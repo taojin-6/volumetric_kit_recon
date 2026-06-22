@@ -1,7 +1,7 @@
 # Self-hosted CI runners
 
-Scripts: `.github/setup-mac-runner.sh` (macOS), `.github/teardown-runners.sh`
-(decommission/migrate any host). The Linux loop below is inline.
+Scripts: `.github/setup-linux-runner.sh` (Linux), `.github/setup-mac-runner.sh`
+(macOS), `.github/teardown-runners.sh` (decommission/migrate any host).
 
 The three Ubuntu legs of `ci.yml` run on a self-hosted runner labelled
 `vk-linux-gpu`, each in an OS-matched container (`ubuntu:22.04` / `:24.04` /
@@ -38,6 +38,10 @@ full parallelism — fewer just means some legs queue.
    ```
 
 ## Register N parallel runners
+
+The quickest path is `bash .github/setup-linux-runner.sh`, which does everything
+in this section (it mints the token via `gh` if you're authed, else prompts for
+one). The manual loop below is what it automates, kept for reference.
 
 The registration token and the exact tarball URL come from the repo →
 **Settings → Actions → Runners → New self-hosted runner (Linux x64)**. One token
