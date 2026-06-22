@@ -1,0 +1,80 @@
+name: ci
+
+# Umbrella CI. Every platform build/test plus lint and sanitizers fan out from
+# here, and the single `required` gate at the bottom succeeds only if all of
+# them did. Branch protection requires just that one check ("ci / required"), so
+# the protected `main` required-checks list stays stable as matrix legs (build
+# types, OSes) are added or renamed — adding an OS never silently leaves an old
+# required context unreported and blocking every PR.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      # The Ubuntu legs run on the self-hosted GPU box (label `vk-linux-gpu`),
+      # each in an OS-matched container with the GPU passed through (`--gpus
+      # all`), so one host covers 22.04 / 24.04 / 26.04 against the real driver.
+      # macOS runs natively on a self-hosted Mac (label `mac`) — macOS can't be
+      # containerised. _build.yml keys its install steps off `runner.os`, so the
+      # macOS leg's Homebrew/MoltenVK path is unchanged and only the Ubuntu legs
+      # use a container; NVIDIA_DRIVER_CAPABILITIES=all makes the toolkit mount
+      # the Vulkan ICD for those. See .github/self-hosted-runners.md.
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            runner: vk-linux-gpu
+            container: '{"image":"ubuntu:22.04","options":"--gpus all","env":{"NVIDIA_DRIVER_CAPABILITIES":"all"}}'
+          - os: ubuntu-24.04
+            runner: vk-linux-gpu
+            container: '{"image":"ubuntu:24.04","options":"--gpus all","env":{"NVIDIA_DRIVER_CAPABILITIES":"all"}}'
+          - os: ubuntu-26.04
+            runner: vk-linux-gpu
+            container: '{"image":"ubuntu:26.04","options":"--gpus all","env":{"NVIDIA_DRIVER_CAPABILITIES":"all"}}'
+          - os: macos-26
+            runner: mac
+            container: ''
+    uses: ./.github/workflows/_build.yml
+    with:
+      os: ${{ matrix.os }}
+      runner: ${{ matrix.runner }}
+      container: ${{ matrix.container }}
+
+  lint:
+    uses: ./.github/workflows/lint.yml
+
+  sanitizers:
+    uses: ./.github/workflows/sanitizers.yml
+
+  required:
+    # The single status check branch protection requires. It passes only when
+    # every build leg, lint, and sanitizers succeeded, and FAILS (never skips)
+    # on any other outcome: a skipped required check never reports its result
+    # and would block every merge forever. Runs on a hosted runner so the gate
+    # can always report, even while a platform is mid-migration to self-hosted.
+    needs: [build, lint, sanitizers]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Assert every required job succeeded
+        run: |
+          echo "build=${{ needs.build.result }}" \
+               "lint=${{ needs.lint.result }}" \
+               "sanitizers=${{ needs.sanitizers.result }}"
+          if [ "${{ needs.build.result }}" = success ] \
+             && [ "${{ needs.lint.result }}" = success ] \
+             && [ "${{ needs.sanitizers.result }}" = success ]; then
+            echo "All required CI jobs passed."
+          else
+            echo "::error::one or more required CI jobs did not succeed (see results above)"
+            exit 1
+          fi
