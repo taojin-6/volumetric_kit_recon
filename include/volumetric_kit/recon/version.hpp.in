@@ -1,0 +1,29 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Tao Jin
+
+#pragma once
+
+/// @file version.hpp
+/// @brief Compile-time and runtime accessors for the library version. Generated
+///        from version.hpp.in by CMake -- do not edit the generated copy.
+
+#include "volumetric_kit/recon/core/export.hpp"
+
+#define VR_VERSION_MAJOR @PROJECT_VERSION_MAJOR@
+#define VR_VERSION_MINOR @PROJECT_VERSION_MINOR@
+#define VR_VERSION_PATCH @PROJECT_VERSION_PATCH@
+#define VR_VERSION_STRING "@PROJECT_VERSION@"
+
+namespace volumetric_kit::recon {
+
+/// @return The library version as "MAJOR.MINOR.PATCH".
+VR_CORE_API const char* version_string() noexcept;
+
+/// @return The major version component.
+VR_CORE_API int version_major() noexcept;
+/// @return The minor version component.
+VR_CORE_API int version_minor() noexcept;
+/// @return The patch version component.
+VR_CORE_API int version_patch() noexcept;
+
+}  // namespace volumetric_kit::recon
