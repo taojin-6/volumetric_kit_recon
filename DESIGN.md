@@ -90,10 +90,9 @@ start, not retrofitted.
 
 ## What this repo excludes
 
-Production-only is a hard rule. Experimental and learned/neural components —
-notably triplane neural fields, the KLT codec transform, and the Python research
-harnesses — are excluded entirely and remain in the upstream research repos. The
-codec, when it lands, is DCT-based and deterministic.
+Production-only is a hard rule. Experimental and learned/neural components are
+excluded entirely and remain in the upstream research repos. The codec, when it
+lands, is DCT-based and deterministic.
 
 ## Roadmap
 
