@@ -52,7 +52,8 @@ void default_sink(LogLevel level, std::string_view message) {
     // calls don't interleave (a prefix from one thread between another's body
     // and newline). Append the body by its exact length rather than printf's
     // %.*s: a string_view need not be NUL-terminated, and its size can exceed
-    // INT_MAX (a negative %.*s precision would scan for a NUL that isn't there).
+    // INT_MAX (a negative %.*s precision would scan for a NUL that isn't
+    // there).
     std::string line = "[vr ";
     line += level_name(level);
     line += "] ";
@@ -75,8 +76,8 @@ void set_log_handler(LogHandler handler) {
 }
 
 void log_message(LogLevel level, std::string_view message) {
-  // Take a reference (refcount bump) to the handler under the lock, then call it
-  // unlocked so a handler may log re-entrantly without deadlocking and a
+  // Take a reference (refcount bump) to the handler under the lock, then call
+  // it unlocked so a handler may log re-entrantly without deadlocking and a
   // concurrent set_log_handler cannot free the handler mid-call.
   std::shared_ptr<const LogHandler> handler;
   {

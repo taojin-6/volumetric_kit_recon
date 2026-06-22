@@ -99,8 +99,8 @@ int main() {
         "version components compose to version_string");
 
   // Logging seam: an installed handler receives every level (including Info,
-  // which the default sink drops); restoring the empty handler falls back to the
-  // default sink.
+  // which the default sink drops); restoring the empty handler falls back to
+  // the default sink.
   vr::LogLevel seen_level = vr::LogLevel::Error;
   std::string seen_message;
   int seen_count = 0;
