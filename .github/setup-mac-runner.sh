@@ -6,9 +6,14 @@
 # Prereqs: Xcode Command Line Tools (`xcode-select --install`) + Homebrew.
 # Run as your login user in Terminal:  bash .github/setup-mac-runner.sh
 # Tear down later (e.g. when switching Macs) with: bash .github/teardown-runners.sh
+#
+# Runner dirs/names are scoped with a `recon-` prefix so this repo's runners
+# coexist with another repo's on the same machine (e.g. volumetric_kit_gfx, whose
+# scripts use the unprefixed `actions-runner-<i>`) instead of clobbering them.
 set -euo pipefail
 
 REPO="taojin-6/volumetric_kit_recon"
+SLUG="recon"                         # dir/name scope so repos don't collide
 LABEL="mac"
 N=2                                  # Debug + Release in parallel
 BASE="$HOME"
@@ -37,7 +42,7 @@ TAR="${BASE}/actions-runner-osx-${PKG_ARCH}-${VER}.tar.gz"
   "https://github.com/actions/runner/releases/download/v${VER}/actions-runner-osx-${PKG_ARCH}-${VER}.tar.gz"
 
 for i in $(seq 1 "$N"); do
-  dir="${BASE}/actions-runner-${i}"
+  dir="${BASE}/actions-runner-${SLUG}-${i}"
   echo "==> [${i}/${N}] ${dir}"
   mkdir -p "$dir"; tar xzf "$TAR" -C "$dir"
   # Loaded into every job -> caps cmake/ctest fan-out so the parallel legs share
@@ -46,7 +51,7 @@ for i in $(seq 1 "$N"); do
   (
     cd "$dir"
     ./config.sh --unattended --url "https://github.com/${REPO}" \
-      --token "$TOKEN" --labels "$LABEL" --name "$(hostname -s)-${i}" --work _work --replace
+      --token "$TOKEN" --labels "$LABEL" --name "$(hostname -s)-${SLUG}-${i}" --work _work --replace
     ./svc.sh install && ./svc.sh start   # launchd LaunchAgent; no sudo on macOS
   )
 done

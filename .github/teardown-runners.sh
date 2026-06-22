@@ -1,18 +1,22 @@
 #!/usr/bin/env bash
-# Stop, deregister, and delete ALL self-hosted runners on THIS machine.
+# Stop, deregister, and delete THIS REPO's self-hosted runners on THIS machine.
 # Use when decommissioning or migrating a runner host (e.g. switching Macs, or
 # rebuilding the Linux box). Works on macOS and Linux. Run as the user that owns
-# ~/actions-runner-*.  Best-effort: keeps going if a single step fails.
+# ~/actions-runner-recon-*.  Best-effort: keeps going if a single step fails.
+#
+# Scoped to this repo's `recon-` prefixed dirs only, so it leaves another repo's
+# runners (e.g. volumetric_kit_gfx's unprefixed `actions-runner-<i>`) untouched.
 set -o pipefail
 
 REPO="taojin-6/volumetric_kit_recon"
+SLUG="recon"
 # Linux runs the runner as a systemd service (root); macOS as a per-user LaunchAgent.
 if [ "$(uname -s)" = "Linux" ]; then SUDO=(sudo); else SUDO=(); fi
 
 shopt -s nullglob
-dirs=("$HOME"/actions-runner-*/)
+dirs=("$HOME"/actions-runner-"${SLUG}"-*/)
 if [ "${#dirs[@]}" -eq 0 ]; then
-  echo "No ~/actions-runner-* runner dirs on this machine — nothing to remove."
+  echo "No ~/actions-runner-${SLUG}-* runner dirs on this machine — nothing to remove."
   exit 0
 fi
 
