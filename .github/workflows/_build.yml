@@ -1,0 +1,182 @@
+name: build (reusable)
+
+# Reusable build & test for one OS leg. ci.yml calls this once per entry in its
+# build matrix. A leg can run on a GitHub-hosted runner (pass just `os`) or on a
+# self-hosted runner in an OS-matched container with a GPU passed through (pass
+# `runner` + `container`) — the dependency-install steps key off `runner.os`
+# (Linux/macOS), so the same steps serve hosted and containerised legs alike.
+on:
+  workflow_call:
+    inputs:
+      os:
+        description: Leg identity, used in the job name and cache key (e.g. ubuntu-24.04).
+        required: true
+        type: string
+      runner:
+        description: >-
+          runs-on label. Empty → use `os` as a GitHub-hosted image; set to a
+          self-hosted label (e.g. vk-linux-gpu) to move this leg onto your box.
+        required: false
+        type: string
+        default: ''
+      container:
+        description: >-
+          JSON for the job container, e.g.
+          '{"image":"ubuntu:24.04","options":"--gpus all"}', or '' for none.
+        required: false
+        type: string
+        default: ''
+
+jobs:
+  build:
+    runs-on: ${{ inputs.runner != '' && inputs.runner || inputs.os }}
+    # Render the container JSON to a map only when one was requested; macOS and
+    # any hosted leg pass '' and run directly on the runner. `&&` short-circuits,
+    # so fromJSON is never handed the empty string.
+    container: ${{ inputs.container != '' && fromJSON(inputs.container) || null }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        # Inside a container GitHub runs `run:` steps under `sh` (dash), not the
+        # `bash` it defaults to on hosted runners; force bash everywhere for one
+        # consistent shell across legs.
+        shell: bash
+    env:
+      # 'true' when this leg runs in a container (the self-hosted GPU box's
+      # Ubuntu legs, where the image is a bare ubuntu:* with the GPU passed
+      # through); drives the toolchain install and the ICD choice below.
+      IN_CONTAINER: ${{ inputs.container != '' }}
+    strategy:
+      fail-fast: false
+      # Build + test both an unoptimized Debug and an optimized Release/NDEBUG
+      # configuration, so an NDEBUG-only or optimizer-exposed break is caught.
+      matrix:
+        build_type: [Debug, Release]
+    steps:
+      # Bare ubuntu:* images lack git (actions/checkout needs it) and sudo (the
+      # install steps use it); we run as root in the container, so install them
+      # before anything else. Skipped on hosted runners.
+      - name: Bootstrap container
+        if: inputs.container != ''
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates git sudo
+
+      - uses: actions/checkout@v7
+
+      - name: Detect build system
+        id: detect
+        run: |
+          if [ -f CMakeLists.txt ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::No CMakeLists.txt found — skipping build and test."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install dependencies (Linux)
+        if: steps.detect.outputs.present == 'true' && runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          # vulkan-tools provides vulkaninfo; glslang-tools/spirv-tools cover the
+          # compute-shader toolchain. A C/C++ toolchain + make ship preinstalled
+          # on hosted images but NOT in a bare ubuntu:* container, so add
+          # build-essential there.
+          pkgs="cmake libvulkan-dev vulkan-validationlayers spirv-tools glslang-tools vulkan-tools"
+          if [ "$IN_CONTAINER" = "true" ]; then
+            pkgs="$pkgs build-essential"
+          else
+            # GPU-less hosted runner: lavapipe (software Vulkan) gives the
+            # Vulkan-touching tests a device to run against.
+            pkgs="$pkgs mesa-vulkan-drivers"
+          fi
+          # shellcheck disable=SC2086  # intentional: split $pkgs into separate args
+          sudo apt-get install -y --no-install-recommends $pkgs
+          # On a hosted runner, point the loader at lavapipe for the rest of the
+          # job. On the GPU box we pin nothing: the NVIDIA Vulkan ICD injected by
+          # the container toolkit is then the only ICD, so the Vulkan tests run on
+          # the real GPU — and if it is absent, vulkaninfo finds no device and the
+          # GPU steps skip themselves rather than fail.
+          if [ "$IN_CONTAINER" != "true" ]; then
+            echo "VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json" >> "$GITHUB_ENV"
+          fi
+
+      - name: Install dependencies (macOS)
+        if: steps.detect.outputs.present == 'true' && runner.os == 'macOS'
+        env:
+          # The formulae we need are bottled, so skip the slow, network-heavy
+          # auto-update — its `git fetch` is what flakes on transient runner DNS.
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+          HOMEBREW_NO_INSTALL_CLEANUP: '1'
+        run: |
+          # Retry to ride out transient Homebrew fetch/DNS blips on the runner.
+          # molten-vk is the Vulkan driver; shaderc provides glslc for the compute
+          # shaders; vulkan-loader/-headers/-tools complete the SDK.
+          ok=0
+          for attempt in 1 2 3; do
+            if brew install cmake molten-vk vulkan-headers vulkan-loader \
+                vulkan-tools shaderc; then
+              ok=1
+              break
+            fi
+            echo "::warning::brew install attempt ${attempt} failed; retrying in 15s"
+            sleep 15
+          done
+          [ "${ok}" = 1 ] || {
+            echo "::error::brew install failed after 3 attempts"
+            exit 1
+          }
+          # make ships with the Xcode command-line tools.
+
+      # Report the Vulkan device the runner sees (the real GPU in a self-hosted
+      # container, lavapipe on a hosted Linux runner, MoltenVK on macOS).
+      # Non-fatal: GPU-dependent tests skip themselves when no device exists.
+      - name: GPU diagnostic
+        if: steps.detect.outputs.present == 'true'
+        run: vulkaninfo --summary || echo "::notice::no Vulkan device visible — GPU tests will skip"
+
+      # Cache the FetchContent dependency tree (VMA / googletest sources + builds)
+      # so they are not re-cloned and recompiled every run. FetchContent bakes the
+      # absolute build path into its sub-build CMakeCache, so a cache is only
+      # reusable where that path is stable: the containerised Linux legs all see
+      # /__w/… (one key, `ctr`), but native macOS self-hosted runners each have
+      # their own path and must key on `runner.name`. The key hashes both the
+      # conventional dep-pin home (third_party/CMakeLists.txt) and the root list,
+      # so a FetchContent version bump in either busts the cache; hashFiles skips
+      # whichever of those paths does not exist yet.
+      - name: Cache third-party deps
+        if: steps.detect.outputs.present == 'true'
+        uses: actions/cache@v5
+        with:
+          path: build/_deps
+          key: deps-${{ inputs.os }}-${{ matrix.build_type }}-${{ inputs.container != '' && 'ctr' || runner.name }}-${{ hashFiles('third_party/CMakeLists.txt', 'CMakeLists.txt') }}
+          restore-keys: |
+            deps-${{ inputs.os }}-${{ matrix.build_type }}-${{ inputs.container != '' && 'ctr' || runner.name }}-
+
+      # Default ("Unix Makefiles") generator + a parallel make build, per project
+      # preference — no Ninja.
+      - name: Configure
+        if: steps.detect.outputs.present == 'true'
+        # Retry to ride out transient FetchContent git-clone DNS blips.
+        run: |
+          ok=0
+          for attempt in 1 2 3; do
+            if cmake -S . -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}; then
+              ok=1
+              break
+            fi
+            echo "::warning::cmake configure attempt ${attempt} failed; retrying in 15s"
+            sleep 15
+          done
+          [ "${ok}" = 1 ] || {
+            echo "::error::cmake configure failed after 3 attempts"
+            exit 1
+          }
+
+      - name: Build
+        if: steps.detect.outputs.present == 'true'
+        run: cmake --build build --parallel
+
+      - name: Test
+        if: steps.detect.outputs.present == 'true'
+        run: ctest --test-dir build --output-on-failure
