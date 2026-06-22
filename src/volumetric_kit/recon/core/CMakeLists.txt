@@ -10,6 +10,13 @@
 include(GenerateExportHeader)
 include(GNUInstallDirs)
 
+# log.cpp uses std::mutex, so recon_core needs the platform threading runtime.
+# Link it explicitly rather than relying on the compiler's implicit pthread, so
+# the static archive resolves on toolchains that require it -- GCC/libstdc++ on
+# Linux with --as-needed, Android, and static links. (macOS folds pthread into
+# libc, which would otherwise hide the gap.)
+find_package(Threads REQUIRED)
+
 set(_vr_generated_inc "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
 
 add_library(recon_core)
@@ -46,6 +53,10 @@ if(_vr_type STREQUAL "STATIC_LIBRARY")
 endif()
 
 target_compile_features(recon_core PUBLIC cxx_std_17)
+
+# PUBLIC: a static-archive consumer must also link the threading runtime, so the
+# exported target carries this requirement (the Config.cmake re-finds Threads).
+target_link_libraries(recon_core PUBLIC Threads::Threads)
 
 target_include_directories(
   recon_core

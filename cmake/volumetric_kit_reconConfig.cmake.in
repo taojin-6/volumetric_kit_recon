@@ -3,11 +3,13 @@
 
 @PACKAGE_INIT@
 
-# The core tier is self-contained (backend-neutral, no external public deps), so
-# there are no find_dependency() calls yet. Later tiers that take a public
-# dependency (e.g. a glTF writer in the mesh tier, or the Metal/CUDA runtime in
-# the interop tier) add their re-find here.
+# recon_core links the platform threading runtime (std::mutex in the logging
+# seam), which the exported targets reference as Threads::Threads -- re-find it
+# here so the imported target exists for consumers. Later tiers that take further
+# public dependencies (e.g. a glTF writer in the mesh tier, or the Metal/CUDA
+# runtime in the interop tier) add their re-find here too.
 include(CMakeFindDependencyMacro)
+find_dependency(Threads)
 
 include("${CMAKE_CURRENT_LIST_DIR}/volumetric_kit_reconTargets.cmake")
 

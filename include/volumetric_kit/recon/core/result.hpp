@@ -39,6 +39,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 
 #include "volumetric_kit/recon/core/check.hpp"
@@ -168,6 +169,13 @@ VR_CORE_API std::string_view to_string(Status::Code code) noexcept;
 /// @endcode
 template <class T>
 class Result {
+  // Result<Status> is ill-formed: the implicit constructors from T and from
+  // Status would collapse to one signature. A fallible operation that yields no
+  // value should return Status directly, not Result<Status>.
+  static_assert(!std::is_same_v<T, Status>,
+                "Result<Status> is ill-formed; return Status directly for a "
+                "valueless fallible operation.");
+
  public:
   /// Construct a success Result holding @p value.
   Result(T value);  // NOLINT(google-explicit-constructor) -- ergonomic success

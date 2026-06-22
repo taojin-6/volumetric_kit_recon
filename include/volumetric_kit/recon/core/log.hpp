@@ -18,7 +18,18 @@
 
 namespace volumetric_kit::recon {
 
-enum class LogLevel { Debug, Info, Warning, Error };
+/// @brief Severity of a diagnostic passed to a @ref LogHandler.
+///
+/// The built-in default sink emits @ref LogLevel::Warning and @ref
+/// LogLevel::Error to stderr and drops @ref LogLevel::Debug and @ref
+/// LogLevel::Info; an installed handler receives every level and decides for
+/// itself.
+enum class LogLevel {
+  Debug,    ///< Verbose developer tracing; dropped by the default sink.
+  Info,     ///< Normal progress information; dropped by the default sink.
+  Warning,  ///< A recoverable problem; emitted to stderr by the default sink.
+  Error,    ///< A failure; emitted to stderr by the default sink.
+};
 
 using LogHandler = std::function<void(LogLevel, std::string_view)>;
 
