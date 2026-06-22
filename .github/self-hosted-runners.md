@@ -106,12 +106,15 @@ Runners on a host share one label (`vk-linux-gpu` or `mac`) and GitHub routes
 jobs to whichever host is online, so swapping machines needs **no `ci.yml`
 change**: bring the new host up, then tear the old one down.
 
-- **Pause** (go offline, stay registered) — drop `sudo` on macOS. Scoped to this
-  repo's `recon-` runners so another repo's stay up:
+- **Pause** (go offline, stay registered) — scoped to this repo's `recon-`
+  runners so another repo's stay up:
   ```bash
+  # Linux (systemd service, runs as root):
   for d in ~/actions-runner-recon-*/; do ( cd "$d" && sudo ./svc.sh stop ); done
+  # macOS (per-user LaunchAgent — drop the sudo):
+  for d in ~/actions-runner-recon-*/; do ( cd "$d" && ./svc.sh stop ); done
   ```
-  Resume with `./svc.sh start`.
+  Resume with `svc.sh start` (sudo on Linux, no sudo on macOS).
 - **Fully remove** (decommission, or before handing the machine on):
   ```bash
   bash .github/teardown-runners.sh   # stop + uninstall service + deregister + delete dirs

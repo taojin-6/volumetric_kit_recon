@@ -140,13 +140,16 @@ jobs:
       # absolute build path into its sub-build CMakeCache, so a cache is only
       # reusable where that path is stable: the containerised Linux legs all see
       # /__w/… (one key, `ctr`), but native macOS self-hosted runners each have
-      # their own path and must key on `runner.name`.
+      # their own path and must key on `runner.name`. The key hashes both the
+      # conventional dep-pin home (third_party/CMakeLists.txt) and the root list,
+      # so a FetchContent version bump in either busts the cache; hashFiles skips
+      # whichever of those paths does not exist yet.
       - name: Cache third-party deps
         if: steps.detect.outputs.present == 'true'
         uses: actions/cache@v5
         with:
           path: build/_deps
-          key: deps-${{ inputs.os }}-${{ matrix.build_type }}-${{ inputs.container != '' && 'ctr' || runner.name }}-${{ hashFiles('third_party/CMakeLists.txt') }}
+          key: deps-${{ inputs.os }}-${{ matrix.build_type }}-${{ inputs.container != '' && 'ctr' || runner.name }}-${{ hashFiles('third_party/CMakeLists.txt', 'CMakeLists.txt') }}
           restore-keys: |
             deps-${{ inputs.os }}-${{ matrix.build_type }}-${{ inputs.container != '' && 'ctr' || runner.name }}-
 
@@ -177,21 +180,3 @@ jobs:
       - name: Test
         if: steps.detect.outputs.present == 'true'
         run: ctest --test-dir build --output-on-failure
-
-  # Single matrix-independent status check for branch protection to require
-  # (surfaces as "<os> / result"). It passes only if every leg of the build
-  # matrix above passed, so the protected-branch required-checks list stays
-  # stable when the build_type matrix changes.
-  result:
-    needs: build
-    # always() so a failed leg reports failure here rather than skipping this
-    # job; a skipped required check never reports and would block merges forever.
-    if: always()
-    runs-on: ubuntu-24.04 # gate does no platform-specific work — cheap Linux runner
-    steps:
-      - name: Assert build matrix succeeded
-        run: |
-          if [ "${{ needs.build.result }}" != "success" ]; then
-            echo "::error::build matrix did not succeed (result: ${{ needs.build.result }})"
-            exit 1
-          fi

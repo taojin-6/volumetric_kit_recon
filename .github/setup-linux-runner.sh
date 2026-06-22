@@ -58,7 +58,9 @@ if [ "$need_register" -eq 1 ]; then
     read -r -p "Paste registration token: " TOKEN
   fi
   TAR="${BASE}/actions-runner-linux-${PKG_ARCH}-${VER}.tar.gz"
-  [ -f "$TAR" ] || curl -fsSL -o "$TAR" \
+  # Reuse a cached tarball only if it's a valid archive; an interrupted earlier
+  # download leaves a truncated file that the next `tar xzf` would choke on.
+  tar tzf "$TAR" >/dev/null 2>&1 || curl -fsSL -o "$TAR" \
     "https://github.com/actions/runner/releases/download/v${VER}/actions-runner-linux-${PKG_ARCH}-${VER}.tar.gz"
 fi
 

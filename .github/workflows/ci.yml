@@ -18,6 +18,12 @@ concurrency:
 jobs:
   build:
     name: ${{ matrix.os }}
+    # The build legs run on persistent self-hosted runners, so only hand them
+    # trusted code: same-repo PRs and pushes. Fork PRs skip these legs (and then
+    # `required` fails, blocking auto-merge until a maintainer runs CI). The repo
+    # is private today so forks can't reach this regardless — it's a guard for if
+    # it ever goes public.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     strategy:
       fail-fast: false
       # The Ubuntu legs run on the self-hosted GPU box (label `vk-linux-gpu`),

@@ -14,7 +14,7 @@ it in the same change that alters a decision.
 
 ```sh
 pip install pre-commit && pre-commit install
-cmake -B build -DVR_BACKEND=Metal   # or -DVR_BACKEND=CUDA on Linux/NVIDIA
+cmake -B build -DCMAKE_BUILD_TYPE=Debug
 cmake --build build
 ctest --test-dir build
 ```

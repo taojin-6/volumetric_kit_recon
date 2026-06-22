@@ -13,8 +13,9 @@ bitstream → handoff to a renderer.**
 
 It is deliberately *not* a renderer. Rendering is owned by the sibling library
 `volumetric_kit_gfx` (Vulkan/MoltenVK). Keeping them separate means each is
-independently useful: a headless capture/compression service never links Vulkan,
-and a viewer never links CUDA/Metal compute. They meet only at the interop seam.
+independently useful: a headless capture/compression service links only the
+reconstruction compute, never the renderer, and a viewer links only the
+renderer. They meet only at the interop seam.
 
 ## Tiered architecture
 

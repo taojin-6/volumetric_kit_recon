@@ -38,7 +38,9 @@ fi
 
 CORES="$(sysctl -n hw.ncpu)"; THREADS=$(( CORES / N )); [ "$THREADS" -lt 1 ] && THREADS=1
 TAR="${BASE}/actions-runner-osx-${PKG_ARCH}-${VER}.tar.gz"
-[ -f "$TAR" ] || curl -fsSL -o "$TAR" \
+# Reuse a cached tarball only if it's a valid archive; an interrupted earlier
+# download leaves a truncated file that the next `tar xzf` would choke on.
+tar tzf "$TAR" >/dev/null 2>&1 || curl -fsSL -o "$TAR" \
   "https://github.com/actions/runner/releases/download/v${VER}/actions-runner-osx-${PKG_ARCH}-${VER}.tar.gz"
 
 for i in $(seq 1 "$N"); do
