@@ -23,6 +23,29 @@ repos:
       - id: cmake-format
         additional_dependencies: [cmakelang, pyyaml]
 
+  # Enforce the Vulkan-include umbrella: first-party code includes
+  # "volumetric_kit/recon/core/vulkan.hpp", never <vulkan/...> directly, so the
+  # loader/dispatch choice (link-time loader today; volk later) stays a detail of
+  # that one header. Fails if any tracked C / C++ / CUDA / Obj-C++ source includes
+  # a <vulkan/...> path. The pattern is anchored to the start of a line (after
+  # optional whitespace) so it matches real `#include` directives, not the path
+  # quoted inside a comment or a Doxygen @code block. Exemptions: examples/
+  # (consumer demo code, not library code, may use Vulkan directly) and vulkan.hpp
+  # itself. (When the VMA allocator lands, add vma_impl.cpp here -- it must define
+  # VMA_STATIC_VULKAN_FUNCTIONS before the include.)
+  - repo: local
+    hooks:
+      - id: vulkan-include-umbrella
+        name: enforce core/vulkan.hpp Vulkan-include umbrella
+        entry: '^\s*#\s*include\s*[<"]vulkan/'
+        language: pygrep
+        files: \.(h|hpp|hxx|inl|ipp|c|cc|cpp|cxx|cu|cuh|mm)$
+        exclude: |
+          (?x)^(
+            examples/.*|
+            include/volumetric_kit/recon/core/vulkan\.hpp
+          )$
+
 # pre-commit.ci (https://pre-commit.ci) runs these same hooks on every PR and
 # pushes the auto-fixes back to the branch, so formatting lands even when a
 # contributor has not run `pre-commit install` locally. The repo's required

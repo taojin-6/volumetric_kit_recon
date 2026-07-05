@@ -37,14 +37,14 @@ include(vr_sanitizers)
 
 # --- Dependencies + library --------------------------------------------------
 # The Vulkan loader (linked at runtime) + headers, from the system SDK (MoltenVK
-# on Apple). Public: the core tier reaches Vulkan through core/vulkan.hpp, so the
-# requirement is carried on the exported target and the package Config re-runs
-# find_dependency(Vulkan). Mirrors volumetric_kit_gfx.
+# on Apple). Public: the core tier reaches Vulkan through core/vulkan.hpp, so
+# the requirement is carried on the exported target and the package Config
+# re-runs find_dependency(Vulkan). Mirrors volumetric_kit_gfx.
 find_package(Vulkan REQUIRED)
 
-# third_party/ is optional today (only the header-only deps a later tier vendors,
-# e.g. VMA); pick it up automatically once it exists. TODO: drop the guard once
-# it does.
+# third_party/ is optional today (only the header-only deps a later tier
+# vendors, e.g. VMA); pick it up automatically once it exists. TODO: drop the
+# guard once it does.
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/CMakeLists.txt")
   add_subdirectory(third_party)
 endif()
