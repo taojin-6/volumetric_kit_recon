@@ -30,12 +30,21 @@ VkResult create_instance(bool with_portability, VkInstance* out) {
   ci.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
   ci.pApplicationInfo = &app;
 
+  // Portability enumeration (what makes MoltenVK visible on Apple) only exists
+  // in Vulkan headers >= 1.3.216. Older SDKs -- e.g. Ubuntu 22.04's 1.3.204 --
+  // lack the symbols, and there the flag is unnecessary anyway: a Linux ICD
+  // (lavapipe or a real driver) is not a portability driver. Guard on the
+  // extension macro the header defines so the smoke compiles on both.
+#ifdef VK_KHR_portability_enumeration
   const char* exts[] = {VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME};
   if (with_portability) {
     ci.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
     ci.enabledExtensionCount = 1;
     ci.ppEnabledExtensionNames = exts;
   }
+#else
+  (void)with_portability;
+#endif
   return vkCreateInstance(&ci, nullptr, out);
 }
 
