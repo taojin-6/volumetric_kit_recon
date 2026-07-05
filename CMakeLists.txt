@@ -36,9 +36,15 @@ include(vr_warnings)
 include(vr_sanitizers)
 
 # --- Dependencies + library --------------------------------------------------
-# third_party/ is optional today (the core tier has no external deps); pick it
-# up automatically once a tier vendors something. TODO: drop the guard once it
-# exists.
+# The Vulkan loader (linked at runtime) + headers, from the system SDK (MoltenVK
+# on Apple). Public: the core tier reaches Vulkan through core/vulkan.hpp, so
+# the requirement is carried on the exported target and the package Config
+# re-runs find_dependency(Vulkan). Mirrors volumetric_kit_gfx.
+find_package(Vulkan REQUIRED)
+
+# third_party/ is optional today (only the header-only deps a later tier
+# vendors, e.g. VMA); pick it up automatically once it exists. TODO: drop the
+# guard once it does.
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/CMakeLists.txt")
   add_subdirectory(third_party)
 endif()
