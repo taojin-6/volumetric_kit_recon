@@ -40,8 +40,13 @@ struct DeviceRequirements {
   /// Minimum device Vulkan version (recon targets 1.2 core: timeline
   /// semaphores).
   std::uint32_t api_version = VK_API_VERSION_1_2;
-  /// Queue capabilities at least one assigned queue must carry.
-  VkQueueFlags queue_flags = VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT;
+  /// Queue capabilities at least one assigned queue must carry. recon needs a
+  /// **compute** queue; a compute-capable family implicitly supports transfer
+  /// (Vulkan guarantees transfer operations on any compute or graphics queue),
+  /// so only the compute bit is required. An embedder building the shared
+  /// device must not additionally demand `VK_QUEUE_TRANSFER_BIT`, which a
+  /// conformant compute family may legally not advertise.
+  VkQueueFlags queue_flags = VK_QUEUE_COMPUTE_BIT;
   /// Device extensions to enable.
   std::vector<const char*> device_extensions;
   /// Core (1.0) features to enable.
@@ -55,9 +60,9 @@ struct DeviceRequirements {
 ///        on it, handed to @ref Device::adopt.
 ///
 /// The `enabled_*` fields exist because Vulkan gives no way to query which
-/// extensions/features were enabled at device-creation time; the creator
-/// declares them so @ref Device::adopt can verify by set-comparison. The
-/// pointed-to arrays need only outlive the `adopt` call.
+/// extensions or features were enabled at device-creation time; the creator
+/// declares them so @ref Device::adopt can verify recon's needs are met. The
+/// pointed-to extension array need only outlive the `adopt` call.
 struct AdoptedDevice {
   VkInstance instance = VK_NULL_HANDLE;
   VkPhysicalDevice physical_device = VK_NULL_HANDLE;
@@ -71,10 +76,19 @@ struct AdoptedDevice {
   /// be externally synchronized).
   std::mutex* submit_mutex = nullptr;
 
-  /// What the creator enabled on `device` (for `adopt`'s set-comparison
-  /// verify).
+  /// Device extensions the creator enabled on `device` (for `adopt`'s
+  /// set-comparison verify).
   const char* const* enabled_device_extensions = nullptr;
   std::uint32_t enabled_device_extension_count = 0;
+  /// Core (1.0) features the creator enabled on `device`. @ref Device::adopt
+  /// rejects the device if any feature recon's @ref DeviceConfig requests is
+  /// not set here.
+  VkPhysicalDeviceFeatures enabled_features = {};
+  /// Whether the creator enabled `timelineSemaphore` on `device`. It is Vulkan
+  /// 1.2 core but must still be *enabled* at device creation, and that cannot
+  /// be queried back, so the creator declares it; recon's default config
+  /// requires it.
+  bool enabled_timeline_semaphore = false;
 };
 
 /// @brief Owns *or borrows* a `VkDevice`, its compute (+ transfer) queue, and a

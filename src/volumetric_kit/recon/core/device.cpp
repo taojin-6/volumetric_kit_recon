@@ -4,11 +4,13 @@
 #include "volumetric_kit/recon/core/device.hpp"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstring>
 #include <optional>
 #include <string>
 #include <vector>
 
+#include "vk_physical_device.hpp"
 #include "volumetric_kit/recon/core/vk_result.hpp"
 
 namespace volumetric_kit::recon {
@@ -18,53 +20,24 @@ namespace {
 // VK_ENABLE_BETA_EXTENSIONS); the string is stable, so we use it directly.
 constexpr const char* kPortabilitySubset = "VK_KHR_portability_subset";
 
-std::optional<std::uint32_t> find_compute_family(VkPhysicalDevice physical) {
-  std::uint32_t count = 0;
-  vkGetPhysicalDeviceQueueFamilyProperties(physical, &count, nullptr);
-  std::vector<VkQueueFamilyProperties> families(count);
-  vkGetPhysicalDeviceQueueFamilyProperties(physical, &count, families.data());
-  // A compute-capable family implicitly supports transfer, so one queue covers
-  // both of recon's needs.
-  for (std::uint32_t i = 0; i < count; ++i) {
-    if ((families[i].queueFlags & VK_QUEUE_COMPUTE_BIT) != 0) {
-      return i;
-    }
-  }
-  return std::nullopt;
-}
-
-bool queue_family_has_compute(VkPhysicalDevice physical, std::uint32_t family) {
-  std::uint32_t count = 0;
-  vkGetPhysicalDeviceQueueFamilyProperties(physical, &count, nullptr);
-  if (family >= count) {
-    return false;
-  }
-  std::vector<VkQueueFamilyProperties> families(count);
-  vkGetPhysicalDeviceQueueFamilyProperties(physical, &count, families.data());
-  return (families[family].queueFlags & VK_QUEUE_COMPUTE_BIT) != 0;
-}
-
-bool device_supports_extension(VkPhysicalDevice physical, const char* name) {
+// The device's supported extensions, enumerated once (empty on an enumeration
+// error, so a missing extension reads as "unsupported" rather than crashing).
+std::vector<VkExtensionProperties> supported_device_extensions(
+    VkPhysicalDevice physical) {
   std::uint32_t count = 0;
   vkEnumerateDeviceExtensionProperties(physical, nullptr, &count, nullptr);
   std::vector<VkExtensionProperties> exts(count);
-  vkEnumerateDeviceExtensionProperties(physical, nullptr, &count, exts.data());
-  for (const VkExtensionProperties& e : exts) {
-    if (std::strcmp(e.extensionName, name) == 0) {
-      return true;
-    }
+  if (vkEnumerateDeviceExtensionProperties(physical, nullptr, &count,
+                                           exts.data()) != VK_SUCCESS) {
+    exts.clear();
   }
-  return false;
-}
-
-std::uint32_t device_api_version(VkPhysicalDevice physical) {
-  VkPhysicalDeviceProperties props{};
-  vkGetPhysicalDeviceProperties(physical, &props);
-  return props.apiVersion;
+  return exts;
 }
 
 // Whether the physical device reports timelineSemaphore support (Vulkan 1.2
-// core, queried through VkPhysicalDeviceFeatures2).
+// core, queried through VkPhysicalDeviceFeatures2). Used only on the create
+// path, where the instance is recon's own >= 1.2 one, so vkGetPhysicalDevice-
+// Features2 (Vulkan 1.1) is always dispatchable.
 bool supports_timeline_semaphore(VkPhysicalDevice physical) {
   VkPhysicalDeviceTimelineSemaphoreFeatures timeline{};
   timeline.sType =
@@ -76,17 +49,32 @@ bool supports_timeline_semaphore(VkPhysicalDevice physical) {
   return timeline.timelineSemaphore == VK_TRUE;
 }
 
+// VkPhysicalDeviceFeatures is a POD of only VkBool32 members (no padding), so
+// treat it as a flat array to check "every feature recon requested is enabled"
+// without hand-listing its ~55 fields.
+bool features_subset_enabled(const VkPhysicalDeviceFeatures& requested,
+                             const VkPhysicalDeviceFeatures& enabled) {
+  constexpr std::size_t kCount =
+      sizeof(VkPhysicalDeviceFeatures) / sizeof(VkBool32);
+  const auto* req = reinterpret_cast<const VkBool32*>(&requested);
+  const auto* en = reinterpret_cast<const VkBool32*>(&enabled);
+  for (std::size_t i = 0; i < kCount; ++i) {
+    if (req[i] == VK_TRUE && en[i] != VK_TRUE) {
+      return false;
+    }
+  }
+  return true;
+}
+
 }  // namespace
 
 DeviceRequirements Device::requirements(const DeviceConfig& config) {
+  // Everything but the config-derived features/extensions comes from the
+  // DeviceRequirements member initializers (api 1.2, a compute queue, timeline
+  // semaphore on).
   DeviceRequirements reqs;
-  reqs.api_version = VK_API_VERSION_1_2;
-  reqs.queue_flags = VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT;
-  reqs.timeline_semaphore = true;
   reqs.features = config.features;
-  for (const char* name : config.extra_device_extensions) {
-    reqs.device_extensions.push_back(name);
-  }
+  reqs.device_extensions = config.extra_device_extensions;
   // portability_subset is enabled by whoever creates the device (spec-required
   // when present); it is not a caller requirement, so it is not listed here.
   return reqs;
@@ -99,13 +87,24 @@ Result<Device> Device::create(VkInstance instance, VkPhysicalDevice physical,
   if (physical == VK_NULL_HANDLE) {
     return Status::invalid_argument("Device::create: physical device is null");
   }
-  if (device_api_version(physical) < VK_API_VERSION_1_2) {
+  if (detail::physical_api_version(physical) < VK_API_VERSION_1_2) {
     return Status::unsupported("device does not support Vulkan 1.2");
   }
-  std::optional<std::uint32_t> compute = find_compute_family(physical);
+  std::optional<std::uint32_t> compute = detail::find_compute_family(physical);
   if (!compute) {
     return Status::unsupported("no compute queue family");
   }
+
+  // Enumerate the device's supported extensions once, then test each request
+  // against that in-memory list rather than re-enumerating per name.
+  const std::vector<VkExtensionProperties> supported =
+      supported_device_extensions(physical);
+  auto is_supported = [&](const char* name) {
+    return std::any_of(supported.begin(), supported.end(),
+                       [&](const VkExtensionProperties& e) {
+                         return std::strcmp(e.extensionName, name) == 0;
+                       });
+  };
 
   std::vector<const char*> extensions;
   auto already = [&](const char* name) {
@@ -113,24 +112,19 @@ Result<Device> Device::create(VkInstance instance, VkPhysicalDevice physical,
         extensions.begin(), extensions.end(),
         [&](const char* e) { return std::strcmp(e, name) == 0; });
   };
-  auto require = [&](const char* name) -> Status {
-    if (!device_supports_extension(physical, name)) {
-      return Status::unsupported(
-          std::string("required device extension missing: ") + name);
-    }
-    extensions.push_back(name);
-    return Status{};
-  };
   for (const char* name : config.extra_device_extensions) {
     if (already(name)) {
       continue;
     }
-    VR_TRY(require(name));
+    if (!is_supported(name)) {
+      return Status::unsupported(
+          std::string("required device extension missing: ") + name);
+    }
+    extensions.push_back(name);
   }
   // The spec requires enabling VK_KHR_portability_subset whenever a device
   // exposes it (e.g. MoltenVK).
-  if (device_supports_extension(physical, kPortabilitySubset) &&
-      !already(kPortabilitySubset)) {
+  if (is_supported(kPortabilitySubset) && !already(kPortabilitySubset)) {
     extensions.push_back(kPortabilitySubset);
   }
 
@@ -192,17 +186,21 @@ Result<Device> Device::adopt(const AdoptedDevice& adopted,
         "Device::adopt: instance, physical device, device, and compute queue "
         "must all be non-null");
   }
-  if (device_api_version(adopted.physical_device) < VK_API_VERSION_1_2) {
+  if (detail::physical_api_version(adopted.physical_device) <
+      VK_API_VERSION_1_2) {
     return Status::unsupported("adopted device does not support Vulkan 1.2");
   }
-  if (!queue_family_has_compute(adopted.physical_device,
-                                adopted.compute_family)) {
+  if (!detail::queue_family_has_compute(adopted.physical_device,
+                                        adopted.compute_family)) {
     return Status::unsupported(
         "Device::adopt: assigned queue family is not compute-capable");
   }
 
-  // Every extension recon needs must be in the creator's declared enabled set
-  // -- Vulkan cannot be asked what a logical device enabled.
+  // Vulkan cannot be asked what a logical device enabled, so recon's needs are
+  // verified against the creator's declaration in AdoptedDevice, not by
+  // querying the device. That is also why adopt touches only Vulkan 1.0
+  // physical-device queries: it makes no assumption about the API version the
+  // embedder negotiated on `adopted.instance`.
   const DeviceRequirements reqs = requirements(config);
   if (!reqs.device_extensions.empty()) {
     if (adopted.enabled_device_extensions == nullptr) {
@@ -227,13 +225,18 @@ Result<Device> Device::adopt(const AdoptedDevice& adopted,
       }
     }
   }
-  // Necessary condition for timelineSemaphore: the physical device supports it.
-  // Whether it was actually enabled on the logical device rests on the creator
-  // honoring requirements().
-  if (reqs.timeline_semaphore &&
-      !supports_timeline_semaphore(adopted.physical_device)) {
+  // Every core feature recon requested must have been enabled by the creator.
+  if (!features_subset_enabled(reqs.features, adopted.enabled_features)) {
     return Status::unsupported(
-        "adopted device does not support timelineSemaphore");
+        "Device::adopt: a VkPhysicalDeviceFeatures bit recon requires was not "
+        "enabled on the adopted device");
+  }
+  // timelineSemaphore likewise can't be queried post-creation; the creator
+  // declares whether it enabled it (1.2 core, but optional to enable).
+  if (reqs.timeline_semaphore && !adopted.enabled_timeline_semaphore) {
+    return Status::unsupported(
+        "Device::adopt: timelineSemaphore was not enabled on the adopted "
+        "device");
   }
 
   Device device;

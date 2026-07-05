@@ -45,6 +45,12 @@ class VR_CORE_API Instance {
   /// @brief Create the instance (Vulkan >= 1.2; timeline semaphores are 1.2
   ///        core), enabling validation when requested and available and
   ///        portability enumeration when the loader offers it.
+  ///
+  /// When validation is enabled and `VK_EXT_debug_utils` is available, a debug
+  /// messenger is created that routes layer output through the core log handler
+  /// (@ref log_message), so diagnostics reach a consumer's installed sink
+  /// rather than the layer's default stderr. If the extension is missing the
+  /// layer still runs (a warning is logged, output goes to its default sink).
   /// @param config  App name, validation toggle, and extra extensions.
   /// @return The instance, or a non-OK @ref Status carrying the
   ///         `vkCreateInstance` `VkResult`.
@@ -73,6 +79,10 @@ class VR_CORE_API Instance {
   void destroy() noexcept;
 
   VkInstance instance_ = VK_NULL_HANDLE;
+  // The validation-layer message sink, created only when validation is enabled
+  // and VK_EXT_debug_utils is available; destroyed before the instance. Reset
+  // on every ownership transfer.
+  VkDebugUtilsMessengerEXT debug_messenger_ = VK_NULL_HANDLE;
   bool validation_enabled_ = false;
 };
 
