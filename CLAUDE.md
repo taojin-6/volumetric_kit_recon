@@ -51,7 +51,7 @@ left. No upward includes.
   instance, device (compute + transfer queues), VMA allocator, RAII buffer/image,
   compute-pipeline + descriptor-set wrappers, sync (fences, timeline
   semaphores), the `Status`/`Result` idiom, a pluggable log handler, and
-  portable POD math. Vulkan is reached through one umbrella header
+  the GLM-backed vector/matrix math. Vulkan is reached through one umbrella header
   (`core/vulkan.hpp`), as in gfx — no other code includes `<vulkan/...>`
   directly.
 - **`volume`** — the sparse voxel hash map in Vulkan buffers; allocate / compact
@@ -69,14 +69,17 @@ Each dated; newest context wins. Change the decision *and* this list together.
   Vulkan compute (GLSL → SPIR-V), one path across Linux / Android / macOS / iOS /
   Windows — chosen over a Metal + CUDA split for cross-platform reach and a
   single shader source. *Supersedes* the earlier "Metal-first / CUDA-later"
-  decision. Native Metal/CUDA acceleration is a possible future optimization, not
-  the baseline.
+  decision. Native Metal is not pursued (MoltenVK runs our GLSL); native CUDA is
+  now a planned NVIDIA accelerator, *not* the baseline — see 2026-07-04.
 - **2026-06-21 — Trivial interop (same Vulkan API).** Because the renderer is
   also Vulkan, recon and gfx share a `VkDevice` (or use UUID-matched compatible
   devices) and pass `VkBuffer`/`VkImage` directly. The cross-API external-memory
   machinery (CUDA↔Vulkan UUID import, Metal-objects, the MoltenVK shared-event
   export) is **not needed** for the recon→gfx path. This is the main reason for
-  the Vulkan choice.
+  the Vulkan choice. (Exception: when the native-CUDA accelerator [2026-07-04]
+  produces the geometry, the CUDA→gfx handoff *does* need the CUDA↔Vulkan
+  external-memory import — or an extra copy back into a `VkBuffer` — a cost borne
+  only on the CUDA path.)
 - **2026-06-21 — Independent siblings; gfx untouched.** recon and gfx stay
   standalone. Now that both are Vulkan, a shared `volumetric_kit_core` is
   attractive and may be revisited — but for now each mirrors the Vulkan core
@@ -87,6 +90,28 @@ Each dated; newest context wins. Change the decision *and* this list together.
   tiers, added once the spine renders end-to-end.
 - **2026-06-21 — Codec ships DCT-only.** KLT (trained basis) and the iQuantizer
   refinement are excluded as research.
+- **2026-07-04 — Native CUDA accelerator, under the Vulkan baseline.** Vulkan
+  compute (GLSL → SPIR-V) stays the cross-platform baseline — it is the only path
+  that reaches every target (Linux, Android, macOS, iOS/iPadOS via MoltenVK);
+  CUDA reaches none of Android/Apple and only NVIDIA on Linux/Windows. On top of
+  that baseline we add a **native CUDA backend as an NVIDIA performance
+  accelerator**, layered under the Vulkan path and ported per-kernel where
+  profiling justifies it — *prove the gain on a hot kernel (e.g. TSDF integrate)
+  before porting the rest*, since these fusion kernels are bandwidth/atomic-bound
+  and the CUDA-vs-Vulkan gap is often small. Cost carried knowingly: two kernel
+  sources (GLSL + CUDA) kept numerically in lockstep, a backend seam in the
+  compute tiers, and the CUDA↔Vulkan interop exception noted above. *Amends* the
+  2026-06-21 single-Vulkan-path decision (CUDA: "possible" → "planned"); it does
+  **not** demote Vulkan.
+- **2026-07-04 — GLM for host/device math (dropped the hand-rolled POD types).**
+  The `vr::Vec3f/Vec3i/Vec4f/Mat4f` vocabulary aliases GLM instead of hand-rolled
+  structs. GLM gives tested math, byte-for-byte `std430`-compatible packed layouts
+  for the Vulkan buffer ABI, `__host__ __device__` operators for the CUDA
+  accelerator, and parity with gfx (which also uses GLM) so the interop seam needs
+  no vector conversions. `core` therefore takes one header-only external
+  dependency (GLM); Eigen was rejected (its alignment + expression templates fight
+  a GPU-upload POD contract). The `vr::` names stay so the backing type is
+  swappable, and `vr::normalize` keeps a zero-length guard GLM lacks.
 
 ## Provenance & salvage policy
 
@@ -99,8 +124,9 @@ source repos are left untouched on disk — never build or write in them.
 
 - **Port (with refactor) from the prior engine:** `core/{math,types}`,
   `voxel_hashing`, `tsdf`, `mesh_extraction`, `mesh_io`. Its Metal/CUDA kernels
-  are **re-implemented as Vulkan compute shaders (GLSL → SPIR-V)** — the
-  algorithms transfer, the kernel source does not.
+  are **re-implemented as Vulkan compute shaders (GLSL → SPIR-V)** for the
+  baseline, with an **optional native-CUDA port as the NVIDIA accelerator**
+  (2026-07-04) — the algorithms transfer, the kernel source does not.
 - **Hardening applied on port:** add install/export + package config; replace
   glog/fmt with the pluggable log handler; adopt `Status`/`Result` repo-wide;
   rename `VK_*` device macros → `VR_*`; break the `ReconstructionPipeline`
@@ -155,9 +181,11 @@ Two contracts — both simpler now that recon and gfx are both Vulkan.
   `Voxel`, …) and their GLSL `std430` mirrors must agree byte-for-byte. The
   `static_assert`s on the C++ side guard half of that; keep the GLSL definitions
   in lockstep.
-- **GLSL compute, not CUDA/Metal kernels.** Warp/wave tricks become Vulkan
-  subgroup ops; device atomics use GLSL atomics. The prior engine's kernels are a
-  reference for the *algorithm*, rewritten in GLSL.
+- **GLSL compute is the baseline; CUDA is the optional accelerator.** In the
+  Vulkan path, warp/wave tricks become Vulkan subgroup ops and device atomics use
+  GLSL atomics; the prior engine's kernels are a reference for the *algorithm*,
+  rewritten in GLSL. The native-CUDA accelerator (2026-07-04) keeps its warp
+  intrinsics/atomics but must stay numerically in lockstep with the GLSL path.
 
 ## RAII resource types (handle/deleter wrappers)
 
@@ -200,7 +228,7 @@ the same shape (gfx's rules; the mistakes reviews keep catching):
 ## Where to start
 
 Current state: scaffolding + the `core` foundation (`Status`/`Result`, logging,
-contract checks, version, POD math) + the `volume` POD data model
+contract checks, version, GLM-backed math) + the `volume` POD data model
 (`volume/hash_types.hpp`). Next: stand up the **Vulkan core** (deps: Vulkan +
 VMA + glslc/shaderc; instance → device with a compute queue → VMA allocator →
 compute pipeline) and prove it with a **Vulkan compute smoke** dispatched through

@@ -20,10 +20,10 @@
 /// themselves return `Status` or `Result<T>`.
 ///
 /// `Status` is deliberately *backend-neutral*: the detail code is a generic
-/// `int64_t` (e.g. a Metal `NSError` code or a `cudaError_t`), never a GPU-API
-/// type, so this header -- and the whole `core` tier -- stays free of Vulkan,
-/// Metal, and CUDA includes. Backend tiers wrap their own `..._error` factory
-/// and `VR_<backend>_TRY` macros on top.
+/// `int64_t` (e.g. a Vulkan `VkResult`, or a `cudaError_t` from the native-CUDA
+/// accelerator), never a GPU-API type, so this header -- and the whole `core`
+/// tier -- stays free of Vulkan and CUDA includes. Backend tiers wrap their own
+/// `..._error` factory and `VR_<backend>_TRY` macros on top.
 ///
 /// Misuse -- reading the value of an error `Result` -- is a programmer error,
 /// not a runtime one: it fails fast via `VR_CHECK` (see check.hpp) rather than
@@ -80,15 +80,15 @@ class Status {
     Unsupported,      ///< A valid request the device or build cannot satisfy.
     OutOfMemory,      ///< A host or device allocation failed.
     IoError,          ///< A read/write/decode/encode operation failed.
-    Backend,          ///< A GPU-backend (Metal/CUDA) call failed; see @ref
-                      ///< detail.
+    Backend,          ///< A GPU-backend (Vulkan or the CUDA accelerator) call
+                      ///< failed; see @ref detail.
   };
 
   /// Construct a success status.
   Status() = default;
 
   /// @brief Build a GPU-backend failure status (domain @ref Code::Backend).
-  /// @param detail   Backend-specific error code (e.g. an `NSError` code or a
+  /// @param detail   Backend-specific error code (e.g. a `VkResult`, or a
   ///                 `cudaError_t`), kept as a generic `int64_t` so `core`
   ///                 stays GPU-API-free.
   /// @param message  Human-readable context (e.g. the failing call site).
