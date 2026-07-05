@@ -29,3 +29,11 @@ target_link_libraries(recon_volume_types_test
                       PRIVATE volumetric_kit::recon_volume)
 vr_target_warnings(recon_volume_types_test)
 add_test(NAME recon_volume_types COMMAND recon_volume_types_test)
+
+# core device seam: Instance + Device create/adopt. Links recon_core, which now
+# carries the Vulkan headers/loader. Skips at runtime where no compute device is
+# present.
+add_executable(recon_device_test device_test.cpp)
+target_link_libraries(recon_device_test PRIVATE volumetric_kit::recon_core)
+vr_target_warnings(recon_device_test)
+add_test(NAME recon_device COMMAND recon_device_test)
