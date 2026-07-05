@@ -16,6 +16,12 @@ find_dependency(Threads)
 # stray Findglm.cmake on a consumer's module path from resolving to different
 # (or missing) imported targets than the exported target expects.
 find_dependency(glm CONFIG)
+# recon_core reaches Vulkan through core/vulkan.hpp, so the public instance/
+# device headers include <vulkan/vulkan.h> and the exported target carries
+# Vulkan::Vulkan in its interface link set -- re-find it here so that imported
+# target exists for consumers (without this, find_package(volumetric_kit_recon)
+# followed by a link to recon_core fails with "Vulkan::Vulkan not found").
+find_dependency(Vulkan)
 
 include("${CMAKE_CURRENT_LIST_DIR}/volumetric_kit_reconTargets.cmake")
 

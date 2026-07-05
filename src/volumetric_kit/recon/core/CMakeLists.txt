@@ -2,12 +2,12 @@
 # Copyright (c) 2026 Tao Jin
 
 # --- recon_core: Tier 1 -----------------------------------------------------
-# Foundation tier: version API, logging, contract checks, backend-neutral
-# Status/Result error handling, plus the GLM-backed vector/matrix vocabulary and
-# device macros. Every other tier depends on this. Its one external dependency
-# is header-only GLM (the vector types alias it; see math/vector_types.hpp); by
-# design it still pulls in no GPU-API or Vulkan include (those belong to the
-# backend tiers and to volumetric_kit_gfx, respectively).
+# Foundation tier: the Vulkan foundation (instance, device, ... mirroring gfx's
+# core), backend-neutral Status/Result error handling, logging, contract checks,
+# and the GLM-backed vector/matrix vocabulary. Every other tier depends on this.
+# Vulkan is reached only through the core/vulkan.hpp umbrella, and the Status
+# type stays backend-neutral (no VkResult in result.hpp -- vk_result.hpp bridges
+# VkResult -> Status). Deps: header-only GLM + the Vulkan loader/headers.
 include(GenerateExportHeader)
 include(GNUInstallDirs)
 
@@ -32,12 +32,19 @@ find_package(Threads REQUIRED)
 # (brew/apt/vcpkg/Conan) or a FetchContent pin.
 find_package(glm CONFIG REQUIRED)
 
+# The Vulkan loader + headers. PUBLIC: the public instance/device headers reach
+# Vulkan through core/vulkan.hpp and so include <vulkan/vulkan.h>, meaning every
+# consumer compiles against it and links the loader (the package Config re-finds
+# Vulkan). MoltenVK is the loader/driver on Apple.
+find_package(Vulkan REQUIRED)
+
 set(_vr_generated_inc "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
 
 add_library(recon_core)
 add_library(volumetric_kit::recon_core ALIAS recon_core)
 
-target_sources(recon_core PRIVATE version.cpp log.cpp check.cpp result.cpp)
+target_sources(recon_core PRIVATE version.cpp log.cpp check.cpp result.cpp
+                                  instance.cpp device.cpp)
 
 # Generated headers: the VR_CORE_API export macro + the configured version
 # header. The export header is per-tier (core/export.hpp + VR_CORE_API +
@@ -72,7 +79,8 @@ target_compile_features(recon_core PUBLIC cxx_std_17)
 # PUBLIC: consumers compile our public headers (which include GLM) and, for a
 # static archive, must also link the threading runtime -- so the exported target
 # carries both requirements (the Config.cmake re-finds Threads and glm).
-target_link_libraries(recon_core PUBLIC Threads::Threads glm::glm)
+target_link_libraries(recon_core PUBLIC Threads::Threads glm::glm
+                                        Vulkan::Vulkan)
 
 target_include_directories(
   recon_core
