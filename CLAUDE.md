@@ -65,6 +65,19 @@ left. No upward includes.
 
 Each dated; newest context wins. Change the decision *and* this list together.
 
+- **2026-07-04 — Zero-copy interop = one shared `VkDevice` + a create/adopt seam
+  (refines "Trivial interop" below).** Being both-Vulkan removes the *cross-API*
+  machinery, but not all of it: a `VkBuffer` is valid only on the `VkDevice` that
+  created it, so zero-copy requires a **single shared `VkDevice`** (one process) —
+  *not* "UUID-matched compatible devices," which would still need external-memory
+  FD import. Each `core` therefore exposes `Device::create` (owns) *and*
+  `Device::adopt` (borrows, verifying against a published `DeviceRequirements`);
+  a neutral app-side bootstrap builds one device from the union of both
+  libraries' requirements and hands it to each, so both stay standalone *and*
+  compose. The live textured mesh is the target: variable topology via
+  `vkCmdDrawIndexedIndirect`, a ring of mesh/atlas slots, an intra-device
+  timeline-semaphore handoff (the MoltenVK external-semaphore caveat does not
+  apply on one device). Authoritative detail: DESIGN.md → "The interop seam".
 - **2026-06-21 — Single Vulkan path (MoltenVK on Apple), like gfx.** Compute is
   Vulkan compute (GLSL → SPIR-V), one path across Linux / Android / macOS / iOS /
   Windows — chosen over a Metal + CUDA split for cross-platform reach and a
@@ -158,15 +171,18 @@ Two contracts — both simpler now that recon and gfx are both Vulkan.
   ingests. Needs zero gfx changes. The converter reconciles the impedance
   mismatches: merge the prior engine's two-stream vertex into one interleaved
   layout, synthesize `tangent`, widen `color` to vec4, `int32`→`uint32` indices,
-  carry a per-triangle atlas as a `Material`+texture. A `PointCloud` handoff is
-  the lighter first milestone.
-- **B — Shared Vulkan resources (zero-copy).** Because both sides are Vulkan,
-  recon writes into a `VkBuffer`/`VkImage` on a device shared with (or
-  UUID-matched to) gfx, and gfx renders it directly — the ordinary
-  same-device/same-API case: a queue-family ownership transfer plus a
-  timeline-semaphore handoff, **no external-memory import**. Sharing one
-  `VkInstance`/`VkDevice` between the two libraries is the cleanest form and the
-  target design.
+  bake a per-triangle atlas into per-vertex `uv0` + a `Material` texture (gfx has
+  no per-triangle UV). The triangle-mesh path is the first milestone — a
+  `PointCloud` handoff waits on gfx growing a point-splat pipeline (it renders
+  only meshes today).
+- **B — Shared Vulkan resources (zero-copy; the live target).** recon writes the
+  mesh/atlas into a `VkBuffer`/`VkImage` on a **single `VkDevice` shared with gfx**
+  (one process) and gfx draws it directly — no external-memory import. Realized by
+  the create/adopt device seam: a neutral bootstrap builds one device from both
+  libraries' merged `DeviceRequirements`; two queues from one graphics+compute
+  family avoid any queue-family ownership transfer; the handoff is an intra-device
+  timeline semaphore over a ring of mesh/atlas slots, variable topology drawn
+  indirectly. See DESIGN.md → "The interop seam".
 
 ## Key gotchas (verified)
 
