@@ -9,3 +9,13 @@ add_executable(recon_core_smoke_test core_smoke_test.cpp)
 target_link_libraries(recon_core_smoke_test PRIVATE volumetric_kit::recon_core)
 vr_target_warnings(recon_core_smoke_test)
 add_test(NAME recon_core_smoke COMMAND recon_core_smoke_test)
+
+# Vulkan availability smoke: proves the build finds Vulkan and the platform
+# driver (MoltenVK on Apple) exposes a compute-capable device. The only test
+# that links the Vulkan loader directly; recon_core carries the include tree for
+# core/vulkan.hpp. Exits 0 (skip) where no driver/device is present.
+add_executable(recon_vulkan_smoke_test vulkan_smoke_test.cpp)
+target_link_libraries(recon_vulkan_smoke_test PRIVATE volumetric_kit::recon_core
+                                                      Vulkan::Vulkan)
+vr_target_warnings(recon_vulkan_smoke_test)
+add_test(NAME recon_vulkan_smoke COMMAND recon_vulkan_smoke_test)
