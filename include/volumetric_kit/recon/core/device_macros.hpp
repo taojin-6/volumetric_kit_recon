@@ -13,8 +13,8 @@
 /// guarded @c normalize) can be reused inside CUDA device kernels -- the
 /// optional NVIDIA accelerator layered under the Vulkan baseline (locked
 /// decision, 2026-07-04). The Vulkan compute path does not use these: GLSL
-/// shaders are separate source that mirror the same POD layouts as `std430`
-/// blocks, not by including these headers.
+/// shaders are separate source that mirror the same POD layouts via scalar
+/// block layout (`GL_EXT_scalar_block_layout`), not by including these headers.
 ///
 /// Named `VR_*` on purpose: the salvaged code used `VK_*`-prefixed macros,
 /// which collide visually with Vulkan's `VK_` namespace -- renamed here.
