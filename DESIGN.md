@@ -75,7 +75,8 @@ coupling.
   exact shape the renderer ingests — an interleaved 64-byte vertex (`position`,
   `normal`, `tangent` with a handedness `w`, `uv0`, `color`) plus 32-bit indices
   — or serializes glTF/GLB, which the renderer's loader already reads. This needs
-  no renderer changes. The converter reconciles the layouts: one interleaved
+  no renderer changes. The vector types already match — both sides use GLM — so
+  the converter reconciles only packing and channels: one interleaved
   stream, synthesized tangents (the renderer does not generate them),
   `int32`→`uint32` indices, `color` widened to vec4, and a per-triangle atlas
   *baked* into per-vertex `uv0` + a per-mesh material texture (the renderer has no
@@ -92,6 +93,10 @@ coupling.
   the `VkDevice` that created it, so zero-copy requires **one shared `VkDevice`**,
   not two UUID-matched ones (separate devices would need external-memory FD
   import — exactly the machinery being avoided). Single process, single device.
+  (This is the Vulkan-compute→renderer path. Geometry from the optional
+  native-CUDA accelerator instead lives on a CUDA context, not the shared
+  `VkDevice`, so *that* handoff does need CUDA↔Vulkan external-memory import — a
+  cost scoped to the CUDA path.)
 
 ### Device ownership: create or adopt
 

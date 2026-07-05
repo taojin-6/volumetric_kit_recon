@@ -65,19 +65,6 @@ left. No upward includes.
 
 Each dated; newest context wins. Change the decision *and* this list together.
 
-- **2026-07-04 — Zero-copy interop = one shared `VkDevice` + a create/adopt seam
-  (refines "Trivial interop" below).** Being both-Vulkan removes the *cross-API*
-  machinery, but not all of it: a `VkBuffer` is valid only on the `VkDevice` that
-  created it, so zero-copy requires a **single shared `VkDevice`** (one process) —
-  *not* "UUID-matched compatible devices," which would still need external-memory
-  FD import. Each `core` therefore exposes `Device::create` (owns) *and*
-  `Device::adopt` (borrows, verifying against a published `DeviceRequirements`);
-  a neutral app-side bootstrap builds one device from the union of both
-  libraries' requirements and hands it to each, so both stay standalone *and*
-  compose. The live textured mesh is the target: variable topology via
-  `vkCmdDrawIndexedIndirect`, a ring of mesh/atlas slots, an intra-device
-  timeline-semaphore handoff (the MoltenVK external-semaphore caveat does not
-  apply on one device). Authoritative detail: DESIGN.md → "The interop seam".
 - **2026-06-21 — Single Vulkan path (MoltenVK on Apple), like gfx.** Compute is
   Vulkan compute (GLSL → SPIR-V), one path across Linux / Android / macOS / iOS /
   Windows — chosen over a Metal + CUDA split for cross-platform reach and a
@@ -85,8 +72,10 @@ Each dated; newest context wins. Change the decision *and* this list together.
   decision. Native Metal is not pursued (MoltenVK runs our GLSL); native CUDA is
   now a planned NVIDIA accelerator, *not* the baseline — see 2026-07-04.
 - **2026-06-21 — Trivial interop (same Vulkan API).** Because the renderer is
-  also Vulkan, recon and gfx share a `VkDevice` (or use UUID-matched compatible
-  devices) and pass `VkBuffer`/`VkImage` directly. The cross-API external-memory
+  also Vulkan, recon and gfx share **one** `VkDevice` and pass `VkBuffer`/`VkImage`
+  directly (zero-copy needs a *single* shared device — see the 2026-07-04 interop
+  refinement below; UUID-matched *separate* devices would still need an import).
+  The cross-API external-memory
   machinery (CUDA↔Vulkan UUID import, Metal-objects, the MoltenVK shared-event
   export) is **not needed** for the recon→gfx path. This is the main reason for
   the Vulkan choice. (Exception: when the native-CUDA accelerator [2026-07-04]
@@ -125,6 +114,21 @@ Each dated; newest context wins. Change the decision *and* this list together.
   dependency (GLM); Eigen was rejected (its alignment + expression templates fight
   a GPU-upload POD contract). The `vr::` names stay so the backing type is
   swappable, and `vr::normalize` keeps a zero-length guard GLM lacks.
+- **2026-07-04 — Zero-copy interop = one shared `VkDevice` + a create/adopt seam
+  (refines "Trivial interop" above).** Being both-Vulkan removes the *cross-API*
+  machinery, but not all of it: a `VkBuffer` is valid only on the `VkDevice` that
+  created it, so zero-copy requires a **single shared `VkDevice`** (one process) —
+  *not* "UUID-matched compatible devices," which would still need external-memory
+  FD import (the same cost the native-CUDA→gfx handoff pays; see the CUDA
+  accelerator decision above). Each `core` therefore exposes `Device::create`
+  (owns) *and* `Device::adopt` (borrows, verifying against a published
+  `DeviceRequirements`); a neutral app-side bootstrap builds one device from the
+  union of both libraries' requirements and hands it to each, so both stay
+  standalone *and* compose. The live textured mesh is the target: variable
+  topology via `vkCmdDrawIndexedIndirect`, a ring of mesh/atlas slots, an
+  intra-device timeline-semaphore handoff (the MoltenVK external-semaphore caveat
+  does not apply on one device). Authoritative detail: DESIGN.md → "The interop
+  seam".
 
 ## Provenance & salvage policy
 
