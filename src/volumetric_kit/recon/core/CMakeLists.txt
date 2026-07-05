@@ -22,17 +22,15 @@ find_package(Threads REQUIRED)
 # (math/vector_types.hpp aliases glm::vec*/glm::mat4) and must be callable from
 # CUDA device code, so consumers need it too (the package Config re-finds it).
 # An imported CONFIG target brings glm's headers in as SYSTEM includes, so glm
-# internals don't trip -Werror. Some packagings (e.g. Homebrew) also ship a
-# compiled glm::glm; we use only the headers, so prefer the header-only target
-# to avoid a needless runtime library. If a target platform lacks a system glm,
-# supply it via the package manager (brew/apt/vcpkg/Conan) or a FetchContent
-# pin.
+# internals don't trip -Werror. We link the canonical glm::glm target, which
+# every glm packaging provides -- the name we link here is baked into the
+# exported target and must resolve on every consumer's platform, and the newer
+# glm::glm-header-only target does not exist on older packagings (e.g. Ubuntu's
+# libglm-dev), which would break their find_package(volumetric_kit_recon). glm
+# is header-only in our use, so linking glm::glm carries no runtime library. If
+# a target platform lacks a system glm, supply it via the package manager
+# (brew/apt/vcpkg/Conan) or a FetchContent pin.
 find_package(glm CONFIG REQUIRED)
-if(TARGET glm::glm-header-only)
-  set(_vr_glm glm::glm-header-only)
-else()
-  set(_vr_glm glm::glm)
-endif()
 
 set(_vr_generated_inc "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
 
@@ -74,7 +72,7 @@ target_compile_features(recon_core PUBLIC cxx_std_17)
 # PUBLIC: consumers compile our public headers (which include GLM) and, for a
 # static archive, must also link the threading runtime -- so the exported target
 # carries both requirements (the Config.cmake re-finds Threads and glm).
-target_link_libraries(recon_core PUBLIC Threads::Threads ${_vr_glm})
+target_link_libraries(recon_core PUBLIC Threads::Threads glm::glm)
 
 target_include_directories(
   recon_core
@@ -94,6 +92,16 @@ if(VR_INSTALL)
     ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
     LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
     RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
+  # This tier ships only its own headers: the core/ source subtree plus the
+  # generated export.hpp/version.hpp. Scoping to core/ (rather than the whole
+  # include/ tree) keeps a core-only build from installing a later tier's
+  # headers, which would pull deps this package's Config does not declare. Each
+  # future tier adds its own header install the same way.
+  install(
+    DIRECTORY "${PROJECT_SOURCE_DIR}/include/volumetric_kit/recon/core"
+    DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/volumetric_kit/recon"
+    FILES_MATCHING
+    PATTERN "*.hpp")
   install(
     DIRECTORY "${_vr_generated_inc}/"
     DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"

@@ -11,7 +11,11 @@
 # in the interop tier) add their re-find here too.
 include(CMakeFindDependencyMacro)
 find_dependency(Threads)
-find_dependency(glm)
+# CONFIG mode, matching how the build finds glm (find_package(glm CONFIG)): glm
+# ships a package config, not a CMake find module, so forcing CONFIG stops a
+# stray Findglm.cmake on a consumer's module path from resolving to different
+# (or missing) imported targets than the exported target expects.
+find_dependency(glm CONFIG)
 
 include("${CMAKE_CURRENT_LIST_DIR}/volumetric_kit_reconTargets.cmake")
 

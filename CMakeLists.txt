@@ -15,20 +15,15 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Are we the top-level project, or pulled in via add_subdirectory/FetchContent?
-# Defaults for "build the extras" and "generate install rules" follow from this.
-if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
-  set(VR_IS_TOP_LEVEL ON)
-else()
-  set(VR_IS_TOP_LEVEL OFF)
-endif()
-
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 # --- Options -----------------------------------------------------------------
-option(VR_BUILD_EXAMPLES "Build example programs" ${VR_IS_TOP_LEVEL})
-option(VR_BUILD_TESTS "Build tests" ${VR_IS_TOP_LEVEL})
-option(VR_INSTALL "Generate install/export rules" ${VR_IS_TOP_LEVEL})
+# PROJECT_IS_TOP_LEVEL (set by project() since CMake 3.21, our floor) is ON only
+# when we are the root project, not pulled in via add_subdirectory/FetchContent;
+# the "build the extras" and "generate install rules" defaults follow from it.
+option(VR_BUILD_EXAMPLES "Build example programs" ${PROJECT_IS_TOP_LEVEL})
+option(VR_BUILD_TESTS "Build tests" ${PROJECT_IS_TOP_LEVEL})
+option(VR_INSTALL "Generate install/export rules" ${PROJECT_IS_TOP_LEVEL})
 option(VR_WARNINGS_AS_ERRORS "Treat first-party compiler warnings as errors" ON)
 
 # Semicolon list of sanitizers (e.g. "address;undefined"); empty = off. Applied

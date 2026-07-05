@@ -200,13 +200,11 @@ class Result {
   const T& value() const&;
   T&& value() &&;
 
-  /// @brief Pointer/reference access to the held value.
-  /// @pre @ref ok is true; otherwise aborts, as in @ref value.
+  /// @brief Member access to the held value (e.g. `result->field`).
+  /// @pre @ref ok is true; otherwise aborts, as in @ref value. To read the
+  ///      value itself rather than a member, use @ref value.
   T* operator->();
   const T* operator->() const;
-  T& operator*() &;
-  const T& operator*() const&;
-  T&& operator*() &&;
 
  private:
   Status status_;
