@@ -107,10 +107,11 @@ Each dated; newest context wins. Change the decision *and* this list together.
   **not** demote Vulkan.
 - **2026-07-04 — GLM for host/device math (dropped the hand-rolled POD types).**
   The `vr::Vec3f/Vec3i/Vec4f/Mat4f` vocabulary aliases GLM instead of hand-rolled
-  structs. GLM gives tested math, byte-for-byte `std430`-compatible packed layouts
-  for the Vulkan buffer ABI, `__host__ __device__` operators for the CUDA
-  accelerator, and parity with gfx (which also uses GLM) so the interop seam needs
-  no vector conversions. `core` therefore takes one header-only external
+  structs. GLM gives tested math, byte-for-byte packed layouts for the Vulkan
+  buffer ABI (via scalar block layout, since `std430` 16-byte-aligns a `vec3` --
+  see 2026-07-05), `__host__ __device__` operators for the CUDA accelerator, and
+  parity with gfx (which also uses GLM) so the interop seam needs no vector
+  conversions. `core` therefore takes one header-only external
   dependency (GLM); Eigen was rejected (its alignment + expression templates fight
   a GPU-upload POD contract). The `vr::` names stay so the backing type is
   swappable, and `vr::normalize` keeps a zero-length guard GLM lacks.
@@ -129,6 +130,17 @@ Each dated; newest context wins. Change the decision *and* this list together.
   intra-device timeline-semaphore handoff (the MoltenVK external-semaphore caveat
   does not apply on one device). Authoritative detail: DESIGN.md → "The interop
   seam".
+- **2026-07-05 — Shader buffer ABI is scalar block layout, not `std430`.** The
+  host POD structs (`HashEntry`, …) embed `Vec3i` voxel-block coords, which
+  `std430` 16-byte-aligns — so a naive `std430` shader mirror does *not* match the
+  packed C/CUDA layout the host uploads (`HashEntry`: host `pos` at 4 in 20 B;
+  `std430` `pos` at 16 in 32 B). The compute shaders therefore declare
+  `layout(scalar)` (`GL_EXT_scalar_block_layout`; core in Vulkan 1.2, supported by
+  MoltenVK), under which the GLSL struct is byte-identical to the host struct for
+  every vector-bearing type — no per-field scalarization, one POD definition
+  across CPU / GLSL / CUDA. *Refines* the 2026-07-04 GLM decision
+  ("`std430`-compatible" was imprecise for `vec3`-bearing structs); the host-side
+  `static_assert`s guard only the host packing.
 
 ## Provenance & salvage policy
 
@@ -198,9 +210,14 @@ Two contracts — both simpler now that recon and gfx are both Vulkan.
   (`core/vulkan.hpp`), exactly as gfx — never `#include <vulkan/...>` directly,
   so adopting volk later for the iOS/Android loader stays a one-header change.
 - **Host buffer layout must match the shader.** Host POD structs (`HashEntry`,
-  `Voxel`, …) and their GLSL `std430` mirrors must agree byte-for-byte. The
-  `static_assert`s on the C++ side guard half of that; keep the GLSL definitions
-  in lockstep.
+  `Voxel`, …) and their GLSL mirrors must agree byte-for-byte, so the shaders
+  read them through **scalar block layout** (`GL_EXT_scalar_block_layout`; Vulkan
+  1.2 core, MoltenVK-supported), *not* `std430` — `std430` 16-byte-aligns a
+  three-component vector, so an `std430` `HashEntry` puts `pos` at offset 16 in
+  32 B where the host packs it at offset 4 in 20 B (see the 2026-07-05 ABI
+  decision). Scalar layout is the C/CUDA layout, so one struct maps 1:1 across
+  CPU / GLSL / CUDA. The `static_assert`s on the C++ side guard only the host
+  packing; keep the `layout(scalar)` GLSL definitions in lockstep.
 - **GLSL compute is the baseline; CUDA is the optional accelerator.** In the
   Vulkan path, warp/wave tricks become Vulkan subgroup ops and device atomics use
   GLSL atomics; the prior engine's kernels are a reference for the *algorithm*,

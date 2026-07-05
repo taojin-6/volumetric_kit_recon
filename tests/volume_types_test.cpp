@@ -33,14 +33,19 @@ int main() {
   check(e.ptr == 7 && e.pos == (vr::Vec3i{1, 2, 3}) && e.offset == -1,
         "HashEntry aggregate fields");
 
-  // VoxelData is a faithful view onto the table's storage; color off by
-  // default.
+  // VoxelData is a faithful view onto the table's storage: color is off by
+  // default, and the view forwards it once the table carries a color array.
   vol::Voxel blocks[1];
+  vr::Vec3u8 colors[1];
   vol::HashTable table{};
   table.sdf_blocks = blocks;
-  const vol::VoxelData data = table.voxel_data();
+  vol::VoxelData data = table.voxel_data();
   check(data.sdf_blocks == blocks, "VoxelData view aliases sdf_blocks");
   check(data.color_blocks == nullptr, "color disabled by default");
+
+  table.color_blocks = colors;
+  data = table.voxel_data();
+  check(data.color_blocks == colors, "VoxelData view aliases color_blocks");
 
   if (failures == 0) {
     std::puts("recon_volume types test passed");
