@@ -24,6 +24,7 @@
 /// `glm::mat4` is indeterminate -- spell the identity `Mat4f(1.0f)`.
 
 #include <glm/glm.hpp>
+#include <glm/gtc/type_precision.hpp>
 
 #include "volumetric_kit/recon/core/device_macros.hpp"
 
@@ -33,6 +34,8 @@ namespace volumetric_kit::recon {
 using Vec3f = glm::vec3;
 /// @brief 3-component signed-integer vector (e.g. voxel-block coordinates).
 using Vec3i = glm::ivec3;
+/// @brief 3-component unsigned 8-bit vector (packed 3 B; per-voxel RGB color).
+using Vec3u8 = glm::u8vec3;
 /// @brief 4-component float vector (packed 16 B; homogeneous points, ...).
 using Vec4f = glm::vec4;
 /// @brief 4x4 column-major matrix (64 B; element (row, col) is `m[col][row]`).
