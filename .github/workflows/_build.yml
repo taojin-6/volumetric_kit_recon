@@ -78,11 +78,12 @@ jobs:
         if: steps.detect.outputs.present == 'true' && runner.os == 'Linux'
         run: |
           sudo apt-get update
-          # vulkan-tools provides vulkaninfo; glslang-tools/spirv-tools cover the
-          # compute-shader toolchain. A C/C++ toolchain + make ship preinstalled
-          # on hosted images but NOT in a bare ubuntu:* container, so add
-          # build-essential there.
-          pkgs="cmake libvulkan-dev vulkan-validationlayers spirv-tools glslang-tools vulkan-tools"
+          # libglm-dev supplies the GLM headers + CMake config that recon_core's
+          # vector/matrix types alias. vulkan-tools provides vulkaninfo;
+          # glslang-tools/spirv-tools cover the compute-shader toolchain. A C/C++
+          # toolchain + make ship preinstalled on hosted images but NOT in a bare
+          # ubuntu:* container, so add build-essential there.
+          pkgs="cmake libglm-dev libvulkan-dev vulkan-validationlayers spirv-tools glslang-tools vulkan-tools"
           if [ "$IN_CONTAINER" = "true" ]; then
             pkgs="$pkgs build-essential"
           else
@@ -110,11 +111,12 @@ jobs:
           HOMEBREW_NO_INSTALL_CLEANUP: '1'
         run: |
           # Retry to ride out transient Homebrew fetch/DNS blips on the runner.
-          # molten-vk is the Vulkan driver; shaderc provides glslc for the compute
-          # shaders; vulkan-loader/-headers/-tools complete the SDK.
+          # glm supplies the GLM math headers recon_core's types alias; molten-vk
+          # is the Vulkan driver; shaderc provides glslc for the compute shaders;
+          # vulkan-loader/-headers/-tools complete the SDK.
           ok=0
           for attempt in 1 2 3; do
-            if brew install cmake molten-vk vulkan-headers vulkan-loader \
+            if brew install cmake glm molten-vk vulkan-headers vulkan-loader \
                 vulkan-tools shaderc; then
               ok=1
               break

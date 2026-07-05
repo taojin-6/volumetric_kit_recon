@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Tao Jin
+
+@PACKAGE_INIT@
+
+# recon_core links the platform threading runtime (std::mutex in the logging
+# seam) and header-only GLM (its public vector/matrix types), which the exported
+# targets reference as Threads::Threads and the glm target -- re-find both here
+# so the imported targets exist for consumers. Later tiers that take further
+# public dependencies (e.g. a glTF writer in the mesh tier, or the CUDA runtime
+# in the interop tier) add their re-find here too.
+include(CMakeFindDependencyMacro)
+find_dependency(Threads)
+# CONFIG mode, matching how the build finds glm (find_package(glm CONFIG)): glm
+# ships a package config, not a CMake find module, so forcing CONFIG stops a
+# stray Findglm.cmake on a consumer's module path from resolving to different
+# (or missing) imported targets than the exported target expects.
+find_dependency(glm CONFIG)
+
+include("${CMAKE_CURRENT_LIST_DIR}/volumetric_kit_reconTargets.cmake")
+
+check_required_components(volumetric_kit_recon)
