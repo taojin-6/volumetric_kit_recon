@@ -39,8 +39,9 @@ jobs:
         if: steps.detect.outputs.present == 'true'
         run: |
           sudo apt-get update
+          # libglm-dev: GLM headers + CMake config that recon_core's math aliases.
           sudo apt-get install -y --no-install-recommends \
-            cmake clang \
+            cmake clang libglm-dev \
             libvulkan-dev vulkan-validationlayers spirv-tools glslang-tools \
             vulkan-tools
           # lavapipe (software Vulkan) is what lets the Vulkan-touching tests run

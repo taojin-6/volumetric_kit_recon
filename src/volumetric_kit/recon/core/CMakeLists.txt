@@ -4,8 +4,8 @@
 # --- recon_core: Tier 1 -----------------------------------------------------
 # Foundation tier: version API, logging, contract checks, backend-neutral
 # Status/Result error handling, plus the GLM-backed vector/matrix vocabulary and
-# device macros. Every other tier depends on this. Its one external dependency is
-# header-only GLM (the vector types alias it; see math/vector_types.hpp); by
+# device macros. Every other tier depends on this. Its one external dependency
+# is header-only GLM (the vector types alias it; see math/vector_types.hpp); by
 # design it still pulls in no GPU-API or Vulkan include (those belong to the
 # backend tiers and to volumetric_kit_gfx, respectively).
 include(GenerateExportHeader)
@@ -20,12 +20,13 @@ find_package(Threads REQUIRED)
 
 # GLM: header-only vector/matrix math. PUBLIC -- it appears in public headers
 # (math/vector_types.hpp aliases glm::vec*/glm::mat4) and must be callable from
-# CUDA device code, so consumers need it too (the package Config re-finds it). An
-# imported CONFIG target brings glm's headers in as SYSTEM includes, so glm
+# CUDA device code, so consumers need it too (the package Config re-finds it).
+# An imported CONFIG target brings glm's headers in as SYSTEM includes, so glm
 # internals don't trip -Werror. Some packagings (e.g. Homebrew) also ship a
-# compiled glm::glm; we use only the headers, so prefer the header-only target to
-# avoid a needless runtime library. If a target platform lacks a system glm,
-# supply it via the package manager (brew/apt/vcpkg/Conan) or a FetchContent pin.
+# compiled glm::glm; we use only the headers, so prefer the header-only target
+# to avoid a needless runtime library. If a target platform lacks a system glm,
+# supply it via the package manager (brew/apt/vcpkg/Conan) or a FetchContent
+# pin.
 find_package(glm CONFIG REQUIRED)
 if(TARGET glm::glm-header-only)
   set(_vr_glm glm::glm-header-only)
