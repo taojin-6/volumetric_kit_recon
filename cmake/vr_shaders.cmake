@@ -130,4 +130,13 @@ function(vr_compile_shaders target)
 
   add_custom_target(${target}_shaders_${_seq} DEPENDS ${_spv_outputs})
   add_dependencies(${target} ${target}_shaders_${_seq})
+
+  # Expose the created target so a caller that ALSO consumes these .spv through
+  # a second custom target (vr_embed_shaders) can serialize against it --
+  # otherwise `make -j` runs the shared glslc recipe from both targets'
+  # makefiles at once and truncates the .spv. See the race note in
+  # vr_embed_shaders.
+  set(_vr_compile_shaders_target
+      "${target}_shaders_${_seq}"
+      PARENT_SCOPE)
 endfunction()

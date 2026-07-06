@@ -31,6 +31,9 @@ function(vr_embed_shaders target)
   set(_spv_dir "${CMAKE_CURRENT_BINARY_DIR}/${target}_embed_spv")
   set(_inc_dir "${CMAKE_CURRENT_BINARY_DIR}/${target}_embed_inc")
   vr_compile_shaders(${target} OUTPUT_DIR "${_spv_dir}" SHADERS ${ARG_SHADERS})
+  # The custom target vr_compile_shaders just created to produce the .spv files;
+  # captured so the embed target can be serialized after it (see below).
+  set(_compile_target "${_vr_compile_shaders_target}")
 
   set(_headers)
   foreach(_src IN LISTS ARG_SHADERS)
@@ -67,5 +70,16 @@ function(vr_embed_shaders target)
 
   add_custom_target(${target}_embedded_shaders_${_seq} DEPENDS ${_headers})
   add_dependencies(${target} ${target}_embedded_shaders_${_seq})
+
+  # Serialize the embed target after the compile target. The .spv files are
+  # outputs of ${_compile_target} (a dependency of ${target}) AND dependencies
+  # of the embed headers above, so both custom targets can reach the same .spv
+  # rule. With no ordering between them, `make -j` runs that glslc recipe from
+  # both targets' makefiles concurrently and truncates the file -- spirv-val
+  # then reports "Missing OpFunctionEnd", and MoltenVK "Function was not
+  # terminated" at MSL-conversion time. Building compile fully first makes each
+  # .spv appear exactly once. (Ninja dedups on a global graph and is unaffected;
+  # this is a Makefile-generator hazard, and it grows with the shader count.)
+  add_dependencies(${target}_embedded_shaders_${_seq} ${_compile_target})
   target_include_directories(${target} PRIVATE "${_inc_dir}")
 endfunction()

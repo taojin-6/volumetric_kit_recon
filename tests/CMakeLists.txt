@@ -83,6 +83,17 @@ target_link_libraries(recon_volume_diagnostics_test
 vr_target_warnings(recon_volume_diagnostics_test)
 add_test(NAME recon_volume_diagnostics COMMAND recon_volume_diagnostics_test)
 
+# volume allocate-from-depth / -points: unproject a synthetic one-pixel depth
+# frame (and a small point set) and verify exactly the expected (2*tb+1)^3
+# truncation-band block cube is allocated on the real driver -- the camera
+# unprojection + band dilation, plus the DepthCameraParams scalar-layout upload.
+# Skips (exit 0) where no device is present.
+add_executable(recon_volume_allocate_test volume_allocate_test.cpp)
+target_link_libraries(recon_volume_allocate_test
+                      PRIVATE volumetric_kit::recon_volume Vulkan::Vulkan)
+vr_target_warnings(recon_volume_allocate_test)
+add_test(NAME recon_volume_allocate COMMAND recon_volume_allocate_test)
+
 # core device seam: Instance + Device create/adopt. Links recon_core, which now
 # carries the Vulkan headers/loader. Skips at runtime where no compute device is
 # present.
