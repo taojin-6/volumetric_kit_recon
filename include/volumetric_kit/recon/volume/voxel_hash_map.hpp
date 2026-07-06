@@ -34,9 +34,9 @@ namespace volumetric_kit::recon::volume {
 /// @ref ComputePipeline, @ref Device::submit_single_time). The GLSL kernels
 /// read the hash structs through scalar block layout (the 2026-07-05 ABI), so
 /// the host @ref HashEntry / @ref BlockIndex and their shader mirrors agree
-/// byte-for-byte. This first slice covers init + allocate-from-coords +
-/// compact; delete, resize/rehash, diagnostics, and depth/point allocation
-/// follow.
+/// byte-for-byte. Covers init, allocate-from-coords, remove, compact, and
+/// resize; diagnostics, the index-preserving GPU rehash, and depth/point
+/// allocation follow.
 ///
 /// @warning The @ref Device and @ref Allocator passed to @ref create must
 ///          outlive this object; it stores references to them.
@@ -97,6 +97,21 @@ class VR_VOLUME_API VoxelHashMap {
   /// @brief Reset the table to empty (re-runs the init kernel).
   Status clear();
 
+  /// @brief Grow the hash table to @p new_num_buckets buckets (must exceed the
+  ///        current count), preserving the active block set.
+  ///
+  /// Reuses the proven init / allocate / compact kernels: snapshot the active
+  /// coordinates, grow the buffers, re-init the larger table, and re-insert.
+  /// This reassigns block indices -- transparent for the coordinate set, but it
+  /// does not preserve per-block voxel data.
+  /// TODO(tsdf): a block-index-preserving GPU rehash once blocks carry SDF
+  /// data.
+  /// @param new_num_buckets  The new bucket count (> the current @ref grid).
+  /// @return OK on success, or a non-OK @ref Status:
+  ///         @ref Status::Code::InvalidArgument for a non-growing count;
+  ///         @ref Status::Code::OutOfMemory if the re-insert overflows.
+  Status resize(std::int32_t new_num_buckets);
+
   /// @brief Read the raw hash-entry slots back to the host.
   ///
   /// Low-level / diagnostic: exposes the on-device @ref HashEntry array (all
@@ -116,6 +131,10 @@ class VR_VOLUME_API VoxelHashMap {
   /// Run the init kernel, resetting every slot to empty (used by create +
   /// clear).
   Status init_table();
+
+  /// Point every set that uses them at the persistent buffers (entries / heap /
+  /// heap_counter / bucket_mutex); run at create and after a resize swaps them.
+  void write_persistent_bindings();
 
   // Borrowed (must outlive this). Pointers, not references, so a moved-from map
   // is left in a defined (empty) state.

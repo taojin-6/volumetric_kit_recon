@@ -179,20 +179,9 @@ Result<VoxelHashMap> VoxelHashMap::create(Device& device, Allocator& allocator,
   VR_ASSIGN(map.compact_set_, map.pool_.allocate(map.compact_layout_.handle()));
   VR_ASSIGN(map.delete_set_, map.pool_.allocate(map.delete_layout_.handle()));
 
-  // Persistent-buffer bindings, written once; the per-call buffers (coords,
-  // fail-count, compacted, count) are written before each dispatch.
-  const VkBuffer entries = map.entries_.handle();
-  const VkBuffer heap = map.heap_.handle();
-  const VkBuffer counter = map.heap_counter_.handle();
-  const VkBuffer mutex = map.bucket_mutex_.handle();
-  for (const DescriptorSet* set :
-       {&map.init_set_, &map.allocate_set_, &map.delete_set_}) {
-    set->write_storage_buffer(0, entries, 0, VK_WHOLE_SIZE);
-    set->write_storage_buffer(1, heap, 0, VK_WHOLE_SIZE);
-    set->write_storage_buffer(2, counter, 0, VK_WHOLE_SIZE);
-    set->write_storage_buffer(3, mutex, 0, VK_WHOLE_SIZE);
-  }
-  map.compact_set_.write_storage_buffer(0, entries, 0, VK_WHOLE_SIZE);
+  // Persistent-buffer bindings (the per-call buffers -- coords, fail-count,
+  // compacted, count -- are written before each dispatch).
+  map.write_persistent_bindings();
 
   VR_TRY(map.init_table());
   return map;
@@ -321,6 +310,65 @@ Status VoxelHashMap::clear() {
     return Status::invalid_argument("VoxelHashMap::clear: moved-from map");
   }
   return init_table();
+}
+
+void VoxelHashMap::write_persistent_bindings() {
+  const VkBuffer entries = entries_.handle();
+  const VkBuffer heap = heap_.handle();
+  const VkBuffer counter = heap_counter_.handle();
+  const VkBuffer mutex = bucket_mutex_.handle();
+  for (const DescriptorSet* set : {&init_set_, &allocate_set_, &delete_set_}) {
+    set->write_storage_buffer(0, entries, 0, VK_WHOLE_SIZE);
+    set->write_storage_buffer(1, heap, 0, VK_WHOLE_SIZE);
+    set->write_storage_buffer(2, counter, 0, VK_WHOLE_SIZE);
+    set->write_storage_buffer(3, mutex, 0, VK_WHOLE_SIZE);
+  }
+  compact_set_.write_storage_buffer(0, entries, 0, VK_WHOLE_SIZE);
+}
+
+Status VoxelHashMap::resize(std::int32_t new_num_buckets) {
+  if (!valid()) {
+    return Status::invalid_argument("VoxelHashMap::resize: moved-from map");
+  }
+  if (new_num_buckets <= grid_.num_buckets) {
+    return Status::invalid_argument(
+        "VoxelHashMap::resize: new_num_buckets must exceed the current count");
+  }
+
+  // Snapshot the active blocks before growing (compact reads the old table).
+  VR_ASSIGN(std::vector<BlockIndex> active, compact_active_blocks());
+
+  const auto new_total_entries = static_cast<std::uint32_t>(new_num_buckets) *
+                                 static_cast<std::uint32_t>(grid_.bucket_size);
+  // num_blocks == bucket_size * num_buckets by convention (one block per slot).
+  const std::uint32_t new_num_blocks = new_total_entries;
+
+  // Grow the buffers (fresh + larger); heap_counter stays a single element.
+  VR_ASSIGN(entries_,
+            storage_buffer(*allocator_, VkDeviceSize(new_total_entries) *
+                                            sizeof(HashEntry)));
+  VR_ASSIGN(heap_, storage_buffer(*allocator_, VkDeviceSize(new_num_blocks) *
+                                                   sizeof(std::uint32_t)));
+  VR_ASSIGN(bucket_mutex_,
+            storage_buffer(*allocator_, VkDeviceSize(new_num_buckets) *
+                                            sizeof(std::int32_t)));
+
+  grid_.num_buckets = new_num_buckets;
+  grid_.num_blocks = static_cast<std::int32_t>(new_num_blocks);
+
+  // Point the sets at the new buffers, init the larger table, and re-insert.
+  write_persistent_bindings();
+  VR_TRY(init_table());
+  if (!active.empty()) {
+    VR_ASSIGN(
+        std::uint32_t failed,
+        allocate(active.data(), static_cast<std::uint32_t>(active.size())));
+    if (failed != 0) {
+      return Status::out_of_memory(
+          "VoxelHashMap::resize: re-insert failed after growing");
+    }
+  }
+  return {};
 }
 
 Result<std::vector<HashEntry>> VoxelHashMap::read_entries() {
