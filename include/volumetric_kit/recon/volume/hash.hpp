@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Tao Jin
 
+#pragma once
+
 /// @file volume/hash.hpp
 /// @brief The spatial hash function and the hash-table slot sentinels.
-
-#pragma once
 
 #include <cstdint>
 
@@ -14,8 +14,9 @@
 namespace volumetric_kit::recon::volume {
 
 /// @name Hash-table slot sentinels
-/// Shared by the host allocator and the compute shaders; a slot's `ptr` field
-/// carries one of these when it is not a live voxel-block pointer.
+/// Shared by the host allocator and the compute shaders. `kFreeEntry` and
+/// `kLockEntry` occupy a slot's `ptr` field when it holds no live voxel-block
+/// pointer; `kNoOffset` terminates a collision chain in the `offset` field.
 /// @{
 inline constexpr std::int32_t kFreeEntry = -1;  ///< Empty slot.
 inline constexpr std::int32_t kLockEntry = -2;  ///< Slot locked mid-insert.
@@ -38,7 +39,9 @@ inline constexpr std::uint32_t kHashPrimeZ = 83492791u;
 /// each axis is cast to `uint32_t` before the multiply (a straight
 /// reinterpretation of the bits, matching the GLSL mirror).
 /// @param block        The voxel-block coordinate.
-/// @param num_buckets  The hash-table bucket count (must be > 0).
+/// @param num_buckets  The hash-table bucket count. @pre `num_buckets > 0`
+///                     (enforced by @ref VoxelGridParams::validate); a value of
+///                     0 is undefined -- integer division by zero.
 /// @return The bucket index the coordinate hashes to.
 VR_DEVICE_HOST inline std::uint32_t hash_bucket(Vec3i block,
                                                 std::int32_t num_buckets) {
