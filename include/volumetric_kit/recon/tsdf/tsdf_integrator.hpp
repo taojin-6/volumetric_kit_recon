@@ -49,8 +49,9 @@ enum class IntegrationMode : std::uint32_t {
 /// unique `BlockIndex::ptr + local`), so the fusion needs no atomics.
 ///
 /// @ref IntegrationMode::Dynamic instead clears stale geometry ahead of a
-/// receded surface (classic keeps a smooth field there). Bilinear depth
-/// sampling is a follow-up; this uses nearest-neighbour depth.
+/// receded surface (classic keeps a smooth field there). Depth is sampled
+/// bilinearly, falling back to nearest-neighbour at image edges and across
+/// depth discontinuities.
 ///
 /// @warning The @ref Device and @ref Allocator passed to @ref create must
 ///          outlive this object; it stores references to them.

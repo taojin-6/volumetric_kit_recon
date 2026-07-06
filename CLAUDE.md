@@ -209,6 +209,21 @@ Each dated; newest context wins. Change the decision *and* this list together.
   interop-seam converter still maps recon's vertex to gfx's `{…, tangent, uv0,
   color}` shape (synthesizing `tangent`). *Amends* the 2026-06-21 "zero gfx
   changes" stance in the interop seam below.
+- **2026-07-06 — Depth sampling is texture-centred (pixel centres at i+0.5), a
+  deliberate ~½-pixel convention.** The `tsdf` bilinear depth sampler
+  (`tsdf_integrate.comp::sample_depth`) shifts its 2×2 taps by −0.5 and takes the
+  containing pixel (`floor(u)`, `floor(v)`) as its nearest-neighbour fallback —
+  the GPU-texture convention, self-consistent across interpolation *and* fallback.
+  recon's projection (`u = fx·x/z + cx`) and the `volume` unprojection
+  (`hash_allocate_depth.comp`: `x = (u − cx)·d/fx` on integer pixels) are instead
+  integer-centred, so an on-axis voxel (`u = cx`) samples the 50/50 blend of the
+  two pixels straddling `cx` rather than the principal-point pixel. We keep the
+  offset knowingly: it faithfully ports the prior engine's `sampleDepthBilinear`
+  taps, and we further make the *fallback* texture-centred (`floor`) where the
+  prior engine inconsistently *rounded* to an integer centre while shifting its
+  taps. Revisit only if the depth intrinsics are ever calibrated integer-centred —
+  then drop the −0.5 shift and round the fallback so the sampler matches the
+  projection.
 
 ## Provenance & salvage policy
 
@@ -380,6 +395,8 @@ there so a receded surface leaves no ghost) — one kernel branch, the prior
 engine's stale-free-space clearing. `tests/tsdf_integrate_test.cpp` fuses a
 constant-depth plane, checks the per-voxel numerics under a rotated pose, and
 proves dynamic clears a receded-surface voxel that classic keeps, on MoltenVK.
+Depth is sampled **bilinearly** (nearest fallback at image edges and across depth
+discontinuities `> trunc_dist`), the prior engine's `sampleDepthBilinear`.
 
 The first **`mesh` tier** slice — GPU marching cubes — lands alongside it. The
 host `MarchingCubes` (`mesh/marching_cubes.hpp`) owns the compute pipeline and
@@ -399,7 +416,7 @@ vertex color on MoltenVK. `mesh` depends only on the
 `volume` voxel payload (a tier to its left, so the strict dependency rule holds)
 and is proven against a dense analytic SDF until it reads `tsdf`'s real blocks.
 
-Next: **bilinear depth sampling** and **colour** (a `color` attribute).
+Next: **colour** (a `color` attribute).
 A block-index-preserving GPU **rehash** + heap-rebuild then preserves per-voxel
 data across a `resize` (which currently reassigns block indices, discarding the
 `tsdf`/`weight` a block held). On the `mesh` side (greppable `TODO`s): extraction

@@ -325,11 +325,83 @@ int main() {
   CHECK(integ.integrate(vbg_cls, depth_far.data(), cam, 5.0f).ok());  // classic
   CHECK(cls_weight[vc] > 0.0f);  // kept (clamped to +trunc, fused)
 
+  // Bilinear depth sampling. cx = 321.0 puts the on-axis voxel's projection at
+  // pixel u = 321.0, so the bilinear taps straddle columns 320 and 321 at
+  // fx = 0.5 (a 50/50 blend). The on-axis voxel is at world z = 0.48.
+  vol::DepthCameraParams bcam = cam;
+  bcam.cx = 321.0f;
+  const std::size_t bw = bcam.width;
+  const std::size_t on_axis =
+      static_cast<std::size_t>(local_index(0, 0, 0, bs));
+
+  // (interp) A 0.48 / 0.50 step across the taps (< trunc) blends to 0.49, so
+  // sdf = 0.49 - 0.48 = 0.01 -- distinct from the nearest sample (0.50 ->
+  // 0.02).
+  std::vector<float> depth_interp(depth.size(), 0.48f);
+  for (std::uint32_t y = 0; y < bcam.height; ++y) {
+    depth_interp[static_cast<std::size_t>(y) * bw + 321] = 0.50f;
+  }
+  vr::Result<vol::VoxelBlockGrid> bi = vol::VoxelBlockGrid::create(
+      device.value(), allocator.value(), grid, attrs, 2);
+  CHECK(bi.ok());
+  vol::VoxelBlockGrid vbg_bi = std::move(bi).value();
+  CHECK(vbg_bi.map()
+            .allocate(blocks.data(), static_cast<std::uint32_t>(blocks.size()))
+            .value() == 0);
+  vr::Result<std::vector<vol::BlockIndex>> bi_active =
+      vbg_bi.map().compact_active_blocks();
+  CHECK(bi_active.ok());
+  const std::int32_t pbi = find_ptr(bi_active.value(), vr::Vec3i(0, 0, 12));
+  CHECK(pbi >= 0);
+  const std::size_t vbi = static_cast<std::size_t>(pbi) + on_axis;
+  CHECK(integ.integrate(vbg_bi, depth_interp.data(), bcam, 5.0f).ok());
+  const auto* bi_tsdf = static_cast<const float*>(
+      vbg_bi.attribute("tsdf").value().buffer->mapped());
+  const auto* bi_weight = static_cast<const float*>(
+      vbg_bi.attribute("weight").value().buffer->mapped());
+  CHECK(bi_weight[vbi] > 0.0f);
+  CHECK(approx(bi_tsdf[vbi], 0.01f, 1e-3f));   // bilinear: 0.49 - 0.48
+  CHECK(!approx(bi_tsdf[vbi], 0.02f, 5e-3f));  // NOT nearest: 0.50 - 0.48
+
+  // (discontinuity) A 0.48 / 0.58 step across the taps (> trunc) is a depth
+  // edge, so the sampler falls back to the nearest sample (0.48) rather than
+  // blending to 0.53. This runs in classic mode, where a regression that DID
+  // blend across the edge would not drop the voxel: sdf = 0.53 - 0.48 = 0.05 >
+  // trunc is clamped to +trunc and fused at tsdf ~ +0.04. So the tsdf ~ 0 check
+  // below is what separates the fallback (0.48 -> sdf 0) from a cross-edge
+  // blend (tsdf ~ +0.04); the weight check only confirms the voxel fused at
+  // all.
+  std::vector<float> depth_edge(depth.size(), 0.48f);
+  for (std::uint32_t y = 0; y < bcam.height; ++y) {
+    depth_edge[static_cast<std::size_t>(y) * bw + 320] = 0.58f;
+  }
+  vr::Result<vol::VoxelBlockGrid> ed = vol::VoxelBlockGrid::create(
+      device.value(), allocator.value(), grid, attrs, 2);
+  CHECK(ed.ok());
+  vol::VoxelBlockGrid vbg_ed = std::move(ed).value();
+  CHECK(vbg_ed.map()
+            .allocate(blocks.data(), static_cast<std::uint32_t>(blocks.size()))
+            .value() == 0);
+  vr::Result<std::vector<vol::BlockIndex>> ed_active =
+      vbg_ed.map().compact_active_blocks();
+  CHECK(ed_active.ok());
+  const std::int32_t ped = find_ptr(ed_active.value(), vr::Vec3i(0, 0, 12));
+  CHECK(ped >= 0);
+  const std::size_t ved = static_cast<std::size_t>(ped) + on_axis;
+  CHECK(integ.integrate(vbg_ed, depth_edge.data(), bcam, 5.0f).ok());
+  const auto* ed_tsdf = static_cast<const float*>(
+      vbg_ed.attribute("tsdf").value().buffer->mapped());
+  const auto* ed_weight = static_cast<const float*>(
+      vbg_ed.attribute("weight").value().buffer->mapped());
+  CHECK(ed_weight[ved] > 0.0f);  // fused (fallback kept it in-band)
+  CHECK(approx(ed_tsdf[ved], 0.0f,
+               1e-3f));  // 0.48 - 0.48; not a cross-edge blend
+
   std::printf(
       "recon tsdf integrate test passed: classic fusion of a 0.5 m plane (%zu "
       "voxels), %zu cross-checked under a rotated pose, dynamic cleared a "
       "stale "
-      "free-space voxel (classic kept it)\n",
+      "voxel, bilinear blended a step and fell back across a depth edge\n",
       touched, cross_checked);
   return 0;
 }
