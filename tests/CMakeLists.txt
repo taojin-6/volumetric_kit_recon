@@ -30,6 +30,22 @@ target_link_libraries(recon_volume_types_test
 vr_target_warnings(recon_volume_types_test)
 add_test(NAME recon_volume_types COMMAND recon_volume_types_test)
 
+# volume coordinate math + spatial hash: pure host transforms (world <-> voxel
+# <-> block, negative-coordinate block indexing, truncation band) and the bucket
+# hash function. CPU-only (no device), so these always run -- not gated on a
+# Vulkan driver.
+add_executable(recon_volume_coords_test volume_coords_test.cpp)
+target_link_libraries(recon_volume_coords_test
+                      PRIVATE volumetric_kit::recon_volume)
+vr_target_warnings(recon_volume_coords_test)
+add_test(NAME recon_volume_coords COMMAND recon_volume_coords_test)
+
+add_executable(recon_volume_hash_test volume_hash_test.cpp)
+target_link_libraries(recon_volume_hash_test
+                      PRIVATE volumetric_kit::recon_volume)
+vr_target_warnings(recon_volume_hash_test)
+add_test(NAME recon_volume_hash COMMAND recon_volume_hash_test)
+
 # core device seam: Instance + Device create/adopt. Links recon_core, which now
 # carries the Vulkan headers/loader. Skips at runtime where no compute device is
 # present.
