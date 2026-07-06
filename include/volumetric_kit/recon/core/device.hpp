@@ -9,6 +9,7 @@
 ///        `VkDevice` with the renderer.
 
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <vector>
 
@@ -162,6 +163,36 @@ class VR_CORE_API Device {
   /// the
   ///         queue is exclusively this device's.
   std::mutex* submit_mutex() const noexcept { return submit_mutex_; }
+
+  /// @brief Submit to the compute queue, holding @ref submit_mutex when the
+  ///        queue is shared with another library (an adopted device).
+  ///
+  /// Vulkan requires queue submits be externally synchronized; on a shared
+  /// queue the neutral bootstrap hands recon a mutex, and every submit must
+  /// hold it. Prefer @ref submit_single_time for a one-shot dispatch; this is
+  /// the lower-level primitive for a caller batching its own command buffers.
+  /// @param count    Number of `VkSubmitInfo`s in @p submits.
+  /// @param submits  The submit batch.
+  /// @param fence    Fence signalled on completion (may be `VK_NULL_HANDLE`).
+  /// @return The `VkResult` from `vkQueueSubmit`.
+  VkResult queue_submit(std::uint32_t count, const VkSubmitInfo* submits,
+                        VkFence fence) const;
+
+  /// @brief Record a one-time command buffer, submit it to the compute queue,
+  ///        and block until the GPU finishes — the simplest dispatch primitive.
+  ///
+  /// Allocates a primary command buffer from @ref command_pool, begins it
+  /// (`ONE_TIME_SUBMIT`), invokes @p record to fill it (bind pipeline, bind
+  /// descriptors, push constants, dispatch, barriers), then ends, submits
+  /// (through @ref queue_submit, so it is shared-queue-safe), and waits on an
+  /// internal fence. Every transient — command buffer and fence — is freed
+  /// before returning. Blocking, so it is a bring-up / single-shot primitive;
+  /// the fusion tiers will batch many dispatches per submit on their own.
+  /// @param record  Records compute commands into the given command buffer.
+  /// @return OK once the work completes, or a non-OK @ref Status if any Vulkan
+  ///         step fails.
+  Status submit_single_time(
+      const std::function<void(VkCommandBuffer)>& record) const;
 
  private:
   Device() = default;

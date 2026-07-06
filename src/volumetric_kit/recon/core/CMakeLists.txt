@@ -43,8 +43,24 @@ set(_vr_generated_inc "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
 add_library(recon_core)
 add_library(volumetric_kit::recon_core ALIAS recon_core)
 
-target_sources(recon_core PRIVATE version.cpp log.cpp check.cpp result.cpp
-                                  instance.cpp device.cpp)
+target_sources(
+  recon_core
+  PRIVATE version.cpp
+          log.cpp
+          check.cpp
+          result.cpp
+          instance.cpp
+          device.cpp
+          # Vulkan compute foundation: the VMA allocator + RAII buffer, the
+          # SPIR-V shader module, descriptor + compute-pipeline wrappers, and
+          # the single TU that instantiates VMA (VMA_IMPLEMENTATION). Dispatch +
+          # submit live on Device (device.cpp).
+          allocator.cpp
+          buffer.cpp
+          shader.cpp
+          descriptor.cpp
+          compute_pipeline.cpp
+          vma_impl.cpp)
 
 # Generated headers: the VR_CORE_API export macro + the configured version
 # header. The export header is per-tier (core/export.hpp + VR_CORE_API +
@@ -87,6 +103,19 @@ target_include_directories(
   PUBLIC "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>"
          "$<BUILD_INTERFACE:${_vr_generated_inc}>"
          "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
+
+# VMA is a private implementation detail: only allocator.cpp / buffer.cpp /
+# vma_impl.cpp include <vk_mem_alloc.h>, never a public header, so it is neither
+# propagated to consumers nor part of the installed interface. SYSTEM keeps
+# VMA's own headers out of recon_core's -Werror surface.
+if(NOT VR_VMA_INCLUDE_DIR)
+  message(
+    FATAL_ERROR
+      "recon_core: VR_VMA_INCLUDE_DIR is unset -- third_party/ (VMA) must be "
+      "configured before src/ (see the root CMakeLists add_subdirectory order)."
+  )
+endif()
+target_include_directories(recon_core SYSTEM PRIVATE "${VR_VMA_INCLUDE_DIR}")
 
 vr_target_warnings(recon_core)
 

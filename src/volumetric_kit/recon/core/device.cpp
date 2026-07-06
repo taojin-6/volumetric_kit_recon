@@ -318,4 +318,66 @@ void Device::destroy() noexcept {
   compute_queue_ = VK_NULL_HANDLE;
 }
 
+VkResult Device::queue_submit(std::uint32_t count, const VkSubmitInfo* submits,
+                              VkFence fence) const {
+  // Vulkan requires queue submits be externally synchronized. When the compute
+  // queue is shared with another library (an adopted device), the neutral
+  // bootstrap hands us a mutex to serialize submits on it; hold it here. When
+  // the queue is exclusively ours (created path), there is nothing to lock.
+  if (submit_mutex_ != nullptr) {
+    std::lock_guard<std::mutex> lock(*submit_mutex_);
+    return vkQueueSubmit(compute_queue_, count, submits, fence);
+  }
+  return vkQueueSubmit(compute_queue_, count, submits, fence);
+}
+
+Status Device::submit_single_time(
+    const std::function<void(VkCommandBuffer)>& record) const {
+  VkCommandBufferAllocateInfo alloc_info{};
+  alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+  alloc_info.commandPool = command_pool_;
+  alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+  alloc_info.commandBufferCount = 1;
+  VkCommandBuffer cmd = VK_NULL_HANDLE;
+  VR_VK_TRY(vkAllocateCommandBuffers(device_, &alloc_info, &cmd));
+
+  // Free the command buffer on every exit path below -- including the VR_VK_TRY
+  // early returns -- via a scope guard (recon has no standalone CommandBuffer
+  // type yet; a one-shot dispatch does not need one).
+  struct CommandBufferGuard {
+    VkDevice device;
+    VkCommandPool pool;
+    VkCommandBuffer cmd;
+    ~CommandBufferGuard() { vkFreeCommandBuffers(device, pool, 1, &cmd); }
+  } cmd_guard{device_, command_pool_, cmd};
+
+  VkCommandBufferBeginInfo begin{};
+  begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+  begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+  VR_VK_TRY(vkBeginCommandBuffer(cmd, &begin));
+  record(cmd);
+  VR_VK_TRY(vkEndCommandBuffer(cmd));
+
+  VkFenceCreateInfo fence_info{};
+  fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+  VkFence fence = VK_NULL_HANDLE;
+  VR_VK_TRY(vkCreateFence(device_, &fence_info, nullptr, &fence));
+  struct FenceGuard {
+    VkDevice device;
+    VkFence fence;
+    ~FenceGuard() { vkDestroyFence(device, fence, nullptr); }
+  } fence_guard{device_, fence};
+
+  VkSubmitInfo submit{};
+  submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+  submit.commandBufferCount = 1;
+  submit.pCommandBuffers = &cmd;
+  VR_VK_TRY(queue_submit(1, &submit, fence));
+
+  // Block until the GPU signals the fence, so the guards can safely free the
+  // command buffer and fence once we return.
+  VR_VK_TRY(vkWaitForFences(device_, 1, &fence, VK_TRUE, UINT64_MAX));
+  return {};
+}
+
 }  // namespace volumetric_kit::recon
