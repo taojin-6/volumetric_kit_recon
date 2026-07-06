@@ -188,6 +188,12 @@ class VR_CORE_API Device {
   /// internal fence. Every transient — command buffer and fence — is freed
   /// before returning. Blocking, so it is a bring-up / single-shot primitive;
   /// the fusion tiers will batch many dispatches per submit on their own.
+  ///
+  /// @warning Not thread-safe: it allocates, records, and frees a command
+  ///          buffer on @ref command_pool, which Vulkan requires be externally
+  ///          synchronized. @ref submit_mutex guards only the queue submit, not
+  ///          the pool, so concurrent calls on one @ref Device must be
+  ///          serialized by the caller.
   /// @param record  Records compute commands into the given command buffer.
   /// @return OK once the work completes, or a non-OK @ref Status if any Vulkan
   ///         step fails.

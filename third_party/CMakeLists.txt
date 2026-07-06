@@ -5,8 +5,10 @@
 # the system (find_package in the root + core CMakeLists), so the only thing
 # vendored here is VMA -- header-only, with no system package to rely on across
 # our targets (Linux/Android/macOS/iOS/Windows). Pinned to a tag, fetched
-# shallow. This subdirectory is added by the root CMakeLists only when it
-# exists, so a core-only checkout without a network can still configure.
+# shallow. recon_core compiles VMA in one TU, so it is a hard dependency: the
+# root CMakeLists adds this subdirectory unconditionally and the fetch below
+# runs on the first configure (a network is required then; afterwards the
+# FetchContent cache serves it).
 #
 # The include dir is exported to the parent scope; the core tier compiles VMA's
 # implementation in a single TU (core/vma_impl.cpp) and attaches this dir as a

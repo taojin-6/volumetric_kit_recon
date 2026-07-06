@@ -4,8 +4,8 @@
 #pragma once
 
 /// @file unique_handle.hpp
-/// @brief Move-only owner for a device-scoped Vulkan handle freed by a
-///        `vkDestroy*` entry point.
+/// @brief Sole owner of a device-scoped Vulkan handle, freeing it via a
+///        `vkDestroy*` entry point exactly once.
 
 #include "volumetric_kit/recon/core/vulkan.hpp"
 
@@ -25,6 +25,12 @@ namespace volumetric_kit::recon {
 /// needs no type-erased `std::function` deleter (that is reserved for the
 /// VMA-backed
 /// @ref Buffer, whose backend must stay out of its public header).
+///
+/// @warning The `VkDevice` the handle was created on must outlive this owner:
+///          the destructor calls @p Destroy on the stored device. A wrapper
+///          built on it (@ref ShaderModule, @ref DescriptorSetLayout, @ref
+///          DescriptorPool, @ref ComputePipeline) must therefore be destroyed
+///          before the @ref Device it was created from.
 ///
 /// @tparam HandleT  The Vulkan handle type (e.g. `VkShaderModule`).
 /// @tparam Destroy  The `vkDestroy*` entry point that frees a @p HandleT.

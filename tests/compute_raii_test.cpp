@@ -116,6 +116,36 @@ int test_layout_moves(VkDevice device) {
   return 0;
 }
 
+// Allocator: the pImpl + unique_ptr owner (defaulted moves) -- the one owner
+// not backed by UniqueHandle, so its move path (vmaDestroyAllocator on the old
+// Impl during move-assign) needs its own coverage.
+int test_allocator_moves(VkInstance instance, const vr::Device& device) {
+  vr::Result<vr::Allocator> a = vr::Allocator::create(instance, device);
+  CHECK(a.ok());
+  vr::Allocator alloc_a = std::move(a).value();
+  CHECK(alloc_a.valid());
+
+  // move-construct: source emptied, destination adopts the allocator.
+  vr::Allocator alloc_b(std::move(alloc_a));
+  CHECK(!alloc_a.valid());
+  CHECK(alloc_b.valid());
+
+  // move-assign over a live allocator: the destination's original VmaAllocator
+  // is freed (ASan would flag a leak otherwise), then it adopts the source.
+  vr::Result<vr::Allocator> c = vr::Allocator::create(instance, device);
+  CHECK(c.ok());
+  vr::Allocator alloc_c = std::move(c).value();
+  alloc_c = std::move(alloc_b);
+  CHECK(alloc_c.valid());
+  CHECK(!alloc_b.valid());
+
+  // self-move: a no-op. Launder through a pointer to dodge -Wself-move.
+  vr::Allocator* alias = &alloc_c;
+  alloc_c = std::move(*alias);
+  CHECK(alloc_c.valid());
+  return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -150,6 +180,10 @@ int main() {
     return rc;
   }
   if (int rc = test_layout_moves(device.value().handle()); rc != 0) {
+    return rc;
+  }
+  if (int rc = test_allocator_moves(instance.value().handle(), device.value());
+      rc != 0) {
     return rc;
   }
 

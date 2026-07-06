@@ -153,10 +153,10 @@ Each dated; newest context wins. Change the decision *and* this list together.
   `CommandPool` types yet** — a one-shot `Device::submit_single_time(record_fn)`,
   shared-queue-safe via `Device::queue_submit` + `submit_mutex`, is the dispatch
   primitive; reusable command buffers and timeline-semaphore sync land when a
-  fusion tier actually batches dispatches. VMA is a private dependency (only the
-  allocator/buffer TUs include `<vk_mem_alloc.h>`, one `VMA_IMPLEMENTATION` TU,
-  `SYSTEM` include). Revisit reflection if the volume/tsdf binding boilerplate
-  grows painful.
+  fusion tier actually batches dispatches. VMA is a private dependency (only
+  `allocator.cpp` and the one `VMA_IMPLEMENTATION` TU, `vma_impl.cpp`, include
+  `<vk_mem_alloc.h>`; `SYSTEM` include). Revisit reflection if the volume/tsdf
+  binding boilerplate grows painful.
 
 ## Provenance & salvage policy
 

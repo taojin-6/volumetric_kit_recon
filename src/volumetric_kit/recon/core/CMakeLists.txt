@@ -104,10 +104,10 @@ target_include_directories(
          "$<BUILD_INTERFACE:${_vr_generated_inc}>"
          "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
 
-# VMA is a private implementation detail: only allocator.cpp / buffer.cpp /
-# vma_impl.cpp include <vk_mem_alloc.h>, never a public header, so it is neither
-# propagated to consumers nor part of the installed interface. SYSTEM keeps
-# VMA's own headers out of recon_core's -Werror surface.
+# VMA is a private implementation detail: only allocator.cpp and vma_impl.cpp
+# include <vk_mem_alloc.h>, never a public header, so it is neither propagated
+# to consumers nor part of the installed interface. SYSTEM keeps VMA's own
+# headers out of recon_core's -Werror surface.
 if(NOT VR_VMA_INCLUDE_DIR)
   message(
     FATAL_ERROR

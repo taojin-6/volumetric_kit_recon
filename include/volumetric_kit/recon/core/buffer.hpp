@@ -22,6 +22,11 @@ namespace volumetric_kit::recon {
 /// backend-out-of-headers rule). A buffer created with `BufferDesc::mapped`
 /// exposes a persistent host pointer through @ref mapped; a device-local
 /// buffer's @ref mapped is `nullptr`.
+///
+/// @warning A Buffer must not outlive the @ref Allocator that created it: the
+///          deleter frees the `VkBuffer` and its allocation through that
+///          allocator, so freeing once the Allocator is gone is a
+///          use-after-free.
 class VR_CORE_API Buffer {
  public:
   /// @brief Construct an empty buffer (owns nothing; `valid()` is false).

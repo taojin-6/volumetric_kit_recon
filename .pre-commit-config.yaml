@@ -31,8 +31,8 @@ repos:
   # optional whitespace) so it matches real `#include` directives, not the path
   # quoted inside a comment or a Doxygen @code block. Exemptions: examples/
   # (consumer demo code, not library code, may use Vulkan directly) and vulkan.hpp
-  # itself. (When the VMA allocator lands, add vma_impl.cpp here -- it must define
-  # VMA_STATIC_VULKAN_FUNCTIONS before the include.)
+  # itself. (core/vma_impl.cpp needs no exemption -- it reaches Vulkan through the
+  # umbrella, then includes <vk_mem_alloc.h>, not a <vulkan/...> path.)
   - repo: local
     hooks:
       - id: vulkan-include-umbrella

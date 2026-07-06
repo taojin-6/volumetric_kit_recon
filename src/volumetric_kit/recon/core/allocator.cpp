@@ -10,6 +10,7 @@
 
 #include <vk_mem_alloc.h>
 
+#include "vk_physical_device.hpp"
 #include "volumetric_kit/recon/core/buffer.hpp"
 #include "volumetric_kit/recon/core/device.hpp"
 #include "volumetric_kit/recon/core/vk_result.hpp"
@@ -62,9 +63,8 @@ Result<Allocator> Allocator::create(VkInstance instance, const Device& device) {
   if (vkEnumerateInstanceVersion(&instance_version) != VK_SUCCESS) {
     instance_version = VK_API_VERSION_1_0;
   }
-  VkPhysicalDeviceProperties props{};
-  vkGetPhysicalDeviceProperties(device.physical_device(), &props);
-  const std::uint32_t effective = std::min(instance_version, props.apiVersion);
+  const std::uint32_t effective = std::min(
+      instance_version, detail::physical_api_version(device.physical_device()));
 
   // With VMA_STATIC_VULKAN_FUNCTIONS (see vma_impl.cpp) VMA resolves entry
   // points against the linked loader; feeding the two get-proc-addr seeds keeps

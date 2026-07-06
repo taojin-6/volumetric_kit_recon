@@ -10,15 +10,17 @@ namespace volumetric_kit::recon {
 Result<ShaderModule> ShaderModule::create(VkDevice device,
                                           const std::uint32_t* code,
                                           std::size_t size_bytes) {
-  if (device == VK_NULL_HANDLE) {
-    return Status::invalid_argument("ShaderModule::create: device is null");
-  }
-  // codeSize is a byte count that Vulkan requires be a multiple of 4 (SPIR-V is
-  // a stream of 32-bit words); reject a malformed blob before the device call.
+  // Argument checks run before the device check so a no-device unit test still
+  // exercises them (matching the other core create() wrappers). codeSize is a
+  // byte count Vulkan requires be a multiple of 4 (SPIR-V is a stream of 32-bit
+  // words); reject a malformed blob up front.
   if (code == nullptr || size_bytes == 0 || size_bytes % 4 != 0) {
     return Status::invalid_argument(
         "ShaderModule::create: SPIR-V must be non-null and a non-zero multiple "
         "of 4 bytes");
+  }
+  if (device == VK_NULL_HANDLE) {
+    return Status::invalid_argument("ShaderModule::create: device is null");
   }
 
   VkShaderModuleCreateInfo info{};

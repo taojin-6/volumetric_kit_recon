@@ -58,6 +58,10 @@ struct BufferDesc {
 ///
 /// @warning The `VkInstance` and @ref Device passed to @ref create must outlive
 ///          this allocator; it stores their handles.
+/// @warning This allocator must outlive every @ref Buffer it creates: a Buffer
+///          frees its `VkBuffer` and allocation through this allocator, so a
+///          Buffer destroyed after its Allocator dereferences a freed allocator
+///          (a use-after-free). Destroy Buffers before their Allocator.
 ///
 /// @code
 /// Result<Allocator> alloc = Allocator::create(instance.handle(), device);

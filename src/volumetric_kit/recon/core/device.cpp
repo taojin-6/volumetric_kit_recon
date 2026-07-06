@@ -6,8 +6,10 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstring>
+#include <functional>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "vk_physical_device.hpp"
@@ -15,6 +17,27 @@
 
 namespace volumetric_kit::recon {
 namespace {
+
+// Runs `cleanup` when it leaves scope, unless release()d first.
+// submit_single_time uses it to free its one-shot transients on every exit
+// path -- and to deliberately leak them (rather than free objects the GPU may
+// still be using) when the fence wait fails.
+class ScopeGuard {
+ public:
+  explicit ScopeGuard(std::function<void()> cleanup)
+      : cleanup_(std::move(cleanup)) {}
+  ScopeGuard(const ScopeGuard&) = delete;
+  ScopeGuard& operator=(const ScopeGuard&) = delete;
+  ~ScopeGuard() {
+    if (cleanup_) {
+      cleanup_();
+    }
+  }
+  void release() noexcept { cleanup_ = nullptr; }
+
+ private:
+  std::function<void()> cleanup_;
+};
 
 // VK_KHR_portability_subset's name macro lives in vulkan_beta.h (gated by
 // VK_ENABLE_BETA_EXTENSIONS); the string is stable, so we use it directly.
@@ -322,11 +345,12 @@ VkResult Device::queue_submit(std::uint32_t count, const VkSubmitInfo* submits,
                               VkFence fence) const {
   // Vulkan requires queue submits be externally synchronized. When the compute
   // queue is shared with another library (an adopted device), the neutral
-  // bootstrap hands us a mutex to serialize submits on it; hold it here. When
-  // the queue is exclusively ours (created path), there is nothing to lock.
+  // bootstrap hands us a mutex to serialize submits on it; hold it for the
+  // submit. When the queue is exclusively ours (created path), there is nothing
+  // to lock and the unengaged lock is a no-op.
+  std::unique_lock<std::mutex> lock;
   if (submit_mutex_ != nullptr) {
-    std::lock_guard<std::mutex> lock(*submit_mutex_);
-    return vkQueueSubmit(compute_queue_, count, submits, fence);
+    lock = std::unique_lock<std::mutex>(*submit_mutex_);
   }
   return vkQueueSubmit(compute_queue_, count, submits, fence);
 }
@@ -342,14 +366,10 @@ Status Device::submit_single_time(
   VR_VK_TRY(vkAllocateCommandBuffers(device_, &alloc_info, &cmd));
 
   // Free the command buffer on every exit path below -- including the VR_VK_TRY
-  // early returns -- via a scope guard (recon has no standalone CommandBuffer
-  // type yet; a one-shot dispatch does not need one).
-  struct CommandBufferGuard {
-    VkDevice device;
-    VkCommandPool pool;
-    VkCommandBuffer cmd;
-    ~CommandBufferGuard() { vkFreeCommandBuffers(device, pool, 1, &cmd); }
-  } cmd_guard{device_, command_pool_, cmd};
+  // early returns (recon has no standalone CommandBuffer type yet; a one-shot
+  // dispatch does not need one).
+  ScopeGuard free_cmd(
+      [&] { vkFreeCommandBuffers(device_, command_pool_, 1, &cmd); });
 
   VkCommandBufferBeginInfo begin{};
   begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -362,11 +382,7 @@ Status Device::submit_single_time(
   fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
   VkFence fence = VK_NULL_HANDLE;
   VR_VK_TRY(vkCreateFence(device_, &fence_info, nullptr, &fence));
-  struct FenceGuard {
-    VkDevice device;
-    VkFence fence;
-    ~FenceGuard() { vkDestroyFence(device, fence, nullptr); }
-  } fence_guard{device_, fence};
+  ScopeGuard destroy_fence([&] { vkDestroyFence(device_, fence, nullptr); });
 
   VkSubmitInfo submit{};
   submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -374,9 +390,17 @@ Status Device::submit_single_time(
   submit.pCommandBuffers = &cmd;
   VR_VK_TRY(queue_submit(1, &submit, fence));
 
-  // Block until the GPU signals the fence, so the guards can safely free the
-  // command buffer and fence once we return.
-  VR_VK_TRY(vkWaitForFences(device_, 1, &fence, VK_TRUE, UINT64_MAX));
+  // Block until the GPU signals the fence. If the wait itself fails (device
+  // lost / out of memory) the submit may still be pending, so the command
+  // buffer and fence must NOT be freed -- disarm the guards and leak them
+  // rather than free objects the GPU could still touch (a use-after-free).
+  const VkResult waited =
+      vkWaitForFences(device_, 1, &fence, VK_TRUE, UINT64_MAX);
+  if (waited != VK_SUCCESS) {
+    free_cmd.release();
+    destroy_fence.release();
+    return vk_error(waited, "vkWaitForFences");
+  }
   return {};
 }
 
