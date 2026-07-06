@@ -10,6 +10,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 #include "volumetric_kit/recon/core/compute_pipeline.hpp"
@@ -29,14 +30,41 @@ class Device;
 /// A resource bundle that replaces the three parallel `*_layout_` /
 /// `*_pipeline_` / `*_set_` members a compute tier used to carry per kernel --
 /// one member per kernel instead of three. @ref KernelSetBuilder populates it;
-/// @ref dispatch runs it. Move-only follows from the members (rule of zero).
+/// @ref dispatch runs it.
 struct ComputeKernel {
   DescriptorSetLayout layout;  ///< Descriptor-set layout (N storage buffers).
   ComputePipeline pipeline;    ///< Pipeline built from the kernel's SPIR-V.
   DescriptorSet set;           ///< One set allocated from the shared pool.
 
-  /// @return `true` once built (its pipeline is live; `false` when moved-from).
-  bool valid() const noexcept { return pipeline.valid(); }
+  ComputeKernel() noexcept = default;
+  ~ComputeKernel() = default;
+  // The moves are hand-written (not defaulted) only to reset the copyable,
+  // non-owning `set` on the source: `layout` and `pipeline` self-reset on move,
+  // but a defaulted move would *copy* `set`, leaving a moved-from kernel with a
+  // stale handle while valid() is false. Nulling it keeps a moved-from kernel
+  // fully empty and its accessors consistent with valid().
+  ComputeKernel(ComputeKernel&& other) noexcept
+      : layout(std::move(other.layout)),
+        pipeline(std::move(other.pipeline)),
+        set(other.set) {
+    other.set = {};
+  }
+  ComputeKernel& operator=(ComputeKernel&& other) noexcept {
+    if (this != &other) {
+      layout = std::move(other.layout);
+      pipeline = std::move(other.pipeline);
+      set = other.set;
+      other.set = {};
+    }
+    return *this;
+  }
+  ComputeKernel(const ComputeKernel&) = delete;
+  ComputeKernel& operator=(const ComputeKernel&) = delete;
+
+  /// @return `true` once fully built -- its pipeline is live AND its set is
+  ///         allocated. `false` before @ref KernelSetBuilder::build has
+  ///         allocated the set, or when moved-from.
+  bool valid() const noexcept { return pipeline.valid() && set.valid(); }
 };
 
 /// @brief Builds a group of @ref ComputeKernel that share one descriptor pool.
@@ -59,8 +87,15 @@ class VR_CORE_API KernelSetBuilder {
   /// @brief Register a kernel: build @p out's layout (@p bindings storage
   ///        buffers at 0..bindings-1) and its pipeline from the embedded SPIR-V
   ///        now; @p out's set is allocated later by @ref build.
-  /// @param out       Receives the built layout + pipeline (and later the set);
-  ///                  must outlive both the builder and the returned pool.
+  ///
+  /// @warning The builder retains a pointer to @p out until @ref build writes
+  ///          its set, so every registered @p out must stay at a fixed address
+  ///          from @ref add through @ref build -- do not move, reallocate, or
+  ///          destroy the kernels (or a container holding them) in between, and
+  ///          each must outlive both the builder and the returned pool. Storing
+  ///          the kernels as stable members (or in a pre-reserved container) is
+  ///          the intended usage.
+  /// @param out       Receives the built layout + pipeline (and later the set).
   /// @param spv       The SPIR-V byte array (4-byte aligned).
   /// @param spv_size  Its size in bytes.
   /// @param bindings  Number of storage-buffer bindings the shader declares.
@@ -92,9 +127,12 @@ class VR_CORE_API KernelSetBuilder {
 /// fence-waited submission, and a fence orders execution but not memory, so
 /// this barrier (not the fence) carries cross-dispatch visibility. Rejects
 /// @p groups > @p max_groups (the device's `maxComputeWorkGroupCount[0]`) as a
-/// clean error rather than risk invalid usage on a min-spec driver.
+/// clean error rather than risk invalid usage on a min-spec driver, and rejects
+/// a null @p push with a non-zero @p push_size (mirroring
+/// @ref ComputePipeline::create's push-range validation).
 /// @return An OK @ref Status, or a non-OK one if @p groups exceeds
-///         @p max_groups or the submission fails.
+///         @p max_groups, @p push is null with @p push_size > 0, or the
+///         submission fails.
 VR_CORE_API Status dispatch(Device& device, const ComputeKernel& kernel,
                             const void* push, std::uint32_t push_size,
                             std::uint32_t groups, std::uint32_t max_groups);

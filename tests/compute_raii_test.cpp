@@ -8,15 +8,18 @@
 // leak/double-free detectors -- a forgotten reset or a missing self-move guard
 // shows up as an ASan report here.
 //
-// Two owners are exercised with real handles, one per mechanism:
+// The owners are exercised with real handles, one per mechanism:
 //   - Buffer            -- the hand-written `std::function` deleter
 //   (VMA-backed).
 //   - DescriptorSetLayout -- the UniqueHandle member, whose defaulted moves
 //   back
 //                            ShaderModule / DescriptorPool / ComputePipeline
 //                            too.
+//   - Allocator         -- the pImpl + unique_ptr owner.
+//   - ComputeKernel     -- the layout/pipeline/set bundle, whose hand-written
+//                          moves reset the copyable non-owning set.
 //
-// Both need a device, so the whole test skips (exit 0) where no driver/device
+// All need a device, so the whole test skips (exit 0) where no driver/device
 // is present, like the other Vulkan tests.
 
 #include <cstdint>
@@ -25,6 +28,7 @@
 
 #include "volumetric_kit/recon/core/allocator.hpp"
 #include "volumetric_kit/recon/core/buffer.hpp"
+#include "volumetric_kit/recon/core/compute_kernel.hpp"
 #include "volumetric_kit/recon/core/descriptor.hpp"
 #include "volumetric_kit/recon/core/device.hpp"
 #include "volumetric_kit/recon/core/instance.hpp"
@@ -146,6 +150,61 @@ int test_allocator_moves(VkInstance instance, const vr::Device& device) {
   return 0;
 }
 
+// ComputeKernel: a bundle of two UniqueHandle-backed owners (layout, pipeline
+// -- covered above) plus a copyable, non-owning DescriptorSet. Its moves are
+// hand-written to reset that `set` on the source, so a moved-from kernel is
+// fully empty (no stale set handle behind valid()==false). A 0-binding layout +
+// a set from a 1-slot pool exercises the moves without a shader -- the pipeline
+// stays empty; the point is the set-reset and the layout move.
+int test_compute_kernel_moves(VkDevice device) {
+  vr::Result<vr::DescriptorSetLayout> layout =
+      vr::DescriptorSetLayout::create(device, nullptr, 0);
+  CHECK(layout.ok());
+  VkDescriptorPoolSize size{};
+  size.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+  size.descriptorCount = 1;
+  vr::Result<vr::DescriptorPool> pool =
+      vr::DescriptorPool::create(device, &size, 1, 1);
+  CHECK(pool.ok());
+  vr::Result<vr::DescriptorSet> set =
+      pool.value().allocate(layout.value().handle());
+  CHECK(set.ok());
+  const VkDescriptorSet raw = set.value().handle();
+  CHECK(raw != VK_NULL_HANDLE);
+
+  vr::ComputeKernel a;
+  a.layout = std::move(layout).value();
+  a.set = set.value();  // copyable, non-owning view
+  CHECK(a.layout.valid());
+  CHECK(a.set.handle() == raw);
+
+  // move-construct: source's set is reset (not left a stale copy), layout
+  // moved.
+  vr::ComputeKernel b(std::move(a));
+  CHECK(a.set.handle() == VK_NULL_HANDLE);  // NOLINT(bugprone-use-after-move)
+  CHECK(!a.layout.valid());
+  CHECK(!a.valid());
+  CHECK(b.set.handle() == raw);
+  CHECK(b.layout.valid());
+
+  // move-assign over a live kernel: destination adopts the source, source
+  // reset.
+  vr::ComputeKernel c;
+  c.set = b.set;
+  c = std::move(b);
+  CHECK(c.set.handle() == raw);
+  CHECK(c.layout.valid());
+  CHECK(b.set.handle() == VK_NULL_HANDLE);  // NOLINT(bugprone-use-after-move)
+
+  // self-move: the `if (this != &other)` guard keeps its set + layout. Launder
+  // through a pointer to dodge -Wself-move.
+  vr::ComputeKernel* alias = &c;
+  c = std::move(*alias);
+  CHECK(c.set.handle() == raw);
+  CHECK(c.layout.valid());
+  return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -184,6 +243,9 @@ int main() {
   }
   if (int rc = test_allocator_moves(instance.value().handle(), device.value());
       rc != 0) {
+    return rc;
+  }
+  if (int rc = test_compute_kernel_moves(device.value().handle()); rc != 0) {
     return rc;
   }
 
