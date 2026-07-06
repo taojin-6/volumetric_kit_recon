@@ -367,7 +367,7 @@ host `MarchingCubes` (`mesh/marching_cubes.hpp`) owns the compute pipeline and
 drives a GLSL kernel (`mesh/shaders/marching_cubes.comp`) that turns a **dense**
 `volume::Voxel` SDF grid into a triangle `Mesh` (`mesh/mesh.hpp`): one invocation
 per cell, cube index from the eight corner signs, independent triangles appended
-via an atomic counter, per-vertex outward gradient normals, winding flipped so
+via an atomic counter, per-cell outward gradient normals, winding flipped so
 the front face (CCW) points outward for gfx. The 256-case tables
 (`mesh/marching_cubes_tables.hpp`, ported verbatim) are uploaded once as an SSBO
 — one definition across CPU/GLSL, mirroring the volume ABI discipline. A GPU test

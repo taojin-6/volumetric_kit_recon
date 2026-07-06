@@ -154,18 +154,27 @@ int main() {
   // face normal (from vertex order) oppose the per-cell gradient normal.
   double face_sum = 0.0;
   int face_count = 0;
+  int face_outward = 0;  // faces whose winding normal points along the gradient
   for (std::size_t t = 0; t + 2 < sphere.vertices.size(); t += 3) {
     const vr::Vec3f& a = sphere.vertices[t].position;
     const vr::Vec3f& b = sphere.vertices[t + 1].position;
     const vr::Vec3f& c = sphere.vertices[t + 2].position;
     const vr::Vec3f face = vr::cross(b - a, c - a);
     if (vr::length(face) > 1e-8f) {
-      face_sum += vr::dot(vr::normalize(face), sphere.vertices[t].normal);
+      const float fd = vr::dot(vr::normalize(face), sphere.vertices[t].normal);
+      face_sum += fd;
+      if (fd > 0.0f) ++face_outward;
       ++face_count;
     }
   }
   CHECK(face_count > 0);
   CHECK(face_sum / static_cast<double>(face_count) > 0.5);
+  // Per-face, not just on average: a partial winding regression that inverted
+  // even a small fraction of faces would clear the mean check above yet drop
+  // this ratio. An analytic sphere winds essentially every face outward.
+  const double outward_ratio =
+      static_cast<double>(face_outward) / static_cast<double>(face_count);
+  CHECK(outward_ratio > 0.95);
 
   // --- Surface misses the grid -> empty mesh ---------------------------------
   // A constant positive field has no sign change anywhere, so no cell meshes.
@@ -218,7 +227,8 @@ int main() {
 
   std::printf(
       "recon mesh marching-cubes test passed: extracted %zu triangles from a "
-      "sphere SDF; radius, outward normals, and winding verified on-device\n",
-      sphere.triangle_count());
+      "sphere SDF; radius, outward normals, and winding (%.4f of faces "
+      "outward) verified on-device\n",
+      sphere.triangle_count(), outward_ratio);
   return 0;
 }

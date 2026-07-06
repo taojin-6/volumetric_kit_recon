@@ -133,11 +133,14 @@ void main() {
     }
     uint tri = atomicAdd(tri_count, 1u);
     if (tri >= pc.capacity) {
-      return;  // past capacity: counted (so the host sees overflow) but dropped
+      // Past capacity: drop. tri_count ends above capacity so the host detects
+      // the overflow -- though not the exact demand, since this invocation
+      // abandons the rest of the cell. Unreachable while capacity is 5/cell.
+      return;
     }
     // Emit with reversed winding (0, 2, 1) so the front face (CCW) points along
     // the outward gradient normal -- the orientation gfx expects, and the one
-    // that makes the per-vertex normal agree with the vertex order. The standard
+    // that makes each vertex's normal agree with the vertex order. The standard
     // tri_table winds the opposite way for this corner numbering; the prior
     // engine shaded from the gradient normal, so its winding was unobserved.
     uint vbase = tri * 3u;
