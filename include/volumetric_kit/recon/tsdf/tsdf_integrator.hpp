@@ -102,13 +102,26 @@ class VR_TSDF_API TsdfIntegrator {
   ///                    5.0).
   /// @param mode        Classic keeps free space ahead of the surface; dynamic
   ///                    clears stale geometry there (see @ref IntegrationMode).
-  /// @param color       Optional @ref ColorFrame to fuse into the grid's `color`
-  ///                    attribute (a `uint32` packed-RGB attribute the grid must
-  ///                    then carry); `nullptr` integrates depth only.
+  /// @param color       Optional @ref ColorFrame fused into the grid's `color`
+  ///                    attribute (a `uint32` packed-RGB attribute the grid
+  ///                    must then carry); `nullptr` integrates depth only. A
+  ///                    voxel's first color observation assigns the sampled
+  ///                    RGB; later ones running-average it with the SDF
+  ///                    weights.
   /// @note  Integrate a given grid with one consistent mode across a sequence:
   ///        a dynamic frame clears every weighted free-space voxel past the
   ///        band, including one a prior classic frame fused there -- not only
-  ///        genuinely receded geometry.
+  ///        genuinely receded geometry. Dynamic also clears the `color` of a
+  ///        receded voxel whenever the grid carries the attribute, including on
+  ///        a depth-only (`color == nullptr`) frame.
+  /// @note  A **separate/unregistered** color camera (a @p color with its own
+  ///        pose or intrinsics) carries the usual projective-color limits the
+  ///        registered case avoids: a voxel occluded in the color view but
+  ///        near-surface for depth takes the occluder's color, and a voxel is
+  ///        colored only on frames where its depth pixel is valid (color fusion
+  ///        follows the depth projection). Color also shares the SDF weight
+  ///        cap, so a changed color converges over several frames once the
+  ///        weight saturates.
   /// @return OK on success, or a non-OK @ref Status:
   ///         @ref Status::Code::InvalidArgument if the integrator is
   ///         moved-from, @p depth is null, @p grid lacks a `float`

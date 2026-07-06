@@ -483,12 +483,83 @@ int main() {
   CHECK(o_weight[o_front] > 0.0f);  // depth still fuses the voxel
   CHECK(o_color[o_front] == 0u);    // but color is out of frame -> skipped
 
+  // Regression: a voxel's first color observation must ASSIGN (keyed on
+  // color_attr == 0), not blend against the black initial attribute, even when
+  // depth weight has already accumulated. Warm up a voxel with two depth-only
+  // frames, then fuse a color frame: it must take the full sampled RGB. (Keying
+  // the assign on the depth weight instead darkened it to ~half here.)
+  vr::Result<vol::VoxelBlockGrid> wg = vol::VoxelBlockGrid::create(
+      device.value(), allocator.value(), grid, cattrs, 3);
+  CHECK(wg.ok());
+  vol::VoxelBlockGrid vbg_wu = std::move(wg).value();
+  CHECK(vbg_wu.map()
+            .allocate(blocks.data(), static_cast<std::uint32_t>(blocks.size()))
+            .value() == 0);
+  vr::Result<std::vector<vol::BlockIndex>> wu_active =
+      vbg_wu.map().compact_active_blocks();
+  CHECK(wu_active.ok());
+  const std::int32_t wup12 = find_ptr(wu_active.value(), vr::Vec3i(0, 0, 12));
+  CHECK(wup12 >= 0);
+  const std::size_t wu_front =
+      static_cast<std::size_t>(wup12) + local_index(0, 0, 1, bs);
+  CHECK(integ.integrate(vbg_wu, depth.data(), cam, 5.0f).ok());  // depth only
+  CHECK(integ.integrate(vbg_wu, depth.data(), cam, 5.0f).ok());  // depth only
+  const auto* wu_color = static_cast<const std::uint32_t*>(
+      vbg_wu.attribute("color").value().buffer->mapped());
+  const auto* wu_weight = static_cast<const float*>(
+      vbg_wu.attribute("weight").value().buffer->mapped());
+  CHECK(wu_weight[wu_front] >
+        1.0f);                      // depth weight accumulated across 2 frames
+  CHECK(wu_color[wu_front] == 0u);  // ...but no color observed yet
+  CHECK(integ
+            .integrate(vbg_wu, depth.data(), cam, 5.0f,
+                       tsdf::IntegrationMode::Classic, &frame)
+            .ok());
+  CHECK((wu_color[wu_front] & 0xFFu) == 200u);  // first color assigns the
+  CHECK(((wu_color[wu_front] >> 8) & 0xFFu) == 100u);  // full RGB, not a blend
+  CHECK(((wu_color[wu_front] >> 16) & 0xFFu) == 50u);  // toward black
+
+  // Regression: dynamic mode clears stale color whenever the grid carries a
+  // `color` attribute -- even on a depth-only (color == nullptr) frame -- so a
+  // receded surface leaves no color ghost. (Gating the clear on a color frame
+  // being supplied stranded the old color on a depth-only recede.)
+  vr::Result<vol::VoxelBlockGrid> zg = vol::VoxelBlockGrid::create(
+      device.value(), allocator.value(), grid, cattrs, 3);
+  CHECK(zg.ok());
+  vol::VoxelBlockGrid vbg_dz = std::move(zg).value();
+  CHECK(vbg_dz.map()
+            .allocate(blocks.data(), static_cast<std::uint32_t>(blocks.size()))
+            .value() == 0);
+  vr::Result<std::vector<vol::BlockIndex>> dz_active =
+      vbg_dz.map().compact_active_blocks();
+  CHECK(dz_active.ok());
+  const std::int32_t dzp12 = find_ptr(dz_active.value(), vr::Vec3i(0, 0, 12));
+  CHECK(dzp12 >= 0);
+  const std::size_t dz_front =
+      static_cast<std::size_t>(dzp12) + local_index(0, 0, 1, bs);
+  CHECK(integ
+            .integrate(vbg_dz, depth.data(), cam, 5.0f,
+                       tsdf::IntegrationMode::Classic, &frame)
+            .ok());  // fuse depth + color
+  const auto* dz_color = static_cast<const std::uint32_t*>(
+      vbg_dz.attribute("color").value().buffer->mapped());
+  const auto* dz_weight = static_cast<const float*>(
+      vbg_dz.attribute("weight").value().buffer->mapped());
+  CHECK(dz_weight[dz_front] > 0.0f && dz_color[dz_front] != 0u);  // fused
+  CHECK(integ
+            .integrate(vbg_dz, depth_far.data(), cam, 5.0f,
+                       tsdf::IntegrationMode::Dynamic)
+            .ok());  // depth-only recede
+  CHECK(dz_weight[dz_front] == 0.0f &&
+        dz_color[dz_front] == 0u);  // geometry + color ghost both cleared
+
   std::printf(
       "recon tsdf integrate test passed: classic fusion of a 0.5 m plane (%zu "
       "voxels), %zu cross-checked under a rotated pose, dynamic cleared a "
       "stale "
       "voxel, bilinear blended a step + fell back, color fused via a separate "
-      "camera\n",
+      "camera, first-obs assigned after a depth-only warmup, dynamic cleared "
+      "color depth-only\n",
       touched, cross_checked);
   return 0;
 }

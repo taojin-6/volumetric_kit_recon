@@ -30,16 +30,20 @@ constexpr std::uint32_t kLocalSize = 256;
 
 // The push-constant block (mirrors `PushConstants` in tsdf_common.glsl): the
 // grid, the active-block count, the fusion weight cap, the integration mode,
-// and whether a color frame is fused. The camera rides the SSBO as
-// volume::DepthCameraParams verbatim -- the kernel derives world -> camera from
-// its rigid cam_to_world, so there is no separate pre-inverted per-dispatch
-// struct.
+// and two color flags. `has_color` fuses the supplied color frame;
+// `has_color_attr` says binding 6 is the grid's real color attribute (so
+// dynamic can clear a stale color even on a depth-only frame) -- the two differ
+// because a grid can carry `color` without a color image arriving this call.
+// The camera rides the SSBO as volume::DepthCameraParams verbatim -- the kernel
+// derives world -> camera from its rigid cam_to_world, so there is no separate
+// pre-inverted per-dispatch struct.
 struct PushConstants {
   VoxelGridParams grid;
   std::uint32_t num_active_blocks;
   float max_weight;
   std::uint32_t mode;       // tsdf::IntegrationMode (0 = classic, 1 = dynamic).
   std::uint32_t has_color;  // 0 = depth only; 1 = fuse the color frame.
+  std::uint32_t has_color_attr;  // 1 = binding 6 is the grid's color attribute.
 };
 
 // Pin the scalar-block-layout ABI: this struct must stay byte-identical to the
@@ -47,7 +51,7 @@ struct PushConstants {
 // bytes, so every field lands at its host offset (no std430 vec padding). A
 // drift is a compile error, not silent buffer corruption -- the discipline the
 // volume/mesh shader-facing PODs already follow.
-static_assert(sizeof(PushConstants) == 48, "PushConstants must be 48 bytes");
+static_assert(sizeof(PushConstants) == 52, "PushConstants must be 52 bytes");
 static_assert(offsetof(PushConstants, grid) == 0, "PushConstants layout drift");
 static_assert(offsetof(PushConstants, num_active_blocks) == 32,
               "PushConstants layout drift");
@@ -56,6 +60,8 @@ static_assert(offsetof(PushConstants, max_weight) == 36,
 static_assert(offsetof(PushConstants, mode) == 40,
               "PushConstants layout drift");
 static_assert(offsetof(PushConstants, has_color) == 44,
+              "PushConstants layout drift");
+static_assert(offsetof(PushConstants, has_color_attr) == 48,
               "PushConstants layout drift");
 
 // Ceil-divide without the `items + kLocalSize - 1` term, which overflows uint32
@@ -76,6 +82,17 @@ Result<Buffer> storage_buffer(Allocator& allocator, VkDeviceSize bytes,
   return allocator.create_buffer(desc);
 }
 
+// A host-visible storage buffer of `bytes`, filled from `src` -- the alloc +
+// map + memcpy every per-call upload (active blocks, depth, color) repeats.
+// Ties the allocation size and the copy length to one argument.
+Result<Buffer> upload_storage_buffer(Allocator& allocator, const void* src,
+                                     VkDeviceSize bytes) {
+  VR_ASSIGN(Buffer buf,
+            storage_buffer(allocator, bytes, HostAccess::SequentialWrite));
+  std::memcpy(buf.mapped(), src, static_cast<std::size_t>(bytes));
+  return buf;
+}
+
 }  // namespace
 
 Result<TsdfIntegrator> TsdfIntegrator::create(Device& device,
@@ -86,9 +103,10 @@ Result<TsdfIntegrator> TsdfIntegrator::create(Device& device,
   integ.device_ = &device;
   integ.allocator_ = &allocator;
 
-  // The integrate kernel: 5 storage-buffer bindings + the PushConstants range.
-  // KernelSetBuilder builds its layout + pipeline and allocates its set from a
-  // shared pool (sized to the exact descriptor total).
+  // The integrate kernel: 8 storage-buffer bindings (tsdf, weight, active,
+  // depth, depth-camera, color image, color attribute, color camera) + the
+  // PushConstants range. KernelSetBuilder builds its layout + pipeline and
+  // allocates its set from a shared pool (sized to the exact descriptor total).
   VkPushConstantRange push_range{};
   push_range.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
   push_range.offset = 0;
@@ -158,6 +176,36 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid, const float* depth,
         "TsdfIntegrator::integrate: tsdf/weight attributes must be float");
   }
 
+  // Resolve the color path up front, before any per-call allocation or binding
+  // (so an invalid request leaves the persistent set untouched). A supplied
+  // color frame must be non-empty and the grid must carry a `uint32` `color`
+  // attribute. Independently, note whether the grid carries `color` at all:
+  // dynamic mode must clear a stale color even on a depth-only frame, so
+  // binding 6 tracks the grid's real attribute (`has_color_attr`) whenever
+  // there is one
+  // -- matching the prior engine, which clears color whenever the grid holds a
+  // color block, not only when a color image arrives.
+  const Buffer* color_attr_buf = nullptr;
+  if (color != nullptr) {
+    if (color->pixels == nullptr || color->cam.width == 0 ||
+        color->cam.height == 0) {
+      return Status::invalid_argument(
+          "TsdfIntegrator::integrate: color frame is empty");
+    }
+    VR_ASSIGN(AttributeView color_view, grid.attribute("color"));
+    if (color_view.element_size != sizeof(std::uint32_t)) {
+      return Status::invalid_argument(
+          "TsdfIntegrator::integrate: color attribute must be uint32 (packed "
+          "RGB)");
+    }
+    color_attr_buf = color_view.buffer;
+  } else if (grid.has_attribute("color")) {
+    VR_ASSIGN(AttributeView color_view, grid.attribute("color"));
+    if (color_view.element_size == sizeof(std::uint32_t)) {
+      color_attr_buf = color_view.buffer;
+    }
+  }
+
   // Snapshot the active blocks; nothing to fuse into an empty grid.
   VR_ASSIGN(std::vector<BlockIndex> active, grid.map().compact_active_blocks());
   if (active.empty()) {
@@ -165,19 +213,16 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid, const float* depth,
   }
 
   // Upload the block list, the depth frame (metres), and the camera params.
-  VR_ASSIGN(Buffer active_buf,
-            storage_buffer(*allocator_,
-                           VkDeviceSize(active.size()) * sizeof(BlockIndex),
-                           HostAccess::SequentialWrite));
-  std::memcpy(active_buf.mapped(), active.data(),
-              active.size() * sizeof(BlockIndex));
+  VR_ASSIGN(
+      Buffer active_buf,
+      upload_storage_buffer(*allocator_, active.data(),
+                            VkDeviceSize(active.size()) * sizeof(BlockIndex)));
 
   const auto pixels = static_cast<std::size_t>(cam.width) *
                       static_cast<std::size_t>(cam.height);
   VR_ASSIGN(Buffer depth_buf,
-            storage_buffer(*allocator_, VkDeviceSize(pixels) * sizeof(float),
-                           HostAccess::SequentialWrite));
-  std::memcpy(depth_buf.mapped(), depth, pixels * sizeof(float));
+            upload_storage_buffer(*allocator_, depth,
+                                  VkDeviceSize(pixels) * sizeof(float)));
 
   // The camera params ride the SSBO verbatim; the kernel derives world ->
   // camera from the rigid cam_to_world, so there is no host-side pose
@@ -193,49 +238,43 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid, const float* depth,
   kernel_.set.write_storage_buffer(2, active_buf.handle(), 0, VK_WHOLE_SIZE);
   kernel_.set.write_storage_buffer(3, depth_buf.handle(), 0, VK_WHOLE_SIZE);
 
-  // Optional color: fuse a color frame through its own camera into the grid's
-  // `color` attribute. color_buf lives at function scope so it outlives the
-  // dispatch; when absent, the color slots (5, 6) fall back to the dummy.
+  // Color bindings. Slot 6 is the grid's `color` attribute whenever it carries
+  // one (resolved above), so dynamic can clear a stale color even on a
+  // depth-only frame; slot 5 is the color image only when a frame is supplied
+  // this call. Unused color slots fall back to the 1-element dummy so every
+  // descriptor stays bound. color_buf lives at function scope so it outlives
+  // the dispatch.
+  const std::uint32_t has_color_attr = (color_attr_buf != nullptr) ? 1u : 0u;
+  kernel_.set.write_storage_buffer(6,
+                                   (color_attr_buf != nullptr)
+                                       ? color_attr_buf->handle()
+                                       : color_dummy_.handle(),
+                                   0, VK_WHOLE_SIZE);
+
   Buffer color_buf;
   std::uint32_t has_color = 0;
   if (color != nullptr) {
-    if (color->pixels == nullptr || color->cam.width == 0 ||
-        color->cam.height == 0) {
-      return Status::invalid_argument(
-          "TsdfIntegrator::integrate: color frame is empty");
-    }
-    VR_ASSIGN(AttributeView color_view, grid.attribute("color"));
-    if (color_view.element_size != sizeof(std::uint32_t)) {
-      return Status::invalid_argument(
-          "TsdfIntegrator::integrate: color attribute must be uint32 (packed "
-          "RGB)");
-    }
     const auto cpixels = static_cast<std::size_t>(color->cam.width) *
                          static_cast<std::size_t>(color->cam.height);
-    VR_ASSIGN(color_buf,
-              storage_buffer(*allocator_,
-                             VkDeviceSize(cpixels) * sizeof(std::uint32_t),
-                             HostAccess::SequentialWrite));
-    std::memcpy(color_buf.mapped(), color->pixels,
-                cpixels * sizeof(std::uint32_t));
+    VR_ASSIGN(color_buf, upload_storage_buffer(
+                             *allocator_, color->pixels,
+                             VkDeviceSize(cpixels) * sizeof(std::uint32_t)));
     std::memcpy(color_cam_buf_.mapped(), &color->cam,
                 sizeof(DepthCameraParams));
     kernel_.set.write_storage_buffer(5, color_buf.handle(), 0, VK_WHOLE_SIZE);
-    kernel_.set.write_storage_buffer(6, color_view.buffer->handle(), 0,
-                                     VK_WHOLE_SIZE);
     has_color = 1;
   } else {
-    // A prior call may have bound real color buffers; restore the dummy.
+    // No color image this call; restore the dummy at slot 5 (a prior call may
+    // have bound a real image there). Slot 6 already reflects the grid above.
     kernel_.set.write_storage_buffer(5, color_dummy_.handle(), 0,
-                                     VK_WHOLE_SIZE);
-    kernel_.set.write_storage_buffer(6, color_dummy_.handle(), 0,
                                      VK_WHOLE_SIZE);
   }
 
   const VoxelGridParams& grid_params = grid.grid();
   const PushConstants push{
-      grid_params, static_cast<std::uint32_t>(active.size()), max_weight,
-      static_cast<std::uint32_t>(mode), has_color};
+      grid_params, static_cast<std::uint32_t>(active.size()),
+      max_weight,  static_cast<std::uint32_t>(mode),
+      has_color,   has_color_attr};
 
   // One thread per voxel of every active block. The flattened thread count must
   // fit a uint32; dispatch() caps groupCountX at the device limit and emits the

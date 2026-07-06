@@ -399,7 +399,13 @@ Depth is sampled **bilinearly** (nearest fallback at image edges and across dept
 discontinuities `> trunc_dist`), the prior engine's `sampleDepthBilinear`. An
 optional `ColorFrame` fuses a posed color image through its **own separate
 camera** into a `color` attribute — RGB packed in a `uint`'s low bytes (the mesh
-tier's layout), running-averaged with the SDF weights.
+tier's layout), running-averaged with the SDF weights. A voxel's **first colour
+observation assigns** (gated on `color_attr == 0`, i.e. whether colour — not
+depth — was seen, so a separate/unregistered colour camera never blends the
+first colour toward black); dynamic mode clears a receded voxel's colour
+whenever the grid carries the attribute, including on a depth-only frame. The
+depth and colour projections share a `project_to_image` helper in
+`tsdf_common.glsl`.
 
 The first **`mesh` tier** slice — GPU marching cubes — lands alongside it. The
 host `MarchingCubes` (`mesh/marching_cubes.hpp`) owns the compute pipeline and
