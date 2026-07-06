@@ -56,3 +56,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   flags a block that cannot be returned to the heap. A GPU test
   (`tests/volume_delete_test.cpp`) forces overflow chains and a tight heap to
   prove the chain splice, successor pull-up, and real heap reuse on MoltenVK.
+- `volume`: `VoxelHashMap::resize` — grow the hash table to more buckets,
+  preserving the active block set by re-inserting through the proven init /
+  allocate / compact kernels (no new shaders). The grow is failure-atomic (the
+  larger buffers are built off to the side and swapped in together), and the
+  re-insert re-drives the snapshot to absorb transient lock contention. A GPU
+  test (`tests/volume_resize_test.cpp`) proves 256 → 1024 growth, that the
+  active set survives, and that allocation past the old capacity then works on
+  MoltenVK. The block-index-preserving GPU rehash is deferred until blocks carry
+  SDF data.
