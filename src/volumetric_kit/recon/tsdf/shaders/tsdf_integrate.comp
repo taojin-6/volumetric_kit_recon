@@ -24,6 +24,21 @@ layout(set = 0, binding = 3, scalar) readonly buffer Depth { float depth[]; };
 layout(set = 0, binding = 4, scalar) readonly buffer Camera {
   DepthCameraParams cam;
 };
+// Color path. The color image is read only when pc.has_color != 0; the color
+// attribute is read/written when pc.has_color (fuse) or pc.has_color_attr (the
+// dynamic clear); each falls back to a 1-element dummy when unbound. RGB packed
+// in a uint's low three bytes -- the mesh tier's `colors[]` layout, so meshing
+// reads the fused color attribute directly. `scalar` like every other data
+// binding (a uint[] is stride 4 under scalar and std430 alike, so this is not a
+// live layout change, but it keeps the scalar-block-layout ABI uniform, as the
+// mesh tier's identical color binding does).
+layout(set = 0, binding = 5, scalar) readonly buffer ColorImage {
+  uint color_image[];
+};
+layout(set = 0, binding = 6, scalar) buffer ColorAttr { uint color_attr[]; };
+layout(set = 0, binding = 7, scalar) readonly buffer ColorCamera {
+  ColorCameraParams color_cam;
+};
 
 // Bilinear depth sample at pixel (u, v), with a nearest-neighbour fallback.
 // Pixel centres sit at (i + 0.5) -- the taps shift by -0.5 to match -- so the
@@ -83,21 +98,15 @@ void main() {
   ivec3 voxel = block.coord * bs + lc;
   vec3 world = vec3(voxel) * pc.grid.voxel_size;
 
-  // Project into the depth camera. cam_to_world is a rigid transform, so
-  // world -> camera is R^T (world - t) -- no explicit inverse, and cheaper than
-  // a full mat4 multiply by the pre-inverted pose.
-  mat3 rot = mat3(cam.cam_to_world);
-  vec3 t = cam.cam_to_world[3].xyz;
-  vec3 p_cam = transpose(rot) * (world - t);
-  float zc = p_cam.z;
-  if (zc <= 0.0) {
-    return;  // behind the camera
+  // Project into the depth camera (rigid world -> camera; see project_to_image).
+  // Behind the camera or outside the image -> nothing to fuse.
+  vec2 px;
+  float zc;
+  if (!project_to_image(cam, world, px, zc)) {
+    return;
   }
-  float u = cam.fx * (p_cam.x / zc) + cam.cx;
-  float v = cam.fy * (p_cam.y / zc) + cam.cy;
-  if (u < 0.0 || u >= float(cam.width) || v < 0.0 || v >= float(cam.height)) {
-    return;  // outside the image
-  }
+  float u = px.x;
+  float v = px.y;
   float d = sample_depth(u, v);  // bilinear, with nearest-neighbour fallback
   // Reject out-of-range depth; the negated compare also drops NaN/inf holes
   // (every comparison with NaN is false), matching hash_allocate_depth.comp so
@@ -120,12 +129,16 @@ void main() {
     // the zeroed initial state), which weight-gated readers treat as empty. Free
     // space is never fused here (classic instead clamps to +trunc, keeping a
     // smooth field ahead of the surface). Matches the prior engine's
-    // classic_tsdf.cu stale-clearing branch.
-    // TODO: when a color attribute lands, reset it here too -- the prior engine
-    // zeroed color in this same branch, so a re-fused voxel keeps no stale color.
+    // classic_tsdf.cu stale-clearing branch, which zeroes color here too --
+    // whenever the grid carries a color attribute (has_color_attr), not only on
+    // a frame that supplies a color image, so a depth-only recede leaves no
+    // color ghost either.
     if (weight[idx] > 0.0) {
       tsdf[idx] = 0.0;
       weight[idx] = 0.0;
+      if (pc.has_color_attr != 0u) {
+        color_attr[idx] = 0u;  // drop stale color along with the geometry
+      }
     }
     return;
   }
@@ -151,4 +164,46 @@ void main() {
   tsdf[idx] = clamp((s_old * w_old + sdf * w_obs) / max(w_sum, 1e-6),
                     -trunc_dist, trunc_dist);
   weight[idx] = min(w_sum, pc.max_weight);
+
+  // Fuse color, if a frame was supplied this call, through the separate color
+  // camera. Project the voxel into the color camera, nearest-sample the packed
+  // RGB, and running-average it with the SAME weights as the SDF. RGB stays in
+  // the uint's low bytes, matching the mesh tier's color attribute.
+  //
+  // The "first observation assigns" test keys on whether COLOR was seen
+  // (color_attr == 0, the zero-initialised / cleared state), NOT on the SDF
+  // weight w_old: with a separate color camera the color and depth coverage
+  // differ per voxel (a voxel can accrue depth weight while outside the color
+  // frame, or across depth-only frames), so gating on w_old would blend the
+  // first real color into the black initial attribute and darken it. A fused
+  // color always packs a 0xFF alpha, so it is never 0 -- the sentinel is exact.
+  //
+  // Color still shares the SDF's w_obs and max_weight cap (a bounded moving
+  // average), so once depth saturates the weight a later color change converges
+  // slowly; a separate per-voxel color weight is future work.
+  // TODO(color): the color camera has no visibility test of its own, so a voxel
+  // occluded in the color view (but near-surface for depth) is painted with the
+  // occluder's color, and a voxel whose depth pixel is a hole/out-of-range this
+  // frame gets no color even if the color camera sees it (color fusion sits
+  // after the depth early-returns above). Both are unregistered-color limits a
+  // color-camera depth map would fix; registered capture (color cam == depth
+  // cam) avoids them.
+  if (pc.has_color != 0u) {
+    vec2 cpx;
+    float czc;
+    if (project_to_image(color_cam, world, cpx, czc)) {
+      vec3 obs =
+          unpackUnorm4x8(
+              color_image[uint(cpx.y) * color_cam.width + uint(cpx.x)])
+              .rgb;
+      vec3 fused;
+      if (color_attr[idx] == 0u) {
+        fused = obs;  // first color observation assigns
+      } else {
+        vec3 prev = unpackUnorm4x8(color_attr[idx]).rgb;
+        fused = (prev * w_old + obs * w_obs) / max(w_sum, 1e-6);
+      }
+      color_attr[idx] = packUnorm4x8(vec4(fused, 1.0));
+    }
+  }
 }

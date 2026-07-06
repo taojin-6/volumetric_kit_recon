@@ -396,7 +396,18 @@ engine's stale-free-space clearing. `tests/tsdf_integrate_test.cpp` fuses a
 constant-depth plane, checks the per-voxel numerics under a rotated pose, and
 proves dynamic clears a receded-surface voxel that classic keeps, on MoltenVK.
 Depth is sampled **bilinearly** (nearest fallback at image edges and across depth
-discontinuities `> trunc_dist`), the prior engine's `sampleDepthBilinear`.
+discontinuities `> trunc_dist`), the prior engine's `sampleDepthBilinear`. An
+optional `ColorFrame` fuses a posed color image through its **own separate
+camera** (a dedicated `ColorCameraParams` — the color analogue of
+`DepthCameraParams`, sans depth range) into a `color` attribute — RGB packed in a
+`uint`'s low bytes (the mesh tier's layout), running-averaged with the SDF
+weights. A voxel's **first colour
+observation assigns** (gated on `color_attr == 0`, i.e. whether colour — not
+depth — was seen, so a separate/unregistered colour camera never blends the
+first colour toward black); dynamic mode clears a receded voxel's colour
+whenever the grid carries the attribute, including on a depth-only frame. The
+depth and colour projections share a `project_to_image` helper in
+`tsdf_common.glsl`.
 
 The first **`mesh` tier** slice — GPU marching cubes — lands alongside it. The
 host `MarchingCubes` (`mesh/marching_cubes.hpp`) owns the compute pipeline and
@@ -416,10 +427,9 @@ vertex color on MoltenVK. `mesh` depends only on the
 `volume` voxel payload (a tier to its left, so the strict dependency rule holds)
 and is proven against a dense analytic SDF until it reads `tsdf`'s real blocks.
 
-Next: **colour** (a `color` attribute).
-A block-index-preserving GPU **rehash** + heap-rebuild then preserves per-voxel
+Next: a block-index-preserving GPU **rehash** + heap-rebuild preserves per-voxel
 data across a `resize` (which currently reassigns block indices, discarding the
-`tsdf`/`weight` a block held). On the `mesh` side (greppable `TODO`s): extraction
+`tsdf`/`weight`/`color` a block held). On the `mesh` side (greppable `TODO`s): extraction
 straight off the sparse `VoxelHashMap` with cross-block neighbour sampling,
 shared-vertex dedup + the incremental block-mesh pool, and OBJ/PLY + glTF/GLB
 export + the gfx-vertex converter (interop seam A).

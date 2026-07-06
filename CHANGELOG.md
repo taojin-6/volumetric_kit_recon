@@ -106,3 +106,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   engine's `sampleDepthBilinear`. The GPU test projects an on-axis voxel onto a
   half-pixel tap boundary and checks a sub-`trunc` step blends (distinct from the
   nearest sample) while an over-`trunc` step falls back. Colour follows.
+- `tsdf`: `TsdfIntegrator::integrate` gains an optional `ColorFrame` — fuse a
+  posed color image into the grid's `color` attribute alongside depth. Color uses
+  a **separate color camera** — its own `ColorCameraParams` (pinhole intrinsics +
+  pose + dimensions, the color analogue of `DepthCameraParams` without the
+  depth-range fields), projected per voxel and running-averaged with the same
+  weights as the SDF. A voxel's **first color
+  observation assigns** the sampled RGB — keyed on whether color was seen
+  (`color_attr == 0`), not on the depth weight, so an unregistered color camera
+  (or a depth-only warmup) does not blend the first color toward black. Dynamic
+  mode clears a receded voxel's color whenever the grid carries the attribute,
+  **including on a depth-only frame**, so no color ghost survives a recede. RGB
+  is packed in a `uint`'s low three bytes, matching the mesh tier's `color`
+  layout so meshing reads it directly. The GPU test fuses a constant color and
+  checks the packed RGB per voxel, that an occluded voxel keeps zero, that a
+  color camera shifted out of frame skips color while depth still fuses, that the
+  first color after a depth-only warmup assigns the full RGB, and that a
+  depth-only dynamic recede clears the color ghost.

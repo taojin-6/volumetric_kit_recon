@@ -8,11 +8,14 @@
 ///        frame into a @ref VoxelBlockGrid's per-voxel `tsdf` + `weight`
 ///        attributes.
 
+#include <cstddef>
 #include <cstdint>
+#include <type_traits>
 
 #include "volumetric_kit/recon/core/buffer.hpp"
 #include "volumetric_kit/recon/core/compute_kernel.hpp"
 #include "volumetric_kit/recon/core/descriptor.hpp"
+#include "volumetric_kit/recon/core/math/vector_types.hpp"  // Mat4f
 #include "volumetric_kit/recon/core/result.hpp"
 #include "volumetric_kit/recon/tsdf/export.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
@@ -33,6 +36,47 @@ enum class IntegrationMode : std::uint32_t {
                 ///< ahead of surfaces.
   Dynamic = 1,  ///< Clear it: reset stale geometry there, so a receded surface
                 ///< leaves no ghost (moving scenes).
+};
+
+/// @brief Pinhole intrinsics + pose + image dimensions of the (separate) color
+///        camera a @ref ColorFrame was captured with.
+///
+/// The color-camera analogue of @ref volume::DepthCameraParams, without the
+/// depth-range fields a color image has no use for. Uploaded verbatim to the
+/// integrate kernel's color-camera SSBO and read through scalar block layout,
+/// so it packs byte-for-byte to the shader's `ColorCameraParams`: the scalars
+/// at their natural 4-byte offsets, the `mat4` at offset 24. The
+/// `static_assert`s pin that layout (a drift is a compile error, not silent
+/// misprojection).
+struct ColorCameraParams {
+  float fx;              ///< Focal length x (pixels).
+  float fy;              ///< Focal length y (pixels).
+  float cx;              ///< Principal point x (pixels).
+  float cy;              ///< Principal point y (pixels).
+  std::uint32_t width;   ///< Color image width (pixels).
+  std::uint32_t height;  ///< Color image height (pixels).
+  Mat4f cam_to_world;    ///< Camera -> world rigid transform (column-major).
+};
+static_assert(sizeof(ColorCameraParams) == 88,
+              "ColorCameraParams must be 88 bytes");
+static_assert(offsetof(ColorCameraParams, width) == 16, "layout drift");
+static_assert(offsetof(ColorCameraParams, cam_to_world) == 24, "layout drift");
+static_assert(std::is_trivially_copyable_v<ColorCameraParams>,
+              "ColorCameraParams must be trivially copyable");
+static_assert(std::is_standard_layout_v<ColorCameraParams>,
+              "ColorCameraParams must be standard-layout");
+
+/// @brief An optional color frame to fuse alongside depth: packed-RGB pixels
+///        plus the (separate) color camera they were captured with.
+struct ColorFrame {
+  /// Row-major color image, `cam.width * cam.height` pixels, RGB packed in each
+  /// `uint`'s low three bytes (alpha ignored) -- the mesh tier's `color`
+  /// layout.
+  const std::uint32_t* pixels = nullptr;
+  /// The color camera (@ref ColorCameraParams): intrinsics + camera->world pose
+  /// + dimensions. May differ from the depth camera (unregistered RGB-D); pass
+  /// the depth camera's matching intrinsics + pose for registered capture.
+  ColorCameraParams cam{};
 };
 
 /// @brief Fuses posed depth frames into a @ref VoxelBlockGrid's `tsdf` +
@@ -89,21 +133,39 @@ class VR_TSDF_API TsdfIntegrator {
   ///                    5.0).
   /// @param mode        Classic keeps free space ahead of the surface; dynamic
   ///                    clears stale geometry there (see @ref IntegrationMode).
+  /// @param color       Optional @ref ColorFrame fused into the grid's `color`
+  ///                    attribute (a `uint32` packed-RGB attribute the grid
+  ///                    must then carry); `nullptr` integrates depth only. A
+  ///                    voxel's first color observation assigns the sampled
+  ///                    RGB; later ones running-average it with the SDF
+  ///                    weights.
   /// @note  Integrate a given grid with one consistent mode across a sequence:
   ///        a dynamic frame clears every weighted free-space voxel past the
   ///        band, including one a prior classic frame fused there -- not only
-  ///        genuinely receded geometry.
+  ///        genuinely receded geometry. Dynamic also clears the `color` of a
+  ///        receded voxel whenever the grid carries the attribute, including on
+  ///        a depth-only (`color == nullptr`) frame.
+  /// @note  A **separate/unregistered** color camera (a @p color with its own
+  ///        pose or intrinsics) carries the usual projective-color limits the
+  ///        registered case avoids: a voxel occluded in the color view but
+  ///        near-surface for depth takes the occluder's color, and a voxel is
+  ///        colored only on frames where its depth pixel is valid (color fusion
+  ///        follows the depth projection). Color also shares the SDF weight
+  ///        cap, so a changed color converges over several frames once the
+  ///        weight saturates.
   /// @return OK on success, or a non-OK @ref Status:
   ///         @ref Status::Code::InvalidArgument if the integrator is
   ///         moved-from, @p depth is null, @p grid lacks a `float`
-  ///         `tsdf`/`weight` attribute, or the active set is too large for a
-  ///         single 1-D dispatch (its voxel count exceeds the device's
+  ///         `tsdf`/`weight` attribute, @p color is set but empty or @p grid
+  ///         lacks a `uint32` `color` attribute, or the active set is too large
+  ///         for a single 1-D dispatch (its voxel count exceeds the device's
   ///         `maxComputeWorkGroupCount[0]`, or 2^32 threads); otherwise a
   ///         buffer or dispatch failure.
   Status integrate(volume::VoxelBlockGrid& grid, const float* depth,
                    const volume::DepthCameraParams& cam,
                    float max_weight = 5.0f,
-                   IntegrationMode mode = IntegrationMode::Classic);
+                   IntegrationMode mode = IntegrationMode::Classic,
+                   const ColorFrame* color = nullptr);
 
   /// @return `true` if this owns a live pipeline (`false` when moved-from).
   bool valid() const noexcept { return kernel_.valid(); }
@@ -128,6 +190,11 @@ class VR_TSDF_API TsdfIntegrator {
   // create() and rewritten each integrate(), not reallocated per frame (mirrors
   // the volume tier's persistent camera params).
   Buffer cam_buf_;
+  // Color path: the persistent (separate) color-camera SSBO, and a 1-element
+  // dummy bound to the color-image + color-attribute slots when no color frame
+  // is fused (so every declared descriptor stays bound).
+  Buffer color_cam_buf_;
+  Buffer color_dummy_;
 };
 
 }  // namespace volumetric_kit::recon::tsdf

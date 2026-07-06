@@ -55,6 +55,13 @@ std::int32_t find_ptr(const std::vector<vol::BlockIndex>& active,
   return -1;
 }
 
+// A color camera sharing a depth camera's intrinsics + pose (registered capture
+// in these tests); the color params simply drop the depth-range fields.
+tsdf::ColorCameraParams color_cam_of(const vol::DepthCameraParams& d) {
+  return tsdf::ColorCameraParams{d.fx,    d.fy,     d.cx,          d.cy,
+                                 d.width, d.height, d.cam_to_world};
+}
+
 }  // namespace
 
 int main() {
@@ -397,11 +404,170 @@ int main() {
   CHECK(approx(ed_tsdf[ved], 0.0f,
                1e-3f));  // 0.48 - 0.48; not a cross-edge blend
 
+  // Color fusion through the separate color camera (RGB packed in a uint's low
+  // bytes, the mesh tier's layout). A grid with a `color` attribute + a
+  // constant color frame: a first-observation voxel takes the sampled RGB; an
+  // occluded voxel (never depth-fused) keeps zero.
+  const vol::AttributeSpec cattrs[] = {{"tsdf", sizeof(float)},
+                                       {"weight", sizeof(float)},
+                                       {"color", sizeof(std::uint32_t)}};
+  vr::Result<vol::VoxelBlockGrid> cg = vol::VoxelBlockGrid::create(
+      device.value(), allocator.value(), grid, cattrs, 3);
+  CHECK(cg.ok());
+  vol::VoxelBlockGrid vbg_c = std::move(cg).value();
+  CHECK(vbg_c.map()
+            .allocate(blocks.data(), static_cast<std::uint32_t>(blocks.size()))
+            .value() == 0);
+  vr::Result<std::vector<vol::BlockIndex>> c_active =
+      vbg_c.map().compact_active_blocks();
+  CHECK(c_active.ok());
+  const std::int32_t cp12 = find_ptr(c_active.value(), vr::Vec3i(0, 0, 12));
+  const std::int32_t cp13 = find_ptr(c_active.value(), vr::Vec3i(0, 0, 13));
+  CHECK(cp12 >= 0 && cp13 >= 0);
+  const std::size_t c_front =
+      static_cast<std::size_t>(cp12) + local_index(0, 0, 1, bs);  // fused
+  const std::size_t c_occ =
+      static_cast<std::size_t>(cp13) + local_index(0, 0, 6, bs);  // occluded
+
+  const std::uint32_t rgb =
+      200u | (100u << 8) | (50u << 16);  // R=200 G=100 B=50
+  std::vector<std::uint32_t> color_img(depth.size(), rgb);
+  const tsdf::ColorFrame frame{color_img.data(),
+                               color_cam_of(cam)};  // registered (= depth)
+  CHECK(integ
+            .integrate(vbg_c, depth.data(), cam, 5.0f,
+                       tsdf::IntegrationMode::Classic, &frame)
+            .ok());
+  const auto* c_color = static_cast<const std::uint32_t*>(
+      vbg_c.attribute("color").value().buffer->mapped());
+  const auto* c_weight = static_cast<const float*>(
+      vbg_c.attribute("weight").value().buffer->mapped());
+  CHECK(c_weight[c_front] > 0.0f);
+  CHECK((c_color[c_front] & 0xFFu) == 200u);         // R
+  CHECK(((c_color[c_front] >> 8) & 0xFFu) == 100u);  // G
+  CHECK(((c_color[c_front] >> 16) & 0xFFu) == 50u);  // B
+  CHECK(c_color[c_occ] == 0u);  // occluded: never fused, color untouched
+
+  // A dynamic frame that recedes the surface clears the fused color along with
+  // the geometry (the shader zeroes color in the same stale-clear branch):
+  // re-fuse the front voxel as free space well past the band (plane at 0.6 m,
+  // voxel at 0.485). Its weight, tsdf, and color all reset to the pristine
+  // zero.
+  CHECK(integ
+            .integrate(vbg_c, depth_far.data(), cam, 5.0f,
+                       tsdf::IntegrationMode::Dynamic, &frame)
+            .ok());
+  CHECK(c_weight[c_front] == 0.0f && c_color[c_front] == 0u);  // color cleared
+
+  // Separate color camera: shift it 10 m off in +X so the same voxel projects
+  // out of the color frame. Depth still fuses it; color is skipped (stays
+  // zero).
+  vol::DepthCameraParams off_cam = cam;
+  off_cam.cam_to_world = vr::Mat4f(1.0f);
+  off_cam.cam_to_world[3] = vr::Vec4f(10.0f, 0.0f, 0.0f, 1.0f);
+  vr::Result<vol::VoxelBlockGrid> og = vol::VoxelBlockGrid::create(
+      device.value(), allocator.value(), grid, cattrs, 3);
+  CHECK(og.ok());
+  vol::VoxelBlockGrid vbg_o = std::move(og).value();
+  CHECK(vbg_o.map()
+            .allocate(blocks.data(), static_cast<std::uint32_t>(blocks.size()))
+            .value() == 0);
+  vr::Result<std::vector<vol::BlockIndex>> o_active =
+      vbg_o.map().compact_active_blocks();
+  CHECK(o_active.ok());
+  const std::int32_t op12 = find_ptr(o_active.value(), vr::Vec3i(0, 0, 12));
+  CHECK(op12 >= 0);
+  const std::size_t o_front =
+      static_cast<std::size_t>(op12) + local_index(0, 0, 1, bs);
+  const tsdf::ColorFrame off_frame{color_img.data(), color_cam_of(off_cam)};
+  CHECK(integ
+            .integrate(vbg_o, depth.data(), cam, 5.0f,
+                       tsdf::IntegrationMode::Classic, &off_frame)
+            .ok());
+  const auto* o_color = static_cast<const std::uint32_t*>(
+      vbg_o.attribute("color").value().buffer->mapped());
+  const auto* o_weight = static_cast<const float*>(
+      vbg_o.attribute("weight").value().buffer->mapped());
+  CHECK(o_weight[o_front] > 0.0f);  // depth still fuses the voxel
+  CHECK(o_color[o_front] == 0u);    // but color is out of frame -> skipped
+
+  // Regression: a voxel's first color observation must ASSIGN (keyed on
+  // color_attr == 0), not blend against the black initial attribute, even when
+  // depth weight has already accumulated. Warm up a voxel with two depth-only
+  // frames, then fuse a color frame: it must take the full sampled RGB. (Keying
+  // the assign on the depth weight instead darkened it to ~half here.)
+  vr::Result<vol::VoxelBlockGrid> wg = vol::VoxelBlockGrid::create(
+      device.value(), allocator.value(), grid, cattrs, 3);
+  CHECK(wg.ok());
+  vol::VoxelBlockGrid vbg_wu = std::move(wg).value();
+  CHECK(vbg_wu.map()
+            .allocate(blocks.data(), static_cast<std::uint32_t>(blocks.size()))
+            .value() == 0);
+  vr::Result<std::vector<vol::BlockIndex>> wu_active =
+      vbg_wu.map().compact_active_blocks();
+  CHECK(wu_active.ok());
+  const std::int32_t wup12 = find_ptr(wu_active.value(), vr::Vec3i(0, 0, 12));
+  CHECK(wup12 >= 0);
+  const std::size_t wu_front =
+      static_cast<std::size_t>(wup12) + local_index(0, 0, 1, bs);
+  CHECK(integ.integrate(vbg_wu, depth.data(), cam, 5.0f).ok());  // depth only
+  CHECK(integ.integrate(vbg_wu, depth.data(), cam, 5.0f).ok());  // depth only
+  const auto* wu_color = static_cast<const std::uint32_t*>(
+      vbg_wu.attribute("color").value().buffer->mapped());
+  const auto* wu_weight = static_cast<const float*>(
+      vbg_wu.attribute("weight").value().buffer->mapped());
+  CHECK(wu_weight[wu_front] >
+        1.0f);                      // depth weight accumulated across 2 frames
+  CHECK(wu_color[wu_front] == 0u);  // ...but no color observed yet
+  CHECK(integ
+            .integrate(vbg_wu, depth.data(), cam, 5.0f,
+                       tsdf::IntegrationMode::Classic, &frame)
+            .ok());
+  CHECK((wu_color[wu_front] & 0xFFu) == 200u);  // first color assigns the
+  CHECK(((wu_color[wu_front] >> 8) & 0xFFu) == 100u);  // full RGB, not a blend
+  CHECK(((wu_color[wu_front] >> 16) & 0xFFu) == 50u);  // toward black
+
+  // Regression: dynamic mode clears stale color whenever the grid carries a
+  // `color` attribute -- even on a depth-only (color == nullptr) frame -- so a
+  // receded surface leaves no color ghost. (Gating the clear on a color frame
+  // being supplied stranded the old color on a depth-only recede.)
+  vr::Result<vol::VoxelBlockGrid> zg = vol::VoxelBlockGrid::create(
+      device.value(), allocator.value(), grid, cattrs, 3);
+  CHECK(zg.ok());
+  vol::VoxelBlockGrid vbg_dz = std::move(zg).value();
+  CHECK(vbg_dz.map()
+            .allocate(blocks.data(), static_cast<std::uint32_t>(blocks.size()))
+            .value() == 0);
+  vr::Result<std::vector<vol::BlockIndex>> dz_active =
+      vbg_dz.map().compact_active_blocks();
+  CHECK(dz_active.ok());
+  const std::int32_t dzp12 = find_ptr(dz_active.value(), vr::Vec3i(0, 0, 12));
+  CHECK(dzp12 >= 0);
+  const std::size_t dz_front =
+      static_cast<std::size_t>(dzp12) + local_index(0, 0, 1, bs);
+  CHECK(integ
+            .integrate(vbg_dz, depth.data(), cam, 5.0f,
+                       tsdf::IntegrationMode::Classic, &frame)
+            .ok());  // fuse depth + color
+  const auto* dz_color = static_cast<const std::uint32_t*>(
+      vbg_dz.attribute("color").value().buffer->mapped());
+  const auto* dz_weight = static_cast<const float*>(
+      vbg_dz.attribute("weight").value().buffer->mapped());
+  CHECK(dz_weight[dz_front] > 0.0f && dz_color[dz_front] != 0u);  // fused
+  CHECK(integ
+            .integrate(vbg_dz, depth_far.data(), cam, 5.0f,
+                       tsdf::IntegrationMode::Dynamic)
+            .ok());  // depth-only recede
+  CHECK(dz_weight[dz_front] == 0.0f &&
+        dz_color[dz_front] == 0u);  // geometry + color ghost both cleared
+
   std::printf(
       "recon tsdf integrate test passed: classic fusion of a 0.5 m plane (%zu "
       "voxels), %zu cross-checked under a rotated pose, dynamic cleared a "
       "stale "
-      "voxel, bilinear blended a step and fell back across a depth edge\n",
+      "voxel, bilinear blended a step + fell back, color fused via a separate "
+      "camera, first-obs assigned after a depth-only warmup, dynamic cleared "
+      "color depth-only\n",
       touched, cross_checked);
   return 0;
 }
