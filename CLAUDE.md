@@ -194,6 +194,21 @@ Each dated; newest context wins. Change the decision *and* this list together.
   declares each shader's binding count by hand, so this answers the 2026-07-05
   "revisit reflection" note with a builder, not reflection — the tier still
   vendors only VMA.
+- **2026-07-06 — Hybrid color renders through a gfx pipeline (amends "interop
+  seam A needs zero gfx changes").** The renderer's shipped PBR path is
+  texture-only and ignores per-vertex `color`, so `volumetric_kit_gfx` grew a
+  **`HybridMeshPipeline`** (its long-anticipated "mesh pipeline"): per fragment
+  it samples the projective-texturing atlas where a triangle carries a valid
+  `uv0`, else uses the per-vertex `color` (the `uv0 = (-1,-1)` sentinel). A
+  general vertex-color/atlas pipeline is a broadly-useful renderer feature, so
+  the siblings stay independent — gfx gained a capability, not a dependency on
+  recon. Recon's `mesh::Vertex` accordingly carries `{position, normal, color,
+  uv0}`; marching cubes interpolates per-voxel `color` (the RGB the `tsdf` tier
+  fuses into the volume) to `Vertex::color` and leaves `uv0` at the sentinel, and
+  the projective-texturing pass (a later slice) fills real atlas UVs. The
+  interop-seam converter still maps recon's vertex to gfx's `{…, tangent, uv0,
+  color}` shape (synthesizing `tangent`). *Amends* the 2026-06-21 "zero gfx
+  changes" stance in the interop seam below.
 
 ## Provenance & salvage policy
 
@@ -367,12 +382,16 @@ host `MarchingCubes` (`mesh/marching_cubes.hpp`) owns the compute pipeline and
 drives a GLSL kernel (`mesh/shaders/marching_cubes.comp`) that turns a **dense**
 `volume::Voxel` SDF grid into a triangle `Mesh` (`mesh/mesh.hpp`): one invocation
 per cell, cube index from the eight corner signs, independent triangles appended
-via an atomic counter, per-cell outward gradient normals, winding flipped so
-the front face (CCW) points outward for gfx. The 256-case tables
-(`mesh/marching_cubes_tables.hpp`, ported verbatim) are uploaded once as an SSBO
-— one definition across CPU/GLSL, mirroring the volume ABI discipline. A GPU test
-(`tests/marching_cubes_test.cpp`) extracts an analytic sphere and verifies
-radius, outward normals, and winding on MoltenVK. `mesh` depends only on the
+via an atomic counter, per-cell outward gradient normals, winding flipped so the
+front face (CCW) points outward for gfx. Each vertex also carries the hybrid
+appearance the renderer's `HybridMeshPipeline` consumes — a per-vertex `color`
+interpolated from an optional per-voxel color input (opaque white when absent)
+and a `uv0` at the `(-1,-1)` sentinel until projective texturing fills it. The
+256-case tables (`mesh/marching_cubes_tables.hpp`, ported verbatim) are uploaded
+once as an SSBO — one definition across CPU/GLSL, mirroring the volume ABI
+discipline. A GPU test (`tests/marching_cubes_test.cpp`) extracts an analytic
+sphere and verifies radius, outward normals, winding, and the interpolated
+vertex color on MoltenVK. `mesh` depends only on the
 `volume` voxel payload (a tier to its left, so the strict dependency rule holds)
 and is proven against a dense analytic SDF until it reads `tsdf`'s real blocks.
 

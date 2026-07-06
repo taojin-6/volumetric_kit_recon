@@ -33,6 +33,8 @@
 
 namespace volumetric_kit::recon {
 
+/// @brief 2-component float vector (packed 8 B; texture coordinates).
+using Vec2f = glm::vec2;
 /// @brief 3-component float vector (packed 12 B; positions, normals, ...).
 using Vec3f = glm::vec3;
 /// @brief 3-component signed-integer vector (e.g. voxel-block coordinates).
@@ -49,6 +51,7 @@ using Mat4f = glm::mat4;
 // compile error rather than silent buffer corruption. `Vec3u8` is guarded
 // nowhere else -- it appears only behind a pointer in the volume tier, so no
 // struct-offset assert transitively pins it the way `Vec3i` is pinned.
+static_assert(sizeof(Vec2f) == 8, "Vec2f must pack to 8 bytes");
 static_assert(sizeof(Vec3f) == 12, "Vec3f must pack to 12 bytes");
 static_assert(sizeof(Vec3i) == 12, "Vec3i must pack to 12 bytes");
 static_assert(sizeof(Vec3u8) == 3, "Vec3u8 must pack to 3 bytes");
