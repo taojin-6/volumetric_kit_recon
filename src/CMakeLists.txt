@@ -10,13 +10,17 @@ include(GNUInstallDirs)
 add_subdirectory(volumetric_kit/recon/core)
 add_subdirectory(volumetric_kit/recon/volume)
 add_subdirectory(volumetric_kit/recon/tsdf)
-# TODO: add_subdirectory() for mesh / interop as those tiers land.
+# mesh reads the volume voxel payload directly (proven against a dense analytic
+# SDF), so it depends on volume, not tsdf.
+add_subdirectory(volumetric_kit/recon/mesh)
+# TODO: add_subdirectory() for interop as that tier lands.
 
 # --- recon: umbrella alias --------------------------------------------------
 # Consumers link `volumetric_kit::recon` and get whatever tiers are built.
 add_library(recon INTERFACE)
 add_library(volumetric_kit::recon ALIAS recon)
-target_link_libraries(recon INTERFACE recon_core recon_volume recon_tsdf)
+target_link_libraries(recon INTERFACE recon_core recon_volume recon_tsdf
+                                      recon_mesh)
 
 # --- Install / export -------------------------------------------------------
 # Tiers install their own targets into volumetric_kit_reconTargets and their own
