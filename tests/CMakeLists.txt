@@ -46,6 +46,16 @@ target_link_libraries(recon_volume_hash_test
 vr_target_warnings(recon_volume_hash_test)
 add_test(NAME recon_volume_hash COMMAND recon_volume_hash_test)
 
+# volume GPU hash map: build a VoxelHashMap, allocate a cube of block coords,
+# compact, and verify the active set + the HashEntry scalar-layout round-trip on
+# the real driver (MoltenVK / NVIDIA). Skips (exit 0) where no device is
+# present.
+add_executable(recon_volume_hash_map_test volume_hash_map_test.cpp)
+target_link_libraries(recon_volume_hash_map_test
+                      PRIVATE volumetric_kit::recon_volume Vulkan::Vulkan)
+vr_target_warnings(recon_volume_hash_map_test)
+add_test(NAME recon_volume_hash_map COMMAND recon_volume_hash_map_test)
+
 # core device seam: Instance + Device create/adopt. Links recon_core, which now
 # carries the Vulkan headers/loader. Skips at runtime where no compute device is
 # present.

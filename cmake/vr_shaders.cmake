@@ -98,7 +98,11 @@ function(vr_compile_shaders target)
     # Optional: validate the emitted SPIR-V against Vulkan 1.2 rules.
     set(_validate)
     if(VR_SPIRV_VAL)
-      set(_validate COMMAND "${VR_SPIRV_VAL}" --target-env vulkan1.2 "${_out}")
+      # --scalar-block-layout: recon's compute shaders read POD structs through
+      # scalar block layout (2026-07-05 ABI), which spirv-val rejects by
+      # default.
+      set(_validate COMMAND "${VR_SPIRV_VAL}" --target-env vulkan1.2
+                    --scalar-block-layout "${_out}")
     endif()
 
     # make_directory runs at build time (not just configure), so the compile

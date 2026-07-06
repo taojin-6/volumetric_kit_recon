@@ -55,6 +55,9 @@ struct DeviceRequirements {
   /// `timelineSemaphore` (1.2 core) — recon's sync primitive and the interop
   /// handoff.
   bool timeline_semaphore = true;
+  /// `scalarBlockLayout` (1.2 core) — the buffer ABI every recon compute shader
+  /// reads its POD structs through (2026-07-05); required.
+  bool scalar_block_layout = true;
 };
 
 /// @brief A `VkDevice` the caller already created, plus what the caller ENABLED
@@ -90,6 +93,9 @@ struct AdoptedDevice {
   /// be queried back, so the creator declares it; recon's default config
   /// requires it.
   bool enabled_timeline_semaphore = false;
+  /// Whether the creator enabled `scalarBlockLayout` on `device` (1.2 core, but
+  /// must be enabled at creation and can't be queried back). recon requires it.
+  bool enabled_scalar_block_layout = false;
 };
 
 /// @brief Owns *or borrows* a `VkDevice`, its compute (+ transfer) queue, and a

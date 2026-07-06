@@ -234,6 +234,9 @@ Two contracts — both simpler now that recon and gfx are both Vulkan.
   decision). Scalar layout is the C/CUDA layout, so one struct maps 1:1 across
   CPU / GLSL / CUDA. The `static_assert`s on the C++ side guard only the host
   packing; keep the `layout(scalar)` GLSL definitions in lockstep.
+  `Device::create` enables the `scalarBlockLayout` feature (and `adopt` requires
+  the creator did); `vr_compile_shaders` validates the emitted SPIR-V with
+  `--scalar-block-layout`.
 - **GLSL compute is the baseline; CUDA is the optional accelerator.** In the
   Vulkan path, warp/wave tricks become Vulkan subgroup ops and device atomics use
   GLSL atomics; the prior engine's kernels are a reference for the *algorithm*,
@@ -282,21 +285,22 @@ the same shape (gfx's rules; the mistakes reviews keep catching):
 
 ## Where to start
 
-Current state: the `core` foundation (`Status`/`Result`, logging, contract
-checks, version, GLM-backed math), the Vulkan **instance/device** create-adopt
-seam, and the rest of the Vulkan **compute foundation** — the VMA `Allocator`
-(`core/allocator.hpp`), the RAII `Buffer` (`core/buffer.hpp`), the SPIR-V
-`ShaderModule`, the descriptor + `ComputePipeline` wrappers, and a
-shared-queue-safe `Device::submit_single_time` dispatch. GLSL → SPIR-V builds
-through `cmake/vr_shaders.cmake`, and a **compute smoke**
-(`tests/compute_smoke_test.cpp`, shader `tests/shaders/fill.comp`) proves the
-whole path — allocate → bind → dispatch → read back — on MoltenVK. Plus the
-`volume` POD data model (`volume/hash_types.hpp`).
+Current state: the `core` foundation + the full Vulkan **compute foundation**
+(VMA `Allocator`, RAII `Buffer`, `ShaderModule`, descriptor + `ComputePipeline`,
+the shared-queue-safe `Device::submit_single_time` dispatch; `Device` also
+enables `scalarBlockLayout`), proven by the compute smoke on MoltenVK. On top of
+it, the first **`volume` tier** slice — the sparse voxel hash map: the host
+`VoxelHashMap` (`volume/voxel_hash_map.hpp`) owns the device buffers + pipelines
+and drives **init / allocate-from-coords / compact** via GLSL kernels
+(`volume/shaders/hash_*.comp`) that read `HashEntry`/`BlockIndex` through the
+scalar-block-layout ABI (2026-07-05). The kernels are embedded into
+`recon_volume` (now a compiled STATIC tier) via `cmake/vr_embed.cmake`, and a GPU
+test (`tests/volume_hash_map_test.cpp`) proves allocate→compact + the on-device
+`HashEntry` layout round-trip on MoltenVK. Host coord/hash math + POD layouts are
+in `volume/{voxel_coords,hash,voxel_grid,hash_types}.hpp`.
 
-Next: **port the `volume` hash ops as compute shaders** on this foundation — the
-GLSL kernels (init / allocate-from-coords·depth·points / compact / delete /
-rehash / heap-rebuild / diagnostics, mirroring the prior engine's `voxel_hashing`
-Metal/CUDA kernels) plus the host `VoxelHashMap` that owns the buffers and
-dispatches them (turning `recon_volume` from an INTERFACE into a compiled tier).
-Those shaders read `HashEntry`/`Voxel` through the scalar-block-layout ABI
-(2026-07-05).
+Next: the remaining `volume` hash ops — **delete** (chain splice + heap free),
+**rehash / resize**, **heap-rebuild**, and **diagnostics**, then
+**allocate-from-depth / -points** (camera unprojection) + frustum-culled
+compaction, mirroring the prior engine's `voxel_hashing`. Then the `tsdf`
+integration tier consumes the allocated blocks.
