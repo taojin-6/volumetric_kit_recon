@@ -1,0 +1,52 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Tao Jin
+
+/// @file volume/hash.hpp
+/// @brief The spatial hash function and the hash-table slot sentinels.
+
+#pragma once
+
+#include <cstdint>
+
+#include "volumetric_kit/recon/core/device_macros.hpp"
+#include "volumetric_kit/recon/core/math/vector_types.hpp"
+
+namespace volumetric_kit::recon::volume {
+
+/// @name Hash-table slot sentinels
+/// Shared by the host allocator and the compute shaders; a slot's `ptr` field
+/// carries one of these when it is not a live voxel-block pointer.
+/// @{
+inline constexpr std::int32_t kFreeEntry = -1;  ///< Empty slot.
+inline constexpr std::int32_t kLockEntry = -2;  ///< Slot locked mid-insert.
+inline constexpr std::int32_t kNoOffset = 0;    ///< Collision-chain terminator.
+/// @}
+
+/// @name Spatial-hash primes
+/// The large primes of the Teschner et al. spatial hash. Unsigned so the
+/// coordinate multiply wraps with defined behaviour.
+/// @{
+inline constexpr std::uint32_t kHashPrimeX = 73856093u;
+inline constexpr std::uint32_t kHashPrimeY = 19349669u;
+inline constexpr std::uint32_t kHashPrimeZ = 83492791u;
+/// @}
+
+/// @brief Map a voxel-block coordinate to a bucket index in `[0, num_buckets)`.
+///
+/// The XOR-of-prime-products spatial hash. Deliberately all-unsigned: the block
+/// coordinate can be negative, and signed integer overflow is undefined, so
+/// each axis is cast to `uint32_t` before the multiply (a straight
+/// reinterpretation of the bits, matching the GLSL mirror).
+/// @param block        The voxel-block coordinate.
+/// @param num_buckets  The hash-table bucket count (must be > 0).
+/// @return The bucket index the coordinate hashes to.
+VR_DEVICE_HOST inline std::uint32_t hash_bucket(Vec3i block,
+                                                std::int32_t num_buckets) {
+  const std::uint32_t hash =
+      (static_cast<std::uint32_t>(block.x) * kHashPrimeX) ^
+      (static_cast<std::uint32_t>(block.y) * kHashPrimeY) ^
+      (static_cast<std::uint32_t>(block.z) * kHashPrimeZ);
+  return hash % static_cast<std::uint32_t>(num_buckets);
+}
+
+}  // namespace volumetric_kit::recon::volume
