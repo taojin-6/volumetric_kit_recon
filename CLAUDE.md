@@ -362,9 +362,25 @@ inverse-square-with-behind-dropoff weight, and a running average capped at
 matching `voxel_to_world`). `tests/tsdf_integrate_test.cpp` fuses a constant-depth
 plane and checks the per-voxel numerics on MoltenVK.
 
+The first **`mesh` tier** slice — GPU marching cubes — lands alongside it. The
+host `MarchingCubes` (`mesh/marching_cubes.hpp`) owns the compute pipeline and
+drives a GLSL kernel (`mesh/shaders/marching_cubes.comp`) that turns a **dense**
+`volume::Voxel` SDF grid into a triangle `Mesh` (`mesh/mesh.hpp`): one invocation
+per cell, cube index from the eight corner signs, independent triangles appended
+via an atomic counter, per-vertex outward gradient normals, winding flipped so
+the front face (CCW) points outward for gfx. The 256-case tables
+(`mesh/marching_cubes_tables.hpp`, ported verbatim) are uploaded once as an SSBO
+— one definition across CPU/GLSL, mirroring the volume ABI discipline. A GPU test
+(`tests/marching_cubes_test.cpp`) extracts an analytic sphere and verifies
+radius, outward normals, and winding on MoltenVK. `mesh` depends only on the
+`volume` voxel payload (a tier to its left, so the strict dependency rule holds)
+and is proven against a dense analytic SDF until it reads `tsdf`'s real blocks.
+
 Next: **dynamic** TSDF integration (one branch: hard-clear stale free-space
 voxels), then **bilinear depth sampling** and **colour** (a `color` attribute).
 A block-index-preserving GPU **rehash** + heap-rebuild then preserves per-voxel
 data across a `resize` (which currently reassigns block indices, discarding the
-`tsdf`/`weight` a block held). Then the **`mesh` tier** — marching cubes reads the
-`tsdf` attribute to extract geometry.
+`tsdf`/`weight` a block held). On the `mesh` side (greppable `TODO`s): extraction
+straight off the sparse `VoxelHashMap` with cross-block neighbour sampling,
+shared-vertex dedup + the incremental block-mesh pool, and OBJ/PLY + glTF/GLB
+export + the gfx-vertex converter (interop seam A).
