@@ -106,3 +106,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   engine's `sampleDepthBilinear`. The GPU test projects an on-axis voxel onto a
   half-pixel tap boundary and checks a sub-`trunc` step blends (distinct from the
   nearest sample) while an over-`trunc` step falls back. Colour follows.
+- `tsdf`: `TsdfIntegrator::integrate` gains an optional `ColorFrame` — fuse a
+  posed color image into the grid's `color` attribute alongside depth. Color uses
+  a **separate color camera** (its own intrinsics + pose, projected per voxel),
+  running-averaged with the same weights as the SDF (first observation assigns).
+  RGB is packed in a `uint`'s low three bytes, matching the mesh tier's `color`
+  layout so meshing reads it directly. The GPU test fuses a constant color and
+  checks the packed RGB per voxel, that an occluded voxel keeps zero, and that a
+  color camera shifted out of frame skips color while depth still fuses.
