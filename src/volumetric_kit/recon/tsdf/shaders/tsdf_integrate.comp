@@ -1,0 +1,90 @@
+#version 450
+
+// Classic projective TSDF integration. One thread per voxel of each active
+// block: project the voxel centre into the depth camera, compute the truncated
+// signed distance (sdf = depth - Zc, positive in front of the surface), and fuse
+// it into the tsdf/weight attributes by a weighted running average. Ported from
+// classic_tsdf.metal / classic_tsdf.cu (the neural/triplane channels are out of
+// scope). Each voxel is owned by exactly one thread (a unique block ptr + local
+// index), so the read-modify-write needs no atomics.
+
+#extension GL_GOOGLE_include_directive : require
+#include "tsdf_common.glsl"
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0, scalar) buffer Tsdf { float tsdf[]; };
+layout(set = 0, binding = 1, scalar) buffer Weight { float weight[]; };
+layout(set = 0, binding = 2, scalar) readonly buffer Active {
+  BlockIndex active_blocks[];
+};
+layout(set = 0, binding = 3, scalar) readonly buffer Depth { float depth[]; };
+layout(set = 0, binding = 4, scalar) readonly buffer Params {
+  IntegrateParams params;
+};
+
+void main() {
+  uint gid = gl_GlobalInvocationID.x;
+  uint vpb = uint(pc.grid.voxels_per_block);
+  if (gid >= pc.num_active_blocks * vpb) {
+    return;
+  }
+  uint block_i = gid / vpb;
+  uint local = gid % vpb;
+  BlockIndex block = active_blocks[block_i];
+
+  // Voxel world position: node convention (voxel * voxel_size), matching
+  // volume/voxel_coords.hpp::voxel_to_world and the prior engine.
+  int bs = pc.grid.block_size;
+  ivec3 lc = ivec3(int(local % uint(bs)), int((local / uint(bs)) % uint(bs)),
+                   int(local / uint(bs * bs)));
+  ivec3 voxel = block.coord * bs + lc;
+  vec3 world = vec3(voxel) * pc.grid.voxel_size;
+
+  // Project into the depth camera (world -> camera, then pinhole).
+  vec3 cam = (params.world_to_cam * vec4(world, 1.0)).xyz;
+  float zc = cam.z;
+  if (zc <= 0.0) {
+    return;  // behind the camera
+  }
+  float u = params.fx * (cam.x / zc) + params.cx;
+  float v = params.fy * (cam.y / zc) + params.cy;
+  if (u < 0.0 || u >= float(params.width) || v < 0.0 ||
+      v >= float(params.height)) {
+    return;  // outside the image
+  }
+  float d = depth[uint(v) * params.width + uint(u)];  // nearest-neighbour
+  if (d <= 0.0 || d > params.max_depth) {
+    return;  // invalid / out-of-range depth
+  }
+
+  // Truncated projective SDF.
+  float trunc_dist = pc.grid.trunc_dist;
+  float sdf = d - zc;
+  if (sdf < -trunc_dist) {
+    return;  // occluded: well behind the surface
+  }
+  sdf = clamp(sdf, -trunc_dist, trunc_dist);
+
+  // Inverse-square observation weight with a linear behind-surface dropoff.
+  float w_obs = (zc > 0.01) ? (1.0 / (zc * zc)) : 1.0;
+  if (zc > d) {
+    float behind = zc - d;
+    if (behind > trunc_dist) {
+      return;
+    }
+    w_obs *= (trunc_dist - behind) / trunc_dist;
+  }
+  if (w_obs <= 0.0) {
+    return;
+  }
+
+  // Weighted running average, capped at max_weight.
+  uint idx = uint(block.ptr) + local;
+  float w_old = weight[idx];
+  float s_old = tsdf[idx];
+  float w_sum = w_old + w_obs;
+  tsdf[idx] = clamp((s_old * w_old + sdf * w_obs) / max(w_sum, 1e-6),
+                    -trunc_dist, trunc_dist);
+  weight[idx] = min(w_sum, params.max_weight);
+}
