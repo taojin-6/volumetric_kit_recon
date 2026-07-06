@@ -272,6 +272,8 @@ the same shape (gfx's rules; the mistakes reviews keep catching):
   workspace holds several sibling repos and a leaked `cd` lands you in the wrong
   one.
 - Conventional Commits (`feat(volume): …`, `build: …`, `refactor(core): …`).
+- When opening a PR, **assign yourself** (`gh pr create --assignee @me`) so it
+  lands on your board and ownership is unambiguous.
 - Mark deferred work inline with a greppable `TODO:` comment.
 - Prefer plain, behavior-level tests over friend-class backdoors.
 - Full Doxygen on public classes/functions, matching
