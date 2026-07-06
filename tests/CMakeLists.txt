@@ -74,6 +74,15 @@ target_link_libraries(recon_volume_resize_test
 vr_target_warnings(recon_volume_resize_test)
 add_test(NAME recon_volume_resize COMMAND recon_volume_resize_test)
 
+# volume diagnostics: force a collision chain (coords hashing to one bucket) and
+# verify the reported active / overflow / chain-length + heap stats. Skips (exit
+# 0) where no device is present.
+add_executable(recon_volume_diagnostics_test volume_diagnostics_test.cpp)
+target_link_libraries(recon_volume_diagnostics_test
+                      PRIVATE volumetric_kit::recon_volume Vulkan::Vulkan)
+vr_target_warnings(recon_volume_diagnostics_test)
+add_test(NAME recon_volume_diagnostics COMMAND recon_volume_diagnostics_test)
+
 # core device seam: Instance + Device create/adopt. Links recon_core, which now
 # carries the Vulkan headers/loader. Skips at runtime where no compute device is
 # present.
