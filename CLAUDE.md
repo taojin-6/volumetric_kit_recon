@@ -352,10 +352,19 @@ keyed by `BlockIndex::ptr`, so a consumer materialises only the channels it need
 (the 2026-07-05 SoA decision); `tests/volume_block_grid_test.cpp` proves
 independent, correctly-sized attribute storage on MoltenVK.
 
-Next: the `volume` tier is feature-complete for v1; a block-index-preserving GPU
-**rehash** + heap-rebuild lands once the `tsdf` tier gives blocks persistent SDF
-data (`resize` currently reuses init/allocate/compact, reassigning block
-indices). The spine now advances to **`tsdf` integration**, which consumes the
-frustum-culled block set and writes the `VoxelBlockGrid` `tsdf`/`weight`
-attributes for the allocated blocks (classic projective integration first, then
-dynamic).
+The first **`tsdf` tier** slice then lands on top: `TsdfIntegrator`
+(`tsdf/tsdf_integrator.hpp`) fuses a posed depth frame (float metres, reusing
+`volume::DepthCameraParams`) into a `VoxelBlockGrid`'s `tsdf`/`weight` attributes
+via `tsdf/shaders/tsdf_integrate.comp` — one thread per voxel of each active
+block, classic projective `sdf = depth − Zc` with `±trunc_dist` truncation, an
+inverse-square-with-behind-dropoff weight, and a running average capped at
+`max_weight` (faithful to the prior engine's classic kernel; node-centred voxels
+matching `voxel_to_world`). `tests/tsdf_integrate_test.cpp` fuses a constant-depth
+plane and checks the per-voxel numerics on MoltenVK.
+
+Next: **dynamic** TSDF integration (one branch: hard-clear stale free-space
+voxels), then **bilinear depth sampling** and **colour** (a `color` attribute).
+A block-index-preserving GPU **rehash** + heap-rebuild then preserves per-voxel
+data across a `resize` (which currently reassigns block indices, discarding the
+`tsdf`/`weight` a block held). Then the **`mesh` tier** — marching cubes reads the
+`tsdf` attribute to extract geometry.

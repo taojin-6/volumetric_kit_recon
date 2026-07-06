@@ -81,3 +81,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   buffers they touch. A GPU test (`tests/volume_block_grid_test.cpp`) proves
   distinct, correctly-sized attribute storage, the composed map, and the error /
   move paths on MoltenVK.
+- `tsdf`: new **`tsdf` tier** with `TsdfIntegrator` — classic projective TSDF
+  integration of a posed depth frame (float metres, reusing `DepthCameraParams`)
+  into a `VoxelBlockGrid`'s `tsdf` + `weight` attributes. One GLSL dispatch
+  (`tsdf_integrate.comp`) runs a thread per voxel of each active block: project
+  the node-centred voxel into the camera, `sdf = depth - Zc`, truncate at
+  `±trunc_dist`, weight by inverse-square with a behind-surface dropoff, and fuse
+  by a running average capped at `max_weight` — faithful to the prior engine's
+  classic kernel (neural/triplane channels excluded). A GPU test
+  (`tests/tsdf_integrate_test.cpp`) fuses a constant-depth plane and checks the
+  per-voxel sdf/weight, the truncation boundary, and the two-frame weight cap on
+  MoltenVK. Dynamic integration, bilinear depth sampling, and colour follow.
