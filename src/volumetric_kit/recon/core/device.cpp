@@ -72,6 +72,19 @@ bool supports_timeline_semaphore(VkPhysicalDevice physical) {
   return timeline.timelineSemaphore == VK_TRUE;
 }
 
+// Whether the physical device reports scalarBlockLayout support (Vulkan 1.2
+// core) -- the buffer ABI every recon compute shader reads its POD structs
+// through (GL_EXT_scalar_block_layout; see the 2026-07-05 decision).
+bool supports_scalar_block_layout(VkPhysicalDevice physical) {
+  VkPhysicalDeviceScalarBlockLayoutFeatures scalar{};
+  scalar.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SCALAR_BLOCK_LAYOUT_FEATURES;
+  VkPhysicalDeviceFeatures2 supported{};
+  supported.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+  supported.pNext = &scalar;
+  vkGetPhysicalDeviceFeatures2(physical, &supported);
+  return scalar.scalarBlockLayout == VK_TRUE;
+}
+
 // VkPhysicalDeviceFeatures is a POD of only VkBool32 members (no padding), so
 // treat it as a flat array to check "every feature recon requested is enabled"
 // without hand-listing its ~55 fields.
@@ -155,6 +168,11 @@ Result<Device> Device::create(VkInstance instance, VkPhysicalDevice physical,
     return Status::unsupported(
         "device does not support timelineSemaphore (Vulkan 1.2 core)");
   }
+  if (!supports_scalar_block_layout(physical)) {
+    return Status::unsupported(
+        "device does not support scalarBlockLayout (Vulkan 1.2 core) -- the "
+        "recon compute-shader buffer ABI");
+  }
 
   const float priority = 1.0f;
   VkDeviceQueueCreateInfo queue_info{};
@@ -169,10 +187,16 @@ Result<Device> Device::create(VkInstance instance, VkPhysicalDevice physical,
   timeline.sType =
       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES;
   timeline.timelineSemaphore = VK_TRUE;
+  // scalarBlockLayout (1.2 core): the buffer ABI every recon compute shader
+  // reads its POD structs through (2026-07-05). Chained ahead of timeline.
+  VkPhysicalDeviceScalarBlockLayoutFeatures scalar{};
+  scalar.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SCALAR_BLOCK_LAYOUT_FEATURES;
+  scalar.scalarBlockLayout = VK_TRUE;
+  scalar.pNext = &timeline;
   VkPhysicalDeviceFeatures2 features2{};
   features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
   features2.features = config.features;
-  features2.pNext = &timeline;
+  features2.pNext = &scalar;
 
   VkDeviceCreateInfo create_info{};
   create_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -259,6 +283,13 @@ Result<Device> Device::adopt(const AdoptedDevice& adopted,
   if (reqs.timeline_semaphore && !adopted.enabled_timeline_semaphore) {
     return Status::unsupported(
         "Device::adopt: timelineSemaphore was not enabled on the adopted "
+        "device");
+  }
+  // scalarBlockLayout likewise must be enabled at creation and can't be queried
+  // back; the creator declares it. recon's compute-shader ABI requires it.
+  if (reqs.scalar_block_layout && !adopted.enabled_scalar_block_layout) {
+    return Status::unsupported(
+        "Device::adopt: scalarBlockLayout was not enabled on the adopted "
         "device");
   }
 

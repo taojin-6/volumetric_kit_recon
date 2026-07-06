@@ -69,8 +69,9 @@ int main() {
   check(owner.value().command_pool() != VK_NULL_HANDLE, "command pool");
 
   // Adopt the owner's device by raw handles. The default config requires
-  // timelineSemaphore (which Device::create enabled) and no extensions, so the
-  // creator declares the timeline feature and no enabled-extension list.
+  // timelineSemaphore + scalarBlockLayout (which Device::create enabled) and no
+  // extensions, so the creator declares those features and no enabled-extension
+  // list.
   vr::AdoptedDevice adopted;
   adopted.instance = instance.value().handle();
   adopted.physical_device = physical.value();
@@ -78,6 +79,7 @@ int main() {
   adopted.compute_family = owner.value().compute_family();
   adopted.compute_queue = owner.value().compute_queue();
   adopted.enabled_timeline_semaphore = true;
+  adopted.enabled_scalar_block_layout = true;
   {
     vr::Result<vr::Device> borrowed = vr::Device::adopt(adopted, {});
     if (!borrowed) {
@@ -107,6 +109,17 @@ int main() {
     vr::Result<vr::Device> r = vr::Device::adopt(no_timeline, {});
     check(!r.ok() && r.status().domain() == vr::Status::Code::Unsupported,
           "adopt rejects a device without timelineSemaphore enabled");
+  }
+
+  // adopt likewise rejects a device the creator did not declare
+  // scalarBlockLayout on (the recon compute-shader buffer ABI; also
+  // un-queryable post-creation).
+  {
+    vr::AdoptedDevice no_scalar = adopted;
+    no_scalar.enabled_scalar_block_layout = false;
+    vr::Result<vr::Device> r = vr::Device::adopt(no_scalar, {});
+    check(!r.ok() && r.status().domain() == vr::Status::Code::Unsupported,
+          "adopt rejects a device without scalarBlockLayout enabled");
   }
 
   // adopt rejects a device missing a core feature recon's config requires but
