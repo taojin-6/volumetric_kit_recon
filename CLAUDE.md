@@ -157,6 +157,20 @@ Each dated; newest context wins. Change the decision *and* this list together.
   `allocator.cpp` and the one `VMA_IMPLEMENTATION` TU, `vma_impl.cpp`, include
   `<vk_mem_alloc.h>`; `SYSTEM` include). Revisit reflection if the volume/tsdf
   binding boilerplate grows painful.
+- **2026-07-05 — Per-voxel storage is a structure-of-arrays attribute store
+  (`VoxelBlockGrid`), not the prior engine's AoS `Voxel`-in-the-hashmap.**
+  Following Open3D's `VoxelBlockGrid`, `VoxelHashMap` keys only a block *index*;
+  each per-voxel channel (`tsdf`, `weight`, `color`, …) is its own flat device
+  array of `num_blocks·voxels_per_block` elements, keyed by `BlockIndex::ptr`,
+  declared and allocated independently. *Diverges* from the monolithic prior
+  engine (which bundled a single AoS `Voxel{sdf,weight}` buffer inside the
+  hash-table struct): the win is à-la-carte + tiered — a `volume`-only user
+  (pure spatial hashing) allocates **zero** per-voxel memory, and each consumer
+  materialises only the channels it needs (TSDF writes `tsdf`+`weight`, a colour
+  pass writes `color`, meshing reads `tsdf`) instead of forcing the full SDF
+  volume (~6 GB at prod defaults) onto every map. The store lives in `volume`
+  (below every consumer tier); the AoS `Voxel`/`VoxelData` PODs in
+  `hash_types.hpp` become host-side read views.
 
 ## Provenance & salvage policy
 
@@ -308,9 +322,17 @@ a camera view — the per-frame streamed working set. The kernels are embedded i
 prove each op + the on-device `HashEntry` layout round-trip on MoltenVK. Host
 coord/hash math + POD layouts are in
 `volume/{voxel_coords,hash,frustum,voxel_grid,hash_types}.hpp`.
+On top of the map, **`VoxelBlockGrid`** (`volume/voxel_block_grid.hpp`) composes
+it with a set of independently-allocated, named per-voxel **attribute** arrays
+(SoA — `tsdf`, `weight`, `color`, …), each `num_blocks·voxels_per_block` and
+keyed by `BlockIndex::ptr`, so a consumer materialises only the channels it needs
+(the 2026-07-05 SoA decision); `tests/volume_block_grid_test.cpp` proves
+independent, correctly-sized attribute storage on MoltenVK.
 
 Next: the `volume` tier is feature-complete for v1; a block-index-preserving GPU
 **rehash** + heap-rebuild lands once the `tsdf` tier gives blocks persistent SDF
 data (`resize` currently reuses init/allocate/compact, reassigning block
 indices). The spine now advances to **`tsdf` integration**, which consumes the
-frustum-culled block set.
+frustum-culled block set and writes the `VoxelBlockGrid` `tsdf`/`weight`
+attributes for the allocated blocks (classic projective integration first, then
+dynamic).
