@@ -60,6 +60,7 @@ target_sources(
           shader.cpp
           descriptor.cpp
           compute_pipeline.cpp
+          compute_kernel.cpp
           vma_impl.cpp)
 
 # Generated headers: the VR_CORE_API export macro + the configured version
