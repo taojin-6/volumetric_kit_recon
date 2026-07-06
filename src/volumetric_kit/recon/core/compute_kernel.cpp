@@ -55,8 +55,18 @@ Result<DescriptorPool> KernelSetBuilder::build() {
       DescriptorPool pool,
       DescriptorPool::create(device_, &size, 1,
                              static_cast<std::uint32_t>(kernels_.size())));
+  // Allocate every set before committing any into the caller's kernels, so a
+  // mid-loop failure destroys the local pool (freeing the sets already made)
+  // with the kernels untouched -- rather than leaving earlier kernels holding a
+  // set whose pool is gone while valid() reports true.
+  std::vector<DescriptorSet> sets;
+  sets.reserve(kernels_.size());
   for (ComputeKernel* kernel : kernels_) {
-    VR_ASSIGN(kernel->set, pool.allocate(kernel->layout.handle()));
+    VR_ASSIGN(DescriptorSet set, pool.allocate(kernel->layout.handle()));
+    sets.push_back(set);
+  }
+  for (std::size_t i = 0; i < kernels_.size(); ++i) {
+    kernels_[i]->set = sets[i];
   }
   return pool;
 }
@@ -72,6 +82,13 @@ Status dispatch(Device& device, const ComputeKernel& kernel, const void* push,
     return Status::invalid_argument(
         "dispatch: workgroup count exceeds the device's "
         "maxComputeWorkGroupCount[0] -- input too large for a 1-D dispatch");
+  }
+  // A non-zero push_size with no data would read past a null pointer in
+  // vkCmdPushConstants; reject it up front (mirrors ComputePipeline::create's
+  // null-push-range check).
+  if (push_size > 0 && push == nullptr) {
+    return Status::invalid_argument(
+        "dispatch: push is null with a non-zero push_size");
   }
   return device.submit_single_time([&](VkCommandBuffer cmd) {
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
