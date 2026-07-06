@@ -70,6 +70,18 @@ void main() {
   if (sdf < -trunc_dist) {
     return;  // occluded: well behind the surface
   }
+  uint idx = uint(block.ptr) + local;
+  if (sdf > trunc_dist && pc.mode == kModeDynamic) {
+    // Free space in front of the surface, past the band: the surface has
+    // receded past this voxel. Dynamic integration clears any stale geometry
+    // here and does not fuse free space (classic instead clamps to +trunc,
+    // keeping a smooth field ahead of the surface).
+    if (weight[idx] > 0.0) {
+      tsdf[idx] = 0.0;
+      weight[idx] = 0.0;
+    }
+    return;
+  }
   sdf = clamp(sdf, -trunc_dist, trunc_dist);
 
   // Inverse-square observation weight with a linear behind-surface dropoff.
@@ -86,7 +98,6 @@ void main() {
   }
 
   // Weighted running average, capped at max_weight.
-  uint idx = uint(block.ptr) + local;
   float w_old = weight[idx];
   float s_old = tsdf[idx];
   float w_sum = w_old + w_obs;

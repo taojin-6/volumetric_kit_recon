@@ -37,6 +37,7 @@ struct PushConstants {
   VoxelGridParams grid;
   std::uint32_t num_active_blocks;
   float max_weight;
+  std::uint32_t mode;  // tsdf::IntegrationMode (0 = classic, 1 = dynamic).
 };
 
 // Ceil-divide without the `items + kLocalSize - 1` term, which overflows uint32
@@ -99,8 +100,8 @@ Result<TsdfIntegrator> TsdfIntegrator::create(Device& device,
 }
 
 Status TsdfIntegrator::integrate(VoxelBlockGrid& grid, const float* depth,
-                                 const DepthCameraParams& cam,
-                                 float max_weight) {
+                                 const DepthCameraParams& cam, float max_weight,
+                                 IntegrationMode mode) {
   if (!valid()) {
     return Status::invalid_argument(
         "TsdfIntegrator::integrate: moved-from integrator");
@@ -158,8 +159,9 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid, const float* depth,
   kernel_.set.write_storage_buffer(3, depth_buf.handle(), 0, VK_WHOLE_SIZE);
 
   const VoxelGridParams& grid_params = grid.grid();
-  const PushConstants push{
-      grid_params, static_cast<std::uint32_t>(active.size()), max_weight};
+  const PushConstants push{grid_params,
+                           static_cast<std::uint32_t>(active.size()),
+                           max_weight, static_cast<std::uint32_t>(mode)};
 
   // One thread per voxel of every active block. The flattened thread count must
   // fit a uint32; dispatch() caps groupCountX at the device limit and emits the
