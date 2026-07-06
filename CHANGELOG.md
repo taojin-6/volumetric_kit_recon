@@ -65,3 +65,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   active set survives, and that allocation past the old capacity then works on
   MoltenVK. The block-index-preserving GPU rehash is deferred until blocks carry
   SDF data.
+- `volume`: `VoxelHashMap::diagnostics` — host-side occupancy + health stats
+  (active / overflow / collision-chain length, load factor, heap utilization)
+  from the entries + heap counter; a GPU test
+  (`tests/volume_diagnostics_test.cpp`) forces a collision chain and verifies the
+  counts. The shared coord-kernel path (allocate + remove) now re-dispatches on
+  failure to converge under same-bucket contention (a GPU spin-lock livelock); a
+  non-zero return means a genuine capacity limit.

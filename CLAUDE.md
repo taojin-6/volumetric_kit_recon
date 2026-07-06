@@ -294,14 +294,14 @@ it, the first **`volume` tier** slice — the sparse voxel hash map: the host
 and drives **init / allocate-from-coords / remove / compact / resize** via GLSL
 kernels
 (`volume/shaders/hash_*.comp`) that read `HashEntry`/`BlockIndex` through the
-scalar-block-layout ABI (2026-07-05). The kernels are embedded into
+scalar-block-layout ABI (2026-07-05), plus a host-side **diagnostics** scan
+(occupancy + collision-chain health). The kernels are embedded into
 `recon_volume` (now a compiled STATIC tier) via `cmake/vr_embed.cmake`, and a GPU
 test (`tests/volume_hash_map_test.cpp`) proves allocate→compact + the on-device
 `HashEntry` layout round-trip on MoltenVK. Host coord/hash math + POD layouts are
 in `volume/{voxel_coords,hash,voxel_grid,hash_types}.hpp`.
 
-Next: **diagnostics** (active / overflow / chain-length + heap utilization), then
-**allocate-from-depth / -points** (camera unprojection) + frustum-culled
+Next: **allocate-from-depth / -points** (camera unprojection) + frustum-culled
 compaction, mirroring the prior engine's `voxel_hashing`. `resize` currently
 reuses init/allocate/compact (reassigning block indices); a block-index-preserving
 GPU **rehash** + heap-rebuild lands once the `tsdf` tier gives blocks persistent
