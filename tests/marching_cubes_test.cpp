@@ -73,6 +73,40 @@ std::vector<vol::Voxel> make_sphere_field() {
   return samples;
 }
 
+// Grid span in world units (origin is 0), used to normalize a position to
+// [0,1] per axis for the gradient color.
+constexpr float kSpan = static_cast<float>(kN - 1) * kH;
+
+// A linear gradient color: world position normalized to [0,1] per axis.
+vr::Vec3f grad_color(vr::Vec3f p) {
+  auto clamp01 = [](float v) {
+    return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
+  };
+  return vr::Vec3f(clamp01(p.x / kSpan), clamp01(p.y / kSpan),
+                   clamp01(p.z / kSpan));
+}
+
+// Per-sample color = grad_color(sample world position), quantized to u8 RGB
+// (the volume tier's Vec3u8 color payload).
+std::vector<vr::Vec3u8> make_gradient_colors() {
+  std::vector<vr::Vec3u8> colors(static_cast<std::size_t>(kN) * kN * kN);
+  for (int z = 0; z < kN; ++z) {
+    for (int y = 0; y < kN; ++y) {
+      for (int x = 0; x < kN; ++x) {
+        const vr::Vec3f p(static_cast<float>(x) * kH,
+                          static_cast<float>(y) * kH,
+                          static_cast<float>(z) * kH);
+        const vr::Vec3f g = grad_color(p);
+        colors[static_cast<std::size_t>(sample_index(x, y, z))] =
+            vr::Vec3u8(static_cast<std::uint8_t>(g.x * 255.0f + 0.5f),
+                       static_cast<std::uint8_t>(g.y * 255.0f + 0.5f),
+                       static_cast<std::uint8_t>(g.z * 255.0f + 0.5f));
+      }
+    }
+  }
+  return colors;
+}
+
 }  // namespace
 
 int main() {
@@ -175,6 +209,35 @@ int main() {
   const double outward_ratio =
       static_cast<double>(face_outward) / static_cast<double>(face_count);
   CHECK(outward_ratio > 0.95);
+
+  // --- Per-vertex color: default (no color input) ----------------------------
+  // With no color supplied every vertex is opaque white, and uv0 is the "use
+  // vertex color" sentinel (projective texturing has not run).
+  for (const mesh::Vertex& v : sphere.vertices) {
+    CHECK(v.color.x == 1.0f && v.color.y == 1.0f && v.color.z == 1.0f &&
+          v.color.w == 1.0f);
+    CHECK(v.uv0.x < 0.0f && v.uv0.y < 0.0f);
+  }
+
+  // --- Per-vertex color: interpolated from a color input ---------------------
+  // Color each sample by a linear gradient of its world position. Linear interp
+  // of a linear field is exact (modulo u8 quantization), so each vertex's color
+  // must match the gradient evaluated at that vertex's position; uv0 stays the
+  // sentinel (no atlas yet).
+  const std::vector<vr::Vec3u8> colors = make_gradient_colors();
+  vr::Result<mesh::Mesh> colored_result = extractor.extract(
+      samples.data(), samples.size(), grid, 0.0f, colors.data());
+  CHECK(colored_result.ok());
+  mesh::Mesh colored = std::move(colored_result).value();
+  CHECK(!colored.empty());
+  for (const mesh::Vertex& v : colored.vertices) {
+    const vr::Vec3f expected = grad_color(v.position);
+    CHECK(std::fabs(v.color.x - expected.x) < 0.03f);  // u8 quant + interp
+    CHECK(std::fabs(v.color.y - expected.y) < 0.03f);
+    CHECK(std::fabs(v.color.z - expected.z) < 0.03f);
+    CHECK(v.color.w == 1.0f);
+    CHECK(v.uv0.x < 0.0f);  // still the sentinel; no atlas yet
+  }
 
   // --- Surface misses the grid -> empty mesh ---------------------------------
   // A constant positive field has no sign change anywhere, so no cell meshes.
