@@ -25,6 +25,38 @@ layout(set = 0, binding = 4, scalar) readonly buffer Camera {
   DepthCameraParams cam;
 };
 
+// Bilinear depth sample at pixel (u, v), with nearest-neighbour fallback. Falls
+// back to the nearest sample when a bilinear tap is out of bounds, invalid
+// (<= 0), or the four taps straddle a depth discontinuity (max - min >
+// trunc_dist) that would blend across a surface edge. Mirrors the prior engine's
+// sampleDepthBilinear. (u, v) is assumed in [0, width) x [0, height).
+float sample_depth(float u, float v) {
+  int w = int(cam.width);
+  int h = int(cam.height);
+  float nearest = depth[int(v) * w + int(u)];
+
+  // Taps at pixel centres (shift by -0.5): the 2x2 block [x0,x0+1]x[y0,y0+1].
+  float su = u - 0.5;
+  float sv = v - 0.5;
+  int x0 = int(floor(su));
+  int y0 = int(floor(sv));
+  if (x0 < 0 || y0 < 0 || x0 + 1 >= w || y0 + 1 >= h) {
+    return nearest;  // a bilinear tap is out of bounds
+  }
+  float d00 = depth[y0 * w + x0];
+  float d10 = depth[y0 * w + x0 + 1];
+  float d01 = depth[(y0 + 1) * w + x0];
+  float d11 = depth[(y0 + 1) * w + x0 + 1];
+  float lo = min(min(d00, d10), min(d01, d11));
+  float hi = max(max(d00, d10), max(d01, d11));
+  if (lo <= 0.0 || (hi - lo) > pc.grid.trunc_dist) {
+    return nearest;  // an invalid tap, or a depth discontinuity across the taps
+  }
+  float fx = su - float(x0);
+  float fy = sv - float(y0);
+  return mix(mix(d00, d10, fx), mix(d01, d11, fx), fy);
+}
+
 void main() {
   uint gid = gl_GlobalInvocationID.x;
   uint vpb = uint(pc.grid.voxels_per_block);
@@ -58,7 +90,7 @@ void main() {
   if (u < 0.0 || u >= float(cam.width) || v < 0.0 || v >= float(cam.height)) {
     return;  // outside the image
   }
-  float d = depth[uint(v) * cam.width + uint(u)];  // nearest-neighbour
+  float d = sample_depth(u, v);  // bilinear, with nearest-neighbour fallback
   // Reject out-of-range depth; the negated compare also drops NaN/inf holes
   // (every comparison with NaN is false), matching hash_allocate_depth.comp so
   // integration accepts exactly the near/far range allocation did.
