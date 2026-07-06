@@ -65,6 +65,15 @@ target_link_libraries(recon_volume_block_grid_test
 vr_target_warnings(recon_volume_block_grid_test)
 add_test(NAME recon_volume_block_grid COMMAND recon_volume_block_grid_test)
 
+# tsdf integrate: fuse a synthetic constant-depth plane into a VoxelBlockGrid
+# and verify the classic projective TSDF math per voxel (sdf, truncation, weight
+# + cap). Skips (exit 0) with no device.
+add_executable(recon_tsdf_integrate_test tsdf_integrate_test.cpp)
+target_link_libraries(recon_tsdf_integrate_test
+                      PRIVATE volumetric_kit::recon_tsdf Vulkan::Vulkan)
+vr_target_warnings(recon_tsdf_integrate_test)
+add_test(NAME recon_tsdf_integrate COMMAND recon_tsdf_integrate_test)
+
 # volume delete: allocate a cube, remove a subset, verify the survivors + heap
 # reuse (chain splice / successor pull-up) on the real driver. Skips (exit 0)
 # where no device is present.
