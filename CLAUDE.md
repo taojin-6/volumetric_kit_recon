@@ -423,13 +423,27 @@ and a `uv0` at the `(-1,-1)` sentinel until projective texturing fills it. The
 once as an SSBO — one definition across CPU/GLSL, mirroring the volume ABI
 discipline. A GPU test (`tests/marching_cubes_test.cpp`) extracts an analytic
 sphere and verifies radius, outward normals, winding, and the interpolated
-vertex color on MoltenVK. `mesh` depends only on the
-`volume` voxel payload (a tier to its left, so the strict dependency rule holds)
-and is proven against a dense analytic SDF until it reads `tsdf`'s real blocks.
+vertex color on MoltenVK.
+
+A second `MarchingCubes::extract` overload meshes straight off a sparse
+`volume::VoxelBlockGrid` (`mesh/shaders/marching_cubes_sparse.comp`) — the real
+`tsdf`/`weight`/`color` blocks the integrator fills. It runs one invocation per
+voxel of each active block (the tsdf integrator's iteration); a cell on a block's
+`+face` reaches its far corners into neighbouring blocks, resolved through a
+**host-built 2×2×2 neighbour table** (each active block plus its seven
+`+x/+y/+z` neighbours, built from the compacted active set — the meshing dispatch
+is quiescent, so no device-side hash probe, and no coupling to the hash table's
+internal buffers). The per-cell body is identical to the dense kernel; a shared
+include is deferred until the block-mesh-pool slice gives a third reason to
+factor it. `tests/marching_cubes_sparse_test.cpp` writes an analytic sphere into
+a real 6³-block grid so the surface crosses interior block boundaries, and proves
+the sparse mesh matches the dense path **triangle-for-triangle** (plus cross-block
+colour) on MoltenVK — the exact-count equivalence being the cross-block-addressing
+proof. `mesh` depends only on the `volume` tier (to its left, so the strict
+dependency rule holds).
 
 Next: a block-index-preserving GPU **rehash** + heap-rebuild preserves per-voxel
 data across a `resize` (which currently reassigns block indices, discarding the
-`tsdf`/`weight`/`color` a block held). On the `mesh` side (greppable `TODO`s): extraction
-straight off the sparse `VoxelHashMap` with cross-block neighbour sampling,
+`tsdf`/`weight`/`color` a block held). On the `mesh` side (greppable `TODO`s):
 shared-vertex dedup + the incremental block-mesh pool, and OBJ/PLY + glTF/GLB
 export + the gfx-vertex converter (interop seam A).

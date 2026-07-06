@@ -123,3 +123,19 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   color camera shifted out of frame skips color while depth still fuses, that the
   first color after a depth-only warmup assigns the full RGB, and that a
   depth-only dynamic recede clears the color ghost.
+- `mesh`: a second `MarchingCubes::extract` overload meshes straight off a sparse
+  `volume::VoxelBlockGrid` — the real `tsdf`/`weight`/`color` blocks — via
+  `mesh/shaders/marching_cubes_sparse.comp`. One invocation per voxel of each
+  active block (the tsdf integrator's iteration); a cell on a block's `+face`
+  resolves its cross-block corners through a **host-built 2×2×2 neighbour table**
+  (each active block plus its seven `+x/+y/+z` neighbours, from the compacted
+  active set), so the kernel needs no device-side hash probe and no access to the
+  hash table's internal buffers. When the grid carries a `uint32` `color`
+  attribute each vertex's color is interpolated from it, else opaque white; `uv0`
+  stays the `(-1,-1)` sentinel. The per-cell body (cube index, gradient normal,
+  reversed winding, independent triangles) is identical to the dense kernel. The
+  GPU test writes an analytic sphere into a real 6³-block grid so the surface
+  crosses interior block boundaries, then proves the sparse mesh matches the
+  dense path **triangle-for-triangle** (plus cross-block color) — the exact-count
+  equivalence being the cross-block-addressing proof — and checks the empty /
+  moved-from / missing-attribute paths.
