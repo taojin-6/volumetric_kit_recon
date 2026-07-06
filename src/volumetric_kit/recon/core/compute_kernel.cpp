@@ -1,0 +1,102 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Tao Jin
+
+#include "volumetric_kit/recon/core/compute_kernel.hpp"
+
+#include <vector>
+
+#include "volumetric_kit/recon/core/device.hpp"
+#include "volumetric_kit/recon/core/shader.hpp"
+#include "volumetric_kit/recon/core/vulkan.hpp"
+
+namespace volumetric_kit::recon {
+
+Status KernelSetBuilder::add(ComputeKernel& out, const unsigned char* spv,
+                             std::size_t spv_size, std::uint32_t bindings,
+                             const VkPushConstantRange* push) {
+  // The layout: `bindings` compute-stage storage buffers at 0..bindings-1 (the
+  // caller's set-0 declarations match by index).
+  std::vector<VkDescriptorSetLayoutBinding> b(bindings);
+  for (std::uint32_t i = 0; i < bindings; ++i) {
+    b[i].binding = i;
+    b[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    b[i].descriptorCount = 1;
+    b[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+  }
+  VR_ASSIGN(out.layout,
+            DescriptorSetLayout::create(device_, b.data(), bindings));
+
+  // The pipeline from the embedded SPIR-V; the shader module is transient (the
+  // pipeline does not retain it).
+  VR_ASSIGN(
+      ShaderModule module,
+      ShaderModule::create(device_, reinterpret_cast<const std::uint32_t*>(spv),
+                           spv_size));
+  const VkDescriptorSetLayout layout_handle = out.layout.handle();
+  ComputePipelineDesc desc;
+  desc.shader = &module;
+  desc.set_layouts = &layout_handle;
+  desc.set_layout_count = 1;
+  desc.push_ranges = push;
+  desc.push_range_count = push != nullptr ? 1u : 0u;
+  VR_ASSIGN(out.pipeline, ComputePipeline::create(device_, desc));
+
+  kernels_.push_back(&out);
+  descriptor_total_ += bindings;
+  return {};
+}
+
+Result<DescriptorPool> KernelSetBuilder::build() {
+  // One set per kernel, `descriptor_total_` storage-buffer descriptors overall.
+  VkDescriptorPoolSize size{};
+  size.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+  size.descriptorCount = descriptor_total_;
+  VR_ASSIGN(
+      DescriptorPool pool,
+      DescriptorPool::create(device_, &size, 1,
+                             static_cast<std::uint32_t>(kernels_.size())));
+  for (ComputeKernel* kernel : kernels_) {
+    VR_ASSIGN(kernel->set, pool.allocate(kernel->layout.handle()));
+  }
+  return pool;
+}
+
+Status dispatch(Device& device, const ComputeKernel& kernel, const void* push,
+                std::uint32_t push_size, std::uint32_t groups,
+                std::uint32_t max_groups) {
+  // A 1-D dispatch flattens the whole input onto groupCountX, but Vulkan only
+  // guarantees maxComputeWorkGroupCount[0] >= 65535 -- an oversized input would
+  // be invalid usage on a min-spec (mobile) driver. Reject it as a clean error
+  // rather than risk a device-lost.
+  if (groups > max_groups) {
+    return Status::invalid_argument(
+        "dispatch: workgroup count exceeds the device's "
+        "maxComputeWorkGroupCount[0] -- input too large for a 1-D dispatch");
+  }
+  return device.submit_single_time([&](VkCommandBuffer cmd) {
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                      kernel.pipeline.handle());
+    const VkDescriptorSet set = kernel.set.handle();
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            kernel.pipeline.layout(), 0, 1, &set, 0, nullptr);
+    if (push_size > 0) {
+      vkCmdPushConstants(cmd, kernel.pipeline.layout(),
+                         VK_SHADER_STAGE_COMPUTE_BIT, 0, push_size, push);
+    }
+    vkCmdDispatch(cmd, groups, 1, 1);
+    // Make this kernel's SSBO writes available and visible to (a) the next
+    // dispatch's shader reads/writes and (b) a host read of the mapped results.
+    VkMemoryBarrier barrier{};
+    barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT |
+                            VK_ACCESS_SHADER_WRITE_BIT |
+                            VK_ACCESS_HOST_READ_BIT;
+    vkCmdPipelineBarrier(
+        cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_HOST_BIT, 0, 1,
+        &barrier, 0, nullptr, 0, nullptr);
+  });
+}
+
+}  // namespace volumetric_kit::recon

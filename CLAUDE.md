@@ -49,8 +49,10 @@ left. No upward includes.
 
 - **`core`** — the Vulkan foundation, mirroring `volumetric_kit_gfx`'s core:
   instance, device (compute + transfer queues), VMA allocator, RAII buffer/image,
-  compute-pipeline + descriptor-set wrappers, sync (fences, timeline
-  semaphores), the `Status`/`Result` idiom, a pluggable log handler, and
+  compute-pipeline + descriptor-set wrappers (and the `ComputeKernel` bundle +
+  `KernelSetBuilder` that groups a kernel's layout/pipeline/set behind one
+  shared pool), sync (fences, timeline semaphores), the `Status`/`Result` idiom,
+  a pluggable log handler, and
   the GLM-backed vector/matrix math. Vulkan is reached through one umbrella header
   (`core/vulkan.hpp`), as in gfx — no other code includes `<vulkan/...>`
   directly.
@@ -171,6 +173,27 @@ Each dated; newest context wins. Change the decision *and* this list together.
   volume (~6 GB at prod defaults) onto every map. The store lives in `volume`
   (below every consumer tier); the AoS `Voxel`/`VoxelData` PODs in
   `hash_types.hpp` become host-side read views.
+- **2026-07-06 — Per-kernel resources are bundled (`core/compute_kernel.hpp`),
+  still not reflected.** The volume tier had grown parallel `*_layout_` /
+  `*_pipeline_` / `*_set_` members (21 fields for 7 kernels) plus a hand-summed
+  descriptor-pool size — the boilerplate the 2026-07-05 decision flagged.
+  Resolved *without* SPIR-V reflection, in `core` because every compute tier
+  repeats the shape: a `ComputeKernel` struct bundles one kernel's
+  `{layout, pipeline, set}`; a `KernelSetBuilder` registers each kernel (its
+  SPIR-V + storage-buffer binding count + optional push range), auto-sizes the
+  shared pool from the exact descriptor total, and allocates every set (resolving
+  the pool chicken-and-egg the tier used to hand-sum); and a free
+  `dispatch(Device&, const ComputeKernel&, push, push_size, groups, max)` carries
+  the workgroup-limit guard + the COMPUTE→COMPUTE/HOST barrier. Seven kernels'
+  setup drops from ~80 lines to seven `kb.add(...)` calls. The **mechanism**
+  (kernel bundle / pool builder / dispatch) is generic and lives in `core`; the
+  **policy** — which buffers bind to which slot — stays in `volume`
+  (`write_persistent_bindings`). A reusable buffer-slot table is deliberately
+  *not* built yet: it waits until `tsdf` is a second consumer whose buffer shape
+  can be generalized against, rather than over-fitting one now. The caller still
+  declares each shader's binding count by hand, so this answers the 2026-07-05
+  "revisit reflection" note with a builder, not reflection — the tier still
+  vendors only VMA.
 
 ## Provenance & salvage policy
 
