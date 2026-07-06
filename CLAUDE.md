@@ -374,8 +374,12 @@ via `tsdf/shaders/tsdf_integrate.comp` — one thread per voxel of each active
 block, classic projective `sdf = depth − Zc` with `±trunc_dist` truncation, an
 inverse-square-with-behind-dropoff weight, and a running average capped at
 `max_weight` (faithful to the prior engine's classic kernel; node-centred voxels
-matching `voxel_to_world`). `tests/tsdf_integrate_test.cpp` fuses a constant-depth
-plane and checks the per-voxel numerics on MoltenVK.
+matching `voxel_to_world`). An `IntegrationMode` selects **classic** (keep free
+space ahead of the surface, a smooth field) or **dynamic** (clear stale geometry
+there so a receded surface leaves no ghost) — one kernel branch, the prior
+engine's stale-free-space clearing. `tests/tsdf_integrate_test.cpp` fuses a
+constant-depth plane, checks the per-voxel numerics under a rotated pose, and
+proves dynamic clears a receded-surface voxel that classic keeps, on MoltenVK.
 
 The first **`mesh` tier** slice — GPU marching cubes — lands alongside it. The
 host `MarchingCubes` (`mesh/marching_cubes.hpp`) owns the compute pipeline and
@@ -395,8 +399,7 @@ vertex color on MoltenVK. `mesh` depends only on the
 `volume` voxel payload (a tier to its left, so the strict dependency rule holds)
 and is proven against a dense analytic SDF until it reads `tsdf`'s real blocks.
 
-Next: **dynamic** TSDF integration (one branch: hard-clear stale free-space
-voxels), then **bilinear depth sampling** and **colour** (a `color` attribute).
+Next: **bilinear depth sampling** and **colour** (a `color` attribute).
 A block-index-preserving GPU **rehash** + heap-rebuild then preserves per-voxel
 data across a `resize` (which currently reassigns block indices, discarding the
 `tsdf`/`weight` a block held). On the `mesh` side (greppable `TODO`s): extraction

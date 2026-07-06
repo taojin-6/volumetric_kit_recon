@@ -91,4 +91,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   classic kernel (neural/triplane channels excluded). A GPU test
   (`tests/tsdf_integrate_test.cpp`) fuses a constant-depth plane and checks the
   per-voxel sdf/weight, the truncation boundary, and the two-frame weight cap on
-  MoltenVK. Dynamic integration, bilinear depth sampling, and colour follow.
+  MoltenVK.
+- `tsdf`: `TsdfIntegrator::integrate` gains an `IntegrationMode` (classic /
+  dynamic). Dynamic integration adds one kernel branch — a voxel that projects
+  into free space past the truncation band (`sdf > trunc_dist`) is cleared if it
+  held prior weight, so a receded surface leaves no ghost geometry (classic keeps
+  it clamped): the prior engine's stale-free-space clearing. The GPU test
+  re-integrates a receding plane and asserts dynamic clears the stale voxel while
+  classic keeps it. Bilinear depth sampling and colour follow.
