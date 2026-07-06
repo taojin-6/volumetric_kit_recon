@@ -51,9 +51,13 @@ layout(set = 0, binding = 0, scalar) readonly buffer Tables {
 layout(set = 0, binding = 1, scalar) readonly buffer Samples {
   Voxel samples[];
 };
-// Per-sample RGBA8 packed into a uint (unpackUnorm4x8), parallel to `samples`;
-// read only when pc.has_color != 0 (else a 1-element dummy is bound).
-layout(set = 0, binding = 2) readonly buffer Colors { uint colors[]; };
+// Per-sample RGB packed into a uint's low three bytes (unpackUnorm4x8 -> .rgb),
+// parallel to `samples`; read only when pc.has_color != 0 (else a 1-element
+// dummy is bound). `scalar` like every other data binding: a uint[] is stride 4
+// under scalar and std430 alike, so this is not a live layout change, but it
+// keeps the ABI discipline uniform so a future vec-bearing color type cannot
+// silently inherit std430's vec padding.
+layout(set = 0, binding = 2, scalar) readonly buffer Colors { uint colors[]; };
 layout(set = 0, binding = 3, scalar) writeonly buffer Vertices {
   Vertex vertices[];
 };

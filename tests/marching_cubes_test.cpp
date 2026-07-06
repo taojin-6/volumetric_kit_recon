@@ -221,9 +221,15 @@ int main() {
 
   // --- Per-vertex color: interpolated from a color input ---------------------
   // Color each sample by a linear gradient of its world position. Linear interp
-  // of a linear field is exact (modulo u8 quantization), so each vertex's color
-  // must match the gradient evaluated at that vertex's position; uv0 stays the
-  // sentinel (no atlas yet).
+  // of a linear field is exact, so each vertex's color must match the gradient
+  // at that vertex's *own* position to within u8 quantization (the corner
+  // colors round-trip through RGBA8, so ~0.5/255 ~= 0.002). The tolerance is
+  // kept deliberately tight -- well below one cell's color span (kH/kSpan ~=
+  // 0.021) -- so the two subtle ways this path can break each trip a CHECK
+  // instead of hiding under a loose bound: a dropped edge interpolation (corner
+  // passthrough) and a color/position winding-reversal mismatch both perturb a
+  // vertex's color by up to that per-cell span. uv0 stays the sentinel (no
+  // atlas yet).
   const std::vector<vr::Vec3u8> colors = make_gradient_colors();
   vr::Result<mesh::Mesh> colored_result = extractor.extract(
       samples.data(), samples.size(), grid, 0.0f, colors.data());
@@ -232,11 +238,12 @@ int main() {
   CHECK(!colored.empty());
   for (const mesh::Vertex& v : colored.vertices) {
     const vr::Vec3f expected = grad_color(v.position);
-    CHECK(std::fabs(v.color.x - expected.x) < 0.03f);  // u8 quant + interp
-    CHECK(std::fabs(v.color.y - expected.y) < 0.03f);
-    CHECK(std::fabs(v.color.z - expected.z) < 0.03f);
+    CHECK(std::fabs(v.color.x - expected.x) < 0.005f);  // ~2.5x the u8 floor
+    CHECK(std::fabs(v.color.y - expected.y) < 0.005f);
+    CHECK(std::fabs(v.color.z - expected.z) < 0.005f);
     CHECK(v.color.w == 1.0f);
-    CHECK(v.uv0.x < 0.0f);  // still the sentinel; no atlas yet
+    CHECK(v.uv0.x < 0.0f &&
+          v.uv0.y < 0.0f);  // still the sentinel; no atlas yet
   }
 
   // --- Surface misses the grid -> empty mesh ---------------------------------
