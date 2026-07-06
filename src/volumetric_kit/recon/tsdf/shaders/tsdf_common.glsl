@@ -55,4 +55,5 @@ layout(push_constant, scalar) uniform PushConstants {
   uint num_active_blocks;
   float max_weight;
   uint mode;
+  uint has_color;  // 0 = depth only; 1 = also fuse the color frame
 } pc;

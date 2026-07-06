@@ -24,6 +24,14 @@ layout(set = 0, binding = 3, scalar) readonly buffer Depth { float depth[]; };
 layout(set = 0, binding = 4, scalar) readonly buffer Camera {
   DepthCameraParams cam;
 };
+// Color path, read only when pc.has_color != 0 (a 1-element dummy otherwise).
+// RGB packed in a uint's low three bytes -- the mesh tier's `colors[]` layout,
+// so meshing reads the fused color attribute directly.
+layout(set = 0, binding = 5) readonly buffer ColorImage { uint color_image[]; };
+layout(set = 0, binding = 6) buffer ColorAttr { uint color_attr[]; };
+layout(set = 0, binding = 7, scalar) readonly buffer ColorCamera {
+  DepthCameraParams color_cam;
+};
 
 // Bilinear depth sample at pixel (u, v), with a nearest-neighbour fallback.
 // Pixel centres sit at (i + 0.5) -- the taps shift by -0.5 to match -- so the
@@ -120,12 +128,13 @@ void main() {
     // the zeroed initial state), which weight-gated readers treat as empty. Free
     // space is never fused here (classic instead clamps to +trunc, keeping a
     // smooth field ahead of the surface). Matches the prior engine's
-    // classic_tsdf.cu stale-clearing branch.
-    // TODO: when a color attribute lands, reset it here too -- the prior engine
-    // zeroed color in this same branch, so a re-fused voxel keeps no stale color.
+    // classic_tsdf.cu stale-clearing branch, which zeroes color here too.
     if (weight[idx] > 0.0) {
       tsdf[idx] = 0.0;
       weight[idx] = 0.0;
+      if (pc.has_color != 0u) {
+        color_attr[idx] = 0u;  // drop stale color along with the geometry
+      }
     }
     return;
   }
@@ -151,4 +160,30 @@ void main() {
   tsdf[idx] = clamp((s_old * w_old + sdf * w_obs) / max(w_sum, 1e-6),
                     -trunc_dist, trunc_dist);
   weight[idx] = min(w_sum, pc.max_weight);
+
+  // Fuse color, if present, through the separate color camera. Project this
+  // voxel into the color camera (its own rigid pose), nearest-sample the packed
+  // RGB, and running-average it with the same weights as the SDF (a first
+  // observation assigns). RGB stays in the uint's low bytes, matching the mesh
+  // tier's color attribute.
+  if (pc.has_color != 0u) {
+    mat3 crot = mat3(color_cam.cam_to_world);
+    vec3 ct = color_cam.cam_to_world[3].xyz;
+    vec3 cp = transpose(crot) * (world - ct);
+    if (cp.z > 0.0) {
+      float cu = color_cam.fx * (cp.x / cp.z) + color_cam.cx;
+      float cv = color_cam.fy * (cp.y / cp.z) + color_cam.cy;
+      if (cu >= 0.0 && cu < float(color_cam.width) && cv >= 0.0 &&
+          cv < float(color_cam.height)) {
+        vec3 obs =
+            unpackUnorm4x8(color_image[uint(cv) * color_cam.width + uint(cu)])
+                .rgb;
+        vec3 prev = unpackUnorm4x8(color_attr[idx]).rgb;
+        vec3 fused = (w_old < 1e-4)
+                         ? obs
+                         : (prev * w_old + obs * w_obs) / max(w_sum, 1e-6);
+        color_attr[idx] = packUnorm4x8(vec4(fused, 1.0));
+      }
+    }
+  }
 }

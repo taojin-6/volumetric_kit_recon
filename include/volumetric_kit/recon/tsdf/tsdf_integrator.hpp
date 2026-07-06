@@ -35,6 +35,19 @@ enum class IntegrationMode : std::uint32_t {
                 ///< leaves no ghost (moving scenes).
 };
 
+/// @brief An optional color frame to fuse alongside depth: packed-RGB pixels
+///        plus the (separate) color camera they were captured with.
+struct ColorFrame {
+  /// Row-major color image, `cam.width * cam.height` pixels, RGB packed in each
+  /// `uint`'s low three bytes (alpha ignored) -- the mesh tier's `color`
+  /// layout.
+  const std::uint32_t* pixels = nullptr;
+  /// The color camera: intrinsics + camera->world pose + dimensions (its
+  /// depth-range fields are unused). May differ from the depth camera
+  /// (unregistered RGB-D); pass the depth camera for registered capture.
+  volume::DepthCameraParams cam{};
+};
+
 /// @brief Fuses posed depth frames into a @ref VoxelBlockGrid's `tsdf` +
 ///        `weight` attributes by projective TSDF integration (classic or
 ///        dynamic).
@@ -89,6 +102,9 @@ class VR_TSDF_API TsdfIntegrator {
   ///                    5.0).
   /// @param mode        Classic keeps free space ahead of the surface; dynamic
   ///                    clears stale geometry there (see @ref IntegrationMode).
+  /// @param color       Optional @ref ColorFrame to fuse into the grid's `color`
+  ///                    attribute (a `uint32` packed-RGB attribute the grid must
+  ///                    then carry); `nullptr` integrates depth only.
   /// @note  Integrate a given grid with one consistent mode across a sequence:
   ///        a dynamic frame clears every weighted free-space voxel past the
   ///        band, including one a prior classic frame fused there -- not only
@@ -96,14 +112,16 @@ class VR_TSDF_API TsdfIntegrator {
   /// @return OK on success, or a non-OK @ref Status:
   ///         @ref Status::Code::InvalidArgument if the integrator is
   ///         moved-from, @p depth is null, @p grid lacks a `float`
-  ///         `tsdf`/`weight` attribute, or the active set is too large for a
-  ///         single 1-D dispatch (its voxel count exceeds the device's
+  ///         `tsdf`/`weight` attribute, @p color is set but empty or @p grid
+  ///         lacks a `uint32` `color` attribute, or the active set is too large
+  ///         for a single 1-D dispatch (its voxel count exceeds the device's
   ///         `maxComputeWorkGroupCount[0]`, or 2^32 threads); otherwise a
   ///         buffer or dispatch failure.
   Status integrate(volume::VoxelBlockGrid& grid, const float* depth,
                    const volume::DepthCameraParams& cam,
                    float max_weight = 5.0f,
-                   IntegrationMode mode = IntegrationMode::Classic);
+                   IntegrationMode mode = IntegrationMode::Classic,
+                   const ColorFrame* color = nullptr);
 
   /// @return `true` if this owns a live pipeline (`false` when moved-from).
   bool valid() const noexcept { return kernel_.valid(); }
@@ -128,6 +146,11 @@ class VR_TSDF_API TsdfIntegrator {
   // create() and rewritten each integrate(), not reallocated per frame (mirrors
   // the volume tier's persistent camera params).
   Buffer cam_buf_;
+  // Color path: the persistent (separate) color-camera SSBO, and a 1-element
+  // dummy bound to the color-image + color-attribute slots when no color frame
+  // is fused (so every declared descriptor stays bound).
+  Buffer color_cam_buf_;
+  Buffer color_dummy_;
 };
 
 }  // namespace volumetric_kit::recon::tsdf
