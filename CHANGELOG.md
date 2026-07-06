@@ -51,3 +51,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   blocks by coordinate (collision-chain splice + successor pull-up) and return
   each freed block to the heap; a GPU test (`tests/volume_delete_test.cpp`)
   proves the survivors and heap reuse on MoltenVK.
+- `volume`: `VoxelHashMap::resize` — grow the hash table to more buckets,
+  preserving the active block set by re-inserting through the proven init /
+  allocate / compact kernels (no new shaders); a GPU test
+  (`tests/volume_resize_test.cpp`) proves 256 → 1024 growth on MoltenVK. The
+  block-index-preserving GPU rehash is deferred until blocks carry SDF data.
