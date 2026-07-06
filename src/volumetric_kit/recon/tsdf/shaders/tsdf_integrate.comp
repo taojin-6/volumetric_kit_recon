@@ -54,8 +54,11 @@ void main() {
     return;  // outside the image
   }
   float d = depth[uint(v) * params.width + uint(u)];  // nearest-neighbour
-  if (d <= 0.0 || d > params.max_depth) {
-    return;  // invalid / out-of-range depth
+  // Reject out-of-range depth; the negated compare also drops NaN/inf holes
+  // (every comparison with NaN is false), matching hash_allocate_depth.comp so
+  // integration accepts exactly the near/far range allocation did.
+  if (!(d >= params.min_depth && d <= params.max_depth)) {
+    return;  // invalid / out-of-range / non-finite depth
   }
 
   // Truncated projective SDF.
@@ -69,10 +72,10 @@ void main() {
   // Inverse-square observation weight with a linear behind-surface dropoff.
   float w_obs = (zc > 0.01) ? (1.0 / (zc * zc)) : 1.0;
   if (zc > d) {
+    // Behind the surface but within the band -- the earlier sdf < -trunc_dist
+    // return already guarantees behind <= trunc_dist. Fade linearly to zero at
+    // the band edge, where the w_obs <= 0.0 guard below drops the sample.
     float behind = zc - d;
-    if (behind > trunc_dist) {
-      return;
-    }
     w_obs *= (trunc_dist - behind) / trunc_dist;
   }
   if (w_obs <= 0.0) {

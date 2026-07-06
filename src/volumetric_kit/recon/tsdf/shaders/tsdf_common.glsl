@@ -29,12 +29,13 @@ struct BlockIndex {
 };
 
 // Per-dispatch camera + fusion parameters (mirrors IntegrateParams host struct:
-// scalars at their 4-byte offsets, the mat4 at offset 32).
+// scalars at their 4-byte offsets, the mat4 at offset 36).
 struct IntegrateParams {
   float fx;
   float fy;
   float cx;
   float cy;
+  float min_depth;
   float max_depth;
   float max_weight;
   uint width;

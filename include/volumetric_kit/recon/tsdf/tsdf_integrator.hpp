@@ -7,6 +7,9 @@
 /// @brief Classic projective TSDF integration of a posed depth frame into a
 ///        @ref VoxelBlockGrid's per-voxel `tsdf` + `weight` attributes.
 
+#include <cstdint>
+
+#include "volumetric_kit/recon/core/buffer.hpp"
 #include "volumetric_kit/recon/core/compute_pipeline.hpp"
 #include "volumetric_kit/recon/core/descriptor.hpp"
 #include "volumetric_kit/recon/core/result.hpp"
@@ -73,9 +76,11 @@ class VR_TSDF_API TsdfIntegrator {
   ///                    5.0).
   /// @return OK on success, or a non-OK @ref Status:
   ///         @ref Status::Code::InvalidArgument if the integrator is
-  ///         moved-from,
-  ///         @p depth is null, or @p grid lacks a `float` `tsdf`/`weight`
-  ///         attribute; otherwise a buffer or dispatch failure.
+  ///         moved-from, @p depth is null, @p grid lacks a `float`
+  ///         `tsdf`/`weight` attribute, or the active set is too large for a
+  ///         single 1-D dispatch (its voxel count exceeds the device's
+  ///         `maxComputeWorkGroupCount[0]`, or 2^32 threads); otherwise a
+  ///         buffer or dispatch failure.
   Status integrate(volume::VoxelBlockGrid& grid, const float* depth,
                    const volume::DepthCameraParams& cam,
                    float max_weight = 5.0f);
@@ -90,10 +95,18 @@ class VR_TSDF_API TsdfIntegrator {
   Device* device_ = nullptr;
   Allocator* allocator_ = nullptr;
 
+  // Cached maxComputeWorkGroupCount[0] -- the device cap on a 1-D dispatch's
+  // groupCountX; integrate() rejects an active set that would exceed it.
+  std::uint32_t max_workgroup_count_x_ = 0;
+
   DescriptorSetLayout layout_;
   ComputePipeline pipeline_;
   DescriptorPool pool_;
   DescriptorSet set_;
+  // Fixed-size (IntegrateParams) params SSBO: bound once at create() and
+  // rewritten each integrate(), not reallocated per frame (mirrors the volume
+  // tier's persistent camera_params_).
+  Buffer params_buf_;
 };
 
 }  // namespace volumetric_kit::recon::tsdf

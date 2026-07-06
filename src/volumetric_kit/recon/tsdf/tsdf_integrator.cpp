@@ -4,7 +4,9 @@
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
+#include <limits>
 #include <type_traits>
 #include <vector>
 
@@ -36,29 +38,33 @@ struct PushConstants {
 
 // Per-dispatch camera + fusion params, uploaded as a single-element SSBO
 // (mirrors `IntegrateParams` in tsdf_common.glsl): scalars at their 4-byte
-// offsets, the mat4 at offset 32. static_asserts pin the layout the shader
+// offsets, the mat4 at offset 36. static_asserts pin the layout the shader
 // mirrors through scalar block layout.
 struct IntegrateParams {
   float fx;
   float fy;
   float cx;
   float cy;
+  float min_depth;
   float max_depth;
   float max_weight;
   std::uint32_t width;
   std::uint32_t height;
   Mat4f world_to_cam;
 };
-static_assert(sizeof(IntegrateParams) == 96,
-              "IntegrateParams must be 96 bytes");
-static_assert(offsetof(IntegrateParams, max_depth) == 16, "layout drift");
-static_assert(offsetof(IntegrateParams, width) == 24, "layout drift");
-static_assert(offsetof(IntegrateParams, world_to_cam) == 32, "layout drift");
+static_assert(sizeof(IntegrateParams) == 100,
+              "IntegrateParams must be 100 bytes");
+static_assert(offsetof(IntegrateParams, min_depth) == 16, "layout drift");
+static_assert(offsetof(IntegrateParams, max_depth) == 20, "layout drift");
+static_assert(offsetof(IntegrateParams, width) == 28, "layout drift");
+static_assert(offsetof(IntegrateParams, world_to_cam) == 36, "layout drift");
 static_assert(std::is_trivially_copyable_v<IntegrateParams>,
               "IntegrateParams must be trivially copyable");
 
+// Ceil-divide without the `items + kLocalSize - 1` term, which overflows uint32
+// for items near UINT32_MAX (yielding ~0 groups -> a silent no-op dispatch).
 std::uint32_t group_count(std::uint32_t items) {
-  return (items + kLocalSize - 1) / kLocalSize;
+  return items / kLocalSize + (items % kLocalSize != 0u ? 1u : 0u);
 }
 
 // `count` storage-buffer bindings at 0..count-1, all compute-stage.
@@ -124,6 +130,23 @@ Result<TsdfIntegrator> TsdfIntegrator::create(Device& device,
   VR_ASSIGN(integ.pool_, DescriptorPool::create(dev, &pool_size, 1, 1));
   VR_ASSIGN(integ.set_, integ.pool_.allocate(integ.layout_.handle()));
 
+  // A 1-D dispatch's groupCountX is capped by maxComputeWorkGroupCount[0] (only
+  // >= 65535 is guaranteed); cache it so integrate() can reject an over-large
+  // active set as a clean error rather than risk a device-lost on a min-spec
+  // GPU -- the guard the volume tier's dispatch() applies.
+  VkPhysicalDeviceProperties props{};
+  vkGetPhysicalDeviceProperties(device.physical_device(), &props);
+  integ.max_workgroup_count_x_ = props.limits.maxComputeWorkGroupCount[0];
+
+  // The per-dispatch params are fixed-size, so persist the SSBO (bound once at
+  // binding 4) and rewrite its contents each integrate() -- not a per-call
+  // allocation. Only the variable-size active/depth buffers are per-call.
+  VR_ASSIGN(integ.params_buf_,
+            storage_buffer(allocator, sizeof(IntegrateParams),
+                           HostAccess::SequentialWrite));
+  integ.set_.write_storage_buffer(4, integ.params_buf_.handle(), 0,
+                                  VK_WHOLE_SIZE);
+
   return integ;
 }
 
@@ -177,31 +200,47 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid, const float* depth,
   params.fy = cam.fy;
   params.cx = cam.cx;
   params.cy = cam.cy;
+  params.min_depth = cam.min_depth;
   params.max_depth = cam.max_depth;
   params.max_weight = max_weight;
   params.width = cam.width;
   params.height = cam.height;
   params.world_to_cam = glm::inverse(cam.cam_to_world);
-  VR_ASSIGN(Buffer params_buf,
-            storage_buffer(*allocator_, sizeof(IntegrateParams),
-                           HostAccess::SequentialWrite));
-  std::memcpy(params_buf.mapped(), &params, sizeof(IntegrateParams));
+  std::memcpy(params_buf_.mapped(), &params, sizeof(IntegrateParams));
 
+  // Params binding (4) was written once at create(); only the per-call
+  // tsdf/weight/active/depth buffers are (re)bound here.
   set_.write_storage_buffer(0, tsdf_view.buffer->handle(), 0, VK_WHOLE_SIZE);
   set_.write_storage_buffer(1, weight_view.buffer->handle(), 0, VK_WHOLE_SIZE);
   set_.write_storage_buffer(2, active_buf.handle(), 0, VK_WHOLE_SIZE);
   set_.write_storage_buffer(3, depth_buf.handle(), 0, VK_WHOLE_SIZE);
-  set_.write_storage_buffer(4, params_buf.handle(), 0, VK_WHOLE_SIZE);
 
   const VoxelGridParams& grid_params = grid.grid();
   const PushConstants push{grid_params,
                            static_cast<std::uint32_t>(active.size())};
-  const std::uint32_t threads =
-      static_cast<std::uint32_t>(active.size()) *
-      static_cast<std::uint32_t>(grid_params.voxels_per_block);
 
-  // One thread per voxel; a barrier makes the fused tsdf/weight writes visible
-  // to a host read-back and to the next frame's dispatch (running average).
+  // One thread per voxel of every active block. Guard the launch size as the
+  // volume tier does: the flattened thread count must fit a uint32, and the
+  // resulting groupCountX must fit the device's maxComputeWorkGroupCount[0].
+  const std::uint64_t threads64 =
+      static_cast<std::uint64_t>(active.size()) *
+      static_cast<std::uint64_t>(grid_params.voxels_per_block);
+  if (threads64 > std::numeric_limits<std::uint32_t>::max()) {
+    return Status::invalid_argument(
+        "TsdfIntegrator::integrate: active_blocks * voxels_per_block exceeds "
+        "2^32");
+  }
+  const std::uint32_t threads = static_cast<std::uint32_t>(threads64);
+  const std::uint32_t groups = group_count(threads);
+  if (groups > max_workgroup_count_x_) {
+    return Status::invalid_argument(
+        "TsdfIntegrator::integrate: workgroup count exceeds the device's "
+        "maxComputeWorkGroupCount[0] -- active set too large for a 1-D "
+        "dispatch");
+  }
+
+  // A barrier makes the fused tsdf/weight writes visible to a host read-back
+  // and to the next frame's dispatch (the running average).
   return device_->submit_single_time([&](VkCommandBuffer cmd) {
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_.handle());
     VkDescriptorSet set = set_.handle();
@@ -209,7 +248,7 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid, const float* depth,
                             pipeline_.layout(), 0, 1, &set, 0, nullptr);
     vkCmdPushConstants(cmd, pipeline_.layout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
                        sizeof(PushConstants), &push);
-    vkCmdDispatch(cmd, group_count(threads), 1, 1);
+    vkCmdDispatch(cmd, groups, 1, 1);
     VkMemoryBarrier barrier{};
     barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
     barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
