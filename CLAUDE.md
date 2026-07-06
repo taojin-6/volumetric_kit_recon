@@ -433,14 +433,23 @@ voxel of each active block (the tsdf integrator's iteration); a cell on a block'
 **host-built 2×2×2 neighbour table** (each active block plus its seven
 `+x/+y/+z` neighbours, built from the compacted active set — the meshing dispatch
 is quiescent, so no device-side hash probe, and no coupling to the hash table's
-internal buffers). The per-cell body is identical to the dense kernel; a shared
-include is deferred until the block-mesh-pool slice gives a third reason to
-factor it. `tests/marching_cubes_sparse_test.cpp` writes an analytic sphere into
-a real 6³-block grid so the surface crosses interior block boundaries, and proves
-the sparse mesh matches the dense path **triangle-for-triangle** (plus cross-block
-colour) on MoltenVK — the exact-count equivalence being the cross-block-addressing
-proof. `mesh` depends only on the `volume` tier (to its left, so the strict
-dependency rule holds).
+internal buffers). Only the corner *sampling* differs from the dense kernel; the
+shared per-cell body (cube index, gradient normal, reversed-winding emission,
+hybrid colour) lives in `mesh/shaders/marching_cubes_common.glsl`, which both
+kernels `#include` (the volume/tsdf tiers' shared-`.glsl` discipline). A corner
+whose fused `color` attribute is 0 — the tsdf integrator's "colour unobserved"
+sentinel (a written colour carries alpha 0xFF, so it is non-zero) — falls back to
+opaque white rather than dragging the interpolated vertex toward black, mirroring
+the integrator's first-observation-assigns anti-darkening rule; and the host
+rejects a worst-case vertex arena larger than `maxStorageBufferRange` with a
+clean `Status` instead of an opaque allocation failure.
+`tests/marching_cubes_sparse_test.cpp` writes an analytic sphere into a real
+6³-block grid so the surface crosses interior block boundaries, and proves the
+sparse mesh matches the dense path **triangle-for-triangle** (plus cross-block
+colour, that an unobserved colour meshes white, and that a sub-threshold weight
+gates every cell out) on MoltenVK — the exact-count equivalence being the
+cross-block-addressing proof. `mesh` depends only on the `volume` tier (to its
+left, so the strict dependency rule holds).
 
 Next: a block-index-preserving GPU **rehash** + heap-rebuild preserves per-voxel
 data across a `resize` (which currently reassigns block indices, discarding the

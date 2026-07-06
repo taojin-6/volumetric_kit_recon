@@ -131,11 +131,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (each active block plus its seven `+x/+y/+z` neighbours, from the compacted
   active set), so the kernel needs no device-side hash probe and no access to the
   hash table's internal buffers. When the grid carries a `uint32` `color`
-  attribute each vertex's color is interpolated from it, else opaque white; `uv0`
-  stays the `(-1,-1)` sentinel. The per-cell body (cube index, gradient normal,
-  reversed winding, independent triangles) is identical to the dense kernel. The
-  GPU test writes an analytic sphere into a real 6³-block grid so the surface
-  crosses interior block boundaries, then proves the sparse mesh matches the
-  dense path **triangle-for-triangle** (plus cross-block color) — the exact-count
-  equivalence being the cross-block-addressing proof — and checks the empty /
-  moved-from / missing-attribute paths.
+  attribute each vertex's color is interpolated from it, else opaque white; a
+  corner whose color is the integrator's `0` "colour unobserved" sentinel (a
+  written colour carries alpha `0xFF`) also falls back to white rather than
+  dragging the vertex toward black; `uv0` stays the `(-1,-1)` sentinel. Only the
+  corner sampling differs from the dense kernel — the shared per-cell body (cube
+  index, gradient normal, reversed winding, independent triangles) is factored
+  into `mesh/shaders/marching_cubes_common.glsl`, `#include`d by both kernels.
+  The host rejects a worst-case vertex arena larger than `maxStorageBufferRange`
+  with a clean `Status` instead of an opaque allocation failure. The GPU test
+  writes an analytic sphere into a real 6³-block grid so the surface crosses
+  interior block boundaries, then proves the sparse mesh matches the dense path
+  **triangle-for-triangle** (plus cross-block color, that an unobserved colour
+  meshes white, and that a sub-threshold weight gates every cell out) — the
+  exact-count equivalence being the cross-block-addressing proof — and checks the
+  empty / moved-from / missing-attribute paths.
