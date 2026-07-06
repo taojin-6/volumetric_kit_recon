@@ -42,12 +42,10 @@ include(vr_sanitizers)
 # re-runs find_dependency(Vulkan). Mirrors volumetric_kit_gfx.
 find_package(Vulkan REQUIRED)
 
-# third_party/ is optional today (only the header-only deps a later tier
-# vendors, e.g. VMA); pick it up automatically once it exists. TODO: drop the
-# guard once it does.
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/CMakeLists.txt")
-  add_subdirectory(third_party)
-endif()
+# Vendored deps (VMA today) via pinned FetchContent. Exposes VR_VMA_INCLUDE_DIR
+# to the tiers below (recon_core compiles VMA in one TU); added before src/ so
+# that variable is in scope when the core target wires it.
+add_subdirectory(third_party)
 
 add_subdirectory(src)
 
