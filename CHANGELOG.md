@@ -34,3 +34,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   fill.comp`) proving the end-to-end path — allocate → bind → dispatch → read
   back — on MoltenVK, plus move-only RAII tests (`tests/compute_raii_test.cpp`)
   the sanitizer job turns into leak/double-free detectors.
+- `volume` tier host math: `VoxelGridParams` (grid + hash-table shape, the
+  scalar-layout shader ABI), world/voxel/block coordinate transforms
+  (`volume/voxel_coords.hpp`), and the Teschner spatial hash + slot sentinels
+  (`volume/hash.hpp`), with CPU tests.
+- `volume` **sparse voxel hash map** (first GPU slice): the host `VoxelHashMap`
+  owns the device buffers + compute pipelines and drives init /
+  allocate-from-coords / compact via GLSL kernels (`volume/shaders/hash_*.comp`,
+  scalar-block-layout `HashEntry`/`BlockIndex`), embedded into the now-compiled
+  STATIC `recon_volume` via `vr_embed_shaders` (`cmake/vr_embed.cmake` +
+  `cmake/embed_spirv.cmake`). A GPU test (`tests/volume_hash_map_test.cpp`) proves
+  allocate→compact + the on-device layout round-trip on MoltenVK.
+- `core`: `Device` now enables `scalarBlockLayout` (Vulkan 1.2 core) — the
+  compute-shader buffer ABI — on create, and `adopt` requires the creator did.
