@@ -56,6 +56,15 @@ target_link_libraries(recon_volume_hash_map_test
 vr_target_warnings(recon_volume_hash_map_test)
 add_test(NAME recon_volume_hash_map COMMAND recon_volume_hash_map_test)
 
+# volume block grid: declare independent SoA per-voxel attributes, verify they
+# are distinct + correctly-sized buffers keyed by the block pool, the composed
+# map allocates, and the error / move paths. Skips (exit 0) with no device.
+add_executable(recon_volume_block_grid_test volume_block_grid_test.cpp)
+target_link_libraries(recon_volume_block_grid_test
+                      PRIVATE volumetric_kit::recon_volume Vulkan::Vulkan)
+vr_target_warnings(recon_volume_block_grid_test)
+add_test(NAME recon_volume_block_grid COMMAND recon_volume_block_grid_test)
+
 # volume delete: allocate a cube, remove a subset, verify the survivors + heap
 # reuse (chain splice / successor pull-up) on the real driver. Skips (exit 0)
 # where no device is present.

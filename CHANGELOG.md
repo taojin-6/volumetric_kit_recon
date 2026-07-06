@@ -72,3 +72,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   counts. The shared coord-kernel path (allocate + remove) now re-dispatches on
   failure to converge under same-bucket contention (a GPU spin-lock livelock); a
   non-zero return means a genuine capacity limit.
+- `volume`: `VoxelBlockGrid` — a structure-of-arrays voxel attribute store
+  (Open3D-style) composing a `VoxelHashMap` block index with named, independently
+  allocated per-voxel attribute arrays (`tsdf`, `weight`, `color`, …), each
+  `num_blocks * voxels_per_block` and keyed by `BlockIndex::ptr`. A consumer
+  declares only the channels it needs, so a `volume`-only user allocates no
+  per-voxel memory; the TSDF / colour integrators and meshing bind the attribute
+  buffers they touch. A GPU test (`tests/volume_block_grid_test.cpp`) proves
+  distinct, correctly-sized attribute storage, the composed map, and the error /
+  move paths on MoltenVK.
