@@ -261,11 +261,63 @@ int main() {
   }
   CHECK(cross_checked > 0);
 
+  // Dynamic integration clears stale free-space voxels. A voxel at world z=0.48
+  // sits just in front of a plane at 0.5 (sdf = +0.02, fused with weight). Move
+  // the plane to 0.6: that voxel is now free space well in front of the surface
+  // (sdf = 0.12 > trunc). Dynamic clears it; classic keeps it (clamped).
+  std::vector<float> depth_far(depth.size(), 0.6f);
+  const std::size_t z96 = static_cast<std::size_t>(local_index(0, 0, 0, bs));
+
+  vr::Result<vol::VoxelBlockGrid> dyn = vol::VoxelBlockGrid::create(
+      device.value(), allocator.value(), grid, attrs, 2);
+  CHECK(dyn.ok());
+  vol::VoxelBlockGrid vbg_dyn = std::move(dyn).value();
+  CHECK(vbg_dyn.map()
+            .allocate(blocks.data(), static_cast<std::uint32_t>(blocks.size()))
+            .value() == 0);
+  vr::Result<std::vector<vol::BlockIndex>> dyn_active =
+      vbg_dyn.map().compact_active_blocks();
+  CHECK(dyn_active.ok());
+  const std::int32_t pd = find_ptr(dyn_active.value(), vr::Vec3i(0, 0, 12));
+  CHECK(pd >= 0);
+  const std::size_t vd = static_cast<std::size_t>(pd) + z96;
+  const auto* dyn_tsdf = static_cast<const float*>(
+      vbg_dyn.attribute("tsdf").value().buffer->mapped());
+  const auto* dyn_weight = static_cast<const float*>(
+      vbg_dyn.attribute("weight").value().buffer->mapped());
+  CHECK(integ.integrate(vbg_dyn, depth.data(), cam, 5.0f).ok());
+  CHECK(dyn_weight[vd] > 0.0f);  // fused at sdf = +0.02
+  CHECK(integ
+            .integrate(vbg_dyn, depth_far.data(), cam, 5.0f,
+                       tsdf::IntegrationMode::Dynamic)
+            .ok());
+  CHECK(dyn_weight[vd] == 0.0f && dyn_tsdf[vd] == 0.0f);  // stale voxel cleared
+
+  // Classic keeps the same free-space voxel (fresh grid, same two frames).
+  vr::Result<vol::VoxelBlockGrid> cls = vol::VoxelBlockGrid::create(
+      device.value(), allocator.value(), grid, attrs, 2);
+  CHECK(cls.ok());
+  vol::VoxelBlockGrid vbg_cls = std::move(cls).value();
+  CHECK(vbg_cls.map()
+            .allocate(blocks.data(), static_cast<std::uint32_t>(blocks.size()))
+            .value() == 0);
+  vr::Result<std::vector<vol::BlockIndex>> cls_active =
+      vbg_cls.map().compact_active_blocks();
+  CHECK(cls_active.ok());
+  const std::int32_t pcl = find_ptr(cls_active.value(), vr::Vec3i(0, 0, 12));
+  CHECK(pcl >= 0);
+  const std::size_t vc = static_cast<std::size_t>(pcl) + z96;
+  const auto* cls_weight = static_cast<const float*>(
+      vbg_cls.attribute("weight").value().buffer->mapped());
+  CHECK(integ.integrate(vbg_cls, depth.data(), cam, 5.0f).ok());
+  CHECK(integ.integrate(vbg_cls, depth_far.data(), cam, 5.0f).ok());  // classic
+  CHECK(cls_weight[vc] > 0.0f);  // kept (clamped to +trunc, fused)
+
   std::printf(
-      "recon tsdf integrate test passed: classic projective fusion of a 0.5 m "
-      "plane, %zu voxels integrated, weight caps at 5.0; %zu voxels "
-      "cross-checked "
-      "under a rotated+translated pose\n",
+      "recon tsdf integrate test passed: classic fusion of a 0.5 m plane (%zu "
+      "voxels), %zu cross-checked under a rotated pose, dynamic cleared a "
+      "stale "
+      "free-space voxel (classic kept it)\n",
       touched, cross_checked);
   return 0;
 }
