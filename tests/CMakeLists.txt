@@ -37,3 +37,31 @@ add_executable(recon_device_test device_test.cpp)
 target_link_libraries(recon_device_test PRIVATE volumetric_kit::recon_core)
 vr_target_warnings(recon_device_test)
 add_test(NAME recon_device COMMAND recon_device_test)
+
+# Vulkan compute smoke: the end-to-end de-risk gate for the compute core. Builds
+# Instance -> Device -> Allocator -> Buffer -> Descriptor -> ComputePipeline,
+# dispatches fill.comp through the platform driver (MoltenVK on Apple), and
+# verifies the readback. vr_compile_shaders compiles the GLSL to SPIR-V; the
+# .spv path is handed to the test as VR_FILL_SPV. Skips (exit 0) where no
+# driver/device is present.
+include(vr_shaders)
+add_executable(recon_compute_smoke_test compute_smoke_test.cpp)
+vr_compile_shaders(recon_compute_smoke_test SHADERS
+                   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fill.comp")
+target_compile_definitions(
+  recon_compute_smoke_test
+  PRIVATE VR_FILL_SPV="${CMAKE_CURRENT_BINARY_DIR}/shaders/fill.comp.spv")
+target_link_libraries(recon_compute_smoke_test
+                      PRIVATE volumetric_kit::recon_core Vulkan::Vulkan)
+vr_target_warnings(recon_compute_smoke_test)
+add_test(NAME recon_compute_smoke COMMAND recon_compute_smoke_test)
+
+# Move-semantics tests for the compute core's RAII handle owners (Buffer's
+# std::function deleter + the UniqueHandle mechanism behind the rest). The
+# sanitizer CI job turns these into leak / double-free detectors. Skips (exit 0)
+# where no device is present.
+add_executable(recon_compute_raii_test compute_raii_test.cpp)
+target_link_libraries(recon_compute_raii_test PRIVATE volumetric_kit::recon_core
+                                                      Vulkan::Vulkan)
+vr_target_warnings(recon_compute_raii_test)
+add_test(NAME recon_compute_raii COMMAND recon_compute_raii_test)
