@@ -423,13 +423,36 @@ and a `uv0` at the `(-1,-1)` sentinel until projective texturing fills it. The
 once as an SSBO — one definition across CPU/GLSL, mirroring the volume ABI
 discipline. A GPU test (`tests/marching_cubes_test.cpp`) extracts an analytic
 sphere and verifies radius, outward normals, winding, and the interpolated
-vertex color on MoltenVK. `mesh` depends only on the
-`volume` voxel payload (a tier to its left, so the strict dependency rule holds)
-and is proven against a dense analytic SDF until it reads `tsdf`'s real blocks.
+vertex color on MoltenVK.
+
+A second `MarchingCubes::extract` overload meshes straight off a sparse
+`volume::VoxelBlockGrid` (`mesh/shaders/marching_cubes_sparse.comp`) — the real
+`tsdf`/`weight`/`color` blocks the integrator fills. It runs one invocation per
+voxel of each active block (the tsdf integrator's iteration); a cell on a block's
+`+face` reaches its far corners into neighbouring blocks, resolved through a
+**host-built 2×2×2 neighbour table** (each active block plus its seven
+`+x/+y/+z` neighbours, built from the compacted active set — the meshing dispatch
+is quiescent, so no device-side hash probe, and no coupling to the hash table's
+internal buffers). Only the corner *sampling* differs from the dense kernel; the
+shared per-cell body (cube index, gradient normal, reversed-winding emission,
+hybrid colour) lives in `mesh/shaders/marching_cubes_common.glsl`, which both
+kernels `#include` (the volume/tsdf tiers' shared-`.glsl` discipline). A corner
+whose fused `color` attribute is 0 — the tsdf integrator's "colour unobserved"
+sentinel (a written colour carries alpha 0xFF, so it is non-zero) — falls back to
+opaque white rather than dragging the interpolated vertex toward black, mirroring
+the integrator's first-observation-assigns anti-darkening rule; and the host
+rejects a worst-case vertex arena larger than `maxStorageBufferRange` with a
+clean `Status` instead of an opaque allocation failure.
+`tests/marching_cubes_sparse_test.cpp` writes an analytic sphere into a real
+6³-block grid so the surface crosses interior block boundaries, and proves the
+sparse mesh matches the dense path **triangle-for-triangle** (plus cross-block
+colour, that an unobserved colour meshes white, and that a sub-threshold weight
+gates every cell out) on MoltenVK — the exact-count equivalence being the
+cross-block-addressing proof. `mesh` depends only on the `volume` tier (to its
+left, so the strict dependency rule holds).
 
 Next: a block-index-preserving GPU **rehash** + heap-rebuild preserves per-voxel
 data across a `resize` (which currently reassigns block indices, discarding the
-`tsdf`/`weight`/`color` a block held). On the `mesh` side (greppable `TODO`s): extraction
-straight off the sparse `VoxelHashMap` with cross-block neighbour sampling,
+`tsdf`/`weight`/`color` a block held). On the `mesh` side (greppable `TODO`s):
 shared-vertex dedup + the incremental block-mesh pool, and OBJ/PLY + glTF/GLB
 export + the gfx-vertex converter (interop seam A).

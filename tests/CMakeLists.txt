@@ -133,6 +133,17 @@ target_link_libraries(recon_mesh_marching_cubes_test
 vr_target_warnings(recon_mesh_marching_cubes_test)
 add_test(NAME recon_mesh_marching_cubes COMMAND recon_mesh_marching_cubes_test)
 
+# Sparse marching cubes: mesh an analytic sphere written into a real multi-block
+# VoxelBlockGrid, exercising cross-block neighbour sampling, and prove it
+# matches the dense path exactly. Skips (exit 0) where no device is present.
+add_executable(recon_mesh_marching_cubes_sparse_test
+               marching_cubes_sparse_test.cpp)
+target_link_libraries(recon_mesh_marching_cubes_sparse_test
+                      PRIVATE volumetric_kit::recon_mesh Vulkan::Vulkan)
+vr_target_warnings(recon_mesh_marching_cubes_sparse_test)
+add_test(NAME recon_mesh_marching_cubes_sparse
+         COMMAND recon_mesh_marching_cubes_sparse_test)
+
 # core device seam: Instance + Device create/adopt. Links recon_core, which now
 # carries the Vulkan headers/loader. Skips at runtime where no compute device is
 # present.
