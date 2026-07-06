@@ -29,16 +29,30 @@ using volume::VoxelGridParams;
 constexpr std::uint32_t kLocalSize = 256;
 
 // The push-constant block (mirrors `PushConstants` in tsdf_common.glsl): the
-// grid, the active-block count, and the fusion weight cap. The camera rides the
-// SSBO as volume::DepthCameraParams verbatim -- the kernel derives world ->
-// camera from its rigid cam_to_world, so there is no separate pre-inverted
-// per-dispatch struct.
+// grid, the active-block count, the fusion weight cap, and the integration
+// mode. The camera rides the SSBO as volume::DepthCameraParams verbatim -- the
+// kernel derives world -> camera from its rigid cam_to_world, so there is no
+// separate pre-inverted per-dispatch struct.
 struct PushConstants {
   VoxelGridParams grid;
   std::uint32_t num_active_blocks;
   float max_weight;
   std::uint32_t mode;  // tsdf::IntegrationMode (0 = classic, 1 = dynamic).
 };
+
+// Pin the scalar-block-layout ABI: this struct must stay byte-identical to the
+// `PushConstants` block in tsdf_common.glsl. VoxelGridParams is 32 all-scalar
+// bytes, so every field lands at its host offset (no std430 vec padding). A
+// drift is a compile error, not silent buffer corruption -- the discipline the
+// volume/mesh shader-facing PODs already follow.
+static_assert(sizeof(PushConstants) == 44, "PushConstants must be 44 bytes");
+static_assert(offsetof(PushConstants, grid) == 0, "PushConstants layout drift");
+static_assert(offsetof(PushConstants, num_active_blocks) == 32,
+              "PushConstants layout drift");
+static_assert(offsetof(PushConstants, max_weight) == 36,
+              "PushConstants layout drift");
+static_assert(offsetof(PushConstants, mode) == 40,
+              "PushConstants layout drift");
 
 // Ceil-divide without the `items + kLocalSize - 1` term, which overflows uint32
 // for items near UINT32_MAX (yielding ~0 groups -> a silent no-op dispatch).

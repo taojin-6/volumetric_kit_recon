@@ -4,8 +4,9 @@
 #pragma once
 
 /// @file tsdf/tsdf_integrator.hpp
-/// @brief Classic projective TSDF integration of a posed depth frame into a
-///        @ref VoxelBlockGrid's per-voxel `tsdf` + `weight` attributes.
+/// @brief Projective TSDF integration (classic or dynamic) of a posed depth
+///        frame into a @ref VoxelBlockGrid's per-voxel `tsdf` + `weight`
+///        attributes.
 
 #include <cstdint>
 
@@ -87,6 +88,10 @@ class VR_TSDF_API TsdfIntegrator {
   ///                    5.0).
   /// @param mode        Classic keeps free space ahead of the surface; dynamic
   ///                    clears stale geometry there (see @ref IntegrationMode).
+  /// @note  Integrate a given grid with one consistent mode across a sequence:
+  ///        a dynamic frame clears every weighted free-space voxel past the
+  ///        band, including one a prior classic frame fused there -- not only
+  ///        genuinely receded geometry.
   /// @return OK on success, or a non-OK @ref Status:
   ///         @ref Status::Code::InvalidArgument if the integrator is
   ///         moved-from, @p depth is null, @p grid lacks a `float`

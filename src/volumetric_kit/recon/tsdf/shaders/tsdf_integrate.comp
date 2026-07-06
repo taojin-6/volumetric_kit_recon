@@ -1,9 +1,11 @@
 #version 450
 
-// Classic projective TSDF integration. One thread per voxel of each active
-// block: project the voxel centre into the depth camera, compute the truncated
-// signed distance (sdf = depth - Zc, positive in front of the surface), and fuse
-// it into the tsdf/weight attributes by a weighted running average. Ported from
+// Projective TSDF integration (classic or dynamic). One thread per voxel of each
+// active block: project the voxel centre into the depth camera, compute the
+// truncated signed distance (sdf = depth - Zc, positive in front of the
+// surface), and fuse it into the tsdf/weight attributes by a weighted running
+// average. Dynamic mode additionally hard-clears a voxel that projects into free
+// space past the truncation band (a surface that has receded). Ported from
 // classic_tsdf.metal / classic_tsdf.cu (the neural/triplane channels are out of
 // scope). Each voxel is owned by exactly one thread (a unique block ptr + local
 // index), so the read-modify-write needs no atomics.
@@ -72,10 +74,15 @@ void main() {
   }
   uint idx = uint(block.ptr) + local;
   if (sdf > trunc_dist && pc.mode == kModeDynamic) {
-    // Free space in front of the surface, past the band: the surface has
-    // receded past this voxel. Dynamic integration clears any stale geometry
-    // here and does not fuse free space (classic instead clamps to +trunc,
-    // keeping a smooth field ahead of the surface).
+    // Free space in front of the surface, past the band: under dynamic
+    // integration the surface has receded past this voxel, so hard-clear any
+    // stale geometry back to the pristine unobserved state (tsdf 0 / weight 0 --
+    // the zeroed initial state), which weight-gated readers treat as empty. Free
+    // space is never fused here (classic instead clamps to +trunc, keeping a
+    // smooth field ahead of the surface). Matches the prior engine's
+    // classic_tsdf.cu stale-clearing branch.
+    // TODO: when a color attribute lands, reset it here too -- the prior engine
+    // zeroed color in this same branch, so a re-fused voxel keeps no stale color.
     if (weight[idx] > 0.0) {
       tsdf[idx] = 0.0;
       weight[idx] = 0.0;

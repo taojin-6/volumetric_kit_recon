@@ -37,8 +37,10 @@ core → volume → tsdf → mesh → interop
   storage keeps memory proportional to the observed surface, not the bounding
   volume. Carries SDF + weight per voxel, with optional color, and supports
   on-device rehash/grow.
-- **tsdf** — truncated-signed-distance-field integration over the hash map, as an
-  `ITSDFIntegrator` strategy with classic and dynamic (moving-object) variants.
+- **tsdf** — truncated-signed-distance-field integration over the hash map, with
+  classic and dynamic (moving-object) modes selected per call by an
+  `IntegrationMode` enum on one concrete `TsdfIntegrator` (a lean runtime flag,
+  not a strategy-class hierarchy).
 - **mesh** — marching-cubes extraction with an incremental block-mesh pool, host
   mesh containers, and OBJ/PLY + glTF/GLB export.
 - **interop** — the handoff to `volumetric_kit_gfx` (below).
