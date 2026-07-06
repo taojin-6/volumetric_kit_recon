@@ -55,6 +55,13 @@ std::int32_t find_ptr(const std::vector<vol::BlockIndex>& active,
   return -1;
 }
 
+// A color camera sharing a depth camera's intrinsics + pose (registered capture
+// in these tests); the color params simply drop the depth-range fields.
+tsdf::ColorCameraParams color_cam_of(const vol::DepthCameraParams& d) {
+  return tsdf::ColorCameraParams{d.fx,    d.fy,     d.cx,          d.cy,
+                                 d.width, d.height, d.cam_to_world};
+}
+
 }  // namespace
 
 int main() {
@@ -425,7 +432,8 @@ int main() {
   const std::uint32_t rgb =
       200u | (100u << 8) | (50u << 16);  // R=200 G=100 B=50
   std::vector<std::uint32_t> color_img(depth.size(), rgb);
-  const tsdf::ColorFrame frame{color_img.data(), cam};  // registered (= depth)
+  const tsdf::ColorFrame frame{color_img.data(),
+                               color_cam_of(cam)};  // registered (= depth)
   CHECK(integ
             .integrate(vbg_c, depth.data(), cam, 5.0f,
                        tsdf::IntegrationMode::Classic, &frame)
@@ -471,7 +479,7 @@ int main() {
   CHECK(op12 >= 0);
   const std::size_t o_front =
       static_cast<std::size_t>(op12) + local_index(0, 0, 1, bs);
-  const tsdf::ColorFrame off_frame{color_img.data(), off_cam};
+  const tsdf::ColorFrame off_frame{color_img.data(), color_cam_of(off_cam)};
   CHECK(integ
             .integrate(vbg_o, depth.data(), cam, 5.0f,
                        tsdf::IntegrationMode::Classic, &off_frame)

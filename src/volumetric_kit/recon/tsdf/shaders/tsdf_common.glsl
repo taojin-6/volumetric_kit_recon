@@ -44,28 +44,55 @@ struct DepthCameraParams {
   mat4 cam_to_world;
 };
 
-// Project a world point into a pinhole camera through its rigid cam_to_world
-// pose. Returns true and sets `px` (pixel coords, in [0,width)x[0,height)) and
-// `zc` (camera-space depth, metres) when the point is in front of the camera and
-// inside the image; false otherwise. world -> camera is R^T (world - t) -- the
-// rigid inverse, no explicit mat4 inverse. Shared by the depth and (separate)
-// color projections, which use the identical intrinsics + pose form.
-bool project_to_image(DepthCameraParams c, vec3 world, out vec2 px,
-                      out float zc) {
-  mat3 rot = mat3(c.cam_to_world);
-  vec3 t = c.cam_to_world[3].xyz;
+// The (separate) color camera, mirroring tsdf::ColorCameraParams byte-for-byte:
+// the color-camera analogue of DepthCameraParams without the (color-irrelevant)
+// depth-range fields, so width/height sit at offset 16 and the mat4 at 24
+// (scalar layout, 88 bytes).
+struct ColorCameraParams {
+  float fx;
+  float fy;
+  float cx;
+  float cy;
+  uint width;
+  uint height;
+  mat4 cam_to_world;
+};
+
+// Project a world point into a pinhole camera given its intrinsics + rigid
+// cam_to_world pose. Returns true and sets `px` (pixel coords, in
+// [0,width)x[0,height)) and `zc` (camera-space depth, metres) when the point is
+// in front of the camera and inside the image; false otherwise. world -> camera
+// is R^T (world - t) -- the rigid inverse, no explicit mat4 inverse. The two
+// project_to_image overloads adapt the depth and color camera structs onto it.
+bool project_pinhole(mat4 cam_to_world, float fx, float fy, float cx, float cy,
+                     uint width, uint height, vec3 world, out vec2 px,
+                     out float zc) {
+  mat3 rot = mat3(cam_to_world);
+  vec3 t = cam_to_world[3].xyz;
   vec3 p_cam = transpose(rot) * (world - t);
   zc = p_cam.z;
   if (zc <= 0.0) {
     return false;  // behind the camera
   }
-  float u = c.fx * (p_cam.x / zc) + c.cx;
-  float v = c.fy * (p_cam.y / zc) + c.cy;
-  if (u < 0.0 || u >= float(c.width) || v < 0.0 || v >= float(c.height)) {
+  float u = fx * (p_cam.x / zc) + cx;
+  float v = fy * (p_cam.y / zc) + cy;
+  if (u < 0.0 || u >= float(width) || v < 0.0 || v >= float(height)) {
     return false;  // outside the image
   }
   px = vec2(u, v);
   return true;
+}
+
+bool project_to_image(DepthCameraParams c, vec3 world, out vec2 px,
+                      out float zc) {
+  return project_pinhole(c.cam_to_world, c.fx, c.fy, c.cx, c.cy, c.width,
+                         c.height, world, px, zc);
+}
+
+bool project_to_image(ColorCameraParams c, vec3 world, out vec2 px,
+                      out float zc) {
+  return project_pinhole(c.cam_to_world, c.fx, c.fy, c.cx, c.cy, c.width,
+                         c.height, world, px, zc);
 }
 
 // Integration mode (mirrors tsdf::IntegrationMode): for free space ahead of the

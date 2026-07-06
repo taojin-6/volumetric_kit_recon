@@ -137,7 +137,7 @@ Result<TsdfIntegrator> TsdfIntegrator::create(Device& device,
   // descriptor stays bound when no color is fused; integrate() rebinds 5/6 and
   // rewrites the color camera when a frame arrives.
   VR_ASSIGN(integ.color_cam_buf_,
-            storage_buffer(allocator, sizeof(DepthCameraParams),
+            storage_buffer(allocator, sizeof(ColorCameraParams),
                            HostAccess::SequentialWrite));
   VR_ASSIGN(integ.color_dummy_,
             storage_buffer(allocator, sizeof(std::uint32_t)));
@@ -260,7 +260,7 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid, const float* depth,
                              *allocator_, color->pixels,
                              VkDeviceSize(cpixels) * sizeof(std::uint32_t)));
     std::memcpy(color_cam_buf_.mapped(), &color->cam,
-                sizeof(DepthCameraParams));
+                sizeof(ColorCameraParams));
     kernel_.set.write_storage_buffer(5, color_buf.handle(), 0, VK_WHOLE_SIZE);
     has_color = 1;
   } else {

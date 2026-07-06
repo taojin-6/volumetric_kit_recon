@@ -108,8 +108,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   nearest sample) while an over-`trunc` step falls back. Colour follows.
 - `tsdf`: `TsdfIntegrator::integrate` gains an optional `ColorFrame` — fuse a
   posed color image into the grid's `color` attribute alongside depth. Color uses
-  a **separate color camera** (its own intrinsics + pose, projected per voxel),
-  running-averaged with the same weights as the SDF. A voxel's **first color
+  a **separate color camera** — its own `ColorCameraParams` (pinhole intrinsics +
+  pose + dimensions, the color analogue of `DepthCameraParams` without the
+  depth-range fields), projected per voxel and running-averaged with the same
+  weights as the SDF. A voxel's **first color
   observation assigns** the sampled RGB — keyed on whether color was seen
   (`color_attr == 0`), not on the depth weight, so an unregistered color camera
   (or a depth-only warmup) does not blend the first color toward black. Dynamic

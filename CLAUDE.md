@@ -398,8 +398,10 @@ proves dynamic clears a receded-surface voxel that classic keeps, on MoltenVK.
 Depth is sampled **bilinearly** (nearest fallback at image edges and across depth
 discontinuities `> trunc_dist`), the prior engine's `sampleDepthBilinear`. An
 optional `ColorFrame` fuses a posed color image through its **own separate
-camera** into a `color` attribute — RGB packed in a `uint`'s low bytes (the mesh
-tier's layout), running-averaged with the SDF weights. A voxel's **first colour
+camera** (a dedicated `ColorCameraParams` — the color analogue of
+`DepthCameraParams`, sans depth range) into a `color` attribute — RGB packed in a
+`uint`'s low bytes (the mesh tier's layout), running-averaged with the SDF
+weights. A voxel's **first colour
 observation assigns** (gated on `color_attr == 0`, i.e. whether colour — not
 depth — was seen, so a separate/unregistered colour camera never blends the
 first colour toward black); dynamic mode clears a receded voxel's colour

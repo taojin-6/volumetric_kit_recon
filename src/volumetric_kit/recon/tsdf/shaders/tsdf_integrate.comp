@@ -37,7 +37,7 @@ layout(set = 0, binding = 5, scalar) readonly buffer ColorImage {
 };
 layout(set = 0, binding = 6, scalar) buffer ColorAttr { uint color_attr[]; };
 layout(set = 0, binding = 7, scalar) readonly buffer ColorCamera {
-  DepthCameraParams color_cam;
+  ColorCameraParams color_cam;
 };
 
 // Bilinear depth sample at pixel (u, v), with a nearest-neighbour fallback.
