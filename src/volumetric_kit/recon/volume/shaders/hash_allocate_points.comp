@@ -1,0 +1,33 @@
+#version 450
+
+// Allocate voxel blocks from a world-space point cloud: one thread per point
+// finds the block containing it and dilates that into the (2*tb+1)^3
+// truncation-band cube. Mirrors allocateBlocksFromPointCloud in hash_ops.metal.
+//
+// Points are already in world space -- no unprojection, and no per-warp dedup
+// (points are not spatially sorted per warp, and the idempotent allocate_block
+// merges overlapping bands at the table). Non-finite points are dropped.
+
+#extension GL_GOOGLE_include_directive : require
+#include "hash_common.glsl"
+#include "hash_allocate_common.glsl"
+
+layout(local_size_x = 256) in;
+
+// binding 4: world-space points, tightly packed vec3 (scalar layout gives a
+// stride of 12, byte-identical to the host Vec3f array).
+layout(set = 0, binding = 4, scalar) readonly buffer Points {
+  vec3 points[];
+};
+
+void main() {
+  uint gid = gl_GlobalInvocationID.x;
+  if (gid >= pc.arg) {  // pc.arg = point count
+    return;
+  }
+  vec3 world = points[gid];
+  if (any(isinf(world)) || any(isnan(world))) {
+    return;
+  }
+  allocate_truncation_band(worldToBlock(world, pc.grid));
+}
