@@ -19,8 +19,8 @@ layout(set = 0, binding = 2, scalar) readonly buffer Active {
   BlockIndex active_blocks[];
 };
 layout(set = 0, binding = 3, scalar) readonly buffer Depth { float depth[]; };
-layout(set = 0, binding = 4, scalar) readonly buffer Params {
-  IntegrateParams params;
+layout(set = 0, binding = 4, scalar) readonly buffer Camera {
+  DepthCameraParams cam;
 };
 
 void main() {
@@ -41,23 +41,26 @@ void main() {
   ivec3 voxel = block.coord * bs + lc;
   vec3 world = vec3(voxel) * pc.grid.voxel_size;
 
-  // Project into the depth camera (world -> camera, then pinhole).
-  vec3 cam = (params.world_to_cam * vec4(world, 1.0)).xyz;
-  float zc = cam.z;
+  // Project into the depth camera. cam_to_world is a rigid transform, so
+  // world -> camera is R^T (world - t) -- no explicit inverse, and cheaper than
+  // a full mat4 multiply by the pre-inverted pose.
+  mat3 rot = mat3(cam.cam_to_world);
+  vec3 t = cam.cam_to_world[3].xyz;
+  vec3 p_cam = transpose(rot) * (world - t);
+  float zc = p_cam.z;
   if (zc <= 0.0) {
     return;  // behind the camera
   }
-  float u = params.fx * (cam.x / zc) + params.cx;
-  float v = params.fy * (cam.y / zc) + params.cy;
-  if (u < 0.0 || u >= float(params.width) || v < 0.0 ||
-      v >= float(params.height)) {
+  float u = cam.fx * (p_cam.x / zc) + cam.cx;
+  float v = cam.fy * (p_cam.y / zc) + cam.cy;
+  if (u < 0.0 || u >= float(cam.width) || v < 0.0 || v >= float(cam.height)) {
     return;  // outside the image
   }
-  float d = depth[uint(v) * params.width + uint(u)];  // nearest-neighbour
+  float d = depth[uint(v) * cam.width + uint(u)];  // nearest-neighbour
   // Reject out-of-range depth; the negated compare also drops NaN/inf holes
   // (every comparison with NaN is false), matching hash_allocate_depth.comp so
   // integration accepts exactly the near/far range allocation did.
-  if (!(d >= params.min_depth && d <= params.max_depth)) {
+  if (!(d >= cam.min_depth && d <= cam.max_depth)) {
     return;  // invalid / out-of-range / non-finite depth
   }
 
@@ -89,5 +92,5 @@ void main() {
   float w_sum = w_old + w_obs;
   tsdf[idx] = clamp((s_old * w_old + sdf * w_obs) / max(w_sum, 1e-6),
                     -trunc_dist, trunc_dist);
-  weight[idx] = min(w_sum, params.max_weight);
+  weight[idx] = min(w_sum, pc.max_weight);
 }

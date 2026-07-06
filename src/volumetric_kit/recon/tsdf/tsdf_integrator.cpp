@@ -7,11 +7,9 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
-#include <type_traits>
 #include <vector>
 
 #include "volumetric_kit/recon/core/device.hpp"
-#include "volumetric_kit/recon/core/math/vector_types.hpp"  // Mat4f, glm::inverse
 #include "volumetric_kit/recon/core/shader.hpp"
 #include "volumetric_kit/recon/core/vulkan.hpp"
 
@@ -30,36 +28,16 @@ using volume::VoxelGridParams;
 // Local group size, matching `layout(local_size_x = 256)` in the kernel.
 constexpr std::uint32_t kLocalSize = 256;
 
-// The push-constant block (mirrors `PushConstants` in tsdf_common.glsl).
+// The push-constant block (mirrors `PushConstants` in tsdf_common.glsl): the
+// grid, the active-block count, and the fusion weight cap. The camera rides the
+// SSBO as volume::DepthCameraParams verbatim -- the kernel derives world ->
+// camera from its rigid cam_to_world, so there is no separate pre-inverted
+// per-dispatch struct.
 struct PushConstants {
   VoxelGridParams grid;
   std::uint32_t num_active_blocks;
-};
-
-// Per-dispatch camera + fusion params, uploaded as a single-element SSBO
-// (mirrors `IntegrateParams` in tsdf_common.glsl): scalars at their 4-byte
-// offsets, the mat4 at offset 36. static_asserts pin the layout the shader
-// mirrors through scalar block layout.
-struct IntegrateParams {
-  float fx;
-  float fy;
-  float cx;
-  float cy;
-  float min_depth;
-  float max_depth;
   float max_weight;
-  std::uint32_t width;
-  std::uint32_t height;
-  Mat4f world_to_cam;
 };
-static_assert(sizeof(IntegrateParams) == 100,
-              "IntegrateParams must be 100 bytes");
-static_assert(offsetof(IntegrateParams, min_depth) == 16, "layout drift");
-static_assert(offsetof(IntegrateParams, max_depth) == 20, "layout drift");
-static_assert(offsetof(IntegrateParams, width) == 28, "layout drift");
-static_assert(offsetof(IntegrateParams, world_to_cam) == 36, "layout drift");
-static_assert(std::is_trivially_copyable_v<IntegrateParams>,
-              "IntegrateParams must be trivially copyable");
 
 // Ceil-divide without the `items + kLocalSize - 1` term, which overflows uint32
 // for items near UINT32_MAX (yielding ~0 groups -> a silent no-op dispatch).
@@ -138,14 +116,12 @@ Result<TsdfIntegrator> TsdfIntegrator::create(Device& device,
   vkGetPhysicalDeviceProperties(device.physical_device(), &props);
   integ.max_workgroup_count_x_ = props.limits.maxComputeWorkGroupCount[0];
 
-  // The per-dispatch params are fixed-size, so persist the SSBO (bound once at
+  // The camera params are fixed-size, so persist the SSBO (bound once at
   // binding 4) and rewrite its contents each integrate() -- not a per-call
   // allocation. Only the variable-size active/depth buffers are per-call.
-  VR_ASSIGN(integ.params_buf_,
-            storage_buffer(allocator, sizeof(IntegrateParams),
-                           HostAccess::SequentialWrite));
-  integ.set_.write_storage_buffer(4, integ.params_buf_.handle(), 0,
-                                  VK_WHOLE_SIZE);
+  VR_ASSIGN(integ.cam_buf_, storage_buffer(allocator, sizeof(DepthCameraParams),
+                                           HostAccess::SequentialWrite));
+  integ.set_.write_storage_buffer(4, integ.cam_buf_.handle(), 0, VK_WHOLE_SIZE);
 
   return integ;
 }
@@ -195,20 +171,12 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid, const float* depth,
                            HostAccess::SequentialWrite));
   std::memcpy(depth_buf.mapped(), depth, pixels * sizeof(float));
 
-  IntegrateParams params{};
-  params.fx = cam.fx;
-  params.fy = cam.fy;
-  params.cx = cam.cx;
-  params.cy = cam.cy;
-  params.min_depth = cam.min_depth;
-  params.max_depth = cam.max_depth;
-  params.max_weight = max_weight;
-  params.width = cam.width;
-  params.height = cam.height;
-  params.world_to_cam = glm::inverse(cam.cam_to_world);
-  std::memcpy(params_buf_.mapped(), &params, sizeof(IntegrateParams));
+  // The camera params ride the SSBO verbatim; the kernel derives world ->
+  // camera from the rigid cam_to_world, so there is no host-side pose
+  // inversion.
+  std::memcpy(cam_buf_.mapped(), &cam, sizeof(DepthCameraParams));
 
-  // Params binding (4) was written once at create(); only the per-call
+  // The camera binding (4) was written once at create(); only the per-call
   // tsdf/weight/active/depth buffers are (re)bound here.
   set_.write_storage_buffer(0, tsdf_view.buffer->handle(), 0, VK_WHOLE_SIZE);
   set_.write_storage_buffer(1, weight_view.buffer->handle(), 0, VK_WHOLE_SIZE);
@@ -216,8 +184,8 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid, const float* depth,
   set_.write_storage_buffer(3, depth_buf.handle(), 0, VK_WHOLE_SIZE);
 
   const VoxelGridParams& grid_params = grid.grid();
-  const PushConstants push{grid_params,
-                           static_cast<std::uint32_t>(active.size())};
+  const PushConstants push{
+      grid_params, static_cast<std::uint32_t>(active.size()), max_weight};
 
   // One thread per voxel of every active block. Guard the launch size as the
   // volume tier does: the flattened thread count must fit a uint32, and the

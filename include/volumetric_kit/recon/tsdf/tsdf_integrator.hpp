@@ -103,10 +103,10 @@ class VR_TSDF_API TsdfIntegrator {
   ComputePipeline pipeline_;
   DescriptorPool pool_;
   DescriptorSet set_;
-  // Fixed-size (IntegrateParams) params SSBO: bound once at create() and
-  // rewritten each integrate(), not reallocated per frame (mirrors the volume
-  // tier's persistent camera_params_).
-  Buffer params_buf_;
+  // Fixed-size camera-params SSBO (volume::DepthCameraParams): bound once at
+  // create() and rewritten each integrate(), not reallocated per frame (mirrors
+  // the volume tier's persistent camera params).
+  Buffer cam_buf_;
 };
 
 }  // namespace volumetric_kit::recon::tsdf

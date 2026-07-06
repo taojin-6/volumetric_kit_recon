@@ -28,22 +28,24 @@ struct BlockIndex {
   int ptr;
 };
 
-// Per-dispatch camera + fusion parameters (mirrors IntegrateParams host struct:
-// scalars at their 4-byte offsets, the mat4 at offset 36).
-struct IntegrateParams {
+// Camera intrinsics + pose + depth range (mirrors volume::DepthCameraParams
+// byte-for-byte: scalars at their 4-byte offsets, the cam_to_world mat4 at 32).
+// The integrate kernel derives world -> camera from the rigid cam_to_world, so
+// the pose is passed straight through -- no separate pre-inverted struct.
+struct DepthCameraParams {
   float fx;
   float fy;
   float cx;
   float cy;
   float min_depth;
   float max_depth;
-  float max_weight;
   uint width;
   uint height;
-  mat4 world_to_cam;
+  mat4 cam_to_world;
 };
 
 layout(push_constant, scalar) uniform PushConstants {
   VoxelGridParams grid;
   uint num_active_blocks;
+  float max_weight;
 } pc;

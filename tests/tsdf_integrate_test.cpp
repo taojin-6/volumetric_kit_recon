@@ -7,6 +7,7 @@
 // dropoff, and the running-average weight cap across two frames. Runs on the
 // real driver (MoltenVK / NVIDIA); exits 0 (skip) where no device is present.
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -204,9 +205,67 @@ int main() {
   CHECK(approx(tsdf_data[front], 0.015f, 1e-3f));
   CHECK(approx(weight_data[front], 5.0f, 1e-3f));
 
+  // A non-identity rigid pose exercises the in-shader world->camera transform
+  // (R^T (world - t)); the identity pose above cannot tell it apart from a
+  // no-op. Fresh grid + one frame, then cross-check every fused voxel's sdf
+  // against an independent glm::inverse projection -- the general inverse the
+  // rigid R^T must equal.
+  vr::Result<vol::VoxelBlockGrid> grid2 = vol::VoxelBlockGrid::create(
+      device.value(), allocator.value(), grid, attrs, 2);
+  CHECK(grid2.ok());
+  vol::VoxelBlockGrid vbg2 = std::move(grid2).value();
+  CHECK(vbg2.map()
+            .allocate(blocks.data(), static_cast<std::uint32_t>(blocks.size()))
+            .value() == 0);
+
+  const float theta = 0.2f;  // ~11 deg about +Y
+  const float ct = std::cos(theta);
+  const float st = std::sin(theta);
+  vol::DepthCameraParams cam2 = cam;  // same intrinsics, range, and 0.5 m plane
+  cam2.cam_to_world = vr::Mat4f(1.0f);
+  cam2.cam_to_world[0] = vr::Vec4f(ct, 0.0f, -st, 0.0f);
+  cam2.cam_to_world[2] = vr::Vec4f(st, 0.0f, ct, 0.0f);
+  cam2.cam_to_world[3] = vr::Vec4f(0.02f, -0.01f, 0.03f, 1.0f);
+  CHECK(integ.integrate(vbg2, depth.data(), cam2, /*max_weight=*/5.0f).ok());
+
+  const vr::Mat4f world_to_cam = glm::inverse(cam2.cam_to_world);
+  vr::Result<std::vector<vol::BlockIndex>> active2 =
+      vbg2.map().compact_active_blocks();
+  CHECK(active2.ok());
+  const auto* tsdf2 = static_cast<const float*>(
+      vbg2.attribute("tsdf").value().buffer->mapped());
+  const auto* weight2 = static_cast<const float*>(
+      vbg2.attribute("weight").value().buffer->mapped());
+  std::size_t cross_checked = 0;
+  for (const vol::BlockIndex& b : active2.value()) {
+    for (int lz = 0; lz < bs; ++lz) {
+      for (int ly = 0; ly < bs; ++ly) {
+        for (int lx = 0; lx < bs; ++lx) {
+          const std::size_t idx =
+              static_cast<std::size_t>(b.ptr) + local_index(lx, ly, lz, bs);
+          if (weight2[idx] <= 0.0f) {
+            continue;
+          }
+          const vr::Vec3f world =
+              vr::Vec3f(vr::Vec3i(b.coord.x * bs + lx, b.coord.y * bs + ly,
+                                  b.coord.z * bs + lz)) *
+              grid.voxel_size;
+          const vr::Vec4f p_cam = world_to_cam * vr::Vec4f(world, 1.0f);
+          const float expected =
+              std::clamp(plane_z - p_cam.z, -grid.trunc_dist, grid.trunc_dist);
+          CHECK(approx(tsdf2[idx], expected, 2e-3f));
+          ++cross_checked;
+        }
+      }
+    }
+  }
+  CHECK(cross_checked > 0);
+
   std::printf(
       "recon tsdf integrate test passed: classic projective fusion of a 0.5 m "
-      "plane, %zu voxels integrated, weight caps at 5.0\n",
-      touched);
+      "plane, %zu voxels integrated, weight caps at 5.0; %zu voxels "
+      "cross-checked "
+      "under a rotated+translated pose\n",
+      touched, cross_checked);
   return 0;
 }
