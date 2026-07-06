@@ -99,3 +99,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   it clamped): the prior engine's stale-free-space clearing. The GPU test
   re-integrates a receding plane and asserts dynamic clears the stale voxel while
   classic keeps it. Bilinear depth sampling and colour follow.
+- `tsdf`: the integrate kernel now samples depth **bilinearly** (was
+  nearest-neighbour), falling back to the nearest sample when a tap is out of
+  bounds, invalid, or the 2x2 taps straddle a depth discontinuity
+  (`max - min > trunc_dist`) that would blend across a surface edge — the prior
+  engine's `sampleDepthBilinear`. The GPU test projects an on-axis voxel onto a
+  half-pixel tap boundary and checks a sub-`trunc` step blends (distinct from the
+  nearest sample) while an over-`trunc` step falls back. Colour follows.

@@ -380,6 +380,8 @@ there so a receded surface leaves no ghost) — one kernel branch, the prior
 engine's stale-free-space clearing. `tests/tsdf_integrate_test.cpp` fuses a
 constant-depth plane, checks the per-voxel numerics under a rotated pose, and
 proves dynamic clears a receded-surface voxel that classic keeps, on MoltenVK.
+Depth is sampled **bilinearly** (nearest fallback at image edges and across depth
+discontinuities `> trunc_dist`), the prior engine's `sampleDepthBilinear`.
 
 The first **`mesh` tier** slice — GPU marching cubes — lands alongside it. The
 host `MarchingCubes` (`mesh/marching_cubes.hpp`) owns the compute pipeline and
@@ -399,7 +401,7 @@ vertex color on MoltenVK. `mesh` depends only on the
 `volume` voxel payload (a tier to its left, so the strict dependency rule holds)
 and is proven against a dense analytic SDF until it reads `tsdf`'s real blocks.
 
-Next: **bilinear depth sampling** and **colour** (a `color` attribute).
+Next: **colour** (a `color` attribute).
 A block-index-preserving GPU **rehash** + heap-rebuild then preserves per-voxel
 data across a `resize` (which currently reassigns block indices, discarding the
 `tsdf`/`weight` a block held). On the `mesh` side (greppable `TODO`s): extraction
