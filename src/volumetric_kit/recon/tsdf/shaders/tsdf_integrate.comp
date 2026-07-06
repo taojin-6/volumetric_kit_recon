@@ -25,15 +25,23 @@ layout(set = 0, binding = 4, scalar) readonly buffer Camera {
   DepthCameraParams cam;
 };
 
-// Bilinear depth sample at pixel (u, v), with nearest-neighbour fallback. Falls
-// back to the nearest sample when a bilinear tap is out of bounds, invalid
-// (<= 0), or the four taps straddle a depth discontinuity (max - min >
-// trunc_dist) that would blend across a surface edge. Mirrors the prior engine's
-// sampleDepthBilinear. (u, v) is assumed in [0, width) x [0, height).
+// Bilinear depth sample at pixel (u, v), with a nearest-neighbour fallback.
+// Pixel centres sit at (i + 0.5) -- the taps shift by -0.5 to match -- so the
+// "nearest" (containing) pixel is floor(u), floor(v), i.e. int(u), int(v) given
+// the caller's u, v >= 0. Falls back to that sample when a bilinear tap is out
+// of bounds, invalid (<= 0), or the four taps straddle a depth discontinuity
+// (max - min > trunc_dist) that would blend across a surface edge. This
+// texture-centred convention -- taps *and* fallback -- is a deliberate recon
+// choice (see CLAUDE.md, the depth-sampling decision); it is self-consistent,
+// unlike the prior engine's sampleDepthBilinear, which rounded the fallback to
+// an integer centre while shifting the taps. (u, v) is in [0, width) x
+// [0, height). The nearest index is computed here but only read on a fallback
+// return, so the common interpolate path loads just the four taps.
 float sample_depth(float u, float v) {
   int w = int(cam.width);
   int h = int(cam.height);
-  float nearest = depth[int(v) * w + int(u)];
+  int nu = int(u);  // nearest (containing) pixel; loaded only on fallback below
+  int nv = int(v);
 
   // Taps at pixel centres (shift by -0.5): the 2x2 block [x0,x0+1]x[y0,y0+1].
   float su = u - 0.5;
@@ -41,7 +49,7 @@ float sample_depth(float u, float v) {
   int x0 = int(floor(su));
   int y0 = int(floor(sv));
   if (x0 < 0 || y0 < 0 || x0 + 1 >= w || y0 + 1 >= h) {
-    return nearest;  // a bilinear tap is out of bounds
+    return depth[nv * w + nu];  // a bilinear tap is out of bounds
   }
   float d00 = depth[y0 * w + x0];
   float d10 = depth[y0 * w + x0 + 1];
@@ -50,7 +58,7 @@ float sample_depth(float u, float v) {
   float lo = min(min(d00, d10), min(d01, d11));
   float hi = max(max(d00, d10), max(d01, d11));
   if (lo <= 0.0 || (hi - lo) > pc.grid.trunc_dist) {
-    return nearest;  // an invalid tap, or a depth discontinuity across the taps
+    return depth[nv * w + nu];  // an invalid tap, or a depth discontinuity across the taps
   }
   float fx = su - float(x0);
   float fy = sv - float(y0);

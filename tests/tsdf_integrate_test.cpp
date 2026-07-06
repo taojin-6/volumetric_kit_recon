@@ -364,9 +364,13 @@ int main() {
   CHECK(!approx(bi_tsdf[vbi], 0.02f, 5e-3f));  // NOT nearest: 0.50 - 0.48
 
   // (discontinuity) A 0.48 / 0.58 step across the taps (> trunc) is a depth
-  // edge: the sampler falls back to the nearest sample (0.48) instead of
-  // blending to 0.53, which would exceed the band and drop the voxel. So it
-  // fuses at sdf ~ 0.
+  // edge, so the sampler falls back to the nearest sample (0.48) rather than
+  // blending to 0.53. This runs in classic mode, where a regression that DID
+  // blend across the edge would not drop the voxel: sdf = 0.53 - 0.48 = 0.05 >
+  // trunc is clamped to +trunc and fused at tsdf ~ +0.04. So the tsdf ~ 0 check
+  // below is what separates the fallback (0.48 -> sdf 0) from a cross-edge
+  // blend (tsdf ~ +0.04); the weight check only confirms the voxel fused at
+  // all.
   std::vector<float> depth_edge(depth.size(), 0.48f);
   for (std::uint32_t y = 0; y < bcam.height; ++y) {
     depth_edge[static_cast<std::size_t>(y) * bw + 320] = 0.58f;
@@ -389,9 +393,9 @@ int main() {
       vbg_ed.attribute("tsdf").value().buffer->mapped());
   const auto* ed_weight = static_cast<const float*>(
       vbg_ed.attribute("weight").value().buffer->mapped());
-  CHECK(ed_weight[ved] > 0.0f);  // fused via the nearest fallback...
+  CHECK(ed_weight[ved] > 0.0f);  // fused (fallback kept it in-band)
   CHECK(approx(ed_tsdf[ved], 0.0f,
-               1e-3f));  // ...at 0.48, not blended out of band
+               1e-3f));  // 0.48 - 0.48; not a cross-edge blend
 
   std::printf(
       "recon tsdf integrate test passed: classic fusion of a 0.5 m plane (%zu "
