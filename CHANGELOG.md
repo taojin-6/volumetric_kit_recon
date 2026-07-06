@@ -47,3 +47,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   allocate→compact + the on-device layout round-trip on MoltenVK.
 - `core`: `Device` now enables `scalarBlockLayout` (Vulkan 1.2 core) — the
   compute-shader buffer ABI — on create, and `adopt` requires the creator did.
+- `volume`: `VoxelHashMap::remove` + the `hash_delete_coords` kernel — delete
+  blocks by coordinate (collision-chain splice + successor pull-up) and return
+  each freed block to the heap; a GPU test (`tests/volume_delete_test.cpp`)
+  proves the survivors and heap reuse on MoltenVK.
