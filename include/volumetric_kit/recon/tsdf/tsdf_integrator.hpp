@@ -4,8 +4,9 @@
 #pragma once
 
 /// @file tsdf/tsdf_integrator.hpp
-/// @brief Classic projective TSDF integration of a posed depth frame into a
-///        @ref VoxelBlockGrid's per-voxel `tsdf` + `weight` attributes.
+/// @brief Projective TSDF integration (classic or dynamic) of a posed depth
+///        frame into a @ref VoxelBlockGrid's per-voxel `tsdf` + `weight`
+///        attributes.
 
 #include <cstdint>
 
@@ -24,8 +25,19 @@ class Allocator;
 
 namespace volumetric_kit::recon::tsdf {
 
+/// @brief How @ref TsdfIntegrator::integrate treats a voxel that projects into
+///        free space ahead of the surface (its projective SDF exceeds
+///        `trunc_dist`).
+enum class IntegrationMode : std::uint32_t {
+  Classic = 0,  ///< Keep it: clamp to +`trunc_dist` and fuse a smooth field
+                ///< ahead of surfaces.
+  Dynamic = 1,  ///< Clear it: reset stale geometry there, so a receded surface
+                ///< leaves no ghost (moving scenes).
+};
+
 /// @brief Fuses posed depth frames into a @ref VoxelBlockGrid's `tsdf` +
-///        `weight` attributes by classic projective TSDF integration.
+///        `weight` attributes by projective TSDF integration (classic or
+///        dynamic).
 ///
 /// One GLSL dispatch runs a thread per voxel of every active block: it projects
 /// the voxel centre into the depth camera, computes the truncated projective
@@ -36,9 +48,9 @@ namespace volumetric_kit::recon::tsdf {
 /// the prior engine's numerics. Each voxel is owned by exactly one thread (a
 /// unique `BlockIndex::ptr + local`), so the fusion needs no atomics.
 ///
-/// The dynamic variant (stale-free-space clearing) and bilinear depth sampling
-/// are follow-ups; this integrates the classic path with nearest-neighbour
-/// depth.
+/// @ref IntegrationMode::Dynamic instead clears stale geometry ahead of a
+/// receded surface (classic keeps a smooth field there). Bilinear depth
+/// sampling is a follow-up; this uses nearest-neighbour depth.
 ///
 /// @warning The @ref Device and @ref Allocator passed to @ref create must
 ///          outlive this object; it stores references to them.
@@ -74,6 +86,12 @@ class VR_TSDF_API TsdfIntegrator {
   ///                    integrator inverts the pose to project world -> camera.
   /// @param max_weight  The running-average weight cap (the ported default is
   ///                    5.0).
+  /// @param mode        Classic keeps free space ahead of the surface; dynamic
+  ///                    clears stale geometry there (see @ref IntegrationMode).
+  /// @note  Integrate a given grid with one consistent mode across a sequence:
+  ///        a dynamic frame clears every weighted free-space voxel past the
+  ///        band, including one a prior classic frame fused there -- not only
+  ///        genuinely receded geometry.
   /// @return OK on success, or a non-OK @ref Status:
   ///         @ref Status::Code::InvalidArgument if the integrator is
   ///         moved-from, @p depth is null, @p grid lacks a `float`
@@ -83,7 +101,8 @@ class VR_TSDF_API TsdfIntegrator {
   ///         buffer or dispatch failure.
   Status integrate(volume::VoxelBlockGrid& grid, const float* depth,
                    const volume::DepthCameraParams& cam,
-                   float max_weight = 5.0f);
+                   float max_weight = 5.0f,
+                   IntegrationMode mode = IntegrationMode::Classic);
 
   /// @return `true` if this owns a live pipeline (`false` when moved-from).
   bool valid() const noexcept { return kernel_.valid(); }

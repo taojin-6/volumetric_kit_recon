@@ -44,8 +44,15 @@ struct DepthCameraParams {
   mat4 cam_to_world;
 };
 
+// Integration mode (mirrors tsdf::IntegrationMode): for free space ahead of the
+// surface (sdf > trunc_dist), classic keeps the voxel (clamped to +trunc) while
+// dynamic clears any stale geometry there.
+const uint kModeClassic = 0u;
+const uint kModeDynamic = 1u;
+
 layout(push_constant, scalar) uniform PushConstants {
   VoxelGridParams grid;
   uint num_active_blocks;
   float max_weight;
+  uint mode;
 } pc;
