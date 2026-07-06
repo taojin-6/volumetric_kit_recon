@@ -291,18 +291,25 @@ the shared-queue-safe `Device::submit_single_time` dispatch; `Device` also
 enables `scalarBlockLayout`), proven by the compute smoke on MoltenVK. On top of
 it, the first **`volume` tier** slice — the sparse voxel hash map: the host
 `VoxelHashMap` (`volume/voxel_hash_map.hpp`) owns the device buffers + pipelines
-and drives **init / allocate-from-coords / remove / compact / resize** via GLSL
-kernels
-(`volume/shaders/hash_*.comp`) that read `HashEntry`/`BlockIndex` through the
-scalar-block-layout ABI (2026-07-05), plus a host-side **diagnostics** scan
-(occupancy + collision-chain health). The kernels are embedded into
-`recon_volume` (now a compiled STATIC tier) via `cmake/vr_embed.cmake`, and a GPU
-test (`tests/volume_hash_map_test.cpp`) proves allocate→compact + the on-device
-`HashEntry` layout round-trip on MoltenVK. Host coord/hash math + POD layouts are
-in `volume/{voxel_coords,hash,voxel_grid,hash_types}.hpp`.
+and drives **init / allocate-from-coords / -depth / -points / remove / compact /
+resize** via GLSL kernels (`volume/shaders/hash_*.comp`) that read
+`HashEntry`/`BlockIndex` through the scalar-block-layout ABI (2026-07-05), plus a
+host-side **diagnostics** scan (occupancy + collision-chain health).
+Depth/point allocation unprojects a posed depth frame (via `DepthCameraParams`
+intrinsics+pose, uploaded through the same scalar ABI) or takes world points,
+and dilates each surface block into the `(2·tb+1)³` truncation band — the prior
+engine's solid block cube, *not* a ray march; the shared insert +
+band-dilation live in `hash_allocate_common.glsl`, the coord transforms in
+`hash_common.glsl`. The kernels are embedded into `recon_volume` (a compiled
+STATIC tier) via `cmake/vr_embed.cmake`, and GPU tests
+(`tests/volume_{hash_map,allocate,delete,resize,diagnostics}_test.cpp`) prove
+each op + the on-device `HashEntry` layout round-trip on MoltenVK. Host coord/hash
+math + POD layouts are in `volume/{voxel_coords,hash,voxel_grid,hash_types}.hpp`.
 
-Next: **allocate-from-depth / -points** (camera unprojection) + frustum-culled
-compaction, mirroring the prior engine's `voxel_hashing`. `resize` currently
-reuses init/allocate/compact (reassigning block indices); a block-index-preserving
-GPU **rehash** + heap-rebuild lands once the `tsdf` tier gives blocks persistent
-SDF data. Then `tsdf` integration consumes the allocated blocks.
+Next: **frustum-culled compaction** — filter the active set against the camera
+frustum into the per-frame streamed working set (the second half of the
+depth/-points milestone), mirroring the prior engine's `voxel_hashing`. Then a
+block-index-preserving GPU **rehash** + heap-rebuild once the `tsdf` tier gives
+blocks persistent SDF data (`resize` currently reuses init/allocate/compact,
+reassigning block indices). Then `tsdf` integration consumes the allocated
+blocks.
