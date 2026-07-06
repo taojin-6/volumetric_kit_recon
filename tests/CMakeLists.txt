@@ -65,6 +65,15 @@ target_link_libraries(recon_volume_delete_test
 vr_target_warnings(recon_volume_delete_test)
 add_test(NAME recon_volume_delete COMMAND recon_volume_delete_test)
 
+# volume resize: allocate, grow the table to more buckets, and verify the active
+# set survives + further allocation past the old capacity works. Skips (exit 0)
+# with no device.
+add_executable(recon_volume_resize_test volume_resize_test.cpp)
+target_link_libraries(recon_volume_resize_test
+                      PRIVATE volumetric_kit::recon_volume Vulkan::Vulkan)
+vr_target_warnings(recon_volume_resize_test)
+add_test(NAME recon_volume_resize COMMAND recon_volume_resize_test)
+
 # core device seam: Instance + Device create/adopt. Links recon_core, which now
 # carries the Vulkan headers/loader. Skips at runtime where no compute device is
 # present.
