@@ -381,6 +381,16 @@ it with a set of independently-allocated, named per-voxel **attribute** arrays
 keyed by `BlockIndex::ptr`, so a consumer materialises only the channels it needs
 (the 2026-07-05 SoA decision); `tests/volume_block_grid_test.cpp` proves
 independent, correctly-sized attribute storage on MoltenVK.
+**`resize` preserves block indices** so per-voxel data survives a grow:
+`VoxelHashMap::resize` snapshots the active set, re-inits the larger table, then a
+`hash_rehash.comp` kernel re-inserts each block with its *original* pointer (the
+shared `insert_block`'s `preset_ptr` — reused across normal allocation and rehash,
+so the tested insert path stays single-sourced — instead of a fresh heap draw),
+and the host rebuilds the free-block heap to exclude those live indices.
+`VoxelBlockGrid::resize` grows every attribute buffer first (copying the old
+contents forward), so a block keeps its `ptr` and its `tsdf`/`weight`/`color`
+data at the same offset. The resize + block-grid tests prove the indices *and*
+per-voxel data survive the grow on MoltenVK.
 
 The first **`tsdf` tier** slice then lands on top: `TsdfIntegrator`
 (`tsdf/tsdf_integrator.hpp`) fuses a posed depth frame (float metres, reusing
@@ -451,8 +461,6 @@ gates every cell out) on MoltenVK — the exact-count equivalence being the
 cross-block-addressing proof. `mesh` depends only on the `volume` tier (to its
 left, so the strict dependency rule holds).
 
-Next: a block-index-preserving GPU **rehash** + heap-rebuild preserves per-voxel
-data across a `resize` (which currently reassigns block indices, discarding the
-`tsdf`/`weight`/`color` a block held). On the `mesh` side (greppable `TODO`s):
-shared-vertex dedup + the incremental block-mesh pool, and OBJ/PLY + glTF/GLB
-export + the gfx-vertex converter (interop seam A).
+Next (`mesh` side, greppable `TODO`s): shared-vertex dedup + the incremental
+block-mesh pool, and OBJ/PLY + glTF/GLB export + the gfx-vertex converter
+(interop seam A).

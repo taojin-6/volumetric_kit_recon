@@ -57,14 +57,21 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`tests/volume_delete_test.cpp`) forces overflow chains and a tight heap to
   prove the chain splice, successor pull-up, and real heap reuse on MoltenVK.
 - `volume`: `VoxelHashMap::resize` — grow the hash table to more buckets,
-  preserving the active block set by re-inserting through the proven init /
-  allocate / compact kernels (no new shaders). The grow is failure-atomic (the
-  larger buffers are built off to the side and swapped in together), and the
-  re-insert re-drives the snapshot to absorb transient lock contention. A GPU
-  test (`tests/volume_resize_test.cpp`) proves 256 → 1024 growth, that the
-  active set survives, and that allocation past the old capacity then works on
-  MoltenVK. The block-index-preserving GPU rehash is deferred until blocks carry
-  SDF data.
+  **preserving each block's index** so per-voxel data survives. Snapshots the
+  active set, re-inits the larger table, then a `hash_rehash.comp` kernel
+  re-inserts each block with its ORIGINAL pointer (the shared `insert_block`'s
+  new `preset_ptr` — reused across normal allocation and rehash, so the tested
+  insert path stays single-sourced, instead of drawing a fresh block off the
+  heap), and the host rebuilds the free-block heap to exclude those live indices.
+  The grow is failure-atomic (the larger buffers are built off to the side and
+  swapped in together) and re-drives the snapshot to absorb transient lock
+  contention. `VoxelBlockGrid::resize` grows every attribute array first (copying
+  the old contents forward), so a block keeps its `ptr` and its
+  `tsdf`/`weight`/`color` data at the same offset. GPU tests
+  (`tests/volume_resize_test.cpp`, `tests/volume_block_grid_test.cpp`) prove
+  256 → 1024 growth with block indices preserved, the heap rebuilt to exclude the
+  live set, per-voxel attribute data surviving the grow, and allocation past the
+  old capacity still working on MoltenVK.
 - `volume`: `VoxelHashMap::diagnostics` — host-side occupancy + health stats
   (active / overflow / collision-chain length, load factor, heap utilization)
   from the entries + heap counter; a GPU test
