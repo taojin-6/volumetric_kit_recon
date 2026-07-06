@@ -141,6 +141,22 @@ Each dated; newest context wins. Change the decision *and* this list together.
   across CPU / GLSL / CUDA. *Refines* the 2026-07-04 GLM decision
   ("`std430`-compatible" was imprecise for `vec3`-bearing structs); the host-side
   `static_assert`s guard only the host packing.
+- **2026-07-05 — Compute core is explicit, not reflected; dispatch via
+  `submit_single_time`.** The Vulkan compute foundation mirrors gfx's core (VMA
+  `Allocator`, RAII `Buffer`, `ShaderModule`, descriptor + `ComputePipeline`
+  wrappers, a `UniqueHandle` owner for pure-Vulkan handles) with two deliberate,
+  lean divergences. (1) **No SPIR-V reflection** — `ComputePipeline::create`
+  takes explicit descriptor-set layouts + push-constant ranges rather than
+  reflecting them from the shader, so the tier vendors only VMA (gfx pulls in
+  spirv-cross); the caller declares bindings matching the shader's
+  `layout(set=, binding=)`. (2) **No standalone `CommandBuffer` / `Fence` /
+  `CommandPool` types yet** — a one-shot `Device::submit_single_time(record_fn)`,
+  shared-queue-safe via `Device::queue_submit` + `submit_mutex`, is the dispatch
+  primitive; reusable command buffers and timeline-semaphore sync land when a
+  fusion tier actually batches dispatches. VMA is a private dependency (only
+  `allocator.cpp` and the one `VMA_IMPLEMENTATION` TU, `vma_impl.cpp`, include
+  `<vk_mem_alloc.h>`; `SYSTEM` include). Revisit reflection if the volume/tsdf
+  binding boilerplate grows painful.
 
 ## Provenance & salvage policy
 
@@ -264,9 +280,21 @@ the same shape (gfx's rules; the mistakes reviews keep catching):
 
 ## Where to start
 
-Current state: scaffolding + the `core` foundation (`Status`/`Result`, logging,
-contract checks, version, GLM-backed math) + the `volume` POD data model
-(`volume/hash_types.hpp`). Next: stand up the **Vulkan core** (deps: Vulkan +
-VMA + glslc/shaderc; instance → device with a compute queue → VMA allocator →
-compute pipeline) and prove it with a **Vulkan compute smoke** dispatched through
-MoltenVK on Apple, then port the `volume` hash ops as compute shaders.
+Current state: the `core` foundation (`Status`/`Result`, logging, contract
+checks, version, GLM-backed math), the Vulkan **instance/device** create-adopt
+seam, and the rest of the Vulkan **compute foundation** — the VMA `Allocator`
+(`core/allocator.hpp`), the RAII `Buffer` (`core/buffer.hpp`), the SPIR-V
+`ShaderModule`, the descriptor + `ComputePipeline` wrappers, and a
+shared-queue-safe `Device::submit_single_time` dispatch. GLSL → SPIR-V builds
+through `cmake/vr_shaders.cmake`, and a **compute smoke**
+(`tests/compute_smoke_test.cpp`, shader `tests/shaders/fill.comp`) proves the
+whole path — allocate → bind → dispatch → read back — on MoltenVK. Plus the
+`volume` POD data model (`volume/hash_types.hpp`).
+
+Next: **port the `volume` hash ops as compute shaders** on this foundation — the
+GLSL kernels (init / allocate-from-coords·depth·points / compact / delete /
+rehash / heap-rebuild / diagnostics, mirroring the prior engine's `voxel_hashing`
+Metal/CUDA kernels) plus the host `VoxelHashMap` that owns the buffers and
+dispatches them (turning `recon_volume` from an INTERFACE into a compiled tier).
+Those shaders read `HashEntry`/`Voxel` through the scalar-block-layout ABI
+(2026-07-05).
