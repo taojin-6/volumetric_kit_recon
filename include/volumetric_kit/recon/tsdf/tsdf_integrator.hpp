@@ -10,7 +10,7 @@
 #include <cstdint>
 
 #include "volumetric_kit/recon/core/buffer.hpp"
-#include "volumetric_kit/recon/core/compute_pipeline.hpp"
+#include "volumetric_kit/recon/core/compute_kernel.hpp"
 #include "volumetric_kit/recon/core/descriptor.hpp"
 #include "volumetric_kit/recon/core/result.hpp"
 #include "volumetric_kit/recon/tsdf/export.hpp"
@@ -86,7 +86,7 @@ class VR_TSDF_API TsdfIntegrator {
                    float max_weight = 5.0f);
 
   /// @return `true` if this owns a live pipeline (`false` when moved-from).
-  bool valid() const noexcept { return pipeline_.valid(); }
+  bool valid() const noexcept { return kernel_.valid(); }
 
  private:
   TsdfIntegrator() = default;
@@ -99,10 +99,11 @@ class VR_TSDF_API TsdfIntegrator {
   // groupCountX; integrate() rejects an active set that would exceed it.
   std::uint32_t max_workgroup_count_x_ = 0;
 
-  DescriptorSetLayout layout_;
-  ComputePipeline pipeline_;
+  // The integrate kernel's bundled layout + pipeline + descriptor set, its set
+  // allocated from pool_ (which must outlive it) by KernelSetBuilder at
+  // create().
+  ComputeKernel kernel_;
   DescriptorPool pool_;
-  DescriptorSet set_;
   // Fixed-size camera-params SSBO (volume::DepthCameraParams): bound once at
   // create() and rewritten each integrate(), not reallocated per frame (mirrors
   // the volume tier's persistent camera params).
