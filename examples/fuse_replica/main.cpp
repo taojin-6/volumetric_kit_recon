@@ -15,6 +15,7 @@
 // intrinsics default to <scene_dir>/../cam_params.json.
 
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -137,6 +138,20 @@ vr::Result<Options> parse_args(int argc, char** argv) {
   // Validate the numeric knobs so a bad value (or garbage that strtof/atoi
   // turns into 0 or a negative) fails loudly here instead of silently producing
   // an empty or degenerate reconstruction downstream.
+  //
+  // strtof parses "nan"/"inf" without error, and a non-finite knob slips the
+  // guards below (NaN compares false to every bound; +inf passes `> 0`) to
+  // reach the grid params and the GPU -- a NaN trunc_dist gives an undefined
+  // truncation-band width, a NaN min_depth makes the depth gate reject every
+  // sample (a silent, empty reconstruction). Reject non-finite up front.
+  for (const float knob :
+       {opt.voxel, opt.trunc, opt.min_depth, opt.max_depth, opt.max_weight}) {
+    if (!std::isfinite(knob)) {
+      return vr::Status::invalid_argument(
+          "numeric options (--voxel/--trunc/--min-depth/--max-depth/"
+          "--max-weight) must be finite");
+    }
+  }
   if (!(opt.voxel > 0.0f)) {
     return vr::Status::invalid_argument("--voxel must be > 0");
   }
@@ -236,6 +251,29 @@ vr::Status run(const Options& opt) {
         "allocation kept overflowing after resize");
   };
 
+  // The camera intrinsics, dimensions, and depth range are identical every
+  // frame -- only the pose changes -- so build both param structs once and
+  // rewrite just cam_to_world per frame. Depth and colour share Replica's one
+  // registered camera; keeping the shared intrinsics in a single place also
+  // stops the depth and colour cameras silently drifting apart.
+  vol::DepthCameraParams dcam{};
+  dcam.fx = cam.fx;
+  dcam.fy = cam.fy;
+  dcam.cx = cam.cx;
+  dcam.cy = cam.cy;
+  dcam.min_depth = opt.min_depth;
+  dcam.max_depth = opt.max_depth;
+  dcam.width = cam.width;
+  dcam.height = cam.height;
+
+  tsdf::ColorCameraParams ccam{};
+  ccam.fx = cam.fx;
+  ccam.fy = cam.fy;
+  ccam.cx = cam.cx;
+  ccam.cy = cam.cy;
+  ccam.width = cam.width;
+  ccam.height = cam.height;
+
   const auto t_start = std::chrono::steady_clock::now();
   std::size_t fused = 0;
   const std::size_t last = std::min<std::size_t>(
@@ -255,24 +293,8 @@ vr::Status run(const Options& opt) {
     }
     const vr_example::RgbdFrame frame = std::move(frame_result).value();
 
-    vol::DepthCameraParams dcam{};
-    dcam.fx = cam.fx;
-    dcam.fy = cam.fy;
-    dcam.cx = cam.cx;
-    dcam.cy = cam.cy;
-    dcam.min_depth = opt.min_depth;
-    dcam.max_depth = opt.max_depth;
-    dcam.width = cam.width;
-    dcam.height = cam.height;
+    // Only the pose changes per frame; dcam/ccam were built once above.
     dcam.cam_to_world = frame.cam_to_world;
-
-    tsdf::ColorCameraParams ccam{};
-    ccam.fx = cam.fx;
-    ccam.fy = cam.fy;
-    ccam.cx = cam.cx;
-    ccam.cy = cam.cy;
-    ccam.width = cam.width;
-    ccam.height = cam.height;
     ccam.cam_to_world = frame.cam_to_world;
     const tsdf::ColorFrame color_frame{frame.color.data(), ccam};
 

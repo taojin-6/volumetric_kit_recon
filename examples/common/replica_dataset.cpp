@@ -4,6 +4,7 @@
 #include "dataset.hpp"
 
 #include <array>
+#include <cmath>
 #include <cstdio>
 #include <fstream>
 #include <optional>
@@ -95,22 +96,36 @@ vr::Result<ReplicaDataset> ReplicaDataset::open(
     }
     values[k] = *v;
   }
-  ds.camera_.fx = values[0];
-  ds.camera_.fy = values[1];
-  ds.camera_.cx = values[2];
-  ds.camera_.cy = values[3];
-  ds.camera_.width = static_cast<std::uint32_t>(values[4]);
-  ds.camera_.height = static_cast<std::uint32_t>(values[5]);
-  ds.camera_.depth_scale = values[6];
-  if (ds.camera_.width == 0 || ds.camera_.height == 0 ||
-      !(ds.camera_.depth_scale > 0.0f) || !(ds.camera_.fx > 0.0f) ||
-      !(ds.camera_.fy > 0.0f)) {
-    // Reject fx/fy too (not just w/h/scale): a zero focal length would make the
-    // downstream unprojection x = (u - cx) * d / fx divide by zero.
+  // Validate the parsed values as finite *before* using them: json_number ->
+  // std::stof parses "nan"/"inf"/negatives without error, and casting a
+  // non-finite or negative float to the uint32 width/height below is undefined
+  // behaviour (a negative also wraps to a huge value that would slip a `== 0`
+  // check). Gate every intrinsic -- including cx/cy, whose NaN would silently
+  // poison every projection -- not just the ones the old check covered.
+  for (const float value : values) {
+    if (!std::isfinite(value)) {
+      return vr::Status::invalid_argument(
+          "ReplicaDataset::open: cam params has a non-finite value");
+    }
+  }
+  const float w = values[4];
+  const float h = values[5];
+  if (!(values[0] > 0.0f) || !(values[1] > 0.0f) || !(values[6] > 0.0f) ||
+      !(w >= 1.0f) || !(w <= 65535.0f) || !(h >= 1.0f) || !(h <= 65535.0f)) {
+    // fx/fy > 0 (a zero focal length divides by zero in the unprojection
+    // x = (u - cx) * d / fx), scale > 0, and width/height in a sane [1, 65535]
+    // so the uint32 cast below is well-defined.
     return vr::Status::invalid_argument(
         "ReplicaDataset::open: cam params has a zero/invalid intrinsic, "
         "dimension, or scale");
   }
+  ds.camera_.fx = values[0];
+  ds.camera_.fy = values[1];
+  ds.camera_.cx = values[2];
+  ds.camera_.cy = values[3];
+  ds.camera_.width = static_cast<std::uint32_t>(w);
+  ds.camera_.height = static_cast<std::uint32_t>(h);
+  ds.camera_.depth_scale = values[6];
 
   // --- Trajectory (traj.txt): one flattened row-major 4x4 cam->world per line,
   // transposed into the column-major glm matrix the pipeline uploads. ---
