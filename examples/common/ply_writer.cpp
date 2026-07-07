@@ -4,18 +4,15 @@
 #include "ply_writer.hpp"
 
 #include <cstdint>
+#include <exception>
 #include <fstream>
 #include <ostream>
+#include <vector>
+
+#include "tinyply.h"  // declarations only; the implementation is tinyply_impl.cpp
 
 namespace vr_example {
 namespace {
-
-// Append the raw bytes of a trivially-copyable value to the stream (binary PLY
-// is little-endian; the host is little-endian on every target we build).
-template <typename T>
-void put(std::ostream& out, const T& value) {
-  out.write(reinterpret_cast<const char*>(&value), sizeof(T));
-}
 
 std::uint8_t to_u8(float channel) {
   const float scaled = channel * 255.0f + 0.5f;
@@ -33,45 +30,63 @@ std::uint8_t to_u8(float channel) {
 }  // namespace
 
 vr::Status write_ply(const std::string& path, const vr::mesh::Mesh& mesh) {
+  const std::size_t vertex_count = mesh.vertices.size();
+  const std::size_t face_count = mesh.indices.size() / 3;
+
+  // tinyply writes each property group from a tightly-packed array, so
+  // de-interleave the Mesh's array-of-Vertex-struct into per-attribute buffers
+  // (position, normal, and the u8-quantized colour). One-shot final export, so
+  // the extra copies are inconsequential.
+  std::vector<float> positions(vertex_count * 3);
+  std::vector<float> normals(vertex_count * 3);
+  std::vector<std::uint8_t> colors(vertex_count * 3);
+  for (std::size_t i = 0; i < vertex_count; ++i) {
+    const vr::mesh::Vertex& v = mesh.vertices[i];
+    positions[i * 3 + 0] = v.position.x;
+    positions[i * 3 + 1] = v.position.y;
+    positions[i * 3 + 2] = v.position.z;
+    normals[i * 3 + 0] = v.normal.x;
+    normals[i * 3 + 1] = v.normal.y;
+    normals[i * 3 + 2] = v.normal.z;
+    colors[i * 3 + 0] = to_u8(v.color.x);
+    colors[i * 3 + 1] = to_u8(v.color.y);
+    colors[i * 3 + 2] = to_u8(v.color.z);
+  }
+  // PLY's conventional face-index type is `int` (the interleaved triangle-soup
+  // indices, uint32 in the Mesh, always fit int32 -- a >2^31-vertex mesh is
+  // unrepresentable in the uint32-index Mesh anyway).
+  std::vector<std::int32_t> faces(mesh.indices.begin(), mesh.indices.end());
+
+  tinyply::PlyFile ply;
+  ply.get_comments().push_back("volumetric_kit_recon fuse example");
+  ply.add_properties_to_element(
+      "vertex", {"x", "y", "z"}, tinyply::Type::FLOAT32, vertex_count,
+      reinterpret_cast<const std::uint8_t*>(positions.data()),
+      tinyply::Type::INVALID, 0);
+  ply.add_properties_to_element(
+      "vertex", {"nx", "ny", "nz"}, tinyply::Type::FLOAT32, vertex_count,
+      reinterpret_cast<const std::uint8_t*>(normals.data()),
+      tinyply::Type::INVALID, 0);
+  ply.add_properties_to_element("vertex", {"red", "green", "blue"},
+                                tinyply::Type::UINT8, vertex_count,
+                                colors.data(), tinyply::Type::INVALID, 0);
+  ply.add_properties_to_element(
+      "face", {"vertex_indices"}, tinyply::Type::INT32, face_count,
+      reinterpret_cast<const std::uint8_t*>(faces.data()), tinyply::Type::UINT8,
+      3);
+
   std::ofstream out(path, std::ios::binary);
   if (!out) {
     return vr::Status::io_error("write_ply: cannot open " + path);
   }
-
-  const std::size_t vertex_count = mesh.vertices.size();
-  const std::size_t face_count = mesh.indices.size() / 3;
-
-  out << "ply\n"
-      << "format binary_little_endian 1.0\n"
-      << "comment volumetric_kit_recon fuse example\n"
-      << "element vertex " << vertex_count << "\n"
-      << "property float x\nproperty float y\nproperty float z\n"
-      << "property float nx\nproperty float ny\nproperty float nz\n"
-      << "property uchar red\nproperty uchar green\nproperty uchar blue\n"
-      << "element face " << face_count << "\n"
-      << "property list uchar int vertex_indices\n"
-      << "end_header\n";
-
-  for (const vr::mesh::Vertex& v : mesh.vertices) {
-    put(out, v.position.x);
-    put(out, v.position.y);
-    put(out, v.position.z);
-    put(out, v.normal.x);
-    put(out, v.normal.y);
-    put(out, v.normal.z);
-    put(out, to_u8(v.color.x));
-    put(out, to_u8(v.color.y));
-    put(out, to_u8(v.color.z));
+  try {
+    ply.write(out, /*isBinary=*/true);
+  } catch (const std::exception& e) {
+    return vr::Status::io_error("write_ply: tinyply failed for " + path + ": " +
+                                e.what());
   }
-  for (std::size_t f = 0; f < face_count; ++f) {
-    put(out, static_cast<std::uint8_t>(3));
-    put(out, static_cast<std::int32_t>(mesh.indices[f * 3 + 0]));
-    put(out, static_cast<std::int32_t>(mesh.indices[f * 3 + 1]));
-    put(out, static_cast<std::int32_t>(mesh.indices[f * 3 + 2]));
-  }
-  // Flush before the final check: a failed final flush (e.g. the disk fills on
-  // the last buffer) would otherwise be missed here and only surface in the
-  // ofstream destructor, leaving a truncated PLY reported as success.
+  // Flush before the final check so a failed final flush (e.g. the disk fills
+  // on the last buffer) is caught here rather than silently in the destructor.
   out.flush();
   if (!out) {
     return vr::Status::io_error("write_ply: write failed for " + path);

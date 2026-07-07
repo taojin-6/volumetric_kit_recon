@@ -160,8 +160,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   each frame into a sparse TSDF+colour volume (`allocate_from_depth`, growing the
   map via the block-index-preserving `resize` on overflow, then `integrate`
   depth+colour), extracts a marching-cubes mesh, and writes a coloured binary
-  PLY. A small `examples/common` reader (stb_image colour/depth decode via a
-  pinned examples-only FetchContent, poses, PLY writer) activates the reserved
-  `examples/` slot. Verified on Replica room0 (400 frames): a coherent
+  PLY. A small `examples/common` reader (stb_image colour/depth decode + a
+  tinyply PLY writer, via pinned examples-only FetchContent, plus the poses)
+  activates the reserved `examples/` slot. Verified on Replica room0 (400
+  frames): a coherent
   4.0×4.4×2.8 m room, unit normals, plausible surface colour, triangle count
   converging, at ~60 fps on MoltenVK.
