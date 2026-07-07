@@ -153,3 +153,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   meshes white, and that a sub-threshold weight gates every cell out) — the
   exact-count equivalence being the cross-block-addressing proof — and checks the
   empty / moved-from / missing-attribute paths.
+- `examples`: `fuse_replica` — the first example and the vertical slice running
+  end-to-end on real data. Reads a posed Replica-SLAM RGB-D sequence (nvblox's
+  `fuse_replica` layout: `results/frameNNNNNN.jpg` + `depthNNNNNN.png`, row-major
+  `traj.txt` camera-to-world poses, `cam_params.json` intrinsics/scale), fuses
+  each frame into a sparse TSDF+colour volume (`allocate_from_depth`, growing the
+  map via the block-index-preserving `resize` on overflow, then `integrate`
+  depth+colour), extracts a marching-cubes mesh, and writes a coloured binary
+  PLY. A small `examples/common` reader (stb_image colour/depth decode + a
+  tinyply PLY writer, via pinned examples-only FetchContent, plus the poses)
+  activates the reserved `examples/` slot. Verified on Replica room0 (400
+  frames): a coherent
+  4.0×4.4×2.8 m room, unit normals, plausible surface colour, triangle count
+  converging, at ~60 fps on MoltenVK.

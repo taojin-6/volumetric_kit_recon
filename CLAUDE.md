@@ -461,6 +461,25 @@ gates every cell out) on MoltenVK — the exact-count equivalence being the
 cross-block-addressing proof. `mesh` depends only on the `volume` tier (to its
 left, so the strict dependency rule holds).
 
-Next (`mesh` side, greppable `TODO`s): shared-vertex dedup + the incremental
-block-mesh pool, and OBJ/PLY + glTF/GLB export + the gfx-vertex converter
-(interop seam A).
+The **`examples/`** harness runs the vertical slice end-to-end on real data:
+`fuse_replica` (`examples/fuse_replica/`) reads a posed Replica-SLAM RGB-D
+sequence (nvblox's `fuse_replica` layout — `results/frameNNNNNN.jpg` +
+`depthNNNNNN.png`, `traj.txt` camera-to-world poses, `cam_params.json`
+intrinsics) via a small `examples/common` reader (stb_image decode + a tinyply
+PLY writer, pinned examples-only FetchContent deps) and drives the spine per
+frame: `allocate_from_depth` (growing the map through the block-index-preserving
+`resize` on overflow) → `integrate` depth+colour → periodic `extract` → a binary
+PLY via tinyply (interop-seam-A export, in example form). Verified on Replica
+room0 (400 frames) — a coherent ~4 m metric room with plausible surface colour at
+~60 fps on MoltenVK.
+
+Next: the **live gfx viewer** — stream each re-mesh to `volumetric_kit_gfx` (the
+recon→gfx vertex converter + `upload_mesh` + a windowed draw loop over the
+shared-device / data-handoff seam), the nvblox `FuserVisualizer` analogue. On the
+`mesh` side (greppable `TODO`s): shared-vertex dedup + the incremental block-mesh
+pool, and first-class **glTF/GLB export via tinygltf** (the same reader gfx's
+`load_gltf` uses, so the seam is one shared glTF implementation across both
+siblings) + the gfx-vertex converter (interop seam A). The example's coloured
+PLY dump is deliberately a throwaway (tinyply), not that first-class exporter —
+Assimp was considered and rejected as disproportionate (a large import-first lib
+gfx does not use; gfx vendors tinygltf + tinyobjloader).
