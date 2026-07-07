@@ -19,7 +19,9 @@ void put(std::ostream& out, const T& value) {
 
 std::uint8_t to_u8(float channel) {
   const float scaled = channel * 255.0f + 0.5f;
-  if (scaled <= 0.0f) {
+  // `!(scaled > 0.0f)` maps NaN to 0 as well as <= 0 (every NaN comparison is
+  // false), so a NaN channel never reaches the undefined float->uint8_t cast.
+  if (!(scaled > 0.0f)) {
     return 0;
   }
   if (scaled >= 255.0f) {
@@ -67,6 +69,10 @@ vr::Status write_ply(const std::string& path, const vr::mesh::Mesh& mesh) {
     put(out, static_cast<std::int32_t>(mesh.indices[f * 3 + 1]));
     put(out, static_cast<std::int32_t>(mesh.indices[f * 3 + 2]));
   }
+  // Flush before the final check: a failed final flush (e.g. the disk fills on
+  // the last buffer) would otherwise be missed here and only surface in the
+  // ofstream destructor, leaving a truncated PLY reported as success.
+  out.flush();
   if (!out) {
     return vr::Status::io_error("write_ply: write failed for " + path);
   }

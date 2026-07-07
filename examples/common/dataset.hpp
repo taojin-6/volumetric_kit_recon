@@ -30,8 +30,8 @@ struct CameraModel {
   std::uint32_t width = 0;   ///< Image width (pixels).
   std::uint32_t height = 0;  ///< Image height (pixels).
   float depth_scale = 1.0f;  ///< Units per metre: metres = raw_uint16 / this.
-  float min_depth = 0.1f;    ///< Reject depth nearer than this (metres).
-  float max_depth = 10.0f;   ///< Reject depth farther than this (metres).
+  // The near/far depth-range gate is a fusion knob, not a camera intrinsic, so
+  // it lives on the driver (the fuse example's CLI), not here.
 };
 
 /// @brief One decoded, posed RGB-D frame.

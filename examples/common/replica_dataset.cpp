@@ -26,6 +26,13 @@ std::optional<std::string> read_file(const std::string& path) {
   return ss.str();
 }
 
+// True if the path can be opened for reading. Used to tell a frame that is
+// simply absent from disk (stop cleanly) from one that is present but fails to
+// decode (a real error).
+bool file_exists(const std::string& path) {
+  return static_cast<bool>(std::ifstream(path, std::ios::binary));
+}
+
 // Pull a numeric value for `"key"` out of a flat JSON object (find the key,
 // then the number after the following colon). Enough for the tiny
 // cam_params.json -- no nesting or arrays to worry about, so no JSON dependency
@@ -96,9 +103,13 @@ vr::Result<ReplicaDataset> ReplicaDataset::open(
   ds.camera_.height = static_cast<std::uint32_t>(values[5]);
   ds.camera_.depth_scale = values[6];
   if (ds.camera_.width == 0 || ds.camera_.height == 0 ||
-      !(ds.camera_.depth_scale > 0.0f)) {
+      !(ds.camera_.depth_scale > 0.0f) || !(ds.camera_.fx > 0.0f) ||
+      !(ds.camera_.fy > 0.0f)) {
+    // Reject fx/fy too (not just w/h/scale): a zero focal length would make the
+    // downstream unprojection x = (u - cx) * d / fx divide by zero.
     return vr::Status::invalid_argument(
-        "ReplicaDataset::open: cam params has a zero dimension or scale");
+        "ReplicaDataset::open: cam params has a zero/invalid intrinsic, "
+        "dimension, or scale");
   }
 
   // --- Trajectory (traj.txt): one flattened row-major 4x4 cam->world per line,
@@ -110,9 +121,20 @@ vr::Result<ReplicaDataset> ReplicaDataset::open(
         "/traj.txt");
   }
   std::string line;
+  bool seen_blank = false;
   while (std::getline(traj, line)) {
     if (line.find_first_not_of(" \t\r\n") == std::string::npos) {
-      continue;  // skip a blank trailing line
+      seen_blank = true;  // tolerate trailing blank line(s)
+      continue;
+    }
+    if (seen_blank) {
+      // A blank line before this data line is an interior gap: skipping it
+      // would silently shift every later pose off its frame index (poses are
+      // matched to frameNNNNNN by position), so reject it instead.
+      return vr::Status::invalid_argument(
+          "ReplicaDataset::open: blank line inside the trajectory (before "
+          "pose " +
+          std::to_string(ds.poses_.size()) + ")");
     }
     std::istringstream ss(line);
     std::array<float, 16> m{};
@@ -148,15 +170,22 @@ vr::Result<RgbdFrame> ReplicaDataset::load(std::size_t i) const {
     return vr::Status::invalid_argument("ReplicaDataset::load: index " +
                                         std::to_string(i) + " out of range");
   }
+  const std::string color_path = frame_path(results_dir_, "frame", i, ".jpg");
+  const std::string depth_path = frame_path(results_dir_, "depth", i, ".png");
+  // A frame simply absent from disk (the trajectory may list more poses than
+  // there are images) is reported as NotFound, so the caller can stop cleanly;
+  // a decode failure on a file that IS present stays a hard error below.
+  if (!file_exists(color_path) || !file_exists(depth_path)) {
+    return vr::Status::not_found("ReplicaDataset::load: frame " +
+                                 std::to_string(i) + " not on disk");
+  }
   RgbdFrame frame;
   frame.cam_to_world = poses_[i];
   VR_ASSIGN(frame.color,
-            load_color_packed(frame_path(results_dir_, "frame", i, ".jpg"),
-                              camera_.width, camera_.height));
-  VR_ASSIGN(
-      frame.depth,
-      load_depth_metres(frame_path(results_dir_, "depth", i, ".png"),
-                        camera_.width, camera_.height, camera_.depth_scale));
+            load_color_packed(color_path, camera_.width, camera_.height));
+  VR_ASSIGN(frame.depth,
+            load_depth_metres(depth_path, camera_.width, camera_.height,
+                              camera_.depth_scale));
   return frame;
 }
 

@@ -19,6 +19,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <utility>
 
@@ -48,7 +49,8 @@ struct Options {
   std::string cam_params;  // default: <scene_dir>/../cam_params.json
   std::string out = "fuse_room0.ply";
   float voxel = 0.02f;     // metres
-  float trunc = 0.08f;     // truncation distance (metres); default 4 * voxel
+  float trunc = 0.0f;      // truncation distance (metres); 0 => 4 * voxel
+  float min_depth = 0.1f;  // reject depth nearer than this (metres)
   float max_depth = 8.0f;  // reject depth beyond this (metres)
   float max_weight = 20.0f;
   int max_frames = 1 << 30;  // process every available frame by default
@@ -93,6 +95,9 @@ vr::Result<Options> parse_args(int argc, char** argv) {
       if (!need(opt.voxel)) return vr::Status::invalid_argument("--voxel");
     } else if (a == "--trunc") {
       if (!need(opt.trunc)) return vr::Status::invalid_argument("--trunc");
+    } else if (a == "--min-depth") {
+      if (!need(opt.min_depth))
+        return vr::Status::invalid_argument("--min-depth");
     } else if (a == "--max-depth") {
       if (!need(opt.max_depth))
         return vr::Status::invalid_argument("--max-depth");
@@ -128,6 +133,38 @@ vr::Result<Options> parse_args(int argc, char** argv) {
     opt.cam_params = opt.scene_dir + "/../cam_params.json";
   }
   if (opt.stride < 1) opt.stride = 1;
+
+  // Validate the numeric knobs so a bad value (or garbage that strtof/atoi
+  // turns into 0 or a negative) fails loudly here instead of silently producing
+  // an empty or degenerate reconstruction downstream.
+  if (!(opt.voxel > 0.0f)) {
+    return vr::Status::invalid_argument("--voxel must be > 0");
+  }
+  if (opt.trunc <= 0.0f) {
+    opt.trunc = 4.0f * opt.voxel;  // default the band to 4 voxels
+  }
+  if (!(opt.max_depth > 0.0f)) {
+    return vr::Status::invalid_argument("--max-depth must be > 0");
+  }
+  if (opt.min_depth < 0.0f || opt.min_depth >= opt.max_depth) {
+    return vr::Status::invalid_argument(
+        "--min-depth must be in [0, --max-depth)");
+  }
+  if (!(opt.max_weight > 0.0f)) {
+    return vr::Status::invalid_argument("--max-weight must be > 0");
+  }
+  if (opt.max_frames < 1) {
+    return vr::Status::invalid_argument("--max-frames must be >= 1");
+  }
+  // num_blocks = bucket_size (8) * num_buckets is an int32; keep the product in
+  // range so it cannot overflow to a negative that still passes validate().
+  constexpr std::int64_t kBucketSize = 8;
+  if (opt.num_buckets < 1 ||
+      static_cast<std::int64_t>(opt.num_buckets) * kBucketSize >
+          std::numeric_limits<std::int32_t>::max()) {
+    return vr::Status::invalid_argument(
+        "--buckets must be >= 1 and small enough that 8 * buckets fits int32");
+  }
   return opt;
 }
 
@@ -181,10 +218,19 @@ vr::Status run(const Options& opt) {
       if (failed == 0) {
         return {};
       }
-      const std::int32_t grown = volume.grid().num_buckets * 2;
-      std::printf("  map overflow (%u fails) -> resize to %d buckets\n", failed,
-                  grown);
-      VR_TRY(volume.resize(grown));
+      // Double in int64 and bail before the block index (bucket_size * buckets)
+      // would overflow int32, so a growth that can no longer fit reports
+      // cleanly instead of tripping the signed-overflow UB.
+      const std::int64_t grown =
+          static_cast<std::int64_t>(volume.grid().num_buckets) * 2;
+      if (grown * volume.grid().bucket_size >
+          std::numeric_limits<std::int32_t>::max()) {
+        return vr::Status::out_of_memory(
+            "map cannot grow further without overflowing the block index");
+      }
+      std::printf("  map overflow (%u fails) -> resize to %lld buckets\n",
+                  failed, static_cast<long long>(grown));
+      VR_TRY(volume.resize(static_cast<std::int32_t>(grown)));
     }
     return vr::Status::out_of_memory(
         "allocation kept overflowing after resize");
@@ -197,11 +243,15 @@ vr::Status run(const Options& opt) {
   for (std::size_t i = 0; i < last; i += static_cast<std::size_t>(opt.stride)) {
     vr::Result<vr_example::RgbdFrame> frame_result = dataset.load(i);
     if (!frame_result) {
-      // Ran past the frames present on disk (we may have only a subset of the
-      // trajectory): stop cleanly rather than erroring.
-      std::printf("frame %zu not on disk; stopping at %zu fused frames\n", i,
-                  fused);
-      break;
+      if (frame_result.status().domain() == vr::Status::Code::NotFound) {
+        // Ran past the frames present on disk (we may have only a subset of the
+        // trajectory): stop cleanly rather than erroring.
+        std::printf("frame %zu not on disk; stopping at %zu fused frames\n", i,
+                    fused);
+        break;
+      }
+      // A frame that IS on disk but failed to decode is a real error.
+      return frame_result.status();
     }
     const vr_example::RgbdFrame frame = std::move(frame_result).value();
 
@@ -210,7 +260,7 @@ vr::Status run(const Options& opt) {
     dcam.fy = cam.fy;
     dcam.cx = cam.cx;
     dcam.cy = cam.cy;
-    dcam.min_depth = cam.min_depth;
+    dcam.min_depth = opt.min_depth;
     dcam.max_depth = opt.max_depth;
     dcam.width = cam.width;
     dcam.height = cam.height;
