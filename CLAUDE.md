@@ -461,6 +461,21 @@ gates every cell out) on MoltenVK — the exact-count equivalence being the
 cross-block-addressing proof. `mesh` depends only on the `volume` tier (to its
 left, so the strict dependency rule holds).
 
-Next (`mesh` side, greppable `TODO`s): shared-vertex dedup + the incremental
-block-mesh pool, and OBJ/PLY + glTF/GLB export + the gfx-vertex converter
+The **`examples/`** harness runs the vertical slice end-to-end on real data:
+`fuse_replica` (`examples/fuse_replica/`) reads a posed Replica-SLAM RGB-D
+sequence (nvblox's `fuse_replica` layout — `results/frameNNNNNN.jpg` +
+`depthNNNNNN.png`, `traj.txt` camera-to-world poses, `cam_params.json`
+intrinsics) via a small `examples/common` reader (stb_image decode, a pinned
+examples-only FetchContent dep) and drives the spine per frame:
+`allocate_from_depth` (growing the map through the block-index-preserving
+`resize` on overflow) → `integrate` depth+colour → periodic `extract` → a binary
+PLY (interop-seam-A export, in example form). Verified on Replica room0 (400
+frames) — a coherent ~4 m metric room with plausible surface colour at ~60 fps
+on MoltenVK.
+
+Next: the **live gfx viewer** — stream each re-mesh to `volumetric_kit_gfx` (the
+recon→gfx vertex converter + `upload_mesh` + a windowed draw loop over the
+shared-device / data-handoff seam), the nvblox `FuserVisualizer` analogue. On the
+`mesh` side (greppable `TODO`s): shared-vertex dedup + the incremental block-mesh
+pool, and first-class OBJ/PLY + glTF/GLB export + the gfx-vertex converter
 (interop seam A).
