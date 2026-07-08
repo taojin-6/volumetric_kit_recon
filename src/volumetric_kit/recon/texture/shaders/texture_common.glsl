@@ -8,12 +8,12 @@
 //
 // DepthCameraParams mirrors volume::DepthCameraParams byte-for-byte (the same
 // scalar-layout camera the volume/tsdf kernels use); Vertex mirrors
-// mesh::Vertex. project_pinhole is the same world -> camera -> pixel projection
-// tsdf_common.glsl uses -- kept a self-contained copy here so this tier's
-// shaders vendor no cross-tier include, matching how each tier's GLSL restates
-// the small structs/helpers it needs (hash_common.glsl / tsdf_common.glsl).
-// Under scalar block layout every field lands at its host offset (no std430 vec
-// padding).
+// mesh::Vertex. project_to_image is the same world -> camera -> pixel projection
+// tsdf_common.glsl's project_pinhole computes -- kept a self-contained copy here
+// so this tier's shaders vendor no cross-tier include, matching how each tier's
+// GLSL restates the small structs/helpers it needs (hash_common.glsl /
+// tsdf_common.glsl). Under scalar block layout every field lands at its host
+// offset (no std430 vec padding).
 
 #extension GL_EXT_scalar_block_layout : require
 
@@ -70,4 +70,5 @@ bool project_to_image(DepthCameraParams c, vec3 world, out vec2 px,
 layout(push_constant, scalar) uniform PushConstants {
   uint num_triangles;
   float occlusion_threshold;  // max |projected depth - sensor depth|, metres
+  uint num_vertices;          // vertices[] length; bounds the index -> vertex read
 } pc;

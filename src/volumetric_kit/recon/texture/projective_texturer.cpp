@@ -10,6 +10,7 @@
 
 #include "volumetric_kit/recon/core/allocator.hpp"
 #include "volumetric_kit/recon/core/compute_kernel.hpp"
+#include "volumetric_kit/recon/core/compute_util.hpp"
 #include "volumetric_kit/recon/core/device.hpp"
 #include "volumetric_kit/recon/core/vulkan.hpp"
 
@@ -25,48 +26,25 @@ using volume::DepthCameraParams;
 constexpr std::uint32_t kLocalSize = 256;
 
 // The push-constant block (mirrors `PushConstants` in texture_common.glsl): the
-// triangle count and the occlusion distance threshold. Both scalars, so under
-// scalar block layout each lands at its host offset. A drift is a compile
-// error, not silent misprojection -- the discipline the volume/tsdf/mesh PODs
-// follow.
+// triangle count, the occlusion distance threshold, and the vertex count that
+// bounds the shader's index -> vertex addressing. All scalars, so under scalar
+// block layout each lands at its host offset. A drift is a compile error, not
+// silent misprojection -- the discipline the volume/tsdf/mesh PODs follow.
 struct PushConstants {
   std::uint32_t num_triangles;
   float occlusion_threshold;
+  std::uint32_t num_vertices;
 };
-static_assert(sizeof(PushConstants) == 8, "PushConstants must be 8 bytes");
+static_assert(sizeof(PushConstants) == 12, "PushConstants must be 12 bytes");
 static_assert(offsetof(PushConstants, num_triangles) == 0,
               "PushConstants layout drift");
 static_assert(offsetof(PushConstants, occlusion_threshold) == 4,
               "PushConstants layout drift");
+static_assert(offsetof(PushConstants, num_vertices) == 8,
+              "PushConstants layout drift");
 
-// Ceil-divide without the `items + kLocalSize - 1` term, which overflows uint32
-// for items near UINT32_MAX (yielding ~0 groups -> a silent no-op dispatch).
-std::uint32_t group_count(std::uint32_t items) {
-  return items / kLocalSize + (items % kLocalSize != 0u ? 1u : 0u);
-}
-
-// A host-visible, host-mapped storage buffer of the given byte size.
-Result<Buffer> storage_buffer(Allocator& allocator, VkDeviceSize bytes,
-                              HostAccess access = HostAccess::Random) {
-  BufferDesc desc;
-  desc.size = bytes;
-  desc.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-  desc.memory = MemoryUsage::HostVisible;
-  desc.mapped = true;
-  desc.host_access = access;
-  return allocator.create_buffer(desc);
-}
-
-// A host-visible storage buffer of `bytes`, filled from `src`. `access`
-// defaults to SequentialWrite (write-once inputs); the vertex buffer overrides
-// it to Random because the kernel writes uv0 back and the host reads it.
-Result<Buffer> upload_storage_buffer(
-    Allocator& allocator, const void* src, VkDeviceSize bytes,
-    HostAccess access = HostAccess::SequentialWrite) {
-  VR_ASSIGN(Buffer buf, storage_buffer(allocator, bytes, access));
-  std::memcpy(buf.mapped(), src, static_cast<std::size_t>(bytes));
-  return buf;
-}
+// group_count / storage_buffer / upload_storage_buffer are shared across the
+// compute tiers -- see core/compute_util.hpp.
 
 }  // namespace
 
@@ -99,6 +77,10 @@ Result<ProjectiveTexturer> ProjectiveTexturer::create(Device& device,
   VkPhysicalDeviceProperties props{};
   vkGetPhysicalDeviceProperties(device.physical_device(), &props);
   tex.max_workgroup_count_x_ = props.limits.maxComputeWorkGroupCount[0];
+  // The ceiling on a single storage-buffer binding's range; texture() rejects a
+  // vertex / index / depth buffer larger than this with a clean error rather
+  // than an opaque allocation failure or device-lost (mirrors the mesh tier).
+  tex.max_storage_buffer_range_ = props.limits.maxStorageBufferRange;
 
   // The camera params are fixed-size, so persist the SSBO (bound once at
   // binding 3) and rewrite its contents each texture() -- not a per-call
@@ -141,23 +123,38 @@ Status ProjectiveTexturer::texture(mesh::Mesh& mesh, const float* depth,
         "ProjectiveTexturer::texture: triangle count exceeds 2^32");
   }
 
+  // A storage-buffer binding may not exceed maxStorageBufferRange; reject an
+  // over-large mesh or depth image with a clean error rather than an opaque
+  // allocation failure / device-lost (mirrors the mesh tier's arena guard).
+  // This also bounds vertices.size() / indices.size() well under UINT32_MAX, so
+  // the casts below -- and the shader's `tri * 3` addressing -- cannot
+  // overflow.
+  const auto pixels = static_cast<std::size_t>(cam.width) *
+                      static_cast<std::size_t>(cam.height);
+  const VkDeviceSize vertex_bytes =
+      VkDeviceSize(mesh.vertices.size()) * sizeof(mesh::Vertex);
+  const VkDeviceSize index_bytes =
+      VkDeviceSize(mesh.indices.size()) * sizeof(std::uint32_t);
+  const VkDeviceSize depth_bytes = VkDeviceSize(pixels) * sizeof(float);
+  if (vertex_bytes > max_storage_buffer_range_ ||
+      index_bytes > max_storage_buffer_range_ ||
+      depth_bytes > max_storage_buffer_range_) {
+    return Status::invalid_argument(
+        "ProjectiveTexturer::texture: a vertex / index / depth buffer exceeds "
+        "the device maxStorageBufferRange");
+  }
+
   // Upload the interleaved vertices (Random: the kernel writes uv0 and the host
   // reads it back), the index buffer, and the depth frame (metres). The camera
   // rides the persistent SSBO written at create().
   VR_ASSIGN(Buffer vertex_buf,
-            upload_storage_buffer(
-                *allocator_, mesh.vertices.data(),
-                VkDeviceSize(mesh.vertices.size()) * sizeof(mesh::Vertex),
-                HostAccess::Random));
-  VR_ASSIGN(Buffer index_buf,
-            upload_storage_buffer(
-                *allocator_, mesh.indices.data(),
-                VkDeviceSize(mesh.indices.size()) * sizeof(std::uint32_t)));
-  const auto pixels = static_cast<std::size_t>(cam.width) *
-                      static_cast<std::size_t>(cam.height);
+            upload_storage_buffer(*allocator_, mesh.vertices.data(),
+                                  vertex_bytes, HostAccess::Random));
+  VR_ASSIGN(
+      Buffer index_buf,
+      upload_storage_buffer(*allocator_, mesh.indices.data(), index_bytes));
   VR_ASSIGN(Buffer depth_buf,
-            upload_storage_buffer(*allocator_, depth,
-                                  VkDeviceSize(pixels) * sizeof(float)));
+            upload_storage_buffer(*allocator_, depth, depth_bytes));
   std::memcpy(cam_buf_.mapped(), &cam, sizeof(DepthCameraParams));
 
   kernel_.set.write_storage_buffer(0, vertex_buf.handle(), 0, VK_WHOLE_SIZE);
@@ -165,20 +162,25 @@ Status ProjectiveTexturer::texture(mesh::Mesh& mesh, const float* depth,
   kernel_.set.write_storage_buffer(2, depth_buf.handle(), 0, VK_WHOLE_SIZE);
 
   const PushConstants push{static_cast<std::uint32_t>(triangle_count),
-                           occlusion_threshold};
+                           occlusion_threshold,
+                           static_cast<std::uint32_t>(mesh.vertices.size())};
 
   // One thread per triangle. dispatch() caps groupCountX at the device limit
   // and emits the COMPUTE->HOST barrier that makes the written uv0 visible to
   // the read-back below.
-  VR_TRY(dispatch(*device_, kernel_, &push, sizeof(push),
-                  group_count(static_cast<std::uint32_t>(triangle_count)),
-                  max_workgroup_count_x_));
+  VR_TRY(dispatch(
+      *device_, kernel_, &push, sizeof(push),
+      group_count(static_cast<std::uint32_t>(triangle_count), kLocalSize),
+      max_workgroup_count_x_));
 
-  // Read the uv0 the kernel wrote back into the host mesh. The kernel touched
-  // only uv0, so copy the whole vertex array back (positions/normals/colors are
-  // the bytes just uploaded, unchanged).
-  std::memcpy(mesh.vertices.data(), vertex_buf.mapped(),
-              mesh.vertices.size() * sizeof(mesh::Vertex));
+  // Read back only the uv0 the kernel wrote: positions / normals / colors are
+  // the bytes just uploaded and unchanged, so the host already holds them --
+  // copying just uv0 avoids rewriting 5/6 of each vertex with identical data.
+  const auto* gpu_vertices =
+      static_cast<const mesh::Vertex*>(vertex_buf.mapped());
+  for (std::size_t i = 0; i < mesh.vertices.size(); ++i) {
+    mesh.vertices[i].uv0 = gpu_vertices[i].uv0;
+  }
   return {};
 }
 

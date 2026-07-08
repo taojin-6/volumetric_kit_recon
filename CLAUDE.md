@@ -197,7 +197,13 @@ Each dated; newest context wins. Change the decision *and* this list together.
   can be generalized against, rather than over-fitting one now. The caller still
   declares each shader's binding count by hand, so this answers the 2026-07-05
   "revisit reflection" note with a builder, not reflection — the tier still
-  vendors only VMA.
+  vendors only VMA. (2026-07-08: the other per-tier duplicates the same decision
+  flagged — the dispatch group-count ceil-divide and the host-visible
+  storage-buffer create/upload helpers, copied verbatim into every tier — moved
+  to `core/compute_util.hpp` (`group_count` / `storage_buffer` /
+  `upload_storage_buffer`) once the `texture` tier would have been the fourth
+  copy; `texture` consumes them now, and the `volume` / `tsdf` / `mesh` copies
+  migrate next — a mechanical follow-up, greppable `TODO(core)`.)
 - **2026-07-06 — Hybrid color renders through a gfx pipeline (amends "interop
   seam A needs zero gfx changes").** The renderer's shipped PBR path is
   texture-only and ignores per-vertex `color`, so `volumetric_kit_gfx` grew a
@@ -271,8 +277,20 @@ Each dated; newest context wins. Change the decision *and* this list together.
   (best-of-N view, packed atlas, the Metal two-step 32-bit atomic once a dedup
   slice shares vertices). Ported faithfully from
   `implicit_world_reconstruction`'s `projective_texturing` (the Metal kernel
-  shape); `texture_common.glsl`'s projection + the bilinear occlusion sampler
-  mirror `tsdf_common.glsl`.
+  shape); `texture_common.glsl`'s projection mirrors `tsdf_common.glsl`'s
+  `project_pinhole`. The occlusion depth sampler shares the tsdf sampler's
+  *intent* — bilinear with hole renormalisation, plus a **depth-discontinuity
+  fallback** to the nearest tap (keyed to `occlusion_threshold`, since this tier
+  carries no `trunc_dist`) so a foreground vertex on a silhouette is not rejected
+  by a blended foreground/background depth — but is **integer-centred** (no −0.5
+  tap shift), matching this tier's integer-centred projection and half-texel
+  atlas UV rather than the tsdf sampler's texture-centred convention (the
+  2026-07-06 depth-sampling decision); the two are self-consistent within their
+  own tier. The kernel bounds its `indices → vertices` addressing with a
+  `num_vertices` push constant (a malformed/loaded mesh whose index is out of
+  range is skipped, not an out-of-bounds SSBO write), and the host rejects a
+  vertex/index/depth buffer past `maxStorageBufferRange` with a clean `Status`
+  (the mesh tier's arena guard).
 
 ## Provenance & salvage policy
 
@@ -517,19 +535,30 @@ mesh appearance the 2026-07-06 hybrid-colour path reserved. `ProjectiveTexturer`
 (`texture/projective_texturer.hpp`) takes a `mesh::Mesh` + one posed frame's
 depth + `volume::DepthCameraParams` and rewrites every `Vertex::uv0` via
 `texture/shaders/texture_score.comp`: one thread per triangle projects its three
-vertices into the camera (the `project_to_image` + bilinear-depth helpers mirror
-`tsdf_common.glsl`) and keeps the triangle only when all three are in front,
-in-frame, and unoccluded (projected depth within an occlusion threshold of the
-sensor depth — the line-of-sight test), writing `uv0 = (pixel + 0.5)/size` (the
-prior engine's half-texel atlas UV) or the `(-1,-1)` sentinel otherwise. The
-caller binds the frame's own image as the renderer atlas, so gfx's
+vertices into the camera (`project_to_image` mirrors `tsdf_common.glsl`'s
+`project_pinhole`; the bilinear occlusion sampler shares the tsdf sampler's
+intent — hole renormalisation + a depth-discontinuity fallback to the nearest
+tap — but is integer-centred, see the 2026-07-07 decision) and keeps the
+triangle only when all three are in front, in-frame, and unoccluded (projected
+depth within an occlusion threshold of the sensor depth — the line-of-sight
+test), writing `uv0 = (pixel + 0.5)/size` (the prior engine's half-texel atlas
+UV) or the `(-1,-1)` sentinel otherwise. A `num_vertices` push constant bounds
+the shader's `indices → vertices` addressing (a malformed mesh's out-of-range
+index is skipped, not an OOB write), and the host rejects a vertex/index/depth
+buffer past `maxStorageBufferRange`. The caller binds the frame's own image
+(registered to the depth camera) as the renderer atlas, so gfx's
 `HybridMeshPipeline` textures where a camera saw the surface and falls back to
 fused voxel colour elsewhere (the 2026-07-07 decision). No score / winner-take-
 all atomic (single camera; independent triangles).
 `tests/texture_projective_test.cpp` textures a three-triangle mesh
 (visible / depth-occluded / behind-camera) and checks the exact projected UVs,
 the sentinel fallback, that a closer depth reverts a textured triangle, and that
-a translated pose shifts the projection, on MoltenVK.
+a translated pose shifts the projection; plus that the occlusion threshold
+discriminates a small within-tolerance offset from an out-of-tolerance one (and
+honours an explicit tighter threshold), that a **rotated** pose projects through
+`Rᵀ` to hand-computed pixels, and that a depth **discontinuity** across the
+bilinear taps textures a foreground vertex via the nearest-tap fallback — on
+MoltenVK.
 
 The **`examples/`** harness runs the vertical slice end-to-end on real data:
 `fuse_replica` (`examples/fuse_replica/`) reads a posed Replica-SLAM RGB-D

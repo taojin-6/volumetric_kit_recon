@@ -41,22 +41,29 @@ namespace volumetric_kit::recon::texture {
 /// onto a pixel whose sensor depth is much closer, so it fails and stays
 /// untextured.
 ///
-/// A kept triangle's vertices receive `uv0 = pixel / (width, height)` -- a
-/// normalized coordinate into the camera's image, which the caller binds as the
-/// renderer's atlas (`HybridMeshPipeline` samples the atlas where `uv0` is
-/// valid). A rejected triangle's vertices are written the `(-1, -1)` sentinel,
-/// so the shader falls back to the @ref mesh::Vertex::color the TSDF tier fused
-/// -- and, because every call **overwrites** `uv0`, a triangle that leaves the
-/// view on a later frame reverts to that fallback rather than keeping a stale
-/// coordinate.
+/// A kept triangle's vertices receive `uv0 = (pixel + 0.5) / (width, height)`
+/// -- a half-texel-centred normalized coordinate into the camera's image,
+/// clamped half a texel inside the border to stop bilinear bleed at the atlas
+/// edge -- which the caller binds as the renderer's atlas (`HybridMeshPipeline`
+/// samples the atlas where `uv0` is valid). A rejected triangle's vertices are
+/// written the `(-1, -1)` sentinel, so the shader falls back to the
+/// @ref mesh::Vertex::color the TSDF tier fused -- and, because every call
+/// **overwrites** `uv0`, a triangle that leaves the view on a later frame
+/// reverts to that fallback rather than keeping a stale coordinate.
 ///
 /// This is the live, single-camera slice: the caller passes the current frame's
 /// depth + camera (and binds its image as the atlas) each frame, so the
-/// textured region tracks the camera through the scene. Multi-keyframe
-/// selection (best of several views, a packed atlas) is a later slice; the
-/// winner-take-all vertex arbitration it needs is unnecessary here because the
-/// mesh tier emits independent triangles (no shared vertices), so each thread
-/// owns its three `uv0` writes outright.
+/// textured region tracks the camera through the scene. The projection and the
+/// occlusion depth test both use @p cam, and the UV is normalized by @p cam's
+/// dimensions, so the bound atlas must be **registered** to the depth camera --
+/// same intrinsics and pose, not merely the same resolution. A registered
+/// (or synthetic, e.g. Replica) RGB-D frame satisfies this; an unregistered
+/// colour stream with its own intrinsics would misaddress the atlas. The
+/// separate-colour-camera path the TSDF tier models (`ColorCameraParams`) is a
+/// later slice. Multi-keyframe selection (best of several views, a packed
+/// atlas) is likewise a later slice; the winner-take-all vertex arbitration it
+/// needs is unnecessary here because the mesh tier emits independent triangles
+/// (no shared vertices), so each thread owns its three `uv0` writes outright.
 ///
 /// @warning The @ref Device and @ref Allocator passed to @ref create must
 ///          outlive this object; it stores references to them.
@@ -93,16 +100,24 @@ class VR_TEXTURE_API ProjectiveTexturer {
   ///                  depth-scale first) -- the occlusion reference.
   /// @param cam       Intrinsics + camera->world pose + depth range; the
   ///                  projected image coordinates index the image the caller
-  ///                  binds as the atlas, so its dimensions must match @p cam.
+  ///                  binds as the atlas, which must be **registered** to @p
+  ///                  cam (same intrinsics + pose, not merely the same
+  ///                  resolution -- see the class note).
   /// @param occlusion_threshold  Max allowed metres between a vertex's
   /// projected
   ///                  depth and the sampled sensor depth for it to count as
-  ///                  visible (the ported default is 0.02 m).
+  ///                  visible (the ported default is 0.02 m). Also the depth
+  ///                  discontinuity bound the bilinear sampler falls back to
+  ///                  nearest across, so it does not blend foreground and
+  ///                  background depth at a surface edge.
   /// @return OK on success (including an empty mesh, a no-op), or a non-OK
   ///         @ref Status: @ref Status::Code::InvalidArgument if the texturer is
-  ///         moved-from, @p depth is null, @p cam is empty, or the mesh's index
-  ///         count is not a multiple of three or exceeds a single 1-D dispatch;
-  ///         otherwise a buffer or dispatch failure.
+  ///         moved-from, @p depth is null, @p cam is empty, the mesh's index
+  ///         count is not a multiple of three, the triangle count exceeds a
+  ///         single 1-D dispatch, or a vertex / index / depth buffer would
+  ///         exceed the device `maxStorageBufferRange`; otherwise a buffer or
+  ///         dispatch failure. An out-of-range triangle index is skipped
+  ///         on-device (a malformed-mesh guard), not reported.
   Status texture(mesh::Mesh& mesh, const float* depth,
                  const volume::DepthCameraParams& cam,
                  float occlusion_threshold = 0.02f);
@@ -120,6 +135,9 @@ class VR_TEXTURE_API ProjectiveTexturer {
   // Cached maxComputeWorkGroupCount[0] -- the device cap on a 1-D dispatch's
   // groupCountX; texture() rejects a triangle count that would exceed it.
   std::uint32_t max_workgroup_count_x_ = 0;
+  // Cached maxStorageBufferRange -- the device cap on a single storage-buffer
+  // binding; texture() rejects a vertex / index / depth buffer larger than it.
+  std::uint32_t max_storage_buffer_range_ = 0;
 
   // The view-selection kernel's bundled layout + pipeline + descriptor set, its
   // set allocated from pool_ (which must outlive it) by KernelSetBuilder.
