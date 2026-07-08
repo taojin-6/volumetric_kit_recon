@@ -34,6 +34,7 @@
 #include "volumetric_kit/recon/core/result.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
 #include "volumetric_kit/recon/mesh/mesh.hpp"
+#include "volumetric_kit/recon/texture/projective_texturer.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_grid.hpp"
@@ -58,6 +59,7 @@ namespace vr = volumetric_kit::recon;
 namespace vol = volumetric_kit::recon::volume;
 namespace rtsdf = volumetric_kit::recon::tsdf;
 namespace rmesh = volumetric_kit::recon::mesh;
+namespace rtex = volumetric_kit::recon::texture;
 namespace vg = volumetric_kit::gfx;
 namespace vgp = volumetric_kit::gfx::pipelines;
 
@@ -77,6 +79,7 @@ struct Options {
   float pitch = 30.0f;  // degrees, above the horizon
   bool lit = false;     // flat raw colour by default (the reconstruction's own)
   int follow = -1;      // >=0: render from this trajectory frame's sensor pose
+  bool texture = true;  // project the keyframe image onto the mesh (uv0 atlas)
 };
 
 bool parse_args(int argc, char** argv, Options& o) {
@@ -129,6 +132,8 @@ bool parse_args(int argc, char** argv, Options& o) {
       o.follow = std::atoi(v);
     } else if (a == "--lit") {
       o.lit = true;
+    } else if (a == "--no-texture") {
+      o.texture = false;
     } else if (!a.empty() && a[0] == '-') {
       std::fprintf(stderr, "unknown flag %s\n", a.c_str());
       return false;
@@ -166,8 +171,35 @@ bool parse_args(int argc, char** argv, Options& o) {
 }
 
 // --- Fuse a Replica sequence into a coloured host mesh (recon side). ---------
-vr::Result<rmesh::Mesh> fuse(const Options& opt,
-                             std::vector<glm::mat4>& poses) {
+
+// The reconstruction handed to the renderer: the textured mesh plus the RGBA8
+// atlas its uv0 index into (the keyframe image projected onto it). `atlas` is
+// empty when texturing is off, and the caller binds a 1x1 white dummy instead.
+struct Reconstruction {
+  rmesh::Mesh mesh;
+  std::vector<std::uint8_t> atlas;  // RGBA8, atlas_w * atlas_h * 4
+  std::uint32_t atlas_w = 0;
+  std::uint32_t atlas_h = 0;
+  int texture_frame = -1;  // trajectory frame used to texture (-1 = none)
+};
+
+vol::DepthCameraParams make_dcam(const vr_example::CameraModel& cam,
+                                 const glm::mat4& pose, float max_depth) {
+  vol::DepthCameraParams d{};
+  d.fx = cam.fx;
+  d.fy = cam.fy;
+  d.cx = cam.cx;
+  d.cy = cam.cy;
+  d.min_depth = 0.1f;
+  d.max_depth = max_depth;
+  d.width = cam.width;
+  d.height = cam.height;
+  d.cam_to_world = pose;
+  return d;
+}
+
+vr::Result<Reconstruction> fuse(const Options& opt,
+                                std::vector<glm::mat4>& poses) {
   VR_ASSIGN(vr::Instance instance, vr::Instance::create({}));
   VR_ASSIGN(VkPhysicalDevice gpu, instance.select_physical_device());
   VR_ASSIGN(vr::Device device, vr::Device::create(instance.handle(), gpu, {}));
@@ -207,16 +239,8 @@ vr::Result<rmesh::Mesh> fuse(const Options& opt,
     const vr_example::RgbdFrame frame = std::move(fr).value();
     poses.push_back(frame.cam_to_world);
 
-    vol::DepthCameraParams dcam{};
-    dcam.fx = cam.fx;
-    dcam.fy = cam.fy;
-    dcam.cx = cam.cx;
-    dcam.cy = cam.cy;
-    dcam.min_depth = 0.1f;
-    dcam.max_depth = opt.max_depth;
-    dcam.width = cam.width;
-    dcam.height = cam.height;
-    dcam.cam_to_world = frame.cam_to_world;
+    const vol::DepthCameraParams dcam =
+        make_dcam(cam, frame.cam_to_world, opt.max_depth);
     rtsdf::ColorCameraParams ccam{};
     ccam.fx = cam.fx;
     ccam.fy = cam.fy;
@@ -248,7 +272,46 @@ vr::Result<rmesh::Mesh> fuse(const Options& opt,
     ++fused;
   }
   std::printf("fused %zu frames\n", fused);
-  return extractor.extract(volume);
+
+  Reconstruction recon;
+  VR_ASSIGN(recon.mesh, extractor.extract(volume));
+
+  // Project one keyframe onto the mesh (the live single-camera texturing
+  // slice): the --follow frame if given, else the middle fused frame. Its uv0
+  // mark the triangles that keyframe saw unoccluded; the rest keep the sentinel
+  // and render with fused voxel colour. The atlas the uv0 index into is that
+  // frame's own colour image (below), so texturing keeps full sensor resolution
+  // where the camera had line of sight.
+  if (opt.texture && fused > 0 && !recon.mesh.vertices.empty()) {
+    VR_ASSIGN(rtex::ProjectiveTexturer texturer,
+              rtex::ProjectiveTexturer::create(device, allocator));
+    const int tex_idx =
+        (opt.follow >= 0 && static_cast<std::size_t>(opt.follow) < fused)
+            ? opt.follow
+            : static_cast<int>(fused / 2);
+    VR_ASSIGN(vr_example::RgbdFrame tf,
+              dataset.load(static_cast<std::size_t>(tex_idx)));
+    const vol::DepthCameraParams tdcam =
+        make_dcam(cam, tf.cam_to_world, opt.max_depth);
+    VR_TRY(texturer.texture(recon.mesh, tf.depth.data(), tdcam));
+
+    // Atlas = the keyframe's colour image, RGBA8 (packed R|G<<8|B<<16 ->
+    // R,G,B,255) at full resolution -- exactly what uv0 = pixel/size index.
+    recon.atlas.resize(static_cast<std::size_t>(cam.width) * cam.height * 4);
+    for (std::size_t p = 0; p < tf.color.size(); ++p) {
+      const std::uint32_t c = tf.color[p];
+      recon.atlas[p * 4 + 0] = static_cast<std::uint8_t>(c & 0xFFu);
+      recon.atlas[p * 4 + 1] = static_cast<std::uint8_t>((c >> 8) & 0xFFu);
+      recon.atlas[p * 4 + 2] = static_cast<std::uint8_t>((c >> 16) & 0xFFu);
+      recon.atlas[p * 4 + 3] = 255;
+    }
+    recon.atlas_w = cam.width;
+    recon.atlas_h = cam.height;
+    recon.texture_frame = tex_idx;
+    std::printf("textured with frame %d (%ux%u atlas)\n", tex_idx, cam.width,
+                cam.height);
+  }
+  return recon;
 }
 
 }  // namespace
@@ -259,13 +322,14 @@ int main(int argc, char** argv) {
 
   // 1. Fuse + extract the reconstruction (recon device).
   std::vector<glm::mat4> poses;
-  vr::Result<rmesh::Mesh> mesh_result = fuse(opt, poses);
-  if (!mesh_result) {
+  vr::Result<Reconstruction> recon_result = fuse(opt, poses);
+  if (!recon_result) {
     std::fprintf(stderr, "fuse failed: %s\n",
-                 mesh_result.status().message().c_str());
+                 recon_result.status().message().c_str());
     return 1;
   }
-  const rmesh::Mesh mesh = std::move(mesh_result).value();
+  const Reconstruction recon = std::move(recon_result).value();
+  const rmesh::Mesh& mesh = recon.mesh;
   if (mesh.vertices.empty()) {
     std::fprintf(stderr, "empty reconstruction\n");
     return 1;
@@ -349,13 +413,17 @@ int main(int argc, char** argv) {
   }
   vgp::GpuMesh gpu_mesh = std::move(gpu_r).value();
 
-  // 4. 1x1 white atlas set (required binding; never selected for vertex color).
+  // 4. Atlas: the keyframe's colour image where texturing ran (uv0 index into
+  // it), else a 1x1 white dummy (the binding is required; the shader takes the
+  // vertex-colour path wherever uv0 is the sentinel).
   const std::uint8_t white[4] = {255, 255, 255, 255};
+  const bool has_atlas = !recon.atlas.empty();
   vg::ImageUploadDesc adesc;
-  adesc.extent = {1, 1};
+  adesc.extent =
+      has_atlas ? VkExtent2D{recon.atlas_w, recon.atlas_h} : VkExtent2D{1, 1};
   adesc.format = VK_FORMAT_R8G8B8A8_UNORM;
-  adesc.pixels = white;
-  adesc.size = sizeof(white);
+  adesc.pixels = has_atlas ? recon.atlas.data() : white;
+  adesc.size = has_atlas ? recon.atlas.size() : sizeof(white);
   auto atlas_tex_r = vg::upload_texture(app.device(), app.allocator(), adesc);
   if (!atlas_tex_r.ok()) {
     std::fprintf(stderr, "atlas upload: %s\n",
