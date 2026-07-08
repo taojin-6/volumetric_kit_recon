@@ -166,3 +166,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   frames): a coherent
   4.0×4.4×2.8 m room, unit normals, plausible surface colour, triangle count
   converging, at ~60 fps on MoltenVK.
+- `examples`: gfx-linked **viewer examples** (`examples/viewer/`, behind an
+  off-by-default `VR_BUILD_VIEWER` that FetchContents `volumetric_kit_gfx` + finds
+  GLFW — the only place the recon tree touches the renderer; the tiers + default
+  build + CI stay renderer-independent). `fuse_render` fuses a Replica sequence
+  and renders the coloured reconstruction to a **PNG** headlessly through gfx's
+  `HybridMeshPipeline` + an `OffscreenTarget` (per-vertex colour on the `uv0`
+  sentinel; optional `--follow N` renders from a sensor pose). `fuse_viewer` opens
+  a **live window** — the nvblox `FuserVisualizer` analogue — fusing on a
+  background thread (load/decode/integrate/extract off the render thread) while
+  the render thread draws the growing mesh each frame following the capture
+  trajectory (a host-mesh handoff, interop seam A, two devices).
+  `recon_gfx_bridge.hpp` converts `mesh::Vertex` → `gfx::assets::Vertex`
+  (synthesizing `tangent`, keeping the `uv0` sentinel). Verified on Replica room0:
+  a correct first-person coloured room render.
