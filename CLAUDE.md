@@ -224,6 +224,22 @@ Each dated; newest context wins. Change the decision *and* this list together.
   taps. Revisit only if the depth intrinsics are ever calibrated integer-centred —
   then drop the −0.5 shift and round the fallback so the sampler matches the
   projection.
+- **2026-07-07 — The viewer example opts into gfx behind `VR_BUILD_VIEWER`
+  (amends "Independent siblings; gfx untouched").** The gfx-linked reconstruction
+  viewer examples (`examples/viewer/`: `fuse_render`, a headless colour-PNG
+  render, and `fuse_viewer`, a live window) pull `volumetric_kit_gfx` via
+  FetchContent + system GLFW — the **only** place the recon tree touches the
+  renderer, behind an **off-by-default** `VR_BUILD_VIEWER`. The library tiers, the
+  default build, and CI stay renderer-independent (verified: a default configure
+  fetches no gfx and builds the gfx-free `fuse_replica`). This amends the
+  independence stance *for an opt-in example only* — recon's **release** is still
+  never coupled to gfx; a developer who wants the live viewer opts in and pays the
+  gfx fetch. The alternative (a standalone neutral repo, where the
+  `shared_device_bootstrap` device-adoption proof still lives) was weighed and
+  set aside for discoverability: the example lives with the pipeline it demos. The
+  handoff is a **host mesh** (interop seam A, two devices: recon fuses on its own,
+  gfx renders on its own), not the zero-copy shared `VkDevice` (that stays the
+  `shared_device_bootstrap`'s concern).
 
 ## Provenance & salvage policy
 
@@ -473,10 +489,21 @@ PLY via tinyply (interop-seam-A export, in example form). Verified on Replica
 room0 (400 frames) — a coherent ~4 m metric room with plausible surface colour at
 ~60 fps on MoltenVK.
 
-Next: the **live gfx viewer** — stream each re-mesh to `volumetric_kit_gfx` (the
-recon→gfx vertex converter + `upload_mesh` + a windowed draw loop over the
-shared-device / data-handoff seam), the nvblox `FuserVisualizer` analogue. On the
-`mesh` side (greppable `TODO`s): shared-vertex dedup + the incremental block-mesh
+The gfx-linked **viewer examples** (`examples/viewer/`, behind the off-by-default
+`VR_BUILD_VIEWER` — the 2026-07-07 opt-in-gfx decision) render the coloured
+reconstruction through `volumetric_kit_gfx`'s `HybridMeshPipeline`: `fuse_render`
+fuses a sequence and writes a colour **PNG** headlessly (a gfx `OffscreenTarget`,
+CI-runnable), and `fuse_viewer` opens a **live window** — the nvblox
+`FuserVisualizer` analogue — fusing on a background thread while the render thread
+draws the growing mesh each frame following the capture trajectory (a host-mesh
+handoff, interop seam A; two devices). `recon_gfx_bridge.hpp` converts
+`mesh::Vertex → gfx::assets::Vertex` (synthesizing `tangent`, keeping the `uv0`
+sentinel so the hybrid shader takes the per-vertex-colour path). Verified: the
+follow-camera render is a correct first-person room view, and the live window
+runs the fly-through.
+
+Next (`mesh` side, greppable `TODO`s): shared-vertex dedup + the incremental
+block-mesh
 pool, and first-class **glTF/GLB export via tinygltf** (the same reader gfx's
 `load_gltf` uses, so the seam is one shared glTF implementation across both
 siblings) + the gfx-vertex converter (interop seam A). The example's coloured
