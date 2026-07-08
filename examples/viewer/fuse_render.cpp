@@ -145,6 +145,22 @@ bool parse_args(int argc, char** argv, Options& o) {
                  "[--max-frames n] [--yaw d] [--pitch d] [--lit]\n");
     return false;
   }
+  // strtof parses "nan"/"inf" without error, and a non-finite knob slips the
+  // downstream guards (NaN compares false to every bound) to reach the grid
+  // params, the GPU, or the camera math -- a silent, degenerate render. Reject
+  // up front.
+  if (!std::isfinite(o.voxel) || o.voxel <= 0.0f) {
+    std::fprintf(stderr, "--voxel must be finite and > 0\n");
+    return false;
+  }
+  if (!std::isfinite(o.max_depth) || o.max_depth <= 0.0f) {
+    std::fprintf(stderr, "--max-depth must be finite and > 0\n");
+    return false;
+  }
+  if (!std::isfinite(o.yaw) || !std::isfinite(o.pitch)) {
+    std::fprintf(stderr, "--yaw/--pitch must be finite\n");
+    return false;
+  }
   if (o.cam_params.empty()) o.cam_params = o.scene_dir + "/../cam_params.json";
   return true;
 }
@@ -211,11 +227,21 @@ vr::Result<rmesh::Mesh> fuse(const Options& opt,
     ccam.cam_to_world = frame.cam_to_world;
     const rtsdf::ColorFrame color_frame{frame.color.data(), ccam};
 
+    bool allocated = false;
     for (int attempt = 0; attempt < 5; ++attempt) {
       VR_ASSIGN(std::uint32_t failed,
                 volume.map().allocate_from_depth(frame.depth.data(), dcam));
-      if (failed == 0) break;
+      if (failed == 0) {
+        allocated = true;
+        break;
+      }
       VR_TRY(volume.resize(volume.grid().num_buckets * 2));
+    }
+    // Don't integrate a frame whose surface band never fully allocated (silent
+    // holes); report the overflow cleanly instead, as fuse_replica does.
+    if (!allocated) {
+      return vr::Status::out_of_memory(
+          "fuse_render: allocation kept overflowing after resize");
     }
     VR_TRY(integrator.integrate(volume, frame.depth.data(), dcam, 20.0f,
                                 rtsdf::IntegrationMode::Classic, &color_frame));
@@ -252,7 +278,10 @@ int main(int argc, char** argv) {
     hi = glm::max(hi, glm::vec3(v.position));
   }
   const glm::vec3 center = 0.5f * (lo + hi);
-  const float radius = 0.5f * glm::length(hi - lo);
+  // Floor the radius so the orbit near/far planes below stay ordered
+  // (z_near = max(0.01, r*0.05) < z_far = r*6) even for a tiny/degenerate
+  // reconstruction; the --follow path uses fixed planes and is unaffected.
+  const float radius = std::max(0.5f * glm::length(hi - lo), 0.05f);
   const float aspect =
       static_cast<float>(opt.width) / static_cast<float>(opt.height);
   glm::mat4 view_proj;

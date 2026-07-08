@@ -19,6 +19,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <exception>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -137,6 +139,17 @@ bool parse_args(int argc, char** argv, Options& o) {
                  "[--fuse-per-tick k] [--remesh-every n] [--unlit]\n");
     return false;
   }
+  // strtof parses "nan"/"inf" without error, and a non-finite knob slips the
+  // downstream guards (NaN compares false to every bound) to reach the grid
+  // params and the GPU -- a silent, degenerate reconstruction. Reject up front.
+  if (!std::isfinite(o.voxel) || o.voxel <= 0.0f) {
+    std::fprintf(stderr, "--voxel must be finite and > 0\n");
+    return false;
+  }
+  if (!std::isfinite(o.max_depth) || o.max_depth <= 0.0f) {
+    std::fprintf(stderr, "--max-depth must be finite and > 0\n");
+    return false;
+  }
   if (o.cam_params.empty()) o.cam_params = o.scene_dir + "/../cam_params.json";
   return true;
 }
@@ -148,26 +161,25 @@ VkExtent2D window_extent(GLFWwindow* w) {
           static_cast<std::uint32_t>(std::max(1, fh))};
 }
 
-}  // namespace
-
-int main(int argc, char** argv) {
-  Options opt;
-  if (!parse_args(argc, argv, opt)) return 2;
-
-  // --- Window ---------------------------------------------------------------
-  if (glfwInit() != GLFW_TRUE) {
-    std::fprintf(stderr, "glfwInit failed\n");
-    return 1;
+// Signals a fuse thread to quit and joins it on scope exit, so an exception
+// unwinding the render loop cannot destroy a still-joinable std::thread (which
+// would call std::terminate). Declared right after the thread so it runs first
+// at scope exit -- while the recon resources the thread borrows are still live.
+struct QuitJoin {
+  std::thread& thread;
+  std::atomic<bool>& quit;
+  ~QuitJoin() {
+    quit.store(true);
+    if (thread.joinable()) thread.join();
   }
-  glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-  GLFWwindow* window =
-      glfwCreateWindow(opt.width, opt.height, "fuse_viewer", nullptr, nullptr);
-  if (window == nullptr) {
-    std::fprintf(stderr, "glfwCreateWindow failed\n");
-    glfwTerminate();
-    return 1;
-  }
+};
 
+// Owns the WindowedApp (and the VkSurfaceKHR built from `window`) plus every
+// device resource, so they all destruct BEFORE main destroys the window -- the
+// gfx run()/main() split. Destroying a surface/swapchain after its window is a
+// use-after-free, notably on MoltenVK where the surface wraps the window's
+// CAMetalLayer.
+int run(GLFWwindow* window, const Options& opt) {
   std::uint32_t ext_count = 0;
   const char** glfw_exts = glfwGetRequiredInstanceExtensions(&ext_count);
   vg::app::WindowedAppConfig config;
@@ -325,75 +337,108 @@ int main(int argc, char** argv) {
   std::atomic<bool> quit{false};
 
   std::thread fuse_thread([&]() {
-    auto publish = [&](rmesh::Mesh&& rm) {
-      vg::assets::Mesh gm = fuse_viewer::to_gfx_mesh(rm);
-      std::lock_guard<std::mutex> lk(share_mtx);
-      pending_mesh = std::move(gm);
-      ++published_version;
-    };
-    for (std::size_t i = 0; i < frame_count && !quit.load(); ++i) {
-      auto fr = dataset.load(i);  // disk read + JPEG/PNG decode (the CPU cost)
-      if (!fr) break;
-      const vr_example::RgbdFrame frame = std::move(fr).value();
-      {
+    // Any throw escaping this thread function (e.g. a decode/allocation
+    // bad_alloc) would call std::terminate; contain it so shutdown stays clean.
+    try {
+      auto publish = [&](rmesh::Mesh&& rm) {
+        vg::assets::Mesh gm = fuse_viewer::to_gfx_mesh(rm);
         std::lock_guard<std::mutex> lk(share_mtx);
-        shared_poses.push_back(frame.cam_to_world);
-      }
-      vol::DepthCameraParams dcam{};
-      dcam.fx = cam.fx;
-      dcam.fy = cam.fy;
-      dcam.cx = cam.cx;
-      dcam.cy = cam.cy;
-      dcam.min_depth = 0.1f;
-      dcam.max_depth = opt.max_depth;
-      dcam.width = cam.width;
-      dcam.height = cam.height;
-      dcam.cam_to_world = frame.cam_to_world;
-      rtsdf::ColorCameraParams ccam{};
-      ccam.fx = cam.fx;
-      ccam.fy = cam.fy;
-      ccam.cx = cam.cx;
-      ccam.cy = cam.cy;
-      ccam.width = cam.width;
-      ccam.height = cam.height;
-      ccam.cam_to_world = frame.cam_to_world;
-      const rtsdf::ColorFrame color_frame{frame.color.data(), ccam};
-      bool ok = true;
-      for (int attempt = 0; attempt < 5; ++attempt) {
-        auto failed =
-            volume.map().allocate_from_depth(frame.depth.data(), dcam);
-        if (!failed) {
-          ok = false;
+        pending_mesh = std::move(gm);
+        ++published_version;
+      };
+      for (std::size_t i = 0; i < frame_count && !quit.load(); ++i) {
+        auto fr =
+            dataset.load(i);  // disk read + JPEG/PNG decode (the CPU cost)
+        if (!fr) break;
+        const vr_example::RgbdFrame frame = std::move(fr).value();
+        {
+          std::lock_guard<std::mutex> lk(share_mtx);
+          shared_poses.push_back(frame.cam_to_world);
+        }
+        vol::DepthCameraParams dcam{};
+        dcam.fx = cam.fx;
+        dcam.fy = cam.fy;
+        dcam.cx = cam.cx;
+        dcam.cy = cam.cy;
+        dcam.min_depth = 0.1f;
+        dcam.max_depth = opt.max_depth;
+        dcam.width = cam.width;
+        dcam.height = cam.height;
+        dcam.cam_to_world = frame.cam_to_world;
+        rtsdf::ColorCameraParams ccam{};
+        ccam.fx = cam.fx;
+        ccam.fy = cam.fy;
+        ccam.cx = cam.cx;
+        ccam.cy = cam.cy;
+        ccam.width = cam.width;
+        ccam.height = cam.height;
+        ccam.cam_to_world = frame.cam_to_world;
+        const rtsdf::ColorFrame color_frame{frame.color.data(), ccam};
+
+        // Grow the map to fit this frame's surface band; surface any hard
+        // failure instead of silently integrating a partially-allocated frame.
+        bool allocated = false;
+        for (int attempt = 0; attempt < 5; ++attempt) {
+          auto failed =
+              volume.map().allocate_from_depth(frame.depth.data(), dcam);
+          if (!failed) {
+            std::fprintf(stderr, "fuse_viewer: allocate (frame %zu): %s\n", i,
+                         failed.status().message().c_str());
+            break;
+          }
+          if (failed.value() == 0) {
+            allocated = true;
+            break;
+          }
+          const vr::Status rs = volume.resize(volume.grid().num_buckets * 2);
+          if (!rs.ok()) {
+            std::fprintf(stderr, "fuse_viewer: resize (frame %zu): %s\n", i,
+                         rs.message().c_str());
+            break;
+          }
+        }
+        if (!allocated) {
+          std::fprintf(
+              stderr, "fuse_viewer: map overflow at frame %zu; stopping fuse\n",
+              i);
           break;
         }
-        if (failed.value() == 0) break;
-        if (!volume.resize(volume.grid().num_buckets * 2).ok()) {
-          ok = false;
+        const vr::Status ist =
+            integrator.integrate(volume, frame.depth.data(), dcam, 20.0f,
+                                 rtsdf::IntegrationMode::Classic, &color_frame);
+        if (!ist.ok()) {
+          std::fprintf(stderr, "fuse_viewer: integrate (frame %zu): %s\n", i,
+                       ist.message().c_str());
           break;
         }
+        fused_count.store(i + 1);
+        if ((i % static_cast<std::size_t>(opt.remesh_every)) == 0) {
+          auto m = extractor.extract(volume);
+          if (m && !m.value().vertices.empty()) publish(std::move(m).value());
+        }
       }
-      if (ok)
-        integrator.integrate(volume, frame.depth.data(), dcam, 20.0f,
-                             rtsdf::IntegrationMode::Classic, &color_frame);
-      fused_count.store(i + 1);
-      if ((i % static_cast<std::size_t>(opt.remesh_every)) == 0) {
-        auto m = extractor.extract(volume);
+      // Skip the full-volume final extract when the user has already quit, so
+      // the join at shutdown does not stall on a whole marching-cubes pass.
+      if (!quit.load()) {
+        auto m = extractor.extract(volume);  // final mesh
         if (m && !m.value().vertices.empty()) publish(std::move(m).value());
       }
+    } catch (const std::exception& e) {
+      std::fprintf(stderr, "fuse_viewer: fuse thread aborted: %s\n", e.what());
     }
-    auto m = extractor.extract(volume);  // final mesh
-    if (m && !m.value().vertices.empty()) publish(std::move(m).value());
     fusing_done.store(true);
     std::printf("fuse thread: done (%zu frames)\n", fused_count.load());
   });
+  QuitJoin fuse_guard{fuse_thread, quit};
 
   // --- Render thread (main): pick up the newest mesh + trajectory, upload,
   // draw following the capture path.
   // ------------------------------------------------
-  std::vector<vgp::GpuMesh> mesh_ring(config.frames_in_flight);
-  std::vector<std::uint64_t> slot_version(config.frames_in_flight, 0);
-  vg::assets::Mesh current_mesh;
-  std::uint64_t current_version = 0;
+  std::vector<std::shared_ptr<vgp::GpuMesh>> slot_mesh(config.frames_in_flight);
+  std::shared_ptr<vgp::GpuMesh> current_gpu;  // latest upload, shared by slots
+  std::uint64_t uploaded_version = 0;         // version held in current_gpu
+  vg::assets::Mesh current_mesh;              // host source for the next upload
+  std::uint64_t current_version = 0;          // version of current_mesh
   std::vector<glm::mat4> poses;
   std::size_t view_frame = 0;
 
@@ -415,7 +460,11 @@ int main(int argc, char** argv) {
         pending_mesh.reset();
         current_version = published_version;
       }
-      if (poses.size() != shared_poses.size()) poses = shared_poses;
+      // Append only the new tail (shared_poses only grows) rather than
+      // re-copying the whole trajectory each frame it changes.
+      if (poses.size() < shared_poses.size())
+        poses.insert(poses.end(), shared_poses.begin() + poses.size(),
+                     shared_poses.end());
     }
     const std::size_t done_frames = fused_count.load();
     const bool done = fusing_done.load();
@@ -433,15 +482,20 @@ int main(int argc, char** argv) {
     }
     const win::Frame& f = *frame.value();
 
-    // Upload the latest mesh into this slot if behind (begin_frame fence-waited
-    // this slot, so overwriting its buffers is safe).
-    if (current_version != 0 && slot_version[f.slot] != current_version) {
+    // Upload the newest host mesh once when its version changes (not once per
+    // ring slot): a shared_ptr keeps a GpuMesh alive until every slot that drew
+    // it has cycled (each release gated by begin_frame's per-slot fence wait),
+    // so one upload safely feeds all slots.
+    if (current_version != 0 && uploaded_version != current_version) {
       auto gpu = vgp::upload_mesh(app.device(), app.allocator(), current_mesh);
       if (gpu.ok()) {
-        mesh_ring[f.slot] = std::move(gpu).value();
-        slot_version[f.slot] = current_version;
+        current_gpu = std::make_shared<vgp::GpuMesh>(std::move(gpu).value());
+        uploaded_version = current_version;
       }
     }
+    // This slot adopts the latest mesh, releasing whatever it drew last frame
+    // (safe: begin_frame fence-waited this slot).
+    slot_mesh[f.slot] = current_gpu;
 
     // Follow the trajectory: the frontier (latest fused pose) while fusing,
     // then replay the path in a loop once done.
@@ -450,9 +504,7 @@ int main(int argc, char** argv) {
                          static_cast<float>(std::max(1u, extent.height));
     if (!poses.empty()) {
       if (!done)
-        view_frame = std::min(done_frames == 0 ? std::size_t{1} : done_frames,
-                              poses.size()) -
-                     1;
+        view_frame = poses.size() - 1;  // follow the frontier (latest pose)
       else if (tick % 2 == 0)
         view_frame = (view_frame + 1) % poses.size();
     }
@@ -467,11 +519,11 @@ int main(int argc, char** argv) {
               eye, eye + fwd, up, vfov, aspect, 0.05f, 2.0f * opt.max_depth)
               .view_proj();
     }
+    const bool has_mesh = slot_mesh[f.slot] && slot_mesh[f.slot]->valid();
     if (tick % 120 == 0)
       std::printf("render tick %d: fused %zu/%zu, mesh v%llu, drawing=%d\n",
                   tick, done_frames, frame_count,
-                  (unsigned long long)current_version,
-                  mesh_ring[f.slot].valid() ? 1 : 0);
+                  (unsigned long long)current_version, has_mesh ? 1 : 0);
 
     vg::RenderTargetBeginInfo bi;
     bi.clear_color.float32[0] = 0.05f;
@@ -479,8 +531,8 @@ int main(int argc, char** argv) {
     bi.clear_color.float32[2] = 0.07f;
     bi.clear_color.float32[3] = 1.0f;
     f.target->begin(f.cmd, bi);
-    if (mesh_ring[f.slot].valid()) {
-      const vgp::HybridMeshDraw draw{&mesh_ring[f.slot]};
+    if (has_mesh) {
+      const vgp::HybridMeshDraw draw{slot_mesh[f.slot].get()};
       vgp::HybridMeshFrame hframe;
       hframe.extent = extent;
       hframe.view_proj = view_proj;
@@ -502,10 +554,35 @@ int main(int argc, char** argv) {
     ++tick;
   }
 
-  quit.store(true);
-  if (fuse_thread.joinable()) fuse_thread.join();
+  quit.store(true);  // stop the fuse thread promptly; QuitJoin joins it on exit
   app.wait_idle();
+  return exit_code;
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+  Options opt;
+  if (!parse_args(argc, argv, opt)) return 2;
+
+  if (glfwInit() != GLFW_TRUE) {
+    std::fprintf(stderr, "glfwInit failed\n");
+    return 1;
+  }
+  glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+  GLFWwindow* window =
+      glfwCreateWindow(opt.width, opt.height, "fuse_viewer", nullptr, nullptr);
+  if (window == nullptr) {
+    std::fprintf(stderr, "glfwCreateWindow failed\n");
+    glfwTerminate();
+    return 1;
+  }
+
+  // run() owns the WindowedApp + every device resource; they destruct as it
+  // returns, before the window is destroyed (see run()'s note).
+  const int rc = run(window, opt);
+
   glfwDestroyWindow(window);
   glfwTerminate();
-  return exit_code;
+  return rc;
 }
