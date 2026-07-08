@@ -7,9 +7,15 @@
 // gets the expected projected atlas UVs while the occluded + behind ones keep
 // the (-1,-1) sentinel. Then re-texture with a closer depth map and verify the
 // once-visible triangle reverts to the sentinel (uv0 is overwritten each call).
-// A translated pose confirms the world->camera transform is applied. Runs on
-// the real driver (MoltenVK / NVIDIA); exits 0 (skip) where no device is
-// present.
+// A translated pose confirms the world->camera transform is applied. Then four
+// discriminating cases: the occlusion threshold accepts a small
+// within-tolerance offset and rejects an out-of-tolerance one (and honours an
+// explicit tighter threshold) -- so the head-on triangle's |d - zc| = 0 was not
+// hiding a dropped/zeroed threshold; a rotated pose projects through R^T to
+// hand-computed pixels (the identity poses above never exercise the rotation);
+// and a depth discontinuity across the bilinear taps textures a foreground
+// vertex via the nearest-tap fallback (the discontinuity guard). Runs on the
+// real driver (MoltenVK / NVIDIA); exits 0 (skip) where no device is present.
 
 #include <cmath>
 #include <cstdint>
@@ -45,13 +51,20 @@ bool approx(float a, float b, float eps) { return std::fabs(a - b) <= eps; }
 
 bool is_sentinel(const vr::Vec2f& uv) { return uv.x == -1.0f && uv.y == -1.0f; }
 
-// The shader's projection + atlas-UV math for the identity/translated pose, so
-// the test predicts the exact uv0 a visible vertex must receive: world ->
-// camera is (world - t) (identity rotation), pinhole u = fx*x/z + cx, then the
-// +0.5 half-texel normalized by the image size and clamped half a texel inside.
-vr::Vec2f expected_uv(const vr::Vec3f& world, const vr::Vec3f& t,
+// The shader's projection + atlas-UV math, so the test predicts the exact uv0 a
+// visible vertex must receive. world -> camera is R^T (world - t) with R (the
+// camera axes) and t read from cam.cam_to_world -- the rigid inverse the shader
+// computes -- so this handles a rotated pose, not only translation; pinhole
+// u = fx*x/z + cx; then the +0.5 half-texel normalized by the image size and
+// clamped half a texel inside.
+vr::Vec2f expected_uv(const vr::Vec3f& world,
                       const vol::DepthCameraParams& cam) {
-  const vr::Vec3f p = world - t;
+  const vr::Vec3f d = world - vr::Vec3f(cam.cam_to_world[3]);
+  const vr::Vec3f cam_x(cam.cam_to_world[0]);  // camera X axis in world
+  const vr::Vec3f cam_y(cam.cam_to_world[1]);  // camera Y axis in world
+  const vr::Vec3f cam_z(cam.cam_to_world[2]);  // camera Z axis in world
+  // R^T (world - t): the rows of R^T are the columns of R (the camera axes).
+  const vr::Vec3f p(vr::dot(cam_x, d), vr::dot(cam_y, d), vr::dot(cam_z, d));
   const float u = cam.fx * (p.x / p.z) + cam.cx;
   const float v = cam.fy * (p.y / p.z) + cam.cy;
   const float w = static_cast<float>(cam.width);
@@ -147,10 +160,9 @@ int main() {
   CHECK(texturer.texture(mesh, depth.data(), cam).ok());
 
   // Triangle A: every vertex textured with the exact projected atlas UV.
-  const vr::Vec3f no_t(0.0f, 0.0f, 0.0f);
   for (int i = 0; i < 3; ++i) {
     const vr::Vec2f uv = mesh.vertices[i].uv0;
-    const vr::Vec2f want = expected_uv(mesh.vertices[i].position, no_t, cam);
+    const vr::Vec2f want = expected_uv(mesh.vertices[i].position, cam);
     CHECK(!is_sentinel(uv));
     CHECK(uv.x > 0.0f && uv.x < 1.0f && uv.y > 0.0f && uv.y < 1.0f);
     CHECK(approx(uv.x, want.x, 1e-5f) && approx(uv.y, want.y, 1e-5f));
@@ -187,18 +199,117 @@ int main() {
   CHECK(texturer.texture(mesh2, depth.data(), cam_t).ok());
   for (int i = 0; i < 3; ++i) {
     const vr::Vec2f uv = mesh2.vertices[i].uv0;
-    const vr::Vec2f want = expected_uv(mesh2.vertices[i].position, t, cam_t);
-    const vr::Vec2f ident =
-        expected_uv(mesh2.vertices[i].position, no_t, cam_t);
+    const vr::Vec2f want = expected_uv(mesh2.vertices[i].position, cam_t);
+    // The same vertex through the un-translated (identity) camera, for the
+    // shifted-left comparison.
+    const vr::Vec2f ident = expected_uv(mesh2.vertices[i].position, cam);
     CHECK(!is_sentinel(uv));
     CHECK(approx(uv.x, want.x, 1e-5f) && approx(uv.y, want.y, 1e-5f));
     CHECK(uv.x < ident.x);  // shifted left by the +X camera translation
   }
 
+  // Occlusion-threshold discrimination: with the 1 m depth map, a triangle a
+  // small distance IN FRONT of the surface is textured iff that distance is
+  // within occlusion_threshold. The visible triangle above sat exactly on the
+  // surface (|d - zc| = 0), which passes for any threshold >= 0; these cases
+  // pin the threshold to a nonzero value and prove it is actually consulted.
+  auto near_axis_tri = [](float z) {
+    rmesh::Mesh m;
+    m.vertices = {vtx(-0.02f, -0.02f, z), vtx(0.02f, -0.02f, z),
+                  vtx(0.0f, 0.02f, z)};
+    m.indices = {0, 1, 2};
+    return m;
+  };
+  // z = 1.015 m -> |1.0 - 1.015| = 0.015 < the 0.02 default -> textured.
+  rmesh::Mesh mesh_in = near_axis_tri(1.015f);
+  CHECK(texturer.texture(mesh_in, depth.data(), cam).ok());
+  for (int i = 0; i < 3; ++i) {
+    CHECK(!is_sentinel(mesh_in.vertices[i].uv0));
+  }
+  // z = 1.03 m -> 0.03 > 0.02 -> occluded (a broken/zeroed threshold would fail
+  // here by texturing it).
+  rmesh::Mesh mesh_out = near_axis_tri(1.03f);
+  CHECK(texturer.texture(mesh_out, depth.data(), cam).ok());
+  for (int i = 0; i < 3; ++i) {
+    CHECK(is_sentinel(mesh_out.vertices[i].uv0));
+  }
+  // z = 1.015 m again, but an explicit tighter 0.01 threshold -> 0.015 > 0.01
+  // -> occluded, proving the threshold argument is honoured.
+  rmesh::Mesh mesh_tight = near_axis_tri(1.015f);
+  CHECK(texturer.texture(mesh_tight, depth.data(), cam, 0.01f).ok());
+  for (int i = 0; i < 3; ++i) {
+    CHECK(is_sentinel(mesh_tight.vertices[i].uv0));
+  }
+
+  // Rotated pose: rotate the camera 90 deg about world +Y so it looks down
+  // world +X (camera +Z axis -> world +X). This exercises the R^T rotation the
+  // shader applies, which the identity-rotation poses above leave untested. A
+  // point 2 m along +X is straight ahead (projects to the principal point); a
+  // +Z world offset maps to -X in camera space (u shifts left). The
+  // principal-point assertion is hand-computed, independent of expected_uv's
+  // own formula.
+  rmesh::Mesh mesh3;
+  mesh3.vertices = {vtx(2.0f, 0.0f, 0.0f), vtx(2.0f, 0.1f, 0.0f),
+                    vtx(2.0f, 0.0f, 0.1f)};
+  mesh3.indices = {0, 1, 2};
+  vol::DepthCameraParams cam_r = cam;
+  cam_r.cam_to_world = vr::Mat4f(1.0f);
+  cam_r.cam_to_world[0] =
+      vr::Vec4f(0.0f, 0.0f, -1.0f, 0.0f);  // camX -> world -Z
+  cam_r.cam_to_world[1] =
+      vr::Vec4f(0.0f, 1.0f, 0.0f, 0.0f);  // camY -> world +Y
+  cam_r.cam_to_world[2] =
+      vr::Vec4f(1.0f, 0.0f, 0.0f, 0.0f);  // camZ -> world +X
+  std::vector<float> depth_2m(depth.size(),
+                              2.0f);  // all three vertices at zc=2m
+  CHECK(texturer.texture(mesh3, depth_2m.data(), cam_r).ok());
+  CHECK(!is_sentinel(mesh3.vertices[0].uv0));
+  CHECK(approx(mesh3.vertices[0].uv0.x, (320.0f + 0.5f) / 640.0f, 1e-5f));
+  CHECK(approx(mesh3.vertices[0].uv0.y, (240.0f + 0.5f) / 480.0f, 1e-5f));
+  for (int i = 0; i < 3; ++i) {
+    const vr::Vec2f uv = mesh3.vertices[i].uv0;
+    const vr::Vec2f want = expected_uv(mesh3.vertices[i].position, cam_r);
+    CHECK(!is_sentinel(uv));
+    CHECK(approx(uv.x, want.x, 1e-5f) && approx(uv.y, want.y, 1e-5f));
+  }
+  // World +Z maps to camera -X, so the +Z vertex sits left of the on-axis one.
+  CHECK(mesh3.vertices[2].uv0.x < mesh3.vertices[0].uv0.x);
+
+  // Depth discontinuity: a foreground vertex projecting onto a depth edge must
+  // texture via the nearest-tap fallback, not be rejected by a blended fg/bg
+  // depth. Depth is 1 m for columns < 330 and 3 m beyond (a vertical edge at
+  // col 330). A foreground (z = 1 m) triangle has one vertex projecting to
+  // u ~ 329.3 -- its 2x2 taps straddle the edge (1 m and 3 m) -- and two safely
+  // on the fg side. Without the discontinuity guard the straddling vertex
+  // samples the ~1.6 m blend (|1.6 - 1| = 0.6 > 0.02) and the whole triangle
+  // drops to the sentinel; with it, the sampler returns the nearest 1 m tap and
+  // the triangle textures.
+  std::vector<float> depth_edge(depth.size(), 1.0f);
+  for (std::uint32_t y = 0; y < cam.height; ++y) {
+    for (std::uint32_t x = 330; x < cam.width; ++x) {
+      depth_edge[static_cast<std::size_t>(y) * cam.width + x] = 3.0f;
+    }
+  }
+  // u = fx*x/z + cx = 500*x + 320 at z = 1: x = 0.0186 -> u ~ 329.3
+  // (straddles); x = 0.010 -> u = 325 (fg side). v ~ cy so the taps stay on
+  // those columns.
+  rmesh::Mesh mesh_edge;
+  mesh_edge.vertices = {vtx(0.0186f, 0.0f, 1.0f), vtx(0.010f, 0.004f, 1.0f),
+                        vtx(0.010f, -0.004f, 1.0f)};
+  mesh_edge.indices = {0, 1, 2};
+  CHECK(texturer.texture(mesh_edge, depth_edge.data(), cam).ok());
+  for (int i = 0; i < 3; ++i) {
+    CHECK(!is_sentinel(mesh_edge.vertices[i].uv0));
+  }
+
   std::printf(
       "recon texture projective test passed: 1 triangle textured with exact "
       "projected UVs, occluded + behind-camera triangles kept the sentinel, a "
-      "closer depth map reverted the textured triangle, and a translated pose "
-      "shifted the projection\n");
+      "closer depth map reverted the textured triangle, a translated pose "
+      "shifted the projection, the occlusion threshold discriminated a "
+      "within-tolerance offset (and honoured an explicit tighter threshold), a "
+      "rotated pose projected through R^T to hand-computed pixels, and a depth "
+      "discontinuity textured a foreground vertex via the nearest-tap "
+      "fallback\n");
   return 0;
 }
