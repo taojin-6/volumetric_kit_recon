@@ -144,6 +144,18 @@ vr_target_warnings(recon_mesh_marching_cubes_sparse_test)
 add_test(NAME recon_mesh_marching_cubes_sparse
          COMMAND recon_mesh_marching_cubes_sparse_test)
 
+# texture projective: texture a mesh of three triangles (one the camera sees
+# head-on, one occluded by a closer depth reading, one behind the camera) and
+# verify the visible triangle gets the exact projected atlas UVs while the
+# others keep the (-1,-1) sentinel; a closer depth map reverts the textured
+# triangle, and a translated pose shifts the projection (the world->camera
+# transform). Skips (exit 0) where no device is present.
+add_executable(recon_texture_projective_test texture_projective_test.cpp)
+target_link_libraries(recon_texture_projective_test
+                      PRIVATE volumetric_kit::recon_texture Vulkan::Vulkan)
+vr_target_warnings(recon_texture_projective_test)
+add_test(NAME recon_texture_projective COMMAND recon_texture_projective_test)
+
 # core device seam: Instance + Device create/adopt. Links recon_core, which now
 # carries the Vulkan headers/loader. Skips at runtime where no compute device is
 # present.

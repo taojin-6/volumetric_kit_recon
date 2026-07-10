@@ -35,8 +35,9 @@ conventions and Vulkan setup.
   Deliberately *not* the `VK_` prefix — that belongs to Vulkan. (The prior
   engine's `VK_DEVICE_HOST`-style macros are renamed `VR_*` on port.)
 - CMake: `find_package(volumetric_kit_recon)`; component targets
-  `volumetric_kit::recon_core`, `…_volume`, `…_tsdf`, `…_mesh`, `…_interop`
-  (+ later `…_compress`, `…_sensor`, `…_track`, `…_codec`, `…_stream`); umbrella
+  `volumetric_kit::recon_core`, `…_volume`, `…_tsdf`, `…_mesh`, `…_texture`,
+  `…_interop` (+ later `…_compress`, `…_sensor`, `…_track`, `…_codec`,
+  `…_stream`); umbrella
   alias `volumetric_kit::recon`.
 
 ## Architecture (tiered)
@@ -44,8 +45,8 @@ conventions and Vulkan setup.
 Strict left-to-right dependency rule: a tier may depend only on tiers to its
 left. No upward includes.
 
-`core` → `volume` → `tsdf` → `mesh` → `interop` (later: `compress`, `sensor`,
-`track`, `codec`, `stream`).
+`core` → `volume` → `tsdf` → `mesh` → `texture` → `interop` (later: `compress`,
+`sensor`, `track`, `codec`, `stream`).
 
 - **`core`** — the Vulkan foundation, mirroring `volumetric_kit_gfx`'s core:
   instance, device (compute + transfer queues), VMA allocator, RAII buffer/image,
@@ -61,6 +62,9 @@ left. No upward includes.
 - **`tsdf`** — TSDF integration compute shaders (classic + dynamic).
 - **`mesh`** — marching-cubes compute shaders, host mesh containers, and
   OBJ/PLY + glTF/GLB export.
+- **`texture`** — projective texturing: fills the mesh's per-vertex `uv0` with a
+  posed camera's image coordinates where it has line of sight (per-vertex-color
+  fallback elsewhere), a compute pass.
 - **`interop`** — the handoff to `volumetric_kit_gfx` (below).
 
 ## Locked decisions
@@ -193,7 +197,13 @@ Each dated; newest context wins. Change the decision *and* this list together.
   can be generalized against, rather than over-fitting one now. The caller still
   declares each shader's binding count by hand, so this answers the 2026-07-05
   "revisit reflection" note with a builder, not reflection — the tier still
-  vendors only VMA.
+  vendors only VMA. (2026-07-08: the other per-tier duplicates the same decision
+  flagged — the dispatch group-count ceil-divide and the host-visible
+  storage-buffer create/upload helpers, copied verbatim into every tier — moved
+  to `core/compute_util.hpp` (`group_count` / `storage_buffer` /
+  `upload_storage_buffer`) once the `texture` tier would have been the fourth
+  copy; `texture` consumes them now, and the `volume` / `tsdf` / `mesh` copies
+  migrate next — a mechanical follow-up, greppable `TODO(core)`.)
 - **2026-07-06 — Hybrid color renders through a gfx pipeline (amends "interop
   seam A needs zero gfx changes").** The renderer's shipped PBR path is
   texture-only and ignores per-vertex `color`, so `volumetric_kit_gfx` grew a
@@ -241,6 +251,47 @@ Each dated; newest context wins. Change the decision *and* this list together.
   gfx renders on its own), not the zero-copy shared `VkDevice` (that stays the
   `shared_device_bootstrap`'s concern).
 
+- **2026-07-07 — Projective texturing is a new `texture` tier; live
+  single-camera first.** Filling the mesh `Vertex::uv0` (the atlas coordinate the
+  2026-07-06 hybrid-colour decision reserved) lands as a **new `texture` tier**
+  between `mesh` and `interop`, not a `mesh` add-on: it is a distinct pass over a
+  mesh + a posed camera that depends on `volume` (`DepthCameraParams` + the
+  `project_to_image` ABI) as well as `mesh`, mirroring the prior engine's
+  separate `projective_texturing` module. The first slice is **live,
+  single-camera** (chosen over a post-scan multi-keyframe atlas): one thread per
+  triangle projects its three vertices into the current frame's camera and keeps
+  the triangle only when all three are in front, in-frame, and **unoccluded** —
+  their projected depth agrees with the frame's depth map within an occlusion
+  threshold (default 0.02 m), the *line-of-sight* test. A kept triangle's
+  vertices get `uv0 = (pixel + 0.5)/size` (the prior engine's half-texel atlas
+  UV, no y-flip); the rest get the `(-1,-1)` sentinel, so gfx's
+  `HybridMeshPipeline` textures where a camera saw the surface and falls back to
+  the fused voxel colour elsewhere — and every call **overwrites** `uv0`, so a
+  triangle that leaves the view reverts to the fallback. The atlas is just the
+  camera image the caller binds (single-camera: no packing, no per-texel baking,
+  full sensor resolution), so **keyframe retention is unneeded** — the current
+  frame *is* the atlas. The prior engine's multi-camera score + winner-take-all
+  vertex atomic are **dropped here**: one camera needs no ranking, and the mesh
+  tier's independent triangles (no shared vertices) let each thread own its three
+  `uv0` writes. A later slice restores both for a post-scan multi-keyframe atlas
+  (best-of-N view, packed atlas, the Metal two-step 32-bit atomic once a dedup
+  slice shares vertices). Ported faithfully from
+  `implicit_world_reconstruction`'s `projective_texturing` (the Metal kernel
+  shape); `texture_common.glsl`'s projection mirrors `tsdf_common.glsl`'s
+  `project_pinhole`. The occlusion depth sampler shares the tsdf sampler's
+  *intent* — bilinear with hole renormalisation, plus a **depth-discontinuity
+  fallback** to the nearest tap (keyed to `occlusion_threshold`, since this tier
+  carries no `trunc_dist`) so a foreground vertex on a silhouette is not rejected
+  by a blended foreground/background depth — but is **integer-centred** (no −0.5
+  tap shift), matching this tier's integer-centred projection and half-texel
+  atlas UV rather than the tsdf sampler's texture-centred convention (the
+  2026-07-06 depth-sampling decision); the two are self-consistent within their
+  own tier. The kernel bounds its `indices → vertices` addressing with a
+  `num_vertices` push constant (a malformed/loaded mesh whose index is out of
+  range is skipped, not an out-of-bounds SSBO write), and the host rejects a
+  vertex/index/depth buffer past `maxStorageBufferRange` with a clean `Status`
+  (the mesh tier's arena guard).
+
 ## Provenance & salvage policy
 
 The algorithms here are a clean re-implementation of the proven core of the
@@ -287,7 +338,9 @@ Two contracts — both simpler now that recon and gfx are both Vulkan.
   mismatches: merge the prior engine's two-stream vertex into one interleaved
   layout, synthesize `tangent`, widen `color` to vec4, `int32`→`uint32` indices,
   bake a per-triangle atlas into per-vertex `uv0` + a `Material` texture (gfx has
-  no per-triangle UV). The triangle-mesh path is the first milestone — a
+  no per-triangle UV; the `texture` tier now fills `uv0` for the live
+  single-camera case — see the 2026-07-07 decision). The triangle-mesh path is
+  the first milestone — a
   `PointCloud` handoff waits on gfx growing a point-splat pipeline (it renders
   only meshes today).
 - **B — Shared Vulkan resources (zero-copy; the live target).** recon writes the
@@ -477,6 +530,36 @@ gates every cell out) on MoltenVK — the exact-count equivalence being the
 cross-block-addressing proof. `mesh` depends only on the `volume` tier (to its
 left, so the strict dependency rule holds).
 
+The first **`texture` tier** slice — **live projective texturing** — fills the
+mesh appearance the 2026-07-06 hybrid-colour path reserved. `ProjectiveTexturer`
+(`texture/projective_texturer.hpp`) takes a `mesh::Mesh` + one posed frame's
+depth + `volume::DepthCameraParams` and rewrites every `Vertex::uv0` via
+`texture/shaders/texture_score.comp`: one thread per triangle projects its three
+vertices into the camera (`project_to_image` mirrors `tsdf_common.glsl`'s
+`project_pinhole`; the bilinear occlusion sampler shares the tsdf sampler's
+intent — hole renormalisation + a depth-discontinuity fallback to the nearest
+tap — but is integer-centred, see the 2026-07-07 decision) and keeps the
+triangle only when all three are in front, in-frame, and unoccluded (projected
+depth within an occlusion threshold of the sensor depth — the line-of-sight
+test), writing `uv0 = (pixel + 0.5)/size` (the prior engine's half-texel atlas
+UV) or the `(-1,-1)` sentinel otherwise. A `num_vertices` push constant bounds
+the shader's `indices → vertices` addressing (a malformed mesh's out-of-range
+index is skipped, not an OOB write), and the host rejects a vertex/index/depth
+buffer past `maxStorageBufferRange`. The caller binds the frame's own image
+(registered to the depth camera) as the renderer atlas, so gfx's
+`HybridMeshPipeline` textures where a camera saw the surface and falls back to
+fused voxel colour elsewhere (the 2026-07-07 decision). No score / winner-take-
+all atomic (single camera; independent triangles).
+`tests/texture_projective_test.cpp` textures a three-triangle mesh
+(visible / depth-occluded / behind-camera) and checks the exact projected UVs,
+the sentinel fallback, that a closer depth reverts a textured triangle, and that
+a translated pose shifts the projection; plus that the occlusion threshold
+discriminates a small within-tolerance offset from an out-of-tolerance one (and
+honours an explicit tighter threshold), that a **rotated** pose projects through
+`Rᵀ` to hand-computed pixels, and that a depth **discontinuity** across the
+bilinear taps textures a foreground vertex via the nearest-tap fallback — on
+MoltenVK.
+
 The **`examples/`** harness runs the vertical slice end-to-end on real data:
 `fuse_replica` (`examples/fuse_replica/`) reads a posed Replica-SLAM RGB-D
 sequence (nvblox's `fuse_replica` layout — `results/frameNNNNNN.jpg` +
@@ -502,8 +585,11 @@ sentinel so the hybrid shader takes the per-vertex-colour path). Verified: the
 follow-camera render is a correct first-person room view, and the live window
 runs the fly-through.
 
-Next (`mesh` side, greppable `TODO`s): shared-vertex dedup + the incremental
-block-mesh
+Next: wire the `texture` tier into the now-landed viewer — per frame, texture the
+growing mesh with the current keyframe and bind that frame's image as the
+`HybridMeshPipeline` atlas, so the surface in view renders at full sensor
+resolution while the rest shows fused voxel colour. On the `mesh` side (greppable
+`TODO`s): shared-vertex dedup + the incremental block-mesh
 pool, and first-class **glTF/GLB export via tinygltf** (the same reader gfx's
 `load_gltf` uses, so the seam is one shared glTF implementation across both
 siblings) + the gfx-vertex converter (interop seam A). The example's coloured

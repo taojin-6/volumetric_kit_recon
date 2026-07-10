@@ -1,0 +1,177 @@
+#version 450
+
+// Projective texturing, single-camera (live line-of-sight) slice. One thread per
+// triangle: project the triangle's three world-space vertices into the posed
+// camera and keep it only when all three are in front, inside the image, and
+// unoccluded (their projected depth agrees with the sensor depth map within
+// pc.occlusion_threshold). A kept triangle's vertices get a normalized atlas UV
+// (the camera image the caller binds as the atlas); a rejected triangle's
+// vertices get the (-1,-1) sentinel, so the renderer falls back to per-vertex
+// color -- and, because every call overwrites uv0, a triangle that leaves the
+// view reverts to that fallback.
+//
+// Ported from the prior engine's scoreTrianglesKernel + writeTriangleUVsKernel
+// (projective_mapping.cu / projective_texturing.metal): the per-vertex
+// bounds + bilinear-depth occlusion test, and camera_uv_to_atlas_uv's +0.5
+// half-texel and half-texel clamp. The multi-camera score + winner-take-all
+// atomic collapse away here: one camera means no ranking, and the mesh tier's
+// independent triangles (no shared vertices) mean each thread owns its three
+// uv0 writes outright -- no atomicMax key. (A later multi-keyframe slice
+// restores the score + the Metal two-step 32-bit atomic once vertices are
+// shared.)
+
+#extension GL_GOOGLE_include_directive : require
+#include "texture_common.glsl"
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0, scalar) buffer Vertices { Vertex vertices[]; };
+layout(set = 0, binding = 1, scalar) readonly buffer Indices { uint indices[]; };
+layout(set = 0, binding = 2, scalar) readonly buffer Depth { float depth[]; };
+layout(set = 0, binding = 3, scalar) readonly buffer Camera {
+  DepthCameraParams cam;
+};
+
+// Bilinear depth sample at pixel (u, v), in metres, excluding invalid (<= 0)
+// taps from the blend and renormalizing by the surviving weight -- so a hole
+// (sensor no-return, 0) next to a valid reading does not pull the result toward
+// 0 and cause a false occlusion. When the valid taps straddle a depth
+// discontinuity (their range exceeds occlusion_threshold), the 2x2 spans a
+// foreground/background surface edge and blending would yield a phantom
+// mid-depth that fails the occlusion test on a genuinely visible foreground
+// vertex; fall back to the nearest (max-weight) valid tap instead, the same
+// intent as tsdf_integrate.comp's discontinuity guard (keyed here to the
+// occlusion tolerance -- the scale at which the blend must be trustworthy --
+// since this tier carries no trunc_dist). Sampling is integer-centred, matching
+// this tier's integer-centred projection (u = fx*x/z + cx) and half-texel atlas
+// UV; it deliberately does NOT copy the tsdf sampler's -0.5 texture-centred tap
+// shift, which is self-consistent only with that tier's texture-centred
+// convention (CLAUDE.md, the 2026-07-06 depth-sampling decision). Ported in
+// spirit from the prior engine's sample_depth_bilinear_m (our depth is already
+// float metres, so there is no uint16 depth-scale divide). Returns 0.0 when all
+// four taps are invalid; occluded_ok's range check then rejects it.
+float sample_depth(float u, float v) {
+  int w = int(cam.width);
+  int h = int(cam.height);
+  float cu = clamp(u, 0.0, float(w - 1));
+  float cv = clamp(v, 0.0, float(h - 1));
+  int x0 = int(floor(cu));
+  int y0 = int(floor(cv));
+  int x1 = min(x0 + 1, w - 1);
+  int y1 = min(y0 + 1, h - 1);
+  float tx = cu - float(x0);
+  float ty = cv - float(y0);
+
+  float d00 = depth[y0 * w + x0];
+  float d10 = depth[y0 * w + x1];
+  float d01 = depth[y1 * w + x0];
+  float d11 = depth[y1 * w + x1];
+  float wts[4] = float[4]((1.0 - tx) * (1.0 - ty), tx * (1.0 - ty),
+                          (1.0 - tx) * ty, tx * ty);
+  float sm[4] = float[4](d00, d10, d01, d11);
+
+  // One pass: blend the valid (> 0) taps, and track their range [lo, hi] and the
+  // nearest (max-weight) valid tap for the discontinuity fallback.
+  float total = 0.0;
+  float result = 0.0;
+  float lo = 3.4e38;  // ~FLT_MAX; first valid tap lowers it
+  float hi = 0.0;     // depths are positive; first valid tap raises it
+  float d_near = 0.0;
+  float best_w = -1.0;
+  for (int i = 0; i < 4; i++) {
+    if (sm[i] > 0.0) {  // a comparison with NaN is false, so NaN taps drop too
+      result += wts[i] * sm[i];
+      total += wts[i];
+      lo = min(lo, sm[i]);
+      hi = max(hi, sm[i]);
+      if (wts[i] > best_w) {
+        best_w = wts[i];
+        d_near = sm[i];
+      }
+    }
+  }
+  if (total <= 0.0) {
+    return 0.0;  // no valid tap; occluded_ok's range check rejects this
+  }
+  if ((hi - lo) > pc.occlusion_threshold) {
+    return d_near;  // depth discontinuity: nearest tap, do not blend fg + bg
+  }
+  return result / total;
+}
+
+// True when the sensor surface at `px` sits within occlusion_threshold of the
+// vertex's camera-space depth `zc` -- i.e. the vertex is on the visible surface,
+// not hidden behind nearer geometry. Uses a 1-px inset so the bilinear taps
+// never straddle the image border (the prior engine's occlusion-bounds margin),
+// and rejects a hole / NaN / inf / out-of-range depth via the sensor range (the
+// negated compare drops non-finite depth).
+bool occluded_ok(vec2 px, float zc) {
+  if (px.x < 1.0 || px.x >= float(int(cam.width) - 1) || px.y < 1.0 ||
+      px.y >= float(int(cam.height) - 1)) {
+    return false;
+  }
+  float d = sample_depth(px.x, px.y);
+  if (!(d >= cam.min_depth && d <= cam.max_depth)) {
+    return false;  // hole / non-finite / out-of-range: no line of sight proof
+  }
+  return abs(d - zc) <= pc.occlusion_threshold;
+}
+
+// pixel coords -> normalized atlas UV. The atlas is the camera image itself
+// (single-camera slice: atlas_x_offset 0, atlas dims == image dims), so the
+// prior engine's camera_uv_to_atlas_uv reduces to a +0.5 half-texel (pixel
+// centre -> texel) normalized by the image size, clamped half a texel inside
+// the border to stop bilinear bleed at the atlas edge. No y-flip.
+vec2 pixel_to_atlas_uv(vec2 px) {
+  float w = float(cam.width);
+  float h = float(cam.height);
+  float u = (px.x + 0.5) / w;
+  float v = (px.y + 0.5) / h;
+  float u_min = 0.5 / w;
+  float v_min = 0.5 / h;
+  u = clamp(u, u_min, 1.0 - u_min);
+  v = clamp(v, v_min, 1.0 - v_min);
+  return vec2(u, v);
+}
+
+void main() {
+  uint tri = gl_GlobalInvocationID.x;
+  if (tri >= pc.num_triangles) {
+    return;
+  }
+  uint i0 = indices[tri * 3 + 0];
+  uint i1 = indices[tri * 3 + 1];
+  uint i2 = indices[tri * 3 + 2];
+  // Guard an out-of-range index before it addresses vertices[]: the kernel both
+  // reads .position and writes .uv0 through it, so a malformed mesh (an index
+  // past the vertex count -- e.g. a loaded/dedup'd mesh, not the mesh tier's
+  // iota) would otherwise be an out-of-bounds SSBO access. Skip such a triangle
+  // (leave its vertices untouched) rather than corrupt memory.
+  if (i0 >= pc.num_vertices || i1 >= pc.num_vertices || i2 >= pc.num_vertices) {
+    return;
+  }
+
+  // Project all three vertices; a triangle is textured only if every vertex is
+  // in front, in the image, and unoccluded (the prior engine's all-3-vertices
+  // gate -- one failing vertex aborts the triangle).
+  vec2 px0, px1, px2;
+  float z0, z1, z2;
+  bool visible = project_to_image(cam, vertices[i0].position, px0, z0) &&
+                 project_to_image(cam, vertices[i1].position, px1, z1) &&
+                 project_to_image(cam, vertices[i2].position, px2, z2) &&
+                 occluded_ok(px0, z0) && occluded_ok(px1, z1) &&
+                 occluded_ok(px2, z2);
+
+  if (!visible) {
+    // Not in this camera's line of sight -> per-vertex color fallback. Written
+    // (not left) so a re-texture resets a triangle that has left the view.
+    vec2 sentinel = vec2(-1.0, -1.0);
+    vertices[i0].uv0 = sentinel;
+    vertices[i1].uv0 = sentinel;
+    vertices[i2].uv0 = sentinel;
+    return;
+  }
+  vertices[i0].uv0 = pixel_to_atlas_uv(px0);
+  vertices[i1].uv0 = pixel_to_atlas_uv(px1);
+  vertices[i2].uv0 = pixel_to_atlas_uv(px2);
+}

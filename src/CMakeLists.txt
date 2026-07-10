@@ -13,6 +13,10 @@ add_subdirectory(volumetric_kit/recon/tsdf)
 # mesh reads the volume voxel payload directly (proven against a dense analytic
 # SDF), so it depends on volume, not tsdf.
 add_subdirectory(volumetric_kit/recon/mesh)
+# texture fills the mesh uv0 by projecting a posed camera onto it; it depends on
+# mesh (the Mesh it textures) + volume (DepthCameraParams + the projection ABI),
+# both to its left, so the strict dependency rule holds.
+add_subdirectory(volumetric_kit/recon/texture)
 # TODO: add_subdirectory() for interop as that tier lands.
 
 # --- recon: umbrella alias --------------------------------------------------
@@ -20,7 +24,7 @@ add_subdirectory(volumetric_kit/recon/mesh)
 add_library(recon INTERFACE)
 add_library(volumetric_kit::recon ALIAS recon)
 target_link_libraries(recon INTERFACE recon_core recon_volume recon_tsdf
-                                      recon_mesh)
+                                      recon_mesh recon_texture)
 
 # --- Install / export -------------------------------------------------------
 # Tiers install their own targets into volumetric_kit_reconTargets and their own
