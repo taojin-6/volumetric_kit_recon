@@ -573,26 +573,37 @@ room0 (400 frames) — a coherent ~4 m metric room with plausible surface colour
 ~60 fps on MoltenVK.
 
 The gfx-linked **viewer examples** (`examples/viewer/`, behind the off-by-default
-`VR_BUILD_VIEWER` — the 2026-07-07 opt-in-gfx decision) render the coloured
-reconstruction through `volumetric_kit_gfx`'s `HybridMeshPipeline`: `fuse_render`
-fuses a sequence and writes a colour **PNG** headlessly (a gfx `OffscreenTarget`,
-CI-runnable), and `fuse_viewer` opens a **live window** — the nvblox
-`FuserVisualizer` analogue — fusing on a background thread while the render thread
-draws the growing mesh each frame following the capture trajectory (a host-mesh
-handoff, interop seam A; two devices). `recon_gfx_bridge.hpp` converts
-`mesh::Vertex → gfx::assets::Vertex` (synthesizing `tangent`, keeping the `uv0`
-sentinel so the hybrid shader takes the per-vertex-colour path). Verified: the
-follow-camera render is a correct first-person room view, and the live window
-runs the fly-through.
+`VR_BUILD_VIEWER` — the 2026-07-07 opt-in-gfx decision) render the coloured,
+**projectively textured** reconstruction through `volumetric_kit_gfx`'s
+`HybridMeshPipeline`: `fuse_render` fuses a sequence and writes a colour **PNG**
+headlessly (a gfx `OffscreenTarget`, CI-runnable), and `fuse_viewer` opens a
+**live window** — the nvblox `FuserVisualizer` analogue — fusing on a background
+thread while the render thread draws the growing mesh each frame following the
+capture trajectory (a host-mesh handoff, interop seam A; two devices). Both run
+the `texture` tier: `fuse_render` projects one keyframe (the `--follow` frame,
+else the middle fused frame) onto the final mesh and binds that frame's image as
+the atlas; `fuse_viewer` re-textures the growing mesh with the **current**
+keyframe on every remesh (on the fuse thread, before the host-mesh conversion)
+and swaps in that frame's image as the atlas in lockstep with the mesh version —
+a per-slot atlas **ring** realising the gfx device-adopt decision's "per-slot
+atlas ringing", each atlas version carrying its own descriptor pool so one bound
+by an in-flight frame outlives its replacement. `--no-texture` A/Bs both against
+the pure vertex-colour path. `recon_gfx_bridge.hpp` converts `mesh::Vertex →
+gfx::assets::Vertex` (synthesizing `tangent`, passing `uv0` through — a real
+atlas coordinate where a keyframe textured, else the `(-1,-1)` sentinel that
+takes the per-vertex-colour path). Verified: the untextured follow-camera render
+is a correct first-person room view and the live window runs the fly-through;
+`fuse_render` texturing sharpens the frame-200 first-person view (crisp rug /
+pillow / window mullions) where `--no-texture` is soft at 2 cm voxels.
 
-Next: wire the `texture` tier into the now-landed viewer — per frame, texture the
-growing mesh with the current keyframe and bind that frame's image as the
-`HybridMeshPipeline` atlas, so the surface in view renders at full sensor
-resolution while the rest shows fused voxel colour. On the `mesh` side (greppable
-`TODO`s): shared-vertex dedup + the incremental block-mesh
-pool, and first-class **glTF/GLB export via tinygltf** (the same reader gfx's
+Next: first-class **glTF/GLB export via tinygltf** (the same reader gfx's
 `load_gltf` uses, so the seam is one shared glTF implementation across both
-siblings) + the gfx-vertex converter (interop seam A). The example's coloured
-PLY dump is deliberately a throwaway (tinyply), not that first-class exporter —
-Assimp was considered and rejected as disproportionate (a large import-first lib
-gfx does not use; gfx vendors tinygltf + tinyobjloader).
+siblings) + the gfx-vertex converter (interop seam A) — the example's coloured
+PLY dump is deliberately a throwaway (tinyply), not that first-class exporter
+(Assimp was considered and rejected as disproportionate: a large import-first lib
+gfx does not use; gfx vendors tinygltf + tinyobjloader). On the `mesh` side
+(greppable `TODO`s): shared-vertex dedup + the incremental block-mesh pool. On
+the `texture` side, a later slice restores the multi-keyframe post-scan atlas
+(best-of-N view, packed atlas, the winner-take-all vertex atomic once dedup
+shares vertices) — the counterpart to the live single-camera path now wired end
+to end through both viewers.

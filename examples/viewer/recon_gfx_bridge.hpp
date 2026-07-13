@@ -28,7 +28,8 @@ namespace gassets = volumetric_kit::gfx::assets;
 /// recon's `Vertex{position, normal, color, uv0}` maps to gfx's
 /// `Vertex{position, normal, tangent, uv0, color}`: positions and normals are
 /// already world-space (what the hybrid pipeline consumes), `color` and `uv0`
-/// carry through unchanged -- crucially `uv0` stays recon's `(-1, -1)`
+/// carry through unchanged. `uv0` is whatever the texture tier left it: a real
+/// atlas coordinate on a triangle a keyframe textured, else recon's `(-1, -1)`
 /// sentinel, which the hybrid fragment shader reads as "no atlas, use the
 /// per-vertex color". `tangent` is synthesized to the glTF identity `(1, 0, 0,
 /// 1)`: the hybrid pipeline does not consume it, but the interleaved
@@ -44,7 +45,7 @@ inline gassets::Mesh to_gfx_mesh(const rmesh::Mesh& mesh) {
     v.position = in.position;
     v.normal = in.normal;
     v.tangent = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);  // unused; slot carried
-    v.uv0 = in.uv0;      // recon's (-1,-1) sentinel -> vertex-color path
+    v.uv0 = in.uv0;      // atlas coord where textured, else (-1,-1) sentinel
     v.color = in.color;  // per-vertex RGBA the TSDF tier fused
   }
   out.indices = mesh.indices;
