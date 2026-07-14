@@ -25,6 +25,8 @@
 #include <glm/glm.hpp>
 
 #include "dataset.hpp"  // vr_example::ReplicaDataset (recon examples/common)
+#include "example_camera.hpp"  // vr_example::make_depth_camera
+#include "image_io.hpp"        // vr_example::pack_color_rgba8
 #include "recon_gfx_bridge.hpp"
 
 // recon tiers
@@ -180,23 +182,7 @@ struct Reconstruction {
   std::vector<std::uint8_t> atlas;  // RGBA8, atlas_w * atlas_h * 4
   std::uint32_t atlas_w = 0;
   std::uint32_t atlas_h = 0;
-  int texture_frame = -1;  // trajectory frame used to texture (-1 = none)
 };
-
-vol::DepthCameraParams make_dcam(const vr_example::CameraModel& cam,
-                                 const glm::mat4& pose, float max_depth) {
-  vol::DepthCameraParams d{};
-  d.fx = cam.fx;
-  d.fy = cam.fy;
-  d.cx = cam.cx;
-  d.cy = cam.cy;
-  d.min_depth = 0.1f;
-  d.max_depth = max_depth;
-  d.width = cam.width;
-  d.height = cam.height;
-  d.cam_to_world = pose;
-  return d;
-}
 
 vr::Result<Reconstruction> fuse(const Options& opt,
                                 std::vector<glm::mat4>& poses) {
@@ -240,7 +226,7 @@ vr::Result<Reconstruction> fuse(const Options& opt,
     poses.push_back(frame.cam_to_world);
 
     const vol::DepthCameraParams dcam =
-        make_dcam(cam, frame.cam_to_world, opt.max_depth);
+        vr_example::make_depth_camera(cam, frame.cam_to_world, opt.max_depth);
     rtsdf::ColorCameraParams ccam{};
     ccam.fx = cam.fx;
     ccam.fy = cam.fy;
@@ -292,22 +278,14 @@ vr::Result<Reconstruction> fuse(const Options& opt,
     VR_ASSIGN(vr_example::RgbdFrame tf,
               dataset.load(static_cast<std::size_t>(tex_idx)));
     const vol::DepthCameraParams tdcam =
-        make_dcam(cam, tf.cam_to_world, opt.max_depth);
+        vr_example::make_depth_camera(cam, tf.cam_to_world, opt.max_depth);
     VR_TRY(texturer.texture(recon.mesh, tf.depth.data(), tdcam));
 
-    // Atlas = the keyframe's colour image, RGBA8 (packed R|G<<8|B<<16 ->
-    // R,G,B,255) at full resolution -- exactly what uv0 = pixel/size index.
-    recon.atlas.resize(static_cast<std::size_t>(cam.width) * cam.height * 4);
-    for (std::size_t p = 0; p < tf.color.size(); ++p) {
-      const std::uint32_t c = tf.color[p];
-      recon.atlas[p * 4 + 0] = static_cast<std::uint8_t>(c & 0xFFu);
-      recon.atlas[p * 4 + 1] = static_cast<std::uint8_t>((c >> 8) & 0xFFu);
-      recon.atlas[p * 4 + 2] = static_cast<std::uint8_t>((c >> 16) & 0xFFu);
-      recon.atlas[p * 4 + 3] = 255;
-    }
+    // Atlas = the keyframe's colour image as RGBA8 at full resolution --
+    // exactly what uv0 = (pixel + 0.5)/size index.
+    recon.atlas = vr_example::pack_color_rgba8(tf.color);
     recon.atlas_w = cam.width;
     recon.atlas_h = cam.height;
-    recon.texture_frame = tex_idx;
     std::printf("textured with frame %d (%ux%u atlas)\n", tex_idx, cam.width,
                 cam.height);
   }

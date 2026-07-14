@@ -39,6 +39,8 @@
 #include <glm/glm.hpp>
 
 #include "dataset.hpp"
+#include "example_camera.hpp"  // vr_example::make_depth_camera
+#include "image_io.hpp"        // vr_example::pack_color_rgba8
 #include "recon_gfx_bridge.hpp"
 
 #include "volumetric_kit/recon/core/allocator.hpp"
@@ -388,8 +390,6 @@ int run(GLFWwindow* window, const Options& opt) {
   std::mutex share_mtx;
   std::optional<vg::assets::Mesh> pending_mesh;  // newest mesh awaiting upload
   std::vector<std::uint8_t> pending_atlas;  // its keyframe RGBA8 (empty = none)
-  std::uint32_t pending_atlas_w = 0;
-  std::uint32_t pending_atlas_h = 0;
   std::uint64_t published_version = 0;
   std::vector<glm::mat4> shared_poses;  // trajectory, grows as frames fuse
   std::atomic<std::size_t> fused_count{0};
@@ -412,15 +412,7 @@ int run(GLFWwindow* window, const Options& opt) {
         if (texturer && depth != nullptr && !rm.vertices.empty()) {
           const vr::Status ts = texturer->texture(rm, depth, dcam);
           if (ts.ok()) {
-            atlas.resize(static_cast<std::size_t>(dcam.width) * dcam.height *
-                         4);
-            for (std::size_t p = 0; p < color.size(); ++p) {
-              const std::uint32_t c = color[p];
-              atlas[p * 4 + 0] = static_cast<std::uint8_t>(c & 0xFFu);
-              atlas[p * 4 + 1] = static_cast<std::uint8_t>((c >> 8) & 0xFFu);
-              atlas[p * 4 + 2] = static_cast<std::uint8_t>((c >> 16) & 0xFFu);
-              atlas[p * 4 + 3] = 255;
-            }
+            atlas = vr_example::pack_color_rgba8(color);
           } else {
             std::fprintf(stderr, "fuse_viewer: texture: %s\n",
                          ts.message().c_str());
@@ -430,14 +422,11 @@ int run(GLFWwindow* window, const Options& opt) {
         std::lock_guard<std::mutex> lk(share_mtx);
         pending_mesh = std::move(gm);
         pending_atlas = std::move(atlas);
-        pending_atlas_w = dcam.width;
-        pending_atlas_h = dcam.height;
         ++published_version;
       };
       // The newest fused frame, retained so the final extract (after the loop)
       // textures with the last keyframe rather than losing its texture.
       std::optional<vr_example::RgbdFrame> last_frame;
-      vol::DepthCameraParams last_dcam{};
       for (std::size_t i = 0; i < frame_count && !quit.load(); ++i) {
         auto fr =
             dataset.load(i);  // disk read + JPEG/PNG decode (the CPU cost)
@@ -447,16 +436,8 @@ int run(GLFWwindow* window, const Options& opt) {
           std::lock_guard<std::mutex> lk(share_mtx);
           shared_poses.push_back(frame.cam_to_world);
         }
-        vol::DepthCameraParams dcam{};
-        dcam.fx = cam.fx;
-        dcam.fy = cam.fy;
-        dcam.cx = cam.cx;
-        dcam.cy = cam.cy;
-        dcam.min_depth = 0.1f;
-        dcam.max_depth = opt.max_depth;
-        dcam.width = cam.width;
-        dcam.height = cam.height;
-        dcam.cam_to_world = frame.cam_to_world;
+        const vol::DepthCameraParams dcam = vr_example::make_depth_camera(
+            cam, frame.cam_to_world, opt.max_depth);
         rtsdf::ColorCameraParams ccam{};
         ccam.fx = cam.fx;
         ccam.fy = cam.fy;
@@ -511,7 +492,6 @@ int run(GLFWwindow* window, const Options& opt) {
                     frame.color);
         }
         // Retain this frame (the newest keyframe) for the final extract below.
-        last_dcam = dcam;
         last_frame = std::move(frame);
       }
       // Skip the full-volume final extract when the user has already quit, so
@@ -519,10 +499,19 @@ int run(GLFWwindow* window, const Options& opt) {
       if (!quit.load()) {
         auto m = extractor.extract(volume);  // final mesh
         if (m && !m.value().vertices.empty()) {
+          // Texture the final mesh with the last keyframe (its depth camera
+          // rebuilt from the retained frame), or leave it untextured if no
+          // frame ever fused.
           static const std::vector<std::uint32_t> kNoColor;
-          publish(std::move(m).value(),
-                  last_frame ? last_frame->depth.data() : nullptr, last_dcam,
-                  last_frame ? last_frame->color : kNoColor);
+          if (last_frame) {
+            publish(std::move(m).value(), last_frame->depth.data(),
+                    vr_example::make_depth_camera(cam, last_frame->cam_to_world,
+                                                  opt.max_depth),
+                    last_frame->color);
+          } else {
+            publish(std::move(m).value(), nullptr, vol::DepthCameraParams{},
+                    kNoColor);
+          }
         }
       }
     } catch (const std::exception& e) {
@@ -545,8 +534,6 @@ int run(GLFWwindow* window, const Options& opt) {
   std::uint64_t current_version = 0;          // version of current_mesh
   std::vector<std::uint8_t>
       current_atlas_px;  // its keyframe pixels (empty=none)
-  std::uint32_t current_atlas_w = 0;
-  std::uint32_t current_atlas_h = 0;
   std::vector<glm::mat4> poses;
   std::size_t view_frame = 0;
 
@@ -568,8 +555,6 @@ int run(GLFWwindow* window, const Options& opt) {
         pending_mesh.reset();
         current_atlas_px = std::move(pending_atlas);
         pending_atlas.clear();  // moved-from vector -> defined empty state
-        current_atlas_w = pending_atlas_w;
-        current_atlas_h = pending_atlas_h;
         current_version = published_version;
       }
       // Append only the new tail (shared_poses only grows) rather than
@@ -599,20 +584,24 @@ int run(GLFWwindow* window, const Options& opt) {
     // it has cycled (each release gated by begin_frame's per-slot fence wait),
     // so one upload safely feeds all slots.
     if (current_version != 0 && uploaded_version != current_version) {
-      auto gpu = vgp::upload_mesh(app.device(), app.allocator(), current_mesh);
-      if (gpu.ok()) {
-        current_gpu = std::make_shared<vgp::GpuMesh>(std::move(gpu).value());
-        // Swap in this mesh's atlas in lockstep: its keyframe image when it was
-        // textured, else the white dummy. Keep the previous atlas if the upload
-        // fails -- a bad atlas must not crash the viewer (the mesh still
-        // draws).
-        std::shared_ptr<AtlasVersion> next =
-            current_atlas_px.empty()
-                ? white_atlas
-                : build_atlas(current_atlas_px.data(), current_atlas_w,
-                              current_atlas_h);
-        if (next) current_atlas = std::move(next);
-        uploaded_version = current_version;
+      // Build this version's atlas first (its keyframe image, else the white
+      // dummy), then upload the mesh, and commit both together -- so the drawn
+      // mesh and the atlas its uv0 index into always come from the SAME
+      // version. A transient atlas- or mesh-upload failure leaves the previous
+      // coherent pair in place and retries next frame (the viewer keeps
+      // drawing), rather than binding a new mesh against a stale atlas.
+      std::shared_ptr<AtlasVersion> next =
+          current_atlas_px.empty()
+              ? white_atlas
+              : build_atlas(current_atlas_px.data(), cam.width, cam.height);
+      if (next) {
+        auto gpu =
+            vgp::upload_mesh(app.device(), app.allocator(), current_mesh);
+        if (gpu.ok()) {
+          current_gpu = std::make_shared<vgp::GpuMesh>(std::move(gpu).value());
+          current_atlas = std::move(next);
+          uploaded_version = current_version;
+        }
       }
     }
     // This slot adopts the latest mesh + its atlas, releasing whatever it drew
