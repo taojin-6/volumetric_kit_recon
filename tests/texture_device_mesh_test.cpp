@@ -1,0 +1,235 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Tao Jin
+
+// The device-resident mesh handoff: extract_device -> texture -> download must
+// produce exactly what the host path produces.
+//
+// Routing a mesh from the `mesh` tier to the `texture` tier through a host
+// Mesh costs a full readback and a full re-upload of the same bytes;
+// MarchingCubes::extract_device hands the texturer the buffers directly
+// instead. That is only worth anything if it is *identical*, so this compares
+// the two paths on one extraction:
+//
+//   extract_device      -> a device mesh
+//   download            -> an untextured host copy (uv0 = sentinel)
+//   texture(host copy)  -> the reference result (upload + readback)
+//   texture(device mesh)-> the same pass, in place, no transfer
+//   download            -> the result under test
+//
+// Both start from the same geometry in the same order, so the comparison is
+// exact and index-by-index -- no need to work around the nondeterministic
+// triangle order marching cubes' atomic append produces between two extracts.
+//
+// Needs a device, so the whole test skips (exit 0) where none is present.
+
+#include <cstdint>
+#include <cstdio>
+#include <utility>
+#include <vector>
+
+#include "volumetric_kit/recon/core/allocator.hpp"
+#include "volumetric_kit/recon/core/device.hpp"
+#include "volumetric_kit/recon/core/instance.hpp"
+#include "volumetric_kit/recon/mesh/marching_cubes.hpp"
+#include "volumetric_kit/recon/mesh/mesh.hpp"
+#include "volumetric_kit/recon/texture/projective_texturer.hpp"
+#include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
+
+namespace vr = volumetric_kit::recon;
+namespace vol = volumetric_kit::recon::volume;
+namespace mesh = volumetric_kit::recon::mesh;
+namespace rtex = volumetric_kit::recon::texture;
+
+#define CHECK(cond)                                                        \
+  do {                                                                     \
+    if (!(cond)) {                                                         \
+      std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
+      return 1;                                                            \
+    }                                                                      \
+  } while (0)
+
+namespace {
+
+constexpr int kBlock = 8;             // voxels per block edge
+constexpr int kBlocks = 4;            // blocks per axis
+constexpr int kN = kBlock * kBlocks;  // voxels per axis
+constexpr float kH = 0.05f;           // metres between voxels
+constexpr float kRadius = 0.5f;
+
+vr::Vec3f sphere_center() {
+  const float c = static_cast<float>(kN - 1) * 0.5f * kH;
+  return vr::Vec3f(c, c, c);
+}
+
+vol::VoxelGridParams sphere_grid_params() {
+  vol::VoxelGridParams grid{};
+  grid.voxel_size = kH;
+  grid.block_size = kBlock;
+  grid.voxels_per_block = kBlock * kBlock * kBlock;
+  grid.trunc_dist = 0.04f;  // unused by meshing; must pass validate()
+  grid.bucket_size = 8;
+  grid.num_buckets = 128;
+  grid.num_blocks = 1024;
+  grid.max_chain = 128;
+  return grid;
+}
+
+// Allocate every block of the cube and write the analytic sphere SDF (weight 1)
+// into each voxel, addressed by the compacted BlockIndex::ptr + local index.
+bool fill_sphere_grid(vol::VoxelBlockGrid& grid) {
+  std::vector<vol::BlockIndex> blocks;
+  for (int cz = 0; cz < kBlocks; ++cz) {
+    for (int cy = 0; cy < kBlocks; ++cy) {
+      for (int cx = 0; cx < kBlocks; ++cx) {
+        vol::BlockIndex block{};
+        block.coord = vr::Vec3i(cx, cy, cz);
+        blocks.push_back(block);
+      }
+    }
+  }
+  vr::Result<std::uint32_t> failed = grid.map().allocate(
+      blocks.data(), static_cast<std::uint32_t>(blocks.size()));
+  if (!failed || failed.value() != 0) return false;
+  vr::Result<std::vector<vol::BlockIndex>> active =
+      grid.map().compact_active_blocks();
+  if (!active) return false;
+
+  vr::Result<vol::AttributeView> tsdf = grid.attribute("tsdf");
+  vr::Result<vol::AttributeView> weight = grid.attribute("weight");
+  if (!tsdf || !weight) return false;
+  auto* tsdf_data = static_cast<float*>(tsdf.value().buffer->mapped());
+  auto* weight_data = static_cast<float*>(weight.value().buffer->mapped());
+
+  for (const vol::BlockIndex& block : active.value()) {
+    for (int lz = 0; lz < kBlock; ++lz) {
+      for (int ly = 0; ly < kBlock; ++ly) {
+        for (int lx = 0; lx < kBlock; ++lx) {
+          const int local = lx + kBlock * (ly + kBlock * lz);
+          const vr::Vec3i voxel = block.coord * kBlock + vr::Vec3i(lx, ly, lz);
+          const vr::Vec3f world(static_cast<float>(voxel.x) * kH,
+                                static_cast<float>(voxel.y) * kH,
+                                static_cast<float>(voxel.z) * kH);
+          // BlockIndex::ptr is already the block's base offset into the flat
+          // per-voxel array, so the local index adds straight onto it.
+          const std::size_t index = static_cast<std::size_t>(block.ptr) +
+                                    static_cast<std::size_t>(local);
+          tsdf_data[index] = vr::length(world - sphere_center()) - kRadius;
+          weight_data[index] = 1.0f;
+        }
+      }
+    }
+  }
+  return true;
+}
+
+}  // namespace
+
+int main() {
+  vr::Result<vr::Instance> instance = vr::Instance::create({});
+  if (!instance) {
+    std::fprintf(stderr, "no Vulkan instance; skipping\n");
+    return 0;
+  }
+  vr::Result<VkPhysicalDevice> gpu = instance.value().select_physical_device();
+  if (!gpu) {
+    std::fprintf(stderr, "no compute-capable device; skipping\n");
+    return 0;
+  }
+  vr::Result<vr::Device> device =
+      vr::Device::create(instance.value().handle(), gpu.value(), {});
+  CHECK(device.ok());
+  vr::Result<vr::Allocator> allocator =
+      vr::Allocator::create(instance.value().handle(), device.value());
+  CHECK(allocator.ok());
+  vr::Result<mesh::MarchingCubes> extractor_result =
+      mesh::MarchingCubes::create(device.value(), allocator.value());
+  CHECK(extractor_result.ok());
+  mesh::MarchingCubes extractor = std::move(extractor_result).value();
+  vr::Result<rtex::ProjectiveTexturer> texturer_result =
+      rtex::ProjectiveTexturer::create(device.value(), allocator.value());
+  CHECK(texturer_result.ok());
+  rtex::ProjectiveTexturer texturer = std::move(texturer_result).value();
+
+  const vol::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
+                                      {"weight", sizeof(float)}};
+  vr::Result<vol::VoxelBlockGrid> grid_result = vol::VoxelBlockGrid::create(
+      device.value(), allocator.value(), sphere_grid_params(), attrs, 2);
+  CHECK(grid_result.ok());
+  vol::VoxelBlockGrid grid = std::move(grid_result).value();
+  CHECK(fill_sphere_grid(grid));
+
+  // A camera in front of the sphere looking down +Z (recon's OpenCV
+  // convention), with a constant depth at the sphere's near surface: the
+  // front-facing triangles pass the line-of-sight test and the far side fails
+  // it, so the comparison covers both the textured and the sentinel branch.
+  constexpr std::uint32_t kWidth = 128;
+  constexpr std::uint32_t kHeight = 128;
+  constexpr float kCameraDistance = 2.0f;
+  vol::DepthCameraParams cam{};
+  cam.fx = 120.0f;
+  cam.fy = 120.0f;
+  cam.cx = static_cast<float>(kWidth) * 0.5f;
+  cam.cy = static_cast<float>(kHeight) * 0.5f;
+  cam.width = kWidth;
+  cam.height = kHeight;
+  cam.min_depth = 0.1f;
+  cam.max_depth = 10.0f;
+  cam.cam_to_world = vr::Mat4f(1.0f);
+  const vr::Vec3f eye =
+      sphere_center() - vr::Vec3f(0.0f, 0.0f, kCameraDistance);
+  cam.cam_to_world[3] = vr::Vec4f(eye.x, eye.y, eye.z, 1.0f);
+  const std::vector<float> depth(static_cast<std::size_t>(kWidth) * kHeight,
+                                 kCameraDistance - kRadius);
+
+  // One extraction feeds both paths, so the geometry -- and its order -- is
+  // identical for the index-by-index comparison below.
+  vr::Result<mesh::DeviceMesh> device_mesh_result =
+      extractor.extract_device(grid, 0.0f);
+  CHECK(device_mesh_result.ok());
+  const mesh::DeviceMesh device_mesh = device_mesh_result.value();
+  CHECK(!device_mesh.empty());
+  CHECK(device_mesh.valid());
+  CHECK(device_mesh.vertex_count == device_mesh.triangle_count * 3);
+
+  // Reference: the host path, on a copy taken before any texturing.
+  vr::Result<mesh::Mesh> host_result = extractor.download(device_mesh);
+  CHECK(host_result.ok());
+  mesh::Mesh host_mesh = std::move(host_result).value();
+  CHECK(host_mesh.vertices.size() == device_mesh.vertex_count);
+  CHECK(texturer.texture(host_mesh, depth.data(), cam).ok());
+
+  // Under test: the same pass over the device buffers, then one copy out.
+  CHECK(texturer.texture(device_mesh, depth.data(), cam).ok());
+  vr::Result<mesh::Mesh> device_result = extractor.download(device_mesh);
+  CHECK(device_result.ok());
+  const mesh::Mesh device_out = std::move(device_result).value();
+
+  CHECK(device_out.vertices.size() == host_mesh.vertices.size());
+  CHECK(device_out.indices.size() == host_mesh.indices.size());
+
+  // Every vertex must match: uv0 is what the pass writes, and the rest proves
+  // the in-place write did not disturb the geometry around it.
+  std::size_t textured = 0;
+  for (std::size_t i = 0; i < host_mesh.vertices.size(); ++i) {
+    const mesh::Vertex& expected = host_mesh.vertices[i];
+    const mesh::Vertex& actual = device_out.vertices[i];
+    CHECK(actual.uv0 == expected.uv0);
+    CHECK(actual.position == expected.position);
+    CHECK(actual.normal == expected.normal);
+    CHECK(actual.color == expected.color);
+    if (expected.uv0.x >= 0.0f) ++textured;
+  }
+  for (std::size_t i = 0; i < host_mesh.indices.size(); ++i) {
+    CHECK(device_out.indices[i] == host_mesh.indices[i]);
+  }
+
+  // Guard against a vacuous pass: if nothing was textured, the two paths would
+  // agree trivially on an all-sentinel mesh and prove nothing.
+  CHECK(textured > 0);
+  CHECK(textured < host_mesh.vertices.size());
+
+  std::printf(
+      "texture device-mesh: OK (%zu triangles, %zu/%zu vertices textured)\n",
+      host_mesh.triangle_count(), textured, host_mesh.vertices.size());
+  return 0;
+}

@@ -656,6 +656,30 @@ honours an explicit tighter threshold), that a **rotated** pose projects through
 bilinear taps textures a foreground vertex via the nearest-tap fallback — on
 MoltenVK.
 
+The two GPU tiers hand off **without a host round trip**. Both write and read the
+same interleaved `Vertex` array, so routing meshing → texturing through a host
+`Mesh` cost a full readback *and* a full re-upload of bytes that had never left
+the device (~45 MB each way on a ~940 k-vertex room scan).
+`MarchingCubes::extract_device` therefore returns a `mesh::DeviceMesh` — the
+vertex + index `VkBuffer`s and the live counts — which
+`ProjectiveTexturer::texture` binds directly, rewriting `uv0` in place with only
+the depth frame uploaded and nothing read back. `MarchingCubes::download` takes
+the single host copy when one is finally needed, so the mesh crosses to the host
+**once** instead of three times; `extract` is exactly `extract_device` +
+`download`, so the host API and its tests are unchanged. A `DeviceMesh`
+**borrows** the extractor's persistent buffers (the grow-only arena), so it is
+valid only until the next extract on that extractor — `download` rejects a stale
+view by comparing handles rather than copying whatever now occupies them. The
+index run is the identity `0,1,2,...` (independent triangles), held beside the
+arena and refilled only on a grow, because the texturing kernel addresses
+vertices through an index buffer and the renderer wants a real one at the interop
+seam. `tests/texture_device_mesh_test.cpp` proves the device path is not merely
+faster but *identical*: one extraction feeds both paths — the host copy textured
+through the upload/readback route, and the same device buffers textured in place
+— and every vertex must match on `uv0`, position, normal, and colour, with a
+guard that some vertices were textured and some were not, so an all-sentinel mesh
+cannot pass vacuously.
+
 The **`examples/`** harness runs the vertical slice end-to-end on real data:
 `fuse_replica` (`examples/fuse_replica/`) reads a posed Replica-SLAM RGB-D
 sequence (nvblox's `fuse_replica` layout — `results/frameNNNNNN.jpg` +

@@ -588,15 +588,20 @@ int run(GLFWwindow* window, const Options& opt) {
       // -- or when --no-texture -- the atlas stays empty and the render thread
       // binds the white dummy (every triangle falls back to fused voxel
       // colour). uv0 must be filled BEFORE to_gfx_mesh, which copies it across.
-      auto publish = [&](rmesh::Mesh&& recon_mesh, const float* depth,
+      auto publish = [&](const rmesh::DeviceMesh& device_mesh,
+                         const float* depth,
                          const vol::DepthCameraParams& depth_camera,
                          const std::vector<std::uint32_t>& color) {
         std::vector<std::uint8_t> atlas;
-        if (texturer && depth != nullptr && !recon_mesh.vertices.empty()) {
+        if (texturer && depth != nullptr && !device_mesh.empty()) {
           vr::Status texture_status;
           {
+            // Textures the extractor's buffers in place -- no upload, no
+            // readback; the geometry has not left the device since it was
+            // meshed.
             fuse_viewer::StageScope scope(fuse_stages, "texture");
-            texture_status = texturer->texture(recon_mesh, depth, depth_camera);
+            texture_status =
+                texturer->texture(device_mesh, depth, depth_camera);
           }
           if (texture_status.ok()) {
             // Its own row, not folded into "texture": repacking a full sensor
@@ -608,6 +613,20 @@ int run(GLFWwindow* window, const Options& opt) {
             std::fprintf(stderr, "fuse_viewer: texture: %s\n",
                          texture_status.message().c_str());
           }
+        }
+        // The single host copy of the whole pipeline, taken after texturing
+        // has written uv0 in place -- so the mesh crosses to the host once
+        // instead of the three times the host-mesh path cost.
+        rmesh::Mesh recon_mesh;
+        {
+          fuse_viewer::StageScope scope(fuse_stages, "download");
+          auto downloaded = extractor.download(device_mesh);
+          if (!downloaded) {
+            std::fprintf(stderr, "fuse_viewer: download: %s\n",
+                         downloaded.status().message().c_str());
+            return;
+          }
+          recon_mesh = std::move(downloaded).value();
         }
         vg::assets::Mesh gfx_mesh;
         {
@@ -662,7 +681,7 @@ int run(GLFWwindow* window, const Options& opt) {
              {"frame", "allocate", "integrate", "extract", "  ..compact",
               "  ..neighbour lut", "  ..inputs", "  ..arena alloc",
               "  ..descriptors", "  ..dispatch", "  ..readback", "texture",
-              "atlas pack", "to_gfx_mesh"}) {
+              "download", "atlas pack", "to_gfx_mesh"}) {
           fuse_stages.seed(stage);
         }
         // A preload cache hit, else a disk read + JPEG/PNG decode (the CPU
@@ -743,7 +762,7 @@ int run(GLFWwindow* window, const Options& opt) {
           rmesh::ExtractTimings extract_timings;
           vr::Result<rmesh::Mesh> extracted = [&]() {
             fuse_viewer::StageScope scope(fuse_stages, "extract");
-            return extractor.extract(volume, 0.0f, &extract_timings);
+            return extractor.extract_device(volume, 0.0f, &extract_timings);
           }();
           // Break the extract row down in place: the phases sum to it, so the
           // table reads as a hierarchy rather than double-counting.
@@ -756,9 +775,9 @@ int run(GLFWwindow* window, const Options& opt) {
           fuse_stages.add("  ..dispatch", extract_timings.dispatch_ms);
           fuse_stages.add("  ..readback", extract_timings.readback_ms);
           extract_stats = extract_timings;
-          if (extracted && !extracted.value().vertices.empty())
-            publish(std::move(extracted).value(), frame.depth.data(),
-                    depth_camera, frame.color);
+          if (extracted && !extracted.value().empty())
+            publish(extracted.value(), frame.depth.data(), depth_camera,
+                    frame.color);
         }
         // Publish this frame's stage breakdown + the volume's device memory for
         // the overlay. Sampled here (not in the render thread) because the
@@ -783,21 +802,20 @@ int run(GLFWwindow* window, const Options& opt) {
       // Skip the full-volume final extract when the user has already quit, so
       // the join at shutdown does not stall on a whole marching-cubes pass.
       if (!quit.load()) {
-        auto m = extractor.extract(volume);  // final mesh
-        if (m && !m.value().vertices.empty()) {
+        auto m = extractor.extract_device(volume);  // final mesh
+        if (m && !m.value().empty()) {
           // Texture the final mesh with the last keyframe (its depth camera
           // rebuilt from the retained frame), or leave it untextured if no
           // frame ever fused.
           static const std::vector<std::uint32_t> kNoColor;
           if (last_frame) {
             const vr_example::RgbdFrame& keyframe = **last_frame;
-            publish(std::move(m).value(), keyframe.depth.data(),
+            publish(m.value(), keyframe.depth.data(),
                     vr_example::make_depth_camera(cam, keyframe.cam_to_world,
                                                   opt.max_depth),
                     keyframe.color);
           } else {
-            publish(std::move(m).value(), nullptr, vol::DepthCameraParams{},
-                    kNoColor);
+            publish(m.value(), nullptr, vol::DepthCameraParams{}, kNoColor);
           }
         }
       }

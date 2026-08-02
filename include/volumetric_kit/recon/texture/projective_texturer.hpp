@@ -122,6 +122,29 @@ class VR_TEXTURE_API ProjectiveTexturer {
                  const volume::DepthCameraParams& cam,
                  float occlusion_threshold = 0.02f);
 
+  /// @brief Texture a mesh that is already on the device, in place.
+  ///
+  /// Same pass, same kernel, same result as the host overload -- but the
+  /// geometry never moves. That overload has to upload every vertex and index
+  /// and then read the vertices back (~45 MB each way on a ~940 k-vertex room
+  /// scan) purely to hand the kernel bytes the producing pass had already
+  /// written to the device. Given a @ref mesh::DeviceMesh straight from
+  /// @ref mesh::MarchingCubes::extract_device, only the depth frame is
+  /// uploaded and nothing is read back; `uv0` is rewritten where it already
+  /// lives, ready for the next device consumer.
+  ///
+  /// @param mesh   A device-resident mesh, still valid (its producer has not
+  ///               extracted again). An empty mesh is a no-op.
+  /// @param depth  As the host overload.
+  /// @param cam    As the host overload.
+  /// @param occlusion_threshold  As the host overload.
+  /// @return OK on success, or the same failures as the host overload except
+  ///         those about host arrays; @ref Status::Code::InvalidArgument if
+  ///         @p mesh names no buffers.
+  Status texture(const mesh::DeviceMesh& mesh, const float* depth,
+                 const volume::DepthCameraParams& cam,
+                 float occlusion_threshold = 0.02f);
+
   /// @return `true` if this owns a live pipeline (`false` when moved-from).
   bool valid() const noexcept { return kernel_.valid(); }
 

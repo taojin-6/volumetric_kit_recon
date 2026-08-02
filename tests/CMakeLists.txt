@@ -165,6 +165,18 @@ target_link_libraries(recon_texture_projective_test
 vr_target_warnings(recon_texture_projective_test)
 add_test(NAME recon_texture_projective COMMAND recon_texture_projective_test)
 
+# mesh + texture composed: the device-resident handoff (extract_device ->
+# texture -> download) must equal the host path vertex for vertex. Links both
+# tiers, since it is the seam between them that is under test. Skips where no
+# device is present.
+add_executable(recon_texture_device_mesh_test texture_device_mesh_test.cpp)
+target_link_libraries(
+  recon_texture_device_mesh_test
+  PRIVATE volumetric_kit::recon_texture volumetric_kit::recon_mesh
+          Vulkan::Vulkan)
+vr_target_warnings(recon_texture_device_mesh_test)
+add_test(NAME recon_texture_device_mesh COMMAND recon_texture_device_mesh_test)
+
 # core device seam: Instance + Device create/adopt. Links recon_core, which now
 # carries the Vulkan headers/loader. Skips at runtime where no compute device is
 # present.
