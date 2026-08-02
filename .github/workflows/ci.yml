@@ -55,6 +55,12 @@ jobs:
       container: ${{ matrix.container }}
 
   viewer:
+    # Self-hosted like the build legs, so it carries their trusted-code guard.
+    # It lives here on the caller rather than inside viewer.yml so a fork PR
+    # skips this job outright and reaches `required` as `skipped` — the same
+    # shape the build legs already produce, which is what the gate below is
+    # written against.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     uses: ./.github/workflows/viewer.yml
 
   lint:

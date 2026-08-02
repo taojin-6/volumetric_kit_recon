@@ -7,6 +7,10 @@
 # the tiers) and only under VR_BUILD_VIEWER, so recon's library and default
 # build stay renderer-independent (the 2026-07-07 decision amendment in
 # CLAUDE.md).
+#
+# Because it is that seam, it is also the thing most likely to drift out of
+# build unnoticed -- and did, until a dedicated build-only macOS CI leg
+# (.github/workflows/viewer.yml) started compiling both targets on every PR.
 
 include(FetchContent)
 
@@ -37,12 +41,17 @@ FetchContent_MakeAvailable(volumetric_kit_gfx)
 # GLFW for the live viewer's window (matches how gfx's own examples get it).
 find_package(glfw3 REQUIRED)
 
-set(_viewer_recon_libs
-    volumetric_kit::recon_tsdf volumetric_kit::recon_mesh
-    volumetric_kit::recon_texture volumetric_kit::recon_volume
-    vr_example_common)
+# Name only the tiers that are not already pulled in transitively. recon_texture
+# PUBLIC-links recon_mesh + recon_volume and recon_tsdf PUBLIC-links
+# recon_volume, so listing those again repeats their archives on the link line
+# and Apple's linker warns "ignoring duplicate libraries". Same for gfx_core,
+# which gfx_app / gfx_pipelines / gfx_ui all PUBLIC-link -- gfx_camera does not
+# link it, which is why that one is named. Resist re-adding the covered tiers
+# for readability's sake; the warning comes straight back.
+set(_viewer_recon_libs volumetric_kit::recon_tsdf volumetric_kit::recon_texture
+                       vr_example_common)
 set(_viewer_gfx_libs volumetric_kit::gfx_app volumetric_kit::gfx_pipelines
-                     volumetric_kit::gfx_camera volumetric_kit::gfx_core)
+                     volumetric_kit::gfx_camera)
 set(_viewer_common_inc "${CMAKE_CURRENT_SOURCE_DIR}"
                        "${PROJECT_SOURCE_DIR}/examples/common")
 

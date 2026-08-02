@@ -19,15 +19,17 @@ on:
 jobs:
   viewer:
     name: viewer build
-    # Self-hosted, so only trusted code: same-repo PRs and pushes, mirroring the
-    # build legs in ci.yml.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     # macOS: MoltenVK is the target this example is developed against, and the
-    # viewer's gfx + GLFW dependencies are already provisioned there.
+    # viewer's gfx + GLFW dependencies are already provisioned there. The
+    # trusted-code guard that keeps fork PRs off this self-hosted runner sits on
+    # the *caller* job in ci.yml, exactly as it does for the build legs, so a
+    # skip reaches the `required` gate the same way theirs does.
     runs-on: mac
-    # A cold run fetches and builds the whole gfx sibling plus ImGui and
-    # spirv-cross; the dependency cache below makes the warm case far shorter.
-    timeout-minutes: 60
+    # Measured cold on this runner -- no cache, full gfx + ImGui + spirv-cross
+    # fetch and build -- the whole job is ~96 s (28 s configure, 9 s build). 20
+    # minutes is ~12x that: headroom for a slow clone without parking one of the
+    # Mac's two runners for an hour on a hang.
+    timeout-minutes: 20
     defaults:
       run:
         shell: bash
@@ -56,19 +58,15 @@ jobs:
             exit 1
           }
 
-      # Keyed on the viewer's own CMakeLists too, since that is where the gfx
-      # and ImGui pins live -- bumping the gfx commit must bust this cache.
-      # Native self-hosted macOS runners each bake their own absolute path into
-      # FetchContent's sub-build cache, hence runner.name in the key (same
-      # reasoning as _build.yml).
-      - name: Cache third-party deps
-        uses: actions/cache@v5
-        with:
-          path: build/_deps
-          key: viewer-deps-${{ runner.name }}-${{ hashFiles('examples/viewer/CMakeLists.txt', 'examples/CMakeLists.txt', 'third_party/CMakeLists.txt', 'CMakeLists.txt') }}
-          restore-keys: |
-            viewer-deps-${{ runner.name }}-
-
+      # No actions/cache step here, unlike every other leg -- deliberately, and
+      # measured. build/_deps with gfx in it is a 131 MiB tarball: saving it took
+      # ~49 s (half this job's wall clock, 5x the build it would accelerate) and
+      # then failed outright -- "uploadCacheArchiveSDK: internal error uploading
+      # cache archive: write EPIPE" -- which actions/cache reports as a warning,
+      # so the leg stayed green while caching nothing. Even a working save only
+      # trades the 28 s configure for a ~17 s restore. If this leg ever does get
+      # slow, reach for a persistent FETCHCONTENT_BASE_DIR outside the workspace
+      # (survives checkout's `git clean -ffdx`, no upload at all), not the cache.
       - name: Configure
         # Tests off: the library tests already run in every build leg, and this
         # leg exists for the viewer targets alone. Retry rides out transient
