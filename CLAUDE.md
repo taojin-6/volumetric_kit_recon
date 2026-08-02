@@ -239,12 +239,19 @@ Each dated; newest context wins. Change the decision *and* this list together.
   viewer examples (`examples/viewer/`: `fuse_render`, a headless colour-PNG
   render, and `fuse_viewer`, a live window) pull `volumetric_kit_gfx` via
   FetchContent + system GLFW — the **only** place the recon tree touches the
-  renderer, behind an **off-by-default** `VR_BUILD_VIEWER`. The library tiers, the
-  default build, and CI stay renderer-independent (verified: a default configure
-  fetches no gfx and builds the gfx-free `fuse_replica`). This amends the
-  independence stance *for an opt-in example only* — recon's **release** is still
-  never coupled to gfx; a developer who wants the live viewer opts in and pays the
-  gfx fetch. The alternative (a standalone neutral repo, where the
+  renderer, behind an **off-by-default** `VR_BUILD_VIEWER`. The library tiers and
+  the default build stay renderer-independent (verified: a default configure
+  fetches no gfx and builds the gfx-free `fuse_replica`). *Amended 2026-08-02:*
+  **one** CI leg does opt in — `.github/workflows/viewer.yml`, build-only, macOS,
+  scoped to `fuse_viewer` + `fuse_render`. Leaving it unbuilt was worse: this
+  directory is the single place recon's code meets gfx's API, and it silently
+  drifted out of build (`fuse_viewer.cpp` declared `Result<Mesh>` against
+  `extract_device`'s `Result<DeviceMesh>`, so `VR_BUILD_VIEWER=ON` failed at
+  `8a439fc` with nothing reporting it). Every *other* leg stays gfx-free, so the
+  renderer is still absent from everything that gates the library itself. This
+  amends the independence stance *for an opt-in example only* — recon's
+  **release** is still never coupled to gfx; a developer who wants the live
+  viewer opts in and pays the gfx fetch. The alternative (a standalone neutral repo, where the
   `shared_device_bootstrap` device-adoption proof still lives) was weighed and
   set aside for discoverability: the example lives with the pipeline it demos. The
   handoff is a **host mesh** (interop seam A, two devices: recon fuses on its own,

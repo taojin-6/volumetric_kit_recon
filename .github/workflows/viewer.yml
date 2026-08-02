@@ -1,0 +1,94 @@
+name: viewer (reusable)
+
+# Build-only leg for the gfx-linked viewer examples (VR_BUILD_VIEWER=ON).
+#
+# The library tiers, the default build, and every other CI leg are deliberately
+# renderer-independent (the 2026-07-07 opt-in-gfx decision), so nothing else
+# here ever compiles examples/viewer. That gap let a real break reach `main`:
+# fuse_viewer.cpp kept declaring `Result<Mesh>` while calling `extract_device`,
+# which returns `Result<DeviceMesh>`, so `-DVR_BUILD_VIEWER=ON` failed to build
+# at 8a439fc and nothing noticed. This leg closes it.
+#
+# Build-only on purpose: the live viewer needs a window and both examples need
+# a posed RGB-D dataset that CI does not carry, so there is nothing to run. The
+# compile + link is the whole point -- it is the API seam between recon and gfx
+# (and the ImGui platform backend the example owns) that drifts.
+on:
+  workflow_call:
+
+jobs:
+  viewer:
+    name: viewer build
+    # macOS: MoltenVK is the target this example is developed against, and the
+    # viewer's gfx + GLFW dependencies are already provisioned there. The
+    # trusted-code guard that keeps fork PRs off this self-hosted runner sits on
+    # the *caller* job in ci.yml, exactly as it does for the build legs, so a
+    # skip reaches the `required` gate the same way theirs does.
+    runs-on: mac
+    # Measured cold on this runner -- no cache, full gfx + ImGui + spirv-cross
+    # fetch and build -- the whole job is ~96 s (28 s configure, 9 s build). 20
+    # minutes is ~12x that: headroom for a slow clone without parking one of the
+    # Mac's two runners for an hour on a hang.
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install dependencies
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+          HOMEBREW_NO_INSTALL_CLEANUP: '1'
+        run: |
+          # Same set as the macOS build leg, plus glfw: the viewer owns its
+          # window, so examples/viewer/CMakeLists.txt does find_package(glfw3).
+          ok=0
+          for attempt in 1 2 3; do
+            if brew install cmake glm molten-vk vulkan-headers vulkan-loader \
+                vulkan-tools shaderc glfw; then
+              ok=1
+              break
+            fi
+            echo "::warning::brew install attempt ${attempt} failed; retrying in 15s"
+            sleep 15
+          done
+          [ "${ok}" = 1 ] || {
+            echo "::error::brew install failed after 3 attempts"
+            exit 1
+          }
+
+      # No actions/cache step here, unlike every other leg -- deliberately, and
+      # measured. build/_deps with gfx in it is a 131 MiB tarball: saving it took
+      # ~49 s (half this job's wall clock, 5x the build it would accelerate) and
+      # then failed outright -- "uploadCacheArchiveSDK: internal error uploading
+      # cache archive: write EPIPE" -- which actions/cache reports as a warning,
+      # so the leg stayed green while caching nothing. Even a working save only
+      # trades the 28 s configure for a ~17 s restore. If this leg ever does get
+      # slow, reach for a persistent FETCHCONTENT_BASE_DIR outside the workspace
+      # (survives checkout's `git clean -ffdx`, no upload at all), not the cache.
+      - name: Configure
+        # Tests off: the library tests already run in every build leg, and this
+        # leg exists for the viewer targets alone. Retry rides out transient
+        # FetchContent clone blips, as in _build.yml.
+        run: |
+          ok=0
+          for attempt in 1 2 3; do
+            if cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+                -DVR_BUILD_VIEWER=ON -DVR_BUILD_TESTS=OFF; then
+              ok=1
+              break
+            fi
+            echo "::warning::cmake configure attempt ${attempt} failed; retrying in 15s"
+            sleep 15
+          done
+          [ "${ok}" = 1 ] || {
+            echo "::error::cmake configure failed after 3 attempts"
+            exit 1
+          }
+
+      # Name the viewer targets explicitly rather than building everything, so
+      # this leg fails for the reason it exists rather than on some unrelated
+      # target, and so it does not re-do what the build legs already cover.
+      - name: Build viewer examples
+        run: cmake --build build --parallel --target fuse_viewer fuse_render

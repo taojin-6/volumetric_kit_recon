@@ -54,6 +54,15 @@ jobs:
       runner: ${{ matrix.runner }}
       container: ${{ matrix.container }}
 
+  viewer:
+    # Self-hosted like the build legs, so it carries their trusted-code guard.
+    # It lives here on the caller rather than inside viewer.yml so a fork PR
+    # skips this job outright and reaches `required` as `skipped` — the same
+    # shape the build legs already produce, which is what the gate below is
+    # written against.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    uses: ./.github/workflows/viewer.yml
+
   lint:
     uses: ./.github/workflows/lint.yml
 
@@ -66,7 +75,7 @@ jobs:
     # on any other outcome: a skipped required check never reports its result
     # and would block every merge forever. Runs on a hosted runner so the gate
     # can always report, even while a platform is mid-migration to self-hosted.
-    needs: [build, lint, sanitizers]
+    needs: [build, viewer, lint, sanitizers]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -74,9 +83,11 @@ jobs:
       - name: Assert every required job succeeded
         run: |
           echo "build=${{ needs.build.result }}" \
+               "viewer=${{ needs.viewer.result }}" \
                "lint=${{ needs.lint.result }}" \
                "sanitizers=${{ needs.sanitizers.result }}"
           if [ "${{ needs.build.result }}" = success ] \
+             && [ "${{ needs.viewer.result }}" = success ] \
              && [ "${{ needs.lint.result }}" = success ] \
              && [ "${{ needs.sanitizers.result }}" = success ]; then
             echo "All required CI jobs passed."
