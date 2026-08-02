@@ -218,6 +218,9 @@ int main() {
     CHECK(actual.position == expected.position);
     CHECK(actual.normal == expected.normal);
     CHECK(actual.color == expected.color);
+    // Also pins that the in-place uv0 rewrite leaves the neighbouring tangent
+    // slot alone -- the two are adjacent in the layout gfx dictates.
+    CHECK(actual.tangent == expected.tangent);
     if (expected.uv0.x >= 0.0f) ++textured;
   }
   for (std::size_t i = 0; i < host_mesh.indices.size(); ++i) {
