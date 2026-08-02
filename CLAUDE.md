@@ -218,7 +218,9 @@ Each dated; newest context wins. Change the decision *and* this list together.
   the projective-texturing pass (a later slice) fills real atlas UVs. The
   interop-seam converter still maps recon's vertex to gfx's `{…, tangent, uv0,
   color}` shape (synthesizing `tangent`). *Amends* the 2026-06-21 "zero gfx
-  changes" stance in the interop seam below.
+  changes" stance in the interop seam below. (*Superseded in part on 2026-08-02*:
+  `mesh::Vertex` now **is** gfx's layout, so there is no shape to map — see that
+  decision.)
 - **2026-07-06 — Depth sampling is texture-centred (pixel centres at i+0.5), a
   deliberate ~½-pixel convention.** The `tsdf` bilinear depth sampler
   (`tsdf_integrate.comp::sample_depth`) shifts its 2×2 taps by −0.5 and takes the
@@ -380,6 +382,34 @@ Each dated; newest context wins. Change the decision *and* this list together.
   `T_world_cv = T_world_arkit · diag(1, −1, −1, 1)`, and ARKit's differing depth
   and colour resolutions are already modelled by the separate
   `DepthCameraParams` / `ColorCameraParams` the 2026-07-06 decision introduced.
+
+- **2026-08-02 — `mesh::Vertex` *is* the renderer's vertex layout.** recon's
+  vertex was `{position, normal, color, uv0}` (48 B) and gfx's is
+  `{position, normal, tangent, uv0, color}` (64 B), so every mesh crossing the
+  seam was rebuilt field by field. recon now emits gfx's layout directly:
+  `mesh::Vertex` is byte-for-byte `gfx::assets::Vertex`, pinned by
+  `static_assert`s on both sides of the seam (`mesh/mesh.hpp` and the bridge),
+  and the marching-cubes kernels + the texturing kernel declare the matching
+  `layout(scalar)` mirror. The host converter collapses to a bulk copy, and —
+  the actual point — a vertex buffer the kernel wrote can be **bound and drawn
+  as-is**, which is what interop seam B requires. gfx's vertex-input description
+  reads position/normal/uv0/color at exactly these offsets with this stride; it
+  does not bind `tangent` at all.
+  **The cost is paid knowingly, and it is not free.** Every vertex grows 48 → 64
+  bytes (+33%) for a `tangent` slot marching cubes cannot produce — it has no
+  surface parameterisation to derive one from, so the kernel writes the same
+  `(1, 0, 0, 1)` placeholder the host converter used to synthesize. A
+  recon-only consumer (`fuse_replica`, the codec tiers, a headless exporter)
+  pays that for a field it never reads: measured on the 400-frame room0,
+  **peak memory +11% and throughput −10%**, against a converter saving that
+  only a gfx-linked consumer sees. The alternative — teaching gfx a
+  vertex-input variant for recon's tighter layout — keeps recon's bytes but
+  needs a change in the sibling repo plus a pin bump here, and leaves the
+  seam-B buffer still un-bindable without one. We chose the renderer's
+  convention because the seam is the point: the whole reason `uv0` and `color`
+  live on this vertex at all is the 2026-07-06 hybrid-colour path. Revisit if a
+  non-renderer consumer ever dominates the mesh tier's traffic — the tangent is
+  then 16 bytes of dead weight per vertex with no offsetting win.
 
 ## Provenance & salvage policy
 
