@@ -216,6 +216,13 @@ int main() {
   double radius_sum = 0.0;
   double outward_sum = 0.0;
   for (const mesh::Vertex& v : sphere.vertices) {
+    // The renderer's tangent slot. Meshing cannot derive a real tangent, so the
+    // kernel writes this placeholder -- and it MUST write it: the vertex arena
+    // is grow-only and reused in place, so an unwritten slot carries whatever
+    // the previous, larger extraction left there. gfx does not bind `tangent`
+    // today, so nothing downstream would notice; this is the only guard.
+    CHECK(v.tangent.x == 1.0f && v.tangent.y == 0.0f && v.tangent.z == 0.0f &&
+          v.tangent.w == 1.0f);
     const vr::Vec3f d = v.position - center;
     const float r = vr::length(d);
     CHECK(std::fabs(r - kRadius) < 1.5f * kH);  // MC accuracy ~ one voxel

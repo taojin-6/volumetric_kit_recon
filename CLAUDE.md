@@ -218,7 +218,9 @@ Each dated; newest context wins. Change the decision *and* this list together.
   the projective-texturing pass (a later slice) fills real atlas UVs. The
   interop-seam converter still maps recon's vertex to gfx's `{…, tangent, uv0,
   color}` shape (synthesizing `tangent`). *Amends* the 2026-06-21 "zero gfx
-  changes" stance in the interop seam below.
+  changes" stance in the interop seam below. (*Superseded in part on 2026-08-02*:
+  `mesh::Vertex` now **is** gfx's layout, so there is no shape to map — see that
+  decision.)
 - **2026-07-06 — Depth sampling is texture-centred (pixel centres at i+0.5), a
   deliberate ~½-pixel convention.** The `tsdf` bilinear depth sampler
   (`tsdf_integrate.comp::sample_depth`) shifts its 2×2 taps by −0.5 and takes the
@@ -381,6 +383,42 @@ Each dated; newest context wins. Change the decision *and* this list together.
   and colour resolutions are already modelled by the separate
   `DepthCameraParams` / `ColorCameraParams` the 2026-07-06 decision introduced.
 
+- **2026-08-02 — `mesh::Vertex` *is* the renderer's vertex layout.** recon's
+  vertex was `{position, normal, color, uv0}` (48 B) and gfx's is
+  `{position, normal, tangent, uv0, color}` (64 B), so every mesh crossing the
+  seam was rebuilt field by field. recon now emits gfx's layout directly:
+  `mesh::Vertex` is byte-for-byte `gfx::assets::Vertex`, pinned by
+  `static_assert`s on both sides of the seam (`mesh/mesh.hpp` and the bridge),
+  and the marching-cubes kernels + the texturing kernel declare the matching
+  `layout(scalar)` mirror. The host converter collapses to a bulk copy, and —
+  the actual point — the bytes the kernel writes are **already in the shape the
+  renderer binds**, which is what interop seam B needs. gfx's vertex-input
+  description reads position/normal/uv0/color at exactly these offsets with this
+  stride; it does not bind `tangent` at all. *Necessary, not yet sufficient*:
+  the vertex arena is still created `STORAGE_BUFFER`-only and host-visible, so
+  it needs `VERTEX_BUFFER` usage (and the index run `INDEX_BUFFER`, plus
+  probably a device-local home) before gfx can draw from it in place — a
+  greppable `TODO(mesh)` in `mesh/mesh.hpp`, paid with the shared-device
+  bootstrap that would be its first consumer.
+  **The cost is paid knowingly, and it is not free.** Every vertex grows 48 → 64
+  bytes (+33%) for a `tangent` slot marching cubes cannot produce — it has no
+  surface parameterisation to derive one from, so the kernel writes the same
+  `(1, 0, 0, 1)` placeholder the host converter used to synthesize. A
+  recon-only consumer (`fuse_replica`, the codec tiers, a headless exporter)
+  pays that for a field it never reads: measured on the 400-frame room0,
+  **peak memory +11% and throughput −10%**, against a converter saving that
+  only a gfx-linked consumer sees. It also moves a limit: the arena is
+  `capacity · 3 · sizeof(Vertex)`, so the triangle count that fits under the
+  `maxStorageBufferRange` guard drops by a quarter. The
+  alternative — teaching gfx a
+  vertex-input variant for recon's tighter layout — keeps recon's bytes but
+  needs a change in the sibling repo plus a pin bump here, and leaves the
+  seam-B buffer still un-bindable without one. We chose the renderer's
+  convention because the seam is the point: the whole reason `uv0` and `color`
+  live on this vertex at all is the 2026-07-06 hybrid-colour path. Revisit if a
+  non-renderer consumer ever dominates the mesh tier's traffic — the tangent is
+  then 16 bytes of dead weight per vertex with no offsetting win.
+
 ## Provenance & salvage policy
 
 The algorithms here are a clean re-implementation of the proven core of the
@@ -423,12 +461,15 @@ Two contracts — both simpler now that recon and gfx are both Vulkan.
 - **A — Data handoff (v1).** The `mesh` tier emits geometry in gfx's exact
   ingestion shape (interleaved `Vertex{position,normal,tangent,uv0,color}` +
   `uint32_t` indices) or serializes **glTF/GLB**, which gfx's `load_gltf` already
-  ingests. Needs zero gfx changes. The converter reconciles the impedance
-  mismatches: merge the prior engine's two-stream vertex into one interleaved
-  layout, synthesize `tangent`, widen `color` to vec4, `int32`→`uint32` indices,
-  bake a per-triangle atlas into per-vertex `uv0` + a `Material` texture (gfx has
-  no per-triangle UV; the `texture` tier now fills `uv0` for the live
-  single-camera case — see the 2026-07-07 decision). The triangle-mesh path is
+  ingests. Needs zero gfx changes — and, since the 2026-08-02 layout decision,
+  no vertex conversion either: `mesh::Vertex` **is** `gfx::assets::Vertex`,
+  indices are already `uint32_t`, and the kernel fills the `tangent` slot, so
+  the host handoff is a bulk copy (and seam B the same buffer). The impedance
+  the *port* reconciled is historical: the prior engine's two-stream vertex
+  merged into one interleaved layout, and its per-triangle atlas baked into
+  per-vertex `uv0` + a `Material` texture (gfx has no per-triangle UV; the
+  `texture` tier now fills `uv0` for the live single-camera case — see the
+  2026-07-07 decision). The triangle-mesh path is
   the first milestone — a
   `PointCloud` handoff waits on gfx growing a point-splat pipeline (it renders
   only meshes today).
@@ -822,10 +863,12 @@ overwrites the arena and then fails must still invalidate every outstanding
 `DeviceMesh`, and so must the dense overload, which shares that arena and can
 now reallocate it.
 
-`recon_gfx_bridge.hpp` converts `mesh::Vertex →
-gfx::assets::Vertex` (synthesizing `tangent`, passing `uv0` through — a real
-atlas coordinate where a keyframe textured, else the `(-1,-1)` sentinel that
-takes the per-vertex-colour path). Verified: the untextured follow-camera render
+`recon_gfx_bridge.hpp` hands a `mesh::Mesh` to gfx as an
+`assets::Mesh` — a bulk copy since the 2026-08-02 decision made the two vertex
+structs byte-identical (layout `static_assert`s on both sides of the seam),
+carrying `uv0` through: a real atlas coordinate where a keyframe textured, else
+the `(-1,-1)` sentinel that takes the per-vertex-colour path. Verified: the
+untextured follow-camera render
 is a correct first-person room view and the live window runs the fly-through;
 `fuse_render` texturing sharpens the frame-200 first-person view (crisp rug /
 pillow / window mullions) where `--no-texture` is soft at 2 cm voxels.

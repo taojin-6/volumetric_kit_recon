@@ -37,8 +37,9 @@ struct DepthCameraParams {
 struct Vertex {
   vec3 position;
   vec3 normal;
-  vec4 color;
+  vec4 tangent;  // renderer's slot; meshing has no parameterisation for one
   vec2 uv0;
+  vec4 color;
 };
 
 // Project a world point into a pinhole camera given its intrinsics + rigid

@@ -9,9 +9,10 @@
 ///        neutral demo app -- the ONLY place aware of both siblings -- so
 ///        neither library depends on the other.
 
+#include <cstddef>
+#include <cstring>
+#include <type_traits>
 #include <utility>
-
-#include <glm/vec4.hpp>
 
 #include "volumetric_kit/gfx/assets/mesh.hpp"
 #include "volumetric_kit/recon/mesh/mesh.hpp"
@@ -21,32 +22,56 @@ namespace fuse_viewer {
 namespace rmesh = volumetric_kit::recon::mesh;
 namespace gassets = volumetric_kit::gfx::assets;
 
-/// @brief Convert a reconstruction mesh into a renderer mesh for the
-/// hybrid-mesh
+/// @brief Adopt a reconstruction mesh as a renderer mesh for the hybrid-mesh
 ///        pipeline.
 ///
-/// recon's `Vertex{position, normal, color, uv0}` maps to gfx's
-/// `Vertex{position, normal, tangent, uv0, color}`: positions and normals are
-/// already world-space (what the hybrid pipeline consumes), `color` and `uv0`
-/// carry through unchanged. `uv0` is whatever the texture tier left it: a real
-/// atlas coordinate on a triangle a keyframe textured, else recon's `(-1, -1)`
-/// sentinel, which the hybrid fragment shader reads as "no atlas, use the
-/// per-vertex color". `tangent` is synthesized to the glTF identity `(1, 0, 0,
-/// 1)`: the hybrid pipeline does not consume it, but the interleaved
-/// `assets::Vertex` carries the slot. Indices pass through (both are 32-bit
-/// triangle lists).
+/// recon's `mesh::Vertex` is byte-for-byte `gfx::assets::Vertex` -- the mesh
+/// tier emits the renderer's layout directly (see the layout `static_assert`s
+/// in `mesh/mesh.hpp`), so there is no field-by-field conversion left: this
+/// bulk-copies the vertex bytes and the indices. Both structs are trivially
+/// copyable PODs, and the assertions below fail the build rather than let a
+/// layout change on either side turn into a silent misread.
+///
+/// `uv0` is whatever the texture tier left: a real atlas coordinate on a
+/// triangle a keyframe textured, else recon's `(-1, -1)` sentinel, which the
+/// hybrid fragment shader reads as "no atlas, use the per-vertex color".
+///
+/// This copy exists only because the viewer hands gfx a *host* mesh (interop
+/// seam A, two devices). With a shared device the same bytes are drawn from
+/// recon's own buffer and even this goes away.
 inline gassets::Mesh to_gfx_mesh(const rmesh::Mesh& mesh) {
+  static_assert(sizeof(rmesh::Vertex) == sizeof(gassets::Vertex),
+                "recon and gfx vertex layouts have diverged in size");
+  static_assert(
+      offsetof(rmesh::Vertex, position) == offsetof(gassets::Vertex, position),
+      "recon and gfx vertex layouts have diverged: position");
+  static_assert(
+      offsetof(rmesh::Vertex, normal) == offsetof(gassets::Vertex, normal),
+      "recon and gfx vertex layouts have diverged: normal");
+  static_assert(
+      offsetof(rmesh::Vertex, tangent) == offsetof(gassets::Vertex, tangent),
+      "recon and gfx vertex layouts have diverged: tangent");
+  static_assert(offsetof(rmesh::Vertex, uv0) == offsetof(gassets::Vertex, uv0),
+                "recon and gfx vertex layouts have diverged: uv0");
+  static_assert(
+      offsetof(rmesh::Vertex, color) == offsetof(gassets::Vertex, color),
+      "recon and gfx vertex layouts have diverged: color");
+  static_assert(std::is_trivially_copyable<rmesh::Vertex>::value &&
+                    std::is_trivially_copyable<gassets::Vertex>::value,
+                "vertex bulk copy requires trivially copyable layouts");
+
   gassets::Mesh out;
   out.name = "recon_reconstruction";
+  // TODO(examples): two passes over the same bytes -- resize()
+  // value-initializes every gfx Vertex (it carries default member initializers)
+  // and the memcpy then overwrites all of it, ~50 MB each on a 790k-vertex room
+  // scan. std::vector has no resize-without-init, so one pass needs either a
+  // different container or a strict-aliasing-shaky reinterpret_cast of the
+  // source range; seam B deletes the copy outright, which is the real fix.
   out.vertices.resize(mesh.vertices.size());
-  for (std::size_t i = 0; i < mesh.vertices.size(); ++i) {
-    const rmesh::Vertex& in = mesh.vertices[i];
-    gassets::Vertex& v = out.vertices[i];
-    v.position = in.position;
-    v.normal = in.normal;
-    v.tangent = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);  // unused; slot carried
-    v.uv0 = in.uv0;      // atlas coord where textured, else (-1,-1) sentinel
-    v.color = in.color;  // per-vertex RGBA the TSDF tier fused
+  if (!mesh.vertices.empty()) {
+    std::memcpy(out.vertices.data(), mesh.vertices.data(),
+                mesh.vertices.size() * sizeof(gassets::Vertex));
   }
   out.indices = mesh.indices;
   return out;
