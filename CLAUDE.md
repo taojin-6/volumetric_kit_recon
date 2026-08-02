@@ -616,8 +616,11 @@ whose fused `color` attribute is 0 — the tsdf integrator's "colour unobserved"
 sentinel (a written colour carries alpha 0xFF, so it is non-zero) — falls back to
 opaque white rather than dragging the interpolated vertex toward black, mirroring
 the integrator's first-observation-assigns anti-darkening rule; and the host
-rejects a worst-case vertex arena larger than `maxStorageBufferRange` with a
-clean `Status` instead of an opaque allocation failure.
+rejects a vertex arena larger than `maxStorageBufferRange` with a clean `Status`
+instead of an opaque allocation failure — measured against what the surface
+needs, since the arena is fitted to it rather than to a worst case ~48x larger
+(so a grid too big for a single dispatch is caught before it, by the
+`worst_case` bound the 32-bit triangle counter needs anyway).
 `tests/marching_cubes_sparse_test.cpp` writes an analytic sphere into a real
 6³-block grid so the surface crosses interior block boundaries, and proves the
 sparse mesh matches the dense path **triangle-for-triangle** (plus cross-block
@@ -733,7 +736,10 @@ comparable host work, so it gets its own `atlas pack` row rather than being
 charged to the GPU pass. A *Reconstruction* panel shows fused-frame progress,
 fuse ms/frame (the stage total **excluding** the `frame` read — that is
 dataloading, not fusion, and it stays visible as its own row), the mesh's
-vertex/triangle counts and version, the map's bucket count and block-heap
+vertex/triangle counts and version, the vertex arena's fill (emitted vs
+capacity, in MiB) **and how many dispatches the extract took** — 2 means the
+planner undershot and had to refit, which the `..dispatch` row cannot show
+because it sums both attempts — the map's bucket count and block-heap
 *capacity* (`num_blocks` is `bucket_size · num_buckets`, what a resize doubles
 and what every attribute array is sized by — not occupancy, which would need the
 diagnostics readback), recon's own device memory (`Allocator::memory_stats` —
@@ -777,16 +783,37 @@ produces and drops only those past `capacity`, so an undersized arena is
 and re-runs, and since the count is a property of the field rather than of the
 atomic ordering, that retry is guaranteed to fit. Steady state is therefore one
 dispatch, against the two an unconditional count-then-fill pass would always
-cost. Measured on the full 400-frame room0: peak process memory **1391 → 1080 MB
-(−22%)** with the mesh identical triangle-for-triangle (same 991,167 vertices /
-330,389 triangles, same canonical hash), and marginally *faster* rather than
-slower. Landing it exposed a latent bug in the kernel: `mcEmitCell` **returned**
-on overflow instead of continuing, abandoning the rest of that cell's triangles
+cost, and the plan is **predictive rather than reactive**: each extract records
+the triangles-per-active-block density it measured, and the next call scales
+that by *its own* active set (a seed of 64/block covers the first call, against
+the 2560 worst case), so a growing scan plans ahead of its surface instead of
+discovering every size increase by throwing a dispatch away. Measured on the
+full 400-frame room0, peak RSS: **1250 → 985 MB (−21%)** at `--mesh-every 0`,
+**1568 → 1302 MB (−17%)** at the default `--mesh-every 50`, with the mesh
+identical triangle-for-triangle in both (991,167 vertices / 330,389 triangles,
+one canonical hash over the sorted triangle set across main, this branch, and
+both flag settings). It is also much *faster* end to end at `--mesh-every 0` —
+17.4 s → 5.6 s (23.0 → 71.6 fps) — because on main the single final extract
+spends ~12 s faulting in and zeroing a ~2 GB worst-case arena.
+
+Landing it exposed a latent bug in the kernel: `mcEmitCell` **returned** on
+overflow instead of continuing, abandoning the rest of that cell's triangles
 *uncounted*, so the reported total was a lower bound. Harmless while capacity
 was the unreachable worst case, fatal the moment the host started trusting the
 count — the first refit undershot and the retry overflowed again. The emit loop
 now `continue`s, which is what makes "tri_count is the field's true total" an
-honest contract.
+honest contract, and `marching_cubes_sparse_test` pins it with a fixture whose
+density (one block of a sign-alternating field, ~1400 triangles where the seed
+plans ~64) *forces* the refit path: reverting the `continue` fails it
+deterministically with an `out_of_memory`, where the sphere fixtures fit inside
+the growth headroom and could not tell the difference. Two further consequences
+of the host trusting the count: the arena's `maxStorageBufferRange` guard now
+tests the *request* rather than the request plus growth headroom (or it would
+reject the top third of legal mesh sizes), and the extract stamps its
+generation when it first touches the arena rather than on success — a call that
+overwrites the arena and then fails must still invalidate every outstanding
+`DeviceMesh`, and so must the dense overload, which shares that arena and can
+now reallocate it.
 
 `recon_gfx_bridge.hpp` converts `mesh::Vertex →
 gfx::assets::Vertex` (synthesizing `tangent`, passing `uv0` through — a real
@@ -830,7 +857,10 @@ siblings) + the gfx-vertex converter (interop seam A) — the example's coloured
 PLY dump is deliberately a throwaway (tinyply), not that first-class exporter
 (Assimp was considered and rejected as disproportionate: a large import-first lib
 gfx does not use; gfx vendors tinygltf + tinyobjloader). On the `mesh` side
-(greppable `TODO`s): shared-vertex dedup + the incremental block-mesh pool. On
+(greppable `TODO(mesh)`s in `marching_cubes.hpp` / `.cpp`): shared-vertex dedup,
+the incremental block-mesh pool, and fitting the *dense* extract to its surface
+as the sparse one does (the two share one retained arena, so a large dense call
+grows it to the dense worst case). On
 the `texture` side, a later slice restores the multi-keyframe post-scan atlas
 (best-of-N view, packed atlas, the winner-take-all vertex atomic once dedup
 shares vertices) — the counterpart to the live single-camera path now wired end
