@@ -285,9 +285,15 @@ vr::Status run(const Options& opt) {
   // so preloading is what makes the reported fps a measure of fusion rather
   // than of the reader.
   if (opt.preload) {
+    const auto stride = static_cast<std::size_t>(opt.stride);
+    // Announce the cost before spending it: --preload has no frame cap of its
+    // own, so a long sequence can quietly ask for many gigabytes.
+    std::printf(
+        "preloading %.0f MB...\n",
+        static_cast<double>(dataset.preload_bytes_projected(last, stride)) /
+            (1024 * 1024));
     const auto preload_start = std::chrono::steady_clock::now();
-    VR_ASSIGN(const std::size_t cached_frames,
-              dataset.preload(last, static_cast<std::size_t>(opt.stride)));
+    VR_ASSIGN(const std::size_t cached_frames, dataset.preload(last, stride));
     const double preload_seconds =
         std::chrono::duration<double>(std::chrono::steady_clock::now() -
                                       preload_start)

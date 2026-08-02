@@ -7,6 +7,7 @@
 /// @brief A posed RGB-D dataset reader for the fuse examples, in the
 ///        Replica-SLAM layout nvblox's `fuse_replica` consumes.
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -55,17 +56,27 @@ class ReplicaDataset;
 class FrameView {
  public:
   /// @return The frame. Never null for a view obtained from a successful
-  ///         @ref ReplicaDataset::frame.
+  ///         @ref ReplicaDataset::frame; null once this view has been moved
+  ///         from, so dereferencing a stale view faults instead of quietly
+  ///         reading an emptied frame.
   const RgbdFrame& operator*() const noexcept { return *get(); }
 
   /// @copydoc operator*
   const RgbdFrame* operator->() const noexcept { return get(); }
 
+  FrameView(FrameView&& other) noexcept;
+  FrameView& operator=(FrameView&& other) noexcept;
+  FrameView(const FrameView&) = delete;
+  FrameView& operator=(const FrameView&) = delete;
+
  private:
   friend class ReplicaDataset;
 
-  // Resolved on access rather than cached in a member pointer, so the defaulted
-  // copy/move stay correct: a member pointing at `owned_` would dangle the
+  // Only the dataset makes one: a default-constructed view holds no frame.
+  FrameView() = default;
+
+  // Resolved on access rather than cached in a member pointer, so the move
+  // operations stay correct: a member pointing at `owned_` would dangle the
   // moment the view is moved.
   const RgbdFrame* get() const noexcept {
     return owned_ ? &*owned_ : borrowed_;
@@ -107,11 +118,12 @@ class ReplicaDataset {
   ///        per-frame JPEG/PNG decode.
   ///
   /// Decode dominates the streaming path: on Replica room0 one frame costs
-  /// ~10 ms to decode against ~3 ms of GPU fusion, so a streaming fuse loop
-  /// spends ~75% of its wall clock in the reader. Preloading trades memory for
-  /// that time -- roughly `width * height * 8` bytes per frame (~6 MB at
-  /// Replica's 1200x680, ~2.5 GB for 400 frames), so it suits benchmarking and
-  /// short sequences, not an unbounded capture.
+  /// ~10 ms to decode against ~1.8 ms of GPU fusion, so a streaming fuse loop
+  /// is dataloader-bound -- ~75-80% of its wall clock is the reader.
+  /// Preloading trades memory for that time -- roughly `width * height * 8`
+  /// bytes per frame (~6 MB at Replica's 1200x680, ~2.5 GB for 400 frames), so
+  /// it suits benchmarking and short sequences, not an unbounded capture. Call
+  /// @ref preload_bytes_projected first to show that cost before paying it.
   ///
   /// Caches indices `0, frame_stride, 2*frame_stride, ...` below
   /// @p frame_limit, matching what a strided fuse loop actually visits. Stops
@@ -121,11 +133,34 @@ class ReplicaDataset {
   ///
   /// @param frame_limit   One past the highest frame index to cache.
   /// @param frame_stride  Frame step; 1 caches every frame. Must be >= 1.
+  /// @param cancel        Optional flag polled once per frame; when it turns
+  ///                      true the decode stops early and returns what it has,
+  ///                      so a caller shutting down is not held up by a long
+  ///                      preload. The frames it did not reach still decode on
+  ///                      demand through @ref frame.
   /// @return How many frames were cached, or a non-OK @ref vr::Status (a zero
   ///         @p frame_stride, or a frame present on disk that failed to
   ///         decode).
   vr::Result<std::size_t> preload(std::size_t frame_limit,
-                                  std::size_t frame_stride = 1);
+                                  std::size_t frame_stride = 1,
+                                  const std::atomic<bool>* cancel = nullptr);
+
+  /// @brief Bytes @ref preload would hold for the same @p frame_limit /
+  ///        @p frame_stride, so a caller can report the cost up front rather
+  ///        than discover it after a multi-gigabyte decode.
+  ///
+  /// Probes the sequence on disk (two file opens per frame, milliseconds) so it
+  /// counts the frames @ref preload would really reach, stopping where it does
+  /// at the first absent frame -- a trajectory routinely lists more poses than
+  /// there are images, and assuming otherwise would overstate the cost several
+  /// fold.
+  ///
+  /// @param frame_limit   One past the highest frame index to cache.
+  /// @param frame_stride  Frame step; 1 caches every frame.
+  /// @return Frame payload bytes, or `0` for a zero @p frame_stride (the
+  ///         argument @ref preload rejects).
+  std::size_t preload_bytes_projected(std::size_t frame_limit,
+                                      std::size_t frame_stride = 1) const;
 
   /// @return Bytes of frame payload currently held by @ref preload.
   std::size_t preloaded_bytes() const noexcept;

@@ -225,8 +225,11 @@ vr::Result<Reconstruction> fuse(const Options& opt,
 
   // Decode the sequence up front when asked, so the fuse loop below runs at
   // GPU speed instead of at JPEG/PNG decode speed (~75% of a streaming loop).
-  // Costs ~6 MB per frame of RAM.
+  // Costs ~6 MB per frame of RAM, announced before it is spent.
   if (opt.preload) {
+    std::printf("preloading %.0f MB...\n",
+                static_cast<double>(dataset.preload_bytes_projected(last)) /
+                    (1024 * 1024));
     VR_ASSIGN(const std::size_t cached_frames, dataset.preload(last));
     std::printf("preloaded %zu frames (%.0f MB)\n", cached_frames,
                 static_cast<double>(dataset.preloaded_bytes()) / (1024 * 1024));

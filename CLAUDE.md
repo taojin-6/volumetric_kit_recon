@@ -572,24 +572,6 @@ PLY via tinyply (interop-seam-A export, in example form). Verified on Replica
 room0 (400 frames) — a coherent ~4 m metric room with plausible surface colour at
 ~60 fps on MoltenVK.
 
-All three fuse examples take **`--preload`**, which decodes the sequence into RAM
-(`ReplicaDataset::preload`) before fusing, so the loop measures compute rather
-than the reader. Streaming is **decode-bound**: per frame the reader costs
-~10 ms of disk read + JPEG/PNG decode against ~1.8 ms of GPU fusion, so ~75% of a
-streaming loop's wall clock is dataloading. Preloading lifts room0 from ~70 fps
-to **~550 fps** (400 frames fused in 0.7 s) after a one-off 4.3 s decode, at
-~6 MB/frame of RAM (2.5 GB for the 400-frame sequence) — a benchmarking and
-short-sequence tool, not a capture-scale one. Frames are served through a
-`FrameView` that borrows the cached frame (no per-iteration copy of a ~6 MB
-frame) or owns one it decoded on demand, so the streaming and preloaded paths run
-the same loop. Verified equivalent on room0: streamed and preloaded runs produce
-the same mesh triangle-for-triangle (identical hash over the canonically-ordered
-triangles; the PLY *bytes* differ between any two runs either way, since marching
-cubes appends through an atomic and triangle order is nondeterministic). The
-follow-up, if an unbounded capture or startup latency makes all-in-RAM the wrong
-trade, is a decode thread pool — which would also speed the *streaming* path,
-where a single decoder thread caps the loop near ~96 fps.
-
 The gfx-linked **viewer examples** (`examples/viewer/`, behind the off-by-default
 `VR_BUILD_VIEWER` — the 2026-07-07 opt-in-gfx decision) render the coloured,
 **projectively textured** reconstruction through `volumetric_kit_gfx`'s
@@ -613,6 +595,34 @@ takes the per-vertex-colour path). Verified: the untextured follow-camera render
 is a correct first-person room view and the live window runs the fly-through;
 `fuse_render` texturing sharpens the frame-200 first-person view (crisp rug /
 pillow / window mullions) where `--no-texture` is soft at 2 cm voxels.
+
+All three fuse examples take **`--preload`**, which decodes the sequence into RAM
+(`ReplicaDataset::preload`) before fusing, so the loop measures compute rather
+than the reader. Streaming is **decode-bound**: per frame the reader costs
+~10 ms of disk read + JPEG/PNG decode against ~1.8 ms of GPU fusion, so ~75-80%
+of a streaming loop's wall clock is dataloading. With the periodic remesh kept
+out of the timed region (`--mesh-every 0`) preloading lifts room0 from ~70 fps to
+**~550 fps** (400 frames fused in 0.7 s) after a one-off ~4 s decode; at the
+default `--mesh-every 50` the eight intermediate marching-cubes extracts sit
+*inside* the timed loop and roughly halve that (~65 → ~310 fps), so quote the
+flags with the number. It costs ~6 MB/frame of RAM (2.5 GB for the 400-frame
+sequence) — a benchmarking and short-sequence tool, not a capture-scale one — so
+each example prints `preload_bytes_projected` (which probes the sequence on disk,
+so a trajectory listing more poses than it has images does not overstate the
+figure) *before* spending it,
+and `fuse_viewer` hands its window `quit` flag to `preload` so closing the window
+mid-decode does not stall the shutdown join (the same reason its final extract is
+skipped once the user has quit). Frames are served through a `FrameView` that
+borrows the cached frame (no per-iteration copy of a ~6 MB frame) or owns one it
+decoded on demand, so the streaming and preloaded paths run the same loop.
+Verified equivalent on room0 at stride 1 *and* stride 4: streamed and preloaded
+runs produce the same mesh triangle-for-triangle (identical hash over the
+canonically-ordered triangles; the PLY *bytes* differ between any two runs either
+way, since marching cubes appends through an atomic and triangle order is
+nondeterministic). The follow-up, if an unbounded capture or startup latency
+makes all-in-RAM the wrong trade, is a decode thread pool — which would also
+speed the *streaming* path, where a single decoder thread caps the loop near
+~96 fps.
 
 Next: first-class **glTF/GLB export via tinygltf** (the same reader gfx's
 `load_gltf` uses, so the seam is one shared glTF implementation across both

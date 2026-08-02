@@ -432,7 +432,15 @@ int run(GLFWwindow* window, const Options& opt) {
       // loop). Done here, on the fuse thread, so the window is already up and
       // responsive while it works.
       if (opt.preload) {
-        auto cached_frames = dataset.preload(frame_count);
+        std::printf(
+            "preloading %.0f MB...\n",
+            static_cast<double>(dataset.preload_bytes_projected(frame_count)) /
+                (1024 * 1024));
+        // `quit` stops the decode at the next frame boundary, so closing the
+        // window mid-preload does not leave the join at shutdown waiting out
+        // the whole sequence -- the same reason the final extract below is
+        // skipped once the user has quit.
+        auto cached_frames = dataset.preload(frame_count, 1, &quit);
         if (cached_frames) {
           std::printf(
               "preloaded %zu frames (%.0f MB)\n", cached_frames.value(),
