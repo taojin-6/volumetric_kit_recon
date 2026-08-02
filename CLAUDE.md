@@ -291,7 +291,6 @@ Each dated; newest context wins. Change the decision *and* this list together.
   range is skipped, not an out-of-bounds SSBO write), and the host rejects a
   vertex/index/depth buffer past `maxStorageBufferRange` with a clean `Status`
   (the mesh tier's arena guard).
-
 - **2026-08-01 — Perf instrumentation starts in the viewer example, not a shared
   contract package.** The question left open when a private
   `volumetric_kit_interop` repo was stood up to hold a shared `FrameMetrics`
@@ -334,6 +333,46 @@ Each dated; newest context wins. Change the decision *and* this list together.
   inside one call, and picking between interop seam B and the incremental
   block-mesh pool needs their split. Other tiers follow the same shape only
   when they have the same problem.
+
+- **2026-08-01 — iOS is a downstream concern; recon cross-compiles to it
+  unchanged.** The iOS app shell lives in a **separate sibling repo**,
+  `volumetric_kit_ios` — an Xcode project, a bundle identifier, a signing team,
+  and a provisioning profile have no business in a library that also ships on
+  Linux and Windows. This is the *stronger* form of the 2026-07-07 viewer
+  decision (which admitted an opt-in gfx example into this tree for
+  discoverability): an app target is heavier than an example, so it goes fully
+  outboard and recon keeps the "independent siblings" rule intact. Verified: the
+  five library tiers build for `ios-arm64` (`platform 2`, minos 16.0) with **zero
+  source changes here**. The whole platform port is one toolchain file
+  downstream, because iOS ships **no ICD loader and no `libvulkan`** — MoltenVK's
+  static library *is* the Vulkan implementation, linked directly (so: no
+  validation layers on device), and seeding `Vulkan_LIBRARY` /
+  `Vulkan_INCLUDE_DIR` with MoltenVK's iOS xcframework is enough for CMake's
+  `FindVulkan` to build a `Vulkan::Vulkan` that satisfies every
+  `find_package(Vulkan)` in this repo. This is the 2026-06-21 single-Vulkan-path
+  decision paying off exactly as argued — MoltenVK carries recon to iOS with no
+  second code path. Proven on an iPad Pro M5 (Apple M5 GPU, MoltenVK 1.4.2 /
+  Vulkan 1.4.357) by an on-device four-stage smoke: device capabilities, a
+  compute dispatch, a **scalar-block-layout ABI round-trip** (`Vec3i` block
+  coords survive host → GLSL → host, so the 2026-07-05 ABI decision holds through
+  MoltenVK's SPIR-V → MSL translation — the one genuinely at-risk assumption),
+  and the full `allocate_from_depth` → TSDF integrate → marching-cubes spine. Two
+  findings that shape the later tiers: the GPU reports a **host-visible
+  `DEVICE_LOCAL` heap** (unified memory), so an ARKit `CVPixelBuffer` upload
+  copies straight into GPU-visible memory with no staging blit; and
+  `scalarBlockLayout` / `timelineSemaphore` / `dynamicRendering` are all present,
+  so the shared-`VkDevice` interop seam (2026-07-04) is reachable on iOS. One
+  packaging wrinkle stays downstream by design: Homebrew's glm 1.0.3 defines
+  `glm::glm` as a *macOS* dylib, and `core` links that canonical name
+  deliberately (older packagings lack `glm::glm-header-only`), so the iOS
+  consumer overrides glm with a header-only copy rather than this repo changing a
+  correct choice. The **`sensor` tier is where iOS actually lands in this tree**:
+  an ARKit `ICameraCapture` source feeding `sceneDepth` (256×192 float metres),
+  `capturedImage`, and `camera.transform` — note ARKit is +Y up / −Z forward
+  while recon projects +Z forward, so poses convert as
+  `T_world_cv = T_world_arkit · diag(1, −1, −1, 1)`, and ARKit's differing depth
+  and colour resolutions are already modelled by the separate
+  `DepthCameraParams` / `ColorCameraParams` the 2026-07-06 decision introduced.
 
 ## Provenance & salvage policy
 
@@ -401,6 +440,20 @@ Two contracts — both simpler now that recon and gfx are both Vulkan.
   MoltenVK *compute* on the target Apple GPU early (prove the path before
   building on it, the gfx playbook). Metal supports compute; MoltenVK translates
   Vulkan compute → Metal compute.
+- **MoltenVK caps a physical device's advertised `apiVersion` to whatever its
+  instance requested.** `Instance::create` negotiates
+  `VkApplicationInfo::apiVersion = VK_API_VERSION_1_2` (all recon needs), so
+  `vkGetPhysicalDeviceProperties` through a recon instance reports **1.2 on
+  hardware that reports 1.4 through an instance created at the ceiling**. Never
+  answer "what can this GPU do" through a library's own instance: create a probe
+  instance with the version from `vkEnumerateInstanceVersion` and query through
+  that. This cost a false "Vulkan 1.3 unsupported" in the iOS smoke, which would
+  have argued against the shared `VkDevice` on a device that fully supports it —
+  so the neutral bootstrap of the 2026-07-04 interop decision must itself request
+  ≥ 1.3 (gfx's floor), not inherit recon's 1.2. Related: when MoltenVK is linked
+  *directly* (no loader, as on iOS) `VK_KHR_portability_enumeration` does not
+  exist, so instance creation must fall back without it — which
+  `Instance::create` already does.
 - **Vulkan via the link-time loader through one umbrella header**
   (`core/vulkan.hpp`), exactly as gfx — never `#include <vulkan/...>` directly,
   so adopting volk later for the iOS/Android loader stays a one-header change.
