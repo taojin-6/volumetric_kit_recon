@@ -7,8 +7,10 @@
 // handing it across the interop seam (a host mesh), and drawing the growing,
 // coloured reconstruction each frame through volumetric_kit_gfx's
 // HybridMeshPipeline with an orbiting camera -- the nvblox FuserVisualizer
-// analogue. Two devices (recon fuses on its own, gfx renders on its own); the
-// mesh bridges them on the host.
+// analogue. Both libraries run on ONE VkDevice, built by the neutral bootstrap
+// in shared_device.hpp and adopted by each -- the precondition for drawing
+// recon's buffers in place. The mesh itself still bridges them on the host
+// (interop seam A); making it zero-copy is seam B's job.
 //
 // Each re-meshed frame is projectively textured with its own keyframe (the
 // texture tier): the triangles that keyframe saw unoccluded render at full
@@ -22,7 +24,7 @@
 //
 //   fuse_viewer <scene_dir> [--voxel 0.02] [--max-frames N] [--fuse-per-tick K]
 //               [--remesh-every N] [--width 1280] [--height 720] [--unlit]
-//               [--no-texture] [--preload] [--no-overlay]
+//               [--no-texture] [--preload] [--no-overlay] [--validation]
 
 #include <algorithm>
 #include <atomic>
@@ -49,11 +51,11 @@
 #include "example_camera.hpp"  // vr_example::make_depth_camera
 #include "image_io.hpp"        // vr_example::pack_color_rgba8
 #include "recon_gfx_bridge.hpp"
+#include "shared_device.hpp"
 #include "stage_metrics.hpp"  // fuse_viewer::StageTimes / StageScope
 
 #include "volumetric_kit/recon/core/allocator.hpp"
 #include "volumetric_kit/recon/core/device.hpp"
-#include "volumetric_kit/recon/core/instance.hpp"
 #include "volumetric_kit/recon/core/result.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
 #include "volumetric_kit/recon/mesh/mesh.hpp"
@@ -103,9 +105,10 @@ struct Options {
   int width = 1280;
   int height = 720;
   bool lit = true;
-  bool texture = true;   // project each keyframe onto the growing mesh (uv0)
-  bool preload = false;  // decode every frame up front (RAM for decode time)
-  bool overlay = true;   // Dear ImGui performance + reconstruction panels
+  bool texture = true;      // project each keyframe onto the growing mesh (uv0)
+  bool preload = false;     // decode every frame up front (RAM for decode time)
+  bool overlay = true;      // Dear ImGui performance + reconstruction panels
+  bool validation = false;  // Vulkan validation layer on the shared device
 };
 
 bool parse_args(int argc, char** argv, Options& o) {
@@ -154,6 +157,8 @@ bool parse_args(int argc, char** argv, Options& o) {
       o.preload = true;
     } else if (a == "--no-overlay") {
       o.overlay = false;
+    } else if (a == "--validation") {
+      o.validation = true;
     } else if (!a.empty() && a[0] == '-') {
       std::fprintf(stderr, "unknown flag %s\n", a.c_str());
       return false;
@@ -168,7 +173,7 @@ bool parse_args(int argc, char** argv, Options& o) {
     std::fprintf(stderr,
                  "usage: fuse_viewer <scene_dir> [--voxel m] [--max-frames n] "
                  "[--fuse-per-tick k] [--remesh-every n] [--unlit] "
-                 "[--no-texture] [--preload] [--no-overlay]\n");
+                 "[--no-texture] [--preload] [--no-overlay] [--validation]\n");
     return false;
   }
   // strtof parses "nan"/"inf" without error, and a non-finite knob slips the
@@ -224,8 +229,8 @@ struct ProfilerDetach {
 };
 
 // What the reconstruction side is holding, shown beside the renderer's frame
-// metrics. gfx's FrameMetrics carries one memory pair (its own device), so
-// recon's device memory + the volume/mesh counters live in their own panel
+// metrics. gfx's FrameMetrics carries one memory pair (its own allocator's),
+// so recon's device memory + the volume/mesh counters live in their own panel
 // rather than being squeezed into that contract.
 struct ReconstructionPanel {
   std::size_t fused_frames = 0;
@@ -315,50 +320,58 @@ struct AtlasVersion {
 // use-after-free, notably on MoltenVK where the surface wraps the window's
 // CAMetalLayer.
 int run(GLFWwindow* window, const Options& opt) {
-  std::uint32_t ext_count = 0;
-  const char** glfw_exts = glfwGetRequiredInstanceExtensions(&ext_count);
+  // --- One VkDevice, adopted by both libraries ------------------------------
+  // Declared first so it outlives every wrapper that borrows it: the gfx app
+  // and recon's device/allocator below hold raw handles into this, and both
+  // must be gone before the instance and device are destroyed.
+  fuse_viewer::SharedDeviceConfig shared_config;
+  shared_config.enable_validation = opt.validation;
+  fuse_viewer::SharedDevice shared;
+  if (!fuse_viewer::build_shared_device(window, shared_config, shared)) {
+    return 1;
+  }
+
   vg::app::WindowedAppConfig config;
   config.app_name = "fuse_viewer";
-  config.instance_extensions.assign(glfw_exts, glfw_exts + ext_count);
   config.swapchain.extent = window_extent(window);
   config.swapchain.depth_format = VK_FORMAT_D32_SFLOAT;
   config.frames_in_flight = 2;
-  auto app_r = vg::app::WindowedApp::create(
-      config, [window](VkInstance inst) -> vg::Result<VkSurfaceKHR> {
-        VkSurfaceKHR surface = VK_NULL_HANDLE;
-        const VkResult r =
-            glfwCreateWindowSurface(inst, window, nullptr, &surface);
-        if (r != VK_SUCCESS)
-          return vg::Status::error(r, "glfwCreateWindowSurface failed");
-        return surface;
+  // The surface already exists -- picking a present-capable device required
+  // one -- so the factory hands over the one the bootstrap made rather than
+  // creating a second. Ownership transfers with it.
+  auto app_r = vg::app::WindowedApp::adopt(
+      fuse_viewer::gfx_adopt_payload(shared), config,
+      [&shared](VkInstance instance) -> vg::Result<VkSurfaceKHR> {
+        // adopt calls this with the instance from the payload, so this can only
+        // trip if the two ever stop coming from the same SharedDevice -- at
+        // which point the surface would belong to a different instance than the
+        // swapchain built on it.
+        if (instance != shared.instance) {
+          return vg::Status::invalid_argument(
+              "surface factory: the app adopted a different VkInstance than "
+              "the bootstrap created the surface on");
+        }
+        return shared.release_surface();
       });
   if (!app_r.ok()) {
-    std::fprintf(stderr, "WindowedApp: %s\n", app_r.status().message().c_str());
+    std::fprintf(stderr, "WindowedApp::adopt: %s\n",
+                 app_r.status().message().c_str());
     return 1;
   }
   vg::app::WindowedApp app = std::move(app_r).value();
 
-  // --- recon pipeline (its own device), fused incrementally -----------------
-  auto recon_instance = vr::Instance::create({});
-  if (!recon_instance) {
-    std::fprintf(stderr, "recon instance: %s\n",
-                 recon_instance.status().message().c_str());
-    return 1;
-  }
-  auto rgpu = recon_instance.value().select_physical_device();
-  if (!rgpu) {
-    std::fprintf(stderr, "recon gpu: %s\n", rgpu.status().message().c_str());
-    return 1;
-  }
+  // recon takes its share of the same device. It gets its own VMA allocator --
+  // allocators are independent bookkeeping over one VkDevice's memory, so each
+  // library manages its own even when the device is shared.
   auto recon_device_result =
-      vr::Device::create(recon_instance.value().handle(), rgpu.value(), {});
+      vr::Device::adopt(fuse_viewer::recon_adopt_payload(shared), {});
   if (!recon_device_result) {
-    std::fprintf(stderr, "recon device: %s\n",
+    std::fprintf(stderr, "recon Device::adopt: %s\n",
                  recon_device_result.status().message().c_str());
     return 1;
   }
-  auto recon_allocator_result = vr::Allocator::create(
-      recon_instance.value().handle(), recon_device_result.value());
+  auto recon_allocator_result =
+      vr::Allocator::create(shared.instance, recon_device_result.value());
   if (!recon_allocator_result) {
     std::fprintf(stderr, "recon allocator: %s\n",
                  recon_allocator_result.status().message().c_str());
@@ -456,10 +469,12 @@ int run(GLFWwindow* window, const Options& opt) {
   }
   vg::Profiler profiler = std::move(profiler_result).value();
   // Fill the snapshot's memory pair from the *renderer's* allocator, so the
-  // Performance panel reports the mesh/atlas/swapchain footprint on gfx's
-  // device; recon's own allocator is on a second device and is reported
-  // separately by the Reconstruction panel below. `app` outlives the profiler
-  // (declared before it), which set_memory_source requires.
+  // Performance panel reports the mesh/atlas/swapchain footprint. recon runs
+  // its own VMA allocator over the same device (independent bookkeeping, not a
+  // second device), reported separately by the Reconstruction panel below, so
+  // the two figures partition the shared device's memory rather than
+  // double-counting it. `app` outlives the profiler (declared before it),
+  // which set_memory_source requires.
   profiler.set_memory_source(&app.allocator());
   app.set_profiler(&profiler);
   const ProfilerDetach profiler_guard{app};
@@ -476,7 +491,7 @@ int run(GLFWwindow* window, const Options& opt) {
     overlay_config.min_image_count = app.swapchain().image_count();
     overlay_config.image_count = app.swapchain().image_count();
     auto overlay_result = vg::ui::ImGuiOverlay::create(
-        app.device(), app.instance().handle(), overlay_config);
+        app.device(), app.instance_handle(), overlay_config);
     if (!overlay_result.ok()) {
       std::fprintf(stderr, "overlay: %s\n",
                    overlay_result.status().message().c_str());
@@ -559,10 +574,14 @@ int run(GLFWwindow* window, const Options& opt) {
 
   // --- Background fuse thread: load + decode + fuse + extract off the render
   // thread (per-frame JPEG/PNG decode is CPU-heavy and would otherwise gate the
-  // loop, starving both GPUs). It publishes the newest coloured mesh + the
+  // loop, starving the GPU). It publishes the newest coloured mesh + the
   // trajectory; the render thread only uploads + draws, so the window stays at
-  // full frame rate and the two devices' queues run concurrently. recon's
-  // device is used solely on this thread.
+  // full frame rate. Whether the two threads' *submits* also overlap is the
+  // shared device's queue plan: they do under kTwoQueuesOneFamily and
+  // kTwoFamilies (a queue each), and serialize under kSharedQueue (one queue
+  // behind a mutex) -- which is why the bootstrap prefers a second family over
+  // sharing a queue. recon's device wrapper is used solely on this thread
+  // (submit_single_time is not thread-safe: it owns one command pool).
   // -------------------------------------------
   std::mutex share_mtx;
   std::optional<vg::assets::Mesh> pending_mesh;  // newest mesh awaiting upload

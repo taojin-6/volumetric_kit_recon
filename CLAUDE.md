@@ -253,12 +253,13 @@ Each dated; newest context wins. Change the decision *and* this list together.
   renderer is still absent from everything that gates the library itself. This
   amends the independence stance *for an opt-in example only* — recon's
   **release** is still never coupled to gfx; a developer who wants the live
-  viewer opts in and pays the gfx fetch. The alternative (a standalone neutral repo, where the
-  `shared_device_bootstrap` device-adoption proof still lives) was weighed and
-  set aside for discoverability: the example lives with the pipeline it demos. The
-  handoff is a **host mesh** (interop seam A, two devices: recon fuses on its own,
-  gfx renders on its own), not the zero-copy shared `VkDevice` (that stays the
-  `shared_device_bootstrap`'s concern).
+  viewer opts in and pays the gfx fetch. The alternative (a standalone neutral
+  repo) was weighed and
+  set aside for discoverability: the example lives with the pipeline it demos.
+  *Amended 2026-08-02 (below):* the device-adoption proof that used to live in
+  that standalone repo now lives here too — `fuse_viewer` runs on **one shared
+  `VkDevice`**. The mesh **handoff** is still a host mesh (interop seam A); the
+  shared device is the precondition seam B needs, not seam B itself.
 
 - **2026-07-07 — Projective texturing is a new `texture` tier; live
   single-camera first.** Filling the mesh `Vertex::uv0` (the atlas coordinate the
@@ -418,6 +419,55 @@ Each dated; newest context wins. Change the decision *and* this list together.
   live on this vertex at all is the 2026-07-06 hybrid-colour path. Revisit if a
   non-renderer consumer ever dominates the mesh tier's traffic — the tangent is
   then 16 bytes of dead weight per vertex with no offsetting win.
+  (*2026-08-02:* that first consumer has arrived — the shared-device bootstrap
+  below — so the `VERTEX_BUFFER`/`INDEX_BUFFER` usage `TODO(mesh)` is now
+  unblocked, and is the next step toward seam B rather than a hypothetical one.)
+
+- **2026-08-02 — The neutral shared-`VkDevice` bootstrap lands in the viewer
+  example, and prefers two families over a shared queue.** The 2026-07-04
+  interop decision's "neutral app-side bootstrap" is now real and in-tree:
+  `examples/viewer/shared_device.hpp` merges what each library publishes through
+  `Device::requirements` (API floor, extension union, core-feature union, the
+  `timelineSemaphore`/`scalarBlockLayout`/`dynamicRendering` chain, plus gfx's
+  opaque `feature_chain`), creates one instance + device + surface, and hands the
+  same handles to `vr::Device::adopt` and `vg::app::WindowedApp::adopt`. Neither
+  library owns it; the bootstrap outlives both wrappers and destroys the device
+  last. It lives beside the example it serves rather than in the standalone repo,
+  for the same discoverability reason as the 2026-07-07 viewer decision.
+  **Taking the merged API floor is load-bearing**: MoltenVK caps a physical
+  device's advertised `apiVersion` to whatever the instance requested, so an
+  instance at recon's 1.2 floor makes a 1.3-capable device fail gfx's check —
+  the gotcha below, hit for real here.
+  **The queue plan is a three-tier preference, and the order is the decision.**
+  (1) One family with ≥ 2 queues: concurrent submission *and* no queue-family
+  ownership transfer on a buffer recon writes and gfx reads — what the seam-B
+  plan assumes. (2) Two families, one queue each: still concurrent, but a shared
+  buffer will need `VK_SHARING_MODE_CONCURRENT` or an explicit release/acquire
+  pair. (3) One family, one queue behind a mutex: fusion and rendering
+  *serialize*. Measured on an Apple M5 Max (MoltenVK 1.4.2): the driver reports
+  **four graphics+compute+present families of exactly one queue each**, so tier 1
+  is **unreachable on Apple** and tier 2 is what actually runs
+  (`family 0 (gfx) + family 1 (recon)`). Preferring tier 2 over tier 3 is the
+  whole point — the pre-shared-device viewer got concurrency for free from two
+  separate `VkDevice`s, and dropping to one shared queue would have handed that
+  back to buy an ownership-transfer saving that **nothing yet collects**, since
+  the mesh handoff is still a host copy. The cost is booked, not avoided: when
+  seam B lands, its buffer is cross-family here and pays one of the two sharing
+  mechanisms. Tier 3 remains for hardware that offers no second compute family,
+  and says so on stdout when taken.
+  Both `adopt` calls are fed from what `vkCreateDevice` actually saw — the
+  enabled extension list, the merged `VkPhysicalDeviceFeatures`, and the three
+  feature booleans are *recorded* by the bootstrap, never restated by hand in the
+  payload builders: Vulkan cannot be asked what a device enabled, so those
+  declarations are the only thing the `adopt` verification has to work with, and
+  a hardcoded `true` would quietly turn the check into a no-op. Extensions and
+  features are checked against the device before creation so a shortfall names
+  itself instead of collapsing into "vkCreateDevice failed"; instance creation
+  retries without `VK_KHR_portability_enumeration` (the iOS direct-MoltenVK case,
+  mirroring `Instance::create`); and `--validation` is the embedder's own knob,
+  since `WindowedApp::adopt` ignores gfx's `enable_validation` once the embedder
+  owns the instance. Verified on room0: two families, 30/30 frames fused while
+  the window renders, and **zero validation errors** with the layer on.
 - **2026-08-02 — The `sensor` tier is a *contract*, not a driver collection: a
   capture driver lives here only if this repo can build **and test** it.** The
   tier's first slice is platform-neutral C++ — an `ICameraCapture` interface, a
@@ -517,8 +567,12 @@ Two contracts — both simpler now that recon and gfx are both Vulkan.
   mesh/atlas into a `VkBuffer`/`VkImage` on a **single `VkDevice` shared with gfx**
   (one process) and gfx draws it directly — no external-memory import. Realized by
   the create/adopt device seam: a neutral bootstrap builds one device from both
-  libraries' merged `DeviceRequirements`; two queues from one graphics+compute
-  family avoid any queue-family ownership transfer; the handoff is an intra-device
+  libraries' merged `DeviceRequirements` (real since 2026-08-02, in
+  `examples/viewer/shared_device.hpp`); two queues from one graphics+compute
+  family would avoid any queue-family ownership transfer, but MoltenVK offers no
+  such family, so on Apple the buffer is cross-family and pays
+  `VK_SHARING_MODE_CONCURRENT` or an explicit release/acquire — see that
+  decision and the MoltenVK queue gotcha; the handoff is an intra-device
   timeline semaphore over a ring of mesh/atlas slots, variable topology drawn
   indirectly. See DESIGN.md → "The interop seam".
 
@@ -542,6 +596,16 @@ Two contracts — both simpler now that recon and gfx are both Vulkan.
   *directly* (no loader, as on iOS) `VK_KHR_portability_enumeration` does not
   exist, so instance creation must fall back without it — which
   `Instance::create` already does.
+- **MoltenVK gives one queue per family, several families — not several queues
+  in one family.** An Apple M5 Max (MoltenVK 1.4.2) reports **four**
+  graphics+compute+present families with `queueCount == 1` each. So the "two
+  queues from one family" shape the interop-seam-B plan assumes (it avoids a
+  queue-family ownership transfer) **cannot be had on Apple**: an embedder
+  sharing a device between recon and gfx either takes two *families* — and pays
+  `VK_SHARING_MODE_CONCURRENT` or an explicit release/acquire on any buffer both
+  touch — or serializes both libraries onto one queue behind a mutex. Do not
+  assume a single-family two-queue carve-out is available; check `queueCount`
+  and plan the fallback (see the 2026-08-02 bootstrap decision, which does).
 - **Vulkan via the link-time loader through one umbrella header**
   (`core/vulkan.hpp`), exactly as gfx — never `#include <vulkan/...>` directly,
   so adopting volk later for the iOS/Android loader stays a one-header change.
@@ -798,7 +862,8 @@ The gfx-linked **viewer examples** (`examples/viewer/`, behind the off-by-defaul
 headlessly (a gfx `OffscreenTarget`, CI-runnable), and `fuse_viewer` opens a
 **live window** — the nvblox `FuserVisualizer` analogue — fusing on a background
 thread while the render thread draws the growing mesh each frame following the
-capture trajectory (a host-mesh handoff, interop seam A; two devices). Both run
+capture trajectory (a host-mesh handoff, interop seam A, but on **one shared
+`VkDevice`** since 2026-08-02 — see that decision). Both run
 the `texture` tier: `fuse_render` projects one keyframe (the `--follow` frame,
 else the middle fused frame) onto the final mesh and binds that frame's image as
 the atlas; `fuse_viewer` re-textures the growing mesh with the **current**
@@ -831,8 +896,10 @@ because it sums both attempts — the map's bucket count and block-heap
 *capacity* (`num_blocks` is `bucket_size · num_buckets`, what a resize doubles
 and what every attribute array is sized by — not occupancy, which would need the
 diagnostics readback), recon's own device memory (`Allocator::memory_stats` —
-its VMA allocator's share of its device, separate from the renderer's, since the
-two run on two devices), and the host-side preload cache. The example owns the ImGui *platform* backend
+its VMA allocator's share of the device, reported apart from the renderer's
+because the two keep **independent VMA allocators over the one shared
+`VkDevice`**, so the two figures partition its memory rather than
+double-counting it), and the host-side preload cache. The example owns the ImGui *platform* backend
 (`imgui_impl_glfw`), as gfx's own examples do, since gfx's `ui` tier
 deliberately wraps only the Vulkan renderer backend.
 
