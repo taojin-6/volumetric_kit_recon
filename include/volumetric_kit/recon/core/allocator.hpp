@@ -7,6 +7,7 @@
 /// @brief The VMA allocator: recon's device-memory arena and the factory for
 ///        @ref Buffer.
 
+#include <cstdint>
 #include <memory>
 
 #include "volumetric_kit/recon/core/export.hpp"
@@ -30,6 +31,37 @@ enum class MemoryUsage {
 enum class HostAccess {
   Random,  ///< Reads and writes in any order (`..._HOST_ACCESS_RANDOM`).
   SequentialWrite,  ///< Write-once, front-to-back (`..._SEQUENTIAL_WRITE`).
+};
+
+/// @brief One memory heap's usage and budget, in bytes.
+///
+/// Both figures are VMA's running accounting of the heap, not a live driver
+/// query: @ref usage_bytes is what VMA has allocated out of it, @ref
+/// budget_bytes is how much VMA estimates is safely usable. They are heuristics
+/// unless `VK_EXT_memory_budget` is enabled, which lets VMA read the driver's
+/// authoritative figures.
+///
+/// TODO(core): enable `VK_EXT_memory_budget` on @ref Device::create (and
+/// require it in @ref DeviceRequirements for the adopt path) so these become
+/// the driver's own numbers rather than VMA's estimate.
+struct HeapStats {
+  std::uint64_t usage_bytes = 0;   ///< Bytes VMA has allocated from the heap.
+  std::uint64_t budget_bytes = 0;  ///< Bytes VMA estimates are usable in it.
+};
+
+/// @brief A snapshot of per-heap memory usage across the device's memory heaps.
+///
+/// Allocation-free: a fixed `VK_MAX_MEMORY_HEAPS` array with a live count, so
+/// it can be filled and returned by value without touching the host heap. Only
+/// the leading @ref heap_count entries of @ref heaps carry valid figures.
+///
+/// On a unified-memory (UMA) GPU -- Apple silicon through MoltenVK, this repo's
+/// primary target -- system and device memory are one pool, so the device
+/// typically reports a single unified heap rather than the separate
+/// device-local / host-visible heaps a discrete GPU exposes.
+struct MemoryStats {
+  std::uint32_t heap_count = 0;  ///< Number of valid entries in @ref heaps.
+  HeapStats heaps[VK_MAX_MEMORY_HEAPS]{};  ///< Per-heap usage/budget.
 };
 
 /// @brief Parameters for @ref Allocator::create_buffer.
@@ -91,6 +123,21 @@ class VR_CORE_API Allocator {
   ///         `mapped` device-local request, or a host-visible request that is
   ///         not `mapped`; @ref Status::Code::Backend if VMA fails.
   Result<Buffer> create_buffer(const BufferDesc& desc);
+
+  /// @brief Sample per-heap memory usage and budget across the device's heaps.
+  ///
+  /// The figures cover what *this* allocator has allocated -- a device shared
+  /// with the renderer (@ref Device::adopt) gives each library its own VMA
+  /// allocator, so each reports only its own share of the same `VkDevice`
+  /// memory.
+  ///
+  /// @return A @ref MemoryStats whose @ref MemoryStats::heap_count names the
+  ///         device's memory heaps and whose first that-many @ref
+  ///         MemoryStats::heaps entries carry each heap's usage/budget in
+  ///         bytes. A moved-from allocator reports `heap_count == 0`.
+  /// @note The byte figures are VMA heuristics unless `VK_EXT_memory_budget` is
+  ///       enabled; see @ref HeapStats. On UMA (Apple) GPUs expect one heap.
+  MemoryStats memory_stats() const;
 
   /// @return `true` if this owns an allocator (`false` when moved-from).
   bool valid() const noexcept { return impl_ != nullptr; }
