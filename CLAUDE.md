@@ -768,6 +768,26 @@ lesson is recorded because it generalises: *measure the phases before choosing
 the optimisation* — three of us (the TODO, the roadmap, and the first analysis)
 had independently guessed the wrong bottleneck.
 
+The follow-up **fits the arena to the surface instead of to the worst case**, so
+what the extractor retains is the mesh's real size rather than the 5-triangles-
+per-cell ceiling it can never reach (a room scan fills ~2% of it). Correctness
+does not rest on the guess: the kernel counts *every* triangle the field
+produces and drops only those past `capacity`, so an undersized arena is
+**detected**, never silently truncated — the host refits to the reported count
+and re-runs, and since the count is a property of the field rather than of the
+atomic ordering, that retry is guaranteed to fit. Steady state is therefore one
+dispatch, against the two an unconditional count-then-fill pass would always
+cost. Measured on the full 400-frame room0: peak process memory **1391 → 1080 MB
+(−22%)** with the mesh identical triangle-for-triangle (same 991,167 vertices /
+330,389 triangles, same canonical hash), and marginally *faster* rather than
+slower. Landing it exposed a latent bug in the kernel: `mcEmitCell` **returned**
+on overflow instead of continuing, abandoning the rest of that cell's triangles
+*uncounted*, so the reported total was a lower bound. Harmless while capacity
+was the unreachable worst case, fatal the moment the host started trusting the
+count — the first refit undershot and the retry overflowed again. The emit loop
+now `continue`s, which is what makes "tri_count is the field's true total" an
+honest contract.
+
 `recon_gfx_bridge.hpp` converts `mesh::Vertex →
 gfx::assets::Vertex` (synthesizing `tangent`, passing `uv0` through — a real
 atlas coordinate where a keyframe textured, else the `(-1,-1)` sentinel that
