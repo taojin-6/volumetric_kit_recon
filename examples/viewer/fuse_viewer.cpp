@@ -49,6 +49,7 @@
 #include "example_camera.hpp"  // vr_example::make_depth_camera
 #include "image_io.hpp"        // vr_example::pack_color_rgba8
 #include "recon_gfx_bridge.hpp"
+#include "shared_device.hpp"
 #include "stage_metrics.hpp"  // fuse_viewer::StageTimes / StageScope
 
 #include "volumetric_kit/recon/core/allocator.hpp"
@@ -315,50 +316,47 @@ struct AtlasVersion {
 // use-after-free, notably on MoltenVK where the surface wraps the window's
 // CAMetalLayer.
 int run(GLFWwindow* window, const Options& opt) {
-  std::uint32_t ext_count = 0;
-  const char** glfw_exts = glfwGetRequiredInstanceExtensions(&ext_count);
+  // --- One VkDevice, adopted by both libraries ------------------------------
+  // Declared first so it outlives every wrapper that borrows it: the gfx app
+  // and recon's device/allocator below hold raw handles into this, and both
+  // must be gone before the instance and device are destroyed.
+  fuse_viewer::SharedDevice shared;
+  if (!fuse_viewer::build_shared_device(window, shared)) {
+    return 1;
+  }
+
   vg::app::WindowedAppConfig config;
   config.app_name = "fuse_viewer";
-  config.instance_extensions.assign(glfw_exts, glfw_exts + ext_count);
   config.swapchain.extent = window_extent(window);
   config.swapchain.depth_format = VK_FORMAT_D32_SFLOAT;
   config.frames_in_flight = 2;
-  auto app_r = vg::app::WindowedApp::create(
-      config, [window](VkInstance inst) -> vg::Result<VkSurfaceKHR> {
-        VkSurfaceKHR surface = VK_NULL_HANDLE;
-        const VkResult r =
-            glfwCreateWindowSurface(inst, window, nullptr, &surface);
-        if (r != VK_SUCCESS)
-          return vg::Status::error(r, "glfwCreateWindowSurface failed");
-        return surface;
+  // The surface already exists -- picking a present-capable device required
+  // one -- so the factory hands over the one the bootstrap made rather than
+  // creating a second. Ownership transfers with it.
+  auto app_r = vg::app::WindowedApp::adopt(
+      fuse_viewer::gfx_adopt_payload(shared), config,
+      [&shared](VkInstance) -> vg::Result<VkSurfaceKHR> {
+        return shared.release_surface();
       });
   if (!app_r.ok()) {
-    std::fprintf(stderr, "WindowedApp: %s\n", app_r.status().message().c_str());
+    std::fprintf(stderr, "WindowedApp::adopt: %s\n",
+                 app_r.status().message().c_str());
     return 1;
   }
   vg::app::WindowedApp app = std::move(app_r).value();
 
-  // --- recon pipeline (its own device), fused incrementally -----------------
-  auto recon_instance = vr::Instance::create({});
-  if (!recon_instance) {
-    std::fprintf(stderr, "recon instance: %s\n",
-                 recon_instance.status().message().c_str());
-    return 1;
-  }
-  auto rgpu = recon_instance.value().select_physical_device();
-  if (!rgpu) {
-    std::fprintf(stderr, "recon gpu: %s\n", rgpu.status().message().c_str());
-    return 1;
-  }
+  // recon takes its share of the same device. It gets its own VMA allocator --
+  // allocators are independent bookkeeping over one VkDevice's memory, so each
+  // library manages its own even when the device is shared.
   auto recon_device_result =
-      vr::Device::create(recon_instance.value().handle(), rgpu.value(), {});
+      vr::Device::adopt(fuse_viewer::recon_adopt_payload(shared), {});
   if (!recon_device_result) {
-    std::fprintf(stderr, "recon device: %s\n",
+    std::fprintf(stderr, "recon Device::adopt: %s\n",
                  recon_device_result.status().message().c_str());
     return 1;
   }
-  auto recon_allocator_result = vr::Allocator::create(
-      recon_instance.value().handle(), recon_device_result.value());
+  auto recon_allocator_result =
+      vr::Allocator::create(shared.instance, recon_device_result.value());
   if (!recon_allocator_result) {
     std::fprintf(stderr, "recon allocator: %s\n",
                  recon_allocator_result.status().message().c_str());
@@ -476,7 +474,7 @@ int run(GLFWwindow* window, const Options& opt) {
     overlay_config.min_image_count = app.swapchain().image_count();
     overlay_config.image_count = app.swapchain().image_count();
     auto overlay_result = vg::ui::ImGuiOverlay::create(
-        app.device(), app.instance().handle(), overlay_config);
+        app.device(), app.instance_handle(), overlay_config);
     if (!overlay_result.ok()) {
       std::fprintf(stderr, "overlay: %s\n",
                    overlay_result.status().message().c_str());
