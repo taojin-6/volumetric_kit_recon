@@ -14,6 +14,7 @@
 #include "volumetric_kit/recon/core/compute_kernel.hpp"
 #include "volumetric_kit/recon/core/descriptor.hpp"
 #include "volumetric_kit/recon/core/result.hpp"
+#include "volumetric_kit/recon/mesh/device_mesh.hpp"
 #include "volumetric_kit/recon/mesh/mesh.hpp"
 #include "volumetric_kit/recon/texture/export.hpp"
 #include "volumetric_kit/recon/volume/voxel_hash_map.hpp"  // DepthCameraParams
