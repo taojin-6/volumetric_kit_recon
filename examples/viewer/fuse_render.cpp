@@ -243,22 +243,22 @@ vr::Result<Reconstruction> fuse(const Options& opt,
     const vr_example::RgbdFrame& frame = *view;
     poses.push_back(frame.cam_to_world);
 
-    const vol::DepthCameraParams dcam =
+    const vol::DepthCameraParams depth_camera =
         vr_example::make_depth_camera(cam, frame.cam_to_world, opt.max_depth);
-    rtsdf::ColorCameraParams ccam{};
-    ccam.fx = cam.fx;
-    ccam.fy = cam.fy;
-    ccam.cx = cam.cx;
-    ccam.cy = cam.cy;
-    ccam.width = cam.width;
-    ccam.height = cam.height;
-    ccam.cam_to_world = frame.cam_to_world;
-    const rtsdf::ColorFrame color_frame{frame.color.data(), ccam};
+    rtsdf::ColorCameraParams color_camera{};
+    color_camera.fx = cam.fx;
+    color_camera.fy = cam.fy;
+    color_camera.cx = cam.cx;
+    color_camera.cy = cam.cy;
+    color_camera.width = cam.width;
+    color_camera.height = cam.height;
+    color_camera.cam_to_world = frame.cam_to_world;
+    const rtsdf::ColorFrame color_frame{frame.color.data(), color_camera};
 
     bool allocated = false;
     for (int attempt = 0; attempt < 5; ++attempt) {
-      VR_ASSIGN(std::uint32_t failed,
-                volume.map().allocate_from_depth(frame.depth.data(), dcam));
+      VR_ASSIGN(std::uint32_t failed, volume.map().allocate_from_depth(
+                                          frame.depth.data(), depth_camera));
       if (failed == 0) {
         allocated = true;
         break;
@@ -271,7 +271,7 @@ vr::Result<Reconstruction> fuse(const Options& opt,
       return vr::Status::out_of_memory(
           "fuse_render: allocation kept overflowing after resize");
     }
-    VR_TRY(integrator.integrate(volume, frame.depth.data(), dcam, 20.0f,
+    VR_TRY(integrator.integrate(volume, frame.depth.data(), depth_camera, 20.0f,
                                 rtsdf::IntegrationMode::Classic, &color_frame));
     ++fused;
   }
@@ -295,9 +295,11 @@ vr::Result<Reconstruction> fuse(const Options& opt,
             : static_cast<int>(fused / 2);
     VR_ASSIGN(vr_example::FrameView keyframe,
               dataset.frame(static_cast<std::size_t>(tex_idx)));
-    const vol::DepthCameraParams tdcam = vr_example::make_depth_camera(
-        cam, keyframe->cam_to_world, opt.max_depth);
-    VR_TRY(texturer.texture(recon.mesh, keyframe->depth.data(), tdcam));
+    const vol::DepthCameraParams keyframe_camera =
+        vr_example::make_depth_camera(cam, keyframe->cam_to_world,
+                                      opt.max_depth);
+    VR_TRY(
+        texturer.texture(recon.mesh, keyframe->depth.data(), keyframe_camera));
 
     // Atlas = the keyframe's colour image as RGBA8 at full resolution --
     // exactly what uv0 = (pixel + 0.5)/size index.
@@ -391,14 +393,14 @@ int main(int argc, char** argv) {
   }
   vg::OffscreenTarget target = std::move(target_r).value();
 
-  auto pipe_r =
+  auto pipeline_result =
       vgp::HybridMeshPipeline::create(app.device().handle(), target.layout());
-  if (!pipe_r.ok()) {
+  if (!pipeline_result.ok()) {
     std::fprintf(stderr, "HybridMeshPipeline: %s\n",
-                 pipe_r.status().message().c_str());
+                 pipeline_result.status().message().c_str());
     return 1;
   }
-  vgp::HybridMeshPipeline pipeline = std::move(pipe_r).value();
+  vgp::HybridMeshPipeline pipeline = std::move(pipeline_result).value();
 
   // 3. Upload the mesh (recon -> gfx, via the host bridge).
   const vg::assets::Mesh gfx_mesh = fuse_viewer::to_gfx_mesh(mesh);
@@ -414,13 +416,14 @@ int main(int argc, char** argv) {
   // vertex-colour path wherever uv0 is the sentinel).
   const std::uint8_t white[4] = {255, 255, 255, 255};
   const bool has_atlas = !recon.atlas.empty();
-  vg::ImageUploadDesc adesc;
-  adesc.extent =
+  vg::ImageUploadDesc upload_desc;
+  upload_desc.extent =
       has_atlas ? VkExtent2D{recon.atlas_w, recon.atlas_h} : VkExtent2D{1, 1};
-  adesc.format = VK_FORMAT_R8G8B8A8_UNORM;
-  adesc.pixels = has_atlas ? recon.atlas.data() : white;
-  adesc.size = has_atlas ? recon.atlas.size() : sizeof(white);
-  auto atlas_tex_r = vg::upload_texture(app.device(), app.allocator(), adesc);
+  upload_desc.format = VK_FORMAT_R8G8B8A8_UNORM;
+  upload_desc.pixels = has_atlas ? recon.atlas.data() : white;
+  upload_desc.size = has_atlas ? recon.atlas.size() : sizeof(white);
+  auto atlas_tex_r =
+      vg::upload_texture(app.device(), app.allocator(), upload_desc);
   if (!atlas_tex_r.ok()) {
     std::fprintf(stderr, "atlas upload: %s\n",
                  atlas_tex_r.status().message().c_str());
@@ -435,20 +438,21 @@ int main(int argc, char** argv) {
   vg::Sampler sampler = std::move(sampler_r).value();
   const VkDescriptorPoolSize pool_size{
       VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
-  auto pool_r =
+  auto pool_result =
       vg::DescriptorPool::create(app.device().handle(), &pool_size, 1, 1);
-  if (!pool_r.ok()) {
+  if (!pool_result.ok()) {
     std::fprintf(stderr, "descriptor pool: %s\n",
-                 pool_r.status().message().c_str());
+                 pool_result.status().message().c_str());
     return 1;
   }
-  vg::DescriptorPool pool = std::move(pool_r).value();
-  auto set_r = pool.allocate(pipeline.descriptor_set_layout(0));
-  if (!set_r.ok()) {
-    std::fprintf(stderr, "atlas set: %s\n", set_r.status().message().c_str());
+  vg::DescriptorPool pool = std::move(pool_result).value();
+  auto set_result = pool.allocate(pipeline.descriptor_set_layout(0));
+  if (!set_result.ok()) {
+    std::fprintf(stderr, "atlas set: %s\n",
+                 set_result.status().message().c_str());
     return 1;
   }
-  vg::DescriptorSet atlas_set = std::move(set_r).value();
+  vg::DescriptorSet atlas_set = std::move(set_result).value();
   atlas_set.write_combined_image_sampler(
       0, atlas_tex.view(), sampler.handle(),
       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
@@ -468,12 +472,12 @@ int main(int argc, char** argv) {
       app.device().submit_single_time([&](VkCommandBuffer cmd) {
         target.prepare(cmd);
         const vg::RenderTarget rt = target.target();
-        vg::RenderTargetBeginInfo bi;
-        bi.clear_color.float32[0] = 0.05f;
-        bi.clear_color.float32[1] = 0.05f;
-        bi.clear_color.float32[2] = 0.07f;
-        bi.clear_color.float32[3] = 1.0f;
-        rt.begin(cmd, bi);
+        vg::RenderTargetBeginInfo begin_info;
+        begin_info.clear_color.float32[0] = 0.05f;
+        begin_info.clear_color.float32[1] = 0.05f;
+        begin_info.clear_color.float32[2] = 0.07f;
+        begin_info.clear_color.float32[3] = 1.0f;
+        rt.begin(cmd, begin_info);
         pipeline.submit(cmd, frame);
         rt.end(cmd);
         target.record_readback(cmd);
