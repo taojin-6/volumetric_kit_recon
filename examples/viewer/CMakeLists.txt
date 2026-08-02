@@ -34,7 +34,13 @@ set(VG_WITH_GLFW
 FetchContent_Declare(
   volumetric_kit_gfx
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_gfx.git
-  GIT_TAG 3516ebb45748285fea38f9aed666d16244e1d4a7 # hybrid mesh pipeline (#86)
+  # Must stay at or past gfx #88: before it, vg_embed_shaders left one glslc
+  # rule reachable from two unrelated targets, so `make -j` ran it twice at once
+  # and truncated the .spv -- "Invalid SPIR-V magic number",
+  # nondeterministically. A warm build tree hides it by skipping shader
+  # compilation entirely, which is why it only surfaced once CI started
+  # discarding stale trees.
+  GIT_TAG b31ee1e3f35af550425eb1d538da8cf26dedf6ca # WindowedApp::adopt (#89)
   GIT_SHALLOW FALSE)
 FetchContent_MakeAvailable(volumetric_kit_gfx)
 

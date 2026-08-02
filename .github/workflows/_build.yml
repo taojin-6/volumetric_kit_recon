@@ -137,23 +137,75 @@ jobs:
         if: steps.detect.outputs.present == 'true'
         run: vulkaninfo --summary || echo "::notice::no Vulkan device visible — GPU tests will skip"
 
+      # The dependency cache is keyed by the workspace *path*, so compute a short
+      # fingerprint of it. See the cache step below for why the path is the thing
+      # that has to match.
+      - name: Workspace fingerprint
+        id: ws
+        if: steps.detect.outputs.present == 'true'
+        run: |
+          h=$(printf '%s' "${GITHUB_WORKSPACE}" |
+              { sha256sum 2>/dev/null || shasum -a 256; } | cut -c1-12)
+          echo "hash=${h}" >> "${GITHUB_OUTPUT}"
+          echo "workspace ${GITHUB_WORKSPACE} -> ${h}"
+
       # Cache the FetchContent dependency tree (VMA / googletest sources + builds)
       # so they are not re-cloned and recompiled every run. FetchContent bakes the
       # absolute build path into its sub-build CMakeCache, so a cache is only
-      # reusable where that path is stable: the containerised Linux legs all see
-      # /__w/… (one key, `ctr`), but native macOS self-hosted runners each have
-      # their own path and must key on `runner.name`. The key hashes both the
-      # conventional dep-pin home (third_party/CMakeLists.txt) and the root list,
-      # so a FetchContent version bump in either busts the cache; hashFiles skips
-      # whichever of those paths does not exist yet.
+      # reusable where that path is identical -- restore one built elsewhere and
+      # Configure dies with "CMakeCache.txt directory ... is different than the
+      # directory ... where CMakeCache.txt was created".
+      #
+      # The key therefore carries a hash of GITHUB_WORKSPACE: the path itself,
+      # not a proxy for it. This previously keyed on `runner.name` for native
+      # runners, on the assumption that a given runner's path is stable -- but
+      # relocating a self-hosted runner on disk (…/actions-runner-recon-2 ->
+      # …/ci-runners/volumetric_kit_recon/runner-2) changes the path while
+      # keeping the name, so the key still matched and every macOS leg restored a
+      # cache full of dead absolute paths and failed to configure. Hashing the
+      # workspace makes a relocation a natural cache miss instead. It also
+      # subsumes the `ctr` special case: containerised legs all see the same
+      # /__w/… path, so they hash alike and share one key exactly as before.
+      #
+      # The key also hashes the conventional dep-pin home
+      # (third_party/CMakeLists.txt) and the root list, so a FetchContent version
+      # bump in either busts the cache; hashFiles skips whichever of those paths
+      # does not exist yet.
       - name: Cache third-party deps
         if: steps.detect.outputs.present == 'true'
         uses: actions/cache@v5
         with:
           path: build/_deps
-          key: deps-${{ inputs.os }}-${{ matrix.build_type }}-${{ inputs.container != '' && 'ctr' || runner.name }}-${{ hashFiles('third_party/CMakeLists.txt', 'CMakeLists.txt') }}
+          key: deps-${{ inputs.os }}-${{ matrix.build_type }}-ws${{ steps.ws.outputs.hash }}-${{ hashFiles('third_party/CMakeLists.txt', 'CMakeLists.txt') }}
           restore-keys: |
-            deps-${{ inputs.os }}-${{ matrix.build_type }}-${{ inputs.container != '' && 'ctr' || runner.name }}-
+            deps-${{ inputs.os }}-${{ matrix.build_type }}-ws${{ steps.ws.outputs.hash }}-
+
+      # A self-hosted runner keeps its _work tree between jobs, so a build/ left
+      # by a previous checkout survives a runner relocation with the old absolute
+      # paths still baked into every CMakeCache.txt. The key change above stops
+      # the *cache* carrying stale paths in, but cannot clean what is already on
+      # disk -- and the Configure retry loop cannot help either, since the failure
+      # is deterministic and simply fails three times.
+      #
+      # So: if any CMakeCache.txt under build/ records a directory other than the
+      # one it now occupies, the tree is unusable. Drop it and let Configure start
+      # clean. Hosted runners always start empty and no-op here.
+      - name: Discard a build tree left behind at a different path
+        if: steps.detect.outputs.present == 'true'
+        run: |
+          [ -d build ] || exit 0
+          stale=$(find build -name CMakeCache.txt -exec sh -c '
+            recorded=$(sed -n "s/^CMAKE_CACHEFILE_DIR:INTERNAL=//p" "$1" | head -1)
+            actual=$(cd "$(dirname "$1")" && pwd)
+            if [ -n "${recorded}" ] && [ "${recorded}" != "${actual}" ]; then
+              echo "$1 records ${recorded}, now at ${actual}"
+            fi
+          ' _ {} \; | head -3)
+          if [ -n "${stale}" ]; then
+            echo "::warning::discarding a stale build tree:"
+            echo "${stale}"
+            rm -rf build
+          fi
 
       # Default ("Unix Makefiles") generator + a parallel make build, per project
       # preference — no Ninja.
