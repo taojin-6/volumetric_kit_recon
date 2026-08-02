@@ -228,11 +228,12 @@ vr::Status run(const Options& opt) {
   // Allocate the truncation band for a frame, growing the map (preserving the
   // per-voxel data already fused) if it overflows -- exercises the block-index-
   // preserving resize on real data.
-  auto allocate_band = [&](const vr_example::RgbdFrame& frame,
-                           const vol::DepthCameraParams& dcam) -> vr::Status {
+  auto allocate_band =
+      [&](const vr_example::RgbdFrame& frame,
+          const vol::DepthCameraParams& depth_camera) -> vr::Status {
     for (int attempt = 0; attempt < 5; ++attempt) {
-      VR_ASSIGN(std::uint32_t failed,
-                volume.map().allocate_from_depth(frame.depth.data(), dcam));
+      VR_ASSIGN(std::uint32_t failed, volume.map().allocate_from_depth(
+                                          frame.depth.data(), depth_camera));
       if (failed == 0) {
         return {};
       }
@@ -259,23 +260,23 @@ vr::Status run(const Options& opt) {
   // rewrite just cam_to_world per frame. Depth and colour share Replica's one
   // registered camera; keeping the shared intrinsics in a single place also
   // stops the depth and colour cameras silently drifting apart.
-  vol::DepthCameraParams dcam{};
-  dcam.fx = cam.fx;
-  dcam.fy = cam.fy;
-  dcam.cx = cam.cx;
-  dcam.cy = cam.cy;
-  dcam.min_depth = opt.min_depth;
-  dcam.max_depth = opt.max_depth;
-  dcam.width = cam.width;
-  dcam.height = cam.height;
+  vol::DepthCameraParams depth_camera{};
+  depth_camera.fx = cam.fx;
+  depth_camera.fy = cam.fy;
+  depth_camera.cx = cam.cx;
+  depth_camera.cy = cam.cy;
+  depth_camera.min_depth = opt.min_depth;
+  depth_camera.max_depth = opt.max_depth;
+  depth_camera.width = cam.width;
+  depth_camera.height = cam.height;
 
-  tsdf::ColorCameraParams ccam{};
-  ccam.fx = cam.fx;
-  ccam.fy = cam.fy;
-  ccam.cx = cam.cx;
-  ccam.cy = cam.cy;
-  ccam.width = cam.width;
-  ccam.height = cam.height;
+  tsdf::ColorCameraParams color_camera{};
+  color_camera.fx = cam.fx;
+  color_camera.fy = cam.fy;
+  color_camera.cx = cam.cx;
+  color_camera.cy = cam.cy;
+  color_camera.width = cam.width;
+  color_camera.height = cam.height;
 
   const std::size_t last = std::min<std::size_t>(
       dataset.frame_count(), static_cast<std::size_t>(opt.max_frames));
@@ -321,13 +322,14 @@ vr::Status run(const Options& opt) {
     const vr_example::FrameView view = std::move(frame_result).value();
     const vr_example::RgbdFrame& frame = *view;
 
-    // Only the pose changes per frame; dcam/ccam were built once above.
-    dcam.cam_to_world = frame.cam_to_world;
-    ccam.cam_to_world = frame.cam_to_world;
-    const tsdf::ColorFrame color_frame{frame.color.data(), ccam};
+    // Only the pose changes per frame; depth_camera/color_camera were built
+    // once above.
+    depth_camera.cam_to_world = frame.cam_to_world;
+    color_camera.cam_to_world = frame.cam_to_world;
+    const tsdf::ColorFrame color_frame{frame.color.data(), color_camera};
 
-    VR_TRY(allocate_band(frame, dcam));
-    VR_TRY(integrator.integrate(volume, frame.depth.data(), dcam,
+    VR_TRY(allocate_band(frame, depth_camera));
+    VR_TRY(integrator.integrate(volume, frame.depth.data(), depth_camera,
                                 opt.max_weight, tsdf::IntegrationMode::Classic,
                                 &color_frame));
     ++fused;

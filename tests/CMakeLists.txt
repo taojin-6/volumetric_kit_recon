@@ -20,6 +20,15 @@ target_link_libraries(recon_vulkan_smoke_test PRIVATE volumetric_kit::recon_core
 vr_target_warnings(recon_vulkan_smoke_test)
 add_test(NAME recon_vulkan_smoke COMMAND recon_vulkan_smoke_test)
 
+# core tier: the device-memory figures Allocator::memory_stats reports (what the
+# viewer's perf overlay shows). Behavioural, not absolute -- the bytes are VMA's
+# accounting. Skips where no device is present.
+add_executable(recon_core_memory_stats_test core_memory_stats_test.cpp)
+target_link_libraries(recon_core_memory_stats_test
+                      PRIVATE volumetric_kit::recon_core)
+vr_target_warnings(recon_core_memory_stats_test)
+add_test(NAME recon_core_memory_stats COMMAND recon_core_memory_stats_test)
+
 # volume tier: the sparse voxel-hash POD layouts. The static_assert size/offset
 # guards in hash_types.hpp are the real test (a build failure there is the
 # check); this binary adds runtime sanity and proves the header compiles and

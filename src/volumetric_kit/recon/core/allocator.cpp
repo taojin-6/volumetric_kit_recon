@@ -158,4 +158,26 @@ Result<Buffer> Allocator::create_buffer(const BufferDesc& desc) {
                 });
 }
 
+MemoryStats Allocator::memory_stats() const {
+  MemoryStats stats;
+  if (impl_ == nullptr) {
+    return stats;  // moved-from: no heaps, no figures
+  }
+  // VMA writes one VmaBudget per heap; the device's heap count comes from the
+  // memory properties VMA already caches, so this needs no physical device.
+  const VkPhysicalDeviceMemoryProperties* props = nullptr;
+  vmaGetMemoryProperties(impl_->allocator, &props);
+  if (props == nullptr) {
+    return stats;
+  }
+  VmaBudget budgets[VK_MAX_MEMORY_HEAPS]{};
+  vmaGetHeapBudgets(impl_->allocator, budgets);
+  stats.heap_count = props->memoryHeapCount;
+  for (std::uint32_t heap = 0; heap < stats.heap_count; ++heap) {
+    stats.heaps[heap].usage_bytes = budgets[heap].usage;
+    stats.heaps[heap].budget_bytes = budgets[heap].budget;
+  }
+  return stats;
+}
+
 }  // namespace volumetric_kit::recon

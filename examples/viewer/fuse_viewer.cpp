@@ -15,9 +15,14 @@
 // sensor resolution, the rest fall back to fused voxel colour. --no-texture
 // disables it (an A/B against the pure vertex-colour path).
 //
+// Two Dear ImGui panels (gfx's ui tier) show where the time and the memory go:
+// Performance (the renderer's fps + GPU spans, with recon's per-frame fuse
+// stages appended) and Reconstruction (mesh/volume counters + recon's device
+// memory). --no-overlay turns both off.
+//
 //   fuse_viewer <scene_dir> [--voxel 0.02] [--max-frames N] [--fuse-per-tick K]
 //               [--remesh-every N] [--width 1280] [--height 720] [--unlit]
-//               [--no-texture]
+//               [--no-texture] [--preload] [--no-overlay]
 
 #include <algorithm>
 #include <atomic>
@@ -36,12 +41,15 @@
 
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
+#include <imgui.h>
+#include <imgui_impl_glfw.h>
 #include <glm/glm.hpp>
 
 #include "dataset.hpp"
 #include "example_camera.hpp"  // vr_example::make_depth_camera
 #include "image_io.hpp"        // vr_example::pack_color_rgba8
 #include "recon_gfx_bridge.hpp"
+#include "stage_metrics.hpp"  // fuse_viewer::StageTimes / StageScope
 
 #include "volumetric_kit/recon/core/allocator.hpp"
 #include "volumetric_kit/recon/core/device.hpp"
@@ -58,6 +66,8 @@
 #include "volumetric_kit/gfx/app/windowed_app.hpp"
 #include "volumetric_kit/gfx/camera/camera.hpp"
 #include "volumetric_kit/gfx/core/descriptor.hpp"
+#include "volumetric_kit/gfx/core/frame_metrics.hpp"
+#include "volumetric_kit/gfx/core/profiler.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/core/result.hpp"
 #include "volumetric_kit/gfx/core/sampler.hpp"
@@ -65,6 +75,8 @@
 #include "volumetric_kit/gfx/core/vulkan.hpp"
 #include "volumetric_kit/gfx/pipelines/gpu_mesh.hpp"
 #include "volumetric_kit/gfx/pipelines/hybrid_mesh_pipeline.hpp"
+#include "volumetric_kit/gfx/ui/imgui_overlay.hpp"
+#include "volumetric_kit/gfx/ui/metrics_panel.hpp"
 #include "volumetric_kit/gfx/windowing/frame_loop.hpp"
 #include "volumetric_kit/gfx/windowing/swapchain.hpp"
 
@@ -93,6 +105,7 @@ struct Options {
   bool lit = true;
   bool texture = true;   // project each keyframe onto the growing mesh (uv0)
   bool preload = false;  // decode every frame up front (RAM for decode time)
+  bool overlay = true;   // Dear ImGui performance + reconstruction panels
 };
 
 bool parse_args(int argc, char** argv, Options& o) {
@@ -139,6 +152,8 @@ bool parse_args(int argc, char** argv, Options& o) {
       o.texture = false;
     } else if (a == "--preload") {
       o.preload = true;
+    } else if (a == "--no-overlay") {
+      o.overlay = false;
     } else if (!a.empty() && a[0] == '-') {
       std::fprintf(stderr, "unknown flag %s\n", a.c_str());
       return false;
@@ -153,7 +168,7 @@ bool parse_args(int argc, char** argv, Options& o) {
     std::fprintf(stderr,
                  "usage: fuse_viewer <scene_dir> [--voxel m] [--max-frames n] "
                  "[--fuse-per-tick k] [--remesh-every n] [--unlit] "
-                 "[--no-texture] [--preload]\n");
+                 "[--no-texture] [--preload] [--no-overlay]\n");
     return false;
   }
   // strtof parses "nan"/"inf" without error, and a non-finite knob slips the
@@ -171,11 +186,11 @@ bool parse_args(int argc, char** argv, Options& o) {
   return true;
 }
 
-VkExtent2D window_extent(GLFWwindow* w) {
-  int fw = 0, fh = 0;
-  glfwGetFramebufferSize(w, &fw, &fh);
-  return {static_cast<std::uint32_t>(std::max(1, fw)),
-          static_cast<std::uint32_t>(std::max(1, fh))};
+VkExtent2D window_extent(GLFWwindow* window) {
+  int width = 0, height = 0;
+  glfwGetFramebufferSize(window, &width, &height);
+  return {static_cast<std::uint32_t>(std::max(1, width)),
+          static_cast<std::uint32_t>(std::max(1, height))};
 }
 
 // Signals a fuse thread to quit and joins it on scope exit, so an exception
@@ -190,6 +205,86 @@ struct QuitJoin {
     if (thread.joinable()) thread.join();
   }
 };
+
+// Shuts the ImGui GLFW platform backend down at scope exit. Declared *after*
+// the overlay so it runs first: ImGui_ImplGlfw_Shutdown touches the ImGui
+// context the overlay owns, so it must not outlive it.
+struct ImGuiGlfwShutdown {
+  bool active;
+  ~ImGuiGlfwShutdown() {
+    if (active) ImGui_ImplGlfw_Shutdown();
+  }
+};
+
+// Detaches the profiler from the app's frame loop at scope exit, before the
+// profiler itself is destroyed -- the loop holds a bare pointer to it.
+struct ProfilerDetach {
+  vg::app::WindowedApp& app;
+  ~ProfilerDetach() { app.set_profiler(nullptr); }
+};
+
+// What the reconstruction side is holding, shown beside the renderer's frame
+// metrics. gfx's FrameMetrics carries one memory pair (its own device), so
+// recon's device memory + the volume/mesh counters live in their own panel
+// rather than being squeezed into that contract.
+struct ReconstructionPanel {
+  std::size_t fused_frames = 0;
+  std::size_t total_frames = 0;
+  std::size_t vertices = 0;
+  std::size_t triangles = 0;
+  std::uint64_t mesh_version = 0;
+  std::int32_t map_buckets = 0;
+  std::int32_t map_blocks = 0;  // heap *capacity* (bucket_size * num_buckets)
+  double fuse_ms = 0.0;
+  std::uint64_t preloaded_bytes = 0;
+  vr::MemoryStats recon_memory;
+  rmesh::ExtractTimings extract;
+};
+
+// Bytes -> MiB, for display only. Mebibytes (1024^2), matching the unit gfx's
+// draw_metrics_panel prints beside this one.
+double to_mebibytes(std::uint64_t bytes) {
+  return static_cast<double>(bytes) / (1024.0 * 1024.0);
+}
+
+// Build the reconstruction panel into the ImGui frame the caller is driving
+// (it calls neither NewFrame nor Render), mirroring gfx's draw_metrics_panel.
+void draw_reconstruction_panel(const ReconstructionPanel& panel) {
+  if (!ImGui::Begin("Reconstruction")) {
+    ImGui::End();
+    return;
+  }
+  ImGui::Text("fused    %zu / %zu frames", panel.fused_frames,
+              panel.total_frames);
+  ImGui::Text("fuse     %.2f ms/frame", panel.fuse_ms);
+  ImGui::Separator();
+  ImGui::Text("mesh v%llu",
+              static_cast<unsigned long long>(panel.mesh_version));
+  ImGui::Text("  %zu vertices / %zu triangles", panel.vertices,
+              panel.triangles);
+  // Capacity, not occupancy: num_blocks is bucket_size * num_buckets, the size
+  // of the block heap every per-voxel attribute array is dimensioned by. It is
+  // what a resize doubles, so it is the memory story; how *full* the map is
+  // needs the hash map's diagnostics scan (a device readback, too costly here).
+  ImGui::Text("map  %d buckets / %d block capacity", panel.map_buckets,
+              panel.map_blocks);
+  ImGui::Separator();
+  // recon's device memory: its own VMA allocator's share of the device. On a
+  // shared/adopted device each library allocates separately, so this is recon's
+  // footprint, not the process total.
+  for (std::uint32_t heap = 0; heap < panel.recon_memory.heap_count; ++heap) {
+    const vr::HeapStats& stats = panel.recon_memory.heaps[heap];
+    if (stats.budget_bytes == 0 && stats.usage_bytes == 0) continue;
+    ImGui::Text("recon heap %u  %.1f / %.1f MiB", heap,
+                to_mebibytes(stats.usage_bytes),
+                to_mebibytes(stats.budget_bytes));
+  }
+  if (panel.preloaded_bytes != 0) {
+    ImGui::Text("frame cache   %.0f MiB (host)",
+                to_mebibytes(panel.preloaded_bytes));
+  }
+  ImGui::End();
+}
 
 // One live atlas version: the keyframe image the current mesh's uv0 index into,
 // plus the descriptor set that binds it to the hybrid pipeline. Each newly
@@ -236,36 +331,42 @@ int run(GLFWwindow* window, const Options& opt) {
   vg::app::WindowedApp app = std::move(app_r).value();
 
   // --- recon pipeline (its own device), fused incrementally -----------------
-  auto ri = vr::Instance::create({});
-  if (!ri) {
-    std::fprintf(stderr, "recon instance: %s\n", ri.status().message().c_str());
+  auto recon_instance = vr::Instance::create({});
+  if (!recon_instance) {
+    std::fprintf(stderr, "recon instance: %s\n",
+                 recon_instance.status().message().c_str());
     return 1;
   }
-  auto rgpu = ri.value().select_physical_device();
+  auto rgpu = recon_instance.value().select_physical_device();
   if (!rgpu) {
     std::fprintf(stderr, "recon gpu: %s\n", rgpu.status().message().c_str());
     return 1;
   }
-  auto rdev = vr::Device::create(ri.value().handle(), rgpu.value(), {});
-  if (!rdev) {
-    std::fprintf(stderr, "recon device: %s\n", rdev.status().message().c_str());
+  auto recon_device_result =
+      vr::Device::create(recon_instance.value().handle(), rgpu.value(), {});
+  if (!recon_device_result) {
+    std::fprintf(stderr, "recon device: %s\n",
+                 recon_device_result.status().message().c_str());
     return 1;
   }
-  auto ralloc = vr::Allocator::create(ri.value().handle(), rdev.value());
-  if (!ralloc) {
+  auto recon_allocator_result = vr::Allocator::create(
+      recon_instance.value().handle(), recon_device_result.value());
+  if (!recon_allocator_result) {
     std::fprintf(stderr, "recon allocator: %s\n",
-                 ralloc.status().message().c_str());
+                 recon_allocator_result.status().message().c_str());
     return 1;
   }
-  vr::Device& rdevice = rdev.value();
-  vr::Allocator& rallocator = ralloc.value();
+  vr::Device& rdevice = recon_device_result.value();
+  vr::Allocator& rallocator = recon_allocator_result.value();
 
-  auto ds = vr_example::ReplicaDataset::open(opt.scene_dir, opt.cam_params);
-  if (!ds) {
-    std::fprintf(stderr, "dataset: %s\n", ds.status().message().c_str());
+  auto dataset_result =
+      vr_example::ReplicaDataset::open(opt.scene_dir, opt.cam_params);
+  if (!dataset_result) {
+    std::fprintf(stderr, "dataset: %s\n",
+                 dataset_result.status().message().c_str());
     return 1;
   }
-  vr_example::ReplicaDataset dataset = std::move(ds).value();
+  vr_example::ReplicaDataset dataset = std::move(dataset_result).value();
   const vr_example::CameraModel& cam = dataset.camera();
 
   vol::VoxelGridParams grid{};
@@ -280,37 +381,39 @@ int run(GLFWwindow* window, const Options& opt) {
   const vol::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
                                       {"weight", sizeof(float)},
                                       {"color", sizeof(std::uint32_t)}};
-  auto vbg_r = vol::VoxelBlockGrid::create(rdevice, rallocator, grid, attrs, 3);
-  if (!vbg_r) {
-    std::fprintf(stderr, "grid: %s\n", vbg_r.status().message().c_str());
+  auto grid_result =
+      vol::VoxelBlockGrid::create(rdevice, rallocator, grid, attrs, 3);
+  if (!grid_result) {
+    std::fprintf(stderr, "grid: %s\n", grid_result.status().message().c_str());
     return 1;
   }
-  vol::VoxelBlockGrid volume = std::move(vbg_r).value();
-  auto integ_r = rtsdf::TsdfIntegrator::create(rdevice, rallocator);
-  if (!integ_r) {
+  vol::VoxelBlockGrid volume = std::move(grid_result).value();
+  auto integrator_result = rtsdf::TsdfIntegrator::create(rdevice, rallocator);
+  if (!integrator_result) {
     std::fprintf(stderr, "integrator: %s\n",
-                 integ_r.status().message().c_str());
+                 integrator_result.status().message().c_str());
     return 1;
   }
-  rtsdf::TsdfIntegrator integrator = std::move(integ_r).value();
-  auto mc_r = rmesh::MarchingCubes::create(rdevice, rallocator);
-  if (!mc_r) {
+  rtsdf::TsdfIntegrator integrator = std::move(integrator_result).value();
+  auto extractor_result = rmesh::MarchingCubes::create(rdevice, rallocator);
+  if (!extractor_result) {
     std::fprintf(stderr, "marching cubes: %s\n",
-                 mc_r.status().message().c_str());
+                 extractor_result.status().message().c_str());
     return 1;
   }
-  rmesh::MarchingCubes extractor = std::move(mc_r).value();
+  rmesh::MarchingCubes extractor = std::move(extractor_result).value();
   // Projective texturer (recon device; used, like the integrator/extractor,
   // only on the fuse thread below). Cheap to keep even when --no-texture, but
   // build it only when texturing so the disabled path stays a pure A/B.
   std::optional<rtex::ProjectiveTexturer> texturer;
   if (opt.texture) {
-    auto tex_r = rtex::ProjectiveTexturer::create(rdevice, rallocator);
-    if (!tex_r) {
-      std::fprintf(stderr, "texturer: %s\n", tex_r.status().message().c_str());
+    auto texture_result = rtex::ProjectiveTexturer::create(rdevice, rallocator);
+    if (!texture_result) {
+      std::fprintf(stderr, "texturer: %s\n",
+                   texture_result.status().message().c_str());
       return 1;
     }
-    texturer = std::move(tex_r).value();
+    texturer = std::move(texture_result).value();
   }
 
   const std::size_t frame_count = std::min<std::size_t>(
@@ -320,59 +423,122 @@ int run(GLFWwindow* window, const Options& opt) {
                                       (2.0f * std::max(1.0f, cam.fy)));
 
   // --- gfx: pipeline + 1x1 white atlas set ----------------------------------
-  auto pipe_r = vgp::HybridMeshPipeline::create(app.device().handle(),
-                                                app.swapchain().layout());
-  if (!pipe_r.ok()) {
-    std::fprintf(stderr, "pipeline: %s\n", pipe_r.status().message().c_str());
+  auto pipeline_result = vgp::HybridMeshPipeline::create(
+      app.device().handle(), app.swapchain().layout());
+  if (!pipeline_result.ok()) {
+    std::fprintf(stderr, "pipeline: %s\n",
+                 pipeline_result.status().message().c_str());
     return 1;
   }
-  vgp::HybridMeshPipeline pipeline = std::move(pipe_r).value();
+  vgp::HybridMeshPipeline pipeline = std::move(pipeline_result).value();
+
+  // --- gfx profiler: the renderer's own per-frame CPU/GPU timings ------------
+  // The render side gets real GPU spans (this device reports 64
+  // timestampValidBits through MoltenVK) plus fps and whole-frame CPU time;
+  // attaching it to the app makes the frame loop drive begin_frame/end_frame.
+  // recon's stages are measured separately -- see stage_metrics.hpp for why
+  // they are wall-clock CPU rows.
+  vg::ProfilerConfig profiler_config;
+  profiler_config.frames_in_flight = config.frames_in_flight;
+  auto profiler_result = vg::Profiler::create(app.device(), profiler_config);
+  if (!profiler_result.ok()) {
+    std::fprintf(stderr, "profiler: %s\n",
+                 profiler_result.status().message().c_str());
+    return 1;
+  }
+  vg::Profiler profiler = std::move(profiler_result).value();
+  // Fill the snapshot's memory pair from the *renderer's* allocator, so the
+  // Performance panel reports the mesh/atlas/swapchain footprint on gfx's
+  // device; recon's own allocator is on a second device and is reported
+  // separately by the Reconstruction panel below. `app` outlives the profiler
+  // (declared before it), which set_memory_source requires.
+  profiler.set_memory_source(&app.allocator());
+  app.set_profiler(&profiler);
+  const ProfilerDetach profiler_guard{app};
+
+  // --- gfx ui: the Dear ImGui performance overlay ----------------------------
+  // Optional: --no-overlay skips both the context and the platform backend, so
+  // the disabled path costs nothing and stays a clean A/B. The pipeline bakes
+  // the swapchain layout, which survives a resize, so the overlay is built
+  // once.
+  std::optional<vg::ui::ImGuiOverlay> overlay;
+  if (opt.overlay) {
+    vg::ui::ImGuiOverlayConfig overlay_config;
+    overlay_config.layout = app.swapchain().layout();
+    overlay_config.min_image_count = app.swapchain().image_count();
+    overlay_config.image_count = app.swapchain().image_count();
+    auto overlay_result = vg::ui::ImGuiOverlay::create(
+        app.device(), app.instance().handle(), overlay_config);
+    if (!overlay_result.ok()) {
+      std::fprintf(stderr, "overlay: %s\n",
+                   overlay_result.status().message().c_str());
+      return 1;
+    }
+    overlay = std::move(overlay_result).value();
+    // The platform (GLFW) half of ImGui is the example's to own -- gfx's ui
+    // tier deliberately wraps only the Vulkan renderer backend so it stays
+    // windowing-free. Shut it down before the overlay's context dies, below.
+    ImGui::SetCurrentContext(overlay->context());
+    if (!ImGui_ImplGlfw_InitForVulkan(window, true)) {
+      std::fprintf(stderr, "ImGui_ImplGlfw_InitForVulkan failed\n");
+      return 1;
+    }
+  }
+  // Runs before `overlay` is destroyed (reverse declaration order), which the
+  // ImGui backend requires: its Shutdown touches the context the overlay owns.
+  const ImGuiGlfwShutdown imgui_glfw_guard{opt.overlay};
 
   // One sampler shared by every atlas version (immutable; outlives them all).
-  auto sampler_r = vg::Sampler::create(app.device().handle());
-  if (!sampler_r.ok()) {
-    std::fprintf(stderr, "sampler: %s\n", sampler_r.status().message().c_str());
+  auto sampler_result = vg::Sampler::create(app.device().handle());
+  if (!sampler_result.ok()) {
+    std::fprintf(stderr, "sampler: %s\n",
+                 sampler_result.status().message().c_str());
     return 1;
   }
-  vg::Sampler sampler = std::move(sampler_r).value();
+  vg::Sampler sampler = std::move(sampler_result).value();
 
   // Build one atlas bundle (texture + its own pool + a combined-image-sampler
   // set bound to `sampler`) from RGBA8 pixels. Returns nullptr on failure so a
   // transient upload error keeps the previous atlas rather than crashing.
-  auto build_atlas = [&](const std::uint8_t* pixels, std::uint32_t w,
-                         std::uint32_t h) -> std::shared_ptr<AtlasVersion> {
-    vg::ImageUploadDesc adesc;
-    adesc.extent = {w, h};
-    adesc.format = VK_FORMAT_R8G8B8A8_UNORM;
-    adesc.pixels = pixels;
-    adesc.size = static_cast<std::size_t>(w) * h * 4;
-    auto tex_r = vg::upload_texture(app.device(), app.allocator(), adesc);
-    if (!tex_r.ok()) {
+  auto build_atlas =
+      [&](const std::uint8_t* pixels, std::uint32_t width,
+          std::uint32_t height) -> std::shared_ptr<AtlasVersion> {
+    vg::ImageUploadDesc upload_desc;
+    upload_desc.extent = {width, height};
+    upload_desc.format = VK_FORMAT_R8G8B8A8_UNORM;
+    upload_desc.pixels = pixels;
+    upload_desc.size = static_cast<std::size_t>(width) * height * 4;
+    auto texture_result =
+        vg::upload_texture(app.device(), app.allocator(), upload_desc);
+    if (!texture_result.ok()) {
       std::fprintf(stderr, "atlas upload: %s\n",
-                   tex_r.status().message().c_str());
+                   texture_result.status().message().c_str());
       return nullptr;
     }
-    const VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
-    auto pool_r = vg::DescriptorPool::create(app.device().handle(), &ps, 1, 1);
-    if (!pool_r.ok()) {
+    const VkDescriptorPoolSize pool_size{
+        VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
+    auto pool_result =
+        vg::DescriptorPool::create(app.device().handle(), &pool_size, 1, 1);
+    if (!pool_result.ok()) {
       std::fprintf(stderr, "atlas pool: %s\n",
-                   pool_r.status().message().c_str());
+                   pool_result.status().message().c_str());
       return nullptr;
     }
-    vg::DescriptorPool apool = std::move(pool_r).value();
-    auto set_r = apool.allocate(pipeline.descriptor_set_layout(0));
-    if (!set_r.ok()) {
-      std::fprintf(stderr, "atlas set: %s\n", set_r.status().message().c_str());
+    vg::DescriptorPool atlas_pool = std::move(pool_result).value();
+    auto set_result = atlas_pool.allocate(pipeline.descriptor_set_layout(0));
+    if (!set_result.ok()) {
+      std::fprintf(stderr, "atlas set: %s\n",
+                   set_result.status().message().c_str());
       return nullptr;
     }
-    auto av = std::make_shared<AtlasVersion>();
-    av->tex = std::move(tex_r).value();
-    av->pool = std::move(apool);
-    av->set = std::move(set_r).value();
-    av->set.write_combined_image_sampler(
-        0, av->tex.view(), sampler.handle(),
+    auto atlas_version = std::make_shared<AtlasVersion>();
+    atlas_version->tex = std::move(texture_result).value();
+    atlas_version->pool = std::move(atlas_pool);
+    atlas_version->set = std::move(set_result).value();
+    atlas_version->set.write_combined_image_sampler(
+        0, atlas_version->tex.view(), sampler.handle(),
         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    return av;
+    return atlas_version;
   };
 
   // The initial + fallback atlas: a 1x1 white texel, bound whenever the current
@@ -398,32 +564,58 @@ int run(GLFWwindow* window, const Options& opt) {
   std::atomic<std::size_t> fused_count{0};
   std::atomic<bool> fusing_done{false};
   std::atomic<bool> quit{false};
+  // Newest fused frame's stage breakdown + the volume's footprint, published
+  // for the overlay under share_mtx alongside the mesh.
+  std::vector<vg::FrameMetrics::Section> shared_fuse_stages;
+  double shared_fuse_ms = 0.0;
+  vr::MemoryStats shared_recon_memory;
+  std::int32_t shared_map_buckets = 0;
+  std::int32_t shared_map_blocks = 0;
+  std::uint64_t shared_preloaded_bytes = 0;
+  rmesh::ExtractTimings shared_extract;
 
   std::thread fuse_thread([&]() {
     // Any throw escaping this thread function (e.g. a decode/allocation
     // bad_alloc) would call std::terminate; contain it so shutdown stays clean.
     try {
+      // Scratch for this thread only; copied under share_mtx once per frame.
+      fuse_viewer::StageTimes fuse_stages;
+      // Held across frames so the panel keeps showing the newest remesh's
+      // sizes between remeshes, rather than blanking to zero.
+      rmesh::ExtractTimings extract_stats;
       // Texture `rm` with one keyframe, then publish it plus that keyframe's
       // colour image as the atlas its uv0 index into. On any texturing failure
       // -- or when --no-texture -- the atlas stays empty and the render thread
       // binds the white dummy (every triangle falls back to fused voxel
       // colour). uv0 must be filled BEFORE to_gfx_mesh, which copies it across.
-      auto publish = [&](rmesh::Mesh&& rm, const float* depth,
-                         const vol::DepthCameraParams& dcam,
+      auto publish = [&](rmesh::Mesh&& recon_mesh, const float* depth,
+                         const vol::DepthCameraParams& depth_camera,
                          const std::vector<std::uint32_t>& color) {
         std::vector<std::uint8_t> atlas;
-        if (texturer && depth != nullptr && !rm.vertices.empty()) {
-          const vr::Status ts = texturer->texture(rm, depth, dcam);
-          if (ts.ok()) {
+        if (texturer && depth != nullptr && !recon_mesh.vertices.empty()) {
+          vr::Status texture_status;
+          {
+            fuse_viewer::StageScope scope(fuse_stages, "texture");
+            texture_status = texturer->texture(recon_mesh, depth, depth_camera);
+          }
+          if (texture_status.ok()) {
+            // Its own row, not folded into "texture": repacking a full sensor
+            // frame to RGBA8 is host work of the same order as the texturing
+            // dispatch, so charging it to the GPU pass would misattribute it.
+            fuse_viewer::StageScope scope(fuse_stages, "atlas pack");
             atlas = vr_example::pack_color_rgba8(color);
           } else {
             std::fprintf(stderr, "fuse_viewer: texture: %s\n",
-                         ts.message().c_str());
+                         texture_status.message().c_str());
           }
         }
-        vg::assets::Mesh gm = fuse_viewer::to_gfx_mesh(rm);
-        std::lock_guard<std::mutex> lk(share_mtx);
-        pending_mesh = std::move(gm);
+        vg::assets::Mesh gfx_mesh;
+        {
+          fuse_viewer::StageScope scope(fuse_stages, "to_gfx_mesh");
+          gfx_mesh = fuse_viewer::to_gfx_mesh(recon_mesh);
+        }
+        std::lock_guard<std::mutex> lock(share_mtx);
+        pending_mesh = std::move(gfx_mesh);
         pending_atlas = std::move(atlas);
         ++published_version;
       };
@@ -451,53 +643,81 @@ int run(GLFWwindow* window, const Options& opt) {
           std::fprintf(stderr, "fuse_viewer: preload: %s (streaming instead)\n",
                        cached_frames.status().message().c_str());
         }
+        // Sampled once, here: preloaded_bytes() walks the cache, and the cache
+        // is only immutable now that the decode has finished.
+        const std::uint64_t cache_bytes = dataset.preloaded_bytes();
+        std::lock_guard<std::mutex> lock(share_mtx);
+        shared_preloaded_bytes = cache_bytes;
       }
       // The newest fused frame, retained so the final extract (after the loop)
       // textures with the last keyframe rather than losing its texture.
       std::optional<vr_example::FrameView> last_frame;
       for (std::size_t i = 0; i < frame_count && !quit.load(); ++i) {
+        // Stage spans are per fused frame: the overlay shows the newest frame's
+        // breakdown, not a running total. Seed every row this frame *could*
+        // fill, in display order, so the remesh-only stages report 0 between
+        // remeshes instead of dropping out and shuffling the table.
+        fuse_stages.clear();
+        for (const char* stage :
+             {"frame", "allocate", "integrate", "extract", "  ..compact",
+              "  ..neighbour lut", "  ..inputs", "  ..arena alloc",
+              "  ..descriptors", "  ..dispatch", "  ..readback", "texture",
+              "atlas pack", "to_gfx_mesh"}) {
+          fuse_stages.seed(stage);
+        }
         // A preload cache hit, else a disk read + JPEG/PNG decode (the CPU
-        // cost the preload exists to hoist out of this loop).
-        auto frame_result = dataset.frame(i);
+        // cost the preload exists to hoist out of this loop). Timed either way,
+        // so --preload's effect is visible as this row collapsing to ~0.
+        auto frame_result = [&]() {
+          fuse_viewer::StageScope scope(fuse_stages, "frame");
+          return dataset.frame(i);
+        }();
         if (!frame_result) break;
         vr_example::FrameView view = std::move(frame_result).value();
         const vr_example::RgbdFrame& frame = *view;
         {
-          std::lock_guard<std::mutex> lk(share_mtx);
+          std::lock_guard<std::mutex> lock(share_mtx);
           shared_poses.push_back(frame.cam_to_world);
         }
-        const vol::DepthCameraParams dcam = vr_example::make_depth_camera(
-            cam, frame.cam_to_world, opt.max_depth);
-        rtsdf::ColorCameraParams ccam{};
-        ccam.fx = cam.fx;
-        ccam.fy = cam.fy;
-        ccam.cx = cam.cx;
-        ccam.cy = cam.cy;
-        ccam.width = cam.width;
-        ccam.height = cam.height;
-        ccam.cam_to_world = frame.cam_to_world;
-        const rtsdf::ColorFrame color_frame{frame.color.data(), ccam};
+        const vol::DepthCameraParams depth_camera =
+            vr_example::make_depth_camera(cam, frame.cam_to_world,
+                                          opt.max_depth);
+        rtsdf::ColorCameraParams color_camera{};
+        color_camera.fx = cam.fx;
+        color_camera.fy = cam.fy;
+        color_camera.cx = cam.cx;
+        color_camera.cy = cam.cy;
+        color_camera.width = cam.width;
+        color_camera.height = cam.height;
+        color_camera.cam_to_world = frame.cam_to_world;
+        const rtsdf::ColorFrame color_frame{frame.color.data(), color_camera};
 
         // Grow the map to fit this frame's surface band; surface any hard
         // failure instead of silently integrating a partially-allocated frame.
         bool allocated = false;
-        for (int attempt = 0; attempt < 5; ++attempt) {
-          auto failed =
-              volume.map().allocate_from_depth(frame.depth.data(), dcam);
-          if (!failed) {
-            std::fprintf(stderr, "fuse_viewer: allocate (frame %zu): %s\n", i,
-                         failed.status().message().c_str());
-            break;
-          }
-          if (failed.value() == 0) {
-            allocated = true;
-            break;
-          }
-          const vr::Status rs = volume.resize(volume.grid().num_buckets * 2);
-          if (!rs.ok()) {
-            std::fprintf(stderr, "fuse_viewer: resize (frame %zu): %s\n", i,
-                         rs.message().c_str());
-            break;
+        {
+          // One row for the whole retry: a frame that overflows the map and
+          // resizes reports allocate + resize together, which is what that
+          // frame actually cost.
+          fuse_viewer::StageScope scope(fuse_stages, "allocate");
+          for (int attempt = 0; attempt < 5; ++attempt) {
+            auto failed = volume.map().allocate_from_depth(frame.depth.data(),
+                                                           depth_camera);
+            if (!failed) {
+              std::fprintf(stderr, "fuse_viewer: allocate (frame %zu): %s\n", i,
+                           failed.status().message().c_str());
+              break;
+            }
+            if (failed.value() == 0) {
+              allocated = true;
+              break;
+            }
+            const vr::Status rs = volume.resize(volume.grid().num_buckets * 2);
+            if (!rs.ok()) {
+              std::fprintf(stderr, "fuse_viewer: resize (frame %zu): %s\n", i,
+                           rs.message().c_str());
+              break;
+            }
           }
         }
         if (!allocated) {
@@ -506,20 +726,56 @@ int run(GLFWwindow* window, const Options& opt) {
               i);
           break;
         }
-        const vr::Status ist =
-            integrator.integrate(volume, frame.depth.data(), dcam, 20.0f,
-                                 rtsdf::IntegrationMode::Classic, &color_frame);
-        if (!ist.ok()) {
+        vr::Status integrate_status;
+        {
+          fuse_viewer::StageScope scope(fuse_stages, "integrate");
+          integrate_status = integrator.integrate(
+              volume, frame.depth.data(), depth_camera, 20.0f,
+              rtsdf::IntegrationMode::Classic, &color_frame);
+        }
+        if (!integrate_status.ok()) {
           std::fprintf(stderr, "fuse_viewer: integrate (frame %zu): %s\n", i,
-                       ist.message().c_str());
+                       integrate_status.message().c_str());
           break;
         }
         fused_count.store(i + 1);
         if ((i % static_cast<std::size_t>(opt.remesh_every)) == 0) {
-          auto m = extractor.extract(volume);
-          if (m && !m.value().vertices.empty())
-            publish(std::move(m).value(), frame.depth.data(), dcam,
-                    frame.color);
+          rmesh::ExtractTimings extract_timings;
+          vr::Result<rmesh::Mesh> extracted = [&]() {
+            fuse_viewer::StageScope scope(fuse_stages, "extract");
+            return extractor.extract(volume, 0.0f, &extract_timings);
+          }();
+          // Break the extract row down in place: the phases sum to it, so the
+          // table reads as a hierarchy rather than double-counting.
+          fuse_stages.add("  ..compact", extract_timings.compact_ms);
+          fuse_stages.add("  ..neighbour lut",
+                          extract_timings.neighbour_lut_ms);
+          fuse_stages.add("  ..inputs", extract_timings.input_upload_ms);
+          fuse_stages.add("  ..arena alloc", extract_timings.arena_alloc_ms);
+          fuse_stages.add("  ..descriptors", extract_timings.descriptor_ms);
+          fuse_stages.add("  ..dispatch", extract_timings.dispatch_ms);
+          fuse_stages.add("  ..readback", extract_timings.readback_ms);
+          extract_stats = extract_timings;
+          if (extracted && !extracted.value().vertices.empty())
+            publish(std::move(extracted).value(), frame.depth.data(),
+                    depth_camera, frame.color);
+        }
+        // Publish this frame's stage breakdown + the volume's device memory for
+        // the overlay. Sampled here (not in the render thread) because the
+        // recon allocator belongs to the fuse thread's device; VMA's own
+        // synchronisation makes the read safe either way.
+        {
+          const vr::MemoryStats recon_memory = rallocator.memory_stats();
+          std::lock_guard<std::mutex> lock(share_mtx);
+          shared_fuse_stages = fuse_stages.sections();
+          // Fusion cost, so the dataset read is excluded: it is dataloading,
+          // not fusion, and while streaming it dwarfs the rest (~10 ms of
+          // JPEG/PNG decode). It stays visible as its own `frame` row.
+          shared_fuse_ms = fuse_stages.total_ms(/*exclude=*/"frame");
+          shared_recon_memory = recon_memory;
+          shared_map_buckets = volume.grid().num_buckets;
+          shared_map_blocks = volume.grid().num_blocks;
+          shared_extract = extract_stats;
         }
         // Retain this frame (the newest keyframe) for the final extract below.
         last_frame = std::move(view);
@@ -567,6 +823,10 @@ int run(GLFWwindow* window, const Options& opt) {
       current_atlas_px;  // its keyframe pixels (empty=none)
   std::vector<glm::mat4> poses;
   std::size_t view_frame = 0;
+  // The fuse thread's newest published stage rows + counters, copied out under
+  // share_mtx each frame so the panels read a consistent snapshot.
+  std::vector<vg::FrameMetrics::Section> fuse_stages_snapshot;
+  ReconstructionPanel recon_panel;
 
   std::printf(
       "fuse_viewer: %zu frames, fusing on a background thread; close the "
@@ -580,7 +840,7 @@ int run(GLFWwindow* window, const Options& opt) {
     // Grab the newest published mesh + any new poses (cheap; the heavy load /
     // decode / fuse all runs on the background thread).
     {
-      std::lock_guard<std::mutex> lk(share_mtx);
+      std::lock_guard<std::mutex> lock(share_mtx);
       if (pending_mesh && published_version != current_version) {
         current_mesh = std::move(*pending_mesh);
         pending_mesh.reset();
@@ -593,9 +853,21 @@ int run(GLFWwindow* window, const Options& opt) {
       if (poses.size() < shared_poses.size())
         poses.insert(poses.end(), shared_poses.begin() + poses.size(),
                      shared_poses.end());
+      fuse_stages_snapshot = shared_fuse_stages;
+      recon_panel.fuse_ms = shared_fuse_ms;
+      recon_panel.recon_memory = shared_recon_memory;
+      recon_panel.map_buckets = shared_map_buckets;
+      recon_panel.map_blocks = shared_map_blocks;
+      recon_panel.preloaded_bytes = shared_preloaded_bytes;
+      recon_panel.extract = shared_extract;
     }
     const std::size_t done_frames = fused_count.load();
     const bool done = fusing_done.load();
+    recon_panel.fused_frames = done_frames;
+    recon_panel.total_frames = frame_count;
+    recon_panel.vertices = current_mesh.vertices.size();
+    recon_panel.triangles = current_mesh.indices.size() / 3;
+    recon_panel.mesh_version = current_version;
 
     auto frame = app.begin_frame(window_extent(window));
     if (!frame.ok()) {
@@ -608,38 +880,44 @@ int run(GLFWwindow* window, const Options& opt) {
       glfwWaitEventsTimeout(0.02);
       continue;
     }
-    const win::Frame& f = *frame.value();
+    const win::Frame& render_frame = *frame.value();
 
     // Upload the newest host mesh once when its version changes (not once per
     // ring slot): a shared_ptr keeps a GpuMesh alive until every slot that drew
     // it has cycled (each release gated by begin_frame's per-slot fence wait),
     // so one upload safely feeds all slots.
-    if (current_version != 0 && uploaded_version != current_version) {
-      // Build this version's atlas first (its keyframe image, else the white
-      // dummy), then upload the mesh, and commit both together -- so the drawn
-      // mesh and the atlas its uv0 index into always come from the SAME
-      // version. A transient atlas- or mesh-upload failure leaves the previous
-      // coherent pair in place and retries next frame (the viewer keeps
-      // drawing), rather than binding a new mesh against a stale atlas.
-      std::shared_ptr<AtlasVersion> next =
-          current_atlas_px.empty()
-              ? white_atlas
-              : build_atlas(current_atlas_px.data(), cam.width, cam.height);
-      if (next) {
-        auto gpu =
-            vgp::upload_mesh(app.device(), app.allocator(), current_mesh);
-        if (gpu.ok()) {
-          current_gpu = std::make_shared<vgp::GpuMesh>(std::move(gpu).value());
-          current_atlas = std::move(next);
-          uploaded_version = current_version;
+    {
+      // Scoped over the whole check, not just the upload, so the row reports
+      // ~0 on a frame with no new mesh instead of vanishing from the table.
+      vg::Profiler::Scope upload_scope = profiler.cpu_scope("mesh upload");
+      if (current_version != 0 && uploaded_version != current_version) {
+        // Build this version's atlas first (its keyframe image, else the white
+        // dummy), then upload the mesh, and commit both together -- so the
+        // drawn mesh and the atlas its uv0 index into always come from the SAME
+        // version. A transient atlas- or mesh-upload failure leaves the
+        // previous coherent pair in place and retries next frame (the viewer
+        // keeps drawing), rather than binding a new mesh against a stale atlas.
+        std::shared_ptr<AtlasVersion> next =
+            current_atlas_px.empty()
+                ? white_atlas
+                : build_atlas(current_atlas_px.data(), cam.width, cam.height);
+        if (next) {
+          auto gpu =
+              vgp::upload_mesh(app.device(), app.allocator(), current_mesh);
+          if (gpu.ok()) {
+            current_gpu =
+                std::make_shared<vgp::GpuMesh>(std::move(gpu).value());
+            current_atlas = std::move(next);
+            uploaded_version = current_version;
+          }
         }
       }
     }
     // This slot adopts the latest mesh + its atlas, releasing whatever it drew
     // last frame (safe: begin_frame fence-waited this slot). Holding the atlas
     // per slot keeps a version bound by an in-flight frame alive past its swap.
-    slot_mesh[f.slot] = current_gpu;
-    slot_atlas[f.slot] = current_atlas;
+    slot_mesh[render_frame.slot] = current_gpu;
+    slot_atlas[render_frame.slot] = current_atlas;
 
     // Follow the trajectory: the frontier (latest fused pose) while fusing,
     // then replay the path in a loop once done.
@@ -663,33 +941,69 @@ int run(GLFWwindow* window, const Options& opt) {
               eye, eye + fwd, up, vfov, aspect, 0.05f, 2.0f * opt.max_depth)
               .view_proj();
     }
-    const bool has_mesh = slot_mesh[f.slot] && slot_mesh[f.slot]->valid();
+    const bool has_mesh =
+        slot_mesh[render_frame.slot] && slot_mesh[render_frame.slot]->valid();
     if (tick % 120 == 0)
       std::printf("render tick %d: fused %zu/%zu, mesh v%llu, drawing=%d\n",
                   tick, done_frames, frame_count,
                   (unsigned long long)current_version, has_mesh ? 1 : 0);
 
-    vg::RenderTargetBeginInfo bi;
-    bi.clear_color.float32[0] = 0.05f;
-    bi.clear_color.float32[1] = 0.05f;
-    bi.clear_color.float32[2] = 0.07f;
-    bi.clear_color.float32[3] = 1.0f;
-    f.target->begin(f.cmd, bi);
-    if (has_mesh) {
-      const vgp::HybridMeshDraw draw{slot_mesh[f.slot].get()};
-      vgp::HybridMeshFrame hframe;
-      hframe.extent = extent;
-      hframe.view_proj = view_proj;
-      hframe.light_dir = glm::vec3(0.4f, 0.9f, 0.5f);
-      hframe.flags = opt.lit ? vgp::kHybridMeshLit : 0u;
-      hframe.atlas = slot_atlas[f.slot]->set.handle();
-      hframe.draws = &draw;
-      hframe.draw_count = 1;
-      pipeline.submit(f.cmd, hframe);
+    // Build the ImGui frame here -- after begin_frame has committed to a real
+    // frame, so every new_frame is paired with exactly one render (ImGui
+    // forbids two un-rendered frames), and before recording, so the panels are
+    // ready when the overlay records its draw data inside the pass below.
+    if (overlay) {
+      ImGui_ImplGlfw_NewFrame();
+      overlay->new_frame();
+      // Stack the two panels instead of letting ImGui default both to the same
+      // spot (which hides one under the other on a fresh layout), and give each
+      // room for its full contents -- the stage table and the memory rows are
+      // clipped away at ImGui's default size. FirstUseEver, so a drag or resize
+      // sticks and imgui.ini keeps it.
+      ImGui::SetNextWindowPos(ImVec2(16.0f, 16.0f), ImGuiCond_FirstUseEver);
+      ImGui::SetNextWindowSize(ImVec2(400.0f, 380.0f), ImGuiCond_FirstUseEver);
+      // The renderer's own snapshot (fps, whole-frame CPU, its GPU spans,
+      // its device memory), with recon's fuse stages appended as rows.
+      vg::FrameMetrics metrics = profiler.metrics();
+      metrics.sections.insert(metrics.sections.end(),
+                              fuse_stages_snapshot.begin(),
+                              fuse_stages_snapshot.end());
+      vg::ui::draw_metrics_panel(metrics, "Performance");
+      ImGui::SetNextWindowPos(ImVec2(16.0f, 408.0f), ImGuiCond_FirstUseEver);
+      ImGui::SetNextWindowSize(ImVec2(400.0f, 250.0f), ImGuiCond_FirstUseEver);
+      draw_reconstruction_panel(recon_panel);
     }
-    f.target->end(f.cmd);
 
-    const vg::Status present = app.end_frame(f);
+    vg::RenderTargetBeginInfo begin_info;
+    begin_info.clear_color.float32[0] = 0.05f;
+    begin_info.clear_color.float32[1] = 0.05f;
+    begin_info.clear_color.float32[2] = 0.07f;
+    begin_info.clear_color.float32[3] = 1.0f;
+    render_frame.target->begin(render_frame.cmd, begin_info);
+    {
+      vg::Profiler::Scope draw_scope =
+          profiler.gpu_scope(render_frame.cmd, "mesh draw");
+      if (has_mesh) {
+        const vgp::HybridMeshDraw draw{slot_mesh[render_frame.slot].get()};
+        vgp::HybridMeshFrame hybrid_frame;
+        hybrid_frame.extent = extent;
+        hybrid_frame.view_proj = view_proj;
+        hybrid_frame.light_dir = glm::vec3(0.4f, 0.9f, 0.5f);
+        hybrid_frame.flags = opt.lit ? vgp::kHybridMeshLit : 0u;
+        hybrid_frame.atlas = slot_atlas[render_frame.slot]->set.handle();
+        hybrid_frame.draws = &draw;
+        hybrid_frame.draw_count = 1;
+        pipeline.submit(render_frame.cmd, hybrid_frame);
+      }
+    }
+    if (overlay) {
+      vg::Profiler::Scope overlay_scope =
+          profiler.gpu_scope(render_frame.cmd, "overlay draw");
+      overlay->render(render_frame.cmd);
+    }
+    render_frame.target->end(render_frame.cmd);
+
+    const vg::Status present = app.end_frame(render_frame);
     if (!present.ok() && !win::swapchain_stale(present)) {
       std::fprintf(stderr, "end_frame: %s\n", present.message().c_str());
       exit_code = 1;
