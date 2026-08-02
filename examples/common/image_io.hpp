@@ -50,4 +50,15 @@ vr::Result<std::vector<float>> load_depth_metres(const std::string& path,
                                                  std::uint32_t expected_h,
                                                  float depth_scale);
 
+/// @brief Expand packed RGB (`R | G<<8 | B<<16`, the @ref load_color_packed
+///        layout) into RGBA8 bytes with alpha forced opaque -- the layout a
+///        `VK_FORMAT_R8G8B8A8_UNORM` atlas upload consumes.
+///
+/// The stored alpha is unused (@ref load_color_packed leaves the high byte 0),
+/// so this fixes it to 255 rather than copying it through.
+/// @param packed  One packed pixel per element, row-major.
+/// @return `packed.size() * 4` bytes: R, G, B, 255 per pixel.
+std::vector<std::uint8_t> pack_color_rgba8(
+    const std::vector<std::uint32_t>& packed);
+
 }  // namespace vr_example

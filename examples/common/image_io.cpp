@@ -88,4 +88,17 @@ vr::Result<std::vector<float>> load_depth_metres(const std::string& path,
   return metres;
 }
 
+std::vector<std::uint8_t> pack_color_rgba8(
+    const std::vector<std::uint32_t>& packed) {
+  std::vector<std::uint8_t> rgba(packed.size() * 4);
+  for (std::size_t p = 0; p < packed.size(); ++p) {
+    const std::uint32_t c = packed[p];
+    rgba[p * 4 + 0] = static_cast<std::uint8_t>(c & 0xFFu);
+    rgba[p * 4 + 1] = static_cast<std::uint8_t>((c >> 8) & 0xFFu);
+    rgba[p * 4 + 2] = static_cast<std::uint8_t>((c >> 16) & 0xFFu);
+    rgba[p * 4 + 3] = 255;
+  }
+  return rgba;
+}
+
 }  // namespace vr_example

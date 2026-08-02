@@ -37,8 +37,10 @@ FetchContent_MakeAvailable(volumetric_kit_gfx)
 # GLFW for the live viewer's window (matches how gfx's own examples get it).
 find_package(glfw3 REQUIRED)
 
-set(_viewer_recon_libs volumetric_kit::recon_tsdf volumetric_kit::recon_mesh
-                       volumetric_kit::recon_volume vr_example_common)
+set(_viewer_recon_libs
+    volumetric_kit::recon_tsdf volumetric_kit::recon_mesh
+    volumetric_kit::recon_texture volumetric_kit::recon_volume
+    vr_example_common)
 set(_viewer_gfx_libs volumetric_kit::gfx_app volumetric_kit::gfx_pipelines
                      volumetric_kit::gfx_camera volumetric_kit::gfx_core)
 set(_viewer_common_inc "${CMAKE_CURRENT_SOURCE_DIR}"
