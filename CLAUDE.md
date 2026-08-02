@@ -708,11 +708,30 @@ diagnostics readback), recon's own device memory (`Allocator::memory_stats` —
 its VMA allocator's share of its device, separate from the renderer's, since the
 two run on two devices), and the host-side preload cache. The example owns the ImGui *platform* backend
 (`imgui_impl_glfw`), as gfx's own examples do, since gfx's `ui` tier
-deliberately wraps only the Vulkan renderer backend. Measured on room0: the
-default `--remesh-every 1` costs **~97 ms/frame** on a ~850 k-vertex mesh
-(marching cubes re-running over the whole volume every frame) against
-**~3.7 ms/frame** at `--remesh-every 5` — the overlay's first finding, and the
-reason the remesh cadence is a knob.
+deliberately wraps only the Vulkan renderer backend.
+
+The overlay's first finding **corrected a wrong assumption and redirected the
+roadmap**. At `--remesh-every 1` on a ~940 k-vertex room0 mesh, `extract` cost
+~55 ms/frame, which looked like whole-volume marching cubes and pointed at the
+incremental block-mesh pool. The `ExtractTimings` breakdown said otherwise:
+
+| phase | ms |
+|---|---|
+| `arena alloc` | **49.8** |
+| `readback` | 2.8 |
+| `dispatch` | **2.0** |
+| `neighbour lut` | 0.6 |
+| `compact` / `descriptors` / `inputs` | < 0.2 |
+
+The GPU marching cubes was 2 ms — the pool would have optimised the one thing
+that was already fast. The cost was `make_output_buffers` allocating a fresh
+worst-case vertex arena (5 triangles per cell → hundreds of MB) **every call**,
+so the driver faulted in and zeroed that many pages per frame. Making the arena
+persistent and grow-only (below) took a `--mesh-every 1` room0 run from
+**15.9 → 136.8 fps**, an **8.6×** end-to-end win with a byte-identical mesh. The
+lesson is recorded because it generalises: *measure the phases before choosing
+the optimisation* — three of us (the TODO, the roadmap, and the first analysis)
+had independently guessed the wrong bottleneck.
 
 `recon_gfx_bridge.hpp` converts `mesh::Vertex →
 gfx::assets::Vertex` (synthesizing `tangent`, passing `uv0` through — a real
