@@ -234,14 +234,16 @@ struct ReconstructionPanel {
   std::size_t triangles = 0;
   std::uint64_t mesh_version = 0;
   std::int32_t map_buckets = 0;
-  std::int32_t map_blocks = 0;
+  std::int32_t map_blocks = 0;  // heap *capacity* (bucket_size * num_buckets)
   double fuse_ms = 0.0;
   std::uint64_t preloaded_bytes = 0;
   vr::MemoryStats recon_memory;
+  rmesh::ExtractTimings extract;
 };
 
-// Bytes -> MB, for display only.
-double to_megabytes(std::uint64_t bytes) {
+// Bytes -> MiB, for display only. Mebibytes (1024^2), matching the unit gfx's
+// draw_metrics_panel prints beside this one.
+double to_mebibytes(std::uint64_t bytes) {
   return static_cast<double>(bytes) / (1024.0 * 1024.0);
 }
 
@@ -260,7 +262,11 @@ void draw_reconstruction_panel(const ReconstructionPanel& panel) {
               static_cast<unsigned long long>(panel.mesh_version));
   ImGui::Text("  %zu vertices / %zu triangles", panel.vertices,
               panel.triangles);
-  ImGui::Text("map  %d buckets / %d blocks", panel.map_buckets,
+  // Capacity, not occupancy: num_blocks is bucket_size * num_buckets, the size
+  // of the block heap every per-voxel attribute array is dimensioned by. It is
+  // what a resize doubles, so it is the memory story; how *full* the map is
+  // needs the hash map's diagnostics scan (a device readback, too costly here).
+  ImGui::Text("map  %d buckets / %d block capacity", panel.map_buckets,
               panel.map_blocks);
   ImGui::Separator();
   // recon's device memory: its own VMA allocator's share of the device. On a
@@ -269,13 +275,13 @@ void draw_reconstruction_panel(const ReconstructionPanel& panel) {
   for (std::uint32_t heap = 0; heap < panel.recon_memory.heap_count; ++heap) {
     const vr::HeapStats& stats = panel.recon_memory.heaps[heap];
     if (stats.budget_bytes == 0 && stats.usage_bytes == 0) continue;
-    ImGui::Text("recon heap %u  %.1f / %.1f MB", heap,
-                to_megabytes(stats.usage_bytes),
-                to_megabytes(stats.budget_bytes));
+    ImGui::Text("recon heap %u  %.1f / %.1f MiB", heap,
+                to_mebibytes(stats.usage_bytes),
+                to_mebibytes(stats.budget_bytes));
   }
   if (panel.preloaded_bytes != 0) {
-    ImGui::Text("frame cache   %.0f MB (host)",
-                to_megabytes(panel.preloaded_bytes));
+    ImGui::Text("frame cache   %.0f MiB (host)",
+                to_mebibytes(panel.preloaded_bytes));
   }
   ImGui::End();
 }
@@ -441,6 +447,12 @@ int run(GLFWwindow* window, const Options& opt) {
     return 1;
   }
   vg::Profiler profiler = std::move(profiler_result).value();
+  // Fill the snapshot's memory pair from the *renderer's* allocator, so the
+  // Performance panel reports the mesh/atlas/swapchain footprint on gfx's
+  // device; recon's own allocator is on a second device and is reported
+  // separately by the Reconstruction panel below. `app` outlives the profiler
+  // (declared before it), which set_memory_source requires.
+  profiler.set_memory_source(&app.allocator());
   app.set_profiler(&profiler);
   const ProfilerDetach profiler_guard{app};
 
@@ -560,6 +572,7 @@ int run(GLFWwindow* window, const Options& opt) {
   std::int32_t shared_map_buckets = 0;
   std::int32_t shared_map_blocks = 0;
   std::uint64_t shared_preloaded_bytes = 0;
+  rmesh::ExtractTimings shared_extract;
 
   std::thread fuse_thread([&]() {
     // Any throw escaping this thread function (e.g. a decode/allocation
@@ -567,6 +580,9 @@ int run(GLFWwindow* window, const Options& opt) {
     try {
       // Scratch for this thread only; copied under share_mtx once per frame.
       fuse_viewer::StageTimes fuse_stages;
+      // Held across frames so the panel keeps showing the newest remesh's
+      // sizes between remeshes, rather than blanking to zero.
+      rmesh::ExtractTimings extract_stats;
       // Texture `rm` with one keyframe, then publish it plus that keyframe's
       // colour image as the atlas its uv0 index into. On any texturing failure
       // -- or when --no-texture -- the atlas stays empty and the render thread
@@ -577,10 +593,16 @@ int run(GLFWwindow* window, const Options& opt) {
                          const std::vector<std::uint32_t>& color) {
         std::vector<std::uint8_t> atlas;
         if (texturer && depth != nullptr && !recon_mesh.vertices.empty()) {
-          fuse_viewer::StageScope scope(fuse_stages, "texture");
-          const vr::Status texture_status =
-              texturer->texture(recon_mesh, depth, depth_camera);
+          vr::Status texture_status;
+          {
+            fuse_viewer::StageScope scope(fuse_stages, "texture");
+            texture_status = texturer->texture(recon_mesh, depth, depth_camera);
+          }
           if (texture_status.ok()) {
+            // Its own row, not folded into "texture": repacking a full sensor
+            // frame to RGBA8 is host work of the same order as the texturing
+            // dispatch, so charging it to the GPU pass would misattribute it.
+            fuse_viewer::StageScope scope(fuse_stages, "atlas pack");
             atlas = vr_example::pack_color_rgba8(color);
           } else {
             std::fprintf(stderr, "fuse_viewer: texture: %s\n",
@@ -636,8 +658,11 @@ int run(GLFWwindow* window, const Options& opt) {
         // fill, in display order, so the remesh-only stages report 0 between
         // remeshes instead of dropping out and shuffling the table.
         fuse_stages.clear();
-        for (const char* stage : {"frame", "allocate", "integrate", "extract",
-                                  "texture", "to_gfx_mesh"}) {
+        for (const char* stage :
+             {"frame", "allocate", "integrate", "extract", "  ..compact",
+              "  ..neighbour lut", "  ..inputs", "  ..arena alloc",
+              "  ..descriptors", "  ..dispatch", "  ..readback", "texture",
+              "to_gfx_mesh"}) {
           fuse_stages.seed(stage);
         }
         // A preload cache hit, else a disk read + JPEG/PNG decode (the CPU
@@ -715,10 +740,22 @@ int run(GLFWwindow* window, const Options& opt) {
         }
         fused_count.store(i + 1);
         if ((i % static_cast<std::size_t>(opt.remesh_every)) == 0) {
+          rmesh::ExtractTimings extract_timings;
           vr::Result<rmesh::Mesh> extracted = [&]() {
             fuse_viewer::StageScope scope(fuse_stages, "extract");
-            return extractor.extract(volume);
+            return extractor.extract(volume, 0.0f, &extract_timings);
           }();
+          // Break the extract row down in place: the phases sum to it, so the
+          // table reads as a hierarchy rather than double-counting.
+          fuse_stages.add("  ..compact", extract_timings.compact_ms);
+          fuse_stages.add("  ..neighbour lut",
+                          extract_timings.neighbour_lut_ms);
+          fuse_stages.add("  ..inputs", extract_timings.input_upload_ms);
+          fuse_stages.add("  ..arena alloc", extract_timings.arena_alloc_ms);
+          fuse_stages.add("  ..descriptors", extract_timings.descriptor_ms);
+          fuse_stages.add("  ..dispatch", extract_timings.dispatch_ms);
+          fuse_stages.add("  ..readback", extract_timings.readback_ms);
+          extract_stats = extract_timings;
           if (extracted && !extracted.value().vertices.empty())
             publish(std::move(extracted).value(), frame.depth.data(),
                     depth_camera, frame.color);
@@ -735,6 +772,7 @@ int run(GLFWwindow* window, const Options& opt) {
           shared_recon_memory = recon_memory;
           shared_map_buckets = volume.grid().num_buckets;
           shared_map_blocks = volume.grid().num_blocks;
+          shared_extract = extract_stats;
         }
         // Retain this frame (the newest keyframe) for the final extract below.
         last_frame = std::move(view);
@@ -818,6 +856,7 @@ int run(GLFWwindow* window, const Options& opt) {
       recon_panel.map_buckets = shared_map_buckets;
       recon_panel.map_blocks = shared_map_blocks;
       recon_panel.preloaded_bytes = shared_preloaded_bytes;
+      recon_panel.extract = shared_extract;
     }
     const std::size_t done_frames = fused_count.load();
     const bool done = fusing_done.load();
@@ -919,7 +958,7 @@ int run(GLFWwindow* window, const Options& opt) {
       // clipped away at ImGui's default size. FirstUseEver, so a drag or resize
       // sticks and imgui.ini keeps it.
       ImGui::SetNextWindowPos(ImVec2(16.0f, 16.0f), ImGuiCond_FirstUseEver);
-      ImGui::SetNextWindowSize(ImVec2(340.0f, 300.0f), ImGuiCond_FirstUseEver);
+      ImGui::SetNextWindowSize(ImVec2(400.0f, 380.0f), ImGuiCond_FirstUseEver);
       // The renderer's own snapshot (fps, whole-frame CPU, its GPU spans,
       // its device memory), with recon's fuse stages appended as rows.
       vg::FrameMetrics metrics = profiler.metrics();
@@ -927,8 +966,8 @@ int run(GLFWwindow* window, const Options& opt) {
                               fuse_stages_snapshot.begin(),
                               fuse_stages_snapshot.end());
       vg::ui::draw_metrics_panel(metrics, "Performance");
-      ImGui::SetNextWindowPos(ImVec2(16.0f, 328.0f), ImGuiCond_FirstUseEver);
-      ImGui::SetNextWindowSize(ImVec2(340.0f, 210.0f), ImGuiCond_FirstUseEver);
+      ImGui::SetNextWindowPos(ImVec2(16.0f, 408.0f), ImGuiCond_FirstUseEver);
+      ImGui::SetNextWindowSize(ImVec2(400.0f, 250.0f), ImGuiCond_FirstUseEver);
       draw_reconstruction_panel(recon_panel);
     }
 

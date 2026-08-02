@@ -78,10 +78,22 @@ class StageTimes {
     return sections_;
   }
 
-  /// @return The sum of every row's CPU milliseconds.
-  double total_ms() const noexcept {
+  /// @brief Sum the recorded rows' CPU milliseconds, optionally skipping one.
+  ///
+  /// A caller excludes a row that is timed for visibility but is not part of
+  /// the figure it reports: the viewer times the dataset read as `frame` so
+  /// `--preload`'s effect is visible in the stage table, yet that decode is not
+  /// fusion and must not inflate a "fuse ms/frame" number.
+  ///
+  /// @param exclude  Stage label to leave out, matched by content like @ref
+  ///                 add; `nullptr` sums every row.
+  /// @return The summed milliseconds.
+  double total_ms(const char* exclude = nullptr) const noexcept {
     double total = 0.0;
     for (const vg::FrameMetrics::Section& section : sections_) {
+      if (exclude != nullptr && std::strcmp(section.name, exclude) == 0) {
+        continue;
+      }
       total += section.cpu_ms;
     }
     return total;

@@ -321,6 +321,19 @@ Each dated; newest context wins. Change the decision *and* this list together.
   buffer is freed** (`tests/core_memory_stats_test.cpp` pins exactly that); the
   numbers are VMA estimates until `VK_EXT_memory_budget` is enabled, a
   `TODO(core)` on the device seam.
+  *Amended the same day:* "the compute tiers stay profiler-free" holds for
+  *frameworks*, not for measurement — a tier may report its own phase breakdown
+  through an **explicit, opt-in out-param**, and `mesh::MarchingCubes::extract`
+  is the first (`ExtractTimings*`, defaulting to `nullptr`). The bar it must
+  clear: no global sink, no timing state retained between calls, no dependency
+  added, and nothing measured when the caller passes `nullptr`. That is a
+  by-value struct the caller owns, not a profiler in the tier — the aggregation,
+  display, and history stay in the consumer (the viewer's overlay). It earns its
+  place because the phases are *invisible from outside*: whole-volume meshing,
+  a host-built neighbour table, and a worst-case arena allocation all hide
+  inside one call, and picking between interop seam B and the incremental
+  block-mesh pool needs their split. Other tiers follow the same shape only
+  when they have the same problem.
 
 ## Provenance & salvage policy
 
