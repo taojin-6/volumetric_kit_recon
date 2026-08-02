@@ -668,12 +668,20 @@ the single host copy when one is finally needed, so the mesh crosses to the host
 **once** instead of three times; `extract` is exactly `extract_device` +
 `download`, so the host API and its tests are unchanged. A `DeviceMesh`
 **borrows** the extractor's persistent buffers (the grow-only arena), so it is
-valid only until the next extract on that extractor — `download` rejects a stale
-view by comparing handles rather than copying whatever now occupies them. The
-index run is the identity `0,1,2,...` (independent triangles), held beside the
-arena and refilled only on a grow, because the texturing kernel addresses
-vertices through an index buffer and the renderer wants a real one at the interop
-seam. `tests/texture_device_mesh_test.cpp` proves the device path is not merely
+valid only until the next extract on that extractor. `download` enforces that
+with a **generation stamp**, not a handle comparison: because the arena is
+grow-only and reused *in place*, a superseded view names the very same
+`VkBuffer` as the live one, so comparing handles accepts it and hands back the
+newer geometry under the older counts — the extractor therefore numbers its
+extracts and `download` takes only its current one. The index run is the
+identity `0,1,2,...` (independent triangles), held beside the arena and refilled
+only on a grow, because the texturing kernel addresses vertices through an index
+buffer and the renderer wants a real one at the interop seam; `download`
+regenerates it on the host instead of reading it back, since it is a known
+sequence and the buffer is write-combined (`SequentialWrite`), where host reads
+are pathologically slow. `DeviceMesh` lives in its own
+`mesh/device_mesh.hpp` so `mesh/mesh.hpp` stays Vulkan-free for pure-host
+consumers such as the coming glTF exporter. `tests/texture_device_mesh_test.cpp` proves the device path is not merely
 faster but *identical*: one extraction feeds both paths — the host copy textured
 through the upload/readback route, and the same device buffers textured in place
 — and every vertex must match on `uv0`, position, normal, and colour, with a

@@ -760,7 +760,7 @@ int run(GLFWwindow* window, const Options& opt) {
         fused_count.store(i + 1);
         if ((i % static_cast<std::size_t>(opt.remesh_every)) == 0) {
           rmesh::ExtractTimings extract_timings;
-          vr::Result<rmesh::Mesh> extracted = [&]() {
+          vr::Result<rmesh::DeviceMesh> extracted = [&]() {
             fuse_viewer::StageScope scope(fuse_stages, "extract");
             return extractor.extract_device(volume, 0.0f, &extract_timings);
           }();

@@ -228,6 +228,55 @@ int main() {
   CHECK(textured > 0);
   CHECK(textured < host_mesh.vertices.size());
 
+  // The index run download produces is the identity 0,1,2,... -- it is
+  // regenerated on the host rather than read back from the write-combined
+  // index buffer, so it is worth pinning that it still says what the kernel's
+  // buffer says.
+  for (std::size_t i = 0; i < device_out.indices.size(); ++i) {
+    CHECK(device_out.indices[i] == static_cast<std::uint32_t>(i));
+  }
+
+  // --- A superseded DeviceMesh is rejected -----------------------------------
+  // The arena is grow-only and reused in place, so a later extract leaves an
+  // earlier view naming the *same* VkBuffer while the contents have been
+  // replaced. Handle comparison cannot see that; the generation stamp can, and
+  // must -- downloading a superseded view would silently return the newer
+  // geometry under the older counts.
+  {
+    vr::Result<mesh::DeviceMesh> first = extractor.extract_device(grid, 0.0f);
+    CHECK(first.ok());
+    const mesh::DeviceMesh superseded = first.value();
+    CHECK(!superseded.empty());
+
+    vr::Result<mesh::DeviceMesh> second = extractor.extract_device(grid, 0.0f);
+    CHECK(second.ok());
+    const mesh::DeviceMesh live = second.value();
+
+    // Same capacity -> no grow -> the buffers really are reused, which is what
+    // makes a handle check insufficient. If this ever stops holding the test
+    // below still passes, but it stops testing the case that matters.
+    CHECK(live.vertices == superseded.vertices);
+    CHECK(live.indices == superseded.indices);
+    CHECK(live.generation != superseded.generation);
+
+    CHECK(!extractor.download(superseded).ok());
+    // ...while the current one still downloads.
+    CHECK(extractor.download(live).ok());
+  }
+
+  // A DeviceMesh from another extractor is rejected too: generations are
+  // per-object, so one extractor's stamp never authorises another's buffers.
+  {
+    vr::Result<mesh::MarchingCubes> other_result =
+        mesh::MarchingCubes::create(device.value(), allocator.value());
+    CHECK(other_result.ok());
+    mesh::MarchingCubes other = std::move(other_result).value();
+    vr::Result<mesh::DeviceMesh> foreign = other.extract_device(grid, 0.0f);
+    CHECK(foreign.ok());
+    CHECK(!foreign.value().empty());
+    CHECK(!extractor.download(foreign.value()).ok());
+  }
+
   std::printf(
       "texture device-mesh: OK (%zu triangles, %zu/%zu vertices textured)\n",
       host_mesh.triangle_count(), textured, host_mesh.vertices.size());
