@@ -3,6 +3,7 @@
 
 #include "dataset.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdio>
@@ -10,6 +11,7 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <utility>
 
 #include "image_io.hpp"
 
@@ -180,28 +182,82 @@ vr::Result<ReplicaDataset> ReplicaDataset::open(
   return ds;
 }
 
-vr::Result<RgbdFrame> ReplicaDataset::load(std::size_t i) const {
-  if (i >= poses_.size()) {
+vr::Result<RgbdFrame> ReplicaDataset::load(std::size_t index) const {
+  if (index >= poses_.size()) {
     return vr::Status::invalid_argument("ReplicaDataset::load: index " +
-                                        std::to_string(i) + " out of range");
+                                        std::to_string(index) +
+                                        " out of range");
   }
-  const std::string color_path = frame_path(results_dir_, "frame", i, ".jpg");
-  const std::string depth_path = frame_path(results_dir_, "depth", i, ".png");
+  const std::string color_path =
+      frame_path(results_dir_, "frame", index, ".jpg");
+  const std::string depth_path =
+      frame_path(results_dir_, "depth", index, ".png");
   // A frame simply absent from disk (the trajectory may list more poses than
   // there are images) is reported as NotFound, so the caller can stop cleanly;
   // a decode failure on a file that IS present stays a hard error below.
   if (!file_exists(color_path) || !file_exists(depth_path)) {
     return vr::Status::not_found("ReplicaDataset::load: frame " +
-                                 std::to_string(i) + " not on disk");
+                                 std::to_string(index) + " not on disk");
   }
   RgbdFrame frame;
-  frame.cam_to_world = poses_[i];
+  frame.cam_to_world = poses_[index];
   VR_ASSIGN(frame.color,
             load_color_packed(color_path, camera_.width, camera_.height));
   VR_ASSIGN(frame.depth,
             load_depth_metres(depth_path, camera_.width, camera_.height,
                               camera_.depth_scale));
   return frame;
+}
+
+vr::Result<std::size_t> ReplicaDataset::preload(std::size_t frame_limit,
+                                                std::size_t frame_stride) {
+  if (frame_stride == 0) {
+    return vr::Status::invalid_argument(
+        "ReplicaDataset::preload: frame_stride must be >= 1");
+  }
+  const std::size_t limit = std::min(frame_limit, poses_.size());
+  // Drop any previous cache first, so a second preload does not hold two
+  // sequences' worth of frames at once while it refills.
+  cache_.clear();
+  cache_.resize(limit);
+  std::size_t cached_frames = 0;
+  for (std::size_t index = 0; index < limit; index += frame_stride) {
+    vr::Result<RgbdFrame> frame_result = load(index);
+    if (!frame_result) {
+      // Ran past the frames present on disk: keep what we have (the fuse loop
+      // stops there anyway). A frame that IS present but failed to decode is a
+      // real error, exactly as in load().
+      if (frame_result.status().domain() == vr::Status::Code::NotFound) {
+        break;
+      }
+      cache_.clear();
+      return frame_result.status();
+    }
+    cache_[index] = std::move(frame_result).value();
+    ++cached_frames;
+  }
+  return cached_frames;
+}
+
+std::size_t ReplicaDataset::preloaded_bytes() const noexcept {
+  std::size_t bytes = 0;
+  for (const std::optional<RgbdFrame>& cached : cache_) {
+    if (cached) {
+      bytes += cached->depth.size() * sizeof(float) +
+               cached->color.size() * sizeof(std::uint32_t);
+    }
+  }
+  return bytes;
+}
+
+vr::Result<FrameView> ReplicaDataset::frame(std::size_t index) const {
+  FrameView view;
+  if (index < cache_.size() && cache_[index]) {
+    view.borrowed_ = &*cache_[index];
+    return view;
+  }
+  VR_ASSIGN(view.owned_, load(index));
+  return view;
 }
 
 }  // namespace vr_example

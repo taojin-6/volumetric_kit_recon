@@ -82,6 +82,7 @@ struct Options {
   bool lit = false;     // flat raw colour by default (the reconstruction's own)
   int follow = -1;      // >=0: render from this trajectory frame's sensor pose
   bool texture = true;  // project the keyframe image onto the mesh (uv0 atlas)
+  bool preload = false;  // decode every frame up front (RAM for decode time)
 };
 
 bool parse_args(int argc, char** argv, Options& o) {
@@ -136,6 +137,8 @@ bool parse_args(int argc, char** argv, Options& o) {
       o.lit = true;
     } else if (a == "--no-texture") {
       o.texture = false;
+    } else if (a == "--preload") {
+      o.preload = true;
     } else if (!a.empty() && a[0] == '-') {
       std::fprintf(stderr, "unknown flag %s\n", a.c_str());
       return false;
@@ -149,7 +152,8 @@ bool parse_args(int argc, char** argv, Options& o) {
   if (o.scene_dir.empty()) {
     std::fprintf(stderr,
                  "usage: fuse_render <scene_dir> [-o out.png] [--voxel m] "
-                 "[--max-frames n] [--yaw d] [--pitch d] [--lit]\n");
+                 "[--max-frames n] [--yaw d] [--pitch d] [--lit] "
+                 "[--preload]\n");
     return false;
   }
   // strtof parses "nan"/"inf" without error, and a non-finite knob slips the
@@ -218,11 +222,22 @@ vr::Result<Reconstruction> fuse(const Options& opt,
   const auto last = std::min<std::size_t>(
       dataset.frame_count(),
       static_cast<std::size_t>(std::max(0, opt.max_frames)));
+
+  // Decode the sequence up front when asked, so the fuse loop below runs at
+  // GPU speed instead of at JPEG/PNG decode speed (~75% of a streaming loop).
+  // Costs ~6 MB per frame of RAM.
+  if (opt.preload) {
+    VR_ASSIGN(const std::size_t cached_frames, dataset.preload(last));
+    std::printf("preloaded %zu frames (%.0f MB)\n", cached_frames,
+                static_cast<double>(dataset.preloaded_bytes()) / (1024 * 1024));
+  }
+
   std::size_t fused = 0;
   for (std::size_t i = 0; i < last; ++i) {
-    vr::Result<vr_example::RgbdFrame> fr = dataset.load(i);
-    if (!fr) break;  // ran past on-disk frames
-    const vr_example::RgbdFrame frame = std::move(fr).value();
+    vr::Result<vr_example::FrameView> frame_result = dataset.frame(i);
+    if (!frame_result) break;  // ran past on-disk frames
+    const vr_example::FrameView view = std::move(frame_result).value();
+    const vr_example::RgbdFrame& frame = *view;
     poses.push_back(frame.cam_to_world);
 
     const vol::DepthCameraParams dcam =
@@ -275,15 +290,15 @@ vr::Result<Reconstruction> fuse(const Options& opt,
         (opt.follow >= 0 && static_cast<std::size_t>(opt.follow) < fused)
             ? opt.follow
             : static_cast<int>(fused / 2);
-    VR_ASSIGN(vr_example::RgbdFrame tf,
-              dataset.load(static_cast<std::size_t>(tex_idx)));
-    const vol::DepthCameraParams tdcam =
-        vr_example::make_depth_camera(cam, tf.cam_to_world, opt.max_depth);
-    VR_TRY(texturer.texture(recon.mesh, tf.depth.data(), tdcam));
+    VR_ASSIGN(vr_example::FrameView keyframe,
+              dataset.frame(static_cast<std::size_t>(tex_idx)));
+    const vol::DepthCameraParams tdcam = vr_example::make_depth_camera(
+        cam, keyframe->cam_to_world, opt.max_depth);
+    VR_TRY(texturer.texture(recon.mesh, keyframe->depth.data(), tdcam));
 
     // Atlas = the keyframe's colour image as RGBA8 at full resolution --
     // exactly what uv0 = (pixel + 0.5)/size index.
-    recon.atlas = vr_example::pack_color_rgba8(tf.color);
+    recon.atlas = vr_example::pack_color_rgba8(keyframe->color);
     recon.atlas_w = cam.width;
     recon.atlas_h = cam.height;
     std::printf("textured with frame %d (%ux%u atlas)\n", tex_idx, cam.width,

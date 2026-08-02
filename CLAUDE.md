@@ -572,6 +572,24 @@ PLY via tinyply (interop-seam-A export, in example form). Verified on Replica
 room0 (400 frames) — a coherent ~4 m metric room with plausible surface colour at
 ~60 fps on MoltenVK.
 
+All three fuse examples take **`--preload`**, which decodes the sequence into RAM
+(`ReplicaDataset::preload`) before fusing, so the loop measures compute rather
+than the reader. Streaming is **decode-bound**: per frame the reader costs
+~10 ms of disk read + JPEG/PNG decode against ~1.8 ms of GPU fusion, so ~75% of a
+streaming loop's wall clock is dataloading. Preloading lifts room0 from ~70 fps
+to **~550 fps** (400 frames fused in 0.7 s) after a one-off 4.3 s decode, at
+~6 MB/frame of RAM (2.5 GB for the 400-frame sequence) — a benchmarking and
+short-sequence tool, not a capture-scale one. Frames are served through a
+`FrameView` that borrows the cached frame (no per-iteration copy of a ~6 MB
+frame) or owns one it decoded on demand, so the streaming and preloaded paths run
+the same loop. Verified equivalent on room0: streamed and preloaded runs produce
+the same mesh triangle-for-triangle (identical hash over the canonically-ordered
+triangles; the PLY *bytes* differ between any two runs either way, since marching
+cubes appends through an atomic and triangle order is nondeterministic). The
+follow-up, if an unbounded capture or startup latency makes all-in-RAM the wrong
+trade, is a decode thread pool — which would also speed the *streaming* path,
+where a single decoder thread caps the loop near ~96 fps.
+
 The gfx-linked **viewer examples** (`examples/viewer/`, behind the off-by-default
 `VR_BUILD_VIEWER` — the 2026-07-07 opt-in-gfx decision) render the coloured,
 **projectively textured** reconstruction through `volumetric_kit_gfx`'s

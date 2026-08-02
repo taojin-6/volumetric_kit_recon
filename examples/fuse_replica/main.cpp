@@ -58,6 +58,7 @@ struct Options {
   int stride = 1;            // integrate every N-th frame
   int mesh_every = 50;       // re-extract + log this often (0 = only at end)
   int num_buckets = 16384;   // initial map size; grows on overflow via resize
+  bool preload = false;  // decode every frame up front (RAM for decode time)
 };
 
 const char* arg_value(int argc, char** argv, int& i) {
@@ -117,6 +118,8 @@ vr::Result<Options> parse_args(int argc, char** argv) {
     } else if (a == "--buckets") {
       if (!need_int(opt.num_buckets))
         return vr::Status::invalid_argument("--buckets");
+    } else if (a == "--preload") {
+      opt.preload = true;
     } else if (a[0] == '-') {
       return vr::Status::invalid_argument("unknown flag: " + a);
     } else if (opt.scene_dir.empty()) {
@@ -128,7 +131,7 @@ vr::Result<Options> parse_args(int argc, char** argv) {
   if (opt.scene_dir.empty()) {
     return vr::Status::invalid_argument(
         "usage: fuse_replica <scene_dir> [-o out.ply] [--voxel m] "
-        "[--max-frames n] [--stride n] [--max-depth m]");
+        "[--max-frames n] [--stride n] [--max-depth m] [--preload]");
   }
   if (opt.cam_params.empty()) {
     opt.cam_params = opt.scene_dir + "/../cam_params.json";
@@ -274,12 +277,30 @@ vr::Status run(const Options& opt) {
   ccam.width = cam.width;
   ccam.height = cam.height;
 
-  const auto t_start = std::chrono::steady_clock::now();
-  std::size_t fused = 0;
   const std::size_t last = std::min<std::size_t>(
       dataset.frame_count(), static_cast<std::size_t>(opt.max_frames));
+
+  // Optionally decode the whole sequence up front. Deliberately *outside* the
+  // timed region below: streaming spends ~75% of the loop in JPEG/PNG decode,
+  // so preloading is what makes the reported fps a measure of fusion rather
+  // than of the reader.
+  if (opt.preload) {
+    const auto preload_start = std::chrono::steady_clock::now();
+    VR_ASSIGN(const std::size_t cached_frames,
+              dataset.preload(last, static_cast<std::size_t>(opt.stride)));
+    const double preload_seconds =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() -
+                                      preload_start)
+            .count();
+    std::printf("preloaded %zu frames (%.0f MB) in %.1fs\n", cached_frames,
+                static_cast<double>(dataset.preloaded_bytes()) / (1024 * 1024),
+                preload_seconds);
+  }
+
+  const auto t_start = std::chrono::steady_clock::now();
+  std::size_t fused = 0;
   for (std::size_t i = 0; i < last; i += static_cast<std::size_t>(opt.stride)) {
-    vr::Result<vr_example::RgbdFrame> frame_result = dataset.load(i);
+    vr::Result<vr_example::FrameView> frame_result = dataset.frame(i);
     if (!frame_result) {
       if (frame_result.status().domain() == vr::Status::Code::NotFound) {
         // Ran past the frames present on disk (we may have only a subset of the
@@ -291,7 +312,8 @@ vr::Status run(const Options& opt) {
       // A frame that IS on disk but failed to decode is a real error.
       return frame_result.status();
     }
-    const vr_example::RgbdFrame frame = std::move(frame_result).value();
+    const vr_example::FrameView view = std::move(frame_result).value();
+    const vr_example::RgbdFrame& frame = *view;
 
     // Only the pose changes per frame; dcam/ccam were built once above.
     dcam.cam_to_world = frame.cam_to_world;

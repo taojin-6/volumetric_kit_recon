@@ -91,7 +91,8 @@ struct Options {
   int width = 1280;
   int height = 720;
   bool lit = true;
-  bool texture = true;  // project each keyframe onto the growing mesh (uv0)
+  bool texture = true;   // project each keyframe onto the growing mesh (uv0)
+  bool preload = false;  // decode every frame up front (RAM for decode time)
 };
 
 bool parse_args(int argc, char** argv, Options& o) {
@@ -136,6 +137,8 @@ bool parse_args(int argc, char** argv, Options& o) {
       o.lit = false;
     } else if (a == "--no-texture") {
       o.texture = false;
+    } else if (a == "--preload") {
+      o.preload = true;
     } else if (!a.empty() && a[0] == '-') {
       std::fprintf(stderr, "unknown flag %s\n", a.c_str());
       return false;
@@ -150,7 +153,7 @@ bool parse_args(int argc, char** argv, Options& o) {
     std::fprintf(stderr,
                  "usage: fuse_viewer <scene_dir> [--voxel m] [--max-frames n] "
                  "[--fuse-per-tick k] [--remesh-every n] [--unlit] "
-                 "[--no-texture]\n");
+                 "[--no-texture] [--preload]\n");
     return false;
   }
   // strtof parses "nan"/"inf" without error, and a non-finite knob slips the
@@ -424,14 +427,33 @@ int run(GLFWwindow* window, const Options& opt) {
         pending_atlas = std::move(atlas);
         ++published_version;
       };
+      // Decode the whole sequence up front when asked, so the loop below is
+      // gated by fusion rather than by JPEG/PNG decode (~75% of a streaming
+      // loop). Done here, on the fuse thread, so the window is already up and
+      // responsive while it works.
+      if (opt.preload) {
+        auto cached_frames = dataset.preload(frame_count);
+        if (cached_frames) {
+          std::printf(
+              "preloaded %zu frames (%.0f MB)\n", cached_frames.value(),
+              static_cast<double>(dataset.preloaded_bytes()) / (1024 * 1024));
+        } else {
+          // frame() still decodes on demand, so a failed preload costs speed,
+          // not the run.
+          std::fprintf(stderr, "fuse_viewer: preload: %s (streaming instead)\n",
+                       cached_frames.status().message().c_str());
+        }
+      }
       // The newest fused frame, retained so the final extract (after the loop)
       // textures with the last keyframe rather than losing its texture.
-      std::optional<vr_example::RgbdFrame> last_frame;
+      std::optional<vr_example::FrameView> last_frame;
       for (std::size_t i = 0; i < frame_count && !quit.load(); ++i) {
-        auto fr =
-            dataset.load(i);  // disk read + JPEG/PNG decode (the CPU cost)
-        if (!fr) break;
-        vr_example::RgbdFrame frame = std::move(fr).value();
+        // A preload cache hit, else a disk read + JPEG/PNG decode (the CPU
+        // cost the preload exists to hoist out of this loop).
+        auto frame_result = dataset.frame(i);
+        if (!frame_result) break;
+        vr_example::FrameView view = std::move(frame_result).value();
+        const vr_example::RgbdFrame& frame = *view;
         {
           std::lock_guard<std::mutex> lk(share_mtx);
           shared_poses.push_back(frame.cam_to_world);
@@ -492,7 +514,7 @@ int run(GLFWwindow* window, const Options& opt) {
                     frame.color);
         }
         // Retain this frame (the newest keyframe) for the final extract below.
-        last_frame = std::move(frame);
+        last_frame = std::move(view);
       }
       // Skip the full-volume final extract when the user has already quit, so
       // the join at shutdown does not stall on a whole marching-cubes pass.
@@ -504,10 +526,11 @@ int run(GLFWwindow* window, const Options& opt) {
           // frame ever fused.
           static const std::vector<std::uint32_t> kNoColor;
           if (last_frame) {
-            publish(std::move(m).value(), last_frame->depth.data(),
-                    vr_example::make_depth_camera(cam, last_frame->cam_to_world,
+            const vr_example::RgbdFrame& keyframe = **last_frame;
+            publish(std::move(m).value(), keyframe.depth.data(),
+                    vr_example::make_depth_camera(cam, keyframe.cam_to_world,
                                                   opt.max_depth),
-                    last_frame->color);
+                    keyframe.color);
           } else {
             publish(std::move(m).value(), nullptr, vol::DepthCameraParams{},
                     kNoColor);
