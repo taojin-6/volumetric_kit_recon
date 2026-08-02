@@ -67,9 +67,10 @@ branching off `tsdf` (later: `compress`, `track`, `codec`, `stream`).
   fallback elsewhere), a compute pass.
 - **`sensor`** — the capture *contract*: `ICameraCapture`, the `CapturedFrame`
   view the fusion tiers consume, and the camera-convention conversions. Reads
-  `DepthCameraParams` (`volume`) + `ColorCameraParams` (`tsdf`), adds no
-  dependency of its own, and bundles **no drivers** — one ships here only if
-  this repo can build *and* test it (the 2026-08-02 decision).
+  `DepthCameraParams` + `ColorCameraParams` through the **Vulkan-free**
+  `volume/camera_params.hpp` + `tsdf/camera_params.hpp`, adds no dependency of
+  its own, and bundles **no drivers** — one ships here only if this repo can
+  build *and* test it (the 2026-08-02 decision).
 - **`interop`** — the handoff to `volumetric_kit_gfx` (below).
 
 ## Locked decisions
@@ -510,6 +511,31 @@ Each dated; newest context wins. Change the decision *and* this list together.
   tool, a visionOS target — since that is reuse across consumers rather than one
   app's platform glue; moving it down stays cheap precisely because the contract
   already lives here.
+  **Two consequences of the implementer being out of tree, both found by review
+  and fixed on the same PR.** (1) *The contract's headers must not drag Vulkan
+  in.* `DepthCameraParams` / `ColorCameraParams` are plain PODs, but they lived
+  inside `voxel_hash_map.hpp` / `tsdf_integrator.hpp`, which reach
+  `core/vulkan.hpp` through the VMA allocator and the pipeline wrappers — so
+  including the sensor contract preprocessed **105 k lines with 1 412 Vulkan
+  handle references**, and an ARKit Objective-C++ TU paid all of it to fill in
+  an intrinsics struct. Both structs now live in Vulkan-free
+  `volume/camera_params.hpp` / `tsdf/camera_params.hpp` (re-included by the old
+  headers, so every existing user is untouched), and the sensor headers include
+  only those: **0 Vulkan references**, 77 k lines, the remainder being GLM,
+  which `Mat4f` requires. The tier targets stay linked — the types are theirs,
+  so a consumer needs their headers installed; only the include weight is gone.
+  (2) *`Result<std::optional<T>>` has no natural spelling*, and a contract whose
+  only implementers are out of tree cannot afford that. `Result` converts
+  implicitly from exactly its value type, so `return std::nullopt;` and
+  `return frame;` are both two user-defined conversions and neither compiles;
+  `return {};` is ambiguous between the value and `Status` constructors; and
+  `return Status{};` compiles and then **aborts**, since an OK `Status` is not a
+  failure. `ICameraCapture` therefore ships `no_frame()` and `some_frame(f)` and
+  documents why. That trap was invisible until something implemented the
+  interface: the tier had shipped an interface **nothing in the repo
+  implemented**, so `tests/sensor_conventions_test.cpp` now carries a
+  `FakeCapture` driven through a base-class reference — it caught the
+  success-path half of this on its first compile.
 
 ## Provenance & salvage policy
 
@@ -1024,7 +1050,12 @@ tick" from "the device failed" exactly as gfx's `WindowedApp::begin_frame` does;
 frames are **dropped rather than queued**, which is what a live reconstruction
 wants. Polling (not callbacks) is the common denominator: it wraps a push-based
 source such as ARKit's session queue, while the reverse would force every
-consumer onto the device's thread.
+consumer onto the device's thread. Both of `poll()`'s non-error returns go
+through the `no_frame()` / `some_frame(f)` helpers, because neither has a
+spelling that compiles on its own (see the 2026-08-02 decision), and the
+contract's headers include only the Vulkan-free `volume/camera_params.hpp` +
+`tsdf/camera_params.hpp` so an out-of-tree driver does not preprocess Vulkan to
+describe a camera.
 
 The substance is `sensor/camera_conventions.hpp` — the two conversions a capture
 integration gets *silently* wrong, kept here (rather than in whichever
@@ -1048,9 +1079,15 @@ principal point centred (`(W−1)/2 → (W′−1)/2`), which is how
 mutations (naive rescale, and left- instead of right-multiplication) were
 confirmed to fail the suite. The derived depth camera **shares the colour pose**
 by construction, since two independently-assigned poses for one physical camera
-are free to drift apart. Host-only, so these run everywhere — the point of the
+are free to drift apart. It also rejects a colour focal length that is not
+finite and positive — the unprojection divides by it, so a zero or NaN focal
+yields inf/NaN rays that fusion reads as garbage block coordinates rather than
+reporting. Host-only, so these run everywhere — the point of the
 2026-08-02 decision that keeps the math here while ARKit's driver lives in
-`volumetric_kit_ios`.
+`volumetric_kit_ios`. Alongside them, a `FakeCapture` implements
+`ICameraCapture` end to end (start/poll/stop, frame handed over once, a device
+failure distinguished from an empty poll) so the tier's actual deliverable —
+the interface — is compiled and exercised in the repo that publishes it.
 
 Next: first-class **glTF/GLB export via tinygltf** (the same reader gfx's
 `load_gltf` uses, so the seam is one shared glTF implementation across both

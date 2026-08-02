@@ -14,14 +14,21 @@
 /// @ref ICameraCapture from outside. The same split is why
 /// `volumetric_kit_gfx`'s windowing tier takes a consumer-supplied surface
 /// rather than owning a window system, and why it ports untouched.
+///
+/// It therefore includes only the two Vulkan-free camera-parameter headers, not
+/// the tiers' full `voxel_hash_map.hpp` / `tsdf_integrator.hpp`: a driver
+/// implementing @ref ICameraCapture out of tree — an ARKit source in
+/// `volumetric_kit_ios` is Objective-C++ — should not preprocess the whole
+/// Vulkan surface to describe a camera. Consuming the frame still means
+/// including the fusion headers, but *producing* one does not.
 
 #include <cstdint>
 #include <optional>
 
 #include "volumetric_kit/recon/core/result.hpp"
 #include "volumetric_kit/recon/sensor/export.hpp"
-#include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
-#include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
+#include "volumetric_kit/recon/tsdf/camera_params.hpp"
+#include "volumetric_kit/recon/volume/camera_params.hpp"
 
 namespace volumetric_kit::recon::sensor {
 
@@ -35,11 +42,19 @@ namespace volumetric_kit::recon::sensor {
 /// captured frame feeds them with no repacking:
 ///
 /// @code
-/// map.allocate_from_depth(frame.depth, frame.depth_camera);
+/// // `failed` counts blocks the map had no room for. Neither call reports a
+/// // shortfall any other way, and neither return is [[nodiscard]], so
+/// // dropping them fuses a frame with silent holes -- grow and retry instead.
+/// VR_ASSIGN(std::uint32_t failed,
+///           grid.map().allocate_from_depth(frame.depth, frame.depth_camera));
+/// if (failed != 0) {
+///   VR_TRY(grid.resize(grid.grid().num_buckets * 2));  // then retry the frame
+///   return Status::out_of_memory("map full; grew it, frame not fused");
+/// }
 /// tsdf::ColorFrame color{frame.color, frame.color_camera};
-/// integrator.integrate(grid, frame.depth, frame.depth_camera, 5.0f,
-///                      tsdf::IntegrationMode::Classic,
-///                      frame.has_color() ? &color : nullptr);
+/// VR_TRY(integrator.integrate(grid, frame.depth, frame.depth_camera, 5.0f,
+///                             tsdf::IntegrationMode::Classic,
+///                             frame.has_color() ? &color : nullptr));
 /// @endcode
 struct CapturedFrame {
   /// Row-major depth in **metres**, `depth_camera.width * height` samples. A
@@ -100,17 +115,62 @@ class VR_SENSOR_API ICameraCapture {
   /// destructor's fallback, so it cannot fail in a way a caller must handle.
   virtual void stop() noexcept = 0;
 
+  /// @brief The "no new frame this tick" return, spelled out for implementers.
+  ///
+  /// @ref poll returns `Result<std::optional<CapturedFrame>>`, and @ref Result
+  /// converts implicitly only from *exactly* its value type. Every natural
+  /// spelling therefore fails, and none of the failures is obvious from the
+  /// signature:
+  /// - `return std::nullopt;` needs two user-defined conversions
+  ///   (`nullopt_t` → `std::optional` → @ref Result) and does not compile;
+  /// - `return {};` is ambiguous between @ref Result's value and @ref Status
+  ///   constructors;
+  /// - `return Status{};` compiles and then **aborts**, because an OK
+  ///   @ref Status is not a failure and @ref Result checks that.
+  ///
+  /// Use this and @ref some_frame instead of rediscovering the wrapping.
+  ///
+  /// @return An OK @ref Result holding an empty optional.
+  static Result<std::optional<CapturedFrame>> no_frame() {
+    return std::optional<CapturedFrame>{};
+  }
+
+  /// @brief The "here is the frame" return, the counterpart to @ref no_frame.
+  ///
+  /// `return frame;` does not compile for the same reason `return
+  /// std::nullopt;` does not: `CapturedFrame` → `std::optional` → @ref Result
+  /// is two user-defined conversions. Both of @ref poll's success paths
+  /// therefore go through a helper rather than through a wrap the caller has to
+  /// get right.
+  ///
+  /// @param frame  The frame to hand over.
+  /// @return An OK @ref Result holding @p frame.
+  static Result<std::optional<CapturedFrame>> some_frame(CapturedFrame frame) {
+    return std::optional<CapturedFrame>{frame};
+  }
+
   /// @brief Take the newest frame not yet returned, if there is one.
   ///
-  /// Returns an empty optional when no new frame has arrived since the last
-  /// call — the ordinary case for a consumer polling faster than the sensor
-  /// runs, and **not** an error. Only a genuine device failure is a non-OK
-  /// @ref Status. (Same shape as `gfx`'s `WindowedApp::begin_frame`, which
-  /// likewise separates "nothing this tick" from "something is wrong".)
+  /// Returns an empty optional (@ref no_frame) when no new frame has arrived
+  /// since the last call — the ordinary case for a consumer polling faster
+  /// than the sensor runs, and **not** an error. Only a genuine device failure
+  /// is a non-OK @ref Status. (Same shape as `gfx`'s
+  /// `WindowedApp::begin_frame`, which likewise separates "nothing this tick"
+  /// from "something is wrong".)
   ///
   /// Frames may be **dropped**, not queued: a consumer slower than the sensor
   /// gets the newest frame rather than a backlog, which is what a live
   /// reconstruction wants.
+  ///
+  /// @code
+  /// Result<std::optional<CapturedFrame>> MyCapture::poll() {
+  ///   if (faulted_) return Status::io_error("sensor stopped responding");
+  ///   if (!newest_) return no_frame();   // ordinary; not an error
+  ///   CapturedFrame frame = *newest_;
+  ///   newest_.reset();                   // hand each frame over once
+  ///   return some_frame(frame);
+  /// }
+  /// @endcode
   ///
   /// @return The frame; an empty optional if none is ready; or a device error.
   virtual Result<std::optional<CapturedFrame>> poll() = 0;

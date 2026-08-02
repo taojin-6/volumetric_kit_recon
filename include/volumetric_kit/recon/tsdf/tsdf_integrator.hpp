@@ -8,15 +8,16 @@
 ///        frame into a @ref VoxelBlockGrid's per-voxel `tsdf` + `weight`
 ///        attributes.
 
-#include <cstddef>
 #include <cstdint>
-#include <type_traits>
 
 #include "volumetric_kit/recon/core/buffer.hpp"
 #include "volumetric_kit/recon/core/compute_kernel.hpp"
 #include "volumetric_kit/recon/core/descriptor.hpp"
-#include "volumetric_kit/recon/core/math/vector_types.hpp"  // Mat4f
 #include "volumetric_kit/recon/core/result.hpp"
+// ColorCameraParams lives in its own Vulkan-free header so a consumer that only
+// describes a camera (the sensor tier's out-of-tree drivers) need not compile
+// this one; re-exported here so existing users are unaffected.
+#include "volumetric_kit/recon/tsdf/camera_params.hpp"
 #include "volumetric_kit/recon/tsdf/export.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_hash_map.hpp"  // DepthCameraParams
@@ -37,34 +38,6 @@ enum class IntegrationMode : std::uint32_t {
   Dynamic = 1,  ///< Clear it: reset stale geometry there, so a receded surface
                 ///< leaves no ghost (moving scenes).
 };
-
-/// @brief Pinhole intrinsics + pose + image dimensions of the (separate) color
-///        camera a @ref ColorFrame was captured with.
-///
-/// The color-camera analogue of @ref volume::DepthCameraParams, without the
-/// depth-range fields a color image has no use for. Uploaded verbatim to the
-/// integrate kernel's color-camera SSBO and read through scalar block layout,
-/// so it packs byte-for-byte to the shader's `ColorCameraParams`: the scalars
-/// at their natural 4-byte offsets, the `mat4` at offset 24. The
-/// `static_assert`s pin that layout (a drift is a compile error, not silent
-/// misprojection).
-struct ColorCameraParams {
-  float fx;              ///< Focal length x (pixels).
-  float fy;              ///< Focal length y (pixels).
-  float cx;              ///< Principal point x (pixels).
-  float cy;              ///< Principal point y (pixels).
-  std::uint32_t width;   ///< Color image width (pixels).
-  std::uint32_t height;  ///< Color image height (pixels).
-  Mat4f cam_to_world;    ///< Camera -> world rigid transform (column-major).
-};
-static_assert(sizeof(ColorCameraParams) == 88,
-              "ColorCameraParams must be 88 bytes");
-static_assert(offsetof(ColorCameraParams, width) == 16, "layout drift");
-static_assert(offsetof(ColorCameraParams, cam_to_world) == 24, "layout drift");
-static_assert(std::is_trivially_copyable_v<ColorCameraParams>,
-              "ColorCameraParams must be trivially copyable");
-static_assert(std::is_standard_layout_v<ColorCameraParams>,
-              "ColorCameraParams must be standard-layout");
 
 /// @brief An optional color frame to fuse alongside depth: packed-RGB pixels
 ///        plus the (separate) color camera they were captured with.
