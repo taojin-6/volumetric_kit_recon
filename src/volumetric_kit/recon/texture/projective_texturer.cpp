@@ -93,6 +93,63 @@ Result<ProjectiveTexturer> ProjectiveTexturer::create(Device& device,
   return tex;
 }
 
+Status ProjectiveTexturer::texture(const mesh::DeviceMesh& mesh,
+                                   const float* depth,
+                                   const DepthCameraParams& cam,
+                                   float occlusion_threshold) {
+  if (!valid()) {
+    return Status::invalid_argument(
+        "ProjectiveTexturer::texture: moved-from texturer");
+  }
+  if (depth == nullptr) {
+    return Status::invalid_argument(
+        "ProjectiveTexturer::texture: depth is null");
+  }
+  if (cam.width == 0 || cam.height == 0) {
+    return Status::invalid_argument(
+        "ProjectiveTexturer::texture: camera image is empty");
+  }
+  // An empty mesh is a no-op success, as in the host overload -- and it is the
+  // one case where a DeviceMesh legitimately names no buffers.
+  if (mesh.empty()) {
+    return {};
+  }
+  if (!mesh.valid()) {
+    return Status::invalid_argument(
+        "ProjectiveTexturer::texture: the DeviceMesh names no buffers");
+  }
+
+  // Only the depth frame needs a binding check here: the mesh buffers were
+  // already sized (and range-checked) by the pass that created them, and are
+  // bound as they are rather than re-allocated.
+  const auto pixels = static_cast<std::size_t>(cam.width) *
+                      static_cast<std::size_t>(cam.height);
+  const VkDeviceSize depth_bytes = VkDeviceSize(pixels) * sizeof(float);
+  if (depth_bytes > max_storage_buffer_range_) {
+    return Status::invalid_argument(
+        "ProjectiveTexturer::texture: the depth buffer exceeds the device "
+        "maxStorageBufferRange");
+  }
+
+  // The one transfer left in this path.
+  VR_ASSIGN(Buffer depth_buf,
+            upload_storage_buffer(*allocator_, depth, depth_bytes));
+  std::memcpy(cam_buf_.mapped(), &cam, sizeof(DepthCameraParams));
+
+  // Bind the producing pass's buffers directly -- no upload, and nothing to
+  // read back afterwards: the kernel rewrites uv0 where the geometry already
+  // lives, for the next device consumer to use.
+  kernel_.set.write_storage_buffer(0, mesh.vertices, 0, VK_WHOLE_SIZE);
+  kernel_.set.write_storage_buffer(1, mesh.indices, 0, VK_WHOLE_SIZE);
+  kernel_.set.write_storage_buffer(2, depth_buf.handle(), 0, VK_WHOLE_SIZE);
+
+  const PushConstants push{mesh.triangle_count, occlusion_threshold,
+                           mesh.vertex_count};
+  return dispatch(*device_, kernel_, &push, sizeof(push),
+                  group_count(mesh.triangle_count, kLocalSize),
+                  max_workgroup_count_x_);
+}
+
 Status ProjectiveTexturer::texture(mesh::Mesh& mesh, const float* depth,
                                    const DepthCameraParams& cam,
                                    float occlusion_threshold) {
