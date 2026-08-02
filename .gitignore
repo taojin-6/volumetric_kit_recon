@@ -45,3 +45,7 @@ DerivedData/
 
 # Logs
 *.log
+
+# Dear ImGui writes its window layout next to the running binary (the viewer
+# example's overlay panels); it is per-developer state, not project config.
+imgui.ini

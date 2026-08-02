@@ -292,6 +292,36 @@ Each dated; newest context wins. Change the decision *and* this list together.
   vertex/index/depth buffer past `maxStorageBufferRange` with a clean `Status`
   (the mesh tier's arena guard).
 
+- **2026-08-01 — Perf instrumentation starts in the viewer example, not a shared
+  contract package.** The question left open when a private
+  `volumetric_kit_interop` repo was stood up to hold a shared `FrameMetrics`
+  (and judged "too thin") is settled the lean way: **the viewer example owns the
+  instrumentation**. `fuse_viewer` already links both siblings, so it fills gfx's
+  plain-data `gfx::FrameMetrics` directly from recon-side timings and draws it
+  with gfx's shipped `ui::ImGuiOverlay` + `ui::draw_metrics_panel` — no shared
+  package, no metrics contract in recon, and *no recon→gfx dependency* (the
+  coupling stays inside the already-opt-in `VR_BUILD_VIEWER` example, per the
+  2026-07-07 decision). The compute tiers stay profiler-free. `core` gains only
+  `Allocator::memory_stats()` (per-heap usage/budget over `vmaGetHeapBudgets`,
+  mirroring gfx's identically-named API) — a genuine library capability, not a
+  metrics framework. Promoting a shared contract waits for a **second** consumer
+  (a headless recon benchmark, or production telemetry), the same
+  wait-for-the-second-consumer rule the 2026-07-06 kernel-registry decision
+  applied. Two consequences carried knowingly: (1) recon's stage rows are
+  **wall-clock CPU**, not a CPU/GPU split — every recon dispatch goes through
+  `submit_single_time`, which blocks on a fence, so the span around a call is
+  that stage's true end-to-end cost (host record *plus* device execution) and is
+  reported with `has_gpu` false rather than as a fabricated device measurement;
+  the renderer's own rows *do* carry real GPU spans, since gfx's `Profiler`
+  writes timestamp queries and this GPU reports 64 `timestampValidBits` through
+  MoltenVK. Splitting recon's host from device time needs a query pool plumbed
+  through `submit_single_time` — the greppable follow-up. (2) VMA's `usage`
+  counts allocated *blocks*, not live sub-allocations, and VMA pools an emptied
+  block, so the reported figure is a **high-water mark that does not fall when a
+  buffer is freed** (`tests/core_memory_stats_test.cpp` pins exactly that); the
+  numbers are VMA estimates until `VK_EXT_memory_budget` is enabled, a
+  `TODO(core)` on the device seam.
+
 ## Provenance & salvage policy
 
 The algorithms here are a clean re-implementation of the proven core of the
@@ -588,7 +618,29 @@ and swaps in that frame's image as the atlas in lockstep with the mesh version �
 a per-slot atlas **ring** realising the gfx device-adopt decision's "per-slot
 atlas ringing", each atlas version carrying its own descriptor pool so one bound
 by an in-flight frame outlives its replacement. `--no-texture` A/Bs both against
-the pure vertex-colour path. `recon_gfx_bridge.hpp` converts `mesh::Vertex →
+the pure vertex-colour path.
+
+`fuse_viewer` also carries the **perf overlay** (the 2026-08-01 decision): two
+Dear ImGui panels drawn through gfx's `ui` tier, off with `--no-overlay`. A
+*Performance* panel shows gfx's `Profiler` snapshot — fps, whole-frame CPU, and
+real GPU spans for `mesh draw` / `overlay draw` (timestamp queries; this GPU
+reports 64 `timestampValidBits` through MoltenVK) — with recon's per-fused-frame
+stages appended as wall-clock rows: `frame` (decode, or ~0 on a preload hit),
+`allocate` (including any map resize), `integrate`, `extract`, `texture`,
+`to_gfx_mesh`, plus the render thread's `mesh upload`. A *Reconstruction* panel
+shows fused-frame progress, ms/frame, the mesh's vertex/triangle counts and
+version, the map's bucket/block counts, recon's own device memory
+(`Allocator::memory_stats` — its VMA allocator's share of its device, separate
+from the renderer's, since the two run on two devices), and the host-side
+preload cache. The example owns the ImGui *platform* backend
+(`imgui_impl_glfw`), as gfx's own examples do, since gfx's `ui` tier
+deliberately wraps only the Vulkan renderer backend. Measured on room0: the
+default `--remesh-every 1` costs **~97 ms/frame** on a ~850 k-vertex mesh
+(marching cubes re-running over the whole volume every frame) against
+**~3.7 ms/frame** at `--remesh-every 5` — the overlay's first finding, and the
+reason the remesh cadence is a knob.
+
+`recon_gfx_bridge.hpp` converts `mesh::Vertex →
 gfx::assets::Vertex` (synthesizing `tangent`, passing `uv0` through — a real
 atlas coordinate where a keyframe textured, else the `(-1,-1)` sentinel that
 takes the per-vertex-colour path). Verified: the untextured follow-camera render

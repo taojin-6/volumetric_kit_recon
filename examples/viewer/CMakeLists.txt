@@ -53,10 +53,31 @@ target_link_libraries(fuse_render PRIVATE ${_viewer_recon_libs} vr_stb_image
                                           ${_viewer_gfx_libs} Vulkan::Vulkan)
 target_include_directories(fuse_render PRIVATE ${_viewer_common_inc})
 
+# The Dear ImGui sources gfx fetched for its ui tier. gfx exports the path only
+# into its own scope (third_party/CMakeLists.txt sets VG_IMGUI_SOURCE_DIR
+# PARENT_SCOPE), so ask FetchContent for the populated dir instead of reaching
+# into a variable that does not reach us.
+FetchContent_GetProperties(imgui)
+
 # fuse_viewer: the live window -- fuses on a background thread, draws the
-# growing reconstruction each frame following the capture trajectory.
-add_executable(fuse_viewer fuse_viewer.cpp)
+# growing reconstruction each frame following the capture trajectory, and shows
+# the Dear ImGui performance + reconstruction panels (gfx's ui tier).
+#
+# The ui tier wraps only ImGui's Vulkan renderer backend, deliberately staying
+# windowing-free, so the *platform* backend (imgui_impl_glfw) is this example's
+# to compile -- exactly as gfx's own examples do it. imgui.h arrives
+# transitively from gfx_ui (SYSTEM); backends/ is added here for
+# imgui_impl_glfw.h.
+add_executable(fuse_viewer fuse_viewer.cpp
+                           "${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp")
 target_link_libraries(
-  fuse_viewer PRIVATE ${_viewer_recon_libs} ${_viewer_gfx_libs} glfw
-                      Vulkan::Vulkan)
+  fuse_viewer PRIVATE ${_viewer_recon_libs} ${_viewer_gfx_libs}
+                      volumetric_kit::gfx_ui glfw Vulkan::Vulkan)
 target_include_directories(fuse_viewer PRIVATE ${_viewer_common_inc})
+target_include_directories(fuse_viewer SYSTEM
+                           PRIVATE "${imgui_SOURCE_DIR}/backends")
+# ImGui's own TU carries its own warning posture and would trip this project's
+# -Werror; the source-level -w follows the target flags on the command line, so
+# it wins. Only the third-party TU opts out -- fuse_viewer.cpp stays strict.
+set_source_files_properties("${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp"
+                            PROPERTIES COMPILE_OPTIONS "-w")
