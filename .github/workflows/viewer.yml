@@ -1,0 +1,96 @@
+name: viewer (reusable)
+
+# Build-only leg for the gfx-linked viewer examples (VR_BUILD_VIEWER=ON).
+#
+# The library tiers, the default build, and every other CI leg are deliberately
+# renderer-independent (the 2026-07-07 opt-in-gfx decision), so nothing else
+# here ever compiles examples/viewer. That gap let a real break reach `main`:
+# fuse_viewer.cpp kept declaring `Result<Mesh>` while calling `extract_device`,
+# which returns `Result<DeviceMesh>`, so `-DVR_BUILD_VIEWER=ON` failed to build
+# at 8a439fc and nothing noticed. This leg closes it.
+#
+# Build-only on purpose: the live viewer needs a window and both examples need
+# a posed RGB-D dataset that CI does not carry, so there is nothing to run. The
+# compile + link is the whole point -- it is the API seam between recon and gfx
+# (and the ImGui platform backend the example owns) that drifts.
+on:
+  workflow_call:
+
+jobs:
+  viewer:
+    name: viewer build
+    # Self-hosted, so only trusted code: same-repo PRs and pushes, mirroring the
+    # build legs in ci.yml.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # macOS: MoltenVK is the target this example is developed against, and the
+    # viewer's gfx + GLFW dependencies are already provisioned there.
+    runs-on: mac
+    # A cold run fetches and builds the whole gfx sibling plus ImGui and
+    # spirv-cross; the dependency cache below makes the warm case far shorter.
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install dependencies
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+          HOMEBREW_NO_INSTALL_CLEANUP: '1'
+        run: |
+          # Same set as the macOS build leg, plus glfw: the viewer owns its
+          # window, so examples/viewer/CMakeLists.txt does find_package(glfw3).
+          ok=0
+          for attempt in 1 2 3; do
+            if brew install cmake glm molten-vk vulkan-headers vulkan-loader \
+                vulkan-tools shaderc glfw; then
+              ok=1
+              break
+            fi
+            echo "::warning::brew install attempt ${attempt} failed; retrying in 15s"
+            sleep 15
+          done
+          [ "${ok}" = 1 ] || {
+            echo "::error::brew install failed after 3 attempts"
+            exit 1
+          }
+
+      # Keyed on the viewer's own CMakeLists too, since that is where the gfx
+      # and ImGui pins live -- bumping the gfx commit must bust this cache.
+      # Native self-hosted macOS runners each bake their own absolute path into
+      # FetchContent's sub-build cache, hence runner.name in the key (same
+      # reasoning as _build.yml).
+      - name: Cache third-party deps
+        uses: actions/cache@v5
+        with:
+          path: build/_deps
+          key: viewer-deps-${{ runner.name }}-${{ hashFiles('examples/viewer/CMakeLists.txt', 'examples/CMakeLists.txt', 'third_party/CMakeLists.txt', 'CMakeLists.txt') }}
+          restore-keys: |
+            viewer-deps-${{ runner.name }}-
+
+      - name: Configure
+        # Tests off: the library tests already run in every build leg, and this
+        # leg exists for the viewer targets alone. Retry rides out transient
+        # FetchContent clone blips, as in _build.yml.
+        run: |
+          ok=0
+          for attempt in 1 2 3; do
+            if cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+                -DVR_BUILD_VIEWER=ON -DVR_BUILD_TESTS=OFF; then
+              ok=1
+              break
+            fi
+            echo "::warning::cmake configure attempt ${attempt} failed; retrying in 15s"
+            sleep 15
+          done
+          [ "${ok}" = 1 ] || {
+            echo "::error::cmake configure failed after 3 attempts"
+            exit 1
+          }
+
+      # Name the viewer targets explicitly rather than building everything, so
+      # this leg fails for the reason it exists rather than on some unrelated
+      # target, and so it does not re-do what the build legs already cover.
+      - name: Build viewer examples
+        run: cmake --build build --parallel --target fuse_viewer fuse_render

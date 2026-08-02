@@ -90,9 +90,11 @@ target_include_directories(fuse_viewer SYSTEM
 # first-party target -- they are our code, and the overlay/panel logic is where
 # a stale format specifier or an unused capture would otherwise go unseen.
 #
-# TODO(ci): no CI leg sets VR_BUILD_VIEWER, so these targets (and the vendored
-# ImGui TU below) are only ever built locally. A build-only macOS leg would
-# cover the CMake wiring; it costs a full gfx fetch + build, so it is deferred.
+# These targets are the one place recon's code meets gfx's API, so they are
+# covered by their own CI leg (.github/workflows/viewer.yml) -- build-only on
+# macOS, since the live viewer needs a window and both examples need a dataset
+# CI does not carry. Added after that gap let a real recon/gfx API mismatch
+# reach `main` unbuilt.
 vr_target_warnings(fuse_viewer)
 # ...but ImGui's own TU carries its own warning posture and would trip that
 # policy. The source-level opt-out follows the target flags on the command line,
