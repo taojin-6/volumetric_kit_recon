@@ -418,6 +418,43 @@ Each dated; newest context wins. Change the decision *and* this list together.
   live on this vertex at all is the 2026-07-06 hybrid-colour path. Revisit if a
   non-renderer consumer ever dominates the mesh tier's traffic — the tangent is
   then 16 bytes of dead weight per vertex with no offsetting win.
+- **2026-08-02 — The `sensor` tier is a *contract*, not a driver collection: a
+  capture driver lives here only if this repo can build **and test** it.** The
+  tier's first slice is platform-neutral C++ — an `ICameraCapture` interface, a
+  `CapturedFrame` POD, and the coordinate/intrinsics conversion helpers — with
+  **no** driver implementations bundled in. The first real source, **ARKit,
+  lives in `volumetric_kit_ios`**, not here. The rule that places it: a driver
+  belongs in this repo when this repo's CI can compile and exercise it (a
+  cross-platform C++ SDK — an Orbbec driver would qualify); otherwise it belongs
+  with the platform that can. ARKit is iOS-only Objective-C, buildable only in
+  an iOS cross-compile recon's CI does not run and verifiable only on LiDAR
+  hardware, so hosting it here would mean an Objective-C++ TU that **no CI
+  compiles and no test exercises** — unbuilt code that rots silently. *Refines*
+  the provenance policy's "its sensor driver framework is rebuilt behind a clean
+  `ICameraCapture`": the **interface** is rebuilt here; drivers are placed by the
+  buildable-and-testable rule. This mirrors the sibling precedent exactly —
+  gfx's windowing tier is *window-system* agnostic (`Surface` adopts a raw
+  `VkSurfaceKHR`, `WindowedApp` takes a consumer-supplied `SurfaceFactory`),
+  which is precisely why gfx ported to iOS with zero source changes and why the
+  app, not the library, owns the `CAMetalLayer`. The `sensor` tier is
+  *capture-system* agnostic for the same reason and buys the same portability.
+  What deliberately **does** stay here is the conversion math, because it is the
+  part most likely to silently ruin a reconstruction and it needs no hardware to
+  test: (1) ARKit's camera is +Y **up** / −Z **forward** while recon projects +Z
+  forward, so poses convert as `T_world_cv = T_world_arkit · diag(1, −1, −1, 1)`
+  — get this wrong and the mesh is smeared or doubled, never an error; and (2)
+  ARKit's depth (`sceneDepth`, 256×192 float metres) and colour
+  (`capturedImage`, 1920×1440) come from **one physical camera**, so depth is
+  *registered* to colour — the two share a pose and differ only by an intrinsics
+  scale, which lands fusion in the registered case and avoids the
+  occlusion/partial-colouring caveats `TsdfIntegrator::integrate` documents for
+  an unregistered colour camera. (`sceneDepth.confidenceMap` gates low-confidence
+  pixels to depth 0, so the integrator skips them.) Both are pinned by plain
+  host-side unit tests before any Objective-C touches them. Revisit the
+  placement if ARKit capture ever gains a second consumer — a headless capture
+  tool, a visionOS target — since that is reuse across consumers rather than one
+  app's platform glue; moving it down stays cheap precisely because the contract
+  already lives here.
 
 ## Provenance & salvage policy
 
@@ -440,7 +477,10 @@ source repos are left untouched on disk — never build or write in them.
   hardcoded paths, and machine-specific config.
 - **Drop:** the prior engine's own renderer (gfx replaces it) and its SwiftUI
   demo app (reference only). Its sensor driver framework is rebuilt behind a
-  clean `ICameraCapture` in the later `sensor` tier.
+  clean `ICameraCapture` in the later `sensor` tier — the **interface** is
+  rebuilt here; each *driver* is placed by the buildable-and-testable rule (see
+  the 2026-08-02 sensor-tier decision), so a platform-only driver such as ARKit
+  lives with the app that can build and run it.
 
 ## Excluded from the public release (experimental — never ship)
 
