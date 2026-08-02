@@ -21,7 +21,6 @@ namespace {
 
 using volume::AttributeView;
 using volume::BlockIndex;
-using volume::DepthCameraParams;
 using volume::VoxelBlockGrid;
 using volume::VoxelGridParams;
 
@@ -34,7 +33,7 @@ constexpr std::uint32_t kLocalSize = 256;
 // `has_color_attr` says binding 6 is the grid's real color attribute (so
 // dynamic can clear a stale color even on a depth-only frame) -- the two differ
 // because a grid can carry `color` without a color image arriving this call.
-// The camera rides the SSBO as volume::DepthCameraParams verbatim -- the kernel
+// The camera rides the SSBO as DepthCameraParams verbatim -- the kernel
 // derives world -> camera from its rigid cam_to_world, so there is no separate
 // pre-inverted per-dispatch struct.
 struct PushConstants {

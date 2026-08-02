@@ -45,10 +45,13 @@ conventions and Vulkan setup.
 Strict left-to-right dependency rule: a tier may depend only on tiers to its
 left. No upward includes.
 
-`core` → `volume` → `tsdf` → `mesh` → `texture` → `interop` (later: `compress`,
-`sensor`, `track`, `codec`, `stream`).
+`core` → `volume` → `tsdf` → `mesh` → `texture` → `interop`, with `sensor`
+branching off **`core`** (later: `compress`, `track`, `codec`, `stream`).
 
-- **`core`** — the Vulkan foundation, mirroring `volumetric_kit_gfx`'s core:
+- **`core`** — the Vulkan foundation *and* the vocabulary every tier trades in
+  (`Status`/`Result`, the GLM math aliases, and the posed pinhole
+  `DepthCameraParams`/`ColorCameraParams` of `core/camera_params.hpp`),
+  mirroring `volumetric_kit_gfx`'s core:
   instance, device (compute + transfer queues), VMA allocator, RAII buffer/image,
   compute-pipeline + descriptor-set wrappers (and the `ComputeKernel` bundle +
   `KernelSetBuilder` that groups a kernel's layout/pipeline/set behind one
@@ -65,6 +68,12 @@ left. No upward includes.
 - **`texture`** — projective texturing: fills the mesh's per-vertex `uv0` with a
   posed camera's image coordinates where it has line of sight (per-vertex-color
   fallback elsewhere), a compute pass.
+- **`sensor`** — the capture *contract*: `ICameraCapture`, the `CapturedFrame`
+  view the fusion tiers consume, and the camera-convention conversions. Reads
+  `DepthCameraParams` + `ColorCameraParams` from `core/camera_params.hpp`, so it
+  depends on **`core` alone** — it sits beside the fusion tiers, not on top of
+  them — and bundles **no drivers**: one ships here only if this repo can build
+  *and* test it (the 2026-08-02 decision).
 - **`interop`** — the handoff to `volumetric_kit_gfx` (below).
 
 ## Locked decisions
@@ -505,6 +514,37 @@ Each dated; newest context wins. Change the decision *and* this list together.
   tool, a visionOS target — since that is reuse across consumers rather than one
   app's platform glue; moving it down stays cheap precisely because the contract
   already lives here.
+  **Two consequences of the implementer being out of tree, both found by review
+  and fixed on the same PR.** (1) *The camera-parameter structs are `core`
+  vocabulary, and the contract depends on `core` alone.* They had been placed by
+  which tier first needed one — `DepthCameraParams` in `volume` (block
+  allocation unprojects a depth frame), `ColorCameraParams` in `tsdf` (the first
+  tier that fuses colour) — which split a matched pair across two tiers and, far
+  worse, buried both inside `voxel_hash_map.hpp` / `tsdf_integrator.hpp`, which
+  reach `core/vulkan.hpp` through the VMA allocator and the pipeline wrappers.
+  Including the sensor contract therefore preprocessed **105 k lines with 1 412
+  Vulkan handle references**, all of it paid by an ARKit Objective-C++ TU that
+  only wants to fill in an intrinsics struct. Both now live in
+  **`core/camera_params.hpp`** as `vr::DepthCameraParams` / `vr::ColorCameraParams`
+  — a posed pinhole camera is pure math over `Mat4f`, the same kind of vocabulary
+  as `Status` and the GLM aliases, and four tiers take one. `recon_sensor`
+  consequently links **`recon_core` and nothing else**: 0 Vulkan references,
+  77 k lines, the remainder GLM, which `Mat4f` requires. They stay two *types*
+  (88 vs 96 bytes — colour carries no depth range), and each still pins its host
+  packing against the GLSL mirrors in `volume/`, `tsdf/` and `texture/`
+  shaders.
+  (2) *`Result<std::optional<T>>` has no natural spelling*, and a contract whose
+  only implementers are out of tree cannot afford that. `Result` converts
+  implicitly from exactly its value type, so `return std::nullopt;` and
+  `return frame;` are both two user-defined conversions and neither compiles;
+  `return {};` is ambiguous between the value and `Status` constructors; and
+  `return Status{};` compiles and then **aborts**, since an OK `Status` is not a
+  failure. `ICameraCapture` therefore ships `no_frame()` and `some_frame(f)` and
+  documents why. That trap was invisible until something implemented the
+  interface: the tier had shipped an interface **nothing in the repo
+  implemented**, so `tests/sensor_conventions_test.cpp` now carries a
+  `FakeCapture` driven through a base-class reference — it caught the
+  success-path half of this on its first compile.
 
 ## Provenance & salvage policy
 
@@ -711,7 +751,7 @@ per-voxel data survive the grow on MoltenVK.
 
 The first **`tsdf` tier** slice then lands on top: `TsdfIntegrator`
 (`tsdf/tsdf_integrator.hpp`) fuses a posed depth frame (float metres, reusing
-`volume::DepthCameraParams`) into a `VoxelBlockGrid`'s `tsdf`/`weight` attributes
+`vr::DepthCameraParams`) into a `VoxelBlockGrid`'s `tsdf`/`weight` attributes
 via `tsdf/shaders/tsdf_integrate.comp` — one thread per voxel of each active
 block, classic projective `sdf = depth − Zc` with `±trunc_dist` truncation, an
 inverse-square-with-behind-dropoff weight, and a running average capped at
@@ -784,7 +824,7 @@ left, so the strict dependency rule holds).
 The first **`texture` tier** slice — **live projective texturing** — fills the
 mesh appearance the 2026-07-06 hybrid-colour path reserved. `ProjectiveTexturer`
 (`texture/projective_texturer.hpp`) takes a `mesh::Mesh` + one posed frame's
-depth + `volume::DepthCameraParams` and rewrites every `Vertex::uv0` via
+depth + `vr::DepthCameraParams` and rewrites every `Vertex::uv0` via
 `texture/shaders/texture_score.comp`: one thread per triangle projects its three
 vertices into the camera (`project_to_image` mirrors `tsdf_common.glsl`'s
 `project_pinhole`; the bilinear occlusion sampler shares the tsdf sampler's
@@ -1007,6 +1047,56 @@ nondeterministic). The follow-up, if an unbounded capture or startup latency
 makes all-in-RAM the wrong trade, is a decode thread pool — which would also
 speed the *streaming* path, where a single decoder thread caps the loop near
 ~96 fps.
+
+The first **`sensor` tier** slice is the capture *contract*, not a driver: an
+`ICameraCapture` (`sensor/camera_capture.hpp`) polled for a `CapturedFrame` — a
+**non-owning view** of one posed RGB-D frame in exactly the shape the fusion
+entry points already borrow (`const float*` depth in metres +
+`DepthCameraParams`, packed-RGB colour + `ColorCameraParams`), so a captured
+frame feeds `allocate_from_depth` / `integrate` with no repacking. `poll()`
+returns `Result<std::optional<CapturedFrame>>`, separating "no new frame this
+tick" from "the device failed" exactly as gfx's `WindowedApp::begin_frame` does;
+frames are **dropped rather than queued**, which is what a live reconstruction
+wants. Polling (not callbacks) is the common denominator: it wraps a push-based
+source such as ARKit's session queue, while the reverse would force every
+consumer onto the device's thread. Both of `poll()`'s non-error returns go
+through the `no_frame()` / `some_frame(f)` helpers, because neither has a
+spelling that compiles on its own (see the 2026-08-02 decision), and the
+contract takes its camera types from `core/camera_params.hpp` and links
+`recon_core` alone, so an out-of-tree driver compiles against the math
+vocabulary rather than preprocessing Vulkan to describe a camera.
+
+The substance is `sensor/camera_conventions.hpp` — the two conversions a capture
+integration gets *silently* wrong, kept here (rather than in whichever
+platform-bound driver produced the numbers) precisely because they are pure
+arithmetic and can be pinned by host tests on any platform. (1)
+`cv_from_gl_camera` reinterprets a pose from the OpenGL/ARKit camera convention
+(+Y up, −Z forward) into the one this repo projects with (+Y down, +Z forward):
+a **right**-multiplication by `diag(1, −1, −1, 1)`, implemented as negating the
+second and third basis columns. Left-multiplying instead would mirror the
+camera's *position* through the world origin rather than turning it in place —
+which is why the test asserts the translation column survives untouched. (2)
+`depth_from_registered_color` derives `DepthCameraParams` from a colour camera
+the depth is registered to (ARKit: 1920×1440 colour, 256×192 depth, one physical
+camera), scaling focal lengths by the size ratio and the principal point by
+`c' = (c + 0.5)·s − 0.5`. That half-pixel term is not cosmetic: pixel centres sit
+at integer coordinates here, so a `W`-wide image spans `[−0.5, W−0.5]`, and
+dropping it biases every unprojected ray by `0.5·(1 − s)` — ~0.43 px at ARKit's
+scale, a fixed bias rather than noise. It is exactly what keeps a centred
+principal point centred (`(W−1)/2 → (W′−1)/2`), which is how
+`tests/sensor_conventions_test.cpp` discriminates it from the naive `c·s`: both
+mutations (naive rescale, and left- instead of right-multiplication) were
+confirmed to fail the suite. The derived depth camera **shares the colour pose**
+by construction, since two independently-assigned poses for one physical camera
+are free to drift apart. It also rejects a colour focal length that is not
+finite and positive — the unprojection divides by it, so a zero or NaN focal
+yields inf/NaN rays that fusion reads as garbage block coordinates rather than
+reporting. Host-only, so these run everywhere — the point of the
+2026-08-02 decision that keeps the math here while ARKit's driver lives in
+`volumetric_kit_ios`. Alongside them, a `FakeCapture` implements
+`ICameraCapture` end to end (start/poll/stop, frame handed over once, a device
+failure distinguished from an empty poll) so the tier's actual deliverable —
+the interface — is compiled and exercised in the repo that publishes it.
 
 Next: first-class **glTF/GLB export via tinygltf** (the same reader gfx's
 `load_gltf` uses, so the seam is one shared glTF implementation across both

@@ -212,3 +212,15 @@ target_link_libraries(recon_compute_raii_test PRIVATE volumetric_kit::recon_core
                                                       Vulkan::Vulkan)
 vr_target_warnings(recon_compute_raii_test)
 add_test(NAME recon_compute_raii COMMAND recon_compute_raii_test)
+
+# sensor tier: the camera-convention conversions -- the OpenGL/ARKit -> CV pose
+# change of basis and the registered-depth intrinsics rescale. These are the two
+# things a capture integration gets *silently* wrong (a flipped axis or a
+# half-pixel bias misaligns the reconstruction without ever erroring), and they
+# are pure host math, so they always run rather than being gated on a device or
+# on the platform whose driver produced the numbers.
+add_executable(recon_sensor_conventions_test sensor_conventions_test.cpp)
+target_link_libraries(recon_sensor_conventions_test
+                      PRIVATE volumetric_kit::recon_sensor)
+vr_target_warnings(recon_sensor_conventions_test)
+add_test(NAME recon_sensor_conventions COMMAND recon_sensor_conventions_test)

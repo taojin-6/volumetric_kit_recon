@@ -166,7 +166,7 @@ int main() {
   constexpr std::uint32_t kWidth = 128;
   constexpr std::uint32_t kHeight = 128;
   constexpr float kCameraDistance = 2.0f;
-  vol::DepthCameraParams cam{};
+  vr::DepthCameraParams cam{};
   cam.fx = 120.0f;
   cam.fy = 120.0f;
   cam.cx = static_cast<float>(kWidth) * 0.5f;
