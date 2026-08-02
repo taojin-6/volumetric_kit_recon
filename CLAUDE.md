@@ -45,8 +45,8 @@ conventions and Vulkan setup.
 Strict left-to-right dependency rule: a tier may depend only on tiers to its
 left. No upward includes.
 
-`core` → `volume` → `tsdf` → `mesh` → `texture` → `interop` (later: `compress`,
-`sensor`, `track`, `codec`, `stream`).
+`core` → `volume` → `tsdf` → `mesh` → `texture` → `interop`, with `sensor`
+branching off `tsdf` (later: `compress`, `track`, `codec`, `stream`).
 
 - **`core`** — the Vulkan foundation, mirroring `volumetric_kit_gfx`'s core:
   instance, device (compute + transfer queues), VMA allocator, RAII buffer/image,
@@ -65,6 +65,11 @@ left. No upward includes.
 - **`texture`** — projective texturing: fills the mesh's per-vertex `uv0` with a
   posed camera's image coordinates where it has line of sight (per-vertex-color
   fallback elsewhere), a compute pass.
+- **`sensor`** — the capture *contract*: `ICameraCapture`, the `CapturedFrame`
+  view the fusion tiers consume, and the camera-convention conversions. Reads
+  `DepthCameraParams` (`volume`) + `ColorCameraParams` (`tsdf`), adds no
+  dependency of its own, and bundles **no drivers** — one ships here only if
+  this repo can build *and* test it (the 2026-08-02 decision).
 - **`interop`** — the handoff to `volumetric_kit_gfx` (below).
 
 ## Locked decisions
@@ -1007,6 +1012,45 @@ nondeterministic). The follow-up, if an unbounded capture or startup latency
 makes all-in-RAM the wrong trade, is a decode thread pool — which would also
 speed the *streaming* path, where a single decoder thread caps the loop near
 ~96 fps.
+
+The first **`sensor` tier** slice is the capture *contract*, not a driver: an
+`ICameraCapture` (`sensor/camera_capture.hpp`) polled for a `CapturedFrame` — a
+**non-owning view** of one posed RGB-D frame in exactly the shape the fusion
+entry points already borrow (`const float*` depth in metres +
+`DepthCameraParams`, packed-RGB colour + `ColorCameraParams`), so a captured
+frame feeds `allocate_from_depth` / `integrate` with no repacking. `poll()`
+returns `Result<std::optional<CapturedFrame>>`, separating "no new frame this
+tick" from "the device failed" exactly as gfx's `WindowedApp::begin_frame` does;
+frames are **dropped rather than queued**, which is what a live reconstruction
+wants. Polling (not callbacks) is the common denominator: it wraps a push-based
+source such as ARKit's session queue, while the reverse would force every
+consumer onto the device's thread.
+
+The substance is `sensor/camera_conventions.hpp` — the two conversions a capture
+integration gets *silently* wrong, kept here (rather than in whichever
+platform-bound driver produced the numbers) precisely because they are pure
+arithmetic and can be pinned by host tests on any platform. (1)
+`cv_from_gl_camera` reinterprets a pose from the OpenGL/ARKit camera convention
+(+Y up, −Z forward) into the one this repo projects with (+Y down, +Z forward):
+a **right**-multiplication by `diag(1, −1, −1, 1)`, implemented as negating the
+second and third basis columns. Left-multiplying instead would mirror the
+camera's *position* through the world origin rather than turning it in place —
+which is why the test asserts the translation column survives untouched. (2)
+`depth_from_registered_color` derives `DepthCameraParams` from a colour camera
+the depth is registered to (ARKit: 1920×1440 colour, 256×192 depth, one physical
+camera), scaling focal lengths by the size ratio and the principal point by
+`c' = (c + 0.5)·s − 0.5`. That half-pixel term is not cosmetic: pixel centres sit
+at integer coordinates here, so a `W`-wide image spans `[−0.5, W−0.5]`, and
+dropping it biases every unprojected ray by `0.5·(1 − s)` — ~0.43 px at ARKit's
+scale, a fixed bias rather than noise. It is exactly what keeps a centred
+principal point centred (`(W−1)/2 → (W′−1)/2`), which is how
+`tests/sensor_conventions_test.cpp` discriminates it from the naive `c·s`: both
+mutations (naive rescale, and left- instead of right-multiplication) were
+confirmed to fail the suite. The derived depth camera **shares the colour pose**
+by construction, since two independently-assigned poses for one physical camera
+are free to drift apart. Host-only, so these run everywhere — the point of the
+2026-08-02 decision that keeps the math here while ARKit's driver lives in
+`volumetric_kit_ios`.
 
 Next: first-class **glTF/GLB export via tinygltf** (the same reader gfx's
 `load_gltf` uses, so the seam is one shared glTF implementation across both
