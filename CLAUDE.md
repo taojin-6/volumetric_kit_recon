@@ -711,9 +711,10 @@ two run on two devices), and the host-side preload cache. The example owns the I
 deliberately wraps only the Vulkan renderer backend.
 
 The overlay's first finding **corrected a wrong assumption and redirected the
-roadmap**. At `--remesh-every 1` on a ~940 k-vertex room0 mesh, `extract` cost
-~55 ms/frame, which looked like whole-volume marching cubes and pointed at the
-incremental block-mesh pool. The `ExtractTimings` breakdown said otherwise:
+roadmap**. At `--remesh-every 1` on a room0 mesh of ~790 k vertices / ~264 k
+triangles, `extract` cost ~55 ms/frame, which looked like whole-volume marching
+cubes and pointed at the incremental block-mesh pool. The `ExtractTimings`
+breakdown said otherwise:
 
 | phase | ms |
 |---|---|
@@ -727,8 +728,10 @@ The GPU marching cubes was 2 ms — the pool would have optimised the one thing
 that was already fast. The cost was `make_output_buffers` allocating a fresh
 worst-case vertex arena (5 triangles per cell → hundreds of MB) **every call**,
 so the driver faulted in and zeroed that many pages per frame. Making the arena
-persistent and grow-only (below) took a `--mesh-every 1` room0 run from
-**15.9 → 136.8 fps**, an **8.6×** end-to-end win with a byte-identical mesh. The
+persistent and grow-only (below) took a 100-frame `--preload --mesh-every 1`
+room0 run from **6.3 s to 0.8 s** — **15.9 → 132.5 fps**, an **8.3×** end-to-end
+win — with a mesh identical triangle-for-triangle (same 793,473 vertices /
+264,491 triangles, same canonical hash over the ordered triangle set). The
 lesson is recorded because it generalises: *measure the phases before choosing
 the optimisation* — three of us (the TODO, the roadmap, and the first analysis)
 had independently guessed the wrong bottleneck.
