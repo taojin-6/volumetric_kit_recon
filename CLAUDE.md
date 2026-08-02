@@ -46,9 +46,12 @@ Strict left-to-right dependency rule: a tier may depend only on tiers to its
 left. No upward includes.
 
 `core` → `volume` → `tsdf` → `mesh` → `texture` → `interop`, with `sensor`
-branching off `tsdf` (later: `compress`, `track`, `codec`, `stream`).
+branching off **`core`** (later: `compress`, `track`, `codec`, `stream`).
 
-- **`core`** — the Vulkan foundation, mirroring `volumetric_kit_gfx`'s core:
+- **`core`** — the Vulkan foundation *and* the vocabulary every tier trades in
+  (`Status`/`Result`, the GLM math aliases, and the posed pinhole
+  `DepthCameraParams`/`ColorCameraParams` of `core/camera_params.hpp`),
+  mirroring `volumetric_kit_gfx`'s core:
   instance, device (compute + transfer queues), VMA allocator, RAII buffer/image,
   compute-pipeline + descriptor-set wrappers (and the `ComputeKernel` bundle +
   `KernelSetBuilder` that groups a kernel's layout/pipeline/set behind one
@@ -67,10 +70,10 @@ branching off `tsdf` (later: `compress`, `track`, `codec`, `stream`).
   fallback elsewhere), a compute pass.
 - **`sensor`** — the capture *contract*: `ICameraCapture`, the `CapturedFrame`
   view the fusion tiers consume, and the camera-convention conversions. Reads
-  `DepthCameraParams` + `ColorCameraParams` through the **Vulkan-free**
-  `volume/camera_params.hpp` + `tsdf/camera_params.hpp`, adds no dependency of
-  its own, and bundles **no drivers** — one ships here only if this repo can
-  build *and* test it (the 2026-08-02 decision).
+  `DepthCameraParams` + `ColorCameraParams` from `core/camera_params.hpp`, so it
+  depends on **`core` alone** — it sits beside the fusion tiers, not on top of
+  them — and bundles **no drivers**: one ships here only if this repo can build
+  *and* test it (the 2026-08-02 decision).
 - **`interop`** — the handoff to `volumetric_kit_gfx` (below).
 
 ## Locked decisions
@@ -512,18 +515,24 @@ Each dated; newest context wins. Change the decision *and* this list together.
   app's platform glue; moving it down stays cheap precisely because the contract
   already lives here.
   **Two consequences of the implementer being out of tree, both found by review
-  and fixed on the same PR.** (1) *The contract's headers must not drag Vulkan
-  in.* `DepthCameraParams` / `ColorCameraParams` are plain PODs, but they lived
-  inside `voxel_hash_map.hpp` / `tsdf_integrator.hpp`, which reach
-  `core/vulkan.hpp` through the VMA allocator and the pipeline wrappers — so
-  including the sensor contract preprocessed **105 k lines with 1 412 Vulkan
-  handle references**, and an ARKit Objective-C++ TU paid all of it to fill in
-  an intrinsics struct. Both structs now live in Vulkan-free
-  `volume/camera_params.hpp` / `tsdf/camera_params.hpp` (re-included by the old
-  headers, so every existing user is untouched), and the sensor headers include
-  only those: **0 Vulkan references**, 77 k lines, the remainder being GLM,
-  which `Mat4f` requires. The tier targets stay linked — the types are theirs,
-  so a consumer needs their headers installed; only the include weight is gone.
+  and fixed on the same PR.** (1) *The camera-parameter structs are `core`
+  vocabulary, and the contract depends on `core` alone.* They had been placed by
+  which tier first needed one — `DepthCameraParams` in `volume` (block
+  allocation unprojects a depth frame), `ColorCameraParams` in `tsdf` (the first
+  tier that fuses colour) — which split a matched pair across two tiers and, far
+  worse, buried both inside `voxel_hash_map.hpp` / `tsdf_integrator.hpp`, which
+  reach `core/vulkan.hpp` through the VMA allocator and the pipeline wrappers.
+  Including the sensor contract therefore preprocessed **105 k lines with 1 412
+  Vulkan handle references**, all of it paid by an ARKit Objective-C++ TU that
+  only wants to fill in an intrinsics struct. Both now live in
+  **`core/camera_params.hpp`** as `vr::DepthCameraParams` / `vr::ColorCameraParams`
+  — a posed pinhole camera is pure math over `Mat4f`, the same kind of vocabulary
+  as `Status` and the GLM aliases, and four tiers take one. `recon_sensor`
+  consequently links **`recon_core` and nothing else**: 0 Vulkan references,
+  77 k lines, the remainder GLM, which `Mat4f` requires. They stay two *types*
+  (88 vs 96 bytes — colour carries no depth range), and each still pins its host
+  packing against the GLSL mirrors in `volume/`, `tsdf/` and `texture/`
+  shaders.
   (2) *`Result<std::optional<T>>` has no natural spelling*, and a contract whose
   only implementers are out of tree cannot afford that. `Result` converts
   implicitly from exactly its value type, so `return std::nullopt;` and
@@ -742,7 +751,7 @@ per-voxel data survive the grow on MoltenVK.
 
 The first **`tsdf` tier** slice then lands on top: `TsdfIntegrator`
 (`tsdf/tsdf_integrator.hpp`) fuses a posed depth frame (float metres, reusing
-`volume::DepthCameraParams`) into a `VoxelBlockGrid`'s `tsdf`/`weight` attributes
+`vr::DepthCameraParams`) into a `VoxelBlockGrid`'s `tsdf`/`weight` attributes
 via `tsdf/shaders/tsdf_integrate.comp` — one thread per voxel of each active
 block, classic projective `sdf = depth − Zc` with `±trunc_dist` truncation, an
 inverse-square-with-behind-dropoff weight, and a running average capped at
@@ -815,7 +824,7 @@ left, so the strict dependency rule holds).
 The first **`texture` tier** slice — **live projective texturing** — fills the
 mesh appearance the 2026-07-06 hybrid-colour path reserved. `ProjectiveTexturer`
 (`texture/projective_texturer.hpp`) takes a `mesh::Mesh` + one posed frame's
-depth + `volume::DepthCameraParams` and rewrites every `Vertex::uv0` via
+depth + `vr::DepthCameraParams` and rewrites every `Vertex::uv0` via
 `texture/shaders/texture_score.comp`: one thread per triangle projects its three
 vertices into the camera (`project_to_image` mirrors `tsdf_common.glsl`'s
 `project_pinhole`; the bilinear occlusion sampler shares the tsdf sampler's
@@ -1053,9 +1062,9 @@ source such as ARKit's session queue, while the reverse would force every
 consumer onto the device's thread. Both of `poll()`'s non-error returns go
 through the `no_frame()` / `some_frame(f)` helpers, because neither has a
 spelling that compiles on its own (see the 2026-08-02 decision), and the
-contract's headers include only the Vulkan-free `volume/camera_params.hpp` +
-`tsdf/camera_params.hpp` so an out-of-tree driver does not preprocess Vulkan to
-describe a camera.
+contract takes its camera types from `core/camera_params.hpp` and links
+`recon_core` alone, so an out-of-tree driver compiles against the math
+vocabulary rather than preprocessing Vulkan to describe a camera.
 
 The substance is `sensor/camera_conventions.hpp` — the two conversions a capture
 integration gets *silently* wrong, kept here (rather than in whichever

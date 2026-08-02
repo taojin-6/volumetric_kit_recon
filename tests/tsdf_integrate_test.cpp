@@ -57,9 +57,9 @@ std::int32_t find_ptr(const std::vector<vol::BlockIndex>& active,
 
 // A color camera sharing a depth camera's intrinsics + pose (registered capture
 // in these tests); the color params simply drop the depth-range fields.
-tsdf::ColorCameraParams color_cam_of(const vol::DepthCameraParams& d) {
-  return tsdf::ColorCameraParams{d.fx,    d.fy,     d.cx,          d.cy,
-                                 d.width, d.height, d.cam_to_world};
+vr::ColorCameraParams color_cam_of(const vr::DepthCameraParams& d) {
+  return vr::ColorCameraParams{d.fx,    d.fy,     d.cx,          d.cy,
+                               d.width, d.height, d.cam_to_world};
 }
 
 }  // namespace
@@ -141,7 +141,7 @@ int main() {
 
   // Camera at the world origin looking down +Z (identity pose), a pinhole with
   // a 640x480 image; the plane fills the view at a constant 0.5 m.
-  vol::DepthCameraParams cam{};
+  vr::DepthCameraParams cam{};
   cam.fx = 525.0f;
   cam.fy = 525.0f;
   cam.cx = 320.0f;
@@ -228,7 +228,7 @@ int main() {
   const float theta = 0.2f;  // ~11 deg about +Y
   const float ct = std::cos(theta);
   const float st = std::sin(theta);
-  vol::DepthCameraParams cam2 = cam;  // same intrinsics, range, and 0.5 m plane
+  vr::DepthCameraParams cam2 = cam;  // same intrinsics, range, and 0.5 m plane
   cam2.cam_to_world = vr::Mat4f(1.0f);
   cam2.cam_to_world[0] = vr::Vec4f(ct, 0.0f, -st, 0.0f);
   cam2.cam_to_world[2] = vr::Vec4f(st, 0.0f, ct, 0.0f);
@@ -335,7 +335,7 @@ int main() {
   // Bilinear depth sampling. cx = 321.0 puts the on-axis voxel's projection at
   // pixel u = 321.0, so the bilinear taps straddle columns 320 and 321 at
   // fx = 0.5 (a 50/50 blend). The on-axis voxel is at world z = 0.48.
-  vol::DepthCameraParams bcam = cam;
+  vr::DepthCameraParams bcam = cam;
   bcam.cx = 321.0f;
   const std::size_t bw = bcam.width;
   const std::size_t on_axis =
@@ -462,7 +462,7 @@ int main() {
   // Separate color camera: shift it 10 m off in +X so the same voxel projects
   // out of the color frame. Depth still fuses it; color is skipped (stays
   // zero).
-  vol::DepthCameraParams off_cam = cam;
+  vr::DepthCameraParams off_cam = cam;
   off_cam.cam_to_world = vr::Mat4f(1.0f);
   off_cam.cam_to_world[3] = vr::Vec4f(10.0f, 0.0f, 0.0f, 1.0f);
   vr::Result<vol::VoxelBlockGrid> og = vol::VoxelBlockGrid::create(

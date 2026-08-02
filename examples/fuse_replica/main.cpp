@@ -230,7 +230,7 @@ vr::Status run(const Options& opt) {
   // preserving resize on real data.
   auto allocate_band =
       [&](const vr_example::RgbdFrame& frame,
-          const vol::DepthCameraParams& depth_camera) -> vr::Status {
+          const vr::DepthCameraParams& depth_camera) -> vr::Status {
     for (int attempt = 0; attempt < 5; ++attempt) {
       VR_ASSIGN(std::uint32_t failed, volume.map().allocate_from_depth(
                                           frame.depth.data(), depth_camera));
@@ -260,7 +260,7 @@ vr::Status run(const Options& opt) {
   // rewrite just cam_to_world per frame. Depth and colour share Replica's one
   // registered camera; keeping the shared intrinsics in a single place also
   // stops the depth and colour cameras silently drifting apart.
-  vol::DepthCameraParams depth_camera{};
+  vr::DepthCameraParams depth_camera{};
   depth_camera.fx = cam.fx;
   depth_camera.fy = cam.fy;
   depth_camera.cx = cam.cx;
@@ -270,7 +270,7 @@ vr::Status run(const Options& opt) {
   depth_camera.width = cam.width;
   depth_camera.height = cam.height;
 
-  tsdf::ColorCameraParams color_camera{};
+  vr::ColorCameraParams color_camera{};
   color_camera.fx = cam.fx;
   color_camera.fy = cam.fy;
   color_camera.cx = cam.cx;

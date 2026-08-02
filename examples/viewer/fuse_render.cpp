@@ -243,9 +243,9 @@ vr::Result<Reconstruction> fuse(const Options& opt,
     const vr_example::RgbdFrame& frame = *view;
     poses.push_back(frame.cam_to_world);
 
-    const vol::DepthCameraParams depth_camera =
+    const vr::DepthCameraParams depth_camera =
         vr_example::make_depth_camera(cam, frame.cam_to_world, opt.max_depth);
-    rtsdf::ColorCameraParams color_camera{};
+    vr::ColorCameraParams color_camera{};
     color_camera.fx = cam.fx;
     color_camera.fy = cam.fy;
     color_camera.cx = cam.cx;
@@ -295,9 +295,8 @@ vr::Result<Reconstruction> fuse(const Options& opt,
             : static_cast<int>(fused / 2);
     VR_ASSIGN(vr_example::FrameView keyframe,
               dataset.frame(static_cast<std::size_t>(tex_idx)));
-    const vol::DepthCameraParams keyframe_camera =
-        vr_example::make_depth_camera(cam, keyframe->cam_to_world,
-                                      opt.max_depth);
+    const vr::DepthCameraParams keyframe_camera = vr_example::make_depth_camera(
+        cam, keyframe->cam_to_world, opt.max_depth);
     VR_TRY(
         texturer.texture(recon.mesh, keyframe->depth.data(), keyframe_camera));
 

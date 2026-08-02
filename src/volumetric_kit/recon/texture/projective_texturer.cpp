@@ -20,8 +20,6 @@
 namespace volumetric_kit::recon::texture {
 namespace {
 
-using volume::DepthCameraParams;
-
 // Local group size, matching `layout(local_size_x = 256)` in the kernel.
 constexpr std::uint32_t kLocalSize = 256;
 

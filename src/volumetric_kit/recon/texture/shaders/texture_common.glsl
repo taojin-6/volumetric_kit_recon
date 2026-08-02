@@ -6,7 +6,7 @@
 // the pinhole projection, and the push-constant block. #included by
 // texture_score.comp.
 //
-// DepthCameraParams mirrors volume::DepthCameraParams byte-for-byte (the same
+// DepthCameraParams mirrors DepthCameraParams byte-for-byte (the same
 // scalar-layout camera the volume/tsdf kernels use); Vertex mirrors
 // mesh::Vertex. project_to_image is the same world -> camera -> pixel projection
 // tsdf_common.glsl's project_pinhole computes -- kept a self-contained copy here
@@ -17,7 +17,7 @@
 
 #extension GL_EXT_scalar_block_layout : require
 
-// Camera intrinsics + pose + depth range (mirrors volume::DepthCameraParams:
+// Camera intrinsics + pose + depth range (mirrors DepthCameraParams:
 // scalars at their 4-byte offsets, the cam_to_world mat4 at 32). world -> camera
 // is derived from the rigid cam_to_world, so the pose is passed straight through.
 struct DepthCameraParams {

@@ -58,7 +58,7 @@ bool is_sentinel(const vr::Vec2f& uv) { return uv.x == -1.0f && uv.y == -1.0f; }
 // u = fx*x/z + cx; then the +0.5 half-texel normalized by the image size and
 // clamped half a texel inside.
 vr::Vec2f expected_uv(const vr::Vec3f& world,
-                      const vol::DepthCameraParams& cam) {
+                      const vr::DepthCameraParams& cam) {
   const vr::Vec3f d = world - vr::Vec3f(cam.cam_to_world[3]);
   const vr::Vec3f cam_x(cam.cam_to_world[0]);  // camera X axis in world
   const vr::Vec3f cam_y(cam.cam_to_world[1]);  // camera Y axis in world
@@ -128,7 +128,7 @@ int main() {
 
   // Camera at the world origin looking down +Z (identity pose), 640x480
   // pinhole.
-  vol::DepthCameraParams cam{};
+  vr::DepthCameraParams cam{};
   cam.fx = 500.0f;
   cam.fy = 500.0f;
   cam.cx = 320.0f;
@@ -192,7 +192,7 @@ int main() {
   mesh2.vertices = {vtx(-0.1f, -0.1f, 1.0f), vtx(0.1f, -0.1f, 1.0f),
                     vtx(0.0f, 0.1f, 1.0f)};
   mesh2.indices = {0, 1, 2};
-  vol::DepthCameraParams cam_t = cam;
+  vr::DepthCameraParams cam_t = cam;
   const vr::Vec3f t(0.2f, 0.0f, 0.0f);
   cam_t.cam_to_world = vr::Mat4f(1.0f);
   cam_t.cam_to_world[3] = vr::Vec4f(t, 1.0f);
@@ -252,7 +252,7 @@ int main() {
   mesh3.vertices = {vtx(2.0f, 0.0f, 0.0f), vtx(2.0f, 0.1f, 0.0f),
                     vtx(2.0f, 0.0f, 0.1f)};
   mesh3.indices = {0, 1, 2};
-  vol::DepthCameraParams cam_r = cam;
+  vr::DepthCameraParams cam_r = cam;
   cam_r.cam_to_world = vr::Mat4f(1.0f);
   cam_r.cam_to_world[0] =
       vr::Vec4f(0.0f, 0.0f, -1.0f, 0.0f);  // camX -> world -Z

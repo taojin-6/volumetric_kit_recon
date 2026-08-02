@@ -11,13 +11,13 @@
 #include <cstdint>
 
 #include "volumetric_kit/recon/core/buffer.hpp"
+#include "volumetric_kit/recon/core/camera_params.hpp"
 #include "volumetric_kit/recon/core/compute_kernel.hpp"
 #include "volumetric_kit/recon/core/descriptor.hpp"
 #include "volumetric_kit/recon/core/result.hpp"
 #include "volumetric_kit/recon/mesh/device_mesh.hpp"
 #include "volumetric_kit/recon/mesh/mesh.hpp"
 #include "volumetric_kit/recon/texture/export.hpp"
-#include "volumetric_kit/recon/volume/voxel_hash_map.hpp"  // DepthCameraParams
 
 namespace volumetric_kit::recon {
 class Device;
@@ -120,7 +120,7 @@ class VR_TEXTURE_API ProjectiveTexturer {
   ///         dispatch failure. An out-of-range triangle index is skipped
   ///         on-device (a malformed-mesh guard), not reported.
   Status texture(mesh::Mesh& mesh, const float* depth,
-                 const volume::DepthCameraParams& cam,
+                 const DepthCameraParams& cam,
                  float occlusion_threshold = 0.02f);
 
   /// @brief Texture a mesh that is already on the device, in place.
@@ -143,7 +143,7 @@ class VR_TEXTURE_API ProjectiveTexturer {
   ///         those about host arrays; @ref Status::Code::InvalidArgument if
   ///         @p mesh names no buffers.
   Status texture(const mesh::DeviceMesh& mesh, const float* depth,
-                 const volume::DepthCameraParams& cam,
+                 const DepthCameraParams& cam,
                  float occlusion_threshold = 0.02f);
 
   /// @return `true` if this owns a live pipeline (`false` when moved-from).
@@ -167,7 +167,7 @@ class VR_TEXTURE_API ProjectiveTexturer {
   // set allocated from pool_ (which must outlive it) by KernelSetBuilder.
   ComputeKernel kernel_;
   DescriptorPool pool_;
-  // Fixed-size camera-params SSBO (volume::DepthCameraParams): bound once at
+  // Fixed-size camera-params SSBO (DepthCameraParams): bound once at
   // create() and rewritten each texture(), like the tsdf tier's camera SSBO.
   Buffer cam_buf_;
 };

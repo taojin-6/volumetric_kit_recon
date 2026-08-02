@@ -28,7 +28,7 @@ struct BlockIndex {
   int ptr;
 };
 
-// Camera intrinsics + pose + depth range (mirrors volume::DepthCameraParams
+// Camera intrinsics + pose + depth range (mirrors DepthCameraParams
 // byte-for-byte: scalars at their 4-byte offsets, the cam_to_world mat4 at 32).
 // The integrate kernel derives world -> camera from the rigid cam_to_world, so
 // the pose is passed straight through -- no separate pre-inverted struct.
@@ -44,7 +44,7 @@ struct DepthCameraParams {
   mat4 cam_to_world;
 };
 
-// The (separate) color camera, mirroring tsdf::ColorCameraParams byte-for-byte:
+// The (separate) color camera, mirroring ColorCameraParams byte-for-byte:
 // the color-camera analogue of DepthCameraParams without the (color-irrelevant)
 // depth-range fields, so width/height sit at offset 16 and the mat4 at 24
 // (scalar layout, 88 bytes).

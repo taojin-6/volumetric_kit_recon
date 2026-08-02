@@ -11,16 +11,12 @@
 #include <cstdint>
 
 #include "volumetric_kit/recon/core/buffer.hpp"
+#include "volumetric_kit/recon/core/camera_params.hpp"
 #include "volumetric_kit/recon/core/compute_kernel.hpp"
 #include "volumetric_kit/recon/core/descriptor.hpp"
 #include "volumetric_kit/recon/core/result.hpp"
-// ColorCameraParams lives in its own Vulkan-free header so a consumer that only
-// describes a camera (the sensor tier's out-of-tree drivers) need not compile
-// this one; re-exported here so existing users are unaffected.
-#include "volumetric_kit/recon/tsdf/camera_params.hpp"
 #include "volumetric_kit/recon/tsdf/export.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
-#include "volumetric_kit/recon/volume/voxel_hash_map.hpp"  // DepthCameraParams
 
 namespace volumetric_kit::recon {
 class Device;
@@ -135,8 +131,7 @@ class VR_TSDF_API TsdfIntegrator {
   ///         `maxComputeWorkGroupCount[0]`, or 2^32 threads); otherwise a
   ///         buffer or dispatch failure.
   Status integrate(volume::VoxelBlockGrid& grid, const float* depth,
-                   const volume::DepthCameraParams& cam,
-                   float max_weight = 5.0f,
+                   const DepthCameraParams& cam, float max_weight = 5.0f,
                    IntegrationMode mode = IntegrationMode::Classic,
                    const ColorFrame* color = nullptr);
 
@@ -159,7 +154,7 @@ class VR_TSDF_API TsdfIntegrator {
   // create().
   ComputeKernel kernel_;
   DescriptorPool pool_;
-  // Fixed-size camera-params SSBO (volume::DepthCameraParams): bound once at
+  // Fixed-size camera-params SSBO (DepthCameraParams): bound once at
   // create() and rewritten each integrate(), not reallocated per frame (mirrors
   // the volume tier's persistent camera params).
   Buffer cam_buf_;

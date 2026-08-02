@@ -15,20 +15,20 @@
 /// `volumetric_kit_gfx`'s windowing tier takes a consumer-supplied surface
 /// rather than owning a window system, and why it ports untouched.
 ///
-/// It therefore includes only the two Vulkan-free camera-parameter headers, not
-/// the tiers' full `voxel_hash_map.hpp` / `tsdf_integrator.hpp`: a driver
-/// implementing @ref ICameraCapture out of tree — an ARKit source in
-/// `volumetric_kit_ios` is Objective-C++ — should not preprocess the whole
-/// Vulkan surface to describe a camera. Consuming the frame still means
-/// including the fusion headers, but *producing* one does not.
+/// That is why the camera types come from `core/camera_params.hpp` rather than
+/// from the fusion tiers that also consume them: this header — and
+/// `recon_sensor`'s whole link line — reaches `core` alone, so a driver
+/// implementing @ref ICameraCapture out of tree (an ARKit source in
+/// `volumetric_kit_ios` is Objective-C++) compiles against the math vocabulary
+/// and never preprocesses the Vulkan surface. *Consuming* a frame still means
+/// including the fusion headers; *producing* one does not.
 
 #include <cstdint>
 #include <optional>
 
+#include "volumetric_kit/recon/core/camera_params.hpp"
 #include "volumetric_kit/recon/core/result.hpp"
 #include "volumetric_kit/recon/sensor/export.hpp"
-#include "volumetric_kit/recon/tsdf/camera_params.hpp"
-#include "volumetric_kit/recon/volume/camera_params.hpp"
 
 namespace volumetric_kit::recon::sensor {
 
@@ -71,13 +71,13 @@ struct CapturedFrame {
   /// Depth intrinsics, size, range and camera-to-world pose. The pose must
   /// already be in this repo's convention; see @ref cv_from_gl_camera for a
   /// source that reports the OpenGL/ARKit one.
-  volume::DepthCameraParams depth_camera{};
+  DepthCameraParams depth_camera{};
 
   /// Colour intrinsics, size and pose. Where depth is registered to colour
   /// (ARKit), derive the depth camera from this one with
   /// @ref depth_from_registered_color so the two cannot drift apart.
   /// Meaningful only when @ref color is set.
-  tsdf::ColorCameraParams color_camera{};
+  ColorCameraParams color_camera{};
 
   /// Device timestamp in nanoseconds; monotonic within one capture session.
   /// Zero when the device reports none.

@@ -617,7 +617,7 @@ int run(GLFWwindow* window, const Options& opt) {
       // colour). uv0 must be filled BEFORE to_gfx_mesh, which copies it across.
       auto publish = [&](const rmesh::DeviceMesh& device_mesh,
                          const float* depth,
-                         const vol::DepthCameraParams& depth_camera,
+                         const vr::DepthCameraParams& depth_camera,
                          const std::vector<std::uint32_t>& color) {
         std::vector<std::uint8_t> atlas;
         if (texturer && depth != nullptr && !device_mesh.empty()) {
@@ -725,10 +725,10 @@ int run(GLFWwindow* window, const Options& opt) {
           std::lock_guard<std::mutex> lock(share_mtx);
           shared_poses.push_back(frame.cam_to_world);
         }
-        const vol::DepthCameraParams depth_camera =
+        const vr::DepthCameraParams depth_camera =
             vr_example::make_depth_camera(cam, frame.cam_to_world,
                                           opt.max_depth);
-        rtsdf::ColorCameraParams color_camera{};
+        vr::ColorCameraParams color_camera{};
         color_camera.fx = cam.fx;
         color_camera.fy = cam.fy;
         color_camera.cx = cam.cx;
@@ -842,7 +842,7 @@ int run(GLFWwindow* window, const Options& opt) {
                                                   opt.max_depth),
                     keyframe.color);
           } else {
-            publish(m.value(), nullptr, vol::DepthCameraParams{}, kNoColor);
+            publish(m.value(), nullptr, vr::DepthCameraParams{}, kNoColor);
           }
         }
       }

@@ -18,10 +18,11 @@ add_subdirectory(volumetric_kit/recon/mesh)
 # both to its left, so the strict dependency rule holds.
 add_subdirectory(volumetric_kit/recon/texture)
 # sensor is the capture contract: ICameraCapture + CapturedFrame + the camera
-# convention conversions. It reads ColorCameraParams (tsdf) and
-# DepthCameraParams (volume), both to its left, and adds no dependency of its
-# own -- it is host types and arithmetic, with drivers deliberately left to
-# whoever can build and test them (the 2026-08-02 decision).
+# convention conversions. It depends on core alone -- the camera-parameter
+# structs it trades in are core vocabulary (core/camera_params.hpp), not voxels
+# or fusion -- so it sits beside the fusion tiers rather than on top of them,
+# and stays implementable from outside this repo, with drivers deliberately left
+# to whoever can build and test them (the 2026-08-02 decision).
 add_subdirectory(volumetric_kit/recon/sensor)
 # TODO: add_subdirectory() for interop as that tier lands.
 

@@ -10,11 +10,11 @@
 #include <glm/glm.hpp>
 
 #include "dataset.hpp"
-#include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
+#include "volumetric_kit/recon/core/camera_params.hpp"
 
 namespace vr_example {
 
-namespace vol = volumetric_kit::recon::volume;
+namespace vr = volumetric_kit::recon;
 
 /// @brief Build a depth camera (intrinsics + pose + fusion depth range) for one
 ///        posed frame. The near plane is the examples' fixed 0.1 m; @p
@@ -22,10 +22,10 @@ namespace vol = volumetric_kit::recon::volume;
 /// @param cam        Shared intrinsics + image dimensions.
 /// @param pose       Camera->world for this frame.
 /// @param max_depth  Far-depth gate (metres).
-inline vol::DepthCameraParams make_depth_camera(const CameraModel& cam,
-                                                const glm::mat4& pose,
-                                                float max_depth) {
-  vol::DepthCameraParams d{};
+inline vr::DepthCameraParams make_depth_camera(const CameraModel& cam,
+                                               const glm::mat4& pose,
+                                               float max_depth) {
+  vr::DepthCameraParams d{};
   d.fx = cam.fx;
   d.fy = cam.fy;
   d.cx = cam.cx;
