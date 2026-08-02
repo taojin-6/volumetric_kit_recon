@@ -262,6 +262,14 @@ void draw_reconstruction_panel(const ReconstructionPanel& panel) {
               static_cast<unsigned long long>(panel.mesh_version));
   ImGui::Text("  %zu vertices / %zu triangles", panel.vertices,
               panel.triangles);
+  // The fitted arena's occupancy, and whether the extract had to correct its
+  // plan. The dispatch count matters on its own: a run that keeps reporting 2
+  // is one whose planner is not tracking the surface, and the ..dispatch row
+  // cannot say so because it sums both attempts into one span.
+  ImGui::Text("  arena %u / %u tris (%.0f MiB), %u dispatch%s",
+              panel.extract.emitted_triangles, panel.extract.triangle_capacity,
+              to_mebibytes(panel.extract.arena_bytes), panel.extract.dispatches,
+              panel.extract.dispatches == 1 ? "" : "es");
   // Capacity, not occupancy: num_blocks is bucket_size * num_buckets, the size
   // of the block heap every per-voxel attribute array is dimensioned by. It is
   // what a resize doubles, so it is the memory story; how *full* the map is

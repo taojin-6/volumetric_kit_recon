@@ -33,6 +33,7 @@
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
 #include "volumetric_kit/recon/mesh/mesh.hpp"
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
+#include "volumetric_kit/recon/volume/hash_types.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 
 namespace vr = volumetric_kit::recon;
@@ -262,6 +263,42 @@ int main() {
     CHECK(!extractor.download(superseded).ok());
     // ...while the current one still downloads.
     CHECK(extractor.download(live).ok());
+  }
+
+  // The DENSE extract shares that same arena, so it invalidates an outstanding
+  // view too. It is the sharper case: now that the sparse path fits its arena
+  // to the surface rather than to the 5-tri/cell worst case, a dense grid
+  // routinely needs MORE than the sparse call left held, so this call
+  // reallocates the buffers rather than merely overwriting them -- and a view
+  // still accepted here would name freed VkBuffers, not just stale contents.
+  {
+    vr::Result<mesh::DeviceMesh> before = extractor.extract_device(grid, 0.0f);
+    CHECK(before.ok());
+    const mesh::DeviceMesh stale = before.value();
+    CHECK(!stale.empty());
+
+    std::vector<vol::Voxel> samples(static_cast<std::size_t>(kN) * kN * kN);
+    for (int z = 0; z < kN; ++z) {
+      for (int y = 0; y < kN; ++y) {
+        for (int x = 0; x < kN; ++x) {
+          const vr::Vec3f p(static_cast<float>(x) * kH,
+                            static_cast<float>(y) * kH,
+                            static_cast<float>(z) * kH);
+          vol::Voxel& v =
+              samples[static_cast<std::size_t>(x + kN * (y + kN * z))];
+          v.sdf = vr::length(p - sphere_center()) - kRadius;
+          v.weight = 1.0f;
+        }
+      }
+    }
+    mesh::DenseGrid dense_grid;
+    dense_grid.dims = vr::Vec3i(kN, kN, kN);
+    dense_grid.voxel_size = kH;
+    dense_grid.origin = vr::Vec3f(0.0f, 0.0f, 0.0f);
+    CHECK(extractor.extract(samples.data(), samples.size(), dense_grid, 0.0f)
+              .ok());
+
+    CHECK(!extractor.download(stale).ok());
   }
 
   // A DeviceMesh from another extractor is rejected too: generations are
