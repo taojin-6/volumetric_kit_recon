@@ -373,7 +373,9 @@ int main(int argc, char** argv) {
   }
 
   // 2. gfx device (its own), offscreen target, hybrid-mesh pipeline.
-  auto app_r = vg::app::HeadlessApp::create({/*app_name=*/"fuse_render"});
+  vg::app::HeadlessAppConfig app_config;
+  app_config.app_name = "fuse_render";
+  auto app_r = vg::app::HeadlessApp::create(app_config);
   if (!app_r.ok()) {
     std::fprintf(stderr, "HeadlessApp: %s\n", app_r.status().message().c_str());
     return 1;

@@ -635,17 +635,25 @@ the pure vertex-colour path.
 
 `fuse_viewer` also carries the **perf overlay** (the 2026-08-01 decision): two
 Dear ImGui panels drawn through gfx's `ui` tier, off with `--no-overlay`. A
-*Performance* panel shows gfx's `Profiler` snapshot — fps, whole-frame CPU, and
-real GPU spans for `mesh draw` / `overlay draw` (timestamp queries; this GPU
-reports 64 `timestampValidBits` through MoltenVK) — with recon's per-fused-frame
-stages appended as wall-clock rows: `frame` (decode, or ~0 on a preload hit),
+*Performance* panel shows gfx's `Profiler` snapshot — fps, whole-frame CPU, real
+GPU spans for `mesh draw` / `overlay draw` (timestamp queries; this GPU reports
+64 `timestampValidBits` through MoltenVK), and the **renderer's** device memory
+(`set_memory_source` points the profiler at gfx's allocator, so the panel covers
+the mesh/atlas/swapchain footprint) — with recon's per-fused-frame stages
+appended as wall-clock rows: `frame` (decode, or ~0 on a preload hit),
 `allocate` (including any map resize), `integrate`, `extract`, `texture`,
-`to_gfx_mesh`, plus the render thread's `mesh upload`. A *Reconstruction* panel
-shows fused-frame progress, ms/frame, the mesh's vertex/triangle counts and
-version, the map's bucket/block counts, recon's own device memory
-(`Allocator::memory_stats` — its VMA allocator's share of its device, separate
-from the renderer's, since the two run on two devices), and the host-side
-preload cache. The example owns the ImGui *platform* backend
+`atlas pack`, `to_gfx_mesh`, plus the render thread's `mesh upload`. `texture`
+is the projective-texturing dispatch alone; repacking the keyframe to RGBA8 is
+comparable host work, so it gets its own `atlas pack` row rather than being
+charged to the GPU pass. A *Reconstruction* panel shows fused-frame progress,
+fuse ms/frame (the stage total **excluding** the `frame` read — that is
+dataloading, not fusion, and it stays visible as its own row), the mesh's
+vertex/triangle counts and version, the map's bucket count and block-heap
+*capacity* (`num_blocks` is `bucket_size · num_buckets`, what a resize doubles
+and what every attribute array is sized by — not occupancy, which would need the
+diagnostics readback), recon's own device memory (`Allocator::memory_stats` —
+its VMA allocator's share of its device, separate from the renderer's, since the
+two run on two devices), and the host-side preload cache. The example owns the ImGui *platform* backend
 (`imgui_impl_glfw`), as gfx's own examples do, since gfx's `ui` tier
 deliberately wraps only the Vulkan renderer backend. Measured on room0: the
 default `--remesh-every 1` costs **~97 ms/frame** on a ~850 k-vertex mesh

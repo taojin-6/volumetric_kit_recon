@@ -52,12 +52,22 @@ add_executable(fuse_render fuse_render.cpp)
 target_link_libraries(fuse_render PRIVATE ${_viewer_recon_libs} vr_stb_image
                                           ${_viewer_gfx_libs} Vulkan::Vulkan)
 target_include_directories(fuse_render PRIVATE ${_viewer_common_inc})
+vr_target_warnings(fuse_render)
 
 # The Dear ImGui sources gfx fetched for its ui tier. gfx exports the path only
 # into its own scope (third_party/CMakeLists.txt sets VG_IMGUI_SOURCE_DIR
 # PARENT_SCOPE), so ask FetchContent for the populated dir instead of reaching
-# into a variable that does not reach us.
+# into a variable that does not reach us. Guard it: an empty imgui_SOURCE_DIR
+# would otherwise surface as an unreadable "Cannot find source file: /backends/
+# imgui_impl_glfw.cpp" far from the cause.
 FetchContent_GetProperties(imgui)
+if(NOT imgui_SOURCE_DIR)
+  message(
+    FATAL_ERROR
+      "fuse_viewer needs the Dear ImGui sources gfx fetches for its ui tier, "
+      "but FetchContent has no populated 'imgui'. Check that the pinned "
+      "volumetric_kit_gfx still declares it in third_party/CMakeLists.txt.")
+endif()
 
 # fuse_viewer: the live window -- fuses on a background thread, draws the
 # growing reconstruction each frame following the capture trajectory, and shows
@@ -76,8 +86,18 @@ target_link_libraries(
 target_include_directories(fuse_viewer PRIVATE ${_viewer_common_inc})
 target_include_directories(fuse_viewer SYSTEM
                            PRIVATE "${imgui_SOURCE_DIR}/backends")
-# ImGui's own TU carries its own warning posture and would trip this project's
-# -Werror; the source-level -w follows the target flags on the command line, so
-# it wins. Only the third-party TU opts out -- fuse_viewer.cpp stays strict.
-set_source_files_properties("${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp"
-                            PROPERTIES COMPILE_OPTIONS "-w")
+# Both viewer examples carry the project's warning policy, like every other
+# first-party target -- they are our code, and the overlay/panel logic is where
+# a stale format specifier or an unused capture would otherwise go unseen.
+#
+# TODO(ci): no CI leg sets VR_BUILD_VIEWER, so these targets (and the vendored
+# ImGui TU below) are only ever built locally. A build-only macOS leg would
+# cover the CMake wiring; it costs a full gfx fetch + build, so it is deferred.
+vr_target_warnings(fuse_viewer)
+# ...but ImGui's own TU carries its own warning posture and would trip that
+# policy. The source-level opt-out follows the target flags on the command line,
+# so it wins; only this third-party TU is exempt, fuse_viewer.cpp stays strict.
+# MSVC spells "no warnings" /w, everyone else -w.
+set_source_files_properties(
+  "${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp"
+  PROPERTIES COMPILE_OPTIONS "$<IF:$<CXX_COMPILER_ID:MSVC>,/w,-w>")

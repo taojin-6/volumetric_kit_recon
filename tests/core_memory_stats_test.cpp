@@ -7,7 +7,8 @@
 // VK_EXT_memory_budget, its estimate), so this pins the properties a consumer
 // relies on rather than any absolute number: the device's heaps are reported,
 // a budget is not below its usage, an allocation shows up as growth, freeing it
-// gives the bytes back, and a moved-from allocator reports nothing.
+// never grows the figure (but need not shrink it -- see the high-water-mark
+// note below), and a moved-from allocator reports nothing.
 //
 // Needs a device, so the whole test skips (exit 0) where no driver/device is
 // present, like the other Vulkan tests.

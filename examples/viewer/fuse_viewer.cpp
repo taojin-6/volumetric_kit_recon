@@ -662,7 +662,7 @@ int run(GLFWwindow* window, const Options& opt) {
              {"frame", "allocate", "integrate", "extract", "  ..compact",
               "  ..neighbour lut", "  ..inputs", "  ..arena alloc",
               "  ..descriptors", "  ..dispatch", "  ..readback", "texture",
-              "to_gfx_mesh"}) {
+              "atlas pack", "to_gfx_mesh"}) {
           fuse_stages.seed(stage);
         }
         // A preload cache hit, else a disk read + JPEG/PNG decode (the CPU
@@ -768,7 +768,10 @@ int run(GLFWwindow* window, const Options& opt) {
           const vr::MemoryStats recon_memory = rallocator.memory_stats();
           std::lock_guard<std::mutex> lock(share_mtx);
           shared_fuse_stages = fuse_stages.sections();
-          shared_fuse_ms = fuse_stages.total_ms();
+          // Fusion cost, so the dataset read is excluded: it is dataloading,
+          // not fusion, and while streaming it dwarfs the rest (~10 ms of
+          // JPEG/PNG decode). It stays visible as its own `frame` row.
+          shared_fuse_ms = fuse_stages.total_ms(/*exclude=*/"frame");
           shared_recon_memory = recon_memory;
           shared_map_buckets = volume.grid().num_buckets;
           shared_map_blocks = volume.grid().num_blocks;
