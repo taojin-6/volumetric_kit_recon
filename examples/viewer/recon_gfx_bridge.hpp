@@ -37,8 +37,11 @@ namespace gassets = volumetric_kit::gfx::assets;
 /// hybrid fragment shader reads as "no atlas, use the per-vertex color".
 ///
 /// This copy exists only because the viewer hands gfx a *host* mesh (interop
-/// seam A, two devices). With a shared device the same bytes are drawn from
-/// recon's own buffer and even this goes away.
+/// seam A). `fuse_viewer` now shares one `VkDevice` with the renderer, so the
+/// remaining blocker is usage flags, not the device: once the marching-cubes
+/// vertex arena is created `VERTEX_BUFFER` (the `TODO(mesh)` in `mesh.hpp`),
+/// gfx draws recon's own buffer and even this copy goes away. `fuse_render`
+/// still builds its own device, and keeps needing this either way.
 inline gassets::Mesh to_gfx_mesh(const rmesh::Mesh& mesh) {
   static_assert(sizeof(rmesh::Vertex) == sizeof(gassets::Vertex),
                 "recon and gfx vertex layouts have diverged in size");
