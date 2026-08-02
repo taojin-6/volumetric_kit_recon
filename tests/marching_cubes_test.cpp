@@ -12,6 +12,8 @@
 // tsdf tier that fills real voxel blocks does not exist yet -- the per-cell
 // kernel is identical either way.
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -105,6 +107,49 @@ std::vector<vr::Vec3u8> make_gradient_colors() {
     }
   }
   return colors;
+}
+
+// An n^3 sphere SDF at the same voxel pitch, radius scaled to fit -- a second,
+// smaller grid so a test can drive the extractor's vertex arena up and back
+// down.
+std::vector<vol::Voxel> make_sphere_field_n(int n) {
+  const float c = static_cast<float>(n - 1) * 0.5f * kH;
+  const vr::Vec3f center(c, c, c);
+  const float radius = c * 0.6f;
+  std::vector<vol::Voxel> samples(static_cast<std::size_t>(n) * n * n);
+  for (int z = 0; z < n; ++z) {
+    for (int y = 0; y < n; ++y) {
+      for (int x = 0; x < n; ++x) {
+        const vr::Vec3f p(static_cast<float>(x) * kH,
+                          static_cast<float>(y) * kH,
+                          static_cast<float>(z) * kH);
+        vol::Voxel& v = samples[static_cast<std::size_t>(x) +
+                                static_cast<std::size_t>(n) *
+                                    (y + static_cast<std::size_t>(n) * z)];
+        v.sdf = vr::length(p - center) - radius;
+        v.weight = 1.0f;
+      }
+    }
+  }
+  return samples;
+}
+
+// A canonical, order-independent form of a mesh: each triangle's nine position
+// floats, sorted. Marching cubes appends through an atomic, so triangle order
+// varies run to run -- only the multiset of triangles is stable, which is what
+// an equality check between two extracts can rest on.
+std::vector<std::array<float, 9>> canonical_triangles(const mesh::Mesh& m) {
+  std::vector<std::array<float, 9>> tris(m.vertices.size() / 3);
+  for (std::size_t t = 0; t < tris.size(); ++t) {
+    for (std::size_t k = 0; k < 3; ++k) {
+      const vr::Vec3f& p = m.vertices[t * 3 + k].position;
+      tris[t][k * 3 + 0] = p.x;
+      tris[t][k * 3 + 1] = p.y;
+      tris[t][k * 3 + 2] = p.z;
+    }
+  }
+  std::sort(tris.begin(), tris.end());
+  return tris;
 }
 
 }  // namespace
@@ -258,6 +303,73 @@ int main() {
       extractor.extract(outside.data(), outside.size(), grid, 0.0f);
   CHECK(empty_result.ok());
   CHECK(std::move(empty_result).value().empty());
+
+  // --- Vertex-arena reuse across extracts ------------------------------------
+  // The arena is retained between extracts, so an extract's OUTPUT must not
+  // depend on what the extractor meshed before it. Drive the capacity up
+  // (small -> large) and back down (large -> small), and require each result to
+  // match one from a fresh extractor that meshed nothing else. This pins output
+  // stability across a reuse sequence; the sizing policy itself is not
+  // observable from the mesh and is pinned in the sparse test, which can read
+  // the arena's actual size through ExtractTimings.
+  constexpr int kSmallN = 16;
+  const std::vector<vol::Voxel> small_samples = make_sphere_field_n(kSmallN);
+  mesh::DenseGrid small_grid = grid;
+  small_grid.dims = vr::Vec3i(kSmallN, kSmallN, kSmallN);
+
+  auto fresh_triangles =
+      [&](const std::vector<vol::Voxel>& s,
+          const mesh::DenseGrid& g) -> std::vector<std::array<float, 9>> {
+    vr::Result<mesh::MarchingCubes> fresh =
+        mesh::MarchingCubes::create(device.value(), allocator.value());
+    if (!fresh) return {};
+    vr::Result<mesh::Mesh> r =
+        fresh.value().extract(s.data(), s.size(), g, 0.0f);
+    if (!r) return {};
+    return canonical_triangles(std::move(r).value());
+  };
+
+  const std::vector<std::array<float, 9>> small_baseline =
+      fresh_triangles(small_samples, small_grid);
+  const std::vector<std::array<float, 9>> big_baseline =
+      fresh_triangles(samples, grid);
+  CHECK(!small_baseline.empty());
+  CHECK(!big_baseline.empty());
+  // The second extract really does need a bigger arena than the first, so the
+  // sequence below exercises the grow path rather than reuse throughout.
+  CHECK(big_baseline.size() > small_baseline.size());
+
+  vr::Result<mesh::MarchingCubes> reuse_result =
+      mesh::MarchingCubes::create(device.value(), allocator.value());
+  CHECK(reuse_result.ok());
+  mesh::MarchingCubes reuser = std::move(reuse_result).value();
+
+  // Sizes the arena from nothing.
+  vr::Result<mesh::Mesh> grow_a = reuser.extract(
+      small_samples.data(), small_samples.size(), small_grid, 0.0f);
+  CHECK(grow_a.ok());
+  CHECK(canonical_triangles(std::move(grow_a).value()) == small_baseline);
+
+  // Needs more than the arena holds: the grow path, including its 1.5x headroom
+  // and the fallback when that headroom would not fit.
+  vr::Result<mesh::Mesh> grow_b =
+      reuser.extract(samples.data(), samples.size(), grid, 0.0f);
+  CHECK(grow_b.ok());
+  CHECK(canonical_triangles(std::move(grow_b).value()) == big_baseline);
+
+  // Needs less: reuse of an oversized arena. Sizing the dispatch from the arena
+  // instead of the request, or reading back past the request, would show here.
+  vr::Result<mesh::Mesh> shrink = reuser.extract(
+      small_samples.data(), small_samples.size(), small_grid, 0.0f);
+  CHECK(shrink.ok());
+  CHECK(canonical_triangles(std::move(shrink).value()) == small_baseline);
+
+  // Repeating a call is idempotent: the atomic counter is reset per extract, so
+  // a second identical extract emits the same triangles, not twice as many.
+  vr::Result<mesh::Mesh> again = reuser.extract(
+      small_samples.data(), small_samples.size(), small_grid, 0.0f);
+  CHECK(again.ok());
+  CHECK(canonical_triangles(std::move(again).value()) == small_baseline);
 
   // --- Argument validation ---------------------------------------------------
   mesh::DenseGrid too_small = grid;
