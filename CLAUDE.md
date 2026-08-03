@@ -69,8 +69,11 @@ branching off **`core`** (later: `compress`, `track`, `codec`, `stream`).
   posed camera's image coordinates where it has line of sight (per-vertex-color
   fallback elsewhere), a compute pass.
 - **`sensor`** — the capture *contract*: `ICameraCapture`, the `CapturedFrame`
-  view the fusion tiers consume, and the camera-convention conversions. Reads
-  `DepthCameraParams` + `ColorCameraParams` from `core/camera_params.hpp`, so it
+  view the fusion tiers consume, and the boundary conversions a capture
+  integration gets silently wrong — camera conventions (pose handedness,
+  registered-depth intrinsics) and colour (`to_canonical`). Reads
+  `DepthCameraParams` + `ColorCameraParams` from `core/camera_params.hpp` and
+  `ColorEncoding` from `core/color_space.hpp`, so it
   depends on **`core` alone** — it sits beside the fusion tiers, not on top of
   them — and bundles **no drivers**: one ships here only if this repo can build
   *and* test it (the 2026-08-02 decision).
@@ -1185,7 +1188,18 @@ finite and positive — the unprojection divides by it, so a zero or NaN focal
 yields inf/NaN rays that fusion reads as garbage block coordinates rather than
 reporting. Host-only, so these run everywhere — the point of the
 2026-08-02 decision that keeps the math here while ARKit's driver lives in
-`volumetric_kit_ios`. Alongside them, a `FakeCapture` implements
+`volumetric_kit_ios`. Its colour counterpart is
+`sensor/color_conventions.hpp` — `to_canonical`, the one boundary conversion,
+which decodes the declared `ColorEncoding::Transfer` to linear and *then* rotates
+the declared `Primaries` into the working basis (skipping the second step is the
+quiet failure: "linear" alone does not name a space), refuses `Bt2020Pq` rather
+than approximating an HDR curve into 8-bit SDR, and on the canonical path — what
+ARKit's `{Bt709, Bt709}` takes — carries the colour bytes across verbatim while
+still forcing alpha `0xFF`, so the "alpha is always written" guarantee holds on
+every path rather than only where the curve runs. The *type* and `is_canonical`
+live in `core` instead (the 2026-08-02 colour decision), because `tsdf` must test
+them to refuse a frame and cannot include from `sensor`. Alongside all of it, a
+`FakeCapture` implements
 `ICameraCapture` end to end (start/poll/stop, frame handed over once, a device
 failure distinguished from an empty poll) so the tier's actual deliverable —
 the interface — is compiled and exercised in the repo that publishes it.

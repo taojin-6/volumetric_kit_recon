@@ -52,7 +52,13 @@ namespace volumetric_kit::recon::sensor {
 ///   VR_TRY(grid.resize(grid.grid().num_buckets * 2));  // then retry the frame
 ///   return Status::out_of_memory("map full; grew it, frame not fused");
 /// }
-/// tsdf::ColorFrame color{frame.color, frame.color_camera};
+/// // Carry the encoding across. `ColorFrame::encoding` defaults to canonical,
+/// // so leaving it out does not mean "unspecified" -- it *declares* canonical,
+/// // and a non-canonical frame would then be fused through the wrong curve
+/// // instead of refused. Pass it and a driver that forgot to call
+/// // sensor::to_canonical gets an error rather than a dim reconstruction.
+/// tsdf::ColorFrame color{frame.color, frame.color_camera,
+///                        frame.color_encoding};
 /// VR_TRY(integrator.integrate(grid, frame.depth, frame.depth_camera, 5.0f,
 ///                             tsdf::IntegrationMode::Classic,
 ///                             frame.has_color() ? &color : nullptr));
