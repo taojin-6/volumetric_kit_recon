@@ -27,6 +27,7 @@
 #include <optional>
 
 #include "volumetric_kit/recon/core/camera_params.hpp"
+#include "volumetric_kit/recon/core/color_space.hpp"
 #include "volumetric_kit/recon/core/result.hpp"
 #include "volumetric_kit/recon/sensor/export.hpp"
 
@@ -78,6 +79,18 @@ struct CapturedFrame {
   /// @ref depth_from_registered_color so the two cannot drift apart.
   /// Meaningful only when @ref color is set.
   ColorCameraParams color_camera{};
+
+  /// What @ref color is encoded as — the declaration a driver makes and never
+  /// acts on. Defaults to the canonical form (sRGB transfer, BT.709 primaries),
+  /// so a source already producing canonical bytes says nothing; ARKit declares
+  /// `{Transfer::Bt709, Primaries::Bt709}`, which @ref is_canonical accepts, so
+  /// its frames need no conversion either.
+  ///
+  /// A frame that is *not* canonical is converted once, here at the boundary,
+  /// with @ref to_canonical — the fusion tiers decode with exactly one curve
+  /// and reject anything else rather than guess. Meaningful only when
+  /// @ref color is set.
+  ColorEncoding color_encoding{};
 
   /// Device timestamp in nanoseconds; monotonic within one capture session.
   /// Zero when the device reports none.

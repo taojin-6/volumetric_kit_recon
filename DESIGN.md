@@ -324,10 +324,18 @@ Take the first and measure. The trigger to escalate is **not** banding — that 
 a display symptom of the wrong variable. It is the running mean *latching*:
 `(prev·w_old + obs·w_obs)/w_sum` re-quantized to 8 bits stops moving once the
 per-frame delta falls below half a code, and the voxel's color then freezes
-short of its true mean. At the default `max_weight = 5` a typical step is ~5% of
-the remaining difference, so gaps under ~10 codes stall — tolerable, but that is
-the quantity to measure, and it is a cheap host test rather than an eyeball
-judgment. The rule above is unaffected either way: it constrains *what space* a
+short of its true mean.
+
+Measured, at the default `max_weight = 5` and a 2 m observation
+(`tests/core_color_space_test.cpp` pins it): the mean stops **~10 codes short of
+its target, uniformly across the range** — 0→64 settles at 55, 0→255 at 245 —
+and a gap narrower than ~10 codes never moves the voxel *at all*. The residual
+is range-independent because the sRGB curve makes a fixed fraction of the linear
+gap a roughly fixed number of codes. So the ceiling on fused color accuracy here
+is ~4%, not the ~0.2% an 8-bit attribute suggests, and it is a *convergence*
+limit rather than a precision one — which is exactly why banding was the wrong
+thing to watch. Whether ~4% matters is the measurement that decides `RGBA16`;
+the rule above is unaffected either way, since it constrains *what space* a
 value is in, not how many bits hold it.
 
 ### What it takes to land
@@ -350,12 +358,22 @@ Smaller than it reads, and almost entirely recon's:
 
 The curve gets one host implementation in `core/color_space.hpp` and one GLSL
 mirror in `core/shaders/color_common.glsl`, in the shared-`.glsl` discipline the
-`volume` and `tsdf` tiers already use. It lives in `core` rather than `sensor`
-for the reason the camera parameter blocks did: `sensor` branches off `core`
-beside the fusion tiers, so `tsdf` and `mesh` cannot include from it, and a
-curve those kernels need is vocabulary. `sensor/color_conventions.hpp` keeps the
-boundary policy — what a declaration means, and whether it is already canonical
-— beside the camera conventions it matches.
+`volume` and `tsdf` tiers already use — reached through a cross-tier include
+spelled like the C++ header path, the first one in the repo, so its provenance
+is visible at the include site. It lives in `core` rather than `sensor` for the
+reason the camera parameter blocks did: `sensor` branches off `core` beside the
+fusion tiers, so `tsdf` and `mesh` cannot include from it, and a curve those
+kernels need is vocabulary.
+
+The **type and the `is_canonical` predicate go to `core` with the curve**, not
+to `sensor` — implementing this moved them. `TsdfIntegrator::integrate` refuses
+a non-canonical frame rather than fusing it through the wrong curve, and `tsdf`
+cannot include from `sensor`; a property of `ColorEncoding` belongs with
+`ColorEncoding`. `sensor/color_conventions.hpp` keeps what is genuinely the
+boundary's: `to_canonical`, which walks a frame, and the cost and limits of
+doing so. That refusal is what makes "convert once at the sensor boundary" a
+contract rather than a hope — a mislabelled frame is an error, not a quietly
+wrong reconstruction.
 
 Both implementations must be the **exact piecewise sRGB function**, not a
 `pow(x, 2.2)` approximation. Hardware `_SRGB` sampling uses the exact curve, and

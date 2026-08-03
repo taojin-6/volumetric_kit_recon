@@ -528,7 +528,11 @@ int run(GLFWwindow* window, const Options& opt) {
           std::uint32_t height) -> std::shared_ptr<AtlasVersion> {
     vg::ImageUploadDesc upload_desc;
     upload_desc.extent = {width, height};
-    upload_desc.format = VK_FORMAT_R8G8B8A8_UNORM;
+    // _SRGB: the atlas holds canonical-encoded 8-bit camera pixels, so the
+    // sampler decodes and filters in linear for free -- and the swapchain
+    // (already _SRGB) applies the one encode at the end. See the 2026-08-02
+    // color-space decision.
+    upload_desc.format = VK_FORMAT_R8G8B8A8_SRGB;
     upload_desc.pixels = pixels;
     upload_desc.size = static_cast<std::size_t>(width) * height * 4;
     auto texture_result =

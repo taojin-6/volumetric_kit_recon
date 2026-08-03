@@ -384,7 +384,12 @@ int main(int argc, char** argv) {
   vg::OffscreenTargetDesc td;
   td.extent = {static_cast<std::uint32_t>(opt.width),
                static_cast<std::uint32_t>(opt.height)};
-  td.color_format = VK_FORMAT_R8G8B8A8_UNORM;
+  // _SRGB, not _UNORM: this is a presentation site, and the only encode on the
+  // headless path. The mesh's vertex colors and the decoded atlas are LINEAR
+  // (the 2026-08-02 color-space decision), and the readback goes straight into
+  // a PNG, which every viewer reads as sRGB -- so nothing else would encode and
+  // the image would come out dark. The hardware does it here for free.
+  td.color_format = VK_FORMAT_R8G8B8A8_SRGB;
   td.depth_format = VK_FORMAT_D32_SFLOAT;
   auto target_r = vg::OffscreenTarget::create(app.allocator(), td);
   if (!target_r.ok()) {
@@ -420,7 +425,11 @@ int main(int argc, char** argv) {
   vg::ImageUploadDesc upload_desc;
   upload_desc.extent =
       has_atlas ? VkExtent2D{recon.atlas_w, recon.atlas_h} : VkExtent2D{1, 1};
-  upload_desc.format = VK_FORMAT_R8G8B8A8_UNORM;
+  // _SRGB: the atlas holds canonical-encoded 8-bit camera pixels, so the
+  // sampler decodes (and filters!) in linear for free -- filtering is an
+  // average, and an average of encoded values is the bug this all exists to
+  // fix. The 1x1 white fallback is 255 in either format.
+  upload_desc.format = VK_FORMAT_R8G8B8A8_SRGB;
   upload_desc.pixels = has_atlas ? recon.atlas.data() : white;
   upload_desc.size = has_atlas ? recon.atlas.size() : sizeof(white);
   auto atlas_tex_r =
