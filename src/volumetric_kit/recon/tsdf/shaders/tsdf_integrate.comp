@@ -12,6 +12,10 @@
 
 #extension GL_GOOGLE_include_directive : require
 #include "tsdf_common.glsl"
+// Cross-tier: the one transfer curve, from core. Colour is fused as a running
+// MEAN, and a mean is a linear operation, so both operands are decoded out of
+// the canonical 8-bit encoding before blending and the result is re-encoded.
+#include "volumetric_kit/recon/core/shaders/color_common.glsl"
 
 layout(local_size_x = 256) in;
 
@@ -192,18 +196,26 @@ void main() {
     vec2 cpx;
     float czc;
     if (project_to_image(color_cam, world, cpx, czc)) {
-      vec3 obs =
-          unpackUnorm4x8(
-              color_image[uint(cpx.y) * color_cam.width + uint(cpx.x)])
-              .rgb;
-      vec3 fused;
+      uint obs_packed = color_image[uint(cpx.y) * color_cam.width + uint(cpx.x)];
       if (color_attr[idx] == 0u) {
-        fused = obs;  // first color observation assigns
+        // First color observation ASSIGNS, and assigns the sensor's own bytes
+        // rather than a decode/encode round trip of them: an assignment is not
+        // an average, so it needs no linear space, and copying the codes keeps
+        // the stored color bit-exact with what the camera reported instead of
+        // resting on the curve round-tripping all 256 codes. Alpha is forced to
+        // 0xFF (the source's high byte is undefined) so the "color unobserved"
+        // sentinel stays exact -- a written color is never 0, not even black.
+        color_attr[idx] = (obs_packed & 0x00FFFFFFu) | 0xFF000000u;
       } else {
-        vec3 prev = unpackUnorm4x8(color_attr[idx]).rgb;
-        fused = (prev * w_old + obs * w_obs) / max(w_sum, 1e-6);
+        // A running mean, so decode both operands to linear working values,
+        // average there, and re-encode. Blending the encoded codes directly is
+        // wrong by construction and wrong quietly (0.0 and 1.0 would fuse to
+        // 0.214 rather than 0.5) -- the 2026-08-02 color-space decision.
+        vec3 prev = vrUnpackSrgbToLinear(color_attr[idx]);
+        vec3 obs = vrUnpackSrgbToLinear(obs_packed);
+        vec3 fused = (prev * w_old + obs * w_obs) / max(w_sum, 1e-6);
+        color_attr[idx] = vrPackLinearToSrgb(fused);
       }
-      color_attr[idx] = packUnorm4x8(vec4(fused, 1.0));
     }
   }
 }

@@ -11,9 +11,11 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <vector>
 
 #include "volumetric_kit/recon/core/allocator.hpp"
+#include "volumetric_kit/recon/core/color_space.hpp"
 #include "volumetric_kit/recon/core/device.hpp"
 #include "volumetric_kit/recon/core/instance.hpp"
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
@@ -526,6 +528,96 @@ int main() {
   CHECK((wu_color[wu_front] & 0xFFu) == 200u);  // first color assigns the
   CHECK(((wu_color[wu_front] >> 8) & 0xFFu) == 100u);  // full RGB, not a blend
   CHECK(((wu_color[wu_front] >> 16) & 0xFFu) == 50u);  // toward black
+
+  // The colour running mean blends in LINEAR working values, not in the encoded
+  // codes (the 2026-08-02 decision). Fuse a second, very different colour into
+  // the voxel just assigned above and check the result against the mean
+  // computed the right way -- with the wrong way as an explicit foil, because
+  // the two differ by ~10 codes here and only a comparison against both proves
+  // which one ran. (The gap is widest across high-contrast pairs, which is
+  // exactly where a reconstruction gets inspected: silhouettes and depth
+  // discontinuities.)
+  //
+  // The check is weight-independent by construction, which matters because the
+  // kernel's w_obs (1/z^2 at this voxel) is not something the host recomputes:
+  // `linear_to_srgb` is *concave* on [0, 1], so by Jensen's inequality
+  // encode(mean of the linear values) >= mean of the encoded codes, for ANY
+  // convex weighting. Blending in linear therefore always lands on a strictly
+  // brighter code than blending the codes did -- the same inequality that makes
+  // 0.0 and 1.0 fuse to 0.214 instead of 0.5. Asserting the direction (plus a
+  // magnitude floor, so it cannot pass vacuously) pins the fix exactly:
+  // reverting the kernel to blend encoded values makes `got == wrong` and this
+  // fails, while no choice of weights can rescue it.
+  {
+    const std::uint32_t prev_packed = wu_color[wu_front];
+    const float w_before = wu_weight[wu_front];
+    constexpr std::uint32_t kDark = 0xFF141414u;  // code 20, far below prev
+    std::vector<std::uint32_t> dark_pixels(color_img.size(), kDark);
+    tsdf::ColorFrame dark_frame{};
+    dark_frame.pixels = dark_pixels.data();
+    dark_frame.cam = frame.cam;
+    CHECK(integ
+              .integrate(vbg_wu, depth.data(), cam, 5.0f,
+                         tsdf::IntegrationMode::Classic, &dark_frame)
+              .ok());
+    const std::uint32_t got = wu_color[wu_front];
+
+    // Both weights are known here rather than recovered from the answer (which
+    // would make the comparison circular and unfailable): `w_before` is the
+    // stored SDF weight the kernel reads as w_old, and the observation weight
+    // is 1/Zc^2 at this voxel -- world z = 97 * 0.005 = 0.485 m under the
+    // identity pose, in front of the surface so no behind-dropoff applies. It
+    // is the same weight the SDF assertions at the top of this test use.
+    const float w_obs = 1.0f / (0.485f * 0.485f);
+    const vr::Vec3f prev_lin = vr::unpack_srgb_to_linear(prev_packed);
+    const vr::Vec3f obs_lin = vr::unpack_srgb_to_linear(kDark);
+    const vr::Vec3f want_lin =
+        (prev_lin * w_before + obs_lin * w_obs) / (w_before + w_obs);
+    const std::uint32_t want = vr::pack_linear_to_srgb(want_lin);
+
+    // What the kernel produces: the linear mean, to within float32 rounding.
+    // This is the assertion that fails if the blend reverts to encoded values.
+    for (int i = 0; i < 3; ++i) {
+      const auto got_c = static_cast<int>((got >> (8 * i)) & 0xFFu);
+      const auto want_c = static_cast<int>((want >> (8 * i)) & 0xFFu);
+      CHECK(std::abs(got_c - want_c) <= 1);
+    }
+
+    // And the foil, stated on RED because that is where the two disagree.
+    // Jensen's inequality puts the code blend strictly darker (encode is
+    // concave), but by how much depends entirely on the contrast: red spans
+    // 200 -> 20 and the two answers sit ~35 codes apart, while blue spans only
+    // 50 -> 20 and they land 3 apart. That is not a quirk of the fixture -- it
+    // is the documented shape of this bug, small between similar samples and
+    // largest across high-contrast pairs, which is why it concentrates on
+    // silhouettes and depth discontinuities and why it survived unnoticed.
+    const auto got_r = static_cast<int>(got & 0xFFu);
+    const auto wrong_r =
+        static_cast<int>((static_cast<float>(prev_packed & 0xFFu) * w_before +
+                          static_cast<float>(kDark & 0xFFu) * w_obs) /
+                             (w_before + w_obs) +
+                         0.5f);
+    CHECK(got_r > wrong_r + 20);
+    CHECK((got >> 24) == 0xFFu);  // alpha still forced, sentinel still exact
+  }
+
+  // A colour frame that is not in the canonical encoded form is REFUSED rather
+  // than fused through the wrong curve: the kernel decodes with exactly one
+  // transfer function, and "convert once at the sensor boundary" is a contract
+  // (sensor::to_canonical does it). A silently-misinterpreted curve is the
+  // quiet error the whole decision exists to prevent, so it must be an error.
+  {
+    tsdf::ColorFrame p3_frame = frame;
+    p3_frame.encoding = {vr::ColorEncoding::Transfer::Srgb,
+                         vr::ColorEncoding::Primaries::DisplayP3};
+    CHECK(!integ
+               .integrate(vbg_wu, depth.data(), cam, 5.0f,
+                          tsdf::IntegrationMode::Classic, &p3_frame)
+               .ok());
+    // The default declaration is canonical, so every existing caller is
+    // unaffected -- which is what makes this an added guard, not a migration.
+    CHECK(vr::is_canonical(tsdf::ColorFrame{}.encoding));
+  }
 
   // Regression: dynamic mode clears stale color whenever the grid carries a
   // `color` attribute -- even on a depth-only (color == nullptr) frame -- so a

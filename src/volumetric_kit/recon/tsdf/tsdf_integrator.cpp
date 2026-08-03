@@ -191,6 +191,18 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid, const float* depth,
       return Status::invalid_argument(
           "TsdfIntegrator::integrate: color frame is empty");
     }
+    // The kernel decodes with exactly one curve, so a frame that is not already
+    // in the canonical encoded form is refused rather than fused through the
+    // wrong one -- "convert once at the sensor boundary" is a contract, and a
+    // silently-misinterpreted curve is precisely the quiet error the
+    // 2026-08-02 color-space decision exists to prevent. `sensor::to_canonical`
+    // is the conversion; it is a copy when the declaration already matches.
+    if (!is_canonical(color->encoding)) {
+      return Status::invalid_argument(
+          "TsdfIntegrator::integrate: color frame is not in the canonical "
+          "encoded form (sRGB transfer, BT.709 primaries); convert it at the "
+          "capture boundary with sensor::to_canonical");
+    }
     VR_ASSIGN(AttributeView color_view, grid.attribute("color"));
     if (color_view.element_size != sizeof(std::uint32_t)) {
       return Status::invalid_argument(

@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "volumetric_kit/recon/core/allocator.hpp"
+#include "volumetric_kit/recon/core/color_space.hpp"
 #include "volumetric_kit/recon/core/device.hpp"
 #include "volumetric_kit/recon/core/instance.hpp"
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
@@ -282,6 +283,18 @@ int main() {
   // passthrough) and a color/position winding-reversal mismatch both perturb a
   // vertex's color by up to that per-cell span. uv0 stays the sentinel (no
   // atlas yet).
+  //
+  // The comparison happens in ENCODED space -- `linear_to_srgb(v.color)`
+  // against the gradient -- because `Vertex::color` is now linear working
+  // values while the gradient was written as canonical-encoded 8-bit (the
+  // 2026-08-02 color-space decision). Inverting the vertex rather than
+  // forward-converting the expectation keeps the tolerance meaningful: one u8
+  // code spans ~0.0089 in *linear* near white, which alone would blow a 0.005
+  // bound, while in encoded space a code is a flat 1/255 everywhere and the
+  // bound still reads as "~2.5x the u8 floor". It also stays discriminating
+  // rather than vacuous: a kernel that skipped the decode would leave `v.color`
+  // encoded, and `linear_to_srgb` of an already-encoded 0.5 is 0.735, nowhere
+  // near it.
   const std::vector<vr::Vec3u8> colors = make_gradient_colors();
   vr::Result<mesh::Mesh> colored_result = extractor.extract(
       samples.data(), samples.size(), grid, 0.0f, colors.data());
@@ -290,9 +303,10 @@ int main() {
   CHECK(!colored.empty());
   for (const mesh::Vertex& v : colored.vertices) {
     const vr::Vec3f expected = grad_color(v.position);
-    CHECK(std::fabs(v.color.x - expected.x) < 0.005f);  // ~2.5x the u8 floor
-    CHECK(std::fabs(v.color.y - expected.y) < 0.005f);
-    CHECK(std::fabs(v.color.z - expected.z) < 0.005f);
+    const vr::Vec3f encoded = vr::linear_to_srgb(vr::Vec3f(v.color));
+    CHECK(std::fabs(encoded.x - expected.x) < 0.005f);  // ~2.5x the u8 floor
+    CHECK(std::fabs(encoded.y - expected.y) < 0.005f);
+    CHECK(std::fabs(encoded.z - expected.z) < 0.005f);
     CHECK(v.color.w == 1.0f);
     CHECK(v.uv0.x < 0.0f &&
           v.uv0.y < 0.0f);  // still the sentinel; no atlas yet

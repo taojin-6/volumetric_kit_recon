@@ -642,8 +642,17 @@ Each dated; newest context wins. Change the decision *and* this list together.
   a `core/shaders/color_common.glsl` mirror), because `sensor` branches off
   `core` *beside* the fusion tiers — so `tsdf` and `mesh`, which do the decoding
   in GLSL, cannot include from it — and because a curve four tiers need is
-  vocabulary. `sensor/color_conventions.hpp` keeps the boundary *policy* beside
-  the camera conventions it matches. The declaration rides **beside** the camera
+  vocabulary. `sensor/color_conventions.hpp` keeps what is genuinely the
+  boundary's — `to_canonical`, which walks a frame. *Implementing this moved
+  the line*: the `ColorEncoding` type **and** `is_canonical` went to `core` too,
+  because `TsdfIntegrator::integrate` **refuses** a non-canonical colour frame
+  rather than fusing it through the wrong curve, and `tsdf` cannot include from
+  `sensor` — a property of the type belongs with the type. That refusal is what
+  makes "convert once at the sensor boundary" a contract rather than a hope.
+  The cross-tier GLSL include (the repo's first) is spelled like the C++ header
+  path so its provenance is visible at the include site; `vr_compile_shaders`
+  passes `src/` as the shader include root.
+  The declaration rides **beside** the camera
   (a field on `sensor::CapturedFrame` / `tsdf::ColorFrame`), never *inside*
   `ColorCameraParams`: that struct is uploaded verbatim under scalar block
   layout, pinned at 88 bytes with GLSL mirrors in `tsdf/` and `texture/`, so a
@@ -673,9 +682,15 @@ Each dated; newest context wins. Change the decision *and* this list together.
   approximation shows as a seam exactly where texturing stops. Storage stays
   `uint32` (convert in the shader) and is measured; the escalation trigger is
   **not** banding but the running mean *latching* — re-quantized to 8 bits it
-  stops moving once the per-frame delta falls under half a code (at the default
-  `max_weight = 5`, gaps under ~10 codes stall). Authoritative detail:
-  DESIGN.md → "Color space".
+  stops moving once the per-frame delta falls under half a code. **Measured**
+  (`tests/core_color_space_test.cpp`) at the default `max_weight = 5` and a 2 m
+  observation: the mean stops **~10 codes short, uniformly across the range**
+  (0→64 settles at 55, 0→255 at 245), and a gap narrower than ~10 codes never
+  moves the voxel at all — the residual is range-independent because the sRGB
+  curve turns a fixed fraction of the linear gap into a roughly fixed number of
+  codes. So fused colour accuracy is ceilinged at ~4%, a *convergence* limit
+  rather than a precision one, which is precisely why banding was the wrong
+  thing to watch. Authoritative detail: DESIGN.md → "Color space".
 
 ## Provenance & salvage policy
 
