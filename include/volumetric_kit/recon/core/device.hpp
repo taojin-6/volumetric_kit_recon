@@ -158,6 +158,19 @@ class VR_CORE_API Device {
   VkPhysicalDevice physical_device() const noexcept { return physical_; }
   /// @return The compute-capable queue-family index.
   std::uint32_t compute_family() const noexcept { return compute_family_; }
+  /// @brief The capabilities @ref compute_family advertises (`VK_QUEUE_*`).
+  ///
+  /// recon requires only `VK_QUEUE_COMPUTE_BIT`, so the family it is handed may
+  /// be compute-*only* -- a dedicated async-compute family on a discrete GPU,
+  /// or anything an embedder assigns through @ref adopt. That matters because
+  /// Vulkan permits a pipeline barrier to name only stages the recording
+  /// command buffer's queue family supports, and
+  /// `VK_PIPELINE_STAGE_VERTEX_INPUT_BIT` requires `VK_QUEUE_GRAPHICS_BIT`; the
+  /// shared @ref dispatch consults this before widening its destination scope
+  /// for a renderer. Read from the driver at create/adopt, never assumed.
+  VkQueueFlags compute_family_flags() const noexcept {
+    return compute_family_flags_;
+  }
   /// @return The compute queue.
   VkQueue compute_queue() const noexcept { return compute_queue_; }
   /// @return The compute-family command pool (created `RESET_COMMAND_BUFFER`).
@@ -219,6 +232,7 @@ class VR_CORE_API Device {
   bool owns_device_ = true;
   std::mutex* submit_mutex_ = nullptr;
   std::uint32_t compute_family_ = 0;
+  VkQueueFlags compute_family_flags_ = 0;
   VkQueue compute_queue_ = VK_NULL_HANDLE;
 };
 

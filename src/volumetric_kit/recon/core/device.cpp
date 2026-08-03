@@ -211,6 +211,7 @@ Result<Device> Device::create(VkInstance instance, VkPhysicalDevice physical,
   Device device;
   device.physical_ = physical;
   device.compute_family_ = *compute;
+  device.compute_family_flags_ = detail::queue_family_flags(physical, *compute);
   VR_VK_TRY(vkCreateDevice(physical, &create_info, nullptr, &device.device_));
   vkGetDeviceQueue(device.device_, *compute, 0, &device.compute_queue_);
 
@@ -298,6 +299,11 @@ Result<Device> Device::adopt(const AdoptedDevice& adopted,
   device.physical_ = adopted.physical_device;
   device.device_ = adopted.device;
   device.compute_family_ = adopted.compute_family;
+  // Read from the driver, not declared by the embedder: unlike the enabled
+  // extensions and features, a family's capabilities *are* queryable, so there
+  // is nothing here for a hand-written payload to get wrong.
+  device.compute_family_flags_ = detail::queue_family_flags(
+      adopted.physical_device, adopted.compute_family);
   device.compute_queue_ = adopted.compute_queue;
   device.submit_mutex_ = adopted.submit_mutex;
 
@@ -319,6 +325,7 @@ Device::Device(Device&& other) noexcept
       owns_device_(other.owns_device_),
       submit_mutex_(other.submit_mutex_),
       compute_family_(other.compute_family_),
+      compute_family_flags_(other.compute_family_flags_),
       compute_queue_(other.compute_queue_) {
   other.physical_ = VK_NULL_HANDLE;
   other.device_ = VK_NULL_HANDLE;
@@ -326,6 +333,7 @@ Device::Device(Device&& other) noexcept
   other.owns_device_ = true;
   other.submit_mutex_ = nullptr;
   other.compute_family_ = 0;
+  other.compute_family_flags_ = 0;
   other.compute_queue_ = VK_NULL_HANDLE;
 }
 
@@ -338,6 +346,7 @@ Device& Device::operator=(Device&& other) noexcept {
     owns_device_ = other.owns_device_;
     submit_mutex_ = other.submit_mutex_;
     compute_family_ = other.compute_family_;
+    compute_family_flags_ = other.compute_family_flags_;
     compute_queue_ = other.compute_queue_;
     other.physical_ = VK_NULL_HANDLE;
     other.device_ = VK_NULL_HANDLE;
@@ -345,6 +354,7 @@ Device& Device::operator=(Device&& other) noexcept {
     other.owns_device_ = true;
     other.submit_mutex_ = nullptr;
     other.compute_family_ = 0;
+    other.compute_family_flags_ = 0;
     other.compute_queue_ = VK_NULL_HANDLE;
   }
   return *this;
@@ -369,6 +379,7 @@ void Device::destroy() noexcept {
   submit_mutex_ = nullptr;
   physical_ = VK_NULL_HANDLE;
   compute_family_ = 0;
+  compute_family_flags_ = 0;
   compute_queue_ = VK_NULL_HANDLE;
 }
 

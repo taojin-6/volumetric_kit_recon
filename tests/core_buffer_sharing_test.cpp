@@ -4,27 +4,38 @@
 // BufferDesc::queue_families: the sharing mode a buffer the renderer reads
 // directly needs (interop seam B).
 //
-// The mode itself is not queryable -- Vulkan gives no way to read a created
-// buffer's sharingMode back -- so what this pins is the behaviour a caller
-// depends on, and it leans on the validation layer for the rest. A CONCURRENT
-// buffer whose indices are not unique, or which names fewer than two families,
-// is a validation error; so a test that asks for those shapes and gets a
-// working buffer *is* the assertion that the deduplication happened -- but only
-// with the layer loaded, which is why this asks for it explicitly below rather
-// than taking the default. Where the Khronos layer is not installed,
-// `enable_validation` is documented as a no-op, and these cases degrade to
-// smoke tests; the failure they catch is a real one either way in CI.
+// Three layers, because the obvious one asserts nothing on its own:
 //
-// Needs a device, so the whole test skips (exit 0) where no driver/device is
+// (1) The reduction, pinned directly through the internal header. Needs no
+//     device and no validation layer, so it fails on any machine if the rule
+//     breaks.
+// (2) The mode each case actually produced, read back off Buffer::sharing_mode.
+//     Vulkan cannot be asked what a VkBuffer was created with, which is why the
+//     Buffer records it -- and it is what lets "the same family twice collapses
+//     to EXCLUSIVE" be an assertion rather than an inference drawn from the
+//     call not failing.
+// (3) A validation-error count around the device cases. The first cut of this
+//     test leaned on the layer alone and claimed a malformed CONCURRENT buffer
+//     would be caught wherever it was installed. It would not have been:
+//     recon's debug callback returns VK_FALSE (it must -- aborting is for a
+//     debugger), vmaCreateBuffer still returns VK_SUCCESS, and nothing turned
+//     the diagnostic into a failure. Counting Error-level messages through the
+//     log handler closes that, as a delta around the buffer cases so an
+//     unrelated driver complaint during setup can neither mask nor fake it.
+//
+// Needs a device, so (2) and (3) skip (exit 0) where no driver/device is
 // present, like the other Vulkan tests.
 
 #include <cstdint>
 #include <cstdio>
+#include <string_view>
 
+#include "queue_family_set.hpp"
 #include "volumetric_kit/recon/core/allocator.hpp"
 #include "volumetric_kit/recon/core/buffer.hpp"
 #include "volumetric_kit/recon/core/device.hpp"
 #include "volumetric_kit/recon/core/instance.hpp"
+#include "volumetric_kit/recon/core/log.hpp"
 #include "volumetric_kit/recon/core/vulkan.hpp"
 
 namespace vr = volumetric_kit::recon;
@@ -37,21 +48,27 @@ namespace vr = volumetric_kit::recon;
     }                                                                        \
   } while (0)
 
-// The reduction, pinned directly. This is the half with teeth: it needs no
-// device and no validation layer, so it fails on any machine if the rule
-// breaks. Sabotaging the deduplication and re-running proved the device cases
-// below do *not* catch it here -- they pass without the layer installed, which
-// is most machines.
+namespace {
+
+// Error-level messages seen since the handler was installed. The validation
+// layer reaches this through recon's debug messenger, so a malformed buffer
+// lands here rather than only on stderr.
+int g_errors = 0;
+
+}  // namespace
+
+// The reduction, pinned directly. Sabotaging the deduplication must fail this
+// on every machine, layer or no layer.
 int check_reduction() {
   constexpr std::uint32_t kCap = 4;
   std::uint32_t out[kCap]{};
 
   // Nothing in, nothing out -- the default path, and null is legal at count 0.
-  CHECK(vr::detail::distinct_queue_families(nullptr, 0, out, kCap) == 0);
+  CHECK(vr::distinct_queue_families(nullptr, 0, out, kCap) == 0);
 
   // Two distinct families stay two, in first-seen order.
   const std::uint32_t two[2] = {1, 0};
-  CHECK(vr::detail::distinct_queue_families(two, 2, out, kCap) == 2);
+  CHECK(vr::distinct_queue_families(two, 2, out, kCap) == 2);
   CHECK(out[0] == 1);
   CHECK(out[1] == 0);
 
@@ -60,12 +77,12 @@ int check_reduction() {
   // entries in, one distinct out -- which is what makes the buffer EXCLUSIVE
   // rather than a CONCURRENT one Vulkan rejects.
   const std::uint32_t same[2] = {2, 2};
-  CHECK(vr::detail::distinct_queue_families(same, 2, out, kCap) == 1);
+  CHECK(vr::distinct_queue_families(same, 2, out, kCap) == 1);
   CHECK(out[0] == 2);
 
   // Duplicates anywhere in the run, not just adjacent.
   const std::uint32_t messy[5] = {3, 1, 3, 1, 3};
-  CHECK(vr::detail::distinct_queue_families(messy, 5, out, kCap) == 2);
+  CHECK(vr::distinct_queue_families(messy, 5, out, kCap) == 2);
   CHECK(out[0] == 3);
   CHECK(out[1] == 1);
 
@@ -73,10 +90,10 @@ int check_reduction() {
   // name fewer families than will actually touch the buffer, which is the
   // original bug wearing a different hat.
   const std::uint32_t many[5] = {0, 1, 2, 3, 4};
-  CHECK(vr::detail::distinct_queue_families(many, 5, out, kCap) == kCap + 1);
+  CHECK(vr::distinct_queue_families(many, 5, out, kCap) == kCap + 1);
   // Repeats of an already-seen family do not count toward the ceiling.
   const std::uint32_t repeats[6] = {0, 1, 2, 3, 3, 0};
-  CHECK(vr::detail::distinct_queue_families(repeats, 6, out, kCap) == kCap);
+  CHECK(vr::distinct_queue_families(repeats, 6, out, kCap) == kCap);
 
   return 0;
 }
@@ -86,8 +103,20 @@ int main() {
     return 1;
   }
 
-  // Validation on: without the layer, a malformed CONCURRENT buffer is created
-  // happily and every case below passes whether the deduplication runs or not.
+  // Installed before the instance, so the layer's output reaches the counter.
+  // Errors are printed as well as counted: a bare count is undiagnosable.
+  vr::set_log_handler([](vr::LogLevel level, std::string_view message) {
+    if (level == vr::LogLevel::Error) {
+      ++g_errors;
+      std::fprintf(stderr, "[vulkan error] %.*s\n",
+                   static_cast<int>(message.size()), message.data());
+    }
+  });
+
+  // Validation on: it is what catches a CONCURRENT buffer whose indices are not
+  // unique, or which names fewer than two families. Where the Khronos layer is
+  // not installed, `enable_validation` is documented as a no-op and layer (3)
+  // goes quiet with it -- layers (1) and (2) still assert.
   vr::InstanceConfig config;
   config.enable_validation = true;
   vr::Result<vr::Instance> instance = vr::Instance::create(config);
@@ -117,6 +146,19 @@ int main() {
     return 1;
   }
 
+  // Real family indices, not hardcoded ones. Vulkan requires every index a
+  // CONCURRENT buffer names be less than the device's family count, so `{0, 1}`
+  // on a single-family driver -- lavapipe, which the Linux CI legs run -- is
+  // itself the malformed shape this test exists to detect.
+  std::uint32_t family_count = 0;
+  vkGetPhysicalDeviceQueueFamilyProperties(gpu.value(), &family_count, nullptr);
+  CHECK(family_count >= 1);
+  std::fprintf(stderr, "device reports %u queue famil%s\n", family_count,
+               family_count == 1 ? "y" : "ies");
+
+  // Everything below this point must produce no validation error.
+  const int errors_before = g_errors;
+
   constexpr VkDeviceSize kBytes = 4096;
   const auto base = [] {
     vr::BufferDesc desc;
@@ -131,10 +173,13 @@ int main() {
     vr::Result<vr::Buffer> buffer = allocator.value().create_buffer(base());
     CHECK(buffer.ok());
     CHECK(buffer.value().handle() != VK_NULL_HANDLE);
+    CHECK(buffer.value().sharing_mode() == VK_SHARING_MODE_EXCLUSIVE);
   }
 
-  // Two distinct families: CONCURRENT, which is the seam-B case.
-  {
+  // Two distinct families: CONCURRENT, which is the seam-B case. Needs a device
+  // that actually has two; on a single-family driver the shape is unreachable
+  // rather than untested -- there is no cross-family read to arrange.
+  if (family_count >= 2) {
     const std::uint32_t families[2] = {0, 1};
     vr::BufferDesc desc = base();
     desc.queue_families = families;
@@ -142,13 +187,16 @@ int main() {
     vr::Result<vr::Buffer> buffer = allocator.value().create_buffer(desc);
     CHECK(buffer.ok());
     CHECK(buffer.value().handle() != VK_NULL_HANDLE);
+    CHECK(buffer.value().sharing_mode() == VK_SHARING_MODE_CONCURRENT);
+  } else {
+    std::fprintf(stderr, "single queue family; skipping the CONCURRENT case\n");
   }
 
   // The same family twice. This is the call site that matters: a consumer
   // passes its compute and render families unconditionally, and off Apple they
   // are frequently the same one. Requesting CONCURRENT here would be a
   // validation error on two counts (duplicate indices, and fewer than two
-  // distinct), so succeeding is the deduplication working.
+  // distinct), so EXCLUSIVE is the deduplication working.
   {
     const std::uint32_t families[2] = {0, 0};
     vr::BufferDesc desc = base();
@@ -156,7 +204,7 @@ int main() {
     desc.queue_family_count = 2;
     vr::Result<vr::Buffer> buffer = allocator.value().create_buffer(desc);
     CHECK(buffer.ok());
-    CHECK(buffer.value().handle() != VK_NULL_HANDLE);
+    CHECK(buffer.value().sharing_mode() == VK_SHARING_MODE_EXCLUSIVE);
   }
 
   // One family is exclusive by definition, and must not reach Vulkan as a
@@ -168,7 +216,19 @@ int main() {
     desc.queue_family_count = 1;
     vr::Result<vr::Buffer> buffer = allocator.value().create_buffer(desc);
     CHECK(buffer.ok());
-    CHECK(buffer.value().handle() != VK_NULL_HANDLE);
+    CHECK(buffer.value().sharing_mode() == VK_SHARING_MODE_EXCLUSIVE);
+  }
+
+  // More distinct families than the reduction can hold is refused, rather than
+  // reaching Vulkan naming only the first few.
+  {
+    const std::uint32_t families[5] = {0, 1, 2, 3, 4};
+    vr::BufferDesc desc = base();
+    desc.queue_families = families;
+    desc.queue_family_count = 5;
+    vr::Result<vr::Buffer> buffer = allocator.value().create_buffer(desc);
+    CHECK(!buffer.ok());
+    CHECK(buffer.status().domain() == vr::Status::Code::InvalidArgument);
   }
 
   // A count with no array is the caller's mistake, and is refused rather than
@@ -181,6 +241,10 @@ int main() {
     CHECK(!buffer.ok());
     CHECK(buffer.status().domain() == vr::Status::Code::InvalidArgument);
   }
+
+  // The layer's verdict on every buffer above. Zero is the assertion; a
+  // non-zero count has already printed what it was.
+  CHECK(g_errors == errors_before);
 
   std::printf("PASS\n");
   return 0;

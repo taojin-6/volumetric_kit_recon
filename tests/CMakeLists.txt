@@ -32,6 +32,12 @@ add_test(NAME recon_core_memory_stats COMMAND recon_core_memory_stats_test)
 add_executable(recon_core_buffer_sharing_test core_buffer_sharing_test.cpp)
 target_link_libraries(recon_core_buffer_sharing_test
                       PRIVATE volumetric_kit::recon_core)
+# queue_family_set.hpp is internal (non-installed): its location under src/ is
+# what keeps it out of the public API, so the test reaches it by include path
+# rather than the tier exporting it for one caller's benefit.
+target_include_directories(
+  recon_core_buffer_sharing_test
+  PRIVATE ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/core)
 vr_target_warnings(recon_core_buffer_sharing_test)
 add_test(NAME recon_core_buffer_sharing COMMAND recon_core_buffer_sharing_test)
 

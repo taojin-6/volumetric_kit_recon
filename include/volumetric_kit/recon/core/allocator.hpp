@@ -100,37 +100,24 @@ struct BufferDesc {
   /// which is the common case off Apple, and where CONCURRENT would otherwise
   /// cost access performance for nothing.
   ///
+  /// At most @ref kMaxQueueFamilies distinct entries; more is an error rather
+  /// than a truncation, since a partial list would name fewer families than
+  /// actually touch the buffer -- the original bug in a different hat.
+  ///
   /// The array need only outlive the @ref Allocator::create_buffer call.
   const std::uint32_t* queue_families = nullptr;
   /// Number of entries in @ref queue_families; must be zero when it is null.
   std::uint32_t queue_family_count = 0;
+
+  /// Ceiling on the *distinct* families one buffer can be shared between.
+  ///
+  /// Two is the case that exists -- one reconstruction family, one renderer
+  /// family -- and the headroom is for a third consumer rather than for a
+  /// device with an unusual queue layout, since what is counted here is
+  /// *consumers*, not what the driver exposes. Published so a caller can see
+  /// the limit it is checked against.
+  static constexpr std::uint32_t kMaxQueueFamilies = 4;
 };
-
-namespace detail {
-
-/// @brief Reduce @p families to its distinct entries, in first-seen order.
-///
-/// The rule @ref BufferDesc::queue_families describes, on its own so it can be
-/// pinned by a host test. Its failure mode is the reason: getting it wrong
-/// produces a buffer Vulkan rejects only when a validation layer happens to be
-/// installed, and a *silently wrong sharing mode* when one is not -- which is
-/// the same "correct on the machine that ran it" hazard the camera and colour
-/// conventions are kept as pure arithmetic to avoid.
-///
-/// @param families      Entries to reduce; may be null only when @p count is 0.
-/// @param count         Number of entries in @p families.
-/// @param out           Receives the distinct entries; may be null only when
-///                      @p out_capacity is 0.
-/// @param out_capacity  How many entries @p out holds.
-/// @return The distinct count, or `out_capacity + 1` when more distinct
-///         families were found than @p out can hold -- a value the caller can
-///         only treat as an error, since the reduction is then incomplete.
-VR_CORE_API std::uint32_t distinct_queue_families(const std::uint32_t* families,
-                                                  std::uint32_t count,
-                                                  std::uint32_t* out,
-                                                  std::uint32_t out_capacity);
-
-}  // namespace detail
 
 /// @brief Owns a `VmaAllocator` built over a `VkDevice`, and creates
 ///        VMA-backed @ref Buffer resources on it.

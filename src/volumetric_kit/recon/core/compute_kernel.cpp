@@ -90,6 +90,47 @@ Status dispatch(Device& device, const ComputeKernel& kernel, const void* push,
     return Status::invalid_argument(
         "dispatch: push is null with a non-zero push_size");
   }
+  // The destination scope, widened for a renderer reading these writes as
+  // geometry -- but only as far as the recording queue family allows.
+  //
+  // A mesh the renderer draws directly is read at VERTEX_INPUT as vertex
+  // attributes and indices, and at DRAW_INDIRECT as a command; none of which
+  // COMPUTE|HOST covers, so those writes were never made visible to the stages
+  // that read them. That omission does not fail loudly -- the draw gets
+  // whatever happens to be in memory, which on a GPU that completed the
+  // dispatch anyway is usually the right answer, right up until it is not.
+  //
+  // Widened unconditionally in the *stage* sense (no per-dispatch knob, which
+  // would have to be threaded through every kernel this helper exists to keep
+  // uniform, to save an execution dependency the driver already had to satisfy
+  // for the host and compute cases) but NOT unconditionally in the *capability*
+  // sense: Vulkan permits a barrier to name only stages the recording command
+  // buffer's queue family supports, and VK_PIPELINE_STAGE_VERTEX_INPUT_BIT
+  // requires VK_QUEUE_GRAPHICS_BIT. recon requires only compute of the family
+  // it is handed, so it can legitimately sit on a compute-only one -- a
+  // discrete GPU's async-compute family, which is exactly what the shared
+  // bootstrap's two-families plan picks there. Naming VERTEX_INPUT on such a
+  // queue is invalid usage in *every* dispatch in every tier, and invisible on
+  // Apple, where every MoltenVK family is graphics+compute. DRAW_INDIRECT needs
+  // only graphics *or* compute, so it is always available here; the two access
+  // bits that belong to VERTEX_INPUT travel with it.
+  const bool family_has_graphics =
+      (device.compute_family_flags() & VK_QUEUE_GRAPHICS_BIT) != 0;
+  VkPipelineStageFlags dst_stages = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                                    VK_PIPELINE_STAGE_HOST_BIT |
+                                    VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT;
+  VkAccessFlags dst_access =
+      VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT |
+      VK_ACCESS_HOST_READ_BIT | VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
+  if (family_has_graphics) {
+    dst_stages |= VK_PIPELINE_STAGE_VERTEX_INPUT_BIT;
+    dst_access |=
+        VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_INDEX_READ_BIT;
+  }
+  // A cross-queue handoff needs a semaphore regardless, and a semaphore's
+  // signal/wait already carries availability and visibility for every prior
+  // write -- so on a compute-only family the renderer is reachable only that
+  // way, and nothing is lost by omitting the stages Vulkan forbids naming here.
   return device.submit_single_time([&](VkCommandBuffer cmd) {
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
                       kernel.pipeline.handle());
@@ -103,34 +144,13 @@ Status dispatch(Device& device, const ComputeKernel& kernel, const void* push,
     vkCmdDispatch(cmd, groups, 1, 1);
     // Make this kernel's SSBO writes available and visible to (a) the next
     // dispatch's shader reads/writes, (b) a host read of the mapped results,
-    // and (c) a renderer consuming the buffer as geometry.
-    //
-    // (c) is what interop seam B needs and what this used to omit. A mesh the
-    // renderer draws directly is read at VERTEX_INPUT as vertex attributes,
-    // indices and an indirect command -- none of which COMPUTE|HOST covers, so
-    // the writes were never made visible to the stage that reads them. That
-    // omission does not fail loudly: the draw gets whatever happens to be in
-    // memory, which on a GPU that completed the dispatch anyway is usually the
-    // right answer, right up until it is not.
-    //
-    // Named unconditionally rather than behind a flag on the dispatch. The
-    // stages are a *destination* mask, so listing one nothing reads costs an
-    // execution dependency the driver already had to satisfy for the host and
-    // compute cases -- and the alternative, a per-dispatch knob, would have to
-    // be threaded through every kernel this helper exists to keep uniform, to
-    // save nothing measurable.
+    // and (c) a renderer consuming the buffer as geometry -- (c) as far as this
+    // queue family permits; see the scope built above.
     VkMemoryBarrier barrier{};
     barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
     barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    barrier.dstAccessMask =
-        VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT |
-        VK_ACCESS_HOST_READ_BIT | VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT |
-        VK_ACCESS_INDEX_READ_BIT | VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
-                             VK_PIPELINE_STAGE_HOST_BIT |
-                             VK_PIPELINE_STAGE_VERTEX_INPUT_BIT |
-                             VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,
+    barrier.dstAccessMask = dst_access;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, dst_stages,
                          0, 1, &barrier, 0, nullptr, 0, nullptr);
   });
 }

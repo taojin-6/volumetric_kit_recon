@@ -58,6 +58,20 @@ inline bool queue_family_has_compute(VkPhysicalDevice physical,
          (families[family].queueFlags & VK_QUEUE_COMPUTE_BIT) != 0;
 }
 
+/// @brief The capabilities @p family advertises on @p physical.
+///
+/// Read once at device create/adopt and cached, because a pipeline barrier may
+/// only name stages the recording command buffer's queue family supports --
+/// `VK_PIPELINE_STAGE_VERTEX_INPUT_BIT` requires `VK_QUEUE_GRAPHICS_BIT`, which
+/// a compute-only family does not have.
+/// @return The family's `queueFlags`, or `0` when @p family is out of range.
+inline VkQueueFlags queue_family_flags(VkPhysicalDevice physical,
+                                       std::uint32_t family) {
+  const std::vector<VkQueueFamilyProperties> families =
+      queue_families(physical);
+  return family < families.size() ? families[family].queueFlags : 0;
+}
+
 /// @return The packed Vulkan API version @p physical reports. Compared with
 ///         `<` against a `VK_API_VERSION_*` constant, which is valid for the
 ///         standard (variant 0) packing.
