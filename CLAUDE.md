@@ -583,7 +583,9 @@ Each dated; newest context wins. Change the decision *and* this list together.
   `vmaDestroyBuffer` with no fence), so the next extract overwrites or frees
   memory an in-flight draw is reading; `DeviceMesh::generation` guards only the
   host `download()` path, and the fix is the ring of slots + timeline semaphore
-  DESIGN.md's seam B already specifies. (2) **sharing** —
+  DESIGN.md's seam B already specifies. (*Superseded by the 2026-08-03 output-
+  ring decision below*, which takes the ring and deliberately declines the
+  semaphore.) (2) **sharing** —
   `Allocator::create_buffer` hardcodes `VK_SHARING_MODE_EXCLUSIVE` and
   `BufferDesc` has no knob, while on Apple recon and gfx sit on *different queue
   families* (the bootstrap decision above), so a cross-family read needs
@@ -766,6 +768,60 @@ Each dated; newest context wins. Change the decision *and* this list together.
   the tier commits nothing to the exported ABI for a helper that exists to be
   host-testable, and the test reaches it by include path. Still open for seam B:
   blockers (1) lifetime and (4) indirect draw, unchanged.
+
+- **2026-08-03 — The mesh arena is a ring of slots released by the *host*, not
+  a timeline semaphore.** Seam-B blocker (1) lifetime. `MarchingCubesConfig`
+  grows `slot_count`: one (the default) is byte-identical to the old single
+  grow-only arena, and more gives each outstanding extract its own arena and
+  index run. The consumer calls `MarchingCubes::release_through(generation)` as
+  its frames retire, and an extract only ever writes, grows, or **frees** a slot
+  that has been released — which is what makes the tier's existing synchronous
+  `vmaDestroyBuffer` (no fence wait; its own work is fence-blocked inside
+  `submit_single_time`) safe again for an external reader.
+  **This takes the ring DESIGN.md's seam B specifies and deliberately declines
+  its timeline semaphore.** A cross-library GPU wait is the one thing the
+  shared-queue arrangement forbids: a command buffer waiting on a value the
+  sibling has not signalled deadlocks against a swapchain rebuild, which drains
+  the queue while holding the submit mutex. Reporting completion *after the
+  fact* cannot deadlock, needs no fence queue in the library, and costs a
+  `std::uint64_t` store. The price is that the contract is now the consumer's to
+  honour: extracting with every slot outstanding is **refused**, not silently
+  serviced by overwriting a live draw.
+  Three things this got wrong before review caught them, all in the same place —
+  *the refusal path must cost the caller nothing*. (1) The slot claim ran inside
+  `ensure_output_buffers`, i.e. **after** `++generation_`, so a refused extract —
+  the path whose entire purpose is to protect a slot the consumer is still
+  reading — advanced the generation and made `download()` retire the very mesh
+  it had just protected. Verified by probe before the fix (`download(gen2)` OK
+  before the refused extract, REFUSED after) and now pinned by a test that a
+  revert fails. The claim is its own `claim_output_slot()`, called once at the
+  top of each extract and before the bump; that also makes "once per extract,
+  not once per call" structural rather than conditional on a
+  generation-equality trick, which matters because a call that plans its
+  capacity low re-enters `ensure_output_buffers` to refit. (2) `release_through`
+  is **not atomic and not internally synchronized**, while the consumer it is
+  written for is on another thread — `fuse_viewer` fuses on a background thread
+  and retires frames on the render thread. Documented as a caller obligation
+  rather than made `std::atomic`, because an atomic is not movable and this
+  class's rule-of-zero defaulted moves are load-bearing; the consumer already
+  holds a mutex to hand the `DeviceMesh` across, and a `uint64_t` store under it
+  is free. (3) `download()` reads the *current* slot unqualified, which is
+  correct only because the generation check and the slot claim together make
+  "current generation" and "current slot" the same statement — the comment
+  there had been justifying the check with the single-arena argument, which a
+  ring **inverts** (a superseded view now names a *different* buffer). Widening
+  `download` to older generations therefore means indexing `slots_` by
+  generation, not relaxing a comparison.
+  Two further notes carried knowingly. The slots are a **fixed array, not a
+  `std::vector`**: this class promises a self-move leaves it intact and the
+  sparse test exercises `mc = std::move(mc)` directly, but `std::vector`'s
+  self-move-assignment is valid-but-unspecified and libc++ empties it, so the
+  extractor passed `valid()` and then indexed nothing (it segfaulted on the
+  first run). And the empty-mesh early return is the one path that advances the
+  generation **without** claiming a slot — safe because an empty mesh owns no
+  bytes and `download` returns before reading a buffer, but it means "every
+  generation lives in exactly one slot" is not total. Still open for seam B:
+  blocker (4), the indirect command on `DeviceMesh`.
 
 ## Provenance & salvage policy
 
