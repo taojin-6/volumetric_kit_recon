@@ -10,12 +10,22 @@
 #include <vector>
 
 #include "tinyply.h"  // declarations only; the implementation is tinyply_impl.cpp
+#include "volumetric_kit/recon/core/color_space.hpp"
 
 namespace vr_example {
 namespace {
 
-std::uint8_t to_u8(float channel) {
-  const float scaled = channel * 255.0f + 0.5f;
+// Encode a LINEAR vertex-color channel to an 8-bit canonical-encoded code.
+//
+// PLY is a presentation site. `mesh::Vertex::color` is linear working values
+// (the 2026-08-02 color-space decision -- what glTF calls COLOR_0), but a PLY's
+// `uchar` red/green/blue properties carry no color-space tag and every external
+// viewer (MeshLab, Blender, CloudCompare) reads them as sRGB. Writing the
+// linear value straight out would therefore render visibly dark, so the encode
+// happens here. glTF export does the opposite and passes COLOR_0 through
+// unchanged, which is why the two exporters cannot share one path.
+std::uint8_t to_u8(float linear_channel) {
+  const float scaled = vr::linear_to_srgb(linear_channel) * 255.0f + 0.5f;
   // `!(scaled > 0.0f)` maps NaN to 0 as well as <= 0 (every NaN comparison is
   // false), so a NaN channel never reaches the undefined float->uint8_t cast.
   if (!(scaled > 0.0f)) {

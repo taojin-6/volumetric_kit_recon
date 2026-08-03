@@ -216,6 +216,35 @@ target_link_libraries(recon_compute_smoke_test
 vr_target_warnings(recon_compute_smoke_test)
 add_test(NAME recon_compute_smoke COMMAND recon_compute_smoke_test)
 
+# Color-space vocabulary: the exact piecewise sRGB curve, the packed helpers the
+# fusion kernels mirror, and the primaries matrices. Pure host math over core,
+# so it always runs -- no device, no platform. That portability is the reason
+# the curve lives in `core` rather than in whichever tier decodes with it.
+add_executable(recon_core_color_space_test core_color_space_test.cpp)
+target_link_libraries(recon_core_color_space_test
+                      PRIVATE volumetric_kit::recon_core)
+vr_target_warnings(recon_core_color_space_test)
+add_test(NAME recon_core_color_space COMMAND recon_core_color_space_test)
+
+# ...and the device half of the same claim: run core/shaders/color_common.glsl
+# over all 256 codes on the real driver and compare against the host curve. Two
+# implementations of one transfer function is the silent drift the 2026-08-02
+# decision exists to prevent, so it is pinned rather than trusted. Skips (exit
+# 0) where no device is present.
+add_executable(recon_core_color_space_gpu_test core_color_space_gpu_test.cpp)
+vr_compile_shaders(recon_core_color_space_gpu_test SHADERS
+                   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/color_parity.comp")
+target_compile_definitions(
+  recon_core_color_space_gpu_test
+  PRIVATE
+    VR_COLOR_PARITY_SPV="${CMAKE_CURRENT_BINARY_DIR}/shaders/color_parity.comp.spv"
+)
+target_link_libraries(recon_core_color_space_gpu_test
+                      PRIVATE volumetric_kit::recon_core Vulkan::Vulkan)
+vr_target_warnings(recon_core_color_space_gpu_test)
+add_test(NAME recon_core_color_space_gpu
+         COMMAND recon_core_color_space_gpu_test)
+
 # Move-semantics tests for the compute core's RAII handle owners (Buffer's
 # std::function deleter + the UniqueHandle mechanism behind the rest). The
 # sanitizer CI job turns these into leak / double-free detectors. Skips (exit 0)

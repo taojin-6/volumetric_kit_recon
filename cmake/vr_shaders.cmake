@@ -40,6 +40,18 @@ function(vr_compile_shaders target)
   # only when found on PATH so a toolchain without it still builds.
   find_program(VR_SPIRV_VAL NAMES spirv-val)
 
+  # The shader include root, mirroring the C++ one: a tier's own helpers are
+  # #included by bare basename (same directory), while a *cross-tier* include is
+  # spelled with its full path from here -- e.g.
+  # "volumetric_kit/recon/core/shaders/color_common.glsl", which reads exactly
+  # like the C++ header path and so makes its provenance visible at the include
+  # site. Only `core` currently publishes such a shader (the color transfer
+  # curve, which the tsdf and mesh kernels both decode through); the strict
+  # left-to-right tier rule applies to these includes as it does to headers.
+  # glslc's -MD depfile lists the resolved includes, so editing an included
+  # .glsl still triggers a recompile of every dependent shader.
+  set(_shader_include_root "${PROJECT_SOURCE_DIR}/src")
+
   set(_spv_outputs)
   set(_seen_names)
   foreach(_src IN LISTS ARG_SHADERS)
@@ -76,6 +88,7 @@ function(vr_compile_shaders target)
       set(_cmd
           "${_compiler}"
           --target-env=vulkan1.2
+          "-I${_shader_include_root}"
           -MD
           -MF
           "${_dep}"
@@ -88,6 +101,7 @@ function(vr_compile_shaders target)
           -V
           --target-env
           vulkan1.2
+          "-I${_shader_include_root}"
           --depfile
           "${_dep}"
           -o

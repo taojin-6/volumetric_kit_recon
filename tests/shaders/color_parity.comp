@@ -1,0 +1,36 @@
+#version 450
+
+// Runs core/shaders/color_common.glsl over all 256 encoded codes so the host
+// test can compare the device curve against the host one. Two implementations
+// of one transfer function is exactly the drift core/color_space.hpp exists to
+// prevent, so it is pinned rather than trusted.
+//
+// Invocation i handles code i: out_linear[i] is the decoded linear value (all
+// three channels are fed the same code, so one float suffices), and
+// out_roundtrip[i] is vrPackLinearToSrgb(vrUnpackSrgbToLinear(code)) -- the
+// round trip the tsdf integrator's 8-bit attribute depends on.
+
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_GOOGLE_include_directive : require
+
+#include "volumetric_kit/recon/core/shaders/color_common.glsl"
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0, scalar) writeonly buffer OutLinear {
+  float out_linear[];
+};
+layout(set = 0, binding = 1, scalar) writeonly buffer OutRoundtrip {
+  uint out_roundtrip[];
+};
+
+void main() {
+  uint code = gl_GlobalInvocationID.x;
+  if (code >= 256u) {
+    return;
+  }
+  uint packed = code | (code << 8) | (code << 16) | 0xFF000000u;
+  vec3 linear = vrUnpackSrgbToLinear(packed);
+  out_linear[code] = linear.r;
+  out_roundtrip[code] = vrPackLinearToSrgb(linear);
+}

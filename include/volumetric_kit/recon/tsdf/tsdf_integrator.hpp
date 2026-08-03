@@ -12,6 +12,7 @@
 
 #include "volumetric_kit/recon/core/buffer.hpp"
 #include "volumetric_kit/recon/core/camera_params.hpp"
+#include "volumetric_kit/recon/core/color_space.hpp"
 #include "volumetric_kit/recon/core/compute_kernel.hpp"
 #include "volumetric_kit/recon/core/descriptor.hpp"
 #include "volumetric_kit/recon/core/result.hpp"
@@ -46,6 +47,20 @@ struct ColorFrame {
   /// + dimensions. May differ from the depth camera (unregistered RGB-D); pass
   /// the depth camera's matching intrinsics + pose for registered capture.
   ColorCameraParams cam{};
+
+  /// What @ref pixels are encoded as. Defaults to the canonical form -- the
+  /// working space (linear BT.709/D65) through the exact piecewise sRGB
+  /// transfer -- which is what the fusion kernel decodes with, so a caller
+  /// already producing canonical bytes says nothing.
+  ///
+  /// It rides here rather than inside @ref cam because that struct is uploaded
+  /// verbatim to the kernel under scalar block layout, pinned at 88 bytes with
+  /// GLSL mirrors in two tiers; the encoding is host-side policy the kernel
+  /// never reads. @ref TsdfIntegrator::integrate **rejects** a non-canonical
+  /// declaration rather than fusing it: converting is the sensor boundary's
+  /// job, once, via `sensor::to_canonical` -- which is what "convert once at
+  /// the sensor boundary" means operationally.
+  ColorEncoding encoding{};
 };
 
 /// @brief Fuses posed depth frames into a @ref VoxelBlockGrid's `tsdf` +

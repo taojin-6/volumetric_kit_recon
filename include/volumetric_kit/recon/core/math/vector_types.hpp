@@ -43,6 +43,10 @@ using Vec3i = glm::ivec3;
 using Vec3u8 = glm::u8vec3;
 /// @brief 4-component float vector (packed 16 B; homogeneous points, ...).
 using Vec4f = glm::vec4;
+/// @brief 3x3 column-major matrix (36 B; element (row, col) is `m[col][row]`).
+///        Linear-only transforms -- the color primaries conversion of
+///        `core/color_space.hpp`, which needs no translation column.
+using Mat3f = glm::mat3;
 /// @brief 4x4 column-major matrix (64 B; element (row, col) is `m[col][row]`).
 using Mat4f = glm::mat4;
 

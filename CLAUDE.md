@@ -69,8 +69,11 @@ branching off **`core`** (later: `compress`, `track`, `codec`, `stream`).
   posed camera's image coordinates where it has line of sight (per-vertex-color
   fallback elsewhere), a compute pass.
 - **`sensor`** — the capture *contract*: `ICameraCapture`, the `CapturedFrame`
-  view the fusion tiers consume, and the camera-convention conversions. Reads
-  `DepthCameraParams` + `ColorCameraParams` from `core/camera_params.hpp`, so it
+  view the fusion tiers consume, and the boundary conversions a capture
+  integration gets silently wrong — camera conventions (pose handedness,
+  registered-depth intrinsics) and colour (`to_canonical`). Reads
+  `DepthCameraParams` + `ColorCameraParams` from `core/camera_params.hpp` and
+  `ColorEncoding` from `core/color_space.hpp`, so it
   depends on **`core` alone** — it sits beside the fusion tiers, not on top of
   them — and bundles **no drivers**: one ships here only if this repo can build
   *and* test it (the 2026-08-02 decision).
@@ -599,6 +602,98 @@ Each dated; newest context wins. Change the decision *and* this list together.
   never enables `bufferDeviceAddress`, so VMA asserts in debug and silently
   drops the allocate flag in NDEBUG) — validated where the caller supplies it,
   not inside the first extract's arena grow.
+
+- **2026-08-02 — One color-space rule, and a *named* working space: 8-bit color
+  is encoded, float color is linear, converted once at the sensor boundary and
+  encoded once at presentation.** Color arrives from a sensor encoded for a
+  display and is then **averaged** four times — the TSDF running mean
+  (`tsdf_integrate.comp`), the marching-cubes edge lerp
+  (`marching_cubes_common.glsl`), texture filtering, and gfx's shading multiply
+  — before a `_SRGB` swapchain encodes it a second time. Averaging is linear and
+  a display encoding deliberately is not, so each is wrong by construction, and
+  wrong *quietly*: linear `0.0` and `1.0` fuse to `0.214` rather than `0.5` (a
+  plausibly darker surface, not a visible error), a few percent between similar
+  samples, worst across high-contrast pairs — so it concentrates on silhouettes
+  and depth discontinuities, exactly where a reconstruction gets inspected.
+  Surfaced by the iOS scanner, where only the double-encode is visible.
+  The rule decides the integrator, marching cubes, the atlas format, the vertex
+  color and the render targets with no judgment left over, and it is not
+  arbitrary: eight bits suffice for color *because* a display curve spends them
+  perceptually, so 8-bit storage stays encoded (naively linearizing trades a
+  blending error for banding in the darks); a float has the range to be linear,
+  so it is. It says *color* deliberately — a future 8-bit confidence or
+  occupancy channel is a number and carries no curve.
+  **"Linear" alone does not name a space, so one is named**: the working space
+  is **linear BT.709/D65** (the linear half of sRGB), its canonical encoded form
+  is that space through the *exact piecewise* sRGB transfer, full range, and
+  every 8-bit color below the sensor boundary is in that one form. Without this
+  the rule is under-determined — a driver can declare four transfers and three
+  primaries, so "encoded" would name twelve different things — and, worse,
+  `Primaries` would be a label nothing consumes: two sensors with different
+  primaries produce linear values in *different RGB bases*, and averaging those
+  is wrong the same way. The boundary conversion is therefore two steps, decode
+  the transfer then 3×3 into the working basis, both identity for a BT.709
+  source (so the ARKit path is a genuine no-op). Cost booked: BT.709 is the
+  narrowest declarable gamut, so a P3/BT.2020 source clips — widening the
+  working space means widening the storage with it, both named constants rather
+  than assumptions spread through the kernels. Presentation is the symmetric
+  half: the surface declares its space (`VkFormat` + `VkColorSpaceKHR`) exactly
+  as a driver does, so a P3/HDR display is reached by that declaration changing
+  and the presentation step gaining the primaries half — nothing else moves.
+  **Placement follows the 2026-08-02 camera-params precedent, not the sensor
+  tier.** `ColorEncoding` and the curve live in `core` (`core/color_space.hpp` +
+  a `core/shaders/color_common.glsl` mirror), because `sensor` branches off
+  `core` *beside* the fusion tiers — so `tsdf` and `mesh`, which do the decoding
+  in GLSL, cannot include from it — and because a curve four tiers need is
+  vocabulary. `sensor/color_conventions.hpp` keeps what is genuinely the
+  boundary's — `to_canonical`, which walks a frame. *Implementing this moved
+  the line*: the `ColorEncoding` type **and** `is_canonical` went to `core` too,
+  because `TsdfIntegrator::integrate` **refuses** a non-canonical colour frame
+  rather than fusing it through the wrong curve, and `tsdf` cannot include from
+  `sensor` — a property of the type belongs with the type. That refusal is what
+  makes "convert once at the sensor boundary" a contract rather than a hope.
+  The cross-tier GLSL include (the repo's first) is spelled like the C++ header
+  path so its provenance is visible at the include site; `vr_compile_shaders`
+  passes `src/` as the shader include root.
+  The declaration rides **beside** the camera
+  (a field on `sensor::CapturedFrame` / `tsdf::ColorFrame`), never *inside*
+  `ColorCameraParams`: that struct is uploaded verbatim under scalar block
+  layout, pinned at 88 bytes with GLSL mirrors in `tsdf/` and `texture/`, so a
+  field there would spend a cross-tier shader ABI change to carry what the
+  kernel needs at most as a push constant. No `Range` field — the contract
+  requires full-range packed R'G'B', so the YCbCr matrix and range expansion are
+  the driver's, applied before the contract; `Primaries` earns its place because
+  the working space gives it a consumer, and a field nothing consumes is a label
+  free to drift. ARKit declares `{Bt709, Bt709}` (its YCbCr→R'G'B' uses a BT.601
+  *matrix*, independent of the transfer function — conflating the two is its own
+  silent error), and `Transfer::Bt709` 8-bit content is **accepted as sRGB
+  rather than converted**: they differ by a couple of codes in the toe, which is
+  what display pipelines assume anyway (BT.1886), and converting would cost a
+  per-frame pass over 1920×1440 to buy nothing.
+  Two consequences worth stating. (1) **Presentation is three sites, not one** —
+  the swapchain (already `_SRGB`), `fuse_render`'s offscreen target (`_UNORM`
+  today; it renders straight to PNG, so linear values would simply come out
+  dark, and it is the CI-visible leg), and host export, where PLY `uchar` colors
+  are read as sRGB by every external viewer and must be encoded on write while
+  glTF `COLOR_0` is linear and passes through — the exporters cannot share one
+  path. (2) **`volumetric_kit_gfx` needs no change at all**: every format is
+  caller-set, the swapchain already prefers `_SRGB`, and `hybrid_mesh.frag`'s
+  `albedo *= ambient + diffuse` was never the bug, only its operands. Both the
+  host curve and its GLSL mirror must be the *exact piecewise* sRGB function,
+  not `pow(x, 2.2)` — hardware `_SRGB` sampling uses the exact curve and that
+  shader selects atlas-vs-vertex-color per triangle across one surface, so an
+  approximation shows as a seam exactly where texturing stops. Storage stays
+  `uint32` (convert in the shader) and is measured; the escalation trigger is
+  **not** banding but the running mean *latching* — re-quantized to 8 bits it
+  stops moving once the per-frame delta falls under half a code. **Measured**
+  (`tests/core_color_space_test.cpp`) at the default `max_weight = 5` and a 2 m
+  observation: the mean stops **~10 codes short, uniformly across the range**
+  (0→64 settles at 55, 0→255 at 245), and a gap narrower than ~10 codes never
+  moves the voxel at all — the residual is range-independent because the sRGB
+  curve turns a fixed fraction of the linear gap into a roughly fixed number of
+  codes. So fused colour accuracy is ceilinged at ~4%, a *convergence* limit
+  rather than a precision one, which is precisely why banding was the wrong
+  thing to watch. Authoritative detail: DESIGN.md → "Color space".
 
 ## Provenance & salvage policy
 
@@ -1147,7 +1242,18 @@ finite and positive — the unprojection divides by it, so a zero or NaN focal
 yields inf/NaN rays that fusion reads as garbage block coordinates rather than
 reporting. Host-only, so these run everywhere — the point of the
 2026-08-02 decision that keeps the math here while ARKit's driver lives in
-`volumetric_kit_ios`. Alongside them, a `FakeCapture` implements
+`volumetric_kit_ios`. Its colour counterpart is
+`sensor/color_conventions.hpp` — `to_canonical`, the one boundary conversion,
+which decodes the declared `ColorEncoding::Transfer` to linear and *then* rotates
+the declared `Primaries` into the working basis (skipping the second step is the
+quiet failure: "linear" alone does not name a space), refuses `Bt2020Pq` rather
+than approximating an HDR curve into 8-bit SDR, and on the canonical path — what
+ARKit's `{Bt709, Bt709}` takes — carries the colour bytes across verbatim while
+still forcing alpha `0xFF`, so the "alpha is always written" guarantee holds on
+every path rather than only where the curve runs. The *type* and `is_canonical`
+live in `core` instead (the 2026-08-02 colour decision), because `tsdf` must test
+them to refuse a frame and cannot include from `sensor`. Alongside all of it, a
+`FakeCapture` implements
 `ICameraCapture` end to end (start/poll/stop, frame handed over once, a device
 failure distinguished from an empty poll) so the tier's actual deliverable —
 the interface — is compiled and exercised in the repo that publishes it.
