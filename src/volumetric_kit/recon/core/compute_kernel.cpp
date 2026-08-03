@@ -102,17 +102,36 @@ Status dispatch(Device& device, const ComputeKernel& kernel, const void* push,
     }
     vkCmdDispatch(cmd, groups, 1, 1);
     // Make this kernel's SSBO writes available and visible to (a) the next
-    // dispatch's shader reads/writes and (b) a host read of the mapped results.
+    // dispatch's shader reads/writes, (b) a host read of the mapped results,
+    // and (c) a renderer consuming the buffer as geometry.
+    //
+    // (c) is what interop seam B needs and what this used to omit. A mesh the
+    // renderer draws directly is read at VERTEX_INPUT as vertex attributes,
+    // indices and an indirect command -- none of which COMPUTE|HOST covers, so
+    // the writes were never made visible to the stage that reads them. That
+    // omission does not fail loudly: the draw gets whatever happens to be in
+    // memory, which on a GPU that completed the dispatch anyway is usually the
+    // right answer, right up until it is not.
+    //
+    // Named unconditionally rather than behind a flag on the dispatch. The
+    // stages are a *destination* mask, so listing one nothing reads costs an
+    // execution dependency the driver already had to satisfy for the host and
+    // compute cases -- and the alternative, a per-dispatch knob, would have to
+    // be threaded through every kernel this helper exists to keep uniform, to
+    // save nothing measurable.
     VkMemoryBarrier barrier{};
     barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
     barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT |
-                            VK_ACCESS_SHADER_WRITE_BIT |
-                            VK_ACCESS_HOST_READ_BIT;
-    vkCmdPipelineBarrier(
-        cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_HOST_BIT, 0, 1,
-        &barrier, 0, nullptr, 0, nullptr);
+    barrier.dstAccessMask =
+        VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT |
+        VK_ACCESS_HOST_READ_BIT | VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT |
+        VK_ACCESS_INDEX_READ_BIT | VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                             VK_PIPELINE_STAGE_HOST_BIT |
+                             VK_PIPELINE_STAGE_VERTEX_INPUT_BIT |
+                             VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,
+                         0, 1, &barrier, 0, nullptr, 0, nullptr);
   });
 }
 

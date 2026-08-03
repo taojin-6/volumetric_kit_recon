@@ -77,7 +77,60 @@ struct BufferDesc {
   bool mapped = false;
   /// Host access pattern; consulted only when @ref mapped is set.
   HostAccess host_access = HostAccess::Random;
+
+  /// @brief The queue families that will access this buffer.
+  ///
+  /// Left null (the default), the buffer is `VK_SHARING_MODE_EXCLUSIVE` and is
+  /// owned by whichever family first uses it -- correct for everything this
+  /// library allocates for itself.
+  ///
+  /// It is *not* correct for a buffer a renderer will read directly (interop
+  /// seam B). On Apple the reconstruction compute and the renderer are handed
+  /// queues from **different families**, and reading an EXCLUSIVE buffer from a
+  /// family that does not own it is undefined -- the contents are not
+  /// guaranteed to be there, with no error and often no visible symptom on the
+  /// device that happened to work.
+  ///
+  /// Enumerate the families that will touch it and this picks the mode: two or
+  /// more distinct indices give `VK_SHARING_MODE_CONCURRENT`, one gives
+  /// EXCLUSIVE, because a single family *is* exclusive and Vulkan rejects
+  /// CONCURRENT with fewer than two. Duplicates are ignored for that count, so
+  /// a caller can pass its compute and render families unconditionally and get
+  /// EXCLUSIVE for free wherever the two turn out to be the same family --
+  /// which is the common case off Apple, and where CONCURRENT would otherwise
+  /// cost access performance for nothing.
+  ///
+  /// The array need only outlive the @ref Allocator::create_buffer call.
+  const std::uint32_t* queue_families = nullptr;
+  /// Number of entries in @ref queue_families; must be zero when it is null.
+  std::uint32_t queue_family_count = 0;
 };
+
+namespace detail {
+
+/// @brief Reduce @p families to its distinct entries, in first-seen order.
+///
+/// The rule @ref BufferDesc::queue_families describes, on its own so it can be
+/// pinned by a host test. Its failure mode is the reason: getting it wrong
+/// produces a buffer Vulkan rejects only when a validation layer happens to be
+/// installed, and a *silently wrong sharing mode* when one is not -- which is
+/// the same "correct on the machine that ran it" hazard the camera and colour
+/// conventions are kept as pure arithmetic to avoid.
+///
+/// @param families      Entries to reduce; may be null only when @p count is 0.
+/// @param count         Number of entries in @p families.
+/// @param out           Receives the distinct entries; may be null only when
+///                      @p out_capacity is 0.
+/// @param out_capacity  How many entries @p out holds.
+/// @return The distinct count, or `out_capacity + 1` when more distinct
+///         families were found than @p out can hold -- a value the caller can
+///         only treat as an error, since the reduction is then incomplete.
+VR_CORE_API std::uint32_t distinct_queue_families(const std::uint32_t* families,
+                                                  std::uint32_t count,
+                                                  std::uint32_t* out,
+                                                  std::uint32_t out_capacity);
+
+}  // namespace detail
 
 /// @brief Owns a `VmaAllocator` built over a `VkDevice`, and creates
 ///        VMA-backed @ref Buffer resources on it.

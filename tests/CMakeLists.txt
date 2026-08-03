@@ -29,6 +29,12 @@ target_link_libraries(recon_core_memory_stats_test
 vr_target_warnings(recon_core_memory_stats_test)
 add_test(NAME recon_core_memory_stats COMMAND recon_core_memory_stats_test)
 
+add_executable(recon_core_buffer_sharing_test core_buffer_sharing_test.cpp)
+target_link_libraries(recon_core_buffer_sharing_test
+                      PRIVATE volumetric_kit::recon_core)
+vr_target_warnings(recon_core_buffer_sharing_test)
+add_test(NAME recon_core_buffer_sharing COMMAND recon_core_buffer_sharing_test)
+
 # volume tier: the sparse voxel-hash POD layouts. The static_assert size/offset
 # guards in hash_types.hpp are the real test (a build failure there is the
 # check); this binary adds runtime sanity and proves the header compiles and

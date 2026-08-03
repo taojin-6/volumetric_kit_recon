@@ -31,6 +31,15 @@ struct Allocator::Impl {
 
 namespace {
 
+/// Ceiling on the distinct queue families one buffer can be shared between.
+///
+/// Two is the case that exists -- one reconstruction family, one renderer
+/// family -- and the headroom is for a third consumer rather than for a device
+/// with an unusual queue layout, since what is named here is *consumers*, not
+/// what the driver exposes. A fixed array keeps `create_buffer` allocation-free
+/// on a path that runs per resource.
+constexpr std::uint32_t kMaxQueueFamilies = 4;
+
 VmaMemoryUsage to_vma_usage(MemoryUsage memory) {
   switch (memory) {
     case MemoryUsage::DeviceLocal:
@@ -44,6 +53,30 @@ VmaMemoryUsage to_vma_usage(MemoryUsage memory) {
 }
 
 }  // namespace
+
+namespace detail {
+
+std::uint32_t distinct_queue_families(const std::uint32_t* families,
+                                      std::uint32_t count, std::uint32_t* out,
+                                      std::uint32_t out_capacity) {
+  std::uint32_t distinct = 0;
+  for (std::uint32_t i = 0; i < count; ++i) {
+    bool seen = false;
+    for (std::uint32_t j = 0; j < distinct; ++j) {
+      seen = seen || out[j] == families[i];
+    }
+    if (seen) {
+      continue;
+    }
+    if (distinct == out_capacity) {
+      return out_capacity + 1;
+    }
+    out[distinct++] = families[i];
+  }
+  return distinct;
+}
+
+}  // namespace detail
 
 Result<Allocator> Allocator::create(VkInstance instance, const Device& device) {
   if (instance == VK_NULL_HANDLE) {
@@ -115,11 +148,38 @@ Result<Buffer> Allocator::create_buffer(const BufferDesc& desc) {
         "is no separate map()); request mapped=true");
   }
 
+  if (desc.queue_families == nullptr && desc.queue_family_count != 0) {
+    return Status::invalid_argument(
+        "Allocator::create_buffer: queue_family_count is non-zero but "
+        "queue_families is null");
+  }
+
+  // Distinct families decide the mode, not the count the caller passed: Vulkan
+  // requires CONCURRENT to name at least two, and requires them unique, so a
+  // caller passing its compute and render families unconditionally would
+  // otherwise be malformed on every platform where those are one family.
+  std::uint32_t distinct[kMaxQueueFamilies]{};
+  const std::uint32_t distinct_count = detail::distinct_queue_families(
+      desc.queue_families, desc.queue_family_count, distinct,
+      kMaxQueueFamilies);
+  if (distinct_count > kMaxQueueFamilies) {
+    return Status::invalid_argument(
+        "Allocator::create_buffer: more distinct queue families than this "
+        "supports");
+  }
+
   VkBufferCreateInfo buffer_info{};
   buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
   buffer_info.size = desc.size;
   buffer_info.usage = desc.usage;
-  buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  // One family is exclusive by definition, and zero is the default path.
+  if (distinct_count > 1) {
+    buffer_info.sharingMode = VK_SHARING_MODE_CONCURRENT;
+    buffer_info.queueFamilyIndexCount = distinct_count;
+    buffer_info.pQueueFamilyIndices = distinct;
+  } else {
+    buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  }
 
   VmaAllocationCreateInfo alloc_info{};
   alloc_info.usage = to_vma_usage(desc.memory);
