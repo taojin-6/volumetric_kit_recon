@@ -483,6 +483,13 @@ int main(int argc, char** argv) {
         target.prepare(cmd);
         const vg::RenderTarget rt = target.target();
         vg::RenderTargetBeginInfo begin_info;
+        // A float colour, so under the one colour rule it is LINEAR, and the
+        // _SRGB target encodes it on clear -- these land at codes ~63/63/75 in
+        // the PNG rather than the ~13/13/18 the same literals gave against the
+        // old _UNORM target. Kept as written rather than re-darkened: it is the
+        // background fuse_viewer has always drawn (its swapchain was already
+        // _SRGB with these very values), so the two examples now agree instead
+        // of differing by an encode.
         begin_info.clear_color.float32[0] = 0.05f;
         begin_info.clear_color.float32[1] = 0.05f;
         begin_info.clear_color.float32[2] = 0.07f;
