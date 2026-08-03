@@ -148,6 +148,96 @@ Variable marching-cubes topology is drawn indirectly: the compute pass writes a
 `VkDrawIndexedIndirectCommand`, so the vertex/index counts never travel back to
 the host.
 
+## Color space
+
+Color arrives from a sensor encoded for a display and is then **averaged** — by
+the TSDF's running mean, by marching cubes interpolating along a cell edge, by
+texture filtering, by the shading multiply. Averaging is a linear operation, and
+a display encoding is deliberately not linear, so performing one on the other is
+wrong by construction. It is wrong quietly: two observations of linear `0.0` and
+`1.0` fuse to `0.214` rather than `0.5`, which reads as a plausibly darker
+surface rather than as an error. The mistake is small between similar samples
+and largest across high-contrast pairs — silhouettes, shadow boundaries, and
+depth discontinuities, which is where a reconstruction is actually inspected.
+
+This is the same class of defect as a flipped camera axis, and it gets the same
+treatment the geometry conventions already get in
+`sensor/camera_conventions.hpp`: the conversions live in platform-neutral C++ in
+the `sensor` tier rather than in whichever driver produced the numbers, because
+they are pure arithmetic that host tests can pin on any platform, and because a
+per-driver copy is a per-driver opportunity to be silently wrong.
+
+**One rule decides every case:**
+
+> **8-bit is encoded. Float is linear. Convert once at the sensor boundary,
+> encode once at presentation.**
+
+Nothing between those two points needs to ask what space it is holding. The rule
+falls out of what each representation is *for*: eight bits are only sufficient
+for color because a display curve spends them perceptually, so 8-bit storage
+must stay encoded — naively linearizing it trades a blending error for banding
+in the darks, which is not a trade. A float has the range to be linear, so it
+is.
+
+Concretely:
+
+| Representation | Space | Why |
+| --- | --- | --- |
+| Sensor `ColorFrame::pixels` (8-bit) | encoded | as delivered; the driver declares which curve |
+| Voxel `color` attribute (`uint32`) | encoded | 8 bits are only enough when spent perceptually |
+| `mesh::Vertex::color` (`Vec4f`) | **linear** | float working value; also what glTF `COLOR_0` specifies |
+| Atlas image (8-bit texture) | encoded, `_SRGB` format | the sampler decodes and filters in linear, for free |
+| Swapchain (`_SRGB` format) | encoded by hardware | the single encode, at the end |
+
+So the integrator decodes both operands, blends in linear, and re-encodes to its
+8-bit attribute; marching cubes decodes the corner colors and writes the
+interpolated result as linear float, which is the boundary where the
+representation changes and therefore where the conversion belongs. The renderer
+then converts nothing at all: its vertex colors are already linear, its atlas is
+decoded by the sampler, and the swapchain applies the one encode.
+
+### Declaring an encoding, not converting it
+
+A driver states what it produces; it never converts. The conversion has one
+implementation, in `sensor/color_conventions.hpp` beside the camera ones:
+
+```cpp
+struct ColorEncoding {
+  enum class Transfer  { Linear, Srgb, Bt709, Bt2020Pq };
+  enum class Primaries { Bt709, DciP3, Bt2020 };
+  enum class Range     { Full, Video };
+};
+```
+
+carried on `ColorCameraParams` alongside the intrinsics that are already there.
+ARKit declares `{Bt709, Bt709, Full}` — its `capturedImage` is bi-planar YCbCr
+that a BT.601 *matrix* converts to **gamma-encoded** R'G'B'; the matrix and the
+transfer function are independent, and conflating them is its own silent error.
+A depth camera emitting linear 16-bit color declares `Transfer::Linear` and is
+converted by nothing.
+
+Adding a sensor is then a declaration rather than a conversion, which is the
+property that makes this scale: the failure mode of a new integration becomes a
+wrong *label* — inspectable, and testable against a known patch — instead of a
+bespoke curve buried in a platform driver.
+
+### The storage question, left open deliberately
+
+Blending in linear while storing 8-bit encoded means a decode/encode pair per
+colored voxel per frame, and a re-quantization each time the running mean is
+written back. The requantization lands in the perceptually-uniform space, which
+is the right place for it, but it is still repeated. Two positions:
+
+- **Keep `uint32`, convert in the shader.** The attribute stays four bytes and
+  the change is a drop-in. Cost is arithmetic against a ~1.3 ms integrate — small
+  in expectation, and to be *measured* rather than assumed.
+- **Widen to `RGBA16`.** Exact, no repeated requantization, twice the color
+  memory in the sparse grid.
+
+Take the first, measure, and escalate only if banding appears in the darks. The
+rule above is unaffected either way: it constrains *what space* a value is in,
+not how many bits hold it.
+
 ## Packaging
 
 The repo installs and exports like its sibling: per-tier targets under a shared
