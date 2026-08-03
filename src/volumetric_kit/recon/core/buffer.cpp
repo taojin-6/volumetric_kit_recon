@@ -7,10 +7,11 @@
 
 namespace volumetric_kit::recon {
 
-Buffer::Buffer(VkBuffer handle, VkDeviceSize size, void* mapped,
-               std::function<void()> deleter) noexcept
+Buffer::Buffer(VkBuffer handle, VkDeviceSize size, VkBufferUsageFlags usage,
+               void* mapped, std::function<void()> deleter) noexcept
     : buffer_(handle),
       size_(size),
+      usage_(usage),
       mapped_(mapped),
       deleter_(std::move(deleter)) {}
 
@@ -19,10 +20,12 @@ Buffer::~Buffer() { destroy(); }
 Buffer::Buffer(Buffer&& other) noexcept
     : buffer_(other.buffer_),
       size_(other.size_),
+      usage_(other.usage_),
       mapped_(other.mapped_),
       deleter_(std::move(other.deleter_)) {
   other.buffer_ = VK_NULL_HANDLE;
   other.size_ = 0;
+  other.usage_ = 0;
   other.mapped_ = nullptr;
   other.deleter_ = nullptr;
 }
@@ -32,10 +35,12 @@ Buffer& Buffer::operator=(Buffer&& other) noexcept {
     destroy();
     buffer_ = other.buffer_;
     size_ = other.size_;
+    usage_ = other.usage_;
     mapped_ = other.mapped_;
     deleter_ = std::move(other.deleter_);
     other.buffer_ = VK_NULL_HANDLE;
     other.size_ = 0;
+    other.usage_ = 0;
     other.mapped_ = nullptr;
     other.deleter_ = nullptr;
   }
@@ -49,6 +54,7 @@ void Buffer::destroy() noexcept {
   }
   buffer_ = VK_NULL_HANDLE;
   size_ = 0;
+  usage_ = 0;
   mapped_ = nullptr;
   deleter_ = nullptr;
 }

@@ -153,6 +153,19 @@ vr_target_warnings(recon_mesh_marching_cubes_sparse_test)
 add_test(NAME recon_mesh_marching_cubes_sparse
          COMMAND recon_mesh_marching_cubes_sparse_test)
 
+# mesh MarchingCubesConfig: prove a consumer's extra buffer usage reaches the
+# vertex arena and index run -- on the first allocation AND across a grow -- and
+# that an unsupported bit is rejected at create(). recon itself never sets one,
+# so this is the only place the non-zero path runs. Skips (exit 0) with no
+# device.
+add_executable(recon_mesh_marching_cubes_config_test
+               marching_cubes_config_test.cpp)
+target_link_libraries(recon_mesh_marching_cubes_config_test
+                      PRIVATE volumetric_kit::recon_mesh Vulkan::Vulkan)
+vr_target_warnings(recon_mesh_marching_cubes_config_test)
+add_test(NAME recon_mesh_marching_cubes_config
+         COMMAND recon_mesh_marching_cubes_config_test)
+
 # texture projective: texture a mesh of three triangles (one the camera sees
 # head-on, one occluded by a closer depth reading, one behind the camera) and
 # verify the visible triangle gets the exact projected atlas UVs while the

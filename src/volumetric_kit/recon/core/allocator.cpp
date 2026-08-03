@@ -152,7 +152,7 @@ Result<Buffer> Allocator::create_buffer(const BufferDesc& desc) {
   // Capture the opaque VMA handles in the type-erased deleter so Buffer frees
   // both without VMA appearing in buffer.hpp.
   VmaAllocator allocator = impl_->allocator;
-  return Buffer(buffer, desc.size, out_info.pMappedData,
+  return Buffer(buffer, desc.size, desc.usage, out_info.pMappedData,
                 [allocator, buffer, allocation]() {
                   vmaDestroyBuffer(allocator, buffer, allocation);
                 });

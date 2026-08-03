@@ -38,10 +38,11 @@ class VR_CORE_API Buffer {
   /// opaque VMA handles and calls `vmaDestroyBuffer`.
   /// @param handle   The `VkBuffer`.
   /// @param size     Its size in bytes.
+  /// @param usage    The `VkBufferUsageFlags` it was created with.
   /// @param mapped   Persistent host pointer, or `nullptr` if unmapped.
   /// @param deleter  Frees the buffer and its allocation exactly once.
-  Buffer(VkBuffer handle, VkDeviceSize size, void* mapped,
-         std::function<void()> deleter) noexcept;
+  Buffer(VkBuffer handle, VkDeviceSize size, VkBufferUsageFlags usage,
+         void* mapped, std::function<void()> deleter) noexcept;
 
   ~Buffer();
   Buffer(Buffer&& other) noexcept;
@@ -53,6 +54,14 @@ class VR_CORE_API Buffer {
   VkBuffer handle() const noexcept { return buffer_; }
   /// @return The size in bytes (`0` when empty).
   VkDeviceSize size() const noexcept { return size_; }
+  /// @brief The usage flags this buffer was created with (`0` when empty).
+  ///
+  /// Recorded at creation because Vulkan offers no way to ask a `VkBuffer`
+  /// what it was created with -- the same reason `AdoptedDevice` carries its
+  /// enabled extension list. A consumer handed a borrowed buffer can therefore
+  /// *verify* it permits the binding it is about to make, instead of trusting
+  /// that whoever created it was passed the right flags.
+  VkBufferUsageFlags usage() const noexcept { return usage_; }
   /// @return The persistent host pointer, or `nullptr` when not host-mapped.
   void* mapped() const noexcept { return mapped_; }
   /// @return `true` if this owns a buffer.
@@ -63,6 +72,7 @@ class VR_CORE_API Buffer {
 
   VkBuffer buffer_ = VK_NULL_HANDLE;
   VkDeviceSize size_ = 0;
+  VkBufferUsageFlags usage_ = 0;
   void* mapped_ = nullptr;
   std::function<void()> deleter_;
 };

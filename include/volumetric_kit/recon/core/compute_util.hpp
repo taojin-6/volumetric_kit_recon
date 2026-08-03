@@ -42,17 +42,22 @@ inline std::uint32_t group_count(std::uint32_t items,
 }
 
 /// @brief Create a host-visible, host-mapped storage buffer of @p bytes.
-/// @param allocator  The allocator to create on.
-/// @param bytes      Size in bytes (must be non-zero).
-/// @param access     Host access pattern (@ref HostAccess::Random when the host
-///                   both writes and reads back; @ref
-///                   HostAccess::SequentialWrite for write-once inputs).
+/// @param allocator    The allocator to create on.
+/// @param bytes        Size in bytes (must be non-zero).
+/// @param access       Host access pattern (@ref HostAccess::Random when the
+///                     host both writes and reads back; @ref
+///                     HostAccess::SequentialWrite for write-once inputs).
+/// @param extra_usage  Usage bits added beyond `STORAGE_BUFFER`, for a
+///                     *consumer* that binds the same allocation some other way
+///                     (a renderer taking it as a vertex buffer). A compute
+///                     tier's own kernels need only the default.
 /// @return The buffer, or a non-OK @ref Status if creation fails.
 inline Result<Buffer> storage_buffer(Allocator& allocator, VkDeviceSize bytes,
-                                     HostAccess access = HostAccess::Random) {
+                                     HostAccess access = HostAccess::Random,
+                                     VkBufferUsageFlags extra_usage = 0) {
   BufferDesc desc;
   desc.size = bytes;
-  desc.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+  desc.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | extra_usage;
   desc.memory = MemoryUsage::HostVisible;
   desc.mapped = true;
   desc.host_access = access;
