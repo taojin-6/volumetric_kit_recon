@@ -789,7 +789,12 @@ Each dated; newest context wins. Change the decision *and* this list together.
   honour: extracting with every slot outstanding is **refused**, not silently
   serviced by overwriting a live draw.
   Three things this got wrong before review caught them, all in the same place —
-  *the refusal path must cost the caller nothing*. (1) The slot claim ran inside
+  *the refusal path must cost the caller nothing*. (Not a closed set: six more
+  of the same family surfaced once a ring actually ran on device, including a
+  capacity plan that compounded 1.5× per extract. See the 2026-08-03
+  slot-independence decision below, which also moves the refusal above the
+  active-set compact — this decision's own "costs nothing" was still paying a
+  GPU round trip.) (1) The slot claim ran inside
   `ensure_output_buffers`, i.e. **after** `++generation_`, so a refused extract —
   the path whose entire purpose is to protect a slot the consumer is still
   reading — advanced the generation and made `download()` retire the very mesh
@@ -895,6 +900,74 @@ Each dated; newest context wins. Change the decision *and* this list together.
   hazard is not the cost but that the cost is invisible on the only hardware CI
   runs. With this, **all four seam-B blockers are settled**; what remains is a
   consumer that actually draws it.
+
+- **2026-08-03 — Nothing in the mesh extractor reads "the current slot" except
+  the code that writes it: the capacity plan is slot-independent, and a slot is
+  marked outstanding only where a `DeviceMesh` is handed out.** Found on an iPad
+  Pro, where a ring reached a **1.1 GB arena for 36 904 triangles (0.59% full)**
+  in a few hundred remeshes and then lost the device. The cause was one line:
+  `plan_capacity` floored its estimate at `arena_capacity()` — right for a
+  single arena reused in place, and a **ratchet** across a ring, because it read
+  the slot just *written* while a different slot was about to be *grown*. Every
+  extract then asked for 1.5× the last, geometrically, with the measured
+  triangle density never getting a say.
+  **The floor is deleted, not repositioned.** Reordering the claim above the
+  plan fixes the symptom and leaves a purely positional invariant inside a
+  340-line function; the floor is also **provably inert** either way, since
+  `capacity` reaches only `ensure_output_buffers`, which keeps whatever the slot
+  holds and grows only on a larger request, and the dispatch is pushed
+  `arena_capacity()` rather than `capacity`. So the plan now reads *no slot at
+  all* — this call's active set and the last call's density — and cannot
+  compound in any call order. Confirmed by mutation: restoring the floor alone
+  changes nothing measurable; restoring it *together with* the old claim
+  position reproduces the runaway.
+  **Fixing that exposed the rest of the family, all the same shape — state that
+  was correct for recon reading its own results and silently wrong across the
+  ring.** (1) *The stamp says a consumer holds a mesh here, so only a path that
+  hands one out may write it.* It lived in `ensure_output_buffers`, so every
+  failure after it — the dispatch, the refit, the `out_of_memory` return, the
+  `maxStorageBufferRange` rejection — left a slot marked with a generation **no
+  `DeviceMesh` ever carried**, which nothing could then release: `slot_count`
+  such failures and the extractor refuses *permanently*, quoting generations the
+  API never handed out. It now sits beside `device_mesh.generation` on each
+  publishing return, which makes "every generation handed out lives in exactly
+  one slot" total by construction rather than by audit. (2) *`claim_output_slot`
+  scans instead of assuming.* "The next slot is always the oldest" holds only
+  while every claim goes on to publish; a failed extract and the host overloads
+  both leave a free slot behind the cursor, and assuming would refuse with one
+  in hand. (3) *The host overloads give back their own slot, not everything
+  below it.* They must hand it back — a `Result<Mesh>` carries no generation, so
+  a host-only caller cannot — but doing it through `release_through`, the
+  **consumer's** high-water mark, also retired every older slot, including one
+  an `extract_device` caller on the same extractor was still drawing out of;
+  the next grow then ran `vmaDestroyBuffer` under a live draw, undefined with
+  layers off, which is the shipping configuration and the only one on iOS.
+  `free_slot_of(generation)` clears one stamp and moves no mark. (4) *The claim
+  and `++generation_` are adjacent, and both move above the active-set compact.*
+  `download()` reads the current slot on the strength of a *generation*
+  comparison, so anything fallible between the two leaves a window where an
+  outstanding mesh passes the currency check and is copied out of a slot that
+  may never have been sized — a `memcpy` from a null mapping. Above the compact
+  because a refusal must cost the caller *nothing*, and the compact is a
+  dispatch, a fence wait and a full active-set readback that a consumer one
+  frame behind would pay on every frame. (5) *`ExtractTimings::arena_bytes` sums
+  the ring.* It reported the claimed slot alone against a header that promised
+  what the extractor holds, so at `slot_count = N` it under-reported resident
+  memory N-fold — and it is the instrument this bug was diagnosed with. (6)
+  *`download` gates on `valid()`* like both extract entry points; the defaulted
+  moves reset every owned member but copy the scalar `generation_`/`slot_`, so a
+  moved-from extractor passed the check and then read a null mapping.
+  **The regression test asserts a magnitude, not just a shape.** Pinning
+  per-slot periodicity alone stays green under a wholesale revert to worst-case
+  sizing — which is perfectly flat, just ~19× too big — so the ratchet block now
+  sandwiches resident arena bytes between 1× and 3× the emitted surface *per
+  slot* and holds them flat across the last two turns of the ring, with its
+  stride derived from `slot_count` rather than hardcoded beside it. Both halves
+  were confirmed to fail against a re-introduced ratchet, against worst-case
+  planning, and against reporting one slot instead of the sum. A separate case
+  holds a live `DeviceMesh` while a host extract runs on the same extractor and
+  asserts the ring then refuses — the handle-independent half of (3), which no
+  dedicated-extractor test could see.
 
 ## Provenance & salvage policy
 
@@ -1337,7 +1410,12 @@ cost, and the plan is **predictive rather than reactive**: each extract records
 the triangles-per-active-block density it measured, and the next call scales
 that by *its own* active set (a seed of 64/block covers the first call, against
 the 2560 worst case), so a growing scan plans ahead of its surface instead of
-discovering every size increase by throwing a dispatch away. Measured on the
+discovering every size increase by throwing a dispatch away. It scales that
+density by nothing else — in particular **not** by what an arena already holds,
+which is what made it compound across the output ring until an iPad Pro lost the
+device (the 2026-08-03 slot-independence decision); and with `slot_count > 1`
+"what the extractor retains" is one such fitted arena *per slot*, which is what
+`ExtractTimings::arena_bytes` sums. Measured on the
 full 400-frame room0, peak RSS: **1250 → 985 MB (−21%)** at `--mesh-every 0`,
 **1568 → 1302 MB (−17%)** at the default `--mesh-every 50`, with the mesh
 identical triangle-for-triangle in both (991,167 vertices / 330,389 triangles,
