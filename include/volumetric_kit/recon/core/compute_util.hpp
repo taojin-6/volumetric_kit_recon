@@ -51,16 +51,33 @@ inline std::uint32_t group_count(std::uint32_t items,
 ///                     *consumer* that binds the same allocation some other way
 ///                     (a renderer taking it as a vertex buffer). A compute
 ///                     tier's own kernels need only the default.
+/// @param queue_families      Families that will access the buffer; see @ref
+///                            BufferDesc::queue_families. Null (the default)
+///                            leaves it `VK_SHARING_MODE_EXCLUSIVE`, which is
+///                            what a tier allocating for its own kernels wants.
+///                            A buffer a *sibling* reads must name both
+///                            families, or the cross-family read is undefined.
+/// @param queue_family_count  Entries in @p queue_families.
 /// @return The buffer, or a non-OK @ref Status if creation fails.
-inline Result<Buffer> storage_buffer(Allocator& allocator, VkDeviceSize bytes,
-                                     HostAccess access = HostAccess::Random,
-                                     VkBufferUsageFlags extra_usage = 0) {
+///
+/// @note The allocation is deliberately `HostVisible` + mapped: this helper
+///       exists for buffers the host fills or reads back. That is the right
+///       trade for inputs and for a counter the host must read every dispatch,
+///       and the wrong one for a large output a device-local consumer streams
+///       -- such a consumer wants its own allocation, not a parameter here.
+inline Result<Buffer> storage_buffer(
+    Allocator& allocator, VkDeviceSize bytes,
+    HostAccess access = HostAccess::Random, VkBufferUsageFlags extra_usage = 0,
+    const std::uint32_t* queue_families = nullptr,
+    std::uint32_t queue_family_count = 0) {
   BufferDesc desc;
   desc.size = bytes;
   desc.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | extra_usage;
   desc.memory = MemoryUsage::HostVisible;
   desc.mapped = true;
   desc.host_access = access;
+  desc.queue_families = queue_families;
+  desc.queue_family_count = queue_family_count;
   return allocator.create_buffer(desc);
 }
 

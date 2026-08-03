@@ -766,8 +766,9 @@ Each dated; newest context wins. Change the decision *and* this list together.
   (`core/queue_family_set.hpp`, mirroring `vk_physical_device.hpp`), not in a
   `detail` namespace in the public one: its location is the access control, so
   the tier commits nothing to the exported ABI for a helper that exists to be
-  host-testable, and the test reaches it by include path. Still open for seam B:
-  blockers (1) lifetime and (4) indirect draw, unchanged.
+  host-testable, and the test reaches it by include path. Still open at the time
+  of writing: seam-B blockers (1) lifetime and (4) indirect draw — both settled
+  by the two decisions below, which close the set.
 
 - **2026-08-03 — The mesh arena is a ring of slots released by the *host*, not
   a timeline semaphore.** Seam-B blocker (1) lifetime. `MarchingCubesConfig`
@@ -817,11 +818,83 @@ Each dated; newest context wins. Change the decision *and* this list together.
   sparse test exercises `mc = std::move(mc)` directly, but `std::vector`'s
   self-move-assignment is valid-but-unspecified and libc++ empties it, so the
   extractor passed `valid()` and then indexed nothing (it segfaulted on the
-  first run). And the empty-mesh early return is the one path that advances the
-  generation **without** claiming a slot — safe because an empty mesh owns no
-  bytes and `download` returns before reading a buffer, but it means "every
-  generation lives in exactly one slot" is not total. Still open for seam B:
-  blocker (4), the indirect command on `DeviceMesh`.
+  first run). And the empty-mesh early return used to be the one path that
+  advanced the generation **without** claiming a slot, on the reasoning that an
+  empty mesh owns no bytes to protect. *Corrected by the decision below*: that
+  is true of the empty mesh and false of the **ring**, because
+  `released_through_` is a high-water mark — a consumer that retires the empty
+  generation (instantly, since it draws nothing) thereby marks every older slot
+  released too, including the one holding the mesh it is still drawing, which is
+  exactly what a viewer does on an empty frame. The empty path now claims and
+  stamps a slot like any other extract, so "every generation lives in exactly
+  one slot" **is** total. Still open for seam B at the time of writing: blocker
+  (4), the indirect command on `DeviceMesh`.
+
+- **2026-08-03 — The draw command is written by the kernel that counts it, and
+  the counter's unit changes from triangles to indices.** Seam-B blocker (4),
+  the last one. The marching-cubes append atomic no longer bumps a bare
+  `uint` triangle counter; it bumps `indexCount` of a real
+  `VkDrawIndexedIndirectCommand` by `kIndicesPerTriangle` per triangle, so the
+  bytes the kernel writes *are* the command `vkCmdDrawIndexedIndirect` reads.
+  The buffer carries `INDIRECT_BUFFER` beside the `STORAGE_BUFFER` the kernel
+  counts through, it is per **slot** rather than per extractor (it is part of
+  the mesh — a renderer reading slot N's command while N+1 is extracted is the
+  whole point of the ring), and `DeviceMesh` publishes it. The count still
+  round-trips to the host, but only because *this tier* needs it to refit an
+  undersized arena; a consumer no longer does, which is what closes the blocker.
+  **Changing what an atomic counts moves every site that reads it, and the first
+  cut moved only some.** The three that mattered, all found by review: (1) the
+  `uint32` overflow guard still bounded *triangles* while the counter had become
+  *indices*, leaving it **3× too loose** — and worse than a plain wrap, since
+  `2^32 ≡ 1 (mod 3)` desynchronises the `/3` that recovers the slot index, so a
+  wrapped dispatch overwrites triangles it already emitted and returns
+  `Status::ok` with a corrupt surface. (2) The safety clamp that bounds
+  `indexCount` by the arena ran only on the success path — where the loop's own
+  exit condition already makes it a **provable no-op** — and was skipped on the
+  two failure returns that genuinely leave the command naming more indices than
+  exist. The guarantee was exactly inverted; it now lives on the failure paths,
+  where at `slot_count == 1` an outstanding `DeviceMesh` names that very buffer.
+  (3) The GLSL contract sentence ("`index_count` always ends as the field's true
+  total") became false in the same edit, and it is not decoration — it is the
+  specification the refit protocol and the `continue`-not-`return` fix rest on,
+  and the CUDA port is required to stay numerically in lockstep with it. The
+  open-coded `3` is now `kIndicesPerTriangle`, named on both sides of the ABI,
+  because it is the conversion between the two units this tier trades in.
+  **Two adjacent bugs the same review turned up, neither about the command.**
+  The host `extract` overloads claim and stamp a ring slot but return
+  `Result<Mesh>` — no generation — and `download` does not release, so a
+  consumer at `slot_count > 1` exhausted the ring in `slot_count` calls and then
+  failed **permanently**, quoting generations the API never handed out. They now
+  release their own slot once the host copy is taken, on success *and* failure,
+  which keeps a host-only caller off the release contract entirely. And the
+  empty-extract path is corrected as described above.
+  **Verification is the point, and it was measured rather than assumed.**
+  Nothing pinned the command's contents: mutating `emitted * 3` to `emitted`
+  passed every mesh and texture test, and reverting the atomic to count
+  triangles passed the *sparse* suite — because dense and sparse share
+  `mcEmitCell`, so a unit error moves both sides of the equivalence equally. The
+  suite now reads the command back through a real `vkCmdCopyBuffer` (which makes
+  the test a genuine consumer of `extra_indirect_usage` — the readback and the
+  flag prove each other) and asserts `indexCount == triangle_count · 3` plus the
+  four fields that make it *drawable*; and the sparse test pins the counter's
+  **units** against the fixture's analytic surface area (`4πr²`), which no
+  counter participates in, so a 3× undercount fails by a mile. Both mutations
+  now fail. `DeviceMesh::valid()` covers all three buffers rather than two.
+  **Sharing and placement, the two remaining ways to get this wrong quietly.**
+  `MarchingCubesConfig` grows `queue_families` (held **by value** — the config
+  is stored and re-read on every arena grow, so a `BufferDesc`-style pointer
+  would dangle) applying to arena, index run *and* command alike, since a
+  renderer reads all three; `DeviceMesh` publishes the resulting
+  `sharing_mode`, which matters more than the usage bits it sits beside because
+  reading an `EXCLUSIVE` buffer from a non-owning family is *undefined* where a
+  missing usage bit is at least a validation diagnostic. Memory placement is
+  **recorded rather than fixed**: the command is host-visible because the refit
+  protocol reads it every extract, which is free on Apple's unified memory and
+  costs a PCIe fetch per draw on a discrete GPU — booked as a greppable
+  `TODO(mesh)` awaiting a discrete-GPU consumer to measure it, because the
+  hazard is not the cost but that the cost is invisible on the only hardware CI
+  runs. With this, **all four seam-B blockers are settled**; what remains is a
+  consumer that actually draws it.
 
 ## Provenance & salvage policy
 
@@ -888,10 +961,15 @@ Two contracts — both simpler now that recon and gfx are both Vulkan.
   `examples/viewer/shared_device.hpp`); two queues from one graphics+compute
   family would avoid any queue-family ownership transfer, but MoltenVK offers no
   such family, so on Apple the buffer is cross-family and pays
-  `VK_SHARING_MODE_CONCURRENT` or an explicit release/acquire — see that
-  decision and the MoltenVK queue gotcha; the handoff is an intra-device
-  timeline semaphore over a ring of mesh/atlas slots, variable topology drawn
-  indirectly. See DESIGN.md → "The interop seam".
+  `VK_SHARING_MODE_CONCURRENT` or an explicit release/acquire — which
+  `MarchingCubesConfig::queue_families` now expresses (2026-08-03); see that
+  decision and the MoltenVK queue gotcha. The handoff is a ring of mesh/atlas
+  slots with variable topology drawn indirectly, both real as of 2026-08-03 —
+  but released by a **host-side report** rather than the intra-device timeline
+  semaphore originally specified, since a cross-library GPU wait deadlocks
+  against a swapchain rebuild on the shared queue. All four blockers are
+  settled; what is left is a consumer that draws it — the viewer still hands
+  over a host mesh (seam A). See DESIGN.md → "The interop seam".
 
 ## Key gotchas (verified)
 
