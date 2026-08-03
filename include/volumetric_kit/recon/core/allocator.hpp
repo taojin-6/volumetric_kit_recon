@@ -77,6 +77,46 @@ struct BufferDesc {
   bool mapped = false;
   /// Host access pattern; consulted only when @ref mapped is set.
   HostAccess host_access = HostAccess::Random;
+
+  /// @brief The queue families that will access this buffer.
+  ///
+  /// Left null (the default), the buffer is `VK_SHARING_MODE_EXCLUSIVE` and is
+  /// owned by whichever family first uses it -- correct for everything this
+  /// library allocates for itself.
+  ///
+  /// It is *not* correct for a buffer a renderer will read directly (interop
+  /// seam B). On Apple the reconstruction compute and the renderer are handed
+  /// queues from **different families**, and reading an EXCLUSIVE buffer from a
+  /// family that does not own it is undefined -- the contents are not
+  /// guaranteed to be there, with no error and often no visible symptom on the
+  /// device that happened to work.
+  ///
+  /// Enumerate the families that will touch it and this picks the mode: two or
+  /// more distinct indices give `VK_SHARING_MODE_CONCURRENT`, one gives
+  /// EXCLUSIVE, because a single family *is* exclusive and Vulkan rejects
+  /// CONCURRENT with fewer than two. Duplicates are ignored for that count, so
+  /// a caller can pass its compute and render families unconditionally and get
+  /// EXCLUSIVE for free wherever the two turn out to be the same family --
+  /// which is the common case off Apple, and where CONCURRENT would otherwise
+  /// cost access performance for nothing.
+  ///
+  /// At most @ref kMaxQueueFamilies distinct entries; more is an error rather
+  /// than a truncation, since a partial list would name fewer families than
+  /// actually touch the buffer -- the original bug in a different hat.
+  ///
+  /// The array need only outlive the @ref Allocator::create_buffer call.
+  const std::uint32_t* queue_families = nullptr;
+  /// Number of entries in @ref queue_families; must be zero when it is null.
+  std::uint32_t queue_family_count = 0;
+
+  /// Ceiling on the *distinct* families one buffer can be shared between.
+  ///
+  /// Two is the case that exists -- one reconstruction family, one renderer
+  /// family -- and the headroom is for a third consumer rather than for a
+  /// device with an unusual queue layout, since what is counted here is
+  /// *consumers*, not what the driver exposes. Published so a caller can see
+  /// the limit it is checked against.
+  static constexpr std::uint32_t kMaxQueueFamilies = 4;
 };
 
 /// @brief Owns a `VmaAllocator` built over a `VkDevice`, and creates

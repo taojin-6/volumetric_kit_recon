@@ -39,10 +39,12 @@ class VR_CORE_API Buffer {
   /// @param handle   The `VkBuffer`.
   /// @param size     Its size in bytes.
   /// @param usage    The `VkBufferUsageFlags` it was created with.
+  /// @param sharing  The `VkSharingMode` it was created with.
   /// @param mapped   Persistent host pointer, or `nullptr` if unmapped.
   /// @param deleter  Frees the buffer and its allocation exactly once.
   Buffer(VkBuffer handle, VkDeviceSize size, VkBufferUsageFlags usage,
-         void* mapped, std::function<void()> deleter) noexcept;
+         VkSharingMode sharing, void* mapped,
+         std::function<void()> deleter) noexcept;
 
   ~Buffer();
   Buffer(Buffer&& other) noexcept;
@@ -62,6 +64,23 @@ class VR_CORE_API Buffer {
   /// *verify* it permits the binding it is about to make, instead of trusting
   /// that whoever created it was passed the right flags.
   VkBufferUsageFlags usage() const noexcept { return usage_; }
+  /// @brief The sharing mode this buffer was created with
+  ///        (`VK_SHARING_MODE_EXCLUSIVE` when empty).
+  ///
+  /// Recorded for the same reason as @ref usage, and with more at stake:
+  /// reading an EXCLUSIVE buffer from a queue family that does not own it is
+  /// *undefined*, where a missing usage bit is at least a validation-layer
+  /// diagnostic. A consumer handed a borrowed buffer can therefore check
+  /// whether its family may read it directly, or whether the producer owes it
+  /// an ownership transfer, instead of inferring that from flags restated at
+  /// both ends of the seam.
+  ///
+  /// Deliberately the mode alone, not the family list: the mode is what decides
+  /// whether an ownership transfer is needed, which is the actionable question
+  /// and the bug this exists to catch. Record the indices too if a consumer
+  /// ever needs the finer check ("was *my* family named"), which costs every
+  /// buffer a small array for one call site's benefit.
+  VkSharingMode sharing_mode() const noexcept { return sharing_; }
   /// @return The persistent host pointer, or `nullptr` when not host-mapped.
   void* mapped() const noexcept { return mapped_; }
   /// @return `true` if this owns a buffer.
@@ -73,6 +92,7 @@ class VR_CORE_API Buffer {
   VkBuffer buffer_ = VK_NULL_HANDLE;
   VkDeviceSize size_ = 0;
   VkBufferUsageFlags usage_ = 0;
+  VkSharingMode sharing_ = VK_SHARING_MODE_EXCLUSIVE;
   void* mapped_ = nullptr;
   std::function<void()> deleter_;
 };

@@ -10,6 +10,7 @@
 
 #include <vk_mem_alloc.h>
 
+#include "queue_family_set.hpp"
 #include "vk_physical_device.hpp"
 #include "volumetric_kit/recon/core/buffer.hpp"
 #include "volumetric_kit/recon/core/device.hpp"
@@ -115,11 +116,38 @@ Result<Buffer> Allocator::create_buffer(const BufferDesc& desc) {
         "is no separate map()); request mapped=true");
   }
 
+  if (desc.queue_families == nullptr && desc.queue_family_count != 0) {
+    return Status::invalid_argument(
+        "Allocator::create_buffer: queue_family_count is non-zero but "
+        "queue_families is null");
+  }
+
+  // Distinct families decide the mode, not the count the caller passed: Vulkan
+  // requires CONCURRENT to name at least two, and requires them unique, so a
+  // caller passing its compute and render families unconditionally would
+  // otherwise be malformed on every platform where those are one family.
+  std::uint32_t distinct[BufferDesc::kMaxQueueFamilies]{};
+  const std::uint32_t distinct_count =
+      distinct_queue_families(desc.queue_families, desc.queue_family_count,
+                              distinct, BufferDesc::kMaxQueueFamilies);
+  if (distinct_count > BufferDesc::kMaxQueueFamilies) {
+    return Status::invalid_argument(
+        "Allocator::create_buffer: more than BufferDesc::kMaxQueueFamilies (4) "
+        "distinct queue families");
+  }
+
   VkBufferCreateInfo buffer_info{};
   buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
   buffer_info.size = desc.size;
   buffer_info.usage = desc.usage;
-  buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  // One family is exclusive by definition, and zero is the default path.
+  if (distinct_count > 1) {
+    buffer_info.sharingMode = VK_SHARING_MODE_CONCURRENT;
+    buffer_info.queueFamilyIndexCount = distinct_count;
+    buffer_info.pQueueFamilyIndices = distinct;
+  } else {
+    buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  }
 
   VmaAllocationCreateInfo alloc_info{};
   alloc_info.usage = to_vma_usage(desc.memory);
@@ -152,8 +180,8 @@ Result<Buffer> Allocator::create_buffer(const BufferDesc& desc) {
   // Capture the opaque VMA handles in the type-erased deleter so Buffer frees
   // both without VMA appearing in buffer.hpp.
   VmaAllocator allocator = impl_->allocator;
-  return Buffer(buffer, desc.size, desc.usage, out_info.pMappedData,
-                [allocator, buffer, allocation]() {
+  return Buffer(buffer, desc.size, desc.usage, buffer_info.sharingMode,
+                out_info.pMappedData, [allocator, buffer, allocation]() {
                   vmaDestroyBuffer(allocator, buffer, allocation);
                 });
 }

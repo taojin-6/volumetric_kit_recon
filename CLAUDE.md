@@ -592,7 +592,11 @@ Each dated; newest context wins. Change the decision *and* this list together.
   `core`'s shared `dispatch()` barrier reaches `COMPUTE_SHADER|HOST`, never
   `VERTEX_INPUT`/`VERTEX_ATTRIBUTE_READ`/`INDEX_READ`; widening it was weighed
   and declined, since every tier's dispatch would pay a broader scope for one
-  consumer, and a cross-queue handoff needs a semaphore regardless. (4)
+  consumer, and a cross-queue handoff needs a semaphore regardless.
+  (*Both (2) and (3) are superseded by the 2026-08-03 decision below*, which
+  reverses that declining: the scope is a destination mask, so it costs an
+  execution dependency the driver already owed — the real cost turned out to be
+  a capability check, not a performance one.) (4)
   **indirect draw** — `counter_` carries no `INDIRECT_BUFFER` usage and is not
   on `DeviceMesh`, so the `vkCmdDrawIndexedIndirect` path seam B is specified
   around cannot be expressed and the count still round-trips to the host.
@@ -694,6 +698,74 @@ Each dated; newest context wins. Change the decision *and* this list together.
   codes. So fused colour accuracy is ceilinged at ~4%, a *convergence* limit
   rather than a precision one, which is precisely why banding was the wrong
   thing to watch. Authoritative detail: DESIGN.md → "Color space".
+
+- **2026-08-03 — A buffer names the *families* that will read it, and the
+  dispatch barrier widens only as far as its queue family may.** Seam-B
+  blockers (2) sharing and (3) visibility from the `MarchingCubesConfig`
+  decision above, both the same shape: the buffers were already correct for
+  recon reading its own results and **silently** wrong for anyone else.
+  (2) `BufferDesc` grows `queue_families` / `queue_family_count`, and
+  `create_buffer` picks the mode from their *distinct* count — two or more give
+  `CONCURRENT`, one or zero give `EXCLUSIVE`. Naming the families rather than
+  the mode is what lets a consumer pass its compute and render indices
+  **unconditionally**: Vulkan requires `CONCURRENT` to name at least two and
+  requires them unique, so a caller restating the mode itself would be
+  malformed on every platform where the two collapse to one family — the common
+  case off Apple, and where `CONCURRENT` would cost access performance for
+  nothing. Over `kMaxQueueFamilies` (4) distinct is an **error**, not a
+  truncation: a partial list names fewer families than actually touch the
+  buffer, which is the original bug in a different hat.
+  (3) The shared `dispatch()` barrier's destination scope adds
+  `VERTEX_INPUT`/`VERTEX_ATTRIBUTE_READ`/`INDEX_READ` and
+  `DRAW_INDIRECT`/`INDIRECT_COMMAND_READ`. Unconditional in the *stage* sense —
+  a destination mask costs an execution dependency the driver already owed the
+  host and compute cases, and a per-dispatch knob would have to be threaded
+  through every kernel this helper exists to keep uniform — but **not** in the
+  *capability* sense, which is the correction the first cut needed:
+  `VK_PIPELINE_STAGE_VERTEX_INPUT_BIT` requires `VK_QUEUE_GRAPHICS_BIT`, and
+  recon requires only *compute* of the family it is handed, so it can sit on a
+  compute-only one. That is not hypothetical — the bootstrap's two-families
+  plan matches on `queue_flags` alone (`VK_QUEUE_COMPUTE_BIT`), so on a discrete
+  GPU it picks the async-compute family, and naming `VERTEX_INPUT` there is
+  invalid usage in *every* dispatch in *every* tier. Invisible on Apple, where
+  all four MoltenVK families are graphics+compute — the same
+  correct-on-the-machine-that-ran-it hazard this decision exists to close, hit
+  while closing it. `Device` therefore records its family's `queueFlags` at
+  create/adopt (**read from the driver**, unlike the enabled extensions and
+  features, because capabilities *are* queryable and so nothing here is a
+  hand-written declaration that can drift), and `dispatch` consults it.
+  `DRAW_INDIRECT` needs graphics *or* compute, so it is always available. A
+  cross-queue handoff needs its semaphore regardless, and a semaphore's
+  signal/wait carries availability and visibility on its own — so nothing is
+  lost on a compute-only family.
+  **Verification is what makes both a seam rather than a hope**, and the first
+  cut got it wrong in an instructive way. Vulkan cannot be asked what a
+  `VkBuffer` was created with, so `Buffer` records its `sharing_mode()` beside
+  its `usage()` — with more at stake, since reading an `EXCLUSIVE` buffer from a
+  family that does not own it is *undefined* where a missing usage bit is at
+  least a validation diagnostic. The mode alone, not the family list: the mode
+  is what decides whether an ownership transfer is needed. That accessor is also
+  what gives the *test* teeth. The first cut asserted the sharing rule by
+  creating deliberately-malformed buffers and checking the call **succeeded**,
+  reasoning that a validation layer would catch the rest — but recon's debug
+  callback returns `VK_FALSE` (it must; aborting is a debugger's job),
+  `vmaCreateBuffer` still returns `VK_SUCCESS`, and nothing turned the
+  diagnostic into a failure, so those cases asserted **nothing on any machine**,
+  layer or no layer. The suite now pins three independent layers: the reduction
+  through the internal header (pure, fails everywhere), the mode read back off
+  `Buffer::sharing_mode`, and an Error-count delta through `set_log_handler`
+  around the device cases. Sabotaging the mode selection fails layer 2;
+  sabotaging the dedup fails layers 2 *and* 3 (the layer is installed on the dev
+  machine and in CI, and the error now reaches the exit code). The test also
+  reads the device's real family count instead of hardcoding `{0, 1}`, which on
+  a single-family driver — lavapipe, which both Linux CI legs run — is itself
+  the malformed shape it is trying to detect.
+  `distinct_queue_families` lives in a **non-installed** `src/` header
+  (`core/queue_family_set.hpp`, mirroring `vk_physical_device.hpp`), not in a
+  `detail` namespace in the public one: its location is the access control, so
+  the tier commits nothing to the exported ABI for a helper that exists to be
+  host-testable, and the test reaches it by include path. Still open for seam B:
+  blockers (1) lifetime and (4) indirect draw, unchanged.
 
 ## Provenance & salvage policy
 
