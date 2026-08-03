@@ -24,8 +24,8 @@ tiers to its left.** This keeps dependencies acyclic, makes each tier separately
 testable and consumable, and lets downstream projects link only what they need.
 
 ```
-core → volume → tsdf → mesh → interop
-                       (later: compress, sensor, track, codec, stream)
+core → volume → tsdf → mesh → texture → interop
+  └→ sensor                   (later: compress, track, codec, stream)
 ```
 
 - **core** — the Vulkan foundation, mirroring the renderer's core: instance,
@@ -160,66 +160,152 @@ surface rather than as an error. The mistake is small between similar samples
 and largest across high-contrast pairs — silhouettes, shadow boundaries, and
 depth discontinuities, which is where a reconstruction is actually inspected.
 
-This is the same class of defect as a flipped camera axis, and it gets the same
-treatment the geometry conventions already get in
-`sensor/camera_conventions.hpp`: the conversions live in platform-neutral C++ in
-the `sensor` tier rather than in whichever driver produced the numbers, because
-they are pure arithmetic that host tests can pin on any platform, and because a
-per-driver copy is a per-driver opportunity to be silently wrong.
+This is the same class of defect as a flipped camera axis, and it earns the same
+treatment the geometry conventions get: pure arithmetic, kept in
+platform-neutral C++ where host tests can pin it on any platform, rather than
+copied into each driver where every copy is another chance to be silently wrong.
 
 **One rule decides every case:**
 
-> **8-bit is encoded. Float is linear. Convert once at the sensor boundary,
-> encode once at presentation.**
+> **8-bit color is encoded. Float color is linear. Convert once at the sensor
+> boundary, encode once at presentation.**
 
 Nothing between those two points needs to ask what space it is holding. The rule
 falls out of what each representation is *for*: eight bits are only sufficient
 for color because a display curve spends them perceptually, so 8-bit storage
 must stay encoded — naively linearizing it trades a blending error for banding
 in the darks, which is not a trade. A float has the range to be linear, so it
-is.
+is. It says *color* because it is a claim about color and not about eight bits:
+a future 8-bit confidence or occupancy channel is a number, and carries no
+curve.
+
+### The working space
+
+"Linear" alone does not name a space. Two sensors with different primaries
+produce linear values in different RGB bases, and averaging *those* is wrong the
+same way averaging encoded values is — quietly, and worst where color is
+saturated. So the rule needs one more constant, and the design turns on naming
+it rather than on which one is named:
+
+> The working space is **linear BT.709 primaries, D65 white** — the linear half
+> of sRGB. Its **canonical encoded form** is that space through the exact
+> piecewise sRGB transfer function, full range. Every 8-bit color downstream of
+> the sensor boundary is in that one form.
+
+The working space is what `mesh::Vertex::color` holds, what the shading multiply
+operates in, and what glTF `COLOR_0` means. It is also what
+`VK_COLOR_SPACE_SRGB_NONLINEAR_KHR` presents, so the working→display matrix is
+identity on every surface this repo has run on — which is exactly why it would
+otherwise go unwritten, and why it is written down before a P3 sensor or an HDR
+swapchain makes it something other than identity.
+
+The sensor-boundary conversion is therefore two steps, not one: decode the
+declared transfer function, then apply the declared primaries' 3×3 into the
+working basis. Both are identity for a BT.709 source, so the common capture path
+costs nothing and only a genuinely different sensor pays.
+
+**The cost is booked.** BT.709 is the narrowest of the gamuts a driver can
+declare, so a Display P3 or BT.2020 source clips on conversion — and an 8-bit
+encoded attribute could not hold the out-of-gamut values regardless. Widening
+the working space therefore means widening the storage with it; the two move
+together, and both are named constants rather than assumptions spread through
+the kernels. Revisit when a wide-gamut sensor is actually in hand. Choosing
+BT.2020 now would spend the same eight bits across a wider gamut and band worse
+for every sensor we have.
 
 Concretely:
 
 | Representation | Space | Why |
 | --- | --- | --- |
-| Sensor `ColorFrame::pixels` (8-bit) | encoded | as delivered; the driver declares which curve |
-| Voxel `color` attribute (`uint32`) | encoded | 8 bits are only enough when spent perceptually |
-| `mesh::Vertex::color` (`Vec4f`) | **linear** | float working value; also what glTF `COLOR_0` specifies |
+| Sensor `CapturedFrame::color` (8-bit) | encoded, as declared | as delivered; the driver declares the curve and converts nothing |
+| Voxel `color` attribute (`uint32`) | encoded, canonical | 8 bits are only enough when spent perceptually |
+| `mesh::Vertex::color` (`Vec4f`) | **linear** working | float working value; also what glTF `COLOR_0` specifies |
 | Atlas image (8-bit texture) | encoded, `_SRGB` format | the sampler decodes and filters in linear, for free |
-| Swapchain (`_SRGB` format) | encoded by hardware | the single encode, at the end |
+| Render target (`_SRGB` format) | encoded by hardware | the single encode, at the end |
+| 8-bit host export (PLY) | encoded | what every external viewer assumes of `uchar` colors |
 
 So the integrator decodes both operands, blends in linear, and re-encodes to its
 8-bit attribute; marching cubes decodes the corner colors and writes the
 interpolated result as linear float, which is the boundary where the
-representation changes and therefore where the conversion belongs. The renderer
-then converts nothing at all: its vertex colors are already linear, its atlas is
-decoded by the sampler, and the swapchain applies the one encode.
+representation changes and therefore where the conversion belongs.
 
 ### Declaring an encoding, not converting it
 
-A driver states what it produces; it never converts. The conversion has one
-implementation, in `sensor/color_conventions.hpp` beside the camera ones:
+A driver states what it produces; it never converts. The declaration is a plain
+value in `core`, because it travels with a frame through every tier:
 
 ```cpp
+// core/color_space.hpp
 struct ColorEncoding {
-  enum class Transfer  { Linear, Srgb, Bt709, Bt2020Pq };
-  enum class Primaries { Bt709, DciP3, Bt2020 };
-  enum class Range     { Full, Video };
+  enum class Transfer { Srgb, Bt709, Linear, Bt2020Pq };
+  enum class Primaries { Bt709, DisplayP3, Bt2020 };
+
+  Transfer transfer = Transfer::Srgb;
+  Primaries primaries = Primaries::Bt709;
 };
 ```
 
-carried on `ColorCameraParams` alongside the intrinsics that are already there.
-ARKit declares `{Bt709, Bt709, Full}` — its `capturedImage` is bi-planar YCbCr
-that a BT.601 *matrix* converts to **gamma-encoded** R'G'B'; the matrix and the
-transfer function are independent, and conflating them is its own silent error.
-A depth camera emitting linear 16-bit color declares `Transfer::Linear` and is
-converted by nothing.
+It rides **beside** the camera — a field on `sensor::CapturedFrame` and
+`tsdf::ColorFrame` — and deliberately *not* inside `ColorCameraParams`. That
+struct is uploaded verbatim to the fusion kernels under scalar block layout,
+pinned at 88 bytes by `static_assert`s with GLSL mirrors in `tsdf/shaders/` and
+`texture/shaders/`; putting a field in it would spend a cross-tier shader ABI
+change to carry something the kernel needs at most as a push constant. Both
+frame structs already hold a `ColorCameraParams` by value, so a sibling field
+costs nothing.
+
+There is no `Range` field, and the omission is the point. By the time a frame
+reaches this contract it is packed R'G'B', so the YCbCr matrix and any
+limited-range expansion have already been applied — the contract requires
+full-range R'G'B'. That conversion (de-planarize, the 601-vs-709 matrix, range
+expansion) is the driver's, done before the contract, and it is as easy to get
+silently wrong as the transfer function; what makes it the driver's is that it
+is the one part that varies with the pixel format rather than with the color.
+A field nothing consumes is a label free to drift. `Primaries` earns its place
+because the working space gives it a consumer; `Range` would not have one.
+
+ARKit declares `{Transfer::Bt709, Primaries::Bt709}` — spelled out, because
+scoped enums do not name themselves from an aggregate initializer and this is
+the line an out-of-tree driver copies. Its `capturedImage` is bi-planar YCbCr
+that a BT.601 *matrix* converts to gamma-encoded R'G'B'; the matrix and the
+transfer function are independent, and conflating them is its own silent
+error. Its
+primaries are already the working basis, so only the transfer is in question —
+and BT.709's camera OETF differs from the sRGB EOTF by a couple of codes in the
+toe. **`Transfer::Bt709` 8-bit content is accepted as sRGB rather than
+converted**, which is what display pipelines do in practice (BT.1886) and what
+keeps the common capture path a genuine no-op instead of a per-frame pass over
+1920×1440 pixels. A bounded, stated error beats an unstated one. A depth camera
+emitting linear 16-bit color declares `Transfer::Linear` and is decoded by
+nothing.
 
 Adding a sensor is then a declaration rather than a conversion, which is the
 property that makes this scale: the failure mode of a new integration becomes a
 wrong *label* — inspectable, and testable against a known patch — instead of a
 bespoke curve buried in a platform driver.
+
+### Encoding at presentation
+
+"Presentation" is every point where linear working values become 8-bit for
+something outside this pipeline, and there are three in tree, not one:
+
+- The **swapchain** (`fuse_viewer`), where gfx already prefers
+  `VK_FORMAT_B8G8R8A8_SRGB` and the hardware encodes.
+- The **offscreen target** (`fuse_render`), `R8G8B8A8_UNORM` today and to become
+  `_SRGB`. It renders straight to PNG, so nothing else would encode and the
+  image would simply come out dark. It is also the CI-visible leg, which is why
+  it is worth naming rather than leaving to the word "swapchain".
+- **Host export**, where a PLY's `uchar` vertex colors are read as sRGB by every
+  external viewer and must be encoded on write, while glTF `COLOR_0` is linear
+  and is written through unchanged. The two disagree, so the exporters cannot
+  share one path.
+
+Recon never encodes by hand where hardware can: writing linear into an `_SRGB`
+target *is* the encode. The surface declares its space the same way a driver
+does — `VkFormat` plus `VkColorSpaceKHR` — so a P3 or HDR display is reached by
+that declaration changing, at which point the presentation step gains the
+primaries half the sensor boundary already has. Nothing else in the pipeline
+moves, which is the return on naming the working space.
 
 ### The storage question, left open deliberately
 
@@ -234,9 +320,56 @@ is the right place for it, but it is still repeated. Two positions:
 - **Widen to `RGBA16`.** Exact, no repeated requantization, twice the color
   memory in the sparse grid.
 
-Take the first, measure, and escalate only if banding appears in the darks. The
-rule above is unaffected either way: it constrains *what space* a value is in,
-not how many bits hold it.
+Take the first and measure. The trigger to escalate is **not** banding — that is
+a display symptom of the wrong variable. It is the running mean *latching*:
+`(prev·w_old + obs·w_obs)/w_sum` re-quantized to 8 bits stops moving once the
+per-frame delta falls below half a code, and the voxel's color then freezes
+short of its true mean. At the default `max_weight = 5` a typical step is ~5% of
+the remaining difference, so gaps under ~10 codes stall — tolerable, but that is
+the quantity to measure, and it is a cheap host test rather than an eyeball
+judgment. The rule above is unaffected either way: it constrains *what space* a
+value is in, not how many bits hold it.
+
+### What it takes to land
+
+Smaller than it reads, and almost entirely recon's:
+
+- `tsdf/shaders/tsdf_integrate.comp` decodes both operands, blends, re-encodes.
+- `mesh/shaders/marching_cubes_common.glsl` decodes the corner colors and writes
+  the interpolated result as linear float.
+- The examples move their atlas and offscreen formats to `_SRGB`, and encode on
+  PLY write.
+- **`volumetric_kit_gfx` needs no change at all.** Its vertex colors arrive
+  linear, its atlas is decoded by the sampler, and `hybrid_mesh.frag`'s
+  `albedo *= ambient + diffuse` is correct the moment its operands are — that
+  multiply was never the bug, only what was fed to it. Every format is
+  caller-set (`OffscreenTargetDesc::color_format`, `TextureDesc::format`), the
+  swapchain already prefers `_SRGB`, and gfx's readback sizes an `_SRGB` format
+  like any other. The seam holds because `mesh::Vertex` is already gfx's layout
+  and glTF already calls `COLOR_0` linear — the two conventions agreed all along.
+
+The curve gets one host implementation in `core/color_space.hpp` and one GLSL
+mirror in `core/shaders/color_common.glsl`, in the shared-`.glsl` discipline the
+`volume` and `tsdf` tiers already use. It lives in `core` rather than `sensor`
+for the reason the camera parameter blocks did: `sensor` branches off `core`
+beside the fusion tiers, so `tsdf` and `mesh` cannot include from it, and a
+curve those kernels need is vocabulary. `sensor/color_conventions.hpp` keeps the
+boundary policy — what a declaration means, and whether it is already canonical
+— beside the camera conventions it matches.
+
+Both implementations must be the **exact piecewise sRGB function**, not a
+`pow(x, 2.2)` approximation. Hardware `_SRGB` sampling uses the exact curve, and
+`hybrid_mesh.frag` selects between the atlas and the vertex color *per triangle
+across one surface*, so an approximated voxel decode would show up as a seam
+exactly where texturing stops.
+
+Four tests pin it, each in the tier that owns the thing it pins: a host round
+trip over all 256 codes; a GPU test comparing the GLSL curve to the host one
+over the same 256, in the style of the existing on-device ABI round-trips; a
+known color patch carried through fuse → mesh → download and checked in linear;
+and the convergence check above. The bar is the one the sensor conventions set —
+reverting the decode, or substituting `pow(x, 2.2)`, has to *fail a test* rather
+than merely look different.
 
 ## Packaging
 
