@@ -211,8 +211,10 @@ Each dated; newest context wins. Change the decision *and* this list together.
   storage-buffer create/upload helpers, copied verbatim into every tier — moved
   to `core/compute_util.hpp` (`group_count` / `storage_buffer` /
   `upload_storage_buffer`) once the `texture` tier would have been the fourth
-  copy; `texture` consumes them now, and the `volume` / `tsdf` / `mesh` copies
-  migrate next — a mechanical follow-up, greppable `TODO(core)`.)
+  copy; `texture` and `mesh` consume them now — `mesh` migrated on 2026-08-02
+  rather than fork its copy to carry the `MarchingCubesConfig` usage bits, which
+  is why `storage_buffer` grew its `extra_usage` parameter — and the `volume` /
+  `tsdf` copies migrate next, a mechanical follow-up, greppable `TODO(core)`.)
 - **2026-07-06 — Hybrid color renders through a gfx pipeline (amends "interop
   seam A needs zero gfx changes").** The renderer's shipped PBR path is
   texture-only and ignores per-vertex `color`, so `volumetric_kit_gfx` grew a
@@ -405,11 +407,10 @@ Each dated; newest context wins. Change the decision *and* this list together.
   renderer binds**, which is what interop seam B needs. gfx's vertex-input
   description reads position/normal/uv0/color at exactly these offsets with this
   stride; it does not bind `tangent` at all. *Necessary, not yet sufficient*:
-  the vertex arena is still created `STORAGE_BUFFER`-only and host-visible, so
-  it needs `VERTEX_BUFFER` usage (and the index run `INDEX_BUFFER`, plus
-  probably a device-local home) before gfx can draw from it in place — a
-  greppable `TODO(mesh)` in `mesh/mesh.hpp`, paid with the shared-device
-  bootstrap that would be its first consumer.
+  the arena also has to be **bindable** (the usage bits — settled by the
+  2026-08-02 `MarchingCubesConfig` decision below) and then actually
+  **drawable** (lifetime, sharing mode, barrier scope, indirect counter — the
+  seam-B `TODO(mesh)` on that struct).
   **The cost is paid knowingly, and it is not free.** Every vertex grows 48 → 64
   bytes (+33%) for a `tangent` slot marching cubes cannot produce — it has no
   surface parameterisation to derive one from, so the kernel writes the same
@@ -429,8 +430,8 @@ Each dated; newest context wins. Change the decision *and* this list together.
   non-renderer consumer ever dominates the mesh tier's traffic — the tangent is
   then 16 bytes of dead weight per vertex with no offsetting win.
   (*2026-08-02:* that first consumer has arrived — the shared-device bootstrap
-  below — so the `VERTEX_BUFFER`/`INDEX_BUFFER` usage `TODO(mesh)` is now
-  unblocked, and is the next step toward seam B rather than a hypothetical one.)
+  below — and the usage half is now settled by the `MarchingCubesConfig`
+  decision below.)
 
 - **2026-08-02 — The neutral shared-`VkDevice` bootstrap lands in the viewer
   example, and prefers two families over a shared queue.** The 2026-07-04
@@ -545,6 +546,59 @@ Each dated; newest context wins. Change the decision *and* this list together.
   implemented**, so `tests/sensor_conventions_test.cpp` now carries a
   `FakeCapture` driven through a base-class reference — it caught the
   success-path half of this on its first compile.
+
+- **2026-08-02 — The mesh arena's extra buffer usage is declared by the
+  *consumer*, not named by this tier — and usage alone does not reach seam B.**
+  `MarchingCubes::create` takes a `MarchingCubesConfig{extra_vertex_usage,
+  extra_index_usage}`, OR-ed onto `STORAGE_BUFFER` for the vertex arena and the
+  index run on **every** grow, not just the first. The alternative — hardcoding
+  `VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | INDEX_BUFFER` in the `mesh` tier — was
+  rejected because it makes this tier guess at a sibling's vertex-input
+  requirements that it is deliberately not compiled against; the app knows both
+  and passes the union, the same shape as the create/adopt device seam. A
+  recon-only consumer (`fuse_replica`, the codec tiers, an exporter) defaults to
+  zero and its buffers are bit-identical to before.
+  **The verification half is what makes it a seam rather than a hope.** Vulkan
+  cannot be asked what a `VkBuffer` was created with, so `core::Buffer` records
+  its `usage()` (the reason `AdoptedDevice` carries its enabled extension list),
+  and `DeviceMesh` carries `vertex_usage` / `index_usage` — a consumer *checks*
+  that the binding it is about to make is permitted instead of trusting that
+  the flags it published reached the producer. Without it the app restates the
+  same flags independently at both ends and a mismatch is a validation-layer-only
+  diagnostic: undefined behaviour with layers off, which is the shipping
+  configuration and the only one on iOS. It is also what lets a test assert the
+  config *landed* — `marching_cubes_config_test.cpp` extracts through a
+  configured extractor and reads the bits back off the `DeviceMesh`, so dropping
+  `config_` from the grow path fails rather than passing silently for want of an
+  in-tree consumer.
+  **Bindable is not drawable, and the gap is recorded rather than implied.**
+  Review of the first cut found prose asserting that the usage bit was "the
+  whole of what stands between it and binding this arena in place." It is not.
+  Four things a create-time flag cannot supply remain, enumerated in a greppable
+  seam-B `TODO(mesh)` on the struct: (1) **lifetime** — one grow-only arena,
+  reused in place and freed *synchronously* on grow (`Buffer::operator=` runs
+  `vmaDestroyBuffer` with no fence), so the next extract overwrites or frees
+  memory an in-flight draw is reading; `DeviceMesh::generation` guards only the
+  host `download()` path, and the fix is the ring of slots + timeline semaphore
+  DESIGN.md's seam B already specifies. (2) **sharing** —
+  `Allocator::create_buffer` hardcodes `VK_SHARING_MODE_EXCLUSIVE` and
+  `BufferDesc` has no knob, while on Apple recon and gfx sit on *different queue
+  families* (the bootstrap decision above), so a cross-family read needs
+  `CONCURRENT` or a release/acquire pair — and Metal has no ownership concept,
+  so this appears to work on the only platform CI runs. (3) **visibility** —
+  `core`'s shared `dispatch()` barrier reaches `COMPUTE_SHADER|HOST`, never
+  `VERTEX_INPUT`/`VERTEX_ATTRIBUTE_READ`/`INDEX_READ`; widening it was weighed
+  and declined, since every tier's dispatch would pay a broader scope for one
+  consumer, and a cross-queue handoff needs a semaphore regardless. (4)
+  **indirect draw** — `counter_` carries no `INDIRECT_BUFFER` usage and is not
+  on `DeviceMesh`, so the `vkCmdDrawIndexedIndirect` path seam B is specified
+  around cannot be expressed and the count still round-trips to the host.
+  None are implemented here: each needs a consumer to verify against, and
+  building them blind is how a two-field config grows four more fields nothing
+  passes. `create` does reject `SHADER_DEVICE_ADDRESS` (this repo's `Device`
+  never enables `bufferDeviceAddress`, so VMA asserts in debug and silently
+  drops the allocate flag in NDEBUG) — validated where the caller supplies it,
+  not inside the first extract's arena grow.
 
 ## Provenance & salvage policy
 

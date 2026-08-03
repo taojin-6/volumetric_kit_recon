@@ -37,10 +37,11 @@ namespace gassets = volumetric_kit::gfx::assets;
 /// hybrid fragment shader reads as "no atlas, use the per-vertex color".
 ///
 /// This copy exists only because the viewer hands gfx a *host* mesh (interop
-/// seam A). `fuse_viewer` now shares one `VkDevice` with the renderer, so the
-/// remaining blocker is usage flags, not the device: once the marching-cubes
-/// vertex arena is created `VERTEX_BUFFER` (the `TODO(mesh)` in `mesh.hpp`),
-/// gfx draws recon's own buffer and even this copy goes away. `fuse_render`
+/// seam A). `fuse_viewer` now shares one `VkDevice` with the renderer, and
+/// `MarchingCubesConfig` can now put `VERTEX_BUFFER` on the arena, but neither
+/// is enough on its own: the arena's lifetime, its queue-family sharing mode,
+/// and the dispatch barrier's visibility scope all still stand in the way (the
+/// seam-B `TODO(mesh)` on `MarchingCubesConfig` enumerates them). `fuse_render`
 /// still builds its own device, and keeps needing this either way.
 inline gassets::Mesh to_gfx_mesh(const rmesh::Mesh& mesh) {
   static_assert(sizeof(rmesh::Vertex) == sizeof(gassets::Vertex),
