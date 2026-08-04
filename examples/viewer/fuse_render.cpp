@@ -10,7 +10,8 @@
 // proves the full recon->gfx colour handoff to a file the same rendering drives
 // live later.
 //
-//   fuse_render <scene_dir> [-o out.png] [--voxel 0.02] [--max-frames N]
+//   fuse_render <scene_dir> [-o out.png] [--voxel 0.02] [--trunc m]
+//                [--max-frames N]
 //               [--width 1280] [--height 720] [--yaw 45] [--pitch 30] [--lit]
 
 #include <algorithm>
@@ -72,7 +73,10 @@ struct Options {
   std::string cam_params;
   std::string out = "fuse_render.png";
   float voxel = 0.02f;
-  float trunc = 0.08f;
+  // Derived from `voxel` when left at 0 (see parse_args): a truncation band
+  // fixed in metres is a band whose width *in voxels* changes with --voxel,
+  // which silently degrades the reconstruction in both directions.
+  float trunc = 0.0f;
   float max_depth = 8.0f;
   int max_frames = 400;
   int width = 1280;
@@ -105,6 +109,10 @@ bool parse_args(int argc, char** argv, Options& o) {
       const char* v = val(a.c_str());
       if (!v) return false;
       o.voxel = std::strtof(v, nullptr);
+    } else if (a == "--trunc") {
+      const char* v = val(a.c_str());
+      if (!v) return false;
+      o.trunc = std::strtof(v, nullptr);
     } else if (a == "--max-depth") {
       const char* v = val(a.c_str());
       if (!v) return false;
@@ -152,7 +160,7 @@ bool parse_args(int argc, char** argv, Options& o) {
   if (o.scene_dir.empty()) {
     std::fprintf(stderr,
                  "usage: fuse_render <scene_dir> [-o out.png] [--voxel m] "
-                 "[--max-frames n] [--yaw d] [--pitch d] [--lit] "
+                 "[--trunc m] [--max-frames n] [--yaw d] [--pitch d] [--lit] "
                  "[--preload]\n");
     return false;
   }
@@ -162,6 +170,18 @@ bool parse_args(int argc, char** argv, Options& o) {
   // up front.
   if (!std::isfinite(o.voxel) || o.voxel <= 0.0f) {
     std::fprintf(stderr, "--voxel must be finite and > 0\n");
+    return false;
+  }
+  // Default the band to 4 voxels, as fuse_replica does. Hardcoding it in metres
+  // meant --voxel alone changed the band's width in voxels: at --voxel 0.05 the
+  // old 0.08 is a 1.6-voxel band, leaving marching cubes a thin, hole-prone
+  // zero set, and at --voxel 0.005 it is 16 voxels, which pushes the
+  // allocation dilation from 27 blocks per surface block to 125. Neither is an
+  // error, and the same flag reconstructed differently here than in
+  // fuse_replica -- which defeats the A/B these examples exist for.
+  if (o.trunc <= 0.0f) o.trunc = 4.0f * o.voxel;
+  if (!std::isfinite(o.trunc) || o.trunc <= 0.0f) {
+    std::fprintf(stderr, "--trunc must be finite and > 0\n");
     return false;
   }
   if (!std::isfinite(o.max_depth) || o.max_depth <= 0.0f) {
@@ -238,7 +258,18 @@ vr::Result<Reconstruction> fuse(const Options& opt,
   std::size_t fused = 0;
   for (std::size_t i = 0; i < last; ++i) {
     vr::Result<vr_example::FrameView> frame_result = dataset.frame(i);
-    if (!frame_result) break;  // ran past on-disk frames
+    if (!frame_result) {
+      // NotFound is "ran past the frames on disk" and ends the sequence
+      // cleanly; anything else -- a truncated JPEG, a wrong-size depth PNG --
+      // is a real failure, and treating the two alike made this leg write a
+      // partial-room PNG and exit 0. Mirrors fuse_replica, which discriminates.
+      if (frame_result.status().domain() == vr::Status::Code::NotFound) {
+        std::printf("frame %zu not on disk; stopping at %zu fused frames\n", i,
+                    fused);
+        break;
+      }
+      return frame_result.status();
+    }
     const vr_example::FrameView view = std::move(frame_result).value();
     const vr_example::RgbdFrame& frame = *view;
     poses.push_back(frame.cam_to_world);
@@ -257,12 +288,19 @@ vr::Result<Reconstruction> fuse(const Options& opt,
 
     bool allocated = false;
     for (int attempt = 0; attempt < 5; ++attempt) {
-      VR_ASSIGN(std::uint32_t failed, volume.map().allocate_from_depth(
-                                          frame.depth.data(), depth_camera));
+      vol::AllocFailures failures;
+      VR_ASSIGN(std::uint32_t failed,
+                volume.map().allocate_from_depth(frame.depth.data(),
+                                                 depth_camera, &failures));
       if (failed == 0) {
         allocated = true;
         break;
       }
+      // Retry, don't grow, when the residue is only lost bucket-lock races:
+      // depth allocation is the map's most contended entry point and can leave
+      // failures on a table that is nowhere near full, where doubling every
+      // attribute array is a large and pointless cost.
+      if (!failures.capacity_limited()) continue;
       VR_TRY(volume.resize(volume.grid().num_buckets * 2));
     }
     // Don't integrate a frame whose surface band never fully allocated (silent

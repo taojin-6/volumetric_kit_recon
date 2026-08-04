@@ -22,7 +22,7 @@
 // stages appended) and Reconstruction (mesh/volume counters + recon's device
 // memory). --no-overlay turns both off.
 //
-//   fuse_viewer <scene_dir> [--voxel 0.02] [--max-frames N] [--fuse-per-tick K]
+//   fuse_viewer <scene_dir> [--voxel 0.02] [--trunc m] [--max-frames N]
 //               [--remesh-every N] [--width 1280] [--height 720] [--unlit]
 //               [--no-texture] [--preload] [--no-overlay] [--validation]
 
@@ -97,7 +97,10 @@ struct Options {
   std::string scene_dir;
   std::string cam_params;
   float voxel = 0.02f;
-  float trunc = 0.08f;
+  // Derived from `voxel` when left at 0 (see parse_args): a truncation band
+  // fixed in metres is a band whose width *in voxels* changes with --voxel,
+  // which silently degrades the reconstruction in both directions.
+  float trunc = 0.0f;
   float max_depth = 8.0f;
   int max_frames = 400;
   int fuse_per_tick = 1;
@@ -125,6 +128,10 @@ bool parse_args(int argc, char** argv, Options& o) {
       const char* x = v();
       if (!x) return false;
       o.voxel = std::strtof(x, nullptr);
+    } else if (a == "--trunc") {
+      const char* x = v();
+      if (!x) return false;
+      o.trunc = std::strtof(x, nullptr);
     } else if (a == "--max-depth") {
       const char* x = v();
       if (!x) return false;
@@ -171,7 +178,8 @@ bool parse_args(int argc, char** argv, Options& o) {
   }
   if (o.scene_dir.empty()) {
     std::fprintf(stderr,
-                 "usage: fuse_viewer <scene_dir> [--voxel m] [--max-frames n] "
+                 "usage: fuse_viewer <scene_dir> [--voxel m] [--trunc m] "
+                 "[--max-frames n] "
                  "[--fuse-per-tick k] [--remesh-every n] [--unlit] "
                  "[--no-texture] [--preload] [--no-overlay] [--validation]\n");
     return false;
@@ -181,6 +189,15 @@ bool parse_args(int argc, char** argv, Options& o) {
   // params and the GPU -- a silent, degenerate reconstruction. Reject up front.
   if (!std::isfinite(o.voxel) || o.voxel <= 0.0f) {
     std::fprintf(stderr, "--voxel must be finite and > 0\n");
+    return false;
+  }
+  // Default the band to 4 voxels, as fuse_replica does -- see the same note in
+  // fuse_render: a band fixed in metres makes --voxel silently change the
+  // reconstruction's quality, and makes the same flag value mean different
+  // things across these examples.
+  if (o.trunc <= 0.0f) o.trunc = 4.0f * o.voxel;
+  if (!std::isfinite(o.trunc) || o.trunc <= 0.0f) {
+    std::fprintf(stderr, "--trunc must be finite and > 0\n");
     return false;
   }
   if (!std::isfinite(o.max_depth) || o.max_depth <= 0.0f) {
@@ -722,7 +739,18 @@ int run(GLFWwindow* window, const Options& opt) {
           fuse_viewer::StageScope scope(fuse_stages, "frame");
           return dataset.frame(i);
         }();
-        if (!frame_result) break;
+        if (!frame_result) {
+          // Only NotFound means "ran past the frames on disk". Every other
+          // failure in this loop already prints (allocate / resize /
+          // integrate), so swallowing a decode error here was the one way to
+          // stop early with nothing on stderr -- the panel just froze at
+          // "fused N / M", indistinguishable from a normal finish.
+          if (frame_result.status().domain() != vr::Status::Code::NotFound) {
+            std::fprintf(stderr, "frame %zu failed to load: %s\n", i,
+                         frame_result.status().message().c_str());
+          }
+          break;
+        }
         vr_example::FrameView view = std::move(frame_result).value();
         const vr_example::RgbdFrame& frame = *view;
         {
@@ -751,8 +779,9 @@ int run(GLFWwindow* window, const Options& opt) {
           // frame actually cost.
           fuse_viewer::StageScope scope(fuse_stages, "allocate");
           for (int attempt = 0; attempt < 5; ++attempt) {
-            auto failed = volume.map().allocate_from_depth(frame.depth.data(),
-                                                           depth_camera);
+            vol::AllocFailures failures;
+            auto failed = volume.map().allocate_from_depth(
+                frame.depth.data(), depth_camera, &failures);
             if (!failed) {
               std::fprintf(stderr, "fuse_viewer: allocate (frame %zu): %s\n", i,
                            failed.status().message().c_str());
@@ -762,6 +791,12 @@ int run(GLFWwindow* window, const Options& opt) {
               allocated = true;
               break;
             }
+            // Retry, don't grow, when the residue is only lost bucket-lock
+            // races: depth allocation is the map's most contended entry point
+            // and can leave failures on a table that is nowhere near full,
+            // where doubling every attribute array is a large and pointless
+            // cost -- and here it would also stall the live window.
+            if (!failures.capacity_limited()) continue;
             const vr::Status rs = volume.resize(volume.grid().num_buckets * 2);
             if (!rs.ok()) {
               std::fprintf(stderr, "fuse_viewer: resize (frame %zu): %s\n", i,
@@ -795,8 +830,11 @@ int run(GLFWwindow* window, const Options& opt) {
             fuse_viewer::StageScope scope(fuse_stages, "extract");
             return extractor.extract_device(volume, 0.0f, &extract_timings);
           }();
-          // Break the extract row down in place: the phases sum to it, so the
-          // table reads as a hierarchy rather than double-counting.
+          // Break the extract row down in place. The phases sum to the
+          // `extract` row above rather than adding to it, so they carry
+          // StageTimes::kBreakdownPrefix -- which is what makes the table read
+          // as a hierarchy *and* keeps total_ms from counting the extract
+          // twice.
           fuse_stages.add("  ..compact", extract_timings.compact_ms);
           fuse_stages.add("  ..neighbour lut",
                           extract_timings.neighbour_lut_ms);

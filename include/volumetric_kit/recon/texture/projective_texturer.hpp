@@ -134,14 +134,18 @@ class VR_TEXTURE_API ProjectiveTexturer {
   /// uploaded and nothing is read back; `uv0` is rewritten where it already
   /// lives, ready for the next device consumer.
   ///
-  /// @param mesh   A device-resident mesh, still valid (its producer has not
-  ///               extracted again). An empty mesh is a no-op.
+  /// @param mesh   A device-resident mesh whose producer has not extracted
+  ///               again. Checked rather than assumed -- see
+  ///               @ref mesh::DeviceMesh::is_current, which this calls: binding
+  ///               a superseded view can be a use-after-free of a `VkBuffer`
+  ///               the producer already destroyed, so this pass refuses instead
+  ///               of relying on the caller. An empty mesh is a no-op.
   /// @param depth  As the host overload.
   /// @param cam    As the host overload.
   /// @param occlusion_threshold  As the host overload.
   /// @return OK on success, or the same failures as the host overload except
   ///         those about host arrays; @ref Status::Code::InvalidArgument if
-  ///         @p mesh names no buffers.
+  ///         @p mesh names no buffers or has been superseded.
   Status texture(const mesh::DeviceMesh& mesh, const float* depth,
                  const DepthCameraParams& cam,
                  float occlusion_threshold = 0.02f);

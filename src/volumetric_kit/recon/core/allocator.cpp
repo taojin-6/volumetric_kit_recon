@@ -18,11 +18,24 @@
 
 namespace volumetric_kit::recon {
 
-// Holds the one handle that must stay out of allocator.hpp. Freeing in ~Impl
-// (not ~Allocator) is what lets Allocator's move ops default correctly: moving
-// the unique_ptr transfers ownership, and the emptied source frees nothing.
+// Holds the handles that must stay out of allocator.hpp. Freeing in ~Impl (not
+// ~Allocator) is what lets Allocator's move ops default correctly: moving the
+// shared_ptr transfers a reference, and the emptied source frees nothing.
+//
+// Held by shared_ptr, and every Buffer's deleter keeps a reference: a Buffer
+// frees through this allocator, so the allocator has to outlive it. Making that
+// structural rather than documented is what closes the case a *documented*
+// ordering rule cannot express -- `a = std::move(b)` ends the resource's life
+// while the wrapper `a` visibly lives on, so a reader who satisfies "destroy
+// Buffers before their Allocator" by keeping the object alive still gets a
+// use-after-free. The shared reference costs one atomic per buffer create /
+// destroy, against a device allocation on the same path.
 struct Allocator::Impl {
   VmaAllocator allocator = nullptr;
+  // How many queue families the device reports, so create_buffer can reject an
+  // index that names none of them. Read once here because Vulkan offers no way
+  // to ask a VmaAllocator (or a VkDevice) for it afterwards.
+  std::uint32_t queue_family_count = 0;
   ~Impl() {
     if (allocator != nullptr) {
       vmaDestroyAllocator(allocator);
@@ -82,8 +95,10 @@ Result<Allocator> Allocator::create(VkInstance instance, const Device& device) {
       effective >= VK_API_VERSION_1_1 ? VK_API_VERSION_1_1 : VK_API_VERSION_1_0;
   info.pVulkanFunctions = &functions;
 
-  auto impl = std::make_unique<Impl>();
+  auto impl = std::make_shared<Impl>();
   VR_VK_TRY(vmaCreateAllocator(&info, &impl->allocator));
+  impl->queue_family_count = static_cast<std::uint32_t>(
+      detail::queue_families(device.physical_device()).size());
 
   Allocator result;
   result.impl_ = std::move(impl);
@@ -136,6 +151,22 @@ Result<Buffer> Allocator::create_buffer(const BufferDesc& desc) {
         "distinct queue families");
   }
 
+  // Every index must name a family this device actually has. Checked in both
+  // modes -- an out-of-range index is a caller bug either way -- but it is
+  // CONCURRENT where it turns into undefined behaviour: naming a nonexistent
+  // family violates VUID-VkBufferCreateInfo-sharingMode-01419, and VMA still
+  // returns VK_SUCCESS, so with layers off (the shipping configuration, and the
+  // only one on iOS) nothing reports it. The shape that hits this is an app
+  // hardcoding its compute and render families -- valid on Apple's four, wrong
+  // on a single-family driver such as lavapipe, which both Linux CI legs run.
+  for (std::uint32_t i = 0; i < distinct_count; ++i) {
+    if (distinct[i] >= impl_->queue_family_count) {
+      return Status::invalid_argument(
+          "Allocator::create_buffer: queue_families names a family index the "
+          "device does not have");
+    }
+  }
+
   VkBufferCreateInfo buffer_info{};
   buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
   buffer_info.size = desc.size;
@@ -178,11 +209,12 @@ Result<Buffer> Allocator::create_buffer(const BufferDesc& desc) {
   }
 
   // Capture the opaque VMA handles in the type-erased deleter so Buffer frees
-  // both without VMA appearing in buffer.hpp.
-  VmaAllocator allocator = impl_->allocator;
+  // both without VMA appearing in buffer.hpp. The captured *Impl reference* is
+  // what keeps the VmaAllocator alive for as long as this Buffer can free
+  // through it -- see the note on Impl.
   return Buffer(buffer, desc.size, desc.usage, buffer_info.sharingMode,
-                out_info.pMappedData, [allocator, buffer, allocation]() {
-                  vmaDestroyBuffer(allocator, buffer, allocation);
+                out_info.pMappedData, [impl = impl_, buffer, allocation]() {
+                  vmaDestroyBuffer(impl->allocator, buffer, allocation);
                 });
 }
 

@@ -317,6 +317,36 @@ int main() {
     CHECK(!extractor.download(foreign.value()).ok());
   }
 
+  // The *writing* path is guarded too, not only download(). texture() binds
+  // these buffers and dispatches over them, so a superseded view is worse than
+  // a stale read: if the later extract grew the arena, the old VkBuffer was
+  // destroyed synchronously and binding it is a use-after-free -- undefined
+  // with validation layers off, the shipping configuration. valid() cannot see
+  // it (the handles are non-null, and a grow-only arena reused in place even
+  // names the same VkBuffer), which is what DeviceMesh::is_current is for.
+  {
+    vr::Result<mesh::DeviceMesh> live = extractor.extract_device(grid, 0.0f);
+    CHECK(live.ok() && !live.value().empty());
+    const mesh::DeviceMesh held = live.value();
+    CHECK(held.is_current());
+    // Texturing it now is fine.
+    CHECK(texturer.texture(held, depth.data(), cam).ok());
+
+    // Extract again on the same extractor; `held` is now superseded.
+    vr::Result<mesh::DeviceMesh> next = extractor.extract_device(grid, 0.0f);
+    CHECK(next.ok());
+    CHECK(!held.is_current());
+    CHECK(next.value().is_current());
+    // valid() still says yes -- the handles are non-null -- which is exactly
+    // why it is not the check that matters here.
+    CHECK(held.valid());
+    vr::Status stale_texture = texturer.texture(held, depth.data(), cam);
+    CHECK(!stale_texture.ok());
+    CHECK(stale_texture.domain() == vr::Status::Code::InvalidArgument);
+    // The live view from the same extractor still textures.
+    CHECK(texturer.texture(next.value(), depth.data(), cam).ok());
+  }
+
   std::printf(
       "texture device-mesh: OK (%zu triangles, %zu/%zu vertices textured)\n",
       host_mesh.triangle_count(), textured, host_mesh.vertices.size());

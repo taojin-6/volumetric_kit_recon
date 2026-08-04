@@ -23,6 +23,26 @@ inline constexpr std::int32_t kLockEntry = -2;  ///< Slot locked mid-insert.
 inline constexpr std::int32_t kNoOffset = 0;    ///< Collision-chain terminator.
 /// @}
 
+/// @name Fail-count slots
+/// The layout of the per-dispatch failure tally the allocate and delete kernels
+/// share, mirrored from `volume/shaders/hash_common.glsl`.
+///
+/// `[kFailTotal .. kFailHeap]` are **retryable**: the host re-dispatches while
+/// the total keeps dropping, because the element that failed is still
+/// unprocessed. @ref kFailTerminal is not, and the split is what keeps the
+/// reported count honest -- a delete whose heap append fails has already
+/// cleared its table entry, so the next round finds the coord absent and counts
+/// nothing. Accumulated across rounds rather than read from the last one, or a
+/// permanently leaked block index would be reported as a clean delete.
+/// @{
+inline constexpr std::uint32_t kFailTotal = 0;     ///< Retryable total.
+inline constexpr std::uint32_t kFailLock = 1;      ///< Lock contention.
+inline constexpr std::uint32_t kFailChain = 2;     ///< Collision chain full.
+inline constexpr std::uint32_t kFailHeap = 3;      ///< Block heap empty.
+inline constexpr std::uint32_t kFailTerminal = 4;  ///< Non-retryable.
+inline constexpr std::uint32_t kFailSlots = 5;     ///< Slots in the tally.
+/// @}
+
 /// @name Spatial-hash primes
 /// The large primes of the Teschner et al. spatial hash. Unsigned so the
 /// coordinate multiply wraps with defined behaviour.

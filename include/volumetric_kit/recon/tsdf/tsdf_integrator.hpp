@@ -163,6 +163,9 @@ class VR_TSDF_API TsdfIntegrator {
   // Cached maxComputeWorkGroupCount[0] -- the device cap on a 1-D dispatch's
   // groupCountX; integrate() rejects an active set that would exceed it.
   std::uint32_t max_workgroup_count_x_ = 0;
+  // The ceiling on one storage-buffer binding's range, read once at create().
+  // The depth and colour frames are uploaded and bound whole each integrate().
+  VkDeviceSize max_storage_buffer_range_ = 0;
 
   // The integrate kernel's bundled layout + pipeline + descriptor set, its set
   // allocated from pool_ (which must outlive it) by KernelSetBuilder at

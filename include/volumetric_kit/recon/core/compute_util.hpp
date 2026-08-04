@@ -18,6 +18,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <string>
 
 #include "volumetric_kit/recon/core/allocator.hpp"
 #include "volumetric_kit/recon/core/buffer.hpp"
@@ -39,6 +40,41 @@ namespace volumetric_kit::recon {
 inline std::uint32_t group_count(std::uint32_t items,
                                  std::uint32_t local_size) {
   return items / local_size + (items % local_size != 0u ? 1u : 0u);
+}
+
+/// @return The device's `maxStorageBufferRange`: the ceiling on the range one
+///         storage-buffer *binding* may cover, which is a separate limit from
+///         how much memory can be allocated. Read once at a tier's `create` and
+///         cached, as the workgroup-count limit beside it is.
+inline VkDeviceSize max_storage_buffer_range(VkPhysicalDevice physical) {
+  VkPhysicalDeviceProperties props{};
+  vkGetPhysicalDeviceProperties(physical, &props);
+  return props.limits.maxStorageBufferRange;
+}
+
+/// @brief Reject a storage-buffer binding whose range the device does not
+///        permit.
+///
+/// Binding more than `maxStorageBufferRange` -- including binding a larger
+/// buffer with `VK_WHOLE_SIZE` -- is invalid usage, which means a
+/// validation-layer-only diagnostic and undefined behaviour with layers off
+/// (the shipping configuration, and the only one available on iOS). Worth a
+/// helper rather than a per-tier copy because the limit's floor is low enough
+/// to reach in normal use: Vulkan guarantees only 2^27 (128 MiB), which is what
+/// Android-class drivers report, while the desktop and MoltenVK drivers CI runs
+/// report far more -- so an over-large binding is invisible exactly where it is
+/// tested and fatal where it ships.
+/// @param what       Names the caller and the buffer, for the error message.
+/// @param bytes      The range the binding would cover.
+/// @param max_range  The device limit, from @ref max_storage_buffer_range.
+/// @return OK when @p bytes fits, else @ref Status::Code::InvalidArgument.
+inline Status check_storage_buffer_range(const char* what, VkDeviceSize bytes,
+                                         VkDeviceSize max_range) {
+  if (bytes > max_range) {
+    return Status::invalid_argument(
+        std::string(what) + " exceeds the device maxStorageBufferRange");
+  }
+  return {};
 }
 
 /// @brief Create a host-visible, host-mapped storage buffer of @p bytes.
