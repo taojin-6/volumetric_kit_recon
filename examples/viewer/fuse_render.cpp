@@ -206,6 +206,11 @@ struct Reconstruction {
   std::vector<std::uint8_t> atlas;  // RGBA8, atlas_w * atlas_h * 4
   std::uint32_t atlas_w = 0;
   std::uint32_t atlas_h = 0;
+  /// The sensor's vertical field of view (radians), from its own intrinsics.
+  /// Carried out of fuse() because --follow renders through the sensor and must
+  /// match it; deriving it in main() from constants is how it came to use 360
+  /// as the half-height of a 680-tall image.
+  float sensor_vfov = 0.0f;
 };
 
 vr::Result<Reconstruction> fuse(const Options& opt,
@@ -219,6 +224,12 @@ vr::Result<Reconstruction> fuse(const Options& opt,
   VR_ASSIGN(vr_example::ReplicaDataset dataset,
             vr_example::ReplicaDataset::open(opt.scene_dir, opt.cam_params));
   const vr_example::CameraModel& cam = dataset.camera();
+  // Split about the principal point rather than assuming it is centred: cy is
+  // 339.5 on Replica, not height/2.
+  const float sensor_vfov =
+      std::atan(static_cast<float>(cam.cy) / static_cast<float>(cam.fy)) +
+      std::atan((static_cast<float>(cam.height) - static_cast<float>(cam.cy)) /
+                static_cast<float>(cam.fy));
 
   vol::VoxelGridParams grid{};
   grid.voxel_size = opt.voxel;
@@ -316,6 +327,7 @@ vr::Result<Reconstruction> fuse(const Options& opt,
   std::printf("fused %zu frames\n", fused);
 
   Reconstruction recon;
+  recon.sensor_vfov = sensor_vfov;
   VR_ASSIGN(recon.mesh, extractor.extract(volume));
 
   // Project one keyframe onto the mesh (the live single-camera texturing
@@ -389,7 +401,11 @@ int main(int argc, char** argv) {
     // same follow-camera math the live viewer uses.
     const glm::mat4& c2w = poses[static_cast<std::size_t>(opt.follow)];
     const glm::vec3 eye(c2w[3]);
-    const float vfov = 2.0f * std::atan(360.0f / 600.0f);  // ~Replica vfov
+    // The sensor's own vertical FOV, carried out of fuse(). It used to be
+    // 2 * atan(360 / 600), wrong twice over: the half-height of a 680-tall
+    // sensor is 340, not 360, and hardcoding 600 for fy silently ignored
+    // --cam-params.
+    const float vfov = recon.sensor_vfov;
     view_proj = vg::camera::Camera::look_at_perspective(
                     eye, eye + glm::vec3(c2w[2]), -glm::vec3(c2w[1]), vfov,
                     aspect, 0.05f, 16.0f)

@@ -40,7 +40,8 @@ inline constexpr std::uint32_t kFailLock = 1;      ///< Lock contention.
 inline constexpr std::uint32_t kFailChain = 2;     ///< Collision chain full.
 inline constexpr std::uint32_t kFailHeap = 3;      ///< Block heap empty.
 inline constexpr std::uint32_t kFailTerminal = 4;  ///< Non-retryable.
-inline constexpr std::uint32_t kFailSlots = 5;     ///< Slots in the tally.
+inline constexpr std::uint32_t kFailTable = 5;     ///< No free entry at all.
+inline constexpr std::uint32_t kFailSlots = 6;     ///< Slots in the tally.
 /// @}
 
 /// @name Spatial-hash primes

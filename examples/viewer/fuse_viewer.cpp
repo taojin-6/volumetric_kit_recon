@@ -103,7 +103,6 @@ struct Options {
   float trunc = 0.0f;
   float max_depth = 8.0f;
   int max_frames = 400;
-  int fuse_per_tick = 1;
   int remesh_every = 1;  // re-extract + re-upload every N fused frames
   int width = 1280;
   int height = 720;
@@ -140,10 +139,6 @@ bool parse_args(int argc, char** argv, Options& o) {
       const char* x = v();
       if (!x) return false;
       o.max_frames = std::atoi(x);
-    } else if (a == "--fuse-per-tick") {
-      const char* x = v();
-      if (!x) return false;
-      o.fuse_per_tick = std::max(1, std::atoi(x));
     } else if (a == "--remesh-every") {
       const char* x = v();
       if (!x) return false;
@@ -180,7 +175,7 @@ bool parse_args(int argc, char** argv, Options& o) {
     std::fprintf(stderr,
                  "usage: fuse_viewer <scene_dir> [--voxel m] [--trunc m] "
                  "[--max-frames n] "
-                 "[--fuse-per-tick k] [--remesh-every n] [--unlit] "
+                 "[--remesh-every n] [--unlit] "
                  "[--no-texture] [--preload] [--no-overlay] [--validation]\n");
     return false;
   }

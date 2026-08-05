@@ -267,9 +267,10 @@ vr::Status run(const Options& opt) {
             "map cannot grow further without overflowing the block index");
       }
       std::printf(
-          "  map overflow (%u fails: %u chain, %u heap) -> resize to %lld "
-          "buckets\n",
-          failed, failures.chain, failures.heap, static_cast<long long>(grown));
+          "  map overflow (%u fails: %u chain, %u heap, %u table) -> resize to "
+          "%lld buckets\n",
+          failed, failures.chain, failures.heap, failures.table,
+          static_cast<long long>(grown));
       VR_TRY(volume.resize(static_cast<std::int32_t>(grown)));
     }
     return vr::Status::out_of_memory(

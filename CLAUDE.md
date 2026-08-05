@@ -1097,6 +1097,62 @@ Each dated; newest context wins. Change the decision *and* this list together.
   band hardcoded in metres made `--voxel` silently change the band's width *in
   voxels* — 1.6 voxels at `--voxel 0.05`, 16 at `0.005` — and made the same
   flag value reconstruct differently across the examples the A/B exists for.
+  **Second pass, the nine the review cut for its report cap.** Same rule, and
+  three were the same *shape* as the thirteen above. (a) `pack_linear_to_srgb`
+  clamped with `e < 0 ? 0 : (e > 1 ? 1 : e)`, which **NaN slips through** —
+  it compares false to both bounds — into a float-to-unsigned conversion that
+  is undefined for a value it cannot represent, in a header this library
+  *installs*. Rewritten as "keep only what is provably in range"; confirmed by
+  reverting it under the UBSan leg, which reports `nan is outside the range of
+  representable values of type 'unsigned int'` at that exact line. (b) The
+  frustum cull's block AABB was the occupied volume shifted **+½ voxel** on
+  every axis (it took the origin voxel's *centre* as `bmin` and added a whole
+  edge, where node-centred voxels extend a half-voxel past each end). The
+  ~10% widening does not absorb it: `make_frustum_planes` scales `fx`/`fy`, so
+  near and far are exact, and the shift lands on them asymmetrically —
+  the near test compares `bmax` and is merely loosened, while the far test
+  compares `bmin` and is *tightened*, culling blocks whose voxels are within
+  `far_z` while their surface is in view. (c) An overflow-chain insert that
+  failed because the **table** was full reported `kFailHeap` — a reason that is
+  *provably impossible* on the rehash path, which presets each pointer and
+  never touches the heap. Now `kFailTable`, and the two allocate helpers return
+  a reason rather than a bool, which is what makes the distinction expressible;
+  `AllocFailures` grows the field and `capacity_limited()` covers it.
+  The rest were smaller. `ExtractTimings::arena_bytes` reported 0 on the
+  empty-extract path — "the extractor released its memory", the opposite of
+  true, on the instrument the ring runaway was diagnosed with.
+  `VoxelBlockGrid::resize` now validates the grown grid before allocating,
+  though honestly: it *overlaps* the `maxStorageBufferRange` guard added above,
+  which fires first on any real device, and is kept only because it states the
+  grow is illegal arithmetically rather than too large for this hardware. Three
+  GLSL headers still documented the superseded 48-byte vertex (`color@24` —
+  the offset `tangent` has occupied since the 2026-08-02 layout decision), a
+  stale comment that read as current because `uv0@40` and the number 48 both
+  still appear in the real layout. `fuse_render`'s `--follow` computed its FOV
+  as `2*atan(360/600)`, wrong twice — 340 is the half-height of a 680-tall
+  sensor, and the hardcoded `fy` ignored `--cam-params` — so the sensor's vfov
+  is now carried out of `fuse()` from its own intrinsics, split about the
+  principal point. `--fuse-per-tick` was parsed, clamped and documented in the
+  usage string while **nothing read it**; removed rather than given an invented
+  meaning.
+  **Three assertions that could not fail** are the last group, and they are the
+  reason this pass exists at all — a test that cannot fail is worse than no
+  test, because it is counted. `marching_cubes_config_test` asserted that a
+  stale `release_through(0)` still *refused* an extract, which held with or
+  without the monotonic guard because the ring had no free slot either way; it
+  now releases the whole ring first, so a dropped `std::max` turns the mark to
+  0 and stalls the ring — a failure. `compute_raii_test` seeded the
+  move-assignment's destination from the source (`c.set = b.set`), so
+  `c.set.handle() == raw` was true *before* the assignment ran; the destination
+  is now a second real pool + set with its own handle to lose. Both were
+  confirmed to fail against the mutation they exist to catch.
+  `sensor_conventions_test`'s was vacuous for a third reason — `dst` still held
+  the previous call's output — and is now zeroed and checked in full, but it is
+  recorded here that it *still* cannot discriminate the `is_canonical` mutation
+  the review named: for 8-bit input the decode/encode round trip is the
+  identity, which is precisely why `Transfer::Bt709` is accepted as sRGB rather
+  than converted. That predicate is pinned directly where it lives, in
+  `core_color_space_test`, and the mutation fails there.
 
 ## Provenance & salvage policy
 
