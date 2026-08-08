@@ -40,7 +40,13 @@ FetchContent_Declare(
   # nondeterministically. A warm build tree hides it by skipping shader
   # compilation entirely, which is why it only surfaced once CI started
   # discarding stale trees.
-  GIT_TAG b31ee1e3f35af550425eb1d538da8cf26dedf6ca # WindowedApp::adopt (#89)
+  #
+  # And at or past gfx #92, which made AdoptedDevice's enabled_* block the
+  # authority `Device::adopt` verifies against. shared_device.hpp's
+  # gfx_adopt_payload sets those fields, so it does not compile before it -- and
+  # a pin that stopped short would not merely lose a check but fail the adopt,
+  # since the fields default to "not enabled".
+  GIT_TAG d8949f6c1ddaa7c1011074c2e48a02521e53977b # gfx #92
   GIT_SHALLOW FALSE)
 FetchContent_MakeAvailable(volumetric_kit_gfx)
 
