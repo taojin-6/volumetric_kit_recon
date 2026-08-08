@@ -189,10 +189,30 @@ int test_compute_kernel_moves(VkDevice device) {
 
   // move-assign over a live kernel: destination adopts the source, source
   // reset.
+  //
+  // The destination has to be live *and distinguishable*. Seeding it with
+  // `c.set = b.set` made `c.set.handle() == raw` true before the assignment
+  // ran, so the check below passed whether or not anything was transferred.
+  // A second real pool + set gives c its own handle to lose.
+  vr::Result<vr::DescriptorSetLayout> layout2 =
+      vr::DescriptorSetLayout::create(device, nullptr, 0);
+  CHECK(layout2.ok());
+  vr::Result<vr::DescriptorPool> pool2 =
+      vr::DescriptorPool::create(device, &size, 1, 1);
+  CHECK(pool2.ok());
+  vr::Result<vr::DescriptorSet> set2 =
+      pool2.value().allocate(layout2.value().handle());
+  CHECK(set2.ok());
+  const VkDescriptorSet raw2 = set2.value().handle();
+  CHECK(raw2 != VK_NULL_HANDLE);
+  CHECK(raw2 != raw);  // both alive, so the driver cannot have reused one
+
   vr::ComputeKernel c;
-  c.set = b.set;
+  c.layout = std::move(layout2).value();
+  c.set = set2.value();
+  CHECK(c.set.handle() == raw2);
   c = std::move(b);
-  CHECK(c.set.handle() == raw);
+  CHECK(c.set.handle() == raw);  // adopted b's, not kept its own
   CHECK(c.layout.valid());
   CHECK(b.set.handle() == VK_NULL_HANDLE);  // NOLINT(bugprone-use-after-move)
 

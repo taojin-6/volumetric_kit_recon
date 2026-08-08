@@ -232,10 +232,29 @@ vr::Status run(const Options& opt) {
       [&](const vr_example::RgbdFrame& frame,
           const vr::DepthCameraParams& depth_camera) -> vr::Status {
     for (int attempt = 0; attempt < 5; ++attempt) {
-      VR_ASSIGN(std::uint32_t failed, volume.map().allocate_from_depth(
-                                          frame.depth.data(), depth_camera));
+      vol::AllocFailures failures;
+      VR_ASSIGN(std::uint32_t failed,
+                volume.map().allocate_from_depth(frame.depth.data(),
+                                                 depth_camera, &failures));
       if (failed == 0) {
         return {};
+      }
+      // Grow only for a *capacity* limit. Depth allocation is the most
+      // contended entry point in the map -- adjacent pixels dilate into the
+      // same block, and the kernel's bucket spin-lock gives up after a bounded
+      // number of retries -- so the retry loop can hand back a residue of pure
+      // lock failures over a table that is nowhere near full. Doubling on that
+      // is expensive and unbounded: at this example's defaults each attribute
+      // array goes 768 MiB -> 1536 MiB, and resize builds the grown buffers
+      // beside the old ones, so the transient peak is ~2.3 GiB -- for pressure
+      // that does not exist. Report it and retry instead; the next dispatch
+      // sees less contention because the blocks that did land are now present.
+      if (!failures.capacity_limited()) {
+        std::printf(
+            "  %u allocations lost bucket-lock races (no capacity limit) -> "
+            "retrying without growing\n",
+            failed);
+        continue;
       }
       // Double in int64 and bail before the block index (bucket_size * buckets)
       // would overflow int32, so a growth that can no longer fit reports
@@ -247,8 +266,11 @@ vr::Status run(const Options& opt) {
         return vr::Status::out_of_memory(
             "map cannot grow further without overflowing the block index");
       }
-      std::printf("  map overflow (%u fails) -> resize to %lld buckets\n",
-                  failed, static_cast<long long>(grown));
+      std::printf(
+          "  map overflow (%u fails: %u chain, %u heap, %u table) -> resize to "
+          "%lld buckets\n",
+          failed, failures.chain, failures.heap, failures.table,
+          static_cast<long long>(grown));
       VR_TRY(volume.resize(static_cast<std::int32_t>(grown)));
     }
     return vr::Status::out_of_memory(

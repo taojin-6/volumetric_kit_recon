@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "volumetric_kit/recon/core/compute_kernel.hpp"
+#include "volumetric_kit/recon/core/compute_util.hpp"
 #include "volumetric_kit/recon/core/device.hpp"
 #include "volumetric_kit/recon/core/vulkan.hpp"
 
@@ -63,33 +64,9 @@ static_assert(offsetof(PushConstants, has_color) == 44,
 static_assert(offsetof(PushConstants, has_color_attr) == 48,
               "PushConstants layout drift");
 
-// Ceil-divide without the `items + kLocalSize - 1` term, which overflows uint32
-// for items near UINT32_MAX (yielding ~0 groups -> a silent no-op dispatch).
+// This tier's local_size, bound once so every call site reads group_count(n).
 std::uint32_t group_count(std::uint32_t items) {
-  return items / kLocalSize + (items % kLocalSize != 0u ? 1u : 0u);
-}
-
-// A host-visible, host-mapped storage buffer of the given byte size.
-Result<Buffer> storage_buffer(Allocator& allocator, VkDeviceSize bytes,
-                              HostAccess access = HostAccess::Random) {
-  BufferDesc desc;
-  desc.size = bytes;
-  desc.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-  desc.memory = MemoryUsage::HostVisible;
-  desc.mapped = true;
-  desc.host_access = access;
-  return allocator.create_buffer(desc);
-}
-
-// A host-visible storage buffer of `bytes`, filled from `src` -- the alloc +
-// map + memcpy every per-call upload (active blocks, depth, color) repeats.
-// Ties the allocation size and the copy length to one argument.
-Result<Buffer> upload_storage_buffer(Allocator& allocator, const void* src,
-                                     VkDeviceSize bytes) {
-  VR_ASSIGN(Buffer buf,
-            storage_buffer(allocator, bytes, HostAccess::SequentialWrite));
-  std::memcpy(buf.mapped(), src, static_cast<std::size_t>(bytes));
-  return buf;
+  return volumetric_kit::recon::group_count(items, kLocalSize);
 }
 
 }  // namespace
@@ -122,6 +99,9 @@ Result<TsdfIntegrator> TsdfIntegrator::create(Device& device,
   VkPhysicalDeviceProperties props{};
   vkGetPhysicalDeviceProperties(device.physical_device(), &props);
   integ.max_workgroup_count_x_ = props.limits.maxComputeWorkGroupCount[0];
+  // Likewise for the per-call depth / colour frame uploads, which are bound
+  // whole: a frame past this limit is invalid usage, not a slow path.
+  integ.max_storage_buffer_range_ = props.limits.maxStorageBufferRange;
 
   // The camera params are fixed-size, so persist the SSBO (bound once at
   // binding 4) and rewrite its contents each integrate() -- not a per-call
@@ -231,9 +211,12 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid, const float* depth,
 
   const auto pixels = static_cast<std::size_t>(cam.width) *
                       static_cast<std::size_t>(cam.height);
+  const VkDeviceSize depth_bytes = VkDeviceSize(pixels) * sizeof(float);
+  VR_TRY(
+      check_storage_buffer_range("TsdfIntegrator::integrate: the depth buffer",
+                                 depth_bytes, max_storage_buffer_range_));
   VR_ASSIGN(Buffer depth_buf,
-            upload_storage_buffer(*allocator_, depth,
-                                  VkDeviceSize(pixels) * sizeof(float)));
+            upload_storage_buffer(*allocator_, depth, depth_bytes));
 
   // The camera params ride the SSBO verbatim; the kernel derives world ->
   // camera from the rigid cam_to_world, so there is no host-side pose
@@ -267,9 +250,13 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid, const float* depth,
   if (color != nullptr) {
     const auto cpixels = static_cast<std::size_t>(color->cam.width) *
                          static_cast<std::size_t>(color->cam.height);
-    VR_ASSIGN(color_buf, upload_storage_buffer(
-                             *allocator_, color->pixels,
-                             VkDeviceSize(cpixels) * sizeof(std::uint32_t)));
+    const VkDeviceSize color_bytes =
+        VkDeviceSize(cpixels) * sizeof(std::uint32_t);
+    VR_TRY(check_storage_buffer_range(
+        "TsdfIntegrator::integrate: the colour buffer", color_bytes,
+        max_storage_buffer_range_));
+    VR_ASSIGN(color_buf,
+              upload_storage_buffer(*allocator_, color->pixels, color_bytes));
     std::memcpy(color_cam_buf_.mapped(), &color->cam,
                 sizeof(ColorCameraParams));
     kernel_.set.write_storage_buffer(5, color_buf.handle(), 0, VK_WHOLE_SIZE);

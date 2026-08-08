@@ -33,7 +33,8 @@ struct DepthCameraParams {
 };
 
 // One mesh vertex (mirrors mesh::Vertex byte-for-byte: position@0, normal@12,
-// color@24, uv0@40, 48 B). The kernel reads `position` and overwrites `uv0`.
+// tangent@24, uv0@40, color@48, 64 B -- the renderer's layout since the
+// 2026-08-02 decision). The kernel reads `position` and overwrites `uv0`.
 struct Vertex {
   vec3 position;
   vec3 normal;

@@ -24,7 +24,7 @@
 // across CPU/GLSL, mirroring the volume tier's POD discipline); Voxel and Vertex
 // are read/written through scalar block layout so they match the host structs
 // (volume/hash_types.hpp Voxel: sdf@0, weight@4, 8 B; mesh Vertex: position@0,
-// normal@12, color@24, uv0@40, 48 B) byte-for-byte.
+// normal@12, tangent@24, uv0@40, color@48, 64 B) byte-for-byte.
 
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_GOOGLE_include_directive : require

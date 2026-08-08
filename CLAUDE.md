@@ -217,7 +217,13 @@ Each dated; newest context wins. Change the decision *and* this list together.
   copy; `texture` and `mesh` consume them now — `mesh` migrated on 2026-08-02
   rather than fork its copy to carry the `MarchingCubesConfig` usage bits, which
   is why `storage_buffer` grew its `extra_usage` parameter — and the `volume` /
-  `tsdf` copies migrate next, a mechanical follow-up, greppable `TODO(core)`.)
+  `tsdf` copies migrated on 2026-08-04 — forced rather than chosen: `volume` and
+  `tsdf` had to include `compute_util.hpp` for the new range guard, and their
+  private `storage_buffer` copies then made every unqualified call **ambiguous**
+  by ADL against the `core` one, since `Allocator` names `recon` as an
+  associated namespace. Each tier keeps only its one-argument `group_count`
+  wrapper, which bakes in that tier's `local_size` and cannot collide with
+  `core`'s two-argument overload.)
 - **2026-07-06 — Hybrid color renders through a gfx pipeline (amends "interop
   seam A needs zero gfx changes").** The renderer's shipped PBR path is
   texture-only and ignores per-vertex `color`, so `volumetric_kit_gfx` grew a
@@ -968,6 +974,185 @@ Each dated; newest context wins. Change the decision *and* this list together.
   holds a live `DeviceMesh` while a host extract runs on the same extractor and
   asserts the ring then refuses — the handle-independent half of (3), which no
   dedicated-extractor test could see.
+
+- **2026-08-04 — A limit, a lifetime, or a staleness the caller cannot see is
+  the library's to check, not to document.** A whole-repo review found fifteen
+  defects and thirteen were one shape: *correct for recon reading its own
+  results on the machine CI runs, silently wrong elsewhere* — the same family
+  the seam-B decisions above kept turning up, now swept across every tier. What
+  unifies the fixes is **where** the check went, so the rule is stated once
+  here rather than re-argued per site: when a caller cannot obtain the fact it
+  is required to honour, an obligation in prose is not a contract, and the
+  library asks the question itself.
+  **(1) `maxStorageBufferRange` is a real ceiling, and it is lowest exactly
+  where nothing tests it.** Vulkan guarantees only 2^27 (128 MiB) — what
+  Android-class drivers report — while MoltenVK and desktop drivers report far
+  more, so an over-large binding is invisible on every machine this repo runs
+  on and undefined on a stated target. `mesh` and `texture` guarded their
+  buffers; `volume` and `tsdf` did not, and their `VoxelBlockGrid` attribute
+  arrays are the **largest allocations in the repo** — 256 MiB *per attribute*
+  at every example's default grid, twice the floor before a single resize, and
+  bound `VK_WHOLE_SIZE` with `robustBufferAccess` enabled nowhere. The guard is
+  now `core`'s (`compute_util.hpp`: `max_storage_buffer_range` /
+  `check_storage_buffer_range`), which is what forced the `volume`/`tsdf`
+  helper migration noted above, and it is applied where the size is *chosen*
+  (attribute create + every grow, the depth/colour frame uploads) rather than
+  at each bind, since a consumer could only re-derive the same number.
+  **(2) A lifetime rule that cannot describe move-assignment is not a rule.**
+  `Allocator` documented "destroy Buffers before their Allocator", which a
+  reader satisfies by keeping the object alive — and `a = std::move(b)` then
+  ends the resource's life while the wrapper visibly lives on, so every
+  outstanding `Buffer` freed through a destroyed `VmaAllocator`. Made
+  structural instead: the pImpl is a `shared_ptr` and each `Buffer`'s deleter
+  holds a reference, so the ordering is unconstrained and the `@warning`
+  becomes a `@note`. `Allocator` stays move-only; the cost is one atomic per
+  buffer create/destroy, against a device allocation on the same path.
+  **(3) Staleness must be *askable* by whoever acts on it.** `DeviceMesh`
+  carried a `generation`, but only `MarchingCubes::download` could compare it —
+  so the *reading* path was guarded and the *writing* path,
+  `ProjectiveTexturer::texture`, was not, while its header stated the
+  obligation and handed the texturer no means to check it. Binding a superseded
+  view is a use-after-free when the intervening extract grew the arena
+  (`Buffer::operator=` runs `vmaDestroyBuffer` with no fence), and silently
+  wrong when it did not. `DeviceMesh` now carries a non-owning pointer to its
+  producer's live counter and answers `is_current()`; the texturer refuses.
+  Handle comparison cannot substitute — a grow-only arena reused in place makes
+  a superseded view name the very same `VkBuffer`. The pointer borrows the
+  producer's address as the handles already borrow its storage, so a view still
+  must not outlive or be held across a move of its producer.
+  **(4) A predicted quantity is clamped, never rejected.** The mesh arena's
+  range check tested `plan_capacity`'s *guess* — last call's density scaled by
+  this call's active set — and `tris_per_block_` is written only on success
+  while a scan's active set only grows, so a single over-estimate failed the
+  extractor **permanently**, quoting a limit the real surface fitted inside. It
+  clamps now, and the rejection moved onto the *measured* count the refit
+  protocol already produces, which is what the error message always claimed.
+  **(5) A validator must not be defeated by its own arithmetic.**
+  `VoxelGridParams::validate` compared `num_blocks` against a *narrow* product
+  that wrapped exactly as the `uint32` multiply in `VoxelHashMap::resize` had,
+  so both sides agreed on the wrapped value and the guard could never fire —
+  and cubed `block_size` unbounded, which is signed-overflow UB inside the
+  function whose job is rejecting bad input (2048³ wraps to exactly 0, so
+  `voxels_per_block == 0` passed and every block aliased pointer 0). Bounded
+  before the cube, widened for the product. `bucket_size == 1` is now rejected
+  outright: the last entry of each bucket is its chain anchor, so at one entry
+  per bucket *every* slot is an anchor and `allocate_in_overflow` — which skips
+  anchors — is a guaranteed no-op, failing the first colliding pair forever,
+  which a caller reads as capacity pressure and answers by growing until it is
+  out of memory.
+  **(6) A retry loop may only erase a failure it can actually resolve.**
+  `dispatch_with_retry` re-dispatches while the failure count drops, which is
+  right for allocation (the element is still unprocessed) and wrong for
+  deletion: the heap append runs *after* the table entry is cleared, so a
+  coord whose block could not be returned to the free heap is absent next round
+  and counts nothing — `remove()` reported a clean delete over a permanently
+  leaked block index. The tally gains a **`kFailTerminal` slot** the host
+  accumulates across rounds instead of reading from the last one, and the slot
+  layout moved to `hash_common.glsl` because it is a host/device ABI two
+  kernels share, not one header's private business.
+  **(7) The aggregate the API returned could not answer the question the caller
+  had to ask.** Every allocate kernel already split its failures by reason and
+  nothing exposed them, so `fuse_replica` read a residue of lost bucket-lock
+  races — transient contention, worst for depth, whose adjacent pixels dilate
+  into the same block — as map overflow and **doubled the volume**: at the
+  example defaults 768 MiB → 1536 MiB per attribute, with both old and new
+  buffers live across the swap, for a table that was never full. `AllocFailures`
+  is an opt-in `nullptr`-defaulted out-param (the `ExtractTimings` shape the
+  2026-08-01 amendment blessed, and the same bar: no global sink, no retained
+  state, nothing measured when null) carrying `capacity_limited()` — the
+  predicate `resize` actually answers. All three examples consult it.
+  **(8) The tier that owns both halves does the clearing.** The delete kernel
+  justified not clearing a freed block's per-voxel data with "there is no voxel
+  data to clear yet", false since the `tsdf` tier landed. It genuinely cannot:
+  under the SoA decision the block index does not know what attributes a
+  consumer declared. But the heap is **LIFO**, so the next allocation re-draws
+  the freed index onto the identical range and the removed surface's
+  `tsdf`/`weight` resurrect at full fused weight — bypassing the integrator's
+  `color_attr == 0` first-observation gate, which exists to stop exactly a
+  wrong first colour. So `VoxelBlockGrid` grew `remove` / `clear`, which zero
+  the ranges first (resolved from the compacted active set — no new kernel, and
+  the buffers are host-mapped); `map().remove()` remains the raw path and says
+  so. Its sibling hazard, `map().resize()` desyncing the attribute arrays, was
+  documented as safe because "a downstream bounds check stays sound" via
+  `AttributeView::element_count` — which **nothing read**. `attribute()` is the
+  funnel every consumer passes through, so it now refuses an array that no
+  longer covers the live grid, and the promise is true.
+  **Verification followed the repo's own standard, and it was measured.** Each
+  fix that could be pinned host-side or on MoltenVK is, and each new assertion
+  was confirmed to **fail against the pre-fix code** by mutation: reverting the
+  `validate` widening, dropping the attribute clearing, dropping the
+  `attribute()` desync check, and dropping the texturer's currency check each
+  fail a named line. `fuse_replica` on Replica room0 produces a mesh identical
+  to `main` triangle-for-triangle (832 518 vertices / 277 506 triangles over
+  120 frames), which is the point: none of this changes fusion numerics on the
+  hardware that already worked — it changes what happens on the hardware that
+  did not. Two example-level fixes carry no test because they are in the
+  gfx-linked examples, which only the build-only viewer CI leg covers:
+  `fuse_render` / `fuse_viewer` discriminating a decode failure from
+  end-of-sequence (both swallowed it, and the CI-visible render leg wrote a
+  partial-room PNG and exited 0), and `StageTimes::total_ms` skipping the
+  `"  .."`-prefixed breakdown rows, which re-state time already counted by the
+  stage they decompose and so reported every extract twice. Both viewers also
+  gained `--trunc`, defaulted to `4 * voxel` as `fuse_replica` does, since a
+  band hardcoded in metres made `--voxel` silently change the band's width *in
+  voxels* — 1.6 voxels at `--voxel 0.05`, 16 at `0.005` — and made the same
+  flag value reconstruct differently across the examples the A/B exists for.
+  **Second pass, the nine the review cut for its report cap.** Same rule, and
+  three were the same *shape* as the thirteen above. (a) `pack_linear_to_srgb`
+  clamped with `e < 0 ? 0 : (e > 1 ? 1 : e)`, which **NaN slips through** —
+  it compares false to both bounds — into a float-to-unsigned conversion that
+  is undefined for a value it cannot represent, in a header this library
+  *installs*. Rewritten as "keep only what is provably in range"; confirmed by
+  reverting it under the UBSan leg, which reports `nan is outside the range of
+  representable values of type 'unsigned int'` at that exact line. (b) The
+  frustum cull's block AABB was the occupied volume shifted **+½ voxel** on
+  every axis (it took the origin voxel's *centre* as `bmin` and added a whole
+  edge, where node-centred voxels extend a half-voxel past each end). The
+  ~10% widening does not absorb it: `make_frustum_planes` scales `fx`/`fy`, so
+  near and far are exact, and the shift lands on them asymmetrically —
+  the near test compares `bmax` and is merely loosened, while the far test
+  compares `bmin` and is *tightened*, culling blocks whose voxels are within
+  `far_z` while their surface is in view. (c) An overflow-chain insert that
+  failed because the **table** was full reported `kFailHeap` — a reason that is
+  *provably impossible* on the rehash path, which presets each pointer and
+  never touches the heap. Now `kFailTable`, and the two allocate helpers return
+  a reason rather than a bool, which is what makes the distinction expressible;
+  `AllocFailures` grows the field and `capacity_limited()` covers it.
+  The rest were smaller. `ExtractTimings::arena_bytes` reported 0 on the
+  empty-extract path — "the extractor released its memory", the opposite of
+  true, on the instrument the ring runaway was diagnosed with.
+  `VoxelBlockGrid::resize` now validates the grown grid before allocating,
+  though honestly: it *overlaps* the `maxStorageBufferRange` guard added above,
+  which fires first on any real device, and is kept only because it states the
+  grow is illegal arithmetically rather than too large for this hardware. Three
+  GLSL headers still documented the superseded 48-byte vertex (`color@24` —
+  the offset `tangent` has occupied since the 2026-08-02 layout decision), a
+  stale comment that read as current because `uv0@40` and the number 48 both
+  still appear in the real layout. `fuse_render`'s `--follow` computed its FOV
+  as `2*atan(360/600)`, wrong twice — 340 is the half-height of a 680-tall
+  sensor, and the hardcoded `fy` ignored `--cam-params` — so the sensor's vfov
+  is now carried out of `fuse()` from its own intrinsics, split about the
+  principal point. `--fuse-per-tick` was parsed, clamped and documented in the
+  usage string while **nothing read it**; removed rather than given an invented
+  meaning.
+  **Three assertions that could not fail** are the last group, and they are the
+  reason this pass exists at all — a test that cannot fail is worse than no
+  test, because it is counted. `marching_cubes_config_test` asserted that a
+  stale `release_through(0)` still *refused* an extract, which held with or
+  without the monotonic guard because the ring had no free slot either way; it
+  now releases the whole ring first, so a dropped `std::max` turns the mark to
+  0 and stalls the ring — a failure. `compute_raii_test` seeded the
+  move-assignment's destination from the source (`c.set = b.set`), so
+  `c.set.handle() == raw` was true *before* the assignment ran; the destination
+  is now a second real pool + set with its own handle to lose. Both were
+  confirmed to fail against the mutation they exist to catch.
+  `sensor_conventions_test`'s was vacuous for a third reason — `dst` still held
+  the previous call's output — and is now zeroed and checked in full, but it is
+  recorded here that it *still* cannot discriminate the `is_canonical` mutation
+  the review named: for 8-bit input the decode/encode round trip is the
+  identity, which is precisely why `Transfer::Bt709` is accepted as sRGB rather
+  than converted. That predicate is pinned directly where it lives, in
+  `core_color_space_test`, and the mutation fails there.
 
 ## Provenance & salvage policy
 

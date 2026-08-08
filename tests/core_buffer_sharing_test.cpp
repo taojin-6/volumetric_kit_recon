@@ -29,6 +29,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <string_view>
+#include <utility>
 
 #include "queue_family_set.hpp"
 #include "volumetric_kit/recon/core/allocator.hpp"
@@ -240,6 +241,55 @@ int main() {
     vr::Result<vr::Buffer> buffer = allocator.value().create_buffer(desc);
     CHECK(!buffer.ok());
     CHECK(buffer.status().domain() == vr::Status::Code::InvalidArgument);
+  }
+
+  // An index no family on this device answers to is refused, in either mode.
+  // It is CONCURRENT where it matters: naming a nonexistent family violates
+  // VUID-VkBufferCreateInfo-sharingMode-01419, and vmaCreateBuffer still
+  // returns VK_SUCCESS, so with layers off -- the shipping configuration, and
+  // the only one on iOS -- nothing at all reports it. The shape that produces
+  // it is an app hardcoding the two families it saw on Apple and running
+  // somewhere with fewer, so the out-of-range index is derived from this
+  // device's real count rather than assumed.
+  {
+    const std::uint32_t past_end[] = {0, family_count};
+    vr::BufferDesc desc = base();
+    desc.queue_families = past_end;
+    desc.queue_family_count = 2;
+    vr::Result<vr::Buffer> buffer = allocator.value().create_buffer(desc);
+    CHECK(!buffer.ok());
+    CHECK(buffer.status().domain() == vr::Status::Code::InvalidArgument);
+  }
+  // Also refused when the duplicate collapses it to EXCLUSIVE, where Vulkan
+  // ignores the list: an index the device does not have is a caller bug either
+  // way, and reporting it where the list is given is the point.
+  {
+    const std::uint32_t past_end[] = {family_count, family_count};
+    vr::BufferDesc desc = base();
+    desc.queue_families = past_end;
+    desc.queue_family_count = 2;
+    vr::Result<vr::Buffer> buffer = allocator.value().create_buffer(desc);
+    CHECK(!buffer.ok());
+    CHECK(buffer.status().domain() == vr::Status::Code::InvalidArgument);
+  }
+
+  // A Buffer outliving the Allocator *object* is well-defined, because the
+  // allocator's lifetime is what a Buffer holds a reference to -- not the
+  // wrapper's. Move-assignment is the case a prose ordering rule could not
+  // express: `alloc = std::move(other)` ends the resource's life while the
+  // wrapper visibly lives on, so a reader who satisfied "destroy Buffers first"
+  // by keeping the object alive still got a use-after-free when the Buffer
+  // freed through the destroyed VmaAllocator. Under the sanitizers leg this is
+  // a real detector; here it is at least a crash.
+  {
+    vr::Result<vr::Allocator> other =
+        vr::Allocator::create(instance.value().handle(), device.value());
+    CHECK(other.ok());
+    vr::Result<vr::Buffer> buffer = allocator.value().create_buffer(base());
+    CHECK(buffer.ok());
+    allocator.value() = std::move(other).value();  // frees the old allocator
+    CHECK(allocator.value().valid());
+    // buffer's destructor runs here, against the allocator it was made from.
   }
 
   // The layer's verdict on every buffer above. Zero is the assertion; a

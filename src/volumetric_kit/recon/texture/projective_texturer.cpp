@@ -116,6 +116,20 @@ Status ProjectiveTexturer::texture(const mesh::DeviceMesh& mesh,
     return Status::invalid_argument(
         "ProjectiveTexturer::texture: the DeviceMesh names no buffers");
   }
+  // valid() is a handle-non-null check and says nothing about whether these
+  // handles are still the producer's. It has to be asked here, not only in
+  // MarchingCubes::download: this pass *binds and writes* the buffers, so a
+  // superseded view is worse than a stale read. If the later extract grew the
+  // arena, the old VkBuffer was destroyed synchronously (no fence, no deferred
+  // retire) and binding it is a use-after-free -- undefined with validation
+  // layers off, the shipping configuration. If it did not grow, the pass
+  // silently rewrites the *current* extract's uv0 under this view's stale
+  // triangle count. The reading path was guarded and the writing path was not.
+  if (!mesh.is_current()) {
+    return Status::invalid_argument(
+        "ProjectiveTexturer::texture: the DeviceMesh has been superseded by a "
+        "later extract on its producer (texture it before extracting again)");
+  }
 
   // Only the depth frame needs a binding check here: the mesh buffers were
   // already sized (and range-checked) by the pass that created them, and are

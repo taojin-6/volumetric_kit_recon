@@ -129,11 +129,17 @@ struct BufferDesc {
 /// @ref Device.
 ///
 /// @warning The `VkInstance` and @ref Device passed to @ref create must outlive
-///          this allocator; it stores their handles.
-/// @warning This allocator must outlive every @ref Buffer it creates: a Buffer
-///          frees its `VkBuffer` and allocation through this allocator, so a
-///          Buffer destroyed after its Allocator dereferences a freed allocator
-///          (a use-after-free). Destroy Buffers before their Allocator.
+///          this allocator *and* every @ref Buffer it creates; it stores their
+///          handles, and a Buffer is freed against that `VkDevice`.
+///
+/// @note A @ref Buffer does **not** have to be destroyed before the Allocator
+///       that created it. Each Buffer holds a reference to the underlying VMA
+///       allocator, which is destroyed once the Allocator and every Buffer made
+///       from it are gone. This is deliberate rather than incidental: an
+///       ordering rule stated in prose cannot express move-assignment, where
+///       `a = std::move(b)` ends the resource's life while the wrapper `a`
+///       visibly lives on -- so a reader who satisfied "destroy Buffers first"
+///       by keeping the object alive still got a use-after-free.
 ///
 /// @code
 /// Result<Allocator> alloc = Allocator::create(instance.handle(), device);
@@ -160,8 +166,10 @@ class VR_CORE_API Allocator {
   /// @param desc  Size, usage, memory location, and mapping request.
   /// @return The buffer, or a non-OK @ref Status:
   ///         @ref Status::Code::InvalidArgument for a zero size/usage, a
-  ///         `mapped` device-local request, or a host-visible request that is
-  ///         not `mapped`; @ref Status::Code::Backend if VMA fails.
+  ///         `mapped` device-local request, a host-visible request that is not
+  ///         `mapped`, more than @ref BufferDesc::kMaxQueueFamilies distinct
+  ///         queue families, or a queue-family index the device does not have;
+  ///         @ref Status::Code::Backend if VMA fails.
   Result<Buffer> create_buffer(const BufferDesc& desc);
 
   /// @brief Sample per-heap memory usage and budget across the device's heaps.
@@ -187,9 +195,11 @@ class VR_CORE_API Allocator {
 
   // pImpl so the VmaAllocator handle -- and thus <vk_mem_alloc.h> -- stays out
   // of this public header. ~Impl frees the allocator, which is what lets the
-  // move operations below default correctly.
+  // move operations above default correctly. Shared rather than unique because
+  // every Buffer's deleter holds a reference (see the @note above); the
+  // Allocator itself stays move-only, so nothing here is copyable.
   struct Impl;
-  std::unique_ptr<Impl> impl_;
+  std::shared_ptr<Impl> impl_;
 };
 
 }  // namespace volumetric_kit::recon
