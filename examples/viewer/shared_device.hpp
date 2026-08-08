@@ -100,6 +100,11 @@ struct SharedDevice {
   bool enabled_timeline_semaphore = false;
   bool enabled_scalar_block_layout = false;
   bool enabled_dynamic_rendering = false;
+  /// Whether the *instance* got `VK_EXT_debug_utils`. An instance-level fact,
+  /// so gfx cannot query it from the device it adopts -- and left false, every
+  /// debug label and object name gfx records is a silent no-op, which is
+  /// exactly what an Xcode or RenderDoc capture of this viewer must not be.
+  bool enabled_debug_utils = false;
 
   ~SharedDevice() {
     // Both libraries' wrappers must already be gone: they borrow these.
@@ -580,6 +585,9 @@ inline bool build_shared_device(GLFWwindow* window,
   out.enabled_timeline_semaphore = want_timeline;
   out.enabled_scalar_block_layout = want_scalar;
   out.enabled_dynamic_rendering = want_dynamic_rendering;
+  // Not config.enable_validation: the layer may have been absent, in which case
+  // the instance above skipped the extension too and continued without it.
+  out.enabled_debug_utils = validation_available;
 
   vkGetDeviceQueue(out.device, out.graphics_family, 0, &out.graphics_queue);
   vkGetDeviceQueue(out.device, out.compute_family, compute_queue_index,
@@ -646,6 +654,17 @@ inline vg::AdoptedDevice gfx_adopt_payload(const SharedDevice& shared) {
   adopted.enabled_device_extensions = shared.enabled_extensions.data();
   adopted.enabled_device_extension_count =
       static_cast<std::uint32_t>(shared.enabled_extensions.size());
+  adopted.enabled_features = shared.enabled_features;
+  // Read back from what the bootstrap enabled, never asserted here -- as in
+  // recon_adopt_payload above. gfx's adopt verifies against this declaration
+  // rather than against physical-device support, because Vulkan cannot be asked
+  // what a *logical* device enabled: every 1.3 physical device reports
+  // dynamicRendering as supported whatever vkCreateDevice was passed. The
+  // fields default to "not enabled", so omitting them is not a lost
+  // optimisation but a refused adopt at startup.
+  adopted.enabled_timeline_semaphore = shared.enabled_timeline_semaphore;
+  adopted.enabled_dynamic_rendering = shared.enabled_dynamic_rendering;
+  adopted.enabled_debug_utils = shared.enabled_debug_utils;
   return adopted;
 }
 
