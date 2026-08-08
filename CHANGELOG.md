@@ -137,7 +137,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   resolves its cross-block corners through a **host-built 2×2×2 neighbour table**
   (each active block plus its seven `+x/+y/+z` neighbours, from the compacted
   active set), so the kernel needs no device-side hash probe and no access to the
-  hash table's internal buffers. When the grid carries a `uint32` `color`
+  hash table's internal buffers. *(Superseded — the kernel resolves the
+  neighbourhood on-device now; see the `Changed` entry below.)* When the grid
+  carries a `uint32` `color`
   attribute each vertex's color is interpolated from it, else opaque white; a
   corner whose color is the integrator's `0` "colour unobserved" sentinel (a
   written colour carries alpha `0xFF`) also falls back to white rather than
@@ -180,3 +182,40 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `recon_gfx_bridge.hpp` converts `mesh::Vertex` → `gfx::assets::Vertex`
   (synthesizing `tangent`, keeping the `uv0` sentinel). Verified on Replica room0:
   a correct first-person coloured room render.
+
+### Changed
+
+- `mesh`: the sparse `MarchingCubes::extract` kernel resolves its 2×2×2
+  neighbourhood **on-device** instead of being handed a host-built table. One
+  workgroup per active block (not a flat voxel grid — shared memory is per
+  workgroup), threads 0–7 each probing one octant through the new
+  `volume/shaders/hash_lookup.glsl` into `shared int s_neighbour[8]`, then every
+  thread strides over the block's voxels. The host pass it replaces was an
+  `O(active·8)` serial `unordered_map` build measured at **102.2 ms of a 132.7 ms
+  extract** at 107 k blocks on an M5 iPad Pro, against 25.9 ms for the dispatch it
+  fed; extract drops to **42.0 ms**. Both prior CUDA and Metal implementations of
+  this pipeline resolved neighbours the same way.
+  `volume::VoxelHashMap::entries_buffer` / `entries_buffer_size` are published for
+  it (bound with the real range and checked against `maxStorageBufferRange`, since
+  `resize` doubles the table), and `hash_lookup.glsl` shares `hash_common.glsl`'s
+  struct layouts and hash constants rather than mirroring them — the `pc`
+  push-constant block is opt-out via `VR_HASH_COMMON_NO_PUSH_CONSTANTS`, and both
+  headers gained include guards.
+  **The probe requires a quiescent table** (no `allocate`/`remove`/`clear`/`resize`
+  dispatch in flight), which is stated on `MarchingCubes::extract_device` as well
+  as on the accessor: it holds by construction on one thread, and a consumer that
+  fuses and meshes concurrently must serialise them. See the 2026-08-08 decision in
+  `CLAUDE.md` for what the `mesh`→`volume` coupling costs.
+- `mesh`: **removed** `ExtractTimings::neighbour_lut_ms` — the phase it measured no
+  longer exists, and a permanently-zero row in the viewer overlay is worse than an
+  absent one. `total_ms()` and `fuse_viewer`'s stage table drop it with the field.
+
+### Fixed
+
+- `volume`: `VoxelHashMap::entries_buffer_size()` reported the full table size on a
+  **moved-from** map while `entries_buffer()` correctly reported `VK_NULL_HANDLE`,
+  so the descriptor write the two accessors exist to spell would pair a null handle
+  with a non-zero range — invalid usage, and undefined with layers off, which this
+  repo neither enables `nullDescriptor` nor `robustBufferAccess` to survive. Both
+  accessors now gate on `valid()`, and `entries_buffer()` documents that a completed
+  `resize` destroys the handle (both shipped examples resize mid-scan).

@@ -722,9 +722,9 @@ int run(GLFWwindow* window, const Options& opt) {
         fuse_stages.clear();
         for (const char* stage :
              {"frame", "allocate", "integrate", "extract", "  ..compact",
-              "  ..neighbour lut", "  ..inputs", "  ..arena alloc",
-              "  ..descriptors", "  ..dispatch", "  ..readback", "texture",
-              "download", "atlas pack", "to_gfx_mesh"}) {
+              "  ..inputs", "  ..arena alloc", "  ..descriptors",
+              "  ..dispatch", "  ..readback", "texture", "download",
+              "atlas pack", "to_gfx_mesh"}) {
           fuse_stages.seed(stage);
         }
         // A preload cache hit, else a disk read + JPEG/PNG decode (the CPU
@@ -831,8 +831,6 @@ int run(GLFWwindow* window, const Options& opt) {
           // as a hierarchy *and* keeps total_ms from counting the extract
           // twice.
           fuse_stages.add("  ..compact", extract_timings.compact_ms);
-          fuse_stages.add("  ..neighbour lut",
-                          extract_timings.neighbour_lut_ms);
           fuse_stages.add("  ..inputs", extract_timings.input_upload_ms);
           fuse_stages.add("  ..arena alloc", extract_timings.arena_alloc_ms);
           fuse_stages.add("  ..descriptors", extract_timings.descriptor_ms);
