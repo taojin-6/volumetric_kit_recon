@@ -40,8 +40,15 @@ inline constexpr std::uint32_t kFailLock = 1;      ///< Lock contention.
 inline constexpr std::uint32_t kFailChain = 2;     ///< Collision chain full.
 inline constexpr std::uint32_t kFailHeap = 3;      ///< Block heap empty.
 inline constexpr std::uint32_t kFailTerminal = 4;  ///< Non-retryable.
-inline constexpr std::uint32_t kFailTable = 5;     ///< No free entry at all.
-inline constexpr std::uint32_t kFailSlots = 6;     ///< Slots in the tally.
+/// No free non-anchor slot within the overflow probe window (see
+/// `kMaxOverflowProbes` in `volume/shaders/hash_common.glsl`): "nothing free
+/// near this bucket", not "the table is full". The probe is bounded because
+/// scanning the whole table cost a contended atomic per slot and hung the GPU
+/// at high occupancy; the trade is that this is now evidence of pressure rather
+/// than proof of exhaustion. Either way the caller's response is the same --
+/// grow.
+inline constexpr std::uint32_t kFailTable = 5;
+inline constexpr std::uint32_t kFailSlots = 6;  ///< Slots in the tally.
 /// @}
 
 /// @name Spatial-hash primes
