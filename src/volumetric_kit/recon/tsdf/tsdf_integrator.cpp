@@ -327,18 +327,31 @@ Result<std::uint32_t> TsdfIntegrator::dirty_remesh_block_count(
   if (vpb == 0) return Status::invalid_argument("voxels_per_block is 0");
   const auto* flags = static_cast<const std::uint32_t*>(dirty_blocks_.mapped());
 
+  // Pack the three axes into one 64-bit key, 21 bits each.
+  //
+  // UNSIGNED shifts, and that is not style: block coordinates are routinely
+  // negative (the world origin sits inside the scan), and shifting a negative
+  // signed value is undefined behaviour -- which every build leg happily
+  // compiled and only the sanitizer leg caught.
+  //
+  // Exact rather than a hash: masking to 21 bits and OR-ing gives a bijection
+  // for |coord| < 2^20, which every real grid is far inside (a 5 m walk at 5 mm
+  // voxels spans ~125 blocks). The XOR-of-shifts this replaced could alias two
+  // distinct coordinates onto one key and silently over-count the dilated set.
   auto key = [](const Vec3i& c) {
-    return (static_cast<std::int64_t>(c.x) << 42) ^
-           (static_cast<std::int64_t>(c.y) << 21) ^
-           static_cast<std::int64_t>(c.z);
+    constexpr std::uint64_t kMask = (std::uint64_t{1} << 21) - 1;
+    const auto ux = static_cast<std::uint64_t>(static_cast<std::uint32_t>(c.x));
+    const auto uy = static_cast<std::uint64_t>(static_cast<std::uint32_t>(c.y));
+    const auto uz = static_cast<std::uint64_t>(static_cast<std::uint32_t>(c.z));
+    return ((ux & kMask) << 42) | ((uy & kMask) << 21) | (uz & kMask);
   };
   // Only blocks that EXIST can need re-meshing: a neighbour never allocated has
   // no geometry to invalidate.
-  std::unordered_set<std::int64_t> active_key;
+  std::unordered_set<std::uint64_t> active_key;
   active_key.reserve(active.size() * 2);
   for (const volume::BlockIndex& b : active) active_key.insert(key(b.coord));
 
-  std::unordered_set<std::int64_t> remesh;
+  std::unordered_set<std::uint64_t> remesh;
   remesh.reserve(active.size());
   for (const volume::BlockIndex& b : active) {
     const auto slot = static_cast<std::uint32_t>(b.ptr) / vpb;
@@ -347,7 +360,7 @@ Result<std::uint32_t> TsdfIntegrator::dirty_remesh_block_count(
     for (int dz = 0; dz <= 1; ++dz) {
       for (int dy = 0; dy <= 1; ++dy) {
         for (int dx = 0; dx <= 1; ++dx) {
-          const std::int64_t k =
+          const std::uint64_t k =
               key(Vec3i{b.coord.x - dx, b.coord.y - dy, b.coord.z - dz});
           if (active_key.count(k) != 0) remesh.insert(k);
         }

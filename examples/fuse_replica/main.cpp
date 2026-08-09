@@ -470,6 +470,8 @@ vr::Status run(const Options& opt) {
         last_rt.active_blocks, cells / 1e6, last_rt.emitted_triangles,
         cells > 0.0 ? 100.0 * last_rt.emitted_triangles / cells : 0.0,
         static_cast<double>(sum_dispatches) / n);
+  }
+
   if (dirty_samples > 0) {
     std::printf(
         "dirty     %zu samples\n"
@@ -487,26 +489,27 @@ vr::Status run(const Options& opt) {
 
   // --- Final mesh -> PLY ---
   //
-  // Measured, because the extract's phases are invisible from outside and this
-  // example is the scriptable place to see them: whole-volume meshing, the
-  // on-device neighbour probe and a possible arena refit all hide inside one
-  // call, and only the split says which one a slow extract is. The overlay in
-  // fuse_viewer shows the same struct interactively; this prints it so a sweep
-  // over --voxel can be diffed.
+  // Measured, because the extract's phases are invisible from outside and
+  // this example is the scriptable place to see them: whole-volume meshing,
+  // the on-device neighbour probe and a possible arena refit all hide inside
+  // one call, and only the split says which one a slow extract is. The
+  // overlay in fuse_viewer shows the same struct interactively; this prints
+  // it so a sweep over --voxel can be diffed.
   mesh::ExtractTimings t{};
   VR_ASSIGN(mesh::Mesh final_mesh, extractor.extract(volume, 0.0f, &t));
-  // cells is what the dispatch actually walks: one workgroup per active block,
-  // striding over that block's voxels. Printed beside the triangles because the
-  // RATIO is the interesting number -- a low emit rate means the kernel is
-  // dominated by gathering cells that produce nothing, which points somewhere
-  // completely different from a kernel dominated by its output.
+  // cells is what the dispatch actually walks: one workgroup per active
+  // block, striding over that block's voxels. Printed beside the triangles
+  // because the RATIO is the interesting number -- a low emit rate means the
+  // kernel is dominated by gathering cells that produce nothing, which points
+  // somewhere completely different from a kernel dominated by its output.
   const double cells = static_cast<double>(t.active_blocks) *
                        static_cast<double>(grid.voxels_per_block);
   std::printf(
       "extract   %.1f ms in %u dispatch(es)\n"
       "  phases  compact %.2f  inputs %.2f  arena %.2f  desc %.2f  "
       "dispatch %.2f  read %.2f\n"
-      "  blocks  %u active -> %.2fM cells, %u tris emitted (%.2f%% of cells)\n"
+      "  blocks  %u active -> %.2fM cells, %u tris emitted (%.2f%% of "
+      "cells)\n"
       "  arena   %.1f MB resident, %u tris planned (%.1f%% full)\n",
       t.total_ms(), t.dispatches, t.compact_ms, t.input_upload_ms,
       t.arena_alloc_ms, t.descriptor_ms, t.dispatch_ms, t.readback_ms,
