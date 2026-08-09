@@ -319,12 +319,21 @@ void draw_reconstruction_panel(const ReconstructionPanel& panel) {
               static_cast<unsigned long long>(panel.mesh_version));
   ImGui::Text("  %zu vertices / %zu triangles", panel.vertices,
               panel.triangles);
-  // The fitted arena's occupancy, and whether the extract had to correct its
-  // plan. The dispatch count matters on its own: a run that keeps reporting 2
+  // The two fitted output buffers' occupancy, each against its OWN capacity.
+  // They are reported separately because MarchingCubesConfig::share_vertices
+  // decouples them -- pairing the vertex arena's bytes with the index run's
+  // fill ratio would describe a buffer it is not measuring -- and because the
+  // arena is the one that dominates the MiB.
+  //
+  // The MiB is the whole ring (both buffers, every slot), so at
+  // slot_count = 3 it is roughly three times the buffers those fractions are
+  // over. The dispatch count matters on its own: a run that keeps reporting 2
   // is one whose planner is not tracking the surface, and the ..dispatch row
   // cannot say so because it sums both attempts into one span.
-  ImGui::Text("  arena %u / %u tris (%.0f MiB), %u dispatch%s",
-              panel.extract.emitted_triangles, panel.extract.triangle_capacity,
+  ImGui::Text("  arena %u / %u verts, %u / %u tris",
+              panel.extract.emitted_vertices, panel.extract.vertex_capacity,
+              panel.extract.emitted_triangles, panel.extract.triangle_capacity);
+  ImGui::Text("  output %.0f MiB (ring), %u dispatch%s",
               to_mebibytes(panel.extract.arena_bytes), panel.extract.dispatches,
               panel.extract.dispatches == 1 ? "" : "es");
   // Capacity, not occupancy: num_blocks is bucket_size * num_buckets, the size
@@ -1400,13 +1409,20 @@ int run(GLFWwindow* window, const Options& opt) {
         // TODO(examples): the arena and index run are host-visible mapped
         // memory -- core::storage_buffer allocates every recon buffer that way
         // -- so the vertex-input stage fetches the whole mesh from system RAM
-        // on every presented frame (~64 MiB at room0's 991 k vertices, with no
-        // vertex reuse: the index run is the identity run until dedup lands).
+        // on every presented frame (~64 MiB at room0's 991 k vertices).
         // Free on Apple's unified memory, which is what this was measured on,
         // and a per-frame PCIe fetch on a discrete GPU, where it would invert
         // the win this seam exists for. Same shape as the host-visible indirect
         // command's TODO(mesh), and it waits on the same thing: a discrete-GPU
         // consumer to measure a device-local arena + staging against it.
+        //
+        // MarchingCubesConfig::share_vertices cuts that fetch ~4x by emitting
+        // ~4x fewer vertices, and this example does NOT take it --
+        // deliberately, because it runs the texture tier, and per-vertex uv0
+        // cannot carry a per-triangle visibility decision over a shared vertex
+        // (recon refuses the pair outright). It becomes available here when
+        // texturing moves to a per-primitive camera id; `fuse_replica
+        // --share-vertices` is the measurement in the meantime.
         vgp::LiveMesh live;
         live.vertices = live_view.vertices;
         live.indices = live_view.indices;

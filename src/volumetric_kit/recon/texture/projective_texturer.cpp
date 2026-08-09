@@ -130,6 +130,26 @@ Status ProjectiveTexturer::texture(const mesh::DeviceMesh& mesh,
         "ProjectiveTexturer::texture: the DeviceMesh has been superseded by a "
         "later extract on its producer (texture it before extracting again)");
   }
+  // This pass decides visibility per TRIANGLE and writes uv0 per VERTEX, which
+  // is well-defined only while a vertex belongs to exactly one triangle. Where
+  // vertices are shared, an interior one is referenced by up to six triangles:
+  // if one is visible and another occluded, whichever thread writes last wins,
+  // nondeterministically and differently every frame -- and a triangle left
+  // holding two real UVs and one sentinel interpolates from (-1, -1) across its
+  // whole face, so the renderer samples arbitrary atlas texels over most of it.
+  // Status::ok, no validation diagnostic, visible only as flicker.
+  //
+  // Refused rather than documented: MarchingCubesConfig::share_vertices is not
+  // something this tier can see, so the incompatibility has to travel with the
+  // mesh (the 2026-08-04 rule). The real fix is a per-primitive camera id
+  // instead of per-vertex uv0, which the packed multi-camera atlas needs
+  // anyway -- see the warning on that flag.
+  if (mesh.shares_vertices) {
+    return Status::invalid_argument(
+        "ProjectiveTexturer::texture: this DeviceMesh shares vertices between "
+        "triangles (MarchingCubesConfig::share_vertices), and per-vertex uv0 "
+        "cannot represent a per-triangle visibility decision over one");
+  }
 
   // Only the depth frame needs a binding check here: the mesh buffers were
   // already sized (and range-checked) by the pass that created them, and are
