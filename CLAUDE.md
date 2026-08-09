@@ -278,8 +278,11 @@ Each dated; newest context wins. Change the decision *and* this list together.
   set aside for discoverability: the example lives with the pipeline it demos.
   *Amended 2026-08-02 (below):* the device-adoption proof that used to live in
   that standalone repo now lives here too — `fuse_viewer` runs on **one shared
-  `VkDevice`**. The mesh **handoff** is still a host mesh (interop seam A); the
+  `VkDevice`**. The mesh **handoff** was still a host mesh (interop seam A); the
   shared device is the precondition seam B needs, not seam B itself.
+  *Amended 2026-08-08 (below):* `fuse_viewer` now draws recon's buffers
+  directly — seam B — so the precondition has been collected on.
+  `fuse_render` deliberately stays two-device seam A.
 
 - **2026-07-07 — Projective texturing is a new `texture` tier; live
   single-camera first.** Filling the mesh `Vertex::uv0` (the atlas coordinate the
@@ -1340,6 +1343,90 @@ Each dated; newest context wins. Change the decision *and* this list together.
   concurrent invocations — so what is claimed here is the cost model and the
   reason codes, not a re-measured device.
 
+- **2026-08-08 — `fuse_viewer` draws recon's buffers: interop seam B, end to
+  end, and the release mark must be published *before* the mesh is taken.**
+  *Amends* the 2026-07-07 viewer decision ("the mesh **handoff** is still a host
+  mesh (interop seam A)") and closes the interop seam's "what is left is a
+  consumer that draws it". recon's marching-cubes kernel writes the vertex
+  arena, index run and `VkDrawIndexedIndirectCommand`; gfx binds those very
+  handles as a `pipelines::LiveMesh` and issues `vkCmdDrawIndexedIndirect`, so
+  the index count is read GPU-side out of the command recon wrote and never
+  crosses the CPU either. What goes away is `download` → `to_gfx_mesh` →
+  `upload_mesh` — a full readback plus a full re-upload of geometry that never
+  conceptually left the device, every remesh.
+  **`fuse_viewer` first, not `fuse_render`, and that order is the decision.**
+  `fuse_render` builds *two* devices on purpose, and a `VkBuffer` is valid only
+  on its creating device, so zero-copy is structurally impossible there without
+  first adopting the shared-device bootstrap — and migrating it would delete the
+  only coverage the two-device path has. `fuse_viewer` already had the shared
+  device, the device extract and the device texturing; the host round trip was
+  the one thing left.
+  **The verification half is the point, as everywhere else on this seam.** The
+  consumer checks `DeviceMesh::vertex_usage` / `index_usage` / `indirect_usage`
+  **and `sharing_mode`** before binding, rather than trusting that the flags it
+  published in `MarchingCubesConfig` reached the producer: Vulkan cannot be
+  asked what a `VkBuffer` was created with, and the sharing mode is the term
+  that actually varies — this machine runs the two-families plan
+  (`family 0 (gfx) + family 1 (recon)`), where reading an `EXCLUSIVE` buffer
+  from a non-owning family is undefined with nothing to report it, and on Apple
+  undefined in the way that appears to work. A failure **latches**: the usage
+  bits and families come from two constants in this file, so a mesh that is
+  unusable once is unusable every time, and collecting the ones that follow
+  would only walk the ring to exhaustion one undrawable generation at a time.
+  No barrier is recorded here — recon's shared `dispatch()` already ends with
+  one reaching `VERTEX_INPUT` / `DRAW_INDIRECT` (the 2026-08-03 decision).
+  **The ordering fault this turned up is the finding worth keeping.** The
+  renderer must publish its release mark **in the same critical section as the
+  take, and compute it first**. Taking is what frees the fuse thread to extract
+  again, and the fuse thread reads the mark in the same breath as it tests for
+  an uncollected mesh — so a take published *ahead* of the mark for the same
+  frame lets it run on a mark one iteration stale, ask for a slot beyond the
+  ring's depth, and be refused. Measured, not reasoned: **25 refused extracts
+  and 40 of 200 meshes published** on a preloaded 200-frame room0 run. It is
+  invisible whenever fusion is *slower* than the render loop, which is every
+  streaming run — it took `--preload` at `-O3` to surface it at all. The mark
+  itself is `oldest_in_flight − 1` over a `frame_generations[frames_in_flight]`
+  array whose entry for the current slot is cleared first (`begin_frame`
+  fence-waited it), floored by what this frame is about to draw so the fallback
+  cannot retire a live generation.
+  **Three consumer obligations that have no analogue in the host path.** (1)
+  *The producer must not publish over an uncollected mesh* — it still holds a
+  ring slot, and the producer cannot free it (`release_through` is the
+  consumer's monotonic high-water mark, so releasing that generation retires
+  every older one with it, including ones in-flight frames are drawing). It
+  skips the extract instead, whose result would have been discarded anyway; at
+  400 frames that is **80 remeshes instead of 400**, so it is also a large
+  saving. (2) *An empty extract must still be published.* It claims and stamps a
+  slot like any other, so a mesh that never reaches a consumer is a slot nothing
+  can ever release — `slot_count` of those and every later extract is refused,
+  permanently. It draws nothing either way (`indexCount` 0). (3) *The release is
+  applied by the **fuse** thread*, at the top of its next remesh:
+  `MarchingCubes::release_through` is not atomic and its header makes
+  serializing it against the extracting thread the caller's job, so the render
+  thread records the mark and the fuse thread applies it — which also puts the
+  release *before* the extract it makes room for.
+  **The mesh and its atlas stay one value**, which is what this example has that
+  the iOS scanner does not (its `FusionConfig::texture` is off precisely for
+  want of the atlas ring). `uv0` is a coordinate into the image of the camera
+  that textured it and every `texture()` call rewrites every vertex's `uv0`
+  against the *current* frame, so they are published, taken and committed
+  together; a failed atlas upload commits neither and the previous coherent pair
+  keeps drawing. The `AtlasVersion` `shared_ptr` ring is unchanged — it owns
+  gfx-side storage and is correctly ref-counted per frame slot; only the *mesh*
+  ring moved to generation tracking.
+  **Cost, booked rather than waved at.** `slot_count` is `frames_in_flight + 1`
+  (3), and each slot is a full vertex arena that never shrinks: **~210–220 MiB
+  resident across the ring** on 400-frame room0 (it varies run to run, since
+  each slot is fitted independently to whatever surface it was handed), against
+  ~70 MiB for the single arena a recon-only consumer keeps. Against that it
+  deletes the `GpuMesh`
+  (~67 MB device), two host mesh copies (~67 MB each — the `rmesh::Mesh` and the
+  `vg::assets::Mesh`), and the per-remesh readback *and* upload. Verified on
+  room0: 400/400 frames fused, **991 167 vertices / 330 389 triangles** —
+  identical to the figure this file records for the host path — rendering a
+  coherent, projectively textured room at 96.5 fps, with zero validation errors,
+  zero refused extracts and one dispatch per extract.
+
 ## Provenance & salvage policy
 
 The algorithms here are a clean re-implementation of the proven core of the
@@ -1412,8 +1499,12 @@ Two contracts — both simpler now that recon and gfx are both Vulkan.
   but released by a **host-side report** rather than the intra-device timeline
   semaphore originally specified, since a cross-library GPU wait deadlocks
   against a swapchain rebuild on the shared queue. All four blockers are
-  settled; what is left is a consumer that draws it — the viewer still hands
-  over a host mesh (seam A). See DESIGN.md → "The interop seam".
+  settled, and **`fuse_viewer` is the consumer that draws it** as of 2026-08-08
+  — `pipelines::LiveMesh` over recon's arena, index run and indirect command,
+  with the ring released by generation as its frames retire (see that decision
+  for the ordering the release report has to honour). `fuse_render` stays on
+  seam A, since it builds two devices by design. See DESIGN.md → "The interop
+  seam".
 
 ## Key gotchas (verified)
 
@@ -1465,6 +1556,15 @@ Two contracts — both simpler now that recon and gfx are both Vulkan.
   GLSL atomics; the prior engine's kernels are a reference for the *algorithm*,
   rewritten in GLSL. The native-CUDA accelerator (2026-07-04) keeps its warp
   intrinsics/atomics but must stay numerically in lockstep with the GLSL path.
+- **A bare `cmake -S . -B build` leaves `CMAKE_BUILD_TYPE` empty, so everything
+  compiles at `-O0`** — the flags are `-std=c++17 -Wall -Wextra -Wpedantic
+  -Werror` and no optimisation at all. Every CI leg passes one explicitly
+  (`viewer.yml` uses Release), so this bites only local runs, and it bites the
+  *examples* hardest because their whole job is measurement: `fuse_viewer`'s
+  `atlas pack` row read **11.18 ms** against **0.32 ms at `-O2`**, a 35x
+  phantom, and it was read as a real cost before the flags were checked. Always
+  configure with `-DCMAKE_BUILD_TYPE=Release` before quoting an overlay number,
+  and quote the build type with the figure.
 
 ## RAII resource types (handle/deleter wrappers)
 
@@ -1703,12 +1803,14 @@ The gfx-linked **viewer examples** (`examples/viewer/`, behind the off-by-defaul
 headlessly (a gfx `OffscreenTarget`, CI-runnable), and `fuse_viewer` opens a
 **live window** — the nvblox `FuserVisualizer` analogue — fusing on a background
 thread while the render thread draws the growing mesh each frame following the
-capture trajectory (a host-mesh handoff, interop seam A, but on **one shared
-`VkDevice`** since 2026-08-02 — see that decision). Both run
+capture trajectory — on **one shared `VkDevice`** since 2026-08-02, and drawing
+recon's own buffers through `pipelines::LiveMesh` + `vkCmdDrawIndexedIndirect`
+since 2026-08-08 (**interop seam B**; `fuse_render` stays seam A, since it
+builds two devices by design). Both run
 the `texture` tier: `fuse_render` projects one keyframe (the `--follow` frame,
 else the middle fused frame) onto the final mesh and binds that frame's image as
 the atlas; `fuse_viewer` re-textures the growing mesh with the **current**
-keyframe on every remesh (on the fuse thread, before the host-mesh conversion)
+keyframe on every remesh (on the fuse thread, in place on the device buffers)
 and swaps in that frame's image as the atlas in lockstep with the mesh version —
 a per-slot atlas **ring** realising the gfx device-adopt decision's "per-slot
 atlas ringing", each atlas version carrying its own descriptor pool so one bound
@@ -1723,8 +1825,10 @@ GPU spans for `mesh draw` / `overlay draw` (timestamp queries; this GPU reports
 (`set_memory_source` points the profiler at gfx's allocator, so the panel covers
 the mesh/atlas/swapchain footprint) — with recon's per-fused-frame stages
 appended as wall-clock rows: `frame` (decode, or ~0 on a preload hit),
-`allocate` (including any map resize), `integrate`, `extract`, `texture`,
-`atlas pack`, `to_gfx_mesh`, plus the render thread's `mesh upload`. `texture`
+`allocate` (including any map resize), `integrate`, `extract`, `texture` and
+`atlas pack`, plus the render thread's `atlas upload` — which is all that is
+left of the old `mesh upload` now that the geometry never leaves the device
+(seam B deleted the `download` and `to_gfx_mesh` rows outright). `texture`
 is the projective-texturing dispatch alone; repacking the keyframe to RGBA8 is
 comparable host work, so it gets its own `atlas pack` row rather than being
 charged to the GPU pass. A *Reconstruction* panel shows fused-frame progress,
