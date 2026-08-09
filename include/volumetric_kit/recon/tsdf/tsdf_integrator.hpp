@@ -8,7 +8,9 @@
 ///        frame into a @ref VoxelBlockGrid's per-voxel `tsdf` + `weight`
 ///        attributes.
 
+#include <cstddef>
 #include <cstdint>
+#include <vector>
 
 #include "volumetric_kit/recon/core/buffer.hpp"
 #include "volumetric_kit/recon/core/camera_params.hpp"
@@ -63,6 +65,25 @@ struct ColorFrame {
   ColorEncoding encoding{};
 };
 
+/// @brief What optional machinery a @ref TsdfIntegrator carries, chosen at
+///        @ref TsdfIntegrator::create.
+struct TsdfIntegratorConfig {
+  /// Track which blocks each fuse actually changed (@ref
+  /// TsdfIntegrator::dirty_block_count and friends).
+  ///
+  /// Off by default, and the default costs nothing: no `num_blocks * 4`
+  /// host-visible allocation (6 MB at `VoxelGridParams::defaults()`, and it
+  /// doubles with every map grow), and not one store in the fusion kernel,
+  /// which binds a 1-element dummy to the flag slot instead. That is the bar a
+  /// tier-level measurement has to clear here -- nothing measured for a caller
+  /// who did not ask -- and a fuse-only consumer (a viewer, an offline
+  /// exporter, a scanner that re-meshes the whole volume) should leave it off.
+  ///
+  /// Turning it on is what an **incremental** re-mesh needs: the set of blocks
+  /// whose extracted geometry the last few frames invalidated.
+  bool track_dirty_blocks = false;
+};
+
 /// @brief Fuses posed depth frames into a @ref VoxelBlockGrid's `tsdf` +
 ///        `weight` attributes by projective TSDF integration (classic or
 ///        dynamic).
@@ -74,7 +95,9 @@ struct ColorFrame {
 /// observation weight with a behind-surface dropoff, capped at `max_weight`).
 /// Node-centred voxels (`voxel * voxel_size`), matching @ref voxel_to_world and
 /// the prior engine's numerics. Each voxel is owned by exactly one thread (a
-/// unique `BlockIndex::ptr + local`), so the fusion needs no atomics.
+/// unique `BlockIndex::ptr + local`), so the fusion needs no atomics (the
+/// opt-in per-block dirty flag is the one shared write; see @ref
+/// TsdfIntegratorConfig::track_dirty_blocks).
 ///
 /// @ref IntegrationMode::Dynamic instead clears stale geometry ahead of a
 /// receded surface (classic keeps a smooth field there). Depth is sampled
@@ -89,9 +112,12 @@ class VR_TSDF_API TsdfIntegrator {
   /// @param device     The compute device (must outlive this object).
   /// @param allocator  The allocator its transient buffers come from (must
   ///                   outlive this).
+  /// @param config     Optional machinery to carry; see @ref
+  ///                   TsdfIntegratorConfig. The default carries none.
   /// @return The integrator, or a non-OK @ref Status if a pipeline or
   ///         descriptor object fails to build.
-  static Result<TsdfIntegrator> create(Device& device, Allocator& allocator);
+  static Result<TsdfIntegrator> create(Device& device, Allocator& allocator,
+                                       const TsdfIntegratorConfig& config = {});
 
   // Rule of zero: every owned pipeline / layout / pool self-frees and self-
   // resets on move; device_ / allocator_ are borrowed, so the defaulted moves
@@ -145,31 +171,51 @@ class VR_TSDF_API TsdfIntegrator {
   ///         for a single 1-D dispatch (its voxel count exceeds the device's
   ///         `maxComputeWorkGroupCount[0]`, or 2^32 threads); otherwise a
   ///         buffer or dispatch failure.
-  /// @brief How many blocks this integrator has WRITTEN since the last
-  ///        @ref reset_dirty.
+  Status integrate(volume::VoxelBlockGrid& grid, const float* depth,
+                   const DepthCameraParams& cam, float max_weight = 5.0f,
+                   IntegrationMode mode = IntegrationMode::Classic,
+                   const ColorFrame* color = nullptr);
+
+  /// @brief How many blocks this integrator has CHANGED since the last @ref
+  ///        reset_dirty (requires @ref
+  ///        TsdfIntegratorConfig::track_dirty_blocks).
   ///
-  /// Not "how many were dispatched" and not "how many were in view": the
-  /// dispatch covers every active block and returns early for most, and a
-  /// frustum test counts the whole depth cone. Only a real write to
-  /// `tsdf`/`weight`/`color` sets a block's flag, so this is the set whose
-  /// extracted geometry is actually stale -- the input an incremental mesh
-  /// extraction needs.
+  /// Not "how many were dispatched", not "how many were in view", and not "how
+  /// many were stored to". The dispatch covers every active block and returns
+  /// early for most; a frustum test counts the whole depth cone; and classic
+  /// mode fuses the free-space cone ahead of the surface too, so counting
+  /// stores would report roughly the view. Only a store that leaves
+  /// `tsdf`/`weight`/`color` holding a **different** value marks a block, so a
+  /// scan revisiting converged surface at `max_weight` marks nothing -- which
+  /// is the steady state, and the whole reason this is narrower than the active
+  /// set.
   ///
   /// Accumulates across calls, because a consumer may fuse several frames per
   /// remesh; @ref reset_dirty clears it, and the natural place to call that is
-  /// immediately after an extract has consumed the set.
+  /// immediately after an extract has consumed the set. The flags survive @ref
+  /// VoxelBlockGrid::resize, which preserves every block's index.
   ///
   /// Counted on the host over a host-visible buffer, so it is O(num_blocks) and
   /// meant for diagnostics and for driving a re-mesh, not for a per-voxel path.
   ///
-  /// @return The count, or 0 before any integrate has run.
+  /// @warning Not synchronized, and `const` only in the C++ sense: it reads a
+  ///          mapping that a concurrent @ref integrate on another thread can
+  ///          free outright (the flag array is reallocated when the map grows,
+  ///          and `Buffer` frees synchronously). Serializing this against
+  ///          @ref integrate and @ref reset_dirty is the caller's job, exactly
+  ///          as it is for `mesh::MarchingCubes::release_through`.
+  /// @return The count; 0 before any integrate has run, and 0 when tracking is
+  ///         off.
   std::uint32_t dirty_block_count() const;
 
-  /// @brief Clear every dirty flag. See @ref dirty_block_count.
+  /// @brief Clear every dirty flag, and re-arm the integrator after a topology
+  ///        change (see @ref dirty_remesh_blocks).
+  ///
+  /// @warning Not synchronized; see @ref dirty_block_count.
   void reset_dirty();
 
-  /// @brief The blocks an incremental re-mesh would actually have to redo:
-  ///        @ref dirty_block_count dilated into the `-x/-y/-z` octant.
+  /// @brief The blocks an incremental re-mesh would actually have to redo: the
+  ///        changed blocks dilated into the `-x/-y/-z` octant.
   ///
   /// Dirty is not the re-mesh set. Marching cubes reads a cell's eight corners
   /// as `base + {0,1}^3`, so a block's cells reach one block in `+x/+y/+z` and
@@ -185,26 +231,48 @@ class VR_TSDF_API TsdfIntegrator {
   /// practice because a dirty set is a contiguous surface patch rather than
   /// scattered blocks: dilating a connected region adds roughly its perimeter.
   ///
-  /// Host-side and O(active blocks) -- a diagnostic and a planning input, not a
-  /// per-frame path. A real incremental extract would scatter the same
-  /// neighbourhood on the GPU.
+  /// Returns the block **coordinates**, not a count: a count cannot drive the
+  /// incremental extract this exists for, and the coordinates are what the
+  /// walk already computes. Take `.size()` for the count.
   ///
-  /// @param grid  The grid these flags were accumulated against; its active set
-  ///              supplies the block coordinates the flags alone do not carry.
-  /// @return The dilated count, or a non-OK @ref Status if the compaction
-  ///         fails.
-  Result<std::uint32_t> dirty_remesh_block_count(volume::VoxelBlockGrid& grid);
-
-  Status integrate(volume::VoxelBlockGrid& grid, const float* depth,
-                   const DepthCameraParams& cam, float max_weight = 5.0f,
-                   IntegrationMode mode = IntegrationMode::Classic,
-                   const ColorFrame* color = nullptr);
+  /// Takes the active set rather than compacting one, because every caller has
+  /// just compacted (the flags carry slots, not coordinates -- the active set
+  /// is what resolves them) and a second compaction inside here is a dispatch,
+  /// a fence wait and a full read-back that measured 0.15-0.26 ms at the
+  /// examples' defaults, on a call already O(active blocks).
+  ///
+  /// @param grid          The grid these flags were accumulated against -- the
+  ///                      one most recently passed to @ref integrate.
+  /// @param active        Its active set (@ref
+  ///                      VoxelHashMap::compact_active_blocks).
+  /// @param active_count  How many.
+  /// @return The coordinates to re-mesh, or @ref Status::Code::InvalidArgument
+  ///         if tracking is off, @p active is null with a non-zero count, @p
+  ///         grid is not the grid the flags were accumulated against, or blocks
+  ///         have been removed from it since (@ref
+  ///         VoxelBlockGrid::topology_epoch moved). That last one is a refusal
+  ///         rather than a stale answer on purpose: a removed block's geometry
+  ///         is stale and its flag cannot say so -- the slot went back to a
+  ///         LIFO heap and now means whichever block was allocated next -- so
+  ///         the honest answer is "re-mesh everything", which only the caller
+  ///         can do. @ref reset_dirty re-arms it.
+  /// @warning Not synchronized; see @ref dirty_block_count.
+  Result<std::vector<Vec3i>> dirty_remesh_blocks(
+      const volume::VoxelBlockGrid& grid, const volume::BlockIndex* active,
+      std::size_t active_count) const;
 
   /// @return `true` if this owns a live pipeline (`false` when moved-from).
   bool valid() const noexcept { return kernel_.valid(); }
 
  private:
   TsdfIntegrator() = default;
+
+  /// @brief Re-anchor the dirty flags on @p grid and size them to it.
+  ///
+  /// Called from @ref integrate only when tracking is on. Split out because
+  /// what it does is a contract (which grid do these flags describe, and is
+  /// that still true) rather than another line of buffer bookkeeping.
+  Status prepare_dirty_flags(const volume::VoxelBlockGrid& grid);
 
   // Borrowed (must outlive this).
   Device* device_ = nullptr;
@@ -231,11 +299,25 @@ class VR_TSDF_API TsdfIntegrator {
   // is fused (so every declared descriptor stays bound).
   Buffer color_cam_buf_;
   Buffer color_dummy_;
-  // One flag per block slot, set by the kernel when it actually writes a voxel.
-  // Sized to the grid's num_blocks and reallocated when that grows; see
-  // dirty_block_count().
+  TsdfIntegratorConfig config_{};
+  // One flag per block slot, set by the kernel when it actually CHANGES a
+  // voxel. Sized to the grid's num_blocks and grown (contents carried forward,
+  // since a slot means the same block across a resize) when that grows; see
+  // dirty_block_count(). Never allocated when tracking is off.
   Buffer dirty_blocks_;
   std::uint32_t dirty_capacity_ = 0;
+  // What the flags describe: the grid most recently integrated, and its
+  // topology_epoch() at that moment. A flag is keyed by block SLOT, which only
+  // means anything relative to one grid and only while the block living there
+  // stays live -- so both halves are recorded and checked rather than left to
+  // the caller, who has no way to compare them. Borrowed for identity only:
+  // never dereferenced, so a dangling grid is compared, not read.
+  const volume::VoxelBlockGrid* dirty_grid_ = nullptr;
+  std::uint64_t dirty_epoch_ = 0;
+  // Latched when blocks were removed from dirty_grid_ while flags were live:
+  // the removed geometry is stale and no flag can say so. Cleared by
+  // reset_dirty().
+  bool dirty_topology_stale_ = false;
 };
 
 }  // namespace volumetric_kit::recon::tsdf

@@ -242,8 +242,16 @@ vr::Status run(const Options& opt) {
                                       {"color", sizeof(std::uint32_t)}};
   VR_ASSIGN(vol::VoxelBlockGrid volume,
             vol::VoxelBlockGrid::create(device, allocator, grid, attrs, 3));
+  // Dirty-block tracking is opt-in and only --dirty-every asks for it: with it
+  // off the integrator allocates no per-block flag array (num_blocks * 4 bytes,
+  // doubling with every map grow) and its kernel stores no flags, so the
+  // default run measures the same fusion every other consumer gets.
   VR_ASSIGN(tsdf::TsdfIntegrator integrator,
-            tsdf::TsdfIntegrator::create(device, allocator));
+            tsdf::TsdfIntegrator::create(device, allocator, [&] {
+              tsdf::TsdfIntegratorConfig c;
+              c.track_dirty_blocks = opt.dirty_every > 0;
+              return c;
+            }()));
   VR_ASSIGN(mesh::MarchingCubes extractor,
             mesh::MarchingCubes::create(device, allocator, [&] {
               mesh::MarchingCubesConfig c;
@@ -368,9 +376,8 @@ vr::Status run(const Options& opt) {
   double sum_dispatch = 0.0, sum_read = 0.0;
   mesh::ExtractTimings last_rt{};
   std::size_t dirty_samples = 0;
-  double sum_dirty_frac = 0.0;
+  std::uint64_t sum_dirty = 0, sum_remesh = 0, sum_active = 0;
   std::uint32_t last_dirty = 0, last_active_blocks = 0, last_remesh = 0;
-  double sum_remesh_frac = 0.0;
   for (std::size_t i = 0; i < last; i += static_cast<std::size_t>(opt.stride)) {
     vr::Result<vr_example::FrameView> frame_result = dataset.frame(i);
     if (!frame_result) {
@@ -401,20 +408,35 @@ vr::Status run(const Options& opt) {
 
     if (opt.dirty_every > 0 &&
         (fused % static_cast<std::size_t>(opt.dirty_every)) == 0) {
-      // Reset FIRST, then fuse one frame, so the count is one frame's writes
-      // rather than everything since startup -- which is the quantity an
-      // incremental remesh would actually re-extract at remesh_every 1.
+      // Read, then reset: the sample is the UNION of this window's
+      // `--dirty-every` frames, which is exactly what an incremental extract
+      // running at that cadence would have to redo. (An earlier comment here
+      // claimed the reset came first and the sample was one frame's writes;
+      // the reset is the last statement of the block, so it never was.)
+      //
+      // The active set is compacted once and handed to dirty_remesh_blocks,
+      // which is why that takes a span: it needs the coordinates the flags do
+      // not carry, and compacting a second time inside it would be a dispatch,
+      // a fence wait and a full read-back per sample.
       VR_ASSIGN(std::vector<vol::BlockIndex> all,
                 volume.map().compact_active_blocks());
       const std::uint32_t dirty = integrator.dirty_block_count();
-      VR_ASSIGN(const std::uint32_t remesh,
-                integrator.dirty_remesh_block_count(volume));
+      VR_ASSIGN(const std::vector<vr::Vec3i> remesh_blocks,
+                integrator.dirty_remesh_blocks(volume, all.data(), all.size()));
+      const auto remesh = static_cast<std::uint32_t>(remesh_blocks.size());
       if (!all.empty()) {
-        sum_remesh_frac += static_cast<double>(remesh) / all.size();
+        // Sums, not a running mean of per-window ratios. The windows are not
+        // comparable: the first one builds the map from nothing, so every block
+        // in it was allocated AND written and its ratio is ~1 by construction.
+        // Averaging ratios gives that window the same vote as a steady-state
+        // one; summing weights each by its own active count, which is the
+        // quantity being asked about.
+        sum_dirty += dirty;
+        sum_remesh += remesh;
+        sum_active += all.size();
         last_remesh = remesh;
         last_dirty = dirty;
         last_active_blocks = static_cast<std::uint32_t>(all.size());
-        sum_dirty_frac += static_cast<double>(dirty) / all.size();
         ++dirty_samples;
       }
       integrator.reset_dirty();
@@ -473,43 +495,54 @@ vr::Status run(const Options& opt) {
   }
 
   if (dirty_samples > 0) {
+    // Ratios of the summed counts, so each window is weighted by its own active
+    // set rather than voting equally (see the accumulation site). "changed" is
+    // what the fuse actually moved; "remesh" is that dilated into the -x/-y/-z
+    // octant, which is the set an incremental extract would have to redo.
+    //
+    // Deliberately NOT reported as a speedup. Only the marching-cubes dispatch
+    // scales with the block count; of the phases printed above it, compact
+    // walks every table slot regardless, arena alloc is sized by the whole
+    // surface, and readback copies all of it. The share below is the ceiling an
+    // incremental extract could aim at, not a factor anything runs faster by.
+    const auto pct = [](std::uint64_t num, std::uint64_t den) {
+      return den > 0
+                 ? 100.0 * static_cast<double>(num) / static_cast<double>(den)
+                 : 0.0;
+    };
     std::printf(
-        "dirty     %zu samples\n"
-        "  written %.2f%% of active blocks per window (mean)\n"
+        "dirty     %zu windows of %d frame(s)\n"
+        "  changed %.2f%% of active blocks\n"
         "  remesh  %.2f%% once dilated into -x/-y/-z (the real set)\n"
-        "  final   %u written -> %u to re-mesh of %u active "
-        "(dilation %.2fx, speedup %.1fx)\n",
-        dirty_samples, 100.0 * sum_dirty_frac / dirty_samples,
-        100.0 * sum_remesh_frac / dirty_samples, last_dirty, last_remesh,
+        "  final   %u changed -> %u to re-mesh of %u active (dilation %.2fx)\n",
+        dirty_samples, opt.dirty_every, pct(sum_dirty, sum_active),
+        pct(sum_remesh, sum_active), last_dirty, last_remesh,
         last_active_blocks,
-        last_dirty > 0 ? static_cast<double>(last_remesh) / last_dirty : 0.0,
-        last_remesh > 0 ? static_cast<double>(last_active_blocks) / last_remesh
-                        : 0.0);
+        last_dirty > 0 ? static_cast<double>(last_remesh) / last_dirty : 1.0);
   }
 
   // --- Final mesh -> PLY ---
   //
-  // Measured, because the extract's phases are invisible from outside and
-  // this example is the scriptable place to see them: whole-volume meshing,
-  // the on-device neighbour probe and a possible arena refit all hide inside
-  // one call, and only the split says which one a slow extract is. The
-  // overlay in fuse_viewer shows the same struct interactively; this prints
-  // it so a sweep over --voxel can be diffed.
+  // Measured, because the extract's phases are invisible from outside and this
+  // example is the scriptable place to see them: whole-volume meshing, the
+  // on-device neighbour probe and a possible arena refit all hide inside one
+  // call, and only the split says which one a slow extract is. The overlay in
+  // fuse_viewer shows the same struct interactively; this prints it so a sweep
+  // over --voxel can be diffed.
   mesh::ExtractTimings t{};
   VR_ASSIGN(mesh::Mesh final_mesh, extractor.extract(volume, 0.0f, &t));
-  // cells is what the dispatch actually walks: one workgroup per active
-  // block, striding over that block's voxels. Printed beside the triangles
-  // because the RATIO is the interesting number -- a low emit rate means the
-  // kernel is dominated by gathering cells that produce nothing, which points
-  // somewhere completely different from a kernel dominated by its output.
+  // cells is what the dispatch actually walks: one workgroup per active block,
+  // striding over that block's voxels. Printed beside the triangles because the
+  // RATIO is the interesting number -- a low emit rate means the kernel is
+  // dominated by gathering cells that produce nothing, which points somewhere
+  // completely different from a kernel dominated by its output.
   const double cells = static_cast<double>(t.active_blocks) *
                        static_cast<double>(grid.voxels_per_block);
   std::printf(
       "extract   %.1f ms in %u dispatch(es)\n"
       "  phases  compact %.2f  inputs %.2f  arena %.2f  desc %.2f  "
       "dispatch %.2f  read %.2f\n"
-      "  blocks  %u active -> %.2fM cells, %u tris emitted (%.2f%% of "
-      "cells)\n"
+      "  blocks  %u active -> %.2fM cells, %u tris emitted (%.2f%% of cells)\n"
       "  arena   %.1f MB resident, %u tris planned (%.1f%% full)\n",
       t.total_ms(), t.dispatches, t.compact_ms, t.input_upload_ms,
       t.arena_alloc_ms, t.descriptor_ms, t.dispatch_ms, t.readback_ms,

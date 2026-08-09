@@ -8,7 +8,9 @@
 // space past the truncation band (a surface that has receded). Ported from
 // classic_tsdf.metal / classic_tsdf.cu (the neural/triplane channels are out of
 // scope). Each voxel is owned by exactly one thread (a unique block ptr + local
-// index), so the read-modify-write needs no atomics.
+// index), so the tsdf/weight/color read-modify-write needs no atomics. The one
+// exception is the per-BLOCK dirty flag at binding 8, which every thread of a
+// block shares -- see there.
 
 #extension GL_GOOGLE_include_directive : require
 #include "tsdf_common.glsl"
@@ -40,26 +42,38 @@ layout(set = 0, binding = 5, scalar) readonly buffer ColorImage {
   uint color_image[];
 };
 layout(set = 0, binding = 6, scalar) buffer ColorAttr { uint color_attr[]; };
-// One flag per BLOCK, set when this dispatch actually WRITES a voxel of it.
+layout(set = 0, binding = 7, scalar) readonly buffer ColorCamera {
+  ColorCameraParams color_cam;
+};
+// One flag per BLOCK, set when this dispatch actually CHANGES a voxel of it.
 //
-// Not "the block was in the active set" and not "the block was in the frustum":
-// the integrate dispatch covers every active block and returns early for most of
-// them, and a frustum test counts the whole view cone. Only an actual write
-// invalidates a block's extracted mesh, so only an actual write may set this.
+// Not "the block was in the active set", not "the block was in the frustum",
+// and -- the distinction that costs the most to get wrong -- not "a store
+// happened". The dispatch covers every active block and returns early for most
+// of them; a frustum test counts the whole view cone; and in classic mode the
+// free-space cone ahead of the surface is fused too, so a flag set by the mere
+// act of storing would collapse to "the camera could see it" and re-mesh the
+// whole view every frame. Only a store that leaves tsdf/weight/color holding a
+// different value may set this, which is why the marks below sit AFTER the
+// writes they describe and are guarded by a comparison against the old value:
+// a voxel converged at max_weight re-stores bit-identical numbers, and that is
+// the steady state of any revisiting scan, not a corner case.
 //
 // Indexed by block SLOT (ptr / voxels_per_block), which is stable across frames
 // and preserved by VoxelHashMap::resize -- so flags accumulate correctly across
 // several fused frames between remeshes, which the compacted dispatch order
-// could not do.
+// could not do. A slot is only meaningful while the block living there stays
+// live; VoxelBlockGrid::topology_epoch is what the host checks that against.
 //
-// A plain store, not an atomic: every writer stores the same 1, so the race is
-// benign and a contended atomic per voxel would cost far more than the flag is
-// worth.
+// atomicOr, not a plain store: every writer contributes the same 1, but a
+// non-atomic race is undefined rather than benign without coherent/
+// NonPrivatePointer, and the guard above means the atomic is paid only by
+// voxels that actually changed -- none at all once a block converges.
+//
+// Bound to a 1-element dummy (and pc.track_dirty is 0) unless the consumer
+// opted into tracking, so an integrator that nobody asks pays neither the
+// num_blocks * 4 allocation nor a single store.
 layout(set = 0, binding = 8, scalar) buffer DirtyBlocks { uint dirty_block[]; };
-
-layout(set = 0, binding = 7, scalar) readonly buffer ColorCamera {
-  ColorCameraParams color_cam;
-};
 
 // Bilinear depth sample at pixel (u, v), with a nearest-neighbour fallback.
 // Pixel centres sit at (i + 0.5) -- the taps shift by -0.5 to match -- so the
@@ -110,6 +124,10 @@ void main() {
   uint block_i = gid / vpb;
   uint local = gid % vpb;
   BlockIndex block = active_blocks[block_i];
+  // The flag slot for this block, resolved once. vpb is not a compile-time
+  // constant, so the divide is a real reciprocal sequence -- it used to be
+  // recomputed inline at each mark site.
+  uint block_slot = uint(block.ptr) / vpb;
 
   // Voxel world position: node convention (voxel * voxel_size), matching
   // volume/voxel_coords.hpp::voxel_to_world and the prior engine.
@@ -162,7 +180,11 @@ void main() {
       }
       // A clear changes the field exactly as a fuse does -- a receded surface
       // that leaves a stale mesh behind is the whole reason dynamic mode exists.
-      dirty_block[uint(block.ptr) / uint(pc.grid.voxels_per_block)] = 1u;
+      // The weight > 0.0 guard above is already the "did anything change" test
+      // on this path: a voxel at weight 0 is in the state the clear writes.
+      if (pc.track_dirty != 0u) {
+        atomicOr(dirty_block[block_slot], 1u);
+      }
     }
     return;
   }
@@ -185,10 +207,15 @@ void main() {
   float w_old = weight[idx];
   float s_old = tsdf[idx];
   float w_sum = w_old + w_obs;
-  dirty_block[uint(block.ptr) / uint(pc.grid.voxels_per_block)] = 1u;
-  tsdf[idx] = clamp((s_old * w_old + sdf * w_obs) / max(w_sum, 1e-6),
-                    -trunc_dist, trunc_dist);
-  weight[idx] = min(w_sum, pc.max_weight);
+  float s_new = clamp((s_old * w_old + sdf * w_obs) / max(w_sum, 1e-6),
+                      -trunc_dist, trunc_dist);
+  float w_new = min(w_sum, pc.max_weight);
+  // Whether this fuse MOVED the field, accumulated across the geometry and
+  // colour stores and marked once at the end. Compared before the stores, since
+  // afterwards the old value is gone.
+  bool changed = (s_new != s_old) || (w_new != w_old);
+  tsdf[idx] = s_new;
+  weight[idx] = w_new;
 
   // Fuse color, if a frame was supplied this call, through the separate color
   // camera. Project the voxel into the color camera, nearest-sample the packed
@@ -218,7 +245,8 @@ void main() {
     float czc;
     if (project_to_image(color_cam, world, cpx, czc)) {
       uint obs_packed = color_image[uint(cpx.y) * color_cam.width + uint(cpx.x)];
-      if (color_attr[idx] == 0u) {
+      uint c_old = color_attr[idx];
+      if (c_old == 0u) {
         // First color observation ASSIGNS, and assigns the sensor's own bytes
         // rather than a decode/encode round trip of them: an assignment is not
         // an average, so it needs no linear space, and copying the codes keeps
@@ -232,11 +260,19 @@ void main() {
         // average there, and re-encode. Blending the encoded codes directly is
         // wrong by construction and wrong quietly (0.0 and 1.0 would fuse to
         // 0.214 rather than 0.5) -- the 2026-08-02 color-space decision.
-        vec3 prev = vrUnpackSrgbToLinear(color_attr[idx]);
+        vec3 prev = vrUnpackSrgbToLinear(c_old);
         vec3 obs = vrUnpackSrgbToLinear(obs_packed);
         vec3 fused = (prev * w_old + obs * w_obs) / max(w_sum, 1e-6);
         color_attr[idx] = vrPackLinearToSrgb(fused);
       }
+      // Colour moves the mesh's vertex colours even where the iso-surface has
+      // settled, so it counts as a change in its own right.
+      changed = changed || (color_attr[idx] != c_old);
     }
+  }
+
+  // One mark per changed voxel, after every store it describes.
+  if (pc.track_dirty != 0u && changed) {
+    atomicOr(dirty_block[block_slot], 1u);
   }
 }

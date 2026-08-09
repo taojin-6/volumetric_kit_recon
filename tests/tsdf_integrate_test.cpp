@@ -64,6 +64,264 @@ vr::ColorCameraParams color_cam_of(const vr::DepthCameraParams& d) {
                                d.width, d.height, d.cam_to_world};
 }
 
+// --- Dirty-block tracking --------------------------------------------------
+//
+// Its own fixture, because the geometry decides whether the assertions can fail
+// at all. A dirty set that is a contiguous 1-D run cannot tell a correct
+// dilation from a broken one -- its -z neighbours are already in the set, so
+// dropping the dilation, dropping the existence filter, inverting the octant
+// and deleting the feature outright all agree.
+//
+// So: a 2x2x2 cube of blocks straddling the band, plus one isolated block that
+// no ray reaches.
+//
+//   (0..1, 0..1, 13)  the band       -- written        -> dirty   = 4
+//   (0..1, 0..1, 12)  ahead of it    -- never written  -> remesh  = 8
+//   (5, 5, 5)         off-camera     -- never written  -> active  = 9
+//
+// Every quantity differs from every other, which is what gives the equalities
+// teeth: dropping the dilation gives 4, dropping the existence filter gives 18,
+// inverting the octant to +x/+y/+z gives 4, and returning the active count
+// gives 9.
+//
+// Dynamic mode throughout, deliberately. In classic mode the free-space cone
+// ahead of the surface is fused too (that is the point of classic), so the
+// first fuse legitimately marks the bz=12 blocks as well and the fixture loses
+// the separation it is built on.
+int dirty_blocks_case(vr::Device& device, vr::Allocator& allocator) {
+  vol::VoxelGridParams gp{};
+  gp.voxel_size = 0.005f;
+  gp.block_size = 8;
+  gp.voxels_per_block = 512;
+  gp.trunc_dist = 0.01f;
+  gp.bucket_size = 8;
+  gp.num_buckets = 256;
+  gp.num_blocks = 256 * 8;
+  gp.max_chain = 128;
+  const vol::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
+                                      {"weight", sizeof(float)}};
+
+  vr::Result<vol::VoxelBlockGrid> grid_a =
+      vol::VoxelBlockGrid::create(device, allocator, gp, attrs, 2);
+  CHECK(grid_a.ok());
+  vol::VoxelBlockGrid a = std::move(grid_a).value();
+
+  std::vector<vol::BlockIndex> blocks;
+  for (int bz = 12; bz <= 13; ++bz) {
+    for (int by = 0; by <= 1; ++by) {
+      for (int bx = 0; bx <= 1; ++bx) {
+        vol::BlockIndex b{};
+        b.coord = vr::Vec3i(bx, by, bz);
+        blocks.push_back(b);
+      }
+    }
+  }
+  vol::BlockIndex far{};
+  far.coord = vr::Vec3i(5, 5, 5);  // projects outside the image
+  blocks.push_back(far);
+  CHECK(a.map()
+            .allocate(blocks.data(), static_cast<std::uint32_t>(blocks.size()))
+            .value() == 0);
+  vr::Result<std::vector<vol::BlockIndex>> active_a =
+      a.map().compact_active_blocks();
+  CHECK(active_a.ok() && active_a.value().size() == 9);
+
+  vr::DepthCameraParams cam{};
+  cam.fx = 525.0f;
+  cam.fy = 525.0f;
+  cam.cx = 320.0f;
+  cam.cy = 240.0f;
+  cam.min_depth = 0.1f;
+  cam.max_depth = 10.0f;
+  cam.width = 640;
+  cam.height = 480;
+  cam.cam_to_world = vr::Mat4f(1.0f);
+  const std::size_t px = static_cast<std::size_t>(cam.width) * cam.height;
+  const std::vector<float> depth_band(px, 0.54f);  // band lands in bz = 13
+  const std::vector<float> depth_near(px, 0.50f);  // band lands in bz = 12
+  const std::vector<float> depth_far(px, 0.60f);   // both recede -> clear
+  const std::vector<float> depth_none(px, 0.0f);   // all invalid -> no writes
+
+  // --- Tracking is opt-in, and off costs nothing ---------------------------
+  //
+  // The default integrator must not allocate a flag array or store a flag, and
+  // must say so rather than answer 0 as though nothing were dirty.
+  {
+    vr::Result<tsdf::TsdfIntegrator> untracked =
+        tsdf::TsdfIntegrator::create(device, allocator);
+    CHECK(untracked.ok());
+    CHECK(untracked.value()
+              .integrate(a, depth_band.data(), cam, 5.0f,
+                         tsdf::IntegrationMode::Dynamic)
+              .ok());
+    CHECK(untracked.value().dirty_block_count() == 0);
+    CHECK(!untracked.value()
+               .dirty_remesh_blocks(a, active_a.value().data(),
+                                    active_a.value().size())
+               .ok());
+  }
+  // That fuse wrote real values into `a`, so start the tracked cases from a
+  // clean grid rather than from whatever it left behind.
+  CHECK(a.clear().ok());
+  CHECK(a.map()
+            .allocate(blocks.data(), static_cast<std::uint32_t>(blocks.size()))
+            .value() == 0);
+  active_a = a.map().compact_active_blocks();
+  CHECK(active_a.ok() && active_a.value().size() == 9);
+
+  tsdf::TsdfIntegratorConfig cfg{};
+  cfg.track_dirty_blocks = true;
+  vr::Result<tsdf::TsdfIntegrator> integ_result =
+      tsdf::TsdfIntegrator::create(device, allocator, cfg);
+  CHECK(integ_result.ok());
+  tsdf::TsdfIntegrator integ = std::move(integ_result).value();
+
+  CHECK(integ.dirty_block_count() == 0);
+
+  // --- What was written, and what that means for a re-mesh -----------------
+  CHECK(integ
+            .integrate(a, depth_band.data(), cam, 5.0f,
+                       tsdf::IntegrationMode::Dynamic)
+            .ok());
+  CHECK(integ.dirty_block_count() == 4);
+
+  vr::Result<std::vector<vr::Vec3i>> remesh = integ.dirty_remesh_blocks(
+      a, active_a.value().data(), active_a.value().size());
+  CHECK(remesh.ok());
+  CHECK(remesh.value().size() == 8);
+  // And it is the cube, not any 8 of the 9: the isolated block is the one that
+  // must not appear.
+  for (const vr::Vec3i& c : remesh.value()) {
+    CHECK(!(c.x == 5 && c.y == 5 && c.z == 5));
+  }
+
+  // --- Flags ACCUMULATE across fuses ---------------------------------------
+  //
+  // The header promises this (a consumer fuses several frames per remesh), and
+  // nothing pinned it: an integrator that zeroed the array at the top of every
+  // integrate -- per-frame instead of cumulative, the one semantic a consumer
+  // must not get wrong -- passed every other assertion here.
+  CHECK(integ
+            .integrate(a, depth_near.data(), cam, 5.0f,
+                       tsdf::IntegrationMode::Dynamic)
+            .ok());
+  CHECK(integ.dirty_block_count() == 8);
+
+  // --- A map grow carries the flags forward --------------------------------
+  //
+  // VoxelHashMap::resize preserves each block's index, so a slot means the same
+  // block on both sides of the grow and the flags stay true. Reallocating and
+  // zeroing instead loses every block fused since the last reset -- silently,
+  // and on exactly the frames a growing scan brings in the most new surface.
+  // The depth here is all-invalid, so the fuse itself writes nothing and the
+  // count that survives is entirely the carried-forward one.
+  CHECK(a.resize(gp.num_buckets * 2).ok());
+  CHECK(integ
+            .integrate(a, depth_none.data(), cam, 5.0f,
+                       tsdf::IntegrationMode::Dynamic)
+            .ok());
+  CHECK(integ.dirty_block_count() == 8);
+
+  // --- The dynamic clear marks too -----------------------------------------
+  //
+  // A receded surface that leaves a stale mesh behind is the whole reason
+  // dynamic mode exists, so the clear has to report itself. Deleting that one
+  // mark left the entire suite green before this case existed. The band at
+  // 0.60 m falls in blocks nobody allocated, so every flag below comes from the
+  // clear.
+  integ.reset_dirty();
+  CHECK(integ.dirty_block_count() == 0);
+  CHECK(integ
+            .integrate(a, depth_far.data(), cam, 5.0f,
+                       tsdf::IntegrationMode::Dynamic)
+            .ok());
+  CHECK(integ.dirty_block_count() == 8);
+
+  // --- A flag means the field CHANGED, not that a store happened -----------
+  //
+  // max_weight 0 pins the fused weight at 0 forever, which makes the stored
+  // tsdf a pure function of THIS frame: re-fusing an identical frame recomputes
+  // bit-identical numbers. That is the exact case a scan revisiting converged
+  // surface lives in, and a flag set by the act of storing reports every block
+  // again, every frame, for as long as the camera can see it.
+  integ.reset_dirty();
+  CHECK(integ
+            .integrate(a, depth_band.data(), cam, 0.0f,
+                       tsdf::IntegrationMode::Dynamic)
+            .ok());
+  CHECK(integ.dirty_block_count() == 4);
+  integ.reset_dirty();
+  CHECK(integ
+            .integrate(a, depth_band.data(), cam, 0.0f,
+                       tsdf::IntegrationMode::Dynamic)
+            .ok());
+  CHECK(integ.dirty_block_count() == 0);
+
+  // --- One integrator, a second grid ---------------------------------------
+  //
+  // A flag is keyed by block SLOT, and a slot means nothing across grids -- the
+  // heap hands the same index to a block at a different coordinate. Driving one
+  // integrator over several grids is already how this suite is written, so this
+  // is not hypothetical; what it used to do was OR the two grids' flags
+  // together.
+  integ.reset_dirty();
+  CHECK(integ
+            .integrate(a, depth_band.data(), cam, 5.0f,
+                       tsdf::IntegrationMode::Dynamic)
+            .ok());
+  CHECK(integ.dirty_block_count() == 4);
+
+  vr::Result<vol::VoxelBlockGrid> grid_b =
+      vol::VoxelBlockGrid::create(device, allocator, gp, attrs, 2);
+  CHECK(grid_b.ok());
+  vol::VoxelBlockGrid b = std::move(grid_b).value();
+  vol::BlockIndex one{};
+  one.coord = vr::Vec3i(0, 0, 13);
+  CHECK(b.map().allocate(&one, 1).value() == 0);
+  CHECK(integ
+            .integrate(b, depth_band.data(), cam, 5.0f,
+                       tsdf::IntegrationMode::Dynamic)
+            .ok());
+  // Re-anchored on `b`: its single block, not `a`'s four OR-ed underneath.
+  CHECK(integ.dirty_block_count() == 1);
+  // And `a`'s flags are gone, so asking about `a` is refused rather than
+  // answered out of `b`'s array.
+  CHECK(!integ
+             .dirty_remesh_blocks(a, active_a.value().data(),
+                                  active_a.value().size())
+             .ok());
+
+  // --- Removing blocks invalidates the set ---------------------------------
+  //
+  // remove() changes the field from the host, and no flag can say so: the freed
+  // slot goes back to a LIFO heap and is re-drawn for a different block. The
+  // dirty set cannot describe geometry that went away, so the answer is a
+  // refusal (re-mesh everything) rather than a confidently wrong subset.
+  vr::Result<std::vector<vol::BlockIndex>> active_b =
+      b.map().compact_active_blocks();
+  CHECK(active_b.ok());
+  CHECK(integ
+            .dirty_remesh_blocks(b, active_b.value().data(),
+                                 active_b.value().size())
+            .ok());
+  CHECK(b.remove(&one, 1).ok());
+  CHECK(b.topology_epoch() == 1);
+  vr::Result<std::vector<vol::BlockIndex>> after_remove =
+      b.map().compact_active_blocks();
+  CHECK(after_remove.ok());
+  CHECK(!integ
+             .dirty_remesh_blocks(b, after_remove.value().data(),
+                                  after_remove.value().size())
+             .ok());
+  // reset_dirty() re-arms it: nothing is accumulated, so nothing is stale.
+  integ.reset_dirty();
+  vr::Result<std::vector<vr::Vec3i>> rearmed = integ.dirty_remesh_blocks(
+      b, after_remove.value().data(), after_remove.value().size());
+  CHECK(rearmed.ok() && rearmed.value().empty());
+
+  return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -157,37 +415,14 @@ int main() {
   std::vector<float> depth(static_cast<std::size_t>(cam.width) * cam.height,
                            plane_z);
 
-  // Nothing has been integrated yet, so nothing can be stale.
-  CHECK(integ.dirty_block_count() == 0);
+  // Dirty-block tracking has its own fixture (see dirty_blocks_case): the
+  // geometry a plane fixture produces is a contiguous run, which cannot tell a
+  // correct dilation from a broken one. This integrator carries no tracking, so
+  // the per-voxel numerics below are asserted against the shape every other
+  // consumer in the repo runs.
+  CHECK(dirty_blocks_case(device.value(), allocator.value()) == 0);
 
   CHECK(integ.integrate(vbg, depth.data(), cam, /*max_weight=*/5.0f).ok());
-
-  // --- The dirty set is what was WRITTEN, not what was dispatched -----------
-  //
-  // The whole value of these counters is that they are narrower than the active
-  // set: the dispatch covers every active block and returns early for most of
-  // them. So the load-bearing assertion is the STRICT inequality -- marking a
-  // block simply because the kernel visited it would satisfy every other check
-  // here and make the counter useless for driving an incremental re-mesh.
-  const std::uint32_t written = integ.dirty_block_count();
-  const auto active_count = static_cast<std::uint32_t>(active.value().size());
-  CHECK(written > 0);
-  CHECK(written < active_count);
-
-  // Dilation into the -x/-y/-z octant can only grow the set, and only to blocks
-  // that exist -- it is bounded by the active set, never by 8x in practice.
-  vr::Result<std::uint32_t> remesh = integ.dirty_remesh_block_count(vbg);
-  CHECK(remesh.ok());
-  CHECK(remesh.value() >= written);
-  CHECK(remesh.value() <= active_count);
-
-  // Cleared means cleared; a consumer resets after an extract has consumed the
-  // set, and a flag surviving that would re-mesh the same block forever.
-  integ.reset_dirty();
-  CHECK(integ.dirty_block_count() == 0);
-  // Deliberately NOT re-integrating here to show the flags come back: the
-  // per-voxel numerics below are asserted against exactly ONE integration, and
-  // a second fuse moves the running average out from under them.
 
   vr::Result<vol::AttributeView> tsdf_view = vbg.attribute("tsdf");
   vr::Result<vol::AttributeView> weight_view = vbg.attribute("weight");

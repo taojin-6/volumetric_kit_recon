@@ -1603,6 +1603,105 @@ Each dated; newest context wins. Change the decision *and* this list together.
   threadgroup-occupancy claim above — it rests on the SPIR-V allocation and the
   documented limits, not on a re-measured device.
 
+- **2026-08-09 — A dirty block is one the fuse *changed*, the flags are anchored
+  to a grid the library checks, and tracking them is opt-in.** `tsdf` can now
+  report which blocks a fuse invalidated — the input an incremental re-mesh
+  needs, and the first thing on the roadmap that the whole-volume extract's
+  `dispatch` phase (77% of an extract since the 2026-08-08 neighbour-probe
+  decision) actually points at. Four things about its shape are the decision,
+  and each was a defect in the first cut.
+  **(1) The flag means the field moved, not that a store happened.** The kernel
+  marked unconditionally at the top of the fuse. In **classic** mode — the
+  default, and what `fuse_replica` runs — free space ahead of the surface is
+  fused too (that is what classic *is*), so the only narrowing above the mark
+  was the occlusion return and the mark collapsed to *in-frustum ∧ valid depth
+  ∧ not occluded*: a frustum survey wearing a different name, which is exactly
+  what `dirty_block_count`'s header said it was not. It now compares the new
+  `tsdf`/`weight`/`color` against the old and marks after the stores it
+  describes, so a voxel converged at `max_weight` — re-storing bit-identical
+  numbers, the steady state of any revisiting scan — marks nothing. Note the
+  asymmetry that gave it away: the dynamic-clear store was already guarded by
+  `weight > 0.0`; the fuse store was guarded by nothing.
+  **Booked honestly: this narrows the set but does not make it small.** On
+  room0 at 120 frames it reports **62% of active blocks changed** per 20-frame
+  window and 59% per *single* frame — because in classic mode a moving camera
+  keeps shifting the running average of everything it sees, which is a real
+  change, not a miscount. The dilated re-mesh set is 83%. So the honest
+  headline is that an incremental extract's ceiling here is ~1.2x, not the
+  order-of-magnitude the first cut's `speedup %.1fx` implied — and that figure
+  is **removed** rather than corrected, because it divided active blocks by
+  re-mesh blocks and so assumed extract cost is proportional to block count
+  with zero fixed cost, which this example's own phase table refutes (`compact`
+  walks every table slot regardless, `arena` is sized by the whole surface,
+  `readback` copies all of it; only `dispatch` scales).
+  **(2) A flag is keyed by block SLOT, so it means nothing without a grid — and
+  the library checks which one.** Slots come from a LIFO heap, so the same index
+  means a different block on a different grid, and a different *coordinate*
+  after a removal. Neither is knowable from the flags, and neither was knowable
+  to the caller, whose only instruction was a `@param` sentence — the shape the
+  2026-08-04 rule exists to close. `VoxelBlockGrid` therefore publishes
+  `topology_epoch()` (bumped by `remove`/`clear`, deliberately **not** by
+  `resize`, which preserves every index), and the integrator records the grid
+  pointer plus that epoch. A different grid **resets** the flags and re-anchors
+  — refusing instead would bind an integrator to one grid for life, and one
+  integrator over many grids is already how the tsdf suite is written, which is
+  how the silent OR-ing went unnoticed. A removal on the *same* grid **refuses**
+  until `reset_dirty()`, because the geometry that went away is stale and no
+  surviving flag can say so: "re-mesh everything" is the only true answer, and
+  only the caller can act on it. The pointer is held for identity and never
+  dereferenced.
+  **(3) A grow carries the flags forward.** The array was reallocated and zeroed
+  on every map grow under a comment asserting the opposite ("the surviving flags
+  stay correct"), so a window straddling a `resize` forgot every block fused
+  since the last reset — silently, and precisely on the frames a growing scan
+  brings in the most new surface, which are the frames that trigger the grow. It
+  now memcpy's and zeroes only the tail, mirroring `VoxelBlockGrid::resize`,
+  which grows the attribute arrays the same way and cites the same
+  index-preserving rehash.
+  **(4) It returns the block set, and tracking is off by default.** A count
+  cannot drive the incremental extract the API exists for, and the walk already
+  computes the coordinates, so `dirty_remesh_blocks` hands back `Vec3i`s and
+  `.size()` is the count. It takes the caller's already-compacted active set
+  rather than compacting its own — the flags carry slots, not coordinates, so
+  every caller has just compacted, and a second compaction inside was a
+  dispatch, a fence wait and a full readback (0.15–0.26 ms at the examples'
+  defaults) on a call already O(active). The walk also inverted: it gathers over
+  active blocks testing their `+{0,1}³` octant, which makes the
+  existence filter *structural* (only blocks that exist are considered) and
+  needs no dedup, against the two hash sets it replaced. And
+  `TsdfIntegratorConfig::track_dirty_blocks` defaults **off** — the 2026-08-01
+  bar is "nothing measured when the caller did not ask", and always-on cost
+  every integrator a `num_blocks * 4` host-visible array (6 MB at
+  `VoxelGridParams::defaults()`, doubling per grow) plus a store per voxel, paid
+  by `fuse_viewer`, `fuse_render`, the iOS scanner and the whole test suite for
+  a flag none of them reads. Off binds a 1-element dummy to the slot and pushes
+  `track_dirty = 0`, the `color_dummy_` pattern this file already uses.
+  The per-voxel store is now `atomicOr` and guarded by the change test, so the
+  atomic is paid only by voxels that moved (none once a block converges) — a
+  non-atomic race on a shared address is undefined rather than benign without
+  `coherent`/`NonPrivatePointer`, and the two doc sites claiming the kernel
+  "needs no atomics" are amended rather than left to read as whole-kernel.
+  **Verified by mutation, and the fixture is the reason.** The original
+  assertions could not fail: their dirty set was a contiguous 1-D run whose `-z`
+  dilation is a no-op, so dropping the dilation, dropping the existence filter,
+  inverting the octant to `+x/+y/+z` (which the PR body itself called "the
+  natural wrong guess") and `return active.size()` all passed, as did a
+  vacuous pre-integrate `== 0` that held with the guard deleted. The fixture is
+  now a 2×2×2 cube straddling the band plus one off-camera block, so changed=4,
+  re-mesh=8 and active=9 are three different numbers, and eight independent
+  mutations each fail a named line: the copy-forward, the change predicate, the
+  re-anchor reset, the dynamic-clear mark, the octant, the feature itself, the
+  opt-out, and the topology check. Fusion numerics are untouched — room0 at 120
+  frames gives 832 518 vertices / 277 506 triangles with tracking on *and* off,
+  identical to what this file records for main. What is **not** covered is named
+  rather than implied: the threading obligation on `dirty_block_count` /
+  `reset_dirty` / `dirty_remesh_blocks` is documented (mirroring
+  `MarchingCubes::release_through`) and **not** checked, because the reader they
+  race is a fuse thread that can free the mapping mid-read and a flag a second
+  thread could race is not a check; and the `atomicOr` contention path is
+  exercised by no fixture, since every fixture here dispatches one frame at a
+  time.
+
 ## Provenance & salvage policy
 
 The algorithms here are a clean re-implementation of the proven core of the
@@ -1851,7 +1950,13 @@ depth — was seen, so a separate/unregistered colour camera never blends the
 first colour toward black); dynamic mode clears a receded voxel's colour
 whenever the grid carries the attribute, including on a depth-only frame. The
 depth and colour projections share a `project_to_image` helper in
-`tsdf_common.glsl`.
+`tsdf_common.glsl`. Behind an off-by-default
+`TsdfIntegratorConfig::track_dirty_blocks`, the integrator also reports which
+blocks a fuse actually **changed** — `dirty_block_count()` and
+`dirty_remesh_blocks()`, the latter dilated into the `-x/-y/-z` octant a
+marching-cubes stencil reaches back through, anchored to the grid and
+`VoxelBlockGrid::topology_epoch()` the flags were accumulated against (the
+2026-08-09 decision, which states what the measured fraction is and is not).
 
 The first **`mesh` tier** slice — GPU marching cubes — lands alongside it. The
 host `MarchingCubes` (`mesh/marching_cubes.hpp`) owns the compute pipeline and
