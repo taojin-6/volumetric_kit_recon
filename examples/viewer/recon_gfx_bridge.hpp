@@ -36,13 +36,19 @@ namespace gassets = volumetric_kit::gfx::assets;
 /// triangle a keyframe textured, else recon's `(-1, -1)` sentinel, which the
 /// hybrid fragment shader reads as "no atlas, use the per-vertex color".
 ///
-/// This copy exists only because the viewer hands gfx a *host* mesh (interop
-/// seam A). `fuse_viewer` now shares one `VkDevice` with the renderer, and
-/// `MarchingCubesConfig` can now put `VERTEX_BUFFER` on the arena, but neither
-/// is enough on its own: the arena's lifetime, its queue-family sharing mode,
-/// and the dispatch barrier's visibility scope all still stand in the way (the
-/// seam-B `TODO(mesh)` on `MarchingCubesConfig` enumerates them). `fuse_render`
-/// still builds its own device, and keeps needing this either way.
+/// This copy exists only for a consumer that hands gfx a *host* mesh (interop
+/// seam A), and `fuse_render` is now the only one: it builds *two* devices by
+/// design, and a `VkBuffer` is valid only on the device that created it, so
+/// zero-copy is structurally out of reach there without adopting the shared
+/// bootstrap -- which would delete the only coverage the two-device path has.
+///
+/// `fuse_viewer` no longer calls this. All four of the blockers the seam-B
+/// `TODO(mesh)` on `MarchingCubesConfig` used to enumerate -- the arena's
+/// lifetime, its queue-family sharing mode, the dispatch barrier's visibility
+/// scope, and the indirect draw -- are marked SETTLED there as of 2026-08-03,
+/// and since 2026-08-08 that viewer binds recon's arena, index run and
+/// `VkDrawIndexedIndirectCommand` directly as a `pipelines::LiveMesh`. It still
+/// includes this header, for the layout assertions below rather than the copy.
 inline gassets::Mesh to_gfx_mesh(const rmesh::Mesh& mesh) {
   static_assert(sizeof(rmesh::Vertex) == sizeof(gassets::Vertex),
                 "recon and gfx vertex layouts have diverged in size");
