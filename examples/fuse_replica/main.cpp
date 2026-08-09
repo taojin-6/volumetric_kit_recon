@@ -62,6 +62,12 @@ struct Options {
   // honestly: it does no projective texturing, whose per-triangle verdict
   // written per vertex is what sharing is incompatible with.
   bool share_vertices = false;
+  // Remesh through extract_device (no host copy) rather than extract. This is
+  // the path fuse_viewer and the iOS scanner actually run, and it is the only
+  // way to see the extract's real steady-state cost: extract() adds a full
+  // readback of every vertex, which measured as 44% of the call at 1 cm and is
+  // paid by no seam-B consumer.
+  bool device_extract = false;
   int num_buckets = 16384;  // initial map size; grows on overflow via resize
   bool preload = false;     // decode every frame up front (RAM for decode time)
 };
@@ -98,6 +104,8 @@ vr::Result<Options> parse_args(int argc, char** argv) {
       if (v == nullptr)
         return vr::Status::invalid_argument("--cam-params path");
       opt.cam_params = v;
+    } else if (a == "--device-extract") {
+      opt.device_extract = true;
     } else if (a == "--share-vertices") {
       opt.share_vertices = true;
     } else if (a == "--voxel") {
@@ -347,6 +355,12 @@ vr::Status run(const Options& opt) {
 
   const auto t_start = std::chrono::steady_clock::now();
   std::size_t fused = 0;
+  // Remesh accumulators; see the report below.
+  std::size_t remeshes = 0;
+  std::uint64_t sum_dispatches = 0;
+  double sum_total = 0.0, sum_compact = 0.0, sum_arena = 0.0;
+  double sum_dispatch = 0.0, sum_read = 0.0;
+  mesh::ExtractTimings last_rt{};
   for (std::size_t i = 0; i < last; i += static_cast<std::size_t>(opt.stride)) {
     vr::Result<vr_example::FrameView> frame_result = dataset.frame(i);
     if (!frame_result) {
@@ -377,14 +391,89 @@ vr::Status run(const Options& opt) {
 
     if (opt.mesh_every > 0 &&
         (fused % static_cast<std::size_t>(opt.mesh_every)) == 0) {
-      VR_ASSIGN(mesh::Mesh preview, extractor.extract(volume));
-      std::printf("  frame %zu: fused %zu, %zu triangles so far\n", i, fused,
-                  preview.triangle_count());
+      // Summed across every remesh, not sampled from one: the first extract of
+      // a run faults in its arena and is not the steady state anyone lives in,
+      // and reporting it as though it were is how a one-off allocation gets
+      // mistaken for a per-frame cost.
+      mesh::ExtractTimings rt{};
+      std::size_t tris = 0;
+      if (opt.device_extract) {
+        // The DeviceMesh borrows the extractor's buffers and is dropped here --
+        // at the default slot_count of 1 the next extract invalidates it, which
+        // is exactly what a benchmark wants and what a real consumer must not
+        // do.
+        VR_ASSIGN(mesh::DeviceMesh dm,
+                  extractor.extract_device(volume, 0.0f, &rt));
+        tris = dm.triangle_count;
+      } else {
+        VR_ASSIGN(mesh::Mesh preview, extractor.extract(volume, 0.0f, &rt));
+        tris = preview.triangle_count();
+      }
+      ++remeshes;
+      sum_total += rt.total_ms();
+      sum_compact += rt.compact_ms;
+      sum_arena += rt.arena_alloc_ms;
+      sum_dispatch += rt.dispatch_ms;
+      sum_read += rt.readback_ms;
+      sum_dispatches += rt.dispatches;
+      last_rt = rt;
+      if (fused % 100 == 0) {
+        std::printf("  frame %zu: fused %zu, %zu triangles so far\n", i, fused,
+                    tris);
+      }
     }
   }
 
+  if (remeshes > 0) {
+    const double n = static_cast<double>(remeshes);
+    const double cells = static_cast<double>(last_rt.active_blocks) *
+                         static_cast<double>(grid.voxels_per_block);
+    std::printf(
+        "remesh    %zu extracts, mean %.2f ms  (%s)\n"
+        "  phases  compact %.2f  arena %.2f  dispatch %.2f  read %.2f\n"
+        "  final   %u blocks -> %.2fM cells, %u tris (%.2f%% of cells), "
+        "%.2f dispatches/extract\n",
+        remeshes, sum_total / n,
+        opt.device_extract ? "extract_device" : "extract + download",
+        sum_compact / n, sum_arena / n, sum_dispatch / n, sum_read / n,
+        last_rt.active_blocks, cells / 1e6, last_rt.emitted_triangles,
+        cells > 0.0 ? 100.0 * last_rt.emitted_triangles / cells : 0.0,
+        static_cast<double>(sum_dispatches) / n);
+  }
+
   // --- Final mesh -> PLY ---
-  VR_ASSIGN(mesh::Mesh final_mesh, extractor.extract(volume));
+  //
+  // Measured, because the extract's phases are invisible from outside and this
+  // example is the scriptable place to see them: whole-volume meshing, the
+  // on-device neighbour probe and a possible arena refit all hide inside one
+  // call, and only the split says which one a slow extract is. The overlay in
+  // fuse_viewer shows the same struct interactively; this prints it so a sweep
+  // over --voxel can be diffed.
+  mesh::ExtractTimings t{};
+  VR_ASSIGN(mesh::Mesh final_mesh, extractor.extract(volume, 0.0f, &t));
+  // cells is what the dispatch actually walks: one workgroup per active block,
+  // striding over that block's voxels. Printed beside the triangles because the
+  // RATIO is the interesting number -- a low emit rate means the kernel is
+  // dominated by gathering cells that produce nothing, which points somewhere
+  // completely different from a kernel dominated by its output.
+  const double cells = static_cast<double>(t.active_blocks) *
+                       static_cast<double>(grid.voxels_per_block);
+  std::printf(
+      "extract   %.1f ms in %u dispatch(es)\n"
+      "  phases  compact %.2f  inputs %.2f  arena %.2f  desc %.2f  "
+      "dispatch %.2f  read %.2f\n"
+      "  blocks  %u active -> %.2fM cells, %u tris emitted (%.2f%% of cells)\n"
+      "  arena   %.1f MB resident, %u tris planned (%.1f%% full)\n",
+      t.total_ms(), t.dispatches, t.compact_ms, t.input_upload_ms,
+      t.arena_alloc_ms, t.descriptor_ms, t.dispatch_ms, t.readback_ms,
+      t.active_blocks, cells / 1e6, t.emitted_triangles,
+      cells > 0.0 ? 100.0 * t.emitted_triangles / cells : 0.0,
+      static_cast<double>(t.arena_bytes) / (1024.0 * 1024.0),
+      t.triangle_capacity,
+      t.triangle_capacity > 0
+          ? 100.0 * static_cast<double>(t.emitted_triangles) /
+                t.triangle_capacity
+          : 0.0);
   VR_TRY(vr_example::write_ply(opt.out, final_mesh));
   const auto t_end = std::chrono::steady_clock::now();
   const double secs = std::chrono::duration<double>(t_end - t_start).count();
