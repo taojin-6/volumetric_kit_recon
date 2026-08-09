@@ -232,12 +232,17 @@ int main() {
   CHECK(textured > 0);
   CHECK(textured < host_mesh.vertices.size());
 
-  // The index run download produces is the identity 0,1,2,... -- it is
-  // regenerated on the host rather than read back from the write-combined
-  // index buffer, so it is worth pinning that it still says what the kernel's
-  // buffer says.
-  for (std::size_t i = 0; i < device_out.indices.size(); ++i) {
-    CHECK(device_out.indices[i] == static_cast<std::uint32_t>(i));
+  // The index run is READ BACK from the kernel's buffer now, not regenerated as
+  // the identity 0,1,2,... -- vertices and triangles come from two independent
+  // atomics, so vertex order is not triangle order even without sharing. What
+  // is worth pinning is that every index actually addresses a vertex: an
+  // out-of-range one is an out-of-bounds read in the texturing kernel and an
+  // undefined fetch in the renderer, and `robustBufferAccess` covers neither.
+  CHECK(device_out.indices.size() % 3 == 0);
+  CHECK(device_out.indices.size() ==
+        static_cast<std::size_t>(device_mesh.triangle_count) * 3);
+  for (const std::uint32_t index : device_out.indices) {
+    CHECK(index < device_out.vertices.size());
   }
 
   // --- A superseded DeviceMesh is rejected -----------------------------------
