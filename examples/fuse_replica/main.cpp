@@ -57,8 +57,13 @@ struct Options {
   int max_frames = 1 << 30;  // process every available frame by default
   int stride = 1;            // integrate every N-th frame
   int mesh_every = 50;       // re-extract + log this often (0 = only at end)
-  int num_buckets = 16384;   // initial map size; grows on overflow via resize
-  bool preload = false;  // decode every frame up front (RAM for decode time)
+  // Share a vertex between the cells meeting on an edge, instead of giving
+  // every triangle three private ones. This example is where it can be measured
+  // honestly: it does no projective texturing, whose per-triangle verdict
+  // written per vertex is what sharing is incompatible with.
+  bool share_vertices = false;
+  int num_buckets = 16384;  // initial map size; grows on overflow via resize
+  bool preload = false;     // decode every frame up front (RAM for decode time)
 };
 
 const char* arg_value(int argc, char** argv, int& i) {
@@ -93,6 +98,8 @@ vr::Result<Options> parse_args(int argc, char** argv) {
       if (v == nullptr)
         return vr::Status::invalid_argument("--cam-params path");
       opt.cam_params = v;
+    } else if (a == "--share-vertices") {
+      opt.share_vertices = true;
     } else if (a == "--voxel") {
       if (!need(opt.voxel)) return vr::Status::invalid_argument("--voxel");
     } else if (a == "--trunc") {
@@ -130,7 +137,8 @@ vr::Result<Options> parse_args(int argc, char** argv) {
   }
   if (opt.scene_dir.empty()) {
     return vr::Status::invalid_argument(
-        "usage: fuse_replica <scene_dir> [-o out.ply] [--voxel m] "
+        "usage: fuse_replica <scene_dir> [-o out.ply] [--share-vertices] "
+        "[--voxel m] "
         "[--max-frames n] [--stride n] [--max-depth m] [--preload]");
   }
   if (opt.cam_params.empty()) {
@@ -223,7 +231,11 @@ vr::Status run(const Options& opt) {
   VR_ASSIGN(tsdf::TsdfIntegrator integrator,
             tsdf::TsdfIntegrator::create(device, allocator));
   VR_ASSIGN(mesh::MarchingCubes extractor,
-            mesh::MarchingCubes::create(device, allocator));
+            mesh::MarchingCubes::create(device, allocator, [&] {
+              mesh::MarchingCubesConfig c;
+              c.share_vertices = opt.share_vertices;
+              return c;
+            }()));
 
   // Allocate the truncation band for a frame, growing the map (preserving the
   // per-voxel data already fused) if it overflows -- exercises the block-index-
