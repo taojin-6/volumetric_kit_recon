@@ -30,8 +30,15 @@
 //     per-slot fence wait is the only completion signal gfx exposes, and no
 //     semaphore may cross this seam (a cross-library GPU wait deadlocks
 //     against a swapchain rebuild).
-//   * visibility -- recon's dispatch barrier already reaches VERTEX_INPUT and
-//     DRAW_INDIRECT, so no barrier is recorded here.
+//   * visibility -- the fuse thread blocks on its dispatch's fence inside
+//     submit_single_time before it publishes anything, and gfx's later
+//     vkQueueSubmit makes those device writes visible to the draw, so no
+//     barrier is recorded here. Note what this does NOT rest on: recon's
+//     dispatch barrier names DRAW_INDIRECT unconditionally but VERTEX_INPUT
+//     only where its queue family advertises graphics, since Vulkan forbids
+//     naming that stage on a compute-only one -- and the bootstrap matches
+//     recon's family on VK_QUEUE_COMPUTE_BIT alone, so off Apple it can land
+//     on exactly such a family.
 //
 // Each re-meshed frame is projectively textured with its own keyframe (the
 // texture tier): the triangles that keyframe saw unoccluded render at full
@@ -77,8 +84,12 @@
 // host copy that used to justify them: gfx now reads recon's arena in place
 // through its own attribute offsets, so a divergence between recon's
 // mesh::Vertex and gfx's assets::Vertex is no longer a mis-sized memcpy but
-// every attribute silently read from the wrong bytes. This is the only TU
-// where both types are visible.
+// every attribute silently read from the wrong bytes. (fuse_render.cpp
+// includes the same header and does still call the converter, so the
+// assertions fire in that TU too; they are kept here because this is the TU
+// that binds the arena, which is where a divergence is silent. What they pin
+// is the two *structs* -- that gfx's vertex-input description reads those
+// offsets with that stride is asserted nowhere, and cannot be from here.)
 #include "recon_gfx_bridge.hpp"
 #include "shared_device.hpp"
 #include "stage_metrics.hpp"  // fuse_viewer::StageTimes / StageScope
@@ -694,6 +705,21 @@ int run(GLFWwindow* window, const Options& opt) {
     try {
       // Scratch for this thread only; copied under share_mtx once per frame.
       fuse_viewer::StageTimes fuse_stages;
+      // The remesh-only rows -- extract and its breakdown, texture, atlas pack
+      // -- measured here rather than straight into `fuse_stages`, and merged in
+      // on every frame whether or not this one remeshed.
+      //
+      // The gate below fires only on the fused frames the renderer has kept up
+      // with, and fusion routinely outruns it (a preloaded run fuses several
+      // frames per presented frame), so measuring them into `fuse_stages`
+      // directly left them reading 0.00 on most samples -- on the very
+      // instrument this repo's history credits with catching the arena-alloc
+      // and neighbour-table regressions, and against its own rule that a row
+      // which is usually zero is worse than an absent one. Held, they describe
+      // the newest remesh, exactly as `extract_stats` beside them does; the
+      // panel's `fuse ms/frame` therefore reads as the cost of a fused frame
+      // that also remeshed.
+      fuse_viewer::StageTimes remesh_stages;
       // Held across frames so the panel keeps showing the newest remesh's
       // sizes between remeshes, rather than blanking to zero.
       rmesh::ExtractTimings extract_stats;
@@ -722,7 +748,7 @@ int run(GLFWwindow* window, const Options& opt) {
             // Textures the extractor's buffers in place -- no upload, no
             // readback; the geometry has not left the device since it was
             // meshed.
-            fuse_viewer::StageScope scope(fuse_stages, "texture");
+            fuse_viewer::StageScope scope(remesh_stages, "texture");
             texture_status =
                 texturer->texture(device_mesh, depth, depth_camera);
           }
@@ -730,7 +756,7 @@ int run(GLFWwindow* window, const Options& opt) {
             // Its own row, not folded into "texture": repacking a full sensor
             // frame to RGBA8 is host work of the same order as the texturing
             // dispatch, so charging it to the GPU pass would misattribute it.
-            fuse_viewer::StageScope scope(fuse_stages, "atlas pack");
+            fuse_viewer::StageScope scope(remesh_stages, "atlas pack");
             atlas = vr_example::pack_color_rgba8(color);
           } else {
             std::fprintf(stderr, "fuse_viewer: texture: %s\n",
@@ -907,9 +933,10 @@ int run(GLFWwindow* window, const Options& opt) {
         // common path, not a corner.
         if ((i % static_cast<std::size_t>(opt.remesh_every)) == 0 &&
             release_and_may_publish()) {
+          remesh_stages.clear();
           rmesh::ExtractTimings extract_timings;
           vr::Result<rmesh::DeviceMesh> extracted = [&]() {
-            fuse_viewer::StageScope scope(fuse_stages, "extract");
+            fuse_viewer::StageScope scope(remesh_stages, "extract");
             return extractor.extract_device(volume, 0.0f, &extract_timings);
           }();
           // Break the extract row down in place. The phases sum to the
@@ -917,12 +944,12 @@ int run(GLFWwindow* window, const Options& opt) {
           // StageTimes::kBreakdownPrefix -- which is what makes the table read
           // as a hierarchy *and* keeps total_ms from counting the extract
           // twice.
-          fuse_stages.add("  ..compact", extract_timings.compact_ms);
-          fuse_stages.add("  ..inputs", extract_timings.input_upload_ms);
-          fuse_stages.add("  ..arena alloc", extract_timings.arena_alloc_ms);
-          fuse_stages.add("  ..descriptors", extract_timings.descriptor_ms);
-          fuse_stages.add("  ..dispatch", extract_timings.dispatch_ms);
-          fuse_stages.add("  ..readback", extract_timings.readback_ms);
+          remesh_stages.add("  ..compact", extract_timings.compact_ms);
+          remesh_stages.add("  ..inputs", extract_timings.input_upload_ms);
+          remesh_stages.add("  ..arena alloc", extract_timings.arena_alloc_ms);
+          remesh_stages.add("  ..descriptors", extract_timings.descriptor_ms);
+          remesh_stages.add("  ..dispatch", extract_timings.dispatch_ms);
+          remesh_stages.add("  ..readback", extract_timings.readback_ms);
           extract_stats = extract_timings;
           // Published even when it meshed nothing, which the host-mesh path
           // did not need to do. An empty extract still claims and stamps a ring
@@ -940,6 +967,12 @@ int run(GLFWwindow* window, const Options& opt) {
             std::fprintf(stderr, "fuse_viewer: extract (frame %zu): %s\n", i,
                          extracted.status().message().c_str());
           }
+        }
+        // Merge the newest remesh's rows in, on every frame -- see
+        // remesh_stages. add() matches by name, so they land in the slots the
+        // seed loop above reserved and the table keeps its order.
+        for (const vg::FrameMetrics::Section& row : remesh_stages.sections()) {
+          fuse_stages.add(row.name, row.cpu_ms);
         }
         // Publish this frame's stage breakdown + the volume's device memory for
         // the overlay. Sampled here (not in the render thread) because the
@@ -977,40 +1010,57 @@ int run(GLFWwindow* window, const Options& opt) {
           }
           std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
-        if (release_and_may_publish()) {
-          // Measured like any other extract, and *published* like one below.
-          // Without this the panel's arena row keeps describing the last
-          // in-loop extract while the mesh row describes this one -- and they
-          // genuinely differ, since fusing the remaining frames refines the
-          // field and the zero-crossing set is not monotonic (400-frame room0:
-          // 330 394 triangles at the last remesh, 330 389 here). Two halves of
-          // one read-out taken from different extracts, frozen that way for the
-          // whole replay, is exactly the trap the ExtractTimings rows exist to
-          // avoid.
-          rmesh::ExtractTimings final_timings;
-          auto m = extractor.extract_device(volume, 0.0f, &final_timings);
-          if (m) {
-            {
-              std::lock_guard<std::mutex> lock(share_mtx);
-              shared_extract = final_timings;
-            }
-            // Texture the final mesh with the last keyframe (its depth camera
-            // rebuilt from the retained frame), or leave it untextured if no
-            // frame ever fused.
-            static const std::vector<std::uint32_t> kNoColor;
-            if (last_frame) {
-              const vr_example::RgbdFrame& keyframe = **last_frame;
-              publish(m.value(), keyframe.depth.data(),
-                      vr_example::make_depth_camera(cam, keyframe.cam_to_world,
-                                                    opt.max_depth),
-                      keyframe.color);
-            } else {
-              publish(m.value(), nullptr, vr::DepthCameraParams{}, kNoColor);
-            }
-          } else {
-            std::fprintf(stderr, "fuse_viewer: final extract: %s\n",
-                         m.status().message().c_str());
+      }
+      // Re-checked after the wait, which can span a whole second: `quit` is
+      // what says the window is gone, and running a full marching-cubes pass
+      // into a closed window is exactly what the guard above exists to avoid.
+      // The two used to be adjacent statements, so the gap did not exist.
+      if (!quit.load()) {
+        // Apply the release the render thread reported, then extract *whether
+        // or not* the last in-loop publish was collected. This one supersedes
+        // that mesh, so overwriting it is the intended outcome; and if the ring
+        // genuinely has no free slot recon refuses with a Status, which is
+        // reported below. Skipping the whole final extract on an uncollected
+        // publish -- which is what a minimized window produces, since
+        // begin_frame returns no frame and the render loop never reaches its
+        // take -- lost the complete surface with nothing on stderr.
+        if (!release_and_may_publish()) {
+          std::fprintf(stderr,
+                       "fuse_viewer: the renderer never collected the last "
+                       "mesh (window hidden, or drawing stopped); extracting "
+                       "the final mesh anyway\n");
+        }
+        // Measured like any other extract, and *published* like one below.
+        // Without this the panel's arena row keeps describing the last in-loop
+        // extract while the mesh row describes this one -- and they genuinely
+        // differ, since fusing the remaining frames refines the field and the
+        // zero-crossing set is not monotonic (400-frame room0: 330 394
+        // triangles at the last remesh, 330 389 here). Two halves of one
+        // read-out taken from different extracts, frozen that way for the whole
+        // replay, is exactly the trap the ExtractTimings rows exist to avoid.
+        rmesh::ExtractTimings final_timings;
+        auto m = extractor.extract_device(volume, 0.0f, &final_timings);
+        if (m) {
+          {
+            std::lock_guard<std::mutex> lock(share_mtx);
+            shared_extract = final_timings;
           }
+          // Texture the final mesh with the last keyframe (its depth camera
+          // rebuilt from the retained frame), or leave it untextured if no
+          // frame ever fused.
+          static const std::vector<std::uint32_t> kNoColor;
+          if (last_frame) {
+            const vr_example::RgbdFrame& keyframe = **last_frame;
+            publish(m.value(), keyframe.depth.data(),
+                    vr_example::make_depth_camera(cam, keyframe.cam_to_world,
+                                                  opt.max_depth),
+                    keyframe.color);
+          } else {
+            publish(m.value(), nullptr, vr::DepthCameraParams{}, kNoColor);
+          }
+        } else {
+          std::fprintf(stderr, "fuse_viewer: final extract: %s\n",
+                       m.status().message().c_str());
         }
       }
     } catch (const std::exception& e) {
@@ -1028,8 +1078,22 @@ int run(GLFWwindow* window, const Options& opt) {
       config.frames_in_flight);
   // What the draw binds: recon's own buffers, borrowed. Committed in lockstep
   // with `current_atlas` below, since the mesh's uv0 index into that image.
+  // Its `generation` is also the mesh version the panel reports: recon numbers
+  // extracts from 1, so a live_view that has never been committed reads 0, and
+  // a second hand-maintained counter beside it could only drift.
   rmesh::DeviceMesh live_view;
-  std::uint64_t committed_version = 0;  // version live_view + current_atlas are
+  // A taken mesh + its keyframe pixels, held here until BOTH can be committed.
+  // Declared outside the loop on purpose: an atlas upload that fails must be
+  // RETRIED, not dropped. A generation this thread took but never committed
+  // keeps its ring slot until a *newer committed* generation lets the release
+  // mark sweep past it (the mark is monotone, so it cannot skip one), and the
+  // commit that would produce one is exactly what just failed -- so two dropped
+  // takes fill the ring and recon refuses every later extract, permanently.
+  // Retrying bounds the uncommitted set at one, and the take below is gated on
+  // this being empty so a second cannot start.
+  rmesh::DeviceMesh taken;
+  std::vector<std::uint8_t> taken_atlas_px;
+  std::uint64_t taken_version = 0;
   // The recon generation each in-flight frame drew, read as a SET: what may be
   // released is everything older than the *oldest* entry, not the entry
   // belonging to the frame that just retired. One generation is normally drawn
@@ -1065,27 +1129,6 @@ int run(GLFWwindow* window, const Options& opt) {
   while (glfwWindowShouldClose(window) == GLFW_FALSE) {
     glfwPollEvents();
 
-    // Grab the newest published mesh + any new poses (cheap; the heavy load /
-    // decode / fuse all runs on the background thread).
-    {
-      std::lock_guard<std::mutex> lock(share_mtx);
-      // Append only the new tail (shared_poses only grows) rather than
-      // re-copying the whole trajectory each frame it changes.
-      if (poses.size() < shared_poses.size())
-        poses.insert(poses.end(), shared_poses.begin() + poses.size(),
-                     shared_poses.end());
-      fuse_stages_snapshot = shared_fuse_stages;
-      recon_panel.fuse_ms = shared_fuse_ms;
-      recon_panel.recon_memory = shared_recon_memory;
-      recon_panel.map_buckets = shared_map_buckets;
-      recon_panel.map_blocks = shared_map_blocks;
-      recon_panel.preloaded_bytes = shared_preloaded_bytes;
-      recon_panel.extract = shared_extract;
-    }
-    const std::size_t done_frames = fused_count.load();
-    const bool done = fusing_done.load();
-    recon_panel.fused_frames = done_frames;
-    recon_panel.total_frames = frame_count;
     auto frame = app.begin_frame(window_extent(window));
     if (!frame.ok()) {
       std::fprintf(stderr, "begin_frame: %s\n",
@@ -1112,13 +1155,29 @@ int run(GLFWwindow* window, const Options& opt) {
     // uncollected mesh -- so a take published *ahead* of the mark for the same
     // frame lets it run on a mark one iteration stale, ask for a slot beyond
     // the ring's depth, and be refused. That is not hypothetical: it cost 25
-    // refused extracts and two thirds of the meshes in a 200-frame preloaded
-    // run, and it is invisible whenever fusion is slower than the render loop.
-    rmesh::DeviceMesh taken;
-    std::vector<std::uint8_t> taken_atlas_px;
-    std::uint64_t taken_version = 0;
+    // refused extracts in a 200-frame preloaded run, and it is invisible
+    // whenever fusion is slower than the render loop.
+    //
+    // The panel snapshot rides in the same section, and that is not tidiness
+    // either: the arena/dispatch rows describe the extract that produced the
+    // mesh beside them, so reading them before begin_frame -- whose per-slot
+    // fence wait can span a whole frame, during which the fuse thread routinely
+    // publishes -- printed one generation's counts above another's arena.
     {
       std::lock_guard<std::mutex> lock(share_mtx);
+      // Append only the new tail (shared_poses only grows) rather than
+      // re-copying the whole trajectory each frame it changes.
+      if (poses.size() < shared_poses.size())
+        poses.insert(poses.end(), shared_poses.begin() + poses.size(),
+                     shared_poses.end());
+      fuse_stages_snapshot = shared_fuse_stages;
+      recon_panel.fuse_ms = shared_fuse_ms;
+      recon_panel.recon_memory = shared_recon_memory;
+      recon_panel.map_buckets = shared_map_buckets;
+      recon_panel.map_blocks = shared_map_blocks;
+      recon_panel.preloaded_bytes = shared_preloaded_bytes;
+      recon_panel.extract = shared_extract;
+
       frame_generations[render_frame.slot] = 0;
       std::uint64_t oldest_in_flight = 0;
       for (const std::uint64_t g : frame_generations) {
@@ -1127,18 +1186,19 @@ int run(GLFWwindow* window, const Options& opt) {
       }
       // No other frame in flight holds one, so the floor is what *this* frame
       // is about to draw -- releasing that would hand recon the slot under a
-      // live draw. Only when nothing has been committed at all does everything
-      // taken so far become releasable, which is the path that drains the ring
-      // when takes are accepted but never drawn.
-      if (oldest_in_flight == 0 && live_view.valid())
-        oldest_in_flight = live_view.generation;
+      // live draw. Only when nothing has been committed at all (generation 0,
+      // since recon numbers extracts from 1) does everything taken so far
+      // become releasable, which is the path that drains the ring when takes
+      // are accepted but never drawn.
+      if (oldest_in_flight == 0) oldest_in_flight = live_view.generation;
       // Generations count from 1, so there is nothing below the first.
       shared_released_through =
           oldest_in_flight > 0 ? oldest_in_flight - 1 : newest_taken_generation;
       // Taking frees the fuse thread whether or not the mesh proves drawable
       // below -- except once latched, where declining to take is also what
-      // stops the extracts that would follow.
-      if (pending_mesh && !mesh_unusable) {
+      // stops the extracts that would follow, and while one is still awaiting
+      // its atlas (see `taken`).
+      if (pending_mesh && !mesh_unusable && taken_version == 0) {
         taken = *pending_mesh;
         pending_mesh.reset();
         taken_atlas_px = std::move(pending_atlas);
@@ -1149,6 +1209,10 @@ int run(GLFWwindow* window, const Options& opt) {
         newest_taken_generation = taken.generation;
       }
     }
+    const std::size_t done_frames = fused_count.load();
+    const bool done = fusing_done.load();
+    recon_panel.fused_frames = done_frames;
+    recon_panel.total_frames = frame_count;
 
     // Commit the newly taken mesh + its atlas. The mesh itself needs no upload
     // -- it is already in device buffers gfx binds directly -- so what remains
@@ -1157,7 +1221,29 @@ int run(GLFWwindow* window, const Options& opt) {
       // Scoped over the whole check, not just the upload, so the row reports
       // ~0 on a frame with no new mesh instead of vanishing from the table.
       vg::Profiler::Scope upload_scope = profiler.cpu_scope("atlas upload");
-      if (taken_version != 0) {
+      if (taken_version != 0 && taken.empty()) {
+        // An empty extract draws nothing, so there is nothing to bind and
+        // nothing to sample -- and, crucially, nothing here is a fault. recon
+        // publishes one for slot hygiene and names its buffers as it found
+        // them, so a slot that was never sized carries NULL HANDLES beside
+        // empty() being true; that is the documented "draw nothing" case. It
+        // must therefore be committed without going through the bindable check
+        // below, which folds valid() in with the usage bits and latches: recon
+        // reaching its own legal empty path (a first extract on an empty map,
+        // which --max-frames 0 or a frame-0 load failure produces) would
+        // otherwise stop this viewer drawing and extracting for good.
+        //
+        // Committed, not held back: `live_view` is what parks a generation for
+        // release below, so keeping the previous mesh here would strand this
+        // slot until some later generation swept past it. The window blanking
+        // is the honest read -- recon meshed no surface. `current_atlas` is
+        // left alone rather than reset to white; with no geometry, nothing
+        // samples it, and the coherence rule binds only what is drawn.
+        live_view = taken;
+        taken = rmesh::DeviceMesh{};
+        taken_atlas_px.clear();
+        taken_version = 0;
+      } else if (taken_version != 0) {
         // Verified, not assumed. recon reports the usage its buffers were
         // created with -- and their sharing mode -- precisely because Vulkan
         // cannot be asked, and binding one that lacks a usage bit is a
@@ -1194,8 +1280,9 @@ int run(GLFWwindow* window, const Options& opt) {
           // dummy) and commit it with the mesh, or commit neither -- so the
           // drawn mesh and the atlas its uv0 index into always come from the
           // SAME version. A transient upload failure leaves the previous
-          // coherent pair in place and retries next frame (the viewer keeps
-          // drawing) rather than binding a new mesh against a stale atlas.
+          // coherent pair in place rather than binding a new mesh against a
+          // stale atlas, and this pair stays in `taken` to be retried on the
+          // next frame: dropping it would strand its ring slot (see `taken`).
           std::shared_ptr<AtlasVersion> next =
               taken_atlas_px.empty()
                   ? white_atlas
@@ -1203,13 +1290,10 @@ int run(GLFWwindow* window, const Options& opt) {
           if (next) {
             live_view = taken;
             current_atlas = std::move(next);
-            committed_version = taken_version;
+            taken = rmesh::DeviceMesh{};
+            taken_atlas_px.clear();
+            taken_version = 0;
           }
-          // On failure neither is committed and this version is simply skipped
-          // -- the previous coherent pair keeps drawing, and fusion republishes
-          // within a frame or two. Its generation is still this thread's to
-          // release: newest_taken_generation recorded it above, and the mark
-          // sweeps past it once a later generation is drawn.
         }
       }
     }
@@ -1218,7 +1302,7 @@ int run(GLFWwindow* window, const Options& opt) {
     // counts for geometry no frame is drawing.
     recon_panel.vertices = live_view.vertex_count;
     recon_panel.triangles = live_view.triangle_count;
-    recon_panel.mesh_version = committed_version;
+    recon_panel.mesh_version = live_view.generation;
     // This slot adopts the current atlas, releasing whatever it bound last
     // frame (safe: begin_frame fence-waited this slot). Holding it per slot
     // keeps a version an in-flight frame bound alive past its replacement --
@@ -1248,19 +1332,18 @@ int run(GLFWwindow* window, const Options& opt) {
               .view_proj();
     }
     // Park the generation this frame reads, for the *next* frame that lands on
-    // this slot to retire. Any valid view, drawn or not: an empty mesh still
-    // occupies a ring slot, and this is what stops it being released early.
-    // Outside the draw branch on purpose -- the release this thread owes recon
-    // does not depend on whether a frame drew, and gating it on drawing is how
-    // a ring drains to exhaustion with nothing able to refill it.
-    frame_generations[render_frame.slot] =
-        live_view.valid() ? live_view.generation : 0;
+    // this slot to retire. Any committed view, drawn or not: an empty mesh
+    // still occupies a ring slot, and this is what stops it being released
+    // early. Outside the draw branch on purpose -- the release this thread owes
+    // recon does not depend on whether a frame drew, and gating it on drawing
+    // is how a ring drains to exhaustion with nothing able to refill it.
+    frame_generations[render_frame.slot] = live_view.generation;
 
     const bool has_mesh = live_view.valid() && !live_view.empty();
     if (tick % 120 == 0)
       std::printf("render tick %d: fused %zu/%zu, mesh v%llu, drawing=%d\n",
                   tick, done_frames, frame_count,
-                  (unsigned long long)committed_version, has_mesh ? 1 : 0);
+                  (unsigned long long)live_view.generation, has_mesh ? 1 : 0);
 
     // Build the ImGui frame here -- after begin_frame has committed to a real
     // frame, so every new_frame is paired with exactly one render (ImGui
@@ -1301,9 +1384,29 @@ int run(GLFWwindow* window, const Options& opt) {
         // recon's buffers, named rather than copied. LiveMesh owns nothing and
         // reads the index count GPU-side out of the indirect command recon's
         // marching-cubes kernel wrote, so the count does not cross the CPU
-        // either. No barrier is recorded here: recon's dispatch already ends
-        // with one reaching VERTEX_INPUT and DRAW_INDIRECT, and the fence it
-        // blocks on inside submit_single_time is what orders the two threads.
+        // either.
+        //
+        // No barrier is recorded here, and the reason is the fence + submit
+        // chain, not the barrier scope: recon's extract blocks on its own fence
+        // inside submit_single_time -- an availability operation covering every
+        // device write it made -- before the mesh is published at all, and this
+        // thread's vkQueueSubmit then makes those writes visible to the draw.
+        // recon's dispatch barrier does also name DRAW_INDIRECT, but it names
+        // VERTEX_INPUT only where its queue family advertises graphics (Vulkan
+        // forbids that stage on a compute-only family, and the bootstrap
+        // matches recon's on VK_QUEUE_COMPUTE_BIT alone), so it is not
+        // something this seam can rest on off Apple.
+        //
+        // TODO(examples): the arena and index run are host-visible mapped
+        // memory -- core::storage_buffer allocates every recon buffer that way
+        // -- so the vertex-input stage fetches the whole mesh from system RAM
+        // on every presented frame (~64 MiB at room0's 991 k vertices, with no
+        // vertex reuse: the index run is the identity run until dedup lands).
+        // Free on Apple's unified memory, which is what this was measured on,
+        // and a per-frame PCIe fetch on a discrete GPU, where it would invert
+        // the win this seam exists for. Same shape as the host-visible indirect
+        // command's TODO(mesh), and it waits on the same thing: a discrete-GPU
+        // consumer to measure a device-local arena + staging against it.
         vgp::LiveMesh live;
         live.vertices = live_view.vertices;
         live.indices = live_view.indices;
