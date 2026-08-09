@@ -266,11 +266,18 @@ vr::Status run(const Options& opt) {
         return vr::Status::out_of_memory(
             "map cannot grow further without overflowing the block index");
       }
+      // Report the occupancy alongside the reason: it is a 4-byte read of the
+      // heap counter (not the O(total slots) diagnostics scan), and it is what
+      // says whether this grow was inevitable or premature. A capture-scale
+      // consumer should poll it and grow on a threshold instead of waiting for
+      // the failure -- linear probing degrades sharply past ~0.7, so growing at
+      // the cliff means every insert before it ran at its slowest.
+      vr::Result<float> load = volume.map().load_factor();
       std::printf(
-          "  map overflow (%u fails: %u chain, %u heap, %u table) -> resize to "
-          "%lld buckets\n",
-          failed, failures.chain, failures.heap, failures.table,
-          static_cast<long long>(grown));
+          "  map overflow at %.3f load (%u fails: %u chain, %u heap, %u table) "
+          "-> resize to %lld buckets\n",
+          load.ok() ? load.value() : -1.0f, failed, failures.chain,
+          failures.heap, failures.table, static_cast<long long>(grown));
       VR_TRY(volume.resize(static_cast<std::int32_t>(grown)));
     }
     return vr::Status::out_of_memory(

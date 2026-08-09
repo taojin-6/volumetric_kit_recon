@@ -362,7 +362,8 @@ Each dated; newest context wins. Change the decision *and* this list together.
   a neighbour-resolution pass, and a worst-case arena allocation all hide
   inside one call, and picking between interop seam B and the incremental
   block-mesh pool needs their split. (The neighbour pass was a host table when
-  this was written; the 2026-08-08 decision moved it into the kernel on the
+  this was written; the 2026-08-08 neighbour-probe decision moved it into the
+  kernel on the
   strength of exactly this breakdown, and `neighbour_lut_ms` went with it.) Other tiers follow the same shape only
   when they have the same problem.
 
@@ -1251,6 +1252,94 @@ Each dated; newest context wins. Change the decision *and* this list together.
   phase: a permanently-0.00 row in the overlay that diagnosed this is worse than
   an absent one.
 
+- **2026-08-08 — The overflow scan stays exhaustive; what gets bounded is its
+  cost per slot, not its length.** An M5 iPad Pro lost the GPU inside
+  `allocate_from_depth` at **31 480 of 32 768 blocks** —
+  `kIOGPUCommandBufferCallbackErrorHang` on recon's compute queue, taking the
+  renderer sharing the device down as collateral and reaching the app one frame
+  later as an unrelated `VK_ERROR_DEVICE_LOST`, with nothing in the chain naming
+  the kernel. `allocate_in_overflow` was the one loop that did not honour
+  `hash_common.glsl`'s own rule that a contended dispatch must not be able to
+  hang the GPU: it scanned all `num_buckets · bucket_size` entries for a free
+  non-anchor slot.
+  **The obvious fix — cap the scan — was tried and rejected**, because the
+  length was never the expensive part. Each slot cost a contended
+  `atomicCompSwap` **and two device-scope `memoryBarrierBuffer()`s taken before
+  the slot had even been read**: ~430 of each per attempt at 96% occupancy,
+  ×5 `insert_block` attempts, ×27 band blocks per depth pixel — ~58 k atomics
+  for one pixel, still watchdog territory under any cap worth having. A cap also
+  spends the only thing `kFailTable` is good for. `hash.hpp` tells a caller to
+  answer it by growing and `fuse_replica` answers by doubling every attribute
+  array (768 → 1536 MiB each, ~2.3 GiB transient), so a reason that can *also*
+  mean "I stopped looking" converts lock contention and chain depth into an
+  unbounded memory spend over a table that was never full. And `resize`'s rehash
+  runs the same insert under the highest concurrency in the repo, so the
+  prescribed remedy for `kFailTable` could itself fail with `kFailTable` and
+  roll back to an equally full map — a permanent stall.
+  **Three changes, and the order of operations in the first is the whole fix.**
+  (1) The scan reads a candidate's `ptr` **unlocked first** and skips it when
+  occupied, so only a slot that looks free pays the atomic — ~25× fewer of them
+  at 96% occupancy. That is safe rather than lucky: alloc and free run in
+  separate dispatches, so within one dispatch a slot moves only free →
+  occupied, which makes the unlocked read conservative in the one direction that
+  matters — a stale "free" costs a wasted lock and is caught by the
+  authoritative re-test under it, and a stale "occupied" cannot happen at all,
+  so the filter never skips a genuinely free slot. Lock-then-look also
+  *manufactured* the contention it went on to report, seizing buckets it had no
+  use for. (2) An empty heap short-circuits the scan with **one atomic load**,
+  which is the state the iPad was actually in: `validate()` forces
+  `num_blocks == bucket_size · num_buckets == total_entries` and every occupied
+  slot on this path consumed exactly one heap block, so "no block left" and "no
+  slot left" are the same statement, and the sweep was running to exhaustion to
+  discover nothing. It fixes attribution too — that state now reports
+  `kFailHeap`, which is what `allocate_in_primary` already calls it, rather than
+  one physical condition getting two names according to which helper hit it.
+  Guarded to the heap path, so `kFailHeap` stays *provably impossible* on the
+  rehash preset. (3) `insert_block` stops re-running the scan on a reason it
+  cannot resolve: within a dispatch `kFailHeap` / `kFailTable` / `kFailChain`
+  are monotone and no other thread can insert the coord either, so only
+  `kFailLock` earns another of the five attempts.
+  **`kFailTable` therefore comes out *stronger*, not weaker**, which is the
+  point: a sweep that skipped a free-looking slot only because another thread
+  held its bucket now reports `kFailLock` — the retryable reason — so
+  `kFailTable` is reached only by a clean sweep and is genuine proof the table
+  is out of usable slots. It is still not the same as "every slot is taken":
+  free *anchor* slots are invisible to an overflow insert by design, and the
+  test fixture pins exactly that case.
+  **Growth also stops being purely reactive.** The occupancy signal existed but
+  was reachable only through `diagnostics()`, which scans every slot on the host
+  (1.5 M at the example defaults) and carries its own `TODO(volume)` — so no
+  caller could afford it per frame, every fuse loop grew only *after*
+  allocations had already failed, and that is how a device reached 96% in the
+  first place. `VoxelHashMap::load_factor()` is a 4-byte read of the
+  host-mapped heap counter, the same quantity `HashDiagnostics::load_factor`
+  reports without the scan. `fuse_replica` prints it beside the overflow reason;
+  adopting an actual grow-at-threshold policy is deliberately **not** taken
+  here, because it would move the peak-memory and throughput figures this file
+  quotes and deserves its own measurement.
+  **Verified by mutation, which the first cut of this work was not** — its test
+  passed against the unbounded original *and* against a cap half the size, so it
+  pinned the change in neither direction. Three independent assertions now, each
+  confirmed to fail against the code it exists to catch: re-introducing a
+  256-slot cap fails the 300-deep chain fixture (its 292nd overflow node sits
+  333 iterations out, chosen to exceed any window worth having, on a table that
+  stays ~85% free so nothing there is a capacity limit); deleting the heap
+  early-out fails the pair asserting that a full table reports `heap` while a
+  table whose only free slot is an anchor reports `table`, on a 2×2 fixture
+  small enough to sweep by hand; and breaking the chain head-insert fails the
+  one-dispatch re-allocation, the only assertion that traverses `offset` —
+  `compact_active_blocks` is a flat per-slot scan, so a broken link still yields
+  the right *count*, which is why the size check alone proved nothing. The
+  coord search is bounded (`coords_in_bucket`, mirroring
+  `volume_diagnostics_test.cpp`) rather than a loop whose only exit is success.
+  What stays untested is named rather than implied: the
+  `kFailLock`-on-contention path and the retry-loop early exit are both
+  concurrency properties, and every fixture here dispatches one coord at a time
+  precisely to keep contention out of what it measures. The hang itself remains
+  unreproducible in a unit test — it needs ~131 k entries and thousands of
+  concurrent invocations — so what is claimed here is the cost model and the
+  reason codes, not a re-measured device.
+
 ## Provenance & salvage policy
 
 The algorithms here are a clean re-implementation of the proven core of the
@@ -1428,7 +1517,9 @@ it, the first **`volume` tier** slice — the sparse voxel hash map: the host
 and drives **init / allocate-from-coords / -depth / -points / remove / compact /
 compact-in-frustum / resize** via GLSL kernels (`volume/shaders/hash_*.comp`) that read
 `HashEntry`/`BlockIndex` through the scalar-block-layout ABI (2026-07-05), plus a
-host-side **diagnostics** scan (occupancy + collision-chain health).
+host-side **diagnostics** scan (occupancy + collision-chain health) and the
+constant-time `load_factor()` a per-frame caller can actually afford (the
+2026-08-08 overflow-scan decision).
 Depth/point allocation unprojects a posed depth frame (via `DepthCameraParams`
 intrinsics+pose, uploaded through the same scalar ABI) or takes world points,
 and dilates each surface block into the `(2·tb+1)³` truncation band — the prior
@@ -1509,7 +1600,7 @@ A second `MarchingCubes::extract` overload meshes straight off a sparse
 `+face` reaches its far corners into neighbouring blocks, and the kernel resolves
 that 2×2×2 neighbourhood **itself**, probing the hash table on-device (eight
 probes per workgroup, amortised over the block's cells — see the 2026-08-08
-decision, which moved it off the host and states what the `mesh`→`volume`
+neighbour-probe decision, which moved it off the host and states what the `mesh`→`volume`
 coupling costs). Only the corner *sampling* differs from the dense kernel; the
 shared per-cell body (cube index, gradient normal, reversed-winding emission,
 hybrid colour) lives in `mesh/shaders/marching_cubes_common.glsl`, which both

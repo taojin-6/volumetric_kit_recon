@@ -27,26 +27,30 @@ inline constexpr std::int32_t kNoOffset = 0;    ///< Collision-chain terminator.
 /// The layout of the per-dispatch failure tally the allocate and delete kernels
 /// share, mirrored from `volume/shaders/hash_common.glsl`.
 ///
-/// `[kFailTotal .. kFailHeap]` are **retryable**: the host re-dispatches while
-/// the total keeps dropping, because the element that failed is still
-/// unprocessed. @ref kFailTerminal is not, and the split is what keeps the
-/// reported count honest -- a delete whose heap append fails has already
-/// cleared its table entry, so the next round finds the coord absent and counts
-/// nothing. Accumulated across rounds rather than read from the last one, or a
-/// permanently leaked block index would be reported as a clean delete.
+/// Every slot but @ref kFailTerminal is **retryable**: the host re-dispatches
+/// while the total keeps dropping, because the element that failed is still
+/// unprocessed and so restates itself next round. @ref kFailTerminal does not,
+/// and the split is what keeps the reported count honest -- a delete whose heap
+/// append fails has already cleared its table entry, so the next round finds
+/// the coord absent and counts nothing. Accumulated across rounds rather than
+/// read from the last one, or a permanently leaked block index would be
+/// reported as a clean delete.
+///
+/// Retryable is not the same as *resolvable*: @ref kFailChain, @ref kFailHeap
+/// and @ref kFailTable restate themselves honestly every round and are answered
+/// by @ref VoxelHashMap::resize, not by another dispatch. Only @ref kFailLock
+/// can clear on its own.
 /// @{
 inline constexpr std::uint32_t kFailTotal = 0;     ///< Retryable total.
 inline constexpr std::uint32_t kFailLock = 1;      ///< Lock contention.
 inline constexpr std::uint32_t kFailChain = 2;     ///< Collision chain full.
 inline constexpr std::uint32_t kFailHeap = 3;      ///< Block heap empty.
 inline constexpr std::uint32_t kFailTerminal = 4;  ///< Non-retryable.
-/// No free non-anchor slot within the overflow probe window (see
-/// `kMaxOverflowProbes` in `volume/shaders/hash_common.glsl`): "nothing free
-/// near this bucket", not "the table is full". The probe is bounded because
-/// scanning the whole table cost a contended atomic per slot and hung the GPU
-/// at high occupancy; the trade is that this is now evidence of pressure rather
-/// than proof of exhaustion. Either way the caller's response is the same --
-/// grow.
+/// No free non-anchor slot anywhere in the table: the overflow scan swept every
+/// entry and every one it may use was occupied. Proof of exhaustion rather than
+/// a heuristic -- the scan is deliberately uncapped, and one that skipped a
+/// free-looking slot because another thread held its bucket reports
+/// @ref kFailLock instead, so this reason never stands in for contention.
 inline constexpr std::uint32_t kFailTable = 5;
 inline constexpr std::uint32_t kFailSlots = 6;  ///< Slots in the tally.
 /// @}
