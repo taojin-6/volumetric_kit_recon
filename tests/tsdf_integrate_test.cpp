@@ -157,7 +157,37 @@ int main() {
   std::vector<float> depth(static_cast<std::size_t>(cam.width) * cam.height,
                            plane_z);
 
+  // Nothing has been integrated yet, so nothing can be stale.
+  CHECK(integ.dirty_block_count() == 0);
+
   CHECK(integ.integrate(vbg, depth.data(), cam, /*max_weight=*/5.0f).ok());
+
+  // --- The dirty set is what was WRITTEN, not what was dispatched -----------
+  //
+  // The whole value of these counters is that they are narrower than the active
+  // set: the dispatch covers every active block and returns early for most of
+  // them. So the load-bearing assertion is the STRICT inequality -- marking a
+  // block simply because the kernel visited it would satisfy every other check
+  // here and make the counter useless for driving an incremental re-mesh.
+  const std::uint32_t written = integ.dirty_block_count();
+  const auto active_count = static_cast<std::uint32_t>(active.value().size());
+  CHECK(written > 0);
+  CHECK(written < active_count);
+
+  // Dilation into the -x/-y/-z octant can only grow the set, and only to blocks
+  // that exist -- it is bounded by the active set, never by 8x in practice.
+  vr::Result<std::uint32_t> remesh = integ.dirty_remesh_block_count(vbg);
+  CHECK(remesh.ok());
+  CHECK(remesh.value() >= written);
+  CHECK(remesh.value() <= active_count);
+
+  // Cleared means cleared; a consumer resets after an extract has consumed the
+  // set, and a flag surviving that would re-mesh the same block forever.
+  integ.reset_dirty();
+  CHECK(integ.dirty_block_count() == 0);
+  // Deliberately NOT re-integrating here to show the flags come back: the
+  // per-voxel numerics below are asserted against exactly ONE integration, and
+  // a second fuse moves the running average out from under them.
 
   vr::Result<vol::AttributeView> tsdf_view = vbg.attribute("tsdf");
   vr::Result<vol::AttributeView> weight_view = vbg.attribute("weight");

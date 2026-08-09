@@ -68,6 +68,9 @@ struct Options {
   // readback of every vertex, which measured as 44% of the call at 1 cm and is
   // paid by no seam-B consumer.
   bool device_extract = false;
+  // Report the TRUE dirty-block fraction every N fused frames; 0 = off. Unlike
+  // a frustum survey this counts only blocks the integrator actually wrote.
+  int dirty_every = 0;
   int num_buckets = 16384;  // initial map size; grows on overflow via resize
   bool preload = false;     // decode every frame up front (RAM for decode time)
 };
@@ -108,6 +111,9 @@ vr::Result<Options> parse_args(int argc, char** argv) {
       opt.device_extract = true;
     } else if (a == "--share-vertices") {
       opt.share_vertices = true;
+    } else if (a == "--dirty-every") {
+      if (!need_int(opt.dirty_every))
+        return vr::Status::invalid_argument("--dirty-every");
     } else if (a == "--voxel") {
       if (!need(opt.voxel)) return vr::Status::invalid_argument("--voxel");
     } else if (a == "--trunc") {
@@ -361,6 +367,10 @@ vr::Status run(const Options& opt) {
   double sum_total = 0.0, sum_compact = 0.0, sum_arena = 0.0;
   double sum_dispatch = 0.0, sum_read = 0.0;
   mesh::ExtractTimings last_rt{};
+  std::size_t dirty_samples = 0;
+  double sum_dirty_frac = 0.0;
+  std::uint32_t last_dirty = 0, last_active_blocks = 0, last_remesh = 0;
+  double sum_remesh_frac = 0.0;
   for (std::size_t i = 0; i < last; i += static_cast<std::size_t>(opt.stride)) {
     vr::Result<vr_example::FrameView> frame_result = dataset.frame(i);
     if (!frame_result) {
@@ -388,6 +398,27 @@ vr::Status run(const Options& opt) {
                                 opt.max_weight, tsdf::IntegrationMode::Classic,
                                 &color_frame));
     ++fused;
+
+    if (opt.dirty_every > 0 &&
+        (fused % static_cast<std::size_t>(opt.dirty_every)) == 0) {
+      // Reset FIRST, then fuse one frame, so the count is one frame's writes
+      // rather than everything since startup -- which is the quantity an
+      // incremental remesh would actually re-extract at remesh_every 1.
+      VR_ASSIGN(std::vector<vol::BlockIndex> all,
+                volume.map().compact_active_blocks());
+      const std::uint32_t dirty = integrator.dirty_block_count();
+      VR_ASSIGN(const std::uint32_t remesh,
+                integrator.dirty_remesh_block_count(volume));
+      if (!all.empty()) {
+        sum_remesh_frac += static_cast<double>(remesh) / all.size();
+        last_remesh = remesh;
+        last_dirty = dirty;
+        last_active_blocks = static_cast<std::uint32_t>(all.size());
+        sum_dirty_frac += static_cast<double>(dirty) / all.size();
+        ++dirty_samples;
+      }
+      integrator.reset_dirty();
+    }
 
     if (opt.mesh_every > 0 &&
         (fused % static_cast<std::size_t>(opt.mesh_every)) == 0) {
@@ -439,6 +470,19 @@ vr::Status run(const Options& opt) {
         last_rt.active_blocks, cells / 1e6, last_rt.emitted_triangles,
         cells > 0.0 ? 100.0 * last_rt.emitted_triangles / cells : 0.0,
         static_cast<double>(sum_dispatches) / n);
+  if (dirty_samples > 0) {
+    std::printf(
+        "dirty     %zu samples\n"
+        "  written %.2f%% of active blocks per window (mean)\n"
+        "  remesh  %.2f%% once dilated into -x/-y/-z (the real set)\n"
+        "  final   %u written -> %u to re-mesh of %u active "
+        "(dilation %.2fx, speedup %.1fx)\n",
+        dirty_samples, 100.0 * sum_dirty_frac / dirty_samples,
+        100.0 * sum_remesh_frac / dirty_samples, last_dirty, last_remesh,
+        last_active_blocks,
+        last_dirty > 0 ? static_cast<double>(last_remesh) / last_dirty : 0.0,
+        last_remesh > 0 ? static_cast<double>(last_active_blocks) / last_remesh
+                        : 0.0);
   }
 
   // --- Final mesh -> PLY ---

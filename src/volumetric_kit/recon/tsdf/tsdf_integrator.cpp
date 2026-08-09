@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <unordered_set>
 #include <vector>
 
 #include "volumetric_kit/recon/core/compute_kernel.hpp"
@@ -89,7 +90,7 @@ Result<TsdfIntegrator> TsdfIntegrator::create(Device& device,
   push_range.size = sizeof(PushConstants);
   KernelSetBuilder kb(dev);
   VR_TRY(kb.add(integ.kernel_, vr_tsdf_integrate_comp_spv,
-                vr_tsdf_integrate_comp_spv_size, 8, &push_range));
+                vr_tsdf_integrate_comp_spv_size, 9, &push_range));
   VR_ASSIGN(integ.pool_, kb.build());
 
   // A 1-D dispatch's groupCountX is capped by maxComputeWorkGroupCount[0] (only
@@ -225,6 +226,22 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid, const float* depth,
 
   // The camera binding (4) was written once at create(); only the per-call
   // tsdf/weight/active/depth buffers are (re)bound here.
+  // The dirty-flag array, sized to the grid's block capacity. Reallocated (and
+  // re-zeroed) when the map grows, which is safe because a resize preserves
+  // block ptrs: a flag's meaning is its slot, so the surviving flags stay
+  // correct and the new tail starts clean.
+  const auto blocks = static_cast<std::uint32_t>(grid.grid().num_blocks);
+  if (!dirty_blocks_.valid() || dirty_capacity_ < blocks) {
+    VR_ASSIGN(dirty_blocks_, storage_buffer(*allocator_,
+                                            static_cast<VkDeviceSize>(blocks) *
+                                                sizeof(std::uint32_t),
+                                            HostAccess::Random));
+    std::memset(dirty_blocks_.mapped(), 0,
+                static_cast<std::size_t>(blocks) * sizeof(std::uint32_t));
+    dirty_capacity_ = blocks;
+  }
+  kernel_.set.write_storage_buffer(8, dirty_blocks_.handle(), 0, VK_WHOLE_SIZE);
+
   kernel_.set.write_storage_buffer(0, tsdf_view.buffer->handle(), 0,
                                    VK_WHOLE_SIZE);
   kernel_.set.write_storage_buffer(1, weight_view.buffer->handle(), 0,
@@ -289,6 +306,62 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid, const float* depth,
   return dispatch(*device_, kernel_, &push, sizeof(push),
                   group_count(static_cast<std::uint32_t>(threads64)),
                   max_workgroup_count_x_);
+}
+
+std::uint32_t TsdfIntegrator::dirty_block_count() const {
+  if (!dirty_blocks_.valid()) return 0;
+  const auto* flags = static_cast<const std::uint32_t*>(dirty_blocks_.mapped());
+  std::uint32_t count = 0;
+  for (std::uint32_t i = 0; i < dirty_capacity_; ++i) {
+    if (flags[i] != 0u) ++count;
+  }
+  return count;
+}
+
+Result<std::uint32_t> TsdfIntegrator::dirty_remesh_block_count(
+    volume::VoxelBlockGrid& grid) {
+  if (!dirty_blocks_.valid()) return std::uint32_t{0};
+  VR_ASSIGN(std::vector<volume::BlockIndex> active,
+            grid.map().compact_active_blocks());
+  const auto vpb = static_cast<std::uint32_t>(grid.grid().voxels_per_block);
+  if (vpb == 0) return Status::invalid_argument("voxels_per_block is 0");
+  const auto* flags = static_cast<const std::uint32_t*>(dirty_blocks_.mapped());
+
+  auto key = [](const Vec3i& c) {
+    return (static_cast<std::int64_t>(c.x) << 42) ^
+           (static_cast<std::int64_t>(c.y) << 21) ^
+           static_cast<std::int64_t>(c.z);
+  };
+  // Only blocks that EXIST can need re-meshing: a neighbour never allocated has
+  // no geometry to invalidate.
+  std::unordered_set<std::int64_t> active_key;
+  active_key.reserve(active.size() * 2);
+  for (const volume::BlockIndex& b : active) active_key.insert(key(b.coord));
+
+  std::unordered_set<std::int64_t> remesh;
+  remesh.reserve(active.size());
+  for (const volume::BlockIndex& b : active) {
+    const auto slot = static_cast<std::uint32_t>(b.ptr) / vpb;
+    if (slot >= dirty_capacity_ || flags[slot] == 0u) continue;
+    // X reads B iff B == X + d for some d in {0,1}^3, i.e. X == B - d.
+    for (int dz = 0; dz <= 1; ++dz) {
+      for (int dy = 0; dy <= 1; ++dy) {
+        for (int dx = 0; dx <= 1; ++dx) {
+          const std::int64_t k =
+              key(Vec3i{b.coord.x - dx, b.coord.y - dy, b.coord.z - dz});
+          if (active_key.count(k) != 0) remesh.insert(k);
+        }
+      }
+    }
+  }
+  return static_cast<std::uint32_t>(remesh.size());
+}
+
+void TsdfIntegrator::reset_dirty() {
+  if (!dirty_blocks_.valid()) return;
+  std::memset(
+      dirty_blocks_.mapped(), 0,
+      static_cast<std::size_t>(dirty_capacity_) * sizeof(std::uint32_t));
 }
 
 }  // namespace volumetric_kit::recon::tsdf

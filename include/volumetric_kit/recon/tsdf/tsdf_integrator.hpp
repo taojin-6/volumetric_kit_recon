@@ -145,6 +145,56 @@ class VR_TSDF_API TsdfIntegrator {
   ///         for a single 1-D dispatch (its voxel count exceeds the device's
   ///         `maxComputeWorkGroupCount[0]`, or 2^32 threads); otherwise a
   ///         buffer or dispatch failure.
+  /// @brief How many blocks this integrator has WRITTEN since the last
+  ///        @ref reset_dirty.
+  ///
+  /// Not "how many were dispatched" and not "how many were in view": the
+  /// dispatch covers every active block and returns early for most, and a
+  /// frustum test counts the whole depth cone. Only a real write to
+  /// `tsdf`/`weight`/`color` sets a block's flag, so this is the set whose
+  /// extracted geometry is actually stale -- the input an incremental mesh
+  /// extraction needs.
+  ///
+  /// Accumulates across calls, because a consumer may fuse several frames per
+  /// remesh; @ref reset_dirty clears it, and the natural place to call that is
+  /// immediately after an extract has consumed the set.
+  ///
+  /// Counted on the host over a host-visible buffer, so it is O(num_blocks) and
+  /// meant for diagnostics and for driving a re-mesh, not for a per-voxel path.
+  ///
+  /// @return The count, or 0 before any integrate has run.
+  std::uint32_t dirty_block_count() const;
+
+  /// @brief Clear every dirty flag. See @ref dirty_block_count.
+  void reset_dirty();
+
+  /// @brief The blocks an incremental re-mesh would actually have to redo:
+  ///        @ref dirty_block_count dilated into the `-x/-y/-z` octant.
+  ///
+  /// Dirty is not the re-mesh set. Marching cubes reads a cell's eight corners
+  /// as `base + {0,1}^3`, so a block's cells reach one block in `+x/+y/+z` and
+  /// no further -- which inverts to: a block whose voxels changed invalidates
+  /// the mesh of every block in its `{0,-1}^3` octant, itself included. Skip
+  /// that and the surface goes stale exactly at block seams, under
+  /// `Status::ok`.
+  ///
+  /// One block deep, and **not** a function of `trunc_dist` -- that governs
+  /// which voxels are written (already reflected in the flags) and how far
+  /// `allocate_from_depth` dilates the band, neither of which widens the
+  /// meshing stencil. So the multiplier is bounded at 8x, and far below it in
+  /// practice because a dirty set is a contiguous surface patch rather than
+  /// scattered blocks: dilating a connected region adds roughly its perimeter.
+  ///
+  /// Host-side and O(active blocks) -- a diagnostic and a planning input, not a
+  /// per-frame path. A real incremental extract would scatter the same
+  /// neighbourhood on the GPU.
+  ///
+  /// @param grid  The grid these flags were accumulated against; its active set
+  ///              supplies the block coordinates the flags alone do not carry.
+  /// @return The dilated count, or a non-OK @ref Status if the compaction
+  ///         fails.
+  Result<std::uint32_t> dirty_remesh_block_count(volume::VoxelBlockGrid& grid);
+
   Status integrate(volume::VoxelBlockGrid& grid, const float* depth,
                    const DepthCameraParams& cam, float max_weight = 5.0f,
                    IntegrationMode mode = IntegrationMode::Classic,
@@ -181,6 +231,11 @@ class VR_TSDF_API TsdfIntegrator {
   // is fused (so every declared descriptor stays bound).
   Buffer color_cam_buf_;
   Buffer color_dummy_;
+  // One flag per block slot, set by the kernel when it actually writes a voxel.
+  // Sized to the grid's num_blocks and reallocated when that grows; see
+  // dirty_block_count().
+  Buffer dirty_blocks_;
+  std::uint32_t dirty_capacity_ = 0;
 };
 
 }  // namespace volumetric_kit::recon::tsdf

@@ -40,6 +40,23 @@ layout(set = 0, binding = 5, scalar) readonly buffer ColorImage {
   uint color_image[];
 };
 layout(set = 0, binding = 6, scalar) buffer ColorAttr { uint color_attr[]; };
+// One flag per BLOCK, set when this dispatch actually WRITES a voxel of it.
+//
+// Not "the block was in the active set" and not "the block was in the frustum":
+// the integrate dispatch covers every active block and returns early for most of
+// them, and a frustum test counts the whole view cone. Only an actual write
+// invalidates a block's extracted mesh, so only an actual write may set this.
+//
+// Indexed by block SLOT (ptr / voxels_per_block), which is stable across frames
+// and preserved by VoxelHashMap::resize -- so flags accumulate correctly across
+// several fused frames between remeshes, which the compacted dispatch order
+// could not do.
+//
+// A plain store, not an atomic: every writer stores the same 1, so the race is
+// benign and a contended atomic per voxel would cost far more than the flag is
+// worth.
+layout(set = 0, binding = 8, scalar) buffer DirtyBlocks { uint dirty_block[]; };
+
 layout(set = 0, binding = 7, scalar) readonly buffer ColorCamera {
   ColorCameraParams color_cam;
 };
@@ -143,6 +160,9 @@ void main() {
       if (pc.has_color_attr != 0u) {
         color_attr[idx] = 0u;  // drop stale color along with the geometry
       }
+      // A clear changes the field exactly as a fuse does -- a receded surface
+      // that leaves a stale mesh behind is the whole reason dynamic mode exists.
+      dirty_block[uint(block.ptr) / uint(pc.grid.voxels_per_block)] = 1u;
     }
     return;
   }
@@ -165,6 +185,7 @@ void main() {
   float w_old = weight[idx];
   float s_old = tsdf[idx];
   float w_sum = w_old + w_obs;
+  dirty_block[uint(block.ptr) / uint(pc.grid.voxels_per_block)] = 1u;
   tsdf[idx] = clamp((s_old * w_old + sdf * w_obs) / max(w_sum, 1e-6),
                     -trunc_dist, trunc_dist);
   weight[idx] = min(w_sum, pc.max_weight);
