@@ -223,6 +223,7 @@ int main() {
     CHECK(actual.tangent == expected.tangent);
     if (expected.uv0.x >= 0.0f) ++textured;
   }
+  CHECK(device_out.indices.size() == host_mesh.indices.size());
   for (std::size_t i = 0; i < host_mesh.indices.size(); ++i) {
     CHECK(device_out.indices[i] == host_mesh.indices[i]);
   }
@@ -232,12 +233,23 @@ int main() {
   CHECK(textured > 0);
   CHECK(textured < host_mesh.vertices.size());
 
-  // The index run download produces is the identity 0,1,2,... -- it is
-  // regenerated on the host rather than read back from the write-combined
-  // index buffer, so it is worth pinning that it still says what the kernel's
-  // buffer says.
+  // Without MarchingCubesConfig::share_vertices -- this extractor's default --
+  // every triangle owns three private vertices written at `tri * 3`, so the run
+  // IS the identity 0,1,2,..., the host fills it once per grow and download()
+  // regenerates rather than reading back. Asserted rather than assumed, because
+  // both the fill and the regeneration are conditional on that flag now and a
+  // mismatch between them is silent: the mesh stays the right SIZE and its
+  // triangles are drawn from the wrong vertices.
+  //
+  // Restating `indices.size() == triangle_count * 3` would prove nothing --
+  // download() resizes to exactly that -- so the content is what is checked,
+  // plus that every index addresses a live vertex (an out-of-range one is an
+  // out-of-bounds read in the texturing kernel and an undefined fetch in the
+  // renderer; `robustBufferAccess` covers neither).
+  CHECK(device_out.indices.size() % 3 == 0);
   for (std::size_t i = 0; i < device_out.indices.size(); ++i) {
     CHECK(device_out.indices[i] == static_cast<std::uint32_t>(i));
+    CHECK(device_out.indices[i] < device_out.vertices.size());
   }
 
   // --- A superseded DeviceMesh is rejected -----------------------------------
@@ -345,6 +357,35 @@ int main() {
     CHECK(stale_texture.domain() == vr::Status::Code::InvalidArgument);
     // The live view from the same extractor still textures.
     CHECK(texturer.texture(next.value(), depth.data(), cam).ok());
+  }
+
+  // A mesh whose vertices are SHARED is refused, and that refusal is the whole
+  // reason DeviceMesh publishes the flag. This pass decides visibility per
+  // triangle and writes uv0 per vertex; where a vertex is referenced by up to
+  // six triangles that disagree, the last writer wins nondeterministically and
+  // a triangle left holding one sentinel interpolates from (-1, -1) across its
+  // face -- Status::ok, no validation diagnostic, visible only as flicker.
+  // Without the flag the texturer had no way to ask: share_vertices lives on a
+  // config it is not compiled against.
+  {
+    mesh::MarchingCubesConfig share_config;
+    share_config.share_vertices = true;
+    vr::Result<mesh::MarchingCubes> share_result = mesh::MarchingCubes::create(
+        device.value(), allocator.value(), share_config);
+    CHECK(share_result.ok());
+    mesh::MarchingCubes share_mc = std::move(share_result).value();
+    vr::Result<mesh::DeviceMesh> shared = share_mc.extract_device(grid, 0.0f);
+    CHECK(shared.ok());
+    CHECK(!shared.value().empty());
+    CHECK(shared.value().shares_vertices);
+    // Current, valid, and correctly configured -- so nothing but the sharing
+    // flag can be what rejects it.
+    CHECK(shared.value().is_current());
+    CHECK(shared.value().valid());
+    vr::Status shared_texture =
+        texturer.texture(shared.value(), depth.data(), cam);
+    CHECK(!shared_texture.ok());
+    CHECK(shared_texture.domain() == vr::Status::Code::InvalidArgument);
   }
 
   std::printf(

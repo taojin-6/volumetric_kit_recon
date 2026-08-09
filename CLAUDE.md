@@ -1471,8 +1471,10 @@ Each dated; newest context wins. Change the decision *and* this list together.
   index run are host-visible mapped memory, because `core::storage_buffer`
   allocates every recon buffer that way. So the vertex-input stage now fetches
   the whole mesh out of system RAM on every *presented* frame — ~64 MiB at these
-  counts, with no vertex reuse until shared-vertex dedup lands — where the old
-  path paid ~67 MB per *remesh* into device-local memory. On Apple's unified
+  counts — where the old path paid ~67 MB per *remesh* into device-local
+  memory. (`share_vertices` would cut that ~4x, and this example deliberately
+  does not take it: it runs the `texture` tier, which the flag is incompatible
+  with — see the 2026-08-08 decision.) On Apple's unified
   memory, which is the only hardware this was measured on, that is free and the
   seam is a clear win; on a discrete GPU it would invert. Booked as a greppable
   `TODO(mesh)` beside the host-visible indirect command's, waiting on the same
@@ -1483,6 +1485,123 @@ Each dated; newest context wins. Change the decision *and* this list together.
   panel's figure moves with what is on screen; 96.5, ~106 and 102–119 across
   three runs), with zero validation errors, zero refused extracts and one
   dispatch per extract.
+
+- **2026-08-08 — In-block vertex sharing is a *second compiled kernel*, not a
+  branch, and the two emitters must interpolate an edge in the same direction.**
+  `MarchingCubesConfig::share_vertices` makes the cells that meet on an edge
+  index one vertex instead of emitting three private ones each: every cell emits
+  a vertex only on the three edges it **owns** (+x/+y/+z from its base corner,
+  derived from the tables by `mcEdgeOwner` rather than tabulated a fourth time),
+  and its neighbours look that up in `shared int s_edge_vtx[]`. Edges on a
+  block's `+face` are still duplicated — sharing them would need the
+  neighbouring workgroup's shared memory — which is why the saving is **~4x**
+  rather than the ~6x full sharing would give. Measured on Replica room0:
+  3.4x fewer vertices, 3.5% faster end to end. Two consumer-visible
+  consequences, both published on `DeviceMesh` rather than left to be inferred:
+  the index run stops being the identity `0,1,2,...` (`shares_vertices`), and
+  `vertex_count` stops being `3 * triangle_count`.
+  **Two kernels, chosen at `create`, and that is the decision.** Sharing needs
+  ~8 KiB of `shared` arrays, and a `shared` array is reserved when the pipeline
+  is created whatever a push constant later says — so the first cut, one kernel
+  with a `share_vertices` push constant, made the **default** path pay
+  sharing's threadgroup budget (32 B → 8 224 B, verified by SPIR-V
+  disassembly), which bounds residency to 3 workgroups on Apple's ~32 KiB and
+  to **1** at Vulkan's guaranteed 16 KiB floor — on the kernel this file records
+  as 77% of an extract. It also cost the default path its memory *shape*:
+  routing both modes through the sharing emitter gave every corner its own
+  interleaved `atomicAdd(vertex_count, 1u)`, so a triangle's three 64-byte
+  writes landed at three arbitrary offsets in a multi-hundred-MB arena and the
+  index run came out non-monotonic — lost write coalescing in the kernel, lost
+  vertex-fetch locality in the seam-B draw that reads it. `fuse_viewer`,
+  `fuse_render`, the whole `texture` tier and the iOS scanner all take that
+  path for a feature none of them enables. So `marching_cubes_sparse.comp` is
+  the default and is byte-for-byte what this tier always did, and
+  `marching_cubes_sparse_shared.comp` is its sibling; what they do identically
+  (the neighbourhood probe, the corner gather, the block addressing) is
+  `marching_cubes_sparse_common.glsl`, the same shared-`.glsl` discipline
+  `marching_cubes_common.glsl` applies to the dense/sparse pair.
+  **The bug that made "sharing moves only the vertex count" false was the edge
+  DIRECTION.** `kEdgeToVert` lists edges 2/3/6/7 max-corner-first, so a cell's
+  owned +y edge (edge 3 = corners {3,0}) is its neighbour's edge 1 (corners
+  {1,2}) — the same segment, traversed opposite ways — and both `mix` and the
+  near-tangent guard are direction-dependent. Normally that is ulps; under the
+  guard it is a **whole voxel**, because at `sa = -1e-9, sb = +1e-9, iso = 0`
+  the guard forces `denom` to `+1e-6` one way and `-1e-6` the other and *both*
+  come out at ratio ~1e-3, hugging whichever endpoint was passed first.
+  `mcEdgeVertex` therefore orders the endpoints canonically (by corner shift —
+  the same rule `mcEdgeOwner` names the edge by, so the two cannot disagree),
+  and `mcEmitCell` now calls it instead of carrying a verbatim copy of its
+  body, which is what made the drift possible. That also makes the shared and
+  unshared meshes comparable **triangle for triangle on exact position floats**,
+  which is the invariant the suite asserts.
+  **`vertex_count` counts vertices, not claims.** A phase-1 claim that overflows
+  the arena records `kVertexDropped`, distinct from `kNoVertex`, so the cells
+  referencing that edge do *not* re-claim a replacement. Left undistinguished,
+  an overflowing dispatch reported `V_owned + ~3T` instead of the true ~0.75T —
+  *more* than not sharing at all — and the host refits a **grow-only** arena to
+  that number: ~95 MB pinned on room0 against the 15.9 MB the shared surface
+  needs, which is the entire thing the feature exists to save. That path is
+  taken by design on the first sharing extract of any real surface, since
+  `kSeedTrisPerBlock` deliberately plans low.
+  **Sizing two buffers means two budgets, and they must not read each other.**
+  The vertex arena and the index run are now grown **independently**: they used
+  to be released together because `arena_capacity()` came off the *arena*, which
+  stopped being true the moment sharing moved it to the index run — and keeping
+  the coupling grew whichever buffer *fitted* to 1.5x what it already held,
+  compounding on every such event. That is numerically the ring runaway the
+  2026-08-03 slot-independence decision exists to prevent, reintroduced one
+  buffer over, and it refaulted the arena — the phase measured at 49.8 ms of a
+  55 ms extract. Relatedly, `plan_capacity` bounds its triangle request by
+  **both** buffers' device limits (`max_triangles_for` covers only the index
+  run's 12 B/triangle; the arena's three private vertices are 16x tighter), and
+  `plan_vertex_capacity` clamps in *both* modes: a predicted quantity is
+  clamped, never rejected (the 2026-08-04 rule), and the unshared branch had no
+  device clamp at all, so on a driver at Vulkan's guaranteed 2^27 a plan could
+  be rejected by `ensure_output_buffers` — **permanently**, since the density is
+  recorded only on success and a scan's active set only grows.
+  **A failure disarms the draw command rather than clamping it.** Clamping
+  bounds how many indices a draw *reads* and says nothing about their *values*,
+  and on every failure path the values are the problem: a triangle whose vertex
+  claim overflowed is counted but never written, so its three index slots hold
+  whatever the VMA block last did, and the dense kernel never writes the index
+  run at all. Arbitrary `uint32`s into a 64-byte-stride arena with
+  `robustBufferAccess` enabled nowhere is a GPU fault, where "this slot has no
+  drawable geometry" is the honest statement — so `indexCount` goes to 0, on the
+  two sparse failure returns *and* at the end of the dense overload, which
+  publishes no `DeviceMesh` and used to leave a live-looking command behind.
+  **What the library checks rather than documents**, per the 2026-08-04 rule.
+  `ProjectiveTexturer::texture` **refuses** a mesh carrying `shares_vertices`:
+  it decides visibility per *triangle* and writes `uv0` per *vertex*, so where
+  an interior vertex is referenced by up to six triangles that disagree the last
+  writer wins nondeterministically, and a triangle left holding one sentinel
+  interpolates from `(-1,-1)` across its whole face — `Status::ok`, no
+  validation diagnostic, visible only as flicker. The real fix is a
+  per-primitive camera id, which the planned packed multi-camera atlas needs
+  anyway; this flag keeps the two decisions independent. And the sharing
+  kernel's compile-time `kMaxSharedCells` is mirrored by a host constant that
+  gates the per-*extract* refusal of a larger `block_size` (not `create`'s — the
+  block size arrives with the grid), with nothing but a comment tying the two
+  across languages; so the kernel **reports** whether it actually shared, in a
+  scratch word past the draw command, and the host fails on it. Raising the host
+  constant alone would otherwise admit a block the kernel silently declines.
+  **Verified by mutation**, since a test that cannot fail is worse than none.
+  `share_vertices` had **zero** coverage in the first cut — `bool sharing =
+  false;` left every suite green — and two of the assertions added beside it
+  were tautological restatements of what `download()` had just computed. Four
+  independent mutations each fail a named line now: dropping the canonical
+  endpoint order fails the shared-vs-unshared triangle-for-triangle equality;
+  removing the `kVertexDropped` sentinel fails a *magnitude* bound on the
+  refitted arena (the shape passes either way, because the second dispatch's
+  counter is the true total whatever the first reported — what changes is what
+  the grow-only arena is refit to); restoring the coupled buffer growth fails a
+  case built from the measured capacities, where the dense overload's 3:1 vertex
+  demand grows the arena of a sharing extractor whose index run already fits;
+  and deleting the `sharing_applied` report while raising the host constant
+  turns a refusal into a silent empty mesh. What is **not** covered is named
+  rather than implied: the `kVertexDropped` path is exercised only through an
+  arena overflow, not through concurrent contention, and no fixture measures the
+  threadgroup-occupancy claim above — it rests on the SPIR-V allocation and the
+  documented limits, not on a re-measured device.
 
 ## Provenance & salvage policy
 
@@ -1826,13 +1945,16 @@ with a **generation stamp**, not a handle comparison: because the arena is
 grow-only and reused *in place*, a superseded view names the very same
 `VkBuffer` as the live one, so comparing handles accepts it and hands back the
 newer geometry under the older counts — the extractor therefore numbers its
-extracts and `download` takes only its current one. The index run is the
-identity `0,1,2,...` (independent triangles), held beside the arena and refilled
-only on a grow, because the texturing kernel addresses vertices through an index
-buffer and the renderer wants a real one at the interop seam; `download`
-regenerates it on the host instead of reading it back, since it is a known
-sequence and the buffer is write-combined (`SequentialWrite`), where host reads
-are pathologically slow. `DeviceMesh` lives in its own
+extracts and `download` takes only its current one. The index run exists because the texturing
+kernel addresses vertices through an index buffer and the renderer wants a real
+one at the interop seam. **Who fills it depends on
+`MarchingCubesConfig::share_vertices`** (the 2026-08-08 decision): off — the
+default — every triangle owns three private vertices written at `tri * 3`, so
+the run is the identity `0,1,2,...`, the host fills it once per grow into
+write-combined (`SequentialWrite`) memory and `download` regenerates it rather
+than reading back from there, where host reads are pathologically slow; on, a
+vertex is referenced by several triangles and only the kernel knows which, so
+the kernel writes the run and `download` reads it back. `DeviceMesh` lives in its own
 `mesh/device_mesh.hpp` so `mesh/mesh.hpp` stays Vulkan-free for pure-host
 consumers such as the coming glTF exporter. `tests/texture_device_mesh_test.cpp` proves the device path is not merely
 faster but *identical*: one extraction feeds both paths — the host copy textured
@@ -1966,7 +2088,9 @@ density by nothing else — in particular **not** by what an arena already holds
 which is what made it compound across the output ring until an iPad Pro lost the
 device (the 2026-08-03 slot-independence decision); and with `slot_count > 1`
 "what the extractor retains" is one such fitted arena *per slot*, which is what
-`ExtractTimings::arena_bytes` sums. Measured on the
+`ExtractTimings::arena_bytes` sums — arenas *and* index runs since the
+2026-08-08 sharing decision, because sharing removes the proportionality that
+let the run be dismissed as a sixteenth of the arena it covers. Measured on the
 full 400-frame room0, peak RSS: **1250 → 985 MB (−21%)** at `--mesh-every 0`,
 **1568 → 1302 MB (−17%)** at the default `--mesh-every 50`, with the mesh
 identical triangle-for-triangle in both (991,167 vertices / 330,389 triangles,
@@ -2099,9 +2223,10 @@ siblings) + the gfx-vertex converter (interop seam A) — the example's coloured
 PLY dump is deliberately a throwaway (tinyply), not that first-class exporter
 (Assimp was considered and rejected as disproportionate: a large import-first lib
 gfx does not use; gfx vendors tinygltf + tinyobjloader). On the `mesh` side
-(greppable `TODO(mesh)`s in `marching_cubes.hpp` / `.cpp`): shared-vertex dedup,
-the incremental block-mesh pool, and fitting the *dense* extract to its surface
-as the sparse one does (the two share one retained arena, so a large dense call
+(greppable `TODO(mesh)`s in `marching_cubes.hpp` / `.cpp`): full (cross-block)
+vertex sharing and per-vertex normals now that in-block sharing has landed
+(2026-08-08), the incremental block-mesh pool, and fitting the *dense* extract
+to its surface as the sparse one does (the two share one retained arena, so a large dense call
 grows it to the dense worst case). On
 the `texture` side, a later slice restores the multi-keyframe post-scan atlas
 (best-of-N view, packed atlas, the winner-take-all vertex atomic once dedup
