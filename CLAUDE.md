@@ -359,9 +359,11 @@ Each dated; newest context wins. Change the decision *and* this list together.
   by-value struct the caller owns, not a profiler in the tier — the aggregation,
   display, and history stay in the consumer (the viewer's overlay). It earns its
   place because the phases are *invisible from outside*: whole-volume meshing,
-  a host-built neighbour table, and a worst-case arena allocation all hide
+  a neighbour-resolution pass, and a worst-case arena allocation all hide
   inside one call, and picking between interop seam B and the incremental
-  block-mesh pool needs their split. Other tiers follow the same shape only
+  block-mesh pool needs their split. (The neighbour pass was a host table when
+  this was written; the 2026-08-08 decision moved it into the kernel on the
+  strength of exactly this breakdown, and `neighbour_lut_ms` went with it.) Other tiers follow the same shape only
   when they have the same problem.
 
 - **2026-08-01 — iOS is a downstream concern; recon cross-compiles to it
@@ -1154,6 +1156,101 @@ Each dated; newest context wins. Change the decision *and* this list together.
   than converted. That predicate is pinned directly where it lives, in
   `core_color_space_test`, and the mutation fails there.
 
+- **2026-08-08 — The sparse mesh kernel resolves its own 2×2×2 neighbourhood by
+  probing the hash table on-device, and `mesh` therefore reads a `volume` buffer
+  — a coupling paid for, not stumbled into.** *Reverses* the "host-built
+  neighbour table … no device-side hash probe, and no coupling to the hash
+  table's internal buffers" that the sparse-extract description above asserted
+  since the tier landed. The host pass hashed every active block coordinate into
+  an `unordered_map` and did eight lookups per block: an `O(active·8)` serial
+  pass rebuilt every extract whether or not anything moved, measured through
+  `volumetric_kit_ios` on an M5 iPad Pro at 107 k blocks as **102.2 ms of a
+  132.7 ms extract** — against 25.9 ms for the marching-cubes dispatch it existed
+  to feed. The kernel now runs one **workgroup per block** (not a flat voxel
+  grid, since shared memory is per workgroup) and threads 0–7 each probe one
+  octant into `shared int s_neighbour[8]`; eight probes amortise over
+  `voxels_per_block` cells. Extract goes 132.7 → 42.0 ms. Both prior
+  implementations of this pipeline did it this way — the CUDA and Metal marching
+  cubes in `implicit_world_reconstruction` each fill a threadgroup
+  `s_neighbor_cache` from device-side `findVoxelBlockByCoord` probes — so the
+  host table was the outlier, not the design.
+  **What the coupling actually costs, stated because the reversed sentence used
+  to deny it.** `VoxelHashMap::entries_buffer` / `entries_buffer_size` are now
+  public, and `mesh` tracks `volume`'s entry layout, bucket geometry and chain
+  protocol. Three consequences are carried rather than waved at. (1) *The probe
+  is quiescent-only.* It takes neither the bucket lock nor the acquire
+  `memoryBarrierBuffer()` `block_exists` splits its `ptr`/`pos` test around, and
+  no barrier could fix that anyway — a walk can meet a chain mid-splice, which is
+  structural, not an ordering problem. So the precondition is stated on
+  `MarchingCubes::extract_device`, where a caller meets it, not only on the
+  `volume` accessor: a consumer that fuses and meshes on different threads must
+  serialise them. Within one thread it holds by construction, every `volume`
+  dispatch being fence-blocked. Per the 2026-08-04 rule this would be the
+  library's to *check* rather than document, and it is documented instead
+  knowingly: `VoxelHashMap` tracks no in-flight mutation, and a flag that a
+  second thread could race is not a check. (2) *The entries buffer is
+  host-visible* (`volume` books device-local + staging as a follow-up), so the
+  win is measured on unified memory only; on a discrete GPU each workgroup's
+  seven probes become up to `bucket_size + max_chain` dependent scattered reads
+  across PCIe — a greppable `TODO(mesh)` at the binding, the same shape as the
+  host-visible indirect command's. (3) *The binding names its real size and is
+  range-checked*, because this is the one buffer in the extract that **another
+  tier** sized and `resize` doubles: `VK_WHOLE_SIZE` would have shipped the
+  accessor added to avoid exactly that with zero call sites.
+  **One definition of the hash ABI, not a fourth mirror.** The first cut
+  restated `HashEntry`, the free/no-offset sentinels and the three hash primes
+  in `hash_lookup.glsl` under a `Vr` prefix, reasoning that the prefix would
+  force a compile error on drift. It does the **opposite**, and this was checked
+  against `glslc`: a duplicate `const int kFreeEntry` is a hard `redefinition`
+  error, so *identical* names are the compile-time guard and a prefix is
+  precisely what lets two divergent sets coexist in silence — with a divergence
+  resolving neighbours from the wrong bucket and dropping surface at block seams
+  under `Status::ok`. The stated blocker to sharing (`hash_common.glsl` declaring
+  its own `pc` block, which collides with any kernel that has push constants) is
+  now opt-out via `VR_HASH_COMMON_NO_PUSH_CONSTANTS`; only the table *shape* had
+  to arrive as arguments. `hash_lookup.glsl` and `hash_common.glsl` both carry
+  include guards, and the sparse kernel's own `BlockIndex` mirror is gone too.
+  **The chain half of the probe was covered by nothing, and that is the finding
+  that mattered.** Every sparse fixture used `bucket_size 8 / num_buckets 128`,
+  whose 216 block coords peak at bucket occupancy 4 — `allocate_in_overflow` is
+  never entered, so no entry is ever reachable only through a chain. Replacing
+  the chain walk with `return -1;` left **every suite green**. The suite now
+  meshes the identical field through `bucket_size 2 / num_buckets 512`, asserts
+  via `HashDiagnostics` that it *does* spill before trusting what it proves, and
+  requires the mesh to match the reference triangle for triangle; the mutation
+  fails it. Production is the overflow case — `VoxelGridParams::defaults()` is
+  50×30000 with `max_chain 128`, and `overflow_count` exists because buckets
+  fill.
+  **Two things deliberately not done.** The primary-bucket scan does **not**
+  early-exit on the first free slot, though a miss then costs `bucket_size`
+  scattered reads and misses are common (the truncation band dilates a shell, so
+  most outer blocks have unallocated `+neighbours`). Insertion takes the first
+  empty slot but `delete_primary` clears an arbitrary one *in place*, so a bucket
+  may hold a free slot ahead of an occupied one — `block_exists` scans in full
+  for that reason and so must this. And the workgroup stays a fixed 256: below
+  `block_size` 8 that idles most lanes *and* multiplies the group count by
+  `256/voxels_per_block`, lowering the reachable active-block count against
+  `maxComputeWorkGroupCount[0]` (floor 65535) by the same factor. Sizing it from
+  `voxels_per_block` needs a specialization constant through
+  `ComputePipeline::create`; every in-tree caller uses 8, where the shape is a
+  win, so both costs are booked in the kernel rather than paid.
+  **The +25% dispatch regression was misattributed, and the correction moves the
+  roadmap.** It was read as lost occupancy — "a workgroup whose cells all bail
+  early now idles where the flat dispatch packed work densely". At `block_size`
+  8, `voxels_per_block` is 512 = 2·256, so the old `gid / 512` was already
+  constant across each 256-thread group: **every workgroup already belonged to
+  one block**, and only the group count changed (2 per block → 1). No packing
+  existed to lose. The cost is the new prologue — 8 lanes walking buckets while
+  the other 248 wait at the `barrier()`, serialised ahead of every cell. That
+  matters because `dispatch` is now 77% of extract, and the levers are the probe
+  (spread the 8 across subgroups, or one lane per bucket slot with a reduction),
+  **not** the cell count (coarser voxels) or the block count (incremental
+  extraction) the first analysis pointed at. Left unmeasured rather than guessed
+  at, per this file's own lesson about profiling the phase before optimising it.
+  `ExtractTimings::neighbour_lut_ms` is **removed**, not retained as a zeroed
+  phase: a permanently-0.00 row in the overlay that diagnosed this is worse than
+  an absent one.
+
 ## Provenance & salvage policy
 
 The algorithms here are a clean re-implementation of the proven core of the
@@ -1408,12 +1505,12 @@ vertex color on MoltenVK.
 A second `MarchingCubes::extract` overload meshes straight off a sparse
 `volume::VoxelBlockGrid` (`mesh/shaders/marching_cubes_sparse.comp`) — the real
 `tsdf`/`weight`/`color` blocks the integrator fills. It runs one invocation per
-voxel of each active block (the tsdf integrator's iteration); a cell on a block's
-`+face` reaches its far corners into neighbouring blocks, resolved through a
-**host-built 2×2×2 neighbour table** (each active block plus its seven
-`+x/+y/+z` neighbours, built from the compacted active set — the meshing dispatch
-is quiescent, so no device-side hash probe, and no coupling to the hash table's
-internal buffers). Only the corner *sampling* differs from the dense kernel; the
+**workgroup** of each active block, striding over its voxels; a cell on a block's
+`+face` reaches its far corners into neighbouring blocks, and the kernel resolves
+that 2×2×2 neighbourhood **itself**, probing the hash table on-device (eight
+probes per workgroup, amortised over the block's cells — see the 2026-08-08
+decision, which moved it off the host and states what the `mesh`→`volume`
+coupling costs). Only the corner *sampling* differs from the dense kernel; the
 shared per-cell body (cube index, gradient normal, reversed-winding emission,
 hybrid colour) lives in `mesh/shaders/marching_cubes_common.glsl`, which both
 kernels `#include` (the volume/tsdf tiers' shared-`.glsl` discipline). A corner
@@ -1569,6 +1666,10 @@ breakdown said otherwise:
 | `dispatch` | **2.0** |
 | `neighbour lut` | 0.6 |
 | `compact` / `descriptors` / `inputs` | < 0.2 |
+
+(`neighbour lut` is the host table of the day; it is gone as of 2026-08-08 and
+so is the field — see that decision, where the same instrument caught it costing
+102 ms of a 133 ms extract at 107 k blocks.)
 
 The GPU marching cubes was 2 ms — the pool would have optimised the one thing
 that was already fast. The cost was `make_output_buffers` allocating a fresh
