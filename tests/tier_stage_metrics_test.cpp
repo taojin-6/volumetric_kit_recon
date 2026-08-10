@@ -26,6 +26,7 @@
 ///    counts rather than on the ratio between two ~16 µs spans is what keeps
 ///    this deterministic: the ratio flaked ~8% of runs on correct code.
 
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -270,9 +271,21 @@ int main() {
     const vr::StageRow* active_set = find(metrics, "  ..active set");
     CHECK(active_set != nullptr);
     if (active_set->has_gpu) {
+      // Compared with a tolerance, not for equality: the two totals accumulate
+      // a different set of rows, so the same quantity comes out with different
+      // rounding, and `total - row == total_excluding_row` is false in the last
+      // bits. An earlier cut asserted exactly that and passed here on ~0.01 ms
+      // spans while failing CI, where lavapipe's 225 ms texture row makes the
+      // representable gap wider than the rows being summed.
+      //
+      // 1e-9 ms is a picosecond -- far below any span a query pool can report
+      // and far above double rounding at these magnitudes. Under the skip this
+      // replaced the difference is 0 against a real span, so the mutation is
+      // still caught by a wide margin.
       CHECK(metrics.total_gpu_ms() >= active_set->gpu_ms);
-      CHECK(metrics.total_gpu_ms("  ..active set") ==
-            metrics.total_gpu_ms() - active_set->gpu_ms);
+      const double delta =
+          metrics.total_gpu_ms() - metrics.total_gpu_ms("  ..active set");
+      CHECK(std::fabs(delta - active_set->gpu_ms) < 1e-9);
     }
     // The host half, by contrast, must stay out: "integrate" already spans it.
     CHECK(metrics.total_cpu_ms() == metrics.total_cpu_ms("  ..active set"));
