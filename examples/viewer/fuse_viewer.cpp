@@ -980,11 +980,11 @@ int run(GLFWwindow* window, const Options& opt) {
           }
         }
         // Merge the newest remesh's rows in, on every frame -- see
-        // remesh_stages. add() matches by name, so they land in the slots the
-        // seed loop above reserved and the table keeps its order.
-        for (const vr::StageRow& row : remesh_stages.rows()) {
-          fuse_stages.add_cpu(row.name, row.cpu_ms);
-        }
+        // remesh_stages. merge() matches by name, so they land in the slots the
+        // seed loop above reserved and the table keeps its order, and it
+        // carries both halves: a hand-written add_cpu loop here would drop the
+        // device column the moment these stages gain one.
+        fuse_stages.merge(remesh_stages);
         // Publish this frame's stage breakdown + the volume's device memory for
         // the overlay. Sampled here (not in the render thread) because the
         // recon allocator belongs to the fuse thread's device; VMA's own

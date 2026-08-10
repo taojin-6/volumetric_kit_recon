@@ -131,6 +131,31 @@ class StageMetrics {
   /// jump, which is what makes a live read-out unreadable.
   void seed(const char* name) { find_or_add(name); }
 
+  /// @brief Fold @p other's rows into this one, matched by name.
+  ///
+  /// Both halves of a row carry over, which is the whole reason this lives on
+  /// the vocabulary type rather than in each consumer: a hand-written merge
+  /// loop reads naturally as `add_cpu(row.name, row.cpu_ms)` and silently
+  /// drops @ref StageRow::gpu_ms and @ref StageRow::has_gpu, and the loss is
+  /// invisible downstream because an absent `has_gpu` is indistinguishable
+  /// from a genuinely host-only stage.
+  ///
+  /// Rows arriving from @p other keep pointing at *its* labels, so those must
+  /// outlive every read of this set (see @ref StageRow::name).
+  ///
+  /// @param other  The set to fold in; merging a set into itself does nothing.
+  void merge(const StageMetrics& other) {
+    if (this == &other) return;
+    for (const StageRow& row : other.rows_) {
+      StageRow& dst = find_or_add(row.name);
+      dst.cpu_ms += row.cpu_ms;
+      if (row.has_gpu) {
+        dst.gpu_ms += row.gpu_ms;
+        dst.has_gpu = true;
+      }
+    }
+  }
+
   /// @return The recorded rows, in first-seen order.
   const std::vector<StageRow>& rows() const noexcept { return rows_; }
 
@@ -196,22 +221,39 @@ class StageMetrics {
 
 /// @brief Times its own scope into a @ref StageMetrics row.
 ///
+/// The pointer constructor is what makes "nothing is measured when the caller
+/// passes null" true at the call site rather than by convention: a tier's
+/// reporting out-param is `StageMetrics* = nullptr`, and a scope that cannot be
+/// conditionally constructed would otherwise need an `if (metrics)` around
+/// every timed site. Null is inert, so the null check in the destructor is the
+/// same one both constructors rely on rather than dead code beside a second
+/// copy of this class.
+///
 /// @warning The @ref StageMetrics and the @p name literal must both outlive the
 ///          scope.
 ///
 /// @code
 /// {
-///   StageScope s(metrics, "allocate");
+///   StageScope s(metrics, "allocate");            // a metrics you hold
 ///   VR_TRY(grid.allocate_from_depth(depth, camera));
 /// }  // the span lands in metrics here
+///
+/// Status TsdfIntegrator::integrate(..., StageMetrics* metrics) {
+///   StageScope s(metrics, "integrate");           // inert when null
+///   ...
+/// }
 /// @endcode
 class StageScope {
  public:
   /// @brief Start timing @p name into @p metrics.
   StageScope(StageMetrics& metrics, const char* name)
-      : metrics_(&metrics), name_(name), start_(Clock::now()) {}
+      : StageScope(&metrics, name) {}
 
-  /// @brief Stop timing and add the elapsed span to the row.
+  /// @brief Start timing @p name into @p metrics, or do nothing if it is null.
+  StageScope(StageMetrics* metrics, const char* name)
+      : metrics_(metrics), name_(name), start_(Clock::now()) {}
+
+  /// @brief Stop timing and add the elapsed span to the row, unless inert.
   ~StageScope() {
     if (metrics_ == nullptr) return;
     metrics_->add_cpu(
@@ -223,47 +265,6 @@ class StageScope {
   StageScope& operator=(const StageScope&) = delete;
   StageScope(StageScope&&) = delete;
   StageScope& operator=(StageScope&&) = delete;
-
- private:
-  using Clock = std::chrono::steady_clock;
-
-  StageMetrics* metrics_;
-  const char* name_;
-  Clock::time_point start_;
-};
-
-/// @brief A @ref StageScope that does nothing when the caller opted out.
-///
-/// Every tier's reporting out-param is `StageMetrics* = nullptr`, so every
-/// timed site would otherwise need `if (metrics) { ... }` around a scope that
-/// cannot be conditionally constructed. This takes the pointer directly and is
-/// inert when it is null -- which is what makes "nothing is measured when the
-/// caller passes null" true at the call site rather than by convention.
-///
-/// @code
-/// Status TsdfIntegrator::integrate(..., StageMetrics* metrics) {
-///   OptionalStageScope s(metrics, "integrate");   // inert when null
-///   ...
-/// }
-/// @endcode
-class OptionalStageScope {
- public:
-  /// @brief Start timing @p name into @p metrics, or do nothing if it is null.
-  OptionalStageScope(StageMetrics* metrics, const char* name)
-      : metrics_(metrics), name_(name), start_(Clock::now()) {}
-
-  /// @brief Stop timing and add the span, unless inert.
-  ~OptionalStageScope() {
-    if (metrics_ == nullptr) return;
-    metrics_->add_cpu(
-        name_, std::chrono::duration<double, std::milli>(Clock::now() - start_)
-                   .count());
-  }
-
-  OptionalStageScope(const OptionalStageScope&) = delete;
-  OptionalStageScope& operator=(const OptionalStageScope&) = delete;
-  OptionalStageScope(OptionalStageScope&&) = delete;
-  OptionalStageScope& operator=(OptionalStageScope&&) = delete;
 
  private:
   using Clock = std::chrono::steady_clock;

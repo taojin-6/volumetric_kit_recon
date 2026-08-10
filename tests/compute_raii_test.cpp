@@ -18,10 +18,14 @@
 //   - Allocator         -- the pImpl + unique_ptr owner.
 //   - ComputeKernel     -- the layout/pipeline/set bundle, whose hand-written
 //                          moves reset the copyable non-owning set.
+//   - GpuTimer          -- a UniqueHandle member PLUS scalar state the
+//                          defaulted moves would copy and leave live in the
+//                          source.
 //
 // All need a device, so the whole test skips (exit 0) where no driver/device
 // is present, like the other Vulkan tests.
 
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <utility>
@@ -31,6 +35,7 @@
 #include "volumetric_kit/recon/core/compute_kernel.hpp"
 #include "volumetric_kit/recon/core/descriptor.hpp"
 #include "volumetric_kit/recon/core/device.hpp"
+#include "volumetric_kit/recon/core/gpu_timer.hpp"
 #include "volumetric_kit/recon/core/instance.hpp"
 #include "volumetric_kit/recon/core/vulkan.hpp"
 
@@ -225,6 +230,54 @@ int test_compute_kernel_moves(VkDevice device) {
   return 0;
 }
 
+// GpuTimer: a UniqueHandle member plus scalar state (device, max_spans, the
+// timestamp validity and period) that the defaulted moves copied and left live
+// in the source. It is the one owner here whose accessors have to stay
+// consistent with valid() for a *capability* reason: a moved-from timer that
+// still reports valid() is byte-indistinguishable from the supported
+// "this family has no timestamps" degradation, so the bug hides as a
+// capability report and the caller is told the GPU cannot do it.
+int test_gpu_timer_moves(const vr::Device& device) {
+  vr::Result<vr::GpuTimer> a = vr::GpuTimer::create(device);
+  CHECK(a.ok());
+  vr::GpuTimer timer_a = std::move(a).value();
+  CHECK(timer_a.valid());
+  const bool was_available = timer_a.available();
+
+  // move-construct: the source is fully empty, not merely handle-less.
+  vr::GpuTimer timer_b(std::move(timer_a));
+  CHECK(!timer_a.valid());  // NOLINT(bugprone-use-after-move)
+  CHECK(!timer_a.available());
+  CHECK(timer_a.count() == 0);
+  CHECK(timer_b.valid());
+  CHECK(timer_b.available() == was_available);
+
+  // move-assign over a live timer: the destination's own pool is freed (ASan
+  // would flag the leak otherwise), then it adopts the source's.
+  vr::Result<vr::GpuTimer> c = vr::GpuTimer::create(device);
+  CHECK(c.ok());
+  vr::GpuTimer timer_c = std::move(c).value();
+  CHECK(timer_c.valid());
+  timer_c = std::move(timer_b);
+  CHECK(timer_c.valid());
+  CHECK(timer_c.available() == was_available);
+  CHECK(!timer_b.valid());  // NOLINT(bugprone-use-after-move)
+
+  // self-move: the `if (this != &other)` guard keeps the pool AND the recorded
+  // window. The defaulted operator= was memberwise, so `spans_ =
+  // std::move(spans_)` silently emptied a window that had already been measured
+  // and the caller read it as "nothing was measured".
+  const auto record = [](VkCommandBuffer) {};
+  CHECK(device.submit_single_time(record, &timer_c, "self-move"));
+  const std::size_t recorded = timer_c.count();
+  vr::GpuTimer* alias = &timer_c;
+  timer_c = std::move(*alias);
+  CHECK(timer_c.valid());
+  CHECK(timer_c.available() == was_available);
+  CHECK(timer_c.count() == recorded);
+  return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -266,6 +319,9 @@ int main() {
     return rc;
   }
   if (int rc = test_compute_kernel_moves(device.value().handle()); rc != 0) {
+    return rc;
+  }
+  if (int rc = test_gpu_timer_moves(device.value()); rc != 0) {
     return rc;
   }
 

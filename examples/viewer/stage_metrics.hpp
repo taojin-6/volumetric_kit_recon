@@ -42,9 +42,10 @@ namespace vr = volumetric_kit::recon;
 ///
 /// A field-for-field copy; the two structs agree on all four. Labels cross as
 /// pointers on both sides, so the strings must outlive every read of the result
-/// -- true of the string literals every recon tier reports with, and **not**
-/// true of a `vr::GpuTimer`'s labels, which the timer owns and frees on its
-/// next `reset()`. Consume those before reusing the timer.
+/// -- one rule for the whole vocabulary: `vr::GpuTimer` borrows its span labels
+/// on the same terms rather than owning copies, so a row published here is as
+/// safe as the literal a tier reported it with. These rows are then read by the
+/// render thread, which is why that matters.
 ///
 /// @param metrics  The rows a fuse iteration collected.
 /// @return The same rows in the renderer's shape.

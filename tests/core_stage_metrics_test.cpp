@@ -15,6 +15,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <string>
 #include <utility>
 
 #include "volumetric_kit/recon/core/allocator.hpp"
@@ -137,19 +138,57 @@ int host_only_checks() {
   // --- an opted-out scope records nothing -----------------------------------
   //
   // "Nothing is measured when the caller passes null" is a promise every tier
-  // entry point will make, and OptionalStageScope is what makes it structural
-  // rather than a convention each site re-implements with an `if`.
+  // entry point will make, and the pointer constructor is what makes it
+  // structural rather than a convention each site re-implements with an `if`.
+  // The inert scope is given the same `m` the live one writes to, so this
+  // asserts that nothing was recorded rather than asserting on a metrics the
+  // scope was never handed.
   {
     vr::StageMetrics m;
     {
-      vr::OptionalStageScope inert(nullptr, "never");
+      vr::StageScope inert(static_cast<vr::StageMetrics*>(nullptr), "never");
     }
     CHECK(m.empty());
     {
-      vr::OptionalStageScope live(&m, "counted");
+      vr::StageScope live(&m, "counted");
     }
     CHECK(m.rows().size() == 1);
+    CHECK(std::string(m.rows()[0].name) == "counted");
     CHECK(m.rows()[0].cpu_ms >= 0.0);
+    // ...and the reference constructor is the same scope, not a second one.
+    {
+      vr::StageScope by_ref(m, "counted");
+    }
+    CHECK(m.rows().size() == 1);
+  }
+
+  // --- merge carries BOTH halves --------------------------------------------
+  //
+  // The one with teeth: `add_cpu(row.name, row.cpu_ms)` is the natural way to
+  // write this loop by hand and silently drops gpu_ms/has_gpu, and the loss is
+  // invisible downstream because an absent has_gpu is indistinguishable from a
+  // genuinely host-only stage.
+  {
+    vr::StageMetrics dst;
+    dst.add_cpu("extract", 1.0);
+
+    vr::StageMetrics src;
+    src.add_cpu("extract", 2.0);
+    src.add_gpu("extract", 0.5);
+    src.add_cpu("texture", 3.0);  // host-only: must NOT gain has_gpu
+
+    dst.merge(src);
+    CHECK(dst.rows().size() == 2);
+    CHECK(dst.rows()[0].cpu_ms == 3.0);
+    CHECK(dst.rows()[0].gpu_ms == 0.5);
+    CHECK(dst.rows()[0].has_gpu == true);
+    CHECK(dst.rows()[1].cpu_ms == 3.0);
+    CHECK(dst.rows()[1].has_gpu == false);
+
+    // Merging a set into itself would iterate the rows it is appending to.
+    dst.merge(dst);
+    CHECK(dst.rows().size() == 2);
+    CHECK(dst.rows()[0].cpu_ms == 3.0);
   }
 
   // --- the tick maths, including the wrap the naive version gets wrong ------
@@ -206,7 +245,17 @@ int main() {
   desc.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
   desc.memory = vr::MemoryUsage::DeviceLocal;
   vr::Result<vr::Buffer> target = allocator.value().create_buffer(desc);
-  CHECK(target);
+  if (!target) {
+    // Every other resource step above skips rather than failing, and this one
+    // is no different: a 128 MB device-local allocation can legitimately fail
+    // on a contended runner or a memory-constrained target, and failing the leg
+    // over it would report a diagnostic-only feature as broken. The size is
+    // chosen only so `gpu_ms > 0` is not vacuous.
+    std::fprintf(stderr, "no %llu MB device buffer (%s); host checks passed\n",
+                 static_cast<unsigned long long>(kFillBytes / (1024 * 1024)),
+                 target.status().message().c_str());
+    return 0;
+  }
 
   const auto record = [&](VkCommandBuffer cmd) {
     vkCmdFillBuffer(cmd, target.value().handle(), 0, kFillBytes, 0xA5A5A5A5u);
@@ -251,16 +300,61 @@ int main() {
   // visible fraction of it rather than noise.
   CHECK(metrics.rows()[0].gpu_ms < wall_ms);
 
+  // Publishing ended the window, so the timer starts the next one empty. This
+  // is what keeps max_spans a per-window bound: without it a timer created once
+  // and submitted through forever fills up and then times nothing, silently.
+  CHECK(timer.count() == 0);
+
   // The per-window bound is enforced rather than overflowing the pool: a
   // one-span timer refuses the second, and refusing means kNoSpan, not a write
   // past the query range (which no validation layer would catch as a logic
-  // error).
+  // error). Driven through real submits, so the bound itself is exercised --
+  // a null command buffer would short-circuit begin() before reaching it and
+  // the check would pass with the guard deleted.
   vr::Result<vr::GpuTimer> tiny = vr::GpuTimer::create(device.value(), 1);
   CHECK(tiny);
-  VkCommandBuffer null_cmd = VK_NULL_HANDLE;
-  CHECK(tiny.value().begin(null_cmd, "a") == vr::GpuTimer::kNoSpan);
+  CHECK(device.value().submit_single_time(record, &tiny.value(), "a"));
+  CHECK(tiny.value().count() == 1);
+  CHECK(device.value().submit_single_time(record, &tiny.value(), "b"));
+  CHECK(tiny.value().count() == 1);  // refused, and the submit still succeeded
 
-  // reset() returns the window to empty and the timer stays usable.
+  // A window reports its OWN cost, not a running total: StageMetrics
+  // accumulates by name, so a re-published span would add frame N's cost on top
+  // of every earlier frame's and present the sum as the current one.
+  vr::StageMetrics first_window;
+  tiny.value().report_into(first_window);
+  CHECK(first_window.rows().size() == 1);
+  CHECK(std::string(first_window.rows()[0].name) == "a");
+  CHECK(tiny.value().count() == 0);
+
+  // ...and the timer is usable again rather than stuck at its bound for the
+  // rest of its life.
+  CHECK(device.value().submit_single_time(record, &tiny.value(), "c"));
+  vr::StageMetrics second_window;
+  tiny.value().report_into(second_window);
+  CHECK(second_window.rows().size() == 1);
+  CHECK(std::string(second_window.rows()[0].name) == "c");
+  CHECK(second_window.rows()[0].gpu_ms > 0.0);
+
+  // Publishing an already-published window adds nothing. This is the assertion
+  // with teeth: a report that re-emitted its spans would put "a" in here too,
+  // and in the realistic shape -- one label per stage, reported every frame --
+  // it would grow one row without bound instead of showing a second one.
+  vr::StageMetrics republished;
+  tiny.value().report_into(republished);
+  CHECK(republished.empty());
+
+  // create() rejects a max_spans whose doubled query count would wrap, rather
+  // than building a pool smaller than the bound begin() enforces.
+  CHECK(!vr::GpuTimer::create(device.value(), 0));
+  CHECK(!vr::GpuTimer::create(device.value(), 0x80000000u));
+  CHECK(!vr::GpuTimer::create(device.value(), vr::GpuTimer::kMaxSpans + 1));
+  CHECK(vr::GpuTimer::create(device.value(), vr::GpuTimer::kMaxSpans));
+
+  // reset() discards a window instead of publishing it, and the timer stays
+  // usable.
+  CHECK(device.value().submit_single_time(record, &timer, "discarded"));
+  CHECK(timer.count() == 1);
   timer.reset();
   CHECK(timer.count() == 0);
   vr::StageMetrics after_reset;

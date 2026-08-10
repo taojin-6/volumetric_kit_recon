@@ -243,14 +243,22 @@ class VR_CORE_API Device {
   /// buffer brackets them itself with @ref GpuTimer::begin / @ref
   /// GpuTimer::end and calls @ref GpuTimer::resolve after this returns.
   ///
+  /// Spans accumulate in @p timer until @ref GpuTimer::report_into publishes
+  /// them, so a caller creating one timer and submitting through it must
+  /// publish (or @ref GpuTimer::reset) once a frame — see @ref GpuTimer.
+  ///
   /// @param record  Records compute commands into the given command buffer.
   /// @param timer   Collects the span; `nullptr` makes this exactly the
   ///                untimed overload. A timer whose device reports no usable
   ///                timestamps records nothing and is not an error.
-  /// @param label   Span label, copied. Null labels the span `"gpu"`.
+  /// @param label   Span label, borrowed for as long as the metrics it is
+  ///                published into are read (see @ref StageRow::name). Null
+  ///                labels the span `"gpu"`.
   /// @return OK once the work completes, or a non-OK @ref Status if any Vulkan
-  ///         step fails. A failure to *resolve* the span is reported, but only
-  ///         after the work itself has succeeded.
+  ///         step fails. A failure to *resolve* the span never appears here:
+  ///         the work has already succeeded by then, and an optional
+  ///         diagnostic must not be able to fail it. Such a span is logged and
+  ///         left unmeasured instead.
   Status submit_single_time(const std::function<void(VkCommandBuffer)>& record,
                             GpuTimer* timer, const char* label) const;
 

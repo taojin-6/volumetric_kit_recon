@@ -14,6 +14,7 @@
 
 #include "vk_physical_device.hpp"
 #include "volumetric_kit/recon/core/gpu_timer.hpp"
+#include "volumetric_kit/recon/core/log.hpp"
 #include "volumetric_kit/recon/core/vk_result.hpp"
 
 namespace volumetric_kit::recon {
@@ -432,6 +433,16 @@ Status Device::submit_single_time(
   // which is the whole distinction this overload exists to draw.
   const std::uint32_t span =
       timer != nullptr ? timer->begin(cmd, label) : GpuTimer::kNoSpan;
+  // The span's queries are reset and written by commands inside `cmd`, so every
+  // early return below -- which abandons the buffer unsubmitted -- leaves them
+  // untouched and unreadable. Drop the span unless the work is known to have
+  // completed, or a later resolve reads an uninitialized (or previous-window)
+  // query pair and publishes it as this label's duration.
+  ScopeGuard discard_span([&] {
+    if (timer != nullptr) {
+      timer->discard(span);
+    }
+  });
   record(cmd);
   if (timer != nullptr) {
     timer->end(cmd, span);
@@ -464,11 +475,21 @@ Status Device::submit_single_time(
 
   // Only here, and only on this path. The queries are readable because the
   // fence has signalled; on the failure path above the submit may still be
-  // pending, so there is nothing valid to read and the timer keeps the span
-  // unresolved -- which report_into skips, rather than publishing a zero that
-  // reads as a fast dispatch.
+  // pending, so there is nothing valid to read and the span is dropped by the
+  // guard rather than published as a duration it never measured.
+  discard_span.release();
   if (timer != nullptr) {
-    VR_TRY(timer->resolve());
+    // Deliberately not propagated. The dispatch itself has completed, and
+    // failing it because an *optional profiler* could not read a query is the
+    // one thing this class exists not to do -- a caller would drop the frame or
+    // abort the scan over a diagnostic. The span simply stays unresolved, which
+    // report_into skips, so the cost reads as "not measured".
+    const Status resolved = timer->resolve();
+    if (!resolved) {
+      log_message(LogLevel::Warning,
+                  "Device::submit_single_time: GPU timestamps not resolved (" +
+                      resolved.message() + "); the dispatch itself succeeded");
+    }
   }
   return {};
 }

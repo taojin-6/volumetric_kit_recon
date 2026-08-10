@@ -3,10 +3,12 @@
 
 #include "volumetric_kit/recon/core/gpu_timer.hpp"
 
+#include <utility>
 #include <vector>
 
 #include "vk_physical_device.hpp"
 #include "volumetric_kit/recon/core/device.hpp"
+#include "volumetric_kit/recon/core/log.hpp"
 #include "volumetric_kit/recon/core/vk_result.hpp"
 
 namespace volumetric_kit::recon {
@@ -35,14 +37,56 @@ std::uint32_t timestamp_valid_bits(VkPhysicalDevice physical,
 
 }  // namespace
 
+GpuTimer::GpuTimer(GpuTimer&& other) noexcept
+    : device_(other.device_),
+      pool_(std::move(other.pool_)),
+      max_spans_(other.max_spans_),
+      valid_bits_(other.valid_bits_),
+      period_ns_(other.period_ns_),
+      warned_full_(other.warned_full_),
+      spans_(std::move(other.spans_)),
+      readback_(std::move(other.readback_)) {
+  other.clear_state();
+}
+
+GpuTimer& GpuTimer::operator=(GpuTimer&& other) noexcept {
+  if (this != &other) {
+    // The pool's own move-assign frees whatever this held before adopting.
+    device_ = other.device_;
+    pool_ = std::move(other.pool_);
+    max_spans_ = other.max_spans_;
+    valid_bits_ = other.valid_bits_;
+    period_ns_ = other.period_ns_;
+    warned_full_ = other.warned_full_;
+    spans_ = std::move(other.spans_);
+    readback_ = std::move(other.readback_);
+    other.clear_state();
+  }
+  return *this;
+}
+
+void GpuTimer::clear_state() noexcept {
+  device_ = VK_NULL_HANDLE;
+  max_spans_ = 0;
+  valid_bits_ = 0;
+  period_ns_ = 0.0f;
+  warned_full_ = false;
+  spans_.clear();
+  readback_.clear();
+}
+
 Result<GpuTimer> GpuTimer::create(const Device& device,
                                   std::uint32_t max_spans) {
   if (device.handle() == VK_NULL_HANDLE ||
       device.physical_device() == VK_NULL_HANDLE) {
     return Status::invalid_argument("GpuTimer::create: device is not valid");
   }
-  if (max_spans == 0) {
-    return Status::invalid_argument("GpuTimer::create: max_spans must be >= 1");
+  // Bounded above as well as below: `max_spans * 2` is the pool's uint32 query
+  // count, so an unchecked value wraps into a pool smaller than the bound
+  // begin() enforces -- see kMaxSpans.
+  if (max_spans == 0 || max_spans > kMaxSpans) {
+    return Status::invalid_argument(
+        "GpuTimer::create: max_spans must be in [1, kMaxSpans]");
   }
 
   GpuTimer timer;
@@ -68,11 +112,25 @@ Result<GpuTimer> GpuTimer::create(const Device& device,
   VR_VK_TRY(vkCreateQueryPool(device.handle(), &info, nullptr, &pool));
   timer.pool_ =
       UniqueHandle<VkQueryPool, vkDestroyQueryPool>(device.handle(), pool);
+  // Sized once here so recording and resolving a span -- which happen inside
+  // every dispatch -- never allocate.
+  timer.spans_.reserve(max_spans);
+  timer.readback_.reserve(static_cast<std::size_t>(max_spans) * 4);
   return timer;
 }
 
 std::uint32_t GpuTimer::begin(VkCommandBuffer cmd, const char* name) {
-  if (!available() || cmd == VK_NULL_HANDLE || spans_.size() >= max_spans_) {
+  if (!available() || cmd == VK_NULL_HANDLE) return kNoSpan;
+  if (spans_.size() >= max_spans_) {
+    // Refusing silently is how a timer whose window nothing ends stops timing
+    // partway through a run while every call still returns OK, and the GPU
+    // column simply freezes on stale values.
+    if (!warned_full_) {
+      warned_full_ = true;
+      log_message(LogLevel::Warning,
+                  "GpuTimer: window is full (max_spans reached); further spans "
+                  "go untimed until report_into or reset ends it");
+    }
     return kNoSpan;
   }
   const auto span = static_cast<std::uint32_t>(spans_.size());
@@ -84,7 +142,15 @@ std::uint32_t GpuTimer::begin(VkCommandBuffer cmd, const char* name) {
   // spans already recorded into an *earlier* command buffer of the same window
   // readable.
   vkCmdResetQueryPool(cmd, pool_.get(), span * 2, 2);
-  vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, pool_.get(),
+  // BOTTOM_OF_PIPE on the *start* write too, not TOP_OF_PIPE. TOP_OF_PIPE
+  // specifies no stage of execution in the first scope, so it orders against
+  // nothing earlier: several spans in one command buffer would each latch near
+  // the front of the buffer while each end waited for all prior work, nesting
+  // rather than tiling and double-counting the total. On the shared-device seam
+  // it can also latch while another library's submission is still draining, and
+  // charge that tail to recon. Bottom-of-pipe makes the start "after everything
+  // recorded so far", which is the only reading that composes.
+  vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, pool_.get(),
                       span * 2);
   return span;
 }
@@ -98,10 +164,25 @@ void GpuTimer::end(VkCommandBuffer cmd, std::uint32_t span) {
                       span * 2 + 1);
 }
 
+void GpuTimer::discard(std::uint32_t span) noexcept {
+  if (span == kNoSpan || spans_.empty()) return;
+  // Only the newest span can be dropped: an earlier one's queries are still
+  // indexed by position, so removing it would renumber every span after it.
+  if (static_cast<std::size_t>(span) + 1 != spans_.size()) return;
+  if (spans_.back().resolved) return;
+  spans_.pop_back();
+}
+
 Status GpuTimer::resolve() {
-  if (!available() || spans_.empty()) {
-    return {};
-  }
+  if (!available()) return {};
+
+  // Read only from the first still-unresolved span. submit_single_time resolves
+  // after every dispatch, so re-reading the whole window each time would make
+  // the readback quadratic in the window's length and re-convert values that
+  // are already final.
+  std::size_t first = 0;
+  while (first < spans_.size() && spans_[first].resolved) ++first;
+  if (first == spans_.size()) return {};
 
   // Availability bit alongside each value, and no WAIT flag. The caller's
   // contract is that the fence has signalled, so the results are ready -- but
@@ -109,12 +190,13 @@ Status GpuTimer::resolve() {
   // inside a diagnostic, where reporting "not measured" is the right failure.
   // A span begun and never ended is the other case this covers: its end query
   // is unwritten, reads back unavailable, and is skipped.
+  const std::uint32_t first_query = static_cast<std::uint32_t>(first) * 2;
   const std::uint32_t query_count =
-      static_cast<std::uint32_t>(spans_.size()) * 2;
-  std::vector<std::uint64_t> results(query_count * 2, 0);
+      static_cast<std::uint32_t>(spans_.size() - first) * 2;
+  readback_.assign(static_cast<std::size_t>(query_count) * 2, 0);
   const VkResult got = vkGetQueryPoolResults(
-      device_, pool_.get(), 0, query_count,
-      results.size() * sizeof(std::uint64_t), results.data(),
+      device_, pool_.get(), first_query, query_count,
+      readback_.size() * sizeof(std::uint64_t), readback_.data(),
       sizeof(std::uint64_t) * 2,
       VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
   // VK_NOT_READY is not a failure: it means some query in the range has no
@@ -123,11 +205,12 @@ Status GpuTimer::resolve() {
     return vk_error(got, "vkGetQueryPoolResults");
   }
 
-  for (std::size_t i = 0; i < spans_.size(); ++i) {
-    const std::uint64_t begin_value = results[i * 4 + 0];
-    const std::uint64_t begin_avail = results[i * 4 + 1];
-    const std::uint64_t end_value = results[i * 4 + 2];
-    const std::uint64_t end_avail = results[i * 4 + 3];
+  for (std::size_t i = first; i < spans_.size(); ++i) {
+    const std::size_t at = (i - first) * 4;
+    const std::uint64_t begin_value = readback_[at + 0];
+    const std::uint64_t begin_avail = readback_[at + 1];
+    const std::uint64_t end_value = readback_[at + 2];
+    const std::uint64_t end_avail = readback_[at + 3];
     if (begin_avail == 0 || end_avail == 0) {
       continue;  // stays unresolved, and report_into skips it
     }
@@ -138,10 +221,14 @@ Status GpuTimer::resolve() {
   return {};
 }
 
-void GpuTimer::report_into(StageMetrics& out) const {
+void GpuTimer::report_into(StageMetrics& out) {
   for (const Span& span : spans_) {
-    if (span.resolved) out.add_gpu(span.name.c_str(), span.ms);
+    if (span.resolved) out.add_gpu(span.name, span.ms);
   }
+  // Publishing ends the window -- see the header. Without this the next publish
+  // would re-add every span already reported, and `max_spans` would be a
+  // lifetime bound rather than a per-window one.
+  spans_.clear();
 }
 
 }  // namespace volumetric_kit::recon

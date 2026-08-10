@@ -1974,6 +1974,60 @@ guaranteed to be pooled and across TUs routinely are not), the breakdown skip
 (dropping it reports 30 where 20 is right), and the wrap case where masking the
 endpoints before subtracting reports several thousand years.
 
+**Review: the window needed an owner, and `report_into` became it.** The first
+cut had `GpuTimer::spans_` as a host-side index into device query state with
+nothing keeping the two in step, and five separate findings were that one gap
+seen from different sides. `submit_single_time` sequenced begin/end/resolve but
+never ended a *window*, so a timer created once — the shape the class's own
+example shows — silently stopped timing after `max_spans` (measured: 40 submits
+left `count() == 32`, every call returning OK) and every publish re-emitted the
+whole window, which `StageMetrics` accumulates by name, so frame N reported
+frames 1..N summed under this frame's label (measured: one row at the sum of 32
+spans). The fix is that **publishing ends the window**: a caller creates one
+timer, submits as often as it likes, and reports per frame, with `reset` left
+for discarding instead of publishing. `max_spans` is then a per-frame bound
+rather than a lifetime one, and exhausting it warns through the log handler
+instead of going quiet. Verified as the realistic loop: 40 frames × 2 submits
+through one timer now publish two measured rows every frame, with frame 39's
+device total at 0.95× frame 0's rather than 40× it.
+
+The same gap had two device-side edges. A span is recorded by commands *inside*
+a command buffer, so a buffer abandoned before submission left its query pair
+never reset and never written — undefined to read
+(VUID-vkGetQueryPoolResults-None-09401), and worse once the pool had been used,
+since the pair still holds an earlier window's value with its availability bit
+set and resolves as a plausible duration under the abandoned label. Every early
+return in `submit_single_time` now drops the span. And `resolve` no longer fails
+the dispatch: `VR_TRY` on a query readback turned an optional profiler into
+something that could fail compute work that had already completed, on the one
+primitive every tier goes through — the exact outcome this entry's availability
+rule exists to prevent. It logs and leaves the span unmeasured, which
+`report_into` already skips.
+
+Three more, each small and each a rule this repo had already written down. The
+labels are now **borrowed on `StageRow::name`'s terms** rather than copied into
+the timer: copies made the published rows point into a `std::string` the timer
+would free, which the one consumer that exists reads from another thread, and
+one lifetime rule across the whole vocabulary is simpler than two. `create`
+bounds `max_spans` above as well as below, because `max_spans * 2` is the pool's
+`uint32_t` query count and `0x80000000` built a **zero**-query pool that `begin`
+believed had room for two billion spans. And the moves are hand-written per the
+RAII rules — the defaulted pair left `device_` live in the source, so a
+moved-from timer reported `valid() == true`, a failure that hides especially
+well here because a hollow timer is byte-indistinguishable from the supported
+`timestampValidBits == 0` degradation and reports itself as a missing GPU
+capability. `tests/compute_raii_test.cpp` gained the three mandated move tests;
+the first two fail on the pre-review code.
+
+On the host side `StageMetrics` grew `merge`, because the viewer's remesh→fuse
+fold was written as `add_cpu(row.name, row.cpu_ms)` and dropped `gpu_ms` and
+`has_gpu` at the only place rows are combined — silently, since an absent
+`has_gpu` is indistinguishable from a genuinely host-only stage. Carrying both
+halves belongs on the vocabulary type rather than in each consumer.
+`OptionalStageScope` folded back into `StageScope` as a second constructor,
+which deletes ~35 duplicated lines and makes that class's null check
+load-bearing instead of dead code beside a copy of itself.
+
 Scope stops at `core` deliberately. Wiring `volume`, `tsdf` and `texture` — and
 handing `mesh` its GPU column — is a follow-up, because the mesh tier is held by
 in-flight incremental-extraction work and instrumenting it here would collide
