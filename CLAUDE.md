@@ -183,6 +183,9 @@ order. Change the decision, its entry there, and this list together.
   Incremental mesh extraction is worth building at a ~4x ceiling, not the ~18x
   one window suggested, and the worst frame rather than the median sizes its
   design (amends the dirty-block decision above).
+- [**2026-08-09**](DECISIONS.md#2026-08-09--timings-are-core-vocabulary-and-the-device-half-is-measured-not-inferred-counters-stay-in-the-tier-that-means-them) —
+  Timings are `core` vocabulary and the device half is measured, not inferred;
+  counters stay in the tier that means them.
 
 ## Provenance & salvage policy
 
@@ -377,8 +380,12 @@ arbitrary; it usually isn't.
   `Device::submit_single_time` dispatch, and the shared `dispatch()` /
   `group_count` / `storage_buffer` / range-guard helpers of `compute_util.hpp`.
   Vocabulary: `Status`/`Result`, the GLM aliases, `camera_params.hpp`,
-  `color_space.hpp`. `Device::create` enables `scalarBlockLayout`; `adopt`
-  requires the creator did, and both record the queue family's `queueFlags`.
+  `color_space.hpp`, and `stage_metrics.hpp` — the `{name, cpu_ms, gpu_ms,
+  has_gpu}` rows every tier reports timings in, with `GpuTimer` measuring the
+  device half through the timed `submit_single_time` overload (a window is
+  ended by publishing it). `Device::create` enables `scalarBlockLayout`;
+  `adopt` requires the creator did, and both record the queue family's
+  `queueFlags`.
 
 - **`volume`** — `VoxelHashMap` drives init / allocate-from-coords, -depth,
   -points / remove / compact / compact-in-frustum / resize as GLSL kernels

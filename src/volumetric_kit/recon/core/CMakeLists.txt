@@ -51,6 +51,12 @@ target_sources(
           result.cpp
           instance.cpp
           device.cpp
+          # Timestamp spans around a dispatch, resolved once its fence has
+          # signalled. Its companion stage_metrics.hpp is deliberately absent
+          # from this list: that header is Vulkan-free and header-only, so a
+          # pure-host consumer reports timings without preprocessing a driver
+          # header.
+          gpu_timer.cpp
           # Vulkan compute foundation: the VMA allocator + RAII buffer, the
           # SPIR-V shader module, descriptor + compute-pipeline wrappers, and
           # the single TU that instantiates VMA (VMA_IMPLEMENTATION). Dispatch +

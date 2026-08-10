@@ -1897,6 +1897,142 @@ and not an `ExtractTimings` phase this repo defines. On desktop the two are
 separate instruments: `fuse_replica --dirty-every N` prints the changed and
 dilated coverage, and `fuse_replica --device-extract` prints the phase split.
 
+### 2026-08-09 — Timings are `core` vocabulary and the device half is measured, not inferred; counters stay in the tier that means them.
+
+*Promotes* the 2026-08-01 decision's parked contract, on the trigger that
+decision named. It held that the viewer example would own the instrumentation
+and that a shared contract waits for a **second consumer**. There are now three
+— `fuse_viewer`, the iOS scanner, and `fuse_replica --device-extract` — and the
+cost of waiting had become visible rather than theoretical: `fuse_viewer` grew
+`StageTimes`/`StageScope` in `examples/viewer/stage_metrics.hpp`, and the
+scanner solved the same problem again and worse, as a 2048-byte `snprintf` into
+a `UILabel`. Two implementations of one idea, neither reusable, and the platform
+with the hardest problems got the weaker one.
+
+**The split is timings uniform, counters local**, which is the same
+mechanism-in-`core` / policy-in-the-tier line the 2026-07-06 kernel-bundle
+decision drew. `vr::StageMetrics` carries `{name, cpu_ms, gpu_ms, has_gpu}`
+rows, accumulating by name, with `kBreakdownPrefix` marking a row as a
+decomposition of the one above it so a total does not count that stage twice
+(not hypothetical: it reported every extract twice in the viewer before the skip
+existed). `active_blocks`, `dispatches`, `triangle_capacity`, `AllocFailures`,
+`load_factor` stay exactly where they are — a millisecond does not care which
+tier produced it and those counters mean nothing outside theirs.
+
+**It is recon's own type rather than the renderer's, and that is the fifth
+application of one idiom.** `gfx::FrameMetrics::Section` is structurally
+identical and nothing about it is renderer-specific — but recon cannot include
+from a sibling it does not depend on, and a shared package for four fields was
+already weighed and judged too thin. So each side declares in its own vocabulary
+and the neutral app that knows both converts in a loop, exactly as
+`DeviceRequirements` does at the device seam and
+`MarchingCubesConfig::extra_vertex_usage` at the buffer seam.
+`examples/viewer/stage_metrics.hpp` survives as *only* that mapping, which is
+what stops the promotion leaving two copies behind.
+
+**`vr::GpuTimer` is the half that was actually missing.** Every recon timing
+before it was wall clock around `Device::submit_single_time`, which blocks on a
+fence — so host record, submit, the stall and device execution collapsed into
+one number, and "the kernel is slow" could not be told from "we are waiting".
+That is not an abstract gap: the whole current optimisation roadmap —
+incremental extraction, the vertex-layout narrowing, the `max_buckets`
+decision — rests on numbers that cannot make the distinction, including a
+`meshing` stage measured at 373 ms on an M5 iPad Pro.
+
+**recon resolves more cheaply than a renderer can, and the blocking design is
+why.** A render loop runs ahead of the GPU, so gfx's profiler buffers per
+in-flight slot and publishes a snapshot that lags. Every recon dispatch is
+already fence-blocked, so the timestamps are readable the instant the submit
+returns: no ring, no deferred publish, no lag. The `submit_single_time(record,
+GpuTimer*, label)` overload exists for exactly that reason rather than leaving a
+caller to bracket the work — reading a timestamp before its submit completes
+returns nothing useful and nothing at the call site makes that visible, so it is
+a staleness the library sequences (the 2026-08-04 rule). It resolves **only** on
+the path where the fence signalled; on the wait-failure path the submit may
+still be pending, and the span stays unresolved rather than publishing a zero
+that reads as a fast dispatch.
+
+**Availability is not an error.** A queue family may report
+`timestampValidBits == 0`, and the two-family bootstrap can hand recon a
+compute-only family on a discrete GPU. `create` then succeeds with `available()`
+false: `begin` returns `kNoSpan`, `end` does nothing, `report_into` contributes
+no rows. A caller writes one code path and gets host timings. Failing instead
+would let an optional diagnostic break a scan.
+
+**Measured, and the number is the point.** A 128 MB device-local
+`vkCmdFillBuffer` through the timed overload: **0.817 ms of device time inside a
+14.256 ms blocking submit — 5.7%.** That is one cold measurement and the fixed
+cost includes first-use residency, so it is not a claim about the steady state;
+what it establishes is that the two quantities are nothing like each other,
+which is the entire premise. The test asserts the inequality rather than a
+magnitude — `gpu_ms < wall_ms` is what catches a span that is the wall clock
+relabelled or resolved against the wrong period, and a fill sized so the work
+cannot round to zero is what keeps `gpu_ms > 0` from passing vacuously. The
+host half is pinned separately and runs on the GPU-less CI legs: accumulation,
+content-matching (two pointers, equal strings, one row — literals are not
+guaranteed to be pooled and across TUs routinely are not), the breakdown skip
+(dropping it reports 30 where 20 is right), and the wrap case where masking the
+endpoints before subtracting reports several thousand years.
+
+**Review: the window needed an owner, and `report_into` became it.** The first
+cut had `GpuTimer::spans_` as a host-side index into device query state with
+nothing keeping the two in step, and five separate findings were that one gap
+seen from different sides. `submit_single_time` sequenced begin/end/resolve but
+never ended a *window*, so a timer created once — the shape the class's own
+example shows — silently stopped timing after `max_spans` (measured: 40 submits
+left `count() == 32`, every call returning OK) and every publish re-emitted the
+whole window, which `StageMetrics` accumulates by name, so frame N reported
+frames 1..N summed under this frame's label (measured: one row at the sum of 32
+spans). The fix is that **publishing ends the window**: a caller creates one
+timer, submits as often as it likes, and reports per frame, with `reset` left
+for discarding instead of publishing. `max_spans` is then a per-frame bound
+rather than a lifetime one, and exhausting it warns through the log handler
+instead of going quiet. Verified as the realistic loop: 40 frames × 2 submits
+through one timer now publish two measured rows every frame, with frame 39's
+device total at 0.95× frame 0's rather than 40× it.
+
+The same gap had two device-side edges. A span is recorded by commands *inside*
+a command buffer, so a buffer abandoned before submission left its query pair
+never reset and never written — undefined to read
+(VUID-vkGetQueryPoolResults-None-09401), and worse once the pool had been used,
+since the pair still holds an earlier window's value with its availability bit
+set and resolves as a plausible duration under the abandoned label. Every early
+return in `submit_single_time` now drops the span. And `resolve` no longer fails
+the dispatch: `VR_TRY` on a query readback turned an optional profiler into
+something that could fail compute work that had already completed, on the one
+primitive every tier goes through — the exact outcome this entry's availability
+rule exists to prevent. It logs and leaves the span unmeasured, which
+`report_into` already skips.
+
+Three more, each small and each a rule this repo had already written down. The
+labels are now **borrowed on `StageRow::name`'s terms** rather than copied into
+the timer: copies made the published rows point into a `std::string` the timer
+would free, which the one consumer that exists reads from another thread, and
+one lifetime rule across the whole vocabulary is simpler than two. `create`
+bounds `max_spans` above as well as below, because `max_spans * 2` is the pool's
+`uint32_t` query count and `0x80000000` built a **zero**-query pool that `begin`
+believed had room for two billion spans. And the moves are hand-written per the
+RAII rules — the defaulted pair left `device_` live in the source, so a
+moved-from timer reported `valid() == true`, a failure that hides especially
+well here because a hollow timer is byte-indistinguishable from the supported
+`timestampValidBits == 0` degradation and reports itself as a missing GPU
+capability. `tests/compute_raii_test.cpp` gained the three mandated move tests;
+the first two fail on the pre-review code.
+
+On the host side `StageMetrics` grew `merge`, because the viewer's remesh→fuse
+fold was written as `add_cpu(row.name, row.cpu_ms)` and dropped `gpu_ms` and
+`has_gpu` at the only place rows are combined — silently, since an absent
+`has_gpu` is indistinguishable from a genuinely host-only stage. Carrying both
+halves belongs on the vocabulary type rather than in each consumer.
+`OptionalStageScope` folded back into `StageScope` as a second constructor,
+which deletes ~35 duplicated lines and makes that class's null check
+load-bearing instead of dead code beside a copy of itself.
+
+Scope stops at `core` deliberately. Wiring `volume`, `tsdf` and `texture` — and
+handing `mesh` its GPU column — is a follow-up, because the mesh tier is held by
+in-flight incremental-extraction work and instrumenting it here would collide
+head-on for no gain.
+
 ## Measured lessons
 
 Not decisions, but the measurements that overturned an assumption about
