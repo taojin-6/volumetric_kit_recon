@@ -185,6 +185,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- docs: split the locked-decision record out of `CLAUDE.md` into a new
+  `DECISIONS.md`, moved verbatim — same 33 entries, same order, byte-identical
+  text. `CLAUDE.md` keeps every decision as a one-line rule linking to its full
+  entry, and its "Where to start" tour is trimmed to a tier map plus what has
+  landed and what is next; the measured-lesson narrative it carried (the
+  `ExtractTimings` breakdown that overturned the bottleneck guess) moves to
+  `DECISIONS.md` → "Measured lessons". `CLAUDE.md` goes 2 339 → 438 lines, which
+  is what an agent loads on every session; nothing is lost, only relocated.
+
 - `mesh`: the sparse `MarchingCubes::extract` kernel resolves its 2×2×2
   neighbourhood **on-device** instead of being handed a host-built table. One
   workgroup per active block (not a flat voxel grid — shared memory is per
@@ -205,7 +214,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   dispatch in flight), which is stated on `MarchingCubes::extract_device` as well
   as on the accessor: it holds by construction on one thread, and a consumer that
   fuses and meshes concurrently must serialise them. See the 2026-08-08 decision in
-  `CLAUDE.md` for what the `mesh`→`volume` coupling costs.
+  `DECISIONS.md` for what the `mesh`→`volume` coupling costs.
 - `mesh`: **removed** `ExtractTimings::neighbour_lut_ms` — the phase it measured no
   longer exists, and a permanently-zero row in the viewer overlay is worse than an
   absent one. `total_ms()` and `fuse_viewer`'s stage table drop it with the field.

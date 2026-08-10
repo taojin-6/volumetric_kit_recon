@@ -53,8 +53,8 @@ add_subdirectory(fuse_replica)
 # recon examples pull in the renderer sibling (volumetric_kit_gfx via
 # FetchContent) + system GLFW. The library tiers, the default build, and the
 # other examples stay renderer-independent -- see the 2026-07-07 "viewer opts
-# into gfx" decision in CLAUDE.md. Added last so it can link vr_example_common +
-# vr_stb_image.
+# into gfx" decision in DECISIONS.md. Added last so it can link
+# vr_example_common + vr_stb_image.
 option(
   VR_BUILD_VIEWER
   "Build the gfx-linked reconstruction viewer examples (pulls volumetric_kit_gfx + GLFW)"

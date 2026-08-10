@@ -82,7 +82,7 @@ layout(set = 0, binding = 8, scalar) buffer DirtyBlocks { uint dirty_block[]; };
 // of bounds, invalid (<= 0), or the four taps straddle a depth discontinuity
 // (max - min > trunc_dist) that would blend across a surface edge. This
 // texture-centred convention -- taps *and* fallback -- is a deliberate recon
-// choice (see CLAUDE.md, the depth-sampling decision); it is self-consistent,
+// choice (DECISIONS.md, the depth-sampling decision); it is self-consistent,
 // unlike the prior engine's sampleDepthBilinear, which rounded the fallback to
 // an integer centre while shifting the taps. (u, v) is in [0, width) x
 // [0, height). The nearest index is computed here but only read on a fallback
