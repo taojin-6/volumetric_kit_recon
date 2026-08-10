@@ -101,10 +101,17 @@ class StageMetrics {
   ///        than a stage of its own -- the phases inside one extract, say.
   ///
   /// Indented so a table reads as a hierarchy, and skipped by @ref
-  /// total_cpu_ms / @ref total_gpu_ms so the sum reads as one too. Without
-  /// that, a flat list carrying a two-level structure double-counts every
-  /// decomposed stage -- which is not hypothetical: it reported every extract
-  /// twice in the viewer before the skip existed.
+  /// total_cpu_ms so the sum reads as one too. Without that, a flat list
+  /// carrying a two-level structure double-counts every decomposed stage --
+  /// which is not hypothetical: it reported every extract twice in the viewer
+  /// before the skip existed.
+  ///
+  /// @ref total_gpu_ms deliberately does **not** skip them, because the two
+  /// halves nest differently: a host scope spans a whole call including
+  /// everything it invokes, while a device span covers one dispatch. A
+  /// breakdown row carrying a GPU measurement is therefore always a *separate*
+  /// dispatch that no row above it contains, and skipping it drops that time
+  /// from every total rather than deduplicating it.
   static constexpr const char* kBreakdownPrefix = "  ..";
 
   /// @brief Drop every row, keeping the storage for reuse.
@@ -192,7 +199,13 @@ class StageMetrics {
     return total;
   }
 
-  /// @brief Sum the rows' device milliseconds, skipping breakdowns.
+  /// @brief Sum the rows' device milliseconds, breakdown rows **included**.
+  ///
+  /// Unlike @ref total_cpu_ms this counts breakdowns, because a device span
+  /// measures one dispatch rather than one call and so is never contained in
+  /// the span of the row above it -- see @ref kBreakdownPrefix. Skipping them
+  /// here lost the whole of any sub-row whose GPU half is a second kernel,
+  /// while the host half of that same work stayed counted through its parent.
   ///
   /// Rows with no GPU measurement contribute nothing, so this is the device
   /// total of the stages that *could* be measured -- not comparable with
@@ -203,10 +216,23 @@ class StageMetrics {
   double total_gpu_ms(const char* exclude = nullptr) const noexcept {
     double total = 0.0;
     for (const StageRow& row : rows_) {
-      if (row.has_gpu && counts_toward_total(row, exclude)) total += row.gpu_ms;
+      if (!row.has_gpu) continue;
+      if (exclude != nullptr && std::strcmp(row.name, exclude) == 0) continue;
+      total += row.gpu_ms;
     }
     return total;
   }
+
+  /// @return `true` while a @ref StageScope is open on this set -- so a row
+  ///         added now is nested inside a stage whose host span contains it.
+  ///
+  /// What an operation called from both positions needs in order to name its
+  /// row: whether that row is a breakdown (@ref kBreakdownPrefix) or a stage of
+  /// its own is a property of *where it was called*, not of what it does. A
+  /// callee that hard-codes the prefix hands a top-level caller a row that
+  /// @ref total_cpu_ms skips -- their only stage, missing from their own total,
+  /// while still sitting in @ref rows() looking accounted for.
+  bool in_stage() const noexcept { return open_scopes_ > 0; }
 
  private:
   // Rows are matched by string CONTENT, not pointer. Seeding a row and timing
@@ -229,7 +255,15 @@ class StageMetrics {
                         std::strlen(kBreakdownPrefix)) != 0;
   }
 
+  // Maintained by StageScope alone, so @ref in_stage answers from the scopes
+  // actually open rather than from each callee being told where it stands.
+  void push_scope() noexcept { ++open_scopes_; }
+  void pop_scope() noexcept { --open_scopes_; }
+
+  friend class StageScope;
+
   std::vector<StageRow> rows_;
+  int open_scopes_ = 0;
 };
 
 /// @brief Times its own scope into a @ref StageMetrics row.
@@ -264,11 +298,16 @@ class StageScope {
 
   /// @brief Start timing @p name into @p metrics, or do nothing if it is null.
   StageScope(StageMetrics* metrics, const char* name)
-      : metrics_(metrics), name_(name), start_(Clock::now()) {}
+      : metrics_(metrics), name_(name), start_(Clock::now()) {
+    if (metrics_ != nullptr) metrics_->push_scope();
+  }
 
   /// @brief Stop timing and add the elapsed span to the row, unless inert.
   ~StageScope() {
     if (metrics_ == nullptr) return;
+    // Closed before the row is added, so a scope opened by whatever runs next
+    // sees the nesting it is actually in (@ref StageMetrics::in_stage).
+    metrics_->pop_scope();
     metrics_->add_cpu(
         name_, std::chrono::duration<double, std::milli>(Clock::now() - start_)
                    .count());

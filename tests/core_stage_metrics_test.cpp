@@ -118,10 +118,52 @@ int host_only_checks() {
     // A name that matches nothing removes nothing.
     CHECK(m.total_cpu_ms("nosuchstage") == 20.0);
 
-    // The GPU total obeys the same structure, and counts only measured rows.
+    // The GPU total counts only measured rows -- but, unlike the host total,
+    // it counts breakdowns too. A host scope spans a whole call including
+    // everything it invokes, so a sub-row's host time is already inside its
+    // parent's; a device span covers one dispatch, so a breakdown carrying one
+    // is a kernel no parent span contains. Skipping it here dropped that time
+    // from every total while its host half stayed counted through the parent,
+    // which is how the active-set compaction went missing from the device
+    // column it was added to fill.
     m.add_gpu("extract", 6.0);
     m.add_gpu("  ..meshing", 6.0);
-    CHECK(m.total_gpu_ms() == 6.0);
+    CHECK(m.total_gpu_ms() == 12.0);
+    // `exclude` still drops a row by name, breakdown or not.
+    CHECK(m.total_gpu_ms("extract") == 6.0);
+    CHECK(m.total_gpu_ms("  ..meshing") == 6.0);
+    // ...and a row with no device measurement contributes nothing either way.
+    CHECK(m.total_gpu_ms("integrate") == 12.0);
+  }
+
+  // --- a row's class follows the nesting it was added in ---------------------
+  //
+  // in_stage is what lets a callee invoked from both positions name its row
+  // correctly. Hard-coding the prefix instead hands a top-level caller a row
+  // total_cpu_ms skips -- their only stage, absent from their own total while
+  // still sitting in rows() looking accounted for.
+  {
+    vr::StageMetrics m;
+    CHECK(!m.in_stage());
+    {
+      vr::StageScope outer(m, "integrate");
+      CHECK(m.in_stage());
+      {
+        vr::StageScope inner(m, "  ..active set");
+        CHECK(m.in_stage());
+      }
+      // Still open: the inner scope closing does not end the outer one.
+      CHECK(m.in_stage());
+    }
+    CHECK(!m.in_stage());
+
+    // A null metrics pointer is inert here as everywhere else -- the scope must
+    // not touch a set it was not given.
+    {
+      vr::StageScope none(nullptr, "nowhere");
+      CHECK(!m.in_stage());
+    }
+    CHECK(!m.in_stage());
   }
 
   // --- clear keeps the object usable ----------------------------------------

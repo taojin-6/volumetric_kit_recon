@@ -186,6 +186,10 @@ order. Change the decision, its entry there, and this list together.
 - [**2026-08-09**](DECISIONS.md#2026-08-09--timings-are-core-vocabulary-and-the-device-half-is-measured-not-inferred-counters-stay-in-the-tier-that-means-them) —
   Timings are `core` vocabulary and the device half is measured, not inferred;
   counters stay in the tier that means them.
+- [**2026-08-10**](DECISIONS.md#2026-08-10--a-breakdown-row-is-one-the-callers-row-already-contains-so-the-host-total-skips-it-and-the-device-total-must-not-and-a-ceiling-the-library-knows-is-the-librarys-to-name) —
+  A breakdown row is one the *caller's* row already contains, so the host total
+  skips it and the device total must not; and a ceiling the library knows is the
+  library's to name.
 
 ## Provenance & salvage policy
 
@@ -383,7 +387,12 @@ arbitrary; it usually isn't.
   `color_space.hpp`, and `stage_metrics.hpp` — the `{name, cpu_ms, gpu_ms,
   has_gpu}` rows every tier reports timings in, with `GpuTimer` measuring the
   device half through the timed `submit_single_time` overload (a window is
-  ended by publishing it). A tier opens one **`GpuStageScope`** per call
+  ended by publishing it). `kBreakdownPrefix` marks a row its parent's row
+  already contains, so `total_cpu_ms` skips it and `total_gpu_ms` **does
+  not** — a host scope spans a whole call, a device span one dispatch, so a
+  sub-row's device time has no parent to be counted through; `in_stage()` is
+  how a callee reached from both positions knows which of the two it is
+  writing. A tier opens one **`GpuStageScope`** per call
   (`core/gpu_timer.hpp`): it times the host span, is what `dispatch()` takes to
   record the device one, and publishes both in its destructor, so no early
   return can strand a span. Timing is unavailable, never an error — a query
@@ -403,10 +412,12 @@ arbitrary; it usually isn't.
   independently-allocated SoA attribute arrays (`tsdf`, `weight`, `color`, …),
   each `num_blocks·voxels_per_block`, so a consumer materialises only what it
   needs. Host `diagnostics()` scans occupancy; `load_factor()` is the
-  constant-time read a per-frame caller can actually afford. Opt-in
+  constant-time read a per-frame caller can actually afford, and
+  `kGrowThreshold` is the occupancy it says to grow at — named here so a UI or
+  an embedder cannot draw a ceiling that disagrees with it. Opt-in
   `StageMetrics*` on `allocate_from_depth` (an `"allocate"` row summing every
-  retry round) and on `compact_active_blocks` (a `"  ..active set"` breakdown
-  row, for the fusion tier whose stage wraps it).
+  retry round) and on both compaction entry points (an `"active set"` row,
+  breakdown-prefixed when the caller already has a stage open).
 
 - **`tsdf`** — `TsdfIntegrator` fuses a posed depth frame into a grid's
   `tsdf`/`weight`: projective `sdf = depth − Zc`, `±trunc_dist`, an
