@@ -183,6 +183,9 @@ order. Change the decision, its entry there, and this list together.
   Incremental mesh extraction is worth building at a ~4x ceiling, not the ~18x
   one window suggested, and the worst frame rather than the median sizes its
   design (amends the dirty-block decision above).
+- [**2026-08-09**](DECISIONS.md#2026-08-09--timings-are-core-vocabulary-and-the-device-half-is-measured-not-inferred-counters-stay-in-the-tier-that-means-them) —
+  Timings are `core` vocabulary and the device half is measured, not inferred;
+  counters stay in the tier that means them.
 
 ## Provenance & salvage policy
 

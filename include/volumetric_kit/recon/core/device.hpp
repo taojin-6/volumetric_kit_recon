@@ -19,6 +19,11 @@
 
 namespace volumetric_kit::recon {
 
+// Forward-declared rather than included: gpu_timer.hpp needs Device to read the
+// physical device and compute family, so including it here would be circular.
+// The timed submit takes a pointer, so a declaration is all this header needs.
+class GpuTimer;
+
 /// @brief Parameters for @ref Device::create / @ref Device::adopt.
 struct DeviceConfig {
   /// Core (1.0) device features to enable (fed into
@@ -218,6 +223,36 @@ class VR_CORE_API Device {
   ///         step fails.
   Status submit_single_time(
       const std::function<void(VkCommandBuffer)>& record) const;
+
+  /// @brief @ref submit_single_time, with a GPU timestamp span around the
+  ///        recorded work.
+  ///
+  /// Identical to the overload above except that @p timer opens a span before
+  /// @p record and closes it after, and the span is **resolved once the fence
+  /// has signalled** — which is the whole reason this overload exists rather
+  /// than leaving a caller to bracket the work itself. Reading a timestamp
+  /// before its submit completes returns nothing useful, and nothing about the
+  /// call site makes that visible: it is a staleness the caller cannot see, so
+  /// the library sequences it (the 2026-08-04 rule).
+  ///
+  /// Because this blocks on the fence, the span is readable the instant it
+  /// returns — no deferred publish, no per-slot ring. See @ref GpuTimer.
+  ///
+  /// One span per submit, which matches what recon records: `dispatch()` puts
+  /// exactly one dispatch in each. A caller batching several into one command
+  /// buffer brackets them itself with @ref GpuTimer::begin / @ref
+  /// GpuTimer::end and calls @ref GpuTimer::resolve after this returns.
+  ///
+  /// @param record  Records compute commands into the given command buffer.
+  /// @param timer   Collects the span; `nullptr` makes this exactly the
+  ///                untimed overload. A timer whose device reports no usable
+  ///                timestamps records nothing and is not an error.
+  /// @param label   Span label, copied. Null labels the span `"gpu"`.
+  /// @return OK once the work completes, or a non-OK @ref Status if any Vulkan
+  ///         step fails. A failure to *resolve* the span is reported, but only
+  ///         after the work itself has succeeded.
+  Status submit_single_time(const std::function<void(VkCommandBuffer)>& record,
+                            GpuTimer* timer, const char* label) const;
 
  private:
   Device() = default;

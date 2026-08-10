@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "vk_physical_device.hpp"
+#include "volumetric_kit/recon/core/gpu_timer.hpp"
 #include "volumetric_kit/recon/core/vk_result.hpp"
 
 namespace volumetric_kit::recon {
@@ -399,6 +400,15 @@ VkResult Device::queue_submit(std::uint32_t count, const VkSubmitInfo* submits,
 
 Status Device::submit_single_time(
     const std::function<void(VkCommandBuffer)>& record) const {
+  // Delegated rather than duplicated: a null timer makes the timed overload
+  // byte-for-byte this one, and one body is one place for the fence-failure
+  // leak rule below to be got right.
+  return submit_single_time(record, nullptr, nullptr);
+}
+
+Status Device::submit_single_time(
+    const std::function<void(VkCommandBuffer)>& record, GpuTimer* timer,
+    const char* label) const {
   VkCommandBufferAllocateInfo alloc_info{};
   alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
   alloc_info.commandPool = command_pool_;
@@ -417,7 +427,15 @@ Status Device::submit_single_time(
   begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
   begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
   VR_VK_TRY(vkBeginCommandBuffer(cmd, &begin));
+  // The span brackets exactly what `record` puts in the buffer, so it measures
+  // device execution and excludes the allocate/begin/end/submit around it --
+  // which is the whole distinction this overload exists to draw.
+  const std::uint32_t span =
+      timer != nullptr ? timer->begin(cmd, label) : GpuTimer::kNoSpan;
   record(cmd);
+  if (timer != nullptr) {
+    timer->end(cmd, span);
+  }
   VR_VK_TRY(vkEndCommandBuffer(cmd));
 
   VkFenceCreateInfo fence_info{};
@@ -442,6 +460,15 @@ Status Device::submit_single_time(
     free_cmd.release();
     destroy_fence.release();
     return vk_error(waited, "vkWaitForFences");
+  }
+
+  // Only here, and only on this path. The queries are readable because the
+  // fence has signalled; on the failure path above the submit may still be
+  // pending, so there is nothing valid to read and the timer keeps the span
+  // unresolved -- which report_into skips, rather than publishing a zero that
+  // reads as a fast dispatch.
+  if (timer != nullptr) {
+    VR_TRY(timer->resolve());
   }
   return {};
 }

@@ -29,6 +29,16 @@ target_link_libraries(recon_core_memory_stats_test
 vr_target_warnings(recon_core_memory_stats_test)
 add_test(NAME recon_core_memory_stats COMMAND recon_core_memory_stats_test)
 
+# The reporting vocabulary (host-only, runs on every leg) and the GPU timer
+# behind it (skips without a device). The load-bearing assertion is that the
+# device span comes in UNDER the wall clock around the same blocking submit --
+# separating the two is the entire reason GpuTimer exists.
+add_executable(recon_core_stage_metrics_test core_stage_metrics_test.cpp)
+target_link_libraries(recon_core_stage_metrics_test
+                      PRIVATE volumetric_kit::recon_core)
+vr_target_warnings(recon_core_stage_metrics_test)
+add_test(NAME recon_core_stage_metrics COMMAND recon_core_stage_metrics_test)
+
 add_executable(recon_core_buffer_sharing_test core_buffer_sharing_test.cpp)
 target_link_libraries(recon_core_buffer_sharing_test
                       PRIVATE volumetric_kit::recon_core)

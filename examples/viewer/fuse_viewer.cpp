@@ -92,7 +92,7 @@
 // offsets with that stride is asserted nowhere, and cannot be from here.)
 #include "recon_gfx_bridge.hpp"
 #include "shared_device.hpp"
-#include "stage_metrics.hpp"  // fuse_viewer::StageTimes / StageScope
+#include "stage_metrics.hpp"  // fuse_viewer::to_sections
 
 #include "volumetric_kit/recon/core/allocator.hpp"
 #include "volumetric_kit/recon/core/device.hpp"
@@ -713,7 +713,7 @@ int run(GLFWwindow* window, const Options& opt) {
     // bad_alloc) would call std::terminate; contain it so shutdown stays clean.
     try {
       // Scratch for this thread only; copied under share_mtx once per frame.
-      fuse_viewer::StageTimes fuse_stages;
+      vr::StageMetrics fuse_stages;
       // The remesh-only rows -- extract and its breakdown, texture, atlas pack
       // -- measured here rather than straight into `fuse_stages`, and merged in
       // on every frame whether or not this one remeshed.
@@ -728,7 +728,7 @@ int run(GLFWwindow* window, const Options& opt) {
       // the newest remesh, exactly as `extract_stats` beside them does; the
       // panel's `fuse ms/frame` therefore reads as the cost of a fused frame
       // that also remeshed.
-      fuse_viewer::StageTimes remesh_stages;
+      vr::StageMetrics remesh_stages;
       // Held across frames so the panel keeps showing the newest remesh's
       // sizes between remeshes, rather than blanking to zero.
       rmesh::ExtractTimings extract_stats;
@@ -757,7 +757,7 @@ int run(GLFWwindow* window, const Options& opt) {
             // Textures the extractor's buffers in place -- no upload, no
             // readback; the geometry has not left the device since it was
             // meshed.
-            fuse_viewer::StageScope scope(remesh_stages, "texture");
+            vr::StageScope scope(remesh_stages, "texture");
             texture_status =
                 texturer->texture(device_mesh, depth, depth_camera);
           }
@@ -765,7 +765,7 @@ int run(GLFWwindow* window, const Options& opt) {
             // Its own row, not folded into "texture": repacking a full sensor
             // frame to RGBA8 is host work of the same order as the texturing
             // dispatch, so charging it to the GPU pass would misattribute it.
-            fuse_viewer::StageScope scope(remesh_stages, "atlas pack");
+            vr::StageScope scope(remesh_stages, "atlas pack");
             atlas = vr_example::pack_color_rgba8(color);
           } else {
             std::fprintf(stderr, "fuse_viewer: texture: %s\n",
@@ -845,7 +845,7 @@ int run(GLFWwindow* window, const Options& opt) {
         // cost the preload exists to hoist out of this loop). Timed either way,
         // so --preload's effect is visible as this row collapsing to ~0.
         auto frame_result = [&]() {
-          fuse_viewer::StageScope scope(fuse_stages, "frame");
+          vr::StageScope scope(fuse_stages, "frame");
           return dataset.frame(i);
         }();
         if (!frame_result) {
@@ -886,7 +886,7 @@ int run(GLFWwindow* window, const Options& opt) {
           // One row for the whole retry: a frame that overflows the map and
           // resizes reports allocate + resize together, which is what that
           // frame actually cost.
-          fuse_viewer::StageScope scope(fuse_stages, "allocate");
+          vr::StageScope scope(fuse_stages, "allocate");
           for (int attempt = 0; attempt < 5; ++attempt) {
             vol::AllocFailures failures;
             auto failed = volume.map().allocate_from_depth(
@@ -922,7 +922,7 @@ int run(GLFWwindow* window, const Options& opt) {
         }
         vr::Status integrate_status;
         {
-          fuse_viewer::StageScope scope(fuse_stages, "integrate");
+          vr::StageScope scope(fuse_stages, "integrate");
           integrate_status = integrator.integrate(
               volume, frame.depth.data(), depth_camera, 20.0f,
               rtsdf::IntegrationMode::Classic, &color_frame);
@@ -945,20 +945,22 @@ int run(GLFWwindow* window, const Options& opt) {
           remesh_stages.clear();
           rmesh::ExtractTimings extract_timings;
           vr::Result<rmesh::DeviceMesh> extracted = [&]() {
-            fuse_viewer::StageScope scope(remesh_stages, "extract");
+            vr::StageScope scope(remesh_stages, "extract");
             return extractor.extract_device(volume, 0.0f, &extract_timings);
           }();
           // Break the extract row down in place. The phases sum to the
           // `extract` row above rather than adding to it, so they carry
-          // StageTimes::kBreakdownPrefix -- which is what makes the table read
-          // as a hierarchy *and* keeps total_ms from counting the extract
-          // twice.
-          remesh_stages.add("  ..compact", extract_timings.compact_ms);
-          remesh_stages.add("  ..inputs", extract_timings.input_upload_ms);
-          remesh_stages.add("  ..arena alloc", extract_timings.arena_alloc_ms);
-          remesh_stages.add("  ..descriptors", extract_timings.descriptor_ms);
-          remesh_stages.add("  ..dispatch", extract_timings.dispatch_ms);
-          remesh_stages.add("  ..readback", extract_timings.readback_ms);
+          // StageMetrics::kBreakdownPrefix -- which is what makes the table
+          // read as a hierarchy *and* keeps total_cpu_ms from counting the
+          // extract twice.
+          remesh_stages.add_cpu("  ..compact", extract_timings.compact_ms);
+          remesh_stages.add_cpu("  ..inputs", extract_timings.input_upload_ms);
+          remesh_stages.add_cpu("  ..arena alloc",
+                                extract_timings.arena_alloc_ms);
+          remesh_stages.add_cpu("  ..descriptors",
+                                extract_timings.descriptor_ms);
+          remesh_stages.add_cpu("  ..dispatch", extract_timings.dispatch_ms);
+          remesh_stages.add_cpu("  ..readback", extract_timings.readback_ms);
           extract_stats = extract_timings;
           // Published even when it meshed nothing, which the host-mesh path
           // did not need to do. An empty extract still claims and stamps a ring
@@ -980,8 +982,8 @@ int run(GLFWwindow* window, const Options& opt) {
         // Merge the newest remesh's rows in, on every frame -- see
         // remesh_stages. add() matches by name, so they land in the slots the
         // seed loop above reserved and the table keeps its order.
-        for (const vg::FrameMetrics::Section& row : remesh_stages.sections()) {
-          fuse_stages.add(row.name, row.cpu_ms);
+        for (const vr::StageRow& row : remesh_stages.rows()) {
+          fuse_stages.add_cpu(row.name, row.cpu_ms);
         }
         // Publish this frame's stage breakdown + the volume's device memory for
         // the overlay. Sampled here (not in the render thread) because the
@@ -990,11 +992,11 @@ int run(GLFWwindow* window, const Options& opt) {
         {
           const vr::MemoryStats recon_memory = rallocator.memory_stats();
           std::lock_guard<std::mutex> lock(share_mtx);
-          shared_fuse_stages = fuse_stages.sections();
+          shared_fuse_stages = fuse_viewer::to_sections(fuse_stages);
           // Fusion cost, so the dataset read is excluded: it is dataloading,
           // not fusion, and while streaming it dwarfs the rest (~10 ms of
           // JPEG/PNG decode). It stays visible as its own `frame` row.
-          shared_fuse_ms = fuse_stages.total_ms(/*exclude=*/"frame");
+          shared_fuse_ms = fuse_stages.total_cpu_ms(/*exclude=*/"frame");
           shared_recon_memory = recon_memory;
           shared_map_buckets = volume.grid().num_buckets;
           shared_map_blocks = volume.grid().num_blocks;

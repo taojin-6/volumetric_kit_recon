@@ -1897,6 +1897,88 @@ and not an `ExtractTimings` phase this repo defines. On desktop the two are
 separate instruments: `fuse_replica --dirty-every N` prints the changed and
 dilated coverage, and `fuse_replica --device-extract` prints the phase split.
 
+### 2026-08-09 — Timings are `core` vocabulary and the device half is measured, not inferred; counters stay in the tier that means them.
+
+*Promotes* the 2026-08-01 decision's parked contract, on the trigger that
+decision named. It held that the viewer example would own the instrumentation
+and that a shared contract waits for a **second consumer**. There are now three
+— `fuse_viewer`, the iOS scanner, and `fuse_replica --device-extract` — and the
+cost of waiting had become visible rather than theoretical: `fuse_viewer` grew
+`StageTimes`/`StageScope` in `examples/viewer/stage_metrics.hpp`, and the
+scanner solved the same problem again and worse, as a 2048-byte `snprintf` into
+a `UILabel`. Two implementations of one idea, neither reusable, and the platform
+with the hardest problems got the weaker one.
+
+**The split is timings uniform, counters local**, which is the same
+mechanism-in-`core` / policy-in-the-tier line the 2026-07-06 kernel-bundle
+decision drew. `vr::StageMetrics` carries `{name, cpu_ms, gpu_ms, has_gpu}`
+rows, accumulating by name, with `kBreakdownPrefix` marking a row as a
+decomposition of the one above it so a total does not count that stage twice
+(not hypothetical: it reported every extract twice in the viewer before the skip
+existed). `active_blocks`, `dispatches`, `triangle_capacity`, `AllocFailures`,
+`load_factor` stay exactly where they are — a millisecond does not care which
+tier produced it and those counters mean nothing outside theirs.
+
+**It is recon's own type rather than the renderer's, and that is the fifth
+application of one idiom.** `gfx::FrameMetrics::Section` is structurally
+identical and nothing about it is renderer-specific — but recon cannot include
+from a sibling it does not depend on, and a shared package for four fields was
+already weighed and judged too thin. So each side declares in its own vocabulary
+and the neutral app that knows both converts in a loop, exactly as
+`DeviceRequirements` does at the device seam and
+`MarchingCubesConfig::extra_vertex_usage` at the buffer seam.
+`examples/viewer/stage_metrics.hpp` survives as *only* that mapping, which is
+what stops the promotion leaving two copies behind.
+
+**`vr::GpuTimer` is the half that was actually missing.** Every recon timing
+before it was wall clock around `Device::submit_single_time`, which blocks on a
+fence — so host record, submit, the stall and device execution collapsed into
+one number, and "the kernel is slow" could not be told from "we are waiting".
+That is not an abstract gap: the whole current optimisation roadmap —
+incremental extraction, the vertex-layout narrowing, the `max_buckets`
+decision — rests on numbers that cannot make the distinction, including a
+`meshing` stage measured at 373 ms on an M5 iPad Pro.
+
+**recon resolves more cheaply than a renderer can, and the blocking design is
+why.** A render loop runs ahead of the GPU, so gfx's profiler buffers per
+in-flight slot and publishes a snapshot that lags. Every recon dispatch is
+already fence-blocked, so the timestamps are readable the instant the submit
+returns: no ring, no deferred publish, no lag. The `submit_single_time(record,
+GpuTimer*, label)` overload exists for exactly that reason rather than leaving a
+caller to bracket the work — reading a timestamp before its submit completes
+returns nothing useful and nothing at the call site makes that visible, so it is
+a staleness the library sequences (the 2026-08-04 rule). It resolves **only** on
+the path where the fence signalled; on the wait-failure path the submit may
+still be pending, and the span stays unresolved rather than publishing a zero
+that reads as a fast dispatch.
+
+**Availability is not an error.** A queue family may report
+`timestampValidBits == 0`, and the two-family bootstrap can hand recon a
+compute-only family on a discrete GPU. `create` then succeeds with `available()`
+false: `begin` returns `kNoSpan`, `end` does nothing, `report_into` contributes
+no rows. A caller writes one code path and gets host timings. Failing instead
+would let an optional diagnostic break a scan.
+
+**Measured, and the number is the point.** A 128 MB device-local
+`vkCmdFillBuffer` through the timed overload: **0.817 ms of device time inside a
+14.256 ms blocking submit — 5.7%.** That is one cold measurement and the fixed
+cost includes first-use residency, so it is not a claim about the steady state;
+what it establishes is that the two quantities are nothing like each other,
+which is the entire premise. The test asserts the inequality rather than a
+magnitude — `gpu_ms < wall_ms` is what catches a span that is the wall clock
+relabelled or resolved against the wrong period, and a fill sized so the work
+cannot round to zero is what keeps `gpu_ms > 0` from passing vacuously. The
+host half is pinned separately and runs on the GPU-less CI legs: accumulation,
+content-matching (two pointers, equal strings, one row — literals are not
+guaranteed to be pooled and across TUs routinely are not), the breakdown skip
+(dropping it reports 30 where 20 is right), and the wrap case where masking the
+endpoints before subtracting reports several thousand years.
+
+Scope stops at `core` deliberately. Wiring `volume`, `tsdf` and `texture` — and
+handing `mesh` its GPU column — is a follow-up, because the mesh tier is held by
+in-flight incremental-extraction work and instrumenting it here would collide
+head-on for no gain.
+
 ## Measured lessons
 
 Not decisions, but the measurements that overturned an assumption about
