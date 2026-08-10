@@ -30,6 +30,7 @@
 #include "volumetric_kit/recon/core/device.hpp"
 #include "volumetric_kit/recon/core/instance.hpp"
 #include "volumetric_kit/recon/core/result.hpp"
+#include "volumetric_kit/recon/core/stage_metrics.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
 #include "volumetric_kit/recon/mesh/mesh.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
@@ -262,14 +263,14 @@ vr::Status run(const Options& opt) {
   // Allocate the truncation band for a frame, growing the map (preserving the
   // per-voxel data already fused) if it overflows -- exercises the block-index-
   // preserving resize on real data.
-  auto allocate_band =
-      [&](const vr_example::RgbdFrame& frame,
-          const vr::DepthCameraParams& depth_camera) -> vr::Status {
+  auto allocate_band = [&](const vr_example::RgbdFrame& frame,
+                           const vr::DepthCameraParams& depth_camera,
+                           vr::StageMetrics* metrics) -> vr::Status {
     for (int attempt = 0; attempt < 5; ++attempt) {
       vol::AllocFailures failures;
       VR_ASSIGN(std::uint32_t failed,
-                volume.map().allocate_from_depth(frame.depth.data(),
-                                                 depth_camera, &failures));
+                volume.map().allocate_from_depth(
+                    frame.depth.data(), depth_camera, &failures, metrics));
       if (failed == 0) {
         return {};
       }
@@ -312,7 +313,17 @@ vr::Status run(const Options& opt) {
           "-> resize to %lld buckets\n",
           load.ok() ? load.value() : -1.0f, failed, failures.chain,
           failures.heap, failures.table, static_cast<long long>(grown));
-      VR_TRY(volume.resize(static_cast<std::int32_t>(grown)));
+      // Its own row rather than folded into "allocate" or left untimed: this is
+      // by far the most expensive thing an overflowing frame does (the ~2.3 GiB
+      // transient above, plus init_table and the rehash passes), and charging
+      // it to "allocate" would sink that stage's device share on exactly the
+      // frames where the host cost is not the kernel at all. Untimed it would
+      // simply vanish -- the frames that cost the most contributing nothing to
+      // the table below.
+      {
+        vr::StageScope resize_span(metrics, "resize");
+        VR_TRY(volume.resize(static_cast<std::int32_t>(grown)));
+      }
     }
     return vr::Status::out_of_memory(
         "allocation kept overflowing after resize");
@@ -375,6 +386,13 @@ vr::Status run(const Options& opt) {
   double sum_total = 0.0, sum_compact = 0.0, sum_arena = 0.0;
   double sum_dispatch = 0.0, sum_read = 0.0;
   mesh::ExtractTimings last_rt{};
+  // Host and device spans per stage, summed across every fused frame -- rows
+  // accumulate by name, so the loop below adds straight into this rather than
+  // folding a per-frame set into it. The two halves are the point: the host row
+  // is wall clock around a fence-blocked submit, the device row is the kernel
+  // inside it, and the gap is submit overhead plus the host round trips the
+  // stage makes.
+  vr::StageMetrics stage_totals;
   std::size_t dirty_samples = 0;
   std::uint64_t sum_dirty = 0, sum_remesh = 0, sum_active = 0;
   std::uint32_t last_dirty = 0, last_active_blocks = 0, last_remesh = 0;
@@ -400,10 +418,10 @@ vr::Status run(const Options& opt) {
     color_camera.cam_to_world = frame.cam_to_world;
     const tsdf::ColorFrame color_frame{frame.color.data(), color_camera};
 
-    VR_TRY(allocate_band(frame, depth_camera));
+    VR_TRY(allocate_band(frame, depth_camera, &stage_totals));
     VR_TRY(integrator.integrate(volume, frame.depth.data(), depth_camera,
                                 opt.max_weight, tsdf::IntegrationMode::Classic,
-                                &color_frame));
+                                &color_frame, &stage_totals));
     ++fused;
 
     if (opt.dirty_every > 0 &&
@@ -492,6 +510,40 @@ vr::Status run(const Options& opt) {
         last_rt.active_blocks, cells / 1e6, last_rt.emitted_triangles,
         cells > 0.0 ? 100.0 * last_rt.emitted_triangles / cells : 0.0,
         static_cast<double>(sum_dispatches) / n);
+  }
+
+  // Per-stage host vs device, averaged over the fused frames.
+  //
+  // The gap between the two columns is what a wall-clock stage row could never
+  // show -- but read it for what it is, not as one thing. It holds the
+  // command-buffer allocate, the submit and the fence wait around EACH
+  // dispatch, every host round trip the stage makes (the active-set readback
+  // and re-upload most of all), and any *other* dispatch inside the same stage.
+  // The last is why `integrate` decomposes: its second kernel reports itself as
+  // the indented `..active set` row, so what remains in the gap is genuinely
+  // overhead rather than another kernel wearing overhead's clothes. Two things
+  // follow. A stage whose device share is small is not a slow kernel and will
+  // not be fixed by a faster one -- and a stage still carrying an untimed
+  // dispatch has not yet earned that conclusion.
+  //
+  // The instrument is not free at this scale: one timed submit costs ~0.13 ms
+  // more than an untimed one on MoltenVK (the first vkCmdWriteTimestamp in a
+  // command buffer, measured -- see DECISIONS.md), so on sub-millisecond stages
+  // it moves the host column it is quoted against. It is noise on a real
+  // workload and is not on a toy one.
+  if (fused > 0 && !stage_totals.empty()) {
+    const double n = static_cast<double>(fused);
+    std::printf("stages    per fused frame, mean over %zu frames\n", fused);
+    for (const vr::StageRow& row : stage_totals.rows()) {
+      if (row.has_gpu) {
+        std::printf("  %-9s host %7.3f ms   device %7.3f ms   (%5.1f%%)\n",
+                    row.name, row.cpu_ms / n, row.gpu_ms / n,
+                    row.cpu_ms > 0.0 ? 100.0 * row.gpu_ms / row.cpu_ms : 0.0);
+      } else {
+        std::printf("  %-9s host %7.3f ms   device       -\n", row.name,
+                    row.cpu_ms / n);
+      }
+    }
   }
 
   if (dirty_samples > 0) {

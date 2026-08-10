@@ -3,6 +3,8 @@
 
 #include "volumetric_kit/recon/core/compute_kernel.hpp"
 
+#include "volumetric_kit/recon/core/gpu_timer.hpp"
+
 #include <vector>
 
 #include "volumetric_kit/recon/core/device.hpp"
@@ -73,7 +75,7 @@ Result<DescriptorPool> KernelSetBuilder::build() {
 
 Status dispatch(Device& device, const ComputeKernel& kernel, const void* push,
                 std::uint32_t push_size, std::uint32_t groups,
-                std::uint32_t max_groups) {
+                std::uint32_t max_groups, GpuStageScope* stage) {
   // A 1-D dispatch flattens the whole input onto groupCountX, but Vulkan only
   // guarantees maxComputeWorkGroupCount[0] >= 65535 -- an oversized input would
   // be invalid usage on a min-spec (mobile) driver. Reject it as a clean error
@@ -131,28 +133,37 @@ Status dispatch(Device& device, const ComputeKernel& kernel, const void* push,
   // signal/wait already carries availability and visibility for every prior
   // write -- so on a compute-only family the renderer is reachable only that
   // way, and nothing is lost by omitting the stages Vulkan forbids naming here.
-  return device.submit_single_time([&](VkCommandBuffer cmd) {
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-                      kernel.pipeline.handle());
-    const VkDescriptorSet set = kernel.set.handle();
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-                            kernel.pipeline.layout(), 0, 1, &set, 0, nullptr);
-    if (push_size > 0) {
-      vkCmdPushConstants(cmd, kernel.pipeline.layout(),
-                         VK_SHADER_STAGE_COMPUTE_BIT, 0, push_size, push);
-    }
-    vkCmdDispatch(cmd, groups, 1, 1);
-    // Make this kernel's SSBO writes available and visible to (a) the next
-    // dispatch's shader reads/writes, (b) a host read of the mapped results,
-    // and (c) a renderer consuming the buffer as geometry -- (c) as far as this
-    // queue family permits; see the scope built above.
-    VkMemoryBarrier barrier{};
-    barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-    barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    barrier.dstAccessMask = dst_access;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, dst_stages,
-                         0, 1, &barrier, 0, nullptr, 0, nullptr);
-  });
+  // One call, timed or not: a null timer makes the timed overload of
+  // submit_single_time byte-for-byte the untimed one (it delegates to exactly
+  // this call), so branching on `stage` here would only name the same thing
+  // twice.
+  return device.submit_single_time(
+      [&](VkCommandBuffer cmd) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                          kernel.pipeline.handle());
+        const VkDescriptorSet set = kernel.set.handle();
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                kernel.pipeline.layout(), 0, 1, &set, 0,
+                                nullptr);
+        if (push_size > 0) {
+          vkCmdPushConstants(cmd, kernel.pipeline.layout(),
+                             VK_SHADER_STAGE_COMPUTE_BIT, 0, push_size, push);
+        }
+        vkCmdDispatch(cmd, groups, 1, 1);
+        // Make this kernel's SSBO writes available and visible to (a) the next
+        // dispatch's shader reads/writes, (b) a host read of the mapped
+        // results, and (c) a renderer consuming the buffer as geometry -- (c)
+        // as far as this queue family permits; see the scope built above.
+        VkMemoryBarrier barrier{};
+        barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        barrier.dstAccessMask = dst_access;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             dst_stages, 0, 1, &barrier, 0, nullptr, 0,
+                             nullptr);
+      },
+      stage != nullptr ? stage->timer() : nullptr,
+      stage != nullptr ? stage->name() : nullptr);
 }
 
 }  // namespace volumetric_kit::recon

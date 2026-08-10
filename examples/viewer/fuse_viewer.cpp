@@ -752,15 +752,15 @@ int run(GLFWwindow* window, const Options& opt) {
                          const std::vector<std::uint32_t>& color) {
         std::vector<std::uint8_t> atlas;
         if (texturer && depth != nullptr && !device_mesh.empty()) {
-          vr::Status texture_status;
-          {
-            // Textures the extractor's buffers in place -- no upload, no
-            // readback; the geometry has not left the device since it was
-            // meshed.
-            vr::StageScope scope(remesh_stages, "texture");
-            texture_status =
-                texturer->texture(device_mesh, depth, depth_camera);
-          }
+          // Textures the extractor's buffers in place -- no upload, no
+          // readback; the geometry has not left the device since it was meshed.
+          //
+          // The tier opens its own "texture" row, so there is no StageScope
+          // here: rows accumulate by name, and wrapping the call as well would
+          // count the host span twice while adding nothing. What the tier's row
+          // has that a wrapper's cannot is the device half.
+          const vr::Status texture_status = texturer->texture(
+              device_mesh, depth, depth_camera, 0.02f, &remesh_stages);
           if (texture_status.ok()) {
             // Its own row, not folded into "texture": repacking a full sensor
             // frame to RGBA8 is host work of the same order as the texturing
@@ -836,9 +836,10 @@ int run(GLFWwindow* window, const Options& opt) {
         // remeshes instead of dropping out and shuffling the table.
         fuse_stages.clear();
         for (const char* stage :
-             {"frame", "allocate", "integrate", "extract", "  ..compact",
-              "  ..inputs", "  ..arena alloc", "  ..descriptors",
-              "  ..dispatch", "  ..readback", "texture", "atlas pack"}) {
+             {"frame", "allocate", "resize", "integrate", "  ..active set",
+              "extract", "  ..compact", "  ..inputs", "  ..arena alloc",
+              "  ..descriptors", "  ..dispatch", "  ..readback", "texture",
+              "atlas pack"}) {
           fuse_stages.seed(stage);
         }
         // A preload cache hit, else a disk read + JPEG/PNG decode (the CPU
@@ -883,14 +884,17 @@ int run(GLFWwindow* window, const Options& opt) {
         // failure instead of silently integrating a partially-allocated frame.
         bool allocated = false;
         {
-          // One row for the whole retry: a frame that overflows the map and
-          // resizes reports allocate + resize together, which is what that
-          // frame actually cost.
-          vr::StageScope scope(fuse_stages, "allocate");
+          // The tier fills "allocate" itself -- every retry round, host and
+          // device, under the one name. So no StageScope around the loop: rows
+          // accumulate by name, and one here would add each round's host span a
+          // second time (up to 5x) and inflate "fuse ms/frame" with it. What
+          // the loop adds beyond the tier is the resize, which gets its own row
+          // below rather than being folded into a stage whose device share it
+          // would sink on exactly the frames that overflow.
           for (int attempt = 0; attempt < 5; ++attempt) {
             vol::AllocFailures failures;
             auto failed = volume.map().allocate_from_depth(
-                frame.depth.data(), depth_camera, &failures);
+                frame.depth.data(), depth_camera, &failures, &fuse_stages);
             if (!failed) {
               std::fprintf(stderr, "fuse_viewer: allocate (frame %zu): %s\n", i,
                            failed.status().message().c_str());
@@ -906,6 +910,7 @@ int run(GLFWwindow* window, const Options& opt) {
             // where doubling every attribute array is a large and pointless
             // cost -- and here it would also stall the live window.
             if (!failures.capacity_limited()) continue;
+            vr::StageScope resize_span(fuse_stages, "resize");
             const vr::Status rs = volume.resize(volume.grid().num_buckets * 2);
             if (!rs.ok()) {
               std::fprintf(stderr, "fuse_viewer: resize (frame %zu): %s\n", i,
@@ -920,13 +925,12 @@ int run(GLFWwindow* window, const Options& opt) {
               i);
           break;
         }
-        vr::Status integrate_status;
-        {
-          vr::StageScope scope(fuse_stages, "integrate");
-          integrate_status = integrator.integrate(
-              volume, frame.depth.data(), depth_camera, 20.0f,
-              rtsdf::IntegrationMode::Classic, &color_frame);
-        }
+        // Again the tier's own row rather than a wrapper's, and this one also
+        // decomposes: the active-set compaction is a second dispatch inside the
+        // stage and reports itself as "  ..active set" beneath it.
+        const vr::Status integrate_status = integrator.integrate(
+            volume, frame.depth.data(), depth_camera, 20.0f,
+            rtsdf::IntegrationMode::Classic, &color_frame, &fuse_stages);
         if (!integrate_status.ok()) {
           std::fprintf(stderr, "fuse_viewer: integrate (frame %zu): %s\n", i,
                        integrate_status.message().c_str());

@@ -383,7 +383,13 @@ arbitrary; it usually isn't.
   `color_space.hpp`, and `stage_metrics.hpp` — the `{name, cpu_ms, gpu_ms,
   has_gpu}` rows every tier reports timings in, with `GpuTimer` measuring the
   device half through the timed `submit_single_time` overload (a window is
-  ended by publishing it). `Device::create` enables `scalarBlockLayout`;
+  ended by publishing it). A tier opens one **`GpuStageScope`** per call
+  (`core/gpu_timer.hpp`): it times the host span, is what `dispatch()` takes to
+  record the device one, and publishes both in its destructor, so no early
+  return can strand a span. Timing is unavailable, never an error — a query
+  pool that will not allocate degrades like a family with no timestamps, and
+  `abandon()` retires the pool when a failed fence wait leaks the command
+  buffer carrying its queries. `Device::create` enables `scalarBlockLayout`;
   `adopt` requires the creator did, and both record the queue family's
   `queueFlags`.
 
@@ -397,7 +403,10 @@ arbitrary; it usually isn't.
   independently-allocated SoA attribute arrays (`tsdf`, `weight`, `color`, …),
   each `num_blocks·voxels_per_block`, so a consumer materialises only what it
   needs. Host `diagnostics()` scans occupancy; `load_factor()` is the
-  constant-time read a per-frame caller can actually afford.
+  constant-time read a per-frame caller can actually afford. Opt-in
+  `StageMetrics*` on `allocate_from_depth` (an `"allocate"` row summing every
+  retry round) and on `compact_active_blocks` (a `"  ..active set"` breakdown
+  row, for the fusion tier whose stage wraps it).
 
 - **`tsdf`** — `TsdfIntegrator` fuses a posed depth frame into a grid's
   `tsdf`/`weight`: projective `sdf = depth − Zc`, `±trunc_dist`, an
@@ -407,7 +416,9 @@ arbitrary; it usually isn't.
   of the surface) or **dynamic** (clear it, so a receded surface leaves no
   ghost). An optional `ColorFrame` fuses colour through its own separate
   `ColorCameraParams`; a voxel's first colour observation assigns rather than
-  blends. Opt-in `track_dirty_blocks` reports which blocks a fuse *changed*.
+  blends. Opt-in `track_dirty_blocks` reports which blocks a fuse *changed*;
+  opt-in `StageMetrics*` reports an `"integrate"` row with both halves, over a
+  `"  ..active set"` sub-row for the compaction dispatch it also makes.
 
 - **`mesh`** — `MarchingCubes` over a dense grid or, the real path, a sparse
   `VoxelBlockGrid`: one workgroup per active block, with the cross-block 2×2×2
@@ -429,7 +440,8 @@ arbitrary; it usually isn't.
   posed frame: a triangle is kept only where all three vertices are in front,
   in frame, and **unoccluded** (projected depth agrees with the depth map),
   else the `(-1,-1)` sentinel takes gfx's per-vertex-colour path. Live single
-  camera, so the frame the caller binds *is* the atlas.
+  camera, so the frame the caller binds *is* the atlas. Opt-in `StageMetrics*`
+  on both overloads reports a `"texture"` row with both halves.
 
 - **`sensor`** — the capture *contract*: `ICameraCapture` polled for a
   `CapturedFrame` (frames dropped, not queued), plus the boundary math that is
@@ -451,9 +463,12 @@ collision with the seam-B ring is recorded there as unresolved. Beside it:
 first-class glTF/GLB export via tinygltf + the gfx-vertex converter (the
 example's tinyply dump is deliberately a throwaway). On `mesh`, the greppable
 `TODO(mesh)`s: cross-block vertex sharing, per-vertex normals, the incremental
-block-mesh pool (the staged work above), and fitting the *dense* extract to its
-surface as the sparse one does. On `texture`: the multi-keyframe post-scan
-atlas.
+block-mesh pool (the staged work above), fitting the *dense* extract to its
+surface as the sparse one does, and `ExtractTimings`' device half — which must
+bracket several dispatches in **one** timed submit, since a timed submit costs
+~0.13 ms on MoltenVK and four of the six phases run under that. On `texture`:
+the multi-keyframe post-scan atlas. On `core`: the `TODO(core)` debug-utils
+labels beside `GpuTimer::begin`.
 
 **Measure the phases before choosing the optimisation.** Three independent
 guesses at this pipeline's bottleneck have been wrong, each corrected by an

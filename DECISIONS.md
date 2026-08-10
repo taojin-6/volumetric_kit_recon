@@ -2028,10 +2028,142 @@ halves belongs on the vocabulary type rather than in each consumer.
 which deletes ~35 duplicated lines and makes that class's null check
 load-bearing instead of dead code beside a copy of itself.
 
-Scope stops at `core` deliberately. Wiring `volume`, `tsdf` and `texture` — and
-handing `mesh` its GPU column — is a follow-up, because the mesh tier is held by
-in-flight incremental-extraction work and instrumenting it here would collide
-head-on for no gain.
+Scope stopped at `core` initially, because the mesh tier was held by in-flight
+incremental-extraction work.
+
+**Extended the same day to `volume`, `tsdf` and `texture`**, and the plumbing
+point is that it went through `dispatch()` rather than through each tier. Every
+compute tier already routes there for the workgroup guard and the barrier, so a
+device span costs a tier one argument and no submit path of its own; each holds
+one `GpuTimer`, created in its `create()` because a query pool of a few
+timestamps costs nothing and a diagnostic that can fail on first use is worse.
+The host scope opens **before** the validity check, so a refused call still
+costs its row — a stage silent on failure reads on an overlay as a stage that
+did not run, which is the reading a frozen pipeline most needs not to give. In
+`volume` the timer threads through the retry loop, so a contended frame's rounds
+accumulate under one label: that is the honest total, and reporting only the
+last would hide exactly the cost that makes contention worth seeing.
+
+**That one argument is `GpuStageScope`, and it is the review's main fix.** The
+first cut hand-copied a three-part idiom at four sites — open a `StageScope`,
+pass `metrics != nullptr ? &gpu_timer_ : nullptr` to `dispatch`, then call
+`report_into` as a plain statement afterwards — and the third part is skipped by
+*every early return between them*. `volume`'s retry loop makes that concrete: a
+round that fails returns through `VR_ASSIGN` with the successful rounds' spans
+still in a timer that now outlives the call, so the next frame publishes a
+failed frame's device time under its own label, and after `max_spans` such
+failures `begin` refuses every span and that tier's GPU column freezes for the
+map's lifetime. A destructor cannot be skipped by a return, so the scope owns
+all three parts, and taking *it* rather than a `(GpuTimer*, const char*)` pair
+also closes both halves of the argument mistake: a timer with no label published
+an anonymous `"gpu"` row that `StageMetrics` merges across unrelated stages, and
+a label with no timer read as instrumented while measuring nothing. Both
+compiled. The same scope inoculates the deferred `mesh` sites.
+
+**A stage that runs two kernels and times one misattributes the difference.**
+`integrate`'s host row wraps the active-set compaction as well as the fusion
+dispatch, so that kernel's device time fell into the gap between the halves and
+read as submit overhead — the fourth instance of the mistake the *Measured
+lessons* section below exists to record, and this one shipped in the entry's own
+prose. `compact_active_blocks` now reports itself as a `kBreakdownPrefix`
+sub-row, so the gap is overhead and nothing else. It is named `"  ..active set"`
+rather than `"  ..compact"` because rows merge by content and `mesh` already
+publishes a `"  ..compact"` phase for the same call inside its extract; two
+stages' compactions summed into one row is the collision the prefix exists to
+avoid. On the test fixture it is *half* of `integrate`'s host row (0.22 of
+0.45 ms), so this was not a rounding-error correction.
+
+**Availability is not an error — including when the pool will not allocate.**
+Creating each tier's timer with `VR_ASSIGN` made a failed `vkCreateQueryPool`
+refuse to construct `VoxelHashMap`, `TsdfIntegrator` and `ProjectiveTexturer`,
+i.e. fail the whole reconstruction spine for a caller who never asked for
+timing. `GpuTimer::create` now degrades that to `available() == false` plus a
+logged warning, exactly as it already did for `timestampValidBits == 0`; the
+class had been carrying two opposite policies. `GpuTimer::abandon` is the same
+rule mid-run: when `submit_single_time`'s fence wait fails it deliberately leaks
+the command buffer because the GPU may still execute it, and that buffer still
+carries the span's `vkCmdResetQueryPool` and both timestamp writes — so the two
+queries retire with it rather than being recycled into the next `begin`
+(VUID-vkCmdResetQueryPool-None-02841). Long-lived per-tier timers are what made
+that reachable; a throwaway timer died with the failed dispatch.
+
+**The consumer was wired in the same change, because leaving it was a trap.**
+`fuse_viewer` already wrapped `allocate`, `integrate` and `texture` in
+`StageScope`s under exactly the literals the tiers now publish, and rows
+accumulate by name — so passing the out-param without removing them would have
+inflated `integrate` and `texture` ~2x and `allocate` up to ~6x (the tier's
+scope fires once per retry round inside the outer one), silently, with
+`shared_fuse_ms` inflating along with it. The tiers' rows replace the wrappers.
+What a wrapper legitimately covered and the tier's row does not — the `resize`
+between retries, by far an overflowing frame's largest cost — gets its own row
+in both examples rather than being folded into `allocate`, where it would sink
+that stage's device share on precisely the frames whose host cost is not the
+kernel. Untimed, as it was in `fuse_replica`, the most expensive frames
+contributed nothing at all to the table.
+
+**The bug this shipped with for an hour is the one worth recording.** Each tier
+gained a `GpuTimer` member and none of them *created* it, so every tier silently
+reported host-only — a default-constructed timer is unavailable by design, which
+is indistinguishable from the supported no-timestamps device. The first cut of
+the test printed `timestamps unavailable` for all three rows and **exited 0**.
+The fix is not just creating the timers: the test now asks the device
+independently, by creating a `GpuTimer` of its own, and *fails* when a tier
+reports no span on hardware that a probe says can time. A capability a test can
+establish for itself must never be inferred from the thing under test.
+Confirmed by mutation — deleting one tier's `GpuTimer::create` fails the suite
+by name.
+
+**And the test that pinned it was itself the review's flakiest finding.** Its
+drain assertion compared two ~16 µs spans within a 1.8x band and failed 5 runs
+in 60 on unmodified correct code — a ~1-in-12 false red on every CI leg — and
+degenerated to `0.0 < 0.0` whenever a span resolved inside one timestamp tick,
+which is a healthy device. Both window properties are now asserted on *counts*
+instead: a window holds `max_spans` and then silently stops recording, so
+running more calls than one window holds and requiring the last to still report
+a device span catches "an untimed call recorded a span anyway" and "publishing
+did not end the window" alike, with no timing ratio anywhere. Its companion,
+`CHECK(untouched.empty())`, was asserting that a `std::vector` nothing was
+passed to is empty — it held against exactly the global-sink tier it claimed to
+be the only guard against. Both mutations now fail the suite by name, the second
+via `gpu_ms >= cpu_ms` (32 accumulated spans against one call's wall clock is a
+factor, not a coin flip); 80 consecutive runs of the replacement pass.
+
+First numbers, **Release** (`-DCMAKE_BUILD_TYPE=Release`; at `-O0` these are
+worthless — see the build-type gotcha in CLAUDE.md), on the deliberately tiny
+fixture the test runs (64x64 depth, three triangles), so they are
+fixed-overhead-dominated and not a workload claim:
+
+| stage | host | device | device share |
+|---|---|---|---|
+| `allocate` | 0.368 ms | 0.144 ms | 39.0% |
+| `integrate` | 0.455 ms | 0.018 ms | 3.9% |
+| `  ..active set` | 0.224 ms | 0.009 ms | 4.1% |
+| `texture` | 0.246 ms | 0.018 ms | 7.3% |
+
+**Read the device shares knowing what the instrument costs.** A timed submit is
+~0.13 ms more expensive than an untimed one on MoltenVK — measured on an M5 Max
+at 0.020 ms for a barrier-only submit with no timestamps against 0.145 ms with
+one and 0.153 ms with two, so the whole penalty is the *first*
+`vkCmdWriteTimestamp` in a command buffer and it is per submit, not per query.
+On a real workload that vanishes (a 300-frame room0 A/B shows no regression),
+but on this fixture it is a third of `integrate`'s host row, so these
+percentages are ratios the instrument moved and not only fixed overhead. Quote
+them as what they are: a demonstration that the halves separate, not a
+measurement of the pipeline.
+
+What is *not* yet wired: `mesh`'s GPU column — `ExtractTimings` keeps its six
+host phases and its counters, and giving each phase a device half means
+threading the timer through several dispatch sites inside one extract. The
+number above says it must not be done one timed submit per phase: this run's
+real phases are compact 0.15, inputs 0.00, arena 0.00, descriptors 0.00,
+dispatch 0.63, readback 3.73 ms, so four of six would gain more than they
+measure. Bracket several dispatches inside **one** timed submit with
+`GpuTimer::begin`/`end` plus a single `resolve()` — which `submit_single_time`'s
+own doc already points at for exactly this — and it is `TODO(mesh)` in
+`marching_cubes.cpp`. Debug-utils labels are also deferred (`TODO(core)` in
+`gpu_timer.hpp`): recon enables `VK_EXT_debug_utils` only when validation is on,
+so a label needs `Device` to record whether it was enabled — the same
+declare/verify shape as the enabled extension list, and its own change.
 
 ## Measured lessons
 

@@ -14,7 +14,9 @@
 #include "volumetric_kit/recon/core/camera_params.hpp"
 #include "volumetric_kit/recon/core/compute_kernel.hpp"
 #include "volumetric_kit/recon/core/descriptor.hpp"
+#include "volumetric_kit/recon/core/gpu_timer.hpp"
 #include "volumetric_kit/recon/core/result.hpp"
+#include "volumetric_kit/recon/core/stage_metrics.hpp"
 #include "volumetric_kit/recon/mesh/device_mesh.hpp"
 #include "volumetric_kit/recon/mesh/mesh.hpp"
 #include "volumetric_kit/recon/texture/export.hpp"
@@ -111,6 +113,11 @@ class VR_TEXTURE_API ProjectiveTexturer {
   ///                  discontinuity bound the bilinear sampler falls back to
   ///                  nearest across, so it does not blend foreground and
   ///                  background depth at a surface edge.
+  /// @param metrics  Optional @ref StageMetrics collecting a `"texture"` host
+  ///                  row and, from a timestamp span around the dispatch, its
+  ///                  device half. `nullptr` measures nothing. See
+  ///                  @ref tsdf::TsdfIntegrator::integrate for why the two
+  ///                  halves are worth separating.
   /// @return OK on success (including an empty mesh, a no-op), or a non-OK
   ///         @ref Status: @ref Status::Code::InvalidArgument if the texturer is
   ///         moved-from, @p depth is null, @p cam is empty, the mesh's index
@@ -121,7 +128,8 @@ class VR_TEXTURE_API ProjectiveTexturer {
   ///         on-device (a malformed-mesh guard), not reported.
   Status texture(mesh::Mesh& mesh, const float* depth,
                  const DepthCameraParams& cam,
-                 float occlusion_threshold = 0.02f);
+                 float occlusion_threshold = 0.02f,
+                 StageMetrics* metrics = nullptr);
 
   /// @brief Texture a mesh that is already on the device, in place.
   ///
@@ -143,12 +151,18 @@ class VR_TEXTURE_API ProjectiveTexturer {
   /// @param depth  As the host overload.
   /// @param cam    As the host overload.
   /// @param occlusion_threshold  As the host overload.
+  /// @param metrics  Optional @ref StageMetrics collecting a `"texture"` host
+  ///                  row and, from a timestamp span around the dispatch, its
+  ///                  device half. `nullptr` measures nothing. See
+  ///                  @ref tsdf::TsdfIntegrator::integrate for why the two
+  ///                  halves are worth separating.
   /// @return OK on success, or the same failures as the host overload except
   ///         those about host arrays; @ref Status::Code::InvalidArgument if
   ///         @p mesh names no buffers or has been superseded.
   Status texture(const mesh::DeviceMesh& mesh, const float* depth,
                  const DepthCameraParams& cam,
-                 float occlusion_threshold = 0.02f);
+                 float occlusion_threshold = 0.02f,
+                 StageMetrics* metrics = nullptr);
 
   /// @return `true` if this owns a live pipeline (`false` when moved-from).
   bool valid() const noexcept { return kernel_.valid(); }
@@ -170,6 +184,9 @@ class VR_TEXTURE_API ProjectiveTexturer {
   // The view-selection kernel's bundled layout + pipeline + descriptor set, its
   // set allocated from pool_ (which must outlive it) by KernelSetBuilder.
   ComputeKernel kernel_;
+  // Device spans for the texturing dispatch; idle until a caller asks. See
+  // tsdf::TsdfIntegrator's member of the same name.
+  GpuTimer gpu_timer_;
   DescriptorPool pool_;
   // Fixed-size camera-params SSBO (DepthCameraParams): bound once at
   // create() and rewritten each texture(), like the tsdf tier's camera SSBO.

@@ -470,6 +470,14 @@ Status Device::submit_single_time(
   if (waited != VK_SUCCESS) {
     free_cmd.release();
     destroy_fence.release();
+    // The leaked command buffer still carries this span's `vkCmdResetQueryPool`
+    // and both timestamp writes, so the two queries cannot go back into
+    // circulation the way `discard` would put them: the pool retires with the
+    // buffer. Disarm the guard first -- abandon() supersedes it.
+    discard_span.release();
+    if (timer != nullptr) {
+      timer->abandon();
+    }
     return vk_error(waited, "vkWaitForFences");
   }
 

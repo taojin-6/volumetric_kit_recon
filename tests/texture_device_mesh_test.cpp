@@ -24,12 +24,15 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <utility>
 #include <vector>
 
 #include "volumetric_kit/recon/core/allocator.hpp"
 #include "volumetric_kit/recon/core/device.hpp"
+#include "volumetric_kit/recon/core/gpu_timer.hpp"
 #include "volumetric_kit/recon/core/instance.hpp"
+#include "volumetric_kit/recon/core/stage_metrics.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
 #include "volumetric_kit/recon/mesh/mesh.hpp"
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
@@ -50,6 +53,13 @@ namespace rtex = volumetric_kit::recon::texture;
   } while (0)
 
 namespace {
+
+const vr::StageRow* find_row(const vr::StageMetrics& m, const char* name) {
+  for (const vr::StageRow& row : m.rows()) {
+    if (std::strcmp(row.name, name) == 0) return &row;
+  }
+  return nullptr;
+}
 
 constexpr int kBlock = 8;             // voxels per block edge
 constexpr int kBlocks = 4;            // blocks per axis
@@ -200,7 +210,25 @@ int main() {
   CHECK(texturer.texture(host_mesh, depth.data(), cam).ok());
 
   // Under test: the same pass over the device buffers, then one copy out.
-  CHECK(texturer.texture(device_mesh, depth.data(), cam).ok());
+  //
+  // Timed, because this overload is the one seam B wires and its reporting path
+  // is otherwise covered nowhere -- deleting its timer argument or its publish
+  // left the whole suite green. It has five returns between the stage scope and
+  // the dispatch, each a chance to skip the publish.
+  vr::StageMetrics metrics;
+  CHECK(texturer.texture(device_mesh, depth.data(), cam, 0.02f, &metrics).ok());
+  const vr::StageRow* row = find_row(metrics, "texture");
+  CHECK(row != nullptr);
+  CHECK(row->cpu_ms > 0.0);
+  // A device that reports timestamps must produce the device half here; one
+  // that does not is a supported configuration, and the probe -- not the tier
+  // under test -- is what tells the two apart.
+  vr::Result<vr::GpuTimer> probe = vr::GpuTimer::create(device.value());
+  CHECK(probe.ok());
+  if (probe.value().available()) {
+    CHECK(row->has_gpu);
+    CHECK(row->gpu_ms < row->cpu_ms);
+  }
   vr::Result<mesh::Mesh> device_result = extractor.download(device_mesh);
   CHECK(device_result.ok());
   const mesh::Mesh device_out = std::move(device_result).value();

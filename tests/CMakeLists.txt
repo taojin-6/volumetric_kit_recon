@@ -39,6 +39,19 @@ target_link_libraries(recon_core_stage_metrics_test
 vr_target_warnings(recon_core_stage_metrics_test)
 add_test(NAME recon_core_stage_metrics COMMAND recon_core_stage_metrics_test)
 
+# Every tier reports, and reports the DEVICE half. The load-bearing assertion is
+# per row: gpu_ms < cpu_ms, since the host span wraps the submit the device span
+# sits inside -- equal numbers mean the wall clock was relabelled. Also pins
+# that a null out-param measures nothing, and that publishing ends the timer
+# window.
+add_executable(recon_tier_stage_metrics_test tier_stage_metrics_test.cpp)
+target_link_libraries(
+  recon_tier_stage_metrics_test
+  PRIVATE volumetric_kit::recon_texture volumetric_kit::recon_tsdf
+          volumetric_kit::recon_volume volumetric_kit::recon_core)
+vr_target_warnings(recon_tier_stage_metrics_test)
+add_test(NAME recon_tier_stage_metrics COMMAND recon_tier_stage_metrics_test)
+
 add_executable(recon_core_buffer_sharing_test core_buffer_sharing_test.cpp)
 target_link_libraries(recon_core_buffer_sharing_test
                       PRIVATE volumetric_kit::recon_core)

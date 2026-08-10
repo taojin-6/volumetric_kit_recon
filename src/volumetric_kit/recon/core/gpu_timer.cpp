@@ -109,7 +109,22 @@ Result<GpuTimer> GpuTimer::create(const Device& device,
   // Two queries per span: the start and the end.
   info.queryCount = max_spans * 2;
   VkQueryPool pool = VK_NULL_HANDLE;
-  VR_VK_TRY(vkCreateQueryPool(device.handle(), &info, nullptr, &pool));
+  const VkResult created =
+      vkCreateQueryPool(device.handle(), &info, nullptr, &pool);
+  if (created != VK_SUCCESS) {
+    // Degrade rather than propagate -- the availability rule, applied to the
+    // one remaining way this can fail. Each tier creates its timer inside its
+    // own create(), so returning an error here would refuse to construct the
+    // reconstruction spine for a caller who never asked for timing, because a
+    // diagnostic could not get a few hundred bytes. Logged, because the reason
+    // every device row is missing must not be guessable only from its absence.
+    log_message(LogLevel::Warning,
+                "GpuTimer::create: " +
+                    vk_error(created, "vkCreateQueryPool").message() +
+                    "; device timings are unavailable");
+    timer.valid_bits_ = 0;
+    return timer;
+  }
   timer.pool_ =
       UniqueHandle<VkQueryPool, vkDestroyQueryPool>(device.handle(), pool);
   // Sized once here so recording and resolving a span -- which happen inside
@@ -162,6 +177,13 @@ void GpuTimer::end(VkCommandBuffer cmd, std::uint32_t span) {
   }
   vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, pool_.get(),
                       span * 2 + 1);
+}
+
+void GpuTimer::abandon() noexcept {
+  // valid_bits_ is what available() reads, so zeroing it retires the pool
+  // without disturbing valid() or the handle destruction still owes.
+  valid_bits_ = 0;
+  end_window();
 }
 
 void GpuTimer::discard(std::uint32_t span) noexcept {
@@ -228,7 +250,7 @@ void GpuTimer::report_into(StageMetrics& out) {
   // Publishing ends the window -- see the header. Without this the next publish
   // would re-add every span already reported, and `max_spans` would be a
   // lifetime bound rather than a per-window one.
-  spans_.clear();
+  end_window();
 }
 
 }  // namespace volumetric_kit::recon
