@@ -165,18 +165,10 @@ class VR_TSDF_API TsdfIntegrator {
   ///        follows the depth projection). Color also shares the SDF weight
   ///        cap, so a changed color converges over several frames once the
   ///        weight saturates.
-  /// @return OK on success, or a non-OK @ref Status:
-  ///         @ref Status::Code::InvalidArgument if the integrator is
-  ///         moved-from, @p depth is null, @p grid lacks a `float`
-  ///         `tsdf`/`weight` attribute, @p color is set but empty or @p grid
-  ///         lacks a `uint32` `color` attribute, or the active set is too large
-  ///         for a single 1-D dispatch (its voxel count exceeds the device's
-  ///         `maxComputeWorkGroupCount[0]`, or 2^32 threads); otherwise a
-  ///         buffer or dispatch failure.
   /// @param metrics  Optional @ref StageMetrics collecting this call's timing:
   ///                  an `"integrate"` host row around the whole call, and its
-  ///                  device half from a timestamp span around the dispatch
-  ///                  alone. `nullptr` measures nothing -- no timer runs, no
+  ///                  device half from a timestamp span around the fusion
+  ///                  dispatch. `nullptr` measures nothing -- no timer runs, no
   ///                  query is written, and the dispatch takes the untimed
   ///                  submit path (the `ExtractTimings` shape, and the
   ///                  2026-08-01 bar: no global sink, no state retained between
@@ -188,6 +180,21 @@ class VR_TSDF_API TsdfIntegrator {
   ///                  buffer, the submit and the stall; the device row is the
   ///                  kernel. A tier whose host row dwarfs its device row is
   ///                  not a slow kernel.
+  ///
+  ///                  A fuse runs *two* dispatches, so the second -- the active
+  ///                  set's compaction (@ref
+  ///                  volume::VoxelHashMap::compact_active_blocks) -- reports
+  ///                  itself as a `"  ..active set"` breakdown row beneath this
+  ///                  one. Without it that kernel's device time would fall into
+  ///                  the gap above and read as submit overhead.
+  /// @return OK on success, or a non-OK @ref Status:
+  ///         @ref Status::Code::InvalidArgument if the integrator is
+  ///         moved-from, @p depth is null, @p grid lacks a `float`
+  ///         `tsdf`/`weight` attribute, @p color is set but empty or @p grid
+  ///         lacks a `uint32` `color` attribute, or the active set is too large
+  ///         for a single 1-D dispatch (its voxel count exceeds the device's
+  ///         `maxComputeWorkGroupCount[0]`, or 2^32 threads); otherwise a
+  ///         buffer or dispatch failure.
   Status integrate(volume::VoxelBlockGrid& grid, const float* depth,
                    const DepthCameraParams& cam, float max_weight = 5.0f,
                    IntegrationMode mode = IntegrationMode::Classic,
@@ -309,9 +316,9 @@ class VR_TSDF_API TsdfIntegrator {
   ComputeKernel kernel_;
   DescriptorPool pool_;
   // The device-span collector, created once rather than per call: a query pool
-  // of 2 timestamps is negligible, and a lazily-created one would need a
-  // mutable member and a failure path on a diagnostic. Idle -- no pool
-  // allocated, no query written -- until a caller passes a StageMetrics.
+  // of a few timestamps is negligible, and a lazily-created one would need a
+  // mutable member and a failure path on a diagnostic. Idle -- no query
+  // written, no span recorded -- until a caller passes a StageMetrics.
   GpuTimer gpu_timer_;
   // Fixed-size camera-params SSBO (DepthCameraParams): bound once at
   // create() and rewritten each integrate(), not reallocated per frame (mirrors

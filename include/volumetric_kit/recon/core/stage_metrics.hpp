@@ -23,11 +23,24 @@ namespace volumetric_kit::recon {
 /// @brief One labelled stage: its host span, and -- where a device timer ran --
 ///        its GPU span.
 ///
-/// @ref has_gpu **is** the capability report. A consumer never branches on a
-/// separate "does this device support timestamps" flag; it reads @ref gpu_ms
-/// only where this is set, which is false both for a stage that is genuinely
-/// host-only and for every stage on a queue family whose `timestampValidBits`
-/// is zero.
+/// @ref has_gpu is what a consumer branches on to *display* a device column: it
+/// reads @ref gpu_ms only where this is set, with no separate "does this device
+/// support timestamps" flag to consult. But read it as "a device span was
+/// measured for this row", which is the only thing it can mean, and not as a
+/// capability report -- it is false for all of:
+///
+/// - a stage that is genuinely host-only (a dataset read, an atlas repack);
+/// - a call that returned before dispatching anything (an empty active set, a
+///   refused argument) -- the host row is still charged, deliberately, since a
+///   stage silent on failure reads as one that did not run;
+/// - every stage on a queue family whose `timestampValidBits` is zero, or whose
+///   query pool would not allocate.
+///
+/// Telling those apart is not this struct's job and cannot be done from one
+/// bool. A consumer that must -- a test asserting the device half is really
+/// there -- asks the device itself, by creating a @ref GpuTimer and reading
+/// `available()`. A capability that can be established independently must never
+/// be inferred from the thing under test.
 struct StageRow {
   /// Stage label. Stored **by pointer**, not copied, which is what keeps this
   /// trivially copyable -- so it must have string-literal lifetime (or point at
@@ -265,6 +278,9 @@ class StageScope {
   StageScope& operator=(const StageScope&) = delete;
   StageScope(StageScope&&) = delete;
   StageScope& operator=(StageScope&&) = delete;
+
+  /// @return The row this times into; see @ref StageRow::name for its lifetime.
+  const char* name() const noexcept { return name_; }
 
  private:
   using Clock = std::chrono::steady_clock;

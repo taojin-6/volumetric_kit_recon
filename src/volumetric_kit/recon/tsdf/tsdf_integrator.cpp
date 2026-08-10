@@ -129,11 +129,8 @@ Result<TsdfIntegrator> TsdfIntegrator::create(
   VkPhysicalDeviceProperties props{};
   vkGetPhysicalDeviceProperties(device.physical_device(), &props);
   integ.max_workgroup_count_x_ = props.limits.maxComputeWorkGroupCount[0];
-  // The device-span collector. Created here rather than lazily: a query pool of
-  // a few timestamps costs nothing, and a diagnostic that can fail on first use
-  // is worse than one that costs a handful of bytes. VR_ASSIGN, not a discarded
-  // Result -- a default-constructed timer is silently unavailable, so dropping
-  // the failure would make every device row vanish with nothing to say why.
+  // The device-span collector; see the member's declaration, and GpuTimer for
+  // why a pool that will not allocate cannot fail this create().
   VR_ASSIGN(integ.gpu_timer_, GpuTimer::create(device));
   // Likewise for the per-call depth / colour frame uploads, which are bound
   // whole: a frame past this limit is invalid usage, not a slow path.
@@ -179,8 +176,9 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid, const float* depth,
   // Opened before the validity check so a refused call still costs its row -- a
   // stage that reports nothing when it fails reads on an overlay as a stage
   // that did not run, which is the reading a frozen pipeline most needs not to
-  // give. Inert when metrics is null.
-  StageScope host_span(metrics, "integrate");
+  // give. Inert when metrics is null, and it publishes both halves on every
+  // return below rather than only the one that reaches the dispatch.
+  GpuStageScope stage(metrics, gpu_timer_, "integrate");
   if (!valid()) {
     return Status::invalid_argument(
         "TsdfIntegrator::integrate: moved-from integrator");
@@ -244,8 +242,13 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid, const float* depth,
     }
   }
 
-  // Snapshot the active blocks; nothing to fuse into an empty grid.
-  VR_ASSIGN(std::vector<BlockIndex> active, grid.map().compact_active_blocks());
+  // Snapshot the active blocks; nothing to fuse into an empty grid. This is a
+  // second GPU dispatch inside this stage's host row, so it reports its own
+  // "  ..active set" breakdown -- otherwise its device time is invisible and
+  // the gap between integrate's two halves reads as submit overhead when a good
+  // part of it is another kernel.
+  VR_ASSIGN(std::vector<BlockIndex> active,
+            grid.map().compact_active_blocks(metrics));
   if (active.empty()) {
     return {};
   }
@@ -342,16 +345,9 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid, const float* depth,
         "TsdfIntegrator::integrate: active_blocks * voxels_per_block exceeds "
         "2^32");
   }
-  VR_TRY(dispatch(*device_, kernel_, &push, sizeof(push),
+  return dispatch(*device_, kernel_, &push, sizeof(push),
                   group_count(static_cast<std::uint32_t>(threads64)),
-                  max_workgroup_count_x_,
-                  metrics != nullptr ? &gpu_timer_ : nullptr, "integrate"));
-  // Publishing ends the window, so this span cannot be re-emitted into a later
-  // frame's metrics -- see GpuTimer::report_into.
-  if (metrics != nullptr) {
-    gpu_timer_.report_into(*metrics);
-  }
-  return {};
+                  max_workgroup_count_x_, &stage);
 }
 
 Status TsdfIntegrator::prepare_dirty_flags(const VoxelBlockGrid& grid) {

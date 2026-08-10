@@ -76,11 +76,8 @@ Result<ProjectiveTexturer> ProjectiveTexturer::create(Device& device,
   VkPhysicalDeviceProperties props{};
   vkGetPhysicalDeviceProperties(device.physical_device(), &props);
   tex.max_workgroup_count_x_ = props.limits.maxComputeWorkGroupCount[0];
-  // The device-span collector. Created here rather than lazily: a query pool of
-  // a few timestamps costs nothing, and a diagnostic that can fail on first use
-  // is worse than one that costs a handful of bytes. VR_ASSIGN, not a discarded
-  // Result -- a default-constructed timer is silently unavailable, so dropping
-  // the failure would make every device row vanish with nothing to say why.
+  // The device-span collector; see the member's declaration, and GpuTimer for
+  // why a pool that will not allocate cannot fail this create().
   VR_ASSIGN(tex.gpu_timer_, GpuTimer::create(device));
   // The ceiling on a single storage-buffer binding's range; texture() rejects a
   // vertex / index / depth buffer larger than this with a clean error rather
@@ -104,8 +101,10 @@ Status ProjectiveTexturer::texture(const mesh::DeviceMesh& mesh,
                                    float occlusion_threshold,
                                    StageMetrics* metrics) {
   // Before the validity check, so a refused call still costs its row: a stage
-  // silent on failure reads as a stage that did not run. Inert when null.
-  StageScope host_span(metrics, "texture");
+  // silent on failure reads as a stage that did not run. Inert when null, and
+  // it publishes both halves on every return below -- this overload has five
+  // between here and the dispatch.
+  GpuStageScope stage(metrics, gpu_timer_, "texture");
   if (!valid()) {
     return Status::invalid_argument(
         "ProjectiveTexturer::texture: moved-from texturer");
@@ -188,16 +187,9 @@ Status ProjectiveTexturer::texture(const mesh::DeviceMesh& mesh,
 
   const PushConstants push{mesh.triangle_count, occlusion_threshold,
                            mesh.vertex_count};
-  VR_TRY(dispatch(*device_, kernel_, &push, sizeof(push),
+  return dispatch(*device_, kernel_, &push, sizeof(push),
                   group_count(mesh.triangle_count, kLocalSize),
-                  max_workgroup_count_x_,
-                  metrics != nullptr ? &gpu_timer_ : nullptr, "texture"));
-  // Publishing ends the window, so this span cannot be re-emitted into a later
-  // frame's metrics -- see GpuTimer::report_into.
-  if (metrics != nullptr) {
-    gpu_timer_.report_into(*metrics);
-  }
-  return {};
+                  max_workgroup_count_x_, &stage);
 }
 
 Status ProjectiveTexturer::texture(mesh::Mesh& mesh, const float* depth,
@@ -207,7 +199,7 @@ Status ProjectiveTexturer::texture(mesh::Mesh& mesh, const float* depth,
   // The host overload's row covers the upload and read-back this path adds on
   // top of the same dispatch -- which is the whole difference between it and
   // the device overload, and the reason both are timed under one name.
-  StageScope host_span(metrics, "texture");
+  GpuStageScope stage(metrics, gpu_timer_, "texture");
   if (!valid()) {
     return Status::invalid_argument(
         "ProjectiveTexturer::texture: moved-from texturer");
@@ -283,11 +275,7 @@ Status ProjectiveTexturer::texture(mesh::Mesh& mesh, const float* depth,
   VR_TRY(dispatch(
       *device_, kernel_, &push, sizeof(push),
       group_count(static_cast<std::uint32_t>(triangle_count), kLocalSize),
-      max_workgroup_count_x_, metrics != nullptr ? &gpu_timer_ : nullptr,
-      "texture"));
-  if (metrics != nullptr) {
-    gpu_timer_.report_into(*metrics);
-  }
+      max_workgroup_count_x_, &stage));
 
   // Read back only the uv0 the kernel wrote: positions / normals / colors are
   // the bytes just uploaded and unchanged, so the host already holds them --

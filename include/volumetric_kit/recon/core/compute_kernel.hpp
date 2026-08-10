@@ -24,7 +24,7 @@ namespace volumetric_kit::recon {
 // Forward-declared, not included: gpu_timer.hpp reaches Device and this header
 // is included by every compute tier, so a full include would pull the timer's
 // query-pool machinery into all of them for a defaulted-null parameter.
-class GpuTimer;
+class GpuStageScope;
 
 class Device;
 
@@ -135,28 +135,31 @@ class VR_CORE_API KernelSetBuilder {
 /// clean error rather than risk invalid usage on a min-spec driver, and rejects
 /// a null @p push with a non-zero @p push_size (mirroring
 /// @ref ComputePipeline::create's push-range validation).
+/// @param stage  Optional @ref GpuStageScope collecting a device span around
+///               this dispatch, through @ref Device::submit_single_time's timed
+///               overload. `nullptr` -- and a scope that is itself inert
+///               because its caller passed no metrics -- is exactly the untimed
+///               path.
 /// @return An OK @ref Status, or a non-OK one if @p groups exceeds
 ///         @p max_groups, @p push is null with @p push_size > 0, or the
 ///         submission fails.
 ///
-/// @param timer  Optional @ref GpuTimer collecting a device span around this
-///               dispatch, through @ref Device::submit_single_time's timed
-///               overload. `nullptr` is exactly the untimed path.
-/// @param label  Span label; borrowed on @ref StageRow::name's terms, so it
-///               must outlive every read of the metrics the timer is published
-///               into (a string literal). Ignored when @p timer is null.
-///
 /// Threading the timer *here* rather than at each tier's own submit is what
 /// makes device timing uniform across every kernel in the repo: each tier
 /// already routes through this helper for the workgroup guard and the barrier,
-/// so a span costs it two arguments rather than its own submit path. The span
-/// covers the recorded work alone -- bind, push, dispatch, barrier -- and
+/// so a span costs it one argument rather than a submit path of its own. The
+/// span covers the recorded work alone -- bind, push, dispatch, barrier -- and
 /// excludes the command-buffer allocate, the submit, and the fence wait around
 /// it, which is precisely the difference a wall-clock stage row cannot show.
+///
+/// The scope rather than a `(GpuTimer*, const char*)` pair, because those two
+/// are meaningful only together and defaulting them independently made both
+/// halves of the mistake compile: a timer with no label publishes an anonymous
+/// `"gpu"` row that @ref StageMetrics merges with every other unlabelled span,
+/// and a label with no timer reads as instrumented while measuring nothing.
 VR_CORE_API Status dispatch(Device& device, const ComputeKernel& kernel,
                             const void* push, std::uint32_t push_size,
                             std::uint32_t groups, std::uint32_t max_groups,
-                            GpuTimer* timer = nullptr,
-                            const char* label = nullptr);
+                            GpuStageScope* stage = nullptr);
 
 }  // namespace volumetric_kit::recon

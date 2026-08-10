@@ -113,6 +113,11 @@ class VR_TEXTURE_API ProjectiveTexturer {
   ///                  discontinuity bound the bilinear sampler falls back to
   ///                  nearest across, so it does not blend foreground and
   ///                  background depth at a surface edge.
+  /// @param metrics  Optional @ref StageMetrics collecting a `"texture"` host
+  ///                  row and, from a timestamp span around the dispatch, its
+  ///                  device half. `nullptr` measures nothing. See
+  ///                  @ref tsdf::TsdfIntegrator::integrate for why the two
+  ///                  halves are worth separating.
   /// @return OK on success (including an empty mesh, a no-op), or a non-OK
   ///         @ref Status: @ref Status::Code::InvalidArgument if the texturer is
   ///         moved-from, @p depth is null, @p cam is empty, the mesh's index
@@ -121,11 +126,6 @@ class VR_TEXTURE_API ProjectiveTexturer {
   ///         exceed the device `maxStorageBufferRange`; otherwise a buffer or
   ///         dispatch failure. An out-of-range triangle index is skipped
   ///         on-device (a malformed-mesh guard), not reported.
-  /// @param metrics  Optional @ref StageMetrics collecting a `"texture"` host
-  ///                  row and, from a timestamp span around the dispatch, its
-  ///                  device half. `nullptr` measures nothing. See
-  ///                  @ref tsdf::TsdfIntegrator::integrate for why the two
-  ///                  halves are worth separating.
   Status texture(mesh::Mesh& mesh, const float* depth,
                  const DepthCameraParams& cam,
                  float occlusion_threshold = 0.02f,
@@ -151,14 +151,14 @@ class VR_TEXTURE_API ProjectiveTexturer {
   /// @param depth  As the host overload.
   /// @param cam    As the host overload.
   /// @param occlusion_threshold  As the host overload.
-  /// @return OK on success, or the same failures as the host overload except
-  ///         those about host arrays; @ref Status::Code::InvalidArgument if
-  ///         @p mesh names no buffers or has been superseded.
   /// @param metrics  Optional @ref StageMetrics collecting a `"texture"` host
   ///                  row and, from a timestamp span around the dispatch, its
   ///                  device half. `nullptr` measures nothing. See
   ///                  @ref tsdf::TsdfIntegrator::integrate for why the two
   ///                  halves are worth separating.
+  /// @return OK on success, or the same failures as the host overload except
+  ///         those about host arrays; @ref Status::Code::InvalidArgument if
+  ///         @p mesh names no buffers or has been superseded.
   Status texture(const mesh::DeviceMesh& mesh, const float* depth,
                  const DepthCameraParams& cam,
                  float occlusion_threshold = 0.02f,

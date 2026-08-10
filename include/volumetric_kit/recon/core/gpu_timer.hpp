@@ -86,7 +86,11 @@ constexpr double ticks_to_ms(std::uint64_t ticks,
 /// @ref available is false: @ref begin returns @ref kNoSpan, @ref end does
 /// nothing, and @ref report_into contributes no rows, so a caller writes the
 /// same code either way and simply gets host timings. Failing instead would
-/// make an optional diagnostic able to break a scan.
+/// make an optional diagnostic able to break a scan -- so a query pool this
+/// *cannot allocate* degrades the same way rather than propagating, and
+/// @ref abandon retires a pool mid-run on the same terms. @ref create refuses
+/// only what a caller got wrong: an invalid device, or a @p max_spans out of
+/// range.
 ///
 /// **The window has one owner: @ref report_into publishes it and ends it.**
 /// Spans accumulate between windows, which is what lets several dispatches be
@@ -139,10 +143,16 @@ class VR_CORE_API GpuTimer {
   /// @param max_spans  Upper bound on spans in one window; sizes the pool at
   ///                   `2 * max_spans` queries. In `[1, kMaxSpans]`.
   /// @return The timer on success -- including where the family supports no
-  ///         timestamps, in which case @ref available is false -- or a non-OK
-  ///         @ref Status: @ref Status::Code::InvalidArgument for a @p max_spans
-  ///         outside `[1, kMaxSpans]` or an invalid @p device, otherwise a
-  ///         Vulkan-domain failure from creating the query pool.
+  ///         timestamps *and* where the query pool could not be allocated, in
+  ///         both of which @ref available is false and the failure is logged --
+  ///         or @ref Status::Code::InvalidArgument for a @p max_spans outside
+  ///         `[1, kMaxSpans]` or an invalid @p device.
+  ///
+  /// A pool that will not allocate is exactly the case the availability rule
+  /// above is for: a tier creating its timer in its own `create()` would
+  /// otherwise refuse to construct -- failing the whole reconstruction spine
+  /// for a caller who never asked for timing -- because a diagnostic ran out of
+  /// host memory.
   static Result<GpuTimer> create(const Device& device,
                                  std::uint32_t max_spans = 32);
 
@@ -167,7 +177,29 @@ class VR_CORE_API GpuTimer {
   /// buffer by @ref begin, which is where a reset is legal and correctly
   /// ordered against the writes. @ref report_into ends a window too, and is
   /// what a caller that wants the numbers uses instead.
-  void reset() noexcept { spans_.clear(); }
+  void reset() noexcept { end_window(); }
+
+  /// @brief Stop timing for good: a submission carrying this window's queries
+  ///        was abandoned while it may still be executing.
+  ///
+  /// @ref Device::submit_single_time leaks its command buffer when the fence
+  /// wait fails, precisely because the GPU may still run it. That buffer resets
+  /// and writes the span's two queries, so handing those indices to the next
+  /// @ref begin would record a `vkCmdResetQueryPool` over queries an in-flight
+  /// buffer is about to write (VUID-vkCmdResetQueryPool-None-02841), and could
+  /// resolve the abandoned submit's timestamps under the new span's label.
+  /// Nothing can say when that buffer drains, so the pool retires with it:
+  /// @ref available is false from here on and every later call is the same
+  /// well-defined no-op as on a device without timestamp support. Long-lived
+  /// per-tier timers are what make this reachable -- a throwaway timer died
+  /// with the failed dispatch.
+  void abandon() noexcept;
+
+  // TODO(core): pair a span with a VK_EXT_debug_utils label, so a capture in
+  // RenderDoc / Xcode names the same regions this reports. Deferred because
+  // recon enables the extension only when validation is on, so a label needs
+  // Device to record whether it was enabled -- the declare/verify shape of the
+  // enabled-extension list, and its own change.
 
   /// @brief Open a span: reset this span's two queries and write its start
   ///        timestamp into @p cmd.
@@ -262,6 +294,15 @@ class VR_CORE_API GpuTimer {
   // default-constructed one and its accessors stay consistent with valid().
   void clear_state() noexcept;
 
+  // End the window: drop its spans and re-arm the full-window warning. The
+  // warning latch is per window, not per timer -- latched for a lifetime it
+  // would fire once on a create-once timer and every later exhaustion, each of
+  // which freezes that tier's GPU column, would be silent.
+  void end_window() noexcept {
+    spans_.clear();
+    warned_full_ = false;
+  }
+
   VkDevice device_ = VK_NULL_HANDLE;
   UniqueHandle<VkQueryPool, vkDestroyQueryPool> pool_;
   std::uint32_t max_spans_ = 0;
@@ -270,12 +311,87 @@ class VR_CORE_API GpuTimer {
   // can (the 2026-08-03 rule).
   std::uint32_t valid_bits_ = 0;
   float period_ns_ = 0.0f;
-  // Latched so a full window warns once rather than on every refused span.
+  // Latched so a full window warns once rather than on every refused span;
+  // re-armed by end_window() so the *next* window can warn too.
   bool warned_full_ = false;
   std::vector<Span> spans_;
   // Readback scratch, reserved at create so a per-dispatch resolve allocates
   // nothing.
   std::vector<std::uint64_t> readback_;
+};
+
+/// @brief One stage's whole window: times the host span, hands @ref dispatch
+///        the device timer, and publishes **both halves when the scope
+///        closes**.
+///
+/// The pairing a tier needs, as one object, because the three parts have to be
+/// got right together and hand-copying them got one wrong: a tier that opens a
+/// @ref StageScope, threads its @ref GpuTimer into a dispatch, and then calls
+/// @ref GpuTimer::report_into as a plain statement afterwards *skips the
+/// publish on every early return between them*. The spans stay in a timer that
+/// now outlives the call, so the next successful call publishes a failed
+/// frame's device time under its own label -- and after `max_spans` such
+/// failures @ref GpuTimer::begin refuses every span and the tier's GPU column
+/// freezes for good. Being a destructor, this cannot be skipped by a return.
+///
+/// It is also the argument @ref dispatch takes, so a timer can no longer reach
+/// a dispatch without the label it publishes under.
+///
+/// Null @p metrics is inert end to end: @ref timer returns null, so the
+/// dispatch takes the untimed path, no query is written, and nothing is
+/// published. That is the 2026-08-01 bar -- nothing measured when unasked --
+/// enforced by construction rather than by an `if` at each site.
+///
+/// @warning The @ref StageMetrics, the @ref GpuTimer and the @p name literal
+///          must all outlive the scope.
+///
+/// @code
+/// Status Tier::run(..., StageMetrics* metrics) {
+///   GpuStageScope stage(metrics, gpu_timer_, "integrate");
+///   ...                                    // every return below publishes
+///   return dispatch(*device_, kernel_, &push, sizeof(push), groups, max,
+///   &stage);
+/// }
+/// @endcode
+class GpuStageScope {
+ public:
+  /// @brief Open @p name's window on @p metrics, collecting device spans in
+  ///        @p timer; inert when @p metrics is null.
+  GpuStageScope(StageMetrics* metrics, GpuTimer& timer, const char* name)
+      : metrics_(metrics), timer_(&timer), host_(metrics, name) {
+    // Seeded up front so the row exists in first-seen order before any
+    // breakdown row the stage adds beneath it -- otherwise a sub-row published
+    // mid-call lands above the stage it decomposes.
+    if (metrics_ != nullptr) metrics_->seed(name);
+  }
+
+  /// @brief Publish the device spans, then close the host row.
+  ///
+  /// Member order does the sequencing: this body runs first, then @ref host_ --
+  /// declared last, so destroyed first among the members -- adds the host span.
+  ~GpuStageScope() {
+    if (metrics_ != nullptr) timer_->report_into(*metrics_);
+  }
+
+  GpuStageScope(const GpuStageScope&) = delete;
+  GpuStageScope& operator=(const GpuStageScope&) = delete;
+  GpuStageScope(GpuStageScope&&) = delete;
+  GpuStageScope& operator=(GpuStageScope&&) = delete;
+
+  /// @return The timer to record into, or `nullptr` when inert -- which is
+  ///         exactly @ref dispatch's untimed path.
+  GpuTimer* timer() const noexcept {
+    return metrics_ != nullptr ? timer_ : nullptr;
+  }
+
+  /// @return The label device spans are published under; see
+  ///         @ref StageRow::name for its lifetime.
+  const char* name() const noexcept { return host_.name(); }
+
+ private:
+  StageMetrics* metrics_;
+  GpuTimer* timer_;
+  StageScope host_;
 };
 
 }  // namespace volumetric_kit::recon
