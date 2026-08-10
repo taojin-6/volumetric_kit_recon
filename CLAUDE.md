@@ -119,7 +119,7 @@ order. Change the decision, its entry there, and this list together.
 - [**2026-07-06**](DECISIONS.md#2026-07-06--hybrid-color-renders-through-a-gfx-pipeline-amends-interop-seam-a-needs-zero-gfx-changes) —
   Hybrid color renders through a gfx pipeline (amends "interop seam A needs
   zero gfx changes").
-- [**2026-07-06**](DECISIONS.md#2026-07-06--depth-sampling-is-texture-centred-pixel-centres-at-i05-a-deliberate-12-pixel-convention) —
+- [**2026-07-06**](DECISIONS.md#2026-07-06--depth-sampling-is-texture-centred-pixel-centres-at-i05-a-deliberate--pixel-convention) —
   Depth sampling is texture-centred (pixel centres at i+0.5), a deliberate
   ~½-pixel convention.
 - [**2026-07-07**](DECISIONS.md#2026-07-07--the-viewer-example-opts-into-gfx-behind-vr_build_viewer-amends-independent-siblings-gfx-untouched) —
@@ -179,6 +179,10 @@ order. Change the decision, its entry there, and this list together.
 - [**2026-08-09**](DECISIONS.md#2026-08-09--a-dirty-block-is-one-the-fuse-changed-the-flags-are-anchored-to-a-grid-the-library-checks-and-tracking-them-is-opt-in) —
   A dirty block is one the fuse *changed*, the flags are anchored to a grid the
   library checks, and tracking them is opt-in.
+- [**2026-08-09**](DECISIONS.md#2026-08-09--incremental-mesh-extraction-is-worth-building-at-a-4x-ceiling-not-the-18x-one-window-suggested-and-the-worst-frame-rather-than-the-median-sizes-its-design-amends-the-dirty-block-decision-above) —
+  Incremental mesh extraction is worth building at a ~4x ceiling, not the ~18x
+  one window suggested, and the worst frame rather than the median sizes its
+  design (amends the dirty-block decision above).
 
 ## Provenance & salvage policy
 
@@ -429,11 +433,15 @@ shared `VkDevice`, fusing on a background thread, drawing recon's buffers
 directly, and carrying the two-panel perf overlay. All three take `--preload`,
 which makes the loop measure compute rather than the JPEG/PNG decoder.
 
-**Next.** First-class glTF/GLB export via tinygltf + the gfx-vertex converter
-(the example's tinyply dump is deliberately a throwaway). On `mesh`, the
-greppable `TODO(mesh)`s: cross-block vertex sharing, per-vertex normals, the
-incremental block-mesh pool, and fitting the *dense* extract to its surface as
-the sparse one does. On `texture`: the multi-keyframe post-scan atlas.
+**Next.** **Incremental mesh extraction**, decided and staged — read the
+2026-08-09 entry before starting it: stage 2 costs a measured +13% and its
+collision with the seam-B ring is recorded there as unresolved. Beside it:
+first-class glTF/GLB export via tinygltf + the gfx-vertex converter (the
+example's tinyply dump is deliberately a throwaway). On `mesh`, the greppable
+`TODO(mesh)`s: cross-block vertex sharing, per-vertex normals, the incremental
+block-mesh pool (the staged work above), and fitting the *dense* extract to its
+surface as the sparse one does. On `texture`: the multi-keyframe post-scan
+atlas.
 
 **Measure the phases before choosing the optimisation.** Three independent
 guesses at this pipeline's bottleneck have been wrong, each corrected by an
