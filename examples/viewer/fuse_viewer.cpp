@@ -291,7 +291,10 @@ struct ReconstructionPanel {
   std::size_t triangles = 0;
   std::uint64_t mesh_version = 0;
   std::int32_t map_buckets = 0;
-  std::int32_t map_blocks = 0;  // heap *capacity* (bucket_size * num_buckets)
+  std::int32_t map_blocks = 0;
+  /// Fraction of the block heap in use, from VoxelHashMap::load_factor -- a
+  /// 4-byte read of the mapped heap counter, not the diagnostics scan.
+  float map_load_factor = 0.0f;
   double fuse_ms = 0.0;
   std::uint64_t preloaded_bytes = 0;
   vr::MemoryStats recon_memory;
@@ -306,6 +309,34 @@ double to_mebibytes(std::uint64_t bytes) {
 
 // Build the reconstruction panel into the ImGui frame the caller is driving
 // (it calls neither NewFrame nor Render), mirroring gfx's draw_metrics_panel.
+// A filled bar carrying its own ceiling.
+//
+// The point of a gauge over the two numbers it replaces: a threshold a reader
+// has to know about is a threshold they will miss. A scan on this pipeline can
+// sit at 85% block occupancy with allocation stopped and every other figure
+// looking healthy -- which is exactly what happened on an iPad, for half a
+// scan, behind an `errors 0` banner. `warn_at` is what makes that state read as
+// a state rather than as one more number.
+void gauge(const char* label, double value, double capacity, double warn_at,
+           const char* overlay) {
+  const double fraction =
+      capacity > 0.0 ? std::min(value / capacity, 1.0) : 0.0;
+  const bool hot = fraction >= warn_at;
+  if (hot) {
+    // Semantic, not decorative: the bar changes colour only when the reader is
+    // meant to act.
+    ImGui::PushStyleColor(ImGuiCol_PlotHistogram,
+                          ImVec4(0.72f, 0.39f, 0.18f, 1.0f));
+  }
+  ImGui::Text("%s", label);
+  ImGui::SameLine(110.0f);
+  ImGui::ProgressBar(static_cast<float>(fraction), ImVec2(-1.0f, 0.0f),
+                     overlay);
+  if (hot) {
+    ImGui::PopStyleColor();
+  }
+}
+
 void draw_reconstruction_panel(const ReconstructionPanel& panel) {
   if (!ImGui::Begin("Reconstruction")) {
     ImGui::End();
@@ -330,9 +361,17 @@ void draw_reconstruction_panel(const ReconstructionPanel& panel) {
   // over. The dispatch count matters on its own: a run that keeps reporting 2
   // is one whose planner is not tracking the surface, and the ..dispatch row
   // cannot say so because it sums both attempts into one span.
-  ImGui::Text("  arena %u / %u verts, %u / %u tris",
-              panel.extract.emitted_vertices, panel.extract.vertex_capacity,
-              panel.extract.emitted_triangles, panel.extract.triangle_capacity);
+  {
+    char overlay[64];
+    std::snprintf(overlay, sizeof(overlay), "%u / %u verts",
+                  panel.extract.emitted_vertices,
+                  panel.extract.vertex_capacity);
+    // 0.9 because past it the next growth step is a refit: the arena is
+    // grow-only, so a full one costs a second dispatch, which is the `dispatch`
+    // count below going to 2.
+    gauge("  arena", panel.extract.emitted_vertices,
+          panel.extract.vertex_capacity, 0.9, overlay);
+  }
   ImGui::Text("  output %.0f MiB (ring), %u dispatch%s",
               to_mebibytes(panel.extract.arena_bytes), panel.extract.dispatches,
               panel.extract.dispatches == 1 ? "" : "es");
@@ -340,8 +379,24 @@ void draw_reconstruction_panel(const ReconstructionPanel& panel) {
   // of the block heap every per-voxel attribute array is dimensioned by. It is
   // what a resize doubles, so it is the memory story; how *full* the map is
   // needs the hash map's diagnostics scan (a device readback, too costly here).
-  ImGui::Text("map  %d buckets / %d block capacity", panel.map_buckets,
-              panel.map_blocks);
+  {
+    // Occupancy, which this panel used to say needed the diagnostics scan and
+    // therefore did not show. It does not: VoxelHashMap::load_factor is a
+    // 4-byte read of the host-mapped heap counter, added on 2026-08-08 as the
+    // constant-time reading a per-frame caller can afford -- and it is the one
+    // figure that says a scan has stopped taking in new geometry.
+    //
+    // 0.85 is where the allocate kernel's overflow scan starts to dominate an
+    // insert; it is the same number `volumetric_kit_ios` refuses to allocate
+    // past, for the same reason.
+    char overlay[80];
+    std::snprintf(
+        overlay, sizeof(overlay), "%.1f%% of %d blocks%s",
+        100.0 * panel.map_load_factor, panel.map_blocks,
+        panel.map_load_factor >= 0.85 ? "  -- allocation degrading" : "");
+    gauge("map", panel.map_load_factor, 1.0, 0.85, overlay);
+    ImGui::Text("  %d buckets", panel.map_buckets);
+  }
   ImGui::Separator();
   // recon's device memory: its own VMA allocator's share of the device. On a
   // shared/adopted device each library allocates separately, so this is recon's
@@ -349,9 +404,14 @@ void draw_reconstruction_panel(const ReconstructionPanel& panel) {
   for (std::uint32_t heap = 0; heap < panel.recon_memory.heap_count; ++heap) {
     const vr::HeapStats& stats = panel.recon_memory.heaps[heap];
     if (stats.budget_bytes == 0 && stats.usage_bytes == 0) continue;
-    ImGui::Text("recon heap %u  %.1f / %.1f MiB", heap,
-                to_mebibytes(stats.usage_bytes),
-                to_mebibytes(stats.budget_bytes));
+    char overlay[64];
+    std::snprintf(overlay, sizeof(overlay), "%.0f / %.0f MiB",
+                  to_mebibytes(stats.usage_bytes),
+                  to_mebibytes(stats.budget_bytes));
+    char label[32];
+    std::snprintf(label, sizeof(label), "recon heap %u", heap);
+    gauge(label, static_cast<double>(stats.usage_bytes),
+          static_cast<double>(stats.budget_bytes), 0.9, overlay);
   }
   if (panel.preloaded_bytes != 0) {
     ImGui::Text("frame cache   %.0f MiB (host)",
@@ -705,6 +765,7 @@ int run(GLFWwindow* window, const Options& opt) {
   vr::MemoryStats shared_recon_memory;
   std::int32_t shared_map_buckets = 0;
   std::int32_t shared_map_blocks = 0;
+  float shared_map_load_factor = 0.0f;
   std::uint64_t shared_preloaded_bytes = 0;
   rmesh::ExtractTimings shared_extract;
 
@@ -1004,6 +1065,10 @@ int run(GLFWwindow* window, const Options& opt) {
           shared_recon_memory = recon_memory;
           shared_map_buckets = volume.grid().num_buckets;
           shared_map_blocks = volume.grid().num_blocks;
+          // Constant-time; safe to sample every fused frame (2026-08-08).
+          if (vr::Result<float> lf = volume.map().load_factor()) {
+            shared_map_load_factor = lf.value();
+          }
           shared_extract = extract_stats;
         }
         // Retain this frame (the newest keyframe) for the final extract below.
@@ -1190,6 +1255,7 @@ int run(GLFWwindow* window, const Options& opt) {
       recon_panel.recon_memory = shared_recon_memory;
       recon_panel.map_buckets = shared_map_buckets;
       recon_panel.map_blocks = shared_map_blocks;
+      recon_panel.map_load_factor = shared_map_load_factor;
       recon_panel.preloaded_bytes = shared_preloaded_bytes;
       recon_panel.extract = shared_extract;
 
