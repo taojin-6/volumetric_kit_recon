@@ -179,6 +179,10 @@ order. Change the decision, its entry there, and this list together.
 - [**2026-08-09**](DECISIONS.md#2026-08-09--a-dirty-block-is-one-the-fuse-changed-the-flags-are-anchored-to-a-grid-the-library-checks-and-tracking-them-is-opt-in) —
   A dirty block is one the fuse *changed*, the flags are anchored to a grid the
   library checks, and tracking them is opt-in.
+- [**2026-08-09**](DECISIONS.md#2026-08-09--incremental-mesh-extraction-is-worth-building-at-5x-not-the-20x-a-first-sample-suggested-and-the-number-that-sizes-its-design-is-the-worst-frame-rather-than-the-median) —
+  Incremental mesh extraction is worth building at ~5x, not the ~20x a first
+  sample suggested, and the number that sizes its design is the worst frame
+  rather than the median.
 
 ## Provenance & salvage policy
 
@@ -429,11 +433,18 @@ shared `VkDevice`, fusing on a background thread, drawing recon's buffers
 directly, and carrying the two-panel perf overlay. All three take `--preload`,
 which makes the loop measure compute rather than the JPEG/PNG decoder.
 
-**Next.** First-class glTF/GLB export via tinygltf + the gfx-vertex converter
-(the example's tinyply dump is deliberately a throwaway). On `mesh`, the
-greppable `TODO(mesh)`s: cross-block vertex sharing, per-vertex normals, the
-incremental block-mesh pool, and fitting the *dense* extract to its surface as
-the sparse one does. On `texture`: the multi-keyframe post-scan atlas.
+**Next.** **Incremental mesh extraction**, decided and staged: stage 2 is
+per-block contiguous emission — the sparse kernels append through global
+atomics, so per-block ranges cannot exist until they restructure to count →
+reserve one span per block → emit, and every later stage needs those ranges.
+Its output is byte-identical geometry, so the golden triangle-for-triangle test
+already covers it. Then stage 3 (dirty-only dispatch off
+`dirty_remesh_blocks`) and stage 4 (compaction gated on `release_through`).
+Beside it: first-class glTF/GLB export via tinygltf + the gfx-vertex converter
+(the example's tinyply dump is deliberately a throwaway), the remaining
+greppable `TODO(mesh)`s — cross-block vertex sharing, per-vertex normals, and
+fitting the *dense* extract to its surface as the sparse one does — and, on
+`texture`, the multi-keyframe post-scan atlas.
 
 **Measure the phases before choosing the optimisation.** Three independent
 guesses at this pipeline's bottleneck have been wrong, each corrected by an
