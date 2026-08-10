@@ -3,6 +3,8 @@
 
 #include "volumetric_kit/recon/core/compute_kernel.hpp"
 
+#include "volumetric_kit/recon/core/gpu_timer.hpp"
+
 #include <vector>
 
 #include "volumetric_kit/recon/core/device.hpp"
@@ -73,7 +75,7 @@ Result<DescriptorPool> KernelSetBuilder::build() {
 
 Status dispatch(Device& device, const ComputeKernel& kernel, const void* push,
                 std::uint32_t push_size, std::uint32_t groups,
-                std::uint32_t max_groups) {
+                std::uint32_t max_groups, GpuTimer* timer, const char* label) {
   // A 1-D dispatch flattens the whole input onto groupCountX, but Vulkan only
   // guarantees maxComputeWorkGroupCount[0] >= 65535 -- an oversized input would
   // be invalid usage on a min-spec (mobile) driver. Reject it as a clean error
@@ -131,7 +133,7 @@ Status dispatch(Device& device, const ComputeKernel& kernel, const void* push,
   // signal/wait already carries availability and visibility for every prior
   // write -- so on a compute-only family the renderer is reachable only that
   // way, and nothing is lost by omitting the stages Vulkan forbids naming here.
-  return device.submit_single_time([&](VkCommandBuffer cmd) {
+  const auto record = [&](VkCommandBuffer cmd) {
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
                       kernel.pipeline.handle());
     const VkDescriptorSet set = kernel.set.handle();
@@ -152,7 +154,14 @@ Status dispatch(Device& device, const ComputeKernel& kernel, const void* push,
     barrier.dstAccessMask = dst_access;
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, dst_stages,
                          0, 1, &barrier, 0, nullptr, 0, nullptr);
-  });
+  };
+  // The untimed overload rather than the timed one with a null timer: they are
+  // equivalent, but naming the plain one keeps a profiler-free build's call
+  // graph free of the timer entirely.
+  if (timer == nullptr) {
+    return device.submit_single_time(record);
+  }
+  return device.submit_single_time(record, timer, label);
 }
 
 }  // namespace volumetric_kit::recon

@@ -2028,10 +2028,50 @@ halves belongs on the vocabulary type rather than in each consumer.
 which deletes ~35 duplicated lines and makes that class's null check
 load-bearing instead of dead code beside a copy of itself.
 
-Scope stops at `core` deliberately. Wiring `volume`, `tsdf` and `texture` — and
-handing `mesh` its GPU column — is a follow-up, because the mesh tier is held by
-in-flight incremental-extraction work and instrumenting it here would collide
-head-on for no gain.
+Scope stopped at `core` initially, because the mesh tier was held by in-flight
+incremental-extraction work.
+
+**Extended the same day to `volume`, `tsdf` and `texture`**, and the plumbing
+point is that it went through `dispatch()` rather than through each tier. Every
+compute tier already routes there for the workgroup guard and the barrier, so a
+device span costs a tier two arguments and no submit path of its own; each holds
+one `GpuTimer`, created in its `create()` because a query pool of a few
+timestamps costs nothing and a diagnostic that can fail on first use is worse.
+The host scope opens **before** the validity check, so a refused call still
+costs its row — a stage silent on failure reads on an overlay as a stage that
+did not run, which is the reading a frozen pipeline most needs not to give. In
+`volume` the timer threads through the retry loop, so a contended frame's rounds
+accumulate under one label: that is the honest total, and reporting only the
+last would hide exactly the cost that makes contention worth seeing.
+
+**The bug this shipped with for an hour is the one worth recording.** Each tier
+gained a `GpuTimer` member and none of them *created* it, so every tier silently
+reported host-only — a default-constructed timer is unavailable by design, which
+is indistinguishable from the supported no-timestamps device. The first cut of
+the test printed `timestamps unavailable` for all three rows and **exited 0**.
+The fix is not just creating the timers: the test now asks the device
+independently, by creating a `GpuTimer` of its own, and *fails* when a tier
+reports no span on hardware that a probe says can time. A capability a test can
+establish for itself must never be inferred from the thing under test.
+Confirmed by mutation — deleting one tier's `GpuTimer::create` fails the suite
+by name.
+
+First numbers, on the deliberately tiny fixture the test runs (64x64 depth,
+three triangles), so these are fixed-overhead-dominated and not a workload
+claim:
+
+| stage | host | device | device share |
+|---|---|---|---|
+| `allocate` | 0.581 ms | 0.153 ms | 26.3% |
+| `integrate` | 0.426 ms | 0.016 ms | 3.7% |
+| `texture` | 0.215 ms | 0.017 ms | 7.7% |
+
+What is *not* yet wired: `mesh`'s GPU column — `ExtractTimings` keeps its six
+host phases and its counters, and giving each phase a device half means
+threading the timer through several dispatch sites inside one extract. Debug-
+utils labels are also deferred: recon enables `VK_EXT_debug_utils` only when
+validation is on, so a label needs `Device` to record whether it was enabled —
+the same declare/verify shape as the enabled extension list, and its own change.
 
 ## Measured lessons
 

@@ -21,6 +21,11 @@
 
 namespace volumetric_kit::recon {
 
+// Forward-declared, not included: gpu_timer.hpp reaches Device and this header
+// is included by every compute tier, so a full include would pull the timer's
+// query-pool machinery into all of them for a defaulted-null parameter.
+class GpuTimer;
+
 class Device;
 
 /// @brief One compute kernel's owned resources: its descriptor-set layout, the
@@ -133,8 +138,25 @@ class VR_CORE_API KernelSetBuilder {
 /// @return An OK @ref Status, or a non-OK one if @p groups exceeds
 ///         @p max_groups, @p push is null with @p push_size > 0, or the
 ///         submission fails.
+///
+/// @param timer  Optional @ref GpuTimer collecting a device span around this
+///               dispatch, through @ref Device::submit_single_time's timed
+///               overload. `nullptr` is exactly the untimed path.
+/// @param label  Span label; borrowed on @ref StageRow::name's terms, so it
+///               must outlive every read of the metrics the timer is published
+///               into (a string literal). Ignored when @p timer is null.
+///
+/// Threading the timer *here* rather than at each tier's own submit is what
+/// makes device timing uniform across every kernel in the repo: each tier
+/// already routes through this helper for the workgroup guard and the barrier,
+/// so a span costs it two arguments rather than its own submit path. The span
+/// covers the recorded work alone -- bind, push, dispatch, barrier -- and
+/// excludes the command-buffer allocate, the submit, and the fence wait around
+/// it, which is precisely the difference a wall-clock stage row cannot show.
 VR_CORE_API Status dispatch(Device& device, const ComputeKernel& kernel,
                             const void* push, std::uint32_t push_size,
-                            std::uint32_t groups, std::uint32_t max_groups);
+                            std::uint32_t groups, std::uint32_t max_groups,
+                            GpuTimer* timer = nullptr,
+                            const char* label = nullptr);
 
 }  // namespace volumetric_kit::recon

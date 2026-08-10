@@ -17,7 +17,9 @@
 #include "volumetric_kit/recon/core/color_space.hpp"
 #include "volumetric_kit/recon/core/compute_kernel.hpp"
 #include "volumetric_kit/recon/core/descriptor.hpp"
+#include "volumetric_kit/recon/core/gpu_timer.hpp"
 #include "volumetric_kit/recon/core/result.hpp"
+#include "volumetric_kit/recon/core/stage_metrics.hpp"
 #include "volumetric_kit/recon/tsdf/export.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 
@@ -171,10 +173,26 @@ class VR_TSDF_API TsdfIntegrator {
   ///         for a single 1-D dispatch (its voxel count exceeds the device's
   ///         `maxComputeWorkGroupCount[0]`, or 2^32 threads); otherwise a
   ///         buffer or dispatch failure.
+  /// @param metrics  Optional @ref StageMetrics collecting this call's timing:
+  ///                  an `"integrate"` host row around the whole call, and its
+  ///                  device half from a timestamp span around the dispatch
+  ///                  alone. `nullptr` measures nothing -- no timer runs, no
+  ///                  query is written, and the dispatch takes the untimed
+  ///                  submit path (the `ExtractTimings` shape, and the
+  ///                  2026-08-01 bar: no global sink, no state retained between
+  ///                  calls).
+  ///
+  ///                  The two halves answer different questions and the gap
+  ///                  between them is the point: the host row is wall clock
+  ///                  around a fence-blocked submit, so it carries the command
+  ///                  buffer, the submit and the stall; the device row is the
+  ///                  kernel. A tier whose host row dwarfs its device row is
+  ///                  not a slow kernel.
   Status integrate(volume::VoxelBlockGrid& grid, const float* depth,
                    const DepthCameraParams& cam, float max_weight = 5.0f,
                    IntegrationMode mode = IntegrationMode::Classic,
-                   const ColorFrame* color = nullptr);
+                   const ColorFrame* color = nullptr,
+                   StageMetrics* metrics = nullptr);
 
   /// @brief How many blocks this integrator has CHANGED since the last @ref
   ///        reset_dirty (requires @ref
@@ -290,6 +308,11 @@ class VR_TSDF_API TsdfIntegrator {
   // create().
   ComputeKernel kernel_;
   DescriptorPool pool_;
+  // The device-span collector, created once rather than per call: a query pool
+  // of 2 timestamps is negligible, and a lazily-created one would need a
+  // mutable member and a failure path on a diagnostic. Idle -- no pool
+  // allocated, no query written -- until a caller passes a StageMetrics.
+  GpuTimer gpu_timer_;
   // Fixed-size camera-params SSBO (DepthCameraParams): bound once at
   // create() and rewritten each integrate(), not reallocated per frame (mirrors
   // the volume tier's persistent camera params).
