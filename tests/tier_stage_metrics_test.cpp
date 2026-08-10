@@ -262,6 +262,57 @@ int main() {
         row->cpu_ms, row->gpu_ms, 100.0 * row->gpu_ms / row->cpu_ms);
   }
 
+  // The compaction's device half is a SECOND dispatch, so no row above it
+  // contains that span -- which is why the device total counts breakdown rows
+  // where the host total cannot. Skipping them lost this kernel from every
+  // total while its host time stayed counted through "integrate".
+  {
+    const vr::StageRow* active_set = find(metrics, "  ..active set");
+    CHECK(active_set != nullptr);
+    if (active_set->has_gpu) {
+      CHECK(metrics.total_gpu_ms() >= active_set->gpu_ms);
+      CHECK(metrics.total_gpu_ms("  ..active set") ==
+            metrics.total_gpu_ms() - active_set->gpu_ms);
+    }
+    // The host half, by contrast, must stay out: "integrate" already spans it.
+    CHECK(metrics.total_cpu_ms() == metrics.total_cpu_ms("  ..active set"));
+  }
+
+  // --- the same compaction, asked for from both positions --------------------
+  //
+  // Breakdown or stage is a property of where the call sits, not of what it
+  // does. Under a caller's own scope the prefix keeps the sub-row out of that
+  // caller's host total; at top level the same prefix would leave the row out
+  // of every total, so the row is named as the stage it is.
+  {
+    vr::StageMetrics nested;
+    {
+      vr::StageScope outer(nested, "fuse");
+      CHECK(grid.value().map().compact_active_blocks(&nested));
+    }
+    CHECK(find(nested, "  ..active set") != nullptr);
+    CHECK(find(nested, "active set") == nullptr);
+    // Counted once, through the stage that wraps it.
+    CHECK(nested.total_cpu_ms() == find(nested, "fuse")->cpu_ms);
+
+    vr::StageMetrics top;
+    CHECK(grid.value().map().compact_active_blocks(&top));
+    CHECK(find(top, "active set") != nullptr);
+    CHECK(find(top, "  ..active set") == nullptr);
+    // The caller's only stage: it must reach the total it will be read from.
+    CHECK(top.total_cpu_ms() > 0.0);
+  }
+
+  // The frustum overload is the same round trip over a smaller set, and reports
+  // through the same row -- a caller who switches to it to make the trip
+  // cheaper has to be able to read what that bought, not watch the row vanish.
+  {
+    vr::StageMetrics frustum;
+    CHECK(grid.value().map().compact_active_blocks_in_frustum(cam, &frustum));
+    CHECK(row_reports_both_halves(frustum, "active set", device_can_time,
+                                  "frustum compaction"));
+  }
+
   // --- publishing ends the window -------------------------------------------
   //
   // The same window bound, from the publishing side: each call must report its

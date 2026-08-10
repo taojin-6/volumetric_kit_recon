@@ -294,6 +294,10 @@ struct ReconstructionPanel {
   std::int32_t map_blocks = 0;
   /// Fraction of the block heap in use, from VoxelHashMap::load_factor -- a
   /// 4-byte read of the mapped heap counter, not the diagnostics scan.
+  /// **Negative when that read failed**, which the panel draws as `unavailable`
+  /// rather than as a low fraction: this is the figure a reader checks to
+  /// decide whether the scan is still taking geometry in, so the one answer it
+  /// must never give is a calm-looking number it does not have.
   float map_load_factor = 0.0f;
   double fuse_ms = 0.0;
   std::uint64_t preloaded_bytes = 0;
@@ -307,13 +311,11 @@ double to_mebibytes(std::uint64_t bytes) {
   return static_cast<double>(bytes) / (1024.0 * 1024.0);
 }
 
-// Build the reconstruction panel into the ImGui frame the caller is driving
-// (it calls neither NewFrame nor Render), mirroring gfx's draw_metrics_panel.
 // A filled bar carrying its own ceiling.
 //
 // The point of a gauge over the two numbers it replaces: a threshold a reader
 // has to know about is a threshold they will miss. A scan on this pipeline can
-// sit at 85% block occupancy with allocation stopped and every other figure
+// sit deep in the band where allocation has stopped with every other figure
 // looking healthy -- which is exactly what happened on an iPad, for half a
 // scan, behind an `errors 0` banner. `warn_at` is what makes that state read as
 // a state rather than as one more number.
@@ -337,6 +339,8 @@ void gauge(const char* label, double value, double capacity, double warn_at,
   }
 }
 
+// Build the reconstruction panel into the ImGui frame the caller is driving
+// (it calls neither NewFrame nor Render), mirroring gfx's draw_metrics_panel.
 void draw_reconstruction_panel(const ReconstructionPanel& panel) {
   if (!ImGui::Begin("Reconstruction")) {
     ImGui::End();
@@ -362,39 +366,55 @@ void draw_reconstruction_panel(const ReconstructionPanel& panel) {
   // is one whose planner is not tracking the surface, and the ..dispatch row
   // cannot say so because it sums both attempts into one span.
   {
+    // 0.9 because past it the next growth step is a refit: the arenas are
+    // grow-only, so a full one costs a second dispatch, which is the `dispatch`
+    // count below going to 2.
     char overlay[64];
     std::snprintf(overlay, sizeof(overlay), "%u / %u verts",
                   panel.extract.emitted_vertices,
                   panel.extract.vertex_capacity);
-    // 0.9 because past it the next growth step is a refit: the arena is
-    // grow-only, so a full one costs a second dispatch, which is the `dispatch`
-    // count below going to 2.
     gauge("  arena", panel.extract.emitted_vertices,
           panel.extract.vertex_capacity, 0.9, overlay);
+    // Its own bar, against its own capacity, for the reason above: with
+    // share_vertices these two fractions come apart, and the one that forces
+    // the refit is whichever fills first.
+    std::snprintf(overlay, sizeof(overlay), "%u / %u tris",
+                  panel.extract.emitted_triangles,
+                  panel.extract.triangle_capacity);
+    gauge("  indices", panel.extract.emitted_triangles,
+          panel.extract.triangle_capacity, 0.9, overlay);
   }
   ImGui::Text("  output %.0f MiB (ring), %u dispatch%s",
               to_mebibytes(panel.extract.arena_bytes), panel.extract.dispatches,
               panel.extract.dispatches == 1 ? "" : "es");
-  // Capacity, not occupancy: num_blocks is bucket_size * num_buckets, the size
-  // of the block heap every per-voxel attribute array is dimensioned by. It is
-  // what a resize doubles, so it is the memory story; how *full* the map is
-  // needs the hash map's diagnostics scan (a device readback, too costly here).
   {
-    // Occupancy, which this panel used to say needed the diagnostics scan and
-    // therefore did not show. It does not: VoxelHashMap::load_factor is a
-    // 4-byte read of the host-mapped heap counter, added on 2026-08-08 as the
-    // constant-time reading a per-frame caller can afford -- and it is the one
-    // figure that says a scan has stopped taking in new geometry.
+    // Occupancy against the block heap num_blocks sizes -- the figure that says
+    // a scan has stopped taking in new geometry, which the bare capacity this
+    // row used to print cannot. VoxelHashMap::load_factor is a 4-byte read of
+    // the host-mapped heap counter, added on 2026-08-08 as the constant-time
+    // reading a per-frame caller can afford; the diagnostics scan it is often
+    // confused with walks every slot on the host and cannot run per frame.
     //
-    // 0.85 is where the allocate kernel's overflow scan starts to dominate an
-    // insert; it is the same number `volumetric_kit_ios` refuses to allocate
-    // past, for the same reason.
+    // The threshold is the map's own (see kGrowThreshold), read once for both
+    // the colour and the words: two literals here drifted apart from the
+    // library's guidance and from each other.
+    const double warn = vol::VoxelHashMap::kGrowThreshold;
     char overlay[80];
-    std::snprintf(
-        overlay, sizeof(overlay), "%.1f%% of %d blocks%s",
-        100.0 * panel.map_load_factor, panel.map_blocks,
-        panel.map_load_factor >= 0.85 ? "  -- allocation degrading" : "");
-    gauge("map", panel.map_load_factor, 1.0, 0.85, overlay);
+    if (panel.map_load_factor < 0.0f) {
+      // Negative means the read failed (the fuse thread said why on stderr).
+      // Drawn as full rather than as a fraction: an unknown occupancy is not a
+      // low one, and this bar is read to decide whether to keep scanning.
+      std::snprintf(overlay, sizeof(overlay), "unavailable, %d blocks",
+                    panel.map_blocks);
+      gauge("map", 1.0, 1.0, warn, overlay);
+    } else {
+      std::snprintf(overlay, sizeof(overlay), "%.1f%% of %d blocks%s",
+                    100.0 * panel.map_load_factor, panel.map_blocks,
+                    panel.map_load_factor >= warn ? "  -- grow now" : "");
+      gauge("map", panel.map_load_factor, 1.0, warn, overlay);
+    }
+    // num_blocks is bucket_size * num_buckets, so the bucket count is what a
+    // resize doubles -- the memory story behind the fraction above.
     ImGui::Text("  %d buckets", panel.map_buckets);
   }
   ImGui::Separator();
@@ -1056,6 +1076,21 @@ int run(GLFWwindow* window, const Options& opt) {
         // synchronisation makes the read safe either way.
         {
           const vr::MemoryStats recon_memory = rallocator.memory_stats();
+          // Read out here beside memory_stats and for the same reason: it is a
+          // mapped-memory read behind a Result whose Status carries a string,
+          // and the render thread is waiting on this lock. Constant-time, so
+          // sampling it every fused frame is affordable (2026-08-08); it fails
+          // only on a moved-from map, and the negative it publishes then is not
+          // defensiveness for its own sake: a gauge whose whole claim is "you
+          // will not have to already know the threshold" cannot answer an
+          // unknown with the last good fraction, which is the one reading that
+          // looks exactly like a healthy map.
+          const vr::Result<float> lf = volume.map().load_factor();
+          if (!lf) {
+            std::fprintf(stderr, "fuse_viewer: load_factor (frame %zu): %s\n",
+                         i, lf.status().message().c_str());
+          }
+          const float load_factor = lf ? lf.value() : -1.0f;
           std::lock_guard<std::mutex> lock(share_mtx);
           shared_fuse_stages = fuse_viewer::to_sections(fuse_stages);
           // Fusion cost, so the dataset read is excluded: it is dataloading,
@@ -1065,10 +1100,7 @@ int run(GLFWwindow* window, const Options& opt) {
           shared_recon_memory = recon_memory;
           shared_map_buckets = volume.grid().num_buckets;
           shared_map_blocks = volume.grid().num_blocks;
-          // Constant-time; safe to sample every fused frame (2026-08-08).
-          if (vr::Result<float> lf = volume.map().load_factor()) {
-            shared_map_load_factor = lf.value();
-          }
+          shared_map_load_factor = load_factor;
           shared_extract = extract_stats;
         }
         // Retain this frame (the newest keyframe) for the final extract below.

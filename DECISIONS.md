@@ -2165,6 +2165,63 @@ own doc already points at for exactly this — and it is `TODO(mesh)` in
 so a label needs `Device` to record whether it was enabled — the same
 declare/verify shape as the enabled extension list, and its own change.
 
+### 2026-08-10 — A breakdown row is one the *caller's* row already contains, so the host total skips it and the device total must not; and a ceiling the library knows is the library's to name.
+
+Refines the entry above, on three things the first cut of `kBreakdownPrefix` got
+wrong once a sub-row carried a *device* half.
+
+**The two halves do not nest the same way, so they cannot obey one skip.** A
+host scope spans a whole call, including everything that call invokes — so a
+sub-row's host time is already inside its parent's row and summing both
+double-counts, which is the observation `kBreakdownPrefix` was built on. A
+device span covers **one dispatch**. `integrate`'s span is its fusion kernel and
+nothing else; the compaction it runs first is a separate submit that no row
+above it contains. Skipping breakdown rows in `total_gpu_ms` therefore did not
+deduplicate that time, it *deleted* it: the host half stayed counted through
+`integrate` while the device half was counted nowhere at all, so the two totals
+silently stopped describing the same work — in the one release where a
+`..active set` row had just been added to make that kernel visible. `total_cpu_ms`
+still skips; `total_gpu_ms` no longer does. The asymmetry is not an exception to
+the rule, it *is* the rule: skip what a parent already contains, and a device
+span never has a parent.
+
+**Whether a row is a breakdown is a property of where it was called, not of what
+it does.** `compact_active_blocks` hard-coded `"  ..active set"`, which is right
+under `tsdf`'s open stage and wrong everywhere else: a caller compacting at top
+level got a row `total_cpu_ms` skips — their only stage, missing from the total
+they read it from, while still sitting in `rows()` looking accounted for. Naming
+it plainly instead would just move the double-count back. So `StageMetrics`
+answers `in_stage()` — maintained by `StageScope` itself, not threaded down by
+hand — and the callee picks between two literals. This is the 2026-08-04 rule
+applied to the one thing left that the caller could not see: it is the library
+that knows whether a scope is open, so it is the library that checks rather than
+documents. The same reasoning gave the frustum compaction the reporting
+parameter its sibling had; it is the same round trip over a smaller set, and a
+caller who switches to it to make that trip cheaper has to be able to read what
+that bought rather than watch the row disappear.
+
+**A tuning constant belongs beside the reading it qualifies.** `load_factor`'s
+own header tells callers linear probing degrades sharply past ~0.7 and to grow
+well under 1.0. The viewer's new gauge warned at 0.85, twice — once for the bar
+colour and once for the text, two literals three lines apart that could drift —
+and `volumetric_kit_ios` carried a third copy. So the number a reader saw
+disagreed with the number the library documented, and the band between them is
+precisely where every insert is slowest: an M5 iPad Pro lost the GPU inside
+`allocate_from_depth` at 96% (see the 2026-08-08 overflow-scan entry), after
+sitting healthy-looking well past 0.7 for half a scan. `VoxelHashMap::kGrowThreshold`
+now names it once, at the library's own number, and the gauge reads it for both
+the colour and the words. A UI drawing its own ceiling is a second source of
+truth for a property of the table.
+
+**And a gauge cannot answer an unknown with the last good value.** The viewer's
+`load_factor()` read was `if (result) { store }` — on failure the bar kept
+rendering the previous frame's fraction as current, which is the calm-green-over-
+a-stopped-scan reading the gauge exists to prevent, arrived at by a different
+route. It now reports on stderr like every other call in that loop and publishes
+a negative the panel draws as `unavailable` rather than as a low number. The
+read also moved out of the `share_mtx` critical section, beside the
+`memory_stats()` call that was hoisted out for the same reason.
+
 ## Measured lessons
 
 Not decisions, but the measurements that overturned an assumption about
