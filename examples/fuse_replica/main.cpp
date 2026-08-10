@@ -30,6 +30,7 @@
 #include "volumetric_kit/recon/core/device.hpp"
 #include "volumetric_kit/recon/core/instance.hpp"
 #include "volumetric_kit/recon/core/result.hpp"
+#include "volumetric_kit/recon/core/stage_metrics.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
 #include "volumetric_kit/recon/mesh/mesh.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
@@ -262,14 +263,14 @@ vr::Status run(const Options& opt) {
   // Allocate the truncation band for a frame, growing the map (preserving the
   // per-voxel data already fused) if it overflows -- exercises the block-index-
   // preserving resize on real data.
-  auto allocate_band =
-      [&](const vr_example::RgbdFrame& frame,
-          const vr::DepthCameraParams& depth_camera) -> vr::Status {
+  auto allocate_band = [&](const vr_example::RgbdFrame& frame,
+                           const vr::DepthCameraParams& depth_camera,
+                           vr::StageMetrics* metrics) -> vr::Status {
     for (int attempt = 0; attempt < 5; ++attempt) {
       vol::AllocFailures failures;
       VR_ASSIGN(std::uint32_t failed,
-                volume.map().allocate_from_depth(frame.depth.data(),
-                                                 depth_camera, &failures));
+                volume.map().allocate_from_depth(
+                    frame.depth.data(), depth_camera, &failures, metrics));
       if (failed == 0) {
         return {};
       }
@@ -375,6 +376,12 @@ vr::Status run(const Options& opt) {
   double sum_total = 0.0, sum_compact = 0.0, sum_arena = 0.0;
   double sum_dispatch = 0.0, sum_read = 0.0;
   mesh::ExtractTimings last_rt{};
+  // Host and device spans per stage, summed across every fused frame. The two
+  // halves are the point: the host row is wall clock around a fence-blocked
+  // submit, the device row is the kernel inside it, and the gap is submit
+  // overhead plus the host round trips the stage makes.
+  vr::StageMetrics frame_stages;
+  vr::StageMetrics stage_totals;
   std::size_t dirty_samples = 0;
   std::uint64_t sum_dirty = 0, sum_remesh = 0, sum_active = 0;
   std::uint32_t last_dirty = 0, last_active_blocks = 0, last_remesh = 0;
@@ -400,10 +407,15 @@ vr::Status run(const Options& opt) {
     color_camera.cam_to_world = frame.cam_to_world;
     const tsdf::ColorFrame color_frame{frame.color.data(), color_camera};
 
-    VR_TRY(allocate_band(frame, depth_camera));
+    // One window per frame; the rows are summed into `stage_totals` below so
+    // the report is a mean over the run rather than whichever frame happened to
+    // be last.
+    frame_stages.clear();
+    VR_TRY(allocate_band(frame, depth_camera, &frame_stages));
     VR_TRY(integrator.integrate(volume, frame.depth.data(), depth_camera,
                                 opt.max_weight, tsdf::IntegrationMode::Classic,
-                                &color_frame));
+                                &color_frame, &frame_stages));
+    stage_totals.merge(frame_stages);
     ++fused;
 
     if (opt.dirty_every > 0 &&
@@ -492,6 +504,28 @@ vr::Status run(const Options& opt) {
         last_rt.active_blocks, cells / 1e6, last_rt.emitted_triangles,
         cells > 0.0 ? 100.0 * last_rt.emitted_triangles / cells : 0.0,
         static_cast<double>(sum_dispatches) / n);
+  }
+
+  // Per-stage host vs device, averaged over the fused frames.
+  //
+  // The gap between the two columns is what a wall-clock stage row could never
+  // show: it is the command-buffer allocate, the submit, the fence wait, and
+  // every host round trip the stage makes -- for allocate and integrate, the
+  // active-set readback and re-upload most of all. A stage whose device share
+  // is small is not a slow kernel and will not be fixed by a faster one.
+  if (fused > 0 && !stage_totals.empty()) {
+    const double n = static_cast<double>(fused);
+    std::printf("stages    per fused frame, mean over %zu frames\n", fused);
+    for (const vr::StageRow& row : stage_totals.rows()) {
+      if (row.has_gpu) {
+        std::printf("  %-9s host %7.3f ms   device %7.3f ms   (%5.1f%%)\n",
+                    row.name, row.cpu_ms / n, row.gpu_ms / n,
+                    row.cpu_ms > 0.0 ? 100.0 * row.gpu_ms / row.cpu_ms : 0.0);
+      } else {
+        std::printf("  %-9s host %7.3f ms   device       -\n", row.name,
+                    row.cpu_ms / n);
+      }
+    }
   }
 
   if (dirty_samples > 0) {
