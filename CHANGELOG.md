@@ -185,6 +185,32 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `mesh`: the **vertex-sharing** sparse kernel emits per block, like the default
+  one. It counts a block's vertices and triangles, reserves one range of each
+  with a single `atomicAdd`, and only then writes — where it previously appended
+  per vertex *and* per triangle through the global counters, so its output
+  interleaved across blocks and no per-block range described it. `share_vertices`
+  was therefore the one path a dirty-only dispatch could not use, which matters
+  because it is the path the iOS scanner runs (memory: an in-block-shared mesh is
+  ~3x smaller, and an iPad is where the arena ceiling is real). Two ranges rather
+  than the default kernel's one, since sharing breaks `v = 3t`.
+  **No measurable cost**: 1.80 ms against 1.82 ms on the extract dispatch (room0,
+  `--voxel 0.012 --share-vertices`, three samples each, overlapping) — the kernel
+  already ran two passes over a cached classification, so the count phases reuse
+  it. The default kernel paid ~10% for the same property.
+  Geometry is byte-identical: room0 at 120 frames matches `main`
+  triangle-for-triangle *and* vertex-for-vertex (244 400 / 277 506) by a
+  canonical hash over the sorted triangle set.
+  Counting duplicates is a **second** pass, not folded into the first: a
+  duplicate is decided by the *owner* cell's validity, which pass one is still
+  writing. Reading it there races, and under-reserves the block's range so the
+  cursor writes into the next block's vertices — invisible on the sphere fixture,
+  a 6 062-vertex error on room0, which is how it was caught.
+  `kVertexDropped` is **removed**: it existed so a dropped vertex would not be
+  re-claimed and double-counted, and per-block reservation makes every slot
+  deterministic whether or not it lands inside the arena, so the totals are exact
+  by construction rather than by bookkeeping.
+
 - `mesh`: the sparse `MarchingCubes` kernel emits **per block contiguously**.
   It counts a block's triangles, reserves one span for all of them with a single
   global `atomicAdd`, and only then writes — where every triangle used to claim
