@@ -1757,10 +1757,23 @@ They are the precondition for dirty-only dispatch (stage 3) and for compaction
 make it the right first move rather than merely the first in sequence: its
 output is **byte-identical geometry**, so the existing golden
 triangle-for-triangle equivalence validates it with no new invariants and no
-lifetime change; and it is **independently valuable**, since it removes the
-interleaved per-vertex atomics that the vertex-sharing review measured as
-destroying write coalescing and index-run monotonicity — a win even if stages 3
-and 4 are never built.
+lifetime change; and it is verifiable in isolation, before any lifetime or
+dirty-set machinery exists to confound it.
+**It is a cost, not a win, and that corrects this entry's first draft**, which
+claimed it "removes the interleaved per-vertex atomics the vertex-sharing review
+measured as destroying write coalescing — a win even if stages 3 and 4 are never
+built". Measured on room0 at `--voxel 0.012`, the extract dispatch goes
+**1.167 → 1.315 ms, +13%**, in four tight non-overlapping samples each way. The
+draft conflated two kernels: the per-*vertex* interleaving that review measured
+is in the **sharing** kernel, which stage 2 does not touch, while the default
+kernel already wrote each triangle's three vertices contiguously at `tri * 3` and
+interleaved only whole triangles — so there was little coalescing left to win,
+and the second visit costs more than it recovers. Caching each cell's triangle
+count so the second visit's rejection is a pure shared-memory read (rather than
+caching the cube index and re-walking `tri_table`) changed it by nothing
+measurable, 1.318 → 1.315 ms, so the cost is the visit itself and not the
+lookup. Stage 2 is therefore justified **only** as the precondition: +13% on a
+phase that is 77% of an extract on device, to unlock the ~5x above.
 
 **The tension with seam B is real and resolved by splitting the two buffers.**
 Incremental extraction wants **in-place mutation** of a persistent arena; the
