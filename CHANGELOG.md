@@ -8,6 +8,24 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `mesh`: `MarchingCubes::block_spans()` publishes **where each block's geometry
+  landed** — vertex base/count and triangle base/count, indexed by block slot
+  (`BlockIndex::ptr / voxels_per_block`), written by both sparse kernels. This is
+  the mapping the per-block reservation computes and used to drop, and it is
+  **not derivable on the host**: the atomic hands spans out in workgroup arrival
+  order, not block order, so nothing outside the dispatch knows which range
+  belongs to which block. It is what a later extract needs in order to leave a
+  clean block's geometry in place.
+  Counted in vertices and **triangles**, not indices, because a triangle is what
+  a block owns and what a re-mesh replaces; the four numbers are independent
+  under `share_vertices` and locked at `v = 3t` without it.
+  Sized by the grid rather than the surface (`num_blocks` entries, grow-only), so
+  it is allocated outside `ensure_output_buffers`, and it is **not per slot** —
+  it describes the current dispatch, not a mesh a consumer still holds.
+  A slot is meaningful only against the grid and topology epoch that produced it,
+  and only for blocks in that extract's active set; anchoring it across extracts
+  stays the caller's job until this tier does it, which the accessor states.
+
 - Initial repository scaffolding: tiered layout, MIT license, `.clang-format`,
   `.cmake-format.yaml`, `.pre-commit-config.yaml`, `.gitignore`.
 - `CLAUDE.md` — the living source of truth (objective, locked decisions, tier
