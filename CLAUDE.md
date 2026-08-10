@@ -404,7 +404,12 @@ arbitrary; it usually isn't.
 
 - **`mesh`** — `MarchingCubes` over a dense grid or, the real path, a sparse
   `VoxelBlockGrid`: one workgroup per active block, with the cross-block 2×2×2
-  neighbourhood resolved by probing the hash table on-device. The vertex arena
+  neighbourhood resolved by probing the hash table on-device. A block counts
+  its triangles, reserves one span for all of them with a single atomic, and
+  only then writes, so **a block's triangles are contiguous in the arena** —
+  the precondition for meshing only the blocks a fuse changed, taken at ~10% on
+  the dispatch, and true of the default kernel alone (`share_vertices` still
+  appends per triangle). The vertex arena
   is fitted to the surface, grow-only, and held as a **ring of slots** the
   consumer releases by generation; the kernel writes a real
   `VkDrawIndexedIndirectCommand`. `extract_device` returns a borrowed

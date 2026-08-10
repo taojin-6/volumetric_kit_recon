@@ -191,22 +191,38 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   its own slot and a block's output interleaved with every other block's in
   flight. Per-block ranges are what a dirty-only dispatch needs to leave a clean
   block's geometry in place, so nothing downstream of incremental extraction can
-  start without this. Geometry is **byte-identical**: room0 at 120 frames matches
+  start without this. Applies to the **default** sparse kernel;
+  `share_vertices` selects a kernel that still appends per triangle, and is
+  therefore the one path incremental extraction cannot use (a `TODO(mesh)` in
+  `marching_cubes_sparse_shared.comp` records what restructuring it would take).
+  Geometry is **byte-identical**: room0 at 120 frames matches
   `main` triangle-for-triangle at `--voxel 0.02` (277 506 triangles) and at
   `--voxel 0.012` (766 117), by a canonical hash over the sorted triangle set.
-  **It costs ~13%** on the extract dispatch (1.167 → 1.315 ms at `--voxel 0.012`,
-  four tight samples each way) and buys no coalescing win — the interleaving that
-  cost coalescing is per-*vertex* and lives in the sharing kernel, which this
-  does not touch. Justified as the precondition, not as a speedup; see the
-  2026-08-09 incremental-extraction decision in `DECISIONS.md`.
-  A cell is visited twice but gathered ~1.08 times: phase one caches each cell's
-  triangle count (one byte, four to a uint — 512 B of `shared` at the default
-  block size, against the ~8 KiB the sharing kernel needs, which the 2026-08-08
-  two-kernel decision exists to keep off this path), so phase two rejects the
-  ~92% of cells that emit nothing without re-reading their eight corners.
+  **It costs ~10%** on the extract dispatch (1.17 → 1.28 ms at `--voxel 0.012`,
+  Release, samples interleaved to cancel thermal drift) and buys **no**
+  coalescing win —
+  a triangle's three vertices were already written consecutively at `tri * 3`;
+  the interleaving that cost coalescing is per-*vertex* and lives in the sharing
+  kernel, which this does not touch. Nor is the index run monotonic within a
+  block: slots are still handed out in whatever order cells reach the cursor.
+  Justified as the precondition, not as a speedup; see the 2026-08-09
+  incremental-extraction decision in `DECISIONS.md` (**PR #60 — merge it
+  first**, or this reference dangles).
+  A cell is visited twice but gathered ~1.08 times, and the two visits are
+  asymmetric: the counting phase runs over 100% of cells and gathers **signs
+  only** (`mcCellSigns` — no `sdf[8]`/colour array copy-out, no sRGB decode, for
+  values a count cannot use), caching each cell's triangle count in one byte,
+  four to a uint — 512 B of `shared` at the default block size, against the
+  ~8 KiB the sharing kernel needs, which the 2026-08-08 two-kernel decision
+  exists to keep off this path. The emitting phase then gathers in full, but
+  only the ~8% of cells that emit; the rest are rejected on a shared-memory
+  byte. A grid whose block outgrows that cache still meshes correctly and now
+  says so, through `ExtractTimings::uncached_cells_per_block`.
   `mcEmitCell` splits into `mcCellTriangleCount` + `mcWriteTriangle`, so the
   per-block emitter and the dense kernel's per-triangle append still write
-  through one body and cannot drift.
+  through one body and cannot drift, and the cross-block corner addressing
+  splits into `mcCornerStorage` so the two gathers resolve a corner through one
+  copy of it.
 
 - docs: split the locked-decision record out of `CLAUDE.md` into a new
   `DECISIONS.md`, moved verbatim — same 33 entries, same order, byte-identical
