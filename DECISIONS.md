@@ -2338,6 +2338,32 @@ extract's active set are written, which on a first extract is a few thousand of
 1.5M entries, and the rest were being published as readable while holding
 whatever VMA handed over.
 
+**And the slot itself is anchored, not just the table.** The generation above
+answers "which extract does this table describe"; it cannot answer "does this
+slot still name the block its span was written for". A slot is meaningful only
+against one grid and one topology epoch — the block heap is LIFO, so after a
+`remove()` a reused slot names a *different* block and its span reads as that
+block's geometry under `Status::ok`. `block_span_valid(grid, slot)` records both
+and checks both, the same shape `TsdfIntegrator::prepare_dirty_flags` uses for
+the sibling table. It takes the **grid** rather than trusting the caller to
+re-extract after a topology change: between a `remove()` and the next extract the
+per-slot stamps are still set, so a query that re-checked nothing would call a
+stale span live. A `resize()` deliberately does not break it, for the same reason
+the buffer carries its spans forward. The stamps are per slot so that "meshed and
+emitted nothing" stays distinct from "no extract has touched this since the
+anchor" — the latter being what a newly allocated block reads — and they are
+written from the active set the *host* dispatched rather than read back from the
+device, which only knows where geometry went, not which blocks it was asked
+about. Three things the test caught that the assertion was not written for:
+`VoxelHashMap::remove` reached through `map()` frees the index *without* bumping
+`topology_epoch` (its own header says so), so the test goes through the grid's
+`remove`; the fixture had to build its own grid and extractor and run last,
+because removing whichever block compaction happened to put last changes nothing
+when that block carries no surface, and a test that fails on some runs is worse
+than one that fails on all of them; and which slot is unmeshed is not guessable,
+so the assertion counts instead — exactly the active blocks are valid, no more
+and no fewer.
+
 **And the host/device mirror is pinned per field.** `BlockSpan` is four
 same-typed `uint32`s, so every permutation is 16 bytes and `sizeof` alone cannot
 see a transposition — while the GLSL side was an anonymous `uvec4` both kernels

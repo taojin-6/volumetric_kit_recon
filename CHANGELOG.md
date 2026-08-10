@@ -220,8 +220,24 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `shaders/marching_cubes_block_span.glsl` rather than copied into two kernels
   that could disagree on field order, and both kernels assign it by name.
   A slot is meaningful only against the grid and topology epoch that produced it,
-  and only for blocks in that extract's active set; anchoring it across extracts
-  stays the caller's job until this tier does it, which the accessor states.
+  and only for blocks in that extract's active set.
+- `mesh`: `MarchingCubes::block_span_valid(grid, slot)` — the **anchor** that
+  makes a published span mean something on a later extract, and the per-slot half
+  of the question `block_spans_generation()` answers for the table as a whole. A
+  span is keyed by block slot, and a slot names a block only against a particular
+  grid and topology epoch: the block heap is LIFO, so after a `remove()` a reused
+  slot names a *different* block and its span reads as that block's geometry
+  under `Status::ok`. Both are recorded and both are checked, mirroring how the
+  `tsdf` tier anchors its dirty flags.
+  It takes the **grid** rather than trusting the caller to re-extract first:
+  between a `remove()` and the next extract the per-slot stamps are still set, so
+  a query that re-checked nothing would call a stale span live — a staleness the
+  caller cannot see, which makes it this tier's to check (the 2026-08-04 rule).
+  False whenever the whole table has been retired, so it can never report a slot
+  live beside a `block_spans()` of `nullptr`; false too when
+  `track_block_spans` is off, since then there is no table to be valid.
+  A `resize()` does not break it: resizing preserves block indices, so spans stay
+  true and the table simply grows, its new entries unstamped.
 
 ### Changed
 

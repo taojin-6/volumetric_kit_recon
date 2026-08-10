@@ -192,7 +192,8 @@ order. Change the decision, its entry there, and this list together.
   library's to name.
 - [**2026-08-11**](DECISIONS.md#2026-08-11--the-per-block-span-table-is-opt-in-is-retired-by-generation-rather-than-described-in-prose-and-is-deliberately-not-per-slot) —
   The per-block span table is opt-in, is retired by generation rather than
-  described in prose, and is deliberately *not* per slot.
+  described in prose, is anchored per slot to the grid and epoch that produced
+  it, and is deliberately *not* per slot.
 
 ## Provenance & salvage policy
 
@@ -449,7 +450,10 @@ arbitrary; it usually isn't.
   mapping stage 3 re-meshes against and the host cannot derive, since the
   atomics hand ranges out in workgroup arrival order. Off by default (it is
   sized by the grid, not the surface), borrowed, and readable only while
-  `block_spans_generation()` still names the mesh you hold. The vertex arena
+  `block_spans_generation()` still names the mesh you hold —
+  `block_span_valid(grid, slot)` answers the same question per slot, against
+  the grid and topology epoch the spans were written for, since a LIFO-reused
+  slot names a different block. The vertex arena
   is fitted to the surface, grow-only, and held as a **ring of slots** the
   consumer releases by generation; the kernel writes a real
   `VkDrawIndexedIndirectCommand`. `extract_device` returns a borrowed
