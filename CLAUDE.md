@@ -439,7 +439,7 @@ directly, and carrying the two-panel perf overlay. All three take `--preload`,
 which makes the loop measure compute rather than the JPEG/PNG decoder.
 
 **Next.** **Incremental mesh extraction**, decided and staged — read the
-2026-08-09 entry before starting it: stage 2 costs a measured +13% and its
+2026-08-09 entry before starting it: stage 2 costs a measured ~10% and its
 collision with the seam-B ring is recorded there as unresolved. Beside it:
 first-class glTF/GLB export via tinygltf + the gfx-vertex converter (the
 example's tinyply dump is deliberately a throwaway). On `mesh`, the greppable

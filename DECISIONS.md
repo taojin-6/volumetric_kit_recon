@@ -1485,7 +1485,10 @@ the index run stops being the identity `0,1,2,...` (`shares_vertices`), and
 is created whatever a push constant later says — so the first cut, one kernel
 with a `share_vertices` push constant, made the **default** path pay
 sharing's threadgroup budget (32 B → 8 224 B, verified by SPIR-V
-disassembly), which bounds residency to 3 workgroups on Apple's ~32 KiB and
+disassembly; **44 B → 8 428 B** on today's kernels, re-verified the same way
+after incremental extraction's stage 2 gave the default path a block
+reservation and sharing an edge-owner table — the gap is the point, not the
+endpoints), which bounds residency to 3 workgroups on Apple's ~32 KiB and
 to **1** at Vulkan's guaranteed 16 KiB floor — on the kernel this file records
 as 77% of an extract. It also cost the default path its memory *shape*:
 routing both modes through the sharing emitter gave every corner its own
@@ -1791,26 +1794,47 @@ byte-identical run to run, and this entry's first draft claiming stage 2's
 output *is* byte-identical overstated both the property and the coverage. That
 test does validate stage 2's **geometry**: the same triangles have to come out.
 It cannot see stage 2's actual deliverable — that each block's output occupies
-one contiguous, non-overlapping span — which needs a new assertion, or a span
-off by a triangle first surfaces in stage 3, confounded with exactly the
-dirty-set machinery stage 2 is sequenced first to avoid.
+one contiguous, non-overlapping span — so stage 2 ships an assertion of its own:
+attribute each triangle to a block by its centroid, walk the index buffer in
+order, and require the owning block to change **exactly `distinct - 1`** times.
+Exactly, not approximately, because the attribution is provably exact — the only
+centroid that could fall into the neighbouring block is one lying on the far
+face of its cell, which takes three sign changes around a 4-cycle, and parity
+forbids it. It runs on a clean extract and on one that refit against an
+undersized arena, where truncating a span shortens it without splitting it.
+Without that assertion a span off by a triangle first surfaces in stage 3,
+confounded with exactly the dirty-set machinery stage 2 is sequenced first to
+avoid.
 
 **It is a cost, not a win, and that corrects this entry's first draft**, which
 claimed stage 2 "removes the interleaved per-vertex atomics the vertex-sharing
 review measured as destroying write coalescing — a win even if stages 3 and 4
 are never built". Measured on room0 at `--voxel 0.012`, Release, the extract
-dispatch goes **1.167 → 1.315 ms, +13%**, in four tight non-overlapping samples
-each way. The draft conflated the two kernels: the per-*vertex* interleaving
-that review measured is the **sharing** kernel's, while the default kernel —
-the one measured here — already wrote each triangle's three vertices
-contiguously at `tri * 3` and interleaved only whole triangles, so there was
-little coalescing left to win and the second visit costs more than it recovers.
-Caching each cell's triangle count so the second visit's rejection is a pure
-shared-memory read (rather than caching the cube index and re-walking
-`tri_table`) changed it by nothing measurable, 1.318 → 1.315 ms, so the cost is
-the visit itself and not the lookup. The sharing kernel's restructure is
-unmeasured. Stage 2 is therefore justified **only** as the precondition: +13%
-on the one phase that scales with the block count — `dispatch`, which the
+dispatch goes **1.17 → 1.28 ms, ~10%**, in four interleaved samples each way.
+The draft conflated the two kernels: the per-*vertex* interleaving that review
+measured is the **sharing** kernel's, while the default kernel — the one
+measured here — already wrote each triangle's three vertices contiguously at
+`tri * 3` and interleaved only whole triangles, so there was little coalescing
+left to win and the second visit costs more than it recovers.
+
+**What moved that number, and what did not.** The first cut of the counting
+phase gathered every cell in full and measured **+13%** (1.167 → 1.315 ms).
+Counting on the eight corner *signs* alone — no `sdf`/colour array copied out of
+the gather and no sRGB decode, for a phase whose only consumer is the cube index
+— brought it to the ~10% above. Nothing about *where* the per-cell triangle
+count is kept has ever moved it: caching the count rather than the cube index
+changed 1.318 → 1.315 ms, and moving that cache out of `shared` into a private
+register changed 1.28 → 1.28 ms. The cost is the second visit itself, not the
+lookup. The private cache was taken anyway, and on a different argument: it
+returns the default path's threadgroup footprint to **44 B**. The 2026-08-08
+decision above splits the two kernels precisely so this path does not carry
+sharing's, and a two-phase emitter that spent 512 B of `shared` — plus an
+`atomicOr` and a zeroing pass — on a cache no invocation but its own writer ever
+reads would have handed part of that back for nothing.
+
+The sharing kernel's restructure is unmeasured. Stage 2 is therefore justified
+**only** as the precondition: ~10% on the one phase that scales with the block
+count — `dispatch`, which the
 2026-08-08 neighbour-probe decision puts at 77% of a *desktop* `extract_device`
 and which is unmeasured as a share on device — to unlock the ceiling above.
 

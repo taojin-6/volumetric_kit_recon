@@ -195,8 +195,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `share_vertices` selects a kernel that still appends per triangle, and is
   therefore the one path incremental extraction cannot use (a `TODO(mesh)` in
   `marching_cubes_sparse_shared.comp` records what restructuring it would take).
-  Geometry is **byte-identical**: room0 at 120 frames matches
-  `main` triangle-for-triangle at `--voxel 0.02` (277 506 triangles) and at
+  Geometry is **unchanged as a triangle set** — not byte-identical, since the
+  arena layout is exactly what this changes: room0 at 120 frames matches `main`
+  triangle-for-triangle at `--voxel 0.02` (277 506 triangles) and at
   `--voxel 0.012` (766 117), by a canonical hash over the sorted triangle set.
   **It costs ~10%** on the extract dispatch (1.17 → 1.28 ms at `--voxel 0.012`,
   Release, samples interleaved to cancel thermal drift) and buys **no**
@@ -206,23 +207,35 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   kernel, which this does not touch. Nor is the index run monotonic within a
   block: slots are still handed out in whatever order cells reach the cursor.
   Justified as the precondition, not as a speedup; see the 2026-08-09
-  incremental-extraction decision in `DECISIONS.md` (**PR #60 — merge it
-  first**, or this reference dangles).
+  incremental-extraction decision in `DECISIONS.md`, which records what did and
+  did not move that number.
   A cell is visited twice but gathered ~1.08 times, and the two visits are
   asymmetric: the counting phase runs over 100% of cells and gathers **signs
   only** (`mcCellSigns` — no `sdf[8]`/colour array copy-out, no sRGB decode, for
   values a count cannot use), caching each cell's triangle count in one byte,
-  four to a uint — 512 B of `shared` at the default block size, against the
-  ~8 KiB the sharing kernel needs, which the 2026-08-08 two-kernel decision
-  exists to keep off this path. The emitting phase then gathers in full, but
-  only the ~8% of cells that emit; the rest are rejected on a shared-memory
-  byte. A grid whose block outgrows that cache still meshes correctly and now
-  says so, through `ExtractTimings::uncached_cells_per_block`.
+  four to a **private uint**. Private, not `shared`: both phases stride the
+  block identically from the same thread id, so the writer is the cache's only
+  reader — which costs the default path **zero** bytes of `shared` (44 B in
+  total, against the sharing kernel's 8 428 B that the 2026-08-08 two-kernel
+  decision exists to keep off this path), and drops an `atomicOr` and a zeroing
+  pass with it. The emitting phase then gathers in full, but only the ~8% of
+  cells that emit; the rest are rejected on a register byte. A grid whose block
+  outgrows the four slots still meshes correctly and now says so, through
+  `ExtractTimings::uncached_cells_per_block`.
+  Contiguity is asserted directly, and exactly: triangles are attributed to
+  blocks by centroid and the owning block must change exactly `distinct - 1`
+  times walking the index buffer — on a clean extract, and on one that refit
+  against an arena too small, over a 27-block run where the arena boundary falls
+  inside one block's span and past others entirely. The golden sparse-vs-dense
+  equivalence cannot see this: it compares triangles as a **set**.
   `mcEmitCell` splits into `mcCellTriangleCount` + `mcWriteTriangle`, so the
   per-block emitter and the dense kernel's per-triangle append still write
   through one body and cannot drift, and the cross-block corner addressing
   splits into `mcCornerStorage` so the two gathers resolve a corner through one
-  copy of it.
+  copy of it. Both walks of a `tri_table` row are now bounded by the row
+  (`kMaxTrianglesPerCell`) as well as by its `-1` terminator: the terminator is
+  data the host uploads, and that count went from a loop trip to the size of a
+  block's arena reservation.
 
 - docs: split the locked-decision record out of `CLAUDE.md` into a new
   `DECISIONS.md`, moved verbatim — same 33 entries, same order, byte-identical
