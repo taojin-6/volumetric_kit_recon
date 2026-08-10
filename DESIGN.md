@@ -2,7 +2,9 @@
 
 This document explains the architecture of `volumetric_kit_recon` and the
 reasoning behind it. For the terse, authoritative list of decisions and
-conventions, see [CLAUDE.md](CLAUDE.md).
+conventions, see [CLAUDE.md](CLAUDE.md); for the full dated record behind each
+decision — rationale, measurements, review findings — see
+[DECISIONS.md](DECISIONS.md).
 
 ## Purpose and scope
 

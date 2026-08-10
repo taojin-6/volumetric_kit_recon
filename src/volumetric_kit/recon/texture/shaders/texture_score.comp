@@ -46,7 +46,7 @@ layout(set = 0, binding = 3, scalar) readonly buffer Camera {
 // this tier's integer-centred projection (u = fx*x/z + cx) and half-texel atlas
 // UV; it deliberately does NOT copy the tsdf sampler's -0.5 texture-centred tap
 // shift, which is self-consistent only with that tier's texture-centred
-// convention (CLAUDE.md, the 2026-07-06 depth-sampling decision). Ported in
+// convention (DECISIONS.md, the 2026-07-06 depth-sampling decision). Ported in
 // spirit from the prior engine's sample_depth_bilinear_m (our depth is already
 // float metres, so there is no uint16 depth-scale divide). Returns 0.0 when all
 // four taps are invalid; occluded_ok's range check then rejects it.

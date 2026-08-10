@@ -5,10 +5,12 @@ codebase consistent with its sibling `volumetric_kit_gfx`.
 
 ## Read first
 
-[CLAUDE.md](CLAUDE.md) is the source of truth for the project's objective,
-locked decisions, tier architecture, interop contract, and the exclusion policy
-(no experimental/neural code ships). Skim it before proposing a change; update
-it in the same change that alters a decision.
+[CLAUDE.md](CLAUDE.md) is the source of truth for the project's objective, tier
+architecture, interop contract, and the exclusion policy (no experimental/neural
+code ships). It carries every locked decision as a one-line rule;
+[DECISIONS.md](DECISIONS.md) carries the same list in full — the rationale, the
+measurements, and what each fix was verified against. Skim CLAUDE.md before
+proposing a change, and update both in the same change that alters a decision.
 
 ## Setup
 

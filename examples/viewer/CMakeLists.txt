@@ -6,7 +6,7 @@
 # examples link the renderer sibling volumetric_kit_gfx -- pulled here (never in
 # the tiers) and only under VR_BUILD_VIEWER, so recon's library and default
 # build stay renderer-independent (the 2026-07-07 decision amendment in
-# CLAUDE.md).
+# DECISIONS.md).
 #
 # Because it is that seam, it is also the thing most likely to drift out of
 # build unnoticed -- and did, until a dedicated build-only macOS CI leg

@@ -12,7 +12,9 @@ interop seam: `recon` builds the volume, `gfx` renders it.
 > **Status: early.** The repository is conventions scaffolding plus the `core`
 > foundation tier. The `volume` / `tsdf` / `mesh` / `interop` tiers are landing
 > next, as Vulkan compute (MoltenVK on Apple). See [DESIGN.md](DESIGN.md) for the
-> architecture and [CLAUDE.md](CLAUDE.md) for the living design record.
+> architecture, [CLAUDE.md](CLAUDE.md) for the conventions and the
+> locked-decision index, and [DECISIONS.md](DECISIONS.md) for the dated record
+> behind each decision.
 
 ## Why
 
