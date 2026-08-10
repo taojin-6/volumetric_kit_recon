@@ -185,6 +185,29 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `mesh`: the sparse `MarchingCubes` kernel emits **per block contiguously**.
+  It counts a block's triangles, reserves one span for all of them with a single
+  global `atomicAdd`, and only then writes — where every triangle used to claim
+  its own slot and a block's output interleaved with every other block's in
+  flight. Per-block ranges are what a dirty-only dispatch needs to leave a clean
+  block's geometry in place, so nothing downstream of incremental extraction can
+  start without this. Geometry is **byte-identical**: room0 at 120 frames matches
+  `main` triangle-for-triangle at `--voxel 0.02` (277 506 triangles) and at
+  `--voxel 0.012` (766 117), by a canonical hash over the sorted triangle set.
+  **It costs ~13%** on the extract dispatch (1.167 → 1.315 ms at `--voxel 0.012`,
+  four tight samples each way) and buys no coalescing win — the interleaving that
+  cost coalescing is per-*vertex* and lives in the sharing kernel, which this
+  does not touch. Justified as the precondition, not as a speedup; see the
+  2026-08-09 incremental-extraction decision in `DECISIONS.md`.
+  A cell is visited twice but gathered ~1.08 times: phase one caches each cell's
+  triangle count (one byte, four to a uint — 512 B of `shared` at the default
+  block size, against the ~8 KiB the sharing kernel needs, which the 2026-08-08
+  two-kernel decision exists to keep off this path), so phase two rejects the
+  ~92% of cells that emit nothing without re-reading their eight corners.
+  `mcEmitCell` splits into `mcCellTriangleCount` + `mcWriteTriangle`, so the
+  per-block emitter and the dense kernel's per-triangle append still write
+  through one body and cannot drift.
+
 - docs: split the locked-decision record out of `CLAUDE.md` into a new
   `DECISIONS.md`, moved verbatim — same 33 entries, same order, byte-identical
   text. `CLAUDE.md` keeps every decision as a one-line rule linking to its full
