@@ -43,7 +43,8 @@ core → volume → tsdf → mesh → texture → interop
   classic and dynamic (moving-object) modes selected per call by an
   `IntegrationMode` enum on one concrete `TsdfIntegrator` (a lean runtime flag,
   not a strategy-class hierarchy).
-- **mesh** — marching-cubes extraction with an incremental block-mesh pool, host
+- **mesh** — marching-cubes extraction (whole-volume today; the incremental
+  block-mesh pool is decided and staged as of 2026-08-09, not shipped), host
   mesh containers, and OBJ/PLY + glTF/GLB export.
 - **interop** — the handoff to `volumetric_kit_gfx` (below).
 

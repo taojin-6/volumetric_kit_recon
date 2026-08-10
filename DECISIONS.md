@@ -1222,11 +1222,14 @@ constant across each 256-thread group: **every workgroup already belonged to
 one block**, and only the group count changed (2 per block → 1). No packing
 existed to lose. The cost is the new prologue — 8 lanes walking buckets while
 the other 248 wait at the `barrier()`, serialised ahead of every cell. That
-matters because `dispatch` is now 77% of extract, and the levers are the probe
+matters because `dispatch` is now 77% of extract — of `extract_device`, on
+desktop, the readback being most of the rest — and the levers are the probe
 (spread the 8 across subgroups, or one lane per bucket slot with a reduction),
 **not** the cell count (coarser voxels) or the block count (incremental
 extraction) the first analysis pointed at. Left unmeasured rather than guessed
 at, per this file's own lesson about profiling the phase before optimising it.
+(*The block-count lever is reinstated by the 2026-08-09 incremental-extraction
+decision below, on a device measurement this desktop one could not see.*)
 `ExtractTimings::neighbour_lut_ms` is **removed**, not retained as a zeroed
 phase: a permanently-0.00 row in the overlay that diagnosed this is worse than
 an absent one.
@@ -1680,40 +1683,50 @@ thread could race is not a check; and the `atomicOr` contention path is
 exercised by no fixture, since every fixture here dispatches one frame at a
 time.
 
-### 2026-08-09 — Incremental mesh extraction is worth building at ~5x, not the ~20x a first sample suggested, and the number that sizes its design is the worst frame rather than the median.
+### 2026-08-09 — Incremental mesh extraction is worth building at a ~4x ceiling, not the ~18x one window suggested, and the worst frame rather than the median sizes its design (amends the dirty-block decision above).
 
-The dirty-block decision above deliberately reports what it measured on
-**room0** — 62% of active blocks changed per 20-frame window, 59% per single
-frame, 83% after the `-x/-y/-z` dilation — and declines to quote a speedup at
-all, because dividing active blocks by re-mesh blocks assumes extract cost is
-proportional to block count with zero fixed cost, which this repo's own phase
-table refutes. Taken alone those numbers put an incremental extract's ceiling
-at **~1.2x**, which reads as a clear "do not build it". That conclusion was
-wrong, and the reason it was wrong is the substance of this entry.
+The dirty-block decision above measured coverage on **room0** — 62% of active
+blocks changed per 20-frame window, 59% per single frame, **83%** once dilated
+into the `-x/-y/-z` octant — and put an incremental extract's ceiling at
+**~1.2x**, a clear "do not build it". It also *removed* the first cut's
+`speedup %.1fx` read-out rather than correcting it, because dividing active
+blocks by re-mesh blocks assumes extract cost is proportional to block count
+with zero fixed cost, which this repo's own phase table refutes. Both of those
+stand as **method**. The **verdict** does not: room0 is the wrong scene to have
+measured coverage on, and this entry amends it. (Same date as the entry it
+amends, so read this one as the later — file order is not the tie-breaker the
+top of this file promises.)
 
-**Measured on an iPad Pro M5**, a real handheld walk, map saturated at 111 942
-blocks, `dirty_remesh_blocks` / active per window:
+**Measured on an iPad Pro M5**, one real handheld walk, map saturated at
+111 942 blocks, sampling `dirty_remesh_blocks` / active per window:
 
-| to re-mesh | extract saved |
+| to re-mesh | ceiling (1 ÷ share) |
 |---|---|
-| 5.6% | 17.7x |
+| 5.6% | 17.9x |
 | 18.4% | 5.4x |
 | 31.5% | 3.2x |
 | 34.4% | 2.9x |
 
-**Median ~18% → ~5x; worst sampled 2.9x.** At 5x, `meshing` goes 51.85 ms →
-~10 ms, taking fusion from ~64 ms/frame to ~23 ms. So it is worth building —
-but at a fifth of what the best sampled window (17.7x) would have promised, and
+Only the left column is measured. The right one is that same invalid division,
+kept because an upper bound is still worth having and labelled so it is not
+read as a speedup: the realised factor is strictly below it by whatever share
+of an extract does not scale with the block count, which is **not** measured on
+this device.
+
+**Median share 25% → a ~4x ceiling; worst sampled 2.9x, best 17.9x.** At the
+ceiling the walk's `meshing` row goes 51.85 ms → **≥13 ms**, taking its ~64 ms
+frame to **≥25 ms**; the real numbers land above both. So it is worth building
+— but at roughly a *quarter* of what the best sampled window promised, and
 quoting that window would have been the same error as quoting room0, one
-optimism instead of one pessimism.
+optimism in place of one pessimism.
 
 **room0 is a correctness fixture, not a coverage one**, and that is the whole
 gap. It is one enclosed room shot through a 90° cone (`fx` 600 over 1200 px),
 so the camera sees very nearly the entire surface every frame and *almost
 everything it sees genuinely changes* — in classic mode a moving camera keeps
 shifting the running average of every voxel in view, which is a real change,
-not a miscount. It reads 42–62% changed depending on window and configuration
-against 18.4% on device, roughly **3x** pessimistic, and it is pessimistic
+not a miscount. Like for like, both sides dilated: **83% on room0 against the
+25% device median**, so room0 is **~3.3x** pessimistic — and pessimistic
 precisely because it is a good correctness fixture: total visibility is what
 makes it reproduce triangle-for-triangle. Every conclusion drawn from it alone
 about *coverage* was wrong. This is the same family as the
@@ -1723,87 +1736,142 @@ test run says so.
 
 **A proxy for the instrument was worse than either.** Before
 `dirty_remesh_blocks` existed, a frustum survey stood in for it: it read 87% on
-room0, and on device it was wrong in **both directions** — 4.5% where the truth
-was 18.7%. A survey of what the camera *could* touch is not a measurement of
-what a fuse *did* change, and the two do not even err consistently. That is why
-the dirty-block decision above insists the flag mean the field moved rather
-than that a store happened; a cheaper approximation of this quantity has
-already been tried and it does not work.
+room0, and on device it was wrong in **both directions** — 4.5% against the
+**18.7%** the instrument read on the same walk, off by ~4x in the optimistic
+direction. (That 18.7% is a separate reading from the table above, whose
+nearest row is 18.4%; which windows the two cover is not on record.) A survey
+of what the camera *could* touch is not a measurement of what a fuse *did*
+change, and the two do not even err consistently. That is why the dirty-block
+decision above insists the flag mean the field moved rather than that a store
+happened; a cheaper approximation of this quantity has already been tried and
+it does not work.
 
-**The variance, not the mean, is the design constraint.** A system that is 17x
-faster usually and 2.9x sometimes still has to fit the worst frame, and a
-frame-rate budget sized on the median tears exactly when the camera sweeps into
-new geometry — which is when a scanning user is most likely to be looking. So
-incremental extraction is planned **beside** a remesh *cadence* cap rather than
-as a replacement for one: the cadence bounds the worst frame, the incremental
-path buys back the median. Sizing anything on ~5x alone would reintroduce the
-per-frame cliff that the whole-volume extract at least had the virtue of being
-honest about.
+**The variance, not the mean, is the design constraint.** A system that reaches
+17.9x on its best sampled window and 2.9x on its worst still has to fit the
+worst, and a frame-rate budget sized on the median tears exactly when the
+camera sweeps into new geometry, which is when a scanning user is most likely
+to be looking. So incremental extraction is planned **beside** a remesh
+*cadence* cap rather than as a replacement for one: the cadence bounds the
+worst frame, the incremental path buys back the median. Sizing anything on the
+~4x alone would reintroduce the per-frame cliff that the whole-volume extract
+at least had the virtue of being honest about.
 
 **Dilation is cheap and needs no hedging.** The `-x/-y/-z` octant a
 marching-cubes stencil reaches back through costs **1.16–1.31x on device** and
 1.30–1.40x on room0 across three resolutions. It is a property of the stencil,
 not of the scene, so the ratio is stable and no allocator has to carry a margin
-against it.
+against it. It is also already *inside* every figure above:
+`dirty_remesh_blocks` returns the dilated set, so the ~4x ceiling is computed
+on the blocks an incremental extract would actually redo and must not be
+divided by the dilation a second time.
 
-**Stage 2 is per-block contiguous emission, and it is next because it is
-verifiable on its own.** Both sparse kernels append through global atomics —
-`marching_cubes_sparse_shared.comp` bumps `vertex_count` once per vertex, and
-the shared cell body bumps `index_count` per triangle — so one block's output
-interleaves with every other block's and **per-block ranges cannot exist**.
-They are the precondition for dirty-only dispatch (stage 3) and for compaction
-(stage 4), so nothing downstream can start until the kernel restructures to
-**count → reserve one span per block (one `atomicAdd`) → emit**. Two properties
-make it the right first move rather than merely the first in sequence: its
-output is **byte-identical geometry**, so the existing golden
-triangle-for-triangle equivalence validates it with no new invariants and no
-lifetime change; and it is verifiable in isolation, before any lifetime or
-dirty-set machinery exists to confound it.
+**The four stages, so "stage 2" has an antecedent.** Stage 1 is the input and
+has landed: `TsdfIntegrator::dirty_remesh_blocks`, the decision above. Stage 2
+is per-block contiguous emission. Stage 3 is dirty-only dispatch over that set.
+Stage 4 is compaction of the retired spans. Each needs the one before it.
+
+**Stage 2 is next, and nothing downstream can start without it.** Both sparse
+kernels append through *global* atomics, so one block's output interleaves with
+every other block's and **per-block ranges cannot exist**: the default
+`marching_cubes_sparse.comp` bumps `index_count`
+once per triangle (`marching_cubes_common.glsl`) and writes that triangle's
+three vertices at `tri * 3`, while `marching_cubes_sparse_shared.comp` bumps
+two independent counters, `vertex_count` per vertex and `index_count` per
+triangle. **Both** must restructure to **count → reserve one span per block →
+emit** — the default kernel to one `atomicAdd`, the sharing kernel to two —
+because `share_vertices` selects one of the two at `create` and is fixed for
+the object's lifetime, so a kernel stage 2 skips is permanently ineligible for
+stages 3 and 4.
+
+**What the existing golden test covers, and what it does not.** It compares the
+two meshes' triangle sets resolved through the index buffer, *sorted*, on
+position alone (`canonical_triangles` in `marching_cubes_sparse_test.cpp`) —
+because the kernel appends through an atomic, output has never been
+byte-identical run to run, and this entry's first draft claiming stage 2's
+output *is* byte-identical overstated both the property and the coverage. That
+test does validate stage 2's **geometry**: the same triangles have to come out.
+It cannot see stage 2's actual deliverable — that each block's output occupies
+one contiguous, non-overlapping span — which needs a new assertion, or a span
+off by a triangle first surfaces in stage 3, confounded with exactly the
+dirty-set machinery stage 2 is sequenced first to avoid.
+
 **It is a cost, not a win, and that corrects this entry's first draft**, which
-claimed it "removes the interleaved per-vertex atomics the vertex-sharing review
-measured as destroying write coalescing — a win even if stages 3 and 4 are never
-built". Measured on room0 at `--voxel 0.012`, the extract dispatch goes
-**1.167 → 1.315 ms, +13%**, in four tight non-overlapping samples each way. The
-draft conflated two kernels: the per-*vertex* interleaving that review measured
-is in the **sharing** kernel, which stage 2 does not touch, while the default
-kernel already wrote each triangle's three vertices contiguously at `tri * 3` and
-interleaved only whole triangles — so there was little coalescing left to win,
-and the second visit costs more than it recovers. Caching each cell's triangle
-count so the second visit's rejection is a pure shared-memory read (rather than
-caching the cube index and re-walking `tri_table`) changed it by nothing
-measurable, 1.318 → 1.315 ms, so the cost is the visit itself and not the
-lookup. Stage 2 is therefore justified **only** as the precondition: +13% on a
-phase that is 77% of an extract on device, to unlock the ~5x above.
+claimed stage 2 "removes the interleaved per-vertex atomics the vertex-sharing
+review measured as destroying write coalescing — a win even if stages 3 and 4
+are never built". Measured on room0 at `--voxel 0.012`, Release, the extract
+dispatch goes **1.167 → 1.315 ms, +13%**, in four tight non-overlapping samples
+each way. The draft conflated the two kernels: the per-*vertex* interleaving
+that review measured is the **sharing** kernel's, while the default kernel —
+the one measured here — already wrote each triangle's three vertices
+contiguously at `tri * 3` and interleaved only whole triangles, so there was
+little coalescing left to win and the second visit costs more than it recovers.
+Caching each cell's triangle count so the second visit's rejection is a pure
+shared-memory read (rather than caching the cube index and re-walking
+`tri_table`) changed it by nothing measurable, 1.318 → 1.315 ms, so the cost is
+the visit itself and not the lookup. The sharing kernel's restructure is
+unmeasured. Stage 2 is therefore justified **only** as the precondition: +13%
+on the one phase that scales with the block count — `dispatch`, which the
+2026-08-08 neighbour-probe decision puts at 77% of a *desktop* `extract_device`
+and which is unmeasured as a share on device — to unlock the ceiling above.
 
-**The tension with seam B is real and resolved by splitting the two buffers.**
-Incremental extraction wants **in-place mutation** of a persistent arena; the
-seam-B ring wants **immutable snapshots** a renderer can still be drawing. The
-resolution is to give each what it needs: the **vertex arena** stays persistent
-and append-only, with stale ranges retired through the existing
-`release_through` mark, while the **index buffer** is ringed and rebuilt every
-extract — 46 MB against 230 MB for ringing the arena instead, and sub-ms to
-refill. `LiveMesh` and gfx are untouched, so this costs the sibling nothing.
+**The tension with seam B is real and is *not* yet resolved.** Incremental
+extraction wants **in-place mutation** of a persistent arena; the seam-B ring
+wants **immutable snapshots** a renderer can still be drawing. Note what is
+already true: `MarchingCubes::Slot` holds an `arena`, an `index_run` *and* an
+`indirect` per slot, so both buffers are ringed today, and the ring is what
+makes an extract's immediate `vmaDestroyBuffer` safe — a slot is only written,
+grown or freed once `release_through` has covered it.
 
-**What this does not establish, named rather than implied.** The 5x is one
+The direction under consideration splits them: keep the **index buffer** ringed
+and rebuilt each extract, and make the **vertex arena** one persistent
+allocation in which a re-meshed block *appends* a new span and its old span
+retires once released. The attraction is memory — on the default kernel a
+slot's arena is **16x** its index run (a 64-byte `Vertex` against a 4-byte
+index, three of each per triangle), so ringing the run instead of the arena is
+where nearly all of a ring's extra residency goes. Two things are unsettled,
+and neither is a detail:
+
+- Growing one persistent arena **frees the storage an in-flight draw is
+  reading** — precisely the hazard `MarchingCubesConfig::slot_count > 1` exists
+  to remove. A chunked arena that never frees while a generation is outstanding
+  is the obvious answer and is not designed.
+- `release_through` is a **whole-slot high-water mark**
+  (`released_through_ = std::max(released_through_, generation)`). Retiring
+  *ranges within* an arena needs a granularity it does not have.
+
+So `LiveMesh` and gfx are untouched only in the sense that no API changes; until
+both are answered the *guarantee* behind that API changes, and that is a cost to
+the sibling rather than zero. The 16x is a ratio and not a measurement — no
+arena/index pair for a named scene and slot count is on record — and it does not
+hold under `share_vertices`, which the only seam-B consumer cannot set anyway,
+since `fuse_viewer` runs the `texture` tier and that tier refuses sharing.
+
+**What this does not establish, named rather than implied.** The ~4x is one
 device, one walk, one scene — an M5 iPad Pro with unified memory, where the
 host-visible arena the 2026-08-08 seam-B decision books as a discrete-GPU risk
-is free. Nothing here re-measures that. The window figures are a *sample* of a
-saturated map, not a distribution: four windows are enough to establish that
-room0 is unrepresentative and that the worst case is near 3x, and not enough to
-size a cadence cap. And the desktop instrument that produced the phase split is
-not the device: `extract_device` is 2.1–2.7 ms on desktop against 20 ms for
-`extract`, i.e. **79% of "the extract" was a readback no seam-B consumer pays**,
-which is why the device figures above are quoted against `meshing` rather than
-against that 20 ms. Related and worth not re-deriving: dispatch scales
+is free. Nothing here re-measures that. Nor are the device figures recorded with
+voxel size, integration mode or window length, against this repo's own rule that
+a figure carries its configuration — so read them as a coverage sample and not
+as a phase budget. Four windows are enough to establish that room0 is
+unrepresentative and that the worst case is near 3x, and not enough to size a
+cadence cap. And the instrument that produced the phase split is a *desktop*
+one: `extract_device` is 2.1–2.7 ms against 20 ms for `extract`, i.e. **87–90%
+of "the extract" was a readback no seam-B consumer pays**, which is why the
+device figures above are quoted against the walk's `meshing` row rather than
+against that 20 ms — and why that share and the 77% above are shares of
+different denominators, 77% being `dispatch` within the 2.1–2.7 ms rather than
+within the 20 ms. Related and worth not re-deriving: dispatch scales
 **sublinearly** in cells (2.84x for 3.95x the blocks) with the emit rate flat at
 ~7.7% across a 4x resolution sweep — the kernel is healthy, it is simply handed
-63 M cells — and steady-state `arena alloc` is **0.03 ms**, the 4–17 ms figure
-having been one-shot first-allocation noise that two conclusions were reversed
-by switching to 200-extract means.
+63 M cells — and steady-state `arena alloc` is **0.03 ms**, the earlier 4–17 ms
+readings having been one-shot first-allocation noise that reversed two
+conclusions before 200-extract means replaced them.
 
-The device measurement itself is instrumented by `volumetric_kit_ios` PR #14
-(console read-out logging); `fuse_replica --device-extract` is the desktop
-counterpart.
+Provenance. The device numbers are instrumented by `volumetric_kit_ios` PR #14
+(console read-out logging), where `meshing` is that scanner's own overlay row
+and not an `ExtractTimings` phase this repo defines. On desktop the two are
+separate instruments: `fuse_replica --dirty-every N` prints the changed and
+dilated coverage, and `fuse_replica --device-extract` prints the phase split.
 
 ## Measured lessons
 
@@ -1829,7 +1897,10 @@ so is the field — see that decision, where the same instrument caught it costi
 102 ms of a 133 ms extract at 107 k blocks.)
 
 The GPU marching cubes was 2 ms — the pool would have optimised the one thing
-that was already fast. The cost was `make_output_buffers` allocating a fresh
+that was already fast. (*On device that ordering inverts: see the 2026-08-09
+incremental-extraction decision, where meshing dominates the frame and the pool
+is back on. The lesson below is about the method, not about the pool.*) The cost
+was `make_output_buffers` allocating a fresh
 worst-case vertex arena (5 triangles per cell → hundreds of MB) **every call**,
 so the driver faulted in and zeroed that many pages per frame. Making the arena
 persistent and grow-only (below) took a 100-frame `--preload --mesh-every 1`
