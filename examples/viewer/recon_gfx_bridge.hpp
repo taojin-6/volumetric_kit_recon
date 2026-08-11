@@ -32,9 +32,12 @@ namespace gassets = volumetric_kit::gfx::assets;
 /// copyable PODs, and the assertions below fail the build rather than let a
 /// layout change on either side turn into a silent misread.
 ///
-/// `uv0` is whatever the texture tier left: a real atlas coordinate on a
-/// triangle a keyframe textured, else recon's `(-1, -1)` sentinel, which the
-/// hybrid fragment shader reads as "no atlas, use the per-vertex color".
+/// `uv0` is whatever the texture tier left: a real atlas coordinate on a vertex
+/// a keyframe textured, else a negative value the hybrid vertex shader reads as
+/// "no atlas, use the per-vertex color". The copy is bulk either way -- it
+/// carries the bytes without interpreting them -- but a reader of this data
+/// must test the SIGN and not `== (-1, -1)`, since a negative uv0 also carries
+/// its coordinate as `-uv - 1` (see `mesh/mesh.hpp`).
 ///
 /// This copy exists only for a consumer that hands gfx a *host* mesh (interop
 /// seam A), and `fuse_render` is now the only one: it builds *two* devices by

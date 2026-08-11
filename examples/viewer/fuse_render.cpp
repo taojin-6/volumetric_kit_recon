@@ -93,11 +93,14 @@ struct Options {
   // memory-bound consumer turns on: an iOS scanner runs with it because the
   // vertex arena is the term that binds there.
   //
-  // It interacts with --texture, which is the whole reason it is worth a flag:
-  // the texturer decides visibility per triangle and writes uv0 per vertex, so
-  // a shared vertex referenced by both a visible and an occluded triangle is
-  // written twice. Rendering the two combinations side by side is what turns
-  // that from a paragraph into a picture.
+  // It is worth a flag specifically BECAUSE it runs beside --texture. The two
+  // were mutually exclusive until the texture pass moved to a per-vertex
+  // dispatch -- the texturer used to decide visibility per triangle and write
+  // uv0 per vertex, so a shared vertex its triangles disagreed about was
+  // written by whichever thread ran last, and it refused the pair outright.
+  // One thread per vertex leaves one writer per vertex, and this is the
+  // example that can show the result: rendering both combinations to a PNG
+  // turns "byte-identical" from a claim into a diff.
   bool share_vertices = false;
 };
 

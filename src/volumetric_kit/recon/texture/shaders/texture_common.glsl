@@ -8,12 +8,21 @@
 //
 // DepthCameraParams mirrors DepthCameraParams byte-for-byte (the same
 // scalar-layout camera the volume/tsdf kernels use); Vertex mirrors
-// mesh::Vertex. project_to_image is the same world -> camera -> pixel projection
-// tsdf_common.glsl's project_pinhole computes -- kept a self-contained copy here
-// so this tier's shaders vendor no cross-tier include, matching how each tier's
-// GLSL restates the small structs/helpers it needs (hash_common.glsl /
-// tsdf_common.glsl). Under scalar block layout every field lands at its host
-// offset (no std430 vec padding).
+// mesh::Vertex. Under scalar block layout every field lands at its host offset
+// (no std430 vec padding).
+//
+// project_to_image computes the same world -> camera -> pixel arithmetic as
+// tsdf_common.glsl's project_pinhole -- a self-contained copy, so this tier's
+// shaders vendor no cross-tier include, matching how each tier's GLSL restates
+// the small structs/helpers it needs (hash_common.glsl / tsdf_common.glsl).
+//
+// It is NOT interchangeable with that one, and the difference is deliberate:
+// this copy accepts a point in front of the camera whose pixel lands outside
+// the image and returns the extrapolated coordinate, where project_pinhole
+// rejects it. See the contract on the function. Do not reconcile the two by
+// copying either into the other -- tsdf's version here restores the
+// frustum-edge smear this tier's encoding exists to prevent, and this version
+// there makes integration fuse depth at pixels the sampler never validated.
 
 #extension GL_EXT_scalar_block_layout : require
 
@@ -44,16 +53,20 @@ struct Vertex {
 };
 
 // Project a world point into a pinhole camera given its intrinsics + rigid
-// cam_to_world pose. Returns true and sets `px` (pixel coords, in
-// [0,width)x[0,height)) and `zc` (camera-space depth, metres) when the point is
-// in front of the camera and inside the image; false otherwise. world -> camera
-// is R^T (world - t) -- the rigid inverse, no explicit mat4 inverse -- which
-// equals the prior engine's precomputed extrinsics_inv * (world, 1). Pinhole
-// u = fx*x/z + cx, v = fy*y/z + cy (OpenCV +X right / +Y down / +Z forward; no
-// y-flip), matching the prior engine's project_to_pixel and tsdf_common.glsl.
-/// Returns false ONLY when the point is behind the camera, where the pinhole
-/// divide has no meaning. A point in front whose pixel lands outside the image
-/// still returns true, with `px` extrapolated past the border.
+// cam_to_world pose, setting `px` (pixel coords) and `zc` (camera-space depth,
+// metres). world -> camera is R^T (world - t) -- the rigid inverse, no explicit
+// mat4 inverse -- which equals the prior engine's precomputed
+// extrinsics_inv * (world, 1). Pinhole u = fx*x/z + cx, v = fy*y/z + cy (OpenCV
+// +X right / +Y down / +Z forward; no y-flip), matching the prior engine's
+// project_to_pixel and tsdf_common.glsl.
+///
+/// Returns false when the point is not strictly in front of the camera, where
+/// the pinhole divide has no meaning, or when the pixel it lands on is not a
+/// number -- so a caller that gets `true` holds a usable coordinate. Both
+/// tests are written so a non-finite input FAILS them rather than slipping
+/// through: every comparison with NaN is false, so the direct forms would have
+/// accepted one. A point in front whose pixel lands outside the image still
+/// returns true, with `px` extrapolated past the border.
 ///
 /// That is deliberate, and it is what keeps a triangle straddling the frustum
 /// edge from sweeping the whole atlas. The caller needs a *coordinate* for such
@@ -77,11 +90,24 @@ bool project_to_image(DepthCameraParams c, vec3 world, out vec2 px,
   vec3 t = c.cam_to_world[3].xyz;
   vec3 p_cam = transpose(rot) * (world - t);
   zc = p_cam.z;
-  if (zc <= 0.0) {
-    return false;  // behind the camera: no projection exists
+  // Negated rather than `zc <= 0.0`, so a NaN fails it: every comparison with
+  // NaN is false, so the direct form would ACCEPT a non-finite depth and hand
+  // the caller a NaN pixel. That matters more than it used to. The sentinel is
+  // computed from `px` now (`-uv - 1`) instead of written as a literal, and a
+  // NaN uv is not negative, so `uv0.x < 0` -- the renderer's whole class test
+  // -- would read it as textured. It would also reach `occluded_ok`, whose
+  // bounds test NaN passes for the same reason, and `sample_depth` indexes
+  // depth[] off a NaN pixel with no bound left to catch it.
+  if (!(zc > 0.0)) {
+    return false;  // behind the camera or non-finite: no projection exists
   }
   px = vec2(c.fx * (p_cam.x / zc) + c.cx, c.fy * (p_cam.y / zc) + c.cy);
-  return true;
+  // A finite `zc` does not make the pixel finite -- a non-finite x or y in the
+  // position survives the divide with the depth intact (an identity pose puts
+  // a NaN x straight through to u while z stays 1). An infinity is fine and
+  // deliberately allowed: `pixel_to_atlas_uv` clamps it to the border like any
+  // far-outside projection. A NaN is not, for the reason above.
+  return !isnan(px.x) && !isnan(px.y);
 }
 
 layout(push_constant, scalar) uniform PushConstants {

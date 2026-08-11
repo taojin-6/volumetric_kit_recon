@@ -64,10 +64,17 @@ Result<ProjectiveTexturer> ProjectiveTexturer::create(Device& device,
   // descriptor total).
   //
   // Three, not four: the per-vertex dispatch never addresses a vertex through
-  // an index, so the index buffer is not bound at all. The remaining three are
-  // renumbered to close the gap rather than leaving binding 1 unused, since the
-  // set layout comes from SPIR-V reflection and a hole in it would be a
-  // standing invitation to write the wrong slot.
+  // an index, so the index buffer is not bound at all. Renumbering the
+  // remaining three to close the gap is not a tidiness choice --
+  // KernelSetBuilder builds bindings 0..n-1 from the count passed below, so a
+  // 3-binding layout has no binding 3 to leave a hole at.
+  //
+  // Which is the hazard worth naming here: that count is a hand-passed literal,
+  // and so is every `layout(binding = N)` in the kernel. Nothing links the two
+  // (the compute core is explicit, not reflected -- the 2026-07-05 decision),
+  // so a binding that drifts out of the layout's range is an unbound descriptor
+  // that only the validation layers report, and undefined with them off, which
+  // is the shipping configuration. The GLSL and the `3` below are one edit.
   VkPushConstantRange push_range{};
   push_range.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
   push_range.offset = 0;
@@ -78,9 +85,16 @@ Result<ProjectiveTexturer> ProjectiveTexturer::create(Device& device,
   VR_ASSIGN(tex.pool_, kb.build());
 
   // A 1-D dispatch's groupCountX is capped by maxComputeWorkGroupCount[0];
-  // cache it so texture() can reject an over-large triangle count as a clean
+  // cache it so texture() can reject an over-large VERTEX count as a clean
   // error rather than risk a device-lost on a min-spec GPU (the guard
   // dispatch() enforces).
+  //
+  // The unit moved with the dispatch, and on an unshared mesh that is three
+  // times fewer primitives before the ceiling trips: a device reporting the
+  // 65535 floor now takes 16.7 M vertices where it took 16.7 M triangles. Not
+  // worth working around -- 16.7 M vertices is 1 GiB at 64 B each, which is
+  // maxStorageBufferRange's own common floor, so the binding range runs out at
+  // the same point and does so with a message about the mesh.
   VkPhysicalDeviceProperties props{};
   vkGetPhysicalDeviceProperties(device.physical_device(), &props);
   tex.max_workgroup_count_x_ = props.limits.maxComputeWorkGroupCount[0];
@@ -88,8 +102,9 @@ Result<ProjectiveTexturer> ProjectiveTexturer::create(Device& device,
   // why a pool that will not allocate cannot fail this create().
   VR_ASSIGN(tex.gpu_timer_, GpuTimer::create(device));
   // The ceiling on a single storage-buffer binding's range; texture() rejects a
-  // vertex / index / depth buffer larger than this with a clean error rather
-  // than an opaque allocation failure or device-lost (mirrors the mesh tier).
+  // vertex or depth buffer larger than this with a clean error rather than an
+  // opaque allocation failure or device-lost (mirrors the mesh tier). Not the
+  // index buffer: this pass does not bind one.
   tex.max_storage_buffer_range_ = props.limits.maxStorageBufferRange;
 
   // The camera params are fixed-size, so persist the SSBO (bound once at
@@ -212,14 +227,23 @@ Status ProjectiveTexturer::texture(mesh::Mesh& mesh, const float* depth,
     return Status::invalid_argument(
         "ProjectiveTexturer::texture: camera image is empty");
   }
-  if (mesh.indices.size() % 3 != 0) {
-    return Status::invalid_argument(
-        "ProjectiveTexturer::texture: index count is not a multiple of three");
-  }
-  // An empty mesh is a no-op success (nothing to texture), matching the tsdf
-  // tier's empty-active-set early return.
-  if (mesh.empty()) {
-    return {};
+  // Keyed on the VERTICES. `mesh::Mesh::empty()` reports `indices.empty()`,
+  // and the index array is the one axis this pass stopped reading when the
+  // dispatch became per vertex -- so a mesh carrying vertices and no indices is
+  // not empty to this pass, it is a mesh whose every vertex still needs a
+  // verdict. Returning OK on it would leave each uv0 holding whatever a
+  // PREVIOUS call wrote against a different frame, which is a real positive
+  // atlas coordinate into the wrong image; the class contract promises the
+  // opposite ("a vertex that leaves the view reverts rather than keeping a
+  // stale coordinate"), and that promise is the one the per-triangle version
+  // also kept.
+  //
+  // Nothing validates the index count for the same reason. The multiple-of-
+  // three rejection that stood here tested an array the kernel no longer binds,
+  // so it refused a mesh this pass textures perfectly well -- and it refused it
+  // on the axis vertex sharing makes the least regular.
+  if (mesh.vertices.empty()) {
+    return {};  // no-op success, matching the tsdf tier's empty active set
   }
   // The dispatch is sized by the vertex count now, so that is what has to fit a
   // uint32 -- the triangle count no longer reaches the GPU at all.
@@ -256,9 +280,11 @@ Status ProjectiveTexturer::texture(mesh::Mesh& mesh, const float* depth,
   // persistent SSBO written at create().
   //
   // The index buffer is no longer uploaded: the per-vertex dispatch does not
-  // read it. That is the larger half of this path's transfer on a mesh the
-  // caller did not share (three 4-byte indices per triangle against one 64-byte
-  // vertex), so the host overload got cheaper along with the device one.
+  // read it. The saving is not in the bytes -- on an unshared mesh those are
+  // three 4-byte indices against three 64-byte vertices per triangle, ~6% of
+  // the transfer -- it is one fewer VMA allocation, memcpy, descriptor write
+  // and buffer destroy per call, which is the fixed cost that dominates a row
+  // this short.
   VR_ASSIGN(Buffer vertex_buf,
             upload_storage_buffer(*allocator_, mesh.vertices.data(),
                                   vertex_bytes, HostAccess::Random));
@@ -272,9 +298,10 @@ Status ProjectiveTexturer::texture(mesh::Mesh& mesh, const float* depth,
   const PushConstants push{static_cast<std::uint32_t>(mesh.vertices.size()),
                            occlusion_threshold};
 
-  // One thread per vertex. dispatch() caps groupCountX at the device limit
-  // and emits the COMPUTE->HOST barrier that makes the written uv0 visible to
-  // the read-back below.
+  // One thread per vertex. dispatch() REJECTS a groupCountX past the device
+  // limit rather than clamping to it -- a clamp would silently leave the tail
+  // of the mesh untextured -- and emits the COMPUTE->HOST barrier that makes
+  // the written uv0 visible to the read-back below.
   VR_TRY(dispatch(
       *device_, kernel_, &push, sizeof(push),
       group_count(static_cast<std::uint32_t>(mesh.vertices.size()), kLocalSize),

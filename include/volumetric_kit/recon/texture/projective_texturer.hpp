@@ -5,7 +5,7 @@
 
 /// @file texture/projective_texturer.hpp
 /// @brief Projective texturing: fill a mesh's per-vertex `uv0` with the image
-///        coordinates of a posed camera, for the triangles that camera sees
+///        coordinates of a posed camera, for the vertices that camera sees
 ///        unoccluded (the rest fall back to per-vertex color).
 
 #include <cstdint>
@@ -28,7 +28,7 @@ class Allocator;
 
 namespace volumetric_kit::recon::texture {
 
-/// @brief Assigns a posed camera's image coordinates to the mesh triangles it
+/// @brief Assigns a posed camera's image coordinates to the mesh vertices it
 ///        sees, so the reconstruction is textured with that camera's image
 ///        where it had a clear line of sight and falls back to per-vertex color
 ///        everywhere else.
@@ -67,9 +67,14 @@ namespace volumetric_kit::recon::texture {
 ///   instead of substituting `(0, 0)`. Without this a triangle mixing the two
 ///   classes interpolates from a real coordinate toward the atlas origin and
 ///   smears the corner of the image across its face.
-/// - **not in frame at all** -- the `(-1, -1)` sentinel. There is no coordinate
-///   to carry, and it decodes to `(0, 0)`, which is what gfx already
-///   substituted.
+/// - **behind the camera** -- the `(-1, -1)` sentinel. The pinhole divide has
+///   no meaning there, so no coordinate exists to carry; it decodes to
+///   `(0, 0)`, which is what gfx already substituted. A vertex **in front but
+///   outside the image** is not this case: its projection is perfectly well
+///   defined, just past the border, so it carries the nearest edge coordinate
+///   under the rule above and the frustum boundary renders as edge stretching.
+///   Conflating the two drew the entire camera image inside one triangle, the
+///   length of that boundary.
 ///
 /// A consumer must therefore test the **sign** (`uv0.x < 0`), which is what
 /// gfx's shader does, and never compare against `(-1, -1)` exactly.
@@ -127,12 +132,13 @@ class VR_TEXTURE_API ProjectiveTexturer {
 
   /// @brief Texture @p mesh with one posed frame, rewriting every vertex's
   ///        `uv0` in place.
-  /// @param mesh      The mesh to texture; its @ref mesh::Vertex::uv0 fields
-  /// are
-  ///                  overwritten -- a normalized image coordinate for a
-  ///                  triangle the camera sees unoccluded, the `(-1, -1)`
-  ///                  sentinel otherwise. Positions/normals/colors are
-  ///                  unchanged.
+  /// @param mesh      The mesh to texture; **every** @ref mesh::Vertex::uv0 is
+  ///                  overwritten, with one of the three values the class note
+  ///                  above describes -- so read the **sign**, never `== (-1,
+  ///                  -1)`. Positions/normals/colors are unchanged, and
+  ///                  @ref mesh::Mesh::indices is neither read nor validated:
+  ///                  the dispatch is per vertex, so a mesh carrying vertices
+  ///                  and no indices is textured rather than refused.
   /// @param depth     Row-major depth image in **metres**, length
   ///                  `cam.width * cam.height` (the host applies any raw sensor
   ///                  depth-scale first) -- the occlusion reference.
@@ -153,14 +159,12 @@ class VR_TEXTURE_API ProjectiveTexturer {
   ///                  device half. `nullptr` measures nothing. See
   ///                  @ref tsdf::TsdfIntegrator::integrate for why the two
   ///                  halves are worth separating.
-  /// @return OK on success (including an empty mesh, a no-op), or a non-OK
-  ///         @ref Status: @ref Status::Code::InvalidArgument if the texturer is
-  ///         moved-from, @p depth is null, @p cam is empty, the mesh's index
-  ///         count is not a multiple of three, the triangle count exceeds a
-  ///         single 1-D dispatch, or a vertex / index / depth buffer would
-  ///         exceed the device `maxStorageBufferRange`; otherwise a buffer or
-  ///         dispatch failure. An out-of-range triangle index is skipped
-  ///         on-device (a malformed-mesh guard), not reported.
+  /// @return OK on success (including a mesh with no vertices, a no-op), or a
+  ///         non-OK @ref Status: @ref Status::Code::InvalidArgument if the
+  ///         texturer is moved-from, @p depth is null, @p cam is empty, the
+  ///         vertex count exceeds a single 1-D dispatch, or a vertex / depth
+  ///         buffer would exceed the device `maxStorageBufferRange`; otherwise
+  ///         a buffer or dispatch failure.
   Status texture(mesh::Mesh& mesh, const float* depth,
                  const DepthCameraParams& cam,
                  float occlusion_threshold = 0.02f,
@@ -210,10 +214,11 @@ class VR_TEXTURE_API ProjectiveTexturer {
   Allocator* allocator_ = nullptr;
 
   // Cached maxComputeWorkGroupCount[0] -- the device cap on a 1-D dispatch's
-  // groupCountX; texture() rejects a triangle count that would exceed it.
+  // groupCountX; texture() rejects a vertex count that would exceed it.
   std::uint32_t max_workgroup_count_x_ = 0;
   // Cached maxStorageBufferRange -- the device cap on a single storage-buffer
-  // binding; texture() rejects a vertex / index / depth buffer larger than it.
+  // binding; texture() rejects a vertex or depth buffer larger than it. Not the
+  // index buffer: the per-vertex dispatch does not bind one.
   std::uint32_t max_storage_buffer_range_ = 0;
 
   // The view-selection kernel's bundled layout + pipeline + descriptor set, its

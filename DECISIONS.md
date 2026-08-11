@@ -249,6 +249,14 @@ directly — seam B — so the precondition has been collected on.
 
 ### 2026-07-07 — Projective texturing is a new `texture` tier; live single-camera first.
 
+*Amended 2026-08-11 (below):* the verdict is taken per **vertex**, not per
+triangle, and a negative `uv0` carries its coordinate as `-uv - 1` instead of
+collapsing to the bare sentinel. The tier, its placement, the live
+single-camera scope and the occlusion sampler below all stand; read "one thread
+per triangle … keeps the triangle only when all three" and "the rest get the
+`(-1,-1)` sentinel" as the shape this decision shipped with and the later entry
+replaced.
+
 Filling the mesh `Vertex::uv0` (the atlas coordinate the
 2026-07-06 hybrid-colour decision reserved) lands as a **new `texture` tier**
 between `mesh` and `interop`, not a `mesh` add-on: it is a distinct pass over a
@@ -1565,7 +1573,14 @@ writer wins nondeterministically, and a triangle left holding one sentinel
 interpolates from `(-1,-1)` across its whole face — `Status::ok`, no
 validation diagnostic, visible only as flicker. The real fix is a
 per-primitive camera id, which the planned packed multi-camera atlas needs
-anyway; this flag keeps the two decisions independent. And the sharing
+anyway; this flag keeps the two decisions independent.
+*Superseded 2026-08-11 (below):* the refusal is gone — the pass dispatches per
+vertex, so there is one writer per vertex and nothing to disagree. What that
+entry keeps from this one is the shape of the argument, not its conclusion: the
+hazard was real and unseeable by the caller, so checking it rather than
+documenting it was right while it existed. `shares_vertices` stays published for
+**sizing**, and the per-primitive camera id is still what the packed
+multi-camera atlas needs. And the sharing
 kernel's compile-time `kMaxSharedCells` is mirrored by a host constant that
 gates the per-*extract* refusal of a larger `block_size` (not `create`'s — the
 block size arrives with the grid), with nothing but a comment tying the two
@@ -1921,8 +1936,12 @@ So `LiveMesh` and gfx are untouched only in the sense that no API changes; until
 both are answered the *guarantee* behind that API changes, and that is a cost to
 the sibling rather than zero. The 16x is a ratio and not a measurement — no
 arena/index pair for a named scene and slot count is on record — and it does not
-hold under `share_vertices`, which the only seam-B consumer cannot set anyway,
-since `fuse_viewer` runs the `texture` tier and that tier refuses sharing.
+hold under `share_vertices`.
+*Amended 2026-08-11 (below):* that caveat used to be waived on the grounds that
+"the only seam-B consumer cannot set `share_vertices` anyway, since
+`fuse_viewer` runs the `texture` tier and that tier refuses sharing". The tier
+refuses nothing now and `fuse_viewer` takes `--share-vertices`, so the ratio is
+live again under a configuration this repo ships — and still unmeasured.
 
 **What this does not establish, named rather than implied.** The ~4x is one
 device, one walk, one scene — an M5 iPad Pro with unified memory, where the
@@ -2438,6 +2457,128 @@ other mirror in the repo, is declared once in
 could disagree on field order and both compile, and both kernels assign it **by
 name** — the same fix `SparsePushConstants` already applies to its own adjacent
 same-typed scalars.
+
+### 2026-08-11 — Projective texturing decides visibility per *vertex*, and a negative `uv0` carries its atlas coordinate rather than discarding it (amends the 2026-07-07 texture-tier decision, and retires the `share_vertices` refusal the 2026-08-04 entry records).
+
+`ProjectiveTexturer` refused any mesh built with
+`MarchingCubesConfig::share_vertices`. It decided visibility per **triangle**
+while writing `Vertex::uv0` per **vertex**, so an interior vertex referenced by
+up to six triangles that disagreed was written by whichever thread ran last —
+`Status::ok`, no validation diagnostic, visible only as flicker along a
+silhouette. The refusal was the honest response to that, and the 2026-08-04
+entry books it as an example of the rule it follows.
+
+It also cost the one configuration a memory-bound consumer wants. The iOS
+scanner runs sharing because the vertex arena is the term that binds there;
+unsharing to satisfy the refusal hands back ~2 GB, and `fuse_viewer` — the only
+seam-B consumer — could not take the flag at all, because it runs this tier.
+
+**Every input to the verdict is a property of the vertex alone.**
+`project_to_image` reads the position and the camera; `occluded_ok` reads the
+resulting pixel and the depth map. Deciding it per triangle and writing the
+answer to three vertices was a choice, not a requirement. One thread per vertex
+gives one writer per vertex — nothing to race, no index buffer bound, and each
+vertex projected once instead of once per referencing triangle (~3x less work on
+a shared mesh). The descriptor set drops 4 bindings to 3 and the push block 12 B
+to 8.
+
+Measured on Replica room0, 120 frames, frame 60, via `fuse_render`: a shared and
+an unshared render are **byte-identical** (same SHA-256), at 3.00 → 0.88
+vertices per triangle. `uv0` is a function of position, so an unshared duplicate
+receives the same value as the shared original and every triangle's provoking
+vertex resolves the same class either way. **Sharing became a pure memory trade
+with no effect on appearance.**
+
+**What it costs is the all-three-vertices gate**, and that is the part that
+needed designing rather than deleting. A triangle straddling the visibility
+boundary is no longer refused whole; the renderer resolves albedo from the
+provoking vertex, so such a triangle takes one class for its whole face and the
+textured region grows by up to one triangle at an occlusion silhouette — 1.02%
+of pixels differing by more than 8 levels, the difference map black everywhere
+else.
+
+Bounding it is what the encoding is for. `uv0` has **three** outcomes now:
+
+- **visible** → `uv`.
+- **in frame, occluded** → `-uv - 1`. Still negative, so gfx's `uv0.x < 0` class
+  test is unchanged, but the coordinate is **carried** and gfx decodes it rather
+  than substituting `(0, 0)`.
+- **behind the camera, or a position that is not a number** → `(-1, -1)`, which
+  decodes to `(0, 0)` — the old behaviour, so a producer that knows nothing of
+  this is unaffected.
+
+Without the middle one a mixed triangle interpolates from a real coordinate
+toward the atlas origin and smears the image's corner across its face, which is
+exactly how a shared mesh rendered before. **A consumer must test the sign and
+never `== (-1, -1)`** — the rule now states so on `mesh::Vertex` itself, since
+that struct is the renderer's vertex layout (2026-08-02) and a mesh-only
+consumer has no reason to read the texture tier's header. A writer that must
+emit a plain coordinate, such as the planned glTF `TEXCOORD_0` export, has to
+decode rather than pass through.
+
+**The frustum boundary was found on device, and is the same bug one step out.**
+The first cut wrote the bare sentinel for anything `project_to_image` refused,
+conflating *behind the camera* (no projection exists) with *in front but outside
+the image* (the projection is fine, just past the border). A boundary triangle
+therefore interpolated to the atlas origin and drew the **entire camera image
+inside one triangle**, repeated the length of the frustum edge. So
+`project_to_image` now projects unconditionally when the point is in front and
+lets `pixel_to_atlas_uv` clamp; such a vertex carries the nearest **edge**
+coordinate and the boundary renders as edge stretching. The bounds test is not
+lost — `occluded_ok` already refuses a pixel within a texel of the border, so
+nothing outside the image is ever classed visible. This is a deliberate
+divergence from `tsdf_common.glsl`'s identically-signatured `project_pinhole`,
+which rejects an out-of-image pixel; both files now say so, because the standing
+convention is that each tier keeps a self-contained copy and the next person to
+reconcile them would otherwise copy one into the other.
+
+**A computed sentinel is not an absorbing one**, which is the review finding
+that shaped the guards. The per-triangle kernel wrote the literal `(-1, -1)` on
+its reject path; `-uv - 1` carries whatever it is given, and a NaN is not
+negative — so a non-finite vertex position would produce a `uv0` the renderer
+classifies as *textured* and samples the atlas at NaN, after passing an
+`occluded_ok` bounds test that NaN also passes and indexing `depth[]` off a NaN
+pixel. Every guard on that path is therefore written **negated**, so a
+non-finite value fails it rather than slipping through, and `project_to_image`
+rejects a NaN pixel as well as a non-positive depth: a finite `zc` does not make
+the pixel finite. An infinity is still allowed through, since the clamp handles
+it like any far-outside projection.
+
+That guard is load-bearing for a second reason the dispatch introduced. The
+domain widened from "vertices the index buffer names" to "every slot in
+`[0, vertex_count)`", and on the sharing kernel the published count is a sum of
+each block's *reservation* while claims are bounded separately — so a block that
+claims fewer than it reserved leaves slots inside the count that no triangle
+references and nothing zeroes. Reading one is in-range and harmless; decoding
+arbitrary bytes as a position is what needed a bound, and the NaN rejection is
+it.
+
+**What did not change.** The packed multi-camera atlas still needs a
+per-**primitive** camera id, and that is a genuinely different problem: a
+triangle whose vertices index different sub-rects of a pack cannot be expressed
+per vertex under any encoding, including this one. `DeviceMesh::shares_vertices`
+therefore stays published — for **sizing**, since `v = 3t` no longer holds, not
+as an incompatibility.
+
+**The renderer half is a floor, not an option.** The decode lives in gfx #93,
+and against an earlier pin the carried vertices forward `(0, 0)` — which is not
+the pre-change behaviour, because the gate that made mixed triangles impossible
+is gone in the same commit. Both viewer examples would render the smear on
+default flags, and the viewer CI leg builds them without rendering, so nothing
+would catch it. The `examples/viewer/CMakeLists.txt` pin carries a `gfx #93`
+floor comment beside its two existing ones; it is the only one of the three that
+fails silently rather than at compile time.
+
+**Also settled here, from the same review.** The host overload's early-out read
+`mesh::Mesh::empty()`, which reports `indices.empty()` — the one axis this pass
+stopped reading — so a mesh with vertices and no indices returned OK having
+written nothing, leaving every `uv0` holding a previous frame's coordinate. It
+keys on `vertices.empty()` now, and the index count is not validated at all,
+because it is not read. And the cached device limits moved with the dispatch: the
+1-D workgroup ceiling now trips on the vertex count, three times sooner in
+primitives on an unshared mesh, which is not worth working around — 16.7 M
+vertices is 1 GiB at 64 B each, the common `maxStorageBufferRange` floor, so the
+binding range runs out at the same point and does so naming the mesh.
 
 ## Measured lessons
 

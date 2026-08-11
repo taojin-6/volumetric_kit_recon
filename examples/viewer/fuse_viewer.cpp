@@ -1538,12 +1538,13 @@ int run(GLFWwindow* window, const Options& opt) {
         // consumer to measure a device-local arena + staging against it.
         //
         // MarchingCubesConfig::share_vertices cuts that fetch ~4x by emitting
-        // ~4x fewer vertices, and this example does NOT take it --
-        // deliberately, because it runs the texture tier, and per-vertex uv0
-        // cannot carry a per-triangle visibility decision over a shared vertex
-        // (recon refuses the pair outright). It becomes available here when
-        // texturing moves to a per-primitive camera id; `fuse_replica
-        // --share-vertices` is the measurement in the meantime.
+        // ~4x fewer vertices, and `--share-vertices` now takes it here. It was
+        // unavailable to this example while the texture tier refused a shared
+        // mesh -- it decided visibility per triangle and wrote uv0 per vertex
+        // -- and the per-vertex dispatch removed that refusal, so the ~4x is
+        // measurable on the running window rather than only in `fuse_replica`.
+        // What still waits on a per-primitive camera id is the packed
+        // multi-camera atlas, which is a different problem.
         vgp::LiveMesh live;
         live.vertices = live_view.vertices;
         live.indices = live_view.indices;

@@ -141,8 +141,15 @@ float sample_depth(float u, float v) {
 // and rejects a hole / NaN / inf / out-of-range depth via the sensor range (the
 // negated compare drops non-finite depth).
 bool occluded_ok(vec2 px, float zc) {
-  if (px.x < 1.0 || px.x >= float(int(cam.width) - 1) || px.y < 1.0 ||
-      px.y >= float(int(cam.height) - 1)) {
+  // Negated rather than `px.x < 1.0 || ...`, which is the same work and rejects
+  // a NaN instead of admitting one: every comparison with NaN is false, so the
+  // direct form falls THROUGH to sample_depth, whose clamp and floor are
+  // undefined on a NaN and whose depth[] index has nothing further to bound it.
+  // project_to_image refuses a non-finite pixel before this is reached, so the
+  // form is what keeps the predicate true on its own terms rather than only on
+  // its caller's.
+  if (!(px.x >= 1.0 && px.x < float(int(cam.width) - 1) && px.y >= 1.0 &&
+        px.y < float(int(cam.height) - 1))) {
     return false;
   }
   float d = sample_depth(px.x, px.y);
@@ -175,16 +182,29 @@ void main() {
     return;
   }
 
+  // The domain widened with the dispatch: the per-triangle version visited only
+  // vertices an index named, and this visits every slot in [0, num_vertices).
+  // On a mesh from the sharing kernel those are not the same set -- that kernel
+  // publishes a vertex count summed from each block's RESERVATION, while a
+  // block that claims fewer than it reserved leaves the tail of its range
+  // never written, inside the published count and in nobody's index buffer.
+  // Nothing zeroes the arena, so such a slot holds whatever the last extract to
+  // own those bytes left. Reading it is harmless -- it is our own buffer, in
+  // range -- but the bytes are arbitrary, so the position may be non-finite.
+  // That is why project_to_image and occluded_ok are both written to reject a
+  // NaN rather than to accept one by default: an unclaimed slot takes the
+  // sentinel path and is never referenced by a triangle anyway.
   vec2 px;
   float zc;
   if (!project_to_image(cam, vertices[vid].position, px, zc)) {
-    // Behind the camera: the pinhole divide has no meaning, so there genuinely
-    // is no coordinate to carry and the bare sentinel is the honest value. The
-    // renderer reads it as (0, 0), which is arbitrary -- but a triangle with a
-    // vertex behind the camera and another in front spans the near plane, and
-    // no per-vertex uv can describe that however it is encoded. Written rather
-    // than left, so a vertex that has left the view drops its previous frame's
-    // coordinate.
+    // No usable projection -- behind the camera, where the pinhole divide has
+    // no meaning, or a position that is not a number. Either way there
+    // genuinely is no coordinate to carry and the bare sentinel is the honest
+    // value. The renderer reads it as (0, 0), which is arbitrary -- but a
+    // triangle with a vertex behind the camera and another in front spans the
+    // near plane, and no per-vertex uv can describe that however it is
+    // encoded. Written rather than left, so a vertex that has left the view
+    // drops its previous frame's coordinate.
     vertices[vid].uv0 = vec2(-1.0, -1.0);
     return;
   }

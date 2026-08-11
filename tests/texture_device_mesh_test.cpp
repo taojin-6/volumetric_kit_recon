@@ -419,10 +419,54 @@ int main() {
     vr::Status shared_texture =
         texturer.texture(shared.value(), depth.data(), cam);
     CHECK(shared_texture.ok());
+
+    // Read the result back. `ok()` alone would pass against a kernel that
+    // wrote the sentinel everywhere, inverted its visibility test, sized the
+    // dispatch by the TRIANGLE count (leaving two thirds of a shared mesh's
+    // vertices untouched), or bound the wrong descriptor slot -- every failure
+    // this mesh exists to catch returns OK.
+    vr::Result<mesh::Mesh> shared_host = share_mc.download(shared.value());
+    CHECK(shared_host.ok());
+    const mesh::Mesh shared_out = std::move(shared_host).value();
+    CHECK(shared_out.vertices.size() == shared.value().vertex_count);
+
+    std::size_t shared_textured = 0;
+    for (const mesh::Vertex& v : shared_out.vertices) {
+      // Every vertex was visited: the dispatch covers the whole arena, so
+      // nothing may still hold the (-1,-1) marching-cubes left AND sit inside
+      // the image. A vertex the camera cannot place keeps a negative uv0, but
+      // the two are told apart by the carried coordinate below.
+      if (v.uv0.x >= 0.0f) {
+        ++shared_textured;
+        CHECK(v.uv0.x > 0.0f && v.uv0.x < 1.0f);
+        CHECK(v.uv0.y > 0.0f && v.uv0.y < 1.0f);
+      }
+    }
+    // A shared vertex is referenced by several triangles that can disagree
+    // about visibility -- the exact configuration the old refusal existed for.
+    // Some of this mesh must land on each side, or the run proves nothing.
+    CHECK(shared_textured > 0);
+    CHECK(shared_textured < shared_out.vertices.size());
+
+    // And the indices really do share: the identity run cannot describe this
+    // mesh, so at least one vertex is referenced more than once. That is what
+    // makes the split above a statement about a SHARED mesh rather than about
+    // any mesh.
+    std::vector<std::uint32_t> uses(shared_out.vertices.size(), 0);
+    for (std::uint32_t i : shared_out.indices) {
+      CHECK(i < shared_out.vertices.size());
+      ++uses[i];
+    }
+    std::size_t multi = 0;
+    for (std::uint32_t u : uses) {
+      if (u > 1) ++multi;
+    }
+    CHECK(multi > 0);
   }
 
   std::printf(
-      "texture device-mesh: OK (%zu triangles, %zu/%zu vertices textured)\n",
+      "texture device-mesh: OK (%zu triangles, %zu/%zu vertices textured; a "
+      "shared-vertex mesh textured in place and read back)\n",
       host_mesh.triangle_count(), textured, host_mesh.vertices.size());
   return 0;
 }

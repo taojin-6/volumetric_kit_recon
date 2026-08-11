@@ -46,7 +46,19 @@ FetchContent_Declare(
   # gfx_adopt_payload sets those fields, so it does not compile before it -- and
   # a pin that stopped short would not merely lose a check but fail the adopt,
   # since the fields default to "not enabled".
-  GIT_TAG d8949f6c1ddaa7c1011074c2e48a02521e53977b # gfx #92
+  #
+  # And at or past gfx #93, which decodes a negative uv0 as the carried
+  # coordinate `-uv - 1` rather than substituting (0, 0). This floor is a
+  # RENDERING one, not a compile one, and it is the only one here that fails
+  # silently. The texture tier now decides visibility per vertex, so a triangle
+  # may mix a textured vertex with a carried one -- the all-three-vertices gate
+  # that made such a triangle impossible is gone. Against gfx #92 the carried
+  # vertices forward (0, 0), so frag_uv interpolates from a real coordinate to
+  # the atlas origin and smears the corner of the camera image across the face,
+  # along every occlusion silhouette and the whole frustum boundary. Both viewer
+  # examples draw that on default flags; nothing in CI catches it, since this
+  # leg builds them and does not render.
+  GIT_TAG 2554fe7978aee22cd4115e124e9cf83bf8985384 # gfx #93
   GIT_SHALLOW FALSE)
 FetchContent_MakeAvailable(volumetric_kit_gfx)
 

@@ -11,15 +11,26 @@
 // behind-camera one projects nowhere and keeps the bare (-1,-1). Then
 // re-texture with a closer depth map and verify the once-visible triangle
 // reverts (uv0 is overwritten each call). A translated pose confirms the
-// world->camera transform is applied. Then four discriminating cases: the
-// occlusion threshold accepts a small within-tolerance offset and rejects an
-// out-of-tolerance one (and honours an explicit tighter threshold) -- so the
-// head-on triangle's |d - zc| = 0 was not hiding a dropped/zeroed threshold; a
-// rotated pose projects through R^T to hand-computed pixels (the identity poses
-// above never exercise the rotation); and a depth discontinuity across the
-// bilinear taps textures a foreground vertex via the nearest-tap fallback (the
-// discontinuity guard). Runs on the real driver (MoltenVK / NVIDIA); exits 0
-// (skip) where no device is present.
+// world->camera transform is applied. Then FIVE discriminating cases:
+//
+//   1. the occlusion threshold accepts a small within-tolerance offset and
+//      rejects an out-of-tolerance one (and honours an explicit tighter
+//      threshold) -- so the head-on triangle's |d - zc| = 0 was not hiding a
+//      dropped/zeroed threshold;
+//   2. a rotated pose projects through R^T to hand-computed pixels (the
+//      identity poses above never exercise the rotation);
+//   3. the frustum boundary: a vertex in front of the camera but projecting
+//      OUTSIDE the image carries the clamped border coordinate rather than the
+//      bare sentinel -- the regression this file's second commit exists for,
+//      and (0, 0) would satisfy a weaker "not the sentinel" check;
+//   4. a depth discontinuity across the bilinear taps textures a foreground
+//      vertex via the nearest-tap fallback (the discontinuity guard);
+//   5. a MIXED triangle -- one visible vertex, two occluded but in frame --
+//      which is the configuration the whole -uv-1 encoding exists to serve and
+//      which only a per-vertex verdict can produce.
+//
+// Runs on the real driver (MoltenVK / NVIDIA); exits 0 (skip) where no device
+// is present.
 
 #include <cmath>
 #include <cstdint>
@@ -68,11 +79,29 @@ bool is_offscreen(const vr::Vec2f& uv) {
 }
 
 // Recover the atlas coordinate a non-visible but IN-FRAME vertex carries: the
-// inverse of the kernel's `-uv - 1`. Kept here as its own function because it
-// must stay identical to hybrid_mesh.vert's decode -- the two are one contract
-// written twice, and this test is the only thing that can notice them drifting.
+// inverse of the kernel's `-uv - 1`, and a transcription of gfx's decode in
+// hybrid_mesh.vert.
+//
+// It cannot detect the two drifting apart -- recon's test suite never compiles
+// or links gfx, so this round-trips recon's encode against a hand-written
+// inverse and would stay green through any change on the renderer's side. What
+// pins the pair is the `gfx #93` floor on the FetchContent pin in
+// examples/viewer/CMakeLists.txt: it names the revision that decodes rather
+// than substituting (0, 0), and the examples are what render the difference.
+// This function's job is narrower and worth having anyway -- it lets the two
+// non-visible outcomes below be distinguished by their coordinates instead of
+// only by their sign.
 vr::Vec2f decode_carried(const vr::Vec2f& uv) {
   return vr::Vec2f(-uv.x - 1.0f, -uv.y - 1.0f);
+}
+
+// The coordinate the renderer actually interpolates for this vertex, whatever
+// class it took: gfx's `frag_uv = use_vertex_color ? (-in_uv0 - 1.0) : in_uv0`.
+// Asserting on THIS is what states the encoding's purpose -- a triangle mixing
+// the classes must interpolate between real projections, not toward the atlas
+// origin.
+vr::Vec2f effective_uv(const vr::Vec2f& uv) {
+  return uses_vertex_color(uv) ? decode_carried(uv) : uv;
 }
 
 // The shader's projection + atlas-UV math, so the test predicts the exact uv0 a
@@ -396,6 +425,105 @@ int main() {
     CHECK(!uses_vertex_color(mesh_edge.vertices[i].uv0));
   }
 
+  // A MIXED triangle: one vertex visible, two occluded but in frame. This is
+  // the configuration the encoding exists for and the one the old pass could
+  // not produce -- the all-three-vertices gate refused such a triangle whole,
+  // so every triangle was uniformly one class and the carried coordinate never
+  // mattered. Every case above is still uniform across its three vertices;
+  // this is the only one that is not.
+  //
+  // A triangle at z = 2 m, so u = 250x + 320 and v = 250y + 240. Vertex 0 sits
+  // at u = 420 where the depth map reads 2 m (agrees with zc -> visible); the
+  // other two sit at u = 220 where it reads 1 m (1 m nearer than the vertex ->
+  // occluded). The step is at column 400, far from every tap, so the
+  // discontinuity fallback plays no part.
+  std::vector<float> depth_split(depth.size(), 1.0f);
+  for (std::uint32_t y = 0; y < cam.height; ++y) {
+    for (std::uint32_t x = 400; x < cam.width; ++x) {
+      depth_split[static_cast<std::size_t>(y) * cam.width + x] = 2.0f;
+    }
+  }
+  rmesh::Mesh mesh_mixed;
+  mesh_mixed.vertices = {vtx(0.4f, 0.0f, 2.0f), vtx(-0.4f, 0.05f, 2.0f),
+                         vtx(-0.4f, -0.05f, 2.0f)};
+  mesh_mixed.indices = {0, 1, 2};
+  CHECK(texturer.texture(mesh_mixed, depth_split.data(), cam).ok());
+
+  // The classes really do differ within the one triangle.
+  CHECK(!uses_vertex_color(mesh_mixed.vertices[0].uv0));
+  CHECK(uses_vertex_color(mesh_mixed.vertices[1].uv0));
+  CHECK(uses_vertex_color(mesh_mixed.vertices[2].uv0));
+
+  // And the property that makes the mixture safe to render: whichever class a
+  // vertex took, the coordinate gfx interpolates is that vertex's true
+  // projection. Before the encoding the two carried vertices would have
+  // decoded to (0, 0) and the face would have run from a real uv at u = 420 to
+  // the corner of the image.
+  for (int i = 0; i < 3; ++i) {
+    const vr::Vec2f eff = effective_uv(mesh_mixed.vertices[i].uv0);
+    const vr::Vec2f want = expected_uv(mesh_mixed.vertices[i].position, cam);
+    CHECK(approx(eff.x, want.x, 1e-5f) && approx(eff.y, want.y, 1e-5f));
+    CHECK(eff.x > 0.0f && eff.x < 1.0f && eff.y > 0.0f && eff.y < 1.0f);
+  }
+  // Explicitly: the occluded pair did not collapse to the origin. They project
+  // to u = 220, left of the visible vertex at u = 420, and say so.
+  for (int i = 1; i < 3; ++i) {
+    const vr::Vec2f carried = decode_carried(mesh_mixed.vertices[i].uv0);
+    CHECK(carried.x > 0.3f);
+    CHECK(carried.x < effective_uv(mesh_mixed.vertices[0].uv0).x);
+  }
+
+  // Vertices with no indices are textured, not skipped. The dispatch is per
+  // vertex, so the index array is not this pass's business -- and the guard
+  // that used to sit here read mesh::Mesh::empty(), which reports
+  // indices.empty(), so such a mesh returned OK with every uv0 still holding
+  // whatever the previous call left. That is the overwrite invariant failing
+  // in the one direction that is invisible: a stale coordinate is a real
+  // positive uv into the wrong frame, not a sentinel.
+  rmesh::Mesh mesh_noidx;
+  mesh_noidx.vertices = {vtx(0.0f, 0.0f, 1.0f)};
+  mesh_noidx.vertices[0].uv0 = vr::Vec2f(0.75f, 0.75f);  // a plausible stale uv
+  CHECK(mesh_noidx.indices.empty());
+  CHECK(texturer.texture(mesh_noidx, depth.data(), cam).ok());
+  CHECK(!uses_vertex_color(mesh_noidx.vertices[0].uv0));
+  {
+    const vr::Vec2f want = expected_uv(mesh_noidx.vertices[0].position, cam);
+    CHECK(approx(mesh_noidx.vertices[0].uv0.x, want.x, 1e-5f));
+    CHECK(approx(mesh_noidx.vertices[0].uv0.y, want.y, 1e-5f));
+  }
+
+  // A non-finite position takes the sentinel path rather than escaping as a
+  // NaN uv0. This matters because the sentinel became a COMPUTED value: the
+  // per-triangle kernel wrote the literal (-1,-1) on its reject path, which is
+  // absorbing, and `-uv - 1` is not -- a NaN uv carries a NaN forward, and a
+  // NaN is not negative, so the renderer's `uv0.x < 0` class test reads it as
+  // TEXTURED and samples the atlas at NaN. Every comparison with NaN is false,
+  // so both guards are written negated to make one fail rather than pass.
+  //
+  // The three vertices take two different paths, which is why all three are
+  // here: a NaN z leaves zc itself non-finite, while a NaN x or y divides
+  // through a perfectly good zc = 1 and only the pixel is unusable.
+  //
+  // Mutation-checked, and the result is worth recording: deleting the pixel
+  // guard does NOT fail this on MoltenVK, which returns 0 from `clamp(NaN, lo,
+  // hi)` and so lands on the sentinel by accident. GLSL leaves `FClamp`
+  // undefined for a NaN operand, so that is one driver's luck and not a
+  // property to rely on -- the guard is what makes the outcome the same
+  // everywhere, and this assertion is what catches a driver that propagates
+  // instead. Expect it to discriminate on lavapipe (the CI legs) rather than
+  // here.
+  rmesh::Mesh mesh_nan;
+  mesh_nan.vertices = {vtx(std::nanf(""), 0.0f, 1.0f),
+                       vtx(0.0f, std::nanf(""), 1.0f),
+                       vtx(0.0f, 0.0f, std::nanf(""))};
+  mesh_nan.indices = {0, 1, 2};
+  CHECK(texturer.texture(mesh_nan, depth.data(), cam).ok());
+  for (int i = 0; i < 3; ++i) {
+    const vr::Vec2f uv = mesh_nan.vertices[i].uv0;
+    CHECK(uses_vertex_color(uv));  // false for a NaN, so this is the assertion
+    CHECK(is_offscreen(uv));
+  }
+
   std::printf(
       "recon texture projective test passed: 1 triangle textured with exact "
       "projected UVs, an occluded triangle carried its coordinate as -uv-1 "
@@ -403,8 +531,11 @@ int main() {
       "closer depth map reverted the textured triangle, a translated pose "
       "shifted the projection, the occlusion threshold discriminated a "
       "within-tolerance offset (and honoured an explicit tighter threshold), a "
-      "rotated pose projected through R^T to hand-computed pixels, and a depth "
+      "rotated pose projected through R^T to hand-computed pixels, a vertex "
+      "outside the frustum carried the clamped border coordinate, a depth "
       "discontinuity textured a foreground vertex via the nearest-tap "
-      "fallback\n");
+      "fallback, a mixed triangle interpolated between real projections "
+      "rather than toward the atlas origin, a mesh with no indices was still "
+      "overwritten, and a non-finite position took the sentinel\n");
   return 0;
 }
