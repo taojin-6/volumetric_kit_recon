@@ -2667,6 +2667,11 @@ topology change, and the correct response to one is to re-mesh everything — bu
 every clause is invisible from outside, and two of them (`share_vertices`, a
 `slot_count` above one) turn the feature off *permanently*. `ExtractTimings::
 dispatches` cannot carry it: it counts refit rounds and reads 1 on both paths.
+*Amended 2026-08-11 (below):* `share_vertices` is no longer one of them — the
+sharing kernel reuses its two ranges and retires more cheaply than the default
+one, not less — so `slot_count` above one is the only clause left that turns
+the feature off permanently. The reporting argument this entry makes is
+untouched, and is what made the reversal measurable rather than hopeful.
 So `incremental` says which pass it was and `remeshed_blocks` says how much it
 saved, the latter counted on-device because the dilation happens in shared memory
 the host never sees. This is the 2026-08-04 rule's second half: a library that
@@ -2697,6 +2702,94 @@ the two own the same flags on unrelated cadences, and `--incremental` turns on
 allocating the table. The room0 figures above stand as the worst case they always
 described; the ~4x lives at the iPad's 25% dirty rate and is still unmeasured
 here.
+
+### 2026-08-11 — Incremental extraction runs under `share_vertices`, because that kernel owns its index run and so retires *more* cheaply, not less (reverses the `share_vertices` clause of the incremental-dispatch decision above).
+
+The stage-3 entry above refuses `share_vertices`, on the grounds that a
+relocated block cannot retire the range it leaves behind unless it owns its
+vertices three-per-triangle. That argument is backwards, and the refusal cost
+the one configuration this feature exists for.
+
+**What the refusal cost.** The device measurement made this the blocker rather
+than the seam-B ring. Measuring the incremental extract on the iPad meant
+turning sharing off, which cost 3x the vertex arena on the one device where
+that ceiling is real: **4 177 MB, against 33 MB for the same app in its normal
+configuration**. Nothing else on the list came close in severity. The iOS
+scanner runs sharing because the vertex arena is the term that binds there.
+
+**Why the argument inverts.** Retirement is an order of magnitude *cheaper*
+under sharing. This kernel writes its own index run, so a dead triangle is
+retired by pointing its three indices at one vertex — 12 bytes, zero area,
+culled before rasterisation — where the default kernel, whose run is the
+identity it cannot touch, must overwrite 192 bytes of vertices to say the same
+thing. The dead *vertices* need no writing at all: sharing is in-block and the
+`+face` is duplicated, so once no triangle references them they are unreachable
+rather than merely unused. The retirement cost that argued against relocation
+in the default kernel mostly disappears here.
+
+**What sharing actually adds is a coupling, and it is one test.** The two
+ranges are reserved independently and a triangle indexes into the vertex range
+beside it, so a block reuses in place only when **both** counts fit and
+relocates both when either does not. Reusing one while relocating the other
+would leave the kept range's triangles naming vertices that moved. That is the
+whole of the difference from the sibling kernel, where `v = 3t` makes one test
+serve both — and it is why `ArenaState` carries a `vertex_watermark` that is
+its own number rather than `3 * watermark`, and why the vertex counter in the
+scratch word past the draw command is *seeded* on an incremental pass exactly
+as `indexCount` is.
+
+**Occupancy is asked on both axes.** `kMaxArenaOccupancy` withholds the arena
+state — which makes the next pass full, which is the compaction — when the
+arena has drifted past 2x its live surface. Under sharing that is two questions
+rather than one asked twice: a relocating block's triangles are retired as
+degenerates that keep occupying index slots, while its vertices are simply left
+unreachable and never written, so the two buffers drift apart and either can be
+the one carrying the dead weight. Withholding on the worse of the two compacts
+whichever it is. Without sharing the second test is the first restated and
+changes nothing.
+
+**Measured on room0 with `--share-vertices --incremental`:** the arena holds
+**310 312 triangles for 277 506 live in 39.5 MB — 1.12x inflation, against
+1.82x without sharing**. The extract's mean is 0.98 ms, unchanged, because
+room0 re-meshes 81.67% of its blocks per window and so cannot show the win;
+that number still lives at the iPad's 25% dirty rate and is still unmeasured.
+
+**What the reversal is verified against, since a test that cannot fail is worse
+than none.** The decisive fixture — the field changed under the extractor while
+the flags still say nothing moved, so all-zero flags must return the OLD
+surface and all-set flags must reproduce a full extract once retired
+degenerates are dropped — now runs over **both** kernels. It did not before:
+the loop that was supposed to select the emitter never read its own induction
+variable, so `share_vertices` stayed false and the two iterations were the same
+kernel run twice, with `-Werror` silent because the loop header used it. Wiring
+it up failed immediately on `remeshed_blocks`, which this kernel declared and
+never incremented — the counter had been added to the sibling alone, on the
+assumption encoded in the very refusal this entry reverses.
+
+**Two hazards the reversal had to close, both invisible to a caller.** A
+triangle dropped for a vertex-claim overflow *inside a reused range* used to
+keep the previous extract's index triple: still in range, so nothing faults,
+but naming three unrelated vertices of the new surface and drawing a full-area
+triangle across the block — and unreachable by the retire pass, which starts
+past the live sub-range by construction. It is retired in place now. And the
+dilation's `s_dirty` had no barrier between invocation 0 zeroing it and
+invocations 0..7 OR-ing into it, so a lane that ORed early had its bit
+clobbered and a changed block took the clean early-return, keeping stale
+triangles for a surface that had moved. Latent where lanes 0..7 share one SIMD
+group, as on Apple; live anywhere else. The sibling kernel had the barrier at
+exactly that point.
+
+**What this does not settle.** A reuse rewrites the span with the *live*
+counts, which is the definition `block_spans()` consumers and the occupancy sum
+both need, but it means a block that shrinks and grows back inside its original
+reservation relocates where it could have stayed. Bounded rather than
+unbounded — occupancy withholds and the next full pass compacts — so what is
+unknown is the rate. Recording the reservation beside the live count (a private
+per-slot table; not the four published span fields, whose ABI is pinned) would
+remove it, and is worth building only once relocation is measured to be common
+rather than rare. room0 cannot supply that measurement: at 81.67% dirty, nearly
+everything relocates there for reasons unrelated to this. Marked `TODO(mesh)`
+at the span write.
 
 ## Measured lessons
 

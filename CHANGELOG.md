@@ -8,6 +8,58 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `mesh`: incremental extraction now works under **`share_vertices`**, which is
+  the configuration the only device consumer runs and the one that decides
+  whether any of this ships. The sharing kernel reserves two per-block ranges
+  already (since the stage-2 work), so this teaches it to *reuse* them: in place
+  when **both** the vertex and triangle counts fit, appending otherwise. Both,
+  not either — the two ranges are allocated independently and a triangle indexes
+  into the vertex range beside it, so reusing one while relocating the other
+  would leave the kept range's triangles pointing at vertices that moved. That
+  coupling is what sharing adds over the default kernel, where `v = 3t` makes one
+  test serve both.
+  **Retirement is an order of magnitude cheaper here**, because this kernel owns
+  its index run: a dead triangle is retired by pointing its three indices at one
+  vertex — 12 bytes, zero area, culled before rasterisation — where the default
+  kernel, whose run is the identity it cannot touch, overwrites 192 bytes of
+  vertices to say the same thing. The dead *vertices* need no writing at all:
+  sharing is in-block and the `+face` is duplicated, so once no triangle
+  references them they are unreachable rather than merely unused.
+  The memory argument this existed to answer: room0 holds **39.5 MB with 310 312
+  triangles for 277 506 live — 1.12x inflation**, against 1.82x and a 4 177 MB
+  device arena without sharing.
+  Occupancy is asked on **both** axes: retirement leaves dead triangles occupying
+  index slots while dead vertices are merely unreachable, so the two buffers
+  drift apart and either can be the one that reaches
+  `maxStorageBufferRange` first. Without sharing the second test is the first
+  restated and changes nothing.
+  The decisive test now runs over **both** kernels: the field is changed under a
+  clean extract, so all-zero flags must return the old surface (a silent fallback
+  returns the new one and fails) and all-set flags must reproduce a full extract
+  exactly once retired degenerates are dropped. It did not before — the loop that
+  selects the emitter never read its own induction variable, so `share_vertices`
+  stayed false and the two iterations ran the same kernel twice, `-Werror` silent
+  because the loop header used it. Wiring it up failed immediately on
+  `remeshed_blocks`, which this kernel declared and never incremented: the
+  counter had been added to the sibling alone, on the assumption this change
+  reverses.
+
+### Fixed
+
+- `mesh`: a triangle the sharing kernel drops for a vertex-claim overflow
+  **inside a reused range** kept the previous extract's index triple. Those
+  indices are in range, so nothing faults, but they name three unrelated vertices
+  of the *new* surface and draw a full-area triangle across the block — and the
+  retire pass cannot reach them, since it starts past the live sub-range by
+  construction. The slot is retired in place now, with the same degenerate.
+- `mesh`: the sharing kernel's dirty dilation had **no `barrier()`** between
+  invocation 0 zeroing `s_dirty` and invocations 0..7 `atomicOr`-ing into it, so
+  a lane that ORed early had its bit clobbered and a changed block took the clean
+  early-return — keeping stale triangles for a surface that had moved, under
+  `Status::ok`. Latent where lanes 0..7 share one SIMD group, as on Apple; live
+  on any implementation with a smaller subgroup or independent thread
+  scheduling. The sibling kernel has the barrier at exactly that point.
+
 - `mesh`: `MarchingCubes::extract_device_incremental` — **stage 3**. Blocks whose
   `+{0,1}³` neighbourhood carries no change keep the triangles they already have,
   at the offsets `block_spans()` already names, and cost one workgroup that
@@ -29,7 +81,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   that retired either anchor, flags the integrator will not vouch for, an arena
   that has to grow (it reallocates without copying), an overflow refit (whose
   retry has already lost the pre-call spans), occupancy past 2x the live
-  surface, sharing, or more than one slot. Which one the caller got is reported
+  surface, or more than one slot. Which one the caller got is reported
   as `ExtractTimings::incremental`, beside a device-counted `remeshed_blocks` —
   `dispatches` counts refit rounds and reads 1 on both paths, so it cannot say.
 - `tsdf`: `TsdfIntegrator::dirty_flags_buffer()` / `dirty_flags_capacity()` /
