@@ -75,6 +75,18 @@ struct Options {
   // Report the TRUE dirty-block fraction every N fused frames; 0 = off. Unlike
   // a frustum survey this counts only blocks the integrator actually wrote.
   int dirty_every = 0;
+  // Re-mesh only the blocks a fuse changed, through
+  // MarchingCubes::extract_device_incremental. Implies the integrator's dirty
+  // tracking (the flags it reads), the extractor's span table (the ranges it
+  // re-meshes against), and --device-extract (the only path it exists on).
+  //
+  // It also takes OWNERSHIP of the flags: the extract consumes them and resets
+  // them immediately after, so the next window accumulates from zero. That is
+  // the whole discipline the feature depends on -- the fuse kernel only ORs
+  // into the flags, so without a reset every block reads dirty within a few
+  // frames and the run re-meshes everything through the incremental path while
+  // paying for the table, the dilation and the retirement.
+  bool incremental = false;
   int num_buckets = 16384;  // initial map size; grows on overflow via resize
   bool preload = false;     // decode every frame up front (RAM for decode time)
 };
@@ -115,6 +127,8 @@ vr::Result<Options> parse_args(int argc, char** argv) {
       opt.device_extract = true;
     } else if (a == "--share-vertices") {
       opt.share_vertices = true;
+    } else if (a == "--incremental") {
+      opt.incremental = true;
     } else if (a == "--dirty-every") {
       if (!need_int(opt.dirty_every))
         return vr::Status::invalid_argument("--dirty-every");
@@ -156,8 +170,28 @@ vr::Result<Options> parse_args(int argc, char** argv) {
   if (opt.scene_dir.empty()) {
     return vr::Status::invalid_argument(
         "usage: fuse_replica <scene_dir> [-o out.ply] [--share-vertices] "
+        "[--device-extract] [--incremental] [--dirty-every n] "
         "[--voxel m] "
         "[--max-frames n] [--stride n] [--max-depth m] [--preload]");
+  }
+  // --incremental only exists on the device path, so it turns it on rather than
+  // being ignored beside it. Ignoring it was worse than it looks: the tracking
+  // and the grid-sized span table are switched on by the flag itself, so the
+  // run paid ~36 MB and a per-fuse dirty pass and then took the host extract
+  // anyway -- and nothing said so.
+  if (opt.incremental) opt.device_extract = true;
+  // Two owners of one set of flags. --dirty-every reads the accumulated flags
+  // and then resets them, which is exactly what the incremental extract does,
+  // on a cadence that has nothing to do with --mesh-every: at the defaults it
+  // would zero the flags at frames 10/20/30/40 and leave the frame-50 extract
+  // seeing only frames 41-50, so every block changed before that reads clean
+  // and keeps stale triangles. Refused rather than silently resolved -- either
+  // is a legitimate thing to want, and picking one for the caller is how the
+  // survey's numbers end up describing a run nobody asked for.
+  if (opt.incremental && opt.dirty_every > 0) {
+    return vr::Status::invalid_argument(
+        "--dirty-every and --incremental both consume the integrator's dirty "
+        "flags and reset them; run one or the other");
   }
   if (opt.cam_params.empty()) {
     opt.cam_params = opt.scene_dir + "/../cam_params.json";
@@ -253,13 +287,17 @@ vr::Status run(const Options& opt) {
   VR_ASSIGN(tsdf::TsdfIntegrator integrator,
             tsdf::TsdfIntegrator::create(device, allocator, [&] {
               tsdf::TsdfIntegratorConfig c;
-              c.track_dirty_blocks = opt.dirty_every > 0;
+              c.track_dirty_blocks = opt.dirty_every > 0 || opt.incremental;
               return c;
             }()));
   VR_ASSIGN(mesh::MarchingCubes extractor,
             mesh::MarchingCubes::create(device, allocator, [&] {
               mesh::MarchingCubesConfig c;
               c.share_vertices = opt.share_vertices;
+              // The span table is what an incremental extract re-meshes
+              // against, and it is sized by the grid rather than the surface --
+              // so it stays off unless asked for.
+              c.track_block_spans = opt.incremental;
               return c;
             }()));
 
@@ -386,6 +424,13 @@ vr::Status run(const Options& opt) {
   // Remesh accumulators; see the report below.
   std::size_t remeshes = 0;
   std::uint64_t sum_dispatches = 0;
+  // Extracts that really were incremental, and what they re-meshed. Separate
+  // from `remeshes` because the extractor falls back silently by design, so
+  // "asked for" and "got" are different numbers and only the second one
+  // explains the timings above.
+  std::size_t incremental_extracts = 0;
+  std::uint64_t sum_remeshed = 0;
+  std::uint64_t sum_incr_active = 0;
   double sum_total = 0.0, sum_compact = 0.0, sum_arena = 0.0;
   double sum_dispatch = 0.0, sum_read = 0.0;
   mesh::ExtractTimings last_rt{};
@@ -476,9 +521,34 @@ vr::Status run(const Options& opt) {
         // at the default slot_count of 1 the next extract invalidates it, which
         // is exactly what a benchmark wants and what a real consumer must not
         // do.
-        VR_ASSIGN(mesh::DeviceMesh dm,
-                  extractor.extract_device(volume, 0.0f, &rt));
-        tris = dm.triangle_count;
+        if (opt.incremental) {
+          // All three fields off the same integrator in the same breath. A
+          // capacity or an epoch cached across a fuse names a buffer this
+          // object may already have replaced or a topology it may already have
+          // left.
+          const mesh::DirtyBlocks dirty{integrator.dirty_flags_buffer(),
+                                        integrator.dirty_flags_capacity(),
+                                        integrator.dirty_epoch()};
+          VR_ASSIGN(mesh::DeviceMesh dm, extractor.extract_device_incremental(
+                                             volume, 0.0f, dirty, &rt));
+          tris = dm.triangle_count;
+          // Consumed, so cleared -- and cleared here, immediately after the
+          // extract that read them, rather than on a cadence of its own. The
+          // fuse kernel only ORs into the flags, so anything else makes the
+          // window they describe drift out of step with the window between
+          // extracts: too long and every block reads dirty (a full re-mesh
+          // wearing the incremental path's costs), too short and blocks that
+          // really changed read clean and keep triangles the fuse invalidated.
+          //
+          // Reset even when the extract fell back to a full pass: a full pass
+          // re-meshes everything, so the flags it did not read are just as
+          // spent as the ones it did.
+          integrator.reset_dirty();
+        } else {
+          VR_ASSIGN(mesh::DeviceMesh dm,
+                    extractor.extract_device(volume, 0.0f, &rt));
+          tris = dm.triangle_count;
+        }
       } else {
         VR_ASSIGN(mesh::Mesh preview, extractor.extract(volume, 0.0f, &rt));
         tris = preview.triangle_count();
@@ -490,6 +560,15 @@ vr::Status run(const Options& opt) {
       sum_dispatch += rt.dispatch_ms;
       sum_read += rt.readback_ms;
       sum_dispatches += rt.dispatches;
+      // Counted, not assumed. Every clause the extractor decides on is
+      // invisible from here, and a run that silently fell back to full
+      // extracts would otherwise be reported as measuring the feature -- which
+      // is the only way a benchmark of it can lie.
+      if (rt.incremental) {
+        ++incremental_extracts;
+        sum_remeshed += rt.remeshed_blocks;
+        sum_incr_active += rt.active_blocks;
+      }
       last_rt = rt;
       if (fused % 100 == 0) {
         std::printf("  frame %zu: fused %zu, %zu triangles so far\n", i, fused,
@@ -513,6 +592,19 @@ vr::Status run(const Options& opt) {
         last_rt.active_blocks, cells / 1e6, last_rt.emitted_triangles,
         cells > 0.0 ? 100.0 * last_rt.emitted_triangles / cells : 0.0,
         static_cast<double>(sum_dispatches) / n);
+    if (opt.incremental) {
+      // Both halves, because either alone reads as success. "0 of 40
+      // incremental" is a run that measured the fallback; "40 of 40, 98%
+      // re-meshed" is a run that measured the feature doing all the work
+      // anyway, which is what an unreset flag array produces.
+      std::printf(
+          "  incr    %zu of %zu extracts incremental, mean %.1f%% of blocks "
+          "re-meshed\n",
+          incremental_extracts, remeshes,
+          sum_incr_active > 0 ? 100.0 * static_cast<double>(sum_remeshed) /
+                                    static_cast<double>(sum_incr_active)
+                              : 0.0);
+    }
   }
 
   // Per-stage host vs device, averaged over the fused frames.

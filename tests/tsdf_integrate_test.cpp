@@ -325,11 +325,57 @@ int dirty_blocks_case(vr::Device& device, vr::Allocator& allocator) {
              .dirty_remesh_blocks(b, after_remove.value().data(),
                                   after_remove.value().size())
              .ok());
+  // ...and so must the ON-DEVICE path, which is the same question asked by a
+  // consumer in another tier: `mesh` tests these flags in a workgroup instead
+  // of taking them back through the host, so it never calls the function above.
+  //
+  // The handle alone CANNOT answer it here, and that is the point of publishing
+  // an epoch beside it. Nothing has been fused since the remove, so this object
+  // has not yet seen the topology move -- the check above is made against the
+  // grid it was handed, and a bare accessor has no grid. The epoch is what
+  // carries the answer across the tier boundary: a consumer compares it with
+  // the grid IT is meshing, and the token being globally unique makes that one
+  // comparison cover both "the right grid" and "no blocks removed since".
+  CHECK(integ.dirty_flags_buffer() != VK_NULL_HANDLE);
+  CHECK(integ.dirty_epoch() != b.topology_epoch());
+
+  // Fusing again is when this object LEARNS the topology moved, and from there
+  // it refuses outright rather than handing out flags it will not vouch for --
+  // the flags accumulated across a remove describe changes to blocks that are
+  // gone. All three go together: a null handle beside a live capacity is a
+  // caller binding one against the other.
+  //
+  // The block has to be put back first. Both removes above took `b`'s only
+  // block, and integrate() returns on an empty active set BEFORE it reaches the
+  // anchor check -- so a fuse over nothing teaches this object nothing, which
+  // is right (it also changed nothing) and would otherwise make the assertion
+  // below read as a refusal it never made. Allocating does not move the token,
+  // so the mismatch this is about survives it.
+  CHECK(b.map().allocate(&one, 1).value() == 0);
+  CHECK(integ
+            .integrate(b, depth_band.data(), cam, 5.0f,
+                       tsdf::IntegrationMode::Dynamic)
+            .ok());
+  CHECK(integ.dirty_flags_buffer() == VK_NULL_HANDLE);
+  CHECK(integ.dirty_flags_capacity() == 0);
+  CHECK(integ.dirty_epoch() == 0);
+
   // reset_dirty() re-arms it: nothing is accumulated, so nothing is stale.
   integ.reset_dirty();
   vr::Result<std::vector<vr::Vec3i>> rearmed = integ.dirty_remesh_blocks(
       b, after_remove.value().data(), after_remove.value().size());
   CHECK(rearmed.ok() && rearmed.value().empty());
+
+  // And the device trio comes back with it, anchored on the grid the next fuse
+  // touches. The epoch is the LIVE token, which is what a consumer's own
+  // comparison is against.
+  CHECK(integ
+            .integrate(b, depth_band.data(), cam, 5.0f,
+                       tsdf::IntegrationMode::Dynamic)
+            .ok());
+  CHECK(integ.dirty_flags_buffer() != VK_NULL_HANDLE);
+  CHECK(integ.dirty_flags_capacity() > 0);
+  CHECK(integ.dirty_epoch() == b.topology_epoch());
 
   return 0;
 }

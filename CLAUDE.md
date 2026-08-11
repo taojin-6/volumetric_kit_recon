@@ -199,6 +199,10 @@ order. Change the decision, its entry there, and this list together.
   carries its atlas coordinate rather than discarding it (amends the 2026-07-07
   texture-tier decision, and retires the `share_vertices` refusal the
   2026-08-04 entry records).
+- [**2026-08-11**](DECISIONS.md#2026-08-11--an-incremental-extract-trusts-one-struct-cleared-on-every-path-and-re-established-only-where-a-mesh-is-handed-out-every-refusal-is-a-silent-fallback-and-the-fallback-is-reported) —
+  An incremental extract trusts one struct, cleared on every path and
+  re-established only where a mesh is handed out; every refusal is a silent
+  fallback, and the fallback is *reported*.
 
 ## Provenance & salvage policy
 
@@ -440,9 +444,14 @@ arbitrary; it usually isn't.
   of the surface) or **dynamic** (clear it, so a receded surface leaves no
   ghost). An optional `ColorFrame` fuses colour through its own separate
   `ColorCameraParams`; a voxel's first colour observation assigns rather than
-  blends. Opt-in `track_dirty_blocks` reports which blocks a fuse *changed*;
-  opt-in `StageMetrics*` reports an `"integrate"` row with both halves, over a
-  `"  ..active set"` sub-row for the compaction dispatch it also makes.
+  blends. Opt-in `track_dirty_blocks` reports which blocks a fuse *changed* —
+  as a host list (`dirty_remesh_blocks`) or, for an on-device consumer, as
+  `dirty_flags_buffer()` / `dirty_flags_capacity()` / `dirty_epoch()`, which go
+  null **together** on every staleness this tier can see and carry the grid's
+  topology token for the one it cannot (a `remove()` since the last fuse is
+  visible only to whoever holds the grid). Opt-in `StageMetrics*` reports an
+  `"integrate"` row with both halves, over a `"  ..active set"` sub-row for the
+  compaction dispatch it also makes.
 
 - **`mesh`** — `MarchingCubes` over a dense grid or, the real path, a sparse
   `VoxelBlockGrid`: one workgroup per active block, with the cross-block 2×2×2
@@ -476,7 +485,28 @@ arbitrary; it usually isn't.
   textured like any other mesh since the `texture` tier moved to a per-vertex
   verdict (2026-08-11). `DeviceMesh::shares_vertices` still publishes it,
   because `v = 3t` no longer holds and a consumer sizing an arena cannot derive
-  that from the buffers.
+  that from the buffers — and because incremental extraction *does* still refuse
+  it, for a reason of its own: a shared vertex is not owned three-per-triangle,
+  so a relocated block cannot retire what it leaves behind.
+  `extract_device_incremental` re-meshes only the blocks a fuse changed: it
+  takes the flags as an opaque `DirtyBlocks` (buffer + capacity + the
+  `topology_epoch` they were accumulated against, all three off the integrator
+  in one breath), dilates the *changed* set into the *re-mesh* set on-device
+  over the 2×2×2 neighbourhood the gather already resolved, reuses each block's
+  existing range where the new count fits and appends past the watermark where
+  it does not, retiring what it leaves behind to zero-area triangles. What it
+  may trust is one `{watermark, epoch, serial}` struct, cleared at the top of
+  **both** extract paths and re-established only on the publishing return, so
+  no failure — and no dense extract — leaves it describing geometry that is
+  gone; the anchor is compared *above* the call that re-anchors it, or it
+  compares a value with itself. Everything else is a **silent fallback to a
+  full extract**, which is why `ExtractTimings::incremental` reports which pass
+  the caller got and `remeshed_blocks` (counted on-device, since the dilation
+  never reaches the host) reports what it saved — `dispatches` counts refit
+  rounds and reads 1 on both. Occupancy past `kMaxArenaOccupancy`x the live
+  count (summed off the spans, never from the arena's own total, which ratchets)
+  withholds the state so the next pass compacts. `slot_count == 1` only, so it
+  is off in `fuse_viewer` today — a `TODO(mesh)` on the class.
 
 - **`texture`** — `ProjectiveTexturer` rewrites every `Vertex::uv0` against one
   posed frame, one thread per **vertex**: it is kept where the vertex is in
@@ -500,26 +530,36 @@ arbitrary; it usually isn't.
   drivers live with the platform that can build *and* test them.
 
 **Examples** (`examples/`). `fuse_replica` runs the spine on a posed
-Replica-SLAM RGB-D sequence and writes a PLY. Behind the off-by-default
+Replica-SLAM RGB-D sequence and writes a PLY; `--incremental` drives the
+dirty-only extract and **owns the dirty flags**, resetting them immediately
+after the extract that consumed them (the fuse kernel only ORs, so anything
+looser and every block reads dirty within a few frames — which is how the first
+cut's headline numbers ended up being the 100%-dirty worst case). It implies
+`--device-extract` and is refused beside `--dirty-every`, which wants the same
+flags on a different cadence. Behind the off-by-default
 `VR_BUILD_VIEWER`: `fuse_render` writes a headless colour PNG (seam A — it
 builds two devices by design), and `fuse_viewer` opens a live window on one
 shared `VkDevice`, fusing on a background thread, drawing recon's buffers
 directly, and carrying the two-panel perf overlay. All three take `--preload`,
 which makes the loop measure compute rather than the JPEG/PNG decoder.
 
-**Next.** **Incremental mesh extraction**, decided and staged — read the
-2026-08-09 entry before starting it. **Stage 2 has landed on both sparse
-kernels** (~10% on the default one, no measurable cost on the sharing one), so
-**stage 3 — dirty-only dispatch — is what is next**. The block-to-range mapping
-it needs is now published (`MarchingCubes::block_spans()`, opt-in behind
-`track_block_spans`; see the 2026-08-11 decision, which also settles the seam-B
-ring collision the 2026-08-09 entry left open — one table, retired by
-generation, not one per slot). What is left is dispatching over the dirty set.
-Beside it:
+**Next.** **Incremental mesh extraction has landed, all three stages** —
+`MarchingCubes::extract_device_incremental`, over the span table of the
+2026-08-11 table decision and the dirty flags of the 2026-08-09 one; read both,
+plus the 2026-08-11 dispatch entry, before touching it. Two things it does
+**not** yet do, and both are `TODO(mesh)`s: it runs at `slot_count == 1` only,
+so it is silently off in `fuse_viewer` (extending the ring is the open design
+question — release-gated range reuse, or copying the retained run into the newly
+claimed slot); and the ~4x win the 2026-08-09 entry sized it for is **still
+unmeasured**, because room0 re-meshes 81.67% of its blocks per window and so
+caps at ~1.22x. The iPad's 25% dirty rate is where the number lives, and
+`fuse_replica --incremental` now reports `incremental` / `remeshed_blocks` so a
+run cannot quietly measure the fallback instead. Beside it:
 first-class glTF/GLB export via tinygltf + the gfx-vertex converter (the
 example's tinyply dump is deliberately a throwaway). On `mesh`, the greppable
-`TODO(mesh)`s: cross-block vertex sharing, per-vertex normals, the incremental
-block-mesh pool (the staged work above), fitting the *dense* extract to its
+`TODO(mesh)`s: cross-block vertex sharing, per-vertex normals, extending
+incremental extraction past one slot, revisiting degenerate retirement if
+relocation proves common rather than rare, fitting the *dense* extract to its
 surface as the sparse one does, and `ExtractTimings`' device half — which must
 bracket several dispatches in **one** timed submit, since a timed submit costs
 ~0.13 ms on MoltenVK and four of the six phases run under that. On `texture`:
