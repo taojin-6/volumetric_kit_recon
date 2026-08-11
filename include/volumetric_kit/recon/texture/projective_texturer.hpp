@@ -33,40 +33,75 @@ namespace volumetric_kit::recon::texture {
 ///        where it had a clear line of sight and falls back to per-vertex color
 ///        everywhere else.
 ///
-/// One GLSL dispatch runs a thread per triangle. It projects the triangle's
-/// three world-space vertices into the camera (rigid `world -> camera` from the
-/// camera's `cam_to_world`, pinhole intrinsics) and keeps the triangle only
-/// when
-/// **all three** vertices are: in front of the camera, inside the image, and
-/// **unoccluded** -- their projected camera-space depth agrees with the frame's
-/// depth map at that pixel within `occlusion_threshold`. That depth test is the
-/// "line of sight" check: a triangle hidden behind nearer geometry projects
-/// onto a pixel whose sensor depth is much closer, so it fails and stays
-/// untextured.
+/// One GLSL dispatch runs a thread per **vertex**. It projects the vertex into
+/// the camera (rigid `world -> camera` from the camera's `cam_to_world`,
+/// pinhole intrinsics) and calls it visible when it is in front of the camera,
+/// inside the image, and **unoccluded** -- its projected camera-space depth
+/// agreeing with the frame's depth map at that pixel within
+/// `occlusion_threshold`. That depth test is the "line of sight" check: a
+/// vertex hidden behind nearer geometry projects onto a pixel whose sensor
+/// depth is much closer, so it fails and stays untextured.
 ///
-/// A kept triangle's vertices receive `uv0 = (pixel + 0.5) / (width, height)`
-/// -- a half-texel-centred normalized coordinate into the camera's image,
-/// clamped half a texel inside the border to stop bilinear bleed at the atlas
-/// edge -- which the caller binds as the renderer's atlas (`HybridMeshPipeline`
-/// samples the atlas where `uv0` is valid). A rejected triangle's vertices are
-/// written the `(-1, -1)` sentinel, so the shader falls back to the
-/// @ref mesh::Vertex::color the TSDF tier fused -- and, because every call
-/// **overwrites** `uv0`, a triangle that leaves the view on a later frame
-/// reverts to that fallback rather than keeping a stale coordinate.
+/// **Per vertex, not per triangle**, and that is what makes this pass safe on a
+/// mesh built with `mesh::MarchingCubesConfig::share_vertices`. Every input to
+/// the verdict above is a property of the vertex alone, so deciding it per
+/// triangle and writing the answer to three vertices was only ever a choice --
+/// and on a shared mesh a wrong one, since a vertex belonging to several
+/// triangles that disagreed was written by whichever thread ran last. One
+/// thread per vertex means one writer per vertex. It is also less work: a
+/// shared vertex used to be projected once per referencing triangle.
+///
+/// The cost is the all-three-vertices gate. A triangle straddling the
+/// visibility boundary is no longer refused whole; the renderer resolves albedo
+/// from its provoking vertex, so it takes one class for its whole face and the
+/// textured region grows by up to one triangle at an occlusion silhouette.
+///
+/// **`uv0` therefore has three outcomes, not two:**
+/// - **visible** -- `uv0 = (pixel + 0.5) / (width, height)`, a half-texel-
+///   centred normalized coordinate into the camera's image, clamped half a
+///   texel inside the border to stop bilinear bleed at the atlas edge. The
+///   caller binds that image as the renderer's atlas.
+/// - **in frame but occluded** -- `uv0 = -uv - 1`: still negative, so
+///   `HybridMeshPipeline` selects @ref mesh::Vertex::color exactly as before,
+///   but the coordinate is **carried** rather than discarded. gfx decodes it
+///   instead of substituting `(0, 0)`. Without this a triangle mixing the two
+///   classes interpolates from a real coordinate toward the atlas origin and
+///   smears the corner of the image across its face.
+/// - **not in frame at all** -- the `(-1, -1)` sentinel. There is no coordinate
+///   to carry, and it decodes to `(0, 0)`, which is what gfx already
+///   substituted.
+///
+/// A consumer must therefore test the **sign** (`uv0.x < 0`), which is what
+/// gfx's shader does, and never compare against `(-1, -1)` exactly.
+///
+/// Because every call **overwrites** every vertex's `uv0`, a vertex that leaves
+/// the view on a later frame reverts rather than keeping a stale coordinate.
 ///
 /// This is the live, single-camera slice: the caller passes the current frame's
 /// depth + camera (and binds its image as the atlas) each frame, so the
 /// textured region tracks the camera through the scene. The projection and the
 /// occlusion depth test both use @p cam, and the UV is normalized by @p cam's
-/// dimensions, so the bound atlas must be **registered** to the depth camera --
-/// same intrinsics and pose, not merely the same resolution. A registered
-/// (or synthetic, e.g. Replica) RGB-D frame satisfies this; an unregistered
-/// colour stream with its own intrinsics would misaddress the atlas. The
-/// separate-colour-camera path the TSDF tier models (`ColorCameraParams`) is a
-/// later slice. Multi-keyframe selection (best of several views, a packed
-/// atlas) is likewise a later slice; the winner-take-all vertex arbitration it
-/// needs is unnecessary here because the mesh tier emits independent triangles
-/// (no shared vertices), so each thread owns its three `uv0` writes outright.
+/// dimensions, so the bound atlas must be **registered** to the depth camera.
+/// A registered (or synthetic, e.g. Replica) RGB-D frame satisfies this; an
+/// unregistered colour stream with its own intrinsics would misaddress it.
+///
+/// **Registered does not mean the same resolution**, and the difference matters
+/// for any sensor whose colour image is larger than its depth map. Because the
+/// UV is *normalized*, a colour image registered to @p cam addresses correctly
+/// at any size, exactly -- provided the depth intrinsics were derived from the
+/// colour ones with a pixel-centre-preserving rescale, which is what
+/// `sensor::depth_from_registered_color` does. With `cx_d = (cx_c + 0.5)·s -
+/// 0.5` the projections satisfy `u_d + 0.5 = s·(u_c + 0.5)`, so
+/// `(u_d + 0.5)/W_d` is identically `(u_c + 0.5)/W_c`. An ARKit frame --
+/// 256x192 depth registered to a 1920x1440 capture -- is therefore textured at
+/// full colour resolution with no rescale and no correction here.
+///
+/// The separate-colour-camera path the TSDF tier models (`ColorCameraParams`)
+/// is a later slice, as is multi-keyframe selection (best of several views, a
+/// packed atlas). That one needs a per-*primitive* camera id rather than the
+/// winner-take-all vertex arbitration the prior engine used: a triangle whose
+/// vertices index different sub-rects of a pack cannot be expressed per vertex
+/// under any encoding, including this one's.
 ///
 /// @warning The @ref Device and @ref Allocator passed to @ref create must
 ///          outlive this object; it stores references to them.

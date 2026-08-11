@@ -387,14 +387,18 @@ int main() {
     CHECK(texturer.texture(next.value(), depth.data(), cam).ok());
   }
 
-  // A mesh whose vertices are SHARED is refused, and that refusal is the whole
-  // reason DeviceMesh publishes the flag. This pass decides visibility per
-  // triangle and writes uv0 per vertex; where a vertex is referenced by up to
-  // six triangles that disagree, the last writer wins nondeterministically and
-  // a triangle left holding one sentinel interpolates from (-1, -1) across its
-  // face -- Status::ok, no validation diagnostic, visible only as flicker.
-  // Without the flag the texturer had no way to ask: share_vertices lives on a
-  // config it is not compiled against.
+  // A mesh whose vertices are SHARED is textured, not refused.
+  //
+  // It used to be refused, and the refusal was the whole reason DeviceMesh
+  // publishes the flag: the pass decided visibility per TRIANGLE and wrote uv0
+  // per VERTEX, so a vertex referenced by up to six triangles that disagreed
+  // was written by whichever thread ran last -- nondeterministically, visible
+  // only as flicker along every silhouette. The dispatch is per vertex now, so
+  // there is exactly one writer per vertex and nothing to disagree.
+  //
+  // The flag has not become useless; it has stopped being an incompatibility.
+  // A packed multi-camera atlas will still need a per-PRIMITIVE camera id, and
+  // a consumer sizing a vertex arena still needs to know whether `v = 3t`.
   {
     mesh::MarchingCubesConfig share_config;
     share_config.share_vertices = true;
@@ -406,14 +410,15 @@ int main() {
     CHECK(shared.ok());
     CHECK(!shared.value().empty());
     CHECK(shared.value().shares_vertices);
-    // Current, valid, and correctly configured -- so nothing but the sharing
-    // flag can be what rejects it.
     CHECK(shared.value().is_current());
     CHECK(shared.value().valid());
+    // Sharing genuinely reduces the vertex count, so this is a mesh the old
+    // path could not have produced a result for at all -- not merely the same
+    // mesh relabelled.
+    CHECK(shared.value().vertex_count < 3 * shared.value().triangle_count);
     vr::Status shared_texture =
         texturer.texture(shared.value(), depth.data(), cam);
-    CHECK(!shared_texture.ok());
-    CHECK(shared_texture.domain() == vr::Status::Code::InvalidArgument);
+    CHECK(shared_texture.ok());
   }
 
   std::printf(

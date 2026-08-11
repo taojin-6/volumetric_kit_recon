@@ -25,21 +25,24 @@ namespace {
 constexpr std::uint32_t kLocalSize = 256;
 
 // The push-constant block (mirrors `PushConstants` in texture_common.glsl): the
-// triangle count, the occlusion distance threshold, and the vertex count that
-// bounds the shader's index -> vertex addressing. All scalars, so under scalar
-// block layout each lands at its host offset. A drift is a compile error, not
-// silent misprojection -- the discipline the volume/tsdf/mesh PODs follow.
+// vertex count this dispatch is bounded by, and the occlusion distance
+// threshold. All scalars, so under scalar block layout each lands at its host
+// offset. A drift is a compile error, not silent misprojection -- the
+// discipline the volume/tsdf/mesh PODs follow.
+//
+// The triangle count left with the per-triangle dispatch, and so did the
+// separate vertex bound it used to need: the kernel formed a vertex index from
+// the index buffer and had to be told where vertices[] ended, whereas now the
+// only index it forms is its own invocation id, bounded by the same count that
+// sizes the dispatch.
 struct PushConstants {
-  std::uint32_t num_triangles;
-  float occlusion_threshold;
   std::uint32_t num_vertices;
+  float occlusion_threshold;
 };
-static_assert(sizeof(PushConstants) == 12, "PushConstants must be 12 bytes");
-static_assert(offsetof(PushConstants, num_triangles) == 0,
+static_assert(sizeof(PushConstants) == 8, "PushConstants must be 8 bytes");
+static_assert(offsetof(PushConstants, num_vertices) == 0,
               "PushConstants layout drift");
 static_assert(offsetof(PushConstants, occlusion_threshold) == 4,
-              "PushConstants layout drift");
-static_assert(offsetof(PushConstants, num_vertices) == 8,
               "PushConstants layout drift");
 
 // group_count / storage_buffer / upload_storage_buffer are shared across the
@@ -55,18 +58,23 @@ Result<ProjectiveTexturer> ProjectiveTexturer::create(Device& device,
   tex.device_ = &device;
   tex.allocator_ = &allocator;
 
-  // The view-selection kernel: 4 storage-buffer bindings (vertices, indices,
-  // depth, camera) + the PushConstants range. KernelSetBuilder builds its
-  // layout
+  // The view-selection kernel: 3 storage-buffer bindings (vertices, depth,
+  // camera) + the PushConstants range. KernelSetBuilder builds its layout
   // + pipeline and allocates its set from a shared pool (sized to the exact
   // descriptor total).
+  //
+  // Three, not four: the per-vertex dispatch never addresses a vertex through
+  // an index, so the index buffer is not bound at all. The remaining three are
+  // renumbered to close the gap rather than leaving binding 1 unused, since the
+  // set layout comes from SPIR-V reflection and a hole in it would be a
+  // standing invitation to write the wrong slot.
   VkPushConstantRange push_range{};
   push_range.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
   push_range.offset = 0;
   push_range.size = sizeof(PushConstants);
   KernelSetBuilder kb(dev);
   VR_TRY(kb.add(tex.kernel_, vr_texture_score_comp_spv,
-                vr_texture_score_comp_spv_size, 4, &push_range));
+                vr_texture_score_comp_spv_size, 3, &push_range));
   VR_ASSIGN(tex.pool_, kb.build());
 
   // A 1-D dispatch's groupCountX is capped by maxComputeWorkGroupCount[0];
@@ -85,11 +93,11 @@ Result<ProjectiveTexturer> ProjectiveTexturer::create(Device& device,
   tex.max_storage_buffer_range_ = props.limits.maxStorageBufferRange;
 
   // The camera params are fixed-size, so persist the SSBO (bound once at
-  // binding 3) and rewrite its contents each texture() -- not a per-call
+  // binding 2) and rewrite its contents each texture() -- not a per-call
   // allocation, mirroring the tsdf tier's camera SSBO.
   VR_ASSIGN(tex.cam_buf_, storage_buffer(allocator, sizeof(DepthCameraParams),
                                          HostAccess::SequentialWrite));
-  tex.kernel_.set.write_storage_buffer(3, tex.cam_buf_.handle(), 0,
+  tex.kernel_.set.write_storage_buffer(2, tex.cam_buf_.handle(), 0,
                                        VK_WHOLE_SIZE);
 
   return tex;
@@ -140,26 +148,20 @@ Status ProjectiveTexturer::texture(const mesh::DeviceMesh& mesh,
         "ProjectiveTexturer::texture: the DeviceMesh has been superseded by a "
         "later extract on its producer (texture it before extracting again)");
   }
-  // This pass decides visibility per TRIANGLE and writes uv0 per VERTEX, which
-  // is well-defined only while a vertex belongs to exactly one triangle. Where
-  // vertices are shared, an interior one is referenced by up to six triangles:
-  // if one is visible and another occluded, whichever thread writes last wins,
-  // nondeterministically and differently every frame -- and a triangle left
-  // holding two real UVs and one sentinel interpolates from (-1, -1) across its
-  // whole face, so the renderer samples arbitrary atlas texels over most of it.
-  // Status::ok, no validation diagnostic, visible only as flicker.
+  // No shared-vertex refusal any more, and its absence is the point of this
+  // pass's shape. It used to refuse a `DeviceMesh::shares_vertices` mesh
+  // outright, because deciding visibility per TRIANGLE and writing uv0 per
+  // VERTEX is well-defined only while a vertex belongs to one triangle -- a
+  // shared vertex whose triangles disagreed was written by whichever thread
+  // ran last. The dispatch is per vertex now, so there is no second writer and
+  // nothing to disagree; see the kernel's header for what that costs at a
+  // silhouette and how the uv-carrying encoding bounds it.
   //
-  // Refused rather than documented: MarchingCubesConfig::share_vertices is not
-  // something this tier can see, so the incompatibility has to travel with the
-  // mesh (the 2026-08-04 rule). The real fix is a per-primitive camera id
-  // instead of per-vertex uv0, which the packed multi-camera atlas needs
-  // anyway -- see the warning on that flag.
-  if (mesh.shares_vertices) {
-    return Status::invalid_argument(
-        "ProjectiveTexturer::texture: this DeviceMesh shares vertices between "
-        "triangles (MarchingCubesConfig::share_vertices), and per-vertex uv0 "
-        "cannot represent a per-triangle visibility decision over one");
-  }
+  // A packed multi-camera atlas will still need a per-PRIMITIVE camera id, and
+  // that is a genuinely different problem: a triangle whose vertices index
+  // different sub-rects of a pack cannot be expressed per vertex however it is
+  // encoded. Vertex sharing was never that problem, which is why it no longer
+  // travels with the mesh as an incompatibility.
 
   // Only the depth frame needs a binding check here: the mesh buffers were
   // already sized (and range-checked) by the pass that created them, and are
@@ -182,13 +184,11 @@ Status ProjectiveTexturer::texture(const mesh::DeviceMesh& mesh,
   // read back afterwards: the kernel rewrites uv0 where the geometry already
   // lives, for the next device consumer to use.
   kernel_.set.write_storage_buffer(0, mesh.vertices, 0, VK_WHOLE_SIZE);
-  kernel_.set.write_storage_buffer(1, mesh.indices, 0, VK_WHOLE_SIZE);
-  kernel_.set.write_storage_buffer(2, depth_buf.handle(), 0, VK_WHOLE_SIZE);
+  kernel_.set.write_storage_buffer(1, depth_buf.handle(), 0, VK_WHOLE_SIZE);
 
-  const PushConstants push{mesh.triangle_count, occlusion_threshold,
-                           mesh.vertex_count};
+  const PushConstants push{mesh.vertex_count, occlusion_threshold};
   return dispatch(*device_, kernel_, &push, sizeof(push),
-                  group_count(mesh.triangle_count, kLocalSize),
+                  group_count(mesh.vertex_count, kLocalSize),
                   max_workgroup_count_x_, &stage);
 }
 
@@ -221,60 +221,63 @@ Status ProjectiveTexturer::texture(mesh::Mesh& mesh, const float* depth,
   if (mesh.empty()) {
     return {};
   }
-  const std::size_t triangle_count = mesh.triangle_count();
-  if (triangle_count > std::numeric_limits<std::uint32_t>::max()) {
+  // The dispatch is sized by the vertex count now, so that is what has to fit a
+  // uint32 -- the triangle count no longer reaches the GPU at all.
+  if (mesh.vertices.size() > std::numeric_limits<std::uint32_t>::max()) {
     return Status::invalid_argument(
-        "ProjectiveTexturer::texture: triangle count exceeds 2^32");
+        "ProjectiveTexturer::texture: vertex count exceeds 2^32");
   }
 
   // A storage-buffer binding may not exceed maxStorageBufferRange; reject an
   // over-large mesh or depth image with a clean error rather than an opaque
   // allocation failure / device-lost (mirrors the mesh tier's arena guard).
-  // This also bounds vertices.size() / indices.size() well under UINT32_MAX, so
-  // the casts below -- and the shader's `tri * 3` addressing -- cannot
-  // overflow.
+  // This also bounds vertices.size() well under UINT32_MAX, so the casts below
+  // cannot overflow.
+  //
+  // The index buffer is not checked because it is not bound: the per-vertex
+  // dispatch reads no indices. Leaving it in the check would reject a mesh this
+  // pass can texture perfectly well -- and would do so on the one axis vertex
+  // sharing makes *larger* relative to the vertices, which is the shape this
+  // pass is now meant to support.
   const auto pixels = static_cast<std::size_t>(cam.width) *
                       static_cast<std::size_t>(cam.height);
   const VkDeviceSize vertex_bytes =
       VkDeviceSize(mesh.vertices.size()) * sizeof(mesh::Vertex);
-  const VkDeviceSize index_bytes =
-      VkDeviceSize(mesh.indices.size()) * sizeof(std::uint32_t);
   const VkDeviceSize depth_bytes = VkDeviceSize(pixels) * sizeof(float);
   if (vertex_bytes > max_storage_buffer_range_ ||
-      index_bytes > max_storage_buffer_range_ ||
       depth_bytes > max_storage_buffer_range_) {
     return Status::invalid_argument(
-        "ProjectiveTexturer::texture: a vertex / index / depth buffer exceeds "
+        "ProjectiveTexturer::texture: a vertex / depth buffer exceeds "
         "the device maxStorageBufferRange");
   }
 
   // Upload the interleaved vertices (Random: the kernel writes uv0 and the host
-  // reads it back), the index buffer, and the depth frame (metres). The camera
-  // rides the persistent SSBO written at create().
+  // reads it back) and the depth frame (metres). The camera rides the
+  // persistent SSBO written at create().
+  //
+  // The index buffer is no longer uploaded: the per-vertex dispatch does not
+  // read it. That is the larger half of this path's transfer on a mesh the
+  // caller did not share (three 4-byte indices per triangle against one 64-byte
+  // vertex), so the host overload got cheaper along with the device one.
   VR_ASSIGN(Buffer vertex_buf,
             upload_storage_buffer(*allocator_, mesh.vertices.data(),
                                   vertex_bytes, HostAccess::Random));
-  VR_ASSIGN(
-      Buffer index_buf,
-      upload_storage_buffer(*allocator_, mesh.indices.data(), index_bytes));
   VR_ASSIGN(Buffer depth_buf,
             upload_storage_buffer(*allocator_, depth, depth_bytes));
   std::memcpy(cam_buf_.mapped(), &cam, sizeof(DepthCameraParams));
 
   kernel_.set.write_storage_buffer(0, vertex_buf.handle(), 0, VK_WHOLE_SIZE);
-  kernel_.set.write_storage_buffer(1, index_buf.handle(), 0, VK_WHOLE_SIZE);
-  kernel_.set.write_storage_buffer(2, depth_buf.handle(), 0, VK_WHOLE_SIZE);
+  kernel_.set.write_storage_buffer(1, depth_buf.handle(), 0, VK_WHOLE_SIZE);
 
-  const PushConstants push{static_cast<std::uint32_t>(triangle_count),
-                           occlusion_threshold,
-                           static_cast<std::uint32_t>(mesh.vertices.size())};
+  const PushConstants push{static_cast<std::uint32_t>(mesh.vertices.size()),
+                           occlusion_threshold};
 
-  // One thread per triangle. dispatch() caps groupCountX at the device limit
+  // One thread per vertex. dispatch() caps groupCountX at the device limit
   // and emits the COMPUTE->HOST barrier that makes the written uv0 visible to
   // the read-back below.
   VR_TRY(dispatch(
       *device_, kernel_, &push, sizeof(push),
-      group_count(static_cast<std::uint32_t>(triangle_count), kLocalSize),
+      group_count(static_cast<std::uint32_t>(mesh.vertices.size()), kLocalSize),
       max_workgroup_count_x_, &stage));
 
   // Read back only the uv0 the kernel wrote: positions / normals / colors are

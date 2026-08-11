@@ -70,7 +70,6 @@ bool project_to_image(DepthCameraParams c, vec3 world, out vec2 px,
 }
 
 layout(push_constant, scalar) uniform PushConstants {
-  uint num_triangles;
+  uint num_vertices;          // vertices[] length; bounds this dispatch
   float occlusion_threshold;  // max |projected depth - sensor depth|, metres
-  uint num_vertices;          // vertices[] length; bounds the index -> vertex read
 } pc;

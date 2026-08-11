@@ -87,6 +87,18 @@ struct Options {
   int follow = -1;      // >=0: render from this trajectory frame's sensor pose
   bool texture = true;  // project the keyframe image onto the mesh (uv0 atlas)
   bool preload = false;  // decode every frame up front (RAM for decode time)
+  // In-block vertex sharing (MarchingCubesConfig::share_vertices), which
+  // `fuse_replica` already exposes and this example did not. It belongs here
+  // because this is the only example that renders, and sharing is what a
+  // memory-bound consumer turns on: an iOS scanner runs with it because the
+  // vertex arena is the term that binds there.
+  //
+  // It interacts with --texture, which is the whole reason it is worth a flag:
+  // the texturer decides visibility per triangle and writes uv0 per vertex, so
+  // a shared vertex referenced by both a visible and an occluded triangle is
+  // written twice. Rendering the two combinations side by side is what turns
+  // that from a paragraph into a picture.
+  bool share_vertices = false;
 };
 
 bool parse_args(int argc, char** argv, Options& o) {
@@ -145,6 +157,8 @@ bool parse_args(int argc, char** argv, Options& o) {
       o.lit = true;
     } else if (a == "--no-texture") {
       o.texture = false;
+    } else if (a == "--share-vertices") {
+      o.share_vertices = true;
     } else if (a == "--preload") {
       o.preload = true;
     } else if (!a.empty() && a[0] == '-') {
@@ -161,7 +175,7 @@ bool parse_args(int argc, char** argv, Options& o) {
     std::fprintf(stderr,
                  "usage: fuse_render <scene_dir> [-o out.png] [--voxel m] "
                  "[--trunc m] [--max-frames n] [--yaw d] [--pitch d] [--lit] "
-                 "[--preload]\n");
+                 "[--no-texture] [--share-vertices] [--preload]\n");
     return false;
   }
   // strtof parses "nan"/"inf" without error, and a non-finite knob slips the
@@ -247,8 +261,10 @@ vr::Result<Reconstruction> fuse(const Options& opt,
             vol::VoxelBlockGrid::create(device, allocator, grid, attrs, 3));
   VR_ASSIGN(rtsdf::TsdfIntegrator integrator,
             rtsdf::TsdfIntegrator::create(device, allocator));
+  rmesh::MarchingCubesConfig mc_config;
+  mc_config.share_vertices = opt.share_vertices;
   VR_ASSIGN(rmesh::MarchingCubes extractor,
-            rmesh::MarchingCubes::create(device, allocator));
+            rmesh::MarchingCubes::create(device, allocator, mc_config));
 
   const auto last = std::min<std::size_t>(
       dataset.frame_count(),
@@ -568,8 +584,19 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "stbi_write_png failed for %s\n", opt.out.c_str());
     return 1;
   }
-  std::printf("rendered %zu triangles -> %s (%dx%d), center=(%.2f,%.2f,%.2f)\n",
-              mesh.triangle_count(), opt.out.c_str(), opt.width, opt.height,
-              center.x, center.y, center.z);
+  // Vertices as well as triangles, and the ratio between them: that ratio is
+  // the whole observable effect of --share-vertices (3.00 when off, since the
+  // mesh tier emits independent triangles; well under it when on), and it is
+  // what prices the vertex arena a memory-bound consumer is trading against.
+  // Printing only the triangle count made the flag look like a no-op -- sharing
+  // does not change how many triangles there are.
+  std::printf(
+      "rendered %zu triangles, %zu vertices (%.2f v/tri) -> %s (%dx%d), "
+      "center=(%.2f,%.2f,%.2f)\n",
+      mesh.triangle_count(), mesh.vertices.size(),
+      mesh.triangle_count() > 0 ? static_cast<double>(mesh.vertices.size()) /
+                                      static_cast<double>(mesh.triangle_count())
+                                : 0.0,
+      opt.out.c_str(), opt.width, opt.height, center.x, center.y, center.z);
   return 0;
 }
