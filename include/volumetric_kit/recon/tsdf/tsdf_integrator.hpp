@@ -239,6 +239,32 @@ class VR_TSDF_API TsdfIntegrator {
   /// @warning Not synchronized; see @ref dirty_block_count.
   void reset_dirty();
 
+  /// @brief The device buffer holding one flag per block slot, for a consumer
+  ///        that tests it on-device instead of taking @ref dirty_remesh_blocks
+  ///        back through the host.
+  ///
+  /// Published for the same reason `volume::VoxelHashMap::entries_buffer` is:
+  /// the alternative is a host round trip whose result is uploaded again, and
+  /// the tier that reads it is a workgroup that already has the block in hand.
+  /// The flag is per **block slot** (`BlockIndex::ptr / voxels_per_block`), one
+  /// `uint32_t` each, so a reader indexes it exactly as this tier does.
+  ///
+  /// A reader must apply the dilation itself. This buffer is the *changed* set;
+  /// the re-mesh set is that dilated into `{0,-1}^3` (see @ref
+  /// dirty_remesh_blocks for why), which on-device is the same relation read
+  /// from the other end -- a block re-meshes when any of its `+{0,1}^3`
+  /// neighbourhood is flagged.
+  ///
+  /// @warning Valid only while @ref TsdfIntegratorConfig::track_dirty_blocks is
+  ///          on and only against the grid the flags were anchored to; see
+  ///          @ref dirty_block_count for the synchronisation this does not do.
+  /// @return `VK_NULL_HANDLE` when tracking is off or nothing has been fused.
+  VkBuffer dirty_flags_buffer() const noexcept;
+  /// @brief Block slots @ref dirty_flags_buffer addresses; 0 when it is null.
+  std::uint32_t dirty_flags_capacity() const noexcept {
+    return dirty_capacity_;
+  }
+
   /// @brief The blocks an incremental re-mesh would actually have to redo: the
   ///        changed blocks dilated into the `-x/-y/-z` octant.
   ///

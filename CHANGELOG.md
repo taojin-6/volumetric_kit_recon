@@ -8,6 +8,35 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `mesh`: `MarchingCubes::extract_device_incremental` — **stage 3**. Blocks whose
+  `+{0,1}³` neighbourhood carries no change keep the triangles they already have,
+  at the offsets `block_spans()` already names, and cost one workgroup that
+  returns before gathering a corner. A changed block re-meshes into the range it
+  owns when the new count fits, and appends past the watermark when it does not.
+  **No host work in the loop.** The dilation from the *changed* set to the
+  *re-mesh* set happens on-device on the eight blocks `s_neighbour` already
+  holds, so there is no readback, no set union and no upload — the same move the
+  2026-08-08 decision made for the neighbour table. Retirement is per block and
+  local (three identical vertices, culled before raster), so no prefix sum and no
+  index rebuild is needed and the run stays the identity. `tsdf` publishes
+  `dirty_flags_buffer()` / `dirty_flags_capacity()` for it; `mesh` takes them as
+  an opaque `DirtyBlocks` and gains no dependency on `tsdf`.
+  Falls back to a **full** extract, by design, when an incremental one would be
+  wrong rather than slower: the first extract against a grid, spans a topology
+  change retired, sharing, more than one slot, or a grown arena.
+  **It costs arena.** On room0 the arena holds 505 511 triangles for 277 506 live
+  — 1.82x — because retirement leaves degenerates and, at that scene's dirty
+  rate, relocation is constant. **And room0 cannot show the win**: 81.67% of its
+  blocks re-mesh per window, so the ceiling there is 1.22x, and measured
+  extract_device is 0.98 ms incremental against 0.94 ms full. The ~4x lives at
+  the iPad's 25%, unmeasured here.
+  **An in-place re-mesh writes bytes an outstanding generation may be drawing.**
+  Every index stays in range and every vertex stays a real vertex, so it is not a
+  memory error — but a consumer holding a `DeviceMesh` across the call can catch
+  one block mid-update. That trade is what this overload exists to make
+  measurable; `extract_device` is unchanged and does not make it.
+  `fuse_replica --incremental` drives it.
+
 - Initial repository scaffolding: tiered layout, MIT license, `.clang-format`,
   `.cmake-format.yaml`, `.pre-commit-config.yaml`, `.gitignore`.
 - `CLAUDE.md` — the living source of truth (objective, locked decisions, tier

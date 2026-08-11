@@ -350,6 +350,10 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid, const float* depth,
                   max_workgroup_count_x_, &stage);
 }
 
+VkBuffer TsdfIntegrator::dirty_flags_buffer() const noexcept {
+  return dirty_blocks_.valid() ? dirty_blocks_.handle() : VK_NULL_HANDLE;
+}
+
 Status TsdfIntegrator::prepare_dirty_flags(const VoxelBlockGrid& grid) {
   // Re-anchor the flags on the grid this call is about to fuse.
   //

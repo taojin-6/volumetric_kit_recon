@@ -75,6 +75,10 @@ struct Options {
   // Report the TRUE dirty-block fraction every N fused frames; 0 = off. Unlike
   // a frustum survey this counts only blocks the integrator actually wrote.
   int dirty_every = 0;
+  // Re-mesh only the blocks a fuse changed, through
+  // MarchingCubes::extract_device_incremental. Implies --dirty-every's
+  // tracking, since the flags it reads are the ones that produces.
+  bool incremental = false;
   int num_buckets = 16384;  // initial map size; grows on overflow via resize
   bool preload = false;     // decode every frame up front (RAM for decode time)
 };
@@ -115,6 +119,8 @@ vr::Result<Options> parse_args(int argc, char** argv) {
       opt.device_extract = true;
     } else if (a == "--share-vertices") {
       opt.share_vertices = true;
+    } else if (a == "--incremental") {
+      opt.incremental = true;
     } else if (a == "--dirty-every") {
       if (!need_int(opt.dirty_every))
         return vr::Status::invalid_argument("--dirty-every");
@@ -156,6 +162,7 @@ vr::Result<Options> parse_args(int argc, char** argv) {
   if (opt.scene_dir.empty()) {
     return vr::Status::invalid_argument(
         "usage: fuse_replica <scene_dir> [-o out.ply] [--share-vertices] "
+        "[--incremental] "
         "[--voxel m] "
         "[--max-frames n] [--stride n] [--max-depth m] [--preload]");
   }
@@ -253,13 +260,17 @@ vr::Status run(const Options& opt) {
   VR_ASSIGN(tsdf::TsdfIntegrator integrator,
             tsdf::TsdfIntegrator::create(device, allocator, [&] {
               tsdf::TsdfIntegratorConfig c;
-              c.track_dirty_blocks = opt.dirty_every > 0;
+              c.track_dirty_blocks = opt.dirty_every > 0 || opt.incremental;
               return c;
             }()));
   VR_ASSIGN(mesh::MarchingCubes extractor,
             mesh::MarchingCubes::create(device, allocator, [&] {
               mesh::MarchingCubesConfig c;
               c.share_vertices = opt.share_vertices;
+              // The span table is what an incremental extract re-meshes
+              // against, and it is sized by the grid rather than the surface --
+              // so it stays off unless asked for.
+              c.track_block_spans = opt.incremental;
               return c;
             }()));
 
@@ -476,8 +487,15 @@ vr::Status run(const Options& opt) {
         // at the default slot_count of 1 the next extract invalidates it, which
         // is exactly what a benchmark wants and what a real consumer must not
         // do.
-        VR_ASSIGN(mesh::DeviceMesh dm,
-                  extractor.extract_device(volume, 0.0f, &rt));
+        VR_ASSIGN(
+            mesh::DeviceMesh dm,
+            opt.incremental
+                ? extractor.extract_device_incremental(
+                      volume, 0.0f,
+                      mesh::DirtyBlocks{integrator.dirty_flags_buffer(),
+                                        integrator.dirty_flags_capacity()},
+                      &rt)
+                : extractor.extract_device(volume, 0.0f, &rt));
         tris = dm.triangle_count;
       } else {
         VR_ASSIGN(mesh::Mesh preview, extractor.extract(volume, 0.0f, &rt));
