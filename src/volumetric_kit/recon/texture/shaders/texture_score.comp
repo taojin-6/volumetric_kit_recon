@@ -178,17 +178,29 @@ void main() {
   vec2 px;
   float zc;
   if (!project_to_image(cam, vertices[vid].position, px, zc)) {
-    // Behind the camera or outside the image: no atlas coordinate exists for
-    // this vertex, so there is nothing to carry and the plain sentinel is the
-    // honest value. Written rather than left, so a vertex that has left the
-    // view drops its previous frame's coordinate.
+    // Behind the camera: the pinhole divide has no meaning, so there genuinely
+    // is no coordinate to carry and the bare sentinel is the honest value. The
+    // renderer reads it as (0, 0), which is arbitrary -- but a triangle with a
+    // vertex behind the camera and another in front spans the near plane, and
+    // no per-vertex uv can describe that however it is encoded. Written rather
+    // than left, so a vertex that has left the view drops its previous frame's
+    // coordinate.
     vertices[vid].uv0 = vec2(-1.0, -1.0);
     return;
   }
 
-  // In frame. The uv is well-defined from here whether or not the camera can
-  // actually see this vertex, so compute it once and let the occlusion test
-  // choose only how it is marked.
+  // In FRONT -- not necessarily in frame. The projection is defined either way,
+  // so compute the coordinate unconditionally and let the tests below decide
+  // only how it is marked. `pixel_to_atlas_uv` clamps an extrapolated pixel
+  // half a texel inside the border, so a vertex outside the image carries the
+  // nearest edge coordinate rather than a wild one.
+  //
+  // Carrying it is the whole point at the frustum boundary. Such a vertex is
+  // never textured -- `occluded_ok` refuses a pixel within a texel of the edge
+  // -- but a triangle whose provoking vertex IS textured interpolates across
+  // it, and the bare sentinel would drag that interpolation to the atlas
+  // origin, drawing the entire camera image inside one triangle along the whole
+  // boundary.
   vec2 uv = pixel_to_atlas_uv(px);
   vertices[vid].uv0 = occluded_ok(px, zc) ? uv : (-uv - 1.0);
 }

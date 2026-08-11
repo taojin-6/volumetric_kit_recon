@@ -51,6 +51,26 @@ struct Vertex {
 // equals the prior engine's precomputed extrinsics_inv * (world, 1). Pinhole
 // u = fx*x/z + cx, v = fy*y/z + cy (OpenCV +X right / +Y down / +Z forward; no
 // y-flip), matching the prior engine's project_to_pixel and tsdf_common.glsl.
+/// Returns false ONLY when the point is behind the camera, where the pinhole
+/// divide has no meaning. A point in front whose pixel lands outside the image
+/// still returns true, with `px` extrapolated past the border.
+///
+/// That is deliberate, and it is what keeps a triangle straddling the frustum
+/// edge from sweeping the whole atlas. The caller needs a *coordinate* for such
+/// a vertex even though it will not be textured: it classes it as vertex-colour
+/// either way, but the uv it carries is interpolated across any triangle whose
+/// provoking vertex IS textured. Refusing to project here left those vertices
+/// carrying the bare sentinel, which the renderer reads as (0, 0) -- so a
+/// boundary triangle interpolated from a real uv near the image edge all the
+/// way to the atlas origin, drawing the entire camera image inside one
+/// triangle, repeated along the whole frustum boundary.
+///
+/// The bounds test does not disappear; it moves to the callers that need it.
+/// `occluded_ok` rejects a pixel within one texel of the border (its bilinear
+/// taps would straddle it), so visibility is still refused outside the image --
+/// and `pixel_to_atlas_uv` clamps the extrapolated coordinate half a texel
+/// inside, so what a boundary triangle actually samples is the edge of the
+/// image stretched, which is what projective texturing is expected to do there.
 bool project_to_image(DepthCameraParams c, vec3 world, out vec2 px,
                       out float zc) {
   mat3 rot = mat3(c.cam_to_world);
@@ -58,14 +78,9 @@ bool project_to_image(DepthCameraParams c, vec3 world, out vec2 px,
   vec3 p_cam = transpose(rot) * (world - t);
   zc = p_cam.z;
   if (zc <= 0.0) {
-    return false;  // behind the camera
+    return false;  // behind the camera: no projection exists
   }
-  float u = c.fx * (p_cam.x / zc) + c.cx;
-  float v = c.fy * (p_cam.y / zc) + c.cy;
-  if (u < 0.0 || u >= float(c.width) || v < 0.0 || v >= float(c.height)) {
-    return false;  // outside the image
-  }
-  px = vec2(u, v);
+  px = vec2(c.fx * (p_cam.x / zc) + c.cx, c.fy * (p_cam.y / zc) + c.cy);
   return true;
 }
 

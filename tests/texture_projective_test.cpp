@@ -59,8 +59,10 @@ bool approx(float a, float b, float eps) { return std::fabs(a - b) <= eps; }
 // be told apart without either of them looking like a regression.
 bool uses_vertex_color(const vr::Vec2f& uv) { return uv.x < 0.0f; }
 
-// The vertex projected nowhere -- behind the camera, or outside the image -- so
-// no atlas coordinate exists to carry and uv0 is the bare sentinel.
+// The vertex projected nowhere -- it is BEHIND the camera, where the pinhole
+// divide has no meaning -- so no atlas coordinate exists to carry and uv0 is
+// the bare sentinel. A vertex in front but outside the image is NOT this case:
+// its projection is defined, and it carries the clamped border coordinate.
 bool is_offscreen(const vr::Vec2f& uv) {
   return uv.x == -1.0f && uv.y == -1.0f;
 }
@@ -329,6 +331,43 @@ int main() {
   }
   // World +Z maps to camera -X, so the +Z vertex sits left of the on-axis one.
   CHECK(mesh3.vertices[2].uv0.x < mesh3.vertices[0].uv0.x);
+
+  // Frustum boundary: a vertex IN FRONT of the camera but projecting outside
+  // the image must carry the clamped border coordinate, not the bare sentinel.
+  //
+  // This is a regression test for a whole-image smear along every frustum edge.
+  // Such a vertex is never textured, so it was written the plain (-1,-1) on the
+  // reasoning that there is no coordinate to carry -- but the renderer reads a
+  // bare sentinel as (0, 0), and a triangle whose provoking vertex IS textured
+  // interpolates across it. A boundary triangle therefore ran from a real uv at
+  // the image edge all the way to the atlas origin, drawing the entire camera
+  // image inside one triangle, repeated the length of the boundary.
+  //
+  // u = 500*x + 320 at z = 1, so x = 1.0 projects to u = 820 -- well outside a
+  // 640-wide image -- while y = 0 keeps v = 240 comfortably inside, isolating
+  // the horizontal bound. The clamp is pixel_to_atlas_uv's half texel.
+  rmesh::Mesh mesh_side;
+  mesh_side.vertices = {vtx(1.0f, 0.0f, 1.0f), vtx(1.0f, 0.01f, 1.0f),
+                        vtx(1.02f, 0.0f, 1.0f)};
+  mesh_side.indices = {0, 1, 2};
+  CHECK(texturer.texture(mesh_side, depth.data(), cam).ok());
+  for (int i = 0; i < 3; ++i) {
+    const vr::Vec2f uv = mesh_side.vertices[i].uv0;
+    // Outside the image, so not visible -- but in front, so it carries.
+    CHECK(uses_vertex_color(uv));
+    CHECK(!is_offscreen(uv));
+    const vr::Vec2f carried = decode_carried(uv);
+    // Clamped to the right border, not swung to the origin. The distinction
+    // this pins is exactly the bug: (0, 0) would also satisfy the two checks
+    // above.
+    CHECK(approx(carried.x, 1.0f - 0.5f / 640.0f, 1e-5f));
+    CHECK(carried.x > 0.9f);
+    // Vertically unclamped, so it still reports where it actually projected --
+    // computed per vertex, since the three sit at different heights.
+    const vr::Vec3f p = mesh_side.vertices[i].position;
+    const float v_px = 500.0f * (p.y / p.z) + 240.0f;
+    CHECK(approx(carried.y, (v_px + 0.5f) / 480.0f, 1e-5f));
+  }
 
   // Depth discontinuity: a foreground vertex projecting onto a depth edge must
   // texture via the nearest-tap fallback, not be rejected by a blended fg/bg
