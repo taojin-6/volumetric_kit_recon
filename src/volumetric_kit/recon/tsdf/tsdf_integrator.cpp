@@ -351,7 +351,22 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid, const float* depth,
 }
 
 VkBuffer TsdfIntegrator::dirty_flags_buffer() const noexcept {
-  return dirty_blocks_.valid() ? dirty_blocks_.handle() : VK_NULL_HANDLE;
+  // The same three refusals dirty_remesh_blocks makes, minus the one that needs
+  // a grid to compare against -- dirty_epoch() carries that to the consumer,
+  // and the token's global uniqueness makes it the same test.
+  //
+  // The buffer alone is not the question. A flag is keyed by block SLOT, so
+  // after a remove()/clear() the slot a flag names has been handed to a
+  // different block and the flags describe changes to geometry that is gone;
+  // dirty_topology_stale_ is latched exactly there and only reset_dirty()
+  // clears it. Returning the handle anyway made an on-device consumer the one
+  // path that could read what the host path refuses -- the same flags, the same
+  // staleness, no check.
+  if (dirty_grid_ == nullptr || dirty_topology_stale_ ||
+      !dirty_blocks_.valid()) {
+    return VK_NULL_HANDLE;
+  }
+  return dirty_blocks_.handle();
 }
 
 Status TsdfIntegrator::prepare_dirty_flags(const VoxelBlockGrid& grid) {

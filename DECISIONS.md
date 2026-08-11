@@ -2579,6 +2579,124 @@ because it is not read. And the cached device limits moved with the dispatch: th
 primitives on an unshared mesh, which is not worth working around — 16.7 M
 vertices is 1 GiB at 64 B each, the common `maxStorageBufferRange` floor, so the
 binding range runs out at the same point and does so naming the mesh.
+### 2026-08-11 — An incremental extract trusts one struct, cleared on every path and re-established only where a mesh is handed out; every refusal is a silent fallback, and the fallback is *reported*.
+
+**Stage 3 of the 2026-08-09 incremental-extraction plan.** Blocks whose
+`+{0,1}³` neighbourhood a fuse did not change keep the triangles they already
+have, at the offsets `block_spans()` names, and cost one workgroup that returns
+before gathering a corner. The dilation from the *changed* set to the *re-mesh*
+set runs on-device on the eight blocks `s_neighbour` already holds — no
+readback, no set union, no upload — which is the same move the 2026-08-08
+neighbour-table decision made and for the same reason. A changed block re-meshes
+into the range it already owns when the new count fits and appends past the
+watermark when it does not; the range it leaves behind is retired by writing
+zero-area triangles over it, so no prefix sum and no index rebuild is needed and
+the run stays the identity.
+
+**What an incremental pass is allowed to trust is one struct, and it is cleared
+before it is read.** The state is `{watermark, epoch, serial}` — how many
+triangles the arena holds, the grid topology they were written against, and the
+span serial of the extract that wrote them — and the three are only ever
+meaningful together. It is snapshotted and then *cleared* at the top of both
+extract paths, beside the span generation, and re-established only on the
+publishing return. That shape is the fix for a class of defect the first cut had
+four instances of, each with the same shape: a scalar cleared on one branch and
+left standing on every other. The dense overload rewrites the same arena with a
+kernel that knows nothing about blocks, and cleared the span generation but not
+the watermark. An unrecoverable overflow, and a refit that had already freed the
+old arena, both returned above the line that reset it. Cleared up front there is
+no exit that can strand it, and no branch to audit.
+
+**A guard compared after the thing it guards is not a guard.** The clause meant
+to catch a topology change read `span_epoch_ == grid.topology_epoch()` *below*
+`ensure_block_spans(grid)`, which assigns exactly that — so it compared a value
+with itself and passed unconditionally. A `remove()` re-draws the epoch and puts
+the freed indices back on a LIFO heap, so a slot then names a different block;
+the pass would have re-meshed against another block's range under `Status::ok`.
+The predicate now runs *above* the re-anchor and reads the snapshot rather than
+the member. The general rule: a cache anchor is compared before the call that
+maintains it, or it is not compared at all.
+
+**Both ends of the flags carry the anchor, because only one end can check it.**
+`tsdf` publishes the flag buffer for an on-device consumer, and `mesh` cannot
+include `tsdf` to ask whether it is stale. So `TsdfIntegrator` refuses on
+everything it *can* see — `dirty_flags_buffer()` returns null once the
+topology-stale latch is set, and the capacity and epoch go null with it, since a
+live capacity beside a null handle is a caller binding one against the other —
+and publishes `dirty_epoch()` for the one thing it cannot: *which grid*. That is
+the same globally-unique token the span table anchors on, so one comparison in
+`mesh` covers both "the right grid" and "no blocks removed since". The flags are
+also range-checked and bound with the byte range the push constant claims rather
+than `VK_WHOLE_SIZE`: the kernel reads every slot below `dirty_capacity`, and
+with `robustBufferAccess` enabled nowhere in this repo an over-stated capacity
+would be an out-of-bounds device read. Bound to the stated range it is a
+descriptor whose range exceeds its buffer, which validation names at the binding.
+
+**A refit retries as a full pass.** The overflow path reallocates the arena
+(discarding the clean blocks' triangles), and attempt 0 has already overwritten
+the span table for every block it touched, so no block can still read the range
+it held *before* the call. Three reasons, one fix: the flag is cleared on the
+refit path, so the retry re-establishes the arena, the spans and the watermark
+together. Relatedly, the draw command's seed became a *parameter* rather than a
+member the reset consumes — both of `ensure_output_buffers`' range guards sit
+above the reset, so a latched seed survived a failure and was inherited by a
+later dense or empty extract over an arena it had rewritten, which is precisely
+the staleness the reset exists to prevent. Passed explicitly, there is nothing to
+strand. The same argument moved the pending flags from a member the wrapper armed
+and disarmed around a delegated call to a parameter on a private impl: an
+exception unwinding out of a function that allocates a vector, a 12 MB stamp
+array and several `std::string`s left a caller-owned `VkBuffer` latched on the
+extractor, which the *plain* `extract_device` would then bind.
+
+**Occupancy is not density, and feeding one to the other ratchets.** The arena's
+triangle count on an incremental pass is what it *holds* — clean blocks, appends,
+and every retired degenerate — while the density estimate that sizes the next
+plan wants what the surface *has*. Feeding occupancy back made the estimate
+monotone non-decreasing, so each pass planned a larger arena than the last on
+evidence its own dead triangles produced, grew geometrically to 1.5x that, and
+never corrected. The live count is summed off the span table over the active set
+— a clean block's entry is exactly its current range — inside the loop that was
+already stamping serials. With the live count in hand the same measurement bounds
+the memory: when occupancy passes `kMaxArenaOccupancy` (2) times live, the state
+is *withheld*, which makes the next extract full, and a full pass rewrites the
+arena from zero. The compaction is the fallback machinery, reused.
+
+**Every refusal is a silent fallback, so the fallback is reported.** Falling back
+rather than refusing is right — a caller fusing a live scan cannot predict a
+topology change, and the correct response to one is to re-mesh everything — but
+every clause is invisible from outside, and two of them (`share_vertices`, a
+`slot_count` above one) turn the feature off *permanently*. `ExtractTimings::
+dispatches` cannot carry it: it counts refit rounds and reads 1 on both paths.
+So `incremental` says which pass it was and `remeshed_blocks` says how much it
+saved, the latter counted on-device because the dilation happens in shared memory
+the host never sees. This is the 2026-08-04 rule's second half: a library that
+checks what the caller cannot see, and then declines to report the answer, has
+converted a caller-visible error into an invisible perf regression.
+
+**`slot_count == 1` only, and that is a real limitation rather than a
+simplification.** A re-meshed block writes into the arena the *last* extract
+filled, and a ring hands this one a different slot, so the retained triangles are
+in the wrong buffer. `fuse_viewer` — the seam-B consumer this whole staged effort
+names as the target — runs `frames_in_flight + 1` slots, so the feature is off
+there today. Extending the ring (reuse a block's range only for slots released
+through `released_through_`, or copy the retained run forward into the newly
+claimed slot) is a `TODO(mesh)` on the class rather than a thing this slice does,
+and `ExtractTimings::incremental` is what keeps it from being invisible
+meanwhile.
+
+**And the benchmark had to be fixed before it measured anything.** The fuse
+kernel only ORs into the dirty flags, so without a reset every block reads dirty
+within a few frames: `fuse_replica --incremental` re-meshed everything through
+the incremental path while paying for the span table, the dilation and the
+retirement, and the headline numbers (0.98 ms incremental against 0.94 ms full;
+505 511 arena triangles for 277 506 live) were the 100%-dirty worst case rather
+than the feature. The reset now happens immediately after the extract that
+consumes the flags, `--dirty-every` is *refused* beside `--incremental` because
+the two own the same flags on unrelated cadences, and `--incremental` turns on
+`--device-extract` rather than being silently ignored beside it while still
+allocating the table. The room0 figures above stand as the worst case they always
+described; the ~4x lives at the iPad's 25% dirty rate and is still unmeasured
+here.
 
 ## Measured lessons
 

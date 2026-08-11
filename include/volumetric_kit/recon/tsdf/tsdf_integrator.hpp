@@ -255,14 +255,39 @@ class VR_TSDF_API TsdfIntegrator {
   /// from the other end -- a block re-meshes when any of its `+{0,1}^3`
   /// neighbourhood is flagged.
   ///
-  /// @warning Valid only while @ref TsdfIntegratorConfig::track_dirty_blocks is
-  ///          on and only against the grid the flags were anchored to; see
-  ///          @ref dirty_block_count for the synchronisation this does not do.
-  /// @return `VK_NULL_HANDLE` when tracking is off or nothing has been fused.
+  /// Refused on exactly what @ref dirty_remesh_blocks refuses on, and for the
+  /// same reason: a flag is keyed by block *slot*, and a slot means nothing
+  /// once a `remove()`/`clear()` has handed that index to a different block.
+  /// A consumer reading these on-device cannot make that check for itself --
+  /// the latch that records it lives here -- so this returns nothing rather
+  /// than something it will not vouch for (the 2026-08-04 rule). The one
+  /// condition it *cannot* answer alone is "against which grid", which is what
+  /// @ref dirty_epoch is for.
+  ///
+  /// @warning Nothing here is synchronized; see @ref dirty_block_count.
+  /// @return `VK_NULL_HANDLE` when tracking is off, nothing has been fused, or
+  ///         the flags went stale under a topology change.
   VkBuffer dirty_flags_buffer() const noexcept;
   /// @brief Block slots @ref dirty_flags_buffer addresses; 0 when it is null.
+  ///
+  /// Read it beside the handle and pass the pair on together. A capacity cached
+  /// across an @ref integrate that grew the grid names a buffer this object has
+  /// already replaced, and a consumer binding one against the other reads past
+  /// the end of the new one.
   std::uint32_t dirty_flags_capacity() const noexcept {
-    return dirty_capacity_;
+    return dirty_flags_buffer() != VK_NULL_HANDLE ? dirty_capacity_ : 0;
+  }
+  /// @brief The `volume::VoxelBlockGrid::topology_epoch` the flags were
+  ///        accumulated against; 0 when @ref dirty_flags_buffer is null.
+  ///
+  /// The token is drawn from a process-wide counter, so it names one grid's one
+  /// topology across the whole program -- which makes a single comparison
+  /// against the grid being consumed answer *both* "the right grid" and "no
+  /// blocks removed since". That is what lets a consumer in another tier make
+  /// the check @ref dirty_remesh_blocks makes here, without being handed this
+  /// object.
+  std::uint64_t dirty_epoch() const noexcept {
+    return dirty_flags_buffer() != VK_NULL_HANDLE ? dirty_epoch_ : 0;
   }
 
   /// @brief The blocks an incremental re-mesh would actually have to redo: the

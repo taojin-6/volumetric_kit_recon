@@ -5,7 +5,8 @@
 // on each crossed edge, and append independent triangles (three fresh vertices
 // each -- no shared-edge dedup) through an atomic bump counter. This is the
 // simple, correct form that proves the GLSL marching-cubes path on MoltenVK;
-// shared-vertex dedup and an incremental block-mesh pool are later slices.
+// shared-vertex dedup is a later slice, and incremental extraction is a sparse
+// path only -- this kernel describes no blocks, so it has no range to keep.
 // Extraction straight off the sparse voxel hash map (with cross-block neighbour
 // sampling) is marching_cubes_sparse.comp -- only its corner *sampling* differs;
 // the per-cell body (cube index, gradient normal, reversed-winding triangle

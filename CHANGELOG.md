@@ -18,24 +18,48 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   holds, so there is no readback, no set union and no upload — the same move the
   2026-08-08 decision made for the neighbour table. Retirement is per block and
   local (three identical vertices, culled before raster), so no prefix sum and no
-  index rebuild is needed and the run stays the identity. `tsdf` publishes
-  `dirty_flags_buffer()` / `dirty_flags_capacity()` for it; `mesh` takes them as
-  an opaque `DirtyBlocks` and gains no dependency on `tsdf`.
+  index rebuild is needed and the run stays the identity.
+  What a pass may trust is one `{watermark, epoch, serial}` struct, **cleared at
+  the top of both extract paths and re-established only on the publishing
+  return**, so no failure — and no dense extract, which rewrites the same arena
+  with a kernel that knows nothing about blocks — leaves it describing geometry
+  that is gone. Anchors are compared *above* the call that re-anchors them.
   Falls back to a **full** extract, by design, when an incremental one would be
-  wrong rather than slower: the first extract against a grid, spans a topology
-  change retired, sharing, more than one slot, or a grown arena.
+  wrong rather than slower: the first extract against a grid, a topology change
+  that retired either anchor, flags the integrator will not vouch for, an arena
+  that has to grow (it reallocates without copying), an overflow refit (whose
+  retry has already lost the pre-call spans), occupancy past 2x the live
+  surface, sharing, or more than one slot. Which one the caller got is reported
+  as `ExtractTimings::incremental`, beside a device-counted `remeshed_blocks` —
+  `dispatches` counts refit rounds and reads 1 on both paths, so it cannot say.
+- `tsdf`: `TsdfIntegrator::dirty_flags_buffer()` / `dirty_flags_capacity()` /
+  `dirty_epoch()` — the dirty set for an on-device consumer, instead of taking
+  `dirty_remesh_blocks` back through the host. All three go null **together** on
+  every staleness this tier can see (the topology-stale latch included, which
+  `dirty_remesh_blocks` already refused on), and the epoch carries the one it
+  cannot: *which grid*. It is the same globally unique token the span table
+  anchors on, so one comparison in the consumer covers both "the right grid" and
+  "no blocks removed since". `mesh` takes the three as an opaque `DirtyBlocks`
+  and gains no dependency on `tsdf`.
   **It costs arena.** On room0 the arena holds 505 511 triangles for 277 506 live
   — 1.82x — because retirement leaves degenerates and, at that scene's dirty
-  rate, relocation is constant. **And room0 cannot show the win**: 81.67% of its
-  blocks re-mesh per window, so the ceiling there is 1.22x, and measured
-  extract_device is 0.98 ms incremental against 0.94 ms full. The ~4x lives at
-  the iPad's 25%, unmeasured here.
+  rate, relocation is constant; the live count is summed off the spans so the
+  density estimate is not fed its own dead triangles, and occupancy past 2x live
+  schedules a full pass, which is the compaction. **And room0 cannot show the
+  win**: 81.67% of its blocks re-mesh per window, so the ceiling there is 1.22x,
+  and measured extract_device is 0.98 ms incremental against 0.94 ms full — both
+  figures taken at a 100% dirty rate, which is what an unreset flag array
+  produces. The ~4x lives at the iPad's 25%, unmeasured here.
   **An in-place re-mesh writes bytes an outstanding generation may be drawing.**
   Every index stays in range and every vertex stays a real vertex, so it is not a
   memory error — but a consumer holding a `DeviceMesh` across the call can catch
   one block mid-update. That trade is what this overload exists to make
   measurable; `extract_device` is unchanged and does not make it.
-  `fuse_replica --incremental` drives it.
+  `fuse_replica --incremental` drives it: it implies `--device-extract`, is
+  refused beside `--dirty-every` (both consume the same flags on unrelated
+  cadences), resets the flags immediately after the extract that read them, and
+  reports how many extracts were really incremental and what fraction of blocks
+  each re-meshed.
 
 - Initial repository scaffolding: tiered layout, MIT license, `.clang-format`,
   `.cmake-format.yaml`, `.pre-commit-config.yaml`, `.gitignore`.
