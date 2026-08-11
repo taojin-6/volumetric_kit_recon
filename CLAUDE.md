@@ -190,6 +190,9 @@ order. Change the decision, its entry there, and this list together.
   A breakdown row is one the *caller's* row already contains, so the host total
   skips it and the device total must not; and a ceiling the library knows is the
   library's to name.
+- [**2026-08-11**](DECISIONS.md#2026-08-11--the-per-block-span-table-is-opt-in-is-retired-by-generation-rather-than-described-in-prose-and-is-deliberately-not-per-slot) —
+  The per-block span table is opt-in, is retired by generation rather than
+  described in prose, and is deliberately *not* per slot.
 
 ## Provenance & salvage policy
 
@@ -441,7 +444,12 @@ arbitrary; it usually isn't.
   ranges rather than one, since a shared vertex breaks `v = 3t`, and measured no
   cost. Each cursor is bounded by its block's own reservation, so a count that
   disagreed with the emit would drop geometry rather than write over the next
-  block's range. The vertex arena
+  block's range. Opt-in `track_block_spans` publishes that range as
+  `block_spans()` — vertex and **triangle** base/count per block slot, the
+  mapping stage 3 re-meshes against and the host cannot derive, since the
+  atomics hand ranges out in workgroup arrival order. Off by default (it is
+  sized by the grid, not the surface), borrowed, and readable only while
+  `block_spans_generation()` still names the mesh you hold. The vertex arena
   is fitted to the surface, grow-only, and held as a **ring of slots** the
   consumer releases by generation; the kernel writes a real
   `VkDrawIndexedIndirectCommand`. `extract_device` returns a borrowed
@@ -474,9 +482,12 @@ which makes the loop measure compute rather than the JPEG/PNG decoder.
 **Next.** **Incremental mesh extraction**, decided and staged — read the
 2026-08-09 entry before starting it. **Stage 2 has landed on both sparse
 kernels** (~10% on the default one, no measurable cost on the sharing one), so
-**stage 3 — dirty-only dispatch — is what is next**; it needs the block-to-range
-mapping both kernels compute and drop, marked with a `TODO(mesh)` in each, and
-its collision with the seam-B ring is recorded there as unresolved. Beside it:
+**stage 3 — dirty-only dispatch — is what is next**. The block-to-range mapping
+it needs is now published (`MarchingCubes::block_spans()`, opt-in behind
+`track_block_spans`; see the 2026-08-11 decision, which also settles the seam-B
+ring collision the 2026-08-09 entry left open — one table, retired by
+generation, not one per slot). What is left is dispatching over the dirty set.
+Beside it:
 first-class glTF/GLB export via tinygltf + the gfx-vertex converter (the
 example's tinyply dump is deliberately a throwaway). On `mesh`, the greppable
 `TODO(mesh)`s: cross-block vertex sharing, per-vertex normals, the incremental

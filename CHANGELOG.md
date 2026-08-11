@@ -182,6 +182,46 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `recon_gfx_bridge.hpp` converts `mesh::Vertex` → `gfx::assets::Vertex`
   (synthesizing `tangent`, keeping the `uv0` sentinel). Verified on Replica room0:
   a correct first-person coloured room render.
+- `mesh`: `MarchingCubes::block_spans()` publishes **where each block's geometry
+  landed** — vertex base/count and triangle base/count per block slot
+  (`BlockIndex::ptr / voxels_per_block`), written by both sparse kernels. This is
+  the mapping the per-block reservation computes and used to drop, and it is
+  **not derivable on the host**: the atomics hand ranges out in workgroup arrival
+  order, not block order, so nothing outside the dispatch knows which range
+  belongs to which block. It is what stage 3 re-meshes against. Counted in
+  vertices and **triangles**, not indices, because a triangle is what a block
+  owns and what a re-mesh replaces; the four numbers are independent under
+  `share_vertices` and locked at `v = 3t` without it.
+  **Opt-in** behind `MarchingCubesConfig::track_block_spans`, off by default: the
+  table is sized by the grid rather than the surface (`num_blocks` entries — 24 MB
+  at `VoxelGridParams::defaults()`, doubling with every `VoxelHashMap::resize`),
+  so a caller who does not read it allocates nothing and the kernel is told not to
+  write it, the bargain `TsdfIntegratorConfig::track_dirty_blocks` strikes for the
+  same table shape. It is counted in `ExtractTimings::arena_bytes`, and grown
+  beside the arena so the allocation lands in `arena_alloc_ms` rather than in the
+  descriptor row.
+  **Borrowed and retired by generation.** The accessor returns mapped device
+  memory, which a grow frees, so `block_spans_generation()` carries the same
+  counter as `DeviceMesh::generation`: a consumer compares the two rather than
+  being told in prose not to cache the pointer. It returns `nullptr` until an
+  extract has left a table describing its own output — both kernels publish a
+  span *before* their capacity guard (deliberately: the counters must carry each
+  block's full total for the host's refit), so a failed, empty or dense extract
+  leaves spans naming triangles the arena never held. **Not per slot**, unlike the
+  arena and index run: one table describes the current dispatch, and the
+  generation is what makes a mismatch against a held mesh visible.
+  A grow carries the existing spans forward and zeroes only the new tail
+  (`VoxelHashMap::resize` preserves block indices, which is why
+  `topology_epoch()` does not move across one), mirroring
+  `TsdfIntegrator::prepare_dirty_flags`.
+  The host/device mirror is pinned per field: `BlockSpan` is four same-typed
+  `uint32`s, so `sizeof` alone cannot see a transposition — it carries `offsetof`
+  asserts like every other mirror in the repo, is declared once in
+  `shaders/marching_cubes_block_span.glsl` rather than copied into two kernels
+  that could disagree on field order, and both kernels assign it by name.
+  A slot is meaningful only against the grid and topology epoch that produced it,
+  and only for blocks in that extract's active set; anchoring it across extracts
+  stays the caller's job until this tier does it, which the accessor states.
 
 ### Changed
 
