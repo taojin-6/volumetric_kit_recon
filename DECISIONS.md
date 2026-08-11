@@ -1517,15 +1517,20 @@ and `mcEmitCell` now calls it instead of carrying a verbatim copy of its
 body, which is what made the drift possible. That also makes the shared and
 unshared meshes comparable **triangle for triangle on exact position floats**,
 which is the invariant the suite asserts.
-**`vertex_count` counts vertices, not claims.** A phase-1 claim that overflows
-the arena records `kVertexDropped`, distinct from `kNoVertex`, so the cells
-referencing that edge do *not* re-claim a replacement. Left undistinguished,
-an overflowing dispatch reported `V_owned + ~3T` instead of the true ~0.75T —
+**`vertex_count` counts vertices, not claims.** With a per-vertex global atomic,
+a phase-1 claim that overflowed the arena had no usable slot, so the cells
+referencing that edge re-claimed a replacement and double-counted: an
+overflowing dispatch reported `V_owned + ~3T` instead of the true ~0.75T —
 *more* than not sharing at all — and the host refits a **grow-only** arena to
 that number: ~95 MB pinned on room0 against the 15.9 MB the shared surface
 needs, which is the entire thing the feature exists to save. That path is
 taken by design on the first sharing extract of any real surface, since
-`kSeedTrisPerBlock` deliberately plans low.
+`kSeedTrisPerBlock` deliberately plans low. It was first fixed with a
+`kVertexDropped` sentinel distinct from `kNoVertex`; the stage-2 restructure in
+the 2026-08-09 entry below **removes the sentinel**, because a block that counts
+first and reserves once gives every vertex a deterministic slot whether or not
+it lands inside the arena, so the totals are exact by construction rather than
+by bookkeeping.
 **Sizing two buffers means two budgets, and they must not read each other.**
 The vertex arena and the index run are now grown **independently**: they used
 to be released together because `arena_capacity()` came off the *arena*, which
@@ -1573,18 +1578,22 @@ false;` left every suite green — and two of the assertions added beside it
 were tautological restatements of what `download()` had just computed. Four
 independent mutations each fail a named line now: dropping the canonical
 endpoint order fails the shared-vs-unshared triangle-for-triangle equality;
-removing the `kVertexDropped` sentinel fails a *magnitude* bound on the
+removing the `kVertexDropped` sentinel failed a *magnitude* bound on the
 refitted arena (the shape passes either way, because the second dispatch's
 counter is the true total whatever the first reported — what changes is what
-the grow-only arena is refit to); restoring the coupled buffer growth fails a
+the grow-only arena is refit to), and that sentinel and that mutation are both
+retired by the stage-2 restructure below, which carries its own; restoring the
+coupled buffer growth fails a
 case built from the measured capacities, where the dense overload's 3:1 vertex
 demand grows the arena of a sharing extractor whose index run already fits;
 and deleting the `sharing_applied` report while raising the host constant
 turns a refusal into a silent empty mesh. What is **not** covered is named
-rather than implied: the `kVertexDropped` path is exercised only through an
-arena overflow, not through concurrent contention, and no fixture measures the
+rather than implied: the arena-overflow path is exercised only through a short
+plan, not through concurrent contention, and no fixture measures the
 threadgroup-occupancy claim above — it rests on the SPIR-V allocation and the
-documented limits, not on a re-measured device.
+documented limits, not on a re-measured device. (The figure there moved to
+8452 B when stage 2 added the sharing kernel's six reservation words; the
+default kernel's 44 B is unchanged, and the gap is the decision.)
 
 ### 2026-08-09 — A dirty block is one the fuse *changed*, the flags are anchored to a grid the library checks, and tracking them is opt-in.
 
@@ -1773,18 +1782,18 @@ has landed: `TsdfIntegrator::dirty_remesh_blocks`, the decision above. Stage 2
 is per-block contiguous emission. Stage 3 is dirty-only dispatch over that set.
 Stage 4 is compaction of the retired spans. Each needs the one before it.
 
-**Stage 2 is next, and nothing downstream can start without it.** Both sparse
-kernels append through *global* atomics, so one block's output interleaves with
-every other block's and **per-block ranges cannot exist**: the default
-`marching_cubes_sparse.comp` bumps `index_count`
-once per triangle (`marching_cubes_common.glsl`) and writes that triangle's
-three vertices at `tri * 3`, while `marching_cubes_sparse_shared.comp` bumps
+**Stage 2 has landed on both sparse kernels; stage 3 is next.** Both used to
+append through *global* atomics, so one block's output interleaved with every
+other block's and **per-block ranges could not exist**: the default
+`marching_cubes_sparse.comp` bumped `index_count`
+once per triangle (`marching_cubes_common.glsl`) and wrote that triangle's
+three vertices at `tri * 3`, while `marching_cubes_sparse_shared.comp` bumped
 two independent counters, `vertex_count` per vertex and `index_count` per
-triangle. **Both** must restructure to **count → reserve one span per block →
+triangle. **Both** had to restructure to **count → reserve one span per block →
 emit** — the default kernel to one `atomicAdd`, the sharing kernel to two —
 because `share_vertices` selects one of the two at `create` and is fixed for
-the object's lifetime, so a kernel stage 2 skips is permanently ineligible for
-stages 3 and 4.
+the object's lifetime, so a kernel stage 2 skipped would be permanently
+ineligible for stages 3 and 4. Both now do.
 
 **What the existing golden test covers, and what it does not.** It compares the
 two meshes' triangle sets resolved through the index buffer, *sorted*, on
@@ -1832,11 +1841,56 @@ sharing's, and a two-phase emitter that spent 512 B of `shared` — plus an
 `atomicOr` and a zeroing pass — on a cache no invocation but its own writer ever
 reads would have handed part of that back for nothing.
 
-The sharing kernel's restructure is unmeasured. Stage 2 is therefore justified
-**only** as the precondition: ~10% on the one phase that scales with the block
-count — `dispatch`, which the
-2026-08-08 neighbour-probe decision puts at 77% of a *desktop* `extract_device`
-and which is unmeasured as a share on device — to unlock the ceiling above.
+**The sharing kernel's restructure costs nothing measurable, and that is not
+the same argument.** Three interleaved samples each of the old and new kernels
+span 1.77–1.82 ms on the extract dispatch and their means differ by less than
+that spread (room0 at 120 frames, `--voxel 0.012 --share-vertices
+--device-extract --preload`, Release). Two reasons it is free where the default
+kernel's cost ~10%: this kernel already made two visits over a cached
+classification, so the counting phases reuse a `s_case` that had to exist
+anyway; and the pass that runs over 100% of the cells reads the eight corner
+*signs* alone (`mcCellSigns`), the same lesson that took the default kernel from
++13% to +10%. Caching the per-cell triangle count beside the cube index — free,
+in bits the cube index does not use — then lets phase four claim a cell's whole
+run with one threadgroup atomic instead of one per triangle (~320k against
+~766k at this scale), and lets both later passes walk a `tri_table` row by count
+rather than each re-finding its `-1` terminator, so the terminator is walked in
+exactly one place, `mcCellTriangleCount`, which is also where that walk is
+bounded against a truncated host upload. Geometry is unchanged as a triangle set
+and as a vertex count (766 117 / 668 792, byte-length-identical PLY with
+different bytes — the arena order is precisely what moved). Stage 2 overall is
+therefore still justified as the precondition, and the cost is the default
+kernel's ~10% on the one phase that scales with the block count — `dispatch`,
+which the 2026-08-08 neighbour-probe decision puts at 77% of a *desktop*
+`extract_device` and which is unmeasured as a share on device.
+
+**Each cursor is bounded by its own block's reservation, on both kernels.** The
+default kernel's span bound was argued as making a count/emit disagreement fail
+*safe*; the sharing kernel needs it more and did not get it in the first cut.
+Its count and emit phases run *different* predicates over *two* ranges, and one
+escape exists — the "cannot happen" re-gather in the owned-edge pass, which
+fails in the **under**-reservation direction, because an owner that emits
+nothing sends every cell referencing its edges down the duplicate path instead.
+Forced on one cell of a `block_size` 3 block, that drove consumption past
+reservation in 1070 of 3000 trials, writing into the next block's range with
+`Status::ok` and exact counters. The bound turns it into dropped geometry.
+Both bounds are guards on a state no fixture can reach, so **neither is
+mutation-covered and that is stated rather than implied**: what is covered is
+the arithmetic they guard.
+
+**What stage 2's mutations cover on the sharing kernel.** Dropping the
+duplicate-count branch — the one the count phase exists for — fails a named
+index-range bound on the refit fixture, whose mesh the first cut discarded
+while asserting magnitudes that passed either way. Putting the vertex claims
+back on the global counter, leaving the triangle span intact, fails the
+**vertex**-span assertion and nothing else: `block_layout` walks the index run,
+so it is structurally blind to the second range this kernel reserves, and every
+transition count in the file passes against a fully interleaved arena. Both
+assertions run on a clean extract *and* on one that refit against an undersized
+arena, and on a 27-block fixture rather than the single-block one — with one
+block, a cursor that overran has no next block to land in, so the failure is
+unobservable there in principle. The unshared extract of the same field is the
+oracle for both.
 
 **The tension with seam B is real and is *not* yet resolved.** Incremental
 extraction wants **in-place mutation** of a persistent arena; the seam-B ring
