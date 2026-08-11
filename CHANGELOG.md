@@ -8,6 +8,31 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `mesh`: incremental extraction now works under **`share_vertices`**, which is
+  the configuration the only device consumer runs and the one that decides
+  whether any of this ships. The sharing kernel reserves two per-block ranges
+  already (since the stage-2 work), so this teaches it to *reuse* them: in place
+  when **both** the vertex and triangle counts fit, appending otherwise. Both,
+  not either — the two ranges are allocated independently and a triangle indexes
+  into the vertex range beside it, so reusing one while relocating the other
+  would leave the kept range's triangles pointing at vertices that moved. That
+  coupling is what sharing adds over the default kernel, where `v = 3t` makes one
+  test serve both.
+  **Retirement is an order of magnitude cheaper here**, because this kernel owns
+  its index run: a dead triangle is retired by pointing its three indices at one
+  vertex — 12 bytes, zero area, culled before rasterisation — where the default
+  kernel, whose run is the identity it cannot touch, overwrites 192 bytes of
+  vertices to say the same thing. The dead *vertices* need no writing at all:
+  sharing is in-block and the `+face` is duplicated, so once no triangle
+  references them they are unreachable rather than merely unused.
+  The memory argument this existed to answer: room0 holds **39.5 MB with 310 312
+  triangles for 277 506 live — 1.12x inflation**, against 1.82x and a 4 177 MB
+  device arena without sharing.
+  The decisive test now runs over **both** kernels: the field is changed under a
+  clean extract, so all-zero flags must return the old surface (a silent fallback
+  returns the new one and fails) and all-set flags must reproduce a full extract
+  exactly once retired degenerates are dropped.
+
 - `mesh`: `MarchingCubes::extract_device_incremental` — **stage 3**. Blocks whose
   `+{0,1}³` neighbourhood carries no change keep the triangles they already have,
   at the offsets `block_spans()` already names, and cost one workgroup that
