@@ -185,16 +185,51 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `mesh`: the **vertex-sharing** sparse kernel emits per block, like the default
+  one. It counts a block's vertices and triangles, reserves one range of each
+  with a single `atomicAdd`, and only then writes — where it previously appended
+  per vertex *and* per triangle through the global counters, so its output
+  interleaved across blocks and no per-block range described it. `share_vertices`
+  was therefore the one path a dirty-only dispatch could not use, which matters
+  because it is the path the iOS scanner runs (memory: an in-block-shared mesh is
+  ~3x smaller, and an iPad is where the arena ceiling is real). Two ranges rather
+  than the default kernel's one, since sharing breaks `v = 3t`.
+  **No measurable cost**: three interleaved samples each of `main` and of this
+  kernel span 1.77–1.82 ms on the extract dispatch, and their means differ by
+  less than that spread (room0 at 120 frames, `--voxel 0.012 --share-vertices
+  --device-extract --preload`, **Release** — the build type belongs with the
+  figure, since a bare configure measures `-O0`). The kernel already ran two
+  passes over a cached classification, so the count phases reuse it — and
+  counting reads the eight corner *signs* alone (`mcCellSigns`), no `sdf`/colour
+  arrays copied out of a gather and no sRGB decode, for the one pass that runs
+  over 100% of the cells. The default kernel paid ~10% for the same property.
+  Geometry is **unchanged as a triangle set and as a vertex count** — not
+  byte-identical, since the arena layout is exactly what this changes: the same
+  766 117 triangles over the same 668 792 vertices as `main`, in a PLY of
+  identical length and different bytes.
+  Counting duplicates is a **second** pass, not folded into the first: a
+  duplicate is decided by the *owner* cell's state, which pass one is still
+  writing. Reading it there races, and under-reserves the block's range so the
+  cursor walks off the end of it — invisible on the sphere fixture, a
+  6 062-vertex error on room0, which is how it was caught.
+  Each cursor is **bounded by the block's own reservation**, the fail-safe the
+  default kernel already pays for on the same mechanism: an over-consuming block
+  drops geometry rather than writing over the next block's range with exact
+  counters and no error anywhere.
+  `kVertexDropped` is **removed**: it existed so a dropped vertex would not be
+  re-claimed and double-counted, and per-block reservation makes every slot
+  deterministic whether or not it lands inside the arena, so the totals are exact
+  by construction rather than by bookkeeping.
+
 - `mesh`: the sparse `MarchingCubes` kernel emits **per block contiguously**.
   It counts a block's triangles, reserves one span for all of them with a single
   global `atomicAdd`, and only then writes — where every triangle used to claim
   its own slot and a block's output interleaved with every other block's in
   flight. Per-block ranges are what a dirty-only dispatch needs to leave a clean
   block's geometry in place, so nothing downstream of incremental extraction can
-  start without this. Applies to the **default** sparse kernel;
-  `share_vertices` selects a kernel that still appends per triangle, and is
-  therefore the one path incremental extraction cannot use (a `TODO(mesh)` in
-  `marching_cubes_sparse_shared.comp` records what restructuring it would take).
+  start without this. Applies to the **default** sparse kernel; the
+  `share_vertices` one is the entry above, which reserves two ranges rather than
+  one.
   Geometry is **unchanged as a triangle set** — not byte-identical, since the
   arena layout is exactly what this changes: room0 at 120 frames matches `main`
   triangle-for-triangle at `--voxel 0.02` (277 506 triangles) and at
