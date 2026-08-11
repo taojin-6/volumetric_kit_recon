@@ -2276,6 +2276,80 @@ a negative the panel draws as `unavailable` rather than as a low number. The
 read also moved out of the `share_mtx` critical section, beside the
 `memory_stats()` call that was hoisted out for the same reason.
 
+### 2026-08-11 — The per-block span table is opt-in, is retired by generation rather than described in prose, and is deliberately *not* per slot.
+
+Stage 2 left both sparse kernels computing a block-to-range mapping and throwing
+it away. Publishing it as `MarchingCubes::block_spans()` is what stage 3
+(dirty-only dispatch) re-meshes against, and it is not derivable on the host: the
+reservation atomics hand ranges out in workgroup **arrival** order, not block
+order, so nothing outside the dispatch knows which range belongs to which block.
+Four decisions came out of reviewing the first cut, and the last three are all
+the same mistake — a fact only the library can know, written down for the caller
+instead of checked.
+
+**Opt-in, because it is sized by the grid rather than by the surface.**
+`num_blocks * 16` is 24 MB at `VoxelGridParams::defaults()` and doubles with
+every `VoxelHashMap::resize`, held for the extractor's lifetime — paid by
+`fuse_viewer`, `fuse_replica`, the iOS scanner and the whole test suite, for a
+table whose only reader today is a test. That is exactly the bargain
+`TsdfIntegratorConfig::track_dirty_blocks` already struck for the same slot-keyed
+table shape at a quarter the width, and the bar it set is verbatim: *nothing
+measured for a caller who did not ask*. `MarchingCubesConfig::track_block_spans`
+gates it; a 1-element dummy keeps the descriptor valid and a `write_spans` push
+flag keeps the kernel off it, which is the mechanism `color_dummy_` already uses
+one binding over. The table is also counted in `ExtractTimings::arena_bytes`,
+which it was not: that instrument is how the ring's runaway growth was diagnosed,
+and omitting a component of what stays resident is the same defect that folding
+the index runs into it fixed.
+
+**Retired by generation, because a borrowed pointer's staleness is not
+documentable.** The accessor hands out mapped device memory, and a grow
+move-assigns the buffer — `Buffer::operator=` destroys the current state first,
+so the next extract over a grown grid frees the pages a cached pointer names.
+That is the growing-scan path the feature exists to serve. `block_spans_generation()`
+carries the same counter `DeviceMesh::generation` does, so the two are directly
+comparable, and the accessor returns `nullptr` until an extract has actually left
+a table describing its own output. This matters most on the failure paths: both
+kernels publish a block's span **before** their capacity guard, deliberately —
+the counters must carry the block's full total for the host's refit — so after a
+failed extract the table names triangles at bases the arena never held.
+`disarm_indirect_command()` stopped those being *drawn*; nothing stopped them
+being *read*. One comparison does.
+
+**Not per slot, and that is the ring collision the 2026-08-09 entry recorded as
+unresolved — resolved in the conservative direction.** The arena, index run and
+draw command are per `slot_count`; this table is one instance describing the
+current dispatch. Making it per-slot would multiply the 24 MB by the ring depth
+to serve a consumer that does not exist yet. So the table stays single and the
+generation stamp makes the mismatch *visible* instead of silent: a consumer
+holding generation N whose `block_spans_generation()` has moved to N+1 knows the
+spans describe another slot's arena. When stage 3 needs to read a held mesh's
+spans, that is when the per-slot cost is worth paying, and the check is already
+the thing that would have to change.
+
+**The grow carries the old spans forward and zeroes only the new tail.**
+`VoxelHashMap::resize` preserves every block's index — which is precisely why
+`VoxelBlockGrid::topology_epoch()` deliberately does not move across one — so a
+slot means the same block on both sides and replacing the table wholesale would
+discard every span on the one event the volume tier guarantees they survive.
+`TsdfIntegrator::prepare_dirty_flags` grows its flags exactly this way, for
+exactly this reason. Zeroing the tail is the other half: only blocks in an
+extract's active set are written, which on a first extract is a few thousand of
+1.5M entries, and the rest were being published as readable while holding
+whatever VMA handed over.
+
+**And the host/device mirror is pinned per field.** `BlockSpan` is four
+same-typed `uint32`s, so every permutation is 16 bytes and `sizeof` alone cannot
+see a transposition — while the GLSL side was an anonymous `uvec4` both kernels
+filled positionally, with `s_ibase` (named for the *index* base) landing in
+`triangle_base` and correct only because the atomic result had been divided by
+`kIndicesPerTriangle`. The struct now has per-field `offsetof` asserts like every
+other mirror in the repo, is declared once in
+`shaders/marching_cubes_block_span.glsl` rather than copied into two kernels that
+could disagree on field order and both compile, and both kernels assign it **by
+name** — the same fix `SparsePushConstants` already applies to its own adjacent
+same-typed scalars.
+
 ## Measured lessons
 
 Not decisions, but the measurements that overturned an assumption about
