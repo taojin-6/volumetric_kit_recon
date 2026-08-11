@@ -304,8 +304,20 @@ int dirty_blocks_case(vr::Device& device, vr::Allocator& allocator) {
             .dirty_remesh_blocks(b, active_b.value().data(),
                                  active_b.value().size())
             .ok());
+  // The token MOVED -- not "is 1". It is drawn from a process-wide counter, so
+  // its value says nothing and only the change is the contract; asserting a
+  // count here would fail the moment another grid in this process were built
+  // first, which is the property that makes two grids unable to collide.
+  const std::uint64_t epoch_before = b.topology_epoch();
   CHECK(b.remove(&one, 1).ok());
-  CHECK(b.topology_epoch() == 1);
+  CHECK(b.topology_epoch() != epoch_before);
+  // And the raw path moves it too, which is the whole reason it lives on the
+  // hash map: reaching remove() through map() bypasses the grid's wrapper, and
+  // used to leave every anchor built on this token reading "unchanged" over a
+  // slot that had just been freed and re-drawn.
+  const std::uint64_t epoch_after_wrapped = b.topology_epoch();
+  CHECK(b.map().remove(&one, 1).ok());
+  CHECK(b.topology_epoch() != epoch_after_wrapped);
   vr::Result<std::vector<vol::BlockIndex>> after_remove =
       b.map().compact_active_blocks();
   CHECK(after_remove.ok());

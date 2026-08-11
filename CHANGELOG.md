@@ -220,24 +220,50 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `shaders/marching_cubes_block_span.glsl` rather than copied into two kernels
   that could disagree on field order, and both kernels assign it by name.
   A slot is meaningful only against the grid and topology epoch that produced it,
-  and only for blocks in that extract's active set.
+  and only for the blocks the *published* extract meshed — nothing is cleared on
+  the way past, so every other entry reads as a well-formed span belonging to an
+  earlier one. `block_span_valid` is what separates them; there is no value in
+  the table that means "not mine".
 - `mesh`: `MarchingCubes::block_span_valid(grid, slot)` — the **anchor** that
   makes a published span mean something on a later extract, and the per-slot half
   of the question `block_spans_generation()` answers for the table as a whole. A
   span is keyed by block slot, and a slot names a block only against a particular
-  grid and topology epoch: the block heap is LIFO, so after a `remove()` a reused
-  slot names a *different* block and its span reads as that block's geometry
-  under `Status::ok`. Both are recorded and both are checked, mirroring how the
-  `tsdf` tier anchors its dirty flags.
+  grid at a particular topology: the block heap is LIFO, so after a `remove()` a
+  reused slot names a *different* block and its span reads as that block's
+  geometry under `Status::ok`. Anchored on `topology_epoch` alone, which now
+  identifies both — see the `volume` entry below.
   It takes the **grid** rather than trusting the caller to re-extract first:
   between a `remove()` and the next extract the per-slot stamps are still set, so
   a query that re-checked nothing would call a stale span live — a staleness the
   caller cannot see, which makes it this tier's to check (the 2026-08-04 rule).
+  The stamp is compared for **equality** with the extract that published the
+  table, not merely for being set: a block that drops out of the active set keeps
+  the stamp its last extract wrote, so "ever meshed" would hand back a span whose
+  bases index an arena since rewritten — which is what dirty-only dispatch, where
+  meshing a strict subset is the normal case, would make the steady state.
   False whenever the whole table has been retired, so it can never report a slot
   live beside a `block_spans()` of `nullptr`; false too when
-  `track_block_spans` is off, since then there is no table to be valid.
+  `track_block_spans` is off, on a moved-from extractor, and for a moved-from
+  grid, which owns no blocks however its token reads.
+  It is **not** the whole answer at `slot_count > 1`: one table serves the whole
+  ring, so compare `block_spans_generation()` against your own
+  `DeviceMesh::generation` first.
   A `resize()` does not break it: resizing preserves block indices, so spans stay
   true and the table simply grows, its new entries unstamped.
+- `volume`: `topology_epoch` moved from `VoxelBlockGrid` down to
+  `VoxelHashMap` — the object that hands block indices out and takes them back —
+  and became a **globally unique token** drawn from a process-wide counter at
+  `create` and at every `remove()` / `clear()`, rather than a per-grid count.
+  Two consequences, both of which closed a hole an anchor built on it could not
+  see. It can no longer be dodged: `VoxelHashMap::remove` reached through
+  `VoxelBlockGrid::map()` moves it exactly as the wrapper does, where a counter
+  owned one tier up was moved only by the wrapper. And no two grids, or two
+  topologies of one grid, ever share a value, so an anchor holding a dead grid's
+  token cannot be revived by a new grid built in the same storage — the ABA a
+  raw pointer comparison has no way to detect. `MarchingCubes` consequently
+  anchors on the token alone and holds no grid pointer at all.
+  `resize()` still does not move it, which is what lets a slot-keyed cache
+  survive a grow. It counts nothing now; compare it for equality only.
 
 ### Changed
 

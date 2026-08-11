@@ -2276,7 +2276,7 @@ a negative the panel draws as `unavailable` rather than as a low number. The
 read also moved out of the `share_mtx` critical section, beside the
 `memory_stats()` call that was hoisted out for the same reason.
 
-### 2026-08-11 — The per-block span table is opt-in, is retired by generation rather than described in prose, and is deliberately *not* per slot.
+### 2026-08-11 — The per-block span table is opt-in, is retired by generation rather than described in prose, is anchored per block slot to a globally unique topology token, and is one table for the whole ring rather than one per slot.
 
 Stage 2 left both sparse kernels computing a block-to-range mapping and throwing
 it away. Publishing it as `MarchingCubes::block_spans()` is what stage 3
@@ -2341,28 +2341,91 @@ whatever VMA handed over.
 **And the slot itself is anchored, not just the table.** The generation above
 answers "which extract does this table describe"; it cannot answer "does this
 slot still name the block its span was written for". A slot is meaningful only
-against one grid and one topology epoch — the block heap is LIFO, so after a
-`remove()` a reused slot names a *different* block and its span reads as that
-block's geometry under `Status::ok`. `block_span_valid(grid, slot)` records both
-and checks both, the same shape `TsdfIntegrator::prepare_dirty_flags` uses for
-the sibling table. It takes the **grid** rather than trusting the caller to
-re-extract after a topology change: between a `remove()` and the next extract the
-per-slot stamps are still set, so a query that re-checked nothing would call a
-stale span live. A `resize()` deliberately does not break it, for the same reason
-the buffer carries its spans forward. The stamps are per slot so that "meshed and
-emitted nothing" stays distinct from "no extract has touched this since the
-anchor" — the latter being what a newly allocated block reads — and they are
-written from the active set the *host* dispatched rather than read back from the
-device, which only knows where geometry went, not which blocks it was asked
-about. Three things the test caught that the assertion was not written for:
-`VoxelHashMap::remove` reached through `map()` frees the index *without* bumping
-`topology_epoch` (its own header says so), so the test goes through the grid's
-`remove`; the fixture had to build its own grid and extractor and run last,
-because removing whichever block compaction happened to put last changes nothing
-when that block carries no surface, and a test that fails on some runs is worse
-than one that fails on all of them; and which slot is unmeshed is not guessable,
-so the assertion counts instead — exactly the active blocks are valid, no more
-and no fewer.
+against one grid at one topology — the block heap is LIFO, so after a `remove()`
+a reused slot names a *different* block and its span reads as that block's
+geometry under `Status::ok`. `block_span_valid(grid, slot)` is that check. It
+takes the **grid** rather than trusting the caller to re-extract after a topology
+change: between a `remove()` and the next extract the per-slot stamps are still
+set, so a query that re-checked nothing would call a stale span live. A
+`resize()` deliberately does not break it, for the same reason the buffer carries
+its spans forward. The stamps are per slot so that "meshed and emitted nothing"
+stays distinct from "this extract did not mesh this block", and they are written
+from the active set the *host* dispatched rather than read back from the device,
+which only knows where geometry went, not which blocks it was asked about. The
+fixture had to build its own grid and extractor and run last, because removing
+whichever block compaction happened to put last changes nothing when that block
+carries no surface, and a test that fails on some runs is worse than one that
+fails on all of them; and which slot is unmeshed is not guessable, so the
+assertions count instead — exactly the active blocks are valid, no more and no
+fewer.
+
+**A stamp is compared for equality with the extract that published the table,
+not for being set — and the anchor is one globally unique token, not a pointer
+and a count.** The first cut got both halves wrong in the same direction, and
+each was a fact the library could check written down as something the caller
+would not do.
+
+The stamp first. It was tested `!= 0`, which answers "has this slot ever been
+meshed since the anchor" — and nothing clears a stamp on the way past, so a block
+that drops out of the active set keeps its last extract's stamp while the span
+under it goes on naming an arena range some other block has since been given.
+Comparing against a per-extract serial makes the question "did the extract whose
+table is published write this", which is the only reading a caller can act on. It
+also *removes* work rather than adding it: with a serial, a re-anchor needs no
+clearing pass at all, because a stamp written before it can never equal the
+serial after it. The reachable failure today is narrow — every topology change
+re-anchors — but dirty-only dispatch, the branch this landed on, makes meshing a
+strict subset the steady state, and there `!= 0` is wrong on every frame.
+
+The anchor second, and this one moved a member between tiers. It was a
+`const VoxelBlockGrid*` beside the epoch, and it could not work: this class
+hands out no way to un-anchor and must never dereference a borrowed grid, so a
+grid destroyed after an extract leaves a dangling address that the *next* grid
+built in that storage matches exactly — and a fresh grid's epoch was 0, the same
+value the anchor had recorded. Both halves match, and a destroyed grid's spans
+read live. The fix is to make the epoch itself identify the table: it moved from
+`VoxelBlockGrid` down to `VoxelHashMap`, and each value is drawn once from a
+process-wide counter at `create` and at every `remove()` / `clear()`. No two
+tables and no two topologies ever share one, so equality already means "the same
+grid, unchanged" and the pointer is gone. Moving it down a tier fixed a second
+hole in the same stroke, one the previous entry above records as a known trap the
+*test* routed around: `VoxelHashMap::remove` reached through
+`VoxelBlockGrid::map()` frees an index, and a counter owned by the grid was
+bumped only by the grid's wrapper — so the raw path defeated every anchor built
+on it in silence. Owned by the object that frees the index, no path can miss it.
+It also deleted the class of bug that `VoxelBlockGrid`'s hand-written
+move-assignment had already fallen into: it assigned four members and not the
+epoch, so a move-assigned grid took on another grid's blocks while still
+reporting the destination's old epoch. There is no such member to forget now —
+it rides inside `map_`. The cost is that the token counts nothing; it is
+comparable for equality and that is all, which is all any of its readers wanted.
+
+**What the table does not do is clear itself, and the accessor has to say so.**
+A grow copies every existing span forward and zeroes only the tail, so `block_spans()`
+publishes well-formed entries for slots the current extract never wrote. The
+first cut's prose said the opposite — "a slot the last extract did not mesh reads
+as an empty span here" — which is the wrong instruction to hand a reader, and
+worse than no instruction: an empty span is what a block that meshed and emitted
+*nothing* writes. There is no value in the table meaning "not mine", which is the
+whole reason the stamp exists, so the accessor now documents itself as a fetch
+mechanism for slots `block_span_valid` has already approved rather than as an
+array to iterate. Zeroing the whole buffer on a re-anchor was considered and
+rejected: it is a 24 MB write to protect a use the contract forbids, where the
+tail zeroing it resembles guards *uninitialized* memory, which is a different
+thing.
+
+**And what the feature costs is reported, including the half that is not a
+buffer.** The stamps are a host array of `num_blocks * 8` — 12 MB at the same
+defaults, on top of the table's 24 MB — and `resident_output_bytes()` counted
+only the table, so `ExtractTimings::arena_bytes` under-reported the feature by a
+third on the instrument the ring's runaway growth was diagnosed with. Both are
+counted now, and the gated-vs-ungated test asserts the difference as an equality
+over both terms rather than one. The per-block stamping loop is under the same
+gate as everything else about the table — it was running for every caller,
+`track_block_spans` or not, ~107k divisions per extract to discard the result —
+and its cost lands in `arena_alloc_ms`, because `total_ms()` sums the six phase
+rows rather than measuring the call, so work outside a row is time nothing
+reports.
 
 **And the host/device mirror is pinned per field.** `BlockSpan` is four
 same-typed `uint32`s, so every permutation is 16 bytes and `sizeof` alone cannot

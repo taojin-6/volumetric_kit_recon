@@ -190,10 +190,10 @@ order. Change the decision, its entry there, and this list together.
   A breakdown row is one the *caller's* row already contains, so the host total
   skips it and the device total must not; and a ceiling the library knows is the
   library's to name.
-- [**2026-08-11**](DECISIONS.md#2026-08-11--the-per-block-span-table-is-opt-in-is-retired-by-generation-rather-than-described-in-prose-and-is-deliberately-not-per-slot) —
+- [**2026-08-11**](DECISIONS.md#2026-08-11--the-per-block-span-table-is-opt-in-is-retired-by-generation-rather-than-described-in-prose-is-anchored-per-block-slot-to-a-globally-unique-topology-token-and-is-one-table-for-the-whole-ring-rather-than-one-per-slot) —
   The per-block span table is opt-in, is retired by generation rather than
-  described in prose, is anchored per slot to the grid and epoch that produced
-  it, and is deliberately *not* per slot.
+  described in prose, is anchored per block slot to a globally unique topology
+  token, and is one table for the whole ring rather than one per slot.
 
 ## Provenance & salvage policy
 
@@ -415,8 +415,12 @@ arbitrary; it usually isn't.
   so per-voxel data survives a grow. `VoxelBlockGrid` composes the map with
   independently-allocated SoA attribute arrays (`tsdf`, `weight`, `color`, …),
   each `num_blocks·voxels_per_block`, so a consumer materialises only what it
-  needs. Host `diagnostics()` scans occupancy; `load_factor()` is the
-  constant-time read a per-frame caller can actually afford, and
+  needs. `topology_epoch()` lives on the *map* — the object that frees a block
+  index — and is a globally unique token re-drawn at `create` and at every
+  `remove`/`clear`, never at `resize`: a slot-keyed cache (tsdf's dirty flags,
+  mesh's spans) anchors on it, so no path may free an index without moving it
+  and no two grids may ever share a value. Host `diagnostics()` scans occupancy;
+  `load_factor()` is the constant-time read a per-frame caller can afford, and
   `kGrowThreshold` is the occupancy it says to grow at — named here so a UI or
   an embedder cannot draw a ceiling that disagrees with it. Opt-in
   `StageMetrics*` on `allocate_from_depth` (an `"allocate"` row summing every
@@ -452,8 +456,12 @@ arbitrary; it usually isn't.
   sized by the grid, not the surface), borrowed, and readable only while
   `block_spans_generation()` still names the mesh you hold —
   `block_span_valid(grid, slot)` answers the same question per slot, against
-  the grid and topology epoch the spans were written for, since a LIFO-reused
-  slot names a different block. The vertex arena
+  the `topology_epoch` the spans were written for and the *serial* of the
+  extract that wrote them, since a LIFO-reused slot names a different block and
+  a block dropped from the active set keeps its last stamp. Nothing in the
+  table itself says "not mine": a grow carries every old span forward, so
+  `block_spans()` is a fetch for slots `block_span_valid` approved, not an
+  array to iterate. The vertex arena
   is fitted to the surface, grow-only, and held as a **ring of slots** the
   consumer releases by generation; the kernel writes a real
   `VkDrawIndexedIndirectCommand`. `extract_device` returns a borrowed

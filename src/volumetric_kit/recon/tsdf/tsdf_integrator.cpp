@@ -374,6 +374,12 @@ Status TsdfIntegrator::prepare_dirty_flags(const VoxelBlockGrid& grid) {
     // away with those blocks, whose slots are back on a LIFO heap and now mean
     // whichever block was allocated next. dirty_remesh_blocks() refuses until
     // reset_dirty() re-arms it.
+    //
+    // This branch also catches what the pointer above cannot: a grid destroyed
+    // between fuses and a new one built at the same address. The token is drawn
+    // from a process-wide counter (volume::VoxelHashMap::topology_epoch), so
+    // the newcomer's never equals the dead grid's and the mismatch lands here
+    // -- a refusal rather than one grid's flags read as another's.
     dirty_topology_stale_ = true;
     dirty_epoch_ = grid.topology_epoch();
   }
