@@ -1,34 +1,69 @@
 #version 450
 
 // Projective texturing, single-camera (live line-of-sight) slice. One thread per
-// triangle: project the triangle's three world-space vertices into the posed
-// camera and keep it only when all three are in front, inside the image, and
-// unoccluded (their projected depth agrees with the sensor depth map within
-// pc.occlusion_threshold). A kept triangle's vertices get a normalized atlas UV
-// (the camera image the caller binds as the atlas); a rejected triangle's
-// vertices get the (-1,-1) sentinel, so the renderer falls back to per-vertex
-// color -- and, because every call overwrites uv0, a triangle that leaves the
-// view reverts to that fallback.
+// VERTEX: project it into the posed camera and give it a normalized atlas UV
+// (into the camera image the caller binds as the atlas) when it is in front,
+// inside the image, and unoccluded -- its projected depth agreeing with the
+// sensor depth map within pc.occlusion_threshold.
+//
+// Per vertex rather than per triangle, and that is the whole shape of this
+// kernel. The visibility verdict reads nothing but the vertex's own position,
+// the camera and the depth map (project_to_image + occluded_ok below), so it
+// was always a pure function of the vertex; deciding it per triangle and then
+// writing the result to three vertices was what made this pass incompatible
+// with MarchingCubesConfig::share_vertices, where one vertex belongs to up to
+// six triangles that can disagree. Dispatching per vertex removes the shared
+// write outright -- there is no second writer to race, no index buffer to read,
+// and each vertex is projected once instead of once per referencing triangle
+// (~3x less work on a shared mesh, where the vertex count is roughly the
+// triangle count rather than three times it).
+//
+// What it costs is the all-three-vertices gate: a triangle straddling the
+// visibility boundary is no longer refused whole. The renderer resolves albedo
+// per triangle from its provoking vertex, so such a triangle takes one class
+// for its whole face, and the textured region grows by up to one triangle at an
+// occlusion silhouette. The uv encoding below is what keeps that bounded.
+//
+// THREE OUTCOMES, not two, and the middle one is the new part:
+//   * visible                  -> uv in [0,1]: sample the atlas here.
+//   * in frame but occluded    -> -uv - 1: use the vertex colour, but CARRY the
+//                                 uv. Still negative, so gfx's `uv0.x < 0` test
+//                                 is unchanged; gfx decodes it back rather than
+//                                 substituting (0,0). Without this a mixed
+//                                 triangle interpolates from a real uv toward
+//                                 the atlas origin and smears the corner of the
+//                                 image across its face -- which is exactly
+//                                 what a shared mesh used to render along every
+//                                 silhouette.
+//   * not in frame at all      -> (-1,-1), the original sentinel. There is no
+//                                 uv to carry, and it decodes to (0,0), which
+//                                 is what gfx already substituted.
+//
+// Every vertex is written on every call, so a vertex that leaves the view
+// reverts rather than keeping a stale coordinate -- the property the per-
+// triangle version had and this must not lose.
 //
 // Ported from the prior engine's scoreTrianglesKernel + writeTriangleUVsKernel
 // (projective_mapping.cu / projective_texturing.metal): the per-vertex
 // bounds + bilinear-depth occlusion test, and camera_uv_to_atlas_uv's +0.5
 // half-texel and half-texel clamp. The multi-camera score + winner-take-all
-// atomic collapse away here: one camera means no ranking, and the mesh tier's
-// independent triangles (no shared vertices) mean each thread owns its three
-// uv0 writes outright -- no atomicMax key. (A later multi-keyframe slice
-// restores the score + the Metal two-step 32-bit atomic once vertices are
-// shared.)
+// atomic stay dropped: one camera means no ranking. They come back for a packed
+// multi-keyframe atlas, which needs a per-PRIMITIVE camera id and is not what
+// vertex sharing needed -- a triangle whose vertices index different sub-rects
+// of a pack cannot be expressed per vertex at all, encoded or not.
 
 #extension GL_GOOGLE_include_directive : require
 #include "texture_common.glsl"
 
 layout(local_size_x = 256) in;
 
+// No Indices binding: this dispatch never addresses a vertex through an index,
+// which is also why it needs no num_vertices bound on that addressing (the
+// malformed-mesh guard the per-triangle version carried) -- the only index it
+// forms is its own invocation id.
 layout(set = 0, binding = 0, scalar) buffer Vertices { Vertex vertices[]; };
-layout(set = 0, binding = 1, scalar) readonly buffer Indices { uint indices[]; };
-layout(set = 0, binding = 2, scalar) readonly buffer Depth { float depth[]; };
-layout(set = 0, binding = 3, scalar) readonly buffer Camera {
+layout(set = 0, binding = 1, scalar) readonly buffer Depth { float depth[]; };
+layout(set = 0, binding = 2, scalar) readonly buffer Camera {
   DepthCameraParams cam;
 };
 
@@ -106,8 +141,15 @@ float sample_depth(float u, float v) {
 // and rejects a hole / NaN / inf / out-of-range depth via the sensor range (the
 // negated compare drops non-finite depth).
 bool occluded_ok(vec2 px, float zc) {
-  if (px.x < 1.0 || px.x >= float(int(cam.width) - 1) || px.y < 1.0 ||
-      px.y >= float(int(cam.height) - 1)) {
+  // Negated rather than `px.x < 1.0 || ...`, which is the same work and rejects
+  // a NaN instead of admitting one: every comparison with NaN is false, so the
+  // direct form falls THROUGH to sample_depth, whose clamp and floor are
+  // undefined on a NaN and whose depth[] index has nothing further to bound it.
+  // project_to_image refuses a non-finite pixel before this is reached, so the
+  // form is what keeps the predicate true on its own terms rather than only on
+  // its caller's.
+  if (!(px.x >= 1.0 && px.x < float(int(cam.width) - 1) && px.y >= 1.0 &&
+        px.y < float(int(cam.height) - 1))) {
     return false;
   }
   float d = sample_depth(px.x, px.y);
@@ -135,43 +177,50 @@ vec2 pixel_to_atlas_uv(vec2 px) {
 }
 
 void main() {
-  uint tri = gl_GlobalInvocationID.x;
-  if (tri >= pc.num_triangles) {
-    return;
-  }
-  uint i0 = indices[tri * 3 + 0];
-  uint i1 = indices[tri * 3 + 1];
-  uint i2 = indices[tri * 3 + 2];
-  // Guard an out-of-range index before it addresses vertices[]: the kernel both
-  // reads .position and writes .uv0 through it, so a malformed mesh (an index
-  // past the vertex count -- e.g. a loaded/dedup'd mesh, not the mesh tier's
-  // iota) would otherwise be an out-of-bounds SSBO access. Skip such a triangle
-  // (leave its vertices untouched) rather than corrupt memory.
-  if (i0 >= pc.num_vertices || i1 >= pc.num_vertices || i2 >= pc.num_vertices) {
+  uint vid = gl_GlobalInvocationID.x;
+  if (vid >= pc.num_vertices) {
     return;
   }
 
-  // Project all three vertices; a triangle is textured only if every vertex is
-  // in front, in the image, and unoccluded (the prior engine's all-3-vertices
-  // gate -- one failing vertex aborts the triangle).
-  vec2 px0, px1, px2;
-  float z0, z1, z2;
-  bool visible = project_to_image(cam, vertices[i0].position, px0, z0) &&
-                 project_to_image(cam, vertices[i1].position, px1, z1) &&
-                 project_to_image(cam, vertices[i2].position, px2, z2) &&
-                 occluded_ok(px0, z0) && occluded_ok(px1, z1) &&
-                 occluded_ok(px2, z2);
-
-  if (!visible) {
-    // Not in this camera's line of sight -> per-vertex color fallback. Written
-    // (not left) so a re-texture resets a triangle that has left the view.
-    vec2 sentinel = vec2(-1.0, -1.0);
-    vertices[i0].uv0 = sentinel;
-    vertices[i1].uv0 = sentinel;
-    vertices[i2].uv0 = sentinel;
+  // The domain widened with the dispatch: the per-triangle version visited only
+  // vertices an index named, and this visits every slot in [0, num_vertices).
+  // On a mesh from the sharing kernel those are not the same set -- that kernel
+  // publishes a vertex count summed from each block's RESERVATION, while a
+  // block that claims fewer than it reserved leaves the tail of its range
+  // never written, inside the published count and in nobody's index buffer.
+  // Nothing zeroes the arena, so such a slot holds whatever the last extract to
+  // own those bytes left. Reading it is harmless -- it is our own buffer, in
+  // range -- but the bytes are arbitrary, so the position may be non-finite.
+  // That is why project_to_image and occluded_ok are both written to reject a
+  // NaN rather than to accept one by default: an unclaimed slot takes the
+  // sentinel path and is never referenced by a triangle anyway.
+  vec2 px;
+  float zc;
+  if (!project_to_image(cam, vertices[vid].position, px, zc)) {
+    // No usable projection -- behind the camera, where the pinhole divide has
+    // no meaning, or a position that is not a number. Either way there
+    // genuinely is no coordinate to carry and the bare sentinel is the honest
+    // value. The renderer reads it as (0, 0), which is arbitrary -- but a
+    // triangle with a vertex behind the camera and another in front spans the
+    // near plane, and no per-vertex uv can describe that however it is
+    // encoded. Written rather than left, so a vertex that has left the view
+    // drops its previous frame's coordinate.
+    vertices[vid].uv0 = vec2(-1.0, -1.0);
     return;
   }
-  vertices[i0].uv0 = pixel_to_atlas_uv(px0);
-  vertices[i1].uv0 = pixel_to_atlas_uv(px1);
-  vertices[i2].uv0 = pixel_to_atlas_uv(px2);
+
+  // In FRONT -- not necessarily in frame. The projection is defined either way,
+  // so compute the coordinate unconditionally and let the tests below decide
+  // only how it is marked. `pixel_to_atlas_uv` clamps an extrapolated pixel
+  // half a texel inside the border, so a vertex outside the image carries the
+  // nearest edge coordinate rather than a wild one.
+  //
+  // Carrying it is the whole point at the frustum boundary. Such a vertex is
+  // never textured -- `occluded_ok` refuses a pixel within a texel of the edge
+  // -- but a triangle whose provoking vertex IS textured interpolates across
+  // it, and the bare sentinel would drag that interpolation to the atlas
+  // origin, drawing the entire camera image inside one triangle along the whole
+  // boundary.
+  vec2 uv = pixel_to_atlas_uv(px);
+  vertices[vid].uv0 = occluded_ok(px, zc) ? uv : (-uv - 1.0);
 }

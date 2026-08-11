@@ -194,6 +194,11 @@ order. Change the decision, its entry there, and this list together.
   The per-block span table is opt-in, is retired by generation rather than
   described in prose, is anchored per block slot to a globally unique topology
   token, and is one table for the whole ring rather than one per slot.
+- [**2026-08-11**](DECISIONS.md#2026-08-11--projective-texturing-decides-visibility-per-vertex-and-a-negative-uv0-carries-its-atlas-coordinate-rather-than-discarding-it-amends-the-2026-07-07-texture-tier-decision-and-retires-the-share_vertices-refusal-the-2026-08-04-entry-records) —
+  Projective texturing decides visibility per *vertex*, and a negative `uv0`
+  carries its atlas coordinate rather than discarding it (amends the 2026-07-07
+  texture-tier decision, and retires the `share_vertices` refusal the
+  2026-08-04 entry records).
 
 ## Provenance & salvage policy
 
@@ -468,14 +473,25 @@ arbitrary; it usually isn't.
   `DeviceMesh` (valid until the next extract, enforced by a generation stamp),
   `download` takes the single host copy. `share_vertices` selects a second
   compiled kernel that indexes in-block vertices — 3.4x fewer on room0, and
-  refused by the `texture` tier, which decides visibility per triangle.
+  textured like any other mesh since the `texture` tier moved to a per-vertex
+  verdict (2026-08-11). `DeviceMesh::shares_vertices` still publishes it,
+  because `v = 3t` no longer holds and a consumer sizing an arena cannot derive
+  that from the buffers.
 
 - **`texture`** — `ProjectiveTexturer` rewrites every `Vertex::uv0` against one
-  posed frame: a triangle is kept only where all three vertices are in front,
-  in frame, and **unoccluded** (projected depth agrees with the depth map),
-  else the `(-1,-1)` sentinel takes gfx's per-vertex-colour path. Live single
-  camera, so the frame the caller binds *is* the atlas. Opt-in `StageMetrics*`
-  on both overloads reports a `"texture"` row with both halves.
+  posed frame, one thread per **vertex**: it is kept where the vertex is in
+  front, in frame, and **unoccluded** (projected depth agrees with the depth
+  map). Three outcomes, not two, and a consumer must test the **sign** and
+  never `== (-1,-1)`: a visible vertex gets `uv`, one in frame but occluded
+  gets `-uv - 1` — negative, so gfx takes the per-vertex-colour path, but the
+  coordinate is *carried* so a mixed triangle interpolates between real
+  projections instead of smearing toward the atlas origin — and one behind the
+  camera or holding a non-finite position gets the bare `(-1,-1)`, there being
+  nothing to carry. A vertex in front but outside the image carries the clamped
+  border coordinate; conflating it with the behind-camera case drew the whole
+  image inside one triangle along the frustum edge. Live single camera, so the
+  frame the caller binds *is* the atlas. Opt-in `StageMetrics*` on both
+  overloads reports a `"texture"` row with both halves.
 
 - **`sensor`** — the capture *contract*: `ICameraCapture` polled for a
   `CapturedFrame` (frames dropped, not queued), plus the boundary math that is

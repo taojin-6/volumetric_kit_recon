@@ -151,6 +151,16 @@ struct Options {
   bool preload = false;     // decode every frame up front (RAM for decode time)
   bool overlay = true;      // Dear ImGui performance + reconstruction panels
   bool validation = false;  // Vulkan validation layer on the shared device
+  // In-block vertex sharing (MarchingCubesConfig::share_vertices). Off here to
+  // match the example's history, on in the iOS scanner, where the vertex arena
+  // is the term that binds -- so this flag is what lets this window stand in
+  // for that configuration rather than only for the desktop one.
+  //
+  // It is worth a flag specifically BECAUSE it runs beside --texture. Sharing
+  // and projective texturing were mutually exclusive until the texture pass
+  // moved to a per-vertex dispatch; this is where the two are exercised
+  // together, live and growing, rather than in one still frame.
+  bool share_vertices = false;
 };
 
 bool parse_args(int argc, char** argv, Options& o) {
@@ -195,6 +205,8 @@ bool parse_args(int argc, char** argv, Options& o) {
       o.lit = false;
     } else if (a == "--no-texture") {
       o.texture = false;
+    } else if (a == "--share-vertices") {
+      o.share_vertices = true;
     } else if (a == "--preload") {
       o.preload = true;
     } else if (a == "--no-overlay") {
@@ -216,7 +228,8 @@ bool parse_args(int argc, char** argv, Options& o) {
                  "usage: fuse_viewer <scene_dir> [--voxel m] [--trunc m] "
                  "[--max-frames n] "
                  "[--remesh-every n] [--unlit] "
-                 "[--no-texture] [--preload] [--no-overlay] [--validation]\n");
+                 "[--no-texture] [--share-vertices] [--preload] [--no-overlay] "
+                 "[--validation]\n");
     return false;
   }
   // strtof parses "nan"/"inf" without error, and a non-finite knob slips the
@@ -584,6 +597,10 @@ int run(GLFWwindow* window, const Options& opt) {
   // that could still be reading it is alive. Each slot is a full vertex arena
   // that never shrinks, so this is not free; deeper buys nothing.
   mc_config.slot_count = config.frames_in_flight + 1;
+  // In-block vertex sharing, which the texture pass no longer excludes: it
+  // dispatches per vertex, so a vertex belonging to several triangles has one
+  // writer rather than several disagreeing ones. See --share-vertices.
+  mc_config.share_vertices = opt.share_vertices;
   auto extractor_result =
       rmesh::MarchingCubes::create(rdevice, rallocator, mc_config);
   if (!extractor_result) {
@@ -1521,12 +1538,13 @@ int run(GLFWwindow* window, const Options& opt) {
         // consumer to measure a device-local arena + staging against it.
         //
         // MarchingCubesConfig::share_vertices cuts that fetch ~4x by emitting
-        // ~4x fewer vertices, and this example does NOT take it --
-        // deliberately, because it runs the texture tier, and per-vertex uv0
-        // cannot carry a per-triangle visibility decision over a shared vertex
-        // (recon refuses the pair outright). It becomes available here when
-        // texturing moves to a per-primitive camera id; `fuse_replica
-        // --share-vertices` is the measurement in the meantime.
+        // ~4x fewer vertices, and `--share-vertices` now takes it here. It was
+        // unavailable to this example while the texture tier refused a shared
+        // mesh -- it decided visibility per triangle and wrote uv0 per vertex
+        // -- and the per-vertex dispatch removed that refusal, so the ~4x is
+        // measurable on the running window rather than only in `fuse_replica`.
+        // What still waits on a per-primitive camera id is the packed
+        // multi-camera atlas, which is a different problem.
         vgp::LiveMesh live;
         live.vertices = live_view.vertices;
         live.indices = live_view.indices;

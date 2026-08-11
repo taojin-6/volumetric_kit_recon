@@ -59,9 +59,12 @@ struct Options {
   int stride = 1;            // integrate every N-th frame
   int mesh_every = 50;       // re-extract + log this often (0 = only at end)
   // Share a vertex between the cells meeting on an edge, instead of giving
-  // every triangle three private ones. This example is where it can be measured
-  // honestly: it does no projective texturing, whose per-triangle verdict
-  // written per vertex is what sharing is incompatible with.
+  // every triangle three private ones. This example isolates the extract: it
+  // does no projective texturing and no rendering, so what the flag moves here
+  // is the meshing cost and the vertex count alone. The viewer examples take
+  // the same flag and are where its effect on a textured render is visible --
+  // the texture tier stopped refusing a shared mesh when it moved to a
+  // per-vertex dispatch.
   bool share_vertices = false;
   // Remesh through extract_device (no host copy) rather than extract. This is
   // the path fuse_viewer and the iOS scanner actually run, and it is the only

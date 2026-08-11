@@ -387,14 +387,18 @@ int main() {
     CHECK(texturer.texture(next.value(), depth.data(), cam).ok());
   }
 
-  // A mesh whose vertices are SHARED is refused, and that refusal is the whole
-  // reason DeviceMesh publishes the flag. This pass decides visibility per
-  // triangle and writes uv0 per vertex; where a vertex is referenced by up to
-  // six triangles that disagree, the last writer wins nondeterministically and
-  // a triangle left holding one sentinel interpolates from (-1, -1) across its
-  // face -- Status::ok, no validation diagnostic, visible only as flicker.
-  // Without the flag the texturer had no way to ask: share_vertices lives on a
-  // config it is not compiled against.
+  // A mesh whose vertices are SHARED is textured, not refused.
+  //
+  // It used to be refused, and the refusal was the whole reason DeviceMesh
+  // publishes the flag: the pass decided visibility per TRIANGLE and wrote uv0
+  // per VERTEX, so a vertex referenced by up to six triangles that disagreed
+  // was written by whichever thread ran last -- nondeterministically, visible
+  // only as flicker along every silhouette. The dispatch is per vertex now, so
+  // there is exactly one writer per vertex and nothing to disagree.
+  //
+  // The flag has not become useless; it has stopped being an incompatibility.
+  // A packed multi-camera atlas will still need a per-PRIMITIVE camera id, and
+  // a consumer sizing a vertex arena still needs to know whether `v = 3t`.
   {
     mesh::MarchingCubesConfig share_config;
     share_config.share_vertices = true;
@@ -406,18 +410,63 @@ int main() {
     CHECK(shared.ok());
     CHECK(!shared.value().empty());
     CHECK(shared.value().shares_vertices);
-    // Current, valid, and correctly configured -- so nothing but the sharing
-    // flag can be what rejects it.
     CHECK(shared.value().is_current());
     CHECK(shared.value().valid());
+    // Sharing genuinely reduces the vertex count, so this is a mesh the old
+    // path could not have produced a result for at all -- not merely the same
+    // mesh relabelled.
+    CHECK(shared.value().vertex_count < 3 * shared.value().triangle_count);
     vr::Status shared_texture =
         texturer.texture(shared.value(), depth.data(), cam);
-    CHECK(!shared_texture.ok());
-    CHECK(shared_texture.domain() == vr::Status::Code::InvalidArgument);
+    CHECK(shared_texture.ok());
+
+    // Read the result back. `ok()` alone would pass against a kernel that
+    // wrote the sentinel everywhere, inverted its visibility test, sized the
+    // dispatch by the TRIANGLE count (leaving two thirds of a shared mesh's
+    // vertices untouched), or bound the wrong descriptor slot -- every failure
+    // this mesh exists to catch returns OK.
+    vr::Result<mesh::Mesh> shared_host = share_mc.download(shared.value());
+    CHECK(shared_host.ok());
+    const mesh::Mesh shared_out = std::move(shared_host).value();
+    CHECK(shared_out.vertices.size() == shared.value().vertex_count);
+
+    std::size_t shared_textured = 0;
+    for (const mesh::Vertex& v : shared_out.vertices) {
+      // Every vertex was visited: the dispatch covers the whole arena, so
+      // nothing may still hold the (-1,-1) marching-cubes left AND sit inside
+      // the image. A vertex the camera cannot place keeps a negative uv0, but
+      // the two are told apart by the carried coordinate below.
+      if (v.uv0.x >= 0.0f) {
+        ++shared_textured;
+        CHECK(v.uv0.x > 0.0f && v.uv0.x < 1.0f);
+        CHECK(v.uv0.y > 0.0f && v.uv0.y < 1.0f);
+      }
+    }
+    // A shared vertex is referenced by several triangles that can disagree
+    // about visibility -- the exact configuration the old refusal existed for.
+    // Some of this mesh must land on each side, or the run proves nothing.
+    CHECK(shared_textured > 0);
+    CHECK(shared_textured < shared_out.vertices.size());
+
+    // And the indices really do share: the identity run cannot describe this
+    // mesh, so at least one vertex is referenced more than once. That is what
+    // makes the split above a statement about a SHARED mesh rather than about
+    // any mesh.
+    std::vector<std::uint32_t> uses(shared_out.vertices.size(), 0);
+    for (std::uint32_t i : shared_out.indices) {
+      CHECK(i < shared_out.vertices.size());
+      ++uses[i];
+    }
+    std::size_t multi = 0;
+    for (std::uint32_t u : uses) {
+      if (u > 1) ++multi;
+    }
+    CHECK(multi > 0);
   }
 
   std::printf(
-      "texture device-mesh: OK (%zu triangles, %zu/%zu vertices textured)\n",
+      "texture device-mesh: OK (%zu triangles, %zu/%zu vertices textured; a "
+      "shared-vertex mesh textured in place and read back)\n",
       host_mesh.triangle_count(), textured, host_mesh.vertices.size());
   return 0;
 }
