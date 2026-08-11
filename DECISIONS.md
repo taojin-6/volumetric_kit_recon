@@ -2458,6 +2458,109 @@ could disagree on field order and both compile, and both kernels assign it **by
 name** — the same fix `SparsePushConstants` already applies to its own adjacent
 same-typed scalars.
 
+### 2026-08-11 — Incremental extraction measured on device: ~8x on the phase that is 90% of an extract, and the dirty fraction is a range set by how someone scans rather than a median (amends the 2026-08-09 incremental decision).
+
+The 2026-08-09 entry sized this work from four sampled windows and a room0 run,
+and said plainly that its ~4x was a **ceiling** computed from a 25% median. The
+first end-to-end device measurement is now in, and it moves two things: the win
+is bigger than the ceiling suggested at the fractions a careful scan actually
+produces, and "the median" was never the right shape for the input.
+
+**Measured on an iPad Pro 11-inch (M5), 203 477 blocks active, 132 extracts**,
+through `fuse`'s own stage rows — `scanner` built with
+`-DVI_INCREMENTAL_BENCHMARK=ON`, which is the configuration
+`extract_device_incremental` required at the time: one slot, `share_vertices`
+off, `track_block_spans` on, and **no mesh published**, since nothing may borrow
+an arena the next extract rewrites in place. Only the sharing clause has since
+been lifted (see below); the rest still hold.
+
+| `meshing` | ms |
+|---|---|
+| incremental, p25 | 3.91 |
+| incremental, **median** | **5.82** |
+| incremental, p75 | 9.08 |
+| full-extract fallback | **56.20** |
+| effective mean, fallbacks included | **7.21** |
+
+`meshing` is **56.20 of a 61.2 ms extract — 92%** — so this is the phase worth
+cutting and nothing else in the extract is close. 126 of the 132 extracts ran
+incremental; the other six fell back.
+
+**The dirty fraction is not a median, it is a range, and the range is set by how
+someone scans.** Ten survey samples across the same device and app:
+
+| re-mesh share of active blocks | active blocks |
+|---|---|
+| 3.3% | 203 477 |
+| 10.5% – 12.7% | 1 233 – 119 065 |
+| 25.1% | 127 496 |
+| 34.2% | 109 079 |
+| 44.8% | 178 160 |
+| 52.1% | 195 926 |
+
+Holding still or moving deliberately keeps it near 3–13%; sweeping the device
+across new geometry takes it past 50%. The win tracks it: ~8x at the low end,
+~4x at the 25% the 2026-08-09 entry quotes, **~2x at the top**. So the number to
+design against is not the median — that entry's own rule was that the worst
+frame sizes the design, and the worst frame here is a user swinging the iPad,
+which is the ordinary way to scan a room rather than an edge case.
+
+**The dilation is cheaper than either estimate, at scale.**
+`dirty_remesh_blocks` dilates the changed set into `{0,-1}^3`; on device that
+costs **1.20–1.24x** at 100k+ blocks, against 1.30x measured on room0. The
+2.56–2.65x seen on small maps
+is the perimeter of a tiny dirty region dominating its volume, and it disappears
+as the map grows — the opposite of a scaling hazard.
+
+**What makes it unshippable as measured is memory, not speed.** The arena was
+**4 177 MB**, because `extract_device_incremental` refused `share_vertices` at
+the time of this run and the mode therefore turned it off. The same app in its
+normal configuration holds
+**33.1 MB across three slots at 4 143 blocks** — ~8 KB per block with sharing
+against ~20.5 KB without it plus the inflation retirement leaves. An iPad is
+where that ceiling is real (it is why `Fusion.mm` turns sharing on and says so),
+so the next piece of work is the sharing kernel reusing its own ranges in place,
+not the seam-B ring. #66 already gave that kernel two per-block ranges; this is
+teaching it to reuse them rather than to compute them.
+*Resolved 2026-08-11 (below):* that next piece of work landed — incremental
+extraction runs under `share_vertices`, and the retirement argument behind the
+refusal turned out to be backwards. This 4 177 MB is therefore the last
+measurement taken without it, and the figure the reversal was argued from; room0
+holds 1.12x inflation with sharing against 1.82x without. The measurement above
+stands as the speed result, which sharing does not change.
+
+**The fallback rate is the second cost.** Six of 132 extracts — 4.5% — fell back
+to a full re-mesh at 56 ms, because a grown arena is reallocated and that
+discards the geometry clean blocks rely on. It should decay as a map saturates
+and this one was still growing, but it is what sets the worst frame, and it is
+unmeasured on a saturated map.
+
+**A measurement toggle that can drift will drift, and this one did.** The mode
+was first reached through an environment variable read at `start()`. It applied
+on the first launch after an install and then silently stopped: iOS resumes a
+running process rather than cold-starting it, so a relaunch re-ran no `getenv`
+even through `devicectl ... --terminate-existing`. **Three consecutive runs were
+reported as incremental while timing the full path.** Nothing in the read-out
+said so — the only tell was `verts == 3 * tris`, i.e. that sharing happened
+to be off, which no line pointed at, and `stats_.mesh_slots` printed the
+*request* rather than what the extractor got, so the one field that would have
+shown the
+mode was on said it was off. It is now a compile definition, which installing is
+what switches, and the slot count reports the effective value. The rule this
+leaves: **a switch that selects what is being measured belongs in the binary,
+and the read-out must name the configuration it measured**, or a run reports the
+wrong number in the right format.
+
+**What this does not establish, named rather than implied.** One device, one
+scene, one scanning session, and a map still growing throughout. Nothing here
+measures **sharing plus incremental**, which is the only configuration that
+could ship, so the 4 177 MB is the cost of the experiment rather than of the
+feature.
+Nothing here observes the **in-place tearing** either: the mode publishes no
+mesh, which is exactly what makes its single slot safe, so the renderer is shown
+nothing and there is nothing to tear. Seeing that still needs the ring intact
+and the arena de-ringed — the 2026-08-11 span-table entry's open question — and
+it is worth answering only if sharing plus in-place lands first.
 ### 2026-08-11 — Projective texturing decides visibility per *vertex*, and a negative `uv0` carries its atlas coordinate rather than discarding it (amends the 2026-07-07 texture-tier decision, and retires the `share_vertices` refusal the 2026-08-04 entry records).
 
 `ProjectiveTexturer` refused any mesh built with
@@ -2751,8 +2854,11 @@ changes nothing.
 **Measured on room0 with `--share-vertices --incremental`:** the arena holds
 **310 312 triangles for 277 506 live in 39.5 MB — 1.12x inflation, against
 1.82x without sharing**. The extract's mean is 0.98 ms, unchanged, because
-room0 re-meshes 81.67% of its blocks per window and so cannot show the win;
-that number still lives at the iPad's 25% dirty rate and is still unmeasured.
+room0 re-meshes 81.67% of its blocks per window and so cannot show the win.
+The speed result lives on device, across the dirty-fraction range the entry
+above measures rather than at any single median, and sharing does not move it —
+what sharing moves is the arena, which is the term that made the device run
+unshippable.
 
 **What the reversal is verified against, since a test that cannot fail is worse
 than none.** The decisive fixture — the field changed under the extractor while
