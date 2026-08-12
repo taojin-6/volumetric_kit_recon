@@ -221,7 +221,6 @@ order. Change the decision, its entry there, and this list together.
   arena's triangle slot, the atlas is a linear buffer rather than a 2D image,
   and the Gauss-Newton warp and render-and-resample of the source paper are
   both cut.
-
 - [**2026-08-12**](DECISIONS.md#2026-08-12--a-grow-only-buffer-is-the-wrong-default-for-a-consumer-that-keys-state-to-a-slot-so-both-the-arena-and-the-atlas-can-be-reserved--which-pre-grows-the-allocation-without-touching-the-capacity-planner) —
   A grow-only buffer is the wrong default for a consumer that keys state to a
   slot, so both the arena and the atlas can be **reserved** — which pre-grows

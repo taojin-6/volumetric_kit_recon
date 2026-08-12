@@ -169,6 +169,11 @@ struct Options {
   // visited earlier at zero weight -- which renders as the vertex-colour
   // fallback and looks, correctly but uselessly, like an untextured scan.
   bool patch_atlas = false;
+  // Triangle slots reserved up front for BOTH the mesh arena and the patch
+  // atlas, under --patch-atlas. Sized for room0's ~310 k with headroom; a scan
+  // that outgrows it keeps working, at the cost of one full extract and one
+  // atlas reset at the moment it does.
+  int reserve_triangles = 600000;
   int width = 1280;
   int height = 720;
   bool lit = true;
@@ -220,6 +225,10 @@ bool parse_args(int argc, char** argv, Options& o) {
       o.remesh_every = std::max(1, std::atoi(x));
     } else if (a == "--patch-atlas") {
       o.patch_atlas = true;
+    } else if (a == "--reserve-tris") {
+      const char* x = v();
+      if (!x) return false;
+      o.reserve_triangles = std::max(1, std::atoi(x));
 
     } else if (a == "--width") {
       const char* x = v();
@@ -591,7 +600,14 @@ int run(GLFWwindow* window, const Options& opt) {
     return 1;
   }
   vol::VoxelBlockGrid volume = std::move(grid_result).value();
-  auto integrator_result = rtsdf::TsdfIntegrator::create(rdevice, rallocator);
+  // Dirty tracking under --patch-atlas: an incremental extract is what keeps a
+  // block's triangles at the arena slots the atlas bound them to, and the flags
+  // are its input. Off otherwise, since it costs a num_blocks*4 host-visible
+  // array and a store per changed voxel in the fusion kernel.
+  rtsdf::TsdfIntegratorConfig tsdf_config;
+  tsdf_config.track_dirty_blocks = opt.patch_atlas;
+  auto integrator_result =
+      rtsdf::TsdfIntegrator::create(rdevice, rallocator, tsdf_config);
   if (!integrator_result) {
     std::fprintf(stderr, "integrator: %s\n",
                  integrator_result.status().message().c_str());
@@ -632,6 +648,9 @@ int run(GLFWwindow* window, const Options& opt) {
   // safe here only because that mode freezes the geometry and stops extracting
   // altogether (see Options::patch_atlas).
   mc_config.slot_count = opt.patch_atlas ? 1u : config.frames_in_flight + 1;
+  // The span table is what an incremental extract re-meshes against, so it is
+  // a prerequisite rather than a diagnostic here.
+  mc_config.track_block_spans = opt.patch_atlas;
   // In-block vertex sharing, which the texture pass no longer excludes: it
   // dispatches per vertex, so a vertex belonging to several triangles has one
   // writer rather than several disagreeing ones. See --share-vertices.
@@ -668,6 +687,27 @@ int run(GLFWwindow* window, const Options& opt) {
       return 1;
     }
     patch_atlas = std::move(atlas_result).value();
+    // Reserve BOTH to the same ceiling, before a single frame fuses. This is
+    // what makes a growing mesh work: without it the arena grows, which
+    // re-plans every block's range and unbinds every patch, and the atlas
+    // grows, which frees a buffer the renderer is drawing. Outgrowing the
+    // reservation is not fatal -- both grow as they always did, and the atlas
+    // is invalidated on the full extract that follows -- so this is a sizing
+    // decision, not a promise.
+    if (vr::Status st = extractor.reserve(opt.reserve_triangles); !st.ok()) {
+      std::fprintf(stderr, "arena reserve: %s\n", st.message().c_str());
+      return 1;
+    }
+    if (vr::Status st = patch_atlas->reserve(opt.reserve_triangles); !st.ok()) {
+      std::fprintf(stderr, "atlas reserve: %s\n", st.message().c_str());
+      return 1;
+    }
+    std::printf(
+        "fuse_viewer: reserved %u triangles -- arena + %.1f MiB atlas at %u "
+        "texels/patch\n",
+        opt.reserve_triangles,
+        static_cast<double>(patch_atlas->bytes()) / (1024 * 1024),
+        patch_atlas->texels_per_patch());
   }
 
   const std::size_t frame_count = std::min<std::size_t>(
@@ -907,6 +947,38 @@ int run(GLFWwindow* window, const Options& opt) {
   std::thread fuse_thread([&]() {
     // Any throw escaping this thread function (e.g. a decode/allocation
     // bad_alloc) would call std::terminate; contain it so shutdown stays clean.
+    // Texels carrying any observation, over the live triangle range. A lambda
+    // so it can be sampled at more than one point: the number after the run is
+    // not much use if it cannot be compared with the number before the last
+    // thing that touched the atlas.
+    auto report_coverage = [&](const char* when, std::uint32_t tris) {
+      if (!patch_atlas || patch_atlas->mapped() == nullptr || tris == 0) return;
+      const std::size_t texels =
+          static_cast<std::size_t>(tris) * patch_atlas->texels_per_patch();
+      std::size_t filled = 0;
+      const std::uint32_t* px = patch_atlas->mapped();
+      for (std::size_t k = 0; k < texels; ++k) {
+        if ((px[k] >> 24) != 0) ++filled;
+      }
+      std::printf(
+          "fuse_viewer: patch atlas %s -- %.1f%% observed (%zu of %zu "
+          "over %u triangles)\n",
+          when,
+          texels > 0 ? 100.0 * static_cast<double>(filled) /
+                           static_cast<double>(texels)
+                     : 0.0,
+          filled, texels, tris);
+      std::fflush(stdout);
+    };
+    // How many extracts stayed incremental. Declared outside the try so the
+    // summary below the catch can still report them after a thrown frame.
+    std::uint64_t patch_extracts = 0;
+    std::uint64_t patch_incremental = 0;
+    // The newest extracted mesh, kept so colour can accumulate on EVERY fused
+    // frame rather than only on the ones that remesh. Safe to hold at
+    // slot_count 1: nothing rewrites the arena between extracts, and fuse()
+    // re-checks the generation stamp anyway.
+    std::optional<rmesh::DeviceMesh> atlas_mesh;
     try {
       // Scratch for this thread only; copied under share_mtx once per frame.
       vr::StageMetrics fuse_stages;
@@ -947,13 +1019,15 @@ int run(GLFWwindow* window, const Options& opt) {
                          const vr::DepthCameraParams& depth_camera,
                          const std::vector<std::uint32_t>& color) {
         std::vector<std::uint8_t> atlas;
-        if (patch_atlas && depth != nullptr && !device_mesh.empty()) {
-          // A full extract re-reserves every block's range through a global
-          // atomic, so no arena slot survives it and every patch now describes
-          // a triangle that has moved. Discard them; the frames after the
-          // freeze are what refill them. See PatchAtlas::invalidate.
-          patch_atlas->invalidate();
-        } else if (texturer && depth != nullptr && !device_mesh.empty()) {
+        // NOTHING about the patch atlas happens here, and that is load bearing.
+        // This used to invalidate it, from when publish() only ever followed a
+        // FULL extract; now it follows every one, so it wiped the colour the
+        // fuse above had just accumulated -- every frame, leaving the atlas
+        // permanently empty and the scan rendering as voxel colour with a
+        // healthy incremental ratio beside it. Invalidation belongs at the
+        // extract, where `ExtractTimings::incremental` says whether the slots
+        // actually moved.
+        if (texturer && depth != nullptr && !device_mesh.empty()) {
           // Textures the extractor's buffers in place -- no upload, no
           // readback; the geometry has not left the device since it was meshed.
           //
@@ -1152,8 +1226,49 @@ int run(GLFWwindow* window, const Options& opt) {
           rmesh::ExtractTimings extract_timings;
           vr::Result<rmesh::DeviceMesh> extracted = [&]() {
             vr::StageScope scope(remesh_stages, "extract");
-            return extractor.extract_device(volume, 0.0f, &extract_timings);
+            if (!opt.patch_atlas) {
+              return extractor.extract_device(volume, 0.0f, &extract_timings);
+            }
+            // Incremental, because the atlas is keyed to arena triangle slots
+            // and a full pass re-reserves every one of them. All three fields
+            // come off the integrator in one breath -- the buffer, its
+            // capacity, and the topology token it was accumulated against.
+            const rmesh::DirtyBlocks dirty{integrator.dirty_flags_buffer(),
+                                           integrator.dirty_flags_capacity(),
+                                           integrator.dirty_epoch()};
+            return extractor.extract_device_incremental(volume, 0.0f, dirty,
+                                                        &extract_timings);
           }();
+          if (opt.patch_atlas) {
+            // Consumed, so cleared, immediately after the extract that read
+            // them: the fuse kernel only ORs, so a looser cadence has every
+            // block reading dirty within a few frames -- a full re-mesh
+            // wearing the incremental path's costs. Cleared on the fallback
+            // path too, where a full pass spent them just as thoroughly.
+            integrator.reset_dirty();
+            // A full extract re-planned every block's range, so no patch
+            // describes the triangle it was fused against any more.
+            if (!extract_timings.incremental) patch_atlas->invalidate();
+            // Counted, because falling back is SILENT and total: a run that
+            // fell back every frame would invalidate the atlas every frame and
+            // render as voxel colour, which is exactly what a run that never
+            // engaged looks like. The ratio is the one number that separates
+            // them.
+            ++patch_extracts;
+            if (extract_timings.incremental) {
+              ++patch_incremental;
+            } else {
+              // WHEN a full pass lands is the whole of its cost: one at frame 0
+              // establishes the arena and discards nothing, one late in the run
+              // throws away every observation before it. The ratio alone cannot
+              // tell those apart.
+              std::printf(
+                  "fuse_viewer: full extract at frame %zu -- atlas reset "
+                  "(%u triangles live)\n",
+                  i, extract_timings.emitted_triangles);
+              std::fflush(stdout);
+            }
+          }
           // Break the extract row down in place. The phases sum to the
           // `extract` row above rather than adding to it, so they carry
           // StageMetrics::kBreakdownPrefix -- which is what makes the table
@@ -1175,9 +1290,12 @@ int run(GLFWwindow* window, const Options& opt) {
           // refused, permanently. It draws nothing either way: recon resets the
           // command, so indexCount is 0.
           if (extracted) {
-            // The mesh the atlas will accumulate against once the freeze hits.
-            // Kept on this thread rather than read back out of `pending_mesh`,
-            // which the render thread takes.
+            // Accumulate THIS frame's colour into the mesh just extracted,
+            // before publishing it -- so the renderer never sees a mesh whose
+            // patches have not been touched, and so the atlas's one possible
+            // reallocation (if the reservation is outgrown) happens while
+            // nothing is drawing it.
+            if (patch_atlas) atlas_mesh = extracted.value();
             publish(extracted.value(), frame.depth.data(), depth_camera,
                     frame.color);
           } else {
@@ -1186,6 +1304,29 @@ int run(GLFWwindow* window, const Options& opt) {
             // healthy frame counter beside it.
             std::fprintf(stderr, "fuse_viewer: extract (frame %zu): %s\n", i,
                          extracted.status().message().c_str());
+          }
+        }
+        // Colour on EVERY fused frame, not only the ones that remesh. A patch
+        // is filled by a frame that can see it, and only ~a quarter of frames
+        // here extract -- so fusing at the remesh cadence left 45% of the
+        // surface at zero weight, rendering as vertex colour. The mesh is
+        // stable between extracts at slot_count 1, so there is nothing to wait
+        // for; at ~0.7 ms it is the cheapest coverage available.
+        if (patch_atlas && atlas_mesh && !atlas_mesh->empty()) {
+          vr::StageMetrics patch_metrics;
+          const vr::Status st = patch_atlas->fuse(
+              *atlas_mesh, frame.depth.data(), frame.color.data(),
+              depth_camera.width, depth_camera.height, depth_camera, 0.02f,
+              &patch_metrics);
+          if (!st.ok()) {
+            std::fprintf(stderr, "fuse_viewer: patch fuse: %s\n",
+                         st.message().c_str());
+          } else {
+            fuse_stages.merge(patch_metrics);
+            std::lock_guard<std::mutex> lock(share_mtx);
+            shared_patch_buffer = patch_atlas->buffer();
+            shared_patch_leg = patch_atlas->patch_leg();
+            shared_patch_texels = patch_atlas->texels_per_patch();
           }
         }
         // Merge the newest remesh's rows in, on every frame -- see
@@ -1274,109 +1415,92 @@ int run(GLFWwindow* window, const Options& opt) {
         // triangles at the last remesh, 330 389 here). Two halves of one
         // read-out taken from different extracts, frozen that way for the whole
         // replay, is exactly the trap the ExtractTimings rows exist to avoid.
-        rmesh::ExtractTimings final_timings;
-        auto m = extractor.extract_device(volume, 0.0f, &final_timings);
-        if (m) {
-          {
-            std::lock_guard<std::mutex> lock(share_mtx);
-            shared_extract = final_timings;
-          }
-          // Texture the final mesh with the last keyframe (its depth camera
-          // rebuilt from the retained frame), or leave it untextured if no
-          // frame ever fused.
-          static const std::vector<std::uint32_t> kNoColor;
-          if (last_frame) {
-            const vr_example::RgbdFrame& keyframe = **last_frame;
-            publish(m.value(), keyframe.depth.data(),
-                    vr_example::make_depth_camera(cam, keyframe.cam_to_world,
-                                                  opt.max_depth),
-                    keyframe.color);
-          } else {
-            publish(m.value(), nullptr, vr::DepthCameraParams{}, kNoColor);
-          }
-          // PASS TWO -- colour only. The geometry is now final and no later
-          // extract will move an arena slot, so a patch bound to slot t stays
-          // bound to slot t for the rest of the run: exactly the stability the
-          // atlas needs, and the reason this waits until here rather than
-          // accumulating during the fuse above.
-          //
-          // The whole sequence is replayed, not its tail, because a patch is
-          // only ever filled by a frame that could SEE it. Fusing colour from
-          // the last few frames alone leaves everything the camera visited
-          // earlier at zero weight -- which the shader renders as the
-          // vertex-colour fallback, and which looks exactly like a scan where
-          // the atlas never engaged at all.
-          if (patch_atlas && !m.value().empty()) {
-            const auto start = std::chrono::steady_clock::now();
-            std::size_t contributed = 0;
-            double patch_host_ms = 0.0;
-            double patch_device_ms = 0.0;
-            std::size_t patch_device_samples = 0;
-            for (std::size_t i = 0; i < frame_count && !quit.load(); ++i) {
-              vr::Result<vr_example::FrameView> loaded = dataset.frame(i);
-              if (!loaded) continue;
-              vr_example::FrameView view = std::move(loaded).value();
-              const vr_example::RgbdFrame& f = *view;
-              const vr::DepthCameraParams dc = vr_example::make_depth_camera(
-                  cam, f.cam_to_world, opt.max_depth);
-              // A FRESH StageMetrics per frame, deliberately: rows accumulate
-              // by name, so reusing one would report the running sum and a
-              // reader would take it for a per-frame cost. (That is not
-              // hypothetical -- it is what an uncleared object did to the
-              // first version of this measurement, turning ~1 ms into a
-              // plausible-looking 112.)
-              vr::StageMetrics frame_metrics;
-              const vr::Status st = patch_atlas->fuse(
-                  m.value(), f.depth.data(), f.color.data(), dc.width,
-                  dc.height, dc, 0.02f, &frame_metrics);
-              for (const vr::StageRow& row : frame_metrics.rows()) {
-                if (std::strcmp(row.name, "patch fuse") != 0) continue;
-                patch_host_ms += row.cpu_ms;
-                if (row.has_gpu) {
-                  patch_device_ms += row.gpu_ms;
-                  ++patch_device_samples;
-                }
-              }
-              if (!st.ok()) {
-                std::fprintf(stderr,
-                             "fuse_viewer: patch fuse (frame %zu): %s\n", i,
-                             st.message().c_str());
-                break;
-              }
-              ++contributed;
-              // Published every frame so the window shows the atlas filling in
-              // rather than appearing at the end. The handle only changes on
-              // the first fuse (the mesh is frozen, so the atlas never grows
-              // again), but the render thread reads it under the lock either
-              // way -- see shared_patch_buffer.
-              std::lock_guard<std::mutex> lock(share_mtx);
-              shared_patch_buffer = patch_atlas->buffer();
-              shared_patch_leg = patch_atlas->patch_leg();
-              shared_patch_texels = patch_atlas->texels_per_patch();
-            }
-            const double ms = std::chrono::duration<double, std::milli>(
-                                  std::chrono::steady_clock::now() - start)
-                                  .count();
-            const double n = std::max<double>(1.0, contributed);
-            std::printf(
-                "fuse_viewer: patch atlas -- %zu frames over %u triangles, "
-                "%u texels/patch, %.1f MiB\n"
-                "  wall %.1f ms total, %.3f ms/frame\n"
-                "  fuse %.3f ms host/frame, %.3f ms device/frame (%zu timed)\n",
-                contributed, m.value().triangle_count,
-                patch_atlas->texels_per_patch(),
-                static_cast<double>(patch_atlas->bytes()) / (1024 * 1024), ms,
-                ms / n, patch_host_ms / n,
-                patch_device_samples > 0
-                    ? patch_device_ms /
-                          static_cast<double>(patch_device_samples)
-                    : 0.0,
-                patch_device_samples);
-            std::fflush(stdout);
-          }
+        // SKIPPED under --patch-atlas. It is redundant there -- the last
+        // in-loop extract already published a complete surface -- and it is
+        // actively destructive: by the end of a run the arena has accumulated
+        // enough retired triangles for this pass to trip the occupancy
+        // compaction (579 816 arena triangles against 309 353 live, past the
+        // 2x threshold), which is a FULL extract, which re-plans every block's
+        // range and discards the whole atlas. Measured: 89.0% of texels
+        // observed before it, 54.6% after, from one keyframe.
+        //
+        // The compaction is not a bug -- it is what clears retired triangles.
+        // What it shows is that relocation is the atlas's real cost in a
+        // growing scan, which is the parked TODO(mesh) about recording a
+        // block's reservation beside its live span so a surface oscillating
+        // around a threshold stops relocating on every up-tick.
+        if (opt.patch_atlas) {
+          report_coverage("final", atlas_mesh ? atlas_mesh->triangle_count : 0);
         } else {
-          std::fprintf(stderr, "fuse_viewer: final extract: %s\n",
-                       m.status().message().c_str());
+          rmesh::ExtractTimings final_timings;
+          // INCREMENTAL under --patch-atlas, like every extract in the loop
+          // above. A full pass here re-plans every block's range, so the atlas
+          // accumulated over the whole run would describe geometry that has
+          // just moved -- nearly every patch missing, every fragment taking the
+          // vertex-colour fallback, and the finished scan rendering as though
+          // the atlas had never engaged. That is the last extract a viewer
+          // looks at, so getting it wrong is indistinguishable from the feature
+          // not working, whatever the in-loop counters say.
+          auto m =
+              opt.patch_atlas
+                  ? extractor.extract_device_incremental(
+                        volume, 0.0f,
+                        rmesh::DirtyBlocks{integrator.dirty_flags_buffer(),
+                                           integrator.dirty_flags_capacity(),
+                                           integrator.dirty_epoch()},
+                        &final_timings)
+                  : extractor.extract_device(volume, 0.0f, &final_timings);
+          if (opt.patch_atlas) {
+            integrator.reset_dirty();
+            ++patch_extracts;
+            std::printf("fuse_viewer: final extract incremental=%d\n",
+                        final_timings.incremental ? 1 : 0);
+            std::fflush(stdout);
+            if (final_timings.incremental) {
+              ++patch_incremental;
+            } else {
+              patch_atlas->invalidate();
+            }
+          }
+          if (m) {
+            {
+              std::lock_guard<std::mutex> lock(share_mtx);
+              shared_extract = final_timings;
+            }
+            // Texture the final mesh with the last keyframe (its depth camera
+            // rebuilt from the retained frame), or leave it untextured if no
+            // frame ever fused.
+            static const std::vector<std::uint32_t> kNoColor;
+            if (patch_atlas && last_frame && !m.value().empty()) {
+              const vr_example::RgbdFrame& kf = **last_frame;
+              const vr::DepthCameraParams kc = vr_example::make_depth_camera(
+                  cam, kf.cam_to_world, opt.max_depth);
+              const vr::Status st =
+                  patch_atlas->fuse(m.value(), kf.depth.data(), kf.color.data(),
+                                    kc.width, kc.height, kc, 0.02f);
+              if (!st.ok()) {
+                std::fprintf(stderr, "fuse_viewer: final patch fuse: %s\n",
+                             st.message().c_str());
+              } else {
+                std::lock_guard<std::mutex> lock(share_mtx);
+                shared_patch_buffer = patch_atlas->buffer();
+                shared_patch_leg = patch_atlas->patch_leg();
+                shared_patch_texels = patch_atlas->texels_per_patch();
+              }
+            }
+            if (last_frame) {
+              const vr_example::RgbdFrame& keyframe = **last_frame;
+              publish(m.value(), keyframe.depth.data(),
+                      vr_example::make_depth_camera(cam, keyframe.cam_to_world,
+                                                    opt.max_depth),
+                      keyframe.color);
+            } else {
+              publish(m.value(), nullptr, vr::DepthCameraParams{}, kNoColor);
+            }
+          } else {
+            std::fprintf(stderr, "fuse_viewer: final extract: %s\n",
+                         m.status().message().c_str());
+          }
         }
       }
     } catch (const std::exception& e) {
@@ -1384,6 +1508,18 @@ int run(GLFWwindow* window, const Options& opt) {
     }
     fusing_done.store(true);
     std::printf("fuse thread: done (%zu frames)\n", fused_count.load());
+    if (opt.patch_atlas) {
+      std::printf(
+          "fuse_viewer: patch atlas -- %llu of %llu extracts incremental "
+          "(%.1f%%); %llu full passes reset it\n",
+          (unsigned long long)patch_incremental,
+          (unsigned long long)patch_extracts,
+          patch_extracts > 0 ? 100.0 * static_cast<double>(patch_incremental) /
+                                   static_cast<double>(patch_extracts)
+                             : 0.0,
+          (unsigned long long)(patch_extracts - patch_incremental));
+      std::fflush(stdout);
+    }
   });
   QuitJoin fuse_guard{fuse_thread, quit};
 
