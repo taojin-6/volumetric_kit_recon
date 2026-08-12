@@ -212,6 +212,10 @@ order. Change the decision, its entry there, and this list together.
   arrival order, and both sparse kernels pay ~2 KiB of threadgroup memory for it
   (amends the "zero bytes of `shared`" clause of the 2026-08-08 vertex-sharing
   decision).
+- [**2026-08-12**](DECISIONS.md#2026-08-12--a-re-meshed-block-is-not-a-reshaped-one-and-on-room0-only-22-of-re-meshed-blocks-change-triangulation--so-a-slot-keyed-per-triangle-cache-survives-far-longer-than-the-dirty-share-suggests) —
+  A re-meshed block is not a reshaped one, and on room0 only **2.2%** of
+  re-meshed blocks change triangulation — so a slot-keyed per-triangle cache
+  survives far longer than the dirty share suggests.
 
 ## Provenance & salvage policy
 

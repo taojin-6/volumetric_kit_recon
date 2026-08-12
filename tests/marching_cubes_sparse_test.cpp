@@ -1802,6 +1802,10 @@ int main() {
     // The point of the loop: pass 0 is the default emitter, pass 1 the sharing
     // one. Without this the two iterations are the same kernel run twice.
     inc_config.share_vertices = share_pass == 1;
+    // Carried on both passes so the sharing kernel's 0 is asserted rather than
+    // assumed: it does not declare the binding, and a caller who asked would
+    // otherwise have no way to tell that from a scene nothing reshaped.
+    inc_config.track_retriangulation = true;
     vr::Result<mesh::MarchingCubes> inc_result = mesh::MarchingCubes::create(
         device.value(), allocator.value(), inc_config);
     CHECK(inc_result.ok());
@@ -2012,6 +2016,21 @@ int main() {
     CHECK(again.ok());
     CHECK(again_rt.incremental);
     CHECK(again_rt.remeshed_blocks == again_rt.active_blocks);
+    // The discriminating pair, and the reason the counter is worth having.
+    // THIS pass re-meshed every block against a field nothing moved, so every
+    // cell kept its case and NOTHING should be reported as reshaped -- while
+    // the pass just above it, which re-meshed the same blocks against a grown
+    // sphere, must report plenty. A hash that always matched would pass the
+    // first and fail the second; one that never matched, the reverse.
+    if (inc_config.share_vertices) {
+      // Not measured on this kernel: the case is a property of the field, so
+      // the number would be the same, but the binding is not there.
+      CHECK(again_rt.retriangulated_blocks == 0);
+      CHECK(dirty_rt.retriangulated_blocks == 0);
+    } else {
+      CHECK(again_rt.retriangulated_blocks == 0);
+      CHECK(dirty_rt.retriangulated_blocks > 0);
+    }
     vr::Result<mesh::Mesh> again_host = inc_mc.download(again.value());
     CHECK(again_host.ok());
     // Both kernels, which is the point of the loop this sits in: the sharing

@@ -208,12 +208,16 @@ struct SparsePushConstants {
   // Slots the bound dirty-flag buffer addresses. A block past it is treated as
   // changed, so a table that is somehow short re-meshes rather than goes stale.
   std::uint32_t dirty_capacity = 0;
+  // 0 = the case-hash binding is the 1-element dummy; do not read, store or
+  // count through it. Gates MarchingCubesConfig::track_retriangulation, the way
+  // `write_spans` gates the span table. Assigned by name, like the six above.
+  std::uint32_t track_cases = 0;
 };
 // Pin every field offset (all 4-byte scalars): a same-size reorder would keep
 // sizeof unchanged but silently drift the host<->GLSL push-constant ABI, so
 // guard each one, matching the dense PushConstants above.
-static_assert(sizeof(SparsePushConstants) == 60,
-              "SparsePushConstants must be 60 bytes");
+static_assert(sizeof(SparsePushConstants) == 64,
+              "SparsePushConstants must be 64 bytes");
 static_assert(offsetof(SparsePushConstants, vertex_capacity) == 32,
               "SparsePushConstants layout drift");
 static_assert(offsetof(SparsePushConstants, block_size) == 0,
@@ -242,6 +246,8 @@ static_assert(offsetof(SparsePushConstants, write_spans) == 48,
               "SparsePushConstants layout drift");
 static_assert(offsetof(SparsePushConstants, incremental) == 52,
               "SparsePushConstants layout drift");
+static_assert(offsetof(SparsePushConstants, track_cases) == 60,
+              "SparsePushConstants layout drift");
 static_assert(offsetof(SparsePushConstants, dirty_capacity) == 56,
               "SparsePushConstants layout drift");
 
@@ -269,8 +275,15 @@ constexpr VkDeviceSize kSharingAppliedOffset =
 //     and 107k atomics to restate it is not free.
 constexpr VkDeviceSize kRemeshedBlocksOffset =
     kSharingAppliedOffset + sizeof(std::uint32_t);
-constexpr VkDeviceSize kIndirectBufferBytes =
+//   * Of those, the ones whose emitted TRIANGULATION actually moved rather
+//     than being re-meshed for a neighbour's sake and re-emitting what they
+//     had. Gated by MarchingCubesConfig::track_retriangulation; see the
+//     case-hash note in marching_cubes_sparse.comp for why the ratio of this
+//     to the one above is the number a slot-keyed cache trades against.
+constexpr VkDeviceSize kRetriangulatedBlocksOffset =
     kRemeshedBlocksOffset + sizeof(std::uint32_t);
+constexpr VkDeviceSize kIndirectBufferBytes =
+    kRetriangulatedBlocksOffset + sizeof(std::uint32_t);
 
 // Read one of the scratch words back out of the command buffer.
 std::uint32_t read_scratch(const Buffer& indirect, VkDeviceSize offset) {
@@ -635,7 +648,11 @@ Status MarchingCubes::ensure_indirect_command(std::uint32_t seed_triangles,
   // out APPEND slots past them. Only that kernel allocates through this word,
   // so every other caller passes 0 and this is the plain reset it has always
   // been.
-  const std::uint32_t scratch_reset[3] = {seed_vertices, 0, 0};
+  // Four words, not three: `retriangulated_blocks` joined the block above it
+  // and is zeroed for exactly the reason `remeshed_blocks` is -- a pass that
+  // never writes it would otherwise publish whatever the last one left, and an
+  // accumulating counter reads as a plausible number rather than as an error.
+  const std::uint32_t scratch_reset[4] = {seed_vertices, 0, 0, 0};
   std::memcpy(static_cast<std::byte*>(indirect().mapped()) + kVertexCountOffset,
               scratch_reset, sizeof(scratch_reset));
   return {};
@@ -691,6 +708,33 @@ std::uint32_t MarchingCubes::plan_vertex_capacity(
 }
 
 Status MarchingCubes::ensure_block_spans(const volume::VoxelBlockGrid& grid) {
+  // The case-hash table first, and OUTSIDE the span opt-out below: the two are
+  // separate flags sized by the same thing. Grown by the same event and in the
+  // same shape -- carry the old hashes forward, because VoxelHashMap::resize
+  // preserves each block's index, and zero only the tail, because a slot no
+  // extract has described must compare changed rather than match whatever VMA
+  // handed over.
+  if (!config_.share_vertices && config_.track_retriangulation) {
+    const auto blocks = static_cast<std::uint32_t>(grid.grid().num_blocks);
+    const auto have =
+        static_cast<std::uint32_t>(case_hashes_.size() / sizeof(std::uint32_t));
+    if (blocks > have) {
+      const VkDeviceSize bytes =
+          static_cast<VkDeviceSize>(blocks) * sizeof(std::uint32_t);
+      VR_ASSIGN(Buffer grown,
+                storage_buffer(*allocator_, bytes, HostAccess::Random));
+      const auto old_bytes =
+          static_cast<std::size_t>(have) * sizeof(std::uint32_t);
+      auto* dst = static_cast<std::uint8_t*>(grown.mapped());
+      if (old_bytes > 0) {
+        std::memcpy(dst, case_hashes_.mapped(), old_bytes);
+      }
+      std::memset(dst + old_bytes, 0,
+                  static_cast<std::size_t>(bytes) - old_bytes);
+      case_hashes_ = std::move(grown);
+    }
+  }
+
   if (!config_.track_block_spans) return {};
 
   // Re-anchor before anything reads a span, and note what this does NOT do:
@@ -1036,7 +1080,11 @@ Result<MarchingCubes> MarchingCubes::create(Device& device,
                 config.share_vertices
                     ? vr_marching_cubes_sparse_shared_comp_spv_size
                     : vr_marching_cubes_sparse_comp_spv_size,
-                config.share_vertices ? 11 : 10, &push_sparse));
+                // Eleven either way now, for different reasons: the sharing
+                // kernel spends binding 8 on the index run it writes itself,
+                // and the default one spends binding 10 on the case-hash table
+                // the sharing kernel does not carry.
+                11, &push_sparse));
   VR_ASSIGN(mc.pool_, kb.build());
 
   // Upload the lookup tables once and bind them at set binding 0 of both
@@ -1076,6 +1124,20 @@ Result<MarchingCubes> MarchingCubes::create(Device& device,
     mc.kernel_sparse_.set.write_storage_buffer(config.share_vertices ? 9 : 8,
                                                mc.block_spans_dummy_.handle(),
                                                0, VK_WHOLE_SIZE);
+  }
+
+  // And the same trick again for the case-hash table. Only the DEFAULT kernel
+  // declares it (binding 10, where the sharing kernel spends 10 on the dirty
+  // flags), so only that set needs a dummy -- retriangulation is measured on
+  // one kernel because the marching-cubes case is a property of the field
+  // rather than of the emitter.
+  if (!config.share_vertices && !config.track_retriangulation) {
+    VR_ASSIGN(mc.case_hashes_dummy_,
+              storage_buffer(allocator, sizeof(std::uint32_t),
+                             HostAccess::SequentialWrite));
+    std::memset(mc.case_hashes_dummy_.mapped(), 0, sizeof(std::uint32_t));
+    mc.kernel_sparse_.set.write_storage_buffer(
+        10, mc.case_hashes_dummy_.handle(), 0, VK_WHOLE_SIZE);
   }
 
   return mc;
@@ -1717,6 +1779,13 @@ Result<DeviceMesh> MarchingCubes::extract_device_impl(
                                             block_spans_.handle(), 0,
                                             VK_WHOLE_SIZE);
   }
+  // The case-hash table, on the one kernel that declares it. Same bargain as
+  // the spans above: rebound only when tracking is on, since create() bound the
+  // dummy at this binding otherwise and nothing rebinds it.
+  if (!config_.share_vertices && config_.track_retriangulation) {
+    kernel_sparse_.set.write_storage_buffer(10, case_hashes_.handle(), 0,
+                                            VK_WHOLE_SIZE);
+  }
 
   // The changed-block flags the kernel dilates on-device, or the same
   // 1-element dummy the colour slot uses when this pass is full: a descriptor
@@ -1782,6 +1851,8 @@ Result<DeviceMesh> MarchingCubes::extract_device_impl(
     // same-typed adjacent scalars, so a positional slip would compile.
     push.vertex_capacity = requested_verts;
     push.write_spans = config_.track_block_spans ? 1u : 0u;
+    push.track_cases =
+        (!config_.share_vertices && config_.track_retriangulation) ? 1u : 0u;
     // Read from the loop variable, not from the decision above it: the refit
     // below turns the retry into a full pass, and this is what carries that.
     push.incremental = incremental ? 1u : 0u;
@@ -2098,6 +2169,12 @@ Result<DeviceMesh> MarchingCubes::extract_device_impl(
     // active_blocks and the atomic to restate it is not free.
     timings->remeshed_blocks =
         incremental ? read_scratch(indirect(), kRemeshedBlocksOffset) : 0u;
+    // Counted only on an incremental pass, exactly as the line above -- a full
+    // one refreshes every hash it visits but has nothing to compare them to
+    // that would mean anything.
+    timings->retriangulated_blocks =
+        incremental ? read_scratch(indirect(), kRetriangulatedBlocksOffset)
+                    : 0u;
     timings->triangle_capacity = requested;
     timings->emitted_triangles = emitted;
     // 0 in every in-tree configuration (block_size 8 -> 512 cells). Nonzero
