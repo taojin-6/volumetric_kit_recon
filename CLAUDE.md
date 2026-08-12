@@ -490,12 +490,20 @@ arbitrary; it usually isn't.
   the dispatch. True of **both** sparse kernels: `share_vertices` reserves two
   ranges rather than one, since a shared vertex breaks `v = 3t`, and measured no
   cost. Within that range a cell's triangles land at a **scanned** offset — the
-  exclusive prefix sum of the per-cell counts the kernel already takes — so the
-  arena triangle slot is `f(block base, cell, triangle-in-cell)` and survives a
-  re-mesh that did not change the triangulation, which is what per-triangle
-  state keyed by slot needs (2026-08-12). A fixed offset is bounded by the
-  *cell's* own reservation as well as the block's, since it can overrun the
-  next cell and no range-level test sees that; vertex slots stay on their
+  exclusive prefix sum of the per-cell counts the kernel already takes, one
+  `s_cell_off` and one `mcScanCellOffsets` in the shared header for both
+  kernels — so the arena triangle slot is `f(block base, cell,
+  triangle-in-cell)` and survives a re-mesh that did not change the
+  triangulation, which is what per-triangle state keyed by slot needs
+  (2026-08-12) — though only as far as the *block base* is stable, which is
+  in-place reuse under `extract_device_incremental` and never a full
+  `extract_device`, whose bases come out in workgroup arrival order;
+  `block_spans()` is how a consumer tells the two apart. A fixed offset is
+  bounded by the *cell's* own reservation as well as the block's, since it can
+  overrun the next cell and no range-level test sees that — and whatever a cell
+  reserved and did not write is **retired**, a hole in the interior of a live
+  range being drawn like any other triangle and reachable by no later pass.
+  Vertex slots stay on their
   arrival-order atomic, being reachable only through the index run. Opt-in
   `track_block_spans` publishes that range as
   `block_spans()` — vertex and **triangle** base/count per block slot, the

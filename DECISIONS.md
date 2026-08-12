@@ -1476,6 +1476,15 @@ dispatch per extract.
 
 ### 2026-08-08 — In-block vertex sharing is a *second compiled kernel*, not a branch, and the two emitters must interpolate an edge in the same direction.
 
+*Amended 2026-08-12 (below):* the threadgroup **gap** this entry rests on has
+narrowed from ~140x to ~5x — both kernels now carry the ~2 KiB per-cell offset
+array, so the SPIR-V-verified endpoints are **2 108 B and 10 524 B**, not the
+44 B → 8 428 B quoted below (which was itself stale at 60 B → 8 476 B before
+that change). Two kernels still stands, on the ~8 KiB of edge and case tables
+sharing alone needs — 15 resident workgroups against 3 on Apple's 32 KiB — but
+"the default path pays a rounding error" no longer describes it, and the
+private-register count cache that argument bought has been spent.
+
 `MarchingCubesConfig::share_vertices` makes the cells that meet on an edge
 index one vertex instead of emitting three private ones each: every cell emits
 a vertex only on the three edges it **owns** (+x/+y/+z from its base corner,
@@ -1711,6 +1720,17 @@ exercised by no fixture, since every fixture here dispatches one frame at a
 time.
 
 ### 2026-08-09 — Incremental mesh extraction is worth building at a ~4x ceiling, not the ~18x one window suggested, and the worst frame rather than the median sizes its design (amends the dirty-block decision above).
+
+*Amended 2026-08-12 (below):* the stage-2 argument for keeping the per-cell
+triangle count in a **private register** is reversed. It rejected a cache that
+"spent 512 B of `shared` — plus an `atomicOr` and a zeroing pass — on a cache no
+invocation but its own writer ever reads"; the ordering decision below spends
+2 052 B, four times that, and takes the zeroing pass back down to one word. What
+changed is not the arithmetic but what the array buys: it is read by every
+invocation in the block on the way to a *reproducible* slot, which is a
+property, not a speed-up, and the register form cannot express it. Everything
+else in the paragraph holds — the second visit is still the cost, and moving
+the count between register and `shared` still does not move the dispatch.
 
 The dirty-block decision above measured coverage on **room0** — 62% of active
 blocks changed per 20-frame window, 59% per single frame, **83%** once dilated
@@ -3182,28 +3202,80 @@ the block base does — which is precisely the in-place range reuse
 `extract_device_incremental` already guarantees for a block that still fits.
 
 **A fixed offset needs a tighter bound than a cursor did, and that is not a
-detail.** The two counts come from two different gathers — `mcCellSigns` when
-the offsets are built, `mcGather` when the triangles are written — which is a
-convention neither kernel enforces. An arrival-order cursor could only ever
-overrun the *range's end*, which `block_end` / `s_ttotal` caught. A fixed
-offset can also overrun **the next cell inside the same range**, which no
-range-level test sees at all. So both kernels now clamp the emit to the cell's
-own reservation (the difference of two adjacent scan entries, free) and keep
-the range test outside it. Dropping the outer one for the inner would have been
-the same mistake in reverse.
+detail.** In the *default* kernel the two counts come from two different
+gathers — `mcCellSigns` when the offsets are built, `mcGather` when the
+triangles are written — which is a convention that kernel does not enforce. An
+arrival-order cursor could only ever overrun the *range's end*, which
+`block_end` caught. A fixed offset can also overrun **the next cell inside the
+same range**, which no range-level test sees at all. So the emit is clamped to
+the cell's own reservation (the difference of two adjacent scan entries, free)
+and the range test is kept outside it. Dropping the outer one for the inner
+would have been the same mistake in reverse: the two are not redundant, because
+`block_end` is what still holds when the **scan** is what went wrong, and an
+underflowed difference would otherwise pass for a budget.
+
+In the *sharing* kernel the same clamp is an **identity**, and saying otherwise
+was this argument borrowed where it does not apply: `n`, the scan entries and
+`s_ttotal` all come from the one `mcCountCell` write, so neither the `min` nor
+the range test can fire. It is kept as two shared reads the emit path already
+makes, against a later change that re-derives the count there — but what
+actually bounds that kernel is `mcClaimVertex`'s test against `s_vtotal`, and
+the code now says so.
+
+**A bound that clamps has to retire what it clamped away.** Clamping alone
+leaves the cell's unwritten slots as a **hole in the interior of the block's
+live range** — and a hole is drawn, because the index run is the identity over
+the whole of `index_count` and the block's reservation is counted into it before
+a slot is written. On a relocation that hole is uninitialised arena; on an
+in-place reuse it still holds the previous extract's triangle, in range and full
+area. Under the cursor the unclaimed slots were always a *suffix*; under a fixed
+offset the gap sits wherever the cell does, and `mcRetireOldRange` starts at the
+live range's end by construction, so nothing downstream can find it. The default
+kernel therefore retires a cell's shortfall at the one place that knows about it
+(`mcRetireCellTail`), which is what the sharing kernel's `!ok` branch already
+did for its own dropped triangles. Every path into it is a "cannot happen" —
+both gathers read the same corners through the same `mcCornerStorage` over the
+same quiescent buffers — so it costs a compare, which is the price of the
+guarantee being one.
 
 **It replaced the default kernel's private count cache, and that is the part
-that amends 2026-08-08.** That decision split the two kernels precisely so the
-default path would not carry sharing's threadgroup budget, and the two-phase
-emitter's per-cell count cache was written as four bytes of a *register* on
-that reasoning — "the cache adds ZERO bytes of `shared`". The scan array is
-~2 KiB and takes that back. What it buys beyond ordering: the same array
-answers "does this cell emit anything", so the cheap rejection is unchanged and
-the cache's four-slot reach stops bounding anything. 2 KiB is a different
-regime from the 8 KiB that decision was arguing about — 16 resident workgroups
-on Apple's ~32 KiB and 8 at Vulkan's guaranteed 16 KiB floor, against 3 and 1 —
-but it is spent on determinism rather than on speed, and it is spent on the
-kernel this file records as 77% of an extract.
+that amends 2026-08-08 *and* 2026-08-09.** The first split the two kernels
+precisely so the default path would not carry sharing's threadgroup budget; the
+second wrote the per-cell count as four bytes of a *register* on that same
+reasoning, explicitly rejecting a `shared` cache "no invocation but its own
+writer ever reads". Both entries carry a marker saying so. The scan array is
+~2 KiB and takes it back, measured at **60 B → 2 108 B** on the default path
+and **8 476 B → 10 524 B** on the sharing one (SPIR-V-verified; the 44 B and
+8 452 B this file and the shaders quoted were two revisions stale). That is
+15 resident workgroups on Apple's 32 KiB against sharing's 3, and 7 against 1
+at Vulkan's guaranteed 16 KiB floor.
+
+What the array buys beyond ordering is the rejection the register cache used to
+serve: the difference of two adjacent entries answers "does this cell emit
+anything" without a second gather. It is **not** free the way the register was
+— two threadgroup loads on 100% of cells against a shift and a mask — so the
++18.5% below covers the rejection as well as the scan, and a follow-up aimed at
+the scan alone should not expect to find all of it. The cache's four-slot reach
+stops bounding anything either way.
+
+**Two placements were wrong and are worth stating, because both were on the
+paths the feature exists to make cheap.** The scan sat *above* the per-block
+early-out even though nothing between them consumes an offset, so every block
+that reserved nothing or landed past the arena — the majority, on a
+frustum-compacted set and on every refit — paid ten Hillis-Steele rounds and
+twenty barriers to discard the result. And the array was zeroed **whole**, 513
+threadgroup stores, above the clean-block return that is the whole of what an
+incremental extract buys. Both are gone: the scan runs below the gate, and the
+counting passes write every entry unconditionally so only entry 0 needs zeroing,
+once per dispatch rather than once per chunk.
+
+**One scan, in the shared header.** It shipped as a near-copy per kernel on the
+grounds that GLSL cannot pass a `shared` array to a function — it can be reached
+by closure instead, exactly as `mcResolveNeighbourhood` reaches `s_neighbour`,
+and `marching_cubes_sparse_common.glsl` exists to stop precisely this. The
+near-copy is not hypothetical harm: only the default kernel was converted in the
+first cut, and the divergence surfaced as 5 373 differing slots in a test rather
+than at compile time.
 
 **Chunked rather than refused, so `block_size` 16 still meshes.** The first cut
 refused a block with more cells than the array holds, which broke the invariant
@@ -3213,7 +3285,11 @@ An oversized block is now emitted a chunk of cells at a time, each chunk
 rebuilding and rescanning its own offsets. So the window is a *report*, exactly
 as the cache's reach was, and `ExtractTimings::uncached_cells_per_block` keeps
 its meaning on a threshold that moved 1024 → 512 — with a cheaper shortfall
-behind it, one extra `mcCellSigns` rather than one extra full gather.
+behind it, one extra `mcCellSigns` rather than one extra full gather. (The
+sharing kernel still *refuses* an oversized block, on `kMaxSharedCells`, because
+its edge table would index past its end; the two constants stay separate for
+that reason even at the same value. Comments in the first cut said the host
+refused one here too, and it never did.)
 
 **Vertex slots are deliberately left on their arrival-order atomic.** Under
 sharing a vertex is reached only through the index run the kernel writes
@@ -3229,11 +3305,40 @@ same figures this file records for main. If that cost binds on device, the
 scan is a flat Hillis-Steele over 513 entries and a two-level or subgroup scan
 should recover most of it; it was not done ahead of a measurement saying so.
 
+Those two figures predate the placement fixes above, and **re-measuring did not
+separate the two builds from run-to-run spread**, so they are left as they were
+rather than replaced by a number that says less. Five interleaved rounds of
+`fuse_replica <room0> --voxel 0.012 --device-extract --preload --max-frames 120`
+at Release on an M5 Max put the default path's in-loop dispatch at 1.60 ms on
+main against 1.50 ms here, and the *final* extract's at 1.34 against 1.47 — the
+two disagree in sign, which is the answer. What can be said without a
+measurement is only what the change removes: an empty or out-of-arena block no
+longer scans, and a clean block no longer zeroes 513 words. Neither adds work to
+any path. Quote the +18.5% as the cost of the ordering, not as the cost of
+today's kernel, and re-measure on device before optimising against either.
+
 **Verified by an assertion the existing suite structurally could not make.**
 Every comparison in the sparse tests goes through `canonical_triangles`, which
 *sorts* — so a permuted arena compares equal to an unpermuted one, and no
-existing check could have failed. The new one re-meshes every block against an
-unchanged field and asserts the arena matches **slot for slot**. It runs over
-both kernels, and it earned its keep immediately: with only the default kernel
-converted it failed on the sharing one with 5 373 differing slots, which is how
-that half of the change was found rather than assumed.
+existing check could have failed. The new one re-meshes against an unchanged
+field and asserts the arena matches **slot for slot**, over both kernels. It
+earned its keep immediately: with only the default kernel converted it failed on
+the sharing one with 5 373 differing slots, which is how that half of the change
+was found rather than assumed.
+
+Three configurations, because one of them sees nothing the others do. The
+all-dirty pass covers in-place reuse at full width. The **repeated mixed pass**
+covers a clean block sitting between two that re-meshed — the only shape where
+the two halves of the reservation can disagree, and the one an all-dirty pass
+cannot contain. And two full extracts of a **`block_size` 16** grid are the only
+thing that can see `chunk_base`: with one active block the base is fixed, so a
+chunk total dropped or a stale entry carried across a chunk boundary shows up as
+a slot permutation rather than sorting equal. A `block_size` **9** grid goes
+beside it (729 = 512 + 217) because nothing bounds a block to a power of two and
+the partial final chunk had no coverage at all.
+
+Retired slots are compared as *retired*, not by their contents: the sharing
+kernel's degenerate points three indices at vertex 0, whose identity comes from
+the arrival-order vertex cursor this decision deliberately leaves unordered, so
+asserting its nine floats would make every retired slot depend on lane arrival
+order — stable on MoltenVK here and not promised anywhere.

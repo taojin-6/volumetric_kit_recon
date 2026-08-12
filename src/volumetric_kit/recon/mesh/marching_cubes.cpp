@@ -1026,12 +1026,15 @@ Result<MarchingCubes> MarchingCubes::create(Device& device,
   // exact descriptor total.
   //
   // ONE of the two sparse variants is built, chosen here rather than branched
-  // per dispatch. Sharing needs ~8 KiB of `shared` arrays, and a `shared` array
-  // is reserved when the pipeline is created whatever a push constant later
-  // says: folding both into one kernel made the default path pay sharing's
-  // threadgroup budget (44 B -> 8452 B, which bounds residency to 3 workgroups
-  // on Apple's ~32 KiB and to 1 at Vulkan's guaranteed 16 KiB floor) and its
-  // per-corner vertex atomic, for a feature it does not use.
+  // per dispatch. Sharing needs ~8 KiB of `shared` arrays BEYOND what the
+  // default path uses, and a `shared` array is reserved when the pipeline is
+  // created whatever a push constant later says: folding both into one kernel
+  // would make the default path pay sharing's threadgroup budget (2 108 B ->
+  // 10 524 B on today's kernels, SPIR-V-verified, which bounds residency to 3
+  // workgroups on Apple's 32 KiB and to 1 at Vulkan's guaranteed 16 KiB floor
+  // against 15 and 7) and its per-corner vertex atomic, for a feature it does
+  // not use. See the note in marching_cubes_sparse_common.glsl for why those
+  // endpoints moved.
   VkPushConstantRange push{};
   push.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
   push.offset = 0;

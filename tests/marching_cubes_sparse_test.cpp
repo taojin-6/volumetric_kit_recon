@@ -206,7 +206,7 @@ bool fill_sphere_grid(vol::VoxelBlockGrid& g, bool with_color,
 // buys two things: a multi-block run meshes its interior seams like any real
 // field, and the SAME field can be written into grids with different block
 // sizes and must extract to the same surface -- which is what pins the kernel's
-// per-block cell cache, whose only effect is supposed to be speed.
+// per-block offset window, whose only effect is supposed to be speed.
 //
 // Reads the block size from the grid rather than assuming kBlock, for that
 // second use.
@@ -396,17 +396,18 @@ std::size_t count_valid_spans(const mesh::MarchingCubes& mc,
 // a comparison against a full extract has to ignore them. Returns the count
 // dropped, because "none were left" is itself worth asserting: it says the
 // retire pass never ran.
+bool is_degenerate(const std::array<float, 9>& t) {
+  for (int i = 0; i < 3; ++i) {
+    if (t[i] != t[3 + i] || t[i] != t[6 + i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
 std::size_t drop_degenerate(std::vector<std::array<float, 9>>& tris) {
   const std::size_t before = tris.size();
-  tris.erase(std::remove_if(tris.begin(), tris.end(),
-                            [](const std::array<float, 9>& t) {
-                              for (int i = 0; i < 3; ++i) {
-                                if (t[i] != t[3 + i] || t[i] != t[6 + i]) {
-                                  return false;
-                                }
-                              }
-                              return true;
-                            }),
+  tris.erase(std::remove_if(tris.begin(), tris.end(), is_degenerate),
              tris.end());
   return before - tris.size();
 }
@@ -534,6 +535,28 @@ std::vector<std::array<float, 9>> arena_triangles(const mesh::Mesh& m) {
 std::vector<std::array<float, 9>> canonical_triangles(const mesh::Mesh& m) {
   std::vector<std::array<float, 9>> tris = arena_triangles(m);
   std::sort(tris.begin(), tris.end());
+  return tris;
+}
+
+// arena_triangles with every RETIRED slot flattened to one value.
+//
+// A retired slot must still be retired for a slot-for-slot comparison to hold,
+// but WHICH degenerate it holds is not a property either kernel promises. The
+// default kernel writes three vertices at the origin; the sharing kernel points
+// all three indices at vertex 0, whose identity comes from an arrival-order
+// `atomicAdd(s_vcursor, 1u)` that the offset scan deliberately does NOT order
+// (see the note on s_cell_off -- vertex slots may permute inside a block, and a
+// triangle naming the same three positions through different indices is the
+// same triangle). Comparing those nine floats would make every retired slot
+// depend on lane arrival order, which holds on MoltenVK here and need not on
+// another driver.
+std::vector<std::array<float, 9>> arena_slots(const mesh::Mesh& m) {
+  std::vector<std::array<float, 9>> tris = arena_triangles(m);
+  for (std::array<float, 9>& t : tris) {
+    if (is_degenerate(t)) {
+      t = std::array<float, 9>{};
+    }
+  }
   return tris;
 }
 
@@ -1583,13 +1606,54 @@ int main() {
   // because the window is one shared array rather than four bytes of a
   // register -- a smaller reach, and a cheaper shortfall behind it.
   CHECK(big_timings_16.uncached_cells_per_block == 4096 - 512);
+  // And the chunking is SLOT-stable, not merely surface-stable. Eight chunks of
+  // 512 here, so this is the only thing that can see `chunk_base` -- the
+  // running total that carries each chunk's offsets into the next. A chunk_base
+  // that dropped a chunk's total, or a rescan that carried a stale entry, would
+  // permute slots across a chunk boundary and pass every sorted comparison in
+  // this file, including the block-size-invariance one below.
+  //
+  // One active block, so the block base is 0 on both passes and a full extract
+  // is enough to say this: across two full extracts of a MULTI-block field the
+  // bases themselves permute, which is a property of the arrival-order
+  // reservation and not of the offsets (see DeviceMesh's note).
+  vr::Result<mesh::Mesh> big_again_16 = arena_mc.extract(big_block_grid, 0.0f);
+  CHECK(big_again_16.ok());
+  CHECK(arena_slots(big_again_16.value()) == arena_slots(big_mesh_16));
+
+  // A block whose cells do NOT divide the window evenly, so the last chunk is
+  // partial (729 = 512 + 217) and `chunk_cells` is not kMaxScanCells on the way
+  // out. Nothing bounds block_size to a power of two -- VoxelGridParams accepts
+  // any size up to 1290 -- so a legal grid can land here, and the chunk loop's
+  // `min(kMaxScanCells, vpb - c0)` is the only thing that makes it work.
+  vol::VoxelGridParams odd_block_gp = sphere_grid_params();
+  odd_block_gp.block_size = 9;
+  odd_block_gp.voxels_per_block = 9 * 9 * 9;  // 729 = one full chunk + 217
+  odd_block_gp.num_buckets = 32;
+  odd_block_gp.num_blocks = 256;
+  vr::Result<vol::VoxelBlockGrid> odd_block_result =
+      vol::VoxelBlockGrid::create(device.value(), allocator.value(),
+                                  odd_block_gp, attrs, 2);
+  CHECK(odd_block_result.ok());
+  vol::VoxelBlockGrid odd_block_grid = std::move(odd_block_result).value();
+  CHECK(fill_dense_blocks(odd_block_grid, 1));
+  mesh::ExtractTimings odd_timings;
+  vr::Result<mesh::Mesh> odd_mesh =
+      arena_mc.extract(odd_block_grid, 0.0f, &odd_timings);
+  CHECK(odd_mesh.ok());
+  CHECK(odd_timings.active_blocks == 1);
+  CHECK(odd_mesh.value().triangle_count() > 0);
+  CHECK(odd_timings.uncached_cells_per_block == 729 - 512);
+  vr::Result<mesh::Mesh> odd_again = arena_mc.extract(odd_block_grid, 0.0f);
+  CHECK(odd_again.ok());
+  CHECK(arena_slots(odd_again.value()) == arena_slots(odd_mesh.value()));
 
   // The block size is an allocation detail, so the SAME field divided into
   // eight blocks of 8 must extract to the same surface. This is what pins the
-  // per-cell cache as an optimisation: it changes which cells are rejected
-  // cheaply and which are gathered twice, and must change nothing else. The
-  // outer +face cells reach a corner at voxel 16, unallocated under either
-  // division, so both meshes stop in the same place.
+  // per-cell offset window as an optimisation: it changes which cells are
+  // rejected cheaply and which are gathered twice, and must change nothing
+  // else. The outer +face cells reach a corner at voxel 16, unallocated under
+  // either division, so both meshes stop in the same place.
   vol::VoxelGridParams split_gp = sphere_grid_params();
   split_gp.num_buckets = 32;
   split_gp.num_blocks = 256;
@@ -1958,6 +2022,28 @@ int main() {
       CHECK(remeshed > 0);  // and the flagged neighbourhood really did redo its
     }
 
+    // Repeat that exact pass. The flags are unchanged, so the same blocks
+    // dilate dirty and re-mesh to the counts they now hold -- which fit their
+    // own ranges exactly, so every one of them reuses in place while every
+    // other block stays clean. The arena therefore has to come back IDENTICAL,
+    // slot for slot.
+    //
+    // This is the configuration the all-dirty check below cannot reach, and the
+    // one where the two halves of the reservation can disagree: a clean block
+    // sitting between two that re-meshed. If a clean block's range were
+    // touched, or a re-meshed block relocated where it could have stayed, this
+    // is what sees it -- and it sees it as a slot diff rather than as a surface
+    // that still sorts equal.
+    mesh::ExtractTimings mixed2_rt{};
+    vr::Result<mesh::DeviceMesh> mixed2 = inc_mc.extract_device_incremental(
+        inc_grid, 0.0f, dirty_blocks, &mixed2_rt);
+    CHECK(mixed2.ok());
+    CHECK(mixed2_rt.incremental);
+    CHECK(mixed2_rt.remeshed_blocks == mixed_rt.remeshed_blocks);
+    vr::Result<mesh::Mesh> mixed2_host = inc_mc.download(mixed2.value());
+    CHECK(mixed2_host.ok());
+    CHECK(arena_slots(mixed2_host.value()) == arena_slots(mixed_host.value()));
+
     // --- And then all of it ----------------------------------------------
     for (std::uint32_t i = 0; i < slots; ++i) flag_ptr[i] = 1u;
     mesh::ExtractTimings dirty_rt{};
@@ -2000,12 +2086,11 @@ int main() {
     // inside its own unchanged range. It holds now because each cell's offset
     // is a scanned prefix over the block's cells rather than an arrival order.
     //
-    // Both halves of the block reservation have to hold for this: a clean block
-    // is untouched, and a re-meshed one that still fits reuses its range in
-    // place. So this is also what would catch either of those quietly
-    // regressing into a relocation.
+    // This pass re-meshes EVERY block (asserted below), so what it covers is
+    // in-place reuse at full width -- the clean-block half is the repeated
+    // mixed pass above, where the two happen side by side.
     std::vector<std::array<float, 9>> dirty_by_slot =
-        arena_triangles(dirty_host.value());
+        arena_slots(dirty_host.value());
     mesh::ExtractTimings again_rt{};
     vr::Result<mesh::DeviceMesh> again = inc_mc.extract_device_incremental(
         inc_grid, 0.0f, dirty_blocks, &again_rt);
@@ -2015,12 +2100,14 @@ int main() {
     vr::Result<mesh::Mesh> again_host = inc_mc.download(again.value());
     CHECK(again_host.ok());
     // Both kernels, which is the point of the loop this sits in: the sharing
-    // emitter reserves two ranges rather than one and hands out its triangle
-    // slots from its own cursor, so it needs its own scan and this is what says
-    // whether it has one. Vertex slots are deliberately NOT asserted -- they
-    // may still permute inside a block, and a triangle that names the same
-    // three positions through a different index is the same triangle.
-    CHECK(arena_triangles(again_host.value()) == dirty_by_slot);
+    // emitter reserves two ranges rather than one and used to hand out its
+    // triangle slots from its own cursor, so it needs the same scan and this is
+    // what says whether it has one. Vertex slots are deliberately NOT asserted
+    // -- they may still permute inside a block, and a triangle that names the
+    // same three positions through a different index is the same triangle
+    // (which is also why this goes through arena_slots rather than
+    // arena_triangles; see its note).
+    CHECK(arena_slots(again_host.value()) == dirty_by_slot);
 
     // --- The fallbacks, each proved by a field the skip would hide ---------
     //

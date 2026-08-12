@@ -216,6 +216,11 @@ layout(push_constant, scalar) uniform PushConstants {
 // (the 2026-08-04 rule) -- and main() falls back to unshared as belt and braces,
 // reporting through `sharing_applied` so the two constants cannot drift in
 // silence.
+//
+// It must also stay <= kMaxScanCells in the shared header, since this kernel
+// scans the whole block in one pass (`mcScanCellOffsets(tid, vpb)`) rather than
+// windowing as the sibling does. Raising this alone would run that scan off the
+// end of `s_cell_off`.
 const uint kMaxSharedCells = 512u;
 // No vertex on this edge: it carries no crossing, or its owner cell emitted
 // nothing, or the owner lies outside this block. A referencing cell duplicates.
@@ -245,7 +250,7 @@ shared uint s_ttotal;   // triangles this block will emit
 shared uint s_vbase;    // first vertex slot, from the global counter
 shared uint s_ibase;    // first triangle slot, from the global counter
 shared uint s_vcursor;  // hands out slots within [s_vbase, s_vbase + s_vtotal)
-// (Triangles have no cursor: their slots come from the s_tri_off scan below.)
+// (Triangles have no cursor: their slots come from the s_cell_off scan in the shared header.)
 // Does any block in this block's +{0,1}^3 neighbourhood carry a change, and
 // what did this block hold going in? Both read under the barrier that already
 // publishes the neighbourhood, so neither costs one of its own.
@@ -283,62 +288,20 @@ shared int s_edge_vtx[kMaxSharedCells * 3u];
 const uint kCaseTriShift = 8u;
 shared uint s_case[kMaxSharedCells];
 
-// Per-cell TRIANGLE OFFSET within the block's reserved triangle range: the
-// exclusive prefix sum of every cell's count, shifted by one so entry `local`
-// is where cell `local` starts and entry `local + 1` is one past its last.
+// The per-cell triangle offsets live in `s_cell_off` in the shared header, and
+// the scan that builds them is mcScanCellOffsets there -- ONE copy for both
+// kernels. It shipped as a near-copy per kernel on the grounds that GLSL cannot
+// pass a `shared` array to a function; it can be reached by closure instead,
+// exactly as mcResolveNeighbourhood reaches s_neighbour, and the near-copy cost
+// this kernel a revision of being converted late.
 //
-// This replaced an `atomicAdd(s_icursor, n)` that handed runs out in whatever
-// order cells reached it. Correct either way -- every slot landed inside the
-// range -- but the ORDER was not reproducible, so a block re-meshed to
-// identical geometry could permute its own triangles inside its own unchanged
-// range. Invisible to a consumer reading the mesh; fatal to one binding
-// per-triangle state to the arena slot, which is what the projective texture
-// atlas does. The sibling kernel carries the same array for the same reason.
-//
-// Sized like s_case rather than windowed like the sibling's: this kernel
-// already REFUSES a block past kMaxSharedCells (s_edge_vtx would run off its
-// end), so there is no oversized case left to chunk for. ~2 KiB beside the
-// ~8 KiB already here, where the same array is the sibling's whole threadgroup
-// budget.
-//
-// VERTEX slots are deliberately left on their arrival-order atomic. A vertex is
-// reached only through the index run this kernel writes itself, so permuting
-// them renames nothing a consumer can key on -- and giving them fixed offsets
-// would need a second scan over a count that is not known until the edges are
-// walked.
-shared uint s_tri_off[kMaxSharedCells + 1u];
+// The array is sized like s_case for this kernel's purposes rather than
+// windowed like the sibling's use of it: this kernel already REFUSES a block
+// past kMaxSharedCells (s_edge_vtx would run off its end), so there is no
+// oversized case left to chunk for and `vpb` is always a legal scan bound.
+// ~2 KiB beside the ~8 KiB already here, where the same array is the sibling's
+// whole threadgroup budget.
 
-// Turn the per-cell counts in s_tri_off[1 ..] into those exclusive prefix sums,
-// in place. Hillis-Steele over the block's own cell count, so a smaller block
-// pays fewer rounds.
-//
-// A near-copy of mcScanCellOffsets in marching_cubes_sparse.comp, because GLSL
-// cannot pass a `shared` array to a function and the two kernels scan different
-// ones. Kept in step by the test that asserts both reproduce their arena slot
-// for slot; a divergence shows up there rather than at compile time.
-//
-// Every thread must reach every barrier, so the bounds tests gate the memory
-// access and never the iteration. `tmp` is read before the write barrier and
-// applied after it, which is what keeps a round from reading a neighbour's
-// already-updated value.
-void mcScanTriangleOffsets(uint tid, uint group_threads, uint vpb) {
-  const uint kScanSlots = (kMaxSharedCells + 1u + 255u) / 256u;
-  uint tmp[kScanSlots];
-  for (uint d = 1u; d <= vpb; d <<= 1u) {
-    for (uint s = 0u; s < kScanSlots; ++s) {
-      uint i = tid + s * group_threads;
-      tmp[s] = (i <= vpb && i >= d) ? s_tri_off[i - d] : 0u;
-    }
-    barrier();
-    for (uint s = 0u; s < kScanSlots; ++s) {
-      uint i = tid + s * group_threads;
-      if (i <= vpb && i >= d) {
-        s_tri_off[i] += tmp[s];
-      }
-    }
-    barrier();
-  }
-}
 // mcEdgeOwner's answer for each of the 12 edges: (delta.xyz, axis). A pure
 // function of the tables, identical for every cell and every block, so it is
 // derived ONCE per workgroup by lanes 0..11 rather than by all 256 lanes and
@@ -401,7 +364,7 @@ void mcCountCell(int bs, uint local, inout uint verts, inout uint tris) {
   // cell emits at. Written on every path through this function, exactly as
   // s_case is, so neither needs a zeroing pass -- but the array has one entry
   // MORE than there are cells, and that one does (see main).
-  s_tri_off[local + 1u] = uint(n);
+  s_cell_off[local + 1u] = uint(n);
   if (n == 0) {
     return;
   }
@@ -562,21 +525,24 @@ void mcTrianglePass(BlockIndex block, int bs, uint local) {
   // triangulation. It replaced one shared atomic per cell, so it is also one
   // fewer threadgroup atomic on the ~8% of cells that emit.
   //
-  // The bound is what makes a disagreement between the counting and emitting
-  // passes fail SAFE, and it is the reason the count is cached rather than
-  // recomputed here from a second walk of the row. Without it a run that overran
-  // would write over the NEXT block's triangles, with a correct-looking
-  // indexCount and no error anywhere: the per-triangle append this replaced
-  // could not overrun by construction, because counting and writing were one
-  // act, and that guarantee has to be paid for somewhere.
+  // The clamp below is an IDENTITY in this kernel today, and saying otherwise
+  // was the sibling's argument borrowed where it does not apply. There, the
+  // count reserved and the count emitted come from two different gathers, so
+  // they can disagree. Here both come from the one `mcCountCell` write: `n` is
+  // `s_case[local] >> kCaseTriShift`, `budget` is the difference of the two scan
+  // entries that same call seeded with it, and `s_ttotal` is the sum of those
+  // same counts. So neither `min` nor the range test can ever fire.
   //
-  // Under a fixed offset that bound has to be the CELL's, not just the block's.
-  // An arrival-order cursor could only ever overrun the range's end, which
-  // `s_ttotal` catches; a fixed offset can also overrun the next cell inside the
-  // range, which no range-level test sees. Both are kept -- the cell's
-  // reservation clamps what is written, the range's end still refuses outright.
-  uint claimed = s_tri_off[local];
-  uint budget = s_tri_off[local + 1u] - claimed;
+  // Kept anyway, and not as decoration: it is what a later change re-deriving
+  // the count here -- from a second walk of the row, as the sibling does -- would
+  // need in order not to write over the next cell inside the block's own range,
+  // which no range-level test sees. It is two shared reads the emit path already
+  // makes. What actually bounds this kernel against over-consumption is
+  // mcClaimVertex's test against `s_vtotal`, which is the one escape phase three
+  // really has (its "cannot happen" gather, failing in the under-reservation
+  // direction).
+  uint claimed = s_cell_off[local];
+  uint budget = s_cell_off[local + 1u] - claimed;
   n = min(n, budget);
   if (n == 0u || claimed + n > s_ttotal) {
     return;
@@ -683,7 +649,7 @@ void mcTrianglePass(BlockIndex block, int bs, uint local) {
 //
 // Index 0 rather than the block's own base, because a block that emitted nothing
 // has no base to point at, and vertex 0 exists whenever the arena does.
-void mcRetireOldRange(uint tid, uint group_threads) {
+void mcRetireOldRange(uint tid) {
   if (pc.incremental == 0u) {
     return;
   }
@@ -691,7 +657,7 @@ void mcRetireOldRange(uint tid, uint group_threads) {
   // surface left entirely, retires all of it. Both end where the old range did.
   uint dead_first = s_reuse ? s_ibase + s_ttotal : s_old_ibase;
   uint dead_end = s_old_ibase + s_old_icount;
-  for (uint tri = dead_first + tid; tri < dead_end; tri += group_threads) {
+  for (uint tri = dead_first + tid; tri < dead_end; tri += kGroupThreads) {
     if (tri >= pc.capacity) {
       break;
     }
@@ -705,16 +671,10 @@ void mcRetireOldRange(uint tid, uint group_threads) {
 void main() {
   int bs = pc.block_size;
   uint vpb = uint(pc.voxels_per_block);
-  // The workgroup's linear thread index, and its size. gl_LocalInvocationIndex
-  // rather than gl_LocalInvocationID.x, and the full dimension product rather
-  // than gl_WorkGroupSize.x, because the two agree only while local_size_y/z
-  // are 1. That is true today (the emitted SPIR-V is `LocalSize 256 1 1`) and
-  // nothing states it, so a later y/z dimension would silently race 8*Ny*Nz
-  // writers onto the 8 s_neighbour slots and re-mesh every voxel Ny*Nz times
-  // through the append atomic. Both forms compile; only this one stays correct.
+  // gl_LocalInvocationIndex rather than gl_LocalInvocationID.x, for the reason
+  // kGroupThreads is the dimension product: the two agree only while
+  // local_size_y/z are 1.
   uint tid = gl_LocalInvocationIndex;
-  uint group_threads =
-      gl_WorkGroupSize.x * gl_WorkGroupSize.y * gl_WorkGroupSize.z;
 
   // One workgroup per block, NOT a flat voxel grid: shared memory is per
   // workgroup, so the neighbourhood and the owned-edge table can only be shared
@@ -759,7 +719,7 @@ void main() {
     // block's cells, which covers 1 .. vpb and leaves both this one and any
     // tail past vpb. The tail is not zeroed because the scan is bounded by vpb
     // and nothing reads past it.
-    s_tri_off[0] = 0u;
+    s_cell_off[0] = 0u;
   }
   // Between invocation 0's `s_dirty = 0u` above and the atomicOr below, which
   // invocations 0..7 reach. Without it those are a race: a lane that ORs its
@@ -845,7 +805,7 @@ void main() {
   // loop and pushed once, as the sibling kernel does, rather than per cell.
   uint my_verts = 0u;
   uint my_tris = 0u;
-  for (uint local = tid; local < vpb; local += group_threads) {
+  for (uint local = tid; local < vpb; local += kGroupThreads) {
     mcCountCell(bs, local, my_verts, my_tris);
   }
   if (my_verts != 0u) {
@@ -857,12 +817,8 @@ void main() {
   // Every cell's classification must be visible before any cell asks whether its
   // edge owners will emit.
   barrier();
-  // And the per-cell counts it recorded become the per-cell triangle offsets.
-  // Here rather than beside the triangle pass because it needs its own pair of
-  // barriers per round and this point already has one on each side.
-  mcScanTriangleOffsets(tid, group_threads, vpb);
   uint my_dupes = 0u;
-  for (uint local = tid; local < vpb; local += group_threads) {
+  for (uint local = tid; local < vpb; local += kGroupThreads) {
     my_dupes += mcCountDuplicates(bs, local);
   }
   if (my_dupes != 0u) {
@@ -972,12 +928,21 @@ void main() {
   // previous range, which the arenas still hold and the draw still covers.
   if (s_ttotal == 0u || s_ibase >= pc.capacity ||
       s_vbase >= pc.vertex_capacity) {
-    mcRetireOldRange(tid, group_threads);
+    mcRetireOldRange(tid);
     return;
   }
 
+  // The per-cell counts phase one recorded become the per-cell triangle
+  // offsets. BELOW the gate above, not beside the classification that fills
+  // them: nothing between the two consumes an offset, and above the gate every
+  // block that reserved nothing or landed past an arena would pay nine
+  // Hillis-Steele rounds and eighteen barriers to throw the result away. Legal
+  // here because that return is uniform across the workgroup and the scan
+  // carries its own barriers on both sides.
+  mcScanCellOffsets(tid, vpb);
+
   // PHASE THREE -- emit a vertex on every owned edge, into the reserved range.
-  for (uint local = tid; local < vpb; local += group_threads) {
+  for (uint local = tid; local < vpb; local += kGroupThreads) {
     mcOwnedEdgePass(block, bs, local);
   }
   // Every owned edge in this block must be resolved before any cell reads a
@@ -985,10 +950,10 @@ void main() {
   barrier();
 
   // PHASE FOUR -- emit triangles as indices into those vertices.
-  for (uint local = tid; local < vpb; local += group_threads) {
+  for (uint local = tid; local < vpb; local += kGroupThreads) {
     mcTrianglePass(block, bs, local);
   }
 
   // PHASE FIVE -- give back what this block no longer occupies.
-  mcRetireOldRange(tid, group_threads);
+  mcRetireOldRange(tid);
 }

@@ -43,6 +43,30 @@ namespace volumetric_kit::recon::mesh {
 /// through it, and because the renderer wants a real one at the interop seam.
 /// Whether it is the identity run `0, 1, 2, ...` depends on @ref
 /// shares_vertices -- do not assume either way.
+///
+/// **When a triangle's arena slot is a durable name.** Since 2026-08-12 a
+/// cell's triangles land at a *scanned* offset inside its block's range rather
+/// than wherever an atomic handed them out, so within a block the slot is
+/// `f(block base, cell, triangle-in-cell)`. That makes per-triangle state keyed
+/// by slot -- a progressive texture atlas, above all -- survive a re-mesh that
+/// did not change the triangulation, but only as far as the **block base** is
+/// itself stable, and that is a property of the *call*, not of this struct:
+///
+/// - `MarchingCubes::extract_device` reserves every block base through one
+///   global atomic, which hands ranges out in workgroup arrival order. Two full
+///   extracts of an unchanged field can therefore permute whole blocks, and no
+///   slot survives.
+/// - `MarchingCubes::extract_device_incremental` reuses a block's existing
+///   range in place wherever the new count still fits, and only then is the
+///   slot durable. A block that outgrew its range relocates, and a block the
+///   pass declined to re-mesh keeps everything it had.
+///
+/// Which of the two happened is *visible*, not something to assume: @ref
+/// ExtractTimings::incremental says whether the incremental pass ran at all
+/// (it falls back silently), and `MarchingCubes::block_spans()` publishes each
+/// block's `triangle_base` -- guarded by `block_span_valid()` -- so a consumer
+/// that caches the previous extract's bases can tell a reused range from a
+/// relocated one per block and invalidate exactly what moved.
 struct DeviceMesh {
   VkBuffer vertices = VK_NULL_HANDLE;  ///< Interleaved `Vertex` array.
   VkBuffer indices = VK_NULL_HANDLE;   ///< `uint32` indices, 3 per triangle.
