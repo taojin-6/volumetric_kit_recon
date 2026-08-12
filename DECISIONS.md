@@ -3027,3 +3027,91 @@ block against a field nothing moved and the count must be **0**; re-mesh the
 same blocks against a grown sphere and it must be **positive**. A hash that
 always matched would pass the first and fail the second, and one that never
 matched the reverse — which is what a single assertion could not have caught.
+
+### 2026-08-12 — The progressive texture atlas has no allocator: a patch **is** the mesh arena's triangle slot, the atlas is a linear buffer rather than a 2D image, and the Gauss-Newton warp and render-and-resample of the source paper are both cut.
+
+TextureMe (Kim et al., ACM TOG 41(3), 2022) fuses colour into a per-triangle
+patch atlas alongside the TSDF, so surface colour resolves at the *camera's*
+resolution rather than the voxel's with no UV unwrapping — which is the only
+shape that can work here, since an incrementally-updated mesh has no stable
+parameterisation to unwrap.
+
+**The paper's hardest data structure is one this repo already has.** Section
+4.2 maintains a GPU free list of patch indices, pushed and popped as voxels
+gain and lose triangles, with the indices stored per voxel. `MarchingCubes`
+already hands each block one contiguous range, reuses it in place when a
+re-meshed count fits, appends past the watermark when it does not, and retires
+what it abandons — and since the scanned-offset decision above, a cell's
+triangles land at a fixed offset inside that range. So `slot = f(block base,
+cell, triangle-in-cell)` is already a durable name, and **the patch index is
+just the arena triangle slot**. No free list, no per-voxel index array, no
+second lifetime: the atlas inherits the arena's.
+
+**Linear, not a 2D image, and that is a departure worth its own line.** A patch
+is `[t * texels_per_patch, (t+1) * texels_per_patch)` of one storage buffer.
+That removes the atlas dimensions, the packing grid, the `maxImageDimension2D`
+ceiling a room-scale atlas would run into, and — because nothing samples across
+a patch boundary — the paper's gutter as well. It also grows exactly as the
+vertex arena does, through the same `storage_buffer` path. What it gives up is
+hardware filtering and mips; a consumer samples the buffer and interpolates
+itself.
+
+**A patch is a right triangle**, `leg*(leg+1)/2` texels, not a square. A square
+of the same edge wastes just under half its area, which at room scale is the
+difference between a ~400 MB atlas and a ~800 MB one — the same reason the
+paper stores right triangles.
+
+**The patch size is sized to the working distance, not the paper's rule.** The
+paper projects a voxel at the camera's *minimum* depth (0.35 m), which is
+defensible on a 24 GB Titan RTX and is not here: through a 1920-px ARKit frame
+that is a 43-texel leg, and at the 3.2 M triangles a 1 cm room scan reaches it
+needs **11.8 GB**. Sized at a 2 m handheld sweep instead it is an 8-texel leg
+and ~410 MB. The useful invariance is that the atlas costs a fixed amount per
+square metre of surface *whatever the voxel size* — coarsening gives four times
+fewer triangles carrying four times the texels each — so the budget is better
+spent here than on geometry.
+
+**Two of the paper's components are cut, and they were the same dependency.**
+Section 6's multi-scale Gauss-Newton image warp and section 5.4's
+render-and-resample both need the current textured model rendered from the
+current pose, which means recon asking gfx to render into a buffer it reads
+back, across a shared device where both libraries submit through one mutex.
+Cutting them together keeps this feature **compute-only and one-directional**.
+What that costs is honest: the result is the paper's own Figure 8 middle panel
+— averaging without warp — rather than its right one. Two things push back:
+ARKit's VIO+LiDAR pose is better in the median than the Colored ICP that panel
+was produced with, and the `n·v` and range weights already suppress the grazing
+and distant observations where misalignment is worst. What stays uncorrected is
+rolling shutter, and — the one with no cheap fallback left — auto-exposure,
+whose principled fix was normalisation against that same rendered model.
+
+**Colour is blended in linear and stored encoded.** An 8-bit value is encoded
+and averaging is linear (the 2026-08-02 colour rule), so every observation is
+decoded through the exact piecewise sRGB curve, mixed, and re-encoded. Storing
+8 bits costs precision the running average cannot recover; that is the price of
+four bytes a texel, and four bytes a texel is what makes a room-scale atlas fit.
+
+**One thread per patch ROW.** Per texel would need the triangular index
+inverted to recover `(i, j)` and would refetch the triangle's three vertices for
+every one; per triangle would leave one lane walking every texel. A row needs
+neither, and it makes each texel single-writer, so nothing in the pass is
+atomic.
+
+**Staleness is answered coarsely, on purpose.** A full extract re-reserves every
+block's range through a global atomic, so no slot survives it and the caller
+answers `ExtractTimings::incremental == false` with `invalidate()`. A per-block
+or per-triangle answer would be finer; the retriangulation measurement above
+says it would buy little, since only 2.2% of re-meshed blocks reshape at all.
+
+**Verified against a frame of one known colour**, which is what makes "did the
+right colour reach the right texels" answerable: every texel the camera can see
+must come out that colour within one 8-bit step, and every texel it cannot must
+stay **entirely** zero rather than merely zero-weighted — the colour bits are
+what a consumer samples, and leaving them as the allocator handed them over
+would draw noise on exactly the surfaces never observed. On the sphere fixture,
+1 780 texels fused and 134 588 left unseen, so both branches are covered by one
+frame. Fusing the same frame twice must raise weights and move no colour, which
+is what pins the read-modify-write as actually reading. The addressing half runs
+with no device at all: `patch_texel_index` must be a bijection onto
+`[0, patch_texel_count)` for every leg, or patches silently overlap with no
+allocation error and no validation message anywhere.
