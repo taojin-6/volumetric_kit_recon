@@ -158,25 +158,27 @@ struct ExtractTimings {
   std::uint32_t triangle_capacity = 0;
   /// Triangles the kernel actually emitted.
   std::uint32_t emitted_triangles = 0;
-  /// Cells per block the sparse kernel could **not** cache a triangle count
-  /// for, so they were gathered twice instead of once -- correct, measurably
-  /// slower, and otherwise invisible.
+  /// Cells per block the sparse kernel could **not** hold offsets for in one
+  /// pass, so their signs were gathered twice instead of once -- correct,
+  /// measurably slower, and otherwise invisible.
   ///
   /// The sparse kernel visits a cell twice: once to count (signs only), once to
-  /// emit. Between them it caches each cell's triangle count in one byte of a
-  /// private register, so the ~92% of cells that emit nothing are rejected
-  /// without touching memory rather than by a second gather. That cache holds
-  /// four counts per invocation, which covers `block_size` 8 whole; a block
-  /// with more cells than it holds still meshes **correctly**, but every cell
-  /// past it pays a second full gather -- at `block_size` 16 that is 75% of the
-  /// block, roughly 1.8 gathers per cell against 1.1.
+  /// emit. Between them it scans the per-cell triangle counts into per-cell
+  /// offsets in one threadgroup array, which is both what fixes a triangle's
+  /// arena slot and what rejects the ~92% of cells that emit nothing without a
+  /// second gather. That array is a **window of 512 cells**, which covers
+  /// `block_size` 8 (512 cells) whole; a block with more cells than it holds
+  /// still meshes **correctly**, but is emitted a chunk at a time and every
+  /// cell past the first chunk pays one extra *signs* gather to rebuild its
+  /// chunk's offsets -- at `block_size` 16 that is 3584 of 4096 cells, 87.5% of
+  /// the block.
   ///
   /// Reported rather than refused, because nothing is wrong with the mesh --
   /// but a limit the caller cannot see is this library's to surface (see the
   /// 2026-08-04 decision). **0 for `block_size` 8**, the only shape any in-tree
   /// caller uses, and 0 for the dense @ref extract and under
-  /// @ref MarchingCubesConfig::share_vertices, neither of which uses that cache
-  /// (sharing is *refused* above its own limit instead).
+  /// @ref MarchingCubesConfig::share_vertices, which *refuses* a block past its
+  /// own limit rather than chunking past it.
   std::uint32_t uncached_cells_per_block = 0;
   /// Vertex capacity the dispatch ran with -- one slot's vertex arena, so
   /// `emitted_vertices / vertex_capacity` is that buffer's fill ratio.

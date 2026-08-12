@@ -211,6 +211,11 @@ order. Change the decision, its entry there, and this list together.
   Meshing a camera's view is a caller-supplied block list, not a camera the mesh
   tier holds; and it stays apart from incremental extraction rather than
   stacking with it.
+- [**2026-08-12**](DECISIONS.md#2026-08-12--a-cells-triangles-land-at-a-scanned-offset-inside-its-blocks-span-not-in-arrival-order-and-both-sparse-kernels-pay-2-kib-of-threadgroup-memory-for-it-amends-the-zero-bytes-of-shared-clause-of-the-2026-08-08-vertex-sharing-decision) —
+  A cell's triangles land at a *scanned* offset inside its block's span, not in
+  arrival order, and both sparse kernels pay ~2 KiB of threadgroup memory for it
+  (amends the "zero bytes of `shared`" clause of the 2026-08-08 vertex-sharing
+  decision).
 
 ## Provenance & salvage policy
 
@@ -484,12 +489,26 @@ arbitrary; it usually isn't.
   the precondition for meshing only the blocks a fuse changed, taken at ~10% on
   the dispatch. True of **both** sparse kernels: `share_vertices` reserves two
   ranges rather than one, since a shared vertex breaks `v = 3t`, and measured no
-  cost. Each cursor is bounded by its block's own reservation, so a count that
-  disagreed with the emit would drop geometry rather than write over the next
-  block's range. Opt-in `track_block_spans` publishes that range as
+  cost. Within that range a cell's triangles land at a **scanned** offset — the
+  exclusive prefix sum of the per-cell counts the kernel already takes, one
+  `s_cell_off` and one `mcScanCellOffsets` in the shared header for both
+  kernels — so the arena triangle slot is `f(block base, cell,
+  triangle-in-cell)` and survives a re-mesh that did not change the
+  triangulation, which is what per-triangle state keyed by slot needs
+  (2026-08-12) — though only as far as the *block base* is stable, which is
+  in-place reuse under `extract_device_incremental` and never a full
+  `extract_device`, whose bases come out in workgroup arrival order;
+  `block_spans()` is how a consumer tells the two apart. A fixed offset is
+  bounded by the *cell's* own reservation as well as the block's, since it can
+  overrun the next cell and no range-level test sees that — and whatever a cell
+  reserved and did not write is **retired**, a hole in the interior of a live
+  range being drawn like any other triangle and reachable by no later pass.
+  Vertex slots stay on their
+  arrival-order atomic, being reachable only through the index run. Opt-in
+  `track_block_spans` publishes that range as
   `block_spans()` — vertex and **triangle** base/count per block slot, the
   mapping stage 3 re-meshes against and the host cannot derive, since the
-  atomics hand ranges out in workgroup arrival order. Off by default (it is
+  atomics hand *block bases* out in workgroup arrival order. Off by default (it is
   sized by the grid, not the surface), borrowed, and readable only while
   `block_spans_generation()` still names the mesh you hold —
   `block_span_valid(grid, slot)` answers the same question per slot, against

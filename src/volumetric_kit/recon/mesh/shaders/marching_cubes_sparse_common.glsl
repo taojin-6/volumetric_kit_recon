@@ -2,31 +2,42 @@
 #define VR_MARCHING_CUBES_SPARSE_COMMON_GLSL
 
 // What both sparse marching-cubes kernels do identically: address a block's
-// voxels, resolve its 2x2x2 +neighbourhood on-device, and gather a cell's eight
-// corners through it.
+// voxels, resolve its 2x2x2 +neighbourhood on-device, gather a cell's eight
+// corners through it, and scan the per-cell triangle counts into the per-cell
+// offsets each emitter writes at.
 //
 // TWO kernels, because vertex sharing is a pipeline choice rather than a
 // runtime branch. `marching_cubes_sparse.comp` gives every triangle three
 // private vertices (what this tier always did); `marching_cubes_sparse_shared.comp`
 // shares a vertex between the cells that meet on an edge. Sharing needs ~8 KiB
-// of `shared` arrays, and a `shared` array is reserved at pipeline creation
-// whatever a push constant later says -- so folding the two into one kernel
-// made the DEFAULT path pay sharing's threadgroup budget (44 B -> 8452 B, which
-// bounds residency to 3 workgroups on Apple's ~32 KiB and to 1 at Vulkan's
-// guaranteed 16 KiB floor) plus its per-corner vertex atomic, for a feature it
-// does not use. MarchingCubes::create builds exactly one of the two.
+// of `shared` arrays BEYOND what the default path uses, and a `shared` array is
+// reserved at pipeline creation whatever a push constant later says -- so
+// folding the two into one kernel would make the DEFAULT path pay sharing's
+// threadgroup budget plus its per-corner vertex atomic, for a feature it does
+// not use. MarchingCubes::create builds exactly one of the two.
 //
-// Both figures are SPIR-V-verified and both move as the kernels grow, so treat
-// the gap rather than the endpoints as the decision: 44 B is s_neighbour plus
-// the default kernel's three-word block reservation, and the default kernel
-// keeps its per-cell triangle-count cache in a private register precisely so
-// this side of the gap stays a rounding error.
+// The figures are SPIR-V-verified and both move as the kernels grow, so treat
+// the GAP rather than the endpoints as the decision -- it has narrowed sharply
+// and the reason is worth stating. The default path was 44 B when this note was
+// written and had drifted to 60 B by the time incremental extraction gave it a
+// block reservation, against sharing's 8 476 B: a ~140x gap, which is why the
+// default kernel's per-cell triangle count was kept in a private register. The
+// 2026-08-12 ordering decision spent ~2 KiB on `s_cell_off` below, which BOTH
+// kernels carry, so the measured endpoints are now **2 108 B and 10 524 B** and
+// the gap is ~5x. What still separates them is the ~8 KiB of edge and case
+// tables sharing alone needs, and it is still worth a kernel: 15 resident
+// workgroups against 3 on Apple's 32 KiB, 7 against 1 at Vulkan's guaranteed
+// 16 KiB floor. But it is no longer the difference between a rounding error and
+// a budget, and an argument that assumes it is has stopped being true.
 //
 // The cost of two kernels is two copies of the code that is genuinely common,
-// which is what this header exists to prevent: the neighbour probe and the
-// corner gather are the cross-block-correctness-critical parts, and a fix to
-// either must not be appliable to only one path. Mirrors marching_cubes_common.glsl,
-// which plays the same role for the dense/sparse pair.
+// which is what this header exists to prevent: the neighbour probe, the corner
+// gather and the offset scan are the correctness-critical parts, and a fix to
+// any of them must not be appliable to only one path. That is not hypothetical
+// -- the scan shipped as a near-copy per kernel and the sharing one was
+// converted a revision late, which the slot-for-slot test caught at 5 373
+// differing slots. Mirrors marching_cubes_common.glsl, which plays the same
+// role for the dense/sparse pair.
 //
 // The includer must, *before* the include, declare the `pc` push block (fields
 // `block_size`, `voxels_per_block`, `iso`, `weight_threshold`, `has_color`,
@@ -34,6 +45,24 @@
 // `weight` / `color_attr` buffers, and have included hash_lookup.glsl (for
 // `BlockIndex` + `vrFindBlockPtr`), color_common.glsl and
 // marching_cubes_common.glsl (for `mcCornerShift`).
+
+// The workgroup's thread count, as a COMPILE-TIME constant.
+//
+// The full dimension product rather than gl_WorkGroupSize.x, because the two
+// agree only while local_size_y/z are 1. That is true today (the emitted SPIR-V
+// is `LocalSize 256 1 1`) and nothing states it, so a later y/z dimension --
+// to cut the idle lanes the emitters note below block_size 8 -- would silently
+// race 8*Ny*Nz writers onto the 8 s_neighbour slots and re-mesh every voxel
+// Ny*Nz times. Both forms compile; only this one stays correct.
+//
+// Constant rather than a local read off gl_WorkGroupSize, because the scan
+// below SIZES AN ARRAY by it. A hardcoded 256 there was correct only while the
+// layout said 256, and the TODO(mesh) in each emitter books exactly the change
+// that would break it: a smaller group would leave the top of s_cell_off
+// unscanned, which reads back as an unsigned underflow in a cell's budget
+// rather than as anything a test would notice.
+const uint kGroupThreads =
+    gl_WorkGroupSize.x * gl_WorkGroupSize.y * gl_WorkGroupSize.z;
 
 // Local voxel index within a block (x-fastest), matching the attribute layout
 // BlockIndex::ptr + local the tsdf integrator writes.
@@ -184,6 +213,74 @@ int mcCellSigns(int bs, ivec3 base) {
     }
   }
   return cube_index;
+}
+
+// Cells the per-cell offset array holds at once. Mirrored by kMaxScanCells in
+// marching_cubes.cpp, which REPORTS a block with more cells than this rather
+// than refusing it (the default emitter walks such a block a chunk at a time).
+// The sharing kernel refuses one anyway, on its own kMaxSharedCells, because
+// its edge table would run off the end.
+const uint kMaxScanCells = 512u;
+
+// Per-cell TRIANGLE OFFSET within the block's reserved triangle range: the
+// exclusive prefix sum of every cell's count, stored shifted by one so entry
+// `local` is where cell `local` starts and entry `local + 1` is one past its
+// last triangle. The difference of two adjacent entries is therefore that
+// cell's count, which is why nothing else stores one.
+//
+// This replaced a shared cursor -- `s_cursor` here, `s_icursor` in the sharing
+// kernel -- that handed runs out in whatever order cells reached it. Correct
+// either way, since every slot landed inside the block's own reservation, but
+// the ORDER was not reproducible: a block re-meshed to identical geometry could
+// permute its own triangles inside its own unchanged range. Invisible to a
+// consumer reading the mesh; fatal to one binding per-triangle state to the
+// arena slot, which is what the projective texture atlas does.
+//
+// VERTEX slots are deliberately left on their arrival-order atomic. Under
+// sharing a vertex is reached only through the index run the kernel writes
+// itself, so permuting them renames nothing a consumer can key on -- and giving
+// them fixed offsets would need a second scan over a count that is not known
+// until the edges are walked.
+//
+// Entry 0 is the fixed zero an exclusive prefix starts from, and the only entry
+// a counting pass never writes: it writes `local + 1` for each of the block's
+// cells. A count pass must therefore write UNCONDITIONALLY -- including the
+// zero -- so no entry carries a previous chunk's value, and entry 0 must be
+// zeroed once. The scan never touches it (every round writes `i >= d >= 1`), so
+// once is once per dispatch and not once per chunk.
+shared uint s_cell_off[kMaxScanCells + 1u];
+
+// Turn the per-cell counts in s_cell_off[1 .. count] into those exclusive
+// prefix sums, in place. Hillis-Steele over the block's own cell count rather
+// than the array's capacity, so a smaller block pays fewer rounds.
+//
+// ONE copy for both kernels, which is the whole reason it lives here: a fix to
+// the barrier placement, to the read-before-write ordering, or to the `i >= d`
+// guard has to reach both emitters or it mis-slots triangles in the one it
+// misses, silently and with exact counters.
+//
+// Every thread must reach every barrier, so the bounds tests gate the memory
+// access and never the iteration. `tmp` is read before the write barrier and
+// applied after it, which is what keeps a round from reading a neighbour's
+// already-updated value. `kScanSlots` covers the array at the workgroup's
+// actual width -- see kGroupThreads.
+void mcScanCellOffsets(uint tid, uint count) {
+  const uint kScanSlots = (kMaxScanCells + kGroupThreads) / kGroupThreads;
+  uint tmp[kScanSlots];
+  for (uint d = 1u; d <= count; d <<= 1u) {
+    for (uint s = 0u; s < kScanSlots; ++s) {
+      uint i = tid + s * kGroupThreads;
+      tmp[s] = (i <= count && i >= d) ? s_cell_off[i - d] : 0u;
+    }
+    barrier();
+    for (uint s = 0u; s < kScanSlots; ++s) {
+      uint i = tid + s * kGroupThreads;
+      if (i <= count && i >= d) {
+        s_cell_off[i] += tmp[s];
+      }
+    }
+    barrier();
+  }
 }
 
 #endif  // VR_MARCHING_CUBES_SPARSE_COMMON_GLSL
