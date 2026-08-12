@@ -16,7 +16,7 @@ include(FetchContent)
 FetchContent_Declare(
   stb
   GIT_REPOSITORY https://github.com/nothings/stb.git
-  GIT_TAG 31c1ad37456438565541f4919958214b6e762fb4
+  GIT_TAG 2c980bb59875b0d32144a71867fbdebb2f77cd20
   GIT_SHALLOW FALSE)
 FetchContent_MakeAvailable(stb)
 
@@ -36,7 +36,7 @@ target_include_directories(vr_stb_image SYSTEM INTERFACE "${stb_SOURCE_DIR}")
 FetchContent_Declare(
   tinyply
   GIT_REPOSITORY https://github.com/ddiakopoulos/tinyply.git
-  GIT_TAG 40aa4a0ae9e9c203e11893f78b8bcaf8a50e65f0 # 2.3.4
+  GIT_TAG c9bb690dfe5e9105961e9e28120c48c9ae084bc6 # 3.0
   GIT_SHALLOW FALSE
   SOURCE_SUBDIR do-not-add-tinyply-cmake)
 FetchContent_MakeAvailable(tinyply)
