@@ -2958,3 +2958,72 @@ unchanged field and asserts the arena matches **slot for slot**. It runs over
 both kernels, and it earned its keep immediately: with only the default kernel
 converted it failed on the sharing one with 5 373 differing slots, which is how
 that half of the change was found rather than assumed.
+
+### 2026-08-12 — A re-meshed block is not a reshaped one, and on room0 only **2.2%** of re-meshed blocks change triangulation — so a slot-keyed per-triangle cache survives far longer than the dirty share suggests.
+
+Every coverage number this file records — room0's 83% dilated, the iPad's 25%
+median — answers "how many blocks does an incremental pass redo". Building a
+progressive texture atlas on the arena triangle slot needs a different number:
+how many of those blocks come out **different**. Nothing measured it, and the
+two are not close.
+
+**Why they diverge.** A block re-meshes because something in its `+{0,1}^3`
+neighbourhood changed, which is almost always a TSDF value drifting under its
+running average. A value that drifts without crossing the iso-surface leaves
+every cell's marching-cubes case exactly as it was, so the block re-emits the
+same triangles — and, since the 2026-08-12 scanned-offset decision above, into
+the same arena slots. Anything keyed by slot survives it untouched. Only a
+block whose case set actually moved loses its state.
+
+**Measured on room0, 120 frames, `--incremental`, three runs, identical to the
+block:** 116 of 120 extracts incremental, **79.9% of blocks re-meshed**, and of
+those **2.2% changed triangulation — 12 337 of 573 366**. So ~1.8% of the
+active set loses per-triangle state per extract, against the 79.9% a
+re-mesh-share reading would have predicted: a patch survives on the order of
+fifty extracts. And room0 is the *pessimistic* fixture — it re-meshes 79.9%
+where the device median is 25%, so the device number can only be lower.
+
+**That is the gate for a progressive atlas, and it is comfortably open.** At
+TextureMe's `w_max` of 5 a patch needs about five observations to saturate; it
+gets fifty. The risk that the whole approach degenerates into
+one-frame-projective-texturing-with-extra-steps does not materialise on this
+fixture.
+
+**A per-block hash of the emitted triangulation, not a per-cell case array.**
+The obvious mechanism is to keep the previous extract's cube index per cell —
+512 B per block, ~55 MB at device scale. An XOR-fold of `(cell index, case)`
+over the block's emitting cells is 4 B per block and answers the same question,
+and the counting pass already has every input in a register. XOR because the
+strided loop and the per-lane combine give no fixed order, so the combine has
+to be commutative; the cell index is folded in so two cells swapping cases
+still moves it. Cells that emit **nothing** contribute nothing, deliberately: a
+cell flipping between all-inside and all-outside changes its cube index and not
+its output, and folding that in would count a block as reshaped for a change no
+consumer can observe.
+
+**Stored on every pass, counted only on an incremental one.** A full extract
+visits every active block and must leave its hash current, or the first
+incremental pass after it compares against whatever an older extract left and
+reports the entire active set as reshaped. That asymmetry is the whole of the
+bookkeeping.
+
+**Measured on the default kernel alone.** The marching-cubes case is a property
+of the *field*, not of the emitter, so `share_vertices` cannot change the
+number — and the sharing kernel does not carry the binding, reporting 0. Opt-in
+(`MarchingCubesConfig::track_retriangulation`), and free when off; measured free
+when on, at 0.60–0.62 ms of dispatch against 0.61–0.62 without it.
+
+**Two bugs it cost, both of the same family: a word the host did not know had
+moved.** Adding binding 10 to the default kernel without raising its declared
+binding count from 10 to 11 left the shader storing through a descriptor the
+layout never declared — which surfaced not as a validation error but as the
+*volume* tier failing with "allocation kept overflowing after resize", because
+the same kernel probes the hash table. And the per-dispatch scratch reset wrote
+three words where there are now four, so the new counter accumulated across
+every extract and read 210 535% before anyone could read it as a share.
+
+**Verified by a discriminating pair rather than by a threshold.** Re-mesh every
+block against a field nothing moved and the count must be **0**; re-mesh the
+same blocks against a grown sphere and it must be **positive**. A hash that
+always matched would pass the first and fail the second, and one that never
+matched the reverse — which is what a single assertion could not have caught.

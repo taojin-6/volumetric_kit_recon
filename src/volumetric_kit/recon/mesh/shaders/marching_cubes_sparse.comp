@@ -129,6 +129,10 @@ layout(set = 0, binding = 7, scalar) buffer DrawCommand {
   // at the host's zero on a full pass, where the answer is num_active_blocks
   // and one atomic per workgroup to restate it is not free.
   uint remeshed_blocks;
+  // Of those, the ones whose TRIANGULATION actually moved -- see the case-hash
+  // note beside `case_hashes`. Bumped once per re-meshing workgroup that finds
+  // its hash changed, under the same pc.incremental gate as the counter above.
+  uint retriangulated_blocks;
 };
 
 // Where each block's output landed; see marching_cubes_block_span.glsl for the
@@ -153,6 +157,31 @@ layout(set = 0, binding = 8, scalar) buffer BlockSpans {
 layout(set = 0, binding = 9, scalar) readonly buffer DirtyFlags {
   uint dirty_flags[];
 };
+
+// One hash per block slot of the block's EMITTED TRIANGULATION -- which cells
+// emit, and which marching-cubes case each of them takes. A 1-element dummy
+// when pc.track_cases is 0, exactly as the span table is.
+//
+// It exists to answer one question the re-mesh count cannot: of the blocks an
+// incremental pass re-meshed, how many actually changed shape? A block is
+// re-meshed because something in its `+{0,1}^3` neighbourhood moved, which is
+// usually a TSDF value drifting under a running average -- and a drifting value
+// that does not cross the iso-surface leaves every cell's case exactly as it
+// was. Such a block re-emits the same triangles at the same slots (which is
+// what the scanned per-cell offset guarantees), so per-triangle state keyed by
+// slot survives it. One whose case set moved does not, and every patch bound to
+// its range has to be discarded.
+//
+// So `retriangulated_blocks / remeshed_blocks` is what a progressive texture
+// atlas actually trades against, and it is strictly smaller than the dirty
+// share every measurement so far has quoted. Nothing else can report it: the
+// case set lives in registers for the length of one dispatch.
+//
+// Cells that emit NOTHING contribute nothing, deliberately. A cell flipping
+// between all-inside and all-outside changes its cube index and not its output,
+// and folding that in would count a block as reshaped for a change no consumer
+// can observe.
+layout(set = 0, binding = 10, scalar) buffer CaseHashes { uint case_hashes[]; };
 
 layout(push_constant, scalar) uniform PushConstants {
   int block_size;          // voxels per block edge
@@ -189,6 +218,12 @@ layout(push_constant, scalar) uniform PushConstants {
   // Slots `dirty_flags` addresses. A block past it is treated as dirty -- the
   // conservative direction, and it re-meshes rather than going stale.
   uint dirty_capacity;
+  // 0 = the case-hash binding is a 1-element dummy; do not read or store
+  // through it, and do not count retriangulations. Gates
+  // MarchingCubesConfig::track_retriangulation, exactly as write_spans gates
+  // its own table. Appended at the END for the reason those two were: this
+  // block is one ABI shared with the sharing kernel and SparsePushConstants.
+  uint track_cases;
 } pc;
 
 // mcCornerShift / mcCellNormal / mcEdgeVertex / mcCellTriangleCount /
@@ -253,6 +288,11 @@ shared uint s_dirty;
 shared uint s_old_base;
 shared uint s_old_count;
 shared bool s_reuse;
+// XOR-fold of every emitting cell's (cell index, case) -- see `case_hashes`.
+// XOR because the counting loop strides the block and the lanes combine in no
+// fixed order, so the combine has to be commutative; the cell index is folded
+// in so two cells swapping cases still moves it.
+shared uint s_case_hash;
 
 // Cells this kernel can scan, and so the largest block it will mesh. Mirrors
 // kMaxSharedCells in marching_cubes_sparse_shared.comp and the host constant of
@@ -384,6 +424,7 @@ void main() {
     s_block_tris = 0u;
     s_block_base = 0u;
     s_dirty = 0u;
+    s_case_hash = 0u;
   }
   // The offset array is zeroed WHOLE, not just over [0, vpb]: the scan below
   // walks the block's cells, but entry 0 is the fixed zero an exclusive prefix
@@ -466,9 +507,14 @@ void main() {
   // this shape is a win. TODO(mesh): revisit if a consumer ships a smaller
   // block.
   uint mine = 0u;
+  uint my_hash = 0u;
   for (uint local = tid; local < vpb; local += group_threads) {
-    int n = mcCellTriangleCount(mcCellSigns(bs, mcLocalBase(local, bs)));
+    int cell_case = mcCellSigns(bs, mcLocalBase(local, bs));
+    int n = mcCellTriangleCount(cell_case);
     if (n != 0) {
+      // Folded per LANE and combined once below, the way `mine` is: one
+      // threadgroup atomic per lane rather than one per emitting cell.
+      my_hash ^= (local * 0x9E3779B1u) ^ (uint(cell_case) * 0x85EBCA6Bu);
       // Shifted by one: entry `local + 1` is cell `local`'s count going in and
       // one-past-its-last-triangle coming out of the scan, which is what makes
       // the exclusive prefix fall out of an inclusive one.
@@ -485,7 +531,33 @@ void main() {
   if (mine != 0u) {
     atomicAdd(s_block_tris, mine);
   }
+  if (my_hash != 0u) {
+    atomicXor(s_case_hash, my_hash);
+  }
   barrier();
+
+  // Did this block's shape actually move, or was it re-meshed for a neighbour's
+  // sake and re-emit exactly what it had? Only reachable on an incremental
+  // pass, and only for a block that got past the clean early-return -- which is
+  // the whole point: the ratio to `remeshed_blocks` is what says how much of a
+  // re-mesh a slot-keyed cache actually loses.
+  //
+  // A slot the buffer has never held a hash for reads 0 and so compares
+  // changed, which is the honest answer for a block no previous pass described.
+  //
+  // STORED on every pass, COUNTED only on an incremental one. A full extract
+  // visits every active block and must leave its hash current, or the first
+  // incremental pass after it would compare against whatever an older extract
+  // left and report the whole active set as reshaped.
+  if (pc.track_cases != 0u && tid == 0u) {
+    uint slot = uint(block.ptr) / uint(pc.voxels_per_block);
+    if (case_hashes[slot] != s_case_hash) {
+      case_hashes[slot] = s_case_hash;
+      if (pc.incremental != 0u) {
+        atomicAdd(retriangulated_blocks, 1u);
+      }
+    }
+  }
 
   // The counts become offsets. Uniform across the workgroup and barrier-bound,
   // so it sits between the two phases rather than inside either. Bounded by the

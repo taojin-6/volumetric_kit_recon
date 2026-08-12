@@ -140,6 +140,10 @@ layout(set = 0, binding = 7, scalar) buffer DrawCommand {
   // kernels describe the same bytes here -- the host resets all three scratch
   // words for either.
   uint remeshed_blocks;
+  // The default kernel's; untouched here. Declared so the two kernels agree on
+  // the layout of the one command buffer they share -- omitting it would leave
+  // this block a word short of the host's reset and of its sibling's writes.
+  uint retriangulated_blocks;
 };
 // The real index buffer -- a property of this dispatch, since a shared vertex is
 // referenced by several triangles from several cells.
@@ -192,6 +196,14 @@ layout(push_constant, scalar) uniform PushConstants {
   // changed, which re-meshes a block that may not need it rather than leaving
   // it stale.
   uint dirty_capacity;
+  // The default kernel's case-hash gate. Declared but UNUSED here, for the
+  // reason vertex_capacity is declared and unused in the sibling: this block is
+  // one ABI shared with marching_cubes_sparse.comp and SparsePushConstants, so
+  // omitting a field would shift nothing today and silently misread the next
+  // one appended. Retriangulation is measured on the default kernel alone --
+  // the marching-cubes case is a property of the field, not of the emitter, so
+  // the number is the same either way.
+  uint track_cases;
 } pc;
 
 // mcCornerShift / mcCellNormal / mcEdgeOwner / mcEdgeVertex + the near-tangent

@@ -298,6 +298,9 @@ vr::Status run(const Options& opt) {
               // against, and it is sized by the grid rather than the surface --
               // so it stays off unless asked for.
               c.track_block_spans = opt.incremental;
+              // Measured on the same runs, since the whole reason to run
+              // --incremental is to find out what it costs and saves.
+              c.track_retriangulation = opt.incremental;
               return c;
             }()));
 
@@ -431,6 +434,10 @@ vr::Status run(const Options& opt) {
   std::size_t incremental_extracts = 0;
   std::uint64_t sum_remeshed = 0;
   std::uint64_t sum_incr_active = 0;
+  // Of the blocks re-meshed, the ones whose triangulation actually moved. The
+  // number a per-triangle cache keyed by arena slot trades against, which the
+  // re-mesh share above is only an upper bound on.
+  std::uint64_t sum_retriangulated = 0;
   double sum_total = 0.0, sum_compact = 0.0, sum_arena = 0.0;
   double sum_dispatch = 0.0, sum_read = 0.0;
   mesh::ExtractTimings last_rt{};
@@ -568,6 +575,7 @@ vr::Status run(const Options& opt) {
         ++incremental_extracts;
         sum_remeshed += rt.remeshed_blocks;
         sum_incr_active += rt.active_blocks;
+        sum_retriangulated += rt.retriangulated_blocks;
       }
       last_rt = rt;
       if (fused % 100 == 0) {
@@ -604,6 +612,19 @@ vr::Status run(const Options& opt) {
           sum_incr_active > 0 ? 100.0 * static_cast<double>(sum_remeshed) /
                                     static_cast<double>(sum_incr_active)
                               : 0.0);
+      // And how much of THAT re-mesh actually changed shape. A block re-meshed
+      // because a neighbour's TSDF drifted, whose own cells all kept their
+      // marching-cubes case, re-emits the same triangles into the same arena
+      // slots -- so the share below, not the one above, is what a slot-keyed
+      // per-triangle cache loses per pass.
+      std::printf(
+          "  retri   %.1f%% of re-meshed blocks changed triangulation "
+          "(%llu of %llu)\n",
+          sum_remeshed > 0 ? 100.0 * static_cast<double>(sum_retriangulated) /
+                                 static_cast<double>(sum_remeshed)
+                           : 0.0,
+          static_cast<unsigned long long>(sum_retriangulated),
+          static_cast<unsigned long long>(sum_remeshed));
     }
   }
 

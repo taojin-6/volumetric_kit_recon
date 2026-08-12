@@ -147,6 +147,13 @@ struct ExtractTimings {
   /// the whole feature trades against, and one no caller can compute (the
   /// dilation happens on-device, off shared memory the host never sees).
   std::uint32_t remeshed_blocks = 0;
+  /// Of @ref remeshed_blocks, those whose emitted triangulation **changed**.
+  ///
+  /// 0 unless @ref MarchingCubesConfig::track_retriangulation is on and this
+  /// pass went incremental. See that flag for why the ratio of the two, rather
+  /// than either alone, is what a per-triangle cache keyed by arena slot trades
+  /// against.
+  std::uint32_t retriangulated_blocks = 0;
   /// Marching-cubes dispatches this call ran: 1 in the steady state, 2 when
   /// the planned capacity was under what the field emitted, so the arena was
   /// refitted to the measured count and the surface re-run. A run that keeps
@@ -471,6 +478,38 @@ struct MarchingCubesConfig {
   /// @note Applies to the sparse @ref extract overloads only. The dense one
   ///       meshes a caller-supplied grid with no block structure to describe.
   bool track_block_spans = false;
+
+  /// @brief Count, per incremental extract, the re-meshed blocks whose emitted
+  ///        triangulation actually **moved**.
+  ///
+  /// Off by default and free when off: no `num_blocks * 4` hash buffer, no
+  /// per-lane fold in the counting loop, and the kernel told not to compare.
+  ///
+  /// @ref ExtractTimings::remeshed_blocks already says how many blocks a pass
+  /// redid. It does not say how many of them came out *different*, and those
+  /// are not the same question. A block is re-meshed because something in its
+  /// `+{0,1}^3` neighbourhood changed, which is usually a TSDF value drifting
+  /// under its running average — and a value that drifts without crossing the
+  /// iso-surface leaves every cell's marching-cubes case exactly as it was.
+  /// Such a block re-emits the same triangles into the same arena slots, so
+  /// anything keyed by slot survives it. One whose case set moved does not.
+  ///
+  /// So `retriangulated_blocks / remeshed_blocks` is the fraction a slot-keyed
+  /// per-triangle cache actually loses per pass, and it is strictly smaller
+  /// than the dirty share. Nothing outside the kernel can report it: the case
+  /// set exists in registers for the length of one dispatch.
+  ///
+  /// @note Measured on the default kernel only. The case is a property of the
+  ///       *field*, not of the emitter, so the number does not depend on
+  ///       @ref share_vertices — but the sharing kernel does not carry the
+  ///       binding, and reports 0.
+  ///
+  /// @note Meaningful only on @ref MarchingCubes::extract_device_incremental,
+  ///       and only on a pass that actually went incremental. A full extract
+  ///       still refreshes every hash it visits (or the next incremental pass
+  ///       would call the whole active set reshaped) but counts nothing, and
+  ///       @ref ExtractTimings::retriangulated_blocks reads 0.
+  bool track_retriangulation = false;
 };
 
 /// @brief Where one block's geometry landed in the extract that meshed it.
@@ -1028,6 +1067,16 @@ class VR_MESH_API MarchingCubes {
   // table nobody asked for. Mirrors color_dummy_ above, and the `write_spans`
   // push flag is what keeps the kernel off it.
   Buffer block_spans_dummy_;
+
+  // One hash per block slot of that block's emitted triangulation, grown
+  // alongside block_spans_ and by the same event. Empty unless
+  // MarchingCubesConfig::track_retriangulation asked for it, in which case
+  // case_hashes_dummy_ is empty instead -- the binding must be valid either
+  // way, and the `track_cases` push flag is what makes the opt-out free rather
+  // than merely cheap. Device-side only: nothing reads it on the host, so
+  // unlike the span table it needs no stamp beside it.
+  Buffer case_hashes_;
+  Buffer case_hashes_dummy_;
   // The generation block_spans_ describes; 0 when it describes nothing. Set
   // only once an extract has succeeded, and cleared by anything that leaves the
   // table not describing the mesh this object last handed out -- a failed
