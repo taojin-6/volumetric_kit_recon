@@ -99,6 +99,14 @@ Result<PatchAtlas> PatchAtlas::create(Device& device, Allocator& allocator,
   return atlas;
 }
 
+Status PatchAtlas::reserve(std::uint32_t triangles) {
+  if (!valid()) {
+    return Status::invalid_argument("PatchAtlas::reserve: moved-from");
+  }
+  if (triangles == 0) return {};
+  return ensure_capacity(triangles);
+}
+
 void PatchAtlas::invalidate() noexcept {
   if (!patches_.valid()) return;
   // Zeroing sets every weight byte to 0, which is what makes the next

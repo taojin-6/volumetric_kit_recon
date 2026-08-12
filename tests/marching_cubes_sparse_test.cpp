@@ -1545,6 +1545,58 @@ int main() {
     CHECK(after_dense.triangle_capacity == before_dense.triangle_capacity);
   }
 
+  // --- Reserving the arena up front ----------------------------------------
+  //
+  // Same property the patch atlas's own reserve test asserts, one tier down:
+  // not "big enough" -- the arena grows on demand anyway -- but that the
+  // BUFFER DOES NOT MOVE, since a grow frees an allocation an in-flight draw
+  // may still be reading and re-plans every block's range, which is what
+  // unbinds a slot-keyed cache.
+  {
+    mesh::MarchingCubesConfig reserve_config;
+    reserve_config.track_block_spans = true;
+    vr::Result<mesh::MarchingCubes> reserve_result =
+        mesh::MarchingCubes::create(device.value(), allocator.value(),
+                                    reserve_config);
+    CHECK(reserve_result.ok());
+    mesh::MarchingCubes reserve_mc = std::move(reserve_result).value();
+
+    CHECK(reserve_mc.reserve(0).ok());  // no-op, not an error
+
+    // Far past what this sphere emits, so the extract cannot outgrow it.
+    mesh::ExtractTimings first{};
+    CHECK(reserve_mc.reserve(1u << 16).ok());
+    vr::Result<mesh::DeviceMesh> reserved_mesh =
+        reserve_mc.extract_device(grid, 0.0f, &first);
+    CHECK(reserved_mesh.ok());
+    CHECK(first.emitted_triangles > 0);
+    // One dispatch: a reservation that did not actually take would show up as
+    // a refit round here rather than as a wrong number anywhere.
+    CHECK(first.dispatches == 1);
+    const VkBuffer arena_before = reserved_mesh.value().vertices;
+    const std::uint64_t bytes_before = first.arena_bytes;
+
+    mesh::ExtractTimings second{};
+    vr::Result<mesh::DeviceMesh> again_mesh =
+        reserve_mc.extract_device(grid, 0.0f, &second);
+    CHECK(again_mesh.ok());
+    CHECK(second.dispatches == 1);
+    // The allocation survived a second extract of the same surface.
+    CHECK(again_mesh.value().vertices == arena_before);
+    CHECK(second.arena_bytes == bytes_before);
+  }
+  // A ring cannot be reserved a slot at a time: reserving one and leaving the
+  // rest to grow is the event a reservation exists to remove, so it is refused
+  // rather than half-done.
+  {
+    mesh::MarchingCubesConfig ring_config;
+    ring_config.slot_count = 2;
+    vr::Result<mesh::MarchingCubes> ring_result = mesh::MarchingCubes::create(
+        device.value(), allocator.value(), ring_config);
+    CHECK(ring_result.ok());
+    CHECK(!std::move(ring_result).value().reserve(1024).ok());
+  }
+
   // A block this kernel's compile-time cell table cannot index is refused up
   // front, not meshed wrong: the shared array is sized for block_size 8, and an
   // out-of-bounds threadgroup write is invisible to every validation layer and

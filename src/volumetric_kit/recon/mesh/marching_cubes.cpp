@@ -592,6 +592,26 @@ const BlockSpan* MarchingCubes::block_spans() const noexcept {
              : static_cast<const BlockSpan*>(block_spans_.mapped());
 }
 
+Status MarchingCubes::reserve(std::uint32_t triangles) {
+  if (!valid()) {
+    return Status::invalid_argument("MarchingCubes::reserve: moved-from");
+  }
+  if (slot_count_ != 1) {
+    return Status::invalid_argument(
+        "MarchingCubes::reserve: needs slot_count == 1 (this extractor has " +
+        std::to_string(slot_count_) +
+        "); reserving one slot of a ring leaves the rest to grow, which is the "
+        "event the reservation exists to remove");
+  }
+  if (triangles == 0) return {};
+  // Straight through to the same growth path an extract uses, with the vertex
+  // half derived by the same rule -- so a reserved arena is byte-for-byte what
+  // an extract of that size would have allocated, and the planner below never
+  // learns this happened.
+  return ensure_output_buffers(triangles, plan_vertex_capacity(triangles), 0u,
+                               0u);
+}
+
 void MarchingCubes::release_through(std::uint64_t generation) noexcept {
   // Monotonic: an older report never un-releases a slot. A consumer finishing
   // frames out of order, or reporting a stale value after a newer one, would

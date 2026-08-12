@@ -3115,3 +3115,67 @@ is what pins the read-modify-write as actually reading. The addressing half runs
 with no device at all: `patch_texel_index` must be a bijection onto
 `[0, patch_texel_count)` for every leg, or patches silently overlap with no
 allocation error and no validation message anywhere.
+
+### 2026-08-12 — A grow-only buffer is the wrong default for a consumer that keys state to a slot, so both the arena and the atlas can be **reserved** — which pre-grows the allocation without touching the capacity planner.
+
+The mesh arena is grow-only and fitted to the surface, which is right for a
+caller that only reads the mesh: it pays for what the scan reaches rather than
+for what it might. It is wrong for a caller holding per-triangle state keyed by
+the **arena slot** — `texture::PatchAtlas` — and wrong twice over.
+
+**A grow unbinds every patch.** Growing reallocates, and the extract that
+follows re-plans every block's range through a global atomic in workgroup
+arrival order, so slot `k` afterwards names a different triangle. Nothing
+reports this: the counts are right, the mesh is right, and the surface simply
+stops being textured. It reaches the caller only as
+`ExtractTimings::incremental` going `false`.
+
+**A grow also frees memory a draw is reading.** `vmaDestroyBuffer` runs
+immediately with no fence wait, because this tier's own work is fence-blocked
+inside `submit_single_time` and never needed one. A consumer drawing the arena
+directly — which is the whole of interop seam B — gets a use-after-free rather
+than a stale image. The same is true of the atlas, whose `fuse` grows it to fit
+each mesh: on a *frozen* mesh that happens once before anything draws, which is
+why the first demo never saw it, and on a growing scan it is most frames.
+
+So `MarchingCubes::reserve` and `PatchAtlas::reserve` pre-grow the allocation
+to a caller-named triangle count. Reserving both to the same number is the
+point — the two buffers are indexed by the same slot, and reserving one leaves
+the other deciding when a realloc happens.
+
+**It does not bias the planner, and that is the whole of its design.**
+`plan_capacity` deliberately has no floor: flooring it at what a slot already
+holds is what once made every extract request 1.5x the last, geometrically, and
+took an iPad Pro to a 1.1 GB arena for 36 904 triangles (0.59% full). `reserve`
+grows the buffers through the same `ensure_output_buffers` path an extract uses
+and leaves the plan alone. The plan stays a request; `ensure_output_buffers`
+keeps whatever the slot already holds; so a reserved arena simply never grows
+again until the surface outruns it. Nothing in the planner learns this
+happened, which is what keeps the pathology from coming back by a different
+door.
+
+**Refused for a ring rather than half-done.** `reserve` grows the *current*
+slot, so at `slot_count > 1` it would leave the rest to grow — the exact event
+it exists to remove, now happening unpredictably instead of on the first
+extract. It returns `InvalidArgument` above one slot. That is not a limitation
+being papered over: a slot-keyed cache cannot use a ring at all, since each
+extract writes a different arena, so one slot is the only configuration where
+reserving means anything.
+
+**Exceeding it is not an error.** The arena and the atlas both grow as they
+always did, and a slot-keyed consumer sees it through the same
+`incremental == false` it already watches. So this makes the event *rare*, not
+impossible — a start-of-scan sizing decision, not a guarantee.
+
+**What it buys, in memory rather than in principle.** A slot-keyed consumer has
+to run at one slot, and dropping a 3-deep ring removes two thirds of the largest
+allocation the iOS scanner makes: 3 089 MB of arenas becomes ~1 GB, which more
+than pays for the ~460 MB atlas beside it. Reserving is cheaper than the ring
+it replaces, before any voxel-size change.
+
+**Verified on the property that matters, not on the size.** Both tests assert
+the **handle does not move** across a later extract or fuse — "big enough"
+would have passed anyway, since both buffers grow on demand. The arena test
+also asserts `dispatches == 1`, since a reservation that silently did not take
+shows up as a refit round rather than as a wrong number anywhere; and the ring
+refusal is asserted directly.

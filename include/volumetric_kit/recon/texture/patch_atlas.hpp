@@ -225,6 +225,32 @@ class VR_TEXTURE_API PatchAtlas {
               float occlusion_threshold = 0.02f,
               StageMetrics* metrics = nullptr);
 
+  /// @brief Grow the atlas to hold at least @p triangles of patches, now, so
+  ///        no later @ref fuse has to.
+  ///
+  /// @ref fuse grows the buffer to fit whatever mesh it is given, carrying the
+  /// existing patches forward -- which is correct, and still not enough for a
+  /// consumer drawing the atlas while it accumulates. Growing **reallocates**,
+  /// and the old buffer is freed with no fence wait, so a frame still reading
+  /// it gets a use-after-free rather than a stale image. On a scan whose mesh
+  /// is growing that is not a corner case; it is most frames.
+  ///
+  /// Reserving to the scan's expected ceiling makes the handle stable for the
+  /// run, which is what lets a renderer bind it once per slot instead of
+  /// re-deriving it every frame under a lock. Pair it with
+  /// `mesh::MarchingCubes::reserve` on the same triangle count: the two
+  /// buffers are indexed by the same slot, and reserving one without the other
+  /// leaves the pair's weaker half deciding when a realloc happens.
+  ///
+  /// Exceeding it later is not an error -- the atlas grows as it always did.
+  /// So this makes the event rare rather than impossible.
+  ///
+  /// @param triangles Triangle slots to hold patches for; 0 reserves nothing.
+  /// @return OK, or @ref Status::Code::InvalidArgument on a moved-from atlas or
+  ///         a reservation past the device `maxStorageBufferRange`; a backend
+  ///         error if the allocation fails.
+  Status reserve(std::uint32_t triangles);
+
   /// @brief Discard every patch, so the next @ref fuse starts from nothing.
   ///
   /// Call it when the arena's triangle slots stop meaning what they meant --

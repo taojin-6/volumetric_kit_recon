@@ -307,6 +307,53 @@ int main() {
   }
   CHECK(grew > 0);
 
+  // --- Reservation --------------------------------------------------------
+  //
+  // The property is not "the buffer is big enough" -- fuse() would have grown
+  // it anyway. It is that the HANDLE DOES NOT MOVE, because growing frees the
+  // old buffer with no fence wait, and a renderer drawing the atlas while a
+  // scan accumulates into it would be reading freed memory. So reserve past
+  // the mesh, fuse, and assert the handle is the one reserve produced.
+  {
+    vr::Result<rtex::PatchAtlas> reserved_result =
+        rtex::PatchAtlas::create(device.value(), allocator.value(), {});
+    CHECK(reserved_result.ok());
+    rtex::PatchAtlas reserved = std::move(reserved_result).value();
+
+    CHECK(reserved.reserve(0).ok());  // no-op, not an error
+    CHECK(reserved.triangle_capacity() == 0);
+
+    const std::uint32_t want = device_mesh.triangle_count * 2;
+    CHECK(reserved.reserve(want).ok());
+    CHECK(reserved.triangle_capacity() >= want);
+    const VkBuffer before = reserved.buffer();
+    CHECK(before != VK_NULL_HANDLE);
+    const std::uint64_t bytes_before = reserved.bytes();
+
+    CHECK(
+        reserved
+            .fuse(device_mesh, depth.data(), color.data(), kWidth, kHeight, cam)
+            .ok());
+    // Same allocation, not merely a big enough one.
+    CHECK(reserved.buffer() == before);
+    CHECK(reserved.bytes() == bytes_before);
+    // And it still fused: a reservation must not make the pass a no-op.
+    std::size_t written_after_reserve = 0;
+    for (std::size_t k = 0;
+         k < static_cast<std::size_t>(device_mesh.triangle_count) *
+                 reserved.texels_per_patch();
+         ++k) {
+      if (weight_of(reserved.mapped()[k]) != 0) ++written_after_reserve;
+    }
+    CHECK(written_after_reserve > 0);
+
+    // Reserving below what is already held keeps the larger allocation rather
+    // than shrinking to fit -- the atlas is grow-only, like the arena it
+    // shadows.
+    CHECK(reserved.reserve(1).ok());
+    CHECK(reserved.buffer() == before);
+  }
+
   // --- Invalidation -------------------------------------------------------
   //
   // The answer to a full extract, where every arena slot is re-reserved and no

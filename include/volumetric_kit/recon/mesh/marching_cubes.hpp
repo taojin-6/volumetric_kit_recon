@@ -817,6 +817,55 @@ class VR_MESH_API MarchingCubes {
   ///          to remove a lock the consumer is already holding.
   void release_through(std::uint64_t generation) noexcept;
 
+  /// @brief Grow the output buffers to hold at least @p triangles, now, so no
+  ///        later extract has to.
+  ///
+  /// The arena is grow-only and sized from the surface, which is right for a
+  /// caller that only reads the mesh: it pays for what the scan actually
+  /// reaches. It is wrong for a caller holding **per-triangle state keyed by
+  /// the arena slot** -- a `texture::PatchAtlas`, above all -- because a grow
+  /// reallocates, and the slots a re-plan hands out afterwards name different
+  /// triangles. Every patch is then bound to geometry that has moved, which is
+  /// not a memory error and not visible in any count: it renders as a surface
+  /// that quietly stops being textured.
+  ///
+  /// Reserving up front removes the event rather than coping with it. It also
+  /// removes the second half of the same hazard, which is worse: a grow frees
+  /// buffers an in-flight draw may still be reading, with no fence wait, so a
+  /// consumer drawing the arena directly gets a use-after-free rather than a
+  /// stale image.
+  ///
+  /// @note This does **not** bias the capacity planner, deliberately. Flooring
+  ///       `plan_capacity` at what a slot already holds is what once made every
+  ///       extract ask for 1.5x the last, geometrically -- an iPad Pro reached
+  ///       a 1.1 GB arena for 36 904 triangles. This grows the buffers and
+  ///       leaves the plan alone; the plan is a request, and
+  ///       `ensure_output_buffers` keeps whatever the slot already holds, so a
+  ///       reserved arena simply never grows again until the surface outruns
+  ///       it.
+  ///
+  /// @warning Call it **before the first extract**. It resets the indirect
+  ///          draw command, so a call between extracts blanks one frame's draw
+  ///          -- harmless, but pointless, and the reservation is a start-of-
+  ///          scan decision either way.
+  ///
+  /// Exceeding the reservation later is not an error: the arena grows as it
+  /// always did, and a slot-keyed consumer sees that through
+  /// @ref ExtractTimings::incremental going `false`. So this is a way to make
+  /// that event *rare*, not a promise it cannot happen.
+  ///
+  /// @param triangles Triangle slots to reserve. The vertex arena is sized from
+  ///                  it by the same rule an extract uses, so
+  ///                  @ref MarchingCubesConfig::share_vertices is accounted
+  ///                  for; 0 reserves nothing.
+  /// @return OK, or @ref Status::Code::InvalidArgument for a moved-from
+  ///         extractor or a @ref MarchingCubesConfig::slot_count above one --
+  ///         this reserves the *current* slot, and a ring would be left
+  ///         partly reserved, which is worse than not reserving at all.
+  ///         A backend error if the allocation fails, and the same
+  ///         `maxStorageBufferRange` refusals an extract makes.
+  Status reserve(std::uint32_t triangles);
+
   // Rule of zero: every owned member (Buffer / ComputeKernel / pool) self-frees
   // and self-resets on move, so the defaulted moves are correct. Nothing here
   // caches a *copy* of an owned member's state -- the arena's capacity is
