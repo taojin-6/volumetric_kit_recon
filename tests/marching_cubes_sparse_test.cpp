@@ -510,7 +510,12 @@ VertexSpans vertex_spans(const mesh::Mesh& m, int block_size,
 // triangles from two independent atomics. It is also what lets this same
 // helper state the vertex-sharing invariant, where the triangle list must be
 // unchanged while the vertex array behind it shrinks ~4x.
-std::vector<std::array<float, 9>> canonical_triangles(const mesh::Mesh& m) {
+// Every triangle IN ARENA ORDER: entry i is the triangle occupying slot i, so
+// two of these compare equal only if each slot holds the same geometry in both.
+// That is a strictly stronger statement than comparing surfaces, and it is the
+// one per-triangle state keyed by arena slot depends on -- see the
+// slot-stability check in the incremental section.
+std::vector<std::array<float, 9>> arena_triangles(const mesh::Mesh& m) {
   std::vector<std::array<float, 9>> tris;
   tris.reserve(m.indices.size() / 3);
   for (std::size_t i = 0; i + 2 < m.indices.size(); i += 3) {
@@ -523,6 +528,11 @@ std::vector<std::array<float, 9>> canonical_triangles(const mesh::Mesh& m) {
     }
     tris.push_back(t);
   }
+  return tris;
+}
+
+std::vector<std::array<float, 9>> canonical_triangles(const mesh::Mesh& m) {
+  std::vector<std::array<float, 9>> tris = arena_triangles(m);
   std::sort(tris.begin(), tris.end());
   return tris;
 }
@@ -1541,7 +1551,7 @@ int main() {
   // reads back as a plausible mesh.
   vol::VoxelGridParams big_block_gp = sphere_grid_params();
   big_block_gp.block_size = 16;
-  big_block_gp.voxels_per_block = 16 * 16 * 16;  // 4096 > the kernel's 1024
+  big_block_gp.voxels_per_block = 16 * 16 * 16;  // 4096 > the kernel's 512
   big_block_gp.num_buckets = 32;
   big_block_gp.num_blocks = 256;  // = bucket_size * num_buckets
   vr::Result<vol::VoxelBlockGrid> big_block_result =
@@ -1552,11 +1562,10 @@ int main() {
   // FILLED, not merely allocated. An allocated-but-unintegrated block has
   // weight 0 at every corner, so every cell is rejected at the gather and the
   // block emits nothing -- which means the default kernel returns at its
-  // "nothing reserved" check and the uncached tail this grid exists to reach
-  // never runs. With the field written, cells 1024..4095 fall past the four
-  // slots the kernel's per-cell cache holds and take the second full gather
-  // instead of the cheap register rejection, and only then is the uncached
-  // branch exercised at all.
+  // "nothing reserved" check and the multi-chunk path this grid exists to reach
+  // never runs. With the field written, cells 512..4095 fall outside the window
+  // the kernel's per-cell offset array holds, so their chunks are rebuilt and
+  // rescanned on the way past, and only then is the branch exercised at all.
   CHECK(fill_dense_blocks(big_block_grid, 1));
   CHECK(!share_mc.extract(big_block_grid, 0.0f).ok());
   // The same grid is fine without sharing -- the refusal is the kernel's table,
@@ -1568,9 +1577,12 @@ int main() {
   const mesh::Mesh big_mesh_16 = std::move(big_mesh_16_result).value();
   CHECK(big_timings_16.active_blocks == 1);
   CHECK(big_mesh_16.triangle_count() > 0);
-  // The shortfall is REPORTED rather than refused: correct mesh, ~1.8 gathers
-  // per cell instead of ~1.1, and nothing else could tell a caller so.
-  CHECK(big_timings_16.uncached_cells_per_block == 4096 - 1024);
+  // The shortfall is REPORTED rather than refused: correct mesh, one extra
+  // signs gather for every cell past the window, and nothing else could tell a
+  // caller so. 512 rather than the 1024 the per-cell count cache used to reach,
+  // because the window is one shared array rather than four bytes of a
+  // register -- a smaller reach, and a cheaper shortfall behind it.
+  CHECK(big_timings_16.uncached_cells_per_block == 4096 - 512);
 
   // The block size is an allocation detail, so the SAME field divided into
   // eight blocks of 8 must extract to the same surface. This is what pins the
@@ -1972,6 +1984,43 @@ int main() {
     // build on. That last part is what the mixed case adds: a corrupted clean
     // range survives into here.
     CHECK(all_dirty == new_surface);
+
+    // --- The arena SLOT is stable, not merely the surface ------------------
+    //
+    // Re-mesh every block again against the SAME field. The surface obviously
+    // cannot move; what this asserts is that each triangle comes back at the
+    // same arena index, which the assertions above cannot see because they
+    // compare sorted sets.
+    //
+    // That is the property per-triangle state keyed by the arena slot rests on
+    // -- a projective texture atlas binding a patch to a slot, above all. It
+    // does NOT come for free from meshing the same field twice: a block's cells
+    // used to claim their slots through a shared cursor in whatever order they
+    // reached it, so an identical re-mesh could permute a block's triangles
+    // inside its own unchanged range. It holds now because each cell's offset
+    // is a scanned prefix over the block's cells rather than an arrival order.
+    //
+    // Both halves of the block reservation have to hold for this: a clean block
+    // is untouched, and a re-meshed one that still fits reuses its range in
+    // place. So this is also what would catch either of those quietly
+    // regressing into a relocation.
+    std::vector<std::array<float, 9>> dirty_by_slot =
+        arena_triangles(dirty_host.value());
+    mesh::ExtractTimings again_rt{};
+    vr::Result<mesh::DeviceMesh> again = inc_mc.extract_device_incremental(
+        inc_grid, 0.0f, dirty_blocks, &again_rt);
+    CHECK(again.ok());
+    CHECK(again_rt.incremental);
+    CHECK(again_rt.remeshed_blocks == again_rt.active_blocks);
+    vr::Result<mesh::Mesh> again_host = inc_mc.download(again.value());
+    CHECK(again_host.ok());
+    // Both kernels, which is the point of the loop this sits in: the sharing
+    // emitter reserves two ranges rather than one and hands out its triangle
+    // slots from its own cursor, so it needs its own scan and this is what says
+    // whether it has one. Vertex slots are deliberately NOT asserted -- they
+    // may still permute inside a block, and a triangle that names the same
+    // three positions through a different index is the same triangle.
+    CHECK(arena_triangles(again_host.value()) == dirty_by_slot);
 
     // --- The fallbacks, each proved by a field the skip would hide ---------
     //
