@@ -57,8 +57,11 @@ FetchContent_Declare(
   # the atlas origin and smears the corner of the camera image across the face,
   # along every occlusion silhouette and the whole frustum boundary. Both viewer
   # examples draw that on default flags; nothing in CI catches it, since this
-  # leg builds them and does not render.
-  GIT_TAG 2554fe7978aee22cd4115e124e9cf83bf8985384 # gfx #93
+  # leg builds them and does not render. DEMO PIN -- gfx PR #94's branch head,
+  # NOT a merged commit. It carries PatchMeshPipeline, which fuse_patch needs
+  # and which main does not have yet. Move this back to a merged SHA before this
+  # branch goes anywhere near main.
+  GIT_TAG 1f5e75ab56e982e973e6627070de1a08bd7ff117 # gfx #94 (unmerged)
   GIT_SHALLOW FALSE)
 FetchContent_MakeAvailable(volumetric_kit_gfx)
 

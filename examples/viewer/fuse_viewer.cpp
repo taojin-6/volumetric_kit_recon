@@ -99,6 +99,7 @@
 #include "volumetric_kit/recon/core/result.hpp"
 #include "volumetric_kit/recon/mesh/device_mesh.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
+#include "volumetric_kit/recon/texture/patch_atlas.hpp"
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
@@ -117,6 +118,7 @@
 #include "volumetric_kit/gfx/core/vulkan.hpp"
 #include "volumetric_kit/gfx/pipelines/hybrid_mesh_pipeline.hpp"
 #include "volumetric_kit/gfx/pipelines/live_mesh.hpp"
+#include "volumetric_kit/gfx/pipelines/patch_mesh_pipeline.hpp"
 #include "volumetric_kit/gfx/ui/imgui_overlay.hpp"
 #include "volumetric_kit/gfx/ui/metrics_panel.hpp"
 #include "volumetric_kit/gfx/windowing/frame_loop.hpp"
@@ -144,6 +146,24 @@ struct Options {
   float max_depth = 8.0f;
   int max_frames = 400;
   int remesh_every = 1;  // re-extract + re-upload every N fused frames
+  // Draw from a progressive per-triangle PATCH ATLAS instead of the per-vertex
+  // uv0 the projective texturer writes -- the TextureMe-style path, where each
+  // triangle owns a small patch that colour accumulates into across frames.
+  //
+  // DEMO SHAPE: the geometry FREEZES at --freeze-after. Up to there the run is
+  // ordinary (extract every remesh_every frames, patches invalidated each time
+  // because a full extract re-reserves every arena slot); from there on nothing
+  // extracts and every frame only fuses colour into the frozen mesh's patches.
+  //
+  // That is not the design, it is the demo: accumulating into a GROWING mesh
+  // needs incremental extraction, which needs slot_count == 1, which needs the
+  // fuse thread gated against the render thread -- the parked ring TODO.
+  // Freezing removes all three and still shows the thing, because the atlas
+  // only needs the arena STABLE, not incremental. It also makes the comparison
+  // visible inside one run: before the freeze you are looking at voxel colour,
+  // after it the same geometry sharpens toward the camera's resolution.
+  bool patch_atlas = false;
+  int freeze_after = 120;  // fused frames before the geometry freezes
   int width = 1280;
   int height = 720;
   bool lit = true;
@@ -193,6 +213,12 @@ bool parse_args(int argc, char** argv, Options& o) {
       const char* x = v();
       if (!x) return false;
       o.remesh_every = std::max(1, std::atoi(x));
+    } else if (a == "--patch-atlas") {
+      o.patch_atlas = true;
+    } else if (a == "--freeze-after") {
+      const char* x = v();
+      if (!x) return false;
+      o.freeze_after = std::max(1, std::atoi(x));
     } else if (a == "--width") {
       const char* x = v();
       if (!x) return false;
@@ -596,7 +622,14 @@ int run(GLFWwindow* window, const Options& opt) {
   // the whole correctness argument -- a slot must not be reused while any frame
   // that could still be reading it is alive. Each slot is a full vertex arena
   // that never shrinks, so this is not free; deeper buys nothing.
-  mc_config.slot_count = config.frames_in_flight + 1;
+  //
+  // ONE under --patch-atlas, because the atlas is keyed to a single arena: a
+  // patch index IS the arena triangle slot, so a ring that hands each extract a
+  // different slot would rebind every patch. That is normally unsafe -- the
+  // next extract overwrites buffers an in-flight draw is reading -- and it is
+  // safe here only because that mode freezes the geometry and stops extracting
+  // altogether (see Options::patch_atlas).
+  mc_config.slot_count = opt.patch_atlas ? 1u : config.frames_in_flight + 1;
   // In-block vertex sharing, which the texture pass no longer excludes: it
   // dispatches per vertex, so a vertex belonging to several triangles has one
   // writer rather than several disagreeing ones. See --share-vertices.
@@ -622,6 +655,18 @@ int run(GLFWwindow* window, const Options& opt) {
     }
     texturer = std::move(texture_result).value();
   }
+  // The progressive patch atlas, used instead of the texturer under
+  // --patch-atlas. Also fuse-thread only.
+  std::optional<rtex::PatchAtlas> patch_atlas;
+  if (opt.patch_atlas) {
+    auto atlas_result = rtex::PatchAtlas::create(rdevice, rallocator, {});
+    if (!atlas_result) {
+      std::fprintf(stderr, "patch atlas: %s\n",
+                   atlas_result.status().message().c_str());
+      return 1;
+    }
+    patch_atlas = std::move(atlas_result).value();
+  }
 
   const std::size_t frame_count = std::min<std::size_t>(
       dataset.frame_count(),
@@ -638,6 +683,47 @@ int run(GLFWwindow* window, const Options& opt) {
     return 1;
   }
   vgp::HybridMeshPipeline pipeline = std::move(pipeline_result).value();
+
+  // The per-primitive sibling, built only under --patch-atlas. It draws the
+  // same LiveMesh but reads its albedo from the patch atlas addressed by
+  // gl_PrimitiveID, which is exactly recon's arena triangle slot under an
+  // indexed indirect draw starting at index 0.
+  std::optional<vgp::PatchMeshPipeline> patch_pipeline;
+  std::optional<vg::DescriptorPool> patch_pool;
+  std::vector<vg::DescriptorSet> patch_sets;
+  if (opt.patch_atlas) {
+    auto pp = vgp::PatchMeshPipeline::create(app.device().handle(),
+                                             app.swapchain().layout());
+    if (!pp.ok()) {
+      std::fprintf(stderr, "patch pipeline: %s\n",
+                   pp.status().message().c_str());
+      return 1;
+    }
+    patch_pipeline = std::move(pp).value();
+    // One set per frame in flight, plus one -- the same depth as the mesh ring
+    // and for the same reason. The set is rewritten every frame from the
+    // buffers recon currently holds, and rewriting a set an in-flight frame is
+    // reading is illegal, so each slot gets its own and is only touched once
+    // that slot's fence has signalled.
+    const std::uint32_t sets = config.frames_in_flight + 1;
+    const VkDescriptorPoolSize sizes[] = {
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, sets * 3}};
+    auto pool =
+        vg::DescriptorPool::create(app.device().handle(), sizes, 1, sets);
+    if (!pool.ok()) {
+      std::fprintf(stderr, "patch pool: %s\n", pool.status().message().c_str());
+      return 1;
+    }
+    patch_pool = std::move(pool).value();
+    for (std::uint32_t i = 0; i < sets; ++i) {
+      auto set = patch_pool->allocate(patch_pipeline->descriptor_set_layout(0));
+      if (!set.ok()) {
+        std::fprintf(stderr, "patch set: %s\n", set.status().message().c_str());
+        return 1;
+      }
+      patch_sets.push_back(std::move(set).value());
+    }
+  }
 
   // --- gfx profiler: the renderer's own per-frame CPU/GPU timings ------------
   // The render side gets real GPU spans (this device reports 64
@@ -791,6 +877,16 @@ int run(GLFWwindow* window, const Options& opt) {
   // extract_device; deferring costs at most one remesh of latency and keeps
   // recon's extractor touched by exactly one thread.
   std::uint64_t shared_released_through = 0;
+  // The patch atlas as the RENDER thread may see it. Published here rather than
+  // read off `patch_atlas` directly: that object lives on the fuse thread and
+  // its buffer is reallocated the first time a fuse sizes it, so reading the
+  // handle across threads would race exactly once -- on the frame the atlas
+  // first appears. Under the freeze the handle is stable ever after, but
+  // "stable after one race" is not a property worth resting a demo's first
+  // frame on.
+  VkBuffer shared_patch_buffer = VK_NULL_HANDLE;
+  std::uint32_t shared_patch_leg = 0;
+  std::uint32_t shared_patch_texels = 0;
   std::vector<glm::mat4> shared_poses;  // trajectory, grows as frames fuse
   std::atomic<std::size_t> fused_count{0};
   std::atomic<bool> fusing_done{false};
@@ -844,12 +940,22 @@ int run(GLFWwindow* window, const Options& opt) {
       //
       // Nothing is copied to the host: what crosses is the DeviceMesh, five
       // words of handles and counts. That is the whole of seam B on this side.
+      // The last mesh extracted before --patch-atlas froze the geometry. Only
+      // this thread touches it, and only to keep fusing colour into its
+      // patches.
+      std::optional<rmesh::DeviceMesh> frozen_mesh;
       auto publish = [&](const rmesh::DeviceMesh& device_mesh,
                          const float* depth,
                          const vr::DepthCameraParams& depth_camera,
                          const std::vector<std::uint32_t>& color) {
         std::vector<std::uint8_t> atlas;
-        if (texturer && depth != nullptr && !device_mesh.empty()) {
+        if (patch_atlas && depth != nullptr && !device_mesh.empty()) {
+          // A full extract re-reserves every block's range through a global
+          // atomic, so no arena slot survives it and every patch now describes
+          // a triangle that has moved. Discard them; the frames after the
+          // freeze are what refill them. See PatchAtlas::invalidate.
+          patch_atlas->invalidate();
+        } else if (texturer && depth != nullptr && !device_mesh.empty()) {
           // Textures the extractor's buffers in place -- no upload, no
           // readback; the geometry has not left the device since it was meshed.
           //
@@ -1042,8 +1148,48 @@ int run(GLFWwindow* window, const Options& opt) {
         // dispatch. Fusion routinely outruns the render loop here (a preloaded
         // run remeshes several times per presented frame), so this is the
         // common path, not a corner.
-        if ((i % static_cast<std::size_t>(opt.remesh_every)) == 0 &&
-            release_and_may_publish()) {
+        // --patch-atlas freezes the geometry once `freeze_after` frames have
+        // fused, and from then on only accumulates colour into the patches of
+        // the mesh already published. Nothing extracts, so nothing rebinds a
+        // patch, and the arena the render thread is drawing is never rewritten
+        // or reallocated -- which is what makes slot_count 1 safe here without
+        // a fuse/render gate. See Options::patch_atlas for why this is the
+        // demo shape and not the design.
+        const bool frozen =
+            opt.patch_atlas && i >= static_cast<std::size_t>(opt.freeze_after);
+        if (frozen) {
+          if (frozen_mesh && !frozen_mesh->empty()) {
+            vr::StageScope scope(remesh_stages, "patch fuse");
+            const vr::Status st = patch_atlas->fuse(
+                *frozen_mesh, frame.depth.data(), frame.color.data(),
+                depth_camera.width, depth_camera.height, depth_camera, 0.02f,
+                &remesh_stages);
+            if (!st.ok()) {
+              std::fprintf(stderr, "fuse_viewer: patch fuse (frame %zu): %s\n",
+                           i, st.message().c_str());
+            } else {
+              // Once, on the first successful fuse. A patch atlas that silently
+              // never engaged renders as the vertex-colour fallback, which is a
+              // perfectly plausible-looking image -- so the run says which of
+              // the two it is rather than leaving it to be inferred from a
+              // screenshot.
+              if (shared_patch_buffer == VK_NULL_HANDLE) {
+                std::printf(
+                    "fuse_viewer: patch atlas engaged at frame %zu -- %u "
+                    "texels/patch over %u triangles, %.1f MiB\n",
+                    i, patch_atlas->texels_per_patch(),
+                    frozen_mesh->triangle_count,
+                    static_cast<double>(patch_atlas->bytes()) / (1024 * 1024));
+                std::fflush(stdout);
+              }
+              std::lock_guard<std::mutex> lock(share_mtx);
+              shared_patch_buffer = patch_atlas->buffer();
+              shared_patch_leg = patch_atlas->patch_leg();
+              shared_patch_texels = patch_atlas->texels_per_patch();
+            }
+          }
+        } else if ((i % static_cast<std::size_t>(opt.remesh_every)) == 0 &&
+                   release_and_may_publish()) {
           remesh_stages.clear();
           rmesh::ExtractTimings extract_timings;
           vr::Result<rmesh::DeviceMesh> extracted = [&]() {
@@ -1071,6 +1217,10 @@ int run(GLFWwindow* window, const Options& opt) {
           // refused, permanently. It draws nothing either way: recon resets the
           // command, so indexCount is 0.
           if (extracted) {
+            // The mesh the atlas will accumulate against once the freeze hits.
+            // Kept on this thread rather than read back out of `pending_mesh`,
+            // which the render thread takes.
+            if (opt.patch_atlas) frozen_mesh = extracted.value();
             publish(extracted.value(), frame.depth.data(), depth_camera,
                     frame.color);
           } else {
@@ -1255,6 +1405,11 @@ int run(GLFWwindow* window, const Options& opt) {
       frame_count);
   int tick = 0;
   int exit_code = 0;
+  // This frame's view of the patch atlas, copied out under share_mtx below.
+  bool patch_draw_announced = false;
+  VkBuffer frame_patch_buffer = VK_NULL_HANDLE;
+  std::uint32_t frame_patch_leg = 0;
+  std::uint32_t frame_patch_texels = 0;
   while (glfwWindowShouldClose(window) == GLFW_FALSE) {
     glfwPollEvents();
 
@@ -1321,6 +1476,10 @@ int run(GLFWwindow* window, const Options& opt) {
       // become releasable, which is the path that drains the ring when takes
       // are accepted but never drawn.
       if (oldest_in_flight == 0) oldest_in_flight = live_view.generation;
+      // Read while the lock is already held; see shared_patch_buffer.
+      frame_patch_buffer = shared_patch_buffer;
+      frame_patch_leg = shared_patch_leg;
+      frame_patch_texels = shared_patch_texels;
       // Generations count from 1, so there is nothing below the first.
       shared_released_through =
           oldest_in_flight > 0 ? oldest_in_flight - 1 : newest_taken_generation;
@@ -1549,16 +1708,51 @@ int run(GLFWwindow* window, const Options& opt) {
         live.vertices = live_view.vertices;
         live.indices = live_view.indices;
         live.indirect = live_view.indirect;
-        const vgp::HybridMeshDraw draw{live};
-        vgp::HybridMeshFrame hybrid_frame;
-        hybrid_frame.extent = extent;
-        hybrid_frame.view_proj = view_proj;
-        hybrid_frame.light_dir = glm::vec3(0.4f, 0.9f, 0.5f);
-        hybrid_frame.flags = opt.lit ? vgp::kHybridMeshLit : 0u;
-        hybrid_frame.atlas = slot_atlas[render_frame.slot]->set.handle();
-        hybrid_frame.draws = &draw;
-        hybrid_frame.draw_count = 1;
-        pipeline.submit(render_frame.cmd, hybrid_frame);
+        // Under --patch-atlas, albedo comes from the per-triangle patches
+        // rather than a per-vertex uv0, so a different pipeline draws the very
+        // same LiveMesh. Falls through to the hybrid path until the atlas has
+        // a buffer -- which it does not until the geometry freezes and the
+        // first colour fuse sizes it -- so the run shows voxel colour first and
+        // the same geometry sharpening after, in one window.
+        if (patch_pipeline && frame_patch_buffer != VK_NULL_HANDLE) {
+          if (!patch_draw_announced) {
+            patch_draw_announced = true;
+            std::printf("fuse_viewer: drawing through PatchMeshPipeline\n");
+            std::fflush(stdout);
+          }
+          // Rewritten every frame from the buffers recon currently holds, into
+          // THIS slot's own set: rewriting a set an in-flight frame is reading
+          // is illegal, and the frame ring has already waited on this slot's
+          // fence by the time the loop reaches here.
+          const vg::DescriptorSet& set = patch_sets[render_frame.slot];
+          set.write_storage_buffer(0, frame_patch_buffer, 0, VK_WHOLE_SIZE);
+          set.write_storage_buffer(1, live_view.indices, 0, VK_WHOLE_SIZE);
+          set.write_storage_buffer(2, live_view.vertices, 0, VK_WHOLE_SIZE);
+
+          const vgp::PatchMeshDraw draw{live};
+          vgp::PatchMeshFrame patch_frame;
+          patch_frame.extent = extent;
+          patch_frame.view_proj = view_proj;
+          patch_frame.light_dir = glm::vec3(0.4f, 0.9f, 0.5f);
+          patch_frame.flags = opt.lit ? vgp::kPatchMeshLit : 0u;
+          patch_frame.atlas = set.handle();
+          patch_frame.patch_leg = frame_patch_leg;
+          patch_frame.texels_per_patch = frame_patch_texels;
+          patch_frame.draws = &draw;
+          patch_frame.draw_count = 1;
+          patch_pipeline->submit(render_frame.cmd, patch_frame);
+        } else {
+          const vgp::HybridMeshDraw draw{live};
+          vgp::HybridMeshFrame hybrid_frame;
+          hybrid_frame.extent = extent;
+          hybrid_frame.view_proj = view_proj;
+          hybrid_frame.light_dir = glm::vec3(0.4f, 0.9f, 0.5f);
+          hybrid_frame.flags = opt.lit ? vgp::kHybridMeshLit : 0u;
+          hybrid_frame.atlas = slot_atlas[render_frame.slot]->set.handle();
+          hybrid_frame.draws = &draw;
+          hybrid_frame.draw_count = 1;
+          pipeline.submit(render_frame.cmd, hybrid_frame);
+        }
       }
     }
     if (overlay) {
