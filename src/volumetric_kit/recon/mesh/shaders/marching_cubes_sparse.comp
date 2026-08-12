@@ -258,49 +258,69 @@ shared uint s_dirty;
 shared uint s_old_base;
 shared uint s_old_count;
 shared bool s_reuse;
-shared uint s_cursor;
 
-// Per-cell TRIANGLE COUNT, carried from phase one to phase three so phase three
-// can reject a cell without re-gathering its eight corners -- and, since the
-// count is what the rejection tests, without walking `tri_table` either. Caching
-// the cube index instead would make the rejection an SSBO read on the ~92% of
-// cells that emit nothing, which is the path that has to be cheap.
-//
-// PRIVATE, not `shared`, and that is the whole of it: both phases walk the block
-// with the SAME strided loop from the same `tid`, so the cell at slot k --
-// `tid + k * group_threads` -- is handled by one invocation in both phases. The
-// writer is the only reader, so a `shared` array would buy nothing and cost an
-// atomicOr (four cells to a word, four different threads) plus a zeroing pass
-// before the barrier. A count is 0..5, so four of them pack into one uint that
-// stays in a register, and the cache adds ZERO bytes of `shared`.
-//
-// Zero bytes matters *here* and not in the vertex-sharing kernel, because this
-// is the DEFAULT path: the 2026-08-08 decision split the two precisely so it
-// would not carry sharing's ~8 KiB threadgroup budget, and a two-phase emitter
-// must not reintroduce it by the back door.
-//
-// A block with more cells than the slots reach still meshes correctly: phase
-// three re-gathers the uncached tail (see the loop below), which is slower but
-// not wrong. Every in-tree caller uses block_size 8, where 512 cells over 256
-// threads is two slots and nothing is uncached.
-//
-// Slower, and by enough to matter -- at block_size 16, 3072 of a block's 4096
-// cells fall past the four slots and are gathered in FULL twice, so the ~1.08
-// gathers per cell this design is chosen for becomes ~1.77. Nothing about that
-// is visible from a correct-looking mesh, so the host mirrors this reach
-// (kMaxCachedCells in marching_cubes.cpp) and reports the shortfall as
-// ExtractTimings::uncached_cells_per_block: a limit the caller cannot see is
-// the library's to check, not to document (the 2026-08-04 decision). It is a
-// REPORT and not a refusal, unlike the sharing kernel's kMaxSharedCells --
-// there an oversized block would index past a shared array, here it only costs
-// time.
-const uint kCachedSlots = 4u;  // 8-bit counts to a uint
+// Cells this kernel can scan, and so the largest block it will mesh. Mirrors
+// kMaxSharedCells in marching_cubes_sparse_shared.comp and the host constant of
+// the same name in marching_cubes.cpp, which refuses a larger grid outright --
+// this array would otherwise be indexed past its end.
+const uint kMaxScanCells = 512u;
 
-// Which strided iteration `local` is, i.e. which byte of the cache holds it.
-// Both phases derive it the same way from the same `tid`; `group_threads` is a
-// compile-time constant, so this is a shift.
-uint mcCacheSlot(uint local, uint tid, uint group_threads) {
-  return (local - tid) / group_threads;
+// Per-cell TRIANGLE OFFSET within the block's reserved span: the EXCLUSIVE
+// prefix sum of every cell's triangle count, stored shifted by one so entry
+// `local` is the offset of cell `local` and entry `local + 1` is one past its
+// last triangle. So the difference of two adjacent entries is that cell's count,
+// which is why nothing else stores one.
+//
+// This replaces an `atomicAdd(s_cursor, n)` that handed slots out in whatever
+// order cells reached it. The mesh was correct either way -- every slot was
+// inside the block's span -- but the ORDER was not reproducible: a block
+// re-meshed to identical geometry could permute its own triangles inside its
+// own range. That is invisible to a consumer reading the mesh, and fatal to one
+// binding per-triangle state to the arena slot (the projective texture atlas),
+// which needs `slot = f(cell, triangle-in-cell)` to hold across extracts.
+//
+// It also subsumes the private per-cell count cache this used to carry. The
+// cache existed so phase three could reject the ~92% of cells that emit nothing
+// without re-gathering, and the adjacent-entry difference answers that same
+// question from the array the ordering already needs -- so the rejection stays
+// one read, the cache's four-slot reach stops bounding anything, and a
+// block_size past that reach is now REFUSED by the host rather than silently
+// gathered twice (see ExtractTimings::uncached_cells_per_block, which is
+// therefore always 0).
+//
+// The cost is real and is the reason this note is long: ~2 KiB of `shared` on
+// the DEFAULT path, which the 2026-08-08 decision split from the sharing kernel
+// precisely so it would not carry a threadgroup budget it did not use. 2 KiB is
+// a different regime from that decision's 8 KiB -- 16 resident workgroups on
+// Apple's ~32 KiB and 8 at Vulkan's guaranteed 16 KiB floor, against 3 and 1 --
+// but it is not free, and it is spent on determinism rather than on speed.
+shared uint s_cell_off[kMaxScanCells + 1u];
+
+// Turn the per-cell counts in s_cell_off[1 ..] into the exclusive prefix sums
+// described above, in place. Hillis-Steele over the block's own cell count
+// rather than the array's capacity, so a smaller block pays fewer rounds.
+//
+// Every thread must reach every barrier, so the bounds tests gate the memory
+// access and never the iteration. `tmp` is read before the write barrier and
+// applied after it, which is what keeps a round from reading a neighbour's
+// already-updated value.
+void mcScanCellOffsets(uint tid, uint group_threads, uint vpb) {
+  const uint kScanSlots = (kMaxScanCells + 1u + 255u) / 256u;
+  uint tmp[kScanSlots];
+  for (uint d = 1u; d <= vpb; d <<= 1u) {
+    for (uint s = 0u; s < kScanSlots; ++s) {
+      uint i = tid + s * group_threads;
+      tmp[s] = (i <= vpb && i >= d) ? s_cell_off[i - d] : 0u;
+    }
+    barrier();
+    for (uint s = 0u; s < kScanSlots; ++s) {
+      uint i = tid + s * group_threads;
+      if (i <= vpb && i >= d) {
+        s_cell_off[i] += tmp[s];
+      }
+    }
+    barrier();
+  }
 }
 
 // Give back the triangles this block no longer occupies.
@@ -377,14 +397,18 @@ void main() {
 
   // Zero the reservation state alongside resolving the neighbourhood -- one
   // barrier opens both. s_block_base is zeroed here rather than only on the
-  // path that reserves, so it is never read uninitialised. The triangle-count
-  // cache takes no pass of its own: it is a private uint, cleared where it is
-  // declared below, which is a register write and not a threadgroup one.
+  // path that reserves, so it is never read uninitialised.
   if (tid == 0u) {
     s_block_tris = 0u;
     s_block_base = 0u;
-    s_cursor = 0u;
     s_dirty = 0u;
+  }
+  // The offset array is zeroed WHOLE, not just over [0, vpb]: the scan below
+  // walks the block's cells, but entry 0 is the fixed zero an exclusive prefix
+  // starts from and the tail past vpb must not carry a previous workgroup's
+  // counts into a partial round. Three strided writes at the default shape.
+  for (uint i = tid; i <= kMaxScanCells; i += group_threads) {
+    s_cell_off[i] = 0u;
   }
   mcResolveNeighbourhood(block, tid);
   barrier();
@@ -430,7 +454,7 @@ void main() {
     atomicAdd(remeshed_blocks, 1u);
   }
 
-  // PHASE ONE -- count, and cache each cell's TRIANGLE COUNT for phase three.
+  // PHASE ONE -- count, and record each cell's TRIANGLE COUNT for the scan.
   //
   // Signs only (mcCellSigns): this loop runs over every cell in the block, and
   // the count needs nothing but the cube index. Gathering in full here -- the
@@ -438,11 +462,10 @@ void main() {
   // for colours a count cannot use -- would be paid on 100% of cells to be
   // thrown away on ~92% of them.
   //
-  // The COUNT is what is cached, not the cube index it came from, and that is
-  // deliberate: the count is what phase three's rejection tests, so caching it
-  // makes that rejection a shared-memory read, where caching the cube index
-  // would make it an SSBO walk of `tri_table` on the ~92% of cells that emit
-  // nothing. It also fits in one byte (0..5) where a cube index needs two.
+  // The COUNT is what is recorded, not the cube index it came from, and that is
+  // deliberate: the count is both what the scan sums and what phase three's
+  // rejection tests, where recording the cube index would make that rejection an
+  // SSBO walk of `tri_table` on the ~92% of cells that emit nothing.
   //
   // Stride over the block's voxels rather than assuming one thread each: the
   // workgroup is a fixed 256 while voxels_per_block is block_size^3 from the
@@ -461,13 +484,18 @@ void main() {
   // this shape is a win. TODO(mesh): revisit if a consumer ships a smaller
   // block.
   uint mine = 0u;
-  uint cache = 0u;  // this invocation's first kCachedSlots counts, one per byte
   for (uint local = tid; local < vpb; local += group_threads) {
     int n = mcCellTriangleCount(mcCellSigns(bs, mcLocalBase(local, bs)));
     if (n != 0) {
-      uint slot = mcCacheSlot(local, tid, group_threads);
-      if (slot < kCachedSlots) {
-        cache |= uint(n) << (slot * 8u);
+      // Shifted by one: entry `local + 1` is cell `local`'s count going in and
+      // one-past-its-last-triangle coming out of the scan, which is what makes
+      // the exclusive prefix fall out of an inclusive one.
+      //
+      // Only the first chunk's counts are kept. A block with more cells than
+      // the array holds re-derives each later chunk's in phase three (see the
+      // chunk loop there); recording them here would need one array per chunk.
+      if (local < kMaxScanCells) {
+        s_cell_off[local + 1u] = uint(n);
       }
       mine += uint(n);
     }
@@ -476,6 +504,12 @@ void main() {
     atomicAdd(s_block_tris, mine);
   }
   barrier();
+
+  // The counts become offsets. Uniform across the workgroup and barrier-bound,
+  // so it sits between the two phases rather than inside either. Bounded by the
+  // array rather than by the block, so an oversized block scans its first chunk
+  // here and the rest as phase three reaches them.
+  mcScanCellOffsets(tid, group_threads, min(vpb, kMaxScanCells));
 
   // PHASE TWO -- one atomic for the whole block.
   //
@@ -559,59 +593,105 @@ void main() {
   }
   uint block_end = s_block_base + s_block_tris;
 
-  // PHASE THREE -- emit into the reserved span.
-  for (uint local = tid; local < vpb; local += group_threads) {
-    // The cheap rejection, and the reason phase one caches at all: a cell with
-    // no triangles is skipped WITHOUT gathering its eight corners, which is
-    // ~92% of them. Cells past the four slots fall through and gather.
-    uint slot = mcCacheSlot(local, tid, group_threads);
-    if (slot < kCachedSlots && ((cache >> (slot * 8u)) & 0xFFu) == 0u) {
-      continue;
-    }
-    ivec3 base = mcLocalBase(local, bs);
-    float sdf[8];
-    vec3 corner_color[8];
-    int cube_index;
-    if (!mcGather(bs, base, sdf, corner_color, cube_index)) {
-      continue;
-    }
-    // Recomputed from the cube index just gathered rather than read back from
-    // the cache, even though phase one put the same number there. The cache is
-    // a REJECTION HINT; this is the count that must match the `tri_table` row
-    // mcWriteTriangle is about to walk, and only a count derived from this
-    // cube_index is guaranteed to. With the all-inside/all-outside case already
-    // rejected on a register, it costs one table read on the ~8% of cells that
-    // reach here.
-    int n = mcCellTriangleCount(cube_index);
-    if (n == 0) {
-      continue;
-    }
-    // Slots within this block's span. The cursor is shared, so the order cells
-    // land in is still unspecified -- but every slot it hands out is inside the
-    // span, because the span was sized from the same counts.
-    //
-    // "The same counts" is a convention between two different gathers --
-    // mcCellSigns in phase one, mcGather here -- and not something the code
-    // enforces, so this bound is what makes a disagreement between them fail
-    // SAFE. Without it a span that overran would write over the next block's
-    // triangles, with a correct-looking indexCount and no error anywhere: the
-    // per-triangle append this replaced could not overrun by construction,
-    // because counting and writing were one act, and that guarantee has to be
-    // paid for somewhere.
-    uint first = s_block_base + atomicAdd(s_cursor, uint(n));
-    if (first + uint(n) > block_end) {
-      continue;
-    }
-    vec3 normal = mcCellNormal(sdf);
-    for (int t = 0; t < n; ++t) {
-      uint tri = first + uint(t);
-      if (tri >= pc.capacity) {
-        break;  // counted in phase one, dropped here -- and `tri` only grows
+  // PHASE THREE -- emit into the reserved span, a chunk of cells at a time.
+  //
+  // ONE chunk at block_size 8, which is every in-tree caller: the loop runs
+  // once, over the offsets phase one already scanned, and costs nothing a flat
+  // loop would not. A block with more cells than the offset array holds walks
+  // several chunks, re-deriving each later chunk's counts from `mcCellSigns`
+  // and rescanning -- so those cells pay a second SIGNS gather (not a second
+  // full gather, which is what the count cache this replaced cost them). That
+  // shortfall is what ExtractTimings::uncached_cells_per_block reports, on the
+  // same threshold it always did.
+  //
+  // `chunk_base` is the running triangle count of every earlier chunk, so a
+  // cell's offset within the block is still exactly one number -- the array is
+  // a window onto the prefix sum, not the whole of it.
+  uint chunk_base = 0u;
+  for (uint c0 = 0u; c0 < vpb; c0 += kMaxScanCells) {
+    uint chunk_cells = min(kMaxScanCells, vpb - c0);
+    if (c0 != 0u) {
+      // Re-window the array onto this chunk. The leading barrier is what makes
+      // the previous chunk's reads finish before these writes land on them.
+      barrier();
+      for (uint i = tid; i <= kMaxScanCells; i += group_threads) {
+        s_cell_off[i] = 0u;
       }
-      mcWriteTriangle(cube_index, t, sdf, corner_color, vec3(0.0),
-                      block.coord * bs + base, pc.voxel_size, normal, pc.iso,
-                      pc.has_color, tri);
+      barrier();
+      for (uint j = tid; j < chunk_cells; j += group_threads) {
+        int n = mcCellTriangleCount(mcCellSigns(bs, mcLocalBase(c0 + j, bs)));
+        if (n != 0) {
+          s_cell_off[j + 1u] = uint(n);
+        }
+      }
+      barrier();
+      mcScanCellOffsets(tid, group_threads, chunk_cells);
     }
+
+    for (uint j = tid; j < chunk_cells; j += group_threads) {
+      uint local = c0 + j;
+      // This cell's slice of the block's span, straight off the scan: where it
+      // starts, and how many slots phase one reserved for it.
+      uint cell_off = chunk_base + s_cell_off[j];
+      uint budget = s_cell_off[j + 1u] - s_cell_off[j];
+      // The cheap rejection, and the reason phase one records counts at all: a
+      // cell with no triangles is skipped WITHOUT gathering its eight corners,
+      // which is ~92% of them.
+      if (budget == 0u) {
+        continue;
+      }
+      ivec3 base = mcLocalBase(local, bs);
+      float sdf[8];
+      vec3 corner_color[8];
+      int cube_index;
+      if (!mcGather(bs, base, sdf, corner_color, cube_index)) {
+        continue;
+      }
+      // Recomputed from the cube index just gathered rather than read back from
+      // the scan, even though the counting pass summed the same number. The
+      // scan entry is a RESERVATION; this is the count that must match the
+      // `tri_table` row mcWriteTriangle is about to walk, and only a count
+      // derived from this cube_index is guaranteed to. With the
+      // all-inside/all-outside case already rejected on the reservation, it
+      // costs one table read on the ~8% of cells that reach here.
+      int n = mcCellTriangleCount(cube_index);
+      if (n == 0) {
+        continue;
+      }
+      // This cell's slots, at a FIXED offset rather than in arrival order,
+      // which is the whole point of the scan: the same cell in the same block
+      // lands on the same arena slots every extract, so per-triangle state
+      // keyed by slot survives a re-mesh that did not change the triangulation.
+      //
+      // Clamped to the cell's own reservation, not merely to the block's span.
+      // The two counts come from two different gathers -- mcCellSigns when the
+      // offsets were built, mcGather here -- which is a convention the code
+      // does not enforce, so a disagreement has to fail SAFE. Under the
+      // arrival-order cursor it could only overrun the block, and `block_end`
+      // caught that; a fixed offset can also overrun the NEXT CELL inside the
+      // same block, which no block-level bound sees. `budget` is what closes
+      // that, and `block_end` stays as the outer of the two.
+      uint first = s_block_base + cell_off;
+      uint emit = min(uint(n), budget);
+      if (first + emit > block_end) {
+        continue;
+      }
+      vec3 normal = mcCellNormal(sdf);
+      for (uint t = 0u; t < emit; ++t) {
+        uint tri = first + t;
+        if (tri >= pc.capacity) {
+          break;  // counted first, dropped here -- and `tri` only grows
+        }
+        mcWriteTriangle(cube_index, int(t), sdf, corner_color, vec3(0.0),
+                        block.coord * bs + base, pc.voxel_size, normal, pc.iso,
+                        pc.has_color, tri);
+      }
+    }
+
+    // Carry this chunk's total into the next one's offsets. Read after the
+    // emit loop and before the next chunk overwrites the array -- the refill's
+    // leading barrier is what orders those two.
+    chunk_base += s_cell_off[chunk_cells];
   }
 
   // PHASE FOUR -- give back what this block no longer occupies.
