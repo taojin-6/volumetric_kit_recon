@@ -194,6 +194,10 @@ order. Change the decision, its entry there, and this list together.
   The per-block span table is opt-in, is retired by generation rather than
   described in prose, is anchored per block slot to a globally unique topology
   token, and is one table for the whole ring rather than one per slot.
+- [**2026-08-11**](DECISIONS.md#2026-08-11--incremental-extraction-measured-on-device-8x-on-the-phase-that-is-90-of-an-extract-and-the-dirty-fraction-is-a-range-set-by-how-someone-scans-rather-than-a-median-amends-the-2026-08-09-incremental-decision) —
+  Incremental extraction measured on device: ~8x on the phase that is 90% of an
+  extract, and the dirty fraction is a range set by how someone scans rather
+  than a median (amends the 2026-08-09 incremental decision).
 - [**2026-08-11**](DECISIONS.md#2026-08-11--projective-texturing-decides-visibility-per-vertex-and-a-negative-uv0-carries-its-atlas-coordinate-rather-than-discarding-it-amends-the-2026-07-07-texture-tier-decision-and-retires-the-share_vertices-refusal-the-2026-08-04-entry-records) —
   Projective texturing decides visibility per *vertex*, and a negative `uv0`
   carries its atlas coordinate rather than discarding it (amends the 2026-07-07
@@ -564,10 +568,13 @@ it cost 4 177 MB against 33 MB on the iPad. Two things it does
 **not** yet do, and both are `TODO(mesh)`s: it runs at `slot_count == 1` only,
 so it is silently off in `fuse_viewer` (extending the ring is the open design
 question — release-gated range reuse, or copying the retained run into the newly
-claimed slot); and the ~4x win the 2026-08-09 entry sized it for is **still
-unmeasured**, because room0 re-meshes 81.67% of its blocks per window and so
-caps at ~1.22x. The iPad's 25% dirty rate is where the number lives, and
-`fuse_replica --incremental` now reports `incremental` / `remeshed_blocks` so a
+claimed slot); and the win is **measured on device now** — ~8x on the phase that
+is 90% of an extract — but not on room0, which re-meshes 81.67% of its blocks
+per window and so caps at ~1.22x. Read the dirty fraction as a **range set by
+how someone scans** (3–13% holding still, past 50% sweeping) rather than as the
+25% median the 2026-08-09 entry sized the ~4x from; the worst frame is a user
+swinging the device, and that is the ordinary way to scan a room.
+`fuse_replica --incremental` reports `incremental` / `remeshed_blocks` so a
 run cannot quietly measure the fallback instead. Beside it:
 first-class glTF/GLB export via tinygltf + the gfx-vertex converter (the
 example's tinyply dump is deliberately a throwaway). On `mesh`, the greppable
