@@ -207,6 +207,10 @@ order. Change the decision, its entry there, and this list together.
   Incremental extraction runs under `share_vertices`, because that kernel owns
   its index run and so retires *more* cheaply, not less (reverses the
   `share_vertices` clause of the incremental-dispatch decision above).
+- [**2026-08-12**](DECISIONS.md#2026-08-12--meshing-a-cameras-view-is-a-caller-supplied-block-list-not-a-camera-the-mesh-tier-holds-and-it-stays-apart-from-incremental-extraction-rather-than-stacking-with-it) —
+  Meshing a camera's view is a caller-supplied block list, not a camera the mesh
+  tier holds; and it stays apart from incremental extraction rather than
+  stacking with it.
 
 ## Provenance & salvage policy
 
@@ -424,7 +428,15 @@ arbitrary; it usually isn't.
   (`volume/shaders/hash_*.comp`) over the scalar-block-layout ABI. Depth
   allocation unprojects a posed frame and dilates each surface block into the
   `(2·tb+1)³` truncation band — a solid cube, not a ray march; frustum-culled
-  compaction gives the per-frame working set. `resize` preserves block indices,
+  compaction gives the per-frame working set, from a depth camera's pinhole
+  intrinsics or — since 2026-08-12 — from a *render* camera's `view_proj`, whose
+  planes are read off the matrix itself and so hold for any handedness, provided
+  depth maps to `[0, 1]` (gfx's convention; a GL matrix clips at the eye). That
+  overload's `margin_m` widens every plane by a distance in metres, applied
+  after normalizing, for a consumer whose cull runs a few frames behind its draw.
+  The result travels as a `BlockList` — pointer, count, and the
+  `topology_epoch` it was compacted at — which is what `mesh` meshes a subset
+  from. `resize` preserves block indices,
   so per-voxel data survives a grow. `VoxelBlockGrid` composes the map with
   independently-allocated SoA attribute arrays (`tsdf`, `weight`, `color`, …),
   each `num_blocks·voxels_per_block`, so a consumer materialises only what it
@@ -484,7 +496,18 @@ arbitrary; it usually isn't.
   consumer releases by generation; the kernel writes a real
   `VkDrawIndexedIndirectCommand`. `extract_device` returns a borrowed
   `DeviceMesh` (valid until the next extract, enforced by a generation stamp),
-  `download` takes the single host copy. `share_vertices` selects a second
+  `download` takes the single host copy. An `extract_device` overload meshes a
+  caller-supplied `volume::BlockList` instead of compacting the whole map —
+  what a camera's frustum-culled set arrives as, though nothing in the extractor
+  knows a frustum produced it (2026-08-12). The arena is rebuilt from that
+  dispatch alone, so a block outside the list costs no triangles and no bytes;
+  the surface does not hole at the cull edge, since the on-device probe still
+  resolves neighbours that were never dispatched; the list is refused if its
+  `topology_epoch` has moved, a LIFO-reused `ptr` being a lie that meshes
+  cleanly; and `compact_ms` reads 0 while every later row shrinks with the set.
+  Offered on `extract_device` **only** — an incremental pass keeps the triangles
+  of blocks it does not re-mesh, so culling would leave them drawn and give the
+  arena win back. `share_vertices` selects a second
   compiled kernel that indexes in-block vertices — 3.4x fewer on room0, and
   textured like any other mesh since the `texture` tier moved to a per-vertex
   verdict (2026-08-11). `DeviceMesh::shares_vertices` still publishes it,
@@ -568,7 +591,14 @@ claimed slot); and the ~4x win the 2026-08-09 entry sized it for is **still
 unmeasured**, because room0 re-meshes 81.67% of its blocks per window and so
 caps at ~1.22x. The iPad's 25% dirty rate is where the number lives, and
 `fuse_replica --incremental` now reports `incremental` / `remeshed_blocks` so a
-run cannot quietly measure the fallback instead. Beside it:
+run cannot quietly measure the fallback instead. Beside it: **view-culled meshing has landed as a
+library API and has no in-tree consumer yet** — `extract_device` takes a
+`volume::BlockList`, `make_frustum_planes` takes a `view_proj`, and what is
+missing is a caller that culls: `fuse_viewer` would have to publish its render
+camera across the fusion-thread boundary, and the scanner that motivates it
+lives in `volumetric_kit_ios`. So the win is correct and unquantified — expect
+it roughly linear in the visible fraction on every `ExtractTimings` row below
+`compact_ms`, and quote nothing until a run says so. Beside that:
 first-class glTF/GLB export via tinygltf + the gfx-vertex converter (the
 example's tinyply dump is deliberately a throwaway). On `mesh`, the greppable
 `TODO(mesh)`s: cross-block vertex sharing, per-vertex normals, extending
