@@ -3155,3 +3155,85 @@ generation when it first touches the arena rather than on success — a call tha
 overwrites the arena and then fails must still invalidate every outstanding
 `DeviceMesh`, and so must the dense overload, which shares that arena and can
 now reallocate it.
+
+### 2026-08-12 — A cell's triangles land at a *scanned* offset inside its block's span, not in arrival order, and both sparse kernels pay ~2 KiB of threadgroup memory for it (amends the "zero bytes of `shared`" clause of the 2026-08-08 vertex-sharing decision).
+
+Stage 2 of incremental extraction made a block's output **contiguous**. It did
+not make it **ordered**: `s_cursor` in `marching_cubes_sparse.comp`, and
+`s_icursor` in its sharing sibling, handed slots out in whatever order cells
+reached them. Both shaders said so in as many words — "the order cells land in
+is still unspecified" — and both were right that the mesh is correct either
+way, because every slot handed out is inside the block's own reservation.
+
+**What that costs is a name.** A block re-meshed to *identical geometry* can
+permute its own triangles inside its own unchanged range. Nothing reading the
+mesh can tell; the surface, the counts and the spans are all the same. But it
+means the arena triangle slot is not a durable identity, and anything binding
+per-triangle state to one silently rebinds it on every re-mesh — which is
+exactly what a progressive texture atlas does, one patch per triangle slot, and
+the reason this landed now.
+
+**The fix is the prefix sum of a count both kernels already compute.** Each
+cell's offset within its block is the exclusive prefix sum over the block's
+cells of `mcCellTriangleCount`, scanned once in threadgroup memory between the
+counting and emitting phases. A cell's slot is then a function of the cell, and
+`slot = f(block base, cell, triangle-in-cell)` holds across extracts wherever
+the block base does — which is precisely the in-place range reuse
+`extract_device_incremental` already guarantees for a block that still fits.
+
+**A fixed offset needs a tighter bound than a cursor did, and that is not a
+detail.** The two counts come from two different gathers — `mcCellSigns` when
+the offsets are built, `mcGather` when the triangles are written — which is a
+convention neither kernel enforces. An arrival-order cursor could only ever
+overrun the *range's end*, which `block_end` / `s_ttotal` caught. A fixed
+offset can also overrun **the next cell inside the same range**, which no
+range-level test sees at all. So both kernels now clamp the emit to the cell's
+own reservation (the difference of two adjacent scan entries, free) and keep
+the range test outside it. Dropping the outer one for the inner would have been
+the same mistake in reverse.
+
+**It replaced the default kernel's private count cache, and that is the part
+that amends 2026-08-08.** That decision split the two kernels precisely so the
+default path would not carry sharing's threadgroup budget, and the two-phase
+emitter's per-cell count cache was written as four bytes of a *register* on
+that reasoning — "the cache adds ZERO bytes of `shared`". The scan array is
+~2 KiB and takes that back. What it buys beyond ordering: the same array
+answers "does this cell emit anything", so the cheap rejection is unchanged and
+the cache's four-slot reach stops bounding anything. 2 KiB is a different
+regime from the 8 KiB that decision was arguing about — 16 resident workgroups
+on Apple's ~32 KiB and 8 at Vulkan's guaranteed 16 KiB floor, against 3 and 1 —
+but it is spent on determinism rather than on speed, and it is spent on the
+kernel this file records as 77% of an extract.
+
+**Chunked rather than refused, so `block_size` 16 still meshes.** The first cut
+refused a block with more cells than the array holds, which broke the invariant
+that block size is an allocation detail — the suite asserts that the same field
+divided into eight blocks of 8 extracts to the same surface as one block of 16.
+An oversized block is now emitted a chunk of cells at a time, each chunk
+rebuilding and rescanning its own offsets. So the window is a *report*, exactly
+as the cache's reach was, and `ExtractTimings::uncached_cells_per_block` keeps
+its meaning on a threshold that moved 1024 → 512 — with a cheaper shortfall
+behind it, one extra `mcCellSigns` rather than one extra full gather.
+
+**Vertex slots are deliberately left on their arrival-order atomic.** Under
+sharing a vertex is reached only through the index run the kernel writes
+itself, so permuting them renames nothing a consumer can key on. Giving them
+fixed offsets would need a second scan over a count that is not known until the
+edges are walked, to buy nothing.
+
+**Measured on room0, 120 frames, Release, `--device-extract`, three runs
+each.** The default kernel's dispatch goes **0.54 → 0.64 ms (+18.5%)** and the
+sharing kernel's **0.70 → 0.79 ms (+12.8%)**. Geometry is bit-identical on both
+paths — 277 506 triangles, 832 518 vertices unshared and 244 400 shared, the
+same figures this file records for main. If that cost binds on device, the
+scan is a flat Hillis-Steele over 513 entries and a two-level or subgroup scan
+should recover most of it; it was not done ahead of a measurement saying so.
+
+**Verified by an assertion the existing suite structurally could not make.**
+Every comparison in the sparse tests goes through `canonical_triangles`, which
+*sorts* — so a permuted arena compares equal to an unpermuted one, and no
+existing check could have failed. The new one re-meshes every block against an
+unchanged field and asserts the arena matches **slot for slot**. It runs over
+both kernels, and it earned its keep immediately: with only the default kernel
+converted it failed on the sharing one with 5 373 differing slots, which is how
+that half of the change was found rather than assumed.
