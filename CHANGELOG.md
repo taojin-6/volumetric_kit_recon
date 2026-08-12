@@ -8,6 +8,29 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `mesh` / `volume`: **view-culled meshing**. `MarchingCubes::extract_device`
+  takes a `volume::BlockList` — pointer, count, and the `topology_epoch` it was
+  compacted at — and meshes that subset instead of compacting the whole map, so
+  a scanning device that renders a small part of a large volume meshes only that
+  part. Nothing in the extractor knows a frustum produced it: a region of
+  interest or a chunk queue is the same call. `volume::make_frustum_planes`
+  gains an overload that reads the six planes off a *render* camera's
+  `view_proj` (Gribb-Hartmann), so it holds for any handedness provided depth
+  maps to `[0, 1]`, with a `margin_m` in metres for a consumer whose cull runs
+  behind its draw. Build the list with `VoxelBlockGrid::block_list`, which
+  stamps the epoch off the grid that owns the blocks so the triple cannot be
+  mispaired.
+  The arena is rebuilt from the culled dispatch alone, so a block outside the
+  list costs no triangles and no live bytes; the surface does not hole at the
+  cull edge, since the on-device probe still resolves neighbours that were never
+  dispatched. Offered on `extract_device` only — an incremental pass keeps the
+  triangles of blocks it does not re-mesh, so culling would leave them drawn.
+  Alternating the two is safe: a culled pass publishes no arena state, so the
+  next incremental request falls back to a full extract and reports it.
+  **Note for downstream:** `volume::BlockList::count` is `uint32_t` (it was
+  `int32_t`) and the struct has a third member, so a two-element aggregate
+  initializer no longer compiles.
+
 - `mesh`: incremental extraction now works under **`share_vertices`**, which is
   the configuration the only device consumer runs and the one that decides
   whether any of this ships. The sharing kernel reserves two per-block ranges

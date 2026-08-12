@@ -2791,6 +2791,285 @@ rather than rare. room0 cannot supply that measurement: at 81.67% dirty, nearly
 everything relocates there for reasons unrelated to this. Marked `TODO(mesh)`
 at the span write.
 
+### 2026-08-12 — Meshing a camera's view is a caller-supplied block list, not a camera the mesh tier holds; and it stays apart from incremental extraction rather than stacking with it.
+
+A scanning device renders a small part of a large volume — the iPad case, where
+the viewport shows a room corner while the map holds the whole floor. Meshing
+the whole active set to draw a fraction of it is the obvious waste, and two of
+the three pieces to stop it were already here: the `volume` tier's
+`compact_active_blocks_in_frustum` culls the active set on-device against six
+planes, and `hash_compact_frustum.comp`'s conservative p-vertex AABB test has
+been proven since the frustum decision landed. What was missing was a way *in*:
+`MarchingCubes` compacted the whole map itself, on the first line of the one
+funnel every extract entry point reaches.
+
+**The set arrives; the camera does not.** The alternative — hand the extractor
+the frustum planes, or a `DepthCameraParams`, and let it cull — would import a
+camera, and with it a policy (which frustum, widened by how much, culled against
+what near plane) into a tier whose job is turning voxels into triangles.
+`MarchingCubes` has no camera vocabulary today and gains none here. A block list
+is also strictly more general: a region of interest, a chunk queue and a
+level-of-detail selection are the same call, and nothing in the extractor knows
+or cares that a frustum produced this one. The unused `volume::BlockList`
+declared in `hash_types.hpp` since the port is what it arrives as — the type was
+right; it had never been given a job.
+
+**The render camera has no pinhole, which is why `make_frustum_planes` grew a
+second constructor.** The existing one takes intrinsics in pixels under the
+OpenCV convention the fusion tiers pose a depth camera in. A viewport has
+neither: it has `proj * view`, in whatever handedness the renderer chose. The
+new overload reads the six planes off that matrix directly (Gribb-Hartmann), so
+it holds for any convention the caller combined — with one hard requirement,
+that depth maps to `[0, 1]`. gfx forces `GLM_FORCE_DEPTH_ZERO_TO_ONE`, so its
+`Camera::view_proj` qualifies; a GL-convention matrix passed here reads the near
+plane as `row2` where it should be `row3 + row2`, which normalizes to
+`z >= 2nf/(n+f)` — the harmonic mean of the caller's near and far, always
+between `n` and `2n`. So it does *not* clip at the eye, as this entry and the
+header both claimed until the review: it over-culls a shell about one
+near-distance thick in front of every camera. That is exactly the kind of wrong
+that ships, so the test pins it — the same scene, the same frustum, built both
+ways. The first cut of that test did not: rows 0, 1 and 3 are bit-identical
+between the two conventions and the far plane normalizes the same under both, so
+*only* the near plane moves, and no fixture block lay in the 0.1–0.196 m band it
+moves through. Substituting `perspectiveRH_NO` left every assertion green. A
+block at world z `[0.12, 0.16]` is the witness, and is now allocated for that
+section alone.
+
+**The margin is a distance in metres, and it is not decoration.** The pinhole
+constructor widens its lateral planes ~10% by scaling the focal lengths — a
+unitless nudge that means different distances at different depths and fields of
+view, and that reaches only four of the six planes. The matrix overload takes
+`margin_m` and applies it *after* normalizing, where `d += margin_m` moves a
+plane outward by exactly that far. It defaults to 0, the exact frustum. Non-zero
+is what an asynchronous consumer needs: fusion extracts on a background thread,
+so the mesh a frame draws was culled against a pose several frames old, and an
+exact frustum pops at the screen edge while the camera turns. Naming it in
+metres lets a consumer size it from how fast its camera can move, which a focal
+scale cannot express.
+
+It reaches five of the six planes, **not the near one**, and that exclusion came
+out of the review. Applied to all six, the near plane sits at world
+`z = z_near - margin_m`, so any `margin_m > z_near` puts it behind the eye — and
+because the *lateral* planes were widened by the same amount, what comes through
+is not a sliver but a cone: measured against the shader's own p-vertex test on
+the test camera, a 0.5 m margin on a 0.1 m near plane admitted blocks up to
+0.36 m behind the camera and 0.56 m off-axis, and a 1.0 m margin reached 0.88 m
+back. The doc that leads a consumer here points straight at metre-scale margins,
+and `fuse_viewer` already builds its camera at `z_near = 0.05`. Excluding near
+also matches the pinhole overload, which widens only its four lateral planes.
+The cost is a block crossing `z_near` while the camera moves forward, which pops
+at the near plane rather than at the screen edge — the smaller of the two
+failures by a wide margin. The test pins it on both axes: a block 0.08 m behind
+the eye stays culled at a 0.5 m margin, and every plane's `d` is read directly
+to confirm five moved by exactly the margin and near moved by nothing.
+
+**A degenerate matrix keeps blocks rather than dropping them.** The normalize
+guard was `len > 0.0f`, which is false for a NaN length as well as a zero one,
+so both fell through to the "keep it unnormalized" branch — and then still took
+the margin, on a plane with no unit normal for a metre to mean anything against.
+On an all-zero matrix that reduces the shader's test to `margin_m >= 0`: at any
+negative margin it rejects everything, an empty mesh every frame under
+`Status::ok`. None of those inputs is exotic. `Mat4f{}` *is* the all-zero matrix
+(`vector_types.hpp` already warns that the identity must be spelled
+`Mat4f(1.0f)`), `glm::infinitePerspectiveRH_ZO` emits an exactly-zero far row,
+and a zero-width viewport puts `inf`/`nan` through the whole product — where
+glslang's ordered comparisons make every NaN plane accept nothing. The guard is
+now explicit and adds no margin in the degenerate case, so the cull fails toward
+keeping blocks, which is the direction that shows up as a slow frame rather than
+a missing surface.
+
+**A bare scalar is a compile error.** glm's scalar-diagonal `mat4` constructor
+is implicit unless `GLM_FORCE_EXPLICIT_CTOR` is defined, which this repo does
+not, so `make_frustum_planes(0.5f)` compiled — as `Mat4f(0.5f)`, a unit box at
+the origin — and `make_frustum_planes(100.0f, 100.0f)` compiled as a frustum
+that keeps everything, both clean under `-Wall -Wextra -Wpedantic -Werror`. A
+deleted single-argument template rejects exactly those and loses the overload
+tie to the real `const Mat4f&` on a matrix. What it cannot catch is a
+`cam_to_world` passed by mistake — same type, and the natural pattern-match
+against the pinhole overload's ninth argument — so that one is a `@warning`.
+
+**The cull boundary does not hole, and that is the 2026-08-08 probe decision
+being paid back.** The sparse kernel resolves each block's 2×2×2 neighbourhood
+by probing the hash table on-device, so a block on the edge of the supplied list
+still samples correct corner values out of neighbours that were never
+dispatched; the surface simply ends there. The host-built neighbour table this
+replaced was fed from a compacted snapshot and would have produced a seam of
+dropped cells all along the frustum edge. The coupling that entry called "paid
+for, not stumbled into" is what makes this feature a parameter rather than a
+project.
+
+**Anchored by `topology_epoch`, the same token the spans and the dirty flags
+use.** A `BlockIndex::ptr` indexes the attribute arrays directly and the block
+heap is LIFO, so a `remove()`/`clear()` between the caller's compaction and the
+extract has handed those pointers to *different* blocks. Every one of them is
+still in range, so without the check the extract meshes whatever voxels now live
+there and returns `Status::ok`. `BlockList` therefore carries the epoch it was
+compacted at and the extractor refuses a mismatch — the 2026-08-04 rule, and the
+third consumer of the token the 2026-08-11 table entry made globally unique.
+What is deliberately *not* checked **on the host** is that each `ptr` is one this
+grid handed out: that is O(count) of host work per frame — ~107k entries on
+room0 — to catch a caller who fabricated a list rather than compacting one.
+
+The review found that reasoning half right. The epoch does not catch a
+**count** that outran its array: `topology_epoch` moves only on
+`create`/`remove`/`clear`, never on allocate or resize, so a consumer that
+re-compacts into a shorter vector while a cached `BlockList` keeps last frame's
+larger count passes every check — and the list is *honestly obtained*, which is
+the case the argument above assumed away. Nor is the consequence "meshes the
+wrong voxels": the kernel stores `block_spans[ptr / vpb] = span`, so an
+unbounded `ptr` is an out-of-bounds device **write**, with `robustBufferAccess`
+enabled nowhere in this repo. The bound the deleted `compact_active_blocks()`
+path gave for free (`collect_compacted` clamps its own count to `num_blocks`,
+and a vector's `data()` and `size()` agree by definition) is now taken
+explicitly, in the two places each costs nothing: `count <= num_blocks` is one
+O(1) host comparison, and the per-block half is one comparison per *workgroup*
+on-device, against a new `num_block_slots` push constant. The active-block
+buffer also picks up the `check_storage_buffer_range` and the exact-range
+binding that both other caller-sized bindings in the same function already had.
+
+**Duplicates are the caller's to avoid, and now say so.** Nothing rejects a list
+naming the same block twice — a duplicate is something the caller can see, and a
+set-wise test is the O(count) cost declined above — but the consequence is
+silent, so it is a `@warning` rather than an omission: one workgroup runs per
+entry and each reserves its own arena range, so the block's surface is emitted
+twice (measured: 132 triangles becomes 264) and the two race to write its span,
+leaving the loser's range live but undescribed by the table. Neither internal
+producer can emit one; a caller unioning two cameras' compactions can.
+
+**An empty list is legal, including the default-constructed one.** `epoch`
+defaults to 0 and `next_topology_epoch()` never returns 0, so an unconditional
+epoch check made `BlockList{}` — the natural spelling of "the cull kept nothing"
+— the one value that could never be accepted, refusing on exactly the frames a
+camera sees nothing while the fully-spelled empty list worked. An empty list
+names no block, so there is nothing about it that can be stale; the epoch check
+is now skipped when `count == 0`.
+
+**Every one of those refusals is a rollback**, and the contract now says so.
+They are checked above `claim_output_slot()` and the generation bump, which the
+implementation comment already called the whole point — but the `@return`
+forwarded the caller to `extract`'s `@warning` that "a failure is not a
+rollback", publishing the opposite of the guarantee the code provides. It
+matters for exactly the consumer this feature exists for: culling a frame behind
+means hitting the epoch refusal on *every* frame after a `remove()`, and
+re-extracting and redrawing on each one costs more than the cull saves.
+
+**And the `share_vertices` block-size refusal moved above the empty-set return.**
+It was below it, which was harmless while an empty active set meant an empty
+map. An empty *cull* is a routine per-frame outcome, so the misconfiguration
+would have surfaced only on frames the camera happened to see geometry —
+`Status::ok` while pointed at nothing, `InvalidArgument` a frame later, reading
+as though the camera move caused it. It is a property of the config and the
+grid, so it answers the same on every frame.
+
+**The triple is built by `VoxelBlockGrid::block_list`.** Pointer, count and
+epoch came from three separate expressions at every call site, including this
+tier's own tests, while the doc asked for them to be paired "in the same breath"
+— a discipline no signature enforced, on a seam whose only real consumer is
+out-of-tree. One accessor takes the vector and stamps the grid's current epoch,
+so the epoch cannot be fetched from a different grid, read a frame early, or
+forgotten (and forgetting it is not a compile error: the default is a value no
+live grid equals). What it does not fix is the *lifetime* — the list still
+borrows the caller's vector — which is a `TODO(volume)` for an owning
+`CompactedBlocks` returned straight from the compaction entry points.
+
+**Kept apart from incremental extraction, deliberately.** The two are separate
+answers to the same cost, and stacking them gives most of one back. An
+incremental pass keeps the triangles of every block it does not re-mesh, and a
+block outside a culled set is simply not dispatched — so it keeps its geometry
+below the watermark and goes on being drawn. Correct, but it surrenders the
+arena and draw savings and leaves only the cheaper dispatch, while the arena
+converges on the union of everything ever visible. A full culled extract seeds
+the draw command at zero and rebuilds the arena from the visible set alone,
+which is what a memory-bound device actually wants. So the overload is offered
+on `extract_device` and not on `extract_device_incremental`, and
+`blocks == nullptr` is a clause of the incremental predicate rather than an
+invariant left to the call sites — a future entry point that offers both gets
+this tier's documented answer to a combination it cannot serve (a full extract,
+reported as `ExtractTimings::incremental == false`) instead of a surprise.
+
+**That clause guarded the wrong scope, and the review found it by running it.**
+Keeping the two apart *within one call* is not the hazard; the hazard is the
+*sequence*. A culled extract published `arena_state_` exactly as a full one
+does — `over_occupied` is provably false off the incremental path, since `live`
+is initialised to `emitted` — while stamping and rewriting spans for only the
+blocks it was handed. Every other block kept a range describing the arena that
+pass had just rebuilt from zero. The next `extract_device_incremental` then
+passed every clause: watermark live, epoch unmoved, and `serial` equal, because
+the serial it compares is the culled call's own (`ensure_block_spans` bumps it
+*below* the predicate). Reproduced on MoltenVK by two reviewers independently:
+a culled extract over half a 216-block sphere followed by an **all-clean**
+incremental returned 3 806 of 7 388 triangles with `Status::ok` and
+`ExtractTimings::incremental == 1` — half the surface silently gone — and with
+the culled-out half marked dirty it wrote over 2 472 *live* triangles belonging
+to blocks that pass had promised not to touch, plus 1 751 triangles the surface
+does not contain. The kernel reads `block_spans[slot]` blind: `span_stamp_` is a
+host-side array with no device mirror, so nothing on the GPU can tell a stale
+span from a current one.
+
+So the invariant belongs on the *published state*, not on a per-call boolean:
+**a culled extract withholds `arena_state_`**, exactly as the dense `extract()`
+path clears it and for the same stated reason ("nothing in the span table says
+'not mine'; this is what does"). The next incremental request then falls back to
+a full extract and reports it, which is the documented behaviour for everything
+else this tier cannot vouch for — so alternating the two entry points is *safe*
+and costs one full extract per switch, rather than being a combination a caller
+must know to avoid. The `blocks == nullptr` clause on the predicate stays, now
+as belt-and-braces rather than as the guard.
+
+**A culled pass also measures nothing.** `tris_per_block_` is a density, and the
+next call multiplies it by *its* active set, so it is sound only while the set
+it was measured over is drawn from the same population as the set it will scale.
+A frustum cull is systematically denser per block — it keeps camera-facing
+surface blocks and drops the far, back-side and empty truncation-band ones — so
+feeding it back poisons the next full extract's plan. Measured: one culled
+extract over a single dense block took the following full extract from a 20 736
+triangle plan and a 4.2 MB arena to 74 196 and 15.1 MB, a 3.6x blow-up held for
+the extractor's lifetime, since the arena is grow-only. Both density figures are
+now recorded on the full path only.
+
+**And `live_sum` only counts spans the previous extract vouched for.** It was
+guarded by capacity alone, so it summed the stale ranges of blocks the last pass
+never dispatched — inflating the occupancy denominator, which is the wrong
+direction twice: `over_occupied` is what forces the compacting full pass, so an
+inflated `live` is precisely what stops the recovery from firing. It compares
+against `prev_arena.serial`, read before the stamp loop overwrites it;
+comparing against `span_serial_` in that position would be a tautology.
+
+**What it does not make cheaper.** The frustum compaction still scans every
+hash-table slot; its dispatch is sized by the table, not by the survivors. What
+shrinks with the visible fraction is the upload, the marching-cubes
+dispatch, the arena, and whatever draws or textures the result —
+`ExtractTimings::compact_ms` reads 0 on the new path because no compaction
+happened *there*, not because one got faster. Two rows named in the first cut do
+**not** shrink and have been struck from the claim: `readback_ms` is the 20-byte
+draw command alone and `descriptor_ms` is a fixed set of descriptor writes, both
+per-call constants. In a repo whose standing rule is that three bottleneck
+guesses have already been wrong, advertising a fixed-cost row as scaling is the
+claim most likely to be acted on. For the same reason the arena wording is now
+"no live bytes" rather than "no bytes": the arena is grow-only, so one full
+extract — a warm-up frame, a pose that is not ready, any documented fallback —
+sizes it for the whole active set and it never shrinks back.
+
+**Verified against a partition, not against a smaller number.** Meshing a subset
+and observing that it is smaller passes for a kernel that drops the seam. The
+test splits the 6×6×6-block sphere's active set into two complementary halves,
+meshes each through the new overload, and requires the two canonical triangle
+sets to merge back into the full extract *exactly*: every cell's base corner
+lies in one block, so the halves must be disjoint and exhaustive. A dropped seam
+triangle is a short merge, a duplicated one a long merge. Handing over the whole
+active set is checked to reproduce the internal compaction bit for bit, and the
+epoch refusal is exercised by removing a block under a list already taken.
+
+**What is unmeasured.** Everything above is correctness; the win is not
+quantified in-tree, because no in-tree example culls yet. `fuse_viewer` is the
+natural place and needs its render camera published across the fusion-thread
+boundary — a viewer-architecture change, not a library one — and the consumer
+that motivates the feature is the iOS scanner, in `volumetric_kit_ios`. The
+figure to expect is roughly linear in the visible fraction on every row below
+`compact_ms`, and nothing here should be quoted until a run says so; three
+guesses at this pipeline's bottleneck have already been wrong (see "Measured
+lessons").
+
 ## Measured lessons
 
 Not decisions, but the measurements that overturned an assumption about
