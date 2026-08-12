@@ -15,7 +15,7 @@ set(_vr_texture_generated_inc "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
 add_library(recon_texture)
 add_library(volumetric_kit::recon_texture ALIAS recon_texture)
 
-target_sources(recon_texture PRIVATE projective_texturer.cpp)
+target_sources(recon_texture PRIVATE projective_texturer.cpp patch_atlas.cpp)
 
 # Per-tier export header (VR_TEXTURE_API / VR_TEXTURE_STATIC_DEFINE), isolated
 # so the macros never collide with another tier's on one include path.
@@ -57,8 +57,10 @@ target_include_directories(
 # PRIVATE path), so recon_texture ships the technique with no runtime shader
 # files.
 include(vr_embed)
-vr_embed_shaders(recon_texture SHADERS
-                 "${CMAKE_CURRENT_SOURCE_DIR}/shaders/texture_score.comp")
+vr_embed_shaders(
+  recon_texture SHADERS
+  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/texture_score.comp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/texture_patch_fuse.comp")
 
 vr_target_warnings(recon_texture)
 

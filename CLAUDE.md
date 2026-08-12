@@ -216,6 +216,11 @@ order. Change the decision, its entry there, and this list together.
   A re-meshed block is not a reshaped one, and on room0 only **2.2%** of
   re-meshed blocks change triangulation — so a slot-keyed per-triangle cache
   survives far longer than the dirty share suggests.
+- [**2026-08-12**](DECISIONS.md#2026-08-12--the-progressive-texture-atlas-has-no-allocator-a-patch-is-the-mesh-arenas-triangle-slot-the-atlas-is-a-linear-buffer-rather-than-a-2d-image-and-the-gauss-newton-warp-and-render-and-resample-of-the-source-paper-are-both-cut) —
+  The progressive texture atlas has no allocator: a patch **is** the mesh
+  arena's triangle slot, the atlas is a linear buffer rather than a 2D image,
+  and the Gauss-Newton warp and render-and-resample of the source paper are
+  both cut.
 
 ## Provenance & salvage policy
 
@@ -548,6 +553,19 @@ arbitrary; it usually isn't.
   image inside one triangle along the frustum edge. Live single camera, so the
   frame the caller binds *is* the atlas. Opt-in `StageMetrics*` on both
   overloads reports a `"texture"` row with both halves.
+
+  `PatchAtlas` is the progressive half: one small **right-triangle patch per
+  arena triangle slot** in a linear storage buffer, accumulated across frames,
+  so colour resolves at the camera's resolution rather than the voxel's with no
+  UV unwrapping (2026-08-12). It needs no allocator — the slot *is* the patch
+  index, which the mesh tier's scanned per-cell offset makes durable — no atlas
+  dimensions, and no gutter. `fuse` runs one thread per patch row against a
+  posed frame, keeping an observation where the texel is in front, in frame and
+  unoccluded, weighting it by `n·v` and range, and averaging it in **linear**
+  before storing encoded. A full extract breaks every slot at once, which the
+  caller answers with `invalidate()`. The paper's Gauss-Newton warp and its
+  render-and-resample are deliberately absent, which is what keeps the whole
+  feature compute-only.
 
 - **`sensor`** — the capture *contract*: `ICameraCapture` polled for a
   `CapturedFrame` (frames dropped, not queued), plus the boundary math that is

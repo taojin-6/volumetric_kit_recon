@@ -23,6 +23,12 @@
 // copying either into the other -- tsdf's version here restores the
 // frustum-edge smear this tier's encoding exists to prevent, and this version
 // there makes integration fuse depth at pixels the sampler never validated.
+//
+// This header holds STRUCTS AND PURE FUNCTIONS ONLY -- no bindings, and no
+// push-constant block. Each kernel declares its own `pc`, because the two in
+// this tier need different fields and a block name may not be reused within one
+// interface: a shared `pc` here made the second kernel that included it fail to
+// compile with an error naming the FIRST one's members.
 
 #extension GL_EXT_scalar_block_layout : require
 
@@ -109,8 +115,3 @@ bool project_to_image(DepthCameraParams c, vec3 world, out vec2 px,
   // far-outside projection. A NaN is not, for the reason above.
   return !isnan(px.x) && !isnan(px.y);
 }
-
-layout(push_constant, scalar) uniform PushConstants {
-  uint num_vertices;          // vertices[] length; bounds this dispatch
-  float occlusion_threshold;  // max |projected depth - sensor depth|, metres
-} pc;

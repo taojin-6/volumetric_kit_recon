@@ -1,0 +1,185 @@
+#version 450
+
+// Progressive patch-atlas fusion: accumulate one posed colour frame into the
+// per-triangle patches of a mesh arena. TextureMe (Kim et al., ACM TOG 41(3),
+// 2022) sections 5.1 and 5.2 -- construct the patch by projecting the triangle
+// into the colour image, then weighted-average it into what is already there --
+// with the paper's section 6 image warp and section 5.4 resample both
+// deliberately absent (see patch_atlas.hpp).
+//
+// ONE THREAD PER PATCH ROW, not per texel and not per triangle. Per texel would
+// need the triangular index inverted (a loop or a sqrt) to get back to (i, j),
+// and would refetch the triangle's three vertices for every one of them. Per
+// triangle would leave a single lane walking `leg*(leg+1)/2` texels. A row is
+// the shape that needs neither: `tid` splits into (triangle, j) by one divide,
+// the vertices are fetched once for the row, and the row's texels are
+// contiguous in the atlas.
+//
+// NOTHING IS ATOMIC, and that falls out of the same choice: a texel belongs to
+// exactly one (triangle, row), so it has exactly one writer. The paper's own
+// update is a read-modify-write per texel and needs no more than that either.
+//
+// Colour is decoded to LINEAR, blended, and re-encoded. Averaging is a linear
+// operation and an 8-bit value is encoded (DECISIONS.md, the 2026-08-02 colour
+// rule), so blending the stored bytes directly would darken every texel the
+// running average touches. What the 8 bits do cost is precision the average
+// cannot recover -- the price of four bytes a texel, which is what makes a
+// room-scale atlas fit at all.
+
+#extension GL_GOOGLE_include_directive : require
+
+// DepthCameraParams / Vertex / project_to_image.
+#include "texture_common.glsl"
+// vrPatchTexelCount / vrPatchTexelIndex / vrPatchBarycentric.
+#include "texture_patch.glsl"
+// The exact piecewise sRGB transfer, so this tier converts through the same
+// curve every other one does rather than a pow(x, 2.2) that nearly matches.
+#include "volumetric_kit/recon/core/shaders/color_common.glsl"
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0, scalar) readonly buffer Vertices {
+  Vertex vertices[];
+};
+// Three per triangle. Read rather than assumed to be the identity run: under
+// mesh::MarchingCubesConfig::share_vertices it is not, and this kernel is meant
+// to run in exactly that configuration.
+layout(set = 0, binding = 1, scalar) readonly buffer Indices { uint indices[]; };
+// The atlas: `num_triangles * texels_per_patch` texels, each one uint32 of
+// canonical-encoded R'G'B' in the low three bytes and an accumulated weight in
+// the high one. The weight byte holds w / max_weight, so it is both the
+// saturation cap and the quantisation scale.
+layout(set = 0, binding = 2, scalar) buffer Patches { uint patches[]; };
+layout(set = 0, binding = 3, scalar) readonly buffer Depth { float depth[]; };
+// Packed RGB, R in the low byte, canonical-encoded 8-bit. Registered to `cam`
+// but not necessarily the same size -- the projection is normalized by cam's
+// dimensions and rescaled to these, which is exactly what makes an ARKit frame
+// (256x192 depth, 1920x1440 colour) address correctly with no correction here.
+layout(set = 0, binding = 4, scalar) readonly buffer Color { uint color[]; };
+layout(set = 0, binding = 5, scalar) readonly buffer Camera {
+  DepthCameraParams cam;
+};
+
+layout(push_constant, scalar) uniform PushConstants {
+  uint num_triangles;         // indices[] / 3; bounds this dispatch
+  uint patch_leg;             // texels along each leg of a patch
+  uint texels_per_patch;      // vrPatchTexelCount(patch_leg), passed not derived
+  uint color_width;           // pixels per row of color[]
+  uint color_height;          // rows of color[]
+  float occlusion_threshold;  // max |projected depth - sensor depth|, metres
+  float max_weight;           // accumulated weight a texel saturates at
+  float normal_epsilon;       // floor on the n.v term
+  float depth_falloff;        // alpha in exp(-alpha * dn^2)
+  float near_depth;           // dn's lower bound (metres)
+  float far_depth;            // dn's upper bound (metres)
+} pc;
+
+// The bilinear depth sampler and the occlusion comparison, shared with
+// texture_score.comp. Included here rather than at the top because they read
+// the `depth` and `Camera` bindings declared above.
+#include "texture_depth.glsl"
+
+// Nearest sample of the colour image at a pixel of the DEPTH camera, returned
+// linear. Goes through normalized coordinates rather than indexing color[]
+// directly, which is what lets the two resolutions differ: (px + 0.5) / cam
+// dimensions is identically (px_c + 0.5) / colour dimensions whenever the depth
+// intrinsics were derived from the colour ones by a pixel-centre-preserving
+// rescale, which is what sensor::depth_from_registered_color does.
+//
+// TODO(texture): nearest, not bilinear. Four fetches and a lerp would probably
+// be worth it, but that wants a measurement against a real scan.
+vec3 vrSampleColorLinear(vec2 px) {
+  vec2 uv = (px + 0.5) / vec2(float(cam.width), float(cam.height));
+  ivec2 c = ivec2(uv * vec2(float(pc.color_width), float(pc.color_height)));
+  c = clamp(c, ivec2(0), ivec2(int(pc.color_width) - 1, int(pc.color_height) - 1));
+  return vrUnpackSrgbToLinear(color[c.y * int(pc.color_width) + c.x]);
+}
+
+void main() {
+  uint tid = gl_GlobalInvocationID.x;
+  uint rows = pc.num_triangles * pc.patch_leg;
+  if (tid >= rows) {
+    return;
+  }
+  uint tri = tid / pc.patch_leg;
+  uint j = tid % pc.patch_leg;
+
+  // The triangle's three corners, fetched once for the whole row. Positions for
+  // the barycentric point, normals for the view-angle weight.
+  uint i0 = indices[tri * 3u + 0u];
+  uint i1 = indices[tri * 3u + 1u];
+  uint i2 = indices[tri * 3u + 2u];
+  vec3 p0 = vertices[i0].position;
+  vec3 p1 = vertices[i1].position;
+  vec3 p2 = vertices[i2].position;
+  vec3 n0 = vertices[i0].normal;
+  vec3 n1 = vertices[i1].normal;
+  vec3 n2 = vertices[i2].normal;
+
+  // A retired triangle -- three indices pointing at one vertex, which is how an
+  // incremental re-mesh gives back a range it no longer fills -- has no area
+  // and no surface to texture. Skipping it also keeps its patch as it was,
+  // which costs nothing and is the honest state for geometry nobody draws.
+  if (i0 == i1 && i1 == i2) {
+    return;
+  }
+
+  vec3 cam_pos = cam.cam_to_world[3].xyz;
+  uint patch_base = tri * pc.texels_per_patch;
+
+  // Row j holds leg - j texels. i + j < leg is what vrPatchTexelIndex's
+  // bijection assumes and what keeps b0 non-negative below.
+  for (uint i = 0u; i + j < pc.patch_leg; ++i) {
+    vec2 b = vrPatchBarycentric(pc.patch_leg, i, j);
+    float b0 = 1.0 - b.x - b.y;
+    vec3 world = b0 * p0 + b.x * p1 + b.y * p2;
+
+    vec2 px;
+    float zc;
+    if (!project_to_image(cam, world, px, zc)) {
+      continue;  // behind the camera or non-finite: no observation to make
+    }
+    if (!vrOccludedOk(px, zc, pc.occlusion_threshold)) {
+      continue;  // out of frame, in a hole, or behind nearer geometry
+    }
+
+    // How much this observation is worth. Both terms are the paper's, and both
+    // exist because a texel that several frames can see should take the frame
+    // that saw it best rather than the one that saw it last.
+    vec3 nrm = b0 * n0 + b.x * n1 + b.y * n2;
+    float nn = dot(nrm, nrm);
+    vec3 view = cam_pos - world;
+    float vv = dot(view, view);
+    // Guarded: a degenerate normal or a texel exactly at the camera makes the
+    // normalize a NaN, and a NaN weight poisons the texel permanently rather
+    // than for one frame. Falling back to the floor keeps the observation at
+    // its least trusted rather than dropping it.
+    float w_n = pc.normal_epsilon;
+    if (nn > 0.0 && vv > 0.0) {
+      w_n = max(dot(nrm * inversesqrt(nn), view * inversesqrt(vv)),
+                pc.normal_epsilon);
+    }
+    float span = max(pc.far_depth - pc.near_depth, 1e-6);
+    float dn = clamp((zc - pc.near_depth) / span, 0.0, 1.0);
+    float w_obs = w_n * exp(-pc.depth_falloff * dn * dn);
+
+    // Read-modify-write, one writer. The stored weight is normalized by
+    // max_weight, so it decodes back through the same scale it was written
+    // with -- and a texel no frame has reached yet reads 0, which makes the
+    // first observation an assignment rather than a blend against black.
+    uint slot = patch_base + vrPatchTexelIndex(pc.patch_leg, i, j);
+    uint prev = patches[slot];
+    float w_old = float(prev >> 24u) / 255.0 * pc.max_weight;
+    vec3 rgb_old = vrUnpackSrgbToLinear(prev);
+    vec3 rgb_new = vrSampleColorLinear(px);
+
+    float w_sum = min(w_old + w_obs, pc.max_weight);
+    // Denominator is w_old + w_obs, NOT the clamped w_sum: clamping is what
+    // caps how far a saturated texel can still move, and dividing by the capped
+    // value instead would scale the whole average up as it saturates.
+    vec3 rgb = (rgb_old * w_old + rgb_new * w_obs) / max(w_old + w_obs, 1e-6);
+
+    uint w_byte = uint(clamp(w_sum / pc.max_weight, 0.0, 1.0) * 255.0 + 0.5);
+    patches[slot] = (vrPackLinearToSrgb(rgb) & 0x00FFFFFFu) | (w_byte << 24u);
+  }
+}

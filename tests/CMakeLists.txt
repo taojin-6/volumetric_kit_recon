@@ -225,6 +225,18 @@ target_link_libraries(
 vr_target_warnings(recon_texture_device_mesh_test)
 add_test(NAME recon_texture_device_mesh COMMAND recon_texture_device_mesh_test)
 
+# texture patch atlas: the per-triangle patch addressing (pure host arithmetic)
+# and the fusion kernel that fills it (needs a device; the addressing half runs
+# either way). Links recon_texture + recon_mesh, since a patch is keyed by the
+# mesh arena's triangle slot.
+add_executable(recon_texture_patch_atlas_test texture_patch_atlas_test.cpp)
+target_link_libraries(
+  recon_texture_patch_atlas_test
+  PRIVATE volumetric_kit::recon_texture volumetric_kit::recon_mesh
+          Vulkan::Vulkan)
+vr_target_warnings(recon_texture_patch_atlas_test)
+add_test(NAME recon_texture_patch_atlas COMMAND recon_texture_patch_atlas_test)
+
 # core device seam: Instance + Device create/adopt. Links recon_core, which now
 # carries the Vulkan headers/loader. Skips at runtime where no compute device is
 # present.
