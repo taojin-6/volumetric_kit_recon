@@ -61,7 +61,7 @@ FetchContent_Declare(
   # NOT a merged commit. It carries PatchMeshPipeline, which fuse_patch needs
   # and which main does not have yet. Move this back to a merged SHA before this
   # branch goes anywhere near main.
-  GIT_TAG 1f5e75ab56e982e973e6627070de1a08bd7ff117 # gfx #94 (unmerged)
+  GIT_TAG 0ad1297c432dcbb85bec6b811c7d6c4773e8fd58 # gfx #94 (unmerged, rebased)
   GIT_SHALLOW FALSE)
 FetchContent_MakeAvailable(volumetric_kit_gfx)
 
