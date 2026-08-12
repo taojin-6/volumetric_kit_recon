@@ -150,20 +150,25 @@ struct Options {
   // uv0 the projective texturer writes -- the TextureMe-style path, where each
   // triangle owns a small patch that colour accumulates into across frames.
   //
-  // DEMO SHAPE: the geometry FREEZES at --freeze-after. Up to there the run is
-  // ordinary (extract every remesh_every frames, patches invalidated each time
-  // because a full extract re-reserves every arena slot); from there on nothing
-  // extracts and every frame only fuses colour into the frozen mesh's patches.
+  // DEMO SHAPE, and it is not the design: the run becomes TWO PASSES. The first
+  // is an ordinary fuse of the whole sequence, ending in the usual final
+  // extract; then the geometry is frozen and the SAME sequence is replayed with
+  // nothing but colour, accumulating into the patches of that one mesh.
   //
-  // That is not the design, it is the demo: accumulating into a GROWING mesh
-  // needs incremental extraction, which needs slot_count == 1, which needs the
-  // fuse thread gated against the render thread -- the parked ring TODO.
-  // Freezing removes all three and still shows the thing, because the atlas
-  // only needs the arena STABLE, not incremental. It also makes the comparison
-  // visible inside one run: before the freeze you are looking at voxel colour,
-  // after it the same geometry sharpens toward the camera's resolution.
+  // Two passes rather than one because the atlas is keyed to arena triangle
+  // slots and a full extract re-reserves every one of them -- so colour fused
+  // before an extract describes geometry that has since moved. Accumulating
+  // into a GROWING mesh instead needs incremental extraction, which needs
+  // slot_count == 1, which needs the fuse thread gated against the render
+  // thread: the parked ring TODO. Freezing removes all three, because the atlas
+  // only needs the arena STABLE, not incremental.
+  //
+  // Replaying the WHOLE sequence rather than its tail is what gives the atlas
+  // coverage: a patch is only filled by a frame that could see it, so
+  // accumulating from the last N frames alone leaves everything the camera
+  // visited earlier at zero weight -- which renders as the vertex-colour
+  // fallback and looks, correctly but uselessly, like an untextured scan.
   bool patch_atlas = false;
-  int freeze_after = 120;  // fused frames before the geometry freezes
   int width = 1280;
   int height = 720;
   bool lit = true;
@@ -215,10 +220,7 @@ bool parse_args(int argc, char** argv, Options& o) {
       o.remesh_every = std::max(1, std::atoi(x));
     } else if (a == "--patch-atlas") {
       o.patch_atlas = true;
-    } else if (a == "--freeze-after") {
-      const char* x = v();
-      if (!x) return false;
-      o.freeze_after = std::max(1, std::atoi(x));
+
     } else if (a == "--width") {
       const char* x = v();
       if (!x) return false;
@@ -940,10 +942,6 @@ int run(GLFWwindow* window, const Options& opt) {
       //
       // Nothing is copied to the host: what crosses is the DeviceMesh, five
       // words of handles and counts. That is the whole of seam B on this side.
-      // The last mesh extracted before --patch-atlas froze the geometry. Only
-      // this thread touches it, and only to keep fusing colour into its
-      // patches.
-      std::optional<rmesh::DeviceMesh> frozen_mesh;
       auto publish = [&](const rmesh::DeviceMesh& device_mesh,
                          const float* depth,
                          const vr::DepthCameraParams& depth_camera,
@@ -1148,48 +1146,8 @@ int run(GLFWwindow* window, const Options& opt) {
         // dispatch. Fusion routinely outruns the render loop here (a preloaded
         // run remeshes several times per presented frame), so this is the
         // common path, not a corner.
-        // --patch-atlas freezes the geometry once `freeze_after` frames have
-        // fused, and from then on only accumulates colour into the patches of
-        // the mesh already published. Nothing extracts, so nothing rebinds a
-        // patch, and the arena the render thread is drawing is never rewritten
-        // or reallocated -- which is what makes slot_count 1 safe here without
-        // a fuse/render gate. See Options::patch_atlas for why this is the
-        // demo shape and not the design.
-        const bool frozen =
-            opt.patch_atlas && i >= static_cast<std::size_t>(opt.freeze_after);
-        if (frozen) {
-          if (frozen_mesh && !frozen_mesh->empty()) {
-            vr::StageScope scope(remesh_stages, "patch fuse");
-            const vr::Status st = patch_atlas->fuse(
-                *frozen_mesh, frame.depth.data(), frame.color.data(),
-                depth_camera.width, depth_camera.height, depth_camera, 0.02f,
-                &remesh_stages);
-            if (!st.ok()) {
-              std::fprintf(stderr, "fuse_viewer: patch fuse (frame %zu): %s\n",
-                           i, st.message().c_str());
-            } else {
-              // Once, on the first successful fuse. A patch atlas that silently
-              // never engaged renders as the vertex-colour fallback, which is a
-              // perfectly plausible-looking image -- so the run says which of
-              // the two it is rather than leaving it to be inferred from a
-              // screenshot.
-              if (shared_patch_buffer == VK_NULL_HANDLE) {
-                std::printf(
-                    "fuse_viewer: patch atlas engaged at frame %zu -- %u "
-                    "texels/patch over %u triangles, %.1f MiB\n",
-                    i, patch_atlas->texels_per_patch(),
-                    frozen_mesh->triangle_count,
-                    static_cast<double>(patch_atlas->bytes()) / (1024 * 1024));
-                std::fflush(stdout);
-              }
-              std::lock_guard<std::mutex> lock(share_mtx);
-              shared_patch_buffer = patch_atlas->buffer();
-              shared_patch_leg = patch_atlas->patch_leg();
-              shared_patch_texels = patch_atlas->texels_per_patch();
-            }
-          }
-        } else if ((i % static_cast<std::size_t>(opt.remesh_every)) == 0 &&
-                   release_and_may_publish()) {
+        if ((i % static_cast<std::size_t>(opt.remesh_every)) == 0 &&
+            release_and_may_publish()) {
           remesh_stages.clear();
           rmesh::ExtractTimings extract_timings;
           vr::Result<rmesh::DeviceMesh> extracted = [&]() {
@@ -1220,7 +1178,6 @@ int run(GLFWwindow* window, const Options& opt) {
             // The mesh the atlas will accumulate against once the freeze hits.
             // Kept on this thread rather than read back out of `pending_mesh`,
             // which the render thread takes.
-            if (opt.patch_atlas) frozen_mesh = extracted.value();
             publish(extracted.value(), frame.depth.data(), depth_camera,
                     frame.color);
           } else {
@@ -1336,6 +1293,86 @@ int run(GLFWwindow* window, const Options& opt) {
                     keyframe.color);
           } else {
             publish(m.value(), nullptr, vr::DepthCameraParams{}, kNoColor);
+          }
+          // PASS TWO -- colour only. The geometry is now final and no later
+          // extract will move an arena slot, so a patch bound to slot t stays
+          // bound to slot t for the rest of the run: exactly the stability the
+          // atlas needs, and the reason this waits until here rather than
+          // accumulating during the fuse above.
+          //
+          // The whole sequence is replayed, not its tail, because a patch is
+          // only ever filled by a frame that could SEE it. Fusing colour from
+          // the last few frames alone leaves everything the camera visited
+          // earlier at zero weight -- which the shader renders as the
+          // vertex-colour fallback, and which looks exactly like a scan where
+          // the atlas never engaged at all.
+          if (patch_atlas && !m.value().empty()) {
+            const auto start = std::chrono::steady_clock::now();
+            std::size_t contributed = 0;
+            double patch_host_ms = 0.0;
+            double patch_device_ms = 0.0;
+            std::size_t patch_device_samples = 0;
+            for (std::size_t i = 0; i < frame_count && !quit.load(); ++i) {
+              vr::Result<vr_example::FrameView> loaded = dataset.frame(i);
+              if (!loaded) continue;
+              vr_example::FrameView view = std::move(loaded).value();
+              const vr_example::RgbdFrame& f = *view;
+              const vr::DepthCameraParams dc = vr_example::make_depth_camera(
+                  cam, f.cam_to_world, opt.max_depth);
+              // A FRESH StageMetrics per frame, deliberately: rows accumulate
+              // by name, so reusing one would report the running sum and a
+              // reader would take it for a per-frame cost. (That is not
+              // hypothetical -- it is what an uncleared object did to the
+              // first version of this measurement, turning ~1 ms into a
+              // plausible-looking 112.)
+              vr::StageMetrics frame_metrics;
+              const vr::Status st = patch_atlas->fuse(
+                  m.value(), f.depth.data(), f.color.data(), dc.width,
+                  dc.height, dc, 0.02f, &frame_metrics);
+              for (const vr::StageRow& row : frame_metrics.rows()) {
+                if (std::strcmp(row.name, "patch fuse") != 0) continue;
+                patch_host_ms += row.cpu_ms;
+                if (row.has_gpu) {
+                  patch_device_ms += row.gpu_ms;
+                  ++patch_device_samples;
+                }
+              }
+              if (!st.ok()) {
+                std::fprintf(stderr,
+                             "fuse_viewer: patch fuse (frame %zu): %s\n", i,
+                             st.message().c_str());
+                break;
+              }
+              ++contributed;
+              // Published every frame so the window shows the atlas filling in
+              // rather than appearing at the end. The handle only changes on
+              // the first fuse (the mesh is frozen, so the atlas never grows
+              // again), but the render thread reads it under the lock either
+              // way -- see shared_patch_buffer.
+              std::lock_guard<std::mutex> lock(share_mtx);
+              shared_patch_buffer = patch_atlas->buffer();
+              shared_patch_leg = patch_atlas->patch_leg();
+              shared_patch_texels = patch_atlas->texels_per_patch();
+            }
+            const double ms = std::chrono::duration<double, std::milli>(
+                                  std::chrono::steady_clock::now() - start)
+                                  .count();
+            const double n = std::max<double>(1.0, contributed);
+            std::printf(
+                "fuse_viewer: patch atlas -- %zu frames over %u triangles, "
+                "%u texels/patch, %.1f MiB\n"
+                "  wall %.1f ms total, %.3f ms/frame\n"
+                "  fuse %.3f ms host/frame, %.3f ms device/frame (%zu timed)\n",
+                contributed, m.value().triangle_count,
+                patch_atlas->texels_per_patch(),
+                static_cast<double>(patch_atlas->bytes()) / (1024 * 1024), ms,
+                ms / n, patch_host_ms / n,
+                patch_device_samples > 0
+                    ? patch_device_ms /
+                          static_cast<double>(patch_device_samples)
+                    : 0.0,
+                patch_device_samples);
+            std::fflush(stdout);
           }
         } else {
           std::fprintf(stderr, "fuse_viewer: final extract: %s\n",
