@@ -8,6 +8,29 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `core`: **GPU-profiler labels** — `VK_EXT_debug_utils` names, so an Nsight
+  Graphics or Xcode Metal capture reads `tsdf_integrate` and `tsdf.depth_frame`
+  rather than a wall of anonymous dispatches over unnamed handles. Every
+  `dispatch()` wraps its submission in a region named by `ComputeKernel::name`,
+  which also names the kernel's `VkPipeline` (the object a profiler indexes
+  shader cost by), and `Device::set_object_name` names the buffers each tier
+  holds — re-applied wherever a handle is replaced, since a name lives on the
+  handle. Labels are **not** tied to a `GpuStageScope`: a span is opt-in and
+  costs a timestamp, a label is free and unconditional.
+  `InstanceConfig::request_debug_utils` defaults **on** and is independent of
+  `enable_validation`, because a Release build is the only one worth profiling.
+  **Note for downstream:** four source-breaking changes. `KernelSetBuilder`
+  takes a `const Device&` rather than a `VkDevice`, and its `add()` gained a
+  required `name` second parameter (a borrowed string literal that must outlive
+  the kernel). `Device::end_debug_label` takes the name its `begin` was called
+  with, so the pair skips on identical conditions. `DeviceRequirements` gained
+  `debug_utils`, `DeviceConfig` gained `instance_debug_utils_enabled`, and
+  `AdoptedDevice` gained `enabled_debug_utils` — debug utils is an *instance*
+  extension, so it cannot ride `enabled_device_extensions` and the creator
+  declares it instead; leaving any of them unset costs the capture's names and
+  nothing else. Prefer the new `Device::create(const Instance&, …)` overload,
+  which fills the declaration in for you.
+
 - `mesh` / `volume`: **view-culled meshing**. `MarchingCubes::extract_device`
   takes a `volume::BlockList` — pointer, count, and the `topology_epoch` it was
   compacted at — and meshes that subset instead of compacting the whole map, so

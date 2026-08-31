@@ -98,8 +98,12 @@ struct ComputeKernel {
 /// compute-stage storage buffer (the compute tiers' shape).
 class VR_CORE_API KernelSetBuilder {
  public:
-  /// @param device  The device the kernels are built on.
-  explicit KernelSetBuilder(VkDevice device) noexcept : device_(device) {}
+  /// @param device  The device the kernels are built on; borrowed, and must
+  ///                outlive the builder. A reference rather than the bare
+  ///                `VkDevice` it used to take, because @ref add names the
+  ///                pipeline it builds and only a @ref Device carries the
+  ///                debug-utils entry points that reach a profiler.
+  explicit KernelSetBuilder(const Device& device) noexcept : device_(&device) {}
 
   KernelSetBuilder(const KernelSetBuilder&) = delete;
   KernelSetBuilder& operator=(const KernelSetBuilder&) = delete;
@@ -118,13 +122,17 @@ class VR_CORE_API KernelSetBuilder {
   /// @param out       Receives the built layout + pipeline (and later the set).
   /// @param name       What the kernel is called, stored on @ref
   ///                   ComputeKernel::name's borrowing terms -- a string
-  ///                   literal. Names the kernel's region in a GPU capture.
+  ///                   literal. Names the kernel's region in a GPU capture,
+  ///                   its `VkPipeline` / pipeline layout / descriptor-set
+  ///                   layout, and any failure this call returns.
   /// @param spv       The SPIR-V byte array (4-byte aligned).
   /// @param spv_size  Its size in bytes.
   /// @param bindings  Number of storage-buffer bindings the shader declares.
   /// @param push      Optional push-constant range (`nullptr` = none).
   /// @return An OK @ref Status, or a non-OK one if the layout or the pipeline
-  ///         fails to build.
+  ///         fails to build — prefixed with @p name, since a tier registers
+  ///         several kernels in one `create()` and the underlying failure names
+  ///         only the Vulkan call.
   Status add(ComputeKernel& out, const char* name, const unsigned char* spv,
              std::size_t spv_size, std::uint32_t bindings,
              const VkPushConstantRange* push = nullptr);
@@ -136,7 +144,7 @@ class VR_CORE_API KernelSetBuilder {
   Result<DescriptorPool> build();
 
  private:
-  VkDevice device_;
+  const Device* device_;
   std::vector<ComputeKernel*> kernels_;
   std::uint32_t descriptor_total_ = 0;
 };

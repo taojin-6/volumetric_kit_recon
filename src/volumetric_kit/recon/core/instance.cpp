@@ -139,8 +139,17 @@ Result<Instance> Instance::create(const InstanceConfig& config) {
                 "validation enabled but VK_EXT_debug_utils is unavailable; "
                 "layer messages will not route through the log handler");
   }
-  // Either job requires the extension to actually be enabled.
+  // Either job requires the extension to actually be enabled -- so a cleared
+  // request_debug_utils does not survive an enabled messenger, which is built
+  // on the same extension. Say so rather than let debug_utils_enabled() report
+  // a state the caller asked against.
   const bool enable_debug_utils = want_debug_utils || want_debug_messenger;
+  if (!config.request_debug_utils && want_debug_messenger) {
+    log_message(LogLevel::Info,
+                "request_debug_utils is false but validation is on; "
+                "VK_EXT_debug_utils stays enabled for the layer messenger, so "
+                "GPU-profiler labels remain active");
+  }
 
   std::vector<const char*> layers;
   if (want_validation) {

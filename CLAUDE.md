@@ -435,12 +435,25 @@ arbitrary; it usually isn't.
   and exists only where the caller asked for `StageMetrics`, so pairing them
   would perturb the captured workload and leave uninstrumented calls anonymous.
   Naming is re-applied wherever a handle is replaced — a grid `resize`, a hash
-  rehash, a mesh-arena grow — since a name lives on the handle. One change
-  serves both profilers: Nsight renders the regions as trace ranges, MoltenVK
-  maps them onto Metal debug groups for Xcode. Debug utils is an *instance*
-  extension, so the adopt seam takes it as `AdoptedDevice::enabled_debug_utils`
-  (declared, never probed — `vkGetInstanceProcAddr` is not portable for a
-  disabled extension) and never requires it.
+  rehash, a mesh-arena grow, a span-table or dirty-flag grow — since a name
+  lives on the handle. One change
+  serves both profilers: Nsight renders the regions as trace ranges (and
+  groups a capture by `VkPipeline`, which `KernelSetBuilder::add` therefore
+  names too), MoltenVK maps them onto Metal debug groups and
+  `MTLComputePipelineState` labels for Xcode. Debug utils is an *instance*
+  extension, so it cannot ride `enabled_device_extensions` and is **declared,
+  never probed** — the loader's answer for a disabled extension is not portable
+  (null from a conformant loader, a live pointer from a directly-linked
+  MoltenVK). Both seams carry the declaration:
+  `AdoptedDevice::enabled_debug_utils` on adopt and
+  `DeviceConfig::instance_debug_utils_enabled` on create, the latter filled in
+  by the `Device::create(const Instance&, …)` overload every recon call site
+  uses; `DeviceRequirements::debug_utils` is how an embedder hears recon wants
+  it at all. It is never required — its absence costs the capture's names and
+  nothing else — and resolution is **all-or-nothing**, so a driver returning
+  two of the three entry points reports no labels rather than a region that can
+  be opened and not closed. The label is recorded *outside* the `GpuTimer`
+  bracket, so no `gpu_ms` measures the markers around the work.
 
 - **`volume`** — `VoxelHashMap` drives init / allocate-from-coords, -depth,
   -points / remove / compact / compact-in-frustum / resize as GLSL kernels

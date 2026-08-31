@@ -55,9 +55,10 @@ int main() {
     return failures == 0 ? 0 : 1;
   }
 
-  // Standalone create: owns the device.
+  // Standalone create: owns the device. Through the Instance& overload, which
+  // is the form that carries the instance's debug-utils state into the device.
   vr::Result<vr::Device> owner =
-      vr::Device::create(instance.value().handle(), physical.value(), {});
+      vr::Device::create(instance.value(), physical.value(), {});
   if (!owner) {
     std::fprintf(stderr, "Device::create failed: %s\n",
                  owner.status().message().c_str());
@@ -136,16 +137,30 @@ int main() {
   // requested independently of validation (a Release build is the one worth
   // profiling), so a default instance carries it wherever the loader offers it.
   //
-  // Asserted as an *implication* rather than a fixed value: whether the
-  // extension exists is the driver's business, and a driver may enable it yet
-  // return no entry point. What must hold is that labels are never available
-  // without it, and that every labelling call is safe either way.
+  // Whether the extension exists is the driver's business, so the fixed
+  // assertion is the implication: labels are never available without it.
   std::fprintf(stderr, "debug utils: instance=%d device=%d\n",
                instance.value().debug_utils_enabled() ? 1 : 0,
                owner.value().debug_labels_available() ? 1 : 0);
   check(instance.value().debug_utils_enabled() ||
             !owner.value().debug_labels_available(),
         "labels are unavailable when the instance lacks debug utils");
+
+  // The converse, on the platforms that can answer it -- and the one assertion
+  // here that fails if the feature is inert. Every other check below passes in
+  // a build where Device::create never resolves an entry point: they assert
+  // safety, absence, or an implication with a false antecedent. This one says
+  // the labels are actually THERE, so dropping the resolve from Device::create
+  // turns ctest red rather than silently anonymising every dispatch.
+  //
+  // Guarded on the instance flag because a conformant driver may enable the
+  // extension and still return no entry point -- rare, and not this test's to
+  // fail on, which is why the guard is the instance's answer rather than the
+  // device's.
+  if (instance.value().debug_utils_enabled()) {
+    check(owner.value().debug_labels_available(),
+          "an instance with debug utils yields a device with labels");
+  }
 
   // Labelling is a diagnostic: it must be safe on every input, including the
   // degenerate ones, and must never be load-bearing. None of these may crash.
@@ -157,8 +172,33 @@ int main() {
                                 vr::debug_object_handle(owner.value().handle()),
                                 nullptr);
   owner.value().begin_debug_label(VK_NULL_HANDLE, "no command buffer");
-  owner.value().end_debug_label(VK_NULL_HANDLE);
+  owner.value().end_debug_label(VK_NULL_HANDLE, "no command buffer");
+  // VK_NULL_HANDLE is std::nullptr_t on a 64-bit target and a literal 0 on a
+  // 32-bit one, so this line is the compile-time half of the test: it does not
+  // build at all without debug_object_handle's null-pointer branch.
+  owner.value().set_object_name(VK_OBJECT_TYPE_BUFFER,
+                                vr::debug_object_handle(VK_NULL_HANDLE),
+                                "null handle constant");
   check(true, "labelling calls survive degenerate inputs");
+
+  // The label pair, through a real command buffer that is recorded, submitted
+  // and waited on. A named region and an unnamed one must both come back OK:
+  // begin_debug_label skips a null name, so an end that did not skip on the
+  // same condition would pop a region that was never pushed -- which the
+  // validation layer reports as VUID-vkCmdEndDebugUtilsLabelEXT-commandBuffer-
+  // 01912 and MoltenVK turns into a popDebugGroup against an unpushed encoder.
+  // A no-op record body keeps this about the labels and nothing else.
+  {
+    const auto nothing = [](VkCommandBuffer) {};
+    check(owner.value()
+              .submit_single_time(nothing, nullptr, nullptr, "named")
+              .ok(),
+          "a named debug region submits cleanly");
+    check(owner.value()
+              .submit_single_time(nothing, nullptr, nullptr, nullptr)
+              .ok(),
+          "a null debug label leaves the region unopened and unclosed");
+  }
 
   // Opting out is honoured, and takes the device's labels with it.
   {
@@ -171,7 +211,7 @@ int main() {
       vr::Result<VkPhysicalDevice> gpu = plain.value().select_physical_device();
       if (gpu) {
         vr::Result<vr::Device> unlabelled =
-            vr::Device::create(plain.value().handle(), gpu.value(), {});
+            vr::Device::create(plain.value(), gpu.value(), {});
         if (unlabelled) {
           check(!unlabelled.value().debug_labels_available(),
                 "an opted-out instance yields a device with no labels");
@@ -186,7 +226,7 @@ int main() {
 
   // adopt takes the embedder's word for an *instance* extension: it is not in
   // enabled_device_extensions and cannot be, so a creator that says nothing
-  // gets no labels rather than an unportable vkGetInstanceProcAddr result.
+  // gets no labels rather than an unportable vkGetDeviceProcAddr result.
   {
     vr::AdoptedDevice undeclared = adopted;  // enabled_debug_utils defaults off
     vr::Result<vr::Device> r = vr::Device::adopt(undeclared, {});
@@ -202,9 +242,9 @@ int main() {
   // Under the sanitizer CI job these become real double-free / leak detectors.
   {
     vr::Result<vr::Device> a =
-        vr::Device::create(instance.value().handle(), physical.value(), {});
+        vr::Device::create(instance.value(), physical.value(), {});
     vr::Result<vr::Device> b =
-        vr::Device::create(instance.value().handle(), physical.value(), {});
+        vr::Device::create(instance.value(), physical.value(), {});
     if (!a || !b) {
       std::fprintf(stderr, "move-test device create failed\n");
       return 1;

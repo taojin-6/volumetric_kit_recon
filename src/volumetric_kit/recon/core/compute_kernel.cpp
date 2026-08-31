@@ -5,6 +5,8 @@
 
 #include "volumetric_kit/recon/core/gpu_timer.hpp"
 
+#include <string>
+#include <utility>
 #include <vector>
 
 #include "volumetric_kit/recon/core/device.hpp"
@@ -13,12 +15,56 @@
 
 namespace volumetric_kit::recon {
 
+namespace {
+
+// Prefix a build failure with the kernel it belongs to, preserving its domain
+// and backend detail. A tier registers up to eight kernels in one create(), and
+// the underlying Status names only the Vulkan call ("ComputePipeline::create:
+// ..."), so without this a binding-count disagreement says nothing about
+// *which* shader disagreed. Rebuilt through the public factories because the
+// domain constructor is private -- deliberately, so a domain cannot be paired
+// with a detail it did not come from.
+Status named_failure(const char* name, const Status& why) {
+  std::string what = (name != nullptr ? name : "<unnamed kernel>");
+  what += ": ";
+  what += why.message();
+  switch (why.domain()) {
+    case Status::Code::InvalidArgument:
+      return Status::invalid_argument(std::move(what));
+    case Status::Code::NotFound:
+      return Status::not_found(std::move(what));
+    case Status::Code::Unsupported:
+      return Status::unsupported(std::move(what));
+    case Status::Code::OutOfMemory:
+      return Status::out_of_memory(std::move(what));
+    case Status::Code::IoError:
+      return Status::io_error(std::move(what));
+    case Status::Code::Backend:
+      return Status::backend_error(why.detail(), std::move(what));
+    case Status::Code::Ok:
+      break;
+  }
+  // Unreachable: only reached with an OK status, which no caller below passes.
+  return why;
+}
+
+// VR_ASSIGN, but attributing the failure to the kernel being built. Every step
+// of add() goes through it, so no build failure can reach a tier unnamed.
+template <typename T>
+Status assign_named(T& out, Result<T>&& from, const char* name) {
+  if (!from) return named_failure(name, from.status());
+  out = std::move(from).value();
+  return {};
+}
+
+}  // namespace
+
 Status KernelSetBuilder::add(ComputeKernel& out, const char* name,
                              const unsigned char* spv, std::size_t spv_size,
                              std::uint32_t bindings,
                              const VkPushConstantRange* push) {
-  // Set before the first early return, so a kernel that fails to build is still
-  // named in whatever diagnostic reports the failure.
+  // Set before the first early return, so a kernel that fails to build is
+  // named in the diagnostic that reports the failure (named_failure below).
   out.name = name;
   // The layout: `bindings` compute-stage storage buffers at 0..bindings-1 (the
   // caller's set-0 declarations match by index).
@@ -29,15 +75,20 @@ Status KernelSetBuilder::add(ComputeKernel& out, const char* name,
     b[i].descriptorCount = 1;
     b[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
   }
-  VR_ASSIGN(out.layout,
-            DescriptorSetLayout::create(device_, b.data(), bindings));
+  VR_TRY(assign_named(
+      out.layout,
+      DescriptorSetLayout::create(device_->handle(), b.data(), bindings),
+      name));
 
   // The pipeline from the embedded SPIR-V; the shader module is transient (the
   // pipeline does not retain it).
-  VR_ASSIGN(
-      ShaderModule module,
-      ShaderModule::create(device_, reinterpret_cast<const std::uint32_t*>(spv),
-                           spv_size));
+  ShaderModule module;
+  VR_TRY(assign_named(
+      module,
+      ShaderModule::create(device_->handle(),
+                           reinterpret_cast<const std::uint32_t*>(spv),
+                           spv_size),
+      name));
   const VkDescriptorSetLayout layout_handle = out.layout.handle();
   ComputePipelineDesc desc;
   desc.shader = &module;
@@ -45,7 +96,21 @@ Status KernelSetBuilder::add(ComputeKernel& out, const char* name,
   desc.set_layout_count = 1;
   desc.push_ranges = push;
   desc.push_range_count = push != nullptr ? 1u : 0u;
-  VR_ASSIGN(out.pipeline, ComputePipeline::create(device_, desc));
+  VR_TRY(assign_named(out.pipeline,
+                      ComputePipeline::create(device_->handle(), desc), name));
+
+  // Name the objects a capture indexes by, not just the region the dispatch
+  // records: Nsight groups a capture by VkPipeline and MoltenVK maps a named
+  // pipeline onto its MTLComputePipelineState label, so an unnamed pipeline
+  // leaves shader cost impossible to attribute back to a kernel -- which is the
+  // question the labels exist to answer. Named here because this is where the
+  // three handles are made and where the name is in scope.
+  device_->set_object_name(VK_OBJECT_TYPE_PIPELINE,
+                           debug_object_handle(out.pipeline.handle()), name);
+  device_->set_object_name(VK_OBJECT_TYPE_PIPELINE_LAYOUT,
+                           debug_object_handle(out.pipeline.layout()), name);
+  device_->set_object_name(VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT,
+                           debug_object_handle(out.layout.handle()), name);
 
   kernels_.push_back(&out);
   descriptor_total_ += bindings;
@@ -59,7 +124,7 @@ Result<DescriptorPool> KernelSetBuilder::build() {
   size.descriptorCount = descriptor_total_;
   VR_ASSIGN(
       DescriptorPool pool,
-      DescriptorPool::create(device_, &size, 1,
+      DescriptorPool::create(device_->handle(), &size, 1,
                              static_cast<std::uint32_t>(kernels_.size())));
   // Allocate every set before committing any into the caller's kernels, so a
   // mid-loop failure destroys the local pool (freeing the sets already made)
@@ -143,12 +208,6 @@ Status dispatch(Device& device, const ComputeKernel& kernel, const void* push,
   // twice.
   return device.submit_single_time(
       [&](VkCommandBuffer cmd) {
-        // The region a GPU profiler attributes this dispatch to. Opened around
-        // the whole recording -- bind, push, dispatch, barrier -- because that
-        // is the work the capture should charge to this kernel, and closed
-        // unconditionally below since begin/end are no-ops together when the
-        // entry points did not resolve.
-        device.begin_debug_label(cmd, kernel.name);
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
                           kernel.pipeline.handle());
         const VkDescriptorSet set = kernel.set.handle();
@@ -171,10 +230,13 @@ Status dispatch(Device& device, const ComputeKernel& kernel, const void* push,
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                              dst_stages, 0, 1, &barrier, 0, nullptr, 0,
                              nullptr);
-        device.end_debug_label(cmd);
       },
       stage != nullptr ? stage->timer() : nullptr,
-      stage != nullptr ? stage->name() : nullptr);
+      stage != nullptr ? stage->name() : nullptr,
+      // The region a GPU profiler attributes this dispatch to. Passed rather
+      // than recorded inside the lambda so submit_single_time can place it
+      // outside the timestamp pair -- see that overload's `debug_label`.
+      kernel.name);
 }
 
 }  // namespace volumetric_kit::recon

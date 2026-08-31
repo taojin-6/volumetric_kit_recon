@@ -286,6 +286,34 @@ inline bool build_shared_device(GLFWwindow* window,
   }
   const char* const validation_layer = "VK_LAYER_KHRONOS_validation";
 
+  // VK_EXT_debug_utils, on its own terms. Both libraries resolve their capture
+  // labels from it -- recon asks through DeviceRequirements::debug_utils, gfx
+  // through InstanceConfig::enable_debug_utils -- and neither requires it, so
+  // an absent extension costs the capture's names and nothing else. Probed
+  // rather than assumed: requesting an instance extension the loader does not
+  // offer fails vkCreateInstance outright.
+  bool debug_utils_available = false;
+  {
+    std::uint32_t ext_count = 0;
+    vkEnumerateInstanceExtensionProperties(nullptr, &ext_count, nullptr);
+    std::vector<VkExtensionProperties> exts(ext_count);
+    if (vkEnumerateInstanceExtensionProperties(nullptr, &ext_count,
+                                               exts.data()) == VK_SUCCESS) {
+      for (const VkExtensionProperties& ext : exts) {
+        if (std::strcmp(ext.extensionName, VK_EXT_DEBUG_UTILS_EXTENSION_NAME) ==
+            0) {
+          debug_utils_available = true;
+          break;
+        }
+      }
+    }
+  }
+  if (!debug_utils_available) {
+    std::fprintf(stderr,
+                 "shared device: VK_EXT_debug_utils unavailable; GPU captures "
+                 "will show unnamed dispatches and buffers\n");
+  }
+
   VkApplicationInfo app_info{};
   app_info.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
   app_info.pApplicationName = config.app_name;
@@ -297,7 +325,13 @@ inline bool build_shared_device(GLFWwindow* window,
   auto make_instance = [&](bool with_portability) -> VkResult {
     std::vector<const char*> instance_extensions(
         glfw_extensions, glfw_extensions + glfw_extension_count);
-    if (validation_available) {
+    // Not gated on the validation layer. Both libraries resolve their capture
+    // labels from this extension, and the build worth profiling is the Release
+    // one with no Vulkan SDK installed -- Xcode's Metal debugger needs no
+    // layer. Gating it here was what left fuse_viewer's dispatches anonymous in
+    // exactly that build. Requested unconditionally: a loader that does not
+    // offer it fails instance creation, and the retry below drops it.
+    if (debug_utils_available) {
       instance_extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
     }
     VkInstanceCreateInfo instance_info{};
@@ -585,9 +619,10 @@ inline bool build_shared_device(GLFWwindow* window,
   out.enabled_timeline_semaphore = want_timeline;
   out.enabled_scalar_block_layout = want_scalar;
   out.enabled_dynamic_rendering = want_dynamic_rendering;
-  // Not config.enable_validation: the layer may have been absent, in which case
-  // the instance above skipped the extension too and continued without it.
-  out.enabled_debug_utils = validation_available;
+  // What the instance actually enabled, which is no longer the same question as
+  // whether validation was available: the extension is requested on its own
+  // terms above, so this is true in a Release build with no layer installed.
+  out.enabled_debug_utils = debug_utils_available;
 
   vkGetDeviceQueue(out.device, out.graphics_family, 0, &out.graphics_queue);
   vkGetDeviceQueue(out.device, out.compute_family, compute_queue_index,
@@ -633,6 +668,10 @@ inline vr::AdoptedDevice recon_adopt_payload(const SharedDevice& shared) {
   // so a hand-written `true` would turn its verification into a no-op.
   adopted.enabled_timeline_semaphore = shared.enabled_timeline_semaphore;
   adopted.enabled_scalar_block_layout = shared.enabled_scalar_block_layout;
+  // As gfx_adopt_payload below. Omitting it does not fail the adopt -- debug
+  // utils is diagnostic and never required -- which is exactly why it went
+  // missing: the only symptom was a capture full of anonymous dispatches.
+  adopted.enabled_debug_utils = shared.enabled_debug_utils;
   return adopted;
 }
 

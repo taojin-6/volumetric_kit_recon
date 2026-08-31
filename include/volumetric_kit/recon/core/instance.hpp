@@ -28,11 +28,13 @@ struct InstanceConfig {
   ///
   /// On by default because the extension is what lets a GPU profiler name what
   /// it is looking at: @ref Device resolves the label entry points from it, so
-  /// every dispatch carries its kernel's name and every buffer recon allocates
-  /// carries its own (see @ref Device::set_object_name). Nsight renders those
-  /// as trace ranges and named resources; MoltenVK maps them onto Metal debug
-  /// groups and `MTLResource` labels, so one instance flag serves the profiler
-  /// on either platform.
+  /// every dispatch carries its kernel's name, its pipeline carries the same,
+  /// and the buffers recon holds across calls — plus the per-frame depth and
+  /// colour uploads, the largest transfers in the pipeline — carry theirs (see
+  /// @ref Device::set_object_name). Nsight renders those as trace ranges and
+  /// named resources; MoltenVK maps them onto Metal debug groups and
+  /// `MTLResource` labels, so one instance flag serves the profiler on either
+  /// platform.
   ///
   /// Costs nothing when no profiler is attached -- the label entry points are
   /// driver stubs, so the labels are a predictable branch and nothing more --
@@ -40,9 +42,14 @@ struct InstanceConfig {
   /// build flag: attaching a profiler to a Release binary must not require
   /// rebuilding the binary being profiled.
   ///
-  /// Set false only to hold a shipping instance to the extensions it strictly
-  /// needs; @ref Instance::debug_utils_enabled then reports false and every
-  /// label site becomes a no-op.
+  /// Set false to hold a shipping instance to the extensions it strictly needs.
+  /// @ref Instance::debug_utils_enabled then reports false and every label site
+  /// becomes a no-op — **unless** @ref enable_validation is also set and the
+  /// layer is present, since the validation messenger is built on this same
+  /// extension and cannot be had without it. Clearing this then removes no
+  /// extension and the labels come back; a line is logged saying so. The two
+  /// do not conflict in practice: a build that wants the extension list
+  /// trimmed is not a build running the validation layer.
   bool request_debug_utils = true;
   /// Extra instance extensions to request (the interop bootstrap may add some).
   std::vector<const char*> extra_instance_extensions;
