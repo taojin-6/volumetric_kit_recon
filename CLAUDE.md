@@ -215,6 +215,9 @@ order. Change the decision, its entry there, and this list together.
   A profiler label belongs to the kernel, not to the timed span;
   `VK_EXT_debug_utils` is requested independently of validation, and the
   *instance* extension is declared across the adopt seam.
+- [**2026-08-31**](DECISIONS.md#2026-08-31--the-dense-extract-goes-extract-becomes-extract_host-so-the-two-workflows-are-named-rather-than-inferred) —
+  The dense extract goes; `extract` becomes `extract_host`, so the two
+  workflows are named rather than inferred.
 
 ## Provenance & salvage policy
 
@@ -508,8 +511,13 @@ arbitrary; it usually isn't.
   `"integrate"` row with both halves, over a `"  ..active set"` sub-row for the
   compaction dispatch it also makes.
 
-- **`mesh`** — `MarchingCubes` over a dense grid or, the real path, a sparse
-  `VoxelBlockGrid`: one workgroup per active block, with the cross-block 2×2×2
+- **`mesh`** — `MarchingCubes` over a sparse `VoxelBlockGrid`, and only that
+  (the dense analytic entry point was removed 2026-08-31; the prior engine
+  never had one). Two workflows, named by their entry points: `extract_host`
+  returns an owned host `Mesh` for export — the complete transaction, giving
+  its ring slot back so a PLY writer never learns the ring exists — and
+  `extract_device` returns a borrowed `DeviceMesh` a renderer draws directly,
+  released by generation. One workgroup per active block, with the cross-block 2×2×2
   neighbourhood resolved by probing the hash table on-device. A block counts
   its output, reserves one range for all of it with a single atomic, and
   only then writes, so **a block's output is contiguous in the arena** —
@@ -535,7 +543,8 @@ arbitrary; it usually isn't.
   consumer releases by generation; the kernel writes a real
   `VkDrawIndexedIndirectCommand`. `extract_device` returns a borrowed
   `DeviceMesh` (valid until the next extract, enforced by a generation stamp),
-  `download` takes the single host copy. An `extract_device` overload meshes a
+  `download` takes the single host copy and bridges the two workflows. An
+  `extract_device` overload meshes a
   caller-supplied `volume::BlockList` instead of compacting the whole map —
   what a camera's frustum-culled set arrives as, though nothing in the extractor
   knows a frustum produced it (2026-08-12). The arena is rebuilt from that
@@ -578,7 +587,7 @@ arbitrary; it usually isn't.
   all. What it
   may trust is one `{watermark, epoch, serial}` struct, cleared at the top of
   **both** extract paths and re-established only on the publishing return, so
-  no failure — and no dense extract — leaves it describing geometry that is
+  no failure leaves it describing geometry that is
   gone; the anchor is compared *above* the call that re-anchors it, or it
   compares a value with itself. Everything else is a **silent fallback to a
   full extract**, which is why `ExtractTimings::incremental` reports which pass
@@ -658,8 +667,7 @@ incremental extraction past one slot, revisiting degenerate retirement if
 relocation proves common rather than rare — and, the sharing kernel's form of
 that same question, recording a block's *reservation* beside its live span so a
 surface oscillating around a threshold stops relocating on every up-tick —
-fitting the *dense* extract to its
-surface as the sparse one does, and `ExtractTimings`' device half — which must
+and `ExtractTimings`' device half — which must
 bracket several dispatches in **one** timed submit, since a timed submit costs
 ~0.13 ms on MoltenVK and four of the six phases run under that. On `texture`:
 the multi-keyframe post-scan atlas. On `core`: the `TODO(core)` for

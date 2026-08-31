@@ -85,9 +85,16 @@ vol::VoxelGridParams sphere_grid_params() {
   return grid;
 }
 
-// Allocate every block of the cube and write the analytic sphere SDF (weight 1)
-// into each voxel, addressed by the compacted BlockIndex::ptr + local index.
-bool fill_sphere_grid(vol::VoxelBlockGrid& grid) {
+// Which field to write. kSphere is the fixture every case below meshes; kDense
+// crosses the iso in EVERY cell -- alternating signs on voxel parity, marching
+// cubes' ~5-triangles-per-cell worst case against a shell's ~1 -- and exists
+// for one case only, which needs an extract that cannot fit in the arena a
+// sphere extract left held.
+enum class Field { kSphere, kDense };
+
+// Allocate every block of the cube and write @p field (weight 1) into each
+// voxel, addressed by the compacted BlockIndex::ptr + local index.
+bool fill_grid(vol::VoxelBlockGrid& grid, Field field = Field::kSphere) {
   std::vector<vol::BlockIndex> blocks;
   for (int cz = 0; cz < kBlocks; ++cz) {
     for (int cy = 0; cy < kBlocks; ++cy) {
@@ -124,7 +131,10 @@ bool fill_sphere_grid(vol::VoxelBlockGrid& grid) {
           // per-voxel array, so the local index adds straight onto it.
           const std::size_t index = static_cast<std::size_t>(block.ptr) +
                                     static_cast<std::size_t>(local);
-          tsdf_data[index] = vr::length(world - sphere_center()) - kRadius;
+          tsdf_data[index] =
+              field == Field::kSphere
+                  ? vr::length(world - sphere_center()) - kRadius
+                  : (((voxel.x + voxel.y + voxel.z) & 1) ? kH : -kH);
           weight_data[index] = 1.0f;
         }
       }
@@ -167,7 +177,7 @@ int main() {
       device.value(), allocator.value(), sphere_grid_params(), attrs, 2);
   CHECK(grid_result.ok());
   vol::VoxelBlockGrid grid = std::move(grid_result).value();
-  CHECK(fill_sphere_grid(grid));
+  CHECK(fill_grid(grid));
 
   // A camera in front of the sphere looking down +Z (recon's OpenCV
   // convention), with a constant depth at the sphere's near surface: the
@@ -308,40 +318,52 @@ int main() {
     CHECK(extractor.download(live).ok());
   }
 
-  // The DENSE extract shares that same arena, so it invalidates an outstanding
-  // view too. It is the sharper case: now that the sparse path fits its arena
-  // to the surface rather than to the 5-tri/cell worst case, a dense grid
-  // routinely needs MORE than the sparse call left held, so this call
-  // reallocates the buffers rather than merely overwriting them -- and a view
-  // still accepted here would name freed VkBuffers, not just stale contents.
+  // The same refusals over a superseding extract that REALLOCATES the buffers
+  // rather than overwriting them. Above, both extracts fit the same arena, so a
+  // stale view names a live VkBuffer and only its contents are wrong; here the
+  // second extract needs more than the first left held, so the old VkBuffer was
+  // destroyed synchronously and the stale view names freed memory.
+  //
+  // What that buys is not a sharper assertion -- the generation check refuses
+  // both, and download() copies out of the LIVE arena either way, so no
+  // mutation fails here that survives above. It is the only place in this file
+  // where a stale DeviceMesh names a freed buffer at all, which is what makes a
+  // future path that binds DeviceMesh::vertices before consulting
+  // is_current() a real use-after-free the validation layers can name, rather
+  // than a silent read of live-but-stale contents that looks correct
+  // everywhere. So the texturing path -- the one that actually BINDS those
+  // handles -- is asserted here beside the download.
+  //
+  // A dedicated extractor, because the arena is grow-only: `extractor` would
+  // have to mesh the dense field to reach this, and then it could never grow
+  // again for any later case.
   {
-    vr::Result<mesh::DeviceMesh> before = extractor.extract_device(grid, 0.0f);
-    CHECK(before.ok());
-    const mesh::DeviceMesh stale = before.value();
+    vr::Result<mesh::MarchingCubes> growing_result =
+        mesh::MarchingCubes::create(device.value(), allocator.value());
+    CHECK(growing_result.ok());
+    mesh::MarchingCubes growing = std::move(growing_result).value();
+
+    vr::Result<vol::VoxelBlockGrid> dense_result = vol::VoxelBlockGrid::create(
+        device.value(), allocator.value(), sphere_grid_params(), attrs, 2);
+    CHECK(dense_result.ok());
+    vol::VoxelBlockGrid dense = std::move(dense_result).value();
+    CHECK(fill_grid(dense, Field::kDense));
+
+    mesh::ExtractTimings before;
+    vr::Result<mesh::DeviceMesh> first =
+        growing.extract_device(grid, 0.0f, &before);
+    CHECK(first.ok());
+    const mesh::DeviceMesh stale = first.value();
     CHECK(!stale.empty());
 
-    std::vector<vol::Voxel> samples(static_cast<std::size_t>(kN) * kN * kN);
-    for (int z = 0; z < kN; ++z) {
-      for (int y = 0; y < kN; ++y) {
-        for (int x = 0; x < kN; ++x) {
-          const vr::Vec3f p(static_cast<float>(x) * kH,
-                            static_cast<float>(y) * kH,
-                            static_cast<float>(z) * kH);
-          vol::Voxel& v =
-              samples[static_cast<std::size_t>(x + kN * (y + kN * z))];
-          v.sdf = vr::length(p - sphere_center()) - kRadius;
-          v.weight = 1.0f;
-        }
-      }
-    }
-    mesh::DenseGrid dense_grid;
-    dense_grid.dims = vr::Vec3i(kN, kN, kN);
-    dense_grid.voxel_size = kH;
-    dense_grid.origin = vr::Vec3f(0.0f, 0.0f, 0.0f);
-    CHECK(extractor.extract(samples.data(), samples.size(), dense_grid, 0.0f)
-              .ok());
-
-    CHECK(!extractor.download(stale).ok());
+    mesh::ExtractTimings after;
+    CHECK(growing.extract_device(dense, 0.0f, &after).ok());
+    // The grow is what makes this the freed-buffer case rather than a repeat of
+    // the one above, so it is asserted rather than assumed.
+    CHECK(after.vertex_capacity > before.vertex_capacity);
+    CHECK(!stale.is_current());
+    CHECK(!growing.download(stale).ok());
+    CHECK(!texturer.texture(stale, depth.data(), cam).ok());
   }
 
   // A DeviceMesh from another extractor is rejected too: generations are

@@ -3310,3 +3310,84 @@ uploads, the largest transfers in the pipeline and the literal subject of the
 bandwidth question. `KernelSetBuilder` took a `const Device&` rather than a bare
 `VkDevice` to reach any of the naming, and the kernel name now also prefixes a
 build failure, which is what its own comment had claimed all along.
+
+### 2026-08-31 — The dense extract goes; `extract` becomes `extract_host`, so the two workflows are named rather than inferred.
+
+Two things had ended up sharing the name `extract`, and they shared nothing
+else. One took a caller-supplied flat array of `Voxel{sdf, weight}` over a
+`DenseGrid` and ran a kernel of its own; the other meshed a sparse
+`VoxelBlockGrid`. Different input model (AoS versus the SoA attribute arrays),
+different kernel, different sizing policy. On top of that the host/device pair
+was asymmetric — `extract` beside `extract_device` — so the unsuffixed name read
+as the default when it is the *export* path, and the device path is what the
+live consumer uses.
+
+**The dense path was never ported heritage; it was rewrite scaffolding.** The
+proven engine this repo re-implements has no dense entry point at all:
+`MarchingCubesExtractor` exposes exactly two overloads, both taking a
+`VoxelHashMap` — one a dirty-block subset, one a caller-supplied `BlockList`,
+which are precisely `extract_device_incremental` and the culled
+`extract_device` here. The only `DenseGrid` anywhere in that tree is an
+unrelated mesh-to-SDF stress test. So the dense overload existed to prove the
+per-cell kernel before the sparse path landed, and nothing outside the tests
+ever called it.
+
+**What it was actually costing.** It shared the ring and arena with the sparse
+path, which its own comment flagged: a large dense call grows whichever slot it
+lands on to the dense worst case (5 triangles/cell, three private vertices
+each, no refit), and that slot keeps it for the extractor's lifetime — so a
+process touching both entry points forfeits the fitted arena. It also generated
+its own test surface: of the four dense uses in the sparse suite, **three**
+existed only to pin what happens when a dense call mixes with sparse work
+(retiring the span table, forcing an incremental fallback, growing one output
+buffer). Those are problems that exist because dense exists.
+
+**Removing it does not cost the marching-cubes oracle**, which was the first
+argument for keeping it and was wrong. The sparse suite writes the analytic
+sphere SDF straight into a real block grid — the attribute buffers are
+host-visible and mapped — and checks radius, unit outward normals, winding, and
+total surface area against `4*pi*r^2`. The prior engine validated its MC with
+strictly less than that (radius tolerance, outward-normal ratio, index range)
+and shipped.
+
+**Nor does it cost the cross-block correctness proof.** That was the second
+argument, and the better one, but the check that carries it does not involve
+dense: the collision-chain case meshes the *same* field through a table shaped
+to spill (2-entry buckets, `overflow_count > 0` asserted before it is trusted)
+and requires the result match the reference **triangle for triangle** through
+`canonical_triangles`. Its own comment names the failure mode — "surface
+silently missing at block seams" — which is exactly what the dense equivalence
+was there for. It is also the sharper instrument of the two: a bug in the
+shared per-cell body moved both sides of the dense equality at once and left it
+green, which the suite records as a real event.
+
+**Nor is the independent-growth guard lost, and the first cut of this change
+was wrong to say so.** "Growing one output buffer must not resize the other"
+defends a real past bug — the two were reallocated together, which grew the
+buffer that already *fitted* to 1.5x on every event, compounding into the ring
+runaway the slot-independence decision exists to prevent. The argument for
+parking it was that the case was reachable only through dense, since under
+`share_vertices` a surface holds ~0.75 vertices per triangle and a sparse
+extract always asks in that proportion. That is false: the arena is planned
+from `verts_per_1000_tris_`, **learned from the previous extract**, so a first
+extract over a thin shell teaches a ratio a dense field then breaks. The sparse
+test now arranges exactly that on one `share_vertices` extractor with no second
+entry point anywhere, and asserts both bounds of the window before it asserts
+the growth, so the case cannot go vacuous if those capacities drift.
+
+The lesson generalises past this guard: **a property is not dense-only because
+the dense caller is the one that used to reach it.** Three of the four dense
+uses in the sparse suite really were about dense mixing with sparse work and
+went with it; this fourth one was about the two budgets being out of
+proportion, and dense was merely the most convenient way to arrange that.
+
+**The rename.** `extract` becomes `extract_host`, symmetric with
+`extract_device` and matching the `Mesh` / `DeviceMesh` type pair, so the shape
+is `extract_<destination>[_<mode>]` and every device-side mode clusters under
+one prefix. `extract_host` is not a convenience wrapper and could not be
+deleted in favour of `extract_device` + `download`: it also calls the private
+`free_slot_of`, and a host-only caller has no generation to release with
+(`Result<Mesh>` carries none) while the public `release_through` is the
+*consumer's* high-water mark and would retire slots an `extract_device` caller
+is still drawing from. Keeping a host entry point is what keeps a PLY writer
+off the ring contract entirely.

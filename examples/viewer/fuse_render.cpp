@@ -347,7 +347,7 @@ vr::Result<Reconstruction> fuse(const Options& opt,
 
   Reconstruction recon;
   recon.sensor_vfov = sensor_vfov;
-  VR_ASSIGN(recon.mesh, extractor.extract(volume));
+  VR_ASSIGN(recon.mesh, extractor.extract_host(volume));
 
   // Project one keyframe onto the mesh (the live single-camera texturing
   // slice): the --follow frame if given, else the middle fused frame. Its uv0
