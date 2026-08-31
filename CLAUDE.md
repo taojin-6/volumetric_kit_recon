@@ -667,9 +667,7 @@ incremental extraction past one slot, revisiting degenerate retirement if
 relocation proves common rather than rare — and, the sharing kernel's form of
 that same question, recording a block's *reservation* beside its live span so a
 surface oscillating around a threshold stops relocating on every up-tick —
-rebuilding the independent-growth guard on the incremental path (it was
-reachable only through the removed dense overload), and `ExtractTimings`'
-device half — which must
+and `ExtractTimings`' device half — which must
 bracket several dispatches in **one** timed submit, since a timed submit costs
 ~0.13 ms on MoltenVK and four of the six phases run under that. On `texture`:
 the multi-keyframe post-scan atlas. On `core`: the `TODO(core)` for

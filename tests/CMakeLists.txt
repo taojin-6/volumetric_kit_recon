@@ -168,8 +168,9 @@ vr_target_warnings(recon_volume_frustum_test)
 add_test(NAME recon_volume_frustum COMMAND recon_volume_frustum_test)
 
 # Sparse marching cubes: mesh an analytic sphere written into a real multi-block
-# VoxelBlockGrid, exercising cross-block neighbour sampling, and prove it
-# matches the dense path exactly. Skips (exit 0) where no device is present.
+# VoxelBlockGrid, exercising cross-block neighbour sampling, and prove the same
+# field meshes identically however it is divided into blocks. Skips (exit 0)
+# where no device is present.
 add_executable(recon_mesh_marching_cubes_sparse_test
                marching_cubes_sparse_test.cpp)
 target_link_libraries(recon_mesh_marching_cubes_sparse_test

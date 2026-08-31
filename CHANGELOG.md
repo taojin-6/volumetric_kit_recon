@@ -16,9 +16,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   shared the sparse path's ring — so one large dense call grew whichever slot
   it landed on to the dense worst case and held it for the extractor's
   lifetime. Meshing is sparse-only now. See the 2026-08-31 decision for what
-  the removal does and does not cost in coverage; one guard (independent growth
-  of the two output buffers) was reachable only through dense and is a
-  `TODO(mesh)` to rebuild on the incremental path.
+  the removal does and does not cost in coverage: every property the dense
+  cases carried is asserted through a sparse fixture instead, including the
+  independent growth of the two output buffers, which a first extract over a
+  thin shell followed by one over a dense field reaches without a second entry
+  point.
 
 ### Changed
 
@@ -33,6 +35,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   returns its ring slot, which a host-only caller cannot do (a `Result<Mesh>`
   carries no generation, and the public `release_through` is the consumer's
   high-water mark).
+  **Note for downstream:** `volumetric_kit_ios` tracks this repo by
+  `GIT_TAG main`, and its `compute_smoke` app calls `mc.extract(vbg)` — rename
+  it there in the same window, or its next configure fails to compile.
 
 ### Added
 

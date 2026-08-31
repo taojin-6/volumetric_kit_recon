@@ -3357,22 +3357,29 @@ to spill (2-entry buckets, `overflow_count > 0` asserted before it is trusted)
 and requires the result match the reference **triangle for triangle** through
 `canonical_triangles`. Its own comment names the failure mode — "surface
 silently missing at block seams" — which is exactly what the dense equivalence
-was there for. It is also the sharper instrument of the two: dense and sparse
-share `mcEmitCell`, so a bug in the shared emitter moved both sides of the
-dense equality and left it green, which the suite records as a real event.
+was there for. It is also the sharper instrument of the two: a bug in the
+shared per-cell body moved both sides of the dense equality at once and left it
+green, which the suite records as a real event.
 
-**One guard is genuinely lost, and it is marked rather than quietly dropped.**
-"Growing one output buffer must not resize the other" defended a real past bug
-— the two were reallocated together, which grew the buffer that already *fitted*
-to 1.5x on every event, compounding into the ring runaway the slot-independence
-decision exists to prevent. It was reachable only through dense: under
+**Nor is the independent-growth guard lost, and the first cut of this change
+was wrong to say so.** "Growing one output buffer must not resize the other"
+defends a real past bug — the two were reallocated together, which grew the
+buffer that already *fitted* to 1.5x on every event, compounding into the ring
+runaway the slot-independence decision exists to prevent. The argument for
+parking it was that the case was reachable only through dense, since under
 `share_vertices` a surface holds ~0.75 vertices per triangle and a sparse
-extract always asks in that proportion, so no sparse call can put the two
-budgets out of step. Dense, asking for exactly 3, could. The `TODO(mesh)` left
-in its place names where to rebuild it — the **incremental** path, where
-retirement leaves dead triangles occupying index slots while dead vertices are
-merely unreachable, so the two buffers drift apart on their own. That is also
-the consumer the property matters for.
+extract always asks in that proportion. That is false: the arena is planned
+from `verts_per_1000_tris_`, **learned from the previous extract**, so a first
+extract over a thin shell teaches a ratio a dense field then breaks. The sparse
+test now arranges exactly that on one `share_vertices` extractor with no second
+entry point anywhere, and asserts both bounds of the window before it asserts
+the growth, so the case cannot go vacuous if those capacities drift.
+
+The lesson generalises past this guard: **a property is not dense-only because
+the dense caller is the one that used to reach it.** Three of the four dense
+uses in the sparse suite really were about dense mixing with sparse work and
+went with it; this fourth one was about the two budgets being out of
+proportion, and dense was merely the most convenient way to arrange that.
 
 **The rename.** `extract` becomes `extract_host`, symmetric with
 `extract_device` and matching the `Mesh` / `DeviceMesh` type pair, so the shape
