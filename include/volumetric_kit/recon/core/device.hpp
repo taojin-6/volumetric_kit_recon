@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <functional>
 #include <mutex>
+#include <type_traits>
 #include <vector>
 
 #include "volumetric_kit/recon/core/export.hpp"
@@ -19,10 +20,44 @@
 
 namespace volumetric_kit::recon {
 
+/// @brief Cast any Vulkan handle to the `std::uint64_t`
+///        @ref Device::set_object_name takes.
+///
+/// One cast will not do for both word sizes, which is the whole reason this
+/// exists: `VK_DEFINE_NON_DISPATCHABLE_HANDLE` is a *pointer* on 64-bit targets
+/// and a bare `uint64_t` on 32-bit ones, so `reinterpret_cast` is required on
+/// the first and ill-formed on the second. recon targets both (a 32-bit
+/// `armeabi-v7a` Android build among them), so the choice is made here once
+/// rather than at each naming site.
+///
+/// `VK_NULL_HANDLE` needs its own branch, and needs it on exactly the platform
+/// the other two do not cover: it is `nullptr` where handles are pointers, and
+/// `std::nullptr_t` is not a pointer type to `std::is_pointer_v`, so without
+/// this the 64-bit build takes the `static_cast` branch and fails to compile
+/// while the 32-bit one (where it is a literal `0`) succeeds -- the inverse of
+/// the portability this exists to provide.
+template <typename Handle>
+inline std::uint64_t debug_object_handle(Handle handle) noexcept {
+  if constexpr (std::is_null_pointer_v<Handle>) {
+    (void)handle;
+    return 0;
+  } else if constexpr (std::is_pointer_v<Handle>) {
+    return reinterpret_cast<std::uint64_t>(handle);
+  } else {
+    return static_cast<std::uint64_t>(handle);
+  }
+}
+
 // Forward-declared rather than included: gpu_timer.hpp needs Device to read the
 // physical device and compute family, so including it here would be circular.
 // The timed submit takes a pointer, so a declaration is all this header needs.
 class GpuTimer;
+
+// Forward-declared for the create() overload below, which reads one bool off
+// it. instance.hpp does not include this header, so a full include would work
+// -- but it would make every consumer of a Device pay for the instance's
+// layer/extension machinery to pass a reference through.
+class Instance;
 
 /// @brief Parameters for @ref Device::create / @ref Device::adopt.
 struct DeviceConfig {
@@ -33,6 +68,22 @@ struct DeviceConfig {
   /// against the device's supported list (create) or its declared enabled list
   /// (adopt).
   std::vector<const char*> extra_device_extensions;
+  /// Whether `VK_EXT_debug_utils` is enabled on the `VkInstance` passed to
+  /// @ref Device::create — the declare/verify partner of @ref
+  /// AdoptedDevice::enabled_debug_utils, for the create path.
+  ///
+  /// Declared rather than detected because Vulkan cannot be asked what a
+  /// `VkInstance` enabled, and asking the loader for an entry point of an
+  /// extension that was *not* enabled is not portable: a conformant loader
+  /// returns null, a directly-linked MoltenVK (iOS) returns a live pointer
+  /// recon must not call.
+  ///
+  /// Defaults false, so a raw `VkInstance` of unknown provenance costs the
+  /// capture's names and nothing else. The @ref Device::create overload taking
+  /// a recon @ref Instance fills this in from @ref
+  /// Instance::debug_utils_enabled, which is why no recon call site sets it by
+  /// hand.
+  bool instance_debug_utils_enabled = false;
 };
 
 /// @brief What recon needs from a `VkDevice`, published so an embedder sharing
@@ -63,6 +114,22 @@ struct DeviceRequirements {
   /// `scalarBlockLayout` (1.2 core) — the buffer ABI every recon compute shader
   /// reads its POD structs through (2026-07-05); required.
   bool scalar_block_layout = true;
+  /// `VK_EXT_debug_utils` — recon names its dispatches and buffers through it
+  /// (see @ref Device::set_object_name), so a GPU capture reads
+  /// `tsdf_integrate` rather than an anonymous dispatch.
+  ///
+  /// The one **instance** extension in this struct, and the reason the struct
+  /// carries a flag rather than a name in @ref device_extensions: that array is
+  /// what gets passed to `vkCreateDevice`, and this belongs to
+  /// `vkCreateInstance`. An embedder merging these requirements enables it on
+  /// its instance and reports back through @ref
+  /// AdoptedDevice::enabled_debug_utils (or @ref
+  /// DeviceConfig::instance_debug_utils_enabled).
+  ///
+  /// Purely diagnostic and the **only** optional entry here: recon runs
+  /// identically without it, so an embedder that cannot enable it drops it
+  /// rather than failing the merge.
+  bool debug_utils = false;
 };
 
 /// @brief A `VkDevice` the caller already created, plus what the caller ENABLED
@@ -101,6 +168,20 @@ struct AdoptedDevice {
   /// Whether the creator enabled `scalarBlockLayout` on `device` (1.2 core, but
   /// must be enabled at creation and can't be queried back). recon requires it.
   bool enabled_scalar_block_layout = false;
+  /// Whether the creator enabled `VK_EXT_debug_utils` on @ref instance.
+  ///
+  /// Declared rather than listed in @ref enabled_device_extensions because
+  /// debug utils is an **instance** extension, so it is not in that array and
+  /// cannot be: the array carries what was enabled on the *device*. Vulkan
+  /// offers no way to query either back, hence the same declare/verify shape
+  /// the two feature flags above use.
+  ///
+  /// Purely diagnostic -- recon never requires it. `false` (the default) costs
+  /// only the profiler labels: @ref Device::set_object_name and the per-kernel
+  /// dispatch labels become no-ops, and @ref Device::debug_labels_available
+  /// reports false. An embedder that wants a capture to name recon's dispatches
+  /// and buffers enables the extension on its instance and sets this.
+  bool enabled_debug_utils = false;
 };
 
 /// @brief Owns *or borrows* a `VkDevice`, its compute (+ transfer) queue, and a
@@ -110,7 +191,7 @@ struct AdoptedDevice {
 ///          outlive this object; it stores only borrowed handles.
 ///
 /// @code
-/// Result<Device> device = Device::create(instance.handle(), physical, {});
+/// Result<Device> device = Device::create(instance, physical, {});
 /// if (!device) return device.status();
 /// @endcode
 class VR_CORE_API Device {
@@ -123,12 +204,37 @@ class VR_CORE_API Device {
   ///                  returned device (a lifetime contract, unused at
   ///                  creation).
   /// @param physical  The physical device to build on.
-  /// @param config    Features and extensions to enable.
+  /// @param config    Features and extensions to enable. @ref
+  ///                  DeviceConfig::instance_debug_utils_enabled must say
+  ///                  whether @p instance enabled `VK_EXT_debug_utils`; it
+  ///                  cannot be detected, and the overload below fills it in
+  ///                  for a recon-created instance.
   /// @return The device, or a non-OK @ref Status:
   ///         @ref Status::Code::InvalidArgument for a null @p physical;
   ///         @ref Status::Code::Unsupported below Vulkan 1.2, without a compute
   ///         family, or missing a requested extension / `timelineSemaphore`.
   static Result<Device> create(VkInstance instance, VkPhysicalDevice physical,
+                               const DeviceConfig& config);
+
+  /// @brief @ref create against a recon-created @ref Instance, which is the
+  ///        only form that can get the debug-utils declaration right on its
+  ///        own.
+  ///
+  /// Identical to the overload above but for reading @ref
+  /// Instance::debug_utils_enabled into @ref
+  /// DeviceConfig::instance_debug_utils_enabled, overriding whatever @p config
+  /// carried: the instance in hand is the authority on what the instance
+  /// enabled, so a caller cannot disagree with it by accident. Prefer this
+  /// wherever an @ref Instance is available — the `VkInstance` overload exists
+  /// for an embedder whose instance recon did not create.
+  ///
+  /// @param instance  The instance @p physical belongs to; must outlive the
+  ///                  returned device.
+  /// @param physical  The physical device to build on.
+  /// @param config    Features and extensions to enable.
+  /// @return As the overload above.
+  static Result<Device> create(const Instance& instance,
+                               VkPhysicalDevice physical,
                                const DeviceConfig& config);
 
   /// @brief Adopt a `VkDevice` an embedder already created, **without owning
@@ -183,6 +289,80 @@ class VR_CORE_API Device {
   /// @return Whether this wrapper owns (and will destroy) the `VkDevice`.
   ///         `false` for a device obtained through @ref adopt.
   bool owns_device() const noexcept { return owns_device_; }
+
+  /// @return Whether `VK_EXT_debug_utils` label entry points resolved, so
+  ///         @ref set_object_name and the dispatch labels reach a profiler.
+  ///
+  /// A capability report, not a request: false when the instance did not
+  /// enable the extension (see @ref InstanceConfig::request_debug_utils and
+  /// @ref AdoptedDevice::enabled_debug_utils) or the driver returned no entry
+  /// point. Every labelling call is a well-defined no-op in that case, so a
+  /// caller never has to branch on this -- it exists for a test asserting the
+  /// labels are really there, and for a diagnostic that says why a capture
+  /// came back unnamed.
+  ///
+  /// Reading one pointer answers for all three: resolution is all-or-nothing,
+  /// so a driver that returns two of them leaves this false rather than
+  /// reporting a capability only two thirds of which is there.
+  bool debug_labels_available() const noexcept {
+    return set_object_name_ != nullptr;
+  }
+
+  /// @brief Name a Vulkan object so a GPU capture shows that name instead of a
+  ///        raw handle.
+  ///
+  /// A no-op when @ref debug_labels_available is false, and deliberately
+  /// `void`: a diagnostic that cannot fail is one no caller has to check, and
+  /// naming is never load-bearing. @p name is copied by the driver, so it need
+  /// not outlive the call -- unlike @ref StageRow::name, which is borrowed.
+  ///
+  /// @param type    The object's `VkObjectType` (e.g.
+  ///                `VK_OBJECT_TYPE_BUFFER`).
+  /// @param handle  The object handle, cast to `std::uint64_t`.
+  /// @param name    The name to attach; ignored when null.
+  ///
+  /// @code
+  /// device.set_object_name(VK_OBJECT_TYPE_BUFFER,
+  ///                        reinterpret_cast<std::uint64_t>(buf.handle()),
+  ///                        "tsdf");
+  /// @endcode
+  void set_object_name(VkObjectType type, std::uint64_t handle,
+                       const char* name) const noexcept;
+
+  /// @brief Open a named region in @p cmd, closed by @ref end_debug_label.
+  ///
+  /// What a profiler renders as one row per dispatch: Nsight shows these as
+  /// trace ranges, and MoltenVK maps them onto Metal debug groups so an Xcode
+  /// capture reads the same names. A no-op when @ref debug_labels_available is
+  /// false.
+  ///
+  /// Deliberately **not** tied to @ref GpuStageScope. A span exists only where
+  /// the caller asked for @ref StageMetrics, and asking costs a timestamp
+  /// (~0.13 ms per submit on MoltenVK) -- so pairing labels to spans would
+  /// perturb the very workload a profiler is measuring, and would leave an
+  /// uninstrumented call unnamed in the capture. Labels are free and
+  /// unconditional; spans are opt-in and measured.
+  ///
+  /// @param cmd   A recording command buffer.
+  /// @param name  The region's name; the call is skipped when null (Vulkan
+  ///              requires a non-null label name).
+  void begin_debug_label(VkCommandBuffer cmd, const char* name) const noexcept;
+
+  /// @brief Close the region opened by @ref begin_debug_label on @p cmd.
+  ///
+  /// Takes @p name so the pair skips on **identical** conditions: a null name
+  /// makes @ref begin_debug_label open nothing, and a bare `end_debug_label`
+  /// would then pop a region that was never pushed
+  /// (`VUID-vkCmdEndDebugUtilsLabelEXT-commandBuffer-01912`; a `popDebugGroup`
+  /// against an unpushed encoder under MoltenVK). @p name is not otherwise
+  /// used — `vkCmdEndDebugUtilsLabelEXT` takes none — so pass whatever was
+  /// passed to @ref begin_debug_label.
+  ///
+  /// A no-op when @ref debug_labels_available is false, so it pairs with a
+  /// skipped @ref begin_debug_label without the caller tracking which happened.
+  /// @param cmd   The command buffer the region was opened on.
+  /// @param name  The name @ref begin_debug_label was called with.
+  void end_debug_label(VkCommandBuffer cmd, const char* name) const noexcept;
   /// @return The mutex guarding submits on a shared queue, or `nullptr` when
   /// the
   ///         queue is exclusively this device's.
@@ -254,13 +434,23 @@ class VR_CORE_API Device {
   /// @param label   Span label, borrowed for as long as the metrics it is
   ///                published into are read (see @ref StageRow::name). Null
   ///                labels the span `"gpu"`.
+  /// @param debug_label  Name for the `VK_EXT_debug_utils` region wrapped
+  ///                around the submission, or null for none. Recorded here
+  ///                rather than by @p record so that it sits **outside** the
+  ///                timestamp pair: a debug label can force an encoder
+  ///                boundary (MoltenVK maps it to
+  ///                `push`/`popDebugGroup`), and a span that measured the
+  ///                markers around the work rather than the work would make
+  ///                every published `gpu_ms` depend on whether a profiler was
+  ///                being catered to.
   /// @return OK once the work completes, or a non-OK @ref Status if any Vulkan
   ///         step fails. A failure to *resolve* the span never appears here:
   ///         the work has already succeeded by then, and an optional
   ///         diagnostic must not be able to fail it. Such a span is logged and
   ///         left unmeasured instead.
   Status submit_single_time(const std::function<void(VkCommandBuffer)>& record,
-                            GpuTimer* timer, const char* label) const;
+                            GpuTimer* timer, const char* label,
+                            const char* debug_label = nullptr) const;
 
  private:
   Device() = default;
@@ -277,6 +467,15 @@ class VR_CORE_API Device {
   std::uint32_t compute_family_ = 0;
   VkQueueFlags compute_family_flags_ = 0;
   VkQueue compute_queue_ = VK_NULL_HANDLE;
+  // VK_EXT_debug_utils label entry points, resolved once at create/adopt and
+  // null when the instance did not enable the extension -- which is what makes
+  // every labelling call a branch on a null pointer rather than a per-call
+  // vkGetInstanceProcAddr. Extension functions must be fetched through the
+  // loader, so they cannot be called directly. Reset on every ownership
+  // transfer, with the rest of the metadata.
+  PFN_vkSetDebugUtilsObjectNameEXT set_object_name_ = nullptr;
+  PFN_vkCmdBeginDebugUtilsLabelEXT begin_label_ = nullptr;
+  PFN_vkCmdEndDebugUtilsLabelEXT end_label_ = nullptr;
 };
 
 }  // namespace volumetric_kit::recon

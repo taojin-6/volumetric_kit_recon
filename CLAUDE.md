@@ -211,6 +211,10 @@ order. Change the decision, its entry there, and this list together.
   Meshing a camera's view is a caller-supplied block list, not a camera the mesh
   tier holds; and it stays apart from incremental extraction rather than
   stacking with it.
+- [**2026-08-30**](DECISIONS.md#2026-08-30--a-profiler-label-belongs-to-the-kernel-not-to-the-timed-span-vk_ext_debug_utils-is-requested-independently-of-validation-and-the-instance-extension-is-declared-across-the-adopt-seam) —
+  A profiler label belongs to the kernel, not to the timed span;
+  `VK_EXT_debug_utils` is requested independently of validation, and the
+  *instance* extension is declared across the adopt seam.
 
 ## Provenance & salvage policy
 
@@ -421,7 +425,35 @@ arbitrary; it usually isn't.
   `abandon()` retires the pool when a failed fence wait leaks the command
   buffer carrying its queries. `Device::create` enables `scalarBlockLayout`;
   `adopt` requires the creator did, and both record the queue family's
-  `queueFlags`.
+  `queueFlags`. Separately from all of that, `core` carries the seam an
+  **external** GPU profiler reads: `VK_EXT_debug_utils` is requested by
+  default and *independently of validation* (2026-08-30), so a Release build —
+  the only one worth profiling — carries labels; `dispatch()` wraps each
+  submission in a region named by `ComputeKernel::name`, and
+  `Device::set_object_name` names the buffers. Labels are **not** tied to a
+  `GpuStageScope`: a span costs a timestamp (~0.13 ms per submit on MoltenVK)
+  and exists only where the caller asked for `StageMetrics`, so pairing them
+  would perturb the captured workload and leave uninstrumented calls anonymous.
+  Naming is re-applied wherever a handle is replaced — a grid `resize`, a hash
+  rehash, a mesh-arena grow, a span-table or dirty-flag grow — since a name
+  lives on the handle. One change
+  serves both profilers: Nsight renders the regions as trace ranges (and
+  groups a capture by `VkPipeline`, which `KernelSetBuilder::add` therefore
+  names too), MoltenVK maps them onto Metal debug groups and
+  `MTLComputePipelineState` labels for Xcode. Debug utils is an *instance*
+  extension, so it cannot ride `enabled_device_extensions` and is **declared,
+  never probed** — the loader's answer for a disabled extension is not portable
+  (null from a conformant loader, a live pointer from a directly-linked
+  MoltenVK). Both seams carry the declaration:
+  `AdoptedDevice::enabled_debug_utils` on adopt and
+  `DeviceConfig::instance_debug_utils_enabled` on create, the latter filled in
+  by the `Device::create(const Instance&, …)` overload every recon call site
+  uses; `DeviceRequirements::debug_utils` is how an embedder hears recon wants
+  it at all. It is never required — its absence costs the capture's names and
+  nothing else — and resolution is **all-or-nothing**, so a driver returning
+  two of the three entry points reports no labels rather than a region that can
+  be opened and not closed. The label is recorded *outside* the `GpuTimer`
+  bracket, so no `gpu_ms` measures the markers around the work.
 
 - **`volume`** — `VoxelHashMap` drives init / allocate-from-coords, -depth,
   -points / remove / compact / compact-in-frustum / resize as GLSL kernels
@@ -630,8 +662,11 @@ fitting the *dense* extract to its
 surface as the sparse one does, and `ExtractTimings`' device half — which must
 bracket several dispatches in **one** timed submit, since a timed submit costs
 ~0.13 ms on MoltenVK and four of the six phases run under that. On `texture`:
-the multi-keyframe post-scan atlas. On `core`: the `TODO(core)` debug-utils
-labels beside `GpuTimer::begin`.
+the multi-keyframe post-scan atlas. On `core`: the `TODO(core)` for
+`VK_EXT_memory_budget` on `Device::create`, which would turn the viewer's heap
+gauges from VMA heuristics into driver truth. The debug-utils labels that TODO
+sat beside **have landed** (2026-08-30) — on the *kernel* rather than the span,
+which is the correction that entry records.
 
 **Measure the phases before choosing the optimisation.** Three independent
 guesses at this pipeline's bottleneck have been wrong, each corrected by an

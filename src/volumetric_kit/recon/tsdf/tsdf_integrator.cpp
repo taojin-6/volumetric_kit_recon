@@ -97,8 +97,6 @@ std::uint32_t group_count(std::uint32_t items) {
 
 Result<TsdfIntegrator> TsdfIntegrator::create(
     Device& device, Allocator& allocator, const TsdfIntegratorConfig& config) {
-  const VkDevice dev = device.handle();
-
   TsdfIntegrator integ;
   integ.device_ = &device;
   integ.allocator_ = &allocator;
@@ -117,8 +115,8 @@ Result<TsdfIntegrator> TsdfIntegrator::create(
   push_range.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
   push_range.offset = 0;
   push_range.size = sizeof(PushConstants);
-  KernelSetBuilder kb(dev);
-  VR_TRY(kb.add(integ.kernel_, vr_tsdf_integrate_comp_spv,
+  KernelSetBuilder kb(device);
+  VR_TRY(kb.add(integ.kernel_, "tsdf_integrate", vr_tsdf_integrate_comp_spv,
                 vr_tsdf_integrate_comp_spv_size, 9, &push_range));
   VR_ASSIGN(integ.pool_, kb.build());
 
@@ -165,6 +163,18 @@ Result<TsdfIntegrator> TsdfIntegrator::create(
   // integrate() rebinds this to the real array once it knows the grid's size.
   integ.kernel_.set.write_storage_buffer(8, integ.color_dummy_.handle(), 0,
                                          VK_WHOLE_SIZE);
+
+  // Name the persistent buffers for a GPU capture. A no-op where the device
+  // resolved no debug-utils entry points.
+  device.set_object_name(VK_OBJECT_TYPE_BUFFER,
+                         debug_object_handle(integ.cam_buf_.handle()),
+                         "tsdf.depth_cam");
+  device.set_object_name(VK_OBJECT_TYPE_BUFFER,
+                         debug_object_handle(integ.color_cam_buf_.handle()),
+                         "tsdf.color_cam");
+  device.set_object_name(VK_OBJECT_TYPE_BUFFER,
+                         debug_object_handle(integ.color_dummy_.handle()),
+                         "tsdf.dummy");
 
   return integ;
 }
@@ -258,6 +268,9 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid, const float* depth,
       Buffer active_buf,
       upload_storage_buffer(*allocator_, active.data(),
                             VkDeviceSize(active.size()) * sizeof(BlockIndex)));
+  device_->set_object_name(VK_OBJECT_TYPE_BUFFER,
+                           debug_object_handle(active_buf.handle()),
+                           "tsdf.active_set");
 
   const auto pixels = static_cast<std::size_t>(cam.width) *
                       static_cast<std::size_t>(cam.height);
@@ -267,6 +280,12 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid, const float* depth,
                                  depth_bytes, max_storage_buffer_range_));
   VR_ASSIGN(Buffer depth_buf,
             upload_storage_buffer(*allocator_, depth, depth_bytes));
+  // Named because it is the biggest thing this call moves -- a few megabytes a
+  // frame at a scanner's resolution -- and so the first row a capture's
+  // transfer view should be able to attribute.
+  device_->set_object_name(VK_OBJECT_TYPE_BUFFER,
+                           debug_object_handle(depth_buf.handle()),
+                           "tsdf.depth_frame");
 
   // The camera params ride the SSBO verbatim; the kernel derives world ->
   // camera from the rigid cam_to_world, so there is no host-side pose
@@ -313,6 +332,9 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid, const float* depth,
         max_storage_buffer_range_));
     VR_ASSIGN(color_buf,
               upload_storage_buffer(*allocator_, color->pixels, color_bytes));
+    device_->set_object_name(VK_OBJECT_TYPE_BUFFER,
+                             debug_object_handle(color_buf.handle()),
+                             "tsdf.color_frame");
     std::memcpy(color_cam_buf_.mapped(), &color->cam,
                 sizeof(ColorCameraParams));
     kernel_.set.write_storage_buffer(5, color_buf.handle(), 0, VK_WHOLE_SIZE);
@@ -435,6 +457,14 @@ Status TsdfIntegrator::prepare_dirty_flags(const VoxelBlockGrid& grid) {
   std::memset(dst + old_bytes, 0, static_cast<std::size_t>(bytes) - old_bytes);
   dirty_blocks_ = std::move(grown);
   dirty_capacity_ = blocks;
+  // A fresh handle each grow, and a name lives on the handle -- the same reason
+  // VoxelBlockGrid::resize renames its attribute arrays, which this grow
+  // mirrors.
+  if (device_ != nullptr) {
+    device_->set_object_name(VK_OBJECT_TYPE_BUFFER,
+                             debug_object_handle(dirty_blocks_.handle()),
+                             "tsdf.dirty_blocks");
+  }
   return {};
 }
 

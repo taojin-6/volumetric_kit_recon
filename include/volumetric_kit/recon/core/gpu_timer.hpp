@@ -195,11 +195,14 @@ class VR_CORE_API GpuTimer {
   /// with the failed dispatch.
   void abandon() noexcept;
 
-  // TODO(core): pair a span with a VK_EXT_debug_utils label, so a capture in
-  // RenderDoc / Xcode names the same regions this reports. Deferred because
-  // recon enables the extension only when validation is on, so a label needs
-  // Device to record whether it was enabled -- the declare/verify shape of the
-  // enabled-extension list, and its own change.
+  // Debug-utils labels are NOT emitted here, though an earlier TODO in this
+  // spot proposed exactly that (see the 2026-08-30 decision). A span exists
+  // only where the caller passed StageMetrics, and asking for one costs a
+  // timestamp -- so a label pinned to a span would perturb the very workload a
+  // profiler is capturing, and would leave every uninstrumented dispatch
+  // anonymous. The label belongs to the kernel instead: dispatch() opens a
+  // region named by ComputeKernel::name, free and unconditional, around
+  // whatever this happens to be measuring.
 
   /// @brief Open a span: reset this span's two queries and write its start
   ///        timestamp into @p cmd.

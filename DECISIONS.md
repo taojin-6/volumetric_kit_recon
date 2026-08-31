@@ -2238,6 +2238,14 @@ own doc already points at for exactly this — and it is `TODO(mesh)` in
 so a label needs `Device` to record whether it was enabled — the same
 declare/verify shape as the enabled extension list, and its own change.
 
+> **Superseded on 2026-08-30**, in the entry of that date. The labels landed,
+> and the paragraph above is wrong in every clause: the extension is no longer
+> gated on validation, the `TODO(core)` in `gpu_timer.hpp` is gone, and the
+> label is **not** paired to a span — that pairing is the specific design this
+> entry proposed and the later one rejects, since a span is opt-in and costs a
+> timestamp while a label is free and unconditional. `Device` does now record
+> whether the extension was enabled, which is the one clause that survived.
+
 ### 2026-08-10 — A breakdown row is one the *caller's* row already contains, so the host total skips it and the device total must not; and a ceiling the library knows is the library's to name.
 
 Refines the entry above, on three things the first cut of `kBreakdownPrefix` got
@@ -3155,3 +3163,150 @@ generation when it first touches the arena rather than on success — a call tha
 overwrites the arena and then fails must still invalidate every outstanding
 `DeviceMesh`, and so must the dense overload, which shares that arena and can
 now reallocate it.
+
+### 2026-08-30 — A profiler label belongs to the kernel, not to the timed span; `VK_EXT_debug_utils` is requested independently of validation, and the *instance* extension is declared across the adopt seam.
+
+Motivated by a plain question — how do we find out whether this pipeline is
+memory-bandwidth bound on mobile — and by the answer that recon could not be
+profiled by the tools that would say. The instrumentation recon had was good
+and entirely about *time*: `StageMetrics` rows, `GpuTimer` spans, the
+`ExtractTimings` phases. What it had none of was a way for **Nsight Graphics**
+(Vulkan on NVIDIA) or **Xcode's Metal debugger** (MoltenVK on Apple) to name
+what they were looking at, so a capture was a wall of anonymous dispatches over
+buffers called `0x…`. One change fixes it on both, because MoltenVK maps
+debug-utils labels onto Metal debug groups and `MTLResource` labels: the same
+call that gives Nsight a trace range gives Xcode a named encoder.
+
+**A label is not a span, and pairing them would have been the wrong seam.** The
+`TODO(core)` this replaces read "pair a span with a `VK_EXT_debug_utils` label",
+and implementing it literally would have produced labels *only where the caller
+passed `StageMetrics*`* — `GpuStageScope::timer()` is null otherwise, and
+`dispatch()` took its label from `stage->name()`. Two things are wrong with
+that. A profiling run does not want recon's timings at all; the profiler is the
+instrument, and recon's job is only to say what each dispatch *is*. And asking
+for timings costs a timestamp — ~0.13 ms per submit on MoltenVK, measured in
+the 2026-08-09 entry — so tying the two would perturb the very workload being
+captured, and would leave every uninstrumented call anonymous. So the name
+moved onto `ComputeKernel`, which every dispatch already has: labels are free
+and unconditional, spans stay opt-in and measured. `dispatch()` opens the region
+around the whole recording — bind, push, dispatch, barrier — because that is
+the work a capture should charge to the kernel.
+
+**The extension is requested on its own, because a Release build is the only
+one worth profiling.** `Instance::create` enabled `VK_EXT_debug_utils` only
+when validation was on, since the only consumer was the validation messenger.
+That left exactly the build a profiler attaches to with no labels, and it is
+the build whose numbers mean anything (the `-O0` gotcha in CLAUDE.md is the
+same lesson from the other side). `InstanceConfig::request_debug_utils`
+defaults **on**: the label entry points are driver stubs when nothing is
+capturing, so the cost is a predictable branch, and the alternative — a build
+flag — means profiling a binary you already have requires rebuilding it, which
+is how a profiling session turns into a different workload.
+
+**Debug utils is an *instance* extension, which is what makes the adopt seam
+its own decision.** It cannot ride `AdoptedDevice::enabled_device_extensions`:
+that array carries what was enabled on the *device*, and this was not. So the
+embedder declares it as `enabled_debug_utils`, the same declare/verify shape
+`enabled_timeline_semaphore` and `enabled_scalar_block_layout` already use for
+the same underlying reason — Vulkan will not say what was enabled. It is
+declared rather than probed because the loader's result for a command of an
+extension that was *not* enabled is not portable: a conformant loader returns
+null, a directly-linked MoltenVK (the iOS case) does not. Asking
+unconditionally would hand one platform a pointer it must not call. Unlike the
+two feature flags, this one is never *required* — its absence costs the
+capture's names and nothing else. The declaration exists on **both** seams:
+`AdoptedDevice::enabled_debug_utils` on adopt, and
+`DeviceConfig::instance_debug_utils_enabled` on create, with a
+`Device::create(const Instance&, …)` overload that fills the latter in so no
+recon call site sets it by hand. All three label commands are device-level, so
+they resolve through `vkGetDeviceProcAddr` — as gfx's `DebugUtilsTable` does —
+and a `Device` therefore keeps nothing of its `VkInstance`.
+
+**Naming is hooked where handles change, not where they are first made.** A
+debug-utils name lives on the handle, so every path that replaces a buffer
+un-names it. Three of those exist and all three were live bugs waiting: the
+grid's attribute arrays are all replaced by `VoxelBlockGrid::resize`, the hash
+table's by a rehash commit, and the mesh arena's by a grow. The hash map hangs
+its naming off `write_persistent_bindings()`, which already runs on create *and*
+on every resize commit, so the names cannot drift from the handles by
+construction; the grid and the mesh name at their own commit points, the mesh
+only where a handle actually changed (per-frame re-statement of an unchanged
+name is pure hot-path overhead). The mesh slot index is *in* the name —
+`mesh.arena[2]` — because the ring hands a consumer one slot while the next
+extract writes another, and a capture showing three identical `mesh.arena`
+entries would not say which generation it caught.
+
+`VoxelBlockGrid` grew a borrowed `Device*` for this, purely to re-name after a
+grow, and the header's own warning caught the trap on the way in: its
+move-assignment is hand-written and "must name EVERY member, and a forgotten
+one is silent" — the same note left behind by the topology-epoch member that
+was once dropped there.
+
+**What this does *not* do**, and both are deliberate. It does not add
+bytes-moved accounting, so the bandwidth question is still unanswered — the
+labels make an external profiler readable, and the roofline that would make its
+numbers comparable across NVIDIA's DRAM counters and Apple's UMA counters is
+its own change. And it does not batch dispatches. One `vkCmdDispatch` still
+means one command buffer, one submit and one fence wait (the 2026-07-05
+decision, which named batching as the trigger for reusable command buffers and
+timeline sync), so a capture will show serialized bursts with idle between
+them, and both profilers will report that idle rather than the kernels. The
+value of fixing it is unmeasured: the one phase breakdown that exists has
+`readback` at 3.73 ms against `dispatch` at 0.63 ms, and batching does nothing
+for a readback. Count the consecutive dispatches with no host dependency
+between them before building the machinery.
+
+**Review: the labels were dead in the one consumer that motivated them, and
+that was a missing channel rather than a typo.** A max-effort pass over the
+first cut returned fifteen findings, and the shape of them is one story. The
+feature was off in `fuse_viewer`: `recon_adopt_payload` never forwarded
+`enabled_debug_utils` (its `gfx_adopt_payload` neighbour did), and the shared
+bootstrap still gated the extension on the validation layer — so the Release
+build with no Vulkan SDK, which is precisely the profiling setup on Apple since
+Xcode's Metal debugger needs no layer, got nothing at either end. Both are
+fixed, but the *cause* was that `DeviceRequirements` had no debug-utils channel
+at all, so an embedder following the documented merge could not learn recon
+wanted it. It now carries `debug_utils` — the one optional entry, and the one
+instance extension, both stated on the field.
+
+Three findings were live defects rather than dead features. `end_debug_label`
+guarded on the entry-point pointers while `begin_debug_label` also skipped a
+null `name`, so a kernel registered with a null name popped a region that was
+never pushed; `end_debug_label` now takes the name and tests every condition
+its partner does. Resolution was not collapsed, so a driver returning two of
+three pointers left a region openable and unclosable — which carries the buffer
+to `vkEndCommandBuffer` with a label open and fails *every* submit; it is now
+all-or-nothing, which is also what makes `debug_labels_available()` honest
+reading one pointer. And `Device::create` resolved ungated, violating the gate
+its own helper's comment declares mandatory — the create path had no channel
+to gate on, which is the same missing-channel finding from the other side.
+
+**The label was inside the timed span, which silently redefined every published
+`gpu_ms`.** `dispatch()` recorded begin/end inside the lambda `submit_single_time`
+brackets with timestamps, so every device figure in this file, in CLAUDE.md and
+on the `fuse_viewer` overlay began measuring two marker commands as well as the
+work. Measured as noise on MoltenVK (allocate 0.470 vs 0.476 ms, interleaved),
+but a debug group can force an encoder boundary and encoder boundaries are
+exactly what costs there. The label is now passed to `submit_single_time` as
+`debug_label` and recorded **outside** the timestamp pair: the capture's region
+also covers the two timestamp writes, which is where they belong, being work
+that submit does.
+
+Verified on MoltenVK (M5 Max, Release): 28/28 ctest, the viewer target built,
+and the new positive assertion shown to be a real detector rather than a
+vacuous one — deleting the `resolve_debug_label_fns` call from `Device::create`
+turns `recon_device` red (`instance=1 device=0`), where every assertion the
+first cut added stayed green with the feature fully inert. The rest of the
+findings were coverage and honesty: `%u` against a `std::size_t` slot index
+(invisible to `-Werror` only because the format string reached `snprintf` as a
+struct member); `debug_object_handle(VK_NULL_HANDLE)` ill-formed on 64-bit and
+fine on 32-bit, the inverse of the portability it exists for; the span table
+and the dirty-flag array left anonymous on their grow paths while their
+mutually-exclusive dummies were named; no pipeline named at all, though
+`VkPipeline` is what Nsight groups a capture by and what MoltenVK maps to
+`MTLComputePipelineState`; and a doc claiming every buffer carried a name while
+`tsdf` and `texture` named none — including the per-frame depth and colour
+uploads, the largest transfers in the pipeline and the literal subject of the
+bandwidth question. `KernelSetBuilder` took a `const Device&` rather than a bare
+`VkDevice` to reach any of the naming, and the kernel name now also prefixes a
+build failure, which is what its own comment had claimed all along.

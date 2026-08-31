@@ -14,6 +14,7 @@
 
 #include "vk_physical_device.hpp"
 #include "volumetric_kit/recon/core/gpu_timer.hpp"
+#include "volumetric_kit/recon/core/instance.hpp"
 #include "volumetric_kit/recon/core/log.hpp"
 #include "volumetric_kit/recon/core/vk_result.hpp"
 
@@ -113,10 +114,66 @@ DeviceRequirements Device::requirements(const DeviceConfig& config) {
   DeviceRequirements reqs;
   reqs.features = config.features;
   reqs.device_extensions = config.extra_device_extensions;
+  // The one optional entry, and the one instance extension: recon uses debug
+  // utils if the embedder's instance has it and runs identically if not. Named
+  // here so a merged bootstrap can offer it -- an embedder that never hears
+  // recon wants it is the way a shared device ends up with unnamed dispatches.
+  reqs.debug_utils = true;
   // portability_subset is enabled by whoever creates the device (spec-required
   // when present); it is not a caller requirement, so it is not listed here.
   return reqs;
 }
+
+namespace {
+
+// Resolve the VK_EXT_debug_utils label entry points, or leave all three null.
+//
+// `enabled` is the caller's declaration that the extension is enabled on the
+// instance `device` belongs to, and it is not optional: vkGetDeviceProcAddr's
+// result for a command of an extension that was NOT enabled is not portable
+// (a conformant loader returns null, a directly-linked MoltenVK returns a live
+// pointer), so asking unconditionally would hand one platform a pointer it must
+// not call. Vulkan offers no way to query the fact back, hence the declaration
+// -- DeviceConfig::instance_debug_utils_enabled on the create path,
+// AdoptedDevice::enabled_debug_utils on the adopt path.
+//
+// All three are device-level commands (their first parameter is a VkDevice or a
+// VkCommandBuffer), so they resolve through vkGetDeviceProcAddr and skip the
+// loader's per-device dispatch trampoline -- the same resolution gfx's
+// DebugUtilsTable uses, and the reason a Device needs nothing of its VkInstance
+// beyond this one bool.
+//
+// A driver that enables the extension but returns no entry point is not an
+// error; the labels simply do not appear. Resolution is all-or-nothing: any
+// single null collapses the set, so a half-resolved driver cannot leave
+// begin_debug_label able to open a region that end_debug_label cannot close --
+// which would carry the command buffer to vkEndCommandBuffer with a label still
+// open (VUID-vkEndCommandBuffer-commandBuffer-01815) and fail every submit.
+void resolve_debug_label_fns(VkDevice device, bool enabled,
+                             PFN_vkSetDebugUtilsObjectNameEXT* set_name,
+                             PFN_vkCmdBeginDebugUtilsLabelEXT* begin_label,
+                             PFN_vkCmdEndDebugUtilsLabelEXT* end_label) {
+  *set_name = nullptr;
+  *begin_label = nullptr;
+  *end_label = nullptr;
+  if (!enabled || device == VK_NULL_HANDLE) {
+    return;
+  }
+  auto set = reinterpret_cast<PFN_vkSetDebugUtilsObjectNameEXT>(
+      vkGetDeviceProcAddr(device, "vkSetDebugUtilsObjectNameEXT"));
+  auto begin = reinterpret_cast<PFN_vkCmdBeginDebugUtilsLabelEXT>(
+      vkGetDeviceProcAddr(device, "vkCmdBeginDebugUtilsLabelEXT"));
+  auto end = reinterpret_cast<PFN_vkCmdEndDebugUtilsLabelEXT>(
+      vkGetDeviceProcAddr(device, "vkCmdEndDebugUtilsLabelEXT"));
+  if (set == nullptr || begin == nullptr || end == nullptr) {
+    return;
+  }
+  *set_name = set;
+  *begin_label = begin;
+  *end_label = end;
+}
+
+}  // namespace
 
 Result<Device> Device::create(VkInstance instance, VkPhysicalDevice physical,
                               const DeviceConfig& config) {
@@ -223,7 +280,25 @@ Result<Device> Device::create(VkInstance instance, VkPhysicalDevice physical,
   pool_info.queueFamilyIndex = *compute;
   VR_VK_TRY(vkCreateCommandPool(device.device_, &pool_info, nullptr,
                                 &device.command_pool_));
+  // Only on the caller's word -- see resolve_debug_label_fns. The overload
+  // below fills this in from a recon Instance, which is how every recon call
+  // site gets its labels; a raw foreign VkInstance defaults to "not enabled"
+  // and so costs the capture's names rather than an unportable entry point.
+  resolve_debug_label_fns(device.device_, config.instance_debug_utils_enabled,
+                          &device.set_object_name_, &device.begin_label_,
+                          &device.end_label_);
   return device;
+}
+
+Result<Device> Device::create(const Instance& instance,
+                              VkPhysicalDevice physical,
+                              const DeviceConfig& config) {
+  // The instance in hand is the authority on what the instance enabled, so it
+  // overwrites rather than defers to whatever `config` carried: a caller cannot
+  // accidentally declare a debug-utils state its own instance disagrees with.
+  DeviceConfig with_instance = config;
+  with_instance.instance_debug_utils_enabled = instance.debug_utils_enabled();
+  return create(instance.handle(), physical, with_instance);
 }
 
 Result<Device> Device::adopt(const AdoptedDevice& adopted,
@@ -317,6 +392,11 @@ Result<Device> Device::adopt(const AdoptedDevice& adopted,
   pool_info.queueFamilyIndex = adopted.compute_family;
   VR_VK_TRY(vkCreateCommandPool(device.device_, &pool_info, nullptr,
                                 &device.command_pool_));
+  // Only on the embedder's word -- see resolve_debug_label_fns. Not required
+  // of the embedder, so its absence costs the capture's names and nothing else.
+  resolve_debug_label_fns(device.device_, adopted.enabled_debug_utils,
+                          &device.set_object_name_, &device.begin_label_,
+                          &device.end_label_);
   return device;
 }
 
@@ -328,7 +408,10 @@ Device::Device(Device&& other) noexcept
       submit_mutex_(other.submit_mutex_),
       compute_family_(other.compute_family_),
       compute_family_flags_(other.compute_family_flags_),
-      compute_queue_(other.compute_queue_) {
+      compute_queue_(other.compute_queue_),
+      set_object_name_(other.set_object_name_),
+      begin_label_(other.begin_label_),
+      end_label_(other.end_label_) {
   other.physical_ = VK_NULL_HANDLE;
   other.device_ = VK_NULL_HANDLE;
   other.command_pool_ = VK_NULL_HANDLE;
@@ -337,6 +420,9 @@ Device::Device(Device&& other) noexcept
   other.compute_family_ = 0;
   other.compute_family_flags_ = 0;
   other.compute_queue_ = VK_NULL_HANDLE;
+  other.set_object_name_ = nullptr;
+  other.begin_label_ = nullptr;
+  other.end_label_ = nullptr;
 }
 
 Device& Device::operator=(Device&& other) noexcept {
@@ -350,6 +436,9 @@ Device& Device::operator=(Device&& other) noexcept {
     compute_family_ = other.compute_family_;
     compute_family_flags_ = other.compute_family_flags_;
     compute_queue_ = other.compute_queue_;
+    set_object_name_ = other.set_object_name_;
+    begin_label_ = other.begin_label_;
+    end_label_ = other.end_label_;
     other.physical_ = VK_NULL_HANDLE;
     other.device_ = VK_NULL_HANDLE;
     other.command_pool_ = VK_NULL_HANDLE;
@@ -358,6 +447,9 @@ Device& Device::operator=(Device&& other) noexcept {
     other.compute_family_ = 0;
     other.compute_family_flags_ = 0;
     other.compute_queue_ = VK_NULL_HANDLE;
+    other.set_object_name_ = nullptr;
+    other.begin_label_ = nullptr;
+    other.end_label_ = nullptr;
   }
   return *this;
 }
@@ -383,6 +475,51 @@ void Device::destroy() noexcept {
   compute_family_ = 0;
   compute_family_flags_ = 0;
   compute_queue_ = VK_NULL_HANDLE;
+  set_object_name_ = nullptr;
+  begin_label_ = nullptr;
+  end_label_ = nullptr;
+}
+
+void Device::set_object_name(VkObjectType type, std::uint64_t handle,
+                             const char* name) const noexcept {
+  if (set_object_name_ == nullptr || name == nullptr || handle == 0) {
+    return;
+  }
+  VkDebugUtilsObjectNameInfoEXT info{};
+  info.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
+  info.objectType = type;
+  info.objectHandle = handle;
+  info.pObjectName = name;
+  // The result is deliberately dropped: naming is a diagnostic, and a driver
+  // that refuses one must not turn a working dispatch into a failure.
+  (void)set_object_name_(device_, &info);
+}
+
+void Device::begin_debug_label(VkCommandBuffer cmd,
+                               const char* name) const noexcept {
+  if (begin_label_ == nullptr || cmd == VK_NULL_HANDLE || name == nullptr) {
+    return;
+  }
+  VkDebugUtilsLabelEXT info{};
+  info.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT;
+  info.pLabelName = name;
+  // Colour left at zero -- profilers that use it fall back to their own
+  // palette, and a per-kernel colour is a choice with no owner here.
+  begin_label_(cmd, &info);
+}
+
+void Device::end_debug_label(VkCommandBuffer cmd,
+                             const char* name) const noexcept {
+  // Every condition begin_debug_label tests, tested again here -- including the
+  // null `name` that makes *it* open nothing. Guarding on the pointers alone
+  // would leave a null-named kernel popping a region that was never pushed.
+  // (end_label_ is redundant with begin_label_, resolution being
+  // all-or-nothing, but it is what this function is about to call.)
+  if (begin_label_ == nullptr || end_label_ == nullptr ||
+      cmd == VK_NULL_HANDLE || name == nullptr) {
+    return;
+  }
+  end_label_(cmd);
 }
 
 VkResult Device::queue_submit(std::uint32_t count, const VkSubmitInfo* submits,
@@ -404,12 +541,12 @@ Status Device::submit_single_time(
   // Delegated rather than duplicated: a null timer makes the timed overload
   // byte-for-byte this one, and one body is one place for the fence-failure
   // leak rule below to be got right.
-  return submit_single_time(record, nullptr, nullptr);
+  return submit_single_time(record, nullptr, nullptr, nullptr);
 }
 
 Status Device::submit_single_time(
     const std::function<void(VkCommandBuffer)>& record, GpuTimer* timer,
-    const char* label) const {
+    const char* label, const char* debug_label) const {
   VkCommandBufferAllocateInfo alloc_info{};
   alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
   alloc_info.commandPool = command_pool_;
@@ -428,6 +565,13 @@ Status Device::submit_single_time(
   begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
   begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
   VR_VK_TRY(vkBeginCommandBuffer(cmd, &begin));
+  // Outside the span below, deliberately. A debug label can force an encoder
+  // boundary (MoltenVK maps the pair to push/popDebugGroup), so a span opened
+  // outside it would charge the marker to the kernel and make every published
+  // gpu_ms depend on whether a profiler was being catered to. Nesting the other
+  // way costs only that the capture's region also covers the two timestamp
+  // writes -- which is where they belong, being work this submit does.
+  begin_debug_label(cmd, debug_label);
   // The span brackets exactly what `record` puts in the buffer, so it measures
   // device execution and excludes the allocate/begin/end/submit around it --
   // which is the whole distinction this overload exists to draw.
@@ -447,6 +591,7 @@ Status Device::submit_single_time(
   if (timer != nullptr) {
     timer->end(cmd, span);
   }
+  end_debug_label(cmd, debug_label);
   VR_VK_TRY(vkEndCommandBuffer(cmd));
 
   VkFenceCreateInfo fence_info{};

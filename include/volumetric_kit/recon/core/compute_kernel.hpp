@@ -40,6 +40,17 @@ struct ComputeKernel {
   DescriptorSetLayout layout;  ///< Descriptor-set layout (N storage buffers).
   ComputePipeline pipeline;    ///< Pipeline built from the kernel's SPIR-V.
   DescriptorSet set;           ///< One set allocated from the shared pool.
+  /// What this kernel is called, for a GPU capture and for diagnostics.
+  ///
+  /// Borrowed on exactly @ref StageRow::name's terms -- stored by pointer and
+  /// never copied, so it must outlive the kernel. Every registration passes a
+  /// string literal, which is the intended usage.
+  ///
+  /// @ref dispatch wraps each submission in a debug-utils region under this
+  /// name, so a Nsight trace row or an Xcode capture reads `hash_allocate`
+  /// rather than an anonymous dispatch. Unlike a @ref StageRow, this costs
+  /// nothing and is always on: naming a dispatch is not measuring it.
+  const char* name = nullptr;
 
   ComputeKernel() noexcept = default;
   ~ComputeKernel() = default;
@@ -51,15 +62,19 @@ struct ComputeKernel {
   ComputeKernel(ComputeKernel&& other) noexcept
       : layout(std::move(other.layout)),
         pipeline(std::move(other.pipeline)),
-        set(other.set) {
+        set(other.set),
+        name(other.name) {
     other.set = {};
+    other.name = nullptr;
   }
   ComputeKernel& operator=(ComputeKernel&& other) noexcept {
     if (this != &other) {
       layout = std::move(other.layout);
       pipeline = std::move(other.pipeline);
       set = other.set;
+      name = other.name;
       other.set = {};
+      other.name = nullptr;
     }
     return *this;
   }
@@ -83,8 +98,12 @@ struct ComputeKernel {
 /// compute-stage storage buffer (the compute tiers' shape).
 class VR_CORE_API KernelSetBuilder {
  public:
-  /// @param device  The device the kernels are built on.
-  explicit KernelSetBuilder(VkDevice device) noexcept : device_(device) {}
+  /// @param device  The device the kernels are built on; borrowed, and must
+  ///                outlive the builder. A reference rather than the bare
+  ///                `VkDevice` it used to take, because @ref add names the
+  ///                pipeline it builds and only a @ref Device carries the
+  ///                debug-utils entry points that reach a profiler.
+  explicit KernelSetBuilder(const Device& device) noexcept : device_(&device) {}
 
   KernelSetBuilder(const KernelSetBuilder&) = delete;
   KernelSetBuilder& operator=(const KernelSetBuilder&) = delete;
@@ -101,14 +120,22 @@ class VR_CORE_API KernelSetBuilder {
   ///          the kernels as stable members (or in a pre-reserved container) is
   ///          the intended usage.
   /// @param out       Receives the built layout + pipeline (and later the set).
+  /// @param name       What the kernel is called, stored on @ref
+  ///                   ComputeKernel::name's borrowing terms -- a string
+  ///                   literal. Names the kernel's region in a GPU capture,
+  ///                   its `VkPipeline` / pipeline layout / descriptor-set
+  ///                   layout, and any failure this call returns.
   /// @param spv       The SPIR-V byte array (4-byte aligned).
   /// @param spv_size  Its size in bytes.
   /// @param bindings  Number of storage-buffer bindings the shader declares.
   /// @param push      Optional push-constant range (`nullptr` = none).
   /// @return An OK @ref Status, or a non-OK one if the layout or the pipeline
-  ///         fails to build.
-  Status add(ComputeKernel& out, const unsigned char* spv, std::size_t spv_size,
-             std::uint32_t bindings, const VkPushConstantRange* push = nullptr);
+  ///         fails to build — prefixed with @p name, since a tier registers
+  ///         several kernels in one `create()` and the underlying failure names
+  ///         only the Vulkan call.
+  Status add(ComputeKernel& out, const char* name, const unsigned char* spv,
+             std::size_t spv_size, std::uint32_t bindings,
+             const VkPushConstantRange* push = nullptr);
 
   /// @brief Create the shared pool (sized to every registered kernel) and
   ///        allocate each kernel's set from it.
@@ -117,7 +144,7 @@ class VR_CORE_API KernelSetBuilder {
   Result<DescriptorPool> build();
 
  private:
-  VkDevice device_;
+  const Device* device_;
   std::vector<ComputeKernel*> kernels_;
   std::uint32_t descriptor_total_ = 0;
 };

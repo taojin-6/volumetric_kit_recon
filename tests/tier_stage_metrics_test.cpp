@@ -146,7 +146,7 @@ int main() {
     return 0;
   }
   vr::Result<vr::Device> device =
-      vr::Device::create(instance.value().handle(), gpu.value(), {});
+      vr::Device::create(instance.value(), gpu.value(), {});
   if (!device) {
     std::fprintf(stderr, "no device; skipping\n");
     return 0;

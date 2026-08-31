@@ -52,8 +52,6 @@ static_assert(offsetof(PushConstants, occlusion_threshold) == 4,
 
 Result<ProjectiveTexturer> ProjectiveTexturer::create(Device& device,
                                                       Allocator& allocator) {
-  const VkDevice dev = device.handle();
-
   ProjectiveTexturer tex;
   tex.device_ = &device;
   tex.allocator_ = &allocator;
@@ -79,8 +77,8 @@ Result<ProjectiveTexturer> ProjectiveTexturer::create(Device& device,
   push_range.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
   push_range.offset = 0;
   push_range.size = sizeof(PushConstants);
-  KernelSetBuilder kb(dev);
-  VR_TRY(kb.add(tex.kernel_, vr_texture_score_comp_spv,
+  KernelSetBuilder kb(device);
+  VR_TRY(kb.add(tex.kernel_, "texture_score", vr_texture_score_comp_spv,
                 vr_texture_score_comp_spv_size, 3, &push_range));
   VR_ASSIGN(tex.pool_, kb.build());
 
@@ -114,6 +112,12 @@ Result<ProjectiveTexturer> ProjectiveTexturer::create(Device& device,
                                          HostAccess::SequentialWrite));
   tex.kernel_.set.write_storage_buffer(2, tex.cam_buf_.handle(), 0,
                                        VK_WHOLE_SIZE);
+
+  // Named for a GPU capture; a no-op where the device resolved no debug-utils
+  // entry points.
+  device.set_object_name(VK_OBJECT_TYPE_BUFFER,
+                         debug_object_handle(tex.cam_buf_.handle()),
+                         "texture.cam");
 
   return tex;
 }
@@ -193,6 +197,9 @@ Status ProjectiveTexturer::texture(const mesh::DeviceMesh& mesh,
   // The one transfer left in this path.
   VR_ASSIGN(Buffer depth_buf,
             upload_storage_buffer(*allocator_, depth, depth_bytes));
+  device_->set_object_name(VK_OBJECT_TYPE_BUFFER,
+                           debug_object_handle(depth_buf.handle()),
+                           "texture.depth_frame");
   std::memcpy(cam_buf_.mapped(), &cam, sizeof(DepthCameraParams));
 
   // Bind the producing pass's buffers directly -- no upload, and nothing to
@@ -290,6 +297,12 @@ Status ProjectiveTexturer::texture(mesh::Mesh& mesh, const float* depth,
                                   vertex_bytes, HostAccess::Random));
   VR_ASSIGN(Buffer depth_buf,
             upload_storage_buffer(*allocator_, depth, depth_bytes));
+  device_->set_object_name(VK_OBJECT_TYPE_BUFFER,
+                           debug_object_handle(vertex_buf.handle()),
+                           "texture.vertices");
+  device_->set_object_name(VK_OBJECT_TYPE_BUFFER,
+                           debug_object_handle(depth_buf.handle()),
+                           "texture.depth_frame");
   std::memcpy(cam_buf_.mapped(), &cam, sizeof(DepthCameraParams));
 
   kernel_.set.write_storage_buffer(0, vertex_buf.handle(), 0, VK_WHOLE_SIZE);

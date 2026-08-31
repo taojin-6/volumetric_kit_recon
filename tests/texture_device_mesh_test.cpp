@@ -147,7 +147,7 @@ int main() {
     return 0;
   }
   vr::Result<vr::Device> device =
-      vr::Device::create(instance.value().handle(), gpu.value(), {});
+      vr::Device::create(instance.value(), gpu.value(), {});
   CHECK(device.ok());
   vr::Result<vr::Allocator> allocator =
       vr::Allocator::create(instance.value().handle(), device.value());
