@@ -6,6 +6,34 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Removed
+
+- `mesh`: **the dense marching-cubes entry point**. `MarchingCubes::extract`
+  taking a caller-supplied `Voxel` array over a `DenseGrid` is gone, with
+  `DenseGrid`, the `marching_cubes.comp` kernel it drove, and its descriptor
+  set. It had no consumer outside the tests, it was never in the engine this
+  tier re-implements (whose extractor takes only a `VoxelHashMap`), and it
+  shared the sparse path's ring — so one large dense call grew whichever slot
+  it landed on to the dense worst case and held it for the extractor's
+  lifetime. Meshing is sparse-only now. See the 2026-08-31 decision for what
+  the removal does and does not cost in coverage; one guard (independent growth
+  of the two output buffers) was reachable only through dense and is a
+  `TODO(mesh)` to rebuild on the incremental path.
+
+### Changed
+
+- `mesh`: **`MarchingCubes::extract` is renamed `extract_host`.**
+  Source-breaking, and mechanical at every call site. The pair is symmetric now
+  — `extract_host` returns an owned host `Mesh`, `extract_device` a borrowed
+  `DeviceMesh` — matching the `Mesh` / `DeviceMesh` types and making the shape
+  `extract_<destination>[_<mode>]`, so `extract_device_incremental` and the
+  `BlockList` overload read as modes of the live workflow rather than siblings
+  of the export one. The old name implied the host path was the default when it
+  is the export path. `extract_host` is *not* a wrapper you can inline: it also
+  returns its ring slot, which a host-only caller cannot do (a `Result<Mesh>`
+  carries no generation, and the public `release_through` is the consumer's
+  high-water mark).
+
 ### Added
 
 - `core`: **GPU-profiler labels** — `VK_EXT_debug_utils` names, so an Nsight

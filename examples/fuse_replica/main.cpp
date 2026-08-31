@@ -550,7 +550,8 @@ vr::Status run(const Options& opt) {
           tris = dm.triangle_count;
         }
       } else {
-        VR_ASSIGN(mesh::Mesh preview, extractor.extract(volume, 0.0f, &rt));
+        VR_ASSIGN(mesh::Mesh preview,
+                  extractor.extract_host(volume, 0.0f, &rt));
         tris = preview.triangle_count();
       }
       ++remeshes;
@@ -677,7 +678,7 @@ vr::Status run(const Options& opt) {
   // fuse_viewer shows the same struct interactively; this prints it so a sweep
   // over --voxel can be diffed.
   mesh::ExtractTimings t{};
-  VR_ASSIGN(mesh::Mesh final_mesh, extractor.extract(volume, 0.0f, &t));
+  VR_ASSIGN(mesh::Mesh final_mesh, extractor.extract_host(volume, 0.0f, &t));
   // cells is what the dispatch actually walks: one workgroup per active block,
   // striding over that block's voxels. Printed beside the triangles because the
   // RATIO is the interesting number -- a low emit rate means the kernel is
