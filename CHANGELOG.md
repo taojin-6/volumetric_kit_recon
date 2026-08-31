@@ -79,6 +79,26 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `volume`: **`VoxelHashMap::allocate_from_triangles`** — the blocks a triangle
+  mesh's truncation band covers, which is what a mesh-to-SDF pass then writes.
+  Not expressible as `allocate_from_points` over the vertices: that dilates each
+  point into the `(2*tb+1)^3` cube, one block (40 mm) wide at the defaults, so
+  any triangle wider than that left an unallocated hole through its middle. A
+  block is allocated when its centre lies within `trunc_dist` plus the block's
+  half-diagonal of some triangle — conservative, so no block holding a voxel in
+  the band is missed, and tight enough that a large slanted triangle allocates a
+  sheet rather than the solid interior of its bounding box. The work is split
+  per *candidate block* rather than per triangle, over a host-computed prefix
+  sum, so a single large quad cannot land a quarter-million bucket-locked
+  inserts on one lane. That host pass also bounds-checks every index (the kernel
+  indexes `vertices` directly and `robustBufferAccess` is enabled nowhere here)
+  and drops zero-area and non-finite triangles, which a mesh file routinely
+  carries and which should not fail the whole allocation. Opt-in `StageMetrics*`
+  reports an `"allocate"` row, as `allocate_from_depth` does. See the 2026-08-31
+  decision.
+- `core`: `shaders/triangle_common.glsl` — closest-point-on-triangle, shared
+  by the block allocation above and (next) the mesh-to-SDF integrators, so the
+  blocks one allocates and the voxels the other writes cannot drift apart.
 - `texture`: **several views into one atlas.** `ProjectiveTexturer::texture`
   takes `TextureView`s (a depth map, its camera, and the size of the colour
   image registered to it, which may be larger) and an `AtlasLayout`; each
