@@ -13,9 +13,13 @@
 
 namespace volumetric_kit::recon {
 
-Status KernelSetBuilder::add(ComputeKernel& out, const unsigned char* spv,
-                             std::size_t spv_size, std::uint32_t bindings,
+Status KernelSetBuilder::add(ComputeKernel& out, const char* name,
+                             const unsigned char* spv, std::size_t spv_size,
+                             std::uint32_t bindings,
                              const VkPushConstantRange* push) {
+  // Set before the first early return, so a kernel that fails to build is still
+  // named in whatever diagnostic reports the failure.
+  out.name = name;
   // The layout: `bindings` compute-stage storage buffers at 0..bindings-1 (the
   // caller's set-0 declarations match by index).
   std::vector<VkDescriptorSetLayoutBinding> b(bindings);
@@ -139,6 +143,12 @@ Status dispatch(Device& device, const ComputeKernel& kernel, const void* push,
   // twice.
   return device.submit_single_time(
       [&](VkCommandBuffer cmd) {
+        // The region a GPU profiler attributes this dispatch to. Opened around
+        // the whole recording -- bind, push, dispatch, barrier -- because that
+        // is the work the capture should charge to this kernel, and closed
+        // unconditionally below since begin/end are no-ops together when the
+        // entry points did not resolve.
+        device.begin_debug_label(cmd, kernel.name);
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
                           kernel.pipeline.handle());
         const VkDescriptorSet set = kernel.set.handle();
@@ -161,6 +171,7 @@ Status dispatch(Device& device, const ComputeKernel& kernel, const void* push,
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                              dst_stages, 0, 1, &barrier, 0, nullptr, 0,
                              nullptr);
+        device.end_debug_label(cmd);
       },
       stage != nullptr ? stage->timer() : nullptr,
       stage != nullptr ? stage->name() : nullptr);

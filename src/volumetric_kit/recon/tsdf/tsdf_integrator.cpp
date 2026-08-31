@@ -118,7 +118,7 @@ Result<TsdfIntegrator> TsdfIntegrator::create(
   push_range.offset = 0;
   push_range.size = sizeof(PushConstants);
   KernelSetBuilder kb(dev);
-  VR_TRY(kb.add(integ.kernel_, vr_tsdf_integrate_comp_spv,
+  VR_TRY(kb.add(integ.kernel_, "tsdf_integrate", vr_tsdf_integrate_comp_spv,
                 vr_tsdf_integrate_comp_spv_size, 9, &push_range));
   VR_ASSIGN(integ.pool_, kb.build());
 

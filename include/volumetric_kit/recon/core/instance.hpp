@@ -23,6 +23,27 @@ struct InstanceConfig {
   /// Enable the Khronos validation layer when it is available (a no-op, with a
   /// logged warning, when the layer is not installed).
   bool enable_validation = false;
+  /// Request `VK_EXT_debug_utils` whenever the loader offers it, **independent
+  /// of** @ref enable_validation.
+  ///
+  /// On by default because the extension is what lets a GPU profiler name what
+  /// it is looking at: @ref Device resolves the label entry points from it, so
+  /// every dispatch carries its kernel's name and every buffer recon allocates
+  /// carries its own (see @ref Device::set_object_name). Nsight renders those
+  /// as trace ranges and named resources; MoltenVK maps them onto Metal debug
+  /// groups and `MTLResource` labels, so one instance flag serves the profiler
+  /// on either platform.
+  ///
+  /// Costs nothing when no profiler is attached -- the label entry points are
+  /// driver stubs, so the labels are a predictable branch and nothing more --
+  /// which is the whole reason this defaults on rather than sitting behind a
+  /// build flag: attaching a profiler to a Release binary must not require
+  /// rebuilding the binary being profiled.
+  ///
+  /// Set false only to hold a shipping instance to the extensions it strictly
+  /// needs; @ref Instance::debug_utils_enabled then reports false and every
+  /// label site becomes a no-op.
+  bool request_debug_utils = true;
   /// Extra instance extensions to request (the interop bootstrap may add some).
   std::vector<const char*> extra_instance_extensions;
 };
@@ -66,6 +87,15 @@ class VR_CORE_API Instance {
   VkInstance handle() const noexcept { return instance_; }
   /// @return Whether the Khronos validation layer is enabled on this instance.
   bool validation_enabled() const noexcept { return validation_enabled_; }
+  /// @return Whether `VK_EXT_debug_utils` is enabled on this instance -- the
+  ///         precondition for @ref Device resolving the label entry points.
+  ///
+  /// False when @ref InstanceConfig::request_debug_utils was cleared or the
+  /// loader does not offer the extension. An embedder creating its own
+  /// instance and handing recon the device reports the same fact through
+  /// @ref AdoptedDevice::enabled_debug_utils, Vulkan offering no way to query
+  /// it back.
+  bool debug_utils_enabled() const noexcept { return debug_utils_enabled_; }
 
   /// @brief Pick the best physical device that exposes a **compute-capable**
   ///        queue family: prefers discrete > integrated > virtual > CPU, and
@@ -84,6 +114,11 @@ class VR_CORE_API Instance {
   // on every ownership transfer.
   VkDebugUtilsMessengerEXT debug_messenger_ = VK_NULL_HANDLE;
   bool validation_enabled_ = false;
+  // Whether VK_EXT_debug_utils was enabled at creation -- the messenger above
+  // needs it, but so do the label entry points Device resolves, which is why
+  // this is tracked separately from validation_enabled_. Reset on every
+  // ownership transfer.
+  bool debug_utils_enabled_ = false;
 };
 
 }  // namespace volumetric_kit::recon

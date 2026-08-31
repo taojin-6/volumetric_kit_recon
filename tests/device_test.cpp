@@ -132,6 +132,70 @@ int main() {
           "adopt rejects a device missing a required feature");
   }
 
+  // --- VK_EXT_debug_utils: the GPU-profiler labelling seam. The extension is
+  // requested independently of validation (a Release build is the one worth
+  // profiling), so a default instance carries it wherever the loader offers it.
+  //
+  // Asserted as an *implication* rather than a fixed value: whether the
+  // extension exists is the driver's business, and a driver may enable it yet
+  // return no entry point. What must hold is that labels are never available
+  // without it, and that every labelling call is safe either way.
+  std::fprintf(stderr, "debug utils: instance=%d device=%d\n",
+               instance.value().debug_utils_enabled() ? 1 : 0,
+               owner.value().debug_labels_available() ? 1 : 0);
+  check(instance.value().debug_utils_enabled() ||
+            !owner.value().debug_labels_available(),
+        "labels are unavailable when the instance lacks debug utils");
+
+  // Labelling is a diagnostic: it must be safe on every input, including the
+  // degenerate ones, and must never be load-bearing. None of these may crash.
+  owner.value().set_object_name(VK_OBJECT_TYPE_DEVICE,
+                                vr::debug_object_handle(owner.value().handle()),
+                                "recon test device");
+  owner.value().set_object_name(VK_OBJECT_TYPE_BUFFER, 0, "null handle");
+  owner.value().set_object_name(VK_OBJECT_TYPE_DEVICE,
+                                vr::debug_object_handle(owner.value().handle()),
+                                nullptr);
+  owner.value().begin_debug_label(VK_NULL_HANDLE, "no command buffer");
+  owner.value().end_debug_label(VK_NULL_HANDLE);
+  check(true, "labelling calls survive degenerate inputs");
+
+  // Opting out is honoured, and takes the device's labels with it.
+  {
+    vr::InstanceConfig quiet;
+    quiet.request_debug_utils = false;
+    vr::Result<vr::Instance> plain = vr::Instance::create(quiet);
+    if (plain) {
+      check(!plain.value().debug_utils_enabled(),
+            "request_debug_utils=false leaves the extension off");
+      vr::Result<VkPhysicalDevice> gpu = plain.value().select_physical_device();
+      if (gpu) {
+        vr::Result<vr::Device> unlabelled =
+            vr::Device::create(plain.value().handle(), gpu.value(), {});
+        if (unlabelled) {
+          check(!unlabelled.value().debug_labels_available(),
+                "an opted-out instance yields a device with no labels");
+          // Still safe -- the no-op path is the one most callers hit.
+          unlabelled.value().set_object_name(
+              VK_OBJECT_TYPE_DEVICE,
+              vr::debug_object_handle(unlabelled.value().handle()), "ignored");
+        }
+      }
+    }
+  }
+
+  // adopt takes the embedder's word for an *instance* extension: it is not in
+  // enabled_device_extensions and cannot be, so a creator that says nothing
+  // gets no labels rather than an unportable vkGetInstanceProcAddr result.
+  {
+    vr::AdoptedDevice undeclared = adopted;  // enabled_debug_utils defaults off
+    vr::Result<vr::Device> r = vr::Device::adopt(undeclared, {});
+    if (r) {
+      check(!r.value().debug_labels_available(),
+            "adopt without enabled_debug_utils yields no labels");
+    }
+  }
+
   // --- Move-only semantics (CLAUDE.md requires these for every move-only
   // type). Device: move-construct empties the source; move-assign over a live
   // object frees the old resources and adopts the new; self-move is a no-op.
@@ -158,12 +222,19 @@ int main() {
           "device move-ctor empties the source pool");
     check(a.value().owns_device(),
           "device move-ctor resets source ownership to true");
+    // The label entry points are metadata and must reset with the rest of it:
+    // a moved-from device that still reported labels would hand a caller
+    // function pointers for a VkDevice it no longer holds.
+    check(!a.value().debug_labels_available(),
+          "device move-ctor clears the source's label entry points");
 
     const VkDevice b_handle = b.value().handle();
     moved = std::move(b.value());  // frees a's resources, then adopts b's
     check(moved.handle() == b_handle, "device move-assign adopts the source");
     check(b.value().handle() == VK_NULL_HANDLE,
           "device move-assign empties the source");
+    check(!b.value().debug_labels_available(),
+          "device move-assign clears the source's label entry points");
 
     vr::Device* self =
         &moved;  // launder through a pointer to dodge -Wself-move

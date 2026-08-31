@@ -3155,3 +3155,89 @@ generation when it first touches the arena rather than on success — a call tha
 overwrites the arena and then fails must still invalidate every outstanding
 `DeviceMesh`, and so must the dense overload, which shares that arena and can
 now reallocate it.
+
+### 2026-08-30 — A profiler label belongs to the kernel, not to the timed span; `VK_EXT_debug_utils` is requested independently of validation, and the *instance* extension is declared across the adopt seam.
+
+Motivated by a plain question — how do we find out whether this pipeline is
+memory-bandwidth bound on mobile — and by the answer that recon could not be
+profiled by the tools that would say. The instrumentation recon had was good
+and entirely about *time*: `StageMetrics` rows, `GpuTimer` spans, the
+`ExtractTimings` phases. What it had none of was a way for **Nsight Graphics**
+(Vulkan on NVIDIA) or **Xcode's Metal debugger** (MoltenVK on Apple) to name
+what they were looking at, so a capture was a wall of anonymous dispatches over
+buffers called `0x…`. One change fixes it on both, because MoltenVK maps
+debug-utils labels onto Metal debug groups and `MTLResource` labels: the same
+call that gives Nsight a trace range gives Xcode a named encoder.
+
+**A label is not a span, and pairing them would have been the wrong seam.** The
+`TODO(core)` this replaces read "pair a span with a `VK_EXT_debug_utils` label",
+and implementing it literally would have produced labels *only where the caller
+passed `StageMetrics*`* — `GpuStageScope::timer()` is null otherwise, and
+`dispatch()` took its label from `stage->name()`. Two things are wrong with
+that. A profiling run does not want recon's timings at all; the profiler is the
+instrument, and recon's job is only to say what each dispatch *is*. And asking
+for timings costs a timestamp — ~0.13 ms per submit on MoltenVK, measured in
+the 2026-08-09 entry — so tying the two would perturb the very workload being
+captured, and would leave every uninstrumented call anonymous. So the name
+moved onto `ComputeKernel`, which every dispatch already has: labels are free
+and unconditional, spans stay opt-in and measured. `dispatch()` opens the region
+around the whole recording — bind, push, dispatch, barrier — because that is
+the work a capture should charge to the kernel.
+
+**The extension is requested on its own, because a Release build is the only
+one worth profiling.** `Instance::create` enabled `VK_EXT_debug_utils` only
+when validation was on, since the only consumer was the validation messenger.
+That left exactly the build a profiler attaches to with no labels, and it is
+the build whose numbers mean anything (the `-O0` gotcha in CLAUDE.md is the
+same lesson from the other side). `InstanceConfig::request_debug_utils`
+defaults **on**: the label entry points are driver stubs when nothing is
+capturing, so the cost is a predictable branch, and the alternative — a build
+flag — means profiling a binary you already have requires rebuilding it, which
+is how a profiling session turns into a different workload.
+
+**Debug utils is an *instance* extension, which is what makes the adopt seam
+its own decision.** It cannot ride `AdoptedDevice::enabled_device_extensions`:
+that array carries what was enabled on the *device*, and this was not. So the
+embedder declares it as `enabled_debug_utils`, the same declare/verify shape
+`enabled_timeline_semaphore` and `enabled_scalar_block_layout` already use for
+the same underlying reason — Vulkan will not say what was enabled. It is
+declared rather than probed because `vkGetInstanceProcAddr`'s result for a
+command of an extension that was *not* enabled is not portable: a conformant
+loader returns null, a directly-linked MoltenVK (the iOS case) does not. Asking
+unconditionally would hand one platform a pointer it must not call. Unlike the
+two feature flags, this one is never *required* — its absence costs the
+capture's names and nothing else.
+
+**Naming is hooked where handles change, not where they are first made.** A
+debug-utils name lives on the handle, so every path that replaces a buffer
+un-names it. Three of those exist and all three were live bugs waiting: the
+grid's attribute arrays are all replaced by `VoxelBlockGrid::resize`, the hash
+table's by a rehash commit, and the mesh arena's by a grow. The hash map hangs
+its naming off `write_persistent_bindings()`, which already runs on create *and*
+on every resize commit, so the names cannot drift from the handles by
+construction; the grid and the mesh name at their own commit points, the mesh
+only where a handle actually changed (per-frame re-statement of an unchanged
+name is pure hot-path overhead). The mesh slot index is *in* the name —
+`mesh.arena[2]` — because the ring hands a consumer one slot while the next
+extract writes another, and a capture showing three identical `mesh.arena`
+entries would not say which generation it caught.
+
+`VoxelBlockGrid` grew a borrowed `Device*` for this, purely to re-name after a
+grow, and the header's own warning caught the trap on the way in: its
+move-assignment is hand-written and "must name EVERY member, and a forgotten
+one is silent" — the same note left behind by the topology-epoch member that
+was once dropped there.
+
+**What this does *not* do**, and both are deliberate. It does not add
+bytes-moved accounting, so the bandwidth question is still unanswered — the
+labels make an external profiler readable, and the roofline that would make its
+numbers comparable across NVIDIA's DRAM counters and Apple's UMA counters is
+its own change. And it does not batch dispatches. One `vkCmdDispatch` still
+means one command buffer, one submit and one fence wait (the 2026-07-05
+decision, which named batching as the trigger for reusable command buffers and
+timeline sync), so a capture will show serialized bursts with idle between
+them, and both profilers will report that idle rather than the kernels. The
+value of fixing it is unmeasured: the one phase breakdown that exists has
+`readback` at 3.73 ms against `dispatch` at 0.63 ms, and batching does nothing
+for a readback. Count the consecutive dispatches with no host dependency
+between them before building the machinery.

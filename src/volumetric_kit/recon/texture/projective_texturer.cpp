@@ -80,7 +80,7 @@ Result<ProjectiveTexturer> ProjectiveTexturer::create(Device& device,
   push_range.offset = 0;
   push_range.size = sizeof(PushConstants);
   KernelSetBuilder kb(dev);
-  VR_TRY(kb.add(tex.kernel_, vr_texture_score_comp_spv,
+  VR_TRY(kb.add(tex.kernel_, "texture_score", vr_texture_score_comp_spv,
                 vr_texture_score_comp_spv_size, 3, &push_range));
   VR_ASSIGN(tex.pool_, kb.build());
 

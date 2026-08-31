@@ -115,17 +115,32 @@ Result<Instance> Instance::create(const InstanceConfig& config) {
                 "validation requested but VK_LAYER_KHRONOS_validation is not "
                 "installed; continuing without it");
   }
-  // The debug messenger (which routes layer output through the log handler)
-  // needs VK_EXT_debug_utils. If validation is on but the extension is absent,
-  // the layer still runs -- its output just goes to its own default sink.
-  const bool want_debug_messenger =
-      want_validation &&
+  // VK_EXT_debug_utils carries two independent jobs, and conflating them is
+  // what this split fixes: it backs the validation messenger (below), and it
+  // backs the *labels* a GPU profiler reads -- kernel names on each dispatch,
+  // resource names on each buffer. Only the first needs validation. Gating the
+  // extension on validation left a Release build -- the only build worth
+  // profiling -- with no labels at all, so the request stands on its own.
+  const bool debug_utils_available =
       instance_extension_available(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+  const bool want_debug_utils =
+      config.request_debug_utils && debug_utils_available;
+  if (config.request_debug_utils && !debug_utils_available) {
+    log_message(LogLevel::Info,
+                "VK_EXT_debug_utils is unavailable; GPU-profiler labels are "
+                "disabled (captures will show unnamed dispatches)");
+  }
+  // The messenger (which routes layer output through the log handler) needs
+  // both the layer and the extension. If validation is on but the extension is
+  // absent, the layer still runs -- its output just goes to its own sink.
+  const bool want_debug_messenger = want_validation && debug_utils_available;
   if (want_validation && !want_debug_messenger) {
     log_message(LogLevel::Warning,
                 "validation enabled but VK_EXT_debug_utils is unavailable; "
                 "layer messages will not route through the log handler");
   }
+  // Either job requires the extension to actually be enabled.
+  const bool enable_debug_utils = want_debug_utils || want_debug_messenger;
 
   std::vector<const char*> layers;
   if (want_validation) {
@@ -146,7 +161,7 @@ Result<Instance> Instance::create(const InstanceConfig& config) {
         extensions.push_back(name);
       }
     };
-    if (want_debug_messenger) {
+    if (enable_debug_utils) {
       add_unique(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
     }
 #ifdef VK_KHR_portability_enumeration
@@ -189,6 +204,7 @@ Result<Instance> Instance::create(const InstanceConfig& config) {
     return vk_error(r, "vkCreateInstance");
   }
   instance.validation_enabled_ = want_validation;
+  instance.debug_utils_enabled_ = enable_debug_utils;
 
   // Stand up the debug messenger now the instance exists. Its entry point is an
   // extension function, fetched through vkGetInstanceProcAddr. A failure here
@@ -255,10 +271,12 @@ Result<VkPhysicalDevice> Instance::select_physical_device() const {
 Instance::Instance(Instance&& other) noexcept
     : instance_(other.instance_),
       debug_messenger_(other.debug_messenger_),
-      validation_enabled_(other.validation_enabled_) {
+      validation_enabled_(other.validation_enabled_),
+      debug_utils_enabled_(other.debug_utils_enabled_) {
   other.instance_ = VK_NULL_HANDLE;
   other.debug_messenger_ = VK_NULL_HANDLE;
   other.validation_enabled_ = false;
+  other.debug_utils_enabled_ = false;
 }
 
 Instance& Instance::operator=(Instance&& other) noexcept {
@@ -267,9 +285,11 @@ Instance& Instance::operator=(Instance&& other) noexcept {
     instance_ = other.instance_;
     debug_messenger_ = other.debug_messenger_;
     validation_enabled_ = other.validation_enabled_;
+    debug_utils_enabled_ = other.debug_utils_enabled_;
     other.instance_ = VK_NULL_HANDLE;
     other.debug_messenger_ = VK_NULL_HANDLE;
     other.validation_enabled_ = false;
+    other.debug_utils_enabled_ = false;
   }
   return *this;
 }
@@ -294,6 +314,7 @@ void Instance::destroy() noexcept {
     instance_ = VK_NULL_HANDLE;
   }
   validation_enabled_ = false;
+  debug_utils_enabled_ = false;
 }
 
 }  // namespace volumetric_kit::recon
