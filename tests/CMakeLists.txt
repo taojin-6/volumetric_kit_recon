@@ -156,6 +156,20 @@ target_link_libraries(recon_volume_allocate_test
 vr_target_warnings(recon_volume_allocate_test)
 add_test(NAME recon_volume_allocate COMMAND recon_volume_allocate_test)
 
+# volume triangle-mesh allocation: allocate from a small mesh, then verify on
+# the real driver that every block holding a voxel within trunc_dist is present
+# -- brute-forced on the host against an independent closest-point -- that a
+# triangle wider than the band leaves no hole (where the point path does), and
+# that the distance prune keeps the bounding box's far corners out. Skips (exit
+# 0) where no device is present.
+add_executable(recon_volume_allocate_triangles_test
+               volume_allocate_triangles_test.cpp)
+target_link_libraries(recon_volume_allocate_triangles_test
+                      PRIVATE volumetric_kit::recon_volume Vulkan::Vulkan)
+vr_target_warnings(recon_volume_allocate_triangles_test)
+add_test(NAME recon_volume_allocate_triangles
+         COMMAND recon_volume_allocate_triangles_test)
+
 # volume frustum-culled compaction: allocate blocks at known world positions
 # (one dead-centre, others behind / beyond-far / off to the side), then verify
 # compact_active_blocks_in_frustum returns only the in-view block while plain

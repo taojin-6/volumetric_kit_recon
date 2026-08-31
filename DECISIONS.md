@@ -3391,3 +3391,69 @@ deleted in favour of `extract_device` + `download`: it also calls the private
 *consumer's* high-water mark and would retire slots an `extract_device` caller
 is still drawing from. Keeping a host entry point is what keeps a PLY writer
 off the ring contract entirely.
+
+### 2026-08-31 — A triangle's work unit is the candidate *block*, not the triangle; and the band it allocates is measured from the surface, not dilated from a point.
+
+The first thing the codec needs is a mesh in the volume, and the first thing
+that needs is the blocks a mesh's truncation band covers.
+`allocate_from_points` over the vertices looks like it already does this and
+does not: it dilates each point into the `(2*tb+1)^3` cube, which is **one
+block** wide at the defaults (40 mm), so any triangle wider than that leaves an
+unallocated hole through its middle — and a triangle wider than 40 mm is not an
+edge case, it is what every mesh that is not a dense scan is made of. The test
+pins the difference on a 0.6 m triangle: the block at its centroid is allocated
+by the triangle path and absent from the point path.
+
+**Why the work unit is a block and not a triangle.** The obvious kernel is one
+thread per triangle, looping its own bounding box, and it is unusable here for
+a reason that has already cost this repo a device: *triangle size is unbounded*.
+A single 20 m floor quad at 5 mm voxels covers ~250 000 blocks, so one lane
+would own a quarter-million bucket-locked inserts while its neighbours idle —
+the same shape of dispatch that hung an M5 iPad in the 2026-08-08 overflow-scan
+entry, and striding inside the lane does not fix it, because the lane still owns
+every insert. So the host walks the triangles once, counts each one's candidate
+blocks, and uploads the exclusive prefix sum; a work item binary-searches that
+array for its triangle and handles exactly **one** block. Work per lane is then
+a search, one point-triangle distance, and at most one insert, whatever the mesh
+looks like — a property of the decomposition rather than of the input.
+
+The host pass is not overhead reluctantly accepted; it is the only place two
+other things can happen. It is where an index is **bounds-checked** — the kernel
+indexes `vertices` with it directly and `robustBufferAccess` is enabled nowhere
+in this repo, so an out-of-range index is an out-of-bounds read, not a wrong
+answer (the 2026-08-04 rule: a limit the caller cannot see is the library's to
+check). And it is where a **zero-area triangle** is dropped, which matters
+because that is the one input that makes the closest-point solve divide by zero:
+each of its three edge branches divides by a squared edge length, so excluding
+degenerate triangles at the source is what lets the GLSL carry no per-lane
+guard. A non-finite vertex is dropped in the same pass, for the plainer reason
+that a NaN turns a bounding box into a block range of garbage extent. Neither is
+an error — a mesh file routinely carries a few, and one bad face should not fail
+the allocation.
+
+**The band is measured, not dilated.** A block is allocated when its centre lies
+within `trunc_dist` plus the block's half-diagonal of some triangle. This is a
+deliberate divergence from what `allocate_from_depth` and `allocate_from_points`
+do, and the divergence is in the input: those dilate a *point*, where the cube
+is both the cheapest and the tightest thing available, while a triangle has a
+real extent and its bounding box is mostly empty space. Without the distance
+test a large slanted triangle allocates the solid interior of its box; with it,
+the same triangle allocates a sheet. The test pins both directions — a far
+corner of a diagonal triangle's box stays out, while the surface itself is
+covered — because a prune that is merely conservative and a prune that does
+nothing both pass a containment check. The half-diagonal is measured off
+`(block_size - 1) * voxel_size`, the span of a block's *voxels*, since voxels
+are node-centred; the nominal block extent would still be conservative, just
+looser by a voxel per axis.
+
+Two follow-on notes. The kernel **recomputes** each triangle's box rather than
+reading back the host's, which is sound because `worldToBlock` mirrors
+`world_to_block` bit-for-bit (the invariant `allocate_from_depth` already rests
+on) and min/max/subtract are exact in IEEE — but the decode is guarded against
+`local` exceeding the recomputed extent anyway, so a future divergence
+under-allocates rather than decoding onto an unrelated coordinate. And the
+closest-point primitive itself landed in **`core`**
+(`core/shaders/triangle_common.glsl`) rather than in `volume`, for the reason
+`core/math/vector_types.hpp` is there: it carries no tier's concepts, and the
+mesh-to-SDF pass will evaluate the field with the same function, so the blocks
+allocated here and the voxels written there cannot drift apart.
