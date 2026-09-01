@@ -2,10 +2,10 @@
 # Stop, deregister, and delete THIS REPO's self-hosted runners on THIS machine.
 # Use when decommissioning or migrating a runner host (e.g. switching Macs, or
 # rebuilding the Linux box). Works on macOS and Linux. Run as the user that owns
-# ~/actions-runner-recon-*.  Best-effort: keeps going if a single step fails.
+# the runner dirs.  Best-effort: keeps going if a single step fails.
 #
-# Scoped to this repo's `recon-` prefixed dirs only, so it leaves another repo's
-# runners (e.g. volumetric_kit_gfx's unprefixed `actions-runner-<i>`) untouched.
+# Scoped to this repo's own dirs only, so it leaves another repo's runners on the
+# same machine (e.g. volumetric_kit_gfx's) untouched.
 set -o pipefail
 
 REPO="taojin-6/volumetric_kit_recon"
@@ -13,10 +13,16 @@ SLUG="recon"
 # Linux runs the runner as a systemd service (root); macOS as a per-user LaunchAgent.
 if [ "$(uname -s)" = "Linux" ]; then SUDO=(sudo); else SUDO=(); fi
 
+# Runners live in ~/ci-runners/<repo>/runner-<i>. Hosts set up before that layout
+# still have them flat in ~/actions-runner-<slug>-<i>, so sweep both: a host that
+# was never migrated has to tear down cleanly rather than silently find nothing
+# and leave its runners registered. Both globs are already scoped to this repo —
+# one by directory, the other by the slug prefix.
 shopt -s nullglob
-dirs=("$HOME"/actions-runner-"${SLUG}"-*/)
+dirs=("$HOME"/ci-runners/"${REPO#*/}"/runner-*/ "$HOME"/actions-runner-"${SLUG}"-*/)
 if [ "${#dirs[@]}" -eq 0 ]; then
-  echo "No ~/actions-runner-${SLUG}-* runner dirs on this machine — nothing to remove."
+  echo "No runner dirs on this machine (looked in ~/ci-runners/${REPO#*/}/ and"
+  echo "~/actions-runner-${SLUG}-*) — nothing to remove."
   exit 0
 fi
 
