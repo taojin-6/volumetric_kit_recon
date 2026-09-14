@@ -47,9 +47,11 @@ The registration token and the exact tarball URL come from the repo →
 **Settings → Actions → Runners → New self-hosted runner (Linux x64)**. One token
 registers all N (valid ~1h).
 
-Runner dirs/names are scoped with a `recon-` prefix so this repo's runners
-coexist with another repo's on the same box (e.g. `volumetric_kit_gfx`, whose
-scripts use the unprefixed `actions-runner-<i>`) instead of clobbering them.
+Runners live under `~/ci-runners/<repo>/runner-<i>` — one directory per repo, so
+this repo's runners coexist with another repo's on the same box (e.g.
+`volumetric_kit_gfx`) instead of clobbering them. Runner *names* keep the
+`recon-` slug so they stay distinct on GitHub. Hosts set up before this layout
+have them flat in `~/actions-runner-recon-<i>`; `teardown-runners.sh` handles both.
 
 ```bash
 TOKEN="<REGISTRATION_TOKEN>"
@@ -58,12 +60,13 @@ URL="https://github.com/taojin-6/volumetric_kit_recon"
 N=6                                # one per Linux build leg (3 OS x Debug/Release)
 THREADS=4                          # N*THREADS ~= core count -> no oversubscription
 
-curl -o ~/actions-runner.tar.gz -L \
+mkdir -p ~/ci-runners
+curl -o ~/ci-runners/actions-runner.tar.gz -L \
   "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz"
 
 for i in $(seq 1 "$N"); do
-  dir=~/actions-runner-recon-$i   # recon-scoped so it won't collide with other repos' runners
-  mkdir -p "$dir" && tar xzf ~/actions-runner.tar.gz -C "$dir"
+  dir=~/ci-runners/volumetric_kit_recon/runner-$i   # per-repo dir; won't collide with other repos' runners
+  mkdir -p "$dir" && tar xzf ~/ci-runners/actions-runner.tar.gz -C "$dir"
   ( cd "$dir"
     # Loaded into every job on this runner -> caps cmake/ctest fan-out so the
     # parallel legs share the cores instead of each grabbing all of them.
@@ -106,13 +109,13 @@ Runners on a host share one label (`vk-linux-gpu` or `mac`) and GitHub routes
 jobs to whichever host is online, so swapping machines needs **no `ci.yml`
 change**: bring the new host up, then tear the old one down.
 
-- **Pause** (go offline, stay registered) — scoped to this repo's `recon-`
-  runners so another repo's stay up:
+- **Pause** (go offline, stay registered) — scoped to this repo's runner dir so
+  another repo's stay up:
   ```bash
   # Linux (systemd service, runs as root):
-  for d in ~/actions-runner-recon-*/; do ( cd "$d" && sudo ./svc.sh stop ); done
+  for d in ~/ci-runners/volumetric_kit_recon/runner-*/; do ( cd "$d" && sudo ./svc.sh stop ); done
   # macOS (per-user LaunchAgent — drop the sudo):
-  for d in ~/actions-runner-recon-*/; do ( cd "$d" && ./svc.sh stop ); done
+  for d in ~/ci-runners/volumetric_kit_recon/runner-*/; do ( cd "$d" && ./svc.sh stop ); done
   ```
   Resume with `svc.sh start` (sudo on Linux, no sudo on macOS).
 - **Fully remove** (decommission, or before handing the machine on):

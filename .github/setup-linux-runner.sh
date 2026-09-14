@@ -11,16 +11,17 @@
 #   (no fresh token needed) and only their services are (re)installed + started.
 # Tear down later (e.g. rebuilding the box) with: bash .github/teardown-runners.sh
 #
-# Runner dirs/names are scoped with a `recon-` prefix so this repo's runners
-# coexist with another repo's on the same machine (e.g. volumetric_kit_gfx, whose
-# scripts use the unprefixed `actions-runner-<i>`) instead of clobbering them.
+# Runners live under ~/ci-runners/<repo>/, so this repo's coexist with another
+# repo's on the same machine (e.g. volumetric_kit_gfx's) instead of clobbering
+# them. Runner *names* keep the `recon-` slug so they stay distinct on GitHub.
 set -euo pipefail
 
 REPO="taojin-6/volumetric_kit_recon"
-SLUG="recon"                         # dir/name scope so repos don't collide
+SLUG="recon"                         # name scope so repos don't collide on GitHub
 LABEL="vk-linux-gpu"
 N=6                                  # one per Linux build leg (3 OS x Debug/Release)
-BASE="$HOME"
+BASE="$HOME/ci-runners"              # every repo's runners under one dir
+RUNNER_ROOT="${BASE}/${REPO#*/}"     # ...this repo's under its own name
 
 case "$(uname -m)" in
   x86_64)  PKG_ARCH="x64"   ;;
@@ -44,7 +45,7 @@ CORES="$(nproc)"; THREADS=$(( CORES / N )); [ "$THREADS" -lt 1 ] && THREADS=1
 # re-runs that just (re)start services don't demand a fresh registration token.
 need_register=0
 for i in $(seq 1 "$N"); do
-  [ -f "${BASE}/actions-runner-${SLUG}-${i}/.runner" ] || need_register=1
+  [ -f "${RUNNER_ROOT}/runner-${i}/.runner" ] || need_register=1
 done
 
 if [ "$need_register" -eq 1 ]; then
@@ -57,6 +58,7 @@ if [ "$need_register" -eq 1 ]; then
     VER="2.335.1"
     read -r -p "Paste registration token: " TOKEN
   fi
+  mkdir -p "$BASE"
   TAR="${BASE}/actions-runner-linux-${PKG_ARCH}-${VER}.tar.gz"
   # Reuse a cached tarball only if it's a valid archive; an interrupted earlier
   # download leaves a truncated file that the next `tar xzf` would choke on.
@@ -65,7 +67,7 @@ if [ "$need_register" -eq 1 ]; then
 fi
 
 for i in $(seq 1 "$N"); do
-  dir="${BASE}/actions-runner-${SLUG}-${i}"
+  dir="${RUNNER_ROOT}/runner-${i}"
   echo "==> [${i}/${N}] ${dir}"
   if [ ! -f "${dir}/.runner" ]; then
     mkdir -p "$dir"; tar xzf "$TAR" -C "$dir"
