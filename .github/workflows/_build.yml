@@ -138,11 +138,22 @@ jobs:
           # make ships with the Xcode command-line tools.
 
       # Report the Vulkan device the runner sees (the real GPU in a self-hosted
-      # container, lavapipe on a hosted Linux runner, MoltenVK on macOS).
-      # Non-fatal: GPU-dependent tests skip themselves when no device exists.
+      # container, lavapipe on a hosted Linux runner, MoltenVK on macOS). On a
+      # hosted or macOS leg a missing device is a notice — the GPU-dependent
+      # tests skip themselves. In a container it fails the leg: that leg exists
+      # only for the GPU behind `--gpus all`, and a green build there with every
+      # GPU test skipped is exactly the failure that went unnoticed for a month.
       - name: GPU diagnostic
         if: steps.detect.outputs.present == 'true'
-        run: vulkaninfo --summary || echo "::notice::no Vulkan device visible — GPU tests will skip"
+        run: |
+          if vulkaninfo --summary; then
+            exit 0
+          fi
+          if [ "$IN_CONTAINER" = "true" ]; then
+            echo "::error::no Vulkan device visible inside the GPU container — refusing to pass a leg that would skip every GPU test"
+            exit 1
+          fi
+          echo "::notice::no Vulkan device visible — GPU tests will skip"
 
       # The dependency cache is keyed by the workspace *path*, so compute a short
       # fingerprint of it. See the cache step below for why the path is the thing
