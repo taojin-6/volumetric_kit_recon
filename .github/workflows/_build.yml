@@ -85,7 +85,14 @@ jobs:
           # ubuntu:* container, so add build-essential there.
           pkgs="cmake libglm-dev libvulkan-dev vulkan-validationlayers spirv-tools glslang-tools vulkan-tools"
           if [ "$IN_CONTAINER" = "true" ]; then
-            pkgs="$pkgs build-essential"
+            # A bare image also lacks the two client libraries the NVIDIA
+            # Vulkan ICD needs before it will hand the loader a
+            # vkCreateInstance: libGLX_nvidia.so.0 links libXext.so.6 and
+            # dlopens libEGL.so.1 while initialising. Without them the ICD the
+            # toolkit mounts is found and then discarded ("Found no drivers!"),
+            # and every GPU test skips itself on the one leg that exists for
+            # the GPU — which is how they silently skipped for a month.
+            pkgs="$pkgs build-essential libxext6 libegl1"
           else
             # GPU-less hosted runner: lavapipe (software Vulkan) gives the
             # Vulkan-touching tests a device to run against.
@@ -96,8 +103,8 @@ jobs:
           # On a hosted runner, point the loader at lavapipe for the rest of the
           # job. On the GPU box we pin nothing: the NVIDIA Vulkan ICD injected by
           # the container toolkit is then the only ICD, so the Vulkan tests run on
-          # the real GPU — and if it is absent, vulkaninfo finds no device and the
-          # GPU steps skip themselves rather than fail.
+          # the real GPU — and if it is absent, the GPU diagnostic below fails
+          # the leg rather than letting every GPU test skip.
           if [ "$IN_CONTAINER" != "true" ]; then
             echo "VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json" >> "$GITHUB_ENV"
           fi

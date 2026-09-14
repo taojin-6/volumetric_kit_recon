@@ -33,8 +33,18 @@ full parallelism — fewer just means some legs queue.
    sudo apt-get install -y nvidia-container-toolkit
    sudo nvidia-ctk runtime configure --runtime=docker
    sudo systemctl restart docker
+   # the toolkit bind-mounts nvidia-persistenced's socket into every --gpus
+   # container, so the daemon must be running or no container *starts*
+   # ("failed to fulfil mount request: open /run/nvidia-persistenced/socket"):
+   sudo systemctl enable --now nvidia-persistenced
    # verify the GPU is visible inside a container:
    docker run --rm --gpus all -e NVIDIA_DRIVER_CAPABILITIES=all ubuntu:24.04 nvidia-smi
+   # and that Vulkan reaches it from a bare image. The ICD the toolkit mounts
+   # needs libXext + libEGL from the image before it reports a device, which is
+   # why _build.yml installs them; a device must be listed here or the GPU
+   # legs fail at their "GPU diagnostic" step:
+   docker run --rm --gpus all -e NVIDIA_DRIVER_CAPABILITIES=all ubuntu:24.04 sh -c \
+     'apt-get update -qq && apt-get install -y -qq libxext6 libegl1 vulkan-tools >/dev/null && vulkaninfo --summary | grep deviceName'
    ```
 
 ## Register N parallel runners
