@@ -3524,18 +3524,19 @@ the atlas leg assumed canonical bytes where the fuse leg checks them; both
 viewers now run the keyframe through `to_canonical` (the identity plus an
 opaque alpha for Replica's sRGB JPEGs) into the packed words an RGBA8 upload
 reads on the little-endian hosts every Vulkan platform here is, and the
-function is gone. And the examples had come to depend on three
-`ReplicaCapture` behaviours no test pinned and no CI leg ran — `viewer.yml`
-is build-only, and 27/27 tests never linked `vr_example_common` —
-so `replica_capture_test.cpp` writes a tiny synthetic scene (a 4×3 camera,
-JPEG colour through `stb_image_write`, a hand-encoded 16-bit depth PNG,
-poses that name their index) and drives the capture through the contract on
-every leg, the sanitizer one included: the probe under limit and stride, a
-thinned sequence playing in full, `frame_count()` agreeing with `preload()`
-and with what `poll()` hands out, `exhausted()` turning true exactly after
-the last frame, a decode error leaving the position where it was, the stamped
-poses and intrinsics, the named range refusal, and a moved-from capture being
-empty.
+function is gone.
+
+**What the review asked for and did not get.** A host-only test of
+`ReplicaCapture`, since the examples had come to depend on three of its
+behaviours — the empty poll and a failed decode leaving the previous frame
+intact, and `frame_count()` agreeing with `preload()` and `poll()` — that no
+test pinned and no CI leg ran (`viewer.yml` is build-only; nothing in `tests/`
+links `vr_example_common`). Declined. The first two dependencies are gone
+with the copy, and a test that reaches `poll()` at all needs decodable
+images — an encoder in the test, or a JPEG as a byte array in source — which
+is a fixture out of all proportion to an example's file reader. The replay
+is verified the way the examples are, against the dataset (below); the
+contract member it implements is pinned where the contract is tested.
 
 **Verified.** `fuse_replica room0 --max-frames 60 --stride 3 --device-extract`
 after the review's fixes: 20 frames played, 6 057 blocks, 628 833 vertices /
@@ -3546,6 +3547,6 @@ multisets, the byte diff being the atomics' arrival-order permutation).
 keyframe in register through the `to_canonical` atlas (PNG inspected);
 `fuse_viewer --max-frames 12 --remesh-every 4`, *streaming*, fuses 12/12 and
 publishes the final mesh textured with the copied last frame, nothing on
-stderr. 28/28 tests pass, `vr_example_replica_capture` among them; the
-examples build under `-Werror` on MoltenVK; an ASan/UBSan build of the whole
-tree runs the suite clean.
+stderr. 27/27 tests pass; the examples build under `-Werror` on MoltenVK; an
+ASan/UBSan build of the whole tree, viewer included, runs the suite and both
+of those example runs clean.

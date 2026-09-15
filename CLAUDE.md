@@ -629,10 +629,9 @@ arbitrary; it usually isn't.
   `depth_from_registered_color`, `to_canonical`. Links `recon_core` alone;
   drivers live with the platform that can build *and* test them. The one
   implementer in this tree is `examples/common/replica_capture.hpp`, which
-  plays a Replica sequence back through the contract and is pinned by the
-  host-only `vr_example_replica_capture` test on every leg — so every example
-  run produces real frames through it, and a live driver plugs in where that
-  one is constructed.
+  plays a Replica sequence back through the contract — so every example run
+  produces real frames through it, and a live driver plugs in where that one
+  is constructed.
 
 **Examples** (`examples/`). All three poll their frames through
 `sensor::ICameraCapture&` — the fuse loop never learns it is reading a disk —

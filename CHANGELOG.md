@@ -70,14 +70,6 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the first must end on the second. Non-pure and `false` by default (a live
   device is never exhausted, only stopped), so existing drivers compile
   untouched; a finite source overrides it.
-- `examples`: **`vr_example_replica_capture`**, a host-only test of the one
-  `ICameraCapture` this tree builds. It writes a tiny synthetic scene in
-  Replica's layout (a baseline JPEG it carries, a hand-encoded 16-bit depth
-  PNG) and drives the capture through the contract on every CI leg, the
-  sanitizer one included: the probe under limit and stride, `frame_count()`
-  against `preload()` and `poll()`, `exhausted()`, a decode error leaving the
-  position unchanged, the stamped poses and intrinsics, the named range
-  refusal, and a moved-from capture being empty.
 - `core`: **GPU-profiler labels** — `VK_EXT_debug_utils` names, so an Nsight
   Graphics or Xcode Metal capture reads `tsdf_integrate` and `tsdf.depth_frame`
   rather than a wall of anonymous dispatches over unnamed handles. Every

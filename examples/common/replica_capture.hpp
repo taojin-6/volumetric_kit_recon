@@ -13,10 +13,9 @@
 /// fuse loop takes an `ICameraCapture&`, waits on an empty poll until
 /// `exhausted()` says the source is done, and never learns whether its frames
 /// came off a disk or a sensor. This is also the one implementer of the
-/// contract this repo builds, runs on every example invocation, and tests
-/// (`replica_capture_test.cpp`, host-only) -- the tier itself ships none (the
-/// 2026-08-02 decision), and its test fake exercises the interface without
-/// ever producing a real frame.
+/// contract this repo builds and runs on every example invocation -- the tier
+/// itself ships none (the 2026-08-02 decision), and its test fake exercises
+/// the interface without ever producing a real frame.
 
 #include <atomic>
 #include <cstddef>
