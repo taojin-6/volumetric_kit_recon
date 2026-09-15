@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Tao Jin
 
-// fuse_replica: the end-to-end reconstruction example. Reads a posed RGB-D
-// sequence in the Replica-SLAM layout (nvblox's fuse_replica dataset), fuses
-// each frame into a sparse TSDF volume (allocate the truncation band, then
-// integrate depth + colour), periodically extracts a marching-cubes mesh, and
-// writes the final coloured mesh to a binary PLY for inspection. This is the
-// headless spine; the live-viewer variant renders the growing mesh each frame
-// through the volumetric_kit_gfx sibling.
+// fuse_replica: the end-to-end reconstruction example. Polls a posed RGB-D
+// sequence in the Replica-SLAM layout (nvblox's fuse_replica dataset) through
+// the sensor tier's ICameraCapture contract, fuses each frame into a sparse
+// TSDF volume (allocate the truncation band, then integrate depth + colour),
+// periodically extracts a marching-cubes mesh, and writes the final coloured
+// mesh to a binary PLY for inspection. This is the headless spine; the
+// live-viewer variant renders the growing mesh each frame through the
+// volumetric_kit_gfx sibling.
 //
 //   fuse_replica <scene_dir> [-o out.ply] [--voxel 0.02] [--max-frames N] ...
 //
@@ -21,11 +22,14 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <optional>
 #include <string>
+#include <thread>
 #include <utility>
 
-#include "dataset.hpp"
+#include "fuse_frame.hpp"
 #include "ply_writer.hpp"
+#include "replica_capture.hpp"
 #include "volumetric_kit/recon/core/allocator.hpp"
 #include "volumetric_kit/recon/core/device.hpp"
 #include "volumetric_kit/recon/core/instance.hpp"
@@ -33,6 +37,7 @@
 #include "volumetric_kit/recon/core/stage_metrics.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
 #include "volumetric_kit/recon/mesh/mesh.hpp"
+#include "volumetric_kit/recon/sensor/camera_capture.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_grid.hpp"
@@ -42,6 +47,7 @@ namespace vr = volumetric_kit::recon;
 namespace vol = volumetric_kit::recon::volume;
 namespace tsdf = volumetric_kit::recon::tsdf;
 namespace mesh = volumetric_kit::recon::mesh;
+namespace sensor = volumetric_kit::recon::sensor;
 
 namespace {
 
@@ -254,15 +260,25 @@ vr::Status run(const Options& opt) {
   VR_ASSIGN(vr::Allocator allocator,
             vr::Allocator::create(instance.handle(), device));
 
-  // --- Dataset ---
-  VR_ASSIGN(vr_example::ReplicaDataset dataset,
-            vr_example::ReplicaDataset::open(opt.scene_dir, opt.cam_params));
-  const vr_example::CameraModel& cam = dataset.camera();
+  // --- Capture ---
+  // The sequence arrives through the sensor contract: frame selection and the
+  // depth gate are the capture's options, the intrinsics and pose ride on each
+  // frame, and the loop below never learns it is reading a disk. A live source
+  // replaces this one construction.
+  vr_example::ReplicaCapture::Options capture_options;
+  capture_options.frame_limit = static_cast<std::size_t>(opt.max_frames);
+  capture_options.frame_stride = static_cast<std::size_t>(opt.stride);
+  capture_options.min_depth = opt.min_depth;
+  capture_options.max_depth = opt.max_depth;
+  VR_ASSIGN(vr_example::ReplicaCapture replica,
+            vr_example::ReplicaCapture::open(opt.scene_dir, opt.cam_params,
+                                             capture_options));
+  const vr::ColorCameraParams& cam = replica.color_camera();
   std::printf(
-      "dataset: %zu poses, %ux%u @ fx=%.1f fy=%.1f cx=%.1f cy=%.1f, depth "
-      "scale %.1f\n",
-      dataset.frame_count(), cam.width, cam.height, cam.fx, cam.fy, cam.cx,
-      cam.cy, cam.depth_scale);
+      "capture: %zu frames to play, %ux%u @ fx=%.1f fy=%.1f cx=%.1f cy=%.1f, "
+      "depth scale %.1f\n",
+      replica.frame_count(), cam.width, cam.height, cam.fx, cam.fy, cam.cx,
+      cam.cy, replica.depth_scale());
 
   // --- Volume + pipeline ---
   vol::VoxelGridParams grid{};
@@ -301,123 +317,30 @@ vr::Status run(const Options& opt) {
               return c;
             }()));
 
-  // Allocate the truncation band for a frame, growing the map (preserving the
-  // per-voxel data already fused) if it overflows -- exercises the block-index-
-  // preserving resize on real data.
-  auto allocate_band = [&](const vr_example::RgbdFrame& frame,
-                           const vr::DepthCameraParams& depth_camera,
-                           vr::StageMetrics* metrics) -> vr::Status {
-    for (int attempt = 0; attempt < 5; ++attempt) {
-      vol::AllocFailures failures;
-      VR_ASSIGN(std::uint32_t failed,
-                volume.map().allocate_from_depth(
-                    frame.depth.data(), depth_camera, &failures, metrics));
-      if (failed == 0) {
-        return {};
-      }
-      // Grow only for a *capacity* limit. Depth allocation is the most
-      // contended entry point in the map -- adjacent pixels dilate into the
-      // same block, and the kernel's bucket spin-lock gives up after a bounded
-      // number of retries -- so the retry loop can hand back a residue of pure
-      // lock failures over a table that is nowhere near full. Doubling on that
-      // is expensive and unbounded: at this example's defaults each attribute
-      // array goes 768 MiB -> 1536 MiB, and resize builds the grown buffers
-      // beside the old ones, so the transient peak is ~2.3 GiB -- for pressure
-      // that does not exist. Report it and retry instead; the next dispatch
-      // sees less contention because the blocks that did land are now present.
-      if (!failures.capacity_limited()) {
-        std::printf(
-            "  %u allocations lost bucket-lock races (no capacity limit) -> "
-            "retrying without growing\n",
-            failed);
-        continue;
-      }
-      // Double in int64 and bail before the block index (bucket_size * buckets)
-      // would overflow int32, so a growth that can no longer fit reports
-      // cleanly instead of tripping the signed-overflow UB.
-      const std::int64_t grown =
-          static_cast<std::int64_t>(volume.grid().num_buckets) * 2;
-      if (grown * volume.grid().bucket_size >
-          std::numeric_limits<std::int32_t>::max()) {
-        return vr::Status::out_of_memory(
-            "map cannot grow further without overflowing the block index");
-      }
-      // Report the occupancy alongside the reason: it is a 4-byte read of the
-      // heap counter (not the O(total slots) diagnostics scan), and it is what
-      // says whether this grow was inevitable or premature. A capture-scale
-      // consumer should poll it and grow on a threshold instead of waiting for
-      // the failure -- linear probing degrades sharply past ~0.7, so growing at
-      // the cliff means every insert before it ran at its slowest.
-      vr::Result<float> load = volume.map().load_factor();
-      std::printf(
-          "  map overflow at %.3f load (%u fails: %u chain, %u heap, %u table) "
-          "-> resize to %lld buckets\n",
-          load.ok() ? load.value() : -1.0f, failed, failures.chain,
-          failures.heap, failures.table, static_cast<long long>(grown));
-      // Its own row rather than folded into "allocate" or left untimed: this is
-      // by far the most expensive thing an overflowing frame does (the ~2.3 GiB
-      // transient above, plus init_table and the rehash passes), and charging
-      // it to "allocate" would sink that stage's device share on exactly the
-      // frames where the host cost is not the kernel at all. Untimed it would
-      // simply vanish -- the frames that cost the most contributing nothing to
-      // the table below.
-      {
-        vr::StageScope resize_span(metrics, "resize");
-        VR_TRY(volume.resize(static_cast<std::int32_t>(grown)));
-      }
-    }
-    return vr::Status::out_of_memory(
-        "allocation kept overflowing after resize");
-  };
-
-  // The camera intrinsics, dimensions, and depth range are identical every
-  // frame -- only the pose changes -- so build both param structs once and
-  // rewrite just cam_to_world per frame. Depth and colour share Replica's one
-  // registered camera; keeping the shared intrinsics in a single place also
-  // stops the depth and colour cameras silently drifting apart.
-  vr::DepthCameraParams depth_camera{};
-  depth_camera.fx = cam.fx;
-  depth_camera.fy = cam.fy;
-  depth_camera.cx = cam.cx;
-  depth_camera.cy = cam.cy;
-  depth_camera.min_depth = opt.min_depth;
-  depth_camera.max_depth = opt.max_depth;
-  depth_camera.width = cam.width;
-  depth_camera.height = cam.height;
-
-  vr::ColorCameraParams color_camera{};
-  color_camera.fx = cam.fx;
-  color_camera.fy = cam.fy;
-  color_camera.cx = cam.cx;
-  color_camera.cy = cam.cy;
-  color_camera.width = cam.width;
-  color_camera.height = cam.height;
-
-  const std::size_t last = std::min<std::size_t>(
-      dataset.frame_count(), static_cast<std::size_t>(opt.max_frames));
-
   // Optionally decode the whole sequence up front. Deliberately *outside* the
   // timed region below: streaming spends ~75% of the loop in JPEG/PNG decode,
   // so preloading is what makes the reported fps a measure of fusion rather
   // than of the reader.
   if (opt.preload) {
-    const auto stride = static_cast<std::size_t>(opt.stride);
     // Announce the cost before spending it: --preload has no frame cap of its
     // own, so a long sequence can quietly ask for many gigabytes.
     std::printf(
         "preloading %.0f MB...\n",
-        static_cast<double>(dataset.preload_bytes_projected(last, stride)) /
-            (1024 * 1024));
+        static_cast<double>(replica.preload_bytes_projected()) / (1024 * 1024));
     const auto preload_start = std::chrono::steady_clock::now();
-    VR_ASSIGN(const std::size_t cached_frames, dataset.preload(last, stride));
+    VR_ASSIGN(const std::size_t cached_frames, replica.preload());
     const double preload_seconds =
         std::chrono::duration<double>(std::chrono::steady_clock::now() -
                                       preload_start)
             .count();
     std::printf("preloaded %zu frames (%.0f MB) in %.1fs\n", cached_frames,
-                static_cast<double>(dataset.preloaded_bytes()) / (1024 * 1024),
+                static_cast<double>(replica.preloaded_bytes()) / (1024 * 1024),
                 preload_seconds);
   }
+
+  // From here on the source is the contract, not the dataset.
+  sensor::ICameraCapture& capture = replica;
+  VR_TRY(capture.start());
 
   const auto t_start = std::chrono::steady_clock::now();
   std::size_t fused = 0;
@@ -444,32 +367,24 @@ vr::Status run(const Options& opt) {
   std::size_t dirty_samples = 0;
   std::uint64_t sum_dirty = 0, sum_remesh = 0, sum_active = 0;
   std::uint32_t last_dirty = 0, last_active_blocks = 0, last_remesh = 0;
-  for (std::size_t i = 0; i < last; i += static_cast<std::size_t>(opt.stride)) {
-    vr::Result<vr_example::FrameView> frame_result = dataset.frame(i);
-    if (!frame_result) {
-      if (frame_result.status().domain() == vr::Status::Code::NotFound) {
-        // Ran past the frames present on disk (we may have only a subset of the
-        // trajectory): stop cleanly rather than erroring.
-        std::printf("frame %zu not on disk; stopping at %zu fused frames\n", i,
-                    fused);
+  for (;;) {
+    // An empty poll is "nothing this tick", which a replay and an idle live
+    // device report alike; only the source knows whether that is the end. A
+    // decode failure on a frame that is present is a real error and stops the
+    // run.
+    VR_ASSIGN(const std::optional<sensor::CapturedFrame> polled,
+              capture.poll());
+    if (!polled) {
+      if (capture.exhausted()) {
         break;
       }
-      // A frame that IS on disk but failed to decode is a real error.
-      return frame_result.status();
+      // A live sensor polled faster than it runs: yield and ask again.
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      continue;
     }
-    const vr_example::FrameView view = std::move(frame_result).value();
-    const vr_example::RgbdFrame& frame = *view;
-
-    // Only the pose changes per frame; depth_camera/color_camera were built
-    // once above.
-    depth_camera.cam_to_world = frame.cam_to_world;
-    color_camera.cam_to_world = frame.cam_to_world;
-    const tsdf::ColorFrame color_frame{frame.color.data(), color_camera};
-
-    VR_TRY(allocate_band(frame, depth_camera, &stage_totals));
-    VR_TRY(integrator.integrate(volume, frame.depth.data(), depth_camera,
-                                opt.max_weight, tsdf::IntegrationMode::Classic,
-                                &color_frame, &stage_totals));
+    const sensor::CapturedFrame& frame = *polled;
+    VR_TRY(vr_example::fuse_frame(volume, integrator, frame, opt.max_weight,
+                                  &stage_totals));
     ++fused;
 
     if (opt.dirty_every > 0 &&
@@ -572,8 +487,7 @@ vr::Status run(const Options& opt) {
       }
       last_rt = rt;
       if (fused % 100 == 0) {
-        std::printf("  frame %zu: fused %zu, %zu triangles so far\n", i, fused,
-                    tris);
+        std::printf("  fused %zu frames, %zu triangles so far\n", fused, tris);
       }
     }
   }
