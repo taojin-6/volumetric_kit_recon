@@ -218,6 +218,9 @@ order. Change the decision, its entry there, and this list together.
 - [**2026-08-31**](DECISIONS.md#2026-08-31--the-dense-extract-goes-extract-becomes-extract_host-so-the-two-workflows-are-named-rather-than-inferred) —
   The dense extract goes; `extract` becomes `extract_host`, so the two
   workflows are named rather than inferred.
+- [**2026-08-31**](DECISIONS.md#2026-08-31--a-triangles-work-unit-is-the-candidate-block-not-the-triangle-and-the-band-it-allocates-is-measured-from-the-surface-not-dilated-from-a-point) —
+  A triangle's work unit is the candidate *block*, not the triangle; and the
+  band it allocates is measured from the surface, not dilated from a point.
 
 ## Provenance & salvage policy
 
@@ -459,10 +462,21 @@ arbitrary; it usually isn't.
   bracket, so no `gpu_ms` measures the markers around the work.
 
 - **`volume`** — `VoxelHashMap` drives init / allocate-from-coords, -depth,
-  -points / remove / compact / compact-in-frustum / resize as GLSL kernels
+  -points, -triangles / remove / compact / compact-in-frustum / resize as GLSL
+  kernels
   (`volume/shaders/hash_*.comp`) over the scalar-block-layout ABI. Depth
   allocation unprojects a posed frame and dilates each surface block into the
-  `(2·tb+1)³` truncation band — a solid cube, not a ray march; frustum-culled
+  `(2·tb+1)³` truncation band — a solid cube, not a ray march;
+  `allocate_from_triangles` deliberately does **not** dilate that cube
+  (2026-08-31): a triangle wider than the band — which is one block, 40 mm, at
+  the defaults — would hole through the middle, so a block is allocated when its
+  centre is within `trunc_dist` + the block's half-diagonal of some triangle,
+  and the work is split per *candidate block* rather than per triangle so one
+  lane cannot own a 250 000-block quad. The host pass that counts those blocks
+  is also where an index is bounds-checked and a zero-area or non-finite
+  triangle is dropped — the former being the one input that divides by zero in
+  the closest-point solve, which lives in `core/shaders/triangle_common.glsl`
+  so mesh-to-SDF evaluates the field with the same function. Frustum-culled
   compaction gives the per-frame working set, from a depth camera's pinhole
   intrinsics or — since 2026-08-12 — from a *render* camera's `view_proj`, whose
   planes are read off the matrix itself and so hold for any handedness, provided
