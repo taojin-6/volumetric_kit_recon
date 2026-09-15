@@ -2,7 +2,8 @@
 // Copyright (c) 2026 Tao Jin
 
 // fuse_render: the recon -> gfx interop demo, headless. Fuse a posed Replica
-// RGB-D sequence into a sparse TSDF+colour volume with volumetric_kit_recon,
+// RGB-D sequence -- polled through the sensor tier's ICameraCapture contract --
+// into a sparse TSDF+colour volume with volumetric_kit_recon,
 // extract a marching-cubes mesh, hand it across the interop seam (a host mesh:
 // recon extracts on its device, gfx uploads on its own), and render the
 // coloured reconstruction to a PNG through volumetric_kit_gfx's
@@ -19,16 +20,16 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include <glm/glm.hpp>
 
-#include "dataset.hpp"  // vr_example::ReplicaDataset (recon examples/common)
-#include "example_camera.hpp"  // vr_example::make_depth_camera
-#include "image_io.hpp"        // vr_example::pack_color_rgba8
+#include "image_io.hpp"  // vr_example::pack_color_rgba8
 #include "recon_gfx_bridge.hpp"
+#include "replica_capture.hpp"  // vr_example::ReplicaCapture (examples/common)
 
 // recon tiers
 #include "volumetric_kit/recon/core/allocator.hpp"
@@ -37,6 +38,7 @@
 #include "volumetric_kit/recon/core/result.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
 #include "volumetric_kit/recon/mesh/mesh.hpp"
+#include "volumetric_kit/recon/sensor/camera_capture.hpp"
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
@@ -63,6 +65,7 @@ namespace vol = volumetric_kit::recon::volume;
 namespace rtsdf = volumetric_kit::recon::tsdf;
 namespace rmesh = volumetric_kit::recon::mesh;
 namespace rtex = volumetric_kit::recon::texture;
+namespace rsensor = volumetric_kit::recon::sensor;
 namespace vg = volumetric_kit::gfx;
 namespace vgp = volumetric_kit::gfx::pipelines;
 
@@ -238,9 +241,17 @@ vr::Result<Reconstruction> fuse(const Options& opt,
   VR_ASSIGN(vr::Allocator allocator,
             vr::Allocator::create(instance.handle(), device));
 
-  VR_ASSIGN(vr_example::ReplicaDataset dataset,
-            vr_example::ReplicaDataset::open(opt.scene_dir, opt.cam_params));
-  const vr_example::CameraModel& cam = dataset.camera();
+  // The sequence arrives through the sensor contract; only this construction
+  // knows it is a disk. The frame cap and the depth gate are the capture's
+  // options, so every frame it hands out is already gated.
+  vr_example::ReplicaCapture::Options capture_options;
+  capture_options.frame_limit =
+      static_cast<std::size_t>(std::max(0, opt.max_frames));
+  capture_options.max_depth = opt.max_depth;
+  VR_ASSIGN(vr_example::ReplicaCapture replica,
+            vr_example::ReplicaCapture::open(opt.scene_dir, opt.cam_params,
+                                             capture_options));
+  const vr_example::CameraModel& cam = replica.camera();
   // Split about the principal point rather than assuming it is centred: cy is
   // 339.5 on Replica, not height/2.
   const float sensor_vfov =
@@ -269,59 +280,77 @@ vr::Result<Reconstruction> fuse(const Options& opt,
   VR_ASSIGN(rmesh::MarchingCubes extractor,
             rmesh::MarchingCubes::create(device, allocator, mc_config));
 
-  const auto last = std::min<std::size_t>(
-      dataset.frame_count(),
-      static_cast<std::size_t>(std::max(0, opt.max_frames)));
-
   // Decode the sequence up front when asked, so the fuse loop below runs at
   // GPU speed instead of at JPEG/PNG decode speed (~75% of a streaming loop).
   // Costs ~6 MB per frame of RAM, announced before it is spent.
   if (opt.preload) {
-    std::printf("preloading %.0f MB...\n",
-                static_cast<double>(dataset.preload_bytes_projected(last)) /
-                    (1024 * 1024));
-    VR_ASSIGN(const std::size_t cached_frames, dataset.preload(last));
+    std::printf(
+        "preloading %.0f MB...\n",
+        static_cast<double>(replica.preload_bytes_projected()) / (1024 * 1024));
+    VR_ASSIGN(const std::size_t cached_frames, replica.preload());
     std::printf("preloaded %zu frames (%.0f MB)\n", cached_frames,
-                static_cast<double>(dataset.preloaded_bytes()) / (1024 * 1024));
+                static_cast<double>(replica.preloaded_bytes()) / (1024 * 1024));
   }
 
-  std::size_t fused = 0;
-  for (std::size_t i = 0; i < last; ++i) {
-    vr::Result<vr_example::FrameView> frame_result = dataset.frame(i);
-    if (!frame_result) {
-      // NotFound is "ran past the frames on disk" and ends the sequence
-      // cleanly; anything else -- a truncated JPEG, a wrong-size depth PNG --
-      // is a real failure, and treating the two alike made this leg write a
-      // partial-room PNG and exit 0. Mirrors fuse_replica, which discriminates.
-      if (frame_result.status().domain() == vr::Status::Code::NotFound) {
-        std::printf("frame %zu not on disk; stopping at %zu fused frames\n", i,
-                    fused);
-        break;
-      }
-      return frame_result.status();
-    }
-    const vr_example::FrameView view = std::move(frame_result).value();
-    const vr_example::RgbdFrame& frame = *view;
-    poses.push_back(frame.cam_to_world);
-
-    const vr::DepthCameraParams depth_camera =
-        vr_example::make_depth_camera(cam, frame.cam_to_world, opt.max_depth);
+  // The keyframe the mesh is textured with, retained as it goes by: the
+  // --follow frame if given, else the middle of the sequence. A frame is a
+  // view the capture recycles on the next poll, so keeping one past that point
+  // means copying it -- exactly what a live consumer does with a keyframe, and
+  // why this no longer reaches back into the dataset for it once fusion is
+  // done.
+  const std::size_t keyframe_index =
+      (opt.follow >= 0 &&
+       static_cast<std::size_t>(opt.follow) < replica.frame_count())
+          ? static_cast<std::size_t>(opt.follow)
+          : replica.frame_count() / 2;
+  struct Keyframe {
+    std::vector<float> depth;
+    std::vector<std::uint32_t> color;
+    vr::DepthCameraParams depth_camera{};
     vr::ColorCameraParams color_camera{};
-    color_camera.fx = cam.fx;
-    color_camera.fy = cam.fy;
-    color_camera.cx = cam.cx;
-    color_camera.cy = cam.cy;
-    color_camera.width = cam.width;
-    color_camera.height = cam.height;
-    color_camera.cam_to_world = frame.cam_to_world;
-    const rtsdf::ColorFrame color_frame{frame.color.data(), color_camera};
+  };
+  std::optional<Keyframe> keyframe;
+
+  // From here on the source is the contract, not the dataset.
+  rsensor::ICameraCapture& capture = replica;
+  VR_TRY(capture.start());
+  std::size_t fused = 0;
+  for (;;) {
+    // A replay hands out one frame per poll, so an empty poll is the end of
+    // the sequence; a decode failure -- a truncated JPEG, a wrong-size depth
+    // PNG -- is a real failure and ends the run, where treating it as the end
+    // of the sequence once made this leg write a partial-room PNG and exit 0.
+    VR_ASSIGN(const std::optional<rsensor::CapturedFrame> polled,
+              capture.poll());
+    if (!polled) {
+      break;
+    }
+    const rsensor::CapturedFrame& frame = *polled;
+    poses.push_back(frame.depth_camera.cam_to_world);
+    if (opt.texture && fused == keyframe_index && frame.has_color()) {
+      const std::size_t depth_px =
+          static_cast<std::size_t>(frame.depth_camera.width) *
+          frame.depth_camera.height;
+      const std::size_t color_px =
+          static_cast<std::size_t>(frame.color_camera.width) *
+          frame.color_camera.height;
+      keyframe = Keyframe{
+          std::vector<float>(frame.depth, frame.depth + depth_px),
+          std::vector<std::uint32_t>(frame.color, frame.color + color_px),
+          frame.depth_camera, frame.color_camera};
+    }
+    // Carry the encoding across rather than leaving it defaulted: the default
+    // *declares* canonical, so a source that forgot to convert would be fused
+    // through the wrong curve instead of refused.
+    const rtsdf::ColorFrame color_frame{frame.color, frame.color_camera,
+                                        frame.color_encoding};
 
     bool allocated = false;
     for (int attempt = 0; attempt < 5; ++attempt) {
       vol::AllocFailures failures;
       VR_ASSIGN(std::uint32_t failed,
-                volume.map().allocate_from_depth(frame.depth.data(),
-                                                 depth_camera, &failures));
+                volume.map().allocate_from_depth(
+                    frame.depth, frame.depth_camera, &failures));
       if (failed == 0) {
         allocated = true;
         break;
@@ -339,8 +368,9 @@ vr::Result<Reconstruction> fuse(const Options& opt,
       return vr::Status::out_of_memory(
           "fuse_render: allocation kept overflowing after resize");
     }
-    VR_TRY(integrator.integrate(volume, frame.depth.data(), depth_camera, 20.0f,
-                                rtsdf::IntegrationMode::Classic, &color_frame));
+    VR_TRY(integrator.integrate(volume, frame.depth, frame.depth_camera, 20.0f,
+                                rtsdf::IntegrationMode::Classic,
+                                frame.has_color() ? &color_frame : nullptr));
     ++fused;
   }
   std::printf("fused %zu frames\n", fused);
@@ -349,33 +379,25 @@ vr::Result<Reconstruction> fuse(const Options& opt,
   recon.sensor_vfov = sensor_vfov;
   VR_ASSIGN(recon.mesh, extractor.extract_host(volume));
 
-  // Project one keyframe onto the mesh (the live single-camera texturing
-  // slice): the --follow frame if given, else the middle fused frame. Its uv0
-  // mark the triangles that keyframe saw unoccluded; the rest keep the sentinel
-  // and render with fused voxel colour. The atlas the uv0 index into is that
-  // frame's own colour image (below), so texturing keeps full sensor resolution
-  // where the camera had line of sight.
-  if (opt.texture && fused > 0 && !recon.mesh.vertices.empty()) {
+  // Project the retained keyframe onto the mesh (the live single-camera
+  // texturing slice). Its uv0 mark the triangles that keyframe saw unoccluded;
+  // the rest keep the sentinel and render with fused voxel colour. The atlas
+  // the uv0 index into is that frame's own colour image (below), so texturing
+  // keeps full sensor resolution where the camera had line of sight.
+  if (keyframe && !recon.mesh.vertices.empty()) {
     VR_ASSIGN(rtex::ProjectiveTexturer texturer,
               rtex::ProjectiveTexturer::create(device, allocator));
-    const int tex_idx =
-        (opt.follow >= 0 && static_cast<std::size_t>(opt.follow) < fused)
-            ? opt.follow
-            : static_cast<int>(fused / 2);
-    VR_ASSIGN(vr_example::FrameView keyframe,
-              dataset.frame(static_cast<std::size_t>(tex_idx)));
-    const vr::DepthCameraParams keyframe_camera = vr_example::make_depth_camera(
-        cam, keyframe->cam_to_world, opt.max_depth);
-    VR_TRY(
-        texturer.texture(recon.mesh, keyframe->depth.data(), keyframe_camera));
+    VR_TRY(texturer.texture(recon.mesh, keyframe->depth.data(),
+                            keyframe->depth_camera));
 
     // Atlas = the keyframe's colour image as RGBA8 at full resolution --
     // exactly what uv0 = (pixel + 0.5)/size index.
-    recon.atlas = vr_example::pack_color_rgba8(keyframe->color);
-    recon.atlas_w = cam.width;
-    recon.atlas_h = cam.height;
-    std::printf("textured with frame %d (%ux%u atlas)\n", tex_idx, cam.width,
-                cam.height);
+    recon.atlas = vr_example::pack_color_rgba8(keyframe->color.data(),
+                                               keyframe->color.size());
+    recon.atlas_w = keyframe->color_camera.width;
+    recon.atlas_h = keyframe->color_camera.height;
+    std::printf("textured with frame %zu (%ux%u atlas)\n", keyframe_index,
+                recon.atlas_w, recon.atlas_h);
   }
   return recon;
 }

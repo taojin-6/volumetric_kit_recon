@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Tao Jin
 
-#include "dataset.hpp"
+#include "replica_capture.hpp"
 
 #include <algorithm>
 #include <array>
@@ -15,6 +15,7 @@
 #include <utility>
 
 #include "image_io.hpp"
+#include "volumetric_kit/recon/sensor/camera_conventions.hpp"
 
 namespace vr_example {
 namespace {
@@ -30,9 +31,7 @@ std::optional<std::string> read_file(const std::string& path) {
   return ss.str();
 }
 
-// True if the path can be opened for reading. Used to tell a frame that is
-// simply absent from disk (stop cleanly) from one that is present but fails to
-// decode (a real error).
+// True if the path can be opened for reading.
 bool file_exists(const std::string& path) {
   return static_cast<bool>(std::ifstream(path, std::ios::binary));
 }
@@ -74,9 +73,7 @@ std::string frame_path(const std::string& results_dir, const char* prefix,
   return results_dir + "/" + name;
 }
 
-// True when both of frame `index`'s images are on disk. Single-sourced so the
-// "is this frame present" rule that stops a load, a preload, and a preload's
-// size projection cannot drift apart.
+// True when both of frame `index`'s images are on disk.
 bool frame_on_disk(const std::string& results_dir, std::size_t index) {
   return file_exists(frame_path(results_dir, "frame", index, ".jpg")) &&
          file_exists(frame_path(results_dir, "depth", index, ".png"));
@@ -84,35 +81,22 @@ bool frame_on_disk(const std::string& results_dir, std::size_t index) {
 
 }  // namespace
 
-// Both members are cleared on transfer, so a moved-from view resolves to
-// nullptr rather than to an emptied RgbdFrame -- dereferencing one faults
-// instead of silently handing a fuse loop a null depth/colour pointer.
-FrameView::FrameView(FrameView&& other) noexcept
-    : owned_(std::move(other.owned_)), borrowed_(other.borrowed_) {
-  other.owned_.reset();
-  other.borrowed_ = nullptr;
-}
-
-FrameView& FrameView::operator=(FrameView&& other) noexcept {
-  if (this != &other) {
-    owned_ = std::move(other.owned_);
-    borrowed_ = other.borrowed_;
-    other.owned_.reset();
-    other.borrowed_ = nullptr;
+vr::Result<ReplicaCapture> ReplicaCapture::open(
+    const std::string& scene_dir, const std::string& cam_params_path,
+    const Options& options) {
+  if (options.frame_stride == 0) {
+    return vr::Status::invalid_argument(
+        "ReplicaCapture::open: frame_stride must be >= 1");
   }
-  return *this;
-}
-
-vr::Result<ReplicaDataset> ReplicaDataset::open(
-    const std::string& scene_dir, const std::string& cam_params_path) {
-  ReplicaDataset ds;
-  ds.results_dir_ = scene_dir + "/results";
+  ReplicaCapture capture;
+  capture.options_ = options;
+  capture.results_dir_ = scene_dir + "/results";
 
   // --- Intrinsics (cam_params.json) ---
   const std::optional<std::string> cam_json = read_file(cam_params_path);
   if (!cam_json) {
     return vr::Status::invalid_argument(
-        "ReplicaDataset::open: cannot read cam params: " + cam_params_path);
+        "ReplicaCapture::open: cannot read cam params: " + cam_params_path);
   }
   const std::array<const char*, 7> keys = {"fx", "fy", "cx",   "cy",
                                            "w",  "h",  "scale"};
@@ -121,7 +105,7 @@ vr::Result<ReplicaDataset> ReplicaDataset::open(
     const std::optional<float> v = json_number(*cam_json, keys[k]);
     if (!v) {
       return vr::Status::invalid_argument(
-          std::string("ReplicaDataset::open: cam params missing key '") +
+          std::string("ReplicaCapture::open: cam params missing key '") +
           keys[k] + "'");
     }
     values[k] = *v;
@@ -135,7 +119,7 @@ vr::Result<ReplicaDataset> ReplicaDataset::open(
   for (const float value : values) {
     if (!std::isfinite(value)) {
       return vr::Status::invalid_argument(
-          "ReplicaDataset::open: cam params has a non-finite value");
+          "ReplicaCapture::open: cam params has a non-finite value");
     }
   }
   const float w = values[4];
@@ -146,23 +130,39 @@ vr::Result<ReplicaDataset> ReplicaDataset::open(
     // x = (u - cx) * d / fx), scale > 0, and width/height in a sane [1, 65535]
     // so the uint32 cast below is well-defined.
     return vr::Status::invalid_argument(
-        "ReplicaDataset::open: cam params has a zero/invalid intrinsic, "
+        "ReplicaCapture::open: cam params has a zero/invalid intrinsic, "
         "dimension, or scale");
   }
-  ds.camera_.fx = values[0];
-  ds.camera_.fy = values[1];
-  ds.camera_.cx = values[2];
-  ds.camera_.cy = values[3];
-  ds.camera_.width = static_cast<std::uint32_t>(w);
-  ds.camera_.height = static_cast<std::uint32_t>(h);
-  ds.camera_.depth_scale = values[6];
+  CameraModel& cam = capture.camera_;
+  cam.fx = values[0];
+  cam.fy = values[1];
+  cam.cx = values[2];
+  cam.cy = values[3];
+  cam.width = static_cast<std::uint32_t>(w);
+  cam.height = static_cast<std::uint32_t>(h);
+  cam.depth_scale = values[6];
+
+  // Both camera blocks once, here. Depth and colour are one registered camera
+  // on Replica, so the depth camera is *derived* from the colour one exactly
+  // as a registered live source's is -- which also validates the depth range
+  // the options carry, before a frame is ever handed out.
+  vr::ColorCameraParams& color = capture.color_camera_;
+  color.fx = cam.fx;
+  color.fy = cam.fy;
+  color.cx = cam.cx;
+  color.cy = cam.cy;
+  color.width = cam.width;
+  color.height = cam.height;
+  VR_ASSIGN(capture.depth_camera_, vr::sensor::depth_from_registered_color(
+                                       color, cam.width, cam.height,
+                                       options.min_depth, options.max_depth));
 
   // --- Trajectory (traj.txt): one flattened row-major 4x4 cam->world per line,
   // transposed into the column-major glm matrix the pipeline uploads. ---
   std::ifstream traj(scene_dir + "/traj.txt");
   if (!traj) {
     return vr::Status::invalid_argument(
-        "ReplicaDataset::open: cannot read trajectory: " + scene_dir +
+        "ReplicaCapture::open: cannot read trajectory: " + scene_dir +
         "/traj.txt");
   }
   std::string line;
@@ -177,9 +177,9 @@ vr::Result<ReplicaDataset> ReplicaDataset::open(
       // would silently shift every later pose off its frame index (poses are
       // matched to frameNNNNNN by position), so reject it instead.
       return vr::Status::invalid_argument(
-          "ReplicaDataset::open: blank line inside the trajectory (before "
+          "ReplicaCapture::open: blank line inside the trajectory (before "
           "pose " +
-          std::to_string(ds.poses_.size()) + ")");
+          std::to_string(capture.poses_.size()) + ")");
     }
     std::istringstream ss(line);
     std::array<float, 16> m{};
@@ -192,8 +192,8 @@ vr::Result<ReplicaDataset> ReplicaDataset::open(
     }
     if (!ok) {
       return vr::Status::invalid_argument(
-          "ReplicaDataset::open: malformed trajectory line " +
-          std::to_string(ds.poses_.size()));
+          "ReplicaCapture::open: malformed trajectory line " +
+          std::to_string(capture.poses_.size()));
     }
     vr::Mat4f pose(1.0f);
     for (int row = 0; row < 4; ++row) {
@@ -201,27 +201,38 @@ vr::Result<ReplicaDataset> ReplicaDataset::open(
         pose[col][row] = m[static_cast<std::size_t>(row) * 4 + col];
       }
     }
-    ds.poses_.push_back(pose);
+    capture.poses_.push_back(pose);
   }
-  if (ds.poses_.empty()) {
+  if (capture.poses_.empty()) {
     return vr::Status::invalid_argument(
-        "ReplicaDataset::open: trajectory has no poses");
+        "ReplicaCapture::open: trajectory has no poses");
   }
-  return ds;
+
+  // --- The frames actually present. Probed once here (two file opens per
+  // frame, milliseconds) rather than discovered by the first poll to hit an
+  // absent image, so frame_count() is the number of frames that will really
+  // play and a viewer's "fused N / M" cannot promise 2000 against 400 on disk.
+  // Contiguous from 0: poses are matched to frameNNNNNN by position, so a gap
+  // ends the sequence exactly as a missing tail does.
+  std::size_t on_disk = 0;
+  while (on_disk < capture.poses_.size() &&
+         frame_on_disk(capture.results_dir_, on_disk)) {
+    ++on_disk;
+  }
+  capture.end_ = std::min(on_disk, options.frame_limit);
+  return capture;
 }
 
-vr::Result<RgbdFrame> ReplicaDataset::load(std::size_t index) const {
-  if (index >= poses_.size()) {
-    return vr::Status::invalid_argument("ReplicaDataset::load: index " +
+std::size_t ReplicaCapture::frame_count() const noexcept {
+  return end_ == 0 ? 0 : (end_ - 1) / options_.frame_stride + 1;
+}
+
+vr::Result<ReplicaCapture::RgbdFrame> ReplicaCapture::load(
+    std::size_t index) const {
+  if (index >= end_) {
+    return vr::Status::invalid_argument("ReplicaCapture::load: index " +
                                         std::to_string(index) +
-                                        " out of range");
-  }
-  // A frame simply absent from disk (the trajectory may list more poses than
-  // there are images) is reported as NotFound, so the caller can stop cleanly;
-  // a decode failure on a file that IS present stays a hard error below.
-  if (!frame_on_disk(results_dir_, index)) {
-    return vr::Status::not_found("ReplicaDataset::load: frame " +
-                                 std::to_string(index) + " not on disk");
+                                        " past the sequence");
   }
   const std::string color_path =
       frame_path(results_dir_, "frame", index, ".jpg");
@@ -237,20 +248,19 @@ vr::Result<RgbdFrame> ReplicaDataset::load(std::size_t index) const {
   return frame;
 }
 
-vr::Result<std::size_t> ReplicaDataset::preload(
-    std::size_t frame_limit, std::size_t frame_stride,
+vr::Result<std::size_t> ReplicaCapture::preload(
     const std::atomic<bool>* cancel) {
-  if (frame_stride == 0) {
+  if (running_) {
     return vr::Status::invalid_argument(
-        "ReplicaDataset::preload: frame_stride must be >= 1");
+        "ReplicaCapture::preload: call before start(); the frame the last "
+        "poll handed out may borrow from the cache this replaces");
   }
-  const std::size_t limit = std::min(frame_limit, poses_.size());
   // Drop any previous cache first, so a second preload does not hold two
   // sequences' worth of frames at once while it refills.
   cache_.clear();
-  cache_.resize(limit);
+  cache_.resize(end_);
   std::size_t cached_frames = 0;
-  for (std::size_t index = 0; index < limit; index += frame_stride) {
+  for (std::size_t index = 0; index < end_; index += options_.frame_stride) {
     // Polled per frame rather than per batch: a caller tearing down waits at
     // most one frame's decode, not the whole sequence's.
     if (cancel != nullptr && cancel->load()) {
@@ -258,12 +268,6 @@ vr::Result<std::size_t> ReplicaDataset::preload(
     }
     vr::Result<RgbdFrame> frame_result = load(index);
     if (!frame_result) {
-      // Ran past the frames present on disk: keep what we have (the fuse loop
-      // stops there anyway). A frame that IS present but failed to decode is a
-      // real error, exactly as in load().
-      if (frame_result.status().domain() == vr::Status::Code::NotFound) {
-        break;
-      }
       cache_.clear();
       return frame_result.status();
     }
@@ -273,29 +277,12 @@ vr::Result<std::size_t> ReplicaDataset::preload(
   return cached_frames;
 }
 
-std::size_t ReplicaDataset::preload_bytes_projected(
-    std::size_t frame_limit, std::size_t frame_stride) const {
-  if (frame_stride == 0) {
-    return 0;
-  }
-  const std::size_t limit = std::min(frame_limit, poses_.size());
-  // Counts the frames preload would really reach rather than assuming the whole
-  // trajectory is backed by images: Replica's room0 lists 2000 poses against
-  // 400 frames on disk, where a worst-case count would overstate the cost 5x
-  // and cry wolf. Two file probes per frame -- milliseconds against a decode
-  // measured in seconds.
-  std::size_t frames = 0;
-  for (std::size_t index = 0; index < limit; index += frame_stride) {
-    if (!frame_on_disk(results_dir_, index)) {
-      break;
-    }
-    ++frames;
-  }
-  return frames * static_cast<std::size_t>(camera_.width) * camera_.height *
-         (sizeof(float) + sizeof(std::uint32_t));
+std::size_t ReplicaCapture::preload_bytes_projected() const noexcept {
+  return frame_count() * static_cast<std::size_t>(camera_.width) *
+         camera_.height * (sizeof(float) + sizeof(std::uint32_t));
 }
 
-std::size_t ReplicaDataset::preloaded_bytes() const noexcept {
+std::size_t ReplicaCapture::preloaded_bytes() const noexcept {
   std::size_t bytes = 0;
   for (const std::optional<RgbdFrame>& cached : cache_) {
     if (cached) {
@@ -306,14 +293,51 @@ std::size_t ReplicaDataset::preloaded_bytes() const noexcept {
   return bytes;
 }
 
-vr::Result<FrameView> ReplicaDataset::frame(std::size_t index) const {
-  FrameView view;
-  if (index < cache_.size() && cache_[index]) {
-    view.borrowed_ = &*cache_[index];
-    return view;
+vr::Status ReplicaCapture::start() {
+  running_ = true;
+  return {};
+}
+
+void ReplicaCapture::stop() noexcept {
+  running_ = false;
+  next_ = 0;
+  current_owned_.reset();
+  current_borrowed_ = nullptr;
+}
+
+vr::Result<std::optional<vr::sensor::CapturedFrame>> ReplicaCapture::poll() {
+  if (!running_ || next_ >= end_) {
+    return no_frame();
   }
-  VR_ASSIGN(view.owned_, load(index));
-  return view;
+  const std::size_t index = next_;
+  // A cache hit, else a disk read + JPEG/PNG decode. Decoded into a fresh
+  // optional and swapped in only on success, so a failed decode leaves the
+  // previous frame -- which a consumer may still be reading -- intact.
+  if (index < cache_.size() && cache_[index]) {
+    current_owned_.reset();
+    current_borrowed_ = &*cache_[index];
+  } else {
+    VR_ASSIGN(RgbdFrame decoded, load(index));
+    current_owned_ = std::move(decoded);
+    current_borrowed_ = nullptr;
+  }
+  // Advance without overshooting: `index + stride` could wrap for a huge
+  // stride, and `end_` is the exhausted position either way.
+  next_ = (end_ - index > options_.frame_stride) ? index + options_.frame_stride
+                                                 : end_;
+
+  const RgbdFrame& stored = *current();
+  vr::sensor::CapturedFrame frame{};
+  frame.depth = stored.depth.data();
+  frame.color = stored.color.data();
+  frame.depth_camera = depth_camera_;
+  frame.depth_camera.cam_to_world = stored.cam_to_world;
+  frame.color_camera = color_camera_;
+  frame.color_camera.cam_to_world = stored.cam_to_world;
+  // color_encoding stays defaulted -- the default *is* the declaration
+  // "canonical", which Replica's sRGB JPEGs are -- and timestamp_ns stays 0,
+  // the contract's "the device reports none".
+  return some_frame(frame);
 }
 
 }  // namespace vr_example

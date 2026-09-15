@@ -3391,3 +3391,74 @@ deleted in favour of `extract_device` + `download`: it also calls the private
 *consumer's* high-water mark and would retire slots an `extract_device` caller
 is still drawing from. Keeping a host entry point is what keeps a PLY writer
 off the ring contract entirely.
+
+### 2026-09-14 — The examples poll their frames through the sensor contract: the Replica reader is an `ICameraCapture`, a replay's empty poll is the end of the sequence, and a frame kept past the next poll is copied.
+
+The sensor tier had shipped a contract with no producer and no consumer in
+this tree. Its only implementer was the ARKit driver in `volumetric_kit_ios`,
+its only in-repo exercise the test fake, and the three fuse examples — the
+code that actually drives the pipeline — read frames through a dataset API of
+their own (`ReplicaDataset::frame(i)` returning a `FrameView`, plus
+`make_depth_camera` to build the camera structs the loop then patched per
+frame). With an external RGB-D source (Orbbec) next, that left a live driver
+with nothing to plug into: every consumer was written against the dataset,
+not the contract, and the contract's ergonomics on a real frame path — a
+frame that borrows its pixels, a range stamped by the driver, a pose that
+rides on the frame — had never been paid for by anything that ran.
+
+**What changed.** `ReplicaDataset` / `FrameView` / `example_camera.hpp` are
+gone, replaced by `examples/common/replica_capture.hpp`: a `ReplicaCapture
+final : sensor::ICameraCapture` that plays the sequence back through
+`poll()`. All three examples take an `ICameraCapture&` for the fuse loop and
+touch the concrete type only where it is opened (options, `preload`,
+`frame_count`, the intrinsics the viewers size their render camera from). No
+compatibility layer: the repo is under active development, and a shim would
+have kept the loop's old shape alive beside the new one. Three points of the
+design carry the decision:
+
+1. **A replay is consumer-paced, and its empty poll is the end of the
+   sequence.** The contract's `no_frame()` means "nothing this tick" for a
+   live device. A file source has no such state — every poll yields the next
+   frame until there is none — so the example loops treat the first empty
+   poll as the end. This is *not* encoded in the interface (an `exhausted()`
+   accessor was considered and rejected as a branch nothing reaches today);
+   it is documented on `ReplicaCapture::poll` and at the loop, and the day a
+   live source sits beside the replay, that branch grows a wait-and-retry.
+   A decode failure on a frame that is present is a real error and stops the
+   run, which is what `fuse_render` already required after a partial-room PNG
+   once exited 0.
+
+2. **The frame cap, the stride and the depth gate are the capture's options,
+   stamped on the frame.** The ARKit driver stamps its own range constants on
+   every frame's depth camera; the replay does the same with the CLI's
+   `--min-depth` / `--max-depth`, deriving the depth camera from the colour
+   one through `depth_from_registered_color` at `open` — which validates the
+   range before a frame exists, and keeps the two poses from a single
+   trajectory entry so they cannot drift. `frame_count()` is probed from disk
+   at `open` rather than read off the trajectory: room0 lists 2000 poses
+   against 400 images, so the viewer's "fused N / M" promised 2000 and the old
+   `preload_bytes_projected` had to probe for itself. One probe, one count,
+   and a missing image at poll time becomes the error it is.
+
+3. **A frame kept past the next poll is copied; one kept past the *last*
+   poll is not.** `CapturedFrame` is a view the capture recycles on the next
+   `poll()`. `fuse_render` used to re-read its keyframe from the dataset after
+   fusion — random access a live source cannot offer — and now retains a copy
+   of that frame as it goes by (the `--follow` frame, else the middle of the
+   sequence, chosen against `frame_count()`). `fuse_viewer` holds the last
+   polled frame as a borrowed view for its final texture pass, which is valid
+   precisely because nothing polls after the loop; the capture is declared
+   before the fuse thread so it outlives that view. The atlas handoff between
+   its threads carries the keyframe's own extent (`AtlasPixels`) instead of a
+   dataset-wide constant, since the frame is the only thing that knows it —
+   and a frame without colour is no longer textured, because uv0 into a
+   white dummy draws every visible triangle white.
+
+**Verified.** `fuse_replica room0 --max-frames 60 --stride 3 --device-extract`
+against the pre-refactor Release binary: 20 frames played, 6 057 blocks,
+628 833 vertices / 209 611 triangles on both, and the two PLYs are identical
+as triangle multisets (position, normal, colour) — the byte diff is the
+atomics' arrival-order permutation. `fuse_render --follow 30` textures the
+retained frame-30 keyframe in register; `fuse_viewer --max-frames 40
+--preload` fuses 40/40 and publishes the final mesh textured with the last
+frame. 27/27 tests pass; the examples build under `-Werror` on MoltenVK.

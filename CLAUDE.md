@@ -218,6 +218,10 @@ order. Change the decision, its entry there, and this list together.
 - [**2026-08-31**](DECISIONS.md#2026-08-31--the-dense-extract-goes-extract-becomes-extract_host-so-the-two-workflows-are-named-rather-than-inferred) —
   The dense extract goes; `extract` becomes `extract_host`, so the two
   workflows are named rather than inferred.
+- [**2026-09-14**](DECISIONS.md#2026-09-14--the-examples-poll-their-frames-through-the-sensor-contract-the-replica-reader-is-an-icameracapture-a-replays-empty-poll-is-the-end-of-the-sequence-and-a-frame-kept-past-the-next-poll-is-copied) —
+  The examples poll their frames through the sensor contract: the Replica
+  reader is an `ICameraCapture`, a replay's empty poll is the end of the
+  sequence, and a frame kept past the next poll is copied.
 
 ## Provenance & salvage policy
 
@@ -620,9 +624,19 @@ arbitrary; it usually isn't.
   `CapturedFrame` (frames dropped, not queued), plus the boundary math that is
   silently wrong when guessed — `cv_from_gl_camera`,
   `depth_from_registered_color`, `to_canonical`. Links `recon_core` alone;
-  drivers live with the platform that can build *and* test them.
+  drivers live with the platform that can build *and* test them. The one
+  implementer in this tree is `examples/common/replica_capture.hpp`, which
+  plays a Replica sequence back through the contract (2026-09-14) — so every
+  example run produces real frames through it, and a live driver plugs in
+  where that one is constructed.
 
-**Examples** (`examples/`). `fuse_replica` runs the spine on a posed
+**Examples** (`examples/`). All three poll their frames through
+`sensor::ICameraCapture&` — the fuse loop never learns it is reading a disk —
+with `ReplicaCapture` as the source: frame cap, stride and the depth gate are
+its options, stamped on each frame it hands out, and its empty poll is the end
+of the sequence (a replay is consumer-paced, so there is no "not yet"; a live
+source beside it will need a wait-and-retry on that branch). `fuse_replica`
+runs the spine on a posed
 Replica-SLAM RGB-D sequence and writes a PLY; `--incremental` drives the
 dirty-only extract and **owns the dirty flags**, resetting them immediately
 after the extract that consumed them (the fuse kernel only ORs, so anything
