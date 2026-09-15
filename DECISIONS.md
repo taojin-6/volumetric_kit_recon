@@ -3415,7 +3415,7 @@ touch the concrete type only where it is opened (options, `preload`,
 No compatibility layer: the repo is under active development, and a shim
 would have kept the loop's old shape alive beside the new one. Beside it, two
 header-only helpers in `examples/common` that the review of the first cut
-asked for: `owned_frame.hpp` (the copy a consumer keeps of a frame, below)
+asked for: `rgbd_frame.hpp` (the one frame type, below)
 and `fuse_frame.hpp` (one frame's allocate-and-integrate, which three loops
 had each carried a drifting copy of — one printed the overflow and timed the
 grow, one did neither, and the encoding hand-off into `ColorFrame` was the
@@ -3497,9 +3497,11 @@ first cut, recorded as such.
    branch happens to return before touching its frame, a detail no document
    promised and no test pinned; the terminating empty poll *is* a poll under
    the contract, and the ARKit driver rotates its buffers on one. So both
-   viewers keep a keyframe the same way, through `OwnedFrame` (`assign` from
-   the view, capacity reused; `view()` back to the contract type, resolved
-   on access so the defaulted moves stay correct), and `fuse_viewer` copies
+   viewers keep a keyframe the same way, in an `RgbdFrame` of their own —
+   the type `ReplicaCapture` decodes into, made public and given the whole
+   header, so there is one frame type in the examples and `CapturedFrame` is
+   its view (`assign` from the view, capacity reused; `view()` back to the
+   contract type, built on access so the defaulted moves stay correct), and `fuse_viewer` copies
    the newest fused frame at the bottom of every iteration: the review
    measured the 6.5 MB retain at 0.08–0.09 ms at `-O2` on an M5 Max — ~5% of
    a preloaded fuse iteration, ~1% of a streaming one. `ReplicaCapture`'s

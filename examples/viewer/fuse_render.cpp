@@ -29,10 +29,10 @@
 
 #include <glm/glm.hpp>
 
-#include "fuse_frame.hpp"   // vr_example::fuse_frame
-#include "owned_frame.hpp"  // vr_example::OwnedFrame
+#include "fuse_frame.hpp"  // vr_example::fuse_frame
 #include "recon_gfx_bridge.hpp"
 #include "replica_capture.hpp"  // vr_example::ReplicaCapture (examples/common)
+#include "rgbd_frame.hpp"       // vr_example::RgbdFrame
 
 // recon tiers
 #include "volumetric_kit/recon/core/allocator.hpp"
@@ -328,7 +328,7 @@ vr::Result<Reconstruction> fuse(const Options& opt,
        static_cast<std::size_t>(opt.follow) < replica.frame_count())
           ? static_cast<std::size_t>(opt.follow)
           : replica.frame_count() / 2;
-  vr_example::OwnedFrame keyframe;
+  vr_example::RgbdFrame keyframe;
 
   // From here on the source is the contract, not the dataset.
   rsensor::ICameraCapture& capture = replica;
@@ -372,7 +372,7 @@ vr::Result<Reconstruction> fuse(const Options& opt,
   // the rest keep the sentinel and render with fused voxel colour. The atlas
   // the uv0 index into is that frame's own colour image (below), so texturing
   // keeps full sensor resolution where the camera had line of sight.
-  if (keyframe.has_frame() && !recon.mesh.vertices.empty()) {
+  if (!keyframe.empty() && !recon.mesh.vertices.empty()) {
     const rsensor::CapturedFrame kf = keyframe.view();
     VR_ASSIGN(rtex::ProjectiveTexturer texturer,
               rtex::ProjectiveTexturer::create(device, allocator));

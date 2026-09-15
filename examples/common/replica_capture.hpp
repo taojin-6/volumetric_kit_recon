@@ -25,6 +25,7 @@
 #include <string>
 #include <vector>
 
+#include "rgbd_frame.hpp"
 #include "volumetric_kit/recon/core/camera_params.hpp"
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
 #include "volumetric_kit/recon/core/result.hpp"
@@ -45,7 +46,7 @@ namespace vr = volumetric_kit::recon;
 /// pixels belong to this object and are valid only until the next @ref poll
 /// (or @ref stop) -- *any* next poll, including the empty one that reports the
 /// end of the sequence, and a poll that fails to decode. A consumer keeping a
-/// frame past that point copies it (`OwnedFrame` in `owned_frame.hpp`).
+/// frame past that point copies it into an @ref RgbdFrame of its own.
 ///
 /// @ref open reads the intrinsics and every pose up front, then probes which
 /// of the frames it will play are actually on disk (a trajectory routinely
@@ -178,18 +179,11 @@ class ReplicaCapture final : public vr::sensor::ICameraCapture {
   bool exhausted() const noexcept override { return next_ >= end_; }
 
  private:
-  /// One decoded, posed RGB-D frame: the storage a @ref
-  /// vr::sensor::CapturedFrame borrows from.
-  struct RgbdFrame {
-    std::vector<float> depth;          ///< Depth in metres, `w*h`, row-major.
-    std::vector<std::uint32_t> color;  ///< Packed RGB (`R|G<<8|B<<16`), `w*h`.
-    vr::Mat4f cam_to_world{1.0f};      ///< Camera->world pose (column-major).
-  };
-
   ReplicaCapture() = default;
 
-  // Decode one frame straight from disk, bypassing the cache. The preload path
-  // and the poll path share it so both decode identically.
+  // Decode one frame straight from disk, bypassing the cache, fully stamped:
+  // the poll path hands out its view as is. The preload path shares it so
+  // both decode identically.
   vr::Result<RgbdFrame> load(std::size_t index) const;
 
   Options options_{};
@@ -212,8 +206,8 @@ class ReplicaCapture final : public vr::sensor::ICameraCapture {
   bool running_ = false;
   std::size_t next_ = 0;  ///< Index of the frame the next poll hands out.
   // The frame the last poll decoded, when it decoded one (streaming); the
-  // storage its CapturedFrame borrows. Empty after a cache hit, whose frame the
-  // cache owns.
+  // storage the view it handed out borrows. Empty after a cache hit, whose
+  // frame the cache owns.
   std::optional<RgbdFrame> current_owned_;
 };
 

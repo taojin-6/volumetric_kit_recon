@@ -644,7 +644,8 @@ through `examples/common/fuse_frame.hpp` (the one allocate-and-grow-then-
 integrate loop, carrying the frame's encoding declaration across), and a
 frame kept past the next poll — `fuse_render`'s keyframe, `fuse_viewer`'s
 newest fused frame for its final texture pass — is copied into an
-`OwnedFrame` (`examples/common/owned_frame.hpp`), never borrowed: the empty
+`RgbdFrame` of its own (`examples/common/rgbd_frame.hpp`, the type the
+reader decodes into; `CapturedFrame` is its view), never borrowed: the empty
 poll that ends a replay is a poll. `fuse_replica`
 runs the spine on a posed
 Replica-SLAM RGB-D sequence and writes a PLY; `--incremental` drives the

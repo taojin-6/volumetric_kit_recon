@@ -302,8 +302,7 @@ std::size_t ReplicaCapture::frame_count() const noexcept {
   return end_ == 0 ? 0 : (end_ - 1) / options_.frame_stride + 1;
 }
 
-vr::Result<ReplicaCapture::RgbdFrame> ReplicaCapture::load(
-    std::size_t index) const {
+vr::Result<RgbdFrame> ReplicaCapture::load(std::size_t index) const {
   if (index >= end_ || index >= poses_.size()) {
     return vr::Status::invalid_argument("ReplicaCapture::load: index " +
                                         std::to_string(index) +
@@ -314,14 +313,22 @@ vr::Result<ReplicaCapture::RgbdFrame> ReplicaCapture::load(
   const std::string depth_path =
       frame_path(results_dir_, "depth", index, ".png");
   RgbdFrame frame;
-  frame.cam_to_world = poses_[index];
-  // Size-checked against the camera structs the frame is stamped with (see
-  // poll), so the buffer a consumer indexes by `depth_camera.width * height`
-  // is exactly that long.
+  // Size-checked against the camera structs the frame is stamped with, so the
+  // buffer a consumer indexes by `depth_camera.width * height` is exactly that
+  // long.
   VR_ASSIGN(frame.color, load_color_packed(color_path, color_camera_.width,
                                            color_camera_.height));
   VR_ASSIGN(frame.depth, load_depth_metres(depth_path, depth_camera_.width,
                                            depth_camera_.height, depth_scale_));
+  // Both cameras from the one trajectory entry: depth and colour are one
+  // registered camera on Replica, so the two poses cannot drift apart.
+  // color_encoding stays defaulted -- the default *is* the declaration
+  // "canonical", which Replica's sRGB JPEGs are -- and timestamp_ns stays 0,
+  // the contract's "the device reports none".
+  frame.depth_camera = depth_camera_;
+  frame.depth_camera.cam_to_world = poses_[index];
+  frame.color_camera = color_camera_;
+  frame.color_camera.cam_to_world = poses_[index];
   return frame;
 }
 
@@ -411,17 +418,7 @@ vr::Result<std::optional<vr::sensor::CapturedFrame>> ReplicaCapture::poll() {
   next_ = (end_ - index > options_.frame_stride) ? index + options_.frame_stride
                                                  : end_;
 
-  vr::sensor::CapturedFrame frame{};
-  frame.depth = stored->depth.data();
-  frame.color = stored->color.data();
-  frame.depth_camera = depth_camera_;
-  frame.depth_camera.cam_to_world = stored->cam_to_world;
-  frame.color_camera = color_camera_;
-  frame.color_camera.cam_to_world = stored->cam_to_world;
-  // color_encoding stays defaulted -- the default *is* the declaration
-  // "canonical", which Replica's sRGB JPEGs are -- and timestamp_ns stays 0,
-  // the contract's "the device reports none".
-  return some_frame(frame);
+  return some_frame(stored->view());
 }
 
 }  // namespace vr_example

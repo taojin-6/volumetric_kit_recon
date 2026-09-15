@@ -39,8 +39,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   trajectory's 2000) and a sequence thinned to every N-th frame plays in full
   under `--stride N`. An empty poll is retried until the source reports itself
   `exhausted()`, so a live driver is a construction-site swap and a replay
-  ends. A frame kept past the next poll is copied into an `OwnedFrame`
-  (`examples/common/owned_frame.hpp`) — `fuse_render`'s keyframe and
+  ends. A frame kept past the next poll is copied into an `RgbdFrame`
+  of its own (`examples/common/rgbd_frame.hpp`, the one frame type: what the
+  reader decodes into, what a consumer keeps, and what `CapturedFrame` is the
+  view of) — `fuse_render`'s keyframe and
   `fuse_viewer`'s newest fused frame for its final texture pass — never
   borrowed. Each frame fuses through `examples/common/fuse_frame.hpp`, the one
   allocate-and-grow-then-integrate loop three examples had each carried a copy
