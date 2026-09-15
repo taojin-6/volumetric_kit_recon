@@ -3392,7 +3392,7 @@ deleted in favour of `extract_device` + `download`: it also calls the private
 is still drawing from. Keeping a host entry point is what keeps a PLY writer
 off the ring contract entirely.
 
-### 2026-09-14 — The examples poll their frames through the sensor contract: the Replica reader is an `ICameraCapture`, a replay's empty poll is the end of the sequence, and a frame kept past the next poll is copied.
+### 2026-09-14 — The examples poll their frames through the sensor contract: the Replica reader is an `ICameraCapture`, a source says when it is exhausted, and a frame kept past the next poll is copied — the last one included.
 
 The sensor tier had shipped a contract with no producer and no consumer in
 this tree. Its only implementer was the ARKit driver in `volumetric_kit_ios`,
@@ -3411,54 +3411,141 @@ gone, replaced by `examples/common/replica_capture.hpp`: a `ReplicaCapture
 final : sensor::ICameraCapture` that plays the sequence back through
 `poll()`. All three examples take an `ICameraCapture&` for the fuse loop and
 touch the concrete type only where it is opened (options, `preload`,
-`frame_count`, the intrinsics the viewers size their render camera from). No
-compatibility layer: the repo is under active development, and a shim would
-have kept the loop's old shape alive beside the new one. Three points of the
-design carry the decision:
+`frame_count`, the colour camera the viewers size their render camera from).
+No compatibility layer: the repo is under active development, and a shim
+would have kept the loop's old shape alive beside the new one. Beside it, two
+header-only helpers in `examples/common` that the review of the first cut
+asked for: `owned_frame.hpp` (the copy a consumer keeps of a frame, below)
+and `fuse_frame.hpp` (one frame's allocate-and-integrate, which three loops
+had each carried a drifting copy of — one printed the overflow and timed the
+grow, one did neither, and the encoding hand-off into `ColorFrame` was the
+kind of line a fourth copy drops with no error, since a `ColorFrame` left
+defaulted *declares* canonical). The contract itself gained one member, and
+`ReplicaCapture` gained a host-only test. Three points of the design carry
+the decision; the first and third are corrections the review made to the
+first cut, recorded as such.
 
-1. **A replay is consumer-paced, and its empty poll is the end of the
-   sequence.** The contract's `no_frame()` means "nothing this tick" for a
-   live device. A file source has no such state — every poll yields the next
-   frame until there is none — so the example loops treat the first empty
-   poll as the end. This is *not* encoded in the interface (an `exhausted()`
-   accessor was considered and rejected as a branch nothing reaches today);
-   it is documented on `ReplicaCapture::poll` and at the loop, and the day a
-   live source sits beside the replay, that branch grows a wait-and-retry.
-   A decode failure on a frame that is present is a real error and stops the
-   run, which is what `fuse_render` already required after a partial-room PNG
-   once exited 0.
+1. **A source says when it is exhausted; the loop does not infer it from an
+   empty poll.** The contract's `no_frame()` means "nothing this tick" for a
+   live device, and a replay has no such state — every poll yields the next
+   frame until there is none — so the first cut treated the first empty poll
+   as the end of the sequence, rejected an `exhausted()` accessor as "a branch
+   nothing reaches today", and deferred a wait-and-retry to "the day a live
+   source sits beside the replay". The review showed that made the headers'
+   own claim false as merged: a live driver constructed in place of
+   `ReplicaCapture` returns `no_frame()` on its first idle tick and all three
+   loops `break` — `fuse_replica` writes a header-only PLY and exits 0 with
+   "done: fused 0 frames" — and the deferral could not be executed at the
+   loop at all, because replay-exhausted and live-idle were one signal. So
+   `ICameraCapture::exhausted()` exists: non-pure, defaulting to `false` (a
+   live device is never exhausted, only stopped), so the test fake and the
+   out-of-tree ARKit driver compile untouched, and overridden by the replay
+   to `next_ >= end_`. Every loop now waits a millisecond and polls again on
+   an empty poll from a source that is not exhausted, and ends on one that
+   is; nothing on that branch is deferred any more. A decode failure on a
+   frame that is present stays a real error and stops the run, which is what
+   `fuse_render` already required after a partial-room PNG once exited 0.
 
 2. **The frame cap, the stride and the depth gate are the capture's options,
-   stamped on the frame.** The ARKit driver stamps its own range constants on
-   every frame's depth camera; the replay does the same with the CLI's
-   `--min-depth` / `--max-depth`, deriving the depth camera from the colour
-   one through `depth_from_registered_color` at `open` — which validates the
-   range before a frame exists, and keeps the two poses from a single
-   trajectory entry so they cannot drift. `frame_count()` is probed from disk
-   at `open` rather than read off the trajectory: room0 lists 2000 poses
-   against 400 images, so the viewer's "fused N / M" promised 2000 and the old
-   `preload_bytes_projected` had to probe for itself. One probe, one count,
-   and a missing image at poll time becomes the error it is.
+   stamped on the frame — and the probe looks only at the frames those options
+   select.** The ARKit driver stamps its own range constants on every frame's
+   depth camera; the replay does the same with the CLI's `--min-depth` /
+   `--max-depth` (now exposed by all three examples, where the viewers had
+   offered only the far end and so refused `--max-depth 0.1` with a message
+   naming a knob they never took — the refusal is also re-labelled as this
+   capture's, with both values in it), deriving the depth camera from the
+   colour one through `depth_from_registered_color` at `open`. That
+   validates the range before a frame exists, keeps the two poses from a
+   single trajectory entry so they cannot drift, and is the only copy of the
+   intrinsics: the first cut kept a third `CameraModel` beside the two camera
+   structs and size-checked the decode against *it*, so a later depth
+   downscale could have stamped one extent and held another. `frame_count()`
+   is probed from disk at `open` rather than read off the trajectory: room0
+   lists 2000 poses against 400 images, which is what `fuse_replica`'s banner
+   printed ("dataset: 2000 poses") and what the viewer's "fused N / M" showed
+   under a `--max-frames` above 400 (its default of 400 clamped it; the first
+   cut of this entry claimed the default over-promised, and it did not), while
+   the old `preload_bytes_projected` probed for itself but only under
+   `--preload`. The first cut probed every contiguous index from 0 and only
+   afterwards applied the limit: the review measured 801 file opens to learn
+   `end_ = 5` at `--max-frames 5`, on `fuse_viewer`'s main thread after the
+   window was up, and a sequence thinned on disk to every N-th frame — which
+   `main` fused completely under `--stride N` — played one frame with
+   nothing said. The probe now visits index 0, `stride`, `2·stride`, … below
+   the limit and stops at the first absent one, through a `stat` rather than
+   an `ifstream` open (~10x cheaper for the same answer), so it scales with
+   the frames the run will play and an index the stride never visits cannot
+   end the sequence. One probe, one count, and a missing image at poll time
+   becomes the error it is.
 
-3. **A frame kept past the next poll is copied; one kept past the *last*
-   poll is not.** `CapturedFrame` is a view the capture recycles on the next
+3. **A frame kept past the next poll is copied — every one, the last
+   included.** `CapturedFrame` is a view the capture recycles on the next
    `poll()`. `fuse_render` used to re-read its keyframe from the dataset after
    fusion — random access a live source cannot offer — and now retains a copy
    of that frame as it goes by (the `--follow` frame, else the middle of the
-   sequence, chosen against `frame_count()`). `fuse_viewer` holds the last
-   polled frame as a borrowed view for its final texture pass, which is valid
-   precisely because nothing polls after the loop; the capture is declared
-   before the fuse thread so it outlives that view. The atlas handoff between
-   its threads carries the keyframe's own extent (`AtlasPixels`) instead of a
-   dataset-wide constant, since the frame is the only thing that knows it —
-   and a frame without colour is no longer textured, because uv0 into a
-   white dummy draws every visible triangle white.
+   sequence, chosen against `frame_count()`). The first cut let `fuse_viewer`
+   hold the *last* polled frame as a borrowed view for its final texture
+   pass, "valid precisely because nothing polls after the loop" — and that
+   named the wrong boundary. The retention sat at the bottom of a successful
+   iteration, so every failure exit (a map that would not allocate after
+   five rounds, a resize that failed, an integrate error) left the loop after
+   the poll that had already move-assigned the next decoded frame over the
+   one the view pointed at, and the final `publish` uploaded ~3 MB of freed
+   depth and packed a freed colour plane — heap-use-after-free under ASan,
+   a corrupted atlas or a SIGSEGV in Release, on the default streaming path.
+   The ordinary exit survived only because `ReplicaCapture`'s exhausted
+   branch happens to return before touching its frame, a detail no document
+   promised and no test pinned; the terminating empty poll *is* a poll under
+   the contract, and the ARKit driver rotates its buffers on one. So both
+   viewers keep a keyframe the same way, through `OwnedFrame` (`assign` from
+   the view, capacity reused; `view()` back to the contract type, resolved
+   on access so the defaulted moves stay correct), and `fuse_viewer` copies
+   the newest fused frame at the bottom of every iteration: the review
+   measured the 6.5 MB retain at 0.08–0.09 ms at `-O2` on an M5 Max — ~5% of
+   a preloaded fuse iteration, ~1% of a streaming one. `ReplicaCapture`'s
+   header no longer promises anything about the empty poll, and the in-loop
+   publish still consumes the frame synchronously, as it may.
+
+**What else the review corrected.** `ReplicaCapture`'s defaulted move pair
+emptied the vectors but copied `end_`, `running_` and `next_` — the shape the
+2026-08-03 entry records for the extractor — so a moved-from capture still
+claimed frames and, polled, indexed an emptied pose table; the pair is
+hand-written to leave the source default-constructed (nothing on disk, not
+running, exhausted), and `load()` guards the pose table as well as `end_`.
+The `current_borrowed_` member and its resolve-on-access `current()` had one
+caller, in the same `poll()` that set both members under an "owned wins"
+precedence rule; a `poll()`-local pointer does the same job with one member,
+and the comment that said the decode was "swapped in only on success" now
+says what the code does — move-assigned in place on success, releasing the
+previous frame's storage, which is exactly the property point 3 tripped
+over. `pack_color_rgba8` re-derived, byte for byte, the identity branch of
+`sensor::to_canonical` and never read the frame's encoding declaration, so
+the atlas leg assumed canonical bytes where the fuse leg checks them; both
+viewers now run the keyframe through `to_canonical` (the identity plus an
+opaque alpha for Replica's sRGB JPEGs) into the packed words an RGBA8 upload
+reads on the little-endian hosts every Vulkan platform here is, and the
+function is gone. And the examples had come to depend on three
+`ReplicaCapture` behaviours no test pinned and no CI leg ran — `viewer.yml`
+is build-only, and 27/27 tests never linked `vr_example_common` —
+so `replica_capture_test.cpp` writes a tiny synthetic scene (a 4×3 camera,
+JPEG colour through `stb_image_write`, a hand-encoded 16-bit depth PNG,
+poses that name their index) and drives the capture through the contract on
+every leg, the sanitizer one included: the probe under limit and stride, a
+thinned sequence playing in full, `frame_count()` agreeing with `preload()`
+and with what `poll()` hands out, `exhausted()` turning true exactly after
+the last frame, a decode error leaving the position where it was, the stamped
+poses and intrinsics, the named range refusal, and a moved-from capture being
+empty.
 
 **Verified.** `fuse_replica room0 --max-frames 60 --stride 3 --device-extract`
-against the pre-refactor Release binary: 20 frames played, 6 057 blocks,
-628 833 vertices / 209 611 triangles on both, and the two PLYs are identical
-as triangle multisets (position, normal, colour) — the byte diff is the
-atomics' arrival-order permutation. `fuse_render --follow 30` textures the
-retained frame-30 keyframe in register; `fuse_viewer --max-frames 40
---preload` fuses 40/40 and publishes the final mesh textured with the last
-frame. 27/27 tests pass; the examples build under `-Werror` on MoltenVK.
+after the review's fixes: 20 frames played, 6 057 blocks, 628 833 vertices /
+209 611 triangles — the same figures the first cut matched against the
+pre-refactor Release binary (where the two PLYs were identical as triangle
+multisets, the byte diff being the atomics' arrival-order permutation).
+`fuse_render --follow 30 --max-frames 100` textures the retained frame-30
+keyframe in register through the `to_canonical` atlas (PNG inspected);
+`fuse_viewer --max-frames 12 --remesh-every 4`, *streaming*, fuses 12/12 and
+publishes the final mesh textured with the copied last frame, nothing on
+stderr. 28/28 tests pass, `vr_example_replica_capture` among them; the
+examples build under `-Werror` on MoltenVK; an ASan/UBSan build of the whole
+tree runs the suite clean.

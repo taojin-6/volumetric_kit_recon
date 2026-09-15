@@ -28,3 +28,17 @@ vr_target_warnings(vr_example_common)
 # applies to our own sources.
 set_source_files_properties(stb_impl.cpp tinyply_impl.cpp
                             PROPERTIES COMPILE_OPTIONS "-w")
+
+# ReplicaCapture's behavioural test: host-only, dataset-free (it writes a tiny
+# synthetic scene from bytes it carries), so it runs on every CI leg -- the
+# sanitizer one included, which is where a frame read after the poll that freed
+# it would surface. The tsdf tier is not needed: the capture is the thing under
+# test, not what consumes it.
+if(VR_BUILD_TESTS)
+  add_executable(vr_example_replica_capture_test replica_capture_test.cpp)
+  target_link_libraries(vr_example_replica_capture_test
+                        PRIVATE vr_example_common)
+  vr_target_warnings(vr_example_replica_capture_test)
+  add_test(NAME vr_example_replica_capture
+           COMMAND vr_example_replica_capture_test)
+endif()

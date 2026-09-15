@@ -8,10 +8,12 @@
 #include <atomic>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <optional>
 #include <sstream>
 #include <string>
+#include <system_error>
 #include <utility>
 
 #include "image_io.hpp"
@@ -31,9 +33,13 @@ std::optional<std::string> read_file(const std::string& path) {
   return ss.str();
 }
 
-// True if the path can be opened for reading.
+// True if a file is at the path. A stat, not an open: the probe at open() runs
+// once per frame that will play, and constructing an ifstream costs ~10x a
+// stat for the same answer. Readability is the decoder's problem -- a present
+// but unreadable frame fails its decode with stb's reason, as it should.
 bool file_exists(const std::string& path) {
-  return static_cast<bool>(std::ifstream(path, std::ios::binary));
+  std::error_code ec;
+  return std::filesystem::exists(path, ec) && !ec;
 }
 
 // Pull a numeric value for `"key"` out of a flat JSON object (find the key,
@@ -80,6 +86,57 @@ bool frame_on_disk(const std::string& results_dir, std::size_t index) {
 }
 
 }  // namespace
+
+// Every member, in declaration order, and the source left as a
+// default-constructed capture: nothing on disk, not running, exhausted. A
+// forgotten member here is silent -- the moved-from shell would keep its
+// value and report a sequence it no longer holds -- so a new member is added
+// to both of these in the same change that declares it.
+ReplicaCapture::ReplicaCapture(ReplicaCapture&& other) noexcept
+    : options_(other.options_),
+      depth_scale_(other.depth_scale_),
+      depth_camera_(other.depth_camera_),
+      color_camera_(other.color_camera_),
+      poses_(std::move(other.poses_)),
+      results_dir_(std::move(other.results_dir_)),
+      end_(other.end_),
+      cache_(std::move(other.cache_)),
+      running_(other.running_),
+      next_(other.next_),
+      current_owned_(std::move(other.current_owned_)) {
+  other.options_ = Options{};
+  other.depth_scale_ = 1.0f;
+  other.depth_camera_ = vr::DepthCameraParams{};
+  other.color_camera_ = vr::ColorCameraParams{};
+  other.poses_.clear();
+  other.results_dir_.clear();
+  other.end_ = 0;
+  other.cache_.clear();
+  other.running_ = false;
+  other.next_ = 0;
+  other.current_owned_.reset();
+}
+
+ReplicaCapture& ReplicaCapture::operator=(ReplicaCapture&& other) noexcept {
+  if (this != &other) {
+    // Steal through the move constructor so the member list lives in one
+    // place, then swap the stolen state in. The temporary carries this
+    // object's old state out and frees it.
+    ReplicaCapture taken(std::move(other));
+    std::swap(options_, taken.options_);
+    std::swap(depth_scale_, taken.depth_scale_);
+    std::swap(depth_camera_, taken.depth_camera_);
+    std::swap(color_camera_, taken.color_camera_);
+    std::swap(poses_, taken.poses_);
+    std::swap(results_dir_, taken.results_dir_);
+    std::swap(end_, taken.end_);
+    std::swap(cache_, taken.cache_);
+    std::swap(running_, taken.running_);
+    std::swap(next_, taken.next_);
+    std::swap(current_owned_, taken.current_owned_);
+  }
+  return *this;
+}
 
 vr::Result<ReplicaCapture> ReplicaCapture::open(
     const std::string& scene_dir, const std::string& cam_params_path,
@@ -133,29 +190,34 @@ vr::Result<ReplicaCapture> ReplicaCapture::open(
         "ReplicaCapture::open: cam params has a zero/invalid intrinsic, "
         "dimension, or scale");
   }
-  CameraModel& cam = capture.camera_;
-  cam.fx = values[0];
-  cam.fy = values[1];
-  cam.cx = values[2];
-  cam.cy = values[3];
-  cam.width = static_cast<std::uint32_t>(w);
-  cam.height = static_cast<std::uint32_t>(h);
-  cam.depth_scale = values[6];
+  capture.depth_scale_ = values[6];
 
   // Both camera blocks once, here. Depth and colour are one registered camera
   // on Replica, so the depth camera is *derived* from the colour one exactly
   // as a registered live source's is -- which also validates the depth range
-  // the options carry, before a frame is ever handed out.
+  // the options carry, before a frame is ever handed out. The refusal is
+  // re-labelled as this capture's: the library's message names min_depth and
+  // max_depth, and a caller that exposes only one of them (the viewers take
+  // --min-depth and --max-depth; a default is still a value) should hear
+  // which object's range it is arguing with.
   vr::ColorCameraParams& color = capture.color_camera_;
-  color.fx = cam.fx;
-  color.fy = cam.fy;
-  color.cx = cam.cx;
-  color.cy = cam.cy;
-  color.width = cam.width;
-  color.height = cam.height;
-  VR_ASSIGN(capture.depth_camera_, vr::sensor::depth_from_registered_color(
-                                       color, cam.width, cam.height,
-                                       options.min_depth, options.max_depth));
+  color.fx = values[0];
+  color.fy = values[1];
+  color.cx = values[2];
+  color.cy = values[3];
+  color.width = static_cast<std::uint32_t>(w);
+  color.height = static_cast<std::uint32_t>(h);
+  vr::Result<vr::DepthCameraParams> depth =
+      vr::sensor::depth_from_registered_color(color, color.width, color.height,
+                                              options.min_depth,
+                                              options.max_depth);
+  if (!depth) {
+    return vr::Status::invalid_argument(
+        "ReplicaCapture::open: depth range rejected (min_depth " +
+        std::to_string(options.min_depth) + " m, max_depth " +
+        std::to_string(options.max_depth) + " m): " + depth.status().message());
+  }
+  capture.depth_camera_ = std::move(depth).value();
 
   // --- Trajectory (traj.txt): one flattened row-major 4x4 cam->world per line,
   // transposed into the column-major glm matrix the pipeline uploads. ---
@@ -208,18 +270,31 @@ vr::Result<ReplicaCapture> ReplicaCapture::open(
         "ReplicaCapture::open: trajectory has no poses");
   }
 
-  // --- The frames actually present. Probed once here (two file opens per
-  // frame, milliseconds) rather than discovered by the first poll to hit an
-  // absent image, so frame_count() is the number of frames that will really
-  // play and a viewer's "fused N / M" cannot promise 2000 against 400 on disk.
-  // Contiguous from 0: poses are matched to frameNNNNNN by position, so a gap
-  // ends the sequence exactly as a missing tail does.
-  std::size_t on_disk = 0;
-  while (on_disk < capture.poses_.size() &&
-         frame_on_disk(capture.results_dir_, on_disk)) {
-    ++on_disk;
+  // --- The frames actually present, probed once here rather than discovered
+  // by the first poll to hit an absent image, so frame_count() is the number
+  // of frames that will really play. Only the frames the options select are
+  // looked at -- the strided indices under the limit -- so the probe scales
+  // with the frames the run will play, not with the sequence on disk (at
+  // `--max-frames 5` that is 5 frames, not room0's 400), and an index the
+  // stride never visits cannot end the sequence. Poses are matched to
+  // frameNNNNNN by position, so a gap at a visited index ends the sequence
+  // exactly as a missing tail does.
+  const std::size_t bound =
+      std::min(capture.poses_.size(), options.frame_limit);
+  std::size_t end = 0;
+  for (std::size_t index = 0; index < bound;) {
+    if (!frame_on_disk(capture.results_dir_, index)) {
+      break;
+    }
+    end = index + 1;
+    // Step without overshooting: `index + stride` could wrap for a huge
+    // stride, and past `bound` there is nothing to probe either way.
+    if (bound - index <= options.frame_stride) {
+      break;
+    }
+    index += options.frame_stride;
   }
-  capture.end_ = std::min(on_disk, options.frame_limit);
+  capture.end_ = end;
   return capture;
 }
 
@@ -229,7 +304,7 @@ std::size_t ReplicaCapture::frame_count() const noexcept {
 
 vr::Result<ReplicaCapture::RgbdFrame> ReplicaCapture::load(
     std::size_t index) const {
-  if (index >= end_) {
+  if (index >= end_ || index >= poses_.size()) {
     return vr::Status::invalid_argument("ReplicaCapture::load: index " +
                                         std::to_string(index) +
                                         " past the sequence");
@@ -240,11 +315,13 @@ vr::Result<ReplicaCapture::RgbdFrame> ReplicaCapture::load(
       frame_path(results_dir_, "depth", index, ".png");
   RgbdFrame frame;
   frame.cam_to_world = poses_[index];
-  VR_ASSIGN(frame.color,
-            load_color_packed(color_path, camera_.width, camera_.height));
-  VR_ASSIGN(frame.depth,
-            load_depth_metres(depth_path, camera_.width, camera_.height,
-                              camera_.depth_scale));
+  // Size-checked against the camera structs the frame is stamped with (see
+  // poll), so the buffer a consumer indexes by `depth_camera.width * height`
+  // is exactly that long.
+  VR_ASSIGN(frame.color, load_color_packed(color_path, color_camera_.width,
+                                           color_camera_.height));
+  VR_ASSIGN(frame.depth, load_depth_metres(depth_path, depth_camera_.width,
+                                           depth_camera_.height, depth_scale_));
   return frame;
 }
 
@@ -260,7 +337,7 @@ vr::Result<std::size_t> ReplicaCapture::preload(
   cache_.clear();
   cache_.resize(end_);
   std::size_t cached_frames = 0;
-  for (std::size_t index = 0; index < end_; index += options_.frame_stride) {
+  for (std::size_t index = 0; index < end_;) {
     // Polled per frame rather than per batch: a caller tearing down waits at
     // most one frame's decode, not the whole sequence's.
     if (cancel != nullptr && cancel->load()) {
@@ -273,13 +350,19 @@ vr::Result<std::size_t> ReplicaCapture::preload(
     }
     cache_[index] = std::move(frame_result).value();
     ++cached_frames;
+    // The probe's step: past this the next strided index is beyond `end_`,
+    // and `index + stride` could wrap.
+    if (end_ - index <= options_.frame_stride) {
+      break;
+    }
+    index += options_.frame_stride;
   }
   return cached_frames;
 }
 
 std::size_t ReplicaCapture::preload_bytes_projected() const noexcept {
-  return frame_count() * static_cast<std::size_t>(camera_.width) *
-         camera_.height * (sizeof(float) + sizeof(std::uint32_t));
+  return frame_count() * static_cast<std::size_t>(color_camera_.width) *
+         color_camera_.height * (sizeof(float) + sizeof(std::uint32_t));
 }
 
 std::size_t ReplicaCapture::preloaded_bytes() const noexcept {
@@ -302,38 +385,39 @@ void ReplicaCapture::stop() noexcept {
   running_ = false;
   next_ = 0;
   current_owned_.reset();
-  current_borrowed_ = nullptr;
 }
 
 vr::Result<std::optional<vr::sensor::CapturedFrame>> ReplicaCapture::poll() {
-  if (!running_ || next_ >= end_) {
+  if (!running_ || exhausted()) {
     return no_frame();
   }
   const std::size_t index = next_;
-  // A cache hit, else a disk read + JPEG/PNG decode. Decoded into a fresh
-  // optional and swapped in only on success, so a failed decode leaves the
-  // previous frame -- which a consumer may still be reading -- intact.
+  // A cache hit, else a disk read + JPEG/PNG decode. The decode lands in a
+  // local and is move-assigned over the previous streamed frame only on
+  // success -- which releases that frame's storage, so a view of it is stale
+  // from here (the contract's "until the next poll"). A failed decode returns
+  // above the assignment and leaves the position unchanged, so the next poll
+  // retries the same frame.
+  const RgbdFrame* stored = nullptr;
   if (index < cache_.size() && cache_[index]) {
     current_owned_.reset();
-    current_borrowed_ = &*cache_[index];
+    stored = &*cache_[index];
   } else {
-    VR_ASSIGN(RgbdFrame decoded, load(index));
-    current_owned_ = std::move(decoded);
-    current_borrowed_ = nullptr;
+    VR_ASSIGN(current_owned_, load(index));
+    stored = &*current_owned_;
   }
   // Advance without overshooting: `index + stride` could wrap for a huge
   // stride, and `end_` is the exhausted position either way.
   next_ = (end_ - index > options_.frame_stride) ? index + options_.frame_stride
                                                  : end_;
 
-  const RgbdFrame& stored = *current();
   vr::sensor::CapturedFrame frame{};
-  frame.depth = stored.depth.data();
-  frame.color = stored.color.data();
+  frame.depth = stored->depth.data();
+  frame.color = stored->color.data();
   frame.depth_camera = depth_camera_;
-  frame.depth_camera.cam_to_world = stored.cam_to_world;
+  frame.depth_camera.cam_to_world = stored->cam_to_world;
   frame.color_camera = color_camera_;
-  frame.color_camera.cam_to_world = stored.cam_to_world;
+  frame.color_camera.cam_to_world = stored->cam_to_world;
   // color_encoding stays defaulted -- the default *is* the declaration
   // "canonical", which Replica's sRGB JPEGs are -- and timestamp_ns stays 0,
   // the contract's "the device reports none".

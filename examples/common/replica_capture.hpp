@@ -10,11 +10,13 @@
 ///
 /// The examples consume frames through the contract rather than through a
 /// dataset API of their own, so a live camera is a construction-site swap: the
-/// fuse loop takes an `ICameraCapture&` and never learns whether its frames
+/// fuse loop takes an `ICameraCapture&`, waits on an empty poll until
+/// `exhausted()` says the source is done, and never learns whether its frames
 /// came off a disk or a sensor. This is also the one implementer of the
-/// contract this repo builds and runs on every example invocation -- the tier
-/// itself ships none (the 2026-08-02 decision), and its test fake exercises the
-/// interface without ever producing a real frame.
+/// contract this repo builds, runs on every example invocation, and tests
+/// (`replica_capture_test.cpp`, host-only) -- the tier itself ships none (the
+/// 2026-08-02 decision), and its test fake exercises the interface without
+/// ever producing a real frame.
 
 #include <atomic>
 #include <cstddef>
@@ -33,41 +35,26 @@ namespace vr_example {
 
 namespace vr = volumetric_kit::recon;
 
-/// @brief Pinhole intrinsics + image dimensions + depth scale shared by every
-///        frame of a sequence (Replica renders depth and colour with one
-///        registered camera).
-struct CameraModel {
-  float fx = 0.0f;           ///< Focal length x (pixels).
-  float fy = 0.0f;           ///< Focal length y (pixels).
-  float cx = 0.0f;           ///< Principal point x (pixels).
-  float cy = 0.0f;           ///< Principal point y (pixels).
-  std::uint32_t width = 0;   ///< Image width (pixels).
-  std::uint32_t height = 0;  ///< Image height (pixels).
-  float depth_scale = 1.0f;  ///< Units per metre: metres = raw_uint16 / this.
-  // The near/far depth-range gate is a fusion knob, not a camera intrinsic, so
-  // it lives on the capture's Options (the fuse example's CLI), not here.
-};
-
 /// @brief A Replica-SLAM RGB-D sequence -- `<scene>/results/frameNNNNNN.jpg` +
 ///        `depthNNNNNN.png`, per-frame poses in `<scene>/traj.txt`, intrinsics
 ///        in a `cam_params.json` -- as a @ref vr::sensor::ICameraCapture.
 ///
 /// Playback is **consumer-paced**: every @ref poll hands out the next frame of
 /// the sequence, decoded on demand or served from the @ref preload cache, and
-/// an empty poll means the sequence is over -- there is no "not yet" for a
-/// file source, so a fuse loop treats the first empty poll as the end. The
-/// frame is a non-owning view exactly as the contract says: its pixels belong
-/// to this object and stay valid until the next @ref poll (or @ref stop), so a
-/// consumer that keeps the last frame it polled -- as the viewer does for its
-/// final texture pass -- holds a valid view for as long as it polls no further.
+/// once the last one has gone @ref exhausted turns true and every further poll
+/// is empty. The frame is a non-owning view exactly as the contract says: its
+/// pixels belong to this object and are valid only until the next @ref poll
+/// (or @ref stop) -- *any* next poll, including the empty one that reports the
+/// end of the sequence, and a poll that fails to decode. A consumer keeping a
+/// frame past that point copies it (`OwnedFrame` in `owned_frame.hpp`).
 ///
 /// @ref open reads the intrinsics and every pose up front, then probes which
-/// frames are actually on disk (a trajectory routinely lists more poses than
-/// there are images: room0 has 2000 against 400), so @ref frame_count is the
-/// number of frames the sequence will really play, after the limit and stride
-/// in @ref Options. The pose file lists one flattened **row-major** 4x4
-/// camera->world matrix per line, transposed into the column-major
-/// @ref vr::Mat4f the pipeline uploads verbatim.
+/// of the frames it will play are actually on disk (a trajectory routinely
+/// lists more poses than there are images: room0 has 2000 against 400), so
+/// @ref frame_count is the number of frames the sequence will really play,
+/// after the limit and stride in @ref Options. The pose file lists one
+/// flattened **row-major** 4x4 camera->world matrix per line, transposed into
+/// the column-major @ref vr::Mat4f the pipeline uploads verbatim.
 class ReplicaCapture final : public vr::sensor::ICameraCapture {
  public:
   /// @brief Which frames to play, and the depth range to stamp on them.
@@ -85,6 +72,14 @@ class ReplicaCapture final : public vr::sensor::ICameraCapture {
   };
 
   /// @brief Open a Replica scene directory.
+  ///
+  /// Probes the disk once, for exactly the frames the options select: index
+  /// 0, `frame_stride`, `2 * frame_stride`, ... below `frame_limit`, stopping
+  /// at the first one whose images are missing -- poses are matched to
+  /// `frameNNNNNN` by position, so a gap ends the sequence as a missing tail
+  /// does. Indices the stride skips are never looked at, so a sequence thinned
+  /// on disk to every N-th frame plays in full under `frame_stride = N`.
+  ///
   /// @param scene_dir        The scene folder (contains `results/` +
   ///                         `traj.txt`).
   /// @param cam_params_path  Path to the `cam_params.json` holding
@@ -92,18 +87,31 @@ class ReplicaCapture final : public vr::sensor::ICameraCapture {
   /// @param options          Frame selection + depth range.
   /// @return The capture, not yet started; or a non-OK @ref vr::Status if the
   ///         intrinsics or trajectory cannot be read/parsed, if
-  ///         `options.frame_stride` is 0, or if the depth range is rejected by
-  ///         `sensor::depth_from_registered_color` (negative, or min not below
-  ///         max).
+  ///         `options.frame_stride` is 0, or if the depth range is rejected
+  ///         (negative, or `min_depth` not below `max_depth`) -- named as this
+  ///         capture's, so a caller that never set one of the two knows which
+  ///         default it is arguing with.
   static vr::Result<ReplicaCapture> open(const std::string& scene_dir,
                                          const std::string& cam_params_path,
                                          const Options& options);
 
-  ReplicaCapture(ReplicaCapture&&) = default;
-  ReplicaCapture& operator=(ReplicaCapture&&) = default;
+  // Hand-written rather than defaulted so a moved-from capture is EMPTY: a
+  // defaulted move empties the vectors but copies `end_`, `running_` and
+  // `next_`, leaving a shell that still claims frames and, polled, indexes an
+  // emptied pose table. Both must name every member; see the .cpp.
+  ReplicaCapture(ReplicaCapture&& other) noexcept;
+  ReplicaCapture& operator=(ReplicaCapture&& other) noexcept;
+  ~ReplicaCapture() override = default;
 
-  /// @return The shared camera intrinsics + depth scale.
-  const CameraModel& camera() const noexcept { return camera_; }
+  /// @return The colour camera every frame is stamped with -- intrinsics and
+  ///         size; the pose is per frame. Replica renders depth and colour
+  ///         from one registered camera, so this is the sensor's geometry.
+  const vr::ColorCameraParams& color_camera() const noexcept {
+    return color_camera_;
+  }
+
+  /// @return Units per metre of the raw 16-bit depth PNGs: metres = raw / this.
+  float depth_scale() const noexcept { return depth_scale_; }
 
   /// @return How many frames this capture plays: the frames on disk, under the
   ///         limit and at the stride @ref open was given.
@@ -158,10 +166,17 @@ class ReplicaCapture final : public vr::sensor::ICameraCapture {
   /// left declared canonical -- the renders are ordinary sRGB JPEGs -- and the
   /// timestamp is 0, since the dataset carries none.
   ///
-  /// @return The frame; an empty optional once the sequence is exhausted or
-  ///         while not started; or the decode error of a frame that is on disk
-  ///         but unreadable, which leaves the position unchanged.
+  /// @return The frame; an empty optional once @ref exhausted, or while not
+  ///         started; or the decode error of a frame that is on disk but
+  ///         unreadable, which leaves the position unchanged so the next poll
+  ///         retries the same frame.
   vr::Result<std::optional<vr::sensor::CapturedFrame>> poll() override;
+
+  /// @return `true` once every frame this capture plays has been handed out
+  ///         (or there were none) -- the replay's end of sequence, which its
+  ///         empty poll alone cannot distinguish from a live device's "not
+  ///         yet". A moved-from capture plays nothing, so it is exhausted.
+  bool exhausted() const noexcept override { return next_ >= end_; }
 
  private:
   /// One decoded, posed RGB-D frame: the storage a @ref
@@ -178,22 +193,18 @@ class ReplicaCapture final : public vr::sensor::ICameraCapture {
   // and the poll path share it so both decode identically.
   vr::Result<RgbdFrame> load(std::size_t index) const;
 
-  // The frame the last poll handed out. Resolved on access rather than cached
-  // in a member pointer, so the defaulted move operations stay correct: a
-  // pointer at `current_owned_` would dangle the moment this object moved.
-  const RgbdFrame* current() const noexcept {
-    return current_owned_ ? &*current_owned_ : current_borrowed_;
-  }
-
-  CameraModel camera_{};
   Options options_{};
-  // Intrinsics + depth range, built once at open; only cam_to_world is
-  // stamped per frame.
+  float depth_scale_ = 1.0f;  ///< Units per metre: metres = raw_uint16 / this.
+  // Intrinsics + size + depth range, built once at open and what every frame
+  // is stamped with; only cam_to_world is per frame. The decoder size-checks
+  // against these very structs, so a frame cannot be stamped with one extent
+  // and hold another.
   vr::DepthCameraParams depth_camera_{};
   vr::ColorCameraParams color_camera_{};
   std::vector<vr::Mat4f> poses_;
   std::string results_dir_;
-  // One past the last index played: the frames on disk, clamped to the limit.
+  // One past the last index played: the last strided index whose images are on
+  // disk, under the limit, plus one. Zero when nothing plays.
   std::size_t end_ = 0;
   // Indexed by frame index; an empty slot is a frame the preload skipped (or a
   // preload that never ran). Empty when streaming.
@@ -201,9 +212,10 @@ class ReplicaCapture final : public vr::sensor::ICameraCapture {
 
   bool running_ = false;
   std::size_t next_ = 0;  ///< Index of the frame the next poll hands out.
-  std::optional<RgbdFrame> current_owned_;  ///< Set when poll decoded it.
-  const RgbdFrame* current_borrowed_ =
-      nullptr;  ///< Set when the cache owns it.
+  // The frame the last poll decoded, when it decoded one (streaming); the
+  // storage its CapturedFrame borrows. Empty after a cache hit, whose frame the
+  // cache owns.
+  std::optional<RgbdFrame> current_owned_;
 };
 
 }  // namespace vr_example

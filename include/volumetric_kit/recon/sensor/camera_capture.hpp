@@ -194,6 +194,28 @@ class VR_SENSOR_API ICameraCapture {
   /// @return The frame; an empty optional if none is ready; or a device error.
   virtual Result<std::optional<CapturedFrame>> poll() = 0;
 
+  /// @brief Whether this source will never hand out another frame.
+  ///
+  /// An empty @ref poll says only "nothing *this tick*": a live device polled
+  /// faster than it runs and a replay that has played its last frame return
+  /// the same empty optional, and the frame alone cannot tell them apart. A
+  /// consumer that would wait for the first must end on the second, so after
+  /// an empty poll it asks this. A live device keeps the default -- it is
+  /// never exhausted, only stopped -- and a finite source (a file replay)
+  /// overrides it to say when its sequence is over.
+  ///
+  /// @code
+  /// VR_ASSIGN(const std::optional<CapturedFrame> polled, capture.poll());
+  /// if (!polled) {
+  ///   if (capture.exhausted()) break;  // a replay's end of sequence
+  ///   wait_a_moment();                 // a live device's "not yet"
+  ///   continue;
+  /// }
+  /// @endcode
+  ///
+  /// @return `true` once no further @ref poll can return a frame.
+  virtual bool exhausted() const noexcept { return false; }
+
  protected:
   ICameraCapture() = default;
   // Move operations stay available to implementations but are not part of the

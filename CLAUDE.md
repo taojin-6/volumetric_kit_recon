@@ -218,10 +218,10 @@ order. Change the decision, its entry there, and this list together.
 - [**2026-08-31**](DECISIONS.md#2026-08-31--the-dense-extract-goes-extract-becomes-extract_host-so-the-two-workflows-are-named-rather-than-inferred) —
   The dense extract goes; `extract` becomes `extract_host`, so the two
   workflows are named rather than inferred.
-- [**2026-09-14**](DECISIONS.md#2026-09-14--the-examples-poll-their-frames-through-the-sensor-contract-the-replica-reader-is-an-icameracapture-a-replays-empty-poll-is-the-end-of-the-sequence-and-a-frame-kept-past-the-next-poll-is-copied) —
+- [**2026-09-14**](DECISIONS.md#2026-09-14--the-examples-poll-their-frames-through-the-sensor-contract-the-replica-reader-is-an-icameracapture-a-source-says-when-it-is-exhausted-and-a-frame-kept-past-the-next-poll-is-copied--the-last-one-included) —
   The examples poll their frames through the sensor contract: the Replica
-  reader is an `ICameraCapture`, a replay's empty poll is the end of the
-  sequence, and a frame kept past the next poll is copied.
+  reader is an `ICameraCapture`, a source says when it is exhausted, and a
+  frame kept past the next poll is copied — the last one included.
 
 ## Provenance & salvage policy
 
@@ -621,21 +621,32 @@ arbitrary; it usually isn't.
   overloads reports a `"texture"` row with both halves.
 
 - **`sensor`** — the capture *contract*: `ICameraCapture` polled for a
-  `CapturedFrame` (frames dropped, not queued), plus the boundary math that is
-  silently wrong when guessed — `cv_from_gl_camera`,
+  `CapturedFrame` (frames dropped, not queued) and asked `exhausted()` after
+  an empty poll, since "nothing this tick" from a live device and "nothing,
+  ever" from a replay are the same empty optional (2026-09-14; non-pure,
+  `false` by default, so a live driver overrides nothing) — plus the boundary
+  math that is silently wrong when guessed — `cv_from_gl_camera`,
   `depth_from_registered_color`, `to_canonical`. Links `recon_core` alone;
   drivers live with the platform that can build *and* test them. The one
   implementer in this tree is `examples/common/replica_capture.hpp`, which
-  plays a Replica sequence back through the contract (2026-09-14) — so every
-  example run produces real frames through it, and a live driver plugs in
-  where that one is constructed.
+  plays a Replica sequence back through the contract and is pinned by the
+  host-only `vr_example_replica_capture` test on every leg — so every example
+  run produces real frames through it, and a live driver plugs in where that
+  one is constructed.
 
 **Examples** (`examples/`). All three poll their frames through
 `sensor::ICameraCapture&` — the fuse loop never learns it is reading a disk —
 with `ReplicaCapture` as the source: frame cap, stride and the depth gate are
-its options, stamped on each frame it hands out, and its empty poll is the end
-of the sequence (a replay is consumer-paced, so there is no "not yet"; a live
-source beside it will need a wait-and-retry on that branch). `fuse_replica`
+its options, stamped on each frame it hands out, and its disk probe at `open`
+visits only the frames those options select. An empty poll is retried after a
+millisecond until the source reports itself `exhausted()`, so a live driver
+in the same construction site waits and the replay ends. Each frame fuses
+through `examples/common/fuse_frame.hpp` (the one allocate-and-grow-then-
+integrate loop, carrying the frame's encoding declaration across), and a
+frame kept past the next poll — `fuse_render`'s keyframe, `fuse_viewer`'s
+newest fused frame for its final texture pass — is copied into an
+`OwnedFrame` (`examples/common/owned_frame.hpp`), never borrowed: the empty
+poll that ends a replay is a poll. `fuse_replica`
 runs the spine on a posed
 Replica-SLAM RGB-D sequence and writes a PLY; `--incremental` drives the
 dirty-only extract and **owns the dirty flags**, resetting them immediately

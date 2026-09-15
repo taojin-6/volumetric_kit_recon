@@ -24,8 +24,10 @@
 #include <limits>
 #include <optional>
 #include <string>
+#include <thread>
 #include <utility>
 
+#include "fuse_frame.hpp"
 #include "ply_writer.hpp"
 #include "replica_capture.hpp"
 #include "volumetric_kit/recon/core/allocator.hpp"
@@ -271,12 +273,12 @@ vr::Status run(const Options& opt) {
   VR_ASSIGN(vr_example::ReplicaCapture replica,
             vr_example::ReplicaCapture::open(opt.scene_dir, opt.cam_params,
                                              capture_options));
-  const vr_example::CameraModel& cam = replica.camera();
+  const vr::ColorCameraParams& cam = replica.color_camera();
   std::printf(
       "capture: %zu frames to play, %ux%u @ fx=%.1f fy=%.1f cx=%.1f cy=%.1f, "
       "depth scale %.1f\n",
       replica.frame_count(), cam.width, cam.height, cam.fx, cam.fy, cam.cx,
-      cam.cy, cam.depth_scale);
+      cam.cy, replica.depth_scale());
 
   // --- Volume + pipeline ---
   vol::VoxelGridParams grid{};
@@ -314,74 +316,6 @@ vr::Status run(const Options& opt) {
               c.track_block_spans = opt.incremental;
               return c;
             }()));
-
-  // Allocate the truncation band for a frame, growing the map (preserving the
-  // per-voxel data already fused) if it overflows -- exercises the block-index-
-  // preserving resize on real data.
-  auto allocate_band = [&](const sensor::CapturedFrame& frame,
-                           vr::StageMetrics* metrics) -> vr::Status {
-    for (int attempt = 0; attempt < 5; ++attempt) {
-      vol::AllocFailures failures;
-      VR_ASSIGN(std::uint32_t failed,
-                volume.map().allocate_from_depth(
-                    frame.depth, frame.depth_camera, &failures, metrics));
-      if (failed == 0) {
-        return {};
-      }
-      // Grow only for a *capacity* limit. Depth allocation is the most
-      // contended entry point in the map -- adjacent pixels dilate into the
-      // same block, and the kernel's bucket spin-lock gives up after a bounded
-      // number of retries -- so the retry loop can hand back a residue of pure
-      // lock failures over a table that is nowhere near full. Doubling on that
-      // is expensive and unbounded: at this example's defaults each attribute
-      // array goes 768 MiB -> 1536 MiB, and resize builds the grown buffers
-      // beside the old ones, so the transient peak is ~2.3 GiB -- for pressure
-      // that does not exist. Report it and retry instead; the next dispatch
-      // sees less contention because the blocks that did land are now present.
-      if (!failures.capacity_limited()) {
-        std::printf(
-            "  %u allocations lost bucket-lock races (no capacity limit) -> "
-            "retrying without growing\n",
-            failed);
-        continue;
-      }
-      // Double in int64 and bail before the block index (bucket_size * buckets)
-      // would overflow int32, so a growth that can no longer fit reports
-      // cleanly instead of tripping the signed-overflow UB.
-      const std::int64_t grown =
-          static_cast<std::int64_t>(volume.grid().num_buckets) * 2;
-      if (grown * volume.grid().bucket_size >
-          std::numeric_limits<std::int32_t>::max()) {
-        return vr::Status::out_of_memory(
-            "map cannot grow further without overflowing the block index");
-      }
-      // Report the occupancy alongside the reason: it is a 4-byte read of the
-      // heap counter (not the O(total slots) diagnostics scan), and it is what
-      // says whether this grow was inevitable or premature. A capture-scale
-      // consumer should poll it and grow on a threshold instead of waiting for
-      // the failure -- linear probing degrades sharply past ~0.7, so growing at
-      // the cliff means every insert before it ran at its slowest.
-      vr::Result<float> load = volume.map().load_factor();
-      std::printf(
-          "  map overflow at %.3f load (%u fails: %u chain, %u heap, %u table) "
-          "-> resize to %lld buckets\n",
-          load.ok() ? load.value() : -1.0f, failed, failures.chain,
-          failures.heap, failures.table, static_cast<long long>(grown));
-      // Its own row rather than folded into "allocate" or left untimed: this is
-      // by far the most expensive thing an overflowing frame does (the ~2.3 GiB
-      // transient above, plus init_table and the rehash passes), and charging
-      // it to "allocate" would sink that stage's device share on exactly the
-      // frames where the host cost is not the kernel at all. Untimed it would
-      // simply vanish -- the frames that cost the most contributing nothing to
-      // the table below.
-      {
-        vr::StageScope resize_span(metrics, "resize");
-        VR_TRY(volume.resize(static_cast<std::int32_t>(grown)));
-      }
-    }
-    return vr::Status::out_of_memory(
-        "allocation kept overflowing after resize");
-  };
 
   // Optionally decode the whole sequence up front. Deliberately *outside* the
   // timed region below: streaming spends ~75% of the loop in JPEG/PNG decode,
@@ -434,26 +368,23 @@ vr::Status run(const Options& opt) {
   std::uint64_t sum_dirty = 0, sum_remesh = 0, sum_active = 0;
   std::uint32_t last_dirty = 0, last_active_blocks = 0, last_remesh = 0;
   for (;;) {
-    // A replay hands out one frame per poll, so an empty poll is the end of
-    // the sequence rather than a live source's "nothing yet"; a decode failure
-    // on a frame that is present is a real error and stops the run.
+    // An empty poll is "nothing this tick", which a replay and an idle live
+    // device report alike; only the source knows whether that is the end. A
+    // decode failure on a frame that is present is a real error and stops the
+    // run.
     VR_ASSIGN(const std::optional<sensor::CapturedFrame> polled,
               capture.poll());
     if (!polled) {
-      break;
+      if (capture.exhausted()) {
+        break;
+      }
+      // A live sensor polled faster than it runs: yield and ask again.
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      continue;
     }
     const sensor::CapturedFrame& frame = *polled;
-    // Carry the encoding across rather than leaving it defaulted: the default
-    // *declares* canonical, so a source that forgot to convert would be fused
-    // through the wrong curve instead of refused.
-    const tsdf::ColorFrame color_frame{frame.color, frame.color_camera,
-                                       frame.color_encoding};
-
-    VR_TRY(allocate_band(frame, &stage_totals));
-    VR_TRY(integrator.integrate(volume, frame.depth, frame.depth_camera,
-                                opt.max_weight, tsdf::IntegrationMode::Classic,
-                                frame.has_color() ? &color_frame : nullptr,
-                                &stage_totals));
+    VR_TRY(vr_example::fuse_frame(volume, integrator, frame, opt.max_weight,
+                                  &stage_totals));
     ++fused;
 
     if (opt.dirty_every > 0 &&

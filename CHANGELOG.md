@@ -8,6 +8,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
+- `examples`: **the examples' own dataset API** — `ReplicaDataset`,
+  `FrameView` and `example_camera.hpp` (`make_depth_camera`) are gone, replaced
+  by `ReplicaCapture` (below); `pack_color_rgba8` with them, since the atlas
+  leg now runs through `sensor::to_canonical`. No compatibility layer: the
+  examples are the only consumers.
 - `mesh`: **the dense marching-cubes entry point**. `MarchingCubes::extract`
   taking a caller-supplied `Voxel` array over a `DenseGrid` is gone, with
   `DenseGrid`, the `marching_cubes.comp` kernel it drove, and its descriptor
@@ -24,6 +29,23 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `examples`: **every fuse loop polls its frames through
+  `sensor::ICameraCapture&`.** `examples/common/replica_capture.hpp` plays a
+  Replica sequence back through the contract — frame cap, stride and the depth
+  gate are its `Options`, stamped on each frame; the depth camera is derived
+  from the colour one through `depth_from_registered_color` at `open`; the
+  frames on disk are probed once, at exactly the strided indices under the
+  limit, so `frame_count()` is what will really play (room0: 400, not the
+  trajectory's 2000) and a sequence thinned to every N-th frame plays in full
+  under `--stride N`. An empty poll is retried until the source reports itself
+  `exhausted()`, so a live driver is a construction-site swap and a replay
+  ends. A frame kept past the next poll is copied into an `OwnedFrame`
+  (`examples/common/owned_frame.hpp`) — `fuse_render`'s keyframe and
+  `fuse_viewer`'s newest fused frame for its final texture pass — never
+  borrowed. Each frame fuses through `examples/common/fuse_frame.hpp`, the one
+  allocate-and-grow-then-integrate loop three examples had each carried a copy
+  of. `fuse_render` and `fuse_viewer` take `--min-depth` beside `--max-depth`.
+  See the 2026-09-14 decision.
 - `mesh`: **`MarchingCubes::extract` is renamed `extract_host`.**
   Source-breaking, and mechanical at every call site. The pair is symmetric now
   — `extract_host` returns an owned host `Mesh`, `extract_device` a borrowed
@@ -41,6 +63,21 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `sensor`: **`ICameraCapture::exhausted()`** — whether a source will never
+  hand out another frame. An empty `poll()` says only "nothing this tick", and
+  a live device polled faster than it runs and a replay that has played its
+  last frame return the same empty optional; a consumer that would wait for
+  the first must end on the second. Non-pure and `false` by default (a live
+  device is never exhausted, only stopped), so existing drivers compile
+  untouched; a finite source overrides it.
+- `examples`: **`vr_example_replica_capture`**, a host-only test of the one
+  `ICameraCapture` this tree builds. It writes a tiny synthetic scene in
+  Replica's layout (a baseline JPEG it carries, a hand-encoded 16-bit depth
+  PNG) and drives the capture through the contract on every CI leg, the
+  sanitizer one included: the probe under limit and stride, `frame_count()`
+  against `preload()` and `poll()`, `exhausted()`, a decode error leaving the
+  position unchanged, the stamped poses and intrinsics, the named range
+  refusal, and a moved-from capture being empty.
 - `core`: **GPU-profiler labels** — `VK_EXT_debug_utils` names, so an Nsight
   Graphics or Xcode Metal capture reads `tsdf_integrate` and `tsdf.depth_frame`
   rather than a wall of anonymous dispatches over unnamed handles. Every
