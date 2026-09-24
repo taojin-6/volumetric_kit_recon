@@ -3078,92 +3078,6 @@ figure to expect is roughly linear in the visible fraction on every row below
 guesses at this pipeline's bottleneck have already been wrong (see "Measured
 lessons").
 
-## Measured lessons
-
-Not decisions, but the measurements that overturned an assumption about
-where this pipeline spends its time. Kept because the mistake generalises.
-
-The overlay's first finding **corrected a wrong assumption and redirected the
-roadmap**. At `--remesh-every 1` on a room0 mesh of ~790 k vertices / ~264 k
-triangles, `extract` cost ~55 ms/frame, which looked like whole-volume marching
-cubes and pointed at the incremental block-mesh pool. The `ExtractTimings`
-breakdown said otherwise:
-
-| phase | ms |
-|---|---|
-| `arena alloc` | **49.8** |
-| `readback` | 2.8 |
-| `dispatch` | **2.0** |
-| `neighbour lut` | 0.6 |
-| `compact` / `descriptors` / `inputs` | < 0.2 |
-
-(`neighbour lut` is the host table of the day; it is gone as of 2026-08-08 and
-so is the field — see that decision, where the same instrument caught it costing
-102 ms of a 133 ms extract at 107 k blocks.)
-
-The GPU marching cubes was 2 ms — the pool would have optimised the one thing
-that was already fast. (*On device that ordering inverts: see the 2026-08-09
-incremental-extraction decision, where meshing dominates the frame and the pool
-is back on. The lesson below is about the method, not about the pool.*) The cost
-was `make_output_buffers` allocating a fresh
-worst-case vertex arena (5 triangles per cell → hundreds of MB) **every call**,
-so the driver faulted in and zeroed that many pages per frame. Making the arena
-persistent and grow-only (below) took a 100-frame `--preload --mesh-every 1`
-room0 run from **6.3 s to 0.8 s** — **15.9 → 132.5 fps**, an **8.3×** end-to-end
-win — with a mesh identical triangle-for-triangle (same 793,473 vertices /
-264,491 triangles, same canonical hash over the ordered triangle set). The
-lesson is recorded because it generalises: *measure the phases before choosing
-the optimisation* — three of us (the TODO, the roadmap, and the first analysis)
-had independently guessed the wrong bottleneck.
-
-The follow-up **fits the arena to the surface instead of to the worst case**, so
-what the extractor retains is the mesh's real size rather than the 5-triangles-
-per-cell ceiling it can never reach (a room scan fills ~2% of it). Correctness
-does not rest on the guess: the kernel counts *every* triangle the field
-produces and drops only those past `capacity`, so an undersized arena is
-**detected**, never silently truncated — the host refits to the reported count
-and re-runs, and since the count is a property of the field rather than of the
-atomic ordering, that retry is guaranteed to fit. Steady state is therefore one
-dispatch, against the two an unconditional count-then-fill pass would always
-cost, and the plan is **predictive rather than reactive**: each extract records
-the triangles-per-active-block density it measured, and the next call scales
-that by *its own* active set (a seed of 64/block covers the first call, against
-the 2560 worst case), so a growing scan plans ahead of its surface instead of
-discovering every size increase by throwing a dispatch away. It scales that
-density by nothing else — in particular **not** by what an arena already holds,
-which is what made it compound across the output ring until an iPad Pro lost the
-device (the 2026-08-03 slot-independence decision); and with `slot_count > 1`
-"what the extractor retains" is one such fitted arena *per slot*, which is what
-`ExtractTimings::arena_bytes` sums — arenas *and* index runs since the
-2026-08-08 sharing decision, because sharing removes the proportionality that
-let the run be dismissed as a sixteenth of the arena it covers. Measured on the
-full 400-frame room0, peak RSS: **1250 → 985 MB (−21%)** at `--mesh-every 0`,
-**1568 → 1302 MB (−17%)** at the default `--mesh-every 50`, with the mesh
-identical triangle-for-triangle in both (991,167 vertices / 330,389 triangles,
-one canonical hash over the sorted triangle set across main, this branch, and
-both flag settings). It is also much *faster* end to end at `--mesh-every 0` —
-17.4 s → 5.6 s (23.0 → 71.6 fps) — because on main the single final extract
-spends ~12 s faulting in and zeroing a ~2 GB worst-case arena.
-
-Landing it exposed a latent bug in the kernel: `mcEmitCell` **returned** on
-overflow instead of continuing, abandoning the rest of that cell's triangles
-*uncounted*, so the reported total was a lower bound. Harmless while capacity
-was the unreachable worst case, fatal the moment the host started trusting the
-count — the first refit undershot and the retry overflowed again. The emit loop
-now `continue`s, which is what makes "tri_count is the field's true total" an
-honest contract, and `marching_cubes_sparse_test` pins it with a fixture whose
-density (one block of a sign-alternating field, ~1400 triangles where the seed
-plans ~64) *forces* the refit path: reverting the `continue` fails it
-deterministically with an `out_of_memory`, where the sphere fixtures fit inside
-the growth headroom and could not tell the difference. Two further consequences
-of the host trusting the count: the arena's `maxStorageBufferRange` guard now
-tests the *request* rather than the request plus growth headroom (or it would
-reject the top third of legal mesh sizes), and the extract stamps its
-generation when it first touches the arena rather than on success — a call that
-overwrites the arena and then fails must still invalidate every outstanding
-`DeviceMesh`, and so must the dense overload, which shares that arena and can
-now reallocate it.
-
 ### 2026-08-30 — A profiler label belongs to the kernel, not to the timed span; `VK_EXT_debug_utils` is requested independently of validation, and the *instance* extension is declared across the adopt seam.
 
 Motivated by a plain question — how do we find out whether this pipeline is
@@ -3582,8 +3496,12 @@ assumed.
 
 **Why off by default.** The SDK ships macOS, Linux (x86_64, arm64) and Windows
 builds and no iOS one, and recon cross-compiles to iOS unchanged (the
-2026-08-01 decision); a required SDK would break that build and every CI leg,
-none of which has it installed.
+2026-08-01 decision); a required SDK would break that build, and make every
+consumer that never touches a camera install it. The iOS half is checked, not
+just stated (the 2026-08-04 rule): with the option on, an Apple target other
+than macOS stops the configure and says to turn it off, where it would
+otherwise find the macOS SDK and fail at link time on the wrong platform's
+dylib.
 
 **Two quirks of the SDK's package files**, handled once in the module rather
 than rediscovered by each caller:
@@ -3592,24 +3510,184 @@ than rediscovered by each caller:
   `OrbbecSDK_ROOT` and `CMAKE_PREFIX_PATH` both miss it; only
   `OrbbecSDK_DIR=<sdk>/lib` finds it.
 - The version file is `OrbbecSDKVersion.cmake`, not
-  `OrbbecSDKConfigVersion.cmake`, so `find_package` never reads it and a
-  versioned `find_package(OrbbecSDK 2.9.3)` rejects even a matching SDK. The
-  floor is enforced by reading `PACKAGE_VERSION` out of that file instead.
+  `OrbbecSDKConfigVersion.cmake`, so `find_package` never reads it: a
+  versioned `find_package(OrbbecSDK 2.9.3)` rejects even a matching SDK, and an
+  unversioned one takes the first SDK on the search path whatever its version.
+  So the module does what a versioned `find_package` would have done (below).
+
+**The search re-runs on every configure, and each candidate's own version
+file judges it.** The first cut ran an unversioned `find_package` and then
+compared `PACKAGE_VERSION` against the floor, and review found three ways that
+went wrong, each reproduced with scratch SDKs. `find_package` caches the
+directory it found in `OrbbecSDK_DIR`, so a build tree kept its first SDK for
+life: re-pointing `OrbbecSDK_ROOT` at an upgrade was ignored without a word —
+and the smoke test still passed, comparing the runtime against the same stale
+configured version — and after an "older than" error, re-pointing it at a
+newer SDK repeated the same error, the rejected directory still cached (the
+2026-08-04 rule: a staleness the caller cannot see is the library's to check).
+The floor was a bare `VERSION_LESS`, so a 3.0.0 passed, where the SDK's own
+version file rejects another major version and a different pointer width.
+And the first candidate on the path was the only one considered, so an old
+`OrbbecSDK_ROOT` in the environment stopped the configure even with a
+matching SDK named on `CMAKE_PREFIX_PATH`. Now the module walks
+`find_package`'s own search path, pointed at the version file rather than the
+config (`CONFIGS OrbbecSDKVersion.cmake`), includes each candidate's version
+file with `PACKAGE_FIND_VERSION*` set exactly as `find_package` would, and
+skips what it rejects by adding the directory to a function-local
+`CMAKE_IGNORE_PATH`; only the chosen SDK's config is loaded, since an imported
+`ob::OrbbecSDK` cannot be taken back once a rejected config has defined it.
+Every configure searches afresh: the module records the directory it chose,
+and an `OrbbecSDK_DIR` still equal to that record is its own leftover and is
+dropped. Only when the search then finds nothing *and* nothing names an SDK
+any more is the last choice kept — without that exception, a tree configured
+with a one-off `OrbbecSDK_ROOT=<sdk> cmake …`, or reopened by an IDE that
+never read the shell profile, failed the next automatic re-run that the cached
+result had survived. A root that is named and holds nothing usable is still an
+error, and the message lists the roots it searched and every SDK it skipped.
+A value in `OrbbecSDK_DIR` that differs from the record is the caller's
+`-DOrbbecSDK_DIR=<sdk>/lib`, taken as given — that SDK or an error naming the
+variable and how to drop it.
+`VR_ORBBEC_SDK_VERSION_MAJOR` / `_MINOR` / `_PATCH` come out of the same
+parse, so the smoke test's compile definitions no longer re-split the string.
+
+**CI installs it the way a developer does.** `_build.yml` takes an
+`orbbec_sdk` input, on for the ubuntu-24.04 and macos-26 legs and off for the
+other two, so both configurations build on every PR: a step downloads the
+pinned 2.9.3 release for the runner's platform, checks its SHA-256, unpacks it
+under `RUNNER_TEMP` and exports `OrbbecSDK_ROOT`, and the configure passes
+`-DVR_WITH_ORBBEC=ON`. That is not the rejected pinned download: the *build*
+still only finds, and the step is the one-time install a developer does,
+repeated per job because a CI job starts with nothing. The pin is the
+module's floor, so CI builds against exactly the oldest SDK it accepts; the
+two move together.
+
+**The smoke test's own fixes.** The SDK's `setLoggerSeverity` sets *every*
+sink, the file one included, so calling it after `setLoggerToFile(OFF, "")`
+switched file logging back on and the test wrote `./Log/OrbbecSDK.log.txt`
+into `build/tests` — the thing its comment said it prevented. It now sets each
+sink separately (`setLoggerToConsole(WARN)`), and both calls sit inside the
+`try`, since they throw `ob::Error` like the rest. The device-list strings go
+through a null guard before `printf("%s")`. And the listing is described as
+what it is: `queryDeviceList()` blocks about a second probing the network, and
+still an Ethernet camera can miss it from cold — polled every 250 ms on the
+rig, the three Femto Megas answered the first query in 12 of 14 runs; in one
+of the other two none answered for ~2.5 s before all three did, and in the
+last none answered in the whole ~4 s window. So "0 device(s)" is a
+log line, not proof that none is attached, and the driver's open path will
+need to wait for discovery rather than trust one query. On Windows, where a
+DLL is found on `PATH` rather than through an rpath and the SDK is not copied
+beside the test (it loads `extensions/` from beside its own DLL), the test
+prepends the SDK's DLL directory through `ENVIRONMENT_MODIFICATION` (CMake ≥
+3.22).
 
 **Verified** on macOS (Apple silicon) against the 2.9.3 install at
 `~/ws/volumetric_kit/third_party/OrbbecSDK_v2.9.3`. `recon_orbbec_sdk_smoke`
 asserts the runtime version equals the one configured against (the failure a
 linked-in-place install invites is a different copy answering at runtime, not
 a build error), then opens an SDK context and enumerates devices: it lists the
-rig's three Femto Megas, all over Ethernet, and passes with none attached.
-`OrbbecSDK_ROOT` as a `-D` flag and as an environment variable,
-`CMAKE_PREFIX_PATH` and `OrbbecSDK_DIR` all find the SDK. A missing SDK and the
-older 2.7.6 each stop the configure with the fix in the message. With the
-option on, all 28 tests pass under `-Werror`; with it off, the build is
-unchanged — 27 tests, the SDK never looked for.
+rig's three Femto Megas, all over Ethernet, passes with none attached, and
+leaves no `Log/` behind. The search was run against scratch SDKs (2.7.6,
+2.9.3, 2.10.0, 3.0.0, a 32-bit 2.9.3, and one with no version file) under both
+CMake 3.21.4 — the declared minimum — and 4.4.3, with identical results:
+re-pointing `OrbbecSDK_ROOT` (by `-D` and by environment) in an existing tree
+switches SDKs, including out of an "older than" error; 2.7.6, 3.0.0 and the
+32-bit build are each rejected with the reason; an old `OrbbecSDK_ROOT` beside
+a matching `CMAKE_PREFIX_PATH` entry picks the match and reports what it
+skipped; dropping the environment variable in a later configure keeps the SDK
+already chosen, a mistyped `-DOrbbecSDK_ROOT` stops the configure naming it,
+and a chosen SDK deleted from disk is not kept; an explicit `OrbbecSDK_DIR` is
+kept across reconfigures and an incompatible one is refused by name; and an
+iOS target stops at configure.
+With the option on, all 28 tests pass under `-Werror` in Release; with it off,
+the build is unchanged — 27 tests, the SDK never looked for.
 
-**Open.** No CI leg builds the Orbbec code yet: that needs the SDK installed on
-a runner and a leg configured with `VR_WITH_ORBBEC=ON` and `OrbbecSDK_ROOT`.
-Under the 2026-08-02 rule — a driver lives here only if this repo's CI can
-build and test it — that is a precondition for the driver itself landing,
-not for this prerequisite.
+**Open.** The Windows `PATH` has never run — no CI leg builds on Windows at
+all (a `TODO(ci)` beside it). The rig's driver has not landed; under the
+2026-08-02 rule it may, now that CI builds and tests against the SDK, and its
+open path owns the discovery wait above.
+
+## Measured lessons
+
+Not decisions, but the measurements that overturned an assumption about
+where this pipeline spends its time. Kept because the mistake generalises.
+
+The overlay's first finding **corrected a wrong assumption and redirected the
+roadmap**. At `--remesh-every 1` on a room0 mesh of ~790 k vertices / ~264 k
+triangles, `extract` cost ~55 ms/frame, which looked like whole-volume marching
+cubes and pointed at the incremental block-mesh pool. The `ExtractTimings`
+breakdown said otherwise:
+
+| phase | ms |
+|---|---|
+| `arena alloc` | **49.8** |
+| `readback` | 2.8 |
+| `dispatch` | **2.0** |
+| `neighbour lut` | 0.6 |
+| `compact` / `descriptors` / `inputs` | < 0.2 |
+
+(`neighbour lut` is the host table of the day; it is gone as of 2026-08-08 and
+so is the field — see that decision, where the same instrument caught it costing
+102 ms of a 133 ms extract at 107 k blocks.)
+
+The GPU marching cubes was 2 ms — the pool would have optimised the one thing
+that was already fast. (*On device that ordering inverts: see the 2026-08-09
+incremental-extraction decision, where meshing dominates the frame and the pool
+is back on. The lesson below is about the method, not about the pool.*) The cost
+was `make_output_buffers` allocating a fresh
+worst-case vertex arena (5 triangles per cell → hundreds of MB) **every call**,
+so the driver faulted in and zeroed that many pages per frame. Making the arena
+persistent and grow-only (below) took a 100-frame `--preload --mesh-every 1`
+room0 run from **6.3 s to 0.8 s** — **15.9 → 132.5 fps**, an **8.3×** end-to-end
+win — with a mesh identical triangle-for-triangle (same 793,473 vertices /
+264,491 triangles, same canonical hash over the ordered triangle set). The
+lesson is recorded because it generalises: *measure the phases before choosing
+the optimisation* — three of us (the TODO, the roadmap, and the first analysis)
+had independently guessed the wrong bottleneck.
+
+The follow-up **fits the arena to the surface instead of to the worst case**, so
+what the extractor retains is the mesh's real size rather than the 5-triangles-
+per-cell ceiling it can never reach (a room scan fills ~2% of it). Correctness
+does not rest on the guess: the kernel counts *every* triangle the field
+produces and drops only those past `capacity`, so an undersized arena is
+**detected**, never silently truncated — the host refits to the reported count
+and re-runs, and since the count is a property of the field rather than of the
+atomic ordering, that retry is guaranteed to fit. Steady state is therefore one
+dispatch, against the two an unconditional count-then-fill pass would always
+cost, and the plan is **predictive rather than reactive**: each extract records
+the triangles-per-active-block density it measured, and the next call scales
+that by *its own* active set (a seed of 64/block covers the first call, against
+the 2560 worst case), so a growing scan plans ahead of its surface instead of
+discovering every size increase by throwing a dispatch away. It scales that
+density by nothing else — in particular **not** by what an arena already holds,
+which is what made it compound across the output ring until an iPad Pro lost the
+device (the 2026-08-03 slot-independence decision); and with `slot_count > 1`
+"what the extractor retains" is one such fitted arena *per slot*, which is what
+`ExtractTimings::arena_bytes` sums — arenas *and* index runs since the
+2026-08-08 sharing decision, because sharing removes the proportionality that
+let the run be dismissed as a sixteenth of the arena it covers. Measured on the
+full 400-frame room0, peak RSS: **1250 → 985 MB (−21%)** at `--mesh-every 0`,
+**1568 → 1302 MB (−17%)** at the default `--mesh-every 50`, with the mesh
+identical triangle-for-triangle in both (991,167 vertices / 330,389 triangles,
+one canonical hash over the sorted triangle set across main, this branch, and
+both flag settings). It is also much *faster* end to end at `--mesh-every 0` —
+17.4 s → 5.6 s (23.0 → 71.6 fps) — because on main the single final extract
+spends ~12 s faulting in and zeroing a ~2 GB worst-case arena.
+
+Landing it exposed a latent bug in the kernel: `mcEmitCell` **returned** on
+overflow instead of continuing, abandoning the rest of that cell's triangles
+*uncounted*, so the reported total was a lower bound. Harmless while capacity
+was the unreachable worst case, fatal the moment the host started trusting the
+count — the first refit undershot and the retry overflowed again. The emit loop
+now `continue`s, which is what makes "tri_count is the field's true total" an
+honest contract, and `marching_cubes_sparse_test` pins it with a fixture whose
+density (one block of a sign-alternating field, ~1400 triangles where the seed
+plans ~64) *forces* the refit path: reverting the `continue` fails it
+deterministically with an `out_of_memory`, where the sphere fixtures fit inside
+the growth headroom and could not tell the difference. Two further consequences
+of the host trusting the count: the arena's `maxStorageBufferRange` guard now
+tests the *request* rather than the request plus growth headroom (or it would
+reject the top third of legal mesh sizes), and the extract stamps its
+generation when it first touches the arena rather than on success — a call that
+overwrites the arena and then fails must still invalidate every outstanding
+`DeviceMesh`, and so must the dense overload, which shares that arena and can
+now reallocate it.

@@ -34,6 +34,10 @@ jobs:
       # macOS leg's Homebrew/MoltenVK path is unchanged and only the Ubuntu legs
       # use a container; NVIDIA_DRIVER_CAPABILITIES=all makes the toolkit mount
       # the Vulkan ICD for those. See .github/self-hosted-runners.md.
+      #
+      # `orbbec_sdk` puts one Linux leg and the macOS leg on VR_WITH_ORBBEC=ON
+      # (the SDK installed per job; see _build.yml), and leaves the others on
+      # the default OFF, so both configurations build on every PR.
       matrix:
         include:
           - os: ubuntu-22.04
@@ -42,17 +46,20 @@ jobs:
           - os: ubuntu-24.04
             runner: vk-linux-gpu
             container: '{"image":"ubuntu:24.04","options":"--gpus all","env":{"NVIDIA_DRIVER_CAPABILITIES":"all"}}'
+            orbbec_sdk: true
           - os: ubuntu-26.04
             runner: vk-linux-gpu
             container: '{"image":"ubuntu:26.04","options":"--gpus all","env":{"NVIDIA_DRIVER_CAPABILITIES":"all"}}'
           - os: macos-26
             runner: mac
             container: ''
+            orbbec_sdk: true
     uses: ./.github/workflows/_build.yml
     with:
       os: ${{ matrix.os }}
       runner: ${{ matrix.runner }}
       container: ${{ matrix.container }}
+      orbbec_sdk: ${{ matrix.orbbec_sdk || false }}
 
   viewer:
     # Self-hosted like the build legs, so it carries their trusted-code guard.

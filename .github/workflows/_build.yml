@@ -26,6 +26,13 @@ on:
         required: false
         type: string
         default: ''
+      orbbec_sdk:
+        description: >-
+          Install the pinned Orbbec SDK and build with VR_WITH_ORBBEC=ON, so
+          this leg compiles cmake/vr_orbbec.cmake and runs the SDK smoke test.
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   build:
@@ -98,6 +105,10 @@ jobs:
             # Vulkan-touching tests a device to run against.
             pkgs="$pkgs mesa-vulkan-drivers"
           fi
+          # curl fetches the Orbbec SDK below; a bare container image lacks it.
+          if [ "${{ inputs.orbbec_sdk }}" = "true" ]; then
+            pkgs="$pkgs curl"
+          fi
           # shellcheck disable=SC2086  # intentional: split $pkgs into separate args
           sudo apt-get install -y --no-install-recommends $pkgs
           # On a hosted runner, point the loader at lavapipe for the rest of the
@@ -136,6 +147,48 @@ jobs:
             exit 1
           }
           # make ships with the Xcode command-line tools.
+
+      # The Orbbec SDK, on the legs that build VR_WITH_ORBBEC (the 2026-09-24
+      # decision). The build finds it and never fetches it, so CI installs it
+      # the way a developer does -- one pinned, hash-checked release unpacked
+      # outside the checkout -- and hands the build its root through the
+      # OrbbecSDK_ROOT environment variable, the family's convention. The pin
+      # is the floor cmake/vr_orbbec.cmake requires
+      # (VR_ORBBEC_SDK_MIN_VERSION): keep the two in lockstep, so CI builds
+      # against exactly the oldest SDK the module accepts.
+      - name: Install the Orbbec SDK
+        if: steps.detect.outputs.present == 'true' && inputs.orbbec_sdk
+        run: |
+          version=2.9.3
+          case "${RUNNER_OS}-$(uname -m)" in
+            Linux-x86_64)
+              asset=OrbbecSDK_v2.9.3_202607151523_2f6561c_linux_x86_64.tar.gz
+              sha256=8516081b2201f841b1aa444dd203975e06891d73a2694dd2b3d864254f89ff0d
+              ;;
+            macOS-*)
+              # One universal build serves both Mac architectures.
+              asset=OrbbecSDK_v2.9.3_202607152323_2f6561c_macOS.tar.gz
+              sha256=12b33a1bf07c6e38122a8fcee6d16360d8ef305af55d2eebeaf2304202b3f385
+              ;;
+            *)
+              echo "::error::no Orbbec SDK pinned for ${RUNNER_OS}-$(uname -m)"
+              exit 1
+              ;;
+          esac
+          archive="${RUNNER_TEMP}/${asset}"
+          curl -fsSL --retry 3 -o "${archive}" \
+            "https://github.com/orbbec/OrbbecSDK_v2/releases/download/v${version}/${asset}"
+          actual=$({ sha256sum "${archive}" 2>/dev/null ||
+                     shasum -a 256 "${archive}"; } | cut -d' ' -f1)
+          if [ "${actual}" != "${sha256}" ]; then
+            echo "::error::${asset}: sha256 ${actual}, expected ${sha256}"
+            exit 1
+          fi
+          root="${RUNNER_TEMP}/OrbbecSDK_v${version}"
+          rm -rf "${root}"
+          mkdir -p "${root}"
+          tar xzf "${archive}" -C "${root}" --strip-components=1
+          echo "OrbbecSDK_ROOT=${root}" >> "${GITHUB_ENV}"
 
       # Report the Vulkan device the runner sees (the real GPU in a self-hosted
       # container, lavapipe on a hosted Linux runner, MoltenVK on macOS). On a
@@ -233,7 +286,8 @@ jobs:
         run: |
           ok=0
           for attempt in 1 2 3; do
-            if cmake -S . -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}; then
+            if cmake -S . -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+                -DVR_WITH_ORBBEC=${{ inputs.orbbec_sdk && 'ON' || 'OFF' }}; then
               ok=1
               break
             fi

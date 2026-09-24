@@ -299,17 +299,24 @@ add_test(NAME recon_sensor_conventions COMMAND recon_sensor_conventions_test)
 # and enumerates devices. Needs no camera (zero devices passes); enumeration
 # probes the network for Ethernet devices, so it takes a couple of seconds.
 if(VR_WITH_ORBBEC)
-  string(REPLACE "." ";" _vr_orbbec_version_parts "${VR_ORBBEC_SDK_VERSION}")
-  list(GET _vr_orbbec_version_parts 0 _vr_orbbec_major)
-  list(GET _vr_orbbec_version_parts 1 _vr_orbbec_minor)
-  list(GET _vr_orbbec_version_parts 2 _vr_orbbec_patch)
   add_executable(recon_orbbec_sdk_smoke_test orbbec_sdk_smoke_test.cpp)
   target_link_libraries(recon_orbbec_sdk_smoke_test PRIVATE ob::OrbbecSDK)
   target_compile_definitions(
     recon_orbbec_sdk_smoke_test
-    PRIVATE VR_ORBBEC_SDK_VERSION_MAJOR=${_vr_orbbec_major}
-            VR_ORBBEC_SDK_VERSION_MINOR=${_vr_orbbec_minor}
-            VR_ORBBEC_SDK_VERSION_PATCH=${_vr_orbbec_patch})
+    PRIVATE VR_ORBBEC_SDK_VERSION_MAJOR=${VR_ORBBEC_SDK_VERSION_MAJOR}
+            VR_ORBBEC_SDK_VERSION_MINOR=${VR_ORBBEC_SDK_VERSION_MINOR}
+            VR_ORBBEC_SDK_VERSION_PATCH=${VR_ORBBEC_SDK_VERSION_PATCH})
   vr_target_warnings(recon_orbbec_sdk_smoke_test)
   add_test(NAME recon_orbbec_sdk_smoke COMMAND recon_orbbec_sdk_smoke_test)
+  if(WIN32)
+    # Windows resolves a DLL on PATH, not through an rpath, and the SDK is
+    # linked in place rather than copied beside the test -- it loads its
+    # extensions/ from beside its own DLL, so a copy would run without them.
+    # ENVIRONMENT_MODIFICATION needs CMake >= 3.22; an older ctest ignores it
+    # and the test cannot start. TODO(ci): no leg runs this on Windows.
+    set_tests_properties(
+      recon_orbbec_sdk_smoke
+      PROPERTIES ENVIRONMENT_MODIFICATION
+                 "PATH=path_list_prepend:$<TARGET_FILE_DIR:ob::OrbbecSDK>")
+  endif()
 endif()
