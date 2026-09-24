@@ -65,6 +65,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- build: **the Orbbec SDK as an opt-in prerequisite** — `VR_WITH_ORBBEC`
+  (off by default) finds an installed SDK ≥ 2.9.3 and exposes `ob::OrbbecSDK`
+  for the Orbbec (Femto Mega) capture driver that follows. Nothing is fetched
+  or vendored: the SDK is installed once, outside every repo, and each build
+  points at it with `-DOrbbecSDK_ROOT=<sdk>` or the `OrbbecSDK_ROOT`
+  environment variable (`cmake/vr_orbbec.cmake`). A missing or older SDK stops
+  the configure with the fix in the message. `recon_orbbec_sdk_smoke` pins
+  that the copy CMake found is the copy that loads, and that an SDK context
+  opens and enumerates devices, with or without a camera attached.
 - `sensor`: **`ICameraCapture::exhausted()`** — whether a source will never
   hand out another frame. An empty `poll()` says only "nothing this tick", and
   a live device polled faster than it runs and a replay that has played its

@@ -48,6 +48,19 @@ cmake --build build
 ctest --test-dir build
 ```
 
+### Optional: Orbbec SDK
+
+The Orbbec (Femto Mega) capture code is off by default and needs the
+[Orbbec SDK](https://github.com/orbbec/OrbbecSDK_v2/releases) ≥ 2.9.3
+installed. It is not fetched: install it once, outside the repo (the family
+convention is `<workspace>/third_party/OrbbecSDK_v<version>`), and point the
+build at its root:
+
+```sh
+cmake -B build -DVR_WITH_ORBBEC=ON -DOrbbecSDK_ROOT=<sdk>
+# or once, for every repo that finds it:  export OrbbecSDK_ROOT=<sdk>
+```
+
 Consume it from another CMake project via `find_package(volumetric_kit_recon)`
 or `FetchContent`, then link a tier (e.g. `volumetric_kit::recon_core`).
 

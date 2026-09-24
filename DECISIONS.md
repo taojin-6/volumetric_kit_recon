@@ -3552,3 +3552,64 @@ publishes the final mesh textured with the copied last frame, nothing on
 stderr. 27/27 tests pass; the examples build under `-Werror` on MoltenVK; an
 ASan/UBSan build of the whole tree, viewer included, runs the suite and both
 of those example runs clean.
+
+### 2026-09-24 — The Orbbec SDK is a prerequisite behind `VR_WITH_ORBBEC`: installed once for the family, found, and never fetched.
+
+The next capture source is the Orbbec rig — Femto Mega units, calibrated by
+`volumetric_kit_calib` for their poses — and its driver needs the Orbbec SDK
+v2. The SDK is a prebuilt binary (a universal dylib plus plugin libraries in
+`lib/extensions/` that it loads from beside itself), and recon is not its only
+consumer: calib's planned `capture/desktop` tier drives the same cameras.
+
+**The rule.** `VR_WITH_ORBBEC` (OFF by default) requires an installed SDK
+≥ 2.9.3 and exposes `ob::OrbbecSDK`; `cmake/vr_orbbec.cmake` does the finding.
+The SDK is installed **once, outside every repo** — the family convention is
+`<workspace>/third_party/OrbbecSDK_v<version>` — and every build that needs it
+points at that copy with `-DOrbbecSDK_ROOT=<sdk>`, or the `OrbbecSDK_ROOT`
+environment variable set once for every repo. It is linked in place, so no
+build tree or worktree carries a copy of its own, and nothing is copied beside
+a binary for it to run. That is the Vulkan SDK's treatment, not VMA's.
+
+**Why not a pinned download.** A FetchContent of the release tarball, hashed
+per platform, with a local-copy override, was the first proposal: it would
+have let a fresh clone and CI build with no setup. The owner's call was to
+make the SDK a requirement instead — one copy the whole family links, the
+version stated as a floor this repo checks, not a download each build tree
+repeats. Vendoring it into git (≈12 MB per platform) was ruled out, as was
+assuming a system install (`/usr/local`: sudo, and a machine-wide version that
+drifts under every repo); a system install still works, it is just not
+assumed.
+
+**Why off by default.** The SDK ships macOS, Linux (x86_64, arm64) and Windows
+builds and no iOS one, and recon cross-compiles to iOS unchanged (the
+2026-08-01 decision); a required SDK would break that build and every CI leg,
+none of which has it installed.
+
+**Two quirks of the SDK's package files**, handled once in the module rather
+than rediscovered by each caller:
+- `OrbbecSDKConfig.cmake` sits in `<sdk>/lib`, which none of `find_package`'s
+  standard layouts search under a prefix. Without `PATH_SUFFIXES lib`,
+  `OrbbecSDK_ROOT` and `CMAKE_PREFIX_PATH` both miss it; only
+  `OrbbecSDK_DIR=<sdk>/lib` finds it.
+- The version file is `OrbbecSDKVersion.cmake`, not
+  `OrbbecSDKConfigVersion.cmake`, so `find_package` never reads it and a
+  versioned `find_package(OrbbecSDK 2.9.3)` rejects even a matching SDK. The
+  floor is enforced by reading `PACKAGE_VERSION` out of that file instead.
+
+**Verified** on macOS (Apple silicon) against the 2.9.3 install at
+`~/ws/volumetric_kit/third_party/OrbbecSDK_v2.9.3`. `recon_orbbec_sdk_smoke`
+asserts the runtime version equals the one configured against (the failure a
+linked-in-place install invites is a different copy answering at runtime, not
+a build error), then opens an SDK context and enumerates devices: it lists the
+rig's three Femto Megas, all over Ethernet, and passes with none attached.
+`OrbbecSDK_ROOT` as a `-D` flag and as an environment variable,
+`CMAKE_PREFIX_PATH` and `OrbbecSDK_DIR` all find the SDK. A missing SDK and the
+older 2.7.6 each stop the configure with the fix in the message. With the
+option on, all 28 tests pass under `-Werror`; with it off, the build is
+unchanged — 27 tests, the SDK never looked for.
+
+**Open.** No CI leg builds the Orbbec code yet: that needs the SDK installed on
+a runner and a leg configured with `VR_WITH_ORBBEC=ON` and `OrbbecSDK_ROOT`.
+Under the 2026-08-02 rule — a driver lives here only if this repo's CI can
+build and test it — that is a precondition for the driver itself landing,
+not for this prerequisite.
