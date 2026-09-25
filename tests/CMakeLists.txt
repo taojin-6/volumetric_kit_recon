@@ -292,3 +292,31 @@ target_link_libraries(recon_sensor_conventions_test
                       PRIVATE volumetric_kit::recon_sensor)
 vr_target_warnings(recon_sensor_conventions_test)
 add_test(NAME recon_sensor_conventions COMMAND recon_sensor_conventions_test)
+
+# The Orbbec SDK prerequisite (VR_WITH_ORBBEC only): the copy the build found is
+# the one that loads -- runtime version == configured version, since the SDK is
+# linked in place from an install outside the repo -- and an SDK context opens
+# and enumerates devices. Needs no camera (zero devices passes); enumeration
+# probes the network for Ethernet devices, so it takes a couple of seconds.
+if(VR_WITH_ORBBEC)
+  add_executable(recon_orbbec_sdk_smoke_test orbbec_sdk_smoke_test.cpp)
+  target_link_libraries(recon_orbbec_sdk_smoke_test PRIVATE ob::OrbbecSDK)
+  target_compile_definitions(
+    recon_orbbec_sdk_smoke_test
+    PRIVATE VR_ORBBEC_SDK_VERSION_MAJOR=${VR_ORBBEC_SDK_VERSION_MAJOR}
+            VR_ORBBEC_SDK_VERSION_MINOR=${VR_ORBBEC_SDK_VERSION_MINOR}
+            VR_ORBBEC_SDK_VERSION_PATCH=${VR_ORBBEC_SDK_VERSION_PATCH})
+  vr_target_warnings(recon_orbbec_sdk_smoke_test)
+  add_test(NAME recon_orbbec_sdk_smoke COMMAND recon_orbbec_sdk_smoke_test)
+  if(WIN32)
+    # Windows resolves a DLL on PATH, not through an rpath, and the SDK is
+    # linked in place rather than copied beside the test -- it loads its
+    # extensions/ from beside its own DLL, so a copy would run without them.
+    # ENVIRONMENT_MODIFICATION needs CMake >= 3.22; an older ctest ignores it
+    # and the test cannot start. TODO(ci): no leg runs this on Windows.
+    set_tests_properties(
+      recon_orbbec_sdk_smoke
+      PROPERTIES ENVIRONMENT_MODIFICATION
+                 "PATH=path_list_prepend:$<TARGET_FILE_DIR:ob::OrbbecSDK>")
+  endif()
+endif()

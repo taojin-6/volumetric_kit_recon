@@ -222,6 +222,9 @@ order. Change the decision, its entry there, and this list together.
   The examples poll their frames through the sensor contract: the Replica
   reader is an `ICameraCapture`, a source says when it is exhausted, and a
   frame kept past the next poll is copied — the last one included.
+- [**2026-09-24**](DECISIONS.md#2026-09-24--the-orbbec-sdk-is-a-prerequisite-behind-vr_with_orbbec-installed-once-for-the-family-found-and-never-fetched) —
+  The Orbbec SDK is a prerequisite behind `VR_WITH_ORBBEC`: installed once for
+  the family, found, and never fetched.
 
 ## Provenance & salvage policy
 

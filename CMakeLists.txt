@@ -25,6 +25,12 @@ option(VR_BUILD_EXAMPLES "Build example programs" ${PROJECT_IS_TOP_LEVEL})
 option(VR_BUILD_TESTS "Build tests" ${PROJECT_IS_TOP_LEVEL})
 option(VR_INSTALL "Generate install/export rules" ${PROJECT_IS_TOP_LEVEL})
 option(VR_WARNINGS_AS_ERRORS "Treat first-party compiler warnings as errors" ON)
+# OFF by default: the Orbbec SDK is a prerequisite you install, not a vendored
+# dependency, and it ships no iOS build -- recon cross-compiles to iOS
+# unchanged. See cmake/vr_orbbec.cmake for how the build finds it.
+option(VR_WITH_ORBBEC
+       "Build the Orbbec-SDK-backed code (requires an installed Orbbec SDK)"
+       OFF)
 
 # Semicolon list of sanitizers (e.g. "address;undefined"); empty = off. Applied
 # globally -- see cmake/vr_sanitizers.cmake for why.
@@ -41,6 +47,12 @@ include(vr_sanitizers)
 # the requirement is carried on the exported target and the package Config
 # re-runs find_dependency(Vulkan). Mirrors volumetric_kit_gfx.
 find_package(Vulkan REQUIRED)
+
+# The Orbbec SDK (ob::OrbbecSDK), found the same way: installed once, outside
+# the repo, and never fetched (the 2026-09-24 decision).
+if(VR_WITH_ORBBEC)
+  include(vr_orbbec)
+endif()
 
 # Vendored deps (VMA today) via pinned FetchContent. Exposes VR_VMA_INCLUDE_DIR
 # to the tiers below (recon_core compiles VMA in one TU); added before src/ so
