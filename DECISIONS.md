@@ -3510,45 +3510,29 @@ than rediscovered by each caller:
   `OrbbecSDK_ROOT` and `CMAKE_PREFIX_PATH` both miss it; only
   `OrbbecSDK_DIR=<sdk>/lib` finds it.
 - The version file is `OrbbecSDKVersion.cmake`, not
-  `OrbbecSDKConfigVersion.cmake`, so `find_package` never reads it: a
-  versioned `find_package(OrbbecSDK 2.9.3)` rejects even a matching SDK, and an
-  unversioned one takes the first SDK on the search path whatever its version.
-  So the module does what a versioned `find_package` would have done (below).
+  `OrbbecSDKConfigVersion.cmake`, so `find_package` never reads it and a
+  versioned `find_package(OrbbecSDK 2.9.3)` rejects even a matching SDK. The
+  module reads `PACKAGE_VERSION` out of that file and checks it itself: the
+  floor *and* the same major version — the rule the file encodes — since the
+  first cut's bare `VERSION_LESS` let a 3.0.0 through.
 
-**The search re-runs on every configure, and each candidate's own version
-file judges it.** The first cut ran an unversioned `find_package` and then
-compared `PACKAGE_VERSION` against the floor, and review found three ways that
-went wrong, each reproduced with scratch SDKs. `find_package` caches the
-directory it found in `OrbbecSDK_DIR`, so a build tree kept its first SDK for
-life: re-pointing `OrbbecSDK_ROOT` at an upgrade was ignored without a word —
-and the smoke test still passed, comparing the runtime against the same stale
-configured version — and after an "older than" error, re-pointing it at a
-newer SDK repeated the same error, the rejected directory still cached (the
-2026-08-04 rule: a staleness the caller cannot see is the library's to check).
-The floor was a bare `VERSION_LESS`, so a 3.0.0 passed, where the SDK's own
-version file rejects another major version and a different pointer width.
-And the first candidate on the path was the only one considered, so an old
-`OrbbecSDK_ROOT` in the environment stopped the configure even with a
-matching SDK named on `CMAKE_PREFIX_PATH`. Now the module walks
-`find_package`'s own search path, pointed at the version file rather than the
-config (`CONFIGS OrbbecSDKVersion.cmake`), includes each candidate's version
-file with `PACKAGE_FIND_VERSION*` set exactly as `find_package` would, and
-skips what it rejects by adding the directory to a function-local
-`CMAKE_IGNORE_PATH`; only the chosen SDK's config is loaded, since an imported
-`ob::OrbbecSDK` cannot be taken back once a rejected config has defined it.
-Every configure searches afresh: the module records the directory it chose,
-and an `OrbbecSDK_DIR` still equal to that record is its own leftover and is
-dropped. Only when the search then finds nothing *and* nothing names an SDK
-any more is the last choice kept — without that exception, a tree configured
-with a one-off `OrbbecSDK_ROOT=<sdk> cmake …`, or reopened by an IDE that
-never read the shell profile, failed the next automatic re-run that the cached
-result had survived. A root that is named and holds nothing usable is still an
-error, and the message lists the roots it searched and every SDK it skipped.
-A value in `OrbbecSDK_DIR` that differs from the record is the caller's
-`-DOrbbecSDK_DIR=<sdk>/lib`, taken as given — that SDK or an error naming the
-variable and how to drop it.
-`VR_ORBBEC_SDK_VERSION_MAJOR` / `_MINOR` / `_PATCH` come out of the same
-parse, so the smoke test's compile definitions no longer re-split the string.
+**A named root is authoritative.** `find_package` caches the directory it
+found in `OrbbecSDK_DIR` for the life of the build tree, so review found that
+re-pointing `OrbbecSDK_ROOT` at an upgrade was ignored without a word — the
+smoke test still passing, since it compared the runtime against the same
+stale configured version — and that after an "older than" error, re-pointing
+it at a newer SDK repeated the error (the 2026-08-04 rule: a staleness the
+caller cannot see is the library's to check). So whenever `OrbbecSDK_ROOT` is
+set, as a variable or in the environment, the module drops the cached
+directory and finds again. With no root named the cache stands, so a tree
+configured with a one-off `OrbbecSDK_ROOT=<sdk> cmake …`, or reopened by an
+IDE that never read the shell profile, still re-runs cleanly. A fuller
+version — walking every candidate on the search path through its own version
+file, skipping the incompatible ones, keeping a record to tell a
+caller-supplied `OrbbecSDK_DIR` from the cache's — was written and dropped as
+not worth its ~170 lines: the root is how the family points at the SDK, the
+cases it added (two SDKs on one search path, a 32-bit build) do not occur
+here, and an SDK the check rejects stops the configure with the fix named.
 
 **CI installs it the way a developer does.** `_build.yml` takes an
 `orbbec_sdk` input, on for the ubuntu-24.04 and macos-26 legs and off for the
@@ -3586,18 +3570,14 @@ asserts the runtime version equals the one configured against (the failure a
 linked-in-place install invites is a different copy answering at runtime, not
 a build error), then opens an SDK context and enumerates devices: it lists the
 rig's three Femto Megas, all over Ethernet, passes with none attached, and
-leaves no `Log/` behind. The search was run against scratch SDKs (2.7.6,
-2.9.3, 2.10.0, 3.0.0, a 32-bit 2.9.3, and one with no version file) under both
-CMake 3.21.4 — the declared minimum — and 4.4.3, with identical results:
-re-pointing `OrbbecSDK_ROOT` (by `-D` and by environment) in an existing tree
-switches SDKs, including out of an "older than" error; 2.7.6, 3.0.0 and the
-32-bit build are each rejected with the reason; an old `OrbbecSDK_ROOT` beside
-a matching `CMAKE_PREFIX_PATH` entry picks the match and reports what it
-skipped; dropping the environment variable in a later configure keeps the SDK
-already chosen, a mistyped `-DOrbbecSDK_ROOT` stops the configure naming it,
-and a chosen SDK deleted from disk is not kept; an explicit `OrbbecSDK_DIR` is
-kept across reconfigures and an incompatible one is refused by name; and an
-iOS target stops at configure.
+leaves no `Log/` behind. The module was run against scratch SDKs (2.7.6,
+2.9.3, 2.10.0, 3.0.0) under both CMake 3.21.4 — the declared minimum — and
+4.4.3, with identical results: re-pointing `OrbbecSDK_ROOT` (by `-D` and by
+environment) in an existing tree switches SDKs, including out of an "older
+than" error; 2.7.6 and 3.0.0 are each refused with the fix named; dropping the
+environment variable in a later configure keeps the SDK already found, a
+mistyped `-DOrbbecSDK_ROOT` stops the configure, and a found SDK deleted from
+disk is not kept; and an iOS target stops at configure.
 With the option on, all 28 tests pass under `-Werror` in Release; with it off,
 the build is unchanged — 27 tests, the SDK never looked for.
 

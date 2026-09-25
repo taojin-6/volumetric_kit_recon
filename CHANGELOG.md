@@ -70,12 +70,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   for the Orbbec (Femto Mega) capture driver that follows. Nothing is fetched
   or vendored: the SDK is installed once, outside every repo, and each build
   points at it with `-DOrbbecSDK_ROOT=<sdk>` or the `OrbbecSDK_ROOT`
-  environment variable (`cmake/vr_orbbec.cmake`). Every configure searches
-  afresh, so re-pointing `OrbbecSDK_ROOT` at another SDK takes effect in an
-  existing build tree, and each SDK on the search path is judged by its own
-  version file — older than the floor, another major version or another
-  pointer width is skipped, and a later match is taken. No usable SDK, or an
-  iOS target, stops the configure with the fix in the message.
+  environment variable (`cmake/vr_orbbec.cmake`), which is authoritative:
+  re-pointing it at another SDK takes effect in an existing build tree. An SDK
+  older than 2.9.3 or of another major version, a missing one, or an iOS
+  target stops the configure with the fix in the message.
   `recon_orbbec_sdk_smoke` pins that the copy CMake found is the copy that
   loads, and that an SDK context opens and enumerates devices, with or without
   a camera attached. CI builds and runs it on the ubuntu-24.04 and macos-26
