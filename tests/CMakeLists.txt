@@ -308,6 +308,35 @@ if(VR_WITH_ORBBEC)
             VR_ORBBEC_SDK_VERSION_PATCH=${VR_ORBBEC_SDK_VERSION_PATCH})
   vr_target_warnings(recon_orbbec_sdk_smoke_test)
   add_test(NAME recon_orbbec_sdk_smoke COMMAND recon_orbbec_sdk_smoke_test)
+
+  # The Orbbec driver's arithmetic -- units, byte order, the camera struct, the
+  # sync-mode mapping, and the option checks open() makes before touching the
+  # SDK. No camera, so it runs on every leg that builds the driver.
+  # frame_conversion.hpp is internal (non-installed) and names SDK types, so the
+  # test reaches it by include path and takes the SDK's headers from its target.
+  add_executable(recon_sensor_orbbec_conversion_test
+                 sensor_orbbec_conversion_test.cpp)
+  target_link_libraries(
+    recon_sensor_orbbec_conversion_test
+    PRIVATE volumetric_kit::recon_sensor_orbbec ob::OrbbecSDK)
+  target_include_directories(
+    recon_sensor_orbbec_conversion_test
+    PRIVATE ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec)
+  vr_target_warnings(recon_sensor_orbbec_conversion_test)
+  add_test(NAME recon_sensor_orbbec_conversion
+           COMMAND recon_sensor_orbbec_conversion_test)
+
+  # The driver against a real camera -- only the one VR_ORBBEC_TEST_SERIAL
+  # names; unset, it skips (exit 0), so no CI leg ever opens a camera that
+  # happens to share its network. See the test for what it checks.
+  add_executable(recon_sensor_orbbec_capture_test
+                 sensor_orbbec_capture_test.cpp)
+  target_link_libraries(recon_sensor_orbbec_capture_test
+                        PRIVATE volumetric_kit::recon_sensor_orbbec)
+  vr_target_warnings(recon_sensor_orbbec_capture_test)
+  add_test(NAME recon_sensor_orbbec_capture
+           COMMAND recon_sensor_orbbec_capture_test)
+
   if(WIN32)
     # Windows resolves a DLL on PATH, not through an rpath, and the SDK is
     # linked in place rather than copied beside the test -- it loads its
@@ -315,7 +344,8 @@ if(VR_WITH_ORBBEC)
     # ENVIRONMENT_MODIFICATION needs CMake >= 3.22; an older ctest ignores it
     # and the test cannot start. TODO(ci): no leg runs this on Windows.
     set_tests_properties(
-      recon_orbbec_sdk_smoke
+      recon_orbbec_sdk_smoke recon_sensor_orbbec_conversion
+      recon_sensor_orbbec_capture
       PROPERTIES ENVIRONMENT_MODIFICATION
                  "PATH=path_list_prepend:$<TARGET_FILE_DIR:ob::OrbbecSDK>")
   endif()

@@ -22,6 +22,15 @@ find_dependency(glm CONFIG)
 # target exists for consumers (without this, find_package(volumetric_kit_recon)
 # followed by a link to recon_core fails with "Vulkan::Vulkan not found").
 find_dependency(Vulkan)
+# recon_sensor_orbbec, when this package was built with VR_WITH_ORBBEC, links
+# the Orbbec SDK privately -- but a static build still names ob::OrbbecSDK in
+# its link interface, and a shared one needs the SDK's library at link time, so
+# the imported target must exist. Found the way the build found it
+# (cmake/vr_orbbec.cmake): the SDK's package config sits in <sdk>/lib, and a
+# consumer points at the SDK with OrbbecSDK_ROOT.
+if(@VR_WITH_ORBBEC@)
+  find_dependency(OrbbecSDK CONFIG PATH_SUFFIXES lib)
+endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/volumetric_kit_reconTargets.cmake")
 
