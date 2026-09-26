@@ -64,6 +64,19 @@ cmake -B build -DVR_WITH_ORBBEC=ON -DOrbbecSDK_ROOT=<sdk>
 # or once, for every repo that finds it:  export OrbbecSDK_ROOT=<sdk>
 ```
 
+That builds `volumetric_kit::recon_sensor_orbbec`, an `ICameraCapture` over one
+camera (`sensor/orbbec/orbbec_capture.hpp`), and lets the fuse example run
+live:
+
+```sh
+build/examples/fuse_replica/fuse_replica --orbbec <serial> --max-frames 300
+# the driver's hardware test opens only the camera you name:
+VR_ORBBEC_TEST_SERIAL=<serial> ctest --test-dir build -R orbbec
+```
+
+A camera wired as a sync secondary streams only while its primary does; name
+a primary or standalone camera for a single-camera run.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

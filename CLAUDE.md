@@ -40,8 +40,8 @@ conventions and Vulkan setup.
 - CMake: `find_package(volumetric_kit_recon)`; component targets
   `volumetric_kit::recon_core`, `…_volume`, `…_tsdf`, `…_mesh`, `…_texture`,
   `…_interop` (+ later `…_compress`, `…_sensor`, `…_track`, `…_codec`,
-  `…_stream`); umbrella
-  alias `volumetric_kit::recon`.
+  `…_stream`), plus the opt-in `…_sensor_orbbec` driver (`VR_WITH_ORBBEC`);
+  umbrella alias `volumetric_kit::recon`.
 
 ## Architecture (tiered)
 
@@ -79,7 +79,9 @@ branching off **`core`** (later: `compress`, `track`, `codec`, `stream`).
   `ColorEncoding` from `core/color_space.hpp`, so it
   depends on **`core` alone** — it sits beside the fusion tiers, not on top of
   them — and bundles **no drivers**: one ships here only if this repo can build
-  *and* test it (the 2026-08-02 decision).
+  *and* test it (the 2026-08-02 decision), and the one that does — Orbbec —
+  is a target of its own under `sensor/orbbec/` (`recon_sensor_orbbec`, built
+  with `VR_WITH_ORBBEC`), so `recon_sensor` never links a vendor SDK.
 - **`interop`** — the handoff to `volumetric_kit_gfx` (below).
 
 ## Locked decisions
@@ -225,6 +227,10 @@ order. Change the decision, its entry there, and this list together.
 - [**2026-09-24**](DECISIONS.md#2026-09-24--the-orbbec-sdk-is-a-prerequisite-behind-vr_with_orbbec-installed-once-for-the-family-found-and-never-fetched) —
   The Orbbec SDK is a prerequisite behind `VR_WITH_ORBBEC`: installed once for
   the family, found, and never fetched.
+- [**2026-09-26**](DECISIONS.md#2026-09-26--the-orbbec-driver-lands-as-sensororbbec-a-target-of-its-own-it-undistorts-colour-and-then-registers-depth-to-it-on-the-host-and-it-reads-the-rigs-sync-roles-without-writing-them) —
+  The Orbbec driver lands as `sensor/orbbec`, a target of its own: it
+  undistorts colour and then registers depth to it on the host, and it reads
+  the rig's sync roles without writing them.
 
 ## Provenance & salvage policy
 
@@ -408,8 +414,9 @@ the same shape (gfx's rules; the mistakes reviews keep catching):
 ## Where to start
 
 Landed and proven on MoltenVK, left to right: `core` → `volume` → `tsdf` →
-`mesh` → `texture`, plus `sensor` (the contract only, no drivers) and **interop
-seam B** — gfx drawing recon's own buffers with no host round trip.
+`mesh` → `texture`, plus `sensor` (the contract, and beside it the one driver
+this repo can build and test, Orbbec) and **interop seam B** — gfx drawing
+recon's own buffers with no host round trip.
 [DECISIONS.md](DECISIONS.md) carries the *why* behind anything here that looks
 arbitrary; it usually isn't.
 
@@ -630,11 +637,21 @@ arbitrary; it usually isn't.
   `false` by default, so a live driver overrides nothing) — plus the boundary
   math that is silently wrong when guessed — `cv_from_gl_camera`,
   `depth_from_registered_color`, `to_canonical`. Links `recon_core` alone;
-  drivers live with the platform that can build *and* test them. The one
-  implementer in this tree is `examples/common/replica_capture.hpp`, which
-  plays a Replica sequence back through the contract — so every example run
-  produces real frames through it, and a live driver plugs in where that one
-  is constructed.
+  drivers live with the platform that can build *and* test them. Two
+  implementers in this tree: `examples/common/replica_capture.hpp`, which
+  plays a Replica sequence back through the contract, so every example run
+  produces real frames through it; and **`sensor/orbbec`'s `OrbbecCapture`**
+  (`VR_WITH_ORBBEC`), a live Femto Mega. Its `poll()` undistorts the colour
+  image and *then* registers depth to it — the SDK's registration ignores the
+  colour lens, which moves pixels ~5 px on average at 720p, so the order is
+  what puts both images on one pinhole camera — then converts to metres and
+  the packed words, ~3.6 ms on the polling thread; both of a frame's cameras
+  are the colour camera, posed by `Options::cam_to_world`, and the first pair
+  of each start is checked against that claim. It reads the camera's rig sync
+  role (`waits_for_primary`: a secondary delivers nothing without its
+  primary) and never writes it, refuses a mirrored/flipped/rotated image, and
+  waits out Ethernet discovery. Its hardware test opens only the camera
+  `VR_ORBBEC_TEST_SERIAL` names, so no CI leg touches the rig.
 
 **Examples** (`examples/`). All three poll their frames through
 `sensor::ICameraCapture&` — the fuse loop never learns it is reading a disk —
@@ -657,7 +674,9 @@ after the extract that consumed them (the fuse kernel only ORs, so anything
 looser and every block reads dirty within a few frames — which is how the first
 cut's headline numbers ended up being the 100%-dirty worst case). It implies
 `--device-extract` and is refused beside `--dirty-every`, which wants the same
-flags on a different cadence. Behind the off-by-default
+flags on a different cadence. `--orbbec <serial|any>` (a `VR_WITH_ORBBEC`
+build) swaps in a live camera for `--max-frames` frames (300 by default),
+refusing the replay's own knobs beside it. Behind the off-by-default
 `VR_BUILD_VIEWER`: `fuse_render` writes a headless colour PNG (seam A — it
 builds two devices by design), and `fuse_viewer` opens a live window on one
 shared `VkDevice`, fusing on a background thread, drawing recon's buffers
@@ -703,6 +722,14 @@ the multi-keyframe post-scan atlas. On `core`: the `TODO(core)` for
 gauges from VMA heuristics into driver truth. The debug-utils labels that TODO
 sat beside **have landed** (2026-08-30) — on the *kernel* rather than the span,
 which is the correction that entry records.
+
+**On `sensor`** — what the live front-end still lacks, each a
+`TODO(sensor)` in `orbbec_capture.cpp`: a multi-camera source that starts the
+synced rig in its wiring's order and puts the cameras on one clock (what
+calib's viewer needs to show the synchronised streams); HEVC colour through a
+decoder of our own (the camera encodes it, the SDK does not decode it — 21
+against 185 Mbit/s at 4K); and GPU pre-processing (undistort, register,
+convert) that keeps the frame on the device through fusion.
 
 **Measure the phases before choosing the optimisation.** Three independent
 guesses at this pipeline's bottleneck have been wrong, each corrected by an

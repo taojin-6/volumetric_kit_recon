@@ -65,6 +65,27 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `sensor`: **the Orbbec (Femto Mega) driver** — `OrbbecCapture`, an
+  `ICameraCapture` over one camera in `sensor/orbbec/`, its own target
+  (`volumetric_kit::recon_sensor_orbbec`, built with `VR_WITH_ORBBEC`) so
+  `recon_sensor` stays vendor-free; no SDK type in its header. Each `poll()`
+  hands out the newest synchronised pair with the colour image undistorted and
+  depth then registered to it, so both of the frame's cameras are the colour
+  camera (posed by `Options::cam_to_world`), depth in metres and colour packed
+  as the contract says — ~3.6 ms on the polling thread at 1280x720. `open`
+  waits out Ethernet discovery, lists the camera's modes when the requested
+  one is missing, refuses a mirrored/flipped/rotated image, and reports the
+  camera's rig sync role (`waits_for_primary`) without changing it; `stats()`
+  counts received, delivered and dropped pairs. The package config re-finds
+  the SDK when the package was built with it, and `recon_sensor` no longer
+  installs the `orbbec/` headers. Tests: `recon_sensor_orbbec_conversion`
+  (units, byte order, the camera struct, option checks; no camera) and
+  `recon_sensor_orbbec_capture` (a real camera, only the one
+  `VR_ORBBEC_TEST_SERIAL` names). See the 2026-09-26 decision.
+- `examples`: **`fuse_replica --orbbec <serial|any>`** fuses a live Orbbec
+  camera through the same loop, for `--max-frames` frames (300 by default);
+  the replay's `--preload`, `--stride` and `--cam-params` are refused beside
+  it.
 - build: **the Orbbec SDK as an opt-in prerequisite** — `VR_WITH_ORBBEC`
   (off by default) finds an installed SDK ≥ 2.9.3 and exposes `ob::OrbbecSDK`
   for the Orbbec (Femto Mega) capture driver that follows. Nothing is fetched
