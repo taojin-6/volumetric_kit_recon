@@ -11,9 +11,13 @@
 // volumetric_kit_gfx sibling.
 //
 //   fuse_replica <scene_dir> [-o out.ply] [--voxel 0.02] [--max-frames N] ...
+//   fuse_replica --orbbec <serial|any> [-o out.ply] [--max-frames N] ...
 //
 // <scene_dir> is a Replica scene folder (contains results/ and traj.txt); the
-// intrinsics default to <scene_dir>/../cam_params.json.
+// intrinsics default to <scene_dir>/../cam_params.json. --orbbec (a
+// VR_WITH_ORBBEC build) fuses a live Orbbec camera in its place -- the same
+// loop, fed through the same contract, which is the point of the contract --
+// for --max-frames frames (default 300), with the camera at the world origin.
 
 #include <chrono>
 #include <cmath>
@@ -42,6 +46,10 @@
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
+
+#if defined(VR_EXAMPLE_WITH_ORBBEC)
+#include "volumetric_kit/recon/sensor/orbbec/orbbec_capture.hpp"
+#endif
 
 namespace vr = volumetric_kit::recon;
 namespace vol = volumetric_kit::recon::volume;
@@ -95,6 +103,15 @@ struct Options {
   bool incremental = false;
   int num_buckets = 16384;  // initial map size; grows on overflow via resize
   bool preload = false;     // decode every frame up front (RAM for decode time)
+  // Fuse a live Orbbec camera instead of a Replica sequence: its serial, or
+  // "any" for the only camera discovery finds. Empty = replay <scene_dir>.
+  std::string orbbec;
+  // Which knobs the command line set, so a live run can keep the driver's own
+  // defaults (its depth gate, a finite frame count) where the replay's would
+  // not fit a camera.
+  bool out_given = false;
+  bool depth_range_given = false;
+  bool max_frames_given = false;
 };
 
 const char* arg_value(int argc, char** argv, int& i) {
@@ -124,6 +141,19 @@ vr::Result<Options> parse_args(int argc, char** argv) {
       const char* v = arg_value(argc, argv, i);
       if (v == nullptr) return vr::Status::invalid_argument("-o needs a path");
       opt.out = v;
+      opt.out_given = true;
+    } else if (a == "--orbbec") {
+      const char* v = arg_value(argc, argv, i);
+      if (v == nullptr) {
+        return vr::Status::invalid_argument(
+            "--orbbec needs a camera serial, or 'any'");
+      }
+#if defined(VR_EXAMPLE_WITH_ORBBEC)
+      opt.orbbec = v;
+#else
+      return vr::Status::invalid_argument(
+          "--orbbec needs a build configured with -DVR_WITH_ORBBEC=ON");
+#endif
     } else if (a == "--cam-params") {
       const char* v = arg_value(argc, argv, i);
       if (v == nullptr)
@@ -145,15 +175,18 @@ vr::Result<Options> parse_args(int argc, char** argv) {
     } else if (a == "--min-depth") {
       if (!need(opt.min_depth))
         return vr::Status::invalid_argument("--min-depth");
+      opt.depth_range_given = true;
     } else if (a == "--max-depth") {
       if (!need(opt.max_depth))
         return vr::Status::invalid_argument("--max-depth");
+      opt.depth_range_given = true;
     } else if (a == "--max-weight") {
       if (!need(opt.max_weight))
         return vr::Status::invalid_argument("--max-weight");
     } else if (a == "--max-frames") {
       if (!need_int(opt.max_frames))
         return vr::Status::invalid_argument("--max-frames");
+      opt.max_frames_given = true;
     } else if (a == "--stride") {
       if (!need_int(opt.stride))
         return vr::Status::invalid_argument("--stride");
@@ -173,12 +206,29 @@ vr::Result<Options> parse_args(int argc, char** argv) {
       return vr::Status::invalid_argument("unexpected argument: " + a);
     }
   }
-  if (opt.scene_dir.empty()) {
+  if (opt.scene_dir.empty() && opt.orbbec.empty()) {
     return vr::Status::invalid_argument(
-        "usage: fuse_replica <scene_dir> [-o out.ply] [--share-vertices] "
+        "usage: fuse_replica (<scene_dir> | --orbbec <serial|any>) "
+        "[-o out.ply] [--share-vertices] "
         "[--device-extract] [--incremental] [--dirty-every n] "
         "[--voxel m] "
         "[--max-frames n] [--stride n] [--max-depth m] [--preload]");
+  }
+  if (!opt.orbbec.empty()) {
+    // The replay's knobs have no meaning against a camera, and taking one
+    // silently would run something other than what was asked for.
+    if (!opt.scene_dir.empty()) {
+      return vr::Status::invalid_argument(
+          "--orbbec replaces <scene_dir>; give one or the other");
+    }
+    if (opt.preload || opt.stride != 1 || !opt.cam_params.empty()) {
+      return vr::Status::invalid_argument(
+          "--preload, --stride and --cam-params select from a Replica "
+          "sequence; a live camera takes none of them");
+    }
+    // A camera never runs out, so a live run needs an end of its own.
+    if (!opt.max_frames_given) opt.max_frames = 300;
+    if (!opt.out_given) opt.out = "fuse_orbbec.ply";
   }
   // --incremental only exists on the device path, so it turns it on rather than
   // being ignored beside it. Ignoring it was worse than it looks: the tracking
@@ -199,7 +249,7 @@ vr::Result<Options> parse_args(int argc, char** argv) {
         "--dirty-every and --incremental both consume the integrator's dirty "
         "flags and reset them; run one or the other");
   }
-  if (opt.cam_params.empty()) {
+  if (opt.cam_params.empty() && opt.orbbec.empty()) {
     opt.cam_params = opt.scene_dir + "/../cam_params.json";
   }
   if (opt.stride < 1) opt.stride = 1;
@@ -264,21 +314,57 @@ vr::Status run(const Options& opt) {
   // The sequence arrives through the sensor contract: frame selection and the
   // depth gate are the capture's options, the intrinsics and pose ride on each
   // frame, and the loop below never learns it is reading a disk. A live source
-  // replaces this one construction.
-  vr_example::ReplicaCapture::Options capture_options;
-  capture_options.frame_limit = static_cast<std::size_t>(opt.max_frames);
-  capture_options.frame_stride = static_cast<std::size_t>(opt.stride);
-  capture_options.min_depth = opt.min_depth;
-  capture_options.max_depth = opt.max_depth;
-  VR_ASSIGN(vr_example::ReplicaCapture replica,
-            vr_example::ReplicaCapture::open(opt.scene_dir, opt.cam_params,
-                                             capture_options));
-  const vr::ColorCameraParams& cam = replica.color_camera();
-  std::printf(
-      "capture: %zu frames to play, %ux%u @ fx=%.1f fy=%.1f cx=%.1f cy=%.1f, "
-      "depth scale %.1f\n",
-      replica.frame_count(), cam.width, cam.height, cam.fx, cam.fy, cam.cx,
-      cam.cy, replica.depth_scale());
+  // replaces this one construction -- --orbbec is that replacement.
+  std::optional<vr_example::ReplicaCapture> replica;
+#if defined(VR_EXAMPLE_WITH_ORBBEC)
+  std::optional<sensor::OrbbecCapture> orbbec;
+#endif
+  sensor::ICameraCapture* source = nullptr;
+  if (!opt.orbbec.empty()) {
+#if defined(VR_EXAMPLE_WITH_ORBBEC)
+    sensor::OrbbecCapture::Options capture_options;
+    capture_options.serial = opt.orbbec == "any" ? "" : opt.orbbec;
+    if (opt.depth_range_given) {
+      capture_options.min_depth = opt.min_depth;
+      capture_options.max_depth = opt.max_depth;
+    }
+    VR_ASSIGN(sensor::OrbbecCapture opened,
+              sensor::OrbbecCapture::open(capture_options));
+    orbbec.emplace(std::move(opened));
+    const sensor::OrbbecDeviceInfo& info = orbbec->device_info();
+    const vr::ColorCameraParams& cam = orbbec->color_camera();
+    std::printf(
+        "capture: %s %s (%s %s, sync %s), %d frames to fuse, %ux%u @ "
+        "fx=%.1f fy=%.1f cx=%.1f cy=%.1f, depth registered to colour\n",
+        info.name.c_str(), info.serial.c_str(), info.connection_type.c_str(),
+        info.ip_address.c_str(), sensor::to_string(info.sync_mode),
+        opt.max_frames, cam.width, cam.height, cam.fx, cam.fy, cam.cx, cam.cy);
+    if (sensor::waits_for_primary(info.sync_mode)) {
+      std::printf(
+          "  note: this camera is a sync %s -- it delivers frames only while "
+          "its primary streams\n",
+          sensor::to_string(info.sync_mode));
+    }
+    source = &*orbbec;
+#endif
+  } else {
+    vr_example::ReplicaCapture::Options capture_options;
+    capture_options.frame_limit = static_cast<std::size_t>(opt.max_frames);
+    capture_options.frame_stride = static_cast<std::size_t>(opt.stride);
+    capture_options.min_depth = opt.min_depth;
+    capture_options.max_depth = opt.max_depth;
+    VR_ASSIGN(vr_example::ReplicaCapture opened,
+              vr_example::ReplicaCapture::open(opt.scene_dir, opt.cam_params,
+                                               capture_options));
+    replica.emplace(std::move(opened));
+    const vr::ColorCameraParams& cam = replica->color_camera();
+    std::printf(
+        "capture: %zu frames to play, %ux%u @ fx=%.1f fy=%.1f cx=%.1f "
+        "cy=%.1f, depth scale %.1f\n",
+        replica->frame_count(), cam.width, cam.height, cam.fx, cam.fy, cam.cx,
+        cam.cy, replica->depth_scale());
+    source = &*replica;
+  }
 
   // --- Volume + pipeline ---
   vol::VoxelGridParams grid{};
@@ -321,25 +407,25 @@ vr::Status run(const Options& opt) {
   // timed region below: streaming spends ~75% of the loop in JPEG/PNG decode,
   // so preloading is what makes the reported fps a measure of fusion rather
   // than of the reader.
-  if (opt.preload) {
+  if (opt.preload && replica) {
     // Announce the cost before spending it: --preload has no frame cap of its
     // own, so a long sequence can quietly ask for many gigabytes.
-    std::printf(
-        "preloading %.0f MB...\n",
-        static_cast<double>(replica.preload_bytes_projected()) / (1024 * 1024));
+    std::printf("preloading %.0f MB...\n",
+                static_cast<double>(replica->preload_bytes_projected()) /
+                    (1024 * 1024));
     const auto preload_start = std::chrono::steady_clock::now();
-    VR_ASSIGN(const std::size_t cached_frames, replica.preload());
+    VR_ASSIGN(const std::size_t cached_frames, replica->preload());
     const double preload_seconds =
         std::chrono::duration<double>(std::chrono::steady_clock::now() -
                                       preload_start)
             .count();
     std::printf("preloaded %zu frames (%.0f MB) in %.1fs\n", cached_frames,
-                static_cast<double>(replica.preloaded_bytes()) / (1024 * 1024),
+                static_cast<double>(replica->preloaded_bytes()) / (1024 * 1024),
                 preload_seconds);
   }
 
   // From here on the source is the contract, not the dataset.
-  sensor::ICameraCapture& capture = replica;
+  sensor::ICameraCapture& capture = *source;
   VR_TRY(capture.start());
 
   const auto t_start = std::chrono::steady_clock::now();
@@ -490,7 +576,16 @@ vr::Status run(const Options& opt) {
         std::printf("  fused %zu frames, %zu triangles so far\n", fused, tris);
       }
     }
+
+    // A replay ends when it is exhausted; a camera never is, so a live run
+    // ends on its frame count.
+    if (!opt.orbbec.empty() &&
+        fused >= static_cast<std::size_t>(opt.max_frames)) {
+      break;
+    }
   }
+  // Release the camera before the final extract rather than at scope exit.
+  capture.stop();
 
   if (remeshes > 0) {
     const double n = static_cast<double>(remeshes);
