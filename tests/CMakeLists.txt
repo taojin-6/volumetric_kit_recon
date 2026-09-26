@@ -314,8 +314,14 @@ if(VR_WITH_ORBBEC)
   # SDK. No camera, so it runs on every leg that builds the driver.
   # frame_conversion.hpp is internal (non-installed) and names SDK types, so the
   # test reaches it by include path and takes the SDK's headers from its target.
-  add_executable(recon_sensor_orbbec_conversion_test
-                 sensor_orbbec_conversion_test.cpp)
+  # Its functions are not exported -- the library hides every symbol it does not
+  # mark -- so the test compiles their source itself rather than linking a
+  # shared build's hidden copies; the library supplies only what it exports.
+  add_executable(
+    recon_sensor_orbbec_conversion_test
+    sensor_orbbec_conversion_test.cpp
+    ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec/frame_conversion.cpp
+  )
   target_link_libraries(
     recon_sensor_orbbec_conversion_test
     PRIVATE volumetric_kit::recon_sensor_orbbec ob::OrbbecSDK)

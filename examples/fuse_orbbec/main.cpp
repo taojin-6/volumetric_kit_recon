@@ -13,9 +13,11 @@
 //
 // The camera sits at the world origin (identity pose), so the volume is what
 // one fixed view sees, averaged over the run. Without --serial it opens the
-// only camera discovery finds. A camera wired as a rig's sync secondary
-// delivers nothing unless its primary streams; the run says so, and gives up
-// after ten seconds without a frame rather than waiting forever.
+// only camera discovery finds -- after waiting out the whole discovery window,
+// since a second camera may answer late; --serial skips that wait. A camera
+// wired as a rig's sync secondary delivers nothing unless its primary streams;
+// the run says so, and gives up after ten seconds without a frame rather than
+// waiting forever.
 
 #include <chrono>
 #include <cmath>
@@ -149,10 +151,13 @@ vr::Status run(const Options& opt) {
   capture_options.serial = opt.serial;
   if (opt.min_depth) capture_options.min_depth = *opt.min_depth;
   if (opt.max_depth) capture_options.max_depth = *opt.max_depth;
-  VR_ASSIGN(sensor::OrbbecCapture camera,
+  VR_ASSIGN(sensor::OrbbecCapture opened,
             sensor::OrbbecCapture::open(capture_options));
-  const sensor::OrbbecDeviceInfo& info = camera.device_info();
-  const vr::ColorCameraParams& cam = camera.color_camera();
+  // Held in an optional so the run can destroy it before the extract: stop()
+  // ends the streams but keeps the camera -- exclusively -- for a restart.
+  std::optional<sensor::OrbbecCapture> camera(std::move(opened));
+  const sensor::OrbbecDeviceInfo info = camera->device_info();
+  const vr::ColorCameraParams cam = camera->color_camera();
   std::printf(
       "camera: %s %s, firmware %s, %s %s, sync %s\n"
       "  %ux%u @ fx=%.1f fy=%.1f cx=%.1f cy=%.1f (depth registered to "
@@ -164,7 +169,7 @@ vr::Status run(const Options& opt) {
   const bool secondary = sensor::waits_for_primary(info.sync_mode);
   if (secondary) {
     std::printf(
-        "  note: a sync %s delivers frames only while its primary streams\n",
+        "  note: a sync %s delivers frames only on another camera's signal\n",
         sensor::to_string(info.sync_mode));
   }
 
@@ -175,27 +180,16 @@ vr::Status run(const Options& opt) {
   VR_ASSIGN(vr::Allocator allocator,
             vr::Allocator::create(instance.handle(), device));
 
-  vol::VoxelGridParams grid{};
-  grid.voxel_size = opt.voxel;
-  grid.block_size = 8;
-  grid.voxels_per_block = 512;
-  grid.trunc_dist = opt.trunc;
-  grid.bucket_size = 8;
-  grid.num_buckets = 16384;  // grows on overflow (fuse_frame.hpp)
-  grid.num_blocks = grid.bucket_size * grid.num_buckets;
-  grid.max_chain = 128;
-  const vol::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
-                                      {"weight", sizeof(float)},
-                                      {"color", sizeof(std::uint32_t)}};
-  VR_ASSIGN(vol::VoxelBlockGrid volume,
-            vol::VoxelBlockGrid::create(device, allocator, grid, attrs, 3));
+  VR_ASSIGN(
+      vol::VoxelBlockGrid volume,
+      vr_example::create_fusion_grid(device, allocator, opt.voxel, opt.trunc));
   VR_ASSIGN(tsdf::TsdfIntegrator integrator,
             tsdf::TsdfIntegrator::create(device, allocator, {}));
   VR_ASSIGN(mesh::MarchingCubes extractor,
             mesh::MarchingCubes::create(device, allocator, {}));
 
   // --- Fuse ---
-  sensor::ICameraCapture& capture = camera;
+  sensor::ICameraCapture& capture = *camera;
   VR_TRY(capture.start());
   vr::StageMetrics stage_totals;
   int fused = 0;
@@ -209,9 +203,12 @@ vr::Status run(const Options& opt) {
       // camera that is not coming, and saying which kind beats a hang.
       if (std::chrono::steady_clock::now() - last_frame > kSilenceLimit) {
         return vr::Status::io_error(
-            "no frame from camera " + info.serial + " in 10 s" +
-            (secondary ? std::string(" -- it is a sync secondary; start its "
-                                     "primary")
+            "no frame from camera " + info.serial + " in " +
+            std::to_string(kSilenceLimit.count()) + " s" +
+            (secondary ? std::string(" -- it is a sync ") +
+                             sensor::to_string(info.sync_mode) +
+                             ", which captures only on another camera's "
+                             "signal; start the camera that drives it"
                        : std::string()));
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -230,16 +227,18 @@ vr::Status run(const Options& opt) {
   const double secs =
       std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start)
           .count();
-  // Release the camera before the extract rather than at scope exit.
-  const sensor::OrbbecCaptureStats st = camera.stats();
-  capture.stop();
+  // Release the camera before the extract rather than at scope exit, so
+  // another process can open it while this one meshes and writes.
+  const sensor::OrbbecCaptureStats st = camera->stats();
+  camera.reset();
 
   std::printf(
       "camera: %llu pairs received, %llu fused, %llu replaced before a poll "
-      "took them\n",
+      "took them, %llu skipped as unprocessable\n",
       static_cast<unsigned long long>(st.received),
       static_cast<unsigned long long>(st.delivered),
-      static_cast<unsigned long long>(st.dropped));
+      static_cast<unsigned long long>(st.dropped),
+      static_cast<unsigned long long>(st.failed));
   std::printf("stages    per fused frame, mean over %d frames\n", fused);
   for (const vr::StageRow& row : stage_totals.rows()) {
     if (row.has_gpu) {

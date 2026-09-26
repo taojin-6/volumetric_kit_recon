@@ -43,22 +43,33 @@ namespace volumetric_kit::recon::sensor {
 /// What it changes for a caller is whether frames arrive on their own; see
 /// @ref waits_for_primary.
 enum class OrbbecSyncMode {
-  FreeRun,             ///< Not synchronised; streams on its own clock.
-  Standalone,          ///< Not synchronised; streams on its own clock.
-  Primary,             ///< Streams on its own and drives the sync line.
-  Secondary,           ///< Captures only on the primary's sync signal.
-  SecondarySynced,     ///< As @ref Secondary; the Femto Mega rig's secondaries.
-  SoftwareTriggering,  ///< Captures only when software triggers it.
-  HardwareTriggering,  ///< Captures only on an external trigger.
-  Other,               ///< A mode this driver does not name.
+  FreeRun,     ///< Not synchronised; streams on its own clock.
+  Standalone,  ///< Not synchronised; streams on its own clock.
+  Primary,     ///< Streams on its own and drives the sync line.
+  Secondary,   ///< Captures only on the primary's sync signal.
+  /// The Femto Mega rig's secondaries. The SDK documents this mode as
+  /// capturing on its own and merely re-timing to a signal when one arrives;
+  /// the rig's secondaries do not -- opened alone, one produced a single frame
+  /// set in ~6 s (the 2026-09-26 measurement) -- so this driver treats it as
+  /// @ref Secondary.
+  SecondarySynced,
+  /// Captures only when the host sends a trigger. This driver sends none, so
+  /// @ref OrbbecCapture::open refuses a camera in this mode.
+  SoftwareTriggering,
+  /// Captures only on a trigger another camera sends down the sync line.
+  HardwareTriggering,
+  Other,  ///< A mode this driver does not name.
 };
 
 /// @param mode  A camera's reported sync mode.
-/// @return `true` when the camera produces frames only on a signal from
-///         elsewhere -- a primary camera that is streaming, or a trigger. Such
+/// @return `true` when the camera produces frames only on another camera's
+///         signal -- a streaming primary, or the camera that triggers it. Such
 ///         a camera, started on its own, delivers nothing, and from the
 ///         consumer's side that is indistinguishable from a camera that is
 ///         merely slow: @ref OrbbecCapture::poll keeps returning no frame.
+///         `false` for @ref OrbbecSyncMode::SoftwareTriggering, which waits
+///         for the host rather than another camera, and which
+///         @ref OrbbecCapture::open refuses.
 VR_SENSOR_ORBBEC_API bool waits_for_primary(OrbbecSyncMode mode) noexcept;
 
 /// @return A stable lowercase name for @p mode (`"primary"`,
@@ -85,6 +96,11 @@ struct OrbbecCaptureStats {
   /// Pairs replaced by a newer one before any poll took them -- the contract's
   /// "dropped, not queued", counted.
   std::uint64_t dropped = 0;
+  /// Pairs a poll took and could not hand out: skipped because the SDK could
+  /// not process them, or refused with an error. Every pair is counted once,
+  /// so `delivered + dropped + failed <= received`, the difference being a
+  /// pair still waiting (or discarded by @ref OrbbecCapture::stop).
+  std::uint64_t failed = 0;
 };
 
 /// @brief One Orbbec RGB-D camera, polled for posed frames with depth
@@ -119,6 +135,12 @@ struct OrbbecCaptureStats {
 /// cleanly and then delivers nothing; @ref device_info says which role the
 /// camera has, so a caller can say why before it waits.
 ///
+/// **Disconnects.** A camera the SDK reports removed never streams again
+/// through this object -- its device handle is gone, and a camera that comes
+/// back is a new device -- so from then on @ref poll and @ref start return
+/// @ref Status::Code::IoError and @ref exhausted is `true`. Open a new capture
+/// to use it again.
+///
 /// @warning Not thread-safe: open, start, poll and stop from one thread. The
 ///          SDK delivers frames on a thread of its own, which this class
 ///          hands over internally.
@@ -129,12 +151,16 @@ class VR_SENSOR_ORBBEC_API OrbbecCapture final : public ICameraCapture {
     /// Serial number of the camera to open. Empty opens the only camera found
     /// -- and is refused when discovery finds more than one, since which of
     /// several a first query happens to list is not a choice worth making for
-    /// the caller.
+    /// the caller. Cameras answer discovery seconds apart, so a query listing
+    /// one is no proof it is alone: empty waits out the whole
+    /// @ref discovery_timeout_ms before it opens anything, and naming the
+    /// camera is what skips that wait.
     std::string serial;
     /// How long @ref open waits for the camera to appear. An Ethernet camera
     /// can take seconds to answer discovery from cold (the 2026-09-24
     /// decision measured a full ~4 s window with no answer), so one query is
-    /// not proof of absence; @ref open re-queries until this runs out.
+    /// not proof of absence; @ref open re-queries until this runs out, or
+    /// until the named camera answers.
     std::uint32_t discovery_timeout_ms = 8000;
     /// Depth stream mode. The default is the Femto Mega's narrow-field
     /// unbinned mode; 320x288, 512x512 and 1024x1024 (15 fps) are the others.
@@ -172,15 +198,17 @@ class VR_SENSOR_ORBBEC_API OrbbecCapture final : public ICameraCapture {
   ///           describe a stream -- a zero size or rate, a depth range that is
   ///           negative, non-finite or empty, a pose that is not finite --
   ///           checked before the SDK is touched; or an empty
-  ///           @ref Options::serial with more than one camera found;
+  ///           @ref Options::serial with more than one camera answering
+  ///           within the discovery window;
   ///         - @ref Status::Code::NotFound if no camera (or not the named one)
   ///           answered within @ref Options::discovery_timeout_ms, naming the
   ///           cameras that did;
   ///         - @ref Status::Code::Unsupported if the camera has no depth or
   ///           colour mode matching the options (the modes it offers are
-  ///           listed), or reports its image mirrored or flipped -- a mirrored
-  ///           frame with un-mirrored intrinsics reconstructs a mirror image
-  ///           without a word;
+  ///           listed), reports its image mirrored, flipped or rotated -- a
+  ///           mirrored frame with un-mirrored intrinsics reconstructs a
+  ///           mirror image without a word -- or is in software-triggering
+  ///           mode, which waits for a trigger this driver never sends;
   ///         - @ref Status::Code::IoError for any other SDK failure, with the
   ///           SDK's message.
   static Result<OrbbecCapture> open(const Options& options);
@@ -205,11 +233,16 @@ class VR_SENSOR_ORBBEC_API OrbbecCapture final : public ICameraCapture {
 
   /// @brief Start both streams. Idempotent: starting a running capture is OK.
   /// @return OK once streaming; @ref Status::Code::InvalidArgument on a
-  ///         moved-from capture; @ref Status::Code::IoError if the SDK refuses.
+  ///         moved-from capture; @ref Status::Code::IoError if the SDK refuses
+  ///         or the camera has disconnected.
   Status start() override;
 
   /// @brief Stop both streams and drop the frame the last @ref poll handed
   ///        out. Idempotent, and safe on a capture that never started.
+  ///
+  /// The camera stays open -- and, the cameras being exclusive, held -- so a
+  /// later @ref start resumes without rediscovering it. Destroying the
+  /// capture is what releases it to another process.
   void stop() noexcept override;
 
   /// @brief Take the newest synchronised pair not yet handed out, processed as
@@ -218,21 +251,31 @@ class VR_SENSOR_ORBBEC_API OrbbecCapture final : public ICameraCapture {
   /// The frame borrows storage this object reuses: it is valid until the next
   /// @ref poll or @ref stop, including a poll that returns no frame.
   ///
-  /// @return The frame; an empty optional when no new pair has arrived (or the
-  ///         capture is not started); or @ref Status::Code::IoError if the
-  ///         camera disconnected or a pair could not be processed, and
+  /// A pair the SDK fails to process -- a filter handing back nothing, a throw
+  /// on one frame -- is skipped and counted in @ref OrbbecCaptureStats::failed
+  /// rather than reported: one bad pair on a network link must not end a
+  /// capture. A run of them is an error, since a camera whose every pair
+  /// fails would otherwise look like one that is merely slow.
+  ///
+  /// @return The frame; an empty optional when no new pair has arrived, the
+  ///         capture is not started, or the pair was skipped; or
+  ///         @ref Status::Code::IoError if the camera disconnected, a pair
+  ///         does not match the stream @ref open negotiated, or ~a second's
+  ///         worth of pairs in a row could not be processed; and
   ///         @ref Status::Code::InvalidArgument on a moved-from capture.
   Result<std::optional<CapturedFrame>> poll() override;
 
-  /// @return `true` only on a moved-from capture, which can never produce a
-  ///         frame. A live camera is never exhausted, only stopped.
-  bool exhausted() const noexcept override { return impl_ == nullptr; }
+  /// @return `true` on a moved-from capture and once the camera has
+  ///         disconnected, neither of which can produce another frame. A
+  ///         connected camera is never exhausted, only stopped.
+  bool exhausted() const noexcept override;
 
  private:
   struct Impl;
   explicit OrbbecCapture(std::unique_ptr<Impl> impl) noexcept;
-  // The SDK delivers frames on its own thread through a callback that holds a
-  // pointer to the Impl, so the Impl must stay put while this object moves.
+  // Behind a pointer so no SDK type reaches this header, and so the frame a
+  // poll handed out, which borrows the Impl's storage, survives a move. The
+  // SDK's callbacks hold only a shared part of it (see the .cpp).
   std::unique_ptr<Impl> impl_;
 };
 

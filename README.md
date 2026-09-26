@@ -74,7 +74,9 @@ VR_ORBBEC_TEST_SERIAL=<serial> ctest --test-dir build -R orbbec
 ```
 
 A camera wired as a sync secondary streams only while its primary does; name
-a primary or standalone camera for a single-camera run.
+a primary or standalone camera for a single-camera run. Without `--serial` the
+example opens the only camera that answers, after waiting out the whole
+discovery window (8 s), since another may answer late.
 
 ## License
 

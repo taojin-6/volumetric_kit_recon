@@ -281,21 +281,9 @@ vr::Status run(const Options& opt) {
       cam.cy, replica.depth_scale());
 
   // --- Volume + pipeline ---
-  vol::VoxelGridParams grid{};
-  grid.voxel_size = opt.voxel;
-  grid.block_size = 8;
-  grid.voxels_per_block = 512;
-  grid.trunc_dist = opt.trunc;
-  grid.bucket_size = 8;
-  grid.num_buckets = opt.num_buckets;
-  grid.num_blocks = grid.bucket_size * grid.num_buckets;
-  grid.max_chain = 128;
-
-  const vol::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
-                                      {"weight", sizeof(float)},
-                                      {"color", sizeof(std::uint32_t)}};
   VR_ASSIGN(vol::VoxelBlockGrid volume,
-            vol::VoxelBlockGrid::create(device, allocator, grid, attrs, 3));
+            vr_example::create_fusion_grid(device, allocator, opt.voxel,
+                                           opt.trunc, opt.num_buckets));
   // Dirty-block tracking is opt-in and only --dirty-every asks for it: with it
   // off the integrator allocates no per-block flag array (num_blocks * 4 bytes,
   // doubling with every map grow) and its kernel stores no flags, so the
@@ -495,7 +483,7 @@ vr::Status run(const Options& opt) {
   if (remeshes > 0) {
     const double n = static_cast<double>(remeshes);
     const double cells = static_cast<double>(last_rt.active_blocks) *
-                         static_cast<double>(grid.voxels_per_block);
+                         static_cast<double>(volume.grid().voxels_per_block);
     std::printf(
         "remesh    %zu extracts, mean %.2f ms  (%s)\n"
         "  phases  compact %.2f  arena %.2f  dispatch %.2f  read %.2f\n"
@@ -599,7 +587,7 @@ vr::Status run(const Options& opt) {
   // dominated by gathering cells that produce nothing, which points somewhere
   // completely different from a kernel dominated by its output.
   const double cells = static_cast<double>(t.active_blocks) *
-                       static_cast<double>(grid.voxels_per_block);
+                       static_cast<double>(volume.grid().voxels_per_block);
   std::printf(
       "extract   %.1f ms in %u dispatch(es)\n"
       "  phases  compact %.2f  inputs %.2f  arena %.2f  desc %.2f  "

@@ -648,20 +648,28 @@ arbitrary; it usually isn't.
   the packed words, ~3.6 ms on the polling thread; both of a frame's cameras
   are the colour camera, posed by `Options::cam_to_world`, and the first pair
   of each start is checked against that claim. It reads the camera's rig sync
-  role (`waits_for_primary`: a secondary delivers nothing without its
-  primary) and never writes it, refuses a mirrored/flipped/rotated image, and
-  waits out Ethernet discovery. Its hardware test opens only the camera
+  role (`waits_for_primary`: a secondary delivers nothing without another
+  camera's signal — `SECONDARY_SYNCED` included, measured against the SDK's
+  own description) and never writes it, refuses a mirrored/flipped/rotated
+  image and a software-triggered camera, and waits out Ethernet discovery —
+  the *whole* window when no serial is named, since cameras answer seconds
+  apart and a list of one is no proof of one. Its SDK callbacks hold a shared
+  mailbox rather than the capture, since the SDK calls a callback after it
+  has been unregistered. A disconnect makes the capture `exhausted()`; a pair
+  the SDK fails on is skipped and counted (`stats().failed`), and only a run
+  of them is an error. Its hardware test opens only the camera
   `VR_ORBBEC_TEST_SERIAL` names, so no CI leg touches the rig.
 
-**Examples** (`examples/`). All three poll their frames through
-`sensor::ICameraCapture&` — the fuse loop never learns it is reading a disk —
-with `ReplicaCapture` as the source: frame cap, stride and the depth gate are
-its options, stamped on each frame it hands out, and its disk probe at `open`
+**Examples** (`examples/`). All four poll their frames through
+`sensor::ICameraCapture&` — the fuse loop never learns what is behind it. The
+three dataset examples take `ReplicaCapture` as the source: frame cap, stride
+and the depth gate are its options, stamped on each frame it hands out, and its disk probe at `open`
 visits only the frames those options select. An empty poll is retried after a
 millisecond until the source reports itself `exhausted()`, so a live driver
 in the same construction site waits and the replay ends. Each frame fuses
 through `examples/common/fuse_frame.hpp` (the one allocate-and-grow-then-
-integrate loop, carrying the frame's encoding declaration across), and a
+integrate loop, carrying the frame's encoding declaration across, into the one
+grid layout its `create_fusion_grid` builds), and a
 frame kept past the next poll — `fuse_render`'s keyframe, `fuse_viewer`'s
 newest fused frame for its final texture pass — is copied into an
 `RgbdFrame` of its own (`examples/common/rgbd_frame.hpp`, the type the
@@ -678,13 +686,16 @@ flags on a different cadence. Behind the off-by-default
 `VR_BUILD_VIEWER`: `fuse_render` writes a headless colour PNG (seam A — it
 builds two devices by design), and `fuse_viewer` opens a live window on one
 shared `VkDevice`, fusing on a background thread, drawing recon's buffers
-directly, and carrying the two-panel perf overlay. All three take `--preload`,
-which makes the loop measure compute rather than the JPEG/PNG decoder.
+directly, and carrying the two-panel perf overlay. The three dataset examples
+take `--preload`, which makes the loop measure compute rather than the
+JPEG/PNG decoder.
 The live counterpart is its own example, not a `fuse_replica` flag:
 **`fuse_orbbec`** (built with `VR_WITH_ORBBEC`) polls an `OrbbecCapture`
 through the same contract, fuses each frame through the same
 `fuse_frame.hpp`, and writes a PLY after `--frames` frames (300 by default),
-giving up with the reason after 10 s without a frame.
+giving up with the reason after 10 s without a frame. It destroys the capture
+before the extract rather than merely stopping it, since `stop()` keeps the
+camera held for a restart.
 
 **Next.** **Incremental mesh extraction has landed, all three stages** —
 `MarchingCubes::extract_device_incremental`, over the span table of the

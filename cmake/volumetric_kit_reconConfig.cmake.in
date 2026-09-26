@@ -26,10 +26,31 @@ find_dependency(Vulkan)
 # the Orbbec SDK privately -- but a static build still names ob::OrbbecSDK in
 # its link interface, and a shared one needs the SDK's library at link time, so
 # the imported target must exist. Found the way the build found it
-# (cmake/vr_orbbec.cmake): the SDK's package config sits in <sdk>/lib, and a
-# consumer points at the SDK with OrbbecSDK_ROOT.
+# (cmake/vr_orbbec.cmake): the SDK's package config sits in <sdk>/lib, a
+# consumer may point at another SDK with OrbbecSDK_ROOT, and otherwise the one
+# this package was built against is the hint -- so a consumer that never links
+# the driver needs no SDK setting of its own. find_package cannot read the
+# SDK's version file (named OrbbecSDKVersion.cmake), so the build's rule is
+# repeated here: the release built against, or a newer one of its major.
 if(@VR_WITH_ORBBEC@)
-  find_dependency(OrbbecSDK CONFIG PATH_SUFFIXES lib)
+  find_dependency(OrbbecSDK CONFIG PATH_SUFFIXES lib HINTS "@OrbbecSDK_DIR@")
+  file(STRINGS "${OrbbecSDK_DIR}/OrbbecSDKVersion.cmake" _vr_orbbec_version
+       REGEX "^set\\(PACKAGE_VERSION \"[0-9.]+\"\\)")
+  string(REGEX MATCH "[0-9]+\\.[0-9]+\\.[0-9]+" _vr_orbbec_version
+               "${_vr_orbbec_version}")
+  string(REGEX MATCH "^[0-9]+" _vr_orbbec_major "${_vr_orbbec_version}")
+  if(NOT _vr_orbbec_version
+     OR _vr_orbbec_version VERSION_LESS "@VR_ORBBEC_SDK_VERSION@"
+     OR NOT _vr_orbbec_major EQUAL "@VR_ORBBEC_SDK_VERSION_MAJOR@")
+    string(CONCAT ${CMAKE_FIND_PACKAGE_NAME}_NOT_FOUND_MESSAGE
+           "the Orbbec SDK at ${OrbbecSDK_DIR} is version "
+           "'${_vr_orbbec_version}', but this package was built against "
+           "@VR_ORBBEC_SDK_VERSION@ and needs it or a newer "
+           "@VR_ORBBEC_SDK_VERSION_MAJOR@.x release; point OrbbecSDK_ROOT at "
+           "one")
+    set(${CMAKE_FIND_PACKAGE_NAME}_FOUND FALSE)
+    return()
+  endif()
 endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/volumetric_kit_reconTargets.cmake")

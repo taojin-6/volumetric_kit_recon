@@ -3,6 +3,7 @@
 
 #include "volumetric_kit/recon/sensor/orbbec/orbbec_capture.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -36,17 +37,43 @@ const char* or_empty(const char* s) { return s != nullptr ? s : ""; }
 // spaces out the retries.
 constexpr std::chrono::milliseconds kDiscoveryRetry{250};
 
+// Pairs in a row poll() may skip before it calls the camera broken: about a
+// second at the 30 fps default. See OrbbecCapture::poll.
+constexpr std::uint32_t kMaxFailedPairsInARow = 30;
+
+// How far the SDK's intrinsics may sit from the camera a frame is stamped with
+// before the first-pair check refuses them, in pixels.
+constexpr float kIntrinsicsTolerance = 1e-3f;
+
+std::string join(const std::vector<std::string>& items) {
+  std::string out;
+  for (const std::string& item : items) {
+    if (!out.empty()) out += ", ";
+    out += item;
+  }
+  return out;
+}
+
 // "640x576@30 Y16, 320x288@30 Y16, ..." -- what a camera offers, for the error
-// that says the requested mode is not among them.
+// that says the requested mode is not among them. It runs while that error is
+// being built, so it must not throw one of its own over it: an entry that is
+// not a video mode is skipped, and a list the SDK fails to read out is cut
+// short and says so.
 std::string list_modes(const ob::StreamProfileList& profiles) {
   std::string out;
-  for (std::uint32_t i = 0; i < profiles.getCount(); ++i) {
-    const auto video = profiles.getProfile(i)->as<ob::VideoStreamProfile>();
-    if (!out.empty()) out += ", ";
-    out += std::to_string(video->getWidth()) + "x" +
-           std::to_string(video->getHeight()) + "@" +
-           std::to_string(video->getFps()) + " " +
-           ob::TypeHelper::convertOBFormatTypeToString(video->getFormat());
+  try {
+    for (std::uint32_t i = 0; i < profiles.getCount(); ++i) {
+      const auto profile = profiles.getProfile(i);
+      if (!profile->is<ob::VideoStreamProfile>()) continue;
+      const auto video = profile->as<ob::VideoStreamProfile>();
+      if (!out.empty()) out += ", ";
+      out += std::to_string(video->getWidth()) + "x" +
+             std::to_string(video->getHeight()) + "@" +
+             std::to_string(video->getFps()) + " " +
+             ob::TypeHelper::convertOBFormatTypeToString(video->getFormat());
+    }
+  } catch (const std::exception&) {
+    out += out.empty() ? "(none it could list)" : ", ... (the rest unreadable)";
   }
   return out;
 }
@@ -88,13 +115,57 @@ Status check_orientation(ob::Device& device) {
   return {};
 }
 
+// What the SDK's threads write and the polling thread reads. Shared, and
+// captured by value in both SDK callbacks, because neither callback is
+// guaranteed gone when the capture is: the SDK invokes a *copy* of the
+// device-changed callback after releasing its own lock, so unregistering does
+// not wait for a call already running, and a pipeline stop that throws may
+// leave the SDK holding the frame callback. Whichever lets go last frees it.
+struct Mailbox {
+  std::mutex mutex;
+  std::shared_ptr<ob::FrameSet> pending;  // guarded by mutex
+  std::string fault;                      // guarded by mutex
+  // Set, after `fault`, once the camera is gone; lets exhausted() answer
+  // without the lock.
+  std::atomic<bool> disconnected{false};
+  std::atomic<std::uint64_t> received{0};
+  std::atomic<std::uint64_t> dropped{0};
+
+  void on_frameset(std::shared_ptr<ob::FrameSet> frameset) {
+    // Runs on the SDK's thread; it must never throw back into the SDK.
+    if (frameset == nullptr) return;
+    std::lock_guard<std::mutex> lock(mutex);
+    if (pending != nullptr) dropped.fetch_add(1, std::memory_order_relaxed);
+    pending = std::move(frameset);
+    received.fetch_add(1, std::memory_order_relaxed);
+  }
+
+  void on_devices_changed(const std::string& serial,
+                          const ob::DeviceList& removed) {
+    try {
+      for (std::uint32_t i = 0; i < removed.getCount(); ++i) {
+        if (serial == or_empty(removed.getSerialNumber(i))) {
+          std::lock_guard<std::mutex> lock(mutex);
+          fault = "OrbbecCapture: camera " + serial +
+                  " disconnected; open a new capture to use it again";
+          disconnected.store(true, std::memory_order_release);
+          return;
+        }
+      }
+    } catch (...) {
+      // A list the SDK cannot read out is not evidence of a disconnect.
+    }
+  }
+};
+
 }  // namespace
 
 bool waits_for_primary(OrbbecSyncMode mode) noexcept {
+  // Not SoftwareTriggering: that waits for the host, not another camera, and
+  // open() refuses it.
   switch (mode) {
     case OrbbecSyncMode::Secondary:
     case OrbbecSyncMode::SecondarySynced:
-    case OrbbecSyncMode::SoftwareTriggering:
     case OrbbecSyncMode::HardwareTriggering:
       return true;
     default:
@@ -128,6 +199,9 @@ struct OrbbecCapture::Impl {
   // Declared first so it is destroyed last: every SDK object below belongs to
   // this context.
   std::shared_ptr<ob::Context> context;
+  // Next, so a frame still pending in it is released while the context lives
+  // (unless a callback outlives this object; see Mailbox).
+  std::shared_ptr<Mailbox> mailbox = std::make_shared<Mailbox>();
   std::shared_ptr<ob::Device> device;
   std::shared_ptr<ob::Pipeline> pipeline;
   std::shared_ptr<ob::StreamProfile> depth_profile;
@@ -141,15 +215,13 @@ struct OrbbecCapture::Impl {
   ColorCameraParams color_camera{};
   DepthCameraParams depth_camera{};
 
-  // The SDK's frame thread -> the polling thread. The callback only swaps a
-  // shared pointer in; all processing happens in poll(), so a pair nobody
-  // polls costs nothing but the SDK's own decode.
-  std::mutex mutex;
-  std::shared_ptr<ob::FrameSet> pending;  // guarded by mutex
-  std::string fault;                      // guarded by mutex
-  std::atomic<std::uint64_t> received{0};
+  // The SDK's frame thread hands pairs over through `mailbox`; the callback
+  // only swaps a shared pointer in, and all processing happens in poll(), so a
+  // pair nobody polls costs nothing but the SDK's own decode. These two are
+  // the polling thread's own.
   std::atomic<std::uint64_t> delivered{0};
-  std::atomic<std::uint64_t> dropped{0};
+  std::atomic<std::uint64_t> failed{0};
+  std::uint32_t failed_in_a_row = 0;
 
   bool running = false;
   // Whether the first processed pair of this start has been checked against
@@ -175,41 +247,20 @@ struct OrbbecCapture::Impl {
     }
   }
 
-  void on_frameset(std::shared_ptr<ob::FrameSet> frameset) {
-    // Runs on the SDK's thread; it must never throw back into the SDK.
-    if (frameset == nullptr) return;
-    std::lock_guard<std::mutex> lock(mutex);
-    if (pending != nullptr) dropped.fetch_add(1, std::memory_order_relaxed);
-    pending = std::move(frameset);
-    received.fetch_add(1, std::memory_order_relaxed);
-  }
-
-  void on_devices_changed(const ob::DeviceList& removed) {
-    try {
-      for (std::uint32_t i = 0; i < removed.getCount(); ++i) {
-        if (info.serial == or_empty(removed.getSerialNumber(i))) {
-          std::lock_guard<std::mutex> lock(mutex);
-          fault = "OrbbecCapture: camera " + info.serial + " disconnected";
-          return;
-        }
-      }
-    } catch (...) {
-      // A list the SDK cannot read out is not evidence of a disconnect.
-    }
-  }
-
   void stop_streaming() noexcept {
     if (running) {
       try {
         pipeline->stop();
       } catch (...) {
         // Stopping is the destructor's fallback; a camera that already went
-        // away cannot be stopped twice, and there is no one to tell.
+        // away cannot be stopped twice, and there is no one to tell. The
+        // frame callback holds only the mailbox, so if the SDK keeps it, a
+        // late frame lands there rather than in this object.
       }
       running = false;
     }
-    std::lock_guard<std::mutex> lock(mutex);
-    pending.reset();
+    std::lock_guard<std::mutex> lock(mailbox->mutex);
+    mailbox->pending.reset();
   }
 };
 
@@ -235,47 +286,55 @@ Result<OrbbecCapture> OrbbecCapture::open(const Options& options) {
     impl->context->enableNetDeviceEnumeration(true);
 
     // Discovery: re-query until the camera answers or the window closes. One
-    // query is not proof of absence for an Ethernet camera.
+    // query is not proof of absence for an Ethernet camera -- and so a query
+    // listing one camera is not proof it is the only one. A named camera is
+    // opened the moment it answers; an unnamed one only once the whole window
+    // has passed with nothing else answering, since cameras answer seconds
+    // apart and the first to answer is not a choice worth making for the
+    // caller.
     const auto deadline =
         std::chrono::steady_clock::now() +
         std::chrono::milliseconds(options.discovery_timeout_ms);
-    std::string seen;
+    std::vector<std::string> answered;  // every serial any query listed
+    // Unnamed: the latest list that held the one camera, opened at the end.
+    std::shared_ptr<ob::DeviceList> sole;
     for (;;) {
       const auto list = impl->context->queryDeviceList();
       const std::uint32_t count = list->getCount();
-      seen.clear();
       for (std::uint32_t i = 0; i < count; ++i) {
-        if (!seen.empty()) seen += ", ";
-        seen += or_empty(list->getSerialNumber(i));
-      }
-      if (options.serial.empty()) {
-        if (count > 1) {
-          return Status::invalid_argument(
-              "OrbbecCapture: " + std::to_string(count) + " cameras found (" +
-              seen + "); name one in Options::serial");
+        const std::string serial = or_empty(list->getSerialNumber(i));
+        if (std::find(answered.begin(), answered.end(), serial) ==
+            answered.end()) {
+          answered.push_back(serial);
         }
-        if (count == 1) {
-          impl->device = list->getDevice(0);
+        if (!options.serial.empty() && serial == options.serial) {
+          impl->device = list->getDevice(i);
           break;
         }
-      } else {
-        for (std::uint32_t i = 0; i < count; ++i) {
-          if (options.serial == or_empty(list->getSerialNumber(i))) {
-            impl->device = list->getDevice(i);
-            break;
-          }
+      }
+      if (impl->device != nullptr) break;
+      if (options.serial.empty()) {
+        if (answered.size() > 1) {
+          return Status::invalid_argument(
+              "OrbbecCapture: " + std::to_string(answered.size()) +
+              " cameras answered (" + join(answered) +
+              "); name one in Options::serial");
         }
-        if (impl->device != nullptr) break;
+        if (count == 1) sole = list;
       }
       if (std::chrono::steady_clock::now() >= deadline) {
+        if (sole != nullptr) {
+          impl->device = sole->getDevice(0);
+          break;
+        }
         const std::string wanted = options.serial.empty()
                                        ? std::string("no camera")
                                        : "camera " + options.serial + " not";
-        return Status::not_found("OrbbecCapture: " + wanted + " found within " +
-                                 std::to_string(options.discovery_timeout_ms) +
-                                 " ms" +
-                                 (seen.empty() ? std::string(" (none answered)")
-                                               : " (answered: " + seen + ")"));
+        return Status::not_found(
+            "OrbbecCapture: " + wanted + " found within " +
+            std::to_string(options.discovery_timeout_ms) + " ms" +
+            (answered.empty() ? std::string(" (none answered)")
+                              : " (answered: " + join(answered) + ")"));
       }
       std::this_thread::sleep_for(kDiscoveryRetry);
     }
@@ -292,6 +351,13 @@ Result<OrbbecCapture> OrbbecCapture::open(const Options& options) {
         sync_modes != 0 ? orbbec::sync_mode_from(
                               impl->device->getMultiDeviceSyncConfig().syncMode)
                         : OrbbecSyncMode::Standalone;
+    if (impl->info.sync_mode == OrbbecSyncMode::SoftwareTriggering) {
+      return Status::unsupported(
+          "OrbbecCapture: camera " + impl->info.serial +
+          " is in software-triggering mode, which captures only when the host "
+          "sends a trigger, and this driver sends none. Set another sync "
+          "mode on the camera.");
+    }
 
     VR_TRY(check_orientation(*impl->device));
 
@@ -361,17 +427,19 @@ Result<OrbbecCapture> OrbbecCapture::open(const Options& options) {
     impl->undistort_color =
         std::make_shared<ob::UnDistortionFilter>(OB_STREAM_COLOR);
     impl->align_to_color = std::make_shared<ob::Align>(OB_STREAM_COLOR);
+    // Registered depth at the colour image's full size -- the frame's one
+    // resolution -- rather than at depth's own with colour's aspect ratio.
+    // Set rather than left to the SDK's default, which poll() depends on.
+    impl->align_to_color->setMatchTargetResolution(true);
 
-    Impl* raw = impl.get();
     impl->device_callback_id = impl->context->registerDeviceChangedCallback(
-        [raw](std::shared_ptr<ob::DeviceList> removed,
-              std::shared_ptr<ob::DeviceList> /*added*/) {
-          if (removed != nullptr) raw->on_devices_changed(*removed);
+        [mailbox = impl->mailbox, serial = impl->info.serial](
+            std::shared_ptr<ob::DeviceList> removed,
+            std::shared_ptr<ob::DeviceList> /*added*/) {
+          if (removed != nullptr) mailbox->on_devices_changed(serial, *removed);
         });
     impl->device_callback_registered = true;
-  } catch (const ob::Error& e) {
-    return sdk_error("opening the camera", e);
-  } catch (const std::exception& e) {
+  } catch (const std::exception& e) {  // ob::Error is one
     return sdk_error("opening the camera", e);
   }
   return OrbbecCapture(std::move(impl));
@@ -390,10 +458,16 @@ const ColorCameraParams& OrbbecCapture::color_camera() const noexcept {
 OrbbecCaptureStats OrbbecCapture::stats() const noexcept {
   OrbbecCaptureStats s;
   if (impl_ == nullptr) return s;
-  s.received = impl_->received.load(std::memory_order_relaxed);
+  s.received = impl_->mailbox->received.load(std::memory_order_relaxed);
   s.delivered = impl_->delivered.load(std::memory_order_relaxed);
-  s.dropped = impl_->dropped.load(std::memory_order_relaxed);
+  s.dropped = impl_->mailbox->dropped.load(std::memory_order_relaxed);
+  s.failed = impl_->failed.load(std::memory_order_relaxed);
   return s;
+}
+
+bool OrbbecCapture::exhausted() const noexcept {
+  return impl_ == nullptr ||
+         impl_->mailbox->disconnected.load(std::memory_order_acquire);
 }
 
 Status OrbbecCapture::start() {
@@ -402,15 +476,21 @@ Status OrbbecCapture::start() {
         "OrbbecCapture: start on a moved-from "
         "capture");
   }
-  if (impl_->running) return {};
   Impl* raw = impl_.get();
+  Mailbox& box = *raw->mailbox;
   {
-    std::lock_guard<std::mutex> lock(raw->mutex);
-    raw->pending.reset();
+    std::lock_guard<std::mutex> lock(box.mutex);
+    // Checked before `running`: a camera that went away while streaming is
+    // not "already started".
+    if (!box.fault.empty()) return Status::io_error(box.fault);
+    if (raw->running) return {};
+    box.pending.reset();
   }
-  raw->received = 0;
+  box.received = 0;
+  box.dropped = 0;
   raw->delivered = 0;
-  raw->dropped = 0;
+  raw->failed = 0;
+  raw->failed_in_a_row = 0;
   raw->first_pair_checked = false;
   try {
     auto config = std::make_shared<ob::Config>();
@@ -422,16 +502,15 @@ Status OrbbecCapture::start() {
     // Pair depth with the colour frame nearest it in time, rather than with
     // whichever arrived last.
     raw->pipeline->enableFrameSync();
-    raw->pipeline->start(config, [raw](std::shared_ptr<ob::FrameSet> fs) {
-      try {
-        raw->on_frameset(std::move(fs));
-      } catch (...) {
-        // Never throw into the SDK's thread.
-      }
-    });
-  } catch (const ob::Error& e) {
-    return sdk_error("starting camera " + raw->info.serial, e);
-  } catch (const std::exception& e) {
+    raw->pipeline->start(
+        config, [mailbox = raw->mailbox](std::shared_ptr<ob::FrameSet> fs) {
+          try {
+            mailbox->on_frameset(std::move(fs));
+          } catch (...) {
+            // Never throw into the SDK's thread.
+          }
+        });
+  } catch (const std::exception& e) {  // ob::Error is one
     return sdk_error("starting camera " + raw->info.serial, e);
   }
   raw->running = true;
@@ -455,12 +534,31 @@ Result<std::optional<CapturedFrame>> OrbbecCapture::poll() {
   Impl& s = *impl_;
   std::shared_ptr<ob::FrameSet> frameset;
   {
-    std::lock_guard<std::mutex> lock(s.mutex);
-    if (!s.fault.empty()) return Status::io_error(s.fault);
-    frameset = std::move(s.pending);
-    s.pending.reset();
+    std::lock_guard<std::mutex> lock(s.mailbox->mutex);
+    if (!s.mailbox->fault.empty()) return Status::io_error(s.mailbox->fault);
+    frameset = std::move(s.mailbox->pending);
+    s.mailbox->pending.reset();
   }
   if (!s.running || frameset == nullptr) return no_frame();
+
+  // From here the pair is this poll's: it is delivered, or counted as failed
+  // by one of these two. `refuse` is for a pair that contradicts the stream
+  // open() negotiated -- every pair after it would too; `skip` for one the SDK
+  // failed on, which the next may not be.
+  const auto refuse = [&s](Status why) {
+    s.failed.fetch_add(1, std::memory_order_relaxed);
+    return why;
+  };
+  const auto skip =
+      [&s](const std::string& why) -> Result<std::optional<CapturedFrame>> {
+    s.failed.fetch_add(1, std::memory_order_relaxed);
+    if (++s.failed_in_a_row < kMaxFailedPairsInARow) return no_frame();
+    return Status::io_error(
+        "OrbbecCapture: " + std::to_string(s.failed_in_a_row) +
+        " pairs in a row could not be processed; the "
+        "last: " +
+        why);
+  };
 
   const std::uint32_t width = s.color_camera.width;
   const std::uint32_t height = s.color_camera.height;
@@ -477,78 +575,77 @@ Result<std::optional<CapturedFrame>> OrbbecCapture::poll() {
     // the colour lens (the 2026-09-26 decision).
     const auto undistorted = s.undistort_color->process(frameset);
     if (undistorted == nullptr) {
-      return Status::io_error(
-          "OrbbecCapture: colour undistortion produced "
-          "no frame");
+      return skip("colour undistortion produced no frame");
     }
     const auto registered = s.align_to_color->process(undistorted);
     if (registered == nullptr) {
-      return Status::io_error(
-          "OrbbecCapture: depth registration produced "
-          "no frame");
+      return skip("depth registration produced no frame");
     }
     const auto pair = registered->as<ob::FrameSet>();
     const auto depth = pair->getDepthFrame();
     const auto color = pair->getColorFrame();
     if (depth == nullptr || color == nullptr) {
-      return Status::io_error(
-          "OrbbecCapture: a processed pair is missing its "
-          "depth or colour frame");
+      return skip("a processed pair is missing its depth or colour frame");
     }
     if (depth->getWidth() != width || depth->getHeight() != height ||
         color->getWidth() != width || color->getHeight() != height) {
-      return Status::io_error("OrbbecCapture: processed pair is depth " +
-                              std::to_string(depth->getWidth()) + "x" +
-                              std::to_string(depth->getHeight()) + ", colour " +
-                              std::to_string(color->getWidth()) + "x" +
-                              std::to_string(color->getHeight()) +
-                              "; expected both " + std::to_string(width) + "x" +
-                              std::to_string(height));
+      return refuse(Status::io_error(
+          "OrbbecCapture: processed pair is depth " +
+          std::to_string(depth->getWidth()) + "x" +
+          std::to_string(depth->getHeight()) + ", colour " +
+          std::to_string(color->getWidth()) + "x" +
+          std::to_string(color->getHeight()) + "; expected both " +
+          std::to_string(width) + "x" + std::to_string(height)));
     }
     if (depth->getFormat() != OB_FORMAT_Y16 ||
         depth->getDataSize() < pixels * sizeof(std::uint16_t)) {
-      return Status::io_error(
-          "OrbbecCapture: registered depth is not a full "
-          "Y16 image");
+      return refuse(
+          Status::io_error("OrbbecCapture: registered depth is not a full "
+                           "Y16 image"));
     }
     if (color->getFormat() != OB_FORMAT_RGB ||
         color->getDataSize() < pixels * 3) {
-      return Status::io_error(
-          "OrbbecCapture: undistorted colour is not a "
-          "full RGB image");
+      return refuse(
+          Status::io_error("OrbbecCapture: undistorted colour is not a "
+                           "full RGB image"));
     }
     if (!s.first_pair_checked) {
       // The frames are stamped with the camera computed at open; hold the SDK
       // to it once per start. Registration must have re-projected into these
-      // intrinsics, and the undistorted colour must carry no distortion.
+      // intrinsics, and undistortion must have kept them and dropped only the
+      // distortion -- a filter that re-projected to a new camera matrix would
+      // leave every colour sample projected with the wrong one.
       const auto depth_video =
           depth->getStreamProfile()->as<ob::VideoStreamProfile>();
       const auto color_video =
           color->getStreamProfile()->as<ob::VideoStreamProfile>();
-      const OBCameraIntrinsic k = depth_video->getIntrinsic();
-      const OBCameraDistortion d = color_video->getDistortion();
-      const float tol = 1e-3f;
-      if (std::fabs(k.fx - s.color_camera.fx) > tol ||
-          std::fabs(k.fy - s.color_camera.fy) > tol ||
-          std::fabs(k.cx - s.color_camera.cx) > tol ||
-          std::fabs(k.cy - s.color_camera.cy) > tol) {
-        return Status::io_error(
+      if (!orbbec::same_pinhole(depth_video->getIntrinsic(), s.color_camera,
+                                kIntrinsicsTolerance)) {
+        return refuse(Status::io_error(
             "OrbbecCapture: registered depth reports intrinsics other than "
-            "the colour camera's; the frame would be unprojected wrongly");
+            "the colour camera's; the frame would be unprojected wrongly"));
       }
+      if (!orbbec::same_pinhole(color_video->getIntrinsic(), s.color_camera,
+                                kIntrinsicsTolerance)) {
+        return refuse(Status::io_error(
+            "OrbbecCapture: undistorted colour reports intrinsics other than "
+            "the ones open() read; the frame would be projected wrongly"));
+      }
+      // `!= 0` refuses a NaN coefficient too.
+      const OBCameraDistortion d = color_video->getDistortion();
       if (d.k1 != 0.0f || d.k2 != 0.0f || d.k3 != 0.0f || d.k4 != 0.0f ||
           d.k5 != 0.0f || d.k6 != 0.0f || d.p1 != 0.0f || d.p2 != 0.0f) {
-        return Status::io_error(
-            "OrbbecCapture: undistorted colour still reports lens distortion");
+        return refuse(Status::io_error(
+            "OrbbecCapture: undistorted colour still reports lens "
+            "distortion"));
       }
       s.first_pair_checked = true;
     }
     const float value_scale = depth->getValueScale();
     if (!std::isfinite(value_scale) || !(value_scale > 0.0f)) {
-      return Status::io_error(
-          "OrbbecCapture: depth frame reports value "
-          "scale " +
-          std::to_string(value_scale));
+      return refuse(
+          Status::io_error("OrbbecCapture: depth frame reports value scale " +
+                           std::to_string(value_scale)));
     }
     s.depth_metres.resize(pixels);
     s.color_packed.resize(pixels);
@@ -560,10 +657,8 @@ Result<std::optional<CapturedFrame>> OrbbecCapture::poll() {
     // needs the cameras on one clock (the SDK's global timestamp, or a
     // synced timer) before it can group their frames.
     timestamp_us = depth->getTimeStampUs();
-  } catch (const ob::Error& e) {
-    return sdk_error("processing a frame", e);
-  } catch (const std::exception& e) {
-    return sdk_error("processing a frame", e);
+  } catch (const std::exception& e) {  // ob::Error is one
+    return skip(std::string("the SDK failed on it: ") + e.what());
   }
 
   CapturedFrame frame{};
@@ -574,6 +669,7 @@ Result<std::optional<CapturedFrame>> OrbbecCapture::poll() {
   // The camera's colour is ordinary 8-bit sRGB: the canonical form, declared
   // by leaving the default.
   frame.timestamp_ns = timestamp_us * 1000;
+  s.failed_in_a_row = 0;
   s.delivered.fetch_add(1, std::memory_order_relaxed);
   return some_frame(frame);
 }

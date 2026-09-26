@@ -6,7 +6,8 @@
 /// @file examples/common/fuse_frame.hpp
 /// @brief One frame's fusion, the way every example does it: allocate the
 ///        truncation band (growing the map when it overflows), then integrate
-///        depth and -- when the frame carries it -- colour.
+///        depth and -- when the frame carries it -- colour; and the volume it
+///        fuses into.
 ///
 /// Header-only and compiled only into the executables that fuse: it includes
 /// the `tsdf` tier, which `vr_example_common` deliberately does not link.
@@ -20,16 +21,53 @@
 #include <limits>
 #include <string>
 
+#include "volumetric_kit/recon/core/allocator.hpp"
+#include "volumetric_kit/recon/core/device.hpp"
 #include "volumetric_kit/recon/core/result.hpp"
 #include "volumetric_kit/recon/core/stage_metrics.hpp"
 #include "volumetric_kit/recon/sensor/camera_capture.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
+#include "volumetric_kit/recon/volume/voxel_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
 
 namespace vr_example {
 
 namespace vr = volumetric_kit::recon;
+
+/// @brief The volume every example fuses into: 8x8x8-voxel blocks hashed into
+///        buckets of eight, carrying the three attributes @ref fuse_frame
+///        writes -- `tsdf`, `weight` and `color`.
+///
+/// One definition of the layout the examples share, so a changed default
+/// reaches all of them; the resolution, the band and the table's starting
+/// size are theirs to choose. The table grows on overflow (@ref
+/// allocate_band), so @p num_buckets sets where it starts, not what it holds.
+///
+/// @param device       The recon device.
+/// @param allocator    Its allocator.
+/// @param voxel_size   Voxel edge (metres).
+/// @param trunc_dist   Truncation distance (metres).
+/// @param num_buckets  Initial hash-bucket count; `8 * num_buckets` must fit
+///                     an `int32_t`.
+/// @return The grid, or @ref vr::volume::VoxelBlockGrid::create's error.
+inline vr::Result<vr::volume::VoxelBlockGrid> create_fusion_grid(
+    vr::Device& device, vr::Allocator& allocator, float voxel_size,
+    float trunc_dist, std::int32_t num_buckets = 16384) {
+  vr::volume::VoxelGridParams grid{};
+  grid.voxel_size = voxel_size;
+  grid.block_size = 8;
+  grid.voxels_per_block = 512;
+  grid.trunc_dist = trunc_dist;
+  grid.bucket_size = 8;
+  grid.num_buckets = num_buckets;
+  grid.num_blocks = grid.bucket_size * grid.num_buckets;
+  grid.max_chain = 128;
+  const vr::volume::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
+                                             {"weight", sizeof(float)},
+                                             {"color", sizeof(std::uint32_t)}};
+  return vr::volume::VoxelBlockGrid::create(device, allocator, grid, attrs, 3);
+}
 
 /// @brief Allocate the truncation band for @p frame into @p grid, growing the
 ///        map (preserving the per-voxel data already fused) if it overflows.

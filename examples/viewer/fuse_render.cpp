@@ -284,20 +284,9 @@ vr::Result<Reconstruction> fuse(const Options& opt,
       std::atan((static_cast<float>(cam.height) - static_cast<float>(cam.cy)) /
                 static_cast<float>(cam.fy));
 
-  vol::VoxelGridParams grid{};
-  grid.voxel_size = opt.voxel;
-  grid.block_size = 8;
-  grid.voxels_per_block = 512;
-  grid.trunc_dist = opt.trunc;
-  grid.bucket_size = 8;
-  grid.num_buckets = 16384;
-  grid.num_blocks = grid.bucket_size * grid.num_buckets;
-  grid.max_chain = 128;
-  const vol::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
-                                      {"weight", sizeof(float)},
-                                      {"color", sizeof(std::uint32_t)}};
-  VR_ASSIGN(vol::VoxelBlockGrid volume,
-            vol::VoxelBlockGrid::create(device, allocator, grid, attrs, 3));
+  VR_ASSIGN(
+      vol::VoxelBlockGrid volume,
+      vr_example::create_fusion_grid(device, allocator, opt.voxel, opt.trunc));
   VR_ASSIGN(rtsdf::TsdfIntegrator integrator,
             rtsdf::TsdfIntegrator::create(device, allocator));
   rmesh::MarchingCubesConfig mc_config;

@@ -175,13 +175,15 @@ int main() {
   const sensor::OrbbecCaptureStats st = capture.stats();
   std::printf(
       "%d frames in %.2f s; %.1f%% of registered pixels carry depth; "
-      "received %llu delivered %llu dropped %llu\n",
+      "received %llu delivered %llu dropped %llu failed %llu\n",
       kFrames, seconds, 100.0 * valid_fraction_sum / kFrames,
       static_cast<unsigned long long>(st.received),
       static_cast<unsigned long long>(st.delivered),
-      static_cast<unsigned long long>(st.dropped));
+      static_cast<unsigned long long>(st.dropped),
+      static_cast<unsigned long long>(st.failed));
   CHECK(st.delivered == static_cast<std::uint64_t>(kFrames));
-  CHECK(st.received >= st.delivered);
+  // Every pair is counted once: handed out, replaced, or failed.
+  CHECK(st.delivered + st.dropped + st.failed <= st.received);
   // Any real scene returns depth over a good part of the frame; an
   // all-but-empty registered image means registration landed off the frame.
   CHECK(valid_fraction_sum / kFrames > 0.2);
