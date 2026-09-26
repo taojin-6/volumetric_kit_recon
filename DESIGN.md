@@ -27,7 +27,8 @@ testable and consumable, and lets downstream projects link only what they need.
 
 ```
 core → volume → tsdf → mesh → texture → interop
-  └→ sensor                   (later: compress, track, codec, stream)
+  │        └→ codec
+  └→ sensor                   (later: track, stream)
 ```
 
 - **core** — the Vulkan foundation, mirroring the renderer's core: instance,
@@ -46,6 +47,15 @@ core → volume → tsdf → mesh → texture → interop
 - **mesh** — marching-cubes extraction (whole-volume today; the incremental
   block-mesh pool is decided and staged as of 2026-08-09, not shipped), host
   mesh containers, and OBJ/PLY + glTF/GLB export.
+- **codec** — the per-frame TSDF geometry codec. An `Encoder` turns a grid's
+  active blocks into a self-contained intra frame: sorted block coordinates, a
+  1-bit-per-voxel observed mask, and the first K coefficients of each block's
+  8³ DCT, entropy-coded by chunked static-table rANS. A separate `Decoder`
+  turns the frame back into a grid the mesh tier extracts unchanged. It reads
+  only the volume, so a capture service links it without the mesher, and a
+  player without the integrator. Geometry only: the decoded mesh is colored by
+  projective texturing from RGB that travels beside it. P-frames come later, as
+  a frame type in the same bitstream (the 2026-09-26 decision).
 - **interop** — the handoff to `volumetric_kit_gfx` (below).
 
 ## Backend strategy: one Vulkan path
@@ -403,8 +413,9 @@ start, not retrofitted.
 ## What this repo excludes
 
 Production-only is a hard rule. Experimental and learned/neural components are
-excluded entirely and remain in the upstream research repos. The codec, when it
-lands, is DCT-based and deterministic.
+excluded entirely and remain in the upstream research repos. The codec is
+DCT-based and deterministic in the sense the 2026-09-26 decision defines: a
+bitstream is reproducible on the device that wrote it, and decodable on any.
 
 ## Roadmap
 
@@ -416,4 +427,5 @@ lands, is DCT-based and deterministic.
   timeline-semaphore ring). This is the headline interop target.
 - **v2** — broaden platform coverage (Linux / Android / Windows) on the same
   Vulkan path; performance passes.
-- **v2.x** — `compress` (DCT) → `sensor` → `track` → `codec`/`stream`.
+- **v2.x** — `codec` (DCT intra frames, then P-frames) → `track` → `stream`.
+  (`sensor`, once on this line, has landed as a contract.)

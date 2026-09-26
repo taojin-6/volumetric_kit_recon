@@ -3722,6 +3722,138 @@ Each camera stamps frames with its own hardware clock, so a rig's frames are not
 yet on one clock. That, HEVC decoding, GPU pre-processing and the hardware
 registration are `TODO(sensor)`s in `orbbec_capture.cpp`; Windows is unbuilt.
 
+### 2026-09-26 — The TSDF codec is one `codec` tier over `volume`, with separate `Encoder` and `Decoder` classes: a geometry-only intra frame of per-block DCT coefficients, an observed-voxel mask and sorted block coordinates, entropy-coded by chunked static-table rANS.
+
+The roadmap listed two later tiers here, `compress` (DCT) and `codec`/`stream`, a split
+that came from the prior engine: an `ISdfCompressor` family for one volume and a
+`FrameCompressor` for a sequence on top of it. What gets built first is a
+**per-frame** codec. Each frame's volume is encoded on its own (intra only), and
+a player decodes it into a `VoxelBlockGrid` that the mesh tier extracts unchanged.
+The prior engine's working version (`src/compression/` in
+`implicit_world_reconstruction`) is the reference for the algorithm. Its CUDA
+kernels, its adaptive range coder and its nvcomp zstd streams are not ported
+as-is (see below).
+
+**One tier, named `codec`.** The prior split made the lower layer expose a
+transform-only API (`transformForward` / `transformInverse`) purely so the upper
+layer's temporal predictor could reach raw coefficients. In one tier, P-frames
+are a later `FrameType` in the same bitstream, and they use the transform through
+a private header rather than a public API made for one caller. `compress` leaves
+the roadmap. `stream` stays separate, because transport and the appearance channel
+(below) are not the codec's business. The tier links **`recon_volume` alone**.
+It reads a grid's `tsdf` and `weight` and, on decode, re-creates blocks through
+`VoxelHashMap::allocate`. It does not link `tsdf`, which produced the field, or
+`mesh`, which consumes the decoded one.
+
+**`Encoder` and `Decoder` are separate concrete classes**, sharing a private
+`DctTransform`. They run on different machines (the capture rig, the player).
+Each will hold its own reference-frame state once P-frames exist, and a player
+never needs the forward kernel. There is no virtual base: the codec is DCT-only
+(2026-06-21), so an interface would have one implementation. `TsdfIntegrator`'s
+runtime `IntegrationMode` flag is the precedent for a lean concrete class over a
+strategy hierarchy.
+
+**The frame is geometry only.** It holds a header, the block coordinates, a
+1-bit-per-voxel observed mask and the coefficients. Color is excluded: the
+player colors the decoded mesh by projective texturing from RGB frames that
+travel beside the codec, and per-voxel RGB would be 1.5 KB per block raw, far more
+than the geometry it would sit next to. The cost is named rather than left to
+be discovered. A surface that none of the transmitted frames sees falls back to
+the mesher's per-vertex color, and a grid with no observed color renders that
+white (`marching_cubes_sparse_common.glsl`). The header carries a stream table,
+so a later stream is a format version, not a break.
+
+**Why a mask and not weights.** The mesher skips any corner whose weight is under
+its threshold, and a freshly allocated block reads all zeros. So a decoded
+volume must say *which* voxels were observed, or nothing meshes. It need not say
+*how much*: weights matter only to a later fuse, and a player does not fuse. The
+old engine sent uint8 weights, 512 bytes per block before zstd, and the mask is
+64. The decoder writes weight 1.0 where the bit is set and leaves an unobserved
+voxel as a fresh block holds it, with zero `tsdf` and zero `weight`. "Observed"
+is `weight >= 1e-6`, the mesher's own `kWeightThreshold`. It is a copy, since
+`codec` may not link `mesh`, and the two must move together.
+
+**The transform.** It is the prior engine's, re-implemented in GLSL:
+- **Shape:** an orthonormal 8³ DCT-II, separable, over each block's SDF
+  normalized by `trunc_dist` (so every input is in [-1, 1]).
+- **Coefficient order:** the first K in 3-D zigzag order, which sorts by
+  `x + y + z` and then by `(x, y, z)`. The order is generated rather than
+  pasted, and it reproduces the prior engine's table.
+- **Quantization:** separate DC and AC steps, expressed as fractions of
+  `trunc_dist` so one setting holds across scenes. Rounding is half-to-even,
+  and the result is clamped to ±32767.
+- **Why the clamp never fires:** an orthonormal coefficient of inputs in
+  [-1, 1] is bounded by √512 ≈ 22.63, so `CodecParams::validate` refuses a step
+  below √512 / 32767. The clamp is then a guard against float drift, never a
+  silent loss. That is the 2026-08-04 rule: a limit the caller cannot see is
+  the library's to check.
+- **Defaults:** K = 32 with a DC step of 0.25 and an AC step of 0.05. These are
+  the prior engine's 0.01 m / 0.002 m at its 40 mm band, carried over until the
+  room0 measurement tunes them.
+- **Block size:** 8 only. The zigzag order and the cosine table are 8-specific,
+  and another block size is refused rather than transformed wrong.
+- **Dispatch:** one workgroup of **64** invocations per block, each owning one
+  8-voxel row per pass. That stays under Vulkan's guaranteed 128 invocations,
+  where the prior engine's 512 threads per block would not. Dispatches are
+  batched past `maxComputeWorkGroupCount[0]` rather than refused, since room0's
+  ~107 k blocks already exceed the 65535 floor.
+
+**Entropy coding: chunked, static-table, interleaved rANS.** This reverses the
+first plan, which was to port the prior engine's range coder. That coder is
+adaptive (a Fenwick-tree frequency model with an escape symbol) and codes one
+stream per coefficient index, so it is sequential within a stream and at most
+K-way parallel. At about 107 k blocks × 32 coefficients, room0 is about 3.4 M
+symbols a frame, roughly 100 M symbols/s at 30 fps. That is more than one
+adaptive host coder can plausibly sustain. That is an estimate, and the room0
+run is where it gets measured. The replacement:
+- **Tables:** static per-frame, per-band frequency tables in the header, over a
+  small alphabet (a magnitude class plus raw bits, JPEG-style).
+- **Chunks:** fixed runs of blocks, each coded by interleaved rANS lanes, with a
+  chunk offset table so decode is parallel too.
+- **Arithmetic:** integer-only, so this stage is bit-exact across devices.
+- **No new dependencies:** the same coder handles the coordinates and the mask,
+  so neither nvcomp (CUDA-only) nor libzstd is needed.
+
+A host reference coder lands first. GPU encode and decode kernels follow once
+room0 measures the host coder, and they must produce bytes identical to that
+reference, which is their test.
+
+**Determinism, defined.** The encoder sorts blocks by coordinate, because the
+GPU compaction orders them by atomics and the same volume would otherwise give
+different bytes. The entropy stage is exact. The transform is float, so the
+same device reproduces its bytes, but another device may round a coefficient
+at a bin edge the other way. With intra-only frames that cannot build up. So a
+bitstream is **reproducible per device and decodable on any**, which is what
+the 2026-06-21 "deterministic" means here. A fixed-point transform would buy
+cross-device byte equality, and nothing needs that yet.
+
+**The sequence**, each PR with its own tests:
+1. This entry, the tier, `CodecParams`, and the forward and inverse transform
+   kernels.
+2. The host rANS reference and the frame format.
+3. `Encoder` / `Decoder` end to end.
+4. `examples/codec_replica` and the room0 measurement that tunes the defaults.
+5. The GPU rANS kernels.
+
+**What this PR lands.** It lands the `recon_codec` target, the public
+`codec/codec_params.hpp`, and the private `DctTransform`. The transform turns a
+`volume::BlockList` into K quantized coefficients per block plus the observed
+mask, and back. It refuses a list anchored to another topology epoch, a block
+`ptr` outside the grid's heap, a grid without `tsdf` and `weight`, a block size
+other than 8, and invalid `CodecParams`. `codec_dct_test` compares the kernels
+against a double-precision host reference of the same transform and checks the
+reconstruction bounds orthonormality guarantees. **Verified:** see the PR.
+
+**Open.**
+- P-frames (`FrameType::Inter`).
+- The GPU rANS kernels.
+- Filling unobserved voxels before the transform. The encoder could replace
+  them with the block's observed mean, since the decoder masks them anyway,
+  which removes the zero-valued steps the DCT otherwise spends coefficients on.
+  It is a compression gain for PR 4 to measure, not a format change.
+- Device-resident coefficients, so the GPU coder reads them without a host
+  round trip, marked `TODO(codec)` on the transform.
+
 ## Measured lessons
 
 Not decisions, but the measurements that overturned an assumption about

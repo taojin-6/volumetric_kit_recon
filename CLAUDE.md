@@ -39,9 +39,9 @@ conventions and Vulkan setup.
   engine's `VK_DEVICE_HOST`-style macros are renamed `VR_*` on port.)
 - CMake: `find_package(volumetric_kit_recon)`; component targets
   `volumetric_kit::recon_core`, `…_volume`, `…_tsdf`, `…_mesh`, `…_texture`,
-  `…_interop` (+ later `…_compress`, `…_sensor`, `…_track`, `…_codec`,
-  `…_stream`), plus the opt-in `…_sensor_orbbec` driver (`VR_WITH_ORBBEC`);
-  umbrella alias `volumetric_kit::recon`.
+  `…_sensor`, `…_codec`, `…_interop` (+ later `…_track`, `…_stream`), plus the
+  opt-in `…_sensor_orbbec` driver (`VR_WITH_ORBBEC`); umbrella alias
+  `volumetric_kit::recon`.
 
 ## Architecture (tiered)
 
@@ -49,7 +49,8 @@ Strict left-to-right dependency rule: a tier may depend only on tiers to its
 left. No upward includes.
 
 `core` → `volume` → `tsdf` → `mesh` → `texture` → `interop`, with `sensor`
-branching off **`core`** (later: `compress`, `track`, `codec`, `stream`).
+branching off **`core`** and `codec` off **`volume`** (later: `track`,
+`stream`).
 
 - **`core`** — the Vulkan foundation *and* the vocabulary every tier trades in
   (`Status`/`Result`, the GLM math aliases, and the posed pinhole
@@ -82,6 +83,12 @@ branching off **`core`** (later: `compress`, `track`, `codec`, `stream`).
   *and* test it (the 2026-08-02 decision). The one that does, Orbbec, is a
   target of its own (`sensor/orbbec/`), so `recon_sensor` never links a vendor
   SDK.
+- **`codec`** — the per-frame TSDF geometry codec: separate `Encoder` and
+  `Decoder` classes over a private 8³ DCT transform, a geometry-only intra
+  frame (block coordinates, an observed-voxel mask, the first K coefficients),
+  chunked static-table rANS. Links **`volume` alone**. Color is not coded: the
+  player textures the decoded mesh from RGB that travels beside it (the
+  2026-09-26 decision).
 - **`interop`** — the handoff to `volumetric_kit_gfx` (below).
 
 ## Locked decisions
@@ -231,6 +238,11 @@ order. Change the decision, its entry there, and this list together.
   The Orbbec driver lands as `sensor/orbbec`, a target of its own: it
   undistorts colour and then registers depth to it on the host, and it reads
   the rig's sync roles without writing them.
+- [**2026-09-26**](DECISIONS.md#2026-09-26--the-tsdf-codec-is-one-codec-tier-over-volume-with-separate-encoder-and-decoder-classes-a-geometry-only-intra-frame-of-per-block-dct-coefficients-an-observed-voxel-mask-and-sorted-block-coordinates-entropy-coded-by-chunked-static-table-rans) —
+  The TSDF codec is one `codec` tier over `volume`, with separate `Encoder` and
+  `Decoder` classes: a geometry-only intra frame of per-block DCT coefficients,
+  an observed-voxel mask and sorted block coordinates, entropy-coded by chunked
+  static-table rANS.
 
 ## Provenance & salvage policy
 
