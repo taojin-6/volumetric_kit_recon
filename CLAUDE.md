@@ -659,6 +659,20 @@ arbitrary; it usually isn't.
   (`waits_for_primary`) and never writes it, and its hardware test opens only
   the camera `VR_ORBBEC_TEST_SERIAL` names (the 2026-09-26 decision).
 
+- **`codec`** — the first of five PRs (2026-09-26 lists them). So far it is
+  `CodecParams` (public) and the private `DctTransform`
+  (`src/volumetric_kit/recon/codec/`). The transform takes a
+  `volume::BlockList` to K quantized coefficients per block, in 3-D zigzag
+  order, plus a 16-word observed mask, and back. There is no `Encoder` /
+  `Decoder` and no bitstream yet. The SDF is normalized by `trunc_dist` before
+  the transform, and the steps are fractions of it. `CodecParams::validate`
+  refuses a step small enough for the ±32767 clamp to engage (√512 / 32767).
+  The transform refuses any block size but 8, and, as `mesh` does, a list
+  whose epoch has moved or whose `ptr` falls outside the heap. "Observed" is
+  the mesher's `weight >= 1e-6`, **copied** rather than shared, since `codec`
+  may not link `mesh`. Change both together. The inverse writes weight 1.0 on
+  observed voxels and a fresh block's zeros elsewhere.
+
 **Examples** (`examples/`). All four poll their frames through
 `sensor::ICameraCapture&` — the fuse loop never learns what is behind it. The
 three dataset examples take `ReplicaCapture` as the source: frame cap, stride

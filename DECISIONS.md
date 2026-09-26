@@ -3842,7 +3842,47 @@ mask, and back. It refuses a list anchored to another topology epoch, a block
 `ptr` outside the grid's heap, a grid without `tsdf` and `weight`, a block size
 other than 8, and invalid `CodecParams`. `codec_dct_test` compares the kernels
 against a double-precision host reference of the same transform and checks the
-reconstruction bounds orthonormality guarantees. **Verified:** see the PR.
+reconstruction bounds orthonormality guarantees.
+
+**Verified** on macOS (Apple M5 Max, MoltenVK 1.4.2), in Release and in Debug
+under ASan + UBSan. The full suite passes, 29 of 29 against 27 before.
+`recon_codec_dct` checks:
+- every forward coefficient against the reference, rounded half-to-even
+  exactly. The one exception is within 0.05 of a half-way point, where either
+  neighbour passes; exact comparisons must outnumber those 20 to 1.
+- per-block RMS error within the orthonormal bound at K = 512.
+- the truncation error at every zigzag band size (1, 4, 10, 20, 35, 84, 512),
+  within 1e-3 of what the reference's dropped energy predicts.
+- the mask below, at and above the threshold.
+- the decoder's clamp, on a step edge whose truncated reconstruction rings
+  to ~1.26.
+- a constant block coming out DC-only, and the floor step landing on the
+  clamp's edge.
+- output following list order.
+- batching at 3 blocks per dispatch, checked against the reference.
+- every refusal, and the moves.
+
+Each assertion was shown to catch the bug it guards against, by planting that
+bug and watching the test fail. The planted bugs were:
+- the inverse using the forward basis
+- the inverse ignoring the zigzag order
+- `>` for `>=` in the mask
+- either kernel ignoring its batch offset
+- `floor` for round-half-even
+- a mis-packed mask word
+- weight written on unobserved voxels
+- the DC step dropped
+- no decode clamp
+- no epoch check
+- a `ptr` past the heap
+
+Two of these needed the test strengthened before it caught them. The batched
+forward kept passing when compared with the single run, because a same-size
+allocation came back still holding that run's output (VMA reusing the freed
+block is the likely mechanism), so it is now judged against the reference.
+And no fixture rang past ±1 until the step edge was added. A removed barrier
+between passes is **not** caught: that is a race, and a race the M5 Max happens
+to win cannot be pinned by a test.
 
 **Open.**
 - P-frames (`FrameType::Inter`).

@@ -24,14 +24,22 @@ add_subdirectory(volumetric_kit/recon/texture)
 # and stays implementable from outside this repo, with drivers deliberately left
 # to whoever can build and test them (the 2026-08-02 decision).
 add_subdirectory(volumetric_kit/recon/sensor)
+add_subdirectory(volumetric_kit/recon/codec)
 # TODO: add_subdirectory() for interop as that tier lands.
 
 # --- recon: umbrella alias --------------------------------------------------
 # Consumers link `volumetric_kit::recon` and get whatever tiers are built.
 add_library(recon INTERFACE)
 add_library(volumetric_kit::recon ALIAS recon)
-target_link_libraries(recon INTERFACE recon_core recon_volume recon_tsdf
-                                      recon_mesh recon_texture recon_sensor)
+target_link_libraries(
+  recon
+  INTERFACE recon_core
+            recon_volume
+            recon_tsdf
+            recon_mesh
+            recon_texture
+            recon_sensor
+            recon_codec)
 if(TARGET recon_sensor_orbbec)
   target_link_libraries(recon INTERFACE recon_sensor_orbbec)
 endif()

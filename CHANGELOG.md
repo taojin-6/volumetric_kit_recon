@@ -75,6 +75,23 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `examples`: **`fuse_orbbec`** — live reconstruction from an Orbbec camera to
   a PLY (built with `VR_WITH_ORBBEC`). The grid setup the four examples shared
   is now one `create_fusion_grid` in `examples/common/fuse_frame.hpp`.
+- `codec`: **a new tier, `recon_codec`, and the block DCT it is built on.** It
+  is the first of five PRs toward a per-frame TSDF geometry codec, with separate
+  `Encoder` and `Decoder` classes, a geometry-only intra frame and chunked
+  static-table rANS (see the 2026-09-26 decision). This one lands:
+  - the public `codec::CodecParams`: coefficients kept per block, and DC / AC
+    quantization steps as fractions of `trunc_dist`. `validate()` refuses a
+    step fine enough to overflow the ±32767 clamp.
+  - the internal `DctTransform`: GLSL forward and inverse 8³ DCT-II kernels
+    with one 64-invocation workgroup per block. They turn a `volume::BlockList`
+    into the first K zigzag-ordered quantized coefficients plus a 1-bit
+    observed mask per voxel, and back. Lists longer than the device's workgroup
+    limit are batched.
+  - tests: `recon_codec_params` (host-only) and `recon_codec_dct`, which checks
+    the kernels against a double-precision reference.
+
+  The tier links `recon_volume` alone and is in the `volumetric_kit::recon`
+  umbrella. There is no encoder, decoder or bitstream yet.
 - build: **the Orbbec SDK as an opt-in prerequisite** — `VR_WITH_ORBBEC`
   (off by default) finds an installed SDK ≥ 2.9.3 and exposes `ob::OrbbecSDK`
   for the Orbbec (Femto Mega) capture driver that follows. Nothing is fetched
