@@ -580,12 +580,14 @@ arbitrary; it usually isn't.
   resolves neighbours that were never dispatched; the list is refused if its
   `topology_epoch` has moved (a LIFO-reused `ptr` being a lie that meshes
   cleanly), if it holds more blocks than the heap has slots, or if it is null
-  with a count — all three above the slot claim, so a refusal is a **rollback**
+  with a count — all three `VoxelBlockGrid::check_block_list`, which `codec`
+  shares, and all three above the slot claim, so a refusal is a **rollback**
   and an outstanding `DeviceMesh` survives it; and `compact_ms` reads 0 while
   every row that scales with the active set shrinks with it (`readback_ms` and
   `descriptor_ms` are per-call constants and do **not**). The list must be
   duplicate-free — unchecked, and a repeat emits the block twice and races its
-  span — and is built by `VoxelBlockGrid::block_list`.
+  span — and is built by `VoxelBlockGrid::block_list`, whose rvalue overload
+  is deleted so a temporary compaction cannot leave it dangling.
   Offered on `extract_device` **only** — an incremental pass keeps the triangles
   of blocks it does not re-mesh, so culling would leave them drawn and give the
   arena win back. *Alternating* the two is safe, though: a culled pass publishes
@@ -662,16 +664,23 @@ arbitrary; it usually isn't.
 - **`codec`** — the first of five PRs (2026-09-26 lists them). So far it is
   `CodecParams` (public) and the private `DctTransform`
   (`src/volumetric_kit/recon/codec/`). The transform takes a
-  `volume::BlockList` to K quantized coefficients per block, in 3-D zigzag
-  order, plus a 16-word observed mask, and back. There is no `Encoder` /
-  `Decoder` and no bitstream yet. The SDF is normalized by `trunc_dist` before
-  the transform, and the steps are fractions of it. `CodecParams::validate`
-  refuses a step small enough for the ±32767 clamp to engage (√512 / 32767).
-  The transform refuses any block size but 8, and, as `mesh` does, a list
-  whose epoch has moved or whose `ptr` falls outside the heap. "Observed" is
-  the mesher's `weight >= 1e-6`, **copied** rather than shared, since `codec`
-  may not link `mesh`. Change both together. The inverse writes weight 1.0 on
-  observed voxels and a fresh block's zeros elsewhere.
+  `volume::BlockList` to a `DctBlocks` — K quantized coefficients per block in
+  3-D zigzag order, a 16-word observed mask, and the params and `trunc_dist`
+  they were made with — and back. There is no `Encoder` / `Decoder` and no
+  bitstream yet. The SDF is normalized by `trunc_dist` before the transform
+  and the steps are fractions of it, so the inverse refuses a `DctBlocks`
+  whose `trunc_dist` is not its grid's. `CodecParams::validate` refuses a step
+  small enough for the ±32767 clamp to engage (√512 / 32767). The forward
+  never reads an unobserved voxel's `tsdf`: it fills each one from the nearest
+  observed voxel along x, then y, then z, since a fused block's zeros there
+  are a step K = 32 cannot hold, and they decoded a partially observed block
+  with 2.8x the error. The transform refuses any block size but 8; a list
+  `VoxelBlockGrid::check_block_list` refuses, the O(1) checks it shares with
+  `mesh`; and, on the device with one hash probe per block, any entry whose
+  coord does not resolve to its ptr — a ptr outside the heap, a free slot, a
+  mis-paired coord — which the inverse then writes nothing into. "Observed" is
+  `volume::kObservedWeight`, the threshold the mesher reads too. The inverse
+  writes weight 1.0 on observed voxels and a fresh block's zeros elsewhere.
 
 **Examples** (`examples/`). All four poll their frames through
 `sensor::ICameraCapture&` — the fuse loop never learns what is behind it. The

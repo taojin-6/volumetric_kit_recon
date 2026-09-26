@@ -3770,18 +3770,61 @@ volume must say *which* voxels were observed, or nothing meshes. It need not say
 old engine sent uint8 weights, 512 bytes per block before zstd, and the mask is
 64. The decoder writes weight 1.0 where the bit is set and leaves an unobserved
 voxel as a fresh block holds it, with zero `tsdf` and zero `weight`. "Observed"
-is `weight >= 1e-6`, the mesher's own `kWeightThreshold`. It is a copy, since
-`codec` may not link `mesh`, and the two must move together.
+is `weight >= volume::kObservedWeight` (1e-6). The mesher's threshold is
+defined from the same constant, since both tiers link `volume`, so the mask
+cannot drift from the voxels the mesher uses.
 
 **The transform.** It is the prior engine's, re-implemented in GLSL:
 - **Shape:** an orthonormal 8³ DCT-II, separable, over each block's SDF
   normalized by `trunc_dist` (so every input is in [-1, 1]).
 - **Coefficient order:** the first K in 3-D zigzag order, which sorts by
   `x + y + z` and then by `(x, y, z)`. The order is generated rather than
-  pasted, and it reproduces the prior engine's table.
+  pasted, and it reproduces the prior engine's table, all 512 entries, pinned
+  by a hash of that table in `codec_params_test`.
 - **Quantization:** separate DC and AC steps, expressed as fractions of
   `trunc_dist` so one setting holds across scenes. Rounding is half-to-even,
-  and the result is clamped to ±32767.
+  and the result is clamped to ±32767. The params and `trunc_dist` travel with
+  the coefficients in one `DctBlocks`, and the inverse compares that
+  `trunc_dist` exactly against its grid's: a grid with another band would
+  rescale every SDF and report success.
+- **Unobserved voxels are filled, not zeroed.** The forward never reads an
+  unobserved voxel's `tsdf`. Each one takes the value of the nearest observed
+  voxel along x, then y, then z (the lower index on a tie), and a block with
+  none stays 0. The decoder masks these voxels out, so their value is free to
+  choose, and zero is the worst choice: a fused block's unobserved voxels read
+  0, the iso level, and the step from the observed band down to it is energy
+  the first 32 coefficients cannot hold. It leaks into the observed voxels
+  beside the mask edge, which is where the surface is. A double-precision
+  simulation at the defaults, RMS error on the observed voxels in units of
+  `trunc_dist`:
+
+  | block | zero | observed mean | nearest, x/y/z |
+  |---|---|---|---|
+  | plane, observed z < 5 | 0.073 | 0.086 | 0.031 |
+  | tilted plane, observed in front + half a band | 0.153 | 0.116 | 0.055 |
+  | 3³ observed corner | 0.109 | 0.120 | 0.010 |
+  | 70% of voxels observed at random | 0.130 | 0.088 | 0.056 |
+  | fully observed (control) | 0.010 | 0.010 | 0.010 |
+
+  The observed mean, the fill this entry first listed as an open compression
+  question, is worse than zero on the plane and the corner and never close to
+  the line fill, so it was not taken. A
+  harmonic fill beats the line fill only on the random mask and needs an
+  iterative solve. The line fill's three passes use the same lane-to-line
+  mapping as the transform. On the GPU the tilted plane decodes at 0.055
+  against zero's 0.153. The format does not change, and neither does the
+  decoder.
+- **Every entry is checked on the device.** Lane 0 of each workgroup probes
+  the hash table through `hash_lookup.glsl`, the mesher's probe, and requires
+  the entry's coord to resolve to exactly its ptr. An entry that does not is
+  neither read nor written, and the call is refused with the count. The probe
+  replaces the O(count) host ptr scan this entry first had, which `mesh`
+  declines to pay, and it catches two things a range check cannot. One is a
+  free slot, which the inverse would write weight 1.0 into, so the next
+  `allocate` would hand out a block that meshes as observed. The other is a
+  coord paired with another block's ptr. The host keeps only the O(1) half,
+  `VoxelBlockGrid::check_block_list`, which `mesh` now calls too. An inverse
+  refused this way has already written every live entry.
 - **Why the clamp never fires:** an orthonormal coefficient of inputs in
   [-1, 1] is bounded by √512 ≈ 22.63, so `CodecParams::validate` refuses a step
   below √512 / 32767. The clamp is then a guard against float drift, never a
@@ -3837,16 +3880,24 @@ cross-device byte equality, and nothing needs that yet.
 
 **What this PR lands.** It lands the `recon_codec` target, the public
 `codec/codec_params.hpp`, and the private `DctTransform`. The transform turns a
-`volume::BlockList` into K quantized coefficients per block plus the observed
-mask, and back. It refuses a list anchored to another topology epoch, a block
-`ptr` outside the grid's heap, a grid without `tsdf` and `weight`, a block size
-other than 8, and invalid `CodecParams`. `codec_dct_test` compares the kernels
-against a double-precision host reference of the same transform and checks the
-reconstruction bounds orthonormality guarantees.
+`volume::BlockList` into a `DctBlocks` and back: K quantized coefficients per
+block plus the observed mask, beside the params and `trunc_dist` they were made
+with. It refuses a list anchored to another topology epoch, one holding more
+blocks than the heap, and one null with a count. On the device it refuses an
+entry that is not a live block of the grid. It also refuses a grid without
+float `tsdf` and `weight` (for an empty list too), a block size other than 8,
+invalid `CodecParams`, and on the inverse a `DctBlocks` whose `trunc_dist` or
+size does not match. In `volume` it adds `kObservedWeight` and
+`VoxelBlockGrid::check_block_list`, both shared with `mesh`, and deletes
+`block_list`'s rvalue overload, since the natural
+`block_list(map().compact_active_blocks().value())` left the list pointing at a
+vector gone by the next statement. `codec_dct_test` compares the kernels
+against a double-precision host reference of the same fill and transform and
+checks the reconstruction bounds orthonormality guarantees.
 
 **Verified** on macOS (Apple M5 Max, MoltenVK 1.4.2), in Release and in Debug
-under ASan + UBSan. The full suite passes, 29 of 29 against 27 before.
-`recon_codec_dct` checks:
+under ASan + UBSan. The full suite passes, 29 of 29 against 27 before, in
+both builds, re-run after the review follow-up. `recon_codec_dct` checks:
 - every forward coefficient against the reference, rounded half-to-even
   exactly. The one exception is within 0.05 of a half-way point, where either
   neighbour passes; exact comparisons must outnumber those 20 to 1.
@@ -3860,7 +3911,16 @@ under ASan + UBSan. The full suite passes, 29 of 29 against 27 before.
   clamp's edge.
 - output following list order.
 - batching at 3 blocks per dispatch, checked against the reference.
-- every refusal, and the moves.
+- the fill: a mask of every fourth voxel pair, and a block with nothing
+  observed, which yields all-zero coefficients.
+- a partially observed tilted plane at the defaults: its coefficients match
+  the reference fill; junk written into its unobserved voxels changes no
+  coefficient; and it decodes within 5e-3 of the reference round trip, at under
+  half the error of a zero fill.
+- every refusal: a free slot and a mis-paired coord among the dead entries,
+  with the free slot left zeroed by the refused inverse and the live entries
+  decoded; another `trunc_dist`; a grid without a weight for an empty list.
+  And the moves.
 
 Each assertion was shown to catch the bug it guards against, by planting that
 bug and watching the test fail. The planted bugs were:
@@ -3876,6 +3936,26 @@ bug and watching the test fail. The planted bugs were:
 - no epoch check
 - a `ptr` past the heap
 
+and, for the review follow-up:
+- no fill
+- the fill searching only one direction
+- the fill skipping its z pass
+- the forward reading an unobserved voxel's `tsdf`
+- the probe reduced to a range check
+- the host ignoring the rejected count
+- the count never reset between calls
+- no `trunc_dist` check
+- the decoded weight not pushed
+- the attribute check after the empty-list return
+- the forward dropping `trunc_dist` from its output
+- two zigzag entries swapped
+
+A fill planted in the kernel and the reference together is caught by the
+accuracy check alone (0.153 against its own 0.153). Make compares mtimes at
+one-second resolution, so a planted file restored within the second of its
+build left a stale binary that failed on correct code. Each plant therefore
+deletes the codec's objects and SPIR-V before rebuilding.
+
 Two of these needed the test strengthened before it caught them. The batched
 forward kept passing when compared with the single run, because a same-size
 allocation came back still holding that run's output (VMA reusing the freed
@@ -3884,13 +3964,16 @@ And no fixture rang past ±1 until the step edge was added. A removed barrier
 between passes is **not** caught: that is a race, and a race the M5 Max happens
 to win cannot be pinned by a test.
 
+**Declined in review: grow-only per-call buffers.** Each call allocates its
+list, coefficient and mask buffers. That looked like 650 MB/s of churn at
+30 fps, but the three allocations measure 0.027 ms steady state (0.23 ms on the
+first call) against a 1.4 ms forward over 97 774 blocks, Apple M5 Max, Release.
+That is 2%, the same per-call pattern the integrator and the mesher use for
+their inputs. The buffers change anyway with the device-resident output below.
+
 **Open.**
 - P-frames (`FrameType::Inter`).
 - The GPU rANS kernels.
-- Filling unobserved voxels before the transform. The encoder could replace
-  them with the block's observed mean, since the decoder masks them anyway,
-  which removes the zero-valued steps the DCT otherwise spends coefficients on.
-  It is a compression gain for PR 4 to measure, not a format change.
 - Device-resident coefficients, so the GPU coder reads them without a host
   round trip, marked `TODO(codec)` on the transform.
 
