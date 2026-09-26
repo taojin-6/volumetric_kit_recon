@@ -65,11 +65,10 @@ cmake -B build -DVR_WITH_ORBBEC=ON -DOrbbecSDK_ROOT=<sdk>
 ```
 
 That builds `volumetric_kit::recon_sensor_orbbec`, an `ICameraCapture` over one
-camera (`sensor/orbbec/orbbec_capture.hpp`), and lets the fuse example run
-live:
+camera (`sensor/orbbec/orbbec_capture.hpp`), and the live example:
 
 ```sh
-build/examples/fuse_replica/fuse_replica --orbbec <serial> --max-frames 300
+build/examples/fuse_orbbec/fuse_orbbec --serial <serial> --frames 300
 # the driver's hardware test opens only the camera you name:
 VR_ORBBEC_TEST_SERIAL=<serial> ctest --test-dir build -R orbbec
 ```

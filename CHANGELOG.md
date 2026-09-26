@@ -82,10 +82,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (units, byte order, the camera struct, option checks; no camera) and
   `recon_sensor_orbbec_capture` (a real camera, only the one
   `VR_ORBBEC_TEST_SERIAL` names). See the 2026-09-26 decision.
-- `examples`: **`fuse_replica --orbbec <serial|any>`** fuses a live Orbbec
-  camera through the same loop, for `--max-frames` frames (300 by default);
-  the replay's `--preload`, `--stride` and `--cam-params` are refused beside
-  it.
+- `examples`: **`fuse_orbbec`** — live reconstruction from an Orbbec camera
+  (built with `VR_WITH_ORBBEC`): polls `OrbbecCapture`, fuses each frame
+  through the shared `fuse_frame.hpp`, and writes a PLY after `--frames`
+  frames (300 by default); it stops, with the reason, after 10 s without a
+  frame. `fuse_replica` stays the dataset example.
 - build: **the Orbbec SDK as an opt-in prerequisite** — `VR_WITH_ORBBEC`
   (off by default) finds an installed SDK ≥ 2.9.3 and exposes `ob::OrbbecSDK`
   for the Orbbec (Femto Mega) capture driver that follows. Nothing is fetched

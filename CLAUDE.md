@@ -674,14 +674,17 @@ after the extract that consumed them (the fuse kernel only ORs, so anything
 looser and every block reads dirty within a few frames — which is how the first
 cut's headline numbers ended up being the 100%-dirty worst case). It implies
 `--device-extract` and is refused beside `--dirty-every`, which wants the same
-flags on a different cadence. `--orbbec <serial|any>` (a `VR_WITH_ORBBEC`
-build) swaps in a live camera for `--max-frames` frames (300 by default),
-refusing the replay's own knobs beside it. Behind the off-by-default
+flags on a different cadence. Behind the off-by-default
 `VR_BUILD_VIEWER`: `fuse_render` writes a headless colour PNG (seam A — it
 builds two devices by design), and `fuse_viewer` opens a live window on one
 shared `VkDevice`, fusing on a background thread, drawing recon's buffers
 directly, and carrying the two-panel perf overlay. All three take `--preload`,
 which makes the loop measure compute rather than the JPEG/PNG decoder.
+The live counterpart is its own example, not a `fuse_replica` flag:
+**`fuse_orbbec`** (built with `VR_WITH_ORBBEC`) polls an `OrbbecCapture`
+through the same contract, fuses each frame through the same
+`fuse_frame.hpp`, and writes a PLY after `--frames` frames (300 by default),
+giving up with the reason after 10 s without a frame.
 
 **Next.** **Incremental mesh extraction has landed, all three stages** —
 `MarchingCubes::extract_device_incremental`, over the span table of the

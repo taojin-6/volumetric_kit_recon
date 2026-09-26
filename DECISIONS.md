@@ -3699,19 +3699,26 @@ struct (an `int16_t` size the SDK reports as negative is refused, not wrapped),
 the sync-mode mapping, and the option checks `open` makes before touching the
 SDK -- on every leg that builds the driver.
 
-**`fuse_replica --orbbec <serial|any>`** is the construction-site swap the
-2026-09-14 decision promised: the same loop, fed a live camera for
-`--max-frames` frames (300 by default -- a camera is never exhausted), with the
-replay's own knobs (`--preload`, `--stride`, `--cam-params`) refused beside it
-rather than ignored.
+**A live camera gets its own example, `fuse_orbbec`,** not a flag on
+`fuse_replica`: that example is the dataset benchmark -- preload, stride, the
+dirty-block survey, the extract's phase breakdown -- and a camera takes none
+of it, so a `--orbbec` flag there (the first cut) meant refusing most of its
+knobs beside it. `fuse_orbbec` shares the one per-frame fuse
+(`examples/common/fuse_frame.hpp`) rather than a copy of the loop, fuses
+`--frames` frames (300 by default -- a camera is never exhausted), and gives
+up after 10 s without a frame, naming a sync secondary as the likely reason,
+rather than waiting forever. The multi-camera rig extends it.
 
 **Verified** on macOS (Apple silicon) against the 2.9.3 install and the rig.
 `recon_sensor_orbbec_capture` against CL2A141000N: 30 frames in 1.09 s, 63.6%
 of registered pixels carrying depth, strictly increasing timestamps, restart,
-moves; against CL2A141000G it skips as a secondary. `fuse_replica --orbbec
-CL2A141000N --max-frames 150`: 27.8 fps (the camera runs at 30), 6,439 blocks,
-104,001 triangles; the mesh, rendered from a viewpoint 35° off the camera's,
-has a planar floor with a floor marker's texture on its own geometry. Registered
+moves; against CL2A141000G it skips as a secondary. `fuse_orbbec --serial
+CL2A141000N --frames 150`: 29.6 fps -- the camera's rate -- with none of the
+150 pairs dropped, 103,024 triangles; the mesh, rendered from a viewpoint 35°
+off the camera's, has a planar floor with a floor marker's texture on its own
+geometry. Against CL2A141000G it stops after 10 s with the secondary named;
+an unknown serial lists the cameras that answered, and no serial with three
+cameras asks for one. Registered
 depth edges drawn over the undistorted colour follow the object outlines. A
 separate CMake project built against an install links the target through
 `find_package(volumetric_kit_recon)`, the SDK re-found through
@@ -3719,7 +3726,7 @@ separate CMake project built against an install links the target through
 Release; with it off, the build is unchanged -- 27 tests, no `orbbec` file
 installed, and the package config asks for no SDK. An ASan/UBSan Debug build
 runs both driver tests (the capture one against the camera, moves and restart
-included) and a 60-frame live fuse clean.
+included) and a 60-frame `fuse_orbbec` run clean.
 
 **Open.** A disconnect is detected through the SDK's device-removed callback
 and surfaces as `IoError` from the next `poll()`, but no run has unplugged a
