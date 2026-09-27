@@ -3722,6 +3722,261 @@ Each camera stamps frames with its own hardware clock, so a rig's frames are not
 yet on one clock. That, HEVC decoding, GPU pre-processing and the hardware
 registration are `TODO(sensor)`s in `orbbec_capture.cpp`; Windows is unbuilt.
 
+### 2026-09-26 — The TSDF codec is one `codec` tier over `volume`, with separate `Encoder` and `Decoder` classes: a geometry-only intra frame of per-block DCT coefficients, an observed-voxel mask and sorted block coordinates, entropy-coded by chunked static-table rANS.
+
+The roadmap listed two later tiers here, `compress` (DCT) and `codec`/`stream`, a split
+that came from the prior engine: an `ISdfCompressor` family for one volume and a
+`FrameCompressor` for a sequence on top of it. What gets built first is a
+**per-frame** codec. Each frame's volume is encoded on its own (intra only), and
+a player decodes it into a `VoxelBlockGrid` that the mesh tier extracts unchanged.
+The prior engine's working version (`src/compression/` in
+`implicit_world_reconstruction`) is the reference for the algorithm. Its CUDA
+kernels, its adaptive range coder and its nvcomp zstd streams are not ported
+as-is (see below).
+
+**One tier, named `codec`.** The prior split made the lower layer expose a
+transform-only API (`transformForward` / `transformInverse`) purely so the upper
+layer's temporal predictor could reach raw coefficients. In one tier, P-frames
+are a later `FrameType` in the same bitstream, and they use the transform through
+a private header rather than a public API made for one caller. `compress` leaves
+the roadmap. `stream` stays separate, because transport and the appearance channel
+(below) are not the codec's business. The tier links **`recon_volume` alone**.
+It reads a grid's `tsdf` and `weight` and, on decode, re-creates blocks through
+`VoxelHashMap::allocate`. It does not link `tsdf`, which produced the field, or
+`mesh`, which consumes the decoded one.
+
+**`Encoder` and `Decoder` are separate concrete classes**, sharing a private
+`DctTransform`. They run on different machines (the capture rig, the player).
+Each will hold its own reference-frame state once P-frames exist, and a player
+never needs the forward kernel. There is no virtual base: the codec is DCT-only
+(2026-06-21), so an interface would have one implementation. `TsdfIntegrator`'s
+runtime `IntegrationMode` flag is the precedent for a lean concrete class over a
+strategy hierarchy.
+
+**The frame is geometry only.** It holds a header, the block coordinates, a
+1-bit-per-voxel observed mask and the coefficients. Color is excluded: the
+player colors the decoded mesh by projective texturing from RGB frames that
+travel beside the codec, and per-voxel RGB would be 1.5 KB per block raw, far more
+than the geometry it would sit next to. The cost is named rather than left to
+be discovered. A surface that none of the transmitted frames sees falls back to
+the mesher's per-vertex color, and a grid with no observed color renders that
+white (`marching_cubes_sparse_common.glsl`). The header carries a stream table,
+so a later stream is a format version, not a break.
+
+**Why a mask and not weights.** The mesher skips any corner whose weight is under
+its threshold, and a freshly allocated block reads all zeros. So a decoded
+volume must say *which* voxels were observed, or nothing meshes. It need not say
+*how much*: weights matter only to a later fuse, and a player does not fuse. The
+old engine sent uint8 weights, 512 bytes per block before zstd, and the mask is
+64. The decoder writes weight 1.0 where the bit is set and leaves an unobserved
+voxel as a fresh block holds it, with zero `tsdf` and zero `weight`. "Observed"
+is `weight >= volume::kObservedWeight` (1e-6). The mesher's threshold is
+defined from the same constant, since both tiers link `volume`, so the mask
+cannot drift from the voxels the mesher uses.
+
+**The transform.** It is the prior engine's, re-implemented in GLSL:
+- **Shape:** an orthonormal 8³ DCT-II, separable, over each block's SDF
+  normalized by `trunc_dist` (so every input is in [-1, 1]).
+- **Coefficient order:** the first K in 3-D zigzag order, which sorts by
+  `x + y + z` and then by `(x, y, z)`. The order is generated rather than
+  pasted, and it reproduces the prior engine's table, all 512 entries, pinned
+  by a hash of that table in `codec_params_test`.
+- **Quantization:** separate DC and AC steps, expressed as fractions of
+  `trunc_dist` so one setting holds across scenes. Rounding is half-to-even,
+  and the result is clamped to ±32767. The params and `trunc_dist` travel with
+  the coefficients in one `DctBlocks`, and the inverse compares that
+  `trunc_dist` exactly against its grid's: a grid with another band would
+  rescale every SDF and report success.
+- **Unobserved voxels are filled, not zeroed.** The forward never reads an
+  unobserved voxel's `tsdf`. Each one takes the value of the nearest observed
+  voxel along x, then y, then z (the lower index on a tie), and a block with
+  none stays 0. The decoder masks these voxels out, so their value is free to
+  choose, and zero is the worst choice: a fused block's unobserved voxels read
+  0, the iso level, and the step from the observed band down to it is energy
+  the first 32 coefficients cannot hold. It leaks into the observed voxels
+  beside the mask edge, which is where the surface is. A double-precision
+  simulation at the defaults, RMS error on the observed voxels in units of
+  `trunc_dist`:
+
+  | block | zero | observed mean | nearest, x/y/z |
+  |---|---|---|---|
+  | plane, observed z < 5 | 0.073 | 0.086 | 0.031 |
+  | tilted plane, observed in front + half a band | 0.153 | 0.116 | 0.055 |
+  | 3³ observed corner | 0.109 | 0.120 | 0.010 |
+  | 70% of voxels observed at random | 0.130 | 0.088 | 0.056 |
+  | fully observed (control) | 0.010 | 0.010 | 0.010 |
+
+  The observed mean, the fill this entry first listed as an open compression
+  question, is worse than zero on the plane and the corner and never close to
+  the line fill, so it was not taken. A
+  harmonic fill beats the line fill only on the random mask and needs an
+  iterative solve. The line fill's three passes use the same lane-to-line
+  mapping as the transform. On the GPU the tilted plane decodes at 0.055
+  against zero's 0.153. The format does not change, and neither does the
+  decoder.
+- **Every entry is checked on the device.** Lane 0 of each workgroup probes
+  the hash table through `hash_lookup.glsl`, the mesher's probe, and requires
+  the entry's coord to resolve to exactly its ptr. An entry that does not is
+  neither read nor written, and the call is refused with the count. The probe
+  replaces the O(count) host ptr scan this entry first had, which `mesh`
+  declines to pay, and it catches two things a range check cannot. One is a
+  free slot, which the inverse would write weight 1.0 into, so the next
+  `allocate` would hand out a block that meshes as observed. The other is a
+  coord paired with another block's ptr. The host keeps only the O(1) half,
+  `VoxelBlockGrid::check_block_list`, which `mesh` now calls too. An inverse
+  refused this way has already written every live entry.
+- **Why the clamp never fires:** an orthonormal coefficient of inputs in
+  [-1, 1] is bounded by √512 ≈ 22.63, so `CodecParams::validate` refuses a step
+  below √512 / 32767. The clamp is then a guard against float drift, never a
+  silent loss. That is the 2026-08-04 rule: a limit the caller cannot see is
+  the library's to check.
+- **Defaults:** K = 32 with a DC step of 0.25 and an AC step of 0.05. These are
+  the prior engine's 0.01 m / 0.002 m at its 40 mm band, carried over until the
+  room0 measurement tunes them.
+- **Block size:** 8 only. The zigzag order and the cosine table are 8-specific,
+  and another block size is refused rather than transformed wrong.
+- **Dispatch:** one workgroup of **64** invocations per block, each owning one
+  8-voxel row per pass. That stays under Vulkan's guaranteed 128 invocations,
+  where the prior engine's 512 threads per block would not. Dispatches are
+  batched past `maxComputeWorkGroupCount[0]` rather than refused, since room0's
+  ~107 k blocks already exceed the 65535 floor.
+
+**Entropy coding: chunked, static-table, interleaved rANS.** This reverses the
+first plan, which was to port the prior engine's range coder. That coder is
+adaptive (a Fenwick-tree frequency model with an escape symbol) and codes one
+stream per coefficient index, so it is sequential within a stream and at most
+K-way parallel. At about 107 k blocks × 32 coefficients, room0 is about 3.4 M
+symbols a frame, roughly 100 M symbols/s at 30 fps. That is more than one
+adaptive host coder can plausibly sustain. That is an estimate, and the room0
+run is where it gets measured. The replacement:
+- **Tables:** static per-frame, per-band frequency tables in the header, over a
+  small alphabet (a magnitude class plus raw bits, JPEG-style).
+- **Chunks:** fixed runs of blocks, each coded by interleaved rANS lanes, with a
+  chunk offset table so decode is parallel too.
+- **Arithmetic:** integer-only, so this stage is bit-exact across devices.
+- **No new dependencies:** the same coder handles the coordinates and the mask,
+  so neither nvcomp (CUDA-only) nor libzstd is needed.
+
+A host reference coder lands first. GPU encode and decode kernels follow once
+room0 measures the host coder, and they must produce bytes identical to that
+reference, which is their test.
+
+**Determinism, defined.** The encoder sorts blocks by coordinate, because the
+GPU compaction orders them by atomics and the same volume would otherwise give
+different bytes. The entropy stage is exact. The transform is float, so the
+same device reproduces its bytes, but another device may round a coefficient
+at a bin edge the other way. With intra-only frames that cannot build up. So a
+bitstream is **reproducible per device and decodable on any**, which is what
+the 2026-06-21 "deterministic" means here. A fixed-point transform would buy
+cross-device byte equality, and nothing needs that yet.
+
+**The sequence**, each PR with its own tests:
+1. This entry, the tier, `CodecParams`, and the forward and inverse transform
+   kernels.
+2. The host rANS reference and the frame format.
+3. `Encoder` / `Decoder` end to end.
+4. `examples/codec_replica` and the room0 measurement that tunes the defaults.
+5. The GPU rANS kernels.
+
+**What this PR lands.** It lands the `recon_codec` target, the public
+`codec/codec_params.hpp`, and the private `DctTransform`. The transform turns a
+`volume::BlockList` into a `DctBlocks` and back: K quantized coefficients per
+block plus the observed mask, beside the params and `trunc_dist` they were made
+with. It refuses a list anchored to another topology epoch, one holding more
+blocks than the heap, and one null with a count. On the device it refuses an
+entry that is not a live block of the grid. It also refuses a grid without
+float `tsdf` and `weight` (for an empty list too), a block size other than 8,
+invalid `CodecParams`, and on the inverse a `DctBlocks` whose `trunc_dist` or
+size does not match. In `volume` it adds `kObservedWeight` and
+`VoxelBlockGrid::check_block_list`, both shared with `mesh`, and deletes
+`block_list`'s rvalue overload, since the natural
+`block_list(map().compact_active_blocks().value())` left the list pointing at a
+vector gone by the next statement. `codec_dct_test` compares the kernels
+against a double-precision host reference of the same fill and transform and
+checks the reconstruction bounds orthonormality guarantees.
+
+**Verified** on macOS (Apple M5 Max, MoltenVK 1.4.2), in Release and in Debug
+under ASan + UBSan. The full suite passes, 29 of 29 against 27 before, in
+both builds, re-run after the review follow-up. `recon_codec_dct` checks:
+- every forward coefficient against the reference, rounded half-to-even
+  exactly. The one exception is within 0.05 of a half-way point, where either
+  neighbour passes; exact comparisons must outnumber those 20 to 1.
+- per-block RMS error within the orthonormal bound at K = 512.
+- the truncation error at every zigzag band size (1, 4, 10, 20, 35, 84, 512),
+  within 1e-3 of what the reference's dropped energy predicts.
+- the mask below, at and above the threshold.
+- the decoder's clamp, on a step edge whose truncated reconstruction rings
+  to ~1.26.
+- a constant block coming out DC-only, and the floor step landing on the
+  clamp's edge.
+- output following list order.
+- batching at 3 blocks per dispatch, checked against the reference.
+- the fill: a mask of every fourth voxel pair, and a block with nothing
+  observed, which yields all-zero coefficients.
+- a partially observed tilted plane at the defaults: its coefficients match
+  the reference fill; junk written into its unobserved voxels changes no
+  coefficient; and it decodes within 5e-3 of the reference round trip, at under
+  half the error of a zero fill.
+- every refusal: a free slot and a mis-paired coord among the dead entries,
+  with the free slot left zeroed by the refused inverse and the live entries
+  decoded; another `trunc_dist`; a grid without a weight for an empty list.
+  And the moves.
+
+Each assertion was shown to catch the bug it guards against, by planting that
+bug and watching the test fail. The planted bugs were:
+- the inverse using the forward basis
+- the inverse ignoring the zigzag order
+- `>` for `>=` in the mask
+- either kernel ignoring its batch offset
+- `floor` for round-half-even
+- a mis-packed mask word
+- weight written on unobserved voxels
+- the DC step dropped
+- no decode clamp
+- no epoch check
+- a `ptr` past the heap
+
+and, for the review follow-up:
+- no fill
+- the fill searching only one direction
+- the fill skipping its z pass
+- the forward reading an unobserved voxel's `tsdf`
+- the probe reduced to a range check
+- the host ignoring the rejected count
+- the count never reset between calls
+- no `trunc_dist` check
+- the decoded weight not pushed
+- the attribute check after the empty-list return
+- the forward dropping `trunc_dist` from its output
+- two zigzag entries swapped
+
+A fill planted in the kernel and the reference together is caught by the
+accuracy check alone (0.153 against its own 0.153). Make compares mtimes at
+one-second resolution, so a planted file restored within the second of its
+build left a stale binary that failed on correct code. Each plant therefore
+deletes the codec's objects and SPIR-V before rebuilding.
+
+Two of these needed the test strengthened before it caught them. The batched
+forward kept passing when compared with the single run, because a same-size
+allocation came back still holding that run's output (VMA reusing the freed
+block is the likely mechanism), so it is now judged against the reference.
+And no fixture rang past ±1 until the step edge was added. A removed barrier
+between passes is **not** caught: that is a race, and a race the M5 Max happens
+to win cannot be pinned by a test.
+
+**Declined in review: grow-only per-call buffers.** Each call allocates its
+list, coefficient and mask buffers. That looked like 650 MB/s of churn at
+30 fps, but the three allocations measure 0.027 ms steady state (0.23 ms on the
+first call) against a 1.4 ms forward over 97 774 blocks, Apple M5 Max, Release.
+That is 2%, the same per-call pattern the integrator and the mesher use for
+their inputs. The buffers change anyway with the device-resident output below.
+
+**Open.**
+- P-frames (`FrameType::Inter`).
+- The GPU rANS kernels.
+- Device-resident coefficients, so the GPU coder reads them without a host
+  round trip, marked `TODO(codec)` on the transform.
+
 ## Measured lessons
 
 Not decisions, but the measurements that overturned an assumption about

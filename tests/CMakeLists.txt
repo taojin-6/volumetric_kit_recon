@@ -293,6 +293,32 @@ target_link_libraries(recon_sensor_conventions_test
 vr_target_warnings(recon_sensor_conventions_test)
 add_test(NAME recon_sensor_conventions COMMAND recon_sensor_conventions_test)
 
+# codec tier, host half: CodecParams validation and the DCT's two tables (basis
+# orthonormality, the zigzag order against the prior engine's). CPU-only, so it
+# always runs. The tables are internal (non-installed), reached by include path
+# as core_buffer_sharing_test reaches queue_family_set.hpp.
+add_executable(recon_codec_params_test codec_params_test.cpp)
+target_link_libraries(recon_codec_params_test
+                      PRIVATE volumetric_kit::recon_codec)
+target_include_directories(
+  recon_codec_params_test
+  PRIVATE ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/codec)
+vr_target_warnings(recon_codec_params_test)
+add_test(NAME recon_codec_params COMMAND recon_codec_params_test)
+
+# codec tier, GPU half: the internal DctTransform's forward kernel against a
+# double-precision reference, the orthonormal reconstruction bounds, the
+# observed mask, batching past one dispatch, the refusals and the moves. Skips
+# (exit 0) with no device.
+add_executable(recon_codec_dct_test codec_dct_test.cpp)
+target_link_libraries(recon_codec_dct_test PRIVATE volumetric_kit::recon_codec
+                                                   Vulkan::Vulkan)
+target_include_directories(
+  recon_codec_dct_test
+  PRIVATE ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/codec)
+vr_target_warnings(recon_codec_dct_test)
+add_test(NAME recon_codec_dct COMMAND recon_codec_dct_test)
+
 # The Orbbec SDK prerequisite (VR_WITH_ORBBEC only): the copy the build found is
 # the one that loads -- runtime version == configured version, since the SDK is
 # linked in place from an install outside the repo -- and an SDK context opens

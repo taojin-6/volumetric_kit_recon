@@ -75,6 +75,36 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `examples`: **`fuse_orbbec`** — live reconstruction from an Orbbec camera to
   a PLY (built with `VR_WITH_ORBBEC`). The grid setup the four examples shared
   is now one `create_fusion_grid` in `examples/common/fuse_frame.hpp`.
+- `codec`: **a new tier, `recon_codec`, and the block DCT it is built on.** It
+  is the first of five PRs toward a per-frame TSDF geometry codec, with separate
+  `Encoder` and `Decoder` classes, a geometry-only intra frame and chunked
+  static-table rANS (see the 2026-09-26 decision). This one lands:
+  - the public `codec::CodecParams`: coefficients kept per block, and DC / AC
+    quantization steps as fractions of `trunc_dist`. `validate()` refuses a
+    step fine enough to overflow the ±32767 clamp.
+  - the internal `DctTransform`: GLSL forward and inverse 8³ DCT-II kernels
+    with one 64-invocation workgroup per block. They turn a `volume::BlockList`
+    into a `DctBlocks` and back: the first K zigzag-ordered quantized
+    coefficients plus a 1-bit observed mask per voxel, beside the params and
+    `trunc_dist` they were made with, which the inverse checks against its
+    grid. The forward fills unobserved voxels from the nearest observed ones
+    rather than transforming the zeros a fused block holds there, which
+    decoded a partially observed block with 2.8x the error. Each workgroup
+    checks through the hash table that its entry is a live block, so a free
+    slot or a mis-paired coord is refused rather than written. Lists longer
+    than the device's workgroup limit are batched.
+  - tests: `recon_codec_params` (host-only, pinning the whole zigzag table) and
+    `recon_codec_dct`, which checks the kernels against a double-precision
+    reference of the same fill and transform.
+
+  The tier links `recon_volume` alone and is in the `volumetric_kit::recon`
+  umbrella. There is no encoder, decoder or bitstream yet.
+- `volume`: **`kObservedWeight`, `VoxelBlockGrid::check_block_list`, and a
+  deleted rvalue `block_list`.** The observed-weight threshold and the O(1)
+  `BlockList` checks (null with a count, more blocks than the heap, another
+  topology epoch) are now defined once, for `mesh` and `codec` both.
+  `block_list(map().compact_active_blocks().value())` no longer compiles: the
+  list borrowed a vector that died at the end of the statement.
 - build: **the Orbbec SDK as an opt-in prerequisite** — `VR_WITH_ORBBEC`
   (off by default) finds an installed SDK ≥ 2.9.3 and exposes `ob::OrbbecSDK`
   for the Orbbec (Femto Mega) capture driver that follows. Nothing is fetched

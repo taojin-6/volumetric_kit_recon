@@ -39,9 +39,9 @@ conventions and Vulkan setup.
   engine's `VK_DEVICE_HOST`-style macros are renamed `VR_*` on port.)
 - CMake: `find_package(volumetric_kit_recon)`; component targets
   `volumetric_kit::recon_core`, `…_volume`, `…_tsdf`, `…_mesh`, `…_texture`,
-  `…_interop` (+ later `…_compress`, `…_sensor`, `…_track`, `…_codec`,
-  `…_stream`), plus the opt-in `…_sensor_orbbec` driver (`VR_WITH_ORBBEC`);
-  umbrella alias `volumetric_kit::recon`.
+  `…_sensor`, `…_codec`, `…_interop` (+ later `…_track`, `…_stream`), plus the
+  opt-in `…_sensor_orbbec` driver (`VR_WITH_ORBBEC`); umbrella alias
+  `volumetric_kit::recon`.
 
 ## Architecture (tiered)
 
@@ -49,7 +49,8 @@ Strict left-to-right dependency rule: a tier may depend only on tiers to its
 left. No upward includes.
 
 `core` → `volume` → `tsdf` → `mesh` → `texture` → `interop`, with `sensor`
-branching off **`core`** (later: `compress`, `track`, `codec`, `stream`).
+branching off **`core`** and `codec` off **`volume`** (later: `track`,
+`stream`).
 
 - **`core`** — the Vulkan foundation *and* the vocabulary every tier trades in
   (`Status`/`Result`, the GLM math aliases, and the posed pinhole
@@ -82,6 +83,12 @@ branching off **`core`** (later: `compress`, `track`, `codec`, `stream`).
   *and* test it (the 2026-08-02 decision). The one that does, Orbbec, is a
   target of its own (`sensor/orbbec/`), so `recon_sensor` never links a vendor
   SDK.
+- **`codec`** — the per-frame TSDF geometry codec: separate `Encoder` and
+  `Decoder` classes over a private 8³ DCT transform, a geometry-only intra
+  frame (block coordinates, an observed-voxel mask, the first K coefficients),
+  chunked static-table rANS. Links **`volume` alone**. Color is not coded: the
+  player textures the decoded mesh from RGB that travels beside it (the
+  2026-09-26 decision).
 - **`interop`** — the handoff to `volumetric_kit_gfx` (below).
 
 ## Locked decisions
@@ -231,6 +238,11 @@ order. Change the decision, its entry there, and this list together.
   The Orbbec driver lands as `sensor/orbbec`, a target of its own: it
   undistorts colour and then registers depth to it on the host, and it reads
   the rig's sync roles without writing them.
+- [**2026-09-26**](DECISIONS.md#2026-09-26--the-tsdf-codec-is-one-codec-tier-over-volume-with-separate-encoder-and-decoder-classes-a-geometry-only-intra-frame-of-per-block-dct-coefficients-an-observed-voxel-mask-and-sorted-block-coordinates-entropy-coded-by-chunked-static-table-rans) —
+  The TSDF codec is one `codec` tier over `volume`, with separate `Encoder` and
+  `Decoder` classes: a geometry-only intra frame of per-block DCT coefficients,
+  an observed-voxel mask and sorted block coordinates, entropy-coded by chunked
+  static-table rANS.
 
 ## Provenance & salvage policy
 
@@ -568,12 +580,14 @@ arbitrary; it usually isn't.
   resolves neighbours that were never dispatched; the list is refused if its
   `topology_epoch` has moved (a LIFO-reused `ptr` being a lie that meshes
   cleanly), if it holds more blocks than the heap has slots, or if it is null
-  with a count — all three above the slot claim, so a refusal is a **rollback**
+  with a count — all three `VoxelBlockGrid::check_block_list`, which `codec`
+  shares, and all three above the slot claim, so a refusal is a **rollback**
   and an outstanding `DeviceMesh` survives it; and `compact_ms` reads 0 while
   every row that scales with the active set shrinks with it (`readback_ms` and
   `descriptor_ms` are per-call constants and do **not**). The list must be
   duplicate-free — unchecked, and a repeat emits the block twice and races its
-  span — and is built by `VoxelBlockGrid::block_list`.
+  span — and is built by `VoxelBlockGrid::block_list`, whose rvalue overload
+  is deleted so a temporary compaction cannot leave it dangling.
   Offered on `extract_device` **only** — an incremental pass keeps the triangles
   of blocks it does not re-mesh, so culling would leave them drawn and give the
   arena win back. *Alternating* the two is safe, though: a culled pass publishes
@@ -646,6 +660,27 @@ arbitrary; it usually isn't.
   `Options::cam_to_world`. It reads the camera's rig sync role
   (`waits_for_primary`) and never writes it, and its hardware test opens only
   the camera `VR_ORBBEC_TEST_SERIAL` names (the 2026-09-26 decision).
+
+- **`codec`** — the first of five PRs (2026-09-26 lists them). So far it is
+  `CodecParams` (public) and the private `DctTransform`
+  (`src/volumetric_kit/recon/codec/`). The transform takes a
+  `volume::BlockList` to a `DctBlocks` — K quantized coefficients per block in
+  3-D zigzag order, a 16-word observed mask, and the params and `trunc_dist`
+  they were made with — and back. There is no `Encoder` / `Decoder` and no
+  bitstream yet. The SDF is normalized by `trunc_dist` before the transform
+  and the steps are fractions of it, so the inverse refuses a `DctBlocks`
+  whose `trunc_dist` is not its grid's. `CodecParams::validate` refuses a step
+  small enough for the ±32767 clamp to engage (√512 / 32767). The forward
+  never reads an unobserved voxel's `tsdf`: it fills each one from the nearest
+  observed voxel along x, then y, then z, since a fused block's zeros there
+  are a step K = 32 cannot hold, and they decoded a partially observed block
+  with 2.8x the error. The transform refuses any block size but 8; a list
+  `VoxelBlockGrid::check_block_list` refuses, the O(1) checks it shares with
+  `mesh`; and, on the device with one hash probe per block, any entry whose
+  coord does not resolve to its ptr — a ptr outside the heap, a free slot, a
+  mis-paired coord — which the inverse then writes nothing into. "Observed" is
+  `volume::kObservedWeight`, the threshold the mesher reads too. The inverse
+  writes weight 1.0 on observed voxels and a fresh block's zeros elsewhere.
 
 **Examples** (`examples/`). All four poll their frames through
 `sensor::ICameraCapture&` — the fuse loop never learns what is behind it. The
