@@ -595,20 +595,8 @@ int run(GLFWwindow* window, const Options& opt) {
   vr_example::ReplicaCapture replica = std::move(capture_result).value();
   const vr::ColorCameraParams& cam = replica.color_camera();
 
-  vol::VoxelGridParams grid{};
-  grid.voxel_size = opt.voxel;
-  grid.block_size = 8;
-  grid.voxels_per_block = 512;
-  grid.trunc_dist = opt.trunc;
-  grid.bucket_size = 8;
-  grid.num_buckets = 16384;
-  grid.num_blocks = grid.bucket_size * grid.num_buckets;
-  grid.max_chain = 128;
-  const vol::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
-                                      {"weight", sizeof(float)},
-                                      {"color", sizeof(std::uint32_t)}};
   auto grid_result =
-      vol::VoxelBlockGrid::create(rdevice, rallocator, grid, attrs, 3);
+      vr_example::create_fusion_grid(rdevice, rallocator, opt.voxel, opt.trunc);
   if (!grid_result) {
     std::fprintf(stderr, "grid: %s\n", grid_result.status().message().c_str());
     return 1;

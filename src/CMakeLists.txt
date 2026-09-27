@@ -22,7 +22,9 @@ add_subdirectory(volumetric_kit/recon/texture)
 # structs it trades in are core vocabulary (core/camera_params.hpp), not voxels
 # or fusion -- so it sits beside the fusion tiers rather than on top of them,
 # and stays implementable from outside this repo, with drivers deliberately left
-# to whoever can build and test them (the 2026-08-02 decision).
+# to whoever can build and test them (the 2026-08-02 decision). The one driver
+# that qualifies, Orbbec, is its own target under sensor/orbbec/, built only
+# with VR_WITH_ORBBEC.
 add_subdirectory(volumetric_kit/recon/sensor)
 # TODO: add_subdirectory() for interop as that tier lands.
 
@@ -32,6 +34,9 @@ add_library(recon INTERFACE)
 add_library(volumetric_kit::recon ALIAS recon)
 target_link_libraries(recon INTERFACE recon_core recon_volume recon_tsdf
                                       recon_mesh recon_texture recon_sensor)
+if(TARGET recon_sensor_orbbec)
+  target_link_libraries(recon INTERFACE recon_sensor_orbbec)
+endif()
 
 # --- Install / export -------------------------------------------------------
 # Tiers install their own targets into volumetric_kit_reconTargets and their own
