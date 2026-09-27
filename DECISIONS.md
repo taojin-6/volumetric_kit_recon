@@ -3599,7 +3599,9 @@ here: `OrbbecCapture final : sensor::ICameraCapture`, target
 driver compiles against — no vendor SDK, no Vulkan. The SDK is `PRIVATE` behind
 a pointer to an implementation, so the public header names no SDK type; the
 driver installs its own headers, and the package config re-finds the SDK, only
-when the package was built with it. The folder names the driver rather than a
+when the package was built with it. The config hints the SDK the build checked
+and does not re-check a version itself: a consumer that points
+`OrbbecSDK_ROOT` elsewhere chose that SDK. The folder names the driver rather than a
 category (`sensor/drivers/`): the rule keeps platform-bound drivers out, so a
 second may never come. calib's planned capture tier is the known second
 consumer and links this target through the package; if the reuse outgrows
