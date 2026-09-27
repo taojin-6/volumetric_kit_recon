@@ -22,9 +22,7 @@ add_subdirectory(volumetric_kit/recon/texture)
 # structs it trades in are core vocabulary (core/camera_params.hpp), not voxels
 # or fusion -- so it sits beside the fusion tiers rather than on top of them,
 # and stays implementable from outside this repo, with drivers deliberately left
-# to whoever can build and test them (the 2026-08-02 decision). The one driver
-# that qualifies, Orbbec, is its own target under sensor/orbbec/, built only
-# with VR_WITH_ORBBEC.
+# to whoever can build and test them (the 2026-08-02 decision).
 add_subdirectory(volumetric_kit/recon/sensor)
 # TODO: add_subdirectory() for interop as that tier lands.
 

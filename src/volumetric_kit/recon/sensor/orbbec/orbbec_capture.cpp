@@ -115,12 +115,11 @@ Status check_orientation(ob::Device& device) {
   return {};
 }
 
-// What the SDK's threads write and the polling thread reads. Shared, and
-// captured by value in both SDK callbacks, because neither callback is
-// guaranteed gone when the capture is: the SDK invokes a *copy* of the
-// device-changed callback after releasing its own lock, so unregistering does
-// not wait for a call already running, and a pipeline stop that throws may
-// leave the SDK holding the frame callback. Whichever lets go last frees it.
+// What the SDK's threads write and the polling thread reads. Captured by
+// shared_ptr in both SDK callbacks, since neither is guaranteed gone when the
+// capture is: the SDK calls a *copy* of the device-changed callback after
+// releasing its lock, so unregistering does not wait for a call in flight, and
+// a pipeline stop that throws may leave the SDK holding the frame callback.
 struct Mailbox {
   std::mutex mutex;
   std::shared_ptr<ob::FrameSet> pending;  // guarded by mutex
@@ -199,8 +198,7 @@ struct OrbbecCapture::Impl {
   // Declared first so it is destroyed last: every SDK object below belongs to
   // this context.
   std::shared_ptr<ob::Context> context;
-  // Next, so a frame still pending in it is released while the context lives
-  // (unless a callback outlives this object; see Mailbox).
+  // Next, so a frame still pending in it is released while the context lives.
   std::shared_ptr<Mailbox> mailbox = std::make_shared<Mailbox>();
   std::shared_ptr<ob::Device> device;
   std::shared_ptr<ob::Pipeline> pipeline;
@@ -215,12 +213,9 @@ struct OrbbecCapture::Impl {
   ColorCameraParams color_camera{};
   DepthCameraParams depth_camera{};
 
-  // The SDK's frame thread hands pairs over through `mailbox`; the callback
-  // only swaps a shared pointer in, and all processing happens in poll(), so a
-  // pair nobody polls costs nothing but the SDK's own decode. These two are
-  // the polling thread's own.
-  std::atomic<std::uint64_t> delivered{0};
-  std::atomic<std::uint64_t> failed{0};
+  // The polling thread's counters; the SDK's thread counts in `mailbox`.
+  std::uint64_t delivered = 0;
+  std::uint64_t failed = 0;
   std::uint32_t failed_in_a_row = 0;
 
   bool running = false;
@@ -252,10 +247,8 @@ struct OrbbecCapture::Impl {
       try {
         pipeline->stop();
       } catch (...) {
-        // Stopping is the destructor's fallback; a camera that already went
-        // away cannot be stopped twice, and there is no one to tell. The
-        // frame callback holds only the mailbox, so if the SDK keeps it, a
-        // late frame lands there rather than in this object.
+        // A camera that already went away cannot be stopped, and there is no
+        // one to tell; a late frame lands in the mailbox, not in this object.
       }
       running = false;
     }
@@ -285,13 +278,9 @@ Result<OrbbecCapture> OrbbecCapture::open(const Options& options) {
     impl->context = std::make_shared<ob::Context>();
     impl->context->enableNetDeviceEnumeration(true);
 
-    // Discovery: re-query until the camera answers or the window closes. One
-    // query is not proof of absence for an Ethernet camera -- and so a query
-    // listing one camera is not proof it is the only one. A named camera is
-    // opened the moment it answers; an unnamed one only once the whole window
-    // has passed with nothing else answering, since cameras answer seconds
-    // apart and the first to answer is not a choice worth making for the
-    // caller.
+    // Discovery: re-query until the camera answers or the window closes. A
+    // named camera opens the moment it answers; an unnamed one only once the
+    // whole window has passed with no other camera answering.
     const auto deadline =
         std::chrono::steady_clock::now() +
         std::chrono::milliseconds(options.discovery_timeout_ms);
@@ -382,12 +371,9 @@ Result<OrbbecCapture> OrbbecCapture::open(const Options& options) {
                                  " Y16; it offers " + list_modes(*depth_modes));
     }
     try {
-      // RGB, not MJPG: the camera still sends MJPG over the wire (the link
-      // carries the same ~30 Mbit/s either way at 1280x720) and the SDK
-      // decodes it on its own thread, so the frame arrives as RGB triplets.
-      // TODO(sensor): stream H.265 instead -- the camera encodes it (21 Mbit/s
-      // at 4K against MJPG's 185, which also tops out at 16.7 of 25 fps) but
-      // the SDK passes it through undecoded, so it needs a decoder of ours.
+      // RGB: the wire carries MJPG either way, decoded on the SDK's thread.
+      // TODO(sensor): stream H.265, which the SDK passes through undecoded, so
+      // 4K on three cameras needs a decoder of ours (the 2026-09-26 decision).
       impl->color_profile = color_modes->getVideoStreamProfile(
           static_cast<int>(options.color_width),
           static_cast<int>(options.color_height), OB_FORMAT_RGB,
@@ -459,9 +445,9 @@ OrbbecCaptureStats OrbbecCapture::stats() const noexcept {
   OrbbecCaptureStats s;
   if (impl_ == nullptr) return s;
   s.received = impl_->mailbox->received.load(std::memory_order_relaxed);
-  s.delivered = impl_->delivered.load(std::memory_order_relaxed);
+  s.delivered = impl_->delivered;
   s.dropped = impl_->mailbox->dropped.load(std::memory_order_relaxed);
-  s.failed = impl_->failed.load(std::memory_order_relaxed);
+  s.failed = impl_->failed;
   return s;
 }
 
@@ -546,12 +532,12 @@ Result<std::optional<CapturedFrame>> OrbbecCapture::poll() {
   // open() negotiated -- every pair after it would too; `skip` for one the SDK
   // failed on, which the next may not be.
   const auto refuse = [&s](Status why) {
-    s.failed.fetch_add(1, std::memory_order_relaxed);
+    ++s.failed;
     return why;
   };
   const auto skip =
       [&s](const std::string& why) -> Result<std::optional<CapturedFrame>> {
-    s.failed.fetch_add(1, std::memory_order_relaxed);
+    ++s.failed;
     if (++s.failed_in_a_row < kMaxFailedPairsInARow) return no_frame();
     return Status::io_error(
         "OrbbecCapture: " + std::to_string(s.failed_in_a_row) +
@@ -565,14 +551,11 @@ Result<std::optional<CapturedFrame>> OrbbecCapture::poll() {
   const std::size_t pixels = static_cast<std::size_t>(width) * height;
   std::uint64_t timestamp_us = 0;
   try {
-    // Undistort colour, then register depth to it; see the class comment for
-    // why the order matters. Both filters are synchronous here.
-    // TODO(sensor): the same three steps as GPU kernels, keeping the frame on
-    // the device through fusion -- which needs device-resident overloads of
-    // the fusion entry points, or the upload is merely moved. And measure the
-    // camera's own registration (ALIGN_D2C_HW_MODE), deferred for shipping
-    // 2.5x the depth pixels over the link and for its unmeasured treatment of
-    // the colour lens (the 2026-09-26 decision).
+    // Undistort colour, then register depth to it (see the class comment).
+    // TODO(sensor): the same steps as GPU kernels, keeping the frame on the
+    // device through fusion -- which needs device-resident fusion entry
+    // points, or the upload is merely moved. And measure the camera's own
+    // registration (ALIGN_D2C_HW_MODE; the 2026-09-26 decision).
     const auto undistorted = s.undistort_color->process(frameset);
     if (undistorted == nullptr) {
       return skip("colour undistortion produced no frame");
@@ -670,7 +653,7 @@ Result<std::optional<CapturedFrame>> OrbbecCapture::poll() {
   // by leaving the default.
   frame.timestamp_ns = timestamp_us * 1000;
   s.failed_in_a_row = 0;
-  s.delivered.fetch_add(1, std::memory_order_relaxed);
+  ++s.delivered;
   return some_frame(frame);
 }
 
