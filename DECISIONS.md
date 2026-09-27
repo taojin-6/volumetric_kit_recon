@@ -509,9 +509,8 @@ host-side unit tests before any Objective-C touches them. Revisit the
 placement if ARKit capture ever gains a second consumer — a headless capture
 tool, a visionOS target — since that is reuse across consumers rather than one
 app's platform glue; moving it down stays cheap precisely because the contract
-already lives here. (*2026-09-26:* the Orbbec driver that "would
-qualify" has landed, as a target of its own beside the contract -- see that
-entry.)
+already lives here. (*2026-09-26:* the Orbbec driver that "would qualify" has
+landed, as a target of its own beside the contract — see that entry.)
 **Two consequences of the implementer being out of tree, both found by review
 and fixed on the same PR.** (1) *The camera-parameter structs are `core`
 vocabulary, and the contract depends on `core` alone.* They had been placed by
@@ -3587,208 +3586,139 @@ the build is unchanged — 27 tests, the SDK never looked for.
 all (a `TODO(ci)` beside it). The rig's driver has not landed; under the
 2026-08-02 rule it may, now that CI builds and tests against the SDK, and its
 open path owns the discovery wait above. (*2026-09-26:* it has landed, discovery
-wait included -- see that entry.)
+wait included — see that entry.)
 
 ### 2026-09-26 — The Orbbec driver lands as `sensor/orbbec`, a target of its own: it undistorts colour and then registers depth to it on the host, and it reads the rig's sync roles without writing them.
 
-The 2026-08-02 rule admits a driver this repo can build and test, and the
-Orbbec SDK is a cross-platform C++ library CI builds against (the 2026-09-24
-decision), so the Femto Mega driver lives here. It is `OrbbecCapture final :
-sensor::ICameraCapture`, in `include/volumetric_kit/recon/sensor/orbbec/`
-and `src/volumetric_kit/recon/sensor/orbbec/`, target
+The 2026-08-02 rule admits a driver this repo can build and test, and CI builds
+against the Orbbec SDK (the 2026-09-24 decision), so the Femto Mega driver lives
+here: `OrbbecCapture final : sensor::ICameraCapture`, target
 `volumetric_kit::recon_sensor_orbbec`, built only with `VR_WITH_ORBBEC`.
 
-**Placement.** The folder names the driver rather than a category
-(`sensor/front_end/`, `sensor/drivers/`): the rule keeps platform-bound
-drivers out, so recon may never host a second one, and "front end" reads as
-tracking in this field, where `track` is the next tier. The driver is its own
-target so `recon_sensor` stays what an out-of-tree driver compiles against --
-no vendor SDK, no Vulkan -- and the SDK is `PRIVATE` behind a pointer to an
-implementation, so the public header names no SDK type and a consumer
-compiles without the SDK's headers. `recon_sensor` no longer installs the
-`orbbec/` headers; `recon_sensor_orbbec` installs them, only when built, and
-the package config re-finds the SDK only when the package was built with it
-(`if(@VR_WITH_ORBBEC@)`). The umbrella `volumetric_kit::recon` links it when it
-exists, as it does every tier that is built. The second consumer is known:
-calib's planned capture tier drives the same cameras, and the owner wants
-calib's viewer to show the rig's synchronised streams. It links this target
-through the package -- a consumer build against an install does exactly that
--- and if the reuse outgrows linking, moving one folder to a shared repo is
-the whole change.
+**Placement.** A target of its own, so `recon_sensor` stays what an out-of-tree
+driver compiles against — no vendor SDK, no Vulkan. The SDK is `PRIVATE` behind
+a pointer to an implementation, so the public header names no SDK type; the
+driver installs its own headers, and the package config re-finds the SDK, only
+when the package was built with it. The folder names the driver rather than a
+category (`sensor/drivers/`): the rule keeps platform-bound drivers out, so a
+second may never come. calib's planned capture tier is the known second
+consumer and links this target through the package; if the reuse outgrows
+linking, moving the folder to a shared repo is the whole change.
 
 **The frame path: undistort colour, then register depth to it, then convert.**
 Measured on the rig's primary (CL2A141000N, 1280x720 colour, 640x576 depth):
-- The SDK's depth-to-colour alignment **ignores the colour lens.** Aligning
-  the raw frame set and one whose colour was undistorted first gives
-  bit-identical depth (0 of 921,600 pixels differ), and the registered depth
-  matches an independent projection -- each depth pixel undistorted through
-  the camera's rational six-coefficient model, moved by the depth-to-colour
-  extrinsic, projected with the *pinhole* colour intrinsics -- to 0.90 mm mean
-  / 1.36 mm RMS over 1,755 interior samples. Predicting the *distorted* colour
-  location instead misses by 28.6 mm RMS. So registered depth sits on the
-  pinhole grid; the raw colour image does not -- its lens moves pixels 5.25 px
-  on average and 10.5 px at most at this size -- and every colour sample would
-  be that far from the depth it is fused with. Undistorting colour first puts
-  both images on one pinhole camera: the registered case `tsdf` and `texture`
-  are written for.
-- The SDK's colour `UnDistortionFilter` runs **in the right direction**: its
-  output matches an independent forward-model remap of the raw image to 0.25
-  of 255 per channel on average, against 17.6 for the opposite direction and
-  14.3 for leaving the image alone.
-- The depth lens is the large correction -- 31.5 px mean, 220.9 px at the edge
-  of the ToF image -- and the SDK's registration makes it; nothing here
-  re-implements it.
-- Both filters keep the intrinsics and zero the distortion, which is what lets
-  both of a frame's cameras be the colour camera, the depth one derived through
-  `depth_from_registered_color`. The driver does not take that on trust: the
-  first pair of every start is checked -- registered depth *and* undistorted
-  colour each reporting the intrinsics the frame is stamped with, undistorted
-  colour reporting no distortion, a NaN on either side failing rather than
-  passing -- and a mismatch is an `IoError` rather than a misprojected
-  reconstruction (the 2026-08-04 rule). Registration is asked for at the
-  colour image's full size (`setMatchTargetResolution(true)`) rather than
-  left to the SDK's default, which the frame's one resolution depends on.
-- Cost, on the polling thread: undistort 1.33 ms + register 1.76 ms median
-  (M5 Max, -O2); a whole `poll()` that hands out a frame, conversions
-  included, 3.56 ms median / 4.20 ms worst over 80 frames. The SDK's frame
-  thread only swaps the newest pair into a slot, so a pair nobody polls costs
-  nothing past the SDK's own decode.
+- The SDK's depth-to-colour alignment **ignores the colour lens.** Aligning a
+  raw frame set and one whose colour was undistorted first gives bit-identical
+  depth, and the registered depth matches an independent *pinhole* projection
+  to 0.90 mm mean / 1.36 mm RMS over 1,755 samples; predicting the distorted
+  colour location instead misses by 28.6 mm RMS. The colour lens moves pixels
+  5.25 px on average (10.5 px at most), so without undistorting first every
+  colour sample would sit that far from its depth. Undistorting first puts both
+  images on one pinhole camera — the registered case `tsdf` and `texture` are
+  written for.
+- The SDK's `UnDistortionFilter` runs in the right direction: 0.25/255 per
+  channel from an independent forward remap, against 17.6 for the opposite
+  direction and 14.3 for none.
+- The depth lens is the large correction (31.5 px mean, 220.9 px at the edge)
+  and the SDK's registration makes it; nothing here re-implements it.
+- Both filters keep the intrinsics and zero the distortion, so both of a
+  frame's cameras are the colour camera, the depth one derived through
+  `depth_from_registered_color`. The first pair of every start is held to that
+  — both images reporting the stamped intrinsics, colour reporting no
+  distortion, a NaN failing — and a mismatch is an `IoError` rather than a
+  misprojected reconstruction (the 2026-08-04 rule). Registration is asked for
+  at the colour image's full size (`setMatchTargetResolution(true)`) rather
+  than left to the SDK's default.
+- Cost on the polling thread (M5 Max, -O2): undistort 1.33 ms + register
+  1.76 ms median; a whole `poll()` that hands out a frame, 3.56 ms median /
+  4.20 ms worst. The SDK's frame thread only swaps the newest pair into a slot,
+  so a pair nobody polls costs nothing past the SDK's own decode.
 
 Depth to colour, not colour to depth: the texture tier's atlas must be
 registered to the frame's camera, and colour sampled through depth would be a
-640x576 atlas with a hole wherever depth has none. Nor unregistered: the
-integrator's documented occlusion and partial-colouring caveats would apply,
-and the texture tier could not use the frame. The camera's **hardware**
-registration (`ALIGN_D2C_HW_MODE`, offered for all 14 depth modes at 720p) is
-deferred -- `TODO(sensor)` -- because it ships 2.5x the depth pixels over
-Ethernet, which three cameras on one link will feel, and because how its grid
-treats the colour lens is unmeasured; the host path costs ~3 ms.
+640x576 atlas with a hole wherever depth has none. The camera's **hardware**
+registration (`ALIGN_D2C_HW_MODE`) is deferred — a `TODO(sensor)` — because it
+ships 2.5x the depth pixels over Ethernet, which three cameras on one link will
+feel, and how it treats the colour lens is unmeasured.
 
-**Colour is requested as RGB, and the wire still carries MJPG.** Measured on
-the host's interface at 1280x720: requesting RGB and requesting MJPG move the
-same traffic (31 and 27 Mbit/s averaged over a run, setup included), because
-the camera compresses either way and the SDK decodes on its own thread. The
-camera also encodes H.264/H.265, which the SDK passes through undecoded:
-22 Mbit/s against MJPG's 37 at 720p, and 21 against 185 at 4K -- where MJPG
-reaches only 16.7 of 25 fps. A decoder of our own is the next step for 4K on
-three cameras, not this one.
+**Colour is requested as RGB; the wire carries MJPG either way.** At 1280x720 an
+RGB and an MJPG request move the same traffic (31 and 27 Mbit/s averaged over a
+run), since the camera compresses and the SDK decodes on its own thread. The
+camera also encodes H.265, which the SDK passes through undecoded: 21 Mbit/s
+against MJPG's 185 at 4K, where MJPG reaches only 16.7 of 25 fps. A decoder of
+our own is the step to 4K on three cameras, not this one.
 
-**Sync roles are read and never written.** The rig is wired for hardware sync:
-CL2A141000N is the primary, CL2A141000G and CL2A14100A4 are
-`SECONDARY_SYNCED` with 480 µs and 320 µs depth delays. A secondary opened on
-its own produced one frame set after ~3 s and none in the next 3 s -- from the
-consumer's side, a camera that is merely slow. That contradicts the SDK's own
-description of the mode, which has it capturing at once and only re-timing to
-a signal, so the measurement is what `waits_for_primary` follows and the enum
-says so. The role persists on the camera, and a driver that "fixed" it for a
-one-camera run would break the rig for the next one, so
-`OrbbecDeviceInfo::sync_mode` reports it and `waits_for_primary` says what it
-means -- frames only on *another camera's* signal, a primary or the camera
-that hardware-triggers it; starting a rig in the order its wiring needs
-(secondaries before the primary) belongs to the multi-camera source that
-comes next. Software triggering is the one mode refused outright
-(`Unsupported`): it waits for a host trigger this driver never sends, so the
-camera could only time out, with advice about a primary that does not apply.
-For the same reason a camera reporting its image mirrored, flipped or rotated
-is refused rather than reconfigured: its intrinsics describe the unmirrored
-image, and nothing downstream could tell.
+**Sync roles are read and never written.** The rig is hardware-synced:
+CL2A141000N is the primary, CL2A141000G and CL2A14100A4 are `SECONDARY_SYNCED`.
+A secondary opened alone produced one frame set in ~6 s — to a consumer, a
+camera that is merely slow. That contradicts the SDK's description of the mode
+(capture at once, re-time to a signal when one arrives), so `waits_for_primary`
+follows the measurement. The role persists on the camera, and a driver that
+"fixed" it for a one-camera run would break the rig for the next one, so
+`OrbbecDeviceInfo::sync_mode` reports it and nothing writes it; starting a rig
+in its wiring's order belongs to the multi-camera source. Software triggering
+is refused at `open`: it waits for a host trigger this driver never sends. A
+camera reporting its image mirrored, flipped or rotated is refused too — its
+intrinsics describe the unmirrored image, and nothing downstream could tell.
 
-**Discovery waits.** `open` re-queries every 250 ms until the camera answers
-or `discovery_timeout_ms` (8 s) runs out, since one query is not proof of
-absence for an Ethernet camera (the 2026-09-24 measurement). By the same
-measurement a query listing *one* camera is no proof it is alone, so an empty
-serial waits out the whole window, gathering every serial any query listed,
-opens the camera only if it was the only one, and is refused with the serials
-the moment a second answers. The first cut opened on the first list of one --
-exactly the arbitrary choice the option says it will not make -- and its
-refusal was verified only in a run where all three cameras answered the first
-query. A named camera opens as soon as it answers, which is why the examples
-and the hardware test always name one.
+**Discovery waits.** `open` re-queries every 250 ms until the camera answers or
+`discovery_timeout_ms` (8 s) runs out, since one query is no proof of absence
+for an Ethernet camera (the 2026-09-24 measurement) — and, by the same
+measurement, a list of one is no proof a camera is alone. So an empty serial
+waits out the whole window and is refused as soon as a second camera answers;
+a named camera opens the moment it answers, which is why the examples and the
+hardware test name one.
+
+**The SDK's callbacks hold a shared mailbox, not the capture.** The SDK calls a
+*copy* of the device-changed callback after releasing its lock, so
+unregistering does not wait for a call in flight, and a pipeline stop that
+throws may keep the frame callback. Both capture the pending pair, the fault and
+the counters by `shared_ptr`, so whichever of the capture and the SDK lets go
+last frees them.
+
+**Failures are graded.** A disconnect is permanent — the handle is gone, and a
+camera that comes back is a new device — so the capture becomes `exhausted()`
+and `start()` refuses it. A pair the SDK fails on is skipped and counted
+(`stats().failed`), and only 30 in a row (a second at 30 fps) are an `IoError`,
+since a camera whose every pair fails would otherwise look merely slow. A pair
+that contradicts the negotiated stream (size, format, intrinsics) is an error
+at once.
 
 **The hardware test opens only the camera it is told to.**
 `recon_sensor_orbbec_capture` skips unless `VR_ORBBEC_TEST_SERIAL` names a
-camera: discovery is a network broadcast, the cameras are exclusive, the
-Debug and Release legs run at once, and a person may be using the rig. It
-skips too, saying why, when the named camera is a secondary.
-`recon_sensor_orbbec_conversion` pins the arithmetic with no camera --
-millimetres to metres with 0 kept exact, the packed byte order, the camera
-struct (an `int16_t` size the SDK reports as negative is refused, not wrapped),
-the sync-mode mapping, and the option checks `open` makes before touching the
-SDK -- on every leg that builds the driver.
+camera — discovery is a broadcast, the cameras are exclusive, the Debug and
+Release legs run at once, and a person may be using the rig — and skips on a
+secondary. `recon_sensor_orbbec_conversion` pins the arithmetic with no camera:
+units (0 kept exact), byte order, the camera struct (a negative `int16_t` size
+refused, not wrapped), the sync-mode mapping, and the option checks `open`
+makes before touching the SDK.
 
-**A live camera gets its own example, `fuse_orbbec`,** not a flag on
-`fuse_replica`: that example is the dataset benchmark -- preload, stride, the
-dirty-block survey, the extract's phase breakdown -- and a camera takes none
-of it, so a `--orbbec` flag there (the first cut) meant refusing most of its
-knobs beside it. `fuse_orbbec` shares the one per-frame fuse
-(`examples/common/fuse_frame.hpp`) rather than a copy of the loop, fuses
-`--frames` frames (300 by default -- a camera is never exhausted), and gives
-up after 10 s without a frame, naming a sync secondary as the likely reason,
-rather than waiting forever. The multi-camera rig extends it.
+**A live camera is its own example, `fuse_orbbec`,** not a flag on
+`fuse_replica`, whose preload, stride, dirty-block survey and phase breakdown a
+camera takes none of. It fuses through the shared
+`examples/common/fuse_frame.hpp`, stops after `--frames` frames (300 by
+default; a camera is never exhausted), and gives up after 10 s without a frame,
+naming a sync secondary as the likely reason.
 
-**Review: the callbacks outlived the object they pointed at, and the
-contract's failure modes were coarser than the camera's.** A pass over the
-first cut returned fifteen findings, and the sharpest one came from reading
-the SDK: its device-changed trampoline copies the callback under its lock and
-calls the copy *after* releasing it, so `unregisterDeviceChangedCallback` does
-not wait for a call already running, and a hot-plug event anywhere on the
-network could land in a destroyed `Impl`. A pipeline stop that throws leaves
-the frame callback just as exposed. Both callbacks now capture a shared
-mailbox -- the pending pair, the fault, the counters -- by value, so whichever
-of the capture and the SDK lets go last frees it. A disconnect was sticky and
-silent: `start()` reported OK over it and `exhausted()` said to keep waiting.
-The camera's handle is gone for good (one that comes back is a new device), so
-a disconnected capture is now exhausted and refuses `start()`. A pair the SDK
-failed on -- a filter returning nothing, a throw on one frame -- was an
-`IoError` that ended a 300-frame run; it is now skipped and counted, and only
-30 in a row (a second at 30 fps) are an error, while a pair that contradicts
-the negotiated stream (size, format, intrinsics) still is one at once. Each
-taken pair is delivered or counted in the new `stats().failed`, so the
-counters add up. The rest were smaller: the conversion test called functions
-a shared build hides, so it now compiles their source itself; the package
-config now hints the SDK the build used and repeats its version rule, so a
-consumer that never links the driver needs no `OrbbecSDK_ROOT` and cannot
-resolve an older SDK than the build accepted; `list_modes` could throw over
-the `Unsupported` it was building; `stop()` keeps the camera held for a
-restart, so `fuse_orbbec` now destroys the capture before the extract, which
-its comment had claimed; and the four examples' copies of the grid setup are
-one `create_fusion_grid` in `fuse_frame.hpp`.
+**Verified** on macOS (Apple silicon) against the 2.9.3 SDK and the rig. The
+capture test against CL2A141000N: 30 frames, 0 dropped, 0 failed, 63.6% of
+registered pixels carrying depth, increasing timestamps, restart and moves; on
+CL2A141000G it skips as a secondary. `fuse_orbbec --serial CL2A141000N`:
+29.6 fps (the camera's rate), none dropped, a planar floor with its marker's
+texture on its own geometry; on the secondary it stops after 10 s naming the
+role, and with no serial and three cameras it refuses with all three serials.
+With the option on, 30 tests pass in Release under `-Werror` and clean under
+ASan/UBSan (the capture test and a `fuse_orbbec` run included), and a
+`BUILD_SHARED_LIBS=ON` build links; with it off the build is unchanged — 27
+tests, no `orbbec` file installed, no SDK asked for. A consumer project against
+an install links the target through `find_package`, and `fuse_replica` on 60
+room0 frames produces the same 636,624-vertex mesh as before.
 
-**Verified** on macOS (Apple silicon) against the 2.9.3 install and the rig.
-`recon_sensor_orbbec_capture` against CL2A141000N: 30 frames in 1.09 s, 63.6%
-of registered pixels carrying depth, strictly increasing timestamps, restart,
-moves; against CL2A141000G it skips as a secondary. `fuse_orbbec --serial
-CL2A141000N --frames 150`: 29.6 fps -- the camera's rate -- with none of the
-150 pairs dropped, 103,024 triangles; the mesh, rendered from a viewpoint 35°
-off the camera's, has a planar floor with a floor marker's texture on its own
-geometry. Against CL2A141000G it stops after 10 s with the secondary named;
-an unknown serial lists the cameras that answered, and no serial with three
-cameras asks for one. Registered
-depth edges drawn over the undistorted colour follow the object outlines. A
-separate CMake project built against an install links the target through
-`find_package(volumetric_kit_recon)`, the SDK re-found through
-`OrbbecSDK_ROOT`. With the option on, 30 tests pass under `-Werror` in
-Release; with it off, the build is unchanged -- 27 tests, no `orbbec` file
-installed, and the package config asks for no SDK. An ASan/UBSan Debug build
-runs both driver tests (the capture one against the camera, moves and restart
-included) and a 60-frame `fuse_orbbec` run clean. After the review, all again:
-30 tests in Release, the capture test against CL2A141000N (30 frames, 0
-dropped, 0 failed) and skipping on CL2A141000G, `fuse_orbbec` with no serial
-refusing with all three serials in 2.4 s, and 90 frames at 28.5 fps with the
-serial; the sanitizer build clean on the same runs; a `BUILD_SHARED_LIBS=ON`
-build linking and passing the conversion test, its library exporting none of
-the internal functions; a consumer of the install configuring with no
-`OrbbecSDK_ROOT`, and refusing a stub SDK reporting 2.8.0; and `fuse_replica`
-on 60 room0 frames producing the same 636,624-vertex mesh as `main`.
-
-**Open.** A disconnect is detected through the SDK's device-removed callback
-and surfaces as `IoError` from the next `poll()` and `start()`, with
-`exhausted()` true, but no run has unplugged a camera, so that path is
-unexercised -- as is the skip-and-count path, which no healthy run reaches. Timestamps are each camera's hardware
-clock, so frames from different cameras are not on one clock yet -- the
-multi-camera source's concern. HEVC decoding, GPU pre-processing that keeps
-the frame on the device through fusion, and the camera's hardware
-registration are each `TODO(sensor)`s. Windows is still unbuilt.
+**Open.** The disconnect and skip-and-count paths are implemented but
+unexercised: no run has unplugged a camera, and no healthy run fails a pair.
+Each camera stamps frames with its own hardware clock, so a rig's frames are not
+yet on one clock. That, HEVC decoding, GPU pre-processing and the hardware
+registration are `TODO(sensor)`s in `orbbec_capture.cpp`; Windows is unbuilt.
 
 ## Measured lessons
 
