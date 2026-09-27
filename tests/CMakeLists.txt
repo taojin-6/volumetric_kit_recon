@@ -309,14 +309,10 @@ if(VR_WITH_ORBBEC)
   vr_target_warnings(recon_orbbec_sdk_smoke_test)
   add_test(NAME recon_orbbec_sdk_smoke COMMAND recon_orbbec_sdk_smoke_test)
 
-  # The Orbbec driver's arithmetic -- units, byte order, the camera struct, the
-  # sync-mode mapping, and the option checks open() makes before touching the
-  # SDK. No camera, so it runs on every leg that builds the driver.
-  # frame_conversion.hpp is internal (non-installed) and names SDK types, so the
-  # test reaches it by include path and takes the SDK's headers from its target.
-  # Its functions are not exported -- the library hides every symbol it does not
-  # mark -- so the test compiles their source itself rather than linking a
-  # shared build's hidden copies; the library supplies only what it exports.
+  # The Orbbec driver's arithmetic, with no camera. frame_conversion.hpp is
+  # internal and names SDK types, so the test reaches it by include path; its
+  # functions are not exported, so the test compiles their source itself rather
+  # than linking a shared build's hidden copies.
   add_executable(
     recon_sensor_orbbec_conversion_test
     sensor_orbbec_conversion_test.cpp
@@ -332,9 +328,8 @@ if(VR_WITH_ORBBEC)
   add_test(NAME recon_sensor_orbbec_conversion
            COMMAND recon_sensor_orbbec_conversion_test)
 
-  # The driver against a real camera -- only the one VR_ORBBEC_TEST_SERIAL
-  # names; unset, it skips (exit 0), so no CI leg ever opens a camera that
-  # happens to share its network. See the test for what it checks.
+  # The driver against the camera VR_ORBBEC_TEST_SERIAL names; unset, it skips,
+  # so no CI leg opens a camera that happens to share its network.
   add_executable(recon_sensor_orbbec_capture_test
                  sensor_orbbec_capture_test.cpp)
   target_link_libraries(recon_sensor_orbbec_capture_test

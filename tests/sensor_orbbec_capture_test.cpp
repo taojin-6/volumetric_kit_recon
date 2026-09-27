@@ -5,13 +5,10 @@
 // against the contract -- the two cameras it is stamped with, the depth it
 // carries, the timestamps -- then restart, and move the capture around.
 //
-// A camera is used only when one is named: set VR_ORBBEC_TEST_SERIAL to its
-// serial. Unset, the test skips (exit 0). Discovery is a network broadcast and
-// the rig's cameras are exclusive, so a CI leg on a machine that happens to
-// share a network with a camera must not open it -- two build types running in
-// parallel would fight over it, and a person using the rig would lose it
-// mid-capture. The camera must stream on its own: a sync secondary delivers
-// nothing without its primary, so naming one skips with a message saying so.
+// A camera is used only when VR_ORBBEC_TEST_SERIAL names one; unset, the test
+// skips (exit 0), since the cameras are exclusive and a CI leg must not take
+// one from a person using the rig. A sync secondary, which streams only with
+// its primary, skips too.
 
 #include <chrono>
 #include <cmath>

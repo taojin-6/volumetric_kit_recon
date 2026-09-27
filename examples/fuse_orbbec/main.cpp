@@ -12,12 +12,9 @@
 //               [--max-weight 20]
 //
 // The camera sits at the world origin (identity pose), so the volume is what
-// one fixed view sees, averaged over the run. Without --serial it opens the
-// only camera discovery finds -- after waiting out the whole discovery window,
-// since a second camera may answer late; --serial skips that wait. A camera
-// wired as a rig's sync secondary delivers nothing unless its primary streams;
-// the run says so, and gives up after ten seconds without a frame rather than
-// waiting forever.
+// one fixed view sees, averaged over the run. The run gives up after ten
+// seconds without a frame -- a sync secondary with no primary, say -- rather
+// than waiting forever.
 
 #include <chrono>
 #include <cmath>
@@ -151,11 +148,10 @@ vr::Status run(const Options& opt) {
   capture_options.serial = opt.serial;
   if (opt.min_depth) capture_options.min_depth = *opt.min_depth;
   if (opt.max_depth) capture_options.max_depth = *opt.max_depth;
-  VR_ASSIGN(sensor::OrbbecCapture opened,
-            sensor::OrbbecCapture::open(capture_options));
-  // Held in an optional so the run can destroy it before the extract: stop()
-  // ends the streams but keeps the camera -- exclusively -- for a restart.
-  std::optional<sensor::OrbbecCapture> camera(std::move(opened));
+  // An optional so the run can release the camera before the extract: stop()
+  // ends the streams but keeps the camera held for a restart.
+  std::optional<sensor::OrbbecCapture> camera;
+  VR_ASSIGN(camera, sensor::OrbbecCapture::open(capture_options));
   const sensor::OrbbecDeviceInfo info = camera->device_info();
   const vr::ColorCameraParams cam = camera->color_camera();
   std::printf(
@@ -227,8 +223,6 @@ vr::Status run(const Options& opt) {
   const double secs =
       std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start)
           .count();
-  // Release the camera before the extract rather than at scope exit, so
-  // another process can open it while this one meshes and writes.
   const sensor::OrbbecCaptureStats st = camera->stats();
   camera.reset();
 

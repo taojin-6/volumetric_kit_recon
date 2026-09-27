@@ -79,9 +79,9 @@ branching off **`core`** (later: `compress`, `track`, `codec`, `stream`).
   `ColorEncoding` from `core/color_space.hpp`, so it
   depends on **`core` alone** — it sits beside the fusion tiers, not on top of
   them — and bundles **no drivers**: one ships here only if this repo can build
-  *and* test it (the 2026-08-02 decision), and the one that does — Orbbec —
-  is a target of its own under `sensor/orbbec/` (`recon_sensor_orbbec`, built
-  with `VR_WITH_ORBBEC`), so `recon_sensor` never links a vendor SDK.
+  *and* test it (the 2026-08-02 decision). The one that does, Orbbec, is a
+  target of its own (`sensor/orbbec/`), so `recon_sensor` never links a vendor
+  SDK.
 - **`interop`** — the handoff to `volumetric_kit_gfx` (below).
 
 ## Locked decisions
@@ -414,9 +414,8 @@ the same shape (gfx's rules; the mistakes reviews keep catching):
 ## Where to start
 
 Landed and proven on MoltenVK, left to right: `core` → `volume` → `tsdf` →
-`mesh` → `texture`, plus `sensor` (the contract, and beside it the one driver
-this repo can build and test, Orbbec) and **interop seam B** — gfx drawing
-recon's own buffers with no host round trip.
+`mesh` → `texture`, plus `sensor` (the contract and the Orbbec driver) and
+**interop seam B** — gfx drawing recon's own buffers with no host round trip.
 [DECISIONS.md](DECISIONS.md) carries the *why* behind anything here that looks
 arbitrary; it usually isn't.
 
@@ -641,37 +640,26 @@ arbitrary; it usually isn't.
   implementers in this tree: `examples/common/replica_capture.hpp`, which
   plays a Replica sequence back through the contract, so every example run
   produces real frames through it; and **`sensor/orbbec`'s `OrbbecCapture`**
-  (`VR_WITH_ORBBEC`), a live Femto Mega. Its `poll()` undistorts the colour
-  image and *then* registers depth to it — the SDK's registration ignores the
-  colour lens, which moves pixels ~5 px on average at 720p, so the order is
-  what puts both images on one pinhole camera — then converts to metres and
-  the packed words, ~3.6 ms on the polling thread; both of a frame's cameras
-  are the colour camera, posed by `Options::cam_to_world`, and the first pair
-  of each start is checked against that claim. It reads the camera's rig sync
-  role (`waits_for_primary`: a secondary delivers nothing without another
-  camera's signal — `SECONDARY_SYNCED` included, measured against the SDK's
-  own description) and never writes it, refuses a mirrored/flipped/rotated
-  image and a software-triggered camera, and waits out Ethernet discovery —
-  the *whole* window when no serial is named, since cameras answer seconds
-  apart and a list of one is no proof of one. Its SDK callbacks hold a shared
-  mailbox rather than the capture, since the SDK calls a callback after it
-  has been unregistered. A disconnect makes the capture `exhausted()`; a pair
-  the SDK fails on is skipped and counted (`stats().failed`), and only a run
-  of them is an error. Its hardware test opens only the camera
-  `VR_ORBBEC_TEST_SERIAL` names, so no CI leg touches the rig.
+  (`VR_WITH_ORBBEC`), a live Femto Mega. Its `poll()` undistorts colour and
+  *then* registers depth to it — the SDK's registration ignores the colour
+  lens, so the order is what puts both on one pinhole camera, posed by
+  `Options::cam_to_world`. It reads the camera's rig sync role
+  (`waits_for_primary`) and never writes it, and its hardware test opens only
+  the camera `VR_ORBBEC_TEST_SERIAL` names (the 2026-09-26 decision).
 
 **Examples** (`examples/`). All four poll their frames through
 `sensor::ICameraCapture&` — the fuse loop never learns what is behind it. The
 three dataset examples take `ReplicaCapture` as the source: frame cap, stride
-and the depth gate are its options, stamped on each frame it hands out, and its disk probe at `open`
-visits only the frames those options select. An empty poll is retried after a
-millisecond until the source reports itself `exhausted()`, so a live driver
-in the same construction site waits and the replay ends. Each frame fuses
+and the depth gate are its options, stamped on each frame it hands out, and its
+disk probe at `open` visits only the frames those options select. An empty
+poll is retried after a millisecond until the source reports itself
+`exhausted()`, so a live driver in the same construction site waits and the
+replay ends. Each frame fuses
 through `examples/common/fuse_frame.hpp` (the one allocate-and-grow-then-
 integrate loop, carrying the frame's encoding declaration across, into the one
-grid layout its `create_fusion_grid` builds), and a
-frame kept past the next poll — `fuse_render`'s keyframe, `fuse_viewer`'s
-newest fused frame for its final texture pass — is copied into an
+grid layout its `create_fusion_grid` builds), and a frame kept past the next
+poll — `fuse_render`'s keyframe, `fuse_viewer`'s newest fused frame for its
+final texture pass — is copied into an
 `RgbdFrame` of its own (`examples/common/rgbd_frame.hpp`, the type the
 reader decodes into; `CapturedFrame` is its view), never borrowed: the empty
 poll that ends a replay is a poll. `fuse_replica`
@@ -690,12 +678,8 @@ directly, and carrying the two-panel perf overlay. The three dataset examples
 take `--preload`, which makes the loop measure compute rather than the
 JPEG/PNG decoder.
 The live counterpart is its own example, not a `fuse_replica` flag:
-**`fuse_orbbec`** (built with `VR_WITH_ORBBEC`) polls an `OrbbecCapture`
-through the same contract, fuses each frame through the same
-`fuse_frame.hpp`, and writes a PLY after `--frames` frames (300 by default),
-giving up with the reason after 10 s without a frame. It destroys the capture
-before the extract rather than merely stopping it, since `stop()` keeps the
-camera held for a restart.
+**`fuse_orbbec`** (`VR_WITH_ORBBEC`) fuses an `OrbbecCapture` through the same
+`fuse_frame.hpp` and writes a PLY after `--frames` frames.
 
 **Next.** **Incremental mesh extraction has landed, all three stages** —
 `MarchingCubes::extract_device_incremental`, over the span table of the
@@ -737,13 +721,10 @@ gauges from VMA heuristics into driver truth. The debug-utils labels that TODO
 sat beside **have landed** (2026-08-30) — on the *kernel* rather than the span,
 which is the correction that entry records.
 
-**On `sensor`** — what the live front-end still lacks, each a
-`TODO(sensor)` in `orbbec_capture.cpp`: a multi-camera source that starts the
-synced rig in its wiring's order and puts the cameras on one clock (what
-calib's viewer needs to show the synchronised streams); HEVC colour through a
-decoder of our own (the camera encodes it, the SDK does not decode it — 21
-against 185 Mbit/s at 4K); and GPU pre-processing (undistort, register,
-convert) that keeps the frame on the device through fusion.
+**On `sensor`**, each a `TODO(sensor)` in `orbbec_capture.cpp`: a
+multi-camera source (the rig's start order, one clock — what calib's viewer
+needs for synchronised streams), HEVC colour through a decoder of our own, and
+GPU pre-processing that keeps the frame on the device through fusion.
 
 **Measure the phases before choosing the optimisation.** Three independent
 guesses at this pipeline's bottleneck have been wrong, each corrected by an

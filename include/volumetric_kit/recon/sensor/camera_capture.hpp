@@ -11,9 +11,7 @@
 /// decision). A driver ships here only when this repo can build *and test* it;
 /// a platform-bound one — ARKit, which is iOS-only Objective-C and needs LiDAR
 /// hardware to exercise — lives with the application that can, and implements
-/// @ref ICameraCapture from outside. (The one that qualifies, the Orbbec
-/// driver, is a target of its own beside this one, `sensor/orbbec/`, so this
-/// tier's link line never grows a vendor SDK.) The same split is why
+/// @ref ICameraCapture from outside. The same split is why
 /// `volumetric_kit_gfx`'s windowing tier takes a consumer-supplied surface
 /// rather than owning a window system, and why it ports untouched.
 ///

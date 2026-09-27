@@ -1,10 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Tao Jin
 
-# fuse_orbbec: live reconstruction from an Orbbec camera -- poll frames through
-# sensor::OrbbecCapture, fuse them with the shared per-frame fuse, extract a
-# marching-cubes mesh and write it to PLY. Built when the driver is
-# (VR_WITH_ORBBEC); the dataset example, fuse_replica, stays dataset-only.
+# fuse_orbbec: live reconstruction from an Orbbec camera to a PLY.
 add_executable(fuse_orbbec main.cpp)
 
 target_link_libraries(

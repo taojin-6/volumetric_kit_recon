@@ -47,8 +47,7 @@ target_include_directories(vr_tinyply SYSTEM
 
 add_subdirectory(common)
 add_subdirectory(fuse_replica)
-# The live counterpart: an Orbbec camera instead of a dataset, when the driver
-# is built (VR_WITH_ORBBEC).
+# The live counterpart, when the Orbbec driver is built.
 if(TARGET volumetric_kit::recon_sensor_orbbec)
   add_subdirectory(fuse_orbbec)
 endif()
