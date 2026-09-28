@@ -38,35 +38,46 @@ struct MeshTopology {
   // index, which is how the kernel finds their pseudonormal.
   std::vector<std::uint32_t> indices;
   // One per vertex, indexed by welded index. Zero on a vertex that touches a
-  // boundary edge, or that no used triangle references.
+  // boundary edge, or that no triangle references.
   std::vector<Vec3f> vertex_normals;
   // Three per triangle: entry 3t + k is the edge from corner k to corner
   // (k + 1) % 3, matching kVrFeatureEdgeAB/BC/CA in triangle_common.glsl. Zero
   // on a boundary edge, and on an edge whose two faces cancel (a fold of zero
   // thickness), neither of which has a side.
   std::vector<Vec3f> edge_normals;
-  // Edges one used triangle has and no other shares: an open mesh's rim.
-  // Allowed -- a voxel nearest one is left unobserved rather than signed.
+  // Edges one triangle has and no other shares: an open mesh's rim. Allowed
+  // -- a voxel nearest one is left unobserved rather than signed.
   std::uint32_t boundary_edges = 0;
-  // Edges three or more used triangles share. Their pseudonormal is not
-  // correct for any side, so signed mode refuses a mesh that has one.
+  // Edges three or more triangles share. Their pseudonormal is not correct
+  // for any side, so signed mode refuses a mesh that has one.
   std::uint32_t nonmanifold_edges = 0;
-  // Vertices where two fans of triangles touch at a point with every edge
-  // manifold (a "bowtie"). Refused for the same reason as a non-manifold edge.
+  // Vertices off the rim where two fans of triangles touch at a point with
+  // every edge manifold (a "bowtie"). Refused for the same reason as a
+  // non-manifold edge. A rim vertex is not counted: its pseudonormal is zero
+  // whatever meets there, so no voxel is signed through it.
   std::uint32_t nonmanifold_vertices = 0;
   // Edges whose two triangles traverse it in the same direction: the winding
   // flips across it, so "outside" means opposite things on its two faces.
   // Signed mode refuses these too.
   std::uint32_t inconsistent_edges = 0;
+  // The volume the triangles enclose, signed: positive when they wind
+  // counter-clockwise seen from outside, negative for a mesh wound inside out.
+  // Meaningful only for a closed mesh (boundary_edges == 0), where signed mode
+  // refuses a negative one -- every check above passes an inside-out mesh, and
+  // its field would come back with inside and outside swapped.
+  double volume = 0.0;
 };
 
-// Build the topology over the triangles `candidate_offsets` marks as used (a
-// non-empty range, so exactly the set the kernels see). The offsets are
-// volume::triangle_candidate_offsets' result for the same mesh, which has
-// already bounds-checked every index.
-MeshTopology build_mesh_topology(
-    const Vec3f* vertices, std::uint32_t vertex_count,
-    const std::uint32_t* indices, std::uint32_t triangle_count,
-    const std::vector<std::uint32_t>& candidate_offsets);
+// Build the topology over every triangle with finite corners that weld onto
+// three distinct vertices. That is a superset of what the kernels see: a
+// zero-area triangle, which triangle_candidate_offsets drops, still carries
+// its adjacency here -- a sliver closing a T-junction joins its neighbours
+// rather than leaving three rim edges -- and contributes no normal. A triangle
+// that collapses onto an edge or a point joins nothing and is left out. Every
+// index must already be bounds-checked (triangle_candidate_offsets does).
+MeshTopology build_mesh_topology(const Vec3f* vertices,
+                                 std::uint32_t vertex_count,
+                                 const std::uint32_t* indices,
+                                 std::uint32_t triangle_count);
 
 }  // namespace volumetric_kit::recon::tsdf::detail

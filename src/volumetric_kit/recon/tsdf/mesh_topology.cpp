@@ -43,6 +43,10 @@ PositionKey key_of(const Vec3f& v) {
   return {float_bits(v.x), float_bits(v.y), float_bits(v.z)};
 }
 
+bool all_finite(const Vec3f& v) {
+  return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
+}
+
 // One undirected edge's accumulation across the triangles that share it.
 struct EdgeAccum {
   double nx = 0.0, ny = 0.0, nz = 0.0;  // sum of the unit face normals
@@ -90,41 +94,50 @@ Vec3f unit_or_zero(double x, double y, double z) {
 
 }  // namespace
 
-MeshTopology build_mesh_topology(
-    const Vec3f* vertices, std::uint32_t vertex_count,
-    const std::uint32_t* indices, std::uint32_t triangle_count,
-    const std::vector<std::uint32_t>& candidate_offsets) {
+MeshTopology build_mesh_topology(const Vec3f* vertices,
+                                 std::uint32_t vertex_count,
+                                 const std::uint32_t* indices,
+                                 std::uint32_t triangle_count) {
   MeshTopology topo;
   const std::size_t corners = 3 * std::size_t{triangle_count};
   topo.indices.assign(indices, indices + corners);
   topo.vertex_normals.assign(vertex_count, Vec3f(0.0f));
   topo.edge_normals.assign(corners, Vec3f(0.0f));
 
-  auto used = [&](std::uint32_t t) {
-    return candidate_offsets[t + 1] > candidate_offsets[t];
-  };
-
-  // Weld: redirect every corner of a used triangle to the first vertex at its
-  // position. Unused triangles keep their indices; no kernel reads them.
+  // Weld: redirect every corner of a finite triangle to the first vertex at its
+  // position. Then keep the triangles whose corners are still three vertices;
+  // one that welded onto fewer has collapsed to an edge or a point, traverses
+  // what edge it has both ways, and counting it would make a manifold edge
+  // read as a non-manifold one. A triangle left out keeps its indices; no
+  // kernel reads it, since it has zero area.
+  std::vector<bool> in_mesh(triangle_count, false);
   std::unordered_map<PositionKey, std::uint32_t, PositionKeyHash> first_at;
   first_at.reserve(vertex_count);
   for (std::uint32_t t = 0; t < triangle_count; ++t) {
-    if (!used(t)) continue;
-    for (int k = 0; k < 3; ++k) {
-      std::uint32_t& corner = topo.indices[3 * std::size_t{t} + k];
-      corner = first_at.emplace(key_of(vertices[corner]), corner).first->second;
+    std::uint32_t* w = &topo.indices[3 * std::size_t{t}];
+    if (!all_finite(vertices[w[0]]) || !all_finite(vertices[w[1]]) ||
+        !all_finite(vertices[w[2]])) {
+      continue;
     }
+    for (int k = 0; k < 3; ++k) {
+      w[k] = first_at.emplace(key_of(vertices[w[k]]), w[k]).first->second;
+    }
+    in_mesh[t] = w[0] != w[1] && w[1] != w[2] && w[2] != w[0];
   }
 
   // Accumulate each face's unit normal into its three edges, and into its three
   // corners weighted by the angle there. Double precision, because a vertex
   // normal is a sum over every face around it and a float sum of many small
-  // angles loses the ones that matter at a sharp corner.
+  // angles loses the ones that matter at a sharp corner. The enclosed volume
+  // is summed about one of the mesh's own vertices, which keeps a mesh far
+  // from the origin from cancelling its terms away.
   std::vector<double> vertex_accum(3 * std::size_t{vertex_count}, 0.0);
   std::unordered_map<std::uint64_t, EdgeAccum> edges;
   edges.reserve(corners);
+  bool have_origin = false;
+  double origin[3] = {0.0, 0.0, 0.0};
   for (std::uint32_t t = 0; t < triangle_count; ++t) {
-    if (!used(t)) continue;
+    if (!in_mesh[t]) continue;
     const std::uint32_t* w = &topo.indices[3 * std::size_t{t}];
     double p[3][3];
     for (int k = 0; k < 3; ++k) {
@@ -139,9 +152,19 @@ MeshTopology build_mesh_topology(
                           p[2][2] - p[0][2]};
     double n[3] = {e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2],
                    e1[0] * e2[1] - e1[1] * e2[0]};
+    if (!have_origin) {
+      std::copy(p[0], p[0] + 3, origin);
+      have_origin = true;
+    }
+    const double r[3] = {p[0][0] - origin[0], p[0][1] - origin[1],
+                         p[0][2] - origin[2]};
+    topo.volume += (r[0] * n[0] + r[1] * n[1] + r[2] * n[2]) / 6.0;
+    // Zero for three distinct corners in a line: a sliver the kernels skip,
+    // kept for its adjacency, or a triangle whose float area survived only on
+    // an FMA's rounding residue. Either contributes no normal -- dividing
+    // would put a NaN into every edge and corner it touches.
     const double nlen = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
-    // Non-zero in float (candidate_offsets dropped the rest), so non-zero here.
-    for (double& c : n) c /= nlen;
+    for (double& c : n) c = nlen > 0.0 ? c / nlen : 0.0;
 
     for (int k = 0; k < 3; ++k) {
       // The interior angle at corner k, between its two outgoing edges.
@@ -207,16 +230,17 @@ MeshTopology build_mesh_topology(
   // touching at a point -- and its pseudonormal sums normals from surfaces that
   // do not bound the same side. Only the pinch the edge count cannot see is
   // counted: an end of a non-manifold edge splits into fans too, and is
-  // already reported as that edge.
+  // already reported as that edge. A rim vertex is not a pinch worth refusing:
+  // its pseudonormal is zeroed below, so no voxel is signed through it.
   constexpr std::uint32_t kNoFan = 0xFFFFFFFFu;
   std::vector<std::uint32_t> fan_of(vertex_count, kNoFan);
   std::vector<bool> pinched(vertex_count, false);
   for (std::uint32_t t = 0; t < triangle_count; ++t) {
-    if (!used(t)) continue;
+    if (!in_mesh[t]) continue;
     for (int k = 0; k < 3; ++k) {
       const auto c = static_cast<std::uint32_t>(3 * std::size_t{t} + k);
       const std::uint32_t v = topo.indices[c];
-      if (on_nonmanifold_edge[v]) continue;
+      if (on_nonmanifold_edge[v] || boundary_vertex[v]) continue;
       const std::uint32_t root = fans.find(c);
       if (fan_of[v] == kNoFan) {
         fan_of[v] = root;
@@ -228,7 +252,7 @@ MeshTopology build_mesh_topology(
   }
 
   for (std::uint32_t t = 0; t < triangle_count; ++t) {
-    if (!used(t)) continue;
+    if (!in_mesh[t]) continue;
     const std::uint32_t* w = &topo.indices[3 * std::size_t{t}];
     for (int k = 0; k < 3; ++k) {
       const EdgeAccum& e = edges.at(edge_key(w[k], w[(k + 1) % 3]));

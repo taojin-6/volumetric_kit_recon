@@ -3,7 +3,7 @@
 
 #include "volumetric_kit/recon/tsdf/mesh_integrator.hpp"
 
-#include <cmath>
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "mesh_topology.hpp"
+#include "volumetric_kit/recon/core/allocator.hpp"
 #include "volumetric_kit/recon/core/compute_util.hpp"
 #include "volumetric_kit/recon/core/device.hpp"
 #include "volumetric_kit/recon/core/vulkan.hpp"
@@ -25,7 +26,6 @@ namespace volumetric_kit::recon::tsdf {
 namespace {
 
 using volume::AttributeView;
-using volume::BlockIndex;
 using volume::VoxelBlockGrid;
 using volume::VoxelGridParams;
 
@@ -52,6 +52,7 @@ struct BinPush {
 };
 struct IntegratePush {
   VoxelGridParams grid;
+  std::uint32_t first_bin;
   std::uint32_t num_bins;
   std::uint32_t mode;
   float shell;
@@ -66,12 +67,14 @@ struct MeshBin {
 static_assert(sizeof(BinPush) == 40, "BinPush must be 40 bytes");
 static_assert(offsetof(BinPush, tri_count) == 32, "BinPush layout drift");
 static_assert(offsetof(BinPush, pass) == 36, "BinPush layout drift");
-static_assert(sizeof(IntegratePush) == 44, "IntegratePush must be 44 bytes");
-static_assert(offsetof(IntegratePush, num_bins) == 32,
+static_assert(sizeof(IntegratePush) == 48, "IntegratePush must be 48 bytes");
+static_assert(offsetof(IntegratePush, first_bin) == 32,
               "IntegratePush layout drift");
-static_assert(offsetof(IntegratePush, mode) == 36,
+static_assert(offsetof(IntegratePush, num_bins) == 36,
               "IntegratePush layout drift");
-static_assert(offsetof(IntegratePush, shell) == 40,
+static_assert(offsetof(IntegratePush, mode) == 40,
+              "IntegratePush layout drift");
+static_assert(offsetof(IntegratePush, shell) == 44,
               "IntegratePush layout drift");
 static_assert(sizeof(MeshBin) == 24, "MeshBin must be 24 bytes");
 static_assert(offsetof(MeshBin, ptr) == 12, "MeshBin layout drift");
@@ -82,6 +85,17 @@ std::uint32_t group_count(std::uint32_t items) {
   return volumetric_kit::recon::group_count(items, kLocalSize);
 }
 
+// A storage buffer only the device touches. storage_buffer is host-visible by
+// design, which on a discrete GPU puts a buffer the kernels stream across the
+// bus.
+Result<Buffer> device_storage_buffer(Allocator& allocator, VkDeviceSize bytes) {
+  BufferDesc desc;
+  desc.size = bytes;
+  desc.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+  desc.memory = MemoryUsage::DeviceLocal;
+  return allocator.create_buffer(desc);
+}
+
 }  // namespace
 
 Result<MeshIntegrator> MeshIntegrator::create(Device& device,
@@ -90,11 +104,12 @@ Result<MeshIntegrator> MeshIntegrator::create(Device& device,
   integ.device_ = &device;
   integ.allocator_ = &allocator;
 
-  // Both kernels take 8 storage buffers. mesh_bin: 0 hash entries, 1 vertices,
-  // 2 indices, 3 candidate offsets, 4 per-slot counts, 5 bin begins, 6 bins,
-  // 7 missing-block counter. mesh_integrate: 0 tsdf, 1 weight, 2 vertices,
-  // 3 indices, 4 block bins, 5 bins, 6 vertex pseudonormals, 7 edge
-  // pseudonormals. These counts and the shaders move together.
+  // mesh_bin takes 9 storage buffers: 0 hash entries, 1 vertices, 2 indices,
+  // 3 candidate offsets, 4 per-slot counts then cursors, 5 per-item slots,
+  // 6 per-slot coordinates, 7 missing-block counter, 8 bins. mesh_integrate
+  // takes 8: 0 tsdf, 1 weight, 2 vertices, 3 indices, 4 block bins, 5 bins,
+  // 6 vertex pseudonormals, 7 edge pseudonormals. These counts and the shaders
+  // move together.
   VkPushConstantRange bin_range{};
   bin_range.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
   bin_range.size = sizeof(BinPush);
@@ -103,7 +118,7 @@ Result<MeshIntegrator> MeshIntegrator::create(Device& device,
   integrate_range.size = sizeof(IntegratePush);
   KernelSetBuilder kb(device);
   VR_TRY(kb.add(integ.bin_, "tsdf_mesh_bin", vr_mesh_bin_comp_spv,
-                vr_mesh_bin_comp_spv_size, 8, &bin_range));
+                vr_mesh_bin_comp_spv_size, 9, &bin_range));
   VR_TRY(kb.add(integ.integrate_, "tsdf_mesh_integrate",
                 vr_mesh_integrate_comp_spv, vr_mesh_integrate_comp_spv_size, 8,
                 &integrate_range));
@@ -169,6 +184,41 @@ Result<MeshIntegrateStats> MeshIntegrator::integrate(
     return stats;
   }
 
+  // Every input is per-call and bound whole, so each is checked against what
+  // one binding may cover -- first, since each size is known from the counts
+  // alone, and a mesh too large to bind should not pay the host passes below
+  // to find out. The hash entries are the one buffer another tier sized, and
+  // are bound with their real range.
+  const auto num_blocks = static_cast<std::uint32_t>(g.num_blocks);
+  const VkDeviceSize vertex_bytes = VkDeviceSize(vertex_count) * sizeof(Vec3f);
+  const VkDeviceSize index_bytes =
+      VkDeviceSize(triangle_count) * 3 * sizeof(std::uint32_t);
+  const VkDeviceSize offset_bytes =
+      (VkDeviceSize(triangle_count) + 1) * sizeof(std::uint32_t);
+  const VkDeviceSize count_bytes =
+      VkDeviceSize(num_blocks) * sizeof(std::uint32_t);
+  const VkDeviceSize coord_bytes = VkDeviceSize(num_blocks) * sizeof(Vec3i);
+  const VkDeviceSize entries_bytes = grid.map().entries_buffer_size();
+  const VkDeviceSize edge_normal_bytes =
+      is_signed ? VkDeviceSize(triangle_count) * 3 * sizeof(Vec3f) : 0;
+  const struct {
+    const char* what;
+    VkDeviceSize bytes;
+  } ranges[] = {
+      {"the vertex buffer", vertex_bytes},
+      {"the index buffer", index_bytes},
+      {"the candidate offsets", offset_bytes},
+      {"the bin counts", count_bytes},
+      {"the bin coordinates", coord_bytes},
+      {"the hash entries", entries_bytes},
+      {"the edge pseudonormals", edge_normal_bytes},
+  };
+  for (const auto& r : ranges) {
+    VR_TRY(
+        check_storage_buffer_range((std::string(kWho) + ": " + r.what).c_str(),
+                                   r.bytes, max_storage_buffer_range_));
+  }
+
   // The candidate decomposition allocate_from_triangles dispatched over. Also
   // where every index is bounds-checked and a degenerate triangle dropped.
   VR_ASSIGN(std::vector<std::uint32_t> offsets,
@@ -181,13 +231,18 @@ Result<MeshIntegrateStats> MeshIntegrator::integrate(
   for (std::uint32_t t = 0; t < triangle_count; ++t) {
     if (offsets[t + 1] > offsets[t]) ++stats.triangles;
   }
+  const VkDeviceSize item_bytes =
+      VkDeviceSize(work_items) * sizeof(std::uint32_t);
+  VR_TRY(check_storage_buffer_range(
+      (std::string(kWho) + ": the work-item slots").c_str(), item_bytes,
+      max_storage_buffer_range_));
 
   // Signed mode's connectivity, and its refusals. Before any upload, so a mesh
   // that cannot be signed costs no GPU work.
   detail::MeshTopology topo;
   if (is_signed) {
     topo = detail::build_mesh_topology(vertices, vertex_count, indices,
-                                       triangle_count, offsets);
+                                       triangle_count);
     if (topo.nonmanifold_edges != 0 || topo.nonmanifold_vertices != 0 ||
         topo.inconsistent_edges != 0) {
       return Status::invalid_argument(
@@ -199,6 +254,13 @@ Result<MeshIntegrateStats> MeshIntegrator::integrate(
           std::to_string(topo.inconsistent_edges) +
           " edge(s) whose winding flips; MeshSdfMode::Shell takes any mesh");
     }
+    if (topo.boundary_edges == 0 && topo.volume < 0.0) {
+      return Status::invalid_argument(
+          std::string(kWho) +
+          ": signed mode needs faces wound counter-clockwise seen from "
+          "outside, and this closed mesh encloses negative volume -- it is "
+          "wound inside out; reverse every triangle's winding");
+    }
     stats.boundary_edges = topo.boundary_edges;
   }
   // Signed mode reads through the welded indices, which name the same
@@ -206,40 +268,10 @@ Result<MeshIntegrateStats> MeshIntegrator::integrate(
   const std::uint32_t* kernel_indices =
       is_signed ? topo.indices.data() : indices;
 
-  // Every input is per-call and bound whole, so each is checked against what
-  // one binding may cover. The hash entries are the one buffer another tier
-  // sized, and are bound with their real range.
-  const auto num_blocks = static_cast<std::uint32_t>(g.num_blocks);
-  const VkDeviceSize vertex_bytes = VkDeviceSize(vertex_count) * sizeof(Vec3f);
-  const VkDeviceSize index_bytes =
-      VkDeviceSize(triangle_count) * 3 * sizeof(std::uint32_t);
-  const VkDeviceSize offset_bytes =
-      VkDeviceSize(offsets.size()) * sizeof(std::uint32_t);
-  const VkDeviceSize count_bytes =
-      VkDeviceSize(num_blocks) * sizeof(std::uint32_t);
-  const VkDeviceSize begin_bytes =
-      (VkDeviceSize(num_blocks) + 1) * sizeof(std::uint32_t);
-  const VkDeviceSize entries_bytes = grid.map().entries_buffer_size();
-  const VkDeviceSize edge_normal_bytes =
-      is_signed ? VkDeviceSize(topo.edge_normals.size()) * sizeof(Vec3f) : 0;
-  const struct {
-    const char* what;
-    VkDeviceSize bytes;
-  } ranges[] = {
-      {"the vertex buffer", vertex_bytes},
-      {"the index buffer", index_bytes},
-      {"the candidate offsets", offset_bytes},
-      {"the bin counts", count_bytes},
-      {"the bin begins", begin_bytes},
-      {"the hash entries", entries_bytes},
-      {"the edge pseudonormals", edge_normal_bytes},
-  };
-  for (const auto& r : ranges) {
-    VR_TRY(
-        check_storage_buffer_range((std::string(kWho) + ": " + r.what).c_str(),
-                                   r.bytes, max_storage_buffer_range_));
-  }
-
+  // TODO(tsdf): the inputs are host-visible, as every buffer the grid itself
+  // binds is (its attributes carry the same TODO(volume)); staging them
+  // device-local waits on a copy path in core. The buffers only the device
+  // touches are device-local already.
   VR_ASSIGN(Buffer vertex_buf,
             upload_storage_buffer(*allocator_, vertices, vertex_bytes));
   VR_ASSIGN(Buffer index_buf,
@@ -247,13 +279,19 @@ Result<MeshIntegrateStats> MeshIntegrator::integrate(
   VR_ASSIGN(Buffer offset_buf,
             upload_storage_buffer(*allocator_, offsets.data(), offset_bytes));
   VR_ASSIGN(Buffer count_buf, storage_buffer(*allocator_, count_bytes));
+  VR_ASSIGN(Buffer coord_buf, storage_buffer(*allocator_, coord_bytes));
+  VR_ASSIGN(Buffer item_buf, device_storage_buffer(*allocator_, item_bytes));
   device_->set_object_name(VK_OBJECT_TYPE_BUFFER,
                            debug_object_handle(vertex_buf.handle()),
                            "tsdf.mesh_vertices");
   device_->set_object_name(VK_OBJECT_TYPE_BUFFER,
                            debug_object_handle(count_buf.handle()),
                            "tsdf.mesh_bin_counts");
+  device_->set_object_name(VK_OBJECT_TYPE_BUFFER,
+                           debug_object_handle(item_buf.handle()),
+                           "tsdf.mesh_item_slots");
   auto* counts = static_cast<std::uint32_t*>(count_buf.mapped());
+  const auto* coords = static_cast<const Vec3i*>(coord_buf.mapped());
   std::memset(counts, 0, static_cast<std::size_t>(count_bytes));
   std::memset(missing_.mapped(), 0, sizeof(std::uint32_t));
 
@@ -263,8 +301,9 @@ Result<MeshIntegrateStats> MeshIntegrator::integrate(
   bin_.set.write_storage_buffer(2, index_buf.handle(), 0, VK_WHOLE_SIZE);
   bin_.set.write_storage_buffer(3, offset_buf.handle(), 0, VK_WHOLE_SIZE);
   bin_.set.write_storage_buffer(4, count_buf.handle(), 0, VK_WHOLE_SIZE);
-  bin_.set.write_storage_buffer(5, dummy_.handle(), 0, VK_WHOLE_SIZE);
-  bin_.set.write_storage_buffer(6, dummy_.handle(), 0, VK_WHOLE_SIZE);
+  bin_.set.write_storage_buffer(5, item_buf.handle(), 0, VK_WHOLE_SIZE);
+  bin_.set.write_storage_buffer(6, coord_buf.handle(), 0, VK_WHOLE_SIZE);
+  bin_.set.write_storage_buffer(8, dummy_.handle(), 0, VK_WHOLE_SIZE);
 
   // Count. The one pass whose result the host must read before it writes
   // anything: a band block the table does not hold would leave that part of
@@ -276,82 +315,75 @@ Result<MeshIntegrateStats> MeshIntegrator::integrate(
   std::memcpy(&missing, missing_.mapped(), sizeof(missing));
   if (missing != 0) {
     return Status::invalid_argument(
-        std::string(kWho) + ": " + std::to_string(missing) +
-        " band block(s) are not allocated; run "
+        std::string(kWho) +
+        ": the band reaches blocks that are not allocated (" +
+        std::to_string(missing) +
+        " triangle-block pair(s) found none); run "
         "VoxelHashMap::allocate_from_triangles with this mesh first, and "
         "check it reported no failures");
   }
 
-  // Each slot's bin as a range of one concatenated array. Only the counts are
-  // kept on the host: the bins themselves never leave the device.
-  const std::vector<std::uint32_t> slot_count(counts, counts + num_blocks);
-  std::vector<std::uint32_t> begin(std::size_t{num_blocks} + 1, 0u);
+  // Each slot's bin as a range of one concatenated array, in one pass: the
+  // counts are rewritten in place as each bin's first entry, which the fill
+  // pass then advances as its cursor, and every binned slot becomes a block to
+  // write, at the coordinate the count pass found it at.
+  const auto vpb = static_cast<std::uint32_t>(g.voxels_per_block);
+  std::vector<MeshBin> blocks;
   std::uint64_t bin_entries = 0;
-  std::uint32_t binned_slots = 0;
+  std::uint32_t largest_bin = 0;
   for (std::uint32_t s = 0; s < num_blocks; ++s) {
-    begin[s] = static_cast<std::uint32_t>(bin_entries);
-    bin_entries += slot_count[s];
-    if (slot_count[s] != 0) ++binned_slots;
+    const std::uint32_t count = counts[s];
+    counts[s] = static_cast<std::uint32_t>(bin_entries);
+    if (count == 0) continue;
+    blocks.push_back(MeshBin{coords[s], static_cast<std::int32_t>(s * vpb),
+                             static_cast<std::uint32_t>(bin_entries), count});
+    largest_bin = std::max(largest_bin, count);
+    bin_entries += count;
     if (bin_entries > std::numeric_limits<std::uint32_t>::max()) {
       return Status::invalid_argument(std::string(kWho) +
                                       ": bin entries exceed 2^32");
     }
   }
-  begin[num_blocks] = static_cast<std::uint32_t>(bin_entries);
-  if (bin_entries == 0) {
+  if (blocks.empty()) {
     return stats;
+  }
+  if (largest_bin > kMaxBinTriangles) {
+    return Status::invalid_argument(
+        std::string(kWho) + ": a block's bin holds " +
+        std::to_string(largest_bin) + " triangles, past kMaxBinTriangles (" +
+        std::to_string(kMaxBinTriangles) +
+        "); the mesh is far finer than the grid's voxels -- decimate it "
+        "toward the voxel size");
   }
   const VkDeviceSize bins_bytes =
       VkDeviceSize(bin_entries) * sizeof(std::uint32_t);
-  VR_TRY(check_storage_buffer_range((std::string(kWho) + ": the bins").c_str(),
-                                    bins_bytes, max_storage_buffer_range_));
-  VR_ASSIGN(Buffer begin_buf,
-            upload_storage_buffer(*allocator_, begin.data(), begin_bytes));
-  VR_ASSIGN(Buffer bins_buf, storage_buffer(*allocator_, bins_bytes));
-  device_->set_object_name(VK_OBJECT_TYPE_BUFFER,
-                           debug_object_handle(bins_buf.handle()),
-                           "tsdf.mesh_bins");
-
-  // Fill. The counts become cursors.
-  std::memset(counts, 0, static_cast<std::size_t>(count_bytes));
-  bin_.set.write_storage_buffer(5, begin_buf.handle(), 0, VK_WHOLE_SIZE);
-  bin_.set.write_storage_buffer(6, bins_buf.handle(), 0, VK_WHOLE_SIZE);
-  const BinPush fill_push{g, triangle_count, kPassFill};
-  VR_TRY(dispatch(*device_, bin_, &fill_push, sizeof(fill_push),
-                  group_count(work_items), max_workgroup_count_x_, &stage));
-
-  // The blocks to write, with their coordinates. A slot names a heap block,
-  // not a coordinate, so the coordinates come from a compaction; a counted slot
-  // missing from it means the table changed under the call.
-  VR_ASSIGN(std::vector<BlockIndex> active,
-            grid.map().compact_active_blocks(metrics));
-  const auto vpb = static_cast<std::uint32_t>(g.voxels_per_block);
-  std::vector<MeshBin> blocks;
-  blocks.reserve(binned_slots);
-  for (const BlockIndex& b : active) {
-    const std::uint32_t s = static_cast<std::uint32_t>(b.ptr) / vpb;
-    if (s < num_blocks && slot_count[s] != 0) {
-      blocks.push_back(MeshBin{b.coord, b.ptr, begin[s], slot_count[s]});
-    }
-  }
-  if (blocks.size() != binned_slots) {
-    return Status::invalid_argument(
-        std::string(kWho) +
-        ": the grid's table changed during the call; it must be quiescent");
-  }
-  const std::uint64_t threads = static_cast<std::uint64_t>(blocks.size()) * vpb;
-  if (threads > std::numeric_limits<std::uint32_t>::max()) {
-    return Status::invalid_argument(std::string(kWho) +
-                                    ": blocks * voxels_per_block exceeds 2^32");
-  }
   const VkDeviceSize block_bytes =
       VkDeviceSize(blocks.size()) * sizeof(MeshBin);
+  VR_TRY(check_storage_buffer_range((std::string(kWho) + ": the bins").c_str(),
+                                    bins_bytes, max_storage_buffer_range_));
   VR_TRY(check_storage_buffer_range(
       (std::string(kWho) + ": the block list").c_str(), block_bytes,
       max_storage_buffer_range_));
+  // The integrate dispatches take consecutive blocks while the next would keep
+  // the dispatch within kMaxDispatchBinEntries, and within what one 1-D
+  // dispatch can launch. Checked here, above the first write: a block too
+  // large for one dispatch alone could not be split.
+  const std::uint64_t max_threads = std::min<std::uint64_t>(
+      std::uint64_t{max_workgroup_count_x_} * kLocalSize,
+      std::numeric_limits<std::uint32_t>::max());
+  const std::uint64_t max_dispatch_blocks = max_threads / vpb;
+  if (max_dispatch_blocks == 0) {
+    return Status::invalid_argument(
+        std::string(kWho) +
+        ": voxels_per_block exceeds what one dispatch can launch");
+  }
+
+  VR_ASSIGN(Buffer bins_buf, device_storage_buffer(*allocator_, bins_bytes));
   VR_ASSIGN(Buffer block_buf,
             upload_storage_buffer(*allocator_, blocks.data(), block_bytes));
-
+  device_->set_object_name(VK_OBJECT_TYPE_BUFFER,
+                           debug_object_handle(bins_buf.handle()),
+                           "tsdf.mesh_bins");
   Buffer vertex_normal_buf;
   Buffer edge_normal_buf;
   if (is_signed) {
@@ -362,6 +394,12 @@ Result<MeshIntegrateStats> MeshIntegrator::integrate(
               upload_storage_buffer(*allocator_, topo.edge_normals.data(),
                                     edge_normal_bytes));
   }
+
+  // Fill.
+  bin_.set.write_storage_buffer(8, bins_buf.handle(), 0, VK_WHOLE_SIZE);
+  const BinPush fill_push{g, triangle_count, kPassFill};
+  VR_TRY(dispatch(*device_, bin_, &fill_push, sizeof(fill_push),
+                  group_count(work_items), max_workgroup_count_x_, &stage));
 
   integrate_.set.write_storage_buffer(0, tsdf_view.buffer->handle(), 0,
                                       VK_WHOLE_SIZE);
@@ -378,12 +416,23 @@ Result<MeshIntegrateStats> MeshIntegrator::integrate(
       7, is_signed ? edge_normal_buf.handle() : dummy_.handle(), 0,
       VK_WHOLE_SIZE);
 
-  const IntegratePush push{g, static_cast<std::uint32_t>(blocks.size()),
-                           static_cast<std::uint32_t>(params.mode),
-                           is_signed ? 0.0f : shell_m};
-  VR_TRY(dispatch(*device_, integrate_, &push, sizeof(push),
-                  group_count(static_cast<std::uint32_t>(threads)),
-                  max_workgroup_count_x_, &stage));
+  for (std::size_t first = 0; first < blocks.size();) {
+    std::size_t end = first + 1;
+    std::uint64_t entries = blocks[first].count;
+    while (end < blocks.size() && end - first < max_dispatch_blocks &&
+           entries + blocks[end].count <= kMaxDispatchBinEntries) {
+      entries += blocks[end].count;
+      ++end;
+    }
+    const auto n = static_cast<std::uint32_t>(end - first);
+    const IntegratePush push{g, static_cast<std::uint32_t>(first), n,
+                             static_cast<std::uint32_t>(params.mode),
+                             is_signed ? 0.0f : shell_m};
+    VR_TRY(dispatch(*device_, integrate_, &push, sizeof(push),
+                    group_count(n * vpb), max_workgroup_count_x_, &stage));
+    ++stats.dispatches;
+    first = end;
+  }
 
   stats.blocks = static_cast<std::uint32_t>(blocks.size());
   stats.bin_entries = static_cast<std::uint32_t>(bin_entries);

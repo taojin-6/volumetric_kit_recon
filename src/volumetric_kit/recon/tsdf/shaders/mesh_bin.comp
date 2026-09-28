@@ -13,22 +13,30 @@
 // shape the 2026-08-08 overflow-scan entry records hanging an M5 iPad.
 //
 // Dispatched twice over the same items (pc.pass):
-//   count -- counts[slot] += 1 per triangle in the block at hash slot `slot`,
-//            and `missing` += 1 per band block the table does not hold. The
-//            host reads `missing` before anything is written and refuses a
-//            non-zero one, then turns the counts into bin_begin (exclusive
-//            prefix sum, num_blocks + 1 entries) and zeroes counts again.
-//   fill  -- counts[] becomes each bin's cursor: an item takes the next slot of
-//            its block's bin and writes its triangle there.
-// The two passes see the same items and the same table, so a fill cursor never
-// passes its bin's end; the bound is checked anyway, so a disagreement drops a
-// triangle from one bin rather than overwriting the next bin's first entry.
+//   count -- probes each item's block and records the answer in
+//            item_slot[gid]: the block's heap SLOT (ptr / voxels_per_block),
+//            or kNoSlot for an item the band test prunes. It counts the
+//            triangle into counts[slot] and stores the block's coordinate in
+//            slot_coord[slot], so the host learns which blocks to write
+//            without a compaction (every item of a slot stores the same
+//            coordinate). An item whose band block the table does not hold
+//            adds 1 to `missing` instead -- one per (triangle, block) pair, not
+//            per block -- which the host reads, and refuses, before anything is
+//            written. The host then rewrites counts[] in place as each bin's
+//            first entry (an exclusive prefix sum), and they become cursors.
+//   fill  -- replays the count pass's slots rather than re-deriving them: an
+//            item takes the next entry of its slot's bin and writes its
+//            triangle there. The same items land in the same slots, so every
+//            bin fills exactly to its count. A fill that re-ran the probe and
+//            the band test would only agree by assumption, and a bin one short
+//            leaves an entry nobody wrote for the integrate pass to read as a
+//            triangle index.
 //
 // Keyed by the block's heap SLOT (ptr / voxels_per_block) rather than a dense
 // grid over the mesh's bounding box, which the prior engine's shell mode built:
 // a 20 m cube at its 2*trunc_dist cell -- 80 mm at the default band -- is ~16M
-// cells whatever the surface looks like, while the slot array is the grid's
-// num_blocks, 4 bytes apiece.
+// cells whatever the surface looks like, while the slot arrays are the grid's
+// num_blocks, 16 bytes apiece (a count and a coordinate).
 
 #extension GL_GOOGLE_include_directive : require
 #define VR_HASH_ENTRIES_BINDING 0
@@ -38,27 +46,33 @@
 
 layout(local_size_x = 256) in;
 
-// binding 0: the grid's hash entries (hash_lookup.glsl).
+// binding 0: the grid's hash entries (hash_lookup.glsl). Count pass only.
 // binding 1: mesh vertices, tightly packed vec3 (scalar stride 12, the host
-// Vec3f array byte for byte).
+// Vec3f array byte for byte). Count pass only.
 layout(set = 0, binding = 1, scalar) readonly buffer Vertices {
   vec3 vertices[];
 };
 // binding 2: triangle indices, 3 per triangle, bounds-checked on the host.
+// Count pass only.
 layout(set = 0, binding = 2, scalar) readonly buffer Indices { uint indices[]; };
 // binding 3: the per-triangle candidate offsets (triangle_candidates.glsl).
-// binding 4: per-slot triangle counts (count pass), then cursors (fill pass).
+// binding 4: per-slot triangle counts (count pass), then per-slot cursors, each
+// starting at its bin's first entry (fill pass).
 layout(set = 0, binding = 4, scalar) buffer Counts { uint counts[]; };
-// binding 5: fill pass only -- each slot's first bin entry, num_blocks + 1.
-layout(set = 0, binding = 5, scalar) readonly buffer BinBegin {
-  uint bin_begin[];
+// binding 5: each work item's slot, or kNoSlot: written by the count pass,
+// replayed by the fill pass.
+layout(set = 0, binding = 5, scalar) buffer ItemSlots { uint item_slot[]; };
+// binding 6: count pass only -- each binned slot's block coordinate.
+layout(set = 0, binding = 6, scalar) writeonly buffer SlotCoords {
+  ivec3 slot_coord[];
 };
-// binding 6: fill pass only -- the bins, concatenated.
-layout(set = 0, binding = 6, scalar) writeonly buffer BinTris {
+// binding 7: count pass only -- (triangle, block) pairs whose band block the
+// table does not hold.
+layout(set = 0, binding = 7, scalar) buffer Missing { uint missing; };
+// binding 8: fill pass only -- the bins, concatenated.
+layout(set = 0, binding = 8, scalar) writeonly buffer BinTris {
   uint bin_tris[];
 };
-// binding 7: count pass only -- band blocks the table does not hold.
-layout(set = 0, binding = 7, scalar) buffer Missing { uint missing; };
 
 layout(push_constant, scalar) uniform PushConstants {
   VoxelGridParams grid;
@@ -68,40 +82,41 @@ layout(push_constant, scalar) uniform PushConstants {
 
 const uint kPassCount = 0u;
 const uint kPassFill = 1u;
+const uint kNoSlot = 0xFFFFFFFFu;
 
 void main() {
   uint gid = gl_GlobalInvocationID.x;
   if (gid >= vr_tri_offsets[pc.tri_count]) {
     return;
   }
+
+  if (pc.pass == kPassFill) {
+    uint slot = item_slot[gid];
+    if (slot != kNoSlot) {
+      bin_tris[atomicAdd(counts[slot], 1u)] = vrTriangleOf(gid, pc.tri_count);
+    }
+    return;
+  }
+
   uint t = vrTriangleOf(gid, pc.tri_count);
   uint local = gid - vr_tri_offsets[t];
-
   vec3 v0 = vertices[indices[3u * t]];
   vec3 v1 = vertices[indices[3u * t + 1u]];
   vec3 v2 = vertices[indices[3u * t + 2u]];
 
+  uint slot = kNoSlot;
   ivec3 coord;
-  if (!vrCandidateBlock(local, v0, v1, v2, pc.grid, coord) ||
-      !vrBlockInBand(coord, v0, v1, v2, pc.grid)) {
-    return;
-  }
-
-  int ptr = vrFindBlockPtr(coord, pc.grid.num_buckets, pc.grid.bucket_size,
-                           pc.grid.max_chain);
-  if (ptr < 0) {
-    if (pc.pass == kPassCount) {
+  if (vrCandidateBlock(local, v0, v1, v2, pc.grid, coord) &&
+      vrBlockInBand(coord, v0, v1, v2, pc.grid)) {
+    int ptr = vrFindBlockPtr(coord, pc.grid.num_buckets, pc.grid.bucket_size,
+                             pc.grid.max_chain);
+    if (ptr < 0) {
       atomicAdd(missing, 1u);
-    }
-    return;
-  }
-
-  uint slot = uint(ptr) / uint(pc.grid.voxels_per_block);
-  uint k = atomicAdd(counts[slot], 1u);
-  if (pc.pass == kPassFill) {
-    uint at = bin_begin[slot] + k;
-    if (at < bin_begin[slot + 1u]) {
-      bin_tris[at] = t;
+    } else {
+      slot = uint(ptr) / uint(pc.grid.voxels_per_block);
+      slot_coord[slot] = coord;
+      atomicAdd(counts[slot], 1u);
     }
   }
+  item_slot[gid] = slot;
 }

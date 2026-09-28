@@ -39,6 +39,14 @@ const uint kVrFeatureFace = 6u;
 // triangles before they reach a work item). The interior branch guards its own
 // denominator anyway, since that one is a sum of signed barycentric areas and
 // can cancel.
+//
+// That guard is against zero, not against a size: the sum is |ab x ac|^2, in
+// metres^4, so any fixed threshold is a triangle size below which the interior
+// collapses onto vertex `a` -- 1e-12 was every triangle with edges under about
+// a millimetre, which a dense scan has everywhere. Where a sliver's rounding
+// lets the sum through with barycentrics that do not describe a point of the
+// triangle, they are clamped onto it, so the closest point is always one the
+// triangle actually has.
 vec3 vrClosestPointOnTriangleFeature(vec3 p, vec3 a, vec3 b, vec3 c,
                                      out uint feature) {
   vec3 ab = b - a;
@@ -87,9 +95,11 @@ vec3 vrClosestPointOnTriangleFeature(vec3 p, vec3 a, vec3 b, vec3 c,
   }
 
   float sum = va + vb + vc;
-  float denom = (sum > 1e-12) ? (1.0 / sum) : 0.0;
+  float denom = (sum > 0.0) ? (1.0 / sum) : 0.0;
+  float v = clamp(vb * denom, 0.0, 1.0);
+  float w = clamp(vc * denom, 0.0, 1.0 - v);
   feature = kVrFeatureFace;
-  return a + ab * (vb * denom) + ac * (vc * denom);  // face interior
+  return a + ab * v + ac * w;  // face interior
 }
 
 // The closest point to `p` on triangle (a, b, c), for a caller that does not

@@ -5120,8 +5120,10 @@ accumulates the pseudonormals in double:
   tolerance would weld vertices a modeller placed apart on purpose.
 - **Refused:** a non-manifold edge (three or more faces), a pinch vertex (two
   fans that touch at a point with every edge manifold — the case an edge count
-  cannot see), or an edge whose winding flips. None of these has a correct
-  pseudonormal. The refusal names the three counts and points at `Shell`.
+  cannot see — off the rim), or an edge whose winding flips. None of these has
+  a correct pseudonormal. The refusal names the three counts and points at
+  `Shell`. A closed mesh wound inside out passes all three, so it is refused
+  on its enclosed volume, which is negative.
 - **Allowed:** a rim. A voxel whose closest point is on a boundary edge or
   vertex has no side, so it is left unobserved rather than signed, and an open
   mesh does not grow a skirt past its boundary. The count comes back in
@@ -5134,8 +5136,9 @@ hanging an M5 iPad. Its shell pass used a dense grid over the mesh's bounding
 box, which at an 80 mm cell is ~16 M cells for a 20 m cube whatever the surface
 looks like. Here, `mesh_bin.comp` runs the (triangle, candidate block) work
 items S0 allocates over twice, first counting and then filling each block's
-list of triangles. The bins are keyed by heap slot, 4 bytes per `num_blocks`.
-Then `mesh_integrate.comp` runs one thread per voxel over its block's bin.
+list of triangles. The bins are keyed by heap slot, 16 bytes per `num_blocks`
+(a count and a coordinate). Then `mesh_integrate.comp` runs one thread per
+voxel over its block's bin.
 - **One decomposition.** S0 and S1 share it in two places, so the blocks
   allocated and the blocks binned cannot drift apart:
   `volume::triangle_candidate_offsets` (host; it moved out of
@@ -5145,10 +5148,10 @@ Then `mesh_integrate.comp` runs one thread per voxel over its block's bin.
   the half-diagonal of the block's centre, so it holds every triangle within
   `trunc_dist` of any of the block's voxels. The minimum over it is the true
   minimum wherever the result is observed.
-- **A missing block is refused.** The count pass also counts band blocks the
-  table does not hold, and the host refuses a non-zero count before anything
-  is written. A missing block would otherwise leave that part of the surface
-  holding stale data.
+- **A missing block is refused.** The count pass also counts the (triangle,
+  block) pairs whose band block the table does not hold, and the host refuses
+  a non-zero count before anything is written. A missing block would
+  otherwise leave that part of the surface holding stale data.
 
 **What is written.** Every voxel of every band block is overwritten, not
 blended. **Observed** means within `trunc_dist` of the mesh in both modes,
@@ -5191,6 +5194,78 @@ twin.
   - writing `clamp(sdf)` for unobserved voxels, an equivalent mutant (their
     `sdf` is already 0)
 
+**Review: fourteen findings, of which eleven are fixed, two in part and one
+documented.** A code review of the first cut returned fourteen, each checked
+against the code before it was fixed.
+- **A bin could be read short.** The fill pass re-derived each work item's
+  block with the count pass's own probe and band test, and only dropped an
+  overflow. Any disagreement between the two dispatches left some other bin
+  one short, and the integrate pass then read an entry nobody wrote as a
+  triangle index: out of bounds, with `robustBufferAccess` off. The count pass
+  now records each item's slot and the fill replays it, so every bin fills
+  exactly. That removed the fill's repeated work too. The count pass also
+  stores each binned slot's coordinate, which retired the whole-map compaction,
+  its readback and the host's second copy of the counts, since the counts are
+  rewritten in place as the fill's cursors. With the compaction went the check
+  it happened to give, that the table had not changed mid-call, which the
+  class's quiescence requirement already rules out, as for the mesh tier's
+  own probe. What stays O(`num_blocks`) per
+  call is one clear and one scan of those counts, 4 bytes a block, which the
+  prefix sum needs.
+- **Nothing bounded a bin.** A thread's work is its bin's length, and the host
+  knew the largest bin and checked nothing. A bin past `kMaxBinTriangles`
+  (2^16, about 230 times the sphere's average below) is refused, and the write
+  is split into dispatches of at most `kMaxDispatchBinEntries` (2^20) bin
+  entries, so no one submission grows with the mesh. Both are named on the
+  class, as the 2026-08-10 rule asks of a ceiling the library knows.
+- **The closest point had a size threshold.** The face-interior branch
+  collapsed onto vertex `a` whenever `|ab × ac|²` fell below 1e-12 m⁴, which
+  is every triangle with edges under about a millimetre, and a dense scan has
+  those everywhere. The guard is now against zero, and the barycentrics are
+  clamped onto the triangle, so a sliver's rounding cannot put the closest
+  point somewhere the triangle is not.
+- **Signed mode's topology, four ways.** (1) Three corners in a line can pass
+  the float area test on an FMA's rounding residue, and their double normal
+  then divided by zero and spread a NaN into every neighbouring pseudonormal;
+  a zero normal now contributes nothing. (2) Zero-area triangles were dropped
+  before the adjacency, so a sliver closing a T-junction opened three rim
+  edges. They now keep their adjacency, though the kernels still skip them,
+  and only a triangle that welds onto fewer than three vertices is left out.
+  That is exact where the faces around the sliver are coplanar or meet at 90°
+  or more. At a sharper crease, part of the edge's wedge is signed by one
+  face's normal, a limit `MeshSdfMode::Signed` states. (3) A rim vertex where
+  two fans touched was refused as a pinch, though its pseudonormal is zeroed
+  anyway; it no longer counts. (4) An inside-out closed mesh passed every
+  check. It is now refused when its enclosed volume is negative. The check is
+  on the whole mesh, not per component, because a cavity is correctly wound
+  and encloses negative volume of its own.
+- **Smaller ones.** The missing count is (triangle, block) pairs, not blocks,
+  and the message now says so. The O(1) binding checks run before the host
+  passes. `triangle_candidate_offsets` refuses a null mesh before it allocates,
+  and takes a null `who`. `voxel_hash_map.cpp` lost two includes the refactor
+  left behind. The bins and the per-item slots are device-local now. The
+  inputs stay host-visible with a `TODO(tsdf)`, as the grid's own attributes
+  do, since staging them needs a copy path `core` does not have yet.
+- **Documented rather than built: dirty blocks.** The integrator does not
+  report the blocks it writes as dirty. Dirty flags belong to the
+  `TsdfIntegrator` fusing into a grid, and the only caller who can mix the two
+  on one grid is the one making both calls, so it is a `@note` on the class
+  rather than a mechanism nothing consumes.
+
+**The review's fixes, verified the same way.** Eight of nine planted
+reversions fail a fixture added for them:
+- the NaN normal and the dropped sliver: a T-junction on a dented cube's 90°
+  edge, closed by a sliver whose dyadic corners make it exactly collinear
+- the rim pinch: two quads touching at a corner
+- the inside-out mesh: the tetrahedron with every face reversed
+- the size threshold: a triangle 0.87 mm across, under one voxel column
+- the chunk offset and the dispatch budget: a metre-square sheet of 320 000
+  triangles, whose 2^20-plus bin entries split across dispatches
+- the bin cap: an 80 000-triangle patch 30 mm square
+
+The clamp is not caught, since no fixture can make float rounding produce an
+out-of-range barycentric on demand.
+
 **Open.**
 - S2, the paper's robust mode, as above.
 - The codec round trip, meaning mesh → TSDF → DCT → v1 frame → decode → mesh
@@ -5206,6 +5281,8 @@ twin.
   | `integrate`, `Shell` | 12.9 ms | 11.0 ms |
   | `integrate`, `Signed` | 22.3 ms | 10.8 ms |
 
+  After the review's changes, the two `integrate` rows re-measured within
+  0.2 ms of these (M5 Max, Release), the write now split in two dispatches.
   The GPU half is the same in both modes. The ~9.5 ms that `Signed` spends
   beyond `Shell` is the host topology pass: welding, adjacency and
   pseudonormals, in hash maps. It depends only on the mesh, so a sequence that

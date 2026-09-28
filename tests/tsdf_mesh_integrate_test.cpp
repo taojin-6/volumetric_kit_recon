@@ -16,10 +16,14 @@
 // meet at 70.5 degrees, sharp enough that signing by the nearest FACE's normal
 // -- the prior engine's rule -- is wrong past its edges; the test proves the
 // fixture has such voxels before relying on it. A cube with one corner pushed
-// in has concave edges and a concave vertex. An open quad has a rim. The soup
-// (unwelded) tetrahedron must write the same bytes as the welded one, and the
-// same mesh twice must write the same bytes. Then every refusal, each checked
-// to leave the grid untouched. Exits 0 (skip) where no device is present.
+// in has concave edges and a concave vertex, and a copy of it has a T-junction
+// closed by a zero-area sliver. An open quad has a rim, and two quads touching
+// at a corner pinch there. The soup (unwelded) tetrahedron must write the same
+// bytes as the welded one, and the same mesh twice must write the same bytes.
+// A triangle under a millimetre across checks the closest point has no size
+// threshold, and a finely divided sheet splits the write across dispatches.
+// Then every refusal, each checked to leave the grid untouched. Exits 0 (skip)
+// where no device is present.
 
 #include <cmath>
 #include <cstdint>
@@ -254,6 +258,53 @@ Mesh fanned_tetrahedron(vr::Vec3f c, float s, int fan) {
   return m;
 }
 
+// Split the second face on the first triangle's first edge at that edge's
+// midpoint, and close the T-junction it leaves with a zero-area sliver -- what
+// a mesh repair tool emits. The sliver has no area to measure but joins its
+// three edges to the faces beside them, so the mesh is still closed. With the
+// edge's corners dyadic the midpoint is exact, and the sliver exactly
+// collinear.
+Mesh close_t_junction(Mesh m) {
+  const std::uint32_t a = m.i[0], b = m.i[1];
+  std::size_t other = 0;
+  std::uint32_t e = 0;
+  for (std::size_t t = 1; t < m.triangle_count(); ++t) {
+    for (int k = 0; k < 3; ++k) {
+      if (m.i[3 * t + k] == b && m.i[3 * t + (k + 1) % 3] == a) {
+        other = t;
+        e = m.i[3 * t + (k + 2) % 3];
+      }
+    }
+  }
+  m.v.push_back(0.5f * (m.v[a] + m.v[b]));
+  const auto mid = static_cast<std::uint32_t>(m.v.size() - 1);
+  // (b, a, e) becomes (b, mid, e) and (mid, a, e): the same winding.
+  m.i[3 * other] = b;
+  m.i[3 * other + 1] = mid;
+  m.i[3 * other + 2] = e;
+  m.i.insert(m.i.end(), {mid, a, e, a, mid, b});
+  return m;
+}
+
+// A +z-facing quad at height z0, divided into n x n cells of two triangles.
+Mesh divided_quad(float x0, float x1, float y0, float y1, float z0, int n) {
+  Mesh m;
+  for (int j = 0; j <= n; ++j) {
+    for (int i = 0; i <= n; ++i) {
+      m.v.emplace_back(x0 + (x1 - x0) * float(i) / float(n),
+                       y0 + (y1 - y0) * float(j) / float(n), z0);
+    }
+  }
+  const auto row = static_cast<std::uint32_t>(n + 1);
+  for (std::uint32_t j = 0; j < std::uint32_t(n); ++j) {
+    for (std::uint32_t i = 0; i < std::uint32_t(n); ++i) {
+      const std::uint32_t c = j * row + i;
+      m.i.insert(m.i.end(), {c, c + 1, c + row + 1, c, c + row + 1, c + row});
+    }
+  }
+  return m;
+}
+
 // The same triangles with no shared vertex -- how an STL stores a mesh.
 Mesh soup(const Mesh& m) {
   Mesh s;
@@ -364,6 +415,29 @@ Expect signed_closed(vr::Vec3f p, const Mesh& m, float trunc) {
     const bool inside = winding(p, m) > 0.5;
     e.value = inside ? -d : d;
   }
+  return e;
+}
+
+// The signed contract for open +z-facing quads at height z0: +-height over a
+// quad's interior, unobserved past every rim, where there is no side. The
+// bounds sit off the voxel lattice, so no voxel projects onto a rim itself.
+struct Rect {
+  float x0, x1, y0, y1;
+};
+Expect signed_quads(vr::Vec3f p, const std::vector<Rect>& quads, float z0,
+                    float trunc) {
+  Expect e;
+  const float h = p.z - z0;
+  if (std::fabs(h) < kEdge || std::fabs(std::fabs(h) - trunc) < kEdge) {
+    e.skip = true;
+    return e;
+  }
+  bool over = false;
+  for (const Rect& q : quads) {
+    over = over || (p.x > q.x0 && p.x < q.x1 && p.y > q.y0 && p.y < q.y1);
+  }
+  e.observed = over && std::fabs(h) <= trunc;
+  e.value = e.observed ? h : 0.0f;
   return e;
 }
 
@@ -562,10 +636,31 @@ int main() {
     return 1;
   }
 
+  // A T-junction on one of the cube's 90-degree edges, closed by a sliver: a
+  // zero-area triangle is not measured, but it must keep its place in the
+  // adjacency, or its three edges read as a rim and the voxels nearest them
+  // are left unobserved. Dyadic corners make the sliver exactly collinear.
+  const Mesh tee = close_t_junction(
+      dented_cube(vr::Vec3f(0.0625f, -0.125f, 0.03125f), 0.25f));
+  {
+    const std::size_t sliver = tee.triangle_count() - 1;
+    const vr::Vec3f n =
+        vr::cross(corner(tee, sliver, 1) - corner(tee, sliver, 0),
+                  corner(tee, sliver, 2) - corner(tee, sliver, 0));
+    CHECK(vr::dot(n, n) == 0.0f);
+  }
+  vr::Result<ts::MeshIntegrateStats> tee_stats = convert(tee, kSigned);
+  CHECK(tee_stats.ok());
+  CHECK(tee_stats.value().triangles == 13);  // the sliver is skipped
+  CHECK(tee_stats.value().boundary_edges == 0);
+  if (verify(grid, "signed T-junction",
+             [&](vr::Vec3f p) { return signed_closed(p, tee, trunc); }) != 0) {
+    return 1;
+  }
+
   // ---- 5. Signed open quad: the rim is unobserved, not a skirt ----------
   // A +z-facing quad at z = z0. A voxel over the quad's interior is +-its
-  // height; a voxel past the rim has no side and must be left unobserved. The
-  // bounds sit off the voxel lattice so no voxel projects onto the rim itself.
+  // height; a voxel past the rim has no side and must be left unobserved.
   const float z0 = 0.052f;
   const float x0 = 0.013f, x1 = 0.297f, y0 = 0.027f, y1 = 0.243f;
   Mesh quad;
@@ -578,22 +673,37 @@ int main() {
   if (verify(
           grid, "signed open quad",
           [&](vr::Vec3f p) {
-            Expect e;
-            const float h = p.z - z0;
-            if (std::fabs(h) < kEdge ||
-                std::fabs(std::fabs(h) - trunc) < kEdge) {
-              e.skip = true;
-              return e;
-            }
-            const bool over = p.x > x0 && p.x < x1 && p.y > y0 && p.y < y1;
-            e.observed = over && std::fabs(h) <= trunc;
-            e.value = e.observed ? h : 0.0f;
-            return e;
+            return signed_quads(p, {{x0, x1, y0, y1}}, z0, trunc);
           },
           &quad_observed) != 0) {
     return 1;
   }
   CHECK(quad_observed > 0);
+
+  // Two quads touching at one corner: two fans meet at a vertex, as at a
+  // pinch, but on the rim of both, where the pseudonormal is zero and no voxel
+  // is signed through it. Accepted, not refused as a bowtie.
+  {
+    const float x2 = 0.283f, y2 = 0.257f, xm = 0.147f, ym = 0.133f;
+    Mesh touching;
+    touching.v = {{x0, y0, z0}, {xm, y0, z0}, {xm, ym, z0}, {x0, ym, z0},
+                  {x2, ym, z0}, {x2, y2, z0}, {xm, y2, z0}};
+    touching.i = {0, 1, 2, 0, 2, 3, 2, 4, 5, 2, 5, 6};
+    vr::Result<ts::MeshIntegrateStats> touching_stats =
+        convert(touching, kSigned);
+    if (!touching_stats.ok()) {
+      std::fprintf(stderr, "touching quads: %s\n",
+                   touching_stats.status().message().c_str());
+      return 1;
+    }
+    CHECK(touching_stats.value().boundary_edges == 8);
+    if (verify(grid, "signed touching quads", [&](vr::Vec3f p) {
+          return signed_quads(p, {{x0, xm, y0, ym}, {xm, x2, ym, y2}}, z0,
+                              trunc);
+        }) != 0) {
+      return 1;
+    }
+  }
 
   // ---- 6. Shell: any mesh, distance minus the half-thickness ------------
   // The same open quad, now observed past its rim too.
@@ -612,6 +722,24 @@ int main() {
     };
   };
   if (verify(grid, "shell open quad", shell_expect(quad)) != 0) return 1;
+
+  // A triangle under a millimetre across, centred under a voxel column, so
+  // that column's closest points lie inside it. Its |ab x ac|^2 is ~4e-13
+  // m^4: below any fixed threshold on it worth having, and the closest point
+  // must not collapse onto a corner there -- which would be 0.5 mm out.
+  {
+    const float r = 0.0005f, zt = 0.0523f;
+    Mesh tiny;
+    tiny.v = {{0.03f, 0.04f + r, zt},
+              {0.03f - 0.8660254f * r, 0.04f - 0.5f * r, zt},
+              {0.03f + 0.8660254f * r, 0.04f - 0.5f * r, zt}};
+    tiny.i = {0, 1, 2};
+    CHECK(convert(tiny, kShell).ok());
+    if (verify(grid, "shell sub-millimetre triangle", shell_expect(tiny)) !=
+        0) {
+      return 1;
+    }
+  }
 
   // Around a closed solid the shell has two walls: an outer one, and an inner
   // one the same distance inside, with positive voxels deeper still.
@@ -632,7 +760,30 @@ int main() {
     CHECK(deep_inside_positive > 0);
   }
 
-  // ---- 7. Blocks the band does not reach keep what they held ------------
+  // ---- 7. A write past one dispatch's budget is split, and still exact ---
+  // A metre-square sheet of 2.5 mm cells: bins of thousands, and more bin
+  // entries in all than one dispatch may measure.
+  {
+    const float sx0 = -0.487f, sx1 = 0.513f, sy0 = -0.493f, sy1 = 0.507f;
+    const Mesh sheet = divided_quad(sx0, sx1, sy0, sy1, z0, 400);
+    vr::Result<ts::MeshIntegrateStats> sheet_stats = convert(sheet, kSigned);
+    if (!sheet_stats.ok()) {
+      std::fprintf(stderr, "divided sheet: %s\n",
+                   sheet_stats.status().message().c_str());
+      return 1;
+    }
+    CHECK(sheet_stats.value().bin_entries >
+          ts::MeshIntegrator::kMaxDispatchBinEntries);
+    CHECK(sheet_stats.value().dispatches > 1);
+    CHECK(sheet_stats.value().blocks == active_blocks(grid).size());
+    if (verify(grid, "signed divided sheet", [&](vr::Vec3f p) {
+          return signed_quads(p, {{sx0, sx1, sy0, sy1}}, z0, trunc);
+        }) != 0) {
+      return 1;
+    }
+  }
+
+  // ---- 8. Blocks the band does not reach keep what they held ------------
   CHECK(grid.clear().ok());
   const vol::BlockIndex far_block{vr::Vec3i(40, 40, 40), 0};
   CHECK(grid.map().allocate(&far_block, 1).ok());
@@ -657,7 +808,7 @@ int main() {
     CHECK(attr(grid, "weight")[far_ptr + k] == 7.0f);
   }
 
-  // ---- 8. Refusals, each before the grid is written ---------------------
+  // ---- 9. Refusals, each before the grid is written ---------------------
   auto refused = [&](const Mesh& m, const ts::MeshSdfParams& params,
                      const char* needle) -> bool {
     const std::vector<float> before = snapshot(grid);
@@ -701,6 +852,31 @@ int main() {
             .integrate(grid, flipped.v.data(), flipped.vertex_count(),
                        flipped.i.data(), flipped.triangle_count(), kShell)
             .ok());
+
+  // Every face reversed: closed, manifold and consistently wound, so only its
+  // enclosed volume, negative, says it is inside out. Refused signed, fine as
+  // a shell.
+  Mesh inverted = tet;
+  for (std::size_t t = 0; t < inverted.triangle_count(); ++t) {
+    std::swap(inverted.i[3 * t + 1], inverted.i[3 * t + 2]);
+  }
+  CHECK(refused(inverted, kSigned, "inside out"));
+  CHECK(integ
+            .integrate(grid, inverted.v.data(), inverted.vertex_count(),
+                       inverted.i.data(), inverted.triangle_count(), kShell)
+            .ok());
+
+  // A mesh far finer than the voxels: a 30 mm patch of 0.15 mm cells puts all
+  // 80 000 of its triangles in the bins of the blocks around it.
+  {
+    const Mesh fine = divided_quad(0.013f, 0.043f, 0.027f, 0.057f, z0, 200);
+    CHECK(grid.clear().ok());
+    CHECK(grid.map()
+              .allocate_from_triangles(fine.v.data(), fine.vertex_count(),
+                                       fine.i.data(), fine.triangle_count())
+              .ok());
+    CHECK(refused(fine, kShell, "kMaxBinTriangles"));
+  }
 
   // Three triangles on one edge.
   Mesh book;
@@ -760,7 +936,7 @@ int main() {
                .ok());
   }
 
-  // ---- 9. Move semantics -------------------------------------------------
+  // ---- 10. Move semantics ------------------------------------------------
   {
     ts::MeshIntegrator moved(std::move(integ));
     CHECK(moved.valid());

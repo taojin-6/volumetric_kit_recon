@@ -40,7 +40,16 @@ enum class MeshSdfMode : std::uint32_t {
   /// An open mesh is accepted: a voxel whose closest point is on the rim has no
   /// side and is left unobserved, so the field does not grow a skirt past the
   /// boundary. A mesh with a non-manifold edge or vertex, or with winding that
-  /// flips across an edge, is refused -- use @ref Shell for those.
+  /// flips across an edge, is refused -- use @ref Shell for those -- and so is
+  /// a closed mesh wound inside out, which every other check passes. That
+  /// check is on the mesh as a whole: one inverted component inside a larger
+  /// correct one is not seen.
+  ///
+  /// A zero-area triangle is not measured, but it keeps its place in the
+  /// connectivity, so a sliver that closes a T-junction does not open three
+  /// rim edges. It contributes no normal, which is exact where the faces
+  /// around it are coplanar or meet at 90 degrees or more; at a sharper
+  /// crease, part of that edge's wedge is signed by one face's normal alone.
   Signed = 0,
   /// Unsigned distance minus a shell half-thickness: negative within
   /// @ref MeshSdfParams::shell_voxels of any triangle, positive beyond. Needs
@@ -81,6 +90,9 @@ struct MeshIntegrateStats {
   /// @ref MeshSdfMode::Signed only: rim edges, whose nearest voxels were left
   /// unobserved. 0 for a closed mesh.
   std::uint32_t boundary_edges = 0;
+  /// The dispatches the write was split into, so that none measures more than
+  /// @ref MeshIntegrator::kMaxDispatchBinEntries bin entries.
+  std::uint32_t dispatches = 0;
 };
 
 /// @brief Writes a triangle mesh's truncated distance field into a
@@ -103,18 +115,30 @@ struct MeshIntegrateStats {
 /// A band block that is missing is refused, with the count, before anything is
 /// written.
 ///
-/// Three dispatches: two bin every triangle into each block its band reaches
-/// (a count, then a fill), each over one work item per (triangle, candidate
-/// block) pair, so a large triangle costs more items and never a longer one;
-/// the third runs one thread per voxel over its block's bin. The minimum over a
-/// bin is taken with the triangle index as tie-break, so the result does not
+/// Two dispatches bin every triangle into each block its band reaches (a
+/// count, then a fill), each over one work item per (triangle, candidate block)
+/// pair, so a large triangle costs more items and never a longer one. Then one
+/// thread per voxel measures its block's bin, in as many dispatches as it takes
+/// to keep each under @ref kMaxDispatchBinEntries bin entries. The minimum over
+/// a bin is taken with the triangle index as tie-break, so the result does not
 /// depend on the order the atomics filled the bin in -- the same mesh writes
 /// the same bytes.
+///
+/// A voxel's cost is its bin, which a mesh near the grid's resolution keeps in
+/// the hundreds. A mesh far finer than the voxels is where it grows, so a bin
+/// past @ref kMaxBinTriangles is refused rather than measured: decimate the
+/// mesh toward the voxel size first.
 ///
 /// @warning The @ref Device and @ref Allocator passed to @ref create must
 ///          outlive this object; it stores references to them. The grid must be
 ///          quiescent across the call: the binning kernel probes its hash table
 ///          without a lock, as the mesh tier does.
+///
+/// @note The blocks this writes are not reported as dirty. Dirty flags belong
+///       to the @ref TsdfIntegrator that fuses into a grid, so a grid written
+///       here is meshed with a full extract, not
+///       `mesh::MarchingCubes::extract_device_incremental` against another
+///       integrator's flags.
 ///
 /// TODO(tsdf): the robust signed mode of Xu & Barbic (GI 2014), for the meshes
 /// @ref MeshSdfMode::Signed refuses -- a shell, marching cubes on its offset
@@ -124,6 +148,18 @@ struct MeshIntegrateStats {
 /// 2026-09-27 decision).
 class VR_TSDF_API MeshIntegrator {
  public:
+  /// The most triangles one block's bin may hold. Each voxel of the block
+  /// measures all of them in one thread, so this bounds how long a thread
+  /// runs. About 230 times the average bin of the 2026-09-27 entry's sphere,
+  /// whose triangles are 1.6 voxels on a side; a bin reaches it with
+  /// triangles near a tenth of a voxel across, detail the grid cannot hold.
+  static constexpr std::uint32_t kMaxBinTriangles = 1u << 16;
+  /// The most bin entries one integrate dispatch measures: each is one
+  /// closest-point test per voxel of its block. A write with more is split
+  /// across dispatches, so no one submission grows with the mesh -- the shape
+  /// the 2026-08-08 entry records hanging an M5 iPad.
+  static constexpr std::uint32_t kMaxDispatchBinEntries = 1u << 20;
+
   /// @brief Build the binning and integrate pipelines on @p device.
   /// @param device     The compute device (must outlive this object).
   /// @param allocator  The allocator its transient buffers come from (must
@@ -152,9 +188,7 @@ class VR_TSDF_API MeshIntegrator {
   /// @param params          The mode, and the shell's thickness.
   /// @param metrics         Optional: receives a `"mesh integrate"` row with
   ///                        both halves -- the host half is where the topology
-  ///                        pass of @ref MeshSdfMode::Signed shows up -- over
-  ///                        an `"  ..active set"` sub-row for the compaction it
-  ///                        makes.
+  ///                        pass of @ref MeshSdfMode::Signed shows up.
   /// @return What was written, or a non-OK @ref Status:
   ///         @ref Status::Code::InvalidArgument for a moved-from integrator; a
   ///         grid without float `tsdf` / `weight`; an unknown mode or a shell
@@ -162,11 +196,15 @@ class VR_TSDF_API MeshIntegrator {
   ///         @p indices with triangles to read, an index at or past
   ///         @p vertex_count, or a mesh too large for the grid (see
   ///         `volume::triangle_candidate_offsets`); for
-  ///         @ref MeshSdfMode::Signed, a non-manifold edge or vertex or an
-  ///         inconsistently wound edge; a band block that is not allocated;
-  ///         or a dispatch past what one 1-D dispatch or one storage-buffer
-  ///         binding can cover. Every refusal comes before the grid is
-  ///         written. Otherwise whatever a buffer or a dispatch returns.
+  ///         @ref MeshSdfMode::Signed, a non-manifold edge or vertex, an
+  ///         inconsistently wound edge, or a closed mesh wound inside out; a
+  ///         band block that is not allocated; a bin past
+  ///         @ref kMaxBinTriangles; or a buffer past what one storage-buffer
+  ///         binding can cover, or a binning pass past what one 1-D dispatch
+  ///         can launch. Every refusal comes before the grid is written.
+  ///         Otherwise whatever a buffer or a dispatch returns; a dispatch
+  ///         that fails after the first has written leaves the blocks before
+  ///         it written.
   Result<MeshIntegrateStats> integrate(volume::VoxelBlockGrid& grid,
                                        const Vec3f* vertices,
                                        std::uint32_t vertex_count,
@@ -202,7 +240,7 @@ class VR_TSDF_API MeshIntegrator {
   // written: how many band blocks the hash table could not find.
   Buffer missing_;
   // A 1-element stand-in for a binding the current pass or mode does not read
-  // (the fill pass's outputs during the count pass; the pseudonormals in shell
+  // (the fill pass's output during the count pass; the pseudonormals in shell
   // mode), so every declared descriptor stays bound.
   Buffer dummy_;
 };
