@@ -7,36 +7,50 @@
 // work here, since a triangle whose vertices took different views would
 // interpolate uv0 across the atlas between two tiles.
 //
-// A view qualifies when all three vertices are in front of it, inside its
-// image and unoccluded (their depth agrees with the view's depth map within
-// the threshold). Among those, the score is |cos| of the angle between the
-// triangle's normal and the ray to its centroid, less depth_weight times the
-// smallest depth disagreement; the highest wins, the first on a tie. With no
-// qualifying view all three vertices take the (-1, -1) sentinel, so the
-// renderer uses the vertex colour. Every vertex is written on every call.
+// A view qualifies when it sees the triangle's FRONT and all three vertices
+// are in front of it, inside its image and unoccluded (their depth agrees with
+// the view's depth map within the threshold). The front is the
+// counter-clockwise side, the side marching cubes' outward normal leaves by
+// and the one gfx draws, so n = cross(p1 - p0, p2 - p0) points out of it and a
+// view sees it when n points back along the view's ray to the centroid. Among
+// the views that qualify, the score is the cosine of the angle between n and
+// that ray reversed, less depth_weight times the smallest depth disagreement;
+// the highest wins, the first on a tie. With no qualifying view all three
+// vertices take the (-1, -1) sentinel, so the renderer uses the vertex colour.
+// Every vertex is written on every call.
 //
 // Ported from implicit_surface_compression's triangles_to_uv_multicam_kernel
 // (texture_mapping.cu) and the prior engine's texture mapper, which score the
-// same way. The depth sampling and the occlusion test are texture_score.comp's,
-// taking a view instead of the one camera; keep the two in step.
+// same way except that they take |cos| and so let a view behind the triangle
+// win: on thin geometry the back of a sheet sits within the occlusion
+// threshold of the front its camera saw, and the back took the front's image.
+// The depth sampler and the occlusion test are texture_common.glsl's, shared
+// with texture_score.comp.
+//
+// TODO(texture): blend the views where they meet, or match their exposure; a
+// triangle takes one view whole, so an exposure step between two views shows
+// as a seam along the triangles where the choice changes.
 
 #extension GL_GOOGLE_include_directive : require
 #include "texture_common.glsl"
 
 layout(local_size_x = 256) in;
 
-// One view (mirrors ViewParams in projective_texturer.cpp, 108 bytes under
-// scalar layout): its camera, where its depth starts in depth[], and its
-// tile's origin in the atlas. The tile is the camera's image size.
+// One view (mirrors ViewParams in projective_texturer.cpp, 116 bytes under
+// scalar layout): its depth camera, where its depth starts in depth[], and
+// its tile -- the colour image registered to that camera, at the image's own
+// resolution, which may be larger than the depth map's.
 struct View {
   DepthCameraParams cam;
   uint depth_offset;
   uint tile_x;
   uint tile_y;
+  uint tile_width;
+  uint tile_height;
 };
 
+// Binding 1, every view's depth end to end, is texture_common.glsl's.
 layout(set = 0, binding = 0, scalar) buffer Vertices { Vertex vertices[]; };
-layout(set = 0, binding = 1, scalar) readonly buffer Depth { float depth[]; };
 layout(set = 0, binding = 2, scalar) readonly buffer Views { View views[]; };
 
 layout(push_constant, scalar) uniform PushConstants {
@@ -48,80 +62,17 @@ layout(push_constant, scalar) uniform PushConstants {
   float depth_weight;         // score cost per metre of depth disagreement
 } pc;
 
-// texture_score.comp's sample_depth, for view `v`: bilinear over the valid
-// (> 0) taps, the nearest tap across a discontinuity wider than the threshold.
-float sample_depth(uint v, float u, float vv) {
-  DepthCameraParams c = views[v].cam;
-  uint base = views[v].depth_offset;
-  int w = int(c.width);
-  int h = int(c.height);
-  float cu = clamp(u, 0.0, float(w - 1));
-  float cv = clamp(vv, 0.0, float(h - 1));
-  int x0 = int(floor(cu));
-  int y0 = int(floor(cv));
-  int x1 = min(x0 + 1, w - 1);
-  int y1 = min(y0 + 1, h - 1);
-  float tx = cu - float(x0);
-  float ty = cv - float(y0);
-  float sm[4] = float[4](depth[base + uint(y0 * w + x0)],
-                         depth[base + uint(y0 * w + x1)],
-                         depth[base + uint(y1 * w + x0)],
-                         depth[base + uint(y1 * w + x1)]);
-  float wts[4] = float[4]((1.0 - tx) * (1.0 - ty), tx * (1.0 - ty),
-                          (1.0 - tx) * ty, tx * ty);
-  float total = 0.0;
-  float result = 0.0;
-  float lo = 3.4e38;
-  float hi = 0.0;
-  float d_near = 0.0;
-  float best_w = -1.0;
-  for (int i = 0; i < 4; i++) {
-    if (sm[i] > 0.0) {
-      result += wts[i] * sm[i];
-      total += wts[i];
-      lo = min(lo, sm[i]);
-      hi = max(hi, sm[i]);
-      if (wts[i] > best_w) {
-        best_w = wts[i];
-        d_near = sm[i];
-      }
-    }
-  }
-  if (total <= 0.0) {
-    return 0.0;
-  }
-  if ((hi - lo) > pc.occlusion_threshold) {
-    return d_near;
-  }
-  return result / total;
-}
-
-// texture_score.comp's occluded_ok, for view `v`, also giving the depth
-// disagreement the score weighs.
-bool visible_in(uint v, vec2 px, float zc, out float diff) {
-  DepthCameraParams c = views[v].cam;
-  diff = 0.0;
-  if (!(px.x >= 1.0 && px.x < float(int(c.width) - 1) && px.y >= 1.0 &&
-        px.y < float(int(c.height) - 1))) {
-    return false;
-  }
-  float d = sample_depth(v, px.x, px.y);
-  if (!(d >= c.min_depth && d <= c.max_depth)) {
-    return false;
-  }
-  diff = abs(d - zc);
-  return diff <= pc.occlusion_threshold;
-}
-
-// A pixel of view `v`'s image -> its atlas coordinate: +0.5 to the texel
-// centre, clamped half a texel inside the TILE, so bilinear filtering never
-// reaches the next view's image.
-vec2 atlas_uv(uint v, vec2 px) {
-  DepthCameraParams c = views[v].cam;
-  float x = clamp(px.x + 0.5, 0.5, float(c.width) - 0.5);
-  float y = clamp(px.y + 0.5, 0.5, float(c.height) - 0.5);
-  return vec2((float(views[v].tile_x) + x) / float(pc.atlas_width),
-              (float(views[v].tile_y) + y) / float(pc.atlas_height));
+// A pixel of the view's depth map -> its atlas coordinate. The pixel centre as
+// a fraction of the depth map is the same fraction of a colour image
+// registered to it (the argument ProjectiveTexturer's class note makes), so it
+// scales to the tile at any size; then clamped half a texel inside the TILE,
+// so bilinear filtering never reaches the next view's image.
+vec2 atlas_uv(View view, vec2 px) {
+  vec2 fraction = (px + 0.5) / vec2(view.cam.width, view.cam.height);
+  vec2 size = vec2(view.tile_width, view.tile_height);
+  vec2 in_tile = clamp(fraction * size, vec2(0.5), size - 0.5);
+  return (vec2(view.tile_x, view.tile_y) + in_tile) /
+         vec2(pc.atlas_width, pc.atlas_height);
 }
 
 void main() {
@@ -138,32 +89,39 @@ void main() {
   float best_score = 0.0;
   vec2 best_px[3];
   for (uint v = 0u; v < pc.num_views; v++) {
-    DepthCameraParams c = views[v].cam;
-    vec2 px[3];
+    View view = views[v];
     vec3 p_cam[3];
+    for (int k = 0; k < 3; k++) {
+      p_cam[k] = world_to_camera(view.cam, world[k]);
+    }
+    // Facing first: it needs no depth, and on a closed surface it refuses the
+    // views behind the triangle before any of their depth is sampled. Negated,
+    // so a NaN position (whose normal is NaN) is refused rather than scored;
+    // a triangle with no area faces no view.
+    vec3 n = cross(p_cam[1] - p_cam[0], p_cam[2] - p_cam[0]);
+    vec3 middle = (p_cam[0] + p_cam[1] + p_cam[2]) / 3.0;
+    float facing = -dot(n, middle);
+    float nn = dot(n, n);
+    float cc = dot(middle, middle);
+    if (!(facing > 0.0 && nn > 1e-24 && cc > 1e-24)) {
+      continue;
+    }
+    vec2 px[3];
     float min_diff = 3.4e38;
     bool ok = true;
     for (int k = 0; k < 3 && ok; k++) {
-      float zc;
       float diff;
-      ok = project_to_image(c, world[k], px[k], zc) &&
-           visible_in(v, px[k], zc, diff);
+      ok = camera_to_image(view.cam, p_cam[k], px[k]) &&
+           occluded_ok(view.cam, view.depth_offset, px[k], p_cam[k].z,
+                       pc.occlusion_threshold, diff);
       if (ok) {
         min_diff = min(min_diff, diff);
-        p_cam[k] = world_to_camera(c, world[k]);
       }
     }
     if (!ok) {
       continue;
     }
-    vec3 n = cross(p_cam[1] - p_cam[0], p_cam[2] - p_cam[0]);
-    vec3 middle = (p_cam[0] + p_cam[1] + p_cam[2]) / 3.0;
-    float nn = dot(n, n);
-    float cc = dot(middle, middle);
-    float cos_angle = 0.0;
-    if (nn > 1e-24 && cc > 1e-24) {
-      cos_angle = abs(dot(n, middle)) * inversesqrt(nn) * inversesqrt(cc);
-    }
+    float cos_angle = facing * inversesqrt(nn) * inversesqrt(cc);
     float score = cos_angle - pc.depth_weight * min_diff;
     if (best < 0 || score > best_score) {
       best = int(v);
@@ -172,8 +130,14 @@ void main() {
     }
   }
 
+  if (best < 0) {
+    for (int k = 0; k < 3; k++) {
+      vertices[first + uint(k)].uv0 = vec2(-1.0, -1.0);
+    }
+    return;
+  }
+  View chosen = views[uint(best)];
   for (int k = 0; k < 3; k++) {
-    vertices[first + uint(k)].uv0 =
-        best >= 0 ? atlas_uv(uint(best), best_px[k]) : vec2(-1.0, -1.0);
+    vertices[first + uint(k)].uv0 = atlas_uv(chosen, best_px[k]);
   }
 }

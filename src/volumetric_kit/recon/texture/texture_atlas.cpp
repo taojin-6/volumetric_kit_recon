@@ -7,12 +7,60 @@
 #include <cstring>
 #include <string>
 
+#include "atlas_checks.hpp"
+
 namespace volumetric_kit::recon::texture {
+
+namespace detail {
+
+Result<ImageSize> view_image_size(const TextureView& view, std::size_t index,
+                                  const std::string& who) {
+  const bool given = view.image_width != 0 || view.image_height != 0;
+  if (given && (view.image_width == 0 || view.image_height == 0)) {
+    return Status::invalid_argument(who + "view " + std::to_string(index) +
+                                    " gives its image one side and not the "
+                                    "other");
+  }
+  const ImageSize size = given ? ImageSize{view.image_width, view.image_height}
+                               : ImageSize{view.cam.width, view.cam.height};
+  if (size.width == 0 || size.height == 0) {
+    return Status::invalid_argument(who + "view " + std::to_string(index) +
+                                    " has no image");
+  }
+  return size;
+}
+
+Status check_tiles(const AtlasLayout& layout, const std::string& who) {
+  const std::vector<AtlasTile>& tiles = layout.tiles;
+  for (std::size_t i = 0; i < tiles.size(); ++i) {
+    const AtlasTile& a = tiles[i];
+    if (std::uint64_t{a.x} + a.width > layout.width ||
+        std::uint64_t{a.y} + a.height > layout.height) {
+      return Status::invalid_argument(who + "tile " + std::to_string(i) +
+                                      " lies outside the atlas");
+    }
+    // Inside the atlas, so no sum below can wrap. Pairwise: a layout holds a
+    // rig's or a keyframe set's views, tens to hundreds.
+    for (std::size_t j = 0; j < i; ++j) {
+      const AtlasTile& b = tiles[j];
+      if (a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height &&
+          b.y < a.y + a.height) {
+        return Status::invalid_argument(who + "tiles " + std::to_string(j) +
+                                        " and " + std::to_string(i) +
+                                        " overlap");
+      }
+    }
+  }
+  return {};
+}
+
+}  // namespace detail
 
 Result<AtlasLayout> side_by_side_atlas(const std::vector<TextureView>& views,
                                        std::uint32_t max_extent) {
+  const std::string who = "side_by_side_atlas: ";
   if (views.empty()) {
-    return Status::invalid_argument("side_by_side_atlas: no views");
+    return Status::invalid_argument(who + "no views");
   }
   AtlasLayout layout;
   std::uint64_t x = 0;      // where the next tile of this row starts
@@ -20,18 +68,18 @@ Result<AtlasLayout> side_by_side_atlas(const std::vector<TextureView>& views,
   std::uint64_t row_h = 0;  // this row's tallest tile
   std::uint64_t width = 0;  // the widest row so far
   for (std::size_t i = 0; i < views.size(); ++i) {
-    const std::uint32_t w = views[i].cam.width;
-    const std::uint32_t h = views[i].cam.height;
-    if (w == 0 || h == 0) {
-      return Status::invalid_argument("side_by_side_atlas: view " +
-                                      std::to_string(i) + " has no image");
-    }
+    VR_ASSIGN(const detail::ImageSize size,
+              detail::view_image_size(views[i], i, who));
+    const std::uint32_t w = size.width;
+    const std::uint32_t h = size.height;
+    // InvalidArgument, as every device limit this tier checks: the vertex
+    // count past one dispatch, a buffer past maxStorageBufferRange, and a
+    // layout past maxImageDimension2D in ProjectiveTexturer::texture.
     if (w > max_extent || h > max_extent) {
-      return Status::unsupported("side_by_side_atlas: view " +
-                                 std::to_string(i) + "'s " + std::to_string(w) +
-                                 "x" + std::to_string(h) +
-                                 " image is larger than the atlas extent " +
-                                 std::to_string(max_extent));
+      return Status::invalid_argument(
+          who + "view " + std::to_string(i) + "'s " + std::to_string(w) + "x" +
+          std::to_string(h) + " image is larger than the atlas extent " +
+          std::to_string(max_extent));
     }
     if (x + w > max_extent) {  // wrap
       y += row_h;
@@ -46,10 +94,10 @@ Result<AtlasLayout> side_by_side_atlas(const std::vector<TextureView>& views,
   }
   const std::uint64_t height = y + row_h;
   if (height > max_extent) {
-    return Status::unsupported(
-        "side_by_side_atlas: " + std::to_string(views.size()) +
-        " images need an atlas " + std::to_string(height) +
-        " tall, past the extent " + std::to_string(max_extent));
+    return Status::invalid_argument(
+        who + std::to_string(views.size()) + " images need an atlas " +
+        std::to_string(height) + " tall, past the extent " +
+        std::to_string(max_extent));
   }
   layout.width = static_cast<std::uint32_t>(width);
   layout.height = static_cast<std::uint32_t>(height);
@@ -59,23 +107,24 @@ Result<AtlasLayout> side_by_side_atlas(const std::vector<TextureView>& views,
 Status pack_atlas(const std::vector<const std::uint32_t*>& images,
                   const AtlasLayout& layout,
                   std::vector<std::uint32_t>* atlas) {
+  // TODO(texture): pack on the GPU into an image gfx samples directly, rather
+  // than on the host for gfx to upload; that needs images in core.
+  const std::string who = "pack_atlas: ";
+  if (atlas == nullptr) {
+    return Status::invalid_argument(who + "atlas is null");
+  }
   if (images.size() != layout.tiles.size()) {
     return Status::invalid_argument(
-        "pack_atlas: " + std::to_string(images.size()) + " images for " +
+        who + std::to_string(images.size()) + " images for " +
         std::to_string(layout.tiles.size()) + " tiles");
   }
   for (std::size_t i = 0; i < images.size(); ++i) {
-    const AtlasTile& t = layout.tiles[i];
     if (images[i] == nullptr) {
-      return Status::invalid_argument("pack_atlas: image " + std::to_string(i) +
+      return Status::invalid_argument(who + "image " + std::to_string(i) +
                                       " is null");
     }
-    if (std::uint64_t{t.x} + t.width > layout.width ||
-        std::uint64_t{t.y} + t.height > layout.height) {
-      return Status::invalid_argument("pack_atlas: tile " + std::to_string(i) +
-                                      " lies outside the atlas");
-    }
   }
+  VR_TRY(detail::check_tiles(layout, who));
   const std::size_t w = layout.width;
   atlas->assign(w * layout.height, 0u);
   for (std::size_t i = 0; i < images.size(); ++i) {

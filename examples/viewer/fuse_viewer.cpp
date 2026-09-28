@@ -1572,8 +1572,9 @@ int run(GLFWwindow* window, const Options& opt) {
         // mesh -- it decided visibility per triangle and wrote uv0 per vertex
         // -- and the per-vertex dispatch removed that refusal, so the ~4x is
         // measurable on the running window rather than only in `fuse_replica`.
-        // What still waits on a per-primitive camera id is the packed
-        // multi-camera atlas, which is a different problem.
+        // The texture tier's several-view atlas still refuses a shared mesh
+        // -- it chooses per triangle, and waits on a per-primitive tile id --
+        // but this example textures from one camera.
         vgp::LiveMesh live;
         live.vertices = live_view.vertices;
         live.indices = live_view.indices;

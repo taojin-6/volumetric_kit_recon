@@ -5169,14 +5169,16 @@ come with MJPEG too.
 ### 2026-09-28 — Projective texturing from several views chooses a view per triangle, on an unshared mesh, into an atlas of the views' images side by side; the single-camera pass stays per vertex.
 
 **The rule.** `ProjectiveTexturer::texture(mesh, views, layout)` textures a
-mesh from N posed `TextureView`s (a registered depth map and its camera). The
-views' images sit side by side in one atlas (`texture_atlas.hpp`):
-`side_by_side_atlas` lays them out in view order, wrapping into a new row
-past the device's `maxImageDimension2D`, and `pack_atlas` copies the images
-in. Each triangle takes one view, and its three vertices point into that
-view's tile. A triangle no view sees whole gets `(-1, -1)`, the vertex
-colour. gfx needs no change: `HybridMeshPipeline` samples the atlas through
-`uv0`, as it samples the single camera's image.
+mesh from N posed `TextureView`s. A view is a depth map, the depth camera
+that took it, and the size of the colour image registered to it, which may be
+larger. The views' images sit side by side in one atlas
+(`texture_atlas.hpp`): `side_by_side_atlas` lays them out in view order,
+wrapping into a new row past the device's `maxImageDimension2D`, and
+`pack_atlas` copies the images in. Each triangle takes one view, and its
+three vertices point into that view's tile. A triangle no view sees whole
+from the front gets `(-1, -1)`, the vertex colour. gfx needs no change:
+`HybridMeshPipeline` samples the atlas through `uv0`, as it samples the
+single camera's image.
 
 **Why per triangle, and so unshared.** If a triangle's vertices took
 different views, `uv0` would interpolate across the atlas between two tiles
@@ -5184,43 +5186,89 @@ and smear whatever lies between them over the face. No per-vertex encoding
 avoids that. So the pass runs one thread per triangle, which needs each
 triangle to own its three vertices: the default marching-cubes kernel's
 meshes (`v = 3t`, identity indices). A `share_vertices` mesh is refused.
-Texturing a shared mesh from several views would need a camera per
-primitive, as the prior engine's Metal path kept (a per-triangle UV table the
-fragment shader reads by primitive id), which is a gfx change. The
-single-camera pass keeps its per-vertex verdict (2026-08-11), since one image
-has no tiles to cross.
+Texturing a shared mesh from several views would need a tile per primitive,
+as the prior engine's Metal path kept (a per-triangle UV table the fragment
+shader reads by primitive id), which is a gfx change. The single-camera pass
+keeps its per-vertex verdict (2026-08-11), since one image has no tiles to
+cross.
 
-**How a view is chosen.** A view qualifies when all three vertices are in
-front of it, inside its image and unoccluded, by the single-camera pass's
-test. The score is `|cos|` of the angle between the triangle's normal and
-the view's ray to its centroid, less 0.01 per metre of the smallest depth
-disagreement; the highest wins, and the first view wins a tie. This is
+**How a view is chosen.** A view qualifies when it sees the triangle's front
+and all three vertices are in front of it, inside its image and unoccluded,
+by the single-camera pass's test. The front is the counter-clockwise side,
+which marching cubes' outward normal leaves by and gfx draws. The score is the
+cosine of the angle between the triangle's normal and the view's ray back
+from its centroid, less 0.01 per metre of the smallest depth disagreement;
+the highest wins, and the first view wins a tie. This is
 implicit_surface_compression's `triangles_to_uv_multicam_kernel`
 (`texture_mapping.cu`), which the prior engine's texture mapper also uses,
-with the same default weight.
+with the same default weight, except for the front. Both take `|cos|`, so a
+view behind a triangle scores as well as one in front of it. On thin
+geometry the back of a sheet sits within the 2 cm threshold of the front its
+camera saw, passes the depth test, and took the front's image. Our winding is
+consistent, so a view behind the triangle does not qualify. The facing test
+runs first, since it needs no depth. A triangle with no area faces no view.
 
-**The coordinates.** The tile's origin plus the pixel plus half a texel, over
-the atlas size, clamped half a texel inside the tile, so filtering never
-reaches a neighbouring view. With one view they match the single-camera pass
-to 1e-6: the tiled form clamps before it divides.
+**The coordinates.** The vertex's pixel centre as a fraction of the depth
+map, times the tile's size, clamped half a texel inside the tile, plus the
+tile's origin, over the atlas size. Filtering never reaches a neighbouring
+view. The fraction is the same fraction of a colour image registered to the
+depth camera, when the depth intrinsics are a pixel-centre-preserving rescale
+of the colour ones (`sensor::depth_from_registered_color`), so the tile is
+the colour image at its own resolution. That is the single-camera pass's
+argument, and the reference's separate low-resolution depth camera is the
+same idea. A phone's 256x192 depth under a 1920x1440 capture textures at the
+capture's resolution, with no upsampled depth. A `TextureView` whose image
+size is zero takes its depth map's. With one view at the depth map's size the
+coordinates match the single-camera pass to 1e-6.
+
+**What is refused.** Before anything is written, as `InvalidArgument`: no
+views, a null depth, an empty depth map or image, an image with one side
+given and not the other, a depth range with `min_depth >= max_depth`, and a
+layout that does not match the views, lies past the device's extent, or
+has tiles outside the atlas or overlapping one another. The depth range
+check exists because a camera converted from a `ColorCameraParams`, which has
+no range, arrives with both zero, and then no sample counts: every triangle
+took the vertex colour and the call returned OK. Overlapping tiles would let
+`pack_atlas` overwrite one view's pixels with another's, so a triangle
+assigned the first view sampled the second's image. `pack_atlas` checks the
+same, plus a null output. `side_by_side_atlas` gives an atlas past the extent
+`InvalidArgument` too, as every device limit this tier checks does.
+
+**Its buffers.** The views' depth and the view table are grow-only members,
+rewritten each call like the single-camera pass's camera buffer. The dispatch
+is fence-waited, so nothing still reads them when the next call writes. A
+four-camera 1080p rig texturing at 30 fps otherwise allocated and freed about
+33 MB a frame.
 
 **Verified.** `recon_texture_multiview` builds a wall seen by three cameras,
 with depth ray-cast per camera. Each triangle takes the view worked out by
 hand: head on, the squarer of two, and the other view when the best one is
-occluded. A triangle behind every camera, or with a vertex off every image,
-gets the vertex colour. Every coordinate lands at its projection, inside its
-tile, in one row and wrapped into two. It also checks one view against the
-single-camera pass, `side_by_side_atlas` and `pack_atlas`, and each refusal.
-Inverting the score, testing one vertex instead of three, dropping the
-occlusion test, or ignoring the tile offset each fails it.
-`recon_texture_device_mesh` checks that the device pass equals the host pass
-vertex for vertex on a sphere seen by two views, and that a shared mesh is
-refused.
+occluded. A triangle behind every camera, with a vertex off every image, or
+wound away from the cameras, gets the vertex colour, though camera 0's depth
+agrees with the last one. The same triangle wound toward them is textured.
+Every coordinate lands at its projection, inside its tile, in one row and
+wrapped into two. A half-resolution depth map under a full-resolution tile
+puts every vertex where the full-resolution depth does. It also checks one
+view against the single-camera pass, `side_by_side_atlas` and `pack_atlas`,
+each refusal, and a moved-from texturer's extent. Inverting the score,
+testing one vertex instead of three, dropping the occlusion test, ignoring
+the tile offset, taking `|cos|`, scaling to the depth map instead of the
+tile, dropping the image size, the depth-range check, the overlap check or
+the null check, never growing the depth buffer, or reading a moved-from
+texturer's extent each fails it. `recon_texture_device_mesh` checks that the
+device pass equals the host pass vertex for vertex on a sphere seen by two
+views, and that it reports its `"texture"` row. It also checks that a shared
+mesh and a superseded one are refused, the latter both over a live buffer
+and over a freed one. Dropping the device overload's `is_current` check or
+its stage scope fails it.
 
-**Open.** The atlas is packed on the host and uploaded by gfx; packing it on
-the GPU into an image gfx samples directly needs `core` images. Each call
-uploads every view's depth. Views are not blended, so exposure differences
-show as seams between triangles textured from different views.
+**Open**, each a `TODO(texture)` at the code it names. The atlas is packed on
+the host and uploaded by gfx; packing it on the GPU into an image gfx samples
+directly needs `core` images. Each call copies every view's depth into the
+buffer, so a keyframe set that does not change pays for it every call. Views
+are not blended, so exposure differences show as seams between triangles
+textured from different views. A shared mesh waits on a per-triangle tile
+index in gfx.
 
 ## Measured lessons
 

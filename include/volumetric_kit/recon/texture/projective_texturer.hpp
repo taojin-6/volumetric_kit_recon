@@ -108,8 +108,11 @@ namespace volumetric_kit::recon::texture {
 /// **triangle**: a triangle whose vertices took different views would
 /// interpolate across the atlas between two tiles, which no per-vertex
 /// encoding can prevent. So that path needs an unshared mesh, where each
-/// triangle owns its three vertices, and refuses a shared one; see those
-/// overloads for how a view is chosen.
+/// triangle owns its three vertices, and refuses a shared one -- the one
+/// refusal @ref mesh::DeviceMesh::shares_vertices means to this class; see
+/// those overloads for how a view is chosen. Each tile is its view's colour
+/// image at that image's own resolution, by the normalized-coordinate argument
+/// above.
 ///
 /// The separate-colour-camera path the TSDF tier models (`ColorCameraParams`)
 /// is a later slice.
@@ -212,30 +215,39 @@ class VR_TEXTURE_API ProjectiveTexturer {
   /// @brief Texture @p mesh from several posed views, each triangle from the
   ///        one that sees it best, into an atlas of their images.
   ///
-  /// One thread per triangle. A view qualifies when all three of the
-  /// triangle's vertices are in front of it, inside its image and unoccluded
-  /// (the same test as the single-camera pass). Among those, the one facing
-  /// the triangle most squarely wins: the score is |cos| of the angle between
-  /// the triangle's normal and the view's ray to its centroid, less 0.01 per
-  /// metre of the smallest depth disagreement, as in the prior engine; the
-  /// first view wins a tie. All three vertices get that view's image
-  /// coordinates, offset into its tile of @p layout and clamped half a texel
-  /// inside the tile, so filtering never reaches a neighbouring view. A
-  /// triangle no view sees whole gets `(-1, -1)` on all three, the vertex
-  /// colour. Every vertex's `uv0` is rewritten.
+  /// One thread per triangle. A view qualifies when it sees the triangle's
+  /// **front** -- its counter-clockwise side, the side marching cubes' outward
+  /// normal leaves by and the one gfx draws -- and all three of its vertices
+  /// are in front of it, inside its image and unoccluded (the same test as the
+  /// single-camera pass). Among those, the one facing the triangle most
+  /// squarely wins: the score is the cosine of the angle between the
+  /// triangle's normal and the view's ray back from its centroid, less 0.01
+  /// per metre of the smallest depth disagreement, as in the prior engine; the
+  /// first view wins a tie. A view behind the triangle does not qualify,
+  /// however well its depth agrees: on thin geometry the back of a sheet sits
+  /// within the threshold of the front the camera saw. All three vertices get
+  /// the winner's image coordinates, scaled into its tile of @p layout and
+  /// clamped half a texel inside it, so filtering never reaches a neighbouring
+  /// view. A triangle no view sees whole from the front gets `(-1, -1)` on all
+  /// three, the vertex colour, and so does one with no area. Every vertex's
+  /// `uv0` is rewritten.
   ///
   /// @param mesh    An unshared mesh from the producer that has not extracted
   ///                again (`DeviceMesh::is_current`): vertices `3t..3t+2` are
   ///                triangle `t`'s. A `shares_vertices` mesh is refused.
-  /// @param views   The views, each with its depth registered to its image.
+  /// @param views   The views: each a depth map, its camera, and the size of
+  ///                the colour image registered to it (@ref TextureView).
   /// @param layout  Where each view's image sits (@ref side_by_side_atlas):
-  ///                one tile per view, each its camera's size.
+  ///                one tile per view, each its colour image's size, none
+  ///                overlapping another.
   /// @param occlusion_threshold  As the single-camera overload.
   /// @param metrics  Optional; a `"texture"` row, as the single-camera
   ///                 overload.
   /// @return OK (an empty mesh is a no-op); @ref Status::Code::InvalidArgument
   ///         for a moved-from texturer, no views, a null depth, an empty
-  ///         camera, a layout that does not match the views or lies past
+  ///         camera or image, a depth range with `min_depth >= max_depth`
+  ///         (under which no sample would count), a layout that does not
+  ///         match the views, overlaps itself or lies past
   ///         @ref max_atlas_extent, a shared, superseded or buffer-less mesh,
   ///         or depth too large for one binding; else a dispatch failure.
   Status texture(const mesh::DeviceMesh& mesh,
@@ -252,8 +264,11 @@ class VR_TEXTURE_API ProjectiveTexturer {
                  StageMetrics* metrics = nullptr);
 
   /// @return The largest atlas width or height this device samples
-  ///         (`maxImageDimension2D`), to lay an atlas out within.
-  std::uint32_t max_atlas_extent() const noexcept { return max_atlas_extent_; }
+  ///         (`maxImageDimension2D`), to lay an atlas out within; 0 for a
+  ///         moved-from texturer, which has no device.
+  std::uint32_t max_atlas_extent() const noexcept {
+    return valid() ? max_atlas_extent_ : 0;
+  }
 
   /// @return `true` if this owns a live pipeline (`false` when moved-from).
   bool valid() const noexcept { return kernel_.valid(); }
@@ -287,6 +302,11 @@ class VR_TEXTURE_API ProjectiveTexturer {
   // Fixed-size camera-params SSBO (DepthCameraParams): bound once at
   // create() and rewritten each texture(), like the tsdf tier's camera SSBO.
   Buffer cam_buf_;
+  // The several-view pass's inputs: every view's depth end to end, and the
+  // views. Grow-only and rewritten each call, like cam_buf_, so a rig
+  // texturing every frame allocates nothing once they fit.
+  Buffer view_depth_buf_;
+  Buffer views_buf_;
 
   // Both multi-view overloads, once the vertices are on the device.
   Status texture_views(VkBuffer vertices, std::uint32_t triangles,

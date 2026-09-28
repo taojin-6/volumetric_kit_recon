@@ -313,7 +313,20 @@ int main() {
   {
     mesh::Mesh host_views = host_mesh;
     CHECK(texturer.texture(host_views, views, layout.value()).ok());
-    CHECK(texturer.texture(device_mesh, views, layout.value()).ok());
+    // Timed, for the reason the single-camera call above is: nothing else
+    // would notice this overload losing its stage scope or its publish.
+    vr::StageMetrics views_metrics;
+    CHECK(
+        texturer
+            .texture(device_mesh, views, layout.value(), 0.02f, &views_metrics)
+            .ok());
+    const vr::StageRow* views_row = find_row(views_metrics, "texture");
+    CHECK(views_row != nullptr);
+    CHECK(views_row->cpu_ms > 0.0);
+    if (probe.value().available()) {
+      CHECK(views_row->has_gpu);
+      CHECK(views_row->gpu_ms < views_row->cpu_ms);
+    }
     vr::Result<mesh::Mesh> read = extractor.download(device_mesh);
     CHECK(read.ok());
     const mesh::Mesh& device_views = read.value();
@@ -403,6 +416,7 @@ int main() {
     CHECK(!stale.is_current());
     CHECK(!growing.download(stale).ok());
     CHECK(!texturer.texture(stale, depth.data(), cam).ok());
+    CHECK(!texturer.texture(stale, views, layout.value()).ok());
   }
 
   // A DeviceMesh from another extractor is rejected too: generations are
@@ -432,6 +446,7 @@ int main() {
     CHECK(held.is_current());
     // Texturing it now is fine.
     CHECK(texturer.texture(held, depth.data(), cam).ok());
+    CHECK(texturer.texture(held, views, layout.value()).ok());
 
     // Extract again on the same extractor; `held` is now superseded.
     vr::Result<mesh::DeviceMesh> next = extractor.extract_device(grid, 0.0f);
@@ -444,11 +459,14 @@ int main() {
     vr::Status stale_texture = texturer.texture(held, depth.data(), cam);
     CHECK(!stale_texture.ok());
     CHECK(stale_texture.domain() == vr::Status::Code::InvalidArgument);
+    // The several-view overload binds the same buffers, so it asks too.
+    CHECK(texturer.texture(held, views, layout.value()).domain() ==
+          vr::Status::Code::InvalidArgument);
     // The live view from the same extractor still textures.
     CHECK(texturer.texture(next.value(), depth.data(), cam).ok());
   }
 
-  // A mesh whose vertices are SHARED is textured, not refused.
+  // A mesh whose vertices are SHARED is textured by one camera, not refused.
   //
   // It used to be refused, and the refusal was the whole reason DeviceMesh
   // publishes the flag: the pass decided visibility per TRIANGLE and wrote uv0
@@ -457,9 +475,9 @@ int main() {
   // only as flicker along every silhouette. The dispatch is per vertex now, so
   // there is exactly one writer per vertex and nothing to disagree.
   //
-  // The flag has not become useless; it has stopped being an incompatibility.
-  // A packed multi-camera atlas will still need a per-PRIMITIVE camera id, and
-  // a consumer sizing a vertex arena still needs to know whether `v = 3t`.
+  // The flag has not become useless. The several-view overloads choose per
+  // TRIANGLE and refuse a shared mesh (asserted below), and a consumer sizing
+  // a vertex arena still needs to know whether `v = 3t`.
   {
     mesh::MarchingCubesConfig share_config;
     share_config.share_vertices = true;
