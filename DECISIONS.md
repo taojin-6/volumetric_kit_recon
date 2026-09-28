@@ -4140,8 +4140,15 @@ The review follow-up was also checked three ways the tests cannot pin:
   under Open is the number that matters. Two things this timing caught
   first: the sticky flag above (47.5 ms), and a `reserve` per appended
   segment. `reserve` allocates exactly what it is asked for, so that version
-  copied the frame once per segment (83.7 ms). `finish` now uses `resize`,
-  which grows geometrically.
+  copied the frame once per segment (83.7 ms). `finish` now appends with
+  `push_back`, which grows geometrically. Its first replacement,
+  `resize`-then-index, failed CI's ubuntu-24.04 Release leg. GCC 13 at `-O3`
+  cannot see that `resize` grew the caller's vector, so `-Wstringop-overflow`
+  fails the build. It reproduced in an `ubuntu:24.04` container, and neither
+  Clang nor GCC 16 warns. `push_back`, a pointer taken after `resize`, and a
+  staged copy all compile cleanly under GCC 13 and time the same.
+- The frame code and both tests compile under `-Werror -O3` with GCC 13.3 in
+  CI's `ubuntu:24.04` image.
 - The frame code and both tests compile under `-Werror` for a 32-bit `size_t`
   (`arm64_32`, the watchOS SDK) and under GCC 16.
 - `bitstream.cpp` now includes none of the 17 Vulkan and GPU headers it used
