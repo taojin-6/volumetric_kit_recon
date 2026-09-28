@@ -490,6 +490,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   355 of 16 384 blocks failed that way after every retry round with half the
   heap free, which a caller answers by growing the map. They pop with one
   `atomicAdd` too.
+- `volume`: **a remove's lock-contention leftovers are counted as
+  `AllocFailures::lock`**, as allocation's are, rather than only in `total`.
+  `recon_volume_delete` re-drives its large remove as the decoder does,
+  where it required one call to finish: a few blocks left to contention
+  failed 7 Debug runs in 100 on the RTX 5090, with none lost.
 - `volume`: **the hash table's bucket locks live in device memory.** They were
   host-visible like every buffer the map owns, so on a discrete GPU each spin
   was an atomic across PCIe. On an RTX 5090, allocating a 5 000-triangle sheet
