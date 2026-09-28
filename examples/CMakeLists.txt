@@ -47,6 +47,7 @@ target_include_directories(vr_tinyply SYSTEM
 
 add_subdirectory(common)
 add_subdirectory(fuse_replica)
+add_subdirectory(codec_replica)
 # The live counterpart, when the Orbbec driver is built.
 if(TARGET volumetric_kit::recon_sensor_orbbec)
   add_subdirectory(fuse_orbbec)

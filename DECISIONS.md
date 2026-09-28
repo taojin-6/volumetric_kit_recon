@@ -4639,6 +4639,140 @@ process holds.
 left and top crop on hardware is tested only on the back ends CI has
 (NVDEC). Pictures pass through host memory (a `TODO(sensor)`).
 
+### 2026-09-27 — Room0 sets the codec's provisional defaults, K = 64 with one step of 0.2 for DC and AC alike: the coefficient count sets the quality and a coarse uniform step costs almost nothing at it, and the host rANS coder fits a frame interval at 1 cm, so the GPU coder waits.
+
+The fourth of the 2026-09-26 entry's five PRs, where the codec meets real data:
+- **`examples/codec_replica`** fuses a Replica sequence exactly as
+  `fuse_replica` does. Every `--encode-every` frames it encodes the fusion grid
+  and decodes it into a player grid, which it builds from the first frame's
+  `read_frame_info` as a player would.
+- **Its report:** bytes per frame and per block, the bitrate at 30 fps, and the
+  stage rows of both calls. At the end it meshes both grids and measures one
+  against the other.
+- **`--sweep`** encodes the final grid under a list of configurations and prints
+  the rate–distortion table below.
+
+**The metric is mesh to mesh, not SDF sampling.** Both directions are named as
+the codec's ground-truth test (#94) names them:
+- **accuracy:** each decoded vertex's distance to the source surface;
+- **coverage:** each source vertex's distance to the decoded surface.
+
+Each is a point-to-triangle distance through a cell hash, up to a reach of
+`max(trunc_dist, 2 cm)`, sampled at every fourth vertex. The code is
+`examples/common/mesh_distance.hpp`, header-only, and its test pins it against
+meshes a known distance apart. The first plan was to sample the source grid's
+SDF at the decoded vertices, which would be simpler. It was dropped because a
+fused TSDF is **projective**: distance along the camera ray, not Euclidean. So
+on real scans the simpler metric would have measured the fusion's bias as well
+as the codec's error.
+
+**Measured** on room0: 400 frames, every frame coded, M5 Max, Release. Encode
+and decode times are host ms per coded frame, and the rANS share of each is in
+brackets.
+
+| | voxel | blocks/frame | B/block | Mbit/s @ 30 fps | encode ms | decode ms | accuracy RMS | coverage RMS / beyond reach |
+|---|---|---|---|---|---|---|---|---|
+| prior engine's (K = 32, DC 0.25 / AC 0.05) | 1 cm | 21.9 k | 18.7 | 98.4 | 13.1 (rANS 10.1) | 10.7 (7.0) | 0.886 mm | 1.226 mm / 104 |
+| **new (K = 64, 0.2 / 0.2)** | 1 cm | 21.9 k | **17.4** | 91.5 | 17.4 (13.8) | 15.7 (11.5) | **0.641 mm** | 0.835 mm / 31 |
+| prior engine's | 2 cm | 5.4 k | 21.6 | 28.0 | 3.9 (2.9) | 3.6 (2.0) | 2.264 mm | 3.414 mm / 37 |
+| **new** | 2 cm | 5.4 k | **20.5** | 26.6 | 4.6 (3.7) | 4.6 (3.1) | **1.629 mm** | 2.382 mm / 24 |
+
+**The sweep over the final 1 cm grid** (24.9 k coded blocks; steps are
+fractions of `trunc_dist`, distances in mm). The 2 cm sweep orders the configs
+the same way.
+
+| config | B/block | accuracy RMS / p95 / max | encode / decode ms |
+|---|---|---|---|
+| split, K = 8 / 16 / 32 / 64 / 128 | 13.3 / 15.5 / 18.5 / 23.0 / 28.3 | RMS 2.646 / 1.374 / 0.884 / 0.574 / 0.381 | 10.6 → 33.0 |
+| split, K = 32, steps ×0.5 / ×2 / ×4 | 20.9 / 16.5 / 14.7 | RMS 0.882 / 0.902 / 0.978 | ~15 |
+| uniform, K = 32, step 0.025 → 0.4 | 21.1 → 13.5 | RMS 0.879 → 0.995 | ~15 |
+| uniform, K = 64, step 0.1 / 0.2 / 0.4 | 19.9 / 17.1 / 14.8 | RMS 0.586 / 0.642 / 0.796 | ~20.5 / 16.3 |
+| uniform, K = 128, step 0.2 / 0.4 / 0.8 | 19.1 / 15.8 / 13.4 | RMS 0.496 / 0.700 / 1.074; max 34 / 19 / 28 | ~29.5 / 25.5 |
+| uniform, K = 256, step 0.4 / 0.8 | 16.7 / 13.7 | RMS 0.671 / 1.073 | ~47 / 46 |
+| uniform, K = 512, step 0.8 / 1.6 | 13.9 / 11.9 | RMS 1.078 / 1.751 | ~85 / 137 |
+| reference, K = 512, step 0.002 | 147.1 | 0.012 / 0.023 / 2.2 | 122 / 131 |
+
+**What it says.**
+1. **The error's tail is the quantizer's.** The near-lossless reference decodes
+   to 0.012 mm RMS, with nothing beyond reach. So the 20–37 mm worst vertices
+   of every practical config are ringing from dropped coefficients, a few
+   floaters near thin structures, and not a pipeline defect. Every config's
+   p95 is under 2 mm.
+2. **K sets the quality, and the step barely does at low K.** At K = 32, going
+   from a step of 0.025 to one of 0.4 cuts the bytes by 36% and raises the
+   error by 13%. Each doubling of K costs about a quarter more bytes and takes
+   about a third off the error.
+3. **A DC step coarser than the AC step buys nothing.** At the same AC step,
+   the split's 5× DC step saves 2% of the bytes for 7% more error (×4:
+   14.7 B/block at 0.978 mm, against uniform 0.2 at 15.0 and 0.915). That
+   matches the theory: the transform is orthonormal, so a unit of quantization
+   error costs the same in any coefficient.
+4. **Many coefficients coarsely beats few finely.** Past K = 128, though, a
+   coarse step zeroes the extra coefficients anyway: at a step of 0.8,
+   K = 128, 256 and 512 all come to ~13.5 B/block and ~1.07 mm, and only the
+   time grows. The best K rises with the bitrate. At the low end, K = 32 at
+   0.4 (13.5, 0.995) edges out K = 128 at 0.8 (13.4, 1.074). This is what the
+   per-band quantization study is for (see Open).
+
+**The choice: K = 64 with a uniform 0.2.** It beats the prior engine's
+defaults on bytes and on error at both resolutions: 7% smaller and 28% more
+accurate at 1 cm, 5% smaller and 28% more accurate at 2 cm. It also keeps both
+calls inside a 30 fps frame interval on the host at 1 cm (encode 17.4 ms,
+decode 15.7 ms).
+
+The two better points traded speed for size:
+- **K = 128 at 0.4:** 15.8 B/block and 0.700 mm.
+- **K = 128 at 0.2:** 19.1 B/block and 0.496 mm.
+
+Both roughly double the host coding time, which would put 1 cm room0 at the
+edge of real time.
+
+The defaults are **provisional**, and are recorded as such in
+`codec_params.hpp`. They are to be re-chosen by the per-band study on these
+same tables.
+
+**Where the new defaults lose.** On the analytic sphere of `codec_decoder_test`
+they are 16% smaller than the old ones (30.2 against 35.8 B/block) but **17%
+less accurate** on the mean (0.070 against 0.060 voxels off), and the worst
+vertex is 0.66 voxels off. A smooth surface keeps all its energy in the low
+bands, which the defaults' coarse AC step quantizes as coarsely as the high
+ones. So the test's bounds were widened: 1 voxel worst, and a new 0.15-voxel
+mean. The sphere is kept as the per-band study's second fixture, beside room0.
+A table can be fine in the low bands and coarse in the high ones, and so could
+win on both.
+
+**The GPU coder waits.** At the new defaults, host rANS takes 42% of a frame
+interval to encode and 35% to decode at 1 cm, single-threaded. That is inside
+the interval, so PR 5 is not needed for this content at this resolution. It
+would be at finer voxels, at K = 128, or on a slower host. Even then, the
+cheaper first step is to code the segments on several host threads, since
+they are independent by construction (the 2026-09-27 format).
+
+**Bitrate.** Intra-only room0 at 1 cm is ~90 Mbit/s at 30 fps. Most blocks do
+not change between frames, which is the case for P-frames.
+
+**Verified.** The full suite passes, 35 of 35 against 34 before; the new test
+is `recon_mesh_distance`. The metric was mutation-checked with five planted
+bugs, each caught:
+- a closest-point vertex region returning the wrong vertex
+- a query that skips neighbour cells
+- the reach counted as within it
+- coverage measured the wrong way round
+- p95 read as the median
+
+The sweep's first cut timed each config's first call on a fresh `Encoder`,
+which varied from 5 to 35 ms on the same grid. Each config now runs one
+untimed round first.
+
+**Open.**
+- **The per-band quantization study,** its own PR, before P-frames. It judges
+  a step table per `x + y + z` band on room0 and on the sphere, with these
+  tables as the baseline.
+- **P-frames,** for the bitrate above.
+- **Host-threaded segment coding,** if a finer voxel or K = 128 is wanted in
+  real time.
+- **The GPU coder,** after that, if threading is not enough.
+
 ## Measured lessons
 
 Not decisions, but the measurements that overturned an assumption about

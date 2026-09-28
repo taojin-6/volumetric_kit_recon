@@ -268,6 +268,11 @@ order. Change the decision, its entry there, and this list together.
   installed FFmpeg: HEVC in, host pictures out, on the first hardware back end
   that decodes a built-in clip, NVIDIA ahead of an integrated GPU; each CI leg
   requires the hardware it has.
+- [**2026-09-27**](DECISIONS.md#2026-09-27--room0-sets-the-codecs-provisional-defaults-k--64-with-one-step-of-02-for-dc-and-ac-alike-the-coefficient-count-sets-the-quality-and-a-coarse-uniform-step-costs-almost-nothing-at-it-and-the-host-rans-coder-fits-a-frame-interval-at-1-cm-so-the-gpu-coder-waits) —
+  Room0 sets the codec's provisional defaults, K = 64 with one step of 0.2 for
+  DC and AC alike: the coefficient count sets the quality and a coarse uniform
+  step costs almost nothing at it, and the host rANS coder fits a frame
+  interval at 1 cm, so the GPU coder waits.
 
 ## Provenance & salvage policy
 
@@ -716,7 +721,11 @@ arbitrary; it usually isn't.
   `VR_TEST_HEVC_BACKEND` makes its test require one back end, which is how
   CI holds the Linux legs to NVDEC (the 2026-09-27 decoder decision).
 
-- **`codec`** — three of five PRs in (2026-09-26 lists them). The public API
+- **`codec`** — four of five PRs in (2026-09-26 lists them). The defaults
+  are room0's, and provisional until the per-band quantization study: K = 64
+  with one step of 0.2 for DC and AC alike (2026-09-27). At 1 cm that is
+  17.4 B/block (235x under raw), 0.64 mm accuracy RMS, and host coding inside
+  a 30 fps frame interval. The public API
   is `CodecParams`, **`Encoder`** (`encoder.hpp`) and **`Decoder`** with
   `read_frame_info` (`decoder.hpp`). `Encoder::encode(grid)` compacts, sorts
   by (z, y, x) and transforms, drops every block with no observed voxel, and
@@ -777,9 +786,9 @@ arbitrary; it usually isn't.
   bit, nor a symbol swapped for one of equal frequency, so integrity is the
   transport's.
 
-**Examples** (`examples/`). All four poll their frames through
+**Examples** (`examples/`). All five poll their frames through
 `sensor::ICameraCapture&` — the fuse loop never learns what is behind it. The
-three dataset examples take `ReplicaCapture` as the source: frame cap, stride
+four dataset examples take `ReplicaCapture` as the source: frame cap, stride
 and the depth gate are its options, stamped on each frame it hands out, and its
 disk probe at `open` visits only the frames those options select. An empty
 poll is retried after a millisecond until the source reports itself
@@ -804,13 +813,22 @@ flags on a different cadence. Behind the off-by-default
 `VR_BUILD_VIEWER`: `fuse_render` writes a headless colour PNG (seam A — it
 builds two devices by design), and `fuse_viewer` opens a live window on one
 shared `VkDevice`, fusing on a background thread, drawing recon's buffers
-directly, and carrying the two-panel perf overlay. The three dataset examples
+directly, and carrying the two-panel perf overlay. The four dataset examples
 take `--preload`, which makes the loop measure compute rather than the
 JPEG/PNG decoder.
 The live counterpart is its own example, not a `fuse_replica` flag:
 **`fuse_orbbec`** (`VR_WITH_ORBBEC`) fuses an `OrbbecCapture` through the same
 `fuse_frame.hpp` and writes a PLY after `--frames` frames; `--rig sync.json`
 fuses the rig as an `OrbbecRig`, posed by `--calibration`.
+**`codec_replica`** fuses a Replica sequence as `fuse_replica` does, and
+streams the growing grid through the codec: every `--encode-every` frames it
+encodes, then decodes into a player grid built from `read_frame_info`. It
+reports bytes, bitrate and both calls' stage rows. It then judges the last
+decoded surface against the source's, mesh to mesh, with
+`examples/common/mesh_distance.hpp`: accuracy and coverage, as the codec's
+ground-truth test names them, since a fused TSDF is projective and sampling it
+would measure the fusion's bias too. `--sweep` prints the rate–distortion
+table the defaults are chosen from.
 
 **Next.** **Incremental mesh extraction has landed, all three stages** —
 `MarchingCubes::extract_device_incremental`, over the span table of the
