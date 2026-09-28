@@ -6156,9 +6156,15 @@ lock (about 0.7 ms a submit). Reusing those is the `TODO(core)` below, now
 measured. The live rig fused 403 frames at 73.7 fps on the Mac, the
 `"frame prep"` row 0.55 ms of host time a frame.
 
-Next are the frame prep's outputs on a ring (a `TODO(sensor)` on
-`ensure_output`), then 5c, the decoder's planes straight to the device. 5c
-needs its own design: CUDA or VideoToolbox memory shared with Vulkan.
+The frame prep's outputs stay off a ring. A ring would have spared a frame
+kept past the next its new 35 MB output at 4K, but measured on the 5090 with
+one camera, keeping the previous frame prepared in 0.91 ms against 1.04 ms
+dropped, since VMA carves the new buffer from a block it holds. The M5 Max
+was within its noise. There is nothing for a ring to win, so its
+`TODO(sensor)` is gone.
+
+Next is 5c, the decoder's planes straight to the device. It needs its own
+design: CUDA or VideoToolbox memory shared with Vulkan.
 
 `dispatch()` is unchanged. `submit_single_time` still allocates a command
 buffer and a fence per submit; reusing them is a `TODO(core)`, measured by

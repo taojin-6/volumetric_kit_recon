@@ -1111,8 +1111,7 @@ one camera (`GpuFramePrep`, the 2026-09-28 GPU pre-processing decision: at 4K
 it takes the host from 15.5 ms of undistortion and registration a frame to
 none, and the run's CPU eightfold down) and for the rig's raw sets, and what
 it leaves is zero-copy input from the decoder's
-hardware frames (`gpu_frame_prep.hpp`, `hevc_decoder.cpp`), the frame
-prep's outputs on a ring (`gpu_frame_prep.cpp`), and the
+hardware frames (`gpu_frame_prep.hpp`, `hevc_decoder.cpp`), and the
 texture tier's separate colour camera, which fusing unregistered
 frames makes the texturing path's next need; and processing a host rig
 set's frames in parallel, one thread per camera, rather than the ~11 ms one
@@ -1126,8 +1125,7 @@ synchronised sets.
 **Device residency, the steps after `core`** (the 2026-09-28 residency
 decision ranks them): `volume`, `tsdf`, `mesh` and `texture` are resident,
 and `GpuFramePrep` stages its raw frame in one submit, the rig's raw sets a
-thread per camera; next the frame prep's outputs on a ring, the decoder's
-planes straight to the device, the examples, the codec's coefficients. The
+thread per camera; next the decoder's planes straight to the device, the examples, the codec's coefficients. The
 benchmark kit that sized
 them sits on the home box in `~/recon-bench` (a throwaway allocator patch
 behind environment variables); re-measure there after each.
