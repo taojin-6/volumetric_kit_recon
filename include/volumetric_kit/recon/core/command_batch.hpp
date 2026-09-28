@@ -39,15 +39,16 @@ struct ComputeKernel;
 /// share a buffer one of them writes -- and the last makes everything visible
 /// to the host and to a renderer drawing the result, as far as the queue
 /// family allows. Fills and uploads into one buffer at rising, disjoint
-/// offsets touch no byte twice, so a run of them needs none. Kernels
-/// keep their debug-utils regions and their @ref GpuStageScope spans.
-/// `dispatch()` is a batch of one dispatch.
+/// offsets touch no byte twice, so a run of them needs none. Kernels keep
+/// their debug-utils regions and their @ref GpuStageScope spans, and an
+/// upload given a span is timed too. `dispatch()` is a batch of one dispatch.
 ///
 /// **Host bytes cross only at the edges, and each way has one path.** An
 /// @ref upload of up to 64 KiB, 4-byte aligned -- a frame's parameters -- is
 /// written inline in the command buffer (`vkCmdUpdateBuffer`); a larger one,
 /// such as a depth frame, is copied in through a host-visible staging buffer
-/// the batch allocates. A @ref readback is for small results, a block count
+/// the batch allocates, which @ref reserve_upload hands to a caller packing
+/// its own bytes. A @ref readback is for small results, a block count
 /// or a failure tally: every readback of a batch is copied into one small
 /// host buffer allocated at @ref submit. Nothing is ever read or written
 /// through a mapping of the destination, so a buffer's memory type never
@@ -101,12 +102,32 @@ class VR_CORE_API CommandBatch {
   /// @param offset  Byte offset into @p dst.
   /// @param src     The bytes; may be null only when @p bytes is 0.
   /// @param bytes   How many; 0 records nothing.
+  /// @param stage   Optional span around the write, as @ref dispatch's, so a
+  ///                stage's device time counts moving its input too.
   /// @return OK; InvalidArgument for a range past @p dst, a missing usage
   ///         bit, a null @p src, or a staged upload on a batch with no
   ///         allocator; a staging allocation failure; or a poisoned batch's
   ///         first refusal.
   Status upload(const Buffer& dst, VkDeviceSize offset, const void* src,
-                VkDeviceSize bytes);
+                VkDeviceSize bytes, GpuStageScope* stage = nullptr);
+
+  /// @brief Stage @p bytes for @p dst at @p offset and return the staging,
+  ///        for the caller to fill before @ref submit.
+  ///
+  /// An upload the caller packs itself, such as strided rows or several
+  /// planes, written once and copied up as one command. Bytes left unwritten
+  /// go up undefined.
+  /// @param dst     Needs `TRANSFER_DST` usage.
+  /// @param offset  Byte offset into @p dst.
+  /// @param bytes   How many; not 0.
+  /// @param stage   As @ref upload.
+  /// @return The @p bytes to write, valid until @ref submit; InvalidArgument
+  ///         for 0 bytes, a range past @p dst, a missing usage bit or a batch
+  ///         with no allocator; a staging allocation failure; or a poisoned
+  ///         batch's first refusal.
+  Result<void*> reserve_upload(const Buffer& dst, VkDeviceSize offset,
+                               VkDeviceSize bytes,
+                               GpuStageScope* stage = nullptr);
 
   /// @brief Set @p bytes of @p dst at @p offset to the repeated word
   ///        @p value (`vkCmdFillBuffer`).
@@ -220,9 +241,9 @@ class VR_CORE_API CommandBatch {
     const ComputeKernel* kernel = nullptr;
     std::uint64_t set_writes = 0;     // the kernel's set, when recorded
     std::vector<unsigned char> data;  // push constants, or an inline upload
-    GpuStageScope* stage = nullptr;
-    void* host_dst = nullptr;  // a readback's destination
-    bool staged = false;       // a Copy from this batch's own staging
+    GpuStageScope* stage = nullptr;   // a dispatch's or an upload's span
+    void* host_dst = nullptr;         // a readback's destination
+    bool staged = false;              // a Copy from this batch's own staging
   };
 
   struct Span {

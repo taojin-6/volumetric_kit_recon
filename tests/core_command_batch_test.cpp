@@ -4,9 +4,10 @@
 // CommandBatch: every recording call, in orders that would expose a command
 // run out of place -- an upload after a dispatch, a readback before one -- over
 // a device-local and a host-visible buffer, since a buffer's memory type must
-// not change what a batch does. Uploads inline and staged, several readbacks
-// in one batch, transfers left unordered, the refusals, the moves, and timed
-// dispatches. Skips (exit 0) where no device is present.
+// not change what a batch does. Uploads inline, staged and packed by the
+// caller, several readbacks in one batch, transfers left unordered, the
+// refusals, the moves, and timed dispatches and uploads. Skips (exit 0) where
+// no device is present.
 
 #include <cstdint>
 #include <cstdio>
@@ -176,6 +177,21 @@ int run_kind(const Rig& rig, int kind) {
   CHECK(head[0] == 0xABCDu && head[1] == p[0] && head[2] == p[1]);
   for (int i = 0; i < 6; ++i) CHECK(middle[i] == odd[i]);
   CHECK(tail == 0xABCDu);
+
+  // A reserved upload, filled by the caller after the call, at an odd offset.
+  unsigned char packed[10] = {};
+  {
+    vr::CommandBatch batch(device, allocator);
+    vr::Result<void*> staging = batch.reserve_upload(buffer, 41, 10);
+    CHECK(staging.ok() && staging.value() != nullptr);
+    for (int i = 0; i < 10; ++i) {
+      static_cast<unsigned char*>(staging.value())[i] =
+          static_cast<unsigned char>(200 + i);
+    }
+    CHECK(batch.readback(buffer, 41, 10, packed).ok());
+    CHECK(batch.submit().ok());
+  }
+  for (int i = 0; i < 10; ++i) CHECK(packed[i] == 200 + i);
   return 0;
 }
 
@@ -386,7 +402,7 @@ int main() {
   }
 
   // Timed dispatches keep their spans: two in one submit, each resolved
-  // into its own row.
+  // into its own row. Timed uploads do too, inline, staged and reserved.
   {
     vr::Result<vr::GpuTimer> timer = vr::GpuTimer::create(device);
     CHECK(timer.ok());
@@ -394,7 +410,11 @@ int main() {
     {
       vr::GpuStageScope first(&metrics, timer.value(), "first");
       vr::GpuStageScope second(&metrics, timer.value(), "second");
+      vr::GpuStageScope uploads(&metrics, timer.value(), "uploads");
       vr::CommandBatch batch(device, allocator);
+      CHECK(batch.upload(a, 0, p.data(), kBytes, &uploads).ok());
+      CHECK(batch.upload(b, 2, p.data(), 8, &uploads).ok());
+      CHECK(batch.reserve_upload(b, 16, 8, &uploads).ok());
       add.set.write_storage_buffer(0, a.handle(), 0, VK_WHOLE_SIZE);
       const Push push{kCount, 1};
       CHECK(batch.dispatch(add, &push, sizeof(push), 4, rig.max_groups, &first)
@@ -402,8 +422,9 @@ int main() {
       CHECK(batch.dispatch(add, &push, sizeof(push), 4, rig.max_groups, &second)
                 .ok());
       CHECK(batch.submit().ok());
+      if (timer.value().available()) CHECK(timer.value().count() == 5);
     }
-    for (const char* name : {"first", "second"}) {
+    for (const char* name : {"first", "second", "uploads"}) {
       const vr::StageRow* row = nullptr;
       for (const vr::StageRow& r : metrics.rows()) {
         if (std::string(r.name) == name) row = &r;
@@ -483,6 +504,9 @@ int main() {
     CHECK(refused(
         [&](vr::CommandBatch& c) { return c.upload(bare, 0, p.data(), 4); }));
     CHECK(refused([&](vr::CommandBatch& c) {
+      return c.reserve_upload(bare, 0, 4).status();
+    }));
+    CHECK(refused([&](vr::CommandBatch& c) {
       return c.upload(mapped_bare, 0, p.data(), 4);
     }));
     CHECK(refused([&](vr::CommandBatch& c) {
@@ -501,6 +525,12 @@ int main() {
         [&](vr::CommandBatch& c) { return c.upload(a, kBytes, p.data(), 4); }));
     CHECK(refused(
         [&](vr::CommandBatch& c) { return c.upload(a, 0, nullptr, 4); }));
+    CHECK(refused([&](vr::CommandBatch& c) {
+      return c.reserve_upload(a, kBytes - 2, 4).status();
+    }));
+    CHECK(refused([&](vr::CommandBatch& c) {
+      return c.reserve_upload(a, 0, 0).status();
+    }));
     CHECK(refused([&](vr::CommandBatch& c) { return c.fill(a, 2, 4, 0); }));
     CHECK(refused([&](vr::CommandBatch& c) { return c.fill(a, 0, 6, 0); }));
     CHECK(
@@ -543,6 +573,9 @@ int main() {
     vr::CommandBatch batch(device);
     CHECK(batch.upload(a, 0, p.data(), kBytes).ok());
     CHECK(batch.upload(a, 2, p.data(), 4).domain() ==
+          vr::Status::Code::InvalidArgument);
+    vr::CommandBatch reserves(device);
+    CHECK(reserves.reserve_upload(a, 0, 4).status().domain() ==
           vr::Status::Code::InvalidArgument);
     vr::CommandBatch reads(device);
     CHECK(reads.readback(a, 0, 4, got.data()).domain() ==

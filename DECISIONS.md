@@ -5617,7 +5617,9 @@ Release, M-series Mac, each path's own run:
 
 The CPU saved is more than the poll row shows: the host path's decode thread
 also converted every 4K picture to RGB through swscale. The frame prep's host
-time is mostly copying 12 MB of planes into the upload buffer.
+time is mostly copying 12 MB of planes into the upload buffer. (Since step 5a
+of the residency decision below, into a batch's staging, and the copy up is
+timed on the device.)
 
 **Verified.** `recon_tsdf_device_input` fuses one frame from host arrays and
 from buffers and compares every observed voxel. `recon_sensor_gpu_frame_prep`
@@ -5676,10 +5678,11 @@ would have been silently wrong.
 
 The plain Brown-Conrady model also stopped reading k4..k6, which only the K6
 model has. One suggestion was not taken: recording both passes in one submit
-would save a fence wait a frame. It needs a several-kernel dispatch in
-`core`, which `ExtractTimings`' device half wants too, so it waits for that
-(a `TODO(sensor)` on `prepare`). None of this has run on the camera yet: the
-hardware test was not re-run after the review.
+would save a fence wait a frame. It needed a several-kernel dispatch in
+`core`, which `ExtractTimings`' device half wants too, so it waited for that.
+`CommandBatch` is that dispatch, and step 5a of the residency decision below
+has since put both passes in one submit. None of this has run on the camera
+yet: the hardware test was not re-run after the review.
 
 **Open.** The colour-occlusion fringe of an unregistered camera is
 unmeasured, and the texture tier's separate colour camera is a later slice.
@@ -6078,18 +6081,52 @@ come back through staging copies. The live pass, `fuse_viewer`'s, is the
 
 **Step 5a, `GpuFramePrep`, has landed.** The raw depth and colour planes go
 up through one batch into device-local inputs, and the depth and colour
-passes share its submit. A plane whose rows are tight goes up as it is, and a
-padded one is packed first. Measured on a 640x576 depth frame and a 3840x2160
-colour frame, Release, per frame (host / device):
+passes share its submit. The three planes are packed into one staging buffer
+(`CommandBatch::reserve_upload`), whatever the decoder's strides, and copied
+up as one command. The copies are timed with the passes, so the
+`"frame prep"` row's device half counts moving the frame. Measured on a
+640x576 depth frame and a 3840x2160 colour frame, Release, per frame (host /
+device):
 
 | | RTX 5090 | M5 Max |
 |---|---|---|
 | step 4 | 2.18 / 0.495 ms | 0.87 / 0.32 ms |
-| step 5a | 1.48 / 0.055 ms | 0.78 / 0.29 ms |
+| step 5a | 1.52 / 0.52 ms | 0.77 / 0.33 ms |
 
-Next is 5b, the rig's raw sets, then 5c, the decoder's planes straight to the
-device, which needs its own design: CUDA or VideoToolbox memory shared with
-Vulkan.
+The device column compares like with like: in step 4 the kernels read the
+planes across the bus inside their spans, and in 5a the copy's span carries
+that transfer, 0.47 ms of the 5090's 0.52 and about 0.04 ms of the Mac's. So
+the device time did not move. The win is the host's, one fence wait a frame.
+
+On unified memory the input is now held twice while the batch runs: the
+device-local input and the staging, about 13 MB each at 4K, the staging freed
+when the submit returns. The M5 Max's time did not move. The iPad, which is
+memory-bound, is not measured.
+
+**The review of step 5a** changed:
+
+- The first cut timed only the dispatches, so its 0.055 ms against step 4's
+  0.495 set the passes alone against passes that read across the bus.
+  `upload` and `reserve_upload` now take the stage's scope. The spans cost
+  nothing measurable on either machine.
+- A padded plane was packed into a vector and then copied again into the
+  staging, and each plane was an upload of its own: three staging buffers,
+  and a barrier between copies that never overlap. The planes now go
+  straight into one staging buffer. A tight plane is one `memcpy`, since
+  copying it row by row into write-combined memory cost the 5090 0.2 ms.
+- The raw inputs are named for a capture (`sensor.raw_depth`,
+  `sensor.raw_color`).
+- The reference test also runs at 321x241 with padded rows full of junk, so
+  the rounded plane offsets and the packing are both held to the reference.
+
+One suggestion was not taken. The two passes share no buffer, yet a barrier
+still separates them, because the batch cannot see a kernel's bindings. The
+depth pass it waits on takes 0.003 ms on the 5090 and 0.008 ms on the Mac.
+
+Next are the frame prep's outputs on a ring (a `TODO(sensor)` on
+`ensure_output`), then 5b, the rig's raw sets, then 5c, the decoder's planes
+straight to the device. 5c needs its own design: CUDA or VideoToolbox memory
+shared with Vulkan.
 
 `dispatch()` is unchanged. `submit_single_time` still allocates a command
 buffer and a fence per submit; reusing them is a `TODO(core)` for when a tier

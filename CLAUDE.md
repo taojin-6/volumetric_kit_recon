@@ -538,7 +538,9 @@ arbitrary; it usually isn't.
   alignment. `dispatch()` is a batch of one.
   An upload of up to 64 KiB, 4-byte aligned, goes inline
   (`vkCmdUpdateBuffer`) and a larger one through a staging buffer the batch
-  allocates; readbacks, which are small results, land in one host buffer
+  allocates, which `reserve_upload` hands to a caller packing its own bytes;
+  an upload given a `GpuStageScope` is timed like a dispatch. Readbacks,
+  which are small results, land in one host buffer
   allocated at `submit`, and the staging is freed once the wait is done, or
   leaked if the wait fails. Nothing goes through a mapping, so memory type
   never changes what a batch does, and usage is checked on every buffer, as
@@ -891,8 +893,9 @@ arbitrary; it usually isn't.
   `integrate` (and `ColorFrame::buffer`, with `coverage_in_alpha`, since a
   pixel the lens maps outside the picture is a 0 word), so nothing is
   uploaded and nothing registered. The raw frame itself goes up through one
-  batch into device-local inputs, both passes in the same submit, a plane
-  with padded rows packed first. The frame *holds* its device-local
+  batch into device-local inputs, its planes packed into one staging buffer
+  whatever their strides, and both passes run in the same submit, the copy
+  timed with them. The frame *holds* its device-local
   buffers, and `prepare` reuses one only once no frame does, so a frame kept
   past the next is still itself; the whole frame is checked before anything
   is uploaded, a depth range from 0 included. `OrbbecCapture` opened with
@@ -1096,7 +1099,8 @@ one camera (`GpuFramePrep`, the 2026-09-28 GPU pre-processing decision: at 4K
 it takes the host from 15.5 ms of undistortion and registration a frame to
 none, and the run's CPU eightfold down), and what it leaves is raw sets from
 the rig (`frame_conversion.cpp`), zero-copy input from the decoder's
-hardware frames (`gpu_frame_prep.hpp`, `hevc_decoder.cpp`), and the
+hardware frames (`gpu_frame_prep.hpp`, `hevc_decoder.cpp`), the frame
+prep's outputs on a ring (`gpu_frame_prep.cpp`), and the
 texture tier's separate colour camera, which fusing unregistered
 frames makes the texturing path's next need; and processing a rig set's
 frames in parallel,
@@ -1109,8 +1113,9 @@ synchronised sets.
 
 **Device residency, the steps after `core`** (the 2026-09-28 residency
 decision ranks them): `volume`, `tsdf`, `mesh` and `texture` are resident,
-and `GpuFramePrep` stages its raw frame in one submit; next the rig's raw
-sets, the decoder's planes straight to the device, the examples, the codec's coefficients. The benchmark kit that sized
+and `GpuFramePrep` stages its raw frame in one submit; next the frame prep's
+outputs on a ring, the rig's raw sets, the decoder's planes straight to the
+device, the examples, the codec's coefficients. The benchmark kit that sized
 them sits on the home box in `~/recon-bench` (a throwaway allocator patch
 behind environment variables); re-measure there after each.
 
