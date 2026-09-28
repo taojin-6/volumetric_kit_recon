@@ -155,11 +155,13 @@ class VR_CORE_API CommandBatch {
   /// @param dst         Needs `TRANSFER_DST` usage.
   /// @param dst_offset  Byte offset into @p dst.
   /// @param bytes       How many; 0 records nothing.
+  /// @param stage       As @ref upload.
   /// @return OK; InvalidArgument for a range past either buffer, ranges of
   ///         one buffer that overlap or a missing usage bit; or a poisoned
   ///         batch's first refusal.
   Status copy(const Buffer& src, VkDeviceSize src_offset, const Buffer& dst,
-              VkDeviceSize dst_offset, VkDeviceSize bytes);
+              VkDeviceSize dst_offset, VkDeviceSize bytes,
+              GpuStageScope* stage = nullptr);
 
   /// @brief Record a 1-D dispatch of @p kernel over @p groups workgroups, as
   ///        `dispatch()` does but in this batch.
