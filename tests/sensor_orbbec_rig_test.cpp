@@ -5,7 +5,8 @@
 // cameras (and a differing one refused, with nothing written), poses read from
 // a calibration file, sets whose frames share a trigger and carry their own
 // camera's pose, most of them complete, restart, the one-frame-at-a-time path,
-// the two readers refusing to mix, and moves.
+// the readers refusing to mix, and moves; then the same with H.265 colour,
+// and raw, each camera's set prepared on the GPU.
 //
 // Cameras are used only when named: set VR_ORBBEC_TEST_RIG to the rig's sync
 // configuration file (femto_mega_sync.json). Unset, the test skips (exit 0).
@@ -290,8 +291,11 @@ int main() {
   sensor::OrbbecRig hevc = std::move(hevc_opened).value();
   if (run_sets(hevc, "H.265") != 0) return 1;
   hevc.stop();
+  // Not opened raw.
+  CHECK(!hevc.raw_frames());
   CHECK(hevc.poll_raw_set().status().domain() ==
-        vr::Status::Code::InvalidArgument);  // not opened raw
+        vr::Status::Code::InvalidArgument);
+  CHECK(hevc.poll_raw().status().domain() == vr::Status::Code::InvalidArgument);
 
   // The rig raw: whole sets as the cameras captured them, each posed by its
   // calibration, prepared on the GPU at once, one thread per camera.
@@ -322,11 +326,17 @@ int main() {
     CHECK(prep.ok());
     preps.push_back(std::move(prep).value());
   }
+  CHECK(raw_rig.raw_frames());
   CHECK_OK(raw_rig.start());
   CHECK(raw_rig.poll_set().status().domain() ==
         vr::Status::Code::InvalidArgument);
   CHECK(raw_rig.poll().status().domain() == vr::Status::Code::InvalidArgument);
+  // Each depth camera sits a few centimetres from its colour camera, by the
+  // camera's own extrinsic, so a depth frame posed by another camera, or
+  // without the extrinsic, shows.
+  std::vector<std::optional<vr::Mat4f>> depth_in_color(raw_rig.camera_count());
   int prepared_sets = 0;
+  std::uint64_t last_raw_ts = 0;
   const auto raw_deadline = std::chrono::steady_clock::now() + kTimeout;
   while (prepared_sets < 10 &&
          std::chrono::steady_clock::now() < raw_deadline) {
@@ -338,17 +348,32 @@ int main() {
     }
     const sensor::OrbbecRigRawSet& set = *polled.value();
     CHECK(set.frames.size() == raw_rig.camera_count());
-    if (!set.complete()) continue;
+    CHECK(set.timestamp_ns > last_raw_ts);
+    last_raw_ts = set.timestamp_ns;
     for (std::size_t c = 0; c < set.frames.size(); ++c) {
+      if (!set.frames[c]) continue;
       const sensor::RawFrame& f = *set.frames[c];
       CHECK(f.depth != nullptr && f.has_color());
-      CHECK(near(f.color_cam_to_world, read.value()[c].cam_to_world));
+      CHECK(near(f.color_cam_to_world, poses[c].cam_to_world));
+      const vr::Mat4f rel =
+          glm::inverse(f.color_cam_to_world) * f.depth_cam_to_world;
+      CHECK(glm::length(vr::Vec3f(rel[3])) < 0.1f);
+      if (!depth_in_color[c]) depth_in_color[c] = rel;
+      CHECK(near(rel, *depth_in_color[c]));
+      const std::uint64_t skew_us = (f.timestamp_ns > set.timestamp_ns
+                                         ? f.timestamp_ns - set.timestamp_ns
+                                         : set.timestamp_ns - f.timestamp_ns) /
+                                    1000;
+      CHECK(skew_us <= options.sync_tolerance_us);
     }
+    // A missing camera's slot stays empty.
     auto prepared = sensor::prepare_set(preps, set.frames);
     CHECK_OK(prepared.status());
     for (std::size_t c = 0; c < set.frames.size(); ++c) {
       const std::optional<sensor::DeviceFrame>& frame = prepared.value()[c];
-      CHECK(frame.has_value() && frame->has_color());
+      CHECK(frame.has_value() == set.frames[c].has_value());
+      if (!frame) continue;
+      CHECK(frame->has_color());
       auto depth = vr_test::read_back<float>(
           device.value(), allocator.value(), *frame->depth,
           std::size_t{frame->depth_camera.width} * frame->depth_camera.height);
@@ -359,6 +384,28 @@ int main() {
     ++prepared_sets;
   }
   CHECK(prepared_sets == 10);
+
+  // Restarted, one raw frame at a time through the contract, each posed by
+  // one of the rig's cameras; and then the sets are refused.
+  raw_rig.stop();
+  CHECK_OK(raw_rig.start());
+  const auto raw_frames_deadline = std::chrono::steady_clock::now() + kTimeout;
+  for (int k = 0; k < 3 * static_cast<int>(n);) {
+    auto polled = raw_rig.poll_raw();
+    CHECK_OK(polled.status());
+    if (!polled.value()) {
+      CHECK(std::chrono::steady_clock::now() < raw_frames_deadline);
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      continue;
+    }
+    const vr::Mat4f& pose = polled.value()->color_cam_to_world;
+    CHECK(std::any_of(poses.begin(), poses.end(), [&](const auto& p) {
+      return near(p.cam_to_world, pose);
+    }));
+    ++k;
+  }
+  CHECK(raw_rig.poll_raw_set().status().domain() ==
+        vr::Status::Code::InvalidArgument);
   raw_rig.stop();
 #else
   CHECK(hevc_opened.status().domain() == vr::Status::Code::Unsupported);

@@ -131,7 +131,8 @@ struct OrbbecStreamOptions {
   /// Reject depth farther than this (metres).
   float max_depth = 5.0f;
   /// Hand frames out as the cameras captured them, through
-  /// @ref OrbbecCapture::poll_raw, for `sensor/utils`'s GPU pass to undistort
+  /// @ref OrbbecCapture::poll_raw, or a rig's @ref OrbbecRig::poll_raw_set and
+  /// @ref OrbbecRig::poll_raw, for `sensor/utils`'s GPU pass to undistort
   /// and convert: the host undistorts, registers and converts nothing, and
   /// depth and colour keep their own cameras, lenses and poses, read from the
   /// camera's factory calibration. Needs @ref OrbbecColorCodec::Hevc, whose

@@ -24,40 +24,34 @@
 
 namespace volumetric_kit::recon::sensor {
 
-/// @brief The frames one sync trigger produced across the rig.
+/// @brief The frames one sync trigger produced across the rig: processed
+///        (@ref OrbbecRigFrameSet) or as the cameras captured them
+///        (@ref OrbbecRigRawSet, for `sensor/utils`'s GPU pass).
 ///
-/// Borrows the rig's storage: valid until the next @ref OrbbecRig::poll_set,
-/// @ref OrbbecRig::poll or @ref OrbbecRig::stop.
-struct OrbbecRigFrameSet {
+/// Borrows the rig's storage: valid until the rig's next poll or
+/// @ref OrbbecRig::stop.
+template <typename Frame>
+struct OrbbecRigSet {
   /// The trigger's time on the rig's clock (ns): the primary's frame's.
   std::uint64_t timestamp_ns = 0;
   /// One entry per camera, in @ref OrbbecRig::Options::cameras order; empty
   /// where that camera's frame for this trigger never arrived, or where the
   /// SDK failed on it -- the only way the primary's is empty. Each frame is
   /// posed by its camera's calibration.
-  std::vector<std::optional<CapturedFrame>> frames;
+  std::vector<std::optional<Frame>> frames;
 
   /// @return How many cameras this set holds a frame from.
-  std::size_t count() const noexcept;
+  std::size_t count() const noexcept {
+    std::size_t n = 0;
+    for (const std::optional<Frame>& f : frames) n += f.has_value() ? 1 : 0;
+    return n;
+  }
   /// @return `true` when every camera's frame is here.
   bool complete() const noexcept { return count() == frames.size(); }
 };
 
-/// @brief One trigger's frames as the cameras captured them, for
-///        `sensor/utils`'s GPU pass (@ref OrbbecStreamOptions::raw).
-struct OrbbecRigRawSet {
-  /// As @ref OrbbecRigFrameSet::timestamp_ns.
-  std::uint64_t timestamp_ns = 0;
-  /// As @ref OrbbecRigFrameSet::frames, raw, each posed by its camera's
-  /// calibration. Borrowed from the cameras: valid until the next
-  /// @ref OrbbecRig::poll_raw_set or @ref OrbbecRig::stop.
-  std::vector<std::optional<RawFrame>> frames;
-
-  /// @return How many cameras this set holds a frame from.
-  std::size_t count() const noexcept;
-  /// @return `true` when every camera's frame is here.
-  bool complete() const noexcept { return count() == frames.size(); }
-};
+using OrbbecRigFrameSet = OrbbecRigSet<CapturedFrame>;
+using OrbbecRigRawSet = OrbbecRigSet<RawFrame>;
 
 /// @brief Counters a caller reads to see how the rig is keeping up.
 struct OrbbecRigStats {
@@ -85,8 +79,10 @@ struct OrbbecRigStats {
 ///
 /// Also an @ref ICameraCapture: @ref poll hands out the current set's frames
 /// one at a time, each posed by its own camera, so a fusion loop written for
-/// one camera fuses the rig unchanged. Read with one of the two between one
-/// @ref start and the next; the other returns
+/// one camera fuses the rig unchanged. A rig opened with
+/// @ref OrbbecStreamOptions::raw reads the same two ways raw, through
+/// @ref poll_raw_set and @ref poll_raw, and @ref raw_frames says so. Read
+/// one way between one @ref start and the next; the others return
 /// @ref Status::Code::InvalidArgument.
 ///
 /// @warning Not thread-safe: open, start, poll and stop from one thread.
@@ -177,7 +173,8 @@ class VR_SENSOR_ORBBEC_API OrbbecRig final : public ICameraCapture {
   ///         started; @ref Status::Code::IoError if a camera disconnected or
   ///         its frames stopped processing (see @ref OrbbecCapture::poll);
   ///         @ref Status::Code::InvalidArgument on a moved-from rig, a rig
-  ///         opened raw, or after @ref poll since the last @ref start.
+  ///         opened raw, or after another reader since the last
+  ///         @ref start.
   Result<std::optional<OrbbecRigFrameSet>> poll_set();
 
   /// @brief @ref poll_set for a rig opened with @ref OrbbecStreamOptions::raw:
@@ -192,9 +189,18 @@ class VR_SENSOR_ORBBEC_API OrbbecRig final : public ICameraCapture {
   /// @brief The next frame of the current set, taking a new set when this one
   ///        is spent. Frames of one set come in camera order; a missing
   ///        camera is skipped.
-  /// @return As @ref poll_set, one frame at a time; InvalidArgument after
-  ///         @ref poll_set since the last @ref start.
+  /// @return As @ref poll_set, one frame at a time.
   Result<std::optional<CapturedFrame>> poll() override;
+
+  /// @brief @ref poll for a rig opened raw: the next frame of the current
+  ///        @ref poll_raw_set set.
+  /// @return As @ref poll_raw_set, one frame at a time.
+  Result<std::optional<RawFrame>> poll_raw() override;
+
+  /// @return `true` if the rig was opened with @ref OrbbecStreamOptions::raw,
+  ///         so its frames come through @ref poll_raw and @ref poll_raw_set;
+  ///         `false` otherwise, and on a moved-from rig.
+  bool raw_frames() const noexcept override;
 
   /// @return `true` on a moved-from rig and once any camera has disconnected.
   bool exhausted() const noexcept override;

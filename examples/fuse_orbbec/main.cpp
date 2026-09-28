@@ -339,17 +339,14 @@ vr::Status run(const Options& opt) {
   VR_ASSIGN(mesh::MarchingCubes extractor,
             mesh::MarchingCubes::create(device, allocator, {}));
   // The source says which frames it hands out: raw ones (--gpu) are prepared
-  // on the device first.
+  // on the device first, and a raw rig's whole sets at once, a pass a camera.
   sensor::ICameraCapture& capture = source->capture();
   const bool raw_frames = capture.raw_frames();
-  std::optional<sensor::GpuFramePrep> prep;
-  if (raw_frames) {
-    VR_ASSIGN(prep, sensor::GpuFramePrep::create(device, allocator));
-  }
-  // A raw rig hands out whole sets, one pass per camera.
-  const bool raw_sets = source->rig && opt.gpu;
+  const bool raw_sets = raw_frames && source->rig;
   std::vector<sensor::GpuFramePrep> preps;
-  for (std::size_t c = 0; raw_sets && c < source->rig->camera_count(); ++c) {
+  std::size_t passes = 0;
+  if (raw_frames) passes = raw_sets ? source->rig->camera_count() : 1;
+  for (std::size_t c = 0; c < passes; ++c) {
     VR_ASSIGN(sensor::GpuFramePrep one,
               sensor::GpuFramePrep::create(device, allocator));
     preps.push_back(std::move(one));
@@ -359,6 +356,7 @@ vr::Status run(const Options& opt) {
   VR_TRY(capture.start());
   vr::StageMetrics stage_totals;
   int fused = 0;
+  int reported = 0;  // the count last reported; a set may step past 100
   const auto t_start = std::chrono::steady_clock::now();
   auto last_frame = t_start;
   while (fused < opt.frames) {
@@ -373,7 +371,7 @@ vr::Status run(const Options& opt) {
     std::optional<sensor::OrbbecRigRawSet> set;
     if (raw_sets) {
       VR_ASSIGN(set, source->rig->poll_raw_set());
-      got = set.has_value();
+      got = set && set->count() > 0;
     } else if (raw_frames) {
       VR_ASSIGN(raw, capture.poll_raw());
       got = raw.has_value();
@@ -415,24 +413,24 @@ vr::Status run(const Options& opt) {
                                std::chrono::steady_clock::now() - t_prep)
                                .count());
       for (const std::optional<sensor::DeviceFrame>& frame : frames) {
-        if (!frame) continue;
+        if (!frame || fused == opt.frames) continue;
         VR_TRY(vr_example::fuse_frame(volume, integrator, *frame,
                                       opt.max_weight, &stage_totals));
         ++fused;
       }
-      continue;
-    }
-    if (raw) {
+    } else if (raw) {
       VR_ASSIGN(const sensor::DeviceFrame frame,
-                prep->prepare(*raw, &stage_totals));
+                preps.front().prepare(*raw, &stage_totals));
       VR_TRY(vr_example::fuse_frame(volume, integrator, frame, opt.max_weight,
                                     &stage_totals));
+      ++fused;
     } else {
       VR_TRY(vr_example::fuse_frame(volume, integrator, *polled, opt.max_weight,
                                     &stage_totals));
+      ++fused;
     }
-    ++fused;
-    if (fused % 100 == 0) {
+    if (fused / 100 > reported / 100) {
+      reported = fused;
       const double secs =
           std::chrono::duration<double>(last_frame - t_start).count();
       std::printf("  fused %d frames (%.1f fps)\n", fused, fused / secs);

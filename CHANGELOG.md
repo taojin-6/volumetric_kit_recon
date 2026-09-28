@@ -151,9 +151,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   an upload to pack itself, such as strided rows or several planes. It,
   `upload` and `copy` take an optional `GpuStageScope` that times the copy.
 - `sensor`: **raw sets from the rig.** `OrbbecRig::poll_raw_set` hands out a
-  set of `RawFrame`s from a rig opened with `raw`, and `prepare_set`
-  prepares one on the device, a thread and a `GpuFramePrep` per camera.
-  `fuse_orbbec --rig --gpu` fuses them.
+  set of `RawFrame`s from a rig opened with `raw`, and `poll_raw` the same
+  frames one at a time, as the contract's `raw_frames()` says. `prepare_set`
+  prepares a set on the device, a thread and a `GpuFramePrep` per camera.
+  `fuse_orbbec --rig --gpu` fuses them. `OrbbecRigFrameSet` and
+  `OrbbecRigRawSet` are one template, `OrbbecRigSet<Frame>`.
 - `core`: **`CommandBatch`** (`core/command_batch.hpp`): one call's uploads,
   fills, copies, dispatches, indirect dispatches and readbacks recorded into one
   command buffer and submitted with one fence wait. Small aligned uploads go

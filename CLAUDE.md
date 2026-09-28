@@ -853,9 +853,10 @@ arbitrary; it usually isn't.
   **`OrbbecRig`** reads several synced cameras as one: `poll_set()` hands out
   one set per primary frame, with a missing secondary's slot left empty, and
   `poll()` hands out the same frames one at a time — one of the two per
-  `start()`. Opened with `raw`, it hands out `poll_raw_set()` instead, a set
-  of `RawFrame`s, which `sensor/utils`' `prepare_set` prepares with a thread
-  and a `GpuFramePrep` per camera. A secondary's frame near no primary frame
+  `start()`. Opened with `raw`, it reads the same two ways raw, through
+  `poll_raw_set()` and `poll_raw()`, as `raw_frames()` says, and
+  `sensor/utils`' `prepare_set` prepares a raw set with a thread and a
+  `GpuFramePrep` per camera. A secondary's frame near no primary frame
   is let go, so a camera
   whose clock is off costs its own frames, not the rig's sets. It opens from
   the rig's **sync configuration** (`orbbec_sync_config.hpp`, the SDK's
