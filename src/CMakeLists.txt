@@ -40,6 +40,9 @@ target_link_libraries(
             recon_texture
             recon_sensor
             recon_codec)
+if(TARGET recon_sensor_video)
+  target_link_libraries(recon INTERFACE recon_sensor_video)
+endif()
 if(TARGET recon_sensor_orbbec)
   target_link_libraries(recon INTERFACE recon_sensor_orbbec)
 endif()

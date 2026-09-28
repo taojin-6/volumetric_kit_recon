@@ -33,6 +33,21 @@ on:
         required: false
         type: boolean
         default: false
+      ffmpeg:
+        description: >-
+          Install FFmpeg and build with VR_WITH_FFMPEG=ON, so this leg builds
+          the video decoder and runs its tests.
+        required: false
+        type: boolean
+        default: false
+      hevc_backend:
+        description: >-
+          The HEVC decode back end this leg promises (cuda, videotoolbox),
+          passed to the tests as VR_TEST_HEVC_BACKEND; the decoder test fails
+          unless it decodes and Auto picks it. Empty requires none.
+        required: false
+        type: string
+        default: ''
 
 jobs:
   build:
@@ -109,6 +124,12 @@ jobs:
           if [ "${{ inputs.orbbec_sdk }}" = "true" ]; then
             pkgs="$pkgs curl"
           fi
+          # FFmpeg, found through pkg-config (cmake/vr_ffmpeg.cmake). NVDEC
+          # needs nothing more: the toolkit mounts libcuda and libnvcuvid, which
+          # FFmpeg loads at run time.
+          if [ "${{ inputs.ffmpeg }}" = "true" ]; then
+            pkgs="$pkgs pkg-config libavcodec-dev libavutil-dev libswscale-dev"
+          fi
           # shellcheck disable=SC2086  # intentional: split $pkgs into separate args
           sudo apt-get install -y --no-install-recommends $pkgs
           # On a hosted runner, point the loader at lavapipe for the rest of the
@@ -132,10 +153,16 @@ jobs:
           # glm supplies the GLM math headers recon_core's types alias; molten-vk
           # is the Vulkan driver; shaderc provides glslc for the compute shaders;
           # vulkan-loader/-headers/-tools complete the SDK.
+          # ffmpeg (with pkgconf to find it) for a VR_WITH_FFMPEG leg.
+          extra=""
+          if [ "${{ inputs.ffmpeg }}" = "true" ]; then
+            extra="ffmpeg pkgconf"
+          fi
           ok=0
           for attempt in 1 2 3; do
+            # shellcheck disable=SC2086  # intentional: split $extra
             if brew install cmake glm molten-vk vulkan-headers vulkan-loader \
-                vulkan-tools shaderc; then
+                vulkan-tools shaderc $extra; then
               ok=1
               break
             fi
@@ -287,7 +314,8 @@ jobs:
           ok=0
           for attempt in 1 2 3; do
             if cmake -S . -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
-                -DVR_WITH_ORBBEC=${{ inputs.orbbec_sdk && 'ON' || 'OFF' }}; then
+                -DVR_WITH_ORBBEC=${{ inputs.orbbec_sdk && 'ON' || 'OFF' }} \
+                -DVR_WITH_FFMPEG=${{ inputs.ffmpeg && 'ON' || 'OFF' }}; then
               ok=1
               break
             fi
@@ -305,4 +333,6 @@ jobs:
 
       - name: Test
         if: steps.detect.outputs.present == 'true'
+        env:
+          VR_TEST_HEVC_BACKEND: ${{ inputs.hevc_backend }}
         run: ctest --test-dir build --output-on-failure

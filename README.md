@@ -90,6 +90,23 @@ VR_ORBBEC_TEST_RIG=$PWD/config/femto_mega_sync.json \
     ctest --test-dir build -R orbbec_rig
 ```
 
+### Optional: FFmpeg
+
+The HEVC decoder (`volumetric_kit::recon_sensor_video`,
+`sensor/video/hevc_decoder.hpp`) is off by default and needs FFmpeg ≥ 4.4
+installed, found through pkg-config:
+
+```sh
+brew install ffmpeg pkgconf        # macOS
+sudo apt install pkg-config libavcodec-dev libavutil-dev libswscale-dev
+cmake -B build -DVR_WITH_FFMPEG=ON
+# require a back end (cuda, videotoolbox, vaapi, vulkan) in the test:
+VR_TEST_HEVC_BACKEND=cuda ctest --test-dir build -R video
+```
+
+It decodes on the first hardware back end that works (NVIDIA ahead of an
+integrated GPU on Linux), else in software.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

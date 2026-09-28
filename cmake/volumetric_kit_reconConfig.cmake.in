@@ -30,6 +30,13 @@ find_dependency(Vulkan)
 if(@VR_WITH_ORBBEC@)
   find_dependency(OrbbecSDK CONFIG PATH_SUFFIXES lib HINTS "@OrbbecSDK_DIR@")
 endif()
+# recon_sensor_video (VR_WITH_FFMPEG) likewise names PkgConfig::VR_FFMPEG,
+# found through pkg-config as cmake/vr_ffmpeg.cmake does.
+if(@VR_WITH_FFMPEG@)
+  find_dependency(PkgConfig)
+  pkg_check_modules(VR_FFMPEG REQUIRED IMPORTED_TARGET libavcodec>=58.134
+                    libavutil>=56.70 libswscale>=5.9)
+endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/volumetric_kit_reconTargets.cmake")
 

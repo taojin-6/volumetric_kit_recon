@@ -4486,6 +4486,69 @@ changed sources and tests also compile at `-O3 -Werror` under GCC 13.3 in an
 - P-frames. Blocks kept in their slots across frames are what an incremental
   re-mesh of a decoded stream would need.
 
+### 2026-09-27 — The video decoder is `recon_sensor_video`, a target of its own over an installed FFmpeg: HEVC in, host pictures out, on the first hardware back end that decodes a built-in clip, NVIDIA ahead of an integrated GPU; each CI leg requires the hardware it has.
+
+**The rule.** `HevcDecoder` (`sensor/video/hevc_decoder.hpp`) takes an Annex B
+H.265 stream one access unit at a time and hands out host pictures, as
+`Rgb24` or as the decoded `Yuv420` planes with the matrix and range to convert
+them by. It knows nothing of cameras, so the Orbbec driver will link it, not
+the other way round. FFmpeg is a prerequisite behind `VR_WITH_FFMPEG`, found
+through pkg-config and never fetched, like the Orbbec SDK; the floor is
+Ubuntu 22.04's FFmpeg 4.4. No FFmpeg type is public.
+
+**Back ends.** `Auto` tries VideoToolbox on Apple; CUDA (NVDEC), Vulkan, then
+VAAPI on Linux; CUDA, then D3D11VA on Windows. A machine with an NVIDIA and an
+Intel GPU therefore decodes on the NVIDIA one. A back end counts only if it
+decodes a built-in 157-byte clip, probed once per process, because an open
+device says nothing about HEVC: a Vulkan device may have no video queue, and
+an older Intel GPU opens under VAAPI without decoding HEVC. A named back end
+that is not there is refused, and the message lists those that are. Only
+`Auto` falls back to software, including mid-stream when the hardware refuses
+a stream (4:4:4, say); `backend()` reports the switch.
+
+**Modules.** Only `hevc_decoder.cpp` is HEVC-specific. `ffmpeg.hpp` is the one
+FFmpeg include (owning pointers, errors), `hw_backend` holds the platform
+order and opens devices, and `picture_converter` is the swscale step and the
+matrix choice. An H.264 decoder, or a GPU path that skips the host copy,
+reuses the three.
+
+**Why these numbers.** M-series Mac, FFmpeg 9.0.2, 120-frame IPPP clips,
+ms per frame:
+
+| | 720p YUV | 720p RGB | 4K YUV | 4K RGB |
+|---|---|---|---|---|
+| VideoToolbox | 0.93 | 2.90 | 4.21 | 22.70 |
+| software, FFmpeg's threads | 0.45 | 2.05 | 2.07 | 18.54 |
+| software, one thread | 1.50 | 3.46 | 13.38 | 32.09 |
+
+- Converting to RGB on the host costs ~18 ms at 4K with any swscale flags.
+  Full chroma interpolation and accurate rounding cost nothing measurable;
+  without them a colour came out 3 codes off. 4K colour for a rig therefore
+  has to be converted on the GPU, from `Yuv420`.
+- VideoToolbox's times include copying each picture out of GPU memory.
+- Software with FFmpeg's thread count held back 15 pictures, half a second at
+  30 fps, so a live stream sets `threads = 1`. Hardware held back none.
+
+**CI.** Every build leg builds the decoder against its own FFmpeg and sets
+`VR_TEST_HEVC_BACKEND`: `cuda` in the Linux GPU containers, `videotoolbox` on
+the Mac. The decoder test fails unless that back end decodes and `Auto` picks
+it, so a container that lost NVDEC, or one that picked an integrated GPU,
+fails instead of passing on software. The sanitizer job decodes in software.
+
+**Verified** on the Mac. `recon_sensor_video_hevc` decodes the committed clip
+(`tools/make_hevc_fixtures.sh`: 256x144, the height NVDEC's minimum allows,
+8 frames of solid patches at qp 4). In software each patch is within 2 codes
+of the pattern in YUV and 3 in RGB, BT.709 limited. On VideoToolbox the YUV
+is bit-identical to software and the RGB within 1 code.
+`recon_sensor_video_converter` checks each matrix and range on hand-built
+frames against the standards' constants. A wrong matrix, wrong coefficients or
+a dropped pts each fails a test, and `VR_TEST_HEVC_BACKEND=cuda` fails on the
+Mac.
+
+**Open.** NVDEC is first exercised by CI. VAAPI and Vulkan decoding are
+untested, and D3D11VA has no leg. The clip has no B-frames. Pictures pass
+through host memory (a `TODO(sensor)`).
+
 ## Measured lessons
 
 Not decisions, but the measurements that overturned an assumption about

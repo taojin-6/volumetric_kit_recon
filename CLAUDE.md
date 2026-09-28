@@ -40,7 +40,8 @@ conventions and Vulkan setup.
 - CMake: `find_package(volumetric_kit_recon)`; component targets
   `volumetric_kit::recon_core`, `…_volume`, `…_tsdf`, `…_mesh`, `…_texture`,
   `…_sensor`, `…_codec`, `…_interop` (+ later `…_track`, `…_stream`), plus the
-  opt-in `…_sensor_orbbec` driver (`VR_WITH_ORBBEC`); umbrella alias
+  opt-in `…_sensor_orbbec` driver (`VR_WITH_ORBBEC`) and `…_sensor_video`
+  decoder (`VR_WITH_FFMPEG`); umbrella alias
   `volumetric_kit::recon`.
 
 ## Architecture (tiered)
@@ -83,7 +84,8 @@ branching off **`core`** and `codec` off **`volume`** (later: `track`,
   *and* test it (the 2026-08-02 decision). The one that does, Orbbec, is a
   target of its own (`sensor/orbbec/`), so `recon_sensor` never links a vendor
   SDK. It also reads and writes the rig calibration file calib produces
-  (`rig_calibration.hpp`).
+  (`rig_calibration.hpp`). The HEVC decoder is another target of its own
+  (`sensor/video/`, over FFmpeg), links `core` alone, and knows no camera.
 - **`codec`** — the per-frame TSDF geometry codec: separate `Encoder` and
   `Decoder` classes over a private 8³ DCT transform, a geometry-only intra
   frame (block coordinates, an observed-voxel mask, the first K coefficients),
@@ -261,6 +263,11 @@ order. Change the decision, its entry there, and this list together.
   exactly the frame by diffing its block set, everything checkable is checked
   before the grid is touched, and a grid too small for the frame is refused
   rather than grown.
+- [**2026-09-27**](DECISIONS.md#2026-09-27--the-video-decoder-is-recon_sensor_video-a-target-of-its-own-over-an-installed-ffmpeg-hevc-in-host-pictures-out-on-the-first-hardware-back-end-that-decodes-a-built-in-clip-nvidia-ahead-of-an-integrated-gpu-each-ci-leg-requires-the-hardware-it-has) —
+  The video decoder is `recon_sensor_video`, a target of its own over an
+  installed FFmpeg: HEVC in, host pictures out, on the first hardware back end
+  that decodes a built-in clip, NVIDIA ahead of an integrated GPU; each CI leg
+  requires the hardware it has.
 
 ## Provenance & salvage policy
 
@@ -693,6 +700,13 @@ arbitrary; it usually isn't.
   internal `CameraStream`. The rig's hardware test opens only the rig
   `VR_ORBBEC_TEST_RIG` names and never writes to it (the 2026-09-27
   decision).
+  **`sensor/video`'s `HevcDecoder`** (`VR_WITH_FFMPEG`) decodes H.265 access
+  units to host pictures, `Rgb24` or the `Yuv420` planes with their matrix
+  and range. `Auto` takes the first hardware back end that decodes a built-in
+  clip (VideoToolbox; CUDA, Vulkan, VAAPI on Linux), else software. A named
+  back end is never swapped for another. `VR_TEST_HEVC_BACKEND` makes its
+  test require one, which is how CI holds the Linux legs to NVDEC (the
+  2026-09-27 decoder decision).
 
 - **`codec`** — three of five PRs in (2026-09-26 lists them). The public API
   is `CodecParams`, **`Encoder`** (`encoder.hpp`) and **`Decoder`** with
@@ -830,9 +844,11 @@ gauges from VMA heuristics into driver truth. The debug-utils labels that TODO
 sat beside **have landed** (2026-08-30) — on the *kernel* rather than the span,
 which is the correction that entry records.
 
-**On `sensor`**, each a `TODO(sensor)`: HEVC colour through a decoder of our
-own, and GPU pre-processing that keeps the frame on the device through fusion
-(both in `camera_stream.cpp`), and processing a rig set's frames in parallel,
+**On `sensor`**, each a `TODO(sensor)`: HEVC colour from the camera through
+`HevcDecoder` (one decode thread per camera, since no access unit may be
+dropped), and GPU pre-processing that keeps the frame on the device through
+fusion (both in `camera_stream.cpp`), including the decoder's hardware frames
+(`hevc_decoder.cpp`), and processing a rig set's frames in parallel,
 one thread per camera, rather than the ~11 ms one after another costs for four
 (`orbbec_rig.cpp`). The rig's next consumer is calib's viewer, showing its
 synchronised sets.
