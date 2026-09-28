@@ -3,12 +3,11 @@
 
 #include "volumetric_kit/recon/core/compute_kernel.hpp"
 
-#include "volumetric_kit/recon/core/gpu_timer.hpp"
-
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "volumetric_kit/recon/core/command_batch.hpp"
 #include "volumetric_kit/recon/core/device.hpp"
 #include "volumetric_kit/recon/core/shader.hpp"
 #include "volumetric_kit/recon/core/vulkan.hpp"
@@ -66,6 +65,11 @@ Status KernelSetBuilder::add(ComputeKernel& out, const char* name,
   // Set before the first early return, so a kernel that fails to build is
   // named in the diagnostic that reports the failure (named_failure below).
   out.name = name;
+  if (push != nullptr && push->offset != 0) {
+    return named_failure(name, Status::invalid_argument(
+                                   "the push range must start at offset 0"));
+  }
+  out.push_bytes = push != nullptr ? push->size : 0;
   // The layout: `bindings` compute-stage storage buffers at 0..bindings-1 (the
   // caller's set-0 declarations match by index).
   std::vector<VkDescriptorSetLayoutBinding> b(bindings);
@@ -145,98 +149,11 @@ Result<DescriptorPool> KernelSetBuilder::build() {
 Status dispatch(Device& device, const ComputeKernel& kernel, const void* push,
                 std::uint32_t push_size, std::uint32_t groups,
                 std::uint32_t max_groups, GpuStageScope* stage) {
-  // A 1-D dispatch flattens the whole input onto groupCountX, but Vulkan only
-  // guarantees maxComputeWorkGroupCount[0] >= 65535 -- an oversized input would
-  // be invalid usage on a min-spec (mobile) driver. Reject it as a clean error
-  // rather than risk a device-lost.
-  if (groups > max_groups) {
-    return Status::invalid_argument(
-        "dispatch: workgroup count exceeds the device's "
-        "maxComputeWorkGroupCount[0] -- input too large for a 1-D dispatch");
-  }
-  // A non-zero push_size with no data would read past a null pointer in
-  // vkCmdPushConstants; reject it up front (mirrors ComputePipeline::create's
-  // null-push-range check).
-  if (push_size > 0 && push == nullptr) {
-    return Status::invalid_argument(
-        "dispatch: push is null with a non-zero push_size");
-  }
-  // The destination scope, widened for a renderer reading these writes as
-  // geometry -- but only as far as the recording queue family allows.
-  //
-  // A mesh the renderer draws directly is read at VERTEX_INPUT as vertex
-  // attributes and indices, and at DRAW_INDIRECT as a command; none of which
-  // COMPUTE|HOST covers, so those writes were never made visible to the stages
-  // that read them. That omission does not fail loudly -- the draw gets
-  // whatever happens to be in memory, which on a GPU that completed the
-  // dispatch anyway is usually the right answer, right up until it is not.
-  //
-  // Widened unconditionally in the *stage* sense (no per-dispatch knob, which
-  // would have to be threaded through every kernel this helper exists to keep
-  // uniform, to save an execution dependency the driver already had to satisfy
-  // for the host and compute cases) but NOT unconditionally in the *capability*
-  // sense: Vulkan permits a barrier to name only stages the recording command
-  // buffer's queue family supports, and VK_PIPELINE_STAGE_VERTEX_INPUT_BIT
-  // requires VK_QUEUE_GRAPHICS_BIT. recon requires only compute of the family
-  // it is handed, so it can legitimately sit on a compute-only one -- a
-  // discrete GPU's async-compute family, which is exactly what the shared
-  // bootstrap's two-families plan picks there. Naming VERTEX_INPUT on such a
-  // queue is invalid usage in *every* dispatch in every tier, and invisible on
-  // Apple, where every MoltenVK family is graphics+compute. DRAW_INDIRECT needs
-  // only graphics *or* compute, so it is always available here; the two access
-  // bits that belong to VERTEX_INPUT travel with it.
-  const bool family_has_graphics =
-      (device.compute_family_flags() & VK_QUEUE_GRAPHICS_BIT) != 0;
-  VkPipelineStageFlags dst_stages = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
-                                    VK_PIPELINE_STAGE_HOST_BIT |
-                                    VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT;
-  VkAccessFlags dst_access =
-      VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT |
-      VK_ACCESS_HOST_READ_BIT | VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
-  if (family_has_graphics) {
-    dst_stages |= VK_PIPELINE_STAGE_VERTEX_INPUT_BIT;
-    dst_access |=
-        VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_INDEX_READ_BIT;
-  }
-  // A cross-queue handoff needs a semaphore regardless, and a semaphore's
-  // signal/wait already carries availability and visibility for every prior
-  // write -- so on a compute-only family the renderer is reachable only that
-  // way, and nothing is lost by omitting the stages Vulkan forbids naming here.
-  // One call, timed or not: a null timer makes the timed overload of
-  // submit_single_time byte-for-byte the untimed one (it delegates to exactly
-  // this call), so branching on `stage` here would only name the same thing
-  // twice.
-  return device.submit_single_time(
-      [&](VkCommandBuffer cmd) {
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-                          kernel.pipeline.handle());
-        const VkDescriptorSet set = kernel.set.handle();
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                kernel.pipeline.layout(), 0, 1, &set, 0,
-                                nullptr);
-        if (push_size > 0) {
-          vkCmdPushConstants(cmd, kernel.pipeline.layout(),
-                             VK_SHADER_STAGE_COMPUTE_BIT, 0, push_size, push);
-        }
-        vkCmdDispatch(cmd, groups, 1, 1);
-        // Make this kernel's SSBO writes available and visible to (a) the next
-        // dispatch's shader reads/writes, (b) a host read of the mapped
-        // results, and (c) a renderer consuming the buffer as geometry -- (c)
-        // as far as this queue family permits; see the scope built above.
-        VkMemoryBarrier barrier{};
-        barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-        barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        barrier.dstAccessMask = dst_access;
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                             dst_stages, 0, 1, &barrier, 0, nullptr, 0,
-                             nullptr);
-      },
-      stage != nullptr ? stage->timer() : nullptr,
-      stage != nullptr ? stage->name() : nullptr,
-      // The region a GPU profiler attributes this dispatch to. Passed rather
-      // than recorded inside the lambda so submit_single_time can place it
-      // outside the timestamp pair -- see that overload's `debug_label`.
-      kernel.name);
+  // A batch of one, so the checks, the span, the label and the barrier have
+  // one definition.
+  CommandBatch batch(device);
+  VR_TRY(batch.dispatch(kernel, push, push_size, groups, max_groups, stage));
+  return batch.submit();
 }
 
 }  // namespace volumetric_kit::recon

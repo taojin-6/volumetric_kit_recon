@@ -29,6 +29,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `core`: **`device_storage_buffer` adds `TRANSFER_SRC | TRANSFER_DST`** and
+  takes extra usage and queue families, as `storage_buffer` does, so a
+  `CommandBatch` can fill, copy and stage through it; `GpuFramePrep`'s
+  outputs are made by it. `tests/buffer_readback.hpp` reads back through a
+  batch.
 - `codec`: **`CodecParams`' defaults are K = 64 with one step of 0.2 for DC
   and AC alike**, replacing the prior engine's K = 32 with DC 0.25 / AC 0.05.
   On room0 at 1 cm frames are 7% smaller and 28% more accurate, and host
@@ -79,6 +84,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `core`: **`CommandBatch`** (`core/command_batch.hpp`): one call's uploads,
+  fills, copies, dispatches, indirect dispatches and readbacks recorded into one
+  command buffer and submitted with one fence wait. Small aligned uploads go
+  inline, larger ones through a staging buffer the batch allocates, and
+  readbacks (small results) through one host buffer; nothing goes through a
+  mapping. On an RTX 5090, memory the kernels use in VRAM rather than
+  host-visible takes `integrate` from 14.6 to 0.067 ms of device time (the
+  2026-09-28 residency decision); no tier uses the batch yet, and
+  `dispatch()` is a batch of one. It refuses a kernel whose descriptor set
+  was rewritten after its dispatch was recorded (`DescriptorSet::writes`) and
+  a push off 4 bytes or past the kernel's range (`ComputeKernel::push_bytes`;
+  `KernelSetBuilder::add` now refuses a push range off offset 0).
+  `submit_single_time` reports a failed wait through `in_flight`, and the
+  batch then leaks its staging. Test: `recon_core_command_batch`.
 - `tsdf`: **`MeshIntegrator`** — a triangle mesh's truncated distance field,
   written into a grid's `tsdf` and `weight`, in one of two `MeshSdfMode`s (see
   the 2026-09-27 decision).

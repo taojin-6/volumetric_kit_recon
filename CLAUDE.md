@@ -58,7 +58,9 @@ branching off **`core`**, `codec` off **`volume`** and `eval` off **`mesh`**
   (`Status`/`Result`, the GLM math aliases, and the posed pinhole
   `DepthCameraParams`/`ColorCameraParams` of `core/camera_params.hpp`),
   mirroring `volumetric_kit_gfx`'s core:
-  instance, device (compute + transfer queues), VMA allocator, RAII buffer/image,
+  instance, device (one compute queue, which carries transfers too), VMA
+  allocator, RAII buffer/image, the `CommandBatch` that records one call's
+  uploads, dispatches and readbacks into one submit,
   compute-pipeline + descriptor-set wrappers (and the `ComputeKernel` bundle +
   `KernelSetBuilder` that groups a kernel's layout/pipeline/set behind one
   shared pool), sync (fences, timeline semaphores), the `Status`/`Result` idiom,
@@ -308,6 +310,10 @@ order. Change the decision, its entry there, and this list together.
   captured, the device undistorts depth and undistorts and converts colour,
   and fusion reads the buffers in place, depth and colour each with its own
   camera rather than registered.
+- [**2026-09-28**](DECISIONS.md#2026-09-28--memory-the-kernels-use-lives-on-the-device-on-every-platform-and-the-host-only-records-commands-against-it-one-commandbatch-per-call-parameters-inline-bulk-bytes-staged-at-the-edges-small-results-read-back) —
+  Memory the kernels use lives on the device on every platform, and the host
+  only records commands against it: one `CommandBatch` per call, parameters
+  inline, bulk bytes staged at the edges, small results read back.
 
 ## Provenance & salvage policy
 
@@ -440,16 +446,21 @@ Two contracts — both simpler now that recon and gfx are both Vulkan.
   GLSL atomics; the prior engine's kernels are a reference for the *algorithm*,
   rewritten in GLSL. The native-CUDA accelerator (2026-07-04) keeps its warp
   intrinsics/atomics but must stay numerically in lockstep with the GLSL path.
-- **A spin lock or a hot atomic in host-visible memory is a bus round trip
-  on a discrete GPU, and free on Apple's unified memory**, so the cost is
-  invisible where CI's Mac and local runs test. Every buffer `storage_buffer`
-  makes is host-visible. The hash table's bucket locks were too, until an RTX
-  5090 took 1.97 s to allocate a 5 000-triangle sheet (3.4 ms device-local) and
-  lost a 320 000-triangle one to the driver's 7-second watchdog (Xid 8 / 109;
-  the 2026-09-28 measured lesson). Memory only the kernels touch comes from
-  `device_storage_buffer`. A GPU test failing on the Linux boxes with a bare
-  `vkWaitForFences` is a lost device: read the host's kernel log for the Xid
-  before calling it load.
+- **Host-visible memory is system RAM on a discrete GPU, and free on Apple's
+  unified memory**, so its cost is invisible where the Mac tests. Every buffer
+  `storage_buffer` makes is host-visible. The hash table's bucket locks were
+  too, until an RTX 5090 took 1.97 s to allocate a 5 000-triangle sheet
+  (3.4 ms device-local) and lost a 320 000-triangle one to the driver's
+  7-second watchdog (Xid 8 / 109; the 2026-09-28 measured lesson). The bulk
+  data costs as surely: the voxel arrays, frames and arena host-visible put
+  `integrate` at 14.6 ms of device time against 0.067 ms resident (the
+  2026-09-28 residency decision). Memory the kernels touch is
+  `device_storage_buffer`, on Apple too, reached from the host through a
+  `CommandBatch`; and the CPU never reads VRAM directly, since BAR memory
+  reads uncached (6.6 s for one mesh download).
+  Small parameters may stay host-visible: under 64 KB, it measured nothing. A
+  GPU test failing on the Linux boxes with a bare `vkWaitForFences` is a lost
+  device: read the host's kernel log for the Xid before calling it load.
 - **A bare `cmake -S . -B build` leaves `CMAKE_BUILD_TYPE` empty, so everything
   compiles at `-O0`** — the flags are `-std=c++17 -Wall -Wextra -Wpedantic
   -Werror` and no optimisation at all. Every CI leg passes one explicitly
@@ -514,7 +525,23 @@ arbitrary; it usually isn't.
   `Device::submit_single_time` dispatch, and the shared `dispatch()` /
   `group_count` / `storage_buffer` / range-guard helpers of `compute_util.hpp`
   — `StorageInput` among them, the host array or device buffer a call binds
-  at its image's exact range.
+  at its image's exact range. **`CommandBatch`** (`core/command_batch.hpp`)
+  is how the host reaches device memory: one call's uploads, fills, copies,
+  dispatches (indirect too) and readbacks in one command buffer, one fence
+  wait, spans and labels kept. A barrier goes wherever a command could see an
+  earlier one's writes: around every dispatch, and between two transfers
+  only when they share a buffer one writes. `dispatch()` is a batch of one.
+  An upload of up to 64 KiB, 4-byte aligned, goes inline
+  (`vkCmdUpdateBuffer`) and a larger one through a staging buffer the batch
+  allocates; readbacks, which are small results, land in one host buffer
+  allocated at `submit`, and the staging is freed once the wait is done, or
+  leaked if the wait fails. Nothing goes through a mapping, so memory type
+  never changes what a batch does, and usage is checked on every buffer, as
+  is a push against the kernel's range. A refused call poisons the batch, and
+  `submit` refuses a kernel whose set was rewritten after its dispatch was
+  recorded, since the set is bound only then (the 2026-09-28 residency
+  decision, which also records why there is no staging arena and no mappable
+  device memory).
   Vocabulary: `Status`/`Result`, the GLM aliases, `camera_params.hpp`,
   `color_space.hpp`, and `stage_metrics.hpp` — the `{name, cpu_ms, gpu_ms,
   has_gpu}` rows every tier reports timings in, with `GpuTimer` measuring the
@@ -1049,6 +1076,14 @@ interval above all, which sets what a lost frame costs (`camera_stream.cpp`),
 and software decoding at 4K, one thread with little headroom
 (`hevc_color.cpp`). The rig's next consumer is calib's viewer, showing its
 synchronised sets.
+
+**Device residency, the steps after `core`** (the 2026-09-28 residency
+decision ranks them): `volume` resident with its compacted list kept on the
+device, `tsdf` integrating on that list by indirect dispatch, `mesh`'s arena
+and index run, `texture`'s device depth, `sensor`'s outputs and decoded
+planes, the examples, the codec's coefficients. The benchmark kit that sized
+them sits on the home box in `~/recon-bench` (a throwaway allocator patch
+behind environment variables); re-measure there after each.
 
 **Measure the phases before choosing the optimisation.** Three independent
 guesses at this pipeline's bottleneck have been wrong, each corrected by an

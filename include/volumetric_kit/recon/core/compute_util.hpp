@@ -5,15 +5,14 @@
 
 /// @file core/compute_util.hpp
 /// @brief Small host-side helpers every compute tier repeats: the dispatch
-///        group-count ceil-divide and host-visible storage-buffer
-///        create/upload.
+///        group-count ceil-divide and storage-buffer creation, device-local
+///        for the kernels and host-visible for what the host fills or reads.
 ///
 /// These sit alongside @ref dispatch / @ref KernelSetBuilder (the 2026-07-06
 /// "mechanism lives in core because every compute tier repeats the shape"
-/// decision): the group-count math and the "make a mapped storage buffer"
-/// pattern had been copied verbatim into every tier. Hoisted here so a tier
-/// declares neither. The **policy** (which buffers, which bindings) stays in
-/// the tier.
+/// decision): the group-count math and the storage-buffer creation had been
+/// copied verbatim into every tier. Hoisted here so a tier declares neither.
+/// The **policy** (which buffers, which bindings) stays in the tier.
 
 #include <cstddef>
 #include <cstdint>
@@ -96,11 +95,10 @@ inline Status check_storage_buffer_range(const char* what, VkDeviceSize bytes,
 /// @param queue_family_count  Entries in @p queue_families.
 /// @return The buffer, or a non-OK @ref Status if creation fails.
 ///
-/// @note The allocation is deliberately `HostVisible` + mapped: this helper
-///       exists for buffers the host fills or reads back. That is the right
-///       trade for inputs and for a counter the host must read every dispatch,
-///       and the wrong one for a large output a device-local consumer streams
-///       -- such a consumer wants its own allocation, not a parameter here.
+/// @note The allocation is deliberately `HostVisible` + mapped, for what the
+///       host produces or consumes: staging, readback, small parameters.
+///       Memory the kernels read or write is @ref device_storage_buffer, on
+///       every platform (the 2026-09-28 residency decision).
 inline Result<Buffer> storage_buffer(
     Allocator& allocator, VkDeviceSize bytes,
     HostAccess access = HostAccess::Random, VkBufferUsageFlags extra_usage = 0,
@@ -138,21 +136,33 @@ inline Result<Buffer> upload_storage_buffer(
 /// The counterpart to @ref storage_buffer, which is host-visible so the host
 /// can fill it or read it back. On Apple's unified memory the two cost the
 /// same; on a discrete GPU a host-visible buffer is system memory the kernels
-/// reach across PCIe, and an **atomic** there is a round trip across the bus.
-/// That is the one place it can cost a device: the hash table's bucket locks,
-/// host-visible, took 1.97 s to allocate a 5 000-triangle sheet on an RTX 5090
-/// against 3.4 ms device-local, and a 320 000-triangle one ran past the
-/// driver's 7-second watchdog (the 2026-09-28 measured lesson). A buffer the
-/// kernels spin on or take hot atomics in belongs here.
-/// @param allocator  The allocator to create on.
-/// @param bytes      Size in bytes (must be non-zero).
+/// reach across PCIe. The hash table's bucket locks, host-visible, took 1.97 s
+/// to allocate a 5 000-triangle sheet on an RTX 5090 against 3.4 ms
+/// device-local (the 2026-09-28 measured lesson), and the grid's attributes
+/// host-visible cost `integrate` 14.6 ms on the device against 0.067 ms (the
+/// 2026-09-28 residency decision).
+///
+/// `TRANSFER_SRC` and `TRANSFER_DST` come with it, so a @ref CommandBatch can
+/// fill, copy, upload into and read back from it.
+/// @param allocator    The allocator to create on.
+/// @param bytes        Size in bytes (must be non-zero).
+/// @param extra_usage  Usage bits beyond those, as @ref storage_buffer.
+/// @param queue_families      As @ref storage_buffer.
+/// @param queue_family_count  Entries in @p queue_families.
 /// @return The buffer, unmapped, or a non-OK @ref Status if creation fails.
-inline Result<Buffer> device_storage_buffer(Allocator& allocator,
-                                            VkDeviceSize bytes) {
+inline Result<Buffer> device_storage_buffer(
+    Allocator& allocator, VkDeviceSize bytes,
+    VkBufferUsageFlags extra_usage = 0,
+    const std::uint32_t* queue_families = nullptr,
+    std::uint32_t queue_family_count = 0) {
   BufferDesc desc;
   desc.size = bytes;
-  desc.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+  desc.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+               VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+               VK_BUFFER_USAGE_TRANSFER_DST_BIT | extra_usage;
   desc.memory = MemoryUsage::DeviceLocal;
+  desc.queue_families = queue_families;
+  desc.queue_family_count = queue_family_count;
   return allocator.create_buffer(desc);
 }
 

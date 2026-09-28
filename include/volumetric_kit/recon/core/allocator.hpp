@@ -20,6 +20,12 @@ class Device;
 class Buffer;
 
 /// @brief Where a buffer's memory should live.
+///
+/// Memory the kernels touch is `DeviceLocal`, and the host reaches it through
+/// a @ref CommandBatch: on a discrete GPU a host-visible buffer is system RAM,
+/// and every kernel access to it crosses PCIe (the 2026-09-28 residency
+/// decision). `HostVisible` is for what the host produces or consumes --
+/// staging, readback, small parameters.
 enum class MemoryUsage {
   Auto,         ///< Let VMA choose based on usage (`VMA_MEMORY_USAGE_AUTO`).
   DeviceLocal,  ///< Prefer device-local (GPU) memory (staged uploads).
