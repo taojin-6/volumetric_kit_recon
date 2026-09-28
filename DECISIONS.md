@@ -4535,18 +4535,18 @@ the Mac. The decoder test fails unless that back end decodes and `Auto` picks
 it, so a container that lost NVDEC, or one that picked an integrated GPU,
 fails instead of passing on software. The sanitizer job decodes in software.
 
-**Verified** on the Mac. `recon_sensor_video_hevc` decodes the committed clip
+**Verified** on the Mac, and on NVDEC in CI (FFmpeg 4.4, 6.1 and 8.0).
+`recon_sensor_video_hevc` decodes the committed clip
 (`tools/make_hevc_fixtures.sh`: 256x144, the height NVDEC's minimum allows,
 8 frames of solid patches at qp 4). In software each patch is within 2 codes
-of the pattern in YUV and 3 in RGB, BT.709 limited. On VideoToolbox the YUV
-is bit-identical to software and the RGB within 1 code.
+of the pattern in YUV and 3 in RGB, BT.709 limited. On VideoToolbox and
+NVDEC the YUV is bit-identical to software and the RGB within 1 code.
 `recon_sensor_video_converter` checks each matrix and range on hand-built
 frames against the standards' constants. A wrong matrix, wrong coefficients or
 a dropped pts each fails a test, and `VR_TEST_HEVC_BACKEND=cuda` fails on the
 Mac.
 
-**Open.** NVDEC is first exercised by CI. VAAPI and Vulkan decoding are
-untested, and D3D11VA has no leg. The clip has no B-frames. Pictures pass
+**Open.** VAAPI and Vulkan decoding are untested, and D3D11VA has no leg. The clip has no B-frames. Pictures pass
 through host memory (a `TODO(sensor)`).
 
 ## Measured lessons
