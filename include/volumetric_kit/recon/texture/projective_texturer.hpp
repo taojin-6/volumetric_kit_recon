@@ -24,8 +24,10 @@
 #include "volumetric_kit/recon/texture/texture_atlas.hpp"
 
 namespace volumetric_kit::recon {
+class CommandBatch;
 class Device;
 class Allocator;
+class StorageInput;
 }  // namespace volumetric_kit::recon
 
 namespace volumetric_kit::recon::texture {
@@ -212,6 +214,20 @@ class VR_TEXTURE_API ProjectiveTexturer {
                  float occlusion_threshold = 0.02f,
                  StageMetrics* metrics = nullptr);
 
+  /// @brief @ref texture for a depth frame already on the device -- a
+  ///        `sensor::GpuFramePrep` output, say -- bound in place, so a live
+  ///        frame never visits the host.
+  /// @param depth  A storage buffer holding at least `cam.width * cam.height`
+  ///               floats, row-major, in metres. The writer's dispatch must
+  ///               have finished, which a dispatch on this device guarantees.
+  /// @return As the host-depth overload; @ref Status::Code::InvalidArgument
+  ///         also for a @p depth that is empty, not a storage buffer, or
+  ///         smaller than the image.
+  Status texture(const mesh::DeviceMesh& mesh, const Buffer& depth,
+                 const DepthCameraParams& cam,
+                 float occlusion_threshold = 0.02f,
+                 StageMetrics* metrics = nullptr);
+
   /// @brief Texture @p mesh from several posed views, each triangle from the
   ///        one that sees it best, into an atlas of their images.
   ///
@@ -300,7 +316,8 @@ class VR_TEXTURE_API ProjectiveTexturer {
   GpuTimer gpu_timer_;
   DescriptorPool pool_;
   // Fixed-size camera-params SSBO (DepthCameraParams): bound once at
-  // create() and rewritten each texture(), like the tsdf tier's camera SSBO.
+  // create() and rewritten inline in each texture()'s batch, like the tsdf
+  // tier's camera SSBO. Device-local, as every buffer here is.
   Buffer cam_buf_;
   // The several-view pass's inputs: every view's depth end to end, and the
   // views. Grow-only and rewritten each call, like cam_buf_, so a rig
@@ -308,8 +325,15 @@ class VR_TEXTURE_API ProjectiveTexturer {
   Buffer view_depth_buf_;
   Buffer views_buf_;
 
-  // Both multi-view overloads, once the vertices are on the device.
-  Status texture_views(VkBuffer vertices, std::uint32_t triangles,
+  // Both DeviceMesh single-camera overloads: `depth` is the host array or
+  // the device buffer the caller passed.
+  Status texture(const mesh::DeviceMesh& mesh, const StorageInput& depth,
+                 const DepthCameraParams& cam, float occlusion_threshold,
+                 StageMetrics* metrics);
+  // Both multi-view overloads, once the vertices are on the device: records
+  // the views and the dispatch into `batch`.
+  Status texture_views(CommandBatch& batch, VkBuffer vertices,
+                       std::uint32_t triangles,
                        const std::vector<TextureView>& views,
                        const AtlasLayout& layout, float occlusion_threshold,
                        GpuStageScope* stage);

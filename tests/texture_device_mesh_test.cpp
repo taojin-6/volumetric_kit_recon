@@ -29,6 +29,7 @@
 #include <vector>
 
 #include "volumetric_kit/recon/core/allocator.hpp"
+#include "volumetric_kit/recon/core/compute_util.hpp"
 #include "volumetric_kit/recon/core/device.hpp"
 #include "volumetric_kit/recon/core/gpu_timer.hpp"
 #include "volumetric_kit/recon/core/instance.hpp"
@@ -283,6 +284,46 @@ int main() {
   // agree trivially on an all-sentinel mesh and prove nothing.
   CHECK(textured > 0);
   CHECK(textured < host_mesh.vertices.size());
+
+  // The same frame as a device buffer, the way GpuFramePrep hands one over,
+  // gives the same uv0. The mesh is first textured against a frame that sees
+  // nothing, so a call that wrote nothing cannot pass, and the buffer is a
+  // pixel longer than the image, so it has to be bound at the image's range.
+  {
+    const std::vector<float> nothing(depth.size(), 0.0f);
+    CHECK(texturer.texture(device_mesh, nothing.data(), cam).ok());
+    vr::Result<mesh::Mesh> scrambled = extractor.download(device_mesh);
+    CHECK(scrambled.ok());
+    std::size_t differ = 0;
+    for (std::size_t i = 0; i < host_mesh.vertices.size(); ++i) {
+      if (!(scrambled.value().vertices[i].uv0 == host_mesh.vertices[i].uv0)) {
+        ++differ;
+      }
+    }
+    CHECK(differ > 0);
+
+    std::vector<float> padded = depth;
+    padded.push_back(-1.0f);
+    vr::Result<vr::Buffer> device_depth = vr::device_storage_buffer(
+        allocator.value(), padded.size() * sizeof(float));
+    CHECK(device_depth.ok());
+    CHECK(vr_test::write_back(device.value(), allocator.value(),
+                              device_depth.value(), padded)
+              .ok());
+    CHECK(texturer.texture(device_mesh, device_depth.value(), cam).ok());
+    vr::Result<mesh::Mesh> restored = extractor.download(device_mesh);
+    CHECK(restored.ok());
+    for (std::size_t i = 0; i < host_mesh.vertices.size(); ++i) {
+      CHECK(restored.value().vertices[i].uv0 == host_mesh.vertices[i].uv0);
+    }
+
+    // Refused: a buffer a word short of the image, and an empty one.
+    vr::Result<vr::Buffer> short_depth = vr::device_storage_buffer(
+        allocator.value(), depth.size() * sizeof(float) - sizeof(float));
+    CHECK(short_depth.ok());
+    CHECK(!texturer.texture(device_mesh, short_depth.value(), cam).ok());
+    CHECK(!texturer.texture(device_mesh, vr::Buffer{}, cam).ok());
+  }
 
   // Without MarchingCubesConfig::share_vertices -- this extractor's default --
   // every triangle owns three private vertices written at `tri * 3`, so the run
