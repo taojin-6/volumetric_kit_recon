@@ -5982,8 +5982,9 @@ room0:
 and the tables are device-local. Each extract attempt is one batch: the
 active list staged, the command reset inline, the dispatch, then the 32-byte
 command and its scratch words read back. A refit is a second batch. The
-identity index run of the unshared kernel is staged up once per grow.
-`download` copies back through a batch. The span table stays host-visible:
+identity index run of the unshared kernel is filled once per grow, in a
+submit of its own before the run is committed. `download` copies back through
+a batch per buffer. The span table stays host-visible:
 the host is its reader (`block_spans()` hands out a pointer), and the kernel
 writes it once per block.
 
@@ -6001,6 +6002,28 @@ paid once per host extract, and it is not optimized: the host copy is for
 export (PLY, the codec's mesh-to-mesh eval, tests), never for online capture,
 where gfx draws these buffers in place (seam B). The same mesh, 330 389
 triangles, comes out.
+
+The rows moved with the batch. Step 3's `dispatch_ms` also carries the active
+list's copy, the command reset and the command readback, which ride its
+submit, so the table understates the gain. `readback_ms` on `extract_device`
+now reads near zero.
+
+**The review of step 3** changed:
+
+- The unshared identity is submitted on its own, before the run is
+  committed. Recorded into the attempt's batch, a batch that failed after the
+  commit left the run uninitialized, and no later extract refilled it.
+- Every failed attempt disarms the command, a refused dispatch or readback
+  included, since the reset was only recorded.
+- An empty extract resets the command only when the slot's is not already
+  empty, so a run of them costs one submit rather than one each.
+- `download` reads back a batch per buffer, so no staging buffer is larger
+  than a device buffer already allocated.
+- `dispatch()` has closed with the batch's barrier, transfers included, since
+  the `CommandBatch` review, so `download`'s copy is ordered after texturing.
+- Tests: the unshared run read off the device after a grow, the empty
+  command read back across empty, real and empty extracts, and an
+  `extra_indirect_usage` bit no buffer carries otherwise.
 
 `dispatch()` is unchanged. `submit_single_time` still allocates a command
 buffer and a fence per submit; reusing them is a `TODO(core)` for when a tier

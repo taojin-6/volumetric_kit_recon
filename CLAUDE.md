@@ -458,7 +458,9 @@ Two contracts — both simpler now that recon and gfx are both Vulkan.
   `device_storage_buffer`, on Apple too, reached from the host through a
   `CommandBatch`; and the CPU never reads VRAM directly, since BAR memory
   reads uncached (6.6 s for one mesh download).
-  Small parameters may stay host-visible: under 64 KB, it measured nothing. A
+  Small parameters may stay host-visible: under 64 KB, it measured nothing.
+  So may a table the host reads in place, as `mesh`'s span table is: the
+  kernel writes each block's entry once, and `block_spans()` is a pointer. A
   GPU test failing on the Linux boxes with a bare `vkWaitForFences` is a lost
   device: read the host's kernel log for the Xid before calling it load.
 - **A bare `cmake -S . -B build` leaves `CMAKE_BUILD_TYPE` empty, so everything

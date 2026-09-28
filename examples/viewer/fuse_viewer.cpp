@@ -1556,18 +1556,11 @@ int run(GLFWwindow* window, const Options& opt) {
         // matches recon's on VK_QUEUE_COMPUTE_BIT alone), so it is not
         // something this seam can rest on off Apple.
         //
-        // TODO(examples): the arena and index run are host-visible mapped
-        // memory -- core::storage_buffer allocates every recon buffer that way
-        // -- so the vertex-input stage fetches the whole mesh from system RAM
-        // on every presented frame (~64 MiB at room0's 991 k vertices).
-        // Free on Apple's unified memory, which is what this was measured on,
-        // and a per-frame PCIe fetch on a discrete GPU, where it would invert
-        // the win this seam exists for. Same shape as the host-visible indirect
-        // command's TODO(mesh), and it waits on the same thing: a discrete-GPU
-        // consumer to measure a device-local arena + staging against it.
-        //
-        // MarchingCubesConfig::share_vertices cuts that fetch ~4x by emitting
-        // ~4x fewer vertices, and `--share-vertices` now takes it here. It was
+        // The arena and index run are device-local, so the vertex-input stage
+        // fetches the mesh from VRAM on every presented frame (~64 MiB at
+        // room0's 991 k vertices). MarchingCubesConfig::share_vertices cuts
+        // that fetch ~4x by emitting ~4x fewer vertices, and
+        // `--share-vertices` now takes it here. It was
         // unavailable to this example while the texture tier refused a shared
         // mesh -- it decided visibility per triangle and wrote uv0 per vertex
         // -- and the per-vertex dispatch removed that refusal, so the ~4x is

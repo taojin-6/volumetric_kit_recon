@@ -287,10 +287,11 @@ int main() {
   // Without MarchingCubesConfig::share_vertices -- this extractor's default --
   // every triangle owns three private vertices written at `tri * 3`, so the run
   // IS the identity 0,1,2,..., the host fills it once per grow and download()
-  // regenerates rather than reading back. Asserted rather than assumed, because
-  // both the fill and the regeneration are conditional on that flag now and a
-  // mismatch between them is silent: the mesh stays the right SIZE and its
-  // triangles are drawn from the wrong vertices.
+  // regenerates rather than reading back. This checks the regeneration (the
+  // fill is checked on the device run in marching_cubes_config_test), because
+  // both are conditional on that flag and a mismatch between them is silent:
+  // the mesh stays the right SIZE and its triangles are drawn from the wrong
+  // vertices.
   //
   // Restating `indices.size() == triangle_count * 3` would prove nothing --
   // download() resizes to exactly that -- so the content is what is checked,
