@@ -29,6 +29,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `volume`: `VoxelBlockGrid::remove` finds each block by binary search over one
+  sorted snapshot, where it scanned the whole active set per block. Removing k
+  of n blocks drops from O(k·n) to O((k + n) log n).
+- `codec`: the frame reader's `max_blocks` refusal is `OutOfMemory`, and it
+  comes after the block count is checked against the segment table. A corrupt
+  count is still `InvalidArgument`. Its messages say `codec frame:`, not
+  `read_intra_frame:`.
 - `examples`: **every fuse loop polls its frames through
   `sensor::ICameraCapture&`.** `examples/common/replica_capture.hpp` plays a
   Replica sequence back through the contract — frame cap, stride and the depth
@@ -71,14 +78,19 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     observed voxel, sorted so the bytes do not depend on hash order.
   - `Decoder::decode(frame, grid)` leaves a caller's grid holding exactly the
     frame. It diffs the grid's block set rather than clearing it, and checks
-    everything checkable before touching the grid. A table too small for the
-    frame is `OutOfMemory`; resize and decode again.
+    everything checkable before touching the grid. A grid too small for the
+    frame, in its heap or its hash table, is `OutOfMemory`; resize and decode
+    again. Lock contention that outlasts the retries is `IoError`. A grid
+    declaring any attribute besides `tsdf` and `weight` is refused, since a
+    kept block would carry it over stale.
   - `read_frame_info` reads a frame's header, so a player can build a grid of
     the stream's geometry.
   - Both report `StageMetrics`.
   - On an analytic sphere at the defaults (K = 32): 35.8 B/block, with the
     decoded mesh at worst 0.27 voxels off the true surface.
   - Tests: `recon_codec_encoder` and `recon_codec_decoder` (GPU).
+- `volume`: `VoxelBlockGrid::attribute_count()`, the number of attributes a
+  grid declared.
 - `sensor`: **`OrbbecRig`**, a hardware-synced rig of Orbbec cameras, opened
   from the rig's sync configuration (`orbbec_sync_config.hpp`, the SDK's
   `MultiDeviceSyncConfig.json` layout). It refuses cameras whose settings

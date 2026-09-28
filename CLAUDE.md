@@ -704,10 +704,16 @@ arbitrary; it usually isn't.
   frame's coordinates, removing, allocating, and keeping shared blocks in their
   slots, then rewrites every voxel's `tsdf` and `weight`. Parsing, geometry
   (exact `voxel_size` / `trunc_dist`), attributes and the heap are all checked
-  before the grid is touched. A hash table that cannot place the frame is
-  `OutOfMemory`, recovered by `resize` and decoding again; the library never
-  grows a grid. Both report `StageMetrics` (`"codec encode"` / `"codec
-  decode"` with breakdowns). The private pieces under
+  before the grid is touched. The attributes must be `tsdf` and `weight` and
+  nothing else (`VoxelBlockGrid::attribute_count`), since a kept block would
+  carry any other one stale. A grid too small for the frame is `OutOfMemory`,
+  whether its heap has too few slots or its hash table cannot place the
+  blocks. Both are recovered by `resize` and decoding again; the library never
+  grows a grid. Lock contention that outlasts four rounds is `IoError`, never
+  `OutOfMemory`. A failure after the grid has changed leaves it holding neither
+  frame until a decode succeeds. Both classes report `StageMetrics`
+  (`"codec encode"` / `"codec decode"`). Their breakdown rows share no name
+  except the map's own `"  ..active set"`. The private pieces under
   `src/volumetric_kit/recon/codec/` are the `DctTransform`, the rANS
   reference coder and the v1 intra frame. The transform takes a
   `volume::BlockList` to a `DctBlocks` — K quantized coefficients per block in
@@ -738,7 +744,10 @@ arbitrary; it usually isn't.
   than `kSectionRequired` is reserved, so a known section that sets one is
   refused. `read_intra_frame` never reads outside its buffer, and it takes the
   caller's `max_blocks`, because a frame's size cannot bound its block count
-  (probability-one blocks cost no bits). That bounds its allocation too, at
+  (probability-one blocks cost no bits). It checks that limit only once the
+  count agrees with the segment table, so a sound frame past it is
+  `OutOfMemory` and a corrupt count stays `InvalidArgument`. The limit bounds
+  its allocation too, at
   under 2.1 KB per block, and every size is checked in 64 bits so a 32-bit
   build refuses rather than wraps. `DctBlocks` lives in `dct_blocks.hpp`, so
   the host-only frame never includes Vulkan. `RansReader::finish` is a
