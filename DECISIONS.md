@@ -5235,12 +5235,23 @@ mostly pseudonormal ones, and went with them.
   |---|---|---|---|---|
   | 0.3 m sphere, K = 32 (default) | 21.7 KB | 0.8% | 0.39 / 1.42 mm | 0.018 / 0.155 mm |
   | same, K = 512 | 37.6 KB | 1.4% | 0.22 / 1.08 mm | same |
-  | dented cube, K = 32 | 14.3 KB | 0.7% | 0.65 / 3.11 mm | 0.15 / 1.54 mm |
+  | 0.22 m cube, K = 32 | 13.5 KB | 0.5% | 0.57 / 2.70 mm | 0.14 / 1.10 mm |
 
-  The cube's floor is marching cubes, not the field: the dent closes six of
-  its edges to about 56°, and a wedge that thin is cut back by 1.4 voxels
-  (7.1 mm of coverage) before anything is compressed. The test's bounds sit at
-  about twice these figures, 1.8x at the tightest.
+  The cube's floor is marching cubes, not the field: it cuts the edges and
+  corners back by under a voxel (4.1 mm of coverage) before anything is
+  compressed. The test's bounds sit at about twice these figures, 1.8x at the
+  tightest.
+
+  The cube is plain and axis-aligned, and both are forced by `Signed`'s
+  closest-face rule. The first cut used the tsdf test's dented cube. Once
+  `Signed` took the closest face's sign, part of the region past the dent's
+  56° edges read the wrong side, and its uncompressed surface grew stray
+  sheets up to 40 mm off the source. A plain cube turned off the grid's axes
+  fails more quietly. Beyond a corner, on the line that continues an edge, two
+  of the tied faces' normals are perpendicular to the offset, so rounding picks
+  the sign: 72 stray vertices, up to 26 mm off. The rule's documented limit is
+  edges under 90°, so this is a second one, at exactly 90° off the axes. An
+  axis-aligned cube off the voxel lattice puts no voxel on those lines.
 
   Measured against the source, these read worse than the research codec's
   figures at the same settings would: that evaluation appears to have scored

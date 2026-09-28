@@ -67,7 +67,7 @@ namespace {
 
 using test_meshes::closest_point;
 using test_meshes::corner;
-using test_meshes::dented_cube;
+using test_meshes::cube;
 using test_meshes::Mesh;
 using test_meshes::orient_outward;
 
@@ -222,8 +222,8 @@ SurfaceError summarize(const std::vector<float>& d) {
   return e;
 }
 
-// How far a distance is measured before it reads as "too far": 4 cm, twice the
-// widest bound checked below.
+// How far a distance is measured before it reads as "too far": 4 cm, about
+// three times the widest bound checked below.
 constexpr float kReach = 0.04f;
 // The coverage lattice's spacing, in voxels. One unobserved voxel drops the
 // eight cells around it, a hole about two voxels across. At half a voxel some
@@ -512,8 +512,13 @@ int main() {
 
   const Mesh sphere_mesh =
       icosphere(vr::Vec3f(0.0131f, -0.0217f, 0.0093f), 0.15f, 3);
-  const Mesh cube_mesh =
-      dented_cube(vr::Vec3f(-0.1127f, -0.0893f, -0.1011f), 0.22f);
+  // A plain cube, axis-aligned, off the voxel lattice. Signed takes each
+  // voxel's sign from the closest face, so a dent's 56-degree edges give part
+  // of their region the wrong side (the 2026-09-27 rule), and a cube turned
+  // off the axes puts voxels on the planes past its edges, where the tied
+  // faces' normals are perpendicular to the offset and rounding picks the
+  // sign. Either extracts stray surface centimetres off; this cube has none.
+  const Mesh cube_mesh = cube(vr::Vec3f(-0.1127f, -0.0893f, -0.1011f), 0.22f);
   const codec::CodecParams defaults{};
   codec::CodecParams full = defaults;
   full.coefficient_count = codec::kVoxelsPerBlock;  // quantization alone
@@ -525,7 +530,7 @@ int main() {
   if (round_trip(tools, sphere_mesh, sphere) != 0) return 1;
   if (round_trip(tools, cube_mesh, cube) != 0) return 1;
   print("sphere", sphere, voxel);
-  print("dented cube", cube, voxel);
+  print("cube", cube, voxel);
   const Surface& sphere_floor = sphere.uncompressed;
   const Surface& sphere_default = sphere.coded[0].decoded;
   const Surface& sphere_full = sphere.coded[1].decoded;
@@ -542,11 +547,10 @@ int main() {
   // it to a fourteenth (measured 0.155 mm and 0.353 mm).
   CHECK(sphere_floor.accuracy.max < 0.1 * voxel);
   CHECK(sphere_floor.coverage.max < 0.2 * voxel);
-  // On the dented cube the dent tilts the six triangles around it, which closes
-  // six of the cube's edges to about 56 degrees, and marching cubes cuts a
-  // wedge that thin back by 1.4 voxels (measured 1.54 mm and 7.09 mm).
-  CHECK(cube_floor.accuracy.max < 0.6 * voxel);
-  CHECK(cube_floor.coverage.max < 3.0 * voxel);
+  // On the cube, marching cubes cuts the edges and corners back by under a
+  // voxel (measured 1.10 mm and 4.13 mm).
+  CHECK(cube_floor.accuracy.max < 0.45 * voxel);
+  CHECK(cube_floor.coverage.max < 1.75 * voxel);
 
   // What the default parameters add, on a smooth surface (measured rms
   // 0.39 mm, max 1.42 mm, coverage 1.30 mm): under a sixth of a voxel rms,
@@ -559,9 +563,9 @@ int main() {
   // bounds the field's error, not a vertex's after the clamp and marching
   // cubes, so fewer coefficients measuring better here would not be a bug.
   CHECK(sphere_full.accuracy.rms < 0.09 * voxel);
-  // And on the sharp features (measured 3.11 mm and 9.86 mm).
-  CHECK(cube_default.accuracy.max < 1.25 * voxel);
-  CHECK(cube_default.coverage.max < 4.0 * voxel);
+  // And on the sharp features (measured 2.70 mm and 6.86 mm).
+  CHECK(cube_default.accuracy.max < 1.1 * voxel);
+  CHECK(cube_default.coverage.max < 2.75 * voxel);
   // The frame is a small fraction of the raw tsdf + weight it replaces
   // (measured 0.8%).
   CHECK(double(sphere.coded[0].frame_bytes) < 0.02 * raw_bytes(sphere.blocks));
