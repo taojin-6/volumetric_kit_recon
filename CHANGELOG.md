@@ -72,6 +72,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `sensor`: **H.265 colour from Orbbec cameras**,
+  `OrbbecStreamOptions::color_codec = OrbbecColorCodec::Hevc` (the default
+  stays `Mjpeg`; needs `VR_WITH_FFMPEG`). 21.6 Mbit/s of colour per camera at
+  720p30 against MJPEG's 37-38, and 21 against 185 at 4K25. Each camera's
+  colour is decoded on a thread of its own, every frame in order, as
+  BT.601 full range, which the Femto Mega codes without saying so.
+  `OrbbecCaptureStats::lost` counts the pairs it cannot hand on. Tests:
+  `recon_sensor_orbbec_hevc` (no camera); the capture and rig hardware tests
+  run both codecs.
+- `sensor`: **`HevcDecoder::Options::color`**, a stream's matrix and range for
+  a source that labels it wrongly or not at all.
+- `examples`: **`fuse_orbbec --hevc [--color WxH] [--fps N]`**.
 - `sensor`: **`HevcDecoder`** (`sensor/video/hevc_decoder.hpp`, the new
   `recon_sensor_video` target behind `VR_WITH_FFMPEG`): H.265 access units to
   host pictures, `Rgb24` or `Yuv420`, over an installed FFmpeg ≥ 4.4. `Auto`

@@ -268,6 +268,11 @@ order. Change the decision, its entry there, and this list together.
   installed FFmpeg: HEVC in, host pictures out, on the first hardware back end
   that decodes a built-in clip, NVIDIA ahead of an integrated GPU; each CI leg
   requires the hardware it has.
+- [**2026-09-28**](DECISIONS.md#2026-09-28--the-orbbec-driver-streams-colour-as-h265-on-request-every-colour-frame-is-decoded-in-order-on-a-thread-per-camera-ahead-of-the-mailbox-a-lost-frame-is-read-off-the-frame-index-not-the-clock-and-the-femto-megas-stream-is-decoded-as-bt601-full-range-which-it-codes-and-does-not-say) —
+  The Orbbec driver streams colour as H.265 on request: every colour frame is
+  decoded, in order, on a thread per camera ahead of the mailbox; a lost frame
+  is read off the frame index, not the clock; and the Femto Mega's stream is
+  decoded as BT.601 full range, which it codes and does not say.
 
 ## Provenance & salvage policy
 
@@ -700,6 +705,13 @@ arbitrary; it usually isn't.
   internal `CameraStream`. The rig's hardware test opens only the rig
   `VR_ORBBEC_TEST_RIG` names and never writes to it (the 2026-09-27
   decision).
+  `color_codec = Hevc` (`VR_WITH_FFMPEG`) puts H.265 on the wire: each
+  camera's `HevcColorDecoder` decodes every colour frame, in order, ahead of
+  the mailbox, as BT.601 full range, and posts RGB frames stamped with the
+  RGB mode's profile, so everything after is MJPEG's path. The SDK hands over
+  every colour frame, depth or not; a pair without depth is dropped after
+  decoding. A gap in the frame index waits for the next key frame, counted in
+  `stats().lost` (the 2026-09-28 decision).
   **`sensor/video`'s `HevcDecoder`** (`VR_WITH_FFMPEG`) decodes H.265 access
   units to host pictures, `Rgb24` or the `Yuv420` planes with their matrix
   and range, plus the stream's transfer and primaries as an optional
@@ -852,11 +864,11 @@ gauges from VMA heuristics into driver truth. The debug-utils labels that TODO
 sat beside **have landed** (2026-08-30) — on the *kernel* rather than the span,
 which is the correction that entry records.
 
-**On `sensor`**, each a `TODO(sensor)`: HEVC colour from the camera through
-`HevcDecoder` (one decode thread per camera, since no access unit may be
-dropped), and GPU pre-processing that keeps the frame on the device through
-fusion (both in `camera_stream.cpp`), including the decoder's hardware frames
-(`hevc_decoder.cpp`), and processing a rig set's frames in parallel,
+**On `sensor`**, each a `TODO(sensor)`: GPU pre-processing that keeps the
+frame on the device through fusion (`camera_stream.cpp`), including the
+decoder's hardware frames (`hevc_decoder.cpp`) -- which a 4K rig needs, since
+at 4K the host's undistortion, registration and conversion cost ~55 ms a frame
+-- and processing a rig set's frames in parallel,
 one thread per camera, rather than the ~11 ms one after another costs for four
 (`orbbec_rig.cpp`). The rig's next consumer is calib's viewer, showing its
 synchronised sets.

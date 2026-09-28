@@ -69,6 +69,8 @@ camera (`sensor/orbbec/orbbec_capture.hpp`), and the live example:
 
 ```sh
 build/examples/fuse_orbbec/fuse_orbbec --serial <serial> --frames 300
+# H.265 colour instead of MJPEG (a build with -DVR_WITH_FFMPEG=ON too):
+build/examples/fuse_orbbec/fuse_orbbec --serial <serial> --hevc
 # the driver's hardware test opens only the camera you name:
 VR_ORBBEC_TEST_SERIAL=<serial> ctest --test-dir build -R orbbec
 ```
