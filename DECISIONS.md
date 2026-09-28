@@ -5075,10 +5075,14 @@ Where decoding picks up again, and what is counted:
   also clears a decoder left holding pictures after a failed send or a
   thrown call, which would otherwise refuse every send after it.
 - **Display order.** Pictures come out in display order, so a picture settles
-  its own pair and no other. A pair sent 16 access units ago with no picture
-  (H.265 holds at most 16 back, and one thread adds none) is one the decoder
-  skipped, and is counted then. The Femto Mega sends no B-frames; a stream
-  that did would otherwise have lost about half its pairs.
+  its own pair and no other. A pair sent 32 access units ago with no picture
+  is one the decoder skipped, and is counted then: H.265 holds at most 16
+  pictures back, one thread adds none, and an FFmpeg before 7.1 (6.1 on
+  Ubuntu 24.04) hands out one picture per access unit, so the pictures a
+  sequence holds back can wait behind the last one's too. A window of 16,
+  the first cut's, would have dropped such a pair as lost. The Femto Mega
+  sends no B-frames; a stream that did would otherwise have lost about half
+  its pairs.
 
 **Why these numbers.** The four-camera rig at 720p30 over the cable,
 1200 frames, Release:
@@ -5103,7 +5107,7 @@ and colour; that a lost frame costs the frames to the next key frame, an
 empty one too, and a pause costs nothing; that colour without depth is
 decoded and dropped, and the frames after it still decode; that a labelled
 stream keeps its label; that B-frames lose nothing; that a restart in open
-GOPs skips the CRA's leading pictures and counts them 16 frames on; and it
+GOPs skips the CRA's leading pictures and counts them 32 frames on; and it
 tests `ColorStreamGate` on its own. The clips are the patch clip unlabelled
 (`unlabelled_256x144.h265`, its SPS's matrix, primaries and transfer set to
 unspecified, which is what FFmpeg reads off the camera), labelled, with
@@ -5114,13 +5118,19 @@ which FFmpeg 9 does and FFmpeg 6.1 does not: 6.1 conceals the missing
 reference and decodes the next frames wrongly, without an error. Removing the gate's index check,
 the decode of a colour frame without depth, or the unlabelled colour each
 fails it. So does taking back each review fix below: settling earlier pairs
-with a picture, the reset at a restart, the count 16 frames on, applying the
+with a picture, the reset at a restart, the count 32 frames on, applying the
 unlabelled colour to a labelled stream, a reset that does not flush or does
 not undo the end, and the early refusal without FFmpeg. Sending an empty
 frame alone does not, since the reset at the next key frame now undoes the
 end of stream it caused; sending it without that reset does.
 `recon_sensor_video_hevc` tests the reset and the unlabelled colour on every
-back end. On the rig, `recon_sensor_orbbec_capture` holds H.265 to the MJPEG
+back end. The first cut of the B-frame test failed on CI's Ubuntu 24.04 leg:
+it waited for every picture, and FFmpeg 6.1, handing out one picture per
+access unit, still held two when the stream ended, where FFmpeg 9 lets them
+all out at the next clip's key frame. Replayed against libavcodec 6.1, the
+open-GOP run hands out 41 of its 43 pictures, none later than 4 access
+units after its own. So the tests take every picture in order but the last
+three, and the window above is 32, not 16. On the rig, `recon_sensor_orbbec_capture` holds H.265 to the MJPEG
 contract, and its colour to MJPEG's within a 5% gain (0.997, 0.984, 0.974
 measured). `recon_sensor_orbbec_rig` streams 90 sets with each codec (H.265:
 89-96% complete, worst skew 1.6-2.2 ms, 0-3 lost per camera). Both passed
