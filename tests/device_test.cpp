@@ -8,6 +8,7 @@
 // headless CI stays green; the pure checks always run.
 
 #include <cstdio>
+#include <mutex>
 #include <utility>
 
 #include "volumetric_kit/recon/core/device.hpp"
@@ -67,7 +68,12 @@ int main() {
   check(owner.value().owns_device(), "created device is owned");
   check(owner.value().handle() != VK_NULL_HANDLE, "device handle non-null");
   check(owner.value().compute_queue() != VK_NULL_HANDLE, "compute queue");
-  check(owner.value().command_pool() != VK_NULL_HANDLE, "command pool");
+  // An empty command buffer: what these checks submit to prove a device can.
+  const auto nothing = [](VkCommandBuffer) {};
+  check(owner.value().submit_single_time(nothing).ok(),
+        "created device submits");
+  check(owner.value().submit_mutex() != nullptr,
+        "created device locks its queue itself");
 
   // Adopt the owner's device by raw handles. The default config requires
   // timelineSemaphore + scalarBlockLayout (which Device::create enabled) and no
@@ -91,16 +97,28 @@ int main() {
     check(!borrowed.value().owns_device(), "adopted device is not owned");
     check(borrowed.value().handle() == owner.value().handle(),
           "adopt shares the device handle");
-    check(borrowed.value().command_pool() != VK_NULL_HANDLE,
-          "adopt owns its own command pool");
-    check(borrowed.value().command_pool() != owner.value().command_pool(),
-          "adopt's pool is distinct from the owner's");
+    check(borrowed.value().submit_single_time(nothing).ok(),
+          "adopt submits on command pools of its own");
+    check(borrowed.value().submit_mutex() != nullptr,
+          "adopt with no embedder mutex locks the queue itself");
   }  // borrowed destructs here: it must NOT destroy the shared VkDevice.
 
   // The owner's device is still valid after the borrower is gone (a double-free
   // trips the sanitizer job; a use-after-free would corrupt this handle).
   check(owner.value().handle() != VK_NULL_HANDLE,
         "owner survives the adopted wrapper's teardown");
+  check(owner.value().submit_single_time(nothing).ok(),
+        "owner still submits after the adopted wrapper's teardown");
+
+  // A queue shared with another library is locked with the embedder's mutex.
+  {
+    std::mutex shared;
+    vr::AdoptedDevice sharing = adopted;
+    sharing.submit_mutex = &shared;
+    vr::Result<vr::Device> r = vr::Device::adopt(sharing, {});
+    check(r.ok() && r.value().submit_mutex() == &shared,
+          "adopt locks a shared queue with the embedder's mutex");
+  }
 
   // adopt rejects a device the creator did not declare timelineSemaphore on
   // (recon's default config requires it, and it cannot be queried back).
@@ -249,17 +267,19 @@ int main() {
       std::fprintf(stderr, "move-test device create failed\n");
       return 1;
     }
+    // A submit first, so each device holds a command pool to move.
+    const auto nothing = [](VkCommandBuffer) {};
+    check(a.value().submit_single_time(nothing).ok() &&
+              b.value().submit_single_time(nothing).ok(),
+          "move-test devices submit");
     const VkDevice a_handle = a.value().handle();
-    const VkCommandPool a_pool = a.value().command_pool();
     vr::Device moved = std::move(a.value());
     check(moved.handle() == a_handle, "device move-ctor transfers the handle");
-    check(moved.command_pool() == a_pool,
-          "device move-ctor transfers the pool");
+    check(moved.submit_single_time(nothing).ok(),
+          "device move-ctor transfers the pools");
     check(moved.owns_device(), "device move-ctor transfers ownership");
     check(a.value().handle() == VK_NULL_HANDLE,
           "device move-ctor empties the source handle");
-    check(a.value().command_pool() == VK_NULL_HANDLE,
-          "device move-ctor empties the source pool");
     check(a.value().owns_device(),
           "device move-ctor resets source ownership to true");
     // The label entry points are metadata and must reset with the rest of it:
@@ -271,6 +291,8 @@ int main() {
     const VkDevice b_handle = b.value().handle();
     moved = std::move(b.value());  // frees a's resources, then adopts b's
     check(moved.handle() == b_handle, "device move-assign adopts the source");
+    check(moved.submit_single_time(nothing).ok(),
+          "device move-assign adopts the source's pools");
     check(b.value().handle() == VK_NULL_HANDLE,
           "device move-assign empties the source");
     check(!b.value().debug_labels_available(),
@@ -280,8 +302,8 @@ int main() {
         &moved;  // launder through a pointer to dodge -Wself-move
     moved = std::move(*self);
     check(moved.handle() == b_handle, "device self-move leaves it intact");
-    check(moved.command_pool() != VK_NULL_HANDLE,
-          "device self-move keeps the pool");
+    check(moved.submit_single_time(nothing).ok(),
+          "device self-move keeps the pools");
   }  // moved (b's device) destructs once; a and b hold emptied devices.
 
   // Instance: the same three cases on the second move-only type.

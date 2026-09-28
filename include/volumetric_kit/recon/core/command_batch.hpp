@@ -64,8 +64,10 @@ struct ComputeKernel;
 /// may still run the batch after that: the batch then keeps its own staging
 /// for good, as @ref Device::submit_single_time keeps its command buffer, and
 /// the device is best treated as lost. The batch borrows its @ref Device and
-/// @ref Allocator, which must outlive it; like @ref
-/// Device::submit_single_time it is not thread-safe.
+/// @ref Allocator, which must outlive it. A batch belongs to one thread, but
+/// batches on several threads may share a device and allocator, each
+/// recording its own kernels, buffers and timers (see @ref
+/// Device::submit_single_time).
 ///
 /// @code
 /// CommandBatch batch(device, allocator);

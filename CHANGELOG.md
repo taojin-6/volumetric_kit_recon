@@ -8,6 +8,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
+- `core`: **`Device::command_pool()`**. Each submit takes a pool of its own,
+  so there is no one pool to hand out, and a caller recording on it would
+  race the device's submits. Nothing outside the tests called it.
 - `examples`: **the examples' own dataset API** — `ReplicaDataset`,
   `FrameView` and `example_camera.hpp` (`make_depth_camera`) are gone, replaced
   by `ReplicaCapture` (below); `pack_color_rgba8` with them, since the atlas
@@ -29,6 +32,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `core`: **a `Device` may be submitted to from several threads at once.**
+  Each submit records on a command pool no other submit holds, from a free
+  list the device keeps, so recording takes no lock. Only `vkQueueSubmit` is
+  serialized, under the embedder's mutex on a shared queue and the device's
+  own otherwise, so `submit_mutex()` is never null. Before, every submit
+  shared one pool and only a shared queue was locked, so two threads' batches
+  were undefined: the validation layer reported `THREADING ERROR` on the pool
+  and one run segfaulted. A command buffer is now kept for the next submit;
+  the fence is still made per submit.
 - `sensor`: **`GpuFramePrep` stages its raw frame and runs both passes in one
   submit**: the raw depth and colour planes go up through a batch into
   device-local inputs, rather than a host-visible buffer the kernels read

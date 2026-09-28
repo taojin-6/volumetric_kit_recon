@@ -138,6 +138,9 @@ struct BufferDesc {
 ///          this allocator *and* every @ref Buffer it creates; it stores their
 ///          handles, and a Buffer is freed against that `VkDevice`.
 ///
+/// Thread-safe: VMA locks its own state, so batches on several threads may
+/// allocate their staging from one allocator at once.
+///
 /// @note A @ref Buffer does **not** have to be destroyed before the Allocator
 ///       that created it. Each Buffer holds a reference to the underlying VMA
 ///       allocator, which is destroyed once the Allocator and every Buffer made

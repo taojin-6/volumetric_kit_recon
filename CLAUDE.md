@@ -314,6 +314,9 @@ order. Change the decision, its entry there, and this list together.
   Memory the kernels use lives on the device on every platform, and the host
   only records commands against it: one `CommandBatch` per call, parameters
   inline, bulk bytes staged at the edges, small results read back.
+- [**2026-09-28**](DECISIONS.md#2026-09-28--a-device-takes-submits-from-several-threads-at-once-each-records-on-a-command-pool-of-its-own-and-only-the-queue-is-locked) —
+  A `Device` takes submits from several threads at once: each records on a
+  command pool of its own, and only the queue is locked.
 
 ## Provenance & salvage policy
 
@@ -524,7 +527,10 @@ arbitrary; it usually isn't.
 - **`core`** — the Vulkan compute foundation: VMA `Allocator`, RAII `Buffer`,
   `ShaderModule`, descriptor + `ComputePipeline` wrappers, the `ComputeKernel`
   bundle + `KernelSetBuilder`, the shared-queue-safe
-  `Device::submit_single_time` dispatch, and the shared `dispatch()` /
+  `Device::submit_single_time` dispatch (safe from several threads at once:
+  each submit records on a command pool of its own and only the queue submit
+  is locked; a kernel's set, a buffer and a `GpuTimer` stay the caller's to
+  keep to one thread), and the shared `dispatch()` /
   `group_count` / `storage_buffer` / range-guard helpers of `compute_util.hpp`
   — `StorageInput` among them, the host array (staged onto the device in the
   call's batch) or device buffer a call binds at its image's exact range.
