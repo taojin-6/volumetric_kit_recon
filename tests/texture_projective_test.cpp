@@ -524,6 +524,31 @@ int main() {
     CHECK(is_offscreen(uv));
   }
 
+  // A frame twice the size after the smaller ones: the texturer's depth copy
+  // is kept across calls, so it has to grow rather than take a short one.
+  {
+    vr::DepthCameraParams cam_big = cam;
+    cam_big.fx *= 2.0f;
+    cam_big.fy *= 2.0f;
+    cam_big.cx *= 2.0f;
+    cam_big.cy *= 2.0f;
+    cam_big.width *= 2;
+    cam_big.height *= 2;
+    const std::vector<float> depth_big(
+        static_cast<std::size_t>(cam_big.width) * cam_big.height, 1.0f);
+    rmesh::Mesh mesh_big;
+    mesh_big.vertices = {mesh.vertices[0], mesh.vertices[1], mesh.vertices[2]};
+    mesh_big.indices = {0, 1, 2};
+    CHECK(texturer.texture(mesh_big, depth_big.data(), cam_big).ok());
+    for (int i = 0; i < 3; ++i) {
+      const vr::Vec2f uv = mesh_big.vertices[i].uv0;
+      const vr::Vec2f want =
+          expected_uv(mesh_big.vertices[i].position, cam_big);
+      CHECK(!uses_vertex_color(uv));
+      CHECK(approx(uv.x, want.x, 1e-5f) && approx(uv.y, want.y, 1e-5f));
+    }
+  }
+
   std::printf(
       "recon texture projective test passed: 1 triangle textured with exact "
       "projected UVs, an occluded triangle carried its coordinate as -uv-1 "
@@ -536,6 +561,7 @@ int main() {
       "discontinuity textured a foreground vertex via the nearest-tap "
       "fallback, a mixed triangle interpolated between real projections "
       "rather than toward the atlas origin, a mesh with no indices was still "
-      "overwritten, and a non-finite position took the sentinel\n");
+      "overwritten, a non-finite position took the sentinel, and a larger "
+      "frame grew the depth copy\n");
   return 0;
 }

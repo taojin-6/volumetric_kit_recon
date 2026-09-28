@@ -213,17 +213,18 @@ class StorageInput {
   }
 
   /// @brief The buffer to bind for @p bytes of this: the device buffer, or a
-  ///        fresh device-local buffer in @p upload that @p batch fills from the
-  ///        host array. The caller keeps @p upload alive until the batch has
-  ///        run, and records the dispatch that reads it after this.
+  ///        device-local buffer in @p upload that @p batch fills from the host
+  ///        array. The caller keeps @p upload alive until the batch has run,
+  ///        and records the dispatch that reads it after this.
   ///
   /// Bind exactly @p bytes of it, never `VK_WHOLE_SIZE`: a caller's buffer may
   /// be larger than `maxStorageBufferRange` when the image is not.
   /// @param batch      Records the upload.
   /// @param allocator  Where the device buffer is made.
   /// @param bytes      The binding's range (non-zero); checked by @ref check.
-  /// @param upload     Receives the device buffer; left empty for a device
-  ///                   input.
+  /// @param upload     Receives the device buffer, reused when it already
+  ///                   holds @p bytes, so a member kept across calls grows
+  ///                   only; left as it is for a device input.
   /// @return The handle to bind; @ref Status::Code::InvalidArgument for a
   ///         null array; or the allocation's or the upload's failure.
   Result<VkBuffer> buffer(CommandBatch& batch, Allocator& allocator,
@@ -232,7 +233,9 @@ class StorageInput {
     if (host_ == nullptr) {
       return Status::invalid_argument("StorageInput: the host array is null");
     }
-    VR_ASSIGN(upload, device_storage_buffer(allocator, bytes));
+    if (!upload.valid() || upload.size() < bytes) {
+      VR_ASSIGN(upload, device_storage_buffer(allocator, bytes));
+    }
     VR_TRY(batch.upload(upload, 0, host_, bytes));
     return upload.handle();
   }
