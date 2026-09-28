@@ -93,14 +93,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   cropped on every back end (VideoToolbox, which cannot, refuses such a
   stream, and `Auto` moves it to software). The installed package holds a
   consumer to the FFmpeg major versions it was built against.
+- `eval`: **a quality-measurement tier**, `recon_eval`, off `recon_mesh`.
+  `MeshDistance` gives point-to-surface distance up to a reach, over a copy
+  of the triangles. `compare_meshes` gives accuracy, coverage and an optional
+  F-score at a threshold. Both return `Status` on a bad reach, indices out of
+  range or a threshold past the reach. The metric came from
+  `examples/common`, where the room0 measurement introduced it. Tested by
+  `recon_eval_mesh_distance`.
 - `examples`: **`codec_replica`**, the TSDF codec on real data. It fuses a
   Replica sequence and streams the grid through `Encoder` / `Decoder`,
   reporting bytes, bitrate and stage rows. It then judges the decoded surface
   against the source's, mesh to mesh (accuracy and coverage, each with its
   count beyond reach). `--sweep` prints a rate–distortion table. The metric
-  is `examples/common/mesh_distance.hpp`, header-only and tested by
-  `recon_mesh_distance`. The player grid shares the fusion grid's layout,
-  now `examples/common/grid_layout.hpp`.
+  is the `eval` tier's (below). The player grid shares the fusion grid's
+  layout, now `examples/common/grid_layout.hpp`.
 - `codec`: **`Encoder` and `Decoder`, the codec's public API** (see the
   2026-09-27 decision). This is the third of its five PRs.
   - `Encoder::encode(grid)` gives one intra frame of every block with an

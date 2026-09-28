@@ -19,11 +19,11 @@
 #include <vector>
 
 #include "grid_layout.hpp"
-#include "mesh_distance.hpp"
 #include "volumetric_kit/recon/codec/decoder.hpp"
 #include "volumetric_kit/recon/codec/encoder.hpp"
 #include "volumetric_kit/recon/core/result.hpp"
 #include "volumetric_kit/recon/core/stage_metrics.hpp"
+#include "volumetric_kit/recon/eval/mesh_distance.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 
 namespace vr_example {
@@ -121,9 +121,9 @@ inline void print_stage_rows(const char* title, const vr::StageMetrics& rows,
   }
 }
 
-/// @brief Print an accuracy / coverage comparison, distances in mm.
-inline void print_comparison(const MeshComparison& c, float voxel) {
-  auto line = [voxel](const char* name, const DistanceStats& s) {
+/// @brief Print an accuracy / coverage / F-score comparison, in mm.
+inline void print_comparison(const vr::eval::MeshComparison& c, float voxel) {
+  auto line = [voxel](const char* name, const vr::eval::DistanceStats& s) {
     std::printf(
         "    %-9s mean %6.3f  rms %6.3f  p95 %6.3f  max %6.3f mm "
         "(%.3f voxels rms), %zu of %zu beyond reach\n",
@@ -132,6 +132,11 @@ inline void print_comparison(const MeshComparison& c, float voxel) {
   };
   line("accuracy", c.accuracy);
   line("coverage", c.coverage);
+  if (c.fscore.threshold > 0.0f) {
+    std::printf("    F-score   %.4f at %.1f mm (precision %.4f, recall %.4f)\n",
+                c.fscore.f, double(c.fscore.threshold) * 1e3,
+                c.fscore.precision, c.fscore.recall);
+  }
 }
 
 /// @brief An encoder, a decoder and the player grid it decodes into, with the

@@ -26,17 +26,18 @@
 #include "codec_stream.hpp"
 #include "codec_sweep.hpp"
 #include "fuse_frame.hpp"
-#include "mesh_distance.hpp"
 #include "ply_writer.hpp"
 #include "replica_capture.hpp"
 #include "volumetric_kit/recon/core/allocator.hpp"
 #include "volumetric_kit/recon/core/device.hpp"
 #include "volumetric_kit/recon/core/instance.hpp"
+#include "volumetric_kit/recon/eval/mesh_distance.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
 
 namespace vr = volumetric_kit::recon;
 namespace codec = volumetric_kit::recon::codec;
+namespace eval = volumetric_kit::recon::eval;
 namespace mesh = volumetric_kit::recon::mesh;
 
 namespace {
@@ -197,12 +198,17 @@ vr::Status run(const Options& opt) {
   // The last frame's decoded surface against the source's.
   VR_ASSIGN(const mesh::Mesh source, extractor.extract_host(volume));
   VR_ASSIGN(const mesh::Mesh decoded, extractor.extract_host(stream.player()));
-  const float reach = std::max(trunc, 0.02f);
+  // A band's width of reach, and an F-score at half a voxel, inside the
+  // reconstruction's own resolution so it moves with the codec.
+  eval::CompareOptions compare;
+  compare.reach = std::max(trunc, 0.02f);
+  compare.stride = kMetricStride;
+  compare.fscore_threshold = 0.5f * opt.voxel;
+  VR_ASSIGN(const eval::MeshComparison cmp,
+            eval::compare_meshes(source, decoded, compare));
   std::printf("surface: %zu triangles decoded against %zu:\n",
               decoded.triangle_count(), source.triangle_count());
-  vr_example::print_comparison(
-      vr_example::compare_meshes(source, decoded, reach, kMetricStride),
-      opt.voxel);
+  vr_example::print_comparison(cmp, opt.voxel);
   if (!opt.out_prefix.empty()) {
     VR_TRY(vr_example::write_ply(opt.out_prefix + "_source.ply", source));
     VR_TRY(vr_example::write_ply(opt.out_prefix + "_decoded.ply", decoded));
@@ -210,8 +216,7 @@ vr::Status run(const Options& opt) {
 
   if (opt.sweep) {
     VR_TRY(vr_example::run_codec_sweep(device, allocator, volume, source,
-                                       extractor, stream.player(), reach,
-                                       kMetricStride));
+                                       extractor, stream.player(), compare));
   }
   return {};
 }

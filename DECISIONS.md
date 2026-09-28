@@ -4662,9 +4662,10 @@ Each is a point-to-triangle distance through a cell hash, up to a reach of
 `max(trunc_dist, 2 cm)`, sampled at every fourth vertex. A point with nothing
 within reach is counted apart, not averaged, so accuracy's RMS, p95 and max
 cover only the points within it; the count beyond it is reported beside them
-(`acc>r`, `cov>r`). The code is `examples/common/mesh_distance.hpp`,
-header-only, and its test pins it against meshes a known distance apart and
-against a scan of every triangle. The first plan was to sample the source grid's
+(`acc>r`, `cov>r`). The code was `examples/common/mesh_distance.hpp`,
+header-only, with a test pinning it against meshes a known distance apart and
+against a scan of every triangle. It moved into the `eval` tier the same day
+(the next entry). The first plan was to sample the source grid's
 SDF at the decoded vertices, which would be simpler. It was dropped because a
 fused TSDF is **projective**: distance along the camera ray, not Euclidean. So
 on real scans the simpler metric would have measured the fusion's bias as well
@@ -4810,6 +4811,88 @@ untimed round first.
 - **Host-threaded segment coding,** if a finer voxel or K = 128 is wanted in
   real time (a `TODO(codec)` in `bitstream.cpp`).
 - **The GPU coder,** after that, if threading is not enough.
+
+### 2026-09-27 — Quality measurement is a tier of its own, `eval`, branching off `mesh`: mesh-to-mesh accuracy, coverage and F-score, host-side and deterministic, and production infrastructure rather than an excluded research harness.
+
+The mesh-distance metric came in with the room0 measurement as a header in
+`examples/common`. It had three consumers, or would have soon:
+- **`codec_replica`**, whose defaults it chose;
+- **the codec's ground-truth test (#94)**, which carries its own copy of the
+  closest-point code;
+- **the per-band quantization study**, which will be judged on it.
+
+A metric that picks defaults and gates tests belongs in the library, where it
+is documented, versioned and tested like the rest.
+
+**Named `eval`, not `metrics`.** `core` already has `StageMetrics`, the timing
+vocabulary every tier reports in, and a `metrics` tier would read as more of
+that. The target is `recon_eval`, the namespace `volumetric_kit::recon::eval`.
+
+**Off `mesh`.** It reads `mesh::Mesh`, so it depends on `mesh` and branches off
+it, as `texture` does. Nothing in the pipeline links it. The codec's tests and
+example depend on it, never the reverse, so `codec` stays on `volume` alone. A
+later grid-to-grid metric would fit too, `volume` being to its left.
+
+**Not an excluded harness.** The exclusion list names "Python research/eval
+harnesses and any learned/neural or paper-experiment code". This is none of
+those: it is host-side C++ with no dependency beyond the mesh container, and
+it is deterministic up to the inputs it is given. The repo's own tests and
+examples use it to hold the reconstruction and the codec to a number, so it
+meets the same bar as any tier: full Doxygen, `Status` on every refusal, a
+test with analytic answers. A paper's evaluation protocol, a dataset loader or
+a plotting script would still be excluded.
+
+**What v1 holds** (`eval/mesh_distance.hpp`):
+- **`MeshDistance`:** point-to-surface distance up to a reach, through a hash
+  of reach-sized cells.
+  - It **copies** the triangles, so the source mesh need not outlive it. The
+    header-only version kept a reference, a lifetime the caller could not see.
+  - `create` refuses a reach that is not finite and positive, an index count
+    that is not a multiple of 3, and an index past the vertices, where the
+    header-only version read out of bounds.
+- **`summarize`:** a distance distribution over the points within reach, plus
+  a count of those beyond it.
+- **`compare_meshes`:** accuracy (test vertices to the reference surface) and
+  coverage (reference vertices to the test surface), the directions the
+  ground-truth test named. It also computes the **F-score** at a threshold,
+  since precision and recall fall out of the same distances.
+  - The threshold must lie in `[0, reach]`. Past the reach, every distance
+    reads as the reach, and the score would be meaningless.
+  - `codec_replica` reports it at half a voxel. That is inside the
+    reconstruction's own resolution, so the score moves with the codec rather
+    than saturating: 0.992 on the 20-frame 2 cm smoke run.
+
+**A stride samples differently each run.** `compare_meshes` can measure every
+`stride`-th vertex, and `codec_replica` uses 4 on room0's million vertices.
+Marching cubes emits vertices in the order its atomics hand out ranges, so the
+subsample changes from run to run. The same grid's figures move by about half
+a percent (accuracy mean 1.216 against 1.211 mm on two runs of the smoke test).
+Where a figure must reproduce exactly, use stride 1.
+
+**The example's entry point stays concise** (this PR's base,
+`refactor(examples): keep codec_replica's entry point concise`). The player
+policy, the report printers and the sweep live in `examples/common`
+(`codec_stream.hpp`, `codec_sweep.hpp`). `main.cpp` is the example's story:
+options, setup, the fuse loop, the report.
+
+**Verified.** The full suite passes, 35 of 35. `recon_eval_mesh_distance`
+replaces the example-header test: the closest point in every region of a
+triangle (a degenerate one included), the reach clamp, the statistics,
+accuracy / coverage between planes a known distance apart, the F-score, and
+every refusal.
+- **F-score checks:** it is exactly 1 above a 3 mm shift and exactly 0 below
+  one, and not 0/0. Half a plane gets precision 1 and the exact recall of the
+  extent it kept. That test first assumed the cut fell at 0.1 m, but
+  `20 * 0.005f` rounds below `0.1f`, so the mesh keeps a 21st column of
+  squares. The test now reads the extent off the mesh.
+- **A copy made at `create`:** the index is built over a temporary mesh and
+  queried after it is gone, which ASan would catch if it were not a copy.
+
+**Open.**
+- The ground-truth test (#94) moves onto `eval` once both have landed, and
+  drops its copy.
+- A threaded `compare_meshes`: room0 at 1 cm takes ~9 s at stride 4 on one
+  core.
 
 ## Measured lessons
 
