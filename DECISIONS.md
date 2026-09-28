@@ -5945,6 +5945,39 @@ The rest sits in the host rows, 0.04 ms on `integrate` and 0.02 ms on
 `allocate`: the two calls that now stage a host depth frame, which a device
 frame from `GpuFramePrep` skips. Not yet split further.
 
+**The review of step 2** measured its `MeshIntegrator` findings on the
+81 920-triangle sphere (Release, medians of ten), and the counter it tried on
+room0:
+
+| | 5090 | M5 Max |
+|---|---|---|
+| one submission per split, 16 384 slots | 7.7 → 8.4 ms | 12.4 → 12.6 ms |
+| counts read back without coordinates, 393 216 slots | 11.6 → 10.1 ms | 14.4 → 14.4 ms |
+| a dirty counter in the kernel, `integrate` device | | 0.12 → 0.15 ms |
+
+- `MeshIntegrator` had folded its split write into one submission, so
+  `kMaxDispatchBinEntries` no longer bounded one. Each dispatch is submitted
+  on its own again, the fill and uploads riding the first, and `dispatches`
+  is counted at the submit. The first row is its price.
+- Its count pass read back each slot's coordinate beside its count. The
+  integrate pass reads them on the device, so 4 B a slot comes back, not 16.
+- `reset_dirty` un-anchored before it cleared, so the next fuse cleared the
+  flags again, and a failed clear left them un-anchored but set. It clears
+  first, and a fuse clears only flags anchored to another grid. It is
+  `[[nodiscard]]`, since it used to return nothing.
+- `DeviceBlockList` was a bare handle. It carries the epoch and a compaction
+  serial, and `check_device_block_list` refuses it after a compaction,
+  resize, remove, clear or move (the 2026-08-04 rule).
+- Not changed: `dirty_block_count` reads the flags back. A counter the kernel
+  bumps per newly set flag cost every tracked fuse the last row, the
+  incremental extract's included, which never reads it. A `TODO(tsdf)` holds
+  an on-demand count.
+- Not changed: a host frame is staged per call. Staging it once for both
+  `allocate` and `integrate` takes a submit of its own, which costs more than
+  the 0.06 ms both stagings take on the Mac.
+- The deferred work is greppable again: `TODO(volume)` for the extract's list,
+  `TODO(tsdf)` for the indirect dispatch.
+
 `dispatch()` is unchanged. `submit_single_time` still allocates a command
 buffer and a fence per submit; reusing them is a `TODO(core)` for when a tier
 measures it.

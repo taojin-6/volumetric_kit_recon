@@ -148,8 +148,9 @@ class VR_TSDF_API TsdfIntegrator {
   /// @brief Integrate one posed depth frame into @p grid's active blocks.
   /// @param grid        The block grid; must carry `float` `tsdf` + `weight`
   ///                    attributes (see @ref VoxelBlockGrid::create). Its
-  ///                    active set (@ref VoxelHashMap::compact_active_blocks)
-  ///                    is fused.
+  ///                    active set (@ref
+  ///                    VoxelHashMap::compact_active_blocks_on_device) is
+  ///                    fused.
   /// @param depth       Row-major depth image in **metres**, length
   ///                    `cam.width * cam.height` (the host applies any raw
   ///                    sensor depth-scale first, as @ref
@@ -198,10 +199,11 @@ class VR_TSDF_API TsdfIntegrator {
   ///
   ///                  A fuse runs *two* dispatches, so the second -- the active
   ///                  set's compaction (@ref
-  ///                  volume::VoxelHashMap::compact_active_blocks) -- reports
-  ///                  itself as a `"  ..active set"` breakdown row beneath this
-  ///                  one. Without it that kernel's device time would fall into
-  ///                  the gap above and read as submit overhead.
+  ///                  volume::VoxelHashMap::compact_active_blocks_on_device) --
+  ///                  reports itself as a `"  ..active set"` breakdown row
+  ///                  beneath this one. Without it that kernel's device time
+  ///                  would fall into the gap above and read as submit
+  ///                  overhead.
   /// @return OK on success, or a non-OK @ref Status:
   ///         @ref Status::Code::InvalidArgument if the integrator is
   ///         moved-from, @p depth is null, @p grid lacks a `float`
@@ -271,8 +273,9 @@ class VR_TSDF_API TsdfIntegrator {
   ///        change (see @ref dirty_remesh_blocks).
   ///
   /// @warning Not synchronized; see @ref dirty_block_count.
-  /// @return OK, or the clear's failure on the device.
-  Status reset_dirty();
+  /// @return OK, or the clear's failure on the device, which leaves the flags
+  ///         as they were.
+  [[nodiscard]] Status reset_dirty();
 
   /// @brief The device buffer holding one flag per block slot, for a consumer
   ///        that tests it on-device instead of taking @ref dirty_remesh_blocks

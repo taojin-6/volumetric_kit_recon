@@ -542,7 +542,8 @@ int main() {
 
   // ---- 7. A write past one dispatch's budget is split, and still exact ---
   // A metre-square sheet of 2.5 mm cells: bins of thousands, and more bin
-  // entries in all than one dispatch may measure.
+  // entries in all than one dispatch may measure. `dispatches` counts the
+  // submissions, one per dispatch, so at least as many as the budget needs.
   {
     const float sx0 = -0.487f, sx1 = 0.513f, sy0 = -0.493f, sy1 = 0.507f;
     const Mesh sheet = divided_quad(sx0, sx1, sy0, sy1, z0, 400);
@@ -554,6 +555,9 @@ int main() {
     }
     CHECK(sheet_stats.value().bin_entries >
           ts::MeshIntegrator::kMaxDispatchBinEntries);
+    CHECK(std::uint64_t{sheet_stats.value().dispatches} *
+              ts::MeshIntegrator::kMaxDispatchBinEntries >=
+          sheet_stats.value().bin_entries);
     CHECK(sheet_stats.value().dispatches > 1);
     CHECK(sheet_stats.value().blocks == active_blocks(grid).size());
     if (verify(ctx, grid, "signed divided sheet", [&](vr::Vec3f p) {

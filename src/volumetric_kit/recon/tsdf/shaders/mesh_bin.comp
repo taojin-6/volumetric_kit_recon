@@ -17,8 +17,9 @@
 //            item_slot[gid]: the block's heap SLOT (ptr / voxels_per_block),
 //            or kNoSlot for an item the band test prunes. It counts the
 //            triangle into counts[slot] and stores the block's coordinate in
-//            slot_coord[slot], so the host learns which blocks to write
-//            without a compaction (every item of a slot stores the same
+//            slot_coord[slot], so the host learns which blocks to write from
+//            the counts, without a compaction, and the integrate pass reads
+//            where each is (every item of a slot stores the same
 //            coordinate). An item whose band block the table does not hold
 //            adds 1 to `missing` instead -- one per (triangle, block) pair, not
 //            per block -- which the host reads, and refuses, before anything is

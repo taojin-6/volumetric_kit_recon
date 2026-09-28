@@ -57,7 +57,6 @@ struct IntegratePush {
   float shell;
 };
 struct MeshBin {
-  Vec3i coord;
   std::int32_t ptr;
   std::uint32_t begin;
   std::uint32_t count;
@@ -75,10 +74,9 @@ static_assert(offsetof(IntegratePush, mode) == 40,
               "IntegratePush layout drift");
 static_assert(offsetof(IntegratePush, shell) == 44,
               "IntegratePush layout drift");
-static_assert(sizeof(MeshBin) == 24, "MeshBin must be 24 bytes");
-static_assert(offsetof(MeshBin, ptr) == 12, "MeshBin layout drift");
-static_assert(offsetof(MeshBin, begin) == 16, "MeshBin layout drift");
-static_assert(offsetof(MeshBin, count) == 20, "MeshBin layout drift");
+static_assert(sizeof(MeshBin) == 12, "MeshBin must be 12 bytes");
+static_assert(offsetof(MeshBin, begin) == 4, "MeshBin layout drift");
+static_assert(offsetof(MeshBin, count) == 8, "MeshBin layout drift");
 
 std::uint32_t group_count(std::uint32_t items) {
   return volumetric_kit::recon::group_count(items, kLocalSize);
@@ -95,8 +93,8 @@ Result<MeshIntegrator> MeshIntegrator::create(Device& device,
   // mesh_bin takes 9 storage buffers: 0 hash entries, 1 vertices, 2 indices,
   // 3 candidate offsets, 4 per-slot counts then cursors, 5 per-item slots,
   // 6 per-slot coordinates, 7 missing-block counter, 8 bins. mesh_integrate
-  // takes 6: 0 tsdf, 1 weight, 2 vertices, 3 indices, 4 block bins, 5 bins.
-  // These counts and the shaders move together.
+  // takes 7: 0 tsdf, 1 weight, 2 vertices, 3 indices, 4 block bins, 5 bins,
+  // 6 per-slot coordinates. These counts and the shaders move together.
   VkPushConstantRange bin_range{};
   bin_range.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
   bin_range.size = sizeof(BinPush);
@@ -107,7 +105,7 @@ Result<MeshIntegrator> MeshIntegrator::create(Device& device,
   VR_TRY(kb.add(integ.bin_, "tsdf_mesh_bin", vr_mesh_bin_comp_spv,
                 vr_mesh_bin_comp_spv_size, 9, &bin_range));
   VR_TRY(kb.add(integ.integrate_, "tsdf_mesh_integrate",
-                vr_mesh_integrate_comp_spv, vr_mesh_integrate_comp_spv_size, 6,
+                vr_mesh_integrate_comp_spv, vr_mesh_integrate_comp_spv_size, 7,
                 &integrate_range));
   VR_ASSIGN(integ.pool_, kb.build());
 
@@ -226,7 +224,8 @@ Result<MeshIntegrateStats> MeshIntegrator::integrate(
   // counts are the ones that mattered: host-visible, the count and fill
   // passes took their per-item atomics across PCIe on a discrete GPU -- 115 ms
   // and 143 ms for a 320 000-triangle sheet on an RTX 5090, against ~5 ms on
-  // an M5 Max (2026-09-28). The host reads them back once, between the passes.
+  // an M5 Max (2026-09-28). The host reads them back once, between the passes;
+  // the coordinates stay on the device for the integrate pass.
   VR_ASSIGN(Buffer vertex_buf,
             device_storage_buffer(*allocator_, vertex_bytes));
   VR_ASSIGN(Buffer index_buf, device_storage_buffer(*allocator_, index_bytes));
@@ -259,7 +258,6 @@ Result<MeshIntegrateStats> MeshIntegrator::integrate(
   // anything: a band block the table does not hold would leave that part of
   // the surface unwritten, so it is refused here rather than holed later.
   std::vector<std::uint32_t> counts(num_blocks);
-  std::vector<Vec3i> coords(num_blocks);
   std::uint32_t missing = 0;
   {
     CommandBatch batch(*device_, *allocator_);
@@ -274,7 +272,6 @@ Result<MeshIntegrateStats> MeshIntegrator::integrate(
                           &stage));
     VR_TRY(batch.readback(missing_, 0, sizeof(missing), &missing));
     VR_TRY(batch.readback(count_buf, 0, count_bytes, counts.data()));
-    VR_TRY(batch.readback(coord_buf, 0, coord_bytes, coords.data()));
     VR_TRY(batch.submit());
   }
   if (missing != 0) {
@@ -289,8 +286,7 @@ Result<MeshIntegrateStats> MeshIntegrator::integrate(
 
   // Each slot's bin as a range of one concatenated array, in one pass: the
   // counts are rewritten as each bin's first entry, which the fill pass then
-  // advances as its cursor, and every binned slot becomes a block to write, at
-  // the coordinate the count pass found it at.
+  // advances as its cursor, and every binned slot becomes a block to write.
   const auto vpb = static_cast<std::uint32_t>(g.voxels_per_block);
   std::vector<MeshBin> blocks;
   std::uint64_t bin_entries = 0;
@@ -299,7 +295,7 @@ Result<MeshIntegrateStats> MeshIntegrator::integrate(
     const std::uint32_t count = counts[s];
     counts[s] = static_cast<std::uint32_t>(bin_entries);
     if (count == 0) continue;
-    blocks.push_back(MeshBin{coords[s], static_cast<std::int32_t>(s * vpb),
+    blocks.push_back(MeshBin{static_cast<std::int32_t>(s * vpb),
                              static_cast<std::uint32_t>(bin_entries), count});
     largest_bin = std::max(largest_bin, count);
     bin_entries += count;
@@ -348,17 +344,11 @@ Result<MeshIntegrateStats> MeshIntegrator::integrate(
                            debug_object_handle(bins_buf.handle()),
                            "tsdf.mesh_bins");
 
-  // Fill, then write: one batch, the cursors and the block list uploaded
-  // first. The descriptor writes all precede the dispatches that bind them.
-  CommandBatch batch(*device_, *allocator_);
-  VR_TRY(batch.upload(count_buf, 0, counts.data(), count_bytes));
-  VR_TRY(batch.upload(block_buf, 0, blocks.data(), block_bytes));
+  // Fill, then write, one submission per integrate dispatch: the split bounds
+  // what one submission runs, so one batch must not rejoin it. The first also
+  // carries the cursors, the block list and the fill. The descriptor writes
+  // all precede the dispatches that bind them.
   bin_.set.write_storage_buffer(8, bins_buf.handle(), 0, VK_WHOLE_SIZE);
-  const BinPush fill_push{g, triangle_count, kPassFill};
-  VR_TRY(batch.dispatch(bin_, &fill_push, sizeof(fill_push),
-                        group_count(work_items), max_workgroup_count_x_,
-                        &stage));
-
   integrate_.set.write_storage_buffer(0, tsdf_view.buffer->handle(), 0,
                                       VK_WHOLE_SIZE);
   integrate_.set.write_storage_buffer(1, weight_view.buffer->handle(), 0,
@@ -367,7 +357,9 @@ Result<MeshIntegrateStats> MeshIntegrator::integrate(
   integrate_.set.write_storage_buffer(3, index_buf.handle(), 0, VK_WHOLE_SIZE);
   integrate_.set.write_storage_buffer(4, block_buf.handle(), 0, VK_WHOLE_SIZE);
   integrate_.set.write_storage_buffer(5, bins_buf.handle(), 0, VK_WHOLE_SIZE);
+  integrate_.set.write_storage_buffer(6, coord_buf.handle(), 0, VK_WHOLE_SIZE);
 
+  const BinPush fill_push{g, triangle_count, kPassFill};
   for (std::size_t first = 0; first < blocks.size();) {
     std::size_t end = first + 1;
     std::uint64_t entries = blocks[first].count;
@@ -376,16 +368,24 @@ Result<MeshIntegrateStats> MeshIntegrator::integrate(
       entries += blocks[end].count;
       ++end;
     }
+    CommandBatch batch(*device_, *allocator_);
+    if (first == 0) {
+      VR_TRY(batch.upload(count_buf, 0, counts.data(), count_bytes));
+      VR_TRY(batch.upload(block_buf, 0, blocks.data(), block_bytes));
+      VR_TRY(batch.dispatch(bin_, &fill_push, sizeof(fill_push),
+                            group_count(work_items), max_workgroup_count_x_,
+                            &stage));
+    }
     const auto n = static_cast<std::uint32_t>(end - first);
     const IntegratePush push{g, static_cast<std::uint32_t>(first), n,
                              static_cast<std::uint32_t>(params.mode),
                              is_signed ? 0.0f : shell_m};
     VR_TRY(batch.dispatch(integrate_, &push, sizeof(push), group_count(n * vpb),
                           max_workgroup_count_x_, &stage));
+    VR_TRY(batch.submit());
     ++stats.dispatches;
     first = end;
   }
-  VR_TRY(batch.submit());
 
   stats.blocks = static_cast<std::uint32_t>(blocks.size());
   stats.bin_entries = static_cast<std::uint32_t>(bin_entries);

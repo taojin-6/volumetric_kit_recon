@@ -309,6 +309,8 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid,
   // is invisible and the gap between integrate's two halves reads as submit
   // overhead when a good part of it is another kernel. Nothing to fuse into an
   // empty grid.
+  // TODO(tsdf): dispatch indirect off the device count, saving the fence wait
+  // between the two submits, if a host row shows that wait.
   VR_ASSIGN(const volume::DeviceBlockList active,
             grid.map().compact_active_blocks_on_device(metrics));
   if (active.count == 0) {
@@ -316,7 +318,7 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid,
   }
 
   // One thread per voxel of every active block. The flattened thread count must
-  // fit a uint32; the batch caps groupCountX at the device limit.
+  // fit a uint32; the batch refuses a groupCountX past the device limit.
   const VoxelGridParams& grid_params = grid.grid();
   const std::uint64_t threads64 =
       static_cast<std::uint64_t>(active.count) *
@@ -357,7 +359,8 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid,
   kernel_.set.write_storage_buffer(1, weight_view.buffer->handle(), 0,
                                    VK_WHOLE_SIZE);
   kernel_.set.write_storage_buffer(
-      2, active.buffer, 0, VkDeviceSize(active.count) * sizeof(BlockIndex));
+      2, active.buffer->handle(), 0,
+      VkDeviceSize(active.count) * sizeof(BlockIndex));
   // The images' exact ranges, never VK_WHOLE_SIZE: a caller's buffer may be
   // past maxStorageBufferRange where the image it holds is not.
   kernel_.set.write_storage_buffer(3, depth_handle, 0, depth_bytes);
@@ -444,8 +447,12 @@ Status TsdfIntegrator::prepare_dirty_flags(const VoxelBlockGrid& grid) {
     // top of another's -- which is what silently happened while one integrator
     // driving several grids was untracked. Reset rather than refuse: the flags
     // this call is about to set ARE valid for `grid`, and refusing would bind
-    // an integrator to one grid for its whole life.
-    VR_TRY(reset_dirty());
+    // an integrator to one grid for its whole life. Un-anchored, they are
+    // clear already: reset_dirty() clears before it un-anchors, and a fresh
+    // array is zeroed below.
+    if (dirty_grid_ != nullptr) {
+      VR_TRY(reset_dirty());
+    }
     dirty_grid_ = &grid;
     dirty_epoch_ = grid.topology_epoch();
   } else if (grid.topology_epoch() != dirty_epoch_) {
@@ -520,6 +527,9 @@ Result<std::vector<std::uint32_t>> TsdfIntegrator::read_dirty_flags() const {
 }
 
 Result<std::uint32_t> TsdfIntegrator::dirty_block_count() const {
+  // TODO(tsdf): count on the device, on demand, if a caller shows this
+  // readback. A counter in the fuse kernel cost every tracked fuse 0.03 ms
+  // (room0, M5 Max).
   if (!dirty_blocks_.valid()) return std::uint32_t{0};
   VR_ASSIGN(const std::vector<std::uint32_t> flags, read_dirty_flags());
   std::uint32_t count = 0;
@@ -543,7 +553,7 @@ Result<std::vector<Vec3i>> TsdfIntegrator::dirty_remesh_blocks(
   }
   // Nothing accumulated: before the first integrate, after a reset_dirty(), or
   // on a moved-from integrator (whose scalar capacity survives the move while
-  // the mapping does not).
+  // the buffer does not).
   if (dirty_grid_ == nullptr || !dirty_blocks_.valid()) {
     return std::vector<Vec3i>{};
   }
@@ -604,6 +614,15 @@ Result<std::vector<Vec3i>> TsdfIntegrator::dirty_remesh_blocks(
 }
 
 Status TsdfIntegrator::reset_dirty() {
+  // Cleared first, so a failed clear leaves the flags anchored to what they
+  // still describe, rather than un-anchored over bits that were never cleared.
+  if (dirty_blocks_.valid()) {
+    CommandBatch batch(*device_, *allocator_);
+    VR_TRY(batch.fill(dirty_blocks_, 0,
+                      VkDeviceSize(dirty_capacity_) * sizeof(std::uint32_t),
+                      0u));
+    VR_TRY(batch.submit());
+  }
   dirty_topology_stale_ = false;
   // Un-anchor: the next integrate() re-anchors on whatever grid it is handed.
   // Done here rather than by re-reading the grid because this holds the grid
@@ -611,11 +630,7 @@ Status TsdfIntegrator::reset_dirty() {
   // destroyed it.
   dirty_grid_ = nullptr;
   dirty_epoch_ = 0;
-  if (!dirty_blocks_.valid()) return {};
-  CommandBatch batch(*device_, *allocator_);
-  VR_TRY(batch.fill(dirty_blocks_, 0,
-                    VkDeviceSize(dirty_capacity_) * sizeof(std::uint32_t), 0u));
-  return batch.submit();
+  return {};
 }
 
 }  // namespace volumetric_kit::recon::tsdf
