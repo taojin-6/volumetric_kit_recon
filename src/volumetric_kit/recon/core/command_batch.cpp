@@ -193,6 +193,21 @@ Status CommandBatch::fill(const Buffer& dst, VkDeviceSize offset,
   return {};
 }
 
+Status CommandBatch::zero(const Buffer& dst, VkDeviceSize offset,
+                          VkDeviceSize bytes) {
+  static constexpr unsigned char kZeros[4] = {};
+  VR_TRY(check(usable()));
+  if (bytes == 0) return {};
+  VR_TRY(check(in_range(dst, offset, bytes, "zero")));
+  const VkDeviceSize end = offset + bytes;
+  const VkDeviceSize first_word =
+      std::min((offset + 3) & ~VkDeviceSize{3}, end);
+  const VkDeviceSize last_word = std::max(end & ~VkDeviceSize{3}, first_word);
+  VR_TRY(upload(dst, offset, kZeros, first_word - offset));
+  VR_TRY(fill(dst, first_word, last_word - first_word, 0u));
+  return upload(dst, last_word, kZeros, end - last_word);
+}
+
 Status CommandBatch::copy(const Buffer& src, VkDeviceSize src_offset,
                           const Buffer& dst, VkDeviceSize dst_offset,
                           VkDeviceSize bytes) {
@@ -336,6 +351,20 @@ bool CommandBatch::needs_barrier(std::size_t first, std::size_t i) const {
     return buffer != VK_NULL_HANDLE && (op.src == buffer || op.dst == buffer);
   };
   const Op& b = ops_[i];
+  // A fill or inline upload that starts past the end of the one before it, in
+  // the same buffer, reads nothing and writes no byte the run has: the run's
+  // first write there was checked against all of it. So zeroing thousands of
+  // scattered blocks is one run, and costs no scan of it per fill.
+  const auto plain = [](const Op& op) {
+    return op.kind == Kind::Fill || op.kind == Kind::Update;
+  };
+  if (i > first) {
+    const Op& prev = ops_[i - 1];
+    if (plain(prev) && plain(b) && prev.dst == b.dst &&
+        b.dst_offset >= prev.dst_offset + prev.bytes) {
+      return false;
+    }
+  }
   for (std::size_t j = first; j < i; ++j) {
     const Op& a = ops_[j];
     if (dispatches(a) || dispatches(b) || touches(a, written(b)) ||

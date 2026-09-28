@@ -530,7 +530,9 @@ arbitrary; it usually isn't.
   dispatches (indirect too) and readbacks in one command buffer, one fence
   wait, spans and labels kept. A barrier goes wherever a command could see an
   earlier one's writes: around every dispatch, and between two transfers
-  only when they share a buffer one writes. `dispatch()` is a batch of one.
+  only when they share a buffer one writes, unless they are fills or inline
+  uploads rising through it without overlap. `zero` clears a range at any
+  alignment. `dispatch()` is a batch of one.
   An upload of up to 64 KiB, 4-byte aligned, goes inline
   (`vkCmdUpdateBuffer`) and a larger one through a staging buffer the batch
   allocates; readbacks, which are small results, land in one host buffer
@@ -629,15 +631,19 @@ arbitrary; it usually isn't.
   independently-allocated SoA attribute arrays (`tsdf`, `weight`, `color`, …),
   each `num_blocks·voxels_per_block`, so a consumer materialises only what it
   needs. Every buffer of both is device-local, reached through a
-  `CommandBatch`: `create`, `clear` and `remove` zero on the device, `resize`
-  copies there, and a call reads back only its counts (the 2026-09-28
-  residency decision). `topology_epoch()` lives on the *map* — the object that frees a block
+  `CommandBatch`: `create`, `clear` and `remove` zero on the device (`clear`
+  and `remove` before any index is freed), `resize` copies there, a call's
+  inputs are uploaded in its first round, and a round reads back its counts.
+  A compaction still reads its list back, in the count's own submit while the
+  set stays within a quarter past its last count (the 2026-09-28 residency
+  decision). `topology_epoch()` lives on the *map* — the object that frees a block
   index — and is a globally unique token re-drawn at `create` and at every
   `remove`/`clear`, never at `resize`: a slot-keyed cache (tsdf's dirty flags,
   mesh's spans) anchors on it, so no path may free an index without moving it
   and no two grids may ever share a value. Host `diagnostics()` scans occupancy;
   `load_factor()` is the constant-time read a per-frame caller can afford (a
-  host copy of the heap counter, read back by every round that moves it), and
+  host copy of the heap counter, read back by every round that moves it, which
+  `diagnostics()` checks against the device's own), and
   `kGrowThreshold` is the occupancy it says to grow at — named here so a UI or
   an embedder cannot draw a ceiling that disagrees with it. Opt-in
   `StageMetrics*` on `allocate_from_depth` (an `"allocate"` row summing every

@@ -38,8 +38,10 @@ struct ComputeKernel;
 /// writes -- always around a dispatch, and between two transfers when they
 /// share a buffer one of them writes -- and the last makes everything visible
 /// to the host and to a renderer drawing the result, as far as the queue
-/// family allows. Kernels keep their debug-utils regions and their
-/// @ref GpuStageScope spans. `dispatch()` is a batch of one dispatch.
+/// family allows. Fills and inline uploads into one buffer at rising,
+/// disjoint offsets touch no byte twice, so a run of them needs none. Kernels
+/// keep their debug-utils regions and their @ref GpuStageScope spans.
+/// `dispatch()` is a batch of one dispatch.
 ///
 /// **Host bytes cross only at the edges, and each way has one path.** An
 /// @ref upload of up to 64 KiB, 4-byte aligned -- a frame's parameters -- is
@@ -116,6 +118,15 @@ class VR_CORE_API CommandBatch {
   ///         missing usage bit; or a poisoned batch's first refusal.
   Status fill(const Buffer& dst, VkDeviceSize offset, VkDeviceSize bytes,
               std::uint32_t value);
+
+  /// @brief Set @p bytes of @p dst at @p offset to zero, at any alignment:
+  ///        a @ref fill for the whole words, an @ref upload for an unaligned
+  ///        edge.
+  /// @param dst     Needs `TRANSFER_DST` usage.
+  /// @param offset  Byte offset into @p dst.
+  /// @param bytes   How many; 0 records nothing.
+  /// @return As @ref fill and @ref upload.
+  Status zero(const Buffer& dst, VkDeviceSize offset, VkDeviceSize bytes);
 
   /// @brief Copy @p bytes from @p src to @p dst on the device.
   /// @param src         Needs `TRANSFER_SRC` usage.

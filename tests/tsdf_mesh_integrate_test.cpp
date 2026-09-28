@@ -174,21 +174,19 @@ std::vector<vol::BlockIndex> active_blocks(vol::VoxelBlockGrid& grid) {
   return a.ok() ? std::move(a).value() : std::vector<vol::BlockIndex>{};
 }
 
-// The device the grid lives on, for attr().
-const vr::Device* g_device = nullptr;
-vr::Allocator* g_allocator = nullptr;
-
 // A host copy of one attribute.
-std::vector<float> attr(vol::VoxelBlockGrid& grid, const char* name) {
-  return vr_test::read_attribute<float>(*g_device, *g_allocator, grid, name)
+std::vector<float> attr(const vr_test::Gpu& ctx, vol::VoxelBlockGrid& grid,
+                        const char* name) {
+  return vr_test::read_attribute<float>(ctx.device, ctx.allocator, grid, name)
       .value();
 }
 
 // Every tsdf + weight value, so a refusal can be shown to have written none.
-std::vector<float> snapshot(vol::VoxelBlockGrid& grid) {
+std::vector<float> snapshot(const vr_test::Gpu& ctx,
+                            vol::VoxelBlockGrid& grid) {
   std::vector<float> out;
   for (const char* name : {"tsdf", "weight"}) {
-    const std::vector<float> p = attr(grid, name);
+    const std::vector<float> p = attr(ctx, grid, name);
     out.insert(out.end(), p.begin(), p.end());
   }
   return out;
@@ -196,10 +194,11 @@ std::vector<float> snapshot(vol::VoxelBlockGrid& grid) {
 
 // Each written block's voxels, keyed by coordinate: the heap hands a block a
 // different slot in each grid, so bytes are compared block by block.
-std::map<Coord, std::vector<float>> by_coord(vol::VoxelBlockGrid& grid) {
+std::map<Coord, std::vector<float>> by_coord(const vr_test::Gpu& ctx,
+                                             vol::VoxelBlockGrid& grid) {
   std::map<Coord, std::vector<float>> out;
-  const std::vector<float> tsdf = attr(grid, "tsdf");
-  const std::vector<float> weight = attr(grid, "weight");
+  const std::vector<float> tsdf = attr(ctx, grid, "tsdf");
+  const std::vector<float> weight = attr(ctx, grid, "weight");
   const int vpb = grid.grid().voxels_per_block;
   for (const vol::BlockIndex& b : active_blocks(grid)) {
     std::vector<float>& vals = out[{b.coord.x, b.coord.y, b.coord.z}];
@@ -220,11 +219,11 @@ struct Expect {
 
 // Compare every voxel of every allocated block with `expect(p)`.
 template <class F>
-int verify(vol::VoxelBlockGrid& grid, const char* what, F expect,
-           int* observed_count = nullptr) {
+int verify(const vr_test::Gpu& ctx, vol::VoxelBlockGrid& grid, const char* what,
+           F expect, int* observed_count = nullptr) {
   const vol::VoxelGridParams& g = grid.grid();
-  const std::vector<float> tsdf = attr(grid, "tsdf");
-  const std::vector<float> weight = attr(grid, "weight");
+  const std::vector<float> tsdf = attr(ctx, grid, "tsdf");
+  const std::vector<float> weight = attr(ctx, grid, "weight");
   int observed = 0;
   for (const vol::BlockIndex& b : active_blocks(grid)) {
     const vr::Vec3i base = vol::block_to_voxel(b.coord, g);
@@ -344,8 +343,7 @@ int main() {
       vr::Allocator::create(instance.value().handle(), device);
   CHECK(allocator_r.ok());
   vr::Allocator& allocator = allocator_r.value();
-  g_device = &device;
-  g_allocator = &allocator;
+  const vr_test::Gpu ctx{device, allocator};
 
   // 10 mm voxels in 8-voxel blocks, a 40 mm (4-voxel) band: coarse enough that
   // the brute-force reference stays quick, with a band several voxels deep.
@@ -406,7 +404,7 @@ int main() {
   int tet_observed = 0;
   int tet_sign_checked = 0;
   if (verify(
-          grid, "signed tetrahedron",
+          ctx, grid, "signed tetrahedron",
           [&](vr::Vec3f p) {
             const Expect e = signed_closed(p, tet, trunc);
             if (!e.skip && e.observed && !e.magnitude_only) ++tet_sign_checked;
@@ -421,19 +419,19 @@ int main() {
   CHECK(tet_sign_checked < tet_observed);  // the sharp edges are exercised
 
   // ---- 2. Same mesh, same bytes ------------------------------------------
-  const std::map<Coord, std::vector<float>> tet_bytes = by_coord(grid);
+  const std::map<Coord, std::vector<float>> tet_bytes = by_coord(ctx, grid);
   CHECK(integ
             .integrate(grid, tet.v.data(), tet.vertex_count(), tet.i.data(),
                        tet.triangle_count(), kSigned)
             .ok());
-  CHECK(by_coord(grid) == tet_bytes);
+  CHECK(by_coord(ctx, grid) == tet_bytes);
 
   // ---- 3. A soup writes the same bytes as its indexed mesh -------------
   // The same triangles in the same order at the same positions: nothing
   // reads the indices but to fetch a position.
   const Mesh tet_soup = soup(tet);
   CHECK(convert(tet_soup, kSigned).ok());
-  CHECK(by_coord(grid) == tet_bytes);
+  CHECK(by_coord(ctx, grid) == tet_bytes);
 
   // So do negated zeros, which an exporter that computes one corner as 0 - 0
   // and another as 0 * -1 writes: -0.0 is the same position as +0.0. A
@@ -441,7 +439,7 @@ int main() {
   // triangle's zeros negated.
   const Mesh zeros = tetrahedron(vr::Vec3f(0.1f, 0.1f, 0.1f), 0.1f);
   CHECK(convert(zeros, kSigned).ok());
-  const std::map<Coord, std::vector<float>> zeros_bytes = by_coord(grid);
+  const std::map<Coord, std::vector<float>> zeros_bytes = by_coord(ctx, grid);
   Mesh zeros_soup = soup(zeros);
   int negated = 0;
   for (int k = 0; k < 3; ++k) {
@@ -454,14 +452,14 @@ int main() {
   }
   CHECK(negated > 0);
   CHECK(convert(zeros_soup, kSigned).ok());
-  CHECK(by_coord(grid) == zeros_bytes);
+  CHECK(by_coord(ctx, grid) == zeros_bytes);
 
   // ---- 4. Signed dented cube: concave edges and a concave vertex ---------
   const Mesh cube = dented_cube(vr::Vec3f(0.013f, -0.021f, 0.017f), 0.3f);
   vr::Result<ts::MeshIntegrateStats> cube_stats = convert(cube, kSigned);
   CHECK(cube_stats.ok());
   CHECK(cube_stats.value().triangles == 12);
-  if (verify(grid, "signed dented cube",
+  if (verify(ctx, grid, "signed dented cube",
              [&](vr::Vec3f p) { return signed_closed(p, cube, trunc); }) != 0) {
     return 1;
   }
@@ -478,7 +476,7 @@ int main() {
   CHECK(convert(quad, kSigned).ok());
   int quad_observed = 0;
   if (verify(
-          grid, "signed open quad",
+          ctx, grid, "signed open quad",
           [&](vr::Vec3f p) {
             return signed_sheets(p, {{x0, x1, y0, y1}}, z0, trunc);
           },
@@ -503,7 +501,7 @@ int main() {
       return e;
     };
   };
-  if (verify(grid, "shell open quad", shell_expect(quad)) != 0) return 1;
+  if (verify(ctx, grid, "shell open quad", shell_expect(quad)) != 0) return 1;
 
   // A triangle under a millimetre across, centred under a voxel column, so
   // that column's closest points lie inside it. Its |ab x ac|^2 is ~4e-13
@@ -517,8 +515,8 @@ int main() {
               {0.03f + 0.8660254f * r, 0.04f - 0.5f * r, zt}};
     tiny.i = {0, 1, 2};
     CHECK(convert(tiny, kShell).ok());
-    if (verify(grid, "shell sub-millimetre triangle", shell_expect(tiny)) !=
-        0) {
+    if (verify(ctx, grid, "shell sub-millimetre triangle",
+               shell_expect(tiny)) != 0) {
       return 1;
     }
   }
@@ -526,10 +524,10 @@ int main() {
   // Around a closed solid the shell has two walls: an outer one, and an inner
   // one the same distance inside, with positive voxels deeper still.
   CHECK(convert(tet, kShell).ok());
-  if (verify(grid, "shell tetrahedron", shell_expect(tet)) != 0) return 1;
+  if (verify(ctx, grid, "shell tetrahedron", shell_expect(tet)) != 0) return 1;
   {
     int deep_inside_positive = 0;
-    if (verify(grid, "shell inner wall", [&](vr::Vec3f p) {
+    if (verify(ctx, grid, "shell inner wall", [&](vr::Vec3f p) {
           Expect e = shell_expect(tet)(p);
           if (!e.skip && e.observed && e.value > 0.0f &&
               winding(p, tet) > 0.5) {
@@ -558,7 +556,7 @@ int main() {
           ts::MeshIntegrator::kMaxDispatchBinEntries);
     CHECK(sheet_stats.value().dispatches > 1);
     CHECK(sheet_stats.value().blocks == active_blocks(grid).size());
-    if (verify(grid, "signed divided sheet", [&](vr::Vec3f p) {
+    if (verify(ctx, grid, "signed divided sheet", [&](vr::Vec3f p) {
           return signed_sheets(p, {{sx0, sx1, sy0, sy1}}, z0, trunc);
         }) != 0) {
       return 1;
@@ -573,8 +571,8 @@ int main() {
   for (const vol::BlockIndex& b : active_blocks(grid)) far_ptr = b.ptr;
   CHECK(far_ptr >= 0);
   {
-    std::vector<float> tsdf = attr(grid, "tsdf");
-    std::vector<float> weight = attr(grid, "weight");
+    std::vector<float> tsdf = attr(ctx, grid, "tsdf");
+    std::vector<float> weight = attr(ctx, grid, "weight");
     for (int k = 0; k < gp.voxels_per_block; ++k) {
       tsdf[far_ptr + k] = 7.0f;
       weight[far_ptr + k] = 7.0f;
@@ -593,8 +591,8 @@ int main() {
   CHECK(beside.ok());
   CHECK(beside.value().blocks == active_blocks(grid).size() - 1);
   {
-    const std::vector<float> tsdf = attr(grid, "tsdf");
-    const std::vector<float> weight = attr(grid, "weight");
+    const std::vector<float> tsdf = attr(ctx, grid, "tsdf");
+    const std::vector<float> weight = attr(ctx, grid, "weight");
     for (int k = 0; k < gp.voxels_per_block; ++k) {
       CHECK(tsdf[far_ptr + k] == 7.0f);
       CHECK(weight[far_ptr + k] == 7.0f);
@@ -604,7 +602,7 @@ int main() {
   // ---- 9. Refusals, each before the grid is written ---------------------
   auto refused = [&](const Mesh& m, const ts::MeshSdfParams& params,
                      const char* needle) -> bool {
-    const std::vector<float> before = snapshot(grid);
+    const std::vector<float> before = snapshot(ctx, grid);
     vr::Result<ts::MeshIntegrateStats> r =
         integ.integrate(grid, m.v.data(), m.vertex_count(), m.i.data(),
                         m.triangle_count(), params);
@@ -617,7 +615,7 @@ int main() {
                    r.status().message().c_str(), needle);
       return false;
     }
-    return snapshot(grid) == before;
+    return snapshot(ctx, grid) == before;
   };
 
   // A band that was never allocated.
@@ -671,7 +669,7 @@ int main() {
   CHECK(refused(tet, {ts::MeshSdfMode::Shell, 4.0f}, "shell_voxels"));
   CHECK(refused(tet, {static_cast<ts::MeshSdfMode>(7), 1.5f}, "unknown mode"));
   {
-    const std::vector<float> before = snapshot(grid);
+    const std::vector<float> before = snapshot(ctx, grid);
     CHECK(!integ.integrate(grid, nullptr, 4, tet.i.data(), 4, kSigned).ok());
     CHECK(!integ.integrate(grid, tet.v.data(), 4, nullptr, 4, kSigned).ok());
     const std::uint32_t bad[3] = {0, 1, 4};
@@ -681,7 +679,7 @@ int main() {
         integ.integrate(grid, tet.v.data(), 4, tet.i.data(), 0, kSigned);
     CHECK(none.ok());
     CHECK(none.value().blocks == 0);
-    CHECK(snapshot(grid) == before);
+    CHECK(snapshot(ctx, grid) == before);
   }
   // A grid without a weight attribute.
   {

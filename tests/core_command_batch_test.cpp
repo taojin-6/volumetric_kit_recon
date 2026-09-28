@@ -291,6 +291,43 @@ int main() {
     CHECK(got[kCount / 2 + i] == p[i]);
   }
 
+  // Zero at any alignment: inside one word, both edges off a word, aligned,
+  // ending on a word -- and not a byte either side touched.
+  {
+    const std::vector<std::uint32_t> ones(kCount, 0xFFFFFFFFu);
+    std::vector<unsigned char> bytes(kBytes, 0);
+    vr::CommandBatch batch(device, allocator);
+    CHECK(batch.upload(a, 0, ones.data(), kBytes).ok());
+    CHECK(batch.zero(a, 1, 2).ok());
+    CHECK(batch.zero(a, 7, 10).ok());
+    CHECK(batch.zero(a, 32, 8).ok());
+    CHECK(batch.zero(a, 45, 7).ok());
+    CHECK(batch.readback(a, 0, kBytes, bytes.data()).ok());
+    CHECK(batch.submit().ok());
+    for (VkDeviceSize i = 0; i < kBytes; ++i) {
+      const bool zeroed = (i >= 1 && i < 3) || (i >= 7 && i < 17) ||
+                          (i >= 32 && i < 40) || (i >= 45 && i < 52);
+      CHECK(bytes[i] == (zeroed ? 0 : 0xFF));
+    }
+  }
+
+  // Fills at rising, disjoint offsets share one barrier. One that goes back
+  // over them keeps its barrier and lands second, and a kernel after the run
+  // reads every fill.
+  {
+    vr::CommandBatch batch(device, allocator);
+    for (std::uint32_t i = 0; i < kCount; ++i) {
+      CHECK(batch.fill(a, VkDeviceSize(i) * 4, 4, i).ok());
+    }
+    CHECK(batch.fill(a, 0, 16, 7u).ok());
+    CHECK(add_to(batch, rig, a, 1).ok());
+    CHECK(batch.readback(a, 0, kBytes, got.data()).ok());
+    CHECK(batch.submit().ok());
+    for (std::uint32_t i = 0; i < kCount; ++i) {
+      CHECK(got[i] == (i < 4 ? 7u : i) + 1);
+    }
+  }
+
   // An indirect dispatch sized by a command in a buffer: two of four groups.
   {
     vr::Result<vr::Buffer> args_result =
@@ -438,6 +475,9 @@ int main() {
         [&](vr::CommandBatch& c) { return c.upload(a, 0, nullptr, 4); }));
     CHECK(refused([&](vr::CommandBatch& c) { return c.fill(a, 2, 4, 0); }));
     CHECK(refused([&](vr::CommandBatch& c) { return c.fill(a, 0, 6, 0); }));
+    CHECK(
+        refused([&](vr::CommandBatch& c) { return c.zero(a, kBytes - 2, 4); }));
+    CHECK(refused([&](vr::CommandBatch& c) { return c.zero(bare, 0, 4); }));
     CHECK(refused([&](vr::CommandBatch& c) { return c.copy(a, 0, a, 8, 16); }));
     CHECK(refused([&](vr::CommandBatch& c) {
       return c.readback(a, kBytes - 2, 4, got.data());

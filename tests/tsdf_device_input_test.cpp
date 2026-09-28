@@ -85,20 +85,18 @@ vr::Result<std::map<Coord, std::int32_t>> blocks_of(vol::VoxelBlockGrid& g) {
 }
 
 // The device the grids live on, for the helpers that read them back.
-const vr::Device* g_device = nullptr;
-vr::Allocator* g_allocator = nullptr;
-
 // The two grids' blocks name the same coordinates and hold the same weight in
 // every voxel, and the same tsdf and colour in every observed one (the rest
 // were never written). A slot can differ: allocation order is the GPU's.
-int check_same(vol::VoxelBlockGrid& a, vol::VoxelBlockGrid& b) {
+int check_same(const vr_test::Gpu& ctx, vol::VoxelBlockGrid& a,
+               vol::VoxelBlockGrid& b) {
   auto ba = blocks_of(a);
   auto bb = blocks_of(b);
   CHECK(ba.ok() && bb.ok());
   CHECK(!ba.value().empty());
   CHECK(ba.value().size() == bb.value().size());
-  const auto view = [](vol::VoxelBlockGrid& g, const char* name) {
-    return vr_test::read_attribute<std::uint32_t>(*g_device, *g_allocator, g,
+  const auto view = [&](vol::VoxelBlockGrid& g, const char* name) {
+    return vr_test::read_attribute<std::uint32_t>(ctx.device, ctx.allocator, g,
                                                   name)
         .value();
   };
@@ -154,14 +152,15 @@ struct ColorCounts {
   std::size_t black = 0;
   std::size_t none = 0;
 };
-vr::Result<ColorCounts> color_counts(vol::VoxelBlockGrid& g) {
+vr::Result<ColorCounts> color_counts(const vr_test::Gpu& ctx,
+                                     vol::VoxelBlockGrid& g) {
   VR_ASSIGN(const std::vector<vol::BlockIndex> active,
             g.map().compact_active_blocks());
   VR_ASSIGN(
       const std::vector<float> weight,
-      vr_test::read_attribute<float>(*g_device, *g_allocator, g, "weight"));
+      vr_test::read_attribute<float>(ctx.device, ctx.allocator, g, "weight"));
   VR_ASSIGN(const std::vector<std::uint32_t> color,
-            vr_test::read_attribute<std::uint32_t>(*g_device, *g_allocator, g,
+            vr_test::read_attribute<std::uint32_t>(ctx.device, ctx.allocator, g,
                                                    "color"));
   ColorCounts out;
   for (const vol::BlockIndex& b : active) {
@@ -182,6 +181,7 @@ int test_coverage(vr::Device& dev, vr::Allocator& alloc,
                   tsdf::TsdfIntegrator& integrator,
                   const std::vector<float>& depth,
                   const vr::DepthCameraParams& cam) {
+  const vr_test::Gpu ctx{dev, alloc};
   std::vector<std::uint32_t> color(kWidth * kHeight);
   for (std::uint32_t v = 0; v < kHeight; ++v) {
     for (std::uint32_t u = 0; u < kWidth; ++u) {
@@ -207,7 +207,7 @@ int test_coverage(vr::Device& dev, vr::Allocator& alloc,
               .integrate(grid.value(), depth.data(), cam, 5.0f,
                          tsdf::IntegrationMode::Classic, &frame)
               .ok());
-    auto c = color_counts(grid.value());
+    auto c = color_counts(ctx, grid.value());
     CHECK(c.ok());
     counts[masked] = c.value();
   }
@@ -244,8 +244,7 @@ int main() {
   CHECK(allocator.ok());
   vr::Device& dev = device.value();
   vr::Allocator& alloc = allocator.value();
-  g_device = &dev;
-  g_allocator = &alloc;
+  const vr_test::Gpu ctx{dev, alloc};
 
   // A tilted, rippled surface 0.6-0.8 m away with a colour gradient over it,
   // so allocation and fusion both vary across the image.
@@ -302,7 +301,7 @@ int main() {
                           tsdf::IntegrationMode::Classic, &device_color)
               .ok());
   }
-  if (check_same(host_grid.value(), device_grid.value()) != 0) return 1;
+  if (check_same(ctx, host_grid.value(), device_grid.value()) != 0) return 1;
 
   // A device colour image beside a host depth frame is fine too.
   CHECK(integrator

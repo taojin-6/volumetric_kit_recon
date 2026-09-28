@@ -126,7 +126,7 @@ vr::Status allocate_band(vr::volume::VoxelBlockGrid& grid, const Depth& depth,
           "allocate_band: map cannot grow further without overflowing the "
           "block index");
     }
-    // Report the occupancy alongside the reason: it is a 4-byte read of the
+    // Report the occupancy alongside the reason: it is a host copy of the
     // heap counter (not the O(total slots) diagnostics scan), and it is what
     // says whether this grow was inevitable or premature. A capture-scale
     // consumer should poll it and grow on a threshold instead of waiting for

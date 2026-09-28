@@ -96,12 +96,10 @@ vol::VoxelGridParams sphere_grid_params() {
 enum class Field { kSphere, kDense };
 
 // The device the grids live on, for fill_grid.
-const vr::Device* g_device = nullptr;
-vr::Allocator* g_allocator = nullptr;
-
 // Allocate every block of the cube and write @p field (weight 1) into each
 // voxel, addressed by the compacted BlockIndex::ptr + local index.
-bool fill_grid(vol::VoxelBlockGrid& grid, Field field = Field::kSphere) {
+bool fill_grid(const vr_test::Gpu& ctx, vol::VoxelBlockGrid& grid,
+               Field field = Field::kSphere) {
   std::vector<vol::BlockIndex> blocks;
   for (int cz = 0; cz < kBlocks; ++cz) {
     for (int cy = 0; cy < kBlocks; ++cy) {
@@ -120,9 +118,9 @@ bool fill_grid(vol::VoxelBlockGrid& grid, Field field = Field::kSphere) {
   if (!active) return false;
 
   auto tsdf =
-      vr_test::read_attribute<float>(*g_device, *g_allocator, grid, "tsdf");
+      vr_test::read_attribute<float>(ctx.device, ctx.allocator, grid, "tsdf");
   auto weight =
-      vr_test::read_attribute<float>(*g_device, *g_allocator, grid, "weight");
+      vr_test::read_attribute<float>(ctx.device, ctx.allocator, grid, "weight");
   if (!tsdf || !weight) return false;
   float* tsdf_data = tsdf.value().data();
   float* weight_data = weight.value().data();
@@ -149,10 +147,10 @@ bool fill_grid(vol::VoxelBlockGrid& grid, Field field = Field::kSphere) {
       }
     }
   }
-  return vr_test::write_attribute(*g_device, *g_allocator, grid, "tsdf",
+  return vr_test::write_attribute(ctx.device, ctx.allocator, grid, "tsdf",
                                   tsdf.value())
              .ok() &&
-         vr_test::write_attribute(*g_device, *g_allocator, grid, "weight",
+         vr_test::write_attribute(ctx.device, ctx.allocator, grid, "weight",
                                   weight.value())
              .ok();
 }
@@ -176,8 +174,7 @@ int main() {
   vr::Result<vr::Allocator> allocator =
       vr::Allocator::create(instance.value().handle(), device.value());
   CHECK(allocator.ok());
-  g_device = &device.value();
-  g_allocator = &allocator.value();
+  const vr_test::Gpu ctx{device.value(), allocator.value()};
   vr::Result<mesh::MarchingCubes> extractor_result =
       mesh::MarchingCubes::create(device.value(), allocator.value());
   CHECK(extractor_result.ok());
@@ -193,7 +190,7 @@ int main() {
       device.value(), allocator.value(), sphere_grid_params(), attrs, 2);
   CHECK(grid_result.ok());
   vol::VoxelBlockGrid grid = std::move(grid_result).value();
-  CHECK(fill_grid(grid));
+  CHECK(fill_grid(ctx, grid));
 
   // A camera in front of the sphere looking down +Z (recon's OpenCV
   // convention), with a constant depth at the sphere's near surface: the
@@ -414,7 +411,7 @@ int main() {
         device.value(), allocator.value(), sphere_grid_params(), attrs, 2);
     CHECK(dense_result.ok());
     vol::VoxelBlockGrid dense = std::move(dense_result).value();
-    CHECK(fill_grid(dense, Field::kDense));
+    CHECK(fill_grid(ctx, dense, Field::kDense));
 
     mesh::ExtractTimings before;
     vr::Result<mesh::DeviceMesh> first =

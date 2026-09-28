@@ -19,6 +19,13 @@ namespace vr_test {
 
 namespace vr = volumetric_kit::recon;
 
+// The device and allocator a test runs on, handed to its helpers. Held by
+// reference: main keeps both where it created them.
+struct Gpu {
+  vr::Device& device;
+  vr::Allocator& allocator;
+};
+
 // The first `count` elements of `buffer`, which needs TRANSFER_SRC usage.
 template <typename T>
 vr::Result<std::vector<T>> read_back(const vr::Device& device,
