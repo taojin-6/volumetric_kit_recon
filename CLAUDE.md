@@ -816,7 +816,10 @@ arbitrary; it usually isn't.
   path needs an unshared mesh and refuses a shared one, as it refuses a view
   with no depth range and tiles that overlap (2026-09-28). Opt-in
   `StageMetrics*` on every overload reports a `"texture"` row with both
-  halves.
+  halves. The single-camera `DeviceMesh` pass also takes its depth as a
+  device `Buffer` (a `GpuFramePrep` output), bound in place; every pass is
+  one batch, a host depth frame staged and a host `Mesh` staged up and read
+  back, which is the export path.
 
 - **`sensor`** — the capture *contract*: `ICameraCapture` polled for a
   `CapturedFrame` (frames dropped, not queued) and asked `exhausted()` after
@@ -1103,8 +1106,8 @@ and software decoding at 4K, one thread with little headroom
 synchronised sets.
 
 **Device residency, the steps after `core`** (the 2026-09-28 residency
-decision ranks them): `volume`, `tsdf` and `mesh` are resident; next
-`texture`'s device depth, `sensor`'s outputs and decoded
+decision ranks them): `volume`, `tsdf`, `mesh` and `texture` are resident;
+next `sensor`'s outputs and decoded
 planes, the examples, the codec's coefficients. The benchmark kit that sized
 them sits on the home box in `~/recon-bench` (a throwaway allocator patch
 behind environment variables); re-measure there after each.

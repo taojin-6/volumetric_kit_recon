@@ -6028,6 +6028,27 @@ now reads near zero.
   command read back across empty, real and empty extracts, and an
   `extra_indirect_usage` bit no buffer carries otherwise.
 
+**Step 4, `texture`, has landed.** The single-camera `DeviceMesh` pass takes
+its depth as a device `Buffer` too, a `GpuFramePrep` output bound in place,
+so the online chain (sensor, prep, fuse, extract, texture, draw) keeps a live
+frame on the device end to end. Every pass is one batch: a host depth frame
+staged, the camera inline, the dispatch, and for a host `Mesh` the vertices
+staged up and read back. The camera and the several-view buffers are
+device-local; a view's depth is still a host array, staged per call (a
+`TODO(texture)`). Measured on room0's final mesh (991 k vertices) and last
+frame, Release:
+
+| texture pass, host / device | RTX 5090, step 3 | RTX 5090, step 4 | M5 Max, step 3 | M5 Max, step 4 |
+|---|---|---|---|---|
+| `DeviceMesh`, host depth | 1.31 / 0.50 ms | 0.82 / 0.017 ms | 0.51 / 0.25 ms | 0.49 / 0.23 ms |
+| `DeviceMesh`, device depth | — | 0.58 / 0.017 ms | — | 0.39 / 0.22 ms |
+| host `Mesh` (export) | 28.2 / 10.8 ms | 33.9 / 0.019 ms | 4.2 / 0.39 ms | 9.8 / 0.20 ms |
+
+The host `Mesh` pass is the export path, `fuse_render`'s, and it costs more
+host time for the same reason `download` does: the vertices now go up and
+come back through staging copies. The live pass, `fuse_viewer`'s, is the
+`DeviceMesh` one.
+
 `dispatch()` is unchanged. `submit_single_time` still allocates a command
 buffer and a fence per submit; reusing them is a `TODO(core)` for when a tier
 measures it.

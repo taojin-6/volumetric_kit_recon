@@ -27,8 +27,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   thin shell followed by one over a dense field reaches without a second entry
   point.
 
+### Added
+
+- `texture`: **`ProjectiveTexturer::texture(const DeviceMesh&, const Buffer&
+  depth, ...)`** binds a depth frame already on the device, such as a
+  `GpuFramePrep` output, so a live frame is textured without visiting the host.
+
 ### Changed
 
+- `texture`: **every pass is one batch**: a host depth frame staged, the camera
+  inline, the dispatch, and for a host `Mesh` the vertices staged up and read
+  back. The camera and the several-view pass's buffers are device-local.
 - `mesh`: **the arena, index run and draw command are device-local**, as are
   the tables. Each extract attempt is one batch: the active list staged, the
   command reset inline, the dispatch, the command read back. `download` copies
