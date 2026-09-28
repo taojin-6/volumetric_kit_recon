@@ -457,6 +457,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `volume`: **removing many blocks at once no longer loses them from the free
+  heap.** The delete kernel appended each freed block with a compare-and-swap
+  loop capped at 256 tries, and a thread that ran out dropped its block for
+  good, counted only in `AllocFailures::terminal`. Removing 2 048 of 16 384
+  blocks in one call lost about 960 of them on an M5 Max and 1 100 on an RTX
+  5090, and every such call shrank the grid further; the codec's decoder
+  removes blocks every frame. One `atomicAdd` now claims the slot. The
+  allocate kernels popped the heap with the same loop and reported
+  `kFailHeap`, an empty heap, for one that was only contended: on the 5090,
+  355 of 16 384 blocks failed that way after every retry round with half the
+  heap free, which a caller answers by growing the map. They pop with one
+  `atomicAdd` too.
 - `volume`: **the hash table's bucket locks live in device memory.** They were
   host-visible like every buffer the map owns, so on a discrete GPU each spin
   was an atomic across PCIe. On an RTX 5090, allocating a 5 000-triangle sheet
