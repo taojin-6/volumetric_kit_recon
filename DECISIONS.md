@@ -5529,6 +5529,108 @@ buffer, so a keyframe set that does not change pays for it every call. Views
 are not blended, so exposure differences show as seams between triangles
 textured from different views. A shared mesh waits on a per-triangle tile
 index in gfx.
+### 2026-09-28 — GPU pre-processing is `recon_sensor_utils`: a driver hands out the frame as captured, the device undistorts depth and undistorts and converts colour, and fusion reads the buffers in place, depth and colour each with its own camera rather than registered.
+
+**The rule.** `GpuFramePrep` (`sensor/utils/gpu_frame_prep.hpp`) takes a
+`RawFrame` (`sensor/raw_frame.hpp`): raw depth, the decoded Y'CbCr 4:2:0
+planes, and each camera's `LensCamera` (`sensor/lens.hpp`) and pose. Two
+compute passes undistort depth, and undistort and convert colour; the result
+is a `DeviceFrame` of storage buffers that `VoxelHashMap::allocate_from_depth`
+and `TsdfIntegrator::integrate` read in place (their `Buffer` overloads, and
+`ColorFrame::buffer`). Nothing registers depth to colour: each keeps its own
+intrinsics and pose, and `tsdf` fuses a separate colour camera as it always
+could. The Orbbec driver hands out such frames with
+`OrbbecStreamOptions::raw` and `OrbbecCapture::poll_raw` (H.265 colour only),
+and `fuse_orbbec --gpu` fuses them.
+
+**Why not registered.** The SDK can register depth to colour two ways, and
+neither suits a 4K rig. Its software `Align` runs on the CPU, and at the
+colour image's full size it made each fuse allocate over 8.3 M depth samples
+where the sensor has 0.37 M (9.1 ms of host allocation at 4K against 1.3 ms
+here). The camera's hardware registration sends depth at the colour size:
+about 8.3 M x 2 B x 25 fps, 415 MB/s a camera at 4K, past gigabit Ethernet.
+Fusing the two cameras as they are removes the step, and the depth resampling
+with it. What it gives up is the registered case's colour visibility: a voxel
+hidden from the colour camera but seen by depth takes the occluder's colour
+(`tsdf`'s documented caveat), and the texture tier still wants a frame
+registered to one camera.
+
+**Placement.** A target of its own under `sensor/utils/`, because it carries
+Vulkan and shaders and `recon_sensor` must not (the 2026-09-26 decision: an
+out-of-tree driver compiles against it). `RawFrame` and `LensCamera` stay in
+`recon_sensor`, so a driver produces them without a GPU API.
+`LensDistortion` moved from `rig_calibration.hpp` to `lens.hpp`, beside the
+host model the GLSL mirrors.
+
+**The kernels.** Undistorting keeps each camera's intrinsics and drops its
+lens, as the SDK's filter does: each pinhole pixel is sampled where OpenCV's
+rational model (`distort_normalized`) images it, so only the forward model is
+needed. Depth is sampled at the nearest pixel, since between a foreground and
+a background return there is no surface to interpolate. Colour is sampled
+bilinearly, luma and chroma each at its own siting (chroma with the even luma
+columns, between two luma rows, H.265's default), and converted by the
+picture's `kr`, `kb` and range in the same pass, so no 4K R'G'B' intermediate
+is written. Only an encoding `is_canonical` accepts is converted.
+
+**The calibration** is the camera's, read at open: each stream profile's
+intrinsics and lens, and `depth_profile->getExtrinsicTo(color_profile)` for
+the depth camera's pose (`p_colour = R p_depth + t`, `rot` row-major,
+millimetres). The calibration file's `pose` is still the colour camera's, so
+it needs no new fields. On CL2A141000N the depth lens is the rational model
+with all six radial terms (k1 29.29 ... k6 3.77), the colour lens plain
+Brown-Conrady (k1 0.073, k2 -0.10, k3 0.04), and the depth camera sits at
+(-32.5, -0.5, 2.2) mm in the colour camera's frame. The SDK's modified,
+inverse and Kannala-Brandt models are refused.
+
+**The Orbbec raw path.** The decoder thread decodes to `Yuv420` and posts the
+planes as an SDK I420 frame through the same mailbox. It must not stamp the RGB
+mode's stream profile on it, as the RGB path does: the profile restamps the
+frame's format as RGB, which the first rig run caught. `OrbbecRig` refuses
+`raw` for now.
+
+**Why these numbers.** `fuse_orbbec` on CL2A141000N at 4K25, 300 frames,
+Release, M-series Mac, each path's own run:
+
+| per fused frame | host path (`--hevc`) | GPU path (`--gpu`) |
+|---|---|---|
+| fps | 24.4 | 24.9 (the camera's 25) |
+| poll, host | 15.5 ms | 0.01 ms |
+| frame prep | -- | 2.6 ms host, 0.89 ms device |
+| allocate | 9.1 ms host, 5.5 ms device | 1.3 ms host, 0.76 ms device |
+| integrate | 3.4 ms host, 0.46 ms device | 1.7 ms host, 0.58 ms device |
+| CPU for the run, user + sys | 15.96 + 1.82 s | 0.94 + 1.23 s |
+| peak resident | 1.43 GB | 1.05 GB |
+
+The CPU saved is more than the poll row shows: the host path's decode thread
+also converted every 4K picture to RGB through swscale. The frame prep's host
+time is mostly copying 12 MB of planes into the upload buffer.
+
+**Verified.** `recon_tsdf_device_input` fuses one frame from host arrays and
+from buffers and compares every observed voxel. `recon_sensor_gpu_frame_prep`
+holds both passes to a host reference (depth exact, colour within a code),
+checks the lens is undone rather than applied (a checkerboard imaged through
+an independently inverted lens comes back where it was drawn: 0 of 49 920
+pixels off), anchors the matrix to a forward conversion, and fuses the
+output. Breaking the lens direction, the matrix weights, the range, the
+depth rounding or the chroma siting each fails it. On the camera,
+`recon_sensor_orbbec_gpu_prep` captures a still scene through both paths.
+At 720p every box of a 5 x 3 grid, corners included, matches the SDK's
+undistorted colour best unshifted, 1.4-3.0 RMS apart. At 4K every textured
+box does (1.9-8.2 RMS, a 2 px shift raising it two to four times). The pass's
+depth, moved into the colour camera by the extrinsic, lies a median 5.1-6.0
+mm from the SDK's registration, best within a pixel of unshifted. A reversed
+extrinsic would shift it by about f * baseline / z, some 30 px there. Two 4K
+meshes, one from each path at 2 cm voxels, sit a median 10 mm apart
+vertex to vertex (half a voxel). 7-16% of vertices have no counterpart within
+2 cm, unexplained: the scene changed between the runs.
+
+**Open.** The colour-occlusion fringe of an unregistered camera is
+unmeasured, and the texture tier's separate colour camera is a later slice.
+The outputs are host-visible and the planes are copied from the decoder;
+device-local outputs and zero-copy input from VideoToolbox or NVDEC are a
+`TODO(sensor)`. The rig's raw sets are one too. Where the lens maps a colour
+pixel outside the captured image the pass writes black, as the SDK's filter
+does, and it is fused as colour.
 
 ## Measured lessons
 
