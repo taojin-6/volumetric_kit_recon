@@ -16,7 +16,6 @@ enum class VideoDecodeBackend {
   Software,      ///< FFmpeg's CPU decoder.
   VideoToolbox,  ///< Apple.
   Cuda,          ///< NVIDIA (NVDEC).
-  Vulkan,        ///< Vulkan video decode.
   Vaapi,         ///< Intel and AMD on Linux.
   D3d11va,       ///< Windows.
 };

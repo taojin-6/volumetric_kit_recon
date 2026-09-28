@@ -76,15 +76,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `recon_sensor_video` target behind `VR_WITH_FFMPEG`): H.265 access units to
   host pictures, `Rgb24` or `Yuv420`, over an installed FFmpeg ≥ 4.4. `Auto`
   takes the first hardware back end that decodes HEVC (VideoToolbox, as
-  `VTIsHardwareDecodeSupported` answers; CUDA, Vulkan, VAAPI on Linux and
-  CUDA, D3D11VA on Windows, by decoding a built-in clip), else software. Tests: `recon_sensor_video_hevc`, which
-  `VR_TEST_HEVC_BACKEND` can hold to one back end, and
-  `recon_sensor_video_converter`. CI builds it on every leg and requires NVDEC
-  on Linux and VideoToolbox on macOS. Pictures carry the stream's transfer and
-  primaries (`DecodedPicture::encoding`), and a display window off the coded
-  corner is cropped on every back end (VideoToolbox, which cannot, refuses
-  such a stream, and `Auto` moves it to software). The installed package holds
-  a consumer to the FFmpeg major versions it was built against.
+  `VTIsHardwareDecodeSupported` answers; CUDA, then VAAPI on Linux and CUDA,
+  then D3D11VA on Windows, by decoding a built-in clip), else software. Tests:
+  `recon_sensor_video_hevc`, which `VR_TEST_HEVC_BACKEND` can hold to one
+  back end, `recon_sensor_video_converter` and `recon_sensor_video_backend`.
+  CI builds it on every leg and requires NVDEC on Linux and VideoToolbox on
+  macOS. Pictures carry the stream's transfer and primaries
+  (`DecodedPicture::encoding`), and a display window off the coded corner is
+  cropped on every back end (VideoToolbox, which cannot, refuses such a
+  stream, and `Auto` moves it to software). The installed package holds a
+  consumer to the FFmpeg major versions it was built against.
 - `codec`: **`Encoder` and `Decoder`, the codec's public API** (see the
   2026-09-27 decision). This is the third of its five PRs.
   - `Encoder::encode(grid)` gives one intra frame of every block with an

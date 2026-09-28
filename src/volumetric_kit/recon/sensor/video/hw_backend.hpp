@@ -16,7 +16,7 @@
 namespace volumetric_kit::recon::sensor::video {
 
 /// @return The hardware back ends this platform tries, most preferred first:
-///         VideoToolbox on Apple; Cuda, Vulkan, Vaapi on Linux (NVIDIA ahead
+///         VideoToolbox on Apple; Cuda, Vaapi on Linux (NVIDIA ahead
 ///         of an integrated GPU); Cuda, D3d11va on Windows.
 std::vector<VideoDecodeBackend> platform_hardware_order();
 

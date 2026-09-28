@@ -705,8 +705,8 @@ arbitrary; it usually isn't.
   and range, plus the stream's transfer and primaries as an optional
   `ColorEncoding` (empty when that type cannot name them). `Auto` takes the
   first hardware back end that decodes HEVC (VideoToolbox, asked through
-  `VTIsHardwareDecodeSupported`; CUDA, Vulkan, VAAPI on Linux, each by
-  decoding a built-in clip), probing only as far as it needs, else software.
+  `VTIsHardwareDecodeSupported`; CUDA, then VAAPI on Linux, each by decoding
+  a built-in clip), probing only as far as it needs, else software.
   It moves to software when the hardware refuses a stream, and the pictures
   the hardware still held come out too. A named back end is never swapped for
   another; it returns `Unsupported` instead. A display window off the coded

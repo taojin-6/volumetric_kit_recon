@@ -18,8 +18,7 @@ std::vector<VideoDecodeBackend> platform_hardware_order() {
 #elif defined(_WIN32)
   return {VideoDecodeBackend::Cuda, VideoDecodeBackend::D3d11va};
 #else
-  return {VideoDecodeBackend::Cuda, VideoDecodeBackend::Vulkan,
-          VideoDecodeBackend::Vaapi};
+  return {VideoDecodeBackend::Cuda, VideoDecodeBackend::Vaapi};
 #endif
 }
 
@@ -29,8 +28,6 @@ AVHWDeviceType device_type(VideoDecodeBackend backend) noexcept {
       return AV_HWDEVICE_TYPE_VIDEOTOOLBOX;
     case VideoDecodeBackend::Cuda:
       return AV_HWDEVICE_TYPE_CUDA;
-    case VideoDecodeBackend::Vulkan:
-      return AV_HWDEVICE_TYPE_VULKAN;
     case VideoDecodeBackend::Vaapi:
       return AV_HWDEVICE_TYPE_VAAPI;
     case VideoDecodeBackend::D3d11va:

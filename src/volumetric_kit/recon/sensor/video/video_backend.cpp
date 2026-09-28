@@ -15,8 +15,6 @@ const char* to_string(VideoDecodeBackend backend) noexcept {
       return "videotoolbox";
     case VideoDecodeBackend::Cuda:
       return "cuda";
-    case VideoDecodeBackend::Vulkan:
-      return "vulkan";
     case VideoDecodeBackend::Vaapi:
       return "vaapi";
     case VideoDecodeBackend::D3d11va:

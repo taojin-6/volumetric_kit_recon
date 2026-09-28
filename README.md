@@ -100,7 +100,7 @@ installed, found through pkg-config:
 brew install ffmpeg pkgconf        # macOS
 sudo apt install pkg-config libavcodec-dev libavutil-dev libswscale-dev
 cmake -B build -DVR_WITH_FFMPEG=ON
-# require a back end (cuda, videotoolbox, vaapi, vulkan) in the test:
+# require a back end (cuda, videotoolbox, vaapi) in the test:
 VR_TEST_HEVC_BACKEND=cuda ctest --test-dir build -R video
 ```
 

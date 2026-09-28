@@ -36,7 +36,6 @@ int test_platform_order() {
 #else
   // NVIDIA first, Intel's and AMD's VAAPI last.
   CHECK(order == (std::vector<VideoDecodeBackend>{VideoDecodeBackend::Cuda,
-                                                  VideoDecodeBackend::Vulkan,
                                                   VideoDecodeBackend::Vaapi}));
 #endif
   return 0;
@@ -49,8 +48,6 @@ int test_device_types() {
   CHECK(video::device_type(VideoDecodeBackend::VideoToolbox) ==
         AV_HWDEVICE_TYPE_VIDEOTOOLBOX);
   CHECK(video::device_type(VideoDecodeBackend::Cuda) == AV_HWDEVICE_TYPE_CUDA);
-  CHECK(video::device_type(VideoDecodeBackend::Vulkan) ==
-        AV_HWDEVICE_TYPE_VULKAN);
   CHECK(video::device_type(VideoDecodeBackend::Vaapi) ==
         AV_HWDEVICE_TYPE_VAAPI);
   CHECK(video::device_type(VideoDecodeBackend::D3d11va) ==
@@ -63,8 +60,8 @@ int test_device_types() {
 // is one is checked (CI's VR_TEST_HEVC_BACKEND checks the yes).
 int test_hardware_decodes() {
   for (const VideoDecodeBackend b :
-       {VideoDecodeBackend::Cuda, VideoDecodeBackend::Vulkan,
-        VideoDecodeBackend::Vaapi, VideoDecodeBackend::D3d11va}) {
+       {VideoDecodeBackend::Cuda, VideoDecodeBackend::Vaapi,
+        VideoDecodeBackend::D3d11va}) {
     CHECK(!video::hardware_decodes(b, AV_CODEC_ID_HEVC).has_value());
   }
   const auto vt_hevc = video::hardware_decodes(VideoDecodeBackend::VideoToolbox,

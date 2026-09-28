@@ -4496,20 +4496,19 @@ the other way round. FFmpeg is a prerequisite behind `VR_WITH_FFMPEG`, found
 through pkg-config and never fetched, like the Orbbec SDK; the floor is
 Ubuntu 22.04's FFmpeg 4.4. No FFmpeg type is public.
 
-**Back ends.** `Auto` tries VideoToolbox on Apple; CUDA (NVDEC), Vulkan, then
-VAAPI on Linux; CUDA, then D3D11VA on Windows. A machine with an NVIDIA and an
+**Back ends.** `Auto` tries VideoToolbox on Apple; CUDA (NVDEC), then VAAPI
+on Linux; CUDA, then D3D11VA on Windows. A machine with an NVIDIA and an
 Intel GPU therefore decodes on the NVIDIA one. A back end counts only if it
 decodes a built-in 157-byte clip, because an open device says nothing about
-HEVC: a Vulkan device may have no video queue, and an older Intel GPU opens
-under VAAPI without decoding HEVC. VideoToolbox is asked instead, through
+HEVC: an older Intel GPU opens under VAAPI without decoding HEVC. VideoToolbox is asked instead, through
 `VTIsHardwareDecodeSupported`, the one back end with a single call for it.
 The others each have a query of their own (NVDEC's `cuvidGetDecoderCaps`,
-VAAPI's profiles, Vulkan's video capabilities, D3D11's decoder profiles),
+VAAPI's profiles, D3D11's decoder profiles),
 each with its own dependency and two with no CI leg, while the clip tests
 the path FFmpeg will decode on. Each is probed once per process, with
 FFmpeg's log silenced (a missing back end says so at ERROR: "Cannot load
 libcuda.so.1"), and `Auto` probes down the list only until one decodes and
-opens, so an NVIDIA machine never probes Vulkan or VAAPI. A named back end
+opens, so an NVIDIA machine never probes VAAPI. A named back end
 that is not there is refused, and the message lists those that are. Only
 `Auto` falls back to software, including mid-stream when the hardware refuses
 a stream (4:4:4 or 4:0:0, say); `backend()` reports the switch. Whether a
@@ -4517,6 +4516,16 @@ picture needs copying off the GPU is asked of the picture (`hw_frames_ctx`),
 not of the back end, because the pictures the hardware decoded before the
 switch are still waiting for display. A named back end meeting such a stream
 returns `Unsupported`, after the pictures decoded before it.
+
+**No Vulkan.** FFmpeg can also decode HEVC through Vulkan video, on NVIDIA's
+driver and Mesa's, and it is left out. At a format change mid-stream (the
+fallback clip's 4:0:0), FFmpeg tears its Vulkan decoder down before asking
+for the new format, and freeing the decoder afterwards segfaults in NVIDIA's
+Vulkan driver: `avcodec_free_context`, then libavcodec, then
+`libnvidia-eglcore.so`, on FFmpeg 6.1 and 8.0 with driver 615.71.09. CUDA
+passes the same clip. Nothing outside FFmpeg avoids it, and CUDA and VAAPI
+already cover NVIDIA, Intel and AMD. Its draw comes with the GPU module:
+pictures decoded straight into `VkImage`s, taken without a copy.
 
 **Cropping.** A stream's display window can start right of or below the
 coded picture's corner (an SPS conformance window). FFmpeg crops a hardware
@@ -4626,7 +4635,7 @@ stays. Kept on purpose: a decoder opens its own device after the probe
 closes its own, since sharing one would tie every decoder to a device the
 process holds.
 
-**Open.** VAAPI and Vulkan decoding are untested, and D3D11VA has no leg. The
+**Open.** VAAPI decoding is untested, and D3D11VA has no leg. The
 left and top crop on hardware is tested only on the back ends CI has
 (NVDEC). Pictures pass through host memory (a `TODO(sensor)`).
 
