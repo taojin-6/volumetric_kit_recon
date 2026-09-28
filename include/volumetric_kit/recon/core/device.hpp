@@ -392,8 +392,8 @@ class VR_CORE_API Device {
   /// (`ONE_TIME_SUBMIT`), invokes @p record to fill it (bind pipeline, bind
   /// descriptors, push constants, dispatch, barriers), then ends, submits
   /// (through @ref queue_submit, so it is shared-queue-safe), and waits on an
-  /// internal fence. The fence is freed and the command buffer kept for a
-  /// later submit before returning. Blocking, so it is a bring-up /
+  /// internal fence. Both the command buffer and the fence are kept for a
+  /// later submit. Blocking, so it is a bring-up /
   /// single-shot primitive; the fusion tiers will batch many dispatches per
   /// submit on their own.
   ///
@@ -479,20 +479,22 @@ class VR_CORE_API Device {
   std::mutex* submit_mutex_ = nullptr;
   mutable std::mutex queue_mutex_;
 
-  // A command buffer on a pool of its own. Vulkan requires a pool be
-  // externally synchronized, so each submit takes one no other submit holds
-  // and records with no lock: a free one, or a new one when every one is in
-  // use. It is given back once its wait is done, and pools_ keeps every pool
-  // made, so destroy() frees them all, one a failed wait left to the device
-  // included.
+  // A command buffer on a pool of its own, and the fence its submit signals.
+  // Vulkan requires a pool be externally synchronized, so each submit takes
+  // one no other submit holds and records with no lock: a free one, or a new
+  // one when every one is in use. It is given back once its wait is done, and
+  // made_ keeps every one made, so destroy() frees them all, one a failed wait
+  // left to the device included. The fence is kept too: making and freeing
+  // one cost an RTX 5090 about 0.3 ms a submit.
   struct Command {
     VkCommandPool pool = VK_NULL_HANDLE;
     VkCommandBuffer buffer = VK_NULL_HANDLE;
+    VkFence fence = VK_NULL_HANDLE;
   };
   Result<Command> take_command() const;
   void give_back(Command command) const noexcept;
-  mutable std::mutex commands_mutex_;  // guards pools_ and free_commands_
-  mutable std::vector<VkCommandPool> pools_;
+  mutable std::mutex commands_mutex_;  // guards made_ and free_commands_
+  mutable std::vector<Command> made_;
   mutable std::vector<Command> free_commands_;
 
   std::uint32_t compute_family_ = 0;

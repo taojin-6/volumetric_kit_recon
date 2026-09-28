@@ -6210,8 +6210,21 @@ another, so the list grows to the most submits ever in flight at once, and
 recording takes no lock. The buffer goes back once its wait is done and is
 begun again by the next submit, which the pool's `RESET_COMMAND_BUFFER` flag
 allows. A failed wait leaves it to the device, as before, and `destroy()`
-frees every pool made, that one included. The fence is still made per submit,
-the `TODO(core)` the entry above left.
+frees every pool made, that one included.
+
+**The fence is kept with its buffer**, reset as the buffer is taken, which
+closes the `TODO(core)` the entry above left. On the 5090 the objects were the
+cost, not the submit: `vkCreateFence` took 0.29 ms and destroying the fence
+with the buffer's free 0.39 ms, against 0.005 ms for `vkQueueSubmit`. On the
+M5 Max each was about a microsecond. Measured on room0 with
+`fuse_replica --preload --device-extract`, Release, four runs each, the same
+330 389 triangles either way:
+
+| RTX 5090, per fused frame | fence per submit | fence kept |
+|---|---|---|
+| `allocate`, host | 1.27–1.42 ms | 0.83–0.89 ms |
+| `integrate`, host | 1.82–2.06 ms | 0.95–1.06 ms |
+| 400 frames | 258–286 fps | 431–463 fps |
 
 **Only the queue is locked**: under the embedder's mutex on a queue shared
 with another library, else under the device's own, so `submit_mutex()` is

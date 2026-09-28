@@ -39,8 +39,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   own otherwise, so `submit_mutex()` is never null. Before, every submit
   shared one pool and only a shared queue was locked, so two threads' batches
   were undefined: the validation layer reported `THREADING ERROR` on the pool
-  and one run segfaulted. A command buffer is now kept for the next submit;
-  the fence is still made per submit.
+  and one run segfaulted. A command buffer is now kept for the next submit,
+  and its fence with it: creating a fence alone cost an RTX 5090 0.29 ms a
+  submit, and room0 fuses there at 431–463 fps against 258–286.
 - `sensor`: **`GpuFramePrep` stages its raw frame and runs both passes in one
   submit**: the raw depth and colour planes go up through a batch into
   device-local inputs, rather than a host-visible buffer the kernels read
