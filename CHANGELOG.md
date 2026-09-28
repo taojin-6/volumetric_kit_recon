@@ -138,6 +138,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`side_by_side_atlas`, wrapping past the device's largest image) and packs
   them (`pack_atlas`). gfx is unchanged. Test: `recon_texture_multiview`;
   `recon_texture_device_mesh` checks device against host.
+- `sensor`: **`OrbbecStreamOptions::raw`** and **`OrbbecCapture::poll_raw`**
+  hand out a `RawFrame`: raw depth and the decoded I420 planes (H.265 colour
+  only), and each camera's lens and pose from the factory calibration, with
+  the depth camera posed through its extrinsic to the colour one. The host
+  undistorts, registers and converts nothing. `fuse_orbbec --gpu` fuses such
+  frames through `GpuFramePrep`, one camera for now (`OrbbecRig` refuses
+  `raw`). `ycbcr_weights` gives a `VideoColorMatrix`'s luma weights.
 - `sensor`: **`GpuFramePrep`** (`sensor/utils/gpu_frame_prep.hpp`, the new
   `recon_sensor_utils` target): a captured frame's depth and colour
   undistorted on the GPU, and its Y'CbCr 4:2:0 colour converted to R'G'B' in

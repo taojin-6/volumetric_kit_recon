@@ -10,7 +10,8 @@
 ///        fuses into.
 ///
 /// Header-only and compiled only into the executables that fuse: it includes
-/// the `tsdf` tier, which `vr_example_common` deliberately does not link.
+/// the `tsdf` tier and `sensor/utils`, which `vr_example_common` deliberately
+/// does not link.
 /// Three copies of this loop had already drifted apart in what they printed,
 /// timed and guarded, and the encoding hand-off below is the kind of line a
 /// fourth copy drops -- with no error, since a `ColorFrame` left defaulted
@@ -27,6 +28,7 @@
 #include "volumetric_kit/recon/core/result.hpp"
 #include "volumetric_kit/recon/core/stage_metrics.hpp"
 #include "volumetric_kit/recon/sensor/camera_capture.hpp"
+#include "volumetric_kit/recon/sensor/utils/gpu_frame_prep.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_grid.hpp"
@@ -85,22 +87,26 @@ inline vr::Result<vr::volume::VoxelBlockGrid> create_fusion_grid(
 /// there is no scope around the loop here.
 ///
 /// @param grid     The volume to allocate into.
-/// @param frame    The posed depth frame; its depth camera drives the
-///                 unprojection and the range gate.
+/// @param depth    The depth image: a host array (`const float*`) or a device
+///                 `vr::Buffer`, whichever `allocate_from_depth` overload the
+///                 frame's source feeds.
+/// @param camera   Its camera, which drives the unprojection and the range
+///                 gate.
 /// @param metrics  Optional stage rows (`"allocate"`, `"resize"`); null
 ///                 measures nothing.
 /// @return OK once every surface block is allocated; @ref
 ///         vr::Status::Code::OutOfMemory if the map cannot grow further or
 ///         kept overflowing after five rounds; or the tier's own error.
-inline vr::Status allocate_band(vr::volume::VoxelBlockGrid& grid,
-                                const vr::sensor::CapturedFrame& frame,
-                                vr::StageMetrics* metrics) {
+template <typename Depth>
+vr::Status allocate_band(vr::volume::VoxelBlockGrid& grid, const Depth& depth,
+                         const vr::DepthCameraParams& camera,
+                         vr::StageMetrics* metrics) {
   constexpr int kRounds = 5;
   for (int round = 0; round < kRounds; ++round) {
     vr::volume::AllocFailures failures;
-    VR_ASSIGN(const std::uint32_t failed,
-              grid.map().allocate_from_depth(frame.depth, frame.depth_camera,
-                                             &failures, metrics));
+    VR_ASSIGN(
+        const std::uint32_t failed,
+        grid.map().allocate_from_depth(depth, camera, &failures, metrics));
     if (failed == 0) {
       return {};
     }
@@ -164,11 +170,28 @@ inline vr::Status fuse_frame(vr::volume::VoxelBlockGrid& grid,
                              vr::tsdf::TsdfIntegrator& integrator,
                              const vr::sensor::CapturedFrame& frame,
                              float max_weight, vr::StageMetrics* metrics) {
-  VR_TRY(allocate_band(grid, frame, metrics));
+  VR_TRY(allocate_band(grid, frame.depth, frame.depth_camera, metrics));
   const vr::tsdf::ColorFrame color{frame.color, frame.color_camera,
                                    frame.color_encoding};
   return integrator.integrate(grid, frame.depth, frame.depth_camera, max_weight,
                               vr::tsdf::IntegrationMode::Classic,
+                              frame.has_color() ? &color : nullptr, metrics);
+}
+
+/// @brief @ref fuse_frame for a frame already on the device, as
+///        `sensor::GpuFramePrep` hands it out: nothing is uploaded, and depth
+///        and colour are fused with their own cameras.
+inline vr::Status fuse_frame(vr::volume::VoxelBlockGrid& grid,
+                             vr::tsdf::TsdfIntegrator& integrator,
+                             const vr::sensor::DeviceFrame& frame,
+                             float max_weight, vr::StageMetrics* metrics) {
+  VR_TRY(allocate_band(grid, *frame.depth, frame.depth_camera, metrics));
+  vr::tsdf::ColorFrame color{};
+  color.buffer = frame.color;
+  color.cam = frame.color_camera;
+  color.encoding = frame.color_encoding;
+  return integrator.integrate(grid, *frame.depth, frame.depth_camera,
+                              max_weight, vr::tsdf::IntegrationMode::Classic,
                               frame.has_color() ? &color : nullptr, metrics);
 }
 

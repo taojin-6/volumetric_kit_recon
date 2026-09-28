@@ -73,7 +73,7 @@ find_package(glfw3 REQUIRED)
 # link it, which is why that one is named. Resist re-adding the covered tiers
 # for readability's sake; the warning comes straight back.
 set(_viewer_recon_libs volumetric_kit::recon_tsdf volumetric_kit::recon_texture
-                       vr_example_common)
+                       volumetric_kit::recon_sensor_utils vr_example_common)
 set(_viewer_gfx_libs volumetric_kit::gfx_app volumetric_kit::gfx_pipelines
                      volumetric_kit::gfx_camera)
 set(_viewer_common_inc "${CMAKE_CURRENT_SOURCE_DIR}"
