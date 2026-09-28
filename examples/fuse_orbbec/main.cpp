@@ -9,9 +9,13 @@
 //
 //   fuse_orbbec [--serial SN | --rig sync.json [--apply-sync]]
 //               [--calibration calib.json] [--frames 300] [-o fuse_orbbec.ply]
+//               [--hevc] [--color 1280x720] [--fps 30]
 //               [--voxel 0.02] [--trunc m] [--min-depth m] [--max-depth m]
 //               [--max-weight 20]
 //
+// --hevc streams colour as H.265 rather than MJPEG (a build with
+// VR_WITH_FFMPEG); --color and --fps pick the colour mode, 4K H.265 running
+// at 25 fps at most.
 // --rig fuses every camera of a sync configuration (femto_mega_sync.json) as
 // one rig, refusing cameras that differ from it unless --apply-sync writes it
 // to them. --calibration poses each camera from a calibration file
@@ -65,7 +69,11 @@ struct Options {
   std::string rig;          // a sync configuration: fuse its cameras as a rig
   std::string calibration;  // poses by serial; empty: all at the origin
   bool apply_sync = false;  // write the sync configuration where it differs
-  int frames = 300;         // a camera never runs out, so the run needs an end
+  bool hevc = false;        // H.265 colour rather than MJPEG
+  std::uint32_t color_width = 0;  // 0 keeps the driver's default mode
+  std::uint32_t color_height = 0;
+  std::uint32_t fps = 0;
+  int frames = 300;  // a camera never runs out, so the run needs an end
   std::string out = "fuse_orbbec.ply";
   float voxel = 0.02f;  // metres
   float trunc = 0.0f;   // truncation distance (metres); 0 => 4 * voxel
@@ -102,6 +110,24 @@ vr::Result<Options> parse_args(int argc, char** argv) {
       (a == "--rig" ? opt.rig : opt.calibration) = s;
     } else if (a == "--apply-sync") {
       opt.apply_sync = true;
+    } else if (a == "--hevc") {
+      opt.hevc = true;
+    } else if (a == "--color") {
+      const char* s = take();
+      unsigned w = 0, h = 0;
+      if (s == nullptr || std::sscanf(s, "%ux%u", &w, &h) != 2 || w == 0 ||
+          h == 0) {
+        return vr::Status::invalid_argument(
+            "--color needs WxH, e.g. 1920x1080");
+      }
+      opt.color_width = w;
+      opt.color_height = h;
+    } else if (a == "--fps") {
+      const char* s = take();
+      if (s == nullptr || std::atoi(s) < 1) {
+        return vr::Status::invalid_argument("--fps needs N >= 1");
+      }
+      opt.fps = static_cast<std::uint32_t>(std::atoi(s));
     } else if (a == "--frames") {
       const char* s = take();
       if (s == nullptr) return vr::Status::invalid_argument("--frames needs N");
@@ -132,7 +158,8 @@ vr::Result<Options> parse_args(int argc, char** argv) {
       return vr::Status::invalid_argument(
           "unknown argument: " + a +
           "\nusage: fuse_orbbec [--serial SN | --rig sync.json [--apply-sync]] "
-          "[--calibration calib.json] [--frames N] "
+          "[--calibration calib.json] [--frames N] [--hevc] [--color WxH] "
+          "[--fps N] "
           "[-o out.ply] [--voxel m] [--trunc m] [--min-depth m] "
           "[--max-depth m] [--max-weight w]");
     }
@@ -173,11 +200,12 @@ struct Source {
                          const sensor::OrbbecCaptureStats& st) {
       std::printf(
           "  %s: %llu pairs received, %llu fused, %llu dropped, %llu "
-          "unprocessable\n",
+          "unprocessable, %llu lost to the colour decoder\n",
           who, static_cast<unsigned long long>(st.received),
           static_cast<unsigned long long>(st.delivered),
           static_cast<unsigned long long>(st.dropped),
-          static_cast<unsigned long long>(st.failed));
+          static_cast<unsigned long long>(st.failed),
+          static_cast<unsigned long long>(st.lost));
     };
     if (camera) {
       line(camera->device_info().serial.c_str(), camera->stats());
@@ -206,6 +234,16 @@ void print_camera(const sensor::OrbbecDeviceInfo& info,
       cam.cam_to_world[3].z);
 }
 
+// The colour stream the command line asked for, over the driver's defaults.
+void apply_streams(const Options& opt, sensor::OrbbecStreamOptions& streams) {
+  if (opt.hevc) streams.color_codec = sensor::OrbbecColorCodec::Hevc;
+  if (opt.color_width != 0) {
+    streams.color_width = opt.color_width;
+    streams.color_height = opt.color_height;
+  }
+  if (opt.fps != 0) streams.fps = opt.fps;
+}
+
 // Opened before the GPU so a missing camera fails fast. The depth gate is
 // validated by the driver, which names both values when it refuses one.
 vr::Result<Source> open_source(const Options& opt) {
@@ -228,6 +266,7 @@ vr::Result<Source> open_source(const Options& opt) {
     rig_options.apply_sync_config = opt.apply_sync;
     if (opt.min_depth) rig_options.min_depth = *opt.min_depth;
     if (opt.max_depth) rig_options.max_depth = *opt.max_depth;
+    apply_streams(opt, rig_options);
     VR_ASSIGN(source.rig, sensor::OrbbecRig::open(rig_options));
     for (std::size_t i = 0; i < source.rig->camera_count(); ++i) {
       print_camera(source.rig->device_info(i), source.rig->color_camera(i));
@@ -256,6 +295,7 @@ vr::Result<Source> open_source(const Options& opt) {
   }
   if (opt.min_depth) capture_options.min_depth = *opt.min_depth;
   if (opt.max_depth) capture_options.max_depth = *opt.max_depth;
+  apply_streams(opt, capture_options);
   VR_ASSIGN(source.camera, sensor::OrbbecCapture::open(capture_options));
   const sensor::OrbbecDeviceInfo& info = source.camera->device_info();
   print_camera(info, source.camera->color_camera());
