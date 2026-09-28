@@ -34,6 +34,7 @@
 #include <utility>
 #include <vector>
 
+#include "test_meshes.hpp"
 #include "volumetric_kit/recon/core/allocator.hpp"
 #include "volumetric_kit/recon/core/device.hpp"
 #include "volumetric_kit/recon/core/instance.hpp"
@@ -60,6 +61,12 @@ namespace ts = volumetric_kit::recon::tsdf;
 
 namespace {
 
+using test_meshes::closest_point;
+using test_meshes::corner;
+using test_meshes::dented_cube;
+using test_meshes::Mesh;
+using test_meshes::orient_outward;
+
 using Coord = std::tuple<int, int, int>;
 
 // Kernel and reference compute the same float distance two different ways; they
@@ -69,52 +76,7 @@ constexpr float kTol = 2e-6f;
 // are not compared: which side a rounding error lands on is not the contract.
 constexpr float kEdge = 1e-5f;
 
-struct Mesh {
-  std::vector<vr::Vec3f> v;
-  std::vector<std::uint32_t> i;
-  std::uint32_t vertex_count() const {
-    return static_cast<std::uint32_t>(v.size());
-  }
-  std::uint32_t triangle_count() const {
-    return static_cast<std::uint32_t>(i.size() / 3);
-  }
-};
-
 // ---- The independent reference --------------------------------------------
-
-// Closest point on a triangle: barycentric projection with a clamp to the
-// edges, a different formulation from the shader's region test.
-vr::Vec3f closest_point(vr::Vec3f p, vr::Vec3f a, vr::Vec3f b, vr::Vec3f c) {
-  const vr::Vec3f ab = b - a;
-  const vr::Vec3f ac = c - a;
-  const vr::Vec3f n = vr::cross(ab, ac);
-  const float nn = vr::dot(n, n);
-  const vr::Vec3f q = p - n * (vr::dot(n, p - a) / nn);
-  const float u = vr::dot(n, vr::cross(c - b, q - b)) / nn;
-  const float v = vr::dot(n, vr::cross(a - c, q - c)) / nn;
-  const float w = vr::dot(n, vr::cross(ab, q - a)) / nn;
-  if (u >= 0.0f && v >= 0.0f && w >= 0.0f) {
-    return q;
-  }
-  auto on_segment = [](vr::Vec3f pt, vr::Vec3f s0, vr::Vec3f s1) {
-    const vr::Vec3f d = s1 - s0;
-    float t = vr::dot(pt - s0, d) / vr::dot(d, d);
-    t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
-    return s0 + d * t;
-  };
-  const vr::Vec3f e0 = on_segment(p, a, b);
-  const vr::Vec3f e1 = on_segment(p, b, c);
-  const vr::Vec3f e2 = on_segment(p, c, a);
-  const float d0 = vr::dot(p - e0, p - e0);
-  const float d1 = vr::dot(p - e1, p - e1);
-  const float d2 = vr::dot(p - e2, p - e2);
-  if (d0 <= d1 && d0 <= d2) return e0;
-  return (d1 <= d2) ? e1 : e2;
-}
-
-vr::Vec3f corner(const Mesh& m, std::size_t t, int k) {
-  return m.v[m.i[3 * t + k]];
-}
 
 float nearest(vr::Vec3f p, const Mesh& m) {
   float best = 1e30f;
@@ -161,19 +123,6 @@ float clampf(float x, float lo, float hi) {
 // ---- Fixtures
 // ----------------------------------------------------------------
 
-// Flip every face whose normal points toward `centre` -- correct for a convex
-// solid, which is all it is used on (the dented cube is oriented before it is
-// dented; moving a vertex does not change a winding).
-void orient_outward(Mesh& m, vr::Vec3f centre) {
-  for (std::size_t t = 0; t < m.triangle_count(); ++t) {
-    const vr::Vec3f a = corner(m, t, 0), b = corner(m, t, 1),
-                    c = corner(m, t, 2);
-    if (vr::dot(vr::cross(b - a, c - a), (a + b + c) / 3.0f - centre) < 0.0f) {
-      std::swap(m.i[3 * t + 1], m.i[3 * t + 2]);
-    }
-  }
-}
-
 // A regular tetrahedron, edge 2*sqrt(2)*s, centred at c.
 Mesh tetrahedron(vr::Vec3f c, float s) {
   Mesh m;
@@ -181,27 +130,6 @@ Mesh tetrahedron(vr::Vec3f c, float s) {
          c + s * vr::Vec3f(-1, 1, -1), c + s * vr::Vec3f(-1, -1, 1)};
   m.i = {0, 1, 2, 0, 1, 3, 0, 2, 3, 1, 2, 3};
   orient_outward(m, c);
-  return m;
-}
-
-// A cube of side `side` at `origin`, 12 triangles, with its (1,1,1) corner
-// pushed in to 0.6 of the way along the diagonal: concave edges and a concave
-// vertex, the case a convex fixture cannot reach.
-Mesh dented_cube(vr::Vec3f origin, float side) {
-  Mesh m;
-  for (int k = 0; k < 8; ++k) {
-    const vr::Vec3f unit(float((k == 1 || k == 2 || k == 5 || k == 6)),
-                         float((k == 2 || k == 3 || k == 6 || k == 7)),
-                         float(k >= 4));
-    m.v.push_back(origin + side * unit);
-  }
-  const std::uint32_t quads[6][4] = {{0, 1, 2, 3}, {4, 5, 6, 7}, {0, 1, 5, 4},
-                                     {3, 2, 6, 7}, {0, 3, 7, 4}, {1, 2, 6, 5}};
-  for (const auto& q : quads) {
-    m.i.insert(m.i.end(), {q[0], q[1], q[2], q[0], q[2], q[3]});
-  }
-  orient_outward(m, origin + vr::Vec3f(0.5f * side));
-  m.v[6] = origin + vr::Vec3f(0.6f * side);
   return m;
 }
 

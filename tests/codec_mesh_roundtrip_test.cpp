@@ -8,7 +8,7 @@
 // SOURCE MESH, in both directions:
 //
 //   accuracy -- every decoded vertex's distance to the source surface;
-//   coverage -- every source sample's distance to the nearest decoded vertex,
+//   coverage -- every source sample's distance to the decoded triangles,
 //               which is what a hole shows up in.
 //
 // A fused scan cannot be measured this way: its only reference is the volume
@@ -16,8 +16,10 @@
 // mesh beside room0. The same numbers for the UNCOMPRESSED volume's surface are
 // the floor -- marching cubes' own discretization -- so what the codec adds is
 // the difference. The test prints both, with the frame's size, and holds the
-// default parameters to bounds a regression would cross. Exits 0 (skip) where
-// no device is present.
+// default parameters to bounds a regression would cross. The frame itself must
+// decode to exactly what was written: a surface is blind to a field scaled as a
+// whole, so the distances alone would pass an entropy layer that scaled every
+// coefficient. Exits 0 (skip) where no device is present.
 
 #include <algorithm>
 #include <array>
@@ -33,6 +35,7 @@
 #include "bitstream.hpp"
 #include "dct_blocks.hpp"
 #include "dct_transform.hpp"
+#include "test_meshes.hpp"
 #include "volumetric_kit/recon/codec/codec_params.hpp"
 #include "volumetric_kit/recon/core/allocator.hpp"
 #include "volumetric_kit/recon/core/device.hpp"
@@ -62,54 +65,22 @@ namespace cd = volumetric_kit::recon::codec::detail;
 
 namespace {
 
-struct Mesh {
-  std::vector<vr::Vec3f> v;
-  std::vector<std::uint32_t> i;
-  std::uint32_t vertex_count() const {
-    return static_cast<std::uint32_t>(v.size());
-  }
-  std::uint32_t triangle_count() const {
-    return static_cast<std::uint32_t>(i.size() / 3);
-  }
-};
-
-vr::Vec3f corner(const Mesh& m, std::size_t t, int k) {
-  return m.v[m.i[3 * t + k]];
-}
-
-// Closest point on a triangle (barycentric projection with an edge clamp).
-vr::Vec3f closest_point(vr::Vec3f p, vr::Vec3f a, vr::Vec3f b, vr::Vec3f c) {
-  const vr::Vec3f ab = b - a;
-  const vr::Vec3f ac = c - a;
-  const vr::Vec3f n = vr::cross(ab, ac);
-  const float nn = vr::dot(n, n);
-  const vr::Vec3f q = p - n * (vr::dot(n, p - a) / nn);
-  const float u = vr::dot(n, vr::cross(c - b, q - b)) / nn;
-  const float v = vr::dot(n, vr::cross(a - c, q - c)) / nn;
-  const float w = vr::dot(n, vr::cross(ab, q - a)) / nn;
-  if (u >= 0.0f && v >= 0.0f && w >= 0.0f) return q;
-  auto on_segment = [](vr::Vec3f pt, vr::Vec3f s0, vr::Vec3f s1) {
-    const vr::Vec3f d = s1 - s0;
-    float t = vr::dot(pt - s0, d) / vr::dot(d, d);
-    t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
-    return s0 + d * t;
-  };
-  const vr::Vec3f e[3] = {on_segment(p, a, b), on_segment(p, b, c),
-                          on_segment(p, c, a)};
-  vr::Vec3f best = e[0];
-  for (const vr::Vec3f& q2 : e) {
-    if (vr::dot(p - q2, p - q2) < vr::dot(p - best, p - best)) best = q2;
-  }
-  return best;
-}
+using test_meshes::closest_point;
+using test_meshes::corner;
+using test_meshes::dented_cube;
+using test_meshes::Mesh;
+using test_meshes::orient_outward;
 
 // Point-to-mesh distance up to `reach`, through a hash of `cell`-sized cells
 // each holding the triangles whose bounding box overlaps it. A query walks
 // outward ring by ring and stops as soon as no cell further out could hold
-// anything nearer -- after ring r, every unvisited cell is at least r cells
-// away -- so the usual sub-voxel answer costs the 27 cells around the point.
+// anything nearer. A triangle listed in no visited cell lies outside all of
+// them, so after ring r it is at least r cells away, plus the point's distance
+// to the nearest face of its own cell. A near answer often costs one cell, and
+// the usual sub-voxel one at most the 27 around the point.
 // Past `reach` the distance reads as `reach`, which every bound below is under,
-// so a miss can only fail a check, never pass one.
+// so a miss can only fail a check, never pass one. Every point it sees must be
+// finite: a NaN has no cell.
 class TriangleHash {
  public:
   TriangleHash(std::vector<std::array<vr::Vec3f, 3>> tris, float cell,
@@ -131,6 +102,12 @@ class TriangleHash {
   float distance(vr::Vec3f p) const {
     float best = reach_;
     const Key k = key(p);
+    // How far p is from the nearest face of its own cell.
+    float margin = cell_;
+    for (int a = 0; a < 3; ++a) {
+      const float f = p[a] / cell_ - float(k[a]);
+      margin = std::min(margin, std::min(f, 1.0f - f) * cell_);
+    }
     const int rings = int(std::ceil(reach_ / cell_));
     for (int r = 0; r <= rings; ++r) {
       for (int dz = -r; dz <= r; ++dz) {
@@ -148,7 +125,7 @@ class TriangleHash {
           }
         }
       }
-      if (best <= float(r) * cell_) break;
+      if (best <= float(r) * cell_ + margin) break;
     }
     return best;
   }
@@ -189,16 +166,6 @@ std::vector<std::array<vr::Vec3f, 3>> triangles_of(const vr::mesh::Mesh& m) {
   return out;
 }
 
-void orient_outward(Mesh& m, vr::Vec3f centre) {
-  for (std::size_t t = 0; t < m.triangle_count(); ++t) {
-    const vr::Vec3f a = corner(m, t, 0), b = corner(m, t, 1),
-                    c = corner(m, t, 2);
-    if (vr::dot(vr::cross(b - a, c - a), (a + b + c) / 3.0f - centre) < 0.0f) {
-      std::swap(m.i[3 * t + 1], m.i[3 * t + 2]);
-    }
-  }
-}
-
 // An icosahedron subdivided `levels` times and pushed onto the sphere: smooth,
 // closed, and made of triangles several voxels across.
 Mesh icosphere(vr::Vec3f c, float r, int levels) {
@@ -237,26 +204,6 @@ Mesh icosphere(vr::Vec3f c, float r, int levels) {
   return m;
 }
 
-// A cube with one corner pushed in: flat faces, 90-degree edges, and a concave
-// dent -- the sharp features a K-coefficient block transform smooths.
-Mesh dented_cube(vr::Vec3f origin, float side) {
-  Mesh m;
-  for (int k = 0; k < 8; ++k) {
-    const vr::Vec3f unit(float((k == 1 || k == 2 || k == 5 || k == 6)),
-                         float((k == 2 || k == 3 || k == 6 || k == 7)),
-                         float(k >= 4));
-    m.v.push_back(origin + side * unit);
-  }
-  const std::uint32_t quads[6][4] = {{0, 1, 2, 3}, {4, 5, 6, 7}, {0, 1, 5, 4},
-                                     {3, 2, 6, 7}, {0, 3, 7, 4}, {1, 2, 6, 5}};
-  for (const auto& q : quads) {
-    m.i.insert(m.i.end(), {q[0], q[1], q[2], q[0], q[2], q[3]});
-  }
-  orient_outward(m, origin + vr::Vec3f(0.5f * side));
-  m.v[6] = origin + vr::Vec3f(0.6f * side);
-  return m;
-}
-
 struct SurfaceError {
   double mean = 0.0, rms = 0.0, max = 0.0;
 };
@@ -275,15 +222,28 @@ SurfaceError summarize(const std::vector<float>& d) {
   return e;
 }
 
-// How far a distance is measured before it reads as "too far": 2 cm, several
-// times any bound checked below.
-constexpr float kReach = 0.02f;
+// How far a distance is measured before it reads as "too far": 4 cm, twice the
+// widest bound checked below.
+constexpr float kReach = 0.04f;
+// The coverage lattice's spacing, in voxels. One unobserved voxel drops the
+// eight cells around it, a hole about two voxels across. At half a voxel some
+// sample lands inside it: clearing one surface voxel's mask bit on the sphere
+// read at least 4.27 mm in each of 12 placements, against the 2.5 mm bound. At
+// two voxels the samples straddled it in 3 of the 12, and the check passed.
+constexpr float kCoverageSpacing = 0.5f;
+
+bool finite(const vr::mesh::Mesh& m) {
+  return std::all_of(
+      m.vertices.begin(), m.vertices.end(), [](const vr::mesh::Vertex& v) {
+        return std::isfinite(v.position.x) && std::isfinite(v.position.y) &&
+               std::isfinite(v.position.z);
+      });
+}
 
 // Accuracy: each extracted vertex position's distance to the source surface.
 // Unique positions, since the mesher emits three vertices per triangle and so
 // every position about six times over.
-SurfaceError accuracy(const vr::mesh::Mesh& got, const Mesh& src, float voxel) {
-  const TriangleHash source(triangles_of(src), voxel, kReach);
+SurfaceError accuracy(const vr::mesh::Mesh& got, const TriangleHash& source) {
   std::vector<std::array<float, 3>> positions;
   positions.reserve(got.vertices.size());
   for (const vr::mesh::Vertex& v : got.vertices) {
@@ -302,9 +262,9 @@ SurfaceError accuracy(const vr::mesh::Mesh& got, const Mesh& src, float voxel) {
 
 // Coverage: how far each point of the source surface is from the extracted
 // surface, sampled on a barycentric lattice over every source triangle fine
-// enough that no sample is more than ~2 voxels from the next. Measured to the
-// extracted TRIANGLES, so a surface without holes reads a fraction of a voxel
-// and a hole reads its own radius.
+// enough that no sample is more than `kCoverageSpacing` voxels from the next.
+// Measured to the extracted TRIANGLES, so a surface without holes reads a
+// fraction of a voxel and a hole reads its own radius.
 SurfaceError coverage(const Mesh& src, const vr::mesh::Mesh& got, float voxel) {
   const TriangleHash extracted(triangles_of(got), voxel, kReach);
   std::vector<float> d;
@@ -313,7 +273,8 @@ SurfaceError coverage(const Mesh& src, const vr::mesh::Mesh& got, float voxel) {
                     c = corner(src, t, 2);
     const float longest =
         std::max({vr::length(b - a), vr::length(c - b), vr::length(a - c)});
-    const int n = std::max(1, int(std::ceil(longest / (2.0f * voxel))));
+    const int n =
+        std::max(1, int(std::ceil(longest / (kCoverageSpacing * voxel))));
     for (int i = 0; i <= n; ++i) {
       for (int j = 0; i + j <= n; ++j) {
         const vr::Vec3f p =
@@ -325,26 +286,40 @@ SurfaceError coverage(const Mesh& src, const vr::mesh::Mesh& got, float voxel) {
   return summarize(d);
 }
 
+// One extracted surface, measured against its source.
+struct Surface {
+  std::size_t triangles = 0;
+  SurfaceError accuracy, coverage;
+};
+
+// One source mesh at one set of params.
+struct Coded {
+  codec::CodecParams params;
+  std::size_t frame_bytes = 0;
+  Surface decoded;
+};
+
+// One source mesh, fused once: the uncompressed surface, then a decoded one
+// per params.
 struct RoundTrip {
   std::uint32_t blocks = 0;
-  std::size_t frame_bytes = 0;
-  std::size_t triangles_ref = 0, triangles_dec = 0;
-  SurfaceError ref_accuracy, ref_coverage, dec_accuracy, dec_coverage;
+  Surface uncompressed;
+  std::vector<Coded> coded;
 };
 
 vol::VoxelGridParams grid_params() {
-  // Production resolution -- 5 mm voxels, 8-voxel blocks (the codec's only
-  // block size), a 40 mm band -- over a heap sized for these meshes.
-  vol::VoxelGridParams gp{};
-  gp.voxel_size = 0.005f;
-  gp.block_size = 8;
-  gp.voxels_per_block = 512;
-  gp.trunc_dist = 0.04f;
+  // Production resolution -- the defaults' voxels, blocks (8, the codec's only
+  // block size) and band -- over a heap sized for these meshes.
+  vol::VoxelGridParams gp = vol::VoxelGridParams::defaults();
   gp.bucket_size = 8;
   gp.num_buckets = 2048;
-  gp.num_blocks = 16384;
-  gp.max_chain = 128;
+  gp.num_blocks = gp.bucket_size * gp.num_buckets;
   return gp;
+}
+
+// The raw tsdf + weight a frame of `blocks` blocks replaces.
+double raw_bytes(std::uint32_t blocks) {
+  return double(blocks) * codec::kVoxelsPerBlock * 2.0 * sizeof(float);
 }
 
 struct Tools {
@@ -355,60 +330,62 @@ struct Tools {
   vr::mesh::MarchingCubes& mc;
 };
 
-// With `measure_floor` false the uncompressed surface is not measured: a second
-// run over the same mesh has the same one, so its figures are copied instead.
-int round_trip(Tools& tools, const Mesh& src, const codec::CodecParams& params,
-               bool measure_floor, RoundTrip& out) {
+int measure(const Mesh& src, const TriangleHash& source,
+            const vr::mesh::Mesh& got, float voxel, Surface& out) {
+  CHECK(!got.empty());
+  // A NaN position has no cell to hash into and no order to sort by.
+  CHECK(finite(got));
+  out.triangles = got.triangle_count();
+  out.accuracy = accuracy(got, source);
+  out.coverage = coverage(src, got, voxel);
+  return 0;
+}
+
+// `a`'s blocks, in the frame's order, through the forward DCT, frame bytes, a
+// fresh grid and the inverse DCT, to a mesh measured against `src`.
+//
+// TODO(codec): drive this through `Encoder` / `Decoder` once they land (the
+// 2026-09-26 entry's third PR). Until then the test sorts, allocates and
+// remaps the blocks itself, so it checks its own copy of what they will do.
+int code(Tools& tools, vol::VoxelBlockGrid& a,
+         const std::vector<vol::BlockIndex>& sorted, const Mesh& src,
+         const TriangleHash& source, Coded& out) {
   const vol::VoxelGridParams gp = grid_params();
-  const vol::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
-                                      {"weight", sizeof(float)}};
 
-  // Mesh -> TSDF.
-  vr::Result<vol::VoxelBlockGrid> a_r =
-      vol::VoxelBlockGrid::create(tools.device, tools.allocator, gp, attrs, 2);
-  CHECK(a_r.ok());
-  vol::VoxelBlockGrid a = std::move(a_r).value();
-  vr::Result<std::uint32_t> failed = a.map().allocate_from_triangles(
-      src.v.data(), src.vertex_count(), src.i.data(), src.triangle_count());
-  CHECK(failed.ok() && failed.value() == 0);
-  CHECK(tools.integrator
-            .integrate(a, src.v.data(), src.vertex_count(), src.i.data(),
-                       src.triangle_count(), {ts::MeshSdfMode::Signed, 1.5f})
-            .ok());
-
-  vr::Result<vr::mesh::Mesh> ref = tools.mc.extract_host(a);
-  CHECK(ref.ok());
-  CHECK(!ref.value().empty());
-
-  // TSDF -> frame bytes, blocks in the frame's order.
-  vr::Result<std::vector<vol::BlockIndex>> active_r =
-      a.map().compact_active_blocks();
-  CHECK(active_r.ok());
-  std::vector<vol::BlockIndex> active = std::move(active_r).value();
-  std::sort(active.begin(), active.end(),
-            [](const vol::BlockIndex& x, const vol::BlockIndex& y) {
-              return cd::coord_less(x.coord, y.coord);
-            });
+  // TSDF -> frame bytes.
   cd::IntraFrame frame;
   frame.voxel_size = gp.voxel_size;
-  for (const vol::BlockIndex& b : active) frame.coords.push_back(b.coord);
-  CHECK(tools.dct.forward(a, a.block_list(active), params, frame.blocks).ok());
+  for (const vol::BlockIndex& b : sorted) frame.coords.push_back(b.coord);
+  CHECK(tools.dct.forward(a, a.block_list(sorted), out.params, frame.blocks)
+            .ok());
   vr::Result<std::vector<std::uint8_t>> bytes = cd::write_intra_frame(frame);
   CHECK(bytes.ok());
 
-  // Frame bytes -> a fresh grid.
-  vr::Result<cd::IntraFrame> decoded =
+  // Frame bytes -> exactly the frame written: the entropy layer is lossless.
+  vr::Result<cd::IntraFrame> decoded_r =
       cd::read_intra_frame(bytes.value().data(), bytes.value().size(),
                            static_cast<std::uint32_t>(gp.num_blocks));
-  CHECK(decoded.ok());
-  CHECK(decoded.value().coords == frame.coords);
+  CHECK(decoded_r.ok());
+  const cd::IntraFrame& decoded = decoded_r.value();
+  CHECK(decoded.voxel_size == frame.voxel_size);
+  CHECK(decoded.coords == frame.coords);
+  CHECK(decoded.blocks.trunc_dist == frame.blocks.trunc_dist);
+  CHECK(decoded.blocks.params.coefficient_count ==
+        frame.blocks.params.coefficient_count);
+  CHECK(decoded.blocks.params.dc_step == frame.blocks.params.dc_step);
+  CHECK(decoded.blocks.params.ac_step == frame.blocks.params.ac_step);
+  CHECK(decoded.blocks.coefficients == frame.blocks.coefficients);
+  CHECK(decoded.blocks.masks == frame.blocks.masks);
 
+  // -> a fresh grid.
+  const vol::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
+                                      {"weight", sizeof(float)}};
   vr::Result<vol::VoxelBlockGrid> b_r =
       vol::VoxelBlockGrid::create(tools.device, tools.allocator, gp, attrs, 2);
   CHECK(b_r.ok());
   vol::VoxelBlockGrid b = std::move(b_r).value();
   std::vector<vol::BlockIndex> want;
-  for (const vr::Vec3i& c : decoded.value().coords) want.push_back({c, 0});
+  for (const vr::Vec3i& c : decoded.coords) want.push_back({c, 0});
   vr::Result<std::uint32_t> b_failed =
       b.map().allocate(want.data(), static_cast<std::uint32_t>(want.size()));
   CHECK(b_failed.ok() && b_failed.value() == 0);
@@ -420,46 +397,83 @@ int round_trip(Tools& tools, const Mesh& src, const codec::CodecParams& params,
     ptr_of[{blk.coord.x, blk.coord.y, blk.coord.z}] = blk.ptr;
   }
   std::vector<vol::BlockIndex> in_order;
-  for (const vr::Vec3i& c : decoded.value().coords) {
-    in_order.push_back({c, ptr_of.at({c.x, c.y, c.z})});
+  for (const vr::Vec3i& c : decoded.coords) {
+    auto it = ptr_of.find({c.x, c.y, c.z});
+    CHECK(it != ptr_of.end());
+    in_order.push_back({c, it->second});
   }
-  CHECK(tools.dct.inverse(b, b.block_list(in_order), decoded.value().blocks)
-            .ok());
+  CHECK(tools.dct.inverse(b, b.block_list(in_order), decoded.blocks).ok());
 
   vr::Result<vr::mesh::Mesh> dec = tools.mc.extract_host(b);
   CHECK(dec.ok());
-  CHECK(!dec.value().empty());
-
-  out.blocks = static_cast<std::uint32_t>(active.size());
   out.frame_bytes = bytes.value().size();
-  out.triangles_ref = ref.value().triangle_count();
-  out.triangles_dec = dec.value().triangle_count();
-  if (measure_floor) {
-    out.ref_accuracy = accuracy(ref.value(), src, gp.voxel_size);
-    out.ref_coverage = coverage(src, ref.value(), gp.voxel_size);
+  return measure(src, source, dec.value(), gp.voxel_size, out.decoded);
+}
+
+// `src` through the mesh integrator once, its uncompressed surface measured,
+// then coded at each of `out.coded`'s params.
+int round_trip(Tools& tools, const Mesh& src, RoundTrip& out) {
+  const vol::VoxelGridParams gp = grid_params();
+  const vol::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
+                                      {"weight", sizeof(float)}};
+
+  // Mesh -> TSDF: every triangle takes part.
+  vr::Result<vol::VoxelBlockGrid> a_r =
+      vol::VoxelBlockGrid::create(tools.device, tools.allocator, gp, attrs, 2);
+  CHECK(a_r.ok());
+  vol::VoxelBlockGrid a = std::move(a_r).value();
+  vr::Result<std::uint32_t> failed = a.map().allocate_from_triangles(
+      src.v.data(), src.vertex_count(), src.i.data(), src.triangle_count());
+  CHECK(failed.ok() && failed.value() == 0);
+  vr::Result<ts::MeshIntegrateStats> stats = tools.integrator.integrate(
+      a, src.v.data(), src.vertex_count(), src.i.data(), src.triangle_count(),
+      {ts::MeshSdfMode::Signed, 1.5f});
+  CHECK(stats.ok());
+  CHECK(stats.value().triangles == src.triangle_count());
+
+  const TriangleHash source(triangles_of(src), gp.voxel_size, kReach);
+  vr::Result<vr::mesh::Mesh> ref = tools.mc.extract_host(a);
+  CHECK(ref.ok());
+  if (measure(src, source, ref.value(), gp.voxel_size, out.uncompressed) != 0) {
+    return 1;
   }
-  out.dec_accuracy = accuracy(dec.value(), src, gp.voxel_size);
-  out.dec_coverage = coverage(src, dec.value(), gp.voxel_size);
+
+  // The blocks the integrator wrote, in the frame's order.
+  vr::Result<std::vector<vol::BlockIndex>> active_r =
+      a.map().compact_active_blocks();
+  CHECK(active_r.ok());
+  std::vector<vol::BlockIndex> sorted = std::move(active_r).value();
+  CHECK(sorted.size() == stats.value().blocks);
+  std::sort(sorted.begin(), sorted.end(),
+            [](const vol::BlockIndex& x, const vol::BlockIndex& y) {
+              return cd::coord_less(x.coord, y.coord);
+            });
+  out.blocks = static_cast<std::uint32_t>(sorted.size());
+
+  for (Coded& c : out.coded) {
+    if (code(tools, a, sorted, src, source, c) != 0) return 1;
+  }
   return 0;
 }
 
-void print(const char* what, const codec::CodecParams& params,
-           const RoundTrip& r, float voxel) {
-  // Millimetres, and the raw tsdf + weight the frame replaces.
-  const double raw = double(r.blocks) * 512.0 * 8.0;
-  std::printf(
-      "%-12s K=%3u  %5u blocks  %8zu B (%.1f%% of raw)  tris %zu -> %zu\n"
-      "             uncompressed: accuracy mean %.3f rms %.3f max %.3f | "
-      "coverage max %.3f mm\n"
-      "             decoded:      accuracy mean %.3f rms %.3f max %.3f | "
-      "coverage max %.3f mm  (max %.2f voxels)\n",
-      what, params.coefficient_count, r.blocks, r.frame_bytes,
-      100.0 * double(r.frame_bytes) / raw, r.triangles_ref, r.triangles_dec,
-      1e3 * r.ref_accuracy.mean, 1e3 * r.ref_accuracy.rms,
-      1e3 * r.ref_accuracy.max, 1e3 * r.ref_coverage.max,
-      1e3 * r.dec_accuracy.mean, 1e3 * r.dec_accuracy.rms,
-      1e3 * r.dec_accuracy.max, 1e3 * r.dec_coverage.max,
-      r.dec_accuracy.max / voxel);
+void print(const char* what, const RoundTrip& r, float voxel) {
+  auto line = [voxel](const char* label, const Surface& s) {
+    std::printf(
+        "             %-13s accuracy mean %.3f rms %.3f max %.3f | "
+        "coverage max %.3f mm = %.2f voxels\n",
+        label, 1e3 * s.accuracy.mean, 1e3 * s.accuracy.rms,
+        1e3 * s.accuracy.max, 1e3 * s.coverage.max, s.coverage.max / voxel);
+  };
+  std::printf("%-12s %5u blocks  tris %zu\n", what, r.blocks,
+              r.uncompressed.triangles);
+  line("uncompressed:", r.uncompressed);
+  for (const Coded& c : r.coded) {
+    std::printf("             K=%3u  %8zu B (%.1f%% of raw)  tris %zu\n",
+                c.params.coefficient_count, c.frame_bytes,
+                100.0 * double(c.frame_bytes) / raw_bytes(r.blocks),
+                c.decoded.triangles);
+    line("decoded:", c.decoded);
+  }
 }
 
 }  // namespace
@@ -496,53 +510,61 @@ int main() {
               dct.value(), mc.value()};
   const float voxel = grid_params().voxel_size;
 
-  const Mesh sphere =
+  const Mesh sphere_mesh =
       icosphere(vr::Vec3f(0.0131f, -0.0217f, 0.0093f), 0.15f, 3);
-  const Mesh cube = dented_cube(vr::Vec3f(-0.1127f, -0.0893f, -0.1011f), 0.22f);
+  const Mesh cube_mesh =
+      dented_cube(vr::Vec3f(-0.1127f, -0.0893f, -0.1011f), 0.22f);
   const codec::CodecParams defaults{};
   codec::CodecParams full = defaults;
-  full.coefficient_count = 512;  // every coefficient: quantization alone
+  full.coefficient_count = codec::kVoxelsPerBlock;  // quantization alone
 
-  RoundTrip sphere_default, sphere_full, cube_default;
-  if (round_trip(tools, sphere, defaults, true, sphere_default) != 0) return 1;
-  if (round_trip(tools, sphere, full, false, sphere_full) != 0) return 1;
-  sphere_full.ref_accuracy = sphere_default.ref_accuracy;
-  sphere_full.ref_coverage = sphere_default.ref_coverage;
-  if (round_trip(tools, cube, defaults, true, cube_default) != 0) return 1;
-  print("sphere", defaults, sphere_default, voxel);
-  print("sphere", full, sphere_full, voxel);
-  print("dented cube", defaults, cube_default, voxel);
+  RoundTrip sphere, cube;
+  sphere.coded.push_back({defaults, 0, {}});
+  sphere.coded.push_back({full, 0, {}});
+  cube.coded.push_back({defaults, 0, {}});
+  if (round_trip(tools, sphere_mesh, sphere) != 0) return 1;
+  if (round_trip(tools, cube_mesh, cube) != 0) return 1;
+  print("sphere", sphere, voxel);
+  print("dented cube", cube, voxel);
+  const Surface& sphere_floor = sphere.uncompressed;
+  const Surface& sphere_default = sphere.coded[0].decoded;
+  const Surface& sphere_full = sphere.coded[1].decoded;
+  const Surface& cube_floor = cube.uncompressed;
+  const Surface& cube_default = cube.coded[0].decoded;
 
   // Bounds sit at about twice what an M5 Max measured (Release, 5 mm voxels),
-  // so they hold across devices and catch a regression, not rounding. The
-  // figures themselves print above.
+  // 1.8x at the tightest and rounded to a fraction of a voxel, so they hold
+  // across devices and catch a regression, not rounding. The figures themselves
+  // print above.
   //
   // The floor, before any compression: marching cubes over the exact field.
-  // On the sphere it sits on the source to a hundredth of a voxel and covers
-  // it to a tenth (measured 0.16 mm and 0.35 mm).
-  CHECK(sphere_default.ref_accuracy.max < 0.1 * voxel);
-  CHECK(sphere_default.ref_coverage.max < 0.2 * voxel);
+  // On the sphere it sits on the source to a thirtieth of a voxel and covers
+  // it to a fourteenth (measured 0.155 mm and 0.353 mm).
+  CHECK(sphere_floor.accuracy.max < 0.1 * voxel);
+  CHECK(sphere_floor.coverage.max < 0.2 * voxel);
   // On the dented cube the dent tilts the six triangles around it, which closes
   // six of the cube's edges to about 56 degrees, and marching cubes cuts a
-  // wedge that thin back by up to a voxel (measured 1.54 mm and 7.09 mm).
-  CHECK(cube_default.ref_accuracy.max < 0.5 * voxel);
-  CHECK(cube_default.ref_coverage.max < 2.0 * voxel);
+  // wedge that thin back by 1.4 voxels (measured 1.54 mm and 7.09 mm).
+  CHECK(cube_floor.accuracy.max < 0.6 * voxel);
+  CHECK(cube_floor.coverage.max < 3.0 * voxel);
 
   // What the default parameters add, on a smooth surface (measured rms
   // 0.39 mm, max 1.42 mm, coverage 1.30 mm): under a sixth of a voxel rms,
   // half a voxel at worst, and no holes.
-  CHECK(sphere_default.dec_accuracy.rms < 0.15 * voxel);
-  CHECK(sphere_default.dec_accuracy.max < 0.5 * voxel);
-  CHECK(sphere_default.dec_coverage.max < 0.5 * voxel);
-  // Keeping every coefficient cannot be worse than keeping 32.
-  CHECK(sphere_full.dec_accuracy.rms <= sphere_default.dec_accuracy.rms);
+  CHECK(sphere_default.accuracy.rms < 0.15 * voxel);
+  CHECK(sphere_default.accuracy.max < 0.5 * voxel);
+  CHECK(sphere_default.coverage.max < 0.5 * voxel);
+  // Every coefficient, which leaves the quantization's error alone (measured
+  // rms 0.22 mm). Bounded on its own rather than against K = 32: Parseval
+  // bounds the field's error, not a vertex's after the clamp and marching
+  // cubes, so fewer coefficients measuring better here would not be a bug.
+  CHECK(sphere_full.accuracy.rms < 0.09 * voxel);
   // And on the sharp features (measured 3.11 mm and 9.86 mm).
-  CHECK(cube_default.dec_accuracy.max < 1.0 * voxel);
-  CHECK(cube_default.dec_coverage.max < 3.0 * voxel);
+  CHECK(cube_default.accuracy.max < 1.25 * voxel);
+  CHECK(cube_default.coverage.max < 4.0 * voxel);
   // The frame is a small fraction of the raw tsdf + weight it replaces
   // (measured 0.8%).
-  CHECK(double(sphere_default.frame_bytes) <
-        0.02 * double(sphere_default.blocks) * 512.0 * 8.0);
+  CHECK(double(sphere.coded[0].frame_bytes) < 0.02 * raw_bytes(sphere.blocks));
 
   std::printf("codec_mesh_roundtrip: OK\n");
   return 0;
