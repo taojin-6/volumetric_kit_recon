@@ -29,6 +29,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `codec`: **`CodecParams`' defaults are K = 64 with one step of 0.2 for DC
+  and AC alike**, replacing the prior engine's K = 32 with DC 0.25 / AC 0.05.
+  On room0 at 1 cm frames are 7% smaller and 28% more accurate, and host
+  coding still fits a 30 fps frame interval. They are provisional until the
+  per-band quantization study (see the 2026-09-27 decision). On a smooth
+  analytic sphere they are 16% smaller but 17% less accurate on the mean,
+  and the worst vertex is 2.4x as far off.
 - `volume`: `VoxelBlockGrid::remove` finds each block by binary search over one
   sorted snapshot, where it scanned the whole active set per block. Removing k
   of n blocks drops from O(k·n) to O((k + n) log n).
@@ -86,6 +93,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   cropped on every back end (VideoToolbox, which cannot, refuses such a
   stream, and `Auto` moves it to software). The installed package holds a
   consumer to the FFmpeg major versions it was built against.
+- `examples`: **`codec_replica`**, the TSDF codec on real data. It fuses a
+  Replica sequence and streams the grid through `Encoder` / `Decoder`,
+  reporting bytes, bitrate and stage rows. It then judges the decoded surface
+  against the source's, mesh to mesh (accuracy and coverage, each with its
+  count beyond reach). `--sweep` prints a rate–distortion table. The metric
+  is `examples/common/mesh_distance.hpp`, header-only and tested by
+  `recon_mesh_distance`. The player grid shares the fusion grid's layout,
+  now `examples/common/grid_layout.hpp`.
 - `codec`: **`Encoder` and `Decoder`, the codec's public API** (see the
   2026-09-27 decision). This is the third of its five PRs.
   - `Encoder::encode(grid)` gives one intra frame of every block with an
