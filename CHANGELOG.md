@@ -65,6 +65,25 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `codec`: **the rANS reference coder and the v1 intra frame**, both internal.
+  This is the second of the codec's five PRs (see the 2026-09-27 decision).
+  - `rans.hpp`: static-table rANS with a 32-bit state, 16-bit words and 12-bit
+    probabilities, integer only. It is the reference the GPU coder must match
+    byte for byte.
+  - `bitstream.{hpp,cpp}`: `write_intra_frame` / `read_intra_frame`. A frame
+    holds a 44-byte header, a section table, fixed per-frame tables, and
+    segments of R sorted blocks (default 64), each an independent rANS stream.
+    Every integer is a class plus raw bits.
+  - The reader never reads outside its buffer. It refuses unknown required
+    sections and skips optional ones, and it takes the caller's `max_blocks`,
+    which bounds its allocation (under 2.1 KB per block). Every size is
+    checked in 64 bits, so a 32-bit build refuses a frame rather than wrapping.
+  - The format requires strictly increasing block coordinates. The reader
+    checks the order across segments, where a segment's first coordinate is raw
+    bits.
+  - Flag bits other than "required" are reserved, so a known section that sets
+    one is refused. Table varints must be canonical.
+  - Tests: `recon_codec_rans` and `recon_codec_bitstream`, both host-only.
 - `sensor`: **the Orbbec (Femto Mega) driver** — `OrbbecCapture`, an
   `ICameraCapture` over one camera, as its own target
   (`volumetric_kit::recon_sensor_orbbec`, built with `VR_WITH_ORBBEC`) so

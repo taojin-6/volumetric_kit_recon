@@ -3852,7 +3852,8 @@ run is where it gets measured. The replacement:
 - **Tables:** static per-frame, per-band frequency tables in the header, over a
   small alphabet (a magnitude class plus raw bits, JPEG-style).
 - **Chunks:** fixed runs of blocks, each coded by interleaved rANS lanes, with a
-  chunk offset table so decode is parallel too.
+  chunk offset table so decode is parallel too. *(Amended 2026-09-27: each run,
+  a segment, is one independent stream instead of interleaved lanes.)*
 - **Arithmetic:** integer-only, so this stage is bit-exact across devices.
 - **No new dependencies:** the same coder handles the coordinates and the mask,
   so neither nvcomp (CUDA-only) nor libzstd is needed.
@@ -3976,6 +3977,230 @@ their inputs. The buffers change anyway with the device-resident output below.
 - The GPU rANS kernels.
 - Device-resident coefficients, so the GPU coder reads them without a host
   round trip, marked `TODO(codec)` on the transform.
+
+### 2026-09-27 — The v1 frame is independent rANS segments of sorted blocks, every integer a class plus raw bits, behind fixed per-frame tables and a section table; the decoder's end check is for consistency, not integrity (amends the 2026-09-26 entry's interleaved lanes).
+
+The second of the 2026-09-26 entry's five PRs: the host rANS reference coder
+(`codec/rans.hpp`) and the v1 intra frame (`codec/bitstream.{hpp,cpp}`), both
+internal. Nothing public changes. `Encoder` / `Decoder` are the next PR.
+
+**Segments, not interleaved lanes.** The 2026-09-26 entry planned chunks of
+blocks, each coded by interleaved rANS lanes. What landed is simpler: a
+**segment** of R consecutive blocks (`segment_size`, default 64, stored in the
+header) is one fully independent rANS stream. It holds everything about its
+blocks, starts with its first block's coordinate in full, and is listed by
+length in a SEGMENTS section.
+- **Why:** on the GPU that is one thread per segment in both directions, with
+  no coordination over where each lane's words go. True interleaving into one
+  stream needs that coordination.
+- **Cost:** a segment carries its state (4 bytes), its first coordinate (12)
+  and its length (4). That is 20 bytes per 64 blocks, against an estimated 30+
+  bytes per block of payload.
+- **Parallelism:** room0's ~107 k blocks come to ~1.7 k segments.
+
+**The coder.** Giesen's word-oriented rANS:
+- **Parameters:** a 32-bit state in `[2^16, 2^32)`, 16-bit output words, and
+  12-bit probabilities. One renormalization step always suffices, and nothing
+  needs more than 32-bit arithmetic, so the GPU kernels can mirror it in GLSL.
+  The encoder's bound is tested as `(x >> 20) >= f`. The first cut wrote
+  `x >= f << 20` as a 64-bit product: right on the host, but a literal port
+  computes `f << 20` in a 32-bit `uint`, where it is 0 at a probability of one,
+  and would emit a word for every probability-one symbol. The two forms agree
+  exactly, and the writer's output did not change by a byte.
+- **The writer:** `RansWriter` takes symbols in decode order and runs the coder
+  backwards itself, so no caller reverses anything. A symbol its table cannot
+  encode (frequency 0, or past the alphabet) or a raw field wider than 32 bits
+  is recorded as a step of frequency 0, and `finish` refuses the stream at the
+  division that step would have made. The failure is recorded in band because
+  a sticky flag stored in `put` made a room0-sized frame's write 47.5 ms
+  against this form's 42.8, which is within noise of no check at all.
+  `finish` appends to the caller's vector, so the frame writes every segment
+  onto one payload.
+- **The reader:** `RansReader` is bounds-checked and its failures are sticky,
+  so garbage input costs a wasted loop, never a read past the buffer. A raw
+  read wider than 32 bits fails it too; it was a shift past the word.
+- **Measured:** 100 000 symbols of probability one cost nothing past the
+  4-byte state. A 200 000-symbol skewed source with interleaved 7-bit raw
+  fields came to 1 087 232 bits against an ideal 1 087 459 under its table
+  (−0.02%).
+
+**The symbol model.** Every integer is a **class** (its bit length) drawn from
+a table, plus the bits below its leading one (and a sign) as raw bits:
+- **Coefficients:** 16 classes (±32767 < 2^15), one table per coefficient
+  index, as the prior engine had.
+- **Coordinates:** blocks are sorted by (z, y, x). Deltas go through five
+  context tables, each for a case the sort already constrains: a z step; a y
+  step within a z slice; a y step after a z step; a run step x − 1 within a
+  row, so a run is a stream of zeros; and a free x step. All five have 33
+  classes, since a delta can reach 2^32 − 1.
+- **Masks:** a 3-way class per block (all observed, none, partial). A partial
+  mask then sends its 64 bytes through a 256-symbol table.
+- **Tables:** counted over the frame and normalized on the host, with integer
+  arithmetic only. The GPU path will hand its histograms to the same function,
+  so the tables cannot differ between the two.
+
+**The layout.** Little-endian throughout:
+- A 44-byte header: magic `VRTC`, version, frame type, voxel size,
+  `trunc_dist`, block size, K, the two steps, block count, segment size.
+- A section table of `{id, flags, length}`, then the bodies: TABLES, SEGMENTS,
+  PAYLOAD.
+- The section rules: an unknown section flagged required stops the read with
+  `Unsupported`, and an unknown optional one is skipped. The sections may come
+  in any order. The frame's length must be exact.
+- Every other flag bit is reserved: zero in v1, and a known section that sets
+  one is refused as `Unsupported`. A later version may define a flag that
+  changes how a body reads, and a v1 reader must not parse that body as v1.
+- A table's varints must be canonical, so each value has one spelling. That
+  does not make every accepted frame canonical, since the sections may come in
+  any order, so a consumer that hashes frames should hash what the writer
+  made.
+
+**Sorted coordinates are a format rule.** They must be strictly increasing, and
+the writer refuses anything else. That is what keeps the deltas small, and it
+means a decoded frame is duplicate-free, which is the precondition the inverse
+transform documents and does not check. Within a segment that holds by
+construction, since the delta code cannot step backwards. A segment's first
+coordinate is raw bits, though, which no end check sees, so the reader checks
+each segment against the one before. The first cut did not, and review found
+it. A frame whose second segment's first x was edited down onto the first
+segment's block decoded cleanly, with one block twice. The writer then refused
+its own decoded frame, and a decoder would have raced two workgroups on one
+block.
+
+**The reader takes the caller's capacity.** A frame's size does not bound its
+block count: a block whose every symbol has probability one costs no bits, so
+640 all-zero blocks in one run fit in 415 bytes. `read_intra_frame` therefore
+takes `max_blocks` and refuses a frame that claims more, rather than
+allocating whatever the header asks for. It bounds bytes as well as blocks:
+the reader allocates `12 + 64 + 4K` bytes per block, at most ~2.1 KB at
+K = 512, which is half the 4 KB of `tsdf` + `weight` the grid it decodes into
+holds per block. Every size is computed in 64 bits and checked against the
+vector's `max_size` before anything is allocated. On a 32-bit build
+(armeabi-v7a is a target) `n * K` used to wrap, sizing the coefficients short
+and then writing past them, and it is now refused as `OutOfMemory`. The writer
+likewise refuses more than 2^30 − 1 segments or 4 GiB of payload, since its
+u32 lengths cannot hold them.
+
+**The end-of-stream check is for consistency, not integrity.** The first draft
+of `RansReader::finish` called it "a free integrity check". The test showed
+otherwise:
+- **Truncation:** caught every time.
+- **Single-bit flips, 4000 of them on a random stream:** 2232 were caught.
+  1714 landed in raw bits, where they are invisible by construction: raw bits
+  leave the state as they are decoded, and every value of them is valid. The
+  other 54 changed a table symbol and still finished. They moved the slot into
+  another symbol of equal frequency, so the next state was identical and the
+  decoder resynchronized one substituted symbol later.
+- **A realistic frame:** 2990 of 3000 random one-to-three-byte corruptions were
+  refused, against 2967 before the review's checks. The rest decode to a
+  different, valid frame.
+
+So the no-checksum rule stands, and **integrity is the transport's**. If a
+consumer ever keeps frames where nothing checks them, a CRC can be added as an
+optional section. A v1 reader skips it, so that needs no new version.
+
+**Verified** on macOS (Apple M5 Max), in Release and in Debug under ASan +
+UBSan. The full suite passes, 31 of 31 against 29 before. The two new
+host-only tests also pass under GCC 16, with identical figures to Clang's.
+That took one fix: the frame fixture drew three random numbers as one
+constructor's arguments, whose evaluation order GCC and Clang choose
+differently, so CI's GCC legs had tested a different frame. The two tests
+are `recon_codec_rans` and `recon_codec_bitstream`:
+- `recon_codec_rans` covers the normalization invariants (including the path
+  where bumping rare symbols to 1 overshoots M), round trips from 0 to 100 000
+  operations with raw fields 1 to 32 bits wide, the zero cost, the size bound,
+  every truncation, the flips above, and a reader that stops early.
+- `recon_codec_bitstream` covers round trips across block counts, K up to 512
+  and segment sizes from 1 to larger than the frame, with decode then
+  re-encode giving identical bytes. It also covers coordinates at both ends of
+  int32 and deltas of 2^32 − 1, every writer refusal, and every header,
+  section and table refusal (each made by editing one field of a valid frame).
+  Further: a delta stepped past int32 in a hand-patched stream, truncation at
+  every length, 3000 random corruptions, and the all-zero frame's cost.
+- For the review follow-up, `recon_codec_rans` adds every put and get either
+  side refuses and `finish` appending. `recon_codec_bitstream` adds a
+  duplicate and a step backwards across segments (and a step forwards, which
+  is just another valid frame), a reserved flag on each known section,
+  overlong varints, and a reader that fails partway through a delta off
+  `INT32_MAX` being reported as corrupt. The first cut reported that as
+  leaving int32.
+
+The review follow-up was also checked three ways the tests cannot pin:
+- The writer's output is byte-identical to the first cut's over 84 frames
+  (2.6 MB, K up to 512, segment sizes 1 to larger than the frame), so the
+  32-bit bound and the rewritten writer changed no byte of the format.
+- Timed on a room0-sized frame (107 000 blocks, K = 32, 64-block segments,
+  3.05 MB; Apple M5 Max, Release, `-O3`, best of 35), the writer takes
+  42.8 ms against the first cut's 40.7. The copies and per-segment allocations
+  review asked to remove were not that cost: the first cut, and the first cut
+  appending into one payload with no per-segment vector, measure within noise
+  (40.5 and 40.3 ms). Reverting any one change of the follow-up leaves the gap
+  in place, so it is the writer function's code generation rather than any
+  one change. It is 5% of a host reference, and the GPU-coder measurement
+  under Open is the number that matters. Two things this timing caught
+  first: the sticky flag above (47.5 ms), and a `reserve` per appended
+  segment. `reserve` allocates exactly what it is asked for, so that version
+  copied the frame once per segment (83.7 ms). `finish` now appends with
+  `push_back`, which grows geometrically. Its first replacement,
+  `resize`-then-index, failed CI's ubuntu-24.04 Release leg. GCC 13 at `-O3`
+  cannot see that `resize` grew the caller's vector, so `-Wstringop-overflow`
+  fails the build. It reproduced in an `ubuntu:24.04` container, and neither
+  Clang nor GCC 16 warns. `push_back`, a pointer taken after `resize`, and a
+  staged copy all compile cleanly under GCC 13 and time the same.
+- The frame code and both tests compile under `-Werror -O3` with GCC 13.3 in
+  CI's `ubuntu:24.04` image.
+- The frame code and both tests compile under `-Werror` for a 32-bit `size_t`
+  (`arm64_32`, the watchOS SDK) and under GCC 16.
+- `bitstream.cpp` now includes none of the 17 Vulkan and GPU headers it used
+  to. `DctBlocks` moved into `dct_blocks.hpp`, which needs only `CodecParams`,
+  so the host-only format no longer reaches the transform.
+
+Mutation-checked: 15 planted bugs, each caught by the tests. They span the
+renormalization bounds on both sides, the state check, the normalization's
+excess path, the table-sum, trailing-byte, `max_blocks`, required-section and
+int32-overflow checks, the writer's sort check, a run step coded one way and
+read another, and mask bytes read reversed. One check is not pinned:
+`read_intra_frame`'s segment-length check (at least 4 bytes, even). It is
+redundant with `RansReader`'s own, which still refuses the frame, and it is
+kept for its message.
+
+The review follow-up planted 12 more bugs, in the Debug build under ASan +
+UBSan, and each was caught:
+- no cross-segment order check
+- a reserved flag accepted on a known section
+- an overlong varint accepted
+- the int32 check ahead of the reader's failure
+- a segment's length off by one word
+- `put` reading past the alphabet (caught by ASan)
+- `finish` dividing by a zero frequency (caught by UBSan and the test)
+- `finish` keeping the ops of a refused stream
+- `put_bits` accepting more than 32 bits
+- `get_bits` accepting more than 32 bits
+- `finish` replacing rather than appending
+- the renormalization bound off by one
+
+One test needed strengthening before it caught its bug. Reading 33 bits from
+a stream of one 32-bit field ran off its end with or without the width check.
+The test now reads 36 bits from three whole 12-bit chunks, which only the
+check refuses.
+
+**Declined in review.**
+- A byte budget beside `max_blocks`. It would bound nothing the grid the caller
+  decodes into does not already bound (see above).
+- Catching `std::bad_alloc`. The library builds with `-fno-exceptions` on
+  mobile, so the reader checks every size before it allocates instead.
+- Writing the payload straight into the frame and back-patching its lengths.
+  It removes the last full copy, and it measured no faster than appending into
+  one payload (see the timing above). The simpler structure stayed.
+
+**Open.**
+- `Encoder` / `Decoder`, the next PR.
+- The room0 throughput measurement that decides whether the GPU coder is
+  needed.
+- The optional CRC section above, a `TODO(codec)` in `read_intra_frame`.
+- The reader accepts a "partial" mask that decodes all-full or all-empty. Our
+  writer never makes one, and it decodes correctly. A `TODO(codec)` in the
+  reader's block decode.
 
 ## Measured lessons
 

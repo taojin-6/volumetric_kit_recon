@@ -319,6 +319,25 @@ target_include_directories(
 vr_target_warnings(recon_codec_dct_test)
 add_test(NAME recon_codec_dct COMMAND recon_codec_dct_test)
 
+# codec tier, entropy coding: the rANS reference coder (normalization, round
+# trips, a probability-one symbol's zero cost, size against the ideal code
+# length, truncation and bit flips) and the v1 intra frame built on it (round
+# trips, every writer and reader refusal, the section rules, corruption, and an
+# all-zero frame's cost). Both host-only, so they always run; both reach the
+# internal headers by include path, as recon_codec_params_test does.
+foreach(_vr_codec_host_test rans bitstream)
+  add_executable(recon_codec_${_vr_codec_host_test}_test
+                 codec_${_vr_codec_host_test}_test.cpp)
+  target_link_libraries(recon_codec_${_vr_codec_host_test}_test
+                        PRIVATE volumetric_kit::recon_codec)
+  target_include_directories(
+    recon_codec_${_vr_codec_host_test}_test
+    PRIVATE ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/codec)
+  vr_target_warnings(recon_codec_${_vr_codec_host_test}_test)
+  add_test(NAME recon_codec_${_vr_codec_host_test}
+           COMMAND recon_codec_${_vr_codec_host_test}_test)
+endforeach()
+
 # The Orbbec SDK prerequisite (VR_WITH_ORBBEC only): the copy the build found is
 # the one that loads -- runtime version == configured version, since the SDK is
 # linked in place from an install outside the repo -- and an SDK context opens
