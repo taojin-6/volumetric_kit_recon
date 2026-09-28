@@ -138,7 +138,9 @@ class VR_SENSOR_ORBBEC_API OrbbecRig final : public ICameraCapture {
   ///        first. Idempotent.
   /// @return OK once all stream; @ref Status::Code::InvalidArgument on a
   ///         moved-from rig; @ref Status::Code::IoError if a camera refuses
-  ///         or has disconnected, in which case none is left streaming.
+  ///         or has disconnected; for H.265 colour, what
+  ///         @ref OrbbecCapture::start returns when a camera's decoder does
+  ///         not start. On any failure, none is left streaming.
   Status start() override;
 
   /// @brief Stop every camera and drop the frames held. Idempotent. The

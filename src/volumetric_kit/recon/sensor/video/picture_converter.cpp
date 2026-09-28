@@ -102,7 +102,7 @@ std::optional<ColorEncoding> resolve_encoding(
 
 Result<DecodedPicture> PictureConverter::convert(
     const AVFrame& frame, VideoPixelLayout layout,
-    const std::optional<VideoColorDescription>& color) {
+    const std::optional<VideoColorDescription>& unlabelled_color) {
   const auto format = static_cast<AVPixelFormat>(frame.format);
   const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(format);
   if (desc == nullptr || (desc->flags & AV_PIX_FMT_FLAG_HWACCEL) != 0 ||
@@ -117,9 +117,15 @@ Result<DecodedPicture> PictureConverter::convert(
   picture.width = static_cast<std::uint32_t>(frame.width);
   picture.height = static_cast<std::uint32_t>(frame.height);
   picture.layout = layout;
-  picture.matrix =
-      color ? color->matrix : resolve_matrix(frame.colorspace, frame.height);
-  picture.full_range = color ? color->full_range : full_range(frame);
+  // A stream that declares no matrix reads as limited range whether or not
+  // it declares one, so the range is taken with the matrix.
+  if (unlabelled_color && frame.colorspace == AVCOL_SPC_UNSPECIFIED) {
+    picture.matrix = unlabelled_color->matrix;
+    picture.full_range = unlabelled_color->full_range;
+  } else {
+    picture.matrix = resolve_matrix(frame.colorspace, frame.height);
+    picture.full_range = full_range(frame);
+  }
   picture.encoding = resolve_encoding(frame.color_trc, frame.color_primaries);
 
   const AVFrame* source = &frame;

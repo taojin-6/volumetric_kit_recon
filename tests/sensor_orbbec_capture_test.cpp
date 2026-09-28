@@ -9,7 +9,8 @@
 // A camera is used only when VR_ORBBEC_TEST_SERIAL names one; unset, the test
 // skips (exit 0), since the cameras are exclusive and a CI leg must not take
 // one from a person using the rig. A sync secondary, which streams only with
-// its primary, skips too.
+// its primary, skips too. A build without the HEVC decoder first checks, with
+// no camera, that H.265 colour is refused before discovery.
 
 #include <chrono>
 #include <cmath>
@@ -120,6 +121,20 @@ void fitted_gains(const std::vector<double>& a, const std::vector<double>& b,
 }  // namespace
 
 int main() {
+#if !VR_TEST_HEVC
+  {
+    // Without the decoder, H.265 colour is refused before the SDK is
+    // touched: at once, with no camera to wait for.
+    sensor::OrbbecCapture::Options hevc;
+    hevc.serial = "not-a-camera";
+    hevc.discovery_timeout_ms = 5000;
+    hevc.color_codec = sensor::OrbbecColorCodec::Hevc;
+    const auto t0 = std::chrono::steady_clock::now();
+    const auto refused = sensor::OrbbecCapture::open(hevc);
+    CHECK(refused.status().domain() == vr::Status::Code::Unsupported);
+    CHECK(std::chrono::steady_clock::now() - t0 < std::chrono::seconds(1));
+  }
+#endif
   const char* serial = std::getenv("VR_ORBBEC_TEST_SERIAL");
   if (serial == nullptr || *serial == '\0') {
     std::printf("SKIP: set VR_ORBBEC_TEST_SERIAL to test against a camera\n");

@@ -4649,7 +4649,7 @@ own, before the mailbox. It uses `HevcDecoder` (`Auto`, one thread, `Rgb24`),
 turns each picture into an RGB frame stamped with the RGB mode's profile, and
 posts it with its depth. From the mailbox on, nothing differs from MJPEG.
 Pairs the decoder cannot hand on are counted in `OrbbecCaptureStats::lost`.
-Without FFmpeg, `open` refuses `Hevc`.
+Without FFmpeg, `open` refuses `Hevc` before it touches the SDK.
 
 **Why ahead of the mailbox.** The mailbox keeps the newest pairs and drops
 the rest. An H.265 frame dropped before decoding corrupts the frames predicted
@@ -4670,14 +4670,21 @@ between the two captures), stable over two runs:
 | BT.709 limited | 5.31 | 5.83 | 0.878, 0.890, 0.868 |
 
 So the driver decodes it as BT.601 full range, through
-`HevcDecoder::Options::color`, which names a stream's matrix and range for a
-source that labels it wrongly or not at all. That is also how JPEG codes the
-MJPEG stream, so a frame's colour is the same sRGB either way.
+`HevcDecoder::Options::unlabelled_color`: the matrix and range for a stream
+that declares no matrix. A stream that declares one is decoded as it says, so
+a camera or firmware that labels its stream is taken at its word. The range
+goes with the matrix because FFmpeg reads a stream with no VUI as limited
+range (ffprobe's `color_range=tv`), just as one that declares limited, so
+only the missing matrix tells the unlabelled stream apart. BT.601 full is
+also how JPEG codes the MJPEG stream, so a frame's colour is the same sRGB
+either way.
 
 **The calibration.** The decoded frames carry the RGB mode's profile. Its
 intrinsics, distortion and depth extrinsic are the H.265 mode's byte for byte,
 measured at 720p, 1080p and 4K, so undistortion and registration run
-unchanged.
+unchanged. `open` compares those bytes on every camera and refuses one where
+they differ (`Unsupported`): the first-pair check compares the frames with
+the RGB profile they were stamped with, so it could never catch it.
 
 **What loses a pair.** Two things measured on the rig shaped this:
 - **The SDK's pairing.** Handed only complete pairs, the SDK dropped a
@@ -4692,9 +4699,23 @@ unchanged.
   and the rest once the primary triggers it, 0.3-4.2 s later, with no frame
   lost between. A rule that dated a gap from the timestamps threw away 29
   good frames per start. The camera's frame index, one up per encoded frame,
-  is what shows a loss (`ColorStreamGate`). A skipped or repeated index, a
-  decode error, or a queue two seconds behind waits for the next key frame;
-  so does the start.
+  is what shows a loss (`ColorStreamGate`). A skipped or repeated index, an
+  empty frame (which, sent, would end the stream), a decode error, or a queue
+  two seconds behind waits for the next key frame; so does the start.
+
+Where decoding picks up again, and what is counted:
+- **The restart.** The key frame that ends a wait resets the decoder
+  (`HevcDecoder::reset`, FFmpeg's flush). What it still holds belongs to pairs
+  from before the loss and is counted lost, and a CRA's leading pictures are
+  skipped rather than decoded from a reference that may be the lost frame;
+  FFmpeg 6.1 conceals a missing reference instead of refusing it. The reset
+  also clears a decoder left holding pictures after a failed send or a
+  thrown call, which would otherwise refuse every send after it.
+- **Display order.** Pictures come out in display order, so a picture settles
+  its own pair and no other. A pair sent 16 access units ago with no picture
+  (H.265 holds at most 16 back, and one thread adds none) is one the decoder
+  skipped, and is counted then. The Femto Mega sends no B-frames; a stream
+  that did would otherwise have lost about half its pairs.
 
 **Why these numbers.** The four-camera rig at 720p30 over the cable,
 1200 frames, Release:
@@ -4713,26 +4734,64 @@ using about 55 ms of CPU a frame, nearly all of it undistorting, registering
 and converting at 4K. So a 4K rig waits on the GPU module, not on the
 decoder.
 
-**Verified.** `recon_sensor_orbbec_hevc` runs the decoder on the committed
-clip wrapped in SDK frames, with no camera. It checks order, timestamps, depth
-and colour; that a lost frame costs the frames to the next key frame and a
-pause costs nothing; that colour without depth is decoded and dropped, and
-the frames after it still decode; and it tests `ColorStreamGate` on its own.
+**Verified.** `recon_sensor_orbbec_hevc` runs the decoder on committed clips
+wrapped in SDK frames, with no camera. It checks order, timestamps, depth
+and colour; that a lost frame costs the frames to the next key frame, an
+empty one too, and a pause costs nothing; that colour without depth is
+decoded and dropped, and the frames after it still decode; that a labelled
+stream keeps its label; that B-frames lose nothing; that a restart in open
+GOPs skips the CRA's leading pictures and counts them 16 frames on; and it
+tests `ColorStreamGate` on its own. The clips are the patch clip unlabelled
+(`unlabelled_256x144.h265`, its SPS's matrix, primaries and transfer set to
+unspecified, which is what FFmpeg reads off the camera), labelled, with
+B-frames, and in open GOPs (`open_gop_256x144.h265`).
 A test cannot set an SDK frame's index, so it numbers its frames through
 `Options::frame_index`. It first relied on the decoder noticing the loss,
 which FFmpeg 9 does and FFmpeg 6.1 does not: 6.1 conceals the missing
 reference and decodes the next frames wrongly, without an error. Removing the gate's index check,
-the decode of a colour frame without depth, or the colour override each fails
-it. On the rig, `recon_sensor_orbbec_capture` holds H.265 to the MJPEG
+the decode of a colour frame without depth, or the unlabelled colour each
+fails it. So does taking back each review fix below: settling earlier pairs
+with a picture, the reset at a restart, the count 16 frames on, applying the
+unlabelled colour to a labelled stream, a reset that does not flush or does
+not undo the end, and the early refusal without FFmpeg. Sending an empty
+frame alone does not, since the reset at the next key frame now undoes the
+end of stream it caused; sending it without that reset does.
+`recon_sensor_video_hevc` tests the reset and the unlabelled colour on every
+back end. On the rig, `recon_sensor_orbbec_capture` holds H.265 to the MJPEG
 contract, and its colour to MJPEG's within a 5% gain (0.997, 0.984, 0.974
 measured). `recon_sensor_orbbec_rig` streams 90 sets with each codec (H.265:
-89-96% complete, worst skew 1.6-2.2 ms, 0-3 lost per camera).
+89-96% complete, worst skew 1.6-2.2 ms, 0-3 lost per camera). Both passed
+again after the review fixes, the calibration check included (gains 1.000,
+0.987, 0.974; H.265 sets 98.9% complete, 0-1 lost per camera).
+
+**Review (PR #97).** Fixed as described above: an empty frame ending the
+stream, the calibration assumed rather than checked, the colour forced on a
+labelled stream, pairs lost to display order, a CRA's leading pictures
+decoded after a loss, and a decoder wedged by pictures left waiting. Also
+fixed: a queue allocation that throws inside `noexcept push` loses the pair
+rather than terminating; the decoding thread failing to start is `IoError`,
+not an exception; `start()` documents the decoder's `Unsupported` and
+`IoError`; the refusal without FFmpeg moved ahead of discovery;
+`configure_sdk_logging` says it sets FFmpeg's level, and does so at the
+first start only; the stats say what `received` and `lost` count under
+H.265; and `stop()` releases the decoder and the RGB profile rather than
+leaving them to the last reference, which the SDK's callback may hold past
+the context. Measured and left as it was, from a 21 Mbit/s 4K x265 clip on
+an M5 Max, Release:
+- Each decoded picture is copied into a freshly allocated SDK frame: 0.5 ms
+  at 4K, allocation included, against 24.4 ms a picture on VideoToolbox. A
+  pool, or swscale writing into the SDK frame, would save 2%.
+- Software decoding stays on one thread: 32.5 ms a picture, about 13 of it
+  decoding and the rest the RGB conversion, inside the 40 ms of 4K25. Frame
+  threads would shorten only the decode, and hold pictures back. A host
+  slower than this one with no hardware decoder would fall behind, which
+  the queue's overflow would show in `lost` (a `TODO(sensor)`).
 
 **Open.** A 4K rig waits on the GPU module, and so does keeping the decoded
 picture off the host. The camera's own H.265 settings (key-frame interval,
-bitrate) are left at its defaults. The SDK's "Stream have not been started!"
-at every close and its RTP "Metadata size is too large!" come with MJPEG
-too.
+bitrate) are left at its defaults (a `TODO(sensor)`). The SDK's "Stream have
+not been started!" at every close and its RTP "Metadata size is too large!"
+come with MJPEG too.
 
 ## Measured lessons
 

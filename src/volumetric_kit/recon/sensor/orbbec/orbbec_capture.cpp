@@ -72,6 +72,7 @@ OrbbecCapture::~OrbbecCapture() = default;
 
 Result<OrbbecCapture> OrbbecCapture::open(const Options& options) {
   VR_TRY(orbbec::validate(options));
+  VR_TRY(orbbec::check_color_codec(options, "OrbbecCapture"));
   auto impl = std::make_unique<Impl>();
   try {
     if (options.configure_sdk_logging) orbbec::configure_sdk_logging();

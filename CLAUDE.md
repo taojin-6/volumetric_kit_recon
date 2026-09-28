@@ -707,15 +707,20 @@ arbitrary; it usually isn't.
   decision).
   `color_codec = Hevc` (`VR_WITH_FFMPEG`) puts H.265 on the wire: each
   camera's `HevcColorDecoder` decodes every colour frame, in order, ahead of
-  the mailbox, as BT.601 full range, and posts RGB frames stamped with the
-  RGB mode's profile, so everything after is MJPEG's path. The SDK hands over
-  every colour frame, depth or not; a pair without depth is dropped after
-  decoding. A gap in the frame index waits for the next key frame, counted in
-  `stats().lost` (the 2026-09-28 decision).
+  the mailbox, as BT.601 full range unless the stream names its matrix, and
+  posts RGB frames stamped with the RGB mode's profile -- whose calibration
+  `open` holds to be the H.265 mode's, byte for byte -- so everything after
+  is MJPEG's path. The SDK hands over every colour frame, depth or not; a
+  pair without depth is dropped after decoding. A gap in the frame index, or
+  an empty frame, waits for the next key frame, where the decoder is reset;
+  pictures come out in display order, each settling its own pair. All of it
+  is counted in `stats().lost` (the 2026-09-28 decision).
   **`sensor/video`'s `HevcDecoder`** (`VR_WITH_FFMPEG`) decodes H.265 access
   units to host pictures, `Rgb24` or the `Yuv420` planes with their matrix
   and range, plus the stream's transfer and primaries as an optional
-  `ColorEncoding` (empty when that type cannot name them). `Auto` takes the
+  `ColorEncoding` (empty when that type cannot name them).
+  `Options::unlabelled_color` stands in for a stream that names no matrix,
+  and `reset()` restarts a stream after lost access units. `Auto` takes the
   first hardware back end that decodes HEVC (VideoToolbox, asked through
   `VTIsHardwareDecodeSupported`; CUDA, then VAAPI on Linux, each by decoding
   a built-in clip), probing only as far as it needs, else software.
@@ -870,7 +875,10 @@ decoder's hardware frames (`hevc_decoder.cpp`) -- which a 4K rig needs, since
 at 4K the host's undistortion, registration and conversion cost ~55 ms a frame
 -- and processing a rig set's frames in parallel,
 one thread per camera, rather than the ~11 ms one after another costs for four
-(`orbbec_rig.cpp`). The rig's next consumer is calib's viewer, showing its
+(`orbbec_rig.cpp`). For H.265: the camera's encoder settings, its key-frame
+interval above all, which sets what a lost frame costs (`camera_stream.cpp`),
+and software decoding at 4K, one thread with little headroom
+(`hevc_color.cpp`). The rig's next consumer is calib's viewer, showing its
 synchronised sets.
 
 **Measure the phases before choosing the optimisation.** Three independent

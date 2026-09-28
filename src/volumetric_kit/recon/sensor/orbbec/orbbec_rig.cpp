@@ -114,6 +114,7 @@ OrbbecRig::~OrbbecRig() = default;
 
 Result<OrbbecRig> OrbbecRig::open(const Options& options) {
   VR_TRY(orbbec::validate(options));
+  VR_TRY(orbbec::check_color_codec(options, "OrbbecRig"));
   auto impl = std::make_unique<Impl>();
   std::vector<std::string> serials;
   for (const OrbbecSyncDevice& device : options.sync.devices) {
