@@ -570,12 +570,16 @@ arbitrary; it usually isn't.
   weight 1 within `trunc_dist` of the mesh, the codec inverse's fresh zeros
   elsewhere, so a mesh-derived grid reads like a decoded frame. `Signed` signs
   by the angle-weighted pseudonormal of the closest feature, over a mesh the
-  host welds by exact position; it refuses a non-manifold edge or vertex and a
-  flipped winding, and leaves a voxel nearest a rim unobserved. `Shell` is
-  `d − σ` and takes any mesh. The blocks must be allocated by
-  `allocate_from_triangles` — a missing one is refused before anything is
-  written — and triangles are binned per block over that allocation's own
-  candidates, so no voxel measures the whole mesh. Ties break on the triangle
+  host welds by exact position; it refuses a non-manifold edge or vertex, a
+  flipped winding and a closed mesh wound inside out, keeps a zero-area
+  triangle's adjacency without measuring it, and leaves a voxel nearest a rim
+  unobserved. `Shell` is `d − σ` and takes any mesh. The blocks must be
+  allocated by `allocate_from_triangles` — a missing one is refused before
+  anything is written — and triangles are binned per block over that
+  allocation's own candidates, so no voxel measures the whole mesh. The fill
+  replays the slots the count pass recorded, so no bin comes up short; a bin
+  past `kMaxBinTriangles` is refused, and the write splits into dispatches of
+  at most `kMaxDispatchBinEntries` bin entries. Ties break on the triangle
   index, so the same mesh writes the same bytes.
 
 - **`mesh`** — `MarchingCubes` over a sparse `VoxelBlockGrid`, and only that

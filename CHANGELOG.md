@@ -71,8 +71,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - `Signed`: +-distance, signed by the angle-weighted pseudonormal of the
     closest feature rather than the nearest face's normal, which gets sharp
     edges wrong. For a closed, manifold, consistently wound mesh; it refuses a
-    non-manifold edge or vertex and a flipped winding, welds a soup by exact
-    position, and leaves a voxel nearest an open rim unobserved.
+    non-manifold edge or vertex, a flipped winding and a closed mesh wound
+    inside out, welds a soup by exact position, and leaves a voxel nearest an
+    open rim unobserved. A zero-area triangle is not measured but keeps its
+    adjacency, so a sliver closing a T-junction does not open a rim.
   - `Shell`: distance minus a half-thickness (1.5 voxels by default), for any
     mesh at all.
   - Every voxel of every band block is overwritten: weight 1 within
@@ -83,6 +85,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - Triangles are binned per block (a count and a fill dispatch over the
     allocation's own work items), so no voxel measures the whole mesh. Ties
     break on the triangle index, so the same mesh writes the same bytes.
+  - A bin past `MeshIntegrator::kMaxBinTriangles` is refused, and the write
+    splits into dispatches of at most `kMaxDispatchBinEntries` bin entries;
+    `MeshIntegrateStats::dispatches` reports how many.
 - `volume`: **`triangle_candidate_offsets`** — the per-triangle candidate-block
   prefix sum `allocate_from_triangles` dispatches over, public so the mesh
   integrator bins over the same decomposition. Its decode and band test moved

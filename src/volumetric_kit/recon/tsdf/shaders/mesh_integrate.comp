@@ -62,8 +62,12 @@ layout(set = 0, binding = 7, scalar) readonly buffer EdgeNormals {
   vec3 edge_normals[];
 };
 
+// The write is split across dispatches so that none measures more than
+// MeshIntegrator::kMaxDispatchBinEntries bin entries; this one writes bins
+// [first_bin, first_bin + num_bins).
 layout(push_constant, scalar) uniform PushConstants {
   VoxelGridParams grid;
+  uint first_bin;
   uint num_bins;
   uint mode;    // kModeSigned or kModeShell (tsdf::MeshSdfMode)
   float shell;  // shell half-thickness, metres
@@ -89,7 +93,7 @@ void main() {
   if (gid >= pc.num_bins * vpb) {
     return;
   }
-  MeshBin bin = bins[gid / vpb];
+  MeshBin bin = bins[pc.first_bin + gid / vpb];
   uint local = gid % vpb;
 
   // Node-centred voxels (voxel * voxel_size), matching
