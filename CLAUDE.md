@@ -533,7 +533,7 @@ arbitrary; it usually isn't.
   dispatches (indirect too) and readbacks in one command buffer, one fence
   wait, spans and labels kept. A barrier goes wherever a command could see an
   earlier one's writes: around every dispatch, and between two transfers
-  only when they share a buffer one writes, unless they are fills or inline
+  only when they share a buffer one writes, unless they are fills or
   uploads rising through it without overlap. `zero` clears a range at any
   alignment. `dispatch()` is a batch of one.
   An upload of up to 64 KiB, 4-byte aligned, goes inline
@@ -817,9 +817,10 @@ arbitrary; it usually isn't.
   with no depth range and tiles that overlap (2026-09-28). Opt-in
   `StageMetrics*` on every overload reports a `"texture"` row with both
   halves. The single-camera `DeviceMesh` pass also takes its depth as a
-  device `Buffer` (a `GpuFramePrep` output), bound in place; every pass is
-  one batch, a host depth frame staged and a host `Mesh` staged up and read
-  back, which is the export path.
+  device `Buffer`, bound in place, though the atlas must still be registered
+  to it, which a `GpuFramePrep` frame's colour is not. Every pass is one
+  batch, a host depth frame staged; a host `Mesh`, the export path, is staged
+  up and read back in a batch of its own.
 
 - **`sensor`** — the capture *contract*: `ICameraCapture` polled for a
   `CapturedFrame` (frames dropped, not queued) and asked `exhausted()` after

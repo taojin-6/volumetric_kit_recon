@@ -90,6 +90,19 @@ constexpr float kDepthWeight = 0.01f;
 // group_count / device_storage_buffer / StorageInput are shared across the
 // compute tiers -- see core/compute_util.hpp.
 
+// A host Mesh's textured vertices, straight back into it: the kernels rewrite
+// only uv0, so every other byte comes back as it went up. A batch of its own,
+// as MarchingCubes::download reads back, so the upload's staging is freed
+// before this one is made and no staging is larger than the device copy.
+Status read_back_vertices(const Device& device, Allocator& allocator,
+                          const Buffer& vertex_buf, mesh::Mesh& mesh) {
+  CommandBatch batch(device, allocator);
+  VR_TRY(batch.readback(
+      vertex_buf, 0, VkDeviceSize(mesh.vertices.size()) * sizeof(mesh::Vertex),
+      mesh.vertices.data()));
+  return batch.submit();
+}
+
 }  // namespace
 
 Result<ProjectiveTexturer> ProjectiveTexturer::create(Device& device,
@@ -194,8 +207,7 @@ Status ProjectiveTexturer::texture(const mesh::DeviceMesh& mesh,
                                    StageMetrics* metrics) {
   // Before the validity check, so a refused call still costs its row: a stage
   // silent on failure reads as a stage that did not run. Inert when null, and
-  // it publishes both halves on every return below -- this overload has five
-  // between here and the dispatch.
+  // it publishes both halves on every return below.
   GpuStageScope stage(metrics, gpu_timer_, "texture");
   if (!valid()) {
     return Status::invalid_argument(
@@ -248,36 +260,17 @@ Status ProjectiveTexturer::texture(const mesh::DeviceMesh& mesh,
   // Only the depth frame needs a binding check here: the mesh buffers were
   // already sized (and range-checked) by the pass that created them, and are
   // bound as they are rather than re-allocated.
-  if (depth_bytes > max_storage_buffer_range_) {
-    return Status::invalid_argument(
-        "ProjectiveTexturer::texture: the depth buffer exceeds the device "
-        "maxStorageBufferRange");
-  }
-
-  // One batch: a host depth frame staged (a device one is bound in place),
-  // the camera inline, then the dispatch.
-  CommandBatch batch(*device_, *allocator_);
-  Buffer depth_buf;  // a host array's device copy, alive across the batch
-  VR_ASSIGN(const VkBuffer depth_handle,
-            depth.buffer(batch, *allocator_, depth_bytes, depth_buf));
-  if (depth_buf.valid()) {
-    device_->set_object_name(VK_OBJECT_TYPE_BUFFER,
-                             debug_object_handle(depth_buf.handle()),
-                             "texture.depth_frame");
-  }
-  VR_TRY(batch.upload(cam_buf_, 0, &cam, sizeof(DepthCameraParams)));
+  VR_TRY(
+      check_storage_buffer_range("ProjectiveTexturer::texture: the depth frame",
+                                 depth_bytes, max_storage_buffer_range_));
 
   // Bind the producing pass's buffers directly -- no upload, and nothing to
   // read back afterwards: the kernel rewrites uv0 where the geometry already
-  // lives, for the next device consumer to use. The depth at its exact range,
-  // since a caller's buffer may be larger than the image.
-  kernel_.set.write_storage_buffer(0, mesh.vertices, 0, VK_WHOLE_SIZE);
-  kernel_.set.write_storage_buffer(1, depth_handle, 0, depth_bytes);
-
-  const PushConstants push{mesh.vertex_count, occlusion_threshold};
-  VR_TRY(batch.dispatch(kernel_, &push, sizeof(push),
-                        group_count(mesh.vertex_count, kLocalSize),
-                        max_workgroup_count_x_, &stage));
+  // lives, for the next device consumer to use.
+  CommandBatch batch(*device_, *allocator_);
+  VR_TRY(texture_vertices(batch, mesh.vertices, VK_WHOLE_SIZE,
+                          mesh.vertex_count, depth, cam, occlusion_threshold,
+                          &stage));
   return batch.submit();
 }
 
@@ -342,47 +335,64 @@ Status ProjectiveTexturer::texture(mesh::Mesh& mesh, const float* depth,
   const VkDeviceSize vertex_bytes =
       VkDeviceSize(mesh.vertices.size()) * sizeof(mesh::Vertex);
   const VkDeviceSize depth_bytes = VkDeviceSize(pixels) * sizeof(float);
-  if (vertex_bytes > max_storage_buffer_range_ ||
-      depth_bytes > max_storage_buffer_range_) {
-    return Status::invalid_argument(
-        "ProjectiveTexturer::texture: a vertex / depth buffer exceeds "
-        "the device maxStorageBufferRange");
-  }
+  VR_TRY(check_storage_buffer_range(
+      "ProjectiveTexturer::texture: the vertex buffer", vertex_bytes,
+      max_storage_buffer_range_));
+  VR_TRY(
+      check_storage_buffer_range("ProjectiveTexturer::texture: the depth frame",
+                                 depth_bytes, max_storage_buffer_range_));
 
-  // One batch: the interleaved vertices and the depth frame (metres) staged,
-  // the camera inline, the dispatch, and the vertices read back. This is the
-  // export path, a host copy each way; a live mesh takes the DeviceMesh
-  // overloads.
-  //
-  // The index buffer is not uploaded: the per-vertex dispatch does not read
-  // it.
-  CommandBatch batch(*device_, *allocator_);
+  // The export path, a host copy each way; a live mesh takes the DeviceMesh
+  // overloads. The index buffer is not uploaded: the per-vertex dispatch does
+  // not read it.
   VR_ASSIGN(Buffer vertex_buf,
             device_storage_buffer(*allocator_, vertex_bytes));
-  VR_TRY(batch.upload(vertex_buf, 0, mesh.vertices.data(), vertex_bytes));
-  Buffer depth_buf;
-  VR_ASSIGN(
-      const VkBuffer depth_handle,
-      StorageInput(depth).buffer(batch, *allocator_, depth_bytes, depth_buf));
+  device_->set_object_name(VK_OBJECT_TYPE_BUFFER,
+                           debug_object_handle(vertex_buf.handle()),
+                           "texture.vertices");
+  {
+    CommandBatch batch(*device_, *allocator_);
+    VR_TRY(batch.upload(vertex_buf, 0, mesh.vertices.data(), vertex_bytes));
+    VR_TRY(texture_vertices(batch, vertex_buf.handle(), vertex_bytes,
+                            static_cast<std::uint32_t>(mesh.vertices.size()),
+                            StorageInput(depth), cam, occlusion_threshold,
+                            &stage));
+    VR_TRY(batch.submit());
+  }
+  return read_back_vertices(*device_, *allocator_, vertex_buf, mesh);
+}
+
+Status ProjectiveTexturer::texture_vertices(
+    CommandBatch& batch, VkBuffer vertices, VkDeviceSize vertex_range,
+    std::uint32_t vertex_count, const StorageInput& depth,
+    const DepthCameraParams& cam, float occlusion_threshold,
+    GpuStageScope* stage) {
+  const VkDeviceSize depth_bytes =
+      VkDeviceSize(cam.width) * cam.height * sizeof(float);
+  // A host frame is staged into depth_buf_, a device one bound in place.
+  // Renamed where it is replaced, since a name lives on the handle.
+  const VkBuffer kept = depth_buf_.handle();
+  VR_ASSIGN(const VkBuffer depth_handle,
+            depth.buffer(batch, *allocator_, depth_bytes, depth_buf_));
+  if (depth_buf_.handle() != kept) {
+    device_->set_object_name(VK_OBJECT_TYPE_BUFFER,
+                             debug_object_handle(depth_buf_.handle()),
+                             "texture.depth_frame");
+  }
   VR_TRY(batch.upload(cam_buf_, 0, &cam, sizeof(DepthCameraParams)));
 
-  kernel_.set.write_storage_buffer(0, vertex_buf.handle(), 0, vertex_bytes);
+  // The depth at its exact range, since a caller's buffer may be larger than
+  // the image.
+  kernel_.set.write_storage_buffer(0, vertices, 0, vertex_range);
   kernel_.set.write_storage_buffer(1, depth_handle, 0, depth_bytes);
-
-  const PushConstants push{static_cast<std::uint32_t>(mesh.vertices.size()),
-                           occlusion_threshold};
 
   // One thread per vertex. The batch REJECTS a groupCountX past the device
   // limit rather than clamping to it -- a clamp would silently leave the tail
   // of the mesh untextured.
-  VR_TRY(batch.dispatch(
-      kernel_, &push, sizeof(push),
-      group_count(static_cast<std::uint32_t>(mesh.vertices.size()), kLocalSize),
-      max_workgroup_count_x_, &stage));
-  // Straight back into the mesh: the kernel rewrites only uv0, so every other
-  // byte comes back as it went up.
-  VR_TRY(batch.readback(vertex_buf, 0, vertex_bytes, mesh.vertices.data()));
-  return batch.submit();
+  const PushConstants push{vertex_count, occlusion_threshold};
+  return batch.dispatch(kernel_, &push, sizeof(push),
+                        group_count(vertex_count, kLocalSize),
+                        max_workgroup_count_x_, stage);
 }
 
 Status ProjectiveTexturer::check_views(const std::vector<TextureView>& views,
@@ -570,21 +580,24 @@ Status ProjectiveTexturer::texture(mesh::Mesh& mesh,
   }
   const VkDeviceSize vertex_bytes =
       VkDeviceSize(mesh.vertices.size()) * sizeof(mesh::Vertex);
-  if (vertex_bytes > max_storage_buffer_range_) {
-    return Status::invalid_argument(
-        "ProjectiveTexturer::texture: the vertex buffer exceeds the device "
-        "maxStorageBufferRange");
-  }
-  // The export path: the vertices staged up and read back in the same batch.
-  CommandBatch batch(*device_, *allocator_);
+  VR_TRY(check_storage_buffer_range(
+      "ProjectiveTexturer::texture: the vertex buffer", vertex_bytes,
+      max_storage_buffer_range_));
+  // The export path, as the single-camera one.
   VR_ASSIGN(Buffer vertex_buf,
             device_storage_buffer(*allocator_, vertex_bytes));
-  VR_TRY(batch.upload(vertex_buf, 0, mesh.vertices.data(), vertex_bytes));
-  VR_TRY(texture_views(batch, vertex_buf.handle(),
-                       static_cast<std::uint32_t>(mesh.vertices.size() / 3),
-                       views, layout, occlusion_threshold, &stage));
-  VR_TRY(batch.readback(vertex_buf, 0, vertex_bytes, mesh.vertices.data()));
-  return batch.submit();
+  device_->set_object_name(VK_OBJECT_TYPE_BUFFER,
+                           debug_object_handle(vertex_buf.handle()),
+                           "texture.vertices");
+  {
+    CommandBatch batch(*device_, *allocator_);
+    VR_TRY(batch.upload(vertex_buf, 0, mesh.vertices.data(), vertex_bytes));
+    VR_TRY(texture_views(batch, vertex_buf.handle(),
+                         static_cast<std::uint32_t>(mesh.vertices.size() / 3),
+                         views, layout, occlusion_threshold, &stage));
+    VR_TRY(batch.submit());
+  }
+  return read_back_vertices(*device_, *allocator_, vertex_buf, mesh);
 }
 
 }  // namespace volumetric_kit::recon::texture

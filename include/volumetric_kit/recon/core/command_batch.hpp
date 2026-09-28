@@ -38,8 +38,8 @@ struct ComputeKernel;
 /// writes -- always around a dispatch, and between two transfers when they
 /// share a buffer one of them writes -- and the last makes everything visible
 /// to the host and to a renderer drawing the result, as far as the queue
-/// family allows. Fills and inline uploads into one buffer at rising,
-/// disjoint offsets touch no byte twice, so a run of them needs none. Kernels
+/// family allows. Fills and uploads into one buffer at rising, disjoint
+/// offsets touch no byte twice, so a run of them needs none. Kernels
 /// keep their debug-utils regions and their @ref GpuStageScope spans.
 /// `dispatch()` is a batch of one dispatch.
 ///
@@ -222,6 +222,7 @@ class VR_CORE_API CommandBatch {
     std::vector<unsigned char> data;  // push constants, or an inline upload
     GpuStageScope* stage = nullptr;
     void* host_dst = nullptr;  // a readback's destination
+    bool staged = false;       // a Copy from this batch's own staging
   };
 
   struct Span {

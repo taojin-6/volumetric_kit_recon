@@ -237,8 +237,8 @@ int main() {
   //
   // Timed, because this overload is the one seam B wires and its reporting path
   // is otherwise covered nowhere -- deleting its timer argument or its publish
-  // left the whole suite green. It has five returns between the stage scope and
-  // the dispatch, each a chance to skip the publish.
+  // left the whole suite green. Every return between the stage scope and the
+  // dispatch is a chance to skip the publish.
   vr::StageMetrics metrics;
   CHECK(texturer.texture(device_mesh, depth.data(), cam, 0.02f, &metrics).ok());
   const vr::StageRow* row = find_row(metrics, "texture");
@@ -285,10 +285,13 @@ int main() {
   CHECK(textured > 0);
   CHECK(textured < host_mesh.vertices.size());
 
-  // The same frame as a device buffer, the way GpuFramePrep hands one over,
-  // gives the same uv0. The mesh is first textured against a frame that sees
-  // nothing, so a call that wrote nothing cannot pass, and the buffer is a
-  // pixel longer than the image, so it has to be bound at the image's range.
+  // The same frame as a device buffer gives the same uv0. The mesh is first
+  // textured against a frame that sees nothing, so a call that wrote nothing
+  // cannot pass. The buffer is a pixel longer than the image, so a larger
+  // buffer is taken and read as the image. That it is bound at the image's
+  // range, not VK_WHOLE_SIZE, is not observable here: the kernel reads within
+  // the image either way, and only a buffer past maxStorageBufferRange tells
+  // the two apart.
   {
     const std::vector<float> nothing(depth.size(), 0.0f);
     CHECK(texturer.texture(device_mesh, nothing.data(), cam).ok());

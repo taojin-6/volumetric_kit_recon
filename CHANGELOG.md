@@ -27,17 +27,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   thin shell followed by one over a dense field reaches without a second entry
   point.
 
-### Added
-
-- `texture`: **`ProjectiveTexturer::texture(const DeviceMesh&, const Buffer&
-  depth, ...)`** binds a depth frame already on the device, such as a
-  `GpuFramePrep` output, so a live frame is textured without visiting the host.
-
 ### Changed
 
 - `texture`: **every pass is one batch**: a host depth frame staged, the camera
-  inline, the dispatch, and for a host `Mesh` the vertices staged up and read
-  back. The camera and the several-view pass's buffers are device-local.
+  inline, the dispatch, and for a host `Mesh` the vertices staged up, then read
+  back in a batch of their own. The camera, the depth copy and the several-view
+  pass's buffers are device-local and grow-only.
+- `core`: **staged uploads rising through one buffer share a barrier**, as
+  fills and inline uploads do, so a rig's views stage into one buffer without a
+  barrier between them. `StorageInput::buffer` reuses the buffer it is handed
+  when it already fits.
 - `mesh`: **the arena, index run and draw command are device-local**, as are
   the tables. Each extract attempt is one batch: the active list staged, the
   command reset inline, the dispatch, the command read back. `download` copies
@@ -123,6 +122,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `texture`: **`ProjectiveTexturer::texture(const DeviceMesh&, const Buffer&
+  depth, ...)`** binds a depth frame already on the device, in place. The atlas
+  must still be registered to the depth camera, so a `GpuFramePrep` frame,
+  whose colour keeps a camera of its own, waits on a colour camera in the
+  texture pass.
 - `core`: **`CommandBatch`** (`core/command_batch.hpp`): one call's uploads,
   fills, copies, dispatches, indirect dispatches and readbacks recorded into one
   command buffer and submitted with one fence wait. Small aligned uploads go

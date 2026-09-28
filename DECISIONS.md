@@ -6029,14 +6029,15 @@ now reads near zero.
   `extra_indirect_usage` bit no buffer carries otherwise.
 
 **Step 4, `texture`, has landed.** The single-camera `DeviceMesh` pass takes
-its depth as a device `Buffer` too, a `GpuFramePrep` output bound in place,
-so the online chain (sensor, prep, fuse, extract, texture, draw) keeps a live
-frame on the device end to end. Every pass is one batch: a host depth frame
-staged, the camera inline, the dispatch, and for a host `Mesh` the vertices
-staged up and read back. The camera and the several-view buffers are
-device-local; a view's depth is still a host array, staged per call (a
-`TODO(texture)`). Measured on room0's final mesh (991 k vertices) and last
-frame, Release:
+its depth as a device `Buffer` too, bound in place. That does not yet keep
+the online chain on the device: the atlas must be registered to the depth
+camera, and a `GpuFramePrep` frame's colour keeps its own camera, so its
+colour is textured only once the pass projects into a colour camera (a
+`TODO(texture)`). Every pass is one batch: a host depth frame staged, the
+camera inline, the dispatch, and for a host `Mesh` the vertices staged up and
+read back. The camera and the several-view buffers are device-local; a view's
+depth is still a host array, staged per call (a `TODO(texture)`). Measured
+on room0's final mesh (991 k vertices) and last frame, Release:
 
 | texture pass, host / device | RTX 5090, step 3 | RTX 5090, step 4 | M5 Max, step 3 | M5 Max, step 4 |
 |---|---|---|---|---|
@@ -6048,6 +6049,32 @@ The host `Mesh` pass is the export path, `fuse_render`'s, and it costs more
 host time for the same reason `download` does: the vertices now go up and
 come back through staging copies. The live pass, `fuse_viewer`'s, is the
 `DeviceMesh` one.
+
+**The review of step 4** changed:
+
+- The docs no longer offer the device-depth pass for a `GpuFramePrep` frame,
+  whose colour is not registered to its depth.
+- A host `Mesh` reads its vertices back in a batch of their own, as
+  `download` does, so the upload's staging is freed first: two copies of the
+  vertices at a time, not three. Reading back only `uv0` would need a pass
+  that packs it; the export path does not pay for one.
+- The depth copy is a grow-only member, as the views' buffers are, so the
+  live pass allocates only its staging once the frame fits.
+  `StorageInput::buffer` reuses the buffer it is handed when it fits.
+- Staged uploads rising through one buffer share a barrier, as fills and
+  inline uploads do, so a rig's views no longer take one between each pair.
+- The three single-camera overloads share one recording helper, as the
+  several-view pair already did, which names the depth copy for all of them;
+  the export paths name their vertex copy again.
+- The test's claim that it pins the depth binding's exact range was dropped:
+  the kernel reads within the image either way, and only a buffer past
+  `maxStorageBufferRange` would tell the two apart.
+- Tests: staged uploads at rising offsets and one going back over them, and a
+  larger frame after smaller ones, which fails when the depth copy is not
+  regrown.
+- Unchanged: a caller-owned buffer a batch records still dies at the call's
+  return when the fence wait fails, as `CommandBatch` documents; the device is
+  then treated as lost, as it already is in `tsdf`.
 
 `dispatch()` is unchanged. `submit_single_time` still allocates a command
 buffer and a fence per submit; reusing them is a `TODO(core)` for when a tier

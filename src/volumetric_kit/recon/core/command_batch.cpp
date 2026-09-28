@@ -167,6 +167,7 @@ Status CommandBatch::upload(const Buffer& dst, VkDeviceSize offset,
     std::memcpy(staging->mapped(), src, static_cast<std::size_t>(bytes));
     op.kind = Kind::Copy;
     op.src = staging->handle();
+    op.staged = true;
   }
   ops_.push_back(std::move(op));
   return {};
@@ -351,12 +352,14 @@ bool CommandBatch::needs_barrier(std::size_t first, std::size_t i) const {
     return buffer != VK_NULL_HANDLE && (op.src == buffer || op.dst == buffer);
   };
   const Op& b = ops_[i];
-  // A fill or inline upload that starts past the end of the one before it, in
-  // the same buffer, reads nothing and writes no byte the run has: the run's
-  // first write there was checked against all of it. So zeroing thousands of
-  // scattered blocks is one run, and costs no scan of it per fill.
+  // A fill or upload that starts past the end of the one before it, in the
+  // same buffer, reads nothing another command writes and writes no byte the
+  // run has: the run's first write there was checked against all of it. So
+  // zeroing thousands of scattered blocks is one run, and costs no scan of it
+  // per fill, and so is staging several images into one buffer. A staged
+  // upload reads only its own staging.
   const auto plain = [](const Op& op) {
-    return op.kind == Kind::Fill || op.kind == Kind::Update;
+    return op.kind == Kind::Fill || op.kind == Kind::Update || op.staged;
   };
   if (i > first) {
     const Op& prev = ops_[i - 1];

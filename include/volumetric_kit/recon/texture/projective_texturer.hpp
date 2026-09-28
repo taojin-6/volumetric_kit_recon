@@ -214,9 +214,14 @@ class VR_TEXTURE_API ProjectiveTexturer {
                  float occlusion_threshold = 0.02f,
                  StageMetrics* metrics = nullptr);
 
-  /// @brief @ref texture for a depth frame already on the device -- a
-  ///        `sensor::GpuFramePrep` output, say -- bound in place, so a live
-  ///        frame never visits the host.
+  /// @brief @ref texture for a depth frame already on the device, bound in
+  ///        place, so the depth never visits the host.
+  ///
+  /// The atlas must still be registered to @p cam, as for the host overload.
+  /// A `sensor::GpuFramePrep` frame's is not: its colour keeps a camera of its
+  /// own, so its depth here gives `uv0` in the depth image, not the colour's.
+  /// TODO(texture): project into a separate colour camera, which texturing an
+  /// unregistered frame needs.
   /// @param depth  A storage buffer holding at least `cam.width * cam.height`
   ///               floats, row-major, in metres. The writer's dispatch must
   ///               have finished, which a dispatch on this device guarantees.
@@ -319,6 +324,10 @@ class VR_TEXTURE_API ProjectiveTexturer {
   // create() and rewritten inline in each texture()'s batch, like the tsdf
   // tier's camera SSBO. Device-local, as every buffer here is.
   Buffer cam_buf_;
+  // A host depth frame's device copy for the single-camera pass. Grow-only,
+  // like the views' buffers below, so a live pass texturing every remesh
+  // allocates only its staging once the frame fits.
+  Buffer depth_buf_;
   // The several-view pass's inputs: every view's depth end to end, and the
   // views. Grow-only and rewritten each call, like cam_buf_, so a rig
   // texturing every frame allocates nothing once they fit.
@@ -330,8 +339,20 @@ class VR_TEXTURE_API ProjectiveTexturer {
   Status texture(const mesh::DeviceMesh& mesh, const StorageInput& depth,
                  const DepthCameraParams& cam, float occlusion_threshold,
                  StageMetrics* metrics);
+  // Every single-camera overload, once the vertices are on the device: records
+  // the depth, the camera and the dispatch into `batch`, binding `vertex_range`
+  // bytes of `vertices`. It may replace depth_buf_, as texture_views may its
+  // buffers.
+  Status texture_vertices(CommandBatch& batch, VkBuffer vertices,
+                          VkDeviceSize vertex_range, std::uint32_t vertex_count,
+                          const StorageInput& depth,
+                          const DepthCameraParams& cam,
+                          float occlusion_threshold, GpuStageScope* stage);
   // Both multi-view overloads, once the vertices are on the device: records
   // the views and the dispatch into `batch`.
+  //
+  // It may replace view_depth_buf_ and views_buf_, so nothing already in
+  // `batch` may refer to them: the callers record only the vertices first.
   Status texture_views(CommandBatch& batch, VkBuffer vertices,
                        std::uint32_t triangles,
                        const std::vector<TextureView>& views,

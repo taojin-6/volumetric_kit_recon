@@ -328,6 +328,34 @@ int main() {
     }
   }
 
+  // Staged uploads at rising, disjoint offsets share a run too. One that goes
+  // back over them keeps its barrier and lands second.
+  {
+    const VkDeviceSize half = vr::CommandBatch::kMaxInlineUpload * 2;
+    const std::size_t n = half / 4;
+    vr::Result<vr::Buffer> big_result =
+        vr::device_storage_buffer(allocator, half * 2);
+    CHECK(big_result.ok());
+    const vr::Buffer big = std::move(big_result).value();
+    const std::vector<std::uint32_t> first = pattern(3, n);
+    const std::vector<std::uint32_t> second = pattern(9, n);
+    const std::vector<std::uint32_t> over = pattern(40, n);
+    std::vector<std::uint32_t> back(2 * n, 0);
+    vr::CommandBatch batch(device, allocator);
+    CHECK(batch.upload(big, 0, first.data(), half).ok());
+    CHECK(batch.upload(big, half, second.data(), half).ok());
+    CHECK(batch.upload(big, half / 2, over.data(), half).ok());
+    CHECK(batch.readback(big, 0, half * 2, back.data()).ok());
+    CHECK(batch.submit().ok());
+    for (std::size_t i = 0; i < 2 * n; ++i) {
+      const std::size_t lo = n / 2;
+      const std::uint32_t want = i < lo       ? first[i]
+                                 : i < lo + n ? over[i - lo]
+                                              : second[i - n];
+      CHECK(back[i] == want);
+    }
+  }
+
   // An indirect dispatch sized by a command in a buffer: two of four groups.
   {
     vr::Result<vr::Buffer> args_result =
