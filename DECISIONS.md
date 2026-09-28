@@ -5631,11 +5631,10 @@ device-local outputs and zero-copy input from VideoToolbox or NVDEC are a
 `TODO(sensor)`. The rig's raw sets are one too. Where the lens maps a colour
 pixel outside the captured image the pass writes black, as the SDK's filter
 does, and it is fused as colour. Nothing has run on an NVIDIA host with a
-camera: there the hash map's bucket locks are host-visible until PR #81, and
-this PR's first test, 320 x 240 pixels of one flat wall, contended on them past
-the driver's 7 s watchdog in CI (Xid 109, and a runner lost). A live 640 x 576
-depth frame, or the host path's 8.3 M registered samples, risks the same until
-#81 lands.
+camera. This PR's first test, 320 x 240 pixels of one flat wall, contended on
+the hash map's bucket locks past the driver's 7 s watchdog in CI (Xid 109, and
+a runner lost), while they were host-visible; PR #81 has since moved them into
+device memory, the fix the fleet's first watchdog report called for.
 
 ## Measured lessons
 

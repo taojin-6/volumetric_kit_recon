@@ -1022,11 +1022,11 @@ allocate.
 one camera (`GpuFramePrep`, the 2026-09-28 GPU pre-processing decision: at 4K
 it takes the host from 15.5 ms of undistortion and registration a frame to
 none, and the run's CPU eightfold down), and what it leaves is raw sets from
-the rig
-(`frame_conversion.cpp`), device-local outputs and zero-copy input from the
-decoder's hardware frames (`gpu_frame_prep.hpp`, `hevc_decoder.cpp`), and the
-texture tier's separate colour camera, which fusing unregistered frames makes
-the texturing path's next need; and processing a rig set's frames in parallel,
+the rig (`frame_conversion.cpp`), device-local outputs and zero-copy input
+from the decoder's hardware frames (`gpu_frame_prep.hpp`, `hevc_decoder.cpp`),
+and the texture tier's separate colour camera, which fusing unregistered
+frames makes the texturing path's next need; and processing a rig set's
+frames in parallel,
 one thread per camera, rather than the ~11 ms one after another costs for four
 (`orbbec_rig.cpp`). For H.265: the camera's encoder settings, its key-frame
 interval above all, which sets what a lost frame costs (`camera_stream.cpp`),
