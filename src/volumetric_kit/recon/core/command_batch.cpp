@@ -234,7 +234,7 @@ Status CommandBatch::zero(const Buffer& dst, VkDeviceSize offset,
 
 Status CommandBatch::copy(const Buffer& src, VkDeviceSize src_offset,
                           const Buffer& dst, VkDeviceSize dst_offset,
-                          VkDeviceSize bytes) {
+                          VkDeviceSize bytes, GpuStageScope* stage) {
   VR_TRY(check(usable()));
   if (bytes == 0) return {};
   VR_TRY(check(in_range(src, src_offset, bytes, "copy source")));
@@ -256,6 +256,7 @@ Status CommandBatch::copy(const Buffer& src, VkDeviceSize src_offset,
   op.dst = dst.handle();
   op.dst_offset = dst_offset;
   op.bytes = bytes;
+  op.stage = stage;
   ops_.push_back(std::move(op));
   return {};
 }

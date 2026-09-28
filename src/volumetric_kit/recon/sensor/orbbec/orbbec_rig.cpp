@@ -6,6 +6,7 @@
 #include <chrono>
 #include <exception>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -34,12 +35,6 @@ std::uint64_t now_us() {
 
 }  // namespace
 
-std::size_t OrbbecRigFrameSet::count() const noexcept {
-  std::size_t n = 0;
-  for (const auto& f : frames) n += f.has_value() ? 1 : 0;
-  return n;
-}
-
 struct OrbbecRig::Impl {
   // Declared first so it is destroyed last: every SDK object belongs to it.
   std::shared_ptr<ob::Context> context;
@@ -61,29 +56,50 @@ struct OrbbecRig::Impl {
   std::vector<std::uint64_t> released;  // scratch
 
   bool running = false;
-  // Which of poll_set() and poll() this start's caller reads with. The other
-  // is refused: a set poll_set() took would drop the frames poll() had left.
-  enum class Reader { Unchosen, Sets, Frames } reader = Reader::Unchosen;
+  // Which of the four polls this start's caller reads with. The others are
+  // refused: a set one took would drop the frames another had left. A raw rig
+  // reads only the raw two, a host rig only the others.
+  enum class Reader {
+    Unchosen,
+    Sets,
+    Frames,
+    RawSets,
+    RawFrames
+  } reader = Reader::Unchosen;
+  bool raw = false;
   std::uint64_t sets = 0;
   std::uint64_t incomplete = 0;
-  // The set poll() is handing out, and the next frame of it.
+  // The set poll() or poll_raw() is handing out, and the next frame of it.
   OrbbecRigFrameSet current;
+  OrbbecRigRawSet current_raw;
   std::size_t cursor = 0;
 
   ~Impl() { stop_all(); }
 
   Status read_with(Reader wanted) {
+    const bool raw_reader =
+        wanted == Reader::RawSets || wanted == Reader::RawFrames;
+    if (raw != raw_reader) {
+      return Status::invalid_argument(
+          raw ? "OrbbecRig: opened for raw frames; take them with poll_raw_set "
+                "or poll_raw"
+              : "OrbbecRig: poll_raw_set and poll_raw need a rig opened with "
+                "raw = true");
+    }
     if (reader == Reader::Unchosen) reader = wanted;
     if (reader == wanted) return {};
     return Status::invalid_argument(
-        wanted == Reader::Sets
-            ? "OrbbecRig: poll_set after poll; read with one of the two until "
-              "the next start"
-            : "OrbbecRig: poll after poll_set; read with one of the two until "
-              "the next start");
+        "OrbbecRig: read with one of the set and frame polls until the next "
+        "start");
   }
 
-  Result<std::optional<OrbbecRigFrameSet>> take_set();
+  // The next ready trigger's frames, each processed, or read raw.
+  template <typename Frame>
+  Result<std::optional<OrbbecRigSet<Frame>>> take();
+
+  // The next frame of `set`, taking a new set when it is spent.
+  template <typename Frame>
+  Result<std::optional<Frame>> next(OrbbecRigSet<Frame>& set);
 
   void release_ids() {
     for (const std::uint64_t id : released) {
@@ -102,6 +118,7 @@ struct OrbbecRig::Impl {
     release_ids();
     held.clear();
     current = OrbbecRigFrameSet{};
+    current_raw = OrbbecRigRawSet{};
     cursor = 0;
   }
 };
@@ -116,6 +133,7 @@ Result<OrbbecRig> OrbbecRig::open(const Options& options) {
   VR_TRY(orbbec::validate(options));
   VR_TRY(orbbec::check_color_codec(options, "OrbbecRig"));
   auto impl = std::make_unique<Impl>();
+  impl->raw = options.raw;
   std::vector<std::string> serials;
   for (const OrbbecSyncDevice& device : options.sync.devices) {
     serials.push_back(device.serial);
@@ -269,12 +287,22 @@ Result<std::optional<OrbbecRigFrameSet>> OrbbecRig::poll_set() {
     return Status::invalid_argument("OrbbecRig: poll on a moved-from rig");
   }
   VR_TRY(impl_->read_with(Impl::Reader::Sets));
-  return impl_->take_set();
+  return impl_->take<CapturedFrame>();
 }
 
-Result<std::optional<OrbbecRigFrameSet>> OrbbecRig::Impl::take_set() {
+Result<std::optional<OrbbecRigRawSet>> OrbbecRig::poll_raw_set() {
+  if (impl_ == nullptr) {
+    return Status::invalid_argument("OrbbecRig: poll on a moved-from rig");
+  }
+  VR_TRY(impl_->read_with(Impl::Reader::RawSets));
+  return impl_->take<RawFrame>();
+}
+
+template <typename Frame>
+Result<std::optional<OrbbecRigSet<Frame>>> OrbbecRig::Impl::take() {
+  using Set = OrbbecRigSet<Frame>;
   Impl& r = *this;
-  if (!r.running) return std::optional<OrbbecRigFrameSet>{};
+  if (!r.running) return std::optional<Set>{};
   const std::uint64_t now = now_us();
   std::vector<std::shared_ptr<ob::FrameSet>> pairs;
   for (std::size_t c = 0; c < r.streams.size(); ++c) {
@@ -299,12 +327,13 @@ Result<std::optional<OrbbecRigFrameSet>> OrbbecRig::Impl::take_set() {
   const std::optional<orbbec::TriggerGrouper::Group> group =
       r.grouper.take(now, &r.released);
   r.release_ids();
-  if (!group) return std::optional<OrbbecRigFrameSet>{};
+  if (!group) return std::optional<Set>{};
 
-  // TODO(sensor): process the set's frames in parallel, one thread per
+  // TODO(sensor): process a host set's frames in parallel, one thread per
   // camera; one after another they take ~11 ms for four (the 2026-09-27
-  // decision).
-  OrbbecRigFrameSet set;
+  // decision). A raw set's are views, and prepare_set runs their GPU passes
+  // in parallel.
+  Set set;
   set.timestamp_ns = group->timestamp_us * 1000;
   set.frames.resize(r.streams.size());
   Status failure;
@@ -317,7 +346,15 @@ Result<std::optional<OrbbecRigFrameSet>> OrbbecRig::Impl::take_set() {
       r.streams[c]->discard();
       continue;
     }
-    auto processed = r.streams[c]->process(pair);
+    // A raw frame is a view of the camera's own buffers, so it costs no more
+    // than the grouping; the per-camera work is the GPU pass's.
+    auto processed = [&] {
+      if constexpr (std::is_same_v<Frame, RawFrame>) {
+        return r.streams[c]->process_raw(pair);
+      } else {
+        return r.streams[c]->process(pair);
+      }
+    }();
     if (!processed.ok()) {
       failure = processed.status();
       continue;
@@ -333,25 +370,41 @@ Result<std::optional<OrbbecRigFrameSet>> OrbbecRig::Impl::take_set() {
   }
   ++r.sets;
   if (!set.complete()) ++r.incomplete;
-  return std::optional<OrbbecRigFrameSet>{std::move(set)};
+  return std::optional<Set>{std::move(set)};
+}
+
+template <typename Frame>
+Result<std::optional<Frame>> OrbbecRig::Impl::next(OrbbecRigSet<Frame>& set) {
+  for (;;) {
+    while (cursor < set.frames.size()) {
+      const std::optional<Frame>& frame = set.frames[cursor++];
+      if (frame) return frame;
+    }
+    VR_ASSIGN(std::optional<OrbbecRigSet<Frame>> taken, take<Frame>());
+    if (!taken) return std::optional<Frame>{};
+    set = std::move(*taken);
+    cursor = 0;
+  }
 }
 
 Result<std::optional<CapturedFrame>> OrbbecRig::poll() {
   if (impl_ == nullptr) {
     return Status::invalid_argument("OrbbecRig: poll on a moved-from rig");
   }
-  Impl& r = *impl_;
-  VR_TRY(r.read_with(Impl::Reader::Frames));
-  for (;;) {
-    while (r.cursor < r.current.frames.size()) {
-      const std::optional<CapturedFrame>& frame = r.current.frames[r.cursor++];
-      if (frame) return some_frame(*frame);
-    }
-    VR_ASSIGN(std::optional<OrbbecRigFrameSet> set, r.take_set());
-    if (!set) return no_frame();
-    r.current = std::move(*set);
-    r.cursor = 0;
+  VR_TRY(impl_->read_with(Impl::Reader::Frames));
+  return impl_->next(impl_->current);
+}
+
+Result<std::optional<RawFrame>> OrbbecRig::poll_raw() {
+  if (impl_ == nullptr) {
+    return Status::invalid_argument("OrbbecRig: poll on a moved-from rig");
   }
+  VR_TRY(impl_->read_with(Impl::Reader::RawFrames));
+  return impl_->next(impl_->current_raw);
+}
+
+bool OrbbecRig::raw_frames() const noexcept {
+  return impl_ != nullptr && impl_->raw;
 }
 
 }  // namespace volumetric_kit::recon::sensor

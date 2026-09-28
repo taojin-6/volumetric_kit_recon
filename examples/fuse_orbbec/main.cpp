@@ -17,7 +17,8 @@
 // VR_WITH_FFMPEG); --color and --fps pick the colour mode, 4K H.265 running
 // at 25 fps at most. --gpu does too, and undistorts and converts on the GPU
 // (sensor::GpuFramePrep) instead of on the host, fusing depth and colour with
-// their own cameras; one camera only.
+// their own cameras; with --rig, each set's cameras are prepared at once, one
+// thread per camera (sensor::prepare_set), and fused one after another.
 // --rig fuses every camera of a sync configuration (femto_mega_sync.json) as
 // one rig, refusing cameras that differ from it unless --apply-sync writes it
 // to them. --calibration poses each camera from a calibration file
@@ -338,18 +339,24 @@ vr::Status run(const Options& opt) {
   VR_ASSIGN(mesh::MarchingCubes extractor,
             mesh::MarchingCubes::create(device, allocator, {}));
   // The source says which frames it hands out: raw ones (--gpu) are prepared
-  // on the device first.
+  // on the device first, and a raw rig's whole sets at once, a pass a camera.
   sensor::ICameraCapture& capture = source->capture();
   const bool raw_frames = capture.raw_frames();
-  std::optional<sensor::GpuFramePrep> prep;
-  if (raw_frames) {
-    VR_ASSIGN(prep, sensor::GpuFramePrep::create(device, allocator));
+  const bool raw_sets = raw_frames && source->rig;
+  std::vector<sensor::GpuFramePrep> preps;
+  std::size_t passes = 0;
+  if (raw_frames) passes = raw_sets ? source->rig->camera_count() : 1;
+  for (std::size_t c = 0; c < passes; ++c) {
+    VR_ASSIGN(sensor::GpuFramePrep one,
+              sensor::GpuFramePrep::create(device, allocator));
+    preps.push_back(std::move(one));
   }
 
   // --- Fuse ---
   VR_TRY(capture.start());
   vr::StageMetrics stage_totals;
   int fused = 0;
+  int reported = 0;  // the count last reported; a set may step past 100
   const auto t_start = std::chrono::steady_clock::now();
   auto last_frame = t_start;
   while (fused < opt.frames) {
@@ -361,7 +368,11 @@ vr::Status run(const Options& opt) {
     bool got = false;
     std::optional<sensor::CapturedFrame> polled;
     std::optional<sensor::RawFrame> raw;
-    if (raw_frames) {
+    std::optional<sensor::OrbbecRigRawSet> set;
+    if (raw_sets) {
+      VR_ASSIGN(set, source->rig->poll_raw_set());
+      got = set && set->count() > 0;
+    } else if (raw_frames) {
       VR_ASSIGN(raw, capture.poll_raw());
       got = raw.has_value();
     } else {
@@ -391,17 +402,35 @@ vr::Status run(const Options& opt) {
       continue;
     }
     last_frame = std::chrono::steady_clock::now();
-    if (raw) {
+    if (set) {
+      // Timed as one row: the cameras run at once, so their sum would
+      // overstate what the set costs.
+      const auto t_prep = std::chrono::steady_clock::now();
+      VR_ASSIGN(const std::vector<std::optional<sensor::DeviceFrame>> frames,
+                sensor::prepare_set(preps, set->frames));
+      stage_totals.add_cpu("frame prep",
+                           std::chrono::duration<double, std::milli>(
+                               std::chrono::steady_clock::now() - t_prep)
+                               .count());
+      for (const std::optional<sensor::DeviceFrame>& frame : frames) {
+        if (!frame || fused == opt.frames) continue;
+        VR_TRY(vr_example::fuse_frame(volume, integrator, *frame,
+                                      opt.max_weight, &stage_totals));
+        ++fused;
+      }
+    } else if (raw) {
       VR_ASSIGN(const sensor::DeviceFrame frame,
-                prep->prepare(*raw, &stage_totals));
+                preps.front().prepare(*raw, &stage_totals));
       VR_TRY(vr_example::fuse_frame(volume, integrator, frame, opt.max_weight,
                                     &stage_totals));
+      ++fused;
     } else {
       VR_TRY(vr_example::fuse_frame(volume, integrator, *polled, opt.max_weight,
                                     &stage_totals));
+      ++fused;
     }
-    ++fused;
-    if (fused % 100 == 0) {
+    if (fused / 100 > reported / 100) {
+      reported = fused;
       const double secs =
           std::chrono::duration<double>(last_frame - t_start).count();
       std::printf("  fused %d frames (%.1f fps)\n", fused, fused / secs);

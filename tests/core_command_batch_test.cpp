@@ -404,7 +404,8 @@ int main() {
   }
 
   // Timed dispatches keep their spans: two in one submit, each resolved
-  // into its own row. Timed uploads do too, inline, staged and reserved.
+  // into its own row. Timed uploads do too, inline, staged and reserved, and
+  // a timed copy.
   {
     vr::Result<vr::GpuTimer> timer = vr::GpuTimer::create(device);
     CHECK(timer.ok());
@@ -417,6 +418,7 @@ int main() {
       CHECK(batch.upload(a, 0, p.data(), kBytes, &uploads).ok());
       CHECK(batch.upload(b, 2, p.data(), 8, &uploads).ok());
       CHECK(batch.reserve_upload(b, 16, 8, &uploads).ok());
+      CHECK(batch.copy(a, 0, b, 32, 8, &uploads).ok());
       add.set.write_storage_buffer(0, a.handle(), 0, VK_WHOLE_SIZE);
       const Push push{kCount, 1};
       CHECK(batch.dispatch(add, &push, sizeof(push), 4, rig.max_groups, &first)
@@ -424,7 +426,7 @@ int main() {
       CHECK(batch.dispatch(add, &push, sizeof(push), 4, rig.max_groups, &second)
                 .ok());
       CHECK(batch.submit().ok());
-      if (timer.value().available()) CHECK(timer.value().count() == 5);
+      if (timer.value().available()) CHECK(timer.value().count() == 6);
     }
     for (const char* name : {"first", "second", "uploads"}) {
       const vr::StageRow* row = nullptr;

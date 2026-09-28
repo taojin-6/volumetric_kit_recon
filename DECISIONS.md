@@ -6123,14 +6123,76 @@ One suggestion was not taken. The two passes share no buffer, yet a barrier
 still separates them, because the batch cannot see a kernel's bindings. The
 depth pass it waits on takes 0.003 ms on the 5090 and 0.008 ms on the Mac.
 
+**Step 5b, the rig's raw sets, has landed.** `OrbbecRig::poll_raw_set`
+hands out a set of `RawFrame`s, views into the SDK's frames, and
+`prepare_set` prepares a set with one `GpuFramePrep` per camera, each on a
+thread of its own and the last on the caller's. Receiving and decoding were
+already a thread per camera. This needed `Device` to take submits from
+several threads, which it now does (the entry below).
+
+The first cut was slower in parallel than in turn on the 5090. Each pass
+had its batch allocate a 13 MB staging buffer per frame, and four at once
+made VMA allocate and free a block for every set, under its lock: 39 ms a
+frame, against 0.003 ms one pass at a time. This is the revisit the "no
+staging arena" bullet above asked for, and it is kept to the one caller that
+needs it: `GpuFramePrep` keeps a staging buffer, grown to the largest frame,
+writes the frame into it, and copies it up in its batch (`copy` now takes the
+stage's scope, as `upload` does). On unified memory the frame is therefore
+held twice for good, not only while the batch runs: about 13 MB more a
+camera at 4K. Measured on four 640x576 depth and 3840x2160 colour frames,
+Release, per set:
+
+| | RTX 5090 | M5 Max |
+|---|---|---|
+| one camera at a time, per-call staging | 7.6 ms | 2.5 ms |
+| `prepare_set`, per-call staging | 46 ms | 1.78 ms |
+| one camera at a time, kept staging | 7.6 ms | 2.4 ms |
+| `prepare_set`, kept staging | 4.8 ms | 1.73 ms |
+
+What is left of the 5090's set is the frame's copy into staging (1.1 ms a
+camera with four at once, against 0.6 ms alone) and `submit_single_time`'s
+fence and command buffer, made and freed per submit under the device's one
+lock (about 0.7 ms a submit). Reusing those is the `TODO(core)` below, now
+measured. The live rig fused 403 frames at 73.7 fps on the Mac, the
+`"frame prep"` row 0.55 ms of host time a frame.
+
 Next are the frame prep's outputs on a ring (a `TODO(sensor)` on
-`ensure_output`), then 5b, the rig's raw sets, then 5c, the decoder's planes
-straight to the device. 5c needs its own design: CUDA or VideoToolbox memory
-shared with Vulkan.
+`ensure_output`), then 5c, the decoder's planes straight to the device. 5c
+needs its own design: CUDA or VideoToolbox memory shared with Vulkan.
 
 `dispatch()` is unchanged. `submit_single_time` still allocates a command
-buffer and a fence per submit; reusing them is a `TODO(core)` for when a tier
-measures it.
+buffer and a fence per submit; reusing them is a `TODO(core)`, measured by
+step 5b at about 0.7 ms a submit on the 5090.
+
+**The review of step 5b** changed:
+
+- A rig opened raw kept `raw_frames()` false and refused `poll()`, so a loop
+  written to the contract got no frames at all. It now says `raw_frames()`
+  and hands out `poll_raw()`, the raw sets one frame at a time, as `poll()`
+  does the host ones. The two set types are one template,
+  `OrbbecRigSet<Frame>`.
+- `prepare_set` joins its threads on every way out, and a thread's
+  `bad_alloc` becomes a `Status`: either exception ended the process.
+- A failed submit lets go of the pass's staging rather than rewriting or
+  freeing it under a copy that may still run, as the batch does its own.
+  The staging is named (`sensor.raw_staging`), made by the inputs' helper.
+- `fuse_orbbec --rig --gpu` stops at `--frames` mid-set, reports progress,
+  and a set with no frame no longer resets the silence limit.
+- The rig's hardware test holds each raw depth frame to its own camera's
+  pose through a fixed extrinsic, and each frame to the trigger's clock. It
+  prepares every set, incomplete ones too, since the lab rig's rarely are.
+
+The adopted device that submitted unlocked is fixed by the entry below.
+Two suggestions were not taken. A staging pool in `CommandBatch` for every
+caller: only `prepare_set` stages from several threads at once, so the "no
+staging arena" bullet stands for the rest. A persistent worker per pass:
+creating and joining three threads costs 0.027 ms a set on the M5 Max, 1.6%
+of the set.
+
+**Verified.** The Mac suite passes. On the lab rig, the raw section passes,
+the MJPEG and H.265 sections skipped: their completeness and loss checks
+fail on this rig, on the base too. `fuse_orbbec --rig --gpu --frames 400`
+fused 400 frames at 47.2 fps (Release).
 
 ### 2026-09-28 — A `Device` takes submits from several threads at once: each records on a command pool of its own, and only the queue is locked.
 

@@ -45,7 +45,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   submit**: the raw depth and colour planes go up through a batch into
   device-local inputs, rather than a host-visible buffer the kernels read
   across the bus. The three planes are packed into one staging buffer, and
-  the `"frame prep"` row's device half counts the copy.
+  the `"frame prep"` row's device half counts the copy. The pass keeps that
+  buffer, since four passes allocating one each per call made VMA allocate
+  and free a block for every rig set: 46 ms a set on an RTX 5090, 4.8 ms
+  kept.
 - `texture`: **every pass is one batch**: a host depth frame staged, the camera
   inline, the dispatch, and for a host `Mesh` the vertices staged up, then read
   back in a batch of their own. The camera, the depth copy and the several-view
@@ -145,8 +148,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   whose colour keeps a camera of its own, waits on a colour camera in the
   texture pass.
 - `core`: **`CommandBatch::reserve_upload`** hands the caller the staging for
-  an upload to pack itself, such as strided rows or several planes. It and
-  `upload` take an optional `GpuStageScope` that times the copy.
+  an upload to pack itself, such as strided rows or several planes. It,
+  `upload` and `copy` take an optional `GpuStageScope` that times the copy.
+- `sensor`: **raw sets from the rig.** `OrbbecRig::poll_raw_set` hands out a
+  set of `RawFrame`s from a rig opened with `raw`, and `poll_raw` the same
+  frames one at a time, as the contract's `raw_frames()` says. `prepare_set`
+  prepares a set on the device, a thread and a `GpuFramePrep` per camera.
+  `fuse_orbbec --rig --gpu` fuses them. `OrbbecRigFrameSet` and
+  `OrbbecRigRawSet` are one template, `OrbbecRigSet<Frame>`.
 - `core`: **`CommandBatch`** (`core/command_batch.hpp`): one call's uploads,
   fills, copies, dispatches, indirect dispatches and readbacks recorded into one
   command buffer and submitted with one fence wait. Small aligned uploads go
