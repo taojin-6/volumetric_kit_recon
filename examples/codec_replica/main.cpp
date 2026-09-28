@@ -26,17 +26,18 @@
 #include "codec_stream.hpp"
 #include "codec_sweep.hpp"
 #include "fuse_frame.hpp"
-#include "mesh_distance.hpp"
 #include "ply_writer.hpp"
 #include "replica_capture.hpp"
 #include "volumetric_kit/recon/core/allocator.hpp"
 #include "volumetric_kit/recon/core/device.hpp"
 #include "volumetric_kit/recon/core/instance.hpp"
+#include "volumetric_kit/recon/eval/mesh_distance.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
 
 namespace vr = volumetric_kit::recon;
 namespace codec = volumetric_kit::recon::codec;
+namespace eval = volumetric_kit::recon::eval;
 namespace mesh = volumetric_kit::recon::mesh;
 
 namespace {
@@ -44,7 +45,7 @@ namespace {
 constexpr double kFps = 30.0;
 constexpr float kMaxWeight = 20.0f;
 constexpr std::int32_t kBuckets = 16384;  // the fusion grid's; it grows
-constexpr std::size_t kMetricStride = 4;  // every 4th vertex, both ways
+constexpr std::size_t kMetricStride = 4;  // about 1 vertex in 4, both ways
 
 struct Options {
   std::string scene_dir;
@@ -197,21 +198,29 @@ vr::Status run(const Options& opt) {
   // The last frame's decoded surface against the source's.
   VR_ASSIGN(const mesh::Mesh source, extractor.extract_host(volume));
   VR_ASSIGN(const mesh::Mesh decoded, extractor.extract_host(stream.player()));
-  const float reach = std::max(trunc, 0.02f);
-  std::printf("surface: %zu triangles decoded against %zu:\n",
-              decoded.triangle_count(), source.triangle_count());
-  vr_example::print_comparison(
-      vr_example::compare_meshes(source, decoded, reach, kMetricStride),
-      opt.voxel);
+  // Written first, so a comparison that refuses a mesh still leaves the
+  // meshes to look at.
   if (!opt.out_prefix.empty()) {
     VR_TRY(vr_example::write_ply(opt.out_prefix + "_source.ply", source));
     VR_TRY(vr_example::write_ply(opt.out_prefix + "_decoded.ply", decoded));
   }
+  // A band's width of reach, and an F-score at half a voxel, inside the
+  // reconstruction's own resolution so it moves with the codec. The source is
+  // indexed once, for this comparison and every one the sweep makes.
+  eval::CompareOptions compare;
+  compare.reach = std::max(trunc, 0.02f);
+  compare.stride = kMetricStride;
+  compare.fscore_threshold = 0.5f * opt.voxel;
+  VR_ASSIGN(const eval::ReferenceMesh reference,
+            eval::ReferenceMesh::create(source, compare));
+  VR_ASSIGN(const eval::MeshComparison cmp, reference.compare(decoded));
+  std::printf("surface: %zu triangles decoded against %zu:\n",
+              decoded.triangle_count(), source.triangle_count());
+  vr_example::print_comparison(cmp, opt.voxel);
 
   if (opt.sweep) {
-    VR_TRY(vr_example::run_codec_sweep(device, allocator, volume, source,
-                                       extractor, stream.player(), reach,
-                                       kMetricStride));
+    VR_TRY(vr_example::run_codec_sweep(device, allocator, volume, reference,
+                                       extractor, stream.player()));
   }
   return {};
 }

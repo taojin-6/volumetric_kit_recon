@@ -4662,9 +4662,10 @@ Each is a point-to-triangle distance through a cell hash, up to a reach of
 `max(trunc_dist, 2 cm)`, sampled at every fourth vertex. A point with nothing
 within reach is counted apart, not averaged, so accuracy's RMS, p95 and max
 cover only the points within it; the count beyond it is reported beside them
-(`acc>r`, `cov>r`). The code is `examples/common/mesh_distance.hpp`,
-header-only, and its test pins it against meshes a known distance apart and
-against a scan of every triangle. The first plan was to sample the source grid's
+(`acc>r`, `cov>r`). The code was `examples/common/mesh_distance.hpp`,
+header-only, with a test pinning it against meshes a known distance apart and
+against a scan of every triangle. It moved into the `eval` tier the same day
+(the next entry). The first plan was to sample the source grid's
 SDF at the decoded vertices, which would be simpler. It was dropped because a
 fused TSDF is **projective**: distance along the camera ray, not Euclidean. So
 on real scans the simpler metric would have measured the fusion's bias as well
@@ -4810,6 +4811,196 @@ untimed round first.
 - **Host-threaded segment coding,** if a finer voxel or K = 128 is wanted in
   real time (a `TODO(codec)` in `bitstream.cpp`).
 - **The GPU coder,** after that, if threading is not enough.
+
+### 2026-09-27 — Quality measurement is a tier of its own, `eval`, branching off `mesh`: mesh-to-mesh accuracy, coverage and F-score, host-side and deterministic, and production infrastructure rather than an excluded research harness.
+
+The mesh-distance metric came in with the room0 measurement as a header in
+`examples/common`. It had three consumers, or would have soon:
+- **`codec_replica`**, whose defaults it chose;
+- **the codec's ground-truth test (#94)**, which carries its own copy of the
+  closest-point code;
+- **the per-band quantization study**, which will be judged on it.
+
+A metric that picks defaults and gates tests belongs in the library, where it
+is documented, versioned and tested like the rest.
+
+**Named `eval`, not `metrics`.** `core` already has `StageMetrics`, the timing
+vocabulary every tier reports in, and a `metrics` tier would read as more of
+that. The target is `recon_eval`, the namespace `volumetric_kit::recon::eval`.
+
+**Off `mesh`.** It reads `mesh::Mesh`, so it depends on `mesh` and branches off
+it, as `texture` does. Nothing in the pipeline links it. The codec's tests and
+example depend on it, never the reverse, so `codec` stays on `volume` alone. A
+later grid-to-grid metric would fit too, `volume` being to its left.
+
+**Not an excluded harness.** The exclusion list names "Python research/eval
+harnesses and any learned/neural or paper-experiment code". This is none of
+those: it is host-side C++ with no dependency beyond the mesh container, and
+it is deterministic up to the inputs it is given. The repo's own tests and
+examples use it to hold the reconstruction and the codec to a number, so it
+meets the same bar as any tier: full Doxygen, `Status` on every refusal, a
+test with analytic answers. A paper's evaluation protocol, a dataset loader or
+a plotting script would still be excluded.
+
+**What v1 holds** (`eval/mesh_distance.hpp`):
+- **`MeshDistance`:** point-to-surface distance up to a reach, through a hash
+  of cells half the reach on a side. A query scans its own cell first, then
+  only the neighbours within two cells whose box is nearer than its best so
+  far, on squared distances (from #95's review, below).
+  - It **copies** the triangles, so the source mesh need not outlive it. The
+    header-only version kept a reference, a lifetime the caller could not see.
+  - `create` refuses a reach that is not finite and positive, an index count
+    that is not a multiple of 3, and an index past the vertices, where the
+    header-only version read out of bounds.
+  - It also refuses a triangle corner that is not finite or lies past the cell
+    keys' range (about half a million reaches out), and a reach so small for
+    the triangles that they would average more than `kMaxCellsPerTriangle`
+    (64) cells each. A triangle no larger than half the reach touches at most
+    8, and one no larger than the reach 27. Both
+    are limits the caller cannot see: the first overflowed the float-to-int
+    cell conversion, which saturates on ARM and left the filing loop without
+    an end, and the second grew memory as `(size / reach)^3` (one 1 cm
+    triangle at a micron took 8.1 GB).
+  - A query that is not finite, or past the range, reads as the reach.
+- **`closest_point_on_triangle`** is the projection onto the face when it
+  lands inside, and otherwise the nearest of the three edges; a triangle
+  whose angle at its first corner has a sine under 1e-4 is measured by its
+  edges alone. Ericson's regions assume an area, and with the first two
+  corners coinciding every point fell in edge ab's region, whose parameter
+  is 0 / 0. The NaN lost to `std::min`, so the triangle silently dropped
+  out, and marching cubes makes one wherever a crossing lands on a voxel
+  corner. (This PR first kept Ericson's test behind a guard at a sine of
+  1e-5; #95's review fixed the same bug with the projection, which is the one
+  kept, as below.)
+- **What counts as surface:** every triangle but one collapsed to a point,
+  and the points measured are the vertices those triangles use.
+  `extract_device_incremental` retires a triangle to a point (the sharing
+  kernel's indices all at vertex 0, the default kernel's three vertices at
+  the origin) and leaves the sharing kernel's dead vertices unreferenced at
+  stale positions. So comparing an incremental extract with a full one, the
+  obvious use of this tier, would have measured its garbage.
+- **`summarize`:** a distance distribution over the points within reach, plus
+  a count of those beyond it. The p95 is the nearest rank, `ceil(0.95 n)`.
+- **`compare_meshes`:** accuracy (test vertices to the reference surface) and
+  coverage (reference vertices to the test surface), the directions the
+  ground-truth test named. It also computes the **F-score** at a threshold,
+  since precision and recall fall out of the same distances.
+  - The threshold must lie in `[0, reach]`. Past the reach, every distance
+    reads as the reach, and the score would be meaningless.
+  - `codec_replica` reports it at half a voxel. That is inside the
+    reconstruction's own resolution, so the score moves with the codec rather
+    than saturating: 0.993 on the 20-frame 2 cm smoke run.
+  - It checks both meshes before indexing either, and drops each index before
+    building the next, so one comparison holds one.
+- **`ReferenceMesh`:** a reference indexed once, for many meshes to be judged
+  against. The sweep compares 24 decoded meshes against one source and
+  rebuilt the source's index for each. It gives exactly what `compare_meshes`
+  gives for the same pair, and it pairs the index with the points taken from
+  the same mesh, so the two cannot be mismatched.
+
+**A stride picks vertices by a hash of their position.** `compare_meshes` can
+measure about one vertex in `stride`, and `codec_replica` uses 4 on room0's
+million vertices. The first cut took every `stride`-th vertex of the array.
+But marching cubes emits vertices in the order its atomics hand out ranges,
+so that subsample changed from run to run. The same grid's figures moved by
+about half a percent (accuracy mean 1.208 against 1.214 mm on two runs of the
+smoke test, the max 44.8 against 39.1 mm), which hid any codec change
+smaller than that. A hash of the position depends only on the geometry, so
+three runs now agree in every printed digit (accuracy mean 1.214 mm, F
+0.9926). The earlier entry's room0 tables were measured under the array
+stride. This is a subsample of the same size, so they should stand to within
+that half percent. One was re-run: the 1 cm defaults' accuracy RMS reads
+0.640 mm under the hash, against the table's 0.641.
+
+**The example's entry point stays concise** (this PR's base,
+`refactor(examples): keep codec_replica's entry point concise`). The player
+policy, the report printers and the sweep live in `examples/common`
+(`codec_stream.hpp`, `codec_sweep.hpp`). `main.cpp` is the example's story:
+options, setup, the fuse loop, the report.
+
+**Verified.** The full suite passes, 35 of 35. `recon_eval_mesh_distance`
+replaces the example-header test: the closest point in every region of a
+triangle and on every degenerate one, the reach clamp, the statistics,
+accuracy / coverage between planes a known distance apart, the F-score, what
+counts as surface, figures independent of the mesh's order, the reusable
+reference, and every refusal.
+- **F-score checks:** it is exactly 1 above a 3 mm shift and exactly 0 below
+  one, and not 0/0. Half a plane gets precision 1 and the exact recall of the
+  extent it kept. That test first assumed the cut fell at 0.1 m, but
+  `20 * 0.005f` rounds below `0.1f`, so the mesh keeps a 21st column of
+  squares. The test now reads the extent off the mesh.
+- **A copy made at `create`:** the index is built over a temporary mesh and
+  queried after it is gone, which ASan would catch if it were not a copy.
+
+**Review (PR #96).** Fixed as described above:
+- the degenerate triangle whose first two corners coincide;
+- the unbounded cell loop on a non-finite or distant corner;
+- the unbounded cells a small reach cost;
+- the unreferenced and retired vertices counted as surface;
+- the order-dependent stride;
+- a p95 one rank high, which read the max for 20 samples;
+- the index rebuilt for every configuration of the sweep;
+- both indices held at once.
+
+Four smaller fixes:
+- The reach is checked before the threshold, so a bad reach is not reported
+  as a threshold left at 0.
+- `codec_replica` writes its PLYs before comparing, so a refusal leaves the
+  meshes to look at.
+- The sweep prints `-` for an F-score nobody asked for, and names its
+  threshold.
+- The `eval` mark in DESIGN.md's diagram now sits under `mesh`.
+
+Each fix has a test, and taking it back fails that test: the degenerate
+check, the p95, the unreferenced vertices, the point triangles, the stride
+(the reorder test rotates the vertices and bumps the surface, since
+reversing 41^2 vertices maps every seventh index onto every seventh index,
+and a flat grid gives many subsets one distribution), the order of the
+option checks, and the cell budget (the test hangs without it). The two
+range checks are caught by the sanitizer leg, as the float-to-int overflow
+they prevent; the cell budget alone refuses the far vertex on ARM. (The
+degenerate guard measured here, 2% per call, was on Ericson's test, which
+the merge below replaced.)
+
+Kept on purpose: `positive_finite` and the cell key stay private copies, not
+`core` helpers. The first is one line. The second differs from
+`tsdf_integrator.cpp`'s `block_key` in encoding (offset rather than
+two's-complement masking) and in its range check, which only `eval` needs,
+since block coordinates are bounded by the grid.
+
+**Merged with #95's review.** #95's review fixed the same header in
+`examples/common` while this PR's review fixed its copy here, each without
+the other. When this PR was rebased onto the merged #95, `eval` took the
+better of each, measured rather than argued:
+- **The closest point is #95's.** Both versions were run against a
+  double-precision reference on 1 cm triangles at room coordinates, about
+  4.2 million queries (coincident corners, collinear corners, 1 µm needles,
+  and slivers with sines from 1e-6 to 1e-2). The projection is within
+  0.17 µm on every one, which is float rounding at 3 m. Ericson behind the
+  guard is off by more than 0.5 µm on 12 of them, all slivers or collinear,
+  by up to 89.5 µm. Rare, so no room0 figure moves, but never is better than
+  rarely, and it is simpler.
+- **The search is #95's**, with this PR's range checks moved onto the finer
+  cells. Room0 at 1 cm, the same grids, compared both ways at stride 4:
+  8.25 s before, 1.86 s after, and every printed figure identical (accuracy
+  RMS 0.640 mm, F 0.9981 at 5 mm).
+- **The rest is this PR's:** the refusals, the surface-only sampling, the
+  position-hashed stride, and `ReferenceMesh`, which covers what #95's
+  hash-once `compare_meshes` overload was for. #95's `acc>r` column and its
+  sweep decoding into the stream's player carry over into the examples.
+- **Tests from #95**, ported: thin triangles against the double-precision
+  answer (50 000 draws, enough to meet Ericson's rare misses; reverting to
+  it fails), and the pruned search against a scan of every triangle
+  (probing one cell fewer along x, or leaving the box gap unsquared,
+  fails). One
+  change survives: trusting the face down to any nonzero area passes every
+  case too. The 1e-4 guard is kept as a margin, not a measured need.
+
+**Open**, each a `TODO(eval)` in the code:
+- The ground-truth test (#94) moves onto `eval` once both have landed, and
+  drops its copy.
+- A threaded `compare_meshes`: room0 at 1 cm takes ~2 s at stride 4 on one
+  core.
 
 ## Measured lessons
 

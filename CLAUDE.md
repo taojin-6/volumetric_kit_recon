@@ -39,9 +39,9 @@ conventions and Vulkan setup.
   engine's `VK_DEVICE_HOST`-style macros are renamed `VR_*` on port.)
 - CMake: `find_package(volumetric_kit_recon)`; component targets
   `volumetric_kit::recon_core`, `…_volume`, `…_tsdf`, `…_mesh`, `…_texture`,
-  `…_sensor`, `…_codec`, `…_interop` (+ later `…_track`, `…_stream`), plus the
-  opt-in `…_sensor_orbbec` driver (`VR_WITH_ORBBEC`) and `…_sensor_video`
-  decoder (`VR_WITH_FFMPEG`); umbrella alias
+  `…_sensor`, `…_codec`, `…_eval`, `…_interop` (+ later `…_track`, `…_stream`),
+  plus the opt-in `…_sensor_orbbec` driver (`VR_WITH_ORBBEC`) and
+  `…_sensor_video` decoder (`VR_WITH_FFMPEG`); umbrella alias
   `volumetric_kit::recon`.
 
 ## Architecture (tiered)
@@ -50,8 +50,8 @@ Strict left-to-right dependency rule: a tier may depend only on tiers to its
 left. No upward includes.
 
 `core` → `volume` → `tsdf` → `mesh` → `texture` → `interop`, with `sensor`
-branching off **`core`** and `codec` off **`volume`** (later: `track`,
-`stream`).
+branching off **`core`**, `codec` off **`volume`** and `eval` off **`mesh`**
+(later: `track`, `stream`).
 
 - **`core`** — the Vulkan foundation *and* the vocabulary every tier trades in
   (`Status`/`Result`, the GLM math aliases, and the posed pinhole
@@ -93,6 +93,11 @@ branching off **`core`** and `codec` off **`volume`** (later: `track`,
   **`volume` alone**. Color is not coded: the
   player textures the decoded mesh from RGB that travels beside it (the
   2026-09-26 decision).
+- **`eval`** — quality measurement for the tests and examples that judge a
+  reconstruction or a codec: mesh-to-mesh distance, accuracy / coverage and
+  the F-score (`eval/mesh_distance.hpp`). Host-side, deterministic, and linked
+  by nothing in the pipeline. It is infrastructure, not one of the excluded
+  eval harnesses (2026-09-27).
 - **`interop`** — the handoff to `volumetric_kit_gfx` (below).
 
 ## Locked decisions
@@ -273,6 +278,10 @@ order. Change the decision, its entry there, and this list together.
   DC and AC alike: the coefficient count sets the quality and a coarse uniform
   step costs almost nothing at it, and the host rANS coder fits a frame
   interval at 1 cm, so the GPU coder waits.
+- [**2026-09-27**](DECISIONS.md#2026-09-27--quality-measurement-is-a-tier-of-its-own-eval-branching-off-mesh-mesh-to-mesh-accuracy-coverage-and-f-score-host-side-and-deterministic-and-production-infrastructure-rather-than-an-excluded-research-harness) —
+  Quality measurement is a tier of its own, `eval`, branching off `mesh`:
+  mesh-to-mesh accuracy, coverage and F-score, host-side and deterministic,
+  and production infrastructure rather than an excluded research harness.
 
 ## Provenance & salvage policy
 
@@ -311,6 +320,8 @@ deferred, not stubbed. When in doubt, it stays out.
   codec is DCT-only).
 - **Python research/eval harnesses** and any learned/neural or paper-experiment
   code. These remain in the prior repos for research; none enter this repo.
+  (The C++ `eval` tier is not one of them: it is the repo's own quality
+  measurement, held to the same bar as any tier — the 2026-09-27 decision.)
 
 ## The interop seam (pairing with gfx)
 
@@ -786,6 +797,28 @@ arbitrary; it usually isn't.
   bit, nor a symbol swapped for one of equal frequency, so integrity is the
   transport's.
 
+- **`eval`** — `MeshDistance` (point-to-surface distance up to a reach,
+  through a hash of cells half the reach on a side, searched nearest first
+  and pruned by distance, over a **copy** of the triangles),
+  `compare_meshes` giving accuracy, coverage and an optional F-score, and
+  `ReferenceMesh`, which indexes a reference once so a sweep can judge many
+  meshes against it. They refuse, with `Status`, what would read out of
+  bounds, overflow or mean nothing:
+  - a bad reach, or indices out of range;
+  - a corner that is not finite or past the cell keys' range;
+  - a reach so small that the triangles would average more than
+    `kMaxCellsPerTriangle` cells each;
+  - a threshold past the reach.
+
+  The surface is every triangle but one collapsed to a point, which is what
+  an incremental extract retires a triangle to. The points measured are the
+  vertices those triangles use. The closest point is the face projection
+  when it lands inside, else the nearest edge, so a degenerate triangle
+  counts as the segment it collapses to and a thin one is measured to float
+  rounding, where Ericson's region test lost it now and then. A `stride` picks
+  vertices by a hash of their position, so the figures reproduce whatever
+  order marching cubes' atomics emitted the mesh in.
+
 **Examples** (`examples/`). All five poll their frames through
 `sensor::ICameraCapture&` — the fuse loop never learns what is behind it. The
 four dataset examples take `ReplicaCapture` as the source: frame cap, stride
@@ -825,12 +858,13 @@ fuses the rig as an `OrbbecRig`, posed by `--calibration`.
 streams the growing grid through the codec: every `--encode-every` frames it
 encodes, then decodes into a player grid built from `read_frame_info` and
 sized for that frame's blocks. It reports bytes, the bitrate at the coded
-frame rate, and both calls' stage rows. It then judges the last
-decoded surface against the source's, mesh to mesh, with
-`examples/common/mesh_distance.hpp`: accuracy and coverage, as the codec's
-ground-truth test names them, since a fused TSDF is projective and sampling it
-would measure the fusion's bias too. `--sweep` prints the rate–distortion
-table the defaults are chosen from.
+frame rate, and both calls' stage rows. It then judges the last decoded
+surface against the source's, mesh to mesh, with the `eval` tier: accuracy,
+coverage and the F-score at half a voxel, since a fused TSDF is projective
+and sampling it would measure the fusion's bias too. `--sweep` prints the
+rate–distortion table the defaults are chosen from. Its `main.cpp` stays the
+example's story; the stream, its report and the sweep are
+`examples/common/codec_stream.hpp` and `codec_sweep.hpp`.
 
 **Next.** **Incremental mesh extraction has landed, all three stages** —
 `MarchingCubes::extract_device_incremental`, over the span table of the

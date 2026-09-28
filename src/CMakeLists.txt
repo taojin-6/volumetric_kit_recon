@@ -25,6 +25,10 @@ add_subdirectory(volumetric_kit/recon/texture)
 # to whoever can build and test them (the 2026-08-02 decision).
 add_subdirectory(volumetric_kit/recon/sensor)
 add_subdirectory(volumetric_kit/recon/codec)
+# Quality measurement for the tests and examples that judge a reconstruction or
+# a codec: mesh-to-mesh distance, accuracy / coverage, F-score (the 2026-09-27
+# eval decision). Off recon_mesh.
+add_subdirectory(volumetric_kit/recon/eval)
 # TODO: add_subdirectory() for interop as that tier lands.
 
 # --- recon: umbrella alias --------------------------------------------------
@@ -39,7 +43,8 @@ target_link_libraries(
             recon_mesh
             recon_texture
             recon_sensor
-            recon_codec)
+            recon_codec
+            recon_eval)
 if(TARGET recon_sensor_video)
   target_link_libraries(recon INTERFACE recon_sensor_video)
 endif()

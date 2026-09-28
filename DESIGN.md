@@ -27,7 +27,7 @@ testable and consumable, and lets downstream projects link only what they need.
 
 ```
 core → volume → tsdf → mesh → texture → interop
-  │        └→ codec
+  │        └→ codec     └→ eval
   └→ sensor                   (later: track, stream)
 ```
 
@@ -57,6 +57,10 @@ core → volume → tsdf → mesh → texture → interop
   player without the integrator. Geometry only: the decoded mesh is colored by
   projective texturing from RGB that travels beside it. P-frames come later, as
   a frame type in the same bitstream (the 2026-09-26 decision).
+- **eval** — quality measurement: how far one mesh is from another
+  (accuracy, coverage, F-score), for the tests and examples that judge a
+  reconstruction or the codec. Host-side and deterministic. The pipeline never
+  links it.
 - **interop** — the handoff to `volumetric_kit_gfx` (below).
 
 ## Backend strategy: one Vulkan path
