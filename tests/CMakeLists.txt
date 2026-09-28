@@ -397,8 +397,9 @@ if(VR_WITH_ORBBEC)
 
   # The rig's grouping of frames into sync triggers and its start order, driven
   # by synthetic streams -- drops, a silent camera, a slow poll, a clock off by
-  # more than the tolerance. No camera. Internal and unexported, so the test
-  # compiles the source itself, as the conversion test does.
+  # more than the tolerance, a late frame, the start-up frames. No camera.
+  # Internal and unexported, so the test compiles the source itself, as the
+  # conversion test does.
   add_executable(
     recon_sensor_orbbec_grouping_test
     sensor_orbbec_grouping_test.cpp

@@ -3,7 +3,8 @@
 
 // OrbbecRig against real cameras: poses read from a rig pose file, sets whose
 // frames share a trigger and carry their own camera's pose, most of them
-// complete, the one-frame-at-a-time path, restart, and moves.
+// complete, restart, the one-frame-at-a-time path, the two readers refusing
+// to mix, and moves.
 //
 // Cameras are used only when named: set VR_ORBBEC_TEST_RIG to their serials,
 // comma-separated, primary included. Unset, the test skips (exit 0).
@@ -100,6 +101,7 @@ int main() {
   }
   CHECK(rig.device_info(rig.primary()).sync_mode ==
         sensor::OrbbecSyncMode::Primary);
+  CHECK(rig.device_info(n).serial.empty());  // past the end: empty, no throw
 
   // Not started: an empty poll, not an error.
   {
@@ -172,11 +174,29 @@ int main() {
   // Measured on the rig over the cable: ~92% of four-camera triggers complete.
   CHECK(complete * 10 >= sets * 8);
 
-  // One frame at a time: every frame carries one of the rig's poses.
+  // poll() would drop the rest of a set poll_set() is reading through.
+  {
+    auto polled = rig.poll();
+    CHECK(!polled.ok() &&
+          polled.status().domain() == vr::Status::Code::InvalidArgument);
+  }
+
+  // Stop, idempotently; a restart streams again with fresh counters, and may
+  // read the other way. One frame at a time: every frame carries one of the
+  // rig's poses.
+  rig.stop();
+  rig.stop();
+  {
+    auto polled = rig.poll_set();
+    CHECK(polled.ok() && !polled.value());
+  }
+  CHECK_OK(rig.start());
+  const auto restart_deadline = std::chrono::steady_clock::now() + kTimeout;
   for (int k = 0; k < 3 * static_cast<int>(n);) {
     auto polled = rig.poll();
     CHECK(polled.ok());
     if (!polled.value()) {
+      CHECK(std::chrono::steady_clock::now() < restart_deadline);
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
       continue;
     }
@@ -185,30 +205,16 @@ int main() {
                       [&](const auto& p) { return p.cam_to_world == pose; }));
     ++k;
   }
-
-  // Stop, idempotently; a restart streams again with fresh counters.
-  rig.stop();
-  rig.stop();
-  {
-    auto polled = rig.poll_set();
-    CHECK(polled.ok() && !polled.value());
-  }
-  CHECK_OK(rig.start());
-  for (int got = 0; got < 3;) {
-    auto polled = rig.poll_set();
-    CHECK(polled.ok());
-    if (polled.value()) {
-      ++got;
-    } else {
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-  }
-  CHECK(rig.stats().sets == 3u);
+  // Each set holds one to n frames, so 3n frames took 3 to 3n sets.
+  const std::uint64_t restarted_sets = rig.stats().sets;
+  CHECK(restarted_sets >= 3u && restarted_sets <= 3u * n);
+  CHECK(!rig.poll_set().ok());  // and the other way round
 
   // Moves: the rig streams wherever it lands; the source is left empty.
   sensor::OrbbecRig moved(std::move(rig));
   CHECK(rig.exhausted());  // NOLINT(bugprone-use-after-move)
   CHECK(rig.camera_count() == 0u);
+  CHECK(rig.device_info(0).serial.empty());
   CHECK(!rig.poll_set().ok());
   CHECK(!rig.start().ok());
   rig.stop();  // safe on a moved-from rig

@@ -27,11 +27,11 @@ namespace volumetric_kit::recon::sensor {
 /// Borrows the rig's storage: valid until the next @ref OrbbecRig::poll_set,
 /// @ref OrbbecRig::poll or @ref OrbbecRig::stop.
 struct OrbbecRigFrameSet {
-  /// The trigger's time on the rig's clock (ns): the primary's frame, or the
-  /// earliest one when the primary's is missing.
+  /// The trigger's time on the rig's clock (ns): the primary's frame's.
   std::uint64_t timestamp_ns = 0;
   /// One entry per camera, in @ref OrbbecRig::Options::cameras order; empty
-  /// where that camera's frame for this trigger never arrived. Each frame is
+  /// where that camera's frame for this trigger never arrived, or where the
+  /// SDK failed on it -- the only way the primary's is empty. Each frame is
   /// posed by its camera's @ref RigCameraPose.
   std::vector<std::optional<CapturedFrame>> frames;
 
@@ -55,14 +55,18 @@ struct OrbbecRigStats {
 /// @ref start starts every secondary before the primary -- the primary's first
 /// trigger is what they wait for -- and has the SDK keep the cameras' clocks on
 /// the host's. @ref poll_set groups frames by that clock, within
-/// @ref Options::sync_tolerance_us, and only then processes the set's frames as
-/// @ref OrbbecCapture processes one. A trigger with a camera's frame missing is
-/// still handed out, with that camera's slot empty. The measurements behind
-/// the defaults are in the 2026-09-27 decision.
+/// @ref Options::sync_tolerance_us of a primary frame, and only then processes
+/// the set's frames as @ref OrbbecCapture processes one. A trigger with a
+/// secondary's frame missing is still handed out, with that camera's slot
+/// empty; one the primary's frame is missing from is not, since its frames
+/// name the triggers. The measurements behind the defaults are in the
+/// 2026-09-27 decision.
 ///
 /// Also an @ref ICameraCapture: @ref poll hands out the current set's frames
 /// one at a time, each posed by its own camera, so a fusion loop written for
-/// one camera fuses the rig unchanged. Use one of the two, not both.
+/// one camera fuses the rig unchanged. Read with one of the two between one
+/// @ref start and the next; the other returns
+/// @ref Status::Code::InvalidArgument.
 ///
 /// @warning Not thread-safe: open, start, poll and stop from one thread.
 class VR_SENSOR_ORBBEC_API OrbbecRig final : public ICameraCapture {
@@ -75,8 +79,9 @@ class VR_SENSOR_ORBBEC_API OrbbecRig final : public ICameraCapture {
     std::vector<RigCameraPose> cameras;
     /// How long @ref open waits for every camera to answer discovery.
     std::uint32_t discovery_timeout_ms = 8000;
-    /// Frames within this of each other on the rig clock belong to one
-    /// trigger.
+    /// A secondary's frame within this of a primary frame on the rig clock
+    /// belongs to its trigger. Under half a frame period, or neighbouring
+    /// triggers would share frames.
     std::uint32_t sync_tolerance_us = 5000;
     /// How often the SDK re-syncs the cameras' clocks to the host's.
     std::uint32_t clock_sync_interval_ms = 60000;
@@ -88,7 +93,9 @@ class VR_SENSOR_ORBBEC_API OrbbecRig final : public ICameraCapture {
   ///        calibration. Does not start streaming.
   /// @return The rig; or @ref Status::Code::InvalidArgument for options that
   ///         cannot describe one (fewer than two cameras, a repeated serial,
-  ///         a stream @ref OrbbecCapture::open would refuse);
+  ///         a pose that is not a rigid transform, a sync tolerance of zero or
+  ///         of half a frame period or more, a stream @ref OrbbecCapture::open
+  ///         would refuse);
   ///         @ref Status::Code::NotFound naming the cameras that did not
   ///         answer; @ref Status::Code::Unsupported for a rig that is not one
   ///         primary and its secondaries, or a camera @ref OrbbecCapture::open
@@ -102,10 +109,12 @@ class VR_SENSOR_ORBBEC_API OrbbecRig final : public ICameraCapture {
 
   /// @return How many cameras the rig has; 0 on a moved-from rig.
   std::size_t camera_count() const noexcept;
-  /// @return Camera @p i's report, in @ref Options::cameras order.
-  const OrbbecDeviceInfo& device_info(std::size_t i) const;
-  /// @return Camera @p i's colour camera, posed as the options say.
-  const ColorCameraParams& color_camera(std::size_t i) const;
+  /// @return Camera @p i's report, in @ref Options::cameras order. Empty for
+  ///         an @p i past @ref camera_count, as on a moved-from rig.
+  const OrbbecDeviceInfo& device_info(std::size_t i) const noexcept;
+  /// @return Camera @p i's colour camera, posed as the options say. Zeroed
+  ///         for an @p i past @ref camera_count.
+  const ColorCameraParams& color_camera(std::size_t i) const noexcept;
   /// @return The index of the sync primary.
   std::size_t primary() const noexcept;
   /// @return The counters since the last @ref start.
@@ -125,19 +134,24 @@ class VR_SENSOR_ORBBEC_API OrbbecRig final : public ICameraCapture {
   /// @brief Take the newest trigger ready to hand out, its frames processed.
   ///
   /// A trigger is ready when every camera's frame for it has arrived, or when
-  /// each missing camera has moved past it or stayed silent for ~1.5 frame
-  /// periods. An older ready trigger is dropped for a newer one.
+  /// each missing secondary has moved past it or stayed silent for ~1.5 frame
+  /// periods. An older ready trigger is dropped for a newer one, and a
+  /// secondary's frame near no primary frame is dropped -- so a camera whose
+  /// clock is off by more than the tolerance costs its own frames, not the
+  /// rig's sets.
   ///
   /// @return The set; an empty optional when none is ready or the rig is not
   ///         started; @ref Status::Code::IoError if a camera disconnected or
   ///         its frames stopped processing (see @ref OrbbecCapture::poll);
-  ///         @ref Status::Code::InvalidArgument on a moved-from rig.
+  ///         @ref Status::Code::InvalidArgument on a moved-from rig, or after
+  ///         @ref poll since the last @ref start.
   Result<std::optional<OrbbecRigFrameSet>> poll_set();
 
   /// @brief The next frame of the current set, taking a new set when this one
   ///        is spent. Frames of one set come in camera order; a missing
   ///        camera is skipped.
-  /// @return As @ref poll_set, one frame at a time.
+  /// @return As @ref poll_set, one frame at a time; InvalidArgument after
+  ///         @ref poll_set since the last @ref start.
   Result<std::optional<CapturedFrame>> poll() override;
 
   /// @return `true` on a moved-from rig and once any camera has disconnected.

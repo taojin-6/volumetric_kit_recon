@@ -65,6 +65,14 @@ struct RigCameraPose {
 VR_SENSOR_API Result<std::vector<RigCameraPose>> parse_rig_poses(
     const std::string& json);
 
+/// @brief The checks @ref parse_rig_poses and @ref write_rig_poses make of the
+///        poses themselves, for a rig built without a file.
+/// @return OK; or @ref Status::Code::InvalidArgument naming what is wrong: no
+///         cameras, an empty or repeated serial, or a `cam_to_world` that is
+///         not a 4x4 rigid transform, as @ref parse_rig_poses describes.
+VR_SENSOR_API Status
+validate_rig_poses(const std::vector<RigCameraPose>& poses);
+
 /// @brief Read and parse the rig pose file at @p path.
 /// @return As @ref parse_rig_poses, or @ref Status::Code::IoError if the file
 ///         cannot be read. Messages name the file.

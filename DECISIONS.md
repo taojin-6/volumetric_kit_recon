@@ -4202,19 +4202,20 @@ check refuses.
   writer never makes one, and it decodes correctly. A `TODO(codec)` in the
   reader's block decode.
 
-### 2026-09-27 — The rig is `OrbbecRig`: secondaries start before the primary, the SDK keeps the cameras on the host's clock, a trigger's frames are grouped within 5 ms, and a trigger missing a camera is still handed out; poses come from a rig pose file.
+### 2026-09-27 — The rig is `OrbbecRig`: secondaries start before the primary, the SDK keeps the cameras on the host's clock, a trigger's frames are grouped within 5 ms of the primary's, and a trigger missing a secondary is still handed out; poses come from a rig pose file.
 
 **The rule.** `OrbbecRig` (`sensor/orbbec/orbbec_rig.hpp`) opens two or more
 cameras that are one sync primary and its secondaries -- anything else is
 refused with every camera's role named -- and starts the secondaries first,
 since the primary's first trigger is what they wait for. It has the SDK sync
 the cameras' clocks to the host's (`enableDeviceClockSync`) before any
-starts, groups frames by that clock within `sync_tolerance_us`, and only then
-processes a trigger's frames, through the same `CameraStream` that
-`OrbbecCapture` now wraps. `poll_set()` returns one `OrbbecRigFrameSet` per
-trigger, a frame per camera or an empty slot; `poll()` hands the same frames
-out one at a time, each posed by its own camera, so the fuse loop reads a rig
-as it reads one camera.
+starts, builds each set around a primary frame -- with each secondary's frame
+within `sync_tolerance_us` of it on that clock -- and only then processes the
+set's frames, through the same `CameraStream` that `OrbbecCapture` now wraps.
+`poll_set()` returns one `OrbbecRigFrameSet` per trigger, a frame per camera
+or an empty slot; `poll()` hands the same frames out one at a time, each posed
+by its own camera, so the fuse loop reads a rig as it reads one camera. A
+caller reads with one of the two between one `start()` and the next.
 
 **Why these numbers.** Measured on the four-camera rig over the 2.5 Gbit/s
 cable, 720p colour, 640x576 depth, 30 fps:
@@ -4222,7 +4223,8 @@ cable, 720p colour, 640x576 depth, 30 fps:
   primary's, with stragglers to 3.4 ms across runs. Without it the cameras'
   clocks are ~30 s apart, and host arrival times jitter by ±20 ms, too much
   to group 33 ms frames by. So the tolerance is 5 ms: past every straggler,
-  far short of the 16.7 ms that would mix up neighbouring triggers.
+  far short of the 16.7 ms that would mix up neighbouring triggers, which
+  `open` refuses.
 - The primary delivers every frame, and each secondary drops 1-6%. 91.7% of
   triggers had all four frames in a 10 s capture; 96.7% of the rig test's 90
   sets were complete. Handing out only complete sets would throw away every
@@ -4240,12 +4242,17 @@ cable, 720p colour, 640x576 depth, 30 fps:
   network uncompressed at ~170 Mbit/s per camera, so the rig needs the wired
   link, and H.265 colour alone would not fix that.
 
-Two grouping rules come from how the rig starts and fails. Sets are handed
-out only from the primary's first grouped frame on, since the secondaries
-send frames of their own before the primary starts. And among triggers ready
-at once, the newest one holding the primary's frame wins, so a camera whose
-clock is off by more than the tolerance costs its own frames, not the rig's
-sets.
+The primary's frames name the triggers, which is what makes the rig's start
+and its failures cost frames rather than sets. Started first and alone for
+4 s, the three secondaries delivered one frame between them -- nothing
+without a signal, as `SecondarySynced`'s doc says. Once the primary starts,
+its first triggers reach them ~525 ms (16 triggers) before its own first
+frame reaches the host, and that is where each secondary's ~16 frames more
+than the primary's come from. Those frames, a secondary's frame that arrives
+after its set left without it, and every frame of a camera whose clock is off
+by more than the tolerance are all earlier than the tolerance allows of some
+primary frame, and are let go; a trigger the primary missed goes too, which
+it did not do in any run here.
 
 **The rig pose file** (`sensor/rig_poses.hpp`, in `recon_sensor`) is where
 calib's result reaches a capture: JSON with a `format`, a `version` (1), and
@@ -4270,11 +4277,40 @@ fuses all four cameras, and `--poses --serial` one camera posed from the
 file. `recon_sensor_rig_poses` and `recon_sensor_orbbec_grouping` run with no
 camera. 35 tests pass with the driver built, under `-Werror` in Release.
 
+**Review: the first cut let a frame with no primary frame near it be a
+trigger.** It grouped the earliest frame held with every frame within the
+tolerance of it, and preferred the newest ready trigger holding the
+primary's. Polled every millisecond, as `fuse_orbbec` polls, that handed a
+camera whose clock ran 8 ms off out on its own on every trigger -- 59 sets
+from 30 triggers in simulation, half of them that one camera -- and handed out
+a secondary's late frame as a set older than the one before it. Building the
+set around the primary's frame fixes both, and retires the gate that held
+sets back until the primary's first frame, whose premise (the secondaries
+send frames of their own before the primary starts) the start-up measurement
+above corrected. `recon_sensor_orbbec_grouping` now polls at 1 ms and fails on
+the first cut. The rest of the review, each fixed rather than documented:
+`sync_tolerance_us` is refused at half a frame period or more; a rig's poses
+pass `validate_rig_poses`, the pose file's own checks, rather than a copy of
+two of them; `poll()` and `poll_set()` refuse to mix within one start, since
+a set taken under `poll()` dropped the rest of the one it was reading;
+`start()` on a running rig reports a camera that went away rather than OK; a
+set that fails partway gives back the `delivered` its earlier cameras
+counted; and `device_info` / `color_camera` return an empty value past the
+end rather than throwing, or dereferencing null on a moved-from rig. In the
+pose file, a serial that is not UTF-8 is refused where nlohmann threw;
+numbers are written in the classic locale, where `%.9g` wrote `0,5` under a
+German one and reported OK; and a read failure is an IoError, which a
+stream's `bad()` never reported, a stream taking a failed read for the end of
+the file. Re-verified on the rig: `recon_sensor_orbbec_rig` 96.7-100% complete
+over three runs, worst skew 2.75 ms, and 95.6% / 4.01 ms under ASan/UBSan;
+`fuse_orbbec --poses` fused 400 frames from 101 sets, one missing a camera.
+
 **Open.** Why the secondaries drop 1-6% with bandwidth to spare -- receive
 buffers or the switch -- is unmeasured. Discovery can miss: once, an 8 s
 window found no camera right after another process released one, and a rerun
-found all four at once. A set's frames are processed one camera after another,
-and nothing has fused real rig poses yet -- that waits on calib.
+found all four at once. A set's frames are processed one camera after another
+(a `TODO(sensor)` in `orbbec_rig.cpp`), and nothing has fused real rig poses
+yet -- that waits on calib.
 
 ## Measured lessons
 

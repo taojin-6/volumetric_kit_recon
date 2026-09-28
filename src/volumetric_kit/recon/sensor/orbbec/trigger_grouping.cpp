@@ -4,7 +4,6 @@
 #include "trigger_grouping.hpp"
 
 #include <algorithm>
-#include <limits>
 
 namespace volumetric_kit::recon::sensor::orbbec {
 
@@ -62,32 +61,38 @@ void TriggerGrouper::add(std::size_t camera, std::uint64_t ts_us,
 
 std::optional<TriggerGrouper::Group> TriggerGrouper::take(
     std::uint64_t now_us, std::vector<std::uint64_t>* released) {
-  std::vector<Group> ready;
-  for (;;) {
-    // The earliest trigger held: the earliest front, and every front within
-    // the tolerance of it.
-    std::uint64_t t0 = std::numeric_limits<std::uint64_t>::max();
-    for (const auto& q : queues_) {
-      if (!q.empty()) t0 = std::min(t0, q.front().ts_us);
-    }
-    if (t0 == std::numeric_limits<std::uint64_t>::max()) break;
+  std::deque<Entry>& anchor = queues_[config_.anchor];
+  std::optional<Group> newest;
+  while (!anchor.empty()) {
+    // The earliest anchor frame held names a trigger; each other camera's
+    // front frame within the tolerance of it is that camera's frame for it.
+    const Entry& trigger = anchor.front();
     Group group;
+    group.timestamp_us = trigger.ts_us;
     group.ids.resize(queues_.size());
-    group.timestamp_us = t0;
-    std::uint64_t first_arrival = std::numeric_limits<std::uint64_t>::max();
+    group.ids[config_.anchor] = trigger.id;
+    std::uint64_t first_arrival = trigger.arrived_us;
     bool waiting = false;
     for (std::size_t c = 0; c < queues_.size(); ++c) {
-      const auto& q = queues_[c];
-      if (!q.empty() && q.front().ts_us - t0 <= config_.tolerance_us) {
+      if (c == config_.anchor) continue;
+      std::deque<Entry>& q = queues_[c];
+      // Earlier than the tolerance allows: near no anchor frame still to come
+      // -- its set already went out, the anchor missed that trigger, or this
+      // camera's clock is off.
+      while (!q.empty() &&
+             q.front().ts_us + config_.tolerance_us < trigger.ts_us) {
+        released->push_back(q.front().id);
+        q.pop_front();
+      }
+      if (q.empty()) {
+        // Silent: its frame for this trigger may still be on the way.
+        waiting = true;
+      } else if (q.front().ts_us <= trigger.ts_us + config_.tolerance_us) {
         group.ids[c] = q.front().id;
         first_arrival = std::min(first_arrival, q.front().arrived_us);
-        if (c == config_.anchor) group.timestamp_us = q.front().ts_us;
-      } else if (q.empty()) {
-        // Silent: its frame for this trigger may still be on the way. (A
-        // non-empty queue here holds a later frame, so this camera is past
-        // the trigger and will never send one for it.)
-        waiting = true;
       }
+      // Otherwise it holds a later frame: past the trigger, it will never
+      // send one for it.
     }
     const std::uint64_t waited =
         now_us > first_arrival ? now_us - first_arrival : 0;
@@ -95,25 +100,14 @@ std::optional<TriggerGrouper::Group> TriggerGrouper::take(
     for (std::size_t c = 0; c < queues_.size(); ++c) {
       if (group.ids[c]) queues_[c].pop_front();
     }
-    ready.push_back(std::move(group));
-  }
-  if (ready.empty()) return std::nullopt;
-
-  // The newest ready trigger holding the anchor, else the newest.
-  std::size_t pick = ready.size() - 1;
-  for (std::size_t i = ready.size(); i-- > 0;) {
-    if (ready[i].ids[config_.anchor]) {
-      pick = i;
-      break;
+    if (newest) {
+      for (const auto& id : newest->ids) {
+        if (id) released->push_back(*id);
+      }
     }
+    newest = std::move(group);
   }
-  for (std::size_t i = 0; i < ready.size(); ++i) {
-    if (i == pick) continue;
-    for (const auto& id : ready[i].ids) {
-      if (id) released->push_back(*id);
-    }
-  }
-  return std::move(ready[pick]);
+  return newest;
 }
 
 void TriggerGrouper::clear(std::vector<std::uint64_t>* released) {

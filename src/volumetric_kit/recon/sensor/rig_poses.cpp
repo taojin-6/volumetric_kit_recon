@@ -7,7 +7,8 @@
 #include <cstdio>
 #include <exception>
 #include <fstream>
-#include <iterator>
+#include <iomanip>
+#include <locale>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -42,6 +43,12 @@ std::string camera_label(std::size_t index, const std::string& serial) {
 Status check_pose(const RigCameraPose& pose, std::size_t index) {
   const std::string who = camera_label(index, pose.serial);
   if (pose.serial.empty()) return bad(who + ": empty serial");
+  // JSON text is UTF-8, so a serial that is not cannot be written.
+  try {
+    (void)json(pose.serial).dump();
+  } catch (const json::exception&) {
+    return bad("camera " + std::to_string(index) + ": serial is not UTF-8");
+  }
   const Mat4f& m = pose.cam_to_world;  // m[column][row]
   for (int c = 0; c < 4; ++c) {
     for (int r = 0; r < 4; ++r) {
@@ -75,19 +82,6 @@ Status check_pose(const RigCameraPose& pose, std::size_t index) {
   return {};
 }
 
-Status check_poses(const std::vector<RigCameraPose>& poses) {
-  if (poses.empty()) return bad("no cameras");
-  for (std::size_t i = 0; i < poses.size(); ++i) {
-    VR_TRY(check_pose(poses[i], i));
-    for (std::size_t j = 0; j < i; ++j) {
-      if (poses[j].serial == poses[i].serial) {
-        return bad("serial " + poses[i].serial + " appears twice");
-      }
-    }
-  }
-  return {};
-}
-
 // A required string member, compared against the one value version 1 accepts.
 Status expect_string(const json& object, const char* key,
                      const std::string& accepted, const std::string& where) {
@@ -104,14 +98,20 @@ Status expect_string(const json& object, const char* key,
   return {};
 }
 
-// Nine significant digits round-trip every float.
-std::string number(float v) {
-  char buf[32];
-  std::snprintf(buf, sizeof(buf), "%.9g", static_cast<double>(v));
-  return buf;
-}
-
 }  // namespace
+
+Status validate_rig_poses(const std::vector<RigCameraPose>& poses) {
+  if (poses.empty()) return bad("no cameras");
+  for (std::size_t i = 0; i < poses.size(); ++i) {
+    VR_TRY(check_pose(poses[i], i));
+    for (std::size_t j = 0; j < i; ++j) {
+      if (poses[j].serial == poses[i].serial) {
+        return bad("serial " + poses[i].serial + " appears twice");
+      }
+    }
+  }
+  return {};
+}
 
 Result<std::vector<RigCameraPose>> parse_rig_poses(const std::string& text) {
   json doc;
@@ -172,16 +172,22 @@ Result<std::vector<RigCameraPose>> parse_rig_poses(const std::string& text) {
     }
     poses.push_back(std::move(pose));
   }
-  VR_TRY(check_poses(poses));
+  VR_TRY(validate_rig_poses(poses));
   return poses;
 }
 
 Result<std::vector<RigCameraPose>> read_rig_poses(const std::string& path) {
-  std::ifstream in(path, std::ios::binary);
-  if (!in) return Status::io_error("rig poses: cannot open " + path);
-  const std::string text((std::istreambuf_iterator<char>(in)),
-                         std::istreambuf_iterator<char>());
-  if (in.bad()) return Status::io_error("rig poses: cannot read " + path);
+  // stdio rather than a stream: a stream reports a failed read -- a directory,
+  // say -- as the end of the file.
+  std::FILE* in = std::fopen(path.c_str(), "rb");
+  if (in == nullptr) return Status::io_error("rig poses: cannot open " + path);
+  std::string text;
+  char buf[4096];
+  std::size_t n = 0;
+  while ((n = std::fread(buf, 1, sizeof(buf), in)) > 0) text.append(buf, n);
+  const bool failed = std::ferror(in) != 0;
+  std::fclose(in);
+  if (failed) return Status::io_error("rig poses: cannot read " + path);
   auto poses = parse_rig_poses(text);
   if (!poses.ok()) {
     return Status::invalid_argument(path + ": " + poses.status().message());
@@ -191,9 +197,13 @@ Result<std::vector<RigCameraPose>> read_rig_poses(const std::string& path) {
 
 Status write_rig_poses(const std::string& path,
                        const std::vector<RigCameraPose>& poses) {
-  VR_TRY(check_poses(poses));
+  VR_TRY(validate_rig_poses(poses));
   // Written by hand rather than dumped, so each matrix row stays on one line.
+  // Nine significant digits round-trip every float, and the classic locale
+  // keeps the decimal point JSON's whatever the process's locale says.
   std::ostringstream out;
+  out.imbue(std::locale::classic());
+  out << std::setprecision(9);
   out << "{\n  \"format\": \"" << kFormat << "\",\n  \"version\": " << kVersion
       << ",\n  \"units\": \"m\",\n  \"camera_axes\": \"opencv\",\n"
       << "  \"cameras\": [\n";
@@ -202,9 +212,8 @@ Status write_rig_poses(const std::string& path,
     out << "    {\n      \"serial\": " << json(poses[i].serial).dump()
         << ",\n      \"sensor\": \"color\",\n      \"cam_to_world\": [\n";
     for (int r = 0; r < 4; ++r) {
-      out << "        [" << number(m[0][r]) << ", " << number(m[1][r]) << ", "
-          << number(m[2][r]) << ", " << number(m[3][r]) << "]"
-          << (r < 3 ? ",\n" : "\n");
+      out << "        [" << m[0][r] << ", " << m[1][r] << ", " << m[2][r]
+          << ", " << m[3][r] << "]" << (r < 3 ? ",\n" : "\n");
     }
     out << "      ]\n    }" << (i + 1 < poses.size() ? ",\n" : "\n");
   }

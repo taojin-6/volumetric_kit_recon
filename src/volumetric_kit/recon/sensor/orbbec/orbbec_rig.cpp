@@ -61,9 +61,9 @@ struct OrbbecRig::Impl {
   std::vector<std::uint64_t> released;  // scratch
 
   bool running = false;
-  // Until the primary's first frame is grouped, a set without it is the
-  // secondaries' start-up, not a trigger the rig drove.
-  bool primary_seen = false;
+  // Which of poll_set() and poll() this start's caller reads with. The other
+  // is refused: a set poll_set() took would drop the frames poll() had left.
+  enum class Reader { Unchosen, Sets, Frames } reader = Reader::Unchosen;
   std::uint64_t sets = 0;
   std::uint64_t incomplete = 0;
   // The set poll() is handing out, and the next frame of it.
@@ -71,6 +71,19 @@ struct OrbbecRig::Impl {
   std::size_t cursor = 0;
 
   ~Impl() { stop_all(); }
+
+  Status read_with(Reader wanted) {
+    if (reader == Reader::Unchosen) reader = wanted;
+    if (reader == wanted) return {};
+    return Status::invalid_argument(
+        wanted == Reader::Sets
+            ? "OrbbecRig: poll_set after poll; read with one of the two until "
+              "the next start"
+            : "OrbbecRig: poll after poll_set; read with one of the two until "
+              "the next start");
+  }
+
+  Result<std::optional<OrbbecRigFrameSet>> take_set();
 
   void release_ids() {
     for (const std::uint64_t id : released) {
@@ -144,12 +157,14 @@ std::size_t OrbbecRig::camera_count() const noexcept {
   return impl_ != nullptr ? impl_->streams.size() : 0;
 }
 
-const OrbbecDeviceInfo& OrbbecRig::device_info(std::size_t i) const {
-  return impl_->streams.at(i)->info();
+const OrbbecDeviceInfo& OrbbecRig::device_info(std::size_t i) const noexcept {
+  static const OrbbecDeviceInfo kEmpty{};
+  return i < camera_count() ? impl_->streams[i]->info() : kEmpty;
 }
 
-const ColorCameraParams& OrbbecRig::color_camera(std::size_t i) const {
-  return impl_->streams.at(i)->color_camera();
+const ColorCameraParams& OrbbecRig::color_camera(std::size_t i) const noexcept {
+  static const ColorCameraParams kEmpty{};
+  return i < camera_count() ? impl_->streams[i]->color_camera() : kEmpty;
 }
 
 std::size_t OrbbecRig::primary() const noexcept {
@@ -180,7 +195,18 @@ Status OrbbecRig::start() {
     return Status::invalid_argument("OrbbecRig: start on a moved-from rig");
   }
   Impl& r = *impl_;
-  if (r.running) return {};
+  if (r.running) {
+    // Not "already started" once a camera has gone away: a running stream's
+    // start() is OK, and a disconnected one's names the camera.
+    for (const auto& stream : r.streams) {
+      const Status started = stream->start();
+      if (!started.ok()) {
+        r.stop_all();
+        return started;
+      }
+    }
+    return {};
+  }
   try {
     // Before any camera starts, so the first trigger is already on one clock.
     r.context->enableDeviceClockSync(r.clock_sync_interval_ms);
@@ -194,7 +220,7 @@ Status OrbbecRig::start() {
       return started;
     }
   }
-  r.primary_seen = false;
+  r.reader = Impl::Reader::Unchosen;
   r.sets = 0;
   r.incomplete = 0;
   r.running = true;
@@ -209,12 +235,13 @@ Result<std::optional<OrbbecRigFrameSet>> OrbbecRig::poll_set() {
   if (impl_ == nullptr) {
     return Status::invalid_argument("OrbbecRig: poll on a moved-from rig");
   }
-  Impl& r = *impl_;
-  if (!r.running) return std::optional<OrbbecRigFrameSet>{};
-  // Handing out a new set invalidates the one poll() was working through.
-  r.current = OrbbecRigFrameSet{};
-  r.cursor = 0;
+  VR_TRY(impl_->read_with(Impl::Reader::Sets));
+  return impl_->take_set();
+}
 
+Result<std::optional<OrbbecRigFrameSet>> OrbbecRig::Impl::take_set() {
+  Impl& r = *this;
+  if (!r.running) return std::optional<OrbbecRigFrameSet>{};
   const std::uint64_t now = now_us();
   std::vector<std::shared_ptr<ob::FrameSet>> pairs;
   for (std::size_t c = 0; c < r.streams.size(); ++c) {
@@ -233,18 +260,13 @@ Result<std::optional<OrbbecRigFrameSet>> OrbbecRig::poll_set() {
   }
   r.release_ids();
 
-  std::optional<orbbec::TriggerGrouper::Group> group;
-  for (;;) {
-    group = r.grouper.take(now, &r.released);
-    r.release_ids();
-    if (!group) return std::optional<OrbbecRigFrameSet>{};
-    if (group->ids[r.primary]) r.primary_seen = true;
-    if (r.primary_seen) break;
-    for (const auto& id : group->ids) {
-      if (id) r.released.push_back(*id);
-    }
-    r.release_ids();
-  }
+  // Every set holds the primary's frame, so the secondaries' frames of the
+  // triggers before the primary's first frame reaches the host (~0.5 s of
+  // them) never make one.
+  const std::optional<orbbec::TriggerGrouper::Group> group =
+      r.grouper.take(now, &r.released);
+  r.release_ids();
+  if (!group) return std::optional<OrbbecRigFrameSet>{};
 
   // TODO(sensor): process the set's frames in parallel, one thread per
   // camera; one after another they take ~11 ms for four (the 2026-09-27
@@ -269,7 +291,13 @@ Result<std::optional<OrbbecRigFrameSet>> OrbbecRig::poll_set() {
     }
     set.frames[c] = processed.value();  // empty when the SDK failed on it
   }
-  if (!failure.ok()) return failure;
+  if (!failure.ok()) {
+    // The set is not handed out, so neither are the frames processed for it.
+    for (std::size_t c = 0; c < r.streams.size(); ++c) {
+      if (set.frames[c]) r.streams[c]->withdraw();
+    }
+    return failure;
+  }
   ++r.sets;
   if (!set.complete()) ++r.incomplete;
   return std::optional<OrbbecRigFrameSet>{std::move(set)};
@@ -280,12 +308,13 @@ Result<std::optional<CapturedFrame>> OrbbecRig::poll() {
     return Status::invalid_argument("OrbbecRig: poll on a moved-from rig");
   }
   Impl& r = *impl_;
+  VR_TRY(r.read_with(Impl::Reader::Frames));
   for (;;) {
     while (r.cursor < r.current.frames.size()) {
       const std::optional<CapturedFrame>& frame = r.current.frames[r.cursor++];
       if (frame) return some_frame(*frame);
     }
-    VR_ASSIGN(std::optional<OrbbecRigFrameSet> set, poll_set());
+    VR_ASSIGN(std::optional<OrbbecRigFrameSet> set, r.take_set());
     if (!set) return no_frame();
     r.current = std::move(*set);
     r.cursor = 0;

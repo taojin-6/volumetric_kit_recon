@@ -250,11 +250,11 @@ order. Change the decision, its entry there, and this list together.
   class plus raw bits, behind fixed per-frame tables and a section table; the
   decoder's end check is for consistency, not integrity (amends the 2026-09-26
   entry's interleaved lanes).
-- [**2026-09-27**](DECISIONS.md#2026-09-27--the-rig-is-orbbecrig-secondaries-start-before-the-primary-the-sdk-keeps-the-cameras-on-the-hosts-clock-a-triggers-frames-are-grouped-within-5-ms-and-a-trigger-missing-a-camera-is-still-handed-out-poses-come-from-a-rig-pose-file) —
+- [**2026-09-27**](DECISIONS.md#2026-09-27--the-rig-is-orbbecrig-secondaries-start-before-the-primary-the-sdk-keeps-the-cameras-on-the-hosts-clock-a-triggers-frames-are-grouped-within-5-ms-of-the-primarys-and-a-trigger-missing-a-secondary-is-still-handed-out-poses-come-from-a-rig-pose-file) —
   The rig is `OrbbecRig`: secondaries start before the primary, the SDK keeps
-  the cameras on the host's clock, a trigger's frames are grouped within 5 ms,
-  and a trigger missing a camera is still handed out; poses come from a rig
-  pose file.
+  the cameras on the host's clock, a trigger's frames are grouped within 5 ms
+  of the primary's, and a trigger missing a secondary is still handed out;
+  poses come from a rig pose file.
 
 ## Provenance & salvage policy
 
@@ -673,11 +673,13 @@ arbitrary; it usually isn't.
   (`waits_for_primary`) and never writes it, and its hardware test opens only
   the camera `VR_ORBBEC_TEST_SERIAL` names (the 2026-09-26 decision).
   **`OrbbecRig`** reads several synced cameras as one: `poll_set()` hands out
-  one set per trigger, with a missing camera's slot left empty, and `poll()`
-  hands out the same frames one at a time. Both classes share the internal
-  `CameraStream`. Each camera's pose comes from a **rig pose file**
-  (`sensor/rig_poses.hpp`), whose units, camera axes and sensor are required
-  declarations. The rig's hardware test opens only the cameras
+  one set per primary frame, with a missing secondary's slot left empty, and
+  `poll()` hands out the same frames one at a time — one of the two per
+  `start()`. A secondary's frame near no primary frame is let go, so a camera
+  whose clock is off costs its own frames, not the rig's sets. Both classes
+  share the internal `CameraStream`. Each camera's pose comes from a **rig
+  pose file** (`sensor/rig_poses.hpp`), whose units, camera axes and sensor
+  are required declarations. The rig's hardware test opens only the cameras
   `VR_ORBBEC_TEST_RIG` names (the 2026-09-27 decision).
 
 - **`codec`** — two of five PRs in (2026-09-26 lists them). So far it is
@@ -795,10 +797,12 @@ gauges from VMA heuristics into driver truth. The debug-utils labels that TODO
 sat beside **have landed** (2026-08-30) — on the *kernel* rather than the span,
 which is the correction that entry records.
 
-**On `sensor`**, each a `TODO(sensor)` in `camera_stream.cpp`: HEVC colour
-through a decoder of our own, and GPU pre-processing that keeps the frame on
-the device through fusion. The rig's next consumer is calib's viewer, showing
-its synchronised sets.
+**On `sensor`**, each a `TODO(sensor)`: HEVC colour through a decoder of our
+own, and GPU pre-processing that keeps the frame on the device through fusion
+(both in `camera_stream.cpp`), and processing a rig set's frames in parallel,
+one thread per camera, rather than the ~11 ms one after another costs for four
+(`orbbec_rig.cpp`). The rig's next consumer is calib's viewer, showing its
+synchronised sets.
 
 **Measure the phases before choosing the optimisation.** Three independent
 guesses at this pipeline's bottleneck have been wrong, each corrected by an

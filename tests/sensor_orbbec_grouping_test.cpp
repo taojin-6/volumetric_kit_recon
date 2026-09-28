@@ -4,7 +4,8 @@
 // How OrbbecRig turns per-camera frames into one set per sync trigger, and the
 // order it starts a rig in -- with synthetic streams, no camera. The streams
 // are shaped like the rig's: 30 fps, secondaries a fraction of a millisecond
-// to ~2 ms off the primary, frames arriving in any order across cameras.
+// to ~2 ms off the primary, frames arriving in any order across cameras. Each
+// set is built around a primary frame.
 
 #include <cstdint>
 #include <cstdio>
@@ -136,28 +137,114 @@ int test_slow_poll() {
   return 0;
 }
 
-int test_clock_beyond_tolerance() {
-  // Camera 0's clock runs 8 ms off, past the 5 ms tolerance: its frames never
-  // join a trigger. The rig keeps handing out the other three cameras' sets --
-  // the ones holding the primary -- and lets camera 0's frames go, rather than
-  // handing out camera 0 alone.
+int clock_beyond_tolerance(std::int64_t offset_us) {
+  // Camera 0's clock runs `offset_us` off, past the 5 ms tolerance, so its
+  // frames never join a trigger. Polled every millisecond, as fuse_orbbec
+  // polls, with each trigger's frames arriving a few hundred microseconds
+  // apart: every trigger still goes out once, holding the other three cameras,
+  // and camera 0's frames are let go rather than handed out on their own.
   orbbec::TriggerGrouper g(config());
   std::vector<std::uint64_t> released;
-  std::uint64_t now = 0;
-  int sets = 0;
-  for (std::uint64_t t = 0; t < 8; ++t) {
+  constexpr std::uint64_t kTriggers = 30;
+  constexpr std::uint64_t kArrival[kCameras] = {300, 100, 0, 200};
+  std::uint64_t next[kCameras] = {};  // each camera's next trigger to add
+  std::uint64_t sets = 0, last_ts = 0;
+  for (std::uint64_t now = 0; now < (kTriggers + 3) * kPeriod; now += 1000) {
     for (std::size_t c = 0; c < kCameras; ++c) {
-      const std::uint64_t ts = ts_of(c, t) + (c == 0 ? 8000 : 0);
-      g.add(c, ts, id_of(c, t), now, &released);
+      while (next[c] < kTriggers &&
+             20000 + next[c] * kPeriod + kArrival[c] <= now) {
+        const std::uint64_t t = next[c]++;
+        const std::uint64_t ts =
+            c == 0 ? static_cast<std::uint64_t>(
+                         static_cast<std::int64_t>(ts_of(c, t)) + offset_us)
+                   : ts_of(c, t);
+        g.add(c, ts, id_of(c, t), now, &released);
+      }
     }
-    now += kPeriod;
     if (const auto group = g.take(now, &released)) {
       ++sets;
-      CHECK(group->ids[kPrimary]);
       CHECK(!group->ids[0]);
+      CHECK(group->ids[1] && group->ids[kPrimary] && group->ids[3]);
+      CHECK(group->timestamp_us > last_ts);
+      last_ts = group->timestamp_us;
     }
   }
-  CHECK(sets >= 6);
+  CHECK(sets == kTriggers);
+  return 0;
+}
+
+int test_clock_beyond_tolerance() {
+  if (clock_beyond_tolerance(+8000) != 0) return 1;
+  return clock_beyond_tolerance(-8000);
+}
+
+int test_late_frame_after_its_set() {
+  // Camera 1's frame for trigger 0 arrives after trigger 0 went out without
+  // it, while the other cameras' trigger-1 frames wait on camera 1. It is let
+  // go -- not handed out as a set of its own, older than the one before it.
+  orbbec::TriggerGrouper g(config());
+  std::vector<std::uint64_t> released;
+  for (std::size_t c : {0u, 2u, 3u}) {
+    g.add(c, ts_of(c, 0), id_of(c, 0), 0, &released);
+  }
+  const auto first = g.take(50000, &released);
+  CHECK(first && !first->ids[1]);
+  for (std::size_t c : {0u, 2u, 3u}) {
+    g.add(c, ts_of(c, 1), id_of(c, 1), 55000, &released);
+  }
+  g.add(1, ts_of(1, 0), id_of(1, 0), 56000, &released);
+  CHECK(!g.take(56000, &released));
+  g.add(1, ts_of(1, 1), id_of(1, 1), 57000, &released);
+  const auto second = g.take(57000, &released);
+  CHECK(second && second->ids[1] == id_of(1, 1));
+  CHECK(second->timestamp_us > first->timestamp_us);
+  CHECK((released == std::vector<std::uint64_t>{id_of(1, 0)}));
+  return 0;
+}
+
+int test_secondaries_before_primary() {
+  // The primary's first triggers reach the secondaries ~0.5 s before its own
+  // first frame reaches the host (measured: ~16 triggers). None of those
+  // frames makes a set; the first set is the primary's first frame's.
+  orbbec::TriggerGrouper g(config());
+  std::vector<std::uint64_t> released;
+  for (std::uint64_t t = 0; t < 6; ++t) {
+    for (std::size_t c : {0u, 1u, 3u}) {
+      g.add(c, ts_of(c, t), id_of(c, t), t * kPeriod, &released);
+    }
+    CHECK(!g.take(t * kPeriod + 1000, &released));
+  }
+  for (std::size_t c = 0; c < kCameras; ++c) {
+    g.add(c, ts_of(c, 6), id_of(c, 6), 6 * kPeriod, &released);
+  }
+  const auto group = g.take(6 * kPeriod, &released);
+  CHECK(group);
+  for (std::size_t c = 0; c < kCameras; ++c) {
+    CHECK(group->ids[c] == id_of(c, 6));
+  }
+  CHECK(released.size() == 3 * 6);  // every start-up frame, let go
+  return 0;
+}
+
+int test_dropped_primary_frame() {
+  // The primary's frame names a trigger, so a trigger it dropped is not
+  // handed out; the secondaries' frames for it are let go.
+  orbbec::TriggerGrouper g(config());
+  std::vector<std::uint64_t> released;
+  for (std::size_t c = 0; c < kCameras; ++c) {
+    g.add(c, ts_of(c, 0), id_of(c, 0), 0, &released);
+  }
+  CHECK(g.take(0, &released));
+  for (std::size_t c : {0u, 1u, 3u}) {
+    g.add(c, ts_of(c, 1), id_of(c, 1), kPeriod, &released);
+  }
+  CHECK(!g.take(kPeriod + 60000, &released));  // long past any wait
+  for (std::size_t c = 0; c < kCameras; ++c) {
+    g.add(c, ts_of(c, 2), id_of(c, 2), 2 * kPeriod, &released);
+  }
+  const auto group = g.take(2 * kPeriod, &released);
+  CHECK(group && group->timestamp_us == ts_of(kPrimary, 2));
+  CHECK(released.size() == 3);
   return 0;
 }
 
@@ -211,6 +298,9 @@ int main() {
   if (test_silent_camera() != 0) return 1;
   if (test_slow_poll() != 0) return 1;
   if (test_clock_beyond_tolerance() != 0) return 1;
+  if (test_late_frame_after_its_set() != 0) return 1;
+  if (test_secondaries_before_primary() != 0) return 1;
+  if (test_dropped_primary_frame() != 0) return 1;
   if (test_out_of_order_within_camera() != 0) return 1;
   if (test_start_order() != 0) return 1;
   std::printf("orbbec grouping tests passed\n");

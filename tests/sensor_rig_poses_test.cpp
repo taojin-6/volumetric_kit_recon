@@ -7,8 +7,10 @@
 // required and checked, a matrix that is not a rigid transform is refused, and
 // a written file reads back exactly. Host-only.
 
+#include <clocale>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -175,10 +177,51 @@ int test_round_trip() {
              path, {{"A", vr::Mat4f(1.0f)}, {"A", vr::Mat4f(1.0f)}})
              .ok());
   CHECK(!sensor::write_rig_poses(path, {{"A", vr::Mat4f(2.0f)}}).ok());
+  // A serial JSON cannot carry is refused, not thrown.
+  const vr::Status not_utf8 =
+      sensor::write_rig_poses(path, {{"CL\xff\xfe", vr::Mat4f(1.0f)}});
+  CHECK(!not_utf8.ok() &&
+        not_utf8.domain() == vr::Status::Code::InvalidArgument);
+  // The same checks, for poses that never touch a file.
+  CHECK(sensor::validate_rig_poses(written).ok());
+  CHECK(!sensor::validate_rig_poses({{"A", vr::Mat4f(2.0f)}}).ok());
 
   const auto missing = sensor::read_rig_poses(path + ".missing");
   CHECK(!missing.ok() &&
         missing.status().domain() == vr::Status::Code::IoError);
+  // A path that opens but cannot be read is an I/O failure, not bad JSON.
+  const auto directory = sensor::read_rig_poses(VR_TEST_SCRATCH_DIR);
+  CHECK(!directory.ok() &&
+        directory.status().domain() == vr::Status::Code::IoError);
+  return 0;
+}
+
+int test_decimal_comma_locale() {
+  // A host app that adopts the user's locale must not get "0,5" in the file.
+  const char* chosen = nullptr;
+  for (const char* name :
+       {"de_DE.UTF-8", "de_DE.utf8", "fr_FR.UTF-8", "fr_FR.utf8"}) {
+    if (std::setlocale(LC_ALL, name) != nullptr &&
+        std::strcmp(std::localeconv()->decimal_point, ",") == 0) {
+      chosen = name;
+      break;
+    }
+  }
+  if (chosen == nullptr) {
+    std::setlocale(LC_ALL, "C");
+    std::printf("  skipped: no decimal-comma locale installed\n");
+    return 0;
+  }
+  vr::Mat4f pose(1.0f);
+  pose[3] = vr::Vec4f(0.5f, -1.25f, 2.0f, 1.0f);
+  const std::string path =
+      std::string(VR_TEST_SCRATCH_DIR) + "/rig_locale.json";
+  const vr::Status written = sensor::write_rig_poses(path, {{"A", pose}});
+  const auto read = sensor::read_rig_poses(path);
+  std::setlocale(LC_ALL, "C");
+  CHECK(written.ok());
+  CHECK(read.ok());
+  CHECK(read.value()[0].cam_to_world == pose);
   return 0;
 }
 
@@ -188,6 +231,7 @@ int main() {
   if (test_parse() != 0) return 1;
   if (test_refusals() != 0) return 1;
   if (test_round_trip() != 0) return 1;
+  if (test_decimal_comma_locale() != 0) return 1;
   std::printf("rig pose tests passed\n");
   return 0;
 }
