@@ -1,0 +1,295 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Tao Jin
+
+#include "volumetric_kit/recon/sensor/orbbec/orbbec_rig.hpp"
+
+#include <chrono>
+#include <exception>
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
+#include <libobsensor/ObSensor.hpp>
+
+#include "camera_stream.hpp"
+#include "frame_conversion.hpp"
+#include "trigger_grouping.hpp"
+
+namespace volumetric_kit::recon::sensor {
+
+namespace {
+
+// Frames held per camera, in its mailbox and again in the grouper: a few
+// frame periods of slack, so a poll slower than the cameras still finds one
+// trigger's frames from all of them rather than each camera's newest.
+constexpr std::size_t kQueueDepth = 4;
+
+std::uint64_t now_us() {
+  return static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::microseconds>(
+          std::chrono::steady_clock::now().time_since_epoch())
+          .count());
+}
+
+}  // namespace
+
+std::size_t OrbbecRigFrameSet::count() const noexcept {
+  std::size_t n = 0;
+  for (const auto& f : frames) n += f.has_value() ? 1 : 0;
+  return n;
+}
+
+struct OrbbecRig::Impl {
+  // Declared first so it is destroyed last: every SDK object belongs to it.
+  std::shared_ptr<ob::Context> context;
+  std::vector<std::unique_ptr<orbbec::CameraStream>> streams;
+  std::vector<std::size_t> start_order;  // secondaries, then the primary
+  std::size_t primary = 0;
+  std::uint32_t clock_sync_interval_ms = 0;
+  orbbec::TriggerGrouper grouper{orbbec::TriggerGrouper::Config{}};
+
+  // Pairs taken from a stream and not yet processed or discarded, by the id
+  // the grouper knows them by. Declared after `streams`, so they are released
+  // before the streams go.
+  struct Held {
+    std::size_t camera;
+    std::shared_ptr<ob::FrameSet> pair;
+  };
+  std::unordered_map<std::uint64_t, Held> held;
+  std::uint64_t next_id = 1;
+  std::vector<std::uint64_t> released;  // scratch
+
+  bool running = false;
+  // Until the primary's first frame is grouped, a set without it is the
+  // secondaries' start-up, not a trigger the rig drove.
+  bool primary_seen = false;
+  std::uint64_t sets = 0;
+  std::uint64_t incomplete = 0;
+  // The set poll() is handing out, and the next frame of it.
+  OrbbecRigFrameSet current;
+  std::size_t cursor = 0;
+
+  ~Impl() { stop_all(); }
+
+  void release_ids() {
+    for (const std::uint64_t id : released) {
+      const auto it = held.find(id);
+      if (it == held.end()) continue;
+      streams[it->second.camera]->discard();
+      held.erase(it);
+    }
+    released.clear();
+  }
+
+  void stop_all() noexcept {
+    for (auto& s : streams) s->stop();
+    running = false;
+    grouper.clear(&released);
+    release_ids();
+    held.clear();
+    current = OrbbecRigFrameSet{};
+    cursor = 0;
+  }
+};
+
+OrbbecRig::OrbbecRig(std::unique_ptr<Impl> impl) noexcept
+    : impl_(std::move(impl)) {}
+OrbbecRig::OrbbecRig(OrbbecRig&& other) noexcept = default;
+OrbbecRig& OrbbecRig::operator=(OrbbecRig&& other) noexcept = default;
+OrbbecRig::~OrbbecRig() = default;
+
+Result<OrbbecRig> OrbbecRig::open(const Options& options) {
+  VR_TRY(orbbec::validate(options));
+  auto impl = std::make_unique<Impl>();
+  std::vector<std::string> serials;
+  for (const RigCameraPose& camera : options.cameras) {
+    serials.push_back(camera.serial);
+  }
+  try {
+    if (options.configure_sdk_logging) orbbec::configure_sdk_logging();
+    impl->context = std::make_shared<ob::Context>();
+    impl->context->enableNetDeviceEnumeration(true);
+    VR_ASSIGN(const auto devices,
+              orbbec::discover(*impl->context, serials,
+                               options.discovery_timeout_ms, "OrbbecRig"));
+    std::vector<OrbbecSyncMode> modes;
+    for (std::size_t i = 0; i < devices.size(); ++i) {
+      VR_ASSIGN(auto stream, orbbec::CameraStream::create(
+                                 impl->context, devices[i], options,
+                                 options.cameras[i].cam_to_world, "OrbbecRig"));
+      modes.push_back(stream->info().sync_mode);
+      stream->set_queue_depth(kQueueDepth);
+      impl->streams.push_back(std::move(stream));
+    }
+    VR_ASSIGN(impl->start_order, orbbec::rig_start_order(modes, serials));
+  } catch (const std::exception& e) {  // ob::Error is one
+    return orbbec::sdk_error("OrbbecRig", "opening the rig", e);
+  }
+  impl->primary = impl->start_order.back();
+  impl->clock_sync_interval_ms = options.clock_sync_interval_ms;
+  orbbec::TriggerGrouper::Config grouping;
+  grouping.cameras = options.cameras.size();
+  grouping.anchor = impl->primary;
+  grouping.tolerance_us = options.sync_tolerance_us;
+  // A frame and a half: long enough for a late camera's frame to arrive,
+  // short enough that a silent one costs one set, not several.
+  grouping.max_wait_us = 1500000u / options.fps;
+  grouping.queue_depth = kQueueDepth;
+  impl->grouper = orbbec::TriggerGrouper(grouping);
+  return OrbbecRig(std::move(impl));
+}
+
+std::size_t OrbbecRig::camera_count() const noexcept {
+  return impl_ != nullptr ? impl_->streams.size() : 0;
+}
+
+const OrbbecDeviceInfo& OrbbecRig::device_info(std::size_t i) const {
+  return impl_->streams.at(i)->info();
+}
+
+const ColorCameraParams& OrbbecRig::color_camera(std::size_t i) const {
+  return impl_->streams.at(i)->color_camera();
+}
+
+std::size_t OrbbecRig::primary() const noexcept {
+  return impl_ != nullptr ? impl_->primary : 0;
+}
+
+OrbbecRigStats OrbbecRig::stats() const {
+  OrbbecRigStats s;
+  if (impl_ == nullptr) return s;
+  s.sets = impl_->sets;
+  s.incomplete = impl_->incomplete;
+  for (const auto& stream : impl_->streams) {
+    s.cameras.push_back(stream->stats());
+  }
+  return s;
+}
+
+bool OrbbecRig::exhausted() const noexcept {
+  if (impl_ == nullptr) return true;
+  for (const auto& s : impl_->streams) {
+    if (s->disconnected()) return true;
+  }
+  return false;
+}
+
+Status OrbbecRig::start() {
+  if (impl_ == nullptr) {
+    return Status::invalid_argument("OrbbecRig: start on a moved-from rig");
+  }
+  Impl& r = *impl_;
+  if (r.running) return {};
+  try {
+    // Before any camera starts, so the first trigger is already on one clock.
+    r.context->enableDeviceClockSync(r.clock_sync_interval_ms);
+  } catch (const std::exception& e) {  // ob::Error is one
+    return orbbec::sdk_error("OrbbecRig", "syncing the cameras' clocks", e);
+  }
+  for (const std::size_t i : r.start_order) {
+    const Status started = r.streams[i]->start();
+    if (!started.ok()) {
+      r.stop_all();
+      return started;
+    }
+  }
+  r.primary_seen = false;
+  r.sets = 0;
+  r.incomplete = 0;
+  r.running = true;
+  return {};
+}
+
+void OrbbecRig::stop() noexcept {
+  if (impl_ != nullptr) impl_->stop_all();
+}
+
+Result<std::optional<OrbbecRigFrameSet>> OrbbecRig::poll_set() {
+  if (impl_ == nullptr) {
+    return Status::invalid_argument("OrbbecRig: poll on a moved-from rig");
+  }
+  Impl& r = *impl_;
+  if (!r.running) return std::optional<OrbbecRigFrameSet>{};
+  // Handing out a new set invalidates the one poll() was working through.
+  r.current = OrbbecRigFrameSet{};
+  r.cursor = 0;
+
+  const std::uint64_t now = now_us();
+  std::vector<std::shared_ptr<ob::FrameSet>> pairs;
+  for (std::size_t c = 0; c < r.streams.size(); ++c) {
+    pairs.clear();
+    VR_TRY(r.streams[c]->take_all(&pairs));
+    for (auto& pair : pairs) {
+      const std::uint64_t ts = orbbec::CameraStream::timestamp_us(*pair);
+      if (ts == 0) {  // no clock to group it by
+        r.streams[c]->discard();
+        continue;
+      }
+      const std::uint64_t id = r.next_id++;
+      r.held.emplace(id, Impl::Held{c, std::move(pair)});
+      r.grouper.add(c, ts, id, now, &r.released);
+    }
+  }
+  r.release_ids();
+
+  std::optional<orbbec::TriggerGrouper::Group> group;
+  for (;;) {
+    group = r.grouper.take(now, &r.released);
+    r.release_ids();
+    if (!group) return std::optional<OrbbecRigFrameSet>{};
+    if (group->ids[r.primary]) r.primary_seen = true;
+    if (r.primary_seen) break;
+    for (const auto& id : group->ids) {
+      if (id) r.released.push_back(*id);
+    }
+    r.release_ids();
+  }
+
+  // TODO(sensor): process the set's frames in parallel, one thread per
+  // camera; one after another they take ~11 ms for four (the 2026-09-27
+  // decision).
+  OrbbecRigFrameSet set;
+  set.timestamp_ns = group->timestamp_us * 1000;
+  set.frames.resize(r.streams.size());
+  Status failure;
+  for (std::size_t c = 0; c < r.streams.size(); ++c) {
+    if (!group->ids[c]) continue;
+    const auto it = r.held.find(*group->ids[c]);
+    std::shared_ptr<ob::FrameSet> pair = std::move(it->second.pair);
+    r.held.erase(it);
+    if (!failure.ok()) {  // an earlier camera failed; account for the rest
+      r.streams[c]->discard();
+      continue;
+    }
+    auto processed = r.streams[c]->process(pair);
+    if (!processed.ok()) {
+      failure = processed.status();
+      continue;
+    }
+    set.frames[c] = processed.value();  // empty when the SDK failed on it
+  }
+  if (!failure.ok()) return failure;
+  ++r.sets;
+  if (!set.complete()) ++r.incomplete;
+  return std::optional<OrbbecRigFrameSet>{std::move(set)};
+}
+
+Result<std::optional<CapturedFrame>> OrbbecRig::poll() {
+  if (impl_ == nullptr) {
+    return Status::invalid_argument("OrbbecRig: poll on a moved-from rig");
+  }
+  Impl& r = *impl_;
+  for (;;) {
+    while (r.cursor < r.current.frames.size()) {
+      const std::optional<CapturedFrame>& frame = r.current.frames[r.cursor++];
+      if (frame) return some_frame(*frame);
+    }
+    VR_ASSIGN(std::optional<OrbbecRigFrameSet> set, poll_set());
+    if (!set) return no_frame();
+    r.current = std::move(*set);
+    r.cursor = 0;
+  }
+}
+
+}  // namespace volumetric_kit::recon::sensor

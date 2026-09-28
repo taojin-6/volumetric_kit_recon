@@ -88,6 +88,26 @@ struct OrbbecCaptureStats {
   std::uint64_t failed = 0;
 };
 
+/// @brief The streams a camera is opened with -- the same for every camera of
+///        an @ref OrbbecRig.
+struct OrbbecStreamOptions {
+  /// Depth stream mode. The default is the Femto Mega's narrow-field
+  /// unbinned mode; 320x288, 512x512 and 1024x1024 (15 fps) are the others.
+  std::uint32_t depth_width = 640;
+  std::uint32_t depth_height = 576;  ///< See @ref depth_width.
+  /// Colour stream size. Registered depth is produced at this size, so it
+  /// also sets the frame's depth resolution.
+  std::uint32_t color_width = 1280;
+  std::uint32_t color_height = 720;  ///< See @ref color_width.
+  /// Frame rate of both streams; the camera pairs them only at one rate.
+  std::uint32_t fps = 30;
+  /// Reject depth nearer than this (metres); stamped on every frame's depth
+  /// camera as the fusion gate.
+  float min_depth = 0.25f;
+  /// Reject depth farther than this (metres).
+  float max_depth = 5.0f;
+};
+
 /// @brief One Orbbec RGB-D camera, polled for posed frames with depth
 ///        registered to colour.
 ///
@@ -115,8 +135,9 @@ struct OrbbecCaptureStats {
 ///          hands over internally.
 class VR_SENSOR_ORBBEC_API OrbbecCapture final : public ICameraCapture {
  public:
-  /// @brief Which camera, which streams, and where the camera sits.
-  struct Options {
+  /// @brief Which camera, which streams (@ref OrbbecStreamOptions), and where
+  ///        the camera sits.
+  struct Options : OrbbecStreamOptions {
     /// Serial number of the camera to open. Empty opens the only camera that
     /// answers -- after waiting out all of @ref discovery_timeout_ms, since
     /// cameras answer seconds apart -- and is refused when more than one does.
@@ -126,21 +147,6 @@ class VR_SENSOR_ORBBEC_API OrbbecCapture final : public ICameraCapture {
     /// camera can take seconds to answer from cold, so one query is not proof
     /// of absence.
     std::uint32_t discovery_timeout_ms = 8000;
-    /// Depth stream mode. The default is the Femto Mega's narrow-field
-    /// unbinned mode; 320x288, 512x512 and 1024x1024 (15 fps) are the others.
-    std::uint32_t depth_width = 640;
-    std::uint32_t depth_height = 576;  ///< See @ref depth_width.
-    /// Colour stream size. Registered depth is produced at this size, so it
-    /// also sets the frame's depth resolution.
-    std::uint32_t color_width = 1280;
-    std::uint32_t color_height = 720;  ///< See @ref color_width.
-    /// Frame rate of both streams; the camera pairs them only at one rate.
-    std::uint32_t fps = 30;
-    /// Reject depth nearer than this (metres); stamped on every frame's depth
-    /// camera as the fusion gate.
-    float min_depth = 0.25f;
-    /// Reject depth farther than this (metres).
-    float max_depth = 5.0f;
     /// Colour camera -> world, in this repo's convention (+Z forward, +Y
     /// down; column-major) -- the pose of the whole frame, since depth is
     /// registered to colour. Identity places the world at the camera.

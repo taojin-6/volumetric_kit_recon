@@ -293,6 +293,18 @@ target_link_libraries(recon_sensor_conventions_test
 vr_target_warnings(recon_sensor_conventions_test)
 add_test(NAME recon_sensor_conventions COMMAND recon_sensor_conventions_test)
 
+# sensor tier: the rig pose file calib writes and a capture reads -- the
+# row-major matrix, the required declarations, the rigidity checks, and an exact
+# round trip through a file in the build tree. Host-only.
+add_executable(recon_sensor_rig_poses_test sensor_rig_poses_test.cpp)
+target_link_libraries(recon_sensor_rig_poses_test
+                      PRIVATE volumetric_kit::recon_sensor)
+target_compile_definitions(
+  recon_sensor_rig_poses_test
+  PRIVATE VR_TEST_SCRATCH_DIR="${CMAKE_CURRENT_BINARY_DIR}")
+vr_target_warnings(recon_sensor_rig_poses_test)
+add_test(NAME recon_sensor_rig_poses COMMAND recon_sensor_rig_poses_test)
+
 # codec tier, host half: CodecParams validation and the DCT's two tables (basis
 # orthonormality, the zigzag order against the prior engine's). CPU-only, so it
 # always runs. The tables are internal (non-installed), reached by include path
@@ -383,6 +395,35 @@ if(VR_WITH_ORBBEC)
   add_test(NAME recon_sensor_orbbec_capture
            COMMAND recon_sensor_orbbec_capture_test)
 
+  # The rig's grouping of frames into sync triggers and its start order, driven
+  # by synthetic streams -- drops, a silent camera, a slow poll, a clock off by
+  # more than the tolerance. No camera. Internal and unexported, so the test
+  # compiles the source itself, as the conversion test does.
+  add_executable(
+    recon_sensor_orbbec_grouping_test
+    sensor_orbbec_grouping_test.cpp
+    ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec/trigger_grouping.cpp
+  )
+  target_link_libraries(recon_sensor_orbbec_grouping_test
+                        PRIVATE volumetric_kit::recon_sensor_orbbec)
+  target_include_directories(
+    recon_sensor_orbbec_grouping_test
+    PRIVATE ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec)
+  vr_target_warnings(recon_sensor_orbbec_grouping_test)
+  add_test(NAME recon_sensor_orbbec_grouping
+           COMMAND recon_sensor_orbbec_grouping_test)
+
+  # The rig against real cameras -- only the ones VR_ORBBEC_TEST_RIG names
+  # (comma-separated serials); unset, it skips (exit 0).
+  add_executable(recon_sensor_orbbec_rig_test sensor_orbbec_rig_test.cpp)
+  target_link_libraries(recon_sensor_orbbec_rig_test
+                        PRIVATE volumetric_kit::recon_sensor_orbbec)
+  target_compile_definitions(
+    recon_sensor_orbbec_rig_test
+    PRIVATE VR_TEST_SCRATCH_DIR="${CMAKE_CURRENT_BINARY_DIR}")
+  vr_target_warnings(recon_sensor_orbbec_rig_test)
+  add_test(NAME recon_sensor_orbbec_rig COMMAND recon_sensor_orbbec_rig_test)
+
   if(WIN32)
     # Windows resolves a DLL on PATH, not through an rpath, and the SDK is
     # linked in place rather than copied beside the test -- it loads its
@@ -391,7 +432,8 @@ if(VR_WITH_ORBBEC)
     # and the test cannot start. TODO(ci): no leg runs this on Windows.
     set_tests_properties(
       recon_orbbec_sdk_smoke recon_sensor_orbbec_conversion
-      recon_sensor_orbbec_capture
+      recon_sensor_orbbec_capture recon_sensor_orbbec_grouping
+      recon_sensor_orbbec_rig
       PROPERTIES ENVIRONMENT_MODIFICATION
                  "PATH=path_list_prepend:$<TARGET_FILE_DIR:ob::OrbbecSDK>")
   endif()
