@@ -4717,8 +4717,11 @@ decoder.
 clip wrapped in SDK frames, with no camera. It checks order, timestamps, depth
 and colour; that a lost frame costs the frames to the next key frame and a
 pause costs nothing; that colour without depth is decoded and dropped, and
-the frames after it still decode; and it tests `ColorStreamGate` on its own,
-since a test cannot set an SDK frame's index. Removing the gate's index check,
+the frames after it still decode; and it tests `ColorStreamGate` on its own.
+A test cannot set an SDK frame's index, so it numbers its frames through
+`Options::frame_index`. It first relied on the decoder noticing the loss,
+which FFmpeg 9 does and FFmpeg 6.1 does not: 6.1 conceals the missing
+reference and decodes the next frames wrongly, without an error. Removing the gate's index check,
 the decode of a colour frame without depth, or the colour override each fails
 it. On the rig, `recon_sensor_orbbec_capture` holds H.265 to the MJPEG
 contract, and its colour to MJPEG's within a 5% gain (0.997, 0.984, 0.974
