@@ -82,13 +82,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `tsdf`: **`MeshIntegrator`** — a triangle mesh's truncated distance field,
   written into a grid's `tsdf` and `weight`, in one of two `MeshSdfMode`s (see
   the 2026-09-27 decision).
-  - `Signed`: +-distance, signed by the angle-weighted pseudonormal of the
-    closest feature rather than the nearest face's normal, which gets sharp
-    edges wrong. For a closed, manifold, consistently wound mesh; it refuses a
-    non-manifold edge or vertex, a flipped winding and a closed mesh wound
-    inside out, welds a soup by exact position, and leaves a voxel nearest an
-    open rim unobserved. A zero-area triangle is not measured but keeps its
-    adjacency, so a sliver closing a T-junction does not open a rim.
+  - `Signed`: +-distance, signed by the closest triangle's face normal. For a
+    closed, outward-wound mesh; nothing is checked and no topology is built,
+    so past an edge sharper than 90 degrees the sign can take the wrong side,
+    and an open mesh grows a skirt past its rim.
   - `Shell`: distance minus a half-thickness (1.5 voxels by default), for any
     mesh at all.
   - Every voxel of every band block is overwritten: weight 1 within

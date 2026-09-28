@@ -31,25 +31,19 @@ namespace volumetric_kit::recon::tsdf {
 ///        signed field.
 enum class MeshSdfMode : std::uint32_t {
   /// Signed distance to the mesh: negative inside, positive outside, with the
-  /// sign read off the angle-weighted pseudonormal of the closest feature
-  /// (Baerentzen & Aanaes 2005). For a closed, manifold, consistently wound
-  /// mesh whose faces wind counter-clockwise seen from outside
-  /// (`cross(v1 - v0, v2 - v0)` points out). The surface extracts where the
-  /// mesh is.
+  /// sign read off the closest triangle's face normal -- the rule the research
+  /// codec shipped. For a closed mesh whose faces wind counter-clockwise seen
+  /// from outside (`cross(v1 - v0, v2 - v0)` points out). The surface extracts
+  /// where the mesh is.
   ///
-  /// An open mesh is accepted: a voxel whose closest point is on the rim has no
-  /// side and is left unobserved, so the field does not grow a skirt past the
-  /// boundary. A mesh with a non-manifold edge or vertex, or with winding that
-  /// flips across an edge, is refused -- use @ref Shell for those -- and so is
-  /// a closed mesh wound inside out, which every other check passes. That
-  /// check is on the mesh as a whole: one inverted component inside a larger
-  /// correct one is not seen.
-  ///
-  /// A zero-area triangle is not measured, but it keeps its place in the
-  /// connectivity, so a sliver that closes a T-junction does not open three
-  /// rim edges. It contributes no normal, which is exact where the faces
-  /// around it are coplanar or meet at 90 degrees or more; at a sharper
-  /// crease, part of that edge's wedge is signed by one face's normal alone.
+  /// Nothing about the mesh is checked, and no topology is built: the field is
+  /// the codec's input, not a reconstruction of the mesh to be measured
+  /// against it (the 2026-09-27 decision). What that gives up: an open mesh
+  /// grows a skirt up to `trunc_dist` past its rim, a mesh wound inside out
+  /// comes back inside out, and past an edge or corner whose faces meet at
+  /// under 90 degrees part of its region can take the wrong side, since the
+  /// faces tied for nearest there disagree and the lowest-indexed one decides.
+  /// Use @ref Shell for a mesh that is not closed.
   Signed = 0,
   /// Unsigned distance minus a shell half-thickness: negative within
   /// @ref MeshSdfParams::shell_voxels of any triangle, positive beyond. Needs
@@ -87,9 +81,6 @@ struct MeshIntegrateStats {
   /// Triangle-in-block incidences, which is what the kernel's cost scales
   /// with: each voxel measures every triangle binned into its block.
   std::uint32_t bin_entries = 0;
-  /// @ref MeshSdfMode::Signed only: rim edges, whose nearest voxels were left
-  /// unobserved. 0 for a closed mesh.
-  std::uint32_t boundary_edges = 0;
   /// The dispatches the write was split into, so that none measures more than
   /// @ref MeshIntegrator::kMaxDispatchBinEntries bin entries.
   std::uint32_t dispatches = 0;
@@ -139,13 +130,6 @@ struct MeshIntegrateStats {
 ///       here is meshed with a full extract, not
 ///       `mesh::MarchingCubes::extract_device_incremental` against another
 ///       integrator's flags.
-///
-/// TODO(tsdf): the robust signed mode of Xu & Barbic (GI 2014), for the meshes
-/// @ref MeshSdfMode::Signed refuses -- a shell, marching cubes on its offset
-/// surface, the nested components dropped, then Signed against that surface
-/// and shifted back by the shell. Extracting the offset needs the mesh tier, so
-/// it composes above this class rather than joining @ref MeshSdfMode (the
-/// 2026-09-27 decision).
 class VR_TSDF_API MeshIntegrator {
  public:
   /// The most triangles one block's bin may hold. Each voxel of the block
@@ -187,18 +171,15 @@ class VR_TSDF_API MeshIntegrator {
   /// @param triangle_count  How many triangles. 0 writes nothing.
   /// @param params          The mode, and the shell's thickness.
   /// @param metrics         Optional: receives a `"mesh integrate"` row with
-  ///                        both halves -- the host half is where the topology
-  ///                        pass of @ref MeshSdfMode::Signed shows up.
+  ///                        both halves.
   /// @return What was written, or a non-OK @ref Status:
   ///         @ref Status::Code::InvalidArgument for a moved-from integrator; a
   ///         grid without float `tsdf` / `weight`; an unknown mode or a shell
   ///         thickness outside `[sqrt(3)/2, trunc_dist)`; a null @p vertices /
   ///         @p indices with triangles to read, an index at or past
   ///         @p vertex_count, or a mesh too large for the grid (see
-  ///         `volume::triangle_candidate_offsets`); for
-  ///         @ref MeshSdfMode::Signed, a non-manifold edge or vertex, an
-  ///         inconsistently wound edge, or a closed mesh wound inside out; a
-  ///         band block that is not allocated; a bin past
+  ///         `volume::triangle_candidate_offsets`); a band block that is not
+  ///         allocated; a bin past
   ///         @ref kMaxBinTriangles; or a buffer past what one storage-buffer
   ///         binding can cover, or a binning pass past what one 1-D dispatch
   ///         can launch. Every refusal comes before the grid is written.
@@ -239,9 +220,8 @@ class VR_TSDF_API MeshIntegrator {
   // The count pass's one output the host must read before anything is
   // written: how many band blocks the hash table could not find.
   Buffer missing_;
-  // A 1-element stand-in for a binding the current pass or mode does not read
-  // (the fill pass's output during the count pass; the pseudonormals in shell
-  // mode), so every declared descriptor stays bound.
+  // A 1-element stand-in for the fill pass's output during the count pass, so
+  // every declared descriptor stays bound.
   Buffer dummy_;
 };
 

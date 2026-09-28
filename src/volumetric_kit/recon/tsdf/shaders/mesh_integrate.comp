@@ -13,19 +13,16 @@
 // every other voxel of the block gets tsdf 0, weight 0 -- a fresh block's
 // zeros, which the mesher and the codec read as unobserved.
 //
-//   Signed -- +-distance, the sign from the angle-weighted pseudonormal of the
-//             closest FEATURE (Baerentzen & Aanaes 2005): the face normal when
-//             the closest point is inside a face, the edge's or the vertex's
-//             pseudonormal when it is on one. A zero pseudonormal marks a rim
-//             edge or vertex, where there is no side, and leaves the voxel
-//             unobserved rather than signed.
+//   Signed -- +-distance, the sign from the closest triangle's face normal:
+//             the rule the research codec shipped. No topology, so it trusts
+//             the mesh to be closed and outward-wound, and a voxel off a sharp
+//             edge can take the wrong side (see MeshSdfMode::Signed).
 //   Shell  -- distance - pc.shell: a thin solid around every triangle.
 //
 // The minimum breaks ties on the triangle index. The fill pass wrote each bin
-// in atomic-arrival order, so "the first minimum" would name a different
-// triangle from run to run whenever two tie -- which they do, along every
-// shared edge and at every shared vertex -- and the same mesh would not write
-// the same bytes.
+// in atomic-arrival order, and two triangles tie along every shared edge and at
+// every shared vertex; taking "the first minimum" would sign those voxels by
+// whichever face the atomics happened to file first.
 
 #extension GL_GOOGLE_include_directive : require
 #define VR_HASH_COMMON_NO_PUSH_CONSTANTS
@@ -53,14 +50,6 @@ layout(set = 0, binding = 4, scalar) readonly buffer Bins { MeshBin bins[]; };
 layout(set = 0, binding = 5, scalar) readonly buffer BinTris {
   uint bin_tris[];
 };
-// Signed only: one pseudonormal per (welded) vertex, and three per triangle,
-// entry 3t + k for the edge from corner k to corner (k + 1) % 3. Zero on a rim.
-layout(set = 0, binding = 6, scalar) readonly buffer VertexNormals {
-  vec3 vertex_normals[];
-};
-layout(set = 0, binding = 7, scalar) readonly buffer EdgeNormals {
-  vec3 edge_normals[];
-};
 
 // The write is split across dispatches so that none measures more than
 // MeshIntegrator::kMaxDispatchBinEntries bin entries; this one writes bins
@@ -75,17 +64,6 @@ layout(push_constant, scalar) uniform PushConstants {
 
 const uint kModeSigned = 0u;
 const uint kModeShell = 1u;
-
-// The normal that signs a voxel whose closest point is `feature` of triangle t.
-vec3 pseudonormal(uint t, uint feature, vec3 a, vec3 b, vec3 c) {
-  if (feature == kVrFeatureFace) {
-    return cross(b - a, c - a);
-  }
-  if (feature <= kVrFeatureVertexC) {
-    return vertex_normals[indices[3u * t + feature]];
-  }
-  return edge_normals[3u * t + (feature - kVrFeatureEdgeAB)];
-}
 
 void main() {
   uint gid = gl_GlobalInvocationID.x;
@@ -105,21 +83,18 @@ void main() {
 
   float best_d2 = 3.4e38;
   uint best_t = 0xFFFFFFFFu;
-  uint best_feature = kVrFeatureFace;
   vec3 best_closest = p;
   for (uint i = 0u; i < bin.count; ++i) {
     uint t = bin_tris[bin.begin + i];
     vec3 a = vertices[indices[3u * t]];
     vec3 b = vertices[indices[3u * t + 1u]];
     vec3 c = vertices[indices[3u * t + 2u]];
-    uint feature;
-    vec3 q = vrClosestPointOnTriangleFeature(p, a, b, c, feature);
+    vec3 q = vrClosestPointOnTriangle(p, a, b, c);
     vec3 d = p - q;
     float d2 = dot(d, d);
     if (d2 < best_d2 || (d2 == best_d2 && t < best_t)) {
       best_d2 = d2;
       best_t = t;
-      best_feature = feature;
       best_closest = q;
     }
   }
@@ -133,12 +108,7 @@ void main() {
       vec3 a = vertices[indices[3u * best_t]];
       vec3 b = vertices[indices[3u * best_t + 1u]];
       vec3 c = vertices[indices[3u * best_t + 2u]];
-      vec3 n = pseudonormal(best_t, best_feature, a, b, c);
-      if (dot(n, n) > 0.0) {
-        sdf = dot(p - best_closest, n) >= 0.0 ? dist : -dist;
-      } else {
-        observed = false;  // closest to a rim: no side to sign
-      }
+      sdf = dot(p - best_closest, cross(b - a, c - a)) >= 0.0 ? dist : -dist;
     } else {
       sdf = dist - pc.shell;
     }
