@@ -420,6 +420,15 @@ if(VR_WITH_FFMPEG)
   add_test(NAME recon_sensor_video_hevc COMMAND recon_sensor_video_hevc_test)
 endif()
 
+# eval tier: closest points, the reach clamp, the summary statistics, accuracy /
+# coverage and the F-score between meshes a known distance apart, and every
+# refusal. Host-only.
+add_executable(recon_eval_mesh_distance_test eval_mesh_distance_test.cpp)
+target_link_libraries(recon_eval_mesh_distance_test
+                      PRIVATE volumetric_kit::recon_eval)
+vr_target_warnings(recon_eval_mesh_distance_test)
+add_test(NAME recon_eval_mesh_distance COMMAND recon_eval_mesh_distance_test)
+
 # The Orbbec SDK prerequisite (VR_WITH_ORBBEC only): the copy the build found is
 # the one that loads -- runtime version == configured version, since the SDK is
 # linked in place from an install outside the repo -- and an SDK context opens

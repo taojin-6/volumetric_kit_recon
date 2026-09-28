@@ -29,6 +29,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `codec`: **`CodecParams`' defaults are K = 64 with one step of 0.2 for DC
+  and AC alike**, replacing the prior engine's K = 32 with DC 0.25 / AC 0.05.
+  On room0 at 1 cm frames are 7% smaller and 28% more accurate, and host
+  coding still fits a 30 fps frame interval. They are provisional until the
+  per-band quantization study (see the 2026-09-27 decision). On a smooth
+  analytic sphere they are 16% smaller but 17% less accurate on the mean,
+  and the worst vertex is 2.4x as far off.
 - `volume`: `VoxelBlockGrid::remove` finds each block by binary search over one
   sorted snapshot, where it scanned the whole active set per block. Removing k
   of n blocks drops from O(k·n) to O((k + n) log n).
@@ -102,6 +109,27 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   cropped on every back end (VideoToolbox, which cannot, refuses such a
   stream, and `Auto` moves it to software). The installed package holds a
   consumer to the FFmpeg major versions it was built against.
+- `eval`: **a quality-measurement tier**, `recon_eval`, off `recon_mesh`.
+  `MeshDistance` gives point-to-surface distance up to a reach, over a copy
+  of the triangles. `compare_meshes` gives accuracy, coverage and an optional
+  F-score at a threshold, and `ReferenceMesh` indexes a reference once to
+  judge many meshes against. They return `Status` on a bad reach, indices out
+  of range, a corner that is not finite or too far out, a reach too small for
+  the triangles, or a threshold past the reach. Only the surface is measured:
+  triangles collapsed to a point, and vertices no triangle uses, are left
+  out. A stride picks vertices by position, so the figures reproduce. The
+  metric came from `examples/common`, where the room0 measurement introduced
+  it, and it carries that header's review fixes: the closest point is exact
+  to float rounding on thin and degenerate triangles, and a pruned search of
+  half-reach cells compares room0 at 1 cm in 1.9 s, down from 8.3 s. Tested
+  by `recon_eval_mesh_distance`.
+- `examples`: **`codec_replica`**, the TSDF codec on real data. It fuses a
+  Replica sequence and streams the grid through `Encoder` / `Decoder`,
+  reporting bytes, bitrate and stage rows. It then judges the decoded surface
+  against the source's, mesh to mesh (accuracy and coverage, each with its
+  count beyond reach). `--sweep` prints a rate–distortion table. The metric
+  is the `eval` tier's (below). The player grid shares the fusion grid's
+  layout, now `examples/common/grid_layout.hpp`.
 - `codec`: **`Encoder` and `Decoder`, the codec's public API** (see the
   2026-09-27 decision). This is the third of its five PRs.
   - `Encoder::encode(grid)` gives one intra frame of every block with an

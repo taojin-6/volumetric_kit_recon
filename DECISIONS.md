@@ -4639,6 +4639,369 @@ process holds.
 left and top crop on hardware is tested only on the back ends CI has
 (NVDEC). Pictures pass through host memory (a `TODO(sensor)`).
 
+### 2026-09-27 — Room0 sets the codec's provisional defaults, K = 64 with one step of 0.2 for DC and AC alike: the coefficient count sets the quality and a coarse uniform step costs almost nothing at it, and the host rANS coder fits a frame interval at 1 cm, so the GPU coder waits.
+
+The fourth of the 2026-09-26 entry's five PRs, where the codec meets real data:
+- **`examples/codec_replica`** fuses a Replica sequence exactly as
+  `fuse_replica` does. Every `--encode-every` frames it encodes the fusion grid
+  and decodes it into a player grid, which it builds from the first frame's
+  `read_frame_info` as a player would.
+- **Its report:** bytes per frame and per block, the bitrate at the coded
+  frame rate (30 fps divided by `--encode-every`), and the stage rows of both
+  calls, timed on the attempt that decoded. At the end it meshes both grids
+  and measures one against the other.
+- **`--sweep`** encodes the final grid under a list of configurations and prints
+  the rate–distortion table below.
+
+**The metric is mesh to mesh, not SDF sampling.** Both directions are named as
+the codec's ground-truth test (#94) names them:
+- **accuracy:** each decoded vertex's distance to the source surface;
+- **coverage:** each source vertex's distance to the decoded surface.
+
+Each is a point-to-triangle distance through a cell hash, up to a reach of
+`max(trunc_dist, 2 cm)`, sampled at every fourth vertex. A point with nothing
+within reach is counted apart, not averaged, so accuracy's RMS, p95 and max
+cover only the points within it; the count beyond it is reported beside them
+(`acc>r`, `cov>r`). The code was `examples/common/mesh_distance.hpp`,
+header-only, with a test pinning it against meshes a known distance apart and
+against a scan of every triangle. It moved into the `eval` tier the same day
+(the next entry). The first plan was to sample the source grid's
+SDF at the decoded vertices, which would be simpler. It was dropped because a
+fused TSDF is **projective**: distance along the camera ray, not Euclidean. So
+on real scans the simpler metric would have measured the fusion's bias as well
+as the codec's error.
+
+**Measured** on room0: 400 frames, every frame coded, M5 Max, Release. Encode
+and decode times are host ms per coded frame, and the rANS share of each is in
+brackets.
+
+| | voxel | blocks/frame | B/block | Mbit/s @ 30 fps | encode ms | decode ms | accuracy RMS | coverage RMS / beyond reach |
+|---|---|---|---|---|---|---|---|---|
+| prior engine's (K = 32, DC 0.25 / AC 0.05) | 1 cm | 21.9 k | 18.7 | 98.4 | 13.1 (rANS 10.1) | 10.7 (7.0) | 0.886 mm | 1.226 mm / 104 |
+| **new (K = 64, 0.2 / 0.2)** | 1 cm | 21.9 k | **17.4** | 91.5 | 17.4 (13.8) | 15.7 (11.5) | **0.641 mm** | 0.835 mm / 31 |
+| prior engine's | 2 cm | 5.4 k | 21.6 | 28.0 | 3.9 (2.9) | 3.6 (2.0) | 2.264 mm | 3.414 mm / 37 |
+| **new** | 2 cm | 5.4 k | **20.5** | 26.6 | 4.6 (3.7) | 4.6 (3.1) | **1.629 mm** | 2.382 mm / 24 |
+
+**The sweep over the final 1 cm grid** (24.9 k coded blocks; steps are
+fractions of `trunc_dist`, distances in mm). The 2 cm sweep orders the configs
+the same way.
+
+| config | B/block | accuracy RMS / p95 / max | encode / decode ms |
+|---|---|---|---|
+| split, K = 8 / 16 / 32 / 64 / 128 | 13.3 / 15.5 / 18.5 / 23.0 / 28.3 | RMS 2.646 / 1.374 / 0.884 / 0.574 / 0.381 | 10.6 → 33.0 |
+| split, K = 32, steps ×0.5 / ×2 / ×4 | 20.9 / 16.5 / 14.7 | RMS 0.882 / 0.902 / 0.978 | ~15 |
+| uniform, K = 32, step 0.025 → 0.4 | 21.1 → 13.5 | RMS 0.879 → 0.995 | ~15 |
+| uniform, K = 64, step 0.1 / 0.2 / 0.4 | 19.9 / 17.1 / 14.8 | RMS 0.586 / 0.642 / 0.796 | ~20.5 / 16.3 |
+| uniform, K = 128, step 0.2 / 0.4 / 0.8 | 19.1 / 15.8 / 13.4 | RMS 0.496 / 0.700 / 1.074; max 34 / 19 / 28 | ~29.5 / 25.5 |
+| uniform, K = 256, step 0.4 / 0.8 | 16.7 / 13.7 | RMS 0.671 / 1.073 | ~47 / 46 |
+| uniform, K = 512, step 0.8 / 1.6 | 13.9 / 11.9 | RMS 1.078 / 1.751 | ~85 / 137 |
+| reference, K = 512, step 0.002 | 147.1 | 0.012 / 0.023 / 2.2 | 122 / 131 |
+
+**What it says.**
+1. **The error's tail is the quantizer's.** The near-lossless reference decodes
+   to 0.012 mm RMS, with nothing beyond reach. So the 20–37 mm worst vertices
+   of every practical config are ringing from dropped coefficients, a few
+   floaters near thin structures, and not a pipeline defect. Every config's
+   p95 is under 2 mm. The max cannot exceed the 4 cm reach, but nothing hides
+   past it: no decoded vertex of any config is beyond reach of the source,
+   save 5 of ~980 k at K = 8 (and at 2 cm, 2 at K = 512 with a step of 1.6).
+2. **K sets the quality, and the step barely does at low K.** At K = 32, going
+   from a step of 0.025 to one of 0.4 cuts the bytes by 36% and raises the
+   error by 13%. Each doubling of K costs about a quarter more bytes and takes
+   about a third off the error.
+3. **A DC step coarser than the AC step buys nothing.** At the same AC step,
+   the split's 5× DC step saves 2% of the bytes for 7% more error (×4:
+   14.7 B/block at 0.978 mm, against uniform 0.2 at 15.0 and 0.915). That
+   matches the theory: the transform is orthonormal, so a unit of quantization
+   error costs the same in any coefficient.
+4. **Many coefficients coarsely beats few finely.** Past K = 128, though, a
+   coarse step zeroes the extra coefficients anyway: at a step of 0.8,
+   K = 128, 256 and 512 all come to ~13.5 B/block and ~1.07 mm, and only the
+   time grows. The best K rises with the bitrate. At the low end, K = 32 at
+   0.4 (13.5, 0.995) edges out K = 128 at 0.8 (13.4, 1.074). This is what the
+   per-band quantization study is for (see Open).
+
+**The choice: K = 64 with a uniform 0.2.** It beats the prior engine's
+defaults on bytes and on error at both resolutions: 7% smaller and 28% more
+accurate at 1 cm, 5% smaller and 28% more accurate at 2 cm. It also keeps both
+calls inside a 30 fps frame interval on the host at 1 cm (encode 17.4 ms,
+decode 15.7 ms).
+
+The two better points traded speed for size:
+- **K = 128 at 0.4:** 15.8 B/block and 0.700 mm.
+- **K = 128 at 0.2:** 19.1 B/block and 0.496 mm.
+
+Both roughly double the host coding time, which would put 1 cm room0 at the
+edge of real time.
+
+The defaults are **provisional**, and are recorded as such in
+`codec_params.hpp`. They are to be re-chosen by the per-band study on these
+same tables.
+
+**Where the new defaults lose.** On the analytic sphere of `codec_decoder_test`
+they are 16% smaller than the old ones (30.2 against 35.8 B/block) but **17%
+less accurate** on the mean (0.070 against 0.060 voxels off), and the worst
+vertex is **2.4x as far off** (0.66 against 0.27 voxels). A smooth surface
+keeps all its energy in the low bands, which the defaults' coarse AC step
+quantizes as coarsely as the high ones. So the test's worst-vertex bound
+moved from 0.5 to 0.8 voxels, and it gained a mean bound of 0.085 --
+1.2x what an M5 Max measures, as tight as another device's rounding allows,
+so the regression is pinned rather than hidden in slack. The sphere is kept as the per-band study's second fixture, beside room0.
+A table can be fine in the low bands and coarse in the high ones, and so could
+win on both.
+
+**The GPU coder waits.** At the new defaults, host rANS takes 42% of a frame
+interval to encode and 35% to decode at 1 cm, single-threaded. That is inside
+the interval, so PR 5 is not needed for this content at this resolution. It
+would be at finer voxels, at K = 128, or on a slower host. Even then, the
+cheaper first step is to code the segments on several host threads, since
+they are independent by construction (the 2026-09-27 format).
+
+**Bitrate.** Intra-only room0 at 1 cm is ~90 Mbit/s at 30 fps. Most blocks do
+not change between frames, which is the case for P-frames.
+
+**Verified.** The full suite passes, 35 of 35 against 34 before; the new test
+is `recon_mesh_distance`. The metric was mutation-checked with five planted
+bugs, each caught:
+- a closest-point vertex region returning the wrong vertex
+- a query that skips neighbour cells
+- the reach counted as within it
+- coverage measured the wrong way round
+- p95 read as the median
+
+**Review fixes** (all in this PR, before merge):
+- **Degenerate triangles.** The first closest point was Ericson's region test,
+  which divides by an edge's length and by the area. Over 1 cm triangles at
+  room coordinates, it gave NaN for half of all queries when `a == b`, NaN
+  for 4% and a point up to 4.7 mm off when `b == c`, and NaN for one in 2000
+  on a micron sliver; `std::min` silently dropped each NaN from the search.
+  It is now the face projection when that lands inside, with the face trusted
+  only at a sine above 1e-4, and otherwise the nearest of the three edges,
+  within 0.2 µm of a double-precision reference on all of those. On room0 no
+  figure moved: its reference mesh has no triangle with coincident corners,
+  and on seven of the sweep's configs the two agree on every sampled
+  distance to 1 µm.
+- **The search.** Cells are half the reach, a query scans its own cell first,
+  and then only the neighbours nearer than its best, on squared distances.
+  The sweep hashes the reference once rather than once per config. Comparing
+  one room0 mesh both ways went from 8.7 s to 2.2 s, and matches a scan of
+  every triangle exactly.
+- **p95** is the nearest rank, `ceil(0.95 n)`; it had been read one rank
+  high, which for 20 points or fewer is the max.
+- **The player grid** is sized from its first frame's block count and the
+  sweep decodes into the stream's, where each had been sized from the
+  source's grown table (131 k slots, 512 MiB of `tsdf` + `weight`, for 25 k
+  blocks). A decode that runs out of room grows the grid and always decodes
+  again. IoError is retried twice, and then returned as itself, since the
+  Decoder also uses it for a broken heap, which no retry mends; it had been
+  retried 16 times and then reported as OutOfMemory.
+- **The partial-block DCT test** is pinned to the prior engine's K = 32, the
+  case the unobserved-voxel fill was built for, rather than following the
+  defaults to K = 64.
+
+The sweep's first cut timed each config's first call on a fresh `Encoder`,
+which varied from 5 to 35 ms on the same grid. Each config now runs one
+untimed round first.
+
+**Open.**
+- **The per-band quantization study,** its own PR, before P-frames. It judges
+  a step table per `x + y + z` band on room0 and on the sphere, with these
+  tables as the baseline (a `TODO(codec)` on `CodecParams`).
+- **P-frames,** for the bitrate above.
+- **Host-threaded segment coding,** if a finer voxel or K = 128 is wanted in
+  real time (a `TODO(codec)` in `bitstream.cpp`).
+- **The GPU coder,** after that, if threading is not enough.
+
+### 2026-09-27 — Quality measurement is a tier of its own, `eval`, branching off `mesh`: mesh-to-mesh accuracy, coverage and F-score, host-side and deterministic, and production infrastructure rather than an excluded research harness.
+
+The mesh-distance metric came in with the room0 measurement as a header in
+`examples/common`. It had three consumers, or would have soon:
+- **`codec_replica`**, whose defaults it chose;
+- **the codec's ground-truth test (#94)**, which carries its own copy of the
+  closest-point code;
+- **the per-band quantization study**, which will be judged on it.
+
+A metric that picks defaults and gates tests belongs in the library, where it
+is documented, versioned and tested like the rest.
+
+**Named `eval`, not `metrics`.** `core` already has `StageMetrics`, the timing
+vocabulary every tier reports in, and a `metrics` tier would read as more of
+that. The target is `recon_eval`, the namespace `volumetric_kit::recon::eval`.
+
+**Off `mesh`.** It reads `mesh::Mesh`, so it depends on `mesh` and branches off
+it, as `texture` does. Nothing in the pipeline links it. The codec's tests and
+example depend on it, never the reverse, so `codec` stays on `volume` alone. A
+later grid-to-grid metric would fit too, `volume` being to its left.
+
+**Not an excluded harness.** The exclusion list names "Python research/eval
+harnesses and any learned/neural or paper-experiment code". This is none of
+those: it is host-side C++ with no dependency beyond the mesh container, and
+it is deterministic up to the inputs it is given. The repo's own tests and
+examples use it to hold the reconstruction and the codec to a number, so it
+meets the same bar as any tier: full Doxygen, `Status` on every refusal, a
+test with analytic answers. A paper's evaluation protocol, a dataset loader or
+a plotting script would still be excluded.
+
+**What v1 holds** (`eval/mesh_distance.hpp`):
+- **`MeshDistance`:** point-to-surface distance up to a reach, through a hash
+  of cells half the reach on a side. A query scans its own cell first, then
+  only the neighbours within two cells whose box is nearer than its best so
+  far, on squared distances (from #95's review, below).
+  - It **copies** the triangles, so the source mesh need not outlive it. The
+    header-only version kept a reference, a lifetime the caller could not see.
+  - `create` refuses a reach that is not finite and positive, an index count
+    that is not a multiple of 3, and an index past the vertices, where the
+    header-only version read out of bounds.
+  - It also refuses a triangle corner that is not finite or lies past the cell
+    keys' range (about half a million reaches out), and a reach so small for
+    the triangles that they would average more than `kMaxCellsPerTriangle`
+    (64) cells each. A triangle no larger than half the reach touches at most
+    8, and one no larger than the reach 27. Both
+    are limits the caller cannot see: the first overflowed the float-to-int
+    cell conversion, which saturates on ARM and left the filing loop without
+    an end, and the second grew memory as `(size / reach)^3` (one 1 cm
+    triangle at a micron took 8.1 GB).
+  - A query that is not finite, or past the range, reads as the reach.
+- **`closest_point_on_triangle`** is the projection onto the face when it
+  lands inside, and otherwise the nearest of the three edges; a triangle
+  whose angle at its first corner has a sine under 1e-4 is measured by its
+  edges alone. Ericson's regions assume an area, and with the first two
+  corners coinciding every point fell in edge ab's region, whose parameter
+  is 0 / 0. The NaN lost to `std::min`, so the triangle silently dropped
+  out, and marching cubes makes one wherever a crossing lands on a voxel
+  corner. (This PR first kept Ericson's test behind a guard at a sine of
+  1e-5; #95's review fixed the same bug with the projection, which is the one
+  kept, as below.)
+- **What counts as surface:** every triangle but one collapsed to a point,
+  and the points measured are the vertices those triangles use.
+  `extract_device_incremental` retires a triangle to a point (the sharing
+  kernel's indices all at vertex 0, the default kernel's three vertices at
+  the origin) and leaves the sharing kernel's dead vertices unreferenced at
+  stale positions. So comparing an incremental extract with a full one, the
+  obvious use of this tier, would have measured its garbage.
+- **`summarize`:** a distance distribution over the points within reach, plus
+  a count of those beyond it. The p95 is the nearest rank, `ceil(0.95 n)`.
+- **`compare_meshes`:** accuracy (test vertices to the reference surface) and
+  coverage (reference vertices to the test surface), the directions the
+  ground-truth test named. It also computes the **F-score** at a threshold,
+  since precision and recall fall out of the same distances.
+  - The threshold must lie in `[0, reach]`. Past the reach, every distance
+    reads as the reach, and the score would be meaningless.
+  - `codec_replica` reports it at half a voxel. That is inside the
+    reconstruction's own resolution, so the score moves with the codec rather
+    than saturating: 0.993 on the 20-frame 2 cm smoke run.
+  - It checks both meshes before indexing either, and drops each index before
+    building the next, so one comparison holds one.
+- **`ReferenceMesh`:** a reference indexed once, for many meshes to be judged
+  against. The sweep compares 24 decoded meshes against one source and
+  rebuilt the source's index for each. It gives exactly what `compare_meshes`
+  gives for the same pair, and it pairs the index with the points taken from
+  the same mesh, so the two cannot be mismatched.
+
+**A stride picks vertices by a hash of their position.** `compare_meshes` can
+measure about one vertex in `stride`, and `codec_replica` uses 4 on room0's
+million vertices. The first cut took every `stride`-th vertex of the array.
+But marching cubes emits vertices in the order its atomics hand out ranges,
+so that subsample changed from run to run. The same grid's figures moved by
+about half a percent (accuracy mean 1.208 against 1.214 mm on two runs of the
+smoke test, the max 44.8 against 39.1 mm), which hid any codec change
+smaller than that. A hash of the position depends only on the geometry, so
+three runs now agree in every printed digit (accuracy mean 1.214 mm, F
+0.9926). The earlier entry's room0 tables were measured under the array
+stride. This is a subsample of the same size, so they should stand to within
+that half percent. One was re-run: the 1 cm defaults' accuracy RMS reads
+0.640 mm under the hash, against the table's 0.641.
+
+**The example's entry point stays concise** (this PR's base,
+`refactor(examples): keep codec_replica's entry point concise`). The player
+policy, the report printers and the sweep live in `examples/common`
+(`codec_stream.hpp`, `codec_sweep.hpp`). `main.cpp` is the example's story:
+options, setup, the fuse loop, the report.
+
+**Verified.** The full suite passes, 35 of 35. `recon_eval_mesh_distance`
+replaces the example-header test: the closest point in every region of a
+triangle and on every degenerate one, the reach clamp, the statistics,
+accuracy / coverage between planes a known distance apart, the F-score, what
+counts as surface, figures independent of the mesh's order, the reusable
+reference, and every refusal.
+- **F-score checks:** it is exactly 1 above a 3 mm shift and exactly 0 below
+  one, and not 0/0. Half a plane gets precision 1 and the exact recall of the
+  extent it kept. That test first assumed the cut fell at 0.1 m, but
+  `20 * 0.005f` rounds below `0.1f`, so the mesh keeps a 21st column of
+  squares. The test now reads the extent off the mesh.
+- **A copy made at `create`:** the index is built over a temporary mesh and
+  queried after it is gone, which ASan would catch if it were not a copy.
+
+**Review (PR #96).** Fixed as described above:
+- the degenerate triangle whose first two corners coincide;
+- the unbounded cell loop on a non-finite or distant corner;
+- the unbounded cells a small reach cost;
+- the unreferenced and retired vertices counted as surface;
+- the order-dependent stride;
+- a p95 one rank high, which read the max for 20 samples;
+- the index rebuilt for every configuration of the sweep;
+- both indices held at once.
+
+Four smaller fixes:
+- The reach is checked before the threshold, so a bad reach is not reported
+  as a threshold left at 0.
+- `codec_replica` writes its PLYs before comparing, so a refusal leaves the
+  meshes to look at.
+- The sweep prints `-` for an F-score nobody asked for, and names its
+  threshold.
+- The `eval` mark in DESIGN.md's diagram now sits under `mesh`.
+
+Each fix has a test, and taking it back fails that test: the degenerate
+check, the p95, the unreferenced vertices, the point triangles, the stride
+(the reorder test rotates the vertices and bumps the surface, since
+reversing 41^2 vertices maps every seventh index onto every seventh index,
+and a flat grid gives many subsets one distribution), the order of the
+option checks, and the cell budget (the test hangs without it). The two
+range checks are caught by the sanitizer leg, as the float-to-int overflow
+they prevent; the cell budget alone refuses the far vertex on ARM. (The
+degenerate guard measured here, 2% per call, was on Ericson's test, which
+the merge below replaced.)
+
+Kept on purpose: `positive_finite` and the cell key stay private copies, not
+`core` helpers. The first is one line. The second differs from
+`tsdf_integrator.cpp`'s `block_key` in encoding (offset rather than
+two's-complement masking) and in its range check, which only `eval` needs,
+since block coordinates are bounded by the grid.
+
+**Merged with #95's review.** #95's review fixed the same header in
+`examples/common` while this PR's review fixed its copy here, each without
+the other. When this PR was rebased onto the merged #95, `eval` took the
+better of each, measured rather than argued:
+- **The closest point is #95's.** Both versions were run against a
+  double-precision reference on 1 cm triangles at room coordinates, about
+  4.2 million queries (coincident corners, collinear corners, 1 µm needles,
+  and slivers with sines from 1e-6 to 1e-2). The projection is within
+  0.17 µm on every one, which is float rounding at 3 m. Ericson behind the
+  guard is off by more than 0.5 µm on 12 of them, all slivers or collinear,
+  by up to 89.5 µm. Rare, so no room0 figure moves, but never is better than
+  rarely, and it is simpler.
+- **The search is #95's**, with this PR's range checks moved onto the finer
+  cells. Room0 at 1 cm, the same grids, compared both ways at stride 4:
+  8.25 s before, 1.86 s after, and every printed figure identical (accuracy
+  RMS 0.640 mm, F 0.9981 at 5 mm).
+- **The rest is this PR's:** the refusals, the surface-only sampling, the
+  position-hashed stride, and `ReferenceMesh`, which covers what #95's
+  hash-once `compare_meshes` overload was for. #95's `acc>r` column and its
+  sweep decoding into the stream's player carry over into the examples.
+- **Tests from #95**, ported: thin triangles against the double-precision
+  answer (50 000 draws, enough to meet Ericson's rare misses; reverting to
+  it fails), and the pruned search against a scan of every triangle
+  (probing one cell fewer along x, or leaving the box gap unsquared,
+  fails). One
+  change survives: trusting the face down to any nonzero area passes every
+  case too. The 1e-4 guard is kept as a margin, not a measured need.
+
+**Open**, each a `TODO(eval)` in the code:
+- The ground-truth test (#94) moves onto `eval` once both have landed, and
+  drops its copy.
+- A threaded `compare_meshes`: room0 at 1 cm takes ~2 s at stride 4 on one
+  core.
+
 ### 2026-09-28 — The Orbbec driver streams colour as H.265 on request: every colour frame is decoded, in order, on a thread per camera ahead of the mailbox; a lost frame is read off the frame index, not the clock; and the Femto Mega's stream is decoded as BT.601 full range, which it codes and does not say.
 
 **The rule.** `OrbbecStreamOptions::color_codec` is `Mjpeg` (the default)

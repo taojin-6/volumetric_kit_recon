@@ -39,9 +39,9 @@ conventions and Vulkan setup.
   engine's `VK_DEVICE_HOST`-style macros are renamed `VR_*` on port.)
 - CMake: `find_package(volumetric_kit_recon)`; component targets
   `volumetric_kit::recon_core`, `…_volume`, `…_tsdf`, `…_mesh`, `…_texture`,
-  `…_sensor`, `…_codec`, `…_interop` (+ later `…_track`, `…_stream`), plus the
-  opt-in `…_sensor_orbbec` driver (`VR_WITH_ORBBEC`) and `…_sensor_video`
-  decoder (`VR_WITH_FFMPEG`); umbrella alias
+  `…_sensor`, `…_codec`, `…_eval`, `…_interop` (+ later `…_track`, `…_stream`),
+  plus the opt-in `…_sensor_orbbec` driver (`VR_WITH_ORBBEC`) and
+  `…_sensor_video` decoder (`VR_WITH_FFMPEG`); umbrella alias
   `volumetric_kit::recon`.
 
 ## Architecture (tiered)
@@ -50,8 +50,8 @@ Strict left-to-right dependency rule: a tier may depend only on tiers to its
 left. No upward includes.
 
 `core` → `volume` → `tsdf` → `mesh` → `texture` → `interop`, with `sensor`
-branching off **`core`** and `codec` off **`volume`** (later: `track`,
-`stream`).
+branching off **`core`**, `codec` off **`volume`** and `eval` off **`mesh`**
+(later: `track`, `stream`).
 
 - **`core`** — the Vulkan foundation *and* the vocabulary every tier trades in
   (`Status`/`Result`, the GLM math aliases, and the posed pinhole
@@ -93,6 +93,11 @@ branching off **`core`** and `codec` off **`volume`** (later: `track`,
   **`volume` alone**. Color is not coded: the
   player textures the decoded mesh from RGB that travels beside it (the
   2026-09-26 decision).
+- **`eval`** — quality measurement for the tests and examples that judge a
+  reconstruction or a codec: mesh-to-mesh distance, accuracy / coverage and
+  the F-score (`eval/mesh_distance.hpp`). Host-side, deterministic, and linked
+  by nothing in the pipeline. It is infrastructure, not one of the excluded
+  eval harnesses (2026-09-27).
 - **`interop`** — the handoff to `volumetric_kit_gfx` (below).
 
 ## Locked decisions
@@ -268,6 +273,15 @@ order. Change the decision, its entry there, and this list together.
   installed FFmpeg: HEVC in, host pictures out, on the first hardware back end
   that decodes a built-in clip, NVIDIA ahead of an integrated GPU; each CI leg
   requires the hardware it has.
+- [**2026-09-27**](DECISIONS.md#2026-09-27--room0-sets-the-codecs-provisional-defaults-k--64-with-one-step-of-02-for-dc-and-ac-alike-the-coefficient-count-sets-the-quality-and-a-coarse-uniform-step-costs-almost-nothing-at-it-and-the-host-rans-coder-fits-a-frame-interval-at-1-cm-so-the-gpu-coder-waits) —
+  Room0 sets the codec's provisional defaults, K = 64 with one step of 0.2 for
+  DC and AC alike: the coefficient count sets the quality and a coarse uniform
+  step costs almost nothing at it, and the host rANS coder fits a frame
+  interval at 1 cm, so the GPU coder waits.
+- [**2026-09-27**](DECISIONS.md#2026-09-27--quality-measurement-is-a-tier-of-its-own-eval-branching-off-mesh-mesh-to-mesh-accuracy-coverage-and-f-score-host-side-and-deterministic-and-production-infrastructure-rather-than-an-excluded-research-harness) —
+  Quality measurement is a tier of its own, `eval`, branching off `mesh`:
+  mesh-to-mesh accuracy, coverage and F-score, host-side and deterministic,
+  and production infrastructure rather than an excluded research harness.
 - [**2026-09-28**](DECISIONS.md#2026-09-28--the-orbbec-driver-streams-colour-as-h265-on-request-every-colour-frame-is-decoded-in-order-on-a-thread-per-camera-ahead-of-the-mailbox-a-lost-frame-is-read-off-the-frame-index-not-the-clock-and-the-femto-megas-stream-is-decoded-as-bt601-full-range-which-it-codes-and-does-not-say) —
   The Orbbec driver streams colour as H.265 on request: every colour frame is
   decoded, in order, on a thread per camera ahead of the mailbox; a lost frame
@@ -311,6 +325,8 @@ deferred, not stubbed. When in doubt, it stays out.
   codec is DCT-only).
 - **Python research/eval harnesses** and any learned/neural or paper-experiment
   code. These remain in the prior repos for research; none enter this repo.
+  (The C++ `eval` tier is not one of them: it is the repo's own quality
+  measurement, held to the same bar as any tier — the 2026-09-27 decision.)
 
 ## The interop seam (pairing with gfx)
 
@@ -733,7 +749,11 @@ arbitrary; it usually isn't.
   `VR_TEST_HEVC_BACKEND` makes its test require one back end, which is how
   CI holds the Linux legs to NVDEC (the 2026-09-27 decoder decision).
 
-- **`codec`** — three of five PRs in (2026-09-26 lists them). The public API
+- **`codec`** — four of five PRs in (2026-09-26 lists them). The defaults
+  are room0's, and provisional until the per-band quantization study: K = 64
+  with one step of 0.2 for DC and AC alike (2026-09-27). At 1 cm that is
+  17.4 B/block (235x under raw), 0.64 mm accuracy RMS, and host coding inside
+  a 30 fps frame interval. The public API
   is `CodecParams`, **`Encoder`** (`encoder.hpp`) and **`Decoder`** with
   `read_frame_info` (`decoder.hpp`). `Encoder::encode(grid)` compacts, sorts
   by (z, y, x) and transforms, drops every block with no observed voxel, and
@@ -794,9 +814,31 @@ arbitrary; it usually isn't.
   bit, nor a symbol swapped for one of equal frequency, so integrity is the
   transport's.
 
-**Examples** (`examples/`). All four poll their frames through
+- **`eval`** — `MeshDistance` (point-to-surface distance up to a reach,
+  through a hash of cells half the reach on a side, searched nearest first
+  and pruned by distance, over a **copy** of the triangles),
+  `compare_meshes` giving accuracy, coverage and an optional F-score, and
+  `ReferenceMesh`, which indexes a reference once so a sweep can judge many
+  meshes against it. They refuse, with `Status`, what would read out of
+  bounds, overflow or mean nothing:
+  - a bad reach, or indices out of range;
+  - a corner that is not finite or past the cell keys' range;
+  - a reach so small that the triangles would average more than
+    `kMaxCellsPerTriangle` cells each;
+  - a threshold past the reach.
+
+  The surface is every triangle but one collapsed to a point, which is what
+  an incremental extract retires a triangle to. The points measured are the
+  vertices those triangles use. The closest point is the face projection
+  when it lands inside, else the nearest edge, so a degenerate triangle
+  counts as the segment it collapses to and a thin one is measured to float
+  rounding, where Ericson's region test lost it now and then. A `stride` picks
+  vertices by a hash of their position, so the figures reproduce whatever
+  order marching cubes' atomics emitted the mesh in.
+
+**Examples** (`examples/`). All five poll their frames through
 `sensor::ICameraCapture&` — the fuse loop never learns what is behind it. The
-three dataset examples take `ReplicaCapture` as the source: frame cap, stride
+four dataset examples take `ReplicaCapture` as the source: frame cap, stride
 and the depth gate are its options, stamped on each frame it hands out, and its
 disk probe at `open` visits only the frames those options select. An empty
 poll is retried after a millisecond until the source reports itself
@@ -804,7 +846,8 @@ poll is retried after a millisecond until the source reports itself
 replay ends. Each frame fuses
 through `examples/common/fuse_frame.hpp` (the one allocate-and-grow-then-
 integrate loop, carrying the frame's encoding declaration across, into the one
-grid layout its `create_fusion_grid` builds), and a frame kept past the next
+grid layout `grid_layout.hpp` defines, which its `create_fusion_grid` builds and
+`codec_replica`'s player shares), and a frame kept past the next
 poll — `fuse_render`'s keyframe, `fuse_viewer`'s newest fused frame for its
 final texture pass — is copied into an
 `RgbdFrame` of its own (`examples/common/rgbd_frame.hpp`, the type the
@@ -821,13 +864,24 @@ flags on a different cadence. Behind the off-by-default
 `VR_BUILD_VIEWER`: `fuse_render` writes a headless colour PNG (seam A — it
 builds two devices by design), and `fuse_viewer` opens a live window on one
 shared `VkDevice`, fusing on a background thread, drawing recon's buffers
-directly, and carrying the two-panel perf overlay. The three dataset examples
+directly, and carrying the two-panel perf overlay. The four dataset examples
 take `--preload`, which makes the loop measure compute rather than the
 JPEG/PNG decoder.
 The live counterpart is its own example, not a `fuse_replica` flag:
 **`fuse_orbbec`** (`VR_WITH_ORBBEC`) fuses an `OrbbecCapture` through the same
 `fuse_frame.hpp` and writes a PLY after `--frames` frames; `--rig sync.json`
 fuses the rig as an `OrbbecRig`, posed by `--calibration`.
+**`codec_replica`** fuses a Replica sequence as `fuse_replica` does, and
+streams the growing grid through the codec: every `--encode-every` frames it
+encodes, then decodes into a player grid built from `read_frame_info` and
+sized for that frame's blocks. It reports bytes, the bitrate at the coded
+frame rate, and both calls' stage rows. It then judges the last decoded
+surface against the source's, mesh to mesh, with the `eval` tier: accuracy,
+coverage and the F-score at half a voxel, since a fused TSDF is projective
+and sampling it would measure the fusion's bias too. `--sweep` prints the
+rate–distortion table the defaults are chosen from. Its `main.cpp` stays the
+example's story; the stream, its report and the sweep are
+`examples/common/codec_stream.hpp` and `codec_sweep.hpp`.
 
 **Next.** **Incremental mesh extraction has landed, all three stages** —
 `MarchingCubes::extract_device_incremental`, over the span table of the
