@@ -693,10 +693,16 @@ arbitrary; it usually isn't.
   (`rans.hpp`: a 32-bit state, 16-bit words and 12-bit probabilities, integer
   only, the reference the GPU kernels must match byte for byte). Every integer
   is coded as a class from a fixed per-frame table plus raw bits. The format
-  requires strictly increasing coordinates, so a decoded list is duplicate-free.
-  `read_intra_frame` never reads outside its buffer, and it takes the caller's
-  `max_blocks`, because a frame's size cannot bound its block count
-  (probability-one blocks cost no bits). `RansReader::finish` is a
+  requires strictly increasing coordinates, so a decoded list is duplicate-free:
+  the delta code cannot step backwards within a segment, and the reader checks
+  each segment's raw first coordinate against the one before. A flag bit other
+  than `kSectionRequired` is reserved, so a known section that sets one is
+  refused. `read_intra_frame` never reads outside its buffer, and it takes the
+  caller's `max_blocks`, because a frame's size cannot bound its block count
+  (probability-one blocks cost no bits). That bounds its allocation too, at
+  under 2.1 KB per block, and every size is checked in 64 bits so a 32-bit
+  build refuses rather than wraps. `DctBlocks` lives in `dct_blocks.hpp`, so
+  the host-only frame never includes Vulkan. `RansReader::finish` is a
   **consistency** check, not an integrity one. It cannot see a flipped raw
   bit, nor a symbol swapped for one of equal frequency, so integrity is the
   transport's.
