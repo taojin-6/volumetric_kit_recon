@@ -4,9 +4,11 @@
 // The device-input overloads of VoxelHashMap::allocate_from_depth and
 // TsdfIntegrator::integrate against the host ones: one depth and colour frame
 // fused into two grids, once from host arrays and once from storage buffers,
-// must give the same blocks and the same tsdf, weight and colour in each. And
-// the buffers they refuse. Runs on the real driver; exits 0 (skip) where no
-// device is present.
+// must give the same blocks and the same tsdf, weight and colour in each. A
+// colour image that marks its coverage in the high byte fuses nothing where
+// it says it has no colour. And the buffers they refuse, an empty grid's
+// included. Runs on the real driver; exits 0 (skip) where no device is
+// present.
 
 #include <algorithm>
 #include <cmath>
@@ -139,6 +141,77 @@ vr::Result<vr::Buffer> upload(vr::Allocator& allocator, const void* data,
   return vr::upload_storage_buffer(allocator, data, bytes);
 }
 
+// Observed voxels (weight > 0) of `g`: how many took black as their colour,
+// and how many took none.
+struct ColorCounts {
+  std::size_t black = 0;
+  std::size_t none = 0;
+};
+vr::Result<ColorCounts> color_counts(vol::VoxelBlockGrid& g) {
+  VR_ASSIGN(const std::vector<vol::BlockIndex> active,
+            g.map().compact_active_blocks());
+  const auto* weight =
+      static_cast<const float*>(g.attribute("weight").value().buffer->mapped());
+  const auto* color = static_cast<const std::uint32_t*>(
+      g.attribute("color").value().buffer->mapped());
+  ColorCounts out;
+  for (const vol::BlockIndex& b : active) {
+    for (std::int32_t k = 0; k < grid_params().voxels_per_block; ++k) {
+      const auto i = static_cast<std::size_t>(b.ptr + k);
+      if (!(weight[i] > 0.0f)) continue;
+      if (color[i] == 0xFF000000u) ++out.black;
+      if (color[i] == 0u) ++out.none;
+    }
+  }
+  return out;
+}
+
+// The left half of the colour image says it has no colour (a zero high byte,
+// and black): with coverage_in_alpha nothing fuses from it, and without it
+// the black is fused as colour, as it would be from any host image.
+int test_coverage(vr::Device& dev, vr::Allocator& alloc,
+                  tsdf::TsdfIntegrator& integrator,
+                  const std::vector<float>& depth,
+                  const vr::DepthCameraParams& cam) {
+  std::vector<std::uint32_t> color(kWidth * kHeight);
+  for (std::uint32_t v = 0; v < kHeight; ++v) {
+    for (std::uint32_t u = 0; u < kWidth; ++u) {
+      color[v * kWidth + u] =
+          u < kWidth / 2 ? 0u
+                         : (200u | (100u << 8) | (50u << 16) | 0xFF000000u);
+    }
+  }
+  auto color_buf =
+      upload(alloc, color.data(), color.size() * sizeof(std::uint32_t));
+  CHECK(color_buf.ok());
+  tsdf::ColorFrame frame{};
+  frame.buffer = &color_buf.value();
+  frame.cam = vr::ColorCameraParams{
+      cam.fx, cam.fy, cam.cx, cam.cy, cam.width, cam.height, cam.cam_to_world};
+  ColorCounts counts[2];
+  for (int masked = 0; masked < 2; ++masked) {
+    auto grid = make_grid(dev, alloc);
+    CHECK(grid.ok());
+    CHECK(allocate(grid.value(), depth.data(), cam) == 0);
+    frame.coverage_in_alpha = masked != 0;
+    CHECK(integrator
+              .integrate(grid.value(), depth.data(), cam, 5.0f,
+                         tsdf::IntegrationMode::Classic, &frame)
+              .ok());
+    auto c = color_counts(grid.value());
+    CHECK(c.ok());
+    counts[masked] = c.value();
+  }
+  std::printf(
+      "  coverage: %zu voxels black and %zu uncoloured unmasked, "
+      "%zu and %zu masked\n",
+      counts[0].black, counts[0].none, counts[1].black, counts[1].none);
+  CHECK(counts[0].black > 1000);
+  CHECK(counts[1].black == 0);
+  CHECK(counts[1].none >= counts[0].none + counts[0].black);
+  return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -225,6 +298,7 @@ int main() {
             ->integrate(device_grid.value(), depth.data(), cam, 5.0f,
                         tsdf::IntegrationMode::Classic, &device_color)
             .ok());
+  if (test_coverage(dev, alloc, integrator.value(), depth, cam) != 0) return 1;
 
   // Refusals: an empty buffer, one smaller than the image, one that is not a
   // storage buffer, and a colour frame naming both images.
@@ -266,6 +340,21 @@ int main() {
             ->integrate(device_grid.value(), depth_buf.value(), cam, 5.0f,
                         tsdf::IntegrationMode::Classic, &small_color)
             .domain() == invalid);
+
+  // An empty grid, where there is nothing to fuse into, refuses the same
+  // buffers rather than returning before it looks at them.
+  auto empty_grid = make_grid(dev, alloc);
+  CHECK(empty_grid.ok());
+  CHECK(integrator->integrate(empty_grid.value(), empty, cam).domain() ==
+        invalid);
+  CHECK(
+      integrator->integrate(empty_grid.value(), small.value(), cam).domain() ==
+      invalid);
+  CHECK(integrator
+            ->integrate(empty_grid.value(), depth_buf.value(), cam, 5.0f,
+                        tsdf::IntegrationMode::Classic, &small_color)
+            .domain() == invalid);
+  CHECK(integrator->integrate(empty_grid.value(), depth_buf.value(), cam).ok());
 
   std::puts("tsdf_device_input: OK");
   return 0;

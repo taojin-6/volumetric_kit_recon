@@ -10,8 +10,7 @@
 ///        fuses into.
 ///
 /// Header-only and compiled only into the executables that fuse: it includes
-/// the `tsdf` tier and `sensor/utils`, which `vr_example_common` deliberately
-/// does not link.
+/// the `tsdf` tier, which `vr_example_common` deliberately does not link.
 /// Three copies of this loop had already drifted apart in what they printed,
 /// timed and guarded, and the encoding hand-off below is the kind of line a
 /// fourth copy drops -- with no error, since a `ColorFrame` left defaulted
@@ -28,7 +27,6 @@
 #include "volumetric_kit/recon/core/result.hpp"
 #include "volumetric_kit/recon/core/stage_metrics.hpp"
 #include "volumetric_kit/recon/sensor/camera_capture.hpp"
-#include "volumetric_kit/recon/sensor/utils/gpu_frame_prep.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_grid.hpp"
@@ -175,23 +173,6 @@ inline vr::Status fuse_frame(vr::volume::VoxelBlockGrid& grid,
                                    frame.color_encoding};
   return integrator.integrate(grid, frame.depth, frame.depth_camera, max_weight,
                               vr::tsdf::IntegrationMode::Classic,
-                              frame.has_color() ? &color : nullptr, metrics);
-}
-
-/// @brief @ref fuse_frame for a frame already on the device, as
-///        `sensor::GpuFramePrep` hands it out: nothing is uploaded, and depth
-///        and colour are fused with their own cameras.
-inline vr::Status fuse_frame(vr::volume::VoxelBlockGrid& grid,
-                             vr::tsdf::TsdfIntegrator& integrator,
-                             const vr::sensor::DeviceFrame& frame,
-                             float max_weight, vr::StageMetrics* metrics) {
-  VR_TRY(allocate_band(grid, *frame.depth, frame.depth_camera, metrics));
-  vr::tsdf::ColorFrame color{};
-  color.buffer = frame.color;
-  color.cam = frame.color_camera;
-  color.encoding = frame.color_encoding;
-  return integrator.integrate(grid, *frame.depth, frame.depth_camera,
-                              max_weight, vr::tsdf::IntegrationMode::Classic,
                               frame.has_color() ? &color : nullptr, metrics);
 }
 

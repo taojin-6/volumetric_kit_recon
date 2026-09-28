@@ -267,8 +267,9 @@ class VR_SENSOR_ORBBEC_API OrbbecCapture final : public ICameraCapture {
   Result<std::optional<CapturedFrame>> poll() override;
 
   /// @brief Take the newest synchronised pair not yet handed out, as the
-  ///        cameras captured it: raw depth, the decoded Y'CbCr planes, and
-  ///        each camera's lens and pose (@ref OrbbecStreamOptions::raw).
+  ///        cameras captured it: raw depth, the decoded Y'CbCr planes with
+  ///        the matrix and range the stream codes them in, and each camera's
+  ///        lens and pose (@ref OrbbecStreamOptions::raw).
   ///
   /// The depth camera's pose is @ref Options::cam_to_world, which poses the
   /// colour camera, composed with the camera's depth-to-colour extrinsic. The
@@ -276,8 +277,15 @@ class VR_SENSOR_ORBBEC_API OrbbecCapture final : public ICameraCapture {
   /// @ref stop, as @ref poll's does.
   /// @return As @ref poll; @ref Status::Code::InvalidArgument also when the
   ///         capture was not opened with @ref OrbbecStreamOptions::raw, and
-  ///         @ref poll returns it when it was.
-  Result<std::optional<RawFrame>> poll_raw();
+  ///         @ref poll returns it when it was; @ref Status::Code::Unsupported
+  ///         for a stream whose transfer or primaries @ref ColorEncoding
+  ///         cannot name.
+  Result<std::optional<RawFrame>> poll_raw() override;
+
+  /// @return `true` if the capture was opened with
+  ///         @ref OrbbecStreamOptions::raw, so its frames come through
+  ///         @ref poll_raw; `false` otherwise, and on a moved-from capture.
+  bool raw_frames() const noexcept override;
 
   /// @return `true` on a moved-from capture and once the camera has
   ///         disconnected, neither of which can produce another frame. A

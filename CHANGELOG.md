@@ -138,29 +138,42 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`side_by_side_atlas`, wrapping past the device's largest image) and packs
   them (`pack_atlas`). gfx is unchanged. Test: `recon_texture_multiview`;
   `recon_texture_device_mesh` checks device against host.
+- `sensor`: **`ICameraCapture::poll_raw`** and **`raw_frames`**: a source
+  opened for raw frames hands them out through the capture contract, so a
+  consumer asks which kind a source serves instead of reaching for its
+  concrete type. Both non-pure: a source that serves none keeps
+  `Unsupported` and `false`.
 - `sensor`: **`OrbbecStreamOptions::raw`** and **`OrbbecCapture::poll_raw`**
   hand out a `RawFrame`: raw depth and the decoded I420 planes (H.265 colour
-  only), and each camera's lens and pose from the factory calibration, with
-  the depth camera posed through its extrinsic to the colour one. The host
-  undistorts, registers and converts nothing. `fuse_orbbec --gpu` fuses such
-  frames through `GpuFramePrep`, one camera for now (`OrbbecRig` refuses
-  `raw`). `ycbcr_weights` gives a `VideoColorMatrix`'s luma weights.
+  only) with the matrix and range the stream codes them in, and each camera's
+  lens and pose from the factory calibration, with the depth camera posed
+  through its extrinsic to the colour one. The host undistorts, registers and
+  converts nothing. `fuse_orbbec --gpu` fuses such frames through
+  `GpuFramePrep`, one camera for now (`OrbbecRig` refuses `raw`).
+  `ycbcr_weights` gives a `VideoColorMatrix`'s luma weights.
 - `sensor`: **`GpuFramePrep`** (`sensor/utils/gpu_frame_prep.hpp`, the new
   `recon_sensor_utils` target): a captured frame's depth and colour
   undistorted on the GPU, and its Y'CbCr 4:2:0 colour converted to R'G'B' in
-  the same pass, handed over as buffers the device-input fusion overloads
-  read. It takes a `RawFrame` (`sensor/raw_frame.hpp`: raw depth, the decoded
-  planes, and each camera's `LensCamera` from `sensor/lens.hpp`, which
-  `LensDistortion` moved to), so depth and colour keep their own intrinsics
-  and poses and nothing registers one to the other. Test:
-  `recon_sensor_gpu_frame_prep`.
+  the same pass, handed over as device-local buffers the device-input fusion
+  overloads read. It takes a `RawFrame` (`sensor/raw_frame.hpp`: raw depth,
+  the decoded planes, and each camera's `LensCamera` from `sensor/lens.hpp`,
+  which `LensDistortion` moved to), so depth and colour keep their own
+  intrinsics and poses and nothing registers one to the other. The
+  `DeviceFrame` it returns holds its buffers, so one kept past the next
+  frame keeps its contents; colour carries each pixel's coverage in its high
+  byte; and a frame is checked whole, its depth range included, before
+  anything is uploaded. Test: `recon_sensor_gpu_frame_prep`.
 - `volume` / `tsdf`: **device-input overloads** of
   `VoxelHashMap::allocate_from_depth` and `TsdfIntegrator::integrate` that
   take the depth image as a storage `Buffer` already on the GPU, and
-  `ColorFrame::buffer` for the colour image, read in place with no upload.
-  The same frame fused both ways gives the same grid
-  (`recon_tsdf_device_input`); a buffer that is empty, not a storage buffer or
-  smaller than the image is refused (`core`'s `check_storage_input`).
+  `ColorFrame::buffer` for the colour image, read in place with no upload
+  and bound at the image's exact range. The same frame fused both ways gives
+  the same grid (`recon_tsdf_device_input`); a buffer that is empty, not a
+  storage buffer or smaller than the image is refused before any work, an
+  empty grid's call included (`core`'s `StorageInput`, which both tiers bind
+  through). **`ColorFrame::coverage_in_alpha`** has fusion skip a colour
+  pixel whose high byte is 0, as `GpuFramePrep` marks one its lens maps
+  outside the picture.
 - `sensor`: **H.265 colour from Orbbec cameras**,
   `OrbbecStreamOptions::color_codec = OrbbecColorCodec::Hevc` (the default
   stays `Mjpeg`; needs `VR_WITH_FFMPEG`). 21.6 Mbit/s of colour per camera at

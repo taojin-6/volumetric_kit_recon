@@ -30,6 +30,7 @@
 #include "volumetric_kit/recon/core/color_space.hpp"
 #include "volumetric_kit/recon/core/result.hpp"
 #include "volumetric_kit/recon/sensor/export.hpp"
+#include "volumetric_kit/recon/sensor/raw_frame.hpp"
 
 namespace volumetric_kit::recon::sensor {
 
@@ -215,6 +216,28 @@ class VR_SENSOR_API ICameraCapture {
   ///
   /// @return `true` once no further @ref poll can return a frame.
   virtual bool exhausted() const noexcept { return false; }
+
+  /// @brief Take the newest frame not yet returned as the cameras captured
+  ///        it, before undistortion and colour conversion: the @ref RawFrame
+  ///        `sensor/utils`'s GPU pass prepares.
+  ///
+  /// A source hands its frames out one way or the other, chosen when it is
+  /// opened, and @ref raw_frames says which, so a consumer asks once and then
+  /// polls this or @ref poll. Otherwise it is @ref poll: an empty optional is
+  /// "nothing this tick" (@ref exhausted tells the two apart), frames are
+  /// dropped rather than queued, and the frame borrows the source's buffers
+  /// until its next call. A source that hands out none keeps the default.
+  /// @return The frame; an empty optional if none is ready; a device error;
+  ///         or, the default, @ref Status::Code::Unsupported from a source
+  ///         that hands out no raw frames.
+  virtual Result<std::optional<RawFrame>> poll_raw() {
+    return Status::unsupported(
+        "ICameraCapture: this source hands out no raw frames");
+  }
+
+  /// @return `true` if this source hands its frames out through @ref poll_raw,
+  ///         and @ref poll refuses; `false`, the default, the other way round.
+  virtual bool raw_frames() const noexcept { return false; }
 
  protected:
   ICameraCapture() = default;

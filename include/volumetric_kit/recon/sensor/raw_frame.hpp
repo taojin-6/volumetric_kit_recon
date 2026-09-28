@@ -51,7 +51,10 @@ struct RawFrame {
   float metres_per_unit = 0.001f;  ///< What one depth unit is, in metres.
   LensCamera depth_camera{};       ///< The depth camera, lens included.
   Mat4f depth_cam_to_world = Mat4f(1.0f);  ///< The depth camera's pose.
-  float min_depth = 0.0f;  ///< Nearer samples are dropped (metres).
+  /// Nearer samples are dropped (metres). Set it: the pass needs
+  /// `0 < min_depth < max_depth`, since 0 is "no return", and refuses these
+  /// zeros rather than fuse nothing.
+  float min_depth = 0.0f;
   float max_depth = 0.0f;  ///< Farther samples are dropped (metres).
 
   /// The colour picture; `color.plane[0]` null when the frame has none. Its

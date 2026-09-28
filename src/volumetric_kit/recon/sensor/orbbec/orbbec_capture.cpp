@@ -151,4 +151,8 @@ Result<std::optional<RawFrame>> OrbbecCapture::poll_raw() {
   return impl_->stream->process_raw(pair);
 }
 
+bool OrbbecCapture::raw_frames() const noexcept {
+  return impl_ != nullptr && impl_->stream->raw();
+}
+
 }  // namespace volumetric_kit::recon::sensor

@@ -27,8 +27,10 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
+#include "buffer_readback.hpp"
 #include "volumetric_kit/recon/core/allocator.hpp"
 #include "volumetric_kit/recon/core/device.hpp"
 #include "volumetric_kit/recon/core/instance.hpp"
@@ -125,6 +127,7 @@ int grab_host(const char* serial, std::uint32_t w, std::uint32_t h,
 }
 
 int grab_gpu(const char* serial, std::uint32_t w, std::uint32_t h,
+             vr::Device& device, vr::Allocator& allocator,
              sensor::GpuFramePrep& prep, Frame* out) {
   auto opened = sensor::OrbbecCapture::open(options_for(serial, w, h, true));
   if (!opened) {
@@ -163,10 +166,18 @@ int grab_gpu(const char* serial, std::uint32_t w, std::uint32_t h,
             std::size_t{f.depth_camera.width} * f.depth_camera.height;
         const std::size_t cn =
             std::size_t{f.color_camera.width} * f.color_camera.height;
-        const auto* dp = static_cast<const float*>(f.depth->mapped());
-        const auto* cp = static_cast<const std::uint32_t*>(f.color->mapped());
-        out->depth.assign(dp, dp + dn);
-        out->color.assign(cp, cp + cn);
+        // Device-local: copied out rather than mapped.
+        auto depth = vr_test::read_back<float>(device, allocator, *f.depth, dn);
+        auto color =
+            vr_test::read_back<std::uint32_t>(device, allocator, *f.color, cn);
+        if (!depth || !color) {
+          std::fprintf(
+              stderr, "FAIL: read back: %s\n",
+              (!depth ? depth.status() : color.status()).message().c_str());
+          return 1;
+        }
+        out->depth = std::move(depth).value();
+        out->color = std::move(color).value();
         out->dcam = f.depth_camera;
         out->ccam = f.color_camera;
         return 0;
@@ -384,7 +395,10 @@ int main() {
 
   Frame host, raw;
   if (grab_host(serial, w, h, &host) != 0) return 1;
-  if (grab_gpu(serial, w, h, prep.value(), &raw) != 0) return 1;
+  if (grab_gpu(serial, w, h, device.value(), allocator.value(), prep.value(),
+               &raw) != 0) {
+    return 1;
+  }
   if (check_color(host, raw) != 0) return 1;
   if (check_depth(host, raw) != 0) return 1;
   std::puts("sensor_orbbec_gpu_prep: OK");

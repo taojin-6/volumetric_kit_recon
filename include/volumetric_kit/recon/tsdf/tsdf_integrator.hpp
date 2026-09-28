@@ -26,6 +26,7 @@
 namespace volumetric_kit::recon {
 class Device;
 class Allocator;
+class StorageInput;
 }  // namespace volumetric_kit::recon
 
 namespace volumetric_kit::recon::tsdf {
@@ -69,9 +70,16 @@ struct ColorFrame {
   /// The same image already on the device, in the same layout: a storage
   /// buffer of at least `cam.width * cam.height` words, read in place with no
   /// upload (a GPU pre-processing pass's output). Set this or @ref pixels, not
-  /// both. Borrowed for the call. Last, so `{pixels, cam, encoding}` still
-  /// initializes a host frame.
+  /// both. Borrowed for the call. After @ref encoding, so `{pixels, cam,
+  /// encoding}` still initializes a host frame.
   const Buffer* buffer = nullptr;
+
+  /// The image marks its own coverage in each word's high byte: 0 is a pixel
+  /// with no colour, such as one a lens maps outside the captured picture,
+  /// and it fuses nothing, as a pixel outside the image does; any other value
+  /// is colour. Off, the high byte is ignored, as a host image's is.
+  /// `sensor::GpuFramePrep` marks its output this way.
+  bool coverage_in_alpha = false;
 };
 
 /// @brief What optional machinery a @ref TsdfIntegrator carries, chosen at
@@ -374,11 +382,12 @@ class VR_TSDF_API TsdfIntegrator {
   /// what it does is a contract (which grid do these flags describe, and is
   /// that still true) rather than another line of buffer bookkeeping.
   Status prepare_dirty_flags(const volume::VoxelBlockGrid& grid);
-  // Both integrate overloads: exactly one of the two depths is set.
-  Status integrate(volume::VoxelBlockGrid& grid, const float* host_depth,
-                   const Buffer* device_depth, const DepthCameraParams& cam,
-                   float max_weight, IntegrationMode mode,
-                   const ColorFrame* color, StageMetrics* metrics);
+  // Both integrate overloads: `depth` is the host array or the device buffer
+  // the caller passed.
+  Status integrate(volume::VoxelBlockGrid& grid, const StorageInput& depth,
+                   const DepthCameraParams& cam, float max_weight,
+                   IntegrationMode mode, const ColorFrame* color,
+                   StageMetrics* metrics);
 
   // Borrowed (must outlive this).
   Device* device_ = nullptr;

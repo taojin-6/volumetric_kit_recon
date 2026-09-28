@@ -35,6 +35,7 @@
 #include <thread>
 #include <vector>
 
+#include "fuse_device_frame.hpp"
 #include "fuse_frame.hpp"
 #include "ply_writer.hpp"
 #include "volumetric_kit/recon/core/allocator.hpp"
@@ -336,13 +337,16 @@ vr::Status run(const Options& opt) {
             tsdf::TsdfIntegrator::create(device, allocator, {}));
   VR_ASSIGN(mesh::MarchingCubes extractor,
             mesh::MarchingCubes::create(device, allocator, {}));
+  // The source says which frames it hands out: raw ones (--gpu) are prepared
+  // on the device first.
+  sensor::ICameraCapture& capture = source->capture();
+  const bool raw_frames = capture.raw_frames();
   std::optional<sensor::GpuFramePrep> prep;
-  if (opt.gpu) {
+  if (raw_frames) {
     VR_ASSIGN(prep, sensor::GpuFramePrep::create(device, allocator));
   }
 
   // --- Fuse ---
-  sensor::ICameraCapture& capture = source->capture();
   VR_TRY(capture.start());
   vr::StageMetrics stage_totals;
   int fused = 0;
@@ -357,8 +361,8 @@ vr::Status run(const Options& opt) {
     bool got = false;
     std::optional<sensor::CapturedFrame> polled;
     std::optional<sensor::RawFrame> raw;
-    if (opt.gpu) {
-      VR_ASSIGN(raw, source->camera->poll_raw());
+    if (raw_frames) {
+      VR_ASSIGN(raw, capture.poll_raw());
       got = raw.has_value();
     } else {
       VR_ASSIGN(polled, capture.poll());

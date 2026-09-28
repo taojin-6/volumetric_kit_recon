@@ -512,7 +512,9 @@ arbitrary; it usually isn't.
   `ShaderModule`, descriptor + `ComputePipeline` wrappers, the `ComputeKernel`
   bundle + `KernelSetBuilder`, the shared-queue-safe
   `Device::submit_single_time` dispatch, and the shared `dispatch()` /
-  `group_count` / `storage_buffer` / range-guard helpers of `compute_util.hpp`.
+  `group_count` / `storage_buffer` / range-guard helpers of `compute_util.hpp`
+  — `StorageInput` among them, the host array or device buffer a call binds
+  at its image's exact range.
   Vocabulary: `Status`/`Result`, the GLM aliases, `camera_params.hpp`,
   `color_space.hpp`, and `stage_metrics.hpp` — the `{name, cpu_ms, gpu_ms,
   has_gpu}` rows every tier reports timings in, with `GpuTimer` measuring the
@@ -619,7 +621,8 @@ arbitrary; it usually isn't.
   of the surface) or **dynamic** (clear it, so a receded surface leaves no
   ghost). An optional `ColorFrame` fuses colour through its own separate
   `ColorCameraParams`; a voxel's first colour observation assigns rather than
-  blends. Opt-in `track_dirty_blocks` reports which blocks a fuse *changed* —
+  blends, and `coverage_in_alpha` has a pixel with a zero high byte fuse no
+  colour, as one outside the image fuses none. Opt-in `track_dirty_blocks` reports which blocks a fuse *changed* —
   as a host list (`dirty_remesh_blocks`) or, for an on-device consumer, as
   `dirty_flags_buffer()` / `dirty_flags_capacity()` / `dirty_epoch()`, which go
   null **together** on every staleness this tier can see and carry the grid's
@@ -767,7 +770,10 @@ arbitrary; it usually isn't.
   `CapturedFrame` (frames dropped, not queued) and asked `exhausted()` after
   an empty poll, since "nothing this tick" from a live device and "nothing,
   ever" from a replay are the same empty optional (2026-09-14; non-pure,
-  `false` by default, so a live driver overrides nothing) — plus the boundary
+  `false` by default, so a live driver overrides nothing). A source opened
+  for raw frames hands them out through `poll_raw()` instead, and
+  `raw_frames()` says which of the two it serves (non-pure too:
+  `Unsupported` and `false`) — plus the boundary
   math that is silently wrong when guessed — `cv_from_gl_camera`,
   `depth_from_registered_color`, `to_canonical`. Links `recon_core` alone;
   drivers live with the platform that can build *and* test them. Two
@@ -826,10 +832,16 @@ arbitrary; it usually isn't.
   depth sampled at the nearest pixel, colour bilinearly and converted from
   Y'CbCr in the same pass, each camera keeping its intrinsics and pose. Its
   `DeviceFrame` feeds the `Buffer` overloads of `allocate_from_depth` and
-  `integrate` (and `ColorFrame::buffer`), so nothing is uploaded and nothing
-  registered. `OrbbecCapture` opened with `raw` hands out `RawFrame`s through
-  `poll_raw`, lenses and the depth-to-colour extrinsic from the factory
-  calibration, and `fuse_orbbec --gpu` fuses them. Its hardware test holds it
+  `integrate` (and `ColorFrame::buffer`, with `coverage_in_alpha`, since a
+  pixel the lens maps outside the picture is a 0 word), so nothing is
+  uploaded and nothing registered. The frame *holds* its device-local
+  buffers, and `prepare` reuses one only once no frame does, so a frame kept
+  past the next is still itself; the whole frame is checked before anything
+  is uploaded, a depth range from 0 included. `OrbbecCapture` opened with
+  `raw` hands out `RawFrame`s through the contract's `poll_raw`, lenses and
+  the depth-to-colour extrinsic from the factory calibration, the planes
+  converted by the matrix and range the stream codes them in, and
+  `fuse_orbbec --gpu` fuses them. Its hardware test holds it
   to the SDK's own undistortion and registration on a still scene (the
   2026-09-28 GPU pre-processing decision).
 
@@ -954,7 +966,10 @@ JPEG/PNG decoder.
 The live counterpart is its own example, not a `fuse_replica` flag:
 **`fuse_orbbec`** (`VR_WITH_ORBBEC`) fuses an `OrbbecCapture` through the same
 `fuse_frame.hpp` and writes a PLY after `--frames` frames; `--rig sync.json`
-fuses the rig as an `OrbbecRig`, posed by `--calibration`.
+fuses the rig as an `OrbbecRig`, posed by `--calibration`. With `--gpu` the
+source serves raw frames, which the loop learns from `raw_frames()`, and each
+is prepared by `GpuFramePrep` and fused through `fuse_device_frame.hpp`, the
+one header that pulls in `sensor/utils`.
 **`codec_replica`** fuses a Replica sequence as `fuse_replica` does, and
 streams the growing grid through the codec: every `--encode-every` frames it
 encodes, then decodes into a player grid built from `read_frame_info` and
@@ -1022,8 +1037,9 @@ allocate.
 one camera (`GpuFramePrep`, the 2026-09-28 GPU pre-processing decision: at 4K
 it takes the host from 15.5 ms of undistortion and registration a frame to
 none, and the run's CPU eightfold down), and what it leaves is raw sets from
-the rig (`frame_conversion.cpp`), device-local outputs and zero-copy input
-from the decoder's hardware frames (`gpu_frame_prep.hpp`, `hevc_decoder.cpp`),
+the rig (`frame_conversion.cpp`), zero-copy input from the decoder's
+hardware frames (`gpu_frame_prep.hpp`, `hevc_decoder.cpp`), both passes in
+one submit (`gpu_frame_prep.cpp`, waiting on a several-kernel dispatch),
 and the texture tier's separate colour camera, which fusing unregistered
 frames makes the texturing path's next need; and processing a rig set's
 frames in parallel,
