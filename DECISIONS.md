@@ -4066,7 +4066,11 @@ optional section. A v1 reader skips it, so that needs no new version.
 
 **Verified** on macOS (Apple M5 Max), in Release and in Debug under ASan +
 UBSan. The full suite passes, 31 of 31 against 29 before. The two new
-host-only tests are `recon_codec_rans` and `recon_codec_bitstream`:
+host-only tests also pass under GCC 16, with identical figures to Clang's.
+That took one fix: the frame fixture drew three random numbers as one
+constructor's arguments, whose evaluation order GCC and Clang choose
+differently, so CI's GCC legs had tested a different frame. The two tests
+are `recon_codec_rans` and `recon_codec_bitstream`:
 - `recon_codec_rans` covers the normalization invariants (including the path
   where bumping rare symbols to 1 overshoots M), round trips from 0 to 100 000
   operations with raw fields 1 to 32 bits wide, the zero cost, the size bound,
