@@ -538,6 +538,20 @@ if(VR_WITH_ORBBEC)
   add_test(NAME recon_sensor_orbbec_capture
            COMMAND recon_sensor_orbbec_capture_test)
 
+  # The GPU pass against the SDK's host path on the camera VR_ORBBEC_TEST_SERIAL
+  # names (H.265, so only with the decoder); unset, it skips.
+  if(TARGET recon_sensor_video)
+    add_executable(recon_sensor_orbbec_gpu_prep_test
+                   sensor_orbbec_gpu_prep_test.cpp)
+    target_link_libraries(
+      recon_sensor_orbbec_gpu_prep_test
+      PRIVATE volumetric_kit::recon_sensor_orbbec
+              volumetric_kit::recon_sensor_utils)
+    vr_target_warnings(recon_sensor_orbbec_gpu_prep_test)
+    add_test(NAME recon_sensor_orbbec_gpu_prep
+             COMMAND recon_sensor_orbbec_gpu_prep_test)
+  endif()
+
   # The rig's sync configuration: the SDK's file layout, its refusals, and the
   # comparison OrbbecRig::open makes against what the cameras read back. No
   # camera; compiles frame_conversion.cpp itself, as the conversion test does.
