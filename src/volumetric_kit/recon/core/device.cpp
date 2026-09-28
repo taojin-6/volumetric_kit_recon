@@ -22,7 +22,7 @@ namespace volumetric_kit::recon {
 namespace {
 
 // Runs `cleanup` when it leaves scope, unless release()d first.
-// submit_single_time uses it to free its one-shot transients on every exit
+// submit_single_time uses it to free or give back its transients on every exit
 // path -- and to deliberately leak them (rather than free objects the GPU may
 // still be using) when the fence wait fails.
 class ScopeGuard {
@@ -273,16 +273,6 @@ Result<Device> Device::create(VkInstance instance, VkPhysicalDevice physical,
   device.compute_family_flags_ = detail::queue_family_flags(physical, *compute);
   VR_VK_TRY(vkCreateDevice(physical, &create_info, nullptr, &device.device_));
   vkGetDeviceQueue(device.device_, *compute, 0, &device.compute_queue_);
-
-  VkCommandPoolCreateInfo pool_info{};
-  pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-  pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-  pool_info.queueFamilyIndex = *compute;
-  VR_VK_TRY(vkCreateCommandPool(device.device_, &pool_info, nullptr,
-                                &device.command_pool_));
-  // The queue is this device's alone, so one mutex guards it and the pool.
-  device.pool_mutex_ = std::make_unique<std::mutex>();
-  device.submit_mutex_ = device.pool_mutex_.get();
   // Only on the caller's word -- see resolve_debug_label_fns. The overload
   // below fills this in from a recon Instance, which is how every recon call
   // site gets its labels; a raw foreign VkInstance defaults to "not enabled"
@@ -386,16 +376,6 @@ Result<Device> Device::adopt(const AdoptedDevice& adopted,
       adopted.physical_device, adopted.compute_family);
   device.compute_queue_ = adopted.compute_queue;
   device.submit_mutex_ = adopted.submit_mutex;
-
-  // The command pool is this wrapper's own resource on the shared device --
-  // made here (and destroyed in destroy()) even though the device is borrowed.
-  VkCommandPoolCreateInfo pool_info{};
-  pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-  pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-  pool_info.queueFamilyIndex = adopted.compute_family;
-  VR_VK_TRY(vkCreateCommandPool(device.device_, &pool_info, nullptr,
-                                &device.command_pool_));
-  device.pool_mutex_ = std::make_unique<std::mutex>();
   // Only on the embedder's word -- see resolve_debug_label_fns. Not required
   // of the embedder, so its absence costs the capture's names and nothing else.
   resolve_debug_label_fns(device.device_, adopted.enabled_debug_utils,
@@ -407,10 +387,10 @@ Result<Device> Device::adopt(const AdoptedDevice& adopted,
 Device::Device(Device&& other) noexcept
     : physical_(other.physical_),
       device_(other.device_),
-      command_pool_(other.command_pool_),
       owns_device_(other.owns_device_),
       submit_mutex_(other.submit_mutex_),
-      pool_mutex_(std::move(other.pool_mutex_)),
+      pools_(std::move(other.pools_)),
+      free_commands_(std::move(other.free_commands_)),
       compute_family_(other.compute_family_),
       compute_family_flags_(other.compute_family_flags_),
       compute_queue_(other.compute_queue_),
@@ -419,9 +399,10 @@ Device::Device(Device&& other) noexcept
       end_label_(other.end_label_) {
   other.physical_ = VK_NULL_HANDLE;
   other.device_ = VK_NULL_HANDLE;
-  other.command_pool_ = VK_NULL_HANDLE;
   other.owns_device_ = true;
   other.submit_mutex_ = nullptr;
+  other.pools_.clear();
+  other.free_commands_.clear();
   other.compute_family_ = 0;
   other.compute_family_flags_ = 0;
   other.compute_queue_ = VK_NULL_HANDLE;
@@ -435,10 +416,10 @@ Device& Device::operator=(Device&& other) noexcept {
     destroy();
     physical_ = other.physical_;
     device_ = other.device_;
-    command_pool_ = other.command_pool_;
     owns_device_ = other.owns_device_;
     submit_mutex_ = other.submit_mutex_;
-    pool_mutex_ = std::move(other.pool_mutex_);
+    pools_ = std::move(other.pools_);
+    free_commands_ = std::move(other.free_commands_);
     compute_family_ = other.compute_family_;
     compute_family_flags_ = other.compute_family_flags_;
     compute_queue_ = other.compute_queue_;
@@ -447,9 +428,10 @@ Device& Device::operator=(Device&& other) noexcept {
     end_label_ = other.end_label_;
     other.physical_ = VK_NULL_HANDLE;
     other.device_ = VK_NULL_HANDLE;
-    other.command_pool_ = VK_NULL_HANDLE;
     other.owns_device_ = true;
     other.submit_mutex_ = nullptr;
+    other.pools_.clear();
+    other.free_commands_.clear();
     other.compute_family_ = 0;
     other.compute_family_flags_ = 0;
     other.compute_queue_ = VK_NULL_HANDLE;
@@ -463,10 +445,12 @@ Device& Device::operator=(Device&& other) noexcept {
 Device::~Device() { destroy(); }
 
 void Device::destroy() noexcept {
-  if (command_pool_ != VK_NULL_HANDLE) {
-    vkDestroyCommandPool(device_, command_pool_, nullptr);
-    command_pool_ = VK_NULL_HANDLE;
+  // Frees each pool's command buffer with it.
+  for (VkCommandPool pool : pools_) {
+    vkDestroyCommandPool(device_, pool, nullptr);
   }
+  pools_.clear();
+  free_commands_.clear();
   if (device_ != VK_NULL_HANDLE) {
     // Only destroy a device this wrapper created; an adopted one belongs to its
     // owner (the shared bootstrap), which outlives us.
@@ -477,7 +461,6 @@ void Device::destroy() noexcept {
   }
   owns_device_ = true;
   submit_mutex_ = nullptr;
-  pool_mutex_.reset();
   physical_ = VK_NULL_HANDLE;
   compute_family_ = 0;
   compute_family_flags_ = 0;
@@ -531,15 +514,51 @@ void Device::end_debug_label(VkCommandBuffer cmd,
 
 VkResult Device::queue_submit(std::uint32_t count, const VkSubmitInfo* submits,
                               VkFence fence) const {
-  // Vulkan requires queue submits be externally synchronized. When the compute
-  // queue is shared with another library (an adopted device), the neutral
-  // bootstrap hands us a mutex to serialize submits on it; a created device
-  // uses its own, so threads submitting on one Device never race.
-  std::unique_lock<std::mutex> lock;
-  if (submit_mutex_ != nullptr) {
-    lock = std::unique_lock<std::mutex>(*submit_mutex_);
-  }
+  // Vulkan requires queue submits be externally synchronized: a queue shared
+  // with another library comes with the embedder's mutex, and one that is not
+  // is guarded by this device's own.
+  const std::lock_guard<std::mutex> lock(*submit_mutex());
   return vkQueueSubmit(compute_queue_, count, submits, fence);
+}
+
+Result<Device::Command> Device::take_command() const {
+  {
+    const std::lock_guard<std::mutex> lock(commands_mutex_);
+    if (!free_commands_.empty()) {
+      const Command command = free_commands_.back();
+      free_commands_.pop_back();
+      return command;
+    }
+  }
+  // Every one made is in use, so make another. The pool is created with
+  // RESET_COMMAND_BUFFER, so beginning its buffer again resets it.
+  VkCommandPoolCreateInfo pool_info{};
+  pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+  pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+  pool_info.queueFamilyIndex = compute_family_;
+  Command command;
+  VR_VK_TRY(vkCreateCommandPool(device_, &pool_info, nullptr, &command.pool));
+  VkCommandBufferAllocateInfo alloc_info{};
+  alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+  alloc_info.commandPool = command.pool;
+  alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+  alloc_info.commandBufferCount = 1;
+  const VkResult allocated =
+      vkAllocateCommandBuffers(device_, &alloc_info, &command.buffer);
+  if (allocated != VK_SUCCESS) {
+    vkDestroyCommandPool(device_, command.pool, nullptr);
+    return vk_error(allocated, "vkAllocateCommandBuffers");
+  }
+  const std::lock_guard<std::mutex> lock(commands_mutex_);
+  pools_.push_back(command.pool);
+  // Room for every command made, so give_back never allocates.
+  free_commands_.reserve(pools_.size());
+  return command;
+}
+
+void Device::give_back(Command command) const noexcept {
+  const std::lock_guard<std::mutex> lock(commands_mutex_);
+  free_commands_.push_back(command);
 }
 
 Status Device::submit_single_time(
@@ -554,32 +573,16 @@ Status Device::submit_single_time(
     const std::function<void(VkCommandBuffer)>& record, GpuTimer* timer,
     const char* label, const char* debug_label, bool* in_flight) const {
   if (in_flight != nullptr) *in_flight = false;
-  // TODO(core): keep one command buffer and fence per submitting object
-  // rather than allocating both per submit: about 0.7 ms a submit on an RTX
-  // 5090, under the device's one lock (the 2026-09-28 residency decision's
-  // step 5b).
-  VkCommandBufferAllocateInfo alloc_info{};
-  alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-  alloc_info.commandPool = command_pool_;
-  alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-  alloc_info.commandBufferCount = 1;
-  VkCommandBuffer cmd = VK_NULL_HANDLE;
-  // The pool is shared by every thread submitting on this device, so it is
-  // locked from the allocate to the end of recording, and again to free.
-  std::unique_lock<std::mutex> pool_lock;
-  if (pool_mutex_ != nullptr) {
-    pool_lock = std::unique_lock<std::mutex>(*pool_mutex_);
-  }
-  VR_VK_TRY(vkAllocateCommandBuffers(device_, &alloc_info, &cmd));
-
-  // Free the command buffer on every exit path below -- including the VR_VK_TRY
-  // early returns (recon has no standalone CommandBuffer type yet; a one-shot
-  // dispatch does not need one) -- under the pool lock, taken again if it was
-  // let go for the wait.
-  ScopeGuard free_cmd([&] {
-    if (pool_mutex_ != nullptr && !pool_lock.owns_lock()) pool_lock.lock();
-    vkFreeCommandBuffers(device_, command_pool_, 1, &cmd);
-  });
+  // TODO(core): keep a fence with each command buffer rather than creating
+  // one per submit, once a tier on a CommandBatch measures what it costs (the
+  // 2026-09-28 residency decision).
+  //
+  // A command buffer no other submit holds, so recording takes no lock. It is
+  // given back on every exit path below -- including the VR_VK_TRY early
+  // returns -- except a failed wait, which leaves it to the device.
+  VR_ASSIGN(const Command command, take_command());
+  ScopeGuard give_back_command([&] { give_back(command); });
+  const VkCommandBuffer cmd = command.buffer;
 
   VkCommandBufferBeginInfo begin{};
   begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -613,8 +616,6 @@ Status Device::submit_single_time(
   }
   end_debug_label(cmd, debug_label);
   VR_VK_TRY(vkEndCommandBuffer(cmd));
-  // Recorded; the submit takes the queue's lock, which may be this one.
-  if (pool_lock.owns_lock()) pool_lock.unlock();
 
   VkFenceCreateInfo fence_info{};
   fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
@@ -630,12 +631,13 @@ Status Device::submit_single_time(
 
   // Block until the GPU signals the fence. If the wait itself fails (device
   // lost / out of memory) the submit may still be pending, so the command
-  // buffer and fence must NOT be freed -- disarm the guards and leak them
-  // rather than free objects the GPU could still touch (a use-after-free).
+  // buffer must NOT be reused nor the fence freed -- disarm the guards and
+  // leak them rather than hand the GPU's objects to another submit (a
+  // use-after-free). destroy() still frees the command's pool.
   const VkResult waited =
       vkWaitForFences(device_, 1, &fence, VK_TRUE, UINT64_MAX);
   if (waited != VK_SUCCESS) {
-    free_cmd.release();
+    give_back_command.release();
     destroy_fence.release();
     if (in_flight != nullptr) *in_flight = true;
     // The leaked command buffer still carries this span's `vkCmdResetQueryPool`
