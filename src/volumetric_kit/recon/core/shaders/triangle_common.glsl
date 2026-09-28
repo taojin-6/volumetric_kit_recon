@@ -2,8 +2,8 @@
 // Copyright (c) 2026 Tao Jin
 
 // Closest-point-on-triangle, the one geometric primitive the mesh-driven
-// passes share: `volume`'s hash_allocate_triangles.comp prunes candidate blocks
-// with it, and the mesh-to-SDF integrators evaluate the distance field itself
+// passes share: `volume`'s triangle_candidates.glsl prunes candidate blocks
+// with it, and tsdf's mesh_integrate.comp evaluates the distance field itself
 // with it. It lives in `core` for the same reason core/math/vector_types.hpp
 // does -- it is math vocabulary with no tier's concepts in it (no hash table,
 // no grid, no camera) -- and a second copy would compile clean, pass spirv-val,
@@ -17,16 +17,30 @@
 #ifndef VR_TRIANGLE_COMMON_GLSL
 #define VR_TRIANGLE_COMMON_GLSL
 
-// The closest point to `p` on triangle (a, b, c).
+// Which feature of triangle (a, b, c) a closest point lies on: a vertex, an
+// edge, or the face interior. The signed mesh-to-SDF pass signs a voxel with
+// the pseudonormal of THIS feature (Baerentzen & Aanaes 2005), and the edge
+// numbering is the one its per-triangle edge table uses: edge k runs from
+// corner k to corner (k + 1) % 3.
+const uint kVrFeatureVertexA = 0u;
+const uint kVrFeatureVertexB = 1u;
+const uint kVrFeatureVertexC = 2u;
+const uint kVrFeatureEdgeAB = 3u;  // edge 0
+const uint kVrFeatureEdgeBC = 4u;  // edge 1
+const uint kVrFeatureEdgeCA = 5u;  // edge 2
+const uint kVrFeatureFace = 6u;
+
+// The closest point to `p` on triangle (a, b, c), and the feature it lies on.
 //
 // Each of the three edge branches divides by a squared edge length -- d1-d3 is
 // |ab|^2, d2-d6 is |ac|^2, and (d4-d3)+(d5-d6) is |bc|^2 -- so every denominator
 // is non-zero for a triangle of non-zero area, and a degenerate one is the
-// caller's to exclude (hash_allocate_triangles.comp's host side drops zero-area
+// caller's to exclude (volume::triangle_candidate_offsets drops zero-area
 // triangles before they reach a work item). The interior branch guards its own
 // denominator anyway, since that one is a sum of signed barycentric areas and
 // can cancel.
-vec3 vrClosestPointOnTriangle(vec3 p, vec3 a, vec3 b, vec3 c) {
+vec3 vrClosestPointOnTriangleFeature(vec3 p, vec3 a, vec3 b, vec3 c,
+                                     out uint feature) {
   vec3 ab = b - a;
   vec3 ac = c - a;
   vec3 ap = p - a;
@@ -34,6 +48,7 @@ vec3 vrClosestPointOnTriangle(vec3 p, vec3 a, vec3 b, vec3 c) {
   float d1 = dot(ab, ap);
   float d2 = dot(ac, ap);
   if (d1 <= 0.0 && d2 <= 0.0) {
+    feature = kVrFeatureVertexA;
     return a;  // vertex region A
   }
 
@@ -41,11 +56,13 @@ vec3 vrClosestPointOnTriangle(vec3 p, vec3 a, vec3 b, vec3 c) {
   float d3 = dot(ab, bp);
   float d4 = dot(ac, bp);
   if (d3 >= 0.0 && d4 <= d3) {
+    feature = kVrFeatureVertexB;
     return b;  // vertex region B
   }
 
   float vc = d1 * d4 - d3 * d2;
   if (vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0) {
+    feature = kVrFeatureEdgeAB;
     return a + ab * (d1 / (d1 - d3));  // edge region AB
   }
 
@@ -53,22 +70,34 @@ vec3 vrClosestPointOnTriangle(vec3 p, vec3 a, vec3 b, vec3 c) {
   float d5 = dot(ab, cp);
   float d6 = dot(ac, cp);
   if (d6 >= 0.0 && d5 <= d6) {
+    feature = kVrFeatureVertexC;
     return c;  // vertex region C
   }
 
   float vb = d5 * d2 - d1 * d6;
   if (vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0) {
+    feature = kVrFeatureEdgeCA;
     return a + ac * (d2 / (d2 - d6));  // edge region AC
   }
 
   float va = d3 * d6 - d5 * d4;
   if (va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0) {
+    feature = kVrFeatureEdgeBC;
     return b + (c - b) * ((d4 - d3) / ((d4 - d3) + (d5 - d6)));  // edge BC
   }
 
   float sum = va + vb + vc;
   float denom = (sum > 1e-12) ? (1.0 / sum) : 0.0;
+  feature = kVrFeatureFace;
   return a + ab * (vb * denom) + ac * (vc * denom);  // face interior
+}
+
+// The closest point to `p` on triangle (a, b, c), for a caller that does not
+// need the feature. The same arithmetic, so a block the allocation prune keeps
+// and a voxel the integrator measures see one closest point, not two.
+vec3 vrClosestPointOnTriangle(vec3 p, vec3 a, vec3 b, vec3 c) {
+  uint feature;
+  return vrClosestPointOnTriangleFeature(p, a, b, c, feature);
 }
 
 // Distance from `p` to triangle (a, b, c), with the closest point itself in
