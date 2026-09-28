@@ -47,6 +47,8 @@
 #include "volumetric_kit/recon/volume/voxel_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
 
+#include "grid_readback.hpp"
+
 namespace vr = volumetric_kit::recon;
 namespace vol = volumetric_kit::recon::volume;
 namespace ts = volumetric_kit::recon::tsdf;
@@ -172,21 +174,22 @@ std::vector<vol::BlockIndex> active_blocks(vol::VoxelBlockGrid& grid) {
   return a.ok() ? std::move(a).value() : std::vector<vol::BlockIndex>{};
 }
 
-float* attr(vol::VoxelBlockGrid& grid, const char* name) {
-  return static_cast<float*>(
-      const_cast<void*>(grid.attribute(name).value().buffer->mapped()));
-}
+// The device the grid lives on, for attr().
+const vr::Device* g_device = nullptr;
+vr::Allocator* g_allocator = nullptr;
 
-std::size_t attr_count(vol::VoxelBlockGrid& grid, const char* name) {
-  return static_cast<std::size_t>(grid.attribute(name).value().element_count);
+// A host copy of one attribute.
+std::vector<float> attr(vol::VoxelBlockGrid& grid, const char* name) {
+  return vr_test::read_attribute<float>(*g_device, *g_allocator, grid, name)
+      .value();
 }
 
 // Every tsdf + weight value, so a refusal can be shown to have written none.
 std::vector<float> snapshot(vol::VoxelBlockGrid& grid) {
   std::vector<float> out;
   for (const char* name : {"tsdf", "weight"}) {
-    const float* p = attr(grid, name);
-    out.insert(out.end(), p, p + attr_count(grid, name));
+    const std::vector<float> p = attr(grid, name);
+    out.insert(out.end(), p.begin(), p.end());
   }
   return out;
 }
@@ -195,13 +198,14 @@ std::vector<float> snapshot(vol::VoxelBlockGrid& grid) {
 // different slot in each grid, so bytes are compared block by block.
 std::map<Coord, std::vector<float>> by_coord(vol::VoxelBlockGrid& grid) {
   std::map<Coord, std::vector<float>> out;
-  const float* tsdf = attr(grid, "tsdf");
-  const float* weight = attr(grid, "weight");
+  const std::vector<float> tsdf = attr(grid, "tsdf");
+  const std::vector<float> weight = attr(grid, "weight");
   const int vpb = grid.grid().voxels_per_block;
   for (const vol::BlockIndex& b : active_blocks(grid)) {
     std::vector<float>& vals = out[{b.coord.x, b.coord.y, b.coord.z}];
-    vals.assign(tsdf + b.ptr, tsdf + b.ptr + vpb);
-    vals.insert(vals.end(), weight + b.ptr, weight + b.ptr + vpb);
+    vals.assign(tsdf.begin() + b.ptr, tsdf.begin() + b.ptr + vpb);
+    vals.insert(vals.end(), weight.begin() + b.ptr,
+                weight.begin() + b.ptr + vpb);
   }
   return out;
 }
@@ -219,8 +223,8 @@ template <class F>
 int verify(vol::VoxelBlockGrid& grid, const char* what, F expect,
            int* observed_count = nullptr) {
   const vol::VoxelGridParams& g = grid.grid();
-  const float* tsdf = attr(grid, "tsdf");
-  const float* weight = attr(grid, "weight");
+  const std::vector<float> tsdf = attr(grid, "tsdf");
+  const std::vector<float> weight = attr(grid, "weight");
   int observed = 0;
   for (const vol::BlockIndex& b : active_blocks(grid)) {
     const vr::Vec3i base = vol::block_to_voxel(b.coord, g);
@@ -340,6 +344,8 @@ int main() {
       vr::Allocator::create(instance.value().handle(), device);
   CHECK(allocator_r.ok());
   vr::Allocator& allocator = allocator_r.value();
+  g_device = &device;
+  g_allocator = &allocator;
 
   // 10 mm voxels in 8-voxel blocks, a 40 mm (4-voxel) band: coarse enough that
   // the brute-force reference stays quick, with a band several voxels deep.
@@ -566,9 +572,16 @@ int main() {
   std::int32_t far_ptr = -1;
   for (const vol::BlockIndex& b : active_blocks(grid)) far_ptr = b.ptr;
   CHECK(far_ptr >= 0);
-  for (int k = 0; k < gp.voxels_per_block; ++k) {
-    attr(grid, "tsdf")[far_ptr + k] = 7.0f;
-    attr(grid, "weight")[far_ptr + k] = 7.0f;
+  {
+    std::vector<float> tsdf = attr(grid, "tsdf");
+    std::vector<float> weight = attr(grid, "weight");
+    for (int k = 0; k < gp.voxels_per_block; ++k) {
+      tsdf[far_ptr + k] = 7.0f;
+      weight[far_ptr + k] = 7.0f;
+    }
+    CHECK(vr_test::write_attribute(device, allocator, grid, "tsdf", tsdf).ok());
+    CHECK(vr_test::write_attribute(device, allocator, grid, "weight", weight)
+              .ok());
   }
   CHECK(grid.map()
             .allocate_from_triangles(tet.v.data(), tet.vertex_count(),
@@ -579,9 +592,13 @@ int main() {
                       tet.triangle_count(), kSigned);
   CHECK(beside.ok());
   CHECK(beside.value().blocks == active_blocks(grid).size() - 1);
-  for (int k = 0; k < gp.voxels_per_block; ++k) {
-    CHECK(attr(grid, "tsdf")[far_ptr + k] == 7.0f);
-    CHECK(attr(grid, "weight")[far_ptr + k] == 7.0f);
+  {
+    const std::vector<float> tsdf = attr(grid, "tsdf");
+    const std::vector<float> weight = attr(grid, "weight");
+    for (int k = 0; k < gp.voxels_per_block; ++k) {
+      CHECK(tsdf[far_ptr + k] == 7.0f);
+      CHECK(weight[far_ptr + k] == 7.0f);
+    }
   }
 
   // ---- 9. Refusals, each before the grid is written ---------------------

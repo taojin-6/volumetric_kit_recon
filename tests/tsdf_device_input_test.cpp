@@ -30,6 +30,8 @@
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
 
+#include "grid_readback.hpp"
+
 namespace vr = volumetric_kit::recon;
 namespace vol = volumetric_kit::recon::volume;
 namespace tsdf = volumetric_kit::recon::tsdf;
@@ -82,6 +84,10 @@ vr::Result<std::map<Coord, std::int32_t>> blocks_of(vol::VoxelBlockGrid& g) {
   return out;
 }
 
+// The device the grids live on, for the helpers that read them back.
+const vr::Device* g_device = nullptr;
+vr::Allocator* g_allocator = nullptr;
+
 // The two grids' blocks name the same coordinates and hold the same weight in
 // every voxel, and the same tsdf and colour in every observed one (the rest
 // were never written). A slot can differ: allocation order is the GPU's.
@@ -92,15 +98,16 @@ int check_same(vol::VoxelBlockGrid& a, vol::VoxelBlockGrid& b) {
   CHECK(!ba.value().empty());
   CHECK(ba.value().size() == bb.value().size());
   const auto view = [](vol::VoxelBlockGrid& g, const char* name) {
-    return static_cast<const std::uint32_t*>(
-        g.attribute(name).value().buffer->mapped());
+    return vr_test::read_attribute<std::uint32_t>(*g_device, *g_allocator, g,
+                                                  name)
+        .value();
   };
-  const std::uint32_t* wa = view(a, "weight");
-  const std::uint32_t* wb = view(b, "weight");
-  const std::uint32_t* ta = view(a, "tsdf");
-  const std::uint32_t* tb = view(b, "tsdf");
-  const std::uint32_t* ca = view(a, "color");
-  const std::uint32_t* cb = view(b, "color");
+  const std::vector<std::uint32_t> wa = view(a, "weight");
+  const std::vector<std::uint32_t> wb = view(b, "weight");
+  const std::vector<std::uint32_t> ta = view(a, "tsdf");
+  const std::vector<std::uint32_t> tb = view(b, "tsdf");
+  const std::vector<std::uint32_t> ca = view(a, "color");
+  const std::vector<std::uint32_t> cb = view(b, "color");
   const std::size_t voxels = grid_params().voxels_per_block;
   std::size_t observed = 0;
   for (const auto& [coord, ptr] : ba.value()) {
@@ -150,10 +157,12 @@ struct ColorCounts {
 vr::Result<ColorCounts> color_counts(vol::VoxelBlockGrid& g) {
   VR_ASSIGN(const std::vector<vol::BlockIndex> active,
             g.map().compact_active_blocks());
-  const auto* weight =
-      static_cast<const float*>(g.attribute("weight").value().buffer->mapped());
-  const auto* color = static_cast<const std::uint32_t*>(
-      g.attribute("color").value().buffer->mapped());
+  VR_ASSIGN(
+      const std::vector<float> weight,
+      vr_test::read_attribute<float>(*g_device, *g_allocator, g, "weight"));
+  VR_ASSIGN(const std::vector<std::uint32_t> color,
+            vr_test::read_attribute<std::uint32_t>(*g_device, *g_allocator, g,
+                                                   "color"));
   ColorCounts out;
   for (const vol::BlockIndex& b : active) {
     for (std::int32_t k = 0; k < grid_params().voxels_per_block; ++k) {
@@ -235,6 +244,8 @@ int main() {
   CHECK(allocator.ok());
   vr::Device& dev = device.value();
   vr::Allocator& alloc = allocator.value();
+  g_device = &dev;
+  g_allocator = &alloc;
 
   // A tilted, rippled surface 0.6-0.8 m away with a colour gradient over it,
   // so allocation and fusion both vary across the image.

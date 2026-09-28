@@ -5851,8 +5851,8 @@ on the 5090: MoltenVK orders the same work without them. So CI's NVIDIA legs
 are what hold the barriers, the ones now left out between independent
 transfers included.
 
-**Open.** No tier uses the batch yet. The review behind this entry ranked what
-moves next, by what the measurement says it costs on the 5090:
+**Open.** The review behind this entry ranked what moves, by what the
+measurement says it costs on the 5090:
 
 1. `volume`: the hash table, its counters and the voxel arrays resident, with
    GPU fill and copy for create, clear, resize and remove, and the compacted
@@ -5866,6 +5866,24 @@ moves next, by what the measurement says it costs on the 5090:
    staging, then NVDEC to Vulkan device to device.
 6. The examples.
 7. `codec`: coefficients read back as filtered int16.
+
+**Step 1, `volume`, has landed** but for the compacted list, which still
+reaches the host and goes with step 2's indirect dispatch. Each call is one
+batch per round: parameters inline, the tally and the heap counter read back.
+`load_factor()` reads a host copy of that counter, so it still costs no
+dispatch. `resize` rebuilds the heap on the host and uploads it, a
+`TODO(volume)`. On the 5090, room0 as above, per fused frame against main:
+
+| | main | resident |
+|---|---|---|
+| `integrate`, host / device | 17.6 / 14.6 ms | 7.8 / 5.4 ms |
+| `allocate`, host / device | 4.1 / 2.6 ms | 1.3 / 0.35 ms |
+| extract dispatch | 54 ms | 69 ms |
+| fused fps | 43 | 91 |
+
+That is the A/B's "hash + voxels in VRAM" column. The mesh is the same 330 389
+triangles. The extract dispatch is slower, as it was in the A/B, and waits on
+step 3's arena.
 
 `submit_single_time` still allocates a command buffer and a fence per
 submit; reusing them is a `TODO(core)` for when a tier measures it.

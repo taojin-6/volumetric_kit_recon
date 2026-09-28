@@ -40,6 +40,8 @@
 #include "volumetric_kit/recon/volume/hash_types.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 
+#include "grid_readback.hpp"
+
 namespace vr = volumetric_kit::recon;
 namespace vol = volumetric_kit::recon::volume;
 namespace mesh = volumetric_kit::recon::mesh;
@@ -93,6 +95,10 @@ vol::VoxelGridParams sphere_grid_params() {
 // sphere extract left held.
 enum class Field { kSphere, kDense };
 
+// The device the grids live on, for fill_grid.
+const vr::Device* g_device = nullptr;
+vr::Allocator* g_allocator = nullptr;
+
 // Allocate every block of the cube and write @p field (weight 1) into each
 // voxel, addressed by the compacted BlockIndex::ptr + local index.
 bool fill_grid(vol::VoxelBlockGrid& grid, Field field = Field::kSphere) {
@@ -113,11 +119,13 @@ bool fill_grid(vol::VoxelBlockGrid& grid, Field field = Field::kSphere) {
       grid.map().compact_active_blocks();
   if (!active) return false;
 
-  vr::Result<vol::AttributeView> tsdf = grid.attribute("tsdf");
-  vr::Result<vol::AttributeView> weight = grid.attribute("weight");
+  auto tsdf =
+      vr_test::read_attribute<float>(*g_device, *g_allocator, grid, "tsdf");
+  auto weight =
+      vr_test::read_attribute<float>(*g_device, *g_allocator, grid, "weight");
   if (!tsdf || !weight) return false;
-  auto* tsdf_data = static_cast<float*>(tsdf.value().buffer->mapped());
-  auto* weight_data = static_cast<float*>(weight.value().buffer->mapped());
+  float* tsdf_data = tsdf.value().data();
+  float* weight_data = weight.value().data();
 
   for (const vol::BlockIndex& block : active.value()) {
     for (int lz = 0; lz < kBlock; ++lz) {
@@ -141,7 +149,12 @@ bool fill_grid(vol::VoxelBlockGrid& grid, Field field = Field::kSphere) {
       }
     }
   }
-  return true;
+  return vr_test::write_attribute(*g_device, *g_allocator, grid, "tsdf",
+                                  tsdf.value())
+             .ok() &&
+         vr_test::write_attribute(*g_device, *g_allocator, grid, "weight",
+                                  weight.value())
+             .ok();
 }
 
 }  // namespace
@@ -163,6 +176,8 @@ int main() {
   vr::Result<vr::Allocator> allocator =
       vr::Allocator::create(instance.value().handle(), device.value());
   CHECK(allocator.ok());
+  g_device = &device.value();
+  g_allocator = &allocator.value();
   vr::Result<mesh::MarchingCubes> extractor_result =
       mesh::MarchingCubes::create(device.value(), allocator.value());
   CHECK(extractor_result.ok());

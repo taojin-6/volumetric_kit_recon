@@ -3,9 +3,8 @@
 
 #pragma once
 
-// A device-local buffer's contents on the host, for a test, staged through a
-// CommandBatch. The source needs TRANSFER_SRC usage, which GpuFramePrep's
-// outputs carry for this.
+// A device-local buffer's contents on the host and back, for a test, through a
+// CommandBatch.
 
 #include <cstddef>
 #include <vector>
@@ -20,7 +19,7 @@ namespace vr_test {
 
 namespace vr = volumetric_kit::recon;
 
-// The first `count` elements of `buffer`.
+// The first `count` elements of `buffer`, which needs TRANSFER_SRC usage.
 template <typename T>
 vr::Result<std::vector<T>> read_back(const vr::Device& device,
                                      vr::Allocator& allocator,
@@ -32,6 +31,16 @@ vr::Result<std::vector<T>> read_back(const vr::Device& device,
       batch.readback(buffer, 0, VkDeviceSize(count) * sizeof(T), out.data()));
   VR_TRY(batch.submit());
   return out;
+}
+
+// Write `data` over the start of `buffer`, which needs TRANSFER_DST usage.
+template <typename T>
+vr::Status write_back(const vr::Device& device, vr::Allocator& allocator,
+                      const vr::Buffer& buffer, const std::vector<T>& data) {
+  vr::CommandBatch batch(device, allocator);
+  VR_TRY(batch.upload(buffer, 0, data.data(),
+                      VkDeviceSize(data.size()) * sizeof(T)));
+  return batch.submit();
 }
 
 }  // namespace vr_test

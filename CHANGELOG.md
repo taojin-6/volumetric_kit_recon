@@ -29,6 +29,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `volume`: **the hash map's buffers and the grid's attribute arrays are
+  device-local**, reached through a `CommandBatch`: `create`, `clear` and
+  `remove` zero on the device, `resize` copies there, and each call reads back
+  only its counts. `AttributeView::buffer` is no longer mapped; a test reads
+  and writes an attribute through `tests/grid_readback.hpp`. `load_factor()`
+  reads a host copy of the heap counter that every allocating or removing
+  round reads back, so it still costs no dispatch.
 - `core`: **`device_storage_buffer` adds `TRANSFER_SRC | TRANSFER_DST`** and
   takes extra usage and queue families, as `storage_buffer` does, so a
   `CommandBatch` can fill, copy and stage through it; `GpuFramePrep`'s
