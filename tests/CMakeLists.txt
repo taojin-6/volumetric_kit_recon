@@ -204,6 +204,16 @@ target_link_libraries(recon_texture_projective_test
 vr_target_warnings(recon_texture_projective_test)
 add_test(NAME recon_texture_projective COMMAND recon_texture_projective_test)
 
+# Several views into an atlas, on a synthetic scene: each triangle takes the
+# view facing it most squarely among those that see it whole, inside that view's
+# tile; the atlas layout and packing; the refusals. Skips where no device is
+# present.
+add_executable(recon_texture_multiview_test texture_multiview_test.cpp)
+target_link_libraries(recon_texture_multiview_test
+                      PRIVATE volumetric_kit::recon_texture Vulkan::Vulkan)
+vr_target_warnings(recon_texture_multiview_test)
+add_test(NAME recon_texture_multiview COMMAND recon_texture_multiview_test)
+
 # mesh + texture composed: the device-resident handoff (extract_device ->
 # texture -> download) must equal the host path vertex for vertex. Links both
 # tiers, since it is the seam between them that is under test. Skips where no

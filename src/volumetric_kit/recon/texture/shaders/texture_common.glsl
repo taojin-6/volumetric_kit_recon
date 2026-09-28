@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Tao Jin
 
-// Shared definitions for the projective-texturing compute kernel: the device
-// struct layouts (scalar block layout, byte-identical to the host POD structs),
-// the pinhole projection, and the push-constant block. #included by
-// texture_score.comp.
+// Shared definitions for the projective-texturing compute kernels: the device
+// struct layouts (scalar block layout, byte-identical to the host POD structs)
+// and the pinhole projection. #included by texture_score.comp (one camera, per
+// vertex) and texture_multiview.comp (several, per triangle), each of which
+// declares its own push-constant block.
 //
 // DepthCameraParams mirrors DepthCameraParams byte-for-byte (the same
 // scalar-layout camera the volume/tsdf kernels use); Vertex mirrors
@@ -110,7 +111,8 @@ bool project_to_image(DepthCameraParams c, vec3 world, out vec2 px,
   return !isnan(px.x) && !isnan(px.y);
 }
 
-layout(push_constant, scalar) uniform PushConstants {
-  uint num_vertices;          // vertices[] length; bounds this dispatch
-  float occlusion_threshold;  // max |projected depth - sensor depth|, metres
-} pc;
+// A world point in camera space: R^T (world - t), the arithmetic
+// project_to_image does before its divide.
+vec3 world_to_camera(DepthCameraParams c, vec3 world) {
+  return transpose(mat3(c.cam_to_world)) * (world - c.cam_to_world[3].xyz);
+}

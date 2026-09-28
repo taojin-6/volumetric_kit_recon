@@ -57,6 +57,11 @@
 
 layout(local_size_x = 256) in;
 
+layout(push_constant, scalar) uniform PushConstants {
+  uint num_vertices;          // vertices[] length; bounds this dispatch
+  float occlusion_threshold;  // max |projected depth - sensor depth|, metres
+} pc;
+
 // No Indices binding: this dispatch never addresses a vertex through an index,
 // which is also why it needs no num_vertices bound on that addressing (the
 // malformed-mesh guard the per-triangle version carried) -- the only index it

@@ -9,6 +9,7 @@
 ///        unoccluded (the rest fall back to per-vertex color).
 
 #include <cstdint>
+#include <vector>
 
 #include "volumetric_kit/recon/core/buffer.hpp"
 #include "volumetric_kit/recon/core/camera_params.hpp"
@@ -20,6 +21,7 @@
 #include "volumetric_kit/recon/mesh/device_mesh.hpp"
 #include "volumetric_kit/recon/mesh/mesh.hpp"
 #include "volumetric_kit/recon/texture/export.hpp"
+#include "volumetric_kit/recon/texture/texture_atlas.hpp"
 
 namespace volumetric_kit::recon {
 class Device;
@@ -101,12 +103,16 @@ namespace volumetric_kit::recon::texture {
 /// 256x192 depth registered to a 1920x1440 capture -- is therefore textured at
 /// full colour resolution with no rescale and no correction here.
 ///
+/// **Several views** (the @ref TextureView overloads) texture from an atlas of
+/// their images side by side (`texture_atlas.hpp`), choosing a view per
+/// **triangle**: a triangle whose vertices took different views would
+/// interpolate across the atlas between two tiles, which no per-vertex
+/// encoding can prevent. So that path needs an unshared mesh, where each
+/// triangle owns its three vertices, and refuses a shared one; see those
+/// overloads for how a view is chosen.
+///
 /// The separate-colour-camera path the TSDF tier models (`ColorCameraParams`)
-/// is a later slice, as is multi-keyframe selection (best of several views, a
-/// packed atlas). That one needs a per-*primitive* camera id rather than the
-/// winner-take-all vertex arbitration the prior engine used: a triangle whose
-/// vertices index different sub-rects of a pack cannot be expressed per vertex
-/// under any encoding, including this one's.
+/// is a later slice.
 ///
 /// @warning The @ref Device and @ref Allocator passed to @ref create must
 ///          outlive this object; it stores references to them.
@@ -203,6 +209,52 @@ class VR_TEXTURE_API ProjectiveTexturer {
                  float occlusion_threshold = 0.02f,
                  StageMetrics* metrics = nullptr);
 
+  /// @brief Texture @p mesh from several posed views, each triangle from the
+  ///        one that sees it best, into an atlas of their images.
+  ///
+  /// One thread per triangle. A view qualifies when all three of the
+  /// triangle's vertices are in front of it, inside its image and unoccluded
+  /// (the same test as the single-camera pass). Among those, the one facing
+  /// the triangle most squarely wins: the score is |cos| of the angle between
+  /// the triangle's normal and the view's ray to its centroid, less 0.01 per
+  /// metre of the smallest depth disagreement, as in the prior engine; the
+  /// first view wins a tie. All three vertices get that view's image
+  /// coordinates, offset into its tile of @p layout and clamped half a texel
+  /// inside the tile, so filtering never reaches a neighbouring view. A
+  /// triangle no view sees whole gets `(-1, -1)` on all three, the vertex
+  /// colour. Every vertex's `uv0` is rewritten.
+  ///
+  /// @param mesh    An unshared mesh from the producer that has not extracted
+  ///                again (`DeviceMesh::is_current`): vertices `3t..3t+2` are
+  ///                triangle `t`'s. A `shares_vertices` mesh is refused.
+  /// @param views   The views, each with its depth registered to its image.
+  /// @param layout  Where each view's image sits (@ref side_by_side_atlas):
+  ///                one tile per view, each its camera's size.
+  /// @param occlusion_threshold  As the single-camera overload.
+  /// @param metrics  Optional; a `"texture"` row, as the single-camera
+  ///                 overload.
+  /// @return OK (an empty mesh is a no-op); @ref Status::Code::InvalidArgument
+  ///         for a moved-from texturer, no views, a null depth, an empty
+  ///         camera, a layout that does not match the views or lies past
+  ///         @ref max_atlas_extent, a shared, superseded or buffer-less mesh,
+  ///         or depth too large for one binding; else a dispatch failure.
+  Status texture(const mesh::DeviceMesh& mesh,
+                 const std::vector<TextureView>& views,
+                 const AtlasLayout& layout, float occlusion_threshold = 0.02f,
+                 StageMetrics* metrics = nullptr);
+
+  /// @brief As the device overload, for a host mesh, uploaded and read back.
+  /// @param mesh  Unshared: `indices` must be `0, 1, 2, ...`, one per vertex.
+  /// @return As the device overload; a mesh whose indices are not that run is
+  ///         InvalidArgument.
+  Status texture(mesh::Mesh& mesh, const std::vector<TextureView>& views,
+                 const AtlasLayout& layout, float occlusion_threshold = 0.02f,
+                 StageMetrics* metrics = nullptr);
+
+  /// @return The largest atlas width or height this device samples
+  ///         (`maxImageDimension2D`), to lay an atlas out within.
+  std::uint32_t max_atlas_extent() const noexcept { return max_atlas_extent_; }
+
   /// @return `true` if this owns a live pipeline (`false` when moved-from).
   bool valid() const noexcept { return kernel_.valid(); }
 
@@ -220,10 +272,14 @@ class VR_TEXTURE_API ProjectiveTexturer {
   // binding; texture() rejects a vertex or depth buffer larger than it. Not the
   // index buffer: the per-vertex dispatch does not bind one.
   std::uint32_t max_storage_buffer_range_ = 0;
+  // Cached maxImageDimension2D, the largest atlas side the renderer can take.
+  std::uint32_t max_atlas_extent_ = 0;
 
   // The view-selection kernel's bundled layout + pipeline + descriptor set, its
   // set allocated from pool_ (which must outlive it) by KernelSetBuilder.
   ComputeKernel kernel_;
+  // The several-view kernel (texture_multiview.comp), from the same pool.
+  ComputeKernel multiview_kernel_;
   // Device spans for the texturing dispatch; idle until a caller asks. See
   // tsdf::TsdfIntegrator's member of the same name.
   GpuTimer gpu_timer_;
@@ -231,6 +287,14 @@ class VR_TEXTURE_API ProjectiveTexturer {
   // Fixed-size camera-params SSBO (DepthCameraParams): bound once at
   // create() and rewritten each texture(), like the tsdf tier's camera SSBO.
   Buffer cam_buf_;
+
+  // Both multi-view overloads, once the vertices are on the device.
+  Status texture_views(VkBuffer vertices, std::uint32_t triangles,
+                       const std::vector<TextureView>& views,
+                       const AtlasLayout& layout, float occlusion_threshold,
+                       GpuStageScope* stage);
+  Status check_views(const std::vector<TextureView>& views,
+                     const AtlasLayout& layout) const;
 };
 
 }  // namespace volumetric_kit::recon::texture
