@@ -541,8 +541,8 @@ arbitrary; it usually isn't.
   An upload of up to 64 KiB, 4-byte aligned, goes inline
   (`vkCmdUpdateBuffer`) and a larger one through a staging buffer the batch
   allocates, which `reserve_upload` hands to a caller packing its own bytes;
-  an upload given a `GpuStageScope` is timed like a dispatch. Readbacks,
-  which are small results, land in one host buffer
+  an upload or copy given a `GpuStageScope` is timed like a dispatch.
+  Readbacks, which are small results, land in one host buffer
   allocated at `submit`, and the staging is freed once the wait is done, or
   leaked if the wait fails. Nothing goes through a mapping, so memory type
   never changes what a batch does, and usage is checked on every buffer, as
@@ -849,7 +849,10 @@ arbitrary; it usually isn't.
   **`OrbbecRig`** reads several synced cameras as one: `poll_set()` hands out
   one set per primary frame, with a missing secondary's slot left empty, and
   `poll()` hands out the same frames one at a time — one of the two per
-  `start()`. A secondary's frame near no primary frame is let go, so a camera
+  `start()`. Opened with `raw`, it hands out `poll_raw_set()` instead, a set
+  of `RawFrame`s, which `sensor/utils`' `prepare_set` prepares with a thread
+  and a `GpuFramePrep` per camera. A secondary's frame near no primary frame
+  is let go, so a camera
   whose clock is off costs its own frames, not the rig's sets. It opens from
   the rig's **sync configuration** (`orbbec_sync_config.hpp`, the SDK's
   `femto_mega_sync.json` layout) and refuses cameras that differ from it
@@ -895,9 +898,11 @@ arbitrary; it usually isn't.
   `integrate` (and `ColorFrame::buffer`, with `coverage_in_alpha`, since a
   pixel the lens maps outside the picture is a 0 word), so nothing is
   uploaded and nothing registered. The raw frame itself goes up through one
-  batch into device-local inputs, its planes packed into one staging buffer
-  whatever their strides, and both passes run in the same submit, the copy
-  timed with them. The frame *holds* its device-local
+  batch into device-local inputs, its planes packed into a staging buffer the
+  pass keeps whatever their strides, and both passes run in the same submit,
+  the copy timed with them. Kept because several passes allocating a 4K
+  frame's staging at once made VMA allocate a block for every set (46 ms a
+  rig set on an RTX 5090, 4.8 ms kept). The frame *holds* its device-local
   buffers, and `prepare` reuses one only once no frame does, so a frame kept
   past the next is still itself; the whole frame is checked before anything
   is uploaded, a depth range from 0 included. `OrbbecCapture` opened with
@@ -1099,25 +1104,26 @@ allocate; 12.6 ms and 10.6 ms resident (the 2026-09-28 residency decision).
 **On `sensor`**, each a `TODO(sensor)`: the GPU pre-processing has landed for
 one camera (`GpuFramePrep`, the 2026-09-28 GPU pre-processing decision: at 4K
 it takes the host from 15.5 ms of undistortion and registration a frame to
-none, and the run's CPU eightfold down), and what it leaves is raw sets from
-the rig (`frame_conversion.cpp`), zero-copy input from the decoder's
+none, and the run's CPU eightfold down) and for the rig's raw sets, and what
+it leaves is zero-copy input from the decoder's
 hardware frames (`gpu_frame_prep.hpp`, `hevc_decoder.cpp`), the frame
 prep's outputs on a ring (`gpu_frame_prep.cpp`), and the
 texture tier's separate colour camera, which fusing unregistered
-frames makes the texturing path's next need; and processing a rig set's
-frames in parallel,
-one thread per camera, rather than the ~11 ms one after another costs for four
-(`orbbec_rig.cpp`). For H.265: the camera's encoder settings, its key-frame
-interval above all, which sets what a lost frame costs (`camera_stream.cpp`),
+frames makes the texturing path's next need; and processing a host rig
+set's frames in parallel, one thread per camera, rather than the ~11 ms one
+after another costs for four (`orbbec_rig.cpp`). For H.265: the camera's
+encoder settings, its key-frame interval above all, which sets what a lost
+frame costs (`camera_stream.cpp`),
 and software decoding at 4K, one thread with little headroom
 (`hevc_color.cpp`). The rig's next consumer is calib's viewer, showing its
 synchronised sets.
 
 **Device residency, the steps after `core`** (the 2026-09-28 residency
 decision ranks them): `volume`, `tsdf`, `mesh` and `texture` are resident,
-and `GpuFramePrep` stages its raw frame in one submit; next the frame prep's
-outputs on a ring, the rig's raw sets, the decoder's planes straight to the
-device, the examples, the codec's coefficients. The benchmark kit that sized
+and `GpuFramePrep` stages its raw frame in one submit, the rig's raw sets a
+thread per camera; next the frame prep's outputs on a ring, the decoder's
+planes straight to the device, the examples, the codec's coefficients. The
+benchmark kit that sized
 them sits on the home box in `~/recon-bench` (a throwaway allocator patch
 behind environment variables); re-measure there after each.
 

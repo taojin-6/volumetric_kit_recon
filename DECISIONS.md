@@ -6123,14 +6123,47 @@ One suggestion was not taken. The two passes share no buffer, yet a barrier
 still separates them, because the batch cannot see a kernel's bindings. The
 depth pass it waits on takes 0.003 ms on the 5090 and 0.008 ms on the Mac.
 
+**Step 5b, the rig's raw sets, has landed.** `OrbbecRig::poll_raw_set`
+hands out a set of `RawFrame`s, views into the SDK's frames, and
+`prepare_set` prepares a set with one `GpuFramePrep` per camera, each on a
+thread of its own and the last on the caller's. Receiving and decoding were
+already a thread per camera. This needed `Device` to take submits from
+several threads, which it now does (its pool and queue locked, never across
+the wait).
+
+The first cut was slower in parallel than in turn on the 5090. Each pass
+had its batch allocate a 13 MB staging buffer per frame, and four at once
+made VMA allocate and free a block for every set, under its lock: 39 ms a
+frame, against 0.003 ms one pass at a time. This is the revisit the "no
+staging arena" bullet above asked for, and it is kept to the one caller that
+needs it: `GpuFramePrep` keeps a staging buffer, grown to the largest frame,
+writes the frame into it, and copies it up in its batch (`copy` now takes the
+stage's scope, as `upload` does). On unified memory the frame is therefore
+held twice for good, not only while the batch runs: about 13 MB more a
+camera at 4K. Measured on four 640x576 depth and 3840x2160 colour frames,
+Release, per set:
+
+| | RTX 5090 | M5 Max |
+|---|---|---|
+| one camera at a time, per-call staging | 7.6 ms | 2.5 ms |
+| `prepare_set`, per-call staging | 46 ms | 1.78 ms |
+| one camera at a time, kept staging | 7.6 ms | 2.4 ms |
+| `prepare_set`, kept staging | 4.8 ms | 1.73 ms |
+
+What is left of the 5090's set is the frame's copy into staging (1.1 ms a
+camera with four at once, against 0.6 ms alone) and `submit_single_time`'s
+fence and command buffer, made and freed per submit under the device's one
+lock (about 0.7 ms a submit). Reusing those is the `TODO(core)` below, now
+measured. The live rig fused 403 frames at 73.7 fps on the Mac, the
+`"frame prep"` row 0.55 ms of host time a frame.
+
 Next are the frame prep's outputs on a ring (a `TODO(sensor)` on
-`ensure_output`), then 5b, the rig's raw sets, then 5c, the decoder's planes
-straight to the device. 5c needs its own design: CUDA or VideoToolbox memory
-shared with Vulkan.
+`ensure_output`), then 5c, the decoder's planes straight to the device. 5c
+needs its own design: CUDA or VideoToolbox memory shared with Vulkan.
 
 `dispatch()` is unchanged. `submit_single_time` still allocates a command
-buffer and a fence per submit; reusing them is a `TODO(core)` for when a tier
-measures it.
+buffer and a fence per submit; reusing them is a `TODO(core)`, measured by
+step 5b at about 0.7 ms a submit on the 5090.
 
 ## Measured lessons
 

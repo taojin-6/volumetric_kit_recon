@@ -555,8 +555,9 @@ Status Device::submit_single_time(
     const char* label, const char* debug_label, bool* in_flight) const {
   if (in_flight != nullptr) *in_flight = false;
   // TODO(core): keep one command buffer and fence per submitting object
-  // rather than allocating both per submit, once a tier on a CommandBatch
-  // measures what they cost (the 2026-09-28 residency decision).
+  // rather than allocating both per submit: about 0.7 ms a submit on an RTX
+  // 5090, under the device's one lock (the 2026-09-28 residency decision's
+  // step 5b).
   VkCommandBufferAllocateInfo alloc_info{};
   alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
   alloc_info.commandPool = command_pool_;
