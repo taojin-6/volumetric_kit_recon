@@ -32,4 +32,12 @@ AVPixelFormat hardware_pixel_format(const AVCodec* codec,
 ///         Unsupported if this FFmpeg lacks it or no device opens.
 Result<BufferRef> open_hardware_device(VideoDecodeBackend backend);
 
+/// @return Whether @p backend's pictures can be cropped at the left and top.
+///         Every one's can but VideoToolbox's: FFmpeg sizes its output at the
+///         display size, which VideoToolbox fills from the coded picture's
+///         top-left corner, and then clears the frame's crop, so a stream
+///         whose display window starts right of or below that corner comes
+///         out showing the wrong region.
+bool crops_left_and_top(VideoDecodeBackend backend) noexcept;
+
 }  // namespace volumetric_kit::recon::sensor::video

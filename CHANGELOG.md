@@ -80,7 +80,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   else software. Tests: `recon_sensor_video_hevc`, which
   `VR_TEST_HEVC_BACKEND` can hold to one back end, and
   `recon_sensor_video_converter`. CI builds it on every leg and requires NVDEC
-  on Linux and VideoToolbox on macOS.
+  on Linux and VideoToolbox on macOS. Pictures carry the stream's transfer and
+  primaries (`DecodedPicture::encoding`), and a display window off the coded
+  corner is cropped on every back end (VideoToolbox, which cannot, refuses
+  such a stream, and `Auto` moves it to software). The installed package holds
+  a consumer to the FFmpeg major versions it was built against.
 - `codec`: **`Encoder` and `Decoder`, the codec's public API** (see the
   2026-09-27 decision). This is the third of its five PRs.
   - `Encoder::encode(grid)` gives one intra frame of every block with an

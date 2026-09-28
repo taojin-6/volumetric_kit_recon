@@ -59,12 +59,14 @@ Result<BufferRef> open_hardware_device(VideoDecodeBackend backend) {
   AVBufferRef* device = nullptr;
   const int err = av_hwdevice_ctx_create(&device, type, nullptr, nullptr, 0);
   if (err < 0) {
-    char text[AV_ERROR_MAX_STRING_SIZE] = {};
-    av_strerror(err, text, sizeof(text));
     return Status::unsupported(std::string(to_string(backend)) +
-                               ": no device opens: " + text);
+                               ": no device opens: " + ffmpeg_message(err));
   }
   return BufferRef(device);
+}
+
+bool crops_left_and_top(VideoDecodeBackend backend) noexcept {
+  return backend != VideoDecodeBackend::VideoToolbox;
 }
 
 }  // namespace volumetric_kit::recon::sensor::video

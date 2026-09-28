@@ -31,11 +31,22 @@ if(@VR_WITH_ORBBEC@)
   find_dependency(OrbbecSDK CONFIG PATH_SUFFIXES lib HINTS "@OrbbecSDK_DIR@")
 endif()
 # recon_sensor_video (VR_WITH_FFMPEG) likewise names PkgConfig::VR_FFMPEG,
-# found through pkg-config as cmake/vr_ffmpeg.cmake does.
+# found through pkg-config and held to the FFmpeg the package was built
+# against: its major versions, no older than its minors
+# (cmake/vr_ffmpeg.cmake says why).
 if(@VR_WITH_FFMPEG@)
   find_dependency(PkgConfig)
-  pkg_check_modules(VR_FFMPEG REQUIRED IMPORTED_TARGET libavcodec>=58.134
-                    libavutil>=56.70 libswscale>=5.9)
+  pkg_check_modules(VR_FFMPEG QUIET IMPORTED_TARGET @VR_FFMPEG_CONSUMER_MODULES@)
+  if(NOT VR_FFMPEG_FOUND)
+    set(volumetric_kit_recon_FOUND FALSE)
+    string(CONCAT volumetric_kit_recon_NOT_FOUND_MESSAGE
+        "volumetric_kit_recon was built against FFmpeg libavcodec "
+        "@VR_FFMPEG_libavcodec_VERSION@, libavutil @VR_FFMPEG_libavutil_VERSION@ "
+        "and libswscale @VR_FFMPEG_libswscale_VERSION@; pkg-config finds no "
+        "FFmpeg of those major versions at those versions or later. Point "
+        "PKG_CONFIG_PATH at that FFmpeg.")
+    return()
+  endif()
 endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/volumetric_kit_reconTargets.cmake")

@@ -702,11 +702,18 @@ arbitrary; it usually isn't.
   decision).
   **`sensor/video`'s `HevcDecoder`** (`VR_WITH_FFMPEG`) decodes H.265 access
   units to host pictures, `Rgb24` or the `Yuv420` planes with their matrix
-  and range. `Auto` takes the first hardware back end that decodes a built-in
-  clip (VideoToolbox; CUDA, Vulkan, VAAPI on Linux), else software. A named
-  back end is never swapped for another. `VR_TEST_HEVC_BACKEND` makes its
-  test require one, which is how CI holds the Linux legs to NVDEC (the
-  2026-09-27 decoder decision).
+  and range, plus the stream's transfer and primaries as an optional
+  `ColorEncoding` (empty when that type cannot name them). `Auto` takes the
+  first hardware back end that decodes a built-in clip (VideoToolbox; CUDA,
+  Vulkan, VAAPI on Linux), probing only as far as it needs, else software.
+  It moves to software when the hardware refuses a stream, and the pictures
+  the hardware still held come out too. A named back end is never swapped for
+  another; it returns `Unsupported` instead. A display window off the coded
+  corner is cropped on the host, except on VideoToolbox, which cannot be
+  (FFmpeg hands its pictures over already cut from the wrong corner), so the
+  decoder reads each SPS there and treats such a stream as refused.
+  `VR_TEST_HEVC_BACKEND` makes its test require one back end, which is how
+  CI holds the Linux legs to NVDEC (the 2026-09-27 decoder decision).
 
 - **`codec`** — three of five PRs in (2026-09-26 lists them). The public API
   is `CodecParams`, **`Encoder`** (`encoder.hpp`) and **`Decoder`** with

@@ -6,7 +6,10 @@
 // A decoded host frame in the layout the caller asked for, through swscale.
 // Codec-neutral. Internal.
 
+#include <optional>
+
 #include "ffmpeg.hpp"
+#include "volumetric_kit/recon/core/color_space.hpp"
 #include "volumetric_kit/recon/core/result.hpp"
 #include "volumetric_kit/recon/sensor/video/decoded_picture.hpp"
 
@@ -16,8 +19,17 @@ namespace volumetric_kit::recon::sensor::video {
 ///         @ref DecodedPicture::matrix describes.
 VideoColorMatrix resolve_matrix(AVColorSpace space, int height) noexcept;
 
+/// @return The encoding @p transfer and @p primaries name, as
+///         @ref DecodedPicture::encoding describes.
+std::optional<ColorEncoding> resolve_encoding(
+    AVColorTransferCharacteristic transfer,
+    AVColorPrimaries primaries) noexcept;
+
 class PictureConverter {
  public:
+  /// @param who What its errors are reported as (the decoder's name).
+  explicit PictureConverter(const char* who) noexcept : who_(who) {}
+
   /// @brief Lay @p frame (in host memory) out as @p layout. Planes point into
   ///        @p frame when it is already 8-bit 4:2:0 and @p layout is Yuv420,
   ///        else into this converter; valid until the next call or until
@@ -43,6 +55,7 @@ class PictureConverter {
     }
   };
 
+  const char* who_;
   SwsContextPtr sws_;
   Setup setup_;
   FramePtr out_;
