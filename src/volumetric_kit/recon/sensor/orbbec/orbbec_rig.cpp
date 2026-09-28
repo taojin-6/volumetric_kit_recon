@@ -131,9 +131,9 @@ Result<OrbbecRig> OrbbecRig::open(const Options& options) {
       for (const RigCameraCalibration& c : options.calibration) {
         if (c.serial == serials[i]) pose = c.cam_to_world;
       }
-      VR_ASSIGN(auto stream,
-                orbbec::CameraStream::create(impl->context, devices[i], options,
-                                             pose, "OrbbecRig"));
+      VR_ASSIGN(auto stream, orbbec::CameraStream::create(
+                                 impl->context, devices[i], options, pose,
+                                 options.configure_sdk_logging, "OrbbecRig"));
       stream->set_queue_depth(kQueueDepth);
       impl->streams.push_back(std::move(stream));
     }

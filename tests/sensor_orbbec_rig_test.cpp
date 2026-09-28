@@ -137,70 +137,84 @@ int main() {
     CHECK(polled.ok() && !polled.value());
   }
 
-  CHECK_OK(rig.start());
-  CHECK_OK(rig.start());  // idempotent
-  int sets = 0, complete = 0;
-  std::uint64_t last_ts = 0, worst_skew_us = 0;
-  double process_ms = 0.0;
-  const auto deadline = std::chrono::steady_clock::now() + kTimeout;
-  while (sets < kSets) {
-    const auto t0 = std::chrono::steady_clock::now();
-    auto polled = rig.poll_set();
-    const auto t1 = std::chrono::steady_clock::now();
-    if (!polled.ok()) {
-      std::fprintf(stderr, "FAIL: poll_set: %s\n",
-                   polled.status().message().c_str());
-      return 1;
+  // Stream kSets sets and hold each to the contract; print and check the
+  // counters. The same for either colour codec.
+  const auto run_sets = [&](sensor::OrbbecRig& rig, const char* label) -> int {
+    CHECK_OK(rig.start());
+    CHECK_OK(rig.start());  // idempotent
+    int sets = 0, complete = 0;
+    std::uint64_t last_ts = 0, worst_skew_us = 0;
+    double process_ms = 0.0;
+    const auto deadline = std::chrono::steady_clock::now() + kTimeout;
+    while (sets < kSets) {
+      const auto t0 = std::chrono::steady_clock::now();
+      auto polled = rig.poll_set();
+      const auto t1 = std::chrono::steady_clock::now();
+      if (!polled.ok()) {
+        std::fprintf(stderr, "FAIL: poll_set: %s\n",
+                     polled.status().message().c_str());
+        return 1;
+      }
+      if (!polled.value()) {
+        CHECK(std::chrono::steady_clock::now() < deadline);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        continue;
+      }
+      const sensor::OrbbecRigFrameSet& set = *polled.value();
+      process_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
+      CHECK(set.frames.size() == n);
+      CHECK(set.count() > 0);
+      CHECK(set.timestamp_ns > last_ts);
+      last_ts = set.timestamp_ns;
+      for (std::size_t i = 0; i < n; ++i) {
+        if (!set.frames[i]) continue;
+        const sensor::CapturedFrame& f = *set.frames[i];
+        CHECK(f.depth != nullptr && f.has_color());
+        // Posed by its own camera.
+        CHECK(near(f.color_camera.cam_to_world, poses[i].cam_to_world));
+        CHECK(near(f.depth_camera.cam_to_world, poses[i].cam_to_world));
+        // On the trigger's clock, within the tolerance.
+        const std::uint64_t skew_us =
+            (f.timestamp_ns > set.timestamp_ns
+                 ? f.timestamp_ns - set.timestamp_ns
+                 : set.timestamp_ns - f.timestamp_ns) /
+            1000;
+        CHECK(skew_us <= options.sync_tolerance_us);
+        worst_skew_us = std::max(worst_skew_us, skew_us);
+      }
+      ++sets;
+      complete += set.complete() ? 1 : 0;
     }
-    if (!polled.value()) {
-      CHECK(std::chrono::steady_clock::now() < deadline);
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
-      continue;
-    }
-    const sensor::OrbbecRigFrameSet& set = *polled.value();
-    process_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
-    CHECK(set.frames.size() == n);
-    CHECK(set.count() > 0);
-    CHECK(set.timestamp_ns > last_ts);
-    last_ts = set.timestamp_ns;
-    for (std::size_t i = 0; i < n; ++i) {
-      if (!set.frames[i]) continue;
-      const sensor::CapturedFrame& f = *set.frames[i];
-      CHECK(f.depth != nullptr && f.has_color());
-      // Posed by its own camera.
-      CHECK(near(f.color_camera.cam_to_world, poses[i].cam_to_world));
-      CHECK(near(f.depth_camera.cam_to_world, poses[i].cam_to_world));
-      // On the trigger's clock, within the tolerance.
-      const std::uint64_t skew_us = (f.timestamp_ns > set.timestamp_ns
-                                         ? f.timestamp_ns - set.timestamp_ns
-                                         : set.timestamp_ns - f.timestamp_ns) /
-                                    1000;
-      CHECK(skew_us <= options.sync_tolerance_us);
-      worst_skew_us = std::max(worst_skew_us, skew_us);
-    }
-    ++sets;
-    complete += set.complete() ? 1 : 0;
-  }
-  const sensor::OrbbecRigStats st = rig.stats();
-  std::printf(
-      "%d sets, %d complete (%.1f%%), worst skew %.2f ms, mean %.2f ms per "
-      "poll_set that handed one out\n",
-      sets, complete, 100.0 * complete / sets, worst_skew_us / 1000.0,
-      process_ms / sets);
-  for (std::size_t i = 0; i < n; ++i) {
-    const sensor::OrbbecCaptureStats& c = st.cameras[i];
+    const sensor::OrbbecRigStats st = rig.stats();
     std::printf(
-        "  [%zu] received %llu delivered %llu dropped %llu failed %llu\n", i,
-        static_cast<unsigned long long>(c.received),
-        static_cast<unsigned long long>(c.delivered),
-        static_cast<unsigned long long>(c.dropped),
-        static_cast<unsigned long long>(c.failed));
-    CHECK(c.delivered + c.dropped + c.failed <= c.received);
-  }
-  CHECK(st.sets == static_cast<std::uint64_t>(sets));
-  CHECK(st.incomplete == static_cast<std::uint64_t>(sets - complete));
-  // Measured on the rig over the cable: ~92% of four-camera triggers complete.
-  CHECK(complete * 10 >= sets * 8);
+        "%s: %d sets, %d complete (%.1f%%), worst skew %.2f ms, mean %.2f ms "
+        "per "
+        "poll_set that handed one out\n",
+        label, sets, complete, 100.0 * complete / sets, worst_skew_us / 1000.0,
+        process_ms / sets);
+    for (std::size_t i = 0; i < n; ++i) {
+      const sensor::OrbbecCaptureStats& c = st.cameras[i];
+      std::printf(
+          "  [%zu] received %llu delivered %llu dropped %llu failed %llu lost "
+          "%llu\n",
+          i, static_cast<unsigned long long>(c.received),
+          static_cast<unsigned long long>(c.delivered),
+          static_cast<unsigned long long>(c.dropped),
+          static_cast<unsigned long long>(c.failed),
+          static_cast<unsigned long long>(c.lost));
+      CHECK(c.delivered + c.dropped + c.failed + c.lost <= c.received);
+      // H.265 loses only colour frames whose depth never came (under 2% on
+      // the rig); gaps costing the stream to its next key frame lost 8-30%.
+      CHECK(c.lost * 20 <= c.received);
+    }
+    CHECK(st.sets == static_cast<std::uint64_t>(sets));
+    CHECK(st.incomplete == static_cast<std::uint64_t>(sets - complete));
+    // Measured on the rig over the cable: ~92% of four-camera triggers
+    // complete.
+    CHECK(complete * 10 >= sets * 8);
+    return 0;
+  };
+  if (run_sets(rig, "MJPEG") != 0) return 1;
 
   // poll() would drop the rest of a set poll_set() is reading through.
   {
@@ -253,6 +267,25 @@ int main() {
   rig = std::move(*alias);  // self-move, laundered past -Wself-move
   CHECK(rig.camera_count() == n);
   rig.stop();
+
+  // The rig again with H.265 colour: the same contract, as complete.
+  {
+    sensor::OrbbecRig closed = std::move(rig);
+  }  // frees the cameras
+  options.color_codec = sensor::OrbbecColorCodec::Hevc;
+  auto hevc_opened = sensor::OrbbecRig::open(options);
+#if VR_TEST_HEVC
+  if (!hevc_opened.ok()) {
+    std::fprintf(stderr, "FAIL: open with H.265 colour: %s\n",
+                 hevc_opened.status().message().c_str());
+    return 1;
+  }
+  sensor::OrbbecRig hevc = std::move(hevc_opened).value();
+  if (run_sets(hevc, "H.265") != 0) return 1;
+  hevc.stop();
+#else
+  CHECK(hevc_opened.status().domain() == vr::Status::Code::Unsupported);
+#endif
 
   std::printf("orbbec rig tests passed\n");
   return 0;

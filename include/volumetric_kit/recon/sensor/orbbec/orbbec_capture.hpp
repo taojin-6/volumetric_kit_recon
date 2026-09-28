@@ -61,6 +61,19 @@ VR_SENSOR_ORBBEC_API bool waits_for_primary(OrbbecSyncMode mode) noexcept;
 ///         `"secondary-synced"`, ...), for logs.
 VR_SENSOR_ORBBEC_API const char* to_string(OrbbecSyncMode mode) noexcept;
 
+/// @brief How the colour stream crosses the wire.
+enum class OrbbecColorCodec {
+  /// Motion JPEG, decoded by the SDK. About 185 Mbit/s at 4K.
+  Mjpeg,
+  /// H.265, about 21 Mbit/s at 720p and at 4K, decoded by
+  /// sensor/video's `HevcDecoder` on a thread per camera. Needs a build with
+  /// VR_WITH_FFMPEG; without one, open refuses it.
+  Hevc,
+};
+
+/// @return A stable lowercase name for @p codec (`"mjpeg"`, `"hevc"`).
+VR_SENSOR_ORBBEC_API const char* to_string(OrbbecColorCodec codec) noexcept;
+
 /// @brief What the camera said about itself when it was opened.
 struct OrbbecDeviceInfo {
   std::string name;              ///< Model, e.g. "Orbbec Femto Mega".
@@ -81,11 +94,15 @@ struct OrbbecCaptureStats {
   /// Pairs replaced by a newer one before any poll took them -- the contract's
   /// "dropped, not queued", counted.
   std::uint64_t dropped = 0;
-  /// Pairs a poll took but could not hand out, skipped or refused. Each pair
-  /// is counted once, so `delivered + dropped + failed <= received`; the
-  /// difference is a pair still pending or discarded by
-  /// @ref OrbbecCapture::stop.
+  /// Pairs a poll took but could not hand out, skipped or refused.
   std::uint64_t failed = 0;
+  /// H.265 pairs whose colour did not decode: after a gap in the stream (a
+  /// frame lost on the network), a decode error or a decoder falling two
+  /// seconds behind, until the next key frame, and before the first. Zero for
+  /// MJPEG. Each pair is counted once, so
+  /// `delivered + dropped + failed + lost <= received`; the difference is a
+  /// pair still pending or discarded by @ref OrbbecCapture::stop.
+  std::uint64_t lost = 0;
 };
 
 /// @brief The streams a camera is opened with -- the same for every camera of
@@ -101,6 +118,9 @@ struct OrbbecStreamOptions {
   std::uint32_t color_height = 720;  ///< See @ref color_width.
   /// Frame rate of both streams; the camera pairs them only at one rate.
   std::uint32_t fps = 30;
+  /// How colour crosses the wire. Either way a frame's colour is the camera's
+  /// sRGB, undistorted.
+  OrbbecColorCodec color_codec = OrbbecColorCodec::Mjpeg;
   /// Reject depth nearer than this (metres); stamped on every frame's depth
   /// camera as the fusion gate.
   float min_depth = 0.25f;

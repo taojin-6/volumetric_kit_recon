@@ -51,6 +51,10 @@ const char* to_string(OrbbecSyncMode mode) noexcept {
   return "other";
 }
 
+const char* to_string(OrbbecColorCodec codec) noexcept {
+  return codec == OrbbecColorCodec::Hevc ? "hevc" : "mjpeg";
+}
+
 struct OrbbecCapture::Impl {
   // Declared first so it is destroyed last: the stream's SDK objects belong
   // to it.
@@ -78,9 +82,10 @@ Result<OrbbecCapture> OrbbecCapture::open(const Options& options) {
     VR_ASSIGN(const auto devices,
               orbbec::discover(*impl->context, serials,
                                options.discovery_timeout_ms, "OrbbecCapture"));
-    VR_ASSIGN(impl->stream, orbbec::CameraStream::create(
-                                impl->context, devices.front(), options,
-                                options.cam_to_world, "OrbbecCapture"));
+    VR_ASSIGN(impl->stream,
+              orbbec::CameraStream::create(
+                  impl->context, devices.front(), options, options.cam_to_world,
+                  options.configure_sdk_logging, "OrbbecCapture"));
   } catch (const std::exception& e) {  // ob::Error is one
     return orbbec::sdk_error("OrbbecCapture", "opening the camera", e);
   }
