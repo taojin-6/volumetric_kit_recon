@@ -78,6 +78,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   write the family's config layout, each camera's OpenCV `pose` turned into
   camera-to-world, its lens fields kept. Test: `recon_sensor_rig_calibration`.
   Parsed with nlohmann/json 3.12.0, a new pinned header-only dependency.
+- `config/`: **the lab rig's sync configuration**, `femto_mega_sync.json`
+  (one primary, three secondaries at 160/320/480 µs), kept valid by
+  `recon_sensor_orbbec_sync_config`.
 - `examples`: **`fuse_orbbec --rig sync.json [--apply-sync]
   [--calibration calib.json]`** fuses the rig; `--serial` with
   `--calibration` poses one camera from the file.

@@ -4231,7 +4231,8 @@ every open. The camera has one secondary mode, and it waits for the trigger:
 started alone for 4 s, the three secondaries delivered one frame between
 them. The SDK answers a read in the same process with what was written, so
 the check after a write proves the write, and the next `open` proves the
-camera.
+camera. The lab rig's file is committed as `config/femto_mega_sync.json`,
+which a test keeps valid; the library never reads `config/` itself.
 
 **Why these numbers.** On the four-camera rig over the 2.5 Gbit/s cable,
 720p colour, 640x576 depth, 30 fps:

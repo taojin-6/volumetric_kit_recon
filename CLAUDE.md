@@ -679,7 +679,9 @@ arbitrary; it usually isn't.
   whose clock is off costs its own frames, not the rig's sets. It opens from
   the rig's **sync configuration** (`orbbec_sync_config.hpp`, the SDK's
   `femto_mega_sync.json` layout) and refuses cameras that differ from it
-  unless `apply_sync_config` writes it. Each camera's pose comes from the
+  unless `apply_sync_config` writes it; the lab rig's is
+  `config/femto_mega_sync.json`, which only the example and tests name. Each
+  camera's pose comes from the
   **calibration file** (`sensor/rig_calibration.hpp`, the family's config
   layout: OpenCV world-to-camera `rvec`/`tvec`). Both classes share the
   internal `CameraStream`. The rig's hardware test opens only the rig

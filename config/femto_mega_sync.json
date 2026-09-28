@@ -1,0 +1,53 @@
+{
+  "master_serial": "CL2A141000N",
+  "devices": [
+  {
+    "sn": "CL2A141000N",
+    "syncConfig": {
+      "syncMode": "OB_MULTI_DEVICE_SYNC_MODE_PRIMARY",
+      "depthDelayUs": 0,
+      "colorDelayUs": 0,
+      "trigger2ImageDelayUs": 0,
+      "triggerOutEnable": true,
+      "triggerOutDelayUs": 0,
+      "framesPerTrigger": 1
+    }
+  },
+  {
+    "sn": "CL2A141006G",
+    "syncConfig": {
+      "syncMode": "OB_MULTI_DEVICE_SYNC_MODE_SECONDARY",
+      "depthDelayUs": 160,
+      "colorDelayUs": 0,
+      "trigger2ImageDelayUs": 0,
+      "triggerOutEnable": true,
+      "triggerOutDelayUs": 0,
+      "framesPerTrigger": 1
+    }
+  },
+  {
+    "sn": "CL2A14100A4",
+    "syncConfig": {
+      "syncMode": "OB_MULTI_DEVICE_SYNC_MODE_SECONDARY",
+      "depthDelayUs": 320,
+      "colorDelayUs": 0,
+      "trigger2ImageDelayUs": 0,
+      "triggerOutEnable": true,
+      "triggerOutDelayUs": 0,
+      "framesPerTrigger": 1
+    }
+  },
+  {
+    "sn": "CL2A141000G",
+    "syncConfig": {
+      "syncMode": "OB_MULTI_DEVICE_SYNC_MODE_SECONDARY",
+      "depthDelayUs": 480,
+      "colorDelayUs": 0,
+      "trigger2ImageDelayUs": 0,
+      "triggerOutEnable": true,
+      "triggerOutDelayUs": 0,
+      "framesPerTrigger": 1
+    }
+  }
+  ]
+}

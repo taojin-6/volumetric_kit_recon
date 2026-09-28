@@ -411,6 +411,10 @@ if(VR_WITH_ORBBEC)
   target_include_directories(
     recon_sensor_orbbec_sync_config_test
     PRIVATE ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec)
+  target_compile_definitions(
+    recon_sensor_orbbec_sync_config_test
+    PRIVATE
+      VR_RIG_SYNC_CONFIG="${PROJECT_SOURCE_DIR}/config/femto_mega_sync.json")
   vr_target_warnings(recon_sensor_orbbec_sync_config_test)
   add_test(NAME recon_sensor_orbbec_sync_config
            COMMAND recon_sensor_orbbec_sync_config_test)
