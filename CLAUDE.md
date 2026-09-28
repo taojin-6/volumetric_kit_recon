@@ -282,6 +282,11 @@ order. Change the decision, its entry there, and this list together.
   Quality measurement is a tier of its own, `eval`, branching off `mesh`:
   mesh-to-mesh accuracy, coverage and F-score, host-side and deterministic,
   and production infrastructure rather than an excluded research harness.
+- [**2026-09-28**](DECISIONS.md#2026-09-28--the-orbbec-driver-streams-colour-as-h265-on-request-every-colour-frame-is-decoded-in-order-on-a-thread-per-camera-ahead-of-the-mailbox-a-lost-frame-is-read-off-the-frame-index-not-the-clock-and-the-femto-megas-stream-is-decoded-as-bt601-full-range-which-it-codes-and-does-not-say) —
+  The Orbbec driver streams colour as H.265 on request: every colour frame is
+  decoded, in order, on a thread per camera ahead of the mailbox; a lost frame
+  is read off the frame index, not the clock; and the Femto Mega's stream is
+  decoded as BT.601 full range, which it codes and does not say.
 
 ## Provenance & salvage policy
 
@@ -716,10 +721,22 @@ arbitrary; it usually isn't.
   internal `CameraStream`. The rig's hardware test opens only the rig
   `VR_ORBBEC_TEST_RIG` names and never writes to it (the 2026-09-27
   decision).
+  `color_codec = Hevc` (`VR_WITH_FFMPEG`) puts H.265 on the wire: each
+  camera's `HevcColorDecoder` decodes every colour frame, in order, ahead of
+  the mailbox, as BT.601 full range unless the stream names its matrix, and
+  posts RGB frames stamped with the RGB mode's profile -- whose calibration
+  `open` holds to be the H.265 mode's, byte for byte -- so everything after
+  is MJPEG's path. The SDK hands over every colour frame, depth or not; a
+  pair without depth is dropped after decoding. A gap in the frame index, or
+  an empty frame, waits for the next key frame, where the decoder is reset;
+  pictures come out in display order, each settling its own pair. All of it
+  is counted in `stats().lost` (the 2026-09-28 decision).
   **`sensor/video`'s `HevcDecoder`** (`VR_WITH_FFMPEG`) decodes H.265 access
   units to host pictures, `Rgb24` or the `Yuv420` planes with their matrix
   and range, plus the stream's transfer and primaries as an optional
-  `ColorEncoding` (empty when that type cannot name them). `Auto` takes the
+  `ColorEncoding` (empty when that type cannot name them).
+  `Options::unlabelled_color` stands in for a stream that names no matrix,
+  and `reset()` restarts a stream after lost access units. `Auto` takes the
   first hardware back end that decodes HEVC (VideoToolbox, asked through
   `VTIsHardwareDecodeSupported`; CUDA, then VAAPI on Linux, each by decoding
   a built-in clip), probing only as far as it needs, else software.
@@ -906,13 +923,16 @@ gauges from VMA heuristics into driver truth. The debug-utils labels that TODO
 sat beside **have landed** (2026-08-30) — on the *kernel* rather than the span,
 which is the correction that entry records.
 
-**On `sensor`**, each a `TODO(sensor)`: HEVC colour from the camera through
-`HevcDecoder` (one decode thread per camera, since no access unit may be
-dropped), and GPU pre-processing that keeps the frame on the device through
-fusion (both in `camera_stream.cpp`), including the decoder's hardware frames
-(`hevc_decoder.cpp`), and processing a rig set's frames in parallel,
+**On `sensor`**, each a `TODO(sensor)`: GPU pre-processing that keeps the
+frame on the device through fusion (`camera_stream.cpp`), including the
+decoder's hardware frames (`hevc_decoder.cpp`) -- which a 4K rig needs, since
+at 4K the host's undistortion, registration and conversion cost ~55 ms a frame
+-- and processing a rig set's frames in parallel,
 one thread per camera, rather than the ~11 ms one after another costs for four
-(`orbbec_rig.cpp`). The rig's next consumer is calib's viewer, showing its
+(`orbbec_rig.cpp`). For H.265: the camera's encoder settings, its key-frame
+interval above all, which sets what a lost frame costs (`camera_stream.cpp`),
+and software decoding at 4K, one thread with little headroom
+(`hevc_color.cpp`). The rig's next consumer is calib's viewer, showing its
 synchronised sets.
 
 **Measure the phases before choosing the optimisation.** Three independent

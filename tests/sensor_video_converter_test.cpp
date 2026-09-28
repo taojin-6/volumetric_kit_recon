@@ -234,6 +234,39 @@ int test_rgb_source_to_yuv420() {
   return 0;
 }
 
+// The unlabelled colour stands in for a frame that declares no matrix --
+// its limited range too, which is how FFmpeg reads a stream that declares
+// neither -- for both the conversion and what the picture reports. A frame
+// that declares one keeps it.
+int test_unlabelled_color() {
+  video::PictureConverter converter("test");
+  auto frame = solid(AV_PIX_FMT_YUV420P, 64, 32, 100, 90, 160);
+  frame->colorspace = AVCOL_SPC_UNSPECIFIED;
+  frame->color_range = AVCOL_RANGE_MPEG;
+  const sensor::VideoColorDescription femto{VideoColorMatrix::Bt601, true};
+  auto rgb = converter.convert(*frame, VideoPixelLayout::Rgb24, femto);
+  CHECK(rgb.ok());
+  CHECK(rgb->matrix == VideoColorMatrix::Bt601 && rgb->full_range);
+  const auto want =
+      yuv_reference::rgb(100, 90, 160, VideoColorMatrix::Bt601, true);
+  const std::uint8_t* px = rgb->plane[0] + 16 * rgb->stride[0] + 3 * 32;
+  for (int k = 0; k < 3; ++k) CHECK(std::abs(px[k] - want[k]) <= 2);
+  auto yuv = converter.convert(*frame, VideoPixelLayout::Yuv420, femto);
+  CHECK(yuv.ok());
+  CHECK(yuv->matrix == VideoColorMatrix::Bt601 && yuv->full_range);
+  CHECK(yuv->plane[0] == frame->data[0]);  // the label changes, not the bytes
+
+  frame->colorspace = AVCOL_SPC_BT709;
+  auto labelled = converter.convert(*frame, VideoPixelLayout::Rgb24, femto);
+  CHECK(labelled.ok());
+  CHECK(labelled->matrix == VideoColorMatrix::Bt709 && !labelled->full_range);
+  const auto as_labelled =
+      yuv_reference::rgb(100, 90, 160, VideoColorMatrix::Bt709, false);
+  px = labelled->plane[0] + 16 * labelled->stride[0] + 3 * 32;
+  for (int k = 0; k < 3; ++k) CHECK(std::abs(px[k] - as_labelled[k]) <= 2);
+  return 0;
+}
+
 int test_size_change() {
   video::PictureConverter converter("test");
   const auto large = solid(AV_PIX_FMT_YUV420P, 64, 32, 100, 90, 160);
@@ -272,6 +305,7 @@ int main() {
   if (test_rgb_follows_matrix_and_range() != 0) return 1;
   if (test_yuv420_keeps_range() != 0) return 1;
   if (test_rgb_source_to_yuv420() != 0) return 1;
+  if (test_unlabelled_color() != 0) return 1;
   if (test_size_change() != 0) return 1;
   if (test_refusals() != 0) return 1;
   std::puts("sensor_video_converter: OK");

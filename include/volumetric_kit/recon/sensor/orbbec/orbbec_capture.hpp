@@ -61,6 +61,19 @@ VR_SENSOR_ORBBEC_API bool waits_for_primary(OrbbecSyncMode mode) noexcept;
 ///         `"secondary-synced"`, ...), for logs.
 VR_SENSOR_ORBBEC_API const char* to_string(OrbbecSyncMode mode) noexcept;
 
+/// @brief How the colour stream crosses the wire.
+enum class OrbbecColorCodec {
+  /// Motion JPEG, decoded by the SDK. About 185 Mbit/s at 4K.
+  Mjpeg,
+  /// H.265, about 21 Mbit/s at 720p and at 4K, decoded by
+  /// sensor/video's `HevcDecoder` on a thread per camera. Needs a build with
+  /// VR_WITH_FFMPEG; without one, open refuses it.
+  Hevc,
+};
+
+/// @return A stable lowercase name for @p codec (`"mjpeg"`, `"hevc"`).
+VR_SENSOR_ORBBEC_API const char* to_string(OrbbecColorCodec codec) noexcept;
+
 /// @brief What the camera said about itself when it was opened.
 struct OrbbecDeviceInfo {
   std::string name;              ///< Model, e.g. "Orbbec Femto Mega".
@@ -73,19 +86,26 @@ struct OrbbecDeviceInfo {
 
 /// @brief Counters a caller reads to see whether it keeps up with the camera.
 struct OrbbecCaptureStats {
-  /// Synchronised depth + colour pairs the camera delivered since @ref
-  /// OrbbecCapture::start.
+  /// Frame sets the camera delivered since @ref OrbbecCapture::start:
+  /// synchronised depth + colour pairs, and for H.265 every colour frame,
+  /// whether or not its depth came (see @ref lost).
   std::uint64_t received = 0;
   /// Pairs handed out by @ref OrbbecCapture::poll.
   std::uint64_t delivered = 0;
   /// Pairs replaced by a newer one before any poll took them -- the contract's
   /// "dropped, not queued", counted.
   std::uint64_t dropped = 0;
-  /// Pairs a poll took but could not hand out, skipped or refused. Each pair
-  /// is counted once, so `delivered + dropped + failed <= received`; the
-  /// difference is a pair still pending or discarded by
-  /// @ref OrbbecCapture::stop.
+  /// Pairs a poll took but could not hand out, skipped or refused.
   std::uint64_t failed = 0;
+  /// H.265 frame sets that will not be handed out: a colour frame that came
+  /// without its depth (decoded, since the frames after it are predicted
+  /// from it, and dropped), and the colour that did not decode -- after a
+  /// gap in the stream (a frame lost on the network, or empty), a decode
+  /// error or a decoder falling two seconds behind, until the next key
+  /// frame, and before the first. Zero for MJPEG. Each is counted once, so
+  /// `delivered + dropped + failed + lost <= received`; the difference is a
+  /// pair still pending or discarded by @ref OrbbecCapture::stop.
+  std::uint64_t lost = 0;
 };
 
 /// @brief The streams a camera is opened with -- the same for every camera of
@@ -101,6 +121,9 @@ struct OrbbecStreamOptions {
   std::uint32_t color_height = 720;  ///< See @ref color_width.
   /// Frame rate of both streams; the camera pairs them only at one rate.
   std::uint32_t fps = 30;
+  /// How colour crosses the wire. Either way a frame's colour is the camera's
+  /// sRGB, undistorted.
+  OrbbecColorCodec color_codec = OrbbecColorCodec::Mjpeg;
   /// Reject depth nearer than this (metres); stamped on every frame's depth
   /// camera as the fusion gate.
   float min_depth = 0.25f;
@@ -152,8 +175,10 @@ class VR_SENSOR_ORBBEC_API OrbbecCapture final : public ICameraCapture {
     /// registered to colour. Identity places the world at the camera.
     Mat4f cam_to_world = Mat4f(1.0f);
     /// Switch off the SDK's log file (it writes `./Log/` at DEBUG by default)
-    /// and route its console sink at WARN. Process-wide: the SDK has one
-    /// logger, so an application configuring it itself turns this off.
+    /// and route its console sink at WARN, at @ref open; for H.265 colour,
+    /// also set FFmpeg's log level to ERROR, at the first @ref start.
+    /// Process-wide: the SDK and FFmpeg have one logger each, so an
+    /// application configuring either itself turns this off.
     bool configure_sdk_logging = true;
   };
 
@@ -174,7 +199,10 @@ class VR_SENSOR_ORBBEC_API OrbbecCapture final : public ICameraCapture {
   ///         - @ref Status::Code::Unsupported if the camera has no depth or
   ///           colour mode matching the options (the modes it offers are
   ///           listed), reports its image mirrored, flipped or rotated, or
-  ///           is in software-triggering mode;
+  ///           is in software-triggering mode; for H.265 colour, if its
+  ///           H.265 mode reports a calibration other than its RGB mode's,
+  ///           or -- before the SDK is touched -- if the build has no
+  ///           decoder (VR_WITH_FFMPEG);
   ///         - @ref Status::Code::IoError for any other SDK failure, with the
   ///           SDK's message.
   static Result<OrbbecCapture> open(const Options& options);
@@ -200,7 +228,10 @@ class VR_SENSOR_ORBBEC_API OrbbecCapture final : public ICameraCapture {
   /// @brief Start both streams. Idempotent: starting a running capture is OK.
   /// @return OK once streaming; @ref Status::Code::InvalidArgument on a
   ///         moved-from capture; @ref Status::Code::IoError if the SDK refuses
-  ///         or the camera has disconnected.
+  ///         or the camera has disconnected. For H.265 colour, whose decoder
+  ///         opens here: @ref Status::Code::Unsupported if FFmpeg has no HEVC
+  ///         decoder, and @ref Status::Code::IoError if it will not open one
+  ///         or its thread will not start.
   Status start() override;
 
   /// @brief Stop both streams and drop the frame the last @ref poll handed

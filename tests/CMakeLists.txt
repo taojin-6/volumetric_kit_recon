@@ -470,6 +470,15 @@ if(VR_WITH_ORBBEC)
                  sensor_orbbec_capture_test.cpp)
   target_link_libraries(recon_sensor_orbbec_capture_test
                         PRIVATE volumetric_kit::recon_sensor_orbbec)
+  # Its H.265 half runs when the driver has the decoder; else it checks the
+  # refusal.
+  if(TARGET recon_sensor_video)
+    target_compile_definitions(recon_sensor_orbbec_capture_test
+                               PRIVATE VR_TEST_HEVC=1)
+  else()
+    target_compile_definitions(recon_sensor_orbbec_capture_test
+                               PRIVATE VR_TEST_HEVC=0)
+  endif()
   vr_target_warnings(recon_sensor_orbbec_capture_test)
   add_test(NAME recon_sensor_orbbec_capture
            COMMAND recon_sensor_orbbec_capture_test)
@@ -515,11 +524,42 @@ if(VR_WITH_ORBBEC)
   add_test(NAME recon_sensor_orbbec_grouping
            COMMAND recon_sensor_orbbec_grouping_test)
 
+  # The driver's H.265 colour decoder, with no camera: the committed patch clip
+  # wrapped in SDK frames (VR_WITH_FFMPEG as well). Internal and unexported, so
+  # the test compiles its source itself.
+  if(TARGET recon_sensor_video)
+    add_executable(
+      recon_sensor_orbbec_hevc_test
+      sensor_orbbec_hevc_test.cpp
+      ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec/hevc_color.cpp
+    )
+    target_link_libraries(
+      recon_sensor_orbbec_hevc_test
+      PRIVATE volumetric_kit::recon_sensor_orbbec
+              volumetric_kit::recon_sensor_video ob::OrbbecSDK)
+    target_include_directories(
+      recon_sensor_orbbec_hevc_test
+      PRIVATE ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec)
+    target_compile_definitions(
+      recon_sensor_orbbec_hevc_test
+      PRIVATE VR_HEVC_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data/hevc")
+    vr_target_warnings(recon_sensor_orbbec_hevc_test)
+    add_test(NAME recon_sensor_orbbec_hevc
+             COMMAND recon_sensor_orbbec_hevc_test)
+  endif()
+
   # The rig against real cameras -- only the ones VR_ORBBEC_TEST_RIG names
   # (comma-separated serials); unset, it skips (exit 0).
   add_executable(recon_sensor_orbbec_rig_test sensor_orbbec_rig_test.cpp)
   target_link_libraries(recon_sensor_orbbec_rig_test
                         PRIVATE volumetric_kit::recon_sensor_orbbec)
+  if(TARGET recon_sensor_video)
+    target_compile_definitions(recon_sensor_orbbec_rig_test
+                               PRIVATE VR_TEST_HEVC=1)
+  else()
+    target_compile_definitions(recon_sensor_orbbec_rig_test
+                               PRIVATE VR_TEST_HEVC=0)
+  endif()
   target_compile_definitions(
     recon_sensor_orbbec_rig_test
     PRIVATE VR_TEST_SCRATCH_DIR="${CMAKE_CURRENT_BINARY_DIR}")
@@ -532,10 +572,15 @@ if(VR_WITH_ORBBEC)
     # extensions/ from beside its own DLL, so a copy would run without them.
     # ENVIRONMENT_MODIFICATION needs CMake >= 3.22; an older ctest ignores it
     # and the test cannot start. TODO(ci): no leg runs this on Windows.
+    set(_vr_orbbec_tests
+        recon_orbbec_sdk_smoke recon_sensor_orbbec_conversion
+        recon_sensor_orbbec_capture recon_sensor_orbbec_grouping
+        recon_sensor_orbbec_sync_config recon_sensor_orbbec_rig)
+    if(TARGET recon_sensor_orbbec_hevc_test)
+      list(APPEND _vr_orbbec_tests recon_sensor_orbbec_hevc)
+    endif()
     set_tests_properties(
-      recon_orbbec_sdk_smoke recon_sensor_orbbec_conversion
-      recon_sensor_orbbec_capture recon_sensor_orbbec_grouping
-      recon_sensor_orbbec_sync_config recon_sensor_orbbec_rig
+      ${_vr_orbbec_tests}
       PROPERTIES ENVIRONMENT_MODIFICATION
                  "PATH=path_list_prepend:$<TARGET_FILE_DIR:ob::OrbbecSDK>")
   endif()

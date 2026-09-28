@@ -33,10 +33,13 @@ class PictureConverter {
   /// @brief Lay @p frame (in host memory) out as @p layout. Planes point into
   ///        @p frame when it is already 8-bit 4:2:0 and @p layout is Yuv420,
   ///        else into this converter; valid until the next call or until
-  ///        @p frame changes. `pts` is left to the caller.
+  ///        @p frame changes. `pts` is left to the caller. A frame that
+  ///        declares no matrix is converted by @p unlabelled_color, if given.
   /// @return The picture; InvalidArgument for a hardware or unconvertible
   ///         format; IoError if swscale fails.
-  Result<DecodedPicture> convert(const AVFrame& frame, VideoPixelLayout layout);
+  Result<DecodedPicture> convert(const AVFrame& frame, VideoPixelLayout layout,
+                                 const std::optional<VideoColorDescription>&
+                                     unlabelled_color = std::nullopt);
 
  private:
   // What sws_ converts. Any change rebuilds it: swscale can reuse a freed
