@@ -128,9 +128,31 @@ Result<std::optional<CapturedFrame>> OrbbecCapture::poll() {
     return Status::invalid_argument(
         "OrbbecCapture: poll on a moved-from capture");
   }
+  if (impl_->stream->raw()) {
+    return Status::invalid_argument(
+        "OrbbecCapture: opened for raw frames; take them with poll_raw");
+  }
   VR_ASSIGN(std::shared_ptr<ob::FrameSet> pair, impl_->stream->take());
   if (pair == nullptr) return no_frame();
   return impl_->stream->process(pair);
+}
+
+Result<std::optional<RawFrame>> OrbbecCapture::poll_raw() {
+  if (impl_ == nullptr) {
+    return Status::invalid_argument(
+        "OrbbecCapture: poll_raw on a moved-from capture");
+  }
+  if (!impl_->stream->raw()) {
+    return Status::invalid_argument(
+        "OrbbecCapture: poll_raw needs a capture opened with raw = true");
+  }
+  VR_ASSIGN(std::shared_ptr<ob::FrameSet> pair, impl_->stream->take());
+  if (pair == nullptr) return std::optional<RawFrame>();
+  return impl_->stream->process_raw(pair);
+}
+
+bool OrbbecCapture::raw_frames() const noexcept {
+  return impl_ != nullptr && impl_->stream->raw();
 }
 
 }  // namespace volumetric_kit::recon::sensor

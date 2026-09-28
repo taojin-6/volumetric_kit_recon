@@ -85,22 +85,26 @@ inline vr::Result<vr::volume::VoxelBlockGrid> create_fusion_grid(
 /// there is no scope around the loop here.
 ///
 /// @param grid     The volume to allocate into.
-/// @param frame    The posed depth frame; its depth camera drives the
-///                 unprojection and the range gate.
+/// @param depth    The depth image: a host array (`const float*`) or a device
+///                 `vr::Buffer`, whichever `allocate_from_depth` overload the
+///                 frame's source feeds.
+/// @param camera   Its camera, which drives the unprojection and the range
+///                 gate.
 /// @param metrics  Optional stage rows (`"allocate"`, `"resize"`); null
 ///                 measures nothing.
 /// @return OK once every surface block is allocated; @ref
 ///         vr::Status::Code::OutOfMemory if the map cannot grow further or
 ///         kept overflowing after five rounds; or the tier's own error.
-inline vr::Status allocate_band(vr::volume::VoxelBlockGrid& grid,
-                                const vr::sensor::CapturedFrame& frame,
-                                vr::StageMetrics* metrics) {
+template <typename Depth>
+vr::Status allocate_band(vr::volume::VoxelBlockGrid& grid, const Depth& depth,
+                         const vr::DepthCameraParams& camera,
+                         vr::StageMetrics* metrics) {
   constexpr int kRounds = 5;
   for (int round = 0; round < kRounds; ++round) {
     vr::volume::AllocFailures failures;
-    VR_ASSIGN(const std::uint32_t failed,
-              grid.map().allocate_from_depth(frame.depth, frame.depth_camera,
-                                             &failures, metrics));
+    VR_ASSIGN(
+        const std::uint32_t failed,
+        grid.map().allocate_from_depth(depth, camera, &failures, metrics));
     if (failed == 0) {
       return {};
     }
@@ -164,7 +168,7 @@ inline vr::Status fuse_frame(vr::volume::VoxelBlockGrid& grid,
                              vr::tsdf::TsdfIntegrator& integrator,
                              const vr::sensor::CapturedFrame& frame,
                              float max_weight, vr::StageMetrics* metrics) {
-  VR_TRY(allocate_band(grid, frame, metrics));
+  VR_TRY(allocate_band(grid, frame.depth, frame.depth_camera, metrics));
   const vr::tsdf::ColorFrame color{frame.color, frame.color_camera,
                                    frame.color_encoding};
   return integrator.integrate(grid, frame.depth, frame.depth_camera, max_weight,

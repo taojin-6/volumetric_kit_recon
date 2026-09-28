@@ -22,6 +22,7 @@
 #include "volumetric_kit/recon/core/result.hpp"
 #include "volumetric_kit/recon/sensor/camera_capture.hpp"
 #include "volumetric_kit/recon/sensor/orbbec/export.hpp"
+#include "volumetric_kit/recon/sensor/raw_frame.hpp"
 
 namespace volumetric_kit::recon::sensor {
 
@@ -129,6 +130,13 @@ struct OrbbecStreamOptions {
   float min_depth = 0.25f;
   /// Reject depth farther than this (metres).
   float max_depth = 5.0f;
+  /// Hand frames out as the cameras captured them, through
+  /// @ref OrbbecCapture::poll_raw, for `sensor/utils`'s GPU pass to undistort
+  /// and convert: the host undistorts, registers and converts nothing, and
+  /// depth and colour keep their own cameras, lenses and poses, read from the
+  /// camera's factory calibration. Needs @ref OrbbecColorCodec::Hevc, whose
+  /// decoded Y'CbCr planes the pass converts.
+  bool raw = false;
 };
 
 /// @brief One Orbbec RGB-D camera, polled for posed frames with depth
@@ -257,6 +265,27 @@ class VR_SENSOR_ORBBEC_API OrbbecCapture final : public ICameraCapture {
   ///         worth of pairs in a row could not be processed; and
   ///         @ref Status::Code::InvalidArgument on a moved-from capture.
   Result<std::optional<CapturedFrame>> poll() override;
+
+  /// @brief Take the newest synchronised pair not yet handed out, as the
+  ///        cameras captured it: raw depth, the decoded Y'CbCr planes with
+  ///        the matrix and range the stream codes them in, and each camera's
+  ///        lens and pose (@ref OrbbecStreamOptions::raw).
+  ///
+  /// The depth camera's pose is @ref Options::cam_to_world, which poses the
+  /// colour camera, composed with the camera's depth-to-colour extrinsic. The
+  /// frame borrows the pair it was read from, until the next poll or
+  /// @ref stop, as @ref poll's does.
+  /// @return As @ref poll; @ref Status::Code::InvalidArgument also when the
+  ///         capture was not opened with @ref OrbbecStreamOptions::raw, and
+  ///         @ref poll returns it when it was; @ref Status::Code::Unsupported
+  ///         for a stream whose transfer or primaries @ref ColorEncoding
+  ///         cannot name.
+  Result<std::optional<RawFrame>> poll_raw() override;
+
+  /// @return `true` if the capture was opened with
+  ///         @ref OrbbecStreamOptions::raw, so its frames come through
+  ///         @ref poll_raw; `false` otherwise, and on a moved-from capture.
+  bool raw_frames() const noexcept override;
 
   /// @return `true` on a moved-from capture and once the camera has
   ///         disconnected, neither of which can produce another frame. A

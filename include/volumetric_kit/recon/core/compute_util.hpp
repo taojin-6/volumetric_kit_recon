@@ -156,4 +156,75 @@ inline Result<Buffer> device_storage_buffer(Allocator& allocator,
   return allocator.create_buffer(desc);
 }
 
+/// @brief An image a call reads as a storage binding: a host array the call
+///        uploads, or a storage buffer already on the device (another pass's
+///        output), bound in place. One or the other, by construction.
+///
+/// What lets a call take both (`allocate_from_depth`, `integrate`) with one
+/// validation path and one binding path, rather than a branch at each. Both
+/// are borrowed, and must outlive the call.
+class StorageInput {
+ public:
+  /// @param host  Host bytes, uploaded by @ref buffer; null is refused by
+  ///              @ref check.
+  explicit StorageInput(const void* host) noexcept : host_(host) {}
+  /// @param device  A storage buffer, bound in place.
+  explicit StorageInput(const Buffer& device) noexcept : device_(&device) {}
+
+  /// @brief Whether this can be bound as @p bytes of storage. O(1), so a call
+  ///        checks it before it does any work.
+  /// @param what   Names the caller and the input, for the error message.
+  /// @param bytes  What the binding will read.
+  /// @return OK; else @ref Status::Code::InvalidArgument for a null array, or
+  ///         for a buffer that is empty, was created without `STORAGE_BUFFER`
+  ///         usage, or holds fewer than @p bytes -- which would be read past
+  ///         its end, undefined rather than an error.
+  Status check(const char* what, VkDeviceSize bytes) const {
+    if (device_ == nullptr) {
+      if (host_ == nullptr) {
+        return Status::invalid_argument(std::string(what) + " is null");
+      }
+      return {};
+    }
+    if (!device_->valid()) {
+      return Status::invalid_argument(std::string(what) + " is empty");
+    }
+    if ((device_->usage() & VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) == 0) {
+      return Status::invalid_argument(std::string(what) +
+                                      " is not a storage buffer");
+    }
+    if (device_->size() < bytes) {
+      return Status::invalid_argument(
+          std::string(what) + " holds " + std::to_string(device_->size()) +
+          " bytes; the image needs " + std::to_string(bytes));
+    }
+    return {};
+  }
+
+  /// @brief The buffer to bind for @p bytes of this: the device buffer, or a
+  ///        fresh upload of the host array into @p upload, which the caller
+  ///        keeps alive across the (synchronous) dispatch.
+  ///
+  /// Bind exactly @p bytes of it, never `VK_WHOLE_SIZE`: a caller's buffer may
+  /// be larger than `maxStorageBufferRange` when the image is not.
+  /// @param allocator  Where an upload is made.
+  /// @param bytes      The binding's range (non-zero); checked by @ref check.
+  /// @param upload     Receives the upload; left empty for a device buffer.
+  /// @return The handle to bind; @ref Status::Code::InvalidArgument for a
+  ///         null array; or the upload's failure.
+  Result<VkBuffer> buffer(Allocator& allocator, VkDeviceSize bytes,
+                          Buffer& upload) const {
+    if (device_ != nullptr) return device_->handle();
+    if (host_ == nullptr) {
+      return Status::invalid_argument("StorageInput: the host array is null");
+    }
+    VR_ASSIGN(upload, upload_storage_buffer(allocator, host_, bytes));
+    return upload.handle();
+  }
+
+ private:
+  const void* host_ = nullptr;
+  const Buffer* device_ = nullptr;
+};
+
 }  // namespace volumetric_kit::recon

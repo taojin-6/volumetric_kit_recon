@@ -26,6 +26,7 @@
 namespace volumetric_kit::recon {
 class Device;
 class Allocator;
+class StorageInput;
 }  // namespace volumetric_kit::recon
 
 namespace volumetric_kit::recon::tsdf {
@@ -45,7 +46,7 @@ enum class IntegrationMode : std::uint32_t {
 struct ColorFrame {
   /// Row-major color image, `cam.width * cam.height` pixels, RGB packed in each
   /// `uint`'s low three bytes (alpha ignored) -- the mesh tier's `color`
-  /// layout.
+  /// layout. Null when @ref buffer holds the image instead.
   const std::uint32_t* pixels = nullptr;
   /// The color camera (@ref ColorCameraParams): intrinsics + camera->world pose
   /// + dimensions. May differ from the depth camera (unregistered RGB-D); pass
@@ -65,6 +66,20 @@ struct ColorFrame {
   /// job, once, via `sensor::to_canonical` -- which is what "convert once at
   /// the sensor boundary" means operationally.
   ColorEncoding encoding{};
+
+  /// The same image already on the device, in the same layout: a storage
+  /// buffer of at least `cam.width * cam.height` words, read in place with no
+  /// upload (a GPU pre-processing pass's output). Set this or @ref pixels, not
+  /// both. Borrowed for the call. After @ref encoding, so `{pixels, cam,
+  /// encoding}` still initializes a host frame.
+  const Buffer* buffer = nullptr;
+
+  /// The image marks its own coverage in each word's high byte: 0 is a pixel
+  /// with no colour, such as one a lens maps outside the captured picture,
+  /// and it fuses nothing, as a pixel outside the image does; any other value
+  /// is colour. Off, the high byte is ignored, as a host image's is.
+  /// `sensor::GpuFramePrep` marks its output this way.
+  bool coverage_in_alpha = false;
 };
 
 /// @brief What optional machinery a @ref TsdfIntegrator carries, chosen at
@@ -196,6 +211,24 @@ class VR_TSDF_API TsdfIntegrator {
   ///         `maxComputeWorkGroupCount[0]`, or 2^32 threads); otherwise a
   ///         buffer or dispatch failure.
   Status integrate(volume::VoxelBlockGrid& grid, const float* depth,
+                   const DepthCameraParams& cam, float max_weight = 5.0f,
+                   IntegrationMode mode = IntegrationMode::Classic,
+                   const ColorFrame* color = nullptr,
+                   StageMetrics* metrics = nullptr);
+
+  /// @brief @ref integrate from a depth image already on the device.
+  ///
+  /// The same fusion, but @p depth is bound where it lives -- a GPU
+  /// pre-processing pass's output -- rather than uploaded from the host. A
+  /// @p color may likewise carry its image as @ref ColorFrame::buffer.
+  /// @param depth  A storage buffer holding the image in metres, at least
+  ///               `cam.width * cam.height` floats, row-major. Borrowed for the
+  ///               call; the writer's dispatch must have finished, which a
+  ///               `dispatch` on this device guarantees.
+  /// @return As the host overload; @ref Status::Code::InvalidArgument also for
+  ///         a @p depth that is empty, not a storage buffer, or smaller than
+  ///         the image.
+  Status integrate(volume::VoxelBlockGrid& grid, const Buffer& depth,
                    const DepthCameraParams& cam, float max_weight = 5.0f,
                    IntegrationMode mode = IntegrationMode::Classic,
                    const ColorFrame* color = nullptr,
@@ -349,6 +382,12 @@ class VR_TSDF_API TsdfIntegrator {
   /// what it does is a contract (which grid do these flags describe, and is
   /// that still true) rather than another line of buffer bookkeeping.
   Status prepare_dirty_flags(const volume::VoxelBlockGrid& grid);
+  // Both integrate overloads: `depth` is the host array or the device buffer
+  // the caller passed.
+  Status integrate(volume::VoxelBlockGrid& grid, const StorageInput& depth,
+                   const DepthCameraParams& cam, float max_weight,
+                   IntegrationMode mode, const ColorFrame* color,
+                   StageMetrics* metrics);
 
   // Borrowed (must outlive this).
   Device* device_ = nullptr;

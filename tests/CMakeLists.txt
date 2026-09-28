@@ -129,6 +129,25 @@ target_link_libraries(recon_tsdf_mesh_integrate_test
                       PRIVATE volumetric_kit::recon_tsdf Vulkan::Vulkan)
 vr_target_warnings(recon_tsdf_mesh_integrate_test)
 add_test(NAME recon_tsdf_mesh_integrate COMMAND recon_tsdf_mesh_integrate_test)
+# GPU pre-processing (recon_sensor_utils) on synthetic frames: undistortion in
+# the right direction, the colour matrix, a host reference of the sampling, the
+# refusals, and fusing the result. Skips (exit 0) where no device is present.
+add_executable(recon_sensor_gpu_frame_prep_test sensor_gpu_frame_prep_test.cpp)
+target_link_libraries(
+  recon_sensor_gpu_frame_prep_test PRIVATE volumetric_kit::recon_sensor_utils
+                                           volumetric_kit::recon_tsdf)
+vr_target_warnings(recon_sensor_gpu_frame_prep_test)
+add_test(NAME recon_sensor_gpu_frame_prep
+         COMMAND recon_sensor_gpu_frame_prep_test)
+
+# The device-input overloads of allocate_from_depth and integrate: the same
+# frame fused from host arrays and from storage buffers must give the same grid.
+# Skips (exit 0) where no device is present.
+add_executable(recon_tsdf_device_input_test tsdf_device_input_test.cpp)
+target_link_libraries(recon_tsdf_device_input_test
+                      PRIVATE volumetric_kit::recon_tsdf Vulkan::Vulkan)
+vr_target_warnings(recon_tsdf_device_input_test)
+add_test(NAME recon_tsdf_device_input COMMAND recon_tsdf_device_input_test)
 
 # volume delete: allocate a cube, remove a subset, verify the survivors + heap
 # reuse (chain splice / successor pull-up) on the real driver. Skips (exit 0)
@@ -518,6 +537,20 @@ if(VR_WITH_ORBBEC)
   vr_target_warnings(recon_sensor_orbbec_capture_test)
   add_test(NAME recon_sensor_orbbec_capture
            COMMAND recon_sensor_orbbec_capture_test)
+
+  # The GPU pass against the SDK's host path on the camera VR_ORBBEC_TEST_SERIAL
+  # names (H.265, so only with the decoder); unset, it skips.
+  if(TARGET recon_sensor_video)
+    add_executable(recon_sensor_orbbec_gpu_prep_test
+                   sensor_orbbec_gpu_prep_test.cpp)
+    target_link_libraries(
+      recon_sensor_orbbec_gpu_prep_test
+      PRIVATE volumetric_kit::recon_sensor_orbbec
+              volumetric_kit::recon_sensor_utils)
+    vr_target_warnings(recon_sensor_orbbec_gpu_prep_test)
+    add_test(NAME recon_sensor_orbbec_gpu_prep
+             COMMAND recon_sensor_orbbec_gpu_prep_test)
+  endif()
 
   # The rig's sync configuration: the SDK's file layout, its refusals, and the
   # comparison OrbbecRig::open makes against what the cameras read back. No

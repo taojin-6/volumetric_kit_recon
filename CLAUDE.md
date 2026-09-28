@@ -40,8 +40,9 @@ conventions and Vulkan setup.
 - CMake: `find_package(volumetric_kit_recon)`; component targets
   `volumetric_kit::recon_core`, `…_volume`, `…_tsdf`, `…_mesh`, `…_texture`,
   `…_sensor`, `…_codec`, `…_eval`, `…_interop` (+ later `…_track`, `…_stream`),
-  plus the opt-in `…_sensor_orbbec` driver (`VR_WITH_ORBBEC`) and
-  `…_sensor_video` decoder (`VR_WITH_FFMPEG`); umbrella alias
+  plus `…_sensor_utils` (GPU pre-processing), the opt-in `…_sensor_orbbec`
+  driver (`VR_WITH_ORBBEC`) and `…_sensor_video` decoder (`VR_WITH_FFMPEG`);
+  umbrella alias
   `volumetric_kit::recon`.
 
 ## Architecture (tiered)
@@ -88,6 +89,8 @@ branching off **`core`**, `codec` off **`volume`** and `eval` off **`mesh`**
   SDK. It also reads and writes the rig calibration file calib produces
   (`rig_calibration.hpp`). The HEVC decoder is another target of its own
   (`sensor/video/`, over FFmpeg), links `core` alone, and knows no camera.
+  The GPU pre-processing is a third (`sensor/utils/`, Vulkan and shaders), so
+  `recon_sensor` itself stays free of both.
 - **`codec`** — the per-frame TSDF geometry codec: separate `Encoder` and
   `Decoder` classes over a private 8³ DCT transform, a geometry-only intra
   frame (block coordinates, an observed-voxel mask, the first K coefficients),
@@ -300,6 +303,11 @@ order. Change the decision, its entry there, and this list together.
   Projective texturing from several views chooses a view per triangle, on an
   unshared mesh, into an atlas of the views' images side by side; the
   single-camera pass stays per vertex.
+- [**2026-09-28**](DECISIONS.md#2026-09-28--gpu-pre-processing-is-recon_sensor_utils-a-driver-hands-out-the-frame-as-captured-the-device-undistorts-depth-and-undistorts-and-converts-colour-and-fusion-reads-the-buffers-in-place-depth-and-colour-each-with-its-own-camera-rather-than-registered) —
+  GPU pre-processing is `recon_sensor_utils`: a driver hands out the frame as
+  captured, the device undistorts depth and undistorts and converts colour,
+  and fusion reads the buffers in place, depth and colour each with its own
+  camera rather than registered.
 
 ## Provenance & salvage policy
 
@@ -504,7 +512,9 @@ arbitrary; it usually isn't.
   `ShaderModule`, descriptor + `ComputePipeline` wrappers, the `ComputeKernel`
   bundle + `KernelSetBuilder`, the shared-queue-safe
   `Device::submit_single_time` dispatch, and the shared `dispatch()` /
-  `group_count` / `storage_buffer` / range-guard helpers of `compute_util.hpp`.
+  `group_count` / `storage_buffer` / range-guard helpers of `compute_util.hpp`
+  — `StorageInput` among them, the host array or device buffer a call binds
+  at its image's exact range.
   Vocabulary: `Status`/`Result`, the GLM aliases, `camera_params.hpp`,
   `color_space.hpp`, and `stage_metrics.hpp` — the `{name, cpu_ms, gpu_ms,
   has_gpu}` rows every tier reports timings in, with `GpuTimer` measuring the
@@ -611,7 +621,8 @@ arbitrary; it usually isn't.
   of the surface) or **dynamic** (clear it, so a receded surface leaves no
   ghost). An optional `ColorFrame` fuses colour through its own separate
   `ColorCameraParams`; a voxel's first colour observation assigns rather than
-  blends. Opt-in `track_dirty_blocks` reports which blocks a fuse *changed* —
+  blends, and `coverage_in_alpha` has a pixel with a zero high byte fuse no
+  colour, as one outside the image fuses none. Opt-in `track_dirty_blocks` reports which blocks a fuse *changed* —
   as a host list (`dirty_remesh_blocks`) or, for an on-device consumer, as
   `dirty_flags_buffer()` / `dirty_flags_capacity()` / `dirty_epoch()`, which go
   null **together** on every staleness this tier can see and carry the grid's
@@ -759,7 +770,10 @@ arbitrary; it usually isn't.
   `CapturedFrame` (frames dropped, not queued) and asked `exhausted()` after
   an empty poll, since "nothing this tick" from a live device and "nothing,
   ever" from a replay are the same empty optional (2026-09-14; non-pure,
-  `false` by default, so a live driver overrides nothing) — plus the boundary
+  `false` by default, so a live driver overrides nothing). A source opened
+  for raw frames hands them out through `poll_raw()` instead, and
+  `raw_frames()` says which of the two it serves (non-pure too:
+  `Unsupported` and `false`) — plus the boundary
   math that is silently wrong when guessed — `cv_from_gl_camera`,
   `depth_from_registered_color`, `to_canonical`. Links `recon_core` alone;
   drivers live with the platform that can build *and* test them. Two
@@ -814,6 +828,22 @@ arbitrary; it usually isn't.
   decoder reads each SPS there and treats such a stream as refused.
   `VR_TEST_HEVC_BACKEND` makes its test require one back end, which is how
   CI holds the Linux legs to NVDEC (the 2026-09-27 decoder decision).
+  **`sensor/utils`'s `GpuFramePrep`** undistorts a `RawFrame` on the device:
+  depth sampled at the nearest pixel, colour bilinearly and converted from
+  Y'CbCr in the same pass, each camera keeping its intrinsics and pose. Its
+  `DeviceFrame` feeds the `Buffer` overloads of `allocate_from_depth` and
+  `integrate` (and `ColorFrame::buffer`, with `coverage_in_alpha`, since a
+  pixel the lens maps outside the picture is a 0 word), so nothing is
+  uploaded and nothing registered. The frame *holds* its device-local
+  buffers, and `prepare` reuses one only once no frame does, so a frame kept
+  past the next is still itself; the whole frame is checked before anything
+  is uploaded, a depth range from 0 included. `OrbbecCapture` opened with
+  `raw` hands out `RawFrame`s through the contract's `poll_raw`, lenses and
+  the depth-to-colour extrinsic from the factory calibration, the planes
+  converted by the matrix and range the stream codes them in, and
+  `fuse_orbbec --gpu` fuses them. Its hardware test holds it
+  to the SDK's own undistortion and registration on a still scene (the
+  2026-09-28 GPU pre-processing decision).
 
 - **`codec`** — four of five PRs in (2026-09-26 lists them). The defaults
   are room0's, and provisional until the per-band quantization study: K = 64
@@ -936,7 +966,10 @@ JPEG/PNG decoder.
 The live counterpart is its own example, not a `fuse_replica` flag:
 **`fuse_orbbec`** (`VR_WITH_ORBBEC`) fuses an `OrbbecCapture` through the same
 `fuse_frame.hpp` and writes a PLY after `--frames` frames; `--rig sync.json`
-fuses the rig as an `OrbbecRig`, posed by `--calibration`.
+fuses the rig as an `OrbbecRig`, posed by `--calibration`. With `--gpu` the
+source serves raw frames, which the loop learns from `raw_frames()`, and each
+is prepared by `GpuFramePrep` and fused through `fuse_device_frame.hpp`, the
+one header that pulls in `sensor/utils`.
 **`codec_replica`** fuses a Replica sequence as `fuse_replica` does, and
 streams the growing grid through the codec: every `--encode-every` frames it
 encodes, then decodes into a player grid built from `read_frame_info` and
@@ -1000,11 +1033,16 @@ cost the same, measured on an 81 920-triangle sphere at scan density (M5 Max,
 Release): 12.8 ms to write, 10.8 ms of it on the GPU, after 14.2 ms to
 allocate.
 
-**On `sensor`**, each a `TODO(sensor)`: GPU pre-processing that keeps the
-frame on the device through fusion (`camera_stream.cpp`), including the
-decoder's hardware frames (`hevc_decoder.cpp`) -- which a 4K rig needs, since
-at 4K the host's undistortion, registration and conversion cost ~55 ms a frame
--- and processing a rig set's frames in parallel,
+**On `sensor`**, each a `TODO(sensor)`: the GPU pre-processing has landed for
+one camera (`GpuFramePrep`, the 2026-09-28 GPU pre-processing decision: at 4K
+it takes the host from 15.5 ms of undistortion and registration a frame to
+none, and the run's CPU eightfold down), and what it leaves is raw sets from
+the rig (`frame_conversion.cpp`), zero-copy input from the decoder's
+hardware frames (`gpu_frame_prep.hpp`, `hevc_decoder.cpp`), both passes in
+one submit (`gpu_frame_prep.cpp`, waiting on a several-kernel dispatch),
+and the texture tier's separate colour camera, which fusing unregistered
+frames makes the texturing path's next need; and processing a rig set's
+frames in parallel,
 one thread per camera, rather than the ~11 ms one after another costs for four
 (`orbbec_rig.cpp`). For H.265: the camera's encoder settings, its key-frame
 interval above all, which sets what a lost frame costs (`camera_stream.cpp`),
