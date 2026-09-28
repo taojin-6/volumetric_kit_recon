@@ -24,6 +24,13 @@
 #include <vector>
 
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
+#if VR_TEST_HEVC
+#include "buffer_readback.hpp"
+#include "volumetric_kit/recon/core/allocator.hpp"
+#include "volumetric_kit/recon/core/device.hpp"
+#include "volumetric_kit/recon/core/instance.hpp"
+#include "volumetric_kit/recon/sensor/utils/gpu_frame_prep.hpp"
+#endif
 #include "volumetric_kit/recon/sensor/orbbec/orbbec_rig.hpp"
 #include "volumetric_kit/recon/sensor/orbbec/orbbec_sync_config.hpp"
 #include "volumetric_kit/recon/sensor/rig_calibration.hpp"
@@ -283,6 +290,76 @@ int main() {
   sensor::OrbbecRig hevc = std::move(hevc_opened).value();
   if (run_sets(hevc, "H.265") != 0) return 1;
   hevc.stop();
+  CHECK(hevc.poll_raw_set().status().domain() ==
+        vr::Status::Code::InvalidArgument);  // not opened raw
+
+  // The rig raw: whole sets as the cameras captured them, each posed by its
+  // calibration, prepared on the GPU at once, one thread per camera.
+  {
+    sensor::OrbbecRig closed = std::move(hevc);
+  }  // frees the cameras
+  options.raw = true;
+  auto raw_opened = sensor::OrbbecRig::open(options);
+  if (!raw_opened.ok()) {
+    std::fprintf(stderr, "FAIL: open raw: %s\n",
+                 raw_opened.status().message().c_str());
+    return 1;
+  }
+  sensor::OrbbecRig raw_rig = std::move(raw_opened).value();
+  vr::Result<vr::Instance> instance = vr::Instance::create({});
+  CHECK(instance.ok());
+  vr::Result<VkPhysicalDevice> gpu = instance.value().select_physical_device();
+  CHECK(gpu.ok());
+  vr::Result<vr::Device> device =
+      vr::Device::create(instance.value(), gpu.value(), {});
+  CHECK(device.ok());
+  vr::Result<vr::Allocator> allocator =
+      vr::Allocator::create(instance.value().handle(), device.value());
+  CHECK(allocator.ok());
+  std::vector<sensor::GpuFramePrep> preps;
+  for (std::size_t c = 0; c < raw_rig.camera_count(); ++c) {
+    auto prep = sensor::GpuFramePrep::create(device.value(), allocator.value());
+    CHECK(prep.ok());
+    preps.push_back(std::move(prep).value());
+  }
+  CHECK_OK(raw_rig.start());
+  CHECK(raw_rig.poll_set().status().domain() ==
+        vr::Status::Code::InvalidArgument);
+  CHECK(raw_rig.poll().status().domain() == vr::Status::Code::InvalidArgument);
+  int prepared_sets = 0;
+  const auto raw_deadline = std::chrono::steady_clock::now() + kTimeout;
+  while (prepared_sets < 10 &&
+         std::chrono::steady_clock::now() < raw_deadline) {
+    auto polled = raw_rig.poll_raw_set();
+    CHECK_OK(polled.status());
+    if (!polled.value()) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      continue;
+    }
+    const sensor::OrbbecRigRawSet& set = *polled.value();
+    CHECK(set.frames.size() == raw_rig.camera_count());
+    if (!set.complete()) continue;
+    for (std::size_t c = 0; c < set.frames.size(); ++c) {
+      const sensor::RawFrame& f = *set.frames[c];
+      CHECK(f.depth != nullptr && f.has_color());
+      CHECK(near(f.color_cam_to_world, read.value()[c].cam_to_world));
+    }
+    auto prepared = sensor::prepare_set(preps, set.frames);
+    CHECK_OK(prepared.status());
+    for (std::size_t c = 0; c < set.frames.size(); ++c) {
+      const std::optional<sensor::DeviceFrame>& frame = prepared.value()[c];
+      CHECK(frame.has_value() && frame->has_color());
+      auto depth = vr_test::read_back<float>(
+          device.value(), allocator.value(), *frame->depth,
+          std::size_t{frame->depth_camera.width} * frame->depth_camera.height);
+      CHECK(depth.ok());
+      CHECK(std::any_of(depth.value().begin(), depth.value().end(),
+                        [](float d) { return d > 0.0f; }));
+    }
+    ++prepared_sets;
+  }
+  CHECK(prepared_sets == 10);
+  raw_rig.stop();
 #else
   CHECK(hevc_opened.status().domain() == vr::Status::Code::Unsupported);
 #endif

@@ -641,6 +641,8 @@ if(VR_WITH_ORBBEC)
   if(TARGET recon_sensor_video)
     target_compile_definitions(recon_sensor_orbbec_rig_test
                                PRIVATE VR_TEST_HEVC=1)
+    target_link_libraries(recon_sensor_orbbec_rig_test
+                          PRIVATE volumetric_kit::recon_sensor_utils)
   else()
     target_compile_definitions(recon_sensor_orbbec_rig_test
                                PRIVATE VR_TEST_HEVC=0)

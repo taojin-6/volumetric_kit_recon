@@ -19,6 +19,7 @@
 #include "volumetric_kit/recon/sensor/orbbec/export.hpp"
 #include "volumetric_kit/recon/sensor/orbbec/orbbec_capture.hpp"
 #include "volumetric_kit/recon/sensor/orbbec/orbbec_sync_config.hpp"
+#include "volumetric_kit/recon/sensor/raw_frame.hpp"
 #include "volumetric_kit/recon/sensor/rig_calibration.hpp"
 
 namespace volumetric_kit::recon::sensor {
@@ -35,6 +36,22 @@ struct OrbbecRigFrameSet {
   /// SDK failed on it -- the only way the primary's is empty. Each frame is
   /// posed by its camera's calibration.
   std::vector<std::optional<CapturedFrame>> frames;
+
+  /// @return How many cameras this set holds a frame from.
+  std::size_t count() const noexcept;
+  /// @return `true` when every camera's frame is here.
+  bool complete() const noexcept { return count() == frames.size(); }
+};
+
+/// @brief One trigger's frames as the cameras captured them, for
+///        `sensor/utils`'s GPU pass (@ref OrbbecStreamOptions::raw).
+struct OrbbecRigRawSet {
+  /// As @ref OrbbecRigFrameSet::timestamp_ns.
+  std::uint64_t timestamp_ns = 0;
+  /// As @ref OrbbecRigFrameSet::frames, raw, each posed by its camera's
+  /// calibration. Borrowed from the cameras: valid until the next
+  /// @ref OrbbecRig::poll_raw_set or @ref OrbbecRig::stop.
+  std::vector<std::optional<RawFrame>> frames;
 
   /// @return How many cameras this set holds a frame from.
   std::size_t count() const noexcept;
@@ -159,9 +176,18 @@ class VR_SENSOR_ORBBEC_API OrbbecRig final : public ICameraCapture {
   /// @return The set; an empty optional when none is ready or the rig is not
   ///         started; @ref Status::Code::IoError if a camera disconnected or
   ///         its frames stopped processing (see @ref OrbbecCapture::poll);
-  ///         @ref Status::Code::InvalidArgument on a moved-from rig, or after
-  ///         @ref poll since the last @ref start.
+  ///         @ref Status::Code::InvalidArgument on a moved-from rig, a rig
+  ///         opened raw, or after @ref poll since the last @ref start.
   Result<std::optional<OrbbecRigFrameSet>> poll_set();
+
+  /// @brief @ref poll_set for a rig opened with @ref OrbbecStreamOptions::raw:
+  ///        the trigger's frames as the cameras captured them, nothing done
+  ///        to them on the host. The cameras are independent, so
+  ///        `sensor::prepare_set` prepares them on the GPU at once, one
+  ///        thread per camera.
+  /// @return As @ref poll_set; @ref Status::Code::InvalidArgument also on a
+  ///         rig not opened raw.
+  Result<std::optional<OrbbecRigRawSet>> poll_raw_set();
 
   /// @brief The next frame of the current set, taking a new set when this one
   ///        is spent. Frames of one set come in camera order; a missing
