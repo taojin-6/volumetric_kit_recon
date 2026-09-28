@@ -310,10 +310,10 @@ order. Change the decision, its entry there, and this list together.
   captured, the device undistorts depth and undistorts and converts colour,
   and fusion reads the buffers in place, depth and colour each with its own
   camera rather than registered.
-- [**2026-09-28**](DECISIONS.md#2026-09-28--memory-the-kernels-use-lives-on-the-device-and-the-host-reaches-it-through-one-commandbatch-per-call-which-stages-on-a-discrete-gpu-and-goes-direct-on-unified-memory-only-where-that-cannot-change-the-result) —
-  Memory the kernels use lives on the device, and the host reaches it through
-  one `CommandBatch` per call, which stages on a discrete GPU and goes direct
-  on unified memory only where that cannot change the result.
+- [**2026-09-28**](DECISIONS.md#2026-09-28--memory-the-kernels-use-lives-on-the-device-on-every-platform-and-the-host-reaches-it-through-one-commandbatch-per-call-which-stages-it-and-goes-direct-only-into-host-visible-buffers-where-that-cannot-change-the-result) —
+  Memory the kernels use lives on the device on every platform, and the host
+  reaches it through one `CommandBatch` per call, which stages it and goes
+  direct only into host-visible buffers, where that cannot change the result.
 
 ## Provenance & salvage policy
 
@@ -455,9 +455,9 @@ Two contracts — both simpler now that recon and gfx are both Vulkan.
   data costs as surely: the voxel arrays, frames and arena host-visible put
   `integrate` at 14.6 ms of device time against 0.067 ms resident (the
   2026-09-28 residency decision). Memory the kernels touch is
-  `device_storage_buffer` or `mappable_storage_buffer`, reached from the host
-  through a `CommandBatch`, never `mapped()`; and the CPU never reads VRAM
-  directly, since BAR memory reads uncached (6.6 s for one mesh download).
+  `device_storage_buffer`, on Apple too, reached from the host through a
+  `CommandBatch`; and the CPU never reads VRAM directly, since BAR memory
+  reads uncached (6.6 s for one mesh download).
   Small parameters may stay host-visible: under 64 KB, it measured nothing. A
   GPU test failing on the Linux boxes with a bare `vkWaitForFences` is a lost
   device: read the host's kernel log for the Xid before calling it load.
@@ -529,14 +529,14 @@ arbitrary; it usually isn't.
   is how the host reaches device memory: one call's uploads, fills, copies,
   dispatches (indirect too) and readbacks in one command buffer, a barrier
   between every two, one fence wait, spans and labels kept, staged through a
-  per-object grow-only `StagingArena`. It goes direct into a mapped buffer
-  only where that cannot change the result: an upload before anything is
-  recorded, a readback followed only by readbacks. It checks usage as if
-  staged either way, so a missing `TRANSFER_*` bit fails on the Mac too. A
-  refused call poisons the batch, and submitting releases the arena.
-  `MemoryUsage::DeviceLocalMappable` is device memory mapped only where it
-  is also CPU-cached, which is unified memory; on a discrete GPU, BAR
-  included, it is unmapped (the 2026-09-28 residency decision).
+  per-object grow-only `StagingArena`. A device-local buffer is always
+  staged, on Apple as on NVIDIA, so a Mac run is the discrete GPU's path; it
+  goes direct into a mapped (host-visible) buffer only where that cannot
+  change the result: an upload before anything is recorded, a readback
+  followed only by readbacks. It checks usage as if staged either way. A
+  refused call poisons the batch, and submitting releases the arena (the
+  2026-09-28 residency decision, which also records why there is no
+  mappable device memory).
   Vocabulary: `Status`/`Result`, the GLM aliases, `camera_params.hpp`,
   `color_space.hpp`, and `stage_metrics.hpp` — the `{name, cpu_ms, gpu_ms,
   has_gpu}` rows every tier reports timings in, with `GpuTimer` measuring the

@@ -3,10 +3,9 @@
 
 #pragma once
 
-// A device-local buffer's contents on the host, for a test, through a
-// CommandBatch: staged on a discrete GPU, read in place where the buffer is
-// mapped. The source needs TRANSFER_SRC usage, which GpuFramePrep's outputs
-// carry for this.
+// A device-local buffer's contents on the host, for a test, staged through a
+// CommandBatch. The source needs TRANSFER_SRC usage, which GpuFramePrep's
+// outputs carry for this.
 
 #include <cstddef>
 #include <vector>

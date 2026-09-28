@@ -297,11 +297,10 @@ target_link_libraries(recon_compute_smoke_test
 vr_target_warnings(recon_compute_smoke_test)
 add_test(NAME recon_compute_smoke COMMAND recon_compute_smoke_test)
 
-# CommandBatch + StagingArena, and the DeviceLocalMappable memory kind: every
-# recording call over device-local, device-local-mappable and host-visible
-# buffers, in orders that would expose a staging shortcut taken where it changes
-# the result; growth, refusals and the arena's moves. add.comp reads what it
-# writes, so a command run out of order leaves a different value.
+# CommandBatch + StagingArena: every recording call over device-local and
+# host-visible buffers, in orders that would expose a staging shortcut taken
+# where it changes the result; growth, refusals and the arena's moves. add.comp
+# reads what it writes, so a command run out of order leaves a different value.
 add_executable(recon_core_command_batch_test core_command_batch_test.cpp)
 vr_compile_shaders(recon_core_command_batch_test SHADERS
                    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/add.comp")

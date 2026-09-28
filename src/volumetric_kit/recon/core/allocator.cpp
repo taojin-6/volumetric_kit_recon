@@ -48,7 +48,6 @@ namespace {
 VmaMemoryUsage to_vma_usage(MemoryUsage memory) {
   switch (memory) {
     case MemoryUsage::DeviceLocal:
-    case MemoryUsage::DeviceLocalMappable:
       return VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
     case MemoryUsage::HostVisible:
       return VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
@@ -126,11 +125,6 @@ Result<Buffer> Allocator::create_buffer(const BufferDesc& desc) {
         "Allocator::create_buffer: a device-local buffer cannot be "
         "host-mapped");
   }
-  if (desc.mapped && desc.memory == MemoryUsage::DeviceLocalMappable) {
-    return Status::invalid_argument(
-        "Allocator::create_buffer: a device-local-mappable buffer is mapped "
-        "where its memory allows, not on request; leave mapped false");
-  }
   if (desc.memory == MemoryUsage::HostVisible && !desc.mapped) {
     return Status::invalid_argument(
         "Allocator::create_buffer: a host-visible buffer must be mapped (there "
@@ -199,18 +193,6 @@ Result<Buffer> Allocator::create_buffer(const BufferDesc& desc) {
     // -- the mapped() contract is a plain pointer.
     alloc_info.requiredFlags |= VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
   }
-  const bool mappable = desc.memory == MemoryUsage::DeviceLocalMappable;
-  if (mappable) {
-    // VMA's own rule for "device-local, host access if free": on a discrete GPU
-    // it prefers plain VRAM, on an integrated one host-cached memory. Nothing
-    // is *required*, least of all HOST_COHERENT, which on NVIDIA would force
-    // the buffer into BAR memory the CPU can only read uncached (the
-    // 2026-09-28 measurement: 6.6 s to read a mesh back out of it).
-    alloc_info.flags |=
-        VMA_ALLOCATION_CREATE_MAPPED_BIT |
-        VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
-        VMA_ALLOCATION_CREATE_HOST_ACCESS_ALLOW_TRANSFER_INSTEAD_BIT;
-  }
 
   VkBuffer buffer = VK_NULL_HANDLE;
   VmaAllocation allocation = nullptr;
@@ -225,28 +207,13 @@ Result<Buffer> Allocator::create_buffer(const BufferDesc& desc) {
         "Allocator::create_buffer: mapping requested but VMA returned no "
         "mapped pointer");
   }
-  void* mapped = out_info.pMappedData;
-  if (mappable) {
-    // Handed out only where the CPU reads it through its cache and needs no
-    // flush: unified memory. VMA may still have mapped host-visible VRAM, and a
-    // pointer into that is exactly what this kind exists not to give out.
-    constexpr VkMemoryPropertyFlags kFree =
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
-        VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
-    VkMemoryPropertyFlags props = 0;
-    vmaGetAllocationMemoryProperties(impl_->allocator, allocation, &props);
-    if ((props & kFree) != kFree) {
-      mapped = nullptr;
-    }
-  }
 
   // Capture the opaque VMA handles in the type-erased deleter so Buffer frees
   // both without VMA appearing in buffer.hpp. The captured *Impl reference* is
   // what keeps the VmaAllocator alive for as long as this Buffer can free
   // through it -- see the note on Impl.
-  return Buffer(buffer, desc.size, desc.usage, buffer_info.sharingMode, mapped,
-                [impl = impl_, buffer, allocation]() {
+  return Buffer(buffer, desc.size, desc.usage, buffer_info.sharingMode,
+                out_info.pMappedData, [impl = impl_, buffer, allocation]() {
                   vmaDestroyBuffer(impl->allocator, buffer, allocation);
                 });
 }

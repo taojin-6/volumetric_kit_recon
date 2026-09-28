@@ -8,11 +8,9 @@
 ///        recorded into one command buffer and submitted with one fence wait,
 ///        over staging memory the submitting object keeps between calls.
 ///
-/// The host reaches device memory through this rather than through
-/// `Buffer::mapped`, so the same code is right on a discrete GPU, where the
-/// kernels' memory is VRAM the host cannot map, and on unified memory, where
-/// it can and a staging copy would be waste (the 2026-09-28 residency
-/// decision).
+/// The host reaches device memory through this: the kernels' memory is
+/// device-local and unmapped on every platform, so the Mac runs the same
+/// staged path a discrete GPU does (the 2026-09-28 residency decision).
 
 #include <cstdint>
 #include <vector>
@@ -102,17 +100,17 @@ class VR_CORE_API StagingArena {
 /// as far as the queue family allows (the scope `dispatch()` uses). Kernels
 /// keep their debug-utils regions and their @ref GpuStageScope spans.
 ///
-/// **Staging is skipped where it can be, and only where that cannot change the
-/// result.** An @ref upload into a mapped buffer is a plain copy on the host
-/// when nothing has been recorded before it (so no earlier command can touch
-/// the bytes); otherwise it is staged and copied in its place. A
-/// @ref readback from a mapped buffer reads it directly after the wait when
-/// nothing but other readbacks follows it; otherwise it is copied out in its
-/// place. So on unified memory a batch that only uploads and reads back needs
-/// no submit at all, and on a discrete GPU the same calls stage. The usage
-/// flags are checked as if staged either way -- `TRANSFER_DST` for an upload,
-/// `TRANSFER_SRC` for a readback -- so a buffer missing one fails where it is
-/// tested and not only where it ships.
+/// **A device-local buffer is always staged; a mapped (host-visible) one skips
+/// staging only where that cannot change the result.** An @ref upload into a
+/// mapped buffer is a plain copy on the host when nothing has been recorded
+/// before it (so no earlier command can touch the bytes); otherwise it is
+/// staged and copied in its place. A @ref readback from a mapped buffer reads
+/// it directly after the wait when nothing but other readbacks follows it;
+/// otherwise it is copied out in its place. So a batch that only touches
+/// host-visible buffers needs no submit at all. The usage flags are checked as
+/// if staged either way -- `TRANSFER_DST` for an upload, `TRANSFER_SRC` for a
+/// readback -- so moving a buffer into device memory later cannot turn up a
+/// missing bit.
 ///
 /// **A failed call poisons the batch.** Each recording call returns its own
 /// refusal, and @ref submit then returns the first of them and runs nothing,

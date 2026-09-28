@@ -21,21 +21,15 @@ class Buffer;
 
 /// @brief Where a buffer's memory should live.
 ///
-/// Memory the kernels touch belongs on the device: on a discrete GPU a
-/// host-visible buffer is system RAM, and every kernel access to it crosses
-/// PCIe (the 2026-09-28 residency decision). Host-visible memory is for what
-/// the host produces or consumes -- staging, readback, small parameters.
+/// Memory the kernels touch is `DeviceLocal`, and the host reaches it through
+/// a @ref CommandBatch: on a discrete GPU a host-visible buffer is system RAM,
+/// and every kernel access to it crosses PCIe (the 2026-09-28 residency
+/// decision). `HostVisible` is for what the host produces or consumes --
+/// staging, readback, small parameters.
 enum class MemoryUsage {
   Auto,         ///< Let VMA choose based on usage (`VMA_MEMORY_USAGE_AUTO`).
-  DeviceLocal,  ///< Device-local, never mapped; reached through transfers.
+  DeviceLocal,  ///< Prefer device-local (GPU) memory (staged uploads).
   HostVisible,  ///< Prefer host-visible (CPU-mappable) memory.
-  /// Device-local, and mapped where that costs nothing: where the memory is
-  /// also host-visible, coherent and **CPU-cached**, which is unified memory
-  /// (Apple silicon). Anywhere else -- a discrete GPU, resizable BAR included,
-  /// whose host-visible VRAM the CPU reads uncached -- it is unmapped and the
-  /// host reaches it through a @ref CommandBatch. @ref Buffer::mapped says
-  /// which; @ref BufferDesc::mapped must be false.
-  DeviceLocalMappable,
 };
 
 /// @brief Host access pattern for a mapped buffer; selects the VMA host-access
@@ -86,8 +80,6 @@ struct BufferDesc {
   MemoryUsage memory = MemoryUsage::Auto;
   /// Persistently map the allocation (host-visible only). A mapped buffer's
   /// memory is reachable through @ref Buffer::mapped for the buffer's lifetime.
-  /// Must be false for @ref MemoryUsage::DeviceLocalMappable, whose memory
-  /// decides.
   bool mapped = false;
   /// Host access pattern; consulted only when @ref mapped is set.
   HostAccess host_access = HostAccess::Random;
@@ -180,10 +172,9 @@ class VR_CORE_API Allocator {
   /// @param desc  Size, usage, memory location, and mapping request.
   /// @return The buffer, or a non-OK @ref Status:
   ///         @ref Status::Code::InvalidArgument for a zero size/usage, a
-  ///         `mapped` device-local or device-local-mappable request, a
-  ///         host-visible request that is not `mapped`, more than @ref
-  ///         BufferDesc::kMaxQueueFamilies distinct queue families, or a
-  ///         queue-family index the device does not have;
+  ///         `mapped` device-local request, a host-visible request that is not
+  ///         `mapped`, more than @ref BufferDesc::kMaxQueueFamilies distinct
+  ///         queue families, or a queue-family index the device does not have;
   ///         @ref Status::Code::Backend if VMA fails.
   Result<Buffer> create_buffer(const BufferDesc& desc);
 

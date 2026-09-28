@@ -5687,24 +5687,14 @@ the hash map's bucket locks past the driver's 7 s watchdog in CI (Xid 109, and
 a runner lost), while they were host-visible; PR #81 has since moved them into
 device memory, the fix the fleet's first watchdog report called for.
 
-### 2026-09-28 — Memory the kernels use lives on the device, and the host reaches it through one `CommandBatch` per call, which stages on a discrete GPU and goes direct on unified memory only where that cannot change the result.
+### 2026-09-28 — Memory the kernels use lives on the device on every platform, and the host reaches it through one `CommandBatch` per call, which stages it and goes direct only into host-visible buffers, where that cannot change the result.
 
-**The rule.** A buffer the kernels read or write is device-local. Host-visible
-memory is for what the host produces or consumes: staging, readback, small
-parameters. `core` gives the three kinds a name:
+**The rule.** A buffer the kernels read or write is device-local
+(`device_storage_buffer`: VRAM, never mapped), on Apple as on NVIDIA.
+Host-visible memory (`storage_buffer`) is for what the host produces or
+consumes: staging, readback, small parameters.
 
-- `MemoryUsage::DeviceLocal` (`device_storage_buffer`): VRAM, never mapped.
-- `MemoryUsage::DeviceLocalMappable` (`mappable_storage_buffer`): device-local,
-  and mapped only where the memory is also host-visible, coherent **and
-  CPU-cached**, which is unified memory. On a discrete GPU it is unmapped,
-  resizable BAR included. VMA picks the memory
-  (`HOST_ACCESS_RANDOM | ALLOW_TRANSFER_INSTEAD`, nothing required), and the
-  allocator hands out the mapping only if the memory it landed in is cached.
-- `MemoryUsage::HostVisible` (`storage_buffer`), as before.
-
-The host reaches device memory through a `CommandBatch` rather than through
-`Buffer::mapped()`, so the same code is right on both kinds of machine. A
-batch records one call's `upload`, `fill`, `copy`, `dispatch`,
+The host reaches device memory through a `CommandBatch`. A batch records one call's `upload`, `fill`, `copy`, `dispatch`,
 `dispatch_indirect` and `readback` into one command buffer, and submits it
 once with one fence wait. It stages through a `StagingArena` the submitting
 object keeps.
@@ -5733,13 +5723,13 @@ Four findings shaped the design:
   arena and the block lists. So small parameters stay host-visible.
 - **The CPU must not read VRAM directly.** With the arena in BAR memory,
   `extract_host`'s download took 6.6 s, and the per-frame compaction readback
-  rose from 1.4 to 5–9 ms. So `DeviceLocalMappable` refuses to map anything
-  uncached, and a readback on a discrete GPU always copies into cached host
-  memory. The last column above has no fps for that reason.
-- **Apple is unaffected.** On the M5 Max every configuration read within
-  noise of main: `integrate` at 0.12 ms of device time in all four. The
-  design must therefore cost nothing there. That is why the mappable kind
-  and the batch's direct paths exist, rather than staging everywhere.
+  rose from 1.4 to 5–9 ms. So device memory is never mapped, and a readback
+  always copies into cached host memory. The last column above has no fps
+  for that reason.
+- **Apple is unaffected by placement.** On the M5 Max every configuration
+  read within noise of main: `integrate` at 0.12 ms of device time in all
+  four. So residency costs Apple nothing but the staging copies, which is
+  what the next section weighs.
 - **Host overhead remains.** Once resident, `integrate`'s host row on the
   5090 is still about 9 ms against 0.07 ms on the device, where the Mac's is
   0.59 ms. That points at per-call allocations, the active-list round trip
@@ -5759,12 +5749,12 @@ Four findings shaped the design:
   into a mapped buffer is a host `memcpy` only while nothing has been
   recorded, since a command recorded earlier runs after the write. A readback
   from a mapped buffer reads the mapping after the wait only when nothing but
-  readbacks follows it. So on unified memory a batch that only uploads and
-  reads back needs no submit at all.
+  readbacks follows it. So a batch that only touches host-visible buffers
+  needs no submit at all.
 - **Usage is checked as if staged**, whichever path a buffer takes:
   `TRANSFER_DST` for an upload, `TRANSFER_SRC` for a readback. Otherwise a
-  buffer missing the bit would pass on the Mac, where the direct path hides
-  it, and fail on NVIDIA, the class of bug the host-visible locks were.
+  host-visible buffer missing the bit would work until the day it moved into
+  device memory.
 - **A refused call poisons the batch.** `submit` returns the first refusal and
   runs nothing. An upload that already went straight into a mapping stays
   written.
@@ -5779,16 +5769,31 @@ Four findings shaped the design:
   a kernel writes on the device can size the next dispatch without reaching
   the host, which is how the active-list round trip goes.
 
+**No mappable device memory, deliberately.** The first cut had a third
+kind, device memory mapped where it is also CPU-cached, i.e. unified memory,
+so that Apple could skip staging. It was dropped before merge:
+
+- On NVIDIA it was plain VRAM, identical to `DeviceLocal`.
+- On Apple it saved only the staging copies. Those are a few bytes for a
+  counter and a few MB for an input frame. The largest is an export such as
+  the mesh download, which can be streamed through a bounded readback in
+  chunks. None of it is measured.
+- What it cost was a Mac taking a different path from NVIDIA. The staged path
+  NVIDIA runs would then have gone unexercised where the code is developed,
+  the same invisible-where-tested class as the host-visible locks.
+
+With plain device memory, a Mac run is the NVIDIA path. Revisit it with a
+measurement of staging on the memory-bound iPad.
+
 `device_storage_buffer` now adds `TRANSFER_SRC | TRANSFER_DST` usage and takes
 extra usage and queue families, so a batch can fill, copy and stage through
 anything it makes, and the mesh arena can use it. #99's
 `tests/buffer_readback.hpp` reads back through a batch, so the sensor tests
 exercise it on every CI leg.
 
-**Verified.** `recon_core_command_batch` runs every call over the three
-kinds. The device-local buffer is always staged, the host-visible one always
-mapped, and the mappable one mapped on the M5 Max and staged on the 5090, so
-each machine takes each path somewhere.
+**Verified.** `recon_core_command_batch` runs every call over a device-local
+buffer, always staged, and a host-visible one, always mapped. So both
+machines run both paths.
 
 - **Orders that would expose a misplaced shortcut:** an upload recorded after
   a dispatch into the same buffer, and a readback recorded before one.

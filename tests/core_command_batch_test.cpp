@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Tao Jin
 
-// CommandBatch and StagingArena, and the DeviceLocalMappable memory kind.
+// CommandBatch and StagingArena.
 //
-// Every case runs over three buffers the host reaches differently: device-local
-// (always staged), device-local-mappable (mapped on unified memory, staged on a
-// discrete GPU) and host-visible (always mapped). The mapped paths take the
-// direct shortcuts, so the ordering cases -- an upload after a dispatch, a
-// readback before one -- are the ones that would catch a shortcut taken where
-// it changes the result, on every platform. Skips (exit 0) where no device is
-// present.
+// Every case runs over the two buffers the host reaches differently:
+// device-local (always staged) and host-visible (always mapped). The mapped one
+// takes the direct shortcuts, so the ordering cases -- an upload after a
+// dispatch, a readback before one -- are the ones that would catch a shortcut
+// taken where it changes the result, on every platform. Skips (exit 0) where no
+// device is present.
 
 #include <cstdint>
 #include <cstdio>
@@ -88,22 +87,15 @@ vr::Status add_to(vr::CommandBatch& batch, const Rig& rig,
                         vr::group_count(kCount, 64), rig.max_groups);
 }
 
-// The three kinds of buffer, with the usage every batch call needs.
+// The two kinds of buffer, with the usage every batch call needs.
 vr::Result<vr::Buffer> make(vr::Allocator& a, int kind) {
-  switch (kind) {
-    case 0:
-      return vr::device_storage_buffer(a, kBytes);
-    case 1:
-      return vr::mappable_storage_buffer(a, kBytes);
-    default:
-      return vr::storage_buffer(
-          a, kBytes, vr::HostAccess::Random,
-          VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
-  }
+  if (kind == 0) return vr::device_storage_buffer(a, kBytes);
+  return vr::storage_buffer(
+      a, kBytes, vr::HostAccess::Random,
+      VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
 }
 
-const char* kKindName[] = {"device-local", "device-local-mappable",
-                           "host-visible"};
+const char* kKindName[] = {"device-local", "host-visible"};
 
 int run_kind(const Rig& rig, int kind) {
   // An arena of its own, so what it stages is this kind's alone.
@@ -113,8 +105,7 @@ int run_kind(const Rig& rig, int kind) {
   vr::Result<vr::Buffer> made = make(*rig.allocator, kind);
   CHECK(made.ok());
   vr::Buffer buffer = std::move(made).value();
-  if (kind == 0) CHECK(buffer.mapped() == nullptr);
-  if (kind == 2) CHECK(buffer.mapped() != nullptr);
+  CHECK((buffer.mapped() != nullptr) == (kind == 1));
   std::printf("  %s: %s\n", kKindName[kind],
               buffer.mapped() != nullptr ? "mapped" : "staged");
 
@@ -229,20 +220,8 @@ int main() {
   CHECK(staging.valid());
   CHECK(staging.upload_capacity() == 0);
 
-  // A mappable buffer is mapped only where its memory is also cached; asking
-  // for the mapping is refused, since the memory decides.
-  {
-    vr::BufferDesc desc;
-    desc.size = kBytes;
-    desc.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-    desc.memory = vr::MemoryUsage::DeviceLocalMappable;
-    desc.mapped = true;
-    CHECK(allocator.create_buffer(desc).status().domain() ==
-          vr::Status::Code::InvalidArgument);
-  }
-
   std::printf("buffers:\n");
-  for (int kind = 0; kind < 3; ++kind) {
+  for (int kind = 0; kind < 2; ++kind) {
     if (run_kind(rig, kind) != 0) return 1;
   }
 
@@ -366,7 +345,7 @@ int main() {
     }));
     CHECK(refused([&](vr::CommandBatch& c) { return c.fill(bare, 0, 4, 0); }));
     // Mapped, so the direct path would work -- and is refused all the same,
-    // or a buffer missing the bit would pass on unified memory only.
+    // or the bit would go missing until the buffer moved to device memory.
     vr::Result<vr::Buffer> mapped_result =
         vr::storage_buffer(allocator, kBytes);
     CHECK(mapped_result.ok());

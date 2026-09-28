@@ -168,36 +168,6 @@ inline Result<Buffer> device_storage_buffer(
   return allocator.create_buffer(desc);
 }
 
-/// @brief @ref device_storage_buffer, mapped where that costs nothing
-///        (@ref MemoryUsage::DeviceLocalMappable): for device memory the host
-///        also reaches -- a grid a test fills, an arena a caller downloads.
-///
-/// On unified memory @ref Buffer::mapped is live and a @ref CommandBatch
-/// reads and writes through it without a staging copy; on a discrete GPU it
-/// is null and the batch stages. Reach it through a batch rather than
-/// `mapped()`, so the same code is right on both.
-/// @param allocator    The allocator to create on.
-/// @param bytes        Size in bytes (must be non-zero).
-/// @param extra_usage  As @ref device_storage_buffer.
-/// @param queue_families      As @ref storage_buffer.
-/// @param queue_family_count  Entries in @p queue_families.
-/// @return The buffer, or a non-OK @ref Status if creation fails.
-inline Result<Buffer> mappable_storage_buffer(
-    Allocator& allocator, VkDeviceSize bytes,
-    VkBufferUsageFlags extra_usage = 0,
-    const std::uint32_t* queue_families = nullptr,
-    std::uint32_t queue_family_count = 0) {
-  BufferDesc desc;
-  desc.size = bytes;
-  desc.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-               VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
-               VK_BUFFER_USAGE_TRANSFER_DST_BIT | extra_usage;
-  desc.memory = MemoryUsage::DeviceLocalMappable;
-  desc.queue_families = queue_families;
-  desc.queue_family_count = queue_family_count;
-  return allocator.create_buffer(desc);
-}
-
 /// @brief An image a call reads as a storage binding: a host array the call
 ///        uploads, or a storage buffer already on the device (another pass's
 ///        output), bound in place. One or the other, by construction.
