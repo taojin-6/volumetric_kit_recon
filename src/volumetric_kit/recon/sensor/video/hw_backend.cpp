@@ -6,6 +6,10 @@
 #include <string>
 #include <vector>
 
+#if defined(__APPLE__)
+#include <VideoToolbox/VideoToolbox.h>
+#endif
+
 namespace volumetric_kit::recon::sensor::video {
 
 std::vector<VideoDecodeBackend> platform_hardware_order() {
@@ -48,6 +52,26 @@ AVPixelFormat hardware_pixel_format(const AVCodec* codec,
       return config->pix_fmt;
     }
   }
+}
+
+std::optional<bool> hardware_decodes(VideoDecodeBackend backend,
+                                     AVCodecID codec) noexcept {
+#if defined(__APPLE__)
+  if (backend == VideoDecodeBackend::VideoToolbox) {
+    switch (codec) {
+      case AV_CODEC_ID_HEVC:
+        return VTIsHardwareDecodeSupported(kCMVideoCodecType_HEVC) != 0;
+      case AV_CODEC_ID_H264:
+        return VTIsHardwareDecodeSupported(kCMVideoCodecType_H264) != 0;
+      default:
+        break;
+    }
+  }
+#else
+  (void)backend;
+  (void)codec;
+#endif
+  return std::nullopt;
 }
 
 Result<BufferRef> open_hardware_device(VideoDecodeBackend backend) {

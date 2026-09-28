@@ -704,8 +704,9 @@ arbitrary; it usually isn't.
   units to host pictures, `Rgb24` or the `Yuv420` planes with their matrix
   and range, plus the stream's transfer and primaries as an optional
   `ColorEncoding` (empty when that type cannot name them). `Auto` takes the
-  first hardware back end that decodes a built-in clip (VideoToolbox; CUDA,
-  Vulkan, VAAPI on Linux), probing only as far as it needs, else software.
+  first hardware back end that decodes HEVC (VideoToolbox, asked through
+  `VTIsHardwareDecodeSupported`; CUDA, Vulkan, VAAPI on Linux, each by
+  decoding a built-in clip), probing only as far as it needs, else software.
   It moves to software when the hardware refuses a stream, and the pictures
   the hardware still held come out too. A named back end is never swapped for
   another; it returns `Unsupported` instead. A display window off the coded

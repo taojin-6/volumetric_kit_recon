@@ -6,6 +6,7 @@
 // The hardware back ends as FFmpeg names them: which this platform tries, in
 // which order, and how a decoder is attached to one. Codec-neutral. Internal.
 
+#include <optional>
 #include <vector>
 
 #include "ffmpeg.hpp"
@@ -27,6 +28,13 @@ AVHWDeviceType device_type(VideoDecodeBackend backend) noexcept;
 ///         AV_PIX_FMT_NONE if this FFmpeg has no such hardware path.
 AVPixelFormat hardware_pixel_format(const AVCodec* codec,
                                     AVHWDeviceType type) noexcept;
+
+/// @return The platform's own answer to whether @p backend's hardware decodes
+///         @p codec, where it has one to ask: VideoToolbox's
+///         VTIsHardwareDecodeSupported, for HEVC and H.264. Empty for the
+///         others, which only decoding a clip can answer.
+std::optional<bool> hardware_decodes(VideoDecodeBackend backend,
+                                     AVCodecID codec) noexcept;
 
 /// @return A device context for @p backend on the default device;
 ///         Unsupported if this FFmpeg lacks it or no device opens.

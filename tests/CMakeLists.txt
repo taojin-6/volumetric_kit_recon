@@ -374,9 +374,10 @@ vr_target_warnings(recon_codec_decoder_test)
 add_test(NAME recon_codec_decoder COMMAND recon_codec_decoder_test)
 
 # The video decoder (VR_WITH_FFMPEG only). The converter test builds frames by
-# hand and compiles the internal source itself, as the Orbbec conversion test
-# does. The decoder test decodes the committed clips on software and on every
-# hardware back end found; VR_TEST_HEVC_BACKEND makes one required.
+# hand and the back-end test asks the platform, no decoding; both compile the
+# internal source themselves, as the Orbbec conversion test does. The decoder
+# test decodes the committed clips on software and on every hardware back end
+# found; VR_TEST_HEVC_BACKEND makes one required.
 if(VR_WITH_FFMPEG)
   set(_vr_video_src ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/video)
   add_executable(
@@ -391,6 +392,23 @@ if(VR_WITH_FFMPEG)
   vr_target_warnings(recon_sensor_video_converter_test)
   add_test(NAME recon_sensor_video_converter
            COMMAND recon_sensor_video_converter_test)
+
+  add_executable(
+    recon_sensor_video_backend_test
+    sensor_video_backend_test.cpp ${_vr_video_src}/hw_backend.cpp
+    ${_vr_video_src}/ffmpeg.cpp)
+  target_link_libraries(
+    recon_sensor_video_backend_test PRIVATE volumetric_kit::recon_sensor_video
+                                            PkgConfig::VR_FFMPEG)
+  if(APPLE)
+    target_link_libraries(recon_sensor_video_backend_test
+                          PRIVATE "-framework VideoToolbox")
+  endif()
+  target_include_directories(recon_sensor_video_backend_test
+                             PRIVATE ${_vr_video_src})
+  vr_target_warnings(recon_sensor_video_backend_test)
+  add_test(NAME recon_sensor_video_backend
+           COMMAND recon_sensor_video_backend_test)
 
   add_executable(recon_sensor_video_hevc_test sensor_video_hevc_test.cpp)
   target_link_libraries(recon_sensor_video_hevc_test

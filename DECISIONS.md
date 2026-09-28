@@ -4501,7 +4501,12 @@ VAAPI on Linux; CUDA, then D3D11VA on Windows. A machine with an NVIDIA and an
 Intel GPU therefore decodes on the NVIDIA one. A back end counts only if it
 decodes a built-in 157-byte clip, because an open device says nothing about
 HEVC: a Vulkan device may have no video queue, and an older Intel GPU opens
-under VAAPI without decoding HEVC. Each is probed once per process, with
+under VAAPI without decoding HEVC. VideoToolbox is asked instead, through
+`VTIsHardwareDecodeSupported`, the one back end with a single call for it.
+The others each have a query of their own (NVDEC's `cuvidGetDecoderCaps`,
+VAAPI's profiles, Vulkan's video capabilities, D3D11's decoder profiles),
+each with its own dependency and two with no CI leg, while the clip tests
+the path FFmpeg will decode on. Each is probed once per process, with
 FFmpeg's log silenced (a missing back end says so at ERROR: "Cannot load
 libcuda.so.1"), and `Auto` probes down the list only until one decodes and
 opens, so an NVIDIA machine never probes Vulkan or VAAPI. A named back end

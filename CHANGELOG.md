@@ -75,9 +75,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `sensor`: **`HevcDecoder`** (`sensor/video/hevc_decoder.hpp`, the new
   `recon_sensor_video` target behind `VR_WITH_FFMPEG`): H.265 access units to
   host pictures, `Rgb24` or `Yuv420`, over an installed FFmpeg ≥ 4.4. `Auto`
-  takes the first hardware back end that decodes a built-in clip
-  (VideoToolbox; CUDA, Vulkan, VAAPI on Linux; CUDA, D3D11VA on Windows),
-  else software. Tests: `recon_sensor_video_hevc`, which
+  takes the first hardware back end that decodes HEVC (VideoToolbox, as
+  `VTIsHardwareDecodeSupported` answers; CUDA, Vulkan, VAAPI on Linux and
+  CUDA, D3D11VA on Windows, by decoding a built-in clip), else software. Tests: `recon_sensor_video_hevc`, which
   `VR_TEST_HEVC_BACKEND` can hold to one back end, and
   `recon_sensor_video_converter`. CI builds it on every leg and requires NVDEC
   on Linux and VideoToolbox on macOS. Pictures carry the stream's transfer and
