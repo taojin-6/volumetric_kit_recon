@@ -1,21 +1,24 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Tao Jin
 
-// fuse_orbbec: live reconstruction from an Orbbec (Femto Mega) camera. Opens
-// the camera through sensor::OrbbecCapture, fuses each frame it hands out into
-// a sparse TSDF volume -- the same per-frame fuse the dataset example runs
-// (examples/common/fuse_frame.hpp) -- and after --frames frames extracts a
-// marching-cubes mesh and writes it to a binary PLY.
+// fuse_orbbec: live reconstruction from an Orbbec (Femto Mega) camera or a
+// synced rig of them. Opens sensor::OrbbecCapture or sensor::OrbbecRig, fuses
+// each frame it hands out into a sparse TSDF volume -- the same per-frame fuse
+// the dataset example runs (examples/common/fuse_frame.hpp) -- and after
+// --frames frames extracts a marching-cubes mesh and writes it to a binary PLY.
 //
-//   fuse_orbbec [--serial SN] [--frames 300] [-o fuse_orbbec.ply]
+//   fuse_orbbec [--serial SN | --rig sync.json [--apply-sync]]
+//               [--calibration calib.json] [--frames 300] [-o fuse_orbbec.ply]
 //               [--voxel 0.02] [--trunc m] [--min-depth m] [--max-depth m]
 //               [--max-weight 20]
 //
-// The camera sits at the world origin (identity pose), so the volume is what
-// one fixed view sees, averaged over the run. The run gives up after ten
-// seconds without a frame -- a sync secondary with no primary, say -- rather
-// than waiting forever.
+// --rig fuses every camera of a sync configuration (femto_mega_sync.json) as
+// one rig, refusing cameras that differ from it unless --apply-sync writes it
+// to them. --calibration poses each camera from a calibration file
+// (sensor/rig_calibration.hpp); without it every camera sits at the origin.
+// The run gives up after ten seconds without a frame rather than waiting.
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -24,6 +27,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "fuse_frame.hpp"
 #include "ply_writer.hpp"
@@ -36,6 +40,9 @@
 #include "volumetric_kit/recon/mesh/mesh.hpp"
 #include "volumetric_kit/recon/sensor/camera_capture.hpp"
 #include "volumetric_kit/recon/sensor/orbbec/orbbec_capture.hpp"
+#include "volumetric_kit/recon/sensor/orbbec/orbbec_rig.hpp"
+#include "volumetric_kit/recon/sensor/orbbec/orbbec_sync_config.hpp"
+#include "volumetric_kit/recon/sensor/rig_calibration.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_grid.hpp"
@@ -54,8 +61,11 @@ namespace {
 constexpr auto kSilenceLimit = std::chrono::seconds(10);
 
 struct Options {
-  std::string serial;  // empty: the only camera found
-  int frames = 300;    // a camera never runs out, so the run needs an end
+  std::string serial;       // one camera; empty: the only one found
+  std::string rig;          // a sync configuration: fuse its cameras as a rig
+  std::string calibration;  // poses by serial; empty: all at the origin
+  bool apply_sync = false;  // write the sync configuration where it differs
+  int frames = 300;         // a camera never runs out, so the run needs an end
   std::string out = "fuse_orbbec.ply";
   float voxel = 0.02f;  // metres
   float trunc = 0.0f;   // truncation distance (metres); 0 => 4 * voxel
@@ -85,6 +95,13 @@ vr::Result<Options> parse_args(int argc, char** argv) {
       if (s == nullptr)
         return vr::Status::invalid_argument("--serial needs SN");
       opt.serial = s;
+    } else if (a == "--rig" || a == "--calibration") {
+      const char* s = take();
+      if (s == nullptr)
+        return vr::Status::invalid_argument(a + " needs a path");
+      (a == "--rig" ? opt.rig : opt.calibration) = s;
+    } else if (a == "--apply-sync") {
+      opt.apply_sync = true;
     } else if (a == "--frames") {
       const char* s = take();
       if (s == nullptr) return vr::Status::invalid_argument("--frames needs N");
@@ -114,9 +131,10 @@ vr::Result<Options> parse_args(int argc, char** argv) {
     } else {
       return vr::Status::invalid_argument(
           "unknown argument: " + a +
-          "\nusage: fuse_orbbec [--serial SN] [--frames N] [-o out.ply] "
-          "[--voxel m] [--trunc m] [--min-depth m] [--max-depth m] "
-          "[--max-weight w]");
+          "\nusage: fuse_orbbec [--serial SN | --rig sync.json [--apply-sync]] "
+          "[--calibration calib.json] [--frames N] "
+          "[-o out.ply] [--voxel m] [--trunc m] [--min-depth m] "
+          "[--max-depth m] [--max-weight w]");
     }
   }
   // strtof takes "nan"/"inf" without complaint, and a NaN knob passes every
@@ -140,34 +158,122 @@ vr::Result<Options> parse_args(int argc, char** argv) {
   return opt;
 }
 
-vr::Status run(const Options& opt) {
-  // --- Camera ---
-  // Opened before the GPU so a missing camera fails fast. The depth gate is
-  // validated by the driver, which names both values when it refuses one.
-  sensor::OrbbecCapture::Options capture_options;
-  capture_options.serial = opt.serial;
-  if (opt.min_depth) capture_options.min_depth = *opt.min_depth;
-  if (opt.max_depth) capture_options.max_depth = *opt.max_depth;
-  // An optional so the run can release the camera before the extract: stop()
-  // ends the streams but keeps the camera held for a restart.
+// One camera or a rig, behind the capture contract the fuse loop reads.
+struct Source {
   std::optional<sensor::OrbbecCapture> camera;
-  VR_ASSIGN(camera, sensor::OrbbecCapture::open(capture_options));
-  const sensor::OrbbecDeviceInfo info = camera->device_info();
-  const vr::ColorCameraParams cam = camera->color_camera();
+  std::optional<sensor::OrbbecRig> rig;
+  bool waits_for_primary = false;  // one camera, and a sync secondary
+  std::string name;                // for the silence message
+
+  sensor::ICameraCapture& capture() {
+    return camera ? static_cast<sensor::ICameraCapture&>(*camera) : *rig;
+  }
+  void print_stats() const {
+    const auto line = [](const char* who,
+                         const sensor::OrbbecCaptureStats& st) {
+      std::printf(
+          "  %s: %llu pairs received, %llu fused, %llu dropped, %llu "
+          "unprocessable\n",
+          who, static_cast<unsigned long long>(st.received),
+          static_cast<unsigned long long>(st.delivered),
+          static_cast<unsigned long long>(st.dropped),
+          static_cast<unsigned long long>(st.failed));
+    };
+    if (camera) {
+      line(camera->device_info().serial.c_str(), camera->stats());
+      return;
+    }
+    const sensor::OrbbecRigStats st = rig->stats();
+    std::printf("rig: %llu sets, %llu missing a camera\n",
+                static_cast<unsigned long long>(st.sets),
+                static_cast<unsigned long long>(st.incomplete));
+    for (std::size_t i = 0; i < st.cameras.size(); ++i) {
+      line(rig->device_info(i).serial.c_str(), st.cameras[i]);
+    }
+  }
+};
+
+void print_camera(const sensor::OrbbecDeviceInfo& info,
+                  const vr::ColorCameraParams& cam) {
   std::printf(
       "camera: %s %s, firmware %s, %s %s, sync %s\n"
       "  %ux%u @ fx=%.1f fy=%.1f cx=%.1f cy=%.1f (depth registered to "
-      "colour), depth gate [%.2f, %.2f] m\n",
+      "colour), at (%.3f, %.3f, %.3f) m\n",
       info.name.c_str(), info.serial.c_str(), info.firmware_version.c_str(),
       info.connection_type.c_str(), info.ip_address.c_str(),
       sensor::to_string(info.sync_mode), cam.width, cam.height, cam.fx, cam.fy,
-      cam.cx, cam.cy, capture_options.min_depth, capture_options.max_depth);
-  const bool secondary = sensor::waits_for_primary(info.sync_mode);
-  if (secondary) {
+      cam.cx, cam.cy, cam.cam_to_world[3].x, cam.cam_to_world[3].y,
+      cam.cam_to_world[3].z);
+}
+
+// Opened before the GPU so a missing camera fails fast. The depth gate is
+// validated by the driver, which names both values when it refuses one.
+vr::Result<Source> open_source(const Options& opt) {
+  if (!opt.rig.empty() && !opt.serial.empty()) {
+    return vr::Status::invalid_argument(
+        "--rig and --serial exclude each other");
+  }
+  if (opt.apply_sync && opt.rig.empty()) {
+    return vr::Status::invalid_argument("--apply-sync needs --rig");
+  }
+  std::vector<sensor::RigCameraCalibration> calibration;
+  if (!opt.calibration.empty()) {
+    VR_ASSIGN(calibration, sensor::read_rig_calibration(opt.calibration));
+  }
+  Source source;
+  if (!opt.rig.empty()) {
+    sensor::OrbbecRig::Options rig_options;
+    VR_ASSIGN(rig_options.sync, sensor::read_orbbec_sync_config(opt.rig));
+    rig_options.calibration = calibration;
+    rig_options.apply_sync_config = opt.apply_sync;
+    if (opt.min_depth) rig_options.min_depth = *opt.min_depth;
+    if (opt.max_depth) rig_options.max_depth = *opt.max_depth;
+    VR_ASSIGN(source.rig, sensor::OrbbecRig::open(rig_options));
+    for (std::size_t i = 0; i < source.rig->camera_count(); ++i) {
+      print_camera(source.rig->device_info(i), source.rig->color_camera(i));
+    }
+    source.name = "the rig";
+    return source;
+  }
+  sensor::OrbbecCapture::Options capture_options;
+  capture_options.serial = opt.serial;
+  if (!calibration.empty()) {
+    // One camera, posed from the file: the named one, or the file's only.
+    const auto it = std::find_if(
+        calibration.begin(), calibration.end(), [&](const auto& c) {
+          return opt.serial.empty() ? calibration.size() == 1
+                                    : c.serial == opt.serial;
+        });
+    if (it == calibration.end()) {
+      return vr::Status::not_found(
+          opt.calibration + (opt.serial.empty()
+                                 ? std::string(" poses several cameras; name "
+                                               "one with --serial")
+                                 : " has no camera " + opt.serial));
+    }
+    capture_options.serial = it->serial;
+    capture_options.cam_to_world = it->cam_to_world;
+  }
+  if (opt.min_depth) capture_options.min_depth = *opt.min_depth;
+  if (opt.max_depth) capture_options.max_depth = *opt.max_depth;
+  VR_ASSIGN(source.camera, sensor::OrbbecCapture::open(capture_options));
+  const sensor::OrbbecDeviceInfo& info = source.camera->device_info();
+  print_camera(info, source.camera->color_camera());
+  source.waits_for_primary = sensor::waits_for_primary(info.sync_mode);
+  if (source.waits_for_primary) {
     std::printf(
         "  note: a sync %s delivers frames only on another camera's signal\n",
         sensor::to_string(info.sync_mode));
   }
+  source.name = "camera " + info.serial;
+  return source;
+}
+
+vr::Status run(const Options& opt) {
+  // An optional so the run can release the cameras before the extract:
+  // stop() ends the streams but keeps the cameras held for a restart.
+  std::optional<Source> source;
+  VR_ASSIGN(source, open_source(opt));
 
   // --- GPU + volume ---
   VR_ASSIGN(vr::Instance instance, vr::Instance::create({}));
@@ -185,7 +291,7 @@ vr::Status run(const Options& opt) {
             mesh::MarchingCubes::create(device, allocator, {}));
 
   // --- Fuse ---
-  sensor::ICameraCapture& capture = *camera;
+  sensor::ICameraCapture& capture = source->capture();
   VR_TRY(capture.start());
   vr::StageMetrics stage_totals;
   int fused = 0;
@@ -199,13 +305,13 @@ vr::Status run(const Options& opt) {
       // camera that is not coming, and saying which kind beats a hang.
       if (std::chrono::steady_clock::now() - last_frame > kSilenceLimit) {
         return vr::Status::io_error(
-            "no frame from camera " + info.serial + " in " +
+            "no frame from " + source->name + " in " +
             std::to_string(kSilenceLimit.count()) + " s" +
-            (secondary ? std::string(" -- it is a sync ") +
-                             sensor::to_string(info.sync_mode) +
-                             ", which captures only on another camera's "
-                             "signal; start the camera that drives it"
-                       : std::string()));
+            (source->waits_for_primary
+                 ? std::string(" -- it is a sync secondary, which captures "
+                               "only on another camera's signal; start the "
+                               "camera that drives it")
+                 : std::string()));
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
       continue;
@@ -223,16 +329,9 @@ vr::Status run(const Options& opt) {
   const double secs =
       std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start)
           .count();
-  const sensor::OrbbecCaptureStats st = camera->stats();
-  camera.reset();
+  source->print_stats();
+  source.reset();
 
-  std::printf(
-      "camera: %llu pairs received, %llu fused, %llu replaced before a poll "
-      "took them, %llu skipped as unprocessable\n",
-      static_cast<unsigned long long>(st.received),
-      static_cast<unsigned long long>(st.delivered),
-      static_cast<unsigned long long>(st.dropped),
-      static_cast<unsigned long long>(st.failed));
   std::printf("stages    per fused frame, mean over %d frames\n", fused);
   for (const vr::StageRow& row : stage_totals.rows()) {
     if (row.has_gpu) {

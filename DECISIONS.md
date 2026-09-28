@@ -4202,6 +4202,89 @@ check refuses.
   writer never makes one, and it decodes correctly. A `TODO(codec)` in the
   reader's block decode.
 
+### 2026-09-27 — The rig is `OrbbecRig`: it checks the cameras against the rig's sync configuration and writes it only when asked, starts the secondaries before the primary, keeps the cameras on the host's clock, and builds each set around a primary frame; poses come from the calibration file.
+
+**The rule.** `OrbbecRig` (`sensor/orbbec/orbbec_rig.hpp`) is opened from the
+rig's sync configuration (`orbbec_sync_config.hpp`: the SDK's
+`MultiDeviceSyncConfig.json` layout, as in `femto_mega_sync.json`), which
+names the cameras, the primary, and each one's sync settings. `open` compares
+every camera's stored settings with it and refuses a difference, naming each
+field, unless `apply_sync_config` writes the configuration to the cameras that
+differ. It then requires one primary and its secondaries. `start` has the SDK
+sync the cameras' clocks to the host's (`enableDeviceClockSync`) and starts
+the secondaries first, since the primary's first trigger is what they wait
+for. Each set is a primary frame plus each secondary's frame within
+`sync_tolerance_us` of it on that clock, and only a set's frames are
+processed, through the `CameraStream` that `OrbbecCapture` now wraps.
+`poll_set()` hands out one set per trigger, with an empty slot for a missing
+secondary; `poll()` hands out the same frames one at a time, so the fuse loop
+reads a rig as it reads one camera. A caller reads with one of the two per
+`start`.
+
+**Which sync fields are compared.** On the Femto Mega, a written `SECONDARY`
+reads back as `SECONDARY_SYNCED`, `trigger2ImageDelayUs` reads back as the
+depth delay, and `framesPerTrigger` as 0; writes persist (a 200 µs delay read
+back from a fresh process). So the comparison covers the role (primary or
+secondary), the depth and colour delays and the trigger output, and
+`framesPerTrigger` only in a triggering mode; anything more would refuse
+every open. The camera has one secondary mode, and it waits for the trigger:
+started alone for 4 s, the three secondaries delivered one frame between
+them. The SDK answers a read in the same process with what was written, so
+the check after a write proves the write, and the next `open` proves the
+camera. The lab rig's file is committed as `config/femto_mega_sync.json`,
+which a test keeps valid; the library never reads `config/` itself.
+
+**Why these numbers.** On the four-camera rig over the 2.5 Gbit/s cable,
+720p colour, 640x576 depth, 30 fps:
+- With clock sync, a secondary's frame lands +0.4 to +1.7 ms from the
+  primary's, stragglers to 3.4 ms. Without it the cameras' clocks are ~30 s
+  apart and host arrival times jitter by ±20 ms. The 5 ms tolerance clears
+  every straggler; half a frame period (16.7 ms), where one frame could match
+  two triggers, is refused.
+- Each secondary drops 1-6% of its frames and the primary none, so 90-99% of
+  sets are complete. A set goes out once each missing secondary has sent a
+  later frame or stayed silent for 1.5 frame periods, rather than costing the
+  other cameras their frames.
+- The primary's frames name the triggers, so its first triggers, which reach
+  the secondaries ~525 ms before its own first frame reaches the host, a late
+  secondary frame, and a camera whose clock is off by more than the tolerance
+  all cost frames, never an extra set.
+- A set's four frames take ~11 ms to process. A rig camera's mailbox keeps
+  its four newest frames, so a poll slower than the cameras still finds one
+  trigger in all of them: at 58 ms a set (ASan), one-frame mailboxes left
+  75.6% of sets complete, four-frame ones 98.9%.
+- Over Wi-Fi the rig ran at 13-28 fps. Depth crosses the network uncompressed
+  at ~170 Mbit/s per camera, so the rig needs the wired link.
+
+**The calibration file** (`sensor/rig_calibration.hpp`, in `recon_sensor`)
+is the family's config layout: `device_calibration.<serial>` with
+`intrinsics`, `distortion`, `optimal_intrinsics` and `pose {rvec, tvec}`;
+other sections are ignored. `pose` is the colour camera's OpenCV extrinsic
+(world to camera; Rodrigues radians; metres), the one required field, turned
+into this repo's camera-to-world on read. The lens fields are parsed and kept
+but not used: they are meant to equal the factory calibration the capture
+undistorts with. The inverse Rodrigues takes its angle from `atan2`, since
+`acos` near pi turned float round-off into an 8e-5 pose error; every pose now
+round-trips to 1.2e-7. It is in `recon_sensor` because calib writes it and
+nothing in it is Orbbec's. Both files are parsed with nlohmann/json 3.12.0
+(hash-pinned in `third_party/CMakeLists.txt`), a private `SYSTEM` include like
+VMA's.
+
+**Verified** on the rig. `recon_sensor_orbbec_rig` (`VR_ORBBEC_TEST_RIG`
+names the sync file) opens against `femto_mega_sync.json` with nothing
+written, refuses a copy with one delay changed, naming the camera, and gets
+90 sets, 98.9% complete, worst skew 1.59 ms, each frame posed from a written
+calibration file. `fuse_orbbec --rig --apply-sync` wrote only the one camera
+that differed; applying the real file put it back, matching a backup taken
+first. `recon_sensor_rig_calibration`, `recon_sensor_orbbec_sync_config` and
+`recon_sensor_orbbec_grouping` need no camera; 36 tests pass with the driver
+built, under `-Werror` in Release.
+
+**Open.** Why the secondaries drop frames with bandwidth to spare is
+unmeasured. Discovery once found no camera for 8 s right after another
+process released one. A set's frames are processed one camera after another
+(a `TODO(sensor)`). No real rig poses exist yet; that waits on calib.
+
 ## Measured lessons
 
 Not decisions, but the measurements that overturned an assumption about

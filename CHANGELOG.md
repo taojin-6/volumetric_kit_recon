@@ -65,6 +65,25 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `sensor`: **`OrbbecRig`**, a hardware-synced rig of Orbbec cameras, opened
+  from the rig's sync configuration (`orbbec_sync_config.hpp`, the SDK's
+  `MultiDeviceSyncConfig.json` layout). It refuses cameras whose settings
+  differ, unless `apply_sync_config` writes them; starts the secondaries
+  first; keeps the cameras on the host's clock; and hands out one set per
+  primary frame (`poll_set()`), or those frames one at a time (`poll()`). A
+  missing secondary leaves an empty slot. Tests: `recon_sensor_orbbec_rig`
+  (only the rig `VR_ORBBEC_TEST_RIG` names), `recon_sensor_orbbec_grouping`,
+  `recon_sensor_orbbec_sync_config`.
+- `sensor`: **the rig calibration file** (`rig_calibration.hpp`): read and
+  write the family's config layout, each camera's OpenCV `pose` turned into
+  camera-to-world, its lens fields kept. Test: `recon_sensor_rig_calibration`.
+  Parsed with nlohmann/json 3.12.0, a new pinned header-only dependency.
+- `config/`: **the lab rig's sync configuration**, `femto_mega_sync.json`
+  (one primary, three secondaries at 160/320/480 µs), kept valid by
+  `recon_sensor_orbbec_sync_config`.
+- `examples`: **`fuse_orbbec --rig sync.json [--apply-sync]
+  [--calibration calib.json]`** fuses the rig; `--serial` with
+  `--calibration` poses one camera from the file.
 - `codec`: **the rANS reference coder and the v1 intra frame**, both internal.
   This is the second of the codec's five PRs (see the 2026-09-27 decision).
   - `rans.hpp`: static-table rANS with a 32-bit state, 16-bit words and 12-bit

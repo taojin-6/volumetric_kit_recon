@@ -82,7 +82,8 @@ branching off **`core`** and `codec` off **`volume`** (later: `track`,
   them — and bundles **no drivers**: one ships here only if this repo can build
   *and* test it (the 2026-08-02 decision). The one that does, Orbbec, is a
   target of its own (`sensor/orbbec/`), so `recon_sensor` never links a vendor
-  SDK.
+  SDK. It also reads and writes the rig calibration file calib produces
+  (`rig_calibration.hpp`).
 - **`codec`** — the per-frame TSDF geometry codec: separate `Encoder` and
   `Decoder` classes over a private 8³ DCT transform, a geometry-only intra
   frame (block coordinates, an observed-voxel mask, the first K coefficients),
@@ -249,6 +250,11 @@ order. Change the decision, its entry there, and this list together.
   class plus raw bits, behind fixed per-frame tables and a section table; the
   decoder's end check is for consistency, not integrity (amends the 2026-09-26
   entry's interleaved lanes).
+- [**2026-09-27**](DECISIONS.md#2026-09-27--the-rig-is-orbbecrig-it-checks-the-cameras-against-the-rigs-sync-configuration-and-writes-it-only-when-asked-starts-the-secondaries-before-the-primary-keeps-the-cameras-on-the-hosts-clock-and-builds-each-set-around-a-primary-frame-poses-come-from-the-calibration-file) —
+  The rig is `OrbbecRig`: it checks the cameras against the rig's sync
+  configuration and writes it only when asked, starts the secondaries before
+  the primary, keeps the cameras on the host's clock, and builds each set
+  around a primary frame; poses come from the calibration file.
 
 ## Provenance & salvage policy
 
@@ -666,6 +672,21 @@ arbitrary; it usually isn't.
   `Options::cam_to_world`. It reads the camera's rig sync role
   (`waits_for_primary`) and never writes it, and its hardware test opens only
   the camera `VR_ORBBEC_TEST_SERIAL` names (the 2026-09-26 decision).
+  **`OrbbecRig`** reads several synced cameras as one: `poll_set()` hands out
+  one set per primary frame, with a missing secondary's slot left empty, and
+  `poll()` hands out the same frames one at a time — one of the two per
+  `start()`. A secondary's frame near no primary frame is let go, so a camera
+  whose clock is off costs its own frames, not the rig's sets. It opens from
+  the rig's **sync configuration** (`orbbec_sync_config.hpp`, the SDK's
+  `femto_mega_sync.json` layout) and refuses cameras that differ from it
+  unless `apply_sync_config` writes it; the lab rig's is
+  `config/femto_mega_sync.json`, which only the example and tests name. Each
+  camera's pose comes from the
+  **calibration file** (`sensor/rig_calibration.hpp`, the family's config
+  layout: OpenCV world-to-camera `rvec`/`tvec`). Both classes share the
+  internal `CameraStream`. The rig's hardware test opens only the rig
+  `VR_ORBBEC_TEST_RIG` names and never writes to it (the 2026-09-27
+  decision).
 
 - **`codec`** — two of five PRs in (2026-09-26 lists them). So far it is
   `CodecParams` (public) and, all private under
@@ -739,7 +760,8 @@ take `--preload`, which makes the loop measure compute rather than the
 JPEG/PNG decoder.
 The live counterpart is its own example, not a `fuse_replica` flag:
 **`fuse_orbbec`** (`VR_WITH_ORBBEC`) fuses an `OrbbecCapture` through the same
-`fuse_frame.hpp` and writes a PLY after `--frames` frames.
+`fuse_frame.hpp` and writes a PLY after `--frames` frames; `--rig sync.json`
+fuses the rig as an `OrbbecRig`, posed by `--calibration`.
 
 **Next.** **Incremental mesh extraction has landed, all three stages** —
 `MarchingCubes::extract_device_incremental`, over the span table of the
@@ -781,10 +803,12 @@ gauges from VMA heuristics into driver truth. The debug-utils labels that TODO
 sat beside **have landed** (2026-08-30) — on the *kernel* rather than the span,
 which is the correction that entry records.
 
-**On `sensor`**, each a `TODO(sensor)` in `orbbec_capture.cpp`: a
-multi-camera source (the rig's start order, one clock — what calib's viewer
-needs for synchronised streams), HEVC colour through a decoder of our own, and
-GPU pre-processing that keeps the frame on the device through fusion.
+**On `sensor`**, each a `TODO(sensor)`: HEVC colour through a decoder of our
+own, and GPU pre-processing that keeps the frame on the device through fusion
+(both in `camera_stream.cpp`), and processing a rig set's frames in parallel,
+one thread per camera, rather than the ~11 ms one after another costs for four
+(`orbbec_rig.cpp`). The rig's next consumer is calib's viewer, showing its
+synchronised sets.
 
 **Measure the phases before choosing the optimisation.** Three independent
 guesses at this pipeline's bottleneck have been wrong, each corrected by an

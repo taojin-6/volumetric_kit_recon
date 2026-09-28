@@ -76,7 +76,19 @@ VR_ORBBEC_TEST_SERIAL=<serial> ctest --test-dir build -R orbbec
 A camera wired as a sync secondary streams only while its primary does; name
 a primary or standalone camera for a single-camera run. Without `--serial` the
 example opens the only camera that answers, after waiting out the whole
-discovery window (8 s), since another may answer late.
+discovery window (8 s).
+
+A synced rig runs from its sync configuration (the lab rig's is
+`config/femto_mega_sync.json`, in the Orbbec SDK's layout) and a calibration
+file (`sensor/rig_calibration.hpp`) for the poses. The rig refuses cameras whose sync settings differ from the file;
+`--apply-sync` writes it to them:
+
+```sh
+build/examples/fuse_orbbec/fuse_orbbec --rig config/femto_mega_sync.json \
+    --calibration calib.json --frames 300
+VR_ORBBEC_TEST_RIG=$PWD/config/femto_mega_sync.json \
+    ctest --test-dir build -R orbbec_rig
+```
 
 ## License
 
