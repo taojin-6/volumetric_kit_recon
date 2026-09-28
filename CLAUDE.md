@@ -986,8 +986,11 @@ it. The codec round trip comes first: mesh → TSDF → DCT → v1 frame → dec
 mesh, measured against the *source* mesh, which fused room0 cannot give (there
 is no ground-truth mesh beside it). Then the robust signed mode of Xu & Barbič,
 composed from both modes plus marching cubes above `mesh`; it is the
-`TODO(tsdf)` on `MeshIntegrator`. Nothing about the integrator's cost is
-measured on a real mesh yet.
+`TODO(tsdf)` on `MeshIntegrator`. Its cost is measured once, on an
+81 920-triangle sphere at scan density (M5 Max, Release): 8.6 ms to allocate,
+12.9 ms to write as a shell, 22.3 ms signed. The GPU half is ~11 ms in both
+modes; the difference is `Signed`'s host topology pass, which depends only on
+the mesh.
 
 **On `sensor`**, each a `TODO(sensor)`: GPU pre-processing that keeps the
 frame on the device through fusion (`camera_stream.cpp`), including the

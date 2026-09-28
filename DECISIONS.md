@@ -5195,9 +5195,24 @@ twin.
 - S2, the paper's robust mode, as above.
 - The codec round trip, meaning mesh → TSDF → DCT → v1 frame → decode → mesh
   measured against the source mesh, is the next PR.
-- Nothing is measured on a real mesh yet: bin sizes, the topology pass's host
-  cost, or how the dispatch scales. A voxel's cost is its bin, so a mesh far
-  denser than the grid is where to look first.
+- **What it costs**, measured once on an 81 920-triangle sphere 1 m across,
+  its triangles about 1.6 voxels on a side like a scan's (Apple M5 Max,
+  Release, 5 mm voxels, the 40 mm band; 6 861 blocks, 1.97 M bin entries,
+  ~287 triangles a bin):
+
+  | call | wall | GPU |
+  |---|---|---|
+  | `allocate_from_triangles` | 8.6 ms | 6.9 ms |
+  | `integrate`, `Shell` | 12.9 ms | 11.0 ms |
+  | `integrate`, `Signed` | 22.3 ms | 10.8 ms |
+
+  The GPU half is the same in both modes. The ~9.5 ms that `Signed` spends
+  beyond `Shell` is the host topology pass: welding, adjacency and
+  pseudonormals, in hash maps. It depends only on the mesh, so a sequence that
+  keeps its connectivity could compute it once. That, or a GPU version, is the
+  lever if a mesh sequence's conversion time ever matters. A voxel's cost is
+  its bin, which a band as wide as a block keeps in the hundreds; a mesh far
+  denser than the grid is where the dispatch would grow first.
 
 ### 2026-09-28 — The Orbbec driver streams colour as H.265 on request: every colour frame is decoded, in order, on a thread per camera ahead of the mailbox; a lost frame is read off the frame index, not the clock; and the Femto Mega's stream is decoded as BT.601 full range, which it codes and does not say.
 
