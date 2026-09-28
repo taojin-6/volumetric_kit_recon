@@ -392,10 +392,11 @@ class VR_CORE_API Device {
   /// (`ONE_TIME_SUBMIT`), invokes @p record to fill it (bind pipeline, bind
   /// descriptors, push constants, dispatch, barriers), then ends, submits
   /// (through @ref queue_submit, so it is shared-queue-safe), and waits on an
-  /// internal fence. The fence is freed and the command buffer kept for a
-  /// later submit before returning. Blocking, so it is a bring-up /
-  /// single-shot primitive; the fusion tiers will batch many dispatches per
-  /// submit on their own.
+  /// internal fence. Both the command buffer and the fence are kept for a
+  /// later submit, except when the device may still run them, as after a
+  /// failed wait, when they are left to it until the device is destroyed.
+  /// Blocking, so it is a bring-up / single-shot primitive; the fusion tiers
+  /// will batch many dispatches per submit on their own.
   ///
   /// Thread-safe: several threads may submit on one @ref Device at once. Each
   /// call records on a command pool no other call is using, so recording
@@ -449,9 +450,10 @@ class VR_CORE_API Device {
   ///                markers around the work rather than the work would make
   ///                every published `gpu_ms` depend on whether a profiler was
   ///                being catered to.
-  /// @param in_flight    Optional; set to `true` when the fence wait failed,
-  ///                which leaves the buffer to a device that may still run
-  ///                it, so whatever it records must stay alive too; `false`
+  /// @param in_flight    Optional; set to `true` when the fence wait failed
+  ///                or the submit lost the device, which leaves the buffer
+  ///                and fence to a device that may still run them, so
+  ///                whatever the buffer records must stay alive too; `false`
   ///                otherwise.
   /// @return OK once the work completes, or a non-OK @ref Status if any Vulkan
   ///         step fails. A failure to *resolve* the span never appears here:
@@ -470,8 +472,8 @@ class VR_CORE_API Device {
   VkPhysicalDevice physical_ = VK_NULL_HANDLE;
   VkDevice device_ = VK_NULL_HANDLE;
   // False when the device was adopted (@ref adopt): destroy() then tears down
-  // only the command pools this wrapper made and leaves the VkDevice to its
-  // owner. Reset on every ownership transfer.
+  // only the command pools and fences this wrapper made and leaves the
+  // VkDevice to its owner. Reset on every ownership transfer.
   bool owns_device_ = true;
   // The embedder's, on a queue shared with another library; else null, and
   // queue_mutex_ guards the queue. A mutex cannot move, so a device moved to
@@ -479,20 +481,24 @@ class VR_CORE_API Device {
   std::mutex* submit_mutex_ = nullptr;
   mutable std::mutex queue_mutex_;
 
-  // A command buffer on a pool of its own. Vulkan requires a pool be
-  // externally synchronized, so each submit takes one no other submit holds
-  // and records with no lock: a free one, or a new one when every one is in
-  // use. It is given back once its wait is done, and pools_ keeps every pool
-  // made, so destroy() frees them all, one a failed wait left to the device
-  // included.
+  // A command buffer on a pool of its own, and the fence its submit signals.
+  // Vulkan requires a pool be externally synchronized, so each submit takes
+  // one no other submit holds and records with no lock: a free one, or a new
+  // one when every one is in use. It is given back, its fence reset, once its
+  // wait is done, and made_ keeps every one made, so destroy() frees them all;
+  // one left to the device is marked pending there, and waited for first. The
+  // fence is kept too: making and freeing one cost an RTX 5090 about 0.3 ms a
+  // submit.
   struct Command {
     VkCommandPool pool = VK_NULL_HANDLE;
     VkCommandBuffer buffer = VK_NULL_HANDLE;
+    VkFence fence = VK_NULL_HANDLE;
+    bool pending = false;  // set only in made_
   };
   Result<Command> take_command() const;
   void give_back(Command command) const noexcept;
-  mutable std::mutex commands_mutex_;  // guards pools_ and free_commands_
-  mutable std::vector<VkCommandPool> pools_;
+  mutable std::mutex commands_mutex_;  // guards made_ and free_commands_
+  mutable std::vector<Command> made_;
   mutable std::vector<Command> free_commands_;
 
   std::uint32_t compute_family_ = 0;

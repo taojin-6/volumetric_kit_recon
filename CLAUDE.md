@@ -528,8 +528,8 @@ arbitrary; it usually isn't.
   `ShaderModule`, descriptor + `ComputePipeline` wrappers, the `ComputeKernel`
   bundle + `KernelSetBuilder`, the shared-queue-safe
   `Device::submit_single_time` dispatch (safe from several threads at once:
-  each submit records on a command pool of its own and only the queue submit
-  is locked; a kernel's set, a buffer and a `GpuTimer` stay the caller's to
+  each submit records on a command pool of its own, kept with its fence for
+  the next, and only the queue submit is locked; a kernel's set, a buffer and a `GpuTimer` stay the caller's to
   keep to one thread), and the shared `dispatch()` /
   `group_count` / `storage_buffer` / range-guard helpers of `compute_util.hpp`
   — `StorageInput` among them, the host array (staged onto the device in the
