@@ -798,12 +798,23 @@ arbitrary; it usually isn't.
   transport's.
 
 - **`eval`** — `MeshDistance` (point-to-surface distance up to a reach,
-  through a hash of reach-sized cells, over a **copy** of the triangles), and
-  `compare_meshes` giving accuracy, coverage and an optional F-score. Both
-  refuse, with `Status`, what would read out of bounds or mean nothing: a bad
-  reach, indices out of range, a threshold past the reach. A `stride`
-  subsample changes run to run, because marching cubes' vertex order follows
-  its atomics. Use stride 1 where a figure must reproduce.
+  through a hash of reach-sized cells, over a **copy** of the triangles),
+  `compare_meshes` giving accuracy, coverage and an optional F-score, and
+  `ReferenceMesh`, which indexes a reference once so a sweep can judge many
+  meshes against it. They refuse, with `Status`, what would read out of
+  bounds, overflow or mean nothing:
+  - a bad reach, or indices out of range;
+  - a corner that is not finite or past the cell keys' range;
+  - a reach so small that the triangles would average more than
+    `kMaxCellsPerTriangle` cells each;
+  - a threshold past the reach.
+
+  The surface is every triangle but one collapsed to a point, which is what
+  an incremental extract retires a triangle to. The points measured are the
+  vertices those triangles use, and a degenerate triangle counts as the
+  segment it collapses to, whichever corners coincide. A `stride` picks
+  vertices by a hash of their position, so the figures reproduce whatever
+  order marching cubes' atomics emitted the mesh in.
 
 **Examples** (`examples/`). All five poll their frames through
 `sensor::ICameraCapture&` — the fuse loop never learns what is behind it. The

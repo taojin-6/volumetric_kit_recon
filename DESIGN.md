@@ -27,7 +27,7 @@ testable and consumable, and lets downstream projects link only what they need.
 
 ```
 core → volume → tsdf → mesh → texture → interop
-  │        └→ codec        └→ eval
+  │        └→ codec     └→ eval
   └→ sensor                   (later: track, stream)
 ```
 

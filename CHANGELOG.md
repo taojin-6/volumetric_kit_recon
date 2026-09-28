@@ -96,10 +96,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `eval`: **a quality-measurement tier**, `recon_eval`, off `recon_mesh`.
   `MeshDistance` gives point-to-surface distance up to a reach, over a copy
   of the triangles. `compare_meshes` gives accuracy, coverage and an optional
-  F-score at a threshold. Both return `Status` on a bad reach, indices out of
-  range or a threshold past the reach. The metric came from
-  `examples/common`, where the room0 measurement introduced it. Tested by
-  `recon_eval_mesh_distance`.
+  F-score at a threshold, and `ReferenceMesh` indexes a reference once to
+  judge many meshes against. They return `Status` on a bad reach, indices out
+  of range, a corner that is not finite or too far out, a reach too small for
+  the triangles, or a threshold past the reach. Only the surface is measured:
+  triangles collapsed to a point, and vertices no triangle uses, are left
+  out. A stride picks vertices by position, so the figures reproduce. The
+  metric came from `examples/common`, where the room0 measurement introduced
+  it. Tested by `recon_eval_mesh_distance`.
 - `examples`: **`codec_replica`**, the TSDF codec on real data. It fuses a
   Replica sequence and streams the grid through `Encoder` / `Decoder`,
   reporting bytes, bitrate and stage rows. It then judges the decoded surface
