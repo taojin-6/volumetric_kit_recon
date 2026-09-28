@@ -5166,6 +5166,62 @@ bitrate) are left at its defaults (a `TODO(sensor)`). The SDK's "Stream have
 not been started!" at every close and its RTP "Metadata size is too large!"
 come with MJPEG too.
 
+### 2026-09-28 — Projective texturing from several views chooses a view per triangle, on an unshared mesh, into an atlas of the views' images side by side; the single-camera pass stays per vertex.
+
+**The rule.** `ProjectiveTexturer::texture(mesh, views, layout)` textures a
+mesh from N posed `TextureView`s (a registered depth map and its camera). The
+views' images sit side by side in one atlas (`texture_atlas.hpp`):
+`side_by_side_atlas` lays them out in view order, wrapping into a new row
+past the device's `maxImageDimension2D`, and `pack_atlas` copies the images
+in. Each triangle takes one view, and its three vertices point into that
+view's tile. A triangle no view sees whole gets `(-1, -1)`, the vertex
+colour. gfx needs no change: `HybridMeshPipeline` samples the atlas through
+`uv0`, as it samples the single camera's image.
+
+**Why per triangle, and so unshared.** If a triangle's vertices took
+different views, `uv0` would interpolate across the atlas between two tiles
+and smear whatever lies between them over the face. No per-vertex encoding
+avoids that. So the pass runs one thread per triangle, which needs each
+triangle to own its three vertices: the default marching-cubes kernel's
+meshes (`v = 3t`, identity indices). A `share_vertices` mesh is refused.
+Texturing a shared mesh from several views would need a camera per
+primitive, as the prior engine's Metal path kept (a per-triangle UV table the
+fragment shader reads by primitive id), which is a gfx change. The
+single-camera pass keeps its per-vertex verdict (2026-08-11), since one image
+has no tiles to cross.
+
+**How a view is chosen.** A view qualifies when all three vertices are in
+front of it, inside its image and unoccluded, by the single-camera pass's
+test. The score is `|cos|` of the angle between the triangle's normal and
+the view's ray to its centroid, less 0.01 per metre of the smallest depth
+disagreement; the highest wins, and the first view wins a tie. This is
+implicit_surface_compression's `triangles_to_uv_multicam_kernel`
+(`texture_mapping.cu`), which the prior engine's texture mapper also uses,
+with the same default weight.
+
+**The coordinates.** The tile's origin plus the pixel plus half a texel, over
+the atlas size, clamped half a texel inside the tile, so filtering never
+reaches a neighbouring view. With one view they match the single-camera pass
+to 1e-6: the tiled form clamps before it divides.
+
+**Verified.** `recon_texture_multiview` builds a wall seen by three cameras,
+with depth ray-cast per camera. Each triangle takes the view worked out by
+hand: head on, the squarer of two, and the other view when the best one is
+occluded. A triangle behind every camera, or with a vertex off every image,
+gets the vertex colour. Every coordinate lands at its projection, inside its
+tile, in one row and wrapped into two. It also checks one view against the
+single-camera pass, `side_by_side_atlas` and `pack_atlas`, and each refusal.
+Inverting the score, testing one vertex instead of three, dropping the
+occlusion test, or ignoring the tile offset each fails it.
+`recon_texture_device_mesh` checks that the device pass equals the host pass
+vertex for vertex on a sphere seen by two views, and that a shared mesh is
+refused.
+
+**Open.** The atlas is packed on the host and uploaded by gfx; packing it on
+the GPU into an image gfx samples directly needs `core` images. Each call
+uploads every view's depth. Views are not blended, so exposure differences
+show as seams between triangles textured from different views.
+
 ## Measured lessons
 
 Not decisions, but the measurements that overturned an assumption about
