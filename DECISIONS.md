@@ -5687,6 +5687,152 @@ the hash map's bucket locks past the driver's 7 s watchdog in CI (Xid 109, and
 a runner lost), while they were host-visible; PR #81 has since moved them into
 device memory, the fix the fleet's first watchdog report called for.
 
+### 2026-09-28 — Memory the kernels use lives on the device, and the host reaches it through one `CommandBatch` per call, which stages on a discrete GPU and goes direct on unified memory only where that cannot change the result.
+
+**The rule.** A buffer the kernels read or write is device-local. Host-visible
+memory is for what the host produces or consumes: staging, readback, small
+parameters. `core` gives the three kinds a name:
+
+- `MemoryUsage::DeviceLocal` (`device_storage_buffer`): VRAM, never mapped.
+- `MemoryUsage::DeviceLocalMappable` (`mappable_storage_buffer`): device-local,
+  and mapped only where the memory is also host-visible, coherent **and
+  CPU-cached**, which is unified memory. On a discrete GPU it is unmapped,
+  resizable BAR included. VMA picks the memory
+  (`HOST_ACCESS_RANDOM | ALLOW_TRANSFER_INSTEAD`, nothing required), and the
+  allocator hands out the mapping only if the memory it landed in is cached.
+- `MemoryUsage::HostVisible` (`storage_buffer`), as before.
+
+The host reaches device memory through a `CommandBatch` rather than through
+`Buffer::mapped()`, so the same code is right on both kinds of machine. A
+batch records one call's `upload`, `fill`, `copy`, `dispatch`,
+`dispatch_indirect` and `readback` into one command buffer, and submits it
+once with one fence wait. It stages through a `StagingArena` the submitting
+object keeps.
+
+**Why: the RTX 5090 measurement.** Every buffer except the bucket locks was
+host-visible on main, so every kernel access crossed PCIe. A throwaway
+allocator patch moved them into device-local host-visible memory (resizable
+BAR, memory type 4 on the 5090, the whole 31.8 GiB). `fuse_replica` ran room0
+with `--preload --device-extract`, 400 frames, Release, twice per
+configuration, on an idle GPU. Per fused frame:
+
+| | main | hash + voxels in VRAM | + every buffer ≥ 64 KB | M5 Max |
+|---|---|---|---|---|
+| `integrate`, device | 14.6 ms | 5.3 ms | **0.067 ms** | 0.12 ms |
+| `allocate`, device | 2.6 ms | 0.35 ms | 0.32 ms | 0.43 ms |
+| extract dispatch | 54 ms | 62 ms | **4.7 ms** | 0.67 ms |
+| fused fps | 43 | 84 | — | 612–640 |
+
+Four findings shaped the design:
+
+- **Size is what matters.** Moving only the buffers under 64 KB changed
+  nothing: `integrate` stayed at 5.4 ms and the extract at 72 ms. Those
+  buffers are the parameters, the marching-cubes tables, the draw command
+  with its per-block atomics, and the counters. The large ones carry the
+  cost: the voxel arrays, the hash table, the depth and colour frames, the
+  arena and the block lists. So small parameters stay host-visible.
+- **The CPU must not read VRAM directly.** With the arena in BAR memory,
+  `extract_host`'s download took 6.6 s, and the per-frame compaction readback
+  rose from 1.4 to 5–9 ms. So `DeviceLocalMappable` refuses to map anything
+  uncached, and a readback on a discrete GPU always copies into cached host
+  memory. The last column above has no fps for that reason.
+- **Apple is unaffected.** On the M5 Max every configuration read within
+  noise of main: `integrate` at 0.12 ms of device time in all four. The
+  design must therefore cost nothing there. That is why the mappable kind
+  and the batch's direct paths exist, rather than staging everywhere.
+- **Host overhead remains.** Once resident, `integrate`'s host row on the
+  5090 is still about 9 ms against 0.07 ms on the device, where the Mac's is
+  0.59 ms. That points at per-call allocations, the active-list round trip
+  and the fence-waited submits, which is what the batch and the tiers moving
+  onto it remove.
+
+**The batch.**
+
+- **Order.** Commands run in the order recorded, with a barrier between
+  every two: shader and transfer writes before the next command's reads and
+  writes, indirect reads included. The last barrier also reaches the host and
+  a renderer drawing the result, as far as the queue family allows, the scope
+  `dispatch()` uses. Each dispatch keeps its debug-utils region, outside its
+  `GpuStageScope` span, and every timer a batch used is resolved after the one
+  wait.
+- **Staging is skipped only where that cannot change the result.** An upload
+  into a mapped buffer is a host `memcpy` only while nothing has been
+  recorded, since a command recorded earlier runs after the write. A readback
+  from a mapped buffer reads the mapping after the wait only when nothing but
+  readbacks follows it. So on unified memory a batch that only uploads and
+  reads back needs no submit at all.
+- **Usage is checked as if staged**, whichever path a buffer takes:
+  `TRANSFER_DST` for an upload, `TRANSFER_SRC` for a readback. Otherwise a
+  buffer missing the bit would pass on the Mac, where the direct path hides
+  it, and fail on NVIDIA, the class of bug the host-visible locks were.
+- **A refused call poisons the batch.** `submit` returns the first refusal and
+  runs nothing. An upload that already went straight into a mapping stays
+  written.
+- **Submitting releases the arena**, so the next batch can start while this
+  one is still in scope. The first cut released it only on destruction, and
+  its own test then passed several refusals for the wrong reason: the arena
+  was still taken.
+- **The arena is grow-only and lazy.** A batch that needed several chunks
+  leaves one chunk of their combined size, so a call whose traffic is steady
+  allocates nothing from its second run on.
+- **`dispatch_indirect`** is here now because the tiers need it next. A count
+  a kernel writes on the device can size the next dispatch without reaching
+  the host, which is how the active-list round trip goes.
+
+`device_storage_buffer` now adds `TRANSFER_SRC | TRANSFER_DST` usage and takes
+extra usage and queue families, so a batch can fill, copy and stage through
+anything it makes, and the mesh arena can use it. #99's
+`tests/buffer_readback.hpp` reads back through a batch, so the sensor tests
+exercise it on every CI leg.
+
+**Verified.** `recon_core_command_batch` runs every call over the three
+kinds. The device-local buffer is always staged, the host-visible one always
+mapped, and the mappable one mapped on the M5 Max and staged on the 5090, so
+each machine takes each path somewhere.
+
+- **Orders that would expose a misplaced shortcut:** an upload recorded after
+  a dispatch into the same buffer, and a readback recorded before one.
+- **The rest:** fills and copies at offsets, an indirect dispatch sized by an
+  uploaded command, two timed dispatches in one submit publishing their row,
+  each refusal with its batch poisoned, one batch per arena, growth settling
+  to one chunk, and the arena's moves.
+
+The whole suite passes on both machines, 41 of 41, the 5090's build with GCC
+13 at `-O3 -Werror` in the CI image. Each of these fails the test:
+
+- going direct on an upload after a command, or on a readback before one;
+- skipping either usage check;
+- submitting a poisoned batch;
+- not consolidating the arena;
+- not resolving the timers;
+- dropping the overlap check;
+- ignoring the indirect command;
+- keeping the arena after submit.
+
+Dropping the barriers between commands fails it too, 10 runs of 10, but only
+on the 5090: MoltenVK orders the same work without them. So CI's NVIDIA legs
+are what hold the barriers.
+
+**Open.** No tier uses the batch yet. The review behind this entry ranked what
+moves next, by what the measurement says it costs on the 5090:
+
+1. `volume`: the hash table, its counters and the voxel arrays resident, with
+   GPU fill and copy for create, clear, resize and remove, and the compacted
+   list kept on the device.
+2. `tsdf`: `integrate` on that list by indirect dispatch in one submit, the
+   dirty flags resident, and `MeshIntegrator`'s slot counts, whose
+   host-visible atomics cost 115 + 143 ms (the measured lesson below).
+3. `mesh`: the arena and index run resident, with `download` staged.
+4. `texture`: depth read from a device buffer.
+5. `sensor`: the frame-prep outputs on a ring, NV12 decoded straight into
+   staging, then NVDEC to Vulkan device to device.
+6. The examples.
+7. `codec`: coefficients read back as filtered int16.
+
+`dispatch()` is unchanged. `submit_single_time` still allocates a command
+buffer and a fence per submit; reusing them is a `TODO(core)` for when a tier
+measures it.
+
 ## Measured lessons
 
 Not decisions, but the measurements that overturned an assumption about

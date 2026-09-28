@@ -138,21 +138,63 @@ inline Result<Buffer> upload_storage_buffer(
 /// The counterpart to @ref storage_buffer, which is host-visible so the host
 /// can fill it or read it back. On Apple's unified memory the two cost the
 /// same; on a discrete GPU a host-visible buffer is system memory the kernels
-/// reach across PCIe, and an **atomic** there is a round trip across the bus.
-/// That is the one place it can cost a device: the hash table's bucket locks,
-/// host-visible, took 1.97 s to allocate a 5 000-triangle sheet on an RTX 5090
-/// against 3.4 ms device-local, and a 320 000-triangle one ran past the
-/// driver's 7-second watchdog (the 2026-09-28 measured lesson). A buffer the
-/// kernels spin on or take hot atomics in belongs here.
-/// @param allocator  The allocator to create on.
-/// @param bytes      Size in bytes (must be non-zero).
+/// reach across PCIe. The hash table's bucket locks, host-visible, took 1.97 s
+/// to allocate a 5 000-triangle sheet on an RTX 5090 against 3.4 ms
+/// device-local (the 2026-09-28 measured lesson), and the grid's attributes
+/// host-visible cost `integrate` 14.6 ms on the device against 0.067 ms (the
+/// 2026-09-28 residency decision).
+///
+/// `TRANSFER_SRC` and `TRANSFER_DST` come with it, so a @ref CommandBatch can
+/// fill, copy, upload into and read back from it.
+/// @param allocator    The allocator to create on.
+/// @param bytes        Size in bytes (must be non-zero).
+/// @param extra_usage  Usage bits beyond those, as @ref storage_buffer.
+/// @param queue_families      As @ref storage_buffer.
+/// @param queue_family_count  Entries in @p queue_families.
 /// @return The buffer, unmapped, or a non-OK @ref Status if creation fails.
-inline Result<Buffer> device_storage_buffer(Allocator& allocator,
-                                            VkDeviceSize bytes) {
+inline Result<Buffer> device_storage_buffer(
+    Allocator& allocator, VkDeviceSize bytes,
+    VkBufferUsageFlags extra_usage = 0,
+    const std::uint32_t* queue_families = nullptr,
+    std::uint32_t queue_family_count = 0) {
   BufferDesc desc;
   desc.size = bytes;
-  desc.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+  desc.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+               VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+               VK_BUFFER_USAGE_TRANSFER_DST_BIT | extra_usage;
   desc.memory = MemoryUsage::DeviceLocal;
+  desc.queue_families = queue_families;
+  desc.queue_family_count = queue_family_count;
+  return allocator.create_buffer(desc);
+}
+
+/// @brief @ref device_storage_buffer, mapped where that costs nothing
+///        (@ref MemoryUsage::DeviceLocalMappable): for device memory the host
+///        also reaches -- a grid a test fills, an arena a caller downloads.
+///
+/// On unified memory @ref Buffer::mapped is live and a @ref CommandBatch
+/// reads and writes through it without a staging copy; on a discrete GPU it
+/// is null and the batch stages. Reach it through a batch rather than
+/// `mapped()`, so the same code is right on both.
+/// @param allocator    The allocator to create on.
+/// @param bytes        Size in bytes (must be non-zero).
+/// @param extra_usage  As @ref device_storage_buffer.
+/// @param queue_families      As @ref storage_buffer.
+/// @param queue_family_count  Entries in @p queue_families.
+/// @return The buffer, or a non-OK @ref Status if creation fails.
+inline Result<Buffer> mappable_storage_buffer(
+    Allocator& allocator, VkDeviceSize bytes,
+    VkBufferUsageFlags extra_usage = 0,
+    const std::uint32_t* queue_families = nullptr,
+    std::uint32_t queue_family_count = 0) {
+  BufferDesc desc;
+  desc.size = bytes;
+  desc.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+               VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+               VK_BUFFER_USAGE_TRANSFER_DST_BIT | extra_usage;
+  desc.memory = MemoryUsage::DeviceLocalMappable;
+  desc.queue_families = queue_families;
+  desc.queue_family_count = queue_family_count;
   return allocator.create_buffer(desc);
 }
 

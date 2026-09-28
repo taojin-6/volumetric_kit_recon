@@ -67,6 +67,9 @@ target_sources(
           descriptor.cpp
           compute_pipeline.cpp
           compute_kernel.cpp
+          # One call's uploads, fills, copies, dispatches and readbacks in one
+          # submit, over a per-object staging arena.
+          command_batch.cpp
           vma_impl.cpp)
 
 # Generated headers: the VR_CORE_API export macro + the configured version

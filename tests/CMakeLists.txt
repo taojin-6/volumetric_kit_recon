@@ -297,6 +297,22 @@ target_link_libraries(recon_compute_smoke_test
 vr_target_warnings(recon_compute_smoke_test)
 add_test(NAME recon_compute_smoke COMMAND recon_compute_smoke_test)
 
+# CommandBatch + StagingArena, and the DeviceLocalMappable memory kind: every
+# recording call over device-local, device-local-mappable and host-visible
+# buffers, in orders that would expose a staging shortcut taken where it changes
+# the result; growth, refusals and the arena's moves. add.comp reads what it
+# writes, so a command run out of order leaves a different value.
+add_executable(recon_core_command_batch_test core_command_batch_test.cpp)
+vr_compile_shaders(recon_core_command_batch_test SHADERS
+                   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/add.comp")
+target_compile_definitions(
+  recon_core_command_batch_test
+  PRIVATE VR_ADD_SPV="${CMAKE_CURRENT_BINARY_DIR}/shaders/add.comp.spv")
+target_link_libraries(recon_core_command_batch_test
+                      PRIVATE volumetric_kit::recon_core Vulkan::Vulkan)
+vr_target_warnings(recon_core_command_batch_test)
+add_test(NAME recon_core_command_batch COMMAND recon_core_command_batch_test)
+
 # Color-space vocabulary: the exact piecewise sRGB curve, the packed helpers the
 # fusion kernels mirror, and the primaries matrices. Pure host math over core,
 # so it always runs -- no device, no platform. That portability is the reason

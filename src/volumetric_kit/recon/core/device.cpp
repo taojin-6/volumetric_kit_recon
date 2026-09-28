@@ -547,6 +547,9 @@ Status Device::submit_single_time(
 Status Device::submit_single_time(
     const std::function<void(VkCommandBuffer)>& record, GpuTimer* timer,
     const char* label, const char* debug_label) const {
+  // TODO(core): keep one command buffer and fence per submitting object
+  // rather than allocating both per submit, once a tier on a CommandBatch
+  // measures what they cost (the 2026-09-28 residency decision).
   VkCommandBufferAllocateInfo alloc_info{};
   alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
   alloc_info.commandPool = command_pool_;
