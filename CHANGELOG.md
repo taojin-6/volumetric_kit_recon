@@ -29,6 +29,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `sensor`: **`GpuFramePrep` stages its raw frame and runs both passes in one
+  submit**: the raw depth and colour planes go up through a batch into
+  device-local inputs, rather than a host-visible buffer the kernels read
+  across the bus. The three planes are packed into one staging buffer, and
+  the `"frame prep"` row's device half counts the copy.
 - `texture`: **every pass is one batch**: a host depth frame staged, the camera
   inline, the dispatch, and for a host `Mesh` the vertices staged up, then read
   back in a batch of their own. The camera, the depth copy and the several-view
@@ -127,6 +132,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   must still be registered to the depth camera, so a `GpuFramePrep` frame,
   whose colour keeps a camera of its own, waits on a colour camera in the
   texture pass.
+- `core`: **`CommandBatch::reserve_upload`** hands the caller the staging for
+  an upload to pack itself, such as strided rows or several planes. It and
+  `upload` take an optional `GpuStageScope` that times the copy.
 - `core`: **`CommandBatch`** (`core/command_batch.hpp`): one call's uploads,
   fills, copies, dispatches, indirect dispatches and readbacks recorded into one
   command buffer and submitted with one fence wait. Small aligned uploads go
