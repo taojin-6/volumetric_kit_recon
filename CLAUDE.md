@@ -72,7 +72,8 @@ branching off **`core`**, `codec` off **`volume`** and `eval` off **`mesh`**
   OBJ/PLY + glTF/GLB export.
 - **`texture`** — projective texturing: fills the mesh's per-vertex `uv0` with a
   posed camera's image coordinates where it has line of sight (per-vertex-color
-  fallback elsewhere), a compute pass.
+  fallback elsewhere), or with several cameras' coordinates into an atlas of
+  their images, a compute pass.
 - **`sensor`** — the capture *contract*: `ICameraCapture`, the `CapturedFrame`
   view the fusion tiers consume, and the boundary conversions a capture
   integration gets silently wrong — camera conventions (pose handedness,
@@ -287,6 +288,10 @@ order. Change the decision, its entry there, and this list together.
   decoded, in order, on a thread per camera ahead of the mailbox; a lost frame
   is read off the frame index, not the clock; and the Femto Mega's stream is
   decoded as BT.601 full range, which it codes and does not say.
+- [**2026-09-28**](DECISIONS.md#2026-09-28--projective-texturing-from-several-views-chooses-a-view-per-triangle-on-an-unshared-mesh-into-an-atlas-of-the-views-images-side-by-side-the-single-camera-pass-stays-per-vertex) —
+  Projective texturing from several views chooses a view per triangle, on an
+  unshared mesh, into an atlas of the views' images side by side; the
+  single-camera pass stays per vertex.
 
 ## Provenance & salvage policy
 
@@ -644,7 +649,8 @@ arbitrary; it usually isn't.
   textured like any other mesh since the `texture` tier moved to a per-vertex
   verdict (2026-08-11). `DeviceMesh::shares_vertices` still publishes it,
   because `v = 3t` no longer holds and a consumer sizing an arena cannot derive
-  that from the buffers — no longer as an incompatibility with anything.
+  that from the buffers, and because the `texture` tier's several-view atlas
+  chooses per triangle and so refuses a shared mesh (2026-09-28).
   `extract_device_incremental` re-meshes only the blocks a fuse changed: it
   takes the flags as an opaque `DirtyBlocks` (buffer + capacity + the
   `topology_epoch` they were accumulated against, all three off the integrator
@@ -686,8 +692,19 @@ arbitrary; it usually isn't.
   nothing to carry. A vertex in front but outside the image carries the clamped
   border coordinate; conflating it with the behind-camera case drew the whole
   image inside one triangle along the frustum edge. Live single camera, so the
-  frame the caller binds *is* the atlas. Opt-in `StageMetrics*` on both
-  overloads reports a `"texture"` row with both halves.
+  frame the caller binds *is* the atlas. The `TextureView` overloads texture
+  from **several** views into an atlas of their images side by side
+  (`texture_atlas.hpp`: `side_by_side_atlas`, `pack_atlas`), one thread per
+  **triangle**: each takes the view facing it most squarely among those that
+  see its **front** and all three of its vertices, and all three point into
+  that view's tile. A view is a depth map, its camera, and the size of the
+  colour image registered to it, which is the tile at its own resolution, so
+  low-resolution depth textures at the capture's. Per triangle because
+  vertices in different tiles would interpolate across the atlas, so that
+  path needs an unshared mesh and refuses a shared one, as it refuses a view
+  with no depth range and tiles that overlap (2026-09-28). Opt-in
+  `StageMetrics*` on every overload reports a `"texture"` row with both
+  halves.
 
 - **`sensor`** — the capture *contract*: `ICameraCapture` polled for a
   `CapturedFrame` (frames dropped, not queued) and asked `exhausted()` after
@@ -916,10 +933,15 @@ that same question, recording a block's *reservation* beside its live span so a
 surface oscillating around a threshold stops relocating on every up-tick —
 and `ExtractTimings`' device half — which must
 bracket several dispatches in **one** timed submit, since a timed submit costs
-~0.13 ms on MoltenVK and four of the six phases run under that. On `texture`:
-the multi-keyframe post-scan atlas. On `core`: the `TODO(core)` for
-`VK_EXT_memory_budget` on `Device::create`, which would turn the viewer's heap
-gauges from VMA heuristics into driver truth. The debug-utils labels that TODO
+~0.13 ms on MoltenVK and four of the six phases run under that. On `texture`,
+the `TODO(texture)`s: packing the multi-view atlas on the GPU into an image gfx
+samples directly (it needs `core` images), keeping a view's depth on the
+device between calls, blending views at their seams, and a per-triangle tile
+index in gfx so a shared mesh can be textured from several views; and the
+multi-keyframe post-scan atlas, which the multi-view path can carry. On
+`core`: the `TODO(core)` for `VK_EXT_memory_budget` on `Device::create`,
+which would turn the viewer's heap gauges from VMA heuristics into driver
+truth. The debug-utils labels that TODO
 sat beside **have landed** (2026-08-30) — on the *kernel* rather than the span,
 which is the correction that entry records.
 

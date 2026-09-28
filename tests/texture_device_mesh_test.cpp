@@ -36,6 +36,7 @@
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
 #include "volumetric_kit/recon/mesh/mesh.hpp"
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
+#include "volumetric_kit/recon/texture/texture_atlas.hpp"
 #include "volumetric_kit/recon/volume/hash_types.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 
@@ -290,6 +291,57 @@ int main() {
     CHECK(device_out.indices[i] < device_out.vertices.size());
   }
 
+  // --- Several views: the same parity, per triangle -------------------------
+  // The front camera and a second looking from +X, each with the constant
+  // depth of the sphere's nearest point, so each textures the patch facing it
+  // and the two tiles share the mesh. The device pass must equal the host one
+  // vertex for vertex, and both views must win triangles.
+  vr::DepthCameraParams side = cam;
+  {
+    const vr::Vec3f side_eye =
+        sphere_center() + vr::Vec3f(kCameraDistance, 0.0f, 0.0f);
+    side.cam_to_world = vr::Mat4f(1.0f);
+    side.cam_to_world[0] = vr::Vec4f(0.0f, 0.0f, 1.0f, 0.0f);   // x
+    side.cam_to_world[2] = vr::Vec4f(-1.0f, 0.0f, 0.0f, 0.0f);  // looks -X
+    side.cam_to_world[3] = vr::Vec4f(side_eye, 1.0f);
+  }
+  const std::vector<rtex::TextureView> views = {{depth.data(), cam},
+                                                {depth.data(), side}};
+  vr::Result<rtex::AtlasLayout> layout =
+      rtex::side_by_side_atlas(views, texturer.max_atlas_extent());
+  CHECK(layout.ok());
+  {
+    mesh::Mesh host_views = host_mesh;
+    CHECK(texturer.texture(host_views, views, layout.value()).ok());
+    // Timed, for the reason the single-camera call above is: nothing else
+    // would notice this overload losing its stage scope or its publish.
+    vr::StageMetrics views_metrics;
+    CHECK(
+        texturer
+            .texture(device_mesh, views, layout.value(), 0.02f, &views_metrics)
+            .ok());
+    const vr::StageRow* views_row = find_row(views_metrics, "texture");
+    CHECK(views_row != nullptr);
+    CHECK(views_row->cpu_ms > 0.0);
+    if (probe.value().available()) {
+      CHECK(views_row->has_gpu);
+      CHECK(views_row->gpu_ms < views_row->cpu_ms);
+    }
+    vr::Result<mesh::Mesh> read = extractor.download(device_mesh);
+    CHECK(read.ok());
+    const mesh::Mesh& device_views = read.value();
+    CHECK(device_views.vertices.size() == host_views.vertices.size());
+    std::size_t in_tile[2] = {0, 0};
+    for (std::size_t i = 0; i < host_views.vertices.size(); ++i) {
+      const vr::Vec2f uv = host_views.vertices[i].uv0;
+      CHECK(device_views.vertices[i].uv0 == uv);
+      CHECK(device_views.vertices[i].position ==
+            host_views.vertices[i].position);
+      if (uv.x >= 0.0f) ++in_tile[uv.x < 0.5f ? 0 : 1];
+    }
+    CHECK(in_tile[0] > 0 && in_tile[1] > 0);
+  }
+
   // --- A superseded DeviceMesh is rejected -----------------------------------
   // The arena is grow-only and reused in place, so a later extract leaves an
   // earlier view naming the *same* VkBuffer while the contents have been
@@ -364,6 +416,7 @@ int main() {
     CHECK(!stale.is_current());
     CHECK(!growing.download(stale).ok());
     CHECK(!texturer.texture(stale, depth.data(), cam).ok());
+    CHECK(!texturer.texture(stale, views, layout.value()).ok());
   }
 
   // A DeviceMesh from another extractor is rejected too: generations are
@@ -393,6 +446,7 @@ int main() {
     CHECK(held.is_current());
     // Texturing it now is fine.
     CHECK(texturer.texture(held, depth.data(), cam).ok());
+    CHECK(texturer.texture(held, views, layout.value()).ok());
 
     // Extract again on the same extractor; `held` is now superseded.
     vr::Result<mesh::DeviceMesh> next = extractor.extract_device(grid, 0.0f);
@@ -405,11 +459,14 @@ int main() {
     vr::Status stale_texture = texturer.texture(held, depth.data(), cam);
     CHECK(!stale_texture.ok());
     CHECK(stale_texture.domain() == vr::Status::Code::InvalidArgument);
+    // The several-view overload binds the same buffers, so it asks too.
+    CHECK(texturer.texture(held, views, layout.value()).domain() ==
+          vr::Status::Code::InvalidArgument);
     // The live view from the same extractor still textures.
     CHECK(texturer.texture(next.value(), depth.data(), cam).ok());
   }
 
-  // A mesh whose vertices are SHARED is textured, not refused.
+  // A mesh whose vertices are SHARED is textured by one camera, not refused.
   //
   // It used to be refused, and the refusal was the whole reason DeviceMesh
   // publishes the flag: the pass decided visibility per TRIANGLE and wrote uv0
@@ -418,9 +475,9 @@ int main() {
   // only as flicker along every silhouette. The dispatch is per vertex now, so
   // there is exactly one writer per vertex and nothing to disagree.
   //
-  // The flag has not become useless; it has stopped being an incompatibility.
-  // A packed multi-camera atlas will still need a per-PRIMITIVE camera id, and
-  // a consumer sizing a vertex arena still needs to know whether `v = 3t`.
+  // The flag has not become useless. The several-view overloads choose per
+  // TRIANGLE and refuse a shared mesh (asserted below), and a consumer sizing
+  // a vertex arena still needs to know whether `v = 3t`.
   {
     mesh::MarchingCubesConfig share_config;
     share_config.share_vertices = true;
@@ -441,6 +498,9 @@ int main() {
     vr::Status shared_texture =
         texturer.texture(shared.value(), depth.data(), cam);
     CHECK(shared_texture.ok());
+    // Several views choose per triangle, which a shared vertex cannot follow.
+    CHECK(texturer.texture(shared.value(), views, layout.value()).domain() ==
+          vr::Status::Code::InvalidArgument);
 
     // Read the result back. `ok()` alone would pass against a kernel that
     // wrote the sentinel everywhere, inverted its visibility test, sized the

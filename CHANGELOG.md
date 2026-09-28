@@ -79,6 +79,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `texture`: **several views into one atlas.** `ProjectiveTexturer::texture`
+  takes `TextureView`s (a depth map, its camera, and the size of the colour
+  image registered to it, which may be larger) and an `AtlasLayout`; each
+  triangle takes the view that faces it most squarely among those that see
+  its front and all three vertices, and its vertices point into that view's
+  tile, the colour image at its own resolution. Needs an unshared mesh; a
+  shared one is refused, as are a view with no depth range and overlapping
+  tiles. `texture_atlas.hpp` lays the images out side by side
+  (`side_by_side_atlas`, wrapping past the device's largest image) and packs
+  them (`pack_atlas`). gfx is unchanged. Test: `recon_texture_multiview`;
+  `recon_texture_device_mesh` checks device against host.
 - `sensor`: **H.265 colour from Orbbec cameras**,
   `OrbbecStreamOptions::color_codec = OrbbecColorCodec::Hevc` (the default
   stays `Mjpeg`; needs `VR_WITH_FFMPEG`). 21.6 Mbit/s of colour per camera at
