@@ -74,7 +74,14 @@ VR_ORBBEC_TEST_SERIAL=<serial> ctest --test-dir build -R orbbec
 ```
 
 A camera wired as a sync secondary streams only while its primary does; name
-a primary or standalone camera for a single-camera run. Without `--serial` the
+a primary or standalone camera for a single-camera run. A synced rig runs
+from a rig pose file (`sensor/rig_poses.hpp`) listing each camera's serial and
+pose:
+
+```sh
+build/examples/fuse_orbbec/fuse_orbbec --poses rig.json --frames 300
+VR_ORBBEC_TEST_RIG=<serial>,<serial>,... ctest --test-dir build -R orbbec_rig
+``` Without `--serial` the
 example opens the only camera that answers, after waiting out the whole
 discovery window (8 s), since another may answer late.
 

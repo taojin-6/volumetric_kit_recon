@@ -4202,6 +4202,80 @@ check refuses.
   writer never makes one, and it decodes correctly. A `TODO(codec)` in the
   reader's block decode.
 
+### 2026-09-27 — The rig is `OrbbecRig`: secondaries start before the primary, the SDK keeps the cameras on the host's clock, a trigger's frames are grouped within 5 ms, and a trigger missing a camera is still handed out; poses come from a rig pose file.
+
+**The rule.** `OrbbecRig` (`sensor/orbbec/orbbec_rig.hpp`) opens two or more
+cameras that are one sync primary and its secondaries -- anything else is
+refused with every camera's role named -- and starts the secondaries first,
+since the primary's first trigger is what they wait for. It has the SDK sync
+the cameras' clocks to the host's (`enableDeviceClockSync`) before any
+starts, groups frames by that clock within `sync_tolerance_us`, and only then
+processes a trigger's frames, through the same `CameraStream` that
+`OrbbecCapture` now wraps. `poll_set()` returns one `OrbbecRigFrameSet` per
+trigger, a frame per camera or an empty slot; `poll()` hands the same frames
+out one at a time, each posed by its own camera, so the fuse loop reads a rig
+as it reads one camera.
+
+**Why these numbers.** Measured on the four-camera rig over the 2.5 Gbit/s
+cable, 720p colour, 640x576 depth, 30 fps:
+- With clock sync, a secondary's frame lands +0.4 to +1.7 ms from the
+  primary's, with stragglers to 3.4 ms across runs. Without it the cameras'
+  clocks are ~30 s apart, and host arrival times jitter by ±20 ms, too much
+  to group 33 ms frames by. So the tolerance is 5 ms: past every straggler,
+  far short of the 16.7 ms that would mix up neighbouring triggers.
+- The primary delivers every frame, and each secondary drops 1-6%. 91.7% of
+  triggers had all four frames in a 10 s capture; 96.7% of the rig test's 90
+  sets were complete. Handing out only complete sets would throw away every
+  other camera's frame in the rest, so a trigger is handed out once each
+  missing camera has sent a later frame or stayed silent for 1.5 frame
+  periods.
+- Processing a set's four frames on the polling thread takes 10.8 ms. With
+  fusion, `fuse_orbbec` keeps up with the rig at ~29 sets/s.
+- A poll slower than the cameras must still find one trigger's frames from
+  all of them, so each camera's mailbox keeps its four newest frames rather
+  than one (a single `OrbbecCapture` still keeps one). Under ASan, at 58 ms
+  a set, one-frame mailboxes left 75.6% of sets complete and four-frame ones
+  98.9%.
+- Over the Mac's Wi-Fi the same rig ran at 13-28 fps. Depth crosses the
+  network uncompressed at ~170 Mbit/s per camera, so the rig needs the wired
+  link, and H.265 colour alone would not fix that.
+
+Two grouping rules come from how the rig starts and fails. Sets are handed
+out only from the primary's first grouped frame on, since the secondaries
+send frames of their own before the primary starts. And among triggers ready
+at once, the newest one holding the primary's frame wins, so a camera whose
+clock is off by more than the tolerance costs its own frames, not the rig's
+sets.
+
+**The rig pose file** (`sensor/rig_poses.hpp`, in `recon_sensor`) is where
+calib's result reaches a capture: JSON with a `format`, a `version` (1), and
+a row-major 4x4 `cam_to_world` per serial. `units` (`"m"`), `camera_axes`
+(`"opencv"`) and each camera's `sensor` (`"color"`) are required
+declarations, because a pose in millimetres, in the OpenGL convention or of
+the depth camera is a valid-looking file that reconstructs a wrong rig. A
+matrix that is not rigid is refused, keys the reader does not know are
+ignored, and `write_rig_poses` round-trips a float pose exactly. It is in
+`recon_sensor` rather than the Orbbec target because calib writes it, calib's
+viewer and recon both read it, and nothing in it is Orbbec's. The parser is
+nlohmann/json 3.12.0 (the release archive, hash-pinned in
+`third_party/CMakeLists.txt`), a private `SYSTEM` include of `recon_sensor`
+as VMA is of `recon_core`: no public header, link line or consumer sees it.
+
+**Verified** on the rig. `recon_sensor_orbbec_rig`
+(`VR_ORBBEC_TEST_RIG` names the cameras) reads its poses through a written
+file and gets 90 sets, 96.7% complete, worst skew 1.55 ms, every frame posed
+by its own camera, then restarts and moves, clean under ASan/UBSan too. `recon_sensor_orbbec_capture`
+passes unchanged on the refactored `CameraStream`. `fuse_orbbec --poses`
+fuses all four cameras, and `--poses --serial` one camera posed from the
+file. `recon_sensor_rig_poses` and `recon_sensor_orbbec_grouping` run with no
+camera. 35 tests pass with the driver built, under `-Werror` in Release.
+
+**Open.** Why the secondaries drop 1-6% with bandwidth to spare -- receive
+buffers or the switch -- is unmeasured. Discovery can miss: once, an 8 s
+window found no camera right after another process released one, and a rerun
+found all four at once. A set's frames are processed one camera after another,
+and nothing has fused real rig poses yet -- that waits on calib.
+
 ## Measured lessons
 
 Not decisions, but the measurements that overturned an assumption about
