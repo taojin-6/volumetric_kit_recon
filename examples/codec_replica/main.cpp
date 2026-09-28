@@ -14,9 +14,12 @@
 // Configure with -DCMAKE_BUILD_TYPE=Release before quoting any timing.
 
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
 #include <string>
 #include <thread>
 
@@ -40,7 +43,7 @@ namespace {
 
 constexpr double kFps = 30.0;
 constexpr float kMaxWeight = 20.0f;
-constexpr std::int32_t kBuckets = 16384;  // both grids grow as needed
+constexpr std::int32_t kBuckets = 16384;  // the fusion grid's; it grows
 constexpr std::size_t kMetricStride = 4;  // every 4th vertex, both ways
 
 struct Options {
@@ -54,8 +57,35 @@ struct Options {
   codec::EncoderConfig codec;  // --k, --step
 };
 
+// A whole, finite number, or an error naming the flag: a trailing "abc" or
+// an "x" read as 0 would change what the run measures without a word.
+vr::Status parse_number(const std::string& flag, const char* v, float& out) {
+  char* end = nullptr;
+  errno = 0;
+  const float f = std::strtof(v, &end);
+  if (end == v || *end != '\0' || errno != 0 || !std::isfinite(f)) {
+    return vr::Status::invalid_argument(flag + ": not a number: " + v);
+  }
+  out = f;
+  return {};
+}
+
+vr::Status parse_number(const std::string& flag, const char* v, int& out) {
+  char* end = nullptr;
+  errno = 0;
+  const long long n = std::strtoll(v, &end, 10);
+  if (end == v || *end != '\0' || errno != 0 ||
+      n < std::numeric_limits<int>::min() ||
+      n > std::numeric_limits<int>::max()) {
+    return vr::Status::invalid_argument(flag + ": not an integer: " + v);
+  }
+  out = int(n);
+  return {};
+}
+
 vr::Result<Options> parse_args(int argc, char** argv) {
   Options o;
+  int k = int(o.codec.params.coefficient_count);
   for (int i = 1; i < argc; ++i) {
     const std::string a = argv[i];
     const bool takes_value = a == "-o" || a == "--voxel" ||
@@ -68,15 +98,16 @@ vr::Result<Options> parse_args(int argc, char** argv) {
     if (a == "-o") {
       o.out_prefix = v;
     } else if (a == "--voxel") {
-      o.voxel = std::strtof(v, nullptr);
+      VR_TRY(parse_number(a, v, o.voxel));
     } else if (a == "--encode-every") {
-      o.encode_every = std::atoi(v);
+      VR_TRY(parse_number(a, v, o.encode_every));
     } else if (a == "--k") {
-      o.codec.params.coefficient_count = std::uint32_t(std::atoi(v));
+      VR_TRY(parse_number(a, v, k));
     } else if (a == "--step") {  // DC and AC alike: room0 found no gain apart
-      o.codec.params.dc_step = o.codec.params.ac_step = std::strtof(v, nullptr);
+      VR_TRY(parse_number(a, v, o.codec.params.dc_step));
+      o.codec.params.ac_step = o.codec.params.dc_step;
     } else if (a == "--max-frames") {
-      o.max_frames = std::atoi(v);
+      VR_TRY(parse_number(a, v, o.max_frames));
     } else if (a == "--preload") {
       o.preload = true;
     } else if (a == "--sweep") {
@@ -93,10 +124,12 @@ vr::Result<Options> parse_args(int argc, char** argv) {
         "[--k n] [--step f] [--max-frames n] [--preload] [--sweep] "
         "[-o prefix]");
   }
-  if (!(o.voxel > 0.0f) || o.max_frames < 1 || o.encode_every < 0) {
+  if (!(o.voxel > 0.0f) || o.max_frames < 1 || o.encode_every < 0 || k < 1) {
     return vr::Status::invalid_argument(
-        "--voxel must be > 0, --max-frames >= 1, --encode-every >= 0");
+        "--voxel must be > 0, --max-frames >= 1, --encode-every >= 0, "
+        "--k >= 1");
   }
+  o.codec.params.coefficient_count = std::uint32_t(k);
   VR_TRY(o.codec.params.validate());
   return o;
 }
@@ -126,9 +159,8 @@ vr::Status run(const Options& opt) {
             vr::tsdf::TsdfIntegrator::create(device, allocator));
   VR_ASSIGN(mesh::MarchingCubes extractor,
             mesh::MarchingCubes::create(device, allocator));
-  VR_ASSIGN(
-      vr_example::CodecStream stream,
-      vr_example::CodecStream::create(device, allocator, opt.codec, kBuckets));
+  VR_ASSIGN(vr_example::CodecStream stream,
+            vr_example::CodecStream::create(device, allocator, opt.codec));
   std::printf("%zu frames at %.3f m voxels; K %u, step %.3f / %.3f\n",
               capture.frame_count(), double(opt.voxel),
               opt.codec.params.coefficient_count,
@@ -160,7 +192,7 @@ vr::Status run(const Options& opt) {
   if (coded_at != fused) {
     VR_TRY(stream.code(volume));
   }
-  stream.report(kFps);
+  stream.report(kFps, opt.encode_every);
 
   // The last frame's decoded surface against the source's.
   VR_ASSIGN(const mesh::Mesh source, extractor.extract_host(volume));
@@ -178,7 +210,8 @@ vr::Status run(const Options& opt) {
 
   if (opt.sweep) {
     VR_TRY(vr_example::run_codec_sweep(device, allocator, volume, source,
-                                       extractor, reach, kMetricStride));
+                                       extractor, stream.player(), reach,
+                                       kMetricStride));
   }
   return {};
 }

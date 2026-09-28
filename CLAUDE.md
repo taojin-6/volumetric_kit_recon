@@ -796,7 +796,8 @@ poll is retried after a millisecond until the source reports itself
 replay ends. Each frame fuses
 through `examples/common/fuse_frame.hpp` (the one allocate-and-grow-then-
 integrate loop, carrying the frame's encoding declaration across, into the one
-grid layout its `create_fusion_grid` builds), and a frame kept past the next
+grid layout `grid_layout.hpp` defines, which its `create_fusion_grid` builds and
+`codec_replica`'s player shares), and a frame kept past the next
 poll — `fuse_render`'s keyframe, `fuse_viewer`'s newest fused frame for its
 final texture pass — is copied into an
 `RgbdFrame` of its own (`examples/common/rgbd_frame.hpp`, the type the
@@ -822,8 +823,9 @@ The live counterpart is its own example, not a `fuse_replica` flag:
 fuses the rig as an `OrbbecRig`, posed by `--calibration`.
 **`codec_replica`** fuses a Replica sequence as `fuse_replica` does, and
 streams the growing grid through the codec: every `--encode-every` frames it
-encodes, then decodes into a player grid built from `read_frame_info`. It
-reports bytes, bitrate and both calls' stage rows. It then judges the last
+encodes, then decodes into a player grid built from `read_frame_info` and
+sized for that frame's blocks. It reports bytes, the bitrate at the coded
+frame rate, and both calls' stage rows. It then judges the last
 decoded surface against the source's, mesh to mesh, with
 `examples/common/mesh_distance.hpp`: accuracy and coverage, as the codec's
 ground-truth test names them, since a fused TSDF is projective and sampling it

@@ -4646,9 +4646,10 @@ The fourth of the 2026-09-26 entry's five PRs, where the codec meets real data:
   `fuse_replica` does. Every `--encode-every` frames it encodes the fusion grid
   and decodes it into a player grid, which it builds from the first frame's
   `read_frame_info` as a player would.
-- **Its report:** bytes per frame and per block, the bitrate at 30 fps, and the
-  stage rows of both calls. At the end it meshes both grids and measures one
-  against the other.
+- **Its report:** bytes per frame and per block, the bitrate at the coded
+  frame rate (30 fps divided by `--encode-every`), and the stage rows of both
+  calls, timed on the attempt that decoded. At the end it meshes both grids
+  and measures one against the other.
 - **`--sweep`** encodes the final grid under a list of configurations and prints
   the rate–distortion table below.
 
@@ -4658,9 +4659,12 @@ the codec's ground-truth test (#94) names them:
 - **coverage:** each source vertex's distance to the decoded surface.
 
 Each is a point-to-triangle distance through a cell hash, up to a reach of
-`max(trunc_dist, 2 cm)`, sampled at every fourth vertex. The code is
-`examples/common/mesh_distance.hpp`, header-only, and its test pins it against
-meshes a known distance apart. The first plan was to sample the source grid's
+`max(trunc_dist, 2 cm)`, sampled at every fourth vertex. A point with nothing
+within reach is counted apart, not averaged, so accuracy's RMS, p95 and max
+cover only the points within it; the count beyond it is reported beside them
+(`acc>r`, `cov>r`). The code is `examples/common/mesh_distance.hpp`,
+header-only, and its test pins it against meshes a known distance apart and
+against a scan of every triangle. The first plan was to sample the source grid's
 SDF at the decoded vertices, which would be simpler. It was dropped because a
 fused TSDF is **projective**: distance along the camera ray, not Euclidean. So
 on real scans the simpler metric would have measured the fusion's bias as well
@@ -4697,7 +4701,9 @@ the same way.
    to 0.012 mm RMS, with nothing beyond reach. So the 20–37 mm worst vertices
    of every practical config are ringing from dropped coefficients, a few
    floaters near thin structures, and not a pipeline defect. Every config's
-   p95 is under 2 mm.
+   p95 is under 2 mm. The max cannot exceed the 4 cm reach, but nothing hides
+   past it: no decoded vertex of any config is beyond reach of the source,
+   save 5 of ~980 k at K = 8 (and at 2 cm, 2 at K = 512 with a step of 1.6).
 2. **K sets the quality, and the step barely does at low K.** At K = 32, going
    from a step of 0.025 to one of 0.4 cuts the bytes by 36% and raises the
    error by 13%. Each doubling of K costs about a quarter more bytes and takes
@@ -4734,10 +4740,12 @@ same tables.
 **Where the new defaults lose.** On the analytic sphere of `codec_decoder_test`
 they are 16% smaller than the old ones (30.2 against 35.8 B/block) but **17%
 less accurate** on the mean (0.070 against 0.060 voxels off), and the worst
-vertex is 0.66 voxels off. A smooth surface keeps all its energy in the low
-bands, which the defaults' coarse AC step quantizes as coarsely as the high
-ones. So the test's bounds were widened: 1 voxel worst, and a new 0.15-voxel
-mean. The sphere is kept as the per-band study's second fixture, beside room0.
+vertex is **2.4x as far off** (0.66 against 0.27 voxels). A smooth surface
+keeps all its energy in the low bands, which the defaults' coarse AC step
+quantizes as coarsely as the high ones. So the test's worst-vertex bound
+moved from 0.5 to 0.8 voxels, and it gained a mean bound of 0.085 --
+1.2x what an M5 Max measures, as tight as another device's rounding allows,
+so the regression is pinned rather than hidden in slack. The sphere is kept as the per-band study's second fixture, beside room0.
 A table can be fine in the low bands and coarse in the high ones, and so could
 win on both.
 
@@ -4760,6 +4768,36 @@ bugs, each caught:
 - coverage measured the wrong way round
 - p95 read as the median
 
+**Review fixes** (all in this PR, before merge):
+- **Degenerate triangles.** The first closest point was Ericson's region test,
+  which divides by an edge's length and by the area. Over 1 cm triangles at
+  room coordinates, it gave NaN for half of all queries when `a == b`, NaN
+  for 4% and a point up to 4.7 mm off when `b == c`, and NaN for one in 2000
+  on a micron sliver; `std::min` silently dropped each NaN from the search.
+  It is now the face projection when that lands inside, with the face trusted
+  only at a sine above 1e-4, and otherwise the nearest of the three edges,
+  within 0.2 µm of a double-precision reference on all of those. On room0 no
+  figure moved: its reference mesh has no triangle with coincident corners,
+  and on seven of the sweep's configs the two agree on every sampled
+  distance to 1 µm.
+- **The search.** Cells are half the reach, a query scans its own cell first,
+  and then only the neighbours nearer than its best, on squared distances.
+  The sweep hashes the reference once rather than once per config. Comparing
+  one room0 mesh both ways went from 8.7 s to 2.2 s, and matches a scan of
+  every triangle exactly.
+- **p95** is the nearest rank, `ceil(0.95 n)`; it had been read one rank
+  high, which for 20 points or fewer is the max.
+- **The player grid** is sized from its first frame's block count and the
+  sweep decodes into the stream's, where each had been sized from the
+  source's grown table (131 k slots, 512 MiB of `tsdf` + `weight`, for 25 k
+  blocks). A decode that runs out of room grows the grid and always decodes
+  again. IoError is retried twice, and then returned as itself, since the
+  Decoder also uses it for a broken heap, which no retry mends; it had been
+  retried 16 times and then reported as OutOfMemory.
+- **The partial-block DCT test** is pinned to the prior engine's K = 32, the
+  case the unobserved-voxel fill was built for, rather than following the
+  defaults to K = 64.
+
 The sweep's first cut timed each config's first call on a fresh `Encoder`,
 which varied from 5 to 35 ms on the same grid. Each config now runs one
 untimed round first.
@@ -4767,10 +4805,10 @@ untimed round first.
 **Open.**
 - **The per-band quantization study,** its own PR, before P-frames. It judges
   a step table per `x + y + z` band on room0 and on the sphere, with these
-  tables as the baseline.
+  tables as the baseline (a `TODO(codec)` on `CodecParams`).
 - **P-frames,** for the bitrate above.
 - **Host-threaded segment coding,** if a finer voxel or K = 128 is wanted in
-  real time.
+  real time (a `TODO(codec)` in `bitstream.cpp`).
 - **The GPU coder,** after that, if threading is not enough.
 
 ## Measured lessons

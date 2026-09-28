@@ -13,10 +13,12 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <optional>
 #include <utility>
 #include <vector>
 
+#include "grid_layout.hpp"
 #include "mesh_distance.hpp"
 #include "volumetric_kit/recon/codec/decoder.hpp"
 #include "volumetric_kit/recon/codec/encoder.hpp"
@@ -33,47 +35,68 @@ using Bytes = std::vector<std::uint8_t>;
 /// Raw tsdf + weight per block: what a frame compresses.
 inline constexpr double kRawBytesPerBlock = 512.0 * 2.0 * sizeof(float);
 
-/// @brief A grid for a stream, from a frame's header: its geometry, `tsdf` +
-///        `weight` only (all a frame carries, and all the Decoder accepts).
-inline vr::Result<vr::volume::VoxelBlockGrid> player_grid(
-    vr::Device& device, vr::Allocator& allocator, const Bytes& frame,
-    std::int32_t num_buckets) {
-  VR_ASSIGN(const vr::codec::FrameInfo info,
-            vr::codec::read_frame_info(frame.data(), frame.size()));
-  vr::volume::VoxelGridParams gp{};
-  gp.voxel_size = info.voxel_size;
-  gp.block_size = vr::codec::kBlockSize;
-  gp.voxels_per_block = std::int32_t(vr::codec::kVoxelsPerBlock);
-  gp.trunc_dist = info.trunc_dist;
-  gp.bucket_size = 8;
-  gp.num_buckets = num_buckets;
-  gp.num_blocks = gp.bucket_size * gp.num_buckets;
-  gp.max_chain = 128;
-  const vr::volume::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
-                                             {"weight", sizeof(float)}};
-  return vr::volume::VoxelBlockGrid::create(device, allocator, gp, attrs, 2);
+/// @return Buckets enough for @p blocks at half the heap, and at least 1024.
+inline std::int32_t player_buckets(std::uint32_t blocks) {
+  const std::int64_t need =
+      (2 * std::int64_t(blocks) + kExampleBucketSize - 1) / kExampleBucketSize;
+  return std::int32_t(std::max<std::int64_t>(need, 1024));
 }
 
-/// @brief Decode, doubling the grid on OutOfMemory -- the recovery the
-///        Decoder names -- and retrying IoError (lock contention).
+/// @brief A grid for a stream, from a frame's header: its geometry, `tsdf` +
+///        `weight` only (all a frame carries, and all the Decoder accepts),
+///        in the examples' layout, sized for the frame's own blocks.
+inline vr::Result<vr::volume::VoxelBlockGrid> player_grid(
+    vr::Device& device, vr::Allocator& allocator, const Bytes& frame) {
+  VR_ASSIGN(const vr::codec::FrameInfo info,
+            vr::codec::read_frame_info(frame.data(), frame.size()));
+  const vr::volume::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
+                                             {"weight", sizeof(float)}};
+  return vr::volume::VoxelBlockGrid::create(
+      device, allocator,
+      example_grid_params(info.voxel_size, info.trunc_dist,
+                          player_buckets(info.block_count)),
+      attrs, 2);
+}
+
+/// @brief Decode, growing the grid on OutOfMemory -- the recovery the
+///        Decoder names -- and decoding again, twice at most, on IoError.
+///
+/// IoError is how the Decoder reports bucket-lock contention that outlasted
+/// its own rounds, which another decode clears; it is also how it reports a
+/// free heap that refused a removed block, which nothing clears. The two
+/// cannot be told apart here, so the retries are few and the last error is
+/// returned as itself. Only the attempt that succeeds is timed into @p rows,
+/// so a frame that grew the grid on the way is reported as one decode.
 inline vr::Status decode_growing(vr::codec::Decoder& dec, const Bytes& frame,
                                  vr::volume::VoxelBlockGrid& grid,
                                  vr::StageMetrics* rows, int* grows) {
-  for (int attempt = 0; attempt < 16; ++attempt) {
-    const vr::Status s = dec.decode(frame.data(), frame.size(), grid, rows);
+  constexpr int kContendedRetries = 2;
+  VR_ASSIGN(const vr::codec::FrameInfo info,
+            vr::codec::read_frame_info(frame.data(), frame.size()));
+  int contended = 0;
+  for (;;) {
+    vr::StageMetrics attempt;
+    const vr::Status s = dec.decode(frame.data(), frame.size(), grid,
+                                    rows != nullptr ? &attempt : nullptr);
     if (s.ok()) {
+      if (rows != nullptr) rows->merge(attempt);
       return s;
     }
     if (s.domain() == vr::Status::Code::OutOfMemory) {
-      VR_TRY(grid.resize(grid.grid().num_buckets * 2));
+      const std::int64_t grown =
+          std::max<std::int64_t>(2 * std::int64_t(grid.grid().num_buckets),
+                                 player_buckets(info.block_count));
+      if (grown * kExampleBucketSize >
+          std::numeric_limits<std::int32_t>::max()) {
+        return s;
+      }
+      VR_TRY(grid.resize(std::int32_t(grown)));
       ++*grows;
-    } else if (s.domain() != vr::Status::Code::IoError) {
+    } else if (s.domain() != vr::Status::Code::IoError ||
+               ++contended > kContendedRetries) {
       return s;
     }
   }
-  return vr::Status::out_of_memory(
-      "the player grid kept failing to hold "
-      "the frame");
 }
 
 /// @return A row's host milliseconds, or 0 if @p m has no row of that name.
@@ -115,17 +138,16 @@ inline void print_comparison(const MeshComparison& c, float voxel) {
 ///        totals of every frame coded through them.
 class CodecStream {
  public:
-  /// @param num_buckets  The player grid's starting size; it grows as needed.
-  static vr::Result<CodecStream> create(vr::Device& device,
-                                        vr::Allocator& allocator,
-                                        const vr::codec::EncoderConfig& config,
-                                        std::int32_t num_buckets) {
+  /// The player grid is built from the first frame's header, sized for its
+  /// blocks, and grows as later frames need.
+  static vr::Result<CodecStream> create(
+      vr::Device& device, vr::Allocator& allocator,
+      const vr::codec::EncoderConfig& config) {
     VR_ASSIGN(vr::codec::Encoder enc,
               vr::codec::Encoder::create(device, allocator, config));
     VR_ASSIGN(vr::codec::Decoder dec,
               vr::codec::Decoder::create(device, allocator));
-    return CodecStream(device, allocator, std::move(enc), std::move(dec),
-                       num_buckets);
+    return CodecStream(device, allocator, std::move(enc), std::move(dec));
   }
 
   /// @brief Encode @p source as one frame and decode it into the player.
@@ -133,7 +155,7 @@ class CodecStream {
     VR_ASSIGN(const Bytes frame, encoder_.encode(source, &encode_rows_));
     if (!player_) {
       VR_ASSIGN(vr::volume::VoxelBlockGrid g,
-                player_grid(*device_, *allocator_, frame, num_buckets_));
+                player_grid(*device_, *allocator_, frame));
       player_.emplace(std::move(g));
     }
     VR_TRY(decode_growing(decoder_, frame, *player_, &decode_rows_, &grows_));
@@ -152,45 +174,52 @@ class CodecStream {
   /// @return The grid the last frame was decoded into. @pre frames() > 0.
   vr::volume::VoxelBlockGrid& player() { return *player_; }
 
-  /// @brief Print what the stream cost: size, bitrate at @p fps, and where
-  ///        the encode and decode time went. @pre frames() > 0.
-  void report(double fps) const {
+  /// @brief Print what the stream cost: size, bitrate, and where the encode
+  ///        and decode time went. @pre frames() > 0.
+  /// @param fps    The source's frame rate.
+  /// @param every  Source frames per coded frame; 0 when only one frame was
+  ///               coded, which has no bitrate.
+  void report(double fps, int every) const {
     const double per_frame = bytes_ / double(frames_);
     const double per_block = blocks_ > 0 ? bytes_ / blocks_ : 0.0;
     std::printf("stream: %zu frames coded%s\n", frames_,
                 grows_ > 0 ? " (the player grid grew)" : "");
     std::printf(
         "  %.0f bytes per frame (max %zu), %.0f blocks; %.1f bytes "
-        "per block, %.0fx under raw; %.2f Mbit/s at %.0f fps\n",
+        "per block, %.0fx under raw",
         per_frame, max_bytes_, blocks_ / double(frames_), per_block,
-        per_block > 0 ? kRawBytesPerBlock / per_block : 0.0,
-        per_frame * 8.0 * fps / 1e6, fps);
+        per_block > 0 ? kRawBytesPerBlock / per_block : 0.0);
+    if (every > 0) {
+      const double coded_fps = fps / double(every);
+      std::printf("; %.2f Mbit/s at %.1f coded frames/s (1 in %d at %.0f fps)",
+                  per_frame * 8.0 * coded_fps / 1e6, coded_fps, every, fps);
+    }
+    std::printf("\n");
     print_stage_rows("encode", encode_rows_, frames_);
     print_stage_rows("decode", decode_rows_, frames_);
+    // Against the source's frame interval: what coding every frame live
+    // would have to fit, whatever this run's cadence.
     const double budget = 1e3 / fps;
     const double enc = row_ms(encode_rows_, "  ..rans encode") / frames_;
     const double dec = row_ms(decode_rows_, "  ..rans decode") / frames_;
     std::printf(
-        "  host rANS: %.2f ms encode, %.2f ms decode per frame "
-        "(%.0f%% / %.0f%% of a %.1f ms frame)\n",
+        "  host rANS: %.2f ms encode, %.2f ms decode per coded frame "
+        "(%.0f%% / %.0f%% of a %.1f ms source frame interval)\n",
         enc, dec, 100.0 * enc / budget, 100.0 * dec / budget, budget);
   }
 
  private:
   CodecStream(vr::Device& device, vr::Allocator& allocator,
-              vr::codec::Encoder enc, vr::codec::Decoder dec,
-              std::int32_t num_buckets)
+              vr::codec::Encoder enc, vr::codec::Decoder dec)
       : device_(&device),
         allocator_(&allocator),
         encoder_(std::move(enc)),
-        decoder_(std::move(dec)),
-        num_buckets_(num_buckets) {}
+        decoder_(std::move(dec)) {}
 
   vr::Device* device_;
   vr::Allocator* allocator_;
   vr::codec::Encoder encoder_;
   vr::codec::Decoder decoder_;
-  std::int32_t num_buckets_;
   std::optional<vr::volume::VoxelBlockGrid> player_;
   vr::StageMetrics encode_rows_;
   vr::StageMetrics decode_rows_;
