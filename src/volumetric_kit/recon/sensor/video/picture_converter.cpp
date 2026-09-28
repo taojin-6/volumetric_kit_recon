@@ -8,6 +8,8 @@
 namespace volumetric_kit::recon::sensor::video {
 namespace {
 
+constexpr bool kYuvSetupReportsFailure = LIBSWSCALE_VERSION_MAJOR < 7;
+
 int sws_matrix(VideoColorMatrix matrix) noexcept {
   switch (matrix) {
     case VideoColorMatrix::Bt601:
@@ -155,9 +157,15 @@ Result<DecodedPicture> PictureConverter::convert(const AVFrame& frame,
       const int* coefficients = sws_getCoefficients(sws_matrix(picture.matrix));
       const int range = picture.full_range ? 1 : 0;
       const int target_range = target == AV_PIX_FMT_RGB24 ? 1 : range;
-      if (sws_setColorspaceDetails(sws_.get(), coefficients, range,
-                                   coefficients, target_range, 0, 1 << 16,
-                                   1 << 16) < 0) {
+      const int set = sws_setColorspaceDetails(sws_.get(), coefficients, range,
+                                               coefficients, target_range, 0,
+                                               1 << 16, 1 << 16);
+      // Before swscale 7, a YUV (or grey) source to a YUV target reports -1
+      // after taking both ranges: there is no RGB table to build (FFmpeg
+      // 4.4's libswscale/utils.c).
+      const bool yuv_to_yuv = target != AV_PIX_FMT_RGB24 &&
+                              (desc->flags & AV_PIX_FMT_FLAG_RGB) == 0;
+      if (set < 0 && !(kYuvSetupReportsFailure && yuv_to_yuv)) {
         sws_.reset();
         return Status::io_error(std::string(who_) +
                                 ": swscale refused the colour matrix");
