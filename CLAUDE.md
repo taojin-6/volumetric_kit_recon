@@ -798,7 +798,8 @@ arbitrary; it usually isn't.
   transport's.
 
 - **`eval`** — `MeshDistance` (point-to-surface distance up to a reach,
-  through a hash of reach-sized cells, over a **copy** of the triangles),
+  through a hash of cells half the reach on a side, searched nearest first
+  and pruned by distance, over a **copy** of the triangles),
   `compare_meshes` giving accuracy, coverage and an optional F-score, and
   `ReferenceMesh`, which indexes a reference once so a sweep can judge many
   meshes against it. They refuse, with `Status`, what would read out of
@@ -811,8 +812,10 @@ arbitrary; it usually isn't.
 
   The surface is every triangle but one collapsed to a point, which is what
   an incremental extract retires a triangle to. The points measured are the
-  vertices those triangles use, and a degenerate triangle counts as the
-  segment it collapses to, whichever corners coincide. A `stride` picks
+  vertices those triangles use. The closest point is the face projection
+  when it lands inside, else the nearest edge, so a degenerate triangle
+  counts as the segment it collapses to and a thin one is measured to float
+  rounding, where Ericson's region test lost it now and then. A `stride` picks
   vertices by a hash of their position, so the figures reproduce whatever
   order marching cubes' atomics emitted the mesh in.
 

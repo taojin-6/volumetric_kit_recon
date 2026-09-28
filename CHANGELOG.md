@@ -103,7 +103,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   triangles collapsed to a point, and vertices no triangle uses, are left
   out. A stride picks vertices by position, so the figures reproduce. The
   metric came from `examples/common`, where the room0 measurement introduced
-  it. Tested by `recon_eval_mesh_distance`.
+  it, and it carries that header's review fixes: the closest point is exact
+  to float rounding on thin and degenerate triangles, and a pruned search of
+  half-reach cells compares room0 at 1 cm in 1.9 s, down from 8.3 s. Tested
+  by `recon_eval_mesh_distance`.
 - `examples`: **`codec_replica`**, the TSDF codec on real data. It fuses a
   Replica sequence and streams the grid through `Encoder` / `Decoder`,
   reporting bytes, bitrate and stage rows. It then judges the decoded surface

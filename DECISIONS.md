@@ -4844,28 +4844,34 @@ a plotting script would still be excluded.
 
 **What v1 holds** (`eval/mesh_distance.hpp`):
 - **`MeshDistance`:** point-to-surface distance up to a reach, through a hash
-  of reach-sized cells.
+  of cells half the reach on a side. A query scans its own cell first, then
+  only the neighbours within two cells whose box is nearer than its best so
+  far, on squared distances (from #95's review, below).
   - It **copies** the triangles, so the source mesh need not outlive it. The
     header-only version kept a reference, a lifetime the caller could not see.
   - `create` refuses a reach that is not finite and positive, an index count
     that is not a multiple of 3, and an index past the vertices, where the
     header-only version read out of bounds.
   - It also refuses a triangle corner that is not finite or lies past the cell
-    keys' range (about a million reaches out), and a reach so small for the
-    triangles that they would average more than `kMaxCellsPerTriangle` (64)
-    cells each. A triangle no larger than the reach touches at most 8. Both
+    keys' range (about half a million reaches out), and a reach so small for
+    the triangles that they would average more than `kMaxCellsPerTriangle`
+    (64) cells each. A triangle no larger than half the reach touches at most
+    8, and one no larger than the reach 27. Both
     are limits the caller cannot see: the first overflowed the float-to-int
     cell conversion, which saturates on ARM and left the filing loop without
     an end, and the second grew memory as `(size / reach)^3` (one 1 cm
     triangle at a micron took 8.1 GB).
   - A query that is not finite, or past the range, reads as the reach.
-- **`closest_point_on_triangle`** takes a degenerate triangle as its edges:
-  one whose angle at its first corner has a sine under 1e-5, which moves the
-  answer by at most 1e-5 of the triangle's size. Ericson's regions assume an
-  area, and with the first two corners coinciding every point fell in edge
-  ab's region, whose parameter is 0 / 0. The NaN lost to `std::min`, so the
-  triangle silently dropped out, and marching cubes makes one wherever a
-  crossing lands on a voxel corner.
+- **`closest_point_on_triangle`** is the projection onto the face when it
+  lands inside, and otherwise the nearest of the three edges; a triangle
+  whose angle at its first corner has a sine under 1e-4 is measured by its
+  edges alone. Ericson's regions assume an area, and with the first two
+  corners coinciding every point fell in edge ab's region, whose parameter
+  is 0 / 0. The NaN lost to `std::min`, so the triangle silently dropped
+  out, and marching cubes makes one wherever a crossing lands on a voxel
+  corner. (This PR first kept Ericson's test behind a guard at a sine of
+  1e-5; #95's review fixed the same bug with the projection, which is the one
+  kept, as below.)
 - **What counts as surface:** every triangle but one collapsed to a point,
   and the points measured are the vertices those triangles use.
   `extract_device_incremental` retires a triangle to a point (the sharing
@@ -4903,7 +4909,8 @@ smaller than that. A hash of the position depends only on the geometry, so
 three runs now agree in every printed digit (accuracy mean 1.214 mm, F
 0.9926). The earlier entry's room0 tables were measured under the array
 stride. This is a subsample of the same size, so they should stand to within
-that half percent, but they were not re-run.
+that half percent. One was re-run: the 1 cm defaults' accuracy RMS reads
+0.640 mm under the hash, against the table's 0.641.
 
 **The example's entry point stays concise** (this PR's base,
 `refactor(examples): keep codec_replica's entry point concise`). The player
@@ -4951,9 +4958,9 @@ reversing 41^2 vertices maps every seventh index onto every seventh index,
 and a flat grid gives many subsets one distribution), the order of the
 option checks, and the cell budget (the test hangs without it). The two
 range checks are caught by the sanitizer leg, as the float-to-int overflow
-they prevent; the cell budget alone refuses the far vertex on ARM. The
-degenerate check costs 2% per closest-point call (16.3 against 16.1 ns on
-1 cm triangles), with the same answers on every non-degenerate one.
+they prevent; the cell budget alone refuses the far vertex on ARM. (The
+degenerate guard measured here, 2% per call, was on Ericson's test, which
+the merge below replaced.)
 
 Kept on purpose: `positive_finite` and the cell key stay private copies, not
 `core` helpers. The first is one line. The second differs from
@@ -4961,10 +4968,38 @@ Kept on purpose: `positive_finite` and the cell key stay private copies, not
 two's-complement masking) and in its range check, which only `eval` needs,
 since block coordinates are bounded by the grid.
 
+**Merged with #95's review.** #95's review fixed the same header in
+`examples/common` while this PR's review fixed its copy here, each without
+the other. When this PR was rebased onto the merged #95, `eval` took the
+better of each, measured rather than argued:
+- **The closest point is #95's.** Both versions were run against a
+  double-precision reference on 1 cm triangles at room coordinates, about
+  4.2 million queries (coincident corners, collinear corners, 1 µm needles,
+  and slivers with sines from 1e-6 to 1e-2). The projection is within
+  0.17 µm on every one, which is float rounding at 3 m. Ericson behind the
+  guard is off by more than 0.5 µm on 12 of them, all slivers or collinear,
+  by up to 89.5 µm. Rare, so no room0 figure moves, but never is better than
+  rarely, and it is simpler.
+- **The search is #95's**, with this PR's range checks moved onto the finer
+  cells. Room0 at 1 cm, the same grids, compared both ways at stride 4:
+  8.25 s before, 1.86 s after, and every printed figure identical (accuracy
+  RMS 0.640 mm, F 0.9981 at 5 mm).
+- **The rest is this PR's:** the refusals, the surface-only sampling, the
+  position-hashed stride, and `ReferenceMesh`, which covers what #95's
+  hash-once `compare_meshes` overload was for. #95's `acc>r` column and its
+  sweep decoding into the stream's player carry over into the examples.
+- **Tests from #95**, ported: thin triangles against the double-precision
+  answer (50 000 draws, enough to meet Ericson's rare misses; reverting to
+  it fails), and the pruned search against a scan of every triangle
+  (probing one cell fewer along x, or leaving the box gap unsquared,
+  fails). One
+  change survives: trusting the face down to any nonzero area passes every
+  case too. The 1e-4 guard is kept as a margin, not a measured need.
+
 **Open**, each a `TODO(eval)` in the code:
 - The ground-truth test (#94) moves onto `eval` once both have landed, and
   drops its copy.
-- A threaded `compare_meshes`: room0 at 1 cm takes ~9 s at stride 4 on one
+- A threaded `compare_meshes`: room0 at 1 cm takes ~2 s at stride 4 on one
   core.
 
 ## Measured lessons
