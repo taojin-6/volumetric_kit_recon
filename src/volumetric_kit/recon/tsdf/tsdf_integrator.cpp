@@ -5,11 +5,11 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <limits>
 #include <unordered_set>
 #include <vector>
 
+#include "volumetric_kit/recon/core/command_batch.hpp"
 #include "volumetric_kit/recon/core/compute_kernel.hpp"
 #include "volumetric_kit/recon/core/compute_util.hpp"
 #include "volumetric_kit/recon/core/device.hpp"
@@ -147,10 +147,11 @@ Result<TsdfIntegrator> TsdfIntegrator::create(
   integ.max_storage_buffer_range_ = props.limits.maxStorageBufferRange;
 
   // The camera params are fixed-size, so persist the SSBO (bound once at
-  // binding 4) and rewrite its contents each integrate() -- not a per-call
-  // allocation. Only the variable-size active/depth buffers are per-call.
-  VR_ASSIGN(integ.cam_buf_, storage_buffer(allocator, sizeof(DepthCameraParams),
-                                           HostAccess::SequentialWrite));
+  // binding 4) and rewrite it inline in each integrate()'s batch -- not a
+  // per-call allocation. All of these are device-local, as every buffer the
+  // kernel reads is (the 2026-09-28 residency decision).
+  VR_ASSIGN(integ.cam_buf_,
+            device_storage_buffer(allocator, sizeof(DepthCameraParams)));
   integ.kernel_.set.write_storage_buffer(4, integ.cam_buf_.handle(), 0,
                                          VK_WHOLE_SIZE);
 
@@ -159,10 +160,9 @@ Result<TsdfIntegrator> TsdfIntegrator::create(
   // descriptor stays bound when no color is fused; integrate() rebinds 5/6 and
   // rewrites the color camera when a frame arrives.
   VR_ASSIGN(integ.color_cam_buf_,
-            storage_buffer(allocator, sizeof(ColorCameraParams),
-                           HostAccess::SequentialWrite));
+            device_storage_buffer(allocator, sizeof(ColorCameraParams)));
   VR_ASSIGN(integ.color_dummy_,
-            storage_buffer(allocator, sizeof(std::uint32_t)));
+            device_storage_buffer(allocator, sizeof(std::uint32_t)));
   integ.kernel_.set.write_storage_buffer(5, integ.color_dummy_.handle(), 0,
                                          VK_WHOLE_SIZE);
   integ.kernel_.set.write_storage_buffer(6, integ.color_dummy_.handle(), 0,
@@ -303,29 +303,44 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid,
     }
   }
 
-  // Snapshot the active blocks; nothing to fuse into an empty grid. This is a
-  // second GPU dispatch inside this stage's host row, so it reports its own
-  // "  ..active set" breakdown -- otherwise its device time is invisible and
-  // the gap between integrate's two halves reads as submit overhead when a good
-  // part of it is another kernel.
-  VR_ASSIGN(std::vector<BlockIndex> active,
-            grid.map().compact_active_blocks(metrics));
-  if (active.empty()) {
+  // Compact the active blocks, leaving the list on the device; only its count
+  // comes back. This is a second GPU dispatch inside this stage's host row, so
+  // it reports its own "  ..active set" breakdown -- otherwise its device time
+  // is invisible and the gap between integrate's two halves reads as submit
+  // overhead when a good part of it is another kernel. Nothing to fuse into an
+  // empty grid.
+  // TODO(tsdf): dispatch indirect off the device count, saving the fence wait
+  // between the two submits, if a host row shows that wait.
+  VR_ASSIGN(const volume::DeviceBlockList active,
+            grid.map().compact_active_blocks_on_device(metrics));
+  if (active.count == 0) {
     return {};
   }
 
-  // Upload the block list, the depth frame (metres), and the camera params.
-  VR_ASSIGN(
-      Buffer active_buf,
-      upload_storage_buffer(*allocator_, active.data(),
-                            VkDeviceSize(active.size()) * sizeof(BlockIndex)));
-  device_->set_object_name(VK_OBJECT_TYPE_BUFFER,
-                           debug_object_handle(active_buf.handle()),
-                           "tsdf.active_set");
+  // One thread per voxel of every active block. The flattened thread count must
+  // fit a uint32; the batch refuses a groupCountX past the device limit.
+  const VoxelGridParams& grid_params = grid.grid();
+  const std::uint64_t threads64 =
+      static_cast<std::uint64_t>(active.count) *
+      static_cast<std::uint64_t>(grid_params.voxels_per_block);
+  if (threads64 > std::numeric_limits<std::uint32_t>::max()) {
+    return Status::invalid_argument(
+        "TsdfIntegrator::integrate: active_blocks * voxels_per_block exceeds "
+        "2^32");
+  }
 
-  Buffer depth_buf;  // a host array's upload, alive across the dispatch
+  if (config_.track_dirty_blocks) {
+    VR_TRY(prepare_dirty_flags(grid));
+    kernel_.set.write_storage_buffer(8, dirty_blocks_.handle(), 0,
+                                     VK_WHOLE_SIZE);
+  }
+
+  // One batch: the frames staged, the cameras inline, then the dispatch. The
+  // descriptor writes all precede the dispatch that binds the set.
+  CommandBatch batch(*device_, *allocator_);
+  Buffer depth_buf;  // a host array's device copy, alive across the batch
   VR_ASSIGN(const VkBuffer depth_handle,
-            depth.buffer(*allocator_, depth_bytes, depth_buf));
+            depth.buffer(batch, *allocator_, depth_bytes, depth_buf));
   if (depth_buf.valid()) {
     // Named because it is the biggest thing this call moves -- a few
     // megabytes a frame at a scanner's resolution -- and so the first row a
@@ -334,25 +349,18 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid,
                              debug_object_handle(depth_buf.handle()),
                              "tsdf.depth_frame");
   }
-
   // The camera params ride the SSBO verbatim; the kernel derives world ->
   // camera from the rigid cam_to_world, so there is no host-side pose
   // inversion.
-  std::memcpy(cam_buf_.mapped(), &cam, sizeof(DepthCameraParams));
-
-  // The camera binding (4) was written once at create(); only the per-call
-  // tsdf/weight/active/depth buffers are (re)bound here.
-  if (config_.track_dirty_blocks) {
-    VR_TRY(prepare_dirty_flags(grid));
-    kernel_.set.write_storage_buffer(8, dirty_blocks_.handle(), 0,
-                                     VK_WHOLE_SIZE);
-  }
+  VR_TRY(batch.upload(cam_buf_, 0, &cam, sizeof(DepthCameraParams)));
 
   kernel_.set.write_storage_buffer(0, tsdf_view.buffer->handle(), 0,
                                    VK_WHOLE_SIZE);
   kernel_.set.write_storage_buffer(1, weight_view.buffer->handle(), 0,
                                    VK_WHOLE_SIZE);
-  kernel_.set.write_storage_buffer(2, active_buf.handle(), 0, VK_WHOLE_SIZE);
+  kernel_.set.write_storage_buffer(
+      2, active.buffer->handle(), 0,
+      VkDeviceSize(active.count) * sizeof(BlockIndex));
   // The images' exact ranges, never VK_WHOLE_SIZE: a caller's buffer may be
   // past maxStorageBufferRange where the image it holds is not.
   kernel_.set.write_storage_buffer(3, depth_handle, 0, depth_bytes);
@@ -361,8 +369,7 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid,
   // one (resolved above), so dynamic can clear a stale color even on a
   // depth-only frame; slot 5 is the color image only when a frame is supplied
   // this call. Unused color slots fall back to the 1-element dummy so every
-  // descriptor stays bound. color_buf lives at function scope so it outlives
-  // the dispatch.
+  // descriptor stays bound.
   const std::uint32_t has_color_attr = (color_attr_buf != nullptr) ? 1u : 0u;
   kernel_.set.write_storage_buffer(6,
                                    (color_attr_buf != nullptr)
@@ -373,15 +380,16 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid,
   Buffer color_buf;
   std::uint32_t has_color = 0;
   if (color != nullptr) {
-    VR_ASSIGN(const VkBuffer color_handle,
-              color_input(*color).buffer(*allocator_, color_bytes, color_buf));
+    VR_ASSIGN(
+        const VkBuffer color_handle,
+        color_input(*color).buffer(batch, *allocator_, color_bytes, color_buf));
     if (color_buf.valid()) {
       device_->set_object_name(VK_OBJECT_TYPE_BUFFER,
                                debug_object_handle(color_buf.handle()),
                                "tsdf.color_frame");
     }
-    std::memcpy(color_cam_buf_.mapped(), &color->cam,
-                sizeof(ColorCameraParams));
+    VR_TRY(batch.upload(color_cam_buf_, 0, &color->cam,
+                        sizeof(ColorCameraParams)));
     kernel_.set.write_storage_buffer(5, color_handle, 0, color_bytes);
     has_color = 1;
   } else {
@@ -391,32 +399,19 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid,
                                      VK_WHOLE_SIZE);
   }
 
-  const VoxelGridParams& grid_params = grid.grid();
   const PushConstants push{
       grid_params,
-      static_cast<std::uint32_t>(active.size()),
+      active.count,
       max_weight,
       static_cast<std::uint32_t>(mode),
       has_color,
       has_color_attr,
       config_.track_dirty_blocks ? 1u : 0u,
       (color != nullptr && color->coverage_in_alpha) ? 1u : 0u};
-
-  // One thread per voxel of every active block. The flattened thread count must
-  // fit a uint32; dispatch() caps groupCountX at the device limit and emits the
-  // barrier that makes the fused tsdf/weight writes visible to a host read-back
-  // and to the next frame's dispatch (the running average).
-  const std::uint64_t threads64 =
-      static_cast<std::uint64_t>(active.size()) *
-      static_cast<std::uint64_t>(grid_params.voxels_per_block);
-  if (threads64 > std::numeric_limits<std::uint32_t>::max()) {
-    return Status::invalid_argument(
-        "TsdfIntegrator::integrate: active_blocks * voxels_per_block exceeds "
-        "2^32");
-  }
-  return dispatch(*device_, kernel_, &push, sizeof(push),
-                  group_count(static_cast<std::uint32_t>(threads64)),
-                  max_workgroup_count_x_, &stage);
+  VR_TRY(batch.dispatch(kernel_, &push, sizeof(push),
+                        group_count(static_cast<std::uint32_t>(threads64)),
+                        max_workgroup_count_x_, &stage));
+  return batch.submit();
 }
 
 VkBuffer TsdfIntegrator::dirty_flags_buffer() const noexcept {
@@ -452,8 +447,12 @@ Status TsdfIntegrator::prepare_dirty_flags(const VoxelBlockGrid& grid) {
     // top of another's -- which is what silently happened while one integrator
     // driving several grids was untracked. Reset rather than refuse: the flags
     // this call is about to set ARE valid for `grid`, and refusing would bind
-    // an integrator to one grid for its whole life.
-    reset_dirty();
+    // an integrator to one grid for its whole life. Un-anchored, they are
+    // clear already: reset_dirty() clears before it un-anchors, and a fresh
+    // array is zeroed below.
+    if (dirty_grid_ != nullptr) {
+      VR_TRY(reset_dirty());
+    }
     dirty_grid_ = &grid;
     dirty_epoch_ = grid.topology_epoch();
   } else if (grid.topology_epoch() != dirty_epoch_) {
@@ -482,8 +481,9 @@ Status TsdfIntegrator::prepare_dirty_flags(const VoxelBlockGrid& grid) {
   VR_TRY(check_storage_buffer_range(
       "TsdfIntegrator::integrate: the dirty-block flags", bytes,
       max_storage_buffer_range_));
-  VR_ASSIGN(Buffer grown,
-            storage_buffer(*allocator_, bytes, HostAccess::Random));
+  // Device-local: the kernel ORs a flag in per changed voxel, an atomic that
+  // would cross PCIe on a discrete GPU from host-visible memory.
+  VR_ASSIGN(Buffer grown, device_storage_buffer(*allocator_, bytes));
 
   // Carry the existing flags forward, and zero only the new tail -- mirroring
   // VoxelBlockGrid::resize, which grows the attribute arrays the same way and
@@ -492,16 +492,17 @@ Status TsdfIntegrator::prepare_dirty_flags(const VoxelBlockGrid& grid) {
   // of it. Zeroing the whole array instead would forget every block fused since
   // the last reset_dirty() -- silently, and precisely on the frames a growing
   // scan brings in the most new surface, which are the frames that trigger the
-  // grow.
-  const auto old_bytes =
+  // grow. Its own batch, since the old array must outlive the copy.
+  const VkDeviceSize old_bytes =
       dirty_blocks_.valid()
-          ? static_cast<std::size_t>(dirty_capacity_) * sizeof(std::uint32_t)
-          : std::size_t{0};
-  auto* dst = static_cast<std::uint8_t*>(grown.mapped());
+          ? VkDeviceSize(dirty_capacity_) * sizeof(std::uint32_t)
+          : VkDeviceSize{0};
+  CommandBatch batch(*device_, *allocator_);
   if (old_bytes > 0) {
-    std::memcpy(dst, dirty_blocks_.mapped(), old_bytes);
+    VR_TRY(batch.copy(dirty_blocks_, 0, grown, 0, old_bytes));
   }
-  std::memset(dst + old_bytes, 0, static_cast<std::size_t>(bytes) - old_bytes);
+  VR_TRY(batch.fill(grown, old_bytes, bytes - old_bytes, 0u));
+  VR_TRY(batch.submit());
   dirty_blocks_ = std::move(grown);
   dirty_capacity_ = blocks;
   // A fresh handle each grow, and a name lives on the handle -- the same reason
@@ -515,12 +516,25 @@ Status TsdfIntegrator::prepare_dirty_flags(const VoxelBlockGrid& grid) {
   return {};
 }
 
-std::uint32_t TsdfIntegrator::dirty_block_count() const {
-  if (!dirty_blocks_.valid()) return 0;
-  const auto* flags = static_cast<const std::uint32_t*>(dirty_blocks_.mapped());
+Result<std::vector<std::uint32_t>> TsdfIntegrator::read_dirty_flags() const {
+  std::vector<std::uint32_t> flags(dirty_capacity_);
+  CommandBatch batch(*device_, *allocator_);
+  VR_TRY(batch.readback(dirty_blocks_, 0,
+                        VkDeviceSize(dirty_capacity_) * sizeof(std::uint32_t),
+                        flags.data()));
+  VR_TRY(batch.submit());
+  return flags;
+}
+
+Result<std::uint32_t> TsdfIntegrator::dirty_block_count() const {
+  // TODO(tsdf): count on the device, on demand, if a caller shows this
+  // readback. A counter in the fuse kernel cost every tracked fuse 0.03 ms
+  // (room0, M5 Max).
+  if (!dirty_blocks_.valid()) return std::uint32_t{0};
+  VR_ASSIGN(const std::vector<std::uint32_t> flags, read_dirty_flags());
   std::uint32_t count = 0;
-  for (std::uint32_t i = 0; i < dirty_capacity_; ++i) {
-    if (flags[i] != 0u) ++count;
+  for (const std::uint32_t f : flags) {
+    if (f != 0u) ++count;
   }
   return count;
 }
@@ -539,7 +553,7 @@ Result<std::vector<Vec3i>> TsdfIntegrator::dirty_remesh_blocks(
   }
   // Nothing accumulated: before the first integrate, after a reset_dirty(), or
   // on a moved-from integrator (whose scalar capacity survives the move while
-  // the mapping does not).
+  // the buffer does not).
   if (dirty_grid_ == nullptr || !dirty_blocks_.valid()) {
     return std::vector<Vec3i>{};
   }
@@ -561,7 +575,7 @@ Result<std::vector<Vec3i>> TsdfIntegrator::dirty_remesh_blocks(
     return Status::invalid_argument(
         "TsdfIntegrator::dirty_remesh_blocks: voxels_per_block is 0");
   }
-  const auto* flags = static_cast<const std::uint32_t*>(dirty_blocks_.mapped());
+  VR_ASSIGN(const std::vector<std::uint32_t> flags, read_dirty_flags());
 
   // The changed blocks, by coordinate. Sized to the DIRTY set rather than the
   // active set: the walk below tests candidates against this, so it is the only
@@ -599,7 +613,16 @@ Result<std::vector<Vec3i>> TsdfIntegrator::dirty_remesh_blocks(
   return remesh;
 }
 
-void TsdfIntegrator::reset_dirty() {
+Status TsdfIntegrator::reset_dirty() {
+  // Cleared first, so a failed clear leaves the flags anchored to what they
+  // still describe, rather than un-anchored over bits that were never cleared.
+  if (dirty_blocks_.valid()) {
+    CommandBatch batch(*device_, *allocator_);
+    VR_TRY(batch.fill(dirty_blocks_, 0,
+                      VkDeviceSize(dirty_capacity_) * sizeof(std::uint32_t),
+                      0u));
+    VR_TRY(batch.submit());
+  }
   dirty_topology_stale_ = false;
   // Un-anchor: the next integrate() re-anchors on whatever grid it is handed.
   // Done here rather than by re-reading the grid because this holds the grid
@@ -607,10 +630,7 @@ void TsdfIntegrator::reset_dirty() {
   // destroyed it.
   dirty_grid_ = nullptr;
   dirty_epoch_ = 0;
-  if (!dirty_blocks_.valid()) return;
-  std::memset(
-      dirty_blocks_.mapped(), 0,
-      static_cast<std::size_t>(dirty_capacity_) * sizeof(std::uint32_t));
+  return {};
 }
 
 }  // namespace volumetric_kit::recon::tsdf

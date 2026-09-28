@@ -21,6 +21,7 @@
 
 #include "volumetric_kit/recon/core/allocator.hpp"
 #include "volumetric_kit/recon/core/buffer.hpp"
+#include "volumetric_kit/recon/core/command_batch.hpp"
 #include "volumetric_kit/recon/core/result.hpp"
 #include "volumetric_kit/recon/core/vulkan.hpp"
 
@@ -167,15 +168,15 @@ inline Result<Buffer> device_storage_buffer(
 }
 
 /// @brief An image a call reads as a storage binding: a host array the call
-///        uploads, or a storage buffer already on the device (another pass's
-///        output), bound in place. One or the other, by construction.
+///        stages onto the device, or a storage buffer already there (another
+///        pass's output), bound in place. One or the other, by construction.
 ///
 /// What lets a call take both (`allocate_from_depth`, `integrate`) with one
 /// validation path and one binding path, rather than a branch at each. Both
 /// are borrowed, and must outlive the call.
 class StorageInput {
  public:
-  /// @param host  Host bytes, uploaded by @ref buffer; null is refused by
+  /// @param host  Host bytes, staged by @ref buffer; null is refused by
   ///              @ref check.
   explicit StorageInput(const void* host) noexcept : host_(host) {}
   /// @param device  A storage buffer, bound in place.
@@ -212,23 +213,27 @@ class StorageInput {
   }
 
   /// @brief The buffer to bind for @p bytes of this: the device buffer, or a
-  ///        fresh upload of the host array into @p upload, which the caller
-  ///        keeps alive across the (synchronous) dispatch.
+  ///        fresh device-local buffer in @p upload that @p batch fills from the
+  ///        host array. The caller keeps @p upload alive until the batch has
+  ///        run, and records the dispatch that reads it after this.
   ///
   /// Bind exactly @p bytes of it, never `VK_WHOLE_SIZE`: a caller's buffer may
   /// be larger than `maxStorageBufferRange` when the image is not.
-  /// @param allocator  Where an upload is made.
+  /// @param batch      Records the upload.
+  /// @param allocator  Where the device buffer is made.
   /// @param bytes      The binding's range (non-zero); checked by @ref check.
-  /// @param upload     Receives the upload; left empty for a device buffer.
+  /// @param upload     Receives the device buffer; left empty for a device
+  ///                   input.
   /// @return The handle to bind; @ref Status::Code::InvalidArgument for a
-  ///         null array; or the upload's failure.
-  Result<VkBuffer> buffer(Allocator& allocator, VkDeviceSize bytes,
-                          Buffer& upload) const {
+  ///         null array; or the allocation's or the upload's failure.
+  Result<VkBuffer> buffer(CommandBatch& batch, Allocator& allocator,
+                          VkDeviceSize bytes, Buffer& upload) const {
     if (device_ != nullptr) return device_->handle();
     if (host_ == nullptr) {
       return Status::invalid_argument("StorageInput: the host array is null");
     }
-    VR_ASSIGN(upload, upload_storage_buffer(allocator, host_, bytes));
+    VR_ASSIGN(upload, device_storage_buffer(allocator, bytes));
+    VR_TRY(batch.upload(upload, 0, host_, bytes));
     return upload.handle();
   }
 

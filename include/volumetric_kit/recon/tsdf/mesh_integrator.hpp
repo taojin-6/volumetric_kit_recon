@@ -84,7 +84,8 @@ struct MeshIntegrateStats {
   /// Triangle-in-block incidences, which is what the kernel's cost scales
   /// with: each voxel measures every triangle binned into its block.
   std::uint32_t bin_entries = 0;
-  /// The dispatches the write was split into, so that none measures more than
+  /// The dispatches the write was split into, each submitted on its own, so
+  /// that no submission measures more than
   /// @ref MeshIntegrator::kMaxDispatchBinEntries bin entries.
   std::uint32_t dispatches = 0;
 };
@@ -112,11 +113,11 @@ struct MeshIntegrateStats {
 /// Two dispatches bin every triangle into each block its band reaches (a
 /// count, then a fill), each over one work item per (triangle, candidate block)
 /// pair, so a large triangle costs more items and never a longer one. Then one
-/// thread per voxel measures its block's bin, in as many dispatches as it takes
-/// to keep each under @ref kMaxDispatchBinEntries bin entries. The minimum over
-/// a bin is taken with the triangle index as tie-break, so the result does not
-/// depend on the order the atomics filled the bin in -- the same mesh writes
-/// the same bytes.
+/// thread per voxel measures its block's bin, in as many submissions as it
+/// takes to keep each under @ref kMaxDispatchBinEntries bin entries. The
+/// minimum over a bin is taken with the triangle index as tie-break, so the
+/// result does not depend on the order the atomics filled the bin in -- the
+/// same mesh writes the same bytes.
 ///
 /// A voxel's cost is its bin, which a mesh near the grid's resolution keeps in
 /// the hundreds. A mesh far finer than the voxels is where it grows, so a bin

@@ -524,8 +524,9 @@ arbitrary; it usually isn't.
   bundle + `KernelSetBuilder`, the shared-queue-safe
   `Device::submit_single_time` dispatch, and the shared `dispatch()` /
   `group_count` / `storage_buffer` / range-guard helpers of `compute_util.hpp`
-  — `StorageInput` among them, the host array or device buffer a call binds
-  at its image's exact range. **`CommandBatch`** (`core/command_batch.hpp`)
+  — `StorageInput` among them, the host array (staged onto the device in the
+  call's batch) or device buffer a call binds at its image's exact range.
+  **`CommandBatch`** (`core/command_batch.hpp`)
   is how the host reaches device memory: one call's uploads, fills, copies,
   dispatches (indirect too) and readbacks in one command buffer, one fence
   wait, spans and labels kept. A barrier goes wherever a command could see an
@@ -636,7 +637,11 @@ arbitrary; it usually isn't.
   inputs are uploaded in its first round, and a round reads back its counts.
   A compaction still reads its list back, in the count's own submit while the
   set stays within a quarter past its last count (the 2026-09-28 residency
-  decision). `topology_epoch()` lives on the *map* — the object that frees a block
+  decision), except `compact_active_blocks_on_device`'s: its
+  `DeviceBlockList` stays on the device, stamped with the epoch and a
+  compaction serial, and `check_device_block_list` refuses one that a
+  compaction, resize, remove, clear or move has made stale.
+  `topology_epoch()` lives on the *map* — the object that frees a block
   index — and is a globally unique token re-drawn at `create` and at every
   `remove`/`clear`, never at `resize`: a slot-keyed cache (tsdf's dirty flags,
   mesh's spans) anchors on it, so no path may free an index without moving it
@@ -666,7 +671,10 @@ arbitrary; it usually isn't.
   topology token for the one it cannot (a `remove()` since the last fuse is
   visible only to whoever holds the grid). Opt-in `StageMetrics*` reports an
   `"integrate"` row with both halves, over a `"  ..active set"` sub-row for the
-  compaction dispatch it also makes.
+  compaction dispatch it also makes. That compaction leaves its list on the
+  device (`compact_active_blocks_on_device`), so a fuse is two submits, the
+  compaction's count the only thing read back; the frames are staged, and
+  the dirty flags are device-local.
   `MeshIntegrator` writes a triangle mesh's distance field instead
   (2026-09-27), **overwriting** every voxel of every block the band reaches:
   weight 1 within `trunc_dist` of the mesh, the codec inverse's fresh zeros
@@ -681,8 +689,10 @@ arbitrary; it usually isn't.
   allocation's own candidates, so no voxel measures the whole mesh. The fill
   replays the slots the count pass recorded, so no bin comes up short; a bin
   past `kMaxBinTriangles` is refused, and the write splits into dispatches of
-  at most `kMaxDispatchBinEntries` bin entries. Ties break on the triangle
-  index, so the same mesh writes the same bytes.
+  at most `kMaxDispatchBinEntries` bin entries, each submitted on its own.
+  The host reads back only the per-slot counts; the coordinates stay on the
+  device. Ties break on the triangle index, so the same mesh writes the same
+  bytes.
 
 - **`mesh`** — `MarchingCubes` over a sparse `VoxelBlockGrid`, and only that
   (the dense analytic entry point was removed 2026-08-31; the prior engine
@@ -1068,7 +1078,7 @@ which is the correction that entry records.
 the grid the codec encodes: a mesh sequence converts frame by frame. Both modes
 cost the same, measured on an 81 920-triangle sphere at scan density (M5 Max,
 Release): 12.8 ms to write, 10.8 ms of it on the GPU, after 14.2 ms to
-allocate.
+allocate; 12.6 ms and 10.6 ms resident (the 2026-09-28 residency decision).
 
 **On `sensor`**, each a `TODO(sensor)`: the GPU pre-processing has landed for
 one camera (`GpuFramePrep`, the 2026-09-28 GPU pre-processing decision: at 4K
@@ -1088,9 +1098,7 @@ and software decoding at 4K, one thread with little headroom
 synchronised sets.
 
 **Device residency, the steps after `core`** (the 2026-09-28 residency
-decision ranks them): `volume` is resident, but its compacted list still
-reaches the host, which goes with `tsdf` integrating on that list by indirect
-dispatch; then `mesh`'s arena
+decision ranks them): `volume` and `tsdf` are resident; next `mesh`'s arena
 and index run, `texture`'s device depth, `sensor`'s outputs and decoded
 planes, the examples, the codec's coefficients. The benchmark kit that sized
 them sits on the home box in `~/recon-bench` (a throwaway allocator patch

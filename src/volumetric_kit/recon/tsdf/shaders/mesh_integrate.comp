@@ -31,10 +31,9 @@
 
 layout(local_size_x = 256) in;
 
-// One block to write: where it is, where its voxels live, and its bin.
-// Scalar layout, 24 bytes, byte-identical to MeshBin in mesh_integrator.cpp.
+// One block to write: where its voxels live, and its bin.
+// Scalar layout, 12 bytes, byte-identical to MeshBin in mesh_integrator.cpp.
 struct MeshBin {
-  ivec3 coord;
   int ptr;
   uint begin;
   uint count;
@@ -49,6 +48,11 @@ layout(set = 0, binding = 3, scalar) readonly buffer Indices { uint indices[]; }
 layout(set = 0, binding = 4, scalar) readonly buffer Bins { MeshBin bins[]; };
 layout(set = 0, binding = 5, scalar) readonly buffer BinTris {
   uint bin_tris[];
+};
+// Each binned slot's block coordinate, as mesh_bin.comp's count pass stored
+// it, so the host reads back only the counts.
+layout(set = 0, binding = 6, scalar) readonly buffer SlotCoords {
+  ivec3 slot_coord[];
 };
 
 // The write is split across dispatches so that none measures more than
@@ -79,7 +83,8 @@ void main() {
   int bs = pc.grid.block_size;
   ivec3 lc = ivec3(int(local % uint(bs)), int((local / uint(bs)) % uint(bs)),
                    int(local / uint(bs * bs)));
-  vec3 p = vec3(bin.coord * bs + lc) * pc.grid.voxel_size;
+  ivec3 coord = slot_coord[uint(bin.ptr) / vpb];
+  vec3 p = vec3(coord * bs + lc) * pc.grid.voxel_size;
 
   float best_d2 = 3.4e38;
   uint best_t = 0xFFFFFFFFu;

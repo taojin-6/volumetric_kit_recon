@@ -29,6 +29,21 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `tsdf`: **`integrate` fuses over the active list in place**, one batch after
+  the compaction: the frames staged onto the device, the cameras inline. The
+  dirty flags, the cameras and `MeshIntegrator`'s per-slot counters are
+  device-local. Breaking: `dirty_block_count()` returns `Result<uint32_t>` and
+  `reset_dirty()` returns a `[[nodiscard]] Status`, since both now reach the
+  device; a boolean test of `dirty_block_count()` now reads success, not a
+  non-zero count. `MeshIntegrator` submits each dispatch of a split write on
+  its own and reads back only the per-slot counts.
+- `volume`: **`compact_active_blocks_on_device`** leaves the compacted list on
+  the device as a `DeviceBlockList` and reads back only its count;
+  `check_device_block_list` refuses a list that has gone stale.
+  `allocate_from_depth` stages a host depth frame onto the device.
+- `core`: **`StorageInput::buffer` takes the call's `CommandBatch`** and stages
+  a host array into a device-local buffer, rather than binding a host-visible
+  upload.
 - `volume`: **the hash map's buffers and the grid's attribute arrays are
   device-local**, reached through a `CommandBatch`: `create`, `clear` and
   `remove` zero on the device, before any index is freed, `resize` copies
