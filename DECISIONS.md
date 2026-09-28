@@ -5064,9 +5064,8 @@ better of each, measured rather than argued:
   change survives: trusting the face down to any nonzero area passes every
   case too. The 1e-4 guard is kept as a margin, not a measured need.
 
-**Open**, each a `TODO(eval)` in the code:
-- The ground-truth test (#94) moves onto `eval` once both have landed, and
-  drops its copy.
+**Open**, a `TODO(eval)` in the code (the ground-truth test's copy of the
+metric went with the test, which #81 dropped before landing):
 - A threaded `compare_meshes`: room0 at 1 cm takes ~2 s at stride 4 on one
   core.
 
@@ -5116,6 +5115,11 @@ it exists to make the sign exact on meshes the simple rule gets wrong.
 - An open mesh grows a skirt out to `trunc_dist` past its rim, since nothing
   finds the rim. `Shell` is the mode for a mesh that is not closed.
 - A mesh wound inside out comes back inside out.
+- At exactly 90°, off the grid's axes. Beyond a corner, on the line that
+  continues an edge, two of the tied faces' normals are perpendicular to the
+  offset, so rounding picks the side. A plain cube turned off the axes
+  extracted 72 stray vertices, up to 26 mm off. Axis-aligned and off the voxel
+  lattice, it puts no voxel on those lines.
 
 The test checks the sign against the winding number wherever the tied faces
 agree, and only the distance where they do not.
@@ -5225,64 +5229,22 @@ out-of-range barycentric on demand. The first cut's own sixteen mutants were
 mostly pseudonormal ones, and went with them.
 
 **Open.**
-- **The codec round trip** has a test, `recon_codec_mesh_roundtrip`: mesh →
-  TSDF → DCT → v1 frame → decode → mesh, with the decoded surface measured
-  against the source mesh for accuracy (vertex to source) and coverage (source
-  to surface). The uncompressed volume's surface is the floor. Measured on an
-  M5 Max, Release, 5 mm voxels:
-
-  | fixture | frame | of raw | decoded rms / max | floor rms / max |
-  |---|---|---|---|---|
-  | 0.3 m sphere, K = 32 (default) | 21.7 KB | 0.8% | 0.39 / 1.42 mm | 0.018 / 0.155 mm |
-  | same, K = 512 | 37.6 KB | 1.4% | 0.22 / 1.08 mm | same |
-  | 0.22 m cube, K = 32 | 13.5 KB | 0.5% | 0.57 / 2.70 mm | 0.14 / 1.10 mm |
-
-  The cube's floor is marching cubes, not the field: it cuts the edges and
-  corners back by under a voxel (4.1 mm of coverage) before anything is
-  compressed. The test's bounds sit at about twice these figures, 1.8x at the
-  tightest.
-
-  The cube is plain and axis-aligned, and both are forced by `Signed`'s
-  closest-face rule. The first cut used the tsdf test's dented cube. Once
-  `Signed` took the closest face's sign, part of the region past the dent's
-  56° edges read the wrong side, and its uncompressed surface grew stray
-  sheets up to 40 mm off the source. A plain cube turned off the grid's axes
-  fails more quietly. Beyond a corner, on the line that continues an edge, two
-  of the tied faces' normals are perpendicular to the offset, so rounding picks
-  the sign: 72 stray vertices, up to 26 mm off. The rule's documented limit is
-  edges under 90°, so this is a second one, at exactly 90° off the axes. An
-  axis-aligned cube off the voxel lattice puts no voxel on those lines.
-
-  Measured against the source, these read worse than the research codec's
-  figures at the same settings would: that evaluation appears to have scored
-  its own output against the marching-cubes extraction of its uncompressed
-  conversion (`ObjMeshingOp` writes it to the run's `ground_truth/`), where
-  Draco was scored against the source meshes, so conversion error never
-  counted against it.
-
-  **What review changed.** The first two are each checked against a planted
-  failure:
-  - **The frame must decode to exactly what was written.** A surface cannot
-    see a field scaled as a whole: doubling or tripling every decoded
-    coefficient left every figure unchanged. The test now compares the
-    decoded coefficients, masks, params and `trunc_dist` with the ones
-    written, and a reader that doubles each coefficient fails there.
-  - **Coverage is sampled every half voxel, not every two.** Clearing one
-    surface voxel's mask bit on the sphere drops the eight cells around it.
-    The two-voxel lattice straddled that hole in 3 of 12 placements and passed
-    them; at half a voxel every placement reads at least 4.27 mm, against the
-    2.5 mm bound.
-  - **The cube's bounds were 1.4–1.6x its figures**, not the twice they were
-    described as, and are now about 2x. K = 512 is bounded on its own rather
-    than against K = 32. Parseval bounds the field's error, not a vertex's
-    after the clamp and marching cubes, so "more coefficients measure better"
-    is not a property of this metric.
-  - The test also checks that the blocks written are the blocks coded, and
-    it refuses a NaN vertex before a sort or a hash cell sees one. The
-    fixtures and the closest point moved to `tests/test_meshes.hpp`, shared
-    with the volume and tsdf triangle tests. This test's copy of the closest
-    point had lost the handling of a zero-length edge, which marching cubes
-    emits where a sample is exactly zero.
+- **No codec round trip test.** One was built here (#94): mesh → TSDF →
+  frame → decode → mesh, measured against the source mesh. It was dropped
+  before landing. `codec_decoder_test` already takes the codec end to end
+  against ground truth: an analytic sphere, the observed set exactly, the
+  field within the transform's bound, and the decoded mesh against the
+  sphere. `recon_tsdf_mesh_integrate` covers the conversion. All the round
+  trip added was about five minutes under the sanitizers. Two of its findings
+  stay:
+  - `Signed`'s second limit, at 90° off the grid's axes, now under *What it
+    gives up* above.
+  - The research codec's published figures appear to score its output against
+    the marching-cubes extraction of its uncompressed conversion
+    (`ObjMeshingOp` writes it to the run's `ground_truth/`), while Draco was
+    scored against the source meshes, so conversion error never counted
+    against it. A mesh-sourced comparison with this codec has to measure both
+    against the source.
 - **What it costs**, on an 81 920-triangle sphere 1 m across, its triangles
   about 1.6 voxels on a side like a scan's (Apple M5 Max, Release, 5 mm voxels,
   the 40 mm band, a table of 2 048 buckets of 8; 6 861 blocks, 1.97 M bin

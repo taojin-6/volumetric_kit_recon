@@ -43,6 +43,9 @@ enum class MeshSdfMode : std::uint32_t {
   /// comes back inside out, and past an edge or corner whose faces meet at
   /// under 90 degrees part of its region can take the wrong side, since the
   /// faces tied for nearest there disagree and the lowest-indexed one decides.
+  /// A 90-degree edge off the grid's axes does too: past a corner, on the line
+  /// that continues an edge, a tied face's normal is perpendicular to the
+  /// offset and rounding picks the side.
   /// Use @ref Shell for a mesh that is not closed.
   Signed = 0,
   /// Unsigned distance minus a shell half-thickness: negative within
