@@ -118,6 +118,18 @@ target_link_libraries(recon_tsdf_integrate_test
 vr_target_warnings(recon_tsdf_integrate_test)
 add_test(NAME recon_tsdf_integrate COMMAND recon_tsdf_integrate_test)
 
+# tsdf mesh integrate: write a mesh's truncated distance field (signed through
+# pseudonormals, or as a shell) and check every voxel of every written block
+# against a brute-force host reference -- an independent closest point, and the
+# winding number for inside/outside -- on a sharp tetrahedron, a dented cube, an
+# open quad and a triangle soup, plus determinism and every refusal. Skips (exit
+# 0) with no device.
+add_executable(recon_tsdf_mesh_integrate_test tsdf_mesh_integrate_test.cpp)
+target_link_libraries(recon_tsdf_mesh_integrate_test
+                      PRIVATE volumetric_kit::recon_tsdf Vulkan::Vulkan)
+vr_target_warnings(recon_tsdf_mesh_integrate_test)
+add_test(NAME recon_tsdf_mesh_integrate COMMAND recon_tsdf_mesh_integrate_test)
+
 # volume delete: allocate a cube, remove a subset, verify the survivors + heap
 # reuse (chain splice / successor pull-up) on the real driver. Skips (exit 0)
 # where no device is present.
@@ -155,6 +167,20 @@ target_link_libraries(recon_volume_allocate_test
                       PRIVATE volumetric_kit::recon_volume Vulkan::Vulkan)
 vr_target_warnings(recon_volume_allocate_test)
 add_test(NAME recon_volume_allocate COMMAND recon_volume_allocate_test)
+
+# volume triangle-mesh allocation: allocate from a small mesh, then verify on
+# the real driver that every block holding a voxel within trunc_dist is present
+# -- brute-forced on the host against an independent closest-point -- that a
+# triangle wider than the band leaves no hole (where the point path does), and
+# that the distance prune keeps the bounding box's far corners out. Skips (exit
+# 0) where no device is present.
+add_executable(recon_volume_allocate_triangles_test
+               volume_allocate_triangles_test.cpp)
+target_link_libraries(recon_volume_allocate_triangles_test
+                      PRIVATE volumetric_kit::recon_volume Vulkan::Vulkan)
+vr_target_warnings(recon_volume_allocate_triangles_test)
+add_test(NAME recon_volume_allocate_triangles
+         COMMAND recon_volume_allocate_triangles_test)
 
 # volume frustum-culled compaction: allocate blocks at known world positions
 # (one dead-centre, others behind / beyond-far / off to the side), then verify

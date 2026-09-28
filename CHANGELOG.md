@@ -79,6 +79,54 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `tsdf`: **`MeshIntegrator`** — a triangle mesh's truncated distance field,
+  written into a grid's `tsdf` and `weight`, in one of two `MeshSdfMode`s (see
+  the 2026-09-27 decision).
+  - `Signed`: +-distance, signed by the closest triangle's face normal. For a
+    closed, outward-wound mesh; nothing is checked and no topology is built,
+    so past an edge sharper than 90 degrees the sign can take the wrong side,
+    and an open mesh grows a skirt past its rim.
+  - `Shell`: distance minus a half-thickness (1.5 voxels by default), for any
+    mesh at all.
+  - Every voxel of every band block is overwritten: weight 1 within
+    `trunc_dist`, `tsdf = 0, weight = 0` elsewhere, which is how the codec's
+    inverse leaves a fresh block. The band must be allocated first with
+    `allocate_from_triangles`; a missing block is refused before anything is
+    written.
+  - Triangles are binned per block (a count and a fill dispatch over the
+    allocation's own work items), so no voxel measures the whole mesh. Ties
+    break on the triangle index, so the same mesh writes the same bytes.
+  - A bin past `MeshIntegrator::kMaxBinTriangles` is refused, and the write
+    splits into dispatches of at most `kMaxDispatchBinEntries` bin entries;
+    `MeshIntegrateStats::dispatches` reports how many.
+- `volume`: **`triangle_candidate_offsets`** — the per-triangle candidate-block
+  prefix sum `allocate_from_triangles` dispatches over, public so the mesh
+  integrator bins over the same decomposition. Its decode and band test moved
+  into `shaders/triangle_candidates.glsl` for the same reason.
+- `core`: `vrClosestPointOnTriangleFeature` in `shaders/triangle_common.glsl`
+  also reports which vertex, edge or face the closest point lies on.
+  `vrClosestPointOnTriangle` is now a wrapper over it, with the same
+  arithmetic.
+- `volume`: **`VoxelHashMap::allocate_from_triangles`** — the blocks a triangle
+  mesh's truncation band covers, which is what a mesh-to-SDF pass then writes.
+  Not expressible as `allocate_from_points` over the vertices: that dilates each
+  point into the `(2*tb+1)^3` cube, one block (40 mm) wide at the defaults, so
+  any triangle wider than that left an unallocated hole through its middle. A
+  block is allocated when its centre lies within `trunc_dist` plus the block's
+  half-diagonal of some triangle — conservative, so no block holding a voxel in
+  the band is missed, and tight enough that a large slanted triangle allocates a
+  sheet rather than the solid interior of its bounding box. The work is split
+  per *candidate block* rather than per triangle, over a host-computed prefix
+  sum, so a single large quad cannot land a quarter-million bucket-locked
+  inserts on one lane. That host pass also bounds-checks every index (the kernel
+  indexes `vertices` directly and `robustBufferAccess` is enabled nowhere here)
+  and drops zero-area and non-finite triangles, which a mesh file routinely
+  carries and which should not fail the whole allocation. Opt-in `StageMetrics*`
+  reports an `"allocate"` row, as `allocate_from_depth` does. See the 2026-08-31
+  decision.
+- `core`: `shaders/triangle_common.glsl` — closest-point-on-triangle, shared
+  by the block allocation above and (next) the mesh-to-SDF integrators, so the
+  blocks one allocates and the voxels the other writes cannot drift apart.
 - `texture`: **several views into one atlas.** `ProjectiveTexturer::texture`
   takes `TextureView`s (a depth map, its camera, and the size of the colour
   image registered to it, which may be larger) and an `AtlasLayout`; each
@@ -342,6 +390,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `volume`: **the hash table's bucket locks live in device memory.** They were
+  host-visible like every buffer the map owns, so on a discrete GPU each spin
+  was an atomic across PCIe. On an RTX 5090, allocating a 5 000-triangle sheet
+  took 1.97 s against 3.4 ms now, and a 320 000-triangle one ran past the
+  driver's 7-second watchdog (NVIDIA Xid 8 / 109), which is what failed the
+  ubuntu-26.04 legs of #81. Every allocation path gains, not only triangles.
+  Apple's unified memory never saw a difference. `core` gains
+  `device_storage_buffer` for memory only the kernels touch.
 - `mesh`: a triangle the sharing kernel drops for a vertex-claim overflow
   **inside a reused range** kept the previous extract's index triple. Those
   indices are in range, so nothing faults, but they name three unrelated vertices

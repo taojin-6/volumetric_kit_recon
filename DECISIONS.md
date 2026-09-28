@@ -3307,6 +3307,74 @@ deleted in favour of `extract_device` + `download`: it also calls the private
 is still drawing from. Keeping a host entry point is what keeps a PLY writer
 off the ring contract entirely.
 
+### 2026-08-31 — A triangle's work unit is the candidate *block*, not the triangle; and the band it allocates is measured from the surface, not dilated from a point.
+
+Putting a mesh into the volume — the mesh-to-SDF pass that comes next — first
+needs the blocks the mesh's truncation band covers. (This was first planned as
+the codec's input stage; the 2026-09-26 codec entry has the codec encode a
+fused grid instead, so nothing here is on the codec's path.)
+`allocate_from_points` over the vertices looks like it already does this and
+does not: it dilates each point into the `(2*tb+1)^3` cube, which is **one
+block** wide at the defaults (40 mm), so any triangle wider than that leaves an
+unallocated hole through its middle — and a triangle wider than 40 mm is not an
+edge case, it is what every mesh that is not a dense scan is made of. The test
+pins the difference on a 0.6 m triangle: the block at its centroid is allocated
+by the triangle path and absent from the point path.
+
+**Why the work unit is a block and not a triangle.** The obvious kernel is one
+thread per triangle, looping its own bounding box, and it is unusable here for
+a reason that has already cost this repo a device: *triangle size is unbounded*.
+A single 20 m floor quad at 5 mm voxels covers ~250 000 blocks, so one lane
+would own a quarter-million bucket-locked inserts while its neighbours idle —
+the same shape of dispatch that hung an M5 iPad in the 2026-08-08 overflow-scan
+entry, and striding inside the lane does not fix it, because the lane still owns
+every insert. So the host walks the triangles once, counts each one's candidate
+blocks, and uploads the exclusive prefix sum; a work item binary-searches that
+array for its triangle and handles exactly **one** block. Work per lane is then
+a search, one point-triangle distance, and at most one insert, whatever the mesh
+looks like — a property of the decomposition rather than of the input.
+
+The host pass is not overhead reluctantly accepted; it is the only place two
+other things can happen. It is where an index is **bounds-checked** — the kernel
+indexes `vertices` with it directly and `robustBufferAccess` is enabled nowhere
+in this repo, so an out-of-range index is an out-of-bounds read, not a wrong
+answer (the 2026-08-04 rule: a limit the caller cannot see is the library's to
+check). And it is where a **zero-area triangle** is dropped, which matters
+because that is the one input that makes the closest-point solve divide by zero:
+each of its three edge branches divides by a squared edge length, so excluding
+degenerate triangles at the source is what lets the GLSL carry no per-lane
+guard. A non-finite vertex is dropped in the same pass, for the plainer reason
+that a NaN turns a bounding box into a block range of garbage extent. Neither is
+an error — a mesh file routinely carries a few, and one bad face should not fail
+the allocation.
+
+**The band is measured, not dilated.** A block is allocated when its centre lies
+within `trunc_dist` plus the block's half-diagonal of some triangle. This is a
+deliberate divergence from what `allocate_from_depth` and `allocate_from_points`
+do, and the divergence is in the input: those dilate a *point*, where the cube
+is both the cheapest and the tightest thing available, while a triangle has a
+real extent and its bounding box is mostly empty space. Without the distance
+test a large slanted triangle allocates the solid interior of its box; with it,
+the same triangle allocates a sheet. The test pins both directions — a far
+corner of a diagonal triangle's box stays out, while the surface itself is
+covered — because a prune that is merely conservative and a prune that does
+nothing both pass a containment check. The half-diagonal is measured off
+`(block_size - 1) * voxel_size`, the span of a block's *voxels*, since voxels
+are node-centred; the nominal block extent would still be conservative, just
+looser by a voxel per axis.
+
+Two follow-on notes. The kernel **recomputes** each triangle's box rather than
+reading back the host's, which is sound because `worldToBlock` mirrors
+`world_to_block` bit-for-bit (the invariant `allocate_from_depth` already rests
+on) and min/max/subtract are exact in IEEE — but the decode is guarded against
+`local` exceeding the recomputed extent anyway, so a future divergence
+under-allocates rather than decoding onto an unrelated coordinate. And the
+closest-point primitive itself landed in **`core`**
+(`core/shaders/triangle_common.glsl`) rather than in `volume`, for the reason
+`core/math/vector_types.hpp` is there: it carries no tier's concepts, and the
+mesh-to-SDF pass will evaluate the field with the same function, so the blocks
+allocated here and the voxels written there cannot drift apart.
+
 ### 2026-09-14 — The examples poll their frames through the sensor contract: the Replica reader is an `ICameraCapture`, a source says when it is exhausted, and a frame kept past the next poll is copied — the last one included.
 
 The sensor tier had shipped a contract with no producer and no consumer in
@@ -4996,11 +5064,203 @@ better of each, measured rather than argued:
   change survives: trusting the face down to any nonzero area passes every
   case too. The 1e-4 guard is kept as a margin, not a measured need.
 
-**Open**, each a `TODO(eval)` in the code:
-- The ground-truth test (#94) moves onto `eval` once both have landed, and
-  drops its copy.
+**Open**, a `TODO(eval)` in the code (the ground-truth test's copy of the
+metric went with the test, which #81 dropped before landing):
 - A threaded `compare_meshes`: room0 at 1 cm takes ~2 s at stride 4 on one
   core.
+
+### 2026-09-27 — A mesh becomes a TSDF two ways, in the `tsdf` tier: signed by the closest triangle's normal, for a closed mesh, or as an unsigned shell, for any mesh — binned per block over the allocation's own candidates, with no topology.
+
+The second stage of mesh → TSDF (S1), on top of the 2026-08-31 block
+allocation (S0). It lands `tsdf::MeshIntegrator`, which writes a mesh's
+truncated distance field into a grid's `tsdf` and `weight`, in one of two
+`MeshSdfMode`s. Both modes are the prior engine's `MeshToSDF::computeSigned` /
+`computeShell`, and the research codec's two conversion rules. The
+acceleration structure is not.
+
+**Two modes.**
+- **Shell** is `d − σ`, the unsigned distance minus a half-thickness (1.5
+  voxels by default): the unsigned offset field of Xu & Barbič, *Signed
+  Distance Fields for Polygon Soup Meshes* (GI 2014), before their interior
+  components are removed. It needs nothing from the mesh: open, non-manifold,
+  self-intersecting or inconsistently wound meshes are all fine. Around a
+  closed solid it extracts two walls, one σ outside and one σ inside.
+- **Signed** is ±`d`, signed by the closest triangle's face normal. That is the
+  research codec's rule for a watertight mesh, and it is meant for a closed,
+  outward-wound one. Nothing about the mesh is checked.
+
+**Why no topology: the field is the codec's input, not a reconstruction of the
+mesh.** The first cut signed by the angle-weighted pseudonormal of the closest
+feature (Bærentzen & Aanæs 2005), which is correct past sharp edges and corners
+where the face rule is not. On the test's regular tetrahedron (faces at
+70.5°), **973 of 10 822** observed voxels are ones the face rule can sign
+wrongly. It paid for that with a host topology pass: a weld by exact position,
+edge adjacency, a union-find over each vertex's fans, and pseudonormals in
+double. That pass was ~9.7 ms of a 22.6 ms signed call on the sphere below. It
+would need a sort and a scan the repo does not have to move to the GPU. And it
+brought refusals the research codec never needed: non-manifold edges and
+vertices, flipped winding, a mesh wound inside out. The conversion exists to
+feed the codec, which takes a block's SDF, transforms it with the DCT, drops the
+high frequencies, quantizes and entropy-codes what is left. The research codec
+produced the paper's results with the closest-face rule and no topology at all.
+So the pass went, with its weld, its refusals, `MeshIntegrateStats`'
+`boundary_edges` and the feature-reporting closest point. `Signed` now costs
+what `Shell` does. Xu & Barbič's robust mode (shell, marching cubes, drop the
+nested components, then signed) went from the plan for the same reason, since
+it exists to make the sign exact on meshes the simple rule gets wrong.
+
+**What it gives up,** stated on `MeshSdfMode::Signed`:
+- Past an edge or corner whose faces meet at under 90°, the faces tied for
+  nearest disagree about the side, and the lowest-indexed one decides.
+- An open mesh grows a skirt out to `trunc_dist` past its rim, since nothing
+  finds the rim. `Shell` is the mode for a mesh that is not closed.
+- A mesh wound inside out comes back inside out.
+- At exactly 90°, off the grid's axes. Beyond a corner, on the line that
+  continues an edge, two of the tied faces' normals are perpendicular to the
+  offset, so rounding picks the side. A plain cube turned off the axes
+  extracted 72 stray vertices, up to 26 mm off. Axis-aligned and off the voxel
+  lattice, it puts no voxel on those lines.
+
+The test checks the sign against the winding number wherever the tied faces
+agree, and only the distance where they do not.
+
+**Triangles are binned per block, over S0's own candidates.** The prior
+engine's signed pass measured every voxel against every triangle of the mesh,
+as the research codec's kernel does. That is the long-dispatch shape the
+2026-08-08 overflow-scan entry records hanging an M5 iPad. The prior engine's
+shell pass used a dense grid over the mesh's bounding box, which at an 80 mm
+cell is ~16 M cells for a 20 m cube whatever the surface looks like. Here,
+`mesh_bin.comp` runs the (triangle, candidate block) work items S0 allocates
+over twice, first counting and then filling each block's list of triangles.
+The bins are keyed by heap slot, 16 bytes per `num_blocks` (a count and a
+coordinate). Then `mesh_integrate.comp` runs one thread per voxel over its
+block's bin.
+- **One decomposition.** S0 and S1 share it in two places, so the blocks
+  allocated and the blocks binned cannot drift apart:
+  `volume::triangle_candidate_offsets` (host; it moved out of
+  `allocate_from_triangles`) and `volume/shaders/triangle_candidates.glsl`
+  (the decode and the band test).
+- **Exact where observed.** A bin holds every triangle within `trunc_dist` plus
+  the half-diagonal of the block's centre, so it holds every triangle within
+  `trunc_dist` of any of the block's voxels. The minimum over it is the true
+  minimum wherever the result is observed.
+- **A missing block is refused.** The count pass also counts the (triangle,
+  block) pairs whose band block the table does not hold, and the host refuses
+  a non-zero count before anything is written. A missing block would
+  otherwise leave that part of the surface holding stale data.
+
+**What is written.** Every voxel of every band block is overwritten, not
+blended. **Observed** means within `trunc_dist` of the mesh in both modes,
+which is the set the band test guarantees complete. An observed voxel gets
+weight 1 and its distance clamped to ±`trunc_dist`; every other voxel gets
+`tsdf = 0, weight = 0`. Those are the codec inverse's fresh-block zeros, so a
+mesh-derived grid reads exactly like a decoded frame. Blocks outside the band,
+and `color`, are untouched. The shell's thickness is refused below √3/2 voxels
+(a point can be that far from every voxel, so a thinner shell can fall between
+them) and at or past `trunc_dist` (nothing observed would read as outside).
+
+**Ties break on the triangle index.** The fill pass writes each bin in
+atomic-arrival order, and two triangles tie along every shared edge and at
+every shared vertex. The per-voxel minimum takes the lower index, for one
+comparison, so the same mesh writes the same bytes and a soup writes the bytes
+of its indexed twin. The test checks both.
+
+**Review: fourteen findings.** A code review of the first cut returned
+fourteen, each checked against the code before it was fixed. Seven are fixed,
+four went with the topology pass, two are fixed in part and one is documented.
+- **A bin could be read short.** The fill pass re-derived each work item's
+  block with the count pass's own probe and band test, and only dropped an
+  overflow. Any disagreement between the two dispatches left some other bin
+  one short, and the integrate pass then read an entry nobody wrote as a
+  triangle index: out of bounds, with `robustBufferAccess` off. The count pass
+  now records each item's slot and the fill replays it, so every bin fills
+  exactly. That removed the fill's repeated work too. The count pass also
+  stores each binned slot's coordinate, which retired the whole-map compaction,
+  its readback and the host's second copy of the counts, since the counts are
+  rewritten in place as the fill's cursors. With the compaction went the check
+  it happened to give, that the table had not changed mid-call, which the
+  class's quiescence requirement already rules out, as for the mesh tier's own
+  probe. What stays O(`num_blocks`) per call is one clear and one scan of
+  those counts, 4 bytes a block, which the prefix sum needs.
+- **Nothing bounded a bin.** A thread's work is its bin's length, and the host
+  knew the largest bin and checked nothing. A bin past `kMaxBinTriangles`
+  (2^16, about 230 times the sphere's average below) is refused, and the write
+  is split into dispatches of at most `kMaxDispatchBinEntries` (2^20) bin
+  entries, so no one submission grows with the mesh. Both are named on the
+  class, as the 2026-08-10 rule asks of a ceiling the library knows.
+- **The closest point had a size threshold.** The face-interior branch
+  collapsed onto vertex `a` whenever `|ab × ac|²` fell below 1e-12 m⁴, which
+  is every triangle with edges under about a millimetre, and a dense scan has
+  those everywhere. The guard is now against zero, and the barycentrics are
+  clamped onto the triangle, so a sliver's rounding cannot put the closest
+  point somewhere the triangle is not. The research codec's kernel has the
+  same problem harder: it skips any triangle whose `|cross|` is at most 1e-6 m²,
+  for its distance as well as its sign.
+- **Four went with the topology pass:** a NaN pseudonormal from a triangle
+  collinear in double, a sliver closing a T-junction read as three rim edges,
+  a rim vertex refused as a pinch, and an inside-out closed mesh accepted. Each
+  was fixed and fixture-checked, and then the code it fixed was removed.
+- **Smaller ones.** The missing count is (triangle, block) pairs, not blocks,
+  and the message now says so. The O(1) binding checks run before the host
+  passes. `triangle_candidate_offsets` refuses a null mesh before it allocates,
+  and takes a null `who`. `voxel_hash_map.cpp` lost two includes the refactor
+  left behind. The bins and the per-item slots are device-local now. The
+  inputs stay host-visible with a `TODO(tsdf)`, as the grid's own attributes
+  do, since staging them needs a copy path `core` does not have yet.
+- **Documented rather than built: dirty blocks.** The integrator does not
+  report the blocks it writes as dirty. Dirty flags belong to the
+  `TsdfIntegrator` fusing into a grid, and the only caller who can mix the two
+  on one grid is the one making both calls, so it is a `@note` on the class
+  rather than a mechanism nothing consumes.
+
+**Verified by mutation.** Seven planted reversions of the current code, each
+failing a fixture:
+- the face normal reversed, and the sign taken from a closest point other than
+  the minimum's: the tetrahedron
+- the 1e-12 threshold: a triangle 0.87 mm across, under one voxel column
+- the chunk offset and the dispatch budget: a metre-square sheet of 320 000
+  triangles, whose 2^20-plus bin entries split across dispatches
+- the bin cap: an 80 000-triangle patch 30 mm square
+- a fill that replays no slots: the tetrahedron
+
+Not caught: the tie-break, since no fixture can force an atomic arrival order;
+and the barycentric clamp, since no fixture can make float rounding produce an
+out-of-range barycentric on demand. The first cut's own sixteen mutants were
+mostly pseudonormal ones, and went with them.
+
+**Open.**
+- **No codec round trip test.** One was built here (#94): mesh → TSDF →
+  frame → decode → mesh, measured against the source mesh. It was dropped
+  before landing. `codec_decoder_test` already takes the codec end to end
+  against ground truth: an analytic sphere, the observed set exactly, the
+  field within the transform's bound, and the decoded mesh against the
+  sphere. `recon_tsdf_mesh_integrate` covers the conversion. All the round
+  trip added was about five minutes under the sanitizers. Two of its findings
+  stay:
+  - `Signed`'s second limit, at 90° off the grid's axes, now under *What it
+    gives up* above.
+  - The research codec's published figures appear to score its output against
+    the marching-cubes extraction of its uncompressed conversion
+    (`ObjMeshingOp` writes it to the run's `ground_truth/`), while Draco was
+    scored against the source meshes, so conversion error never counted
+    against it. A mesh-sourced comparison with this codec has to measure both
+    against the source.
+- **What it costs**, on an 81 920-triangle sphere 1 m across, its triangles
+  about 1.6 voxels on a side like a scan's (Apple M5 Max, Release, 5 mm voxels,
+  the 40 mm band, a table of 2 048 buckets of 8; 6 861 blocks, 1.97 M bin
+  entries, ~287 triangles a bin; medians of ten runs):
+
+  | call | wall | GPU |
+  |---|---|---|
+  | `allocate_from_triangles` | 14.2 ms | 12.6 ms |
+  | `integrate`, `Shell` | 12.8 ms | 10.8 ms |
+  | `integrate`, `Signed` | 12.8 ms | 10.8 ms |
+
+  The first cut quoted 8.6 ms for the allocation on a table this run did not
+  reproduce; that code did not change, and the difference was not chased. A
+  voxel's cost is its bin, which a band as wide as a block keeps in the
+  hundreds; a mesh far denser than the grid is where the dispatch grows, up to
+  the two ceilings above.
 
 ### 2026-09-28 — The Orbbec driver streams colour as H.265 on request: every colour frame is decoded, in order, on a thread per camera ahead of the mailbox; a lost frame is read off the frame index, not the clock; and the Femto Mega's stream is decoded as BT.601 full range, which it codes and does not say.
 
@@ -5355,3 +5615,34 @@ generation when it first touches the arena rather than on success — a call tha
 overwrites the arena and then fails must still invalidate every outstanding
 `DeviceMesh`, and so must the dense overload, which shares that arena and can
 now reallocate it.
+
+**A hang read twice as something else (2026-09-28): the bucket locks were
+across PCIe.** `recon_tsdf_mesh_integrate`'s divided sheet — a metre square
+of 320 000 triangles, a quarter voxel each — failed ubuntu-26.04 CI with a
+bare `vkWaitForFences`. The host's kernel log showed NVIDIA Xid 8 (the RC
+watchdog's 7 s) and Xid 109 (context-switch timeout) against the test. The
+first reading was load: two jobs shared the RTX 5090, and a re-run passed. The
+second was bandwidth. The test ran 0.23 s on an M5 Max and 4–22 s on the
+NVIDIA hosts, every buffer the map and the integrator bind is host-visible,
+and the integrate kernel re-reads vertices per voxel. Both were wrong.
+Per-dispatch timers on the RTX 5090 put the integrate kernel at 4.3 ms,
+faster than the Mac. The failure reproduced there alone on an idle GPU, and
+it was the sheet's **allocation**: some 2.6 M candidate items racing into
+~400 blocks, each miss spinning on a bucket lock that lived in host-visible
+memory, so every attempt was an atomic across the bus. Moving only
+`bucket_mutex` to device memory:
+
+| sheet (triangles) | RTX 5090, locks host-visible | locks device-local | M5 Max |
+|---|---|---|---|
+| 5 000 | 1 969 ms | 3.4 ms | 8.6 ms |
+| 20 000 | 7 006 ms | 8.0 ms | 7.5 ms |
+| 80 000 | 10 861 ms | 14.7 ms | 17.7 ms |
+| 180 000 | 13 268 ms | 19.2 ms | 14.7 ms |
+| 320 000 | past the watchdog | 24.4 ms | 19.4 ms |
+
+The same instinct produced both wrong guesses: a cost invisible where it is
+tested (unified memory hides host visibility entirely), read off totals rather
+than phases. The per-slot bin counters are the next instance: host-visible
+because the host reads them back, they cost the count and fill passes 115 ms
+and 143 ms for the sheet on the RTX 5090 against ~5 ms on the Mac, a
+`TODO(tsdf)`.
