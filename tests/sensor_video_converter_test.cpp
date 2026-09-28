@@ -234,6 +234,28 @@ int test_rgb_source_to_yuv420() {
   return 0;
 }
 
+// An override replaces what the frame is labelled with, for both the
+// conversion and what the picture reports.
+int test_color_override() {
+  video::PictureConverter converter("test");
+  auto frame = solid(AV_PIX_FMT_YUV420P, 64, 32, 100, 90, 160);
+  frame->colorspace = AVCOL_SPC_BT709;
+  frame->color_range = AVCOL_RANGE_MPEG;
+  const sensor::VideoColorDescription femto{VideoColorMatrix::Bt601, true};
+  auto rgb = converter.convert(*frame, VideoPixelLayout::Rgb24, femto);
+  CHECK(rgb.ok());
+  CHECK(rgb->matrix == VideoColorMatrix::Bt601 && rgb->full_range);
+  const auto want =
+      yuv_reference::rgb(100, 90, 160, VideoColorMatrix::Bt601, true);
+  const std::uint8_t* px = rgb->plane[0] + 16 * rgb->stride[0] + 3 * 32;
+  for (int k = 0; k < 3; ++k) CHECK(std::abs(px[k] - want[k]) <= 2);
+  auto yuv = converter.convert(*frame, VideoPixelLayout::Yuv420, femto);
+  CHECK(yuv.ok());
+  CHECK(yuv->matrix == VideoColorMatrix::Bt601 && yuv->full_range);
+  CHECK(yuv->plane[0] == frame->data[0]);  // the label changes, not the bytes
+  return 0;
+}
+
 int test_size_change() {
   video::PictureConverter converter("test");
   const auto large = solid(AV_PIX_FMT_YUV420P, 64, 32, 100, 90, 160);
@@ -272,6 +294,7 @@ int main() {
   if (test_rgb_follows_matrix_and_range() != 0) return 1;
   if (test_yuv420_keeps_range() != 0) return 1;
   if (test_rgb_source_to_yuv420() != 0) return 1;
+  if (test_color_override() != 0) return 1;
   if (test_size_change() != 0) return 1;
   if (test_refusals() != 0) return 1;
   std::puts("sensor_video_converter: OK");

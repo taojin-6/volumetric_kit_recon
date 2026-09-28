@@ -36,7 +36,9 @@ class PictureConverter {
   ///        @p frame changes. `pts` is left to the caller.
   /// @return The picture; InvalidArgument for a hardware or unconvertible
   ///         format; IoError if swscale fails.
-  Result<DecodedPicture> convert(const AVFrame& frame, VideoPixelLayout layout);
+  Result<DecodedPicture> convert(
+      const AVFrame& frame, VideoPixelLayout layout,
+      const std::optional<VideoColorDescription>& color = std::nullopt);
 
  private:
   // What sws_ converts. Any change rebuilds it: swscale can reuse a freed

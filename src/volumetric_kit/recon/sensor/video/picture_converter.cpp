@@ -100,8 +100,9 @@ std::optional<ColorEncoding> resolve_encoding(
   return encoding;
 }
 
-Result<DecodedPicture> PictureConverter::convert(const AVFrame& frame,
-                                                 VideoPixelLayout layout) {
+Result<DecodedPicture> PictureConverter::convert(
+    const AVFrame& frame, VideoPixelLayout layout,
+    const std::optional<VideoColorDescription>& color) {
   const auto format = static_cast<AVPixelFormat>(frame.format);
   const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(format);
   if (desc == nullptr || (desc->flags & AV_PIX_FMT_FLAG_HWACCEL) != 0 ||
@@ -116,8 +117,9 @@ Result<DecodedPicture> PictureConverter::convert(const AVFrame& frame,
   picture.width = static_cast<std::uint32_t>(frame.width);
   picture.height = static_cast<std::uint32_t>(frame.height);
   picture.layout = layout;
-  picture.matrix = resolve_matrix(frame.colorspace, frame.height);
-  picture.full_range = full_range(frame);
+  picture.matrix =
+      color ? color->matrix : resolve_matrix(frame.colorspace, frame.height);
+  picture.full_range = color ? color->full_range : full_range(frame);
   picture.encoding = resolve_encoding(frame.color_trc, frame.color_primaries);
 
   const AVFrame* source = &frame;
