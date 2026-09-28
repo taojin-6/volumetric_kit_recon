@@ -1330,7 +1330,10 @@ concurrency properties, and every fixture here dispatches one coord at a time
 precisely to keep contention out of what it measures. The hang itself remains
 unreproducible in a unit test — it needs ~131 k entries and thousands of
 concurrent invocations — so what is claimed here is the cost model and the
-reason codes, not a re-measured device.
+reason codes, not a re-measured device. (*Since 2026-09-28 a remove's
+contention is tested: `recon_volume_delete` queues 1 024 coords on one
+bucket's lock. The early exit now fires only on a capacity limit; see the
+measured lesson "A flake read as a livelock".*)
 
 ### 2026-08-08 — `fuse_viewer` draws recon's buffers: interop seam B, end to end, and the release mark must be published *before* the mesh is taken.
 
@@ -6145,3 +6148,14 @@ than phases. The per-slot bin counters are the next instance: host-visible
 because the host reads them back, they cost the count and fill passes 115 ms
 and 143 ms for the sheet on the RTX 5090 against ~5 ms on the Mac. Step 2 of
 the residency decision moved them to the device.
+
+**A flake read as a livelock (2026-09-28).** `recon_volume_delete` removed
+8 192 blocks in one call and failed 2 to 7 Debug runs in 100 on the RTX
+5090, with 1–6 blocks left to lock contention and none lost. A review read the
+residue as two threads each holding the bucket the other spins on. Measured
+per variant, 600 removes each: the code as it stood left blocks behind in 5,
+taking the second bucket in index order in 4, and each of the two changes
+that shipped in none. The retry loop had read two rounds without progress as a
+capacity limit, which a remove never hits, and every round re-ran every coord,
+so blocks already removed took their locks again. The residue was plain
+contention, so the lock order was dropped.
