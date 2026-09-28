@@ -4438,9 +4438,9 @@ mostly pseudonormal ones, and went with them.
   | dented cube, K = 32 | 14.3 KB | 0.7% | 0.65 / 3.11 mm | 0.15 / 1.54 mm |
 
   The cube's floor is marching cubes, not the field: the dent closes six of
-  its edges to about 56°, and a wedge that thin is cut back by up to a voxel
+  its edges to about 56°, and a wedge that thin is cut back by 1.4 voxels
   (7.1 mm of coverage) before anything is compressed. The test's bounds sit at
-  about twice these figures.
+  about twice these figures, 1.8x at the tightest.
 
   Measured against the source, these read worse than the research codec's
   figures at the same settings would: that evaluation appears to have scored
@@ -4448,6 +4448,30 @@ mostly pseudonormal ones, and went with them.
   conversion (`ObjMeshingOp` writes it to the run's `ground_truth/`), where
   Draco was scored against the source meshes, so conversion error never
   counted against it.
+
+  **What review changed.** The first two are each checked against a planted
+  failure:
+  - **The frame must decode to exactly what was written.** A surface cannot
+    see a field scaled as a whole: doubling or tripling every decoded
+    coefficient left every figure unchanged. The test now compares the
+    decoded coefficients, masks, params and `trunc_dist` with the ones
+    written, and a reader that doubles each coefficient fails there.
+  - **Coverage is sampled every half voxel, not every two.** Clearing one
+    surface voxel's mask bit on the sphere drops the eight cells around it.
+    The two-voxel lattice straddled that hole in 3 of 12 placements and passed
+    them; at half a voxel every placement reads at least 4.27 mm, against the
+    2.5 mm bound.
+  - **The cube's bounds were 1.4–1.6x its figures**, not the twice they were
+    described as, and are now about 2x. K = 512 is bounded on its own rather
+    than against K = 32. Parseval bounds the field's error, not a vertex's
+    after the clamp and marching cubes, so "more coefficients measure better"
+    is not a property of this metric.
+  - The test also checks that the blocks written are the blocks coded, and
+    it refuses a NaN vertex before a sort or a hash cell sees one. The
+    fixtures and the closest point moved to `tests/test_meshes.hpp`, shared
+    with the volume and tsdf triangle tests. This test's copy of the closest
+    point had lost the handling of a zero-length edge, which marching cubes
+    emits where a sample is exactly zero.
 - **What it costs**, on an 81 920-triangle sphere 1 m across, its triangles
   about 1.6 voxels on a side like a scan's (Apple M5 Max, Release, 5 mm voxels,
   the 40 mm band, a table of 2 048 buckets of 8; 6 861 blocks, 1.97 M bin

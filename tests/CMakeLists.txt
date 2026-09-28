@@ -348,8 +348,9 @@ add_test(NAME recon_codec_dct COMMAND recon_codec_dct_test)
 # codec round trip with ground truth: a mesh through tsdf::MeshIntegrator, the
 # forward DCT, v1 frame bytes and back, the inverse DCT and marching cubes, with
 # the decoded surface measured against the source mesh (accuracy and coverage)
-# beside the uncompressed volume's. Reaches the codec's internal headers by
-# include path, as the other codec tests do. Skips (exit 0) with no device.
+# beside the uncompressed volume's, and the frame's decode compared with what
+# was written. Reaches the codec's internal headers by include path, as the
+# other codec tests do. Skips (exit 0) with no device.
 add_executable(recon_codec_mesh_roundtrip_test codec_mesh_roundtrip_test.cpp)
 target_link_libraries(
   recon_codec_mesh_roundtrip_test
