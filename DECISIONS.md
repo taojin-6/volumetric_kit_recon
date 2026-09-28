@@ -5743,9 +5743,13 @@ Four findings shaped the design:
   transfer writes visible to the next command's reads and writes, indirect
   reads included, wherever a command could see an earlier one's writes:
   around every dispatch, and between two transfers only when they share a
-  buffer one writes. Two readbacks never need one, since each lands in its
-  own slice of the batch's buffer; a pipeline drain between them would be a
-  wait-for-idle on NVIDIA. The last barrier also reaches the host and a
+  buffer one writes. A fill or inline upload that starts past the end of the
+  one before it in the same buffer needs none either: the run's first write
+  there was checked against the rest, so zeroing thousands of scattered
+  blocks is one run, with no scan of it per fill. Two readbacks never need
+  one, since each lands in its own slice of the batch's buffer; a pipeline
+  drain between them would be a wait-for-idle on NVIDIA. The last barrier
+  also reaches the host and a
   renderer drawing the result, as far as the queue family allows.
   `dispatch()` is a batch of one dispatch, so that scope, the dispatch
   checks, the label and the span each have one definition. Each dispatch
@@ -5851,8 +5855,8 @@ on the 5090: MoltenVK orders the same work without them. So CI's NVIDIA legs
 are what hold the barriers, the ones now left out between independent
 transfers included.
 
-**Open.** No tier uses the batch yet. The review behind this entry ranked what
-moves next, by what the measurement says it costs on the 5090:
+**Open.** The review behind this entry ranked what moves, by what the
+measurement says it costs on the 5090:
 
 1. `volume`: the hash table, its counters and the voxel arrays resident, with
    GPU fill and copy for create, clear, resize and remove, and the compacted
@@ -5866,6 +5870,54 @@ moves next, by what the measurement says it costs on the 5090:
    staging, then NVDEC to Vulkan device to device.
 6. The examples.
 7. `codec`: coefficients read back as filtered int16.
+
+**Step 1, `volume`, has landed** but for the compacted list, which still
+reaches the host and goes with step 2's indirect dispatch. Each allocating or
+removing call is one batch per round: its inputs uploaded to device buffers in
+the first, the tally and the heap counter read back in every one. A compaction
+reads back its count and, in the same submit, the list as far as a quarter
+past its last count; only a set that outgrew that takes a second submit.
+`load_factor()` reads a host copy of the heap counter, so it still costs no
+dispatch, and `diagnostics()` reads the device's. `resize` rebuilds the heap
+on the host and uploads it, a `TODO(volume)`. On the 5090, room0 as above,
+per fused frame against main:
+
+| | main | resident |
+|---|---|---|
+| `integrate`, host / device | 17.6 / 14.6 ms | 7.8 / 5.4 ms |
+| `allocate`, host / device | 4.1 / 2.6 ms | 1.3 / 0.35 ms |
+| extract dispatch | 54 ms | 69 ms |
+| fused fps | 43 | 91 |
+
+That is the A/B's "hash + voxels in VRAM" column. The mesh is the same 330 389
+triangles. The extract dispatch is slower, as it was in the A/B, and waits on
+step 3's arena.
+
+**The review of step 1** measured three of its findings on a grid of 16 384
+blocks, Release:
+
+| | 5090 | M5 Max |
+|---|---|---|
+| `VoxelBlockGrid::remove`, 2 048 scattered blocks | 7.6 → 4.3 ms | 17.4 → 5.2 ms |
+| `compact_active_blocks`, again on one grid | 1.11 → 0.66 ms | 0.30 → 0.17 ms |
+| a round's 28 B readback buffer | < 1 µs | 2 µs |
+
+- `remove` zeroed each run of freed blocks with a fill and a barrier after
+  it, and the barriers were the cost. It now zeroes attribute by attribute,
+  so each array's fills rise through it as one run, and `CommandBatch::zero`
+  takes the unaligned edges the grid used to handle.
+- A compaction took two submits, one for the count and one for the list, at
+  0.38 ms each on the 5090 for an empty one.
+- The buffer each batch allocates for its readbacks stays. A persistent one
+  would save under a microsecond a round.
+- `clear` freed the indices before zeroing, so a failed zeroing left the heap
+  handing them back over the old surface. It zeroes first now, as `remove`
+  does.
+- `diagnostics` read the host copy of the heap counter, so it could not catch
+  that copy stale. It reads the device's now, and the tests compare the two
+  after every call that moves the counter, a rolled-back `resize` included.
+- The per-call inputs (coordinates, a mesh, the rehash snapshot) were still
+  host-visible. They are device buffers the first round uploads into.
 
 `submit_single_time` still allocates a command buffer and a fence per
 submit; reusing them is a `TODO(core)` for when a tier measures it.

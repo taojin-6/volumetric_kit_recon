@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include <vector>
 
+#include "grid_readback.hpp"
 #include "volumetric_kit/recon/core/allocator.hpp"
 #include "volumetric_kit/recon/core/color_space.hpp"
 #include "volumetric_kit/recon/core/device.hpp"
@@ -409,6 +410,17 @@ int main() {
                  allocator.status().message().c_str());
     return 1;
   }
+  // Copies of a grid attribute; the arrays are device-local.
+  const auto floats = [&](const vol::VoxelBlockGrid& g, const char* name) {
+    return vr_test::read_attribute<float>(device.value(), allocator.value(), g,
+                                          name)
+        .value();
+  };
+  const auto words = [&](const vol::VoxelBlockGrid& g, const char* name) {
+    return vr_test::read_attribute<std::uint32_t>(device.value(),
+                                                  allocator.value(), g, name)
+        .value();
+  };
 
   vol::VoxelGridParams grid{};
   grid.voxel_size = 0.005f;
@@ -482,13 +494,8 @@ int main() {
 
   CHECK(integ.integrate(vbg, depth.data(), cam, /*max_weight=*/5.0f).ok());
 
-  vr::Result<vol::AttributeView> tsdf_view = vbg.attribute("tsdf");
-  vr::Result<vol::AttributeView> weight_view = vbg.attribute("weight");
-  CHECK(tsdf_view.ok() && weight_view.ok());
-  const auto* tsdf_data =
-      static_cast<const float*>(tsdf_view.value().buffer->mapped());
-  const auto* weight_data =
-      static_cast<const float*>(weight_view.value().buffer->mapped());
+  std::vector<float> tsdf_data = floats(vbg, "tsdf");
+  std::vector<float> weight_data = floats(vbg, "weight");
 
   const std::int32_t p12 = find_ptr(active.value(), vr::Vec3i(0, 0, 12));
   const std::int32_t p13 = find_ptr(active.value(), vr::Vec3i(0, 0, 13));
@@ -521,7 +528,7 @@ int main() {
 
   // Aggregate: some voxels were fused, and every fused sdf is inside the band.
   std::size_t touched = 0;
-  for (std::uint64_t i = 0; i < tsdf_view.value().element_count; ++i) {
+  for (std::size_t i = 0; i < tsdf_data.size(); ++i) {
     if (weight_data[i] > 0.0f) {
       ++touched;
       CHECK(tsdf_data[i] >= -grid.trunc_dist - 1e-4f &&
@@ -534,6 +541,8 @@ int main() {
   // the weight accumulates and saturates at the cap (4.25 + 4.25 -> min(8.5,
   // 5)).
   CHECK(integ.integrate(vbg, depth.data(), cam, /*max_weight=*/5.0f).ok());
+  tsdf_data = floats(vbg, "tsdf");
+  weight_data = floats(vbg, "weight");
   CHECK(approx(tsdf_data[front], 0.015f, 1e-3f));
   CHECK(approx(weight_data[front], 5.0f, 1e-3f));
 
@@ -564,10 +573,8 @@ int main() {
   vr::Result<std::vector<vol::BlockIndex>> active2 =
       vbg2.map().compact_active_blocks();
   CHECK(active2.ok());
-  const auto* tsdf2 = static_cast<const float*>(
-      vbg2.attribute("tsdf").value().buffer->mapped());
-  const auto* weight2 = static_cast<const float*>(
-      vbg2.attribute("weight").value().buffer->mapped());
+  const std::vector<float> tsdf2 = floats(vbg2, "tsdf");
+  const std::vector<float> weight2 = floats(vbg2, "weight");
   std::size_t cross_checked = 0;
   for (const vol::BlockIndex& b : active2.value()) {
     for (int lz = 0; lz < bs; ++lz) {
@@ -614,16 +621,15 @@ int main() {
   const std::int32_t pd = find_ptr(dyn_active.value(), vr::Vec3i(0, 0, 12));
   CHECK(pd >= 0);
   const std::size_t vd = static_cast<std::size_t>(pd) + corner_local;
-  const auto* dyn_tsdf = static_cast<const float*>(
-      vbg_dyn.attribute("tsdf").value().buffer->mapped());
-  const auto* dyn_weight = static_cast<const float*>(
-      vbg_dyn.attribute("weight").value().buffer->mapped());
   CHECK(integ.integrate(vbg_dyn, depth.data(), cam, 5.0f).ok());
+  std::vector<float> dyn_weight = floats(vbg_dyn, "weight");
   CHECK(dyn_weight[vd] > 0.0f);  // fused at sdf = +0.02
   CHECK(integ
             .integrate(vbg_dyn, depth_far.data(), cam, 5.0f,
                        tsdf::IntegrationMode::Dynamic)
             .ok());
+  dyn_weight = floats(vbg_dyn, "weight");
+  const std::vector<float> dyn_tsdf = floats(vbg_dyn, "tsdf");
   CHECK(dyn_weight[vd] == 0.0f && dyn_tsdf[vd] == 0.0f);  // stale voxel cleared
 
   // Dynamic clears only free space *past* the band, never near-surface
@@ -651,10 +657,9 @@ int main() {
   const std::int32_t pcl = find_ptr(cls_active.value(), vr::Vec3i(0, 0, 12));
   CHECK(pcl >= 0);
   const std::size_t vc = static_cast<std::size_t>(pcl) + corner_local;
-  const auto* cls_weight = static_cast<const float*>(
-      vbg_cls.attribute("weight").value().buffer->mapped());
   CHECK(integ.integrate(vbg_cls, depth.data(), cam, 5.0f).ok());
   CHECK(integ.integrate(vbg_cls, depth_far.data(), cam, 5.0f).ok());  // classic
+  const std::vector<float> cls_weight = floats(vbg_cls, "weight");
   CHECK(cls_weight[vc] > 0.0f);  // kept (clamped to +trunc, fused)
 
   // Bilinear depth sampling. cx = 321.0 puts the on-axis voxel's projection at
@@ -687,10 +692,8 @@ int main() {
   CHECK(pbi >= 0);
   const std::size_t vbi = static_cast<std::size_t>(pbi) + on_axis;
   CHECK(integ.integrate(vbg_bi, depth_interp.data(), bcam, 5.0f).ok());
-  const auto* bi_tsdf = static_cast<const float*>(
-      vbg_bi.attribute("tsdf").value().buffer->mapped());
-  const auto* bi_weight = static_cast<const float*>(
-      vbg_bi.attribute("weight").value().buffer->mapped());
+  const std::vector<float> bi_tsdf = floats(vbg_bi, "tsdf");
+  const std::vector<float> bi_weight = floats(vbg_bi, "weight");
   CHECK(bi_weight[vbi] > 0.0f);
   CHECK(approx(bi_tsdf[vbi], 0.01f, 1e-3f));   // bilinear: 0.49 - 0.48
   CHECK(!approx(bi_tsdf[vbi], 0.02f, 5e-3f));  // NOT nearest: 0.50 - 0.48
@@ -721,10 +724,8 @@ int main() {
   CHECK(ped >= 0);
   const std::size_t ved = static_cast<std::size_t>(ped) + on_axis;
   CHECK(integ.integrate(vbg_ed, depth_edge.data(), bcam, 5.0f).ok());
-  const auto* ed_tsdf = static_cast<const float*>(
-      vbg_ed.attribute("tsdf").value().buffer->mapped());
-  const auto* ed_weight = static_cast<const float*>(
-      vbg_ed.attribute("weight").value().buffer->mapped());
+  const std::vector<float> ed_tsdf = floats(vbg_ed, "tsdf");
+  const std::vector<float> ed_weight = floats(vbg_ed, "weight");
   CHECK(ed_weight[ved] > 0.0f);  // fused (fallback kept it in-band)
   CHECK(approx(ed_tsdf[ved], 0.0f,
                1e-3f));  // 0.48 - 0.48; not a cross-edge blend
@@ -763,10 +764,8 @@ int main() {
             .integrate(vbg_c, depth.data(), cam, 5.0f,
                        tsdf::IntegrationMode::Classic, &frame)
             .ok());
-  const auto* c_color = static_cast<const std::uint32_t*>(
-      vbg_c.attribute("color").value().buffer->mapped());
-  const auto* c_weight = static_cast<const float*>(
-      vbg_c.attribute("weight").value().buffer->mapped());
+  std::vector<std::uint32_t> c_color = words(vbg_c, "color");
+  std::vector<float> c_weight = floats(vbg_c, "weight");
   CHECK(c_weight[c_front] > 0.0f);
   CHECK((c_color[c_front] & 0xFFu) == 200u);         // R
   CHECK(((c_color[c_front] >> 8) & 0xFFu) == 100u);  // G
@@ -782,6 +781,8 @@ int main() {
             .integrate(vbg_c, depth_far.data(), cam, 5.0f,
                        tsdf::IntegrationMode::Dynamic, &frame)
             .ok());
+  c_color = words(vbg_c, "color");
+  c_weight = floats(vbg_c, "weight");
   CHECK(c_weight[c_front] == 0.0f && c_color[c_front] == 0u);  // color cleared
 
   // Separate color camera: shift it 10 m off in +X so the same voxel projects
@@ -809,10 +810,8 @@ int main() {
             .integrate(vbg_o, depth.data(), cam, 5.0f,
                        tsdf::IntegrationMode::Classic, &off_frame)
             .ok());
-  const auto* o_color = static_cast<const std::uint32_t*>(
-      vbg_o.attribute("color").value().buffer->mapped());
-  const auto* o_weight = static_cast<const float*>(
-      vbg_o.attribute("weight").value().buffer->mapped());
+  const std::vector<std::uint32_t> o_color = words(vbg_o, "color");
+  const std::vector<float> o_weight = floats(vbg_o, "weight");
   CHECK(o_weight[o_front] > 0.0f);  // depth still fuses the voxel
   CHECK(o_color[o_front] == 0u);    // but color is out of frame -> skipped
 
@@ -837,10 +836,8 @@ int main() {
       static_cast<std::size_t>(wup12) + local_index(0, 0, 1, bs);
   CHECK(integ.integrate(vbg_wu, depth.data(), cam, 5.0f).ok());  // depth only
   CHECK(integ.integrate(vbg_wu, depth.data(), cam, 5.0f).ok());  // depth only
-  const auto* wu_color = static_cast<const std::uint32_t*>(
-      vbg_wu.attribute("color").value().buffer->mapped());
-  const auto* wu_weight = static_cast<const float*>(
-      vbg_wu.attribute("weight").value().buffer->mapped());
+  std::vector<std::uint32_t> wu_color = words(vbg_wu, "color");
+  std::vector<float> wu_weight = floats(vbg_wu, "weight");
   CHECK(wu_weight[wu_front] >
         1.0f);                      // depth weight accumulated across 2 frames
   CHECK(wu_color[wu_front] == 0u);  // ...but no color observed yet
@@ -848,6 +845,8 @@ int main() {
             .integrate(vbg_wu, depth.data(), cam, 5.0f,
                        tsdf::IntegrationMode::Classic, &frame)
             .ok());
+  wu_color = words(vbg_wu, "color");
+  wu_weight = floats(vbg_wu, "weight");
   CHECK((wu_color[wu_front] & 0xFFu) == 200u);  // first color assigns the
   CHECK(((wu_color[wu_front] >> 8) & 0xFFu) == 100u);  // full RGB, not a blend
   CHECK(((wu_color[wu_front] >> 16) & 0xFFu) == 50u);  // toward black
@@ -883,7 +882,7 @@ int main() {
               .integrate(vbg_wu, depth.data(), cam, 5.0f,
                          tsdf::IntegrationMode::Classic, &dark_frame)
               .ok());
-    const std::uint32_t got = wu_color[wu_front];
+    const std::uint32_t got = words(vbg_wu, "color")[wu_front];
 
     // Both weights are known here rather than recovered from the answer (which
     // would make the comparison circular and unfailable): `w_before` is the
@@ -964,15 +963,15 @@ int main() {
             .integrate(vbg_dz, depth.data(), cam, 5.0f,
                        tsdf::IntegrationMode::Classic, &frame)
             .ok());  // fuse depth + color
-  const auto* dz_color = static_cast<const std::uint32_t*>(
-      vbg_dz.attribute("color").value().buffer->mapped());
-  const auto* dz_weight = static_cast<const float*>(
-      vbg_dz.attribute("weight").value().buffer->mapped());
+  std::vector<std::uint32_t> dz_color = words(vbg_dz, "color");
+  std::vector<float> dz_weight = floats(vbg_dz, "weight");
   CHECK(dz_weight[dz_front] > 0.0f && dz_color[dz_front] != 0u);  // fused
   CHECK(integ
             .integrate(vbg_dz, depth_far.data(), cam, 5.0f,
                        tsdf::IntegrationMode::Dynamic)
             .ok());  // depth-only recede
+  dz_color = words(vbg_dz, "color");
+  dz_weight = floats(vbg_dz, "weight");
   CHECK(dz_weight[dz_front] == 0.0f &&
         dz_color[dz_front] == 0u);  // geometry + color ghost both cleared
 

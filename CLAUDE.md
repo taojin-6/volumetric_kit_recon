@@ -530,7 +530,9 @@ arbitrary; it usually isn't.
   dispatches (indirect too) and readbacks in one command buffer, one fence
   wait, spans and labels kept. A barrier goes wherever a command could see an
   earlier one's writes: around every dispatch, and between two transfers
-  only when they share a buffer one writes. `dispatch()` is a batch of one.
+  only when they share a buffer one writes, unless they are fills or inline
+  uploads rising through it without overlap. `zero` clears a range at any
+  alignment. `dispatch()` is a batch of one.
   An upload of up to 64 KiB, 4-byte aligned, goes inline
   (`vkCmdUpdateBuffer`) and a larger one through a staging buffer the batch
   allocates; readbacks, which are small results, land in one host buffer
@@ -628,12 +630,20 @@ arbitrary; it usually isn't.
   so per-voxel data survives a grow. `VoxelBlockGrid` composes the map with
   independently-allocated SoA attribute arrays (`tsdf`, `weight`, `color`, …),
   each `num_blocks·voxels_per_block`, so a consumer materialises only what it
-  needs. `topology_epoch()` lives on the *map* — the object that frees a block
+  needs. Every buffer of both is device-local, reached through a
+  `CommandBatch`: `create`, `clear` and `remove` zero on the device (`clear`
+  and `remove` before any index is freed), `resize` copies there, a call's
+  inputs are uploaded in its first round, and a round reads back its counts.
+  A compaction still reads its list back, in the count's own submit while the
+  set stays within a quarter past its last count (the 2026-09-28 residency
+  decision). `topology_epoch()` lives on the *map* — the object that frees a block
   index — and is a globally unique token re-drawn at `create` and at every
   `remove`/`clear`, never at `resize`: a slot-keyed cache (tsdf's dirty flags,
   mesh's spans) anchors on it, so no path may free an index without moving it
   and no two grids may ever share a value. Host `diagnostics()` scans occupancy;
-  `load_factor()` is the constant-time read a per-frame caller can afford, and
+  `load_factor()` is the constant-time read a per-frame caller can afford (a
+  host copy of the heap counter, read back by every round that moves it, which
+  `diagnostics()` checks against the device's own), and
   `kGrowThreshold` is the occupancy it says to grow at — named here so a UI or
   an embedder cannot draw a ceiling that disagrees with it. Opt-in
   `StageMetrics*` on `allocate_from_depth` (an `"allocate"` row summing every
@@ -1078,8 +1088,9 @@ and software decoding at 4K, one thread with little headroom
 synchronised sets.
 
 **Device residency, the steps after `core`** (the 2026-09-28 residency
-decision ranks them): `volume` resident with its compacted list kept on the
-device, `tsdf` integrating on that list by indirect dispatch, `mesh`'s arena
+decision ranks them): `volume` is resident, but its compacted list still
+reaches the host, which goes with `tsdf` integrating on that list by indirect
+dispatch; then `mesh`'s arena
 and index run, `texture`'s device depth, `sensor`'s outputs and decoded
 planes, the examples, the codec's coefficients. The benchmark kit that sized
 them sits on the home box in `~/recon-bench` (a throwaway allocator patch

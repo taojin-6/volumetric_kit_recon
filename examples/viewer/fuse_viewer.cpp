@@ -328,7 +328,7 @@ struct ReconstructionPanel {
   std::int32_t map_buckets = 0;
   std::int32_t map_blocks = 0;
   /// Fraction of the block heap in use, from VoxelHashMap::load_factor -- a
-  /// 4-byte read of the mapped heap counter, not the diagnostics scan.
+  /// host copy of the heap counter, not the diagnostics scan.
   /// **Negative when that read failed**, which the panel draws as `unavailable`
   /// rather than as a low fraction: this is the figure a reader checks to
   /// decide whether the scan is still taking geometry in, so the one answer it
@@ -425,9 +425,9 @@ void draw_reconstruction_panel(const ReconstructionPanel& panel) {
   {
     // Occupancy against the block heap num_blocks sizes -- the figure that says
     // a scan has stopped taking in new geometry, which the bare capacity this
-    // row used to print cannot. VoxelHashMap::load_factor is a 4-byte read of
-    // the host-mapped heap counter, added on 2026-08-08 as the constant-time
-    // reading a per-frame caller can afford; the diagnostics scan it is often
+    // row used to print cannot. VoxelHashMap::load_factor reads a host copy
+    // of the heap counter, added on 2026-08-08 as the constant-time reading
+    // a per-frame caller can afford; the diagnostics scan it is often
     // confused with walks every slot on the host and cannot run per frame.
     //
     // The threshold is the map's own (see kGrowThreshold), read once for both
@@ -1130,8 +1130,8 @@ int run(GLFWwindow* window, const Options& opt) {
         {
           const vr::MemoryStats recon_memory = rallocator.memory_stats();
           // Read out here beside memory_stats and for the same reason: it is a
-          // mapped-memory read behind a Result whose Status carries a string,
-          // and the render thread is waiting on this lock. Constant-time, so
+          // host field behind a Result whose Status carries a string, and the
+          // render thread is waiting on this lock. Constant-time, so
           // sampling it every fused frame is affordable (2026-08-08); it fails
           // only on a moved-from map, and the negative it publishes then is not
           // defensiveness for its own sake: a gauge whose whole claim is "you

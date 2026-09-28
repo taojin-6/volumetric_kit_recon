@@ -29,6 +29,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `volume`: **the hash map's buffers and the grid's attribute arrays are
+  device-local**, reached through a `CommandBatch`: `create`, `clear` and
+  `remove` zero on the device, before any index is freed, `resize` copies
+  there, a call's inputs are uploaded in its first round, and a compaction
+  reads its list back in the count's own submit. `AttributeView::buffer` is
+  no longer mapped; a test reads and writes an attribute through
+  `tests/grid_readback.hpp`. `load_factor()` reads a host copy of the heap
+  counter that every allocating or removing round reads back, so it still
+  costs no dispatch, and `diagnostics()` reads the device's own.
 - `core`: **`device_storage_buffer` adds `TRANSFER_SRC | TRANSFER_DST`** and
   takes extra usage and queue families, as `storage_buffer` does, so a
   `CommandBatch` can fill, copy and stage through it; `GpuFramePrep`'s
@@ -91,10 +100,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   readbacks (small results) through one host buffer; nothing goes through a
   mapping. On an RTX 5090, memory the kernels use in VRAM rather than
   host-visible takes `integrate` from 14.6 to 0.067 ms of device time (the
-  2026-09-28 residency decision); no tier uses the batch yet, and
-  `dispatch()` is a batch of one. It refuses a kernel whose descriptor set
-  was rewritten after its dispatch was recorded (`DescriptorSet::writes`) and
-  a push off 4 bytes or past the kernel's range (`ComputeKernel::push_bytes`;
+  2026-09-28 residency decision). `dispatch()` is a batch of one, `zero`
+  clears a range at any alignment, and fills and inline uploads rising
+  through one buffer without overlap share a barrier, which takes 4 096
+  scattered fills from 7.0 to 0.78 ms on the 5090. It refuses a kernel whose
+  descriptor set was rewritten after its dispatch was recorded
+  (`DescriptorSet::writes`) and a push off 4 bytes or past the kernel's range
+  (`ComputeKernel::push_bytes`;
   `KernelSetBuilder::add` now refuses a push range off offset 0).
   `submit_single_time` reports a failed wait through `in_flight`, and the
   batch then leaks its staging. Test: `recon_core_command_batch`.
