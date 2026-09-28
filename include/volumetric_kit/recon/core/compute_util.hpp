@@ -77,6 +77,37 @@ inline Status check_storage_buffer_range(const char* what, VkDeviceSize bytes,
   return {};
 }
 
+/// @brief Reject a device buffer passed in place of host data that cannot be
+///        bound as @p bytes of storage.
+///
+/// The device-input overloads (`allocate_from_depth`, `integrate`) read a
+/// buffer another pass wrote, so the shape the host overload derives from its
+/// own upload has to be checked instead: a buffer smaller than the image the
+/// camera describes would be read past its end, which is undefined rather than
+/// an error.
+/// @param what    Names the caller and the buffer, for the error message.
+/// @param buffer  The buffer to bind.
+/// @param bytes   What the binding will read.
+/// @return OK; else @ref Status::Code::InvalidArgument if @p buffer is empty,
+///         was created without `STORAGE_BUFFER` usage, or holds fewer than
+///         @p bytes.
+inline Status check_storage_input(const char* what, const Buffer& buffer,
+                                  VkDeviceSize bytes) {
+  if (!buffer.valid()) {
+    return Status::invalid_argument(std::string(what) + " is empty");
+  }
+  if ((buffer.usage() & VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) == 0) {
+    return Status::invalid_argument(std::string(what) +
+                                    " is not a storage buffer");
+  }
+  if (buffer.size() < bytes) {
+    return Status::invalid_argument(
+        std::string(what) + " holds " + std::to_string(buffer.size()) +
+        " bytes; the image needs " + std::to_string(bytes));
+  }
+  return {};
+}
+
 /// @brief Create a host-visible, host-mapped storage buffer of @p bytes.
 /// @param allocator    The allocator to create on.
 /// @param bytes        Size in bytes (must be non-zero).

@@ -183,6 +183,22 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid, const float* depth,
                                  const DepthCameraParams& cam, float max_weight,
                                  IntegrationMode mode, const ColorFrame* color,
                                  StageMetrics* metrics) {
+  return integrate(grid, depth, nullptr, cam, max_weight, mode, color, metrics);
+}
+
+Status TsdfIntegrator::integrate(VoxelBlockGrid& grid, const Buffer& depth,
+                                 const DepthCameraParams& cam, float max_weight,
+                                 IntegrationMode mode, const ColorFrame* color,
+                                 StageMetrics* metrics) {
+  return integrate(grid, nullptr, &depth, cam, max_weight, mode, color,
+                   metrics);
+}
+
+Status TsdfIntegrator::integrate(VoxelBlockGrid& grid, const float* host_depth,
+                                 const Buffer* device_depth,
+                                 const DepthCameraParams& cam, float max_weight,
+                                 IntegrationMode mode, const ColorFrame* color,
+                                 StageMetrics* metrics) {
   // Opened before the validity check so a refused call still costs its row -- a
   // stage that reports nothing when it fails reads on an overlay as a stage
   // that did not run, which is the reading a frozen pipeline most needs not to
@@ -193,7 +209,7 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid, const float* depth,
     return Status::invalid_argument(
         "TsdfIntegrator::integrate: moved-from integrator");
   }
-  if (depth == nullptr) {
+  if (host_depth == nullptr && device_depth == nullptr) {
     return Status::invalid_argument("TsdfIntegrator::integrate: depth is null");
   }
   if (cam.width == 0 || cam.height == 0) {
@@ -221,10 +237,15 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid, const float* depth,
   // color block, not only when a color image arrives.
   const Buffer* color_attr_buf = nullptr;
   if (color != nullptr) {
-    if (color->pixels == nullptr || color->cam.width == 0 ||
-        color->cam.height == 0) {
+    if ((color->pixels == nullptr && color->buffer == nullptr) ||
+        color->cam.width == 0 || color->cam.height == 0) {
       return Status::invalid_argument(
           "TsdfIntegrator::integrate: color frame is empty");
+    }
+    if (color->pixels != nullptr && color->buffer != nullptr) {
+      return Status::invalid_argument(
+          "TsdfIntegrator::integrate: color frame sets both pixels and "
+          "buffer");
     }
     // The kernel decodes with exactly one curve, so a frame that is not already
     // in the canonical encoded form is refused rather than fused through the
@@ -278,14 +299,23 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid, const float* depth,
   VR_TRY(
       check_storage_buffer_range("TsdfIntegrator::integrate: the depth buffer",
                                  depth_bytes, max_storage_buffer_range_));
-  VR_ASSIGN(Buffer depth_buf,
-            upload_storage_buffer(*allocator_, depth, depth_bytes));
-  // Named because it is the biggest thing this call moves -- a few megabytes a
-  // frame at a scanner's resolution -- and so the first row a capture's
-  // transfer view should be able to attribute.
-  device_->set_object_name(VK_OBJECT_TYPE_BUFFER,
-                           debug_object_handle(depth_buf.handle()),
-                           "tsdf.depth_frame");
+  Buffer depth_buf;  // the upload, alive across the (synchronous) dispatch
+  VkBuffer depth_handle = VK_NULL_HANDLE;
+  if (device_depth != nullptr) {
+    VR_TRY(check_storage_input("TsdfIntegrator::integrate: the depth buffer",
+                               *device_depth, depth_bytes));
+    depth_handle = device_depth->handle();
+  } else {
+    VR_ASSIGN(depth_buf,
+              upload_storage_buffer(*allocator_, host_depth, depth_bytes));
+    // Named because it is the biggest thing this call moves -- a few
+    // megabytes a frame at a scanner's resolution -- and so the first row a
+    // capture's transfer view should be able to attribute.
+    device_->set_object_name(VK_OBJECT_TYPE_BUFFER,
+                             debug_object_handle(depth_buf.handle()),
+                             "tsdf.depth_frame");
+    depth_handle = depth_buf.handle();
+  }
 
   // The camera params ride the SSBO verbatim; the kernel derives world ->
   // camera from the rigid cam_to_world, so there is no host-side pose
@@ -305,7 +335,7 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid, const float* depth,
   kernel_.set.write_storage_buffer(1, weight_view.buffer->handle(), 0,
                                    VK_WHOLE_SIZE);
   kernel_.set.write_storage_buffer(2, active_buf.handle(), 0, VK_WHOLE_SIZE);
-  kernel_.set.write_storage_buffer(3, depth_buf.handle(), 0, VK_WHOLE_SIZE);
+  kernel_.set.write_storage_buffer(3, depth_handle, 0, VK_WHOLE_SIZE);
 
   // Color bindings. Slot 6 is the grid's `color` attribute whenever it carries
   // one (resolved above), so dynamic can clear a stale color even on a
@@ -330,14 +360,22 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid, const float* depth,
     VR_TRY(check_storage_buffer_range(
         "TsdfIntegrator::integrate: the colour buffer", color_bytes,
         max_storage_buffer_range_));
-    VR_ASSIGN(color_buf,
-              upload_storage_buffer(*allocator_, color->pixels, color_bytes));
-    device_->set_object_name(VK_OBJECT_TYPE_BUFFER,
-                             debug_object_handle(color_buf.handle()),
-                             "tsdf.color_frame");
+    VkBuffer color_handle = VK_NULL_HANDLE;
+    if (color->buffer != nullptr) {
+      VR_TRY(check_storage_input("TsdfIntegrator::integrate: the colour buffer",
+                                 *color->buffer, color_bytes));
+      color_handle = color->buffer->handle();
+    } else {
+      VR_ASSIGN(color_buf,
+                upload_storage_buffer(*allocator_, color->pixels, color_bytes));
+      device_->set_object_name(VK_OBJECT_TYPE_BUFFER,
+                               debug_object_handle(color_buf.handle()),
+                               "tsdf.color_frame");
+      color_handle = color_buf.handle();
+    }
     std::memcpy(color_cam_buf_.mapped(), &color->cam,
                 sizeof(ColorCameraParams));
-    kernel_.set.write_storage_buffer(5, color_buf.handle(), 0, VK_WHOLE_SIZE);
+    kernel_.set.write_storage_buffer(5, color_handle, 0, VK_WHOLE_SIZE);
     has_color = 1;
   } else {
     // No color image this call; restore the dummy at slot 5 (a prior call may

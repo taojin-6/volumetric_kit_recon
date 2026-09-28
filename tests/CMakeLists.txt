@@ -129,6 +129,14 @@ target_link_libraries(recon_tsdf_mesh_integrate_test
                       PRIVATE volumetric_kit::recon_tsdf Vulkan::Vulkan)
 vr_target_warnings(recon_tsdf_mesh_integrate_test)
 add_test(NAME recon_tsdf_mesh_integrate COMMAND recon_tsdf_mesh_integrate_test)
+# The device-input overloads of allocate_from_depth and integrate: the same
+# frame fused from host arrays and from storage buffers must give the same grid.
+# Skips (exit 0) where no device is present.
+add_executable(recon_tsdf_device_input_test tsdf_device_input_test.cpp)
+target_link_libraries(recon_tsdf_device_input_test
+                      PRIVATE volumetric_kit::recon_tsdf Vulkan::Vulkan)
+vr_target_warnings(recon_tsdf_device_input_test)
+add_test(NAME recon_tsdf_device_input COMMAND recon_tsdf_device_input_test)
 
 # volume delete: allocate a cube, remove a subset, verify the survivors + heap
 # reuse (chain splice / successor pull-up) on the real driver. Skips (exit 0)

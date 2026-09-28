@@ -138,6 +138,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`side_by_side_atlas`, wrapping past the device's largest image) and packs
   them (`pack_atlas`). gfx is unchanged. Test: `recon_texture_multiview`;
   `recon_texture_device_mesh` checks device against host.
+- `volume` / `tsdf`: **device-input overloads** of
+  `VoxelHashMap::allocate_from_depth` and `TsdfIntegrator::integrate` that
+  take the depth image as a storage `Buffer` already on the GPU, and
+  `ColorFrame::buffer` for the colour image, read in place with no upload.
+  The same frame fused both ways gives the same grid
+  (`recon_tsdf_device_input`); a buffer that is empty, not a storage buffer or
+  smaller than the image is refused (`core`'s `check_storage_input`).
 - `sensor`: **H.265 colour from Orbbec cameras**,
   `OrbbecStreamOptions::color_codec = OrbbecColorCodec::Hevc` (the default
   stays `Mjpeg`; needs `VR_WITH_FFMPEG`). 21.6 Mbit/s of colour per camera at
