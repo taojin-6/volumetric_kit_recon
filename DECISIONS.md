@@ -5997,9 +5997,10 @@ writes it once per block.
 The dispatch is the A/B's 4.7 ms and better: the arena and the index run were
 the buffers it was waiting on. `download` is the cost. It copies twice now,
 into a readback buffer the batch allocates and then into the `Mesh`, and it is
-paid once per host extract, which is the export path. A persistent readback
-buffer would take the allocation out of it; revisit it if a consumer
-downloads per frame. The same mesh, 330 389 triangles, comes out.
+paid once per host extract, which is the export path, and it is not
+optimized: the download path is to be removed, since visualization is gfx
+drawing these buffers in place (seam B). The same mesh, 330 389 triangles,
+comes out.
 
 `dispatch()` is unchanged. `submit_single_time` still allocates a command
 buffer and a fence per submit; reusing them is a `TODO(core)` for when a tier
