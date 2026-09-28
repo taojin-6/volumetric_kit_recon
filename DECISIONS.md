@@ -4486,6 +4486,159 @@ changed sources and tests also compile at `-O3 -Werror` under GCC 13.3 in an
 - P-frames. Blocks kept in their slots across frames are what an incremental
   re-mesh of a decoded stream would need.
 
+### 2026-09-27 — The video decoder is `recon_sensor_video`, a target of its own over an installed FFmpeg: HEVC in, host pictures out, on the first hardware back end that decodes a built-in clip, NVIDIA ahead of an integrated GPU; each CI leg requires the hardware it has.
+
+**The rule.** `HevcDecoder` (`sensor/video/hevc_decoder.hpp`) takes an Annex B
+H.265 stream one access unit at a time and hands out host pictures, as
+`Rgb24` or as the decoded `Yuv420` planes with the matrix and range to convert
+them by. It knows nothing of cameras, so the Orbbec driver will link it, not
+the other way round. FFmpeg is a prerequisite behind `VR_WITH_FFMPEG`, found
+through pkg-config and never fetched, like the Orbbec SDK; the floor is
+Ubuntu 22.04's FFmpeg 4.4. No FFmpeg type is public.
+
+**Back ends.** `Auto` tries VideoToolbox on Apple; CUDA (NVDEC), then VAAPI
+on Linux; CUDA, then D3D11VA on Windows. A machine with an NVIDIA and an
+Intel GPU therefore decodes on the NVIDIA one. A back end counts only if it
+decodes a built-in 157-byte clip, because an open device says nothing about
+HEVC: an older Intel GPU opens under VAAPI without decoding HEVC. VideoToolbox is asked instead, through
+`VTIsHardwareDecodeSupported`, the one back end with a single call for it.
+The others each have a query of their own (NVDEC's `cuvidGetDecoderCaps`,
+VAAPI's profiles, D3D11's decoder profiles),
+each with its own dependency and two with no CI leg, while the clip tests
+the path FFmpeg will decode on. Each is probed once per process, with
+FFmpeg's log silenced (a missing back end says so at ERROR: "Cannot load
+libcuda.so.1"), and `Auto` probes down the list only until one decodes and
+opens, so an NVIDIA machine never probes VAAPI. A named back end
+that is not there is refused, and the message lists those that are. Only
+`Auto` falls back to software, including mid-stream when the hardware refuses
+a stream (4:4:4 or 4:0:0, say); `backend()` reports the switch. Whether a
+picture needs copying off the GPU is asked of the picture (`hw_frames_ctx`),
+not of the back end, because the pictures the hardware decoded before the
+switch are still waiting for display. A named back end meeting such a stream
+returns `Unsupported`, after the pictures decoded before it.
+
+**No Vulkan.** FFmpeg can also decode HEVC through Vulkan video, on NVIDIA's
+driver and Mesa's, and it is left out. At a format change mid-stream (the
+fallback clip's 4:0:0), FFmpeg tears its Vulkan decoder down before asking
+for the new format, and freeing the decoder afterwards segfaults in NVIDIA's
+Vulkan driver: `avcodec_free_context`, then libavcodec, then
+`libnvidia-eglcore.so`, on FFmpeg 6.1 and 8.0 with driver 615.71.09. CUDA
+passes the same clip. Nothing outside FFmpeg avoids it, and CUDA and VAAPI
+already cover NVIDIA, Intel and AMD. Its draw comes with the GPU module:
+pictures decoded straight into `VkImage`s, taken without a copy.
+
+**Cropping.** A stream's display window can start right of or below the
+coded picture's corner (an SPS conformance window). FFmpeg crops a hardware
+picture only at the right and bottom, so the decoder crops the host copy at
+the left and top. VideoToolbox cannot be fixed that way: FFmpeg sizes its
+output at the display size, which VideoToolbox fills from the coded corner,
+and then clears the frame's crop, so the right pixels never reach the host.
+The decoder therefore reads each SPS itself on VideoToolbox (the conformance
+window, H.265 7.3.2.2; only the NAL units ahead of a slice) and treats a left
+or top offset like a stream the hardware refuses. Software decoding sets
+`AV_CODEC_FLAG_UNALIGNED`, without which FFmpeg keeps up to 64 columns of a
+left crop to keep the planes aligned.
+
+**Colour.** `matrix` and `full_range` describe the planes handed out, which
+is what a `Yuv420` consumer converts by. So a converted `Yuv420` keeps its
+source's range (swscale alone takes a YUVJ source to limited range), and an
+RGB-coded stream is converted to `Yuv420` by the matrix it is labelled with.
+SMPTE 240M and FCC have their own matrices, since swscale has tables for
+both. `encoding` carries the stream's transfer function and primaries as the
+`ColorEncoding` a capture source declares, and is empty for anything that
+type cannot name (HLG, BT.601's own primaries), so a driver refuses rather
+than guesses.
+
+**Modules.** Only `hevc_decoder.cpp` is HEVC-specific. `ffmpeg.hpp` is the one
+FFmpeg include (owning pointers, errors), `hw_backend` holds the platform
+order and opens devices, and `picture_converter` is the swscale step and the
+matrix choice. An H.264 decoder, or a GPU path that skips the host copy,
+reuses the three; the converter reports errors under the name its owner
+gives it.
+
+**Packaging.** A static `recon_sensor_video` is code compiled against one
+FFmpeg's headers, so the package config holds a consumer to that FFmpeg: its
+major versions, no older than its minors. The floor applies only to the
+build. A consumer whose pkg-config finds another FFmpeg is told which to
+point `PKG_CONFIG_PATH` at, rather than linking one that lays `AVFrame` out
+differently.
+
+**Why these numbers.** M-series Mac, FFmpeg 9.0.2, 120-frame IPPP clips,
+ms per frame:
+
+| | 720p YUV | 720p RGB | 4K YUV | 4K RGB |
+|---|---|---|---|---|
+| VideoToolbox | 0.93 | 2.90 | 4.21 | 22.70 |
+| software, FFmpeg's threads | 0.45 | 2.05 | 2.07 | 18.54 |
+| software, one thread | 1.50 | 3.46 | 13.38 | 32.09 |
+
+- Converting to RGB on the host costs ~18 ms at 4K, and nearly all of that
+  is the flags. An earlier note here said full chroma interpolation and
+  accurate rounding cost nothing measurable; that is wrong on FFmpeg 9.0.2.
+  `SWS_ACCURATE_RND | SWS_FULL_CHR_H_INT` take swscale off its unscaled SIMD
+  path, and plain `SWS_BILINEAR` converts 4K NV12 or YUV420P to RGB24 in
+  0.96 or 0.90 ms instead of 18.9 or 17.9. On solid colours both are within 1
+  code of the standards: 99.7% exact with the flags, 77.7% without. What the
+  fast path gives up is chroma interpolation, since it repeats each chroma
+  sample. `SWS_ACCURATE_RND` alone is the case that came out 3 codes off
+  (10 ms). swscale is CPU-only, and its own threads did not speed up either
+  path. 4K colour for a rig is to be converted on the GPU, from `Yuv420`
+  (the next step), so the host path's flags are left as they are for now.
+- VideoToolbox's times include copying each picture out of GPU memory.
+- Software with FFmpeg's thread count held back 15 pictures, half a second at
+  30 fps, so a live stream sets `threads = 1`. Hardware held back none.
+- A hardware decoder opens with the caller's `threads` as *slice* threads, for
+  a stream `Auto` moves to software. They hold nothing back, since frame
+  threads would hold pictures back on the hardware too, but they help only a
+  wavefront (WPP) stream: on 4K x265, 12.3 ms a frame on one thread against
+  3.7 on slice threads (frame threads: 4.2), and 10.8 either way without WPP.
+
+**CI.** Every build leg builds the decoder against its own FFmpeg and sets
+`VR_TEST_HEVC_BACKEND`: `cuda` in the Linux GPU containers, `videotoolbox` on
+the Mac. The decoder test fails unless that back end decodes and `Auto` picks
+it, so a container that lost NVDEC, or one that picked an integrated GPU,
+fails instead of passing on software. The sanitizer job decodes in software.
+
+**Verified** on the Mac, and on NVDEC in CI (FFmpeg 4.4, 6.1 and 8.0).
+`recon_sensor_video_hevc` decodes the committed clip
+(`tools/make_hevc_fixtures.sh`: 256x144, the height NVDEC's minimum allows,
+8 frames of solid patches at qp 4). In software each patch is within 2 codes
+of the pattern in YUV and 3 in RGB, BT.709 limited. On VideoToolbox and
+NVDEC the YUV is bit-identical to software and the RGB within 1 code.
+`recon_sensor_video_converter` checks each matrix and range on hand-built
+frames against the standards' constants. A wrong matrix, wrong coefficients or
+a dropped pts each fails a test, and `VR_TEST_HEVC_BACKEND=cuda` fails on the
+Mac.
+
+Two more clips came out of review. `cropped_240x128.h265` is the same
+frames with a window 16 right and 16 down; it must equal the uncropped
+decode's pixels there, exactly, on every back end that crops, and named
+VideoToolbox must refuse it. `fallback_256x144.h265` has B-frames and then
+4:0:0 grey, for which FFmpeg offers no hardware format in any version from
+4.4 to 9.0.2. `Auto` must hand out all 10 pictures, in display order and
+each pts sent once, and end on software; a named back end must refuse it.
+Taking back each of these fixes fails a test: deciding the GPU copy by the
+back end, the SPS read, `AV_CODEC_FLAG_UNALIGNED`, a YUVJ source's range, the
+target matrix of an RGB-coded stream, and SMPTE 240M. The SPS reader was
+also checked against an x265 stream with three temporal sub-layers.
+
+**Review (PR #92).** Fixed as described above: the lost pictures after a
+fallback, the left and top crop on hardware and in software, the range of a
+converted YUVJ source, the transfer and primaries, the matrices, a failed
+`sws_scale` (it returned OK), single-threaded decoding after a fallback, the
+unpinned FFmpeg in the package config, `Auto` giving up after the first
+hardware back end, the probe's cost and noise, and the converter's
+hard-coded name. Measured and left as it was: FFmpeg allocates a fresh host
+picture for each hardware picture, and keeping one buffer measured no faster
+(3.70 against 3.63 ms a 4K picture on VideoToolbox), so the simpler code
+stays. Kept on purpose: a decoder opens its own device after the probe
+closes its own, since sharing one would tie every decoder to a device the
+process holds.
+
+**Open.** VAAPI decoding is untested, and D3D11VA has no leg. The
+left and top crop on hardware is tested only on the back ends CI has
+(NVDEC). Pictures pass through host memory (a `TODO(sensor)`).
+
 ## Measured lessons
 
 Not decisions, but the measurements that overturned an assumption about

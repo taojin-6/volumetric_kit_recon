@@ -31,6 +31,11 @@ option(VR_WARNINGS_AS_ERRORS "Treat first-party compiler warnings as errors" ON)
 option(VR_WITH_ORBBEC
        "Build the Orbbec-SDK-backed code (requires an installed Orbbec SDK)"
        OFF)
+# OFF by default for the same reasons: FFmpeg is a prerequisite you install
+# (cmake/vr_ffmpeg.cmake), and the iOS build takes none.
+option(VR_WITH_FFMPEG
+       "Build the FFmpeg-backed video decoder (requires an installed FFmpeg)"
+       OFF)
 
 # Semicolon list of sanitizers (e.g. "address;undefined"); empty = off. Applied
 # globally -- see cmake/vr_sanitizers.cmake for why.
@@ -52,6 +57,9 @@ find_package(Vulkan REQUIRED)
 # the repo, and never fetched (the 2026-09-24 decision).
 if(VR_WITH_ORBBEC)
   include(vr_orbbec)
+endif()
+if(VR_WITH_FFMPEG)
+  include(vr_ffmpeg)
 endif()
 
 # Vendored deps (VMA today) via pinned FetchContent. Exposes VR_VMA_INCLUDE_DIR
