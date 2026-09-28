@@ -50,7 +50,8 @@ core → volume → tsdf → mesh → texture → interop
 - **codec** — the per-frame TSDF geometry codec. An `Encoder` turns a grid's
   active blocks into a self-contained intra frame: sorted block coordinates, a
   1-bit-per-voxel observed mask, and the first K coefficients of each block's
-  8³ DCT, entropy-coded by chunked static-table rANS. A separate `Decoder`
+  8³ DCT, entropy-coded by static-table rANS in independent segments of 64
+  blocks, each decodable on its own (the 2026-09-27 format). A separate `Decoder`
   turns the frame back into a grid the mesh tier extracts unchanged. It reads
   only the volume, so a capture service links it without the mesher, and a
   player without the integrator. Geometry only: the decoded mesh is colored by

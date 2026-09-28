@@ -3852,7 +3852,8 @@ run is where it gets measured. The replacement:
 - **Tables:** static per-frame, per-band frequency tables in the header, over a
   small alphabet (a magnitude class plus raw bits, JPEG-style).
 - **Chunks:** fixed runs of blocks, each coded by interleaved rANS lanes, with a
-  chunk offset table so decode is parallel too.
+  chunk offset table so decode is parallel too. *(Amended 2026-09-27: each run,
+  a segment, is one independent stream instead of interleaved lanes.)*
 - **Arithmetic:** integer-only, so this stage is bit-exact across devices.
 - **No new dependencies:** the same coder handles the coordinates and the mask,
   so neither nvcomp (CUDA-only) nor libzstd is needed.
@@ -3976,6 +3977,124 @@ their inputs. The buffers change anyway with the device-resident output below.
 - The GPU rANS kernels.
 - Device-resident coefficients, so the GPU coder reads them without a host
   round trip, marked `TODO(codec)` on the transform.
+
+### 2026-09-27 — The v1 frame is independent rANS segments of sorted blocks, every integer a class plus raw bits, behind fixed per-frame tables and a section table; the decoder's end check is for consistency, not integrity (amends the 2026-09-26 entry's interleaved lanes).
+
+The second of the 2026-09-26 entry's five PRs: the host rANS reference coder
+(`codec/rans.hpp`) and the v1 intra frame (`codec/bitstream.{hpp,cpp}`), both
+internal. Nothing public changes. `Encoder` / `Decoder` are the next PR.
+
+**Segments, not interleaved lanes.** The 2026-09-26 entry planned chunks of
+blocks, each coded by interleaved rANS lanes. What landed is simpler: a
+**segment** of R consecutive blocks (`segment_size`, default 64, stored in the
+header) is one fully independent rANS stream. It holds everything about its
+blocks, starts with its first block's coordinate in full, and is listed by
+length in a SEGMENTS section.
+- **Why:** on the GPU that is one thread per segment in both directions, with
+  no coordination over where each lane's words go. True interleaving into one
+  stream needs that coordination.
+- **Cost:** a segment carries its state (4 bytes), its first coordinate (12)
+  and its length (4). That is 20 bytes per 64 blocks, against an estimated 30+
+  bytes per block of payload.
+- **Parallelism:** room0's ~107 k blocks come to ~1.7 k segments.
+
+**The coder.** Giesen's word-oriented rANS:
+- **Parameters:** a 32-bit state in `[2^16, 2^32)`, 16-bit output words, and
+  12-bit probabilities. One renormalization step always suffices, and nothing
+  needs 64-bit arithmetic on the state, so the GPU kernels can mirror it in
+  GLSL.
+- **The writer:** `RansWriter` takes symbols in decode order and runs the coder
+  backwards itself, so no caller reverses anything.
+- **The reader:** `RansReader` is bounds-checked and its failures are sticky,
+  so garbage input costs a wasted loop, never a read past the buffer.
+- **Measured:** 100 000 symbols of probability one cost nothing past the
+  4-byte state. A 200 000-symbol skewed source with interleaved 7-bit raw
+  fields came to 1 087 232 bits against an ideal 1 087 459 under its table
+  (−0.02%).
+
+**The symbol model.** Every integer is a **class** (its bit length) drawn from
+a table, plus the bits below its leading one (and a sign) as raw bits:
+- **Coefficients:** 16 classes (±32767 < 2^15), one table per coefficient
+  index, as the prior engine had.
+- **Coordinates:** blocks are sorted by (z, y, x). Deltas go through five
+  context tables, each for a case the sort already constrains: a z step; a y
+  step within a z slice; a y step after a z step; a run step x − 1 within a
+  row, so a run is a stream of zeros; and a free x step. All five have 33
+  classes, since a delta can reach 2^32 − 1.
+- **Masks:** a 3-way class per block (all observed, none, partial). A partial
+  mask then sends its 64 bytes through a 256-symbol table.
+- **Tables:** counted over the frame and normalized on the host, with integer
+  arithmetic only. The GPU path will hand its histograms to the same function,
+  so the tables cannot differ between the two.
+
+**The layout.** Little-endian throughout:
+- A 44-byte header: magic `VRTC`, version, frame type, voxel size,
+  `trunc_dist`, block size, K, the two steps, block count, segment size.
+- A section table of `{id, flags, length}`, then the bodies: TABLES, SEGMENTS,
+  PAYLOAD.
+- The section rules: an unknown section flagged required stops the read with
+  `Unsupported`, and an unknown optional one is skipped. The sections may come
+  in any order. The frame's length must be exact.
+
+**Sorted coordinates are a format rule.** They must be strictly increasing, and
+the writer refuses anything else. That is what keeps the deltas small, and it
+means a decoded frame is duplicate-free by construction, which is the
+precondition the inverse transform documents and does not check.
+
+**The reader takes the caller's capacity.** A frame's size does not bound its
+block count: a block whose every symbol has probability one costs no bits, so
+640 all-zero blocks in one run fit in 415 bytes. `read_intra_frame` therefore
+takes `max_blocks` and refuses a frame that claims more, rather than
+allocating whatever the header asks for.
+
+**The end-of-stream check is for consistency, not integrity.** The first draft
+of `RansReader::finish` called it "a free integrity check". The test showed
+otherwise:
+- **Truncation:** caught every time.
+- **Single-bit flips, 4000 of them on a random stream:** 2232 were caught.
+  1714 landed in raw bits, where they are invisible by construction: raw bits
+  leave the state as they are decoded, and every value of them is valid. The
+  other 54 changed a table symbol and still finished. They moved the slot into
+  another symbol of equal frequency, so the next state was identical and the
+  decoder resynchronized one substituted symbol later.
+- **A realistic frame:** 2967 of 3000 random one-to-three-byte corruptions were
+  refused. The rest decode to a different, valid frame.
+
+So the no-checksum rule stands, and **integrity is the transport's**. If a
+consumer ever keeps frames where nothing checks them, a CRC can be added as an
+optional section. A v1 reader skips it, so that needs no new version.
+
+**Verified** on macOS (Apple M5 Max), in Release and in Debug under ASan +
+UBSan. The full suite passes, 31 of 31 against 29 before. The two new
+host-only tests are `recon_codec_rans` and `recon_codec_bitstream`:
+- `recon_codec_rans` covers the normalization invariants (including the path
+  where bumping rare symbols to 1 overshoots M), round trips from 0 to 100 000
+  operations with raw fields 1 to 32 bits wide, the zero cost, the size bound,
+  every truncation, the flips above, and a reader that stops early.
+- `recon_codec_bitstream` covers round trips across block counts, K up to 512
+  and segment sizes from 1 to larger than the frame, with decode then
+  re-encode giving identical bytes. It also covers coordinates at both ends of
+  int32 and deltas of 2^32 − 1, every writer refusal, and every header,
+  section and table refusal (each made by editing one field of a valid frame).
+  Further: a delta stepped past int32 in a hand-patched stream, truncation at
+  every length, 3000 random corruptions, and the all-zero frame's cost.
+
+Mutation-checked: 15 planted bugs, each caught by the tests. They span the
+renormalization bounds on both sides, the state check, the normalization's
+excess path, the table-sum, trailing-byte, `max_blocks`, required-section and
+int32-overflow checks, the writer's sort check, a run step coded one way and
+read another, and mask bytes read reversed. One check is not pinned:
+`read_intra_frame`'s segment-length check (at least 4 bytes, even). It is
+redundant with `RansReader`'s own, which still refuses the frame, and it is
+kept for its message.
+
+**Open.**
+- `Encoder` / `Decoder`, the next PR.
+- The room0 throughput measurement that decides whether the GPU coder is
+  needed.
+- The optional CRC section above.
+- The reader accepts a "partial" mask that decodes all-full or all-empty. Our
+  writer never makes one, and it decodes correctly.
 
 ## Measured lessons
 

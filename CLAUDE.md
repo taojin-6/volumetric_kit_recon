@@ -86,7 +86,8 @@ branching off **`core`** and `codec` off **`volume`** (later: `track`,
 - **`codec`** — the per-frame TSDF geometry codec: separate `Encoder` and
   `Decoder` classes over a private 8³ DCT transform, a geometry-only intra
   frame (block coordinates, an observed-voxel mask, the first K coefficients),
-  chunked static-table rANS. Links **`volume` alone**. Color is not coded: the
+  static-table rANS in independent segments of blocks (2026-09-27). Links
+  **`volume` alone**. Color is not coded: the
   player textures the decoded mesh from RGB that travels beside it (the
   2026-09-26 decision).
 - **`interop`** — the handoff to `volumetric_kit_gfx` (below).
@@ -243,6 +244,11 @@ order. Change the decision, its entry there, and this list together.
   `Decoder` classes: a geometry-only intra frame of per-block DCT coefficients,
   an observed-voxel mask and sorted block coordinates, entropy-coded by chunked
   static-table rANS.
+- [**2026-09-27**](DECISIONS.md#2026-09-27--the-v1-frame-is-independent-rans-segments-of-sorted-blocks-every-integer-a-class-plus-raw-bits-behind-fixed-per-frame-tables-and-a-section-table-the-decoders-end-check-is-for-consistency-not-integrity-amends-the-2026-09-26-entrys-interleaved-lanes) —
+  The v1 frame is independent rANS segments of sorted blocks, every integer a
+  class plus raw bits, behind fixed per-frame tables and a section table; the
+  decoder's end check is for consistency, not integrity (amends the 2026-09-26
+  entry's interleaved lanes).
 
 ## Provenance & salvage policy
 
@@ -661,13 +667,14 @@ arbitrary; it usually isn't.
   (`waits_for_primary`) and never writes it, and its hardware test opens only
   the camera `VR_ORBBEC_TEST_SERIAL` names (the 2026-09-26 decision).
 
-- **`codec`** — the first of five PRs (2026-09-26 lists them). So far it is
-  `CodecParams` (public) and the private `DctTransform`
-  (`src/volumetric_kit/recon/codec/`). The transform takes a
+- **`codec`** — two of five PRs in (2026-09-26 lists them). So far it is
+  `CodecParams` (public) and, all private under
+  `src/volumetric_kit/recon/codec/`, the `DctTransform`, the rANS reference
+  coder and the v1 intra frame. The transform takes a
   `volume::BlockList` to a `DctBlocks` — K quantized coefficients per block in
   3-D zigzag order, a 16-word observed mask, and the params and `trunc_dist`
-  they were made with — and back. There is no `Encoder` / `Decoder` and no
-  bitstream yet. The SDF is normalized by `trunc_dist` before the transform
+  they were made with — and back. There is no `Encoder` / `Decoder`
+  yet. The SDF is normalized by `trunc_dist` before the transform
   and the steps are fractions of it, so the inverse refuses a `DctBlocks`
   whose `trunc_dist` is not its grid's. `CodecParams::validate` refuses a step
   small enough for the ±32767 clamp to engage (√512 / 32767). The forward
@@ -681,6 +688,18 @@ arbitrary; it usually isn't.
   mis-paired coord — which the inverse then writes nothing into. "Observed" is
   `volume::kObservedWeight`, the threshold the mesher reads too. The inverse
   writes weight 1.0 on observed voxels and a fresh block's zeros elsewhere.
+  The frame (`bitstream.hpp`, the 2026-09-27 entry) is segments of R sorted
+  blocks (default 64). Each segment is one independent rANS stream
+  (`rans.hpp`: a 32-bit state, 16-bit words and 12-bit probabilities, integer
+  only, the reference the GPU kernels must match byte for byte). Every integer
+  is coded as a class from a fixed per-frame table plus raw bits. The format
+  requires strictly increasing coordinates, so a decoded list is duplicate-free.
+  `read_intra_frame` never reads outside its buffer, and it takes the caller's
+  `max_blocks`, because a frame's size cannot bound its block count
+  (probability-one blocks cost no bits). `RansReader::finish` is a
+  **consistency** check, not an integrity one. It cannot see a flipped raw
+  bit, nor a symbol swapped for one of equal frequency, so integrity is the
+  transport's.
 
 **Examples** (`examples/`). All four poll their frames through
 `sensor::ICameraCapture&` — the fuse loop never learns what is behind it. The
