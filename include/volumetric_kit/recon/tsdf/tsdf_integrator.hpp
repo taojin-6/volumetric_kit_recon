@@ -89,7 +89,7 @@ struct TsdfIntegratorConfig {
   /// TsdfIntegrator::dirty_block_count and friends).
   ///
   /// Off by default, and the default costs nothing: no `num_blocks * 4`
-  /// host-visible allocation (6 MB at `VoxelGridParams::defaults()`, and it
+  /// device allocation (6 MB at `VoxelGridParams::defaults()`, and it
   /// doubles with every map grow), and not one store in the fusion kernel,
   /// which binds a 1-element dummy to the flag slot instead. That is the bar a
   /// tier-level measurement has to clear here -- nothing measured for a caller
@@ -253,24 +253,26 @@ class VR_TSDF_API TsdfIntegrator {
   /// immediately after an extract has consumed the set. The flags survive @ref
   /// VoxelBlockGrid::resize, which preserves every block's index.
   ///
-  /// Counted on the host over a host-visible buffer, so it is O(num_blocks) and
-  /// meant for diagnostics and for driving a re-mesh, not for a per-voxel path.
+  /// The flags are read back and counted on the host, so it is O(num_blocks)
+  /// and meant for diagnostics and for driving a re-mesh, not for a per-voxel
+  /// path.
   ///
   /// @warning Not synchronized, and `const` only in the C++ sense: it reads a
-  ///          mapping that a concurrent @ref integrate on another thread can
+  ///          buffer that a concurrent @ref integrate on another thread can
   ///          free outright (the flag array is reallocated when the map grows,
   ///          and `Buffer` frees synchronously). Serializing this against
   ///          @ref integrate and @ref reset_dirty is the caller's job, exactly
   ///          as it is for `mesh::MarchingCubes::release_through`.
   /// @return The count; 0 before any integrate has run, and 0 when tracking is
-  ///         off.
-  std::uint32_t dirty_block_count() const;
+  ///         off; or the readback's failure.
+  Result<std::uint32_t> dirty_block_count() const;
 
   /// @brief Clear every dirty flag, and re-arm the integrator after a topology
   ///        change (see @ref dirty_remesh_blocks).
   ///
   /// @warning Not synchronized; see @ref dirty_block_count.
-  void reset_dirty();
+  /// @return OK, or the clear's failure on the device.
+  Status reset_dirty();
 
   /// @brief The device buffer holding one flag per block slot, for a consumer
   ///        that tests it on-device instead of taking @ref dirty_remesh_blocks
@@ -382,6 +384,8 @@ class VR_TSDF_API TsdfIntegrator {
   /// what it does is a contract (which grid do these flags describe, and is
   /// that still true) rather than another line of buffer bookkeeping.
   Status prepare_dirty_flags(const volume::VoxelBlockGrid& grid);
+  /// The flag array, read back whole.
+  Result<std::vector<std::uint32_t>> read_dirty_flags() const;
   // Both integrate overloads: `depth` is the host array or the device buffer
   // the caller passed.
   Status integrate(volume::VoxelBlockGrid& grid, const StorageInput& depth,
@@ -397,7 +401,7 @@ class VR_TSDF_API TsdfIntegrator {
   // groupCountX; integrate() rejects an active set that would exceed it.
   std::uint32_t max_workgroup_count_x_ = 0;
   // The ceiling on one storage-buffer binding's range, read once at create().
-  // The depth and colour frames are uploaded and bound whole each integrate().
+  // The depth and colour frames are staged and bound whole each integrate().
   VkDeviceSize max_storage_buffer_range_ = 0;
 
   // The integrate kernel's bundled layout + pipeline + descriptor set, its set
@@ -411,8 +415,8 @@ class VR_TSDF_API TsdfIntegrator {
   // written, no span recorded -- until a caller passes a StageMetrics.
   GpuTimer gpu_timer_;
   // Fixed-size camera-params SSBO (DepthCameraParams): bound once at
-  // create() and rewritten each integrate(), not reallocated per frame (mirrors
-  // the volume tier's persistent camera params).
+  // create() and rewritten inline each integrate(), not reallocated per frame
+  // (mirrors the volume tier's persistent camera params).
   Buffer cam_buf_;
   // Color path: the persistent (separate) color-camera SSBO, and a 1-element
   // dummy bound to the color-image + color-attribute slots when no color frame

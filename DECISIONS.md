@@ -5919,8 +5919,35 @@ blocks, Release:
 - The per-call inputs (coordinates, a mesh, the rehash snapshot) were still
   host-visible. They are device buffers the first round uploads into.
 
-`submit_single_time` still allocates a command buffer and a fence per
-submit; reusing them is a `TODO(core)` for when a tier measures it.
+**Step 2, `tsdf`, has landed, without the indirect dispatch.** The compaction
+leaves its list on the device (`compact_active_blocks_on_device`) and reads
+back only the count, which sizes the dispatch on the host, as the plan's
+"small results read back" allows. So a fuse is two submits: the compaction,
+then one batch that stages the frames, writes the cameras inline and
+dispatches. `StorageInput` stages every host frame this way, `allocate`'s
+too. The dirty flags, which the kernel ORs per changed voxel, and
+`MeshIntegrator`'s per-slot counters are device-local; the counters are read
+back once, between the count and fill passes. Indirect dispatch would save
+the one fence wait between the submits. Revisit it if a host row shows that
+wait.
+
+| room0, per fused frame | RTX 5090, step 1 | RTX 5090, step 2 | M5 Max, main | M5 Max, step 1 | M5 Max, step 2 |
+|---|---|---|---|---|---|
+| `integrate`, host / device | 7.8 / 5.4 ms | 1.9 / 0.033 ms | 0.64 / 0.124 ms | 0.81 / 0.123 ms | 0.68 / 0.118 ms |
+| `allocate`, host / device | 1.3 / 0.35 ms | 1.3 / 0.29 ms | 0.78 / 0.43 ms | 0.79 / 0.42 ms | 0.80 / 0.43 ms |
+| fused fps | 91 | 185–199 | ~592 | ~535 | ~573 |
+
+The 5090's device `integrate` is under the A/B's 0.067 ms. The sheet test
+(`recon_tsdf_mesh_integrate`) ran 1.29 s on the 5090 at step 1 and 0.87 s here.
+Apple is not quite unaffected: step 1's extra submits cost the Mac 10% of its
+frame rate, and this step wins most of that back, leaving it 3% under main.
+The rest sits in the host rows, 0.04 ms on `integrate` and 0.02 ms on
+`allocate`: the two calls that now stage a host depth frame, which a device
+frame from `GpuFramePrep` skips. Not yet split further.
+
+`dispatch()` is unchanged. `submit_single_time` still allocates a command
+buffer and a fence per submit; reusing them is a `TODO(core)` for when a tier
+measures it.
 
 ## Measured lessons
 
@@ -6036,5 +6063,5 @@ The same instinct produced both wrong guesses: a cost invisible where it is
 tested (unified memory hides host visibility entirely), read off totals rather
 than phases. The per-slot bin counters are the next instance: host-visible
 because the host reads them back, they cost the count and fill passes 115 ms
-and 143 ms for the sheet on the RTX 5090 against ~5 ms on the Mac, a
-`TODO(tsdf)`.
+and 143 ms for the sheet on the RTX 5090 against ~5 ms on the Mac. Step 2 of
+the residency decision moved them to the device.

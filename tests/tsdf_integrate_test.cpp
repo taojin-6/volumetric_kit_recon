@@ -155,7 +155,7 @@ int dirty_blocks_case(vr::Device& device, vr::Allocator& allocator) {
               .integrate(a, depth_band.data(), cam, 5.0f,
                          tsdf::IntegrationMode::Dynamic)
               .ok());
-    CHECK(untracked.value().dirty_block_count() == 0);
+    CHECK(untracked.value().dirty_block_count().value() == 0);
     CHECK(!untracked.value()
                .dirty_remesh_blocks(a, active_a.value().data(),
                                     active_a.value().size())
@@ -177,14 +177,14 @@ int dirty_blocks_case(vr::Device& device, vr::Allocator& allocator) {
   CHECK(integ_result.ok());
   tsdf::TsdfIntegrator integ = std::move(integ_result).value();
 
-  CHECK(integ.dirty_block_count() == 0);
+  CHECK(integ.dirty_block_count().value() == 0);
 
   // --- What was written, and what that means for a re-mesh -----------------
   CHECK(integ
             .integrate(a, depth_band.data(), cam, 5.0f,
                        tsdf::IntegrationMode::Dynamic)
             .ok());
-  CHECK(integ.dirty_block_count() == 4);
+  CHECK(integ.dirty_block_count().value() == 4);
 
   vr::Result<std::vector<vr::Vec3i>> remesh = integ.dirty_remesh_blocks(
       a, active_a.value().data(), active_a.value().size());
@@ -206,7 +206,7 @@ int dirty_blocks_case(vr::Device& device, vr::Allocator& allocator) {
             .integrate(a, depth_near.data(), cam, 5.0f,
                        tsdf::IntegrationMode::Dynamic)
             .ok());
-  CHECK(integ.dirty_block_count() == 8);
+  CHECK(integ.dirty_block_count().value() == 8);
 
   // --- A map grow carries the flags forward --------------------------------
   //
@@ -221,7 +221,7 @@ int dirty_blocks_case(vr::Device& device, vr::Allocator& allocator) {
             .integrate(a, depth_none.data(), cam, 5.0f,
                        tsdf::IntegrationMode::Dynamic)
             .ok());
-  CHECK(integ.dirty_block_count() == 8);
+  CHECK(integ.dirty_block_count().value() == 8);
 
   // --- The dynamic clear marks too -----------------------------------------
   //
@@ -230,13 +230,13 @@ int dirty_blocks_case(vr::Device& device, vr::Allocator& allocator) {
   // mark left the entire suite green before this case existed. The band at
   // 0.60 m falls in blocks nobody allocated, so every flag below comes from the
   // clear.
-  integ.reset_dirty();
-  CHECK(integ.dirty_block_count() == 0);
+  CHECK(integ.reset_dirty().ok());
+  CHECK(integ.dirty_block_count().value() == 0);
   CHECK(integ
             .integrate(a, depth_far.data(), cam, 5.0f,
                        tsdf::IntegrationMode::Dynamic)
             .ok());
-  CHECK(integ.dirty_block_count() == 8);
+  CHECK(integ.dirty_block_count().value() == 8);
 
   // --- A flag means the field CHANGED, not that a store happened -----------
   //
@@ -245,18 +245,18 @@ int dirty_blocks_case(vr::Device& device, vr::Allocator& allocator) {
   // bit-identical numbers. That is the exact case a scan revisiting converged
   // surface lives in, and a flag set by the act of storing reports every block
   // again, every frame, for as long as the camera can see it.
-  integ.reset_dirty();
+  CHECK(integ.reset_dirty().ok());
   CHECK(integ
             .integrate(a, depth_band.data(), cam, 0.0f,
                        tsdf::IntegrationMode::Dynamic)
             .ok());
-  CHECK(integ.dirty_block_count() == 4);
-  integ.reset_dirty();
+  CHECK(integ.dirty_block_count().value() == 4);
+  CHECK(integ.reset_dirty().ok());
   CHECK(integ
             .integrate(a, depth_band.data(), cam, 0.0f,
                        tsdf::IntegrationMode::Dynamic)
             .ok());
-  CHECK(integ.dirty_block_count() == 0);
+  CHECK(integ.dirty_block_count().value() == 0);
 
   // --- One integrator, a second grid ---------------------------------------
   //
@@ -265,12 +265,12 @@ int dirty_blocks_case(vr::Device& device, vr::Allocator& allocator) {
   // integrator over several grids is already how this suite is written, so this
   // is not hypothetical; what it used to do was OR the two grids' flags
   // together.
-  integ.reset_dirty();
+  CHECK(integ.reset_dirty().ok());
   CHECK(integ
             .integrate(a, depth_band.data(), cam, 5.0f,
                        tsdf::IntegrationMode::Dynamic)
             .ok());
-  CHECK(integ.dirty_block_count() == 4);
+  CHECK(integ.dirty_block_count().value() == 4);
 
   vr::Result<vol::VoxelBlockGrid> grid_b =
       vol::VoxelBlockGrid::create(device, allocator, gp, attrs, 2);
@@ -284,7 +284,7 @@ int dirty_blocks_case(vr::Device& device, vr::Allocator& allocator) {
                        tsdf::IntegrationMode::Dynamic)
             .ok());
   // Re-anchored on `b`: its single block, not `a`'s four OR-ed underneath.
-  CHECK(integ.dirty_block_count() == 1);
+  CHECK(integ.dirty_block_count().value() == 1);
   // And `a`'s flags are gone, so asking about `a` is refused rather than
   // answered out of `b`'s array.
   CHECK(!integ
@@ -362,7 +362,7 @@ int dirty_blocks_case(vr::Device& device, vr::Allocator& allocator) {
   CHECK(integ.dirty_epoch() == 0);
 
   // reset_dirty() re-arms it: nothing is accumulated, so nothing is stale.
-  integ.reset_dirty();
+  CHECK(integ.reset_dirty().ok());
   vr::Result<std::vector<vr::Vec3i>> rearmed = integ.dirty_remesh_blocks(
       b, after_remove.value().data(), after_remove.value().size());
   CHECK(rearmed.ok() && rearmed.value().empty());

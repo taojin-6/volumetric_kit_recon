@@ -524,8 +524,9 @@ arbitrary; it usually isn't.
   bundle + `KernelSetBuilder`, the shared-queue-safe
   `Device::submit_single_time` dispatch, and the shared `dispatch()` /
   `group_count` / `storage_buffer` / range-guard helpers of `compute_util.hpp`
-  — `StorageInput` among them, the host array or device buffer a call binds
-  at its image's exact range. **`CommandBatch`** (`core/command_batch.hpp`)
+  — `StorageInput` among them, the host array (staged onto the device in the
+  call's batch) or device buffer a call binds at its image's exact range.
+  **`CommandBatch`** (`core/command_batch.hpp`)
   is how the host reaches device memory: one call's uploads, fills, copies,
   dispatches (indirect too) and readbacks in one command buffer, one fence
   wait, spans and labels kept. A barrier goes wherever a command could see an
@@ -666,7 +667,10 @@ arbitrary; it usually isn't.
   topology token for the one it cannot (a `remove()` since the last fuse is
   visible only to whoever holds the grid). Opt-in `StageMetrics*` reports an
   `"integrate"` row with both halves, over a `"  ..active set"` sub-row for the
-  compaction dispatch it also makes.
+  compaction dispatch it also makes. That compaction leaves its list on the
+  device (`compact_active_blocks_on_device`), so a fuse is two submits, the
+  compaction's count the only thing read back; the frames are staged, and
+  the dirty flags are device-local.
   `MeshIntegrator` writes a triangle mesh's distance field instead
   (2026-09-27), **overwriting** every voxel of every block the band reaches:
   weight 1 within `trunc_dist` of the mesh, the codec inverse's fresh zeros
@@ -1088,9 +1092,7 @@ and software decoding at 4K, one thread with little headroom
 synchronised sets.
 
 **Device residency, the steps after `core`** (the 2026-09-28 residency
-decision ranks them): `volume` is resident, but its compacted list still
-reaches the host, which goes with `tsdf` integrating on that list by indirect
-dispatch; then `mesh`'s arena
+decision ranks them): `volume` and `tsdf` are resident; next `mesh`'s arena
 and index run, `texture`'s device depth, `sensor`'s outputs and decoded
 planes, the examples, the codec's coefficients. The benchmark kit that sized
 them sits on the home box in `~/recon-bench` (a throwaway allocator patch

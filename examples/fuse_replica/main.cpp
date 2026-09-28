@@ -389,7 +389,7 @@ vr::Status run(const Options& opt) {
       // a fence wait and a full read-back per sample.
       VR_ASSIGN(std::vector<vol::BlockIndex> all,
                 volume.map().compact_active_blocks());
-      const std::uint32_t dirty = integrator.dirty_block_count();
+      VR_ASSIGN(const std::uint32_t dirty, integrator.dirty_block_count());
       VR_ASSIGN(const std::vector<vr::Vec3i> remesh_blocks,
                 integrator.dirty_remesh_blocks(volume, all.data(), all.size()));
       const auto remesh = static_cast<std::uint32_t>(remesh_blocks.size());
@@ -408,7 +408,7 @@ vr::Status run(const Options& opt) {
         last_active_blocks = static_cast<std::uint32_t>(all.size());
         ++dirty_samples;
       }
-      integrator.reset_dirty();
+      VR_TRY(integrator.reset_dirty());
     }
 
     if (opt.mesh_every > 0 &&
@@ -446,7 +446,7 @@ vr::Status run(const Options& opt) {
           // Reset even when the extract fell back to a full pass: a full pass
           // re-meshes everything, so the flags it did not read are just as
           // spent as the ones it did.
-          integrator.reset_dirty();
+          VR_TRY(integrator.reset_dirty());
         } else {
           VR_ASSIGN(mesh::DeviceMesh dm,
                     extractor.extract_device(volume, 0.0f, &rt));
