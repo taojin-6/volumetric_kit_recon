@@ -726,7 +726,10 @@ arbitrary; it usually isn't.
   consumer releases by generation; the kernel writes a real
   `VkDrawIndexedIndirectCommand`. `extract_device` returns a borrowed
   `DeviceMesh` (valid until the next extract, enforced by a generation stamp),
-  `download` takes the single host copy and bridges the two workflows. An
+  `download` takes the single host copy and bridges the two workflows. The
+  arena, index run and draw command are device-local, and each extract
+  attempt is one batch that reads back only the 32-byte command; the span
+  table stays host-visible, since the host reads it. An
   `extract_device` overload meshes a
   caller-supplied `volume::BlockList` instead of compacting the whole map —
   what a camera's frustum-culled set arrives as, though nothing in the extractor
@@ -1098,8 +1101,8 @@ and software decoding at 4K, one thread with little headroom
 synchronised sets.
 
 **Device residency, the steps after `core`** (the 2026-09-28 residency
-decision ranks them): `volume` and `tsdf` are resident; next `mesh`'s arena
-and index run, `texture`'s device depth, `sensor`'s outputs and decoded
+decision ranks them): `volume`, `tsdf` and `mesh` are resident; next
+`texture`'s device depth, `sensor`'s outputs and decoded
 planes, the examples, the codec's coefficients. The benchmark kit that sized
 them sits on the home box in `~/recon-bench` (a throwaway allocator patch
 behind environment variables); re-measure there after each.

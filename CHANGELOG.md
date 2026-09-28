@@ -29,6 +29,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `mesh`: **the arena, index run and draw command are device-local**, as are
+  the tables. Each extract attempt is one batch: the active list staged, the
+  command reset inline, the dispatch, the command read back. `download` copies
+  back through a batch. The span table stays host-visible, since its reader
+  is the host. The output buffers' usage now includes `TRANSFER_SRC |
+  TRANSFER_DST`.
 - `tsdf`: **`integrate` fuses over the active list in place**, one batch after
   the compaction: the frames staged onto the device, the cameras inline. The
   dirty flags, the cameras and `MeshIntegrator`'s per-slot counters are

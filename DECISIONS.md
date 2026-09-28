@@ -5978,6 +5978,29 @@ room0:
 - The deferred work is greppable again: `TODO(volume)` for the extract's list,
   `TODO(tsdf)` for the indirect dispatch.
 
+**Step 3, `mesh`, has landed.** The arena, the index run, the draw command
+and the tables are device-local. Each extract attempt is one batch: the
+active list staged, the command reset inline, the dispatch, then the 32-byte
+command and its scratch words read back. A refit is a second batch. The
+identity index run of the unshared kernel is staged up once per grow.
+`download` copies back through a batch. The span table stays host-visible:
+the host is its reader (`block_spans()` hands out a pointer), and the kernel
+writes it once per block.
+
+| room0 | RTX 5090, step 2 | RTX 5090, step 3 | M5 Max, step 2 | M5 Max, step 3 |
+|---|---|---|---|---|
+| extract dispatch | 76 ms | 0.97 ms | 0.70 ms | 0.73 ms |
+| remesh, whole extract | 78.9 ms | 2.6 ms | 1.8 ms | 1.8 ms |
+| `download` (991 k vertices) | 21 ms | 31 ms | 6.5 ms | 9.8 ms |
+| fused fps (8 remeshes) | 179–190 | 268 | ~627 | ~618 |
+
+The dispatch is the A/B's 4.7 ms and better: the arena and the index run were
+the buffers it was waiting on. `download` is the cost. It copies twice now,
+into a readback buffer the batch allocates and then into the `Mesh`, and it is
+paid once per host extract, which is the export path. A persistent readback
+buffer would take the allocation out of it; revisit it if a consumer
+downloads per frame. The same mesh, 330 389 triangles, comes out.
+
 `dispatch()` is unchanged. `submit_single_time` still allocates a command
 buffer and a fence per submit; reusing them is a `TODO(core)` for when a tier
 measures it.
