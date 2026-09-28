@@ -6076,6 +6076,21 @@ come back through staging copies. The live pass, `fuse_viewer`'s, is the
   return when the fence wait fails, as `CommandBatch` documents; the device is
   then treated as lost, as it already is in `tsdf`.
 
+**Step 5a, `GpuFramePrep`, has landed.** The raw depth and colour planes go
+up through one batch into device-local inputs, and the depth and colour
+passes share its submit. A plane whose rows are tight goes up as it is, and a
+padded one is packed first. Measured on a 640x576 depth frame and a 3840x2160
+colour frame, Release, per frame (host / device):
+
+| | RTX 5090 | M5 Max |
+|---|---|---|
+| step 4 | 2.18 / 0.495 ms | 0.87 / 0.32 ms |
+| step 5a | 1.48 / 0.055 ms | 0.78 / 0.29 ms |
+
+Next is 5b, the rig's raw sets, then 5c, the decoder's planes straight to the
+device, which needs its own design: CUDA or VideoToolbox memory shared with
+Vulkan.
+
 `dispatch()` is unchanged. `submit_single_time` still allocates a command
 buffer and a fence per submit; reusing them is a `TODO(core)` for when a tier
 measures it.

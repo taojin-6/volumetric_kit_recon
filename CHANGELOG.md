@@ -29,6 +29,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `sensor`: **`GpuFramePrep` stages its raw frame and runs both passes in one
+  submit**: the raw depth and colour planes go up through a batch into
+  device-local inputs, rather than a host-visible buffer the kernels read
+  across the bus.
 - `texture`: **every pass is one batch**: a host depth frame staged, the camera
   inline, the dispatch, and for a host `Mesh` the vertices staged up, then read
   back in a batch of their own. The camera, the depth copy and the several-view

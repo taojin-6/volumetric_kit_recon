@@ -890,7 +890,9 @@ arbitrary; it usually isn't.
   `DeviceFrame` feeds the `Buffer` overloads of `allocate_from_depth` and
   `integrate` (and `ColorFrame::buffer`, with `coverage_in_alpha`, since a
   pixel the lens maps outside the picture is a 0 word), so nothing is
-  uploaded and nothing registered. The frame *holds* its device-local
+  uploaded and nothing registered. The raw frame itself goes up through one
+  batch into device-local inputs, both passes in the same submit, a plane
+  with padded rows packed first. The frame *holds* its device-local
   buffers, and `prepare` reuses one only once no frame does, so a frame kept
   past the next is still itself; the whole frame is checked before anything
   is uploaded, a depth range from 0 included. `OrbbecCapture` opened with
@@ -1094,9 +1096,8 @@ one camera (`GpuFramePrep`, the 2026-09-28 GPU pre-processing decision: at 4K
 it takes the host from 15.5 ms of undistortion and registration a frame to
 none, and the run's CPU eightfold down), and what it leaves is raw sets from
 the rig (`frame_conversion.cpp`), zero-copy input from the decoder's
-hardware frames (`gpu_frame_prep.hpp`, `hevc_decoder.cpp`), both passes in
-one submit (`gpu_frame_prep.cpp`, waiting on a several-kernel dispatch),
-and the texture tier's separate colour camera, which fusing unregistered
+hardware frames (`gpu_frame_prep.hpp`, `hevc_decoder.cpp`), and the
+texture tier's separate colour camera, which fusing unregistered
 frames makes the texturing path's next need; and processing a rig set's
 frames in parallel,
 one thread per camera, rather than the ~11 ms one after another costs for four
@@ -1107,9 +1108,9 @@ and software decoding at 4K, one thread with little headroom
 synchronised sets.
 
 **Device residency, the steps after `core`** (the 2026-09-28 residency
-decision ranks them): `volume`, `tsdf`, `mesh` and `texture` are resident;
-next `sensor`'s outputs and decoded
-planes, the examples, the codec's coefficients. The benchmark kit that sized
+decision ranks them): `volume`, `tsdf`, `mesh` and `texture` are resident,
+and `GpuFramePrep` stages its raw frame in one submit; next the rig's raw
+sets, the decoder's planes straight to the device, the examples, the codec's coefficients. The benchmark kit that sized
 them sits on the home box in `~/recon-bench` (a throwaway allocator patch
 behind environment variables); re-measure there after each.
 
