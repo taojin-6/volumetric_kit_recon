@@ -5,12 +5,12 @@
 
 /// @file core/command_batch.hpp
 /// @brief One call's uploads, fills, copies, dispatches and readbacks,
-///        recorded into one command buffer and submitted with one fence wait,
-///        over staging memory the submitting object keeps between calls.
+///        recorded into one command buffer and submitted with one fence wait.
 ///
-/// The host reaches device memory through this: the kernels' memory is
-/// device-local and unmapped on every platform, so the Mac runs the same
-/// staged path a discrete GPU does (the 2026-09-28 residency decision).
+/// The host reaches device memory through this and nothing else: the kernels'
+/// memory is device-local and unmapped on every platform, so the host only
+/// records commands, and the Mac runs the same path a discrete GPU does (the
+/// 2026-09-28 residency decision).
 
 #include <cstdint>
 #include <vector>
@@ -25,70 +25,7 @@ namespace volumetric_kit::recon {
 class Allocator;
 class Device;
 class GpuStageScope;
-class GpuTimer;
 struct ComputeKernel;
-
-/// @brief Host-visible memory a @ref CommandBatch stages uploads and readbacks
-///        through, kept by the object that submits them.
-///
-/// Grow-only and lazy: it allocates nothing until a batch first needs to
-/// stage, grows when a batch needs more, and after a batch that needed more
-/// than one allocation it keeps a single one of the combined size, so a call
-/// whose traffic is steady allocates nothing after the first. One batch uses
-/// it at a time.
-///
-/// @warning The @ref Allocator passed to @ref create must outlive this.
-class VR_CORE_API StagingArena {
- public:
-  /// @brief An empty arena over @p allocator.
-  /// @param allocator  Where staging memory comes from (must outlive this).
-  /// @return The arena, or @ref Status::Code::InvalidArgument for a moved-from
-  ///         allocator.
-  static Result<StagingArena> create(Allocator& allocator);
-
-  StagingArena() noexcept = default;
-  ~StagingArena() = default;
-  StagingArena(StagingArena&& other) noexcept;
-  StagingArena& operator=(StagingArena&& other) noexcept;
-  StagingArena(const StagingArena&) = delete;
-  StagingArena& operator=(const StagingArena&) = delete;
-
-  /// @return Bytes of upload staging held (`0` before the first staged
-  ///         upload).
-  VkDeviceSize upload_capacity() const noexcept;
-  /// @return Bytes of readback staging held (`0` before the first staged
-  ///         readback).
-  VkDeviceSize readback_capacity() const noexcept;
-  /// @return `true` if this has an allocator (`false` when moved-from).
-  bool valid() const noexcept { return allocator_ != nullptr; }
-
- private:
-  friend class CommandBatch;
-
-  // One allocation of a pool, and how much of it this batch has handed out.
-  struct Chunk {
-    Buffer buffer;
-    VkDeviceSize used = 0;
-  };
-  // Where `bytes` staged bytes go: a chunk with room, or a new one.
-  struct Slice {
-    VkBuffer buffer = VK_NULL_HANDLE;
-    VkDeviceSize offset = 0;
-    void* host = nullptr;
-  };
-  Result<Slice> take(bool upload, VkDeviceSize bytes);
-  // End of a batch. A pool that needed several chunks is freed and remembers
-  // their total, so its next chunk holds the whole batch.
-  void recycle() noexcept;
-
-  Allocator* allocator_ = nullptr;
-  std::vector<Chunk> upload_;
-  std::vector<Chunk> readback_;
-  VkDeviceSize upload_wanted_ = 0;
-  VkDeviceSize readback_wanted_ = 0;
-  const Device* device_ = nullptr;  // names new chunks; set by each batch
-  bool busy_ = false;
-};
 
 /// @brief Records one call's device work -- uploads, fills, copies, dispatches,
 ///        readbacks -- into a single command buffer, submitted once and waited
@@ -100,31 +37,28 @@ class VR_CORE_API StagingArena {
 /// as far as the queue family allows (the scope `dispatch()` uses). Kernels
 /// keep their debug-utils regions and their @ref GpuStageScope spans.
 ///
-/// **A device-local buffer is always staged; a mapped (host-visible) one skips
-/// staging only where that cannot change the result.** An @ref upload into a
-/// mapped buffer is a plain copy on the host when nothing has been recorded
-/// before it (so no earlier command can touch the bytes); otherwise it is
-/// staged and copied in its place. A @ref readback from a mapped buffer reads
-/// it directly after the wait when nothing but other readbacks follows it;
-/// otherwise it is copied out in its place. So a batch that only touches
-/// host-visible buffers needs no submit at all. The usage flags are checked as
-/// if staged either way -- `TRANSFER_DST` for an upload, `TRANSFER_SRC` for a
-/// readback -- so moving a buffer into device memory later cannot turn up a
-/// missing bit.
+/// **Host bytes cross only at the edges, and each way has one path.** An
+/// @ref upload of up to 64 KiB, 4-byte aligned -- a frame's parameters -- is
+/// written inline in the command buffer (`vkCmdUpdateBuffer`); a larger one,
+/// such as a depth frame, is copied in through a host-visible staging buffer
+/// the batch allocates. A @ref readback is for small results, a block count
+/// or a failure tally: every readback of a batch is copied into one small
+/// host buffer allocated at @ref submit. Nothing is ever read or written
+/// through a mapping of the destination, so a buffer's memory type never
+/// changes what a batch does.
 ///
 /// **A failed call poisons the batch.** Each recording call returns its own
 /// refusal, and @ref submit then returns the first of them and runs nothing,
-/// so a batch missing a command is never submitted. An upload that already
-/// went straight into a mapped buffer stays written.
+/// so a batch missing a command is never submitted.
 ///
 /// Every @ref Buffer recorded must stay alive until @ref submit returns, and
 /// so must every readback destination. The batch borrows its @ref Device and
-/// @ref StagingArena, which must outlive it; like @ref
+/// @ref Allocator, which must outlive it; like @ref
 /// Device::submit_single_time it is not thread-safe.
 ///
 /// @code
-/// CommandBatch batch(device, staging);
-/// VR_TRY(batch.upload(depth_buf, 0, depth, depth_bytes));
+/// CommandBatch batch(device, allocator);
+/// VR_TRY(batch.upload(params_buf, 0, &params, sizeof(params)));
 /// VR_TRY(batch.dispatch(kernel, &push, sizeof(push), groups, max_groups,
 ///                       &stage));
 /// VR_TRY(batch.readback(counter_buf, 0, sizeof(count), &count));
@@ -132,11 +66,13 @@ class VR_CORE_API StagingArena {
 /// @endcode
 class VR_CORE_API CommandBatch {
  public:
-  /// @brief Start a batch on @p device, staging through @p staging.
-  ///
-  /// A moved-from arena, or one another live batch is using, poisons the
-  /// batch: its first call and @ref submit return InvalidArgument.
-  CommandBatch(const Device& device, StagingArena& staging) noexcept;
+  /// Largest upload written inline in the command buffer
+  /// (`vkCmdUpdateBuffer`'s limit); larger ones are staged.
+  static constexpr VkDeviceSize kMaxInlineUpload = 65536;
+
+  /// @brief Start a batch on @p device, allocating staging from
+  ///        @p allocator.
+  CommandBatch(const Device& device, Allocator& allocator) noexcept;
   ~CommandBatch();
   CommandBatch(const CommandBatch&) = delete;
   CommandBatch& operator=(const CommandBatch&) = delete;
@@ -145,7 +81,9 @@ class VR_CORE_API CommandBatch {
 
   /// @brief Write @p bytes from @p src into @p dst at @p offset.
   ///
-  /// @p src is copied before this returns, so it need not outlive the call.
+  /// Inline when @p bytes is at most @ref kMaxInlineUpload and it and
+  /// @p offset are multiples of 4; staged otherwise. @p src is copied before
+  /// this returns, so it need not outlive the call.
   /// @param dst     Needs `TRANSFER_DST` usage.
   /// @param offset  Byte offset into @p dst.
   /// @param src     The bytes; may be null only when @p bytes is 0.
@@ -228,21 +166,19 @@ class VR_CORE_API CommandBatch {
   /// @brief Submit everything recorded as one command buffer, wait for it,
   ///        and fill every readback destination.
   ///
-  /// Submits nothing when nothing needs the device (every upload and readback
-  /// went direct), and resolves the spans of every timer a dispatch used. A
-  /// batch is submitted at most once, and submitting it releases the arena,
-  /// so the next batch may start while this one is still in scope.
+  /// Resolves the spans of every timer a dispatch used. An empty batch
+  /// submits nothing. A batch is submitted at most once.
   /// @return OK; the first refusal a recording call returned; InvalidArgument
   ///         for a second submit; or a staging or Vulkan failure. A failed
-  ///         submit retires the timers it used (@ref GpuTimer::abandon),
-  ///         since it cannot tell whether the device may still run them.
+  ///         submit retires the timers it used (`GpuTimer::abandon`), since
+  ///         it cannot tell whether the device may still run them.
   Status submit();
 
   /// @return `true` once @ref submit has run, whatever it returned.
   bool submitted() const noexcept { return submitted_; }
 
  private:
-  enum class Kind { Copy, Fill, Dispatch, DispatchIndirect, Readback };
+  enum class Kind { Update, Copy, Fill, Dispatch, DispatchIndirect, Readback };
   struct Op {
     Kind kind = Kind::Copy;
     VkBuffer src = VK_NULL_HANDLE;
@@ -252,29 +188,27 @@ class VR_CORE_API CommandBatch {
     VkDeviceSize bytes = 0;
     std::uint32_t value = 0;  // fill word, or workgroup count
     const ComputeKernel* kernel = nullptr;
-    std::vector<unsigned char> push;
+    std::vector<unsigned char> data;  // push constants, or an inline upload
     GpuStageScope* stage = nullptr;
-    const void* mapped_src = nullptr;  // a readback's direct source
-    const void* staged = nullptr;      // a staged readback's host copy
-    void* host_dst = nullptr;          // a readback's destination
-    bool direct = false;               // a readback read without a copy
+    void* host_dst = nullptr;  // a readback's destination
   };
 
   Status check(Status status);
+  Status usable() const;
   Status check_dispatch(const ComputeKernel& kernel, const void* push,
                         std::uint32_t push_size) const;
   Op dispatch_op(Kind kind, const ComputeKernel& kernel, const void* push,
                  std::uint32_t push_size, GpuStageScope* stage) const;
+  // A host-visible buffer of `bytes`, held until the batch is destroyed.
+  Result<const Buffer*> stage(VkDeviceSize bytes, bool upload);
   void record(VkCommandBuffer cmd) const;
-  // Hands the arena back, once: at the end of submit, or on destruction.
-  void release() noexcept;
 
   const Device* device_;
-  StagingArena* staging_;
+  Allocator* allocator_;
   std::vector<Op> ops_;
+  std::vector<Buffer> staging_;
   Status status_;
   bool submitted_ = false;
-  bool owns_staging_ = false;
 };
 
 }  // namespace volumetric_kit::recon

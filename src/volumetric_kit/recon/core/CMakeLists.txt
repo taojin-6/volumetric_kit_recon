@@ -68,7 +68,7 @@ target_sources(
           compute_pipeline.cpp
           compute_kernel.cpp
           # One call's uploads, fills, copies, dispatches and readbacks in one
-          # submit, over a per-object staging arena.
+          # submit.
           command_batch.cpp
           vma_impl.cpp)
 

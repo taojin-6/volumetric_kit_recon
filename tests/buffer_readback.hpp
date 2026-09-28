@@ -26,9 +26,8 @@ vr::Result<std::vector<T>> read_back(const vr::Device& device,
                                      vr::Allocator& allocator,
                                      const vr::Buffer& buffer,
                                      std::size_t count) {
-  VR_ASSIGN(vr::StagingArena staging, vr::StagingArena::create(allocator));
   std::vector<T> out(count);
-  vr::CommandBatch batch(device, staging);
+  vr::CommandBatch batch(device, allocator);
   VR_TRY(
       batch.readback(buffer, 0, VkDeviceSize(count) * sizeof(T), out.data()));
   VR_TRY(batch.submit());

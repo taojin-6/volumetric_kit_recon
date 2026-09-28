@@ -85,13 +85,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - `core`: **`CommandBatch`** (`core/command_batch.hpp`): one call's uploads,
   fills, copies, dispatches, indirect dispatches and readbacks recorded into one
-  command buffer and submitted with one fence wait, over a per-object
-  grow-only **`StagingArena`**. Device-local buffers are always staged, on
-  every platform; it goes direct into a host-visible buffer only where that
-  cannot change the result. On an
-  RTX 5090, memory the kernels use in VRAM rather than host-visible takes
-  `integrate` from 14.6 to 0.067 ms of device time (the 2026-09-28 residency
-  decision); no tier uses the batch yet. Test: `recon_core_command_batch`.
+  command buffer and submitted with one fence wait. Small aligned uploads go
+  inline, larger ones through a staging buffer the batch allocates, and
+  readbacks (small results) through one host buffer; nothing goes through a
+  mapping. On an RTX 5090, memory the kernels use in VRAM rather than
+  host-visible takes `integrate` from 14.6 to 0.067 ms of device time (the
+  2026-09-28 residency decision); no tier uses the batch yet. Test:
+  `recon_core_command_batch`.
 - `tsdf`: **`MeshIntegrator`** — a triangle mesh's truncated distance field,
   written into a grid's `tsdf` and `weight`, in one of two `MeshSdfMode`s (see
   the 2026-09-27 decision).

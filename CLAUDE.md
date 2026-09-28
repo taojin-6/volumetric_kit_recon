@@ -310,10 +310,10 @@ order. Change the decision, its entry there, and this list together.
   captured, the device undistorts depth and undistorts and converts colour,
   and fusion reads the buffers in place, depth and colour each with its own
   camera rather than registered.
-- [**2026-09-28**](DECISIONS.md#2026-09-28--memory-the-kernels-use-lives-on-the-device-on-every-platform-and-the-host-reaches-it-through-one-commandbatch-per-call-which-stages-it-and-goes-direct-only-into-host-visible-buffers-where-that-cannot-change-the-result) —
+- [**2026-09-28**](DECISIONS.md#2026-09-28--memory-the-kernels-use-lives-on-the-device-on-every-platform-and-the-host-only-records-commands-against-it-one-commandbatch-per-call-parameters-inline-bulk-bytes-staged-at-the-edges-small-results-read-back) —
   Memory the kernels use lives on the device on every platform, and the host
-  reaches it through one `CommandBatch` per call, which stages it and goes
-  direct only into host-visible buffers, where that cannot change the result.
+  only records commands against it: one `CommandBatch` per call, parameters
+  inline, bulk bytes staged at the edges, small results read back.
 
 ## Provenance & salvage policy
 
@@ -528,15 +528,14 @@ arbitrary; it usually isn't.
   at its image's exact range. **`CommandBatch`** (`core/command_batch.hpp`)
   is how the host reaches device memory: one call's uploads, fills, copies,
   dispatches (indirect too) and readbacks in one command buffer, a barrier
-  between every two, one fence wait, spans and labels kept, staged through a
-  per-object grow-only `StagingArena`. A device-local buffer is always
-  staged, on Apple as on NVIDIA, so a Mac run is the discrete GPU's path; it
-  goes direct into a mapped (host-visible) buffer only where that cannot
-  change the result: an upload before anything is recorded, a readback
-  followed only by readbacks. It checks usage as if staged either way. A
-  refused call poisons the batch, and submitting releases the arena (the
+  between every two, one fence wait, spans and labels kept. An upload of up
+  to 64 KiB, 4-byte aligned, goes inline (`vkCmdUpdateBuffer`) and a larger
+  one through a staging buffer the batch allocates; readbacks, which are
+  small results, land in one host buffer allocated at `submit`. Nothing goes
+  through a mapping, so memory type never changes what a batch does, and
+  usage is checked on every buffer. A refused call poisons the batch (the
   2026-09-28 residency decision, which also records why there is no
-  mappable device memory).
+  staging arena and no mappable device memory).
   Vocabulary: `Status`/`Result`, the GLM aliases, `camera_params.hpp`,
   `color_space.hpp`, and `stage_metrics.hpp` — the `{name, cpu_ms, gpu_ms,
   has_gpu}` rows every tier reports timings in, with `GpuTimer` measuring the

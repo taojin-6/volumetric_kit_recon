@@ -5687,17 +5687,18 @@ the hash map's bucket locks past the driver's 7 s watchdog in CI (Xid 109, and
 a runner lost), while they were host-visible; PR #81 has since moved them into
 device memory, the fix the fleet's first watchdog report called for.
 
-### 2026-09-28 — Memory the kernels use lives on the device on every platform, and the host reaches it through one `CommandBatch` per call, which stages it and goes direct only into host-visible buffers, where that cannot change the result.
+### 2026-09-28 — Memory the kernels use lives on the device on every platform, and the host only records commands against it: one `CommandBatch` per call, parameters inline, bulk bytes staged at the edges, small results read back.
 
 **The rule.** A buffer the kernels read or write is device-local
 (`device_storage_buffer`: VRAM, never mapped), on Apple as on NVIDIA.
 Host-visible memory (`storage_buffer`) is for what the host produces or
 consumes: staging, readback, small parameters.
 
-The host reaches device memory through a `CommandBatch`. A batch records one call's `upload`, `fill`, `copy`, `dispatch`,
-`dispatch_indirect` and `readback` into one command buffer, and submits it
-once with one fence wait. It stages through a `StagingArena` the submitting
-object keeps.
+The host reaches device memory through a `CommandBatch`. A batch records
+one call's `upload`, `fill`, `copy`, `dispatch`, `dispatch_indirect` and
+`readback` into one command buffer, and submits it once with one fence wait.
+In the loop the host sends only a frame's inputs and reads back only small
+results: block counts, failure tallies.
 
 **Why: the RTX 5090 measurement.** Every buffer except the bucket locks was
 host-visible on main, so every kernel access crossed PCIe. A throwaway
@@ -5745,26 +5746,29 @@ Four findings shaped the design:
   `dispatch()` uses. Each dispatch keeps its debug-utils region, outside its
   `GpuStageScope` span, and every timer a batch used is resolved after the one
   wait.
-- **Staging is skipped only where that cannot change the result.** An upload
-  into a mapped buffer is a host `memcpy` only while nothing has been
-  recorded, since a command recorded earlier runs after the write. A readback
-  from a mapped buffer reads the mapping after the wait only when nothing but
-  readbacks follows it. So a batch that only touches host-visible buffers
-  needs no submit at all.
-- **Usage is checked as if staged**, whichever path a buffer takes:
-  `TRANSFER_DST` for an upload, `TRANSFER_SRC` for a readback. Otherwise a
-  host-visible buffer missing the bit would work until the day it moved into
-  device memory.
+- **One path each way.**
+  - **Uploads.** One of up to 64 KiB, 4-byte aligned (a frame's parameters)
+    is written inline in the command buffer with `vkCmdUpdateBuffer`, so no
+    buffer is mapped for it. A larger one, such as a depth frame, is staged
+    through a host-visible buffer the batch allocates and frees.
+  - **Readbacks** are copied into one small host buffer allocated at
+    `submit`.
+
+  Nothing is read or written through a mapping of the destination, so a
+  buffer's memory type never changes what a batch does.
+- **No staging arena.** Staging happens only at the edges. VMA carves small
+  buffers out of blocks it keeps, so a staging buffer per call costs
+  microseconds. The first cut kept a persistent, grow-only arena per tier
+  object and dropped it before merge. Its saving was unmeasured, and its
+  cost was an object every tier had to own and a one-batch-at-a-time rule
+  its own test tripped over. Revisit if a tier's host rows show the
+  allocations.
+- **Usage is checked on every buffer**, host-visible ones included:
+  `TRANSFER_DST` for an upload, `TRANSFER_SRC` for a readback. Every path
+  copies, so every buffer needs the bits, and moving one into device memory
+  later cannot turn up a missing bit.
 - **A refused call poisons the batch.** `submit` returns the first refusal and
-  runs nothing. An upload that already went straight into a mapping stays
-  written.
-- **Submitting releases the arena**, so the next batch can start while this
-  one is still in scope. The first cut released it only on destruction, and
-  its own test then passed several refusals for the wrong reason: the arena
-  was still taken.
-- **The arena is grow-only and lazy.** A batch that needed several chunks
-  leaves one chunk of their combined size, so a call whose traffic is steady
-  allocates nothing from its second run on.
+  runs nothing.
 - **`dispatch_indirect`** is here now because the tiers need it next. A count
   a kernel writes on the device can size the next dispatch without reaching
   the host, which is how the active-list round trip goes.
@@ -5783,7 +5787,10 @@ so that Apple could skip staging. It was dropped before merge:
   the same invisible-where-tested class as the host-visible locks.
 
 With plain device memory, a Mac run is the NVIDIA path. Revisit it with a
-measurement of staging on the memory-bound iPad.
+measurement of staging on the memory-bound iPad. The first cut's shortcuts
+through a mapped destination went with it, for the same reason and because
+nothing in the loop is mapped: uploads target device memory, and readbacks
+are small counts.
 
 `device_storage_buffer` now adds `TRANSFER_SRC | TRANSFER_DST` usage and takes
 extra usage and queue families, so a batch can fill, copy and stage through
@@ -5792,27 +5799,29 @@ anything it makes, and the mesh arena can use it. #99's
 exercise it on every CI leg.
 
 **Verified.** `recon_core_command_batch` runs every call over a device-local
-buffer, always staged, and a host-visible one, always mapped. So both
-machines run both paths.
+and a host-visible buffer with the same expectations. It runs under the
+Khronos validation layer wherever that is installed (this Mac and the Linux CI
+images), and fails on any error the layer reports.
 
-- **Orders that would expose a misplaced shortcut:** an upload recorded after
-  a dispatch into the same buffer, and a readback recorded before one.
-- **The rest:** fills and copies at offsets, an indirect dispatch sized by an
-  uploaded command, two timed dispatches in one submit publishing their row,
-  each refusal with its batch poisoned, one batch per arena, growth settling
-  to one chunk, and the arena's moves.
+- **Orders that would expose a command run out of place:** an upload recorded
+  after a dispatch into the same buffer, and a readback recorded before one.
+- **The rest:** inline, staged (past 64 KiB) and unaligned staged uploads;
+  several readbacks of odd sizes in one batch; fills and copies at offsets;
+  an indirect dispatch sized by an uploaded command; two timed dispatches in
+  one submit publishing their row; each refusal, with its batch poisoned.
 
 The whole suite passes on both machines, 41 of 41, the 5090's build with GCC
 13 at `-O3 -Werror` in the CI image. Each of these fails the test:
 
-- going direct on an upload after a command, or on a readback before one;
+- an inline upload past 64 KiB or off 4-byte alignment. Only the validation
+  layer sees this one; MoltenVK runs it anyway.
+- dropping an inline upload's offset, or a staged copy's source offset;
+- readbacks sharing one slice;
 - skipping either usage check;
 - submitting a poisoned batch;
-- not consolidating the arena;
 - not resolving the timers;
 - dropping the overlap check;
-- ignoring the indirect command;
-- keeping the arena after submit.
+- ignoring the indirect command.
 
 Dropping the barriers between commands fails it too, 10 runs of 10, but only
 on the 5090: MoltenVK orders the same work without them. So CI's NVIDIA legs
