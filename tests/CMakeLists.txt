@@ -352,6 +352,27 @@ foreach(_vr_codec_host_test rans bitstream)
            COMMAND recon_codec_${_vr_codec_host_test}_test)
 endforeach()
 
+# codec tier, public API: the Encoder (an empty grid, bytes independent of the
+# hash table's order, unobserved blocks left out, its rows, refusals, moves) and
+# the Decoder with the codec end to end -- a decoded grid within the orthonormal
+# bound of its source, meshing to the analytic sphere it came from, frame after
+# frame into one grid, untouched on every early refusal, and OutOfMemory that a
+# resize recovers. Public headers only, plus the shared codec_fixture.hpp; the
+# decoder test links recon_mesh, which the tier may not. Both skip (exit 0) with
+# no device.
+add_executable(recon_codec_encoder_test codec_encoder_test.cpp)
+target_link_libraries(recon_codec_encoder_test
+                      PRIVATE volumetric_kit::recon_codec Vulkan::Vulkan)
+vr_target_warnings(recon_codec_encoder_test)
+add_test(NAME recon_codec_encoder COMMAND recon_codec_encoder_test)
+
+add_executable(recon_codec_decoder_test codec_decoder_test.cpp)
+target_link_libraries(
+  recon_codec_decoder_test PRIVATE volumetric_kit::recon_codec
+                                   volumetric_kit::recon_mesh Vulkan::Vulkan)
+vr_target_warnings(recon_codec_decoder_test)
+add_test(NAME recon_codec_decoder COMMAND recon_codec_decoder_test)
+
 # The Orbbec SDK prerequisite (VR_WITH_ORBBEC only): the copy the build found is
 # the one that loads -- runtime version == configured version, since the SDK is
 # linked in place from an install outside the repo -- and an SDK context opens

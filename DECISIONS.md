@@ -4285,6 +4285,207 @@ unmeasured. Discovery once found no camera for 8 s right after another
 process released one. A set's frames are processed one camera after another
 (a `TODO(sensor)`). No real rig poses exist yet; that waits on calib.
 
+### 2026-09-27 — `Encoder` and `Decoder` are the codec's public API: encoding drops never-observed blocks and sorts the rest, decoding makes a caller's grid hold exactly the frame by diffing its block set, everything checkable is checked before the grid is touched, and a grid too small for the frame is refused rather than grown.
+
+The third of the 2026-09-26 entry's five PRs, and the first public API the
+codec has had: `codec/encoder.hpp` (`Encoder`, `EncoderConfig`) and
+`codec/decoder.hpp` (`Decoder`, `FrameInfo`, `read_frame_info`). Both hold the
+private `DctTransform` through a `std::unique_ptr` to a forward declaration, so
+the installed headers name nothing under `src/`.
+
+**Encoding.** `Encoder::encode(grid)` works in five steps:
+1. Compact the active set.
+2. Sort it by (z, y, x).
+3. Run the forward transform.
+4. Drop every block whose mask is empty.
+5. Write the frame.
+
+The sort puts the blocks in the order the frame format requires, and it is also
+what makes the output independent of hash order. A test pins this: two grids
+with the same content, allocated in opposite orders into tables of different
+sizes, give identical bytes.
+
+**Why drop never-observed blocks.** A fused grid allocates the whole
+truncation band, and much of it is never integrated. Such a block costs a
+coordinate and a mask class in the frame and contributes nothing to the mesh,
+since the mesher skips unobserved corners. The filter runs after the transform
+because the mask is what says which blocks those are. As a result a decoded
+grid can hold fewer blocks than the source grid, with the same surface.
+
+**Decoding into the caller's grid, by diffing.** The grid is the caller's, as
+it is for every tier. After `Decoder::decode(frame, grid)` succeeds, the grid
+holds **exactly** the frame's blocks. The decoder does not clear it for that:
+at playback rate, clearing a large grid would zero every attribute array each
+frame. Instead it merges two sorted lists, the grid's current active set and
+the frame's coordinates:
+- Blocks the frame lacks are removed; `VoxelBlockGrid::remove` zeroes them.
+- Blocks the grid lacks are allocated.
+- Blocks in both are kept in their slots.
+
+The inverse transform then rewrites every voxel's `tsdf` and `weight`, so a
+kept block carries nothing over from the previous frame. A test pins that a
+kept block keeps its slot, which is what makes the sort matter. An unsorted
+merge still gives the right grid, but it removes and re-allocates blocks it
+should have kept. When the merge allocates nothing, its kept blocks are the
+frame's blocks in the frame's order, in the slots the first compaction read,
+since a removal frees other blocks' slots and moves none. So that pass skips
+the second compaction and its sort. A grid that declares any attribute beyond
+`tsdf` and `weight` is refused. A kept block would otherwise carry that
+attribute's previous values (a `color`, say) under the new geometry, and the
+2026-08-04 rule makes a staleness the caller cannot see the library's to
+check. `VoxelBlockGrid::attribute_count()` exists for that check.
+`read_frame_info` reads the header alone, which is what a player uses to
+build a grid of the stream's geometry before its first decode.
+
+**Checked before the grid is touched:** the grid's block size and attributes,
+the whole frame parsed and entropy-decoded, the grid's geometry matched
+exactly, and the frame fitting its heap. Geometry is compared exactly, not
+approximately: the coordinates are in the grid's voxels and the coefficients
+are fractions of its band, so a frame from a grid of other geometry would
+otherwise decode to the wrong place at the wrong scale and report OK. A
+refusal at any of these checks leaves the grid bit for bit as it was, which
+the tests check for truncation, a flipped byte, another geometry, a heap too
+small, a missing attribute and an extra one. The inverse transform's
+`maxStorageBufferRange` checks come after the grid has changed, but they
+cannot refuse there. Once the frame fits the heap, every buffer the inverse
+binds is at most the grid's 4-byte `tsdf` array:
+- K ≤ 512 coefficients per block
+- 16 mask words per block
+- one 16-byte list entry per block
+- 20 bytes of hash entry per slot
+
+`VoxelBlockGrid::create` and `resize` bound that array to the limit, and
+`attribute()` confirms it still covers the grid. Only three failures can come
+after the grid has changed: a hash table that cannot place the blocks, bucket
+locks that keep losing races, or a failed dispatch. The grid is then valid but
+holds **neither** frame. Blocks both frames share still hold the previous
+frame's voxels, and blocks new to this frame are empty. The next successful
+decode restores it exactly, because each decode diffs against whatever the
+grid holds.
+
+**Refused, not grown.** A grid too small for the frame gets `OutOfMemory`,
+whether its heap has fewer slots than the frame has blocks or its hash table
+cannot place them. The message names the fix (`resize`), and one recovery
+serves both cases. Growing is policy the library leaves to its callers: the
+examples grow (`allocate_band`), and no tier does. The heap case comes from
+the frame reader, which checks `max_blocks` only after the block count agrees
+with the segment table. A corrupt count is therefore still `InvalidArgument`,
+and only a sound frame is refused for its size. Lock contention is not a
+capacity limit, so the decoder retries it itself, removal and allocation
+alike, up to four rounds each, since both calls already re-dispatch
+internally. Contention that outlasts the rounds is `IoError` ("decode
+again"), never `OutOfMemory`: growing on it would double every attribute
+array over a table with room, which is the misreading `AllocFailures` exists
+to prevent. A removed block the free heap refuses is `IoError` too. The heap
+only takes back what it handed out, so that grid's accounting was already
+broken. Tests build both too-small grids, get `OutOfMemory`, resize, and
+decode the same frame exactly. The first grid has 32 slots for a larger
+frame. The second has as many slots as blocks, two per bucket and chains of
+one.
+
+**Metrics from the start.** The public API would otherwise change in the next
+PR, whose room0 run measures exactly these rows:
+- `"codec encode"` over `"  ..active set"`, `"  ..sort"`, `"  ..forward"`
+  and `"  ..rans encode"`.
+- `"codec decode"` over `"  ..rans decode"`, `"  ..active set"` (the
+  compactions), `"  ..apply"` (the merge, the removal and allocation, and
+  ordering and checking the placed set) and `"  ..inverse"`.
+
+Rows merge by name, so the two sides share no name of their own: an encode
+and a decode timed into one `StageMetrics` stay apart, and a test pins it.
+The one row they share is `"  ..active set"`. The map itself publishes that
+row for every caller that compacts inside a stage, `tsdf` included.
+
+The parent row's device half is the transform, timed through a `GpuStageScope`
+that `DctTransform::forward` and `inverse` now take. The encoder takes the grid
+by non-const reference because compaction runs the map's kernels, as
+`MarchingCubes::extract_host` does. It reads the grid and never writes it.
+
+**Measured**, on an analytic sphere (radius 0.12 m, 5 mm voxels, 40 mm band,
+298 coded blocks) meshed with `MarchingCubes` and judged against the true
+surface, not against the source mesh:
+
+| | size | triangles vs. source | worst / mean vertex off the sphere |
+|---|---|---|---|
+| source grid (the analytic SDF) | — | 21 472 | 0.005 / 0.002 voxels |
+| defaults (K = 32) | **35.8 B/block** | ×1.0067 | 0.27 / 0.06 voxels |
+| near-lossless (K = 512, steps 0.002) | 289 B/block | ×1.0007 | 0.014 / 0.003 voxels |
+
+At near-lossless settings the worst voxel error is 0.12 mm, against the
+0.9 mm the orthonormal bound allows. The room0 run in the next PR is the
+real-content version of this table, and it is where the defaults get tuned.
+
+**Verified** on macOS (Apple M5 Max), in Release and in Debug under ASan +
+UBSan. The full suite passes, 34 of 34 against 32 before.
+`recon_codec_encoder` and `recon_codec_decoder` are new; they share
+`tests/codec_fixture.hpp`, and the decoder test links `recon_mesh`, which the
+tier itself may not. Mutation-checked with eight planted bugs, each caught:
+- keeping unobserved blocks
+- sorting by `ptr`
+- never removing
+- no geometry check
+- a capacity failure reported as the wrong code
+- the attribute check skipping `weight`
+- the heap bound dropped
+- the merge left unsorted (caught by the slot-keeping check)
+
+**What the review changed.** A review found the gaps above, and each fix is
+in the text: the heap case's code, the contention and heap-refusal codes, the
+removal's count, the extra-attribute refusal, the post-failure state, and the
+row names. It also found two costs:
+- `VoxelBlockGrid::remove` found each removed block by scanning the whole
+  active set, which is O(k·n) for k of n blocks. It now sorts the snapshot
+  once and binary-searches, so a decoder removing thousands of blocks a frame
+  pays O((k + n) log n).
+- The encoder copied every observed block's coefficients into a second set of
+  vectors, so it held the readback twice. It now slides kept blocks down in
+  place and moves the result into the frame. The sphere figures above are
+  unchanged by it.
+
+Two smaller fixes: `sort_by_coord` now lives beside `coord_less` in
+`bitstream.hpp`, so the encoder and decoder share one frame order, and a
+`static_assert` ties `EncoderConfig::segment_size` to the writer's
+`kDefaultSegmentSize`. A moved-from `Encoder` now reports an all-zero
+configuration, consistent with `valid()`. The reader's messages now say
+`codec frame:`, not the private `read_intra_frame:`, since `read_frame_info`
+and `decode` both surface them.
+
+Nine more planted bugs, each caught:
+- the heap limit refused as `InvalidArgument`
+- the heap limit checked before the segment table
+- no extra-attribute refusal
+- the no-allocation pass skipping the removal
+- the no-allocation pass using the pre-merge set
+- the in-place filter moving masks only
+- a defaulted `Encoder` move
+- a decoder row sharing the encoder's name
+- `VoxelBlockGrid::remove` matching on z alone
+
+Two of them needed a test first. The in-place filter was invisible, because no
+test grid had a dropped block sorting *before* a kept one, so nothing ever
+slid. The round trip now plants one. The z-only match was invisible because
+the volume test removed a single block, and it now removes two of four in one
+z plane. Verified in Release and in Debug under ASan + UBSan, 34 of 34. The
+changed sources and tests also compile at `-O3 -Werror` under GCC 13.3 in an
+`ubuntu:24.04` container, the CI leg local toolchains have missed before.
+
+**Declined in review.**
+- Moving the inverse's buffer-range checks ahead of the grid change. They
+  cannot fire there (see above), so a second copy of them would guard
+  nothing.
+- Renaming `"  ..active set"`. It is the map's row, published by
+  `compact_active_blocks` for every caller, so the codec reporting under it is
+  the design, not a collision. Timing the codec's compactions under a name of
+  its own would lose their device half.
+- A test of the contention and heap-refusal paths. Neither can be provoked
+  from outside the map without planting a fault in its kernels.
+
+**Open.**
+- The room0 measurement and tuning of the defaults (the next PR).
+- The GPU coder, if that measurement calls for it.
+- P-frames. Blocks kept in their slots across frames are what an incremental
+  re-mesh of a decoded stream would need.
+
 ## Measured lessons
 
 Not decisions, but the measurements that overturned an assumption about
