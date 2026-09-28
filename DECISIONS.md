@@ -5225,13 +5225,29 @@ out-of-range barycentric on demand. The first cut's own sixteen mutants were
 mostly pseudonormal ones, and went with them.
 
 **Open.**
-- The codec round trip, meaning mesh → TSDF → DCT → v1 frame → decode → mesh
-  measured against the source mesh, is the next PR. Measured against the
-  source, it will read worse than the research codec's figures at the same
-  settings: that evaluation appears to have scored its own output against the
-  marching-cubes extraction of its uncompressed conversion (`ObjMeshingOp`
-  writes it to the run's `ground_truth/`), where Draco was scored against the
-  source meshes, so conversion error never counted against it.
+- **The codec round trip** has a test, `recon_codec_mesh_roundtrip`: mesh →
+  TSDF → DCT → v1 frame → decode → mesh, with the decoded surface measured
+  against the source mesh for accuracy (vertex to source) and coverage (source
+  to surface). The uncompressed volume's surface is the floor. Measured on an
+  M5 Max, Release, 5 mm voxels:
+
+  | fixture | frame | of raw | decoded rms / max | floor rms / max |
+  |---|---|---|---|---|
+  | 0.3 m sphere, K = 32 (default) | 21.7 KB | 0.8% | 0.39 / 1.42 mm | 0.018 / 0.155 mm |
+  | same, K = 512 | 37.6 KB | 1.4% | 0.22 / 1.08 mm | same |
+  | dented cube, K = 32 | 14.3 KB | 0.7% | 0.65 / 3.11 mm | 0.15 / 1.54 mm |
+
+  The cube's floor is marching cubes, not the field: the dent closes six of
+  its edges to about 56°, and a wedge that thin is cut back by up to a voxel
+  (7.1 mm of coverage) before anything is compressed. The test's bounds sit at
+  about twice these figures.
+
+  Measured against the source, these read worse than the research codec's
+  figures at the same settings would: that evaluation appears to have scored
+  its own output against the marching-cubes extraction of its uncompressed
+  conversion (`ObjMeshingOp` writes it to the run's `ground_truth/`), where
+  Draco was scored against the source meshes, so conversion error never
+  counted against it.
 - **What it costs**, on an 81 920-triangle sphere 1 m across, its triangles
   about 1.6 voxels on a side like a scan's (Apple M5 Max, Release, 5 mm voxels,
   the 40 mm band, a table of 2 048 buckets of 8; 6 861 blocks, 1.97 M bin

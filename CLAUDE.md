@@ -984,12 +984,16 @@ truth. The debug-utils labels that TODO
 sat beside **have landed** (2026-08-30) — on the *kernel* rather than the span,
 which is the correction that entry records.
 
-**On `tsdf`**, mesh → TSDF has its two modes (2026-09-27), and what follows it
-is the codec round trip: mesh → TSDF → DCT → v1 frame → decode → mesh, measured
+**On `tsdf`**, mesh → TSDF has its two modes (2026-09-27), and the codec has a
+ground-truth round trip over it: `recon_codec_mesh_roundtrip` takes a mesh
+through the DCT and v1 frame bytes and back, and measures the decoded surface
 against the *source* mesh, which fused room0 cannot give (there is no
-ground-truth mesh beside it). Both modes cost the same, measured on an
-81 920-triangle sphere at scan density (M5 Max, Release): 12.8 ms to write,
-10.8 ms of it on the GPU, after 14.2 ms to allocate.
+ground-truth mesh beside it). At the default parameters a 0.3 m sphere's frame
+is 0.8% of the raw `tsdf` + `weight` and decodes to 0.39 mm RMS from the source,
+against 0.018 mm uncompressed — the fixture PR 4's tuning can hold its
+parameters to. Both modes cost the same, measured on an 81 920-triangle sphere
+at scan density (M5 Max, Release): 12.8 ms to write, 10.8 ms of it on the GPU,
+after 14.2 ms to allocate.
 
 **On `sensor`**, each a `TODO(sensor)`: GPU pre-processing that keeps the
 frame on the device through fusion (`camera_stream.cpp`), including the
