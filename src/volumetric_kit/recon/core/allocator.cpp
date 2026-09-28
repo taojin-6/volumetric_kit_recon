@@ -95,6 +95,8 @@ Result<Allocator> Allocator::create(VkInstance instance, const Device& device) {
       effective >= VK_API_VERSION_1_1 ? VK_API_VERSION_1_1 : VK_API_VERSION_1_0;
   info.pVulkanFunctions = &functions;
 
+  // Never VMA_ALLOCATOR_CREATE_EXTERNALLY_SYNCHRONIZED_BIT: batches on
+  // several threads allocate from one allocator (allocator.hpp).
   auto impl = std::make_shared<Impl>();
   VR_VK_TRY(vmaCreateAllocator(&info, &impl->allocator));
   impl->queue_family_count = static_cast<std::uint32_t>(

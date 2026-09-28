@@ -808,8 +808,7 @@ int run(GLFWwindow* window, const Options& opt) {
   // shared device's queue plan: they do under kTwoQueuesOneFamily and
   // kTwoFamilies (a queue each), and serialize under kSharedQueue (one queue
   // behind a mutex) -- which is why the bootstrap prefers a second family over
-  // sharing a queue. recon's device wrapper is used solely on this thread
-  // (submit_single_time is not thread-safe: it owns one command pool).
+  // sharing a queue. recon's device wrapper is used solely on this thread.
   // -------------------------------------------
   std::mutex share_mtx;
   // The extractor's own buffers, borrowed -- handles and counts, not bytes.

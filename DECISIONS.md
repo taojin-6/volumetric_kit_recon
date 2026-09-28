@@ -6132,6 +6132,56 @@ shared with Vulkan.
 buffer and a fence per submit; reusing them is a `TODO(core)` for when a tier
 measures it.
 
+### 2026-09-28 — A `Device` takes submits from several threads at once: each records on a command pool of its own, and only the queue is locked.
+
+Step 5b prepares the rig's cameras on the GPU in parallel, a thread per
+camera, and two threads batching on one `Device` were undefined. Every submit
+allocated, recorded and freed its command buffer on the device's one
+`VkCommandPool`, which Vulkan requires be externally synchronized, and a
+created device called `vkQueueSubmit` with no lock. Four threads of fifty
+batches on one device failed 3 of 3 runs under the validation layer:
+`THREADING ERROR` on the pool, and one segfault.
+
+**Each submit takes a command buffer no other submit holds**, on a pool of
+its own, from a free list the device keeps. When every one is in use it makes
+another, so the list grows to the most submits ever in flight at once, and
+recording takes no lock. The buffer goes back once its wait is done and is
+begun again by the next submit, which the pool's `RESET_COMMAND_BUFFER` flag
+allows. A failed wait leaves it to the device, as before, and `destroy()`
+frees every pool made, that one included. The fence is still made per submit,
+the `TODO(core)` the entry above left.
+
+**Only the queue is locked**: under the embedder's mutex on a queue shared
+with another library, else under the device's own, so `submit_mutex()` is
+never null. It is not held across the wait. This amends the 2026-07-05
+dispatch entry: "shared-queue-safe" now holds for every queue.
+
+**What a caller records stays its own**: a kernel's descriptor set, a buffer,
+a `GpuTimer`. The `Allocator` a batch stages through may be shared, because
+VMA locks its own state; it must stay created without
+`VMA_ALLOCATOR_CREATE_EXTERNALLY_SYNCHRONIZED_BIT`.
+
+`Device::command_pool()` is gone. There is no one pool to hand out, and a
+caller recording on it would race the device's submits.
+
+**The review of the first cut** changed:
+
+- The first cut locked the one pool from allocate to end of recording, and a
+  created device used that mutex for its queue too. An adopted device given
+  no embedder mutex still submitted unlocked. That is `fuse_viewer`'s layout
+  whenever its queue is not shared, so the race remained on the path the
+  viewer runs. The test now runs on such a device too, and fails 3 of 3 when
+  only its queue is left unlocked.
+- `record` ran under the pool lock, so a callback that submitted on the same
+  device deadlocked, and one thread's submit held up every other thread's
+  recording. Neither can happen now, since no lock is held while recording.
+- The test also stages an upload past the inline limit, times it on a timer
+  per thread, and prints each failure's thread, round and first refusal.
+
+Sharing one pool across threads, as a mutant, fails the test 3 of 3 with
+`THREADING ERROR` on the pool and a segfault; dropping the queue lock fails it
+3 of 3 on the queue. With neither, it passes 20 of 20 on the M5 Max.
+
 ## Measured lessons
 
 Not decisions, but the measurements that overturned an assumption about

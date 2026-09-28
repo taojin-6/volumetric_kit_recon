@@ -4,13 +4,12 @@
 #pragma once
 
 /// @file device.hpp
-/// @brief The logical device: a compute (+ transfer) queue, a command pool, and
-///        the create-or-adopt seam that lets recon run standalone or share one
-///        `VkDevice` with the renderer.
+/// @brief The logical device: a compute (+ transfer) queue, its command pools,
+///        and the create-or-adopt seam that lets recon run standalone or share
+///        one `VkDevice` with the renderer.
 
 #include <cstdint>
 #include <functional>
-#include <memory>
 #include <mutex>
 #include <type_traits>
 #include <vector>
@@ -150,7 +149,8 @@ struct AdoptedDevice {
   VkQueue compute_queue = VK_NULL_HANDLE;
   /// When non-null, the assigned queue is shared with another library; every
   /// `vkQueueSubmit` on it must hold this mutex (Vulkan requires queue submits
-  /// be externally synchronized).
+  /// be externally synchronized). When null, the @ref Device locks the queue
+  /// with a mutex of its own.
   std::mutex* submit_mutex = nullptr;
 
   /// Device extensions the creator enabled on `device` (for `adopt`'s
@@ -185,8 +185,9 @@ struct AdoptedDevice {
   bool enabled_debug_utils = false;
 };
 
-/// @brief Owns *or borrows* a `VkDevice`, its compute (+ transfer) queue, and a
-///        compute command pool. Holds no surface/swapchain — recon is headless.
+/// @brief Owns *or borrows* a `VkDevice` and its compute (+ transfer) queue,
+///        and owns the command pools it submits from. Holds no
+///        surface/swapchain — recon is headless.
 ///
 /// @warning The @ref Instance / device in the create or adopt inputs must
 ///          outlive this object; it stores only borrowed handles.
@@ -240,7 +241,7 @@ class VR_CORE_API Device {
 
   /// @brief Adopt a `VkDevice` an embedder already created, **without owning
   ///        it** — the destructor leaves the `VkDevice` alone (it still creates
-  ///        and owns its own command pool). Use this to run recon on a device
+  ///        and owns its own command pools). Use this to run recon on a device
   ///        shared with the renderer.
   /// @param adopted  The existing handles, the compute queue assigned to recon,
   ///                 and what the creator enabled on the device.
@@ -285,8 +286,6 @@ class VR_CORE_API Device {
   }
   /// @return The compute queue.
   VkQueue compute_queue() const noexcept { return compute_queue_; }
-  /// @return The compute-family command pool (created `RESET_COMMAND_BUFFER`).
-  VkCommandPool command_pool() const noexcept { return command_pool_; }
   /// @return Whether this wrapper owns (and will destroy) the `VkDevice`.
   ///         `false` for a device obtained through @ref adopt.
   bool owns_device() const noexcept { return owns_device_; }
@@ -364,18 +363,21 @@ class VR_CORE_API Device {
   /// @param cmd   The command buffer the region was opened on.
   /// @param name  The name @ref begin_debug_label was called with.
   void end_debug_label(VkCommandBuffer cmd, const char* name) const noexcept;
-  /// @return The mutex guarding submits on a shared queue, or `nullptr` when
-  /// the
-  ///         queue is exclusively this device's.
-  std::mutex* submit_mutex() const noexcept { return submit_mutex_; }
+  /// @return The mutex every submit on @ref compute_queue holds: the
+  ///         embedder's (@ref AdoptedDevice::submit_mutex) on a queue shared
+  ///         with another library, else this device's own. Never null. Hold
+  ///         it only around a `vkQueueSubmit` of your own; @ref queue_submit
+  ///         takes it for you.
+  std::mutex* submit_mutex() const noexcept {
+    return submit_mutex_ != nullptr ? submit_mutex_ : &queue_mutex_;
+  }
 
-  /// @brief Submit to the compute queue, holding @ref submit_mutex when the
-  ///        queue is shared with another library (an adopted device).
+  /// @brief Submit to the compute queue, holding @ref submit_mutex.
   ///
-  /// Vulkan requires queue submits be externally synchronized; on a shared
-  /// queue the neutral bootstrap hands recon a mutex, and every submit must
-  /// hold it. Prefer @ref submit_single_time for a one-shot dispatch; this is
-  /// the lower-level primitive for a caller batching its own command buffers.
+  /// Vulkan requires queue submits be externally synchronized, so this is
+  /// safe from several threads at once. Prefer @ref submit_single_time for a
+  /// one-shot dispatch; this is the lower-level primitive for a caller
+  /// batching its own command buffers.
   /// @param count    Number of `VkSubmitInfo`s in @p submits.
   /// @param submits  The submit batch.
   /// @param fence    Fence signalled on completion (may be `VK_NULL_HANDLE`).
@@ -386,19 +388,22 @@ class VR_CORE_API Device {
   /// @brief Record a one-time command buffer, submit it to the compute queue,
   ///        and block until the GPU finishes — the simplest dispatch primitive.
   ///
-  /// Allocates a primary command buffer from @ref command_pool, begins it
+  /// Takes a primary command buffer of this call's own, begins it
   /// (`ONE_TIME_SUBMIT`), invokes @p record to fill it (bind pipeline, bind
   /// descriptors, push constants, dispatch, barriers), then ends, submits
   /// (through @ref queue_submit, so it is shared-queue-safe), and waits on an
-  /// internal fence. Every transient — command buffer and fence — is freed
-  /// before returning. Blocking, so it is a bring-up / single-shot primitive;
-  /// the fusion tiers will batch many dispatches per submit on their own.
+  /// internal fence. The fence is freed and the command buffer kept for a
+  /// later submit before returning. Blocking, so it is a bring-up /
+  /// single-shot primitive; the fusion tiers will batch many dispatches per
+  /// submit on their own.
   ///
-  /// Thread-safe: several threads may submit on one @ref Device at once. The
-  /// command pool is locked while a buffer is allocated, recorded and freed,
-  /// and the queue while it is submitted, but not across the wait, so
-  /// threads overlap their waits. What a caller records must still be its
-  /// own: a kernel's descriptor set or a buffer is not locked.
+  /// Thread-safe: several threads may submit on one @ref Device at once. Each
+  /// call records on a command pool no other call is using, so recording
+  /// takes no lock and @p record may itself submit on this device; only the
+  /// `vkQueueSubmit` is serialized, through @ref queue_submit. What a caller
+  /// records must still be its own: a kernel's descriptor set, a buffer and a
+  /// @ref GpuTimer are not locked. The @ref Allocator a batch stages through
+  /// is.
   /// @param record  Records compute commands into the given command buffer.
   /// @return OK once the work completes, or a non-OK @ref Status if any Vulkan
   ///         step fails.
@@ -464,16 +469,32 @@ class VR_CORE_API Device {
 
   VkPhysicalDevice physical_ = VK_NULL_HANDLE;
   VkDevice device_ = VK_NULL_HANDLE;
-  VkCommandPool command_pool_ = VK_NULL_HANDLE;
   // False when the device was adopted (@ref adopt): destroy() then tears down
-  // only the command pool this wrapper made and leaves the VkDevice to its
+  // only the command pools this wrapper made and leaves the VkDevice to its
   // owner. Reset on every ownership transfer.
   bool owns_device_ = true;
+  // The embedder's, on a queue shared with another library; else null, and
+  // queue_mutex_ guards the queue. A mutex cannot move, so a device moved to
+  // uses its own.
   std::mutex* submit_mutex_ = nullptr;
-  // Guards command_pool_, which Vulkan requires be externally synchronized,
-  // and on a created device the queue too (submit_mutex_ points at it). Never
-  // held with submit_mutex_ at once, so the two orders cannot deadlock.
-  std::unique_ptr<std::mutex> pool_mutex_;
+  mutable std::mutex queue_mutex_;
+
+  // A command buffer on a pool of its own. Vulkan requires a pool be
+  // externally synchronized, so each submit takes one no other submit holds
+  // and records with no lock: a free one, or a new one when every one is in
+  // use. It is given back once its wait is done, and pools_ keeps every pool
+  // made, so destroy() frees them all, one a failed wait left to the device
+  // included.
+  struct Command {
+    VkCommandPool pool = VK_NULL_HANDLE;
+    VkCommandBuffer buffer = VK_NULL_HANDLE;
+  };
+  Result<Command> take_command() const;
+  void give_back(Command command) const noexcept;
+  mutable std::mutex commands_mutex_;  // guards pools_ and free_commands_
+  mutable std::vector<VkCommandPool> pools_;
+  mutable std::vector<Command> free_commands_;
+
   std::uint32_t compute_family_ = 0;
   VkQueueFlags compute_family_flags_ = 0;
   VkQueue compute_queue_ = VK_NULL_HANDLE;
