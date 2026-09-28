@@ -116,8 +116,8 @@ Result<OrbbecRig> OrbbecRig::open(const Options& options) {
   VR_TRY(orbbec::validate(options));
   auto impl = std::make_unique<Impl>();
   std::vector<std::string> serials;
-  for (const RigCameraPose& camera : options.cameras) {
-    serials.push_back(camera.serial);
+  for (const OrbbecSyncDevice& device : options.sync.devices) {
+    serials.push_back(device.serial);
   }
   try {
     if (options.configure_sdk_logging) orbbec::configure_sdk_logging();
@@ -126,14 +126,46 @@ Result<OrbbecRig> OrbbecRig::open(const Options& options) {
     VR_ASSIGN(const auto devices,
               orbbec::discover(*impl->context, serials,
                                options.discovery_timeout_ms, "OrbbecRig"));
-    std::vector<OrbbecSyncMode> modes;
     for (std::size_t i = 0; i < devices.size(); ++i) {
-      VR_ASSIGN(auto stream, orbbec::CameraStream::create(
-                                 impl->context, devices[i], options,
-                                 options.cameras[i].cam_to_world, "OrbbecRig"));
-      modes.push_back(stream->info().sync_mode);
+      Mat4f pose(1.0f);
+      for (const RigCameraCalibration& c : options.calibration) {
+        if (c.serial == serials[i]) pose = c.cam_to_world;
+      }
+      VR_ASSIGN(auto stream,
+                orbbec::CameraStream::create(impl->context, devices[i], options,
+                                             pose, "OrbbecRig"));
       stream->set_queue_depth(kQueueDepth);
       impl->streams.push_back(std::move(stream));
+    }
+    // The sync configuration is the rig's hardware state: compare each camera
+    // with it, and write it only where it differs, only when asked.
+    std::string differences;
+    for (std::size_t i = 0; i < devices.size(); ++i) {
+      const OrbbecSyncSettings& wanted = options.sync.devices[i].sync;
+      auto diff =
+          orbbec::sync_differences(wanted, impl->streams[i]->sync_settings());
+      if (!diff.empty() && options.apply_sync_config) {
+        VR_TRY(impl->streams[i]->apply_sync(wanted));
+        diff =
+            orbbec::sync_differences(wanted, impl->streams[i]->sync_settings());
+      }
+      if (diff.empty()) continue;
+      differences += (differences.empty() ? "" : "; ") + serials[i] + " ";
+      for (std::size_t k = 0; k < diff.size(); ++k) {
+        differences += (k == 0 ? "" : ", ") + diff[k];
+      }
+    }
+    if (!differences.empty()) {
+      return Status::unsupported(
+          "OrbbecRig: cameras differ from the sync configuration: " +
+          differences +
+          (options.apply_sync_config
+               ? std::string("; they did not keep it when written")
+               : std::string("; set apply_sync_config to write it")));
+    }
+    std::vector<OrbbecSyncMode> modes;
+    for (const auto& stream : impl->streams) {
+      modes.push_back(stream->info().sync_mode);
     }
     VR_ASSIGN(impl->start_order, orbbec::rig_start_order(modes, serials));
   } catch (const std::exception& e) {  // ob::Error is one
@@ -142,7 +174,7 @@ Result<OrbbecRig> OrbbecRig::open(const Options& options) {
   impl->primary = impl->start_order.back();
   impl->clock_sync_interval_ms = options.clock_sync_interval_ms;
   orbbec::TriggerGrouper::Config grouping;
-  grouping.cameras = options.cameras.size();
+  grouping.cameras = options.sync.devices.size();
   grouping.anchor = impl->primary;
   grouping.tolerance_us = options.sync_tolerance_us;
   // A frame and a half: long enough for a late camera's frame to arrive,

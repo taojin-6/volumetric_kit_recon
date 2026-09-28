@@ -18,7 +18,8 @@
 #include "volumetric_kit/recon/sensor/camera_capture.hpp"
 #include "volumetric_kit/recon/sensor/orbbec/export.hpp"
 #include "volumetric_kit/recon/sensor/orbbec/orbbec_capture.hpp"
-#include "volumetric_kit/recon/sensor/rig_poses.hpp"
+#include "volumetric_kit/recon/sensor/orbbec/orbbec_sync_config.hpp"
+#include "volumetric_kit/recon/sensor/rig_calibration.hpp"
 
 namespace volumetric_kit::recon::sensor {
 
@@ -32,7 +33,7 @@ struct OrbbecRigFrameSet {
   /// One entry per camera, in @ref OrbbecRig::Options::cameras order; empty
   /// where that camera's frame for this trigger never arrived, or where the
   /// SDK failed on it -- the only way the primary's is empty. Each frame is
-  /// posed by its camera's @ref RigCameraPose.
+  /// posed by its camera's calibration.
   std::vector<std::optional<CapturedFrame>> frames;
 
   /// @return How many cameras this set holds a frame from.
@@ -52,9 +53,12 @@ struct OrbbecRigStats {
 
 /// @brief Several Orbbec cameras wired for hardware sync, read as one rig.
 ///
-/// @ref start starts every secondary before the primary -- the primary's first
-/// trigger is what they wait for -- and has the SDK keep the cameras' clocks on
-/// the host's. @ref poll_set groups frames by that clock, within
+/// @ref open checks each camera's stored sync settings against the rig's sync
+/// configuration, and writes the configuration to the cameras that differ
+/// only when @ref Options::apply_sync_config asks. @ref start starts every
+/// secondary before the primary -- the primary's first trigger is what they
+/// wait for -- and has the SDK keep the cameras' clocks on the host's. @ref
+/// poll_set groups frames by that clock, within
 /// @ref Options::sync_tolerance_us of a primary frame, and only then processes
 /// the set's frames as @ref OrbbecCapture processes one. A trigger with a
 /// secondary's frame missing is still handed out, with that camera's slot
@@ -73,10 +77,17 @@ class VR_SENSOR_ORBBEC_API OrbbecRig final : public ICameraCapture {
  public:
   /// @brief The cameras, their streams (the same for all), and the grouping.
   struct Options : OrbbecStreamOptions {
-    /// Each camera by serial, posed by its colour camera -- what
-    /// @ref read_rig_poses returns. At least two; exactly one must be the
-    /// sync primary and the rest its secondaries.
-    std::vector<RigCameraPose> cameras;
+    /// The rig's cameras, in the order the rig reports them, and each one's
+    /// sync settings -- what @ref read_orbbec_sync_config returns. At least
+    /// two: one primary, the rest its secondaries.
+    OrbbecRigSyncConfig sync;
+    /// Each camera's pose, by serial -- what @ref read_rig_calibration
+    /// returns; it may list other cameras too. Empty places every camera at
+    /// the world origin.
+    std::vector<RigCameraCalibration> calibration;
+    /// Write @ref sync to each camera whose stored settings differ, where it
+    /// persists, rather than refusing to open.
+    bool apply_sync_config = false;
     /// How long @ref open waits for every camera to answer discovery.
     std::uint32_t discovery_timeout_ms = 8000;
     /// A secondary's frame within this of a primary frame on the rig clock
@@ -89,17 +100,20 @@ class VR_SENSOR_ORBBEC_API OrbbecRig final : public ICameraCapture {
     bool configure_sdk_logging = true;
   };
 
-  /// @brief Find every camera, check its role and streams, and read its
-  ///        calibration. Does not start streaming.
+  /// @brief Find every camera, reconcile its sync settings, check its role and
+  ///        streams, and read its calibration. Does not start streaming.
   /// @return The rig; or @ref Status::Code::InvalidArgument for options that
   ///         cannot describe one (fewer than two cameras, a repeated serial,
-  ///         a pose that is not a rigid transform, a sync tolerance of zero or
-  ///         of half a frame period or more, a stream @ref OrbbecCapture::open
-  ///         would refuse);
+  ///         a calibration that is invalid or misses a camera, a sync
+  ///         tolerance of zero or of half a frame period or more, a stream
+  ///         @ref OrbbecCapture::open would refuse);
   ///         @ref Status::Code::NotFound naming the cameras that did not
-  ///         answer; @ref Status::Code::Unsupported for a rig that is not one
-  ///         primary and its secondaries, or a camera @ref OrbbecCapture::open
-  ///         would refuse; @ref Status::Code::IoError for another SDK failure.
+  ///         answer; @ref Status::Code::Unsupported for cameras whose sync
+  ///         settings differ from @ref Options::sync (named, field by field)
+  ///         without @ref Options::apply_sync_config, for a rig that is not
+  ///         one primary and its secondaries, or a camera
+  ///         @ref OrbbecCapture::open would refuse; @ref Status::Code::IoError
+  ///         for another SDK failure.
   static Result<OrbbecRig> open(const Options& options);
 
   OrbbecRig(OrbbecRig&& other) noexcept;

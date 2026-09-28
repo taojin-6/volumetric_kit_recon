@@ -65,22 +65,22 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- `sensor`: **`OrbbecRig`**, a hardware-synced rig of Orbbec cameras. It
-  starts the secondaries before the primary, keeps the cameras on the host's
-  clock, and hands out one set of frames per sync trigger (`poll_set()`), or
-  those frames one at a time as an `ICameraCapture` (`poll()`). Each set is a
-  primary frame and the secondaries' frames within 5 ms of it; a trigger
-  missing a secondary is handed out with that slot empty. Test:
-  `recon_sensor_orbbec_rig` (only the cameras `VR_ORBBEC_TEST_RIG` names), and
-  the grouping logic in `recon_sensor_orbbec_grouping`.
-- `sensor`: **the rig pose file** (`rig_poses.hpp`): `read_rig_poses` /
-  `write_rig_poses` for the JSON calib writes — one 4x4 colour-camera pose
-  per serial, with its units, camera axes and sensor declared — and
-  `validate_rig_poses`, the same checks for poses built by hand. Test:
-  `recon_sensor_rig_poses`. Parsed with nlohmann/json 3.12.0, a new pinned
-  header-only dependency private to `recon_sensor`.
-- `examples`: **`fuse_orbbec --poses rig.json`** fuses every camera in the
-  file as one rig; with `--serial`, that one camera posed from the file.
+- `sensor`: **`OrbbecRig`**, a hardware-synced rig of Orbbec cameras, opened
+  from the rig's sync configuration (`orbbec_sync_config.hpp`, the SDK's
+  `MultiDeviceSyncConfig.json` layout). It refuses cameras whose settings
+  differ, unless `apply_sync_config` writes them; starts the secondaries
+  first; keeps the cameras on the host's clock; and hands out one set per
+  primary frame (`poll_set()`), or those frames one at a time (`poll()`). A
+  missing secondary leaves an empty slot. Tests: `recon_sensor_orbbec_rig`
+  (only the rig `VR_ORBBEC_TEST_RIG` names), `recon_sensor_orbbec_grouping`,
+  `recon_sensor_orbbec_sync_config`.
+- `sensor`: **the rig calibration file** (`rig_calibration.hpp`): read and
+  write the family's config layout, each camera's OpenCV `pose` turned into
+  camera-to-world, its lens fields kept. Test: `recon_sensor_rig_calibration`.
+  Parsed with nlohmann/json 3.12.0, a new pinned header-only dependency.
+- `examples`: **`fuse_orbbec --rig sync.json [--apply-sync]
+  [--calibration calib.json]`** fuses the rig; `--serial` with
+  `--calibration` poses one camera from the file.
 - `codec`: **the rANS reference coder and the v1 intra frame**, both internal.
   This is the second of the codec's five PRs (see the 2026-09-27 decision).
   - `rans.hpp`: static-table rANS with a 32-bit state, 16-bit words and 12-bit

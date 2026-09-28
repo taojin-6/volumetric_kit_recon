@@ -1,21 +1,23 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Tao Jin
 
-// OrbbecRig against real cameras: poses read from a rig pose file, sets whose
-// frames share a trigger and carry their own camera's pose, most of them
-// complete, restart, the one-frame-at-a-time path, the two readers refusing
-// to mix, and moves.
+// OrbbecRig against real cameras: the rig's sync file checked against the
+// cameras (and a differing one refused, with nothing written), poses read from
+// a calibration file, sets whose frames share a trigger and carry their own
+// camera's pose, most of them complete, restart, the one-frame-at-a-time path,
+// the two readers refusing to mix, and moves.
 //
-// Cameras are used only when named: set VR_ORBBEC_TEST_RIG to their serials,
-// comma-separated, primary included. Unset, the test skips (exit 0).
+// Cameras are used only when named: set VR_ORBBEC_TEST_RIG to the rig's sync
+// configuration file (femto_mega_sync.json). Unset, the test skips (exit 0).
+// The cameras must already match it; the test never writes to them.
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <optional>
-#include <sstream>
 #include <string>
 #include <thread>
 #include <utility>
@@ -23,7 +25,8 @@
 
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
 #include "volumetric_kit/recon/sensor/orbbec/orbbec_rig.hpp"
-#include "volumetric_kit/recon/sensor/rig_poses.hpp"
+#include "volumetric_kit/recon/sensor/orbbec/orbbec_sync_config.hpp"
+#include "volumetric_kit/recon/sensor/rig_calibration.hpp"
 
 namespace vr = volumetric_kit::recon;
 namespace sensor = volumetric_kit::recon::sensor;
@@ -51,37 +54,62 @@ namespace {
 constexpr int kSets = 90;
 constexpr auto kTimeout = std::chrono::seconds(30);
 
+bool near(const vr::Mat4f& a, const vr::Mat4f& b) {
+  for (int c = 0; c < 4; ++c) {
+    for (int r = 0; r < 4; ++r) {
+      if (std::fabs(a[c][r] - b[c][r]) > 1e-6f) return false;
+    }
+  }
+  return true;
+}
+
 }  // namespace
 
 int main() {
   const char* env = std::getenv("VR_ORBBEC_TEST_RIG");
   if (env == nullptr || *env == '\0') {
-    std::printf("SKIP: set VR_ORBBEC_TEST_RIG to the rig's serials\n");
+    std::printf("SKIP: set VR_ORBBEC_TEST_RIG to the rig's sync file\n");
     return 0;
   }
-  std::vector<sensor::RigCameraPose> poses;
-  {
-    std::stringstream list(env);
-    std::string serial;
-    while (std::getline(list, serial, ',')) {
-      sensor::RigCameraPose pose;
-      pose.serial = serial;
-      // A distinct translation per camera, so a frame stamped with the wrong
-      // camera's pose shows.
-      pose.cam_to_world[3] =
-          vr::Vec4f(static_cast<float>(poses.size()), 0.5f, -1.0f, 1.0f);
-      poses.push_back(pose);
-    }
+  auto sync = sensor::read_orbbec_sync_config(env);
+  if (!sync.ok()) {
+    std::fprintf(stderr, "FAIL: %s\n", sync.status().message().c_str());
+    return 1;
   }
-  // Through the file, as the rig is fed in practice.
+  // A distinct pose per camera, so a frame stamped with the wrong camera's
+  // pose shows -- through a calibration file, as the rig is fed in practice.
+  std::vector<sensor::RigCameraCalibration> poses;
+  for (const sensor::OrbbecSyncDevice& d : sync.value().devices) {
+    sensor::RigCameraCalibration c;
+    c.serial = d.serial;
+    c.cam_to_world[3] =
+        vr::Vec4f(static_cast<float>(poses.size()), 0.5f, -1.0f, 1.0f);
+    poses.push_back(c);
+  }
   const std::string path =
       std::string(VR_TEST_SCRATCH_DIR) + "/orbbec_rig_test.json";
-  CHECK_OK(sensor::write_rig_poses(path, poses));
-  auto read = sensor::read_rig_poses(path);
+  CHECK_OK(sensor::write_rig_calibration(path, poses));
+  auto read = sensor::read_rig_calibration(path);
   CHECK(read.ok());
 
   sensor::OrbbecRig::Options options;
-  options.cameras = read.value();
+  options.sync = sync.value();
+  options.calibration = read.value();
+
+  // A configuration the cameras do not match is refused, naming the camera,
+  // and -- without apply_sync_config -- nothing is written.
+  {
+    sensor::OrbbecRig::Options differing = options;
+    differing.sync.devices.back().sync.depth_delay_us += 40;
+    const auto refused = sensor::OrbbecRig::open(differing);
+    CHECK(!refused.ok() &&
+          refused.status().domain() == vr::Status::Code::Unsupported);
+    std::printf("  refused as expected: %s\n",
+                refused.status().message().c_str());
+    CHECK(refused.status().message().find(
+              differing.sync.devices.back().serial) != std::string::npos);
+  }
+
   auto opened = sensor::OrbbecRig::open(options);
   if (!opened.ok()) {
     std::fprintf(stderr, "FAIL: open: %s\n", opened.status().message().c_str());
@@ -97,7 +125,7 @@ int main() {
                 sensor::to_string(info.sync_mode),
                 i == rig.primary() ? "  (started last)" : "");
     CHECK(info.serial == poses[i].serial);
-    CHECK(rig.color_camera(i).cam_to_world == poses[i].cam_to_world);
+    CHECK(near(rig.color_camera(i).cam_to_world, poses[i].cam_to_world));
   }
   CHECK(rig.device_info(rig.primary()).sync_mode ==
         sensor::OrbbecSyncMode::Primary);
@@ -140,8 +168,8 @@ int main() {
       const sensor::CapturedFrame& f = *set.frames[i];
       CHECK(f.depth != nullptr && f.has_color());
       // Posed by its own camera.
-      CHECK(f.color_camera.cam_to_world == poses[i].cam_to_world);
-      CHECK(f.depth_camera.cam_to_world == poses[i].cam_to_world);
+      CHECK(near(f.color_camera.cam_to_world, poses[i].cam_to_world));
+      CHECK(near(f.depth_camera.cam_to_world, poses[i].cam_to_world));
       // On the trigger's clock, within the tolerance.
       const std::uint64_t skew_us = (f.timestamp_ns > set.timestamp_ns
                                          ? f.timestamp_ns - set.timestamp_ns
@@ -201,8 +229,9 @@ int main() {
       continue;
     }
     const vr::Mat4f& pose = polled.value()->color_camera.cam_to_world;
-    CHECK(std::any_of(poses.begin(), poses.end(),
-                      [&](const auto& p) { return p.cam_to_world == pose; }));
+    CHECK(std::any_of(poses.begin(), poses.end(), [&](const auto& p) {
+      return near(p.cam_to_world, pose);
+    }));
     ++k;
   }
   // Each set holds one to n frames, so 3n frames took 3 to 3n sets.
