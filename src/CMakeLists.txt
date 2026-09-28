@@ -43,6 +43,7 @@ target_link_libraries(
             recon_mesh
             recon_texture
             recon_sensor
+            recon_sensor_utils
             recon_codec
             recon_eval)
 if(TARGET recon_sensor_video)

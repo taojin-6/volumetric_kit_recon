@@ -129,6 +129,17 @@ target_link_libraries(recon_tsdf_mesh_integrate_test
                       PRIVATE volumetric_kit::recon_tsdf Vulkan::Vulkan)
 vr_target_warnings(recon_tsdf_mesh_integrate_test)
 add_test(NAME recon_tsdf_mesh_integrate COMMAND recon_tsdf_mesh_integrate_test)
+# GPU pre-processing (recon_sensor_utils) on synthetic frames: undistortion in
+# the right direction, the colour matrix, a host reference of the sampling, the
+# refusals, and fusing the result. Skips (exit 0) where no device is present.
+add_executable(recon_sensor_gpu_frame_prep_test sensor_gpu_frame_prep_test.cpp)
+target_link_libraries(
+  recon_sensor_gpu_frame_prep_test PRIVATE volumetric_kit::recon_sensor_utils
+                                           volumetric_kit::recon_tsdf)
+vr_target_warnings(recon_sensor_gpu_frame_prep_test)
+add_test(NAME recon_sensor_gpu_frame_prep
+         COMMAND recon_sensor_gpu_frame_prep_test)
+
 # The device-input overloads of allocate_from_depth and integrate: the same
 # frame fused from host arrays and from storage buffers must give the same grid.
 # Skips (exit 0) where no device is present.

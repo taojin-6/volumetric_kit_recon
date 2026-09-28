@@ -32,6 +32,7 @@
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
 #include "volumetric_kit/recon/core/result.hpp"
 #include "volumetric_kit/recon/sensor/export.hpp"
+#include "volumetric_kit/recon/sensor/lens.hpp"
 
 namespace volumetric_kit::recon::sensor {
 
@@ -41,12 +42,6 @@ struct PinholeIntrinsics {
   float fy = 0.0f;
   float cx = 0.0f;
   float cy = 0.0f;
-};
-
-/// @brief OpenCV's rational lens model, in its coefficient order.
-struct LensDistortion {
-  float k1 = 0.0f, k2 = 0.0f, p1 = 0.0f, p2 = 0.0f;
-  float k3 = 0.0f, k4 = 0.0f, k5 = 0.0f, k6 = 0.0f;
 };
 
 /// @brief One camera of a calibrated rig.

@@ -138,6 +138,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`side_by_side_atlas`, wrapping past the device's largest image) and packs
   them (`pack_atlas`). gfx is unchanged. Test: `recon_texture_multiview`;
   `recon_texture_device_mesh` checks device against host.
+- `sensor`: **`GpuFramePrep`** (`sensor/utils/gpu_frame_prep.hpp`, the new
+  `recon_sensor_utils` target): a captured frame's depth and colour
+  undistorted on the GPU, and its Y'CbCr 4:2:0 colour converted to R'G'B' in
+  the same pass, handed over as buffers the device-input fusion overloads
+  read. It takes a `RawFrame` (`sensor/raw_frame.hpp`: raw depth, the decoded
+  planes, and each camera's `LensCamera` from `sensor/lens.hpp`, which
+  `LensDistortion` moved to), so depth and colour keep their own intrinsics
+  and poses and nothing registers one to the other. Test:
+  `recon_sensor_gpu_frame_prep`.
 - `volume` / `tsdf`: **device-input overloads** of
   `VoxelHashMap::allocate_from_depth` and `TsdfIntegrator::integrate` that
   take the depth image as a storage `Buffer` already on the GPU, and
