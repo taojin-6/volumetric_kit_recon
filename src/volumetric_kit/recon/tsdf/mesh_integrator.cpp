@@ -11,7 +11,6 @@
 #include <string>
 #include <vector>
 
-#include "mesh_topology.hpp"
 #include "volumetric_kit/recon/core/allocator.hpp"
 #include "volumetric_kit/recon/core/compute_util.hpp"
 #include "volumetric_kit/recon/core/device.hpp"
@@ -107,9 +106,8 @@ Result<MeshIntegrator> MeshIntegrator::create(Device& device,
   // mesh_bin takes 9 storage buffers: 0 hash entries, 1 vertices, 2 indices,
   // 3 candidate offsets, 4 per-slot counts then cursors, 5 per-item slots,
   // 6 per-slot coordinates, 7 missing-block counter, 8 bins. mesh_integrate
-  // takes 8: 0 tsdf, 1 weight, 2 vertices, 3 indices, 4 block bins, 5 bins,
-  // 6 vertex pseudonormals, 7 edge pseudonormals. These counts and the shaders
-  // move together.
+  // takes 6: 0 tsdf, 1 weight, 2 vertices, 3 indices, 4 block bins, 5 bins.
+  // These counts and the shaders move together.
   VkPushConstantRange bin_range{};
   bin_range.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
   bin_range.size = sizeof(BinPush);
@@ -120,7 +118,7 @@ Result<MeshIntegrator> MeshIntegrator::create(Device& device,
   VR_TRY(kb.add(integ.bin_, "tsdf_mesh_bin", vr_mesh_bin_comp_spv,
                 vr_mesh_bin_comp_spv_size, 9, &bin_range));
   VR_TRY(kb.add(integ.integrate_, "tsdf_mesh_integrate",
-                vr_mesh_integrate_comp_spv, vr_mesh_integrate_comp_spv_size, 8,
+                vr_mesh_integrate_comp_spv, vr_mesh_integrate_comp_spv_size, 6,
                 &integrate_range));
   VR_ASSIGN(integ.pool_, kb.build());
 
@@ -131,8 +129,7 @@ Result<MeshIntegrator> MeshIntegrator::create(Device& device,
   VR_ASSIGN(integ.gpu_timer_, GpuTimer::create(device));
 
   VR_ASSIGN(integ.missing_, storage_buffer(allocator, sizeof(std::uint32_t)));
-  // Sized for the widest element it stands in for (a vec3 pseudonormal).
-  VR_ASSIGN(integ.dummy_, storage_buffer(allocator, sizeof(Vec3f)));
+  VR_ASSIGN(integ.dummy_, storage_buffer(allocator, sizeof(std::uint32_t)));
   integ.bin_.set.write_storage_buffer(7, integ.missing_.handle(), 0,
                                       VK_WHOLE_SIZE);
 
@@ -199,8 +196,6 @@ Result<MeshIntegrateStats> MeshIntegrator::integrate(
       VkDeviceSize(num_blocks) * sizeof(std::uint32_t);
   const VkDeviceSize coord_bytes = VkDeviceSize(num_blocks) * sizeof(Vec3i);
   const VkDeviceSize entries_bytes = grid.map().entries_buffer_size();
-  const VkDeviceSize edge_normal_bytes =
-      is_signed ? VkDeviceSize(triangle_count) * 3 * sizeof(Vec3f) : 0;
   const struct {
     const char* what;
     VkDeviceSize bytes;
@@ -211,7 +206,6 @@ Result<MeshIntegrateStats> MeshIntegrator::integrate(
       {"the bin counts", count_bytes},
       {"the bin coordinates", coord_bytes},
       {"the hash entries", entries_bytes},
-      {"the edge pseudonormals", edge_normal_bytes},
   };
   for (const auto& r : ranges) {
     VR_TRY(
@@ -237,37 +231,6 @@ Result<MeshIntegrateStats> MeshIntegrator::integrate(
       (std::string(kWho) + ": the work-item slots").c_str(), item_bytes,
       max_storage_buffer_range_));
 
-  // Signed mode's connectivity, and its refusals. Before any upload, so a mesh
-  // that cannot be signed costs no GPU work.
-  detail::MeshTopology topo;
-  if (is_signed) {
-    topo = detail::build_mesh_topology(vertices, vertex_count, indices,
-                                       triangle_count);
-    if (topo.nonmanifold_edges != 0 || topo.nonmanifold_vertices != 0 ||
-        topo.inconsistent_edges != 0) {
-      return Status::invalid_argument(
-          std::string(kWho) + ": signed mode needs a manifold, consistently " +
-          "wound mesh, and this one has " +
-          std::to_string(topo.nonmanifold_edges) + " non-manifold edge(s), " +
-          std::to_string(topo.nonmanifold_vertices) +
-          " non-manifold vertex(es) and " +
-          std::to_string(topo.inconsistent_edges) +
-          " edge(s) whose winding flips; MeshSdfMode::Shell takes any mesh");
-    }
-    if (topo.boundary_edges == 0 && topo.volume < 0.0) {
-      return Status::invalid_argument(
-          std::string(kWho) +
-          ": signed mode needs faces wound counter-clockwise seen from "
-          "outside, and this closed mesh encloses negative volume -- it is "
-          "wound inside out; reverse every triangle's winding");
-    }
-    stats.boundary_edges = topo.boundary_edges;
-  }
-  // Signed mode reads through the welded indices, which name the same
-  // positions and let shared corners find their pseudonormal.
-  const std::uint32_t* kernel_indices =
-      is_signed ? topo.indices.data() : indices;
-
   // TODO(tsdf): the inputs are host-visible, as every buffer the grid itself
   // binds is (its attributes carry the same TODO(volume)); staging them
   // device-local waits on a copy path in core. The buffers only the device
@@ -275,7 +238,7 @@ Result<MeshIntegrateStats> MeshIntegrator::integrate(
   VR_ASSIGN(Buffer vertex_buf,
             upload_storage_buffer(*allocator_, vertices, vertex_bytes));
   VR_ASSIGN(Buffer index_buf,
-            upload_storage_buffer(*allocator_, kernel_indices, index_bytes));
+            upload_storage_buffer(*allocator_, indices, index_bytes));
   VR_ASSIGN(Buffer offset_buf,
             upload_storage_buffer(*allocator_, offsets.data(), offset_bytes));
   VR_ASSIGN(Buffer count_buf, storage_buffer(*allocator_, count_bytes));
@@ -384,16 +347,6 @@ Result<MeshIntegrateStats> MeshIntegrator::integrate(
   device_->set_object_name(VK_OBJECT_TYPE_BUFFER,
                            debug_object_handle(bins_buf.handle()),
                            "tsdf.mesh_bins");
-  Buffer vertex_normal_buf;
-  Buffer edge_normal_buf;
-  if (is_signed) {
-    VR_ASSIGN(vertex_normal_buf,
-              upload_storage_buffer(*allocator_, topo.vertex_normals.data(),
-                                    vertex_bytes));
-    VR_ASSIGN(edge_normal_buf,
-              upload_storage_buffer(*allocator_, topo.edge_normals.data(),
-                                    edge_normal_bytes));
-  }
 
   // Fill.
   bin_.set.write_storage_buffer(8, bins_buf.handle(), 0, VK_WHOLE_SIZE);
@@ -409,12 +362,6 @@ Result<MeshIntegrateStats> MeshIntegrator::integrate(
   integrate_.set.write_storage_buffer(3, index_buf.handle(), 0, VK_WHOLE_SIZE);
   integrate_.set.write_storage_buffer(4, block_buf.handle(), 0, VK_WHOLE_SIZE);
   integrate_.set.write_storage_buffer(5, bins_buf.handle(), 0, VK_WHOLE_SIZE);
-  integrate_.set.write_storage_buffer(
-      6, is_signed ? vertex_normal_buf.handle() : dummy_.handle(), 0,
-      VK_WHOLE_SIZE);
-  integrate_.set.write_storage_buffer(
-      7, is_signed ? edge_normal_buf.handle() : dummy_.handle(), 0,
-      VK_WHOLE_SIZE);
 
   for (std::size_t first = 0; first < blocks.size();) {
     std::size_t end = first + 1;

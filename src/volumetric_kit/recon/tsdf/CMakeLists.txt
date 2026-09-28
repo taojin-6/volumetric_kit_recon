@@ -15,8 +15,7 @@ set(_vr_tsdf_generated_inc "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
 add_library(recon_tsdf)
 add_library(volumetric_kit::recon_tsdf ALIAS recon_tsdf)
 
-target_sources(recon_tsdf PRIVATE mesh_integrator.cpp mesh_topology.cpp
-                                  tsdf_integrator.cpp)
+target_sources(recon_tsdf PRIVATE mesh_integrator.cpp tsdf_integrator.cpp)
 
 # Per-tier export header (VR_TSDF_API / VR_TSDF_STATIC_DEFINE), isolated so the
 # macros never collide with another tier's on one include path.
