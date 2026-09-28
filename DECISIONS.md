@@ -3309,8 +3309,10 @@ off the ring contract entirely.
 
 ### 2026-08-31 — A triangle's work unit is the candidate *block*, not the triangle; and the band it allocates is measured from the surface, not dilated from a point.
 
-The first thing the codec needs is a mesh in the volume, and the first thing
-that needs is the blocks a mesh's truncation band covers.
+Putting a mesh into the volume — the mesh-to-SDF pass that comes next — first
+needs the blocks the mesh's truncation band covers. (This was first planned as
+the codec's input stage; the 2026-09-26 codec entry has the codec encode a
+fused grid instead, so nothing here is on the codec's path.)
 `allocate_from_points` over the vertices looks like it already does this and
 does not: it dilates each point into the `(2*tb+1)^3` cube, which is **one
 block** wide at the defaults (40 mm), so any triangle wider than that leaves an
