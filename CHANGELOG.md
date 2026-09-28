@@ -29,6 +29,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `core`: **a `Device` may be submitted to from several threads at once.** It
+  locks its command pool while a command buffer is allocated, recorded and
+  freed, and its queue while it is submitted, not across the wait. A created
+  device's submits were unguarded before, and every submit shared one pool,
+  so two threads' batches were undefined; the validation layer reported
+  `THREADING ERROR` on the pool and one run segfaulted.
 - `sensor`: **`GpuFramePrep` stages its raw frame and runs both passes in one
   submit**: the raw depth and colour planes go up through a batch into
   device-local inputs, rather than a host-visible buffer the kernels read

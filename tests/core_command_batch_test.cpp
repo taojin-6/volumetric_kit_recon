@@ -9,11 +9,13 @@
 // refusals, the moves, and timed dispatches and uploads. Skips (exit 0) where
 // no device is present.
 
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -44,7 +46,7 @@ namespace {
 // Validation-layer errors, counted by the log handler: the only report of a
 // command the batch recorded against the spec -- an inline update past 64 KiB
 // or off 4-byte alignment -- on a driver that runs it anyway.
-int g_errors = 0;
+std::atomic<int> g_errors{0};  // the layer may report from any thread
 
 constexpr std::uint32_t kCount = 256;  // four workgroups of add.comp
 constexpr VkDeviceSize kBytes = kCount * sizeof(std::uint32_t);
@@ -629,6 +631,53 @@ int main() {
     self = std::move(*alias);
     CHECK(self.submit().ok());
     CHECK(word == 43u);
+  }
+
+  // Several threads batch on one device at once, each with its own kernel and
+  // buffer. The device locks its command pool and queue, so every result is
+  // right and the layer's thread-safety checks report nothing.
+  {
+    constexpr int kThreads = 4;
+    constexpr int kRounds = 50;
+    std::vector<vr::ComputeKernel> kernels(kThreads);
+    vr::KernelSetBuilder per_thread(device);
+    for (vr::ComputeKernel& k : kernels) {
+      CHECK(per_thread
+                .add(k, "test_add",
+                     reinterpret_cast<const unsigned char*>(spv.data()),
+                     spv.size() * sizeof(std::uint32_t), 1, &range)
+                .ok());
+    }
+    vr::Result<vr::DescriptorPool> thread_pool = per_thread.build();
+    CHECK(thread_pool.ok());
+    std::atomic<int> wrong{0};
+    std::vector<std::thread> threads;
+    for (int t = 0; t < kThreads; ++t) {
+      threads.emplace_back([&, t] {
+        vr::Result<vr::Buffer> made =
+            vr::device_storage_buffer(allocator, kBytes);
+        if (!made.ok()) {
+          ++wrong;
+          return;
+        }
+        const vr::Buffer& mine = made.value();
+        const Rig own{&device, &allocator, &kernels[t], rig.max_groups};
+        for (int r = 0; r < kRounds; ++r) {
+          const std::vector<std::uint32_t> in =
+              pattern(1000u * static_cast<std::uint32_t>(t) +
+                      static_cast<std::uint32_t>(r));
+          std::vector<std::uint32_t> out(kCount, 0);
+          vr::CommandBatch batch(device, allocator);
+          const bool ran = batch.upload(mine, 0, in.data(), kBytes).ok() &&
+                           add_to(batch, own, mine, 3).ok() &&
+                           batch.readback(mine, 0, kBytes, out.data()).ok() &&
+                           batch.submit().ok();
+          if (!ran || out != plus(in, 3)) ++wrong;
+        }
+      });
+    }
+    for (std::thread& t : threads) t.join();
+    CHECK(wrong == 0);
   }
 
   CHECK(g_errors == 0);

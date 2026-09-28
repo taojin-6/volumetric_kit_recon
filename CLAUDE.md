@@ -524,7 +524,9 @@ arbitrary; it usually isn't.
 - **`core`** — the Vulkan compute foundation: VMA `Allocator`, RAII `Buffer`,
   `ShaderModule`, descriptor + `ComputePipeline` wrappers, the `ComputeKernel`
   bundle + `KernelSetBuilder`, the shared-queue-safe
-  `Device::submit_single_time` dispatch, and the shared `dispatch()` /
+  `Device::submit_single_time` dispatch (safe from several threads at once: the
+  device locks its command pool and queue, but not across the wait; a kernel's
+  set and a buffer stay the caller's to keep to one thread), and the shared `dispatch()` /
   `group_count` / `storage_buffer` / range-guard helpers of `compute_util.hpp`
   — `StorageInput` among them, the host array (staged onto the device in the
   call's batch) or device buffer a call binds at its image's exact range.

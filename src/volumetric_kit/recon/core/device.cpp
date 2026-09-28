@@ -280,6 +280,9 @@ Result<Device> Device::create(VkInstance instance, VkPhysicalDevice physical,
   pool_info.queueFamilyIndex = *compute;
   VR_VK_TRY(vkCreateCommandPool(device.device_, &pool_info, nullptr,
                                 &device.command_pool_));
+  // The queue is this device's alone, so one mutex guards it and the pool.
+  device.pool_mutex_ = std::make_unique<std::mutex>();
+  device.submit_mutex_ = device.pool_mutex_.get();
   // Only on the caller's word -- see resolve_debug_label_fns. The overload
   // below fills this in from a recon Instance, which is how every recon call
   // site gets its labels; a raw foreign VkInstance defaults to "not enabled"
@@ -392,6 +395,7 @@ Result<Device> Device::adopt(const AdoptedDevice& adopted,
   pool_info.queueFamilyIndex = adopted.compute_family;
   VR_VK_TRY(vkCreateCommandPool(device.device_, &pool_info, nullptr,
                                 &device.command_pool_));
+  device.pool_mutex_ = std::make_unique<std::mutex>();
   // Only on the embedder's word -- see resolve_debug_label_fns. Not required
   // of the embedder, so its absence costs the capture's names and nothing else.
   resolve_debug_label_fns(device.device_, adopted.enabled_debug_utils,
@@ -406,6 +410,7 @@ Device::Device(Device&& other) noexcept
       command_pool_(other.command_pool_),
       owns_device_(other.owns_device_),
       submit_mutex_(other.submit_mutex_),
+      pool_mutex_(std::move(other.pool_mutex_)),
       compute_family_(other.compute_family_),
       compute_family_flags_(other.compute_family_flags_),
       compute_queue_(other.compute_queue_),
@@ -433,6 +438,7 @@ Device& Device::operator=(Device&& other) noexcept {
     command_pool_ = other.command_pool_;
     owns_device_ = other.owns_device_;
     submit_mutex_ = other.submit_mutex_;
+    pool_mutex_ = std::move(other.pool_mutex_);
     compute_family_ = other.compute_family_;
     compute_family_flags_ = other.compute_family_flags_;
     compute_queue_ = other.compute_queue_;
@@ -471,6 +477,7 @@ void Device::destroy() noexcept {
   }
   owns_device_ = true;
   submit_mutex_ = nullptr;
+  pool_mutex_.reset();
   physical_ = VK_NULL_HANDLE;
   compute_family_ = 0;
   compute_family_flags_ = 0;
@@ -526,9 +533,8 @@ VkResult Device::queue_submit(std::uint32_t count, const VkSubmitInfo* submits,
                               VkFence fence) const {
   // Vulkan requires queue submits be externally synchronized. When the compute
   // queue is shared with another library (an adopted device), the neutral
-  // bootstrap hands us a mutex to serialize submits on it; hold it for the
-  // submit. When the queue is exclusively ours (created path), there is nothing
-  // to lock and the unengaged lock is a no-op.
+  // bootstrap hands us a mutex to serialize submits on it; a created device
+  // uses its own, so threads submitting on one Device never race.
   std::unique_lock<std::mutex> lock;
   if (submit_mutex_ != nullptr) {
     lock = std::unique_lock<std::mutex>(*submit_mutex_);
@@ -557,13 +563,22 @@ Status Device::submit_single_time(
   alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
   alloc_info.commandBufferCount = 1;
   VkCommandBuffer cmd = VK_NULL_HANDLE;
+  // The pool is shared by every thread submitting on this device, so it is
+  // locked from the allocate to the end of recording, and again to free.
+  std::unique_lock<std::mutex> pool_lock;
+  if (pool_mutex_ != nullptr) {
+    pool_lock = std::unique_lock<std::mutex>(*pool_mutex_);
+  }
   VR_VK_TRY(vkAllocateCommandBuffers(device_, &alloc_info, &cmd));
 
   // Free the command buffer on every exit path below -- including the VR_VK_TRY
   // early returns (recon has no standalone CommandBuffer type yet; a one-shot
-  // dispatch does not need one).
-  ScopeGuard free_cmd(
-      [&] { vkFreeCommandBuffers(device_, command_pool_, 1, &cmd); });
+  // dispatch does not need one) -- under the pool lock, taken again if it was
+  // let go for the wait.
+  ScopeGuard free_cmd([&] {
+    if (pool_mutex_ != nullptr && !pool_lock.owns_lock()) pool_lock.lock();
+    vkFreeCommandBuffers(device_, command_pool_, 1, &cmd);
+  });
 
   VkCommandBufferBeginInfo begin{};
   begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -597,6 +612,8 @@ Status Device::submit_single_time(
   }
   end_debug_label(cmd, debug_label);
   VR_VK_TRY(vkEndCommandBuffer(cmd));
+  // Recorded; the submit takes the queue's lock, which may be this one.
+  if (pool_lock.owns_lock()) pool_lock.unlock();
 
   VkFenceCreateInfo fence_info{};
   fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;

@@ -10,6 +10,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <type_traits>
 #include <vector>
@@ -393,11 +394,11 @@ class VR_CORE_API Device {
   /// before returning. Blocking, so it is a bring-up / single-shot primitive;
   /// the fusion tiers will batch many dispatches per submit on their own.
   ///
-  /// @warning Not thread-safe: it allocates, records, and frees a command
-  ///          buffer on @ref command_pool, which Vulkan requires be externally
-  ///          synchronized. @ref submit_mutex guards only the queue submit, not
-  ///          the pool, so concurrent calls on one @ref Device must be
-  ///          serialized by the caller.
+  /// Thread-safe: several threads may submit on one @ref Device at once. The
+  /// command pool is locked while a buffer is allocated, recorded and freed,
+  /// and the queue while it is submitted, but not across the wait, so
+  /// threads overlap their waits. What a caller records must still be its
+  /// own: a kernel's descriptor set or a buffer is not locked.
   /// @param record  Records compute commands into the given command buffer.
   /// @return OK once the work completes, or a non-OK @ref Status if any Vulkan
   ///         step fails.
@@ -469,6 +470,10 @@ class VR_CORE_API Device {
   // owner. Reset on every ownership transfer.
   bool owns_device_ = true;
   std::mutex* submit_mutex_ = nullptr;
+  // Guards command_pool_, which Vulkan requires be externally synchronized,
+  // and on a created device the queue too (submit_mutex_ points at it). Never
+  // held with submit_mutex_ at once, so the two orders cannot deadlock.
+  std::unique_ptr<std::mutex> pool_mutex_;
   std::uint32_t compute_family_ = 0;
   VkQueueFlags compute_family_flags_ = 0;
   VkQueue compute_queue_ = VK_NULL_HANDLE;
