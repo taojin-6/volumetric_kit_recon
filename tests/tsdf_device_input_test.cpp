@@ -118,6 +118,22 @@ int check_same(vol::VoxelBlockGrid& a, vol::VoxelBlockGrid& b) {
   return 0;
 }
 
+// Allocate the band, retrying rounds that only lost bucket-lock races (as
+// examples/common/fuse_frame.hpp does), so both grids end with the same
+// blocks.
+template <typename Depth>
+int allocate(vol::VoxelBlockGrid& grid, const Depth& depth,
+             const vr::DepthCameraParams& camera) {
+  for (int round = 0; round < 5; ++round) {
+    vol::AllocFailures why;
+    auto failed = grid.map().allocate_from_depth(depth, camera, &why);
+    CHECK(failed.ok() && !why.capacity_limited());
+    if (failed.value() == 0) return 0;
+  }
+  std::fprintf(stderr, "FAIL: allocation kept losing lock races\n");
+  return 1;
+}
+
 vr::Result<vr::Buffer> upload(vr::Allocator& allocator, const void* data,
                               std::size_t bytes) {
   return vr::upload_storage_buffer(allocator, data, bytes);
@@ -191,10 +207,8 @@ int main() {
   device_color.buffer = &color_buf.value();
   device_color.cam = color_cam;
   for (int frame = 0; frame < 2; ++frame) {
-    auto a = host_grid->map().allocate_from_depth(depth.data(), cam);
-    auto b = device_grid->map().allocate_from_depth(depth_buf.value(), cam);
-    CHECK(a.ok() && a.value() == 0);
-    CHECK(b.ok() && b.value() == 0);
+    CHECK(allocate(host_grid.value(), depth.data(), cam) == 0);
+    CHECK(allocate(device_grid.value(), depth_buf.value(), cam) == 0);
     CHECK(integrator
               ->integrate(host_grid.value(), depth.data(), cam, 5.0f,
                           tsdf::IntegrationMode::Classic, &host_color)
