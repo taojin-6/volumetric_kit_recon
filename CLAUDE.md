@@ -527,15 +527,21 @@ arbitrary; it usually isn't.
   — `StorageInput` among them, the host array or device buffer a call binds
   at its image's exact range. **`CommandBatch`** (`core/command_batch.hpp`)
   is how the host reaches device memory: one call's uploads, fills, copies,
-  dispatches (indirect too) and readbacks in one command buffer, a barrier
-  between every two, one fence wait, spans and labels kept. An upload of up
-  to 64 KiB, 4-byte aligned, goes inline (`vkCmdUpdateBuffer`) and a larger
-  one through a staging buffer the batch allocates; readbacks, which are
-  small results, land in one host buffer allocated at `submit`. Nothing goes
-  through a mapping, so memory type never changes what a batch does, and
-  usage is checked on every buffer. A refused call poisons the batch (the
-  2026-09-28 residency decision, which also records why there is no
-  staging arena and no mappable device memory).
+  dispatches (indirect too) and readbacks in one command buffer, one fence
+  wait, spans and labels kept. A barrier goes wherever a command could see an
+  earlier one's writes: around every dispatch, and between two transfers
+  only when they share a buffer one writes. `dispatch()` is a batch of one.
+  An upload of up to 64 KiB, 4-byte aligned, goes inline
+  (`vkCmdUpdateBuffer`) and a larger one through a staging buffer the batch
+  allocates; readbacks, which are small results, land in one host buffer
+  allocated at `submit`, and the staging is freed once the wait is done, or
+  leaked if the wait fails. Nothing goes through a mapping, so memory type
+  never changes what a batch does, and usage is checked on every buffer, as
+  is a push against the kernel's range. A refused call poisons the batch, and
+  `submit` refuses a kernel whose set was rewritten after its dispatch was
+  recorded, since the set is bound only then (the 2026-09-28 residency
+  decision, which also records why there is no staging arena and no mappable
+  device memory).
   Vocabulary: `Status`/`Result`, the GLM aliases, `camera_params.hpp`,
   `color_space.hpp`, and `stage_metrics.hpp` — the `{name, cpu_ms, gpu_ms,
   has_gpu}` rows every tier reports timings in, with `GpuTimer` measuring the

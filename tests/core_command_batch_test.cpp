@@ -5,8 +5,8 @@
 // run out of place -- an upload after a dispatch, a readback before one -- over
 // a device-local and a host-visible buffer, since a buffer's memory type must
 // not change what a batch does. Uploads inline and staged, several readbacks
-// in one batch, the refusals, and timed dispatches. Skips (exit 0) where no
-// device is present.
+// in one batch, transfers left unordered, the refusals, the moves, and timed
+// dispatches. Skips (exit 0) where no device is present.
 
 #include <cstdint>
 #include <cstdio>
@@ -262,6 +262,21 @@ int main() {
     CHECK(back == data);
   }
 
+  // Transfers on different buffers run without a barrier between them, and
+  // each readback still waits for the upload it reads.
+  {
+    const std::vector<std::uint32_t> q = pattern(500);
+    std::vector<std::uint32_t> got_b(kCount, 0);
+    vr::CommandBatch batch(device, allocator);
+    CHECK(batch.upload(a, 0, p.data(), kBytes).ok());
+    CHECK(batch.upload(b, 0, q.data(), kBytes).ok());
+    CHECK(batch.readback(a, 0, kBytes, got.data()).ok());
+    CHECK(batch.readback(b, 0, kBytes, got_b.data()).ok());
+    CHECK(batch.submit().ok());
+    CHECK(got == p);
+    CHECK(got_b == q);
+  }
+
   // Device-to-device copy, and within one buffer where the ranges are apart.
   {
     vr::CommandBatch batch(device, allocator);
@@ -305,29 +320,56 @@ int main() {
     CHECK(!plain.dispatch_indirect(add, &push, sizeof(push), a, 0).ok());
   }
 
-  // Timed dispatches keep their spans: two in one submit, one row.
+  // Timed dispatches keep their spans: two in one submit, each resolved
+  // into its own row.
   {
     vr::Result<vr::GpuTimer> timer = vr::GpuTimer::create(device);
     CHECK(timer.ok());
     vr::StageMetrics metrics;
     {
-      vr::GpuStageScope stage(&metrics, timer.value(), "batch");
+      vr::GpuStageScope first(&metrics, timer.value(), "first");
+      vr::GpuStageScope second(&metrics, timer.value(), "second");
       vr::CommandBatch batch(device, allocator);
       add.set.write_storage_buffer(0, a.handle(), 0, VK_WHOLE_SIZE);
       const Push push{kCount, 1};
-      CHECK(batch.dispatch(add, &push, sizeof(push), 4, rig.max_groups, &stage)
+      CHECK(batch.dispatch(add, &push, sizeof(push), 4, rig.max_groups, &first)
                 .ok());
-      CHECK(batch.dispatch(add, &push, sizeof(push), 4, rig.max_groups, &stage)
+      CHECK(batch.dispatch(add, &push, sizeof(push), 4, rig.max_groups, &second)
                 .ok());
       CHECK(batch.submit().ok());
     }
-    const vr::StageRow* row = nullptr;
-    for (const vr::StageRow& r : metrics.rows()) {
-      if (std::string(r.name) == "batch") row = &r;
+    for (const char* name : {"first", "second"}) {
+      const vr::StageRow* row = nullptr;
+      for (const vr::StageRow& r : metrics.rows()) {
+        if (std::string(r.name) == name) row = &r;
+      }
+      CHECK(row != nullptr);
+      CHECK(row->cpu_ms > 0.0);
+      if (timer.value().available()) CHECK(row->has_gpu);
     }
-    CHECK(row != nullptr);
-    CHECK(row->cpu_ms > 0.0);
-    if (timer.value().available()) CHECK(row->has_gpu);
+  }
+
+  // A set rewritten after its dispatch was recorded is refused at submit, so
+  // the first dispatch never runs on the second's binding.
+  {
+    const std::vector<std::uint32_t> z(kCount, 0);
+    vr::CommandBatch clear(device, allocator);
+    CHECK(clear.upload(a, 0, z.data(), kBytes).ok());
+    CHECK(clear.upload(b, 0, z.data(), kBytes).ok());
+    CHECK(clear.submit().ok());
+
+    vr::CommandBatch batch(device, allocator);
+    CHECK(add_to(batch, rig, a, 1).ok());
+    CHECK(add_to(batch, rig, b, 2).ok());
+    CHECK(batch.submit().domain() == vr::Status::Code::InvalidArgument);
+
+    std::vector<std::uint32_t> got_b(kCount, 1);
+    vr::CommandBatch look(device, allocator);
+    CHECK(look.readback(a, 0, kBytes, got.data()).ok());
+    CHECK(look.readback(b, 0, kBytes, got_b.data()).ok());
+    CHECK(look.submit().ok());
+    CHECK(got == z);
+    CHECK(got_b == z);
   }
 
   // A refusal poisons its batch: nothing it recorded runs.
@@ -412,11 +454,80 @@ int main() {
     CHECK(refused([&](vr::CommandBatch& c) {
       return c.dispatch(add, nullptr, sizeof(Push), 1, rig.max_groups);
     }));
+    // A push off 4 bytes, or past the kernel's range.
+    const std::uint32_t words[3] = {kCount, 0, 0};
+    CHECK(refused([&](vr::CommandBatch& c) {
+      return c.dispatch(add, words, 6, 1, rig.max_groups);
+    }));
+    CHECK(refused([&](vr::CommandBatch& c) {
+      return c.dispatch(add, words, sizeof(words), 1, rig.max_groups);
+    }));
     // Nothing at all is fine, and submits nothing.
     vr::CommandBatch empty(device, allocator);
     CHECK(empty.upload(a, 0, nullptr, 0).ok());
     CHECK(empty.readback(a, 0, 0, nullptr).ok());
     CHECK(empty.submit().ok());
+  }
+
+  // A batch with no allocator dispatches and uploads inline, and refuses
+  // what would need staging.
+  {
+    vr::CommandBatch batch(device);
+    CHECK(batch.upload(a, 0, p.data(), kBytes).ok());
+    CHECK(batch.upload(a, 2, p.data(), 4).domain() ==
+          vr::Status::Code::InvalidArgument);
+    vr::CommandBatch reads(device);
+    CHECK(reads.readback(a, 0, 4, got.data()).domain() ==
+          vr::Status::Code::InvalidArgument);
+  }
+
+  // A moved-from device poisons the batch rather than reaching Vulkan.
+  {
+    vr::Result<vr::Device> other_result =
+        vr::Device::create(instance.value(), gpu.value(), {});
+    CHECK(other_result.ok());
+    vr::Device other = std::move(other_result).value();
+    const vr::Device taken(std::move(other));
+    vr::CommandBatch batch(other,
+                           allocator);  // NOLINT(bugprone-use-after-move)
+    CHECK(batch.fill(a, 0, 4, 0).domain() == vr::Status::Code::InvalidArgument);
+    CHECK(batch.submit().domain() == vr::Status::Code::InvalidArgument);
+  }
+
+  // Moves: the recorded commands go with the batch, and the source is empty.
+  {
+    std::uint32_t word = 0;
+    vr::CommandBatch source(device, allocator);
+    CHECK(source.fill(a, 0, 4, 41u).ok());
+    CHECK(source.readback(a, 0, 4, &word).ok());
+    vr::CommandBatch moved(std::move(source));
+    CHECK(!source.submitted());  // NOLINT(bugprone-use-after-move)
+    CHECK(source.fill(a, 0, 4, 0).domain() ==
+          vr::Status::Code::InvalidArgument);
+    CHECK(source.submit().domain() == vr::Status::Code::InvalidArgument);
+    CHECK(moved.submit().ok());
+    CHECK(word == 41u);
+
+    // Over a live batch, whose own commands are dropped.
+    vr::CommandBatch next(device, allocator);
+    CHECK(next.fill(a, 0, 4, 42u).ok());
+    CHECK(next.readback(a, 0, 4, &word).ok());
+    vr::CommandBatch live(device, allocator);
+    CHECK(live.fill(a, 0, 4, 7u).ok());
+    live = std::move(next);
+    CHECK(next.submit().domain() ==  // NOLINT(bugprone-use-after-move)
+          vr::Status::Code::InvalidArgument);
+    CHECK(live.submit().ok());
+    CHECK(word == 42u);
+
+    // Self-move keeps the batch.
+    vr::CommandBatch self(device, allocator);
+    CHECK(self.fill(a, 0, 4, 43u).ok());
+    CHECK(self.readback(a, 0, 4, &word).ok());
+    vr::CommandBatch* alias = &self;
+    self = std::move(*alias);
+    CHECK(self.submit().ok());
+    CHECK(word == 43u);
   }
 
   CHECK(g_errors == 0);

@@ -5,15 +5,14 @@
 
 /// @file core/compute_util.hpp
 /// @brief Small host-side helpers every compute tier repeats: the dispatch
-///        group-count ceil-divide and host-visible storage-buffer
-///        create/upload.
+///        group-count ceil-divide and storage-buffer creation, device-local
+///        for the kernels and host-visible for what the host fills or reads.
 ///
 /// These sit alongside @ref dispatch / @ref KernelSetBuilder (the 2026-07-06
 /// "mechanism lives in core because every compute tier repeats the shape"
-/// decision): the group-count math and the "make a mapped storage buffer"
-/// pattern had been copied verbatim into every tier. Hoisted here so a tier
-/// declares neither. The **policy** (which buffers, which bindings) stays in
-/// the tier.
+/// decision): the group-count math and the storage-buffer creation had been
+/// copied verbatim into every tier. Hoisted here so a tier declares neither.
+/// The **policy** (which buffers, which bindings) stays in the tier.
 
 #include <cstddef>
 #include <cstdint>
@@ -96,11 +95,10 @@ inline Status check_storage_buffer_range(const char* what, VkDeviceSize bytes,
 /// @param queue_family_count  Entries in @p queue_families.
 /// @return The buffer, or a non-OK @ref Status if creation fails.
 ///
-/// @note The allocation is deliberately `HostVisible` + mapped: this helper
-///       exists for buffers the host fills or reads back. That is the right
-///       trade for inputs and for a counter the host must read every dispatch,
-///       and the wrong one for a large output a device-local consumer streams
-///       -- such a consumer wants its own allocation, not a parameter here.
+/// @note The allocation is deliberately `HostVisible` + mapped, for what the
+///       host produces or consumes: staging, readback, small parameters.
+///       Memory the kernels read or write is @ref device_storage_buffer, on
+///       every platform (the 2026-09-28 residency decision).
 inline Result<Buffer> storage_buffer(
     Allocator& allocator, VkDeviceSize bytes,
     HostAccess access = HostAccess::Random, VkBufferUsageFlags extra_usage = 0,

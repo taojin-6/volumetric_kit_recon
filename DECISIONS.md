@@ -5739,13 +5739,31 @@ Four findings shaped the design:
 
 **The batch.**
 
-- **Order.** Commands run in the order recorded, with a barrier between
-  every two: shader and transfer writes before the next command's reads and
-  writes, indirect reads included. The last barrier also reaches the host and
-  a renderer drawing the result, as far as the queue family allows, the scope
-  `dispatch()` uses. Each dispatch keeps its debug-utils region, outside its
-  `GpuStageScope` span, and every timer a batch used is resolved after the one
-  wait.
+- **Order.** Commands run in the order recorded. A barrier makes shader and
+  transfer writes visible to the next command's reads and writes, indirect
+  reads included, wherever a command could see an earlier one's writes:
+  around every dispatch, and between two transfers only when they share a
+  buffer one writes. Two readbacks never need one, since each lands in its
+  own slice of the batch's buffer; a pipeline drain between them would be a
+  wait-for-idle on NVIDIA. The last barrier also reaches the host and a
+  renderer drawing the result, as far as the queue family allows.
+  `dispatch()` is a batch of one dispatch, so that scope, the dispatch
+  checks, the label and the span each have one definition. Each dispatch
+  keeps its debug-utils region, outside its `GpuStageScope` span, and every
+  timer a batch used is resolved after the one wait.
+- **Bound at submit.** A kernel's descriptor set is bound when `submit`
+  records, so a set rewritten after its dispatch was recorded would run that
+  dispatch on the later binding. `DescriptorSet` counts its writes, and
+  `submit` refuses a batch whose kernel's count has moved. A push is checked
+  against the kernel's range (`ComputeKernel::push_bytes`, which
+  `KernelSetBuilder::add` records and holds to offset 0).
+- **A failed wait leaks the staging.** `submit_single_time` leaks its command
+  buffer when the fence wait fails, since the device may still run it, and
+  says so through `in_flight`. The batch then leaks its staging too and
+  retires the spans' timers (`GpuTimer::abandon`). A submit that fails before
+  the device has the buffer only drops its spans (`GpuTimer::discard`), so a
+  transient failure does not turn a tier's timing off for good. On success
+  the staging is freed at the end of `submit`, not when the batch goes.
 - **One path each way.**
   - **Uploads.** One of up to 64 KiB, 4-byte aligned (a frame's parameters)
     is written inline in the command buffer with `vkCmdUpdateBuffer`, so no
@@ -5807,8 +5825,11 @@ images), and fails on any error the layer reports.
   after a dispatch into the same buffer, and a readback recorded before one.
 - **The rest:** inline, staged (past 64 KiB) and unaligned staged uploads;
   several readbacks of odd sizes in one batch; fills and copies at offsets;
-  an indirect dispatch sized by an uploaded command; two timed dispatches in
-  one submit publishing their row; each refusal, with its batch poisoned.
+  an indirect dispatch sized by an uploaded command; transfers on different
+  buffers without a barrier between them; two timed dispatches in one submit,
+  each publishing its own row; each refusal, with its batch poisoned; a set
+  rewritten before submit, a push off 4 bytes or past the kernel's range, a
+  moved-from device and a batch with no allocator refused; and the moves.
 
 The whole suite passes on both machines, 41 of 41, the 5090's build with GCC
 13 at `-O3 -Werror` in the CI image. Each of these fails the test:
@@ -5821,11 +5842,14 @@ The whole suite passes on both machines, 41 of 41, the 5090's build with GCC
 - submitting a poisoned batch;
 - not resolving the timers;
 - dropping the overlap check;
-- ignoring the indirect command.
+- ignoring the indirect command;
+- skipping the rewritten-set check or the push check, not recording a span,
+  or a move that leaves its source live (each checked on the Mac).
 
 Dropping the barriers between commands fails it too, 10 runs of 10, but only
 on the 5090: MoltenVK orders the same work without them. So CI's NVIDIA legs
-are what hold the barriers.
+are what hold the barriers, the ones now left out between independent
+transfers included.
 
 **Open.** No tier uses the batch yet. The review behind this entry ranked what
 moves next, by what the measurement says it costs on the 5090:
@@ -5843,9 +5867,8 @@ moves next, by what the measurement says it costs on the 5090:
 6. The examples.
 7. `codec`: coefficients read back as filtered int16.
 
-`dispatch()` is unchanged. `submit_single_time` still allocates a command
-buffer and a fence per submit; reusing them is a `TODO(core)` for when a tier
-measures it.
+`submit_single_time` still allocates a command buffer and a fence per
+submit; reusing them is a `TODO(core)` for when a tier measures it.
 
 ## Measured lessons
 

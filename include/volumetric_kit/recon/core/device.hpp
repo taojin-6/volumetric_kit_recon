@@ -418,10 +418,10 @@ class VR_CORE_API Device {
   /// Because this blocks on the fence, the span is readable the instant it
   /// returns — no deferred publish, no per-slot ring. See @ref GpuTimer.
   ///
-  /// One span per submit, which matches what recon records: `dispatch()` puts
-  /// exactly one dispatch in each. A caller batching several into one command
-  /// buffer brackets them itself with @ref GpuTimer::begin / @ref
-  /// GpuTimer::end and calls @ref GpuTimer::resolve after this returns.
+  /// One span per submit. A caller batching several dispatches into one
+  /// command buffer, as @ref CommandBatch does, brackets them itself with
+  /// @ref GpuTimer::begin / @ref GpuTimer::end and calls
+  /// @ref GpuTimer::resolve after this returns.
   ///
   /// Spans accumulate in @p timer until @ref GpuTimer::report_into publishes
   /// them, so a caller creating one timer and submitting through it must
@@ -443,6 +443,10 @@ class VR_CORE_API Device {
   ///                markers around the work rather than the work would make
   ///                every published `gpu_ms` depend on whether a profiler was
   ///                being catered to.
+  /// @param in_flight    Optional; set to `true` when the fence wait failed,
+  ///                which leaves the buffer to a device that may still run
+  ///                it, so whatever it records must stay alive too; `false`
+  ///                otherwise.
   /// @return OK once the work completes, or a non-OK @ref Status if any Vulkan
   ///         step fails. A failure to *resolve* the span never appears here:
   ///         the work has already succeeded by then, and an optional
@@ -450,7 +454,8 @@ class VR_CORE_API Device {
   ///         left unmeasured instead.
   Status submit_single_time(const std::function<void(VkCommandBuffer)>& record,
                             GpuTimer* timer, const char* label,
-                            const char* debug_label = nullptr) const;
+                            const char* debug_label = nullptr,
+                            bool* in_flight = nullptr) const;
 
  private:
   Device() = default;

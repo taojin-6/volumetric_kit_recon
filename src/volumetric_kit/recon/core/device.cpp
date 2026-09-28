@@ -546,7 +546,8 @@ Status Device::submit_single_time(
 
 Status Device::submit_single_time(
     const std::function<void(VkCommandBuffer)>& record, GpuTimer* timer,
-    const char* label, const char* debug_label) const {
+    const char* label, const char* debug_label, bool* in_flight) const {
+  if (in_flight != nullptr) *in_flight = false;
   // TODO(core): keep one command buffer and fence per submitting object
   // rather than allocating both per submit, once a tier on a CommandBatch
   // measures what they cost (the 2026-09-28 residency decision).
@@ -618,6 +619,7 @@ Status Device::submit_single_time(
   if (waited != VK_SUCCESS) {
     free_cmd.release();
     destroy_fence.release();
+    if (in_flight != nullptr) *in_flight = true;
     // The leaked command buffer still carries this span's `vkCmdResetQueryPool`
     // and both timestamp writes, so the two queries cannot go back into
     // circulation the way `discard` would put them: the pool retires with the

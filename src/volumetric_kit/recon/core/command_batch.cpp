@@ -17,10 +17,6 @@
 namespace volumetric_kit::recon {
 namespace {
 
-// Each readback's slice of the batch's one readback buffer starts on a 16-byte
-// boundary, so any element a caller reads back is aligned on the host.
-constexpr VkDeviceSize kReadbackAlign = 16;
-
 // `bytes` at `offset` lie inside `buffer`, written so neither sum can wrap.
 Status in_range(const Buffer& buffer, VkDeviceSize offset, VkDeviceSize bytes,
                 const char* what) {
@@ -57,17 +53,54 @@ void barrier(VkCommandBuffer cmd, VkPipelineStageFlags dst_stages,
 
 }  // namespace
 
+CommandBatch::CommandBatch(const Device& device) noexcept
+    : device_(&device), allocator_(nullptr) {
+  if (device.handle() == VK_NULL_HANDLE) {
+    status_ =
+        Status::invalid_argument("CommandBatch: the device is moved-from");
+  }
+}
+
 CommandBatch::CommandBatch(const Device& device, Allocator& allocator) noexcept
-    : device_(&device), allocator_(&allocator) {
-  if (!allocator.valid()) {
+    : CommandBatch(device) {
+  allocator_ = &allocator;
+  if (status_.ok() && !allocator.valid()) {
     status_ =
         Status::invalid_argument("CommandBatch: the allocator is moved-from");
   }
 }
 
-// The staging buffers go with the batch; its one submit waited, so nothing on
-// the device still reads them.
+// Staging still held here never reached the device, or its submit failed
+// before the device had it: a successful submit frees its own, and a failed
+// wait leaks it.
 CommandBatch::~CommandBatch() = default;
+
+CommandBatch::CommandBatch(CommandBatch&& other) noexcept
+    : device_(std::exchange(other.device_, nullptr)),
+      allocator_(std::exchange(other.allocator_, nullptr)),
+      ops_(std::move(other.ops_)),
+      staging_(std::move(other.staging_)),
+      status_(std::move(other.status_)),
+      submitted_(std::exchange(other.submitted_, false)) {
+  other.ops_.clear();
+  other.staging_.clear();
+  other.status_ = Status{};
+}
+
+CommandBatch& CommandBatch::operator=(CommandBatch&& other) noexcept {
+  if (this != &other) {
+    device_ = std::exchange(other.device_, nullptr);
+    allocator_ = std::exchange(other.allocator_, nullptr);
+    ops_ = std::move(other.ops_);
+    staging_ = std::move(other.staging_);
+    status_ = std::move(other.status_);
+    submitted_ = std::exchange(other.submitted_, false);
+    other.ops_.clear();
+    other.staging_.clear();
+    other.status_ = Status{};
+  }
+  return *this;
+}
 
 Status CommandBatch::check(Status status) {
   if (!status.ok() && status_.ok()) {
@@ -77,6 +110,9 @@ Status CommandBatch::check(Status status) {
 }
 
 Status CommandBatch::usable() const {
+  if (device_ == nullptr) {
+    return Status::invalid_argument("CommandBatch: the batch is moved-from");
+  }
   if (!status_.ok()) return status_;
   if (submitted_) {
     return Status::invalid_argument("CommandBatch: already submitted");
@@ -85,6 +121,10 @@ Status CommandBatch::usable() const {
 }
 
 Result<const Buffer*> CommandBatch::stage(VkDeviceSize bytes, bool upload) {
+  if (allocator_ == nullptr) {
+    return Status::invalid_argument(
+        "CommandBatch: the batch has no allocator to stage through");
+  }
   BufferDesc desc;
   desc.size = bytes;
   desc.usage = upload ? VK_BUFFER_USAGE_TRANSFER_SRC_BIT
@@ -191,6 +231,11 @@ Status CommandBatch::check_dispatch(const ComputeKernel& kernel,
     return Status::invalid_argument(
         "CommandBatch: push is null with a non-zero push_size");
   }
+  if (push_size % 4 != 0 || push_size > kernel.push_bytes) {
+    return Status::invalid_argument(
+        "CommandBatch: push_size is not a multiple of 4 or overruns the "
+        "kernel's push-constant range");
+  }
   return {};
 }
 
@@ -202,6 +247,7 @@ CommandBatch::Op CommandBatch::dispatch_op(Kind kind,
   Op op;
   op.kind = kind;
   op.kernel = &kernel;
+  op.set_writes = kernel.set.writes();
   if (push_size > 0) {
     const auto* bytes = static_cast<const unsigned char*>(push);
     op.data.assign(bytes, bytes + push_size);
@@ -261,6 +307,11 @@ Status CommandBatch::readback(const Buffer& src, VkDeviceSize offset,
   VR_TRY(check(in_range(src, offset, bytes, "readback")));
   VR_TRY(check(has_usage(src, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                          "readback needs a TRANSFER_SRC buffer")));
+  if (allocator_ == nullptr) {
+    return check(Status::invalid_argument(
+        "CommandBatch::readback: the batch has no allocator to read back "
+        "through"));
+  }
   Op op;
   op.kind = Kind::Readback;
   op.src = src.handle();
@@ -271,7 +322,31 @@ Status CommandBatch::readback(const Buffer& src, VkDeviceSize offset,
   return {};
 }
 
-void CommandBatch::record(VkCommandBuffer cmd) const {
+// Two transfers run unordered unless they share a buffer one of them writes;
+// a dispatch is always ordered. A readback's write is left out: its slice of
+// the batch's own buffer is touched by no other command.
+bool CommandBatch::needs_barrier(std::size_t first, std::size_t i) const {
+  const auto dispatches = [](const Op& op) {
+    return op.kind == Kind::Dispatch || op.kind == Kind::DispatchIndirect;
+  };
+  const auto written = [](const Op& op) -> VkBuffer {
+    return op.kind == Kind::Readback ? VK_NULL_HANDLE : op.dst;
+  };
+  const auto touches = [](const Op& op, VkBuffer buffer) {
+    return buffer != VK_NULL_HANDLE && (op.src == buffer || op.dst == buffer);
+  };
+  const Op& b = ops_[i];
+  for (std::size_t j = first; j < i; ++j) {
+    const Op& a = ops_[j];
+    if (dispatches(a) || dispatches(b) || touches(a, written(b)) ||
+        touches(b, written(a))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void CommandBatch::record(VkCommandBuffer cmd, std::vector<Span>& spans) const {
   constexpr VkPipelineStageFlags kInnerStages =
       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT |
       VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT;
@@ -280,11 +355,15 @@ void CommandBatch::record(VkCommandBuffer cmd) const {
       VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT |
       VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
 
+  std::size_t first = 0;  // the first command since the last barrier
   for (std::size_t i = 0; i < ops_.size(); ++i) {
     const Op& op = ops_[i];
     // Each command sees every write before it -- the ordering one submit per
     // dispatch used to give for free.
-    if (i > 0) barrier(cmd, kInnerStages, kInnerAccess);
+    if (i > 0 && needs_barrier(first, i)) {
+      barrier(cmd, kInnerStages, kInnerAccess);
+      first = i;
+    }
     switch (op.kind) {
       case Kind::Update:
         vkCmdUpdateBuffer(cmd, op.dst, op.dst_offset, op.bytes, op.data.data());
@@ -327,14 +406,18 @@ void CommandBatch::record(VkCommandBuffer cmd) const {
           vkCmdDispatchIndirect(cmd, op.src, op.src_offset);
         }
         if (timer != nullptr) timer->end(cmd, span);
+        if (span != GpuTimer::kNoSpan) spans.push_back({timer, span});
         device_->end_debug_label(cmd, op.kernel->name);
         break;
       }
     }
   }
   // The last write, visible to the host, to the next batch, and to a renderer
-  // drawing the result -- the stages dispatch() names, and only as far as this
-  // queue family may name them.
+  // drawing the result: at VERTEX_INPUT as vertices and indices, at
+  // DRAW_INDIRECT as a command. VERTEX_INPUT needs a graphics family, and
+  // recon may sit on a compute-only one (a discrete GPU's async-compute
+  // family), where a renderer is reached through a semaphore, which carries
+  // the visibility itself (the 2026-08-03 decision).
   VkPipelineStageFlags stages = kInnerStages | VK_PIPELINE_STAGE_HOST_BIT;
   VkAccessFlags access = kInnerAccess | VK_ACCESS_HOST_READ_BIT;
   if ((device_->compute_family_flags() & VK_QUEUE_GRAPHICS_BIT) != 0) {
@@ -345,19 +428,31 @@ void CommandBatch::record(VkCommandBuffer cmd) const {
 }
 
 Status CommandBatch::submit() {
+  if (device_ == nullptr) {
+    return Status::invalid_argument("CommandBatch: the batch is moved-from");
+  }
   if (submitted_) {
     return Status::invalid_argument("CommandBatch: already submitted");
   }
   submitted_ = true;
   if (!status_.ok()) return status_;
   if (ops_.empty()) return {};
+  // The set is bound only now, so a write since its dispatch was recorded
+  // would run that dispatch on the later binding.
+  for (const Op& op : ops_) {
+    if (op.kernel != nullptr && op.kernel->set.writes() != op.set_writes) {
+      return Status::invalid_argument(
+          "CommandBatch::submit: a kernel's descriptor set was rewritten "
+          "after its dispatch was recorded");
+    }
+  }
 
-  // Every readback lands in one host buffer, each at its own aligned slice.
+  // Every readback lands in one host buffer, each at its own slice.
   VkDeviceSize readback_bytes = 0;
   for (Op& op : ops_) {
     if (op.kind != Kind::Readback) continue;
     op.dst_offset = readback_bytes;
-    readback_bytes += (op.bytes + kReadbackAlign - 1) & ~(kReadbackAlign - 1);
+    readback_bytes += op.bytes;
   }
   const Buffer* readbacks = nullptr;
   if (readback_bytes > 0) {
@@ -367,21 +462,32 @@ Status CommandBatch::submit() {
     }
   }
 
-  std::vector<GpuTimer*> timers;
-  for (const Op& op : ops_) {
-    GpuTimer* timer = op.stage != nullptr ? op.stage->timer() : nullptr;
-    if (timer != nullptr &&
-        std::find(timers.begin(), timers.end(), timer) == timers.end()) {
-      timers.push_back(timer);
-    }
-  }
-  const Status submitted =
-      device_->submit_single_time([this](VkCommandBuffer cmd) { record(cmd); });
+  std::vector<Span> spans;
+  bool in_flight = false;
+  const Status submitted = device_->submit_single_time(
+      [&](VkCommandBuffer cmd) { record(cmd, spans); }, nullptr, nullptr,
+      nullptr, &in_flight);
   if (!submitted.ok()) {
-    // Whether the device may still run the buffer (a failed wait leaks it) is
-    // not visible from here, so every span it carries retires with it.
-    for (GpuTimer* timer : timers) timer->abandon();
+    if (in_flight) {
+      // The device may still run the buffer, so what it touches stays, as
+      // submit_single_time keeps the buffer: the staging is leaked, and the
+      // spans' timers retire with their queries.
+      static_cast<void>(new std::vector<Buffer>(std::move(staging_)));
+      for (const Span& span : spans) span.timer->abandon();
+    } else {
+      // Never run: the spans' queries were never written. Newest first, the
+      // only order discard takes them in.
+      for (auto it = spans.rbegin(); it != spans.rend(); ++it) {
+        it->timer->discard(it->id);
+      }
+    }
     return submitted;
+  }
+  std::vector<GpuTimer*> timers;
+  for (const Span& span : spans) {
+    if (std::find(timers.begin(), timers.end(), span.timer) == timers.end()) {
+      timers.push_back(span.timer);
+    }
   }
   for (GpuTimer* timer : timers) {
     const Status resolved = timer->resolve();
@@ -400,6 +506,7 @@ Status CommandBatch::submit() {
                   static_cast<std::size_t>(op.bytes));
     }
   }
+  staging_.clear();
   return {};
 }
 

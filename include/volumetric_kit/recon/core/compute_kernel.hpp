@@ -51,6 +51,9 @@ struct ComputeKernel {
   /// rather than an anonymous dispatch. Unlike a @ref StageRow, this costs
   /// nothing and is always on: naming a dispatch is not measuring it.
   const char* name = nullptr;
+  /// Size of the push-constant range, starting at 0; 0 for none. A dispatch
+  /// pushes at most this many bytes.
+  std::uint32_t push_bytes = 0;
 
   ComputeKernel() noexcept = default;
   ~ComputeKernel() = default;
@@ -63,9 +66,11 @@ struct ComputeKernel {
       : layout(std::move(other.layout)),
         pipeline(std::move(other.pipeline)),
         set(other.set),
-        name(other.name) {
+        name(other.name),
+        push_bytes(other.push_bytes) {
     other.set = {};
     other.name = nullptr;
+    other.push_bytes = 0;
   }
   ComputeKernel& operator=(ComputeKernel&& other) noexcept {
     if (this != &other) {
@@ -73,8 +78,10 @@ struct ComputeKernel {
       pipeline = std::move(other.pipeline);
       set = other.set;
       name = other.name;
+      push_bytes = other.push_bytes;
       other.set = {};
       other.name = nullptr;
+      other.push_bytes = 0;
     }
     return *this;
   }
@@ -128,8 +135,10 @@ class VR_CORE_API KernelSetBuilder {
   /// @param spv       The SPIR-V byte array (4-byte aligned).
   /// @param spv_size  Its size in bytes.
   /// @param bindings  Number of storage-buffer bindings the shader declares.
-  /// @param push      Optional push-constant range (`nullptr` = none).
-  /// @return An OK @ref Status, or a non-OK one if the layout or the pipeline
+  /// @param push      Optional push-constant range (`nullptr` = none),
+  ///                  starting at offset 0, where a dispatch pushes.
+  /// @return An OK @ref Status; InvalidArgument for a push range off offset
+  ///         0; or a non-OK one if the layout or the pipeline
   ///         fails to build — prefixed with @p name, since a tier registers
   ///         several kernels in one `create()` and the underlying failure names
   ///         only the Vulkan call.
@@ -150,32 +159,26 @@ class VR_CORE_API KernelSetBuilder {
 };
 
 /// @brief Record + submit a one-shot 1-D dispatch of @p kernel over @p groups
-///        workgroups, followed by a barrier making its writes visible to the
-///        next dispatch and to a host read.
+///        workgroups: a @ref CommandBatch of that one command.
 ///
-/// Binds @p kernel's pipeline + set, pushes @p push_size bytes from @p push
-/// (skipped when @p push_size is 0), dispatches, and emits a
-/// COMPUTE->COMPUTE(+HOST) memory barrier -- each kernel runs as its own
-/// fence-waited submission, and a fence orders execution but not memory, so
-/// this barrier (not the fence) carries cross-dispatch visibility. Rejects
-/// @p groups > @p max_groups (the device's `maxComputeWorkGroupCount[0]`) as a
-/// clean error rather than risk invalid usage on a min-spec driver, and rejects
-/// a null @p push with a non-zero @p push_size (mirroring
-/// @ref ComputePipeline::create's push-range validation).
+/// So it binds, pushes, dispatches and makes the writes visible to the next
+/// dispatch, the host and a renderer exactly as a batch does, and refuses
+/// what @ref CommandBatch::dispatch refuses: @p groups past @p max_groups
+/// (the device's `maxComputeWorkGroupCount[0]`), a null @p push with a
+/// non-zero @p push_size, a push that is not a multiple of 4 or overruns the
+/// kernel's range, and an unbuilt kernel.
 /// @param stage  Optional @ref GpuStageScope collecting a device span around
-///               this dispatch, through @ref Device::submit_single_time's timed
-///               overload. `nullptr` -- and a scope that is itself inert
+///               this dispatch. `nullptr` -- and a scope that is itself inert
 ///               because its caller passed no metrics -- is exactly the untimed
 ///               path.
-/// @return An OK @ref Status, or a non-OK one if @p groups exceeds
-///         @p max_groups, @p push is null with @p push_size > 0, or the
-///         submission fails.
+/// @return An OK @ref Status, or a non-OK one for a refusal above or a failed
+///         submission.
 ///
 /// Threading the timer *here* rather than at each tier's own submit is what
 /// makes device timing uniform across every kernel in the repo: each tier
 /// already routes through this helper for the workgroup guard and the barrier,
 /// so a span costs it one argument rather than a submit path of its own. The
-/// span covers the recorded work alone -- bind, push, dispatch, barrier -- and
+/// span covers the recorded work alone -- bind, push, dispatch -- and
 /// excludes the command-buffer allocate, the submit, and the fence wait around
 /// it, which is precisely the difference a wall-clock stage row cannot show.
 ///

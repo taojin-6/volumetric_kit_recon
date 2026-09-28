@@ -108,10 +108,14 @@ class VR_CORE_API DescriptorSet {
   VkDescriptorSet handle() const noexcept { return set_; }
   /// @return `true` if this refers to a set.
   bool valid() const noexcept { return set_ != VK_NULL_HANDLE; }
+  /// @return How many writes this object has made, so a @ref CommandBatch
+  ///         can refuse a set rewritten after it recorded a dispatch.
+  std::uint64_t writes() const noexcept { return writes_; }
 
  private:
   VkDevice device_ = VK_NULL_HANDLE;
   VkDescriptorSet set_ = VK_NULL_HANDLE;
+  mutable std::uint64_t writes_ = 0;
 };
 
 }  // namespace volumetric_kit::recon
