@@ -5615,3 +5615,34 @@ generation when it first touches the arena rather than on success — a call tha
 overwrites the arena and then fails must still invalidate every outstanding
 `DeviceMesh`, and so must the dense overload, which shares that arena and can
 now reallocate it.
+
+**A hang read twice as something else (2026-09-28): the bucket locks were
+across PCIe.** `recon_tsdf_mesh_integrate`'s divided sheet — a metre square
+of 320 000 triangles, a quarter voxel each — failed ubuntu-26.04 CI with a
+bare `vkWaitForFences`. The host's kernel log showed NVIDIA Xid 8 (the RC
+watchdog's 7 s) and Xid 109 (context-switch timeout) against the test. The
+first reading was load: two jobs shared the RTX 5090, and a re-run passed. The
+second was bandwidth. The test ran 0.23 s on an M5 Max and 4–22 s on the
+NVIDIA hosts, every buffer the map and the integrator bind is host-visible,
+and the integrate kernel re-reads vertices per voxel. Both were wrong.
+Per-dispatch timers on the RTX 5090 put the integrate kernel at 4.3 ms,
+faster than the Mac. The failure reproduced there alone on an idle GPU, and
+it was the sheet's **allocation**: some 2.6 M candidate items racing into
+~400 blocks, each miss spinning on a bucket lock that lived in host-visible
+memory, so every attempt was an atomic across the bus. Moving only
+`bucket_mutex` to device memory:
+
+| sheet (triangles) | RTX 5090, locks host-visible | locks device-local | M5 Max |
+|---|---|---|---|
+| 5 000 | 1 969 ms | 3.4 ms | 8.6 ms |
+| 20 000 | 7 006 ms | 8.0 ms | 7.5 ms |
+| 80 000 | 10 861 ms | 14.7 ms | 17.7 ms |
+| 180 000 | 13 268 ms | 19.2 ms | 14.7 ms |
+| 320 000 | past the watchdog | 24.4 ms | 19.4 ms |
+
+The same instinct produced both wrong guesses: a cost invisible where it is
+tested (unified memory hides host visibility entirely), read off totals rather
+than phases. The per-slot bin counters are the next instance: host-visible
+because the host reads them back, they cost the count and fill passes 115 ms
+and 143 ms for the sheet on the RTX 5090 against ~5 ms on the Mac, a
+`TODO(tsdf)`.

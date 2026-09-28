@@ -390,6 +390,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `volume`: **the hash table's bucket locks live in device memory.** They were
+  host-visible like every buffer the map owns, so on a discrete GPU each spin
+  was an atomic across PCIe. On an RTX 5090, allocating a 5 000-triangle sheet
+  took 1.97 s against 3.4 ms now, and a 320 000-triangle one ran past the
+  driver's 7-second watchdog (NVIDIA Xid 8 / 109), which is what failed the
+  ubuntu-26.04 legs of #81. Every allocation path gains, not only triangles.
+  Apple's unified memory never saw a difference. `core` gains
+  `device_storage_buffer` for memory only the kernels touch.
 - `mesh`: a triangle the sharing kernel drops for a vertex-claim overflow
   **inside a reused range** kept the previous extract's index triple. Those
   indices are in range, so nothing faults, but they name three unrelated vertices

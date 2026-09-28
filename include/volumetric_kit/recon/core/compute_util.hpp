@@ -132,4 +132,28 @@ inline Result<Buffer> upload_storage_buffer(
   return buf;
 }
 
+/// @brief Create a device-local storage buffer of @p bytes, for memory only the
+///        kernels touch.
+///
+/// The counterpart to @ref storage_buffer, which is host-visible so the host
+/// can fill it or read it back. On Apple's unified memory the two cost the
+/// same; on a discrete GPU a host-visible buffer is system memory the kernels
+/// reach across PCIe, and an **atomic** there is a round trip across the bus.
+/// That is the one place it can cost a device: the hash table's bucket locks,
+/// host-visible, took 1.97 s to allocate a 5 000-triangle sheet on an RTX 5090
+/// against 3.4 ms device-local, and a 320 000-triangle one ran past the
+/// driver's 7-second watchdog (the 2026-09-28 measured lesson). A buffer the
+/// kernels spin on or take hot atomics in belongs here.
+/// @param allocator  The allocator to create on.
+/// @param bytes      Size in bytes (must be non-zero).
+/// @return The buffer, unmapped, or a non-OK @ref Status if creation fails.
+inline Result<Buffer> device_storage_buffer(Allocator& allocator,
+                                            VkDeviceSize bytes) {
+  BufferDesc desc;
+  desc.size = bytes;
+  desc.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+  desc.memory = MemoryUsage::DeviceLocal;
+  return allocator.create_buffer(desc);
+}
+
 }  // namespace volumetric_kit::recon

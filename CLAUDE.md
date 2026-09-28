@@ -432,6 +432,16 @@ Two contracts — both simpler now that recon and gfx are both Vulkan.
   GLSL atomics; the prior engine's kernels are a reference for the *algorithm*,
   rewritten in GLSL. The native-CUDA accelerator (2026-07-04) keeps its warp
   intrinsics/atomics but must stay numerically in lockstep with the GLSL path.
+- **A spin lock or a hot atomic in host-visible memory is a bus round trip
+  on a discrete GPU, and free on Apple's unified memory**, so the cost is
+  invisible where CI's Mac and local runs test. Every buffer `storage_buffer`
+  makes is host-visible. The hash table's bucket locks were too, until an RTX
+  5090 took 1.97 s to allocate a 5 000-triangle sheet (3.4 ms device-local) and
+  lost a 320 000-triangle one to the driver's 7-second watchdog (Xid 8 / 109;
+  the 2026-09-28 measured lesson). Memory only the kernels touch comes from
+  `device_storage_buffer`. A GPU test failing on the Linux boxes with a bare
+  `vkWaitForFences` is a lost device: read the host's kernel log for the Xid
+  before calling it load.
 - **A bare `cmake -S . -B build` leaves `CMAKE_BUILD_TYPE` empty, so everything
   compiles at `-O0`** — the flags are `-std=c++17 -Wall -Wextra -Wpedantic
   -Werror` and no optimisation at all. Every CI leg passes one explicitly

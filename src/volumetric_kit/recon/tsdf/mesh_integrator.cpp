@@ -84,17 +84,6 @@ std::uint32_t group_count(std::uint32_t items) {
   return volumetric_kit::recon::group_count(items, kLocalSize);
 }
 
-// A storage buffer only the device touches. storage_buffer is host-visible by
-// design, which on a discrete GPU puts a buffer the kernels stream across the
-// bus.
-Result<Buffer> device_storage_buffer(Allocator& allocator, VkDeviceSize bytes) {
-  BufferDesc desc;
-  desc.size = bytes;
-  desc.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-  desc.memory = MemoryUsage::DeviceLocal;
-  return allocator.create_buffer(desc);
-}
-
 }  // namespace
 
 Result<MeshIntegrator> MeshIntegrator::create(Device& device,
@@ -234,7 +223,11 @@ Result<MeshIntegrateStats> MeshIntegrator::integrate(
   // TODO(tsdf): the inputs are host-visible, as every buffer the grid itself
   // binds is (its attributes carry the same TODO(volume)); staging them
   // device-local waits on a copy path in core. The buffers only the device
-  // touches are device-local already.
+  // touches are device-local already. The per-slot counts are the costly
+  // ones: the host reads them back, so the count and fill passes take their
+  // per-item atomics across PCIe on a discrete GPU -- 115 ms and 143 ms for a
+  // 320 000-triangle sheet on an RTX 5090, against ~5 ms on an M5 Max
+  // (2026-09-28). Well under any watchdog, but the first thing to move.
   VR_ASSIGN(Buffer vertex_buf,
             upload_storage_buffer(*allocator_, vertices, vertex_bytes));
   VR_ASSIGN(Buffer index_buf,
