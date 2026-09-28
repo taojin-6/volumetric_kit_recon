@@ -66,7 +66,8 @@ branching off **`core`** and `codec` off **`volume`** (later: `track`,
   directly.
 - **`volume`** — the sparse voxel hash map in Vulkan buffers; allocate / compact
   / rehash as compute shaders. (POD layouts already landed in `volume/hash_types.hpp`.)
-- **`tsdf`** — TSDF integration compute shaders (classic + dynamic).
+- **`tsdf`** — TSDF integration compute shaders (classic + dynamic), and a
+  triangle mesh's distance field written in (signed, or as a shell).
 - **`mesh`** — marching-cubes compute shaders, host mesh containers, and
   OBJ/PLY + glTF/GLB export.
 - **`texture`** — projective texturing: fills the mesh's per-vertex `uv0` with a
@@ -252,6 +253,10 @@ order. Change the decision, its entry there, and this list together.
   class plus raw bits, behind fixed per-frame tables and a section table; the
   decoder's end check is for consistency, not integrity (amends the 2026-09-26
   entry's interleaved lanes).
+- [**2026-09-27**](DECISIONS.md#2026-09-27--a-mesh-becomes-a-tsdf-two-ways-in-the-tsdf-tier-signed-by-the-closest-triangles-normal-for-a-closed-mesh-or-as-an-unsigned-shell-for-any-mesh--binned-per-block-over-the-allocations-own-candidates-with-no-topology) —
+  A mesh becomes a TSDF two ways, in the `tsdf` tier: signed by the closest
+  triangle's normal, for a closed mesh, or as an unsigned shell, for any mesh
+  — binned per block over the allocation's own candidates, with no topology.
 
 ## Provenance & salvage policy
 
@@ -507,8 +512,12 @@ arbitrary; it usually isn't.
   is also where an index is bounds-checked and a zero-area or non-finite
   triangle is dropped — the former being the one input that divides by zero in
   the closest-point solve, which lives in `core/shaders/triangle_common.glsl`
-  so mesh-to-SDF evaluates the field with the same function. Frustum-culled
-  compaction gives the per-frame working set, from a depth camera's pinhole
+  so mesh-to-SDF evaluates the field with the same function. That pass is the
+  public `triangle_candidate_offsets`, and the decode and band test are
+  `volume/shaders/triangle_candidates.glsl`: `tsdf`'s mesh integrator bins over
+  both, so the blocks allocated and the blocks binned cannot drift apart.
+  Frustum-culled compaction gives the per-frame working set, from a depth
+  camera's pinhole
   intrinsics or — since 2026-08-12 — from a *render* camera's `view_proj`, whose
   planes are read off the matrix itself and so hold for any handedness, provided
   depth maps to `[0, 1]` (gfx's convention; a GL matrix puts the near plane at
@@ -555,6 +564,22 @@ arbitrary; it usually isn't.
   visible only to whoever holds the grid). Opt-in `StageMetrics*` reports an
   `"integrate"` row with both halves, over a `"  ..active set"` sub-row for the
   compaction dispatch it also makes.
+  `MeshIntegrator` writes a triangle mesh's distance field instead
+  (2026-09-27), **overwriting** every voxel of every block the band reaches:
+  weight 1 within `trunc_dist` of the mesh, the codec inverse's fresh zeros
+  elsewhere, so a mesh-derived grid reads like a decoded frame. `Signed` signs
+  by the closest triangle's face normal, the research codec's rule, and builds
+  no topology and checks nothing: the field is the codec's input, not a
+  reconstruction of the mesh, so it gives up the sign past edges sharper than
+  90° and grows a skirt past an open mesh's rim. `Shell` is `d − σ` and takes
+  any mesh. The blocks must be
+  allocated by `allocate_from_triangles` — a missing one is refused before
+  anything is written — and triangles are binned per block over that
+  allocation's own candidates, so no voxel measures the whole mesh. The fill
+  replays the slots the count pass recorded, so no bin comes up short; a bin
+  past `kMaxBinTriangles` is refused, and the write splits into dispatches of
+  at most `kMaxDispatchBinEntries` bin entries. Ties break on the triangle
+  index, so the same mesh writes the same bytes.
 
 - **`mesh`** — `MarchingCubes` over a sparse `VoxelBlockGrid`, and only that
   (the dense analytic entry point was removed 2026-08-31; the prior engine
@@ -794,6 +819,13 @@ the multi-keyframe post-scan atlas. On `core`: the `TODO(core)` for
 gauges from VMA heuristics into driver truth. The debug-utils labels that TODO
 sat beside **have landed** (2026-08-30) — on the *kernel* rather than the span,
 which is the correction that entry records.
+
+**On `tsdf`**, mesh → TSDF has its two modes (2026-09-27), and what follows it
+is the codec round trip: mesh → TSDF → DCT → v1 frame → decode → mesh, measured
+against the *source* mesh, which fused room0 cannot give (there is no
+ground-truth mesh beside it). Both modes cost the same, measured on an
+81 920-triangle sphere at scan density (M5 Max, Release): 12.8 ms to write,
+10.8 ms of it on the GPU, after 14.2 ms to allocate.
 
 **On `sensor`**, each a `TODO(sensor)` in `orbbec_capture.cpp`: a
 multi-camera source (the rig's start order, one clock — what calib's viewer

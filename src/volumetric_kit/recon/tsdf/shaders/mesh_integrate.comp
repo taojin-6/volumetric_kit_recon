@@ -1,0 +1,120 @@
+#version 450
+
+// Write a mesh's truncated distance field into a grid's tsdf/weight, one
+// thread per voxel of every block the band reaches. Each voxel measures the
+// triangles mesh_bin.comp filed under its block -- every triangle within
+// trunc_dist of any of the block's voxels, since a bin holds each triangle
+// within trunc_dist + half-diagonal of the block's centre -- so the minimum
+// over the bin is the true minimum wherever the result is observed.
+//
+// Observed means within trunc_dist of the mesh, in both modes: that is the set
+// the band test guarantees complete, and it is the set the allocation covers.
+// An observed voxel gets weight 1 and its distance clamped to +-trunc_dist;
+// every other voxel of the block gets tsdf 0, weight 0 -- a fresh block's
+// zeros, which the mesher and the codec read as unobserved.
+//
+//   Signed -- +-distance, the sign from the closest triangle's face normal:
+//             the rule the research codec shipped. No topology, so it trusts
+//             the mesh to be closed and outward-wound, and a voxel off a sharp
+//             edge can take the wrong side (see MeshSdfMode::Signed).
+//   Shell  -- distance - pc.shell: a thin solid around every triangle.
+//
+// The minimum breaks ties on the triangle index. The fill pass wrote each bin
+// in atomic-arrival order, and two triangles tie along every shared edge and at
+// every shared vertex; taking "the first minimum" would sign those voxels by
+// whichever face the atomics happened to file first.
+
+#extension GL_GOOGLE_include_directive : require
+#define VR_HASH_COMMON_NO_PUSH_CONSTANTS
+#include "volumetric_kit/recon/volume/shaders/hash_common.glsl"
+#include "volumetric_kit/recon/core/shaders/triangle_common.glsl"
+
+layout(local_size_x = 256) in;
+
+// One block to write: where it is, where its voxels live, and its bin.
+// Scalar layout, 24 bytes, byte-identical to MeshBin in mesh_integrator.cpp.
+struct MeshBin {
+  ivec3 coord;
+  int ptr;
+  uint begin;
+  uint count;
+};
+
+layout(set = 0, binding = 0, scalar) buffer Tsdf { float tsdf[]; };
+layout(set = 0, binding = 1, scalar) buffer Weight { float weight[]; };
+layout(set = 0, binding = 2, scalar) readonly buffer Vertices {
+  vec3 vertices[];
+};
+layout(set = 0, binding = 3, scalar) readonly buffer Indices { uint indices[]; };
+layout(set = 0, binding = 4, scalar) readonly buffer Bins { MeshBin bins[]; };
+layout(set = 0, binding = 5, scalar) readonly buffer BinTris {
+  uint bin_tris[];
+};
+
+// The write is split across dispatches so that none measures more than
+// MeshIntegrator::kMaxDispatchBinEntries bin entries; this one writes bins
+// [first_bin, first_bin + num_bins).
+layout(push_constant, scalar) uniform PushConstants {
+  VoxelGridParams grid;
+  uint first_bin;
+  uint num_bins;
+  uint mode;    // kModeSigned or kModeShell (tsdf::MeshSdfMode)
+  float shell;  // shell half-thickness, metres
+} pc;
+
+const uint kModeSigned = 0u;
+const uint kModeShell = 1u;
+
+void main() {
+  uint gid = gl_GlobalInvocationID.x;
+  uint vpb = uint(pc.grid.voxels_per_block);
+  if (gid >= pc.num_bins * vpb) {
+    return;
+  }
+  MeshBin bin = bins[pc.first_bin + gid / vpb];
+  uint local = gid % vpb;
+
+  // Node-centred voxels (voxel * voxel_size), matching
+  // volume/voxel_coords.hpp::voxel_to_world and tsdf_integrate.comp.
+  int bs = pc.grid.block_size;
+  ivec3 lc = ivec3(int(local % uint(bs)), int((local / uint(bs)) % uint(bs)),
+                   int(local / uint(bs * bs)));
+  vec3 p = vec3(bin.coord * bs + lc) * pc.grid.voxel_size;
+
+  float best_d2 = 3.4e38;
+  uint best_t = 0xFFFFFFFFu;
+  vec3 best_closest = p;
+  for (uint i = 0u; i < bin.count; ++i) {
+    uint t = bin_tris[bin.begin + i];
+    vec3 a = vertices[indices[3u * t]];
+    vec3 b = vertices[indices[3u * t + 1u]];
+    vec3 c = vertices[indices[3u * t + 2u]];
+    vec3 q = vrClosestPointOnTriangle(p, a, b, c);
+    vec3 d = p - q;
+    float d2 = dot(d, d);
+    if (d2 < best_d2 || (d2 == best_d2 && t < best_t)) {
+      best_d2 = d2;
+      best_t = t;
+      best_closest = q;
+    }
+  }
+
+  float trunc_dist = pc.grid.trunc_dist;
+  float dist = sqrt(best_d2);
+  bool observed = best_t != 0xFFFFFFFFu && dist <= trunc_dist;
+  float sdf = 0.0;
+  if (observed) {
+    if (pc.mode == kModeSigned) {
+      vec3 a = vertices[indices[3u * best_t]];
+      vec3 b = vertices[indices[3u * best_t + 1u]];
+      vec3 c = vertices[indices[3u * best_t + 2u]];
+      sdf = dot(p - best_closest, cross(b - a, c - a)) >= 0.0 ? dist : -dist;
+    } else {
+      sdf = dist - pc.shell;
+    }
+  }
+
+  uint idx = uint(bin.ptr) + local;
+  tsdf[idx] = observed ? clamp(sdf, -trunc_dist, trunc_dist) : 0.0;
+  weight[idx] = observed ? 1.0 : 0.0;
+}

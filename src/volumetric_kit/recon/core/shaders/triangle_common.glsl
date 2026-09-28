@@ -2,8 +2,8 @@
 // Copyright (c) 2026 Tao Jin
 
 // Closest-point-on-triangle, the one geometric primitive the mesh-driven
-// passes share: `volume`'s hash_allocate_triangles.comp prunes candidate blocks
-// with it, and the mesh-to-SDF integrators evaluate the distance field itself
+// passes share: `volume`'s triangle_candidates.glsl prunes candidate blocks
+// with it, and tsdf's mesh_integrate.comp evaluates the distance field itself
 // with it. It lives in `core` for the same reason core/math/vector_types.hpp
 // does -- it is math vocabulary with no tier's concepts in it (no hash table,
 // no grid, no camera) -- and a second copy would compile clean, pass spirv-val,
@@ -22,10 +22,18 @@
 // Each of the three edge branches divides by a squared edge length -- d1-d3 is
 // |ab|^2, d2-d6 is |ac|^2, and (d4-d3)+(d5-d6) is |bc|^2 -- so every denominator
 // is non-zero for a triangle of non-zero area, and a degenerate one is the
-// caller's to exclude (hash_allocate_triangles.comp's host side drops zero-area
+// caller's to exclude (volume::triangle_candidate_offsets drops zero-area
 // triangles before they reach a work item). The interior branch guards its own
 // denominator anyway, since that one is a sum of signed barycentric areas and
 // can cancel.
+//
+// That guard is against zero, not against a size: the sum is |ab x ac|^2, in
+// metres^4, so any fixed threshold is a triangle size below which the interior
+// collapses onto vertex `a` -- 1e-12 was every triangle with edges under about
+// a millimetre, which a dense scan has everywhere. Where a sliver's rounding
+// lets the sum through with barycentrics that do not describe a point of the
+// triangle, they are clamped onto it, so the closest point is always one the
+// triangle actually has.
 vec3 vrClosestPointOnTriangle(vec3 p, vec3 a, vec3 b, vec3 c) {
   vec3 ab = b - a;
   vec3 ac = c - a;
@@ -67,8 +75,10 @@ vec3 vrClosestPointOnTriangle(vec3 p, vec3 a, vec3 b, vec3 c) {
   }
 
   float sum = va + vb + vc;
-  float denom = (sum > 1e-12) ? (1.0 / sum) : 0.0;
-  return a + ab * (vb * denom) + ac * (vc * denom);  // face interior
+  float denom = (sum > 0.0) ? (1.0 / sum) : 0.0;
+  float v = clamp(vb * denom, 0.0, 1.0);
+  float w = clamp(vc * denom, 0.0, 1.0 - v);
+  return a + ab * v + ac * w;  // face interior
 }
 
 // Distance from `p` to triangle (a, b, c), with the closest point itself in

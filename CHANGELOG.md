@@ -65,6 +65,34 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `tsdf`: **`MeshIntegrator`** — a triangle mesh's truncated distance field,
+  written into a grid's `tsdf` and `weight`, in one of two `MeshSdfMode`s (see
+  the 2026-09-27 decision).
+  - `Signed`: +-distance, signed by the closest triangle's face normal. For a
+    closed, outward-wound mesh; nothing is checked and no topology is built,
+    so past an edge sharper than 90 degrees the sign can take the wrong side,
+    and an open mesh grows a skirt past its rim.
+  - `Shell`: distance minus a half-thickness (1.5 voxels by default), for any
+    mesh at all.
+  - Every voxel of every band block is overwritten: weight 1 within
+    `trunc_dist`, `tsdf = 0, weight = 0` elsewhere, which is how the codec's
+    inverse leaves a fresh block. The band must be allocated first with
+    `allocate_from_triangles`; a missing block is refused before anything is
+    written.
+  - Triangles are binned per block (a count and a fill dispatch over the
+    allocation's own work items), so no voxel measures the whole mesh. Ties
+    break on the triangle index, so the same mesh writes the same bytes.
+  - A bin past `MeshIntegrator::kMaxBinTriangles` is refused, and the write
+    splits into dispatches of at most `kMaxDispatchBinEntries` bin entries;
+    `MeshIntegrateStats::dispatches` reports how many.
+- `volume`: **`triangle_candidate_offsets`** — the per-triangle candidate-block
+  prefix sum `allocate_from_triangles` dispatches over, public so the mesh
+  integrator bins over the same decomposition. Its decode and band test moved
+  into `shaders/triangle_candidates.glsl` for the same reason.
+- `core`: `vrClosestPointOnTriangleFeature` in `shaders/triangle_common.glsl`
+  also reports which vertex, edge or face the closest point lies on.
+  `vrClosestPointOnTriangle` is now a wrapper over it, with the same
+  arithmetic.
 - `volume`: **`VoxelHashMap::allocate_from_triangles`** — the blocks a triangle
   mesh's truncation band covers, which is what a mesh-to-SDF pass then writes.
   Not expressible as `allocate_from_points` over the vertices: that dilates each

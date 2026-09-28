@@ -15,7 +15,7 @@ set(_vr_tsdf_generated_inc "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
 add_library(recon_tsdf)
 add_library(volumetric_kit::recon_tsdf ALIAS recon_tsdf)
 
-target_sources(recon_tsdf PRIVATE tsdf_integrator.cpp)
+target_sources(recon_tsdf PRIVATE mesh_integrator.cpp tsdf_integrator.cpp)
 
 # Per-tier export header (VR_TSDF_API / VR_TSDF_STATIC_DEFINE), isolated so the
 # macros never collide with another tier's on one include path.
@@ -52,12 +52,15 @@ target_include_directories(
          "$<BUILD_INTERFACE:${_vr_tsdf_generated_inc}>"
          "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
 
-# Compile the GLSL integrate kernel to SPIR-V and embed it as a constexpr byte
-# array (tsdf_integrator.cpp #includes the generated *.spv.hpp on a PRIVATE
-# path), so recon_tsdf ships the technique with no runtime shader files.
+# Compile the GLSL kernels to SPIR-V and embed them as constexpr byte arrays
+# (each .cpp #includes its generated *.spv.hpp on a PRIVATE path), so recon_tsdf
+# ships the technique with no runtime shader files. The two mesh kernels include
+# volume's and core's GLSL by root-relative path, as the mesh tier's do.
 include(vr_embed)
-vr_embed_shaders(recon_tsdf SHADERS
-                 "${CMAKE_CURRENT_SOURCE_DIR}/shaders/tsdf_integrate.comp")
+vr_embed_shaders(
+  recon_tsdf SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/tsdf_integrate.comp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/mesh_bin.comp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/mesh_integrate.comp")
 
 vr_target_warnings(recon_tsdf)
 
