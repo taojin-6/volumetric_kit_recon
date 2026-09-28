@@ -65,6 +65,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `codec`: **`Encoder` and `Decoder`, the codec's public API** (see the
+  2026-09-27 decision). This is the third of its five PRs.
+  - `Encoder::encode(grid)` gives one intra frame of every block with an
+    observed voxel, sorted so the bytes do not depend on hash order.
+  - `Decoder::decode(frame, grid)` leaves a caller's grid holding exactly the
+    frame. It diffs the grid's block set rather than clearing it, and checks
+    everything checkable before touching the grid. A table too small for the
+    frame is `OutOfMemory`; resize and decode again.
+  - `read_frame_info` reads a frame's header, so a player can build a grid of
+    the stream's geometry.
+  - Both report `StageMetrics`.
+  - On an analytic sphere at the defaults (K = 32): 35.8 B/block, with the
+    decoded mesh at worst 0.27 voxels off the true surface.
+  - Tests: `recon_codec_encoder` and `recon_codec_decoder` (GPU).
 - `sensor`: **`OrbbecRig`**, a hardware-synced rig of Orbbec cameras, opened
   from the rig's sync configuration (`orbbec_sync_config.hpp`, the SDK's
   `MultiDeviceSyncConfig.json` layout). It refuses cameras whose settings

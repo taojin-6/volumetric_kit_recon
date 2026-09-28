@@ -255,6 +255,12 @@ order. Change the decision, its entry there, and this list together.
   configuration and writes it only when asked, starts the secondaries before
   the primary, keeps the cameras on the host's clock, and builds each set
   around a primary frame; poses come from the calibration file.
+- [**2026-09-27**](DECISIONS.md#2026-09-27--encoder-and-decoder-are-the-codecs-public-api-encoding-drops-never-observed-blocks-and-sorts-the-rest-decoding-makes-a-callers-grid-hold-exactly-the-frame-by-diffing-its-block-set-everything-checkable-is-checked-before-the-grid-is-touched-and-a-grid-too-small-for-the-frame-is-refused-rather-than-grown) —
+  `Encoder` and `Decoder` are the codec's public API: encoding drops
+  never-observed blocks and sorts the rest, decoding makes a caller's grid hold
+  exactly the frame by diffing its block set, everything checkable is checked
+  before the grid is touched, and a grid too small for the frame is refused
+  rather than grown.
 
 ## Provenance & salvage policy
 
@@ -688,15 +694,27 @@ arbitrary; it usually isn't.
   `VR_ORBBEC_TEST_RIG` names and never writes to it (the 2026-09-27
   decision).
 
-- **`codec`** — two of five PRs in (2026-09-26 lists them). So far it is
-  `CodecParams` (public) and, all private under
-  `src/volumetric_kit/recon/codec/`, the `DctTransform`, the rANS reference
-  coder and the v1 intra frame. The transform takes a
+- **`codec`** — three of five PRs in (2026-09-26 lists them). The public API
+  is `CodecParams`, **`Encoder`** (`encoder.hpp`) and **`Decoder`** with
+  `read_frame_info` (`decoder.hpp`). `Encoder::encode(grid)` compacts, sorts
+  by (z, y, x) and transforms, drops every block with no observed voxel, and
+  writes the frame. The same content gives the same bytes whatever the hash
+  table's order. `Decoder::decode(frame, grid)` leaves the caller's grid
+  holding exactly the frame. It merges the grid's sorted active set with the
+  frame's coordinates, removing, allocating, and keeping shared blocks in their
+  slots, then rewrites every voxel's `tsdf` and `weight`. Parsing, geometry
+  (exact `voxel_size` / `trunc_dist`), attributes and the heap are all checked
+  before the grid is touched. A hash table that cannot place the frame is
+  `OutOfMemory`, recovered by `resize` and decoding again; the library never
+  grows a grid. Both report `StageMetrics` (`"codec encode"` / `"codec
+  decode"` with breakdowns). The private pieces under
+  `src/volumetric_kit/recon/codec/` are the `DctTransform`, the rANS
+  reference coder and the v1 intra frame. The transform takes a
   `volume::BlockList` to a `DctBlocks` — K quantized coefficients per block in
   3-D zigzag order, a 16-word observed mask, and the params and `trunc_dist`
-  they were made with — and back. There is no `Encoder` / `Decoder`
-  yet. The SDF is normalized by `trunc_dist` before the transform
-  and the steps are fractions of it, so the inverse refuses a `DctBlocks`
+  they were made with — and back. The SDF is normalized by `trunc_dist`
+  before the transform and the steps are fractions of it, so the inverse
+  refuses a `DctBlocks`
   whose `trunc_dist` is not its grid's. `CodecParams::validate` refuses a step
   small enough for the ±32767 clamp to engage (√512 / 32767). The forward
   never reads an unobserved voxel's `tsdf`: it fills each one from the nearest
