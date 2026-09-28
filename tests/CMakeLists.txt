@@ -345,6 +345,23 @@ target_include_directories(
 vr_target_warnings(recon_codec_dct_test)
 add_test(NAME recon_codec_dct COMMAND recon_codec_dct_test)
 
+# codec round trip with ground truth: a mesh through tsdf::MeshIntegrator, the
+# forward DCT, v1 frame bytes and back, the inverse DCT and marching cubes, with
+# the decoded surface measured against the source mesh (accuracy and coverage)
+# beside the uncompressed volume's. Reaches the codec's internal headers by
+# include path, as the other codec tests do. Skips (exit 0) with no device.
+add_executable(recon_codec_mesh_roundtrip_test codec_mesh_roundtrip_test.cpp)
+target_link_libraries(
+  recon_codec_mesh_roundtrip_test
+  PRIVATE volumetric_kit::recon_codec volumetric_kit::recon_tsdf
+          volumetric_kit::recon_mesh Vulkan::Vulkan)
+target_include_directories(
+  recon_codec_mesh_roundtrip_test
+  PRIVATE ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/codec)
+vr_target_warnings(recon_codec_mesh_roundtrip_test)
+add_test(NAME recon_codec_mesh_roundtrip
+         COMMAND recon_codec_mesh_roundtrip_test)
+
 # codec tier, entropy coding: the rANS reference coder (normalization, round
 # trips, a probability-one symbol's zero cost, size against the ideal code
 # length, truncation and bit flips) and the v1 intra frame built on it (round
