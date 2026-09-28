@@ -6212,7 +6212,7 @@ begun again by the next submit, which the pool's `RESET_COMMAND_BUFFER` flag
 allows. A failed wait leaves it to the device, as before, and `destroy()`
 frees every pool made, that one included.
 
-**The fence is kept with its buffer**, reset as the buffer is taken, which
+**The fence is kept with its buffer**, reset after its wait, which
 closes the `TODO(core)` the entry above left. On the 5090 the objects were the
 cost, not the submit: `vkCreateFence` took 0.29 ms and destroying the fence
 with the buffer's free 0.39 ms, against 0.005 ms for `vkQueueSubmit`. On the
@@ -6225,6 +6225,22 @@ M5 Max each was about a microsecond. Measured on room0 with
 | `allocate`, host | 1.27–1.42 ms | 0.83–0.89 ms |
 | `integrate`, host | 1.82–2.06 ms | 0.95–1.06 ms |
 | 400 frames | 258–286 fps | 431–463 fps |
+
+Its review settled the failure paths, where a kept fence can outlive a
+submit the device may still run:
+
+- `destroy()` waits for a command a failed wait left to the device before
+  freeing it, and leaks it if the device may still run it. The old code
+  leaked the fence, but freed the pool, whose buffer might still be running.
+- A submit that loses the device is handled as a failed wait. `vkQueueSubmit`
+  promises that the fence and buffer are untouched only when it fails for
+  memory.
+- The fence is reset after its wait, the one place it is known signalled, so
+  every free fence is unsignalled. One that will not reset is not given back.
+- A `record` that throws gives its buffer back reset, since the next begin
+  may not find it recording. `take_command` grows both lists before making
+  anything, under the lock, so a throw there leaks nothing and `give_back`
+  never allocates.
 
 **Only the queue is locked**: under the embedder's mutex on a queue shared
 with another library, else under the device's own, so `submit_mutex()` is

@@ -22,9 +22,8 @@ namespace volumetric_kit::recon {
 namespace {
 
 // Runs `cleanup` when it leaves scope, unless release()d first.
-// submit_single_time uses it to free or give back its transients on every exit
-// path -- and to deliberately leak them (rather than free objects the GPU may
-// still be using) when the fence wait fails.
+// submit_single_time uses it to give back its command and drop its timer span
+// on every exit path, and releases it when the command is left to the device.
 class ScopeGuard {
  public:
   explicit ScopeGuard(std::function<void()> cleanup)
@@ -445,8 +444,16 @@ Device& Device::operator=(Device&& other) noexcept {
 Device::~Device() { destroy(); }
 
 void Device::destroy() noexcept {
-  // Frees each pool's command buffer with it.
   for (const Command& command : made_) {
+    // One left to the device is waited for first, and leaked if the device may
+    // still run it. A lost device's is freed, since its children must still
+    // be destroyed.
+    if (command.pending) {
+      const VkResult waited =
+          vkWaitForFences(device_, 1, &command.fence, VK_TRUE, UINT64_MAX);
+      if (waited != VK_SUCCESS && waited != VK_ERROR_DEVICE_LOST) continue;
+    }
+    // Frees the pool's command buffer with it.
     vkDestroyFence(device_, command.fence, nullptr);
     vkDestroyCommandPool(device_, command.pool, nullptr);
   }
@@ -523,26 +530,19 @@ VkResult Device::queue_submit(std::uint32_t count, const VkSubmitInfo* submits,
 }
 
 Result<Device::Command> Device::take_command() const {
-  Command command;
-  {
-    const std::lock_guard<std::mutex> lock(commands_mutex_);
-    if (!free_commands_.empty()) {
-      command = free_commands_.back();
-      free_commands_.pop_back();
-    }
-  }
-  if (command.buffer != VK_NULL_HANDLE) {
-    // Its fence is signalled if its last submit reached the queue; its buffer
-    // resets as it begins.
-    const VkResult reset = vkResetFences(device_, 1, &command.fence);
-    if (reset != VK_SUCCESS) {
-      give_back(command);
-      return vk_error(reset, "vkResetFences");
-    }
+  const std::lock_guard<std::mutex> lock(commands_mutex_);
+  if (!free_commands_.empty()) {
+    const Command command = free_commands_.back();
+    free_commands_.pop_back();
     return command;
   }
-  // Every one made is in use, so make another. The pool is created with
+  // Every one made is in use, so make another, under the lock: a device does
+  // so only as often as its submits overlap. Both lists grow first, so a throw
+  // leaks nothing and give_back never allocates. The pool is created with
   // RESET_COMMAND_BUFFER, so beginning its buffer again resets it.
+  made_.reserve(made_.size() + 1);
+  free_commands_.reserve(made_.size() + 1);
+  Command command;
   VkCommandPoolCreateInfo pool_info{};
   pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
   pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
@@ -567,10 +567,7 @@ Result<Device::Command> Device::take_command() const {
     vkDestroyCommandPool(device_, command.pool, nullptr);
     return vk_error(fenced, "vkCreateFence");
   }
-  const std::lock_guard<std::mutex> lock(commands_mutex_);
   made_.push_back(command);
-  // Room for every command made, so give_back never allocates.
-  free_commands_.reserve(made_.size());
   return command;
 }
 
@@ -593,16 +590,24 @@ Status Device::submit_single_time(
   if (in_flight != nullptr) *in_flight = false;
   // A command buffer and fence no other submit holds, so recording takes no
   // lock. It is given back on every exit path below -- including the VR_VK_TRY
-  // early returns -- except a failed wait, which leaves it to the device.
+  // early returns and a throwing `record` -- except one that leaves it to the
+  // device.
   VR_ASSIGN(const Command command, take_command());
-  ScopeGuard give_back_command([&] { give_back(command); });
   const VkCommandBuffer cmd = command.buffer;
   const VkFence fence = command.fence;
+  bool recording = false;
+  ScopeGuard give_back_command([&] {
+    // A `record` that throws leaves the buffer recording, which begin may not
+    // be given, so it is reset; one that will not reset is not reused.
+    if (recording && vkResetCommandBuffer(cmd, 0) != VK_SUCCESS) return;
+    give_back(command);
+  });
 
   VkCommandBufferBeginInfo begin{};
   begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
   begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
   VR_VK_TRY(vkBeginCommandBuffer(cmd, &begin));
+  recording = true;
   // Outside the span below, deliberately. A debug label can force an encoder
   // boundary (MoltenVK maps the pair to push/popDebugGroup), so a span opened
   // outside it would charge the marker to the kernel and make every published
@@ -631,22 +636,37 @@ Status Device::submit_single_time(
   }
   end_debug_label(cmd, debug_label);
   VR_VK_TRY(vkEndCommandBuffer(cmd));
+  recording = false;
 
   VkSubmitInfo submit{};
   submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
   submit.commandBufferCount = 1;
   submit.pCommandBuffers = &cmd;
-  VR_VK_TRY(queue_submit(1, &submit, fence));
+  // A failed submit leaves the buffer and fence as they were, except one that
+  // loses the device, which vkQueueSubmit does not promise that for: it is
+  // handled as a failed wait below.
+  const VkResult submitted = queue_submit(1, &submit, fence);
+  if (submitted != VK_SUCCESS && submitted != VK_ERROR_DEVICE_LOST) {
+    return vk_error(submitted, "vkQueueSubmit");
+  }
 
   // Block until the GPU signals the fence. If the wait itself fails (device
   // lost / out of memory) the submit may still be pending, so the command
   // buffer and fence must NOT be reused -- disarm the guard and leave them to
   // the device rather than hand the GPU's objects to another submit (a
-  // use-after-free). destroy() still frees both.
+  // use-after-free). destroy() waits for them before freeing them.
   const VkResult waited =
-      vkWaitForFences(device_, 1, &fence, VK_TRUE, UINT64_MAX);
+      submitted == VK_SUCCESS
+          ? vkWaitForFences(device_, 1, &fence, VK_TRUE, UINT64_MAX)
+          : submitted;
   if (waited != VK_SUCCESS) {
     give_back_command.release();
+    {
+      const std::lock_guard<std::mutex> lock(commands_mutex_);
+      for (Command& made : made_) {
+        if (made.pool == command.pool) made.pending = true;
+      }
+    }
     if (in_flight != nullptr) *in_flight = true;
     // The leaked command buffer still carries this span's `vkCmdResetQueryPool`
     // and both timestamp writes, so the two queries cannot go back into
@@ -656,7 +676,13 @@ Status Device::submit_single_time(
     if (timer != nullptr) {
       timer->abandon();
     }
-    return vk_error(waited, "vkWaitForFences");
+    return vk_error(
+        waited, submitted == VK_SUCCESS ? "vkWaitForFences" : "vkQueueSubmit");
+  }
+  // Unsignalled for the next submit. One that will not reset is not given
+  // back, so the next submit makes another; destroy() still frees it.
+  if (vkResetFences(device_, 1, &fence) != VK_SUCCESS) {
+    give_back_command.release();
   }
 
   // Only here, and only on this path. The queries are readable because the

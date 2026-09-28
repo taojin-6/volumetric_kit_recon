@@ -6,13 +6,14 @@
 // a device-local and a host-visible buffer, since a buffer's memory type must
 // not change what a batch does. Uploads inline, staged and packed by the
 // caller, several readbacks in one batch, transfers left unordered, the
-// refusals, the moves, and timed dispatches and uploads. Skips (exit 0) where
-// no device is present.
+// refusals, the moves, timed dispatches and uploads, and a throwing record.
+// Skips (exit 0) where no device is present.
 
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -633,6 +634,20 @@ int main() {
     self = std::move(*alias);
     CHECK(self.submit().ok());
     CHECK(word == 43u);
+  }
+
+  // A `record` that throws gives its buffer back reset: the next submit begins
+  // the same one, which the layer refuses while it is still recording.
+  {
+    bool threw = false;
+    try {
+      static_cast<void>(device.submit_single_time(
+          [](VkCommandBuffer) { throw std::runtime_error("record"); }));
+    } catch (const std::runtime_error&) {
+      threw = true;
+    }
+    CHECK(threw);
+    CHECK(device.submit_single_time([](VkCommandBuffer) {}).ok());
   }
 
   // Several threads batch on one device at once, each with its own kernel,
