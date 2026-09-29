@@ -3,7 +3,8 @@
 
 // The GPU pass against the SDK's host path, on a real camera and a still
 // scene: one capture through the host path (the SDK undistorts colour and
-// registers depth to it), one raw through GpuFramePrep.
+// registers depth to it), one raw through GpuFramePrep, its colour decoded
+// onto the pass's device where the hardware leaves it there.
 //   - Colour: the two undistorted images, gains fitted per channel for the
 //     exposure change between captures, line up best unshifted in the centre
 //     and in every corner, where a wrong lens model moves them apart.
@@ -65,7 +66,8 @@ struct Frame {
 std::uint32_t g_fps = 30;
 
 sensor::OrbbecCapture::Options options_for(const char* serial, std::uint32_t w,
-                                           std::uint32_t h, bool raw) {
+                                           std::uint32_t h, bool raw,
+                                           const vr::Device* device = nullptr) {
   sensor::OrbbecCapture::Options o;
   o.serial = serial;
   o.fps = g_fps;
@@ -73,6 +75,7 @@ sensor::OrbbecCapture::Options options_for(const char* serial, std::uint32_t w,
   o.color_height = h;
   o.color_codec = sensor::OrbbecColorCodec::Hevc;
   o.raw = raw;
+  o.device = device;
   return o;
 }
 
@@ -129,7 +132,8 @@ int grab_host(const char* serial, std::uint32_t w, std::uint32_t h,
 int grab_gpu(const char* serial, std::uint32_t w, std::uint32_t h,
              vr::Device& device, vr::Allocator& allocator,
              sensor::GpuFramePrep& prep, Frame* out) {
-  auto opened = sensor::OrbbecCapture::open(options_for(serial, w, h, true));
+  auto opened =
+      sensor::OrbbecCapture::open(options_for(serial, w, h, true, &device));
   if (!opened) {
     std::fprintf(stderr, "FAIL: open raw: %s\n",
                  opened.status().message().c_str());
@@ -155,6 +159,20 @@ int grab_gpu(const char* serial, std::uint32_t w, std::uint32_t h,
         const vr::Vec4f t = raw.depth_cam_to_world[3];
         std::printf("  depth camera at (%.4f, %.4f, %.4f) m in the colour's\n",
                     t.x, t.y, t.z);
+        // Where the hardware decoded it, the colour stays on the device; a
+        // leg that promises the hardware must find it there.
+        const bool on_device =
+            raw.color.device != nullptr || raw.color.image[0] != nullptr;
+        std::printf("  colour %s\n",
+                    raw.color.image[0] != nullptr ? "as images on the device"
+                    : raw.color.device != nullptr ? "in a buffer on the device"
+                                                  : "as host planes");
+        const char* required = std::getenv("VR_TEST_HEVC_BACKEND");
+        if (required != nullptr && !on_device) {
+          std::fprintf(stderr, "FAIL: %s promised, colour on the host\n",
+                       required);
+          return 1;
+        }
         auto prepared = prep.prepare(raw);
         if (!prepared) {
           std::fprintf(stderr, "FAIL: prepare: %s\n",

@@ -24,6 +24,10 @@
 #include "volumetric_kit/recon/sensor/orbbec/export.hpp"
 #include "volumetric_kit/recon/sensor/raw_frame.hpp"
 
+namespace volumetric_kit::recon {
+class Device;
+}  // namespace volumetric_kit::recon
+
 namespace volumetric_kit::recon::sensor {
 
 /// @brief A camera's role in a hardware-synchronised rig, as the camera itself
@@ -138,6 +142,13 @@ struct OrbbecStreamOptions {
   /// camera's factory calibration. Needs @ref OrbbecColorCodec::Hevc, whose
   /// decoded Y'CbCr planes the pass converts.
   bool raw = false;
+  /// With @ref raw, the device the GPU pass prepares the frames on. A
+  /// picture the hardware decoder leaves there -- NVDEC's (VR_WITH_CUDA) or
+  /// VideoToolbox's -- stays there, and a raw frame's colour is that picture
+  /// (`YuvImage::device` or `YuvImage::image`) rather than host planes, so it
+  /// never crosses to the host. Null, or a decode elsewhere, gives host
+  /// planes. Borrowed: it must outlive the capture and every frame on it.
+  const Device* device = nullptr;
 };
 
 /// @brief One Orbbec RGB-D camera, polled for posed frames with depth

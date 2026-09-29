@@ -641,6 +641,7 @@ if(VR_WITH_ORBBEC)
       recon_sensor_orbbec_hevc_test
       sensor_orbbec_hevc_test.cpp
       ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec/hevc_color.cpp
+      ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec/device_picture_frame.cpp
     )
     target_link_libraries(
       recon_sensor_orbbec_hevc_test
