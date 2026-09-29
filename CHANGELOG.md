@@ -158,11 +158,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   recorded in gfx's frame. It shades unlit, lit or by normal, orbits, and
   looks out of any camera. Defaults: 1 cm voxels and H.265 colour. Ctrl+C
   stops the rig before it exits. See the 2026-09-29 decision.
-- `sensor`: **`GpuFramePrepConfig::queue_families`**, the queue families a
-  pass's output buffers are shared with, as `MarchingCubesConfig`'s are for
-  the mesh. A renderer on another family can then read a frame's colour.
-  Empty (the default) leaves the outputs EXCLUSIVE, as before. Test:
+- `sensor`: **`GpuFramePrepConfig::color_queue_families`**, the queue
+  families a pass's colour buffers are shared with, as `MarchingCubesConfig`'s
+  are for the mesh. A renderer on another family can then read a frame's
+  colour. Depth stays EXCLUSIVE, since only recon reads it, and an empty
+  config (the default) leaves both EXCLUSIVE, as before. Test:
   `recon_sensor_gpu_frame_prep`.
+- `core`: **`check_queue_family_count`**, the bound `MarchingCubes::create`
+  and `GpuFramePrep::create` both put on a config's fixed family array.
 - `sensor`: **raw Orbbec frames over MJPEG.** A raw capture or rig no longer
   needs H.265: over MJPEG it streams the camera's JPEGs, decoded on a
   thread per camera by `JpegDecoder`, onto `OrbbecStreamOptions::device`

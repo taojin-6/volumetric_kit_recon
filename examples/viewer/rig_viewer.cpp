@@ -19,11 +19,12 @@
 // device to device.
 //
 // What makes the atlas copy safe, each checked or derived rather than assumed:
-//   * sharing -- the frame prep's outputs are made CONCURRENT across recon's
-//     and gfx's queue families (GpuFramePrepConfig::queue_families), since
-//     MoltenVK hands the two libraries different families, where reading an
-//     EXCLUSIVE buffer is undefined in the way that appears to work. Verified
-//     per buffer before the copy is recorded, as fuse_viewer verifies the mesh.
+//   * sharing -- the frame prep's colour is made CONCURRENT across recon's
+//     and gfx's queue families (GpuFramePrepConfig::color_queue_families),
+//     since MoltenVK hands the two libraries different families, where reading
+//     an EXCLUSIVE buffer is undefined in the way that appears to work.
+//     Verified per buffer before its camera textures the mesh, so a buffer gfx
+//     cannot copy costs that camera's triangles rather than the mesh's texture.
 //   * lifetime -- the colour buffers a copy reads are held by the frame slot
 //     that recorded it until begin_frame fence-waits that slot again, and an
 //     atlas image is reused only once no frame in flight and no committed
@@ -85,6 +86,7 @@
 #include "recon_gfx_bridge.hpp"
 #include "shared_device.hpp"
 #include "stage_metrics.hpp"  // fuse_viewer::to_sections
+#include "viewer_common.hpp"
 
 #include "volumetric_kit/recon/core/allocator.hpp"
 #include "volumetric_kit/recon/core/buffer.hpp"
@@ -279,12 +281,13 @@ bool parse_args(int argc, char** argv, Options& o) {
       if (x == nullptr) return false;
       (a == "--width" ? o.width : o.height) = std::max(1, std::atoi(x));
     } else if (a == "--lit" || a == "--normals") {
-      if (shading_given) {
+      const Shading shading = a == "--lit" ? Shading::kLit : Shading::kNormals;
+      if (shading_given && o.shading != shading) {
         std::fprintf(stderr, "--lit or --normals, not both\n");
         return false;
       }
       shading_given = true;
-      o.shading = a == "--lit" ? Shading::kLit : Shading::kNormals;
+      o.shading = shading;
     } else if (a == "--no-texture") {
       o.texture = false;
     } else if (a == "--no-overlay") {
@@ -317,36 +320,6 @@ bool parse_args(int argc, char** argv, Options& o) {
   return true;
 }
 
-VkExtent2D window_extent(GLFWwindow* window) {
-  int width = 0, height = 0;
-  glfwGetFramebufferSize(window, &width, &height);
-  return {static_cast<std::uint32_t>(std::max(1, width)),
-          static_cast<std::uint32_t>(std::max(1, height))};
-}
-
-// The scope guards fuse_viewer declares, for the same reasons: join the fuse
-// thread before the recon objects it borrows go, shut ImGui's GLFW backend
-// down before the overlay's context, and detach the profiler from the frame
-// loop before the profiler dies.
-struct QuitJoin {
-  std::thread& thread;
-  std::atomic<bool>& quit;
-  ~QuitJoin() {
-    quit.store(true);
-    if (thread.joinable()) thread.join();
-  }
-};
-struct ImGuiGlfwShutdown {
-  bool active;
-  ~ImGuiGlfwShutdown() {
-    if (active) ImGui_ImplGlfw_Shutdown();
-  }
-};
-struct ProfilerDetach {
-  vg::app::WindowedApp& app;
-  ~ProfilerDetach() { app.set_profiler(nullptr); }
-};
-
 // A turntable around `target`, about the primary camera's image-up axis.
 // recon's world is the rig's, whose cameras follow OpenCV (+Y down), so gfx's
 // OrbitCamera -- which fixes world +Y as up -- would stand it on its head.
@@ -371,7 +344,7 @@ struct OrbitView {
 
 // The point nearest every camera's optical axis in the least-squares sense --
 // where a rig built around a subject is looking. `fallback` when the axes are
-// (nearly) parallel, as one camera's always is, or meet behind the cameras.
+// (nearly) parallel, as one camera's always is, or meet behind any camera.
 glm::vec3 axes_meet(const std::vector<glm::mat4>& poses, glm::vec3 fallback) {
   glm::mat3 a(0.0f);
   glm::vec3 b(0.0f);
@@ -385,9 +358,11 @@ glm::vec3 axes_meet(const std::vector<glm::mat4>& poses, glm::vec3 fallback) {
     return fallback;
   }
   const glm::vec3 p = glm::inverse(a) * b;
-  const glm::mat4& first = poses.front();
-  if (glm::dot(p - glm::vec3(first[3]), glm::vec3(first[2])) < 0.1f) {
-    return fallback;
+  for (const glm::mat4& c2w : poses) {
+    if (glm::dot(p - glm::vec3(c2w[3]), glm::normalize(glm::vec3(c2w[2]))) <
+        0.1f) {
+      return fallback;
+    }
   }
   return p;
 }
@@ -468,7 +443,7 @@ void record_atlas_copy(VkCommandBuffer cmd, VkImage image,
 // between the cameras' texture and the fused colour; the Rig panel counts each.
 enum Untextured : std::size_t {
   kEmptyMesh,   // the extract had no triangles, so there was nothing to texture
-  kNoColour,    // no camera of the set carried colour
+  kNoColour,    // no camera of the set carried colour gfx can copy
   kTextureOff,  // texturing switched off in the View panel
   kTextureFailed,  // the texture pass refused or failed (said on stderr)
   kUntexturedReasons,
@@ -477,20 +452,21 @@ constexpr const char* kUntexturedNames[kUntexturedReasons] = {
     "empty extract", "no colour", "texturing off", "texture failed"};
 
 // What the rig side reports beside the renderer's metrics, sampled on the
-// fuse thread (which owns the rig) and shown by the render thread.
+// fuse thread (which owns the rig) and copied out by the render thread every
+// frame, so it holds only what changes.
 struct RigPanel {
   std::uint64_t sets_fused = 0;
   std::uint64_t frames_fused = 0;
   std::size_t cameras_textured = 0;  // in the newest textured set
   std::array<std::uint64_t, kUntexturedReasons> untextured{};
   rsensor::OrbbecRigStats stats;
-  std::vector<std::string> serials;
   std::size_t vertices = 0;
   std::size_t triangles = 0;
   std::uint64_t mesh_version = 0;
   float map_load_factor = 0.0f;  // negative: the read failed
   std::int32_t map_blocks = 0;
-  double fuse_ms = 0.0;
+  double fuse_ms = 0.0;    // the newest set's prep, allocate and integrate
+  double remesh_ms = 0.0;  // the newest remesh's extract and texture
   vr::MemoryStats recon_memory;
   bool silent = false;  // no set within kSilenceLimit
 };
@@ -499,7 +475,8 @@ double to_mebibytes(std::uint64_t bytes) {
   return static_cast<double>(bytes) / (1024.0 * 1024.0);
 }
 
-void draw_rig_panel(const RigPanel& panel) {
+void draw_rig_panel(const RigPanel& panel,
+                    const std::vector<std::string>& serials) {
   if (!ImGui::Begin("Rig")) {
     ImGui::End();
     return;
@@ -514,6 +491,7 @@ void draw_rig_panel(const RigPanel& panel) {
                        static_cast<long long>(kSilenceLimit.count()));
   }
   ImGui::Text("fuse     %.2f ms/set", panel.fuse_ms);
+  ImGui::Text("remesh   %.2f ms, the newest", panel.remesh_ms);
   ImGui::Text("textured from %zu camera%s", panel.cameras_textured,
               panel.cameras_textured == 1 ? "" : "s");
   for (std::size_t r = 0; r < kUntexturedReasons; ++r) {
@@ -525,7 +503,7 @@ void draw_rig_panel(const RigPanel& panel) {
   for (std::size_t i = 0; i < panel.stats.cameras.size(); ++i) {
     const rsensor::OrbbecCaptureStats& st = panel.stats.cameras[i];
     ImGui::Text("%s  %llu in, %llu dropped, %llu failed, %llu lost",
-                i < panel.serials.size() ? panel.serials[i].c_str() : "?",
+                i < serials.size() ? serials[i].c_str() : "?",
                 static_cast<unsigned long long>(st.received),
                 static_cast<unsigned long long>(st.dropped),
                 static_cast<unsigned long long>(st.failed),
@@ -568,7 +546,7 @@ int run(GLFWwindow* window, const Options& opt) {
 
   vg::app::WindowedAppConfig config;
   config.app_name = "rig_viewer";
-  config.swapchain.extent = window_extent(window);
+  config.swapchain.extent = fuse_viewer::window_extent(window);
   config.swapchain.depth_format = VK_FORMAT_D32_SFLOAT;
   config.frames_in_flight = 2;
   auto app_r = vg::app::WindowedApp::adopt(
@@ -705,12 +683,12 @@ int run(GLFWwindow* window, const Options& opt) {
   }
   rtex::ProjectiveTexturer texturer = std::move(texturer_result).value();
   // The colour buffers are what gfx copies into its atlas, so the passes
-  // share their outputs with gfx's family too -- the same reasoning as the
-  // mesh buffers above, and the same unconditional pair.
+  // share them with gfx's family too -- the same reasoning as the mesh buffers
+  // above, and the same unconditional pair. Depth only recon reads.
   rsensor::GpuFramePrepConfig prep_config;
-  prep_config.queue_families[0] = shared.compute_family;
-  prep_config.queue_families[1] = shared.graphics_family;
-  prep_config.queue_family_count = 2;
+  prep_config.color_queue_families[0] = shared.compute_family;
+  prep_config.color_queue_families[1] = shared.graphics_family;
+  prep_config.color_queue_family_count = 2;
   std::vector<rsensor::GpuFramePrep> preps;
   for (std::size_t i = 0; i < cameras; ++i) {
     auto prep = rsensor::GpuFramePrep::create(rdevice, rallocator, prep_config);
@@ -762,7 +740,7 @@ int run(GLFWwindow* window, const Options& opt) {
   vg::Profiler profiler = std::move(profiler_result).value();
   profiler.set_memory_source(&app.allocator());
   app.set_profiler(&profiler);
-  const ProfilerDetach profiler_guard{app};
+  const fuse_viewer::ProfilerDetach profiler_guard{app};
 
   // Before ImGui's GLFW backend, which chains to the callback it finds.
   ScrollInput scroll;
@@ -791,7 +769,7 @@ int run(GLFWwindow* window, const Options& opt) {
       return 1;
     }
   }
-  const ImGuiGlfwShutdown imgui_glfw_guard{opt.overlay};
+  const fuse_viewer::ImGuiGlfwShutdown imgui_glfw_guard{opt.overlay};
 
   auto sampler_result = vg::Sampler::create(app.device().handle());
   if (!sampler_result.ok()) {
@@ -802,23 +780,16 @@ int run(GLFWwindow* window, const Options& opt) {
   vg::Sampler sampler = std::move(sampler_result).value();
 
   // A texture + its own pool + a set binding it, as fuse_viewer's bundle.
-  auto bind_atlas = [&](vg::Texture texture) -> std::shared_ptr<AtlasImage> {
+  using AtlasResult = vg::Result<std::shared_ptr<AtlasImage>>;
+  auto bind_atlas = [&](vg::Texture texture) -> AtlasResult {
     const VkDescriptorPoolSize pool_size{
         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
     auto pool_result =
         vg::DescriptorPool::create(app.device().handle(), &pool_size, 1, 1);
-    if (!pool_result.ok()) {
-      std::fprintf(stderr, "atlas pool: %s\n",
-                   pool_result.status().message().c_str());
-      return nullptr;
-    }
+    if (!pool_result.ok()) return pool_result.status();
     vg::DescriptorPool atlas_pool = std::move(pool_result).value();
     auto set_result = atlas_pool.allocate(pipeline.descriptor_set_layout(0));
-    if (!set_result.ok()) {
-      std::fprintf(stderr, "atlas set: %s\n",
-                   set_result.status().message().c_str());
-      return nullptr;
-    }
+    if (!set_result.ok()) return set_result.status();
     auto atlas = std::make_shared<AtlasImage>();
     atlas->tex = std::move(texture);
     atlas->pool = std::move(atlas_pool);
@@ -846,8 +817,13 @@ int run(GLFWwindow* window, const Options& opt) {
                    uploaded.status().message().c_str());
       return 1;
     }
-    white_atlas = bind_atlas(std::move(uploaded).value());
-    if (!white_atlas) return 1;
+    AtlasResult bound = bind_atlas(std::move(uploaded).value());
+    if (!bound.ok()) {
+      std::fprintf(stderr, "white atlas: %s\n",
+                   bound.status().message().c_str());
+      return 1;
+    }
+    white_atlas = std::move(bound).value();
   }
 
   // Atlas images the copies fill, reused once only the pool holds one: the
@@ -856,9 +832,8 @@ int run(GLFWwindow* window, const Options& opt) {
   // prep's colour is canonical-encoded 8-bit and the sampler then filters in
   // linear (the 2026-08-02 colour-space decision, as fuse_viewer's upload).
   std::vector<std::shared_ptr<AtlasImage>> atlas_pool;
-  auto acquire_atlas =
-      [&](std::uint32_t width,
-          std::uint32_t height) -> std::shared_ptr<AtlasImage> {
+  auto acquire_atlas = [&](std::uint32_t width,
+                           std::uint32_t height) -> AtlasResult {
     for (const std::shared_ptr<AtlasImage>& atlas : atlas_pool) {
       if (atlas.use_count() == 1 && atlas->tex.extent().width == width &&
           atlas->tex.extent().height == height) {
@@ -870,13 +845,9 @@ int run(GLFWwindow* window, const Options& opt) {
     desc.format = VK_FORMAT_R8G8B8A8_SRGB;
     desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     auto image = app.allocator().create_image(desc);
-    if (!image.ok()) {
-      std::fprintf(stderr, "atlas image: %s\n",
-                   image.status().message().c_str());
-      return nullptr;
-    }
-    std::shared_ptr<AtlasImage> atlas = bind_atlas(std::move(image).value());
-    if (atlas) atlas_pool.push_back(atlas);
+    if (!image.ok()) return image.status();
+    AtlasResult atlas = bind_atlas(std::move(image).value());
+    if (atlas.ok()) atlas_pool.push_back(atlas.value());
     return atlas;
   };
 
@@ -915,9 +886,11 @@ int run(GLFWwindow* window, const Options& opt) {
   std::uint64_t shared_released_through = 0;
   std::vector<vg::FrameMetrics::Section> shared_fuse_stages;
   RigPanel shared_panel;
-  shared_panel.serials = serials;
   std::atomic<bool> fusing_done{false};
+  // Set by whatever ended fusion early, so a scripted run exits non-zero.
+  std::atomic<bool> fuse_failed{false};
   std::atomic<bool> quit{false};
+  const bool cross_family = shared.graphics_family != shared.compute_family;
 
   std::thread fuse_thread([&]() {
     try {
@@ -927,6 +900,21 @@ int run(GLFWwindow* window, const Options& opt) {
       std::size_t cameras_textured = 0;
       std::array<std::uint64_t, kUntexturedReasons> untextured{};
       bool texture_error_reported = false;
+      std::vector<bool> uncopyable_reported(cameras, false);
+
+      // Whether gfx can copy `color` into `tile`: a copy source, as large as
+      // the tile, and CONCURRENT where gfx is on another family, since a copy
+      // from a buffer EXCLUSIVE to recon's is undefined with nothing to report
+      // it. Checked before the camera textures the mesh: once uv0 point into
+      // its tile, the tile must be filled.
+      auto copyable = [&](const vr::Buffer& color,
+                          const rtex::AtlasTile& tile) {
+        return color.valid() &&
+               (color.usage() & VK_BUFFER_USAGE_TRANSFER_SRC_BIT) != 0 &&
+               (!cross_family ||
+                color.sharing_mode() == VK_SHARING_MODE_CONCURRENT) &&
+               color.size() >= VkDeviceSize(tile.width) * tile.height * 4u;
+      };
 
       // Texture `mesh` from the set's cameras and publish the two together:
       // uv0 index into this set's images, so the mesh and its atlas are one
@@ -949,6 +937,20 @@ int run(GLFWwindow* window, const Options& opt) {
               for (std::size_t c = 0; c < frames.size() && c < cameras; ++c) {
                 if (!frames[c] || !frames[c]->has_color()) continue;
                 const rsensor::DeviceFrame& f = *frames[c];
+                if (!copyable(*f.color, layout.tiles[c])) {
+                  // Said once a camera: its format is fixed at open, so every
+                  // set would repeat it.
+                  if (!uncopyable_reported[c]) {
+                    std::fprintf(stderr,
+                                 "rig_viewer: camera %zu's colour cannot be "
+                                 "copied into the atlas (not a copy source, "
+                                 "short of its tile, or EXCLUSIVE across two "
+                                 "queue families); texturing without it\n",
+                                 c);
+                    uncopyable_reported[c] = true;
+                  }
+                  continue;
+                }
                 // The frame's own buffers, held by the view for the call: its
                 // depth, and its colour as the coverage, so a vertex where the
                 // lens saw nothing is not textured black from this camera.
@@ -1025,30 +1027,31 @@ int run(GLFWwindow* window, const Options& opt) {
       if (!started.ok()) {
         std::fprintf(stderr, "rig_viewer: rig start: %s\n",
                      started.message().c_str());
+        fuse_failed.store(true);
       }
       std::uint64_t sets = 0;
       std::uint64_t frames_fused = 0;
       auto last_set = std::chrono::steady_clock::now();
+      bool said_silent = false;
       while (started.ok() && !quit.load()) {
-        fuse_stages.clear();
-        for (const char* stage :
-             {"poll", "frame prep", "allocate", "resize", "integrate",
-              "  ..active set", "extract", "texture"}) {
-          fuse_stages.seed(stage);
-        }
-        auto polled = [&]() {
-          vr::StageScope scope(fuse_stages, "poll");
-          return rig.poll_raw_set();
-        }();
+        const auto poll_start = std::chrono::steady_clock::now();
+        auto polled = rig.poll_raw_set();
+        const double poll_ms =
+            std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - poll_start)
+                .count();
         if (!polled) {
           std::fprintf(stderr, "rig_viewer: poll: %s\n",
                        polled.status().message().c_str());
+          fuse_failed.store(true);
           break;
         }
         if (!polled.value() || polled.value()->count() == 0) {
+          // Published only when it changes: this path runs every millisecond.
           const bool silent =
               std::chrono::steady_clock::now() - last_set > kSilenceLimit;
-          {
+          if (silent != said_silent) {
+            said_silent = silent;
             std::lock_guard<std::mutex> lock(share_mtx);
             shared_panel.silent = silent;
           }
@@ -1056,6 +1059,16 @@ int run(GLFWwindow* window, const Options& opt) {
           continue;
         }
         last_set = std::chrono::steady_clock::now();
+        said_silent = false;
+        // The table shows the newest set's rows, seeded in display order so the
+        // remesh rows read 0 between remeshes rather than drop out.
+        fuse_stages.clear();
+        for (const char* stage :
+             {"poll", "frame prep", "allocate", "resize", "integrate",
+              "  ..active set", "extract", "texture"}) {
+          fuse_stages.seed(stage);
+        }
+        fuse_stages.add_cpu("poll", poll_ms);
         const rsensor::OrbbecRigRawSet& set = *polled.value();
         auto prepared = [&]() {
           // One row for the set: the cameras prepare at once, so their sum
@@ -1066,6 +1079,7 @@ int run(GLFWwindow* window, const Options& opt) {
         if (!prepared) {
           std::fprintf(stderr, "rig_viewer: frame prep: %s\n",
                        prepared.status().message().c_str());
+          fuse_failed.store(true);
           break;
         }
         const std::vector<std::optional<rsensor::DeviceFrame>>& frames =
@@ -1083,12 +1097,19 @@ int run(GLFWwindow* window, const Options& opt) {
           }
           ++frames_fused;
         }
-        if (!fused_ok) break;
+        if (!fused_ok) {
+          fuse_failed.store(true);
+          break;
+        }
         ++sets;
 
-        // The last set of a --sets run is always meshed, waiting a moment for
-        // the renderer to collect the previous mesh first: it is the complete
-        // surface, and nothing later will supersede it.
+        // The last set of a --sets run is always meshed: it is the complete
+        // surface, and nothing later will supersede it. So it waits a moment
+        // for the renderer to collect the previous mesh, then extracts whether
+        // or not it did, as fuse_viewer's final extract does -- a minimized
+        // window never collects, and skipping lost the surface with nothing
+        // said. Not once the window has closed, where a full extract and
+        // texture would only stall the join.
         const bool last =
             opt.sets > 0 && sets >= static_cast<std::uint64_t>(opt.sets);
         if (last) {
@@ -1100,11 +1121,22 @@ int run(GLFWwindow* window, const Options& opt) {
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
           }
         }
-        if ((last ||
-             sets % static_cast<std::uint64_t>(opt.remesh_every) == 0) &&
-            release_and_may_publish()) {
-          remesh(frames);
+        if (!quit.load() &&
+            (last ||
+             sets % static_cast<std::uint64_t>(opt.remesh_every) == 0)) {
+          if (release_and_may_publish()) {
+            remesh(frames);
+          } else if (last) {
+            std::fprintf(stderr,
+                         "rig_viewer: the renderer never collected the last "
+                         "mesh (window hidden, or drawing stopped); meshing "
+                         "the last set anyway\n");
+            remesh(frames);
+          }
         }
+        // Fusion alone, before the remesh rows go in: those describe the
+        // newest remesh, not this set, and are reported beside it.
+        const double fuse_ms = fuse_stages.total_cpu_ms(/*exclude=*/"poll");
         fuse_stages.merge(remesh_stages);
         {
           const vr::MemoryStats memory = rallocator.memory_stats();
@@ -1112,7 +1144,8 @@ int run(GLFWwindow* window, const Options& opt) {
           const rsensor::OrbbecRigStats stats = rig.stats();
           std::lock_guard<std::mutex> lock(share_mtx);
           shared_fuse_stages = fuse_viewer::to_sections(fuse_stages);
-          shared_panel.fuse_ms = fuse_stages.total_cpu_ms(/*exclude=*/"poll");
+          shared_panel.fuse_ms = fuse_ms;
+          shared_panel.remesh_ms = remesh_stages.total_cpu_ms();
           shared_panel.sets_fused = sets;
           shared_panel.frames_fused = frames_fused;
           shared_panel.cameras_textured = cameras_textured;
@@ -1125,21 +1158,24 @@ int run(GLFWwindow* window, const Options& opt) {
         }
         if (last) break;
       }
-      rig.stop();
     } catch (const std::exception& e) {
       std::fprintf(stderr, "rig_viewer: fuse thread aborted: %s\n", e.what());
+      fuse_failed.store(true);
     }
+    // Outside the try, so an exception stops the cameras too.
+    rig.stop();
     fusing_done.store(true);
   });
-  QuitJoin fuse_guard{fuse_thread, quit};
+  fuse_viewer::QuitJoin fuse_guard{fuse_thread, quit};
 
   // --- Render thread (main) -------------------------------------------------
-  // The mesh ring's bookkeeping is fuse_viewer's, line for line in intent:
-  // retire, then take, under one lock; release everything older than the
-  // oldest generation a frame in flight draws; retry a take that could not be
-  // committed rather than drop it. What is new is the atlas: a taken version's
-  // job is recorded into this frame's command buffer, and the colour buffers it
-  // reads stay with this frame's slot until the slot comes round again.
+  // The mesh ring's bookkeeping is fuse_viewer's, and its two decisions are
+  // viewer_common.hpp's: retire, then take, under one lock; release everything
+  // older than the oldest generation a frame in flight draws; retry a take
+  // that could not be committed rather than drop it. What is new is the atlas:
+  // a taken version's job is recorded into this frame's command buffer, and the
+  // colour buffers it reads stay with this frame's slot until the slot comes
+  // round again.
   std::vector<std::shared_ptr<AtlasImage>> slot_atlas(config.frames_in_flight);
   std::vector<std::vector<std::shared_ptr<const vr::Buffer>>> slot_sources(
       config.frames_in_flight);
@@ -1151,10 +1187,9 @@ int run(GLFWwindow* window, const Options& opt) {
   std::vector<std::uint64_t> frame_generations(config.frames_in_flight, 0);
   std::uint64_t newest_taken_generation = 0;
   bool mesh_unusable = false;
-  bool atlas_unusable = false;
+  bool atlas_error_said = false;  // until an atlas image is acquired again
   std::vector<vg::FrameMetrics::Section> fuse_stages_snapshot;
   RigPanel panel;
-  const bool cross_family = shared.graphics_family != shared.compute_family;
   double last_x = 0.0, last_y = 0.0;
   bool have_last = false;
 
@@ -1173,7 +1208,7 @@ int run(GLFWwindow* window, const Options& opt) {
       continue;
     }
 
-    auto frame = app.begin_frame(window_extent(window));
+    auto frame = app.begin_frame(fuse_viewer::window_extent(window));
     if (!frame.ok()) {
       std::fprintf(stderr, "begin_frame: %s\n",
                    frame.status().message().c_str());
@@ -1196,15 +1231,9 @@ int run(GLFWwindow* window, const Options& opt) {
       // The mesh rows are filled below, from what this frame draws.
       panel = shared_panel;
 
-      frame_generations[render_frame.slot] = 0;
-      std::uint64_t oldest_in_flight = 0;
-      for (const std::uint64_t g : frame_generations) {
-        if (g != 0 && (oldest_in_flight == 0 || g < oldest_in_flight))
-          oldest_in_flight = g;
-      }
-      if (oldest_in_flight == 0) oldest_in_flight = live_view.generation;
-      shared_released_through =
-          oldest_in_flight > 0 ? oldest_in_flight - 1 : newest_taken_generation;
+      shared_released_through = fuse_viewer::retire_and_release_mark(
+          frame_generations, render_frame.slot, live_view.generation,
+          newest_taken_generation);
       if (pending_mesh && !mesh_unusable && taken_version == 0) {
         taken = *pending_mesh;
         pending_mesh.reset();
@@ -1228,53 +1257,40 @@ int run(GLFWwindow* window, const Options& opt) {
         taken_job = AtlasJob{};
         taken_version = 0;
       } else if (taken_version != 0) {
-        const bool sharing_ok =
-            !cross_family || taken.sharing_mode == VK_SHARING_MODE_CONCURRENT;
-        const bool bindable =
-            taken.valid() && sharing_ok &&
-            (taken.vertex_usage & VK_BUFFER_USAGE_VERTEX_BUFFER_BIT) != 0 &&
-            (taken.index_usage & VK_BUFFER_USAGE_INDEX_BUFFER_BIT) != 0 &&
-            (taken.indirect_usage & VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT) != 0;
-        if (!bindable) {
+        if (const char* why =
+                fuse_viewer::unbindable_reason(taken, cross_family)) {
           std::fprintf(stderr,
                        "rig_viewer: the extracted mesh cannot be bound as "
                        "geometry (%s); drawing stops here\n",
-                       sharing_ok ? "usage bits or handles missing"
-                                  : "its buffers are EXCLUSIVE across two "
-                                    "queue families");
+                       why);
           mesh_unusable = true;
+          // Dropped, so this is said once (see fuse_viewer).
+          taken = rmesh::DeviceMesh{};
+          taken_job = AtlasJob{};
+          taken_version = 0;
         } else {
-          // The colour buffers are checked as the mesh's are: a copy from one
-          // that is EXCLUSIVE to recon's family, or that is not a copy source,
-          // is undefined with nothing to report it.
-          bool sources_ok = true;
-          for (const AtlasTileSource& source : taken_job.tiles) {
-            const vr::Buffer& color = *source.color;
-            sources_ok =
-                sources_ok && color.valid() &&
-                (color.usage() & VK_BUFFER_USAGE_TRANSFER_SRC_BIT) != 0 &&
-                (!cross_family ||
-                 color.sharing_mode() == VK_SHARING_MODE_CONCURRENT) &&
-                color.size() >=
-                    VkDeviceSize(source.tile.width) * source.tile.height * 4u;
-          }
-          if (!taken_job.empty() && !sources_ok && !atlas_unusable) {
-            std::fprintf(stderr,
-                         "rig_viewer: the cameras' colour buffers cannot be "
-                         "copied into the atlas (EXCLUSIVE across two queue "
-                         "families, not a copy source, or short); drawing "
-                         "untextured from here\n");
-            atlas_unusable = true;
-          }
+          // Every tile is one the fuse thread found copyable, since it left
+          // out any camera whose colour is not.
           std::shared_ptr<AtlasImage> next = white_atlas;
-          if (!taken_job.empty() && !atlas_unusable) {
-            next = acquire_atlas(taken_job.width, taken_job.height);
-            if (next) {
+          if (!taken_job.empty()) {
+            AtlasResult acquired =
+                acquire_atlas(taken_job.width, taken_job.height);
+            if (acquired.ok()) {
+              next = std::move(acquired).value();
+              atlas_error_said = false;
               record_atlas_copy(render_frame.cmd, next->tex.image(), taken_job);
               ++atlas_copies;
               for (AtlasTileSource& source : taken_job.tiles) {
                 slot_sources[render_frame.slot].push_back(
                     std::move(source.color));
+              }
+            } else {
+              next = nullptr;
+              // Retried every frame, below, so said once until it succeeds.
+              if (!atlas_error_said) {
+                std::fprintf(stderr, "rig_viewer: atlas image: %s\n",
+                             acquired.status().message().c_str());
+                atlas_error_said = true;
               }
             }
           }
@@ -1363,7 +1379,7 @@ int run(GLFWwindow* window, const Options& opt) {
       vg::ui::draw_metrics_panel(metrics, "Performance");
       ImGui::SetNextWindowPos(ImVec2(16.0f, 388.0f), ImGuiCond_FirstUseEver);
       ImGui::SetNextWindowSize(ImVec2(400.0f, 260.0f), ImGuiCond_FirstUseEver);
-      draw_rig_panel(panel);
+      draw_rig_panel(panel, serials);
       ImGui::SetNextWindowPos(ImVec2(432.0f, 16.0f), ImGuiCond_FirstUseEver);
       if (ImGui::Begin("View")) {
         int mode = static_cast<int>(shading);
@@ -1389,7 +1405,11 @@ int run(GLFWwindow* window, const Options& opt) {
           std::snprintf(label, sizeof(label), "camera %zu", i);
           if (ImGui::Button(label)) from_camera = i;
         }
-        if (fusing_done.load()) ImGui::Text("fusion stopped");
+        if (fusing_done.load()) {
+          ImGui::Text(fuse_failed.load()
+                          ? "fusion stopped on an error (see the terminal)"
+                          : "fusion stopped");
+        }
       }
       ImGui::End();
     }
@@ -1436,12 +1456,13 @@ int run(GLFWwindow* window, const Options& opt) {
     }
     if (drawn % 120 == 0) {
       std::printf(
-          "frame %d: %llu sets fused (%.1f ms/set), mesh v%llu (%zu "
-          "triangles), textured from %zu camera%s, %llu atlas copies",
+          "frame %d: %llu sets fused (%.1f ms/set, remesh %.1f ms), mesh "
+          "v%llu (%zu triangles), textured from %zu camera%s, %llu atlas "
+          "copies",
           drawn, static_cast<unsigned long long>(panel.sets_fused),
-          panel.fuse_ms, static_cast<unsigned long long>(panel.mesh_version),
-          panel.triangles, panel.cameras_textured,
-          panel.cameras_textured == 1 ? "" : "s",
+          panel.fuse_ms, panel.remesh_ms,
+          static_cast<unsigned long long>(panel.mesh_version), panel.triangles,
+          panel.cameras_textured, panel.cameras_textured == 1 ? "" : "s",
           static_cast<unsigned long long>(atlas_copies));
       for (std::size_t r = 0; r < kUntexturedReasons; ++r) {
         if (panel.untextured[r] != 0) {
@@ -1455,8 +1476,12 @@ int run(GLFWwindow* window, const Options& opt) {
     ++drawn;
   }
 
+  // Joined here rather than by fuse_guard, so fuse_failed is final when read.
   quit.store(true);
+  fuse_thread.join();
   app.wait_idle();
+  // The fuse thread said why on stderr; the exit code is for a script.
+  if (fuse_failed.load()) exit_code = 1;
   std::printf(
       "rig_viewer: drew %d frames; %llu sets (%llu frames) fused, "
       "mesh v%llu with %zu triangles, %llu atlas copies\n",

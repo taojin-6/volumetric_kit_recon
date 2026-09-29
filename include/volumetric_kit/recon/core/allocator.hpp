@@ -125,6 +125,20 @@ struct BufferDesc {
   static constexpr std::uint32_t kMaxQueueFamilies = 4;
 };
 
+/// @brief Check the entry count of a config that carries its queue families
+///        in a fixed array of @ref BufferDesc::kMaxQueueFamilies, as
+///        `mesh::MarchingCubesConfig` and `sensor::GpuFramePrepConfig` do.
+///
+/// For the tier's `create`, so a count past the array is refused there
+/// rather than read past its end at the first buffer. The Allocator bounds
+/// the *distinct* families; this bounds what the array can hold at all.
+///
+/// @param count   The config's entry count.
+/// @param caller  Named in the message, e.g. `"MarchingCubes::create"`.
+/// @return OK, or @ref Status::Code::InvalidArgument past the array.
+VR_CORE_API Status check_queue_family_count(std::uint32_t count,
+                                            const char* caller);
+
 /// @brief Owns a `VmaAllocator` built over a `VkDevice`, and creates
 ///        VMA-backed @ref Buffer resources on it.
 ///

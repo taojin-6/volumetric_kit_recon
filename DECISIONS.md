@@ -6925,7 +6925,7 @@ either kernel, or not copied; the walk never blocking, or skipped in either
 kernel; no side test; the depth pixels as the coordinates; and, under
 synchronization validation, a copy joining the run whatever wrote its source.
 
-### 2026-09-29 — `rig_viewer` draws a live Orbbec rig: raw sets prepared, fused and textured on the GPU, the atlas filled by device copies recorded in gfx's frame, and the frame prep's outputs shared with gfx's queue family.
+### 2026-09-29 — `rig_viewer` draws a live Orbbec rig: raw sets prepared, fused and textured on the GPU, the atlas filled by device copies recorded in gfx's frame, and the frame prep's colour shared with gfx's queue family.
 
 **The rule.** `examples/viewer/rig_viewer` is `fuse_viewer`'s sibling for a
 live, synced rig of Orbbec cameras. It opens `OrbbecRig` raw, onto the device
@@ -6947,15 +6947,21 @@ The atlas is laid out once, from the rig's colour cameras, with
 never changes size. A set missing a camera textures from the cameras present,
 into their own tiles, and a version samples only the tiles it wrote. It is a
 separate executable rather than a mode of `fuse_viewer`, which stays the
-dataset replay; the two share the bootstrap, the stage table and the ring's
-bookkeeping, and it builds only where the Orbbec driver does.
+dataset replay. The two share the bootstrap, the stage table, and
+`viewer_common.hpp`: the teardown guards and the render side of the ring (the
+release mark and the check that a mesh can be bound). It builds only where
+the Orbbec driver and its colour decoders do, since it opens the rig raw. It
+reads the rig's raw sets directly (`poll_raw_set`), as `fuse_orbbec --gpu
+--rig` does: the sensor contract of 2026-09-14 has frames, not sets.
 
-`GpuFramePrep::create` takes a `GpuFramePrepConfig` whose `queue_families`
-its outputs are shared with, `MarchingCubesConfig::queue_families`' twin. The
-viewer names recon's and gfx's families for both, since MoltenVK hands the
-two libraries different ones, where copying from an EXCLUSIVE buffer is
-undefined in the way that appears to work. Left empty, the outputs are
-EXCLUSIVE, as they always were.
+`GpuFramePrep::create` takes a `GpuFramePrepConfig` whose
+`color_queue_families` its colour output is shared with, the twin of
+`MarchingCubesConfig::queue_families`; both `create`s bound the count with
+`core`'s `check_queue_family_count`. The viewer names recon's and gfx's
+families, since MoltenVK hands the two libraries different ones, where
+copying from an EXCLUSIVE buffer is undefined in the way that appears to
+work. Depth stays EXCLUSIVE whatever the config says, since only recon reads
+it. Left empty, both outputs are EXCLUSIVE, as they always were.
 
 **Why a copy, not zero-copy sampling.** gfx's hybrid pipeline samples an
 image, which buys filtering and the sRGB decode in hardware. Reading the
@@ -6968,13 +6974,19 @@ Nothing crosses the host either way.
 
 - A copy's colour buffers are held by the frame slot that recorded it until
   `begin_frame` fence-waits that slot again, so a `GpuFramePrep` reuses one
-  only after gfx has read it.
+  only after gfx has read it. The pass's reuse test is `use_count() == 1`, a
+  relaxed load, so an acquire fence follows it: without one nothing orders
+  the render thread's fence wait before the pass's next write.
 - An atlas image is reused only when nothing but the viewer's pool holds it:
   not the committed version, and no frame slot that bound it.
 - The frame prep fence-waits its batch before `prepare_set` returns, and
   gfx's later `vkQueueSubmit` makes those writes visible to the copy.
-- Each colour buffer's usage, size and sharing mode are checked before the
-  copy is recorded, as the mesh's are before it is bound.
+- Each colour buffer's usage, size and sharing mode are checked on the fuse
+  thread, before its camera textures the mesh. Once uv0 point into a tile the
+  tile must be filled, so a buffer that fails the check costs its camera's
+  triangles, which other cameras or the fused colour take. Checked at the
+  copy instead, the only fallback was the white atlas, which draws every
+  textured triangle white.
 
 **Defaults.**
 
@@ -6998,6 +7010,10 @@ texture are not yet judged.
 | 2 cm | 9.9 ms | 245 k triangles | 60 fps | 0.03 ms | 7.8% | 1.3 GB |
 | 1 cm | 12.7-20 ms | 1.0 M triangles | 60 fps | 0.23 ms | 37% | 2.3 GB |
 
+"Fuse per set" includes the newest remesh's extract and texture, as the
+panel then summed them into every set. The panel now reports the two apart,
+fuse per set and the newest remesh, and the rig has not been re-run with it.
+
 The map's share is of its initial 131 072 blocks, which grow on overflow.
 The cameras deliver a set every 40 ms, so 1 cm fuses with room to spare.
 
@@ -7007,6 +7023,18 @@ arrive short of 640 x 576 x 2 bytes. That is 22 and 9 in a minute. The rig
 hands out the set without the camera, and the viewer textures from the rest.
 The eight "Stream have not been started!" lines at exit are the SDK stopping
 the H.265 streams; `fuse_orbbec` prints the same eight.
+
+**Failures.**
+
+- The last set of a `--sets` run is meshed even when the renderer has not
+  collected the previous mesh, as `fuse_viewer`'s final extract is, and is
+  skipped once the window has closed.
+- A failure that ends fusion (the rig's start, a poll, the frame prep or a
+  fuse) makes the run exit 1.
+- The rig is stopped on every exit from the fuse thread, an exception
+  included.
+- A mesh gfx cannot bind is said once and dropped, not re-said every frame,
+  and so is an atlas image that cannot be made, until one is made.
 
 A mesh that goes out without an atlas draws in fused colour until the next
 remesh. The Rig panel counts each by its reason: an empty extract, no camera
@@ -7026,11 +7054,17 @@ which the counter named and the person at the window confirmed.
   mesh.
 - A SIGINT mid-run takes the clean exit, the rig stopped and rc 0.
 - `recon_sensor_gpu_frame_prep` checks the new config:
-  - a second family makes both outputs CONCURRENT;
-  - the pass's own family named twice, or no config, leaves them EXCLUSIVE;
+  - a second family makes the colour output CONCURRENT;
+  - the pass's own family named twice, or no config, leaves it EXCLUSIVE;
+  - depth is EXCLUSIVE throughout;
   - a count past the array is refused.
 
-  Ignoring the config in `ensure_output` fails it.
+  Ignoring the config in `ensure_output` fails it, and so does sharing depth
+  with the colour families.
+- After the review fixes, `fuse_viewer` on room0 (150 frames, preloaded,
+  validation on, across two queue families) committed 39 mesh versions with
+  no refused extract and no validation message, through the shared ring
+  helpers. `rig_viewer`'s fixes have not been run on the rig.
 
 **Open.**
 
