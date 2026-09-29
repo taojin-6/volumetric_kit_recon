@@ -45,7 +45,7 @@
 //   rig_viewer --rig sync.json [--calibration calib.json] [--apply-sync]
 //              [--hevc | --mjpeg] [--color WxH] [--fps N]
 //              [--voxel 0.01] [--trunc m] [--min-depth m] [--max-depth m]
-//              [--max-weight 20] [--remesh-every 5] [--sets N] [--frames N]
+//              [--max-weight 20] [--remesh-every 1] [--sets N] [--frames N]
 //              [--width 1280] [--height 720] [--lit | --normals]
 //              [--no-texture] [--no-overlay] [--validation]
 //
@@ -189,9 +189,10 @@ struct Options {
   std::optional<float> min_depth;  // unset keeps the driver's defaults
   std::optional<float> max_depth;
   float max_weight = 20.0f;
-  // Sets between re-extracts. A set fuses up to one frame per camera, so this
-  // is several times fuse_viewer's per-frame cadence at the same value.
-  int remesh_every = 5;
+  // Sets between re-extracts: every set, so the mesh follows the cameras. A
+  // set with a remesh cost about 21.6 ms on the M5 Max at 1 cm (four cameras
+  // fused, extracted and textured), inside the 33 ms a 30 fps rig leaves.
+  int remesh_every = 1;
   int sets = 0;  // stop fusing after N sets; 0 fuses until the window closes
   // Draw N frames, then exit as a closed window does -- for a scripted run;
   // 0 draws until the window is closed.
@@ -469,6 +470,10 @@ struct RigPanel {
   double remesh_ms = 0.0;  // the newest remesh's extract and texture
   vr::MemoryStats recon_memory;
   bool silent = false;  // no set within kSilenceLimit
+  // Meshes the window committed per second, over the last second: how often
+  // what is drawn changes, the viewer's live rate. Filled on the render
+  // thread, as the mesh counts are.
+  double mesh_rate = 0.0;
 };
 
 double to_mebibytes(std::uint64_t bytes) {
@@ -492,6 +497,7 @@ void draw_rig_panel(const RigPanel& panel,
   }
   ImGui::Text("fuse     %.2f ms/set", panel.fuse_ms);
   ImGui::Text("remesh   %.2f ms, the newest", panel.remesh_ms);
+  ImGui::Text("mesh     %.1f updates/s", panel.mesh_rate);
   ImGui::Text("textured from %zu camera%s", panel.cameras_textured,
               panel.cameras_textured == 1 ? "" : "s");
   for (std::size_t r = 0; r < kUntexturedReasons; ++r) {
@@ -1200,6 +1206,10 @@ int run(GLFWwindow* window, const Options& opt) {
   int exit_code = 0;
   int drawn = 0;
   std::uint64_t atlas_copies = 0;
+  // The mesh rate's window: when it began, and the generation drawn then.
+  auto rate_start = std::chrono::steady_clock::now();
+  std::uint64_t rate_generation = 0;
+  double mesh_rate = 0.0;
   while (glfwWindowShouldClose(window) == GLFW_FALSE &&
          (opt.frames == 0 || drawn < opt.frames)) {
     glfwPollEvents();
@@ -1309,6 +1319,21 @@ int run(GLFWwindow* window, const Options& opt) {
     panel.vertices = live_view.vertex_count;
     panel.triangles = live_view.triangle_count;
     panel.mesh_version = live_view.generation;
+    {
+      // A generation is one extract, and every extract is committed, so their
+      // rise over a second is the meshes drawn in it.
+      const auto now = std::chrono::steady_clock::now();
+      const double seconds =
+          std::chrono::duration<double>(now - rate_start).count();
+      if (seconds >= 1.0) {
+        mesh_rate =
+            static_cast<double>(live_view.generation - rate_generation) /
+            seconds;
+        rate_generation = live_view.generation;
+        rate_start = now;
+      }
+      panel.mesh_rate = mesh_rate;
+    }
     slot_atlas[render_frame.slot] = current_atlas;
     frame_generations[render_frame.slot] = live_view.generation;
 
@@ -1457,12 +1482,13 @@ int run(GLFWwindow* window, const Options& opt) {
     if (drawn % 120 == 0) {
       std::printf(
           "frame %d: %llu sets fused (%.1f ms/set, remesh %.1f ms), mesh "
-          "v%llu (%zu triangles), textured from %zu camera%s, %llu atlas "
-          "copies",
+          "v%llu (%zu triangles, %.1f updates/s), textured from %zu "
+          "camera%s, %llu atlas copies",
           drawn, static_cast<unsigned long long>(panel.sets_fused),
           panel.fuse_ms, panel.remesh_ms,
           static_cast<unsigned long long>(panel.mesh_version), panel.triangles,
-          panel.cameras_textured, panel.cameras_textured == 1 ? "" : "s",
+          panel.mesh_rate, panel.cameras_textured,
+          panel.cameras_textured == 1 ? "" : "s",
           static_cast<unsigned long long>(atlas_copies));
       for (std::size_t r = 0; r < kUntexturedReasons; ++r) {
         if (panel.untextured[r] != 0) {

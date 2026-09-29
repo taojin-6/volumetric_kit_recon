@@ -6993,7 +6993,26 @@ Nothing crosses the host either way.
 - 1 cm voxels: a Femto Mega's depth pixel covers about 4 mm at 1.5 m.
 - Unlit shading: the cameras' colour as they saw it.
 - H.265 colour: raw MJPEG takes about nine times the bandwidth.
-- Remesh every 5 sets.
+- Remesh every set (every 5 before the amendment below).
+
+*Amended 2026-09-29:* the viewer remeshes on **every** set by default, so the
+drawn mesh follows the cameras rather than a sixth of their rate. Every 5
+sets, the first default, changed the mesh about six times a second, which
+read as a mesh that was not live. A set with its remesh fits the rig's frame
+period with room to spare, and the Rig panel and status line now report the
+measured rate (meshes committed per second, over the last second). On the lab
+rig, calibrated, 1 cm, 1.5 M triangles, M5 Max, Release:
+
+| per set | fuse | remesh (extract + texture) | mesh updates |
+|---|---|---|---|
+| every set | 9.3-11.1 ms | 6.1-7.8 ms | 25.9-28.8 /s |
+
+That is the rig's own set rate, 30 fps less the sets the SDK drops on the
+wired link, so the viewer is no longer what limits it. What still delays a
+moving surface is the fusion, not the mesh: at `--max-weight 20` a voxel
+settled over 20 frames takes a new observation at a twentieth of its weight,
+and `Classic` integration keeps what a receded surface left. The `Dynamic`
+mode clears it, and is not yet the viewer's.
 
 Ctrl+C closes the window rather than ending the process, so the rig is
 stopped either way. The viewer's gfx pin moves to #98 for `kHybridMeshNormals`,
