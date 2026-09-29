@@ -143,6 +143,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `sensor`: **`JpegDecoder` decodes on VideoToolbox.** Given a device that
+  imports Metal textures, an 8-bit 4:2:0 JPEG decodes on the hardware JPEG
+  decoder into NV12 plane images (`DecodedPicture::image`,
+  `JpegDecodeBackend::VideoToolbox`). On an M5 Max, per 4K frame: 0.92-0.94
+  ms of CPU to decode against 13.1-13.3 in software.
 - `sensor`: **VideoToolbox's pictures stay on the GPU.** Given
   `HevcDecoder::Options::device` on a device that imports Metal textures, a
   VideoToolbox decode hands its picture out as two plane images
