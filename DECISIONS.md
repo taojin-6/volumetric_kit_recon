@@ -7014,6 +7014,64 @@ settled over 20 frames takes a new observation at a twentieth of its weight,
 and `Classic` integration keeps what a receded surface left. The `Dynamic`
 mode clears it, and is not yet the viewer's.
 
+*Amended 2026-09-29, again:* the viewer now fuses **`Dynamic`** by default
+(`--static` for `Classic`) and textures at a **5 cm** occlusion threshold
+(`--occlusion`), and the View panel tunes both live, with the max weight.
+Two reports from the lab rig drove it.
+
+- **A moving surface faded out and in.** Under `Classic` a surface that moved
+  away was only averaged down, over up to `--max-weight` frames, and one that
+  arrived where free space had been fused at full weight took as long to
+  appear. `Dynamic` clears a voxel a camera sees as free space past the band,
+  so the old surface is gone on the next set and the new one forms from
+  weight 0. `fuse_frame` (the `DeviceFrame` overload in `examples/common`)
+  takes the mode, `Classic` by default, so `fuse_orbbec` is unchanged.
+- **Much of the scene looked textured by one camera, or not at all.** Two
+  causes, measured with the new `--texture-stats`, which reads the mesh back
+  every 30 remeshes and counts each camera's triangles by the tile their
+  `uv0` land in:
+  - **The April calibration.** Converted from that rig's bundle adjustment, it
+    placed three of the four cameras 35-50 cm from where the 2026-09-29
+    calibration puts them. The rig had been rearranged since, so a camera's
+    depth disagreed with the fused surface far past any threshold, and the
+    camera never qualified.
+  - **The 2 cm threshold.** With today's calibration, 1 cm voxels, a 1.4 M
+    triangle mesh:
+
+    | occlusion | untextured | each camera |
+    |---|---|---|
+    | 2 cm | 27-29% | 16-20% |
+    | 5 cm | 16-18% | 19-23% |
+
+    ToF noise and what calibration error is left both grow with range, so the
+    background failed the tighter test first. 5 cm is the viewer's default,
+    and the texture tier's own default stays 2 cm.
+
+  Most of what is left untextured lies outside every colour camera's view.
+  The Femto Mega's depth covers about 65 degrees vertically and its
+  1280 x 720 colour about 51, so the floor near each camera is fused from
+  depth alone. The mesher gives such a vertex opaque white, having no colour
+  to give it.
+
+`--show-sources` (a View panel toggle too) fills each camera's tile with a
+colour of its own rather than its image, copied from host-visible buffers
+gfx makes the first time it is switched on, so the window shows which camera
+textured each triangle and what none did. On today's run it shows each
+camera owning the surfaces it faces, and the overlap between them choosing
+per triangle, which speckles. That speckle is where the cameras' auto
+exposure and white balance, both on in every camera's firmware, show as
+seams.
+
+Still open:
+
+- A set missing a camera textures that remesh without it, so its region
+  falls to fused colour for a frame, a flicker now that every set remeshes.
+  Holding each camera's last frame for texturing would cover it, at the cost
+  of the frame prep's output reuse.
+- Blending the views where they meet, or locking every camera to one
+  exposure and white balance (a write to the cameras, like `--apply-sync`),
+  would take the seams out of the speckle.
+
 Ctrl+C closes the window rather than ending the process, so the rig is
 stopped either way. The viewer's gfx pin moves to #98 for `kHybridMeshNormals`,
 the View panel's third shading mode.

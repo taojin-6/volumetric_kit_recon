@@ -32,6 +32,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `examples`: **`rig_viewer` fuses `Dynamic` by default** (`--static` for
+  `Classic`), so a surface that moves away is gone on the next set rather
+  than fading over `--max-weight` frames. It **textures at a 5 cm occlusion
+  threshold** (`--occlusion`), which on the lab rig left 17% of the mesh
+  untextured against 28% at 2 cm. The View panel tunes the mode, the max
+  weight and the threshold live. `fuse_frame`'s `DeviceFrame` overload takes
+  the integration mode, `Classic` by default.
 - `examples`: **`rig_viewer` remeshes on every set by default**, not every
   fifth, so the mesh updates at the rig's set rate (about 26-29 a second on
   the lab rig at 1 cm), and its Rig panel and status line report the
@@ -155,6 +162,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `examples`: **`rig_viewer --show-sources`** (a View panel toggle too) fills
+  each camera's atlas tile with a colour of its own, so the window shows which
+  camera textured each triangle; **`--texture-stats`** reads the mesh back
+  every 30 remeshes and prints each camera's share and the untextured one.
 - `examples`: **`rig_viewer`**, a live window over a synced rig of Orbbec
   cameras (`VR_BUILD_VIEWER` with `VR_WITH_ORBBEC` and `VR_WITH_FFMPEG`).
   The rig's raw sets are prepared, fused and textured from every camera on

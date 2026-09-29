@@ -45,15 +45,18 @@
 //   rig_viewer --rig sync.json [--calibration calib.json] [--apply-sync]
 //              [--hevc | --mjpeg] [--color WxH] [--fps N]
 //              [--voxel 0.01] [--trunc m] [--min-depth m] [--max-depth m]
-//              [--max-weight 20] [--remesh-every 1] [--sets N] [--frames N]
+//              [--max-weight 20] [--dynamic | --static] [--occlusion 0.05]
+//              [--remesh-every 1] [--sets N] [--frames N]
 //              [--width 1280] [--height 720] [--lit | --normals]
-//              [--no-texture] [--no-overlay] [--validation]
+//              [--no-texture] [--show-sources] [--texture-stats]
+//              [--no-overlay] [--validation]
 //
 // Without --calibration every camera sits at the world origin, which fuses a
 // rig of several into nonsense; the viewer says so and runs anyway. Drag with
 // the left button to orbit, the right to pan, and scroll to zoom; the View
-// panel switches shading, texturing and the viewpoint. Closing the window, or
-// Ctrl+C in the terminal, stops the rig before the process ends.
+// panel switches shading, texturing and the viewpoint, and tunes the fusion
+// and texturing knobs below live. Closing the window, or Ctrl+C in the
+// terminal, stops the rig before the process ends.
 
 #include <algorithm>
 #include <array>
@@ -189,6 +192,17 @@ struct Options {
   std::optional<float> min_depth;  // unset keeps the driver's defaults
   std::optional<float> max_depth;
   float max_weight = 20.0f;
+  // Dynamic integration by default: a voxel a camera now sees as free space
+  // is cleared, so a surface that moves away is gone on the next set rather
+  // than fading over max_weight frames, and one arriving there forms at once.
+  // --static fuses Classic, keeping it.
+  bool dynamic = true;
+  // How far, in metres, a camera's depth may disagree with the fused surface
+  // for it to texture a vertex (ProjectiveTexturer's occlusion_threshold).
+  // 5 cm, not the tier's 2 cm: on the lab rig, calibrated, 2 cm left 28% of
+  // the mesh untextured and 5 cm 17%, the rest mostly outside every colour
+  // camera's field of view (see the 2026-09-29 decision's amendment).
+  float occlusion = 0.05f;
   // Sets between re-extracts: every set, so the mesh follows the cameras. A
   // set with a remesh cost about 21.6 ms on the M5 Max at 1 cm (four cameras
   // fused, extracted and textured), inside the 33 ms a 30 fps rig leaves.
@@ -202,7 +216,13 @@ struct Options {
   // Unlit by default: the cameras' own colour, as they saw it, with no
   // light to darken the faces turned from it.
   Shading shading = Shading::kUnlit;
-  bool texture = true;      // texture from the cameras; off: fused colour
+  bool texture = true;  // texture from the cameras; off: fused colour
+  // Each camera's tile filled with a colour of its own rather than its image,
+  // so the window shows which camera textured each triangle.
+  bool show_sources = false;
+  // Now and then read the mesh back and print how much of it each camera
+  // textured. Costs a readback of the whole mesh, so off by default.
+  bool texture_stats = false;
   bool overlay = true;      // Dear ImGui panels
   bool validation = false;  // Vulkan validation layer on the shared device
 };
@@ -211,8 +231,10 @@ const char* kUsage =
     "usage: rig_viewer --rig sync.json [--calibration calib.json] "
     "[--apply-sync] [--hevc | --mjpeg] [--color WxH] [--fps N] [--voxel m] "
     "[--trunc m] [--min-depth m] [--max-depth m] [--max-weight w] "
+    "[--dynamic | --static] [--occlusion m] "
     "[--remesh-every N] [--sets N] [--frames N] [--width W] [--height H] "
-    "[--lit | --normals] [--no-texture] [--no-overlay] [--validation]\n";
+    "[--lit | --normals] [--no-texture] [--show-sources] [--texture-stats] "
+    "[--no-overlay] [--validation]\n";
 
 bool parse_args(int argc, char** argv, Options& o) {
   bool codec_given = false;
@@ -291,6 +313,14 @@ bool parse_args(int argc, char** argv, Options& o) {
       o.shading = shading;
     } else if (a == "--no-texture") {
       o.texture = false;
+    } else if (a == "--dynamic" || a == "--static") {
+      o.dynamic = a == "--dynamic";
+    } else if (a == "--occlusion") {
+      if (!number(o.occlusion)) return false;
+    } else if (a == "--show-sources") {
+      o.show_sources = true;
+    } else if (a == "--texture-stats") {
+      o.texture_stats = true;
     } else if (a == "--no-overlay") {
       o.overlay = false;
     } else if (a == "--validation") {
@@ -306,15 +336,16 @@ bool parse_args(int argc, char** argv, Options& o) {
   }
   // strtof takes "nan" and "inf" without complaint, and a NaN knob passes
   // every bound below by comparing false.
-  for (const float knob : {o.voxel, o.trunc, o.max_weight}) {
+  for (const float knob : {o.voxel, o.trunc, o.max_weight, o.occlusion}) {
     if (!std::isfinite(knob)) {
       std::fprintf(stderr,
-                   "--voxel, --trunc and --max-weight must be finite\n");
+                   "--voxel, --trunc, --max-weight and --occlusion must be "
+                   "finite\n");
       return false;
     }
   }
-  if (!(o.voxel > 0.0f) || !(o.max_weight > 0.0f)) {
-    std::fprintf(stderr, "--voxel and --max-weight must be > 0\n");
+  if (!(o.voxel > 0.0f) || !(o.max_weight > 0.0f) || !(o.occlusion > 0.0f)) {
+    std::fprintf(stderr, "--voxel, --max-weight and --occlusion must be > 0\n");
     return false;
   }
   if (o.trunc <= 0.0f) o.trunc = 4.0f * o.voxel;
@@ -388,6 +419,7 @@ struct AtlasImage {
 struct AtlasTileSource {
   std::shared_ptr<const vr::Buffer> color;
   rtex::AtlasTile tile;
+  std::size_t camera = 0;  // which camera, for the colour-by-camera view
 };
 
 // What a mesh version's atlas is made from: the cameras that textured it,
@@ -403,9 +435,11 @@ struct AtlasJob {
 // camera's buffer, then the image made ready for the fragment shader. The
 // previous contents are discarded (UNDEFINED), since a version samples only the
 // tiles it wrote -- a camera missing from the set left no triangle pointing at
-// its tile.
-void record_atlas_copy(VkCommandBuffer cmd, VkImage image,
-                       const AtlasJob& job) {
+// its tile. With `solid`, each tile is copied from that camera's solid-colour
+// buffer instead (at least a tile's size), so every triangle shows the camera
+// that textured it.
+void record_atlas_copy(VkCommandBuffer cmd, VkImage image, const AtlasJob& job,
+                       const std::vector<VkBuffer>* solid = nullptr) {
   vg::ImageBarrierDesc to_copy;
   to_copy.image = image;
   // Nothing to wait for: acquire hands out only an image no frame in flight
@@ -425,7 +459,9 @@ void record_atlas_copy(VkCommandBuffer cmd, VkImage image,
     region.imageOffset = {static_cast<std::int32_t>(source.tile.x),
                           static_cast<std::int32_t>(source.tile.y), 0};
     region.imageExtent = {source.tile.width, source.tile.height, 1};
-    vkCmdCopyBufferToImage(cmd, source.color->handle(), image,
+    const VkBuffer from =
+        solid != nullptr ? (*solid)[source.camera] : source.color->handle();
+    vkCmdCopyBufferToImage(cmd, from, image,
                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
   }
   vg::ImageBarrierDesc to_sample;
@@ -832,6 +868,54 @@ int run(GLFWwindow* window, const Options& opt) {
     white_atlas = std::move(bound).value();
   }
 
+  // The colour-by-camera view's sources: one host-visible buffer a camera,
+  // its tile's size, filled with that camera's colour (sRGB bytes, as the
+  // atlas holds). Made the first time the view is switched on, since at 4K
+  // they are 33 MB a camera.
+  const std::array<std::array<std::uint8_t, 3>, 8> kCameraColours = {{
+      {230, 60, 60},
+      {60, 200, 80},
+      {60, 110, 240},
+      {240, 210, 50},
+      {210, 70, 210},
+      {60, 210, 220},
+      {245, 140, 40},
+      {200, 200, 200},
+  }};
+  std::vector<vg::Buffer> solid_buffers;
+  std::vector<VkBuffer> solid_handles;
+  auto ensure_solid = [&]() -> bool {
+    if (solid_handles.size() == cameras) return true;
+    solid_buffers.clear();
+    solid_handles.clear();
+    for (std::size_t c = 0; c < cameras; ++c) {
+      const rtex::AtlasTile& tile = layout.tiles[c];
+      vg::BufferDesc desc;
+      desc.size = VkDeviceSize(tile.width) * tile.height * 4u;
+      desc.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+      desc.memory = vg::MemoryUsage::HostVisible;
+      desc.mapped = true;
+      desc.host_access = vg::HostAccess::SequentialWrite;
+      auto buffer = app.allocator().create_buffer(desc);
+      if (!buffer.ok()) {
+        std::fprintf(stderr, "rig_viewer: colour-by-camera buffer: %s\n",
+                     buffer.status().message().c_str());
+        solid_buffers.clear();
+        solid_handles.clear();
+        return false;
+      }
+      const auto& rgb = kCameraColours[c % kCameraColours.size()];
+      const std::uint32_t word = std::uint32_t{rgb[0]} |
+                                 (std::uint32_t{rgb[1]} << 8) |
+                                 (std::uint32_t{rgb[2]} << 16) | 0xFF000000u;
+      auto* words = static_cast<std::uint32_t*>(buffer.value().mapped());
+      std::fill(words, words + std::size_t{tile.width} * tile.height, word);
+      solid_handles.push_back(buffer.value().handle());
+      solid_buffers.push_back(std::move(buffer).value());
+    }
+    return true;
+  };
+
   // Atlas images the copies fill, reused once only the pool holds one: the
   // committed version holds its image, and so does every frame slot that
   // bound it, until begin_frame fence-waits that slot. _SRGB, since the frame
@@ -880,6 +964,14 @@ int run(GLFWwindow* window, const Options& opt) {
   std::optional<std::size_t> from_camera;
   Shading shading = opt.shading;
   std::atomic<bool> texture_on{opt.texture};
+  // The fusion and texturing knobs the View panel tunes while the rig runs,
+  // read by the fuse thread at each set and each remesh.
+  std::atomic<bool> dynamic_on{opt.dynamic};
+  std::atomic<float> max_weight{opt.max_weight};
+  std::atomic<float> occlusion{opt.occlusion};
+  // Render-thread state: whether the next atlas copy fills each tile with its
+  // camera's colour rather than its image.
+  bool show_sources = opt.show_sources;
 
   // --- Fuse thread ----------------------------------------------------------
   // The rig, the frame prep, fusion, extraction and texturing all run here;
@@ -967,11 +1059,11 @@ int run(GLFWwindow* window, const Options& opt) {
                 v.coverage = f.color;
                 views.push_back(std::move(v));
                 present.tiles.push_back(layout.tiles[c]);
-                job.tiles.push_back({f.color, layout.tiles[c]});
+                job.tiles.push_back({f.color, layout.tiles[c], c});
               }
               if (!views.empty()) {
                 const vr::Status textured = texturer.texture(
-                    mesh, views, present, 0.02f, &remesh_stages);
+                    mesh, views, present, occlusion.load(), &remesh_stages);
                 if (textured.ok()) {
                   cameras_textured = views.size();
                 } else {
@@ -1012,6 +1104,53 @@ int run(GLFWwindow* window, const Options& opt) {
         if (mark != 0) extractor.release_through(mark);
         return !uncollected;
       };
+      // --texture-stats: read `mesh` back and count, per camera, the triangles
+      // it textured (uv0 inside its tile; a triangle's three share one) and
+      // those no camera did. A readback of the whole mesh, hence a flag.
+      std::uint64_t remeshes = 0;
+      auto print_texture_stats = [&](const rmesh::DeviceMesh& mesh) {
+        const auto start = std::chrono::steady_clock::now();
+        auto host = extractor.download(mesh);
+        if (!host) {
+          std::fprintf(stderr, "rig_viewer: texture stats: %s\n",
+                       host.status().message().c_str());
+          return;
+        }
+        const std::vector<rmesh::Vertex>& v = host.value().vertices;
+        std::vector<std::size_t> per_camera(cameras, 0);
+        std::size_t none = 0;
+        const std::size_t triangles = v.size() / 3;
+        for (std::size_t t = 0; t < triangles; ++t) {
+          const vr::Vec2f uv = v[3 * t].uv0;
+          if (!(uv.x >= 0.0f)) {
+            ++none;
+            continue;
+          }
+          const float px = uv.x * static_cast<float>(layout.width);
+          const float py = uv.y * static_cast<float>(layout.height);
+          for (std::size_t c = 0; c < cameras; ++c) {
+            const rtex::AtlasTile& tile = layout.tiles[c];
+            if (px >= tile.x && px < tile.x + tile.width && py >= tile.y &&
+                py < tile.y + tile.height) {
+              ++per_camera[c];
+              break;
+            }
+          }
+        }
+        const double ms = std::chrono::duration<double, std::milli>(
+                              std::chrono::steady_clock::now() - start)
+                              .count();
+        const double n = triangles > 0 ? static_cast<double>(triangles) : 1.0;
+        std::printf("texture stats: %zu triangles, %.1f%% untextured;",
+                    triangles, 100.0 * static_cast<double>(none) / n);
+        for (std::size_t c = 0; c < cameras; ++c) {
+          std::printf(" camera %zu %.1f%%", c,
+                      100.0 * static_cast<double>(per_camera[c]) / n);
+        }
+        std::printf(" (occlusion %.1f cm, %s; read back in %.0f ms)\n",
+                    100.0 * occlusion.load(),
+                    dynamic_on.load() ? "dynamic" : "static", ms);
+      };
       auto remesh =
           [&](const std::vector<std::optional<rsensor::DeviceFrame>>& frames) {
             remesh_stages.clear();
@@ -1023,6 +1162,10 @@ int run(GLFWwindow* window, const Options& opt) {
             // way (see fuse_viewer).
             if (extracted) {
               publish(extracted.value(), frames);
+              // Before the next extract, which retires this mesh.
+              if (opt.texture_stats && remeshes++ % 30 == 0) {
+                print_texture_stats(extracted.value());
+              }
             } else {
               std::fprintf(stderr, "rig_viewer: extract: %s\n",
                            extracted.status().message().c_str());
@@ -1094,7 +1237,9 @@ int run(GLFWwindow* window, const Options& opt) {
         for (const std::optional<rsensor::DeviceFrame>& frame : frames) {
           if (!frame) continue;
           const vr::Status fused = vr_example::fuse_frame(
-              volume, integrator, *frame, opt.max_weight, &fuse_stages);
+              volume, integrator, *frame, max_weight.load(), &fuse_stages,
+              dynamic_on.load() ? rtsdf::IntegrationMode::Dynamic
+                                : rtsdf::IntegrationMode::Classic);
           if (!fused.ok()) {
             std::fprintf(stderr, "rig_viewer: fuse: %s\n",
                          fused.message().c_str());
@@ -1288,7 +1433,9 @@ int run(GLFWwindow* window, const Options& opt) {
             if (acquired.ok()) {
               next = std::move(acquired).value();
               atlas_error_said = false;
-              record_atlas_copy(render_frame.cmd, next->tex.image(), taken_job);
+              record_atlas_copy(
+                  render_frame.cmd, next->tex.image(), taken_job,
+                  show_sources && ensure_solid() ? &solid_handles : nullptr);
               ++atlas_copies;
               for (AtlasTileSource& source : taken_job.tiles) {
                 slot_sources[render_frame.slot].push_back(
@@ -1420,6 +1567,34 @@ int run(GLFWwindow* window, const Options& opt) {
                             &texture)) {
           texture_on.store(texture);
         }
+        float occlusion_cm = 100.0f * occlusion.load();
+        if (ImGui::SliderFloat("texture occlusion (cm)", &occlusion_cm, 0.5f,
+                               20.0f, "%.1f")) {
+          occlusion.store(occlusion_cm / 100.0f);
+        }
+        ImGui::Checkbox("colour by camera", &show_sources);
+        if (show_sources) {
+          for (std::size_t c = 0; c < cameras; ++c) {
+            const auto& rgb = kCameraColours[c % kCameraColours.size()];
+            ImGui::ColorButton(
+                serials[c].c_str(),
+                ImVec4(rgb[0] / 255.0f, rgb[1] / 255.0f, rgb[2] / 255.0f, 1.0f),
+                ImGuiColorEditFlags_NoTooltip, ImVec2(12, 12));
+            ImGui::SameLine();
+            ImGui::Text("camera %zu  %s", c, serials[c].c_str());
+          }
+          ImGui::TextDisabled("fused colour: textured by no camera");
+        }
+        ImGui::Separator();
+        bool dynamic = dynamic_on.load();
+        if (ImGui::Checkbox("fusion clears free space (dynamic)", &dynamic)) {
+          dynamic_on.store(dynamic);
+        }
+        float weight = max_weight.load();
+        if (ImGui::SliderFloat("max weight", &weight, 1.0f, 50.0f, "%.0f")) {
+          max_weight.store(weight);
+        }
+        ImGui::Separator();
         if (ImGui::Button("orbit view")) {
           view = home;
           from_camera.reset();
