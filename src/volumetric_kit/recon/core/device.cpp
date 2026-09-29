@@ -44,6 +44,8 @@ class ScopeGuard {
 // VK_KHR_portability_subset's name macro lives in vulkan_beta.h (gated by
 // VK_ENABLE_BETA_EXTENSIONS); the string is stable, so we use it directly.
 constexpr const char* kPortabilitySubset = "VK_KHR_portability_subset";
+constexpr const char* kExternalMemoryFd =
+    VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME;
 
 // The device's supported extensions, enumerated once (empty on an enumeration
 // error, so a missing extension reads as "unsupported" rather than crashing).
@@ -113,11 +115,14 @@ DeviceRequirements Device::requirements(const DeviceConfig& config) {
   DeviceRequirements reqs;
   reqs.features = config.features;
   reqs.device_extensions = config.extra_device_extensions;
-  // The one optional entry, and the one instance extension: recon uses debug
-  // utils if the embedder's instance has it and runs identically if not. Named
-  // here so a merged bootstrap can offer it -- an embedder that never hears
-  // recon wants it is the way a shared device ends up with unnamed dispatches.
+  // Optional, and the one instance extension: recon uses debug utils if the
+  // embedder's instance has it and runs identically if not. Named here so a
+  // merged bootstrap can offer it -- an embedder that never hears recon wants
+  // it is the way a shared device ends up with unnamed dispatches.
   reqs.debug_utils = true;
+  // Optional too, and named for the same reason: a shared device that never
+  // hears of it hands every decoded picture through the host.
+  reqs.external_memory = true;
   // portability_subset is enabled by whoever creates the device (spec-required
   // when present); it is not a caller requirement, so it is not listed here.
   return reqs;
@@ -221,6 +226,12 @@ Result<Device> Device::create(VkInstance instance, VkPhysicalDevice physical,
   if (is_supported(kPortabilitySubset) && !already(kPortabilitySubset)) {
     extensions.push_back(kPortabilitySubset);
   }
+  // Optional: lets another API on this GPU, such as CUDA writing a hardware
+  // decoder's picture, write into recon's buffers (core/external_memory.hpp).
+  const bool exports_memory = is_supported(kExternalMemoryFd);
+  if (exports_memory && !already(kExternalMemoryFd)) {
+    extensions.push_back(kExternalMemoryFd);
+  }
 
   if (!supports_timeline_semaphore(physical)) {
     return Status::unsupported(
@@ -279,6 +290,10 @@ Result<Device> Device::create(VkInstance instance, VkPhysicalDevice physical,
   resolve_debug_label_fns(device.device_, config.instance_debug_utils_enabled,
                           &device.set_object_name_, &device.begin_label_,
                           &device.end_label_);
+  if (exports_memory) {
+    device.get_memory_fd_ = reinterpret_cast<PFN_vkGetMemoryFdKHR>(
+        vkGetDeviceProcAddr(device.device_, "vkGetMemoryFdKHR"));
+  }
   return device;
 }
 
@@ -319,20 +334,20 @@ Result<Device> Device::adopt(const AdoptedDevice& adopted,
   // physical-device queries: it makes no assumption about the API version the
   // embedder negotiated on `adopted.instance`.
   const DeviceRequirements reqs = requirements(config);
+  auto is_enabled = [&](const char* name) {
+    if (adopted.enabled_device_extensions == nullptr) return false;
+    for (std::uint32_t i = 0; i < adopted.enabled_device_extension_count; ++i) {
+      if (std::strcmp(adopted.enabled_device_extensions[i], name) == 0) {
+        return true;
+      }
+    }
+    return false;
+  };
   if (!reqs.device_extensions.empty()) {
     if (adopted.enabled_device_extensions == nullptr) {
       return Status::unsupported(
           "Device::adopt: adopted device did not declare enabled extensions");
     }
-    auto is_enabled = [&](const char* name) {
-      for (std::uint32_t i = 0; i < adopted.enabled_device_extension_count;
-           ++i) {
-        if (std::strcmp(adopted.enabled_device_extensions[i], name) == 0) {
-          return true;
-        }
-      }
-      return false;
-    };
     for (const char* name : reqs.device_extensions) {
       if (!is_enabled(name)) {
         return Status::unsupported(
@@ -380,6 +395,12 @@ Result<Device> Device::adopt(const AdoptedDevice& adopted,
   resolve_debug_label_fns(device.device_, adopted.enabled_debug_utils,
                           &device.set_object_name_, &device.begin_label_,
                           &device.end_label_);
+  // Only where the creator says it enabled the export: Vulkan cannot be
+  // asked, and an entry point for an extension not enabled must not be used.
+  if (is_enabled(kExternalMemoryFd)) {
+    device.get_memory_fd_ = reinterpret_cast<PFN_vkGetMemoryFdKHR>(
+        vkGetDeviceProcAddr(device.device_, "vkGetMemoryFdKHR"));
+  }
   return device;
 }
 
@@ -395,7 +416,8 @@ Device::Device(Device&& other) noexcept
       compute_queue_(other.compute_queue_),
       set_object_name_(other.set_object_name_),
       begin_label_(other.begin_label_),
-      end_label_(other.end_label_) {
+      end_label_(other.end_label_),
+      get_memory_fd_(other.get_memory_fd_) {
   other.physical_ = VK_NULL_HANDLE;
   other.device_ = VK_NULL_HANDLE;
   other.owns_device_ = true;
@@ -407,6 +429,7 @@ Device::Device(Device&& other) noexcept
   other.compute_queue_ = VK_NULL_HANDLE;
   other.set_object_name_ = nullptr;
   other.begin_label_ = nullptr;
+  other.get_memory_fd_ = nullptr;
   other.end_label_ = nullptr;
 }
 
@@ -424,6 +447,7 @@ Device& Device::operator=(Device&& other) noexcept {
     compute_queue_ = other.compute_queue_;
     set_object_name_ = other.set_object_name_;
     begin_label_ = other.begin_label_;
+    get_memory_fd_ = other.get_memory_fd_;
     end_label_ = other.end_label_;
     other.physical_ = VK_NULL_HANDLE;
     other.device_ = VK_NULL_HANDLE;
@@ -436,6 +460,7 @@ Device& Device::operator=(Device&& other) noexcept {
     other.compute_queue_ = VK_NULL_HANDLE;
     other.set_object_name_ = nullptr;
     other.begin_label_ = nullptr;
+    other.get_memory_fd_ = nullptr;
     other.end_label_ = nullptr;
   }
   return *this;
@@ -475,6 +500,7 @@ void Device::destroy() noexcept {
   compute_queue_ = VK_NULL_HANDLE;
   set_object_name_ = nullptr;
   begin_label_ = nullptr;
+  get_memory_fd_ = nullptr;
   end_label_ = nullptr;
 }
 
@@ -518,6 +544,15 @@ void Device::end_debug_label(VkCommandBuffer cmd,
     return;
   }
   end_label_(cmd);
+}
+
+VkResult Device::memory_fd(VkDeviceMemory memory, int* fd) const noexcept {
+  if (get_memory_fd_ == nullptr) return VK_ERROR_EXTENSION_NOT_PRESENT;
+  VkMemoryGetFdInfoKHR info{};
+  info.sType = VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR;
+  info.memory = memory;
+  info.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
+  return get_memory_fd_(device_, &info, fd);
 }
 
 VkResult Device::queue_submit(std::uint32_t count, const VkSubmitInfo* submits,

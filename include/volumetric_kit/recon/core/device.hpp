@@ -126,10 +126,16 @@ struct DeviceRequirements {
   /// AdoptedDevice::enabled_debug_utils (or @ref
   /// DeviceConfig::instance_debug_utils_enabled).
   ///
-  /// Purely diagnostic and the **only** optional entry here: recon runs
-  /// identically without it, so an embedder that cannot enable it drops it
-  /// rather than failing the merge.
+  /// Purely diagnostic and optional: recon runs identically without it, so
+  /// an embedder that cannot enable it drops it rather than failing the
+  /// merge.
   bool debug_utils = false;
+  /// `VK_KHR_external_memory_fd`, which lets a hardware decoder hand its
+  /// pictures over on the device (@ref create_exported_buffer). Optional
+  /// too: an embedder enables it where the device offers it and lists it in
+  /// @ref AdoptedDevice::enabled_device_extensions; without it, pictures come
+  /// through the host.
+  bool external_memory = false;
 };
 
 /// @brief A `VkDevice` the caller already created, plus what the caller ENABLED
@@ -307,6 +313,18 @@ class VR_CORE_API Device {
   bool debug_labels_available() const noexcept {
     return set_object_name_ != nullptr;
   }
+
+  /// @return Whether this device exports memory as a file descriptor
+  ///         (`VK_KHR_external_memory_fd`), which @ref
+  ///         create_exported_buffer needs: enabled by @ref create where the
+  ///         GPU offers it, and on @ref adopt where the creator declares it.
+  bool exports_memory() const noexcept { return get_memory_fd_ != nullptr; }
+
+  /// @brief `vkGetMemoryFdKHR`: an opaque file descriptor for @p memory,
+  ///        which the caller then owns.
+  /// @return `VK_ERROR_EXTENSION_NOT_PRESENT` when @ref exports_memory is
+  ///         false; otherwise the call's result.
+  VkResult memory_fd(VkDeviceMemory memory, int* fd) const noexcept;
 
   /// @brief Name a Vulkan object so a GPU capture shows that name instead of a
   ///        raw handle.
@@ -513,6 +531,9 @@ class VR_CORE_API Device {
   PFN_vkSetDebugUtilsObjectNameEXT set_object_name_ = nullptr;
   PFN_vkCmdBeginDebugUtilsLabelEXT begin_label_ = nullptr;
   PFN_vkCmdEndDebugUtilsLabelEXT end_label_ = nullptr;
+  // VK_KHR_external_memory_fd's export, resolved only where it is enabled,
+  // so a null pointer is the answer to exports_memory(). Reset with the rest.
+  PFN_vkGetMemoryFdKHR get_memory_fd_ = nullptr;
 };
 
 }  // namespace volumetric_kit::recon

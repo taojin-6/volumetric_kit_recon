@@ -313,6 +313,18 @@ target_link_libraries(recon_core_command_batch_test
 vr_target_warnings(recon_core_command_batch_test)
 add_test(NAME recon_core_command_batch COMMAND recon_core_command_batch_test)
 
+# An exported buffer: a descriptor where the device exports memory, a refusal
+# where it does not (MoltenVK), and an ordinary storage buffer to a batch. Not
+# on Windows, which has no file descriptors to close.
+if(NOT WIN32)
+  add_executable(recon_core_external_memory_test core_external_memory_test.cpp)
+  target_link_libraries(recon_core_external_memory_test
+                        PRIVATE volumetric_kit::recon_core Vulkan::Vulkan)
+  vr_target_warnings(recon_core_external_memory_test)
+  add_test(NAME recon_core_external_memory
+           COMMAND recon_core_external_memory_test)
+endif()
+
 # Color-space vocabulary: the exact piecewise sRGB curve, the packed helpers the
 # fusion kernels mirror, and the primaries matrices. Pure host math over core,
 # so it always runs -- no device, no platform. That portability is the reason
@@ -486,7 +498,8 @@ if(VR_WITH_FFMPEG)
                         PRIVATE volumetric_kit::recon_sensor_video)
   target_compile_definitions(
     recon_sensor_video_hevc_test
-    PRIVATE VR_HEVC_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data/hevc")
+    PRIVATE VR_HEVC_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data/hevc"
+            VR_TEST_WITH_CUDA=$<BOOL:${VR_WITH_CUDA}>)
   vr_target_warnings(recon_sensor_video_hevc_test)
   add_test(NAME recon_sensor_video_hevc COMMAND recon_sensor_video_hevc_test)
 endif()

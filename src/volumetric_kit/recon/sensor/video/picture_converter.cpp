@@ -100,6 +100,24 @@ std::optional<ColorEncoding> resolve_encoding(
   return encoding;
 }
 
+void describe_color(
+    const AVFrame& frame,
+    const std::optional<VideoColorDescription>& unlabelled_color,
+    DecodedPicture& picture) {
+  // A stream that declares no matrix reads as limited range whether or not
+  // it declares one, so the range is taken with the matrix.
+  if (unlabelled_color && frame.colorspace == AVCOL_SPC_UNSPECIFIED) {
+    picture.matrix = unlabelled_color->matrix;
+    picture.full_range = unlabelled_color->full_range;
+  } else {
+    // The displayed height: a hardware frame's still counts its top crop.
+    picture.matrix =
+        resolve_matrix(frame.colorspace, static_cast<int>(picture.height));
+    picture.full_range = full_range(frame);
+  }
+  picture.encoding = resolve_encoding(frame.color_trc, frame.color_primaries);
+}
+
 Result<DecodedPicture> PictureConverter::convert(
     const AVFrame& frame, VideoPixelLayout layout,
     const std::optional<VideoColorDescription>& unlabelled_color) {
@@ -117,16 +135,7 @@ Result<DecodedPicture> PictureConverter::convert(
   picture.width = static_cast<std::uint32_t>(frame.width);
   picture.height = static_cast<std::uint32_t>(frame.height);
   picture.layout = layout;
-  // A stream that declares no matrix reads as limited range whether or not
-  // it declares one, so the range is taken with the matrix.
-  if (unlabelled_color && frame.colorspace == AVCOL_SPC_UNSPECIFIED) {
-    picture.matrix = unlabelled_color->matrix;
-    picture.full_range = unlabelled_color->full_range;
-  } else {
-    picture.matrix = resolve_matrix(frame.colorspace, frame.height);
-    picture.full_range = full_range(frame);
-  }
-  picture.encoding = resolve_encoding(frame.color_trc, frame.color_primaries);
+  describe_color(frame, unlabelled_color, picture);
 
   const AVFrame* source = &frame;
   if (layout != VideoPixelLayout::Yuv420 || !is_host_yuv420(format)) {

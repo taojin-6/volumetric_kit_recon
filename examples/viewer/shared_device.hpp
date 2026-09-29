@@ -485,6 +485,12 @@ inline bool build_shared_device(GLFWwindow* window,
   if (device_supports("VK_KHR_portability_subset")) {
     add_extension("VK_KHR_portability_subset");
   }
+  // Optional: where the GPU exports memory, a hardware decoder's pictures
+  // reach recon without a trip through the host.
+  if (recon_req.external_memory &&
+      device_supports(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME)) {
+    add_extension(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME);
+  }
   // Name what is missing rather than letting vkCreateDevice fail opaquely.
   for (const char* name : extensions) {
     if (!device_supports(name)) {

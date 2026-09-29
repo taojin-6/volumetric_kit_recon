@@ -578,7 +578,11 @@ arbitrary; it usually isn't.
   `abandon()` retires the pool when a failed fence wait leaks the command
   buffer carrying its queries. `Device::create` enables `scalarBlockLayout`;
   `adopt` requires the creator did, and both record the queue family's
-  `queueFlags`. Separately from all of that, `core` carries the seam an
+  `queueFlags`. `create_exported_buffer` (`core/external_memory.hpp`) makes
+  a buffer CUDA imports, on a device that `exports_memory()`:
+  `VK_KHR_external_memory_fd`, which `create` enables where offered and
+  `requirements()` names as optional (`external_memory`). Separately from
+  all of that, `core` carries the seam an
   **external** GPU profiler reads: `VK_EXT_debug_utils` is requested by
   default and *independently of validation* (2026-08-30), so a Release build —
   the only one worth profiling — carries labels; `dispatch()` wraps each
@@ -901,7 +905,15 @@ arbitrary; it usually isn't.
   (FFmpeg hands its pictures over already cut from the wrong corner), so the
   decoder reads each SPS there and treats such a stream as refused.
   `VR_TEST_HEVC_BACKEND` makes its test require one back end, which is how
-  CI holds the Linux legs to NVDEC (the 2026-09-27 decoder decision).
+  CI holds the Linux legs to NVDEC (the 2026-09-27 decoder decision). With
+  `Options::device` and `VR_WITH_CUDA` (Linux, the CUDA 13 toolkit's
+  headers; libcuda is loaded at run time), an NVDEC picture stays on the
+  GPU: copied device to device into a Vulkan buffer CUDA imported (`core`'s
+  `create_exported_buffer`, on a device that `exports_memory`), and handed
+  out as NV12 in `DecodedPicture::device`, which a reader acquires from
+  `VK_QUEUE_FAMILY_EXTERNAL`; any other picture comes to the host, as does
+  every one after the device path fails (the 2026-09-28 decoded-frame
+  decision).
   **`sensor/utils`'s `GpuFramePrep`** undistorts a `RawFrame` on the device:
   depth sampled at the nearest pixel, colour bilinearly and converted from
   Y'CbCr in the same pass, each camera keeping its intrinsics and pose. Its
@@ -1120,9 +1132,10 @@ allocate; 12.6 ms and 10.6 ms resident (the 2026-09-28 residency decision).
 **On `sensor`**, each a `TODO(sensor)`: the GPU pre-processing has landed for
 one camera (`GpuFramePrep`, the 2026-09-28 GPU pre-processing decision: at 4K
 it takes the host from 15.5 ms of undistortion and registration a frame to
-none, and the run's CPU eightfold down) and for the rig's raw sets, and what
-it leaves is the decoders handing their pictures over on the device, H.265
-and MJPEG, NVIDIA and Apple (`hevc_decoder.cpp`, the 2026-09-28
+none, and the run's CPU eightfold down) and for the rig's raw sets. NVDEC
+hands its H.265 pictures over on the device; what is left is nvJPEG for
+MJPEG, VideoToolbox on Apple, and the Orbbec raw path carrying the device
+picture (`hevc_decoder.cpp`, `camera_stream.cpp`, the 2026-09-28
 decoded-frame decision's order), and the
 texture tier's separate colour camera, which fusing unregistered
 frames makes the texturing path's next need; and processing a host rig
@@ -1137,7 +1150,8 @@ synchronised sets.
 **Device residency, the steps after `core`** (the 2026-09-28 residency
 decision ranks them): `volume`, `tsdf`, `mesh` and `texture` are resident,
 and `GpuFramePrep` stages its raw frame in one submit, the rig's raw sets a
-thread per camera; next the decoder's planes straight to the device, the examples, the codec's coefficients. The
+thread per camera, and NVDEC's pictures stay on the device; next the other
+decoders' planes, the examples, the codec's coefficients. The
 benchmark kit that sized
 them sits on the home box in `~/recon-bench` (a throwaway allocator patch
 behind environment variables); re-measure there after each.

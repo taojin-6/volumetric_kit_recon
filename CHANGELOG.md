@@ -143,6 +143,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `sensor`: **NVDEC's pictures stay on the GPU** (`VR_WITH_CUDA`, Linux, the
+  CUDA 13 toolkit's headers; libcuda is loaded at run time). Given `HevcDecoder::Options::device`, a CUDA decode copies each
+  picture device to device into a Vulkan buffer CUDA has imported and hands
+  it out as NV12 (`DecodedPicture::device`), rather than copying it to the
+  host and converting it there: on an RTX 5090, 0.03-0.05 ms of CPU a 4K
+  picture against 1.34, before the host path's staging copy and upload.
+- `core`: **`create_exported_buffer`** makes a device-local storage buffer on
+  memory of its own, with a file descriptor another API on the GPU imports.
+  `Device::create` enables `VK_KHR_external_memory_fd` where the GPU offers
+  it (`Device::exports_memory`), `adopt` honours it where declared, and
+  `DeviceRequirements::external_memory` asks a shared device for it.
 - `sensor`: **colour already on the device, and NV12.** `YuvImage` names its
   chroma layout (`layout`: I420 or NV12) and takes its planes from a device
   buffer (`device`, with per-plane `offset`) as well as from the host.

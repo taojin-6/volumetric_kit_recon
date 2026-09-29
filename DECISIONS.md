@@ -6419,11 +6419,78 @@ wrote reaches:
   through `StorageInput::check`, so an empty one is called empty. A mutant
   dropping any of the new checks fails the test.
 
+**NVDEC has landed.** `HevcDecoder::Options::device` hands a CUDA decode's
+pictures out on the device:
+
+- The decoder opens NVDEC on the CUDA device whose UUID is the Vulkan
+  device's.
+- It keeps a ring of buffers from `core`'s `create_exported_buffer`, each
+  imported into CUDA once.
+- For each picture it runs two `cuMemcpy2DAsync`, luma and chroma, and a
+  stream sync on FFmpeg's stream.
+- A picture takes a buffer no earlier picture holds, so a kept one is still
+  itself.
+- CUDA wrote it, so a reader acquires it from `VK_QUEUE_FAMILY_EXTERNAL`
+  first, and a `YuvImage` of it carries `kQueueFamilyExternal`.
+
+Anything else comes to the host as before: another back end, a 10-bit
+stream, a left or top crop by an odd count, or a build without
+`VR_WITH_CUDA`. FFmpeg has already taken the right and bottom crop off a
+hardware picture's size, so the device path offsets its pointers by the
+left and top crop and copies the rest.
+
+`VR_WITH_CUDA` needs the CUDA 13 toolkit, and `nvcc` with it, since CMake
+3.28's FindCUDAToolkit will not find the toolkit without it, though recon
+compiles no CUDA code. CI's Ubuntu 24.04 leg installs the packages from
+NVIDIA's repository. Measured on the RTX 5090, `receive` per 4K picture:
+
+| | wall | CPU |
+|---|---|---|
+| host (copy to host, NV12 to I420) | 1.73-1.75 ms | 1.34-1.35 ms |
+| device | 0.17-0.19 ms | 0.03-0.05 ms |
+
+The host path then pays the 0.6 ms staging copy and the 0.47 ms upload; the
+device path neither. On the 5090 and on CI's CUDA leg, the device pictures
+of the plain and the cropped clips equal software's, byte for byte. Without
+the left-crop offset, as a mutant, the cropped clip fails. A build without
+CUDA, or any other back end, hands the same device option's pictures to the
+host, which the Mac checks.
+
+Its review changed six things:
+
+- **libcuda is loaded, not linked.** Linking `CUDA::cuda_driver` stopped
+  every program built with `VR_WITH_CUDA` from starting without the NVIDIA
+  driver. It is `dlopen`ed now, as FFmpeg does, each entry point named
+  through `cuda.h`'s macros so it is the versioned symbol its prototype
+  declares. Only `cuda.h` comes from the toolkit, so the installed package
+  finds no CUDA.
+- **A failure falls back.** A slot that would not allocate, or a CUDA call
+  that failed, failed the picture, and the next one the same way. Now the
+  device path is let go, and that picture and every later one come to the
+  host. Retrying each picture was not taken: a lasting failure would pay an
+  allocation a picture.
+- **Export is asked, not assumed.** The extension does not promise that a
+  storage buffer exports, so `create_exported_buffer` asks
+  `vkGetPhysicalDeviceExternalBufferProperties`.
+- **A shared device hears of it.** `DeviceRequirements::external_memory`
+  names the extension as optional, and `fuse_viewer`'s bootstrap enables it
+  where offered. Before, an adopted device never exported memory.
+- **The matrix guess reads the displayed height.** The device path passed
+  the hardware frame's, which still counts the top crop, so a stream near
+  576 rows could take BT.709 on one path and BT.601 on the other.
+- **A free slot too small is let go**, so a change of picture size strands
+  no memory. Slots added while pictures were held stay, a high-water mark
+  like the mesh arena's.
+
+`VR_WITH_CUDA` is Linux only, since CUDA imports the memory as a file
+descriptor. The device must outlive every picture on it, documented rather
+than checked, as for every `Buffer`. The test expects device pictures only
+on an NVIDIA Vulkan device, one CUDA sees.
+
 **Next**, in order:
 
-1. NVIDIA: NVDEC and nvJPEG into CUDA-shared Vulkan buffers, behind
-   `VR_WITH_CUDA`, with CI's Linux legs installing the toolkit. Their
-   pictures carry `kQueueFamilyExternal`.
+1. NVIDIA: nvJPEG into the same buffers, for MJPEG. Its pictures carry
+   `kQueueFamilyExternal` too.
 2. Apple: VideoToolbox for H.265 and JPEG, and the IOSurface import.
 3. The Orbbec raw path carrying the device picture, with MJPEG raw asking the
    SDK for the JPEG bytes and decoding them on a thread per camera.
