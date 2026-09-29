@@ -6569,8 +6569,11 @@ picture out as two images:
   (`imports_metal_textures()`), and `DeviceRequirements::metal_objects` asks
   a shared device for it.
 - Each plane of the picture's IOSurface becomes a Metal texture on the
-  device's own `MTLDevice` (`vkExportMetalObjectsEXT`), imported as an image
-  that `core`'s new `Image` holds. VideoToolbox cycles its pictures through
+  device's own `MTLDevice`, imported as an image that `core`'s new `Image`
+  holds. The `MTLDevice` is read off the exported texture of a 1x1 probe
+  image: exporting the device itself (`vkExportMetalObjectsEXT`) needs the
+  instance to have asked for it when it was made, which an embedder's may
+  not have, where an image asks for its own texture. VideoToolbox cycles its pictures through
   a few surfaces (five for the lab's 4K clip), so each surface's images are
   made the first time a picture arrives on it and kept until none has for 64
   pictures. A picture's images hold its pixel buffer, so VideoToolbox does
@@ -6587,7 +6590,9 @@ picture out as two images:
   not in `core`. The images the tests fill by hand are GENERAL too, so the
   copy is exercised on every GPU CI has.
 - A picture that is not 8-bit NV12 on an IOSurface comes to the host, and a
-  failed import lets the device path go, as for NVDEC. VideoToolbox has cut
+  failed import lets the device path go, as for NVDEC. A device path that
+  cannot be set up, on either, leaves every picture to the host rather than
+  failing the decoder. VideoToolbox has cut
   the right and bottom already, and a stream cropped at the left or top never
   reaches it.
 
