@@ -6615,12 +6615,38 @@ Colour copied from images larger than the picture, read from their corner,
 prepares identically to host planes, and a mutant copying the chroma a
 column short at an odd width fails that test.
 
+**VideoToolbox's JPEG has landed.** Given a device that imports Metal
+textures, `JpegDecoder` opens VideoToolbox's hardware JPEG decoder
+(`JpegDecodeBackend::VideoToolbox`):
+
+- It takes a baseline or extended 8-bit 4:2:0 JPEG in three components, the
+  frame header read off the bytes, as nvJPEG takes it. Anything else goes to
+  software.
+- A session holds for one size, asked for full-range NV12 on an IOSurface
+  and the hardware only. A size no session opens for is not asked again each
+  frame.
+- The decode is synchronous. Its picture goes through the same import as
+  H.265's, into `DecodedPicture::image`.
+- A JPEG the session refuses goes to software alone, and the session is
+  started afresh for the next; only a failed import lets the device path go.
+
+Measured on the M5 Max, Release, per frame of the Femto Mega's 4K MJPEG, CPU
+the whole process's:
+
+| | decode, wall | decode, CPU | prepare, CPU | prepare, GPU |
+|---|---|---|---|---|
+| software | 13.1-13.3 ms | 13.1-13.3 ms | 0.38-0.39 ms | 0.98-1.00 ms |
+| VideoToolbox | 6.0-6.1 ms | 0.92-0.94 ms | 0.64-0.67 ms | 1.14-1.18 ms |
+
+A frame costs 1.6 ms of CPU where it cost 13.7. The images of every 4:2:0
+fixture, the 16400-wide one included, are within 2 codes of software's; 4:2:2
+goes to software.
+
 **Next**, in order:
 
-1. Apple: VideoToolbox for JPEG, into the same images.
-2. The Orbbec raw path carrying the device picture, with MJPEG raw asking the
+1. The Orbbec raw path carrying the device picture, with MJPEG raw asking the
    SDK for the JPEG bytes and decoding them on a thread per camera.
-3. Measured afterwards: the colour kernel reading Apple's plane images
+2. Measured afterwards: the colour kernel reading Apple's plane images
    directly, which saves the copy's 0.28-0.31 ms of GPU.
 
 ### 2026-09-28 — Projective texturing takes a colour camera of its own and depth on the device: the depth camera decides what is visible, its map what the colour camera sees, and the colour camera gives the coordinate; a view's device depth and coverage are copied on the device rather than staged.

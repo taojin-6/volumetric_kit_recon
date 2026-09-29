@@ -948,7 +948,9 @@ arbitrary; it usually isn't.
   to host planes, 4:2:2 converted. On VideoToolbox, given a device that
   `imports_metal_textures`, an H.265 picture's two IOSurface planes become
   Metal textures imported as `Image`s (`vt_pictures.mm`, Objective-C++),
-  made once per surface and kept, handed out in `DecodedPicture::image`.
+  made once per surface and kept, handed out in `DecodedPicture::image`,
+  and `JpegDecoder` takes an 8-bit 4:2:0 JPEG to the same images through
+  VideoToolbox's hardware JPEG decoder (`vt_jpeg.cpp`).
   **`sensor/utils`'s `GpuFramePrep`** undistorts a `RawFrame` on the device:
   depth sampled at the nearest pixel, colour bilinearly and converted from
   Y'CbCr in the same pass, each camera keeping its intrinsics and pose. Its
@@ -1170,9 +1172,8 @@ allocate; 12.6 ms and 10.6 ms resident (the 2026-09-28 residency decision).
 one camera (`GpuFramePrep`, the 2026-09-28 GPU pre-processing decision: at 4K
 it takes the host from 15.5 ms of undistortion and registration a frame to
 none, and the run's CPU eightfold down) and for the rig's raw sets. NVDEC
-and nvJPEG hand their pictures over on the device, and VideoToolbox its
-H.265; what is left is VideoToolbox's JPEG, and the Orbbec raw path carrying
-the device picture
+and nvJPEG hand their pictures over on the device, and VideoToolbox both
+kinds; what is left is the Orbbec raw path carrying the device picture
 (`hevc_decoder.cpp`, `camera_stream.cpp`, the 2026-09-28 decoded-frame
 decision's order); and processing a host rig
 set's frames in parallel, one thread per camera, rather than the ~11 ms one
@@ -1186,8 +1187,8 @@ synchronised sets.
 **Device residency, the steps after `core`** (the 2026-09-28 residency
 decision ranks them): `volume`, `tsdf`, `mesh` and `texture` are resident,
 and `GpuFramePrep` stages its raw frame in one submit, the rig's raw sets a
-thread per camera, and the hardware decoders' pictures stay on the device
-but VideoToolbox's JPEG; next that, the examples, the codec's coefficients. The
+thread per camera, and the hardware decoders' pictures stay on the device;
+next the examples, the codec's coefficients. The
 benchmark kit that sized
 them sits on the home box in `~/recon-bench` (a throwaway allocator patch
 behind environment variables); re-measure there after each.
