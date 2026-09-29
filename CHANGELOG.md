@@ -143,6 +143,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `sensor`: **`JpegDecoder`** decodes the JPEGs an MJPEG camera sends, to
+  I420. Given a device, with `VR_WITH_CUDA`, nvJPEG decodes an 8-bit 4:2:0
+  JPEG straight into a Vulkan buffer CUDA has imported, on the GPU's
+  hardware JPEG engine where it has one and its cores for the rest: on an
+  RTX 5090, 0.38 ms of CPU a 4K frame against 14.3 in software, and the
+  picture is already on the device. libnvjpeg is loaded at run time, like
+  libcuda. Anything else
+  decodes in software to host planes. `DecodedPicture::offset` grows a
+  third plane for it.
 - `sensor`: **NVDEC's pictures stay on the GPU** (`VR_WITH_CUDA`, Linux, the
   CUDA 13 toolkit's headers; libcuda is loaded at run time). Given `HevcDecoder::Options::device`, a CUDA decode copies each
   picture device to device into a Vulkan buffer CUDA has imported and hands

@@ -460,7 +460,8 @@ add_test(NAME recon_codec_decoder COMMAND recon_codec_decoder_test)
 # hand and the back-end test asks the platform, no decoding; both compile the
 # internal source themselves, as the Orbbec conversion test does. The decoder
 # test decodes the committed clips on software and on every hardware back end
-# found; VR_TEST_HEVC_BACKEND makes one required.
+# found; VR_TEST_HEVC_BACKEND makes one required. The JPEG decoder test decodes
+# the committed JPEGs, on nvJPEG too in a VR_WITH_CUDA build.
 if(VR_WITH_FFMPEG)
   set(_vr_video_src ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/video)
   add_executable(
@@ -502,6 +503,16 @@ if(VR_WITH_FFMPEG)
             VR_TEST_WITH_CUDA=$<BOOL:${VR_WITH_CUDA}>)
   vr_target_warnings(recon_sensor_video_hevc_test)
   add_test(NAME recon_sensor_video_hevc COMMAND recon_sensor_video_hevc_test)
+
+  add_executable(recon_sensor_video_jpeg_test sensor_video_jpeg_test.cpp)
+  target_link_libraries(recon_sensor_video_jpeg_test
+                        PRIVATE volumetric_kit::recon_sensor_video)
+  target_compile_definitions(
+    recon_sensor_video_jpeg_test
+    PRIVATE VR_JPEG_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data/jpeg"
+            VR_TEST_WITH_CUDA=$<BOOL:${VR_WITH_CUDA}>)
+  vr_target_warnings(recon_sensor_video_jpeg_test)
+  add_test(NAME recon_sensor_video_jpeg COMMAND recon_sensor_video_jpeg_test)
 endif()
 
 # eval tier: closest points, the reach clamp, the summary statistics, accuracy /

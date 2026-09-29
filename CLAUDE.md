@@ -89,8 +89,9 @@ branching off **`core`**, `codec` off **`volume`** and `eval` off **`mesh`**
   *and* test it (the 2026-08-02 decision). The one that does, Orbbec, is a
   target of its own (`sensor/orbbec/`), so `recon_sensor` never links a vendor
   SDK. It also reads and writes the rig calibration file calib produces
-  (`rig_calibration.hpp`). The HEVC decoder is another target of its own
-  (`sensor/video/`, over FFmpeg), links `core` alone, and knows no camera.
+  (`rig_calibration.hpp`). The HEVC and JPEG decoders are another target of
+  their own (`sensor/video/`, over FFmpeg), link `core` alone, and know no
+  camera.
   The GPU pre-processing is a third (`sensor/utils/`, Vulkan and shaders), so
   `recon_sensor` itself stays free of both.
 - **`codec`** — the per-frame TSDF geometry codec: separate `Encoder` and
@@ -913,7 +914,13 @@ arbitrary; it usually isn't.
   out as NV12 in `DecodedPicture::device`, which a reader acquires from
   `VK_QUEUE_FAMILY_EXTERNAL`; any other picture comes to the host, as does
   every one after the device path fails (the 2026-09-28 decoded-frame
-  decision).
+  decision). **`JpegDecoder`** decodes MJPEG's JPEGs as I420, BT.601 full
+  range: given a device, with `VR_WITH_CUDA`, nvJPEG decodes an 8-bit 4:2:0
+  one into the same kind of buffer, on the GPU's hardware JPEG engine where
+  it has one (`backend()`) and its cores for the rest, and libnvjpeg too is
+  loaded at run time. A JPEG nvJPEG refuses goes to software alone; any
+  other failure lets the device path go. Anything else decodes in software
+  to host planes, 4:2:2 converted.
   **`sensor/utils`'s `GpuFramePrep`** undistorts a `RawFrame` on the device:
   depth sampled at the nearest pixel, colour bilinearly and converted from
   Y'CbCr in the same pass, each camera keeping its intrinsics and pose. Its
@@ -1133,10 +1140,10 @@ allocate; 12.6 ms and 10.6 ms resident (the 2026-09-28 residency decision).
 one camera (`GpuFramePrep`, the 2026-09-28 GPU pre-processing decision: at 4K
 it takes the host from 15.5 ms of undistortion and registration a frame to
 none, and the run's CPU eightfold down) and for the rig's raw sets. NVDEC
-hands its H.265 pictures over on the device; what is left is nvJPEG for
-MJPEG, VideoToolbox on Apple, and the Orbbec raw path carrying the device
-picture (`hevc_decoder.cpp`, `camera_stream.cpp`, the 2026-09-28
-decoded-frame decision's order), and the
+and nvJPEG hand their pictures over on the device; what is left is
+VideoToolbox on Apple, and the Orbbec raw path carrying the device picture
+(`hevc_decoder.cpp`, `camera_stream.cpp`, the 2026-09-28 decoded-frame
+decision's order), and the
 texture tier's separate colour camera, which fusing unregistered
 frames makes the texturing path's next need; and processing a host rig
 set's frames in parallel, one thread per camera, rather than the ~11 ms one
