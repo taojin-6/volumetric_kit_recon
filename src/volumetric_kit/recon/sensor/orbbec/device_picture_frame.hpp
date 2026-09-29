@@ -5,26 +5,34 @@
 
 // Internal (not installed), and built only with the video decoder: a
 // decoder's picture left on the GPU, carried from the decode thread through
-// the mailbox inside an SDK colour frame whose buffer owns it. The picture
-// then lives exactly as long as its frame -- dropped with it, grouped into a
-// rig's set with it, held with it -- and every step between the SDK and the
-// raw frame goes on handling frame sets.
+// the mailbox by an SDK colour frame. The picture then lives exactly as long
+// as its frame -- dropped with it, grouped into a rig's set with it, held
+// with it -- and every step between the SDK and the raw frame goes on
+// handling frame sets.
 
 #include <memory>
+#include <optional>
 
 #include <libobsensor/ObSensor.hpp>
 
+#include "volumetric_kit/recon/sensor/raw_frame.hpp"
 #include "volumetric_kit/recon/sensor/video/decoded_picture.hpp"
 
 namespace volumetric_kit::recon::sensor::orbbec {
 
-// A colour frame owning a copy of @p picture, which holds its device buffer
-// or images. Not a video frame: its bytes are the picture, not pixels, so
-// its size is the picture's to say.
+// A colour frame that keeps @p picture, and with it its device buffer or
+// images, until the frame is freed. A 0x0 video frame of a compressed format
+// whose bytes only name the picture, so a copy of the frame owns nothing, and
+// once the frame is freed the copy carries no picture.
 std::shared_ptr<ob::Frame> device_picture_frame(const DecodedPicture& picture);
 
-// The picture a frame from device_picture_frame carries; null for any other
-// frame.
-const DecodedPicture* device_picture(const ob::Frame& frame);
+// The picture a live frame from device_picture_frame carries, which the copy
+// returned holds; empty for any other frame.
+std::optional<DecodedPicture> device_picture(const ob::Frame& frame);
+
+// Point @p image at @p picture's planes where the hardware left them:
+// NVDEC's buffer, taken over from kQueueFamilyExternal, or VideoToolbox's
+// images. Its size and colour description are the caller's to set.
+void place_device_color(const DecodedPicture& picture, YuvImage* image);
 
 }  // namespace volumetric_kit::recon::sensor::orbbec

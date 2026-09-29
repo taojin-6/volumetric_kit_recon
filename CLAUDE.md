@@ -978,8 +978,9 @@ arbitrary; it usually isn't.
   converted by the matrix and range the stream codes them in, and
   `fuse_orbbec --gpu` fuses them. Given `OrbbecStreamOptions::device`, its
   H.265 colour is decoded onto that device and stays there, the picture
-  carried through the mailbox inside the SDK frame that owns it
-  (`device_picture_frame.hpp`). Its hardware test holds it
+  carried through the mailbox by an SDK frame whose bytes only name it, so
+  a copy of the frame owns nothing (`device_picture_frame.hpp`). Its
+  hardware test holds it
   to the SDK's own undistortion and registration on a still scene (the
   2026-09-28 GPU pre-processing decision).
 

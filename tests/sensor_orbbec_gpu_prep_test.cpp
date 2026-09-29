@@ -160,7 +160,7 @@ int grab_gpu(const char* serial, std::uint32_t w, std::uint32_t h,
         std::printf("  depth camera at (%.4f, %.4f, %.4f) m in the colour's\n",
                     t.x, t.y, t.z);
         // Where the hardware decoded it, the colour stays on the device; a
-        // leg that promises the hardware must find it there.
+        // leg whose hardware leaves it there must find it there.
         const bool on_device =
             raw.color.device != nullptr || raw.color.image[0] != nullptr;
         std::printf("  colour %s\n",
@@ -168,7 +168,10 @@ int grab_gpu(const char* serial, std::uint32_t w, std::uint32_t h,
                     : raw.color.device != nullptr ? "in a buffer on the device"
                                                   : "as host planes");
         const char* required = std::getenv("VR_TEST_HEVC_BACKEND");
-        if (required != nullptr && !on_device) {
+        const std::string backend = required != nullptr ? required : "";
+        if ((backend == "videotoolbox" ||
+             (VR_TEST_WITH_CUDA && backend == "cuda")) &&
+            !on_device) {
           std::fprintf(stderr, "FAIL: %s promised, colour on the host\n",
                        required);
           return 1;

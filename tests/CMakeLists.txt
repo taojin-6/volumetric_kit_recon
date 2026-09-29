@@ -587,6 +587,9 @@ if(VR_WITH_ORBBEC)
       recon_sensor_orbbec_gpu_prep_test
       PRIVATE volumetric_kit::recon_sensor_orbbec
               volumetric_kit::recon_sensor_utils)
+    target_compile_definitions(
+      recon_sensor_orbbec_gpu_prep_test
+      PRIVATE VR_TEST_WITH_CUDA=$<BOOL:${VR_WITH_CUDA}>)
     vr_target_warnings(recon_sensor_orbbec_gpu_prep_test)
     add_test(NAME recon_sensor_orbbec_gpu_prep
              COMMAND recon_sensor_orbbec_gpu_prep_test)
@@ -652,7 +655,8 @@ if(VR_WITH_ORBBEC)
       PRIVATE ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec)
     target_compile_definitions(
       recon_sensor_orbbec_hevc_test
-      PRIVATE VR_HEVC_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data/hevc")
+      PRIVATE VR_HEVC_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data/hevc"
+              VR_TEST_WITH_CUDA=$<BOOL:${VR_WITH_CUDA}>)
     vr_target_warnings(recon_sensor_orbbec_hevc_test)
     add_test(NAME recon_sensor_orbbec_hevc
              COMMAND recon_sensor_orbbec_hevc_test)
