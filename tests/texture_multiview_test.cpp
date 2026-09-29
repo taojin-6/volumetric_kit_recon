@@ -446,6 +446,28 @@ int main() {
     }
   }
 
+  // A fallback view takes only what no other view qualifies for. Views 1 and
+  // 0, view 1 first: unmarked, view 1 takes the right triangle, which it faces
+  // more squarely, and the occluded one; marked, it keeps only the occluded
+  // one, which view 0 cannot take, and the right goes to view 0.
+  {
+    std::vector<tex::TextureView> two = {views[1], views[0]};
+    vr::Result<tex::AtlasLayout> layout =
+        tex::side_by_side_atlas(two, texturer.max_atlas_extent());
+    CHECK(layout.ok());
+    for (const bool fallback : {false, true}) {
+      two[0].fallback = fallback;
+      rmesh::Mesh m = mesh;
+      CHECK(texturer.texture(m, two, layout.value()).ok());
+      const int want_two[] = {1, fallback ? 1 : 0, 1, 0, -1, -1, -1};
+      for (std::size_t t = 0; t < kTriangles; ++t) {
+        if (check_triangle(m, t, want_two[t], two, layout.value()) != 0) {
+          return 1;
+        }
+      }
+    }
+  }
+
   // Two rows: an extent of 700 fits two tiles a row, so view 2 wraps to the
   // second, at (0, 240) of a 640 x 480 atlas.
   {

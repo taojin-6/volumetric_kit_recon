@@ -853,8 +853,9 @@ arbitrary; it usually isn't.
   side, in floor(sqrt(n)) rows so four views make two rows of two
   (`texture_atlas.hpp`: `side_by_side_atlas`, `pack_atlas`), one thread per
   **triangle**: each takes the view facing it most squarely among those
-  that see its **front** and all three of its vertices, and all three point
-  into that view's tile. Per triangle because vertices in different tiles
+  that see its **front** and all three of its vertices, a `fallback` view
+  only where no other does, and all three point into that view's tile. Per
+  triangle because vertices in different tiles
   would interpolate across the atlas, so that path needs an unshared mesh and
   refuses a shared one, as it refuses a view with no depth range and tiles
   that overlap (2026-09-28). With a colour camera the depth camera still
@@ -1125,8 +1126,9 @@ one header that pulls in `sensor/utils`.
 `VR_WITH_FFMPEG`) is `fuse_viewer`'s live-rig sibling: raw sets prepared,
 fused and textured from every camera on the GPU, and the atlas filled by
 device copies recorded in gfx's frame (the 2026-09-29 decision), fusing
-depth only inside each colour camera's view unless given `--all-depth`. The two
-viewers share `viewer_common.hpp`: the teardown guards, and the render side of
+depth only inside each colour camera's view unless given `--all-depth`, and
+texturing a camera a set lacks from its last frame, a fallback view
+(`--hold-ms`). The two viewers share `viewer_common.hpp`: the teardown guards, and the render side of
 the mesh ring.
 **`codec_replica`** fuses a Replica sequence as `fuse_replica` does, and
 streams the growing grid through the codec: every `--encode-every` frames it

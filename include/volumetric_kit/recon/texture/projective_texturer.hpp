@@ -309,7 +309,8 @@ class VR_TEXTURE_API ProjectiveTexturer {
   /// squarely wins: the score is the cosine of the angle between the
   /// triangle's normal and the view's ray back from its centroid, less 0.01
   /// per metre of the smallest depth disagreement, as in the prior engine; the
-  /// first view wins a tie. A view behind the triangle does not qualify,
+  /// first view wins a tie, and a @ref TextureView::fallback view wins only
+  /// where no other qualifies. A view behind the triangle does not qualify,
   /// however well its depth agrees: on thin geometry the back of a sheet sits
   /// within the threshold of the front the camera saw. All three vertices get
   /// the winner's image coordinates, scaled into its tile of @p layout and

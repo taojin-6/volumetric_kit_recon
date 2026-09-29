@@ -87,7 +87,8 @@ static_assert(offsetof(MultiviewPushConstants, occlusion_threshold) == 16,
 // its depth camera, where its depth starts in the concatenated depth buffer,
 // its tile -- the colour image, which may be larger than the depth map --
 // where the image's coverage starts in the concatenated coverage buffer when
-// it marks it, and the colour camera the image was taken with.
+// it marks it, the colour camera the image was taken with, and whether the
+// view is a fallback (TextureView::fallback).
 struct ViewParams {
   DepthCameraParams cam;
   std::uint32_t depth_offset;
@@ -98,10 +99,11 @@ struct ViewParams {
   std::uint32_t coverage_offset;
   std::uint32_t has_coverage;
   ColorCameraParams color;
+  std::uint32_t fallback;
 };
 static_assert(sizeof(ViewParams) ==
-                  sizeof(DepthCameraParams) + 28 + sizeof(ColorCameraParams),
-              "ViewParams must be 212 bytes");
+                  sizeof(DepthCameraParams) + 32 + sizeof(ColorCameraParams),
+              "ViewParams must be 216 bytes");
 static_assert(offsetof(ViewParams, depth_offset) == 96,
               "ViewParams layout drift");
 static_assert(offsetof(ViewParams, tile_width) == 108,
@@ -109,6 +111,7 @@ static_assert(offsetof(ViewParams, tile_width) == 108,
 static_assert(offsetof(ViewParams, coverage_offset) == 116,
               "ViewParams layout drift");
 static_assert(offsetof(ViewParams, color) == 124, "ViewParams layout drift");
+static_assert(offsetof(ViewParams, fallback) == 212, "ViewParams layout drift");
 
 // The score's cost per metre of depth disagreement: the prior engine's
 // default, and implicit_surface_compression's constant.
@@ -594,6 +597,7 @@ Status ProjectiveTexturer::texture_views(CommandBatch& batch, VkBuffer vertices,
     params[i].tile_width = tile.width;
     params[i].tile_height = tile.height;
     params[i].color = color_camera_of(views[i]);
+    params[i].fallback = views[i].fallback ? 1 : 0;
     if (views[i].coverage != nullptr) {
       params[i].coverage_offset = static_cast<std::uint32_t>(coverage_words);
       params[i].has_coverage = 1;

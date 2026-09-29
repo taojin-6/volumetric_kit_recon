@@ -87,6 +87,12 @@ struct TextureView {
   /// as storage or copied from, as @ref depth_buffer is, and held as it is.
   /// Null (the default) means every pixel of the image counts.
   std::shared_ptr<const Buffer> coverage = nullptr;
+  /// Whether this view textures only the triangles no other view qualifies
+  /// for: among the views that do, any one not marked wins over any marked
+  /// one, whatever their scores. For a frame older than the rest, such as a
+  /// camera's last frame standing in for one a rig's set lacks. Read by the
+  /// several-view pass only.
+  bool fallback = false;
 };
 
 /// @brief Where one view's image sits in the atlas, in pixels.
