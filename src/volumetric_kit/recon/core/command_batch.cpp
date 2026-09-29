@@ -8,6 +8,7 @@
 #include <string>
 #include <utility>
 
+#include "vk_physical_device.hpp"
 #include "volumetric_kit/recon/core/allocator.hpp"
 #include "volumetric_kit/recon/core/compute_kernel.hpp"
 #include "volumetric_kit/recon/core/device.hpp"
@@ -261,6 +262,36 @@ Status CommandBatch::copy(const Buffer& src, VkDeviceSize src_offset,
   return {};
 }
 
+Status CommandBatch::acquire(const Buffer& buffer, std::uint32_t from) {
+  VR_TRY(check(usable()));
+  if (!buffer.valid()) {
+    return check(
+        Status::invalid_argument("CommandBatch::acquire: the buffer is empty"));
+  }
+  const std::uint32_t own = device_->compute_family();
+  const bool external = from == VK_QUEUE_FAMILY_EXTERNAL;
+  if (!external && from != VK_QUEUE_FAMILY_IGNORED &&
+      from >= detail::queue_families(device_->physical_device()).size()) {
+    return check(Status::invalid_argument(
+        "CommandBatch::acquire: queue family " + std::to_string(from) +
+        " is not one of the device's"));
+  }
+  const bool concurrent = buffer.sharing_mode() == VK_SHARING_MODE_CONCURRENT;
+  if (from == VK_QUEUE_FAMILY_IGNORED || from == own ||
+      (concurrent && !external)) {
+    return {};
+  }
+  Op op;
+  op.kind = Kind::Acquire;
+  op.dst = buffer.handle();
+  op.value = from;
+  // A CONCURRENT buffer is taken from outside Vulkan for every family at
+  // once, which Vulkan spells with the destination ignored.
+  op.to_family = concurrent ? VK_QUEUE_FAMILY_IGNORED : own;
+  ops_.push_back(std::move(op));
+  return {};
+}
+
 Status CommandBatch::check_dispatch(const ComputeKernel& kernel,
                                     const void* push,
                                     std::uint32_t push_size) const {
@@ -376,6 +407,9 @@ bool CommandBatch::needs_barrier(std::size_t first, std::size_t i) const {
     return buffer != VK_NULL_HANDLE && (op.src == buffer || op.dst == buffer);
   };
   const Op& b = ops_[i];
+  // An acquire is a barrier of its own, and orders what reads its buffer
+  // after it.
+  if (b.kind == Kind::Acquire) return false;
   // A fill or upload that starts past the end of the one before it, in the
   // same buffer, reads nothing another command writes and writes no byte the
   // run has: the run's first write there was checked against all of it. So
@@ -394,6 +428,7 @@ bool CommandBatch::needs_barrier(std::size_t first, std::size_t i) const {
   }
   for (std::size_t j = first; j < i; ++j) {
     const Op& a = ops_[j];
+    if (a.kind == Kind::Acquire) continue;
     if (dispatches(a) || dispatches(b) || touches(a, written(b)) ||
         touches(b, written(a))) {
       return true;
@@ -443,6 +478,20 @@ void CommandBatch::record(VkCommandBuffer cmd, std::vector<Span>& spans) const {
       case Kind::Fill:
         vkCmdFillBuffer(cmd, op.dst, op.dst_offset, op.bytes, op.value);
         break;
+      case Kind::Acquire: {
+        // The writer's release made its writes available, so this makes
+        // them visible to everything after it, and waits on nothing before.
+        VkBufferMemoryBarrier b{};
+        b.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+        b.dstAccessMask = kInnerAccess;
+        b.srcQueueFamilyIndex = op.value;
+        b.dstQueueFamilyIndex = op.to_family;
+        b.buffer = op.dst;
+        b.size = VK_WHOLE_SIZE;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                             kInnerStages, 0, 0, nullptr, 1, &b, 0, nullptr);
+        break;
+      }
       case Kind::Dispatch:
       case Kind::DispatchIndirect: {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,

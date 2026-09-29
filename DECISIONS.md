@@ -6279,6 +6279,157 @@ Sharing one pool across threads, as a mutant, fails the test 3 of 3 with
 `THREADING ERROR` on the pool and a segfault; dropping the queue lock fails it
 3 of 3 on the queue. With neither, it passes 20 of 20 on the M5 Max.
 
+### 2026-09-28 — A decoded colour frame never leaves the GPU: the platform's hardware decoder, for H.265 and MJPEG alike, hands its picture to Vulkan in place, and `GpuFramePrep` takes I420 or NV12 from the host or the device.
+
+**The rule.** The camera stream arrives on the host, the RGB-D frame goes to
+the GPU once, and undistortion, colour conversion and fusion all run there.
+Depth already did: raw 16-bit samples, one upload. Colour did not. A
+hardware-decoded picture came back to the host (`av_hwframe_transfer_data`),
+swscale converted it from NV12 to I420, the Orbbec driver copied it into a
+new 12 MB buffer, `GpuFramePrep` copied it into staging, and the batch
+uploaded it again. Per 4K picture per camera, Release, that was:
+
+| | M5 Max | RTX 5090 box |
+|---|---|---|
+| copy to host | 0.20-0.34 ms | 1.1 ms (3.9 with a fresh driver buffer) |
+| NV12 to I420 | 0.31-0.46 ms | 0.6 ms |
+| driver copy (`i420_frame`) | 0.18-0.28 ms | 0.57 ms (3.8 fresh) |
+| copy into staging | 0.2 ms | 0.6 ms |
+| upload, device time | 0.04 ms | 0.47 ms |
+
+On Linux a fresh 12 MB buffer a frame page-faults, which is what the driver
+does today; the bench that measured it decoded a 3840x2160 clip through
+`HevcDecoder` and repeated the driver's copy.
+
+Instead, each platform's hardware decoder hands its picture to Vulkan where it
+lies:
+
+- **NVIDIA.** NVDEC, for H.265, copies its surface device to device
+  (`cuMemcpy2DAsync`) into a ring of Vulkan buffers imported into CUDA
+  (`VK_KHR_external_memory_fd`). Its pool is small, so the surface is copied
+  out at once rather than held. nvJPEG's hardware back end decodes MJPEG
+  straight into the same buffers, and `GPU_HYBRID` stands in on a GPU without
+  the JPEG engine. Both sit behind `VR_WITH_CUDA`, on the CUDA 13 toolkit.
+- **Apple.** VideoToolbox, for H.265 through FFmpeg and for JPEG directly,
+  gives an IOSurface-backed NV12 `CVPixelBuffer`. Each plane becomes a Metal
+  texture over the IOSurface, imported with `VK_EXT_metal_objects`, and the
+  pass copies the planes into its input in its own batch.
+- **`GpuFramePrep`** takes I420 or NV12, as host planes or as a device
+  buffer with per-plane offsets and strides (`YuvImage::device`), and binds
+  device planes where they are. The frame holds that buffer, so a decoder's
+  ring cannot reuse it while the frame is prepared.
+
+**Why each piece**, measured on throwaway spikes:
+
+- **MoltenVK 1.4.2 refuses an IOSurface as one two-plane image**: `IOSurface
+  bytes per element 1 does not match VkImage bytes per element 6`. A Metal
+  texture per plane imports in 0.16-0.24 ms. VideoToolbox cycled through 5
+  surfaces for 110 pictures, so the import can be cached per surface. The
+  planes read back identical to FFmpeg's own host copy: 0 of 8.3 M luma and
+  4.1 M chroma bytes differ. Copying both planes image to buffer takes
+  0.24-0.30 ms of device time, which the kernel reading the images directly
+  would save.
+- **MJPEG needs a hardware decoder.** The Femto Mega's JPEGs are 4:2:0, full
+  range, BT.601, like its H.265, about 1.4 MB at 4K (its limit is 25 fps),
+  and carry no restart markers, so each frame's entropy decode is serial.
+  CPU per 4K frame, with CUDA waiting on blocking sync, since its default
+  spin bills every wait as CPU:
+
+  | decoder | wall | CPU |
+  |---|---|---|
+  | FFmpeg software, M5 Max | 13.2 ms | 14.4 ms |
+  | VideoToolbox JPEG, M5 Max | 5.2 ms | 0.25-0.29 ms |
+  | FFmpeg software, 5090 | 14.7 ms | 16.2 ms |
+  | FFmpeg through NVDEC, 5090 | 12.9 ms | 14.3 ms |
+  | nvJPEG 13.2, CPU Huffman, 5090 | 10.9 ms | 10.0 ms |
+  | nvJPEG 13.2, `GPU_HYBRID`, 5090 | 4.6 ms | 4.2 ms |
+  | nvJPEG 13.2, `HARDWARE`, 5090 | 3.8 ms | 0.38 ms |
+
+  The hardware engine's picture differs from the others only by IDCT
+  rounding (a luma sum 350 apart over 8.3 M pixels), so its tests compare
+  with a tolerance. FFmpeg's NVDEC MJPEG path keeps the picture on the GPU
+  but not the work off the CPU. An MJPEG camera sends about 280 Mbit/s at 4K
+  against about 30 for H.265, so H.265 stays the rig's default.
+- **Vulkan Video decode was set aside.** FFmpeg 6.1 decodes H.265 through
+  it on the 5090 at 12.4x real time, against 14.4x for CUDA. It needs Vulkan
+  1.3 (recon's instance asks for 1.2), a decode queue in both device seams
+  (gfx's bootstrap too), and FFmpeg's `AVVkFrame` protocol, and MoltenVK has
+  none of it. It becomes the better choice if AMD or Intel on Linux, or
+  Windows, become targets.
+- **Host-side trims were set aside**: pooled driver buffers, and NV12
+  through the host. They polish the path this removes. The page-fault
+  finding stays true for the paths that keep host frames.
+
+**Landed.** `GpuFramePrep` takes I420 or NV12, from the host or the device.
+The colour kernel reads each plane at an offset and row stride of its own,
+with a chroma step of 1 or 2, so its push constants grow from 76 to 96 bytes.
+A test prepares one odd-sized, lensed picture every way it can come and
+requires the outputs to be identical: host I420, host NV12 with tight and
+padded rows, and device I420 and NV12 at odd offsets with padded rows, 4 KiB
+into their buffer, taken over from outside Vulkan or not, the I420 with Cb
+and Cr rows of different lengths. It also refuses:
+
+- planes on both the host and the device, a stale third one included, and
+  an NV12 host picture with a third plane;
+- a plane past its buffer, or its last word past it;
+- planes that overlap, as I420's do with their offsets left at zero;
+- a row shorter than its picture;
+- a buffer that is empty or without storage usage;
+- a queue family the device lacks, before any work.
+
+A kernel that ignores the chroma step, as a mutant, fails the NV12 case; one
+that ignores the luma offset fails the device case.
+
+Its review settled the device path, which a picture another queue or API
+wrote reaches:
+
+- **Ownership.** Reading an EXCLUSIVE buffer another queue family wrote, or
+  memory CUDA wrote through an import, is undefined without a queue-family
+  ownership transfer, and appears to work on Apple, where Metal has no such
+  thing. `YuvImage::queue_family` names the writer: another family of the
+  device, `kQueueFamilyExternal` for CUDA, or `kQueueFamilyIgnored`, the
+  default, for the pass's own. The pass opens its batch with
+  `CommandBatch::acquire`, new in `core`: the receiving half, from
+  `VK_QUEUE_FAMILY_EXTERNAL` for an EXCLUSIVE or a CONCURRENT buffer, and
+  from another family for an EXCLUSIVE one, whose writer records the
+  release. The batch waits on no semaphore, so the writer must have
+  finished, a fence waited or the stream synchronized, which
+  `YuvImage::device` now says. An acquire naming this family for a
+  CONCURRENT buffer, rather than every family, fails the batch test under
+  the validation layer (VUID-09051); a pass that skips the acquire fails its
+  refusal of an unknown family.
+- **Lifetime.** A failed wait already leaked the staging the device may
+  still read. It now leaks a reference to the device planes' buffer too,
+  which the caller could otherwise drop, or a decoder's ring reuse, as soon
+  as `prepare` returned.
+- **Binding.** Device planes are bound from the first plane, rounded down to
+  `minStorageBufferOffsetAlignment`, not from byte 0, so
+  `maxStorageBufferRange` (2^27 on Mali and many Intel drivers) and the
+  kernel's 32-bit addressing weigh the picture, not where it sits: a
+  decoder ring's slot 128 MB into one buffer would have been refused on
+  those drivers. A kernel reading each
+  plane where it sits in the buffer rather than the binding fails the test;
+  binding from byte 0 does not, since no device CI runs has a limit that
+  low.
+- **Checks.** Overlapping planes are refused, which catches I420's offsets
+  left at zero, and so is a host pointer beside device planes, whichever
+  plane it is. The kernel takes Cb's and Cr's strides separately, so the
+  device path accepts Cb and Cr rows of different lengths, as FFmpeg's
+  linesizes allow, rather than refusing them. The borrowed buffer is checked
+  through `StorageInput::check`, so an empty one is called empty. A mutant
+  dropping any of the new checks fails the test.
+
+**Next**, in order:
+
+1. NVIDIA: NVDEC and nvJPEG into CUDA-shared Vulkan buffers, behind
+   `VR_WITH_CUDA`, with CI's Linux legs installing the toolkit. Their
+   pictures carry `kQueueFamilyExternal`.
+2. Apple: VideoToolbox for H.265 and JPEG, and the IOSurface import.
+3. The Orbbec raw path carrying the device picture, with MJPEG raw asking the
+   SDK for the JPEG bytes and decoding them on a thread per camera.
+4. Measured afterwards: the colour kernel reading Apple's plane images
+   directly.
+
 ## Measured lessons
 
 Not decisions, but the measurements that overturned an assumption about

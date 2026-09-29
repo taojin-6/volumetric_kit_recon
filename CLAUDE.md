@@ -314,6 +314,10 @@ order. Change the decision, its entry there, and this list together.
   Memory the kernels use lives on the device on every platform, and the host
   only records commands against it: one `CommandBatch` per call, parameters
   inline, bulk bytes staged at the edges, small results read back.
+- [**2026-09-28**](DECISIONS.md#2026-09-28--a-decoded-colour-frame-never-leaves-the-gpu-the-platforms-hardware-decoder-for-h265-and-mjpeg-alike-hands-its-picture-to-vulkan-in-place-and-gpuframeprep-takes-i420-or-nv12-from-the-host-or-the-device) —
+  A decoded colour frame never leaves the GPU: the platform's hardware
+  decoder, for H.265 and MJPEG alike, hands its picture to Vulkan in place,
+  and `GpuFramePrep` takes I420 or NV12 from the host or the device.
 - [**2026-09-28**](DECISIONS.md#2026-09-28--a-device-takes-submits-from-several-threads-at-once-each-records-on-a-command-pool-of-its-own-and-only-the-queue-is-locked) —
   A `Device` takes submits from several threads at once: each records on a
   command pool of its own, and only the queue is locked.
@@ -537,7 +541,9 @@ arbitrary; it usually isn't.
   **`CommandBatch`** (`core/command_batch.hpp`)
   is how the host reaches device memory: one call's uploads, fills, copies,
   dispatches (indirect too) and readbacks in one command buffer, one fence
-  wait, spans and labels kept. A barrier goes wherever a command could see an
+  wait, spans and labels kept. `acquire` takes over a buffer another queue
+  family or an API outside Vulkan wrote, the receiving half of the ownership
+  transfer. A barrier goes wherever a command could see an
   earlier one's writes: around every dispatch, and between two transfers
   only when they share a buffer one writes, unless they are fills or
   uploads rising through it without overlap. `zero` clears a range at any
@@ -902,8 +908,13 @@ arbitrary; it usually isn't.
   `DeviceFrame` feeds the `Buffer` overloads of `allocate_from_depth` and
   `integrate` (and `ColorFrame::buffer`, with `coverage_in_alpha`, since a
   pixel the lens maps outside the picture is a 0 word), so nothing is
-  uploaded and nothing registered. The raw frame itself goes up through one
-  batch into device-local inputs, its planes packed into a staging buffer the
+  uploaded and nothing registered. Colour comes as I420 or NV12, as host
+  planes or already on the device (`YuvImage::device`, with per-plane
+  offsets and strides), and device planes are bound where they are, from
+  the first plane, once the batch has taken them over from the queue family
+  that wrote them (`YuvImage::queue_family`; the 2026-09-28 decoded-frame
+  decision). The raw frame's host data goes up
+  through one batch into device-local inputs, its planes packed into a staging buffer the
   pass keeps whatever their strides, and both passes run in the same submit,
   the copy timed with them. Kept because several passes allocating a 4K
   frame's staging at once made VMA allocate a block for every set (46 ms a
@@ -1110,8 +1121,9 @@ allocate; 12.6 ms and 10.6 ms resident (the 2026-09-28 residency decision).
 one camera (`GpuFramePrep`, the 2026-09-28 GPU pre-processing decision: at 4K
 it takes the host from 15.5 ms of undistortion and registration a frame to
 none, and the run's CPU eightfold down) and for the rig's raw sets, and what
-it leaves is zero-copy input from the decoder's
-hardware frames (`gpu_frame_prep.hpp`, `hevc_decoder.cpp`), and the
+it leaves is the decoders handing their pictures over on the device, H.265
+and MJPEG, NVIDIA and Apple (`hevc_decoder.cpp`, the 2026-09-28
+decoded-frame decision's order), and the
 texture tier's separate colour camera, which fusing unregistered
 frames makes the texturing path's next need; and processing a host rig
 set's frames in parallel, one thread per camera, rather than the ~11 ms one

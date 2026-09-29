@@ -404,6 +404,52 @@ int main() {
     CHECK(!plain.dispatch_indirect(add, &push, sizeof(push), a, 0).ok());
   }
 
+  // An acquire takes a buffer over before what reads it. From outside Vulkan
+  // it records the transfer, for an EXCLUSIVE buffer and a CONCURRENT one;
+  // from this device's family, from none, or from another family into a
+  // CONCURRENT buffer it records nothing. Either way the kernel after it
+  // sees what an earlier batch wrote, and the layer stays silent.
+  {
+    const auto invalid = vr::Status::Code::InvalidArgument;
+    const std::uint32_t own = device.compute_family();
+    std::uint32_t family_count = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(device.physical_device(),
+                                             &family_count, nullptr);
+    const auto taken_over = [&](const vr::Buffer& buffer, std::uint32_t from) {
+      std::vector<std::uint32_t> back(kCount, 0);
+      vr::CommandBatch write(device, allocator);
+      if (!write.upload(buffer, 0, p.data(), kBytes).ok()) return false;
+      if (!write.submit().ok()) return false;
+      vr::CommandBatch batch(device, allocator);
+      return batch.acquire(buffer, from).ok() &&
+             add_to(batch, rig, buffer, 2).ok() &&
+             batch.readback(buffer, 0, kBytes, back.data()).ok() &&
+             batch.submit().ok() && back == plus(p, 2);
+    };
+    CHECK(taken_over(a, VK_QUEUE_FAMILY_EXTERNAL));
+    CHECK(taken_over(a, VK_QUEUE_FAMILY_IGNORED));
+    CHECK(taken_over(a, own));
+    if (family_count > 1) {
+      const std::uint32_t other = own == 0 ? 1 : 0;
+      const std::uint32_t both[2] = {own, other};
+      vr::Result<vr::Buffer> shared =
+          vr::device_storage_buffer(allocator, kBytes, 0, both, 2);
+      CHECK(shared.ok());
+      CHECK(shared.value().sharing_mode() == VK_SHARING_MODE_CONCURRENT);
+      CHECK(taken_over(shared.value(), VK_QUEUE_FAMILY_EXTERNAL));
+      CHECK(taken_over(shared.value(), other));
+    }
+
+    // Refused, poisoning the batch: an empty buffer, and a family the device
+    // does not have.
+    vr::CommandBatch empty(device, allocator);
+    CHECK(empty.acquire(vr::Buffer(), own).domain() == invalid);
+    CHECK(empty.submit().domain() == invalid);
+    vr::CommandBatch stranger(device, allocator);
+    CHECK(stranger.acquire(a, family_count).domain() == invalid);
+    CHECK(stranger.submit().domain() == invalid);
+  }
+
   // Timed dispatches keep their spans: two in one submit, each resolved
   // into its own row. Timed uploads do too, inline, staged and reserved, and
   // a timed copy.
