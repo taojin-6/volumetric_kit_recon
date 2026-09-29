@@ -977,7 +977,10 @@ arbitrary; it usually isn't.
   rig set on an RTX 5090, 4.8 ms kept). The frame *holds* its device-local
   buffers, and `prepare` reuses one only once no frame does, so a frame kept
   past the next is still itself; the whole frame is checked before anything
-  is uploaded, a depth range from 0 included. `OrbbecCapture` opened with
+  is uploaded, a depth range from 0 included. `depth_within_color` (off by
+  default; `rig_viewer` turns it on) zeroes depth outside the colour camera's
+  view, by the colour pass's own coverage test, so nothing is fused that no
+  colour camera can colour. `OrbbecCapture` opened with
   `raw` hands out `RawFrame`s through the contract's `poll_raw`, lenses and
   the depth-to-colour extrinsic from the factory calibration, the planes
   converted by the matrix and range the stream codes them in, and
@@ -1121,7 +1124,8 @@ one header that pulls in `sensor/utils`.
 **`rig_viewer`** (`VR_BUILD_VIEWER` with `VR_WITH_ORBBEC` and
 `VR_WITH_FFMPEG`) is `fuse_viewer`'s live-rig sibling: raw sets prepared,
 fused and textured from every camera on the GPU, and the atlas filled by
-device copies recorded in gfx's frame (the 2026-09-29 decision). The two
+device copies recorded in gfx's frame (the 2026-09-29 decision), fusing
+depth only inside each colour camera's view unless given `--all-depth`. The two
 viewers share `viewer_common.hpp`: the teardown guards, and the render side of
 the mesh ring.
 **`codec_replica`** fuses a Replica sequence as `fuse_replica` does, and

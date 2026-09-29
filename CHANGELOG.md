@@ -32,6 +32,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `examples`: **`rig_viewer` fuses depth only inside each camera's colour
+  view** by default (`GpuFramePrepConfig::depth_within_color`), so the
+  untextured white floor and walls outside every colour camera's view are no
+  longer fused. On the lab rig this halved the untextured triangles, from
+  16.9% to 8.6%. `--all-depth` fuses all of it.
 - `examples`: **`rig_viewer` fuses `Dynamic` by default** (`--static` for
   `Classic`), so a surface that moves away is gone on the next set rather
   than fading over `--max-weight` frames. It **textures at a 5 cm occlusion
@@ -162,6 +167,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `sensor`: **`GpuFramePrepConfig::depth_within_color`**. It zeroes a depth
+  pixel whose point the colour camera did not record: behind that camera, or
+  on a pixel its lens missed, found by the colour pass's own coverage test.
+  What is fused then lies inside the colour view, so every surface can be
+  coloured and textured. The test is the colour camera's view, not its line
+  of sight. A frame without colour keeps all its depth, and the option is off
+  by default. Test: `recon_sensor_gpu_frame_prep` (the 2026-09-28 GPU
+  pre-processing decision, amended).
 - `examples`: **`rig_viewer --show-sources`** (a View panel toggle too) fills
   each camera's atlas tile with a colour of its own, so the window shows which
   camera textured each triangle; **`--texture-stats`** reads the mesh back
