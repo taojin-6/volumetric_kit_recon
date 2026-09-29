@@ -7129,53 +7129,95 @@ roughly halves, and each camera's share grows only because the total shrinks.
 A screenshot of each run shows the white walls and floor of the first gone
 from the second. The 8.6% left has not been broken down by cause.
 
-*Amended 2026-09-29, a fourth time:* a camera missing from a set, or missing
-its colour, **textures from its last frame** for up to `--hold-sets` sets (30
-by default, a second of the rig's rate; 0 turns it off). The viewer keeps
-each camera's newest frame with colour, and `texture_sources` picks, per
-camera, the set's own frame or the held one. A held frame goes to the texture
-pass whole: its colour into the camera's tile, and its depth and colour camera
-as the view. The pass's depth test is two-sided at the occlusion threshold, so
-a held image textures only surfaces that are still where its depth saw them.
-Where something has moved since, that camera is refused, and another camera
-or the fused colour takes the surface.
+*Amended 2026-09-29, a fourth time:* a camera missing from a set **textures
+from its last frame** for up to `--hold-ms` on the rig's clock (2000 by
+default; 0 turns it off). The viewer keeps each camera's newest frame with
+colour, and `texture_sources` gives the texture pass, per camera, this set's
+frame or, within the limit, the one kept from an earlier set. A held frame
+goes to the pass whole: its colour into the camera's tile, and its depth and
+colour camera as the view. It is a **fallback view**
+(`TextureView::fallback`, new here): it takes only the triangles no present
+camera qualifies for, and of those only where its own depth still agrees
+with the mesh within the occlusion threshold. That test is geometric: a
+surface that moved toward or away from the camera is refused, but one that
+slid along itself, or changed its look, passes and takes the old image.
 
 - **Why.** With every set remeshed, each set missing a camera was a remesh
   textured without it. For one frame, every triangle that camera held fell
   to fused colour, which read as flicker whenever the Rig panel's `dropped`
   count went up. The SDK drops those frames on the wired link, more often
-  from the secondaries and more often at 4K. The viewer cannot prevent that.
+  from the secondaries and more often at 4K, and a lost H.265 frame costs
+  its camera every frame to the next key frame. The viewer cannot prevent
+  either.
 - **Texture only, not fusion.** The missing camera's depth is not re-fused
   from the held frame. Fusing a frame twice would double its weight, and
   under `Dynamic` stale depth would clear surfaces that have since arrived.
-- **The cost.** A held frame keeps its buffers, so that camera's frame prep
-  writes each new frame to a new buffer rather than reusing one (the reuse
-  rule of the GPU pre-processing entry). At 4K that is a 33 MB colour buffer
-  per camera per set, and the fuse time did not move (below).
-- **The limit.** 30 sets was not derived from a measured gap length; the gaps
-  seen were covered. It is long enough to span a lost H.265 frame's wait for
-  the next key frame, and short enough that a camera gone for good stops
-  texturing within a second.
+- **The limit.** 2 s on the rig's clock, so a stall does not keep a frame
+  fresh. It spans the wait for the next key frame (30 frames at the camera's
+  default, 1.2 s at 25 fps) with room for the decoder's reset. A held view
+  gives way to every present one, so a longer hold costs only surfaces no
+  present camera sees.
+- **The cost.** A kept frame keeps its buffers, so its camera's frame prep
+  writes the next frame to new colour and depth buffers rather than reusing
+  them (the reuse rule of the GPU pre-processing entry). Frames are kept
+  only while a hold can be used: not at `--hold-ms 0`, nor with texturing
+  off. `prepare_set` on four 3840 x 2160 colour and 640 x 576 depth frames,
+  the previous set's kept, measured 0.1 ms a set slower on the RTX 5090
+  (2.82 against 2.71 ms mean, and 2.94 against 2.85 on a second run; Release,
+  570 sets each, interleaved), its 95th percentile about 1 ms higher.
+  Keeping two sets measured no slower than keeping none. On the M5 Max the
+  rig's fuse time did not move (below).
 
-The Rig panel and status line now count views taken from a held frame, and
-remeshes textured from fewer cameras than the rig has (each one a flicker).
-On the lab rig, defaults otherwise, today's calibration, runs of 20-40 s
-(each row's counts are from that run's last status line, so the `sets` column
-gives the run's length):
+The Rig panel and status line count the views given to the texture pass from
+a held frame, and the remeshes given fewer cameras than the rig has. Both
+count views given, not triangles taken, so the second at zero shows that
+every remesh had a view for every camera, not that nothing flickered: a held
+view whose depth no longer agrees with the mesh takes nothing.
+`--texture-stats` marks the cameras a remesh textured from a held frame
+beside their share of the triangles, which is where that is read.
+
+On the lab rig (M5 Max, Release), defaults otherwise, today's calibration,
+runs of 20-40 s, each row's counts from that run's last status line, so the
+`sets` column gives the run's length. The hold is the first cut's, 30 sets
+and no fallback rank:
 
 | colour | hold | sets | remeshes short of a camera | views held | fuse per set |
 |---|---|---|---|---|---|
-| 1280 x 720, 30 fps | off (`--hold-sets 0`) | 903 | 17 of 877 (1.9%) | 0 | 6.0 ms |
+| 1280 x 720, 30 fps | off | 903 | 17 of 877 (1.9%) | 0 | 6.0 ms |
 | 1280 x 720, 30 fps | 30 sets | 637 | 0 of 636 | 13 | 6.6 ms |
 | 3840 x 2160, 25 fps | off | 909 | 71 of 823 (8.6%) | 0 | 7.6 ms |
 | 3840 x 2160, 25 fps | 30 sets | 946 | 0 of 888 | 101 | 7.5 ms |
 
 Watching the 4K pair, the person at the window saw the first flicker and
 the second stay stable. A third 4K run with the validation layer on (626
-sets, 64 views held) reported nothing.
+sets, 64 views held) reported nothing. The reviewed version, 2 s and the
+fallback rank, has not yet been run on the rig.
 
-These are also the viewer's first 4K runs: a 7680 x 4320 atlas, 6.7-7.1 ms a
-remesh, and 24.7-25.8 mesh updates a second at the cameras' 25 fps.
+These are also the viewer's first 4K runs (M5 Max, Release): a 7680 x 4320
+atlas, 6.7-7.1 ms a remesh, and 24.7-25.8 mesh updates a second at the
+cameras' 25 fps.
+
+**The review of the fourth amendment** changed:
+
+- A held view competed with the present ones on score alone, so an image a
+  second old could take a triangle a present camera also saw, by facing it
+  more squarely. `TextureView::fallback` ranks it below every unmarked view,
+  and the several-view test pins both halves: the marked view gives a
+  triangle up, and still takes one no other view can.
+- The limit counted sets fused, so a rig stall kept a frame of any age
+  fresh, and at 30 it equalled the camera's key-frame interval, leaving
+  nothing for the decoder's reset. It is now `--hold-ms`, 2 s on the rig's
+  clock.
+- "A stale image lands only on surfaces that have not moved" was wrong: the
+  depth test is geometric, as above.
+- Frames were kept with texturing off, costing the reuse for nothing.
+- A raw frame missing its colour was described as a case the hold covers.
+  The Orbbec driver skips such a pair, so the set lacks the camera instead.
+
+Not taken: a two-slot output ring in `GpuFramePrep`. The review expected
+four passes allocating at once to repeat step 5b's 46 ms. Measured, the hold
+costs 0.1 ms a set (above), the step 5b entry's conclusion again, now for
+four cameras.
 
 Ctrl+C closes the window rather than ending the process, so the rig is
 stopped either way. The viewer's gfx pin moves to #98 for `kHybridMeshNormals`,

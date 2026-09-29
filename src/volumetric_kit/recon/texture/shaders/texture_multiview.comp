@@ -15,9 +15,10 @@
 // view sees it when n points back along the view's ray to the centroid. Among
 // the views that qualify, the score is the cosine of the angle between n and
 // that ray reversed, less depth_weight times the smallest depth disagreement;
-// the highest wins, the first on a tie. With no qualifying view all three
-// vertices take the (-1, -1) sentinel, so the renderer uses the vertex colour.
-// Every vertex is written on every call.
+// the highest wins, the first on a tie, except that a fallback view wins only
+// where no other qualifies (TextureView::fallback). With no qualifying view
+// all three vertices take the (-1, -1) sentinel, so the renderer uses the
+// vertex colour. Every vertex is written on every call.
 //
 // The tile is the view's colour camera's image, and the vertices take their
 // coordinates from that camera. For an image registered to the depth camera
@@ -44,11 +45,12 @@
 
 layout(local_size_x = 256) in;
 
-// One view (mirrors ViewParams in projective_texturer.cpp, 212 bytes under
+// One view (mirrors ViewParams in projective_texturer.cpp, 216 bytes under
 // scalar layout): its depth camera, where its depth starts in depth[], its
 // tile -- the colour image, at the image's own resolution, which may be larger
 // than the depth map's -- where the image's coverage starts in coverage[] when
-// it marks it, and the camera the image was taken with.
+// it marks it, the camera the image was taken with, and whether it is a
+// fallback.
 struct View {
   DepthCameraParams cam;
   uint depth_offset;
@@ -59,6 +61,7 @@ struct View {
   uint coverage_offset;
   uint has_coverage;
   ColorCameraParams color;
+  uint fallback;
 };
 
 // Bindings 1 and 3, every view's depth and every marked image's coverage end
@@ -124,6 +127,7 @@ void main() {
 
   int best = -1;
   float best_score = 0.0;
+  bool best_fallback = false;
   vec2 best_px[3];
   for (uint v = 0u; v < pc.num_views; v++) {
     View view = views[v];
@@ -183,9 +187,12 @@ void main() {
     }
     float cos_angle = facing * inversesqrt(nn) * inversesqrt(cc);
     float score = cos_angle - pc.depth_weight * min_diff;
-    if (best < 0 || score > best_score) {
+    bool fallback = view.fallback != 0u;
+    if (best < 0 || (best_fallback && !fallback) ||
+        (fallback == best_fallback && score > best_score)) {
       best = int(v);
       best_score = score;
+      best_fallback = fallback;
       best_px = cpx;
     }
   }
