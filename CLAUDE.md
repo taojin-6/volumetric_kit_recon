@@ -590,7 +590,13 @@ arbitrary; it usually isn't.
   `queueFlags`. `create_exported_buffer` (`core/external_memory.hpp`) makes
   a buffer CUDA imports, on a device that `exports_memory()`:
   `VK_KHR_external_memory_fd`, which `create` enables where offered and
-  `requirements()` names as optional (`external_memory`). Separately from
+  `requirements()` names as optional (`external_memory`). `Image`
+  (`core/image.hpp`) holds a `VkImage` another API made, freed by its
+  maker's deleter and kept in one layout a copy reads (GENERAL or
+  TRANSFER_SRC_OPTIMAL), and `CommandBatch::copy` copies an R8 or R8G8 one
+  into a buffer; `VK_EXT_metal_objects`, enabled and named
+  the same way (`metal_objects`, `imports_metal_textures()`), is how a
+  VideoToolbox picture's planes arrive as images. Separately from
   all of that, `core` carries the seam an
   **external** GPU profiler reads: `VK_EXT_debug_utils` is requested by
   default and *independently of validation* (2026-08-30), so a Release build —
@@ -939,7 +945,10 @@ arbitrary; it usually isn't.
   it has one (`backend()`) and its cores for the rest, and libnvjpeg too is
   loaded at run time. A JPEG nvJPEG refuses goes to software alone; any
   other failure lets the device path go. Anything else decodes in software
-  to host planes, 4:2:2 converted.
+  to host planes, 4:2:2 converted. On VideoToolbox, given a device that
+  `imports_metal_textures`, an H.265 picture's two IOSurface planes become
+  Metal textures imported as `Image`s (`vt_pictures.mm`, Objective-C++),
+  made once per surface and kept, handed out in `DecodedPicture::image`.
   **`sensor/utils`'s `GpuFramePrep`** undistorts a `RawFrame` on the device:
   depth sampled at the nearest pixel, colour bilinearly and converted from
   Y'CbCr in the same pass, each camera keeping its intrinsics and pose. Its
@@ -951,7 +960,8 @@ arbitrary; it usually isn't.
   offsets and strides), and device planes are bound where they are, from
   the first plane, once the batch has taken them over from the queue family
   that wrote them (`YuvImage::queue_family`; the 2026-09-28 decoded-frame
-  decision). The raw frame's host data goes up
+  decision). NV12's planes may come as images instead (`YuvImage::image`),
+  which the batch copies into the pass's input. The raw frame's host data goes up
   through one batch into device-local inputs, its planes packed into a staging buffer the
   pass keeps whatever their strides, and both passes run in the same submit,
   the copy timed with them. Kept because several passes allocating a 4K
@@ -1160,8 +1170,9 @@ allocate; 12.6 ms and 10.6 ms resident (the 2026-09-28 residency decision).
 one camera (`GpuFramePrep`, the 2026-09-28 GPU pre-processing decision: at 4K
 it takes the host from 15.5 ms of undistortion and registration a frame to
 none, and the run's CPU eightfold down) and for the rig's raw sets. NVDEC
-and nvJPEG hand their pictures over on the device; what is left is
-VideoToolbox on Apple, and the Orbbec raw path carrying the device picture
+and nvJPEG hand their pictures over on the device, and VideoToolbox its
+H.265; what is left is VideoToolbox's JPEG, and the Orbbec raw path carrying
+the device picture
 (`hevc_decoder.cpp`, `camera_stream.cpp`, the 2026-09-28 decoded-frame
 decision's order); and processing a host rig
 set's frames in parallel, one thread per camera, rather than the ~11 ms one
@@ -1175,8 +1186,8 @@ synchronised sets.
 **Device residency, the steps after `core`** (the 2026-09-28 residency
 decision ranks them): `volume`, `tsdf`, `mesh` and `texture` are resident,
 and `GpuFramePrep` stages its raw frame in one submit, the rig's raw sets a
-thread per camera, and NVDEC's pictures stay on the device; next the other
-decoders' planes, the examples, the codec's coefficients. The
+thread per camera, and the hardware decoders' pictures stay on the device
+but VideoToolbox's JPEG; next that, the examples, the codec's coefficients. The
 benchmark kit that sized
 them sits on the home box in `~/recon-bench` (a throwaway allocator patch
 behind environment variables); re-measure there after each.

@@ -46,6 +46,9 @@ class ScopeGuard {
 constexpr const char* kPortabilitySubset = "VK_KHR_portability_subset";
 constexpr const char* kExternalMemoryFd =
     VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME;
+// Its name macro needs VK_USE_PLATFORM_METAL_EXT, which only a Metal caller
+// defines.
+constexpr const char* kMetalObjects = "VK_EXT_metal_objects";
 
 // The device's supported extensions, enumerated once (empty on an enumeration
 // error, so a missing extension reads as "unsupported" rather than crashing).
@@ -123,6 +126,7 @@ DeviceRequirements Device::requirements(const DeviceConfig& config) {
   // Optional too, and named for the same reason: a shared device that never
   // hears of it hands every decoded picture through the host.
   reqs.external_memory = true;
+  reqs.metal_objects = true;
   // portability_subset is enabled by whoever creates the device (spec-required
   // when present); it is not a caller requirement, so it is not listed here.
   return reqs;
@@ -232,6 +236,12 @@ Result<Device> Device::create(VkInstance instance, VkPhysicalDevice physical,
   if (exports_memory && !already(kExternalMemoryFd)) {
     extensions.push_back(kExternalMemoryFd);
   }
+  // Optional too: lets a VideoToolbox picture's planes, Metal textures over
+  // its IOSurface, be imported as images (MoltenVK only).
+  const bool metal_objects = is_supported(kMetalObjects);
+  if (metal_objects && !already(kMetalObjects)) {
+    extensions.push_back(kMetalObjects);
+  }
 
   if (!supports_timeline_semaphore(physical)) {
     return Status::unsupported(
@@ -294,6 +304,7 @@ Result<Device> Device::create(VkInstance instance, VkPhysicalDevice physical,
     device.get_memory_fd_ = reinterpret_cast<PFN_vkGetMemoryFdKHR>(
         vkGetDeviceProcAddr(device.device_, "vkGetMemoryFdKHR"));
   }
+  device.metal_objects_ = metal_objects;
   return device;
 }
 
@@ -401,6 +412,7 @@ Result<Device> Device::adopt(const AdoptedDevice& adopted,
     device.get_memory_fd_ = reinterpret_cast<PFN_vkGetMemoryFdKHR>(
         vkGetDeviceProcAddr(device.device_, "vkGetMemoryFdKHR"));
   }
+  device.metal_objects_ = is_enabled(kMetalObjects);
   return device;
 }
 
@@ -417,7 +429,8 @@ Device::Device(Device&& other) noexcept
       set_object_name_(other.set_object_name_),
       begin_label_(other.begin_label_),
       end_label_(other.end_label_),
-      get_memory_fd_(other.get_memory_fd_) {
+      get_memory_fd_(other.get_memory_fd_),
+      metal_objects_(other.metal_objects_) {
   other.physical_ = VK_NULL_HANDLE;
   other.device_ = VK_NULL_HANDLE;
   other.owns_device_ = true;
@@ -430,6 +443,7 @@ Device::Device(Device&& other) noexcept
   other.set_object_name_ = nullptr;
   other.begin_label_ = nullptr;
   other.get_memory_fd_ = nullptr;
+  other.metal_objects_ = false;
   other.end_label_ = nullptr;
 }
 
@@ -448,6 +462,7 @@ Device& Device::operator=(Device&& other) noexcept {
     set_object_name_ = other.set_object_name_;
     begin_label_ = other.begin_label_;
     get_memory_fd_ = other.get_memory_fd_;
+    metal_objects_ = other.metal_objects_;
     end_label_ = other.end_label_;
     other.physical_ = VK_NULL_HANDLE;
     other.device_ = VK_NULL_HANDLE;
@@ -461,6 +476,7 @@ Device& Device::operator=(Device&& other) noexcept {
     other.set_object_name_ = nullptr;
     other.begin_label_ = nullptr;
     other.get_memory_fd_ = nullptr;
+    other.metal_objects_ = false;
     other.end_label_ = nullptr;
   }
   return *this;
@@ -501,6 +517,7 @@ void Device::destroy() noexcept {
   set_object_name_ = nullptr;
   begin_label_ = nullptr;
   get_memory_fd_ = nullptr;
+  metal_objects_ = false;
   end_label_ = nullptr;
 }
 

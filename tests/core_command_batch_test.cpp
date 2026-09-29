@@ -6,13 +6,14 @@
 // a device-local and a host-visible buffer, since a buffer's memory type must
 // not change what a batch does. Uploads inline, staged and packed by the
 // caller, several readbacks in one batch, transfers left unordered (fills,
-// uploads and copies rising through one buffer among them), the
+// uploads and copies rising through one buffer among them), image copies, the
 // refusals, the moves, timed dispatches and uploads, and a throwing record.
 // Skips (exit 0) where no device is present.
 
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <stdexcept>
 #include <string>
@@ -21,6 +22,7 @@
 #include <utility>
 #include <vector>
 
+#include "test_image.hpp"
 #include "volumetric_kit/recon/core/allocator.hpp"
 #include "volumetric_kit/recon/core/buffer.hpp"
 #include "volumetric_kit/recon/core/command_batch.hpp"
@@ -106,6 +108,42 @@ vr::Result<vr::Buffer> make(vr::Allocator& a, int kind, VkDeviceSize bytes) {
   return vr::storage_buffer(
       a, bytes, vr::HostAccess::Random,
       VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+}
+
+// An image handle nothing was made for, for tests that never reach Vulkan.
+VkImage fake_image() {
+  VkImage handle = VK_NULL_HANDLE;
+  const std::uint64_t value = 0x1000;
+  static_assert(sizeof(handle) == sizeof(value), "a 64-bit handle");
+  std::memcpy(&handle, &value, sizeof(handle));
+  return handle;
+}
+
+// An Image hands its deleter on with it and runs it once, whoever holds it.
+int test_image_moves() {
+  int freed = 0;
+  const auto made = [&freed] {
+    return vr::Image(fake_image(), VK_FORMAT_R8_UNORM, 4, 2,
+                     VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_IMAGE_LAYOUT_GENERAL,
+                     [&freed] { ++freed; });
+  };
+  {
+    vr::Image a = made();
+    vr::Image b(std::move(a));
+    CHECK(!a.valid() && a.width() == 0 && a.height() == 0);      // NOLINT
+    CHECK(a.format() == VK_FORMAT_UNDEFINED && a.usage() == 0);  // NOLINT
+    CHECK(a.layout() == VK_IMAGE_LAYOUT_UNDEFINED);              // NOLINT
+    CHECK(b.valid() && b.width() == 4 && b.height() == 2);
+    CHECK(b.layout() == VK_IMAGE_LAYOUT_GENERAL);
+    vr::Image c = made();
+    c = std::move(b);  // over a live image, which goes
+    CHECK(freed == 1 && !b.valid() && c.valid());  // NOLINT
+    vr::Image* alias = &c;
+    c = std::move(*alias);  // self-move
+    CHECK(freed == 1 && c.valid());
+  }
+  CHECK(freed == 2);
+  return 0;
 }
 
 int run_kind(const Rig& rig, int kind) {
@@ -477,6 +515,102 @@ int main() {
     CHECK(stranger.submit().domain() == invalid);
   }
 
+  // An image copies into a buffer, rows packed, from its corner, after a
+  // fill before it and before a kernel after it: one R8 and one R8G8, each a
+  // region short of the image, rising through the buffer, then the first
+  // again back over the second, which keeps its barrier and lands last.
+  // Refused, poisoning the batch: an empty image or one of another format or
+  // a layout a copy cannot read, a region empty, past it or past 64 bits of
+  // bytes, a misaligned offset, a range past the buffer, and an image without
+  // TRANSFER_SRC.
+  {
+    const auto invalid = vr::Status::Code::InvalidArgument;
+    std::vector<std::uint8_t> luma(7 * 5);
+    std::vector<std::uint8_t> chroma(4 * 3 * 2);
+    for (std::size_t i = 0; i < luma.size(); ++i) {
+      luma[i] = static_cast<std::uint8_t>(3 * i + 1);
+    }
+    for (std::size_t i = 0; i < chroma.size(); ++i) {
+      chroma[i] = static_cast<std::uint8_t>(200 - i);
+    }
+    auto y =
+        test_image::make(device, allocator, VK_FORMAT_R8_UNORM, 7, 5, luma);
+    auto c =
+        test_image::make(device, allocator, VK_FORMAT_R8G8_UNORM, 4, 3, chroma);
+    CHECK(y.ok() && c.ok());
+    std::vector<std::uint8_t> want(kBytes, 1);  // the kernel adds 1 a byte
+    for (std::size_t r = 0; r < 4; ++r) {
+      for (std::size_t x = 0; x < 6; ++x) {
+        want[r * 6 + x] = static_cast<std::uint8_t>(luma[r * 7 + x] + 1);
+      }
+    }
+    for (std::size_t r = 0; r < 2; ++r) {
+      for (std::size_t x = 0; x < 6; ++x) {
+        want[24 + r * 6 + x] = static_cast<std::uint8_t>(chroma[r * 8 + x] + 1);
+      }
+    }
+    want[24] = static_cast<std::uint8_t>(luma[0] + 1);
+    want[25] = static_cast<std::uint8_t>(luma[1] + 1);
+    std::vector<std::uint8_t> got(kBytes, 0);
+    vr::CommandBatch batch(device, allocator);
+    CHECK(batch.fill(a, 0, kBytes, 0u).ok());
+    CHECK(batch.copy(y.value(), 6, 4, a, 0).ok());
+    CHECK(batch.copy(c.value(), 3, 2, a, 24).ok());
+    CHECK(batch.copy(y.value(), 2, 1, a, 24).ok());
+    CHECK(add_to(batch, rig, a, 0x01010101u).ok());
+    CHECK(batch.readback(a, 0, kBytes, got.data()).ok());
+    CHECK(batch.submit().ok());
+    CHECK(got == want);
+
+    const auto refused = [&](auto&& record) {
+      vr::CommandBatch refusing(device, allocator);
+      return record(refusing).domain() == invalid &&
+             refusing.submit().domain() == invalid;
+    };
+    auto rgba = test_image::make(device, allocator, VK_FORMAT_R8G8B8A8_UNORM, 1,
+                                 1, {0, 0, 0, 0});
+    auto unusable =
+        test_image::make(device, allocator, VK_FORMAT_R8_UNORM, 1, 1, {0}, 0);
+    CHECK(rgba.ok() && unusable.ok());
+    // Refused before anything reaches Vulkan, so no image need exist.
+    const auto fake = [](VkFormat format, std::uint32_t width,
+                         std::uint32_t height, VkImageLayout layout) {
+      return vr::Image(fake_image(), format, width, height,
+                       VK_IMAGE_USAGE_TRANSFER_SRC_BIT, layout, nullptr);
+    };
+    CHECK(refused([&](vr::CommandBatch& b) {
+      return b.copy(fake(VK_FORMAT_R8_UNORM, 1, 1, VK_IMAGE_LAYOUT_UNDEFINED),
+                    1, 1, a, 0);
+    }));
+    CHECK(refused([&](vr::CommandBatch& b) {
+      return b.copy(fake(VK_FORMAT_R8_UNORM, 1, 1,
+                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
+                    1, 1, a, 0);
+    }));
+    // 2^63 + 2 texels of two bytes, which wrap to 4 bytes.
+    CHECK(refused([&](vr::CommandBatch& b) {
+      const std::uint32_t w = 0xFFFE0002u, h = 0x80010001u;
+      return b.copy(fake(VK_FORMAT_R8G8_UNORM, w, h, VK_IMAGE_LAYOUT_GENERAL),
+                    w, h, a, 0);
+    }));
+    CHECK(refused(
+        [&](vr::CommandBatch& b) { return b.copy(vr::Image(), 1, 1, a, 0); }));
+    CHECK(refused(
+        [&](vr::CommandBatch& b) { return b.copy(rgba.value(), 1, 1, a, 0); }));
+    CHECK(refused(
+        [&](vr::CommandBatch& b) { return b.copy(y.value(), 8, 5, a, 0); }));
+    CHECK(refused(
+        [&](vr::CommandBatch& b) { return b.copy(y.value(), 7, 0, a, 0); }));
+    CHECK(refused(
+        [&](vr::CommandBatch& b) { return b.copy(y.value(), 7, 5, a, 2); }));
+    CHECK(refused([&](vr::CommandBatch& b) {
+      return b.copy(y.value(), 7, 5, a, kBytes - 32);
+    }));
+    CHECK(refused([&](vr::CommandBatch& b) {
+      return b.copy(unusable.value(), 1, 1, a, 0);
+    }));
+  }
+
   // Timed dispatches keep their spans: two in one submit, each resolved
   // into its own row. Timed uploads do too, inline, staged and reserved, and
   // a timed copy.
@@ -816,6 +950,7 @@ int main() {
     CHECK(run_threads(borrowed.value()));
   }
 
+  CHECK(test_image_moves() == 0);
   CHECK(g_errors == 0);
   std::printf("core command batch: OK\n");
   return 0;

@@ -35,6 +35,7 @@ int main() {
         "requirements does not over-demand transfer");
   check(reqs.timeline_semaphore, "requirements timeline semaphore");
   check(reqs.external_memory, "requirements name the memory export");
+  check(reqs.metal_objects, "requirements name the Metal texture import");
 
   // adopt rejects null handles without touching a device.
   vr::Result<vr::Device> bad = vr::Device::adopt(vr::AdoptedDevice{}, {});

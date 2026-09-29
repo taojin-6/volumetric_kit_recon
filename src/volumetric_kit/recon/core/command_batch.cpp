@@ -13,6 +13,7 @@
 #include "volumetric_kit/recon/core/compute_kernel.hpp"
 #include "volumetric_kit/recon/core/device.hpp"
 #include "volumetric_kit/recon/core/gpu_timer.hpp"
+#include "volumetric_kit/recon/core/image.hpp"
 #include "volumetric_kit/recon/core/log.hpp"
 
 namespace volumetric_kit::recon {
@@ -36,6 +37,14 @@ Status has_usage(const Buffer& buffer, VkBufferUsageFlags bit,
                  const char* what) {
   if ((buffer.usage() & bit) == 0) {
     return Status::invalid_argument(std::string("CommandBatch: ") + what);
+  }
+  return {};
+}
+
+Status has_usage_image(const Image& image) {
+  if ((image.usage() & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) == 0) {
+    return Status::invalid_argument(
+        "CommandBatch: copy needs a TRANSFER_SRC image");
   }
   return {};
 }
@@ -262,6 +271,59 @@ Status CommandBatch::copy(const Buffer& src, VkDeviceSize src_offset,
   return {};
 }
 
+Status CommandBatch::copy(const Image& src, std::uint32_t width,
+                          std::uint32_t height, const Buffer& dst,
+                          VkDeviceSize dst_offset, GpuStageScope* stage) {
+  VR_TRY(check(usable()));
+  if (!src.valid()) {
+    return check(
+        Status::invalid_argument("CommandBatch::copy: the image is empty"));
+  }
+  VkDeviceSize texel = 0;
+  if (src.format() == VK_FORMAT_R8_UNORM) texel = 1;
+  if (src.format() == VK_FORMAT_R8G8_UNORM) texel = 2;
+  if (texel == 0) {
+    return check(Status::invalid_argument(
+        "CommandBatch::copy: copies R8_UNORM and R8G8_UNORM images only"));
+  }
+  if (width == 0 || height == 0 || width > src.width() ||
+      height > src.height()) {
+    return check(Status::invalid_argument(
+        "CommandBatch::copy: the region is empty or past the image"));
+  }
+  if (src.layout() != VK_IMAGE_LAYOUT_GENERAL &&
+      src.layout() != VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL) {
+    return check(Status::invalid_argument(
+        "CommandBatch::copy: the image is in a layout a copy cannot read"));
+  }
+  VR_TRY(check(has_usage_image(src)));
+  if (dst_offset % 4 != 0) {
+    return check(Status::invalid_argument(
+        "CommandBatch::copy: the destination offset is not a multiple of 4"));
+  }
+  // The image's size is its maker's word, so the bytes may not fit 64 bits.
+  if (VkDeviceSize{width} * height > ~VkDeviceSize{0} / texel) {
+    return check(Status::invalid_argument(
+        "CommandBatch::copy: the region is past any buffer"));
+  }
+  const VkDeviceSize bytes = VkDeviceSize{width} * height * texel;
+  VR_TRY(check(in_range(dst, dst_offset, bytes, "copy destination")));
+  VR_TRY(check(has_usage(dst, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                         "copy needs a TRANSFER_DST destination")));
+  Op op;
+  op.kind = Kind::ImageCopy;
+  op.image = src.handle();
+  op.image_layout = src.layout();
+  op.width = width;
+  op.height = height;
+  op.dst = dst.handle();
+  op.dst_offset = dst_offset;
+  op.bytes = bytes;
+  op.stage = stage;
+  ops_.push_back(std::move(op));
+  return {};
+}
+
 Status CommandBatch::acquire(const Buffer& buffer, std::uint32_t from) {
   VR_TRY(check(usable()));
   if (!buffer.valid()) {
@@ -418,10 +480,12 @@ bool CommandBatch::needs_barrier(std::size_t first, std::size_t i) const {
   // upload reads only its own staging, and a copy from another buffer reads
   // only that, so it joins the run too once nothing in the run writes its
   // source -- which, a run's commands writing only its buffer, is asked of
-  // the joining copy alone.
+  // the joining copy alone. An image copy reads an image, which no command in
+  // a batch writes.
   const auto plain = [](const Op& op) {
     return op.kind == Kind::Fill || op.kind == Kind::Update || op.staged ||
-           (op.kind == Kind::Copy && op.src != op.dst);
+           (op.kind == Kind::Copy && op.src != op.dst) ||
+           op.kind == Kind::ImageCopy;
   };
   if (i > first) {
     const Op& prev = ops_[i - 1];
@@ -489,6 +553,15 @@ void CommandBatch::record(VkCommandBuffer cmd, std::vector<Span>& spans) const {
       case Kind::Fill:
         vkCmdFillBuffer(cmd, op.dst, op.dst_offset, op.bytes, op.value);
         break;
+      case Kind::ImageCopy: {
+        VkBufferImageCopy region{};
+        region.bufferOffset = op.dst_offset;
+        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        region.imageExtent = {op.width, op.height, 1};
+        vkCmdCopyImageToBuffer(cmd, op.image, op.image_layout, op.dst, 1,
+                               &region);
+        break;
+      }
       case Kind::Acquire: {
         // The writer's release made its writes available, so this makes
         // them visible to everything after it, and waits on nothing before.

@@ -6561,13 +6561,67 @@ Not taken:
   family may take a buffer without a transfer when its contents need not
   survive, and the reader that let the picture go had finished with it.
 
+**VideoToolbox's H.265 has landed.** Given `HevcDecoder::Options::device`
+on a device that imports Metal textures, a VideoToolbox decode hands its
+picture out as two images:
+
+- `Device::create` enables `VK_EXT_metal_objects` where MoltenVK offers it
+  (`imports_metal_textures()`), and `DeviceRequirements::metal_objects` asks
+  a shared device for it.
+- Each plane of the picture's IOSurface becomes a Metal texture on the
+  device's own `MTLDevice`, imported as an image that `core`'s new `Image`
+  holds. The `MTLDevice` is read off the exported texture of a 1x1 probe
+  image: exporting the device itself (`vkExportMetalObjectsEXT`) needs the
+  instance to have asked for it when it was made, which an embedder's may
+  not have, where an image asks for its own texture. VideoToolbox cycles its pictures through
+  a few surfaces (five for the lab's 4K clip), so each surface's images are
+  made the first time a picture arrives on it and kept until none has for 64
+  pictures. A picture's images hold its pixel buffer, so VideoToolbox does
+  not reuse the surface while a frame reads it.
+- `DecodedPicture::image` carries the two, and `YuvImage::image` takes them.
+  `GpuFramePrep` copies both into its input in its batch
+  (`CommandBatch::copy` from an `Image`, new), then reads them as it reads
+  packed host planes.
+- An image stays in one layout, one a copy reads, which its maker puts it
+  in: `CommandBatch::copy` refuses any but GENERAL and TRANSFER_SRC_OPTIMAL.
+  A surface's images go from UNDEFINED to GENERAL once, when they are made.
+  Vulkan does not promise that keeps their contents; MoltenVK keeps them,
+  Metal having no layouts, so the assumption lives with the Metal import,
+  not in `core`. The images the tests fill by hand are GENERAL too, so the
+  copy is exercised on every GPU CI has.
+- A picture that is not 8-bit NV12 on an IOSurface comes to the host, and a
+  failed import lets the device path go, as for NVDEC. A device path that
+  cannot be set up, on either, leaves every picture to the host rather than
+  failing the decoder. VideoToolbox has cut
+  the right and bottom already, and a stream cropped at the left or top never
+  reaches it.
+
+Measured on the M5 Max, Release, per picture of the lab's 4K clip, with a
+640x576 depth frame beside it:
+
+| | receive, CPU | prepare, CPU | prepare, GPU |
+|---|---|---|---|
+| host planes | 0.57-0.75 ms | 0.43-0.58 ms | 0.94-1.01 ms |
+| plane images | 0.003-0.005 ms | 0.31-0.45 ms | 1.09-1.17 ms |
+
+Unified memory makes the host path cheap here, so the saving is modest: the
+copy to the host, the conversion and the staging go, and the device copies
+the planes instead, 0.28-0.31 ms alone and some 0.15 ms more than the staged
+copy it replaces. Receiving is only handing the images over: made for every
+picture, two textures, two images and two allocations cost 0.16-0.33 ms of
+it. The pictures read back
+identical to software's, byte for byte, the cropped clip going to software.
+Colour copied from images larger than the picture, read from their corner,
+prepares identically to host planes, and a mutant copying the chroma a
+column short at an odd width fails that test.
+
 **Next**, in order:
 
-1. Apple: VideoToolbox for H.265 and JPEG, and the IOSurface import.
+1. Apple: VideoToolbox for JPEG, into the same images.
 2. The Orbbec raw path carrying the device picture, with MJPEG raw asking the
    SDK for the JPEG bytes and decoding them on a thread per camera.
 3. Measured afterwards: the colour kernel reading Apple's plane images
-   directly.
+   directly, which saves the copy's 0.28-0.31 ms of GPU.
 
 ### 2026-09-28 — Projective texturing takes a colour camera of its own and depth on the device: the depth camera decides what is visible, its map what the colour camera sees, and the colour camera gives the coordinate; a view's device depth and coverage are copied on the device rather than staged.
 

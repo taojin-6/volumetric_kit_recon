@@ -491,6 +491,10 @@ inline bool build_shared_device(GLFWwindow* window,
       device_supports(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME)) {
     add_extension(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME);
   }
+  // And where MoltenVK imports Metal textures, a VideoToolbox picture's.
+  if (recon_req.metal_objects && device_supports("VK_EXT_metal_objects")) {
+    add_extension("VK_EXT_metal_objects");
+  }
   // Name what is missing rather than letting vkCreateDevice fail opaquely.
   for (const char* name : extensions) {
     if (!device_supports(name)) {

@@ -6,3 +6,11 @@ ColumnLimit: 80
 IncludeBlocks: Preserve
 DerivePointerAlignment: false
 PointerAlignment: Left
+---
+# The same for Objective-C++ (vt_pictures.mm).
+Language: ObjC
+BasedOnStyle: Google
+ColumnLimit: 80
+IncludeBlocks: Preserve
+DerivePointerAlignment: false
+PointerAlignment: Left
