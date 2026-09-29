@@ -33,11 +33,10 @@ class VR_CORE_API Image {
   /// @param width    Its width in texels.
   /// @param height   Its height in texels.
   /// @param usage    The `VkImageUsageFlags` it was created with.
-  /// @param layout   The layout its contents are in, which they stay in:
-  ///                 `VK_IMAGE_LAYOUT_GENERAL`, or `VK_IMAGE_LAYOUT_UNDEFINED`
-  ///                 for an import whose driver keeps its contents through a
-  ///                 transition from it -- MoltenVK's over a Metal texture,
-  ///                 Metal having no layouts.
+  /// @param layout   The layout its maker put its contents in, which they
+  ///                 stay in: `VK_IMAGE_LAYOUT_GENERAL` or
+  ///                 `VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL`, the two a copy
+  ///                 reads.
   /// @param deleter  Frees the image and what backs it exactly once.
   Image(VkImage handle, VkFormat format, std::uint32_t width,
         std::uint32_t height, VkImageUsageFlags usage, VkImageLayout layout,

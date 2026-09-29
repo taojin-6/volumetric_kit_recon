@@ -517,9 +517,11 @@ int main() {
 
   // An image copies into a buffer, rows packed, from its corner, after a
   // fill before it and before a kernel after it: one R8 and one R8G8, each a
-  // region short of the image. Refused, poisoning the batch: an empty image
-  // or one of another format, a region empty or past it, an image copied
-  // twice, a misaligned offset, a range past the buffer, and an image without
+  // region short of the image, rising through the buffer, then the first
+  // again back over the second, which keeps its barrier and lands last.
+  // Refused, poisoning the batch: an empty image or one of another format or
+  // a layout a copy cannot read, a region empty, past it or past 64 bits of
+  // bytes, a misaligned offset, a range past the buffer, and an image without
   // TRANSFER_SRC.
   {
     const auto invalid = vr::Status::Code::InvalidArgument;
@@ -547,11 +549,14 @@ int main() {
         want[24 + r * 6 + x] = static_cast<std::uint8_t>(chroma[r * 8 + x] + 1);
       }
     }
+    want[24] = static_cast<std::uint8_t>(luma[0] + 1);
+    want[25] = static_cast<std::uint8_t>(luma[1] + 1);
     std::vector<std::uint8_t> got(kBytes, 0);
     vr::CommandBatch batch(device, allocator);
     CHECK(batch.fill(a, 0, kBytes, 0u).ok());
     CHECK(batch.copy(y.value(), 6, 4, a, 0).ok());
     CHECK(batch.copy(c.value(), 3, 2, a, 24).ok());
+    CHECK(batch.copy(y.value(), 2, 1, a, 24).ok());
     CHECK(add_to(batch, rig, a, 0x01010101u).ok());
     CHECK(batch.readback(a, 0, kBytes, got.data()).ok());
     CHECK(batch.submit().ok());
@@ -567,6 +572,27 @@ int main() {
     auto unusable =
         test_image::make(device, allocator, VK_FORMAT_R8_UNORM, 1, 1, {0}, 0);
     CHECK(rgba.ok() && unusable.ok());
+    // Refused before anything reaches Vulkan, so no image need exist.
+    const auto fake = [](VkFormat format, std::uint32_t width,
+                         std::uint32_t height, VkImageLayout layout) {
+      return vr::Image(fake_image(), format, width, height,
+                       VK_IMAGE_USAGE_TRANSFER_SRC_BIT, layout, nullptr);
+    };
+    CHECK(refused([&](vr::CommandBatch& b) {
+      return b.copy(fake(VK_FORMAT_R8_UNORM, 1, 1, VK_IMAGE_LAYOUT_UNDEFINED),
+                    1, 1, a, 0);
+    }));
+    CHECK(refused([&](vr::CommandBatch& b) {
+      return b.copy(fake(VK_FORMAT_R8_UNORM, 1, 1,
+                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
+                    1, 1, a, 0);
+    }));
+    // 2^63 + 2 texels of two bytes, which wrap to 4 bytes.
+    CHECK(refused([&](vr::CommandBatch& b) {
+      const std::uint32_t w = 0xFFFE0002u, h = 0x80010001u;
+      return b.copy(fake(VK_FORMAT_R8G8_UNORM, w, h, VK_IMAGE_LAYOUT_GENERAL),
+                    w, h, a, 0);
+    }));
     CHECK(refused(
         [&](vr::CommandBatch& b) { return b.copy(vr::Image(), 1, 1, a, 0); }));
     CHECK(refused(
@@ -575,10 +601,6 @@ int main() {
         [&](vr::CommandBatch& b) { return b.copy(y.value(), 8, 5, a, 0); }));
     CHECK(refused(
         [&](vr::CommandBatch& b) { return b.copy(y.value(), 7, 0, a, 0); }));
-    CHECK(refused([&](vr::CommandBatch& b) {
-      static_cast<void>(b.copy(y.value(), 7, 5, a, 0));
-      return b.copy(y.value(), 7, 5, a, 64);
-    }));
     CHECK(refused(
         [&](vr::CommandBatch& b) { return b.copy(y.value(), 7, 5, a, 2); }));
     CHECK(refused([&](vr::CommandBatch& b) {

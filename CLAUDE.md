@@ -592,8 +592,9 @@ arbitrary; it usually isn't.
   `VK_KHR_external_memory_fd`, which `create` enables where offered and
   `requirements()` names as optional (`external_memory`). `Image`
   (`core/image.hpp`) holds a `VkImage` another API made, freed by its
-  maker's deleter and kept in one layout, and `CommandBatch::copy` copies an
-  R8 or R8G8 one into a buffer; `VK_EXT_metal_objects`, enabled and named
+  maker's deleter and kept in one layout a copy reads (GENERAL or
+  TRANSFER_SRC_OPTIMAL), and `CommandBatch::copy` copies an R8 or R8G8 one
+  into a buffer; `VK_EXT_metal_objects`, enabled and named
   the same way (`metal_objects`, `imports_metal_textures()`), is how a
   VideoToolbox picture's planes arrive as images. Separately from
   all of that, `core` carries the seam an
@@ -947,7 +948,7 @@ arbitrary; it usually isn't.
   to host planes, 4:2:2 converted. On VideoToolbox, given a device that
   `imports_metal_textures`, an H.265 picture's two IOSurface planes become
   Metal textures imported as `Image`s (`vt_pictures.mm`, Objective-C++),
-  handed out in `DecodedPicture::image`.
+  made once per surface and kept, handed out in `DecodedPicture::image`.
   **`sensor/utils`'s `GpuFramePrep`** undistorts a `RawFrame` on the device:
   depth sampled at the nearest pixel, colour bilinearly and converted from
   Y'CbCr in the same pass, each camera keeping its intrinsics and pose. Its

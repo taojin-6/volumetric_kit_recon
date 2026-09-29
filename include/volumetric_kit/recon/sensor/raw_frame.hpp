@@ -127,8 +127,7 @@ struct RawFrame {
   float max_depth = 0.0f;  ///< Farther samples are dropped (metres).
 
   /// The colour picture; with none of `color.plane[0]`, `color.device` and
-  /// `color.image[0]` set, the frame has none. Its size is
-  /// @ref color_camera's.
+  /// `color.image` set, the frame has none. Its size is @ref color_camera's.
   YuvImage color{};
   LensCamera color_camera{};  ///< The colour camera, lens included.
   Mat4f color_cam_to_world = Mat4f(1.0f);  ///< The colour camera's pose.
@@ -141,7 +140,7 @@ struct RawFrame {
   /// @return `true` if this frame carries colour.
   bool has_color() const noexcept {
     return color.plane[0] != nullptr || color.device != nullptr ||
-           color.image[0] != nullptr;
+           color.image[0] != nullptr || color.image[1] != nullptr;
   }
 };
 

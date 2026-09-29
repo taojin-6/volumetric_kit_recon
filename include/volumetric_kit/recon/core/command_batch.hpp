@@ -170,19 +170,19 @@ class VR_CORE_API CommandBatch {
   /// @brief Copy @p width x @p height texels of @p src, from its corner, into
   ///        @p dst at @p dst_offset, rows packed (`vkCmdCopyImageToBuffer`).
   ///
-  /// The image is read in its @ref Image::layout, after a transition when
-  /// that is undefined, so each image is copied at most once a batch.
+  /// The image is read in its @ref Image::layout, which its maker put it in.
   /// @param src         An `R8_UNORM` or `R8G8_UNORM` image with
-  ///                    `TRANSFER_SRC` usage, its writer finished.
+  ///                    `TRANSFER_SRC` usage, in `GENERAL` or
+  ///                    `TRANSFER_SRC_OPTIMAL`, its writer finished.
   /// @param width       Texels a row, not 0 and at most the image's width.
   /// @param height      Rows, not 0 and at most the image's height.
   /// @param dst         Needs `TRANSFER_DST` usage.
   /// @param dst_offset  Byte offset into @p dst; a multiple of 4.
   /// @param stage       As @ref upload.
-  /// @return OK; InvalidArgument for an empty image or one of another format,
-  ///         a region empty or past it, an image this batch copies already,
-  ///         a misaligned offset or a range past @p dst, or a missing usage
-  ///         bit; or a poisoned batch's first refusal.
+  /// @return OK; InvalidArgument for an empty image or one of another format
+  ///         or layout, a region empty or past it, a misaligned offset or a
+  ///         range past @p dst, or a missing usage bit; or a poisoned batch's
+  ///         first refusal.
   Status copy(const Image& src, std::uint32_t width, std::uint32_t height,
               const Buffer& dst, VkDeviceSize dst_offset,
               GpuStageScope* stage = nullptr);

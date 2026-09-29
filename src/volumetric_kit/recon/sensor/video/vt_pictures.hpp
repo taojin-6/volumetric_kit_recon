@@ -34,8 +34,10 @@ class VtPictures {
   VtPictures& operator=(const VtPictures&) = delete;
 
   // @p pixels' two planes as images holding a @p width x @p height NV12
-  // picture from their corner, each image holding the pixel buffer: fills
-  // @p out's size, layout and images and returns true. False for a picture
+  // picture from their corner, in GENERAL, each image holding the pixel
+  // buffer: fills @p out's size, layout and images and returns true. A
+  // surface's images are made the first time a picture arrives on it and
+  // kept while pictures keep arriving. False for a picture
   // this does not take -- not 8-bit NV12, not on an IOSurface, or smaller
   // than the picture -- which comes to the host instead.
   Result<bool> import(CVPixelBufferRef pixels, std::uint32_t width,
