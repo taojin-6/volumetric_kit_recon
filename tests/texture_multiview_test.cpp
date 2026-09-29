@@ -431,13 +431,26 @@ int main() {
               .domain() == vr::Status::Code::InvalidArgument);
   }
 
-  // Two rows: three views go two a row, so view 2 starts the second, at
-  // (0, 240) of a 640 x 480 atlas, however wide the device allows.
+  // One row: three views stay side by side, 960 x 240, tiles at x = 0, 320,
+  // 640.
   {
     vr::Result<tex::AtlasLayout> layout =
         tex::side_by_side_atlas(views, texturer.max_atlas_extent());
     CHECK(layout.ok());
-    CHECK(layout->tiles[1].x == kW && layout->tiles[1].y == 0);
+    CHECK(layout->width == 3 * kW && layout->height == kH);
+    CHECK(layout->tiles[1].x == kW && layout->tiles[2].x == 2 * kW);
+    rmesh::Mesh m = mesh;
+    CHECK(texturer.texture(m, views, layout.value()).ok());
+    for (std::size_t t = 0; t < kTriangles; ++t) {
+      if (check_triangle(m, t, want[t], views, layout.value()) != 0) return 1;
+    }
+  }
+
+  // Two rows: an extent of 700 fits two tiles a row, so view 2 wraps to the
+  // second, at (0, 240) of a 640 x 480 atlas.
+  {
+    vr::Result<tex::AtlasLayout> layout = tex::side_by_side_atlas(views, 700);
+    CHECK(layout.ok());
     CHECK(layout->width == 2 * kW && layout->height == 2 * kH);
     CHECK(layout->tiles[2].x == 0 && layout->tiles[2].y == kH);
     rmesh::Mesh m = mesh;
@@ -727,7 +740,7 @@ int main() {
     }
   }
 
-  // The atlas on its own: tiles in order, in rows of ceil(sqrt(n)), a row
+  // The atlas on its own: tiles in order, in floor(sqrt(n)) rows, a row
   // ended early at the extent, and the refusals.
   {
     vr::DepthCameraParams small = cam0;
@@ -757,10 +770,10 @@ int main() {
     overlapping.tiles[1].x = 2;
     CHECK(tex::pack_atlas({a.data(), b.data()}, overlapping, &atlas).domain() ==
           vr::Status::Code::InvalidArgument);
-    // Three 4-wide, however wide the extent: two rows, the second half empty.
+    // Three 4-wide in an extent of 8: two rows, the second half empty.
     const std::vector<tex::TextureView> three = {
         {nullptr, small}, {nullptr, small}, {nullptr, small}};
-    vr::Result<tex::AtlasLayout> wrapped = tex::side_by_side_atlas(three, 64);
+    vr::Result<tex::AtlasLayout> wrapped = tex::side_by_side_atlas(three, 8);
     CHECK(wrapped.ok());
     CHECK(wrapped->width == 8 && wrapped->height == 4);
     CHECK(wrapped->tiles[2].x == 0 && wrapped->tiles[2].y == 2);
@@ -769,7 +782,10 @@ int main() {
                           &packed)
               .ok());
     CHECK(packed[3 * 8 + 5] == 0u);  // nothing covers it
-    // Four make two rows of two, and five three columns.
+    // In a wide extent, three stay in one row, four make two rows of two, and
+    // five three columns.
+    vr::Result<tex::AtlasLayout> row = tex::side_by_side_atlas(three, 64);
+    CHECK(row.ok() && row->width == 12 && row->height == 2);
     const std::vector<tex::TextureView> four(4, {nullptr, small});
     vr::Result<tex::AtlasLayout> square = tex::side_by_side_atlas(four, 64);
     CHECK(square.ok() && square->width == 8 && square->height == 4);

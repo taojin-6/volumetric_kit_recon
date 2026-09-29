@@ -32,11 +32,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- `texture`: **the multi-view atlas is as square as its view count
-  allows.** `side_by_side_atlas` ends a row at ceil(sqrt(n)) views, so one
-  or two views sit side by side and three or four make two rows: four 4K
-  views make a 7680 x 4320 atlas rather than 15360 x 2160. A row still ends
-  early at the extent.
+- `texture`: **the multi-view atlas grows in rows.**
+  `side_by_side_atlas` lays n views out in floor(sqrt(n)) rows, so up to
+  three sit side by side and four make two rows of two: four 4K views make a
+  7680 x 4320 atlas rather than 15360 x 2160. A row still ends early at the
+  extent.
 - `core`: **a `Device` may be submitted to from several threads at once.**
   Each submit records on a command pool no other submit holds, from a free
   list the device keeps, so recording takes no lock. Only `vkQueueSubmit` is

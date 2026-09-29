@@ -76,10 +76,12 @@ Result<AtlasLayout> side_by_side_atlas(const std::vector<TextureView>& views,
   if (views.empty()) {
     return Status::invalid_argument(who + "no views");
   }
-  // As square as the count allows: four 4K views make 7680 x 4320, not
-  // 15360 x 2160, which is near the 16384 many devices allow.
-  std::size_t columns = 1;
-  while (columns * columns < views.size()) ++columns;
+  // floor(sqrt(n)) rows of ceil(n / rows): four 4K views make 7680 x 4320,
+  // not 15360 x 2160, and three stay in one row, which a square grid would
+  // leave a quarter empty.
+  std::size_t rows = 1;
+  while ((rows + 1) * (rows + 1) <= views.size()) ++rows;
+  const std::size_t columns = (views.size() + rows - 1) / rows;
   AtlasLayout layout;
   std::size_t in_row = 0;   // tiles in this row so far
   std::uint64_t x = 0;      // where the next tile of this row starts
