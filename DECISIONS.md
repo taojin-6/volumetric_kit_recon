@@ -6621,7 +6621,9 @@ textures, `JpegDecoder` opens VideoToolbox's hardware JPEG decoder
 
 - It takes a baseline or extended 8-bit 4:2:0 JPEG in three components, the
   frame header read off the bytes, as nvJPEG takes it. Anything else goes to
-  software.
+  software, as does one past the device's `maxImageDimension2D`, before a
+  session starts: Metal aborts the process on a texture past it, which the
+  16400-wide fixture is on the M4 runner (16384).
 - A session holds for one size, asked for full-range NV12 on an IOSurface
   and the hardware only. A size no session opens for is not asked again each
   frame.
@@ -6639,8 +6641,8 @@ the whole process's:
 | VideoToolbox | 6.0-6.1 ms | 0.92-0.94 ms | 0.64-0.67 ms | 1.14-1.18 ms |
 
 A frame costs 1.6 ms of CPU where it cost 13.7. The images of every 4:2:0
-fixture, the 16400-wide one included, are within 2 codes of software's; 4:2:2
-goes to software.
+fixture, the 16400-wide one included where the extent takes it, are within 2
+codes of software's; 4:2:2 goes to software.
 
 **Next**, in order:
 

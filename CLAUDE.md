@@ -950,7 +950,8 @@ arbitrary; it usually isn't.
   Metal textures imported as `Image`s (`vt_pictures.mm`, Objective-C++),
   made once per surface and kept, handed out in `DecodedPicture::image`,
   and `JpegDecoder` takes an 8-bit 4:2:0 JPEG to the same images through
-  VideoToolbox's hardware JPEG decoder (`vt_jpeg.cpp`).
+  VideoToolbox's hardware JPEG decoder (`vt_jpeg.cpp`), leaving one past the
+  device's image extent to software.
   **`sensor/utils`'s `GpuFramePrep`** undistorts a `RawFrame` on the device:
   depth sampled at the nearest pixel, colour bilinearly and converted from
   Y'CbCr in the same pass, each camera keeping its intrinsics and pose. Its
