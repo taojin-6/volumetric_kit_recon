@@ -48,7 +48,7 @@
 //              [--max-weight 20] [--dynamic | --static] [--occlusion 0.05]
 //              [--remesh-every 1] [--sets N] [--frames N]
 //              [--width 1280] [--height 720] [--lit | --normals]
-//              [--no-texture] [--show-sources] [--texture-stats]
+//              [--no-texture] [--show-sources] [--texture-stats] [--all-depth]
 //              [--no-overlay] [--validation]
 //
 // Without --calibration every camera sits at the world origin, which fuses a
@@ -197,11 +197,17 @@ struct Options {
   // than fading over max_weight frames, and one arriving there forms at once.
   // --static fuses Classic, keeping it.
   bool dynamic = true;
+  // Fuse depth only where the camera's colour camera recorded it
+  // (GpuFramePrepConfig::depth_within_color): the Femto Mega's depth sees
+  // about 65 degrees vertically to its 16:9 colour's 51, and depth past the
+  // colour fuses into surfaces no camera can colour or texture, which draw
+  // white. --all-depth fuses all of it.
+  bool depth_within_color = true;
   // How far, in metres, a camera's depth may disagree with the fused surface
   // for it to texture a vertex (ProjectiveTexturer's occlusion_threshold).
   // 5 cm, not the tier's 2 cm: on the lab rig, calibrated, 2 cm left 28% of
-  // the mesh untextured and 5 cm 17%, the rest mostly outside every colour
-  // camera's field of view (see the 2026-09-29 decision's amendment).
+  // the mesh untextured and 5 cm 17% with all depth fused, 8.6% with
+  // depth_within_color (see the 2026-09-29 decision's amendments).
   float occlusion = 0.05f;
   // Sets between re-extracts: every set, so the mesh follows the cameras. A
   // set with a remesh cost about 21.6 ms on the M5 Max at 1 cm (four cameras
@@ -234,6 +240,7 @@ const char* kUsage =
     "[--dynamic | --static] [--occlusion m] "
     "[--remesh-every N] [--sets N] [--frames N] [--width W] [--height H] "
     "[--lit | --normals] [--no-texture] [--show-sources] [--texture-stats] "
+    "[--all-depth] "
     "[--no-overlay] [--validation]\n";
 
 bool parse_args(int argc, char** argv, Options& o) {
@@ -317,6 +324,8 @@ bool parse_args(int argc, char** argv, Options& o) {
       o.dynamic = a == "--dynamic";
     } else if (a == "--occlusion") {
       if (!number(o.occlusion)) return false;
+    } else if (a == "--all-depth") {
+      o.depth_within_color = false;
     } else if (a == "--show-sources") {
       o.show_sources = true;
     } else if (a == "--texture-stats") {
@@ -731,6 +740,7 @@ int run(GLFWwindow* window, const Options& opt) {
   prep_config.color_queue_families[0] = shared.compute_family;
   prep_config.color_queue_families[1] = shared.graphics_family;
   prep_config.color_queue_family_count = 2;
+  prep_config.depth_within_color = opt.depth_within_color;
   std::vector<rsensor::GpuFramePrep> preps;
   for (std::size_t i = 0; i < cameras; ++i) {
     auto prep = rsensor::GpuFramePrep::create(rdevice, rallocator, prep_config);

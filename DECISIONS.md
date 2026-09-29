@@ -5705,6 +5705,46 @@ the hash map's bucket locks past the driver's 7 s watchdog in CI (Xid 109, and
 a runner lost), while they were host-visible; PR #81 has since moved them into
 device memory, the fix the fleet's first watchdog report called for.
 
+*Amended 2026-09-29:* **the depth pass can keep depth to the colour camera's
+view.** With `GpuFramePrepConfig::depth_within_color` set, a frame with colour
+has a depth pixel zeroed ("no return") when its point, moved into the colour
+camera by the two poses, lies behind that camera or lands on a pixel the colour
+pass marks uncovered. The test uses the colour pass's own rounding and lens
+test, so depth survives exactly where `DeviceFrame::color`'s coverage byte is
+set. The option is off by default, and a frame without colour keeps all its
+depth.
+
+- **Why.** A Femto Mega's depth covers about 65 degrees vertically and its
+  16:9 colour about 51. The depth outside the colour view fuses into surfaces
+  no camera can colour or texture, and the mesher draws them white. On the
+  lab rig that was about half the viewer's untextured triangles (the
+  `rig_viewer` entry below).
+- **Why here.** The frame prep is the one place that holds both cameras,
+  their poses and the colour's coverage on the device. A zero is the "no
+  return" that `allocate_from_depth` and `integrate` already skip, so neither
+  fusion tier changes. The host Orbbec path needs no option: it registers
+  depth to colour, so its depth already lies inside the colour view.
+- **Not registration.** Depth keeps its own resolution and camera, as this
+  entry chose. The mask costs each depth pixel one rigid transform and one
+  lens evaluation, plus a 120-byte inline upload per frame. That device cost
+  has not been measured apart from the pass.
+- **The view, not the line of sight.** A point inside the colour view that a
+  nearer surface hides from the colour camera is kept. That is `tsdf`'s
+  documented colour-occlusion caveat, unchanged.
+
+`recon_sensor_gpu_frame_prep` checks three cases:
+
+- a pinhole depth camera behind a pincushion colour lens, with the same
+  intrinsics and pose: depth is zeroed exactly where the colour's coverage
+  byte is 0 (63 807 pixels kept, 12 993 zeroed, 0 wrong);
+- a colour camera 1.5 times narrower and 10 cm to the side: the depth kept
+  is the region a host projection puts inside its image;
+- the option off, or a frame without colour: nothing is zeroed.
+
+Each of three mutations fails the test: ignoring the pose, skipping the lens
+coverage test, and ignoring the flag. The test passes under the Khronos
+validation layer with no messages.
+
 ### 2026-09-28 — Memory the kernels use lives on the device on every platform, and the host only records commands against it: one `CommandBatch` per call, parameters inline, bulk bytes staged at the edges, small results read back.
 
 **The rule.** A buffer the kernels read or write is device-local
@@ -7071,6 +7111,23 @@ Still open:
 - Blending the views where they meet, or locking every camera to one
   exposure and white balance (a write to the cameras, like `--apply-sync`),
   would take the seams out of the speckle.
+
+*Amended 2026-09-29, a third time:* the viewer fuses **depth only inside each
+camera's colour view** by default, through the frame prep's new
+`depth_within_color` (the GPU pre-processing entry's amendment). `--all-depth`
+fuses all of it, as before. The white floor near each camera, which no colour
+camera sees, is no longer fused. On the lab rig, with the defaults above and
+today's calibration, over 2400 frames per run:
+
+| depth fused | triangles | untextured | each camera |
+|---|---|---|---|
+| all (`--all-depth`) | 1.39 M | 16.8-16.9% | 19.0-22.5% |
+| inside the colour view | 1.26 M | 8.5-8.7% | 20.8-24.8% |
+
+The triangles removed were almost all untextured ones: the untextured share
+roughly halves, and each camera's share grows only because the total shrinks.
+A screenshot of each run shows the white walls and floor of the first gone
+from the second. The 8.6% left has not been broken down by cause.
 
 Ctrl+C closes the window rather than ending the process, so the rig is
 stopped either way. The viewer's gfx pin moves to #98 for `kHybridMeshNormals`,
