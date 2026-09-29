@@ -579,7 +579,7 @@ if(VR_WITH_ORBBEC)
            COMMAND recon_sensor_orbbec_capture_test)
 
   # The GPU pass against the SDK's host path on the camera VR_ORBBEC_TEST_SERIAL
-  # names (H.265, so only with the decoder); unset, it skips.
+  # names (raw frames, so only with the video decoders); unset, it skips.
   if(TARGET recon_sensor_video)
     add_executable(recon_sensor_orbbec_gpu_prep_test
                    sensor_orbbec_gpu_prep_test.cpp)
@@ -644,7 +644,7 @@ if(VR_WITH_ORBBEC)
       recon_sensor_orbbec_hevc_test
       sensor_orbbec_hevc_test.cpp
       ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec/hevc_color.cpp
-      ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec/device_picture_frame.cpp
+      ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec/picture_frames.cpp
     )
     target_link_libraries(
       recon_sensor_orbbec_hevc_test
@@ -660,6 +660,29 @@ if(VR_WITH_ORBBEC)
     vr_target_warnings(recon_sensor_orbbec_hevc_test)
     add_test(NAME recon_sensor_orbbec_hevc
              COMMAND recon_sensor_orbbec_hevc_test)
+
+    # The raw MJPEG colour decoder, with no camera: the committed JPEG wrapped
+    # in SDK frames.
+    add_executable(
+      recon_sensor_orbbec_jpeg_test
+      sensor_orbbec_jpeg_test.cpp
+      ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec/jpeg_color.cpp
+      ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec/picture_frames.cpp
+    )
+    target_link_libraries(
+      recon_sensor_orbbec_jpeg_test
+      PRIVATE volumetric_kit::recon_sensor_orbbec
+              volumetric_kit::recon_sensor_video ob::OrbbecSDK)
+    target_include_directories(
+      recon_sensor_orbbec_jpeg_test
+      PRIVATE ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec)
+    target_compile_definitions(
+      recon_sensor_orbbec_jpeg_test
+      PRIVATE VR_JPEG_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data/jpeg"
+              VR_TEST_WITH_CUDA=$<BOOL:${VR_WITH_CUDA}>)
+    vr_target_warnings(recon_sensor_orbbec_jpeg_test)
+    add_test(NAME recon_sensor_orbbec_jpeg
+             COMMAND recon_sensor_orbbec_jpeg_test)
   endif()
 
   # The rig against real cameras -- only the ones VR_ORBBEC_TEST_RIG names
@@ -693,7 +716,8 @@ if(VR_WITH_ORBBEC)
         recon_sensor_orbbec_capture recon_sensor_orbbec_grouping
         recon_sensor_orbbec_sync_config recon_sensor_orbbec_rig)
     if(TARGET recon_sensor_orbbec_hevc_test)
-      list(APPEND _vr_orbbec_tests recon_sensor_orbbec_hevc)
+      list(APPEND _vr_orbbec_tests recon_sensor_orbbec_hevc
+           recon_sensor_orbbec_jpeg)
     endif()
     set_tests_properties(
       ${_vr_orbbec_tests}

@@ -9,16 +9,19 @@
 //
 //   fuse_orbbec [--serial SN | --rig sync.json [--apply-sync]]
 //               [--calibration calib.json] [--frames 300] [-o fuse_orbbec.ply]
-//               [--hevc | --gpu] [--color 1280x720] [--fps 30]
+//               [--hevc | --mjpeg] [--gpu] [--color 1280x720] [--fps 30]
 //               [--voxel 0.02] [--trunc m] [--min-depth m] [--max-depth m]
 //               [--max-weight 20]
 //
 // --hevc streams colour as H.265 rather than MJPEG (a build with
 // VR_WITH_FFMPEG); --color and --fps pick the colour mode, 4K H.265 running
-// at 25 fps at most. --gpu does too, and undistorts and converts on the GPU
-// (sensor::GpuFramePrep) instead of on the host, fusing depth and colour with
-// their own cameras; with --rig, each set's cameras are prepared at once, one
-// thread per camera (sensor::prepare_set), and fused one after another.
+// at 25 fps at most. --gpu (a build with VR_WITH_FFMPEG too) undistorts and
+// converts on the GPU (sensor::GpuFramePrep) instead of on the host, fusing
+// depth and colour with their own cameras, the colour decoded onto the GPU;
+// it streams H.265 unless --mjpeg says otherwise, since MJPEG needs about
+// nine times the bandwidth. With --rig, each set's cameras are prepared at
+// once, one thread per camera (sensor::prepare_set), and fused one after
+// another.
 // --rig fuses every camera of a sync configuration (femto_mega_sync.json) as
 // one rig, refusing cameras that differ from it unless --apply-sync writes it
 // to them. --calibration poses each camera from a calibration file
@@ -73,8 +76,9 @@ struct Options {
   std::string rig;          // a sync configuration: fuse its cameras as a rig
   std::string calibration;  // poses by serial; empty: all at the origin
   bool apply_sync = false;  // write the sync configuration where it differs
-  bool hevc = false;        // H.265 colour rather than MJPEG
-  bool gpu = false;         // raw frames, prepared on the GPU (implies hevc)
+  // H.265 colour rather than MJPEG; unset, H.265 for --gpu alone.
+  std::optional<bool> hevc;
+  bool gpu = false;               // raw frames, prepared on the GPU
   std::uint32_t color_width = 0;  // 0 keeps the driver's default mode
   std::uint32_t color_height = 0;
   std::uint32_t fps = 0;
@@ -115,11 +119,14 @@ vr::Result<Options> parse_args(int argc, char** argv) {
       (a == "--rig" ? opt.rig : opt.calibration) = s;
     } else if (a == "--apply-sync") {
       opt.apply_sync = true;
-    } else if (a == "--hevc") {
-      opt.hevc = true;
+    } else if (a == "--hevc" || a == "--mjpeg") {
+      const bool hevc = a == "--hevc";
+      if (opt.hevc && *opt.hevc != hevc) {
+        return vr::Status::invalid_argument("--hevc or --mjpeg, not both");
+      }
+      opt.hevc = hevc;
     } else if (a == "--gpu") {
       opt.gpu = true;
-      opt.hevc = true;
     } else if (a == "--color") {
       const char* s = take();
       unsigned w = 0, h = 0;
@@ -166,8 +173,8 @@ vr::Result<Options> parse_args(int argc, char** argv) {
       return vr::Status::invalid_argument(
           "unknown argument: " + a +
           "\nusage: fuse_orbbec [--serial SN | --rig sync.json [--apply-sync]] "
-          "[--calibration calib.json] [--frames N] [--hevc | --gpu] "
-          "[--color WxH] [--fps N] "
+          "[--calibration calib.json] [--frames N] [--hevc | --mjpeg] "
+          "[--gpu] [--color WxH] [--fps N] "
           "[-o out.ply] [--voxel m] [--trunc m] [--min-depth m] "
           "[--max-depth m] [--max-weight w]");
     }
@@ -246,7 +253,9 @@ void print_camera(const sensor::OrbbecDeviceInfo& info,
 // Raw frames' colour is decoded onto `device`, where the hardware leaves it.
 void apply_streams(const Options& opt, const vr::Device& device,
                    sensor::OrbbecStreamOptions& streams) {
-  if (opt.hevc) streams.color_codec = sensor::OrbbecColorCodec::Hevc;
+  if (opt.hevc.value_or(opt.gpu)) {
+    streams.color_codec = sensor::OrbbecColorCodec::Hevc;
+  }
   streams.raw = opt.gpu;
   if (opt.gpu) streams.device = &device;
   if (opt.color_width != 0) {
