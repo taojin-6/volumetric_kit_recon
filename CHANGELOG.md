@@ -147,7 +147,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   chroma layout (`layout`: I420 or NV12) and takes its planes from a device
   buffer (`device`, with per-plane `offset`) as well as from the host.
   `GpuFramePrep` binds device planes where they are, so a hardware decoder's
-  picture need never cross the bus.
+  picture need never cross the bus, after taking the buffer over from the
+  queue family that wrote it (`queue_family`: `kQueueFamilyExternal` for
+  CUDA). Device planes that overlap are refused.
+- `core`: **`CommandBatch::acquire`** takes over a buffer another queue family
+  or an API outside Vulkan wrote, before the commands after it use it.
 - `texture`: **`ProjectiveTexturer::texture(const DeviceMesh&, const Buffer&
   depth, ...)`** binds a depth frame already on the device, in place. The atlas
   must still be registered to the depth camera, so a `GpuFramePrep` frame,

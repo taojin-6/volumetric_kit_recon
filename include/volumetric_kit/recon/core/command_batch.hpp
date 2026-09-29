@@ -29,9 +29,9 @@ class GpuStageScope;
 class GpuTimer;
 struct ComputeKernel;
 
-/// @brief Records one call's device work -- uploads, fills, copies, dispatches,
-///        readbacks -- into a single command buffer, submitted once and waited
-///        on once by @ref submit.
+/// @brief Records one call's device work -- uploads, fills, copies, ownership
+///        acquires, dispatches, readbacks -- into a single command buffer,
+///        submitted once and waited on once by @ref submit.
 ///
 /// The commands run in the order they were recorded, each seeing every write
 /// before it: a barrier precedes any command that could see an earlier one's
@@ -165,6 +165,35 @@ class VR_CORE_API CommandBatch {
               VkDeviceSize dst_offset, VkDeviceSize bytes,
               GpuStageScope* stage = nullptr);
 
+  /// @brief Take @p buffer over from the queue family @p from before the
+  ///        commands recorded after this use it: the acquiring half of a
+  ///        queue-family ownership transfer.
+  ///
+  /// Reading an EXCLUSIVE buffer that another family wrote is undefined
+  /// without one, and so is reading memory an API outside Vulkan wrote, such
+  /// as CUDA through an imported allocation, which comes from
+  /// `VK_QUEUE_FAMILY_EXTERNAL`. For another Vulkan family the writer records
+  /// the releasing half on its own queue, the whole buffer from @p from to
+  /// @ref Device::compute_family, and that work must have finished before
+  /// @ref submit, as a waited fence ensures: the batch waits on no semaphore.
+  /// Nothing is recorded when there is nothing to transfer, which is when
+  /// @p from is `VK_QUEUE_FAMILY_IGNORED` or this device's family, or when a
+  /// CONCURRENT buffer was written on another Vulkan family (it is shared
+  /// already).
+  ///
+  /// @code
+  /// VR_TRY(batch.acquire(imported, VK_QUEUE_FAMILY_EXTERNAL));  // CUDA wrote
+  /// it VR_TRY(batch.dispatch(kernel, &push, sizeof(push), groups,
+  /// max_groups));
+  /// @endcode
+  /// @param buffer  The buffer, which must stay alive until @ref submit
+  ///                returns.
+  /// @param from    The family that last wrote it: one of the device's, or
+  ///                `VK_QUEUE_FAMILY_EXTERNAL` or `VK_QUEUE_FAMILY_IGNORED`.
+  /// @return OK; InvalidArgument for an empty @p buffer or a @p from that is
+  ///         none of those; or a poisoned batch's first refusal.
+  Status acquire(const Buffer& buffer, std::uint32_t from);
+
   /// @brief Record a 1-D dispatch of @p kernel over @p groups workgroups, as
   ///        `dispatch()` does but in this batch.
   /// @param kernel      A built kernel whose descriptor set is written. The
@@ -233,7 +262,15 @@ class VR_CORE_API CommandBatch {
   bool submitted() const noexcept { return submitted_; }
 
  private:
-  enum class Kind { Update, Copy, Fill, Dispatch, DispatchIndirect, Readback };
+  enum class Kind {
+    Update,
+    Copy,
+    Fill,
+    Dispatch,
+    DispatchIndirect,
+    Readback,
+    Acquire
+  };
   struct Op {
     Kind kind = Kind::Copy;
     VkBuffer src = VK_NULL_HANDLE;
@@ -241,7 +278,8 @@ class VR_CORE_API CommandBatch {
     VkDeviceSize src_offset = 0;
     VkDeviceSize dst_offset = 0;
     VkDeviceSize bytes = 0;
-    std::uint32_t value = 0;  // fill word, or workgroup count
+    std::uint32_t value = 0;  // fill word, workgroup count, or acquired-from
+    std::uint32_t to_family = 0;  // an acquire's destination family
     const ComputeKernel* kernel = nullptr;
     std::uint64_t set_writes = 0;     // the kernel's set, when recorded
     std::vector<unsigned char> data;  // push constants, or an inline upload

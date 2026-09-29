@@ -541,7 +541,9 @@ arbitrary; it usually isn't.
   **`CommandBatch`** (`core/command_batch.hpp`)
   is how the host reaches device memory: one call's uploads, fills, copies,
   dispatches (indirect too) and readbacks in one command buffer, one fence
-  wait, spans and labels kept. A barrier goes wherever a command could see an
+  wait, spans and labels kept. `acquire` takes over a buffer another queue
+  family or an API outside Vulkan wrote, the receiving half of the ownership
+  transfer. A barrier goes wherever a command could see an
   earlier one's writes: around every dispatch, and between two transfers
   only when they share a buffer one writes, unless they are fills or
   uploads rising through it without overlap. `zero` clears a range at any
@@ -908,8 +910,10 @@ arbitrary; it usually isn't.
   pixel the lens maps outside the picture is a 0 word), so nothing is
   uploaded and nothing registered. Colour comes as I420 or NV12, as host
   planes or already on the device (`YuvImage::device`, with per-plane
-  offsets and strides), and device planes are bound where they are (the
-  2026-09-28 decoded-frame decision). The raw frame's host data goes up
+  offsets and strides), and device planes are bound where they are, from
+  the first plane, once the batch has taken them over from the queue family
+  that wrote them (`YuvImage::queue_family`; the 2026-09-28 decoded-frame
+  decision). The raw frame's host data goes up
   through one batch into device-local inputs, its planes packed into a staging buffer the
   pass keeps whatever their strides, and both passes run in the same submit,
   the copy timed with them. Kept because several passes allocating a 4K

@@ -6361,25 +6361,69 @@ lies:
   finding stays true for the paths that keep host frames.
 
 **Landed.** `GpuFramePrep` takes I420 or NV12, from the host or the device.
-The colour kernel reads each plane at an offset and row stride, with a
-chroma step of 1 or 2, so its push constants grow from 76 to 92 bytes. A
-test prepares one odd-sized, lensed picture four ways and requires the
-outputs to be identical: host I420, host NV12 with padded rows, and device
-I420 and NV12 at odd offsets with padded rows. It also refuses:
+The colour kernel reads each plane at an offset and row stride of its own,
+with a chroma step of 1 or 2, so its push constants grow from 76 to 96 bytes.
+A test prepares one odd-sized, lensed picture every way it can come and
+requires the outputs to be identical: host I420, host NV12 with tight and
+padded rows, and device I420 and NV12 at odd offsets with padded rows, 4 KiB
+into their buffer, taken over from outside Vulkan or not, the I420 with Cb
+and Cr rows of different lengths. It also refuses:
 
-- planes on both the host and the device;
-- a plane past its buffer;
+- planes on both the host and the device, a stale third one included, and
+  an NV12 host picture with a third plane;
+- a plane past its buffer, or its last word past it;
+- planes that overlap, as I420's do with their offsets left at zero;
 - a row shorter than its picture;
-- Cb and Cr rows of different lengths;
-- a buffer without storage usage.
+- a buffer that is empty or without storage usage;
+- a queue family the device lacks, before any work.
 
 A kernel that ignores the chroma step, as a mutant, fails the NV12 case; one
 that ignores the luma offset fails the device case.
 
+Its review settled the device path, which a picture another queue or API
+wrote reaches:
+
+- **Ownership.** Reading an EXCLUSIVE buffer another queue family wrote, or
+  memory CUDA wrote through an import, is undefined without a queue-family
+  ownership transfer, and appears to work on Apple, where Metal has no such
+  thing. `YuvImage::queue_family` names the writer: another family of the
+  device, `kQueueFamilyExternal` for CUDA, or `kQueueFamilyIgnored`, the
+  default, for the pass's own. The pass opens its batch with
+  `CommandBatch::acquire`, new in `core`: the receiving half, from
+  `VK_QUEUE_FAMILY_EXTERNAL` for an EXCLUSIVE or a CONCURRENT buffer, and
+  from another family for an EXCLUSIVE one, whose writer records the
+  release. The batch waits on no semaphore, so the writer must have
+  finished, a fence waited or the stream synchronized, which
+  `YuvImage::device` now says. An acquire naming this family for a
+  CONCURRENT buffer, rather than every family, fails the batch test under
+  the validation layer (VUID-09051); a pass that skips the acquire fails its
+  refusal of an unknown family.
+- **Lifetime.** A failed wait already leaked the staging the device may
+  still read. It now leaks a reference to the device planes' buffer too,
+  which the caller could otherwise drop, or a decoder's ring reuse, as soon
+  as `prepare` returned.
+- **Binding.** Device planes are bound from the first plane, rounded down to
+  `minStorageBufferOffsetAlignment`, not from byte 0, so
+  `maxStorageBufferRange` (2^27 on Mali and many Intel drivers) and the
+  kernel's 32-bit addressing weigh the picture, not where it sits: a
+  decoder ring's slot 128 MB into one buffer would have been refused on
+  those drivers. A kernel reading each
+  plane where it sits in the buffer rather than the binding fails the test;
+  binding from byte 0 does not, since no device CI runs has a limit that
+  low.
+- **Checks.** Overlapping planes are refused, which catches I420's offsets
+  left at zero, and so is a host pointer beside device planes, whichever
+  plane it is. The kernel takes Cb's and Cr's strides separately, so the
+  device path accepts Cb and Cr rows of different lengths, as FFmpeg's
+  linesizes allow, rather than refusing them. The borrowed buffer is checked
+  through `StorageInput::check`, so an empty one is called empty. A mutant
+  dropping any of the new checks fails the test.
+
 **Next**, in order:
 
 1. NVIDIA: NVDEC and nvJPEG into CUDA-shared Vulkan buffers, behind
-   `VR_WITH_CUDA`, with CI's Linux legs installing the toolkit.
+   `VR_WITH_CUDA`, with CI's Linux legs installing the toolkit. Their
+   pictures carry `kQueueFamilyExternal`.
 2. Apple: VideoToolbox for H.265 and JPEG, and the IOSurface import.
 3. The Orbbec raw path carrying the device picture, with MJPEG raw asking the
    SDK for the JPEG bytes and decoding them on a thread per camera.

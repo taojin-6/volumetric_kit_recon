@@ -36,6 +36,15 @@ enum class YuvLayout : std::uint8_t {
   Nv12,  ///< Cb and Cr interleaved in one plane, Cb first.
 };
 
+/// @brief @ref YuvImage::queue_family for device planes that need no
+///        ownership transfer: written on the queue family that prepares them,
+///        or held in a CONCURRENT buffer. Vulkan's `VK_QUEUE_FAMILY_IGNORED`.
+inline constexpr std::uint32_t kQueueFamilyIgnored = ~std::uint32_t{0};
+/// @brief @ref YuvImage::queue_family for device planes an API outside Vulkan
+///        wrote, such as CUDA through imported memory. Vulkan's
+///        `VK_QUEUE_FAMILY_EXTERNAL`.
+inline constexpr std::uint32_t kQueueFamilyExternal = ~std::uint32_t{0} - 1;
+
 /// @brief An 8-bit Y'CbCr 4:2:0 picture, on the host or already on the
 ///        device, and the matrix and range it was coded with.
 ///
@@ -44,19 +53,46 @@ enum class YuvLayout : std::uint8_t {
 /// then Cb and Cr at half size (rounded up) for I420, or Y then CbCr for
 /// NV12, whose chroma rows hold both samples of each pair. They are either
 /// host memory in @ref plane or, where a decoder left its picture on the GPU,
-/// ranges of @ref device; never both.
+/// ranges of @ref device that do not overlap; never both.
+///
+/// @code
+/// YuvImage image;  // a decoder's NV12 picture, left on the device
+/// image.layout = YuvLayout::Nv12;
+/// image.device = picture_buffer;  // written, and the writer waited on
+/// image.offset[0] = 0;
+/// image.offset[1] = chroma_at;
+/// image.stride[0] = width;
+/// image.stride[1] = (width + 1) / 2 * 2;
+/// image.queue_family = kQueueFamilyExternal;  // CUDA wrote it
+/// image.width = width;
+/// image.height = height;
+/// @endcode
 struct YuvImage {
   YuvLayout layout = YuvLayout::I420;  ///< How the chroma is laid out.
-  /// The planes on the host; `plane[2]` is unused for NV12. Borrowed.
+  /// The planes on the host; `plane[2]` is unused for NV12, and so null.
+  /// Borrowed.
   const std::uint8_t* plane[3] = {};
   std::size_t stride[3] = {};  ///< Bytes per row of each plane.
   /// Or the planes on the device: a storage buffer on the device the frame
-  /// is prepared on, holding plane `p` at byte @ref offset `[p]`. The frame
-  /// holds it, so the decoder cannot reuse it while the frame is prepared.
+  /// is prepared on, holding plane `p` at byte @ref offset `[p]`.
+  ///
+  /// Its writer must have **finished** before the frame is prepared -- a
+  /// fence waited on, or the CUDA stream synchronized -- since the pass
+  /// submits on its own queue and waits on no semaphore; an unfinished write
+  /// reads as a torn picture. The frame holds the buffer, so the decoder
+  /// cannot reuse it while the frame is prepared, and a prepare whose wait
+  /// fails holds it for good, as the device may still read it.
   std::shared_ptr<const Buffer> device;
   std::uint64_t offset[3] = {};  ///< Each plane's byte offset in @ref device.
-  std::uint32_t width = 0;       ///< Luma width (pixels).
-  std::uint32_t height = 0;      ///< Luma height (pixels).
+  /// The queue family that wrote @ref device, which the pass takes it over
+  /// from before reading: another family of the device, whose writer
+  /// released the whole buffer to the pass's family, or
+  /// @ref kQueueFamilyExternal. @ref kQueueFamilyIgnored when the pass's own
+  /// family wrote it; another Vulkan family's is ignored too for a
+  /// CONCURRENT buffer, which needs no transfer.
+  std::uint32_t queue_family = kQueueFamilyIgnored;
+  std::uint32_t width = 0;   ///< Luma width (pixels).
+  std::uint32_t height = 0;  ///< Luma height (pixels).
   /// The matrix's red and blue weights: BT.601 is 0.299 and 0.114, BT.709
   /// 0.2126 and 0.0722.
   float kr = 0.299f;
