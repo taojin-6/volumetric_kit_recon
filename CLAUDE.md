@@ -306,8 +306,8 @@ order. Change the decision, its entry there, and this list together.
   decoded as BT.601 full range, which it codes and does not say.
 - [**2026-09-28**](DECISIONS.md#2026-09-28--projective-texturing-from-several-views-chooses-a-view-per-triangle-on-an-unshared-mesh-into-an-atlas-of-the-views-images-side-by-side-the-single-camera-pass-stays-per-vertex) —
   Projective texturing from several views chooses a view per triangle, on an
-  unshared mesh, into an atlas of the views' images side by side; the
-  single-camera pass stays per vertex.
+  unshared mesh, into an atlas of the views' images side by side, in
+  floor(sqrt(n)) rows; the single-camera pass stays per vertex.
 - [**2026-09-28**](DECISIONS.md#2026-09-28--gpu-pre-processing-is-recon_sensor_utils-a-driver-hands-out-the-frame-as-captured-the-device-undistorts-depth-and-undistorts-and-converts-colour-and-fusion-reads-the-buffers-in-place-depth-and-colour-each-with-its-own-camera-rather-than-registered) —
   GPU pre-processing is `recon_sensor_utils`: a driver hands out the frame as
   captured, the device undistorts depth and undistorts and converts colour,
@@ -846,8 +846,9 @@ arbitrary; it usually isn't.
   saw nothing), the buffers held by `shared_ptr`. The single-camera pass takes
   one view (the `DeviceMesh` and host `Mesh` overloads), and the several-view
   overloads texture from **several** into an atlas of their images side by
-  side (`texture_atlas.hpp`: `side_by_side_atlas`, `pack_atlas`), one thread
-  per **triangle**: each takes the view facing it most squarely among those
+  side, in floor(sqrt(n)) rows so four views make two rows of two
+  (`texture_atlas.hpp`: `side_by_side_atlas`, `pack_atlas`), one thread per
+  **triangle**: each takes the view facing it most squarely among those
   that see its **front** and all three of its vertices, and all three point
   into that view's tile. Per triangle because vertices in different tiles
   would interpolate across the atlas, so that path needs an unshared mesh and

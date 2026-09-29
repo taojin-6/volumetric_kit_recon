@@ -108,7 +108,7 @@ namespace volumetric_kit::recon::texture {
 /// full colour resolution with no rescale and no correction here.
 ///
 /// **Several views** (the @ref TextureView overloads) texture from an atlas of
-/// their images side by side (`texture_atlas.hpp`), choosing a view per
+/// their images in rows (`texture_atlas.hpp`), choosing a view per
 /// **triangle**: a triangle whose vertices took different views would
 /// interpolate across the atlas between two tiles, which no per-vertex
 /// encoding can prevent. So that path needs an unshared mesh, where each

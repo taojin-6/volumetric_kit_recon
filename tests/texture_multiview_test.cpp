@@ -431,7 +431,8 @@ int main() {
               .domain() == vr::Status::Code::InvalidArgument);
   }
 
-  // One row: 960 x 240, tiles at x = 0, 320, 640.
+  // One row: three views stay side by side, 960 x 240, tiles at x = 0, 320,
+  // 640.
   {
     vr::Result<tex::AtlasLayout> layout =
         tex::side_by_side_atlas(views, texturer.max_atlas_extent());
@@ -739,7 +740,8 @@ int main() {
     }
   }
 
-  // The atlas on its own: tiles in order, wrapping, and the refusals.
+  // The atlas on its own: tiles in order, in floor(sqrt(n)) rows, a row
+  // ended early at the extent, and the refusals.
   {
     vr::DepthCameraParams small = cam0;
     small.width = 4;
@@ -780,6 +782,26 @@ int main() {
                           &packed)
               .ok());
     CHECK(packed[3 * 8 + 5] == 0u);  // nothing covers it
+    // In a wide extent, three stay in one row, four make two rows of two, and
+    // five three columns.
+    vr::Result<tex::AtlasLayout> row = tex::side_by_side_atlas(three, 64);
+    CHECK(row.ok() && row->width == 12 && row->height == 2);
+    const std::vector<tex::TextureView> four(4, {nullptr, small});
+    vr::Result<tex::AtlasLayout> square = tex::side_by_side_atlas(four, 64);
+    CHECK(square.ok() && square->width == 8 && square->height == 4);
+    CHECK(square->tiles[3].x == 4 && square->tiles[3].y == 2);
+    const std::vector<tex::TextureView> five(5, {nullptr, small});
+    vr::Result<tex::AtlasLayout> wide = tex::side_by_side_atlas(five, 64);
+    CHECK(wide.ok() && wide->width == 12 && wide->height == 4);
+    CHECK(wide->tiles[3].x == 0 && wide->tiles[3].y == 2);
+    // Two views a row, unless the second would pass the extent: 4 + 6 > 8.
+    vr::DepthCameraParams wider = small;
+    wider.width = 6;
+    const std::vector<tex::TextureView> uneven = {{nullptr, small},
+                                                  {nullptr, wider}};
+    vr::Result<tex::AtlasLayout> early = tex::side_by_side_atlas(uneven, 8);
+    CHECK(early.ok() && early->width == 6 && early->height == 4);
+    CHECK(early->tiles[1].x == 0 && early->tiles[1].y == 2);
     CHECK(tex::side_by_side_atlas({}, 16).status().domain() ==
           vr::Status::Code::InvalidArgument);
     // Past the extent is InvalidArgument, as texture() says of a layout past
