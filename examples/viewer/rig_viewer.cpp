@@ -34,9 +34,12 @@
 //     writes visible to the copy.
 //
 // The atlas is laid out once, from the rig's colour cameras, with
-// texture::side_by_side_atlas (four cameras make a 2 x 2 grid). A set missing a
-// camera textures from the ones present, into their own tiles of the same
-// layout, so the atlas never changes size.
+// texture::side_by_side_atlas (four cameras make a 2 x 2 grid), so it never
+// changes size. A set missing a camera, or its colour, textures that camera
+// from its last frame, up to --hold-sets sets old, into the same tile: that
+// frame's own depth decides where it may texture, so a dropped frame costs no
+// flicker and a stale image lands only on surfaces that have not moved.
+// Past the limit the set textures from the cameras it has.
 //
 // The mesh is unshared: texturing from several views chooses a camera per
 // triangle, which a vertex shared between triangles that chose differently
@@ -46,7 +49,7 @@
 //              [--hevc | --mjpeg] [--color WxH] [--fps N]
 //              [--voxel 0.01] [--trunc m] [--min-depth m] [--max-depth m]
 //              [--max-weight 20] [--dynamic | --static] [--occlusion 0.05]
-//              [--remesh-every 1] [--sets N] [--frames N]
+//              [--remesh-every 1] [--hold-sets 30] [--sets N] [--frames N]
 //              [--width 1280] [--height 720] [--lit | --normals]
 //              [--no-texture] [--show-sources] [--texture-stats] [--all-depth]
 //              [--no-overlay] [--validation]
@@ -213,6 +216,16 @@ struct Options {
   // set with a remesh cost about 21.6 ms on the M5 Max at 1 cm (four cameras
   // fused, extracted and textured), inside the 33 ms a 30 fps rig leaves.
   int remesh_every = 1;
+  // How many sets old a camera's last frame may be and still texture the
+  // mesh when a set lacks the camera, or lacks its colour. The SDK drops a
+  // secondary's frame now and then on the wired link, and H.265 colour is
+  // lost from a dropped frame to the next key frame; texturing without the
+  // camera then drops its tile for that remesh, and every triangle it held
+  // flickers to fused colour. The held frame's own depth decides where it
+  // may texture, so it lands only on surfaces still where they were when it
+  // was captured. 30 sets is a second of the rig's rate; 0 textures only
+  // from each set's own frames.
+  int hold_sets = 30;
   int sets = 0;  // stop fusing after N sets; 0 fuses until the window closes
   // Draw N frames, then exit as a closed window does -- for a scripted run;
   // 0 draws until the window is closed.
@@ -238,7 +251,8 @@ const char* kUsage =
     "[--apply-sync] [--hevc | --mjpeg] [--color WxH] [--fps N] [--voxel m] "
     "[--trunc m] [--min-depth m] [--max-depth m] [--max-weight w] "
     "[--dynamic | --static] [--occlusion m] "
-    "[--remesh-every N] [--sets N] [--frames N] [--width W] [--height H] "
+    "[--remesh-every N] [--hold-sets N] [--sets N] [--frames N] "
+    "[--width W] [--height H] "
     "[--lit | --normals] [--no-texture] [--show-sources] [--texture-stats] "
     "[--all-depth] "
     "[--no-overlay] [--validation]\n";
@@ -302,6 +316,10 @@ bool parse_args(int argc, char** argv, Options& o) {
       const char* x = value();
       if (x == nullptr) return false;
       o.remesh_every = std::max(1, std::atoi(x));
+    } else if (a == "--hold-sets") {
+      const char* x = value();
+      if (x == nullptr) return false;
+      o.hold_sets = std::max(0, std::atoi(x));
     } else if (a == "--sets" || a == "--frames") {
       const char* x = value();
       if (x == nullptr) return false;
@@ -422,6 +440,38 @@ struct AtlasImage {
   vg::DescriptorSet set;
 };
 
+// A camera's newest frame with colour, and the set it came in (sets count
+// from 1), kept to texture a later set that lacks the camera or its colour.
+struct HeldFrame {
+  rsensor::DeviceFrame frame;
+  std::uint64_t set = 0;
+};
+
+// The frame a remesh textures one camera from, and whether it is a held one.
+struct TextureSource {
+  const rsensor::DeviceFrame* frame = nullptr;
+  bool held = false;
+};
+
+// Per camera: the set's own frame when it has colour; else that camera's held
+// frame, when it is at most `hold_sets` sets older than `set`; else none. A
+// held frame keeps its own depth and colour camera beside its colour, so the
+// texture pass tests it against the mesh as it was seen then.
+std::vector<TextureSource> texture_sources(
+    const std::vector<std::optional<rsensor::DeviceFrame>>& frames,
+    const std::vector<std::optional<HeldFrame>>& held, std::uint64_t set,
+    std::uint64_t hold_sets) {
+  std::vector<TextureSource> out(held.size());
+  for (std::size_t c = 0; c < held.size(); ++c) {
+    if (c < frames.size() && frames[c] && frames[c]->has_color()) {
+      out[c] = {&*frames[c], false};
+    } else if (held[c] && set - held[c]->set <= hold_sets) {
+      out[c] = {&held[c]->frame, true};
+    }
+  }
+  return out;
+}
+
 // One camera's share of an atlas: its colour buffer, as the frame prep left
 // it (R, G, B and coverage in each word -- the bytes of R8G8B8A8), and the
 // tile it goes to.
@@ -504,6 +554,13 @@ struct RigPanel {
   std::uint64_t sets_fused = 0;
   std::uint64_t frames_fused = 0;
   std::size_t cameras_textured = 0;  // in the newest textured set
+  std::size_t cameras_held = 0;      // of those, from a held frame
+  // Over the run: textured views taken from a held frame (a camera missing
+  // from a set, or its colour, that its last frame stood in for), and
+  // remeshes textured from fewer cameras than the rig has -- each one a
+  // flicker, where the missing cameras' triangles fell to fused colour.
+  std::uint64_t held_views = 0;
+  std::uint64_t short_remeshes = 0;
   std::array<std::uint64_t, kUntexturedReasons> untextured{};
   rsensor::OrbbecRigStats stats;
   std::size_t vertices = 0;
@@ -543,8 +600,11 @@ void draw_rig_panel(const RigPanel& panel,
   ImGui::Text("fuse     %.2f ms/set", panel.fuse_ms);
   ImGui::Text("remesh   %.2f ms, the newest", panel.remesh_ms);
   ImGui::Text("mesh     %.1f updates/s", panel.mesh_rate);
-  ImGui::Text("textured from %zu camera%s", panel.cameras_textured,
-              panel.cameras_textured == 1 ? "" : "s");
+  ImGui::Text("textured from %zu camera%s, %zu held", panel.cameras_textured,
+              panel.cameras_textured == 1 ? "" : "s", panel.cameras_held);
+  ImGui::Text("  so far  %llu views held, %llu remeshes short of a camera",
+              static_cast<unsigned long long>(panel.held_views),
+              static_cast<unsigned long long>(panel.short_remeshes));
   for (std::size_t r = 0; r < kUntexturedReasons; ++r) {
     if (panel.untextured[r] == 0) continue;
     ImGui::Text("  untextured meshes, %s: %llu", kUntexturedNames[r],
@@ -1006,8 +1066,16 @@ int run(GLFWwindow* window, const Options& opt) {
       // The remesh rows, held between remeshes (see fuse_viewer).
       vr::StageMetrics remesh_stages;
       std::size_t cameras_textured = 0;
+      std::size_t cameras_held = 0;
+      std::uint64_t held_views = 0;
+      std::uint64_t short_remeshes = 0;
       std::array<std::uint64_t, kUntexturedReasons> untextured{};
       bool texture_error_reported = false;
+      // Each camera's newest frame with colour (Options::hold_sets). Kept
+      // only when holding is on: a held frame has that camera's frame prep
+      // write the next one to a new buffer rather than reuse this one.
+      std::vector<std::optional<HeldFrame>> held(cameras);
+      const auto hold_sets = static_cast<std::uint64_t>(opt.hold_sets);
       std::vector<bool> uncopyable_reported(cameras, false);
 
       // Whether gfx can copy `color` into `tile`: a copy source, as large as
@@ -1024,83 +1092,88 @@ int run(GLFWwindow* window, const Options& opt) {
                color.size() >= VkDeviceSize(tile.width) * tile.height * 4u;
       };
 
-      // Texture `mesh` from the set's cameras and publish the two together:
-      // uv0 index into this set's images, so the mesh and its atlas are one
-      // value.
-      auto publish =
-          [&](const rmesh::DeviceMesh& mesh,
-              const std::vector<std::optional<rsensor::DeviceFrame>>& frames) {
-            AtlasJob job;
-            std::size_t why = kTextureOff;
-            if (!texture_on.load()) {
-              why = kTextureOff;
-            } else if (mesh.empty()) {
-              why = kEmptyMesh;
+      // Texture `mesh` from each camera's source (texture_sources: the set's
+      // frame, or the camera's held one) and publish the two together: uv0
+      // index into those images, so the mesh and its atlas are one value.
+      auto publish = [&](const rmesh::DeviceMesh& mesh,
+                         const std::vector<TextureSource>& sources) {
+        AtlasJob job;
+        std::size_t views_held = 0;
+        std::size_t why = kTextureOff;
+        if (!texture_on.load()) {
+          why = kTextureOff;
+        } else if (mesh.empty()) {
+          why = kEmptyMesh;
+        } else {
+          why = kNoColour;
+          std::vector<rtex::TextureView> views;
+          rtex::AtlasLayout present{layout.width, layout.height, {}};
+          job.width = layout.width;
+          job.height = layout.height;
+          for (std::size_t c = 0; c < sources.size() && c < cameras; ++c) {
+            if (sources[c].frame == nullptr) continue;
+            const rsensor::DeviceFrame& f = *sources[c].frame;
+            if (!copyable(*f.color, layout.tiles[c])) {
+              // Said once a camera: its format is fixed at open, so every
+              // set would repeat it.
+              if (!uncopyable_reported[c]) {
+                std::fprintf(stderr,
+                             "rig_viewer: camera %zu's colour cannot be "
+                             "copied into the atlas (not a copy source, "
+                             "short of its tile, or EXCLUSIVE across two "
+                             "queue families); texturing without it\n",
+                             c);
+                uncopyable_reported[c] = true;
+              }
+              continue;
+            }
+            // The frame's own buffers, held by the view for the call: its
+            // depth, and its colour as the coverage, so a vertex where the
+            // lens saw nothing is not textured black from this camera.
+            rtex::TextureView v;
+            v.cam = f.depth_camera;
+            v.depth_buffer = f.depth;
+            v.color_camera = f.color_camera;
+            v.coverage = f.color;
+            views.push_back(std::move(v));
+            present.tiles.push_back(layout.tiles[c]);
+            job.tiles.push_back({f.color, layout.tiles[c], c});
+            views_held += sources[c].held ? 1 : 0;
+          }
+          if (!views.empty()) {
+            const vr::Status textured = texturer.texture(
+                mesh, views, present, occlusion.load(), &remesh_stages);
+            if (textured.ok()) {
+              cameras_textured = views.size();
+              cameras_held = views_held;
+              held_views += views_held;
+              short_remeshes += views.size() < cameras ? 1 : 0;
             } else {
-              why = kNoColour;
-              std::vector<rtex::TextureView> views;
-              rtex::AtlasLayout present{layout.width, layout.height, {}};
-              job.width = layout.width;
-              job.height = layout.height;
-              for (std::size_t c = 0; c < frames.size() && c < cameras; ++c) {
-                if (!frames[c] || !frames[c]->has_color()) continue;
-                const rsensor::DeviceFrame& f = *frames[c];
-                if (!copyable(*f.color, layout.tiles[c])) {
-                  // Said once a camera: its format is fixed at open, so every
-                  // set would repeat it.
-                  if (!uncopyable_reported[c]) {
-                    std::fprintf(stderr,
-                                 "rig_viewer: camera %zu's colour cannot be "
-                                 "copied into the atlas (not a copy source, "
-                                 "short of its tile, or EXCLUSIVE across two "
-                                 "queue families); texturing without it\n",
-                                 c);
-                    uncopyable_reported[c] = true;
-                  }
-                  continue;
-                }
-                // The frame's own buffers, held by the view for the call: its
-                // depth, and its colour as the coverage, so a vertex where the
-                // lens saw nothing is not textured black from this camera.
-                rtex::TextureView v;
-                v.cam = f.depth_camera;
-                v.depth_buffer = f.depth;
-                v.color_camera = f.color_camera;
-                v.coverage = f.color;
-                views.push_back(std::move(v));
-                present.tiles.push_back(layout.tiles[c]);
-                job.tiles.push_back({f.color, layout.tiles[c], c});
+              why = kTextureFailed;
+              // Said once: a refusal here is a configuration fault (a frame
+              // whose colour is not its tile's size, say), and every remesh
+              // would repeat it.
+              if (!texture_error_reported) {
+                std::fprintf(stderr, "rig_viewer: texture: %s\n",
+                             textured.message().c_str());
+                texture_error_reported = true;
               }
-              if (!views.empty()) {
-                const vr::Status textured = texturer.texture(
-                    mesh, views, present, occlusion.load(), &remesh_stages);
-                if (textured.ok()) {
-                  cameras_textured = views.size();
-                } else {
-                  why = kTextureFailed;
-                  // Said once: a refusal here is a configuration fault (a frame
-                  // whose colour is not its tile's size, say), and every remesh
-                  // would repeat it.
-                  if (!texture_error_reported) {
-                    std::fprintf(stderr, "rig_viewer: texture: %s\n",
-                                 textured.message().c_str());
-                    texture_error_reported = true;
-                  }
-                  job = AtlasJob{};
-                }
-              } else {
-                job = AtlasJob{};
-              }
+              job = AtlasJob{};
             }
-            if (job.empty()) {
-              cameras_textured = 0;
-              ++untextured[why];
-            }
-            std::lock_guard<std::mutex> lock(share_mtx);
-            pending_mesh = mesh;
-            pending_job = std::move(job);
-            ++published_version;
-          };
+          } else {
+            job = AtlasJob{};
+          }
+        }
+        if (job.empty()) {
+          cameras_textured = 0;
+          cameras_held = 0;
+          ++untextured[why];
+        }
+        std::lock_guard<std::mutex> lock(share_mtx);
+        pending_mesh = mesh;
+        pending_job = std::move(job);
+        ++published_version;
+      };
       // The release mark, applied on this thread, and whether it may publish
       // (see fuse_viewer).
       auto release_and_may_publish = [&]() {
@@ -1161,26 +1234,25 @@ int run(GLFWwindow* window, const Options& opt) {
                     100.0 * occlusion.load(),
                     dynamic_on.load() ? "dynamic" : "static", ms);
       };
-      auto remesh =
-          [&](const std::vector<std::optional<rsensor::DeviceFrame>>& frames) {
-            remesh_stages.clear();
-            vr::Result<rmesh::DeviceMesh> extracted = [&]() {
-              vr::StageScope scope(remesh_stages, "extract");
-              return extractor.extract_device(volume, 0.0f);
-            }();
-            // Published even when empty: an extract claims a ring slot either
-            // way (see fuse_viewer).
-            if (extracted) {
-              publish(extracted.value(), frames);
-              // Before the next extract, which retires this mesh.
-              if (opt.texture_stats && remeshes++ % 30 == 0) {
-                print_texture_stats(extracted.value());
-              }
-            } else {
-              std::fprintf(stderr, "rig_viewer: extract: %s\n",
-                           extracted.status().message().c_str());
-            }
-          };
+      auto remesh = [&](const std::vector<TextureSource>& sources) {
+        remesh_stages.clear();
+        vr::Result<rmesh::DeviceMesh> extracted = [&]() {
+          vr::StageScope scope(remesh_stages, "extract");
+          return extractor.extract_device(volume, 0.0f);
+        }();
+        // Published even when empty: an extract claims a ring slot either
+        // way (see fuse_viewer).
+        if (extracted) {
+          publish(extracted.value(), sources);
+          // Before the next extract, which retires this mesh.
+          if (opt.texture_stats && remeshes++ % 30 == 0) {
+            print_texture_stats(extracted.value());
+          }
+        } else {
+          std::fprintf(stderr, "rig_viewer: extract: %s\n",
+                       extracted.status().message().c_str());
+        }
+      };
 
       const vr::Status started = rig.start();
       if (!started.ok()) {
@@ -1263,6 +1335,13 @@ int run(GLFWwindow* window, const Options& opt) {
           break;
         }
         ++sets;
+        if (hold_sets > 0) {
+          for (std::size_t c = 0; c < frames.size() && c < cameras; ++c) {
+            if (frames[c] && frames[c]->has_color()) {
+              held[c] = HeldFrame{*frames[c], sets};
+            }
+          }
+        }
 
         // The last set of a --sets run is always meshed: it is the complete
         // surface, and nothing later will supersede it. So it waits a moment
@@ -1286,13 +1365,13 @@ int run(GLFWwindow* window, const Options& opt) {
             (last ||
              sets % static_cast<std::uint64_t>(opt.remesh_every) == 0)) {
           if (release_and_may_publish()) {
-            remesh(frames);
+            remesh(texture_sources(frames, held, sets, hold_sets));
           } else if (last) {
             std::fprintf(stderr,
                          "rig_viewer: the renderer never collected the last "
                          "mesh (window hidden, or drawing stopped); meshing "
                          "the last set anyway\n");
-            remesh(frames);
+            remesh(texture_sources(frames, held, sets, hold_sets));
           }
         }
         // Fusion alone, before the remesh rows go in: those describe the
@@ -1310,6 +1389,9 @@ int run(GLFWwindow* window, const Options& opt) {
           shared_panel.sets_fused = sets;
           shared_panel.frames_fused = frames_fused;
           shared_panel.cameras_textured = cameras_textured;
+          shared_panel.cameras_held = cameras_held;
+          shared_panel.held_views = held_views;
+          shared_panel.short_remeshes = short_remeshes;
           shared_panel.untextured = untextured;
           shared_panel.stats = stats;
           shared_panel.recon_memory = memory;
@@ -1668,12 +1750,15 @@ int run(GLFWwindow* window, const Options& opt) {
       std::printf(
           "frame %d: %llu sets fused (%.1f ms/set, remesh %.1f ms), mesh "
           "v%llu (%zu triangles, %.1f updates/s), textured from %zu "
-          "camera%s, %llu atlas copies",
+          "camera%s (%zu held; %llu views held, %llu remeshes short so far), "
+          "%llu atlas copies",
           drawn, static_cast<unsigned long long>(panel.sets_fused),
           panel.fuse_ms, panel.remesh_ms,
           static_cast<unsigned long long>(panel.mesh_version), panel.triangles,
           panel.mesh_rate, panel.cameras_textured,
-          panel.cameras_textured == 1 ? "" : "s",
+          panel.cameras_textured == 1 ? "" : "s", panel.cameras_held,
+          static_cast<unsigned long long>(panel.held_views),
+          static_cast<unsigned long long>(panel.short_remeshes),
           static_cast<unsigned long long>(atlas_copies));
       for (std::size_t r = 0; r < kUntexturedReasons; ++r) {
         if (panel.untextured[r] != 0) {

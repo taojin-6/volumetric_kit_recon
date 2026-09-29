@@ -32,6 +32,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `examples`: **`rig_viewer` textures a missing camera from its last
+  frame.** A set missing a camera, or missing its colour, now textures that
+  camera from its newest frame with colour, up to `--hold-sets` sets old (30
+  by default; 0 turns it off). The held frame brings its own depth, so it
+  textures only surfaces that have not moved since. Before, each dropped
+  frame textured that remesh without the camera, and its triangles flickered
+  to fused colour. On the lab rig at 4K, 71 of 823 remeshes were short of a
+  camera without the hold, and none of 888 with it. The Rig panel counts held
+  views and short remeshes. Only texturing uses the held frame, so no frame
+  is fused twice.
 - `examples`: **`rig_viewer` fuses depth only inside each camera's colour
   view** by default (`GpuFramePrepConfig::depth_within_color`), so the
   untextured white floor and walls outside every colour camera's view are no

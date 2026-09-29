@@ -7107,7 +7107,7 @@ Still open:
 - A set missing a camera textures that remesh without it, so its region
   falls to fused colour for a frame, a flicker now that every set remeshes.
   Holding each camera's last frame for texturing would cover it, at the cost
-  of the frame prep's output reuse.
+  of the frame prep's output reuse. (Done: the fourth amendment below.)
 - Blending the views where they meet, or locking every camera to one
   exposure and white balance (a write to the cameras, like `--apply-sync`),
   would take the seams out of the speckle.
@@ -7128,6 +7128,54 @@ The triangles removed were almost all untextured ones: the untextured share
 roughly halves, and each camera's share grows only because the total shrinks.
 A screenshot of each run shows the white walls and floor of the first gone
 from the second. The 8.6% left has not been broken down by cause.
+
+*Amended 2026-09-29, a fourth time:* a camera missing from a set, or missing
+its colour, **textures from its last frame** for up to `--hold-sets` sets (30
+by default, a second of the rig's rate; 0 turns it off). The viewer keeps
+each camera's newest frame with colour, and `texture_sources` picks, per
+camera, the set's own frame or the held one. A held frame goes to the texture
+pass whole: its colour into the camera's tile, and its depth and colour camera
+as the view. The pass's depth test is two-sided at the occlusion threshold, so
+a held image textures only surfaces that are still where its depth saw them.
+Where something has moved since, that camera is refused, and another camera
+or the fused colour takes the surface.
+
+- **Why.** With every set remeshed, each set missing a camera was a remesh
+  textured without it. For one frame, every triangle that camera held fell
+  to fused colour, which read as flicker whenever the Rig panel's `dropped`
+  count went up. The SDK drops those frames on the wired link, more often
+  from the secondaries and more often at 4K. The viewer cannot prevent that.
+- **Texture only, not fusion.** The missing camera's depth is not re-fused
+  from the held frame. Fusing a frame twice would double its weight, and
+  under `Dynamic` stale depth would clear surfaces that have since arrived.
+- **The cost.** A held frame keeps its buffers, so that camera's frame prep
+  writes each new frame to a new buffer rather than reusing one (the reuse
+  rule of the GPU pre-processing entry). At 4K that is a 33 MB colour buffer
+  per camera per set, and the fuse time did not move (below).
+- **The limit.** 30 sets was not derived from a measured gap length; the gaps
+  seen were covered. It is long enough to span a lost H.265 frame's wait for
+  the next key frame, and short enough that a camera gone for good stops
+  texturing within a second.
+
+The Rig panel and status line now count views taken from a held frame, and
+remeshes textured from fewer cameras than the rig has (each one a flicker).
+On the lab rig, defaults otherwise, today's calibration, runs of 20-40 s
+(each row's counts are from that run's last status line, so the `sets` column
+gives the run's length):
+
+| colour | hold | sets | remeshes short of a camera | views held | fuse per set |
+|---|---|---|---|---|---|
+| 1280 x 720, 30 fps | off (`--hold-sets 0`) | 903 | 17 of 877 (1.9%) | 0 | 6.0 ms |
+| 1280 x 720, 30 fps | 30 sets | 637 | 0 of 636 | 13 | 6.6 ms |
+| 3840 x 2160, 25 fps | off | 909 | 71 of 823 (8.6%) | 0 | 7.6 ms |
+| 3840 x 2160, 25 fps | 30 sets | 946 | 0 of 888 | 101 | 7.5 ms |
+
+Watching the 4K pair, the person at the window saw the first flicker and
+the second stay stable. A third 4K run with the validation layer on (626
+sets, 64 views held) reported nothing.
+
+These are also the viewer's first 4K runs: a 7680 x 4320 atlas, 6.7-7.1 ms a
+remesh, and 24.7-25.8 mesh updates a second at the cameras' 25 fps.
 
 Ctrl+C closes the window rather than ending the process, so the rig is
 stopped either way. The viewer's gfx pin moves to #98 for `kHybridMeshNormals`,
@@ -7205,7 +7253,7 @@ which the counter named and the person at the window confirmed.
 - A calibration file for these cameras, without which the rig's view means
   nothing yet.
 - 4K colour on the rig, which makes a 7680 x 4320 atlas and about 133 MB of
-  copies per remesh.
+  copies per remesh. (Since run: the fourth amendment above.)
 - A CI leg that builds `rig_viewer`: the viewer leg has no Orbbec SDK, so it is
   compiled only where the SDK is installed (a `TODO(examples)` in the
   viewer's CMakeLists).

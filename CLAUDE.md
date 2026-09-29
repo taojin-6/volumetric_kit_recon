@@ -1125,7 +1125,8 @@ one header that pulls in `sensor/utils`.
 `VR_WITH_FFMPEG`) is `fuse_viewer`'s live-rig sibling: raw sets prepared,
 fused and textured from every camera on the GPU, and the atlas filled by
 device copies recorded in gfx's frame (the 2026-09-29 decision), fusing
-depth only inside each colour camera's view unless given `--all-depth`. The two
+depth only inside each colour camera's view unless given `--all-depth`, and
+texturing a camera a set lacks from its last frame (`--hold-sets`). The two
 viewers share `viewer_common.hpp`: the teardown guards, and the render side of
 the mesh ring.
 **`codec_replica`** fuses a Replica sequence as `fuse_replica` does, and
