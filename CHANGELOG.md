@@ -143,6 +143,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `sensor`: **colour already on the device, and NV12.** `YuvImage` names its
+  chroma layout (`layout`: I420 or NV12) and takes its planes from a device
+  buffer (`device`, with per-plane `offset`) as well as from the host.
+  `GpuFramePrep` binds device planes where they are, so a hardware decoder's
+  picture need never cross the bus.
 - `texture`: **`ProjectiveTexturer::texture(const DeviceMesh&, const Buffer&
   depth, ...)`** binds a depth frame already on the device, in place. The atlas
   must still be registered to the depth camera, so a `GpuFramePrep` frame,
