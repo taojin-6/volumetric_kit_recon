@@ -40,6 +40,14 @@ on:
         required: false
         type: boolean
         default: false
+      cuda:
+        description: >-
+          Install the CUDA 13 toolkit's headers and link stubs from NVIDIA's
+          repository and build with VR_WITH_CUDA=ON, so this leg hands NVDEC's
+          pictures out on the device and tests them. Needs ffmpeg.
+        required: false
+        type: boolean
+        default: false
       hevc_backend:
         description: >-
           The HEVC decode back end this leg promises (cuda, videotoolbox),
@@ -121,8 +129,8 @@ jobs:
             pkgs="$pkgs mesa-vulkan-drivers"
           fi
           # curl fetches the Orbbec SDK below; a bare container image lacks it.
-          if [ "${{ inputs.orbbec_sdk }}" = "true" ]; then
-            pkgs="$pkgs curl"
+          if [ "${{ inputs.orbbec_sdk }}" = "true" ] || [ "${{ inputs.cuda }}" = "true" ]; then
+            pkgs="$pkgs curl ca-certificates"
           fi
           # FFmpeg, found through pkg-config (cmake/vr_ffmpeg.cmake). NVDEC
           # needs nothing more: the toolkit mounts libcuda and libnvcuvid, which
@@ -132,6 +140,21 @@ jobs:
           fi
           # shellcheck disable=SC2086  # intentional: split $pkgs into separate args
           sudo apt-get install -y --no-install-recommends $pkgs
+          # The CUDA toolkit for VR_WITH_CUDA (cmake/vr_cuda.cmake): headers,
+          # link stubs and the nvcc FindCUDAToolkit locates it by; recon
+          # compiles no CUDA code. The driver's libraries come from the
+          # container toolkit at run time, as for NVDEC.
+          if [ "${{ inputs.cuda }}" = "true" ]; then
+            . /etc/os-release
+            repo="ubuntu$(echo "$VERSION_ID" | tr -d .)"
+            curl -fsSL -o /tmp/cuda-keyring.deb \
+              "https://developer.download.nvidia.com/compute/cuda/repos/${repo}/x86_64/cuda-keyring_1.1-1_all.deb"
+            sudo dpkg -i /tmp/cuda-keyring.deb
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends cuda-nvcc-13-4 \
+              cuda-cudart-dev-13-4 cuda-driver-dev-13-4 libnvjpeg-dev-13-4
+            echo "CUDAToolkit_ROOT=/usr/local/cuda-13.4" >> "$GITHUB_ENV"
+          fi
           # On a hosted runner, point the loader at lavapipe for the rest of the
           # job. On the GPU box we pin nothing: the NVIDIA Vulkan ICD injected by
           # the container toolkit is then the only ICD, so the Vulkan tests run on
@@ -315,7 +338,8 @@ jobs:
           for attempt in 1 2 3; do
             if cmake -S . -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
                 -DVR_WITH_ORBBEC=${{ inputs.orbbec_sdk && 'ON' || 'OFF' }} \
-                -DVR_WITH_FFMPEG=${{ inputs.ffmpeg && 'ON' || 'OFF' }}; then
+                -DVR_WITH_FFMPEG=${{ inputs.ffmpeg && 'ON' || 'OFF' }} \
+                -DVR_WITH_CUDA=${{ inputs.cuda && 'ON' || 'OFF' }}; then
               ok=1
               break
             fi

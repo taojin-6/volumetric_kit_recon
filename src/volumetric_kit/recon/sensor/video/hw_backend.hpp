@@ -38,7 +38,8 @@ std::optional<bool> hardware_decodes(VideoDecodeBackend backend,
 
 /// @return A device context for @p backend on the default device;
 ///         Unsupported if this FFmpeg lacks it or no device opens.
-Result<BufferRef> open_hardware_device(VideoDecodeBackend backend);
+Result<BufferRef> open_hardware_device(VideoDecodeBackend backend,
+                                       const char* name = nullptr);
 
 /// @return Whether @p backend's pictures can be cropped at the left and top.
 ///         Every one's can but VideoToolbox's: FFmpeg sizes its output at the

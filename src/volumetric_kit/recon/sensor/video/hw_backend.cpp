@@ -71,14 +71,15 @@ std::optional<bool> hardware_decodes(VideoDecodeBackend backend,
   return std::nullopt;
 }
 
-Result<BufferRef> open_hardware_device(VideoDecodeBackend backend) {
+Result<BufferRef> open_hardware_device(VideoDecodeBackend backend,
+                                       const char* name) {
   const AVHWDeviceType type = device_type(backend);
   if (type == AV_HWDEVICE_TYPE_NONE) {
     return Status::invalid_argument(std::string("no device for back end ") +
                                     to_string(backend));
   }
   AVBufferRef* device = nullptr;
-  const int err = av_hwdevice_ctx_create(&device, type, nullptr, nullptr, 0);
+  const int err = av_hwdevice_ctx_create(&device, type, name, nullptr, 0);
   if (err < 0) {
     return Status::unsupported(std::string(to_string(backend)) +
                                ": no device opens: " + ffmpeg_message(err));

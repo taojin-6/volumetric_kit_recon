@@ -49,6 +49,11 @@ if(@VR_WITH_FFMPEG@)
   endif()
 endif()
 
+# A static recon_sensor_video built with VR_WITH_CUDA names CUDA::cuda_driver.
+if(@VR_WITH_CUDA@)
+  find_dependency(CUDAToolkit @CUDAToolkit_VERSION_MAJOR@)
+endif()
+
 include("${CMAKE_CURRENT_LIST_DIR}/volumetric_kit_reconTargets.cmake")
 
 check_required_components(volumetric_kit_recon)

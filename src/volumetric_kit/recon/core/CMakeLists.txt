@@ -70,6 +70,7 @@ target_sources(
           # One call's uploads, fills, copies, dispatches and readbacks in one
           # submit.
           command_batch.cpp
+          external_memory.cpp
           vma_impl.cpp)
 
 # Generated headers: the VR_CORE_API export macro + the configured version

@@ -36,6 +36,11 @@ option(VR_WITH_ORBBEC
 option(VR_WITH_FFMPEG
        "Build the FFmpeg-backed video decoder (requires an installed FFmpeg)"
        OFF)
+# OFF by default too: NVIDIA's decoders hand their pictures over on the device
+# only with the CUDA toolkit installed (cmake/vr_cuda.cmake).
+option(VR_WITH_CUDA
+       "Keep NVIDIA-decoded pictures on the device (requires the CUDA toolkit)"
+       OFF)
 
 # Semicolon list of sanitizers (e.g. "address;undefined"); empty = off. Applied
 # globally -- see cmake/vr_sanitizers.cmake for why.
@@ -60,6 +65,9 @@ if(VR_WITH_ORBBEC)
 endif()
 if(VR_WITH_FFMPEG)
   include(vr_ffmpeg)
+endif()
+if(VR_WITH_CUDA)
+  include(vr_cuda)
 endif()
 
 # Vendored deps (VMA today) via pinned FetchContent. Exposes VR_VMA_INCLUDE_DIR

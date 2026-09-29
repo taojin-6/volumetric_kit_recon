@@ -901,7 +901,12 @@ arbitrary; it usually isn't.
   (FFmpeg hands its pictures over already cut from the wrong corner), so the
   decoder reads each SPS there and treats such a stream as refused.
   `VR_TEST_HEVC_BACKEND` makes its test require one back end, which is how
-  CI holds the Linux legs to NVDEC (the 2026-09-27 decoder decision).
+  CI holds the Linux legs to NVDEC (the 2026-09-27 decoder decision). With
+  `Options::device` and `VR_WITH_CUDA` (the CUDA 13 toolkit), an NVDEC
+  picture stays on the GPU: copied device to device into a Vulkan buffer
+  CUDA imported (`core`'s `create_exported_buffer`, on a device that
+  `exports_memory`), and handed out as NV12 in `DecodedPicture::device`; any
+  other picture comes to the host (the 2026-09-28 decoded-frame decision).
   **`sensor/utils`'s `GpuFramePrep`** undistorts a `RawFrame` on the device:
   depth sampled at the nearest pixel, colour bilinearly and converted from
   Y'CbCr in the same pass, each camera keeping its intrinsics and pose. Its

@@ -25,6 +25,14 @@ std::optional<ColorEncoding> resolve_encoding(
     AVColorTransferCharacteristic transfer,
     AVColorPrimaries primaries) noexcept;
 
+// The matrix, range and encoding @p frame declares, set on @p picture as
+// PictureConverter::convert sets them: @p unlabelled_color stands in for a
+// frame that declares no matrix.
+void describe_color(
+    const AVFrame& frame,
+    const std::optional<VideoColorDescription>& unlabelled_color,
+    DecodedPicture& picture);
+
 class PictureConverter {
  public:
   /// @param who What its errors are reported as (the decoder's name).
