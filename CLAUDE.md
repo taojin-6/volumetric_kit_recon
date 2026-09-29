@@ -329,6 +329,10 @@ order. Change the decision, its entry there, and this list together.
   device: the depth camera decides what is visible, its map what the colour
   camera sees, and the colour camera gives the coordinate; a view's device
   depth and coverage are copied on the device rather than staged.
+- [**2026-09-29**](DECISIONS.md#2026-09-29--rig_viewer-draws-a-live-orbbec-rig-raw-sets-prepared-fused-and-textured-on-the-gpu-the-atlas-filled-by-device-copies-recorded-in-gfxs-frame-and-the-frame-preps-colour-shared-with-gfxs-queue-family) —
+  `rig_viewer` draws a live Orbbec rig: raw sets prepared, fused and textured
+  on the GPU, the atlas filled by device copies recorded in gfx's frame, and
+  the frame prep's colour shared with gfx's queue family.
 
 ## Provenance & salvage policy
 
@@ -1074,8 +1078,10 @@ arbitrary; it usually isn't.
   vertices by a hash of their position, so the figures reproduce whatever
   order marching cubes' atomics emitted the mesh in.
 
-**Examples** (`examples/`). All five poll their frames through
-`sensor::ICameraCapture&` — the fuse loop never learns what is behind it. The
+**Examples** (`examples/`). Five of the six poll their frames through
+`sensor::ICameraCapture&` — the fuse loop never learns what is behind it.
+`rig_viewer` reads the rig's raw *sets* (`OrbbecRig::poll_raw_set`) instead,
+as `fuse_orbbec --gpu --rig` does, since the contract has no set. The
 four dataset examples take `ReplicaCapture` as the source: frame cap, stride
 and the depth gate are its options, stamped on each frame it hands out, and its
 disk probe at `open` visits only the frames those options select. An empty
@@ -1112,6 +1118,12 @@ fuses the rig as an `OrbbecRig`, posed by `--calibration`. With `--gpu` the
 source serves raw frames, which the loop learns from `raw_frames()`, and each
 is prepared by `GpuFramePrep` and fused through `fuse_device_frame.hpp`, the
 one header that pulls in `sensor/utils`.
+**`rig_viewer`** (`VR_BUILD_VIEWER` with `VR_WITH_ORBBEC` and
+`VR_WITH_FFMPEG`) is `fuse_viewer`'s live-rig sibling: raw sets prepared,
+fused and textured from every camera on the GPU, and the atlas filled by
+device copies recorded in gfx's frame (the 2026-09-29 decision). The two
+viewers share `viewer_common.hpp`: the teardown guards, and the render side of
+the mesh ring.
 **`codec_replica`** fuses a Replica sequence as `fuse_replica` does, and
 streams the growing grid through the codec: every `--encode-every` frames it
 encodes, then decodes into a player grid built from `read_frame_info` and

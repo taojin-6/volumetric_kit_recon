@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <utility>
 
 #include <vk_mem_alloc.h>
@@ -58,6 +59,16 @@ VmaMemoryUsage to_vma_usage(MemoryUsage memory) {
 }
 
 }  // namespace
+
+Status check_queue_family_count(std::uint32_t count, const char* caller) {
+  if (count > BufferDesc::kMaxQueueFamilies) {
+    return Status::invalid_argument(
+        std::string(caller) + ": queue_family_count must be 0.." +
+        std::to_string(BufferDesc::kMaxQueueFamilies) + " (got " +
+        std::to_string(count) + ")");
+  }
+  return {};
+}
 
 Result<Allocator> Allocator::create(VkInstance instance, const Device& device) {
   if (instance == VK_NULL_HANDLE) {

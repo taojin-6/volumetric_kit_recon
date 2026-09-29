@@ -32,6 +32,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `examples`: **the viewers' gfx pin moves from #93 to #98**, whose
+  `kHybridMeshNormals` is `rig_viewer`'s normals shading mode. `fuse_viewer`
+  and `fuse_render` build unchanged at it.
 - `texture`: **the multi-view atlas grows in rows.**
   `side_by_side_atlas` lays n views out in floor(sqrt(n)) rows, so up to
   three sit side by side and four make two rows of two: four 4K views make a
@@ -148,6 +151,21 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `examples`: **`rig_viewer`**, a live window over a synced rig of Orbbec
+  cameras (`VR_BUILD_VIEWER` with `VR_WITH_ORBBEC` and `VR_WITH_FFMPEG`).
+  The rig's raw sets are prepared, fused and textured from every camera on
+  the GPU. The atlas, one tile per camera, is filled by device copies
+  recorded in gfx's frame. It shades unlit, lit or by normal, orbits, and
+  looks out of any camera. Defaults: 1 cm voxels and H.265 colour. Ctrl+C
+  stops the rig before it exits. See the 2026-09-29 decision.
+- `sensor`: **`GpuFramePrepConfig::color_queue_families`**, the queue
+  families a pass's colour buffers are shared with, as `MarchingCubesConfig`'s
+  are for the mesh. A renderer on another family can then read a frame's
+  colour. Depth stays EXCLUSIVE, since only recon reads it, and an empty
+  config (the default) leaves both EXCLUSIVE, as before. Test:
+  `recon_sensor_gpu_frame_prep`.
+- `core`: **`check_queue_family_count`**, the bound `MarchingCubes::create`
+  and `GpuFramePrep::create` both put on a config's fixed family array.
 - `sensor`: **raw Orbbec frames over MJPEG.** A raw capture or rig no longer
   needs H.265: over MJPEG it streams the camera's JPEGs, decoded on a
   thread per camera by `JpegDecoder`, onto `OrbbecStreamOptions::device`

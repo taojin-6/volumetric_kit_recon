@@ -96,6 +96,7 @@
 #include "replica_capture.hpp"  // vr_example::ReplicaCapture
 #include "shared_device.hpp"
 #include "stage_metrics.hpp"  // fuse_viewer::to_sections
+#include "viewer_common.hpp"
 
 #include "volumetric_kit/recon/core/allocator.hpp"
 #include "volumetric_kit/recon/core/device.hpp"
@@ -277,43 +278,6 @@ bool parse_args(int argc, char** argv, Options& o) {
   if (o.cam_params.empty()) o.cam_params = o.scene_dir + "/../cam_params.json";
   return true;
 }
-
-VkExtent2D window_extent(GLFWwindow* window) {
-  int width = 0, height = 0;
-  glfwGetFramebufferSize(window, &width, &height);
-  return {static_cast<std::uint32_t>(std::max(1, width)),
-          static_cast<std::uint32_t>(std::max(1, height))};
-}
-
-// Signals a fuse thread to quit and joins it on scope exit, so an exception
-// unwinding the render loop cannot destroy a still-joinable std::thread (which
-// would call std::terminate). Declared right after the thread so it runs first
-// at scope exit -- while the recon resources the thread borrows are still live.
-struct QuitJoin {
-  std::thread& thread;
-  std::atomic<bool>& quit;
-  ~QuitJoin() {
-    quit.store(true);
-    if (thread.joinable()) thread.join();
-  }
-};
-
-// Shuts the ImGui GLFW platform backend down at scope exit. Declared *after*
-// the overlay so it runs first: ImGui_ImplGlfw_Shutdown touches the ImGui
-// context the overlay owns, so it must not outlive it.
-struct ImGuiGlfwShutdown {
-  bool active;
-  ~ImGuiGlfwShutdown() {
-    if (active) ImGui_ImplGlfw_Shutdown();
-  }
-};
-
-// Detaches the profiler from the app's frame loop at scope exit, before the
-// profiler itself is destroyed -- the loop holds a bare pointer to it.
-struct ProfilerDetach {
-  vg::app::WindowedApp& app;
-  ~ProfilerDetach() { app.set_profiler(nullptr); }
-};
 
 // What the reconstruction side is holding, shown beside the renderer's frame
 // metrics. gfx's FrameMetrics carries one memory pair (its own allocator's),
@@ -528,7 +492,7 @@ int run(GLFWwindow* window, const Options& opt) {
 
   vg::app::WindowedAppConfig config;
   config.app_name = "fuse_viewer";
-  config.swapchain.extent = window_extent(window);
+  config.swapchain.extent = fuse_viewer::window_extent(window);
   config.swapchain.depth_format = VK_FORMAT_D32_SFLOAT;
   config.frames_in_flight = 2;
   // The surface already exists -- picking a present-capable device required
@@ -700,7 +664,7 @@ int run(GLFWwindow* window, const Options& opt) {
   // which set_memory_source requires.
   profiler.set_memory_source(&app.allocator());
   app.set_profiler(&profiler);
-  const ProfilerDetach profiler_guard{app};
+  const fuse_viewer::ProfilerDetach profiler_guard{app};
 
   // --- gfx ui: the Dear ImGui performance overlay ----------------------------
   // Optional: --no-overlay skips both the context and the platform backend, so
@@ -732,7 +696,7 @@ int run(GLFWwindow* window, const Options& opt) {
   }
   // Runs before `overlay` is destroyed (reverse declaration order), which the
   // ImGui backend requires: its Shutdown touches the context the overlay owns.
-  const ImGuiGlfwShutdown imgui_glfw_guard{opt.overlay};
+  const fuse_viewer::ImGuiGlfwShutdown imgui_glfw_guard{opt.overlay};
 
   // One sampler shared by every atlas version (immutable; outlives them all).
   auto sampler_result = vg::Sampler::create(app.device().handle());
@@ -1225,7 +1189,7 @@ int run(GLFWwindow* window, const Options& opt) {
     fusing_done.store(true);
     std::printf("fuse thread: done (%zu frames)\n", fused_count.load());
   });
-  QuitJoin fuse_guard{fuse_thread, quit};
+  fuse_viewer::QuitJoin fuse_guard{fuse_thread, quit};
 
   // --- Render thread (main): pick up the newest mesh + trajectory, upload,
   // draw following the capture path.
@@ -1285,7 +1249,7 @@ int run(GLFWwindow* window, const Options& opt) {
   while (glfwWindowShouldClose(window) == GLFW_FALSE) {
     glfwPollEvents();
 
-    auto frame = app.begin_frame(window_extent(window));
+    auto frame = app.begin_frame(fuse_viewer::window_extent(window));
     if (!frame.ok()) {
       std::fprintf(stderr, "begin_frame: %s\n",
                    frame.status().message().c_str());
@@ -1335,22 +1299,9 @@ int run(GLFWwindow* window, const Options& opt) {
       recon_panel.preloaded_bytes = shared_preloaded_bytes;
       recon_panel.extract = shared_extract;
 
-      frame_generations[render_frame.slot] = 0;
-      std::uint64_t oldest_in_flight = 0;
-      for (const std::uint64_t g : frame_generations) {
-        if (g != 0 && (oldest_in_flight == 0 || g < oldest_in_flight))
-          oldest_in_flight = g;
-      }
-      // No other frame in flight holds one, so the floor is what *this* frame
-      // is about to draw -- releasing that would hand recon the slot under a
-      // live draw. Only when nothing has been committed at all (generation 0,
-      // since recon numbers extracts from 1) does everything taken so far
-      // become releasable, which is the path that drains the ring when takes
-      // are accepted but never drawn.
-      if (oldest_in_flight == 0) oldest_in_flight = live_view.generation;
-      // Generations count from 1, so there is nothing below the first.
-      shared_released_through =
-          oldest_in_flight > 0 ? oldest_in_flight - 1 : newest_taken_generation;
+      shared_released_through = fuse_viewer::retire_and_release_mark(
+          frame_generations, render_frame.slot, live_view.generation,
+          newest_taken_generation);
       // Taking frees the fuse thread whether or not the mesh proves drawable
       // below -- except once latched, where declining to take is also what
       // stops the extracts that would follow, and while one is still awaiting
@@ -1401,37 +1352,19 @@ int run(GLFWwindow* window, const Options& opt) {
         taken_atlas.clear();
         taken_version = 0;
       } else if (taken_version != 0) {
-        // Verified, not assumed. recon reports the usage its buffers were
-        // created with -- and their sharing mode -- precisely because Vulkan
-        // cannot be asked, and binding one that lacks a usage bit is a
-        // validation-layer-only diagnostic: undefined behaviour with layers
-        // off, which is the shipping configuration.
-        //
-        // The sharing mode is the term that can actually vary, and the one with
-        // most at stake: reading an EXCLUSIVE buffer from a family that does
-        // not own it is undefined outright, and on Apple -- where Metal has no
-        // queue-ownership concept -- undefined in the way that appears to work.
-        // Checked only where the families really differ, since recon collapses
-        // the pair to EXCLUSIVE when they are one family and that is correct.
-        const bool cross_family =
-            shared.graphics_family != shared.compute_family;
-        const bool sharing_ok =
-            !cross_family || taken.sharing_mode == VK_SHARING_MODE_CONCURRENT;
-        const bool bindable =
-            taken.valid() && sharing_ok &&
-            (taken.vertex_usage & VK_BUFFER_USAGE_VERTEX_BUFFER_BIT) != 0 &&
-            (taken.index_usage & VK_BUFFER_USAGE_INDEX_BUFFER_BIT) != 0 &&
-            (taken.indirect_usage & VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT) != 0;
-        if (!bindable) {
-          std::fprintf(
-              stderr, "fuse_viewer: %s\n",
-              sharing_ok
-                  ? "extracted mesh is not bindable as geometry (usage bits or "
-                    "handles missing); drawing stops here"
-                  : "extracted mesh buffers are VK_SHARING_MODE_EXCLUSIVE but "
-                    "recon and gfx are on different queue families; binding "
-                    "them would be undefined. Drawing stops here");
+        if (const char* why = fuse_viewer::unbindable_reason(
+                taken, shared.graphics_family != shared.compute_family)) {
+          std::fprintf(stderr,
+                       "fuse_viewer: the extracted mesh cannot be bound as "
+                       "geometry (%s); drawing stops here\n",
+                       why);
           mesh_unusable = true;
+          // Dropped, so this branch is not re-entered and re-said every
+          // frame. Its slot is stranded, which no longer matters: nothing is
+          // taken once latched, so nothing is extracted either.
+          taken = rmesh::DeviceMesh{};
+          taken_atlas.clear();
+          taken_version = 0;
         } else {
           // Build this version's atlas (its keyframe image, else the white
           // dummy) and commit it with the mesh, or commit neither -- so the
