@@ -68,7 +68,9 @@ VR_SENSOR_ORBBEC_API const char* to_string(OrbbecSyncMode mode) noexcept;
 
 /// @brief How the colour stream crosses the wire.
 enum class OrbbecColorCodec {
-  /// Motion JPEG, decoded by the SDK. About 185 Mbit/s at 4K.
+  /// Motion JPEG, decoded by the SDK -- or, for raw frames, by
+  /// sensor/video's `JpegDecoder` on a thread per camera, onto the GPU where
+  /// nvJPEG or VideoToolbox takes it. About 185 Mbit/s at 4K.
   Mjpeg,
   /// H.265, about 21 Mbit/s at 720p and at 4K, decoded by
   /// sensor/video's `HevcDecoder` on a thread per camera. Needs a build with
@@ -107,7 +109,9 @@ struct OrbbecCaptureStats {
   /// from it, and dropped), and the colour that did not decode -- after a
   /// gap in the stream (a frame lost on the network, or empty), a decode
   /// error or a decoder falling two seconds behind, until the next key
-  /// frame, and before the first. Zero for MJPEG. Each is counted once, so
+  /// frame, and before the first. For raw MJPEG, a JPEG that did not
+  /// decode, a pair missing a frame, and those a decoder two seconds behind
+  /// let go; zero for host MJPEG. Each is counted once, so
   /// `delivered + dropped + failed + lost <= received`; the difference is a
   /// pair still pending or discarded by @ref OrbbecCapture::stop.
   std::uint64_t lost = 0;
@@ -139,12 +143,13 @@ struct OrbbecStreamOptions {
   /// @ref OrbbecRig::poll_raw, for `sensor/utils`'s GPU pass to undistort
   /// and convert: the host undistorts, registers and converts nothing, and
   /// depth and colour keep their own cameras, lenses and poses, read from the
-  /// camera's factory calibration. Needs @ref OrbbecColorCodec::Hevc, whose
-  /// decoded Y'CbCr planes the pass converts.
+  /// camera's factory calibration. Either codec is decoded for the pass, so
+  /// raw frames need a build with VR_WITH_FFMPEG.
   bool raw = false;
   /// With @ref raw, the device the GPU pass prepares the frames on. A
-  /// picture the hardware decoder leaves there -- NVDEC's (VR_WITH_CUDA) or
-  /// VideoToolbox's -- stays there, and a raw frame's colour is that picture
+  /// picture the hardware decoder leaves there -- NVDEC's or nvJPEG's
+  /// (VR_WITH_CUDA), or VideoToolbox's -- stays there, and a raw frame's
+  /// colour is that picture
   /// (`YuvImage::device` or `YuvImage::image`) rather than host planes, so it
   /// never crosses to the host. Null, or a decode elsewhere, gives host
   /// planes. Borrowed: it must outlive the capture and every frame on it.

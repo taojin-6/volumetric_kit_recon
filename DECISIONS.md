@@ -6664,7 +6664,7 @@ or `YuvImage::image`). Any other picture comes as the I420 planes it came as
 before.
 
 The picture crosses the mailbox with an SDK colour frame
-(`device_picture_frame.hpp`). The decode thread, the mailbox, a rig's
+(`picture_frames.hpp`). The decode thread, the mailbox, a rig's
 grouping and the held pair all handle frame sets, as before. The picture then
 lives exactly as long as its frame, and is dropped, grouped and held with it;
 changing the mailbox's element type instead would have touched every one of
@@ -6710,12 +6710,49 @@ That is about 1.4 ms less CPU per camera frame: the copy to the host, the
 conversion, the I420 frame and the staging copy. The cameras set the rate
 either way.
 
-**Next**, in order:
+**MJPEG raw frames have landed.** A raw stream no longer needs H.265. For
+MJPEG it streams the camera's MJPG mode, the JPEGs themselves, where the
+host path takes the SDK's RGB mode. Each camera's `JpegColorDecoder` decodes
+every pair on a thread of its own, ahead of the mailbox as H.265's decoder
+does, through `JpegDecoder` onto the device where nvJPEG or VideoToolbox
+takes the JPEG and in software to I420 otherwise. It hands the picture on in
+the same frame (`picture_frames.hpp`, which now holds both kinds of colour
+frame, and `PlanesColor`).
 
-1. MJPEG raw frames: the camera's JPEG bytes, decoded on a thread per camera
-   by nvJPEG or VideoToolbox into a picture on the device.
-2. Measured afterwards: the colour kernel reading Apple's plane images
-   directly, which saves the copy's 0.28-0.31 ms of GPU.
+- On its own thread, so a rig's four cameras decode at once rather than one
+  after another on the polling thread, where VideoToolbox's 6 ms a 4K frame
+  would have cost a set 24.
+- A JPEG depends on no other frame, so there is no gate: a pair missing a
+  frame, an empty colour frame, a JPEG that does not decode, or the oldest
+  pairs once the queue is two seconds deep each cost only themselves, all
+  counted in `stats().lost`.
+- The MJPG mode's calibration must be the RGB mode's, byte for byte, as
+  H.265's must.
+- `VR_ORBBEC_WITH_HEVC` becomes `VR_ORBBEC_WITH_VIDEO`, since it now gates
+  both decoders, and raw frames without them are refused at open.
+
+Measured on the lab rig, four Femto Megas at 4K and 25 fps over the wired
+link, `fuse_orbbec --rig`, 600 frames, M5 Max, Release:
+
+| path | user CPU | sys CPU | poll a frame |
+|---|---|---|---|
+| host MJPEG (the SDK decodes, the host undistorts and registers) | 60.0 s | 11.5 s | 18.6 ms |
+| raw MJPEG, `--gpu` | 0.83-1.09 s | 3.66-4.37 s | 0.02 ms |
+| raw H.265, `--gpu --hevc` | 0.61 s | 1.71-1.75 s | 0.02 ms |
+
+Raw MJPEG takes about a sixteenth of the host path's CPU, and a little more
+than H.265: its system time is mostly the kernel receiving the JPEGs, about
+185 Mbit/s a camera against H.265's 21. H.265 stays the rig's default for
+that reason and for the link's headroom. `fuse_orbbec --gpu` no longer
+implies `--hevc`. It did, and the first MJPEG runs measured H.265 for that
+reason; the table is the rerun. The offline test
+holds the decoder to the committed JPEG. It checks I420 frames in software,
+VideoToolbox images given a device, each released with its frame, and each
+loss counted once. On the live camera, raw MJPEG frames arrive as images and
+match the SDK's undistortion and registration at 720p and 4K, as H.265's do.
+
+**Next**: measured first, the colour kernel reading Apple's plane images
+directly, which saves the copy's 0.28-0.31 ms of GPU.
 
 ### 2026-09-28 — Projective texturing takes a colour camera of its own and depth on the device: the depth camera decides what is visible, its map what the colour camera sees, and the colour camera gives the coordinate; a view's device depth and coverage are copied on the device rather than staged.
 

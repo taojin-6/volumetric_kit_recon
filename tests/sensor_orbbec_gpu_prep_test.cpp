@@ -3,8 +3,9 @@
 
 // The GPU pass against the SDK's host path, on a real camera and a still
 // scene: one capture through the host path (the SDK undistorts colour and
-// registers depth to it), one raw through GpuFramePrep, its colour decoded
-// onto the pass's device where the hardware leaves it there.
+// registers depth to it), and raw through GpuFramePrep over each codec, H.265
+// and MJPEG, the colour decoded onto the pass's device where the hardware
+// leaves it there.
 //   - Colour: the two undistorted images, gains fitted per channel for the
 //     exposure change between captures, line up best unshifted in the centre
 //     and in every corner, where a wrong lens model moves them apart.
@@ -65,15 +66,16 @@ struct Frame {
 
 std::uint32_t g_fps = 30;
 
-sensor::OrbbecCapture::Options options_for(const char* serial, std::uint32_t w,
-                                           std::uint32_t h, bool raw,
-                                           const vr::Device* device = nullptr) {
+sensor::OrbbecCapture::Options options_for(
+    const char* serial, std::uint32_t w, std::uint32_t h, bool raw,
+    const vr::Device* device = nullptr,
+    sensor::OrbbecColorCodec codec = sensor::OrbbecColorCodec::Hevc) {
   sensor::OrbbecCapture::Options o;
   o.serial = serial;
   o.fps = g_fps;
   o.color_width = w;
   o.color_height = h;
-  o.color_codec = sensor::OrbbecColorCodec::Hevc;
+  o.color_codec = codec;
   o.raw = raw;
   o.device = device;
   return o;
@@ -130,10 +132,11 @@ int grab_host(const char* serial, std::uint32_t w, std::uint32_t h,
 }
 
 int grab_gpu(const char* serial, std::uint32_t w, std::uint32_t h,
-             vr::Device& device, vr::Allocator& allocator,
-             sensor::GpuFramePrep& prep, Frame* out) {
-  auto opened =
-      sensor::OrbbecCapture::open(options_for(serial, w, h, true, &device));
+             sensor::OrbbecColorCodec codec, vr::Device& device,
+             vr::Allocator& allocator, sensor::GpuFramePrep& prep, Frame* out) {
+  std::printf("raw %s:\n", sensor::to_string(codec));
+  auto opened = sensor::OrbbecCapture::open(
+      options_for(serial, w, h, true, &device, codec));
   if (!opened) {
     std::fprintf(stderr, "FAIL: open raw: %s\n",
                  opened.status().message().c_str());
@@ -414,14 +417,18 @@ int main() {
   auto prep = sensor::GpuFramePrep::create(device.value(), allocator.value());
   CHECK(prep.ok());
 
-  Frame host, raw;
+  Frame host;
   if (grab_host(serial, w, h, &host) != 0) return 1;
-  if (grab_gpu(serial, w, h, device.value(), allocator.value(), prep.value(),
-               &raw) != 0) {
-    return 1;
+  for (const auto codec :
+       {sensor::OrbbecColorCodec::Hevc, sensor::OrbbecColorCodec::Mjpeg}) {
+    Frame raw;
+    if (grab_gpu(serial, w, h, codec, device.value(), allocator.value(),
+                 prep.value(), &raw) != 0) {
+      return 1;
+    }
+    if (check_color(host, raw) != 0) return 1;
+    if (check_depth(host, raw) != 0) return 1;
   }
-  if (check_color(host, raw) != 0) return 1;
-  if (check_depth(host, raw) != 0) return 1;
   std::puts("sensor_orbbec_gpu_prep: OK");
   return 0;
 }

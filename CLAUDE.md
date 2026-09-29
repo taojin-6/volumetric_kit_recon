@@ -980,8 +980,10 @@ arbitrary; it usually isn't.
   `fuse_orbbec --gpu` fuses them. Given `OrbbecStreamOptions::device`, its
   H.265 colour is decoded onto that device and stays there, the picture
   carried through the mailbox by an SDK frame whose bytes only name it, so
-  a copy of the frame owns nothing (`device_picture_frame.hpp`). Its
-  hardware test holds it
+  a copy of the frame owns nothing (`picture_frames.hpp`); for raw MJPEG it
+  streams the camera's JPEGs, and each camera's `JpegColorDecoder` decodes
+  them on a thread of its own onto the device. Its hardware test holds both
+  codecs
   to the SDK's own undistortion and registration on a still scene (the
   2026-09-28 GPU pre-processing decision).
 
@@ -1179,10 +1181,9 @@ one camera (`GpuFramePrep`, the 2026-09-28 GPU pre-processing decision: at 4K
 it takes the host from 15.5 ms of undistortion and registration a frame to
 none, and the run's CPU eightfold down) and for the rig's raw sets. NVDEC
 and nvJPEG hand their pictures over on the device, and VideoToolbox both
-kinds, and a raw Orbbec frame's H.265 colour stays on the device; what is
-left is MJPEG raw frames, the camera's JPEG bytes decoded on the device
-(`frame_conversion.cpp`, the 2026-09-28 decoded-frame decision's order);
-and processing a host rig
+kinds, and a raw Orbbec frame's colour stays on the device over either
+codec; what is left there is the colour kernel reading Apple's plane images
+directly, measured first (`gpu_frame_prep.cpp`); and processing a host rig
 set's frames in parallel, one thread per camera, rather than the ~11 ms one
 after another costs for four (`orbbec_rig.cpp`). For H.265: the camera's
 encoder settings, its key-frame interval above all, which sets what a lost
