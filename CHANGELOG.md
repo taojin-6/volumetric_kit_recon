@@ -32,6 +32,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `examples`: **`rig_viewer` remeshes on every set by default**, not every
+  fifth, so the mesh updates at the rig's set rate (about 26-29 a second on
+  the lab rig at 1 cm), and its Rig panel and status line report the
+  measured mesh update rate. `--remesh-every N` still sets it.
 - `examples`: **the viewers' gfx pin moves from #93 to #98**, whose
   `kHybridMeshNormals` is `rig_viewer`'s normals shading mode. `fuse_viewer`
   and `fuse_render` build unchanged at it.
