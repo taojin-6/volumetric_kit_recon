@@ -38,8 +38,9 @@ struct ComputeKernel;
 /// writes -- always around a dispatch, and between two transfers when they
 /// share a buffer one of them writes -- and the last makes everything visible
 /// to the host and to a renderer drawing the result, as far as the queue
-/// family allows. Fills and uploads into one buffer at rising, disjoint
-/// offsets touch no byte twice, so a run of them needs none. Kernels keep
+/// family allows. Fills, uploads and copies into one buffer at rising,
+/// disjoint offsets touch no byte twice, so a run of them needs none, once
+/// no command in the run writes a copy's source. Kernels keep
 /// their debug-utils regions and their @ref GpuStageScope spans, and an
 /// upload given a span is timed too. `dispatch()` is a batch of one dispatch.
 ///

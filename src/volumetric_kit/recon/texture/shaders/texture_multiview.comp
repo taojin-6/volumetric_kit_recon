@@ -19,15 +19,13 @@
 // vertices take the (-1, -1) sentinel, so the renderer uses the vertex colour.
 // Every vertex is written on every call.
 //
-// A view whose colour image has a camera of its own (has_color, as a
-// GpuFramePrep frame's does) must also see the triangle's front from that
-// camera and record all three vertices inside its image, and the vertices take
-// their coordinates from it rather than from the depth camera. The depth
-// camera still decides occlusion, and a point the colour camera cannot see
-// past a nearer surface is not caught: with no depth map in the colour
-// camera's frame there is nothing to test it against, so a sliver beside an
-// occluding edge can take the occluder's colour -- the fringe tsdf documents
-// for the same unregistered frames, about a baseline's parallax wide.
+// The tile is the view's colour camera's image, and the vertices take their
+// coordinates from that camera. For an image registered to the depth camera
+// the colour camera is the depth camera again; one of its own (a GpuFramePrep
+// frame's) must also see the triangle's front and record all three vertices
+// inside its image, on pixels the image marks as recorded (has_coverage), and
+// nothing the depth map shows may stand between it and any of them
+// (color_sees). The tests run cheapest first, the depth reads last.
 //
 // Ported from implicit_surface_compression's triangles_to_uv_multicam_kernel
 // (texture_mapping.cu) and the prior engine's texture mapper, which score the
@@ -46,12 +44,11 @@
 
 layout(local_size_x = 256) in;
 
-// One view (mirrors ViewParams in projective_texturer.cpp, 208 bytes under
+// One view (mirrors ViewParams in projective_texturer.cpp, 212 bytes under
 // scalar layout): its depth camera, where its depth starts in depth[], its
 // tile -- the colour image, at the image's own resolution, which may be larger
-// than the depth map's -- and, when has_color is set, the camera that image
-// was taken with; otherwise the image is registered to the depth camera and
-// `color` is not read.
+// than the depth map's -- where the image's coverage starts in coverage[] when
+// it marks it, and the camera the image was taken with.
 struct View {
   DepthCameraParams cam;
   uint depth_offset;
@@ -59,11 +56,13 @@ struct View {
   uint tile_y;
   uint tile_width;
   uint tile_height;
-  uint has_color;
+  uint coverage_offset;
+  uint has_coverage;
   ColorCameraParams color;
 };
 
-// Binding 1, every view's depth end to end, is texture_common.glsl's.
+// Bindings 1 and 3, every view's depth and every marked image's coverage end
+// to end, are texture_common.glsl's.
 layout(set = 0, binding = 0, scalar) buffer Vertices { Vertex vertices[]; };
 layout(set = 0, binding = 2, scalar) readonly buffer Views { View views[]; };
 
@@ -76,17 +75,14 @@ layout(push_constant, scalar) uniform PushConstants {
   float depth_weight;         // score cost per metre of depth disagreement
 } pc;
 
-// A pixel of the view's image -> its atlas coordinate. The image is the colour
-// camera's when the view has one. Otherwise it is the depth map, and the pixel
-// centre as a fraction of the depth map is the same fraction of a colour image
-// registered to it (the argument ProjectiveTexturer's class note makes), so it
-// scales to the tile at any size. Then clamped half a texel inside the TILE,
-// so bilinear filtering never reaches the next view's image.
+// A pixel of the view's colour camera -> its atlas coordinate. For a
+// registered image that camera is the depth camera, whose map may be smaller
+// than the image, and the pixel centre as a fraction of the depth map is the
+// same fraction of the image (the argument ProjectiveTexturer's class note
+// makes), so it scales to the tile at any size. Then clamped half a texel
+// inside the TILE, so bilinear filtering never reaches the next view's image.
 vec2 atlas_uv(View view, vec2 px) {
-  vec2 image = view.has_color != 0u
-                   ? vec2(view.color.width, view.color.height)
-                   : vec2(view.cam.width, view.cam.height);
-  vec2 fraction = (px + 0.5) / image;
+  vec2 fraction = (px + 0.5) / vec2(view.color.width, view.color.height);
   vec2 size = vec2(view.tile_width, view.tile_height);
   vec2 in_tile = clamp(fraction * size, vec2(0.5), size - 0.5);
   return (vec2(view.tile_x, view.tile_y) + in_tile) /
@@ -96,7 +92,7 @@ vec2 atlas_uv(View view, vec2 px) {
 // The triangle's pixels in colour camera `c`, when that camera sees its front
 // -- the same test as the depth camera's below, since a colour camera behind
 // a sheet images the other side of it -- and records all three vertices
-// inside its image.
+// inside its image. Reads no memory, so it runs before the depth is sampled.
 bool color_pixels(ColorCameraParams c, vec3 world[3], out vec2 px[3]) {
   vec3 q[3];
   for (int k = 0; k < 3; k++) {
@@ -147,6 +143,24 @@ void main() {
     if (!(facing > 0.0 && nn > 1e-24 && cc > 1e-24)) {
       continue;
     }
+    // The colour camera next, with the image's coverage: no depth read yet.
+    vec2 cpx[3];
+    if (!color_pixels(view.color, world, cpx)) {
+      continue;
+    }
+    if (view.has_coverage != 0u) {
+      vec2 size = vec2(view.color.width, view.color.height);
+      uvec2 image = uvec2(view.tile_width, view.tile_height);
+      bool recorded = true;
+      for (int k = 0; k < 3 && recorded; k++) {
+        recorded = covered(view.coverage_offset, cpx[k], size, image);
+      }
+      if (!recorded) {
+        continue;
+      }
+    }
+    // Then the depth camera's line of sight to each vertex, and last the
+    // colour camera's, which walks the depth map.
     vec2 px[3];
     float min_diff = 3.4e38;
     bool ok = true;
@@ -159,13 +173,12 @@ void main() {
         min_diff = min(min_diff, diff);
       }
     }
-    if (!ok) {
-      continue;
+    vec3 color_eye = world_to_camera(view.cam, view.color.cam_to_world[3].xyz);
+    for (int k = 0; k < 3 && ok; k++) {
+      ok = color_sees(view.cam, view.depth_offset, p_cam[k], px[k], color_eye,
+                      pc.occlusion_threshold);
     }
-    // Visible to the depth camera. A view with a colour camera of its own
-    // must be seen by it too, and its coordinates are that camera's pixels;
-    // the depth pixels have done their work.
-    if (view.has_color != 0u && !color_pixels(view.color, world, px)) {
+    if (!ok) {
       continue;
     }
     float cos_angle = facing * inversesqrt(nn) * inversesqrt(cc);
@@ -173,7 +186,7 @@ void main() {
     if (best < 0 || score > best_score) {
       best = int(v);
       best_score = score;
-      best_px = px;
+      best_px = cpx;
     }
   }
 

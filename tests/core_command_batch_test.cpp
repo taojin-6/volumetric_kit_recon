@@ -5,7 +5,8 @@
 // run out of place -- an upload after a dispatch, a readback before one -- over
 // a device-local and a host-visible buffer, since a buffer's memory type must
 // not change what a batch does. Uploads inline, staged and packed by the
-// caller, several readbacks in one batch, transfers left unordered, the
+// caller, several readbacks in one batch, transfers left unordered (fills,
+// uploads and copies rising through one buffer among them), the
 // refusals, the moves, timed dispatches and uploads, and a throwing record.
 // Skips (exit 0) where no device is present.
 
@@ -372,6 +373,32 @@ int main() {
                                  : i < lo + n ? over[i - lo]
                                               : second[i - n];
       CHECK(back[i] == want);
+    }
+  }
+
+  // Copies from other buffers into one at rising, disjoint offsets share a
+  // run too. One whose source the run has written keeps its barrier, and
+  // copies what was written.
+  {
+    const VkDeviceSize half = kBytes / 2;
+    vr::Result<vr::Buffer> c_result =
+        vr::device_storage_buffer(allocator, kBytes);
+    CHECK(c_result.ok());
+    const vr::Buffer c = std::move(c_result).value();
+    {
+      vr::CommandBatch batch(device, allocator);
+      CHECK(batch.upload(a, 0, p.data(), kBytes).ok());
+      CHECK(batch.submit().ok());
+    }
+    vr::CommandBatch batch(device, allocator);
+    CHECK(batch.fill(b, 0, kBytes, 9u).ok());
+    CHECK(batch.copy(a, 0, c, 0, half / 2).ok());
+    CHECK(batch.copy(a, half / 2, c, half / 2, half / 2).ok());
+    CHECK(batch.copy(b, 0, c, half, half).ok());
+    CHECK(batch.readback(c, 0, kBytes, got.data()).ok());
+    CHECK(batch.submit().ok());
+    for (std::uint32_t i = 0; i < kCount; ++i) {
+      CHECK(got[i] == (i < kCount / 2 ? p[i] : 9u));
     }
   }
 

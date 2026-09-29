@@ -11,6 +11,7 @@
 /// layout; the renderer samples the packed atlas.
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <vector>
 
@@ -41,15 +42,17 @@ namespace volumetric_kit::recon::texture {
 /// visible, and the vertex is projected into the colour camera for its
 /// coordinate, so the tile is that camera's image at its size.
 ///
-/// The depth is a host array (@ref depth) or a storage buffer already on the
-/// device (@ref depth_buffer), exactly one of the two. A device frame therefore
+/// The depth is a host array (@ref depth) or a buffer already on the device
+/// (@ref depth_buffer), exactly one of the two, and an image that marks what
+/// it recorded gives that too (@ref coverage). A device frame therefore
 /// textures without visiting the host:
 /// @code
 /// const sensor::DeviceFrame& f = ...;  // from GpuFramePrep::prepare
 /// texture::TextureView view;
 /// view.cam = f.depth_camera;
-/// view.depth_buffer = f.depth.get();
+/// view.depth_buffer = f.depth;
 /// view.color_camera = f.color_camera;
+/// view.coverage = f.color;
 /// @endcode
 struct TextureView {
   /// Depth in metres, `cam.width * cam.height`, row-major: the occlusion
@@ -65,15 +68,25 @@ struct TextureView {
   /// size @ref color_camera does not have, is refused.
   std::uint32_t image_width = 0;
   std::uint32_t image_height = 0;
-  /// The same depth as @ref depth, already on the device: a storage buffer of
-  /// at least `cam.width * cam.height` floats that a batch can copy from
-  /// (`device_storage_buffer` makes one, as `GpuFramePrep` does). Its writer
-  /// must have finished, which a dispatch on the texturer's device guarantees.
-  /// Borrowed for the call. Null when @ref depth holds it instead.
-  const Buffer* depth_buffer = nullptr;
+  /// The same depth as @ref depth, already on the device: a buffer of at
+  /// least `cam.width * cam.height` floats, which the single-camera pass
+  /// binds as storage and the several-view pass copies from
+  /// (`device_storage_buffer` makes one that serves both, as `GpuFramePrep`
+  /// does). Its writer must have finished, which a dispatch on the texturer's
+  /// device guarantees. Held, not borrowed, so a `GpuFramePrep` that hands
+  /// out its frames' buffers reuses this one only once no view holds it
+  /// either. Null when @ref depth holds the depth instead.
+  std::shared_ptr<const Buffer> depth_buffer = nullptr;
   /// The camera the tile's image was taken with, when it is not registered to
   /// @ref cam. Unset (the default) means registered, as described above.
   std::optional<ColorCameraParams> color_camera = std::nullopt;
+  /// What the image recorded: the image itself on the device, one word a
+  /// pixel of the tile's size, with 0 in a word's high byte where it recorded
+  /// nothing -- `sensor::DeviceFrame::color`, black where the lens saw
+  /// nothing. A vertex on such a pixel is not textured from this view. Bound
+  /// as storage or copied from, as @ref depth_buffer is, and held as it is.
+  /// Null (the default) means every pixel of the image counts.
+  std::shared_ptr<const Buffer> coverage = nullptr;
 };
 
 /// @brief Where one view's image sits in the atlas, in pixels.

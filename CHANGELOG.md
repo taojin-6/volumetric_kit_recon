@@ -143,17 +143,27 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- `texture`: **a colour camera of its own, and depth on the device, for
-  projective texturing** — what a `GpuFramePrep` frame has. A `TextureView`
-  takes an optional `color_camera` and a `depth_buffer` in place of the host
-  `depth`; the single-camera pass takes the camera in
-  `texture(const DeviceMesh&, const Buffer& depth, cam, color_cam, ...)`. The
-  depth camera decides visibility, the colour camera gives each vertex its
-  coordinate, and a view with one must also see the triangle's front and
-  record all three vertices. A view's device depth is copied on the device
-  into the pass's buffer, never staged through the host. Without a colour
-  camera the result is unchanged. Tests: `recon_texture_multiview`,
-  `recon_texture_device_mesh`. See the 2026-09-28 decision.
+- `texture`: **a colour camera of its own, and depth and coverage on the
+  device, for projective texturing** — what a `GpuFramePrep` frame has. A
+  `TextureView` takes an optional `color_camera`, a `depth_buffer` in place
+  of the host `depth`, and a `coverage` (the frame's colour, whose zero high
+  byte marks what the lens saw nothing of), the buffers held by
+  `shared_ptr`. The single-camera pass takes one in
+  `texture(const DeviceMesh&, const TextureView&, ...)` and
+  `texture(Mesh&, const TextureView&, ...)`. The depth camera decides
+  visibility and the colour camera gives each vertex its coordinate, which it
+  keeps only where the image recorded it, both cameras see the same side of
+  the surface, and the colour camera's line of sight, walked through the
+  depth map, is clear; per triangle, the colour camera must also see its
+  front. A view's device depth and coverage are copied on the device into the
+  pass's buffers, never staged through the host, and timed in its row.
+  Without a colour camera the result is unchanged. Tests:
+  `recon_texture_multiview`, `recon_texture_device_mesh`. See the 2026-09-28
+  decision.
+- `core`: **copies join a rising run** in `CommandBatch`: copies from other
+  buffers into one at rising, disjoint offsets need no barrier between them,
+  as fills and uploads did not, unless a command in the run writes a copy's
+  source. Test: `recon_core_command_batch`.
 - `sensor`: **`JpegDecoder`** decodes the JPEGs an MJPEG camera sends, to
   I420. Given a device, with `VR_WITH_CUDA`, nvJPEG decodes an 8-bit 4:2:0
   JPEG straight into a Vulkan buffer CUDA has imported, on the GPU's
@@ -186,8 +196,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `texture`: **`ProjectiveTexturer::texture(const DeviceMesh&, const Buffer&
   depth, ...)`** binds a depth frame already on the device, in place. The atlas
   must be registered to the depth camera; a `GpuFramePrep` frame, whose colour
-  keeps a camera of its own, takes the colour-camera overload listed
-  above.
+  keeps a camera of its own, takes the `TextureView` overload listed above.
 - `core`: **`CommandBatch::reserve_upload`** hands the caller the staging for
   an upload to pack itself, such as strided rows or several planes. It,
   `upload` and `copy` take an optional `GpuStageScope` that times the copy.

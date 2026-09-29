@@ -6569,18 +6569,21 @@ Not taken:
 3. Measured afterwards: the colour kernel reading Apple's plane images
    directly.
 
-### 2026-09-28 — Projective texturing takes a colour camera of its own and depth on the device: the depth camera decides what is visible, the colour camera gives the coordinate, and a view's device depth is copied on the device rather than staged.
+### 2026-09-28 — Projective texturing takes a colour camera of its own and depth on the device: the depth camera decides what is visible, its map what the colour camera sees, and the colour camera gives the coordinate; a view's device depth and coverage are copied on the device rather than staged.
 
-**The rule.** A `TextureView` may carry a `color_camera`, the camera its tile's
-image was taken with, and may give its depth as a `depth_buffer` on the
-device in place of the host `depth` array, exactly one of the two. The
-single-camera pass gains the same camera in one overload,
-`texture(const DeviceMesh&, const Buffer& depth, cam, color_cam, ...)`, the
-shape of a `GpuFramePrep` frame. In both passes the depth camera still decides
-visibility, through the same projection and occlusion test, and a vertex's
-coordinate is its pixel in the colour camera, normalized by that camera's
-image. With no colour camera nothing changes: the atlas is registered to the
-depth camera, bit for bit as before.
+**The rule.** A `TextureView` may carry a `color_camera`, the camera its
+tile's image was taken with; its depth as a `depth_buffer` on the device in
+place of the host `depth` array, exactly one of the two; and a `coverage`, the
+image on the device with a zero high byte where it recorded nothing. The
+buffers are held by `shared_ptr`. The single-camera pass takes the same view,
+in `texture(const DeviceMesh&, const TextureView&, ...)` and
+`texture(Mesh&, const TextureView&, ...)`. In both passes the depth camera
+decides visibility through the same projection and occlusion test, and its
+map decides too whether the colour camera's line of sight is clear. A
+vertex's coordinate is its pixel in the colour camera. A registered image is
+textured as one whose colour camera is its depth camera: one path, the same
+arithmetic, and every colour-camera test then passes wherever the depth
+camera's does, so the result is what it was.
 
 **Why.** It closes the two `TODO(texture)`s that kept a `GpuFramePrep` frame
 off the texture tier. The GPU pre-processing decision above keeps depth and
@@ -6591,78 +6594,146 @@ the host. A rig of such frames could therefore be fused on the device but not
 textured there. Now its views texture from the frames `prepare_set` returns,
 and nothing visits the host on the way.
 
-**What the colour camera must do.**
+The prior repos never met the offset. Both set the Femto Mega to
+`ALIGN_D2C_HW_MODE`, so depth arrived registered to colour and occlusion was
+tested in the colour camera itself (`implicit_surface_compression` against a
+downsampled copy of the registered depth). `GpuFramePrep` keeps the two
+apart, and the pass asks the same question of the depth map as it stands,
+with both cameras' intrinsics and poses, rather than building a registered
+map for every view.
 
-- **Single camera, per vertex.** The three outcomes of the class note are read
-  off the colour camera. Behind it, the `(-1, -1)` sentinel: no coordinate in
-  its image exists, whatever the depth camera makes of the vertex. In front,
-  the vertex carries its coordinate (`-uv - 1`) unless the depth camera sees
-  it unoccluded **and** it lands inside the colour image, the second so that a
-  vertex the colour camera did not record is not given the edge clamp of one.
-- **Several views, per triangle.** A view with a colour camera qualifies only
-  if that camera, too, sees the triangle's front and records all three
-  vertices inside its image. A colour camera behind a sheet images its other
-  side. The score stays the depth camera's: the baseline between the two is a
-  few centimetres, and the depth camera is the one that proved the view.
+**What the colour camera must see.** Cheapest test first, the depth reads
+last:
+
+- **Its image, where the image recorded it.** Behind the colour camera a
+  vertex gets the `(-1, -1)` sentinel, whatever the depth camera makes of it.
+  In front, it must land inside the colour image, not on an edge clamp, and
+  on a pixel `coverage` marks: `GpuFramePrep` writes 0 where the lens saw
+  nothing, and without the test a view whose undistorted corner is black won
+  a triangle another view saw and textured it black.
+- **The side the depth camera saw.** A colour camera across the surface's
+  plane from the depth camera images the other side of it. Per triangle that
+  is the colour camera's own facing test; per vertex, where the pass has only
+  the vertex, it is the sign of the vertex normal against each camera's
+  centre, which must agree. A zero normal passes.
+- **A clear line of sight.** The depth camera proves its own line to the
+  vertex. The colour camera, a few centimetres away, looks along another,
+  and past an occluding edge it sees the occluder where the depth camera sees
+  the vertex: a sliver about the cameras' parallax wide,
+  `f·b·(1/z_occluder - 1/z_surface)` pixels. The line from the vertex back to
+  the colour camera projects into the depth image along the vertex's
+  epipolar line, on which 1/z is linear, so the pass walks it and knows the
+  line's depth at every sample. A surface the map puts more than
+  `occlusion_threshold` nearer than the line blocks it. The walk takes at most
+  64 samples, a pixel apart until the line is longer, one nearest read each,
+  and ends at the near end of the depth range or the image's edge. For a
+  registered image the line is a point and nothing is sampled.
 - **The tile is the colour image.** `side_by_side_atlas` sizes a view with a
   colour camera from it, and a given `image_width` x `image_height` other than
   its size is refused, since every coordinate would be misplaced.
 
-**Device depth is copied, not bound in place.** The several-view kernel reads
-every view's depth from one buffer at each view's offset, through the sampler
-both kernels share. A device view's depth is copied into that buffer with
-`CommandBatch::copy`, device to device, where a host view's is staged. Binding
-each in place would need a descriptor array indexed per view, which is a
-device feature (`shaderStorageBufferArrayDynamicIndexing`) that every embedder,
-the neutral bootstrap included, would then have to enable, to save a copy of
-about 1.5 MB a view at 640 x 576 (a `TODO(texture)`). So the buffer must be
-a copy source as well as a storage buffer, which `device_storage_buffer` makes
-and `check_views` checks before anything is recorded.
+The score stays the depth camera's: the baseline is a few centimetres, and the
+depth camera is the one that proved the view.
 
-**Measured**, on the M5 Max, four 640 x 576 views of a wall and 3 000
-triangles through the host-mesh overload, Release, medians of 50 (throwaway
-harness, not committed). The pass's host row fell from 0.54-0.55 ms with the
-depth staged to 0.42-0.48 ms with it on the device, colour cameras included.
-The device span covers the dispatch alone and read about 0.02 ms either way.
-Not measured on the RTX 5090, where the staging crosses PCIe and should cost
-more.
+**Device inputs are copied, not bound in place.** The several-view kernel
+reads every view's depth from one buffer, and every marked image's coverage
+from another, at each view's offset. A device view's are copied into them
+with `CommandBatch::copy`, a host view's depth staged, every depth before any
+coverage. `CommandBatch` now lets a copy join a run of writes rising through
+one buffer, as fills and uploads did, unless a command in the run writes the
+copy's source, so the copies take no barrier between them. They are timed in
+the call's row. Binding each view's buffer in place would take a descriptor
+array indexed per view -- `shaderStorageBufferArrayDynamicIndexing`, a core
+1.0 feature most GPUs have but `Device::create` does not enable, so every
+embedder's device would have to, or the copy would stay beside it as the
+fallback -- or a binding per view, which caps the views. The copy is one
+device-local pass: 1.5 MB of depth at 640 x 576 and 3.7 MB of coverage at
+1280 x 720 a view. A copied input need only be a copy source, which the batch
+checks; the single-camera pass binds its inputs, which must be storage
+buffers.
+
+**Held, not borrowed.** `GpuFramePrep` reuses a frame's buffer once its
+`shared_ptr` is the pass's alone. A raw pointer in a kept view could not be
+seen: the next same-size frame overwrote the depth the view read against its
+old camera, and a larger one freed it under the view.
+
+**Measured**, on the M5 Max, Release, a throwaway harness (not committed),
+medians of 30 over two interleaved passes, shared machine. A wall 3 m out of
+180 000 unshared triangles (540 000 vertices), 640 x 576 depth, 1280 x 720
+colour cameras 3.2 cm beside their depth cameras, through the host-mesh
+overloads; the device span, which is the dispatch and, for several views,
+the inputs' transfers:
+
+| | one camera | four views |
+|---|---|---|
+| registered | 0.24-0.27 ms | 0.27-0.29 ms |
+| colour camera on the depth camera | 0.23 ms | 0.26-0.28 ms |
+| colour camera 3.2 cm aside | 0.52-0.74 ms | 0.85-1.08 ms |
+| the same, with coverage | 0.58-0.74 ms | 0.80-1.23 ms |
+
+The walk is the difference: about 0.3-0.5 ms for one camera and 0.6-0.8 ms
+for four. With bilinear samples
+the aside rows read 0.83-0.88 and 1.30-1.39 ms, which is why each sample is
+one read: on a plane its error passes the threshold only at slopes where the
+bilinear sampler falls back to its nearest tap too. An earlier harness, four
+views of 3 000 triangles, put the host row at 0.54-0.55 ms with the depth
+staged and 0.42-0.48 ms with it on the device; its triangles faced away from
+every camera, so it measured the transfers and not the tests. Not measured on
+the RTX 5090.
 
 **Open.**
 
-- **The colour-occlusion fringe.** With no depth map in the colour camera's
-  frame, a point the colour camera sees *past* a nearer surface is not caught,
-  so a sliver beside an occluding edge, about the cameras' parallax wide, can
-  take the occluder's colour. It is the fringe `tsdf` documents for the same
-  frames, and it is unmeasured.
-- **Coverage.** `GpuFramePrep` marks the pixels its lens saw nothing of with a
-  zero alpha, and the texturer binds no colour, so a vertex in an undistorted
-  image's black corners is textured black (a `TODO(texture)`).
+- **What the depth camera cannot see.** The walk tests the line against the
+  map, so an occluder the depth camera does not see, or one thinner than a
+  sample step on a line longer than 64 pixels, does not block it.
+- **Inputs kept between calls.** Every call stages or copies every view's
+  depth and coverage afresh; a static keyframe set could keep them (a
+  `TODO(texture)` at the buffers).
 - **The atlas and gfx.** `pack_atlas` still packs on the host, and nothing yet
   hands a device frame's colour to gfx as an image; the texture pass's side is
   what landed here.
 
-**Verified.** The whole suite passes on the M5 Max, 42 of 42, and the texture
-tests report nothing with the Khronos validation layer loaded. The new cases,
-in `recon_texture_multiview` and `recon_texture_device_mesh`, check:
+**The review.** The first cut documented the fringe and the black corners as
+open, took the device depth by raw pointer, gave the single-camera colour
+path no side test, a branch of its own beside the registered one and no host
+overloads, required a copied depth to be a storage buffer, left its copies
+untimed with a barrier between each, and dropped the `TODO(texture)` for
+keeping inputs between calls. Each is fixed above. Its "same camera" test
+passed on a mesh an earlier case had already textured; it now follows a pass
+against a frame that sees nothing.
 
-- device depth, every view's and one beside two host views, giving the host
-  run's coordinates exactly, each run after one against empty depth maps so a
-  copy that moved nothing cannot pass;
-- colour cameras beside the depth cameras, at another resolution and focal
-  length, winning the same triangles with the colour cameras' coordinates;
-- the centre triangle refused when its colour camera sees only its back, sees
-  nothing of it, or sees it past the edge of its image;
-- the single-camera overload with a colour camera equal to the depth camera
-  giving the registered result, one aside giving its own coordinates, one too
-  narrow carrying the vertices outside its image, and one facing away giving
-  every vertex the sentinel;
-- the refusals: both depths, a device depth short of its map, empty, or not a
-  copy source, and a colour camera with no image or a size it does not have.
+**Verified.** The whole suite passes on the M5 Max, 42 of 42, and the batch
+and texture tests report nothing under the Khronos validation layer with
+synchronization validation on. The new cases check:
 
-Each of these mutations fails a test: taking the coordinate from the depth
-camera, dropping the colour camera's facing test or its image bounds in
-either kernel, not copying the device depth, ignoring the single-camera
-colour flag, and dropping the sentinel behind the colour camera.
+- device depth, every view's, one beside two host views in a buffer the pass
+  can copy from but not bind, giving the host run's coordinates exactly, each
+  after a run against empty depth maps;
+- colour cameras beside the depth cameras winning the same triangles with the
+  colour cameras' coordinates, and a colour camera that sees a triangle's
+  back, nothing of it, or it past its image refusing it;
+- a rig of device depth, colour cameras and coverage matching the host run
+  exactly after a run whose images recorded nothing, and a view whose image is
+  blank over a triangle giving it to another;
+- a triangle beside an occluder in the depth map given to a clear view when
+  its colour camera looks through the occluder, and kept with the colour
+  camera on the other side or none, in both passes;
+- vertices whose normals put the colour camera behind their plane carried,
+  and textured from the depth camera's side;
+- one camera: the registered result from a colour camera on the depth camera
+  after a blind pass, one aside, its image half blank, one too narrow and one
+  facing away;
+- the refusals: both depths or neither, a device depth or coverage short of
+  its image, empty, or not a copy source, a single-camera coverage that is not
+  a storage buffer, and a colour camera with no image or a size it does not
+  have;
+- `CommandBatch`: copies into one buffer at rising offsets land, and one whose
+  source the run filled copies the fill.
+
+Each of these mutations fails a test: coverage always recorded, ignored in
+either kernel, or not copied; the walk never blocking, or skipped in either
+kernel; no side test; the depth pixels as the coordinates; and, under
+synchronization validation, a copy joining the run whatever wrote its source.
 
 ## Measured lessons
 
