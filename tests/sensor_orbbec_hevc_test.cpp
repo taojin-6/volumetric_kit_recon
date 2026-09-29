@@ -9,26 +9,35 @@
 // empty, costs the frames up to the next key frame, a pause in the
 // timestamps costs nothing, and decoding starts at the first key frame. The
 // frame-index gate is tested on its own, since a test cannot set an SDK
-// frame's index.
+// frame's index. Given a device, a picture the hardware leaves on it comes
+// out carried in its frame, and goes with it.
 
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <iterator>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <thread>
 #include <vector>
 
 #include <libobsensor/ObSensor.hpp>
 
+#include "device_picture_frame.hpp"
+#include "device_picture_readback.hpp"
 #include "hevc_color.hpp"
+#include "volumetric_kit/recon/core/allocator.hpp"
+#include "volumetric_kit/recon/core/device.hpp"
+#include "volumetric_kit/recon/core/instance.hpp"
 #include "yuv_reference.hpp"
 
+namespace vr = volumetric_kit::recon;
 namespace sensor = volumetric_kit::recon::sensor;
 namespace orbbec = volumetric_kit::recon::sensor::orbbec;
 
@@ -145,12 +154,13 @@ Pairs pairs(const Units& units, const std::vector<int>& frames,
 }
 
 // Push `in`, wait for `expect` pairs out, and stop; `yuv` has the decoder
-// hand on I420 frames, for the GPU pass.
+// hand on I420 frames, for the GPU pass, or pictures on `device`.
 struct Run {
   std::vector<std::shared_ptr<ob::FrameSet>> out;
   std::uint64_t lost = 0;
 };
-Run run(const Pairs& in, std::size_t expect, bool yuv = false) {
+Run run(const Pairs& in, std::size_t expect, bool yuv = false,
+        const vr::Device* device = nullptr) {
   auto collected = std::make_shared<Collected>();
   orbbec::HevcColorDecoder::Options options;
   options.fps = 30;
@@ -159,6 +169,7 @@ Run run(const Pairs& in, std::size_t expect, bool yuv = false) {
     return frame.getSystemTimeStampUs();
   };
   options.yuv = yuv;
+  options.device = device;
   auto decoder = orbbec::HevcColorDecoder::start(
       options, [collected](std::shared_ptr<ob::FrameSet> set) {
         std::lock_guard<std::mutex> lock(collected->mutex);
@@ -291,6 +302,112 @@ int test_hands_on_i420() {
       }
     }
   }
+  return 0;
+}
+
+// Given a device the hardware decodes onto, each picture comes out carried in
+// its frame, each patch's value as the clip was made, described as the Femto
+// Mega codes the unlabelled stream, and placed in a raw frame's colour as the
+// driver places it; and it lives as long as its frame, which a copy of the
+// frame does not extend. Where no hardware leaves pictures on this device,
+// they come as I420.
+int test_hands_on_device_pictures() {
+  auto instance = vr::Instance::create({});
+  if (!instance) return 0;
+  auto gpu = instance.value().select_physical_device();
+  if (!gpu) return 0;
+  auto device = vr::Device::create(instance.value(), gpu.value(), {});
+  CHECK(device.ok());
+  auto allocator =
+      vr::Allocator::create(instance.value().handle(), device.value());
+  CHECK(allocator.ok());
+
+  Run r = run(pairs(access_units(kUnlabelled), {0, 1, 2, 3, 4, 5, 6, 7}), 8,
+              true, &device.value());
+  CHECK(r.out.size() == 8 && r.lost == 0);
+  const bool on_device =
+      orbbec::device_picture(*r.out.front()->getColorFrame()).has_value();
+  // The legs whose hardware leaves its pictures on the device.
+  const char* required = std::getenv("VR_TEST_HEVC_BACKEND");
+  const std::string backend = required != nullptr ? required : "";
+  if (backend == "videotoolbox" || (VR_TEST_WITH_CUDA && backend == "cuda")) {
+    CHECK(on_device);
+  }
+  std::shared_ptr<const void> held;
+  std::shared_ptr<ob::Frame> copied;
+  for (int f = 0; f < 8; ++f) {
+    const auto color = r.out[static_cast<std::size_t>(f)]->getColorFrame();
+    CHECK(color != nullptr);
+    const std::optional<sensor::DecodedPicture> p =
+        orbbec::device_picture(*color);
+    CHECK(p.has_value() == on_device);
+    if (!p) {
+      CHECK(color->getFormat() == OB_FORMAT_I420);
+      continue;
+    }
+    CHECK(color->as<ob::VideoFrame>()->getWidth() == 0);  // no pixels
+    CHECK(p->width == static_cast<std::uint32_t>(kWidth) &&
+          p->height == static_cast<std::uint32_t>(kHeight));
+    CHECK(p->layout == sensor::VideoPixelLayout::Nv12);
+    CHECK((p->device != nullptr) != (p->image[0] != nullptr));
+    CHECK(p->matrix == sensor::VideoColorMatrix::Bt601 && p->full_range);
+    sensor::YuvImage placed;
+    orbbec::place_device_color(*p, &placed);
+    CHECK(placed.layout == sensor::YuvLayout::Nv12);
+    CHECK(placed.plane[0] == nullptr);
+    if (p->device != nullptr) {
+      CHECK(placed.device == p->device && placed.image[0] == nullptr);
+      CHECK(placed.queue_family == sensor::kQueueFamilyExternal);
+      for (int i = 0; i < 2; ++i) {
+        CHECK(placed.offset[i] == p->offset[i] &&
+              placed.stride[i] == p->stride[i]);
+      }
+    } else {
+      CHECK(placed.device == nullptr && placed.image[0] == p->image[0] &&
+            placed.image[1] == p->image[1]);
+    }
+    std::vector<std::uint8_t> got[3];
+    vr_test::read_device_picture(*p, device.value(), allocator.value(), got);
+    CHECK(got[0].size() == static_cast<std::size_t>(kWidth * kHeight));
+    const int cw = kWidth / 2;
+    for (int row = 0; row < 2; ++row) {
+      for (int col = 0; col < 8; ++col) {
+        const int k = patch(col, row, f);
+        const int x = 32 * col + 16;
+        const int yy = 72 * row + 36;
+        CHECK(std::abs(got[0][yy * kWidth + x] - (40 + 24 * k)) <= 2);
+        const int c = (yy / 2) * cw + x / 2;
+        CHECK(std::abs(got[1][c] - (64 + 16 * ((3 * k) % 8))) <= 2);
+        CHECK(std::abs(got[2][c] - (64 + 16 * ((5 * k) % 8))) <= 2);
+      }
+    }
+    if (f == 7) {
+      if (p->device)
+        held = p->device;
+      else
+        held = p->image[0];
+      // Its bytes, copied into a frame of their own.
+      auto* bytes = new std::uint8_t[color->getDataSize()];
+      std::memcpy(bytes, color->getData(), color->getDataSize());
+      copied = ob::FrameFactory::createFrameFromBuffer(
+          OB_FRAME_COLOR, color->getFormat(), bytes,
+          [](std::uint8_t* b) { delete[] b; }, color->getDataSize());
+    }
+  }
+  if (held != nullptr) {
+    CHECK(held.use_count() > 1);  // the frame still holds it
+    CHECK(orbbec::device_picture(*copied).has_value());  // as its copy sees
+    r.out.clear();
+    CHECK(held.use_count() == 1);  // and it went with the frame
+    CHECK(!orbbec::device_picture(*copied).has_value());  // nor its copy
+  }
+  // A frame that carries no picture reads as none.
+  CHECK(!orbbec::device_picture(*ob::FrameFactory::createVideoFrame(
+                                    OB_FRAME_COLOR, OB_FORMAT_NV12, 16, 16))
+             .has_value());
+  std::printf("  device pictures: %s\n",
+              on_device ? "carried in their frames"
+                        : "not offered here; I420 frames instead");
   return 0;
 }
 
@@ -597,6 +714,7 @@ int main() {
   if (test_key_frames() != 0) return 1;
   if (test_every_pair_in_order() != 0) return 1;
   if (test_hands_on_i420() != 0) return 1;
+  if (test_hands_on_device_pictures() != 0) return 1;
   if (test_gap_waits_for_key_frame() != 0) return 1;
   if (test_pause_costs_nothing() != 0) return 1;
   if (test_gate() != 0) return 1;

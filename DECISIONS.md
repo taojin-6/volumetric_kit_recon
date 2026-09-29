@@ -6656,10 +6656,64 @@ A frame costs 1.6 ms of CPU where it cost 13.7. The images of every 4:2:0
 fixture, the 16400-wide one included where the extent takes it, are within 2
 codes of software's; 4:2:2 goes to software.
 
+**The Orbbec raw path carries H.265's device picture.** Given
+`OrbbecStreamOptions::device` with `raw`, each camera's colour decoder
+decodes onto that device, and a raw frame's colour is the picture NVDEC or
+VideoToolbox left there (`YuvImage::device`, taken over from outside Vulkan,
+or `YuvImage::image`). Any other picture comes as the I420 planes it came as
+before.
+
+The picture crosses the mailbox with an SDK colour frame
+(`device_picture_frame.hpp`). The decode thread, the mailbox, a rig's
+grouping and the held pair all handle frame sets, as before. The picture then
+lives exactly as long as its frame, and is dropped, grouped and held with it;
+changing the mailbox's element type instead would have touched every one of
+them.
+
+The frame's bytes are a tag and a serial, and the picture waits in a table
+under that serial until the frame's deleter erases it. The first cut stored
+the picture itself as the bytes, `shared_ptr`s and all, and review found that
+a byte copy of the frame (`copyFrameInfo` then `updateData`, or an SDK filter)
+would duplicate them without a reference, and outlive what they point at. Now
+such a copy owns nothing, and once the frame is freed it carries no picture.
+The frame is a 0x0 video frame of `OB_FORMAT_H264`, where the first cut's
+NV12 invited a reader to take its bytes for pixels. The SDK refuses
+`OB_FORMAT_UNKNOWN` for a colour frame, and a compressed format is sized by
+its bytes. No stream here carries H.264, so nothing decodes them either.
+
+No CI leg has a camera, so `process_raw` itself never runs there. What it
+does with a device picture is `place_device_color`, which the offline test
+runs on NVDEC's buffers on the CUDA leg and on VideoToolbox's images on the
+Mac. Both tests require the pictures on the device only on the legs whose
+hardware leaves them there: VideoToolbox, and NVDEC in a `VR_WITH_CUDA`
+build. The three decoder tests read a device picture back through one
+helper, `tests/device_picture_readback.hpp`.
+`fuse_orbbec --gpu` now creates the GPU before it opens the cameras, and
+hands the capture that device.
+
+The committed clip, fed through the decoder with a device on the M5 Max,
+comes out as VideoToolbox images holding each patch's value within 2 codes.
+They are described as the Femto Mega codes its stream, and released with
+their frames. On the live camera, raw frames arrive with their colour as
+images, and the pass still matches the SDK's own undistortion and
+registration at 720p and at 4K (depth 5 mm median).
+
+Measured on the lab rig, four Femto Megas at 4K and 25 fps over the wired
+link, `fuse_orbbec --rig --gpu --hevc`, 600 frames, Release, two runs each:
+
+| colour | user CPU | sys CPU | fused |
+|---|---|---|---|
+| on the device | 0.56-0.57 s | 1.61-1.64 s | 94.8-97.4 fps |
+| host planes | 1.37 s | 1.60-1.65 s | 92.7-97.4 fps |
+
+That is about 1.4 ms less CPU per camera frame: the copy to the host, the
+conversion, the I420 frame and the staging copy. The cameras set the rate
+either way.
+
 **Next**, in order:
 
-1. The Orbbec raw path carrying the device picture, with MJPEG raw asking the
-   SDK for the JPEG bytes and decoding them on a thread per camera.
+1. MJPEG raw frames: the camera's JPEG bytes, decoded on a thread per camera
+   by nvJPEG or VideoToolbox into a picture on the device.
 2. Measured afterwards: the colour kernel reading Apple's plane images
    directly, which saves the copy's 0.28-0.31 ms of GPU.
 

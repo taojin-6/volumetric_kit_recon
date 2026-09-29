@@ -243,9 +243,12 @@ void print_camera(const sensor::OrbbecDeviceInfo& info,
 }
 
 // The colour stream the command line asked for, over the driver's defaults.
-void apply_streams(const Options& opt, sensor::OrbbecStreamOptions& streams) {
+// Raw frames' colour is decoded onto `device`, where the hardware leaves it.
+void apply_streams(const Options& opt, const vr::Device& device,
+                   sensor::OrbbecStreamOptions& streams) {
   if (opt.hevc) streams.color_codec = sensor::OrbbecColorCodec::Hevc;
   streams.raw = opt.gpu;
+  if (opt.gpu) streams.device = &device;
   if (opt.color_width != 0) {
     streams.color_width = opt.color_width;
     streams.color_height = opt.color_height;
@@ -253,9 +256,9 @@ void apply_streams(const Options& opt, sensor::OrbbecStreamOptions& streams) {
   if (opt.fps != 0) streams.fps = opt.fps;
 }
 
-// Opened before the GPU so a missing camera fails fast. The depth gate is
+// Opened on the GPU the frames are decoded and fused on. The depth gate is
 // validated by the driver, which names both values when it refuses one.
-vr::Result<Source> open_source(const Options& opt) {
+vr::Result<Source> open_source(const Options& opt, const vr::Device& device) {
   if (!opt.rig.empty() && !opt.serial.empty()) {
     return vr::Status::invalid_argument(
         "--rig and --serial exclude each other");
@@ -275,7 +278,7 @@ vr::Result<Source> open_source(const Options& opt) {
     rig_options.apply_sync_config = opt.apply_sync;
     if (opt.min_depth) rig_options.min_depth = *opt.min_depth;
     if (opt.max_depth) rig_options.max_depth = *opt.max_depth;
-    apply_streams(opt, rig_options);
+    apply_streams(opt, device, rig_options);
     VR_ASSIGN(source.rig, sensor::OrbbecRig::open(rig_options));
     for (std::size_t i = 0; i < source.rig->camera_count(); ++i) {
       print_camera(source.rig->device_info(i), source.rig->color_camera(i));
@@ -304,7 +307,7 @@ vr::Result<Source> open_source(const Options& opt) {
   }
   if (opt.min_depth) capture_options.min_depth = *opt.min_depth;
   if (opt.max_depth) capture_options.max_depth = *opt.max_depth;
-  apply_streams(opt, capture_options);
+  apply_streams(opt, device, capture_options);
   VR_ASSIGN(source.camera, sensor::OrbbecCapture::open(capture_options));
   const sensor::OrbbecDeviceInfo& info = source.camera->device_info();
   print_camera(info, source.camera->color_camera());
@@ -319,17 +322,20 @@ vr::Result<Source> open_source(const Options& opt) {
 }
 
 vr::Status run(const Options& opt) {
-  // An optional so the run can release the cameras before the extract:
-  // stop() ends the streams but keeps the cameras held for a restart.
-  std::optional<Source> source;
-  VR_ASSIGN(source, open_source(opt));
-
-  // --- GPU + volume ---
+  // --- GPU, first: the cameras' pictures are decoded onto it ---
   VR_ASSIGN(vr::Instance instance, vr::Instance::create({}));
   VR_ASSIGN(VkPhysicalDevice gpu, instance.select_physical_device());
   VR_ASSIGN(vr::Device device, vr::Device::create(instance, gpu, {}));
   VR_ASSIGN(vr::Allocator allocator,
             vr::Allocator::create(instance.handle(), device));
+
+  // An optional so the run can release the cameras before the extract:
+  // stop() ends the streams but keeps the cameras held for a restart. After
+  // the device, so every picture on it goes first.
+  std::optional<Source> source;
+  VR_ASSIGN(source, open_source(opt, device));
+
+  // --- Volume ---
 
   VR_ASSIGN(
       vol::VoxelBlockGrid volume,

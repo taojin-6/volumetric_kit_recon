@@ -150,8 +150,10 @@ class CameraStream {
   Result<std::optional<CapturedFrame>> process(
       const std::shared_ptr<ob::FrameSet>& pair);
   // A pair as the cameras captured it, for a stream opened raw: raw depth and
-  // the decoded I420 planes, each camera's lens and pose. The frame points
-  // into the pair, which is held until the next call or stop().
+  // the decoded colour, each camera's lens and pose. The colour is the
+  // picture the hardware left on the device, which the frame holds itself,
+  // or I420 host planes. Depth and host planes point into the pair, which is
+  // held until the next call or stop().
   Result<std::optional<RawFrame>> process_raw(
       const std::shared_ptr<ob::FrameSet>& pair);
   bool raw() const noexcept { return raw_; }
@@ -176,6 +178,8 @@ class CameraStream {
   std::shared_ptr<ob::StreamProfile> wire_color_profile_;
   std::uint32_t fps_ = 0;
   bool configure_ffmpeg_logging_ = true;  // cleared by the first start
+  // The device a raw stream's colour is decoded onto (streams.device).
+  const Device* vulkan_device_ = nullptr;
   // Decodes the H.265 colour, between the SDK and the mailbox; null for
   // MJPEG. Replaced at each start, so its counters start fresh with the rest.
   std::shared_ptr<HevcColorDecoder> hevc_;

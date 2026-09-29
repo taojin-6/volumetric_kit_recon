@@ -148,6 +148,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `sensor`: **a raw Orbbec frame's colour stays on the GPU.** With
+  `OrbbecStreamOptions::device`, a raw capture or rig decodes its H.265
+  colour onto that device, and a `RawFrame`'s colour is the picture NVDEC or
+  VideoToolbox left there, for `GpuFramePrep` on the same device.
+  `fuse_orbbec --gpu` passes its device. On the four-camera rig at 4K25, the
+  run's CPU falls by about 1.4 ms a camera frame.
 - `sensor`: **`JpegDecoder` decodes on VideoToolbox.** Given a device that
   imports Metal textures, an 8-bit 4:2:0 JPEG decodes on the hardware JPEG
   decoder into NV12 plane images (`DecodedPicture::image`,
