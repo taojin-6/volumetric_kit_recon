@@ -6487,14 +6487,48 @@ descriptor. The device must outlive every picture on it, documented rather
 than checked, as for every `Buffer`. The test expects device pictures only
 on an NVIDIA Vulkan device, one CUDA sees.
 
+**nvJPEG has landed.** `JpegDecoder` decodes the JPEGs an MJPEG camera
+sends, to I420, BT.601 full range as JFIF defines it:
+
+- Given a device, in a `VR_WITH_CUDA` build, it opens nvJPEG in the primary
+  context of the CUDA device whose UUID is the Vulkan device's: the
+  `HARDWARE` back end first, else `GPU_HYBRID`, as `backend()` says.
+- An 8-bit 4:2:0 JPEG that back end supports decodes into a buffer from the
+  same ring as NVDEC's, Y, Cb and Cr each packed and starting on 256 bytes,
+  so `DecodedPicture::offset` grows a third plane. The decoder waits on an
+  event made to block, since CUDA's default wait spins and bills the wait as
+  CPU. The picture carries `kQueueFamilyExternal` like NVDEC's.
+- Anything else decodes in software through FFmpeg, 4:2:2 converted to
+  4:2:0 on the host: another subsampling or precision, a JPEG nvJPEG cannot
+  parse or decode, a device on another GPU, no device.
+- libnvjpeg is loaded at run time, like libcuda, so a program built with
+  CUDA starts where neither is. CI's CUDA leg installs it again.
+- A CUDA failure lets the device path go, as NVDEC's does; a JPEG nvJPEG
+  refuses goes to software alone, since one corrupt frame from a camera must
+  not cost every later one 14 ms of CPU.
+
+Measured on the RTX 5090, per 4K frame of the Femto Mega's MJPEG, Release:
+
+| | wall | CPU |
+|---|---|---|
+| software | 14.27 ms | 14.34 ms |
+| nvJPEG, `HARDWARE` | 3.83 ms | 0.38 ms |
+
+The software picture then pays the staging copy and the upload; the nvJPEG
+one is already on the device. The committed JPEGs
+(`tools/make_jpeg_fixtures.sh`: the HEVC clips' pattern at 4:2:0, at an odd
+size and at 4:2:2) decode to the pattern in software, and to within 2 codes
+of software on the device, the two inverse DCTs rounding apart. A buffer is
+reused only once no picture holds it. Swapping the Cb and Cr offsets, as a
+mutant, fails the test. Both CI hosts are Blackwell and have the JPEG
+engine, so `GPU_HYBRID` runs on none of them.
+
 **Next**, in order:
 
-1. NVIDIA: nvJPEG into the same buffers, for MJPEG. Its pictures carry
-   `kQueueFamilyExternal` too.
-2. Apple: VideoToolbox for H.265 and JPEG, and the IOSurface import.
-3. The Orbbec raw path carrying the device picture, with MJPEG raw asking the
+1. Apple: VideoToolbox for H.265 and JPEG, and the IOSurface import.
+2. The Orbbec raw path carrying the device picture, with MJPEG raw asking the
    SDK for the JPEG bytes and decoding them on a thread per camera.
-4. Measured afterwards: the colour kernel reading Apple's plane images
+3. Measured afterwards: the colour kernel reading Apple's plane images
    directly.
 
 ## Measured lessons
