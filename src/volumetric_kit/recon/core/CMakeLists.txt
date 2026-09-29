@@ -63,6 +63,7 @@ target_sources(
           # submit live on Device (device.cpp).
           allocator.cpp
           buffer.cpp
+          image.cpp
           shader.cpp
           descriptor.cpp
           compute_pipeline.cpp

@@ -6561,13 +6561,54 @@ Not taken:
   family may take a buffer without a transfer when its contents need not
   survive, and the reader that let the picture go had finished with it.
 
+**VideoToolbox's H.265 has landed.** Given `HevcDecoder::Options::device`
+on a device that imports Metal textures, a VideoToolbox decode hands its
+picture out as two images:
+
+- `Device::create` enables `VK_EXT_metal_objects` where MoltenVK offers it
+  (`imports_metal_textures()`), and `DeviceRequirements::metal_objects` asks
+  a shared device for it.
+- Each plane of the picture's IOSurface becomes a Metal texture on the
+  device's own `MTLDevice` (`vkExportMetalObjectsEXT`), imported as an image.
+  `core`'s new `Image` holds it, and its deleter holds the texture and the
+  pixel buffer, so VideoToolbox does not reuse the surface while a frame
+  reads it.
+- `DecodedPicture::image` carries the two, and `YuvImage::image` takes them.
+  `GpuFramePrep` copies both into its input in its batch
+  (`CommandBatch::copy` from an `Image`, new), then reads them as it reads
+  packed host planes.
+- An image stays in one layout. MoltenVK's imports are declared UNDEFINED,
+  and the copy transitions them to GENERAL each time, which keeps their
+  contents since Metal has no layouts. The images the tests fill by hand are
+  GENERAL throughout, so the copy is exercised on every GPU CI has.
+- A picture that is not 8-bit NV12 on an IOSurface comes to the host, and a
+  failed import lets the device path go, as for NVDEC. VideoToolbox has cut
+  the right and bottom already, and a stream cropped at the left or top never
+  reaches it.
+
+Measured on the M5 Max, Release, per picture of the lab's 4K clip, with a
+640x576 depth frame beside it:
+
+| | receive, CPU | prepare, CPU | prepare, GPU |
+|---|---|---|---|
+| host planes | 0.64-0.71 ms | 0.49-0.52 ms | 1.00-1.02 ms |
+| plane images | 0.20-0.28 ms | 0.29-0.38 ms | 1.13-1.14 ms |
+
+Unified memory makes the host path cheap here, so the saving is modest: the
+copy to the host, the conversion and the staging go, and the device copies
+the planes instead, for 0.13 ms more of its time. The pictures read back
+identical to software's, byte for byte, the cropped clip going to software.
+Colour copied from images larger than the picture, read from their corner,
+prepares identically to host planes, and a mutant copying the chroma a
+column short at an odd width fails that test.
+
 **Next**, in order:
 
-1. Apple: VideoToolbox for H.265 and JPEG, and the IOSurface import.
+1. Apple: VideoToolbox for JPEG, into the same images.
 2. The Orbbec raw path carrying the device picture, with MJPEG raw asking the
    SDK for the JPEG bytes and decoding them on a thread per camera.
 3. Measured afterwards: the colour kernel reading Apple's plane images
-   directly.
+   directly, which saves the copy.
 
 ### 2026-09-28 — Projective texturing takes a colour camera of its own and depth on the device: the depth camera decides what is visible, its map what the colour camera sees, and the colour camera gives the coordinate; a view's device depth and coverage are copied on the device rather than staged.
 

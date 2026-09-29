@@ -14,7 +14,8 @@
 ///
 /// Like the capture contract it reaches `core` alone and no Vulkan, so a
 /// driver produces it without compiling against a GPU API: a picture a
-/// decoder left on the device is named by `core`'s `Buffer`, declared here.
+/// decoder left on the device is named by `core`'s `Buffer` or `Image`,
+/// declared here.
 
 #include <cstddef>
 #include <cstdint>
@@ -26,6 +27,7 @@
 
 namespace volumetric_kit::recon {
 class Buffer;
+class Image;
 }  // namespace volumetric_kit::recon
 
 namespace volumetric_kit::recon::sensor {
@@ -51,9 +53,10 @@ inline constexpr std::uint32_t kQueueFamilyExternal = ~std::uint32_t{0} - 1;
 /// Chroma is sited as H.265 and MPEG-2 place it by default: horizontally with
 /// the even luma columns, vertically between two luma rows. The planes are Y,
 /// then Cb and Cr at half size (rounded up) for I420, or Y then CbCr for
-/// NV12, whose chroma rows hold both samples of each pair. They are either
-/// host memory in @ref plane or, where a decoder left its picture on the GPU,
-/// ranges of @ref device that do not overlap; never both.
+/// NV12, whose chroma rows hold both samples of each pair. They are host
+/// memory in @ref plane or, where a decoder left its picture on the GPU,
+/// ranges of @ref device that do not overlap or the @ref image planes; one of
+/// the three.
 ///
 /// @code
 /// YuvImage image;  // a decoder's NV12 picture, left on the device
@@ -91,6 +94,13 @@ struct YuvImage {
   /// family wrote it; another Vulkan family's is ignored too for a
   /// CONCURRENT buffer, which needs no transfer.
   std::uint32_t queue_family = kQueueFamilyIgnored;
+  /// Or NV12's planes as images on the device, as VideoToolbox's picture
+  /// arrives: `image[0]` the luma (`R8_UNORM`), `image[1]` the chroma
+  /// (`R8G8_UNORM`, Cb first), each at least the picture's size, chroma
+  /// halved and rounded up, and read from its corner. The pass copies them
+  /// into its input in its batch, so their writer must have finished, as
+  /// for @ref device, and the frame holds them as it does @ref device.
+  std::shared_ptr<const Image> image[2];
   std::uint32_t width = 0;   ///< Luma width (pixels).
   std::uint32_t height = 0;  ///< Luma height (pixels).
   /// The matrix's red and blue weights: BT.601 is 0.299 and 0.114, BT.709
@@ -116,8 +126,9 @@ struct RawFrame {
   float min_depth = 0.0f;
   float max_depth = 0.0f;  ///< Farther samples are dropped (metres).
 
-  /// The colour picture; with neither `color.plane[0]` nor `color.device`
-  /// set, the frame has none. Its size is @ref color_camera's.
+  /// The colour picture; with none of `color.plane[0]`, `color.device` and
+  /// `color.image[0]` set, the frame has none. Its size is
+  /// @ref color_camera's.
   YuvImage color{};
   LensCamera color_camera{};  ///< The colour camera, lens included.
   Mat4f color_cam_to_world = Mat4f(1.0f);  ///< The colour camera's pose.
@@ -129,7 +140,8 @@ struct RawFrame {
 
   /// @return `true` if this frame carries colour.
   bool has_color() const noexcept {
-    return color.plane[0] != nullptr || color.device != nullptr;
+    return color.plane[0] != nullptr || color.device != nullptr ||
+           color.image[0] != nullptr;
   }
 };
 

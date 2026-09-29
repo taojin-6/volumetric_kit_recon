@@ -26,6 +26,7 @@ namespace volumetric_kit::recon {
 class Allocator;
 class Device;
 class GpuStageScope;
+class Image;
 class GpuTimer;
 struct ComputeKernel;
 
@@ -166,6 +167,26 @@ class VR_CORE_API CommandBatch {
               VkDeviceSize dst_offset, VkDeviceSize bytes,
               GpuStageScope* stage = nullptr);
 
+  /// @brief Copy @p width x @p height texels of @p src, from its corner, into
+  ///        @p dst at @p dst_offset, rows packed (`vkCmdCopyImageToBuffer`).
+  ///
+  /// The image is read in its @ref Image::layout, after a transition when
+  /// that is undefined, so each image is copied at most once a batch.
+  /// @param src         An `R8_UNORM` or `R8G8_UNORM` image with
+  ///                    `TRANSFER_SRC` usage, its writer finished.
+  /// @param width       Texels a row, not 0 and at most the image's width.
+  /// @param height      Rows, not 0 and at most the image's height.
+  /// @param dst         Needs `TRANSFER_DST` usage.
+  /// @param dst_offset  Byte offset into @p dst; a multiple of 4.
+  /// @param stage       As @ref upload.
+  /// @return OK; InvalidArgument for an empty image or one of another format,
+  ///         a region empty or past it, an image this batch copies already,
+  ///         a misaligned offset or a range past @p dst, or a missing usage
+  ///         bit; or a poisoned batch's first refusal.
+  Status copy(const Image& src, std::uint32_t width, std::uint32_t height,
+              const Buffer& dst, VkDeviceSize dst_offset,
+              GpuStageScope* stage = nullptr);
+
   /// @brief Take @p buffer over from the queue family @p from before the
   ///        commands recorded after this use it: the acquiring half of a
   ///        queue-family ownership transfer.
@@ -270,7 +291,8 @@ class VR_CORE_API CommandBatch {
     Dispatch,
     DispatchIndirect,
     Readback,
-    Acquire
+    Acquire,
+    ImageCopy
   };
   struct Op {
     Kind kind = Kind::Copy;
@@ -287,6 +309,10 @@ class VR_CORE_API CommandBatch {
     GpuStageScope* stage = nullptr;   // a dispatch's or an upload's span
     void* host_dst = nullptr;         // a readback's destination
     bool staged = false;              // a Copy from this batch's own staging
+    VkImage image = VK_NULL_HANDLE;   // an ImageCopy's source
+    VkImageLayout image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    std::uint32_t width = 0;   // an ImageCopy's texels a row
+    std::uint32_t height = 0;  // and rows
   };
 
   struct Span {

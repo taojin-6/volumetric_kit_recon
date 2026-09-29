@@ -136,6 +136,10 @@ struct DeviceRequirements {
   /// @ref AdoptedDevice::enabled_device_extensions; without it, pictures come
   /// through the host.
   bool external_memory = false;
+  /// `VK_EXT_metal_objects` (MoltenVK), which lets a VideoToolbox picture's
+  /// planes be imported as images and stay on the GPU. Optional, as
+  /// @ref external_memory is.
+  bool metal_objects = false;
 };
 
 /// @brief A `VkDevice` the caller already created, plus what the caller ENABLED
@@ -325,6 +329,12 @@ class VR_CORE_API Device {
   /// @return `VK_ERROR_EXTENSION_NOT_PRESENT` when @ref exports_memory is
   ///         false; otherwise the call's result.
   VkResult memory_fd(VkDeviceMemory memory, int* fd) const noexcept;
+
+  /// @return Whether this device imports Metal textures as images
+  ///         (`VK_EXT_metal_objects`), which a VideoToolbox picture needs to
+  ///         stay on the GPU: enabled by @ref create where the GPU offers it,
+  ///         and on @ref adopt where the creator declares it.
+  bool imports_metal_textures() const noexcept { return metal_objects_; }
 
   /// @brief Name a Vulkan object so a GPU capture shows that name instead of a
   ///        raw handle.
@@ -534,6 +544,8 @@ class VR_CORE_API Device {
   // VK_KHR_external_memory_fd's export, resolved only where it is enabled,
   // so a null pointer is the answer to exports_memory(). Reset with the rest.
   PFN_vkGetMemoryFdKHR get_memory_fd_ = nullptr;
+  // Whether VK_EXT_metal_objects is enabled. Reset with the rest.
+  bool metal_objects_ = false;
 };
 
 }  // namespace volumetric_kit::recon

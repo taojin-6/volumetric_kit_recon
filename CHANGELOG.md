@@ -143,6 +143,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `sensor`: **VideoToolbox's pictures stay on the GPU.** Given
+  `HevcDecoder::Options::device` on a device that imports Metal textures, a
+  VideoToolbox decode hands its picture out as two plane images
+  (`DecodedPicture::image`), which `GpuFramePrep` takes as `YuvImage::image`
+  and copies on the device. On an M5 Max, per 4K picture: 0.20-0.28 ms of
+  CPU to receive against 0.64-0.71, and 0.29-0.38 to prepare against
+  0.49-0.52.
+- `core`: **`Image`**, a `VkImage` another API made, freed by its maker's
+  deleter, and **`CommandBatch::copy`** from one into a buffer.
+  `Device::create` enables `VK_EXT_metal_objects` where offered
+  (`imports_metal_textures`), and `DeviceRequirements::metal_objects` asks a
+  shared device for it. The build enables Objective-C++ on Apple.
 - `texture`: **a colour camera of its own, and depth and coverage on the
   device, for projective texturing** — what a `GpuFramePrep` frame has. A
   `TextureView` takes an optional `color_camera`, a `depth_buffer` in place
