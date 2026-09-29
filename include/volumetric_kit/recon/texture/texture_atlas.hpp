@@ -104,8 +104,11 @@ struct AtlasLayout {
   std::vector<AtlasTile> tiles;
 };
 
-/// @brief Lay the views' images side by side in view order, starting a new
-///        row when the next image would pass @p max_extent.
+/// @brief Lay the views' images side by side in view order, in rows of
+///        ceil(sqrt(n)): one or two views in one row, three or four in two,
+///        up to nine in three, so the atlas grows in both directions and
+///        stays inside the extent. A row also ends early when the next image
+///        would pass @p max_extent.
 /// @param views       The views, whose @ref TextureView::image_width and
 ///                    `image_height` (or colour cameras, or depth maps) give
 ///                    each tile's size.

@@ -5525,6 +5525,16 @@ mesh and a superseded one are refused, the latter both over a live buffer
 and over a freed one. Dropping the device overload's `is_current` check or
 its stage scope fails it.
 
+**Amended: rows of ceil(sqrt(n)).** One row of a rig's four 4K views is a
+15360 x 2160 atlas, near the 16384 `maxImageDimension2D` many devices allow,
+long and thin, and any fifth view or 4096-wide mode wraps it anyway. So
+`side_by_side_atlas` now ends a row at ceil(sqrt(n)) views: one or two views
+stay side by side, three or four make two rows (7680 x 4320 for four 4K
+views, the same pixels), and up to nine make three. A row still ends early
+where the next image would pass the extent. The texturer reads each tile's
+rectangle, so nothing else changes. A layout left in one row, as a mutant,
+fails the multi-view test.
+
 **Open**, each a `TODO(texture)` at the code it names. The atlas is packed on
 the host and uploaded by gfx; packing it on the GPU into an image gfx samples
 directly needs `core` images. Each call copies every view's depth into the

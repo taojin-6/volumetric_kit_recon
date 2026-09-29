@@ -76,7 +76,12 @@ Result<AtlasLayout> side_by_side_atlas(const std::vector<TextureView>& views,
   if (views.empty()) {
     return Status::invalid_argument(who + "no views");
   }
+  // As square as the count allows: four 4K views make 7680 x 4320, not
+  // 15360 x 2160, which is near the 16384 many devices allow.
+  std::size_t columns = 1;
+  while (columns * columns < views.size()) ++columns;
   AtlasLayout layout;
+  std::size_t in_row = 0;   // tiles in this row so far
   std::uint64_t x = 0;      // where the next tile of this row starts
   std::uint64_t y = 0;      // where this row starts
   std::uint64_t row_h = 0;  // this row's tallest tile
@@ -95,14 +100,16 @@ Result<AtlasLayout> side_by_side_atlas(const std::vector<TextureView>& views,
           std::to_string(h) + " image is larger than the atlas extent " +
           std::to_string(max_extent));
     }
-    if (x + w > max_extent) {  // wrap
+    if (in_row == columns || x + w > max_extent) {  // wrap
       y += row_h;
       x = 0;
       row_h = 0;
+      in_row = 0;
     }
     layout.tiles.push_back(
         {static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y), w, h});
     x += w;
+    ++in_row;
     row_h = std::max<std::uint64_t>(row_h, h);
     width = std::max(width, x);
   }
