@@ -415,15 +415,26 @@ bool CommandBatch::needs_barrier(std::size_t first, std::size_t i) const {
   // run has: the run's first write there was checked against all of it. So
   // zeroing thousands of scattered blocks is one run, and costs no scan of it
   // per fill, and so is staging several images into one buffer. A staged
-  // upload reads only its own staging.
+  // upload reads only its own staging, and a copy from another buffer reads
+  // only that, so it joins the run too once nothing in the run writes its
+  // source -- which, a run's commands writing only its buffer, is asked of
+  // the joining copy alone.
   const auto plain = [](const Op& op) {
-    return op.kind == Kind::Fill || op.kind == Kind::Update || op.staged;
+    return op.kind == Kind::Fill || op.kind == Kind::Update || op.staged ||
+           (op.kind == Kind::Copy && op.src != op.dst);
   };
   if (i > first) {
     const Op& prev = ops_[i - 1];
     if (plain(prev) && plain(b) && prev.dst == b.dst &&
         b.dst_offset >= prev.dst_offset + prev.bytes) {
-      return false;
+      bool source_written = false;
+      if (b.kind == Kind::Copy && !b.staged) {
+        for (std::size_t j = first; j < i && !source_written; ++j) {
+          source_written =
+              ops_[j].kind != Kind::Acquire && written(ops_[j]) == b.src;
+        }
+      }
+      if (!source_written) return false;
     }
   }
   for (std::size_t j = first; j < i; ++j) {

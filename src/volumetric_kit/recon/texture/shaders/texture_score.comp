@@ -43,6 +43,16 @@
 // reverts rather than keeping a stale coordinate -- the property the per-
 // triangle version had and this must not lose.
 //
+// The atlas is the colour camera's image (`color`), which for an image
+// registered to the depth camera is that camera again. The coordinate is the
+// colour camera's pixel, so the three outcomes above are read off it: behind
+// it is the sentinel, and a vertex in front of it carries its coordinate
+// unless it lands inside the image, on a pixel the image recorded
+// (pc.has_coverage), both cameras see the same side of the surface there, the
+// depth camera sees it unoccluded, and nothing the depth map shows stands
+// between it and the colour camera (color_sees). Cheapest first, the depth
+// reads last.
+//
 // Ported from the prior engine's scoreTrianglesKernel + writeTriangleUVsKernel
 // (projective_mapping.cu / projective_texturing.metal): the per-vertex
 // bounds + bilinear-depth occlusion test, and camera_uv_to_atlas_uv's +0.5
@@ -62,16 +72,21 @@ layout(local_size_x = 256) in;
 layout(push_constant, scalar) uniform PushConstants {
   uint num_vertices;          // vertices[] length; bounds this dispatch
   float occlusion_threshold;  // max |projected depth - sensor depth|, metres
+  uint has_coverage;          // coverage[] marks what the image recorded
+  uint image_width;           // the image's size, which coverage[] has
+  uint image_height;
 } pc;
 
 // No Indices binding: this dispatch never addresses a vertex through an index,
 // which is also why it needs no num_vertices bound on that addressing (the
 // malformed-mesh guard the per-triangle version carried) -- the only index it
 // forms is its own invocation id.
-// Binding 1, the depth frame, is texture_common.glsl's, beside its sampler.
+// Bindings 1 and 3, the depth frame and the image's coverage, are
+// texture_common.glsl's, beside the tests that read them.
 layout(set = 0, binding = 0, scalar) buffer Vertices { Vertex vertices[]; };
 layout(set = 0, binding = 2, scalar) readonly buffer Camera {
   DepthCameraParams cam;
+  ColorCameraParams color;  // the atlas image's; `cam` again when registered
 };
 
 // True when the vertex at `px`, depth `zc`, is on the visible surface of the
@@ -85,10 +100,11 @@ bool occluded_ok(vec2 px, float zc) {
 // (single-camera slice: atlas_x_offset 0, atlas dims == image dims), so the
 // prior engine's camera_uv_to_atlas_uv reduces to a +0.5 half-texel (pixel
 // centre -> texel) normalized by the image size, clamped half a texel inside
-// the border to stop bilinear bleed at the atlas edge. No y-flip.
-vec2 pixel_to_atlas_uv(vec2 px) {
-  float w = float(cam.width);
-  float h = float(cam.height);
+// the border to stop bilinear bleed at the atlas edge. No y-flip. `image` is
+// the colour camera's size.
+vec2 pixel_to_atlas_uv(vec2 px, vec2 image) {
+  float w = image.x;
+  float h = image.y;
   float u = (px.x + 0.5) / w;
   float v = (px.y + 0.5) / h;
   float u_min = 0.5 / w;
@@ -96,6 +112,35 @@ vec2 pixel_to_atlas_uv(vec2 px) {
   u = clamp(u, u_min, 1.0 - u_min);
   v = clamp(v, v_min, 1.0 - v_min);
   return vec2(u, v);
+}
+
+// Whether the vertex at `position`, colour pixel `cpx` of a `size` image, is
+// textured: the class note's tests, cheapest first.
+//
+// The side test is the per-vertex form of texture_multiview.comp's facing
+// test for the colour camera: across the surface's plane from the depth
+// camera, a colour camera images the other side of what the depth camera
+// proved it sees. A zero normal leaves both sides equal and so passes; a
+// registered image's two cameras are one, which always does.
+bool seen(vec3 position, vec3 normal, vec2 cpx, vec2 size) {
+  if (!inside_image(cpx, size)) {
+    return false;
+  }
+  if (pc.has_coverage != 0u &&
+      !covered(0u, cpx, size, uvec2(pc.image_width, pc.image_height))) {
+    return false;
+  }
+  vec3 depth_eye = cam.cam_to_world[3].xyz;
+  vec3 color_eye = color.cam_to_world[3].xyz;
+  if ((dot(normal, depth_eye - position) > 0.0) !=
+      (dot(normal, color_eye - position) > 0.0)) {
+    return false;
+  }
+  vec3 q = world_to_camera(cam, position);
+  vec2 px;
+  return camera_to_image(cam, q, px) && occluded_ok(px, q.z) &&
+         color_sees(cam, 0u, q, px, world_to_camera(cam, color_eye),
+                    pc.occlusion_threshold);
 }
 
 void main() {
@@ -116,9 +161,9 @@ void main() {
   // That is why project_to_image and occluded_ok are both written to reject a
   // NaN rather than to accept one by default: an unclaimed slot takes the
   // sentinel path and is never referenced by a triangle anyway.
-  vec2 px;
-  float zc;
-  if (!project_to_image(cam, vertices[vid].position, px, zc)) {
+  vec3 position = vertices[vid].position;
+  vec2 cpx;
+  if (!project_to_image(color, position, cpx)) {
     // No usable projection -- behind the camera, where the pinhole divide has
     // no meaning, or a position that is not a number. Either way there
     // genuinely is no coordinate to carry and the bare sentinel is the honest
@@ -138,11 +183,13 @@ void main() {
   // nearest edge coordinate rather than a wild one.
   //
   // Carrying it is the whole point at the frustum boundary. Such a vertex is
-  // never textured -- `occluded_ok` refuses a pixel within a texel of the edge
-  // -- but a triangle whose provoking vertex IS textured interpolates across
-  // it, and the bare sentinel would drag that interpolation to the atlas
-  // origin, drawing the entire camera image inside one triangle along the whole
+  // never textured -- `seen` refuses a pixel outside the image -- but a
+  // triangle whose provoking vertex IS textured interpolates across it, and
+  // the bare sentinel would drag that interpolation to the atlas origin,
+  // drawing the entire camera image inside one triangle along the whole
   // boundary.
-  vec2 uv = pixel_to_atlas_uv(px);
-  vertices[vid].uv0 = occluded_ok(px, zc) ? uv : (-uv - 1.0);
+  vec2 size = vec2(color.width, color.height);
+  vec2 uv = pixel_to_atlas_uv(cpx, size);
+  vertices[vid].uv0 =
+      seen(position, vertices[vid].normal, cpx, size) ? uv : (-uv - 1.0);
 }

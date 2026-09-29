@@ -3,15 +3,22 @@
 
 // Shared definitions for the projective-texturing compute kernels: the device
 // struct layouts (scalar block layout, byte-identical to the host POD structs),
-// the pinhole projection, the depth binding and the occlusion test that reads
-// it. #included by texture_score.comp (one camera, per vertex) and
-// texture_multiview.comp (several, per triangle), each of which declares its
-// own push-constant block and its other bindings.
+// the pinhole projection into a depth or a colour camera, the depth and
+// coverage bindings and the tests that read them. #included by
+// texture_score.comp (one camera, per vertex) and texture_multiview.comp
+// (several, per triangle), each of which declares its own push-constant block
+// and its other bindings.
+//
+// Both kernels texture from a colour camera and decide visibility with the
+// depth camera. An image registered to its depth camera arrives with that
+// camera as its colour camera: the same arithmetic on the same pixels, and the
+// colour camera's own tests then pass wherever the depth camera's do.
 //
 // DepthCameraParams mirrors DepthCameraParams byte-for-byte (the same
-// scalar-layout camera the volume/tsdf kernels use); Vertex mirrors
-// mesh::Vertex. Under scalar block layout every field lands at its host offset
-// (no std430 vec padding).
+// scalar-layout camera the volume/tsdf kernels use), ColorCameraParams mirrors
+// ColorCameraParams (tsdf's colour camera), and Vertex mirrors mesh::Vertex.
+// Under scalar block layout every field lands at its host offset (no std430
+// vec padding).
 //
 // project_to_image computes the same world -> camera -> pixel arithmetic as
 // tsdf_common.glsl's project_pinhole -- a self-contained copy, so this tier's
@@ -43,6 +50,20 @@ struct DepthCameraParams {
   mat4 cam_to_world;
 };
 
+// The camera the colour image was taken with (mirrors ColorCameraParams:
+// scalars at their 4-byte offsets, the cam_to_world mat4 at 24, 88 B). No
+// depth range: it projects a vertex for its coordinate, and the depth camera's
+// map decides what it can see.
+struct ColorCameraParams {
+  float fx;
+  float fy;
+  float cx;
+  float cy;
+  uint width;
+  uint height;
+  mat4 cam_to_world;
+};
+
 // One mesh vertex (mirrors mesh::Vertex byte-for-byte: position@0, normal@12,
 // tangent@24, uv0@40, color@48, 64 B -- the renderer's layout since the
 // 2026-08-02 decision). The kernel reads `position` and overwrites `uv0`.
@@ -56,14 +77,14 @@ struct Vertex {
 
 // A world point in camera space: R^T (world - t), the rigid inverse of
 // cam_to_world.
-vec3 world_to_camera(DepthCameraParams c, vec3 world) {
-  return transpose(mat3(c.cam_to_world)) * (world - c.cam_to_world[3].xyz);
+vec3 world_to_camera(mat4 cam_to_world, vec3 world) {
+  return transpose(mat3(cam_to_world)) * (world - cam_to_world[3].xyz);
 }
 
 // project_to_image's divide, for a point already in camera space -- which is
 // how texture_multiview.comp calls it, having transformed each vertex once for
-// both the facing test and the projection.
-bool camera_to_image(DepthCameraParams c, vec3 p_cam, out vec2 px) {
+// both the facing test and the projection. `k` is (fx, fy, cx, cy).
+bool camera_to_image(vec4 k, vec3 p_cam, out vec2 px) {
   // Negated rather than `p_cam.z <= 0.0`, so a NaN fails it: every comparison
   // with NaN is false, so the direct form would ACCEPT a non-finite depth and
   // hand the caller a NaN pixel. That matters more than it used to. The
@@ -76,8 +97,7 @@ bool camera_to_image(DepthCameraParams c, vec3 p_cam, out vec2 px) {
   if (!(p_cam.z > 0.0)) {
     return false;  // behind the camera or non-finite: no projection exists
   }
-  px = vec2(c.fx * (p_cam.x / p_cam.z) + c.cx,
-            c.fy * (p_cam.y / p_cam.z) + c.cy);
+  px = vec2(k.x * (p_cam.x / p_cam.z) + k.z, k.y * (p_cam.y / p_cam.z) + k.w);
   // A finite depth does not make the pixel finite -- a non-finite x or y in
   // the position survives the divide with the depth intact (an identity pose
   // puts a NaN x straight through to u while z stays 1). An infinity is fine
@@ -85,6 +105,21 @@ bool camera_to_image(DepthCameraParams c, vec3 p_cam, out vec2 px) {
   // border like any far-outside projection. A NaN is not, for the reason
   // above.
   return !isnan(px.x) && !isnan(px.y);
+}
+
+// The two above for either camera: one copy of the arithmetic and its NaN
+// handling, which a registered image's colour camera must repeat exactly.
+vec3 world_to_camera(DepthCameraParams c, vec3 world) {
+  return world_to_camera(c.cam_to_world, world);
+}
+vec3 world_to_camera(ColorCameraParams c, vec3 world) {
+  return world_to_camera(c.cam_to_world, world);
+}
+bool camera_to_image(DepthCameraParams c, vec3 p_cam, out vec2 px) {
+  return camera_to_image(vec4(c.fx, c.fy, c.cx, c.cy), p_cam, px);
+}
+bool camera_to_image(ColorCameraParams c, vec3 p_cam, out vec2 px) {
+  return camera_to_image(vec4(c.fx, c.fy, c.cx, c.cy), p_cam, px);
 }
 
 // Project a world point into a pinhole camera given its intrinsics + rigid
@@ -124,6 +159,40 @@ bool project_to_image(DepthCameraParams c, vec3 world, out vec2 px,
   vec3 p_cam = world_to_camera(c, world);
   zc = p_cam.z;
   return camera_to_image(c, p_cam, px);
+}
+
+// project_to_image for a colour camera, which has no depth to report. A
+// point in front whose pixel lands outside the image still projects, for the
+// reason project_to_image gives; inside_image is the bounds test.
+bool project_to_image(ColorCameraParams c, vec3 world, out vec2 px) {
+  return camera_to_image(c, world_to_camera(c, world), px);
+}
+
+// True when pixel `px` lies within the pixel centres of a `size` image, so the
+// colour camera recorded the point rather than the coordinate being an edge
+// clamp of one it did not. Every compare is true only inside, so a NaN is
+// outside.
+bool inside_image(vec2 px, vec2 size) {
+  return px.x >= 0.0 && px.x <= size.x - 1.0 && px.y >= 0.0 &&
+         px.y <= size.y - 1.0;
+}
+
+// Binding 3 in both kernels: images that mark their own coverage, a word a
+// pixel with 0 in the high byte where the image recorded nothing -- a
+// sensor::GpuFramePrep frame's colour, black where its lens saw nothing. The
+// one camera's image, or every such view's end to end.
+layout(set = 0, binding = 3, scalar) readonly buffer Coverage {
+  uint coverage[];
+};
+
+// True when the `image`-pixel image at coverage[base] recorded the pixel that
+// colour pixel `cpx` lands on. `cpx` is measured in the colour camera's
+// `size`, which is the image's except for an image registered to a smaller
+// depth map, so the pixel is found as a fraction of it; the caller has held
+// `cpx` inside_image, so the fraction is inside too.
+bool covered(uint base, vec2 cpx, vec2 size, uvec2 image) {
+  uvec2 p = min(uvec2((cpx + 0.5) / size * vec2(image)), image - 1u);
+  return (coverage[base + p.y * image.x + p.x] >> 24) != 0u;
 }
 
 // Binding 1 in both kernels: the depth the occlusion test reads -- the one
@@ -226,4 +295,66 @@ bool occluded_ok(DepthCameraParams c, uint base, vec2 px, float zc,
   }
   diff = abs(d - zc);
   return diff <= threshold;
+}
+
+// The most depth samples color_sees takes on one sight line: a pixel apart,
+// until a line is longer than this and they spread out along it.
+const int kMaxSightSamples = 64;
+
+// True unless depth camera `c`'s map (at depth[base]) shows a surface between
+// a colour camera and the point `q` that `c` sees at pixel `px`. `q` and `e`,
+// the colour camera's centre, are in `c`'s space.
+//
+// The depth camera proved its own line of sight to q, and the colour camera,
+// a few centimetres away, looks along another: past an occluding edge, it can
+// see the occluder where the depth camera sees q. Its sight line, from q back
+// to e, projects into the depth image as a segment of q's epipolar line, and
+// along a projected 3-D segment 1/z is linear in the image, so a walk down it
+// knows the line's depth at each sample. A surface the map puts more than
+// `threshold` nearer than the line blocks it. Each sample is one read at the
+// nearest pixel, a third cheaper than the bilinear sampler on the M5 Max; on
+// a plane its error passes the threshold only at slopes where that sampler
+// falls back to its nearest tap too. The walk ends where the line
+// reaches the near end of the depth range, since nothing nearer is measured,
+// or leaves the image. The first pixel is q's own, which occluded_ok judged.
+// For a registered image the colour camera IS the depth camera, the segment
+// is a point, and nothing is sampled.
+bool color_sees(DepthCameraParams c, uint base, vec3 q, vec2 px, vec3 e,
+                float threshold) {
+  if (!(q.z > c.min_depth)) {
+    return true;  // nothing measured lies in front of it
+  }
+  // The walk's far end: where the line crosses the near limit, or e itself
+  // when e is no nearer than that.
+  float s = e.z < c.min_depth ? (q.z - c.min_depth) / (q.z - e.z) : 1.0;
+  vec3 end = mix(q, e, s);
+  vec2 end_px;
+  if (!camera_to_image(c, end, end_px)) {
+    return true;
+  }
+  vec2 along = end_px - px;
+  float len = length(along);
+  if (!(len >= 1.0 && len < 1e6)) {
+    return true;  // under a pixel: the two cameras look down one ray
+  }
+  int n = min(int(ceil(len)), kMaxSightSamples);
+  float inv_q = 1.0 / q.z;
+  float inv_end = 1.0 / end.z;
+  for (int i = 1; i <= n; i++) {
+    float a = float(i) / float(n);
+    if (a * len < 1.0) {
+      continue;
+    }
+    vec2 p = px + a * along;
+    if (!(p.x >= 0.0 && p.x <= float(c.width) - 1.0 && p.y >= 0.0 &&
+          p.y <= float(c.height) - 1.0)) {
+      break;  // a straight line that has left the image stays out
+    }
+    float z = 1.0 / mix(inv_q, inv_end, a);
+    float d = depth[base + uint(p.y + 0.5) * c.width + uint(p.x + 0.5)];
+    if (d >= c.min_depth && d <= c.max_depth && d < z - threshold) {
+      return false;
+    }
+  }
+  return true;
 }

@@ -77,7 +77,9 @@ branching off **`core`**, `codec` off **`volume`** and `eval` off **`mesh`**
 - **`texture`** — projective texturing: fills the mesh's per-vertex `uv0` with a
   posed camera's image coordinates where it has line of sight (per-vertex-color
   fallback elsewhere), or with several cameras' coordinates into an atlas of
-  their images, a compute pass.
+  their images, a compute pass. A colour image is registered to its depth
+  camera or taken by a colour camera of its own, whose line of sight the
+  depth map decides too; depth may be on the host or the device.
 - **`sensor`** — the capture *contract*: `ICameraCapture`, the `CapturedFrame`
   view the fusion tiers consume, and the boundary conversions a capture
   integration gets silently wrong — camera conventions (pose handedness,
@@ -322,6 +324,11 @@ order. Change the decision, its entry there, and this list together.
 - [**2026-09-28**](DECISIONS.md#2026-09-28--a-device-takes-submits-from-several-threads-at-once-each-records-on-a-command-pool-of-its-own-and-only-the-queue-is-locked) —
   A `Device` takes submits from several threads at once: each records on a
   command pool of its own, and only the queue is locked.
+- [**2026-09-28**](DECISIONS.md#2026-09-28--projective-texturing-takes-a-colour-camera-of-its-own-and-depth-on-the-device-the-depth-camera-decides-what-is-visible-its-map-what-the-colour-camera-sees-and-the-colour-camera-gives-the-coordinate-a-views-device-depth-and-coverage-are-copied-on-the-device-rather-than-staged) —
+  Projective texturing takes a colour camera of its own and depth on the
+  device: the depth camera decides what is visible, its map what the colour
+  camera sees, and the colour camera gives the coordinate; a view's device
+  depth and coverage are copied on the device rather than staged.
 
 ## Provenance & salvage policy
 
@@ -546,8 +553,9 @@ arbitrary; it usually isn't.
   family or an API outside Vulkan wrote, the receiving half of the ownership
   transfer. A barrier goes wherever a command could see an
   earlier one's writes: around every dispatch, and between two transfers
-  only when they share a buffer one writes, unless they are fills or
-  uploads rising through it without overlap. `zero` clears a range at any
+  only when they share a buffer one writes, unless they are fills, uploads
+  or copies rising through it without overlap, and no command in the run
+  writes a copy's source. `zero` clears a range at any
   alignment. `dispatch()` is a batch of one.
   An upload of up to 64 KiB, 4-byte aligned, goes inline
   (`vkCmdUpdateBuffer`) and a larger one through a staging buffer the batch
@@ -823,23 +831,34 @@ arbitrary; it usually isn't.
   nothing to carry. A vertex in front but outside the image carries the clamped
   border coordinate; conflating it with the behind-camera case drew the whole
   image inside one triangle along the frustum edge. Live single camera, so the
-  frame the caller binds *is* the atlas. The `TextureView` overloads texture
-  from **several** views into an atlas of their images side by side
-  (`texture_atlas.hpp`: `side_by_side_atlas`, `pack_atlas`), one thread per
-  **triangle**: each takes the view facing it most squarely among those that
-  see its **front** and all three of its vertices, and all three point into
-  that view's tile. A view is a depth map, its camera, and the size of the
-  colour image registered to it, which is the tile at its own resolution, so
-  low-resolution depth textures at the capture's. Per triangle because
-  vertices in different tiles would interpolate across the atlas, so that
-  path needs an unshared mesh and refuses a shared one, as it refuses a view
-  with no depth range and tiles that overlap (2026-09-28). Opt-in
-  `StageMetrics*` on every overload reports a `"texture"` row with both
-  halves. The single-camera `DeviceMesh` pass also takes its depth as a
-  device `Buffer`, bound in place, though the atlas must still be registered
-  to it, which a `GpuFramePrep` frame's colour is not. Every pass is one
-  batch, a host depth frame staged; a host `Mesh`, the export path, is staged
-  up and read back in a batch of its own.
+  frame the caller binds *is* the atlas. A **`TextureView`** is one frame: a
+  depth map on the host or the device (`depth_buffer`), its camera, the size
+  of its colour image, which is the tile at its own resolution so
+  low-resolution depth textures at the capture's, and, when that image is not
+  registered to the depth camera, the `color_camera` it was taken with and
+  optionally its `coverage` (a `GpuFramePrep` frame's colour, 0 where the lens
+  saw nothing), the buffers held by `shared_ptr`. The single-camera pass takes
+  one view (the `DeviceMesh` and host `Mesh` overloads), and the several-view
+  overloads texture from **several** into an atlas of their images side by
+  side (`texture_atlas.hpp`: `side_by_side_atlas`, `pack_atlas`), one thread
+  per **triangle**: each takes the view facing it most squarely among those
+  that see its **front** and all three of its vertices, and all three point
+  into that view's tile. Per triangle because vertices in different tiles
+  would interpolate across the atlas, so that path needs an unshared mesh and
+  refuses a shared one, as it refuses a view with no depth range and tiles
+  that overlap (2026-09-28). With a colour camera the depth camera still
+  decides visibility, and the coordinate is the colour camera's, kept only
+  where its image recorded the vertex, both cameras see the same side of the
+  surface, and its line of sight is clear: the pass walks that line's
+  projection across the depth map, at most 64 samples, for a surface in front
+  of it, which is what catches the parallax fringe beside an occluding edge.
+  A registered image is the case where the two cameras are one (the
+  2026-09-28 colour-camera decision). Opt-in `StageMetrics*` on every overload
+  reports a `"texture"` row with both halves, the several-view inputs'
+  transfers included. Every pass is one batch, a host depth frame staged and
+  a device view's depth and coverage copied into the several-view pass's
+  buffers, device to device; a host `Mesh`, the export path, is staged up and
+  read back in a batch of its own.
 
 - **`sensor`** — the capture *contract*: `ICameraCapture` polled for a
   `CapturedFrame` (frames dropped, not queued) and asked `exhausted()` after
@@ -1120,8 +1139,9 @@ and `ExtractTimings`' device half — which must
 bracket several dispatches in **one** timed submit, since a timed submit costs
 ~0.13 ms on MoltenVK and four of the six phases run under that. On `texture`,
 the `TODO(texture)`s: packing the multi-view atlas on the GPU into an image gfx
-samples directly (it needs `core` images), keeping a view's depth on the
-device between calls, blending views at their seams, and a per-triangle tile
+samples directly (it needs `core` images), keeping a static keyframe set's
+depth and coverage in the pass between calls, blending views at their seams,
+and a per-triangle tile
 index in gfx so a shared mesh can be textured from several views; and the
 multi-keyframe post-scan atlas, which the multi-view path can carry. On
 `core`: the `TODO(core)` for `VK_EXT_memory_budget` on `Device::create`,
@@ -1143,9 +1163,7 @@ none, and the run's CPU eightfold down) and for the rig's raw sets. NVDEC
 and nvJPEG hand their pictures over on the device; what is left is
 VideoToolbox on Apple, and the Orbbec raw path carrying the device picture
 (`hevc_decoder.cpp`, `camera_stream.cpp`, the 2026-09-28 decoded-frame
-decision's order), and the
-texture tier's separate colour camera, which fusing unregistered
-frames makes the texturing path's next need; and processing a host rig
+decision's order); and processing a host rig
 set's frames in parallel, one thread per camera, rather than the ~11 ms one
 after another costs for four (`orbbec_rig.cpp`). For H.265: the camera's
 encoder settings, its key-frame interval above all, which sets what a lost

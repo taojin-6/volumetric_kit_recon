@@ -25,12 +25,14 @@ struct ImageSize {
   std::uint32_t height = 0;
 };
 
-/// @brief @p view's @ref TextureView::image_width x `image_height`, or its
-///        depth map's size when both are zero.
+/// @brief @p view's @ref TextureView::image_width x `image_height`, or, when
+///        both are zero, its colour camera's size if it has one and its depth
+///        map's if not.
 /// @param who    The caller's name, prefixed to a refusal.
 /// @param index  The view's index, for the refusal.
-/// @return The size; InvalidArgument when exactly one of the two is zero or
-///         the size is empty.
+/// @return The size; InvalidArgument when exactly one of the two is zero, when
+///         a given size is not the colour camera's, or when the size is
+///         empty.
 Result<ImageSize> view_image_size(const TextureView& view, std::size_t index,
                                   const std::string& who);
 

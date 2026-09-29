@@ -22,9 +22,11 @@
 //
 // Needs a device, so the whole test skips (exit 0) where none is present.
 
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -57,6 +59,26 @@ namespace rtex = volumetric_kit::recon::texture;
   } while (0)
 
 namespace {
+
+// The coordinate the single-camera pass gives `world` in colour camera `k`:
+// the kernel's arithmetic -- the pixel centre as a fraction of the image,
+// clamped half a texel inside it.
+vr::Vec2f color_uv(const vr::ColorCameraParams& k, vr::Vec3f world) {
+  const vr::Vec3f d = world - vr::Vec3f(k.cam_to_world[3]);
+  const vr::Vec3f p(vr::dot(vr::Vec3f(k.cam_to_world[0]), d),
+                    vr::dot(vr::Vec3f(k.cam_to_world[1]), d),
+                    vr::dot(vr::Vec3f(k.cam_to_world[2]), d));
+  const float w = static_cast<float>(k.width);
+  const float h = static_cast<float>(k.height);
+  const float u = (k.fx * (p.x / p.z) + k.cx + 0.5f) / w;
+  const float v = (k.fy * (p.y / p.z) + k.cy + 0.5f) / h;
+  return vr::Vec2f(std::fmin(std::fmax(u, 0.5f / w), 1.0f - 0.5f / w),
+                   std::fmin(std::fmax(v, 0.5f / h), 1.0f - 0.5f / h));
+}
+
+bool near(vr::Vec2f a, vr::Vec2f b, float tolerance) {
+  return std::fabs(a.x - b.x) <= tolerance && std::fabs(a.y - b.y) <= tolerance;
+}
 
 const vr::StageRow* find_row(const vr::StageMetrics& m, const char* name) {
   for (const vr::StageRow& row : m.rows()) {
@@ -326,6 +348,219 @@ int main() {
     CHECK(short_depth.ok());
     CHECK(!texturer.texture(device_mesh, short_depth.value(), cam).ok());
     CHECK(!texturer.texture(device_mesh, vr::Buffer{}, cam).ok());
+  }
+
+  // A colour camera of its own, as a GpuFramePrep frame has: the depth on the
+  // device, and the camera the atlas was taken with, in one TextureView.
+  //
+  // One identical to the depth camera gives the registered coordinates, since
+  // it is the same arithmetic on the same pixel; the mesh is first textured
+  // against a frame that sees nothing, so a call that wrote nothing cannot
+  // pass. One 5 cm aside, at 256 x 256 with a focal length and principal
+  // point of its own, gives every vertex its pixel in THAT camera: textured
+  // exactly where the registered pass textured it (it is wider, so it records
+  // all the depth camera sees on the sphere, and its line of sight to the
+  // near cap is clear), carried everywhere else. Its image blank over its
+  // right half carries the vertices there too. One too narrow for what the
+  // depth camera sees carries the vertices outside its image. One facing away
+  // gives every vertex the sentinel, though the depth camera sees half of
+  // them.
+  {
+    vr::Result<vr::Buffer> depth_result = vr::device_storage_buffer(
+        allocator.value(), depth.size() * sizeof(float));
+    CHECK(depth_result.ok());
+    CHECK(vr_test::write_back(device.value(), allocator.value(),
+                              depth_result.value(), depth)
+              .ok());
+    const auto device_depth =
+        std::make_shared<const vr::Buffer>(std::move(depth_result).value());
+    const auto view_from = [&](const vr::ColorCameraParams& k) {
+      rtex::TextureView view;
+      view.cam = cam;
+      view.depth_buffer = device_depth;
+      view.color_camera = k;
+      return view;
+    };
+
+    const std::vector<float> nothing(depth.size(), 0.0f);
+    CHECK(texturer.texture(device_mesh, nothing.data(), cam).ok());
+    vr::Result<mesh::Mesh> blind = extractor.download(device_mesh);
+    CHECK(blind.ok());
+    for (const mesh::Vertex& v : blind.value().vertices) {
+      CHECK(v.uv0.x < 0.0f);
+    }
+    const vr::ColorCameraParams same{cam.fx,          cam.fy,    cam.cx,
+                                     cam.cy,          cam.width, cam.height,
+                                     cam.cam_to_world};
+    CHECK(texturer.texture(device_mesh, view_from(same)).ok());
+    vr::Result<mesh::Mesh> as_same = extractor.download(device_mesh);
+    CHECK(as_same.ok());
+    for (std::size_t i = 0; i < host_mesh.vertices.size(); ++i) {
+      const vr::Vec2f got = as_same.value().vertices[i].uv0;
+      const vr::Vec2f want = host_mesh.vertices[i].uv0;
+      CHECK((got.x < 0.0f) == (want.x < 0.0f));
+      CHECK(near(got, want, 1e-6f));
+    }
+
+    vr::ColorCameraParams aside{};
+    aside.fx = 200.0f;
+    aside.fy = 200.0f;
+    aside.cx = 129.5f;
+    aside.cy = 126.0f;
+    aside.width = 256;
+    aside.height = 256;
+    aside.cam_to_world = cam.cam_to_world;
+    aside.cam_to_world[3] += vr::Vec4f(0.05f, 0.0f, 0.0f, 0.0f);
+    // Timed, as the registered overloads are: this is the one a device frame
+    // takes, and nothing else would notice it dropping its row.
+    vr::StageMetrics color_metrics;
+    CHECK(texturer.texture(device_mesh, view_from(aside), 0.02f, &color_metrics)
+              .ok());
+    const vr::StageRow* color_row = find_row(color_metrics, "texture");
+    CHECK(color_row != nullptr);
+    CHECK(color_row->cpu_ms > 0.0);
+    vr::Result<mesh::Mesh> as_aside = extractor.download(device_mesh);
+    CHECK(as_aside.ok());
+    std::size_t textured_aside = 0;
+    for (std::size_t i = 0; i < host_mesh.vertices.size(); ++i) {
+      const vr::Vec2f got = as_aside.value().vertices[i].uv0;
+      const vr::Vec2f uv = color_uv(aside, host_mesh.vertices[i].position);
+      if (host_mesh.vertices[i].uv0.x >= 0.0f) {
+        CHECK(near(got, uv, 1e-5f));
+        ++textured_aside;
+      } else {
+        CHECK(near(got, -uv - vr::Vec2f(1.0f), 1e-5f));
+      }
+    }
+    CHECK(textured_aside > 0);
+
+    // The same camera's image blank from column 128 on, as the corner of an
+    // undistorted image is where the lens saw nothing: the vertices there are
+    // carried, the rest keep their coordinates. Refused, a coverage a word
+    // short of the image, and one that is not a storage buffer, since this
+    // pass binds it in place.
+    {
+      std::vector<std::uint32_t> half(256 * 256, 0u);
+      for (std::size_t y = 0; y < 256; ++y) {
+        for (std::size_t x = 0; x < 128; ++x) half[y * 256 + x] = 0xFF404040u;
+      }
+      vr::Result<vr::Buffer> coverage = vr::device_storage_buffer(
+          allocator.value(), half.size() * sizeof(std::uint32_t));
+      CHECK(coverage.ok());
+      CHECK(vr_test::write_back(device.value(), allocator.value(),
+                                coverage.value(), half)
+                .ok());
+      rtex::TextureView covered = view_from(aside);
+      covered.coverage =
+          std::make_shared<const vr::Buffer>(std::move(coverage).value());
+      CHECK(texturer.texture(device_mesh, covered).ok());
+      vr::Result<mesh::Mesh> as_covered = extractor.download(device_mesh);
+      CHECK(as_covered.ok());
+      std::size_t left = 0;
+      std::size_t right = 0;
+      for (std::size_t i = 0; i < host_mesh.vertices.size(); ++i) {
+        const vr::Vec2f got = as_covered.value().vertices[i].uv0;
+        const vr::Vec2f uv = as_aside.value().vertices[i].uv0;
+        if (uv.x < 0.0f) {
+          CHECK(got == uv);
+          continue;
+        }
+        // The pixel's column: the coordinate's fraction of the image.
+        const float column = uv.x * 256.0f;
+        if (column < 127.9f) {
+          CHECK(got == uv);
+          ++left;
+        } else if (column > 128.1f) {
+          CHECK(near(got, -uv - vr::Vec2f(1.0f), 1e-6f));
+          ++right;
+        }
+      }
+      CHECK(left > 0 && right > 0);
+
+      vr::Result<vr::Buffer> short_coverage = vr::device_storage_buffer(
+          allocator.value(), half.size() * sizeof(std::uint32_t) - 4);
+      vr::BufferDesc copy_only;
+      copy_only.size = half.size() * sizeof(std::uint32_t);
+      copy_only.usage =
+          VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+      copy_only.memory = vr::MemoryUsage::DeviceLocal;
+      vr::Result<vr::Buffer> unbindable =
+          allocator.value().create_buffer(copy_only);
+      CHECK(short_coverage.ok() && unbindable.ok());
+      covered.coverage =
+          std::make_shared<const vr::Buffer>(std::move(short_coverage).value());
+      CHECK(texturer.texture(device_mesh, covered).domain() ==
+            vr::Status::Code::InvalidArgument);
+      covered.coverage =
+          std::make_shared<const vr::Buffer>(std::move(unbindable).value());
+      CHECK(texturer.texture(device_mesh, covered).domain() ==
+            vr::Status::Code::InvalidArgument);
+    }
+
+    // A colour camera too narrow for all the depth camera sees: 16 x 16 at the
+    // same focal length, so only the middle of the textured cap lands inside
+    // its image. A vertex outside it is carried, though the depth camera
+    // proves its line of sight. Within a hundredth of a pixel of the border
+    // either answer is the float's to give, so those are not held to one.
+    vr::ColorCameraParams narrow = aside;
+    narrow.cx = 7.5f;
+    narrow.cy = 7.5f;
+    narrow.width = 16;
+    narrow.height = 16;
+    CHECK(texturer.texture(device_mesh, view_from(narrow)).ok());
+    vr::Result<mesh::Mesh> as_narrow = extractor.download(device_mesh);
+    CHECK(as_narrow.ok());
+    std::size_t inside = 0;
+    std::size_t outside = 0;
+    for (std::size_t i = 0; i < host_mesh.vertices.size(); ++i) {
+      const vr::Vec2f got = as_narrow.value().vertices[i].uv0;
+      if (host_mesh.vertices[i].uv0.x < 0.0f) {
+        CHECK(got.x < 0.0f);
+        continue;
+      }
+      // The pixel, from the coordinate before its clamp (the camera is
+      // unrotated, so camera space is the world shifted).
+      const vr::Vec3f d =
+          host_mesh.vertices[i].position - vr::Vec3f(narrow.cam_to_world[3]);
+      const float px = narrow.fx * (d.x / d.z) + narrow.cx;
+      const float py = narrow.fy * (d.y / d.z) + narrow.cy;
+      const float edge =
+          std::fmin(std::fmin(px, 15.0f - px), std::fmin(py, 15.0f - py));
+      if (edge > 0.01f) {
+        CHECK(got.x >= 0.0f);
+        ++inside;
+      } else if (edge < -0.01f) {
+        CHECK(got.x < 0.0f);
+        ++outside;
+      }
+    }
+    CHECK(inside > 0 && outside > 0);
+
+    // Half a turn about y, so it looks back past the sphere's far side.
+    vr::ColorCameraParams away = aside;
+    away.cam_to_world[0] = -aside.cam_to_world[0];
+    away.cam_to_world[2] = -aside.cam_to_world[2];
+    CHECK(texturer.texture(device_mesh, view_from(away)).ok());
+    vr::Result<mesh::Mesh> as_away = extractor.download(device_mesh);
+    CHECK(as_away.ok());
+    for (const mesh::Vertex& v : as_away.value().vertices) {
+      CHECK(v.uv0 == vr::Vec2f(-1.0f, -1.0f));
+    }
+
+    // Refused: a colour camera with no image, a view giving its depth on the
+    // host and the device both, and one giving it on neither.
+    vr::ColorCameraParams blank = aside;
+    blank.height = 0;
+    CHECK(texturer.texture(device_mesh, view_from(blank)).domain() ==
+          vr::Status::Code::InvalidArgument);
+    rtex::TextureView both = view_from(aside);
+    both.depth = depth.data();
+    CHECK(texturer.texture(device_mesh, both).domain() ==
+          vr::Status::Code::InvalidArgument);
+    rtex::TextureView neither = view_from(aside);
+    neither.depth_buffer = nullptr;
+    CHECK(texturer.texture(device_mesh, neither).domain() ==
+          vr::Status::Code::InvalidArgument);
   }
 
   // Without MarchingCubesConfig::share_vertices -- this extractor's default --

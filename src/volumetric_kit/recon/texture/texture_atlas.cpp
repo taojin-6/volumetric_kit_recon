@@ -21,8 +21,22 @@ Result<ImageSize> view_image_size(const TextureView& view, std::size_t index,
                                     " gives its image one side and not the "
                                     "other");
   }
-  const ImageSize size = given ? ImageSize{view.image_width, view.image_height}
-                               : ImageSize{view.cam.width, view.cam.height};
+  // A colour camera's image IS the tile: its pixels are what the vertices'
+  // coordinates address, so a different size would misplace every one.
+  const ImageSize own =
+      view.color_camera
+          ? ImageSize{view.color_camera->width, view.color_camera->height}
+          : ImageSize{view.cam.width, view.cam.height};
+  if (given && view.color_camera &&
+      (view.image_width != own.width || view.image_height != own.height)) {
+    return Status::invalid_argument(
+        who + "view " + std::to_string(index) + " gives its image as " +
+        std::to_string(view.image_width) + "x" +
+        std::to_string(view.image_height) + ", but its colour camera's is " +
+        std::to_string(own.width) + "x" + std::to_string(own.height));
+  }
+  const ImageSize size =
+      given ? ImageSize{view.image_width, view.image_height} : own;
   if (size.width == 0 || size.height == 0) {
     return Status::invalid_argument(who + "view " + std::to_string(index) +
                                     " has no image");
