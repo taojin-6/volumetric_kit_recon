@@ -110,7 +110,9 @@ void describe_color(
     picture.matrix = unlabelled_color->matrix;
     picture.full_range = unlabelled_color->full_range;
   } else {
-    picture.matrix = resolve_matrix(frame.colorspace, frame.height);
+    // The displayed height: a hardware frame's still counts its top crop.
+    picture.matrix =
+        resolve_matrix(frame.colorspace, static_cast<int>(picture.height));
     picture.full_range = full_range(frame);
   }
   picture.encoding = resolve_encoding(frame.color_trc, frame.color_primaries);

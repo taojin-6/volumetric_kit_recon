@@ -314,13 +314,16 @@ vr_target_warnings(recon_core_command_batch_test)
 add_test(NAME recon_core_command_batch COMMAND recon_core_command_batch_test)
 
 # An exported buffer: a descriptor where the device exports memory, a refusal
-# where it does not (MoltenVK), and an ordinary storage buffer to a batch.
-add_executable(recon_core_external_memory_test core_external_memory_test.cpp)
-target_link_libraries(recon_core_external_memory_test
-                      PRIVATE volumetric_kit::recon_core Vulkan::Vulkan)
-vr_target_warnings(recon_core_external_memory_test)
-add_test(NAME recon_core_external_memory
-         COMMAND recon_core_external_memory_test)
+# where it does not (MoltenVK), and an ordinary storage buffer to a batch. Not
+# on Windows, which has no file descriptors to close.
+if(NOT WIN32)
+  add_executable(recon_core_external_memory_test core_external_memory_test.cpp)
+  target_link_libraries(recon_core_external_memory_test
+                        PRIVATE volumetric_kit::recon_core Vulkan::Vulkan)
+  vr_target_warnings(recon_core_external_memory_test)
+  add_test(NAME recon_core_external_memory
+           COMMAND recon_core_external_memory_test)
+endif()
 
 # Color-space vocabulary: the exact piecewise sRGB curve, the packed helpers the
 # fusion kernels mirror, and the primaries matrices. Pure host math over core,

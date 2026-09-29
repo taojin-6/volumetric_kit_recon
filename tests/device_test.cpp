@@ -34,6 +34,7 @@ int main() {
   check((reqs.queue_flags & VK_QUEUE_TRANSFER_BIT) == 0,
         "requirements does not over-demand transfer");
   check(reqs.timeline_semaphore, "requirements timeline semaphore");
+  check(reqs.external_memory, "requirements name the memory export");
 
   // adopt rejects null handles without touching a device.
   vr::Result<vr::Device> bad = vr::Device::adopt(vr::AdoptedDevice{}, {});

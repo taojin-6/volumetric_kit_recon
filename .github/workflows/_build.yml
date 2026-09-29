@@ -42,7 +42,7 @@ on:
         default: false
       cuda:
         description: >-
-          Install the CUDA 13 toolkit's headers and link stubs from NVIDIA's
+          Install the CUDA 13 toolkit's headers and nvcc from NVIDIA's
           repository and build with VR_WITH_CUDA=ON, so this leg hands NVDEC's
           pictures out on the device and tests them. Needs ffmpeg.
         required: false
@@ -140,10 +140,10 @@ jobs:
           fi
           # shellcheck disable=SC2086  # intentional: split $pkgs into separate args
           sudo apt-get install -y --no-install-recommends $pkgs
-          # The CUDA toolkit for VR_WITH_CUDA (cmake/vr_cuda.cmake): headers,
-          # link stubs and the nvcc FindCUDAToolkit locates it by; recon
-          # compiles no CUDA code. The driver's libraries come from the
-          # container toolkit at run time, as for NVDEC.
+          # The CUDA toolkit for VR_WITH_CUDA (cmake/vr_cuda.cmake): cuda.h
+          # and the nvcc FindCUDAToolkit locates it by; recon compiles no
+          # CUDA code. libcuda comes from the container toolkit at run time,
+          # as for NVDEC.
           if [ "${{ inputs.cuda }}" = "true" ]; then
             . /etc/os-release
             repo="ubuntu$(echo "$VERSION_ID" | tr -d .)"
@@ -152,7 +152,7 @@ jobs:
             sudo dpkg -i /tmp/cuda-keyring.deb
             sudo apt-get update
             sudo apt-get install -y --no-install-recommends cuda-nvcc-13-4 \
-              cuda-cudart-dev-13-4 cuda-driver-dev-13-4 libnvjpeg-dev-13-4
+              cuda-cudart-dev-13-4 cuda-driver-dev-13-4
             echo "CUDAToolkit_ROOT=/usr/local/cuda-13.4" >> "$GITHUB_ENV"
           fi
           # On a hosted runner, point the loader at lavapipe for the rest of the

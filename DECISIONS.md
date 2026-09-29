@@ -6456,6 +6456,37 @@ the left-crop offset, as a mutant, the cropped clip fails. A build without
 CUDA, or any other back end, hands the same device option's pictures to the
 host, which the Mac checks.
 
+Its review changed six things:
+
+- **libcuda is loaded, not linked.** Linking `CUDA::cuda_driver` stopped
+  every program built with `VR_WITH_CUDA` from starting without the NVIDIA
+  driver. It is `dlopen`ed now, as FFmpeg does, each entry point named
+  through `cuda.h`'s macros so it is the versioned symbol its prototype
+  declares. Only `cuda.h` comes from the toolkit, so the installed package
+  finds no CUDA.
+- **A failure falls back.** A slot that would not allocate, or a CUDA call
+  that failed, failed the picture, and the next one the same way. Now the
+  device path is let go, and that picture and every later one come to the
+  host. Retrying each picture was not taken: a lasting failure would pay an
+  allocation a picture.
+- **Export is asked, not assumed.** The extension does not promise that a
+  storage buffer exports, so `create_exported_buffer` asks
+  `vkGetPhysicalDeviceExternalBufferProperties`.
+- **A shared device hears of it.** `DeviceRequirements::external_memory`
+  names the extension as optional, and `fuse_viewer`'s bootstrap enables it
+  where offered. Before, an adopted device never exported memory.
+- **The matrix guess reads the displayed height.** The device path passed
+  the hardware frame's, which still counts the top crop, so a stream near
+  576 rows could take BT.709 on one path and BT.601 on the other.
+- **A free slot too small is let go**, so a change of picture size strands
+  no memory. Slots added while pictures were held stay, a high-water mark
+  like the mesh arena's.
+
+`VR_WITH_CUDA` is Linux only, since CUDA imports the memory as a file
+descriptor. The device must outlive every picture on it, documented rather
+than checked, as for every `Buffer`. The test expects device pictures only
+on an NVIDIA Vulkan device, one CUDA sees.
+
 **Next**, in order:
 
 1. NVIDIA: nvJPEG into the same buffers, for MJPEG. Its pictures carry

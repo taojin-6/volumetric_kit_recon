@@ -115,11 +115,14 @@ DeviceRequirements Device::requirements(const DeviceConfig& config) {
   DeviceRequirements reqs;
   reqs.features = config.features;
   reqs.device_extensions = config.extra_device_extensions;
-  // The one optional entry, and the one instance extension: recon uses debug
-  // utils if the embedder's instance has it and runs identically if not. Named
-  // here so a merged bootstrap can offer it -- an embedder that never hears
-  // recon wants it is the way a shared device ends up with unnamed dispatches.
+  // Optional, and the one instance extension: recon uses debug utils if the
+  // embedder's instance has it and runs identically if not. Named here so a
+  // merged bootstrap can offer it -- an embedder that never hears recon wants
+  // it is the way a shared device ends up with unnamed dispatches.
   reqs.debug_utils = true;
+  // Optional too, and named for the same reason: a shared device that never
+  // hears of it hands every decoded picture through the host.
+  reqs.external_memory = true;
   // portability_subset is enabled by whoever creates the device (spec-required
   // when present); it is not a caller requirement, so it is not listed here.
   return reqs;
@@ -331,20 +334,20 @@ Result<Device> Device::adopt(const AdoptedDevice& adopted,
   // physical-device queries: it makes no assumption about the API version the
   // embedder negotiated on `adopted.instance`.
   const DeviceRequirements reqs = requirements(config);
+  auto is_enabled = [&](const char* name) {
+    if (adopted.enabled_device_extensions == nullptr) return false;
+    for (std::uint32_t i = 0; i < adopted.enabled_device_extension_count; ++i) {
+      if (std::strcmp(adopted.enabled_device_extensions[i], name) == 0) {
+        return true;
+      }
+    }
+    return false;
+  };
   if (!reqs.device_extensions.empty()) {
     if (adopted.enabled_device_extensions == nullptr) {
       return Status::unsupported(
           "Device::adopt: adopted device did not declare enabled extensions");
     }
-    auto is_enabled = [&](const char* name) {
-      for (std::uint32_t i = 0; i < adopted.enabled_device_extension_count;
-           ++i) {
-        if (std::strcmp(adopted.enabled_device_extensions[i], name) == 0) {
-          return true;
-        }
-      }
-      return false;
-    };
     for (const char* name : reqs.device_extensions) {
       if (!is_enabled(name)) {
         return Status::unsupported(
@@ -394,13 +397,9 @@ Result<Device> Device::adopt(const AdoptedDevice& adopted,
                           &device.end_label_);
   // Only where the creator says it enabled the export: Vulkan cannot be
   // asked, and an entry point for an extension not enabled must not be used.
-  for (std::uint32_t i = 0; i < adopted.enabled_device_extension_count; ++i) {
-    if (adopted.enabled_device_extensions != nullptr &&
-        std::strcmp(adopted.enabled_device_extensions[i], kExternalMemoryFd) ==
-            0) {
-      device.get_memory_fd_ = reinterpret_cast<PFN_vkGetMemoryFdKHR>(
-          vkGetDeviceProcAddr(device.device_, "vkGetMemoryFdKHR"));
-    }
+  if (is_enabled(kExternalMemoryFd)) {
+    device.get_memory_fd_ = reinterpret_cast<PFN_vkGetMemoryFdKHR>(
+        vkGetDeviceProcAddr(device.device_, "vkGetMemoryFdKHR"));
   }
   return device;
 }

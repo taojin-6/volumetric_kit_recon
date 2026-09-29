@@ -38,7 +38,8 @@ struct ExportedBuffer {
 /// @param device  A device that exports memory (@ref Device::exports_memory).
 /// @param bytes   The buffer's size; not 0.
 /// @return The buffer and its descriptor; Unsupported where @p device does not
-///         export memory or has no device-local memory the buffer can use;
+///         export memory, cannot export this buffer, or has no device-local
+///         memory it can use;
 ///         InvalidArgument for 0 bytes; otherwise a Vulkan failure.
 VR_CORE_API Result<ExportedBuffer> create_exported_buffer(const Device& device,
                                                           VkDeviceSize bytes);

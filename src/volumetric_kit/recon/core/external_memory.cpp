@@ -27,6 +27,22 @@ Result<ExportedBuffer> create_exported_buffer(const Device& device,
                                         VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
                                         VK_BUFFER_USAGE_TRANSFER_DST_BIT;
 
+  // The extension alone does not promise an exportable storage buffer.
+  VkPhysicalDeviceExternalBufferInfo query{};
+  query.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_BUFFER_INFO;
+  query.usage = kUsage;
+  query.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
+  VkExternalBufferProperties can{};
+  can.sType = VK_STRUCTURE_TYPE_EXTERNAL_BUFFER_PROPERTIES;
+  vkGetPhysicalDeviceExternalBufferProperties(device.physical_device(), &query,
+                                              &can);
+  if ((can.externalMemoryProperties.externalMemoryFeatures &
+       VK_EXTERNAL_MEMORY_FEATURE_EXPORTABLE_BIT) == 0) {
+    return Status::unsupported(
+        "create_exported_buffer: the device cannot export a storage buffer "
+        "as a file descriptor");
+  }
+
   VkExternalMemoryBufferCreateInfo external{};
   external.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO;
   external.handleTypes = kHandle;

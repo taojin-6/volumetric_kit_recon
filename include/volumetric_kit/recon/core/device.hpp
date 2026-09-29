@@ -126,10 +126,16 @@ struct DeviceRequirements {
   /// AdoptedDevice::enabled_debug_utils (or @ref
   /// DeviceConfig::instance_debug_utils_enabled).
   ///
-  /// Purely diagnostic and the **only** optional entry here: recon runs
-  /// identically without it, so an embedder that cannot enable it drops it
-  /// rather than failing the merge.
+  /// Purely diagnostic and optional: recon runs identically without it, so
+  /// an embedder that cannot enable it drops it rather than failing the
+  /// merge.
   bool debug_utils = false;
+  /// `VK_KHR_external_memory_fd`, which lets a hardware decoder hand its
+  /// pictures over on the device (@ref create_exported_buffer). Optional
+  /// too: an embedder enables it where the device offers it and lists it in
+  /// @ref AdoptedDevice::enabled_device_extensions; without it, pictures come
+  /// through the host.
+  bool external_memory = false;
 };
 
 /// @brief A `VkDevice` the caller already created, plus what the caller ENABLED
