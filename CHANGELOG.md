@@ -153,7 +153,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   thread per camera by `JpegDecoder`, onto `OrbbecStreamOptions::device`
   where nvJPEG or VideoToolbox takes them. On the four-camera rig at 4K25,
   about 5 s of CPU for 600 frames against 71 s on the host MJPEG path.
-  `fuse_orbbec --gpu` no longer implies `--hevc`.
+  `fuse_orbbec --gpu --mjpeg` streams them; `--gpu` alone stays on H.265.
 - `sensor`: **a raw Orbbec frame's colour stays on the GPU.** With
   `OrbbecStreamOptions::device`, a raw capture or rig decodes its H.265
   colour onto that device, and a `RawFrame`'s colour is the picture NVDEC or

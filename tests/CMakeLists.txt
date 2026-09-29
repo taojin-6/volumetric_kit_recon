@@ -678,7 +678,8 @@ if(VR_WITH_ORBBEC)
       PRIVATE ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec)
     target_compile_definitions(
       recon_sensor_orbbec_jpeg_test
-      PRIVATE VR_JPEG_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data/jpeg")
+      PRIVATE VR_JPEG_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data/jpeg"
+              VR_TEST_WITH_CUDA=$<BOOL:${VR_WITH_CUDA}>)
     vr_target_warnings(recon_sensor_orbbec_jpeg_test)
     add_test(NAME recon_sensor_orbbec_jpeg
              COMMAND recon_sensor_orbbec_jpeg_test)
@@ -715,7 +716,8 @@ if(VR_WITH_ORBBEC)
         recon_sensor_orbbec_capture recon_sensor_orbbec_grouping
         recon_sensor_orbbec_sync_config recon_sensor_orbbec_rig)
     if(TARGET recon_sensor_orbbec_hevc_test)
-      list(APPEND _vr_orbbec_tests recon_sensor_orbbec_hevc)
+      list(APPEND _vr_orbbec_tests recon_sensor_orbbec_hevc
+           recon_sensor_orbbec_jpeg)
     endif()
     set_tests_properties(
       ${_vr_orbbec_tests}

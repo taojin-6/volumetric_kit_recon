@@ -6723,9 +6723,11 @@ frame, and `PlanesColor`).
   after another on the polling thread, where VideoToolbox's 6 ms a 4K frame
   would have cost a set 24.
 - A JPEG depends on no other frame, so there is no gate: a pair missing a
-  frame, an empty colour frame, a JPEG that does not decode, or the oldest
-  pairs once the queue is two seconds deep each cost only themselves, all
-  counted in `stats().lost`.
+  frame, an empty colour frame, a JPEG that does not decode, or a pair a
+  newer one replaced while the decoder was busy each cost only themselves,
+  all counted in `stats().lost`. The queue holds as many pairs as the
+  mailbox after it, newest kept, so a decoder slower than the camera skips
+  pairs rather than handing them out seconds late.
 - The MJPG mode's calibration must be the RGB mode's, byte for byte, as
   H.265's must.
 - `VR_ORBBEC_WITH_HEVC` becomes `VR_ORBBEC_WITH_VIDEO`, since it now gates
@@ -6737,19 +6739,22 @@ link, `fuse_orbbec --rig`, 600 frames, M5 Max, Release:
 | path | user CPU | sys CPU | poll a frame |
 |---|---|---|---|
 | host MJPEG (the SDK decodes, the host undistorts and registers) | 60.0 s | 11.5 s | 18.6 ms |
-| raw MJPEG, `--gpu` | 0.83-1.09 s | 3.66-4.37 s | 0.02 ms |
+| raw MJPEG, `--gpu --mjpeg` | 0.83-1.09 s | 3.66-4.37 s | 0.02 ms |
 | raw H.265, `--gpu --hevc` | 0.61 s | 1.71-1.75 s | 0.02 ms |
 
 Raw MJPEG takes about a sixteenth of the host path's CPU, and a little more
 than H.265: its system time is mostly the kernel receiving the JPEGs, about
 185 Mbit/s a camera against H.265's 21. H.265 stays the rig's default for
-that reason and for the link's headroom. `fuse_orbbec --gpu` no longer
-implies `--hevc`. It did, and the first MJPEG runs measured H.265 for that
-reason; the table is the rerun. The offline test
-holds the decoder to the committed JPEG. It checks I420 frames in software,
-VideoToolbox images given a device, each released with its frame, and each
-loss counted once. On the live camera, raw MJPEG frames arrive as images and
-match the SDK's undistortion and registration at 720p and 4K, as H.265's do.
+that reason and for the link's headroom: `fuse_orbbec --gpu` still streams
+it, and `--mjpeg` asks for MJPEG by name. Before, `--gpu` forced H.265, and
+the first MJPEG runs measured H.265 for that reason; the table is the rerun.
+The offline test holds the decoder to the committed JPEG. It checks I420
+frames in software, the device's pictures given one (VideoToolbox's images,
+or nvJPEG's buffer on a CUDA leg), each released with its frame, each loss
+counted once, and a decoder held back skipping to the newest pair. On the
+live camera, raw MJPEG frames arrive as images and match the SDK's
+undistortion and registration at 720p and 4K, as H.265's do, and the rig's
+raw pass runs over both codecs.
 
 **Next**: measured first, the colour kernel reading Apple's plane images
 directly, which saves the copy's 0.28-0.31 ms of GPU.

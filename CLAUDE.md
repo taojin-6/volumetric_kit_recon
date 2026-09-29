@@ -1183,7 +1183,7 @@ none, and the run's CPU eightfold down) and for the rig's raw sets. NVDEC
 and nvJPEG hand their pictures over on the device, and VideoToolbox both
 kinds, and a raw Orbbec frame's colour stays on the device over either
 codec; what is left there is the colour kernel reading Apple's plane images
-directly, measured first (`gpu_frame_prep.cpp`); and processing a host rig
+directly, measured first (`undistort_color.comp`); and processing a host rig
 set's frames in parallel, one thread per camera, rather than the ~11 ms one
 after another costs for four (`orbbec_rig.cpp`). For H.265: the camera's
 encoder settings, its key-frame interval above all, which sets what a lost
