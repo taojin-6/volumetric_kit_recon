@@ -6491,9 +6491,11 @@ on an NVIDIA Vulkan device, one CUDA sees.
 sends, to I420, BT.601 full range as JFIF defines it:
 
 - Given a device, in a `VR_WITH_CUDA` build, it opens nvJPEG in the primary
-  context of the CUDA device whose UUID is the Vulkan device's: the
-  `HARDWARE` back end first, else `GPU_HYBRID`, as `backend()` says.
-- An 8-bit 4:2:0 JPEG that back end supports decodes into a buffer from the
+  context of the CUDA device whose UUID is the Vulkan device's, with a
+  decoder on the GPU's hardware JPEG engine where it has one and one on its
+  cores (`GPU_HYBRID`) for what the engine refuses; `backend()` names the
+  first.
+- An 8-bit 4:2:0 JPEG that one of them supports decodes into a buffer from the
   same ring as NVDEC's, Y, Cb and Cr each packed and starting on 256 bytes,
   so `DecodedPicture::offset` grows a third plane. The decoder waits on an
   event made to block, since CUDA's default wait spins and bills the wait as
@@ -6503,9 +6505,10 @@ sends, to I420, BT.601 full range as JFIF defines it:
   parse or decode, a device on another GPU, no device.
 - libnvjpeg is loaded at run time, like libcuda, so a program built with
   CUDA starts where neither is. CI's CUDA leg installs it again.
-- A CUDA failure lets the device path go, as NVDEC's does; a JPEG nvJPEG
-  refuses goes to software alone, since one corrupt frame from a camera must
-  not cost every later one 14 ms of CPU.
+- A JPEG nvJPEG refuses (`BAD_JPEG`, `JPEG_NOT_SUPPORTED`,
+  `INCOMPLETE_BITSTREAM`) goes to software alone, since one corrupt frame
+  from a camera must not cost every later one 14 ms of CPU. Any other
+  failure, nvJPEG's or CUDA's, lets the device path go, as NVDEC's does.
 
 Measured on the RTX 5090, per 4K frame of the Femto Mega's MJPEG, Release:
 
@@ -6521,7 +6524,42 @@ size and at 4:2:2) decode to the pattern in software, and to within 2 codes
 of software on the device, the two inverse DCTs rounding apart. A buffer is
 reused only once no picture holds it. Swapping the Cb and Cr offsets, as a
 mutant, fails the test. Both CI hosts are Blackwell and have the JPEG
-engine, so `GPU_HYBRID` runs on none of them.
+engine, so `GPU_HYBRID` runs there only on a fixture 16400 pixels wide.
+
+Its review changed five things, measured on the RTX 5090 against 4K JPEGs
+spoiled the ways a camera link might spoil them: entropy data flipped or
+zeroed, and the file cut short.
+
+- **A status is read, not only its failure.** Every nvJPEG failure sent the
+  JPEG to software, so a lost GPU or a device out of memory cost every later
+  frame a parse and 14 ms of CPU while `backend()` still named nvJPEG. Only
+  the three statuses about the JPEG are refusals now, and a decode that fails
+  still waits for what it queued before the buffers are reused. No spoiled
+  frame returned another status: a flipped one fails to parse as
+  `JPEG_NOT_SUPPORTED`, and a zeroed or cut one decodes, CUDA sound. The test
+  holds a garbage and a cut frame to keeping the device path.
+- **The cores take what the engine refuses**, a JPEG past 16384 pixels a
+  side, which `GPU_HYBRID` decodes; nothing from 2x2 to 8192x8192 was
+  refused. Both decoders share one handle, made on the engine.
+- **A device path let go releases what it held**: the primary context, the
+  stream, nvJPEG's handle, states and staging buffers. So does one that
+  never finished opening. Both kept them for the decoder's life.
+- **libnvjpeg is the major version `nvjpeg.h` names**, and configure refuses
+  a toolkit without `nvjpeg.h`, which is a package of its own.
+- **The test checks what it reads**: each picture against its fixture's
+  size, and every plane whole before it indexes one. Dropping the cores'
+  decoder, or refusing no status, as mutants, fails it on the 5090.
+
+Not taken:
+
+- Remembering a refusal. A full parse of a 350 KB 4K JPEG is 0.05 ms, under
+  0.4% of the software decode that follows it. A header-only parse is not
+  enough: the engine's support check answered differently after one.
+- One loader for libcuda and libnvjpeg. Each table would still need its own
+  macro list, so sharing saved no lines.
+- Releasing a reused buffer back to CUDA. CUDA overwrites the picture, a
+  family may take a buffer without a transfer when its contents need not
+  survive, and the reader that let the picture go had finished with it.
 
 **Next**, in order:
 

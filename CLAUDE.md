@@ -917,8 +917,10 @@ arbitrary; it usually isn't.
   decision). **`JpegDecoder`** decodes MJPEG's JPEGs as I420, BT.601 full
   range: given a device, with `VR_WITH_CUDA`, nvJPEG decodes an 8-bit 4:2:0
   one into the same kind of buffer, on the GPU's hardware JPEG engine where
-  it has one (`backend()`), and libnvjpeg too is loaded at run time;
-  anything else decodes in software to host planes, 4:2:2 converted.
+  it has one (`backend()`) and its cores for the rest, and libnvjpeg too is
+  loaded at run time. A JPEG nvJPEG refuses goes to software alone; any
+  other failure lets the device path go. Anything else decodes in software
+  to host planes, 4:2:2 converted.
   **`sensor/utils`'s `GpuFramePrep`** undistorts a `RawFrame` on the device:
   depth sampled at the nearest pixel, colour bilinearly and converted from
   Y'CbCr in the same pass, each camera keeping its intrinsics and pose. Its
