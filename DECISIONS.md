@@ -6925,6 +6925,123 @@ either kernel, or not copied; the walk never blocking, or skipped in either
 kernel; no side test; the depth pixels as the coordinates; and, under
 synchronization validation, a copy joining the run whatever wrote its source.
 
+### 2026-09-29 — `rig_viewer` draws a live Orbbec rig: raw sets prepared, fused and textured on the GPU, the atlas filled by device copies recorded in gfx's frame, and the frame prep's outputs shared with gfx's queue family.
+
+**The rule.** `examples/viewer/rig_viewer` is `fuse_viewer`'s sibling for a
+live, synced rig of Orbbec cameras. It opens `OrbbecRig` raw, onto the device
+it shares with gfx, and keeps everything a camera produces on the GPU after
+it arrives:
+
+- each set is prepared by `prepare_set` (one `GpuFramePrep` per camera) and
+  fused through the device-input overloads;
+- every `--remesh-every` sets, the unshared marching-cubes mesh is textured
+  from all the set's cameras (`ProjectiveTexturer`, each view's depth, colour
+  camera and coverage its frame's);
+- the atlas is a gfx image, filled by `vkCmdCopyBufferToImage` from each
+  camera's colour buffer into its tile, recorded in the renderer's frame
+  before the draw; `HybridMeshPipeline` then draws recon's buffers in place,
+  as in `fuse_viewer`.
+
+The atlas is laid out once, from the rig's colour cameras, with
+`side_by_side_atlas`, so four cameras make a 2 x 2 grid of their images and it
+never changes size. A set missing a camera textures from the cameras present,
+into their own tiles, and a version samples only the tiles it wrote. It is a
+separate executable rather than a mode of `fuse_viewer`, which stays the
+dataset replay; the two share the bootstrap, the stage table and the ring's
+bookkeeping, and it builds only where the Orbbec driver does.
+
+`GpuFramePrep::create` takes a `GpuFramePrepConfig` whose `queue_families`
+its outputs are shared with, `MarchingCubesConfig::queue_families`' twin. The
+viewer names recon's and gfx's families for both, since MoltenVK hands the
+two libraries different ones, where copying from an EXCLUSIVE buffer is
+undefined in the way that appears to work. Left empty, the outputs are
+EXCLUSIVE, as they always were.
+
+**Why a copy, not zero-copy sampling.** gfx's hybrid pipeline samples an
+image, which buys filtering and the sRGB decode in hardware. Reading the
+cameras' storage buffers directly would need a pipeline variant that decodes
+and filters in the shader, as gfx's pending patch pipeline does, to save a
+device-to-device copy of about 0.23 ms per remesh at 1 cm (measured below).
+Nothing crosses the host either way.
+
+**Lifetimes and visibility, as `fuse_viewer`'s mesh.**
+
+- A copy's colour buffers are held by the frame slot that recorded it until
+  `begin_frame` fence-waits that slot again, so a `GpuFramePrep` reuses one
+  only after gfx has read it.
+- An atlas image is reused only when nothing but the viewer's pool holds it:
+  not the committed version, and no frame slot that bound it.
+- The frame prep fence-waits its batch before `prepare_set` returns, and
+  gfx's later `vkQueueSubmit` makes those writes visible to the copy.
+- Each colour buffer's usage, size and sharing mode are checked before the
+  copy is recorded, as the mesh's are before it is bound.
+
+**Defaults.**
+
+- 1 cm voxels: a Femto Mega's depth pixel covers about 4 mm at 1.5 m.
+- Unlit shading: the cameras' colour as they saw it.
+- H.265 colour: raw MJPEG takes about nine times the bandwidth.
+- Remesh every 5 sets.
+
+Ctrl+C closes the window rather than ending the process, so the rig is
+stopped either way. The viewer's gfx pin moves to #98 for `kHybridMeshNormals`,
+the View panel's third shading mode.
+
+**Measured** on the lab rig: four Femto Megas at 1280 x 720 colour over the
+wired link, H.265, the M5 Max, Release. The run was **uncalibrated** (no
+calibration file for these cameras is on the machine), so the four cameras
+sit at the origin and the surfaces fuse over one another; the geometry and
+texture are not yet judged.
+
+| voxel | fuse per set | mesh | render | atlas copy, GPU | map | recon heap |
+|---|---|---|---|---|---|---|
+| 2 cm | 9.9 ms | 245 k triangles | 60 fps | 0.03 ms | 7.8% | 1.3 GB |
+| 1 cm | 12.7-20 ms | 1.0 M triangles | 60 fps | 0.23 ms | 37% | 2.3 GB |
+
+The map's share is of its initial 131 072 blocks, which grow on overflow.
+The cameras deliver a set every 40 ms, so 1 cm fuses with room to spare.
+
+About 2% of sets miss a camera. The SDK drops those frames on the wired link:
+"Metadata size is too large!" on the H.265 RTP stream, and depth frames that
+arrive short of 640 x 576 x 2 bytes. That is 22 and 9 in a minute. The rig
+hands out the set without the camera, and the viewer textures from the rest.
+The eight "Stream have not been started!" lines at exit are the SDK stopping
+the H.265 streams; `fuse_orbbec` prints the same eight.
+
+A mesh that goes out without an atlas draws in fused colour until the next
+remesh. The Rig panel counts each by its reason: an empty extract, no camera
+with colour, texturing switched off, or a failed texture pass. The first runs
+showed such versions in bursts, eight in one and six in another. Both were the
+View panel's texturing checkbox, switched off for about a second and back on,
+which the counter named and the person at the window confirmed.
+
+**Verified.**
+
+- The suite passes on the M5 Max, 55 of 55.
+- `rig_viewer`, `fuse_viewer` and `fuse_render` build at the new pin under
+  `-Werror`.
+- On the rig with the Khronos validation layer loaded, the viewer reports
+  nothing. That run ended at 60 sets of 237 frames, 12 remeshes, and 12 atlas
+  copies from four cameras. A screenshot shows the cameras' images on the
+  mesh.
+- A SIGINT mid-run takes the clean exit, the rig stopped and rc 0.
+- `recon_sensor_gpu_frame_prep` checks the new config:
+  - a second family makes both outputs CONCURRENT;
+  - the pass's own family named twice, or no config, leaves them EXCLUSIVE;
+  - a count past the array is refused.
+
+  Ignoring the config in `ensure_output` fails it.
+
+**Open.**
+
+- A calibration file for these cameras, without which the rig's view means
+  nothing yet.
+- 4K colour on the rig, which makes a 7680 x 4320 atlas and about 133 MB of
+  copies per remesh.
+- A CI leg that builds `rig_viewer`: the viewer leg has no Orbbec SDK, so it is
+  compiled only where the SDK is installed (a `TODO(examples)` in the
+  viewer's CMakeLists).
+
 ## Measured lessons
 
 Not decisions, but the measurements that overturned an assumption about

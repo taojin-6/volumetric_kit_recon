@@ -58,7 +58,10 @@ FetchContent_Declare(
   # along every occlusion silhouette and the whole frustum boundary. Both viewer
   # examples draw that on default flags; nothing in CI catches it, since this
   # leg builds them and does not render.
-  GIT_TAG 2554fe7978aee22cd4115e124e9cf83bf8985384 # gfx #93
+  #
+  # And at or past gfx #98, whose kHybridMeshNormals is rig_viewer's normals
+  # shading mode. A compile floor: the flag does not exist before it.
+  GIT_TAG 32550b414ab749068cb9b0c5b9791a35f5b59147 # gfx #98
   GIT_SHALLOW FALSE)
 FetchContent_MakeAvailable(volumetric_kit_gfx)
 
@@ -136,3 +139,32 @@ vr_target_warnings(fuse_viewer)
 set_source_files_properties(
   "${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp"
   PROPERTIES COMPILE_OPTIONS "$<IF:$<CXX_COMPILER_ID:MSVC>,/w,-w>")
+
+# rig_viewer: fuse_viewer's sibling for a live, synced rig of Orbbec cameras,
+# every camera's frame prepared, fused and textured on the GPU. Built only where
+# the Orbbec driver is (VR_WITH_ORBBEC), and it opens its rig raw, so the driver
+# must also have been built with its colour decoders (VR_WITH_FFMPEG): without
+# them OrbbecRig::open refuses raw frames, and says so.
+#
+# The viewer CI leg builds without the Orbbec SDK, so this target is not in it;
+# it is compiled wherever the SDK is installed, the lab machines included.
+# TODO(examples): a CI leg with the Orbbec SDK and the viewer both on, so
+# rig_viewer's use of recon's and gfx's APIs is compiled on every PR.
+if(TARGET volumetric_kit::recon_sensor_orbbec
+   AND TARGET volumetric_kit::recon_sensor_utils)
+  add_executable(rig_viewer rig_viewer.cpp
+                            "${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp")
+  target_link_libraries(
+    rig_viewer
+    PRIVATE ${_viewer_recon_libs}
+            volumetric_kit::recon_sensor_orbbec
+            volumetric_kit::recon_sensor_utils
+            ${_viewer_gfx_libs}
+            volumetric_kit::gfx_ui
+            glfw
+            Vulkan::Vulkan)
+  target_include_directories(rig_viewer PRIVATE ${_viewer_common_inc})
+  target_include_directories(rig_viewer SYSTEM
+                             PRIVATE "${imgui_SOURCE_DIR}/backends")
+  vr_target_warnings(rig_viewer)
+endif()

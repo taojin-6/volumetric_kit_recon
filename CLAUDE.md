@@ -329,6 +329,10 @@ order. Change the decision, its entry there, and this list together.
   device: the depth camera decides what is visible, its map what the colour
   camera sees, and the colour camera gives the coordinate; a view's device
   depth and coverage are copied on the device rather than staged.
+- [**2026-09-29**](DECISIONS.md#2026-09-29--rig_viewer-draws-a-live-orbbec-rig-raw-sets-prepared-fused-and-textured-on-the-gpu-the-atlas-filled-by-device-copies-recorded-in-gfxs-frame-and-the-frame-preps-outputs-shared-with-gfxs-queue-family) —
+  `rig_viewer` draws a live Orbbec rig: raw sets prepared, fused and textured
+  on the GPU, the atlas filled by device copies recorded in gfx's frame, and
+  the frame prep's outputs shared with gfx's queue family.
 
 ## Provenance & salvage policy
 
