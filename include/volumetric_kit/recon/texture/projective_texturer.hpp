@@ -91,8 +91,10 @@ namespace volumetric_kit::recon::texture {
 /// textured region tracks the camera through the scene. The projection and the
 /// occlusion depth test both use @p cam, and the UV is normalized by @p cam's
 /// dimensions, so the bound atlas must be **registered** to the depth camera.
-/// A registered (or synthetic, e.g. Replica) RGB-D frame satisfies this; an
-/// unregistered colour stream with its own intrinsics would misaddress it.
+/// A registered (or synthetic, e.g. Replica) RGB-D frame satisfies this. An
+/// unregistered colour stream with its own intrinsics and pose -- a
+/// `sensor::GpuFramePrep` frame -- takes the overloads with a
+/// @ref ColorCameraParams instead (below).
 ///
 /// **Registered does not mean the same resolution**, and the difference matters
 /// for any sensor whose colour image is larger than its depth map. Because the
@@ -116,8 +118,16 @@ namespace volumetric_kit::recon::texture {
 /// image at that image's own resolution, by the normalized-coordinate argument
 /// above.
 ///
-/// The separate-colour-camera path the TSDF tier models (`ColorCameraParams`)
-/// is a later slice.
+/// **A colour camera of its own.** Where the colour image was taken by a
+/// camera other than the depth one -- the separate colour camera the TSDF
+/// tier also models (@ref ColorCameraParams) -- the depth camera still decides
+/// what is visible, and the vertex is projected into the colour camera for its
+/// coordinate, which is textured only where that camera recorded it too. The
+/// three outcomes above are then the colour camera's. With no depth map in the
+/// colour camera's frame, a point it sees *past* a nearer surface is not
+/// caught, so a sliver beside an occluding edge, about the two cameras'
+/// parallax wide, can take the occluder's colour: tsdf's documented fringe for
+/// the same frames.
 ///
 /// @warning The @ref Device and @ref Allocator passed to @ref create must
 ///          outlive this object; it stores references to them.
@@ -218,10 +228,8 @@ class VR_TEXTURE_API ProjectiveTexturer {
   ///        place, so the depth never visits the host.
   ///
   /// The atlas must still be registered to @p cam, as for the host overload.
-  /// A `sensor::GpuFramePrep` frame's is not: its colour keeps a camera of its
-  /// own, so its depth here gives `uv0` in the depth image, not the colour's.
-  /// TODO(texture): project into a separate colour camera, which texturing an
-  /// unregistered frame needs.
+  /// A `sensor::GpuFramePrep` frame's is not -- its colour keeps a camera of
+  /// its own -- so it takes the overload below, with that camera.
   /// @param depth  A storage buffer holding at least `cam.width * cam.height`
   ///               floats, row-major, in metres. The writer's dispatch must
   ///               have finished, which a dispatch on this device guarantees.
@@ -230,6 +238,37 @@ class VR_TEXTURE_API ProjectiveTexturer {
   ///         smaller than the image.
   Status texture(const mesh::DeviceMesh& mesh, const Buffer& depth,
                  const DepthCameraParams& cam,
+                 float occlusion_threshold = 0.02f,
+                 StageMetrics* metrics = nullptr);
+
+  /// @brief @ref texture for a frame whose colour image was taken by a camera
+  ///        of its own, with the depth on the device: a `sensor::GpuFramePrep`
+  ///        frame, which then textures without visiting the host.
+  ///
+  /// The depth camera @p cam decides visibility exactly as in the registered
+  /// overloads. The coordinate is @p color_cam's: a vertex behind it gets the
+  /// `(-1, -1)` sentinel; one in front gets its pixel centre in @p color_cam's
+  /// image, normalized and clamped half a texel inside as the class note
+  /// describes, and it is carried (`-uv - 1`) unless @p cam sees the vertex
+  /// unoccluded **and** it lands inside @p color_cam's image. The atlas the
+  /// caller binds is @p color_cam's image.
+  /// @code
+  /// const sensor::DeviceFrame& f = ...;  // from GpuFramePrep::prepare
+  /// VR_TRY(texturer.texture(mesh, *f.depth, f.depth_camera, f.color_camera));
+  /// // uv0 now addresses f.color, the colour camera's image
+  /// @endcode
+  /// @param mesh       As the other device overloads.
+  /// @param depth      As the overload above.
+  /// @param cam        The depth camera, as the overload above.
+  /// @param color_cam  The camera the atlas image was taken with, posed in the
+  ///                   same world as @p cam.
+  /// @param occlusion_threshold  As the host overload.
+  /// @param metrics    As the host overload.
+  /// @return As the overload above; @ref Status::Code::InvalidArgument also
+  ///         for a @p color_cam with an empty image.
+  Status texture(const mesh::DeviceMesh& mesh, const Buffer& depth,
+                 const DepthCameraParams& cam,
+                 const ColorCameraParams& color_cam,
                  float occlusion_threshold = 0.02f,
                  StageMetrics* metrics = nullptr);
 
@@ -253,11 +292,20 @@ class VR_TEXTURE_API ProjectiveTexturer {
   /// three, the vertex colour, and so does one with no area. Every vertex's
   /// `uv0` is rewritten.
   ///
+  /// A view with a @ref TextureView::color_camera qualifies only if that
+  /// camera also sees the triangle's front and records all three vertices
+  /// inside its image, and the coordinates are its pixels (the class note's
+  /// colour-camera paragraph). The score stays the depth camera's. A view's
+  /// depth may be on the device (@ref TextureView::depth_buffer), copied there
+  /// into the pass's buffer, so a rig of `sensor::GpuFramePrep` frames
+  /// textures without visiting the host.
+  ///
   /// @param mesh    An unshared mesh from the producer that has not extracted
   ///                again (`DeviceMesh::is_current`): vertices `3t..3t+2` are
   ///                triangle `t`'s. A `shares_vertices` mesh is refused.
-  /// @param views   The views: each a depth map, its camera, and the size of
-  ///                the colour image registered to it (@ref TextureView).
+  /// @param views   The views: each a depth map on the host or the device,
+  ///                its camera, and its colour image's size and, when it is
+  ///                not registered, camera (@ref TextureView).
   /// @param layout  Where each view's image sits (@ref side_by_side_atlas):
   ///                one tile per view, each its colour image's size, none
   ///                overlapping another.
@@ -265,8 +313,11 @@ class VR_TEXTURE_API ProjectiveTexturer {
   /// @param metrics  Optional; a `"texture"` row, as the single-camera
   ///                 overload.
   /// @return OK (an empty mesh is a no-op); @ref Status::Code::InvalidArgument
-  ///         for a moved-from texturer, no views, a null depth, an empty
-  ///         camera or image, a depth range with `min_depth >= max_depth`
+  ///         for a moved-from texturer, no views, a view with no depth or with
+  ///         both a host and a device one, a device depth that is not a
+  ///         storage buffer, is smaller than its map or cannot be copied from,
+  ///         an empty camera or image, a depth range with
+  ///         `min_depth >= max_depth`
   ///         (under which no sample would count), a layout that does not
   ///         match the views, overlaps itself or lies past
   ///         @ref max_atlas_extent, a shared, superseded or buffer-less mesh,
@@ -320,9 +371,10 @@ class VR_TEXTURE_API ProjectiveTexturer {
   // tsdf::TsdfIntegrator's member of the same name.
   GpuTimer gpu_timer_;
   DescriptorPool pool_;
-  // Fixed-size camera-params SSBO (DepthCameraParams): bound once at
-  // create() and rewritten inline in each texture()'s batch, like the tsdf
-  // tier's camera SSBO. Device-local, as every buffer here is.
+  // Fixed-size camera-params SSBO (the depth camera, then the colour camera
+  // the single-camera kernel reads when it has one): bound once at create()
+  // and rewritten inline in each texture()'s batch, like the tsdf tier's
+  // camera SSBO. Device-local, as every buffer here is.
   Buffer cam_buf_;
   // A host depth frame's device copy for the single-camera pass. Grow-only,
   // like the views' buffers below, so a live pass texturing every remesh
@@ -334,19 +386,22 @@ class VR_TEXTURE_API ProjectiveTexturer {
   Buffer view_depth_buf_;
   Buffer views_buf_;
 
-  // Both DeviceMesh single-camera overloads: `depth` is the host array or
-  // the device buffer the caller passed.
+  // Every DeviceMesh single-camera overload: `depth` is the host array or
+  // the device buffer the caller passed, and `color_cam` the colour camera,
+  // null where the atlas is registered to `cam`.
   Status texture(const mesh::DeviceMesh& mesh, const StorageInput& depth,
-                 const DepthCameraParams& cam, float occlusion_threshold,
+                 const DepthCameraParams& cam,
+                 const ColorCameraParams* color_cam, float occlusion_threshold,
                  StageMetrics* metrics);
   // Every single-camera overload, once the vertices are on the device: records
-  // the depth, the camera and the dispatch into `batch`, binding `vertex_range`
-  // bytes of `vertices`. It may replace depth_buf_, as texture_views may its
-  // buffers.
+  // the depth, the cameras and the dispatch into `batch`, binding
+  // `vertex_range` bytes of `vertices`. It may replace depth_buf_, as
+  // texture_views may its buffers.
   Status texture_vertices(CommandBatch& batch, VkBuffer vertices,
                           VkDeviceSize vertex_range, std::uint32_t vertex_count,
                           const StorageInput& depth,
                           const DepthCameraParams& cam,
+                          const ColorCameraParams* color_cam,
                           float occlusion_threshold, GpuStageScope* stage);
   // Both multi-view overloads, once the vertices are on the device: records
   // the views and the dispatch into `batch`.

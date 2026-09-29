@@ -41,15 +41,31 @@ constexpr std::uint32_t kLocalSize = 256;
 // the index buffer and had to be told where vertices[] ended, whereas now the
 // only index it forms is its own invocation id, bounded by the same count that
 // sizes the dispatch.
+//
+// `has_color` says the atlas is a colour camera's image (CameraBlock::color)
+// rather than one registered to the depth camera.
 struct PushConstants {
   std::uint32_t num_vertices;
   float occlusion_threshold;
+  std::uint32_t has_color;
 };
-static_assert(sizeof(PushConstants) == 8, "PushConstants must be 8 bytes");
+static_assert(sizeof(PushConstants) == 12, "PushConstants must be 12 bytes");
 static_assert(offsetof(PushConstants, num_vertices) == 0,
               "PushConstants layout drift");
 static_assert(offsetof(PushConstants, occlusion_threshold) == 4,
               "PushConstants layout drift");
+static_assert(offsetof(PushConstants, has_color) == 8,
+              "PushConstants layout drift");
+
+// The single-camera kernel's camera SSBO (mirrors `Camera` in
+// texture_score.comp): the depth camera, then the colour camera the kernel
+// reads only under PushConstants::has_color.
+struct CameraBlock {
+  DepthCameraParams depth;
+  ColorCameraParams color;
+};
+static_assert(sizeof(CameraBlock) == 184, "CameraBlock must be 184 bytes");
+static_assert(offsetof(CameraBlock, color) == 96, "CameraBlock layout drift");
 
 // The several-view kernel's push constants (mirrors texture_multiview.comp).
 struct MultiviewPushConstants {
@@ -67,7 +83,8 @@ static_assert(offsetof(MultiviewPushConstants, occlusion_threshold) == 16,
 
 // One view as the kernel reads it (mirrors `View` in texture_multiview.comp):
 // its depth camera, where its depth starts in the concatenated depth buffer,
-// and its tile -- the colour image, which may be larger than the depth map.
+// its tile -- the colour image, which may be larger than the depth map -- and
+// the colour camera that image was taken with, read only under has_color.
 struct ViewParams {
   DepthCameraParams cam;
   std::uint32_t depth_offset;
@@ -75,13 +92,19 @@ struct ViewParams {
   std::uint32_t tile_y;
   std::uint32_t tile_width;
   std::uint32_t tile_height;
+  std::uint32_t has_color;
+  ColorCameraParams color;
 };
-static_assert(sizeof(ViewParams) == sizeof(DepthCameraParams) + 20,
-              "ViewParams must be 116 bytes");
+static_assert(sizeof(ViewParams) ==
+                  sizeof(DepthCameraParams) + 24 + sizeof(ColorCameraParams),
+              "ViewParams must be 208 bytes");
 static_assert(offsetof(ViewParams, depth_offset) == 96,
               "ViewParams layout drift");
 static_assert(offsetof(ViewParams, tile_width) == 108,
               "ViewParams layout drift");
+static_assert(offsetof(ViewParams, has_color) == 116,
+              "ViewParams layout drift");
+static_assert(offsetof(ViewParams, color) == 120, "ViewParams layout drift");
 
 // The score's cost per metre of depth disagreement: the prior engine's
 // default, and implicit_surface_compression's constant.
@@ -171,7 +194,7 @@ Result<ProjectiveTexturer> ProjectiveTexturer::create(Device& device,
   // binding 2) and rewrite it inline in each texture()'s batch -- not a
   // per-call allocation, mirroring the tsdf tier's camera SSBO.
   VR_ASSIGN(tex.cam_buf_,
-            device_storage_buffer(allocator, sizeof(DepthCameraParams)));
+            device_storage_buffer(allocator, sizeof(CameraBlock)));
   tex.kernel_.set.write_storage_buffer(2, tex.cam_buf_.handle(), 0,
                                        VK_WHOLE_SIZE);
 
@@ -189,7 +212,8 @@ Status ProjectiveTexturer::texture(const mesh::DeviceMesh& mesh,
                                    const DepthCameraParams& cam,
                                    float occlusion_threshold,
                                    StageMetrics* metrics) {
-  return texture(mesh, StorageInput(depth), cam, occlusion_threshold, metrics);
+  return texture(mesh, StorageInput(depth), cam, nullptr, occlusion_threshold,
+                 metrics);
 }
 
 Status ProjectiveTexturer::texture(const mesh::DeviceMesh& mesh,
@@ -197,12 +221,24 @@ Status ProjectiveTexturer::texture(const mesh::DeviceMesh& mesh,
                                    const DepthCameraParams& cam,
                                    float occlusion_threshold,
                                    StageMetrics* metrics) {
-  return texture(mesh, StorageInput(depth), cam, occlusion_threshold, metrics);
+  return texture(mesh, StorageInput(depth), cam, nullptr, occlusion_threshold,
+                 metrics);
+}
+
+Status ProjectiveTexturer::texture(const mesh::DeviceMesh& mesh,
+                                   const Buffer& depth,
+                                   const DepthCameraParams& cam,
+                                   const ColorCameraParams& color_cam,
+                                   float occlusion_threshold,
+                                   StageMetrics* metrics) {
+  return texture(mesh, StorageInput(depth), cam, &color_cam,
+                 occlusion_threshold, metrics);
 }
 
 Status ProjectiveTexturer::texture(const mesh::DeviceMesh& mesh,
                                    const StorageInput& depth,
                                    const DepthCameraParams& cam,
+                                   const ColorCameraParams* color_cam,
                                    float occlusion_threshold,
                                    StageMetrics* metrics) {
   // Before the validity check, so a refused call still costs its row: a stage
@@ -219,6 +255,14 @@ Status ProjectiveTexturer::texture(const mesh::DeviceMesh& mesh,
   if (cam.width == 0 || cam.height == 0) {
     return Status::invalid_argument(
         "ProjectiveTexturer::texture: camera image is empty");
+  }
+  // An empty colour image would divide every coordinate by zero, and no
+  // vertex could land inside it: the call would return OK with nothing
+  // textured.
+  if (color_cam != nullptr &&
+      (color_cam->width == 0 || color_cam->height == 0)) {
+    return Status::invalid_argument(
+        "ProjectiveTexturer::texture: colour camera image is empty");
   }
   // An empty mesh is a no-op success, as in the host overload -- and it is the
   // one case where a DeviceMesh legitimately names no buffers.
@@ -269,8 +313,8 @@ Status ProjectiveTexturer::texture(const mesh::DeviceMesh& mesh,
   // lives, for the next device consumer to use.
   CommandBatch batch(*device_, *allocator_);
   VR_TRY(texture_vertices(batch, mesh.vertices, VK_WHOLE_SIZE,
-                          mesh.vertex_count, depth, cam, occlusion_threshold,
-                          &stage));
+                          mesh.vertex_count, depth, cam, color_cam,
+                          occlusion_threshold, &stage));
   return batch.submit();
 }
 
@@ -355,8 +399,8 @@ Status ProjectiveTexturer::texture(mesh::Mesh& mesh, const float* depth,
     VR_TRY(batch.upload(vertex_buf, 0, mesh.vertices.data(), vertex_bytes));
     VR_TRY(texture_vertices(batch, vertex_buf.handle(), vertex_bytes,
                             static_cast<std::uint32_t>(mesh.vertices.size()),
-                            StorageInput(depth), cam, occlusion_threshold,
-                            &stage));
+                            StorageInput(depth), cam, nullptr,
+                            occlusion_threshold, &stage));
     VR_TRY(batch.submit());
   }
   return read_back_vertices(*device_, *allocator_, vertex_buf, mesh);
@@ -365,8 +409,8 @@ Status ProjectiveTexturer::texture(mesh::Mesh& mesh, const float* depth,
 Status ProjectiveTexturer::texture_vertices(
     CommandBatch& batch, VkBuffer vertices, VkDeviceSize vertex_range,
     std::uint32_t vertex_count, const StorageInput& depth,
-    const DepthCameraParams& cam, float occlusion_threshold,
-    GpuStageScope* stage) {
+    const DepthCameraParams& cam, const ColorCameraParams* color_cam,
+    float occlusion_threshold, GpuStageScope* stage) {
   const VkDeviceSize depth_bytes =
       VkDeviceSize(cam.width) * cam.height * sizeof(float);
   // A host frame is staged into depth_buf_, a device one bound in place.
@@ -379,7 +423,13 @@ Status ProjectiveTexturer::texture_vertices(
                              debug_object_handle(depth_buf_.handle()),
                              "texture.depth_frame");
   }
-  VR_TRY(batch.upload(cam_buf_, 0, &cam, sizeof(DepthCameraParams)));
+  // Both cameras in one inline write; a zero colour camera where there is
+  // none, which the kernel does not read.
+  CameraBlock cameras{cam, ColorCameraParams{}};
+  if (color_cam != nullptr) {
+    cameras.color = *color_cam;
+  }
+  VR_TRY(batch.upload(cam_buf_, 0, &cameras, sizeof(cameras)));
 
   // The depth at its exact range, since a caller's buffer may be larger than
   // the image.
@@ -389,7 +439,8 @@ Status ProjectiveTexturer::texture_vertices(
   // One thread per vertex. The batch REJECTS a groupCountX past the device
   // limit rather than clamping to it -- a clamp would silently leave the tail
   // of the mesh untextured.
-  const PushConstants push{vertex_count, occlusion_threshold};
+  const PushConstants push{vertex_count, occlusion_threshold,
+                           color_cam != nullptr ? 1u : 0u};
   return batch.dispatch(kernel_, &push, sizeof(push),
                         group_count(vertex_count, kLocalSize),
                         max_workgroup_count_x_, stage);
@@ -416,11 +467,30 @@ Status ProjectiveTexturer::check_views(const std::vector<TextureView>& views,
     const TextureView& v = views[i];
     const AtlasTile& t = layout.tiles[i];
     const std::string which = "view " + std::to_string(i) + " ";
-    if (v.depth == nullptr) {
+    if (v.depth == nullptr && v.depth_buffer == nullptr) {
       return Status::invalid_argument(who + which + "has no depth");
+    }
+    // Both is a caller unsure which one it meant; taking either would be a
+    // guess about which frame it is.
+    if (v.depth != nullptr && v.depth_buffer != nullptr) {
+      return Status::invalid_argument(
+          who + which + "gives its depth both on the host and on the device");
     }
     if (v.cam.width == 0 || v.cam.height == 0) {
       return Status::invalid_argument(who + which + "has an empty depth map");
+    }
+    if (v.depth_buffer != nullptr) {
+      const VkDeviceSize bytes =
+          VkDeviceSize(v.cam.width) * v.cam.height * sizeof(float);
+      const std::string what = who + which + "depth buffer";
+      VR_TRY(StorageInput(*v.depth_buffer).check(what.c_str(), bytes));
+      // Copied into the pass's own buffer, so it must be a copy source.
+      // Checked here, before any view is recorded, rather than left to the
+      // batch's copy.
+      if ((v.depth_buffer->usage() & VK_BUFFER_USAGE_TRANSFER_SRC_BIT) == 0) {
+        return Status::invalid_argument(
+            what + " was created without TRANSFER_SRC usage");
+      }
     }
     // Negated, so a NaN bound is refused too. A camera converted from a
     // ColorCameraParams, which has no depth range, arrives with both zero, and
@@ -458,6 +528,8 @@ Status ProjectiveTexturer::texture_views(CommandBatch& batch, VkBuffer vertices,
     params[i].tile_y = layout.tiles[i].y;
     params[i].tile_width = layout.tiles[i].width;
     params[i].tile_height = layout.tiles[i].height;
+    params[i].has_color = views[i].color_camera ? 1u : 0u;
+    params[i].color = views[i].color_camera.value_or(ColorCameraParams{});
     depth_floats += VkDeviceSize(views[i].cam.width) * views[i].cam.height;
   }
   const VkDeviceSize depth_bytes = depth_floats * sizeof(float);
@@ -485,15 +557,26 @@ Status ProjectiveTexturer::texture_views(CommandBatch& batch, VkBuffer vertices,
                              debug_object_handle(views_buf_.handle()),
                              "texture.views");
   }
-  // TODO(texture): keep a view's depth on the device between calls, for a
-  // keyframe set that does not change, and take a device depth per view as
-  // the single-camera pass does; every call stages every view's depth.
+  // A host view's depth is staged up; a device view's is copied on the
+  // device, so a GpuFramePrep frame never visits the host. Either way it lands
+  // at its offset in the one buffer the kernel's sampler reads.
+  //
+  // TODO(texture): bind each device view's depth in place, as the
+  // single-camera pass does, rather than copy it (about 1.5 MB a view at
+  // 640x576). The sampler reads one depth[] at a view's offset, so that needs
+  // a descriptor array indexed per view -- a device feature every embedder
+  // would then have to enable.
   for (std::size_t i = 0; i < views.size(); ++i) {
-    VR_TRY(batch.upload(view_depth_buf_,
-                        VkDeviceSize(params[i].depth_offset) * sizeof(float),
-                        views[i].depth,
-                        VkDeviceSize(views[i].cam.width) * views[i].cam.height *
-                            sizeof(float)));
+    const VkDeviceSize offset =
+        VkDeviceSize(params[i].depth_offset) * sizeof(float);
+    const VkDeviceSize bytes =
+        VkDeviceSize(views[i].cam.width) * views[i].cam.height * sizeof(float);
+    if (views[i].depth_buffer != nullptr) {
+      VR_TRY(batch.copy(*views[i].depth_buffer, 0, view_depth_buf_, offset,
+                        bytes));
+    } else {
+      VR_TRY(batch.upload(view_depth_buf_, offset, views[i].depth, bytes));
+    }
   }
   VR_TRY(batch.upload(views_buf_, 0, params.data(), view_bytes));
 

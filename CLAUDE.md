@@ -77,7 +77,9 @@ branching off **`core`**, `codec` off **`volume`** and `eval` off **`mesh`**
 - **`texture`** — projective texturing: fills the mesh's per-vertex `uv0` with a
   posed camera's image coordinates where it has line of sight (per-vertex-color
   fallback elsewhere), or with several cameras' coordinates into an atlas of
-  their images, a compute pass.
+  their images, a compute pass. A colour image is registered to its depth
+  camera or taken by a colour camera of its own, and depth may be on the host
+  or the device.
 - **`sensor`** — the capture *contract*: `ICameraCapture`, the `CapturedFrame`
   view the fusion tiers consume, and the boundary conversions a capture
   integration gets silently wrong — camera conventions (pose handedness,
@@ -322,6 +324,11 @@ order. Change the decision, its entry there, and this list together.
 - [**2026-09-28**](DECISIONS.md#2026-09-28--a-device-takes-submits-from-several-threads-at-once-each-records-on-a-command-pool-of-its-own-and-only-the-queue-is-locked) —
   A `Device` takes submits from several threads at once: each records on a
   command pool of its own, and only the queue is locked.
+- [**2026-09-28**](DECISIONS.md#2026-09-28--projective-texturing-takes-a-colour-camera-of-its-own-and-depth-on-the-device-the-depth-camera-decides-what-is-visible-the-colour-camera-gives-the-coordinate-and-a-views-device-depth-is-copied-on-the-device-rather-than-staged) —
+  Projective texturing takes a colour camera of its own and depth on the
+  device: the depth camera decides what is visible, the colour camera gives
+  the coordinate, and a view's device depth is copied on the device rather
+  than staged.
 
 ## Provenance & salvage policy
 

@@ -6569,6 +6569,101 @@ Not taken:
 3. Measured afterwards: the colour kernel reading Apple's plane images
    directly.
 
+### 2026-09-28 — Projective texturing takes a colour camera of its own and depth on the device: the depth camera decides what is visible, the colour camera gives the coordinate, and a view's device depth is copied on the device rather than staged.
+
+**The rule.** A `TextureView` may carry a `color_camera`, the camera its tile's
+image was taken with, and may give its depth as a `depth_buffer` on the
+device in place of the host `depth` array, exactly one of the two. The
+single-camera pass gains the same camera in one overload,
+`texture(const DeviceMesh&, const Buffer& depth, cam, color_cam, ...)`, the
+shape of a `GpuFramePrep` frame. In both passes the depth camera still decides
+visibility, through the same projection and occlusion test, and a vertex's
+coordinate is its pixel in the colour camera, normalized by that camera's
+image. With no colour camera nothing changes: the atlas is registered to the
+depth camera, bit for bit as before.
+
+**Why.** It closes the two `TODO(texture)`s that kept a `GpuFramePrep` frame
+off the texture tier. The GPU pre-processing decision above keeps depth and
+colour unregistered, each with its own camera, and step 4 of the residency
+decision left the single-camera device-depth pass textured only for a
+registered atlas and the several-view pass staging every view's depth from
+the host. A rig of such frames could therefore be fused on the device but not
+textured there. Now its views texture from the frames `prepare_set` returns,
+and nothing visits the host on the way.
+
+**What the colour camera must do.**
+
+- **Single camera, per vertex.** The three outcomes of the class note are read
+  off the colour camera. Behind it, the `(-1, -1)` sentinel: no coordinate in
+  its image exists, whatever the depth camera makes of the vertex. In front,
+  the vertex carries its coordinate (`-uv - 1`) unless the depth camera sees
+  it unoccluded **and** it lands inside the colour image, the second so that a
+  vertex the colour camera did not record is not given the edge clamp of one.
+- **Several views, per triangle.** A view with a colour camera qualifies only
+  if that camera, too, sees the triangle's front and records all three
+  vertices inside its image. A colour camera behind a sheet images its other
+  side. The score stays the depth camera's: the baseline between the two is a
+  few centimetres, and the depth camera is the one that proved the view.
+- **The tile is the colour image.** `side_by_side_atlas` sizes a view with a
+  colour camera from it, and a given `image_width` x `image_height` other than
+  its size is refused, since every coordinate would be misplaced.
+
+**Device depth is copied, not bound in place.** The several-view kernel reads
+every view's depth from one buffer at each view's offset, through the sampler
+both kernels share. A device view's depth is copied into that buffer with
+`CommandBatch::copy`, device to device, where a host view's is staged. Binding
+each in place would need a descriptor array indexed per view, which is a
+device feature (`shaderStorageBufferArrayDynamicIndexing`) that every embedder,
+the neutral bootstrap included, would then have to enable, to save a copy of
+about 1.5 MB a view at 640 x 576 (a `TODO(texture)`). So the buffer must be
+a copy source as well as a storage buffer, which `device_storage_buffer` makes
+and `check_views` checks before anything is recorded.
+
+**Measured**, on the M5 Max, four 640 x 576 views of a wall and 3 000
+triangles through the host-mesh overload, Release, medians of 50 (throwaway
+harness, not committed). The pass's host row fell from 0.54-0.55 ms with the
+depth staged to 0.42-0.48 ms with it on the device, colour cameras included.
+The device span covers the dispatch alone and read about 0.02 ms either way.
+Not measured on the RTX 5090, where the staging crosses PCIe and should cost
+more.
+
+**Open.**
+
+- **The colour-occlusion fringe.** With no depth map in the colour camera's
+  frame, a point the colour camera sees *past* a nearer surface is not caught,
+  so a sliver beside an occluding edge, about the cameras' parallax wide, can
+  take the occluder's colour. It is the fringe `tsdf` documents for the same
+  frames, and it is unmeasured.
+- **Coverage.** `GpuFramePrep` marks the pixels its lens saw nothing of with a
+  zero alpha, and the texturer binds no colour, so a vertex in an undistorted
+  image's black corners is textured black (a `TODO(texture)`).
+- **The atlas and gfx.** `pack_atlas` still packs on the host, and nothing yet
+  hands a device frame's colour to gfx as an image; the texture pass's side is
+  what landed here.
+
+**Verified.** The whole suite passes on the M5 Max, 42 of 42, and the texture
+tests report nothing with the Khronos validation layer loaded. The new cases,
+in `recon_texture_multiview` and `recon_texture_device_mesh`, check:
+
+- device depth, every view's and one beside two host views, giving the host
+  run's coordinates exactly, each run after one against empty depth maps so a
+  copy that moved nothing cannot pass;
+- colour cameras beside the depth cameras, at another resolution and focal
+  length, winning the same triangles with the colour cameras' coordinates;
+- the centre triangle refused when its colour camera sees only its back, sees
+  nothing of it, or sees it past the edge of its image;
+- the single-camera overload with a colour camera equal to the depth camera
+  giving the registered result, one aside giving its own coordinates, one too
+  narrow carrying the vertices outside its image, and one facing away giving
+  every vertex the sentinel;
+- the refusals: both depths, a device depth short of its map, empty, or not a
+  copy source, and a colour camera with no image or a size it does not have.
+
+Each of these mutations fails a test: taking the coordinate from the depth
+camera, dropping the colour camera's facing test or its image bounds in
+either kernel, not copying the device depth, ignoring the single-camera
+colour flag, and dropping the sentinel behind the colour camera.
+
 ## Measured lessons
 
 Not decisions, but the measurements that overturned an assumption about

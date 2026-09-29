@@ -143,6 +143,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `texture`: **a colour camera of its own, and depth on the device, for
+  projective texturing** — what a `GpuFramePrep` frame has. A `TextureView`
+  takes an optional `color_camera` and a `depth_buffer` in place of the host
+  `depth`; the single-camera pass takes the camera in
+  `texture(const DeviceMesh&, const Buffer& depth, cam, color_cam, ...)`. The
+  depth camera decides visibility, the colour camera gives each vertex its
+  coordinate, and a view with one must also see the triangle's front and
+  record all three vertices. A view's device depth is copied on the device
+  into the pass's buffer, never staged through the host. Without a colour
+  camera the result is unchanged. Tests: `recon_texture_multiview`,
+  `recon_texture_device_mesh`. See the 2026-09-28 decision.
 - `sensor`: **`JpegDecoder`** decodes the JPEGs an MJPEG camera sends, to
   I420. Given a device, with `VR_WITH_CUDA`, nvJPEG decodes an 8-bit 4:2:0
   JPEG straight into a Vulkan buffer CUDA has imported, on the GPU's
@@ -174,9 +185,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   or an API outside Vulkan wrote, before the commands after it use it.
 - `texture`: **`ProjectiveTexturer::texture(const DeviceMesh&, const Buffer&
   depth, ...)`** binds a depth frame already on the device, in place. The atlas
-  must still be registered to the depth camera, so a `GpuFramePrep` frame,
-  whose colour keeps a camera of its own, waits on a colour camera in the
-  texture pass.
+  must be registered to the depth camera; a `GpuFramePrep` frame, whose colour
+  keeps a camera of its own, takes the colour-camera overload listed
+  above.
 - `core`: **`CommandBatch::reserve_upload`** hands the caller the staging for
   an upload to pack itself, such as strided rows or several planes. It,
   `upload` and `copy` take an optional `GpuStageScope` that times the copy.

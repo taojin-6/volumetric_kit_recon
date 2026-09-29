@@ -3,15 +3,16 @@
 
 // Shared definitions for the projective-texturing compute kernels: the device
 // struct layouts (scalar block layout, byte-identical to the host POD structs),
-// the pinhole projection, the depth binding and the occlusion test that reads
-// it. #included by texture_score.comp (one camera, per vertex) and
-// texture_multiview.comp (several, per triangle), each of which declares its
-// own push-constant block and its other bindings.
+// the pinhole projection into a depth or a colour camera, the depth binding and
+// the occlusion test that reads it. #included by texture_score.comp (one
+// camera, per vertex) and texture_multiview.comp (several, per triangle), each
+// of which declares its own push-constant block and its other bindings.
 //
 // DepthCameraParams mirrors DepthCameraParams byte-for-byte (the same
-// scalar-layout camera the volume/tsdf kernels use); Vertex mirrors
-// mesh::Vertex. Under scalar block layout every field lands at its host offset
-// (no std430 vec padding).
+// scalar-layout camera the volume/tsdf kernels use), ColorCameraParams mirrors
+// ColorCameraParams (tsdf's colour camera), and Vertex mirrors mesh::Vertex.
+// Under scalar block layout every field lands at its host offset (no std430
+// vec padding).
 //
 // project_to_image computes the same world -> camera -> pixel arithmetic as
 // tsdf_common.glsl's project_pinhole -- a self-contained copy, so this tier's
@@ -38,6 +39,21 @@ struct DepthCameraParams {
   float cy;
   float min_depth;
   float max_depth;
+  uint width;
+  uint height;
+  mat4 cam_to_world;
+};
+
+// The camera a view's colour image was taken with, when it is not registered
+// to the depth camera (mirrors ColorCameraParams: scalars at their 4-byte
+// offsets, the cam_to_world mat4 at 24, 88 B). No depth range: it projects a
+// vertex for its coordinate and proves nothing about visibility, which stays
+// the depth camera's to decide.
+struct ColorCameraParams {
+  float fx;
+  float fy;
+  float cx;
+  float cy;
   uint width;
   uint height;
   mat4 cam_to_world;
@@ -124,6 +140,42 @@ bool project_to_image(DepthCameraParams c, vec3 world, out vec2 px,
   vec3 p_cam = world_to_camera(c, world);
   zc = p_cam.z;
   return camera_to_image(c, p_cam, px);
+}
+
+// The same three for a colour camera: the identical pinhole arithmetic, and
+// the same refusal of a point behind it or a pixel that is not a number. A
+// point in front whose pixel lands outside the image still projects, for the
+// reason project_to_image gives; inside_image is the bounds test.
+vec3 world_to_camera(ColorCameraParams c, vec3 world) {
+  return transpose(mat3(c.cam_to_world)) * (world - c.cam_to_world[3].xyz);
+}
+
+bool camera_to_image(ColorCameraParams c, vec3 p_cam, out vec2 px) {
+  if (!(p_cam.z > 0.0)) {
+    return false;
+  }
+  px = vec2(c.fx * (p_cam.x / p_cam.z) + c.cx,
+            c.fy * (p_cam.y / p_cam.z) + c.cy);
+  return !isnan(px.x) && !isnan(px.y);
+}
+
+bool project_to_image(ColorCameraParams c, vec3 world, out vec2 px) {
+  return camera_to_image(c, world_to_camera(c, world), px);
+}
+
+// True when pixel `px` lies within the pixel centres of a `size` image, so the
+// colour camera recorded the point rather than the coordinate being an edge
+// clamp of one it did not. Every compare is true only inside, so a NaN is
+// outside.
+//
+// TODO(texture): consult the colour frame's coverage as well. GpuFramePrep
+// writes 0 in a pixel's alpha byte where the lens saw nothing, so a vertex in
+// an undistorted image's black corners passes this test and is textured black.
+// The pass binds no colour, so that needs the frame's colour or a coverage
+// mask bound beside the depth.
+bool inside_image(vec2 px, vec2 size) {
+  return px.x >= 0.0 && px.x <= size.x - 1.0 && px.y >= 0.0 &&
+         px.y <= size.y - 1.0;
 }
 
 // Binding 1 in both kernels: the depth the occlusion test reads -- the one

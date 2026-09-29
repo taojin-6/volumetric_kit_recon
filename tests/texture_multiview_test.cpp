@@ -18,11 +18,13 @@
 //   back     (x = -0.3, wound away from the cameras) -> no view: (-1, -1),
 //                          though camera 0's depth agrees with all three
 //
-// Then the same with the atlas wrapped into two rows; one view against the
-// single-camera pass; a half-resolution depth map under a full-resolution
-// tile against the full-resolution one; the atlas layout and packing on their
-// own; the refusals; and a moved-from texturer. Skips (exit 0) where no device
-// is present.
+// Then the same with the atlas wrapped into two rows; with the depth maps on
+// the device, all of them or one; with colour cameras of their own beside the
+// depth cameras, and a colour camera that does not see a triangle refusing
+// it; one view against the single-camera pass; a half-resolution depth map
+// under a full-resolution tile against the full-resolution one; the atlas
+// layout and packing on their own; the refusals; and a moved-from texturer.
+// Skips (exit 0) where no device is present.
 
 #include <algorithm>
 #include <cmath>
@@ -32,6 +34,8 @@
 #include <vector>
 
 #include "volumetric_kit/recon/core/allocator.hpp"
+#include "volumetric_kit/recon/core/buffer.hpp"
+#include "volumetric_kit/recon/core/compute_util.hpp"
 #include "volumetric_kit/recon/core/device.hpp"
 #include "volumetric_kit/recon/core/instance.hpp"
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
@@ -39,6 +43,8 @@
 #include "volumetric_kit/recon/mesh/mesh.hpp"
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
 #include "volumetric_kit/recon/texture/texture_atlas.hpp"
+
+#include "buffer_readback.hpp"
 
 namespace vr = volumetric_kit::recon;
 namespace tex = volumetric_kit::recon::texture;
@@ -119,12 +125,48 @@ std::vector<float> wall_depth(const vr::DepthCameraParams& c) {
   return depth;
 }
 
-// The atlas coordinate a vertex seen by view `i` must get: the kernel's
+// A colour camera beside depth camera `c`: `baseline` metres along its x axis,
+// facing the same way, at 640 x 480 with a focal length and principal point
+// of its own. Not a rescale of `c`, so a coordinate taken from the depth
+// camera instead lands elsewhere; a little wider, so it records everything
+// `c` sees on the wall.
+vr::ColorCameraParams color_beside(const vr::DepthCameraParams& c,
+                                   float baseline) {
+  vr::ColorCameraParams k{};
+  k.fx = 480.0f;
+  k.fy = 480.0f;
+  k.cx = 321.5f;
+  k.cy = 238.0f;
+  k.width = 640;
+  k.height = 480;
+  k.cam_to_world = c.cam_to_world;
+  k.cam_to_world[3] += c.cam_to_world[0] * baseline;
+  return k;
+}
+
+// color_beside's intrinsics, at `eye` looking along `forward`.
+vr::ColorCameraParams color_camera(vr::Vec3f eye, vr::Vec3f forward) {
+  return color_beside(camera(eye, forward), 0.0f);
+}
+
+// The atlas coordinate a vertex seen by view `v` must get: the kernel's
 // arithmetic, from the projected pixel -- its centre as a fraction of the
-// depth map, scaled to the tile and clamped half a texel inside it.
-vr::Vec2f expected_uv(vr::Vec3f world, const vr::DepthCameraParams& c,
+// image (the colour camera's when the view has one, else the depth map),
+// scaled to the tile and clamped half a texel inside it.
+vr::Vec2f expected_uv(vr::Vec3f world, const tex::TextureView& view,
                       const tex::AtlasTile& tile,
                       const tex::AtlasLayout& layout) {
+  vr::DepthCameraParams c = view.cam;
+  if (view.color_camera) {
+    const vr::ColorCameraParams& k = *view.color_camera;
+    c.fx = k.fx;
+    c.fy = k.fy;
+    c.cx = k.cx;
+    c.cy = k.cy;
+    c.width = k.width;
+    c.height = k.height;
+    c.cam_to_world = k.cam_to_world;
+  }
   const vr::Vec3f p = to_camera(c, world);
   const float u = c.fx * (p.x / p.z) + c.cx;
   const float v = c.fy * (p.y / p.z) + c.cy;
@@ -182,7 +224,7 @@ int check_triangle(const rmesh::Mesh& m, std::size_t t, int want,
     }
     const tex::AtlasTile& tile = layout.tiles[static_cast<std::size_t>(want)];
     const vr::Vec2f uv = expected_uv(
-        v.position, views[static_cast<std::size_t>(want)].cam, tile, layout);
+        v.position, views[static_cast<std::size_t>(want)], tile, layout);
     if (!near(v.uv0, uv)) {
       std::fprintf(stderr,
                    "triangle %zu vertex %zu: uv (%f, %f), want (%f, %f)\n", t,
@@ -196,6 +238,18 @@ int check_triangle(const rmesh::Mesh& m, std::size_t t, int want,
           v.uv0.y * layout.height < tile.y + tile.height);
   }
   return 0;
+}
+
+// Texture `m` from `view` alone, its tile the whole atlas, and check that its
+// first triangle took the view (`want` 0) or the vertex colour (`want` -1).
+int texture_alone(tex::ProjectiveTexturer& texturer,
+                  const tex::TextureView& view, int want, rmesh::Mesh m) {
+  const std::vector<tex::TextureView> one = {view};
+  vr::Result<tex::AtlasLayout> layout =
+      tex::side_by_side_atlas(one, texturer.max_atlas_extent());
+  CHECK(layout.ok());
+  CHECK(texturer.texture(m, one, layout.value()).ok());
+  return check_triangle(m, 0, want, one, layout.value());
 }
 
 }  // namespace
@@ -343,6 +397,126 @@ int main() {
     CHECK(m.vertices[6].uv0.y > 0.5f);  // the left triangle, in row two
   }
 
+  // The depth maps on the device, as GpuFramePrep leaves them: every view's,
+  // then only view 1's beside two on the host. The kernel reads the same
+  // bytes either way, so the coordinates are the host run's exactly -- and
+  // the scene's. Each run follows one against depth maps of nothing, the same
+  // sizes, so the pass's own depth buffer holds zeros going in: a copy that
+  // moved nothing would read those, not the host run's identical bytes.
+  {
+    vr::Result<tex::AtlasLayout> layout =
+        tex::side_by_side_atlas(views, texturer.max_atlas_extent());
+    CHECK(layout.ok());
+    rmesh::Mesh from_host = mesh;
+    CHECK(texturer.texture(from_host, views, layout.value()).ok());
+
+    const std::vector<float>* maps[] = {&depth0, &depth1, &depth2};
+    std::vector<vr::Buffer> buffers;
+    for (const std::vector<float>* map : maps) {
+      vr::Result<vr::Buffer> buffer = vr::device_storage_buffer(
+          allocator.value(), map->size() * sizeof(float));
+      CHECK(buffer.ok());
+      CHECK(vr_test::write_back(device.value(), allocator.value(),
+                                buffer.value(), *map)
+                .ok());
+      buffers.push_back(std::move(buffer).value());
+    }
+    std::vector<tex::TextureView> on_device = views;
+    for (std::size_t i = 0; i < on_device.size(); ++i) {
+      on_device[i].depth = nullptr;
+      on_device[i].depth_buffer = &buffers[i];
+    }
+    std::vector<tex::TextureView> mixed = views;
+    mixed[1].depth = nullptr;
+    mixed[1].depth_buffer = &buffers[1];
+    const std::vector<float> nothing(depth0.size(), 0.0f);
+    std::vector<tex::TextureView> blind = views;
+    for (tex::TextureView& v : blind) {
+      v.depth = nothing.data();
+    }
+    for (const std::vector<tex::TextureView>* run : {&on_device, &mixed}) {
+      rmesh::Mesh unseen = mesh;
+      CHECK(texturer.texture(unseen, blind, layout.value()).ok());
+      CHECK(unseen.vertices[0].uv0 == vr::Vec2f(-1.0f, -1.0f));
+      rmesh::Mesh m = mesh;
+      CHECK(texturer.texture(m, *run, layout.value()).ok());
+      for (std::size_t i = 0; i < m.vertices.size(); ++i) {
+        CHECK(m.vertices[i].uv0 == from_host.vertices[i].uv0);
+      }
+      for (std::size_t t = 0; t < kTriangles; ++t) {
+        if (check_triangle(m, t, want[t], views, layout.value()) != 0) return 1;
+      }
+    }
+  }
+
+  // Colour cameras of their own, 5 cm beside the depth cameras: the same
+  // views win -- the depth cameras still decide what is visible, and the
+  // score is theirs -- but the tiles are the 640 x 480 colour images and each
+  // vertex lands at its pixel in the winner's colour camera.
+  {
+    std::vector<tex::TextureView> colored = views;
+    for (tex::TextureView& v : colored) {
+      v.color_camera = color_beside(v.cam, 0.05f);
+    }
+    vr::Result<tex::AtlasLayout> layout =
+        tex::side_by_side_atlas(colored, texturer.max_atlas_extent());
+    CHECK(layout.ok());
+    CHECK(layout->width == 3 * 640 && layout->height == 480);
+    rmesh::Mesh m = mesh;
+    CHECK(texturer.texture(m, colored, layout.value()).ok());
+    for (std::size_t t = 0; t < kTriangles; ++t) {
+      if (check_triangle(m, t, want[t], colored, layout.value()) != 0) {
+        return 1;
+      }
+    }
+    // A size its colour camera does not have is refused, by the layout and
+    // the pass alike.
+    tex::TextureView wrong = colored[0];
+    wrong.image_width = kW;
+    wrong.image_height = kH;
+    CHECK(tex::side_by_side_atlas({wrong}, texturer.max_atlas_extent())
+              .status()
+              .domain() == vr::Status::Code::InvalidArgument);
+    std::vector<tex::TextureView> wrong_views = colored;
+    wrong_views[0] = wrong;
+    rmesh::Mesh untouched = mesh;
+    CHECK(texturer.texture(untouched, wrong_views, layout.value()).domain() ==
+          vr::Status::Code::InvalidArgument);
+    CHECK(untouched.vertices[0].uv0 == vr::Vec2f(0.25f, 0.25f));
+    // So is a colour camera with no image.
+    tex::TextureView blank = colored[0];
+    blank.color_camera->width = 0;
+    CHECK(tex::side_by_side_atlas({blank}, texturer.max_atlas_extent())
+              .status()
+              .domain() == vr::Status::Code::InvalidArgument);
+  }
+
+  // The colour camera must see the triangle as well: the centre triangle,
+  // which view 0 textures with its colour camera beside it, falls to the
+  // vertex colour when that camera sees only the triangle's back (from behind
+  // the wall), sees nothing of it (looking away), or sees it past the edge of
+  // its image (moved 3 m aside). Each time the depth camera alone would
+  // texture it.
+  {
+    rmesh::Mesh centre;
+    add_wall_triangle(centre, 0.0f, -0.6f);
+    identity_indices(centre);
+    tex::TextureView view = views[0];
+    view.color_camera = color_beside(view.cam, 0.05f);
+    if (texture_alone(texturer, view, 0, centre) != 0) return 1;
+    view.color_camera = color_camera(vr::Vec3f(0.0f, 0.0f, 2.0f * kWallZ),
+                                     vr::Vec3f(0.0f, 0.0f, -1.0f));
+    if (texture_alone(texturer, view, -1, centre) != 0) return 1;
+    view.color_camera =
+        color_camera(vr::Vec3f(0.0f, 0.0f, 0.0f), vr::Vec3f(0.0f, 0.0f, -1.0f));
+    if (texture_alone(texturer, view, -1, centre) != 0) return 1;
+    view.color_camera =
+        color_camera(vr::Vec3f(3.0f, 0.0f, 0.0f), vr::Vec3f(0.0f, 0.0f, 1.0f));
+    if (texture_alone(texturer, view, -1, centre) != 0) return 1;
+    view.color_camera.reset();
+    if (texture_alone(texturer, view, 0, centre) != 0) return 1;
+  }
+
   // One view: where the single-camera pass textures all three vertices, the
   // same coordinates, within rounding (the tiled form clamps before it
   // divides).
@@ -466,6 +640,29 @@ int main() {
     rmesh::Mesh shared = mesh;  // triangle 1 reuses a vertex of triangle 0
     shared.indices[3] = 0;
     CHECK(refused(shared, views, layout.value()));
+    // Device depth: given beside the host one, a float short of its map,
+    // empty, and in a buffer a batch cannot copy from.
+    const VkDeviceSize map_bytes = VkDeviceSize(kW) * kH * sizeof(float);
+    vr::Result<vr::Buffer> whole =
+        vr::device_storage_buffer(allocator.value(), map_bytes);
+    vr::Result<vr::Buffer> short_map =
+        vr::device_storage_buffer(allocator.value(), map_bytes - sizeof(float));
+    vr::Result<vr::Buffer> no_copy =
+        vr::storage_buffer(allocator.value(), map_bytes);
+    CHECK(whole.ok() && short_map.ok() && no_copy.ok());
+    CHECK((no_copy->usage() & VK_BUFFER_USAGE_TRANSFER_SRC_BIT) == 0);
+    std::vector<tex::TextureView> both = views;
+    both[1].depth_buffer = &whole.value();
+    CHECK(refused(mesh, both, layout.value()));
+    const vr::Buffer empty;
+    const vr::Buffer* const bad_buffers[] = {&short_map.value(), &empty,
+                                             &no_copy.value()};
+    for (const vr::Buffer* bad : bad_buffers) {
+      std::vector<tex::TextureView> device_view = views;
+      device_view[1].depth = nullptr;
+      device_view[1].depth_buffer = bad;
+      CHECK(refused(mesh, device_view, layout.value()));
+    }
     // An empty mesh is a no-op.
     rmesh::Mesh none;
     CHECK(texturer.texture(none, views, layout.value()).ok());
