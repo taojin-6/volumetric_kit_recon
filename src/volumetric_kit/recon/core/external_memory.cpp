@@ -10,6 +10,22 @@
 
 namespace volumetric_kit::recon {
 
+std::optional<std::uint32_t> find_memory_type(const Device& device,
+                                              std::uint32_t type_bits,
+                                              VkMemoryPropertyFlags required,
+                                              VkMemoryPropertyFlags excluded) {
+  VkPhysicalDeviceMemoryProperties memory{};
+  vkGetPhysicalDeviceMemoryProperties(device.physical_device(), &memory);
+  for (std::uint32_t i = 0; i < memory.memoryTypeCount; ++i) {
+    const VkMemoryPropertyFlags flags = memory.memoryTypes[i].propertyFlags;
+    if ((type_bits & (1u << i)) != 0 && (flags & required) == required &&
+        (flags & excluded) == 0) {
+      return i;
+    }
+  }
+  return std::nullopt;
+}
+
 Result<ExportedBuffer> create_exported_buffer(const Device& device,
                                               VkDeviceSize bytes) {
   if (!device.exports_memory()) {
@@ -57,24 +73,9 @@ Result<ExportedBuffer> create_exported_buffer(const Device& device,
 
   VkMemoryRequirements needs{};
   vkGetBufferMemoryRequirements(vk, buffer, &needs);
-  VkPhysicalDeviceMemoryProperties memory{};
-  vkGetPhysicalDeviceMemoryProperties(device.physical_device(), &memory);
-  // Device-local, and not host-visible where a type allows it: on a ReBAR
-  // system the first device-local type can be the BAR heap the host maps.
-  std::uint32_t type = memory.memoryTypeCount;
-  for (const bool host_visible_ok : {false, true}) {
-    for (std::uint32_t i = 0;
-         i < memory.memoryTypeCount && type == memory.memoryTypeCount; ++i) {
-      const VkMemoryPropertyFlags flags = memory.memoryTypes[i].propertyFlags;
-      if ((needs.memoryTypeBits & (1u << i)) != 0 &&
-          (flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0 &&
-          (host_visible_ok ||
-           (flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) == 0)) {
-        type = i;
-      }
-    }
-  }
-  if (type == memory.memoryTypeCount) {
+  const std::optional<std::uint32_t> type = find_memory_type(
+      device, needs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+  if (!type) {
     vkDestroyBuffer(vk, buffer, nullptr);
     return Status::unsupported(
         "create_exported_buffer: no device-local memory the buffer can use");
@@ -91,7 +92,7 @@ Result<ExportedBuffer> create_exported_buffer(const Device& device,
   alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
   alloc.pNext = &dedicated;
   alloc.allocationSize = needs.size;
-  alloc.memoryTypeIndex = type;
+  alloc.memoryTypeIndex = *type;
   VkDeviceMemory backing = VK_NULL_HANDLE;
   VkResult result = vkAllocateMemory(vk, &alloc, nullptr, &backing);
   if (result == VK_SUCCESS) result = vkBindBufferMemory(vk, buffer, backing, 0);

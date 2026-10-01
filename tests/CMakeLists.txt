@@ -323,8 +323,9 @@ vr_target_warnings(recon_core_command_batch_test)
 add_test(NAME recon_core_command_batch COMMAND recon_core_command_batch_test)
 
 # An exported buffer: a descriptor where the device exports memory, a refusal
-# where it does not (MoltenVK), and an ordinary storage buffer to a batch. Not
-# on Windows, which has no file descriptors to close.
+# where it does not (MoltenVK), and an ordinary storage buffer to a batch; and
+# the memory type it binds. Not on Windows, which has no file descriptors to
+# close.
 if(NOT WIN32)
   add_executable(recon_core_external_memory_test core_external_memory_test.cpp)
   target_link_libraries(recon_core_external_memory_test

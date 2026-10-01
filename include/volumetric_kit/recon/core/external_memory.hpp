@@ -5,7 +5,11 @@
 
 /// @file core/external_memory.hpp
 /// @brief Device memory another API on the same GPU writes into: CUDA writing
-///        a hardware decoder's picture, which the kernels then read in place.
+///        a hardware decoder's picture, which the kernels then read in place;
+///        and the memory type such a resource is bound to.
+
+#include <cstdint>
+#include <optional>
 
 #include "volumetric_kit/recon/core/buffer.hpp"
 #include "volumetric_kit/recon/core/export.hpp"
@@ -29,6 +33,23 @@ struct ExportedBuffer {
   /// The memory's size, which an importer is told.
   VkDeviceSize memory_size = 0;
 };
+
+/// @brief The memory type to bind a resource to that is not allocated through
+///        the @ref Allocator: the first that @p type_bits allows with every
+///        flag of @p required and none of @p excluded.
+///
+/// Vulkan orders a memory type ahead of any whose flags strictly contain its
+/// own, so the first match is the plainest. Asked for device-local alone, it
+/// is a type the host cannot map wherever @p type_bits allows one, which keeps
+/// the resource out of a ReBAR system's host-visible BAR heap.
+/// @param device    The device whose memory types are searched.
+/// @param type_bits `VkMemoryRequirements::memoryTypeBits` of the resource.
+/// @param required  Flags the type must have; 0 for any.
+/// @param excluded  Flags the type must not have; 0 for none.
+/// @return The type's index, or empty when no allowed type fits.
+VR_CORE_API std::optional<std::uint32_t> find_memory_type(
+    const Device& device, std::uint32_t type_bits,
+    VkMemoryPropertyFlags required, VkMemoryPropertyFlags excluded = 0);
 
 /// @brief Make a buffer that another API on the same GPU imports and writes.
 ///

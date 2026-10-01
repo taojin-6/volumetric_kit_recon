@@ -3,6 +3,8 @@
 
 // An exported buffer: on a device that exports memory it comes with a file
 // descriptor and works like any other storage buffer; elsewhere it is refused.
+// And the memory type such a resource binds: the first that fits, which for
+// device-local alone is one the host cannot map wherever the GPU has one.
 
 #include <unistd.h>
 
@@ -41,6 +43,27 @@ int main() {
       vr::Device::create(instance.value(), gpu.value(), {});
   CHECK(device.ok());
   const vr::Device& dev = device.value();
+
+  VkPhysicalDeviceMemoryProperties memory{};
+  vkGetPhysicalDeviceMemoryProperties(dev.physical_device(), &memory);
+  const auto flags = [&](std::uint32_t i) {
+    return memory.memoryTypes[i].propertyFlags;
+  };
+  constexpr VkMemoryPropertyFlags kLocal = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+  constexpr VkMemoryPropertyFlags kMapped = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
+  const auto local = vr::find_memory_type(dev, ~0u, kLocal);
+  CHECK(local && (flags(*local) & kLocal) != 0);
+  for (std::uint32_t i = 0; i < *local; ++i) CHECK((flags(i) & kLocal) == 0);
+  // The spec's order is what keeps a device-local resource out of the BAR.
+  bool unmapped_local = false;
+  for (std::uint32_t i = 0; i < memory.memoryTypeCount; ++i) {
+    unmapped_local |= (flags(i) & kLocal) != 0 && (flags(i) & kMapped) == 0;
+  }
+  CHECK(!unmapped_local || (flags(*local) & kMapped) == 0);
+  const auto plain = vr::find_memory_type(dev, ~0u, kLocal, kMapped);
+  CHECK(plain.has_value() == unmapped_local);
+  CHECK(!vr::find_memory_type(dev, 0, 0));
+  CHECK(!vr::find_memory_type(dev, 1u << *local, kLocal, kLocal));
 
   if (!dev.exports_memory()) {
     CHECK(vr::create_exported_buffer(dev, 256).status().domain() ==

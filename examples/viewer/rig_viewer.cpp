@@ -1545,10 +1545,10 @@ int run(GLFWwindow* window, const Options& opt) {
             if (acquired.ok()) {
               next = std::move(acquired).value();
               atlas_error_said = false;
+              // Filled in this command buffer, so ahead of the copy.
+              const bool solid = show_sources && ensure_solid(render_frame.cmd);
               record_atlas_copy(render_frame.cmd, next->tex.image(), taken_job,
-                                show_sources && ensure_solid(render_frame.cmd)
-                                    ? &solid_handles
-                                    : nullptr);
+                                solid ? &solid_handles : nullptr);
               ++atlas_copies;
               for (AtlasTileSource& source : taken_job.tiles) {
                 slot_sources[render_frame.slot].push_back(

@@ -5,7 +5,8 @@
 // scene: one capture through the host path (the SDK undistorts colour and
 // registers depth to it), and raw through GpuFramePrep over each codec, H.265
 // and MJPEG, the colour decoded onto the pass's device where the hardware
-// leaves it there.
+// leaves it there; and raw H.265 once more onto a device the decoder can keep
+// nothing on, so every frame's colour falls back to the host and is counted.
 //   - Colour: the two undistorted images, gains fitted per channel for the
 //     exposure change between captures, line up best unshifted in the centre
 //     and in every corner, where a wrong lens model moves them apart.
@@ -32,6 +33,7 @@
 #include <utility>
 #include <vector>
 
+#include "bare_device.hpp"
 #include "buffer_readback.hpp"
 #include "volumetric_kit/recon/core/allocator.hpp"
 #include "volumetric_kit/recon/core/device.hpp"
@@ -131,12 +133,17 @@ int grab_host(const char* serial, std::uint32_t w, std::uint32_t h,
                 });
 }
 
+// Raw frames decoded onto `decode_on`, prepared on `device`. A `decode_on`
+// other than `device` is one the decoder keeps nothing on.
 int grab_gpu(const char* serial, std::uint32_t w, std::uint32_t h,
              sensor::OrbbecColorCodec codec, vr::Device& device,
-             vr::Allocator& allocator, sensor::GpuFramePrep& prep, Frame* out) {
-  std::printf("raw %s:\n", sensor::to_string(codec));
+             const vr::Device& decode_on, vr::Allocator& allocator,
+             sensor::GpuFramePrep& prep, Frame* out) {
+  const bool forced = &decode_on != &device;
+  std::printf("raw %s%s:\n", sensor::to_string(codec),
+              forced ? ", the device path forced to fail" : "");
   auto opened = sensor::OrbbecCapture::open(
-      options_for(serial, w, h, true, &device, codec));
+      options_for(serial, w, h, true, &decode_on, codec));
   if (!opened) {
     std::fprintf(stderr, "FAIL: open raw: %s\n",
                  opened.status().message().c_str());
@@ -144,6 +151,7 @@ int grab_gpu(const char* serial, std::uint32_t w, std::uint32_t h,
   }
   sensor::OrbbecCapture capture = std::move(opened).value();
   CHECK(capture.start().ok());
+  std::uint64_t frames = 0;
   std::uint64_t host_frames = 0;  // colour handed out on the host
   const int settled = settle(
       [&] {
@@ -151,6 +159,7 @@ int grab_gpu(const char* serial, std::uint32_t w, std::uint32_t h,
         // `settle` keeps.
         auto polled = capture.poll_raw();
         if (polled && polled.value()) {
+          ++frames;
           const sensor::YuvImage& c = polled.value()->color;
           host_frames += c.device == nullptr && c.image[0] == nullptr ? 1 : 0;
         }
@@ -184,7 +193,7 @@ int grab_gpu(const char* serial, std::uint32_t w, std::uint32_t h,
         const std::string backend = required != nullptr ? required : "";
         if ((backend == "videotoolbox" ||
              (VR_TEST_WITH_CUDA && backend == "cuda")) &&
-            !on_device) {
+            !on_device && !forced) {
           std::fprintf(stderr, "FAIL: %s promised, colour on the host\n",
                        required);
           return 1;
@@ -218,14 +227,19 @@ int grab_gpu(const char* serial, std::uint32_t w, std::uint32_t h,
       });
   if (settled != 0) return settled;
   // The stats count what the frames showed: each one whose colour came to
-  // the host although the stream decodes onto a device.
+  // the host although the stream decodes onto a device, which is every one
+  // when the device path cannot open.
   const std::uint64_t counted = capture.stats().host_pictures;
-  std::printf("  %llu of the frames with colour on the host\n",
-              static_cast<unsigned long long>(counted));
-  if (counted != host_frames) {
-    std::fprintf(stderr, "FAIL: stats count %llu host pictures, saw %llu\n",
+  std::printf("  %llu of %llu frames with colour on the host\n",
+              static_cast<unsigned long long>(counted),
+              static_cast<unsigned long long>(frames));
+  if (counted != host_frames || (forced && host_frames != frames)) {
+    std::fprintf(stderr,
+                 "FAIL: stats count %llu host pictures; %llu of %llu frames "
+                 "came to the host\n",
                  static_cast<unsigned long long>(counted),
-                 static_cast<unsigned long long>(host_frames));
+                 static_cast<unsigned long long>(host_frames),
+                 static_cast<unsigned long long>(frames));
     return 1;
   }
   return 0;
@@ -445,13 +459,21 @@ int main() {
   for (const auto codec :
        {sensor::OrbbecColorCodec::Hevc, sensor::OrbbecColorCodec::Mjpeg}) {
     Frame raw;
-    if (grab_gpu(serial, w, h, codec, device.value(), allocator.value(),
-                 prep.value(), &raw) != 0) {
+    if (grab_gpu(serial, w, h, codec, device.value(), device.value(),
+                 allocator.value(), prep.value(), &raw) != 0) {
       return 1;
     }
     if (check_color(host, raw) != 0) return 1;
     if (check_depth(host, raw) != 0) return 1;
   }
+  auto bare = vr_test::bare_device(instance.value(), device.value());
+  CHECK(bare.ok());
+  Frame fallback;
+  if (grab_gpu(serial, w, h, sensor::OrbbecColorCodec::Hevc, device.value(),
+               bare.value(), allocator.value(), prep.value(), &fallback) != 0) {
+    return 1;
+  }
+  if (check_color(host, fallback) != 0) return 1;
   std::puts("sensor_orbbec_gpu_prep: OK");
   return 0;
 }
