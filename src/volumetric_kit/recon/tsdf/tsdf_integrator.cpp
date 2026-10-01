@@ -193,9 +193,7 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid, const Buffer& depth,
 Status TsdfIntegrator::integrate(VoxelBlockGrid& grid,
                                  const std::vector<FrameInput>& frames,
                                  float max_weight, IntegrationMode mode,
-                                 StageMetrics* metrics,
-                                 volume::DeviceBlockList* active_out) {
-  if (active_out != nullptr) *active_out = volume::DeviceBlockList{};
+                                 StageMetrics* metrics) {
   // Opened before the validity check so a refused call still costs its row -- a
   // stage that reports nothing when it fails reads on an overlay as a stage
   // that did not run, which is the reading a frozen pipeline most needs not to
@@ -305,7 +303,6 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid,
   // between the two submits, if a host row shows that wait.
   VR_ASSIGN(const volume::DeviceBlockList active,
             grid.map().compact_active_blocks_on_device(metrics));
-  if (active_out != nullptr) *active_out = active;
   if (active.count == 0) {
     return {};
   }

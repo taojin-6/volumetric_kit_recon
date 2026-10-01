@@ -269,19 +269,12 @@ class VR_TSDF_API TsdfIntegrator {
   /// @param mode        As @ref integrate, for every frame.
   /// @param metrics     As @ref integrate: one `"integrate"` row, a device span
   ///                    per frame, over one `"  ..active set"` sub-row.
-  /// @param active      Optional: receives the active set this call compacted
-  ///                    and fused over, still on the device and current until
-  ///                    the map compacts again, so an extract that follows
-  ///                    meshes it without compacting again
-  ///                    (`mesh::MarchingCubes::extract_device`). Empty when the
-  ///                    call fused nothing.
   /// @return As @ref integrate.
   Status integrate(volume::VoxelBlockGrid& grid,
                    const std::vector<FrameInput>& frames,
                    float max_weight = 5.0f,
                    IntegrationMode mode = IntegrationMode::Classic,
-                   StageMetrics* metrics = nullptr,
-                   volume::DeviceBlockList* active = nullptr);
+                   StageMetrics* metrics = nullptr);
 
   /// @brief How many blocks this integrator has CHANGED since the last @ref
   ///        reset_dirty (requires @ref

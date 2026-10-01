@@ -234,9 +234,10 @@ whenever convenient; then P1, P3, P5, P4, P2 + P6; P7 once it is measured.
 
 ### P5 — Extract from the fuse's device block list
 
-> **Landed** as written: with spans off the list stays on the device, and a
-> new `extract_device` overload meshes the list `integrate` reports. See
-> DECISIONS.md, 2026-09-30.
+> **Landed**, though not as the fix below has it. With spans off the list
+> stays on the device, and the map hands its last compaction back while
+> nothing has changed since, so the extract reuses the fuse's with no new
+> API. See DECISIONS.md, 2026-09-30.
 
 - **Problem.** `extract_device` compacts the whole map again, reads the list
   back to the host (`collect_compacted`, `voxel_hash_map.cpp:653`) and

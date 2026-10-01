@@ -339,9 +339,9 @@ order. Change the decision, its entry there, and this list together.
 - [**2026-09-30**](DECISIONS.md#2026-09-30--depth-allocation-works-a-16-x-16-pixel-tile-a-workgroup-and-dilates-each-distinct-block-of-the-tile-once-its-band-shared-out-over-the-lanes) —
   Depth allocation works a 16 x 16 pixel tile a workgroup and dilates each
   distinct block of the tile once, its band shared out over the lanes.
-- [**2026-09-30**](DECISIONS.md#2026-09-30--with-the-spans-off-an-extracts-active-list-stays-on-the-device-and-a-remesh-meshes-the-list-the-fuse-compacted) —
-  With the spans off, an extract's active list stays on the device, and a
-  remesh meshes the list the fuse compacted.
+- [**2026-09-30**](DECISIONS.md#2026-09-30--with-the-spans-off-an-extracts-active-list-stays-on-the-device-and-the-map-hands-back-its-last-compaction-while-nothing-has-changed-since) —
+  With the spans off, an extract's active list stays on the device, and the
+  map hands back its last compaction while nothing has changed since.
 
 ## Provenance & salvage policy
 
@@ -691,9 +691,12 @@ arbitrary; it usually isn't.
   A compaction still reads its list back, in the count's own submit while the
   set stays within a quarter past its last count (the 2026-09-28 residency
   decision), except `compact_active_blocks_on_device`'s: its
-  `DeviceBlockList` stays on the device, stamped with the epoch and a
-  compaction serial, and `check_device_block_list` refuses one that a
-  compaction, resize, remove, clear or move has made stale.
+  `DeviceBlockList` stays on the device, stamped with the epoch, a
+  compaction serial and the heap's free count, and `check_device_block_list`
+  refuses one that a compaction, allocation, resize, remove, clear or move
+  has made stale. While the last one still holds, the call returns it again,
+  dispatching and reporting nothing, so an extract after a fuse reuses the
+  fuse's compaction (2026-09-30).
   `topology_epoch()` lives on the *map* — the object that frees a block
   index — and is a globally unique token re-drawn at `create` and at every
   `remove`/`clear`, never at `resize`: a slot-keyed cache (tsdf's dirty flags,
@@ -736,9 +739,7 @@ arbitrary; it usually isn't.
   calls): one compaction and one submit for them all, each frame a dispatch
   of its own in order, so every voxel takes them in turn as integrating them
   one at a time does, bit for bit over the same blocks. A frame with no
-  pixels fuses nothing, as it allocates nothing (2026-09-30). It reports the
-  device list it fused over, which an extract can mesh without compacting
-  again.
+  pixels fuses nothing, as it allocates nothing (2026-09-30).
   `MeshIntegrator` writes a triangle mesh's distance field instead
   (2026-09-27), **overwriting** every voxel of every block the band reaches:
   weight 1 within `trunc_dist` of the mesh, the codec inverse's fresh zeros
@@ -794,9 +795,8 @@ arbitrary; it usually isn't.
   arena, index run and draw command are device-local, and each extract
   attempt is one batch that reads back only the 32-byte command; the span
   table stays host-visible, since the host reads it. With the spans off the
-  active list never reaches the host: the extract compacts onto the device
-  and binds the list there, or meshes a current `volume::DeviceBlockList` a
-  caller hands it — the one `integrate` reports — compacting nothing
+  active list never reaches the host: the extract compacts onto the device,
+  or takes the fuse's list back from the map, and binds it in place
   (2026-09-30). An
   `extract_device` overload meshes a
   caller-supplied `volume::BlockList` instead of compacting the whole map —
@@ -1116,8 +1116,7 @@ arbitrary; it usually isn't.
 `rig_viewer` reads the rig's raw *sets* (`OrbbecRig::poll_raw_set`) instead,
 as `fuse_orbbec --gpu --rig` does, since the contract has no set, and both
 fuse each set through `fuse_device_frame.hpp`'s `fuse_set`: every camera's
-band in one allocation, then every camera in one integrate, whose device
-list `rig_viewer`'s remesh meshes. The
+band in one allocation, then every camera in one integrate. The
 four dataset examples take `ReplicaCapture` as the source: frame cap, stride
 and the depth gate are its options, stamped on each frame it hands out, and its
 disk probe at `open` visits only the frames those options select. An empty
