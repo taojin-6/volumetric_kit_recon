@@ -545,7 +545,8 @@ the same shape (gfx's rules; the mistakes reviews keep catching):
 - When opening a PR, **assign yourself** (`gh pr create --assignee @me`) so it
   lands on your board and ownership is unambiguous.
 - Mark deferred work inline with a greppable `TODO:` comment.
-- Prefer plain, behavior-level tests over friend-class backdoors.
+- No `friend` declarations: test through the public API, with plain,
+  behavior-level tests.
 - Full Doxygen on public classes/functions, matching
   `include/volumetric_kit/recon/core/result.hpp`. Don't write "move-only" in
   prose — the deleted-copy/defaulted-move declarations convey it.

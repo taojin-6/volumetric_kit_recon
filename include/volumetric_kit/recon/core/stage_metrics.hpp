@@ -234,6 +234,8 @@ class StageMetrics {
   /// while still sitting in @ref rows() looking accounted for.
   bool in_stage() const noexcept { return open_scopes_ > 0; }
 
+  class Scope;
+
  private:
   // Rows are matched by string CONTENT, not pointer. Seeding a row and timing
   // it name the same stage from two places in the source, and identical string
@@ -255,12 +257,10 @@ class StageMetrics {
                         std::strlen(kBreakdownPrefix)) != 0;
   }
 
-  // Maintained by StageScope alone, so @ref in_stage answers from the scopes
+  // Maintained by Scope alone, so @ref in_stage answers from the scopes
   // actually open rather than from each callee being told where it stands.
   void push_scope() noexcept { ++open_scopes_; }
   void pop_scope() noexcept { --open_scopes_; }
-
-  friend class StageScope;
 
   std::vector<StageRow> rows_;
   int open_scopes_ = 0;
@@ -290,20 +290,19 @@ class StageMetrics {
 ///   ...
 /// }
 /// @endcode
-class StageScope {
+class StageMetrics::Scope {
  public:
   /// @brief Start timing @p name into @p metrics.
-  StageScope(StageMetrics& metrics, const char* name)
-      : StageScope(&metrics, name) {}
+  Scope(StageMetrics& metrics, const char* name) : Scope(&metrics, name) {}
 
   /// @brief Start timing @p name into @p metrics, or do nothing if it is null.
-  StageScope(StageMetrics* metrics, const char* name)
+  Scope(StageMetrics* metrics, const char* name)
       : metrics_(metrics), name_(name), start_(Clock::now()) {
     if (metrics_ != nullptr) metrics_->push_scope();
   }
 
   /// @brief Stop timing and add the elapsed span to the row, unless inert.
-  ~StageScope() {
+  ~Scope() {
     if (metrics_ == nullptr) return;
     // Closed before the row is added, so a scope opened by whatever runs next
     // sees the nesting it is actually in (@ref StageMetrics::in_stage).
@@ -313,10 +312,10 @@ class StageScope {
                    .count());
   }
 
-  StageScope(const StageScope&) = delete;
-  StageScope& operator=(const StageScope&) = delete;
-  StageScope(StageScope&&) = delete;
-  StageScope& operator=(StageScope&&) = delete;
+  Scope(const Scope&) = delete;
+  Scope& operator=(const Scope&) = delete;
+  Scope(Scope&&) = delete;
+  Scope& operator=(Scope&&) = delete;
 
   /// @return The row this times into; see @ref StageRow::name for its lifetime.
   const char* name() const noexcept { return name_; }
@@ -328,5 +327,8 @@ class StageScope {
   const char* name_;
   Clock::time_point start_;
 };
+
+/// @brief The name every tier times its stages with.
+using StageScope = StageMetrics::Scope;
 
 }  // namespace volumetric_kit::recon
