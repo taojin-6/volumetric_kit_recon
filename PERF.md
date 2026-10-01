@@ -119,16 +119,16 @@ kernels.
 
 | id | item | expected win | effort | depends on | status |
 |---|---|---|---|---|---|
-| P8 | Sample the viewer's GPU timing | ~1.7 ms/set on MoltenVK (estimate) and honest rows | S | — | open |
+| P8 | Sample the viewer's GPU timing | measured 0.04–0.07 ms/set, not the 1.7 estimated | S | — | not worth it |
 | P1 | Fuse a set's cameras in one allocate, one compaction and one integrate | measured −14% a set on the M5 Max, −21% on the RTX 5090 | L | — | landed (#127) |
 | P3 | Deduplicate depth allocation before dilating | measured −50% a set on the M5 Max, −62% on the RTX 5090 (over P1) | M | — | landed (#128) |
 | P5 | Extract from the fuse's device block list | measured −14% an extract on the M5 Max, −35% on the RTX 5090 | M | P1 for the shared list | landed (#129) |
-| P4 | Bind texture views in place, with no per-remesh copies | ~133 MB of device copies per remesh at 4K | M | P1's descriptor-array decision | open |
-| P2 | Record a set's frame prep in one batch | 3 of 4 prep submits | S | — | open |
-| P6 | Take the remaining host decisions off the critical path | ~2 submits per set in steady state | M | P1, P2, P5 | open |
+| P4 | Bind texture views in place, with no per-remesh copies | measured 0.26–0.51 ms GPU per remesh at 4K, 0.04–0.12 at 720p | M | P1's descriptor-array decision | deferred |
+| P2 | Record a set's frame prep in one batch | measured no gain; slower for host colour on the Mac | S | — | not worth it |
+| P6 | Take the remaining host decisions off the critical path | at most ~0.5 ms/set on the RTX 5090, ~0.7 on the M5 Max (measured gap) | M | P1, P5 | open |
 | P7 | Free the blocks Dynamic mode has emptied | active-set growth over a session (measure first) | M | — | open |
-| D1 | Report a decoder's fallback to host pictures | makes a silent 12 MB/camera/frame PCIe regression visible | S | — | in review (#130) |
-| D2 | Put `--show-sources`' buffers on the device | ~133 MB over PCIe per remesh with the view on | S | — | in review (#130) |
+| D1 | Report a decoder's fallback to host pictures | makes a silent 12 MB/camera/frame PCIe regression visible | S | — | landed (#130) |
+| D2 | Put `--show-sources`' buffers on the device | ~133 MB over PCIe per remesh with the view on | S | — | landed (#130) |
 | D3 | Keep exported picture buffers out of the BAR | robustness on ReBAR systems | S | — | not needed; in review (#130) |
 | L1 | Shared-vertex, incremental remesh for the rig | ~3.4× fewer vertices; remesh cost tracks change, not size | L | gfx | blocked |
 | L2 | Pipeline sets | overlaps set N's GPU work with set N+1's host work | L | P6 | later |
@@ -139,6 +139,13 @@ The suggested order: P8 first, so every later figure is honest; D1–D3
 whenever convenient; then P1, P3, P5, P4, P2 + P6; P7 once it is measured.
 
 ### P8 — Sample the viewer's GPU timing
+
+> **Measured, not built (2026-10-01).** Timing every set costs 0.04–0.07 ms
+> a set. A throwaway bench ran room0's four-frame sets through `fuse_set`,
+> rows on against off, interleaved over 3 × 30 sets: M5 Max 2.87 against
+> 2.83 ms, RTX 5090 1.23 against 1.16 ms (within run-to-run noise). The
+> estimate below predates P1, which cut the timed submits from about 13 a set
+> to 3, and over-stated what one costs.
 
 - **Problem.** `rig_viewer` passes `&fuse_stages` and `&remesh_stages` on
   every set, so about 13 submits a set are timed: 4 × allocate, compaction and
@@ -258,6 +265,13 @@ whenever convenient; then P1, P3, P5, P4, P2 + P6; P7 once it is measured.
 
 ### P4 — Bind texture views in place
 
+> **Measured, deferred (2026-10-01).** The copy is cheaper than its byte count
+> suggests: four views' colour copied into one buffer, as `texture_views`
+> does, costs 0.51 ms of GPU at 4K on the M5 Max and 0.26 ms on the RTX 5090
+> (0.12 and 0.04 ms at 720p). That is about 7% of a 4K remesh on the Mac, too
+> little to buy a caller-declared cache key or a device feature for. Revisit
+> if a 4K rig's remesh shows the texture row's device half dominating.
+
 - **Problem.** `texture_views` copies every view's depth, and its whole RGBA
   colour buffer, into packed buffers on every call
   (`projective_texturer.cpp:658-679`).
@@ -278,6 +292,20 @@ whenever convenient; then P1, P3, P5, P4, P2 + P6; P7 once it is measured.
 
 ### P2 — Record a set's frame prep in one batch
 
+> **Built, measured, dropped (2026-10-01).** The per-camera threads already
+> overlap the four submits, so one batch saves nothing.
+>
+> `prepare_set` on four frames (640 x 576 depth, 3840 x 2160 colour),
+> threads against one batch, median over 70 sets:
+>
+> | | device colour | host colour |
+> |---|---|---|
+> | M5 Max | 0.99 vs 1.03 ms | 1.50 vs 1.97 ms |
+> | RTX 5090 | 2.64 vs 2.64 ms | 8.1 vs 8.1 ms |
+>
+> The Mac's host-colour case got slower, because the staging copies ran one
+> after another on one thread.
+
 - **Problem.** `prepare_set` starts a thread per camera, and each thread
   makes its own batch, submit and wait (`gpu_frame_prep.cpp:468`, `:573`).
   With colour already on the device, a thread does a 0.7 MB depth memcpy and
@@ -291,6 +319,19 @@ whenever convenient; then P1, P3, P5, P4, P2 + P6; P7 once it is measured.
 - **Accept.** `prepare_set` time on both machines, against step 5b's table.
 
 ### P6 — One submit per set in steady state
+
+> **Headroom measured (2026-10-01).** What P6 can recover is the gap between
+> a step's host and device time, from #128's set rows (room0, four frames,
+> 1 cm, per set):
+>
+> | | allocate, host / device | integrate, host / device | gap at most |
+> |---|---|---|---|
+> | RTX 5090 | 0.69 / 0.47 ms | about 0.65 / 0.34 ms | about 0.5 ms |
+> | M5 Max | 1.14 / 0.84 ms | 1.82 / 1.38 ms | about 0.7 ms |
+>
+> That is about 25–45% of the set. Taking the compaction count off the host
+> also means rethinking #129's cached list, which holds that count. P2 was
+> dropped, so P6 no longer waits on it.
 
 With P1, P2 and P5 in place, three host decisions still split a set:
 
