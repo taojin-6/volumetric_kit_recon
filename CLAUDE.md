@@ -606,7 +606,9 @@ arbitrary; it usually isn't.
   `queueFlags`. `create_exported_buffer` (`core/external_memory.hpp`) makes
   a buffer CUDA imports, on a device that `exports_memory()`:
   `VK_KHR_external_memory_fd`, which `create` enables where offered and
-  `requirements()` names as optional (`external_memory`). `Image`
+  `requirements()` names as optional (`external_memory`); beside it,
+  `find_memory_type` is the type a resource bound by hand takes, the first
+  that fits, which Vulkan's ordering makes the plainest. `Image`
   (`core/image.hpp`) holds a `VkImage` another API made, freed by its
   maker's deleter and kept in one layout a copy reads (GENERAL or
   TRANSFER_SRC_OPTIMAL), and `CommandBatch::copy` copies an R8 or R8G8 one
@@ -974,7 +976,12 @@ arbitrary; it usually isn't.
   out as NV12 in `DecodedPicture::device`, which a reader acquires from
   `VK_QUEUE_FAMILY_EXTERNAL`; any other picture comes to the host, as does
   every one after the device path fails (the 2026-09-28 decoded-frame
-  decision). **`JpegDecoder`** decodes MJPEG's JPEGs as I420, BT.601 full
+  decision). The decoder says once, as a warning ahead of which
+  `Options::label` names whose decoder it is, every way a device's
+  pictures end up on the host: a device path that never opens, one that
+  fails, Auto's move to software. `OrbbecCaptureStats::host_pictures`
+  counts them, so a run that should stay on the device can be held to 0.
+  **`JpegDecoder`** decodes MJPEG's JPEGs as I420, BT.601 full
   range: given a device, with `VR_WITH_CUDA`, nvJPEG decodes an 8-bit 4:2:0
   one into the same kind of buffer, on the GPU's hardware JPEG engine where
   it has one (`backend()`) and its cores for the rest, and libnvjpeg too is

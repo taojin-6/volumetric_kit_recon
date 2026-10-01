@@ -61,7 +61,7 @@ Bytes moved per set, four cameras (4K colour, 640 × 576 depth, 1 cm voxels):
 | colour, 33 MB per camera | prep output → texturer's buffer | every remesh | P4 |
 | colour, 33 MB per camera | prep output → gfx atlas image | every remesh | L4 (kept) |
 | mesh, ~290 MB at 1.5 M triangles | written by marching cubes, `uv0` rewritten by texturing | every remesh | L1 |
-| solid colour, 33 MB per camera | host → device | every remesh with `--show-sources` | D2 |
+| solid colour, 33 MB per camera | device buffer → gfx atlas image | every remesh with `--show-sources` | D2 |
 
 ## Baseline figures
 
@@ -122,14 +122,14 @@ kernels.
 | P8 | Sample the viewer's GPU timing | ~1.7 ms/set on MoltenVK (estimate) and honest rows | S | — | open |
 | P1 | Fuse a set's cameras in one allocate, one compaction and one integrate | measured −14% a set on the M5 Max, −21% on the RTX 5090 | L | — | landed (#127) |
 | P3 | Deduplicate depth allocation before dilating | measured −50% a set on the M5 Max, −62% on the RTX 5090 (over P1) | M | — | landed (#128) |
-| P5 | Extract from the fuse's device block list | measured −14% an extract on the M5 Max, −35% on the RTX 5090 | M | P1 for the shared list | in review (#129) |
+| P5 | Extract from the fuse's device block list | measured −14% an extract on the M5 Max, −35% on the RTX 5090 | M | P1 for the shared list | landed (#129) |
 | P4 | Bind texture views in place, with no per-remesh copies | ~133 MB of device copies per remesh at 4K | M | P1's descriptor-array decision | open |
 | P2 | Record a set's frame prep in one batch | 3 of 4 prep submits | S | — | open |
 | P6 | Take the remaining host decisions off the critical path | ~2 submits per set in steady state | M | P1, P2, P5 | open |
 | P7 | Free the blocks Dynamic mode has emptied | active-set growth over a session (measure first) | M | — | open |
-| D1 | Report a decoder's fallback to host pictures | makes a silent 12 MB/camera/frame PCIe regression visible | S | — | open |
-| D2 | Put `--show-sources`' buffers on the device | ~133 MB over PCIe per remesh with the view on | S | — | open |
-| D3 | Keep exported picture buffers out of the BAR | robustness on ReBAR systems | S | — | open |
+| D1 | Report a decoder's fallback to host pictures | makes a silent 12 MB/camera/frame PCIe regression visible | S | — | in review (#130) |
+| D2 | Put `--show-sources`' buffers on the device | ~133 MB over PCIe per remesh with the view on | S | — | in review (#130) |
+| D3 | Keep exported picture buffers out of the BAR | robustness on ReBAR systems | S | — | not needed; in review (#130) |
 | L1 | Shared-vertex, incremental remesh for the rig | ~3.4× fewer vertices; remesh cost tracks change, not size | L | gfx | blocked |
 | L2 | Pipeline sets | overlaps set N's GPU work with set N+1's host work | L | P6 | later |
 | L3 | Read VideoToolbox's plane images directly | 0.28–0.31 ms GPU per 4K frame, Apple only | M | — | later |
@@ -354,6 +354,12 @@ from about 19. Merge further only if the rows show the remaining gap.
   `vkCmdFillBuffer`, since the solid colour is one 4-byte word.
 
 ### D3 — Keep exported picture buffers out of the BAR
+
+> **Not needed.** Vulkan orders a memory type ahead of any whose flags
+> strictly contain its own, so the first `DEVICE_LOCAL` type is already not
+> host-visible wherever the buffer allows one. #130 names the rule in
+> `core`'s `find_memory_type` and checks it on each CI GPU instead. See
+> DECISIONS.md, the 2026-09-28 decoded-frame entry, amended 2026-10-01.
 
 - **Problem.** `create_exported_buffer` takes the first `DEVICE_LOCAL`
   memory type (`external_memory.cpp:62-67`). On a ReBAR system that type can

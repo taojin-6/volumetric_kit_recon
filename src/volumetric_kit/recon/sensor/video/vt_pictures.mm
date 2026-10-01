@@ -10,11 +10,13 @@
 #include <Metal/Metal.h>
 
 #include <algorithm>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "volumetric_kit/recon/core/device.hpp"
+#include "volumetric_kit/recon/core/external_memory.hpp"
 #include "volumetric_kit/recon/core/image.hpp"
 #include "volumetric_kit/recon/core/vulkan.hpp"
 
@@ -61,24 +63,16 @@ VkDeviceMemory bind_memory(const Device& device, VkImage image) {
   const VkDevice dev = device.handle();
   VkMemoryRequirements needs{};
   vkGetImageMemoryRequirements(dev, image, &needs);
-  VkPhysicalDeviceMemoryProperties memory{};
-  vkGetPhysicalDeviceMemoryProperties(device.physical_device(), &memory);
+  const std::optional<std::uint32_t> type = find_memory_type(
+      device, needs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
+  if (!type) return VK_NULL_HANDLE;
   VkMemoryAllocateInfo alloc{};
   alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
   alloc.allocationSize = needs.size;
-  alloc.memoryTypeIndex = memory.memoryTypeCount;
-  for (std::uint32_t i = 0; i < memory.memoryTypeCount; ++i) {
-    const VkMemoryPropertyFlags flags = memory.memoryTypes[i].propertyFlags;
-    if ((needs.memoryTypeBits & (1u << i)) != 0 &&
-        (flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0 &&
-        (flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) == 0) {
-      alloc.memoryTypeIndex = i;
-      break;
-    }
-  }
+  alloc.memoryTypeIndex = *type;
   VkDeviceMemory out = VK_NULL_HANDLE;
-  if (alloc.memoryTypeIndex == memory.memoryTypeCount ||
-      vkAllocateMemory(dev, &alloc, nullptr, &out) != VK_SUCCESS) {
+  if (vkAllocateMemory(dev, &alloc, nullptr, &out) != VK_SUCCESS) {
     return VK_NULL_HANDLE;
   }
   if (vkBindImageMemory(dev, image, out, 0) != VK_SUCCESS) {

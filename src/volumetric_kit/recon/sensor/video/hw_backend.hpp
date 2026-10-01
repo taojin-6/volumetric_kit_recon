@@ -4,9 +4,11 @@
 #pragma once
 
 // The hardware back ends as FFmpeg names them: which this platform tries, in
-// which order, and how a decoder is attached to one. Codec-neutral. Internal.
+// which order, how a decoder is attached to one, and the warning a decoder
+// gives when its pictures come to the host instead. Codec-neutral. Internal.
 
 #include <optional>
+#include <string>
 #include <vector>
 
 #include "ffmpeg.hpp"
@@ -40,6 +42,14 @@ std::optional<bool> hardware_decodes(VideoDecodeBackend backend,
 ///         Unsupported if this FFmpeg lacks it or no device opens.
 Result<BufferRef> open_hardware_device(VideoDecodeBackend backend,
                                        const char* name = nullptr);
+
+/// @brief Warn, through core's log handler, that a decoder's pictures come to
+///        the host from here on because of @p why: on a discrete GPU every
+///        one then crosses the bus. A decoder says it once.
+/// @param who    The decoder ("HevcDecoder").
+/// @param label  Whose decoder it is (a camera, say), or empty.
+void warn_host_pictures(const char* who, const std::string& label,
+                        const std::string& why);
 
 /// @return Whether @p backend's pictures can be cropped at the left and top.
 ///         Every one's can but VideoToolbox's: FFmpeg sizes its output at the

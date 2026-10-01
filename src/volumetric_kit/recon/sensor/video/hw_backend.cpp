@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 
+#include "volumetric_kit/recon/core/log.hpp"
+
 #if defined(__APPLE__)
 #include <VideoToolbox/VideoToolbox.h>
 #endif
@@ -85,6 +87,13 @@ Result<BufferRef> open_hardware_device(VideoDecodeBackend backend,
                                ": no device opens: " + ffmpeg_message(err));
   }
   return BufferRef(device);
+}
+
+void warn_host_pictures(const char* who, const std::string& label,
+                        const std::string& why) {
+  log_message(LogLevel::Warning,
+              (label.empty() ? std::string() : label + ": ") + who + ": " +
+                  why + "; from here on its pictures come to the host");
 }
 
 bool crops_left_and_top(VideoDecodeBackend backend) noexcept {
