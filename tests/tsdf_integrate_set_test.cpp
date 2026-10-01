@@ -302,7 +302,14 @@ int main() {
       CHECK(settle([&](vol::AllocFailures* why) {
               return set->map().allocate_from_depth(depths, why);
             }) == 0);
-      CHECK(integrator->integrate(set.value(), set_frames, 5.0f, mode).ok());
+      // The list it fused over comes back, current and on the device.
+      vol::DeviceBlockList fused{};
+      CHECK(integrator
+                ->integrate(set.value(), set_frames, 5.0f, mode, nullptr,
+                            &fused)
+                .ok());
+      CHECK(fused.count > 0);
+      CHECK(set->map().check_device_block_list(fused, "test").ok());
       auto dirty_set = integrator->dirty_block_count();
       CHECK(dirty_set.ok());
       CHECK(dirty_set.value() == dirty_one.value());

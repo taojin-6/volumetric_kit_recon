@@ -59,12 +59,16 @@ inline vr::Status fuse_frame(
 ///        them out: every frame's band allocated in one call, then every
 ///        frame fused in one, so a set costs a few submits rather than a few a
 ///        frame. An empty entry is skipped.
+/// @param active  Optional: receives the active set the integrate fused over,
+///                still on the device, for an extract to mesh without
+///                compacting again.
 /// @return OK, or the first error of the two steps.
 inline vr::Status fuse_set(
     vr::volume::VoxelBlockGrid& grid, vr::tsdf::TsdfIntegrator& integrator,
     const std::vector<std::optional<vr::sensor::DeviceFrame>>& frames,
     float max_weight, vr::StageMetrics* metrics,
-    vr::tsdf::IntegrationMode mode = vr::tsdf::IntegrationMode::Classic) {
+    vr::tsdf::IntegrationMode mode = vr::tsdf::IntegrationMode::Classic,
+    vr::volume::DeviceBlockList* active = nullptr) {
   std::vector<vr::tsdf::ColorFrame> colors;
   std::vector<vr::tsdf::FrameInput> inputs;
   colors.reserve(frames.size());  // the inputs point into it
@@ -82,7 +86,7 @@ inline vr::Status fuse_set(
   const std::vector<vr::volume::DepthInput> depths(inputs.begin(),
                                                    inputs.end());
   VR_TRY(allocate_band(grid, depths, metrics));
-  return integrator.integrate(grid, inputs, max_weight, mode, metrics);
+  return integrator.integrate(grid, inputs, max_weight, mode, metrics, active);
 }
 
 }  // namespace vr_example

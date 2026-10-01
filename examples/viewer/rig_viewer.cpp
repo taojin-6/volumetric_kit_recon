@@ -1237,11 +1237,14 @@ int run(GLFWwindow* window, const Options& opt) {
                     100.0 * occlusion.load(),
                     dynamic_on.load() ? "dynamic" : "static", ms);
       };
-      auto remesh = [&](const std::vector<TextureSource>& sources) {
+      // Meshes the active set the set's fuse left on the device, so the
+      // extract compacts nothing and no list reaches the host.
+      auto remesh = [&](const std::vector<TextureSource>& sources,
+                        const vol::DeviceBlockList& active) {
         remesh_stages.clear();
         vr::Result<rmesh::DeviceMesh> extracted = [&]() {
           vr::StageScope scope(remesh_stages, "extract");
-          return extractor.extract_device(volume, 0.0f);
+          return extractor.extract_device(volume, 0.0f, active);
         }();
         // Published even when empty: an extract claims a ring slot either
         // way (see fuse_viewer).
@@ -1319,10 +1322,12 @@ int run(GLFWwindow* window, const Options& opt) {
         }
         const std::vector<std::optional<rsensor::DeviceFrame>>& frames =
             prepared.value();
+        vol::DeviceBlockList active_set;
         const vr::Status fused = vr_example::fuse_set(
             volume, integrator, frames, max_weight.load(), &fuse_stages,
             dynamic_on.load() ? rtsdf::IntegrationMode::Dynamic
-                              : rtsdf::IntegrationMode::Classic);
+                              : rtsdf::IntegrationMode::Classic,
+            &active_set);
         if (!fused.ok()) {
           std::fprintf(stderr, "rig_viewer: fuse: %s\n",
                        fused.message().c_str());
@@ -1361,13 +1366,13 @@ int run(GLFWwindow* window, const Options& opt) {
             (last ||
              sets % static_cast<std::uint64_t>(opt.remesh_every) == 0)) {
           if (release_and_may_publish()) {
-            remesh(texture_sources(newest, sets, set_ns, hold_ns));
+            remesh(texture_sources(newest, sets, set_ns, hold_ns), active_set);
           } else if (last) {
             std::fprintf(stderr,
                          "rig_viewer: the renderer never collected the last "
                          "mesh (window hidden, or drawing stopped); meshing "
                          "the last set anyway\n");
-            remesh(texture_sources(newest, sets, set_ns, hold_ns));
+            remesh(texture_sources(newest, sets, set_ns, hold_ns), active_set);
           }
         }
         // Kept past this set only while a later remesh can texture from them:

@@ -339,6 +339,9 @@ order. Change the decision, its entry there, and this list together.
 - [**2026-09-30**](DECISIONS.md#2026-09-30--depth-allocation-works-a-16-x-16-pixel-tile-a-workgroup-and-dilates-each-distinct-block-of-the-tile-once-its-band-shared-out-over-the-lanes) —
   Depth allocation works a 16 x 16 pixel tile a workgroup and dilates each
   distinct block of the tile once, its band shared out over the lanes.
+- [**2026-09-30**](DECISIONS.md#2026-09-30--with-the-spans-off-an-extracts-active-list-stays-on-the-device-and-a-remesh-meshes-the-list-the-fuse-compacted) —
+  With the spans off, an extract's active list stays on the device, and a
+  remesh meshes the list the fuse compacted.
 
 ## Provenance & salvage policy
 
@@ -733,7 +736,9 @@ arbitrary; it usually isn't.
   calls): one compaction and one submit for them all, each frame a dispatch
   of its own in order, so every voxel takes them in turn as integrating them
   one at a time does, bit for bit over the same blocks. A frame with no
-  pixels fuses nothing, as it allocates nothing (2026-09-30).
+  pixels fuses nothing, as it allocates nothing (2026-09-30). It reports the
+  device list it fused over, which an extract can mesh without compacting
+  again.
   `MeshIntegrator` writes a triangle mesh's distance field instead
   (2026-09-27), **overwriting** every voxel of every block the band reaches:
   weight 1 within `trunc_dist` of the mesh, the codec inverse's fresh zeros
@@ -788,7 +793,11 @@ arbitrary; it usually isn't.
   `download` takes the single host copy and bridges the two workflows. The
   arena, index run and draw command are device-local, and each extract
   attempt is one batch that reads back only the 32-byte command; the span
-  table stays host-visible, since the host reads it. An
+  table stays host-visible, since the host reads it. With the spans off the
+  active list never reaches the host: the extract compacts onto the device
+  and binds the list there, or meshes a current `volume::DeviceBlockList` a
+  caller hands it — the one `integrate` reports — compacting nothing
+  (2026-09-30). An
   `extract_device` overload meshes a
   caller-supplied `volume::BlockList` instead of compacting the whole map —
   what a camera's frustum-culled set arrives as, though nothing in the extractor
@@ -1107,7 +1116,8 @@ arbitrary; it usually isn't.
 `rig_viewer` reads the rig's raw *sets* (`OrbbecRig::poll_raw_set`) instead,
 as `fuse_orbbec --gpu --rig` does, since the contract has no set, and both
 fuse each set through `fuse_device_frame.hpp`'s `fuse_set`: every camera's
-band in one allocation, then every camera in one integrate. The
+band in one allocation, then every camera in one integrate, whose device
+list `rig_viewer`'s remesh meshes. The
 four dataset examples take `ReplicaCapture` as the source: frame cap, stride
 and the depth gate are its options, stamped on each frame it hands out, and its
 disk probe at `open` visits only the frames those options select. An empty

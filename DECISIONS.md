@@ -7509,6 +7509,50 @@ Not changed:
 blocks between adjacent centres, a `TODO(volume)` at the band loop. The rest
 of allocation's device time has not been broken down.
 
+### 2026-09-30 — With the spans off, an extract's active list stays on the device, and a remesh meshes the list the fuse compacted.
+
+**The rule.**
+- **No host list.** With `track_block_spans` off, `extract_device` and
+  `extract_host` no longer bring the active list to the host and upload it
+  again. They compact onto the device (`compact_active_blocks_on_device`) and
+  bind the map's own list in place, so only its count comes back. This is the
+  `TODO(mesh)` the extract carried.
+- **The fuse's list.** A new `extract_device` overload takes a current
+  `volume::DeviceBlockList` and compacts nothing. `TsdfIntegrator::integrate`'s
+  set overload reports the list it fused over, and `fuse_set` passes it on, so
+  `rig_viewer`'s remesh meshes the set's fused blocks without a compaction of
+  its own.
+- **What the overload refuses.** A stale list (the map compacted, resized,
+  removed or cleared since) and an extractor with spans on, whose spans are
+  summed off a host list. Both are refused before the slot claim, as the subset
+  overload's refusals are, so an outstanding `DeviceMesh` survives them.
+- **Density.** The list is the whole active set, so the call records density
+  as a full extract does. (PERF.md's P5.)
+
+**Why it is safe to mesh the fuse's list.** The integrate compacts after
+every frame's allocation, and nothing between the fuse and the remesh
+allocates or compacts. A block allocated after the compaction would have no
+fused weight, and so no surface, anyway.
+
+**Measured.** The batching entry's bench with an extract after each set
+(room0, sets of four 1200 x 680 frames, 1 cm, Release, a three-slot ring,
+unshared), median per extract, interleaved with the deduplication branch:
+
+| | host list | device list, compacted here | the fuse's list |
+|---|---|---|---|
+| M5 Max | 1.77 ms | 1.71 ms | 1.53 ms |
+| RTX 5090 | 0.91–0.96 ms | 0.74 ms | 0.60 ms |
+
+**Verified.**
+- `recon_mesh_marching_cubes_sparse` meshes a device list to the same
+  triangles as the extract's own compaction, with `compact_ms` 0. It refuses
+  a list after another compaction while the mesh taken from it stays current,
+  and refuses one on an extractor with spans on.
+- `recon_tsdf_integrate_set` holds the reported list current.
+- The suite passes on the M5 Max and the RTX 5090. The 5090's run caught the
+  overload writing `compact_ms` for a compaction it never made; the Mac's
+  clock had read 0.
+
 ## Measured lessons
 
 Not decisions, but the measurements that overturned an assumption about

@@ -122,7 +122,7 @@ kernels.
 | P8 | Sample the viewer's GPU timing | ~1.7 ms/set on MoltenVK (estimate) and honest rows | S | — | open |
 | P1 | Fuse a set's cameras in one allocate, one compaction and one integrate | measured −14% a set on the M5 Max, −21% on the RTX 5090 | L | — | landed (#127) |
 | P3 | Deduplicate depth allocation before dilating | measured −50% a set on the M5 Max, −62% on the RTX 5090 (over P1) | M | — | in review (#128) |
-| P5 | Extract from the fuse's device block list | one compaction and the list's host round trip per remesh | M | P1 for the shared list | open |
+| P5 | Extract from the fuse's device block list | measured −14% an extract on the M5 Max, −35% on the RTX 5090 | M | P1 for the shared list | in review (`perf/extract-list`) |
 | P4 | Bind texture views in place, with no per-remesh copies | ~133 MB of device copies per remesh at 4K | M | P1's descriptor-array decision | open |
 | P2 | Record a set's frame prep in one batch | 3 of 4 prep submits | S | — | open |
 | P6 | Take the remaining host decisions off the critical path | ~2 submits per set in steady state | M | P1, P2, P5 | open |
@@ -233,6 +233,10 @@ whenever convenient; then P1, P3, P5, P4, P2 + P6; P7 once it is measured.
   - Lock races and retry rounds per set (`AllocFailures::lock`).
 
 ### P5 — Extract from the fuse's device block list
+
+> **Landed** as written: with spans off the list stays on the device, and a
+> new `extract_device` overload meshes the list `integrate` reports. See
+> DECISIONS.md, 2026-09-30.
 
 - **Problem.** `extract_device` compacts the whole map again, reads the list
   back to the host (`collect_compacted`, `voxel_hash_map.cpp:653`) and
