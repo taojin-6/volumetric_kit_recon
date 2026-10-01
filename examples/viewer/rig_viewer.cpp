@@ -46,7 +46,8 @@
 //              [--hevc | --mjpeg] [--color WxH] [--fps N]
 //              [--voxel 0.01] [--trunc m] [--min-depth m] [--max-depth m]
 //              [--max-weight 20] [--dynamic | --static] [--occlusion 0.05]
-//              [--remesh-every 1] [--hold-ms 2000] [--sets N] [--frames N]
+//              [--remesh-every 1] [--hold-ms 2000] [--free-after 30]
+//              [--sets N] [--frames N]
 //              [--width 1280] [--height 720] [--lit | --normals]
 //              [--no-texture] [--show-sources] [--texture-stats] [--all-depth]
 //              [--no-overlay] [--validation]
@@ -225,6 +226,14 @@ struct Options {
   // its buffer reuse: 0.1 ms a set for four 4K cameras on an RTX 5090. 0
   // turns it off.
   int hold_ms = 2000;
+  // Every N sets, free the blocks no allocation has asked for and no voxel
+  // has held weight in for N sets (VoxelBlockGrid::free_stale_blocks): space
+  // a surface has left, which otherwise stays allocated and costs every
+  // integrate. A synthetic rig with a moving sphere grew 2 117 blocks to
+  // 7 348 in 600 sets without it and held 2 100 to 3 200 with it; the lab
+  // rig's static room frees about 1 500 noise blocks a pass, in 5 to 7 ms on
+  // the M5 Max. 0 keeps every block.
+  int free_after = 30;
   int sets = 0;  // stop fusing after N sets; 0 fuses until the window closes
   // Draw N frames, then exit as a closed window does -- for a scripted run;
   // 0 draws until the window is closed.
@@ -250,7 +259,8 @@ const char* kUsage =
     "[--apply-sync] [--hevc | --mjpeg] [--color WxH] [--fps N] [--voxel m] "
     "[--trunc m] [--min-depth m] [--max-depth m] [--max-weight w] "
     "[--dynamic | --static] [--occlusion m] "
-    "[--remesh-every N] [--hold-ms N] [--sets N] [--frames N] "
+    "[--remesh-every N] [--hold-ms N] [--free-after N] [--sets N] "
+    "[--frames N] "
     "[--width W] [--height H] "
     "[--lit | --normals] [--no-texture] [--show-sources] [--texture-stats] "
     "[--all-depth] "
@@ -319,6 +329,10 @@ bool parse_args(int argc, char** argv, Options& o) {
       const char* x = value();
       if (x == nullptr) return false;
       o.hold_ms = std::max(0, std::atoi(x));
+    } else if (a == "--free-after") {
+      const char* x = value();
+      if (x == nullptr) return false;
+      o.free_after = std::max(0, std::atoi(x));
     } else if (a == "--sets" || a == "--frames") {
       const char* x = value();
       if (x == nullptr) return false;
@@ -1318,7 +1332,7 @@ int run(GLFWwindow* window, const Options& opt) {
         fuse_stages.clear();
         for (const char* stage :
              {"poll", "frame prep", "allocate", "resize", "integrate",
-              "  ..active set", "extract", "texture"}) {
+              "  ..active set", "block stamps", "extract", "texture"}) {
           fuse_stages.seed(stage);
         }
         fuse_stages.add_cpu("poll", poll_ms);
@@ -1352,6 +1366,19 @@ int run(GLFWwindow* window, const Options& opt) {
           frames_fused += frame ? 1 : 0;
         }
         ++sets;
+        // Ahead of the remesh, so it meshes the smaller set.
+        const auto free_after = static_cast<std::uint32_t>(opt.free_after);
+        if (free_after != 0 && sets % free_after == 0) {
+          const vr::Result<std::uint32_t> freed =
+              volume.free_stale_blocks(free_after, &fuse_stages);
+          if (!freed) {
+            std::fprintf(stderr, "rig_viewer: free blocks: %s\n",
+                         freed.status().message().c_str());
+            fuse_failed.store(true);
+            break;
+          }
+        }
+        volume.map().advance_tick();
         for (std::size_t c = 0; c < frames.size() && c < cameras; ++c) {
           if (frames[c] && frames[c]->has_color()) {
             newest[c] = NewestFrame{*frames[c], sets};

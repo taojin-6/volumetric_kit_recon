@@ -342,6 +342,10 @@ order. Change the decision, its entry there, and this list together.
 - [**2026-09-30**](DECISIONS.md#2026-09-30--with-the-spans-off-an-extracts-active-list-stays-on-the-device-and-the-map-hands-back-its-last-compaction-while-nothing-has-changed-since) —
   With the spans off, an extract's active list stays on the device, and the
   map hands back its last compaction while nothing has changed since.
+- [**2026-10-01**](DECISIONS.md#2026-10-01--every-block-slot-carries-stamps-ticks-of-one-clock-on-the-map-each-written-by-the-pass-that-knows-its-fact-the-grid-frees-the-blocks-no-allocation-has-asked-for-and-no-voxel-has-weighted-in-max_age-ticks) —
+  Every block slot carries stamps, ticks of one clock on the map, each
+  written by the pass that knows its fact; the grid frees the blocks no
+  allocation has asked for and no voxel has weighted in `max_age` ticks.
 
 ## Provenance & salvage policy
 
@@ -716,6 +720,18 @@ arbitrary; it usually isn't.
   `StageMetrics*` on `allocate_from_depth` (an `"allocate"` row summing every
   retry round) and on both compaction entry points (an `"active set"` row,
   breakdown-prefixed when the caller already has a stage open).
+  Every block slot carries a `BlockStamp` (`hash_types.hpp`): ticks of the
+  map's clock (`tick()`, which the caller advances), in a device buffer
+  beside the heap (`stamps_buffer()`), each written by the pass that knows
+  its fact (2026-10-01). Every allocation kernel stamps `requested` on each
+  block it asks for, inserted or found, and the grid's block pass
+  (`stamp_blocks`) stamps `weighted` on each holding any weight. The init
+  kernel zeroes the records, the delete kernel zeroes a freed slot's, and
+  `resize` copies them forward, the rehash stamping nothing. A consumer
+  compares ticks and resets nothing: `free_stale_blocks(max_age)` frees the
+  blocks whose newer stamp is that old, so the band the allocator still asks
+  for stays, and `rig_viewer` runs it every `--free-after` sets. The dirty
+  flags are next onto a stamp, `changed`, written by the integrator.
 
 - **`tsdf`** — `TsdfIntegrator` fuses a posed depth frame into a grid's
   `tsdf`/`weight`: projective `sdf = depth − Zc`, `±trunc_dist`, an

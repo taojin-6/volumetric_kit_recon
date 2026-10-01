@@ -126,7 +126,8 @@ kernels.
 | P4 | Bind texture views in place, with no per-remesh copies | measured 0.26–0.51 ms GPU per remesh at 4K, 0.04–0.12 at 720p | M | P1's descriptor-array decision | deferred |
 | P2 | Record a set's frame prep in one batch | measured no gain; slower for host colour on the Mac | S | — | not worth it |
 | P6 | Take the remaining host decisions off the critical path | at most ~0.5 ms/set on the RTX 5090, ~0.7 on the M5 Max (measured gap) | M | P1, P5 | open |
-| P7 | Free the blocks Dynamic mode has emptied | measured: the map 3.5x in 600 sets, integrate's device time 2.6x | M | — | open, worth building |
+| P7 | Free the blocks nothing asks for or weights | measured: the map 7.3k → 2.9k blocks in 600 sets, integrate's device time −40% on the M5 Max, −50% on the RTX 5090; a static room keeps its size | M | — | in review |
+| P9 | Allocate only the band blocks a sample can weight | ~60% of a static room's active set holds no weight; compaction, integrate and meshing scale with it | M | — | open, measure first |
 | D1 | Report a decoder's fallback to host pictures | makes a silent 12 MB/camera/frame PCIe regression visible | S | — | landed (#130) |
 | D2 | Put `--show-sources`' buffers on the device | ~133 MB over PCIe per remesh with the view on | S | — | landed (#130) |
 | D3 | Keep exported picture buffers out of the BAR | robustness on ReBAR systems | S | — | not needed; in review (#130) |
@@ -136,7 +137,8 @@ kernels.
 | L4 | Sample the atlas in place rather than copy it | measure the copy at 4K first | L | gfx | kept |
 
 The suggested order: P8 first, so every later figure is honest; D1–D3
-whenever convenient; then P1, P3, P5, P4, P2 + P6; P7 once it is measured.
+whenever convenient; then P1, P3, P5, P4, P2 + P6; then P7, and P9 once it
+is measured.
 
 ### P8 — Sample the viewer's GPU timing
 
@@ -351,9 +353,31 @@ With P1, P2 and P5 in place, three host decisions still split a set:
 The target is fuse + prep in one submit and remesh in one, about 2 per set
 from about 19. Merge further only if the rows show the remaining gap.
 
-### P7 — Free the blocks Dynamic mode has emptied
+### P7 — Free the blocks nothing asks for or weights
 
-> **Measured (2026-10-01), so worth building.** A throwaway bench put four
+> **Built (2026-10-01; the DECISIONS.md entry of that date).** Every block
+> slot carries stamps, ticks of a clock on the map: `requested`, written by
+> every allocation kernel for each block it asks for, and `weighted`, by the
+> grid's block pass. `free_stale_blocks(max_age)` frees the blocks whose
+> newer stamp is that old, and `rig_viewer` runs it every 30 sets
+> (`--free-after`). On the bench below, at 600 sets:
+>
+> | | blocks | integrate, device ms/set |
+> |---|---|---|
+> | M5 Max, without / with | 7 348 / 2 909 | 0.41 / 0.25 |
+> | RTX 5090, without / with | 7 345 / 2 909 | 0.08–0.09 / 0.04 |
+>
+> The blocks holding weight are the same with and without. A pass costs
+> about 2 ms of host time on the M5 Max and 1 ms on the RTX 5090, and the
+> stamp adds 4% to allocation's device time on the RTX 5090 and nothing
+> measurable on the M5 Max. On the lab rig's static room a pass frees
+> 1 100–1 800 noise blocks in 4.6–7.4 ms, nearly all of it zero fills, and
+> the map keeps its size: what is empty there is the band, which P9 is
+> about. The first cut freed on weight alone, and freed that band every
+> other pass for the allocator to ask for again, 33 000 blocks and 140 ms
+> a pass.
+
+> **Measured before building (2026-10-01).** A throwaway bench put four
 > cameras at the rig's calibrated poses, with Femto-like 640 x 576 depth
 > ray-cast on the host. They saw a static 0.3 m sphere at the point their
 > axes meet, and a 0.25 m sphere walking a 0.8 m loop around it, then the
@@ -367,17 +391,14 @@ from about 19. Merge further only if the rows show the remaining gap.
 > | 600 | 7 348 | 1 947 | 74% | 0.82 / 0.49 ms |
 >
 > The surface stays at about 1 600–1 950 blocks while the map grows 3.5x.
-> Empty blocks come two ways, and one pass that frees a block empty for M
-> sets answers both:
+> Empty blocks come two ways:
 >
 > - **From the start.** Most of the dilated band never takes weight under
 >   Dynamic integration, which clears free space ahead of the surface and
->   does not fuse past the band. That is already 64% at set 50.
+>   does not fuse past the band. That is already 64% at set 50. P7 keeps
+>   these, since the allocator asks for them every set; P9 is about them.
 > - **Over time.** A receded surface's blocks accumulate as the mover
->   reaches new space.
->
-> The age guard matters for the first kind: a band block is empty until the
-> next fuse reaches it.
+>   reaches new space. These are what P7 frees.
 
 - **Problem.**
   - Dynamic integration clears a receded surface's voxels to weight 0 (the
@@ -386,18 +407,47 @@ from about 19. Merge further only if the rows show the remaining gap.
   - The active set therefore grows with the history of motion, and so does
     every per-set pass over it: compaction, integrate, marching cubes.
   - Eventually a resize doubles the map.
-- **Measure first.** Run `rig_viewer` with a subject moving for several
-  minutes and log, over time, the active blocks and the blocks holding any
-  weight above 0. Build this only if the gap between the two keeps growing.
-- **Change.**
-  - Every K sets, a device pass flags each active block whose voxels all
-    have weight 0 for M consecutive sets. The age keeps a block flickering
-    at the band's edge from being freed and allocated again each set.
-  - It compacts the flagged blocks into a device list and removes them on
-    the device. Today's `remove` takes host coordinates.
+- **Still to measure.** `rig_viewer` with a subject moving for several
+  minutes, the map's size over time at `--free-after 30` and at 0. The
+  room measured so far was static, where there is no history to free.
+- **Change, as built.**
+  - Every K sets, one block pass stamps the active blocks holding weight
+    and lists those that neither an allocation nor weight has stamped for
+    M ticks. The age keeps a block flickering at the band's edge from being
+    freed and allocated again each set, and `requested` keeps the band.
+  - The list is read back, the blocks' attributes are zeroed by the ptrs
+    the pass read, and they are removed by coordinate.
   - Removing moves `topology_epoch`, which invalidates the dirty flags and
     span tables; incremental extraction already falls back when that
     happens.
+
+### P9 — Allocate only the band blocks a sample can weight
+
+- **Problem.**
+  - In the lab rig's static room about 60% of the active set holds no
+    weight at any moment: 33 000 of about 58 000 blocks at 1 cm, which the
+    first P7 cut found by freeing them.
+  - Depth allocation dilates every surface block into the (2tb+1)³ cube,
+    27 blocks at the defaults. With 8 cm blocks and 4 cm of truncation, a
+    sample reaches only the neighbours within 4 cm of it. Dynamic
+    integration clears free space ahead of the surface to weight 0, so the
+    cube's far blocks never take weight.
+  - Every pass over the active set pays for them: compaction, integrate (a
+    workgroup a block a camera) and marching cubes.
+- **Measure first.** Count, per set, the blocks the allocator asks for that
+  take no weight, and integrate's device time over them. The stamps give
+  the first: `requested` at this tick, `weighted` not.
+- **Change.**
+  - Dilate a block into a neighbour only where some sample of it lies
+    within `trunc_dist` of that neighbour.
+  - P3's tile dedup keeps a tile's distinct blocks, not their samples, so
+    the test needs each block's sample extent: a per-block min and max in
+    shared memory, say.
+  - The risk is holes at block edges, where a band the test skipped was
+    needed. Judge room0's and the lab rig's meshes against today's with the
+    `eval` tier.
+- **Expected.** Up to ~2.5x fewer blocks on a static scene, and integrate's
+  work with them; an estimate until measured.
 
 ### D1 — Report a decoder's fallback to host pictures
 
