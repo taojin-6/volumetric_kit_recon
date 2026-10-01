@@ -240,15 +240,23 @@ class VR_CORE_API CommandBatch {
   ///
   /// So one batch can dispatch a kernel several times over different
   /// buffers, each dispatch binding a set of its own of the kernel's layout
-  /// (@ref allocate_kernel_sets). The kernel's own set's rule holds for
-  /// @p set: rewritten before @ref submit, the batch is refused.
-  /// @param set  A written set of @p kernel's layout. The layout is not
-  ///             checked; the validation layer names a mismatch.
+  /// (@ref KernelSets). The kernel's own set's rule holds for @p set:
+  /// rewritten before @ref submit, the batch is refused.
+  /// @param set  A written set of @p kernel's layout, which must stay alive
+  ///             until @ref submit returns: the batch keeps a pointer to
+  ///             it, and binds and checks that object, not a copy. The
+  ///             layout is not checked; the validation layer names a
+  ///             mismatch.
   /// @return As @ref dispatch; InvalidArgument also for an empty @p set.
   Status dispatch(const ComputeKernel& kernel, const DescriptorSet& set,
                   const void* push, std::uint32_t push_size,
                   std::uint32_t groups, std::uint32_t max_groups,
                   GpuStageScope* stage = nullptr);
+  /// A temporary set would be gone by @ref submit.
+  Status dispatch(const ComputeKernel& kernel, DescriptorSet&& set,
+                  const void* push, std::uint32_t push_size,
+                  std::uint32_t groups, std::uint32_t max_groups,
+                  GpuStageScope* stage = nullptr) = delete;
 
   /// @brief Record a dispatch of @p kernel whose workgroup counts the device
   ///        reads from @p args at @p offset (`vkCmdDispatchIndirect`), so a

@@ -180,6 +180,7 @@ int test_compute_kernel_moves(VkDevice device) {
   vr::ComputeKernel a;
   a.layout = std::move(layout).value();
   a.set = set.value();  // copyable, non-owning view
+  a.bindings = 3;
   CHECK(a.layout.valid());
   CHECK(a.set.handle() == raw);
 
@@ -189,7 +190,9 @@ int test_compute_kernel_moves(VkDevice device) {
   CHECK(a.set.handle() == VK_NULL_HANDLE);  // NOLINT(bugprone-use-after-move)
   CHECK(!a.layout.valid());
   CHECK(!a.valid());
+  CHECK(a.bindings == 0);
   CHECK(b.set.handle() == raw);
+  CHECK(b.bindings == 3);
   CHECK(b.layout.valid());
 
   // move-assign over a live kernel: destination adopts the source, source

@@ -3,6 +3,7 @@
 
 #include "volumetric_kit/recon/core/gpu_timer.hpp"
 
+#include <algorithm>
 #include <utility>
 #include <vector>
 
@@ -177,6 +178,13 @@ void GpuTimer::end(VkCommandBuffer cmd, std::uint32_t span) {
   }
   vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, pool_.get(),
                       span * 2 + 1);
+}
+
+Status GpuTimer::reserve(const Device& device, std::uint32_t max_spans) {
+  max_spans = std::min(max_spans, kMaxSpans);
+  if (!available() || max_spans <= max_spans_ || !spans_.empty()) return {};
+  VR_ASSIGN(*this, create(device, max_spans));
+  return {};
 }
 
 void GpuTimer::abandon() noexcept {

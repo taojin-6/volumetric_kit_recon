@@ -18,6 +18,18 @@
 
 namespace vr_example {
 
+/// @brief How a prepared frame's colour is fused: through its own camera, the
+///        coverage read off its high byte. Meaningful only when the frame
+///        @ref vr::sensor::DeviceFrame::has_color.
+inline vr::tsdf::ColorFrame device_color(const vr::sensor::DeviceFrame& frame) {
+  vr::tsdf::ColorFrame color{};
+  color.buffer = frame.color.get();
+  color.cam = frame.color_camera;
+  color.encoding = frame.color_encoding;
+  color.coverage_in_alpha = true;
+  return color;
+}
+
 /// @brief @ref fuse_frame for a frame already on the device, as
 ///        `sensor::GpuFramePrep` hands it out: nothing is uploaded, and depth
 ///        and colour are fused with their own cameras, the colour's coverage
@@ -37,11 +49,7 @@ inline vr::Status fuse_frame(
     vr::StageMetrics* metrics,
     vr::tsdf::IntegrationMode mode = vr::tsdf::IntegrationMode::Classic) {
   VR_TRY(allocate_band(grid, *frame.depth, frame.depth_camera, metrics));
-  vr::tsdf::ColorFrame color{};
-  color.buffer = frame.color.get();
-  color.cam = frame.color_camera;
-  color.encoding = frame.color_encoding;
-  color.coverage_in_alpha = true;
+  const vr::tsdf::ColorFrame color = device_color(frame);
   return integrator.integrate(grid, *frame.depth, frame.depth_camera,
                               max_weight, mode,
                               frame.has_color() ? &color : nullptr, metrics);
@@ -57,26 +65,22 @@ inline vr::Status fuse_set(
     const std::vector<std::optional<vr::sensor::DeviceFrame>>& frames,
     float max_weight, vr::StageMetrics* metrics,
     vr::tsdf::IntegrationMode mode = vr::tsdf::IntegrationMode::Classic) {
-  std::vector<vr::volume::DepthInput> depths;
   std::vector<vr::tsdf::ColorFrame> colors;
   std::vector<vr::tsdf::FrameInput> inputs;
   colors.reserve(frames.size());  // the inputs point into it
   for (const std::optional<vr::sensor::DeviceFrame>& frame : frames) {
     if (!frame) continue;
-    depths.push_back({vr::StorageInput(*frame->depth), frame->depth_camera});
     const vr::tsdf::ColorFrame* color = nullptr;
     if (frame->has_color()) {
-      vr::tsdf::ColorFrame c{};
-      c.buffer = frame->color.get();
-      c.cam = frame->color_camera;
-      c.encoding = frame->color_encoding;
-      c.coverage_in_alpha = true;
-      colors.push_back(c);
+      colors.push_back(device_color(*frame));
       color = &colors.back();
     }
     inputs.push_back(
-        {vr::StorageInput(*frame->depth), frame->depth_camera, color});
+        {{vr::StorageInput(*frame->depth), frame->depth_camera}, color});
   }
+  // Each input's depth half, sliced off.
+  const std::vector<vr::volume::DepthInput> depths(inputs.begin(),
+                                                   inputs.end());
   VR_TRY(allocate_band(grid, depths, metrics));
   return integrator.integrate(grid, inputs, max_weight, mode, metrics);
 }

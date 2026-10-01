@@ -7308,7 +7308,7 @@ which the counter named and the person at the window confirmed.
 `CommandBatch`: allocation one submit a round, fusion one compaction and one
 submit for the whole set. A batch binds a set when it submits and refuses one
 rewritten after its dispatch was recorded, so each frame's dispatch binds a set
-of its own from `core`'s `allocate_kernel_sets`, through the set overload of
+of its own from `core`'s `KernelSets`, through the set overload of
 `CommandBatch::dispatch`. The camera buffers stay shared and are rewritten
 inline before each dispatch, which the batch's barrier around every dispatch
 orders after the read before it. The one-frame overloads are lists of one.
@@ -7371,12 +7371,36 @@ bench was wrong.
 - The kernel that loops over the cameras: measure integrate's device share
   after P3 first. It is 0.34 ms a set on the 5090 and 1.4 ms on the Mac.
 
+Both are `TODO`s at the code they would change.
+
+**Review.** The PR's review changed five things:
+
+- **A set must outlive the batch.** The batch binds and checks the set object
+  it was given at `submit`, and `DescriptorSet` is copyable. So the set
+  overload deletes its rvalue twin, as `block_list` does.
+- **`KernelSets` grows itself.** It `reserve`s the sets a call needs, one a
+  frame, rather than the kernel's own set plus extras. The binding count it
+  sizes its pool by is on `ComputeKernel`, recorded by `KernelSetBuilder::add`,
+  not repeated at the call site.
+- **The timers fit a set.** A set records a device span a frame a round, past
+  the timer's 32 at four cameras and nine rounds. `GpuTimer::reserve` raises
+  the bound between windows.
+- **An empty frame is skipped by both calls.** `allocate_from_depth` skipped
+  one and `integrate` refused it, so one camera's empty frame lost a whole set.
+- **The retry budget is the call's.** A set gets the ten rounds one frame
+  gets, so the doc no longer claims the frames' blocks match one-at-a-time
+  allocation unconditionally: they match once every frame's blocks are in.
+
 **Verified.**
 - The suite passes on the M5 Max and the RTX 5090 (in the CI image).
 - `recon_tsdf_integrate_set` also passes under synchronization validation, and
   fails when only the first frame's camera is uploaded.
 - `recon_core_command_batch` dispatches one kernel over two sets in one batch,
   and refuses a set rewritten after its dispatch was recorded.
+- `recon_tsdf_integrate_set`'s set carries an empty frame, grows the map's
+  sets past a one-frame call, and counts the same dirty blocks as one frame
+  at a time. That last check fails when only the first frame's set binds the
+  dirty flags.
 
 ## Measured lessons
 

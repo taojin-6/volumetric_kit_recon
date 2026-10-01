@@ -577,8 +577,9 @@ arbitrary; it usually isn't.
   recorded, since the set is bound only then (the 2026-09-28 residency
   decision, which also records why there is no staging arena and no mappable
   device memory). So a batch that dispatches one kernel over several cameras
-  binds each dispatch a set of its own, from `allocate_kernel_sets`, through
-  `dispatch`'s set overload (the 2026-09-30 decision).
+  binds each dispatch a set of its own, from a grow-only `KernelSets`, through
+  `dispatch`'s set overload, which refuses a temporary since the batch binds
+  that very object at `submit` (the 2026-09-30 decision).
   Vocabulary: `Status`/`Result`, the GLM aliases, `camera_params.hpp`,
   `color_space.hpp`, and `stage_metrics.hpp` — the `{name, cpu_ms, gpu_ms,
   has_gpu}` rows every tier reports timings in, with `GpuTimer` measuring the
@@ -697,7 +698,8 @@ arbitrary; it usually isn't.
   an embedder cannot draw a ceiling that disagrees with it.
   `allocate_from_depth` also takes a list of frames (`DepthInput`), every
   frame dispatched in each round's one submit, on a set of its own; a round
-  that retries dispatches them all again. Opt-in
+  that retries dispatches them all again, and the rounds are the call's, not
+  each frame's. Opt-in
   `StageMetrics*` on `allocate_from_depth` (an `"allocate"` row summing every
   retry round) and on both compaction entry points (an `"active set"` row,
   breakdown-prefixed when the caller already has a stage open).
@@ -722,10 +724,11 @@ arbitrary; it usually isn't.
   device (`compact_active_blocks_on_device`), so a fuse is two submits, the
   compaction's count the only thing read back; the frames are staged, and
   the dirty flags are device-local. `integrate` also takes a list of frames
-  (`FrameInput`): one compaction and one submit for them all, each frame a
-  dispatch of its own in order, so every voxel takes them in turn as
-  integrating them one at a time does, bit for bit over the same blocks
-  (2026-09-30).
+  (`FrameInput`, a `DepthInput` and its colour, so one list feeds both
+  calls): one compaction and one submit for them all, each frame a dispatch
+  of its own in order, so every voxel takes them in turn as integrating them
+  one at a time does, bit for bit over the same blocks. A frame with no
+  pixels fuses nothing, as it allocates nothing (2026-09-30).
   `MeshIntegrator` writes a triangle mesh's distance field instead
   (2026-09-27), **overwriting** every voxel of every block the band reaches:
   weight 1 within `trunc_dist` of the mesh, the codec inverse's fresh zeros

@@ -178,7 +178,7 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid, const float* depth,
                                  const DepthCameraParams& cam, float max_weight,
                                  IntegrationMode mode, const ColorFrame* color,
                                  StageMetrics* metrics) {
-  return integrate(grid, {FrameInput{StorageInput(depth), cam, color}},
+  return integrate(grid, {FrameInput{{StorageInput(depth), cam}, color}},
                    max_weight, mode, metrics);
 }
 
@@ -186,7 +186,7 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid, const Buffer& depth,
                                  const DepthCameraParams& cam, float max_weight,
                                  IntegrationMode mode, const ColorFrame* color,
                                  StageMetrics* metrics) {
-  return integrate(grid, {FrameInput{StorageInput(depth), cam, color}},
+  return integrate(grid, {FrameInput{{StorageInput(depth), cam}, color}},
                    max_weight, mode, metrics);
 }
 
@@ -206,7 +206,9 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid,
   }
   // Every frame's O(1) checks come first, ahead of the compaction dispatch and
   // every binding below, so a refused call does no work and leaves the
-  // persistent set as it was -- an empty grid included.
+  // persistent set as it was -- an empty grid included. A frame with no pixels
+  // dispatches nothing, as allocate_from_depth allocates nothing for it.
+  std::vector<std::size_t> live;  // the frames that dispatch, in order
   std::vector<VkDeviceSize> depth_bytes(frames.size());
   std::vector<VkDeviceSize> color_bytes(frames.size(), 0);
   bool any_color = false;
@@ -217,10 +219,8 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid,
     depth_bytes[i] = VkDeviceSize(pixels) * sizeof(float);
     VR_TRY(frames[i].depth.check("TsdfIntegrator::integrate: depth",
                                  depth_bytes[i]));
-    if (cam.width == 0 || cam.height == 0) {
-      return Status::invalid_argument(
-          "TsdfIntegrator::integrate: depth image is empty");
-    }
+    if (pixels == 0) continue;
+    live.push_back(i);
     VR_TRY(check_storage_buffer_range(
         "TsdfIntegrator::integrate: the depth buffer", depth_bytes[i],
         max_storage_buffer_range_));
@@ -259,7 +259,7 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid,
     }
     any_color = true;
   }
-  if (frames.empty()) {
+  if (live.empty()) {
     return {};
   }
 
@@ -322,24 +322,27 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid,
   if (config_.track_dirty_blocks) {
     VR_TRY(prepare_dirty_flags(grid));
   }
-  if (frames.size() - 1 > frame_sets_.sets.size()) {
-    VR_ASSIGN(frame_sets_, allocate_kernel_sets(
-                               *device_, kernel_, 9,
-                               static_cast<std::uint32_t>(frames.size() - 1)));
-  }
+  // A set and a device span a frame.
+  const auto count = static_cast<std::uint32_t>(live.size());
+  VR_TRY(frame_sets_.reserve(*device_, kernel_, count));
+  VR_TRY(gpu_timer_.reserve(*device_, count));
 
   // One batch: per frame, its images staged, its cameras inline, then its
   // dispatch, on a set of its own. The two camera buffers are shared by every
   // frame and rewritten ahead of each dispatch, which the batch's barrier
   // around every dispatch orders after the one before read them. Every set is
   // written whole before its dispatch is recorded, as the batch requires.
+  // TODO(tsdf): one dispatch looping over the cameras, reading and writing
+  // each voxel once, if integrate's device time comes to matter after
+  // PERF.md's P3 (DECISIONS.md, 2026-09-30).
   CommandBatch batch(*device_, *allocator_);
   std::vector<Buffer> depth_bufs(frames.size());  // host arrays' device copies
   std::vector<Buffer> color_bufs(frames.size());  // alive across the batch
   const std::uint32_t has_color_attr = (color_attr_buf != nullptr) ? 1u : 0u;
-  for (std::size_t i = 0; i < frames.size(); ++i) {
+  for (std::size_t k = 0; k < live.size(); ++k) {
+    const std::size_t i = live[k];
     const FrameInput& frame = frames[i];
-    const DescriptorSet& set = frame_set(i);
+    const DescriptorSet& set = frame_sets_[k];
     VR_ASSIGN(
         const VkBuffer depth_handle,
         frame.depth.buffer(batch, *allocator_, depth_bytes[i], depth_bufs[i]));

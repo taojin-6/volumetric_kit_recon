@@ -116,6 +116,7 @@ Status KernelSetBuilder::add(ComputeKernel& out, const char* name,
   device_->set_object_name(VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT,
                            debug_object_handle(out.layout.handle()), name);
 
+  out.bindings = bindings;
   kernels_.push_back(&out);
   descriptor_total_ += bindings;
   return {};
@@ -146,26 +147,27 @@ Result<DescriptorPool> KernelSetBuilder::build() {
   return pool;
 }
 
-Result<KernelSets> allocate_kernel_sets(const Device& device,
-                                        const ComputeKernel& kernel,
-                                        std::uint32_t bindings,
-                                        std::uint32_t count) {
-  if (!kernel.valid() || bindings == 0 || count == 0) {
+Status KernelSets::reserve(const Device& device, const ComputeKernel& kernel,
+                           std::uint32_t count) {
+  if (!kernel.valid() || count == 0) {
     return Status::invalid_argument(
-        "allocate_kernel_sets: needs a built kernel, and bindings and count "
-        "above 0");
+        "KernelSets::reserve: needs a built kernel and a count above 0");
   }
+  if (count <= sets_.size()) return {};
   VkDescriptorPoolSize size{};
   size.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-  size.descriptorCount = bindings * count;
-  KernelSets out;
-  VR_ASSIGN(out.pool, DescriptorPool::create(device.handle(), &size, 1, count));
-  out.sets.reserve(count);
+  size.descriptorCount = kernel.bindings * count;
+  VR_ASSIGN(DescriptorPool pool,
+            DescriptorPool::create(device.handle(), &size, 1, count));
+  std::vector<DescriptorSet> sets;
+  sets.reserve(count);
   for (std::uint32_t i = 0; i < count; ++i) {
-    VR_ASSIGN(DescriptorSet set, out.pool.allocate(kernel.layout.handle()));
-    out.sets.push_back(set);
+    VR_ASSIGN(DescriptorSet set, pool.allocate(kernel.layout.handle()));
+    sets.push_back(set);
   }
-  return out;
+  pool_ = std::move(pool);
+  sets_ = std::move(sets);
+  return {};
 }
 
 Status dispatch(Device& device, const ComputeKernel& kernel, const void* push,

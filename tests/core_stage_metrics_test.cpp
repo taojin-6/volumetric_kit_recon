@@ -378,6 +378,18 @@ int main() {
   CHECK(std::string(second_window.rows()[0].name) == "c");
   CHECK(second_window.rows()[0].gpu_ms > 0.0);
 
+  // reserve() raises the bound between windows, and not within one.
+  CHECK(device.value().submit_single_time(record, &tiny.value(), "d"));
+  CHECK(tiny.value().reserve(device.value(), 2));
+  CHECK(device.value().submit_single_time(record, &tiny.value(), "e"));
+  CHECK(tiny.value().count() == 1);
+  tiny.value().reset();
+  CHECK(tiny.value().reserve(device.value(), 2));
+  CHECK(device.value().submit_single_time(record, &tiny.value(), "f"));
+  CHECK(device.value().submit_single_time(record, &tiny.value(), "g"));
+  CHECK(tiny.value().count() == 2);
+  tiny.value().reset();
+
   // Publishing an already-published window adds nothing. This is the assertion
   // with teeth: a report that re-emitted its spans would put "a" in here too,
   // and in the realistic shape -- one label per stage, reported every frame --

@@ -16,13 +16,13 @@
 #include "volumetric_kit/recon/core/camera_params.hpp"
 #include "volumetric_kit/recon/core/color_space.hpp"
 #include "volumetric_kit/recon/core/compute_kernel.hpp"
-#include "volumetric_kit/recon/core/compute_util.hpp"
 #include "volumetric_kit/recon/core/descriptor.hpp"
 #include "volumetric_kit/recon/core/gpu_timer.hpp"
 #include "volumetric_kit/recon/core/result.hpp"
 #include "volumetric_kit/recon/core/stage_metrics.hpp"
 #include "volumetric_kit/recon/tsdf/export.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
+#include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
 
 namespace volumetric_kit::recon {
 class Device;
@@ -83,13 +83,14 @@ struct ColorFrame {
 };
 
 /// @brief One camera's frame, for @ref TsdfIntegrator::integrate over several
-///        cameras at once.
-struct FrameInput {
-  /// Row-major depth in **metres**, `camera.width * camera.height` floats: a
-  /// host array, staged in the call's batch, or a storage buffer, bound in
-  /// place.
-  StorageInput depth;
-  DepthCameraParams camera;  ///< Intrinsics, depth range, size and pose.
+///        cameras at once: the depth frame its band was allocated from, plus
+///        its colour.
+///
+/// A host depth array is staged in the call's batch, a storage buffer bound
+/// in place. A list of these slices into the list
+/// @ref volume::VoxelHashMap::allocate_from_depth takes, so one list feeds
+/// both.
+struct FrameInput : volume::DepthInput {
   /// Optional colour, as @ref TsdfIntegrator::integrate takes it; borrowed
   /// for the call.
   const ColorFrame* color = nullptr;
@@ -261,7 +262,9 @@ class VR_TSDF_API TsdfIntegrator {
   /// ones as well.
   /// @param grid        As @ref integrate.
   /// @param frames      The frames, each checked as @ref integrate checks one
-  ///                    before any work; none fuses nothing.
+  ///                    before any work. One with no pixels fuses nothing, as
+  ///                    @ref volume::VoxelHashMap::allocate_from_depth
+  ///                    allocates nothing for it, and so does an empty list.
   /// @param max_weight  As @ref integrate, for every frame.
   /// @param mode        As @ref integrate, for every frame.
   /// @param metrics     As @ref integrate: one `"integrate"` row, a device span
@@ -426,11 +429,6 @@ class VR_TSDF_API TsdfIntegrator {
   Status prepare_dirty_flags(const volume::VoxelBlockGrid& grid);
   /// The flag array, read back whole.
   Result<std::vector<std::uint32_t>> read_dirty_flags() const;
-  // The set the kernel binds for a call's i-th frame: its own for the first,
-  // one of frame_sets_ for each after it.
-  const DescriptorSet& frame_set(std::size_t i) const noexcept {
-    return i == 0 ? kernel_.set : frame_sets_.sets[i - 1];
-  }
 
   // Borrowed (must outlive this).
   Device* device_ = nullptr;
@@ -448,9 +446,9 @@ class VR_TSDF_API TsdfIntegrator {
   // create().
   ComputeKernel kernel_;
   DescriptorPool pool_;
-  // The kernel's sets for every frame of a call after the first, so one batch
-  // fuses several cameras. Grown to the most frames a call has had; every set
-  // is written whole each call.
+  // The kernel's sets, one a frame of a call, so one batch fuses several
+  // cameras; kernel_.set goes unused. Grown to the most frames a call has
+  // had; every set is written whole each call.
   KernelSets frame_sets_;
   // The device-span collector, created once rather than per call: a query pool
   // of a few timestamps is negligible, and a lazily-created one would need a

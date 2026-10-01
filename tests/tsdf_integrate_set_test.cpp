@@ -6,9 +6,12 @@
 // sphere, fused twice into one grid one frame at a time and into another as a
 // set, must give the same blocks and the same tsdf, weight and colour bit for
 // bit, classic and dynamic: each frame is a dispatch of its own in both, in the
-// same order. The frames mix host arrays and storage buffers, colour and none.
-// And a set with one bad frame is refused before anything is fused. Exits 0
-// (skip) where no device is present.
+// same order. The frames mix host arrays and storage buffers, colour and none,
+// and the set carries an empty frame, which both calls skip. The set grows the
+// map's and the integrator's sets past an earlier call's, and changes the
+// blocks one frame at a time changes, so the dirty flags are bound on every
+// set. And a set with one bad frame is refused before anything is fused.
+// Exits 0 (skip) where no device is present.
 
 #include <cmath>
 #include <cstdint>
@@ -241,16 +244,24 @@ int main() {
   c0.coverage_in_alpha = true;
   tsdf::ColorFrame c1{views[1].color.data(), color_cam(views[1]), {}};
 
-  std::vector<vol::DepthInput> depths{
-      {vr::StorageInput(depth_bufs[0]), views[0].cam},
-      {vr::StorageInput(views[1].depth.data()), views[1].cam},
-      {vr::StorageInput(depth_bufs[2]), views[2].cam}};
-  std::vector<tsdf::FrameInput> frames{
-      {vr::StorageInput(depth_bufs[0]), views[0].cam, &c0},
-      {vr::StorageInput(views[1].depth.data()), views[1].cam, &c1},
-      {vr::StorageInput(depth_bufs[2]), views[2].cam, nullptr}};
+  const std::vector<tsdf::FrameInput> frames{
+      {{vr::StorageInput(depth_bufs[0]), views[0].cam}, &c0},
+      {{vr::StorageInput(views[1].depth.data()), views[1].cam}, &c1},
+      {{vr::StorageInput(depth_bufs[2]), views[2].cam}, nullptr}};
+  // The set, with an empty frame second, and the list it allocates from.
+  vr::DepthCameraParams empty_cam = views[1].cam;
+  empty_cam.width = 0;
+  std::vector<tsdf::FrameInput> set_frames = frames;
+  set_frames.insert(
+      set_frames.begin() + 1,
+      tsdf::FrameInput{{vr::StorageInput(views[1].depth.data()), empty_cam},
+                       &c1});
+  const std::vector<vol::DepthInput> depths(set_frames.begin(),
+                                            set_frames.end());
 
-  auto integrator = tsdf::TsdfIntegrator::create(dev, alloc);
+  tsdf::TsdfIntegratorConfig config;
+  config.track_dirty_blocks = true;
+  auto integrator = tsdf::TsdfIntegrator::create(dev, alloc, config);
   CHECK(integrator.ok());
   for (const tsdf::IntegrationMode mode :
        {tsdf::IntegrationMode::Classic, tsdf::IntegrationMode::Dynamic}) {
@@ -258,7 +269,9 @@ int main() {
     auto set = make_grid(dev, alloc);
     CHECK(one.ok() && set.ok());
     // Twice, so the running average and the colour blend run too. Each pass
-    // allocates every frame's band before fusing any, as the set does.
+    // allocates every frame's band before fusing any, as the set does. The
+    // integrator moves between the grids, which restarts its dirty flags, so
+    // each grid's count is this pass's.
     for (int pass = 0; pass < 2; ++pass) {
       for (int c = 0; c < kCameras; ++c) {
         CHECK(settle([&](vol::AllocFailures* why) {
@@ -277,10 +290,22 @@ int main() {
                                            5.0f, mode, f.color);
         CHECK(fused.ok());
       }
+      auto dirty_one = integrator->dirty_block_count();
+      CHECK(dirty_one.ok());
+      if (pass == 0) {
+        // One frame first, so the full set grows the map's sets.
+        CHECK(settle([&](vol::AllocFailures* why) {
+                return set->map().allocate_from_depth(
+                    std::vector<vol::DepthInput>{depths[0]}, why);
+              }) == 0);
+      }
       CHECK(settle([&](vol::AllocFailures* why) {
               return set->map().allocate_from_depth(depths, why);
             }) == 0);
-      CHECK(integrator->integrate(set.value(), frames, 5.0f, mode).ok());
+      CHECK(integrator->integrate(set.value(), set_frames, 5.0f, mode).ok());
+      auto dirty_set = integrator->dirty_block_count();
+      CHECK(dirty_set.ok());
+      CHECK(dirty_set.value() == dirty_one.value());
     }
     std::printf("%s:\n",
                 mode == tsdf::IntegrationMode::Classic ? "classic" : "dynamic");
@@ -295,7 +320,7 @@ int main() {
     auto small = vr::upload_storage_buffer(alloc, views[2].depth.data(),
                                            sizeof(float) * kWidth);
     CHECK(small.ok());
-    std::vector<vol::DepthInput> bad_depths = depths;
+    std::vector<vol::DepthInput> bad_depths(frames.begin(), frames.end());
     bad_depths[2] = {vr::StorageInput(small.value()), views[2].cam};
     CHECK(grid->map().allocate_from_depth(bad_depths).status().domain() ==
           vr::Status::Code::InvalidArgument);
@@ -306,7 +331,7 @@ int main() {
             return grid->map().allocate_from_depth(depths, why);
           }) == 0);
     std::vector<tsdf::FrameInput> bad = frames;
-    bad[2] = {vr::StorageInput(small.value()), views[2].cam, nullptr};
+    bad[2] = {{vr::StorageInput(small.value()), views[2].cam}, nullptr};
     CHECK(integrator->integrate(grid.value(), bad).domain() ==
           vr::Status::Code::InvalidArgument);
     auto weight =

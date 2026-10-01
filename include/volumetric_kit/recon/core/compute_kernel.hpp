@@ -54,6 +54,8 @@ struct ComputeKernel {
   /// Size of the push-constant range, starting at 0; 0 for none. A dispatch
   /// pushes at most this many bytes.
   std::uint32_t push_bytes = 0;
+  /// Its storage-buffer bindings, as given to @ref KernelSetBuilder::add.
+  std::uint32_t bindings = 0;
 
   ComputeKernel() noexcept = default;
   ~ComputeKernel() = default;
@@ -67,10 +69,12 @@ struct ComputeKernel {
         pipeline(std::move(other.pipeline)),
         set(other.set),
         name(other.name),
-        push_bytes(other.push_bytes) {
+        push_bytes(other.push_bytes),
+        bindings(other.bindings) {
     other.set = {};
     other.name = nullptr;
     other.push_bytes = 0;
+    other.bindings = 0;
   }
   ComputeKernel& operator=(ComputeKernel&& other) noexcept {
     if (this != &other) {
@@ -79,9 +83,11 @@ struct ComputeKernel {
       set = other.set;
       name = other.name;
       push_bytes = other.push_bytes;
+      bindings = other.bindings;
       other.set = {};
       other.name = nullptr;
       other.push_bytes = 0;
+      other.bindings = 0;
     }
     return *this;
   }
@@ -158,30 +164,54 @@ class VR_CORE_API KernelSetBuilder {
   std::uint32_t descriptor_total_ = 0;
 };
 
-/// @brief More descriptor sets of one kernel's layout, in a pool of their own.
+/// @brief Descriptor sets of one kernel's layout, in a pool of their own.
 ///
 /// A @ref CommandBatch binds a set when it submits, so it refuses one rewritten
 /// after its dispatch was recorded. A batch that dispatches one kernel several
 /// times over different buffers -- a rig's cameras in one submit -- binds one
 /// of these to each dispatch (the set overload of @ref CommandBatch::dispatch).
-struct KernelSets {
-  DescriptorPool pool;              ///< Owns the sets; outlives every use.
-  std::vector<DescriptorSet> sets;  ///< Each of the kernel's layout.
-};
+class VR_CORE_API KernelSets {
+ public:
+  KernelSets() noexcept = default;
+  KernelSets(KernelSets&& other) noexcept
+      : pool_(std::move(other.pool_)), sets_(std::move(other.sets_)) {
+    other.sets_.clear();
+  }
+  KernelSets& operator=(KernelSets&& other) noexcept {
+    if (this != &other) {
+      pool_ = std::move(other.pool_);
+      sets_ = std::move(other.sets_);
+      other.sets_.clear();
+    }
+    return *this;
+  }
+  KernelSets(const KernelSets&) = delete;
+  KernelSets& operator=(const KernelSets&) = delete;
 
-/// @brief Allocate @p count descriptor sets of @p kernel's layout.
-/// @param device    The kernel's device.
-/// @param kernel    A built kernel.
-/// @param bindings  Its storage-buffer bindings, as given to
-///                  @ref KernelSetBuilder::add.
-/// @param count     How many sets.
-/// @return The sets, none written yet; @ref Status::Code::InvalidArgument for
-///         an unbuilt kernel or a zero @p bindings or @p count; or the pool's
-///         failure.
-VR_CORE_API Result<KernelSets> allocate_kernel_sets(const Device& device,
-                                                    const ComputeKernel& kernel,
-                                                    std::uint32_t bindings,
-                                                    std::uint32_t count);
+  /// @brief Hold at least @p count sets of @p kernel's layout.
+  ///
+  /// Grow-only: holding fewer, the pool is replaced by one of @p count sets,
+  /// which frees every set held before, so none may be in a batch not yet
+  /// submitted. New sets are unwritten.
+  /// @param device  The kernel's device.
+  /// @param kernel  A built kernel, the same one on every call.
+  /// @param count   How many sets.
+  /// @return OK; @ref Status::Code::InvalidArgument for an unbuilt kernel or a
+  ///         zero @p count; or the pool's failure, which keeps the sets held.
+  Status reserve(const Device& device, const ComputeKernel& kernel,
+                 std::uint32_t count);
+
+  /// @return How many sets are held.
+  std::size_t size() const noexcept { return sets_.size(); }
+  /// @return The @p i-th set. @pre `i < size()`.
+  const DescriptorSet& operator[](std::size_t i) const noexcept {
+    return sets_[i];
+  }
+
+ private:
+  DescriptorPool pool_;
+  std::vector<DescriptorSet> sets_;
+};
 
 /// @brief Record + submit a one-shot 1-D dispatch of @p kernel over @p groups
 ///        workgroups: a @ref CommandBatch of that one command.
