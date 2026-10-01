@@ -8,8 +8,8 @@
 // bit, classic and dynamic: each frame is a dispatch of its own in both, in the
 // same order. The frames mix host arrays and storage buffers, colour and none,
 // and the set carries an empty frame, which both calls skip. The set grows the
-// map's and the integrator's sets past an earlier call's, and changes the
-// blocks one frame at a time changes, so the dirty flags are bound on every
+// map's and the integrator's sets past an earlier call's, and stamps changed
+// the blocks one frame at a time changes, so the stamps are bound on every
 // set. And a set with one bad frame is refused before anything is fused.
 // Exits 0 (skip) where no device is present.
 
@@ -136,6 +136,18 @@ vr::Result<std::map<Coord, std::int32_t>> blocks_of(vol::VoxelBlockGrid& g) {
 
 // The same blocks, and in each the same bits of weight, tsdf and colour in
 // every voxel. A slot can differ: allocation order is the GPU's.
+// The blocks of `g` stamped changed after `since`.
+vr::Result<std::uint32_t> changed_after(const vol::VoxelBlockGrid& g,
+                                        std::uint32_t since) {
+  VR_ASSIGN(const std::vector<vol::BlockStamp> stamps,
+            g.map().read_block_stamps());
+  std::uint32_t n = 0;
+  for (const vol::BlockStamp& st : stamps) {
+    n += static_cast<std::int32_t>(st.changed - since) > 0 ? 1u : 0u;
+  }
+  return n;
+}
+
 int check_same(const vr_test::Gpu& ctx, vol::VoxelBlockGrid& a,
                vol::VoxelBlockGrid& b) {
   auto ba = blocks_of(a);
@@ -259,9 +271,7 @@ int main() {
   const std::vector<vol::DepthInput> depths(set_frames.begin(),
                                             set_frames.end());
 
-  tsdf::TsdfIntegratorConfig config;
-  config.track_dirty_blocks = true;
-  auto integrator = tsdf::TsdfIntegrator::create(dev, alloc, config);
+  auto integrator = tsdf::TsdfIntegrator::create(dev, alloc);
   CHECK(integrator.ok());
   for (const tsdf::IntegrationMode mode :
        {tsdf::IntegrationMode::Classic, tsdf::IntegrationMode::Dynamic}) {
@@ -269,10 +279,12 @@ int main() {
     auto set = make_grid(dev, alloc);
     CHECK(one.ok() && set.ok());
     // Twice, so the running average and the colour blend run too. Each pass
-    // allocates every frame's band before fusing any, as the set does. The
-    // integrator moves between the grids, which restarts its dirty flags, so
-    // each grid's count is this pass's.
+    // allocates every frame's band before fusing any, as the set does, and
+    // counts the blocks each grid stamped changed after its tick going in:
+    // four ticks a pass for one frame at a time, one for the set.
     for (int pass = 0; pass < 2; ++pass) {
+      const std::uint32_t one_since = one->map().tick();
+      const std::uint32_t set_since = set->map().tick();
       for (int c = 0; c < kCameras; ++c) {
         CHECK(settle([&](vol::AllocFailures* why) {
                 return c == 1 ? one->map().allocate_from_depth(
@@ -290,8 +302,9 @@ int main() {
                                            5.0f, mode, f.color);
         CHECK(fused.ok());
       }
-      auto dirty_one = integrator->dirty_block_count();
-      CHECK(dirty_one.ok());
+      CHECK(one->map().tick() == one_since + std::uint32_t{kCameras});
+      auto dirty_one = changed_after(one.value(), one_since);
+      CHECK(dirty_one.ok() && dirty_one.value() > 0);
       if (pass == 0) {
         // One frame first, so the full set grows the map's sets.
         CHECK(settle([&](vol::AllocFailures* why) {
@@ -303,7 +316,8 @@ int main() {
               return set->map().allocate_from_depth(depths, why);
             }) == 0);
       CHECK(integrator->integrate(set.value(), set_frames, 5.0f, mode).ok());
-      auto dirty_set = integrator->dirty_block_count();
+      CHECK(set->map().tick() == set_since + 1);
+      auto dirty_set = changed_after(set.value(), set_since);
       CHECK(dirty_set.ok());
       CHECK(dirty_set.value() == dirty_one.value());
     }

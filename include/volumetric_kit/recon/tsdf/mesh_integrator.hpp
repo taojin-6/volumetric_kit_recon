@@ -129,11 +129,9 @@ struct MeshIntegrateStats {
 ///          quiescent across the call: the binning kernel probes its hash table
 ///          without a lock, as the mesh tier does.
 ///
-/// @note The blocks this writes are not reported as dirty. Dirty flags belong
-///       to the @ref TsdfIntegrator that fuses into a grid, so a grid written
-///       here is meshed with a full extract, not
-///       `mesh::MarchingCubes::extract_device_incremental` against another
-///       integrator's flags.
+/// @note Every block this writes is stamped changed (@ref integrate), so
+///       `mesh::MarchingCubes::extract_device_incremental` re-meshes it as it
+///       does a block a fuse changed.
 class VR_TSDF_API MeshIntegrator {
  public:
   /// The most triangles one block's bin may hold. Each voxel of the block
@@ -166,6 +164,10 @@ class VR_TSDF_API MeshIntegrator {
   MeshIntegrator& operator=(const MeshIntegrator&) = delete;
 
   /// @brief Write the mesh's truncated distance field into @p grid.
+  ///
+  /// Advances the map's tick (@ref volume::VoxelHashMap::tick) and stamps
+  /// `changed` with it on every block it writes, all of them, since each is
+  /// overwritten whole (@ref volume::BlockStamp).
   /// @param grid            A grid carrying float `tsdf` and `weight`
   ///                        attributes, with the mesh's band allocated (see
   ///                        the class notes).

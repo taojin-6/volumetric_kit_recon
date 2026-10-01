@@ -7763,6 +7763,99 @@ M5 Max and 1 ms on the RTX 5090, once every 30 sets.
   found it 0. Under the new threshold it need not be, and the kernel leaves
   little to save.
 
+### 2026-10-01 — The dirty flags become the `changed` stamp: every pass that writes voxels advances the map's clock and stamps what it changed, always, and an incremental extract keeps the tick it last meshed at (amends the 2026-08-09 dirty-block decision and the stamps entry above).
+
+**The rule.**
+- **Writers advance the clock.** Three calls write voxels, and each advances
+  the map's tick before it writes and stamps `changed` with the new one:
+  - `TsdfIntegrator::integrate`, one tick a call, so a rig's set is one. It
+    stamps where a stored value differs, Dynamic's clear included, exactly
+    where the flags were set.
+  - `MeshIntegrator::integrate` and the codec's inverse, on every block they
+    write, since they overwrite whole blocks.
+
+  The caller no longer advances the tick, and `rig_viewer`'s call goes. So
+  an age in ticks is an age in writes: in sets for the rig, in frames for a
+  single camera.
+- **Readers keep a tick.** `extract_device_incremental(grid, iso, timings)`
+  re-meshes the blocks whose `changed` stamp is newer than the tick its last
+  publishing extract ran at, kept in its arena state beside the watermark.
+  Nothing is reset. `fuse_replica --dirty-every` keeps a tick of its own and
+  dilates on the host, so it and `--incremental` no longer contend for one
+  set of flags.
+- **Gone:** `DirtyBlocks`, `TsdfIntegratorConfig` (whose only field was the
+  flag), `dirty_block_count`, `reset_dirty`, `dirty_flags_buffer`,
+  `dirty_flags_capacity`, `dirty_epoch` and `dirty_remesh_blocks`. So is
+  their anchoring: grid identity, an epoch latched per integrator, and
+  re-arming. The stamps live in the grid's own map, which zeroes a slot's
+  record as it frees the block. A remove still forces a full extract,
+  through the arena state's own epoch.
+- **Always on.** The integrator stamps on every fuse, with no opt-in. One
+  lane of each subgroup stamps for the lanes beside it, since every lane of
+  a workgroup is one block's when a block is a whole number of workgroups.
+  It reads the stamp first, so subgroups after the first skip the atomic.
+
+**Why the writers advance it, not the caller.** A tick is a period, and a
+fuse and an extract both happen within one. With the caller advancing, an
+extract records "meshed through T", and a fuse later in the same tick also
+stamps T, which the next extract reads as already meshed: a stale surface
+under `Status::ok`. A writer that advances first stamps a tick newer than
+every cursor taken before it, however the calls interleave.
+
+**Why every writer.** The extractor now reads the stamps instead of a
+struct the caller hands it. So a writer that stamped nothing would leave
+its blocks' triangles stale, which is the library's to prevent (2026-08-04).
+The flags had the same blind spot, since `MeshIntegrator`'s notes said a
+grid it wrote had to be meshed in full. But there the caller had to bring
+the flags, so the extractor never meshed against a writer it could not
+see.
+
+**Measured.**
+- **Equivalence**, on room0 at 2 cm in Release, on the M5 Max and the RTX
+  5090, against #132:
+  - `--incremental --mesh-every 10`: 38 of 40 extracts incremental and 71.0%
+    of blocks re-meshed on both builds, with the same final mesh;
+  - `--dirty-every 10`: 53.30% changed and 71.44% to re-mesh, 3 329 → 4 530
+    of 8 692, on both;
+  - both flags at once give the same numbers as each alone.
+- **Integrate's device time**, interleaved A/B against #132 (ms a frame):
+
+  | | 2 cm | 1 cm, mean |
+  |---|---|---|
+  | M5 Max, before / after | 0.128–0.130 / 0.127–0.134 | 0.480 / 0.488 |
+  | RTX 5090, before / after | 0.033 / 0.034 | 0.219 / 0.207 |
+
+  It took three cuts. An atomic for each changed voxel read 0.046 against
+  0.033 at 2 cm on the 5090. One elected lane a subgroup still read 0.225
+  against 0.197 at 1 cm. Reading the stamp first brought both to parity.
+
+**Verified.**
+- `recon_tsdf_integrate`'s stamps fixture:
+  - a fuse is one tick, and stamps the four band blocks but neither the four
+    ahead of them nor the off-camera one;
+  - a reader's tick sees both fuses since, or only the later one;
+  - a grow keeps the stamps;
+  - Dynamic's clear stamps;
+  - an identical re-fuse stamps nothing;
+  - a second grid's fuse leaves the first's stamps and clock alone.
+- `recon_tsdf_integrate_set`: one frame at a time and the set stamp the
+  same blocks, at a tick a frame against one for the set.
+- `recon_mesh_marching_cubes_sparse`, incremental passes driven by stamps:
+  - nothing stamped keeps the old surface;
+  - one stamped block re-meshes its neighbourhood alone;
+  - a pass after it, with nothing new stamped, re-meshes nothing;
+  - all stamped gives the new surface;
+  - the culled-extract and remove fallbacks still hold.
+- `recon_tsdf_mesh_integrate` and `recon_codec_decoder`: every block written
+  is stamped at the call's tick.
+- `recon_volume_block_stamps`: `changed` is kept across a resize and zeroed
+  by the delete kernel and by clear.
+- Seven mutants each fail one of those: no stamp on a fuse, none on the
+  clear, no tick advanced, an inclusive cursor, a cursor not kept, and no
+  stamp from `MeshIntegrator` or from the decoder.
+- The changed tests run clean under synchronization validation, and the
+  full suite passes on the M5 Max (57) and the RTX 5090 (44).
+
 ## Measured lessons
 
 Not decisions, but the measurements that overturned an assumption about

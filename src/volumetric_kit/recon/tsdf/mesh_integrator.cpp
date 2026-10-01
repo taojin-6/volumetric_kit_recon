@@ -55,6 +55,7 @@ struct IntegratePush {
   std::uint32_t num_bins;
   std::uint32_t mode;
   float shell;
+  std::uint32_t tick;  // the map's tick, which each block written takes
 };
 struct MeshBin {
   std::int32_t ptr;
@@ -65,7 +66,7 @@ struct MeshBin {
 static_assert(sizeof(BinPush) == 40, "BinPush must be 40 bytes");
 static_assert(offsetof(BinPush, tri_count) == 32, "BinPush layout drift");
 static_assert(offsetof(BinPush, pass) == 36, "BinPush layout drift");
-static_assert(sizeof(IntegratePush) == 48, "IntegratePush must be 48 bytes");
+static_assert(sizeof(IntegratePush) == 52, "IntegratePush must be 52 bytes");
 static_assert(offsetof(IntegratePush, first_bin) == 32,
               "IntegratePush layout drift");
 static_assert(offsetof(IntegratePush, num_bins) == 36,
@@ -73,6 +74,8 @@ static_assert(offsetof(IntegratePush, num_bins) == 36,
 static_assert(offsetof(IntegratePush, mode) == 40,
               "IntegratePush layout drift");
 static_assert(offsetof(IntegratePush, shell) == 44,
+              "IntegratePush layout drift");
+static_assert(offsetof(IntegratePush, tick) == 48,
               "IntegratePush layout drift");
 static_assert(sizeof(MeshBin) == 12, "MeshBin must be 12 bytes");
 static_assert(offsetof(MeshBin, begin) == 4, "MeshBin layout drift");
@@ -105,7 +108,7 @@ Result<MeshIntegrator> MeshIntegrator::create(Device& device,
   VR_TRY(kb.add(integ.bin_, "tsdf_mesh_bin", vr_mesh_bin_comp_spv,
                 vr_mesh_bin_comp_spv_size, 9, &bin_range));
   VR_TRY(kb.add(integ.integrate_, "tsdf_mesh_integrate",
-                vr_mesh_integrate_comp_spv, vr_mesh_integrate_comp_spv_size, 7,
+                vr_mesh_integrate_comp_spv, vr_mesh_integrate_comp_spv_size, 8,
                 &integrate_range));
   VR_ASSIGN(integ.pool_, kb.build());
 
@@ -358,6 +361,11 @@ Result<MeshIntegrateStats> MeshIntegrator::integrate(
   integrate_.set.write_storage_buffer(4, block_buf.handle(), 0, VK_WHOLE_SIZE);
   integrate_.set.write_storage_buffer(5, bins_buf.handle(), 0, VK_WHOLE_SIZE);
   integrate_.set.write_storage_buffer(6, coord_buf.handle(), 0, VK_WHOLE_SIZE);
+  integrate_.set.write_storage_buffer(7, grid.map().stamps_buffer().handle(), 0,
+                                      VK_WHOLE_SIZE);
+  // The call is one tick, which every block it writes is stamped changed with.
+  grid.map().advance_tick();
+  const std::uint32_t tick = grid.map().tick();
 
   const BinPush fill_push{g, triangle_count, kPassFill};
   for (std::size_t first = 0; first < blocks.size();) {
@@ -377,9 +385,12 @@ Result<MeshIntegrateStats> MeshIntegrator::integrate(
                             &stage));
     }
     const auto n = static_cast<std::uint32_t>(end - first);
-    const IntegratePush push{g, static_cast<std::uint32_t>(first), n,
+    const IntegratePush push{g,
+                             static_cast<std::uint32_t>(first),
+                             n,
                              static_cast<std::uint32_t>(params.mode),
-                             is_signed ? 0.0f : shell_m};
+                             is_signed ? 0.0f : shell_m,
+                             tick};
     VR_TRY(batch.dispatch(integrate_, &push, sizeof(push), group_count(n * vpb),
                           max_workgroup_count_x_, &stage));
     VR_TRY(batch.submit());

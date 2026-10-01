@@ -9,15 +9,17 @@
 // classic_tsdf.metal / classic_tsdf.cu (the neural/triplane channels are out of
 // scope). Each voxel is owned by exactly one thread (a unique block ptr + local
 // index), so the tsdf/weight/color read-modify-write needs no atomics. The one
-// exception is the per-BLOCK dirty flag at binding 8, which every thread of a
-// block shares -- see there.
+// exception is the block's `changed` stamp at binding 8, which every thread of
+// a block shares -- see there.
 
 #extension GL_GOOGLE_include_directive : require
+#extension GL_KHR_shader_subgroup_basic : require
 #include "tsdf_common.glsl"
 // Cross-tier: the one transfer curve, from core. Colour is fused as a running
 // MEAN, and a mean is a linear operation, so both operands are decoded out of
 // the canonical 8-bit encoding before blending and the result is re-encoded.
 #include "volumetric_kit/recon/core/shaders/color_common.glsl"
+#include "volumetric_kit/recon/volume/shaders/block_stamp.glsl"
 
 layout(local_size_x = 256) in;
 
@@ -45,7 +47,8 @@ layout(set = 0, binding = 6, scalar) buffer ColorAttr { uint color_attr[]; };
 layout(set = 0, binding = 7, scalar) readonly buffer ColorCamera {
   ColorCameraParams color_cam;
 };
-// One flag per BLOCK, set when this dispatch actually CHANGES a voxel of it.
+// The map's block stamps (volume::BlockStamp): this dispatch stamps `changed`
+// with the map's tick on a block when it actually CHANGES a voxel of it.
 //
 // Not "the block was in the active set", not "the block was in the frustum",
 // and -- the distinction that costs the most to get wrong -- not "a store
@@ -54,26 +57,37 @@ layout(set = 0, binding = 7, scalar) readonly buffer ColorCamera {
 // free-space cone ahead of the surface is fused too, so a flag set by the mere
 // act of storing would collapse to "the camera could see it" and re-mesh the
 // whole view every frame. Only a store that leaves tsdf/weight/color holding a
-// different value may set this, which is why the marks below sit AFTER the
+// different value may stamp it, which is why the marks below sit AFTER the
 // writes they describe and are guarded by a comparison against the old value:
 // a voxel converged at max_weight re-stores bit-identical numbers, and that is
 // the steady state of any revisiting scan, not a corner case.
 //
-// Indexed by block SLOT (ptr / voxels_per_block), which is stable across frames
-// and preserved by VoxelHashMap::resize -- so flags accumulate correctly across
-// several fused frames between remeshes, which the compacted dispatch order
-// could not do. A slot is only meaningful while the block living there stays
-// live; VoxelBlockGrid::topology_epoch is what the host checks that against.
+// Indexed by block SLOT (ptr / voxels_per_block), which the map keeps across
+// a resize and zeroes when it frees the block, so a stamp always describes
+// the block living in its slot.
 //
-// atomicOr, not a plain store: every writer contributes the same 1, but a
+// atomicMax, not a plain store: every writer contributes the same tick, but a
 // non-atomic race is undefined rather than benign without coherent/
 // NonPrivatePointer, and the guard above means the atomic is paid only by
 // voxels that actually changed -- none at all once a block converges.
-//
-// Bound to a 1-element dummy (and pc.track_dirty is 0) unless the consumer
-// opted into tracking, so an integrator that nobody asks pays neither the
-// num_blocks * 4 allocation nor a single store.
-layout(set = 0, binding = 8, scalar) buffer DirtyBlocks { uint dirty_block[]; };
+layout(set = 0, binding = 8, scalar) buffer Stamps { BlockStamp stamps[]; };
+
+// Stamp a block changed, from a lane that changed one of its voxels. When the
+// block is a whole number of workgroups -- every block size from 8 up -- every
+// lane of the workgroup is this block's, so one lane of each subgroup stamps
+// for the lanes beside it, elected among the lanes that reach here (basic
+// subgroup operations are core in compute since Vulkan 1.1). And it reads the
+// stamp first, so the subgroups after the first skip the atomic; a stale read
+// costs only an atomic. On the RTX 5090 a stamp from every changed voxel cost
+// 0.013 ms a frame at 2 cm and one a subgroup still 0.03 ms at 1 cm; with
+// both, integrate measured as it did without stamps.
+void stamp_changed(uint block_slot) {
+  if ((uint(pc.grid.voxels_per_block) % gl_WorkGroupSize.x != 0u ||
+       subgroupElect()) &&
+      stamps[block_slot].changed != pc.tick) {
+    atomicMax(stamps[block_slot].changed, pc.tick);
+  }
+}
 
 // Bilinear depth sample at pixel (u, v), with a nearest-neighbour fallback.
 // Pixel centres sit at (i + 0.5) -- the taps shift by -0.5 to match -- so the
@@ -124,7 +138,7 @@ void main() {
   uint block_i = gid / vpb;
   uint local = gid % vpb;
   BlockIndex block = active_blocks[block_i];
-  // The flag slot for this block, resolved once. vpb is not a compile-time
+  // The stamp slot for this block, resolved once. vpb is not a compile-time
   // constant, so the divide is a real reciprocal sequence -- it used to be
   // recomputed inline at each mark site.
   uint block_slot = uint(block.ptr) / vpb;
@@ -182,9 +196,7 @@ void main() {
       // that leaves a stale mesh behind is the whole reason dynamic mode exists.
       // The weight > 0.0 guard above is already the "did anything change" test
       // on this path: a voxel at weight 0 is in the state the clear writes.
-      if (pc.track_dirty != 0u) {
-        atomicOr(dirty_block[block_slot], 1u);
-      }
+      stamp_changed(block_slot);
     }
     return;
   }
@@ -281,7 +293,7 @@ void main() {
   }
 
   // One mark per changed voxel, after every store it describes.
-  if (pc.track_dirty != 0u && changed) {
-    atomicOr(dirty_block[block_slot], 1u);
+  if (changed) {
+    stamp_changed(block_slot);
   }
 }

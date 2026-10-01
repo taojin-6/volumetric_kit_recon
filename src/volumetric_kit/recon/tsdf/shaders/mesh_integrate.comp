@@ -54,6 +54,9 @@ layout(set = 0, binding = 5, scalar) readonly buffer BinTris {
 layout(set = 0, binding = 6, scalar) readonly buffer SlotCoords {
   ivec3 slot_coord[];
 };
+// The map's block stamps: every block written is stamped changed, since the
+// write overwrites it whole.
+layout(set = 0, binding = 7, scalar) buffer Stamps { BlockStamp stamps[]; };
 
 // The write is split across dispatches so that none measures more than
 // MeshIntegrator::kMaxDispatchBinEntries bin entries; this one writes bins
@@ -64,6 +67,7 @@ layout(push_constant, scalar) uniform PushConstants {
   uint num_bins;
   uint mode;    // kModeSigned or kModeShell (tsdf::MeshSdfMode)
   float shell;  // shell half-thickness, metres
+  uint tick;    // the map's tick, which each block written is stamped with
 } pc;
 
 const uint kModeSigned = 0u;
@@ -77,6 +81,9 @@ void main() {
   }
   MeshBin bin = bins[pc.first_bin + gid / vpb];
   uint local = gid % vpb;
+  if (local == 0u) {
+    stamps[uint(bin.ptr) / vpb].changed = pc.tick;
+  }
 
   // Node-centred voxels (voxel * voxel_size), matching
   // volume/voxel_coords.hpp::voxel_to_world and tsdf_integrate.comp.

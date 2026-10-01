@@ -96,25 +96,6 @@ struct FrameInput : volume::DepthInput {
   const ColorFrame* color = nullptr;
 };
 
-/// @brief What optional machinery a @ref TsdfIntegrator carries, chosen at
-///        @ref TsdfIntegrator::create.
-struct TsdfIntegratorConfig {
-  /// Track which blocks each fuse actually changed (@ref
-  /// TsdfIntegrator::dirty_block_count and friends).
-  ///
-  /// Off by default, and the default costs nothing: no `num_blocks * 4`
-  /// device allocation (6 MB at `VoxelGridParams::defaults()`, and it
-  /// doubles with every map grow), and not one store in the fusion kernel,
-  /// which binds a 1-element dummy to the flag slot instead. That is the bar a
-  /// tier-level measurement has to clear here -- nothing measured for a caller
-  /// who did not ask -- and a fuse-only consumer (a viewer, an offline
-  /// exporter, a scanner that re-meshes the whole volume) should leave it off.
-  ///
-  /// Turning it on is what an **incremental** re-mesh needs: the set of blocks
-  /// whose extracted geometry the last few frames invalidated.
-  bool track_dirty_blocks = false;
-};
-
 /// @brief Fuses posed depth frames into a @ref VoxelBlockGrid's `tsdf` +
 ///        `weight` attributes by projective TSDF integration (classic or
 ///        dynamic).
@@ -126,9 +107,8 @@ struct TsdfIntegratorConfig {
 /// observation weight with a behind-surface dropoff, capped at `max_weight`).
 /// Node-centred voxels (`voxel * voxel_size`), matching @ref voxel_to_world and
 /// the prior engine's numerics. Each voxel is owned by exactly one thread (a
-/// unique `BlockIndex::ptr + local`), so the fusion needs no atomics (the
-/// opt-in per-block dirty flag is the one shared write; see @ref
-/// TsdfIntegratorConfig::track_dirty_blocks).
+/// unique `BlockIndex::ptr + local`), so the fusion needs no atomics but the
+/// one shared write per block: its `changed` stamp (see @ref integrate).
 ///
 /// @ref IntegrationMode::Dynamic instead clears stale geometry ahead of a
 /// receded surface (classic keeps a smooth field there). Depth is sampled
@@ -143,12 +123,9 @@ class VR_TSDF_API TsdfIntegrator {
   /// @param device     The compute device (must outlive this object).
   /// @param allocator  The allocator its transient buffers come from (must
   ///                   outlive this).
-  /// @param config     Optional machinery to carry; see @ref
-  ///                   TsdfIntegratorConfig. The default carries none.
   /// @return The integrator, or a non-OK @ref Status if a pipeline or
   ///         descriptor object fails to build.
-  static Result<TsdfIntegrator> create(Device& device, Allocator& allocator,
-                                       const TsdfIntegratorConfig& config = {});
+  static Result<TsdfIntegrator> create(Device& device, Allocator& allocator);
 
   // Rule of zero: every owned pipeline / layout / pool self-frees and self-
   // resets on move; device_ / allocator_ are borrowed, so the defaulted moves
@@ -160,6 +137,14 @@ class VR_TSDF_API TsdfIntegrator {
   TsdfIntegrator& operator=(const TsdfIntegrator&) = delete;
 
   /// @brief Integrate one posed depth frame into @p grid's active blocks.
+  ///
+  /// Advances the map's tick (@ref volume::VoxelHashMap::tick) and stamps
+  /// `changed` with it on every block whose `tsdf`, `weight` or `color` the
+  /// call changed (@ref volume::BlockStamp). Only a store that leaves a
+  /// **different** value counts, so a scan revisiting converged surface at
+  /// `max_weight` stamps nothing, and Dynamic's clear of a weighted voxel
+  /// counts as a change. A consumer keeps the tick it last read at and asks
+  /// which blocks are newer: an incremental mesh extract keeps its own.
   /// @param grid        The block grid; must carry `float` `tsdf` + `weight`
   ///                    attributes (see @ref VoxelBlockGrid::create). Its
   ///                    active set (@ref
@@ -259,7 +244,7 @@ class VR_TSDF_API TsdfIntegrator {
   /// The set is compacted once, so allocate every frame's band first (@ref
   /// volume::VoxelHashMap::allocate_from_depth takes them together too); a
   /// block first allocated for a later frame is then fused from the earlier
-  /// ones as well.
+  /// ones as well. The call is one tick, so a rig's set ages as one fuse.
   /// @param grid        As @ref integrate.
   /// @param frames      The frames, each checked as @ref integrate checks one
   ///                    before any work. One with no pixels fuses nothing, as
@@ -276,159 +261,11 @@ class VR_TSDF_API TsdfIntegrator {
                    IntegrationMode mode = IntegrationMode::Classic,
                    StageMetrics* metrics = nullptr);
 
-  /// @brief How many blocks this integrator has CHANGED since the last @ref
-  ///        reset_dirty (requires @ref
-  ///        TsdfIntegratorConfig::track_dirty_blocks).
-  ///
-  /// Not "how many were dispatched", not "how many were in view", and not "how
-  /// many were stored to". The dispatch covers every active block and returns
-  /// early for most; a frustum test counts the whole depth cone; and classic
-  /// mode fuses the free-space cone ahead of the surface too, so counting
-  /// stores would report roughly the view. Only a store that leaves
-  /// `tsdf`/`weight`/`color` holding a **different** value marks a block, so a
-  /// scan revisiting converged surface at `max_weight` marks nothing -- which
-  /// is the steady state, and the whole reason this is narrower than the active
-  /// set.
-  ///
-  /// Accumulates across calls, because a consumer may fuse several frames per
-  /// remesh; @ref reset_dirty clears it, and the natural place to call that is
-  /// immediately after an extract has consumed the set. The flags survive @ref
-  /// VoxelBlockGrid::resize, which preserves every block's index.
-  ///
-  /// The flags are read back and counted on the host, so it is O(num_blocks)
-  /// and meant for diagnostics and for driving a re-mesh, not for a per-voxel
-  /// path.
-  ///
-  /// @warning Not synchronized, and `const` only in the C++ sense: it reads a
-  ///          buffer that a concurrent @ref integrate on another thread can
-  ///          free outright (the flag array is reallocated when the map grows,
-  ///          and `Buffer` frees synchronously). Serializing this against
-  ///          @ref integrate and @ref reset_dirty is the caller's job, exactly
-  ///          as it is for `mesh::MarchingCubes::release_through`.
-  /// @return The count; 0 before any integrate has run, and 0 when tracking is
-  ///         off; or the readback's failure.
-  Result<std::uint32_t> dirty_block_count() const;
-
-  /// @brief Clear every dirty flag, and re-arm the integrator after a topology
-  ///        change (see @ref dirty_remesh_blocks).
-  ///
-  /// @warning Not synchronized; see @ref dirty_block_count.
-  /// @return OK, or the clear's failure on the device, which leaves the flags
-  ///         as they were.
-  [[nodiscard]] Status reset_dirty();
-
-  /// @brief The device buffer holding one flag per block slot, for a consumer
-  ///        that tests it on-device instead of taking @ref dirty_remesh_blocks
-  ///        back through the host.
-  ///
-  /// Published for the same reason `volume::VoxelHashMap::entries_buffer` is:
-  /// the alternative is a host round trip whose result is uploaded again, and
-  /// the tier that reads it is a workgroup that already has the block in hand.
-  /// The flag is per **block slot** (`BlockIndex::ptr / voxels_per_block`), one
-  /// `uint32_t` each, so a reader indexes it exactly as this tier does.
-  ///
-  /// A reader must apply the dilation itself. This buffer is the *changed* set;
-  /// the re-mesh set is that dilated into `{0,-1}^3` (see @ref
-  /// dirty_remesh_blocks for why), which on-device is the same relation read
-  /// from the other end -- a block re-meshes when any of its `+{0,1}^3`
-  /// neighbourhood is flagged.
-  ///
-  /// Refused on exactly what @ref dirty_remesh_blocks refuses on, and for the
-  /// same reason: a flag is keyed by block *slot*, and a slot means nothing
-  /// once a `remove()`/`clear()` has handed that index to a different block.
-  /// A consumer reading these on-device cannot make that check for itself --
-  /// the latch that records it lives here -- so this returns nothing rather
-  /// than something it will not vouch for (the 2026-08-04 rule). The one
-  /// condition it *cannot* answer alone is "against which grid", which is what
-  /// @ref dirty_epoch is for.
-  ///
-  /// @warning Nothing here is synchronized; see @ref dirty_block_count.
-  /// @return `VK_NULL_HANDLE` when tracking is off, nothing has been fused, or
-  ///         the flags went stale under a topology change.
-  VkBuffer dirty_flags_buffer() const noexcept;
-  /// @brief Block slots @ref dirty_flags_buffer addresses; 0 when it is null.
-  ///
-  /// Read it beside the handle and pass the pair on together. A capacity cached
-  /// across an @ref integrate that grew the grid names a buffer this object has
-  /// already replaced, and a consumer binding one against the other reads past
-  /// the end of the new one.
-  std::uint32_t dirty_flags_capacity() const noexcept {
-    return dirty_flags_buffer() != VK_NULL_HANDLE ? dirty_capacity_ : 0;
-  }
-  /// @brief The `volume::VoxelBlockGrid::topology_epoch` the flags were
-  ///        accumulated against; 0 when @ref dirty_flags_buffer is null.
-  ///
-  /// The token is drawn from a process-wide counter, so it names one grid's one
-  /// topology across the whole program -- which makes a single comparison
-  /// against the grid being consumed answer *both* "the right grid" and "no
-  /// blocks removed since". That is what lets a consumer in another tier make
-  /// the check @ref dirty_remesh_blocks makes here, without being handed this
-  /// object.
-  std::uint64_t dirty_epoch() const noexcept {
-    return dirty_flags_buffer() != VK_NULL_HANDLE ? dirty_epoch_ : 0;
-  }
-
-  /// @brief The blocks an incremental re-mesh would actually have to redo: the
-  ///        changed blocks dilated into the `-x/-y/-z` octant.
-  ///
-  /// Dirty is not the re-mesh set. Marching cubes reads a cell's eight corners
-  /// as `base + {0,1}^3`, so a block's cells reach one block in `+x/+y/+z` and
-  /// no further -- which inverts to: a block whose voxels changed invalidates
-  /// the mesh of every block in its `{0,-1}^3` octant, itself included. Skip
-  /// that and the surface goes stale exactly at block seams, under
-  /// `Status::ok`.
-  ///
-  /// One block deep, and **not** a function of `trunc_dist` -- that governs
-  /// which voxels are written (already reflected in the flags) and how far
-  /// `allocate_from_depth` dilates the band, neither of which widens the
-  /// meshing stencil. So the multiplier is bounded at 8x, and far below it in
-  /// practice because a dirty set is a contiguous surface patch rather than
-  /// scattered blocks: dilating a connected region adds roughly its perimeter.
-  ///
-  /// Returns the block **coordinates**, not a count: a count cannot drive the
-  /// incremental extract this exists for, and the coordinates are what the
-  /// walk already computes. Take `.size()` for the count.
-  ///
-  /// Takes the active set rather than compacting one, because every caller has
-  /// just compacted (the flags carry slots, not coordinates -- the active set
-  /// is what resolves them) and a second compaction inside here is a dispatch,
-  /// a fence wait and a full read-back that measured 0.15-0.26 ms at the
-  /// examples' defaults, on a call already O(active blocks).
-  ///
-  /// @param grid          The grid these flags were accumulated against -- the
-  ///                      one most recently passed to @ref integrate.
-  /// @param active        Its active set (@ref
-  ///                      VoxelHashMap::compact_active_blocks).
-  /// @param active_count  How many.
-  /// @return The coordinates to re-mesh, or @ref Status::Code::InvalidArgument
-  ///         if tracking is off, @p active is null with a non-zero count, @p
-  ///         grid is not the grid the flags were accumulated against, or blocks
-  ///         have been removed from it since (@ref
-  ///         VoxelBlockGrid::topology_epoch moved). That last one is a refusal
-  ///         rather than a stale answer on purpose: a removed block's geometry
-  ///         is stale and its flag cannot say so -- the slot went back to a
-  ///         LIFO heap and now means whichever block was allocated next -- so
-  ///         the honest answer is "re-mesh everything", which only the caller
-  ///         can do. @ref reset_dirty re-arms it.
-  /// @warning Not synchronized; see @ref dirty_block_count.
-  Result<std::vector<Vec3i>> dirty_remesh_blocks(
-      const volume::VoxelBlockGrid& grid, const volume::BlockIndex* active,
-      std::size_t active_count) const;
-
   /// @return `true` if this owns a live pipeline (`false` when moved-from).
   bool valid() const noexcept { return kernel_.valid(); }
 
  private:
   TsdfIntegrator() = default;
-
-  /// @brief Re-anchor the dirty flags on @p grid and size them to it.
-  ///
-  /// Called from @ref integrate only when tracking is on. Split out because
-  /// what it does is a contract (which grid do these flags describe, and is
-  /// that still true) rather than another line of buffer bookkeeping.
-  Status prepare_dirty_flags(const volume::VoxelBlockGrid& grid);
-  /// The flag array, read back whole.
-  Result<std::vector<std::uint32_t>> read_dirty_flags() const;
 
   // Borrowed (must outlive this).
   Device* device_ = nullptr;
@@ -464,25 +301,6 @@ class VR_TSDF_API TsdfIntegrator {
   // is fused (so every declared descriptor stays bound).
   Buffer color_cam_buf_;
   Buffer color_dummy_;
-  TsdfIntegratorConfig config_{};
-  // One flag per block slot, set by the kernel when it actually CHANGES a
-  // voxel. Sized to the grid's num_blocks and grown (contents carried forward,
-  // since a slot means the same block across a resize) when that grows; see
-  // dirty_block_count(). Never allocated when tracking is off.
-  Buffer dirty_blocks_;
-  std::uint32_t dirty_capacity_ = 0;
-  // What the flags describe: the grid most recently integrated, and its
-  // topology_epoch() at that moment. A flag is keyed by block SLOT, which only
-  // means anything relative to one grid and only while the block living there
-  // stays live -- so both halves are recorded and checked rather than left to
-  // the caller, who has no way to compare them. Borrowed for identity only:
-  // never dereferenced, so a dangling grid is compared, not read.
-  const volume::VoxelBlockGrid* dirty_grid_ = nullptr;
-  std::uint64_t dirty_epoch_ = 0;
-  // Latched when blocks were removed from dirty_grid_ while flags were live:
-  // the removed geometry is stale and no flag can say so. Cleared by
-  // reset_dirty().
-  bool dirty_topology_stale_ = false;
 };
 
 }  // namespace volumetric_kit::recon::tsdf

@@ -418,9 +418,8 @@ from about 19. Merge further only if the rows show the remaining gap.
     freed and allocated again each set, and `requested` keeps the band.
   - A kernel zeroes the listed blocks' attributes on the device, and the
     list is read back and removed by coordinate.
-  - Removing moves `topology_epoch`, which invalidates the dirty flags and
-    span tables; incremental extraction already falls back when that
-    happens.
+  - Removing moves `topology_epoch`, which invalidates the span table;
+    incremental extraction falls back to a full extract when that happens.
 
 ### P9 — Allocate only the band blocks a sample can weight
 

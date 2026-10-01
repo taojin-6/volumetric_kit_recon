@@ -172,7 +172,7 @@ int main() {
   CHECK(grid);
 
   vr::Result<vr::tsdf::TsdfIntegrator> integrator =
-      vr::tsdf::TsdfIntegrator::create(device.value(), allocator.value(), {});
+      vr::tsdf::TsdfIntegrator::create(device.value(), allocator.value());
   CHECK(integrator);
 
   vr::Result<vr::texture::ProjectiveTexturer> texturer =

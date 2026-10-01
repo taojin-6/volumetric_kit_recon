@@ -346,6 +346,11 @@ order. Change the decision, its entry there, and this list together.
   Every block slot carries stamps, ticks of one clock on the map, each
   written by the pass that knows its fact; the grid frees the blocks no
   allocation has asked for and no voxel has weighted in `max_age` ticks.
+- [**2026-10-01**](DECISIONS.md#2026-10-01--the-dirty-flags-become-the-changed-stamp-every-pass-that-writes-voxels-advances-the-maps-clock-and-stamps-what-it-changed-always-and-an-incremental-extract-keeps-the-tick-it-last-meshed-at-amends-the-2026-08-09-dirty-block-decision-and-the-stamps-entry-above) —
+  The dirty flags become the `changed` stamp: every pass that writes voxels
+  advances the map's clock and stamps what it changed, always, and an
+  incremental extract keeps the tick it last meshed at (amends the
+  2026-08-09 dirty-block decision and the stamps entry above).
 
 ## Provenance & salvage policy
 
@@ -629,7 +634,7 @@ arbitrary; it usually isn't.
   and exists only where the caller asked for `StageMetrics`, so pairing them
   would perturb the captured workload and leave uninstrumented calls anonymous.
   Naming is re-applied wherever a handle is replaced — a grid `resize`, a hash
-  rehash, a mesh-arena grow, a span-table or dirty-flag grow — since a name
+  rehash, a mesh-arena grow, a span-table grow — since a name
   lives on the handle. One change
   serves both profilers: Nsight renders the regions as trace ranges (and
   groups a capture by `VkPipeline`, which `KernelSetBuilder::add` therefore
@@ -705,8 +710,8 @@ arbitrary; it usually isn't.
   fuse's compaction (2026-09-30).
   `topology_epoch()` lives on the *map* — the object that frees a block
   index — and is a globally unique token re-drawn at `create` and at every
-  `remove`/`clear`, never at `resize`: a slot-keyed cache (tsdf's dirty flags,
-  mesh's spans) anchors on it, so no path may free an index without moving it
+  `remove`/`clear`, never at `resize`: a slot-keyed cache (mesh's spans)
+  anchors on it, so no path may free an index without moving it
   and no two grids may ever share a value. Host `diagnostics()` scans occupancy;
   `load_factor()` is the constant-time read a per-frame caller can afford (a
   host copy of the heap counter, read back by every round that moves it, which
@@ -721,18 +726,23 @@ arbitrary; it usually isn't.
   retry round) and on both compaction entry points (an `"active set"` row,
   breakdown-prefixed when the caller already has a stage open).
   Every block slot carries a `BlockStamp` (`hash_types.hpp`): ticks of the
-  map's clock (`tick()`, which the caller advances), in a device buffer
-  beside the heap (`stamps_buffer()`), each written by the pass that knows
-  its fact (2026-10-01). Every allocation kernel stamps `requested` on each
-  block it asks for, inserted or found, and the grid's block pass
-  (`stamp_blocks`) stamps `weighted` on each holding an observed voxel. The
-  init kernel zeroes the records, the delete kernel zeroes a freed slot's,
-  and `resize` copies them forward, the rehash stamping nothing. A consumer
-  compares ticks and resets nothing: `free_stale_blocks(max_age)` frees the
-  blocks whose newer stamp is that old, zeroing them with a kernel over the
-  pass's list, so the band the allocator still asks for stays, and
-  `rig_viewer` runs it every `--free-after` sets. The dirty
-  flags are next onto a stamp, `changed`, written by the integrator.
+  map's clock (`tick()`), in a device buffer beside the heap
+  (`stamps_buffer()`), each written by the pass that knows its fact
+  (2026-10-01). Every allocation kernel stamps `requested` on each block it
+  asks for, inserted or found, and the grid's block pass (`stamp_blocks`)
+  stamps `weighted` on each holding an observed voxel. Every pass that
+  writes voxels -- `TsdfIntegrator`, `MeshIntegrator`, the codec's
+  inverse -- advances the clock first and stamps `changed` on what it
+  changed, so the clock counts writes (one a set, for the rig) and a
+  reader's recorded tick is older than every later change, however the calls
+  interleave. The init kernel zeroes the records, the delete kernel zeroes a
+  freed slot's, and `resize` copies them forward, the rehash stamping
+  nothing. A consumer compares ticks and resets nothing:
+  `free_stale_blocks(max_age)` frees the blocks whose newer stamp is that
+  old, zeroing them with a kernel over the pass's list, so the band the
+  allocator still asks for stays, and `rig_viewer` runs it every
+  `--free-after` sets; `mesh`'s incremental extract re-meshes what changed
+  since the tick it last meshed at.
 
 - **`tsdf`** — `TsdfIntegrator` fuses a posed depth frame into a grid's
   `tsdf`/`weight`: projective `sdf = depth − Zc`, `±trunc_dist`, an
@@ -743,17 +753,17 @@ arbitrary; it usually isn't.
   ghost). An optional `ColorFrame` fuses colour through its own separate
   `ColorCameraParams`; a voxel's first colour observation assigns rather than
   blends, and `coverage_in_alpha` has a pixel with a zero high byte fuse no
-  colour, as one outside the image fuses none. Opt-in `track_dirty_blocks` reports which blocks a fuse *changed* —
-  as a host list (`dirty_remesh_blocks`) or, for an on-device consumer, as
-  `dirty_flags_buffer()` / `dirty_flags_capacity()` / `dirty_epoch()`, which go
-  null **together** on every staleness this tier can see and carry the grid's
-  topology token for the one it cannot (a `remove()` since the last fuse is
-  visible only to whoever holds the grid). Opt-in `StageMetrics*` reports an
+  colour, as one outside the image fuses none. Each call is one tick of the
+  map's clock, and stamps `changed` on every block whose `tsdf`, `weight` or
+  `color` it changed -- a store that leaves a different value, Dynamic's
+  clear included, so converged surface stamps nothing -- always, one lane a
+  subgroup reading the stamp before its atomic, which measured as nothing
+  (2026-10-01). Opt-in `StageMetrics*` reports an
   `"integrate"` row with both halves, over a `"  ..active set"` sub-row for the
   compaction dispatch it also makes. That compaction leaves its list on the
   device (`compact_active_blocks_on_device`), so a fuse is two submits, the
-  compaction's count the only thing read back; the frames are staged, and
-  the dirty flags are device-local. `integrate` also takes a list of frames
+  compaction's count the only thing read back; the frames are staged.
+  `integrate` also takes a list of frames
   (`FrameInput`, a `DepthInput` and its colour, so one list feeds both
   calls): one compaction and one submit for them all, each frame a dispatch
   of its own in order, so every voxel takes them in turn as integrating them
@@ -776,7 +786,7 @@ arbitrary; it usually isn't.
   at most `kMaxDispatchBinEntries` bin entries, each submitted on its own.
   The host reads back only the per-slot counts; the coordinates stay on the
   device. Ties break on the triangle index, so the same mesh writes the same
-  bytes.
+  bytes. Each call is a tick, and every block it writes is stamped `changed`.
 
 - **`mesh`** — `MarchingCubes` over a sparse `VoxelBlockGrid`, and only that
   (the dense analytic entry point was removed 2026-08-31; the prior engine
@@ -848,10 +858,10 @@ arbitrary; it usually isn't.
   because `v = 3t` no longer holds and a consumer sizing an arena cannot derive
   that from the buffers, and because the `texture` tier's several-view atlas
   chooses per triangle and so refuses a shared mesh (2026-09-28).
-  `extract_device_incremental` re-meshes only the blocks a fuse changed: it
-  takes the flags as an opaque `DirtyBlocks` (buffer + capacity + the
-  `topology_epoch` they were accumulated against, all three off the integrator
-  in one breath), dilates the *changed* set into the *re-mesh* set on-device
+  `extract_device_incremental` re-meshes only the blocks changed since its
+  last extract: it keeps the map's tick that extract ran at, reads each
+  block's `changed` stamp against it (2026-10-01), dilates the *changed* set
+  into the *re-mesh* set on-device
   over the 2×2×2 neighbourhood the gather already resolved, reuses each block's
   existing range where the new count fits and appends past the watermark where
   it does not, retiring what it leaves behind to zero-area triangles. It runs
@@ -861,7 +871,7 @@ arbitrary; it usually isn't.
   not less: that kernel owns its index run, so a dead triangle costs 12 bytes
   against the default kernel's 192, and its dead vertices need no writing at
   all. What it
-  may trust is one `{watermark, epoch, serial}` struct, cleared at the top of
+  may trust is one `{watermark, epoch, serial, tick}` struct, cleared at the top of
   **both** extract paths and re-established only on the publishing return, so
   no failure leaves it describing geometry that is
   gone; the anchor is compared *above* the call that re-anchors it, or it
@@ -1158,12 +1168,9 @@ reader decodes into; `CapturedFrame` is its view), never borrowed: the empty
 poll that ends a replay is a poll. `fuse_replica`
 runs the spine on a posed
 Replica-SLAM RGB-D sequence and writes a PLY; `--incremental` drives the
-dirty-only extract and **owns the dirty flags**, resetting them immediately
-after the extract that consumed them (the fuse kernel only ORs, so anything
-looser and every block reads dirty within a few frames — which is how the first
-cut's headline numbers ended up being the 100%-dirty worst case). It implies
-`--device-extract` and is refused beside `--dirty-every`, which wants the same
-flags on a different cadence. Behind the off-by-default
+changed-only extract and implies `--device-extract`, and `--dirty-every`
+reports the changed and re-mesh fractions over windows of its own, each
+keeping its own tick, so the two run together. Behind the off-by-default
 `VR_BUILD_VIEWER`: `fuse_render` writes a headless colour PNG (seam A — it
 builds two devices by design), and `fuse_viewer` opens a live window on one
 shared `VkDevice`, fusing on a background thread, drawing recon's buffers
@@ -1199,7 +1206,8 @@ example's story; the stream, its report and the sweep are
 
 **Next.** **Incremental mesh extraction has landed, all three stages** —
 `MarchingCubes::extract_device_incremental`, over the span table of the
-2026-08-11 table decision and the dirty flags of the 2026-08-09 one; read both,
+2026-08-11 table decision and the `changed` stamps of the second 2026-10-01
+one (which replaced the 2026-08-09 dirty flags); read both,
 plus the two 2026-08-11 dispatch entries (the second reverses the first's
 `share_vertices` clause), before touching it. It runs under `share_vertices`,
 which is the configuration the memory-bound consumer wants — unsharing to avoid

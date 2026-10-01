@@ -356,7 +356,7 @@ vr::Status run(const Options& opt) {
       vol::VoxelBlockGrid volume,
       vr_example::create_fusion_grid(device, allocator, opt.voxel, opt.trunc));
   VR_ASSIGN(tsdf::TsdfIntegrator integrator,
-            tsdf::TsdfIntegrator::create(device, allocator, {}));
+            tsdf::TsdfIntegrator::create(device, allocator));
   VR_ASSIGN(mesh::MarchingCubes extractor,
             mesh::MarchingCubes::create(device, allocator, {}));
   // The source says which frames it hands out: raw ones (--gpu) are prepared
