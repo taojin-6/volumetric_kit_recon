@@ -6,7 +6,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
-#include <unordered_set>
 #include <vector>
 
 #include "volumetric_kit/recon/core/command_batch.hpp"
@@ -46,30 +45,11 @@ struct PushConstants {
   std::uint32_t mode;       // tsdf::IntegrationMode (0 = classic, 1 = dynamic).
   std::uint32_t has_color;  // 0 = depth only; 1 = fuse the color frame.
   std::uint32_t has_color_attr;  // 1 = binding 6 is the grid's color attribute.
-  std::uint32_t track_dirty;  // 1 = binding 8 is a real per-block flag array.
+  std::uint32_t tick;  // the map's tick, which a changed block is stamped with
   // 1 = a colour word with a zero high byte is no colour
   // (ColorFrame::coverage_in_alpha).
   std::uint32_t coverage_in_alpha;
 };
-
-// Pack a block coordinate into one 64-bit key, 21 bits per axis.
-//
-// UNSIGNED shifts, and that is not style: block coordinates are routinely
-// negative (the world origin sits inside the scan), and shifting a negative
-// signed value is undefined behaviour -- which every build leg happily compiled
-// and only the sanitizer leg caught.
-//
-// Exact rather than a hash: masking to 21 bits and OR-ing gives a bijection for
-// |coord| < 2^20, which every real grid is far inside (a 5 m walk at 5 mm
-// voxels spans ~125 blocks). An XOR-of-shifts could alias two distinct
-// coordinates onto one key and silently mis-report the dilated set.
-std::uint64_t block_key(const Vec3i& c) {
-  constexpr std::uint64_t kMask = (std::uint64_t{1} << 21) - 1;
-  const auto ux = static_cast<std::uint64_t>(static_cast<std::uint32_t>(c.x));
-  const auto uy = static_cast<std::uint64_t>(static_cast<std::uint32_t>(c.y));
-  const auto uz = static_cast<std::uint64_t>(static_cast<std::uint32_t>(c.z));
-  return ((ux & kMask) << 42) | ((uy & kMask) << 21) | (uz & kMask);
-}
 
 // Pin the scalar-block-layout ABI: this struct must stay byte-identical to the
 // `PushConstants` block in tsdf_common.glsl. VoxelGridParams is 32 all-scalar
@@ -88,7 +68,7 @@ static_assert(offsetof(PushConstants, has_color) == 44,
               "PushConstants layout drift");
 static_assert(offsetof(PushConstants, has_color_attr) == 48,
               "PushConstants layout drift");
-static_assert(offsetof(PushConstants, track_dirty) == 52,
+static_assert(offsetof(PushConstants, tick) == 52,
               "PushConstants layout drift");
 static_assert(offsetof(PushConstants, coverage_in_alpha) == 56,
               "PushConstants layout drift");
@@ -107,22 +87,21 @@ std::uint32_t group_count(std::uint32_t items) {
 
 }  // namespace
 
-Result<TsdfIntegrator> TsdfIntegrator::create(
-    Device& device, Allocator& allocator, const TsdfIntegratorConfig& config) {
+Result<TsdfIntegrator> TsdfIntegrator::create(Device& device,
+                                              Allocator& allocator) {
   TsdfIntegrator integ;
   integ.device_ = &device;
   integ.allocator_ = &allocator;
-  integ.config_ = config;
 
   // The integrate kernel: 9 storage-buffer bindings (0 tsdf, 1 weight,
   // 2 active, 3 depth, 4 depth-camera, 5 color image, 6 color attribute,
-  // 7 color camera, 8 dirty-block flags) + the PushConstants range. This count
-  // is the single source of truth for both the layout (KernelSetBuilder::add
-  // creates bindings 0..N-1) and the auto-sized pool -- the deliberate cost of
-  // the "explicit, not reflected" decision -- so it and the list above have to
-  // move together with the shader.
-  // KernelSetBuilder builds its layout + pipeline and
-  // allocates its set from a shared pool (sized to the exact descriptor total).
+  // 7 color camera, 8 the map's block stamps) + the PushConstants range. This
+  // count is the single source of truth for both the layout
+  // (KernelSetBuilder::add creates bindings 0..N-1) and the auto-sized pool --
+  // the deliberate cost of the "explicit, not reflected" decision -- so it and
+  // the list above have to move together with the shader. KernelSetBuilder
+  // builds its layout + pipeline and allocates its set from a shared pool
+  // (sized to the exact descriptor total).
   VkPushConstantRange push_range{};
   push_range.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
   push_range.offset = 0;
@@ -148,7 +127,7 @@ Result<TsdfIntegrator> TsdfIntegrator::create(
 
   // The camera params are fixed-size, so persist the SSBOs and rewrite them
   // inline in each integrate()'s batch -- not a per-call allocation -- and a
-  // 1-element dummy for the colour and dirty-flag slots a call leaves unused.
+  // 1-element dummy for the colour slots a call leaves unused.
   // All of these are device-local, as every buffer the kernel reads is (the
   // 2026-09-28 residency decision). integrate() writes every binding of every
   // set it dispatches.
@@ -319,9 +298,10 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid,
         "2^32");
   }
 
-  if (config_.track_dirty_blocks) {
-    VR_TRY(prepare_dirty_flags(grid));
-  }
+  // The call is one tick: every block it changes is stamped with the new one,
+  // so a reader that recorded the tick before sees the change as newer.
+  grid.map().advance_tick();
+  const std::uint32_t tick = grid.map().tick();
   // A set and a device span a frame.
   const auto count = static_cast<std::uint32_t>(live.size());
   VR_TRY(frame_sets_.reserve(*device_, kernel_, count));
@@ -377,12 +357,8 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid,
                                  : color_dummy_.handle(),
                              0, VK_WHOLE_SIZE);
     set.write_storage_buffer(7, color_cam_buf_.handle(), 0, VK_WHOLE_SIZE);
-    // The dirty-flag slot: the real array when tracking, else the dummy, which
-    // the kernel never indexes (pc.track_dirty is 0).
-    set.write_storage_buffer(8,
-                             config_.track_dirty_blocks ? dirty_blocks_.handle()
-                                                        : color_dummy_.handle(),
-                             0, VK_WHOLE_SIZE);
+    set.write_storage_buffer(8, grid.map().stamps_buffer().handle(), 0,
+                             VK_WHOLE_SIZE);
     std::uint32_t has_color = 0;
     if (frame.color != nullptr) {
       VR_ASSIGN(const VkBuffer color_handle,
@@ -408,232 +384,13 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid,
         static_cast<std::uint32_t>(mode),
         has_color,
         has_color_attr,
-        config_.track_dirty_blocks ? 1u : 0u,
+        tick,
         (frame.color != nullptr && frame.color->coverage_in_alpha) ? 1u : 0u};
     VR_TRY(batch.dispatch(kernel_, set, &push, sizeof(push),
                           group_count(static_cast<std::uint32_t>(threads64)),
                           max_workgroup_count_x_, &stage));
   }
   return batch.submit();
-}
-
-VkBuffer TsdfIntegrator::dirty_flags_buffer() const noexcept {
-  // The same three refusals dirty_remesh_blocks makes, minus the one that needs
-  // a grid to compare against -- dirty_epoch() carries that to the consumer,
-  // and the token's global uniqueness makes it the same test.
-  //
-  // The buffer alone is not the question. A flag is keyed by block SLOT, so
-  // after a remove()/clear() the slot a flag names has been handed to a
-  // different block and the flags describe changes to geometry that is gone;
-  // dirty_topology_stale_ is latched exactly there and only reset_dirty()
-  // clears it. Returning the handle anyway made an on-device consumer the one
-  // path that could read what the host path refuses -- the same flags, the same
-  // staleness, no check.
-  if (dirty_grid_ == nullptr || dirty_topology_stale_ ||
-      !dirty_blocks_.valid()) {
-    return VK_NULL_HANDLE;
-  }
-  return dirty_blocks_.handle();
-}
-
-Status TsdfIntegrator::prepare_dirty_flags(const VoxelBlockGrid& grid) {
-  // Re-anchor the flags on the grid this call is about to fuse.
-  //
-  // A flag is keyed by block SLOT, which means something only relative to one
-  // grid, and only while the block living in that slot stays live. Neither is
-  // knowable from a slot, and neither is knowable to the caller either -- so
-  // both are recorded here and checked, rather than stated as an obligation the
-  // caller has no way to honour.
-  if (dirty_grid_ != &grid) {
-    // A different grid (or the first integrate since a reset). The slots carry
-    // nothing about it, so start clean rather than OR-ing one grid's flags on
-    // top of another's -- which is what silently happened while one integrator
-    // driving several grids was untracked. Reset rather than refuse: the flags
-    // this call is about to set ARE valid for `grid`, and refusing would bind
-    // an integrator to one grid for its whole life. Un-anchored, they are
-    // clear already: reset_dirty() clears before it un-anchors, and a fresh
-    // array is zeroed below.
-    if (dirty_grid_ != nullptr) {
-      VR_TRY(reset_dirty());
-    }
-    dirty_grid_ = &grid;
-    dirty_epoch_ = grid.topology_epoch();
-  } else if (grid.topology_epoch() != dirty_epoch_) {
-    // Same grid, but blocks were removed since the last fuse. What the flags
-    // hold is still true; what they cannot express is the geometry that went
-    // away with those blocks, whose slots are back on a LIFO heap and now mean
-    // whichever block was allocated next. dirty_remesh_blocks() refuses until
-    // reset_dirty() re-arms it.
-    //
-    // This branch also catches what the pointer above cannot: a grid destroyed
-    // between fuses and a new one built at the same address. The token is drawn
-    // from a process-wide counter (volume::VoxelHashMap::topology_epoch), so
-    // the newcomer's never equals the dead grid's and the mismatch lands here
-    // -- a refusal rather than one grid's flags read as another's.
-    dirty_topology_stale_ = true;
-    dirty_epoch_ = grid.topology_epoch();
-  }
-
-  const auto blocks = static_cast<std::uint32_t>(grid.grid().num_blocks);
-  if (dirty_blocks_.valid() && dirty_capacity_ >= blocks) {
-    return {};
-  }
-
-  const VkDeviceSize bytes =
-      static_cast<VkDeviceSize>(blocks) * sizeof(std::uint32_t);
-  VR_TRY(check_storage_buffer_range(
-      "TsdfIntegrator::integrate: the dirty-block flags", bytes,
-      max_storage_buffer_range_));
-  // Device-local: the kernel ORs a flag in per changed voxel, an atomic that
-  // would cross PCIe on a discrete GPU from host-visible memory.
-  VR_ASSIGN(Buffer grown, device_storage_buffer(*allocator_, bytes));
-
-  // Carry the existing flags forward, and zero only the new tail -- mirroring
-  // VoxelBlockGrid::resize, which grows the attribute arrays the same way and
-  // for the same reason. The grow is driven by VoxelHashMap::resize, which
-  // PRESERVES each block's index, so a slot means the same block on both sides
-  // of it. Zeroing the whole array instead would forget every block fused since
-  // the last reset_dirty() -- silently, and precisely on the frames a growing
-  // scan brings in the most new surface, which are the frames that trigger the
-  // grow. Its own batch, since the old array must outlive the copy.
-  const VkDeviceSize old_bytes =
-      dirty_blocks_.valid()
-          ? VkDeviceSize(dirty_capacity_) * sizeof(std::uint32_t)
-          : VkDeviceSize{0};
-  CommandBatch batch(*device_, *allocator_);
-  if (old_bytes > 0) {
-    VR_TRY(batch.copy(dirty_blocks_, 0, grown, 0, old_bytes));
-  }
-  VR_TRY(batch.fill(grown, old_bytes, bytes - old_bytes, 0u));
-  VR_TRY(batch.submit());
-  dirty_blocks_ = std::move(grown);
-  dirty_capacity_ = blocks;
-  // A fresh handle each grow, and a name lives on the handle -- the same reason
-  // VoxelBlockGrid::resize renames its attribute arrays, which this grow
-  // mirrors.
-  if (device_ != nullptr) {
-    device_->set_object_name(VK_OBJECT_TYPE_BUFFER,
-                             debug_object_handle(dirty_blocks_.handle()),
-                             "tsdf.dirty_blocks");
-  }
-  return {};
-}
-
-Result<std::vector<std::uint32_t>> TsdfIntegrator::read_dirty_flags() const {
-  std::vector<std::uint32_t> flags(dirty_capacity_);
-  CommandBatch batch(*device_, *allocator_);
-  VR_TRY(batch.readback(dirty_blocks_, 0,
-                        VkDeviceSize(dirty_capacity_) * sizeof(std::uint32_t),
-                        flags.data()));
-  VR_TRY(batch.submit());
-  return flags;
-}
-
-Result<std::uint32_t> TsdfIntegrator::dirty_block_count() const {
-  // TODO(tsdf): count on the device, on demand, if a caller shows this
-  // readback. A counter in the fuse kernel cost every tracked fuse 0.03 ms
-  // (room0, M5 Max).
-  if (!dirty_blocks_.valid()) return std::uint32_t{0};
-  VR_ASSIGN(const std::vector<std::uint32_t> flags, read_dirty_flags());
-  std::uint32_t count = 0;
-  for (const std::uint32_t f : flags) {
-    if (f != 0u) ++count;
-  }
-  return count;
-}
-
-Result<std::vector<Vec3i>> TsdfIntegrator::dirty_remesh_blocks(
-    const VoxelBlockGrid& grid, const volume::BlockIndex* active,
-    std::size_t active_count) const {
-  if (!config_.track_dirty_blocks) {
-    return Status::invalid_argument(
-        "TsdfIntegrator::dirty_remesh_blocks: dirty-block tracking is off; "
-        "build the integrator with TsdfIntegratorConfig::track_dirty_blocks");
-  }
-  if (active == nullptr && active_count != 0) {
-    return Status::invalid_argument(
-        "TsdfIntegrator::dirty_remesh_blocks: active is null");
-  }
-  // Nothing accumulated: before the first integrate, after a reset_dirty(), or
-  // on a moved-from integrator (whose scalar capacity survives the move while
-  // the buffer does not).
-  if (dirty_grid_ == nullptr || !dirty_blocks_.valid()) {
-    return std::vector<Vec3i>{};
-  }
-  if (dirty_grid_ != &grid) {
-    return Status::invalid_argument(
-        "TsdfIntegrator::dirty_remesh_blocks: these flags were accumulated "
-        "against a different grid; a flag is keyed by block slot, which means "
-        "nothing across grids");
-  }
-  if (dirty_topology_stale_ || grid.topology_epoch() != dirty_epoch_) {
-    return Status::invalid_argument(
-        "TsdfIntegrator::dirty_remesh_blocks: blocks were removed from the "
-        "grid since these flags were accumulated, so the dirty set cannot "
-        "describe the geometry that went away; re-mesh the whole volume, then "
-        "reset_dirty()");
-  }
-  const auto vpb = static_cast<std::uint32_t>(grid.grid().voxels_per_block);
-  if (vpb == 0) {
-    return Status::invalid_argument(
-        "TsdfIntegrator::dirty_remesh_blocks: voxels_per_block is 0");
-  }
-  VR_ASSIGN(const std::vector<std::uint32_t> flags, read_dirty_flags());
-
-  // The changed blocks, by coordinate. Sized to the DIRTY set rather than the
-  // active set: the walk below tests candidates against this, so it is the only
-  // table needed and it is the small one (a dirty set is a surface patch, an
-  // active set is the whole scan).
-  std::unordered_set<std::uint64_t> dirty_key;
-  for (std::size_t i = 0; i < active_count; ++i) {
-    const auto slot = static_cast<std::uint32_t>(active[i].ptr) / vpb;
-    if (slot < dirty_capacity_ && flags[slot] != 0u) {
-      dirty_key.insert(block_key(active[i].coord));
-    }
-  }
-  std::vector<Vec3i> remesh;
-  if (dirty_key.empty()) return remesh;
-
-  // X's mesh reads corners in X + {0,1}^3, so X must be redone iff any block in
-  // that octant changed. Walking the ACTIVE set and testing its octant (rather
-  // than walking the dirty set and emitting its -{0,1}^3 neighbours) is what
-  // makes the existence filter structural -- only blocks that exist are ever
-  // considered, so a never-allocated neighbour cannot enter the result -- and
-  // it emits each block at most once, so no dedup pass is needed either.
-  for (std::size_t i = 0; i < active_count; ++i) {
-    const Vec3i& c = active[i].coord;
-    bool hit = false;
-    for (int dz = 0; dz <= 1 && !hit; ++dz) {
-      for (int dy = 0; dy <= 1 && !hit; ++dy) {
-        for (int dx = 0; dx <= 1 && !hit; ++dx) {
-          hit = dirty_key.count(
-                    block_key(Vec3i{c.x + dx, c.y + dy, c.z + dz})) != 0;
-        }
-      }
-    }
-    if (hit) remesh.push_back(c);
-  }
-  return remesh;
-}
-
-Status TsdfIntegrator::reset_dirty() {
-  // Cleared first, so a failed clear leaves the flags anchored to what they
-  // still describe, rather than un-anchored over bits that were never cleared.
-  if (dirty_blocks_.valid()) {
-    CommandBatch batch(*device_, *allocator_);
-    VR_TRY(batch.fill(dirty_blocks_, 0,
-                      VkDeviceSize(dirty_capacity_) * sizeof(std::uint32_t),
-                      0u));
-    VR_TRY(batch.submit());
-  }
-  dirty_topology_stale_ = false;
-  // Un-anchor: the next integrate() re-anchors on whatever grid it is handed.
-  // Done here rather than by re-reading the grid because this holds the grid
-  // only for identity and must never dereference it -- a caller may well have
-  // destroyed it.
-  dirty_grid_ = nullptr;
-  dirty_epoch_ = 0;
-  return {};
 }
 
 }  // namespace volumetric_kit::recon::tsdf

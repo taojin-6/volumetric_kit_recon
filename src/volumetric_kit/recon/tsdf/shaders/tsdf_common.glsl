@@ -108,6 +108,6 @@ layout(push_constant, scalar) uniform PushConstants {
   uint mode;
   uint has_color;       // 0 = depth only; 1 = also fuse the color frame
   uint has_color_attr;  // 1 = binding 6 is the grid's color attribute (clearable)
-  uint track_dirty;     // 1 = binding 8 is a real per-block flag array to mark
+  uint tick;            // the map's tick, which a changed block is stamped with
   uint coverage_in_alpha;  // 1 = a colour word with a zero high byte is no colour
 } pc;

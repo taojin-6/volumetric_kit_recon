@@ -15,8 +15,7 @@
 //
 // Keyed by slot because a slot is a dense index into a fixed table where a coord
 // would need a device-side hash. A slot only means something against a
-// particular grid and topology epoch -- the host anchors it, exactly as the tsdf
-// tier anchors its dirty flags.
+// particular grid and topology epoch, which the host anchors it to.
 //
 // DECLARED ONCE, for both kernels, and that is the point of the file rather
 // than a tidiness preference: four same-typed fields make every permutation 16

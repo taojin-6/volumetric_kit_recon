@@ -419,12 +419,25 @@ int main() {
   CHECK(tet_sign_checked < tet_observed);  // the sharp edges are exercised
 
   // ---- 2. Same mesh, same bytes ------------------------------------------
+  // And every block written stamped changed, at a tick of the call's own.
   const std::map<Coord, std::vector<float>> tet_bytes = by_coord(ctx, grid);
-  CHECK(integ
-            .integrate(grid, tet.v.data(), tet.vertex_count(), tet.i.data(),
-                       tet.triangle_count(), kSigned)
-            .ok());
+  const std::uint32_t tick_before = grid.map().tick();
+  vr::Result<ts::MeshIntegrateStats> again =
+      integ.integrate(grid, tet.v.data(), tet.vertex_count(), tet.i.data(),
+                      tet.triangle_count(), kSigned);
+  CHECK(again.ok());
   CHECK(by_coord(ctx, grid) == tet_bytes);
+  CHECK(grid.map().tick() == tick_before + 1);
+  {
+    vr::Result<std::vector<vol::BlockStamp>> st =
+        grid.map().read_block_stamps();
+    CHECK(st.ok());
+    std::uint32_t stamped = 0;
+    for (const vol::BlockStamp& s : st.value()) {
+      stamped += s.changed == grid.map().tick() ? 1u : 0u;
+    }
+    CHECK(stamped == again.value().blocks);
+  }
 
   // ---- 3. A soup writes the same bytes as its indexed mesh -------------
   // The same triangles in the same order at the same positions: nothing

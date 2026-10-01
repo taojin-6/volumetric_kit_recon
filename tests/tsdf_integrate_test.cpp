@@ -17,6 +17,7 @@
 #include "grid_readback.hpp"
 #include "volumetric_kit/recon/core/allocator.hpp"
 #include "volumetric_kit/recon/core/color_space.hpp"
+#include "volumetric_kit/recon/core/command_batch.hpp"
 #include "volumetric_kit/recon/core/device.hpp"
 #include "volumetric_kit/recon/core/instance.hpp"
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
@@ -65,31 +66,21 @@ vr::ColorCameraParams color_cam_of(const vr::DepthCameraParams& d) {
                                d.width, d.height, d.cam_to_world};
 }
 
-// --- Dirty-block tracking --------------------------------------------------
+// --- Changed stamps -------------------------------------------------------
 //
 // Its own fixture, because the geometry decides whether the assertions can fail
-// at all. A dirty set that is a contiguous 1-D run cannot tell a correct
-// dilation from a broken one -- its -z neighbours are already in the set, so
-// dropping the dilation, dropping the existence filter, inverting the octant
-// and deleting the feature outright all agree.
+// at all: a 2x2x2 cube of blocks straddling the band, plus one isolated block
+// that no ray reaches.
 //
-// So: a 2x2x2 cube of blocks straddling the band, plus one isolated block that
-// no ray reaches.
-//
-//   (0..1, 0..1, 13)  the band       -- written        -> dirty   = 4
-//   (0..1, 0..1, 12)  ahead of it    -- never written  -> remesh  = 8
-//   (5, 5, 5)         off-camera     -- never written  -> active  = 9
-//
-// Every quantity differs from every other, which is what gives the equalities
-// teeth: dropping the dilation gives 4, dropping the existence filter gives 18,
-// inverting the octant to +x/+y/+z gives 4, and returning the active count
-// gives 9.
+//   (0..1, 0..1, 13)  the band       -- written       -> stamped changed
+//   (0..1, 0..1, 12)  ahead of it    -- never written
+//   (5, 5, 5)         off-camera     -- never written
 //
 // Dynamic mode throughout, deliberately. In classic mode the free-space cone
 // ahead of the surface is fused too (that is the point of classic), so the
-// first fuse legitimately marks the bz=12 blocks as well and the fixture loses
-// the separation it is built on.
-int dirty_blocks_case(vr::Device& device, vr::Allocator& allocator) {
+// first fuse legitimately changes the bz=12 blocks as well and the fixture
+// loses the separation it is built on.
+int changed_stamps_case(vr::Device& device, vr::Allocator& allocator) {
   vol::VoxelGridParams gp{};
   gp.voxel_size = 0.005f;
   gp.block_size = 8;
@@ -123,9 +114,6 @@ int dirty_blocks_case(vr::Device& device, vr::Allocator& allocator) {
   CHECK(a.map()
             .allocate(blocks.data(), static_cast<std::uint32_t>(blocks.size()))
             .value() == 0);
-  vr::Result<std::vector<vol::BlockIndex>> active_a =
-      a.map().compact_active_blocks();
-  CHECK(active_a.ok() && active_a.value().size() == 9);
 
   vr::DepthCameraParams cam{};
   cam.fx = 525.0f;
@@ -141,137 +129,105 @@ int dirty_blocks_case(vr::Device& device, vr::Allocator& allocator) {
   const std::vector<float> depth_band(px, 0.54f);  // band lands in bz = 13
   const std::vector<float> depth_near(px, 0.50f);  // band lands in bz = 12
   const std::vector<float> depth_far(px, 0.60f);   // both recede -> clear
-  const std::vector<float> depth_none(px, 0.0f);   // all invalid -> no writes
 
-  // --- Tracking is opt-in, and off costs nothing ---------------------------
-  //
-  // The default integrator must not allocate a flag array or store a flag, and
-  // must say so rather than answer 0 as though nothing were dirty.
-  {
-    vr::Result<tsdf::TsdfIntegrator> untracked =
-        tsdf::TsdfIntegrator::create(device, allocator);
-    CHECK(untracked.ok());
-    CHECK(untracked.value()
-              .integrate(a, depth_band.data(), cam, 5.0f,
-                         tsdf::IntegrationMode::Dynamic)
-              .ok());
-    CHECK(untracked.value().dirty_block_count().value() == 0);
-    CHECK(!untracked.value()
-               .dirty_remesh_blocks(a, active_a.value().data(),
-                                    active_a.value().size())
-               .ok());
-  }
-  // That fuse wrote real values into `a`, so start the tracked cases from a
-  // clean grid rather than from whatever it left behind.
-  CHECK(a.clear().ok());
-  CHECK(a.map()
-            .allocate(blocks.data(), static_cast<std::uint32_t>(blocks.size()))
-            .value() == 0);
-  active_a = a.map().compact_active_blocks();
-  CHECK(active_a.ok() && active_a.value().size() == 9);
-
-  tsdf::TsdfIntegratorConfig cfg{};
-  cfg.track_dirty_blocks = true;
   vr::Result<tsdf::TsdfIntegrator> integ_result =
-      tsdf::TsdfIntegrator::create(device, allocator, cfg);
+      tsdf::TsdfIntegrator::create(device, allocator);
   CHECK(integ_result.ok());
   tsdf::TsdfIntegrator integ = std::move(integ_result).value();
+  const auto fuse = [&](vol::VoxelBlockGrid& g, const std::vector<float>& d,
+                        float max_weight) {
+    return integ.integrate(g, d.data(), cam, max_weight,
+                           tsdf::IntegrationMode::Dynamic);
+  };
+  // The z of every active block of `g` stamped changed after `since`, or -1
+  // for a failed read.
+  const auto changed_z = [](vol::VoxelBlockGrid& g, std::uint32_t since) {
+    std::vector<int> z;
+    vr::Result<std::vector<vol::BlockIndex>> active =
+        g.map().compact_active_blocks();
+    vr::Result<std::vector<vol::BlockStamp>> st = g.map().read_block_stamps();
+    if (!active.ok() || !st.ok()) return std::vector<int>{-1};
+    for (const vol::BlockIndex& b : active.value()) {
+      const vol::BlockStamp& s =
+          st.value()[static_cast<std::uint32_t>(b.ptr) / 512u];
+      if (vol::tick_after(s.changed, since)) {
+        z.push_back(b.coord.z);
+      }
+    }
+    std::sort(z.begin(), z.end());
+    return z;
+  };
 
-  CHECK(integ.dirty_block_count().value() == 0);
+  // --- A fuse is a tick, and stamps what it changed ------------------------
+  const std::uint32_t t0 = a.map().tick();
+  CHECK(fuse(a, depth_band, 5.0f).ok());
+  CHECK(a.map().tick() == t0 + 1);
+  CHECK(changed_z(a, t0) == std::vector<int>(4, 13));
 
-  // --- What was written, and what that means for a re-mesh -----------------
-  CHECK(integ
-            .integrate(a, depth_band.data(), cam, 5.0f,
-                       tsdf::IntegrationMode::Dynamic)
-            .ok());
-  CHECK(integ.dirty_block_count().value() == 4);
-
-  vr::Result<std::vector<vr::Vec3i>> remesh = integ.dirty_remesh_blocks(
-      a, active_a.value().data(), active_a.value().size());
-  CHECK(remesh.ok());
-  CHECK(remesh.value().size() == 8);
-  // And it is the cube, not any 8 of the 9: the isolated block is the one that
-  // must not appear.
-  for (const vr::Vec3i& c : remesh.value()) {
-    CHECK(!(c.x == 5 && c.y == 5 && c.z == 5));
-  }
-
-  // --- Flags ACCUMULATE across fuses ---------------------------------------
+  // --- A reader's tick sees every fuse since -------------------------------
   //
-  // The header promises this (a consumer fuses several frames per remesh), and
-  // nothing pinned it: an integrator that zeroed the array at the top of every
-  // integrate -- per-frame instead of cumulative, the one semantic a consumer
-  // must not get wrong -- passed every other assertion here.
-  CHECK(integ
-            .integrate(a, depth_near.data(), cam, 5.0f,
-                       tsdf::IntegrationMode::Dynamic)
-            .ok());
-  CHECK(integ.dirty_block_count().value() == 8);
+  // Nothing accumulates and nothing is reset: a reader that kept t0 sees both
+  // fuses, one that kept t1 only the second.
+  const std::uint32_t t1 = a.map().tick();
+  CHECK(fuse(a, depth_near, 5.0f).ok());
+  CHECK(changed_z(a, t0).size() == 8);
+  const std::vector<int> since_t1 = changed_z(a, t1);
+  CHECK(std::count(since_t1.begin(), since_t1.end(), 12) == 4);
 
-  // --- A map grow carries the flags forward --------------------------------
-  //
-  // VoxelHashMap::resize preserves each block's index, so a slot means the same
-  // block on both sides of the grow and the flags stay true. Reallocating and
-  // zeroing instead loses every block fused since the last reset -- silently,
-  // and on exactly the frames a growing scan brings in the most new surface.
-  // The depth here is all-invalid, so the fuse itself writes nothing and the
-  // count that survives is entirely the carried-forward one.
+  // --- A map grow keeps them -----------------------------------------------
   CHECK(a.resize(gp.num_buckets * 2).ok());
-  CHECK(integ
-            .integrate(a, depth_none.data(), cam, 5.0f,
-                       tsdf::IntegrationMode::Dynamic)
-            .ok());
-  CHECK(integ.dirty_block_count().value() == 8);
+  CHECK(changed_z(a, t0).size() == 8);
 
-  // --- The dynamic clear marks too -----------------------------------------
+  // --- The dynamic clear stamps too ----------------------------------------
   //
   // A receded surface that leaves a stale mesh behind is the whole reason
-  // dynamic mode exists, so the clear has to report itself. Deleting that one
-  // mark left the entire suite green before this case existed. The band at
-  // 0.60 m falls in blocks nobody allocated, so every flag below comes from the
-  // clear.
-  CHECK(integ.reset_dirty().ok());
-  CHECK(integ.dirty_block_count().value() == 0);
-  CHECK(integ
-            .integrate(a, depth_far.data(), cam, 5.0f,
-                       tsdf::IntegrationMode::Dynamic)
-            .ok());
-  CHECK(integ.dirty_block_count().value() == 8);
+  // dynamic mode exists, so the clear has to report itself. The band at
+  // 0.60 m falls in blocks nobody allocated, so every stamp below is the
+  // clear's.
+  const std::uint32_t t2 = a.map().tick();
+  CHECK(fuse(a, depth_far, 5.0f).ok());
+  CHECK(changed_z(a, t2).size() == 8);
 
-  // --- A flag means the field CHANGED, not that a store happened -----------
+  // --- A stamp means the field CHANGED, not that a store happened ----------
   //
   // max_weight 0 pins the fused weight at 0 forever, which makes the stored
   // tsdf a pure function of THIS frame: re-fusing an identical frame recomputes
   // bit-identical numbers. That is the exact case a scan revisiting converged
-  // surface lives in, and a flag set by the act of storing reports every block
-  // again, every frame, for as long as the camera can see it.
-  CHECK(integ.reset_dirty().ok());
-  CHECK(integ
-            .integrate(a, depth_band.data(), cam, 0.0f,
-                       tsdf::IntegrationMode::Dynamic)
-            .ok());
-  CHECK(integ.dirty_block_count().value() == 4);
-  CHECK(integ.reset_dirty().ok());
-  CHECK(integ
-            .integrate(a, depth_band.data(), cam, 0.0f,
-                       tsdf::IntegrationMode::Dynamic)
-            .ok());
-  CHECK(integ.dirty_block_count().value() == 0);
+  // surface lives in, and a stamp set by the act of storing reports every
+  // block again, every frame, for as long as the camera can see it.
+  const std::uint32_t t3 = a.map().tick();
+  CHECK(fuse(a, depth_band, 0.0f).ok());
+  CHECK(changed_z(a, t3) == std::vector<int>(4, 13));
+  const std::uint32_t t4 = a.map().tick();
+  CHECK(fuse(a, depth_band, 0.0f).ok());
+  CHECK(a.map().tick() == t4 + 1);
+  CHECK(changed_z(a, t4).empty());
 
-  // --- One integrator, a second grid ---------------------------------------
+  // --- A stamp from before the clock wrapped is overwritten ----------------
   //
-  // A flag is keyed by block SLOT, and a slot means nothing across grids -- the
-  // heap hands the same index to a block at a different coordinate. Driving one
-  // integrator over several grids is already how this suite is written, so this
-  // is not hypothetical; what it used to do was OR the two grids' flags
-  // together.
-  CHECK(integ.reset_dirty().ok());
-  CHECK(integ
-            .integrate(a, depth_band.data(), cam, 5.0f,
-                       tsdf::IntegrationMode::Dynamic)
-            .ok());
-  CHECK(integ.dirty_block_count().value() == 4);
+  // Across a wrap a block holds a tick numerically above the clock's, so
+  // every stamp is set to one, and the fuse must still stamp what it changes
+  // with its own tick: a max would keep the old one, which reads as older
+  // than every cursor taken since.
+  {
+    vr::Result<std::vector<vol::BlockStamp>> st = a.map().read_block_stamps();
+    CHECK(st.ok());
+    for (vol::BlockStamp& s : st.value()) s.changed = 0xFFFFFFF0u;
+    vr::CommandBatch batch(device, allocator);
+    CHECK(batch
+              .upload(a.map().stamps_buffer(), 0, st.value().data(),
+                      st.value().size() * sizeof(vol::BlockStamp))
+              .ok());
+    CHECK(batch.submit().ok());
+  }
+  const std::uint32_t t5 = a.map().tick();
+  CHECK(fuse(a, depth_near, 5.0f).ok());
+  CHECK(!changed_z(a, t5).empty());
 
+  // --- A grid's stamps are its own -----------------------------------------
+  //
+  // One integrator driven over two grids, as this suite does: a fuse into `b`
+  // stamps `b` and moves `b`'s clock, and leaves `a` alone.
   vr::Result<vol::VoxelBlockGrid> grid_b =
       vol::VoxelBlockGrid::create(device, allocator, gp, attrs, 2);
   CHECK(grid_b.ok());
@@ -279,104 +235,12 @@ int dirty_blocks_case(vr::Device& device, vr::Allocator& allocator) {
   vol::BlockIndex one{};
   one.coord = vr::Vec3i(0, 0, 13);
   CHECK(b.map().allocate(&one, 1).value() == 0);
-  CHECK(integ
-            .integrate(b, depth_band.data(), cam, 5.0f,
-                       tsdf::IntegrationMode::Dynamic)
-            .ok());
-  // Re-anchored on `b`: its single block, not `a`'s four OR-ed underneath.
-  CHECK(integ.dirty_block_count().value() == 1);
-  // And `a`'s flags are gone, so asking about `a` is refused rather than
-  // answered out of `b`'s array.
-  CHECK(!integ
-             .dirty_remesh_blocks(a, active_a.value().data(),
-                                  active_a.value().size())
-             .ok());
-
-  // --- Removing blocks invalidates the set ---------------------------------
-  //
-  // remove() changes the field from the host, and no flag can say so: the freed
-  // slot goes back to a LIFO heap and is re-drawn for a different block. The
-  // dirty set cannot describe geometry that went away, so the answer is a
-  // refusal (re-mesh everything) rather than a confidently wrong subset.
-  vr::Result<std::vector<vol::BlockIndex>> active_b =
-      b.map().compact_active_blocks();
-  CHECK(active_b.ok());
-  CHECK(integ
-            .dirty_remesh_blocks(b, active_b.value().data(),
-                                 active_b.value().size())
-            .ok());
-  // The token MOVED -- not "is 1". It is drawn from a process-wide counter, so
-  // its value says nothing and only the change is the contract; asserting a
-  // count here would fail the moment another grid in this process were built
-  // first, which is the property that makes two grids unable to collide.
-  const std::uint64_t epoch_before = b.topology_epoch();
-  CHECK(b.remove(&one, 1).ok());
-  CHECK(b.topology_epoch() != epoch_before);
-  // And the raw path moves it too, which is the whole reason it lives on the
-  // hash map: reaching remove() through map() bypasses the grid's wrapper, and
-  // used to leave every anchor built on this token reading "unchanged" over a
-  // slot that had just been freed and re-drawn.
-  const std::uint64_t epoch_after_wrapped = b.topology_epoch();
-  CHECK(b.map().remove(&one, 1).ok());
-  CHECK(b.topology_epoch() != epoch_after_wrapped);
-  vr::Result<std::vector<vol::BlockIndex>> after_remove =
-      b.map().compact_active_blocks();
-  CHECK(after_remove.ok());
-  CHECK(!integ
-             .dirty_remesh_blocks(b, after_remove.value().data(),
-                                  after_remove.value().size())
-             .ok());
-  // ...and so must the ON-DEVICE path, which is the same question asked by a
-  // consumer in another tier: `mesh` tests these flags in a workgroup instead
-  // of taking them back through the host, so it never calls the function above.
-  //
-  // The handle alone CANNOT answer it here, and that is the point of publishing
-  // an epoch beside it. Nothing has been fused since the remove, so this object
-  // has not yet seen the topology move -- the check above is made against the
-  // grid it was handed, and a bare accessor has no grid. The epoch is what
-  // carries the answer across the tier boundary: a consumer compares it with
-  // the grid IT is meshing, and the token being globally unique makes that one
-  // comparison cover both "the right grid" and "no blocks removed since".
-  CHECK(integ.dirty_flags_buffer() != VK_NULL_HANDLE);
-  CHECK(integ.dirty_epoch() != b.topology_epoch());
-
-  // Fusing again is when this object LEARNS the topology moved, and from there
-  // it refuses outright rather than handing out flags it will not vouch for --
-  // the flags accumulated across a remove describe changes to blocks that are
-  // gone. All three go together: a null handle beside a live capacity is a
-  // caller binding one against the other.
-  //
-  // The block has to be put back first. Both removes above took `b`'s only
-  // block, and integrate() returns on an empty active set BEFORE it reaches the
-  // anchor check -- so a fuse over nothing teaches this object nothing, which
-  // is right (it also changed nothing) and would otherwise make the assertion
-  // below read as a refusal it never made. Allocating does not move the token,
-  // so the mismatch this is about survives it.
-  CHECK(b.map().allocate(&one, 1).value() == 0);
-  CHECK(integ
-            .integrate(b, depth_band.data(), cam, 5.0f,
-                       tsdf::IntegrationMode::Dynamic)
-            .ok());
-  CHECK(integ.dirty_flags_buffer() == VK_NULL_HANDLE);
-  CHECK(integ.dirty_flags_capacity() == 0);
-  CHECK(integ.dirty_epoch() == 0);
-
-  // reset_dirty() re-arms it: nothing is accumulated, so nothing is stale.
-  CHECK(integ.reset_dirty().ok());
-  vr::Result<std::vector<vr::Vec3i>> rearmed = integ.dirty_remesh_blocks(
-      b, after_remove.value().data(), after_remove.value().size());
-  CHECK(rearmed.ok() && rearmed.value().empty());
-
-  // And the device trio comes back with it, anchored on the grid the next fuse
-  // touches. The epoch is the LIVE token, which is what a consumer's own
-  // comparison is against.
-  CHECK(integ
-            .integrate(b, depth_band.data(), cam, 5.0f,
-                       tsdf::IntegrationMode::Dynamic)
-            .ok());
-  CHECK(integ.dirty_flags_buffer() != VK_NULL_HANDLE);
-  CHECK(integ.dirty_flags_capacity() > 0);
-  CHECK(integ.dirty_epoch() == b.topology_epoch());
+  const std::uint32_t ta = a.map().tick();
+  const std::uint32_t tb = b.map().tick();
+  CHECK(fuse(b, depth_band, 5.0f).ok());
+  CHECK(changed_z(b, tb) == std::vector<int>(1, 13));
+  CHECK(a.map().tick() == ta);
+  CHECK(changed_z(a, ta).empty());
 
   return 0;
 }
@@ -485,12 +349,10 @@ int main() {
   std::vector<float> depth(static_cast<std::size_t>(cam.width) * cam.height,
                            plane_z);
 
-  // Dirty-block tracking has its own fixture (see dirty_blocks_case): the
-  // geometry a plane fixture produces is a contiguous run, which cannot tell a
-  // correct dilation from a broken one. This integrator carries no tracking, so
-  // the per-voxel numerics below are asserted against the shape every other
-  // consumer in the repo runs.
-  CHECK(dirty_blocks_case(device.value(), allocator.value()) == 0);
+  // The changed stamps have their own fixture (see changed_stamps_case): the
+  // geometry a plane fixture produces cannot separate a written block from one
+  // ahead of the band.
+  CHECK(changed_stamps_case(device.value(), allocator.value()) == 0);
 
   CHECK(integ.integrate(vbg, depth.data(), cam, /*max_weight=*/5.0f).ok());
 

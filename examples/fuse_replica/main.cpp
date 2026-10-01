@@ -25,7 +25,9 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <unordered_set>
 #include <utility>
+#include <vector>
 
 #include "fuse_frame.hpp"
 #include "ply_writer.hpp"
@@ -50,6 +52,52 @@ namespace mesh = volumetric_kit::recon::mesh;
 namespace sensor = volumetric_kit::recon::sensor;
 
 namespace {
+
+// The active blocks stamped changed after `since`, and how many blocks those
+// put back to marching cubes: a cell reads corners at `base + {0,1}^3`, so a
+// block re-meshes when any of its own `+{0,1}^3` neighbourhood changed -- the
+// set an incremental extract would redo.
+struct ChangedBlocks {
+  std::uint32_t changed = 0;
+  std::uint32_t remesh = 0;
+};
+
+vr::Result<ChangedBlocks> changed_since(
+    const vol::VoxelBlockGrid& grid, const std::vector<vol::BlockIndex>& active,
+    std::uint32_t since) {
+  const auto vpb = static_cast<std::uint32_t>(grid.grid().voxels_per_block);
+  if (vpb == 0) {
+    return vr::Status::invalid_argument("changed_since: voxels_per_block is 0");
+  }
+  VR_ASSIGN(const std::vector<vol::BlockStamp> stamps,
+            grid.map().read_block_stamps());
+  // 21 bits an axis, through unsigned casts since coordinates go negative.
+  const auto key = [](const vr::Vec3i& c) {
+    constexpr std::uint64_t kMask = (std::uint64_t{1} << 21) - 1;
+    return ((std::uint64_t{static_cast<std::uint32_t>(c.x)} & kMask) << 42) |
+           ((std::uint64_t{static_cast<std::uint32_t>(c.y)} & kMask) << 21) |
+           (std::uint64_t{static_cast<std::uint32_t>(c.z)} & kMask);
+  };
+  std::unordered_set<std::uint64_t> changed;
+  for (const vol::BlockIndex& b : active) {
+    // A slot past the stamps counts as changed, as the extract's kernel has it.
+    const std::size_t slot = static_cast<std::uint32_t>(b.ptr) / vpb;
+    if (slot >= stamps.size() || vol::tick_after(stamps[slot].changed, since)) {
+      changed.insert(key(b.coord));
+    }
+  }
+  ChangedBlocks out;
+  out.changed = static_cast<std::uint32_t>(changed.size());
+  for (const vol::BlockIndex& b : active) {
+    bool hit = false;
+    for (int d = 0; d < 8 && !hit; ++d) {
+      hit = changed.count(
+                key(b.coord + vr::Vec3i(d & 1, (d >> 1) & 1, d >> 2))) != 0;
+    }
+    out.remesh += hit ? 1u : 0u;
+  }
+  return out;
+}
 
 // Command-line options with reconstruction-friendly defaults for Replica.
 struct Options {
@@ -78,20 +126,14 @@ struct Options {
   // readback of every vertex, which measured as 44% of the call at 1 cm and is
   // paid by no seam-B consumer.
   bool device_extract = false;
-  // Report the TRUE dirty-block fraction every N fused frames; 0 = off. Unlike
-  // a frustum survey this counts only blocks the integrator actually wrote.
+  // Report the TRUE changed-block fraction every N fused frames; 0 = off.
+  // Unlike a frustum survey this counts only blocks the integrator actually
+  // changed: those whose `changed` stamp is newer than the last report's tick.
   int dirty_every = 0;
-  // Re-mesh only the blocks a fuse changed, through
-  // MarchingCubes::extract_device_incremental. Implies the integrator's dirty
-  // tracking (the flags it reads), the extractor's span table (the ranges it
-  // re-meshes against), and --device-extract (the only path it exists on).
-  //
-  // It also takes OWNERSHIP of the flags: the extract consumes them and resets
-  // them immediately after, so the next window accumulates from zero. That is
-  // the whole discipline the feature depends on -- the fuse kernel only ORs
-  // into the flags, so without a reset every block reads dirty within a few
-  // frames and the run re-meshes everything through the incremental path while
-  // paying for the table, the dilation and the retirement.
+  // Re-mesh only the blocks changed since the last extract, through
+  // MarchingCubes::extract_device_incremental. Implies the extractor's span
+  // table (the ranges it re-meshes against) and --device-extract (the only
+  // path it exists on).
   bool incremental = false;
   int num_buckets = 16384;  // initial map size; grows on overflow via resize
   bool preload = false;     // decode every frame up front (RAM for decode time)
@@ -181,24 +223,10 @@ vr::Result<Options> parse_args(int argc, char** argv) {
         "[--max-frames n] [--stride n] [--max-depth m] [--preload]");
   }
   // --incremental only exists on the device path, so it turns it on rather than
-  // being ignored beside it. Ignoring it was worse than it looks: the tracking
-  // and the grid-sized span table are switched on by the flag itself, so the
-  // run paid ~36 MB and a per-fuse dirty pass and then took the host extract
-  // anyway -- and nothing said so.
+  // being ignored beside it. Ignoring it was worse than it looks: the
+  // grid-sized span table is switched on by the flag itself, so the run paid
+  // for it and then took the host extract anyway -- and nothing said so.
   if (opt.incremental) opt.device_extract = true;
-  // Two owners of one set of flags. --dirty-every reads the accumulated flags
-  // and then resets them, which is exactly what the incremental extract does,
-  // on a cadence that has nothing to do with --mesh-every: at the defaults it
-  // would zero the flags at frames 10/20/30/40 and leave the frame-50 extract
-  // seeing only frames 41-50, so every block changed before that reads clean
-  // and keeps stale triangles. Refused rather than silently resolved -- either
-  // is a legitimate thing to want, and picking one for the caller is how the
-  // survey's numbers end up describing a run nobody asked for.
-  if (opt.incremental && opt.dirty_every > 0) {
-    return vr::Status::invalid_argument(
-        "--dirty-every and --incremental both consume the integrator's dirty "
-        "flags and reset them; run one or the other");
-  }
   if (opt.cam_params.empty()) {
     opt.cam_params = opt.scene_dir + "/../cam_params.json";
   }
@@ -284,16 +312,8 @@ vr::Status run(const Options& opt) {
   VR_ASSIGN(vol::VoxelBlockGrid volume,
             vr_example::create_fusion_grid(device, allocator, opt.voxel,
                                            opt.trunc, opt.num_buckets));
-  // Dirty-block tracking is opt-in and only --dirty-every asks for it: with it
-  // off the integrator allocates no per-block flag array (num_blocks * 4 bytes,
-  // doubling with every map grow) and its kernel stores no flags, so the
-  // default run measures the same fusion every other consumer gets.
   VR_ASSIGN(tsdf::TsdfIntegrator integrator,
-            tsdf::TsdfIntegrator::create(device, allocator, [&] {
-              tsdf::TsdfIntegratorConfig c;
-              c.track_dirty_blocks = opt.dirty_every > 0 || opt.incremental;
-              return c;
-            }()));
+            tsdf::TsdfIntegrator::create(device, allocator));
   VR_ASSIGN(mesh::MarchingCubes extractor,
             mesh::MarchingCubes::create(device, allocator, [&] {
               mesh::MarchingCubesConfig c;
@@ -355,6 +375,9 @@ vr::Status run(const Options& opt) {
   std::size_t dirty_samples = 0;
   std::uint64_t sum_dirty = 0, sum_remesh = 0, sum_active = 0;
   std::uint32_t last_dirty = 0, last_active_blocks = 0, last_remesh = 0;
+  // The tick of the last --dirty-every report: a window is the blocks stamped
+  // changed after it.
+  std::uint32_t dirty_since = volume.map().tick();
   for (;;) {
     // An empty poll is "nothing this tick", which a replay and an idle live
     // device report alike; only the source knows whether that is the end. A
@@ -377,22 +400,16 @@ vr::Status run(const Options& opt) {
 
     if (opt.dirty_every > 0 &&
         (fused % static_cast<std::size_t>(opt.dirty_every)) == 0) {
-      // Read, then reset: the sample is the UNION of this window's
-      // `--dirty-every` frames, which is exactly what an incremental extract
-      // running at that cadence would have to redo. (An earlier comment here
-      // claimed the reset came first and the sample was one frame's writes;
-      // the reset is the last statement of the block, so it never was.)
-      //
-      // The active set is compacted once and handed to dirty_remesh_blocks,
-      // which is why that takes a span: it needs the coordinates the flags do
-      // not carry, and compacting a second time inside it would be a dispatch,
-      // a fence wait and a full read-back per sample.
+      // The sample is the UNION of this window's `--dirty-every` frames, which
+      // is exactly what an incremental extract running at that cadence would
+      // have to redo.
       VR_ASSIGN(std::vector<vol::BlockIndex> all,
                 volume.map().compact_active_blocks());
-      VR_ASSIGN(const std::uint32_t dirty, integrator.dirty_block_count());
-      VR_ASSIGN(const std::vector<vr::Vec3i> remesh_blocks,
-                integrator.dirty_remesh_blocks(volume, all.data(), all.size()));
-      const auto remesh = static_cast<std::uint32_t>(remesh_blocks.size());
+      VR_ASSIGN(const ChangedBlocks sample,
+                changed_since(volume, all, dirty_since));
+      dirty_since = volume.map().tick();
+      const std::uint32_t dirty = sample.changed;
+      const std::uint32_t remesh = sample.remesh;
       if (!all.empty()) {
         // Sums, not a running mean of per-window ratios. The windows are not
         // comparable: the first one builds the map from nothing, so every block
@@ -408,7 +425,6 @@ vr::Status run(const Options& opt) {
         last_active_blocks = static_cast<std::uint32_t>(all.size());
         ++dirty_samples;
       }
-      VR_TRY(integrator.reset_dirty());
     }
 
     if (opt.mesh_every > 0 &&
@@ -425,28 +441,11 @@ vr::Status run(const Options& opt) {
         // is exactly what a benchmark wants and what a real consumer must not
         // do.
         if (opt.incremental) {
-          // All three fields off the same integrator in the same breath. A
-          // capacity or an epoch cached across a fuse names a buffer this
-          // object may already have replaced or a topology it may already have
-          // left.
-          const mesh::DirtyBlocks dirty{integrator.dirty_flags_buffer(),
-                                        integrator.dirty_flags_capacity(),
-                                        integrator.dirty_epoch()};
-          VR_ASSIGN(mesh::DeviceMesh dm, extractor.extract_device_incremental(
-                                             volume, 0.0f, dirty, &rt));
+          // The extractor keeps the tick it last meshed at, so this re-meshes
+          // what the fuses since changed and nothing needs resetting.
+          VR_ASSIGN(mesh::DeviceMesh dm,
+                    extractor.extract_device_incremental(volume, 0.0f, &rt));
           tris = dm.triangle_count;
-          // Consumed, so cleared -- and cleared here, immediately after the
-          // extract that read them, rather than on a cadence of its own. The
-          // fuse kernel only ORs into the flags, so anything else makes the
-          // window they describe drift out of step with the window between
-          // extracts: too long and every block reads dirty (a full re-mesh
-          // wearing the incremental path's costs), too short and blocks that
-          // really changed read clean and keep triangles the fuse invalidated.
-          //
-          // Reset even when the extract fell back to a full pass: a full pass
-          // re-meshes everything, so the flags it did not read are just as
-          // spent as the ones it did.
-          VR_TRY(integrator.reset_dirty());
         } else {
           VR_ASSIGN(mesh::DeviceMesh dm,
                     extractor.extract_device(volume, 0.0f, &rt));
@@ -499,7 +498,8 @@ vr::Status run(const Options& opt) {
       // Both halves, because either alone reads as success. "0 of 40
       // incremental" is a run that measured the fallback; "40 of 40, 98%
       // re-meshed" is a run that measured the feature doing all the work
-      // anyway, which is what an unreset flag array produces.
+      // anyway, which is what a writer stamping every block it visits, rather
+      // than those it changed, produces.
       std::printf(
           "  incr    %zu of %zu extracts incremental, mean %.1f%% of blocks "
           "re-meshed\n",

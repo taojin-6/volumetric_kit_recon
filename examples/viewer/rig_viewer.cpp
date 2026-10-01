@@ -1377,7 +1377,6 @@ int run(GLFWwindow* window, const Options& opt) {
                          freed.status().message().c_str());
           }
         }
-        volume.map().advance_tick();
         for (std::size_t c = 0; c < frames.size() && c < cameras; ++c) {
           if (frames[c] && frames[c]->has_color()) {
             newest[c] = NewestFrame{*frames[c], sets};
