@@ -974,7 +974,9 @@ arbitrary; it usually isn't.
   out as NV12 in `DecodedPicture::device`, which a reader acquires from
   `VK_QUEUE_FAMILY_EXTERNAL`; any other picture comes to the host, as does
   every one after the device path fails (the 2026-09-28 decoded-frame
-  decision). **`JpegDecoder`** decodes MJPEG's JPEGs as I420, BT.601 full
+  decision), which the decoder says once as a warning and
+  `OrbbecCaptureStats::host_pictures` counts, so a run that should stay on
+  the device can be held to 0. **`JpegDecoder`** decodes MJPEG's JPEGs as I420, BT.601 full
   range: given a device, with `VR_WITH_CUDA`, nvJPEG decodes an 8-bit 4:2:0
   one into the same kind of buffer, on the GPU's hardware JPEG engine where
   it has one (`backend()`) and its cores for the rest, and libnvjpeg too is

@@ -6799,6 +6799,23 @@ raw pass runs over both codecs.
 **Next**: measured first, the colour kernel reading Apple's plane images
 directly, which saves the copy's 0.28-0.31 ms of GPU.
 
+*Amended 2026-10-01 (PERF.md's D1 and D3):* the fallback is no longer
+silent, and an exported picture buffer stays out of the BAR.
+
+- **The fallback.** A device path that fails still lets every later picture
+  come to the host, but the decoder now says so once, through `core`'s log
+  handler. `OrbbecCaptureStats::host_pictures` counts the raw frames handed
+  out with host colour although the stream decodes onto a device, and
+  `fuse_orbbec` and `rig_viewer`'s Rig panel show it. On a discrete GPU each
+  such 4K frame costs 12 MB across the bus.
+- **Pinned by the camera test.** The camera's GPU pre-processing test now
+  holds the count to the host-colour frames it sees. On the M5 Max it was 0
+  for H.265 and MJPEG, and a mutant counting every frame failed it.
+- **Out of the BAR.** `create_exported_buffer` prefers a device-local memory
+  type that is not host-visible, as `vt_pictures.mm` already did, and falls
+  back to any device-local one. On a ReBAR system the first device-local type
+  can be the BAR heap the host maps.
+
 ### 2026-09-28 — Projective texturing takes a colour camera of its own and depth on the device: the depth camera decides what is visible, its map what the colour camera sees, and the colour camera gives the coordinate; a view's device depth and coverage are copied on the device rather than staged.
 
 **The rule.** A `TextureView` may carry a `color_camera`, the camera its
@@ -7094,8 +7111,10 @@ Two reports from the lab rig drove it.
   to give it.
 
 `--show-sources` (a View panel toggle too) fills each camera's tile with a
-colour of its own rather than its image, copied from host-visible buffers
-gfx makes the first time it is switched on, so the window shows which camera
+colour of its own rather than its image, copied from device-local buffers
+gfx makes and fills on the device the first time it is switched on
+(host-visible until 2026-10-01, which crossed the bus on every remesh on a
+discrete GPU: PERF.md's D2), so the window shows which camera
 textured each triangle and what none did. On today's run it shows each
 camera owning the surfaces it faces, and the overlap between them choosing
 per triangle, which speckles. That speckle is where the cameras' auto

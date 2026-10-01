@@ -59,13 +59,19 @@ Result<ExportedBuffer> create_exported_buffer(const Device& device,
   vkGetBufferMemoryRequirements(vk, buffer, &needs);
   VkPhysicalDeviceMemoryProperties memory{};
   vkGetPhysicalDeviceMemoryProperties(device.physical_device(), &memory);
+  // Device-local, and not host-visible where a type allows it: on a ReBAR
+  // system the first device-local type can be the BAR heap the host maps.
   std::uint32_t type = memory.memoryTypeCount;
-  for (std::uint32_t i = 0; i < memory.memoryTypeCount; ++i) {
-    if ((needs.memoryTypeBits & (1u << i)) != 0 &&
-        (memory.memoryTypes[i].propertyFlags &
-         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0) {
-      type = i;
-      break;
+  for (const bool host_visible_ok : {false, true}) {
+    for (std::uint32_t i = 0;
+         i < memory.memoryTypeCount && type == memory.memoryTypeCount; ++i) {
+      const VkMemoryPropertyFlags flags = memory.memoryTypes[i].propertyFlags;
+      if ((needs.memoryTypeBits & (1u << i)) != 0 &&
+          (flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0 &&
+          (host_visible_ok ||
+           (flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) == 0)) {
+        type = i;
+      }
     }
   }
   if (type == memory.memoryTypeCount) {

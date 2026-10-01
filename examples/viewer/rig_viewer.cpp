@@ -618,6 +618,13 @@ void draw_rig_panel(const RigPanel& panel,
                 static_cast<unsigned long long>(st.dropped),
                 static_cast<unsigned long long>(st.failed),
                 static_cast<unsigned long long>(st.lost));
+    // Colour that should have stayed on the GPU and did not: on a discrete
+    // GPU every such frame crossed the bus (OrbbecCaptureStats::host_pictures).
+    if (st.host_pictures != 0) {
+      ImGui::TextColored(ImVec4(0.9f, 0.5f, 0.2f, 1.0f),
+                         "  %llu with colour on the host",
+                         static_cast<unsigned long long>(st.host_pictures));
+    }
   }
   ImGui::Separator();
   ImGui::Text("mesh v%llu  %zu vertices / %zu triangles",
@@ -937,10 +944,12 @@ int run(GLFWwindow* window, const Options& opt) {
     white_atlas = std::move(bound).value();
   }
 
-  // The colour-by-camera view's sources: one host-visible buffer a camera,
+  // The colour-by-camera view's sources: one device-local buffer a camera,
   // its tile's size, filled with that camera's colour (sRGB bytes, as the
   // atlas holds). Made the first time the view is switched on, since at 4K
-  // they are 33 MB a camera.
+  // they are 33 MB a camera, and filled on the device in that frame's command
+  // buffer: host-visible, a discrete GPU would copy them across the bus on
+  // every remesh.
   const std::array<std::array<std::uint8_t, 3>, 8> kCameraColours = {{
       {230, 60, 60},
       {60, 200, 80},
@@ -953,7 +962,7 @@ int run(GLFWwindow* window, const Options& opt) {
   }};
   std::vector<vg::Buffer> solid_buffers;
   std::vector<VkBuffer> solid_handles;
-  auto ensure_solid = [&]() -> bool {
+  auto ensure_solid = [&](VkCommandBuffer cmd) -> bool {
     if (solid_handles.size() == cameras) return true;
     solid_buffers.clear();
     solid_handles.clear();
@@ -961,10 +970,9 @@ int run(GLFWwindow* window, const Options& opt) {
       const rtex::AtlasTile& tile = layout.tiles[c];
       vg::BufferDesc desc;
       desc.size = VkDeviceSize(tile.width) * tile.height * 4u;
-      desc.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-      desc.memory = vg::MemoryUsage::HostVisible;
-      desc.mapped = true;
-      desc.host_access = vg::HostAccess::SequentialWrite;
+      desc.usage =
+          VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+      desc.memory = vg::MemoryUsage::DeviceLocal;
       auto buffer = app.allocator().create_buffer(desc);
       if (!buffer.ok()) {
         std::fprintf(stderr, "rig_viewer: colour-by-camera buffer: %s\n",
@@ -977,11 +985,18 @@ int run(GLFWwindow* window, const Options& opt) {
       const std::uint32_t word = std::uint32_t{rgb[0]} |
                                  (std::uint32_t{rgb[1]} << 8) |
                                  (std::uint32_t{rgb[2]} << 16) | 0xFF000000u;
-      auto* words = static_cast<std::uint32_t*>(buffer.value().mapped());
-      std::fill(words, words + std::size_t{tile.width} * tile.height, word);
+      vkCmdFillBuffer(cmd, buffer.value().handle(), 0, VK_WHOLE_SIZE, word);
       solid_handles.push_back(buffer.value().handle());
       solid_buffers.push_back(std::move(buffer).value());
     }
+    // The fills land before the atlas copy reads them, later in this buffer.
+    VkMemoryBarrier filled{};
+    filled.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    filled.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    filled.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &filled, 0,
+                         nullptr, 0, nullptr);
     return true;
   };
 
@@ -1526,9 +1541,10 @@ int run(GLFWwindow* window, const Options& opt) {
             if (acquired.ok()) {
               next = std::move(acquired).value();
               atlas_error_said = false;
-              record_atlas_copy(
-                  render_frame.cmd, next->tex.image(), taken_job,
-                  show_sources && ensure_solid() ? &solid_handles : nullptr);
+              record_atlas_copy(render_frame.cmd, next->tex.image(), taken_job,
+                                show_sources && ensure_solid(render_frame.cmd)
+                                    ? &solid_handles
+                                    : nullptr);
               ++atlas_copies;
               for (AtlasTileSource& source : taken_job.tiles) {
                 slot_sources[render_frame.slot].push_back(

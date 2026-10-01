@@ -144,8 +144,18 @@ int grab_gpu(const char* serial, std::uint32_t w, std::uint32_t h,
   }
   sensor::OrbbecCapture capture = std::move(opened).value();
   CHECK(capture.start().ok());
-  return settle(
-      [&] { return capture.poll_raw(); },
+  std::uint64_t host_frames = 0;  // colour handed out on the host
+  const int settled = settle(
+      [&] {
+        // Every frame handed out, as the stats count them, not only the one
+        // `settle` keeps.
+        auto polled = capture.poll_raw();
+        if (polled && polled.value()) {
+          const sensor::YuvImage& c = polled.value()->color;
+          host_frames += c.device == nullptr && c.image[0] == nullptr ? 1 : 0;
+        }
+        return polled;
+      },
       [&](const sensor::RawFrame& raw) {
         const auto& d = raw.depth_camera;
         const auto& c = raw.color_camera;
@@ -206,6 +216,19 @@ int grab_gpu(const char* serial, std::uint32_t w, std::uint32_t h,
         out->ccam = f.color_camera;
         return 0;
       });
+  if (settled != 0) return settled;
+  // The stats count what the frames showed: each one whose colour came to
+  // the host although the stream decodes onto a device.
+  const std::uint64_t counted = capture.stats().host_pictures;
+  std::printf("  %llu of the frames with colour on the host\n",
+              static_cast<unsigned long long>(counted));
+  if (counted != host_frames) {
+    std::fprintf(stderr, "FAIL: stats count %llu host pictures, saw %llu\n",
+                 static_cast<unsigned long long>(counted),
+                 static_cast<unsigned long long>(host_frames));
+    return 1;
+  }
+  return 0;
 }
 
 float channel(std::uint32_t c, int k) {

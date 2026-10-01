@@ -215,12 +215,14 @@ struct Source {
                          const sensor::OrbbecCaptureStats& st) {
       std::printf(
           "  %s: %llu pairs received, %llu fused, %llu dropped, %llu "
-          "unprocessable, %llu lost to the colour decoder\n",
+          "unprocessable, %llu lost to the colour decoder, %llu with colour "
+          "on the host\n",
           who, static_cast<unsigned long long>(st.received),
           static_cast<unsigned long long>(st.delivered),
           static_cast<unsigned long long>(st.dropped),
           static_cast<unsigned long long>(st.failed),
-          static_cast<unsigned long long>(st.lost));
+          static_cast<unsigned long long>(st.lost),
+          static_cast<unsigned long long>(st.host_pictures));
     };
     if (camera) {
       line(camera->device_info().serial.c_str(), camera->stats());
