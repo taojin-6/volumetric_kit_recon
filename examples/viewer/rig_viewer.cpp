@@ -1366,7 +1366,8 @@ int run(GLFWwindow* window, const Options& opt) {
           frames_fused += frame ? 1 : 0;
         }
         ++sets;
-        // Ahead of the remesh, so it meshes the smaller set.
+        // Ahead of the remesh, so it meshes the smaller set. Housekeeping, so
+        // a failed pass is reported and fusion goes on.
         const auto free_after = static_cast<std::uint32_t>(opt.free_after);
         if (free_after != 0 && sets % free_after == 0) {
           const vr::Result<std::uint32_t> freed =
@@ -1374,8 +1375,6 @@ int run(GLFWwindow* window, const Options& opt) {
           if (!freed) {
             std::fprintf(stderr, "rig_viewer: free blocks: %s\n",
                          freed.status().message().c_str());
-            fuse_failed.store(true);
-            break;
           }
         }
         volume.map().advance_tick();

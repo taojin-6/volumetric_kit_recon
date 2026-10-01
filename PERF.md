@@ -371,8 +371,9 @@ from about 19. Merge further only if the rows show the remaining gap.
 > about 2 ms of host time on the M5 Max and 1 ms on the RTX 5090, and the
 > stamp adds 4% to allocation's device time on the RTX 5090 and nothing
 > measurable on the M5 Max. On the lab rig's static room a pass frees
-> 1 100–1 800 noise blocks in 4.6–7.4 ms, nearly all of it zero fills, and
-> the map keeps its size: what is empty there is the band, which P9 is
+> 1 100–1 800 noise blocks in 4.6–7.4 ms, nearly all of it zero fills,
+> which a kernel has since replaced (5.2 → 0.8 ms for 1 500 scattered
+> blocks on a bench), and the map keeps its size: what is empty there is the band, which P9 is
 > about. The first cut freed on weight alone, and freed that band every
 > other pass for the allocator to ask for again, 33 000 blocks and 140 ms
 > a pass.
@@ -415,8 +416,8 @@ from about 19. Merge further only if the rows show the remaining gap.
     and lists those that neither an allocation nor weight has stamped for
     M ticks. The age keeps a block flickering at the band's edge from being
     freed and allocated again each set, and `requested` keeps the band.
-  - The list is read back, the blocks' attributes are zeroed by the ptrs
-    the pass read, and they are removed by coordinate.
+  - A kernel zeroes the listed blocks' attributes on the device, and the
+    list is read back and removed by coordinate.
   - Removing moves `topology_epoch`, which invalidates the dirty flags and
     span tables; incremental extraction already falls back when that
     happens.

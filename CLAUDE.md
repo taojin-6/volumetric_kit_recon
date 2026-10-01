@@ -725,12 +725,13 @@ arbitrary; it usually isn't.
   beside the heap (`stamps_buffer()`), each written by the pass that knows
   its fact (2026-10-01). Every allocation kernel stamps `requested` on each
   block it asks for, inserted or found, and the grid's block pass
-  (`stamp_blocks`) stamps `weighted` on each holding any weight. The init
-  kernel zeroes the records, the delete kernel zeroes a freed slot's, and
-  `resize` copies them forward, the rehash stamping nothing. A consumer
+  (`stamp_blocks`) stamps `weighted` on each holding an observed voxel. The
+  init kernel zeroes the records, the delete kernel zeroes a freed slot's,
+  and `resize` copies them forward, the rehash stamping nothing. A consumer
   compares ticks and resets nothing: `free_stale_blocks(max_age)` frees the
-  blocks whose newer stamp is that old, so the band the allocator still asks
-  for stays, and `rig_viewer` runs it every `--free-after` sets. The dirty
+  blocks whose newer stamp is that old, zeroing them with a kernel over the
+  pass's list, so the band the allocator still asks for stays, and
+  `rig_viewer` runs it every `--free-after` sets. The dirty
   flags are next onto a stamp, `changed`, written by the integrator.
 
 - **`tsdf`** — `TsdfIntegrator` fuses a posed depth frame into a grid's

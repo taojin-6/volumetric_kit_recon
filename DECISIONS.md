@@ -7617,19 +7617,23 @@ re-run, because the box was busy with other work.
 - **Each stamp is written by the pass that knows it.**
   - `requested` is written by every allocation kernel, through
     `allocate_block`, for every block it asks for, inserted or found. The
-    tick rides the shared push block, and the store is an `atomicMax` since
-    a band's lanes ask for one block together.
+    tick rides the shared push block, and the store is an `atomicExchange`
+    since a band's lanes ask for one block together. Ages are differences of
+    ticks, so they hold across the clock's wrap.
   - `weighted` is written by the grid's block pass (`stamp_blocks`): one
-    workgroup per active block, where any voxel's weight is above 0.
+    workgroup per active block, where any voxel is observed
+    (`weight >= kObservedWeight`, the mesher's and the codec's threshold).
   - A consumer compares ticks against a tick of its own and never resets
     anything. So the dirty flags, which a consumer must reset, are the next
     to move onto a stamp: `changed`, written by the integrator.
 - **The first consumer is the GC.** `VoxelBlockGrid::free_stale_blocks`
   frees the blocks whose newer stamp is at least `max_age` ticks old, under
-  a `"block stamps"` row. It zeroes their attributes by the ptrs the pass
-  read off the active list, rather than through `remove`, which reads the
-  whole list back and sorts it to resolve coordinates. `rig_viewer` runs it
-  every `--free-after` sets (30), with `max_age` the same.
+  a `"block stamps"` row. A second kernel zeroes their attributes where the
+  pass listed them, a dispatch an attribute, rather than through `remove`,
+  which resolves coordinates on the host and fills block by block; the list
+  is then read back for the map's `remove`. Both kernels are built on the
+  first pass. `rig_viewer` runs it every `--free-after` sets (30), with
+  `max_age` the same.
 - **Why the map, not the grid.** The map hands slots out and takes them
   back, so its kernels are the ones that know a block was asked for or
   freed. A record kept a tier up would need the allocation kernels to bind
@@ -7679,8 +7683,8 @@ M5 Max and 1 ms on the RTX 5090, once every 30 sets.
 - **The lab rig, static room** (M5 Max, four cameras at 1280 x 720, 1 cm,
   300 sets): the heap stays at 43–44% of 131 072. Each pass frees 1 100–1 800
   blocks the allocator stopped asking for, depth noise most likely, in
-  4.6–7.4 ms, nearly all of it zero fills. A kernel zeroing a list of
-  blocks would make that constant: a `TODO(volume)` on `zero_blocks`.
+  4.6–7.4 ms, nearly all of it zero fills, which the review moved into a
+  kernel (below).
 - **So the GC bounds history, not the band.** A room nobody moves through
   keeps its size. Shrinking the band is a separate item, PERF.md's P9.
 
@@ -7701,6 +7705,63 @@ M5 Max and 1 ms on the RTX 5090, once every 30 sets.
   synchronization validation.
 - The full suite passes on the M5 Max (57) and the RTX 5090 (44), and
   `rig_viewer` ran 300 sets on the lab rig.
+
+**Review.** The PR's review changed seven things:
+- **The move-assignment names every member.** It moved none of the block
+  pass's, so a grid assigned into a moved-from one kept an empty kernel and
+  aborted on its next pass.
+- **Zeroing is a kernel.** `block_zero.comp` zeroes one attribute of every
+  listed block, a workgroup a block, reading the pass's list where it lies.
+  A throwaway bench freed every other block of N, so each freed block was a
+  fill of its own before (M5 Max, Release, interleaved, the `"block stamps"`
+  row):
+
+  | freed blocks | fills | kernel |
+  |---|---|---|
+  | 1 500 | 5.2–8.3 ms | 0.74–0.78 ms |
+  | 33 000 | 94–100 ms | 1.9–2.8 ms |
+
+  The kernel needs each attribute's block to be whole 4-byte words, as at
+  block size 8 it always is, and `free_stale_blocks` refuses the rest.
+  `remove` still fills, a `TODO(volume)` on `zero_blocks`.
+- **Ages hold across the wrap.** `requested` was an `atomicMax` and the age
+  `tick - max(requested, weighted)`, so once the clock wrapped a block's old
+  `requested` won, and a block weighted that very pass could be freed.
+- **One threshold for observed.** The pass counted any weight above 0, so a
+  block of weights under `kObservedWeight`, empty to the mesher and the
+  codec, was never freed.
+- **A large active set splits.** Both kernels dispatch a group a block in
+  dispatches of at most `maxComputeWorkGroupCount[0]`, which a min-spec
+  device sets at 65 535 and the lab rig's 58 000 blocks nearly reach.
+- **The pass is built on first use**, so a grid that never frees builds no
+  pipeline, pool or query pool for it, and its two buffers are named for a
+  capture.
+- **`rig_viewer` reports a failed pass and fuses on**, rather than ending
+  the session over housekeeping.
+
+**Verified (review).**
+- `recon_volume_block_stamps` now also checks that a weight under
+  `kObservedWeight` leaves a block to be freed, that a freed block's voxels
+  are zeroed in every attribute while a kept block's stay, and two
+  move-assignments: into a moved-from grid, and over one that ran its pass
+  over fewer attributes.
+- It fails each of these mutants: a zeroing kernel that writes nothing, the
+  threshold back at 0, the move-assignment without the new members (a
+  crash), and either kernel ignoring its base with the split forced to 2
+  groups. The split forced to 2 alone passes.
+- A throwaway run wrapped the clock: the old logic freed a block weighted
+  that pass, and the new keeps it.
+- The volume tests run clean under synchronization validation, and the
+  suite passes on the M5 Max (57). The lab rig was not re-run.
+
+**Not taken.**
+- Removing on the device. The list comes back in the zeroing's submit and
+  goes up again in `remove`'s, 16 bytes a block each way and no submit of
+  its own; a device-list `remove` would save those bytes and nothing
+  measured.
+- Skipping the `weight` fill, which the review suggested since the pass had
+  found it 0. Under the new threshold it need not be, and the kernel leaves
+  little to save.
 
 ## Measured lessons
 
