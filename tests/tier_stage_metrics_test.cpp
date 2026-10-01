@@ -219,6 +219,9 @@ int main() {
                                 "after untimed calls"));
 
   // --- (2) + (3) every tier reports, and the halves differ ------------------
+  // Cleared, so the allocation takes blocks and the integrate compacts rather
+  // than reuse the last list, which reports no row.
+  CHECK(grid.value().clear().ok());
   vr::StageMetrics metrics;
   vr::Result<std::uint32_t> allocated = grid.value().map().allocate_from_depth(
       depth.data(), cam, nullptr, &metrics);
@@ -289,6 +292,17 @@ int main() {
     }
     // The host half, by contrast, must stay out: "integrate" already spans it.
     CHECK(metrics.total_cpu_ms() == metrics.total_cpu_ms("  ..active set"));
+  }
+
+  // Nothing allocated since, so the next integrate reuses that list: no
+  // compaction runs, and none is reported.
+  {
+    vr::StageMetrics reused;
+    CHECK(integrator.value().integrate(grid.value(), depth.data(), cam, 5.0f,
+                                       vr::tsdf::IntegrationMode::Classic,
+                                       nullptr, &reused));
+    CHECK(find(reused, "integrate") != nullptr);
+    CHECK(find(reused, "  ..active set") == nullptr);
   }
 
   // --- the same compaction, asked for from both positions --------------------

@@ -7509,6 +7509,66 @@ Not changed:
 blocks between adjacent centres, a `TODO(volume)` at the band loop. The rest
 of allocation's device time has not been broken down.
 
+### 2026-09-30 — With the spans off, an extract's active list stays on the device, and the map hands back its last compaction while nothing has changed since.
+
+**The rule.**
+- **No host list.** With `track_block_spans` off, `extract_device` and
+  `extract_host` no longer bring the active list to the host and upload it
+  again. They compact onto the device (`compact_active_blocks_on_device`) and
+  bind the map's own list in place, so only its count comes back. This is the
+  `TODO(mesh)` the extract carried.
+- **The fuse's list, reused by the map.** `compact_active_blocks_on_device`
+  keeps the list it last returned. While that list still holds, the call
+  returns it again, and dispatches and reports nothing. So an extract after
+  a fuse reuses the fuse's compaction, with no new API, for every caller:
+  `rig_viewer`'s sets, and `fuse_viewer`'s frames.
+- **What "holds" means.** The list is stamped with the map's topology epoch
+  (moved by a remove or clear), its compaction serial (moved by any
+  compaction or resize) and the heap's free count. Within one epoch the free
+  count only falls, so a change in it means a block was allocated since.
+  `check_device_block_list` makes the same test, so a list held across an
+  allocation is now refused too.
+
+**Not taken: a caller-held list.** The first cut added an
+`extract_device(grid, iso, DeviceBlockList)` overload, fed by an out-param
+on `TsdfIntegrator::integrate` and `fuse_set`. Its review found it
+returning the wrong mesh with `Status::ok`:
+- An empty list, as `integrate` hands back when it fuses nothing, meshed
+  nothing on a full grid.
+- A list held across `allocate_from_triangles` and `MeshIntegrator`
+  passed the check and left out the new surface, since allocation moved no
+  stamp.
+
+It also refused outright with the spans on, made `extract_device(grid, iso,
+{})` ambiguous, and reached only the set overload's callers. Keeping the list
+in the map removes the overload and both out-params.
+
+**Measured.** The batching entry's bench with an extract after each set
+(room0, sets of four 1200 x 680 frames, 1 cm, Release, a three-slot ring,
+unshared), median per extract:
+
+| | host list | device list, compacted here | the fuse's list |
+|---|---|---|---|
+| M5 Max | 1.77 ms | 1.69 ms | 1.51 ms |
+| RTX 5090 | 0.91–0.96 ms | 0.74 ms | 0.60 ms |
+
+The Mac's last two columns are the map's reuse, interleaved in one binary:
+an untimed host compaction before the extract makes it compact again. The
+5090's are the overload's, which did the same device work. They were not
+re-run, because the box was busy with other work.
+
+**Verified.**
+- `recon_volume_hash_map`: a second compaction with nothing changed returns
+  the same list. An allocation that takes a block makes it stale. One that
+  takes none does not.
+- `recon_mesh_marching_cubes_sparse` meshes the map's list to the same
+  triangles as a spans-on extractor's host list, and leaves the fuse's list
+  current. After one more block is allocated, it compacts again.
+- `recon_tier_stage_metrics` reports no `"  ..active set"` row for a reused
+  list.
+- Mutants that drop the free-count clause or the reuse each fail two or
+  three of those tests.
+
 ## Measured lessons
 
 Not decisions, but the measurements that overturned an assumption about

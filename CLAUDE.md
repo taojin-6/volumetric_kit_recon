@@ -339,6 +339,9 @@ order. Change the decision, its entry there, and this list together.
 - [**2026-09-30**](DECISIONS.md#2026-09-30--depth-allocation-works-a-16-x-16-pixel-tile-a-workgroup-and-dilates-each-distinct-block-of-the-tile-once-its-band-shared-out-over-the-lanes) —
   Depth allocation works a 16 x 16 pixel tile a workgroup and dilates each
   distinct block of the tile once, its band shared out over the lanes.
+- [**2026-09-30**](DECISIONS.md#2026-09-30--with-the-spans-off-an-extracts-active-list-stays-on-the-device-and-the-map-hands-back-its-last-compaction-while-nothing-has-changed-since) —
+  With the spans off, an extract's active list stays on the device, and the
+  map hands back its last compaction while nothing has changed since.
 
 ## Provenance & salvage policy
 
@@ -688,9 +691,12 @@ arbitrary; it usually isn't.
   A compaction still reads its list back, in the count's own submit while the
   set stays within a quarter past its last count (the 2026-09-28 residency
   decision), except `compact_active_blocks_on_device`'s: its
-  `DeviceBlockList` stays on the device, stamped with the epoch and a
-  compaction serial, and `check_device_block_list` refuses one that a
-  compaction, resize, remove, clear or move has made stale.
+  `DeviceBlockList` stays on the device, stamped with the epoch, a
+  compaction serial and the heap's free count, and `check_device_block_list`
+  refuses one that a compaction, allocation, resize, remove, clear or move
+  has made stale. While the last one still holds, the call returns it again,
+  dispatching and reporting nothing, so an extract after a fuse reuses the
+  fuse's compaction (2026-09-30).
   `topology_epoch()` lives on the *map* — the object that frees a block
   index — and is a globally unique token re-drawn at `create` and at every
   `remove`/`clear`, never at `resize`: a slot-keyed cache (tsdf's dirty flags,
@@ -788,7 +794,10 @@ arbitrary; it usually isn't.
   `download` takes the single host copy and bridges the two workflows. The
   arena, index run and draw command are device-local, and each extract
   attempt is one batch that reads back only the 32-byte command; the span
-  table stays host-visible, since the host reads it. An
+  table stays host-visible, since the host reads it. With the spans off the
+  active list never reaches the host: the extract compacts onto the device,
+  or takes the fuse's list back from the map, and binds it in place
+  (2026-09-30). An
   `extract_device` overload meshes a
   caller-supplied `volume::BlockList` instead of compacting the whole map —
   what a camera's frustum-culled set arrives as, though nothing in the extractor
