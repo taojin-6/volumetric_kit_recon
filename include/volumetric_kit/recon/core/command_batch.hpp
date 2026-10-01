@@ -29,6 +29,7 @@ class GpuStageScope;
 class Image;
 class GpuTimer;
 struct ComputeKernel;
+class DescriptorSet;
 
 /// @brief Records one call's device work -- uploads, fills, copies, ownership
 ///        acquires, dispatches, readbacks -- into a single command buffer,
@@ -235,6 +236,28 @@ class VR_CORE_API CommandBatch {
                   std::uint32_t push_size, std::uint32_t groups,
                   std::uint32_t max_groups, GpuStageScope* stage = nullptr);
 
+  /// @brief @ref dispatch with @p set bound in place of the kernel's own.
+  ///
+  /// So one batch can dispatch a kernel several times over different
+  /// buffers, each dispatch binding a set of its own of the kernel's layout
+  /// (@ref KernelSets). The kernel's own set's rule holds for @p set:
+  /// rewritten before @ref submit, the batch is refused.
+  /// @param set  A written set of @p kernel's layout, which must stay alive
+  ///             until @ref submit returns: the batch keeps a pointer to
+  ///             it, and binds and checks that object, not a copy. The
+  ///             layout is not checked; the validation layer names a
+  ///             mismatch.
+  /// @return As @ref dispatch; InvalidArgument also for an empty @p set.
+  Status dispatch(const ComputeKernel& kernel, const DescriptorSet& set,
+                  const void* push, std::uint32_t push_size,
+                  std::uint32_t groups, std::uint32_t max_groups,
+                  GpuStageScope* stage = nullptr);
+  /// A temporary set would be gone by @ref submit.
+  Status dispatch(const ComputeKernel& kernel, DescriptorSet&& set,
+                  const void* push, std::uint32_t push_size,
+                  std::uint32_t groups, std::uint32_t max_groups,
+                  GpuStageScope* stage = nullptr) = delete;
+
   /// @brief Record a dispatch of @p kernel whose workgroup counts the device
   ///        reads from @p args at @p offset (`vkCmdDispatchIndirect`), so a
   ///        count a kernel produced sizes the next without reaching the host.
@@ -304,12 +327,13 @@ class VR_CORE_API CommandBatch {
     std::uint32_t value = 0;  // fill word, workgroup count, or acquired-from
     std::uint32_t to_family = 0;  // an acquire's destination family
     const ComputeKernel* kernel = nullptr;
-    std::uint64_t set_writes = 0;     // the kernel's set, when recorded
-    std::vector<unsigned char> data;  // push constants, or an inline upload
-    GpuStageScope* stage = nullptr;   // a dispatch's or an upload's span
-    void* host_dst = nullptr;         // a readback's destination
-    bool staged = false;              // a Copy from this batch's own staging
-    VkImage image = VK_NULL_HANDLE;   // an ImageCopy's source
+    const DescriptorSet* set = nullptr;  // the set a dispatch binds
+    std::uint64_t set_writes = 0;        // its writes, when recorded
+    std::vector<unsigned char> data;     // push constants, or an inline upload
+    GpuStageScope* stage = nullptr;      // a dispatch's or an upload's span
+    void* host_dst = nullptr;            // a readback's destination
+    bool staged = false;                 // a Copy from this batch's own staging
+    VkImage image = VK_NULL_HANDLE;      // an ImageCopy's source
     VkImageLayout image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
     std::uint32_t width = 0;   // an ImageCopy's texels a row
     std::uint32_t height = 0;  // and rows
@@ -324,7 +348,8 @@ class VR_CORE_API CommandBatch {
   Status usable() const;
   Status check_dispatch(const ComputeKernel& kernel, const void* push,
                         std::uint32_t push_size) const;
-  Op dispatch_op(Kind kind, const ComputeKernel& kernel, const void* push,
+  Op dispatch_op(Kind kind, const ComputeKernel& kernel,
+                 const DescriptorSet& set, const void* push,
                  std::uint32_t push_size, GpuStageScope* stage) const;
   // A host-visible buffer of `bytes`, held until the submit's wait is done.
   Result<const Buffer*> stage(VkDeviceSize bytes, bool upload);

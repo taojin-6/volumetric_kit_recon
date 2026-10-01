@@ -146,35 +146,18 @@ Result<TsdfIntegrator> TsdfIntegrator::create(
   // whole: a frame past this limit is invalid usage, not a slow path.
   integ.max_storage_buffer_range_ = props.limits.maxStorageBufferRange;
 
-  // The camera params are fixed-size, so persist the SSBO (bound once at
-  // binding 4) and rewrite it inline in each integrate()'s batch -- not a
-  // per-call allocation. All of these are device-local, as every buffer the
-  // kernel reads is (the 2026-09-28 residency decision).
+  // The camera params are fixed-size, so persist the SSBOs and rewrite them
+  // inline in each integrate()'s batch -- not a per-call allocation -- and a
+  // 1-element dummy for the colour and dirty-flag slots a call leaves unused.
+  // All of these are device-local, as every buffer the kernel reads is (the
+  // 2026-09-28 residency decision). integrate() writes every binding of every
+  // set it dispatches.
   VR_ASSIGN(integ.cam_buf_,
             device_storage_buffer(allocator, sizeof(DepthCameraParams)));
-  integ.kernel_.set.write_storage_buffer(4, integ.cam_buf_.handle(), 0,
-                                         VK_WHOLE_SIZE);
-
-  // Color path: a persistent color-camera SSBO at binding 7, and a 1-element
-  // dummy at the color-image (5) and color-attribute (6) slots so every
-  // descriptor stays bound when no color is fused; integrate() rebinds 5/6 and
-  // rewrites the color camera when a frame arrives.
   VR_ASSIGN(integ.color_cam_buf_,
             device_storage_buffer(allocator, sizeof(ColorCameraParams)));
   VR_ASSIGN(integ.color_dummy_,
             device_storage_buffer(allocator, sizeof(std::uint32_t)));
-  integ.kernel_.set.write_storage_buffer(5, integ.color_dummy_.handle(), 0,
-                                         VK_WHOLE_SIZE);
-  integ.kernel_.set.write_storage_buffer(6, integ.color_dummy_.handle(), 0,
-                                         VK_WHOLE_SIZE);
-  integ.kernel_.set.write_storage_buffer(7, integ.color_cam_buf_.handle(), 0,
-                                         VK_WHOLE_SIZE);
-  // The dirty-flag slot. Bound to the same 1-element dummy when tracking is
-  // off, and pc.track_dirty is 0 so the kernel never indexes it -- an
-  // integrator nobody asked allocates nothing per block and stores nothing.
-  // integrate() rebinds this to the real array once it knows the grid's size.
-  integ.kernel_.set.write_storage_buffer(8, integ.color_dummy_.handle(), 0,
-                                         VK_WHOLE_SIZE);
 
   // Name the persistent buffers for a GPU capture. A no-op where the device
   // resolved no debug-utils entry points.
@@ -195,22 +178,21 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid, const float* depth,
                                  const DepthCameraParams& cam, float max_weight,
                                  IntegrationMode mode, const ColorFrame* color,
                                  StageMetrics* metrics) {
-  return integrate(grid, StorageInput(depth), cam, max_weight, mode, color,
-                   metrics);
+  return integrate(grid, {FrameInput{{StorageInput(depth), cam}, color}},
+                   max_weight, mode, metrics);
 }
 
 Status TsdfIntegrator::integrate(VoxelBlockGrid& grid, const Buffer& depth,
                                  const DepthCameraParams& cam, float max_weight,
                                  IntegrationMode mode, const ColorFrame* color,
                                  StageMetrics* metrics) {
-  return integrate(grid, StorageInput(depth), cam, max_weight, mode, color,
-                   metrics);
+  return integrate(grid, {FrameInput{{StorageInput(depth), cam}, color}},
+                   max_weight, mode, metrics);
 }
 
 Status TsdfIntegrator::integrate(VoxelBlockGrid& grid,
-                                 const StorageInput& depth,
-                                 const DepthCameraParams& cam, float max_weight,
-                                 IntegrationMode mode, const ColorFrame* color,
+                                 const std::vector<FrameInput>& frames,
+                                 float max_weight, IntegrationMode mode,
                                  StageMetrics* metrics) {
   // Opened before the validity check so a refused call still costs its row -- a
   // stage that reports nothing when it fails reads on an overlay as a stage
@@ -222,42 +204,28 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid,
     return Status::invalid_argument(
         "TsdfIntegrator::integrate: moved-from integrator");
   }
-  // The inputs' O(1) checks come first, ahead of the compaction dispatch and
+  // Every frame's O(1) checks come first, ahead of the compaction dispatch and
   // every binding below, so a refused call does no work and leaves the
-  // persistent set as it was -- an empty grid included.
-  const auto pixels = static_cast<std::size_t>(cam.width) *
-                      static_cast<std::size_t>(cam.height);
-  const VkDeviceSize depth_bytes = VkDeviceSize(pixels) * sizeof(float);
-  VR_TRY(depth.check("TsdfIntegrator::integrate: depth", depth_bytes));
-  if (cam.width == 0 || cam.height == 0) {
-    return Status::invalid_argument(
-        "TsdfIntegrator::integrate: depth image is empty");
-  }
-  VR_TRY(
-      check_storage_buffer_range("TsdfIntegrator::integrate: the depth buffer",
-                                 depth_bytes, max_storage_buffer_range_));
-
-  // The float tsdf + weight attributes to fuse into.
-  VR_ASSIGN(AttributeView tsdf_view, grid.attribute("tsdf"));
-  VR_ASSIGN(AttributeView weight_view, grid.attribute("weight"));
-  if (tsdf_view.element_size != sizeof(float) ||
-      weight_view.element_size != sizeof(float)) {
-    return Status::invalid_argument(
-        "TsdfIntegrator::integrate: tsdf/weight attributes must be float");
-  }
-
-  // Resolve the color path up front, before any per-call allocation or binding
-  // (so an invalid request leaves the persistent set untouched). A supplied
-  // color frame must be non-empty and the grid must carry a `uint32` `color`
-  // attribute. Independently, note whether the grid carries `color` at all:
-  // dynamic mode must clear a stale color even on a depth-only frame, so
-  // binding 6 tracks the grid's real attribute (`has_color_attr`) whenever
-  // there is one
-  // -- matching the prior engine, which clears color whenever the grid holds a
-  // color block, not only when a color image arrives.
-  const Buffer* color_attr_buf = nullptr;
-  VkDeviceSize color_bytes = 0;
-  if (color != nullptr) {
+  // persistent set as it was -- an empty grid included. A frame with no pixels
+  // dispatches nothing, as allocate_from_depth allocates nothing for it.
+  std::vector<std::size_t> live;  // the frames that dispatch, in order
+  std::vector<VkDeviceSize> depth_bytes(frames.size());
+  std::vector<VkDeviceSize> color_bytes(frames.size(), 0);
+  bool any_color = false;
+  for (std::size_t i = 0; i < frames.size(); ++i) {
+    const DepthCameraParams& cam = frames[i].camera;
+    const auto pixels = static_cast<std::size_t>(cam.width) *
+                        static_cast<std::size_t>(cam.height);
+    depth_bytes[i] = VkDeviceSize(pixels) * sizeof(float);
+    VR_TRY(frames[i].depth.check("TsdfIntegrator::integrate: depth",
+                                 depth_bytes[i]));
+    if (pixels == 0) continue;
+    live.push_back(i);
+    VR_TRY(check_storage_buffer_range(
+        "TsdfIntegrator::integrate: the depth buffer", depth_bytes[i],
+        max_storage_buffer_range_));
+    const ColorFrame* color = frames[i].color;
+    if (color == nullptr) continue;
     if ((color->pixels == nullptr && color->buffer == nullptr) ||
         color->cam.width == 0 || color->cam.height == 0) {
       return Status::invalid_argument(
@@ -268,14 +236,14 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid,
           "TsdfIntegrator::integrate: color frame sets both pixels and "
           "buffer");
     }
-    color_bytes = VkDeviceSize(color->cam.width) * color->cam.height *
-                  sizeof(std::uint32_t);
+    color_bytes[i] = VkDeviceSize(color->cam.width) * color->cam.height *
+                     sizeof(std::uint32_t);
     VR_TRY(
         color_input(*color).check("TsdfIntegrator::integrate: the colour "
                                   "image",
-                                  color_bytes));
+                                  color_bytes[i]));
     VR_TRY(check_storage_buffer_range(
-        "TsdfIntegrator::integrate: the colour buffer", color_bytes,
+        "TsdfIntegrator::integrate: the colour buffer", color_bytes[i],
         max_storage_buffer_range_));
     // The kernel decodes with exactly one curve, so a frame that is not already
     // in the canonical encoded form is refused rather than fused through the
@@ -289,6 +257,28 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid,
           "encoded form (sRGB transfer, BT.709 primaries); convert it at the "
           "capture boundary with sensor::to_canonical");
     }
+    any_color = true;
+  }
+  if (live.empty()) {
+    return {};
+  }
+
+  // The float tsdf + weight attributes to fuse into.
+  VR_ASSIGN(AttributeView tsdf_view, grid.attribute("tsdf"));
+  VR_ASSIGN(AttributeView weight_view, grid.attribute("weight"));
+  if (tsdf_view.element_size != sizeof(float) ||
+      weight_view.element_size != sizeof(float)) {
+    return Status::invalid_argument(
+        "TsdfIntegrator::integrate: tsdf/weight attributes must be float");
+  }
+
+  // The grid's colour attribute: required as uint32 when a frame brings
+  // colour, and used whenever the grid carries one, since dynamic mode must
+  // clear a stale color even on a depth-only frame -- matching the prior
+  // engine, which clears color whenever the grid holds a color block, not only
+  // when a color image arrives.
+  const Buffer* color_attr_buf = nullptr;
+  if (any_color) {
     VR_ASSIGN(AttributeView color_view, grid.attribute("color"));
     if (color_view.element_size != sizeof(std::uint32_t)) {
       return Status::invalid_argument(
@@ -303,12 +293,12 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid,
     }
   }
 
-  // Compact the active blocks, leaving the list on the device; only its count
-  // comes back. This is a second GPU dispatch inside this stage's host row, so
-  // it reports its own "  ..active set" breakdown -- otherwise its device time
-  // is invisible and the gap between integrate's two halves reads as submit
-  // overhead when a good part of it is another kernel. Nothing to fuse into an
-  // empty grid.
+  // Compact the active blocks once for every frame, leaving the list on the
+  // device; only its count comes back. This is a second GPU dispatch inside
+  // this stage's host row, so it reports its own "  ..active set" breakdown --
+  // otherwise its device time is invisible and the gap between integrate's two
+  // halves reads as submit overhead when a good part of it is another kernel.
+  // Nothing to fuse into an empty grid.
   // TODO(tsdf): dispatch indirect off the device count, saving the fence wait
   // between the two submits, if a host row shows that wait.
   VR_ASSIGN(const volume::DeviceBlockList active,
@@ -331,86 +321,99 @@ Status TsdfIntegrator::integrate(VoxelBlockGrid& grid,
 
   if (config_.track_dirty_blocks) {
     VR_TRY(prepare_dirty_flags(grid));
-    kernel_.set.write_storage_buffer(8, dirty_blocks_.handle(), 0,
-                                     VK_WHOLE_SIZE);
   }
+  // A set and a device span a frame.
+  const auto count = static_cast<std::uint32_t>(live.size());
+  VR_TRY(frame_sets_.reserve(*device_, kernel_, count));
+  VR_TRY(gpu_timer_.reserve(*device_, count));
 
-  // One batch: the frames staged, the cameras inline, then the dispatch. The
-  // descriptor writes all precede the dispatch that binds the set.
+  // One batch: per frame, its images staged, its cameras inline, then its
+  // dispatch, on a set of its own. The two camera buffers are shared by every
+  // frame and rewritten ahead of each dispatch, which the batch's barrier
+  // around every dispatch orders after the one before read them. Every set is
+  // written whole before its dispatch is recorded, as the batch requires.
+  // TODO(tsdf): one dispatch looping over the cameras, reading and writing
+  // each voxel once, if integrate's device time comes to matter after
+  // PERF.md's P3 (DECISIONS.md, 2026-09-30).
   CommandBatch batch(*device_, *allocator_);
-  Buffer depth_buf;  // a host array's device copy, alive across the batch
-  VR_ASSIGN(const VkBuffer depth_handle,
-            depth.buffer(batch, *allocator_, depth_bytes, depth_buf));
-  if (depth_buf.valid()) {
-    // Named because it is the biggest thing this call moves -- a few
-    // megabytes a frame at a scanner's resolution -- and so the first row a
-    // capture's transfer view should be able to attribute.
-    device_->set_object_name(VK_OBJECT_TYPE_BUFFER,
-                             debug_object_handle(depth_buf.handle()),
-                             "tsdf.depth_frame");
-  }
-  // The camera params ride the SSBO verbatim; the kernel derives world ->
-  // camera from the rigid cam_to_world, so there is no host-side pose
-  // inversion.
-  VR_TRY(batch.upload(cam_buf_, 0, &cam, sizeof(DepthCameraParams)));
-
-  kernel_.set.write_storage_buffer(0, tsdf_view.buffer->handle(), 0,
-                                   VK_WHOLE_SIZE);
-  kernel_.set.write_storage_buffer(1, weight_view.buffer->handle(), 0,
-                                   VK_WHOLE_SIZE);
-  kernel_.set.write_storage_buffer(
-      2, active.buffer->handle(), 0,
-      VkDeviceSize(active.count) * sizeof(BlockIndex));
-  // The images' exact ranges, never VK_WHOLE_SIZE: a caller's buffer may be
-  // past maxStorageBufferRange where the image it holds is not.
-  kernel_.set.write_storage_buffer(3, depth_handle, 0, depth_bytes);
-
-  // Color bindings. Slot 6 is the grid's `color` attribute whenever it carries
-  // one (resolved above), so dynamic can clear a stale color even on a
-  // depth-only frame; slot 5 is the color image only when a frame is supplied
-  // this call. Unused color slots fall back to the 1-element dummy so every
-  // descriptor stays bound.
+  std::vector<Buffer> depth_bufs(frames.size());  // host arrays' device copies
+  std::vector<Buffer> color_bufs(frames.size());  // alive across the batch
   const std::uint32_t has_color_attr = (color_attr_buf != nullptr) ? 1u : 0u;
-  kernel_.set.write_storage_buffer(6,
-                                   (color_attr_buf != nullptr)
-                                       ? color_attr_buf->handle()
-                                       : color_dummy_.handle(),
-                                   0, VK_WHOLE_SIZE);
-
-  Buffer color_buf;
-  std::uint32_t has_color = 0;
-  if (color != nullptr) {
+  for (std::size_t k = 0; k < live.size(); ++k) {
+    const std::size_t i = live[k];
+    const FrameInput& frame = frames[i];
+    const DescriptorSet& set = frame_sets_[k];
     VR_ASSIGN(
-        const VkBuffer color_handle,
-        color_input(*color).buffer(batch, *allocator_, color_bytes, color_buf));
-    if (color_buf.valid()) {
+        const VkBuffer depth_handle,
+        frame.depth.buffer(batch, *allocator_, depth_bytes[i], depth_bufs[i]));
+    if (depth_bufs[i].valid()) {
+      // Named because it is the biggest thing this call moves -- a few
+      // megabytes a frame at a scanner's resolution -- and so the first row a
+      // capture's transfer view should be able to attribute.
       device_->set_object_name(VK_OBJECT_TYPE_BUFFER,
-                               debug_object_handle(color_buf.handle()),
-                               "tsdf.color_frame");
+                               debug_object_handle(depth_bufs[i].handle()),
+                               "tsdf.depth_frame");
     }
-    VR_TRY(batch.upload(color_cam_buf_, 0, &color->cam,
-                        sizeof(ColorCameraParams)));
-    kernel_.set.write_storage_buffer(5, color_handle, 0, color_bytes);
-    has_color = 1;
-  } else {
-    // No color image this call; restore the dummy at slot 5 (a prior call may
-    // have bound a real image there). Slot 6 already reflects the grid above.
-    kernel_.set.write_storage_buffer(5, color_dummy_.handle(), 0,
-                                     VK_WHOLE_SIZE);
-  }
+    // The camera params ride the SSBO verbatim; the kernel derives world ->
+    // camera from the rigid cam_to_world, so there is no host-side pose
+    // inversion.
+    VR_TRY(batch.upload(cam_buf_, 0, &frame.camera, sizeof(DepthCameraParams)));
 
-  const PushConstants push{
-      grid_params,
-      active.count,
-      max_weight,
-      static_cast<std::uint32_t>(mode),
-      has_color,
-      has_color_attr,
-      config_.track_dirty_blocks ? 1u : 0u,
-      (color != nullptr && color->coverage_in_alpha) ? 1u : 0u};
-  VR_TRY(batch.dispatch(kernel_, &push, sizeof(push),
-                        group_count(static_cast<std::uint32_t>(threads64)),
-                        max_workgroup_count_x_, &stage));
+    set.write_storage_buffer(0, tsdf_view.buffer->handle(), 0, VK_WHOLE_SIZE);
+    set.write_storage_buffer(1, weight_view.buffer->handle(), 0, VK_WHOLE_SIZE);
+    set.write_storage_buffer(2, active.buffer->handle(), 0,
+                             VkDeviceSize(active.count) * sizeof(BlockIndex));
+    // The images' exact ranges, never VK_WHOLE_SIZE: a caller's buffer may be
+    // past maxStorageBufferRange where the image it holds is not.
+    set.write_storage_buffer(3, depth_handle, 0, depth_bytes[i]);
+    set.write_storage_buffer(4, cam_buf_.handle(), 0, VK_WHOLE_SIZE);
+    // Slot 6 is the grid's `color` attribute whenever it carries one, so
+    // dynamic can clear a stale color even on a depth-only frame; slot 5 is the
+    // frame's color image only when it brings one. Unused color slots take the
+    // 1-element dummy so every descriptor stays bound.
+    set.write_storage_buffer(6,
+                             (color_attr_buf != nullptr)
+                                 ? color_attr_buf->handle()
+                                 : color_dummy_.handle(),
+                             0, VK_WHOLE_SIZE);
+    set.write_storage_buffer(7, color_cam_buf_.handle(), 0, VK_WHOLE_SIZE);
+    // The dirty-flag slot: the real array when tracking, else the dummy, which
+    // the kernel never indexes (pc.track_dirty is 0).
+    set.write_storage_buffer(8,
+                             config_.track_dirty_blocks ? dirty_blocks_.handle()
+                                                        : color_dummy_.handle(),
+                             0, VK_WHOLE_SIZE);
+    std::uint32_t has_color = 0;
+    if (frame.color != nullptr) {
+      VR_ASSIGN(const VkBuffer color_handle,
+                color_input(*frame.color)
+                    .buffer(batch, *allocator_, color_bytes[i], color_bufs[i]));
+      if (color_bufs[i].valid()) {
+        device_->set_object_name(VK_OBJECT_TYPE_BUFFER,
+                                 debug_object_handle(color_bufs[i].handle()),
+                                 "tsdf.color_frame");
+      }
+      VR_TRY(batch.upload(color_cam_buf_, 0, &frame.color->cam,
+                          sizeof(ColorCameraParams)));
+      set.write_storage_buffer(5, color_handle, 0, color_bytes[i]);
+      has_color = 1;
+    } else {
+      set.write_storage_buffer(5, color_dummy_.handle(), 0, VK_WHOLE_SIZE);
+    }
+
+    const PushConstants push{
+        grid_params,
+        active.count,
+        max_weight,
+        static_cast<std::uint32_t>(mode),
+        has_color,
+        has_color_attr,
+        config_.track_dirty_blocks ? 1u : 0u,
+        (frame.color != nullptr && frame.color->coverage_in_alpha) ? 1u : 0u};
+    VR_TRY(batch.dispatch(kernel_, set, &push, sizeof(push),
+                          group_count(static_cast<std::uint32_t>(threads64)),
+                          max_workgroup_count_x_, &stage));
+  }
   return batch.submit();
 }
 

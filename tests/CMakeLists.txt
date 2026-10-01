@@ -149,6 +149,15 @@ target_link_libraries(recon_tsdf_device_input_test
 vr_target_warnings(recon_tsdf_device_input_test)
 add_test(NAME recon_tsdf_device_input COMMAND recon_tsdf_device_input_test)
 
+# tsdf integrate set: several cameras allocated and fused in one call each must
+# give the grid fusing them one at a time gives, bit for bit. Skips (exit 0)
+# where no device is present.
+add_executable(recon_tsdf_integrate_set_test tsdf_integrate_set_test.cpp)
+target_link_libraries(recon_tsdf_integrate_set_test
+                      PRIVATE volumetric_kit::recon_tsdf Vulkan::Vulkan)
+vr_target_warnings(recon_tsdf_integrate_set_test)
+add_test(NAME recon_tsdf_integrate_set COMMAND recon_tsdf_integrate_set_test)
+
 # volume delete: allocate a cube, remove a subset, verify the survivors + heap
 # reuse (chain splice / successor pull-up) on the real driver. Skips (exit 0)
 # where no device is present.

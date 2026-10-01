@@ -116,6 +116,7 @@ Status KernelSetBuilder::add(ComputeKernel& out, const char* name,
   device_->set_object_name(VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT,
                            debug_object_handle(out.layout.handle()), name);
 
+  out.bindings = bindings;
   kernels_.push_back(&out);
   descriptor_total_ += bindings;
   return {};
@@ -144,6 +145,29 @@ Result<DescriptorPool> KernelSetBuilder::build() {
     kernels_[i]->set = sets[i];
   }
   return pool;
+}
+
+Status KernelSets::reserve(const Device& device, const ComputeKernel& kernel,
+                           std::uint32_t count) {
+  if (!kernel.valid() || count == 0) {
+    return Status::invalid_argument(
+        "KernelSets::reserve: needs a built kernel and a count above 0");
+  }
+  if (count <= sets_.size()) return {};
+  VkDescriptorPoolSize size{};
+  size.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+  size.descriptorCount = kernel.bindings * count;
+  VR_ASSIGN(DescriptorPool pool,
+            DescriptorPool::create(device.handle(), &size, 1, count));
+  std::vector<DescriptorSet> sets;
+  sets.reserve(count);
+  for (std::uint32_t i = 0; i < count; ++i) {
+    VR_ASSIGN(DescriptorSet set, pool.allocate(kernel.layout.handle()));
+    sets.push_back(set);
+  }
+  pool_ = std::move(pool);
+  sets_ = std::move(sets);
+  return {};
 }
 
 Status dispatch(Device& device, const ComputeKernel& kernel, const void* push,

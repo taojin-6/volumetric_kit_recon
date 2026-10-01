@@ -267,6 +267,16 @@ class VR_CORE_API GpuTimer {
   /// @return How many spans the current window recorded.
   std::size_t count() const noexcept { return spans_.size(); }
 
+  /// @brief Raise the per-window bound to at least @p max_spans, clamped to
+  ///        @ref kMaxSpans, for a caller whose window grows with its input.
+  ///
+  /// Replaces the pool, so it does nothing within a window (a span
+  /// recorded) or on a timer that is not @ref available, since an abandoned
+  /// one must keep its pool.
+  /// @param device  The device the timer was created for.
+  /// @return OK, or @ref create's failure.
+  Status reserve(const Device& device, std::uint32_t max_spans);
+
   /// @brief Publish each resolved span to @p out as a GPU row, and end the
   ///        window.
   ///

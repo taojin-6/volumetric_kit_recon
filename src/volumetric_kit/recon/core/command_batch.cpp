@@ -372,15 +372,14 @@ Status CommandBatch::check_dispatch(const ComputeKernel& kernel,
   return {};
 }
 
-CommandBatch::Op CommandBatch::dispatch_op(Kind kind,
-                                           const ComputeKernel& kernel,
-                                           const void* push,
-                                           std::uint32_t push_size,
-                                           GpuStageScope* stage) const {
+CommandBatch::Op CommandBatch::dispatch_op(
+    Kind kind, const ComputeKernel& kernel, const DescriptorSet& set,
+    const void* push, std::uint32_t push_size, GpuStageScope* stage) const {
   Op op;
   op.kind = kind;
   op.kernel = &kernel;
-  op.set_writes = kernel.set.writes();
+  op.set = &set;
+  op.set_writes = set.writes();
   if (push_size > 0) {
     const auto* bytes = static_cast<const unsigned char*>(push);
     op.data.assign(bytes, bytes + push_size);
@@ -392,8 +391,20 @@ CommandBatch::Op CommandBatch::dispatch_op(Kind kind,
 Status CommandBatch::dispatch(const ComputeKernel& kernel, const void* push,
                               std::uint32_t push_size, std::uint32_t groups,
                               std::uint32_t max_groups, GpuStageScope* stage) {
+  return dispatch(kernel, kernel.set, push, push_size, groups, max_groups,
+                  stage);
+}
+
+Status CommandBatch::dispatch(const ComputeKernel& kernel,
+                              const DescriptorSet& set, const void* push,
+                              std::uint32_t push_size, std::uint32_t groups,
+                              std::uint32_t max_groups, GpuStageScope* stage) {
   VR_TRY(check(usable()));
   VR_TRY(check(check_dispatch(kernel, push, push_size)));
+  if (!set.valid()) {
+    return check(
+        Status::invalid_argument("CommandBatch::dispatch: the set is empty"));
+  }
   // The guard dispatch() enforces: an oversized 1-D grid is invalid usage on
   // a min-spec driver, and a clamp would drop the tail of the work silently.
   if (groups > max_groups) {
@@ -401,7 +412,7 @@ Status CommandBatch::dispatch(const ComputeKernel& kernel, const void* push,
         "CommandBatch::dispatch: workgroup count exceeds the device's "
         "maxComputeWorkGroupCount[0]"));
   }
-  Op op = dispatch_op(Kind::Dispatch, kernel, push, push_size, stage);
+  Op op = dispatch_op(Kind::Dispatch, kernel, set, push, push_size, stage);
   op.value = groups;
   ops_.push_back(std::move(op));
   return {};
@@ -422,7 +433,8 @@ Status CommandBatch::dispatch_indirect(const ComputeKernel& kernel,
                         "indirect command")));
   VR_TRY(check(has_usage(args, VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
                          "dispatch_indirect needs an INDIRECT_BUFFER")));
-  Op op = dispatch_op(Kind::DispatchIndirect, kernel, push, push_size, stage);
+  Op op = dispatch_op(Kind::DispatchIndirect, kernel, kernel.set, push,
+                      push_size, stage);
   op.src = args.handle();
   op.src_offset = offset;
   ops_.push_back(std::move(op));
@@ -580,7 +592,7 @@ void CommandBatch::record(VkCommandBuffer cmd, std::vector<Span>& spans) const {
       case Kind::DispatchIndirect: {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
                           op.kernel->pipeline.handle());
-        const VkDescriptorSet set = op.kernel->set.handle();
+        const VkDescriptorSet set = op.set->handle();
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
                                 op.kernel->pipeline.layout(), 0, 1, &set, 0,
                                 nullptr);
@@ -629,7 +641,7 @@ Status CommandBatch::submit() {
   // The set is bound only now, so a write since its dispatch was recorded
   // would run that dispatch on the later binding.
   for (const Op& op : ops_) {
-    if (op.kernel != nullptr && op.kernel->set.writes() != op.set_writes) {
+    if (op.set != nullptr && op.set->writes() != op.set_writes) {
       return Status::invalid_argument(
           "CommandBatch::submit: a kernel's descriptor set was rewritten "
           "after its dispatch was recorded");

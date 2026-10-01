@@ -7300,6 +7300,108 @@ which the counter named and the person at the window confirmed.
   compiled only where the SDK is installed (a `TODO(examples)` in the
   viewer's CMakeLists).
 
+### 2026-09-30 — A rig's cameras fuse in one batch: each dispatch binds a descriptor set of its own over the same kernel, and the set is compacted once.
+
+**The rule.** `VoxelHashMap::allocate_from_depth` and
+`TsdfIntegrator::integrate` take a list of frames (`volume::DepthInput`,
+`tsdf::FrameInput`), and record every frame's dispatch, in order, into one
+`CommandBatch`: allocation one submit a round, fusion one compaction and one
+submit for the whole set. A batch binds a set when it submits and refuses one
+rewritten after its dispatch was recorded, so each frame's dispatch binds a set
+of its own from `core`'s `KernelSets`, through the set overload of
+`CommandBatch::dispatch`. The camera buffers stay shared and are rewritten
+inline before each dispatch, which the batch's barrier around every dispatch
+orders after the read before it. The one-frame overloads are lists of one.
+`fuse_set` (`examples/common/fuse_device_frame.hpp`) allocates and grows for a
+set, then integrates it, and `rig_viewer` and `fuse_orbbec --rig --gpu` fuse
+through it (PERF.md's P1).
+
+**Why this shape.** Fusion ran one set of kernels per camera, three or more
+fence-waited submits each: twelve a set for four cameras. Each voxel belongs to
+one thread, so dispatching the frames in order in one batch computes exactly
+what separate submits did, Dynamic's clearing included.
+`recon_tsdf_integrate_set` fuses three cameras both ways, over the same
+blocks, and compares every voxel's bits. The one difference is the compaction:
+it runs once, after every frame's allocation, so a block first allocated for a
+later camera is fused from the earlier ones too.
+
+PERF.md proposed descriptor arrays and a kernel that loops over the cameras,
+reading and writing each voxel once rather than once a camera. That needs
+`shaderStorageBufferArrayDynamicIndexing` and a second shader, for a gain in
+device time that no one has measured. A set per camera needs neither and
+removes the submits.
+
+**Measured.** room0, sets of four 1200 x 680 frames held in device-local
+buffers (as `GpuFramePrep` hands them out), 1 cm, Dynamic, Release, metrics
+off, the two modes interleaved over three runs of 30 sets, median per set:
+
+| per set | one frame at a time | `fuse_set` |
+|---|---|---|
+| M5 Max | 6.87 ms | 5.93 ms |
+| RTX 5090 | 4.00 ms | 3.16 ms |
+
+Summed over a run of 30 sets with metrics on:
+
+| | M5 Max, one / set | RTX 5090, one / set |
+|---|---|---|
+| integrate, host | 91.3 / 55.6 ms | 41.7 / 21.6 ms |
+| its compaction, host | 24.9 / 6.7 ms | 16.8 / 4.9 ms |
+| allocate, host | 127 / 125 ms | 89.3 / 83.7 ms |
+| allocate, device | 92.0 / 110.9 ms | 72.1 / 74.2 ms |
+
+Allocation gains least, for two reasons:
+
+- **Its device time is most of it.** It is about 3.7 ms a set on the Mac and
+  2.5 on the 5090.
+- **A retry round now re-dispatches every frame**, not only the one that lost
+  a race. On the Mac 63% of sets need a second round, against 31% of single
+  frames, and the device time rose 20%.
+
+Per-frame tallies would re-dispatch only the frames that failed, at the cost of
+a second retry loop. The contention's cause is the 27 blocks each pixel probes,
+which PERF.md's P3 removes, so that comes first.
+
+The first 5090 run put integrate at 23 ms of device time a set. The bench had
+made its frames with `upload_storage_buffer`, which is host-visible, so every
+voxel read them across PCIe. The library's own frames are device-local; the
+bench was wrong.
+
+**Not taken.**
+- Per-frame retry tallies (above).
+- The kernel that loops over the cameras: measure integrate's device share
+  after P3 first. It is 0.34 ms a set on the 5090 and 1.4 ms on the Mac.
+
+Both are `TODO`s at the code they would change.
+
+**Review.** The PR's review changed five things:
+
+- **A set must outlive the batch.** The batch binds and checks the set object
+  it was given at `submit`, and `DescriptorSet` is copyable. So the set
+  overload deletes its rvalue twin, as `block_list` does.
+- **`KernelSets` grows itself.** It `reserve`s the sets a call needs, one a
+  frame, rather than the kernel's own set plus extras. The binding count it
+  sizes its pool by is on `ComputeKernel`, recorded by `KernelSetBuilder::add`,
+  not repeated at the call site.
+- **The timers fit a set.** A set records a device span a frame a round, past
+  the timer's 32 at four cameras and nine rounds. `GpuTimer::reserve` raises
+  the bound between windows.
+- **An empty frame is skipped by both calls.** `allocate_from_depth` skipped
+  one and `integrate` refused it, so one camera's empty frame lost a whole set.
+- **The retry budget is the call's.** A set gets the ten rounds one frame
+  gets, so the doc no longer claims the frames' blocks match one-at-a-time
+  allocation unconditionally: they match once every frame's blocks are in.
+
+**Verified.**
+- The suite passes on the M5 Max and the RTX 5090 (in the CI image).
+- `recon_tsdf_integrate_set` also passes under synchronization validation, and
+  fails when only the first frame's camera is uploaded.
+- `recon_core_command_batch` dispatches one kernel over two sets in one batch,
+  and refuses a set rewritten after its dispatch was recorded.
+- `recon_tsdf_integrate_set`'s set carries an empty frame, grows the map's
+  sets past a one-frame call, and counts the same dirty blocks as one frame
+  at a time. That last check fails when only the first frame's set binds the
+  dirty flags.
+
 ## Measured lessons
 
 Not decisions, but the measurements that overturned an assumption about

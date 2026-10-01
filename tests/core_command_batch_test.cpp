@@ -670,6 +670,79 @@ int main() {
     CHECK(got_b == z);
   }
 
+  // One kernel dispatched twice in one batch over different buffers, each on
+  // a set of its own; and an extra set rewritten after its dispatch is refused
+  // as the kernel's own is.
+  {
+    vr::KernelSets sets;
+    CHECK(sets.reserve(device, add, 0).domain() ==
+          vr::Status::Code::InvalidArgument);
+    CHECK(sets.reserve(device, vr::ComputeKernel{}, 1).domain() ==
+          vr::Status::Code::InvalidArgument);
+    CHECK(sets.reserve(device, add, 2).ok() && sets.size() == 2);
+    // Grow-only: a smaller count keeps the sets, a larger one replaces them.
+    const VkDescriptorSet first = sets[0].handle();
+    CHECK(sets.reserve(device, add, 1).ok() && sets.size() == 2);
+    CHECK(sets[0].handle() == first);
+    CHECK(sets.reserve(device, add, 3).ok() && sets.size() == 3);
+
+    // Moves: the source is left empty, a live destination takes the source's
+    // sets, and a self-move keeps them. Launder through a pointer to dodge
+    // -Wself-move.
+    vr::KernelSets moved(std::move(sets));
+    CHECK(sets.size() == 0);  // NOLINT(bugprone-use-after-move)
+    CHECK(moved.size() == 3);
+    vr::KernelSets other;
+    CHECK(other.reserve(device, add, 1).ok());
+    const VkDescriptorSet kept = moved[0].handle();
+    other = std::move(moved);
+    CHECK(moved.size() == 0);  // NOLINT(bugprone-use-after-move)
+    CHECK(other.size() == 3 && other[0].handle() == kept);
+    vr::KernelSets* alias = &other;
+    other = std::move(*alias);
+    CHECK(other.size() == 3 && other[0].handle() == kept);
+    const vr::DescriptorSet& sa = other[0];
+    const vr::DescriptorSet& sb = other[1];
+
+    const std::vector<std::uint32_t> q = pattern(900);
+    vr::CommandBatch fill(device, allocator);
+    CHECK(fill.upload(a, 0, p.data(), kBytes).ok());
+    CHECK(fill.upload(b, 0, q.data(), kBytes).ok());
+    CHECK(fill.submit().ok());
+
+    const Push one{kCount, 1};
+    const Push two{kCount, 2};
+    const std::uint32_t groups = vr::group_count(kCount, 64);
+    sa.write_storage_buffer(0, a.handle(), 0, VK_WHOLE_SIZE);
+    sb.write_storage_buffer(0, b.handle(), 0, VK_WHOLE_SIZE);
+    std::vector<std::uint32_t> got_b(kCount, 0);
+    vr::CommandBatch batch(device, allocator);
+    CHECK(batch.dispatch(add, sa, &one, sizeof(one), groups, rig.max_groups)
+              .ok());
+    CHECK(batch.dispatch(add, sb, &two, sizeof(two), groups, rig.max_groups)
+              .ok());
+    // The first set again, after the second: the same buffer twice in order.
+    CHECK(batch.dispatch(add, sa, &two, sizeof(two), groups, rig.max_groups)
+              .ok());
+    CHECK(batch.readback(a, 0, kBytes, got.data()).ok());
+    CHECK(batch.readback(b, 0, kBytes, got_b.data()).ok());
+    CHECK(batch.submit().ok());
+    CHECK(got == plus(p, 3));
+    CHECK(got_b == plus(q, 2));
+
+    vr::CommandBatch rewritten(device, allocator);
+    CHECK(rewritten.dispatch(add, sb, &one, sizeof(one), groups, rig.max_groups)
+              .ok());
+    sb.write_storage_buffer(0, a.handle(), 0, VK_WHOLE_SIZE);
+    CHECK(rewritten.submit().domain() == vr::Status::Code::InvalidArgument);
+
+    const vr::DescriptorSet none;
+    vr::CommandBatch empty_set(device, allocator);
+    CHECK(
+        empty_set.dispatch(add, none, &one, sizeof(one), groups, rig.max_groups)
+            .domain() == vr::Status::Code::InvalidArgument);
+  }
+
   // A refusal poisons its batch: nothing it recorded runs.
   {
     const std::vector<std::uint32_t> z(kCount, 0);
