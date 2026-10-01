@@ -359,7 +359,7 @@ from about 19. Merge further only if the rows show the remaining gap.
 > slot carries stamps, ticks of a clock on the map: `requested`, written by
 > every allocation kernel for each block it asks for, and `weighted`, by the
 > grid's block pass. `free_stale_blocks(max_age)` frees the blocks whose
-> newer stamp is that old, and `rig_viewer` runs it every 30 sets
+> newer stamp is older than that, and `rig_viewer` runs it every 30 sets
 > (`--free-after`). On the bench below, at 600 sets:
 >
 > | | blocks | integrate, device ms/set |

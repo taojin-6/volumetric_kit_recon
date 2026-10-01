@@ -143,7 +143,7 @@ vr::Result<std::uint32_t> changed_after(const vol::VoxelBlockGrid& g,
             g.map().read_block_stamps());
   std::uint32_t n = 0;
   for (const vol::BlockStamp& st : stamps) {
-    n += static_cast<std::int32_t>(st.changed - since) > 0 ? 1u : 0u;
+    n += vol::tick_after(st.changed, since) ? 1u : 0u;
   }
   return n;
 }

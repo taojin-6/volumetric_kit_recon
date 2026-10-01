@@ -17,6 +17,7 @@
 #include "grid_readback.hpp"
 #include "volumetric_kit/recon/core/allocator.hpp"
 #include "volumetric_kit/recon/core/color_space.hpp"
+#include "volumetric_kit/recon/core/command_batch.hpp"
 #include "volumetric_kit/recon/core/device.hpp"
 #include "volumetric_kit/recon/core/instance.hpp"
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
@@ -149,7 +150,7 @@ int changed_stamps_case(vr::Device& device, vr::Allocator& allocator) {
     for (const vol::BlockIndex& b : active.value()) {
       const vol::BlockStamp& s =
           st.value()[static_cast<std::uint32_t>(b.ptr) / 512u];
-      if (static_cast<std::int32_t>(s.changed - since) > 0) {
+      if (vol::tick_after(s.changed, since)) {
         z.push_back(b.coord.z);
       }
     }
@@ -201,6 +202,27 @@ int changed_stamps_case(vr::Device& device, vr::Allocator& allocator) {
   CHECK(fuse(a, depth_band, 0.0f).ok());
   CHECK(a.map().tick() == t4 + 1);
   CHECK(changed_z(a, t4).empty());
+
+  // --- A stamp from before the clock wrapped is overwritten ----------------
+  //
+  // Across a wrap a block holds a tick numerically above the clock's, so
+  // every stamp is set to one, and the fuse must still stamp what it changes
+  // with its own tick: a max would keep the old one, which reads as older
+  // than every cursor taken since.
+  {
+    vr::Result<std::vector<vol::BlockStamp>> st = a.map().read_block_stamps();
+    CHECK(st.ok());
+    for (vol::BlockStamp& s : st.value()) s.changed = 0xFFFFFFF0u;
+    vr::CommandBatch batch(device, allocator);
+    CHECK(batch
+              .upload(a.map().stamps_buffer(), 0, st.value().data(),
+                      st.value().size() * sizeof(vol::BlockStamp))
+              .ok());
+    CHECK(batch.submit().ok());
+  }
+  const std::uint32_t t5 = a.map().tick();
+  CHECK(fuse(a, depth_near, 5.0f).ok());
+  CHECK(!changed_z(a, t5).empty());
 
   // --- A grid's stamps are its own -----------------------------------------
   //

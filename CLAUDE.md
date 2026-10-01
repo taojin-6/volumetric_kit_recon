@@ -738,8 +738,8 @@ arbitrary; it usually isn't.
   interleave. The init kernel zeroes the records, the delete kernel zeroes a
   freed slot's, and `resize` copies them forward, the rehash stamping
   nothing. A consumer compares ticks and resets nothing:
-  `free_stale_blocks(max_age)` frees the blocks whose newer stamp is that
-  old, zeroing them with a kernel over the pass's list, so the band the
+  `free_stale_blocks(max_age)` frees the blocks whose newer stamp is older
+  than that, zeroing them with a kernel over the pass's list, so the band the
   allocator still asks for stays, and `rig_viewer` runs it every
   `--free-after` sets; `mesh`'s incremental extract re-meshes what changed
   since the tick it last meshed at.
@@ -871,7 +871,7 @@ arbitrary; it usually isn't.
   not less: that kernel owns its index run, so a dead triangle costs 12 bytes
   against the default kernel's 192, and its dead vertices need no writing at
   all. What it
-  may trust is one `{watermark, epoch, serial, tick}` struct, cleared at the top of
+  may trust is one `{watermark, epoch, serial, tick, iso}` struct, cleared at the top of
   **both** extract paths and re-established only on the publishing return, so
   no failure leaves it describing geometry that is
   gone; the anchor is compared *above* the call that re-anchors it, or it

@@ -7856,6 +7856,72 @@ see.
 - The changed tests run clean under synchronization validation, and the
   full suite passes on the M5 Max (57) and the RTX 5090 (44).
 
+**Review.** The PR's review changed five things:
+- **The GC frees a block older than `max_age`, not one that old.** With
+  integrate advancing the clock, a set's allocation is a tick old by the
+  time the set is fused. So `age >= max_age` freed blocks a set early, and
+  at `--free-after 1` it freed the whole unweighted band every set, about
+  60% of a static room. Freeing above `max_age` gives `rig_viewer` its old
+  behaviour exactly: a block goes `max_age` sets after it was last asked
+  for. This amends the stamps entry's "at least `max_age` ticks old".
+- **The integrate stamp is an exchange, and its read an atomic load.**
+  `atomicMax` compares unsigned, so once the clock wrapped, a stamp from
+  before the wrap would outrank every new tick and its block would never
+  re-mesh. The plain read before it raced the other groups' atomics, which
+  the memory model leaves undefined. A relaxed `atomicLoad`
+  (`GL_KHR_memory_scope_semantics`) keeps the skip and is well defined.
+  Interleaved A/B on the M5 Max, room0, 300 frames, device ms a frame:
+  0.127–0.150 before and 0.124–0.131 after at 2 cm; a mean of 0.515 before
+  and 0.520 after at 1 cm. Not re-measured on the RTX 5090, which was busy
+  with other jobs.
+- **The arena records its iso.** An incremental pass at another iso kept
+  every clean block's triangles on the old surface. It now falls back to a
+  full extract. The flags' version had the same gap.
+- **One wrap-aware comparison.** `volume::tick_after` and its GLSL twin in
+  `block_stamp.glsl` replace five hand-written copies.
+- **Smaller fixes:**
+  - the extractor binds the stamps on every pass, not a dummy on full ones;
+  - `fuse_replica`'s `changed_since` refuses a zero block size and counts a
+    slot past the stamps as changed, as the kernel does;
+  - two stale comments and a stale fallback in `ExtractTimings::incremental`
+    are fixed.
+
+**Verified (review).**
+- `recon_volume_block_stamps`: a block asked for a tick before a writer
+  stays at `max_age` 1, and goes a tick later.
+- `recon_tsdf_integrate`: with every stamp set above the clock, as after a
+  wrap, a fuse still stamps what it changed.
+- `recon_mesh_marching_cubes_sparse`: an incremental request at another
+  iso falls back, and gives that iso's surface.
+- Each fails its mutant: `>=` in the GC, `atomicMax` in the integrate, and
+  the iso clause dropped.
+- room0 at 2 cm gives this entry's numbers again: 38 of 40 extracts
+  incremental at 71.0% re-meshed, and 53.30% changed, 3 329 → 4 530 of
+  8 692.
+- The changed tests run clean under synchronization validation, and the
+  suite passes on the M5 Max (57).
+
+**Not taken.**
+- **Shims for the removed dirty API.** `volumetric_kit_ios` fetches recon
+  at `main`, and its scanner (`apps/scanner/Bridge/Fusion.mm`) calls
+  `TsdfIntegratorConfig`, `dirty_remesh_blocks`, `dirty_block_count`,
+  `reset_dirty` and the `DirtyBlocks` overload. So it stops compiling at
+  this merge, and it migrates in a PR of its own:
+  - drop the config and the resets;
+  - call `extract_device_incremental(grid, iso, &timings)`;
+  - survey from `read_block_stamps()` against a kept tick, as
+    `fuse_replica`'s `changed_since` does.
+
+  Shims would keep two mechanisms for one fact.
+- **A public call that stamps blocks changed, for other writers.** Nothing
+  in the family writes voxels outside the three writers. `attribute()` now
+  says that a write through it stamps nothing, so the next extract must be
+  a full one. The test that drives the extractor without fusing stamps by
+  hand.
+- **A narrower `--dirty-every` readback.** It reads 12 bytes a slot, against
+  the flags' 4. That is about 1.5 MB at room0's 131 072 slots, once a window,
+  outside every timed row.
+
 ## Measured lessons
 
 Not decisions, but the measurements that overturned an assumption about

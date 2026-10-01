@@ -111,8 +111,8 @@ add_test(NAME recon_volume_block_grid COMMAND recon_volume_block_grid_test)
 
 # volume block stamps: every allocation path stamps the blocks it asks for with
 # the map's tick, the block pass stamps those holding weight, and
-# free_stale_blocks frees those neither for max_age ticks; resize keeps the
-# records, remove and clear zero them. Skips (exit 0) with no device.
+# free_stale_blocks frees those neither for more than max_age ticks; resize
+# keeps the records, remove and clear zero them. Skips (exit 0) with no device.
 add_executable(recon_volume_block_stamps_test volume_block_stamps_test.cpp)
 target_link_libraries(recon_volume_block_stamps_test
                       PRIVATE volumetric_kit::recon_volume Vulkan::Vulkan)

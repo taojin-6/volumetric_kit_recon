@@ -65,9 +65,12 @@ struct ChangedBlocks {
 vr::Result<ChangedBlocks> changed_since(
     const vol::VoxelBlockGrid& grid, const std::vector<vol::BlockIndex>& active,
     std::uint32_t since) {
+  const auto vpb = static_cast<std::uint32_t>(grid.grid().voxels_per_block);
+  if (vpb == 0) {
+    return vr::Status::invalid_argument("changed_since: voxels_per_block is 0");
+  }
   VR_ASSIGN(const std::vector<vol::BlockStamp> stamps,
             grid.map().read_block_stamps());
-  const auto vpb = static_cast<std::uint32_t>(grid.grid().voxels_per_block);
   // 21 bits an axis, through unsigned casts since coordinates go negative.
   const auto key = [](const vr::Vec3i& c) {
     constexpr std::uint64_t kMask = (std::uint64_t{1} << 21) - 1;
@@ -77,9 +80,9 @@ vr::Result<ChangedBlocks> changed_since(
   };
   std::unordered_set<std::uint64_t> changed;
   for (const vol::BlockIndex& b : active) {
-    const std::uint32_t tick =
-        stamps[static_cast<std::uint32_t>(b.ptr) / vpb].changed;
-    if (static_cast<std::int32_t>(tick - since) > 0) {
+    // A slot past the stamps counts as changed, as the extract's kernel has it.
+    const std::size_t slot = static_cast<std::uint32_t>(b.ptr) / vpb;
+    if (slot >= stamps.size() || vol::tick_after(stamps[slot].changed, since)) {
       changed.insert(key(b.coord));
     }
   }
@@ -495,7 +498,8 @@ vr::Status run(const Options& opt) {
       // Both halves, because either alone reads as success. "0 of 40
       // incremental" is a run that measured the fallback; "40 of 40, 98%
       // re-meshed" is a run that measured the feature doing all the work
-      // anyway, which is what an unreset flag array produces.
+      // anyway, which is what a writer stamping every block it visits, rather
+      // than those it changed, produces.
       std::printf(
           "  incr    %zu of %zu extracts incremental, mean %.1f%% of blocks "
           "re-meshed\n",
