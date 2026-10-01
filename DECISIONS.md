@@ -7604,6 +7604,165 @@ re-run, because the box was busy with other work.
 - Mutants that drop the free-count clause or the reuse each fail two or
   three of those tests.
 
+### 2026-10-01 — Every block slot carries stamps, ticks of one clock on the map, each written by the pass that knows its fact; the grid frees the blocks no allocation has asked for and no voxel has weighted in `max_age` ticks.
+
+**The rule.**
+- **One clock, one record a slot.** `VoxelHashMap` keeps a `uint32` tick,
+  which the caller advances (`rig_viewer` once a set), and a device buffer
+  of one `BlockStamp` per block slot beside the heap (`stamps_buffer()`).
+  The init kernel zeroes every record, at create and clear and for a grow's
+  new slots, and the delete kernel zeroes a slot's as it frees the block.
+  `resize` copies the records forward, since it keeps every slot, and the
+  rehash never stamps.
+- **Each stamp is written by the pass that knows it.**
+  - `requested` is written by every allocation kernel, through
+    `allocate_block`, for every block it asks for, inserted or found. The
+    tick rides the shared push block, and the store is an `atomicExchange`
+    since a band's lanes ask for one block together. Ages are differences of
+    ticks, so they hold across the clock's wrap.
+  - `weighted` is written by the grid's block pass (`stamp_blocks`): one
+    workgroup per active block, where any voxel is observed
+    (`weight >= kObservedWeight`, the mesher's and the codec's threshold).
+  - A consumer compares ticks against a tick of its own and never resets
+    anything. So the dirty flags, which a consumer must reset, are the next
+    to move onto a stamp: `changed`, written by the integrator.
+- **The first consumer is the GC.** `VoxelBlockGrid::free_stale_blocks`
+  frees the blocks whose newer stamp is at least `max_age` ticks old, under
+  a `"block stamps"` row. A second kernel zeroes their attributes where the
+  pass listed them, a dispatch an attribute, rather than through `remove`,
+  which resolves coordinates on the host and fills block by block; the list
+  is then read back for the map's `remove`. Both kernels are built on the
+  first pass. `rig_viewer` runs it every `--free-after` sets (30), with
+  `max_age` the same.
+- **Why the map, not the grid.** The map hands slots out and takes them
+  back, so its kernels are the ones that know a block was asked for or
+  freed. A record kept a tier up would need the allocation kernels to bind
+  a buffer they do not own, or the host to zero a record per freed block.
+
+**Not taken: freeing on weight alone.** The first cut kept the records on
+the grid, stamped a block `allocated` when a pass first saw it, and freed
+one empty for `max_age` ticks. The synthetic bench below liked it. The lab
+rig did not:
+- In a static room about 60% of the active set holds no weight at any
+  moment. It is most likely the corners of the (2tb+1)³ cube depth
+  allocation dilates every surface block into, which the allocator asks
+  for every set and Dynamic integration never weights.
+- So every other pass freed 33 000 blocks (the heap 44% → 18% of 131 072),
+  and the sets after it asked for every one again.
+- Each such pass took 140 ms, nearly all of it the zero fills: MoltenVK runs
+  each `vkCmdFillBuffer` as a dispatch of its own. Removing 33 000 scattered
+  blocks of 60 000 spent 80–97 ms in its one submit, against 6 ms sorting
+  and searching on the host and 1 ms for the map's delete. A fill per block
+  for the stamps was about four in ten of the fills, and the delete kernel
+  now does that instead.
+
+`requested` is what tells a block the allocator still wants from one a
+surface has left.
+
+**Measured.** A throwaway bench: four cameras at the rig's calibrated
+poses, Femto-like 640 x 576 depth ray-cast on the host, a static 0.3 m
+sphere and a 0.25 m one walking a 0.8 m loop, then the same loop shifted
+0.5 m. 600 sets fused through `fuse_set`, Dynamic, 1 cm, Release; GC every
+30 sets at `max_age` 30.
+
+| | blocks at set 600 | blocks holding weight | integrate, device ms/set at the end |
+|---|---|---|---|
+| M5 Max, no GC | 7 348 | 1 947 | 0.41 |
+| M5 Max, GC | 2 909 (2 100–3 200 throughout) | 1 947 | 0.25 |
+| RTX 5090, no GC | 7 345 | 1 947 | 0.08–0.09 |
+| RTX 5090, GC | 2 909 | 1 947 | 0.04 |
+
+The weighted count matches the no-GC run at every 50-set checkpoint, so no
+block holding weight was freed. A pass costs about 2 ms of host time on the
+M5 Max and 1 ms on the RTX 5090, once every 30 sets.
+
+- **What the stamp costs allocation.** Interleaved A/B with GC off, three
+  rounds of 300 sets, device ms a set: 0.228–0.235 on the base against
+  0.220–0.232 on the M5 Max; 0.088–0.090 against 0.092–0.093, +4%, on the
+  RTX 5090.
+- **The lab rig, static room** (M5 Max, four cameras at 1280 x 720, 1 cm,
+  300 sets): the heap stays at 43–44% of 131 072. Each pass frees 1 100–1 800
+  blocks the allocator stopped asking for, depth noise most likely, in
+  4.6–7.4 ms, nearly all of it zero fills, which the review moved into a
+  kernel (below).
+- **So the GC bounds history, not the band.** A room nobody moves through
+  keeps its size. Shrinking the band is a separate item, PERF.md's P9.
+
+**Verified.**
+- `recon_volume_block_stamps` (new):
+  - each allocation path stamps what it asks for: coords, points,
+    triangles and depth, each through a binding of its own;
+  - asking again restamps;
+  - the pass stamps only the blocks holding weight;
+  - `free_stale_blocks` frees exactly the blocks neither stamp has touched
+    in `max_age` ticks, and zeroes their records;
+  - `resize` keeps every record, so the rehash does not restamp;
+  - `clear` zeroes them all;
+  - a `max_age` of 0, and a grid without `weight`, are refused.
+- Four mutants each fail it: allocation not stamping, delete keeping the
+  record, GC on weight alone, and `resize` dropping the records.
+- The volume tests and `recon_tsdf_integrate` run clean under
+  synchronization validation.
+- The full suite passes on the M5 Max (57) and the RTX 5090 (44), and
+  `rig_viewer` ran 300 sets on the lab rig.
+
+**Review.** The PR's review changed seven things:
+- **The move-assignment names every member.** It moved none of the block
+  pass's, so a grid assigned into a moved-from one kept an empty kernel and
+  aborted on its next pass.
+- **Zeroing is a kernel.** `block_zero.comp` zeroes one attribute of every
+  listed block, a workgroup a block, reading the pass's list where it lies.
+  A throwaway bench freed every other block of N, so each freed block was a
+  fill of its own before (M5 Max, Release, interleaved, the `"block stamps"`
+  row):
+
+  | freed blocks | fills | kernel |
+  |---|---|---|
+  | 1 500 | 5.2–8.3 ms | 0.74–0.78 ms |
+  | 33 000 | 94–100 ms | 1.9–2.8 ms |
+
+  The kernel needs each attribute's block to be whole 4-byte words, as at
+  block size 8 it always is, and `free_stale_blocks` refuses the rest.
+  `remove` still fills, a `TODO(volume)` on `zero_blocks`.
+- **Ages hold across the wrap.** `requested` was an `atomicMax` and the age
+  `tick - max(requested, weighted)`, so once the clock wrapped a block's old
+  `requested` won, and a block weighted that very pass could be freed.
+- **One threshold for observed.** The pass counted any weight above 0, so a
+  block of weights under `kObservedWeight`, empty to the mesher and the
+  codec, was never freed.
+- **A large active set splits.** Both kernels dispatch a group a block in
+  dispatches of at most `maxComputeWorkGroupCount[0]`, which a min-spec
+  device sets at 65 535 and the lab rig's 58 000 blocks nearly reach.
+- **The pass is built on first use**, so a grid that never frees builds no
+  pipeline, pool or query pool for it, and its two buffers are named for a
+  capture.
+- **`rig_viewer` reports a failed pass and fuses on**, rather than ending
+  the session over housekeeping.
+
+**Verified (review).**
+- `recon_volume_block_stamps` now also checks that a weight under
+  `kObservedWeight` leaves a block to be freed, that a freed block's voxels
+  are zeroed in every attribute while a kept block's stay, and two
+  move-assignments: into a moved-from grid, and over one that ran its pass
+  over fewer attributes.
+- It fails each of these mutants: a zeroing kernel that writes nothing, the
+  threshold back at 0, the move-assignment without the new members (a
+  crash), and either kernel ignoring its base with the split forced to 2
+  groups. The split forced to 2 alone passes.
+- A throwaway run wrapped the clock: the old logic freed a block weighted
+  that pass, and the new keeps it.
+- The volume tests run clean under synchronization validation, and the
+  suite passes on the M5 Max (57). The lab rig was not re-run.
+
+**Not taken.**
+- Removing on the device. The list comes back in the zeroing's submit and
+  goes up again in `remove`'s, 16 bytes a block each way and no submit of
+  its own; a device-list `remove` would save those bytes and nothing
+  measured.
+- Skipping the `weight` fill, which the review suggested since the pass had
+  found it 0. Under the new threshold it need not be, and the kernel leaves
+  little to save.
+
 ## Measured lessons
 
 Not decisions, but the measurements that overturned an assumption about
