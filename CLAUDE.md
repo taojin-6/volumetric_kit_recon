@@ -1223,3 +1223,10 @@ behind environment variables); re-measure there after each.
 guesses at this pipeline's bottleneck have been wrong, each corrected by an
 `ExtractTimings` breakdown that pointed somewhere else entirely — see
 [DECISIONS.md](DECISIONS.md#measured-lessons).
+
+**Performance work on the live rig path is planned in [PERF.md](PERF.md)**:
+the path camera to screen, its submits and bytes per set, the measured
+baseline, the rules for that work, and the claimable work items (batching
+a set's cameras, deduplicating allocation, per-remesh copies, the
+discrete-GPU gaps). Read it before optimising anything on that path, and
+update your item's row in the PR that lands it.
