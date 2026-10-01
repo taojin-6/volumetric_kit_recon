@@ -126,7 +126,7 @@ kernels.
 | P4 | Bind texture views in place, with no per-remesh copies | measured 0.26–0.51 ms GPU per remesh at 4K, 0.04–0.12 at 720p | M | P1's descriptor-array decision | deferred |
 | P2 | Record a set's frame prep in one batch | measured no gain; slower for host colour on the Mac | S | — | not worth it |
 | P6 | Take the remaining host decisions off the critical path | at most ~0.5 ms/set on the RTX 5090, ~0.7 on the M5 Max (measured gap) | M | P1, P5 | open |
-| P7 | Free the blocks Dynamic mode has emptied | active-set growth over a session (measure first) | M | — | open |
+| P7 | Free the blocks Dynamic mode has emptied | measured: the map 3.5x in 600 sets, integrate's device time 2.6x | M | — | open, worth building |
 | D1 | Report a decoder's fallback to host pictures | makes a silent 12 MB/camera/frame PCIe regression visible | S | — | landed (#130) |
 | D2 | Put `--show-sources`' buffers on the device | ~133 MB over PCIe per remesh with the view on | S | — | landed (#130) |
 | D3 | Keep exported picture buffers out of the BAR | robustness on ReBAR systems | S | — | not needed; in review (#130) |
@@ -352,6 +352,32 @@ The target is fuse + prep in one submit and remesh in one, about 2 per set
 from about 19. Merge further only if the rows show the remaining gap.
 
 ### P7 — Free the blocks Dynamic mode has emptied
+
+> **Measured (2026-10-01), so worth building.** A throwaway bench put four
+> cameras at the rig's calibrated poses, with Femto-like 640 x 576 depth
+> ray-cast on the host. They saw a static 0.3 m sphere at the point their
+> axes meet, and a 0.25 m sphere walking a 0.8 m loop around it, then the
+> same loop shifted 0.5 m. The bench fused every set through `fuse_set`,
+> Dynamic, 1 cm (M5 Max, Release):
+>
+> | set | blocks | with any weight | empty | integrate, host / device |
+> |---|---|---|---|---|
+> | 50 | 2 117 | 759 | 64% | 0.63 / 0.19 ms |
+> | 300 | 5 786 | 1 632 | 72% | 0.81 / 0.45 ms |
+> | 600 | 7 348 | 1 947 | 74% | 0.82 / 0.49 ms |
+>
+> The surface stays at about 1 600–1 950 blocks while the map grows 3.5x.
+> Empty blocks come two ways, and one pass that frees a block empty for M
+> sets answers both:
+>
+> - **From the start.** Most of the dilated band never takes weight under
+>   Dynamic integration, which clears free space ahead of the surface and
+>   does not fuse past the band. That is already 64% at set 50.
+> - **Over time.** A receded surface's blocks accumulate as the mover
+>   reaches new space.
+>
+> The age guard matters for the first kind: a band block is empty until the
+> next fuse reaches it.
 
 - **Problem.**
   - Dynamic integration clears a receded surface's voxels to weight 0 (the
