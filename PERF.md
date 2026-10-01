@@ -121,7 +121,7 @@ kernels.
 |---|---|---|---|---|---|
 | P8 | Sample the viewer's GPU timing | ~1.7 ms/set on MoltenVK (estimate) and honest rows | S | — | open |
 | P1 | Fuse a set's cameras in one allocate, one compaction and one integrate | measured −14% a set on the M5 Max, −21% on the RTX 5090 | L | — | in review (#127) |
-| P3 | Deduplicate depth allocation before dilating | allocate's device time (the largest fusion kernel) and its lock-race retries | M | — | open |
+| P3 | Deduplicate depth allocation before dilating | measured −50% a set on the M5 Max, −62% on the RTX 5090 (over P1) | M | — | in review (`perf/alloc-dedup`) |
 | P5 | Extract from the fuse's device block list | one compaction and the list's host round trip per remesh | M | P1 for the shared list | open |
 | P4 | Bind texture views in place, with no per-remesh copies | ~133 MB of device copies per remesh at 4K | M | P1's descriptor-array decision | open |
 | P2 | Record a set's frame prep in one batch | 3 of 4 prep submits | S | — | open |
@@ -201,6 +201,11 @@ whenever convenient; then P1, P3, P5, P4, P2 + P6; P7 once it is measured.
   - Submits per set.
 
 ### P3 — Deduplicate depth allocation
+
+> **Landed as** 16 x 16 tiles with shared-memory leader election, each
+> distinct block's band shared out over the workgroup. See DECISIONS.md,
+> 2026-09-30. Allocation's device time fell 77–81%, and its retries no longer
+> cost a set more than a frame.
 
 - **Problem.** `hash_allocate_depth.comp` gives each pixel a thread that
   probes the whole (2·tb + 1)³ cube around its block

@@ -7402,6 +7402,61 @@ Both are `TODO`s at the code they would change.
   at a time. That last check fails when only the first frame's set binds the
   dirty flags.
 
+### 2026-09-30 — Depth allocation works a 16 x 16 pixel tile a workgroup and dilates each distinct block of the tile once, its band shared out over the lanes.
+
+**The rule.** `hash_allocate_depth.comp` maps each workgroup onto a 16 x 16
+tile of the depth image, and the host dispatches one group a tile. Every lane
+unprojects its pixel to a centre block. In shared memory, a lane keeps its
+block only when no earlier lane of the tile has it: its left or upper
+neighbour settles almost every lane, and only the first of each block scans
+the lanes before it. Then every distinct block's `(2·tb+1)³` band is shared
+out over the workgroup's 256 lanes, rather than walked by one. The allocated
+set is the per-pixel one exactly: `allocate_block` is idempotent, and a
+block's band is the same whoever dilates it. This is the prior engine's
+leader election (`hash_ops.metal`), in shared memory, so it needs no
+subgroup feature, and it retires the `TODO(volume)` the kernel carried
+(PERF.md's P3).
+
+**Why.** Neighbouring pixels nearly always land in one block: a 1 cm-voxel
+block at 1.5 m spans a few hundred pixels. Dilating per pixel probed the same
+27 blocks hundreds of times, about 22 M probes for a 1200 x 680 frame. It also
+set those pixels racing for one bucket's lock, and every lost race meant
+another round and another submit. After the 2026-09-30 batching entry,
+allocation was most of a set's fusion, and its retries re-dispatched every
+camera.
+
+**Measured.** The batching entry's bench, room0, sets of four 1200 x 680
+frames, 1 cm, Release, metrics off, interleaved with that entry's branch,
+median per set in set mode:
+
+| | before | after |
+|---|---|---|
+| M5 Max, per set | 5.77–5.97 ms | 2.87–2.94 ms |
+| M5 Max, allocate device (30 sets) | 105–111 ms | 25.3 ms |
+| RTX 5090, per set | 2.68–3.07 ms | 1.07–1.09 ms |
+| RTX 5090, allocate device (30 sets) | 73–74 ms | 14.0 ms |
+
+The retry cost the batching entry recorded is gone with the contention.
+Allocation's device time is now the same whether the frames come one at a
+time or as a set: 24.9 against 25.3 ms on the Mac. Against fusing one frame at
+a time before either change, a set takes 2.9 ms rather than 6.9 on the Mac.
+
+**Verified.**
+- `recon_volume_allocate` adds a frame three tiles by two, ragged at both
+  edges, with holes, one smooth half (many pixels a block) and one jagged
+  half (many blocks a tile). It must allocate exactly the host's union of
+  every pixel's band. Its values are dyadic (focal length 128, a 1/128 m
+  voxel, depths in 32nds, a power-of-two pose), so the host and the shader
+  unproject identically.
+- It fails two mutants: a lane that defers to its left neighbour without
+  comparing blocks, and a band loop that allocates only the centres. The old
+  4 x 4 frame passes the first, since it is one partial tile.
+- The suite passes on the M5 Max and the RTX 5090.
+
+**Not taken.** Deduplicating the bands themselves, which overlap 18 of 27
+blocks between adjacent centres. The rest of allocation's device time has not
+been broken down.
+
 ## Measured lessons
 
 Not decisions, but the measurements that overturned an assumption about

@@ -336,6 +336,9 @@ order. Change the decision, its entry there, and this list together.
 - [**2026-09-30**](DECISIONS.md#2026-09-30--a-rigs-cameras-fuse-in-one-batch-each-dispatch-binds-a-descriptor-set-of-its-own-over-the-same-kernel-and-the-set-is-compacted-once) —
   A rig's cameras fuse in one batch: each dispatch binds a descriptor set of
   its own over the same kernel, and the set is compacted once.
+- [**2026-09-30**](DECISIONS.md#2026-09-30--depth-allocation-works-a-16-x-16-pixel-tile-a-workgroup-and-dilates-each-distinct-block-of-the-tile-once-its-band-shared-out-over-the-lanes) —
+  Depth allocation works a 16 x 16 pixel tile a workgroup and dilates each
+  distinct block of the tile once, its band shared out over the lanes.
 
 ## Provenance & salvage policy
 
@@ -642,7 +645,9 @@ arbitrary; it usually isn't.
   kernels
   (`volume/shaders/hash_*.comp`) over the scalar-block-layout ABI. Depth
   allocation unprojects a posed frame and dilates each surface block into the
-  `(2·tb+1)³` truncation band — a solid cube, not a ray march;
+  `(2·tb+1)³` truncation band — a solid cube, not a ray march — a 16 × 16
+  pixel tile a workgroup, each distinct block of the tile dilated once and its
+  band shared out over the lanes (2026-09-30);
   `allocate_from_triangles` deliberately does **not** dilate that cube
   (2026-08-31): a triangle wider than the band — which is one block, 40 mm, at
   the defaults — would hole through the middle, so a block is allocated when its
