@@ -119,11 +119,11 @@ vr::Status allocate_band_with(vr::volume::VoxelBlockGrid& grid,
 /// @brief Allocate the truncation band for @p frame into @p grid, growing the
 ///        map (preserving the per-voxel data already fused) if it overflows.
 ///
-/// Grows only for a *capacity* limit. Depth allocation is the most contended
-/// entry point in the map -- adjacent pixels dilate into the same block, and
-/// the kernel's bucket spin-lock gives up after a bounded number of retries --
-/// so a round can hand back a residue of pure lock failures over a table that
-/// is nowhere near full. Doubling on that is expensive and unbounded: at the
+/// Grows only for a *capacity* limit. A frame of mostly new blocks -- the
+/// first, or a fast pan -- makes many of them at once, and the kernel's bucket
+/// spin-lock gives up after a bounded number of retries, so a round can hand
+/// back a residue of pure lock failures over a table that is nowhere near
+/// full. Doubling on that is expensive and unbounded: at the
 /// examples' defaults each attribute array goes 768 MiB -> 1536 MiB, and
 /// `resize` builds the grown buffers beside the old ones, so the transient
 /// peak is ~2.3 GiB -- for pressure that does not exist. Such a round is

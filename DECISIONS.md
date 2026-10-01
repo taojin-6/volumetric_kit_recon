@@ -7405,12 +7405,14 @@ Both are `TODO`s at the code they would change.
 ### 2026-09-30 — Depth allocation works a 16 x 16 pixel tile a workgroup and dilates each distinct block of the tile once, its band shared out over the lanes.
 
 **The rule.** `hash_allocate_depth.comp` maps each workgroup onto a 16 x 16
-tile of the depth image, and the host dispatches one group a tile. Every lane
-unprojects its pixel to a centre block. In shared memory, a lane keeps its
-block only when no earlier lane of the tile has it: its left or upper
-neighbour settles almost every lane, and only the first of each block scans
-the lanes before it. Then every distinct block's `(2·tb+1)³` band is shared
-out over the workgroup's 256 lanes, rather than walked by one. The allocated
+tile of the depth image. The host dispatches one group a tile and pushes the
+tile count along x, so it alone places the tiles. Every lane unprojects its
+pixel to a centre block. In shared memory, a lane keeps its block only when
+no earlier lane of the tile has it, scanning back from the lane before: the
+left neighbour settles most lanes, and only the first of each block reads
+every lane before it. Then every distinct block's `(2·tb+1)³` band is shared
+out over the workgroup's 256 lanes, offset by offset across the centres,
+rather than walked by one. The allocated
 set is the per-pixel one exactly: `allocate_block` is idempotent, and a
 block's band is the same whoever dilates it. This is the prior engine's
 leader election (`hash_ops.metal`), in shared memory, so it needs no
@@ -7436,8 +7438,19 @@ median per set in set mode:
 | RTX 5090, per set | 2.68–3.07 ms | 1.07–1.09 ms |
 | RTX 5090, allocate device (30 sets) | 73–74 ms | 14.0 ms |
 
-The retry cost the batching entry recorded is gone with the contention.
-Allocation's device time is now the same whether the frames come one at a
+Retries, from a round counter on the same bench (30 sets, three runs):
+
+| | before | after |
+|---|---|---|
+| M5 Max, sets needing a second round | 18–20 | 1 |
+| RTX 5090, sets needing a second round | 3 | 2–3 |
+
+On the Mac the retry cost the batching entry recorded is gone with the
+contention. The set left on both machines is the first, into an empty map; a
+second round settles it. The 5090 had little to remove: its first set loses
+about 14 000 races in round 1 to either kernel, and a few later sets lose
+1–41, since NVIDIA's independent thread scheduling lets a spin lock make
+progress. Allocation's device time is now the same whether the frames come one at a
 time or as a set: 24.9 against 25.3 ms on the Mac. Against fusing one frame at
 a time before either change, a set takes 2.9 ms rather than 6.9 on the Mac.
 
@@ -7453,9 +7466,48 @@ a time before either change, a set takes 2.9 ms rather than 6.9 on the Mac.
   4 x 4 frame passes the first, since it is one partial tile.
 - The suite passes on the M5 Max and the RTX 5090.
 
+**Review.** The PR's review changed three things:
+
+- **The scan walks back.** One backward scan from the lane before replaced
+  the left and upper shortcuts and the forward scan, and the band work goes
+  offset by offset rather than centre by centre. Over the 30 sets,
+  allocation's device time fell from 25.4 to 22.8 ms on the Mac and from
+  14.1 to 12.2 ms on the 5090; the scan alone gave 7% on the Mac. The review
+  proposed the offset order to cut lock races, and it did not change them; it
+  stays for its 2%.
+- **The host places the tiles.** The kernel derived its tile count along x
+  from the camera. It now takes the host's, in the push constant's spare
+  argument, and `kTile` sizes its workgroup and shared arrays.
+- **The tests cover the wide band and the retry.** The multi-tile frame also
+  runs at tb = 2, whose 125-block band outnumbers the lanes. A one-bucket
+  table puts every block of the 4 x 4 frame behind one lock: on the Mac its
+  first round loses 41–43 races and it settles by its fifth. The 4 x 4 case
+  claimed that contention before, but the dedup had taken it away.
+
+After P3, integrate is the larger part of fusion's device time on the Mac:
+41.4 ms over the 30 sets against allocation's 22.8. On the 5090 it is 10.3
+against 12.2. The batching entry's camera-looping kernel waits on that
+figure.
+
+Not changed:
+- A 2-D dispatch. Padding to whole tiles can push a frame of about 16.7 M
+  pixels past a min-spec device's 65 535 groups, which `CommandBatch`
+  refuses cleanly. That is sixteen times a 1024 x 1024 depth frame, and the
+  batch dispatches in one dimension.
+- A test that the dedup happens. Allocation is idempotent, so the allocated
+  set cannot show it; the bench does.
+
+**Verified (review).**
+- After every set of the room0 run, the sorted block set hashes the same as
+  main's, on both machines.
+- `recon_volume_allocate` fails four more mutants: a scan that ignores the
+  block, the failure report dropped (the one-bucket case), a band decode that
+  assumes a side of 3 (tb = 2), and the shader's `kTile` changed alone.
+- The suite passes on the M5 Max (56 tests) and the RTX 5090 (43).
+
 **Not taken.** Deduplicating the bands themselves, which overlap 18 of 27
-blocks between adjacent centres. The rest of allocation's device time has not
-been broken down.
+blocks between adjacent centres, a `TODO(volume)` at the band loop. The rest
+of allocation's device time has not been broken down.
 
 ## Measured lessons
 
