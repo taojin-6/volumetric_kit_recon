@@ -120,7 +120,7 @@ kernels.
 | id | item | expected win | effort | depends on | status |
 |---|---|---|---|---|---|
 | P8 | Sample the viewer's GPU timing | ~1.7 ms/set on MoltenVK (estimate) and honest rows | S | — | open |
-| P1 | Fuse a set's cameras in one allocate, one compaction and one integrate | measured −14% a set on the M5 Max, −21% on the RTX 5090 | L | — | in review (`perf/fuse-set`) |
+| P1 | Fuse a set's cameras in one allocate, one compaction and one integrate | measured −14% a set on the M5 Max, −21% on the RTX 5090 | L | — | in review (#127) |
 | P3 | Deduplicate depth allocation before dilating | allocate's device time (the largest fusion kernel) and its lock-race retries | M | — | open |
 | P5 | Extract from the fuse's device block list | one compaction and the list's host round trip per remesh | M | P1 for the shared list | open |
 | P4 | Bind texture views in place, with no per-remesh copies | ~133 MB of device copies per remesh at 4K | M | P1's descriptor-array decision | open |
