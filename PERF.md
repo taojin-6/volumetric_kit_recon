@@ -25,13 +25,15 @@ Baseline: `main` at `36b6d86` (2026-09-30).
 2. **This holds on a discrete GPU.** An NVIDIA desktop is the reference, not
    Apple's unified memory, where host visibility is free and so hides its
    cost (the 2026-09-28 residency decision and its measured lessons).
-3. **A set of N cameras costs a fixed number of submits.** Today that number
-   grows with the camera count: about 19 fence waits for four cameras.
+3. **A set of N cameras costs a fixed number of submits.** The baseline
+   took about 19 fence waits for four cameras. Since P1, fusion's share no
+   longer grows with the camera count.
 
 ## The path today
 
 For one set of four cameras, one iteration of `rig_viewer`'s fuse thread
-(`examples/viewer/rig_viewer.cpp:1270`):
+(`examples/viewer/rig_viewer.cpp:1270`), at the baseline. P1 has since made
+allocate, compaction and integrate one submit each per set; see its row.
 
 | stage | code | submits | order | read back |
 |---|---|---|---|---|
@@ -118,7 +120,7 @@ kernels.
 | id | item | expected win | effort | depends on | status |
 |---|---|---|---|---|---|
 | P8 | Sample the viewer's GPU timing | ~1.7 ms/set on MoltenVK (estimate) and honest rows | S | — | open |
-| P1 | Fuse a set's cameras in one allocate, one compaction and one integrate | most of the fuse's submit overhead; 3/4 of integrate's voxel traffic | L | — | open |
+| P1 | Fuse a set's cameras in one allocate, one compaction and one integrate | measured −14% a set on the M5 Max, −21% on the RTX 5090 | L | — | in review (`perf/fuse-set`) |
 | P3 | Deduplicate depth allocation before dilating | allocate's device time (the largest fusion kernel) and its lock-race retries | M | — | open |
 | P5 | Extract from the fuse's device block list | one compaction and the list's host round trip per remesh | M | P1 for the shared list | open |
 | P4 | Bind texture views in place, with no per-remesh copies | ~133 MB of device copies per remesh at 4K | M | P1's descriptor-array decision | open |
@@ -149,6 +151,13 @@ whenever convenient; then P1, P3, P5, P4, P2 + P6; P7 once it is measured.
   interleaved.
 
 ### P1 — Fuse a set's cameras together
+
+> **Landed as** one batch per step with a descriptor set per camera over the
+> unchanged kernels: no device feature, and the same bits as fusing the frames
+> one at a time. The camera-looping kernel below is deferred until integrate's
+> device time is shown to matter. Figures and rationale are in DECISIONS.md,
+> 2026-09-30. What is left: a retry round re-dispatches every camera (see P3),
+> and the extract still compacts again (P5).
 
 - **Problem.** `rig_viewer.cpp:1323` loops over the cameras through
   `fuse_frame` (`examples/common/fuse_device_frame.hpp`), and per camera:
@@ -201,7 +210,11 @@ whenever convenient; then P1, P3, P5, P4, P2 + P6; P7 once it is measured.
   round, another submit (`dispatch_with_retry`).
 - **Evidence.**
   - Allocate is the largest fusion kernel on the device: 0.76 ms against
-    integrate's 0.58 ms for one camera.
+    integrate's 0.58 ms for one camera. After P1 it is most of a set's
+    fusion: about 3.7 ms of device time a set on the M5 Max and 2.5 on the
+    RTX 5090 (room0, four frames, 1 cm).
+  - Since P1 a retry round re-dispatches every camera of the set. 63% of sets
+    need a second round on the Mac, so contention now costs a whole set.
   - The dedup is already a `TODO(volume)` (`hash_allocate_depth.comp:12`),
     which the prior engine's `hash_ops.metal` did with leader election.
 - **Change.** Deduplicate the centre blocks before dilating: 2-D workgroups

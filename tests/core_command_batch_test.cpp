@@ -670,6 +670,62 @@ int main() {
     CHECK(got_b == z);
   }
 
+  // One kernel dispatched twice in one batch over different buffers, each on
+  // a set of its own; and an extra set rewritten after its dispatch is refused
+  // as the kernel's own is.
+  {
+    CHECK(vr::allocate_kernel_sets(device, add, 0, 1).status().domain() ==
+          vr::Status::Code::InvalidArgument);
+    CHECK(vr::allocate_kernel_sets(device, add, 1, 0).status().domain() ==
+          vr::Status::Code::InvalidArgument);
+    CHECK(vr::allocate_kernel_sets(device, vr::ComputeKernel{}, 1, 1)
+              .status()
+              .domain() == vr::Status::Code::InvalidArgument);
+    vr::Result<vr::KernelSets> sets =
+        vr::allocate_kernel_sets(device, add, 1, 2);
+    CHECK(sets.ok() && sets.value().sets.size() == 2);
+    const vr::DescriptorSet& sa = sets.value().sets[0];
+    const vr::DescriptorSet& sb = sets.value().sets[1];
+
+    const std::vector<std::uint32_t> q = pattern(900);
+    vr::CommandBatch fill(device, allocator);
+    CHECK(fill.upload(a, 0, p.data(), kBytes).ok());
+    CHECK(fill.upload(b, 0, q.data(), kBytes).ok());
+    CHECK(fill.submit().ok());
+
+    const Push one{kCount, 1};
+    const Push two{kCount, 2};
+    const std::uint32_t groups = vr::group_count(kCount, 64);
+    sa.write_storage_buffer(0, a.handle(), 0, VK_WHOLE_SIZE);
+    sb.write_storage_buffer(0, b.handle(), 0, VK_WHOLE_SIZE);
+    std::vector<std::uint32_t> got_b(kCount, 0);
+    vr::CommandBatch batch(device, allocator);
+    CHECK(batch.dispatch(add, sa, &one, sizeof(one), groups, rig.max_groups)
+              .ok());
+    CHECK(batch.dispatch(add, sb, &two, sizeof(two), groups, rig.max_groups)
+              .ok());
+    // The first set again, after the second: the same buffer twice in order.
+    CHECK(batch.dispatch(add, sa, &two, sizeof(two), groups, rig.max_groups)
+              .ok());
+    CHECK(batch.readback(a, 0, kBytes, got.data()).ok());
+    CHECK(batch.readback(b, 0, kBytes, got_b.data()).ok());
+    CHECK(batch.submit().ok());
+    CHECK(got == plus(p, 3));
+    CHECK(got_b == plus(q, 2));
+
+    vr::CommandBatch rewritten(device, allocator);
+    CHECK(rewritten.dispatch(add, sb, &one, sizeof(one), groups, rig.max_groups)
+              .ok());
+    sb.write_storage_buffer(0, a.handle(), 0, VK_WHOLE_SIZE);
+    CHECK(rewritten.submit().domain() == vr::Status::Code::InvalidArgument);
+
+    vr::CommandBatch empty_set(device, allocator);
+    CHECK(empty_set
+              .dispatch(add, vr::DescriptorSet{}, &one, sizeof(one), groups,
+                        rig.max_groups)
+              .domain() == vr::Status::Code::InvalidArgument);
+  }
+
   // A refusal poisons its batch: nothing it recorded runs.
   {
     const std::vector<std::uint32_t> z(kCount, 0);

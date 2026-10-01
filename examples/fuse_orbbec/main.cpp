@@ -427,12 +427,17 @@ vr::Status run(const Options& opt) {
                            std::chrono::duration<double, std::milli>(
                                std::chrono::steady_clock::now() - t_prep)
                                .count());
+      // The set's frames up to --frames, fused together.
+      std::vector<std::optional<sensor::DeviceFrame>> take;
       for (const std::optional<sensor::DeviceFrame>& frame : frames) {
-        if (!frame || fused == opt.frames) continue;
-        VR_TRY(vr_example::fuse_frame(volume, integrator, *frame,
-                                      opt.max_weight, &stage_totals));
-        ++fused;
+        if (!frame || fused + static_cast<int>(take.size()) == opt.frames) {
+          continue;
+        }
+        take.push_back(frame);
       }
+      VR_TRY(vr_example::fuse_set(volume, integrator, take, opt.max_weight,
+                                  &stage_totals));
+      fused += static_cast<int>(take.size());
     } else if (raw) {
       VR_ASSIGN(const sensor::DeviceFrame frame,
                 preps.front().prepare(*raw, &stage_totals));

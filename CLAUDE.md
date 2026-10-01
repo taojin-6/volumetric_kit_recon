@@ -333,6 +333,9 @@ order. Change the decision, its entry there, and this list together.
   `rig_viewer` draws a live Orbbec rig: raw sets prepared, fused and textured
   on the GPU, the atlas filled by device copies recorded in gfx's frame, and
   the frame prep's colour shared with gfx's queue family.
+- [**2026-09-30**](DECISIONS.md#2026-09-30--a-rigs-cameras-fuse-in-one-batch-each-dispatch-binds-a-descriptor-set-of-its-own-over-the-same-kernel-and-the-set-is-compacted-once) —
+  A rig's cameras fuse in one batch: each dispatch binds a descriptor set of
+  its own over the same kernel, and the set is compacted once.
 
 ## Provenance & salvage policy
 
@@ -573,7 +576,9 @@ arbitrary; it usually isn't.
   `submit` refuses a kernel whose set was rewritten after its dispatch was
   recorded, since the set is bound only then (the 2026-09-28 residency
   decision, which also records why there is no staging arena and no mappable
-  device memory).
+  device memory). So a batch that dispatches one kernel over several cameras
+  binds each dispatch a set of its own, from `allocate_kernel_sets`, through
+  `dispatch`'s set overload (the 2026-09-30 decision).
   Vocabulary: `Status`/`Result`, the GLM aliases, `camera_params.hpp`,
   `color_space.hpp`, and `stage_metrics.hpp` — the `{name, cpu_ms, gpu_ms,
   has_gpu}` rows every tier reports timings in, with `GpuTimer` measuring the
@@ -689,7 +694,10 @@ arbitrary; it usually isn't.
   host copy of the heap counter, read back by every round that moves it, which
   `diagnostics()` checks against the device's own), and
   `kGrowThreshold` is the occupancy it says to grow at — named here so a UI or
-  an embedder cannot draw a ceiling that disagrees with it. Opt-in
+  an embedder cannot draw a ceiling that disagrees with it.
+  `allocate_from_depth` also takes a list of frames (`DepthInput`), every
+  frame dispatched in each round's one submit, on a set of its own; a round
+  that retries dispatches them all again. Opt-in
   `StageMetrics*` on `allocate_from_depth` (an `"allocate"` row summing every
   retry round) and on both compaction entry points (an `"active set"` row,
   breakdown-prefixed when the caller already has a stage open).
@@ -713,7 +721,11 @@ arbitrary; it usually isn't.
   compaction dispatch it also makes. That compaction leaves its list on the
   device (`compact_active_blocks_on_device`), so a fuse is two submits, the
   compaction's count the only thing read back; the frames are staged, and
-  the dirty flags are device-local.
+  the dirty flags are device-local. `integrate` also takes a list of frames
+  (`FrameInput`): one compaction and one submit for them all, each frame a
+  dispatch of its own in order, so every voxel takes them in turn as
+  integrating them one at a time does, bit for bit over the same blocks
+  (2026-09-30).
   `MeshIntegrator` writes a triangle mesh's distance field instead
   (2026-09-27), **overwriting** every voxel of every block the band reaches:
   weight 1 within `trunc_dist` of the mesh, the codec inverse's fresh zeros
@@ -1085,7 +1097,9 @@ arbitrary; it usually isn't.
 **Examples** (`examples/`). Five of the six poll their frames through
 `sensor::ICameraCapture&` — the fuse loop never learns what is behind it.
 `rig_viewer` reads the rig's raw *sets* (`OrbbecRig::poll_raw_set`) instead,
-as `fuse_orbbec --gpu --rig` does, since the contract has no set. The
+as `fuse_orbbec --gpu --rig` does, since the contract has no set, and both
+fuse each set through `fuse_device_frame.hpp`'s `fuse_set`: every camera's
+band in one allocation, then every camera in one integrate. The
 four dataset examples take `ReplicaCapture` as the source: frame cap, stride
 and the depth gate are its options, stamped on each frame it hands out, and its
 disk probe at `open` visits only the frames those options select. An empty

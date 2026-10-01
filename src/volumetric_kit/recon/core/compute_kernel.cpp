@@ -146,6 +146,28 @@ Result<DescriptorPool> KernelSetBuilder::build() {
   return pool;
 }
 
+Result<KernelSets> allocate_kernel_sets(const Device& device,
+                                        const ComputeKernel& kernel,
+                                        std::uint32_t bindings,
+                                        std::uint32_t count) {
+  if (!kernel.valid() || bindings == 0 || count == 0) {
+    return Status::invalid_argument(
+        "allocate_kernel_sets: needs a built kernel, and bindings and count "
+        "above 0");
+  }
+  VkDescriptorPoolSize size{};
+  size.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+  size.descriptorCount = bindings * count;
+  KernelSets out;
+  VR_ASSIGN(out.pool, DescriptorPool::create(device.handle(), &size, 1, count));
+  out.sets.reserve(count);
+  for (std::uint32_t i = 0; i < count; ++i) {
+    VR_ASSIGN(DescriptorSet set, out.pool.allocate(kernel.layout.handle()));
+    out.sets.push_back(set);
+  }
+  return out;
+}
+
 Status dispatch(Device& device, const ComputeKernel& kernel, const void* push,
                 std::uint32_t push_size, std::uint32_t groups,
                 std::uint32_t max_groups, GpuStageScope* stage) {

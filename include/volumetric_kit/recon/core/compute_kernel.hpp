@@ -158,6 +158,31 @@ class VR_CORE_API KernelSetBuilder {
   std::uint32_t descriptor_total_ = 0;
 };
 
+/// @brief More descriptor sets of one kernel's layout, in a pool of their own.
+///
+/// A @ref CommandBatch binds a set when it submits, so it refuses one rewritten
+/// after its dispatch was recorded. A batch that dispatches one kernel several
+/// times over different buffers -- a rig's cameras in one submit -- binds one
+/// of these to each dispatch (the set overload of @ref CommandBatch::dispatch).
+struct KernelSets {
+  DescriptorPool pool;              ///< Owns the sets; outlives every use.
+  std::vector<DescriptorSet> sets;  ///< Each of the kernel's layout.
+};
+
+/// @brief Allocate @p count descriptor sets of @p kernel's layout.
+/// @param device    The kernel's device.
+/// @param kernel    A built kernel.
+/// @param bindings  Its storage-buffer bindings, as given to
+///                  @ref KernelSetBuilder::add.
+/// @param count     How many sets.
+/// @return The sets, none written yet; @ref Status::Code::InvalidArgument for
+///         an unbuilt kernel or a zero @p bindings or @p count; or the pool's
+///         failure.
+VR_CORE_API Result<KernelSets> allocate_kernel_sets(const Device& device,
+                                                    const ComputeKernel& kernel,
+                                                    std::uint32_t bindings,
+                                                    std::uint32_t count);
+
 /// @brief Record + submit a one-shot 1-D dispatch of @p kernel over @p groups
 ///        workgroups: a @ref CommandBatch of that one command.
 ///

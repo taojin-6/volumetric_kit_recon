@@ -20,6 +20,7 @@
 #include <cstdio>
 #include <limits>
 #include <string>
+#include <vector>
 
 #include "grid_layout.hpp"
 #include "volumetric_kit/recon/core/allocator.hpp"
@@ -63,48 +64,15 @@ inline vr::Result<vr::volume::VoxelBlockGrid> create_fusion_grid(
       example_grid_params(voxel_size, trunc_dist, num_buckets), attrs, 3);
 }
 
-/// @brief Allocate the truncation band for @p frame into @p grid, growing the
-///        map (preserving the per-voxel data already fused) if it overflows.
-///
-/// Grows only for a *capacity* limit. Depth allocation is the most contended
-/// entry point in the map -- adjacent pixels dilate into the same block, and
-/// the kernel's bucket spin-lock gives up after a bounded number of retries --
-/// so a round can hand back a residue of pure lock failures over a table that
-/// is nowhere near full. Doubling on that is expensive and unbounded: at the
-/// examples' defaults each attribute array goes 768 MiB -> 1536 MiB, and
-/// `resize` builds the grown buffers beside the old ones, so the transient
-/// peak is ~2.3 GiB -- for pressure that does not exist. Such a round is
-/// reported and retried instead; the next dispatch sees less contention
-/// because the blocks that did land are now present.
-///
-/// The grow is its own `"resize"` row rather than folded into `"allocate"` or
-/// left untimed: it is by far the most expensive thing an overflowing frame
-/// does, and charging it to the allocate row would sink that stage's device
-/// share on exactly the frames where the host cost is not the kernel at all.
-/// The tier fills `"allocate"` itself, every round under the one name, so
-/// there is no scope around the loop here.
-///
-/// @param grid     The volume to allocate into.
-/// @param depth    The depth image: a host array (`const float*`) or a device
-///                 `vr::Buffer`, whichever `allocate_from_depth` overload the
-///                 frame's source feeds.
-/// @param camera   Its camera, which drives the unprojection and the range
-///                 gate.
-/// @param metrics  Optional stage rows (`"allocate"`, `"resize"`); null
-///                 measures nothing.
-/// @return OK once every surface block is allocated; @ref
-///         vr::Status::Code::OutOfMemory if the map cannot grow further or
-///         kept overflowing after five rounds; or the tier's own error.
-template <typename Depth>
-vr::Status allocate_band(vr::volume::VoxelBlockGrid& grid, const Depth& depth,
-                         const vr::DepthCameraParams& camera,
-                         vr::StageMetrics* metrics) {
+/// @brief The loop both @ref allocate_band overloads run: @p allocate takes the
+///        failures' split and returns the allocations that failed.
+template <typename Allocate>
+vr::Status allocate_band_with(vr::volume::VoxelBlockGrid& grid,
+                              Allocate&& allocate, vr::StageMetrics* metrics) {
   constexpr int kRounds = 5;
   for (int round = 0; round < kRounds; ++round) {
     vr::volume::AllocFailures failures;
-    VR_ASSIGN(
-        const std::uint32_t failed,
-        grid.map().allocate_from_depth(depth, camera, &failures, metrics));
+    VR_ASSIGN(const std::uint32_t failed, allocate(&failures));
     if (failed == 0) {
       return {};
     }
@@ -146,6 +114,64 @@ vr::Status allocate_band(vr::volume::VoxelBlockGrid& grid, const Depth& depth,
   return vr::Status::out_of_memory(
       "allocate_band: allocation kept overflowing after " +
       std::to_string(kRounds) + " rounds");
+}
+
+/// @brief Allocate the truncation band for @p frame into @p grid, growing the
+///        map (preserving the per-voxel data already fused) if it overflows.
+///
+/// Grows only for a *capacity* limit. Depth allocation is the most contended
+/// entry point in the map -- adjacent pixels dilate into the same block, and
+/// the kernel's bucket spin-lock gives up after a bounded number of retries --
+/// so a round can hand back a residue of pure lock failures over a table that
+/// is nowhere near full. Doubling on that is expensive and unbounded: at the
+/// examples' defaults each attribute array goes 768 MiB -> 1536 MiB, and
+/// `resize` builds the grown buffers beside the old ones, so the transient
+/// peak is ~2.3 GiB -- for pressure that does not exist. Such a round is
+/// reported and retried instead; the next dispatch sees less contention
+/// because the blocks that did land are now present.
+///
+/// The grow is its own `"resize"` row rather than folded into `"allocate"` or
+/// left untimed: it is by far the most expensive thing an overflowing frame
+/// does, and charging it to the allocate row would sink that stage's device
+/// share on exactly the frames where the host cost is not the kernel at all.
+/// The tier fills `"allocate"` itself, every round under the one name, so
+/// there is no scope around the loop here.
+///
+/// @param grid     The volume to allocate into.
+/// @param depth    The depth image: a host array (`const float*`) or a device
+///                 `vr::Buffer`, whichever `allocate_from_depth` overload the
+///                 frame's source feeds.
+/// @param camera   Its camera, which drives the unprojection and the range
+///                 gate.
+/// @param metrics  Optional stage rows (`"allocate"`, `"resize"`); null
+///                 measures nothing.
+/// @return OK once every surface block is allocated; @ref
+///         vr::Status::Code::OutOfMemory if the map cannot grow further or
+///         kept overflowing after five rounds; or the tier's own error.
+template <typename Depth>
+vr::Status allocate_band(vr::volume::VoxelBlockGrid& grid, const Depth& depth,
+                         const vr::DepthCameraParams& camera,
+                         vr::StageMetrics* metrics) {
+  return allocate_band_with(
+      grid,
+      [&](vr::volume::AllocFailures* failures) {
+        return grid.map().allocate_from_depth(depth, camera, failures, metrics);
+      },
+      metrics);
+}
+
+/// @brief @ref allocate_band for several cameras' frames at once, each round
+///        one submit for them all.
+inline vr::Status allocate_band(
+    vr::volume::VoxelBlockGrid& grid,
+    const std::vector<vr::volume::DepthInput>& frames,
+    vr::StageMetrics* metrics) {
+  return allocate_band_with(
+      grid,
+      [&](vr::volume::AllocFailures* failures) {
+        return grid.map().allocate_from_depth(frames, failures, metrics);
+      },
+      metrics);
 }
 
 /// @brief Fuse one captured frame: @ref allocate_band, then integrate its

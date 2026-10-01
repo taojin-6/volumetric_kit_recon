@@ -82,7 +82,7 @@
 #include <imgui_impl_glfw.h>
 #include <glm/glm.hpp>
 
-#include "fuse_device_frame.hpp"  // vr_example::fuse_frame (DeviceFrame)
+#include "fuse_device_frame.hpp"  // vr_example::fuse_set
 #include "fuse_frame.hpp"         // vr_example::create_fusion_grid
 // For the vertex-layout static_asserts it carries: gfx reads recon's arena in
 // place through its own attribute offsets (see fuse_viewer.cpp).
@@ -1319,24 +1319,18 @@ int run(GLFWwindow* window, const Options& opt) {
         }
         const std::vector<std::optional<rsensor::DeviceFrame>>& frames =
             prepared.value();
-        bool fused_ok = true;
-        for (const std::optional<rsensor::DeviceFrame>& frame : frames) {
-          if (!frame) continue;
-          const vr::Status fused = vr_example::fuse_frame(
-              volume, integrator, *frame, max_weight.load(), &fuse_stages,
-              dynamic_on.load() ? rtsdf::IntegrationMode::Dynamic
-                                : rtsdf::IntegrationMode::Classic);
-          if (!fused.ok()) {
-            std::fprintf(stderr, "rig_viewer: fuse: %s\n",
-                         fused.message().c_str());
-            fused_ok = false;
-            break;
-          }
-          ++frames_fused;
-        }
-        if (!fused_ok) {
+        const vr::Status fused = vr_example::fuse_set(
+            volume, integrator, frames, max_weight.load(), &fuse_stages,
+            dynamic_on.load() ? rtsdf::IntegrationMode::Dynamic
+                              : rtsdf::IntegrationMode::Classic);
+        if (!fused.ok()) {
+          std::fprintf(stderr, "rig_viewer: fuse: %s\n",
+                       fused.message().c_str());
           fuse_failed.store(true);
           break;
+        }
+        for (const std::optional<rsensor::DeviceFrame>& frame : frames) {
+          frames_fused += frame ? 1 : 0;
         }
         ++sets;
         for (std::size_t c = 0; c < frames.size() && c < cameras; ++c) {
