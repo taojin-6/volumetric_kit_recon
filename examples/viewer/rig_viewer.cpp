@@ -981,13 +981,17 @@ int run(GLFWwindow* window, const Options& opt) {
         solid_handles.clear();
         return false;
       }
+      solid_handles.push_back(buffer.value().handle());
+      solid_buffers.push_back(std::move(buffer).value());
+    }
+    // Filled only once every buffer exists, so a failed allocation above
+    // frees none that a recorded fill names.
+    for (std::size_t c = 0; c < cameras; ++c) {
       const auto& rgb = kCameraColours[c % kCameraColours.size()];
       const std::uint32_t word = std::uint32_t{rgb[0]} |
                                  (std::uint32_t{rgb[1]} << 8) |
                                  (std::uint32_t{rgb[2]} << 16) | 0xFF000000u;
-      vkCmdFillBuffer(cmd, buffer.value().handle(), 0, VK_WHOLE_SIZE, word);
-      solid_handles.push_back(buffer.value().handle());
-      solid_buffers.push_back(std::move(buffer).value());
+      vkCmdFillBuffer(cmd, solid_handles[c], 0, VK_WHOLE_SIZE, word);
     }
     // The fills land before the atlas copy reads them, later in this buffer.
     VkMemoryBarrier filled{};

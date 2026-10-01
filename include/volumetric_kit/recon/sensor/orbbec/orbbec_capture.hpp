@@ -102,12 +102,6 @@ struct OrbbecCaptureStats {
   /// Pairs replaced by a newer one before any poll took them -- the contract's
   /// "dropped, not queued", counted.
   std::uint64_t dropped = 0;
-  /// Raw frames handed out with their colour on the host although the stream
-  /// was opened onto a device (`OrbbecStreamOptions::device`): the decoder
-  /// could not keep the picture there, or its device path failed and every
-  /// later picture followed. Each costs a 4K frame's 12 MB across the bus on
-  /// a discrete GPU, so a run that should stay on the device reads 0 here.
-  std::uint64_t host_pictures = 0;
   /// Pairs a poll took but could not hand out, skipped or refused.
   std::uint64_t failed = 0;
   /// H.265 frame sets that will not be handed out: a colour frame that came
@@ -121,6 +115,13 @@ struct OrbbecCaptureStats {
   /// `delivered + dropped + failed + lost <= received`; the difference is a
   /// pair still pending or discarded by @ref OrbbecCapture::stop.
   std::uint64_t lost = 0;
+  /// Of @ref delivered, the raw frames handed out with their colour on the host
+  /// although the stream was opened onto a device
+  /// (`OrbbecStreamOptions::device`): the decoder could not keep the picture
+  /// there, or its device path failed and every later picture followed. Each
+  /// costs a 4K frame's 12 MB across the bus on a discrete GPU, so a run that
+  /// should stay on the device reads 0 here.
+  std::uint64_t host_pictures = 0;
 };
 
 /// @brief The streams a camera is opened with -- the same for every camera of

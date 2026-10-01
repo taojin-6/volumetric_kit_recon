@@ -6806,8 +6806,11 @@ silent, and an exported picture buffer stays out of the BAR.
   come to the host, but the decoder now says so once, through `core`'s log
   handler. `OrbbecCaptureStats::host_pictures` counts the raw frames handed
   out with host colour although the stream decodes onto a device, and
-  `fuse_orbbec` and `rig_viewer`'s Rig panel show it. On a discrete GPU each
-  such 4K frame costs 12 MB across the bus.
+  `fuse_orbbec` and `rig_viewer`'s Rig panel show it when it is not 0. On a
+  discrete GPU each such 4K frame costs 12 MB across the bus.
+- **The view's fills.** `--show-sources` allocates every buffer before it
+  records a fill, so a failed allocation never frees a buffer a recorded
+  fill names.
 - **Pinned by the camera test.** The camera's GPU pre-processing test now
   holds the count to the host-colour frames it sees. On the M5 Max it was 0
   for H.265 and MJPEG, and a mutant counting every frame failed it.
