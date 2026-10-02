@@ -31,8 +31,10 @@ struct DctBlocks {
   /// compares it exactly: a frame carries it bit for bit.
   float trunc_dist = 0.0f;
   /// `count * params.coefficient_count` values, by list position: coefficient
-  /// `j` of entry `i` is `coefficients[i * coefficient_count + j]`.
-  std::vector<std::int32_t> coefficients;
+  /// `j` of entry `i` is `coefficients[i * coefficient_count + j]`. Each is
+  /// within ±@ref kMaxQuantizedMagnitude, so 16 bits hold it, which halves the
+  /// transform's largest buffers against 32.
+  std::vector<std::int16_t> coefficients;
   /// `count * kMaskWordsPerBlock` words: entry `i`'s start at
   /// `masks[i * kMaskWordsPerBlock]`, and its voxel `v` (see @ref voxel_index)
   /// is bit `v % kMaskWordBits` of word `v / kMaskWordBits`.

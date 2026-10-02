@@ -62,11 +62,10 @@ inline vr::Result<vr::volume::VoxelBlockGrid> player_grid(
 ///        Decoder names -- and decoding again, twice at most, on IoError.
 ///
 /// IoError is how the Decoder reports bucket-lock contention that outlasted
-/// its own rounds, which another decode clears; it is also how it reports a
-/// free heap that refused a removed block, which nothing clears. The two
-/// cannot be told apart here, so the retries are few and the last error is
-/// returned as itself. Only the attempt that succeeds is timed into @p rows,
-/// so a frame that grew the grid on the way is reported as one decode.
+/// its own rounds, which another decode clears, and nothing else; every
+/// other error is returned as itself. Only the attempt that succeeds is timed
+/// into @p rows, so a frame that grew the grid on the way is reported as one
+/// decode.
 inline vr::Status decode_growing(vr::codec::Decoder& dec, const Bytes& frame,
                                  vr::volume::VoxelBlockGrid& grid,
                                  vr::StageMetrics* rows, int* grows) {

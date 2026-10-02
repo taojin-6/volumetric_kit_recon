@@ -32,6 +32,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `codec`: **frame v2, 37% smaller on room0.** A partial observed mask is
+  coded a plane and a line at a time against its neighbours, and a sign
+  inside its mantissa's raw field: 11.0 B/block at 1 cm where v1 was 17.4,
+  with the same decoded surface, and encode / decode 14.3 / 14.0 ms where
+  they were 17.6 / 16.0 (M5 Max, Release). A v1 frame is `Unsupported`. The
+  transform is device-resident, one `CommandBatch` a call, with 16-bit
+  coefficients. The encoder reuses a fuse's active list and drops
+  never-observed blocks before the transform. The decoder checks geometry
+  off the header first, stamps `changed` only on blocks it alters, and
+  reports a broken heap as `InvalidArgument` rather than `IoError`.
+  `CodecParams` refuses a step past `kMaxStep` (64). See the 2026-10-01
+  codec review decision.
+- `volume`: **`VoxelBlockGrid::remove` finds each block on the device**, so
+  it no longer compacts and sorts the whole grid to zero what it removes.
 - `examples`: **`rig_viewer` textures a missing camera from its last
   frame.** A set missing a camera now textures that camera from its newest
   frame, up to `--hold-ms` old on the rig's clock (2000 by default; 0 turns
