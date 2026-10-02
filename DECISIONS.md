@@ -7922,6 +7922,178 @@ see.
   the flags' 4. That is about 1.5 MB at room0's 131 072 slots, once a window,
   outside every timed row.
 
+### 2026-10-01 — The codec review: frame v2 codes a partial mask a plane and a line at a time against its neighbours and a sign inside its mantissa's field; the transform finds every block by its coordinate, one `CommandBatch` a call over device memory; the encoder takes the map's own list and drops never-observed blocks before the transform; and the decoder stamps only what it changes (amends the `changed`-stamp entry above).
+
+A review of the codec tier found fifteen things, five of correctness and ten
+of cost. All fifteen are fixed here. One of them changes the frame, so it is
+version 2, and a v1 frame is `Unsupported`; nothing in the family keeps
+frames.
+
+**The mask was half the frame.** Measured before anything changed, on room0
+at 1 cm coding every fourth frame (2.2 M blocks, 41% of them partially
+observed), v1's partial masks were **51.4% of the bits** and 25.3% of the
+coder steps: 64 raw bytes a partial block through one order-0 table. The mask
+edge of a fused band is a smooth surface, so its lines repeat. The models
+were judged offline on the last frame's 24 885 masks, by the empirical
+entropy of each context (bytes a coded block):
+
+| v1, one table | a line's byte by its predecessor's class | per line: same, empty, full or a byte | **per plane, then per line** |
+|---|---|---|---|
+| 8.25 (64 steps a partial block) | 4.88 | 2.80 (68 steps) | **2.23 (28 steps)** |
+
+So v2 codes a partial mask a z plane at a time. Each plane is one symbol:
+the same as the plane before it, all empty, all full, or coded line by line.
+Each line (one byte, eight voxels along x) is the same as its predictor,
+empty, full, or a byte. Its predictor is the line before it in the plane, or
+the same line of the plane before. Its symbol and byte are drawn from one of
+three tables, chosen by whether the predictor is empty, full or neither. The
+plane before the first, and the predictor of the first line, are unobserved.
+The writer tries the symbols in that order, so a value two of them name has
+one spelling from it. A plane-model context of the previous plane's symbol
+measured 2.17 and was not taken for three more tables.
+
+**A sign rides its field.** v1 sent a sign as a raw field of its own beside
+the bits below the leading one. v2 sends one field of c bits: the sign is the
+low bit and the mantissa sits above it. A value of class c <= 12 is one coder
+step, not two, and the bits are the same.
+
+**Measured**, room0, every frame coded, M5 Max, Release, three interleaved
+pairs at 1 cm and one at 2 cm (host ms a coded frame):
+
+| | B/block | Mbit/s @ 30 fps | encode (rANS) | decode (rANS) | accuracy RMS |
+|---|---|---|---|---|---|
+| 1 cm, before | 17.4 | 91.5 | 17.6 (13.7–13.8) | 15.9–16.1 (11.1–11.3) | 0.640 mm |
+| **1 cm, after** | **11.0** | **57.7** | **14.2–14.4** (11.1–11.3) | **13.9–14.1** (10.3–10.5) | 0.640 mm |
+| 2 cm, before | 20.5 | 26.6 | 4.70 (3.69) | 4.58 (2.96) | 1.635 mm |
+| **2 cm, after** | **13.6** | **17.6** | **3.83** (2.96) | **4.10** (2.72) | 1.635 mm |
+
+The decoded surface is the same to the triangle: 1 312 202 at 1 cm on both.
+On the decoder test's sphere the defaults go from 30.2 to 21.6 B/block with
+the same error. The rest of the encode's time went as follows:
+- `..sort`: 1.36 to 1.00 ms, sorting only the kept blocks.
+- `..forward`: 2.03 to 1.17 ms.
+- `..active set`: gone, since the fuse's list is reused.
+- `..observed`: 0.75 ms, new.
+
+On the decode side, `..active set` went from 0.98 to 0.67 ms, one
+compaction instead of two, and `..apply` from 2.70 to 1.70 ms. The device
+half rose: the encode's from 0.92–0.96 to 0.95–1.05 ms, and the decode's
+from 0.59–0.60 to 0.78–0.82 ms, since the inverse now reads every voxel
+before it writes it (below). Nothing here was measured on a discrete GPU.
+
+**The transform is resident.** Its coefficients, masks, list, tables and
+reject count were host-visible, and each batch of up to
+`maxComputeWorkGroupCount` blocks was its own fence-waited `dispatch()`.
+That is what the 2026-09-28 rule forbids. They are device-local now. Each
+call is one `CommandBatch`: the inputs staged up, the dispatches, and the
+results and the reject count read back. The coefficients travel as 16 bits,
+two to a word, each entry starting a word of its own. So an odd K pads its
+last word, and the host drops the pad on the way out and restores it on the
+way in. `DctBlocks` holds them as `int16_t`, which halves the transform's
+largest buffers and the host's copy. The reader's allocation bound drops
+from ~2.1 KB a block to ~1.1 KB.
+
+**Every block is found by its coordinate.** The kernels used to check that an
+entry's coord resolved to exactly its ptr, and refused it otherwise. Now they
+take the block the hash table holds for the coord and never read the ptr. A
+coord the table does not hold is refused, and nothing is written for it. That
+is the same single probe as before. It is what lets the decoder list the
+frame's blocks without reading back the slots its allocation drew, which had
+cost it a second compaction and a sort of the whole grid on every frame that
+added a block. The check that the grid held exactly the frame went with that
+compaction. The inverse's refusal still catches a frame block the grid
+lacks. A block the grid gained could only come from a writer during the
+call, which `Decoder` already forbids.
+
+**The encoder takes the map's own list and keeps only observed blocks.**
+`compact_active_blocks_on_device` returns a fuse's list while it still
+holds, and its compaction is kept for the extract after. Before, the
+encoder's host compaction invalidated the fuse's list, so an extract after
+an encode compacted again. A new kernel, `dct_observed.comp`, reads each
+listed block's weights and writes one word back per entry. The encoder drops
+the unobserved blocks there, then sorts and transforms the rest. Before, it
+transformed every block and read the zeros of the dropped ones back: room0
+codes one block in five of those it allocates.
+
+**The decoder stamps only what it changes.** The `changed`-stamp entry above
+had the inverse stamp every block it wrote. That made an incremental extract
+of a decoded stream re-mesh the whole grid every frame, though the blocks
+kept across frames are what such an extract needs (the 2026-09-27 decoder
+entry's Open list). The inverse now reads each voxel before writing it, and
+stamps a block only where a value differs, as the integrator does. That read
+is the decode's device time above. Decoding a frame twice into one grid
+stamps nothing the second time.
+
+**`VoxelBlockGrid::remove` resolves on the device.** It found each removed
+block's slot from a compaction and a sort of the whole active set, on every
+call and so on every decoder retry. Now `block_zero.comp` finds each coord's
+block itself, and zeroes it, so the cost is the count's and not the grid's.
+`free_stale_blocks` uses the same kernel. An attribute whose blocks share
+4-byte words cannot be zeroed by that kernel. That needs an odd block size
+and an element under 4 bytes, and `free_stale_blocks` already refuses it.
+`remove` keeps the old snapshot and fills for that case.
+
+**The smaller fixes.**
+- **A step ceiling.** `kMaxStep = 64`, the power of two past
+  `2 sqrt(512)`, where every coefficient quantizes to 0. A corrupt header's
+  finite step of 1e38 made decoded coefficients infinite, and the inverse's
+  sums NaN. `validate` refuses it, and so does the frame reader.
+- **Geometry before size.** The decoder compares the frame's geometry with
+  the grid's from the header, before decoding anything. A frame of other
+  geometry that was also larger than the grid came back `OutOfMemory`,
+  telling the player to grow a grid that could never take it.
+- **A broken heap is `InvalidArgument`.** A free heap that refuses a removed
+  block shared `IoError` with lock contention, whose answer is to decode
+  again. `decode_growing` could not tell them apart.
+- **Other fixes:**
+  - `kMinStep` is a literal, which the params test holds to its formula,
+    since `std::sqrt` made it a dynamic initializer;
+  - `bit_length` counts leading zeros in one instruction rather than a
+    shift loop;
+  - `volume::coord_less` is the one (z, y, x) order, where the codec, the
+    grid's remove and the test fixture each had a copy.
+
+**Verified.**
+- New cases:
+  - `recon_codec_dct`:
+    - an odd K over four blocks, both ways, against the reference;
+    - ptrs that are forged and ignored, an absent coord refused, and nothing
+      written for it;
+    - the observed pass, in the list's order, refusing a stale list;
+    - stamps only on a change.
+  - `recon_codec_decoder`: a second decode of one frame stamps nothing, and
+    another geometry larger than the grid is `InvalidArgument`.
+  - `recon_codec_encoder`: it takes back a fuse's list, leaves its own for
+    the next caller, and has the `..observed` row.
+  - `recon_codec_bitstream`: slab-shaped partial masks, the v2 table count,
+    and the step ceiling.
+  - `recon_volume_block_grid`: an absent coord zeroes nothing, and the
+    shared-word fallback.
+- Ten planted bugs, each caught:
+  - every block stamped;
+  - every block observed;
+  - no geometry check;
+  - the odd-K pad dropped and restored wrong;
+  - the zero kernel trusting the ptr;
+  - "same" before the first plane read as full;
+  - the sign read from the wrong bit;
+  - no step ceiling;
+  - the coefficient halves swapped.
+- The changed tests run clean under synchronization validation. The changed
+  sources and tests compile at `-O3 -Werror` under GCC 13.3 in an
+  `ubuntu:24.04` container. The codec and volume tests pass under ASan and
+  UBSan, and the suite passes on the M5 Max, 44 of 44.
+
+**Not taken.**
+- **Refusing a second spelling.** A mask whose plane is coded line by line
+  but repeats the plane before it, or a line coded as a byte that is empty,
+  decodes correctly and is never written. It joins v1's partial-mask-all-full
+  case in the same `TODO(codec)`.
+- **The GPU coder, and a device-resident forward output.** Host rANS is now
+  34% of a 30 fps interval to encode and 31% to decode at 1 cm. That is less
+  than before, so the GPU coder waits on the same terms as the room0 entry,
+  and the transform's `TODO(codec)` stays.
+
 ## Measured lessons
 
 Not decisions, but the measurements that overturned an assumption about

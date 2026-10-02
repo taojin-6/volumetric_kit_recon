@@ -351,6 +351,13 @@ order. Change the decision, its entry there, and this list together.
   advances the map's clock and stamps what it changed, always, and an
   incremental extract keeps the tick it last meshed at (amends the
   2026-08-09 dirty-block decision and the stamps entry above).
+- [**2026-10-01**](DECISIONS.md#2026-10-01--the-codec-review-frame-v2-codes-a-partial-mask-a-plane-and-a-line-at-a-time-against-its-neighbours-and-a-sign-inside-its-mantissas-field-the-transform-finds-every-block-by-its-coordinate-one-commandbatch-a-call-over-device-memory-the-encoder-takes-the-maps-own-list-and-drops-never-observed-blocks-before-the-transform-and-the-decoder-stamps-only-what-it-changes-amends-the-changed-stamp-entry-above) —
+  The codec review: frame v2 codes a partial mask a plane and a line at a
+  time against its neighbours and a sign inside its mantissa's field; the
+  transform finds every block by its coordinate, one `CommandBatch` a call
+  over device memory; the encoder takes the map's own list and drops
+  never-observed blocks before the transform; and the decoder stamps only
+  what it changes (amends the `changed`-stamp entry above).
 
 ## Provenance & salvage policy
 
@@ -698,7 +705,9 @@ arbitrary; it usually isn't.
   each `num_blocks·voxels_per_block`, so a consumer materialises only what it
   needs. Every buffer of both is device-local, reached through a
   `CommandBatch`: `create`, `clear` and `remove` zero on the device (`clear`
-  and `remove` before any index is freed), `resize` copies there, a call's
+  and `remove` before any index is freed, `remove` by a kernel that finds
+  each coord's block itself, so its cost is the count's, not the grid's),
+  `resize` copies there, a call's
   inputs are uploaded in its first round, and a round reads back its counts.
   A compaction still reads its list back, in the count's own submit while the
   set stays within a quarter past its last count (the 2026-09-28 residency
@@ -1062,51 +1071,63 @@ arbitrary; it usually isn't.
 - **`codec`** — four of five PRs in (2026-09-26 lists them). The defaults
   are room0's, and provisional until the per-band quantization study: K = 64
   with one step of 0.2 for DC and AC alike (2026-09-27). At 1 cm that is
-  17.4 B/block (235x under raw), 0.64 mm accuracy RMS, and host coding inside
-  a 30 fps frame interval. The public API
+  11.0 B/block (374x under raw) since frame v2 (2026-10-01), 0.64 mm
+  accuracy RMS, and host coding inside a 30 fps frame interval. The public API
   is `CodecParams`, **`Encoder`** (`encoder.hpp`) and **`Decoder`** with
-  `read_frame_info` (`decoder.hpp`). `Encoder::encode(grid)` compacts, sorts
-  by (z, y, x) and transforms, drops every block with no observed voxel, and
-  writes the frame. The same content gives the same bytes whatever the hash
-  table's order. `Decoder::decode(frame, grid)` leaves the caller's grid
-  holding exactly the frame. It merges the grid's sorted active set with the
-  frame's coordinates, removing, allocating, and keeping shared blocks in their
-  slots, then rewrites every voxel's `tsdf` and `weight`. Parsing, geometry
-  (exact `voxel_size` / `trunc_dist`), attributes and the heap are all checked
-  before the grid is touched. The attributes must be `tsdf` and `weight` and
+  `read_frame_info` (`decoder.hpp`). `Encoder::encode(grid)` takes the map's
+  own active list (`compact_active_blocks_on_device`, so a fuse's list is
+  reused and its own kept for the extract after), keeps the blocks with an
+  observed voxel (`DctTransform::observed`, on the device), sorts them by
+  (z, y, x), transforms them, and writes the frame. The same content gives
+  the same bytes whatever the hash table's order.
+  `Decoder::decode(frame, grid)` leaves the caller's grid holding exactly the
+  frame. It merges the grid's sorted active set with the frame's
+  coordinates, removing, allocating, and keeping shared blocks in their
+  slots, then rewrites every voxel's `tsdf` and `weight`, and stamps
+  `changed` only on a block it leaves different. Attributes, geometry (exact
+  `voxel_size` / `trunc_dist`, off the header), parsing and the heap are all
+  checked before the grid is touched. The attributes must be `tsdf` and `weight` and
   nothing else (`VoxelBlockGrid::attribute_count`), since a kept block would
   carry any other one stale. A grid too small for the frame is `OutOfMemory`,
   whether its heap has too few slots or its hash table cannot place the
   blocks. Both are recovered by `resize` and decoding again; the library never
   grows a grid. Lock contention that outlasts four rounds is `IoError`, never
-  `OutOfMemory`. A failure after the grid has changed leaves it holding neither
+  `OutOfMemory`, and a free heap that refuses a removed block is
+  `InvalidArgument`. A failure after the grid has changed leaves it holding neither
   frame until a decode succeeds. Both classes report `StageMetrics`
   (`"codec encode"` / `"codec decode"`). Their breakdown rows share no name
   except the map's own `"  ..active set"`. The private pieces under
   `src/volumetric_kit/recon/codec/` are the `DctTransform`, the rANS
-  reference coder and the v1 intra frame. The transform takes a
-  `volume::BlockList` to a `DctBlocks` — K quantized coefficients per block in
-  3-D zigzag order, a 16-word observed mask, and the params and `trunc_dist`
-  they were made with — and back. The SDF is normalized by `trunc_dist`
+  reference coder and the intra frame. The transform takes a
+  `volume::BlockList` to a `DctBlocks` — K quantized 16-bit coefficients per
+  block in 3-D zigzag order, a 16-word observed mask, and the params and
+  `trunc_dist` they were made with — and back, each call one `CommandBatch`
+  over device-local buffers. The SDF is normalized by `trunc_dist`
   before the transform and the steps are fractions of it, so the inverse
   refuses a `DctBlocks`
   whose `trunc_dist` is not its grid's. `CodecParams::validate` refuses a step
-  small enough for the ±32767 clamp to engage (√512 / 32767). The forward
+  small enough for the ±32767 clamp to engage (√512 / 32767), and one past
+  `kMaxStep` (64), where every coefficient is 0 and a decoded one could
+  overflow to infinity. The forward
   never reads an unobserved voxel's `tsdf`: it fills each one from the nearest
   observed voxel along x, then y, then z, since a fused block's zeros there
   are a step K = 32 cannot hold, and they decoded a partially observed block
   with 2.8x the error. The transform refuses any block size but 8; a list
   `VoxelBlockGrid::check_block_list` refuses, the O(1) checks it shares with
   `mesh`; and, on the device with one hash probe per block, any entry whose
-  coord does not resolve to its ptr — a ptr outside the heap, a free slot, a
-  mis-paired coord — which the inverse then writes nothing into. "Observed" is
+  coord the grid does not hold, which the inverse then writes nothing into.
+  Each block is found by that probe and its ptr never read, so the decoder
+  lists blocks it has just allocated by coordinate alone. "Observed" is
   `volume::kObservedWeight`, the threshold the mesher reads too. The inverse
   writes weight 1.0 on observed voxels and a fresh block's zeros elsewhere.
   The frame (`bitstream.hpp`, the 2026-09-27 entry) is segments of R sorted
   blocks (default 64). Each segment is one independent rANS stream
   (`rans.hpp`: a 32-bit state, 16-bit words and 12-bit probabilities, integer
   only, the reference the GPU kernels must match byte for byte). Every integer
-  is coded as a class from a fixed per-frame table plus raw bits. The format
+  is coded as a class from a fixed per-frame table plus one raw field, its
+  sign the low bit. A partial mask is coded a z plane at a time and a line
+  at a time, each against the one before it (v2, 2026-10-01: the mask had
+  been half of room0's bits). The format
   requires strictly increasing coordinates, so a decoded list is duplicate-free:
   the delta code cannot step backwards within a segment, and the reader checks
   each segment's raw first coordinate against the one before. A flag bit other
@@ -1117,7 +1138,7 @@ arbitrary; it usually isn't.
   count agrees with the segment table, so a sound frame past it is
   `OutOfMemory` and a corrupt count stays `InvalidArgument`. The limit bounds
   its allocation too, at
-  under 2.1 KB per block, and every size is checked in 64 bits so a 32-bit
+  under 1.1 KB per block, and every size is checked in 64 bits so a 32-bit
   build refuses rather than wraps. `DctBlocks` lives in `dct_blocks.hpp`, so
   the host-only frame never includes Vulkan. `RansReader::finish` is a
   **consistency** check, not an integrity one. It cannot see a flipped raw
@@ -1278,7 +1299,7 @@ synchronised sets.
 decision ranks them): `volume`, `tsdf`, `mesh` and `texture` are resident,
 and `GpuFramePrep` stages its raw frame in one submit, the rig's raw sets a
 thread per camera, and the hardware decoders' pictures stay on the device;
-next the examples, the codec's coefficients. The
+next the examples (the codec's transform is resident since 2026-10-01). The
 benchmark kit that sized
 them sits on the home box in `~/recon-bench` (a throwaway allocator patch
 behind environment variables); re-measure there after each.
