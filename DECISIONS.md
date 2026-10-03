@@ -287,6 +287,9 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-02**](#2026-10-02--per-basis-quantization-and-a-normalized-mesh-codec-fixture) —
   Per-basis quantization replaces the DC/AC split; frame v3 carries the table,
   and a normalized Rafa2 mesh joins room0 in the codec study.
+- [**2026-10-03**](#2026-10-03--compact-the-codecs-observed-list-on-the-device-and-retain-transform-scratch) —
+  Compact the codec's observed list on the device, predict its readback prefix
+  to avoid an unconditional extra fence, and retain transform scratch.
 
 ## Decision record
 
@@ -8287,6 +8290,10 @@ lacks. A block the grid gained could only come from a writer during the
 call, which `Decoder` already forbids.
 
 **The encoder takes the map's own list and keeps only observed blocks.**
+*Amended 2026-10-03:* the observed kernel now appends a compact list on the
+device, with a predicted-prefix readback instead of the full input and flags;
+see the dated entry below. The coordinate sort and CPU entropy boundary stay.
+
 `compact_active_blocks_on_device` returns a fuse's list while it still
 holds, and its compaction is kept for the extract after. Before, the
 encoder's host compaction invalidated the fuse's list, so an extract after
@@ -8944,6 +8951,113 @@ and truncated v3 parameters, effective-step bounds and valid subnormal
 factorizations, input-unit invariance, oblique height normalization and
 winding preservation, and OBJ/topology refusals. No discrete GPU or new
 sanitizer run was performed for this change.
+
+### 2026-10-03 — Compact the codec's observed list on the device and retain transform scratch.
+
+The GPU memory audit found two avoidable costs inside an otherwise staged
+codec. The observed filter downloaded every allocated `BlockIndex` (16 bytes)
+plus a four-byte flag, then discarded unobserved entries on the CPU. Forward
+and inverse also recreated their list, coefficient and mask buffers on every
+call. This change is stacked on the per-basis v3 codec; it changes neither the
+frame format nor the CPU coordinate sort and rANS reference implementation.
+
+**Compact before readback.** One workgroup still checks one block's weights
+and resolves its coordinate through the hash table. Its leader atomically
+appends the input `BlockIndex` when any voxel is observed. A two-word counter
+buffer holds rejected and observed counts, reset before the call's dispatches.
+Output order is unspecified; `Encoder` still sorts by (z, y, x), preserving
+the same content's exact frame bytes regardless of scheduling.
+
+Downloading the exact list only after learning its count would require two
+fence waits every time. Instead the filter follows the hash map's
+`collect_compacted`: download the count and a predicted list prefix in the
+same batch, then download a missing tail only if the result grew past the
+prediction. The first non-empty call without a previous result predicts the
+whole input; later calls predict the last observed count plus 25%, capped by
+the current input count. A prior empty result predicts zero, so regrowth can
+need the second batch. Empty inputs submit nothing. The returned observed
+count is checked against input capacity before resizing or reading a tail.
+
+For A input blocks, N observed blocks and prefix G, total observed readback is
+`8 + 16*max(G,N)` bytes, bounded by `8 + 16*A`, against the old `4 + 20*A`.
+The steady one-in-five case predicts about A/4 and transfers about `4*A + 8`
+bytes, with one submission. The first/all-observed case transfers `16*A + 8`.
+These are byte counts, not a latency claim; atomics add device work and growth
+can still add a fence. Device compaction/sorting of coordinates and GPU rANS
+remain separate work. The host coder still requires the coefficient/mask
+readback on encode and upload on decode.
+
+**Retain scratch.** Each transform owns grow-only device buffers for the
+observed output, sorted input list, packed coefficients and masks. A fitting
+call makes no new allocation for these buffers. Descriptors bind logical
+ranges, and transfers use logical counts, so a smaller list or K cannot expose
+an old suffix. Scratch remains at its largest size until destruction; at A
+input blocks, N coded blocks and padded coefficient count Kp the high-water
+sizes are 16A, 16N, 2NKp and 64N bytes respectively. The obsolete flags buffer
+is removed. Batch staging allocations remain per-call; the per-basis 2 KiB
+effective-step upload and its barriers are unchanged.
+
+**Validation.** Release with `VR_WARNINGS_AS_ERRORS=ON` builds and all 45 tests
+pass. New GPU regressions cover mixed/all/none observed results, zero-count
+regrowth, input growth/shrinkage, empty input, original coordinates and ptrs,
+and forced two-workgroup dispatch chunks. Forward/inverse reuse through count
+and K changes, odd padding and emptiness is compared with the independent CPU
+DCT reference, including unchanged blocks outside the current list. Existing
+tests retain deterministic frame bytes, stale-list refusal and A/B/A
+quantization-table coverage. The three GPU codec tests also pass with the
+Khronos layer explicitly enabled and synchronization validation on, with no
+validation messages. The same full 45-test suite and three forced-Khronos
+synchronization-validation codec tests pass on the RTX 4090 in Release.
+
+**Apple timing check.** A one-off C++ harness linked
+the unchanged `23c6e36` baseline and this change separately, both Release/O3 on
+Apple M5 Max through Vulkan/MoltenVK. It allocated 32,768 blocks in a 65,536-slot
+grid, marked one voxel in each selected block, and timed only `observed` with
+five warmups and 50 measured calls per density. Allocation, weight upload and
+active-list construction are outside the measurement. Host spans include
+recording, submission, waiting and readback; device spans cover dispatches.
+
+Two alternating baseline/changed runs showed device warm-up drift in the first
+baseline run, so these are the second pair, not an aggregated speedup claim:
+
+| Observed blocks | Baseline host mean / median / p95 (ms) | Changed host mean / median / p95 (ms) | Baseline / changed device mean (ms) |
+|---:|---|---|---|
+| 0 | 0.408 / 0.380 / 0.488 | 0.348 / 0.305 / 0.404 | 0.164 / 0.147 |
+| 6,554 | 0.333 / 0.328 / 0.365 | 0.294 / 0.292 / 0.327 | 0.117 / 0.118 |
+| 32,768 | 0.381 / 0.379 / 0.395 | 0.313 / 0.312 / 0.324 | 0.116 / 0.120 |
+
+The old pass reads 655,364 bytes at every density. The warmed new pass reads
+8, 131,080 and 524,296 bytes respectively. The all-observed row illustrates
+the small extra atomic device work despite less host traffic. This is a
+synthetic filter-only check; it does not measure total codec latency, scratch
+allocation savings, real capture-to-display throughput, or discrete-GPU gains.
+
+**RTX 4090 timing check.** The same `/tmp/codec_observed_bench.cpp` harness ran
+on the idle RTX 4090 host `taojin-desktop`, both variants built Release/O3:
+baseline `23c6e36` and implementation `525bdf7` (before this documentation-only
+amendment). One interleaved baseline/changed pair was excluded as warm-up;
+three subsequent pairs each used five warmups and 50 measured calls per case.
+The workload and timing scopes are exactly those above. Each table entry is
+the **median of the three per-run medians**, with the minimum and maximum
+per-run median in brackets; these are not pooled-sample percentiles.
+
+| Observed blocks | Baseline host (ms) | Changed host (ms) | Baseline device (ms) | Changed device (ms) |
+|---:|---|---|---|---|
+| 0 | 0.1241 [0.1221–0.1254] | 0.0511 [0.0507–0.0512] | 0.0245 [0.0244–0.0247] | 0.0240 [0.0239–0.0243] |
+| 6,554 | 0.1643 [0.1643–0.2315] | 0.0695 [0.0693–0.0697] | 0.0246 [0.0244–0.0246] | 0.0246 [0.0246–0.0247] |
+| 32,768 | 0.1428 [0.1427–0.2113] | 0.1120 [0.1120–0.1148] | 0.0248 [0.0248–0.0250] | 0.0334 [0.0334–0.0335] |
+
+The second baseline run's host times rose without a corresponding device-time
+increase, consistent with host scheduling noise; the ranges retain that run.
+Host filter latency is lower at all three densities. With every block observed,
+the append atomics increase device time from about 0.0248 to 0.0334 ms even
+though less readback and host work reduce total filter time. This establishes
+a discrete-GPU improvement for this synthetic filter workload, not total codec
+or live-pipeline throughput, and does not isolate retained-transform-scratch
+savings. Raw runs 1–3 are retained on `taojin-desktop` under
+`/home/taojin/ws/volumetric_kit/volumetric_kit_recon/.worktrees/`, in
+`gpu-codec-base-23c6e36/observed-bench-{1,2,3}.log` and
+`gpu-codec-fix-525bdf7/observed-bench-{1,2,3}.log`.
 
 ## Measured lessons
 

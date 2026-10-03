@@ -1201,9 +1201,17 @@ is `CodecParams`, **`Encoder`** (`encoder.hpp`) and **`Decoder`** with
 `read_frame_info` (`decoder.hpp`). `Encoder::encode(grid)` takes the map's
 own active list (`compact_active_blocks_on_device`, so a fuse's list is
 reused and its own kept for the extract after), keeps the blocks with an
-observed voxel (`DctTransform::observed`, on the device), sorts them by
+observed voxel (`DctTransform::observed`, compacted on the device), sorts them by
 (z, y, x), transforms them, and writes the frame. The same content gives
-the same bytes whatever the hash table's order.
+the same bytes whatever the hash table's order. The filter reads back its count
+and rejection tally together with a predicted prefix of the compacted list:
+the last observed count plus 25%, bounded by the current input count; the full
+input count on its first call. Only an outgrown prediction needs a second
+transfer-only submit for the tail. It downloads no per-input flags. For A input
+blocks, N observed blocks and a predicted prefix G, readback is
+`8 + 16*max(G,N)` bytes, at most `8 + 16*A`, instead of `4 + 20*A`.
+An empty input submits nothing. Append order is unspecified; the CPU coordinate
+sort is still what makes the frame deterministic.
 `Decoder::decode(frame, grid)` leaves the caller's grid holding exactly the
 frame. It merges the grid's sorted active set with the frame's
 coordinates, removing, allocating, and keeping shared blocks in their
@@ -1226,7 +1234,12 @@ reference coder and the intra frame. The transform takes a
 `volume::BlockList` to a `DctBlocks` — K quantized 16-bit coefficients per
 block in 3-D zigzag order, a 16-word observed mask, and the params and
 `trunc_dist` they were made with — and back, each call one `CommandBatch`
-over device-local buffers. The SDF is normalized by `trunc_dist`
+over device-local buffers. The compacted observed list, uploaded sorted list,
+coefficient buffer and mask buffer are retained and grow only when a call needs
+more capacity; descriptor ranges and transfers use the current logical sizes.
+They remain allocated until the transform is destroyed. The per-call staging
+inside `CommandBatch` remains transient, and the CPU rANS boundary still reads
+coefficients/masks back on encode and uploads them on decode. The SDF is normalized by `trunc_dist`
 before the transform and the steps are fractions of it, so the inverse
 refuses a `DctBlocks`
 whose `trunc_dist` is not its grid's. `CodecParams::validate` checks the scale,
