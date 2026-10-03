@@ -8692,7 +8692,7 @@ cadence, truncation and hardware. Repeated-run means and p50/p95/p99 are
 reported together. Geometry and memory measurements accompany timing. The
 instrumentation change alone cannot establish either adaptive gate.
 
-**Measured instrumentation baseline.** `main` at `34d7fb1`, Release with
+**Historical instrumentation baseline.** `main` at `34d7fb1`, Release with
 warnings as errors, Apple M5 Max / MoltenVK 1.4.2. Replica room0, 400 paired
 1200 × 680 frames, `--voxel 0.01 --trunc 0.04 --max-frames 400 --preload
 --device-extract --mesh-every 1`. Three interleaved runs each of pristine,
@@ -8713,6 +8713,24 @@ of a disabled adaptive grid. With tracing enabled, allocation's mean was
 must not be added twice to the host total. Extraction averaged
 1.909–1.918 ms host; its device duration remains unavailable.
 
+**Refreshed after rebasing onto `209b23e`.** The same workload, hardware,
+build options and three-run interleaving, with the pristine executable built
+in a separate detached worktree at that exact commit:
+
+| measurement, ms/frame | pristine | patched, CSV off | patched, CSV on |
+|---|---|---|---|
+| median sum of legacy allocate/integrate/mesh host means | 3.546 | 3.568 | 3.534 |
+| range of those sums | 3.540–3.638 | 3.564–3.809 | 3.525–3.571 |
+| new online mean, unrounded CSV | unavailable | unavailable | 3.527–3.575 |
+| new online p50 / p95 / p99 | unavailable | unavailable | 3.520–3.563 / 3.849–4.005 / 3.955–4.463 |
+
+The disabled-CSV comparison is +0.62% at this base, again with shared-machine
+noise, and still says nothing about adaptive-grid overhead. Trace-enabled
+allocation averaged 0.584–0.604 ms host / 0.193–0.194 ms device;
+integration 1.031–1.057 / 0.480; extraction 1.883–1.912 ms host.
+The old results remain historical measurements of `34d7fb1`, not relabeled
+measurements of the newer GPU correctness fixes.
+
 **Verified.** All nine full replays produced 32,972 blocks and bit-identical
 sorted oriented triangle coordinates: 1,308,911 triangles, 3,926,733 vertices.
 Twenty-frame replays checked extraction every second frame, no scheduled
@@ -8720,6 +8738,8 @@ extraction, and incremental fallback (9 of 10 extracts incremental), with
 identical final geometry. CSV row counts, phase presence, pipeline sums and
 percentiles were checked independently; invalid paths and aliased CSV/PLY
 outputs were refused. Release/Werror build and scoped formatting passed.
+These checks were repeated after the rebase, including all nine full and
+three short room replays, with the same geometric results.
 No adaptive reconstruction, quality improvement, memory saving or
 discrete-GPU performance was measured by this change.
 

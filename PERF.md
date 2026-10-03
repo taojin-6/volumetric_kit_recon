@@ -161,16 +161,17 @@ latency distribution alongside repeated-run means, and compare geometry and
 memory as well as time. These are gates for the adaptive implementation, not
 measurements of it.
 
-Instrumentation alone was checked against `34d7fb1`: Release, Apple M5 Max,
+Instrumentation alone was checked against `209b23e`: Release, Apple M5 Max,
 MoltenVK 1.4.2, room0's 400 frames at 1200 × 680, 1 cm voxels, 4 cm
 truncation, preloaded, device extraction every frame, three interleaved runs
-per variant. Median sums of the legacy mean host stage rows were 3.531 ms
-before and 3.574 ms with CSV disabled (+1.22%; baseline range 3.507–4.199 ms,
-patched 3.537–3.585 ms). The trace-enabled online mean was 3.541–3.562 ms;
-p95 was 3.904–4.031 ms. All final meshes had the same 1,308,911 canonical
+per variant. Median sums of the legacy mean host stage rows were 3.546 ms
+before and 3.568 ms with CSV disabled (+0.62%; baseline range 3.540–3.638 ms,
+patched 3.564–3.809 ms). The trace-enabled online mean was 3.527–3.575 ms;
+p95 was 3.849–4.005 ms. All final meshes had the same 1,308,911 canonical
 oriented triangles. This checks the instrumentation's disabled path only;
 adaptive-grid overhead, quality, memory savings and discrete-GPU performance
-are still unmeasured. Detailed phase evidence is in the
+are still unmeasured. Detailed phase evidence and the historical `34d7fb1`
+baseline are in the
 [dated decision](DECISIONS.md#2026-10-02--online-room-benchmarks-report-per-frame-fusion-and-scheduled-extraction-before-adaptive-grids-are-judged).
 
 ### P8 — Sample the viewer's GPU timing
