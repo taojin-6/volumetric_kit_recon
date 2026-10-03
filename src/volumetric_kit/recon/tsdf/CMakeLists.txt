@@ -58,8 +58,15 @@ target_include_directories(
 # volume's and core's GLSL by root-relative path, as the mesh tier's do.
 include(vr_embed)
 vr_embed_shaders(
-  recon_tsdf SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/tsdf_integrate.comp"
+  recon_tsdf
+  SHADERS
+  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/tsdf_integrate.comp"
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/mesh_bin.comp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/mesh_scan_counts.comp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/mesh_scan_sums.comp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/mesh_scan_add.comp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/mesh_compact_bins.comp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/mesh_bin_ranges.comp"
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/mesh_integrate.comp")
 
 vr_target_warnings(recon_tsdf)

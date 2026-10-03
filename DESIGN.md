@@ -872,8 +872,18 @@ allocation's own candidates, so no voxel measures the whole mesh. The fill
 replays the slots the count pass recorded, so no bin comes up short; a bin
 past `kMaxBinTriangles` is refused, and the write splits into dispatches of
 at most `kMaxDispatchBinEntries` bin entries, each submitted on its own.
-The host reads back only the per-slot counts; the coordinates stay on the
-device. Ties break on the triangle index, so the same mesh writes the same
+Counts, fill cursors and occupied bins stay on the device: a hierarchical
+256-way prefix scan carries entry totals, occupied counts, largest bin and
+overflow, then compacts bins in slot order. The host reads 20 bytes of
+validation/size control plus 8 bytes per bounded dispatch range, at most
+34,960 bytes of ranges even for the uint32 candidate limit. Prefix windows
+of `kMaxDispatchBinEntries - kMaxBinTriangles + 1` bound every range; the host
+only splits them further for the device thread limit. Bulk scratch grows
+with demand and stays allocated. If the compact list outgrows its retained
+capacity, only compaction/range planning retries after growth; normal calls
+need one planning submission plus one per write. No grid write precedes
+missing-block, overflow, bin-size and binding-range validation
+(2026-10-02). Ties break on the triangle index, so the same mesh writes the same
 bytes. Each call is a tick, and every block it writes is stamped `changed`.
 
 ### mesh
