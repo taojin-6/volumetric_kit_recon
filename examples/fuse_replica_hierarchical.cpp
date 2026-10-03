@@ -248,6 +248,8 @@ vr::Result<Options> parse_args(int argc, char** argv) {
       good = real(opt.refinement.surface_error);
     else if (arg == "--noise-floor")
       good = real(opt.refinement.noise_floor);
+    else if (arg == "--depth-jump")
+      good = real(opt.refinement.depth_discontinuity);
     else if (arg == "--levels")
       good = integer(opt.levels);
     else if (arg == "--buckets")
@@ -292,12 +294,14 @@ vr::Result<Options> parse_args(int argc, char** argv) {
         "[--voxel m] [--levels 1..4] [--trunc m] [--buckets n] [--max-nodes n] "
         "[--max-splits n] [--max-merges n] [--merge-stability n] "
         "[--refine-every n] [--surface-error m] [--noise-floor m] "
+        "[--depth-jump m] "
         "[--pixel-stride n] [--support-coarsening] "
         "[--max-frames n] [--stride n] "
         "[--mesh-every n] [--preload] [--device-extract] [--timings-csv path]");
   if (!(opt.voxel > 0 && opt.trunc > 0 && opt.max_weight > 0) ||
       opt.min_depth < 0 || !(opt.max_depth > opt.min_depth) ||
-      !(opt.refinement.surface_error > 0) || opt.refinement.noise_floor < 0)
+      !(opt.refinement.surface_error > 0) || opt.refinement.noise_floor < 0 ||
+      !(opt.refinement.depth_discontinuity > 0))
     return vr::Status::invalid_argument(
         "invalid resolution, truncation, weight, depth range or refinement "
         "threshold");
@@ -362,7 +366,8 @@ vr::Status run(const Options& opt) {
   VR_ASSIGN(vol::HierarchicalGrid grid,
             vol::HierarchicalGrid::create(device, allocator, config));
   VR_ASSIGN(tsdf::HierarchicalTsdfIntegrator integrator,
-            tsdf::HierarchicalTsdfIntegrator::create(device, allocator));
+            tsdf::HierarchicalTsdfIntegrator::create(
+                device, allocator, opt.refinement.depth_discontinuity));
   VR_ASSIGN(mesh::HierarchicalMarchingCubes extractor,
             mesh::HierarchicalMarchingCubes::create(device, allocator));
   std::printf("capture: %zu frames, %ux%u, depth scale %.1f\n",
@@ -373,11 +378,12 @@ vr::Status run(const Options& opt) {
       "  budgets: %d root slots, %d total nodes, %d splits / %d merges per "
       "update, merge stability %d\n"
       "  policy: refine every %d frames, error %.6fm, noise %.6fm, pixel "
-      "stride %d, conservative coarsening support %s\n",
+      "stride %d, depth jump %.6fm, conservative coarsening support %s\n",
       opt.levels, opt.voxel, std::ldexp(opt.voxel, opt.levels - 1), opt.trunc,
       opt.buckets * 8, opt.max_nodes, opt.max_splits, opt.max_merges,
       opt.merge_stability, opt.refine_every, opt.refinement.surface_error,
       opt.refinement.noise_floor, opt.pixel_stride,
+      opt.refinement.depth_discontinuity,
       opt.refinement.support_coarsening ? "on" : "off");
   if (opt.preload) {
     std::printf(
