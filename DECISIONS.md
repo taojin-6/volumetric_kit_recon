@@ -293,6 +293,9 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-03**](#2026-10-03--codec-mesh-evaluation-consumes-the-shared-io-loader) —
   The codec example uses Assimp-backed asset loading and shared PLY export;
   height normalization and topology checks remain example policy.
+- [**2026-10-03**](#2026-10-03--rans-encoding-runs-on-the-device-byte-for-byte-the-hosts-frame-chosen-per-frame-by-segment-count) —
+  rANS encoding runs on the device, byte for byte the host's frame, and the
+  encoder picks the device per frame from 48 segments.
 
 ## Decision record
 
@@ -9123,6 +9126,92 @@ and synchronization validation. `codec_mesh` on a box OBJ writes a
 15,179-byte frame whose 300-byte header carries 64 weights. No new rate or
 latency measurement was made. The normalization's own test, listed in the
 2026-10-02 validation, is removed with it from the shared code.
+
+### 2026-10-03 — rANS encoding runs on the device, byte for byte the host's frame, chosen per frame by segment count.
+
+The 2026-09-26 decision's fifth PR, for the encoder: the v3 format is
+unchanged, and every frame the device writes is `write_intra_frame`'s.
+
+**The pipeline.** The forward output stays in device memory
+(`DctTransform::record_forward`). In the forward's own batch, one invocation
+per block walks its frame symbols (`rans_walk.glsl`, the reverse of
+`emit_block`) to count every model's symbols and the block's coder steps.
+Only those counts cross to the host, which builds the tables with the host
+writer's `frame_tables`, lays each segment's blocks last first so a
+segment's steps are one run, and sizes each segment's output slot at one
+word per step plus the state. A second batch writes every block's steps in
+parallel (`rans_ops.comp`, `start | freq << 16`), runs one invocation per
+segment over its run with `RansWriter::finish`'s integer arithmetic
+(`rans_encode.comp`), packs the streams with a scan and a gather, and reads
+back the segment lengths and the payload. The payload is read up to 32 bytes
+a block with the lengths, and any rest after. The container comes from
+`assemble_intra_frame`, which the host writer now uses too.
+
+**Memory, discrete first.** Every bulk buffer is device-local and retained
+(`ensure_device_scratch`), and the host reaches them only through
+`CommandBatch`, write-combined staging up and cached staging down. Per frame
+the bus carries the symbol counts (8 KB at K = 64), 4 bytes per block of step
+counts up and step offsets down, 8 bytes per segment of offsets, and the
+lengths and payload (about 12 bytes per block) up. The host path instead
+reads back 64 + 2K bytes per block of masks and coefficients, 192 at K = 64.
+
+**Exactness.** Integer arithmetic only. The device frame test compares the
+device's bytes with `write_intra_frame`'s over 0 to 700 blocks, K of 1, 20,
+64 and 512, segments of 1, 16, 64 and 1,024 blocks, and int32 coordinate
+extremes. Five planted kernel bugs each failed it: chunk order, mask symbol
+order, coordinate order, a gather index and the scan's carry. The encoder's
+contract cases run again with device coding, and an automatic choice past the
+threshold writes the host's bytes. The tests pass on Apple M5 Max through
+MoltenVK and on an RTX 5090 under Ubuntu 24.04, GCC 13.
+
+**Why the walk is a pass of its own.** A segment is one serial rANS chain,
+and one GPU invocation takes about 0.2 µs a coder step on the M5 Max against
+about 8 ns on a CPU core. Rafa2 at 1 cm on the M5 Max, R = 64 (10 segments),
+coding ms: the walk inside the coding loop with 64 segments a workgroup,
+12.1; the same with the tables in shared memory, 12.1; one segment a
+workgroup with whole-word writes, 2.15; the walk in its own pass, 2.07; steps
+loaded four ahead, 1.96. Dividing by libdivide's reciprocal instead of `/`
+measured 2.60 through MoltenVK, so it was reverted. On the RTX 5090 the
+separate walk took room0 at R = 64 from 3.95 to 1.50 ms.
+
+**Measured**, Release, host / device `..rans encode` ms, frames identical in
+each pair. Room0 at 1 cm codes every frame of 60 (14,728 blocks); Rafa2 is
+the 1.7 m normalized mesh, coded 21 times in a row by a temporary loop in
+`codec_mesh`, not committed:
+
+| Content | Machine | R = 64 | R = 32 | R = 16 | R = 8 |
+|---|---|---|---|---|---|
+| room0 | M5 Max | 7.15 / 1.74 | | 7.25 / 0.84 | |
+| room0 | RTX 5090 | 8.41 / 1.50 | | 8.45 / 0.72 | |
+| Rafa2 5 mm, 2,395 blocks | M5 Max | 2.38 / 2.12 | | 2.28 / 0.84 | |
+| Rafa2 5 mm | RTX 5090 | 3.01 / 1.70 | 3.00 / 1.00 | 3.01 / 0.64 | 3.02 / 0.45 |
+| Rafa2 1 cm, 600 blocks | M5 Max | 0.59 / 1.96 | | 0.59 / 0.79 | |
+| Rafa2 1 cm | RTX 5090 | 0.80 / 1.48 | 0.80 / 0.90 | 0.80 / 0.57 | 0.80 / 0.33 |
+
+The whole room0 encode at R = 64 goes from 8.98 to 3.12 ms on the M5 Max and
+from 10.67 to 3.06 ms on the RTX 5090. Its forward drops from 0.68 to 0.39 ms
+and from 1.30 to 0.40 ms, since the coefficients no longer come back. Smaller
+segments buy the device parallelism at some size: room0 is 2.5%, 7.5% and
+17% larger at R = 32, 16 and 8, and 1 cm Rafa2 0.9%, 2.8% and 6.7%.
+
+**Chosen per frame.** The device's time follows its longest segment and the
+host's the whole frame, so the device loses on a frame of few segments: it
+breaks even near 20 segments on the RTX 5090 and 45 on the M5 Max. The
+choice changes only the time, so `EntropyCoding::kAuto`, the default, codes
+on the device from `kMinDeviceSegments` (48) and on the host below.
+`kHost` and `kDevice` force one.
+
+**Not done.** Decoding stays on the host, a `TODO(codec)` in the decoder.
+The tables are still normalized on the host, which costs the second
+batch's round trip. Lanes within a segment (format v4) are the next step if
+frames of few segments need the device; host threads per segment remain a
+`TODO(codec)` in the writer.
+
+**Validation.** Apple M5 Max, Release with warnings as errors and Assimp: all
+48 tests pass, and the four GPU codec tests report no messages with the
+Khronos layer forced on and synchronization validation. RTX 5090, Ubuntu
+24.04 container: the seven codec tests pass. No sanitizer run was made
+locally.
 
 ## Measured lessons
 

@@ -3,7 +3,7 @@
 
 #pragma once
 
-// Numeric flag values for the codec examples' command lines.
+// Flag values for the codec examples' command lines.
 
 #include <cerrno>
 #include <cmath>
@@ -11,6 +11,7 @@
 #include <limits>
 #include <string>
 
+#include "volumetric_kit/recon/codec/encoder.hpp"
 #include "volumetric_kit/recon/core/result.hpp"
 
 namespace vr_example {
@@ -55,6 +56,22 @@ inline vr::Status parse_number(const std::string& flag, const char* text,
     return vr::Status::invalid_argument(flag + ": not an integer: " + text);
   }
   out = static_cast<int>(value);
+  return {};
+}
+
+/// Parse @p text, the value of @p flag, as `auto`, `host` or `device`.
+inline vr::Status parse_entropy(const std::string& flag,
+                                const std::string& text,
+                                vr::codec::EntropyCoding& out) {
+  if (text == "auto") {
+    out = vr::codec::EntropyCoding::kAuto;
+  } else if (text == "host") {
+    out = vr::codec::EntropyCoding::kHost;
+  } else if (text == "device") {
+    out = vr::codec::EntropyCoding::kDevice;
+  } else {
+    return vr::Status::invalid_argument(flag + " needs auto, host or device");
+  }
   return {};
 }
 

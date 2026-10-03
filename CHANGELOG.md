@@ -207,6 +207,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `codec`: **rANS encoding on the device.** `EncoderConfig::entropy` picks
+  `EntropyCoding::kAuto` (the default: the device from 48 segments, the
+  host below), `kHost` or `kDevice`; all write the same bytes. On the device
+  the coefficients stay in VRAM and only symbol counts and the coded frame
+  cross the bus. Room0's encode at 1 cm goes from 8.98 to 3.12 ms on M5 Max
+  and from 10.67 to 3.06 ms on RTX 5090. See the 2026-10-03 decision.
 - `texture`: **`TextureView::fallback`**. The several-view pass gives a
   marked view only the triangles no unmarked view qualifies for, whatever
   their scores: for a frame older than the rest, such as `rig_viewer`'s held
