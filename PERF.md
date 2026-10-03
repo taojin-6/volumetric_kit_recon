@@ -132,6 +132,7 @@ kernels.
 | D1 | Report a decoder's fallback to host pictures | makes a silent 12 MB/camera/frame PCIe regression visible | S | — | landed (#130) |
 | D2 | Put `--show-sources`' buffers on the device | ~133 MB over PCIe per remesh with the view on | S | — | landed (#130) |
 | D3 | Keep exported picture buffers out of the BAR | robustness on ReBAR systems | S | — | not needed (#130) |
+| MESH1 | Keep mesh-input bins and cursors on-device and retain scratch | removes capacity-sized count/cursor round trip; Apple timing mixed, discrete GPU pending | M | — | `perf/mesh-device-binning`, measured Apple Release; mesh input only, outside the live rig |
 | L1 | Shared-vertex, incremental remesh for the rig | ~3.4× fewer vertices; remesh cost tracks change, not size | L | gfx | blocked |
 | L2 | Pipeline sets | overlaps set N's GPU work with set N+1's host work | L | P6 | later |
 | L3 | Read VideoToolbox's plane images directly | 0.28–0.31 ms GPU per 4K frame, Apple only | M | — | later |

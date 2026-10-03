@@ -8,6 +8,7 @@
 ///        @ref VoxelBlockGrid's `tsdf` + `weight` attributes, signed or as a
 ///        shell.
 
+#include <array>
 #include <cstdint>
 
 #include "volumetric_kit/recon/core/buffer.hpp"
@@ -118,6 +119,9 @@ struct MeshIntegrateStats {
 /// minimum over a bin is taken with the triangle index as tie-break, so the
 /// result does not depend on the order the atomics filled the bin in -- the
 /// same mesh writes the same bytes.
+/// Counts, prefix sums, fill cursors and occupied bins stay on the device.
+/// Only validation totals and bounded dispatch ranges are read back. Scratch
+/// grows as needed and is retained; each call refreshes the mesh and bins.
 ///
 /// A voxel's cost is its bin, which a mesh near the grid's resolution keeps in
 /// the hundreds. A mesh far finer than the voxels is where it grows, so a bin
@@ -148,7 +152,7 @@ class VR_TSDF_API MeshIntegrator {
 
   /// @brief Build the binning and integrate pipelines on @p device.
   /// @param device     The compute device (must outlive this object).
-  /// @param allocator  The allocator its transient buffers come from (must
+  /// @param allocator  The allocator its retained buffers come from (must
   ///                   outlive this).
   /// @return The integrator, or a non-OK @ref Status if a pipeline or
   ///         descriptor object fails to build.
@@ -206,6 +210,8 @@ class VR_TSDF_API MeshIntegrator {
  private:
   MeshIntegrator() = default;
 
+  Status ensure_scratch(Buffer& buffer, VkDeviceSize bytes, const char* name);
+
   // Borrowed (must outlive this).
   Device* device_ = nullptr;
   Allocator* allocator_ = nullptr;
@@ -220,6 +226,11 @@ class VR_TSDF_API MeshIntegrator {
   // kernel, their sets allocated from pool_ (which must outlive them).
   ComputeKernel bin_;
   ComputeKernel integrate_;
+  ComputeKernel scan_counts_;
+  std::array<ComputeKernel, 3> scan_sums_;
+  std::array<ComputeKernel, 2> scan_add_;
+  ComputeKernel compact_bins_;
+  ComputeKernel bin_ranges_;
   DescriptorPool pool_;
   // The device-span collector, idle until a caller passes a StageMetrics.
   GpuTimer gpu_timer_;
@@ -229,6 +240,19 @@ class VR_TSDF_API MeshIntegrator {
   // A 1-element stand-in for the fill pass's output during the count pass, so
   // every declared descriptor stays bound.
   Buffer dummy_;
+  // Grow-only bulk storage; descriptors are rebound before recording each
+  // call so mesh changes, grid replacement and allocation growth are safe.
+  Buffer vertices_;
+  Buffer indices_;
+  Buffer offsets_;
+  Buffer counts_;
+  Buffer coordinates_;
+  Buffer item_slots_;
+  Buffer bins_;
+  Buffer blocks_;
+  Buffer ranges_;
+  // 256-way scan levels, including the final 16-byte validation summary.
+  std::array<Buffer, 4> scan_levels_;
 };
 
 }  // namespace volumetric_kit::recon::tsdf

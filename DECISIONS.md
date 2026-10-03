@@ -270,6 +270,10 @@ entries relevant to your task; later amendments supersede earlier rules.
   Garbage collection passes its device coordinate list directly to deletion,
   retaining host readback only for control counts.
 
+- [**2026-10-02**](#2026-10-02--mesh-input-binning-keeps-counts-cursors-and-occupied-bins-on-the-device-retains-scratch-and-reads-only-validation-and-bounded-dispatch-control) —
+  Mesh input binning keeps counts, cursors and occupied bins on the device,
+  retains scratch, and reads only validation and bounded dispatch control.
+
 ## Decision record
 
 ### 2026-06-21 — Single Vulkan path (MoltenVK on Apple), like gfx.
@@ -8561,6 +8565,84 @@ and RTX 4090. The six volume allocation, deletion, resize, and block-stamp
 tests also pass with the Khronos layer and synchronization validation forced
 on both devices. These checks validate correctness and synchronization; no
 garbage-collection latency comparison was made.
+
+### 2026-10-02 — Mesh input binning keeps counts, cursors and occupied bins on the device, retains scratch, and reads only validation and bounded dispatch control.
+
+Amends the 2026-09-28 residency entry's mesh-input count readback. The two
+triangle-candidate passes were device-local, but each call allocated eight
+bulk buffers, read `4 * num_blocks` count bytes to the host, scanned them,
+and uploaded the same bytes as cursors plus 12 bytes per occupied bin. The
+new path removes that internal round trip; mesh vertices, indices and
+candidate offsets still enter from the host once per call.
+
+**A hierarchical exclusive scan and ordered compaction.** Each 256-slot
+workgroup scans entry counts and occupied counts while reducing the largest
+bin. Group summaries are scanned recursively, then their prefixes are added
+back down. A sticky carry flag follows every addition; uint32 overflow is
+refused before a wrapped prefix can become a cursor. Compaction emits the
+same slot-ordered `MeshBin { ptr, begin, count }` records as the old host
+loop. Counts become fill cursors on-device. No distance, sign, tie-break,
+observation or changed-stamp rule changes. Missing blocks, excess bin size,
+overflow, binding ranges and dispatch limits are still checked before the
+first grid write.
+
+**The watchdog still bounds a submission.** Let `B` be
+`kMaxDispatchBinEntries`, `M` be `kMaxBinTriangles`, and `W = B - M + 1`.
+Group bins by the window containing their exclusive entry prefix. Bin starts
+in a window span at most `W - 1` entries; adding the last bin contributes at
+most `M`, so every range has at most `B` entries. GPU binary searches find
+the range endpoints in the ordered compact list. The host reads these
+8-byte pairs and may split them further for the device thread limit. Each
+write remains a separate submission, with the fill in the first. The
+partition can use more submissions than the previous greedy packing; it
+never increases a submission's entry bound.
+
+The readback is 20 bytes of validation/size control (entry total, occupied
+count, largest bin, overflow and missing blocks), plus
+`8 * ceil(candidate_count / W)` bytes of range control: at most 34,960
+range bytes at the uint32 candidate limit. Usually only a few ranges are
+needed. This is independent of unused grid capacity. Kernels never consume
+mapped host memory or a CPU-generated cursor/bin list.
+
+**Scratch is retained.** All eight prior bulk allocations and the new scan
+and range scratch grow only when needed, with 1.5x headroom bounded by
+`maxStorageBufferRange`. Every call refreshes the input arrays, zeroes the
+logical counts/missing value, and rebinds the current grid. A compact list
+starts with at most 4096 entries; if insufficient, compaction leaves the
+local prefixes intact, the host grows the list, and only compaction/range
+planning retries. Steady calls keep the previous submission count apart from
+the bounded partition difference. No geometry, topology or pointer identity
+is used as a cache-validity shortcut.
+
+**Validation.** Release with warnings as errors on Apple M5 Max:
+`recon_tsdf_mesh_integrate`, `recon_tsdf_mesh_bins` and
+`recon_volume_allocate_triangles` pass, including forced Khronos
+synchronization validation. The independent distance/winding oracle still
+covers signed/shell conversion, deterministic bytes, missing blocks,
+refusals and split submissions. A new 65,544-slot partial hierarchy grows the
+compact list past 4096, repeats, changes the mesh in place and reverses its
+winding, then returns to a smaller grid. Synthetic GPU counts are compared
+with a uint64 host oracle at exact watchdog boundaries, `UINT32_MAX`,
+overflow in leaf and summary levels, oversized bins, empty/padded groups,
+and guarded compact retries.
+
+**Initial timing evidence, not a universal speed claim.** Apple M5 Max,
+Release, baseline `e4db453`, three interleaved baseline/change pairs per
+workload; each process warms three integrations then reports nine samples.
+Allocation, object creation and mesh generation are outside the measured
+integration. The same metre-square +Z sheet, 1 cm voxels, 8³ blocks and 4 cm
+truncation is two triangles at 393,216-slot capacity for the sparse case,
+and 320,000 triangles at 16,384-slot capacity for the dense case.
+
+| case | baseline host medians, ms | changed host medians, ms | baseline device medians, ms | changed device medians, ms |
+|---|---|---|---|---|
+| sparse capacity | 1.055 / 1.527 / 0.908 | 1.294 / 0.772 / 0.783 | 0.069 / 0.047 / 0.033 | 0.281 / 0.274 / 0.275 |
+| dense triangles | 21.346 / 20.930 / 20.855 | 21.717 / 20.940 / 21.238 | 12.866 / 12.722 / 13.053 | 13.541 / 12.468 / 13.493 |
+
+The scan adds GPU work; sparse host time is variable and the dense case is
+roughly flat/slightly slower on this shared Mac. Discrete-GPU measurements
+are pending. The demonstrated change is bounded control transfer and
+retained bulk storage, not a general frame-rate improvement.
 
 ## Measured lessons
 

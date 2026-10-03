@@ -17,13 +17,13 @@
 //            item_slot[gid]: the block's heap SLOT (ptr / voxels_per_block),
 //            or kNoSlot for an item the band test prunes. It counts the
 //            triangle into counts[slot] and stores the block's coordinate in
-//            slot_coord[slot], so the host learns which blocks to write from
-//            the counts, without a compaction, and the integrate pass reads
-//            where each is (every item of a slot stores the same
+//            slot_coord[slot]. GPU scan/compaction builds the occupied-bin
+//            list, and the integrate pass reads where each is (every item
+//            of a slot stores the same
 //            coordinate). An item whose band block the table does not hold
 //            adds 1 to `missing` instead -- one per (triangle, block) pair, not
 //            per block -- which the host reads, and refuses, before anything is
-//            written. The host then rewrites counts[] in place as each bin's
+//            written. The scan rewrites counts[] in place as each bin's
 //            first entry (an exclusive prefix sum), and they become cursors.
 //   fill  -- replays the count pass's slots rather than re-deriving them: an
 //            item takes the next entry of its slot's bin and writes its

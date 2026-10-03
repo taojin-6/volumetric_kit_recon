@@ -710,6 +710,57 @@ int main() {
                .ok());
   }
 
+  // A capacity past 256^2 with a partial final group exercises a second
+  // prefix level. A coarse sheet reaches >4096 blocks, growing the compact
+  // output on the first call; all later calls reuse it. Move the same input
+  // allocation and flip winding so neither geometry nor bins may be cached.
+  {
+    vol::VoxelGridParams wide_gp = gp;
+    wide_gp.block_size = 2;
+    wide_gp.voxels_per_block = 8;
+    wide_gp.trunc_dist = 0.015f;
+    wide_gp.num_buckets = 8193;
+    wide_gp.num_blocks = 65544;
+    auto wide_r =
+        vol::VoxelBlockGrid::create(device, allocator, wide_gp, attrs, 2);
+    CHECK(wide_r.ok());
+    vol::VoxelBlockGrid wide = std::move(wide_r).value();
+    Mesh moving = divided_quad(-0.487f, 0.513f, -0.493f, 0.507f, z0, 1);
+    auto write = [&]() -> vr::Result<ts::MeshIntegrateStats> {
+      VR_TRY(wide.clear());
+      VR_ASSIGN(auto failed, wide.map().allocate_from_triangles(
+                                 moving.v.data(), moving.vertex_count(),
+                                 moving.i.data(), moving.triangle_count()));
+      if (failed != 0) return vr::Status::out_of_memory("wide allocation");
+      return integ.integrate(wide, moving.v.data(), moving.vertex_count(),
+                             moving.i.data(), moving.triangle_count(), kSigned);
+    };
+    auto initial = write();
+    CHECK(initial.ok());
+    CHECK(initial.value().blocks > 4096);
+    const auto first_bytes = by_coord(ctx, wide);
+    CHECK(write().ok());
+    CHECK(by_coord(ctx, wide) == first_bytes);
+    for (vr::Vec3f& v : moving.v) v.z += 0.137f;
+    for (std::size_t t = 0; t < moving.i.size(); t += 3) {
+      std::swap(moving.i[t + 1], moving.i[t + 2]);
+    }
+    CHECK(write().ok());
+    CHECK(by_coord(ctx, wide) != first_bytes);
+    if (verify(ctx, wide, "reused scratch, moved/reversed sheet",
+               [&](vr::Vec3f p) {
+                 Expect e =
+                     signed_sheets(p, {{-0.487f, 0.513f, -0.493f, 0.507f}},
+                                   z0 + 0.137f, wide_gp.trunc_dist);
+                 e.value = -e.value;
+                 return e;
+               }) != 0)
+      return 1;
+    // Return to the smaller original grid after the hierarchy grew.
+    CHECK(convert(tet, kSigned).ok());
+    CHECK(by_coord(ctx, grid) == tet_bytes);
+  }
+
   // ---- 10. Move semantics ------------------------------------------------
   {
     ts::MeshIntegrator moved(std::move(integ));
