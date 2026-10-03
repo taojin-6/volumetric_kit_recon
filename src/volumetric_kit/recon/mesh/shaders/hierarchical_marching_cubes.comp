@@ -66,6 +66,8 @@ struct Sample {
 shared uint partial[256];
 shared uint block_base;
 shared uint block_cursor;
+shared HierarchicalNode neighbor_nodes[27];
+shared uint neighbor_valid[27];
 
 bool coordLess(ivec3 a, ivec3 b) {
   return a.z != b.z ? a.z < b.z : (a.y != b.y ? a.y < b.y : a.x < b.x);
@@ -76,19 +78,17 @@ bool gather(HierarchicalNode owner, uint candidate, bool need_color, out Sample 
   ivec3 corner = ivec3(int(candidate % 9u), int((candidate / 9u) % 9u), int(candidate / 81u));
   int scale = 1 << int(owner.level);
   ivec3 q = (owner.coord * 8 + corner) * scale;
-  VoxelGridParams grid = VoxelGridParams(0.0, 8, 512, 0.0, pc.bucket_size,
-                                        pc.num_buckets, pc.num_buckets * pc.bucket_size, pc.max_chain);
   for (int c = 0; c < 8; ++c) {
     ivec3 shift = mcCornerShift(c);
     ivec3 local = corner + shift - ivec3(1);
     HierarchicalNode node = owner;
     ivec3 query = q + shift - ivec3(1);
     if (any(lessThan(local, ivec3(0))) || any(greaterThanEqual(local, ivec3(8)))) {
-      uint node_id;
-      if (!vrHierarchyLocate(query, grid, pc.max_level, pc.node_capacity, node_id, local)) return false;
-      node = vr_hierarchy_nodes[node_id];
-      if (node.level < owner.level ||
-          (node.level == owner.level && coordLess(node.coord, owner.coord))) return false;
+      ivec3 region = ivec3(lessThan(local, ivec3(0))) * -1 + ivec3(greaterThanEqual(local, ivec3(8)));
+      int index = region.x + 1 + 3 * (region.y + 1 + 3 * (region.z + 1));
+      if (neighbor_valid[index] == 0u) return false;
+      node = neighbor_nodes[index];
+      local = vrHierarchyFloorDiv(query, 1 << int(node.level)) - node.coord * 8;
     }
     uint si = uint(node.ptr) + uint(local.x + 8 * (local.y + 8 * local.z));
     float w = weights[si];
@@ -179,6 +179,35 @@ void main() {
     if (tid == 0u) atomicOr(rejected, 1u);
     return;
   }
+  // Every adjacent region is aligned at the owner's level. It is covered by
+  // one same/coarser leaf, or its level node is internal and all of its leaves
+  // are finer, in which case this owner cannot emit an incident dual cell.
+  // Resolve these 27 regions once, instead of traversing for each corner in
+  // both the count and emission passes.
+  if (tid < 27u) {
+    ivec3 region = ivec3(int(tid % 3u), int((tid / 3u) % 3u), int(tid / 9u)) - ivec3(1);
+    neighbor_valid[tid] = 0u;
+    if (tid == 13u) {
+      neighbor_nodes[tid] = owner;
+      neighbor_valid[tid] = 1u;
+    } else {
+      VoxelGridParams grid = VoxelGridParams(0.0, 8, 512, 0.0, pc.bucket_size,
+                                            pc.num_buckets, pc.num_buckets * pc.bucket_size, pc.max_chain);
+      ivec3 query = (owner.coord + region) * (8 << int(owner.level));
+      uint node_id;
+      ivec3 local;
+      if (vrHierarchyLocateAtLevel(query, grid, pc.max_level, pc.node_capacity,
+                                    owner.level, node_id, local)) {
+        HierarchicalNode node = vr_hierarchy_nodes[node_id];
+        if (node.children == 0u &&
+            (node.level > owner.level || !coordLess(node.coord, owner.coord))) {
+          neighbor_nodes[tid] = node;
+          neighbor_valid[tid] = 1u;
+        }
+      }
+    }
+  }
+  barrier();
   uint masks[3];
   uint count = 0u;
   for (uint k = 0u; k < 3u; ++k) {
