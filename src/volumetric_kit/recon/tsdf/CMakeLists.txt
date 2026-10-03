@@ -15,7 +15,8 @@ set(_vr_tsdf_generated_inc "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
 add_library(recon_tsdf)
 add_library(volumetric_kit::recon_tsdf ALIAS recon_tsdf)
 
-target_sources(recon_tsdf PRIVATE mesh_integrator.cpp tsdf_integrator.cpp)
+target_sources(recon_tsdf PRIVATE mesh_integrator.cpp tsdf_integrator.cpp
+                                  hierarchical_tsdf_integrator.cpp)
 
 # Per-tier export header (VR_TSDF_API / VR_TSDF_STATIC_DEFINE), isolated so the
 # macros never collide with another tier's on one include path.
@@ -61,6 +62,8 @@ vr_embed_shaders(
   recon_tsdf
   SHADERS
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/tsdf_integrate.comp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/hierarchical_integrate.comp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/hierarchical_classify.comp"
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/mesh_bin.comp"
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/mesh_scan_counts.comp"
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/mesh_scan_sums.comp"

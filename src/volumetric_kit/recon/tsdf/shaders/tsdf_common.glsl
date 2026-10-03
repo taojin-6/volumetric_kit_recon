@@ -110,4 +110,7 @@ layout(push_constant, scalar) uniform PushConstants {
   uint has_color_attr;  // 1 = binding 6 is the grid's color attribute (clearable)
   uint tick;            // the map's tick, which a changed block is stamped with
   uint coverage_in_alpha;  // 1 = a colour word with a zero high byte is no colour
+#ifdef VR_HIERARCHICAL
+  uint first_leaf;
+#endif
 } pc;

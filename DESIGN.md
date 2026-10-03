@@ -845,11 +845,27 @@ topology generation invalidates borrowed views after mutation. The first
 device contract supports at most four levels and a fixed root capacity.
 The uniform `VoxelBlockGrid` and its node sampling remain unchanged.
 
-This foundation defines geometry, borrowing, and shader lookup, not a
-working adaptive capture path by itself. Storage mutation, online fusion,
-dual-cell meshing, and performance acceptance are separate changes; their
-status belongs to the implementation entries as each lands. See the
-2026-10-02 hierarchy decision and PERF.md's H2 row.
+`HierarchicalGrid` owns fixed coarse roots and a separate child-node budget.
+Allocation initializes roots on the GPU; `prepare_leaves` caches the compact
+leaf list until topology changes. `split` publishes an eight-child group only
+after initializing its samples. Inherited confidence is capped, since
+resampling a coarse field cannot recover previously lost detail. Exhausted
+root/child capacity and deferred refinement remain explicit results.
+
+`HierarchicalTsdfIntegrator` shares the uniform fusion arithmetic through a
+shader body compiled separately for each addressing scheme. Its classifier
+uses incoming depth patch tangent-plane residuals, subtracts a noise floor,
+and estimates a desired spacing. Large depth jumps request fine samples only
+with nonplanarity evidence, so grazing planes can remain coarse. Invalid or
+unseen patches supply no coarsening evidence. The result is a device-resident
+desired-level array consumed before topology changes. This is a heuristic,
+not a geometric error bound or semantic human detector. Fusion supports
+Classic/Dynamic modes and splits dispatches at the device's workgroup limit.
+
+These storage and fusion APIs are separate from adaptive meshing and room
+performance acceptance. Uniform marching cubes and the uniform codec cannot
+consume this field view. See the 2026-10-02 hierarchy decision and PERF.md's
+H2 row.
 
 ### tsdf
 

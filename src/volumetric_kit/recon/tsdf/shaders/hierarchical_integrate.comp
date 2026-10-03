@@ -1,4 +1,5 @@
 #version 450
 
 #extension GL_GOOGLE_include_directive : require
+#define VR_HIERARCHICAL 1
 #include "tsdf_integrate_body.glsl"

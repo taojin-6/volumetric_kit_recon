@@ -152,6 +152,12 @@ target_link_libraries(recon_tsdf_integrate_test
 vr_target_warnings(recon_tsdf_integrate_test)
 add_test(NAME recon_tsdf_integrate COMMAND recon_tsdf_integrate_test)
 
+add_executable(recon_tsdf_hierarchical_test tsdf_hierarchical_test.cpp)
+target_link_libraries(recon_tsdf_hierarchical_test
+                      PRIVATE volumetric_kit::recon_tsdf)
+vr_target_warnings(recon_tsdf_hierarchical_test)
+add_test(NAME recon_tsdf_hierarchical COMMAND recon_tsdf_hierarchical_test)
+
 # tsdf mesh integrate: write a mesh's truncated distance field (signed through
 # pseudonormals, or as a shell) and check every voxel of every written block
 # against a brute-force host reference -- an independent closest point, and the

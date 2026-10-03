@@ -138,7 +138,7 @@ kernels.
 | L2 | Pipeline sets | overlaps set N's GPU work with set N+1's host work | L | P6 | later |
 | L3 | Read VideoToolbox's plane images directly | 0.28–0.31 ms GPU per 4K frame, Apple only | M | — | later |
 | L4 | Sample the atlas in place rather than copy it | measure the copy at 4K first | L | gfx | kept |
-| H2 | Online hierarchical blocks with selective fine detail | less work on planar regions at a fixed detail target; measure first | L | online phase measurements | in progress, `feat/hierarchical-grid-foundation`; ownership and field ABI first, adaptive performance unmeasured |
+| H2 | Online hierarchical blocks with selective fine detail | less work on planar regions at a fixed detail target; measure first | L | online phase measurements | in progress: GPU storage, bounded splits, cell-centered fusion and incoming-depth classification tested; adaptive room performance unmeasured |
 
 The suggested order: P8 first, so every later figure is honest; D1–D3
 whenever convenient; then P1, P3, P5, P4, P2 + P6; then P7, and P9 once it
