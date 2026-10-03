@@ -285,6 +285,10 @@ entries relevant to your task; later amendments supersede earlier rules.
   Hierarchical refinement respects observed projective-band support even on
   flat surfaces.
 
+- [**2026-10-03**](#hierarchical-batched-evaluation) — Bounded split/merge
+  share one submission; every-frame room evaluation distinguishes mean-time
+  gates, latency tails, proxy detail and unmeasured discrete-GPU behavior.
+
 ## Decision record
 
 ### 2026-06-21 — Single Vulkan path (MoltenVK on Apple), like gfx.
@@ -8877,6 +8881,60 @@ regression verifies that `T=40mm` and `T=80mm` with a 40mm sensor limit both
 produce the nearest plane's `+30mm` TSDF; an explicitly requested 80mm sensor
 limit instead produces the blended zero. The wider band's room quality must
 still be measured; this test isolates depth-edge sampling behavior.
+
+<a id="hierarchical-batched-evaluation"></a>
+
+### 2026-10-03 — Batch bounded split/merge without changing ownership, and evaluate the selected resolution explicitly.
+
+`HierarchicalGrid::update_topology` validates inputs before mutation, then
+performs the existing split followed by merge under one command batch and
+completion wait. Separate event budgets, confidence transfer, merge
+persistence and returned counters remain intact. Merge selection reads the
+nodes after splitting and needs no intermediate leaf-list rebuild. In the
+supported classify/update sequence, inactive request slots are UINT32_MAX,
+so newly created children cannot acquire stale coarsening evidence. Child
+groups returned by merge are available to a later update's split. Consumers
+reacquire the field view after topology changes.
+
+The room example reports one `hierarchy update` stage as
+`topology_host_ms` / `topology_device_ms`, included in the fusion span.
+Standalone split/merge timing columns stay blank for the combined call;
+their event counters remain separate. Combined time cannot be assigned to
+two artificial per-operation measurements. Batch/serial field equivalence
+and failure/lifetime behavior are tested with synchronization validation.
+
+The selected M5 Max Release room experiment uses 7.5/15/30 mm samples,
+65,536 total nodes and classification every four frames; fusion and mesh
+extraction still run on **all 400 frames**. Defaults remain 5/10/20 mm, and
+the earlier 5 mm measurements retain their separate configuration labels.
+Three interleaved runs per variant give median per-frame online run means
+of 3.571605 ms for uniform 10 mm, 3.545425 ms for the same uniform path with
+adaptive code compiled in but unused, and 3.854842 ms for adaptive sampling.
+The local mean-time gates pass (+7.93% adaptive, −0.73% disabled), including
+startup and retries. Median run p95/p99 are nevertheless slower adaptively:
+5.025667/9.211208 ms versus 3.956167/4.524459 ms. The disabled comparison
+uses per-frame online traces and is distinct from the earlier +0.62% legacy
+stage-sum instrumentation check. No discrete-GPU performance inference
+follows from the Mac result.
+
+All three adaptive outputs improve detail-region p95 distance to the
+same-input uniform 5 mm proxy: accuracy 1.538702–1.614423 mm versus
+1.706589 mm and coverage 1.847213–1.925112 mm versus 2.080917 mm. Detail
+F-score at 5 mm is worse (0.988267–0.989717 versus 0.996884), as are
+global/planar proxy distances and F-score. Global coverage misses beyond
+40 mm rise to 70–71 from 39. The reference is a reconstruction proxy, not
+ground truth. This supports a local-detail tradeoff within the measured
+mean-time budget, not an overall quality or latency-tail win.
+
+The default finest-5-mm configuration remains over budget in a separate
+single, unpaired batched probe: 5.049231 ms/frame with 131,072 nodes.
+Its quality was not re-evaluated; historical 5 mm quality must retain its
+earlier revision label. Neither the room replay nor analytic regressions
+establish moving-human reconstruction or adaptive codec transport.
+
+See [PERF H2](PERF.md#h2--online-hierarchical-room-experiment-draft) for
+resolution, budgets, measurement boundaries, proxy-quality methodology,
+the review stack and reproducible commands.
 
 ## Measured lessons
 

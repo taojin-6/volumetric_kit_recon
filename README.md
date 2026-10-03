@@ -99,8 +99,9 @@ claiming a performance improvement.
 TSDF fusion and dual-cell mesh extraction on a posed Replica-SLAM sequence.
 It uses a separate cell-centered field with 8³ samples per leaf; level zero
 is finest and each following level doubles the spacing. The uniform
-`VoxelBlockGrid` path remains independent. Finest spacing is configurable;
-the current experiment uses 5/10/20 mm levels with a common 40 mm physical
+`VoxelBlockGrid` path remains independent. Finest spacing is configurable.
+Defaults remain 5/10/20 mm; the comparison below explicitly selects
+7.5/15/30 mm and 65,536 total node slots, with a common 40 mm physical
 truncation band.
 
 The scene directory contains `results/frameNNNNNN.jpg`, matching
@@ -116,8 +117,8 @@ cmake --build "$recon_root/build" --parallel --target \
     fuse_replica fuse_replica_hierarchical compare_mesh_quality
 mkdir -p "$recon_root/build/room-validation"
 "$recon_root/build/examples/fuse_replica_hierarchical" "$room0" \
-    --voxel 0.005 --levels 3 --trunc 0.04 --depth-jump 0.04 \
-    --buckets 2048 --max-nodes 131072 --max-splits 64 --max-merges 64 \
+    --voxel 0.0075 --levels 3 --trunc 0.04 --depth-jump 0.04 \
+    --buckets 2048 --max-nodes 65536 --max-splits 64 --max-merges 64 \
     --merge-stability 8 --refine-every 4 --surface-error 0.002 \
     --noise-floor 0.0005 --pixel-stride 4 --max-frames 400 \
     --mesh-every 1 --preload --device-extract \
@@ -128,18 +129,26 @@ mkdir -p "$recon_root/build/room-validation"
 Fusion and extraction run every frame in this experiment. `--refine-every 4`
 classifies and applies topology budgets on frames 1, 5, 9, …; excess split
 requests are reported as deferred and can be requested by later classifications.
+Split then merge share one bounded `update_topology` submission and completion
+wait. `topology_host_ms` / `topology_device_ms` report that combined stage;
+standalone split/merge timing columns remain blank, while their separate
+event counters remain populated. The stage is included in `fuse_host_ms`,
+so do not add it to fusion again.
+
 `--max-nodes` includes fixed root slots (`8 * --buckets`), internal parents
-and child slots, not
-just active leaves. Logs and CSV report per-level leaf counts, deferred and
-exhausted requests. `--support-coarsening` enables an additional conservative
+and child slots, not just active leaves. Logs and CSV report per-level leaf
+counts, deferred and exhausted requests. `--support-coarsening` enables an additional conservative
 support pass and is off by default. Preloading this 400-frame fixture uses
 about 2.5 GB of host RAM.
 
-The draft reduces detail-region p95 distances from a 5 mm uniform mesh proxy,
-but has not met the accepted **within +10% online time versus uniform 1 cm**
-target with extraction every frame. See
+The 7.5/15/30 mm comparison meets the local M5 Max mean-time gates:
+adaptive +7.93% and the uniform path with adaptive code present −0.73%,
+using medians of three interleaved 400-frame run means. Adaptive p95/p99
+latency is slower; this does not establish a tail-latency or cross-GPU win.
+Detail-region p95 distances to the 5 mm proxy improve, while overall/planar
+distances and the 5 mm F-score are worse. See
 [H2 measurements and reproduction](PERF.md#h2--online-hierarchical-room-experiment-draft)
-for the paired baseline, quality metric, timing boundaries and remaining
+for the paired baseline, proxy quality, timing boundaries and remaining
 validation. Static replay does not establish moving-body reconstruction or
 live rig performance; adaptive codec transport is not implemented.
 

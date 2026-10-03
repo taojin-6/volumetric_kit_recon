@@ -138,7 +138,7 @@ kernels.
 | L2 | Pipeline sets | overlaps set N's GPU work with set N+1's host work | L | P6 | later |
 | L3 | Read VideoToolbox's plane images directly | 0.28–0.31 ms GPU per 4K frame, Apple only | M | — | later |
 | L4 | Sample the atlas in place rather than copy it | measure the copy at 4K first | L | gfx | kept |
-| H2 | Online hierarchical blocks with selective fine detail | finer local sampling with <5% disabled overhead and at most +10% adaptive online time versus uniform 1 cm; extract every frame | L | paired online phases and local proxy quality | in progress, draft (`feat/hierarchical-extraction`): measured M5 Max room0 detail improvement; provisional 5.079 vs 3.595 ms/frame (+41.3%), adaptive target unmet; discrete-GPU acceptance open |
+| H2 | Online hierarchical blocks with selective fine detail | finer local sampling with <5% disabled overhead and at most +10% adaptive online time versus uniform 1 cm; extract every frame | L | paired online phases and local proxy quality | in progress, draft: M5 Max mean gates met at 7.5/15/30 mm, 65,536 slots (+7.93% adaptive, −0.73% disabled); detail p95 improves but F-score/global/planar quality and latency tails worsen; 5 mm over budget; discrete-GPU acceptance open |
 
 The suggested order: P8 first, so every later figure is honest; D1–D3
 whenever convenient; then P1, P3, P5, P4, P2 + P6; then P7, and P9 once it
@@ -580,12 +580,138 @@ After P6, the GPU could run set N while the host polls and decodes set N+1.
 with **mesh extraction every frame** on the same input and poses as the
 uniform 1 cm pipeline. Disabled overhead must stay below 5%; adaptive online
 time must be at most 10% higher while improving local detail. A lower mesh
-cadence does not satisfy this workload. Finest spacing is configurable:
-5 mm is the current tested setting, not a required resolution or a general
-optimum. The comparison must state its tested spacings and common physical
-truncation band.
+cadence does not satisfy this workload. Finest spacing is configurable;
+the comparison must state its tested spacings and common physical truncation
+band. Defaults remain 5/10/20 mm, but the current candidate explicitly uses
+7.5/15/30 mm with 65,536 total node slots and `--refine-every 4`.
 
-**Provisional snapshot, 2026-10-02, adaptive `8b1d24e`.** Release with warnings
+**Combined topology stage.** `HierarchicalGrid::update_topology` validates
+all controls, then records split followed by merge in one command batch and
+completion wait, without an intermediate leaf-list rebuild. It preserves
+the separate event budgets and returned split/merge counts; groups freed by
+merging become available to the next update's split. The room example reports
+the combined `hierarchy update` as `topology_host_ms` and
+`topology_device_ms`, inside `fuse_host_ms`. Standalone split/merge time
+columns stay blank on this path: their individual times are not measured.
+Classification and final leaf-list preparation remain separate measured
+stages. The zero-budget path performs no topology work.
+
+**Final interleaved local timing comparison, 2026-10-03.** Release/Werror,
+Apple M5 Max, MoltenVK, same first 400 room0 frames at 1200 × 680 and poses;
+three runs each for the uniform 10 mm baseline, the same uniform path with
+adaptive code compiled in but unused, and adaptive 7.5/15/30 mm. Every run
+uses a common 40 mm TSDF band, stage instrumentation, preloaded inputs and
+**400 device extractions for 400 frames**; no incremental path or frame
+subsampling is used. The adaptive configuration has 16,384 root slots,
+65,536 total node slots, 64 split/64 merge event budgets, eight qualifying
+coarsening updates, a four-frame classification cadence, and conservative
+coarsening support off. Sensor depth-jump rejection remains 40 mm.
+Baseline executable revision is `d08e4f9`; disabled and adaptive executables
+are `73c1d3b`.
+
+The table reports medians across three runs; each run's mean and nearest-rank
+percentiles use every `pipeline_host_ms` frame, including startup, growth and
+retries. Fusion includes allocation, classification, topology and leaf-list
+work. Online timing excludes input decoding/preload and I/O, logging, CSV
+writes, final mesh readback/export and CPU quality evaluation. Mesh time is
+host time including completion waits; its device timestamp remains unavailable.
+
+| online host timing, ms | uniform baseline | adaptive disabled | adaptive 7.5/15/30 mm |
+|---|---:|---:|---:|
+| median run mean | 3.571605 | 3.545425 | 3.854842 |
+| run-mean range | 3.530668–3.581544 | 3.536377–3.588454 | 3.821529–3.862206 |
+| median run p50 | 3.589667 | 3.550625 | 3.992417 |
+| median run p95 | 3.956167 | 3.950626 | 5.025667 |
+| median run p99 | 4.524459 | 4.331833 | 9.211208 |
+| median fusion run mean | 1.674113 | 1.654493 | 1.661321 |
+| median mesh run mean | 1.897492 | 1.897062 | 2.191125 |
+
+Phase medians are computed independently and need not sum to the median
+online total. The adaptive topology stage's median per-input-frame mean is
+0.076480 ms host / 0.019391 ms device: all 400 frames remain in the
+denominator although topology updates run on 100 frames.
+
+The **local mean gates pass** for this explicit configuration: adaptive
+overhead is +7.93023% and disabled overhead is −0.7330%. The small disabled
+difference is within shared-machine variation, not an optimization claim.
+Adaptive p95 and p99 remain slower; the result does not establish a latency
+tail improvement, a default-5-mm result or discrete-GPU performance. This
+disabled comparison uses actual per-frame online measurements, unlike the
+earlier +0.62% instrumentation-only sum of legacy stage means.
+All three disabled outputs have the same 1,308,911 oriented triangles and
+3,926,733 vertices as all three baseline outputs and the historical uniform
+mesh. Canonical comparison checks exact float32 position bits and triangle
+orientation after cyclic-rotation normalization and sorting; it does not
+assert normal or color byte identity.
+
+All three adaptive runs report zero exhausted/rejected split requests and
+zero root-allocation retries. Each retains six mesh-growth retry frames in
+its statistics, including their latency spikes. Splits range from 4,065 to
+4,092, deferrals from 26,665 to 26,896, and merges are zero. Deferred counts sum updates and can
+count the same region repeatedly. Final fine/middle/coarse leaf populations
+are 23,960–24,176 / 5,538–5,565 / 2,892–2,893, producing
+1,662,115–1,672,224 triangles versus 1,308,911 uniformly. Topology budget
+selection may vary between runs, so quality is compared for all three outputs.
+The fixed field arrays occupy 404,815,872 bytes including unused/internal
+sample slots, excluding root-map metadata, scratch, mesh arenas and input
+preload storage. This is not a total-memory saving claim.
+
+Artifacts are all nine `baseline-{1,2,3}`, `disabled-{1,2,3}` and
+`adaptive-{1,2,3}` CSV/log/PLY sets under
+`.worktrees/hierarchical-grid/build/room-validation/final-batched/`.
+
+**Quality over all three adaptive outputs.** The production C++
+`compare_mesh_quality` / `eval::MeshDistance` comparison uses the same-input
+uniform 5 mm, 40 mm-band mesh as a **proxy, not ground truth**. It requests
+200,000 deterministic area-weighted samples per mesh, 40 mm query reach and
+a 5 mm F-score threshold. Reference-only 10 cm cells define strata using
+normal coherence: planar at least `cos(10°)²`, detail at most `cos(25°)²`,
+with at least eight reference samples per classified cell. Accuracy goes
+from candidate to proxy; coverage goes from proxy to candidate. Mean/p95
+exclude beyond-reach queries; F includes them as misses. The baseline's
+quality matches its earlier result exactly.
+
+| proxy metric | uniform 10 mm | adaptive range across three runs |
+|---|---:|---:|
+| detail accuracy p95, mm | 1.706589 | 1.538702–1.614423 |
+| detail coverage p95, mm | 2.080917 | 1.847213–1.925112 |
+| detail F-score at 5 mm | 0.996884 | 0.988267–0.989717 |
+| global accuracy p95, mm | 0.418512 | 0.523693–0.532251 |
+| global coverage p95, mm | 0.551405 | 0.593167–0.615599 |
+| global F-score at 5 mm | 0.998483 | 0.995780–0.995940 |
+| planar coverage p95, mm | 0.169427 | 0.381829–0.408816 |
+| planar F-score at 5 mm | 0.999315 | 0.997823–0.998069 |
+
+Detail-region p95 improves in every run, but the F-score tail and broader
+global/planar agreement worsen. Global coverage has 70–71 beyond-reach
+queries versus 39 uniformly; accuracy has none. The earlier grazing-ceiling
+ROI has zero beyond-reach queries among 6,709 proxy samples and F=1 in
+adaptive run 2, but its coverage p95 is 0.265736 mm versus 0.116355 mm
+uniformly. This verifies restored support in that ROI, not uniformly better
+surface quality. Static replay does not establish moving-human quality or
+live multi-camera behavior; adaptive incremental extraction and codec
+transport remain separate work.
+
+Quality artifacts are `quality-batched-adaptive-{1,2,3}.log`,
+`quality-batched-baseline-1.log` and `quality-batched-adaptive-2-roi.log`,
+with per-cell CSVs under `.worktrees/hierarchical-room/build/room-validation/`.
+The reference is `fine-400.ply` in that directory. All measured adaptive
+outputs are retained; no slow run or unfavorable quality output was removed.
+
+**Finest-5-mm limitation probe.** One additional unpaired run of the batched
+code at 5/10/20 mm, 131,072 slots and the same other controls costs
+5.049231 ms/frame (fusion 1.860223 + mesh 3.189008), with 400 meshes,
+six growth retries and zero exhaustion. Its p95/p99 are 7.124458/15.756208 ms.
+This remains above the approximately 3.57 ms uniform reference; it is not a
+paired ratio or an acceptance result. Quality was not rerun for this probe,
+so the earlier 5 mm quality table below must not be relabeled as its result.
+Artifacts: `.worktrees/hierarchical-grid/build/room-validation/final-5mm-batched.{csv,log,ply}`.
+
+#### Earlier 5/10/20 mm configuration
+
+**Historical provisional snapshot, 2026-10-02, adaptive `8b1d24e`.** This
+predates combined topology submission and uses a different resolution and
+node budget from the current candidate. Release with warnings
 as errors, Apple M5 Max, MoltenVK; the first 400 Replica room0 frames at
 1200 × 680, stride 1, preloaded, 400 device extractions. Both executables
 collect stage instrumentation. Online host time includes recording, submits,
@@ -602,16 +728,16 @@ leaf-list preparation. Mesh phases are host timings only:
 | mesh, host | 1.909796 | 3.169806 |
 | online total, host | 3.594793 | 5.078579 |
 
-The adaptive mean is **41.3% higher**, so the +10% gate is unmet. These
-development runs are provisional, not final interleaved acceptance. A prior
+This earlier adaptive mean was **41.3% higher**, missing the +10% gate for
+that configuration. These development runs were provisional. A prior
 three-run instrumentation study against pristine `209b23e` found median
 sums of the legacy allocate/integrate/mesh host means of 3.568 versus
 3.546 ms (+0.62%); CSV was disabled on the instrumented side and stage
 instrumentation was present on both. The new per-frame online metric was
 unavailable with CSV off. That checks measurement-path overhead at that
-revision, not the final adaptive-disabled gate. Repeat the final candidates
-interleaved on the shared Mac,
-retaining all frames, and separately validate an NVIDIA/discrete-GPU run.
+revision, not the final adaptive-disabled gate. The later per-frame paired
+comparison above supersedes this instrumentation-only evidence for the
+current candidate; NVIDIA/discrete-GPU timing remains unmeasured.
 
 The adaptive configuration uses a 40 mm common field band, independent
 40 mm sensor depth-jump threshold, 16,384 fixed root slots and 131,072 total
@@ -627,16 +753,8 @@ sample slots but excluding root-map metadata, scratch, mesh arenas and input
 preload memory. Fewer coarse-region samples do not imply lower total memory
 for this fixed-capacity implementation.
 
-**Local quality is proxy agreement, not ground truth.** The C++
-`compare_mesh_quality` example uses the production `eval::MeshDistance`
-tier against a uniform 5 mm reconstruction of the same 400 frames and poses.
-It requests 200,000 deterministic area-weighted samples per mesh, a 40 mm
-query reach and 5 mm F-score threshold. Reference-only 10 cm spatial cells
-define strata from normal coherence: planar at least `cos(10°)²`, detail at
-most `cos(25°)²`, at least eight reference samples per classified cell.
-Accuracy queries go from candidate to proxy; coverage queries go from proxy
-to candidate. Mean/p95 exclude beyond-reach queries; F includes them as
-misses. More triangles alone is not the quality criterion.
+The earlier output was compared with the same C++ proxy protocol stated
+above. More triangles alone was not the quality criterion.
 
 | detail-region metric | uniform 10 mm | adaptive 5/10/20 mm |
 |---|---:|---:|
@@ -652,7 +770,9 @@ performance. Adaptive incremental extraction and codec transport remain
 separate work; no existing uniform codec format is claimed to support this
 field.
 
-**Reproduction.** Build the three examples and run the adaptive command in
+#### Reproduction and review stack
+
+Build the three examples and run the adaptive command in
 [README](README.md#adaptive-room-reconstruction-draft). Use the same scene,
 camera metadata, frame count and `--mesh-every 1` for the baseline and proxy:
 
@@ -679,6 +799,16 @@ camera metadata, frame count and `--mesh-every 1` for the baseline and proxy:
     --cells-csv "$recon_root/build/room-validation/quality-uniform-cells.csv"
 ```
 
+For the disabled comparison, build `d08e4f9` in a separate checkout with
+the same Release/Werror options and run its uniform executable alongside
+the current checkout's uniform executable. "Disabled" means the existing
+`fuse_replica` path with the adaptive code compiled in but unused; it does
+not mean a one-level hierarchical field. Run three interleaved captures per
+variant, including the adaptive command, using distinct numbered CSV/PLY
+paths; retain all startup, retry and slow frames. The current uniform output
+can supply the quality baseline because its canonical geometry was verified
+identical to the baseline build.
+
 The uniform CSV instrumentation is the change introduced by `6cd7f42`.
 Recorded development artifacts are
 `.worktrees/hierarchical-grid/build/room-validation/prolong40-400.{csv,log,ply}`
@@ -687,7 +817,26 @@ artifacts `uniform-400`, `fine-400` and `quality-uniform` under
 `.worktrees/hierarchical-room/build/room-validation/`. The CSV-disabled study is
 under `.worktrees/hierarchical-bench/build/timings-209b23e/`, three
 `baseline-*` and `off-*` logs. These local artifacts preserve this snapshot;
-later shader optimizations need their own paired measurements.
+later shader optimizations need their own paired measurements. The current
+README command selects 7.5/15/30 mm and 65,536 nodes; to reproduce this
+historical configuration, use `--voxel 0.005 --max-nodes 131072` at its
+recorded revision.
+
+Each row builds on the row above; room capture and quality examples are
+reviewed separately from library contracts.
+
+| PR | Scope |
+|---|---|
+| [#138](https://github.com/taojin-6/volumetric_kit_recon/pull/138) | Per-frame uniform baseline measurements |
+| [#139](https://github.com/taojin-6/volumetric_kit_recon/pull/139) | Dyadic layout, field view and GPU lookup |
+| [#140](https://github.com/taojin-6/volumetric_kit_recon/pull/140) | GPU storage and bounded refinement |
+| [#141](https://github.com/taojin-6/volumetric_kit_recon/pull/141) | Hierarchical fusion and incoming-depth classification |
+| [#142](https://github.com/taojin-6/volumetric_kit_recon/pull/142) | Persistent coarsening and child storage reuse |
+| [#147](https://github.com/taojin-6/volumetric_kit_recon/pull/147) | GPU adaptive dual-cell extraction |
+| [#150](https://github.com/taojin-6/volumetric_kit_recon/pull/150) | Observation support, depth edges and prolongation |
+| [#151](https://github.com/taojin-6/volumetric_kit_recon/pull/151) | One-submission bounded split/merge update |
+| [#152](https://github.com/taojin-6/volumetric_kit_recon/pull/152) | Online room capture and per-level/topology timing reports |
+| This change | C++ proxy-quality tool and final measurements |
 
 #### Shader diagnosis during implementation
 
@@ -738,5 +887,6 @@ Development artifacts are under `.worktrees/hierarchical-grid/build/room-validat
 `cache-{20,400}`, `signs-20`, `shifts-{20,400}` and `scratch-{20,400}`, each
 with CSV/log outputs. Inspect translation with
 `spirv-cross <hierarchical_marching_cubes.comp.spv> --msl --output <out.metal>`.
-TODO: record repeated interleaved room runs and a discrete-GPU measurement
-before treating this as an accepted cross-platform performance result.
+The repeated interleaved room measurements above cover the later selected
+configuration. TODO: measure a discrete GPU before treating the result as
+cross-platform performance evidence.
