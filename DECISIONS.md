@@ -296,6 +296,9 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-03**](#2026-10-03--rans-encoding-runs-on-the-device-byte-for-byte-the-hosts-frame-chosen-per-frame-by-segment-count) —
   rANS encoding runs on the device, byte for byte the host's frame, and the
   encoder picks the device per frame from 48 segments.
+- [**2026-10-03**](#2026-10-03--rans-decoding-runs-on-the-device-block-for-block-the-hosts-chosen-from-80-segments) —
+  rANS decoding runs on the device, block for block and refusal for refusal
+  the host's, and the decoder picks the device per frame from 80 segments.
 
 ## Decision record
 
@@ -9201,14 +9204,15 @@ segments buy the device parallelism at some size: room0 is 2.5%, 7.5% and
 host's the whole frame, so the device loses on a frame of few segments: it
 breaks even near 20 segments on the RTX 5090 and 45 on the M5 Max. The
 choice changes only the time, so `EntropyCoding::kAuto`, the default, codes
-on the device from `kMinDeviceSegments` (48) and on the host below.
+on the device from `kMinDeviceSegments` (48; `kMinDeviceEncodeSegments` since
+the decoding decision below) and on the host below.
 `kHost` and `kDevice` force one. `kAuto` builds the device coder at its
 first device frame, and codes on the host any frame the device could not:
 one past `maxStorageBufferRange` or free memory, or kernels that do not
 build. Only `kDevice` reports those failures.
 
-**Not done.** Decoding stays on the host, a `TODO(codec)` in the decoder.
-The tables are still normalized on the host, which costs the second
+**Not done.** Decoding stays on the host (moved to the device by the next
+entry). The tables are still normalized on the host, which costs the second
 batch's round trip. Lanes within a segment (format v4) are the next step if
 frames of few segments need the device; host threads per segment remain a
 `TODO(codec)` in the writer.
@@ -9218,6 +9222,79 @@ frames of few segments need the device; host threads per segment remain a
 Khronos layer forced on and synchronization validation. RTX 5090, Ubuntu
 24.04 container: the seven codec tests pass. No sanitizer run was made
 locally.
+
+### 2026-10-03 — rANS decoding runs on the device, block for block the host's, chosen from 80 segments.
+
+The 2026-09-26 decision's fifth PR, for the decoder. The v3 format is
+unchanged, and the device decodes every frame to `read_intra_frame`'s blocks
+and refuses every frame it refuses, with the same message.
+
+**The pipeline.** The host parses the frame: the header, sections, tables,
+segment lengths and the heap check (`parse_intra_frame`, which
+`read_intra_frame` now calls too). It uploads the tables (8 KB at K = 64) and
+the payload. One batch expands each model's table into a 4096-slot lookup on
+the device (`rans_slots.comp`, about 0.02 ms). It then decodes one segment
+per workgroup (`rans_decode.comp`: `RansReader` and `read_block` in the same
+32-bit arithmetic) into the inverse transform's layout. Only the coordinates,
+16 bytes a block for the decoder's merge, and each segment's fault come
+back. `check_segment` judges them in segment order, the one place both
+readers' refusals come from. The inverse reads the coefficients and masks
+where they were decoded (`DctTransform::inverse` over `ResidentBlocks`); the
+host path uploads 64 + 2K bytes a block instead.
+
+**Exactness.** The device frame test decodes every frame of the writer
+comparison on both sides (0 to 700 blocks, K of 1 to 512, segments of 1 to
+1,024 blocks, int32 extremes): the same coordinates, masks and coefficients.
+Of 800 payloads with one to three random bytes changed, the two sides agree
+on every one, with the same message: 40 decode, 179 step a coordinate out of
+int32, 511 are corrupt and 70 start out of order. The decoder's contract
+cases run again with device decoding, and host, device and automatic
+decoding leave identical grids.
+
+**Measured**, Release, host / device `..rans decode` ms, parsing included.
+Room0 at 1 cm decodes every frame of 60 (14,728 blocks); Rafa2 is coded 21
+times in a row by the same uncommitted loop in `codec_mesh` as before:
+
+| Content | Machine | R = 64 | R = 32 | R = 16 | R = 8 |
+|---|---|---|---|---|---|
+| room0 | M5 Max | 6.11 / 1.79 | | 6.08 / 0.76 | |
+| room0 | RTX 5090 | 6.09 / 2.07 | | 5.98 / 0.77 | |
+| Rafa2 5 mm, 2,395 blocks | M5 Max | 1.94 / 2.48 | 2.03 / 1.51 | 1.85 / 0.87 | 1.78 / 0.61 |
+| Rafa2 5 mm | RTX 5090 | 1.89 / 2.45 | 1.90 / 1.36 | 1.90 / 0.77 | 1.88 / 0.47 |
+| Rafa2 1 cm, 600 blocks | M5 Max | 0.46 / 2.83 | 0.47 / 1.18 | 0.46 / 0.84 | 0.52 / 0.61 |
+| Rafa2 1 cm | RTX 5090 | 0.50 / 2.32 | 0.50 / 1.31 | 0.50 / 0.73 | 0.50 / 0.39 |
+
+The whole room0 decode goes from 8.54 to 3.29 ms on the M5 Max and from 8.07
+to 4.08 ms on the RTX 5090 at R = 64, and to 2.27 and 2.75 ms at R = 16.
+
+**One segment per workgroup.** Segments diverge at every mask and coordinate
+branch: 32 of them a workgroup took room0 at R = 64 to 4.62 ms, 8 to 2.91,
+and one to 2.06 (M5 Max, an earlier and busier run than the table's).
+Loading the next stream word ahead changed nothing (2.04 ms), and a binary
+search of each model's 8 KB table in place of the 1.2 MB lookup was slower
+(3.10 ms); both were reverted.
+
+**Chosen per frame, later than encoding.** Decoding cannot take the symbol
+walk out of the serial chain, as encoding did: each symbol's model depends on
+the symbols before it. A block costs the device 30 to 45 µs of its segment's
+chain and the host 0.4 to 0.8 µs, and the device's batch adds a fixed 0.1 to
+0.4 ms. At R = 64 the device breaks even near 48 segments on Rafa2 on both
+machines, and on room0 near 70 on the M5 Max and 80 on the RTX 5090, so `EntropyCoding::kAuto` decodes on the
+device from `kMinDeviceDecodeSegments` (80); the encoder's threshold is
+renamed `kMinDeviceEncodeSegments`. Smaller segments need more of them, since
+the fixed cost stays and each covers fewer blocks: 1 cm Rafa2 wins only at
+R = 8 on the RTX 5090. Like the encoder, `kAuto` builds the device reader at
+its first device frame and decodes on the host any frame the device could
+not; `kHost` and `kDevice` force one. The examples' `--entropy` sets both.
+
+**Not done.** Lanes within a segment (format v4) would shorten the chain,
+which is what decoding few segments on the device needs; host threads per
+segment remain a `TODO(codec)` in the writer.
+
+**Validation.** Apple M5 Max, Release with warnings as errors and Assimp: all
+tests pass, and the four GPU codec tests report no messages with the Khronos
+layer forced on and synchronization validation. RTX 5090, Ubuntu 24.04
+container: the seven codec tests pass. No sanitizer run was made locally.
 
 ## Measured lessons
 

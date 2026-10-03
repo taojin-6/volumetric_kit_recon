@@ -153,8 +153,8 @@ example with `VR_WITH_ASSIMP=ON` after installing the
 [asset I/O prerequisites](#asset-io).
 Both support `--quant-table uniform|band|radial`, `--step` for the global
 quantization scale, `--entropy auto|host|device` and `--segment-size` for
-where and in what segments the frame's rANS coding runs, and `--sweep` for
-the shared rate-distortion study.
+where and in what segments the frame's rANS encoding and decoding run, and
+`--sweep` for the shared rate-distortion study.
 
 Rafa2's supplied OBJ has no declared physical unit and its person is tilted
 in the stored coordinates. The explicit head-up vector below is the

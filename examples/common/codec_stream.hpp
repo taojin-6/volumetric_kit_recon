@@ -145,14 +145,17 @@ inline void print_comparison(const vr::eval::MeshComparison& c, float voxel) {
 class CodecStream {
  public:
   /// The player grid is built from the first frame's header, sized for its
-  /// blocks, and grows as later frames need.
+  /// blocks, and grows as later frames need. The decoder runs its rANS
+  /// coding where @p config says the encoder does.
   static vr::Result<CodecStream> create(
       vr::Device& device, vr::Allocator& allocator,
       const vr::codec::EncoderConfig& config) {
     VR_ASSIGN(vr::codec::Encoder enc,
               vr::codec::Encoder::create(device, allocator, config));
+    vr::codec::DecoderConfig dc;
+    dc.entropy = config.entropy;
     VR_ASSIGN(vr::codec::Decoder dec,
-              vr::codec::Decoder::create(device, allocator));
+              vr::codec::Decoder::create(device, allocator, dc));
     return CodecStream(device, allocator, std::move(enc), std::move(dec));
   }
 
@@ -221,7 +224,7 @@ class CodecStream {
     print_stage_rows("decode", decode_rows_, frames_);
     const double enc = row_ms(encode_rows_, "  ..rans encode") / frames_;
     const double dec = row_ms(decode_rows_, "  ..rans decode") / frames_;
-    std::printf("  host rANS: %.2f ms encode, %.2f ms decode per coded frame",
+    std::printf("  rANS: %.2f ms encode, %.2f ms decode per coded frame (host)",
                 enc, dec);
     if (every > 0) {
       // Against the source's interval: what coding every frame live must fit.
