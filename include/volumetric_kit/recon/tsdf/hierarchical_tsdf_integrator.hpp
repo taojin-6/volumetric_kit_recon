@@ -62,6 +62,8 @@ class VR_TSDF_API HierarchicalTsdfIntegrator {
   /// @param allocator Allocator that outlives this integrator.
   /// @param depth_discontinuity Positive finite camera-depth jump in metres
   ///        above which bilinear taps fall back to the nearest depth pixel.
+  ///        Applies to integration only; classify uses
+  ///        HierarchicalRefinementParams::depth_discontinuity independently.
   ///        Independent of the field truncation distance; default 40mm.
   /// @return A live integrator, invalid_argument for empty device/allocator or
   ///         invalid depth_discontinuity,
@@ -103,8 +105,11 @@ class VR_TSDF_API HierarchicalTsdfIntegrator {
   /// @param metrics Optional host/device timing rows.
   /// @return A borrowed device buffer of node_capacity uint32 values: desired
   ///         level per current leaf, UINT32_MAX for no evidence. Valid until
-  ///         the next classify call, integrator move, or destruction. Consume
-  ///         it with HierarchicalGrid::split or merge before changing topology.
+  ///         the next classify call, integrator move, or destruction. For one
+  ///         topology update, call HierarchicalGrid::split once, merge once,
+  ///         or split followed by merge with this same snapshot. Regenerate
+  ///         requests before another update, after allocation/clear, and before
+  ///         any split following merge, since freed node indices can be reused.
   ///         With support_coarsening enabled, unsupported coarse surface votes
   ///         are suppressed; any fine surface request is preserved.
   Result<const Buffer*> classify(

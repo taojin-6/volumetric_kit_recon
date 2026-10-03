@@ -62,6 +62,14 @@ struct HierarchicalMergeStats {
 /// spacing`. This is a separate field from the existing node-sampled uniform
 /// VoxelBlockGrid. All topology calls invalidate previously returned views.
 /// Calls and borrowed-buffer consumers must be externally serialized.
+///
+/// Desired levels describe one topology-update snapshot. Inactive node slots
+/// must contain UINT32_MAX. One update may call split once and then merge once
+/// with that same buffer: new children have no request, and merge only frees
+/// slots. Regenerate requests before the next update, or after allocation or
+/// clear. In particular, merge followed by split must use fresh requests,
+/// because split can reuse node indices freed by merge. Acquire a fresh field
+/// view after the update before integration or meshing.
 class VR_VOLUME_API HierarchicalGrid {
  public:
   /// @brief Construct a grid and zero its device-local storage.
@@ -117,14 +125,17 @@ class VR_VOLUME_API HierarchicalGrid {
 
   /// @brief Prepare the device leaf list and borrow the field buffers.
   /// @param metrics Optional host/device stage rows.
-  /// @return A checked-lifetime field view. An unchanged topology reuses its
-  ///         prepared list without dispatch or readback. Only the leaf count
-  ///         is read back when the list is rebuilt.
+  /// @return A borrowed field view guarded by the topology generation. An
+  ///         unchanged topology reuses its prepared list without dispatch or
+  ///         readback. Only total and per-level leaf counts are read back when
+  ///         the list is rebuilt.
   Result<HierarchicalFieldView> prepare_leaves(StageMetrics* metrics = nullptr);
 
   /// @brief Split requested leaves, subject to capacity and an event budget.
   ///
-  /// A request is one desired level per node; UINT32_MAX means no request.
+  /// A request is one desired level per node; UINT32_MAX means no request and
+  /// is required in inactive slots. Follow the class's single-update ordering
+  /// when sharing a request buffer with merge.
   /// Only current leaves with a finer desired level qualify. A complete group
   /// of eight children is reserved before the parent
   /// publishes it; the parent's payload is retained. Requests are not reset.

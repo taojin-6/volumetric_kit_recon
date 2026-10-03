@@ -870,7 +870,11 @@ The finest available level is used when no spacing satisfies both estimates;
 this heuristic does not guarantee support at arbitrarily grazing angles.
 Depth discontinuities and valid silhouettes beside missing depth request fine
 samples. Invalid or unseen patches supply no coarsening evidence. The result
-is a device-resident desired-level array consumed before topology changes.
+is a device-resident desired-level snapshot with inactive slots set to
+`UINT32_MAX`. One update may split once then merge once using that snapshot:
+new children remain unrequested, and merge only releases slots. Regenerate
+requests before the next update or after allocation/clear; a split following
+a merge requires new requests because child indices can be reused.
 Optional `support_coarsening` checks current depth coverage and historical
 sample visibility before supplying sibling support for merges. Neither policy
 changes the common metric truncation distance. Fusion supports
