@@ -63,15 +63,21 @@ int test_buffer_moves(vr::Allocator& allocator) {
   vr::Buffer buf_a = std::move(a).value();
   CHECK(buf_a.valid());
   const VkBuffer raw = buf_a.handle();
+  CHECK(buf_a.memory_info().has_value());
+  const vr::BufferMemoryInfo memory = *buf_a.memory_info();
 
   // move-construct: source emptied, destination adopts the handle + size.
   vr::Buffer buf_b(std::move(buf_a));
   CHECK(!buf_a.valid());
   CHECK(buf_a.handle() == VK_NULL_HANDLE);
   CHECK(buf_a.size() == 0);
+  CHECK(!buf_a.memory_info() && !buf_a.is_device_local());
   CHECK(buf_b.valid());
   CHECK(buf_b.handle() == raw);
   CHECK(buf_b.size() == 256);
+  CHECK(buf_b.memory_info()->properties == memory.properties);
+  CHECK(buf_b.memory_info()->type_index == memory.type_index);
+  CHECK(buf_b.memory_info()->heap_index == memory.heap_index);
 
   // move-assign over a live buffer: the destination's original allocation is
   // freed (ASan would flag a leak otherwise), then it adopts the source.
@@ -82,6 +88,10 @@ int test_buffer_moves(vr::Allocator& allocator) {
   CHECK(buf_c.valid());
   CHECK(buf_c.handle() == raw);
   CHECK(!buf_b.valid());
+  CHECK(!buf_b.memory_info() && !buf_b.is_device_local());
+  CHECK(buf_c.memory_info()->properties == memory.properties);
+  CHECK(buf_c.memory_info()->type_index == memory.type_index);
+  CHECK(buf_c.memory_info()->heap_index == memory.heap_index);
 
   // self-move: the `if (this != &other)` guard makes it a no-op. Launder
   // through a pointer so the compiler can't see the self-assignment
@@ -90,6 +100,11 @@ int test_buffer_moves(vr::Allocator& allocator) {
   buf_c = std::move(*alias);
   CHECK(buf_c.valid());
   CHECK(buf_c.handle() == raw);
+  CHECK(buf_c.memory_info()->properties == memory.properties);
+  CHECK(buf_c.memory_info()->type_index == memory.type_index);
+  CHECK(buf_c.memory_info()->heap_index == memory.heap_index);
+  buf_c = vr::Buffer{};
+  CHECK(!buf_c.valid() && !buf_c.memory_info() && !buf_c.is_device_local());
   return 0;
 }
 

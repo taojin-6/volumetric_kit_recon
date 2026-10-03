@@ -136,12 +136,13 @@ inline Result<Buffer> upload_storage_buffer(
 ///
 /// The counterpart to @ref storage_buffer, which is host-visible so the host
 /// can fill it or read it back. On Apple's unified memory the two cost the
-/// same; on a discrete GPU a host-visible buffer is system memory the kernels
-/// reach across PCIe. The hash table's bucket locks, host-visible, took 1.97 s
+/// same; on a discrete GPU non-device-local host memory is reached across
+/// PCIe. Host visibility alone does not exclude device locality. The hash
+/// table's bucket locks in non-local memory took 1.97 s
 /// to allocate a 5 000-triangle sheet on an RTX 5090 against 3.4 ms
 /// device-local (the 2026-09-28 measured lesson), and the grid's attributes
-/// host-visible cost `integrate` 14.6 ms on the device against 0.067 ms (the
-/// 2026-09-28 residency decision).
+/// in non-local memory cost `integrate` 14.6 ms on the device against 0.067 ms
+/// (the 2026-09-28 residency decision).
 ///
 /// `TRANSFER_SRC` and `TRANSFER_DST` come with it, so a @ref CommandBatch can
 /// fill, copy, upload into and read back from it.
@@ -179,7 +180,8 @@ class StorageInput {
   /// @param host  Host bytes, staged by @ref buffer; null is refused by
   ///              @ref check.
   explicit StorageInput(const void* host) noexcept : host_(host) {}
-  /// @param device  A storage buffer, bound in place.
+  /// @param device  A storage buffer with known device-local memory, bound in
+  ///                place. Host-visible device-local memory is also accepted.
   explicit StorageInput(const Buffer& device) noexcept : device_(&device) {}
 
   /// @brief Whether this can be bound as @p bytes of storage. O(1), so a call
@@ -188,7 +190,8 @@ class StorageInput {
   /// @param bytes  What the binding will read.
   /// @return OK; else @ref Status::Code::InvalidArgument for a null array, or
   ///         for a buffer that is empty, was created without `STORAGE_BUFFER`
-  ///         usage, or holds fewer than @p bytes -- which would be read past
+  ///         usage, has unknown or non-device-local memory, or holds fewer than
+  ///         @p bytes -- which would be read past
   ///         its end, undefined rather than an error.
   Status check(const char* what, VkDeviceSize bytes) const {
     if (device_ == nullptr) {
@@ -209,6 +212,12 @@ class StorageInput {
           std::string(what) + " holds " + std::to_string(device_->size()) +
           " bytes; the image needs " + std::to_string(bytes));
     }
+    if (!device_->is_device_local()) {
+      return Status::invalid_argument(
+          std::string(what) +
+          " requires known device-local memory; stage host input or upload "
+          "into a device_storage_buffer");
+    }
     return {};
   }
 
@@ -225,15 +234,19 @@ class StorageInput {
   /// @param upload     Receives the device buffer, reused when it already
   ///                   holds @p bytes, so a member kept across calls grows
   ///                   only; left as it is for a device input.
-  /// @return The handle to bind; @ref Status::Code::InvalidArgument for a
-  ///         null array; or the allocation's or the upload's failure.
+  /// @return The handle to bind; @ref Status::Code::InvalidArgument for an
+  ///         input refused by @ref check; or the allocation's or the upload's
+  ///         failure.
   Result<VkBuffer> buffer(CommandBatch& batch, Allocator& allocator,
                           VkDeviceSize bytes, Buffer& upload) const {
-    if (device_ != nullptr) return device_->handle();
+    if (device_ != nullptr) {
+      VR_TRY(check("StorageInput", bytes));
+      return device_->handle();
+    }
     if (host_ == nullptr) {
       return Status::invalid_argument("StorageInput: the host array is null");
     }
-    if (!upload.valid() || upload.size() < bytes) {
+    if (!upload.valid() || !upload.is_device_local() || upload.size() < bytes) {
       VR_ASSIGN(upload, device_storage_buffer(allocator, bytes));
     }
     VR_TRY(batch.upload(upload, 0, host_, bytes));

@@ -286,16 +286,20 @@ geometry buffers directly.
   GLSL atomics; the prior engine's kernels are a reference for the *algorithm*,
   rewritten in GLSL. The native-CUDA accelerator (2026-07-04) keeps its warp
   intrinsics/atomics but must stay numerically in lockstep with the GLSL path.
-- **Host-visible memory is system RAM on a discrete GPU, and free on Apple's
-  unified memory**, so its cost is invisible where the Mac tests. Every buffer
-  `storage_buffer` makes is host-visible. The hash table's bucket locks were
-  too, until an RTX 5090 took 1.97 s to allocate a 5 000-triangle sheet
+- **Device locality and host visibility are independent flags.** Non-local
+  host memory costs PCIe traffic on a discrete GPU, a cost hidden by Apple's
+  unified memory. A type with both `DEVICE_LOCAL` and `HOST_VISIBLE` is still
+  local (UMA or BAR). Every buffer `storage_buffer` makes is host-visible;
+  its actual locality is recorded in `Buffer::memory_info()`. The hash table's
+  bucket locks used non-local host memory until an RTX 5090 took 1.97 s to
+  allocate a 5 000-triangle sheet
   (3.4 ms device-local) and lost a 320 000-triangle one to the driver's
   7-second watchdog (Xid 8 / 109; the 2026-09-28 measured lesson). The bulk
-  data costs as surely: the voxel arrays, frames and arena host-visible put
+  data costs as surely: the voxel arrays, frames and arena in non-local memory put
   `integrate` at 14.6 ms of device time against 0.067 ms resident (the
   2026-09-28 residency decision). Memory the kernels touch is
-  `device_storage_buffer`, on Apple too, reached from the host through a
+  `device_storage_buffer`, which requires `DEVICE_LOCAL` rather than preferring
+  it, on Apple too, reached from the host through a
   `CommandBatch`; and the CPU never reads VRAM directly, since BAR memory
   reads uncached (6.6 s for one mesh download).
   Small parameters may stay host-visible: under 64 KB, it measured nothing.
@@ -624,6 +628,19 @@ keep to one thread), and the shared `dispatch()` /
 `group_count` / `storage_buffer` / range-guard helpers of `compute_util.hpp`
 — `StorageInput` among them, the host array (staged onto the device in the
 call's batch) or device buffer a call binds at its image's exact range.
+`MemoryUsage::DeviceLocal` requires `VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT`:
+allocation fails instead of spilling into a non-local heap. `Buffer::memory_info()`
+records the selected memory type's flags, type index and heap index; its
+optional value is absent for an empty buffer or an adoption with unknown
+backing memory. `is_device_local()` accepts `DEVICE_LOCAL` with or without
+`HOST_VISIBLE`. The VMA allocator and exported-buffer factory both record the
+actual allocation type. `StorageInput` refuses a borrowed buffer with unknown
+or non-local memory before submitting work, even when its size and storage
+usage fit. Existing adopters must supply the bound allocation's actual memory
+metadata. Callers holding non-local data can pass a host array for staging, or
+upload/copy into `device_storage_buffer` with `CommandBatch` before using the
+device overload. Transfer-only sources and the documented small-parameter or
+host-read-table exceptions do not gain a blanket residency restriction.
 **`CommandBatch`** (`core/command_batch.hpp`)
 is how the host reaches device memory: one call's uploads, fills, copies,
 dispatches (indirect too) and readbacks in one command buffer, one fence

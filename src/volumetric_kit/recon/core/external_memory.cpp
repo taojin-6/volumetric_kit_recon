@@ -105,11 +105,19 @@ Result<ExportedBuffer> create_exported_buffer(const Device& device,
   }
 
   ExportedBuffer out;
-  out.buffer = Buffer(buffer, bytes, kUsage, VK_SHARING_MODE_EXCLUSIVE, nullptr,
-                      [vk, buffer, backing]() {
-                        vkDestroyBuffer(vk, buffer, nullptr);
-                        vkFreeMemory(vk, backing, nullptr);
-                      });
+  VkPhysicalDeviceMemoryProperties memory_properties{};
+  vkGetPhysicalDeviceMemoryProperties(device.physical_device(),
+                                      &memory_properties);
+  const VkMemoryType& selected = memory_properties.memoryTypes[*type];
+  const BufferMemoryInfo memory{selected.propertyFlags, *type,
+                                selected.heapIndex};
+  out.buffer = Buffer(
+      buffer, bytes, kUsage, VK_SHARING_MODE_EXCLUSIVE, nullptr,
+      [vk, buffer, backing]() {
+        vkDestroyBuffer(vk, buffer, nullptr);
+        vkFreeMemory(vk, backing, nullptr);
+      },
+      memory);
   out.fd = fd;
   out.memory_size = needs.size;
   return out;

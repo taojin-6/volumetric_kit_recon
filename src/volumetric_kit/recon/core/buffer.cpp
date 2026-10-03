@@ -9,12 +9,14 @@ namespace volumetric_kit::recon {
 
 Buffer::Buffer(VkBuffer handle, VkDeviceSize size, VkBufferUsageFlags usage,
                VkSharingMode sharing, void* mapped,
-               std::function<void()> deleter) noexcept
+               std::function<void()> deleter,
+               std::optional<BufferMemoryInfo> memory) noexcept
     : buffer_(handle),
       size_(size),
       usage_(usage),
       sharing_(sharing),
       mapped_(mapped),
+      memory_(handle == VK_NULL_HANDLE ? std::nullopt : memory),
       deleter_(std::move(deleter)) {}
 
 Buffer::~Buffer() { destroy(); }
@@ -25,12 +27,14 @@ Buffer::Buffer(Buffer&& other) noexcept
       usage_(other.usage_),
       sharing_(other.sharing_),
       mapped_(other.mapped_),
+      memory_(other.memory_),
       deleter_(std::move(other.deleter_)) {
   other.buffer_ = VK_NULL_HANDLE;
   other.size_ = 0;
   other.usage_ = 0;
   other.sharing_ = VK_SHARING_MODE_EXCLUSIVE;
   other.mapped_ = nullptr;
+  other.memory_.reset();
   other.deleter_ = nullptr;
 }
 
@@ -42,12 +46,14 @@ Buffer& Buffer::operator=(Buffer&& other) noexcept {
     usage_ = other.usage_;
     sharing_ = other.sharing_;
     mapped_ = other.mapped_;
+    memory_ = other.memory_;
     deleter_ = std::move(other.deleter_);
     other.buffer_ = VK_NULL_HANDLE;
     other.size_ = 0;
     other.usage_ = 0;
     other.sharing_ = VK_SHARING_MODE_EXCLUSIVE;
     other.mapped_ = nullptr;
+    other.memory_.reset();
     other.deleter_ = nullptr;
   }
   return *this;
@@ -63,6 +69,7 @@ void Buffer::destroy() noexcept {
   usage_ = 0;
   sharing_ = VK_SHARING_MODE_EXCLUSIVE;
   mapped_ = nullptr;
+  memory_.reset();
   deleter_ = nullptr;
 }
 
