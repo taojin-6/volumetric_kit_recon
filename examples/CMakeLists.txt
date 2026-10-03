@@ -54,7 +54,13 @@ target_link_libraries(
           volumetric_kit::recon_mesh volumetric_kit::recon_volume
           Vulkan::Vulkan)
 vr_target_warnings(fuse_replica_hierarchical)
+add_executable(compare_mesh_quality compare_mesh_quality.cpp)
+target_link_libraries(compare_mesh_quality PRIVATE vr_example_common vr_tinyply
+                                                   volumetric_kit::recon_eval)
+vr_target_warnings(compare_mesh_quality)
 if(VR_BUILD_TESTS)
+  add_test(NAME recon_mesh_quality_sampling COMMAND compare_mesh_quality
+                                                    --self-test)
   add_test(
     NAME recon_hierarchical_room_cli
     COMMAND
