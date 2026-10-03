@@ -65,8 +65,8 @@ Static mesh import is a separate optional target,
 dependency. Install Assimp and enable it explicitly:
 
 ```sh
-brew install assimp                  # macOS
-sudo apt install libassimp-dev        # Debian/Ubuntu
+brew install assimp                       # macOS
+sudo apt install libassimp-dev zlib1g-dev   # Debian/Ubuntu
 cmake -S "$recon_root" -B "$recon_root/build" -DCMAKE_BUILD_TYPE=Release \
     -DVR_WITH_ASSIMP=ON
 ```

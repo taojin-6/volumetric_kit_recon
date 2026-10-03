@@ -147,7 +147,9 @@ jobs:
             pkgs="$pkgs pkg-config libavcodec-dev libavutil-dev libswscale-dev"
           fi
           if [ "${{ inputs.assimp }}" = "true" ]; then
-            pkgs="$pkgs libassimp-dev"
+            # Ubuntu 22.04's Assimp CMake export references libz.so but does
+            # not pull in the development package that provides that link.
+            pkgs="$pkgs libassimp-dev zlib1g-dev"
           fi
           # shellcheck disable=SC2086  # intentional: split $pkgs into separate args
           sudo apt-get install -y --no-install-recommends $pkgs

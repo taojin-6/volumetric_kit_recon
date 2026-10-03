@@ -42,7 +42,7 @@ jobs:
           # libglm-dev: GLM headers + CMake config that recon_core's math aliases.
           # FFmpeg: the video decoder runs here too, in software (no GPU).
           sudo apt-get install -y --no-install-recommends \
-            cmake clang libglm-dev libassimp-dev \
+            cmake clang libglm-dev libassimp-dev zlib1g-dev \
             libvulkan-dev vulkan-validationlayers spirv-tools glslang-tools \
             vulkan-tools pkg-config libavcodec-dev libavutil-dev libswscale-dev
           # lavapipe (software Vulkan) is what lets the Vulkan-touching tests run
