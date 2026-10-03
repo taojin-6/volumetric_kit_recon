@@ -95,6 +95,9 @@ class VR_VOLUME_API HierarchicalGrid {
   /// half a root voxel of allocation-only padding for its nearest-node center
   /// selection. The field's physical truncation distance remains unchanged.
   /// Existing refined roots retain their descendants and attributes.
+  /// The declared camera frustum and allocation band must fit the signed
+  /// finest-cell domain (-2^30, 2^30), with neighbor-query headroom. Validation
+  /// checks camera metadata before dispatch and never reads depth to the host.
   /// @param frames Host or device depth inputs in metres.
   /// @param out_failures Optional root allocation failure details.
   /// @param metrics Optional host/device stage rows.
@@ -104,7 +107,9 @@ class VR_VOLUME_API HierarchicalGrid {
       AllocFailures* out_failures = nullptr, StageMetrics* metrics = nullptr);
 
   /// @brief Allocate prescribed coarse root coordinates.
-  /// @param coords Root-level coordinates; ptr is ignored.
+  /// @param coords Root-level coordinates; ptr is ignored. Every coordinate
+  ///               must have magnitude <= 2^30 / (8 * 2^max_level) - 2,
+  ///               leaving headroom for descendant and neighbor arithmetic.
   /// @param count Number of coordinates; zero accepts a null pointer.
   /// @return Unsuccessful root allocations after retries, or a non-OK status.
   Result<std::uint32_t> allocate_roots(const BlockIndex* coords,

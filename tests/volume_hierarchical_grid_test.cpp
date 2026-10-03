@@ -67,6 +67,12 @@ int main() {
   config.level_count = 3;
   config.child_block_capacity = 16;
   config.color = true;
+  auto saved_device = std::move(dev);
+  CHECK(!vol::HierarchicalGrid::create(dev, alloc, config));
+  dev = std::move(saved_device);
+  auto saved_allocator = std::move(alloc);
+  CHECK(!vol::HierarchicalGrid::create(dev, alloc, config));
+  alloc = std::move(saved_allocator);
   auto created = vol::HierarchicalGrid::create(dev, alloc, config);
   CHECK(created.ok());
   auto grid = std::move(created).value();
@@ -74,6 +80,37 @@ int main() {
   auto empty = grid.prepare_leaves();
   CHECK(empty.ok() && empty->validate().ok() && empty->leaf_count == 0);
   CHECK(empty->nodes->mapped() == nullptr && empty->tsdf->mapped() == nullptr);
+
+  // Reject the entire invalid batch before any allocation or view
+  // invalidation. Child addressing must remain inside the signed cell domain.
+  for (int axis = 0; axis < 3; ++axis) {
+    for (auto extreme : {std::numeric_limits<std::int32_t>::min(),
+                         std::numeric_limits<std::int32_t>::max()}) {
+      vol::BlockIndex invalid_roots[2]{{vr::Vec3i(0), 0}, {vr::Vec3i(0), 0}};
+      invalid_roots[1].coord[axis] = extreme;
+      CHECK(!grid.allocate_roots(invalid_roots, 2));
+      CHECK(empty->is_current());
+    }
+  }
+  CHECK(!grid.allocate_roots(nullptr, 1));
+  CHECK(empty->is_current());
+  float boundary_depth = 1.0f;
+  vr::DepthCameraParams far_camera{1, 1, 0, 0, 0.1f, 2.0f, 1, 1, vr::Mat4f(1)};
+  far_camera.cam_to_world[3].x = 1e12f;
+  CHECK(!grid.allocate_from_depth(
+      {{vr::StorageInput(&boundary_depth), far_camera}}));
+  CHECK(empty->is_current());
+  far_camera.cam_to_world = vr::Mat4f(1);
+  far_camera.fx = std::numeric_limits<float>::min();
+  CHECK(!grid.allocate_from_depth(
+      {{vr::StorageInput(&boundary_depth), far_camera}}));
+  CHECK(empty->is_current());
+  far_camera.fx = 1.0f;
+  far_camera.cam_to_world[0][0] = std::numeric_limits<float>::quiet_NaN();
+  CHECK(!grid.allocate_from_depth(
+      {{vr::StorageInput(&boundary_depth), far_camera}}));
+  CHECK(empty->is_current());
+  CHECK(grid.prepare_leaves()->leaf_count == 0);
 
   const vol::BlockIndex roots[] = {{vr::Vec3i(-1, 0, 0), -1},
                                    {vr::Vec3i(0, 0, 0), -1},
