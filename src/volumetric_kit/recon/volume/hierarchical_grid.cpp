@@ -166,7 +166,7 @@ struct HierarchicalGrid::Impl {
                                  &generation};
   }
   Status check_requests(const Buffer& requests) const {
-    if (!requests.valid() ||
+    if (!requests.valid() || !requests.is_device_local() ||
         (requests.usage() & VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) == 0 ||
         requests.size() < VkDeviceSize(capacity) * sizeof(std::uint32_t)) {
       return Status::invalid_argument(

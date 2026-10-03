@@ -138,7 +138,7 @@ kernels.
 | L2 | Pipeline sets | overlaps set N's GPU work with set N+1's host work | L | P6 | later |
 | L3 | Read VideoToolbox's plane images directly | 0.28–0.31 ms GPU per 4K frame, Apple only | M | — | later |
 | L4 | Sample the atlas in place rather than copy it | measure the copy at 4K first | L | gfx | kept |
-| H2 | Online hierarchical blocks with selective fine detail | finer local sampling with <5% disabled overhead and at most +10% adaptive online time versus uniform 1 cm; extract every frame | L | paired online phases and local proxy quality | in progress, draft: pre-rebase M5 Max mean gates met at 7.5/15/30 mm, 65,536 slots (+7.93% adaptive, −0.73% disabled); detail p95 improves but F-score/global/planar quality and latency tails worsen; 5 mm over budget; 2424f40 remeasurement and discrete-GPU acceptance open |
+| H2 | Online hierarchical blocks with selective fine detail | finer local sampling with <5% disabled overhead and at most +10% adaptive online time versus uniform 1 cm; extract every frame | L | paired online phases and local proxy quality | in progress, draft: borrowed buffers require known device-local memory; pre-rebase M5 Max mean gates met at 7.5/15/30 mm, 65,536 slots (+7.93% adaptive, −0.73% disabled); detail p95 improves but F-score/global/planar quality and latency tails worsen; 5 mm over budget; 2424f40 remeasurement and discrete-GPU acceptance open |
 
 The suggested order: P8 first, so every later figure is honest; D1–D3
 whenever convenient; then P1, P3, P5, P4, P2 + P6; then P7, and P9 once it

@@ -81,6 +81,9 @@ struct HierarchicalTopologyStats {
 /// Deliberate node-independent policies, such as a constant target level, may
 /// be reused across topology changes. Acquire a fresh field view after the
 /// update before integration or meshing.
+/// Borrowed desired-level buffers must have known device-local memory;
+/// host-visible device-local types are accepted. Adopted buffers must provide
+/// metadata queried from the actual backing allocation.
 class VR_VOLUME_API HierarchicalGrid {
  public:
   /// @brief Construct a grid and zero its device-local storage.

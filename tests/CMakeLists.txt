@@ -158,6 +158,17 @@ target_link_libraries(recon_tsdf_hierarchical_test
 vr_target_warnings(recon_tsdf_hierarchical_test)
 add_test(NAME recon_tsdf_hierarchical COMMAND recon_tsdf_hierarchical_test)
 
+add_executable(recon_hierarchical_residency_test
+               hierarchical_residency_test.cpp)
+target_link_libraries(
+  recon_hierarchical_residency_test
+  PRIVATE volumetric_kit::recon_tsdf volumetric_kit::recon_mesh Vulkan::Vulkan)
+vr_target_warnings(recon_hierarchical_residency_test)
+add_test(NAME recon_hierarchical_residency
+         COMMAND recon_hierarchical_residency_test)
+set_tests_properties(recon_hierarchical_residency PROPERTIES SKIP_RETURN_CODE
+                                                             77)
+
 # tsdf mesh integrate: write a mesh's truncated distance field (signed through
 # pseudonormals, or as a shell) and check every voxel of every written block
 # against a brute-force host reference -- an independent closest point, and the

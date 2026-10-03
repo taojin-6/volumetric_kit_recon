@@ -844,6 +844,13 @@ remain device-local SoA arrays, indexed by each node's sample base. A
 topology generation invalidates borrowed views after mutation. The first
 device contract supports at most four levels and a fixed root capacity.
 The uniform `VoxelBlockGrid` and its node sampling remain unchanged.
+Borrowed field buffers and desired-level request buffers must report known
+`DEVICE_LOCAL` backing memory, matching the core `StorageInput` contract for
+depth/color inputs. `HOST_VISIBLE | DEVICE_LOCAL` memory remains valid; an
+unmapped buffer alone does not prove residency. Unknown or non-local metadata
+is rejected before dispatch, including for empty fields or zero event budgets.
+Internal hierarchy allocations use `device_storage_buffer` and retain the
+allocator's actual memory metadata.
 
 `HierarchicalGrid` owns fixed coarse roots and a separate child-node budget.
 Allocation initializes roots on the GPU; `prepare_leaves` caches the compact

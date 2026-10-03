@@ -71,8 +71,10 @@ struct HierarchicalFieldView {
 
   /// @brief Validate the host-checkable shape and buffer extents.
   /// @return OK, or InvalidArgument for stale topology, invalid geometry,
-  ///         missing buffers/usage, or undersized storage. Node contents and
-  ///         duplicate-free leaf membership remain the producer's contract.
+  ///         missing buffers/usage, unknown or non-device-local memory, or
+  ///         undersized storage. Host-visible device-local memory is accepted.
+  ///         Node contents and duplicate-free leaf membership remain the
+  ///         producer's contract.
   Status validate() const {
     if (!is_current()) {
       return Status::invalid_argument("HierarchicalFieldView: stale view");
@@ -91,7 +93,8 @@ struct HierarchicalFieldView {
           "HierarchicalFieldView: invalid geometry");
     }
     const auto check = [](const Buffer* b, VkDeviceSize bytes) {
-      return b != nullptr && b->valid() && b->size() >= bytes &&
+      return b != nullptr && b->valid() && b->is_device_local() &&
+             b->size() >= bytes &&
              (b->usage() & VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) != 0;
     };
     const VkDeviceSize samples = VkDeviceSize(node_capacity) * 512u;
