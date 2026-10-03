@@ -15,6 +15,8 @@
 #include "volumetric_kit/recon/volume/hierarchy_layout.hpp"
 
 #include "hierarchical_leaves_comp.spv.hpp"
+#include "hierarchical_merge_candidates_comp.spv.hpp"
+#include "hierarchical_merge_comp.spv.hpp"
 #include "hierarchical_roots_comp.spv.hpp"
 #include "hierarchical_split_comp.spv.hpp"
 
@@ -31,6 +33,16 @@ struct SplitPush {
   std::uint32_t max_splits;
   std::uint32_t has_color;
   float weight_cap;
+};
+struct MergeCandidatePush {
+  std::uint32_t capacity;
+  std::uint32_t stable_updates;
+  std::uint32_t max_merges;
+};
+struct MergePush {
+  std::uint32_t base;
+  std::uint32_t root_capacity;
+  std::uint32_t has_color;
 };
 void bind(const ComputeKernel& kernel, std::uint32_t binding,
           const Buffer& buffer) {
@@ -50,12 +62,15 @@ struct HierarchicalGrid::Impl {
   HierarchicalGridConfig config;
   VoxelHashMap roots;
   Buffer nodes, leaves, tsdf, weight, color, leaf_counter, group_counter, stats;
+  Buffer free_groups, merge_ages, merge_candidates, merge_dispatch;
   DescriptorPool pool;
   ComputeKernel root_kernel, leaf_kernel, split_kernel;
+  ComputeKernel merge_candidate_kernel, merge_kernel;
   GpuTimer timer;
   std::uint64_t generation = 1;
   std::uint32_t capacity = 0;
   std::uint32_t leaf_count = 0;
+  std::array<std::uint32_t, 4> leaf_counts{};
   std::uint32_t known_root_count = 0;
   std::uint32_t max_groups = 0;
   bool leaves_dirty = true;
@@ -82,6 +97,7 @@ struct HierarchicalGrid::Impl {
     invalidate();
     leaves_dirty = true;
     leaf_count = 0;
+    leaf_counts = {};
     known_root_count = 0;
     CommandBatch batch(device, allocator);
     // ptr=-1 is the absence marker; initialization assigns every live member.
@@ -90,13 +106,22 @@ struct HierarchicalGrid::Impl {
     VR_TRY(batch.zero(weight, 0, weight.size()));
     VR_TRY(batch.zero(color, 0, color.size()));
     VR_TRY(batch.zero(leaf_counter, 0, leaf_counter.size()));
-    VR_TRY(batch.zero(group_counter, 0, group_counter.size()));
+    const std::uint32_t groups = config.child_block_capacity / 8u;
+    std::vector<std::uint32_t> group_ids(groups);
+    for (std::uint32_t i = 0; i < groups; ++i) group_ids[i] = i;
+    if (groups != 0) {
+      VR_TRY(batch.upload(free_groups, 0, group_ids.data(),
+                          VkDeviceSize(groups) * sizeof(std::uint32_t)));
+    }
+    VR_TRY(batch.upload(group_counter, 0, &groups, sizeof(groups)));
+    VR_TRY(batch.zero(merge_ages, 0, merge_ages.size()));
     return batch.submit();
   }
 };
 
 HierarchicalGrid::HierarchicalGrid(std::unique_ptr<Impl> impl) noexcept
     : impl_(std::move(impl)) {}
+HierarchicalGrid::HierarchicalGrid() noexcept = default;
 HierarchicalGrid::~HierarchicalGrid() = default;
 HierarchicalGrid::HierarchicalGrid(HierarchicalGrid&& other) noexcept
     : impl_(std::move(other.impl_)) {
@@ -113,6 +138,9 @@ HierarchicalGrid& HierarchicalGrid::operator=(
 bool HierarchicalGrid::valid() const noexcept { return impl_ != nullptr; }
 std::uint32_t HierarchicalGrid::node_capacity() const noexcept {
   return impl_ ? impl_->capacity : 0;
+}
+std::array<std::uint32_t, 4> HierarchicalGrid::leaf_counts() const noexcept {
+  return impl_ ? impl_->leaf_counts : std::array<std::uint32_t, 4>{};
 }
 
 Result<HierarchicalGrid> HierarchicalGrid::create(
@@ -166,8 +194,24 @@ Result<HierarchicalGrid> HierarchicalGrid::create(
   VR_ASSIGN(impl->weight, device_storage_buffer(allocator, sample_bytes));
   VR_ASSIGN(impl->color,
             device_storage_buffer(allocator, config.color ? sample_bytes : 4));
-  VR_ASSIGN(impl->leaf_counter, device_storage_buffer(allocator, 4));
+  VR_ASSIGN(impl->leaf_counter,
+            device_storage_buffer(allocator, 5 * sizeof(std::uint32_t)));
   VR_ASSIGN(impl->group_counter, device_storage_buffer(allocator, 4));
+  VR_ASSIGN(
+      impl->free_groups,
+      device_storage_buffer(
+          allocator, std::max<VkDeviceSize>(
+                         4, VkDeviceSize(config.child_block_capacity / 8u) *
+                                sizeof(std::uint32_t))));
+  VR_ASSIGN(impl->merge_ages,
+            device_storage_buffer(
+                allocator, VkDeviceSize(capacity) * sizeof(std::uint32_t)));
+  VR_ASSIGN(impl->merge_candidates,
+            device_storage_buffer(
+                allocator, VkDeviceSize(capacity) * sizeof(std::uint32_t)));
+  VR_ASSIGN(impl->merge_dispatch,
+            device_storage_buffer(allocator, 3 * sizeof(std::uint32_t),
+                                  VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT));
   VR_ASSIGN(impl->stats,
             device_storage_buffer(allocator, 5 * sizeof(std::uint32_t)));
   const VkPushConstantRange root_push{VK_SHADER_STAGE_COMPUTE_BIT, 0,
@@ -176,6 +220,10 @@ Result<HierarchicalGrid> HierarchicalGrid::create(
                                       sizeof(std::uint32_t)};
   const VkPushConstantRange split_push{VK_SHADER_STAGE_COMPUTE_BIT, 0,
                                        sizeof(SplitPush)};
+  const VkPushConstantRange merge_candidate_push{VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                                                 sizeof(MergeCandidatePush)};
+  const VkPushConstantRange merge_push{VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                                       sizeof(MergePush)};
   KernelSetBuilder builder(device);
   VR_TRY(builder.add(impl->root_kernel, "hierarchical_roots",
                      vr_hierarchical_roots_comp_spv,
@@ -185,7 +233,15 @@ Result<HierarchicalGrid> HierarchicalGrid::create(
                      vr_hierarchical_leaves_comp_spv_size, 3, &leaf_push));
   VR_TRY(builder.add(impl->split_kernel, "hierarchical_split",
                      vr_hierarchical_split_comp_spv,
-                     vr_hierarchical_split_comp_spv_size, 8, &split_push));
+                     vr_hierarchical_split_comp_spv_size, 10, &split_push));
+  VR_TRY(builder.add(impl->merge_candidate_kernel,
+                     "hierarchical_merge_candidates",
+                     vr_hierarchical_merge_candidates_comp_spv,
+                     vr_hierarchical_merge_candidates_comp_spv_size, 6,
+                     &merge_candidate_push));
+  VR_TRY(builder.add(impl->merge_kernel, "hierarchical_merge",
+                     vr_hierarchical_merge_comp_spv,
+                     vr_hierarchical_merge_comp_spv_size, 9, &merge_push));
   VR_ASSIGN(impl->pool, builder.build());
   VR_ASSIGN(impl->timer, GpuTimer::create(device));
   VkPhysicalDeviceProperties properties{};
@@ -227,14 +283,15 @@ Result<HierarchicalFieldView> HierarchicalGrid::prepare_leaves(
   bind(p.leaf_kernel, 0, p.nodes);
   bind(p.leaf_kernel, 1, p.leaves);
   bind(p.leaf_kernel, 2, p.leaf_counter);
-  VR_TRY(batch.zero(p.leaf_counter, 0, sizeof(std::uint32_t)));
+  VR_TRY(batch.zero(p.leaf_counter, 0, p.leaf_counter.size()));
   VR_TRY(batch.dispatch(p.leaf_kernel, &p.capacity, sizeof(p.capacity),
                         (p.capacity + 255u) / 256u, p.max_groups, &stage));
-  std::uint32_t leaf_count = 0;
-  VR_TRY(batch.readback(p.leaf_counter, 0, sizeof(leaf_count), &leaf_count));
+  std::uint32_t leaf_counts[5]{};
+  VR_TRY(batch.readback(p.leaf_counter, 0, sizeof(leaf_counts), leaf_counts));
   p.invalidate();
   VR_TRY(batch.submit());
-  p.leaf_count = leaf_count;
+  p.leaf_count = leaf_counts[0];
+  std::copy(leaf_counts + 1, leaf_counts + 5, p.leaf_counts.begin());
   p.known_root_count = roots.count;
   p.leaves_dirty = false;
   return p.view();
@@ -263,6 +320,8 @@ Result<HierarchicalSplitStats> HierarchicalGrid::split(
   bind(p.split_kernel, 5, p.color);
   bind(p.split_kernel, 6, p.group_counter);
   bind(p.split_kernel, 7, p.stats);
+  bind(p.split_kernel, 8, p.free_groups);
+  bind(p.split_kernel, 9, p.merge_ages);
   std::uint32_t counters[5]{};
   CommandBatch batch(p.device, p.allocator);
   VR_TRY(batch.zero(p.stats, 0, sizeof(counters)));
@@ -286,6 +345,61 @@ Result<HierarchicalSplitStats> HierarchicalGrid::split(
   return HierarchicalSplitStats{counters[0], counters[1], counters[2],
                                 counters[3]};
 }
+Result<HierarchicalMergeStats> HierarchicalGrid::merge(
+    const Buffer& requests, std::uint32_t max_merges,
+    std::uint32_t stable_updates, StageMetrics* metrics) {
+  if (!valid()) return Status::invalid_argument("HierarchicalGrid: empty grid");
+  Impl& p = *impl_;
+  if (!requests.valid() ||
+      (requests.usage() & VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) == 0 ||
+      requests.size() < VkDeviceSize(p.capacity) * sizeof(std::uint32_t) ||
+      stable_updates == 0) {
+    return Status::invalid_argument("HierarchicalGrid: invalid merge input");
+  }
+  if (max_merges == 0) return HierarchicalMergeStats{};
+  VR_ASSIGN(const auto field, prepare_leaves(metrics));
+  if (field.leaf_count == 0) return HierarchicalMergeStats{};
+  GpuStageScope stage(metrics, p.timer, "hierarchy merge");
+  bind(p.merge_candidate_kernel, 0, p.nodes);
+  bind(p.merge_candidate_kernel, 1, requests);
+  bind(p.merge_candidate_kernel, 2, p.merge_ages);
+  bind(p.merge_candidate_kernel, 3, p.merge_candidates);
+  bind(p.merge_candidate_kernel, 4, p.stats);
+  bind(p.merge_candidate_kernel, 5, p.merge_dispatch);
+  bind(p.merge_kernel, 0, p.nodes);
+  bind(p.merge_kernel, 1, p.merge_candidates);
+  bind(p.merge_kernel, 2, p.tsdf);
+  bind(p.merge_kernel, 3, p.weight);
+  bind(p.merge_kernel, 4, p.color);
+  bind(p.merge_kernel, 5, p.group_counter);
+  bind(p.merge_kernel, 6, p.free_groups);
+  bind(p.merge_kernel, 7, p.stats);
+  bind(p.merge_kernel, 8, p.merge_ages);
+  std::uint32_t counters[5]{};
+  CommandBatch batch(p.device, p.allocator);
+  VR_TRY(batch.zero(p.stats, 0, sizeof(counters)));
+  const std::uint32_t dispatch_args[3]{0, 1, 1};
+  VR_TRY(
+      batch.upload(p.merge_dispatch, 0, dispatch_args, sizeof(dispatch_args)));
+  // The candidate kernel bounds the indirect dispatch without a host count
+  // readback. Larger requested budgets continue through later calls.
+  const MergeCandidatePush candidate_push{p.capacity, stable_updates,
+                                          std::min(max_merges, p.max_groups)};
+  VR_TRY(batch.dispatch(p.merge_candidate_kernel, &candidate_push,
+                        sizeof(candidate_push), (p.capacity + 255u) / 256u,
+                        p.max_groups, &stage));
+  MergePush push{0, static_cast<std::uint32_t>(p.config.finest.num_blocks),
+                 p.config.color ? 1u : 0u};
+  VR_TRY(batch.dispatch_indirect(p.merge_kernel, &push, sizeof(push),
+                                 p.merge_dispatch, 0, &stage));
+  VR_TRY(batch.readback(p.stats, 0, sizeof(counters), counters));
+  p.invalidate();
+  p.leaves_dirty = true;
+  VR_TRY(batch.submit());
+  if (counters[0] == 0) p.leaves_dirty = false;
+  return HierarchicalMergeStats{counters[0], counters[1], counters[2]};
+}
+
 Status HierarchicalGrid::clear() {
   if (!valid()) return Status::invalid_argument("HierarchicalGrid: empty grid");
   impl_->invalidate();

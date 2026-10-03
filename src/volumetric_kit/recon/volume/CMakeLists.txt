@@ -70,6 +70,8 @@ vr_embed_shaders(
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/hierarchical_roots.comp"
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/hierarchical_leaves.comp"
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/hierarchical_split.comp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/hierarchical_merge_candidates.comp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/hierarchical_merge.comp"
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/hash_init.comp"
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/hash_allocate_coords.comp"
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/hash_allocate_depth.comp"

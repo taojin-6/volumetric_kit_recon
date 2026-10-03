@@ -1,0 +1,54 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_scalar_block_layout : require
+#include "hierarchical_types.glsl"
+
+// All eligibility decisions see the same topology. Combining this with the
+// mutation pass would permit a grandparent to see children merged earlier by
+// another workgroup and then race that group over the same subtree.
+layout(local_size_x = 256) in;
+layout(set = 0, binding = 0, scalar) readonly buffer Nodes { HierarchicalNode nodes[]; };
+layout(set = 0, binding = 1, scalar) readonly buffer Requests { uint desired[]; };
+layout(set = 0, binding = 2, scalar) buffer Ages { uint ages[]; };
+layout(set = 0, binding = 3, scalar) writeonly buffer Candidates { uint candidates[]; };
+layout(set = 0, binding = 4, scalar) buffer Stats { uint stats[]; };
+layout(set = 0, binding = 5, scalar) buffer Dispatch { uint groups_x; uint groups_y; uint groups_z; };
+layout(push_constant, scalar) uniform Push {
+  uint capacity;
+  uint stable_updates;
+  uint max_merges;
+} pc;
+
+void main() {
+  uint i = gl_GlobalInvocationID.x;
+  if (i >= pc.capacity) return;
+  HierarchicalNode parent = nodes[i];
+  bool eligible = parent.ptr >= 0 && parent.children != 0u;
+  if (eligible) {
+    uint first = parent.children - 1u;
+    for (uint j = 0u; j < 8u; ++j) {
+      HierarchicalNode child = nodes[first + j];
+      uint request = desired[first + j];
+      eligible = eligible && child.ptr >= 0 && child.children == 0u &&
+                 request != 0xffffffffu && request >= parent.level;
+    }
+  }
+  if (!eligible) {
+    ages[i] = 0u;
+    return;
+  }
+  uint age = ages[i];
+  if (age < pc.stable_updates) ++age;
+  ages[i] = age;
+  if (age < pc.stable_updates) {
+    atomicAdd(stats[2], 1u);
+  } else {
+    uint index = atomicAdd(stats[4], 1u);
+    if (index >= pc.max_merges) {
+      atomicAdd(stats[1], 1u);
+    } else {
+      candidates[index] = i;
+      atomicAdd(groups_x, 1u);
+    }
+  }
+}

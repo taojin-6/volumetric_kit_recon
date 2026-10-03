@@ -12,8 +12,10 @@ layout(set = 0, binding = 2, scalar) readonly buffer Requests { uint desired[]; 
 layout(set = 0, binding = 3, scalar) buffer Tsdf { float tsdf[]; };
 layout(set = 0, binding = 4, scalar) buffer Weight { float weight[]; };
 layout(set = 0, binding = 5, scalar) buffer Color { uint colors[]; };
-layout(set = 0, binding = 6, scalar) buffer Pool { uint groups_used; };
+layout(set = 0, binding = 6, scalar) buffer Pool { uint groups_free; };
 layout(set = 0, binding = 7, scalar) buffer Stats { uint stats[]; };
+layout(set = 0, binding = 8, scalar) readonly buffer Heap { uint free_groups[]; };
+layout(set = 0, binding = 9, scalar) buffer Ages { uint merge_age[]; };
 layout(push_constant, scalar) uniform Push {
   uint base;
   uint root_capacity;
@@ -40,16 +42,16 @@ void main() {
       } else if (atomicAdd(stats[4], 1u) >= pc.max_splits) {
         atomicAdd(stats[1], 1u);
       } else {
-        uint group = atomicAdd(groups_used, 0u);
-        while (group < pc.group_capacity) {
-          uint previous = atomicCompSwap(groups_used, group, group + 1u);
-          if (previous == group) break;
-          group = previous;
+        uint available = atomicAdd(groups_free, 0u);
+        while (available > 0u) {
+          uint previous = atomicCompSwap(groups_free, available, available - 1u);
+          if (previous == available) break;
+          available = previous;
         }
-        if (group == pc.group_capacity) {
+        if (available == 0u) {
           atomicAdd(stats[2], 1u);
         } else {
-          s_first = pc.root_capacity + 8u * group;
+          s_first = pc.root_capacity + 8u * free_groups[available - 1u];
         }
       }
     }
@@ -64,6 +66,7 @@ void main() {
     nodes[child].ptr = int(child * 512u);
     nodes[child].level = parent.level - 1u;
     nodes[child].children = 0u;
+    merge_age[child] = 0u;
   }
   for (uint i = lane; i < 4096u; i += 256u) {
     uint octant = i / 512u;
@@ -80,6 +83,7 @@ void main() {
   memoryBarrierBuffer();
   barrier();
   if (lane == 0u) {
+    merge_age[s_parent] = 0u;
     nodes[s_parent].children = s_first + 1u;
     atomicAdd(stats[0], 1u);
   }

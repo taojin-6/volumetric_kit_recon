@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <limits>
@@ -54,6 +55,9 @@ int main() {
   CHECK(allocator.ok());
   auto& dev = device.value();
   auto& alloc = allocator.value();
+  vol::HierarchicalGrid uncreated;
+  CHECK(!uncreated.valid() && uncreated.node_capacity() == 0);
+  CHECK(!uncreated.prepare_leaves() && !uncreated.clear());
   vol::HierarchicalGridConfig config;
   config.finest.voxel_size = 0.03125f;
   config.finest.trunc_dist = 1.0f;  // exactly the root extent at level 2
@@ -79,6 +83,7 @@ int main() {
   CHECK(!empty->is_current());
   auto before = grid.prepare_leaves();
   CHECK(before.ok() && before->validate().ok() && before->leaf_count == 3);
+  CHECK(grid.leaf_counts()[2] == 3 && grid.leaf_counts()[0] == 0);
   CHECK(before->root_grid.trunc_dist == config.finest.trunc_dist);
   auto cached = grid.prepare_leaves();
   CHECK(cached.ok() && cached->generation == before->generation);
@@ -127,6 +132,7 @@ int main() {
   CHECK(!before->is_current());
   auto after = grid.prepare_leaves();
   CHECK(after.ok() && after->validate().ok() && after->leaf_count == 10);
+  CHECK(grid.leaf_counts()[1] == 8 && grid.leaf_counts()[2] == 2);
   auto nodes_after = vr_test::read_back<vol::HierarchicalNode>(
       dev, alloc, *after->nodes, grid.node_capacity());
   auto tsdf_after =
@@ -175,6 +181,104 @@ int main() {
   CHECK(!grid.split(requests.value(), 1, 0.0f));
   CHECK(!grid.split(vr::Buffer{}, 1));
 
+  // Coarsening needs all eight observed coarse requests for consecutive
+  // updates. Losing one child's evidence resets the age, not merely pauses it.
+  nodes_after = vr_test::read_back<vol::HierarchicalNode>(
+      dev, alloc, *after->nodes, grid.node_capacity());
+  CHECK(nodes_after.ok());
+  std::uint32_t merge_parent = 0;
+  for (auto id : leaves_before.value()) {
+    if (nodes_after.value()[id].children != 0) {
+      merge_parent = id;
+      break;
+    }
+  }
+  const auto first_child = nodes_after.value()[merge_parent].children - 1;
+  std::fill(desired.begin(), desired.end(),
+            std::numeric_limits<std::uint32_t>::max());
+  for (std::uint32_t j = 0; j < 8; ++j) desired[first_child + j] = 2;
+  CHECK(vr_test::write_back(dev, alloc, requests.value(), desired));
+  auto merge = grid.merge(requests.value(), 1, 2);
+  CHECK(merge.ok() && merge->merged == 0 && merge->pending == 1);
+  desired[first_child] = std::numeric_limits<std::uint32_t>::max();
+  CHECK(vr_test::write_back(dev, alloc, requests.value(), desired));
+  merge = grid.merge(requests.value(), 1, 2);
+  CHECK(merge.ok() && merge->merged == 0 && merge->pending == 0);
+  desired[first_child] = 2;
+  CHECK(vr_test::write_back(dev, alloc, requests.value(), desired));
+  merge = grid.merge(requests.value(), 1, 2);
+  CHECK(merge.ok() && merge->merged == 0 && merge->pending == 1);
+
+  // An affine fine field restricts to the parent's sample positions. An
+  // unobserved fine tap makes its coarse sample unobserved; encoded colors
+  // average in linear light (half red / half blue becomes sRGB 188,0,188).
+  for (std::uint32_t j = 0; j < 8; ++j) {
+    const auto& n = nodes_after.value()[first_child + j];
+    for (std::uint32_t local = 0; local < 512; ++local) {
+      const auto i = static_cast<std::size_t>(n.ptr) + local;
+      const float x = (static_cast<float>(n.coord.x * 8) +
+                       static_cast<float>(local & 7u) + 0.5f) *
+                      0.0625f;
+      tsdf_after.value()[i] = x * 0.01f;
+      weight_after.value()[i] = 2.0f;
+      color_after.value()[i] = (local & 1u) != 0 ? 0xff0000ffu : 0xffff0000u;
+    }
+  }
+  weight_after
+      .value()[static_cast<std::size_t>(nodes_after.value()[first_child].ptr)] =
+      0.0f;
+  after = grid.prepare_leaves();
+  CHECK(after.ok());
+  CHECK(vr_test::write_back(dev, alloc, *after->tsdf, tsdf_after.value()));
+  CHECK(vr_test::write_back(dev, alloc, *after->weight, weight_after.value()));
+  CHECK(vr_test::write_back(dev, alloc, *after->color, color_after.value()));
+  merge = grid.merge(requests.value(), 1, 2);
+  CHECK(merge.ok() && merge->merged == 1 && merge->deferred == 0);
+  after = grid.prepare_leaves();
+  CHECK(after.ok() && after->leaf_count == 10);
+  auto merged_nodes = vr_test::read_back<vol::HierarchicalNode>(
+      dev, alloc, *after->nodes, grid.node_capacity());
+  auto merged_sdf =
+      vr_test::read_back<float>(dev, alloc, *after->tsdf, samples);
+  auto merged_weight =
+      vr_test::read_back<float>(dev, alloc, *after->weight, samples);
+  auto merged_color =
+      vr_test::read_back<std::uint32_t>(dev, alloc, *after->color, samples);
+  CHECK(merged_nodes.ok() && merged_sdf.ok() && merged_weight.ok() &&
+        merged_color.ok());
+  const auto& restricted = merged_nodes.value()[merge_parent];
+  CHECK(restricted.children == 0 && restricted.level == 2);
+  const auto restricted_ptr = static_cast<std::size_t>(restricted.ptr);
+  CHECK(merged_weight.value()[restricted_ptr] == 0.0f);
+  CHECK(merged_sdf.value()[restricted_ptr] == 0.0f);
+  CHECK(merged_color.value()[restricted_ptr] == 0u);
+  for (std::uint32_t local = 1; local < 512; ++local) {
+    const float expected = (static_cast<float>(restricted.coord.x * 8) +
+                            static_cast<float>(local & 7u) + 0.5f) *
+                           0.125f * 0.01f;
+    CHECK(std::abs(merged_sdf.value()[restricted_ptr + local] - expected) <
+          1e-7f);
+    CHECK(merged_weight.value()[restricted_ptr + local] == 2.0f);
+    CHECK(merged_color.value()[restricted_ptr + local] == 0xffbc00bcu);
+  }
+  for (std::uint32_t j = 0; j < 8; ++j)
+    CHECK(merged_nodes.value()[first_child + j].ptr == -1);
+  // The pool was exhausted. The immediately following split reuses exactly
+  // the returned group, proving both ownership and capacity were restored.
+  std::fill(desired.begin(), desired.end(),
+            std::numeric_limits<std::uint32_t>::max());
+  desired[merge_parent] = 0;
+  CHECK(vr_test::write_back(dev, alloc, requests.value(), desired));
+  split = grid.split(requests.value(), 1);
+  CHECK(split.ok() && split->split == 1 && split->exhausted == 0);
+  after = grid.prepare_leaves();
+  CHECK(after.ok() && after->leaf_count == 17);
+  merged_nodes = vr_test::read_back<vol::HierarchicalNode>(
+      dev, alloc, *after->nodes, grid.node_capacity());
+  CHECK(merged_nodes.ok());
+  CHECK(merged_nodes.value()[merge_parent].children == first_child + 1);
+  CHECK(!grid.merge(requests.value(), 1, 0));
+
   // Moves invalidate borrowed generations and empty the source; assignment
   // over a live grid releases that grid, while self-move preserves this one.
   vol::HierarchicalGrid moved(std::move(grid));
@@ -196,6 +300,57 @@ int main() {
   auto zeroed = vr_test::read_back<float>(dev, alloc, *after->weight, samples);
   CHECK(zeroed.ok() && std::all_of(zeroed->begin(), zeroed->end(),
                                    [](float w) { return w == 0.0f; }));
+
+  // Two eligible sibling groups compete for one bounded merge event; the
+  // deferred candidate remains intact and completes on the following call.
+  allocated = destination.allocate_roots(roots, 2);
+  CHECK(allocated.ok() && allocated.value() == 0);
+  std::fill(desired.begin(), desired.end(), 0u);
+  CHECK(vr_test::write_back(dev, alloc, requests.value(), desired));
+  split = destination.split(requests.value(), 2);
+  CHECK(split.ok() && split->split == 2);
+  std::fill(desired.begin(), desired.end(), 2u);
+  CHECK(vr_test::write_back(dev, alloc, requests.value(), desired));
+  merge = destination.merge(requests.value(), 1, 1);
+  CHECK(merge.ok() && merge->merged == 1 && merge->deferred == 1);
+  merge = destination.merge(requests.value(), 1, 1);
+  CHECK(merge.ok() && merge->merged == 1 && merge->deferred == 0);
+  after = destination.prepare_leaves();
+  CHECK(after.ok() && after->leaf_count == 2);
+  CHECK(destination.leaf_counts()[2] == 2);
+
+  // A root containing one refined child cannot merge in the same call as
+  // that child. Eligibility must be a snapshot before any mutation dispatch.
+  CHECK(destination.clear());
+  allocated = destination.allocate_roots(roots, 1);
+  CHECK(allocated.ok() && allocated.value() == 0);
+  std::fill(desired.begin(), desired.end(), 0u);
+  CHECK(vr_test::write_back(dev, alloc, requests.value(), desired));
+  split = destination.split(requests.value(), 1);
+  CHECK(split.ok() && split->split == 1);
+  split = destination.split(requests.value(), 1);
+  CHECK(split.ok() && split->split == 1);
+  after = destination.prepare_leaves();
+  CHECK(after.ok() && after->leaf_count == 15);
+  CHECK(destination.leaf_counts()[0] == 8 && destination.leaf_counts()[1] == 7);
+  std::fill(desired.begin(), desired.end(), 2u);
+  CHECK(vr_test::write_back(dev, alloc, requests.value(), desired));
+  merge = destination.merge(requests.value(), 10, 1);
+  CHECK(merge.ok() && merge->merged == 1);
+  after = destination.prepare_leaves();
+  CHECK(after.ok() && after->leaf_count == 8);
+  CHECK(destination.leaf_counts()[1] == 8);
+  merge = destination.merge(requests.value(), 10, 1);
+  CHECK(merge.ok() && merge->merged == 1);
+  after = destination.prepare_leaves();
+  CHECK(after.ok() && after->leaf_count == 1);
+  CHECK(destination.leaf_counts()[2] == 1);
+  std::fill(desired.begin(), desired.end(), 0u);
+  CHECK(vr_test::write_back(dev, alloc, requests.value(), desired));
+  split = destination.split(requests.value(), 1);
+  CHECK(split.ok() && split->split == 1);
+  split = destination.split(requests.value(), 1);
+  CHECK(split.ok() && split->split == 1);  // both returned groups are reusable
 
   // A surface just before x=1 selects nearest root 1. With T=1 the root -1
   // can still contain fine samples within the band. Allocation-only padding

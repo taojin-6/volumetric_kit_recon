@@ -6,6 +6,7 @@
 /// @file volume/hierarchical_grid.hpp
 /// @brief Device-resident forest of fixed-size adaptive TSDF blocks.
 
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -37,6 +38,14 @@ struct HierarchicalSplitStats {
   std::uint32_t rejected = 0;   ///< Child coordinates would overflow int32.
 };
 
+/// @brief Counts from one conservative online coarsening update.
+struct HierarchicalMergeStats {
+  std::uint32_t merged = 0;  ///< Eight sibling leaves replaced by their parent.
+  std::uint32_t deferred = 0;  ///< Stable candidates beyond the event budget.
+  std::uint32_t pending =
+      0;  ///< Observed candidates still below the age limit.
+};
+
 /// @brief A sparse root hash and an octree of device-resident 8-cubed blocks.
 ///
 /// Only leaves are integrated or meshed. Parent payloads remain available for
@@ -64,7 +73,7 @@ class VR_VOLUME_API HierarchicalGrid {
   static Result<HierarchicalGrid> create(Device& device, Allocator& allocator,
                                          const HierarchicalGridConfig& config);
 
-  HierarchicalGrid() noexcept = default;
+  HierarchicalGrid() noexcept;
   ~HierarchicalGrid();
   HierarchicalGrid(HierarchicalGrid&& other) noexcept;
   HierarchicalGrid& operator=(HierarchicalGrid&& other) noexcept;
@@ -75,6 +84,10 @@ class VR_VOLUME_API HierarchicalGrid {
   bool valid() const noexcept;
   /// @return Total reserved root and child nodes, or zero when empty.
   std::uint32_t node_capacity() const noexcept;
+  /// @return Leaf populations by level from the last successful
+  ///         @ref prepare_leaves, all zero when empty. Prepare after topology
+  ///         changes before using these counts; this accessor does no work.
+  std::array<std::uint32_t, 4> leaf_counts() const noexcept;
 
   /// @brief Allocate coarse root regions from posed depth frames.
   ///
@@ -120,6 +133,29 @@ class VR_VOLUME_API HierarchicalGrid {
   Result<HierarchicalSplitStats> split(const Buffer& requests,
                                        std::uint32_t max_splits,
                                        float transfer_weight_cap = 1.0f,
+                                       StageMetrics* metrics = nullptr);
+
+  /// @brief Coarsen stable sibling leaves and recycle their child groups.
+  ///
+  /// All eight children must be leaves with observed desired levels at least
+  /// as coarse as their parent. UINT32_MAX means unseen and resets the parent's
+  /// consecutive-update age, as does a fine request from any child. Candidate
+  /// selection precedes mutation, so one call cannot merge overlapping levels.
+  /// Requests express the caller's geometry policy; this operation does not
+  /// independently establish an error tolerance for discarding fine detail.
+  ///
+  /// A coarse sample is the weighted mean of its eight fine samples, with
+  /// their mean weight, only if every fine sample is observed; otherwise it
+  /// becomes unobserved. Color is averaged in linear light when all eight
+  /// colors are observed. Returned groups are reusable by the next split.
+  /// @param requests Desired levels, one uint per node as in @ref split.
+  /// @param max_merges Maximum parents merged by this call; zero does no work.
+  /// @param stable_updates Required consecutive qualifying calls, at least 1.
+  /// @param metrics Optional host/device stage rows.
+  /// @return Merge, deferred, and pending counts, or a non-OK status.
+  Result<HierarchicalMergeStats> merge(const Buffer& requests,
+                                       std::uint32_t max_merges,
+                                       std::uint32_t stable_updates = 8,
                                        StageMetrics* metrics = nullptr);
 
   /// @brief Discard all roots, descendants, and attributes and reset the pool.

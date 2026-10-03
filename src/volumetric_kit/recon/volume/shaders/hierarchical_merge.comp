@@ -1,0 +1,68 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_scalar_block_layout : require
+#include "hierarchical_types.glsl"
+#include "volumetric_kit/recon/core/shaders/color_common.glsl"
+
+layout(local_size_x = 256) in;
+layout(set = 0, binding = 0, scalar) buffer Nodes { HierarchicalNode nodes[]; };
+layout(set = 0, binding = 1, scalar) readonly buffer Candidates { uint candidates[]; };
+layout(set = 0, binding = 2, scalar) buffer Tsdf { float tsdf[]; };
+layout(set = 0, binding = 3, scalar) buffer Weight { float weight[]; };
+layout(set = 0, binding = 4, scalar) buffer Color { uint colors[]; };
+layout(set = 0, binding = 5, scalar) buffer Pool { uint groups_free; };
+layout(set = 0, binding = 6, scalar) buffer Heap { uint free_groups[]; };
+layout(set = 0, binding = 7, scalar) buffer Stats { uint stats[]; };
+layout(set = 0, binding = 8, scalar) buffer Ages { uint ages[]; };
+layout(push_constant, scalar) uniform Push { uint base; uint root_capacity; uint has_color; } pc;
+
+void main() {
+  uint parent_id = candidates[gl_WorkGroupID.x];
+  uint lane = gl_LocalInvocationID.x;
+  HierarchicalNode parent = nodes[parent_id];
+  uint first = parent.children - 1u;
+  for (uint local = lane; local < 512u; local += 256u) {
+    uvec3 origin = uvec3(local & 7u, (local >> 3) & 7u, local >> 6) * 2u;
+    float sum_weight = 0.0;
+    float sum_sdf = 0.0;
+    vec3 sum_color = vec3(0.0);
+    bool observed = true;
+    bool color_observed = true;
+    for (uint j = 0u; j < 8u; ++j) {
+      uvec3 fine = origin + uvec3(j & 1u, (j >> 1) & 1u, j >> 2);
+      uvec3 octant = fine / 8u;
+      uvec3 lc = fine % 8u;
+      uint child = first + octant.x + 2u * octant.y + 4u * octant.z;
+      uint src = uint(nodes[child].ptr) + lc.x + 8u * (lc.y + 8u * lc.z);
+      float w = weight[src];
+      observed = observed && w > 0.0;
+      sum_weight += w;
+      sum_sdf += w * tsdf[src];
+      if (pc.has_color != 0u) {
+        uint color = colors[src];
+        color_observed = color_observed && color != 0u;
+        sum_color += w * vrUnpackSrgbToLinear(color);
+      }
+    }
+    uint dst = uint(parent.ptr) + local;
+    tsdf[dst] = observed ? sum_sdf / sum_weight : 0.0;
+    weight[dst] = observed ? sum_weight / 8.0 : 0.0;
+    if (pc.has_color != 0u) {
+      colors[dst] = observed && color_observed ? vrPackLinearToSrgb(sum_color / sum_weight) : 0u;
+    }
+  }
+  memoryBarrierBuffer();
+  barrier();
+  if (lane < 8u) {
+    nodes[first + lane].ptr = -1;
+    ages[first + lane] = 0u;
+  }
+  memoryBarrierBuffer();
+  barrier();
+  if (lane == 0u) {
+    nodes[parent_id].children = 0u;
+    ages[parent_id] = 0u;
+    free_groups[atomicAdd(groups_free, 1u)] = (first - pc.root_capacity) / 8u;
+    atomicAdd(stats[0], 1u);
+  }
+}
