@@ -768,3 +768,25 @@ if(VR_WITH_ORBBEC)
                  "PATH=path_list_prepend:$<TARGET_FILE_DIR:ob::OrbbecSDK>")
   endif()
 endif()
+
+# Host asset I/O remains testable without creating a Vulkan device.
+add_executable(recon_io_image_test io_image_test.cpp)
+target_link_libraries(recon_io_image_test PRIVATE volumetric_kit::recon_io)
+vr_target_warnings(recon_io_image_test)
+add_test(NAME recon_io_image COMMAND recon_io_image_test)
+
+add_executable(recon_io_ply_test io_ply_test.cpp)
+target_link_libraries(recon_io_ply_test PRIVATE volumetric_kit::recon_io)
+vr_target_warnings(recon_io_ply_test)
+add_test(NAME recon_io_ply COMMAND recon_io_ply_test)
+
+if(TARGET recon_io_assimp)
+  add_executable(recon_io_mesh_load_test io_mesh_load_test.cpp)
+  target_link_libraries(recon_io_mesh_load_test
+                        PRIVATE volumetric_kit::recon_io_assimp)
+  target_compile_definitions(
+    recon_io_mesh_load_test
+    PRIVATE VR_IO_MESH_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data/io")
+  vr_target_warnings(recon_io_mesh_load_test)
+  add_test(NAME recon_io_mesh_load COMMAND recon_io_mesh_load_test)
+endif()

@@ -49,12 +49,15 @@ Dependencies flow left to right:
 
 ```text
 core → volume → tsdf → mesh → texture → interop
-  │        └→ codec     └→ eval
+  │        └→ codec     ├→ eval
+  │                    └→ io
   └→ sensor                   (later: track, stream)
 ```
 
 - No upward includes. `sensor` depends on `core`, `codec` on `volume`, and
-  `eval` on `mesh`; driver/decoder/pre-processing targets stay separate.
+  `eval` and `io` on `mesh`; driver/decoder/pre-processing targets stay separate.
+  Asset I/O is host-side at file boundaries; Assimp is an optional private
+  backend of `recon_io_assimp`, never a dependency of GPU kernels.
 - C++17, no compiler extensions. Namespace `volumetric_kit::recon` (`vr::` in
   docs), nested per tier. Headers: `include/volumetric_kit/recon/<tier>/…`.
 - Macros use `VR_`; `VK_` belongs to Vulkan. CMake targets use

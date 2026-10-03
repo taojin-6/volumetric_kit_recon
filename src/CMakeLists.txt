@@ -13,6 +13,8 @@ add_subdirectory(volumetric_kit/recon/tsdf)
 # mesh reads the volume voxel payload directly (proven against a dense analytic
 # SDF), so it depends on volume, not tsdf.
 add_subdirectory(volumetric_kit/recon/mesh)
+# Host asset I/O branches off mesh for the public Mesh serialization API.
+add_subdirectory(volumetric_kit/recon/io)
 # texture fills the mesh uv0 by projecting a posed camera onto it; it depends on
 # mesh (the Mesh it textures) + volume (DepthCameraParams + the projection ABI),
 # both to its left, so the strict dependency rule holds.
@@ -45,7 +47,11 @@ target_link_libraries(
             recon_sensor
             recon_sensor_utils
             recon_codec
-            recon_eval)
+            recon_eval
+            recon_io)
+if(TARGET recon_io_assimp)
+  target_link_libraries(recon INTERFACE recon_io_assimp)
+endif()
 if(TARGET recon_sensor_video)
   target_link_libraries(recon INTERFACE recon_sensor_video)
 endif()

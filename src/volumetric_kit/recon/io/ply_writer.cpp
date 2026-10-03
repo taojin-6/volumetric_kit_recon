@@ -1,19 +1,25 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Tao Jin
 
-#include "ply_writer.hpp"
+#include "volumetric_kit/recon/io/ply_writer.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <exception>
 #include <fstream>
+#include <limits>
+#include <new>
 #include <ostream>
 #include <vector>
 
-#include "tinyply.h"  // declarations only; the implementation is tinyply_impl.cpp
+#include "tinyply_backend.hpp"
 #include "volumetric_kit/recon/core/color_space.hpp"
 
-namespace vr_example {
+namespace volumetric_kit::recon::io {
 namespace {
+
+namespace tinyply = detail::tinyply;
 
 // Encode a LINEAR vertex-color channel to an 8-bit canonical-encoded code.
 //
@@ -25,23 +31,48 @@ namespace {
 // happens here. glTF export does the opposite and passes COLOR_0 through
 // unchanged, which is why the two exporters cannot share one path.
 std::uint8_t to_u8(float linear_channel) {
-  const float scaled = vr::linear_to_srgb(linear_channel) * 255.0f + 0.5f;
-  // `!(scaled > 0.0f)` maps NaN to 0 as well as <= 0 (every NaN comparison is
-  // false), so a NaN channel never reaches the undefined float->uint8_t cast.
-  if (!(scaled > 0.0f)) {
-    return 0;
-  }
-  if (scaled >= 255.0f) {
-    return 255;
-  }
+  const float scaled =
+      linear_to_srgb(std::clamp(linear_channel, 0.0f, 1.0f)) * 255.0f + 0.5f;
   return static_cast<std::uint8_t>(scaled);
+}
+
+bool finite(Vec3f v) {
+  return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
 }
 
 }  // namespace
 
-vr::Status write_ply(const std::string& path, const vr::mesh::Mesh& mesh) {
+Status write_ply(const std::string& path, const mesh::Mesh& mesh) try {
+  if (path.empty() || path.find('\0') != std::string::npos) {
+    return Status::invalid_argument("write_ply: empty path or embedded NUL");
+  }
+  if (mesh.indices.size() % 3 != 0) {
+    return Status::invalid_argument("write_ply: incomplete triangle indices");
+  }
   const std::size_t vertex_count = mesh.vertices.size();
   const std::size_t face_count = mesh.indices.size() / 3;
+  if (vertex_count > std::vector<float>().max_size() / 3 ||
+      mesh.indices.size() > std::vector<std::int32_t>().max_size()) {
+    return Status::invalid_argument(
+        "write_ply: mesh exceeds host array limits");
+  }
+  for (const auto& v : mesh.vertices) {
+    if (!finite(v.position) || !finite(v.normal) || !finite(Vec3f(v.color))) {
+      return Status::invalid_argument("write_ply: nonfinite vertex attribute");
+    }
+  }
+  for (std::uint32_t index : mesh.indices) {
+    if (index >= vertex_count ||
+        index > static_cast<std::uint32_t>(
+                    std::numeric_limits<std::int32_t>::max())) {
+      return Status::invalid_argument("write_ply: invalid signed int32 index");
+    }
+  }
+  // tinyply labels newly written files little-endian but writes native values.
+  const std::uint16_t endian = 1;
+  if (*reinterpret_cast<const std::uint8_t*>(&endian) != 1) {
+    return Status::unsupported("write_ply: requires a little-endian host");
+  }
 
   // tinyply writes each property group from a tightly-packed array, so
   // de-interleave the Mesh's array-of-Vertex-struct into per-attribute buffers
@@ -51,7 +82,7 @@ vr::Status write_ply(const std::string& path, const vr::mesh::Mesh& mesh) {
   std::vector<float> normals(vertex_count * 3);
   std::vector<std::uint8_t> colors(vertex_count * 3);
   for (std::size_t i = 0; i < vertex_count; ++i) {
-    const vr::mesh::Vertex& v = mesh.vertices[i];
+    const mesh::Vertex& v = mesh.vertices[i];
     positions[i * 3 + 0] = v.position.x;
     positions[i * 3 + 1] = v.position.y;
     positions[i * 3 + 2] = v.position.z;
@@ -62,13 +93,12 @@ vr::Status write_ply(const std::string& path, const vr::mesh::Mesh& mesh) {
     colors[i * 3 + 1] = to_u8(v.color.y);
     colors[i * 3 + 2] = to_u8(v.color.z);
   }
-  // PLY's conventional face-index type is `int` (the interleaved triangle-soup
-  // indices, uint32 in the Mesh, always fit int32 -- a >2^31-vertex mesh is
-  // unrepresentable in the uint32-index Mesh anyway).
+  // PLY's conventional face-index type is signed int32. Mesh indices are
+  // uint32, so the explicit range check above is required before conversion.
   std::vector<std::int32_t> faces(mesh.indices.begin(), mesh.indices.end());
 
   tinyply::PlyFile ply;
-  ply.get_comments().push_back("volumetric_kit_recon fuse example");
+  ply.get_comments().push_back("volumetric_kit_recon");
   ply.add_properties_to_element(
       "vertex", {"x", "y", "z"}, tinyply::Type::FLOAT32, vertex_count,
       reinterpret_cast<const std::uint8_t*>(positions.data()),
@@ -87,21 +117,19 @@ vr::Status write_ply(const std::string& path, const vr::mesh::Mesh& mesh) {
 
   std::ofstream out(path, std::ios::binary);
   if (!out) {
-    return vr::Status::io_error("write_ply: cannot open " + path);
+    return Status::io_error("write_ply: cannot open " + path);
   }
-  try {
-    ply.write(out, /*isBinary=*/true);
-  } catch (const std::exception& e) {
-    return vr::Status::io_error("write_ply: tinyply failed for " + path + ": " +
-                                e.what());
-  }
-  // Flush before the final check so a failed final flush (e.g. the disk fills
-  // on the last buffer) is caught here rather than silently in the destructor.
-  out.flush();
+  ply.write(out, /*isBinary=*/true);
+  // Explicit close includes the final flush and reports a delayed write error.
+  out.close();
   if (!out) {
-    return vr::Status::io_error("write_ply: write failed for " + path);
+    return Status::io_error("write_ply: write failed for " + path);
   }
   return {};
+} catch (const std::bad_alloc&) {
+  return Status::out_of_memory({});
+} catch (...) {
+  return Status::io_error({});
 }
 
-}  // namespace vr_example
+}  // namespace volumetric_kit::recon::io

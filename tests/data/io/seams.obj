@@ -1,0 +1,29 @@
+# Outward-wound 2 by 3 by 5 box, split at UV/normal/material seams.
+mtllib seams.mtl
+v 0 0 0
+v 2 0 0
+v 2 3 0
+v 0 3 0
+v 0 0 5
+v 2 0 5
+v 2 3 5
+v 0 3 5
+vt 0 0
+vt 1 0
+vt 1 1
+vt 0 1
+vn 0 0 -1
+vn 0 0 1
+vn 0 -1 0
+vn 1 0 0
+vn 0 1 0
+vn -1 0 0
+usemtl bottom_top
+f -8/1/1 -5/2/1 -6/3/1 -7/4/1
+f 5/1/2 6/2/2 7/3/2 8/4/2
+usemtl front_back
+f 1/1/3 2/2/3 6/3/3 5/4/3
+f 3/1/5 4/2/5 8/3/5 7/4/5
+usemtl left_right
+f 2/1/4 3/2/4 7/3/4 6/4/4
+f 4/1/6 1/2/6 5/3/6 8/4/6

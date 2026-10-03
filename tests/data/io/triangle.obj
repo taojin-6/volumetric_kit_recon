@@ -1,0 +1,5 @@
+# Positions have no declared physical unit. Keep the coordinates unchanged.
+v 1 2 3
+v 5 2 3
+v 1 8 3
+f 1 2 3

@@ -49,6 +49,13 @@ on:
         required: false
         type: boolean
         default: false
+      assimp:
+        description: >-
+          Install Assimp and build with VR_WITH_ASSIMP=ON, including mesh
+          import tests and the installed IO package consumer.
+        required: false
+        type: boolean
+        default: false
       hevc_backend:
         description: >-
           The HEVC decode back end this leg promises (cuda, videotoolbox),
@@ -139,6 +146,9 @@ jobs:
           if [ "${{ inputs.ffmpeg }}" = "true" ]; then
             pkgs="$pkgs pkg-config libavcodec-dev libavutil-dev libswscale-dev"
           fi
+          if [ "${{ inputs.assimp }}" = "true" ]; then
+            pkgs="$pkgs libassimp-dev"
+          fi
           # shellcheck disable=SC2086  # intentional: split $pkgs into separate args
           sudo apt-get install -y --no-install-recommends $pkgs
           # The CUDA toolkit for VR_WITH_CUDA (cmake/vr_cuda.cmake): cuda.h,
@@ -181,6 +191,9 @@ jobs:
           extra=""
           if [ "${{ inputs.ffmpeg }}" = "true" ]; then
             extra="ffmpeg pkgconf"
+          fi
+          if [ "${{ inputs.assimp }}" = "true" ]; then
+            extra="$extra assimp"
           fi
           ok=0
           for attempt in 1 2 3; do
@@ -340,7 +353,8 @@ jobs:
             if cmake -S . -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
                 -DVR_WITH_ORBBEC=${{ inputs.orbbec_sdk && 'ON' || 'OFF' }} \
                 -DVR_WITH_FFMPEG=${{ inputs.ffmpeg && 'ON' || 'OFF' }} \
-                -DVR_WITH_CUDA=${{ inputs.cuda && 'ON' || 'OFF' }}; then
+                -DVR_WITH_CUDA=${{ inputs.cuda && 'ON' || 'OFF' }} \
+                -DVR_WITH_ASSIMP=${{ inputs.assimp && 'ON' || 'OFF' }}; then
               ok=1
               break
             fi
@@ -361,3 +375,14 @@ jobs:
         env:
           VR_TEST_HEVC_BACKEND: ${{ inputs.hevc_backend }}
         run: ctest --test-dir build --output-on-failure
+
+      - name: Installed IO package consumer
+        if: steps.detect.outputs.present == 'true'
+        run: |
+          cmake --install build --prefix "${RUNNER_TEMP}/recon-install"
+          cmake -S tests/install_io -B build/install-io \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DCMAKE_PREFIX_PATH="${RUNNER_TEMP}/recon-install" \
+            -DVR_EXPECT_ASSIMP=${{ inputs.assimp && 'ON' || 'OFF' }}
+          cmake --build build/install-io --parallel
+          ctest --test-dir build/install-io --output-on-failure

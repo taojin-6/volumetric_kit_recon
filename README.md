@@ -25,7 +25,7 @@ CI-gated, and split into clean, independently consumable tiers.
 ## Design at a glance
 
 - **Tiered, like gfx:** `core` → `volume` → `tsdf` → `mesh` → `texture` →
-  `interop`, with `sensor` off `core`, `codec` off `volume`, and `eval` off
+  `interop`, with `sensor` off `core`, `codec` off `volume`, and `eval`/`io` off
   `mesh`. A tier may depend only on tiers to its left.
 - **One Vulkan path everywhere:** compute runs as Vulkan compute shaders
   (GLSL → SPIR-V), with MoltenVK on Apple — Linux / Android / macOS / iOS /
@@ -51,6 +51,37 @@ ctest --test-dir "$recon_root/build" --output-on-failure
 
 Consume it from another CMake project via `find_package(volumetric_kit_recon)`
 or `FetchContent`, then link a tier (e.g. `volumetric_kit::recon_core`).
+
+### Asset I/O
+
+`volumetric_kit::recon_io` provides encoded RGB image loading, 16-bit
+grayscale depth PNG loading with explicit units, RGBA8 PNG writing, and
+binary PLY mesh export. Include `io/image_io.hpp` or `io/ply_writer.hpp` under
+`volumetric_kit/recon/`. These are host file operations; they allocate no
+Vulkan resources and do not download a live GPU volume.
+
+Static mesh import is a separate optional target,
+`volumetric_kit::recon_io_assimp`, with Assimp as a private implementation
+dependency. Install Assimp and enable it explicitly:
+
+```sh
+brew install assimp                  # macOS
+sudo apt install libassimp-dev        # Debian/Ubuntu
+cmake -S "$recon_root" -B "$recon_root/build" -DCMAKE_BUILD_TYPE=Release \
+    -DVR_WITH_ASSIMP=ON
+```
+
+`io::load_mesh(path)` in `io/mesh_io.hpp` returns owned positions and triangle
+indices. It triangulates polygons, applies scene-node transforms and instances,
+preserves winding under reflections, and joins exactly coincident positions.
+OBJ, PLY and glTF are covered by tests; other formats depend on the installed
+Assimp build. Materials/textures are discarded and animated/skinned/morphed
+assets are refused. Import does not impose physical units or a target height:
+normalization such as Rafa2's 1.7 m convention is a caller operation.
+
+The default build does not need Assimp. An installed package built with
+`VR_WITH_ASSIMP=ON` also needs Assimp's CMake package at consumption time.
+Cross-compiles must supply Assimp for the target platform, not a host package.
 
 ### Optional: Orbbec SDK
 

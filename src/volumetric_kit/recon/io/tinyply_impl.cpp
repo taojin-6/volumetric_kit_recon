@@ -7,4 +7,4 @@
 // the tier's -Werror surface. CMake attaches `-w` to this file alone.
 
 #define TINYPLY_IMPLEMENTATION
-#include "tinyply.h"
+#include "tinyply_backend.hpp"
