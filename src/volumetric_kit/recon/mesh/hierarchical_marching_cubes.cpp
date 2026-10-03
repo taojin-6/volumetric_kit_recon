@@ -132,6 +132,15 @@ struct HierarchicalMarchingCubes::Impl {
     VR_ASSIGN(Buffer vertices,
               output(vertices_bytes, config.extra_vertex_usage));
     VR_ASSIGN(Buffer indices, output(indices_bytes, config.extra_index_usage));
+    // Unshared extraction always draws the identity index run. Initialize it
+    // once per arena growth instead of rewriting it on every extraction.
+    // Submit before committing either buffer so a failed upload cannot leave
+    // a retained slot advertising an uninitialized index run.
+    std::vector<std::uint32_t> identity(static_cast<std::size_t>(capacity) * 3);
+    std::iota(identity.begin(), identity.end(), std::uint32_t(0));
+    CommandBatch fill(*device, *allocator);
+    VR_TRY(fill.upload(indices, 0, identity.data(), indices_bytes));
+    VR_TRY(fill.submit());
     slot.vertices = std::move(vertices);
     slot.indices = std::move(indices);
     slot.capacity = static_cast<std::uint32_t>(capacity);
@@ -265,8 +274,6 @@ Result<DeviceMesh> HierarchicalMarchingCubes::extract_device(
     }
     p.kernel.set.write_storage_buffer(7, slot.vertices.handle(), 0,
                                       slot.vertices.size());
-    p.kernel.set.write_storage_buffer(8, slot.indices.handle(), 0,
-                                      slot.indices.size());
     p.kernel.set.write_storage_buffer(9, slot.indirect.handle(), 0,
                                       slot.indirect.size());
     if (timings) timings->descriptor_ms += elapsed(start);

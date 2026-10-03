@@ -30,7 +30,6 @@ struct Vertex {
   vec4 color;
 };
 layout(set = 0, binding = 7, scalar) writeonly buffer Vertices { Vertex vertices[]; };
-layout(set = 0, binding = 8, scalar) writeonly buffer Indices { uint indices[]; };
 layout(set = 0, binding = 9, scalar) buffer Command {
   uint index_count;
   uint instance_count;
@@ -326,7 +325,6 @@ void main() {
       for (uint v = 0u; v < 3u; ++v) {
         uint target = tri * 3u + v;
         mcWriteVertex(target, p[v], normal, color[v]);
-        indices[target] = target;
       }
     }
   }

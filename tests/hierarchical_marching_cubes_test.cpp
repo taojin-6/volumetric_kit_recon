@@ -34,6 +34,34 @@ namespace mesh = vr::mesh;
   } while (0)
 
 namespace {
+bool device_indices_are_identity(const vr_test::Gpu& gpu,
+                                 const mesh::DeviceMesh& view) {
+  if (view.vertex_count == 0) return false;
+  const VkDeviceSize bytes =
+      VkDeviceSize(view.vertex_count) * sizeof(std::uint32_t);
+  auto copy = vr::device_storage_buffer(gpu.allocator, bytes);
+  if (!copy) return false;
+  const auto status = gpu.device.submit_single_time([&](VkCommandBuffer cmd) {
+    VkMemoryBarrier barrier{};
+    barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    barrier.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &barrier, 0,
+                         nullptr, 0, nullptr);
+    VkBufferCopy region{};
+    region.size = bytes;
+    vkCmdCopyBuffer(cmd, view.indices, copy.value().handle(), 1, &region);
+  });
+  if (!status.ok()) return false;
+  auto indices = vr_test::read_back<std::uint32_t>(
+      gpu.device, gpu.allocator, copy.value(), view.vertex_count);
+  if (!indices) return false;
+  for (std::uint32_t i = 0; i < view.vertex_count; ++i)
+    if (indices.value()[i] != i) return false;
+  return true;
+}
+
 // Atomic reservation order is deliberately unspecified. Compare every vertex
 // attribute exactly after canonicalizing triangle order and cyclic winding.
 auto canonical_triangles(const mesh::Mesh& mesh) {
@@ -412,18 +440,35 @@ int run_tests() {
   auto ring = mesh::HierarchicalMarchingCubes::create(gpu.device, gpu.allocator,
                                                       config);
   CHECK(ring);
-  auto first = ring.value().extract_device(field.view());
+  // Prime each ring slot with a one-triangle arena. Both nonempty extracts
+  // must overflow, grow, and retry, initializing the entire new index range.
+  // Check the real GPU indices: download() synthesizes its host identity run.
+  auto no_leaves = field.view();
+  no_leaves.leaf_count = 0;
+  auto empty_first = ring.value().extract_device(no_leaves, 0.0f, &timings);
+  CHECK(empty_first && timings.triangle_capacity == 1);
+  auto empty_second = ring.value().extract_device(no_leaves, 0.0f, &timings);
+  CHECK(empty_second && timings.triangle_capacity == 1);
+  ring.value().release_through(empty_second.value().generation);
+  auto first = ring.value().extract_device(field.view(), 0.0f, &timings);
   CHECK(first);
-  auto second = ring.value().extract_device(field.view());
+  CHECK(timings.dispatches == 2 &&
+        device_indices_are_identity(gpu, first.value()));
+  auto second = ring.value().extract_device(field.view(), 0.0f, &timings);
   CHECK(second);
+  CHECK(timings.dispatches == 2 &&
+        device_indices_are_identity(gpu, second.value()));
   CHECK(first.value().vertices != second.value().vertices);
   CHECK(!ring.value().extract_device(field.view()));
   CHECK(second.value().is_current());
   CHECK(!ring.value().download(first.value()));
   ring.value().release_through(first.value().generation);
-  auto third = ring.value().extract_device(field.view());
+  auto third = ring.value().extract_device(field.view(), 0.0f, &timings);
   CHECK(third);
   CHECK(third.value().vertices == first.value().vertices);
+  CHECK(third.value().indices == first.value().indices);
+  CHECK(timings.dispatches == 1 &&
+        device_indices_are_identity(gpu, third.value()));
   ring.value().release_through(third.value().generation);
   auto host = ring.value().extract_host(field.view());
   CHECK(host);
