@@ -5,10 +5,9 @@
 #include <cmath>
 #include <cstdio>
 #include <limits>
-#include <sstream>
 #include <string>
 
-#include "mesh_input.hpp"
+#include "mesh_normalization.hpp"
 
 #define CHECK(cond)                                                        \
   do {                                                                     \
@@ -19,17 +18,9 @@
   } while (0)
 
 namespace {
-const char* kTetrahedron =
-    "# Input coordinates intentionally have no unit annotation.\n"
-    "v 10 20 30\nv 12 20 30\nv 10 22 30\nv 10 20 32\n"
-    "vt 0 0\nvn 0 0 1\n"
-    "f 1/1/1 3/1/1 2/1/1\n"
-    "f -4//1 -3//1 -1//1 # relative indices\n"
-    "f 1 4 3\nf 2/1 3/1 4/1\n";
-
-vr_example::ObjGeometry tetrahedron() {
-  std::istringstream input(kTetrahedron);
-  return vr_example::read_obj_geometry(input).value();
+volumetric_kit::recon::io::TriangleMesh tetrahedron() {
+  return {{{10, 20, 30}, {12, 20, 30}, {10, 22, 30}, {10, 20, 32}},
+          {0, 2, 1, 0, 1, 3, 0, 3, 2, 1, 2, 3}};
 }
 
 double distance(const volumetric_kit::recon::Vec3f& a,
@@ -42,9 +33,28 @@ double distance(const volumetric_kit::recon::Vec3f& a,
 }  // namespace
 
 int main() {
+  // The production loader joins attribute/material seams before the example
+  // audits indexed topology. Import keeps this box's source-unit Y extent of
+  // three; only an explicit normalization request changes it to 1.7 metres.
+  auto imported = volumetric_kit::recon::io::load_mesh(
+      std::string(VR_IO_MESH_DATA) + "/seams.obj");
+  CHECK(imported.ok());
+  auto& box = imported.value();
+  CHECK(box.positions.size() == 8 && box.indices.size() == 36);
+  const auto box_audit = vr_example::audit_mesh_topology(box);
+  CHECK(box_audit.supports_signed() && box_audit.edges == 18);
+  CHECK(std::abs(box_audit.signed_volume - 30.0) < 1e-12);
+  const auto box_indices = box.indices;
+  const auto box_normalization =
+      vr_example::normalize_mesh_height(box, 1.7, {0, 1, 0});
+  CHECK(box_normalization.ok());
+  CHECK(box_normalization.value().original_height == 3.0);
+  CHECK(box_normalization.value().normalized.min[1] == 0.0);
+  CHECK(std::abs(box_normalization.value().normalized.max[1] - 1.7) < 1e-6);
+  CHECK(box.indices == box_indices);
+  CHECK(vr_example::audit_mesh_topology(box).supports_signed());
+
   auto mesh = tetrahedron();
-  CHECK(mesh.positions.size() == 4 && mesh.indices.size() == 12);
-  CHECK(mesh.indices[3] == 0 && mesh.indices[4] == 1 && mesh.indices[5] == 3);
   const auto audit = vr_example::audit_mesh_topology(mesh);
   CHECK(audit.supports_signed() && audit.edges == 6 && audit.components == 1);
   CHECK(std::abs(audit.signed_volume - 8.0 / 6.0) < 1e-12);
@@ -128,17 +138,6 @@ int main() {
   degenerate.indices.insert(degenerate.indices.end(), {0, 0, 1});
   CHECK(vr_example::audit_mesh_topology(degenerate).degenerate_triangles == 1);
 
-  const std::string vertices = "v 0 0 0\nv 1 0 0\nv 0 1 0\n";
-  for (const auto& face : {"f 0 2 3", "f 1 2 4", "f -4 -2 -1", "f 1 2",
-                           "f 1 2 3 1", "f 1/x 2 3", "f 1// 2 3", "f 1/ 2 3"}) {
-    std::istringstream input(vertices + face);
-    CHECK(!vr_example::read_obj_geometry(input).ok());
-  }
-  for (const auto& text :
-       {"", "v 0 0 0", "v inf 0 0", "v 1e999 0 0", "v 0 0"}) {
-    std::istringstream input(text);
-    CHECK(!vr_example::read_obj_geometry(input).ok());
-  }
-  std::puts("mesh input tests passed");
+  std::puts("mesh normalization tests passed");
   return 0;
 }

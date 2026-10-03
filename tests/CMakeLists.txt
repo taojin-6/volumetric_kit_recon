@@ -1,14 +1,22 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Tao Jin
 
-# OBJ parsing, explicit unit/height normalization and topology checks are
-# host-only and remain testable when example executables are disabled.
-add_executable(recon_mesh_input_test mesh_input_test.cpp
-                                     ../examples/common/mesh_input.cpp)
-target_include_directories(recon_mesh_input_test PRIVATE ../examples/common)
-target_link_libraries(recon_mesh_input_test PRIVATE volumetric_kit::recon_mesh)
-vr_target_warnings(recon_mesh_input_test)
-add_test(NAME recon_mesh_input COMMAND recon_mesh_input_test)
+# Asset import followed by explicit height normalization and topology checks.
+# Host-only and testable when example executables are disabled.
+if(TARGET recon_io_assimp)
+  add_executable(
+    recon_mesh_normalization_test mesh_normalization_test.cpp
+                                  ../examples/common/mesh_normalization.cpp)
+  target_include_directories(recon_mesh_normalization_test
+                             PRIVATE ../examples/common)
+  target_link_libraries(recon_mesh_normalization_test
+                        PRIVATE volumetric_kit::recon_io_assimp)
+  target_compile_definitions(
+    recon_mesh_normalization_test
+    PRIVATE VR_IO_MESH_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data/io")
+  vr_target_warnings(recon_mesh_normalization_test)
+  add_test(NAME recon_mesh_normalization COMMAND recon_mesh_normalization_test)
+endif()
 
 # Smoke test: compiles the core public headers (Status/Result, POD math,
 # version) and links recon_core, proving the tier builds, links, and runs under

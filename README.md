@@ -146,8 +146,11 @@ integrated GPU on Linux), else in software.
 ## Codec evaluation
 
 `codec_replica` runs the grid codec on a fused room sequence. `codec_mesh`
-uses `tsdf::MeshIntegrator` to convert an OBJ to a TSDF, compresses and
-decodes that grid, then extracts the decoded surface with marching cubes.
+loads static triangle geometry through `io::load_mesh`, uses
+`tsdf::MeshIntegrator` to convert it to a TSDF, compresses and decodes that
+grid, then extracts the decoded surface with marching cubes. Build the mesh
+example with `VR_WITH_ASSIMP=ON` after installing the
+[asset I/O prerequisites](#asset-io).
 Both support `--quant-table uniform|band|radial`, `--step` for the global
 quantization scale, and `--sweep` for the shared rate-distortion study.
 
@@ -159,6 +162,9 @@ It prints the original and normalized bounds and leaves the asset unchanged.
 This is a height normalization, not an assertion about the source's unit.
 
 ```sh
+cmake -S "$recon_root" -B "$recon_root/build" -DCMAKE_BUILD_TYPE=Release \
+  -DVR_WITH_ASSIMP=ON
+cmake --build "$recon_root/build" --parallel
 dataset_root=/absolute/path/to/datasets
 "$recon_root/build/examples/codec_replica/codec_replica" \
   "$dataset_root/replica_room0/room0" --max-frames 400 \

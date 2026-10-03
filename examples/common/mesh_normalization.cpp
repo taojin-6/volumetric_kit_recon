@@ -1,17 +1,13 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Tao Jin
 
-#include "mesh_input.hpp"
+#include "mesh_normalization.hpp"
 
 #include <algorithm>
-#include <cerrno>
 #include <cmath>
-#include <cstdlib>
-#include <fstream>
 #include <limits>
 #include <map>
 #include <numeric>
-#include <sstream>
 #include <utility>
 
 namespace vr_example {
@@ -44,39 +40,6 @@ MeshBounds bounds(const std::vector<vr::Vec3f>& positions) {
   return b;
 }
 
-vr::Result<long long> parse_index(const std::string& text) {
-  char* end = nullptr;
-  errno = 0;
-  const auto value = std::strtoll(text.c_str(), &end, 10);
-  if (end == text.c_str() || *end != '\0' || errno != 0 || value == 0) {
-    return vr::Status::invalid_argument("invalid OBJ face index: " + text);
-  }
-  return value;
-}
-
-vr::Result<std::uint32_t> position_index(const std::string& token,
-                                         std::size_t vertex_count) {
-  const auto slash = token.find('/');
-  VR_ASSIGN(const long long index, parse_index(token.substr(0, slash)));
-  if (slash != std::string::npos) {
-    const auto second = token.find('/', slash + 1);
-    const auto uv = token.substr(slash + 1, second - slash - 1);
-    if (!uv.empty()) VR_TRY(parse_index(uv).status());
-    if (second == std::string::npos && uv.empty()) {
-      return vr::Status::invalid_argument("missing OBJ texture index");
-    }
-    if (second != std::string::npos) {
-      VR_TRY(parse_index(token.substr(second + 1)).status());
-    }
-  }
-  const long long resolved =
-      index > 0 ? index - 1 : static_cast<long long>(vertex_count) + index;
-  if (resolved < 0 || static_cast<std::size_t>(resolved) >= vertex_count) {
-    return vr::Status::invalid_argument("OBJ position index out of range");
-  }
-  return static_cast<std::uint32_t>(resolved);
-}
-
 }  // namespace
 
 bool MeshTopology::supports_signed() const noexcept {
@@ -85,81 +48,8 @@ bool MeshTopology::supports_signed() const noexcept {
          nonpositive_components == 0;
 }
 
-vr::Result<ObjGeometry> read_obj_geometry(std::istream& input) {
-  ObjGeometry geometry;
-  std::string line;
-  std::size_t line_number = 0;
-  while (std::getline(input, line)) {
-    ++line_number;
-    line.resize(line.find('#') == std::string::npos ? line.size()
-                                                    : line.find('#'));
-    std::istringstream fields(line);
-    std::string kind;
-    fields >> kind;
-    const std::string where = "OBJ line " + std::to_string(line_number) + ": ";
-    if (kind == "v") {
-      Point3d p{};
-      if (!(fields >> p[0] >> p[1] >> p[2])) {
-        return vr::Status::invalid_argument(where +
-                                            "expected three coordinates");
-      }
-      for (const double value : p) {
-        if (!std::isfinite(value) ||
-            std::abs(value) > std::numeric_limits<float>::max()) {
-          return vr::Status::invalid_argument(where + "invalid coordinate");
-        }
-      }
-      std::string extra;
-      if (fields >> extra) {
-        return vr::Status::invalid_argument(where +
-                                            "only xyz vertices supported");
-      }
-      if (geometry.positions.size() ==
-          std::numeric_limits<std::uint32_t>::max()) {
-        return vr::Status::invalid_argument(where + "too many vertices");
-      }
-      geometry.positions.push_back({float(p[0]), float(p[1]), float(p[2])});
-    } else if (kind == "f") {
-      std::string token;
-      std::array<std::uint32_t, 3> face{};
-      for (auto& index : face) {
-        if (!(fields >> token)) {
-          return vr::Status::invalid_argument(where + "expected a triangle");
-        }
-        const auto parsed = position_index(token, geometry.positions.size());
-        if (!parsed.ok()) {
-          return vr::Status::invalid_argument(where +
-                                              parsed.status().message());
-        }
-        index = parsed.value();
-      }
-      if (fields >> token) {
-        return vr::Status::invalid_argument(where +
-                                            "only triangle faces supported");
-      }
-      if (geometry.indices.size() / 3 ==
-          std::numeric_limits<std::uint32_t>::max()) {
-        return vr::Status::invalid_argument(where + "too many triangles");
-      }
-      geometry.indices.insert(geometry.indices.end(), face.begin(), face.end());
-    }
-  }
-  if (input.bad()) return vr::Status::io_error("failed reading OBJ");
-  if (geometry.positions.empty() || geometry.indices.empty()) {
-    return vr::Status::invalid_argument("OBJ contains no triangle geometry");
-  }
-  return geometry;
-}
-
-vr::Result<ObjGeometry> read_obj_geometry(const std::string& path) {
-  std::ifstream input(path);
-  if (!input) return vr::Status::io_error("cannot open OBJ: " + path);
-  return read_obj_geometry(input);
-}
-
-vr::Result<MeshNormalization> normalize_mesh_height(ObjGeometry& geometry,
-                                                    double height,
-                                                    const Point3d& up) {
+vr::Result<MeshNormalization> normalize_mesh_height(
+    vr::io::TriangleMesh& geometry, double height, const Point3d& up) {
   const double norm = dot(up, up);
   if (geometry.positions.empty() || !std::isfinite(height) || !(height > 0.0) ||
       !std::isfinite(norm) || !(norm > 0.0)) {
@@ -224,7 +114,7 @@ vr::Result<MeshNormalization> normalize_mesh_height(ObjGeometry& geometry,
   return result;
 }
 
-MeshTopology audit_mesh_topology(const ObjGeometry& geometry) {
+MeshTopology audit_mesh_topology(const vr::io::TriangleMesh& geometry) {
   struct Edge {
     std::size_t count = 0;
     int direction = 0;
@@ -288,7 +178,7 @@ MeshTopology audit_mesh_topology(const ObjGeometry& geometry) {
   return result;
 }
 
-vr::mesh::Mesh geometry_mesh(const ObjGeometry& geometry) {
+vr::mesh::Mesh geometry_mesh(const vr::io::TriangleMesh& geometry) {
   vr::mesh::Mesh mesh;
   mesh.indices = geometry.indices;
   mesh.vertices.reserve(geometry.positions.size());

@@ -1407,15 +1407,19 @@ rate–distortion table the defaults are chosen from. Its `main.cpp` stays the
 example's story; the stream, its report and the sweep are
 `examples/common/codec_stream.hpp` and `codec_sweep.hpp`.
 
-**`codec_mesh`** loads an OBJ, explicitly normalizes its projected height and
-up direction into metres, allocates its triangle band and writes its field
+**`codec_mesh`** loads static geometry through the optional Assimp-backed
+`io::load_mesh`, explicitly normalizes its projected height and up direction
+into metres, allocates its triangle band and writes its field
 with `tsdf::MeshIntegrator`. It then encodes, decodes into a separate grid,
 and extracts both grids with `mesh::MarchingCubes`. It reports conversion
 error against the normalized input mesh separately from codec error against
 the uncompressed extracted surface. Rafa2 is the first mesh fixture: its
 file declares no unit, and its tilted body needs an explicit up vector
 before scaling to 1.7 m (see the 2026-10-02 decision for the measured bounds
-and normalization). The original asset is left unchanged.
+and normalization). The original asset is left unchanged. File parsing and
+PLY export belong to `io`; `examples/common/mesh_normalization.*` retains
+the example's height convention and topology audit. The mesh example and
+its normalization test are built only with `VR_WITH_ASSIMP=ON`.
 
 Both examples take `--quant-table uniform|band|radial` and `--step` for a
 single configuration. Their common `--sweep` compares all three table

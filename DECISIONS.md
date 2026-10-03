@@ -290,6 +290,9 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-03**](#2026-10-03--compact-the-codecs-observed-list-on-the-device-and-retain-transform-scratch) —
   Compact the codec's observed list on the device, predict its readback prefix
   to avoid an unconditional extra fence, and retain transform scratch.
+- [**2026-10-03**](#2026-10-03--codec-mesh-evaluation-consumes-the-shared-io-loader) —
+  The codec example uses Assimp-backed asset loading and shared PLY export;
+  height normalization and topology checks remain example policy.
 
 ## Decision record
 
@@ -9058,6 +9061,39 @@ savings. Raw runs 1–3 are retained on `taojin-desktop` under
 `/home/taojin/ws/volumetric_kit/volumetric_kit_recon/.worktrees/`, in
 `gpu-codec-base-23c6e36/observed-bench-{1,2,3}.log` and
 `gpu-codec-fix-525bdf7/observed-bench-{1,2,3}.log`.
+
+### 2026-10-03 — Codec mesh evaluation consumes the shared io loader.
+
+The codec change is stacked above the standalone asset I/O module. Its
+`codec_mesh` example now calls `io::load_mesh` directly and passes the owned
+`io::TriangleMesh` into its normalization and topology checks. The bespoke
+OBJ parser and duplicate geometry container are removed. PLY exports use
+`io::write_ply`, matching the room example. This completes the codec adoption
+left separate by the asset I/O decision above.
+
+`examples/common/mesh_normalization.*` contains the explicit height/up
+convention, topology audit and conversion to the evaluator's host mesh.
+These are consumer choices, so they stay outside the format loader.
+Quantization-table candidates likewise remain codec-example policy.
+`codec_mesh` and its normalization test require `VR_WITH_ASSIMP=ON`; the
+room codec, production codec library and remaining tests build without it.
+
+The 1.7 m Rafa2 convention and signed-mode checks are unchanged. Assimp's
+format parsing, triangulation and exact position joining are now inherited
+from `io`; successful import still does not certify a closed manifold.
+Earlier rate-distortion and latency tables describe their recorded builds,
+not a new performance measurement of this integration.
+
+Validation of the stacked integration on Apple M5 Max: Release with warnings
+as errors, Assimp and FFmpeg passes all 54 tests. The three GPU codec tests
+and the actual 5 mm Rafa2 radial/K64/0.1 pipeline pass with Khronos
+synchronization validation forced on, without validation diagnostics. The
+import retains 24,998 vertices and 50,000 triangles with closed, consistently
+oriented edges; explicit normalization produces Y bounds [0, 1.70000005] m.
+The pipeline emits all three PLYs and a 66,973-byte frame, decodes 2,395
+blocks, and extracts 199,864 decoded triangles. This is a functional smoke
+run with validation enabled, not a latency benchmark. An Assimp-disabled
+Release/Werror build also succeeds, and its image/PLY host tests pass.
 
 ## Measured lessons
 
