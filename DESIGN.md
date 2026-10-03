@@ -1315,6 +1315,15 @@ shared `VkDevice`, fusing on a background thread, drawing recon's buffers
 directly, and carrying the two-panel perf overlay. The four dataset examples
 take `--preload`, which makes the loop measure compute rather than the
 JPEG/PNG decoder.
+`fuse_replica --timings-csv path` additionally buffers one record per fused
+frame and prints nearest-rank p50/p95/p99 summaries. Its online pipeline
+host time sums fusion and scheduled extraction, excluding input polling,
+decode/preload, dirty-block surveys, reporting and final export. Stage rows
+keep measured host/device halves; mesh phases are wall-clock only, so mesh
+device time is explicitly unavailable. Startup and retries stay in the
+distribution. This is benchmark infrastructure for adaptive grids, whose
+performance remains unmeasured; [PERF.md H1](PERF.md#h1--record-per-frame-online-timings-for-adaptive-grid-evaluation)
+records the acceptance gates and the instrumentation-only baseline.
 The live counterpart is its own example, not a `fuse_replica` flag:
 **`fuse_orbbec`** (`VR_WITH_ORBBEC`) fuses an `OrbbecCapture` through the same
 `fuse_frame.hpp` and writes a PLY after `--frames` frames; `--rig sync.json`

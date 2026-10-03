@@ -120,6 +120,7 @@ kernels.
 
 | id | item | expected win | effort | depends on | status |
 |---|---|---|---|---|---|
+| H1 | Record per-frame online timings for adaptive-grid evaluation | measures latency distributions; adaptive performance remains unmeasured | S | — | implemented on `feat/hierarchical-benchmark`, awaiting review |
 | P8 | Sample the viewer's GPU timing | measured 0.04–0.07 ms/set, not the 1.7 estimated | S | — | not worth it |
 | P1 | Fuse a set's cameras in one allocate, one compaction and one integrate | measured −14% a set on the M5 Max, −21% on the RTX 5090 | L | — | landed (#127) |
 | P3 | Deduplicate depth allocation before dilating | measured −50% a set on the M5 Max, −62% on the RTX 5090 (over P1) | M | — | landed (#128) |
@@ -141,6 +142,36 @@ kernels.
 The suggested order: P8 first, so every later figure is honest; D1–D3
 whenever convenient; then P1, P3, P5, P4, P2 + P6; then P7, and P9 once it
 is measured.
+
+### H1 — Record per-frame online timings for adaptive-grid evaluation
+
+`fuse_replica --timings-csv path` records fusion and scheduled extraction
+per frame, before judging a hierarchical grid's overhead. Its pipeline host
+time excludes input decode/preload, dirty-block surveys, reporting and final
+export; the existing final fps does not. Stage rows retain measured device
+timestamps where available. Mesh phases are host wall times, with the
+unavailable mesh device column left blank. CSV records and nearest-rank
+p50/p95/p99 summaries include startup and retries; see the
+[benchmark command and column definitions](README.md#benchmark-a-recorded-room).
+
+The accepted implementation gates are **less than 5% overhead with adaptive
+mode disabled**, and **adaptive online pipeline time at most 1.10 times the
+uniform 1 cm reference** on the same workload and hardware. Report the full
+latency distribution alongside repeated-run means, and compare geometry and
+memory as well as time. These are gates for the adaptive implementation, not
+measurements of it.
+
+Instrumentation alone was checked against `34d7fb1`: Release, Apple M5 Max,
+MoltenVK 1.4.2, room0's 400 frames at 1200 × 680, 1 cm voxels, 4 cm
+truncation, preloaded, device extraction every frame, three interleaved runs
+per variant. Median sums of the legacy mean host stage rows were 3.531 ms
+before and 3.574 ms with CSV disabled (+1.22%; baseline range 3.507–4.199 ms,
+patched 3.537–3.585 ms). The trace-enabled online mean was 3.541–3.562 ms;
+p95 was 3.904–4.031 ms. All final meshes had the same 1,308,911 canonical
+oriented triangles. This checks the instrumentation's disabled path only;
+adaptive-grid overhead, quality, memory savings and discrete-GPU performance
+are still unmeasured. Detailed phase evidence is in the
+[dated decision](DECISIONS.md#2026-10-02--online-room-benchmarks-report-per-frame-fusion-and-scheduled-extraction-before-adaptive-grids-are-judged).
 
 ### P8 — Sample the viewer's GPU timing
 

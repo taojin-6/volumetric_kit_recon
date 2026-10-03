@@ -261,6 +261,9 @@ entries relevant to your task; later amendments supersede earlier rules.
   GPU regressions guard span ownership, chroma placement, descriptor aliases,
   invalid depth taps, and zero-near visibility; zero holes never occlude a
   colour sight line.
+- [**2026-10-02**](#2026-10-02--online-room-benchmarks-report-per-frame-fusion-and-scheduled-extraction-before-adaptive-grids-are-judged) —
+  Online room benchmarks report per-frame fusion and scheduled extraction
+  before adaptive grids are judged.
 
 - [**2026-10-02**](#2026-10-02--device-local-allocation-is-required-and-buffer-residency-is-explicit) —
   Device-local allocation is required and buffer residency is explicit;
@@ -8667,6 +8670,58 @@ The RTX logs are `mesh-{sparse,dense}-bench-{1,2,3}.log` under the remote
 `.worktrees/gpu-residency-base-e4db453/` and
 `.worktrees/gpu-mesh-fix-13adbb3/` checkouts. The demonstrated structural
 change is bounded control transfer and retained bulk storage.
+
+### 2026-10-02 — Online room benchmarks report per-frame fusion and scheduled extraction before adaptive grids are judged.
+
+Adaptive voxel blocks need a measured online reference before their extra
+allocation, fusion and transition-meshing work can be accepted. The existing
+`fuse_replica` stage means locate costs, but hide tail latency, and its final
+fps includes final host extraction and PLY export. Those semantics stay
+unchanged. Opt-in `--timings-csv` adds per-frame fusion and scheduled-extract
+host spans, their sum, existing host/device stage rows, mesh host phases,
+and mesh presence/retry/incremental/block/arena counters. Records are buffered
+until after the workload. Input, diagnostic surveys, reporting and final
+export are outside the new spans. No GPU time is inferred from a wall-clock
+mesh phase: that device column is blank. Percentiles use nearest ranks and
+include startup and retries; absent stages contribute no samples.
+
+**Acceptance gates for the coming adaptive implementation.** Less than 5%
+overhead when adaptive mode is disabled; adaptive online pipeline time at
+most 1.10 times the uniform 1 cm reference with identical input, meshing
+cadence, truncation and hardware. Repeated-run means and p50/p95/p99 are
+reported together. Geometry and memory measurements accompany timing. The
+instrumentation change alone cannot establish either adaptive gate.
+
+**Measured instrumentation baseline.** `main` at `34d7fb1`, Release with
+warnings as errors, Apple M5 Max / MoltenVK 1.4.2. Replica room0, 400 paired
+1200 × 680 frames, `--voxel 0.01 --trunc 0.04 --max-frames 400 --preload
+--device-extract --mesh-every 1`. Three interleaved runs each of pristine,
+patched/CSV-off and patched/CSV-on, on the shared Mac:
+
+| measurement, ms/frame | pristine | patched, CSV off | patched, CSV on |
+|---|---|---|---|
+| median sum of legacy allocate/integrate/mesh host means | 3.531 | 3.574 | 3.553 |
+| range of those sums | 3.507–4.199 | 3.537–3.585 | 3.541–3.559 |
+| new online mean, unrounded CSV | unavailable | unavailable | 3.541–3.562 |
+| new online p50 / p95 / p99 | unavailable | unavailable | 3.503–3.560 / 3.904–4.031 / 3.987–4.133 |
+
+The +1.22% disabled-CSV comparison is the instrumentation's cost, with
+run-to-run noise (the first pristine run was slower). It is **not** the cost
+of a disabled adaptive grid. With tracing enabled, allocation's mean was
+0.599–0.605 ms host / 0.193–0.194 ms device; integration 1.028–1.045 /
+0.462–0.464. Its nested active-set row was 0.148–0.154 / 0.008–0.009 and
+must not be added twice to the host total. Extraction averaged
+1.909–1.918 ms host; its device duration remains unavailable.
+
+**Verified.** All nine full replays produced 32,972 blocks and bit-identical
+sorted oriented triangle coordinates: 1,308,911 triangles, 3,926,733 vertices.
+Twenty-frame replays checked extraction every second frame, no scheduled
+extraction, and incremental fallback (9 of 10 extracts incremental), with
+identical final geometry. CSV row counts, phase presence, pipeline sums and
+percentiles were checked independently; invalid paths and aliased CSV/PLY
+outputs were refused. Release/Werror build and scoped formatting passed.
+No adaptive reconstruction, quality improvement, memory saving or
+discrete-GPU performance was measured by this change.
 
 ## Measured lessons
 
