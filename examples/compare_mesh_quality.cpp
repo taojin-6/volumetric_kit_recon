@@ -28,7 +28,7 @@ namespace eval = vr::eval;
 
 namespace {
 struct Options {
-  std::string reference, test, cells_csv;
+  std::string reference, test, cells_csv, misses_csv;
   std::size_t samples = 200000;
   float reach = 0.04f, threshold = 0.005f, cell = 0.1f;
   bool roi = false;
@@ -249,9 +249,25 @@ void compare(const Options& opt) {
         cell.moments[3 * row + column] += normal[row] * normal[column];
   }
   for (auto& entry : cells) classify_cell(entry.second);
-  for (const auto& sample : ref_samples)
-    cells[cell_for(sample.position, opt.cell)].coverage.push_back(
-        indexed_test.value().distance(sample.position));
+  std::ofstream misses;
+  if (!opt.misses_csv.empty()) {
+    misses.open(opt.misses_csv);
+    if (!misses) throw std::runtime_error("cannot open missed-sample CSV");
+    misses << "x,y,z,nx,ny,nz,distance_m\n" << std::setprecision(9);
+  }
+  for (const auto& sample : ref_samples) {
+    const float distance = indexed_test.value().distance(sample.position);
+    cells[cell_for(sample.position, opt.cell)].coverage.push_back(distance);
+    if (misses.is_open() && distance >= opt.reach)
+      misses << sample.position.x << ',' << sample.position.y << ','
+             << sample.position.z << ',' << sample.normal.x << ','
+             << sample.normal.y << ',' << sample.normal.z << ',' << distance
+             << '\n';
+  }
+  if (misses.is_open()) {
+    misses.close();
+    if (!misses) throw std::runtime_error("failed to write missed-sample CSV");
+  }
   for (const auto& sample : test_samples)
     cells[cell_for(sample.position, opt.cell)].accuracy.push_back(
         indexed_reference.value().distance(sample.position));
@@ -338,6 +354,9 @@ Options parse(int argc, char** argv) {
     } else if (arg == "--cells-csv") {
       if (++i >= argc) throw std::runtime_error("missing CSV path");
       opt.cells_csv = argv[i];
+    } else if (arg == "--misses-csv") {
+      if (++i >= argc) throw std::runtime_error("missing CSV path");
+      opt.misses_csv = argv[i];
     } else if (!arg.empty() && arg[0] == '-')
       throw std::runtime_error("unknown flag: " + arg);
     else if (opt.reference.empty())
@@ -351,6 +370,7 @@ Options parse(int argc, char** argv) {
     throw std::runtime_error(
         "usage: compare_mesh_quality reference.ply test.ply [--samples 200000] "
         "[--reach .04] [--threshold .005] [--cell .1] [--cells-csv path] "
+        "[--misses-csv path] "
         "[--roi xmin ymin zmin xmax ymax zmax]");
   if (!std::isfinite(opt.reach) || !std::isfinite(opt.threshold) ||
       !std::isfinite(opt.cell) || !(opt.reach > 0) || !(opt.threshold > 0) ||
@@ -363,17 +383,25 @@ Options parse(int argc, char** argv) {
         (!std::isfinite(opt.bounds[i]) || !std::isfinite(opt.bounds[i + 3]) ||
          opt.bounds[i] > opt.bounds[i + 3]))
       throw std::runtime_error("invalid ROI bounds");
-  if (!opt.cells_csv.empty()) {
+  for (const auto& output : {opt.cells_csv, opt.misses_csv}) {
+    if (output.empty()) continue;
     for (const auto& input : {opt.reference, opt.test}) {
       std::error_code csv_error, input_error, same_error;
-      const auto csv =
-          std::filesystem::weakly_canonical(opt.cells_csv, csv_error);
+      const auto csv = std::filesystem::weakly_canonical(output, csv_error);
       const auto path = std::filesystem::weakly_canonical(input, input_error);
       if ((!csv_error && !input_error && csv == path) ||
-          std::filesystem::equivalent(opt.cells_csv, input, same_error))
+          std::filesystem::equivalent(output, input, same_error))
         throw std::runtime_error(
-            "--cells-csv must differ from both input meshes");
+            "CSV outputs must differ from both input meshes");
     }
+  }
+  if (!opt.cells_csv.empty() && !opt.misses_csv.empty()) {
+    std::error_code a, b, same;
+    const auto cells = std::filesystem::weakly_canonical(opt.cells_csv, a);
+    const auto missed = std::filesystem::weakly_canonical(opt.misses_csv, b);
+    if ((!a && !b && cells == missed) ||
+        std::filesystem::equivalent(opt.cells_csv, opt.misses_csv, same))
+      throw std::runtime_error("CSV output paths must differ");
   }
   return opt;
 }
