@@ -65,7 +65,7 @@ struct Sample {
 };
 // Invocation-private scratch, overwritten by every active gather. Passing this
 // array by value through triangle/crossing makes SPIRV-Cross generate several
-// 320-byte array copies per triangle; direct access preserves reference use in
+// whole-array copies per triangle; direct access preserves reference use in
 // MSL without requiring compiler-specific optimization flags.
 Sample samples[8];
 shared uint partial[256];

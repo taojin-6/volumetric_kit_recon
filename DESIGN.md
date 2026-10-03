@@ -1049,7 +1049,8 @@ by the dual cell's Jacobian. The shader owns the count and output; extraction
 reads back only the draw command and rejection status. The output ring follows
 the existing generation/release contract. This initial path always extracts
 the full leaf list and refuses vertex sharing and block spans. Room-scale
-performance remains unmeasured; it does not change the uniform extractor.
+acceptance and discrete-GPU measurements remain open (see PERF.md, H2);
+it does not change the uniform extractor.
 
 ### texture
 

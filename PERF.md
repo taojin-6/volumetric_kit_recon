@@ -573,3 +573,55 @@ After P6, the GPU could run set N while the host polls and decodes set N+1.
   measured.
 - Measure before revisiting. Sampling the buffers in place needs a gfx
   pipeline variant.
+
+### H2 — Adaptive extraction: measure the generated shader as well as the GLSL
+
+**Exploratory measurements, 2026-10-02.** Release, Apple M5 Max, MoltenVK,
+Replica room0; preload the same first 20 or 400 frames, fuse and extract every
+frame, finest spacing 5 mm, three levels (5/10/20 mm), truncation 4 cm,
+unshared device extraction. These were development probes with concurrent
+CPU work, not repeated interleaved acceptance runs. The figures below are
+host phase times, including command recording, submission and completion;
+they are not device timestamp measurements or evidence for a discrete GPU.
+
+- **Initial costs.** Across 400 frames, extraction averaged 56.70 ms:
+  arena allocation 11.46 ms and dispatch 45.24 ms. The arena guessed
+  `leaf_count * 64` triangles every frame and grew to that exact guess, even
+  when retained capacity already held the actual output. Retaining each
+  slot until its measured triangle count outgrows it, then reserving 50%
+  headroom within device buffer limits, removed that recurring allocation.
+- **Traversal and empty cells.** Cache the 27 aligned neighboring regions
+  once per leaf, stopping hierarchy descent at the owner's level. A finer
+  region cannot belong to this owner; a same/coarser leaf resolves every
+  incident query in that region. A signs-only pass rejects non-crossing
+  cells before building positions, colors or private sample arrays. Signed
+  dyadic coordinate division uses arithmetic shifts, including negative
+  coordinates; disassembly confirms no `OpSDiv` remains in this shader.
+- **Generated MSL exposed the largest remaining cost.** The unoptimized
+  GLSL compiler emitted array copies for `Sample[8]` function arguments.
+  SPIRV-Cross's MSL copied the entire array before each of three `crossing`
+  calls inside `triangle`, as well as at other helper boundaries. An
+  experimental `spirv-opt -O` still left endpoint-selection array copies.
+  One invocation-private scratch array, overwritten by each active gather
+  and accessed directly by the helpers, removes those copies in generated
+  MSL without changing compiler flags or the uniform shaders. In successive
+  20-frame probes, median extraction fell from 5.34 ms immediately before
+  this change to 1.236 ms after it. This motivates the implementation; final
+  full-sequence interleaved timings and quality remain the acceptance gate.
+- **Correctness boundary.** The shader still applies the same dual-cell
+  ownership, canonical interpolation and exact degenerate-triangle filter.
+  Release/Werror builds and synchronization validation pass analytic planes,
+  mixed levels 0/1/2 with negative coordinates, spheres and arbitrary signs
+  with exact float-bit closed-edge incidence, color conversion, and output
+  ring lifetime tests. Fully observed analytic fields do not prove RGB-D
+  observation support or preservation of thin surfaces after coarsening.
+
+Reproduce with `fuse_replica_hierarchical <room0> --voxel 0.005 --levels 3
+--trunc 0.04 --max-frames 20 --mesh-every 1 --preload --device-extract
+--timings-csv <absolute.csv> --out <absolute.ply>`; repeat with 400 frames.
+Development artifacts are under `.worktrees/hierarchical-grid/build/room-validation/`:
+`cache-{20,400}`, `signs-20`, `shifts-{20,400}` and `scratch-{20,400}`, each
+with CSV/log outputs. Inspect translation with
+`spirv-cross <hierarchical_marching_cubes.comp.spv> --msl --output <out.metal>`.
+TODO: record repeated interleaved room runs and a discrete-GPU measurement
+before treating this as an accepted cross-platform performance result.
