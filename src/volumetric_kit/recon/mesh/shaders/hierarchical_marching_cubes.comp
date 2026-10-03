@@ -1,0 +1,230 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Tao Jin
+
+#version 450
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_GOOGLE_include_directive : require
+
+// Cell-centered dual construction: Wald, arXiv:2004.08475 (2020).
+// Enumerate a leaf's 9^3 primal vertices once, rather than eight candidates
+// per sample. The finest incident leaf, then lowest (z,y,x) leaf coordinate,
+// owns the dual cell. Strict-interior candidates use no hierarchy lookup.
+layout(local_size_x = 256) in;
+layout(set = 0, binding = 0, scalar) readonly buffer Tables {
+  int tri_table[4096];
+  int corner_offset[24];
+  int edge_to_vert[24];
+};
+#define VR_HASH_ENTRIES_BINDING 1
+#define VR_HIERARCHY_NODES_BINDING 2
+#include "volumetric_kit/recon/volume/shaders/hierarchical_lookup.glsl"
+layout(set = 0, binding = 3, scalar) readonly buffer Leaves { uint leaves[]; };
+layout(set = 0, binding = 4, scalar) readonly buffer Distances { float tsdf[]; };
+layout(set = 0, binding = 5, scalar) readonly buffer Weights { float weights[]; };
+layout(set = 0, binding = 6, scalar) readonly buffer Colors { uint colors[]; };
+struct Vertex {
+  vec3 position;
+  vec3 normal;
+  vec4 tangent;
+  vec2 uv0;
+  vec4 color;
+};
+layout(set = 0, binding = 7, scalar) writeonly buffer Vertices { Vertex vertices[]; };
+layout(set = 0, binding = 8, scalar) writeonly buffer Indices { uint indices[]; };
+layout(set = 0, binding = 9, scalar) buffer Command {
+  uint index_count;
+  uint instance_count;
+  uint first_index;
+  int vertex_offset;
+  uint first_instance;
+  uint rejected;
+};
+layout(push_constant, scalar) uniform Push {
+  uint leaf_count;
+  uint leaf_base;
+  uint node_capacity;
+  uint max_level;
+  int num_buckets;
+  int bucket_size;
+  int max_chain;
+  uint capacity;
+  float voxel_size;
+  float iso;
+  float weight_threshold;
+  uint has_color;
+} pc;
+
+#include "volumetric_kit/recon/core/shaders/color_common.glsl"
+#include "marching_cubes_common.glsl"
+
+struct Sample {
+  ivec3 lower;
+  vec3 position;
+  vec3 color;
+  float distance;
+};
+shared uint partial[256];
+shared uint block_base;
+shared uint block_cursor;
+
+bool coordLess(ivec3 a, ivec3 b) {
+  return a.z != b.z ? a.z < b.z : (a.y != b.y ? a.y < b.y : a.x < b.x);
+}
+
+bool gather(HierarchicalNode owner, uint candidate, bool need_color, out Sample samples[8], out int code) {
+  code = 0;
+  ivec3 corner = ivec3(int(candidate % 9u), int((candidate / 9u) % 9u), int(candidate / 81u));
+  int scale = 1 << int(owner.level);
+  ivec3 q = (owner.coord * 8 + corner) * scale;
+  VoxelGridParams grid = VoxelGridParams(0.0, 8, 512, 0.0, pc.bucket_size,
+                                        pc.num_buckets, pc.num_buckets * pc.bucket_size, pc.max_chain);
+  for (int c = 0; c < 8; ++c) {
+    ivec3 shift = mcCornerShift(c);
+    ivec3 local = corner + shift - ivec3(1);
+    HierarchicalNode node = owner;
+    ivec3 query = q + shift - ivec3(1);
+    if (any(lessThan(local, ivec3(0))) || any(greaterThanEqual(local, ivec3(8)))) {
+      uint node_id;
+      if (!vrHierarchyLocate(query, grid, pc.max_level, pc.node_capacity, node_id, local)) return false;
+      node = vr_hierarchy_nodes[node_id];
+      if (node.level < owner.level ||
+          (node.level == owner.level && coordLess(node.coord, owner.coord))) return false;
+    }
+    uint si = uint(node.ptr) + uint(local.x + 8 * (local.y + 8 * local.z));
+    float w = weights[si];
+    float d = tsdf[si];
+    if (!(w >= pc.weight_threshold) || isnan(d) || isinf(d)) return false;
+    int h = 1 << int(node.level);
+    ivec3 lower = vrHierarchyFloorDiv(query, h) * h;
+    samples[c].lower = lower;
+    samples[c].position = (vec3(lower) + vec3(float(h) * 0.5)) * pc.voxel_size;
+    samples[c].distance = d;
+    samples[c].color = vec3(1.0);
+    if (need_color && pc.has_color != 0u) {
+      uint color = colors[si];
+      if (color != 0u) samples[c].color = vrUnpackSrgbToLinear(color);
+    }
+    if (d < pc.iso) code |= 1 << c;
+  }
+  return true;
+}
+
+void crossing(int edge, Sample samples[8], out vec3 position, out vec3 color) {
+  int a = edge_to_vert[2 * edge];
+  int b = edge_to_vert[2 * edge + 1];
+  // The same snapped edge can occupy different local MC edges in neighboring
+  // duals. Canonical actual-cell ordering, not local corner ordering, makes
+  // interpolation bit-identical on both sides.
+  if (coordLess(samples[b].lower, samples[a].lower)) {
+    int tmp = a; a = b; b = tmp;
+  }
+  float ratio = mcEdgeRatio(samples[a].distance, samples[b].distance, pc.iso);
+  position = mix(samples[a].position, samples[b].position, ratio);
+  color = mix(samples[a].color, samples[b].color, ratio);
+}
+
+bool triangle(Sample samples[8], int code, int t, out vec3 p[3], out vec3 color[3]) {
+  int base = code * 16 + t * 3;
+  // Reverse the classic table's inward winding, as the uniform extractor does.
+  crossing(tri_table[base], samples, p[0], color[0]);
+  crossing(tri_table[base + 2], samples, p[1], color[1]);
+  crossing(tri_table[base + 1], samples, p[2], color[2]);
+  if (all(equal(p[0], p[1])) || all(equal(p[1], p[2])) || all(equal(p[2], p[0]))) return false;
+  vec3 area = cross(p[1] - p[0], p[2] - p[0]);
+  return dot(area, area) > 0.0 && !any(isnan(area)) && !any(isinf(area));
+}
+
+// The usual eight-corner gradient is in parametric coordinates. Transform it
+// by the dual cell's Jacobian: cross-level cells are generally not cubes.
+// This also avoids unstable geometric normals on near-tangent sliver triangles.
+vec3 dualNormal(Sample s[8]) {
+  vec3 dx = s[1].position + s[2].position + s[5].position + s[6].position -
+            s[0].position - s[3].position - s[4].position - s[7].position;
+  vec3 dy = s[2].position + s[3].position + s[6].position + s[7].position -
+            s[0].position - s[1].position - s[4].position - s[5].position;
+  vec3 dz = s[4].position + s[5].position + s[6].position + s[7].position -
+            s[0].position - s[1].position - s[2].position - s[3].position;
+  float sx = s[1].distance + s[2].distance + s[5].distance + s[6].distance -
+             s[0].distance - s[3].distance - s[4].distance - s[7].distance;
+  float sy = s[2].distance + s[3].distance + s[6].distance + s[7].distance -
+             s[0].distance - s[1].distance - s[4].distance - s[5].distance;
+  float sz = s[4].distance + s[5].distance + s[6].distance + s[7].distance -
+             s[0].distance - s[1].distance - s[2].distance - s[3].distance;
+  float determinant = dot(dx, cross(dy, dz));
+  vec3 normal = cross(dy, dz) * sx + cross(dz, dx) * sy + cross(dx, dy) * sz;
+  float squared = dot(normal, normal);
+  if (determinant == 0.0 || !(squared > 0.0) || any(isnan(normal)) || any(isinf(normal))) return vec3(0.0);
+  return normal * (sign(determinant) * inversesqrt(squared));
+}
+
+void main() {
+  uint item = pc.leaf_base + gl_WorkGroupID.x;
+  if (item >= pc.leaf_count) return;
+  uint tid = gl_LocalInvocationID.x;
+  uint id = leaves[item];
+  if (id >= pc.node_capacity) {
+    if (tid == 0u) atomicOr(rejected, 1u);
+    return;
+  }
+  HierarchicalNode owner = vr_hierarchy_nodes[id];
+  if (owner.children != 0u || owner.level > pc.max_level || owner.ptr < 0 ||
+      owner.ptr % 512 != 0 || uint(owner.ptr) / 512u >= pc.node_capacity) {
+    if (tid == 0u) atomicOr(rejected, 1u);
+    return;
+  }
+  // Leave room for the +boundary vertex and the -1 incident-cell query;
+  // reject before any signed multiply, including INT_MIN input coordinates.
+  int limit = 2147483646 / (8 << int(owner.level)) - 1;
+  if (any(lessThan(owner.coord, ivec3(-limit))) || any(greaterThan(owner.coord, ivec3(limit)))) {
+    if (tid == 0u) atomicOr(rejected, 1u);
+    return;
+  }
+  uint masks[3];
+  uint count = 0u;
+  for (uint k = 0u; k < 3u; ++k) {
+    masks[k] = 0u;
+    uint candidate = tid + k * 256u;
+    if (candidate >= 729u) continue;
+    Sample samples[8];
+    int code;
+    if (!gather(owner, candidate, false, samples, code)) continue;
+    int n = mcCellTriangleCount(code);
+    for (int t = 0; t < n; ++t) {
+      vec3 p[3], color[3];
+      if (triangle(samples, code, t, p, color)) masks[k] |= 1u << uint(t);
+    }
+    count += bitCount(masks[k]);
+  }
+  partial[tid] = count;
+  barrier();
+  for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+    if (tid < stride) partial[tid] += partial[tid + stride];
+    barrier();
+  }
+  if (tid == 0u) {
+    block_base = atomicAdd(index_count, partial[0] * 3u) / 3u;
+    block_cursor = 0u;
+  }
+  barrier();
+  for (uint k = 0u; k < 3u; ++k) {
+    if (masks[k] == 0u) continue;
+    Sample samples[8];
+    int code;
+    if (!gather(owner, tid + k * 256u, true, samples, code)) continue;
+    vec3 gradient = dualNormal(samples);
+    uint first = block_base + atomicAdd(block_cursor, uint(bitCount(masks[k])));
+    for (int t = 0; t < 5; ++t) {
+      if ((masks[k] & (1u << uint(t))) == 0u) continue;
+      uint tri = first++;
+      if (tri >= pc.capacity) continue;
+      vec3 p[3], color[3];
+      triangle(samples, code, t, p, color);
+      vec3 normal = dot(gradient, gradient) > 0.0 ? gradient : normalize(cross(p[1] - p[0], p[2] - p[0]));
+      for (uint v = 0u; v < 3u; ++v) {
+        uint target = tri * 3u + v;
+        mcWriteVertex(target, p[v], normal, color[v]);
+        indices[target] = target;
+      }
+    }
+  }
+}

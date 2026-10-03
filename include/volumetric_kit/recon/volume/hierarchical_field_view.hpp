@@ -83,6 +83,8 @@ struct HierarchicalFieldView {
             std::uint32_t(std::numeric_limits<std::int32_t>::max()) / 512u ||
         leaf_count > node_capacity ||
         std::uint32_t(root_grid.num_blocks) > node_capacity ||
+        !std::isfinite(root_grid.voxel_size) ||
+        !std::isfinite(root_grid.trunc_dist) ||
         !std::isfinite(finest_voxel_size) || !(finest_voxel_size > 0.0f) ||
         root_grid.voxel_size != std::ldexp(finest_voxel_size, int(max_level))) {
       return Status::invalid_argument(

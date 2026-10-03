@@ -289,6 +289,14 @@ vr_target_warnings(recon_mesh_marching_cubes_sparse_test)
 add_test(NAME recon_mesh_marching_cubes_sparse
          COMMAND recon_mesh_marching_cubes_sparse_test)
 
+add_executable(recon_mesh_hierarchical_test
+               hierarchical_marching_cubes_test.cpp)
+target_link_libraries(recon_mesh_hierarchical_test
+                      PRIVATE volumetric_kit::recon_mesh Vulkan::Vulkan)
+vr_target_warnings(recon_mesh_hierarchical_test)
+add_test(NAME recon_mesh_hierarchical COMMAND recon_mesh_hierarchical_test)
+set_tests_properties(recon_mesh_hierarchical PROPERTIES SKIP_RETURN_CODE 77)
+
 # mesh MarchingCubesConfig: prove a consumer's extra buffer usage reaches the
 # vertex arena and index run -- on the first allocation AND across a grow -- and
 # that an unsupported bit is rejected at create(). recon itself never sets one,

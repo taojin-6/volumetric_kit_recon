@@ -1037,6 +1037,20 @@ dead vertices are merely unreachable, so the two buffers drift apart and
 either can be the binding one. `slot_count == 1` only, so it
 is off in `fuse_viewer` today — a `TODO(mesh)` on the class.
 
+`HierarchicalMarchingCubes` is the separate extractor for cell-centered,
+zero-origin dyadic leaves (`volume::HierarchicalFieldView`). Each 8³ leaf
+enumerates its 9³ primal vertices; the finest incident leaf, then the lowest
+(z, y, x) leaf coordinate, owns each dual cell. Cross-level corners resolve
+through the root hash and bounded child descent on the device. Repeated
+corners form degenerate hexahedra processed by the same MC tables; canonical
+actual-sample endpoint order keeps seams exact. Coincident-vertex triangles
+are discarded explicitly, and normals transform the eight-corner gradient
+by the dual cell's Jacobian. The shader owns the count and output; extraction
+reads back only the draw command and rejection status. The output ring follows
+the existing generation/release contract. This initial path always extracts
+the full leaf list and refuses vertex sharing and block spans. Room-scale
+performance remains unmeasured; it does not change the uniform extractor.
+
 ### texture
 
 `ProjectiveTexturer` rewrites every `Vertex::uv0` against one

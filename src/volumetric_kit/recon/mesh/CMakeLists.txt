@@ -18,7 +18,8 @@ set(_vr_mesh_generated_inc "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
 add_library(recon_mesh)
 add_library(volumetric_kit::recon_mesh ALIAS recon_mesh)
 
-target_sources(recon_mesh PRIVATE marching_cubes.cpp)
+target_sources(recon_mesh PRIVATE marching_cubes.cpp
+                                  hierarchical_marching_cubes.cpp)
 
 # Per-tier export header (VR_MESH_API / VR_MESH_STATIC_DEFINE), isolated from
 # the other tiers' so the macros never collide on one include path.
@@ -62,9 +63,11 @@ target_include_directories(
 # runtime shader files.
 include(vr_embed)
 vr_embed_shaders(
-  recon_mesh SHADERS
+  recon_mesh
+  SHADERS
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/marching_cubes_sparse.comp"
-  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/marching_cubes_sparse_shared.comp")
+  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/marching_cubes_sparse_shared.comp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/hierarchical_marching_cubes.comp")
 
 vr_target_warnings(recon_mesh)
 
