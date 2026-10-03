@@ -63,6 +63,11 @@ struct Sample {
   vec3 color;
   float distance;
 };
+// Invocation-private scratch, overwritten by every active gather. Passing this
+// array by value through triangle/crossing makes SPIRV-Cross generate several
+// 320-byte array copies per triangle; direct access preserves reference use in
+// MSL without requiring compiler-specific optimization flags.
+Sample samples[8];
 shared uint partial[256];
 shared uint block_base;
 shared uint block_cursor;
@@ -112,7 +117,7 @@ bool cellSigns(HierarchicalNode owner, uint candidate, out int code) {
   return code != 0 && code != 255;
 }
 
-bool gather(HierarchicalNode owner, uint candidate, bool need_color, out Sample samples[8], out int code) {
+bool gather(HierarchicalNode owner, uint candidate, bool need_color, out int code) {
   code = 0;
   ivec3 corner = ivec3(int(candidate % 9u), int((candidate / 9u) % 9u), int(candidate / 81u));
   int scale = 1 << int(owner.level);
@@ -140,7 +145,7 @@ bool gather(HierarchicalNode owner, uint candidate, bool need_color, out Sample 
   return true;
 }
 
-void crossing(int edge, Sample samples[8], out vec3 position, out vec3 color) {
+void crossing(int edge, out vec3 position, out vec3 color) {
   int a = edge_to_vert[2 * edge];
   int b = edge_to_vert[2 * edge + 1];
   // The same snapped edge can occupy different local MC edges in neighboring
@@ -154,12 +159,12 @@ void crossing(int edge, Sample samples[8], out vec3 position, out vec3 color) {
   color = mix(samples[a].color, samples[b].color, ratio);
 }
 
-bool triangle(Sample samples[8], int code, int t, out vec3 p[3], out vec3 color[3]) {
+bool triangle(int code, int t, out vec3 p[3], out vec3 color[3]) {
   int base = code * 16 + t * 3;
   // Reverse the classic table's inward winding, as the uniform extractor does.
-  crossing(tri_table[base], samples, p[0], color[0]);
-  crossing(tri_table[base + 2], samples, p[1], color[1]);
-  crossing(tri_table[base + 1], samples, p[2], color[2]);
+  crossing(tri_table[base], p[0], color[0]);
+  crossing(tri_table[base + 2], p[1], color[1]);
+  crossing(tri_table[base + 1], p[2], color[2]);
   if (all(equal(p[0], p[1])) || all(equal(p[1], p[2])) || all(equal(p[2], p[0]))) return false;
   vec3 area = cross(p[1] - p[0], p[2] - p[0]);
   return dot(area, area) > 0.0 && !any(isnan(area)) && !any(isinf(area));
@@ -168,19 +173,19 @@ bool triangle(Sample samples[8], int code, int t, out vec3 p[3], out vec3 color[
 // The usual eight-corner gradient is in parametric coordinates. Transform it
 // by the dual cell's Jacobian: cross-level cells are generally not cubes.
 // This also avoids unstable geometric normals on near-tangent sliver triangles.
-vec3 dualNormal(Sample s[8]) {
-  vec3 dx = s[1].position + s[2].position + s[5].position + s[6].position -
-            s[0].position - s[3].position - s[4].position - s[7].position;
-  vec3 dy = s[2].position + s[3].position + s[6].position + s[7].position -
-            s[0].position - s[1].position - s[4].position - s[5].position;
-  vec3 dz = s[4].position + s[5].position + s[6].position + s[7].position -
-            s[0].position - s[1].position - s[2].position - s[3].position;
-  float sx = s[1].distance + s[2].distance + s[5].distance + s[6].distance -
-             s[0].distance - s[3].distance - s[4].distance - s[7].distance;
-  float sy = s[2].distance + s[3].distance + s[6].distance + s[7].distance -
-             s[0].distance - s[1].distance - s[4].distance - s[5].distance;
-  float sz = s[4].distance + s[5].distance + s[6].distance + s[7].distance -
-             s[0].distance - s[1].distance - s[2].distance - s[3].distance;
+vec3 dualNormal() {
+  vec3 dx = samples[1].position + samples[2].position + samples[5].position + samples[6].position -
+            samples[0].position - samples[3].position - samples[4].position - samples[7].position;
+  vec3 dy = samples[2].position + samples[3].position + samples[6].position + samples[7].position -
+            samples[0].position - samples[1].position - samples[4].position - samples[5].position;
+  vec3 dz = samples[4].position + samples[5].position + samples[6].position + samples[7].position -
+            samples[0].position - samples[1].position - samples[2].position - samples[3].position;
+  float sx = samples[1].distance + samples[2].distance + samples[5].distance + samples[6].distance -
+             samples[0].distance - samples[3].distance - samples[4].distance - samples[7].distance;
+  float sy = samples[2].distance + samples[3].distance + samples[6].distance + samples[7].distance -
+             samples[0].distance - samples[1].distance - samples[4].distance - samples[5].distance;
+  float sz = samples[4].distance + samples[5].distance + samples[6].distance + samples[7].distance -
+             samples[0].distance - samples[1].distance - samples[2].distance - samples[3].distance;
   float determinant = dot(dx, cross(dy, dz));
   vec3 normal = cross(dy, dz) * sx + cross(dz, dx) * sy + cross(dx, dy) * sz;
   float squared = dot(normal, normal);
@@ -247,12 +252,11 @@ void main() {
     if (candidate >= 729u) continue;
     int code;
     if (!cellSigns(owner, candidate, code)) continue;
-    Sample samples[8];
-    if (!gather(owner, candidate, false, samples, code)) continue;
+    if (!gather(owner, candidate, false, code)) continue;
     int n = mcCellTriangleCount(code);
     for (int t = 0; t < n; ++t) {
       vec3 p[3], color[3];
-      if (triangle(samples, code, t, p, color)) masks[k] |= 1u << uint(t);
+      if (triangle(code, t, p, color)) masks[k] |= 1u << uint(t);
     }
     count += bitCount(masks[k]);
   }
@@ -269,17 +273,16 @@ void main() {
   barrier();
   for (uint k = 0u; k < 3u; ++k) {
     if (masks[k] == 0u) continue;
-    Sample samples[8];
     int code;
-    if (!gather(owner, tid + k * 256u, true, samples, code)) continue;
-    vec3 gradient = dualNormal(samples);
+    if (!gather(owner, tid + k * 256u, true, code)) continue;
+    vec3 gradient = dualNormal();
     uint first = block_base + atomicAdd(block_cursor, uint(bitCount(masks[k])));
     for (int t = 0; t < 5; ++t) {
       if ((masks[k] & (1u << uint(t))) == 0u) continue;
       uint tri = first++;
       if (tri >= pc.capacity) continue;
       vec3 p[3], color[3];
-      triangle(samples, code, t, p, color);
+      triangle(code, t, p, color);
       vec3 normal = dot(gradient, gradient) > 0.0 ? gradient : normalize(cross(p[1] - p[0], p[2] - p[0]));
       for (uint v = 0u; v < 3u; ++v) {
         uint target = tri * 3u + v;
