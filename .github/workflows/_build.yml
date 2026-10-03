@@ -381,6 +381,9 @@ jobs:
       - name: Installed IO package consumer
         if: steps.detect.outputs.present == 'true'
         run: |
+          # Container jobs on the self-hosted runners leave root-owned files in
+          # RUNNER_TEMP, so another leg's optional headers can outlive its job.
+          rm -rf "${RUNNER_TEMP}/recon-install"
           cmake --install build --prefix "${RUNNER_TEMP}/recon-install"
           cmake -S tests/install_io -B build/install-io \
             -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
