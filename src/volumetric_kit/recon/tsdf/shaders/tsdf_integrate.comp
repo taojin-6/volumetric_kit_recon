@@ -172,10 +172,10 @@ void main() {
   float u = px.x;
   float v = px.y;
   float d = sample_depth(u, v);  // bilinear, with nearest-neighbour fallback
-  // Reject out-of-range depth; the negated compare also drops NaN/inf holes
-  // (every comparison with NaN is false), matching hash_allocate_depth.comp so
-  // integration accepts exactly the near/far range allocation did.
-  if (!(d >= cam.min_depth && d <= cam.max_depth)) {
+  // Reject zero holes and out-of-range depth; the negated compare also drops
+  // NaN/inf holes (every comparison with NaN is false), matching
+  // hash_allocate_depth.comp so integration accepts exactly what allocation did.
+  if (!(d > 0.0 && d >= cam.min_depth && d <= cam.max_depth)) {
     return;  // invalid / out-of-range / non-finite depth
   }
 

@@ -87,14 +87,16 @@ class VR_CORE_API DescriptorPool {
 ///        typed update helpers.
 ///
 /// Freely copyable -- it borrows the set handle rather than owning it.
-/// Copies share the write counter used to reject stale command batches.
+/// Copies share the write counter used to reject stale command batches. As
+/// for the `VkDescriptorSet` itself, writes through any copy need external
+/// synchronization.
 class VR_CORE_API DescriptorSet {
  public:
   DescriptorSet() noexcept = default;
 
   /// @brief Wrap an already-allocated set. Called by @ref
   /// DescriptorPool::allocate.
-  DescriptorSet(VkDevice device, VkDescriptorSet set) noexcept
+  DescriptorSet(VkDevice device, VkDescriptorSet set)
       : state_(std::make_shared<State>(State{device, set, 0})) {}
 
   /// @brief Bind a storage buffer (SSBO) at @p binding.

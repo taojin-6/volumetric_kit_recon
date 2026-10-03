@@ -296,6 +296,48 @@ int nonfinite_depth_taps_case(const vr_test::Gpu& ctx) {
   return 0;
 }
 
+// Zero is a missing measurement even when the near bound admits it: a hole
+// neither allocates the block at the camera nor fuses a surface there.
+int zero_depth_case(const vr_test::Gpu& ctx) {
+  vol::VoxelGridParams gp{};
+  gp.block_size = 8;
+  gp.voxels_per_block = 512;
+  gp.bucket_size = 8;
+  gp.num_buckets = 128;
+  gp.num_blocks = 1024;
+  gp.max_chain = 128;
+  gp.voxel_size = 0.125f;
+  gp.trunc_dist = 0.5f;  // spans the voxels just in front of the camera
+  const vol::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
+                                      {"weight", sizeof(float)}};
+  auto integrator = vr::tsdf::TsdfIntegrator::create(ctx.device, ctx.allocator);
+  CHECK(integrator.ok());
+  auto made =
+      vol::VoxelBlockGrid::create(ctx.device, ctx.allocator, gp, attrs, 2);
+  CHECK(made.ok());
+  auto grid = std::move(made).value();
+  vr::DepthCameraParams cam{};
+  cam.fx = cam.fy = 1.0f;
+  cam.cx = cam.cy = 1.25f;
+  cam.width = cam.height = 3;
+  cam.min_depth = 0.0f;
+  cam.max_depth = 5.0f;
+  cam.cam_to_world = vr::Mat4f(1.0f);
+  const std::vector<float> depth(9, 0.0f);
+  CHECK(grid.map().allocate_from_depth(depth.data(), cam).ok());
+  auto none = grid.map().compact_active_blocks();
+  CHECK(none.ok() && none->empty());
+
+  const vol::BlockIndex block{};  // the block at the camera
+  CHECK(grid.map().allocate(&block, 1).value() == 0);
+  CHECK(integrator->integrate(grid, depth.data(), cam, 100.0f).ok());
+  auto weight =
+      vr_test::read_attribute<float>(ctx.device, ctx.allocator, grid, "weight");
+  CHECK(weight.ok());
+  for (float w : weight.value()) CHECK(w == 0.0f);
+  return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -326,6 +368,7 @@ int main() {
     return 1;
   }
   CHECK(nonfinite_depth_taps_case({device.value(), allocator.value()}) == 0);
+  CHECK(zero_depth_case({device.value(), allocator.value()}) == 0);
 
   // Copies of a grid attribute; the arrays are device-local.
   const auto floats = [&](const vol::VoxelBlockGrid& g, const char* name) {

@@ -290,7 +290,7 @@ bool occluded_ok(DepthCameraParams c, uint base, vec2 px, float zc,
     return false;
   }
   float d = sample_depth(c, base, px, threshold);
-  if (!(d >= c.min_depth && d <= c.max_depth)) {
+  if (!(d > 0.0 && d >= c.min_depth && d <= c.max_depth)) {
     return false;  // hole / non-finite / out-of-range: no line of sight proof
   }
   diff = abs(d - zc);

@@ -317,7 +317,7 @@ int main() {
   // before allocating blocks or updating any voxel, even on unified memory.
   const vr::Buffer unknown(depth_buf->handle(), depth_buf->size(),
                            depth_buf->usage(), depth_buf->sharing_mode(),
-                           nullptr, {});
+                           nullptr, {}, std::nullopt);
   CHECK(
       device_grid->map().allocate_from_depth(unknown, cam).status().domain() ==
       invalid);

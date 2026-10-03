@@ -121,7 +121,9 @@ struct MeshIntegrateStats {
 /// same mesh writes the same bytes.
 /// Counts, prefix sums, fill cursors and occupied bins stay on the device.
 /// Only validation totals and bounded dispatch ranges are read back. Scratch
-/// grows as needed and is retained; each call refreshes the mesh and bins.
+/// grows as needed and is retained until this integrator is destroyed: about
+/// 16 bytes per grid block slot, plus the largest mesh's inputs and bins.
+/// Each call refreshes the mesh and bins.
 ///
 /// A voxel's cost is its bin, which a mesh near the grid's resolution keeps in
 /// the hundreds. A mesh far finer than the voxels is where it grows, so a bin

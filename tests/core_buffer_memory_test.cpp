@@ -157,7 +157,7 @@ int main() {
   // An adoption with no memory provenance must not silently turn into a
   // device input, even when the actual allocation happens to be local.
   vr::Buffer unknown(helper->handle(), kBytes, kUsage,
-                     VK_SHARING_MODE_EXCLUSIVE, nullptr, {});
+                     VK_SHARING_MODE_EXCLUSIVE, nullptr, {}, std::nullopt);
   CHECK(!unknown.memory_info() && !unknown.is_device_local());
   const auto invalid = vr::Status::Code::InvalidArgument;
   CHECK(vr::StorageInput(unknown).check("unknown", kBytes).domain() == invalid);

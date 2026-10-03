@@ -60,10 +60,11 @@ class VR_CORE_API Buffer {
   /// @param memory   Actual backing memory metadata, or `std::nullopt` when
   ///                 unknown. An adopter supplying it must query the bound
   ///                 allocation's selected memory type, not infer it from
-  ///                 usage.
+  ///                 usage. Required, so an adopter decides: a buffer with
+  ///                 unknown memory is refused as a device input.
   Buffer(VkBuffer handle, VkDeviceSize size, VkBufferUsageFlags usage,
          VkSharingMode sharing, void* mapped, std::function<void()> deleter,
-         std::optional<BufferMemoryInfo> memory = std::nullopt) noexcept;
+         std::optional<BufferMemoryInfo> memory) noexcept;
 
   ~Buffer();
   Buffer(Buffer&& other) noexcept;

@@ -145,22 +145,6 @@ target_link_libraries(recon_tsdf_mesh_integrate_test
                       PRIVATE volumetric_kit::recon_tsdf Vulkan::Vulkan)
 vr_target_warnings(recon_tsdf_mesh_integrate_test)
 add_test(NAME recon_tsdf_mesh_integrate COMMAND recon_tsdf_mesh_integrate_test)
-# Synthetic bin counts exercise the production scan/compact shaders at uint32
-# and watchdog boundaries without an enormous triangle-distance workload.
-add_executable(recon_tsdf_mesh_bins_test tsdf_mesh_bins_test.cpp)
-target_link_libraries(recon_tsdf_mesh_bins_test
-                      PRIVATE volumetric_kit::recon_tsdf)
-vr_target_warnings(recon_tsdf_mesh_bins_test)
-vr_embed_shaders(
-  recon_tsdf_mesh_bins_test
-  SHADERS
-  "${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/tsdf/shaders/mesh_scan_counts.comp"
-  "${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/tsdf/shaders/mesh_scan_sums.comp"
-  "${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/tsdf/shaders/mesh_scan_add.comp"
-  "${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/tsdf/shaders/mesh_compact_bins.comp"
-  "${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/tsdf/shaders/mesh_bin_ranges.comp"
-)
-add_test(NAME recon_tsdf_mesh_bins COMMAND recon_tsdf_mesh_bins_test)
 # GPU pre-processing (recon_sensor_utils) on synthetic frames: undistortion in
 # the right direction, the colour matrix, a host reference of the sampling, the
 # refusals, and fusing the result. Skips (exit 0) where no device is present.

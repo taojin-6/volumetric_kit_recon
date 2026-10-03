@@ -14,6 +14,12 @@ std::optional<std::uint32_t> find_memory_type(const Device& device,
                                               std::uint32_t type_bits,
                                               VkMemoryPropertyFlags required,
                                               VkMemoryPropertyFlags excluded) {
+  // Using an AMD coherent type without deviceCoherentMemory violates
+  // VUID-vkAllocateMemory-deviceCoherentMemory-02790; lazy memory is for
+  // transient attachments.
+  excluded |= VK_MEMORY_PROPERTY_PROTECTED_BIT |
+              VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT |
+              VK_MEMORY_PROPERTY_DEVICE_COHERENT_BIT_AMD;
   VkPhysicalDeviceMemoryProperties memory{};
   vkGetPhysicalDeviceMemoryProperties(device.physical_device(), &memory);
   for (std::uint32_t i = 0; i < memory.memoryTypeCount; ++i) {
