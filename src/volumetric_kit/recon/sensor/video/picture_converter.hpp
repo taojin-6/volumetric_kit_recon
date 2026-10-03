@@ -7,6 +7,7 @@
 // Codec-neutral. Internal.
 
 #include <optional>
+#include <vector>
 
 #include "ffmpeg.hpp"
 #include "volumetric_kit/recon/core/color_space.hpp"
@@ -71,6 +72,7 @@ class PictureConverter {
   SwsContextPtr sws_;
   Setup setup_;
   FramePtr out_;
+  std::vector<std::uint8_t> rgb_;
 };
 
 }  // namespace volumetric_kit::recon::sensor::video

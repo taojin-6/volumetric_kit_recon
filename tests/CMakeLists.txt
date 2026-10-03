@@ -526,11 +526,8 @@ if(VR_WITH_FFMPEG)
 
   add_executable(recon_sensor_video_jpeg_test sensor_video_jpeg_test.cpp)
   target_link_libraries(
-    recon_sensor_video_jpeg_test
-    PRIVATE volumetric_kit::recon_sensor_video
-            volumetric_kit::recon_sensor_utils PkgConfig::VR_FFMPEG)
-  target_include_directories(recon_sensor_video_jpeg_test
-                             PRIVATE ${_vr_video_src})
+    recon_sensor_video_jpeg_test PRIVATE volumetric_kit::recon_sensor_video
+                                         volumetric_kit::recon_sensor_utils)
   target_compile_definitions(
     recon_sensor_video_jpeg_test
     PRIVATE VR_JPEG_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data/jpeg"

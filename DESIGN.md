@@ -1106,9 +1106,11 @@ depth sampled at the nearest pixel, colour bilinearly and converted from
 Y'CbCr in the same pass, each camera keeping its intrinsics and pose.
 `ChromaLocation` follows the picture through `DecodedPicture`, the Orbbec
 frame handoff and `YuvImage`: JPEG is centred, and HEVC keeps the decoded tag
-with left alignment when unspecified. Host resampling preserves that location,
-and the GPU samples it consistently for host planes, device buffers and NV12
-images. Existing callers that leave the field unset keep left alignment. The
+with left alignment when unspecified. Host resampling preserves that location;
+with libswscale before 9, vertically subsampled inputs go through planar RGB
+before packing RGB24 to avoid its packed converter's rounded chroma weights.
+The GPU samples the location consistently for host planes, device buffers and
+NV12 images. Existing callers that leave the field unset keep left alignment. The
 resulting `DeviceFrame` feeds the `Buffer` overloads of `allocate_from_depth` and
 `integrate` (and `ColorFrame::buffer`, with `coverage_in_alpha`, since a
 pixel the lens maps outside the picture is a 0 word), so nothing is

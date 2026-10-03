@@ -115,8 +115,8 @@ int test_resolve_encoding() {
 }
 
 // One converter follows changes to the chroma tag, including when swscale
-// resamples or converts to RGB. The same continuous ramps give neutral grey
-// at luma (8, 8), independently of where their chroma samples were placed.
+// resamples or converts to RGB. The same continuous ramps give the same RGB
+// at even and odd luma pixels, regardless of their chroma sample locations.
 int test_chroma_locations() {
   using Location = sensor::ChromaLocation;
   struct Case {
@@ -161,14 +161,23 @@ int test_chroma_locations() {
         CHECK(picture.ok());
         CHECK(picture->chroma_location == c.location);
         if (layout == VideoPixelLayout::Rgb24) {
-          const auto* pixel =
-              picture->plane[0] + 8 * picture->stride[0] + 3 * 8;
-          for (int channel = 0; channel < 3; ++channel) {
-            if (std::abs(pixel[channel] - 128) > 2) {
-              std::fprintf(stderr, "%s chroma %d channel %d: %d, want 128\n",
-                           av_get_pix_fmt_name(format), c.tag, channel,
-                           pixel[channel]);
-              CHECK(false);
+          for (int y : {7, 8}) {
+            for (int x : {7, 8}) {
+              const auto* pixel =
+                  picture->plane[0] + y * picture->stride[0] + 3 * x;
+              const auto want =
+                  yuv_reference::rgb(128, 48 + 10 * x, 48 + 10 * y,
+                                     picture->matrix, picture->full_range);
+              for (int channel = 0; channel < 3; ++channel) {
+                if (std::abs(pixel[channel] - want[channel]) > 2) {
+                  std::fprintf(stderr,
+                               "%s chroma %d at (%d, %d) channel %d: %d, "
+                               "want %d\n",
+                               av_get_pix_fmt_name(format), c.tag, x, y,
+                               channel, pixel[channel], want[channel]);
+                  CHECK(false);
+                }
+              }
             }
           }
         } else {

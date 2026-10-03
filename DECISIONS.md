@@ -8420,10 +8420,25 @@ depth taps with zero, NaN and both infinities; and near bounds 0.1, 0 and
 1e-8 for single-view and multi-view texturing. Chroma tests use continuous
 ramps for all six locations and verify host resampling, storage-layout
 equivalence, and the SDK frame handoff. JPEG software and VideoToolbox device
-pictures prepare within 2 channel codes of FFmpeg's explicitly centred
-conversion, while the explicitly left-aligned reference differs by at least
-30 codes on the same fixture. CUDA/nvJPEG and physical-camera capture were
-not run on this host.
+pictures prepare within 1 channel code of an independent centred-sampling
+and colour-matrix reference, while its left-aligned control differs by at
+least 30 codes on the same fixture. CUDA/nvJPEG and physical-camera capture
+were not run on this host.
+
+**CI exposed an older swscale interpolation bug.** Ubuntu 22.04 and 24.04
+failed the host chroma ramp and the JPEG test's original swscale reference;
+the current library passed both. Before libswscale 9, packed RGB's
+one-luma-row path rounds vertical chroma weights to zero or one half,
+including the one-quarter and three-quarter weights centred 4:2:0 needs
+([FFmpeg fix 095f8038fa](https://github.com/FFmpeg/FFmpeg/commit/095f8038fa9180842cd38d4d61c7c47a02aad9ed)).
+Host RGB conversion on those libraries now uses the planar RGB filter and
+interleaves its output. The JPEG GPU test uses independently calculated
+sampling weights and matrix constants, so a broken library cannot define
+the expected image. The host ramps cover even and odd rows and columns.
+The compatibility targets remain the distro FFmpeg packages in CI's Ubuntu
+22.04, 24.04 and 26.04 jobs; no package upgrade is required. Local reproductions
+of the converter and JPEG tests pass with FFmpeg 4.4.6, 6.1.1 and 9.0.2,
+without relaxing numerical tolerances.
 
 ## Measured lessons
 
