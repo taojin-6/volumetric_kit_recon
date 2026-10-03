@@ -248,9 +248,22 @@ int main() {
   CHECK(vr_test::write_back(dev, alloc, *before->tsdf, tsdf));
   CHECK(vr_test::write_back(dev, alloc, *before->weight, weight));
   CHECK(vr_test::write_back(dev, alloc, *before->color, color));
+  // Caller-owned storage can reserve more than this grid needs. Topology
+  // operations consume only the current node prefix and leave its tail alone.
+  const auto request_capacity = grid.node_capacity() + 257u;
   auto requests = vr::device_storage_buffer(
-      alloc, grid.node_capacity() * sizeof(std::uint32_t));
+      alloc, request_capacity * sizeof(std::uint32_t));
   CHECK(requests.ok());
+  constexpr std::uint32_t tail_sentinel = 0xdeadbeefu;
+  CHECK(vr_test::write_back(
+      dev, alloc, requests.value(),
+      std::vector<std::uint32_t>(request_capacity, tail_sentinel)));
+  auto short_requests = vr::device_storage_buffer(
+      alloc, (grid.node_capacity() - 1u) * sizeof(std::uint32_t));
+  CHECK(short_requests.ok());
+  CHECK(!grid.split(short_requests.value(), 1));
+  CHECK(!grid.merge(short_requests.value(), 1));
+  CHECK(before->is_current());
   std::vector<std::uint32_t> desired(grid.node_capacity(),
                                      std::numeric_limits<std::uint32_t>::max());
   for (auto id : leaves_before.value()) desired[id] = 0;
@@ -496,6 +509,12 @@ int main() {
   CHECK(split.ok() && split->split == 1);
   split = destination.split(requests.value(), 1);
   CHECK(split.ok() && split->split == 1);  // both returned groups are reusable
+
+  auto requests_after = vr_test::read_back<std::uint32_t>(
+      dev, alloc, requests.value(), request_capacity);
+  CHECK(requests_after.ok());
+  for (std::size_t i = desired.size(); i < requests_after->size(); ++i)
+    CHECK(requests_after.value()[i] == tail_sentinel);
 
   // A surface just before x=1 selects nearest root 1. With T=1 the root -1
   // can still contain fine samples within the band. Allocation-only padding

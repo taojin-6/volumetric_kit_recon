@@ -410,10 +410,12 @@ Result<HierarchicalSplitStats> HierarchicalGrid::split(
     if (!valid())
       return Status::invalid_argument("HierarchicalGrid: empty grid");
     Impl& p = *impl_;
+    const VkDeviceSize request_bytes =
+        VkDeviceSize(p.capacity) * sizeof(std::uint32_t);
     if (!requests.valid() ||
         (requests.usage() & VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) == 0 ||
-        requests.size() < VkDeviceSize(p.capacity) * sizeof(std::uint32_t) ||
-        !(transfer_weight_cap > 0.0f) || !std::isfinite(transfer_weight_cap)) {
+        requests.size() < request_bytes || !(transfer_weight_cap > 0.0f) ||
+        !std::isfinite(transfer_weight_cap)) {
       return Status::invalid_argument("HierarchicalGrid: invalid split input");
     }
     if (max_splits == 0) return HierarchicalSplitStats{};
@@ -422,7 +424,11 @@ Result<HierarchicalSplitStats> HierarchicalGrid::split(
     GpuStageScope stage(metrics, p.timer, "hierarchy split");
     bind(p.split_kernel, 0, p.nodes);
     bind(p.split_kernel, 1, p.leaves);
-    bind(p.split_kernel, 2, requests);
+    // External storage may be larger than maxStorageBufferRange. Bind only
+    // its required prefix, which is smaller than the sample array checked
+    // against that device limit at grid creation.
+    p.split_kernel.set.write_storage_buffer(2, requests.handle(), 0,
+                                            request_bytes);
     bind(p.split_kernel, 3, p.tsdf);
     bind(p.split_kernel, 4, p.weight);
     bind(p.split_kernel, 5, p.color);
@@ -461,10 +467,11 @@ Result<HierarchicalMergeStats> HierarchicalGrid::merge(
     if (!valid())
       return Status::invalid_argument("HierarchicalGrid: empty grid");
     Impl& p = *impl_;
+    const VkDeviceSize request_bytes =
+        VkDeviceSize(p.capacity) * sizeof(std::uint32_t);
     if (!requests.valid() ||
         (requests.usage() & VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) == 0 ||
-        requests.size() < VkDeviceSize(p.capacity) * sizeof(std::uint32_t) ||
-        stable_updates == 0) {
+        requests.size() < request_bytes || stable_updates == 0) {
       return Status::invalid_argument("HierarchicalGrid: invalid merge input");
     }
     if (max_merges == 0) return HierarchicalMergeStats{};
@@ -472,7 +479,8 @@ Result<HierarchicalMergeStats> HierarchicalGrid::merge(
     if (field.leaf_count == 0) return HierarchicalMergeStats{};
     GpuStageScope stage(metrics, p.timer, "hierarchy merge");
     bind(p.merge_candidate_kernel, 0, p.nodes);
-    bind(p.merge_candidate_kernel, 1, requests);
+    p.merge_candidate_kernel.set.write_storage_buffer(1, requests.handle(), 0,
+                                                      request_bytes);
     bind(p.merge_candidate_kernel, 2, p.merge_ages);
     bind(p.merge_candidate_kernel, 3, p.merge_candidates);
     bind(p.merge_candidate_kernel, 4, p.stats);

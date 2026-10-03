@@ -66,13 +66,15 @@ struct HierarchicalMergeStats {
 /// VoxelBlockGrid. All topology calls invalidate previously returned views.
 /// Calls and borrowed-buffer consumers must be externally serialized.
 ///
-/// Desired levels describe one topology-update snapshot. Inactive node slots
-/// must contain UINT32_MAX. One update may call split once and then merge once
-/// with that same buffer: new children have no request, and merge only frees
-/// slots. Regenerate requests before the next update, or after allocation or
-/// clear. In particular, merge followed by split must use fresh requests,
-/// because split can reuse node indices freed by merge. Acquire a fresh field
-/// view after the update before integration or meshing.
+/// For desired levels derived from a topology-specific observation snapshot,
+/// inactive node slots must contain UINT32_MAX. One update may call split once
+/// and then merge once with that same snapshot: new children have no request,
+/// and merge only frees slots. Regenerate observation requests before the next
+/// update, or after allocation or clear. In particular, merge followed by split
+/// needs a fresh snapshot because split can reuse node indices freed by merge.
+/// Deliberate node-independent policies, such as a constant target level, may
+/// be reused across topology changes. Acquire a fresh field view after the
+/// update before integration or meshing.
 class VR_VOLUME_API HierarchicalGrid {
  public:
   /// @brief Construct a grid and zero its device-local storage.
@@ -136,13 +138,14 @@ class VR_VOLUME_API HierarchicalGrid {
 
   /// @brief Split requested leaves, subject to capacity and an event budget.
   ///
-  /// A request is one desired level per node; UINT32_MAX means no request and
-  /// is required in inactive slots. Follow the class's single-update ordering
-  /// when sharing a request buffer with merge.
+  /// A request is one desired level per node; UINT32_MAX means no request.
+  /// Observation snapshots require that sentinel in inactive slots and follow
+  /// the class's single-update ordering when sharing requests with merge.
   /// Only current leaves with a finer desired level qualify. A complete group
   /// of eight children is reserved before the parent
   /// publishes it; the parent's payload is retained. Requests are not reset.
   /// @param requests Desired-level buffer with at least node_capacity uints.
+  ///                 Only that prefix is bound; trailing storage is ignored.
   /// @param max_splits Maximum parents split by this call; zero does no work.
   /// @param transfer_weight_cap Maximum inherited observation weight, finite
   ///                            and positive. Interpolated confidence is also
