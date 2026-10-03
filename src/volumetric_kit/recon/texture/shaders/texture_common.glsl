@@ -366,7 +366,8 @@ bool color_sees(DepthCameraParams c, uint base, vec3 q, vec2 px, vec3 e,
     }
     float z = 1.0 / mix(inv_q, inv_end, a);
     float d = depth[base + uint(p.y + 0.5) * c.width + uint(p.x + 0.5)];
-    if (d >= c.min_depth && d <= c.max_depth && d < z - threshold) {
+    // Zero is a missing measurement, even when the accepted near bound is 0.
+    if (d > 0.0 && d >= c.min_depth && d <= c.max_depth && d < z - threshold) {
       return false;
     }
   }

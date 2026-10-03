@@ -673,7 +673,7 @@ int main() {
   // single-camera pass carries the triangle's vertices under the right-hand
   // colour camera and textures them under the others, while a triangle far
   // from the occluder is textured under all three.
-  for (float min_depth : {0.1f, 0.0f, 1e-8f}) {
+  for (float min_depth : {0.1f, 1e-8f, 0.0f}) {
     vr::DepthCameraParams sight_cam0 = cam0;
     vr::DepthCameraParams sight_cam2 = cam2;
     sight_cam0.min_depth = min_depth;
@@ -715,6 +715,29 @@ int main() {
         const bool carried = first == &right && i < 3;
         CHECK((single.vertices[i].uv0.x < 0.0f) == carried);
       }
+    }
+
+    // Replace the occluder with missing measurements. A zero-depth hole
+    // cannot block the colour camera, even when zero is inside the accepted
+    // depth range. The right-hand view must keep both triangles in either
+    // pass, and win over the less squarely facing clear view.
+    for (std::uint32_t v = 100; v <= 140; ++v) {
+      for (std::uint32_t u = 160; u <= 200; ++u) {
+        occluded[v * kW + u] = 0.0f;
+      }
+    }
+    const std::vector<tex::TextureView> two = {right, clear};
+    auto layout = tex::side_by_side_atlas(two, texturer.max_atlas_extent());
+    CHECK(layout.ok());
+    rmesh::Mesh multi = fringe;
+    CHECK(texturer.texture(multi, two, layout.value()).ok());
+    rmesh::Mesh single = fringe;
+    CHECK(texturer.texture(single, right).ok());
+    for (const rmesh::Vertex& vertex : single.vertices) {
+      CHECK(vertex.uv0.x >= 0.0f && vertex.uv0.y >= 0.0f);
+    }
+    for (std::size_t t = 0; t < 2; ++t) {
+      if (check_triangle(multi, t, 0, two, layout.value()) != 0) return 1;
     }
   }
 

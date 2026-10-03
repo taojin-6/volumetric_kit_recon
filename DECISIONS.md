@@ -259,7 +259,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   Shared instructions live in a concise AGENTS.md; CLAUDE.md imports it, DESIGN.md holds implementation detail, and DECISIONS.md holds the decision index and rationale.
 - [**2026-10-02**](#2026-10-02--gpu-regressions-guard-span-ownership-chroma-placement-descriptor-aliases-invalid-depth-taps-and-zero-near-visibility) —
   GPU regressions guard span ownership, chroma placement, descriptor aliases,
-  invalid depth taps, and zero-near visibility.
+  invalid depth taps, and zero-near visibility; zero holes never occlude a
+  colour sight line.
 
 ## Decision record
 
@@ -8411,6 +8412,15 @@ Five correctness reproductions exposed gaps in otherwise passing tests.
   colour camera at depth zero then ends the walk at the image edge, and a
   tiny positive near bound cannot exhaust the 64 samples outside the image.
   The registered-camera case still has no segment to walk.
+
+**Follow-up: zero holes are not occluders.** The repaired sight-line walk
+reached a range-only check that admitted a zero depth when `min_depth` was
+zero. Require a strictly positive measurement before the range and occlusion
+comparisons. Replacing the fixture's 1.5 m occluder with zero holes must keep
+the colour camera visible in the single-view pass and let it win the
+multi-view selection at near bounds 0.1, 1e-8 and 0. The GPU regression fails
+without the positive-depth guard; the existing positive occluder still blocks
+the camera at all three near bounds.
 
 Verification: Release on Apple M5 Max through MoltenVK, FFmpeg and Orbbec
 enabled; all 57 CTests pass with `VR_TEST_HEVC_BACKEND=videotoolbox`.
