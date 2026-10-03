@@ -9142,10 +9142,12 @@ segment's steps are one run, and sizes each segment's output slot at one
 word per step plus the state. A second batch writes every block's steps in
 parallel (`rans_ops.comp`, `start | freq << 16`), runs one invocation per
 segment over its run with `RansWriter::finish`'s integer arithmetic
-(`rans_encode.comp`), packs the streams with a scan and a gather, and reads
-back the segment lengths and the payload. The payload is read up to 32 bytes
-a block with the lengths, and any rest after. The container comes from
-`assemble_intra_frame`, which the host writer now uses too.
+(`rans_encode.comp`), packs the streams with a scan and a gather sized from
+the payload by an indirect dispatch, and reads back the segment lengths and
+the payload. The payload is read up to the last frame's bytes per block plus
+25% (32 before any frame) with the lengths, and any rest after. The
+container comes from `assemble_intra_frame`, which the host writer now uses
+too and which checks the header fields and sections it is given.
 
 **Memory, discrete first.** Every bulk buffer is device-local and retained
 (`ensure_device_scratch`), and the host reaches them only through
@@ -9175,7 +9177,8 @@ measured 2.60 through MoltenVK, so it was reverted. On the RTX 5090 the
 separate walk took room0 at R = 64 from 3.95 to 1.50 ms.
 
 **Measured**, Release, host / device `..rans encode` ms, frames identical in
-each pair. Room0 at 1 cm codes every frame of 60 (14,728 blocks); Rafa2 is
+each pair. The device's counting pass shares the forward's batch, so it is
+timed in `..forward`, not here; the whole-encode figures below include it. Room0 at 1 cm codes every frame of 60 (14,728 blocks); Rafa2 is
 the 1.7 m normalized mesh, coded 21 times in a row by a temporary loop in
 `codec_mesh`, not committed:
 
@@ -9199,7 +9202,10 @@ host's the whole frame, so the device loses on a frame of few segments: it
 breaks even near 20 segments on the RTX 5090 and 45 on the M5 Max. The
 choice changes only the time, so `EntropyCoding::kAuto`, the default, codes
 on the device from `kMinDeviceSegments` (48) and on the host below.
-`kHost` and `kDevice` force one.
+`kHost` and `kDevice` force one. `kAuto` builds the device coder at its
+first device frame, and codes on the host any frame the device could not:
+one past `maxStorageBufferRange` or free memory, or kernels that do not
+build. Only `kDevice` reports those failures.
 
 **Not done.** Decoding stays on the host, a `TODO(codec)` in the decoder.
 The tables are still normalized on the host, which costs the second

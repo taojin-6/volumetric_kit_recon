@@ -1226,8 +1226,9 @@ Bulk buffers are device-local and retained; the bus carries the counts, four
 bytes a block each way, and the payload, against 64 + 2K bytes a block of
 coefficients and masks on the host path. A segment is one serial chain, so
 `kAuto`, the default, codes on the device from `kMinDeviceSegments` (48)
-segments and on the host below; smaller segments give the device
-parallelism at a few percent of size.
+segments and on the host below, and on the host too for a frame the device
+cannot code; smaller segments give the device parallelism at a few percent
+of size.
 `Decoder::decode(frame, grid)` leaves the caller's grid holding exactly the
 frame. It merges the grid's sorted active set with the frame's
 coordinates, removing, allocating, and keeping shared blocks in their

@@ -205,7 +205,7 @@ vr::Status run(const Options& opt) {
 
   if (opt.sweep) {
     VR_TRY(vr_example::run_codec_sweep(device, allocator, volume, reference,
-                                       extractor, stream.player()));
+                                       extractor, opt.codec, stream.player()));
   }
   return {};
 }

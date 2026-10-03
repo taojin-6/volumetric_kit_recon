@@ -209,7 +209,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - `codec`: **rANS encoding on the device.** `EncoderConfig::entropy` picks
   `EntropyCoding::kAuto` (the default: the device from 48 segments, the
-  host below), `kHost` or `kDevice`; all write the same bytes. On the device
+  host below or when the device cannot code the frame), `kHost` or
+  `kDevice`; all write the same bytes. On the device
   the coefficients stay in VRAM and only symbol counts and the coded frame
   cross the bus. Room0's encode at 1 cm goes from 8.98 to 3.12 ms on M5 Max
   and from 10.67 to 3.06 ms on RTX 5090. See the 2026-10-03 decision.
