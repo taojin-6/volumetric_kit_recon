@@ -147,7 +147,7 @@ on `e4db453`):
 adaptive +7.93% and the uniform path with adaptive code present −0.73%,
 using medians of three interleaved 400-frame run means. Adaptive p95/p99
 latency is slower; this does not establish a tail-latency or cross-GPU win.
-The stack rebased onto `ab0e738` has not been retimed.
+The stack rebased through PRs #146 and #145 onto `2424f40` has not been retimed.
 Those recorded outputs improve detail-region p95 distances to the 5 mm
 proxy, while overall/planar distances and the 5 mm F-score are worse. See
 [H2 measurements and reproduction](PERF.md#h2--online-hierarchical-room-experiment-draft)
