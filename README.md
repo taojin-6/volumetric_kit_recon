@@ -147,9 +147,14 @@ on `e4db453`):
 adaptive +7.93% and the uniform path with adaptive code present −0.73%,
 using medians of three interleaved 400-frame run means. Adaptive p95/p99
 latency is slower; this does not establish a tail-latency or cross-GPU win.
-The stack rebased through PRs #146 and #145 onto `2424f40` has not been retimed.
-Those recorded outputs improve detail-region p95 distances to the 5 mm
-proxy, while overall/planar distances and the 5 mm F-score are worse. See
+On the RTX 5090, the same configuration at baseline `63ef33a` and candidate
+`411f0ae` (both based on `2424f40`) costs 2.753 ms/frame versus 2.402 ms
+uniformly: **+14.62%, above the provisional +10% target**. Disabled overhead
+is within the 5% gate; its negative difference does not establish a speedup
+given the run variation.
+Both platforms improve detail-region p95 distances to the 5 mm proxy, while
+overall/planar distances and the 5 mm F-score are worse. The later rebase
+onto `313d8ec` is correctness-tested but has not been retimed. See
 [H2 measurements and reproduction](PERF.md#h2--online-hierarchical-room-experiment-draft)
 for the paired baseline, proxy quality, timing boundaries and remaining
 validation. Static replay does not establish moving-body reconstruction or

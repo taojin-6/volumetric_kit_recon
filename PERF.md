@@ -120,7 +120,7 @@ kernels.
 
 | id | item | expected win | effort | depends on | status |
 |---|---|---|---|---|---|
-| H1 | Record per-frame online timings for adaptive-grid evaluation | measures latency distributions; adaptive performance remains unmeasured | S | — | implemented on `feat/hierarchical-benchmark`, awaiting review |
+| H1 | Record per-frame online timings for adaptive-grid evaluation | measures latency distributions; adaptive evidence is tracked in H2 | S | — | implemented on `feat/hierarchical-benchmark`, awaiting review |
 | P8 | Sample the viewer's GPU timing | measured 0.04–0.07 ms/set, not the 1.7 estimated | S | — | not worth it |
 | P1 | Fuse a set's cameras in one allocate, one compaction and one integrate | measured −14% a set on the M5 Max, −21% on the RTX 5090 | L | — | landed (#127) |
 | P3 | Deduplicate depth allocation before dilating | measured −50% a set on the M5 Max, −62% on the RTX 5090 (over P1) | M | — | landed (#128) |
@@ -138,7 +138,7 @@ kernels.
 | L2 | Pipeline sets | overlaps set N's GPU work with set N+1's host work | L | P6 | later |
 | L3 | Read VideoToolbox's plane images directly | 0.28–0.31 ms GPU per 4K frame, Apple only | M | — | later |
 | L4 | Sample the atlas in place rather than copy it | measure the copy at 4K first | L | gfx | kept |
-| H2 | Online hierarchical blocks with selective fine detail | finer local sampling with <5% disabled overhead and at most +10% adaptive online time versus uniform 1 cm; extract every frame | L | paired online phases and local proxy quality | in progress, draft: borrowed buffers require known device-local memory; pre-rebase M5 Max mean gates met at 7.5/15/30 mm, 65,536 slots (+7.93% adaptive, −0.73% disabled); detail p95 improves but F-score/global/planar quality and latency tails worsen; 5 mm over budget; 2424f40 remeasurement and discrete-GPU acceptance open |
+| H2 | Online hierarchical blocks with selective fine detail | finer local sampling with <5% disabled overhead and at most +10% adaptive online time versus uniform 1 cm; extract every frame | L | paired online phases and local proxy quality | in progress, draft: borrowed buffers require known device-local memory; 7.5/15/30 mm, 65,536 slots: M5 Max +7.93% at e4db453 base; RTX 5090 +14.62% at 2424f40 base misses adaptive target, disabled gate met; detail p95 improves but F-score/global/planar quality and latency tails worsen; 5 mm over budget; 313d8ec rebase unretimed |
 
 The suggested order: P8 first, so every later figure is honest; D1–D3
 whenever convenient; then P1, P3, P5, P4, P2 + P6; then P7, and P9 once it
@@ -170,8 +170,8 @@ before and 3.568 ms with CSV disabled (+0.62%; baseline range 3.540–3.638 ms,
 patched 3.564–3.809 ms). The trace-enabled online mean was 3.527–3.575 ms;
 p95 was 3.849–4.005 ms. All final meshes had the same 1,308,911 canonical
 oriented triangles. This checks the instrumentation's disabled path only;
-adaptive-grid overhead, quality, memory savings and discrete-GPU performance
-are still unmeasured. Detailed phase evidence and the historical `34d7fb1`
+it does not measure adaptive overhead, quality, memory savings or discrete-GPU
+performance. Later adaptive evidence is in H2. Detailed phase evidence and the historical `34d7fb1`
 baseline are in the
 [dated decision](DECISIONS.md#2026-10-02--online-room-benchmarks-report-per-frame-fusion-and-scheduled-extraction-before-adaptive-grids-are-judged).
 
@@ -582,7 +582,7 @@ uniform 1 cm pipeline. Disabled overhead must stay below 5%; adaptive online
 time must be at most 10% higher while improving local detail. A lower mesh
 cadence does not satisfy this workload. Finest spacing is configurable;
 the comparison must state its tested spacings and common physical truncation
-band. Defaults remain 5/10/20 mm, but the measured `73c1d3b` candidate uses
+band. Defaults remain 5/10/20 mm, but the measured candidates below use
 7.5/15/30 mm with 65,536 total node slots and `--refine-every 4`.
 
 **Combined topology stage.** `HierarchicalGrid::update_topology` validates
@@ -595,6 +595,161 @@ the combined `hierarchy update` as `topology_host_ms` and
 columns stay blank on this path: their individual times are not measured.
 Classification and final leaf-list preparation remain separate measured
 stages. The zero-budget path performs no topology work.
+
+#### RTX 5090 comparison, 2026-10-03
+
+**Measured revisions and workload.** Baseline `63ef33a` and disabled/adaptive
+`411f0ae` share main base `2424f40`, including the device-memory residency
+changes. Release/Werror, GCC 15.2, glslang 16.2, Ubuntu 26.04.1, Intel Core
+Ultra 9 285K, NVIDIA RTX 5090 (32,607 MiB), driver 615.71.09. The NVIDIA ICD
+is selected explicitly with `VK_DRIVER_FILES`; validation is disabled for
+timing. The later stack rebase onto `313d8ec` is not a measured revision.
+
+The same first 400 room0 frames and poses, 1200 × 680 inputs, 40 mm physical
+truncation/depth-jump thresholds, and the controls in the README command are
+used. Uniform baseline and disabled use 10 mm voxels; adaptive uses
+7.5/15/30 mm, 16,384 root slots, 65,536 total nodes, 64 split/merge event
+budgets, merge stability eight, and classification every four frames.
+Support coarsening is off. All variants fuse and fully extract on every
+frame. Online host timing includes allocation, topology, fusion, mesh
+recording/submits, completion waits, startup, arena growth and retries. It
+excludes input decoding/preload and I/O, logging/CSV writes, final mesh
+readback/export, and CPU quality evaluation.
+
+Three runs per variant are interleaved in the order baseline/disabled/adaptive,
+adaptive/baseline/disabled, disabled/adaptive/baseline. A preceding attempt
+overlapped a newly started CI worker and is excluded in full. The retained
+nine-run set passed CI-worker checks before and after every capture; saved
+GPU process snapshots are empty. These boundary checks do not prove complete
+machine isolation. All nine CSVs pass the audit: 3,600 sequential frame rows,
+3,600 full meshes, no incremental extraction, and pipeline = fusion + mesh.
+No slow run or startup/retry frame is discarded.
+
+| online host timing, ms | uniform baseline | adaptive disabled | adaptive 7.5/15/30 mm |
+|---|---:|---:|---:|
+| median run mean | 2.401614 | 2.181760 | 2.752688 |
+| run-mean range | 2.184677–2.800570 | 2.071156–2.247946 | 2.583734–2.761855 |
+| median run p50 | 2.251183 | 2.057966 | 2.748641 |
+| median run p95 | 2.722109 | 2.496584 | 3.529187 |
+| median run p99 | 2.937814 | 2.661833 | 6.738585 |
+| median fusion run mean | 1.580172 | 1.439027 | 1.551483 |
+| median mesh run mean | 0.821442 | 0.742733 | 1.201205 |
+
+Adaptive overhead is **+14.6182%, missing the provisional +10% target**.
+Disabled overhead is −9.1544%, meeting the <5% gate in this set, but the
+negative value is not an implementation speedup claim. Baseline run 1 is
+slower and remains included; paired-by-replicate adaptive differences are
+−1.71%, +18.27%, +15.00%. This is noisy shared-machine evidence, not a tight
+bound on a production workload. Independent phase medians need not sum to
+the median pipeline. Mesh device timestamps are unavailable; host dispatch
+time must not be relabeled as GPU time.
+
+| phase, median all-frame mean, ms | uniform host / device | adaptive host / device |
+|---|---:|---:|
+| allocation | 0.579246 / 0.078414 | 0.505363 / 0.044311 |
+| integration | 1.000137 / 0.173406 | 0.764776 / 0.119005 |
+| classification | — | 0.085074 / 0.001744 |
+| leaf preparation | — | 0.080982 / 0.005427 |
+| combined topology | — | 0.040613 / 0.009033 |
+| mesh arena | 0.026933 / unavailable | 0.082412 / unavailable |
+| mesh dispatch | 0.791897 / unavailable | 1.117383 / unavailable |
+
+All three adaptive runs have zero exhausted/rejected split requests and zero
+root-allocation retries; each includes six mesh-growth retry frames and 406
+dispatches. They perform 4,024–4,037 splits, zero merges, and 23,291–24,075
+deferred split requests summed over updates (the same region may recur).
+Final fine/middle/coarse leaf counts are 23,688–23,808 / 5,512–5,543 /
+2,899–2,901, producing 1,648,413–1,652,762 triangles. Fixed field arrays use
+404,815,872 bytes, excluding map metadata, scratch, mesh arenas and input
+preload. The final mesh arena capacity is 366,882,396 bytes. No total-memory
+saving is claimed.
+
+All six uniform outputs contain exactly the same 1,308,911 oriented
+position triangles / 3,926,733 vertices after canonical float32-position,
+cyclic-rotation and triangle-order normalization. This does not establish
+normal/color byte identity. Debug-stripped uniform TSDF SPIR-V is also
+identical between the measured builds. The baseline passes 45/45 tests and
+the candidate 52/52 with forced Khronos validation and synchronization
+validation on the RTX 5090. The borrowed-buffer residency fixture exercises
+both actual nonlocal and mapped-local memory (`nonlocal=1 mapped-local=1`).
+After the `313d8ec` rebase, integrated head `b343725` passes the local
+Release/Werror build, all 53 tests with forced Khronos/synchronization
+validation, and all-file formatting checks on the M5 Max. These correctness
+checks do not retime the rebased binaries.
+
+**Quality of the measured RTX outputs.** The production C++ quality tool
+compares all three adaptive meshes and one of the six identical uniform
+position meshes with a same-input uniform 5 mm / 40 mm-band proxy. The
+reference has 5,298,739 triangles; it is not ground truth. The protocol
+requests 200,000 deterministic area-weighted samples per mesh, a 40 mm
+query reach, a 5 mm F-score threshold and reference-only 10 cm normal-coherence
+strata, as in the historical protocol below. Actual proxy samples number
+200,289 (including 14,136 detail samples); stochastic rounding of per-triangle
+sample counts need not equal the requested count. Accuracy queries candidate
+to proxy; coverage queries proxy to candidate. Mean/p95 exclude beyond-reach
+queries, whereas F includes them as misses.
+
+| proxy metric | uniform 10 mm | adaptive range across three runs |
+|---|---:|---:|
+| detail accuracy p95, mm | 1.726564 | 1.532306–1.586986 |
+| detail coverage p95, mm | 2.060382 | 1.797215–1.851564 |
+| detail F-score at 5 mm | 0.996804 | 0.987910–0.988356 |
+| global accuracy p95, mm | 0.418379 | 0.555140–0.556511 |
+| global coverage p95, mm | 0.546431 | 0.632051–0.641237 |
+| global F-score at 5 mm | 0.998457 | 0.994468–0.994660 |
+| planar coverage p95, mm | 0.169542 | 0.418546–0.440903 |
+| planar F-score at 5 mm | 0.999235 | 0.996666–0.996845 |
+
+Detail p95 improves in every run, but F-score and global/planar agreement
+worsen. Global beyond-reach coverage counts rise from 40 to 64–72; accuracy
+has none. The grazing-ceiling ROI (`--roi -0.65 1.65 1.1 0.95 2.95 1.4`)
+has zero misses among 6,777 proxy coverage samples and F=1 for both baseline
+and adaptive run 2, with coverage p95 0.119968 and 0.251679 mm respectively.
+The ROI filters query samples while target meshes remain complete. These
+are the RTX outputs and sample counts, not relabeled Mac measurements.
+The room fixture does not validate moving-human reconstruction or live
+multi-camera performance; adaptive codec transport remains separate work.
+
+**Finest-5-mm exploratory probe.** A single additional unpaired run at
+5/10/20 mm, 131,072 total nodes and unchanged other controls costs
+3.755741 ms/frame (fusion 1.851431 + mesh 1.904310), with p95/p99
+6.995894/15.017471 ms. This is descriptively 56.38% above the earlier
+uniform median, not a paired acceptance ratio. It has all 400 full meshes,
+six growth retries, zero exhaustion/rejection or allocation retries,
+5,637 splits, zero merges and 66,655 summed deferrals. Final fine/middle/coarse
+leaf populations are 28,328 / 13,227 / 6,596, producing 2,611,971 triangles;
+field arrays use 809,304,064 bytes and the mesh arena 733,169,904 bytes.
+Its independently evaluated detail accuracy/coverage p95 are
+1.363171/1.469593 mm and detail F=0.992222. Global coverage p95 improves to
+0.518997 mm, but accuracy p95 0.474730 mm and global F=0.996544 are worse
+than uniform 10 mm. It has 41 beyond-reach coverage queries and no accuracy
+misses. The probe has no saved process snapshots; its completion and absent
+contention marker provide less evidence of isolation than the nine-run set.
+
+**Next performance experiment.** Reaching the target from this median needs
+about 0.111 ms/frame. Steady extraction already uses one submit/fence.
+Even eliminating the entire 0.082 ms arena phase would not close the gap.
+First add extraction GPU timestamps, then measure reuse of already validated
+shared sign-tile SDF samples in the two gather loops, with complete geometry
+and vertex-attribute equivalence checks. This is an unimplemented candidate;
+no gain or target pass is assumed.
+
+Artifacts remain on `taojin@home-desktop` under
+`/home/taojin/ws/volumetric_kit/volumetric_kit_recon/.worktrees/hierarchical-5090/build/room-validation/rtx5090-411f0ae-quiet2/`:
+all nine numbered CSV/log/PLY sets, `metadata.txt` (toolchain, revisions and
+binary hashes), process snapshots, and `uniform-canonical-geometry.log`.
+Quality logs and cell/miss CSVs are `quality-{baseline-1,adaptive-1,adaptive-2,adaptive-3}`;
+`quality-{baseline-1,adaptive-2}-roi` have logs and cell CSVs only. The probe
+uses `probe-5mm.{csv,log,ply}` and `quality-probe-5mm` outputs. The quality-only
+proxy is the sibling `../rtx5090-411f0ae/proxy-5mm.ply`; it was generated during CI activity, so
+its timing is not used. CPU quality evaluation ran after all GPU timings.
+Small artifacts are copied locally under
+`.worktrees/hierarchical-bench/build/timings-validation/rtx5090-quiet2/`;
+the adjacent `rtx5090-quiet2-summary.md` and `rtx5090-quiet2-audit.txt` retain
+all per-run statistics and counters. The preceding contended attempt is in
+`rtx5090-411f0ae/` and is not acceptance timing evidence.
+
+#### Historical M5 Max comparison
 
 **Interleaved local timing comparison before the PR #146/#145 rebases, 2026-10-03.** Release/Werror,
 Apple M5 Max, MoltenVK, same first 400 room0 frames at 1200 × 680 and poses;
@@ -617,8 +772,9 @@ deletion and explicit-coordinate/point input helper; those changes did not
 alter call paths exercised by these room runners. It does not extend to
 the latest base: PR #145 also changes allocator behavior and `Buffer`
 residency metadata. Correctness validation is tracked in the review stack
-and does not replace timing measurements. The stack rebased onto `2424f40`
-has not been retimed, so its gate status remains unmeasured.
+and does not replace timing measurements. The M5 Max has not been retimed
+after these rebases. The RTX comparison above measures the `2424f40` base
+separately and does not update these historical Mac figures.
 
 The table reports medians across three runs; each run's mean and nearest-rank
 percentiles use every `pipeline_host_ms` frame, including startup, growth and
@@ -749,7 +905,7 @@ instrumentation was present on both. The new per-frame online metric was
 unavailable with CSV off. That checks measurement-path overhead at that
 revision, not the final adaptive-disabled gate. The later per-frame paired
 comparison above supersedes this instrumentation-only evidence for the
-measured `73c1d3b` candidate; NVIDIA/discrete-GPU timing remains unmeasured.
+measured `73c1d3b` candidate; the RTX section records later discrete-GPU evidence.
 
 The adaptive configuration uses a 40 mm common field band, independent
 40 mm sensor depth-jump threshold, 16,384 fixed root slots and 131,072 total
@@ -819,9 +975,10 @@ not mean a one-level hierarchical field. Run three interleaved captures per
 variant, including the adaptive command, using distinct numbered CSV/PLY
 paths; retain all startup, retry and slow frames. The recorded canonical
 position/topology identity applies only to outputs from those measured
-revisions. For acceptance after the `2424f40` rebase, rebuild baseline and
-candidate on that common main base, then repeat the interleaved captures
-and canonical-geometry comparison.
+revisions. For the RTX comparison, use `63ef33a` and `411f0ae` instead, both
+based on `2424f40`, and select the NVIDIA ICD. For acceptance of the later
+`313d8ec` rebase, rebuild baseline and candidate on that common main base
+and repeat the captures and canonical-geometry comparison.
 
 The uniform CSV instrumentation is the change introduced by `6cd7f42`.
 Recorded development artifacts are
@@ -850,7 +1007,9 @@ reviewed separately from library contracts.
 | [#150](https://github.com/taojin-6/volumetric_kit_recon/pull/150) | Observation support, depth edges and prolongation |
 | [#151](https://github.com/taojin-6/volumetric_kit_recon/pull/151) | One-submission bounded split/merge update |
 | [#152](https://github.com/taojin-6/volumetric_kit_recon/pull/152) | Online room capture and per-level/topology timing reports |
-| This change | C++ proxy-quality tool and final measurements |
+| [#153](https://github.com/taojin-6/volumetric_kit_recon/pull/153) | C++ proxy-quality tool and M5 Max measurements |
+| [#154](https://github.com/taojin-6/volumetric_kit_recon/pull/154) | Borrowed hierarchy-buffer residency validation |
+| This change | RTX 5090 timing, quality and remaining target gap |
 
 #### Shader diagnosis during implementation
 
@@ -901,6 +1060,7 @@ Development artifacts are under `.worktrees/hierarchical-grid/build/room-validat
 `cache-{20,400}`, `signs-20`, `shifts-{20,400}` and `scratch-{20,400}`, each
 with CSV/log outputs. Inspect translation with
 `spirv-cross <hierarchical_marching_cubes.comp.spv> --msl --output <out.metal>`.
-The repeated interleaved room measurements above cover the later selected
-configuration. TODO: measure a discrete GPU before treating the result as
-cross-platform performance evidence.
+The repeated interleaved M5 Max and RTX room measurements above cover the
+later selected configuration. TODO: close the RTX adaptive target gap and
+repeat on the current common main base; the MSL probes alone remain
+platform-specific evidence.

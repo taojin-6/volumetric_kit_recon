@@ -287,7 +287,11 @@ entries relevant to your task; later amendments supersede earlier rules.
 
 - [**2026-10-03**](#hierarchical-batched-evaluation) — Bounded split/merge
   share one submission; every-frame room evaluation distinguishes mean-time
-  gates, latency tails, proxy detail and unmeasured discrete-GPU behavior.
+  gates, latency tails and proxy detail; the later RTX study records a
+  discrete-GPU adaptive performance gap.
+- [**2026-10-03**](#hierarchical-rtx-evaluation) — Native RTX 5090 correctness
+  passes; adaptive room time is +14.62% with improved detail p95 but worse
+  global/planar agreement, leaving the provisional +10% target open.
 
 ## Decision record
 
@@ -8924,9 +8928,9 @@ follows from the Mac result.
 The earlier source audit found no changed room call path from PR #146
 alone. It does not cover PR #145's allocator and `Buffer` residency changes
 in the latest base. Correctness validation remains tracked in the review
-stack separately from timing evidence. The stack rebased onto `2424f40`
-has not been retimed; its baseline and candidate need new measurements on
-that common main base before claiming a gate pass.
+stack separately from timing evidence. The Mac has not been retimed on
+`2424f40`; the later RTX comparison below measures that common base and
+does not replace these historical Mac figures.
 
 All three adaptive outputs improve detail-region p95 distance to the
 same-input uniform 5 mm proxy: accuracy 1.538702–1.614423 mm versus
@@ -8946,6 +8950,43 @@ establish moving-human reconstruction or adaptive codec transport.
 See [PERF H2](PERF.md#h2--online-hierarchical-room-experiment-draft) for
 resolution, budgets, measurement boundaries, proxy-quality methodology,
 the review stack and reproducible commands.
+
+<a id="hierarchical-rtx-evaluation"></a>
+
+### 2026-10-03 — Keep the RTX adaptive target open after native validation and a complete room comparison.
+
+The RTX 5090 Release/Werror builds measure baseline `63ef33a` and
+disabled/adaptive `411f0ae`, both on `2424f40`. They pass 45/45 and 52/52
+tests respectively with forced Khronos validation and synchronization
+validation. Borrowed hierarchy buffers require verified device locality;
+the real-allocation fixture exercises both nonlocal and mapped-local memory.
+The later `313d8ec` rebase is correctness-tested separately and unretimed.
+
+Nine interleaved room0 captures retain all 400 fused and fully meshed frames
+per run, including startup and growth retries. At 7.5/15/30 mm, 65,536 total
+nodes and classification every four frames, median run means are
+2.401614 ms uniform, 2.181760 ms disabled and 2.752688 ms adaptive. Adaptive
+overhead **+14.62% misses the provisional +10% target**. Disabled passes the
+<5% gate, but its negative difference does not establish a speedup given
+the run variation. The earlier CI-contended attempt is excluded in full;
+all nine retained runs passed before/after worker checks, with empty GPU
+process snapshots. Those checks do not establish complete isolation.
+
+All three outputs improve detail p95 against the same-input 5 mm proxy:
+accuracy 1.532306–1.586986 mm versus 1.726564, coverage 1.797215–1.851564 mm
+versus 2.060382. Detail F-score falls to 0.987910–0.988356 from 0.996804;
+global/planar distances, F-score and latency tails also worsen. This remains
+a selective-detail tradeoff, not an overall quality win or ground-truth
+evaluation. All six uniform position meshes are canonically identical.
+
+The separate unpaired 5/10/20 mm probe costs 3.755741 ms/frame and further
+improves detail p95; it remains substantially above the uniform reference.
+The room replay establishes neither moving-human quality nor live rig
+performance. Retain the draft status and the original target. Extraction
+dominates the remaining gap; measure GPU timestamps and validated sample
+reuse before claiming another optimization. Configuration, all-run ranges,
+quality tails, memory and artifact provenance are recorded in
+[PERF H2](PERF.md#rtx-5090-comparison-2026-10-03).
 
 ## Measured lessons
 
