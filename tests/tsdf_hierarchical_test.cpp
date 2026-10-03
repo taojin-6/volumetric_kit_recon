@@ -479,7 +479,7 @@ int main() {
   CHECK(integrator.integrate(batch_view.value(), {frame, second_device}).ok());
   CHECK(integrator.integrate(serial_view.value(), {frame}).ok());
   CHECK(integrator.integrate(serial_view.value(), {second}).ok());
-  for (const auto pair :
+  for (const auto& pair :
        {std::make_pair(batch_view->tsdf, serial_view->tsdf),
         std::make_pair(batch_view->weight, serial_view->weight)}) {
     auto batched = vr_test::read_back<float>(device, allocator, *pair.first,
