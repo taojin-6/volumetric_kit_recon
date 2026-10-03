@@ -69,7 +69,7 @@ struct Sample {
 // MSL without requiring compiler-specific optimization flags.
 Sample samples[8];
 bool samples_regular;
-shared uint partial[256];
+shared uint block_count;
 shared uint block_base;
 shared uint block_cursor;
 shared HierarchicalNode neighbor_nodes[27];
@@ -228,7 +228,10 @@ void main() {
     if (tid == 0u) atomicOr(rejected, 1u);
     return;
   }
-  if (tid == 0u) tile_signs = 0u;
+  if (tid == 0u) {
+    tile_signs = 0u;
+    block_count = 0u;
+  }
   // Every adjacent region is aligned at the owner's level. It is covered by
   // one same/coarser leaf, or its level node is internal and all of its leaves
   // are finer, in which case this owner cannot emit an incident dual cell.
@@ -297,14 +300,13 @@ void main() {
     }
     count += bitCount(masks[k]);
   }
-  partial[tid] = count;
+  // As in uniform extraction, only emitting lanes contribute. One shared
+  // atomic per such lane avoids a full eight-barrier tree reduction.
+  if (count != 0u) atomicAdd(block_count, count);
   barrier();
-  for (uint stride = 128u; stride > 0u; stride >>= 1u) {
-    if (tid < stride) partial[tid] += partial[tid + stride];
-    barrier();
-  }
+  if (block_count == 0u) return;
   if (tid == 0u) {
-    block_base = atomicAdd(index_count, partial[0] * 3u) / 3u;
+    block_base = atomicAdd(index_count, block_count * 3u) / 3u;
     block_cursor = 0u;
   }
   barrier();

@@ -34,6 +34,25 @@ namespace mesh = vr::mesh;
   } while (0)
 
 namespace {
+// Atomic reservation order is deliberately unspecified. Compare every vertex
+// attribute exactly after canonicalizing triangle order and cyclic winding.
+auto canonical_triangles(const mesh::Mesh& mesh) {
+  using VertexBits = std::array<std::uint32_t, sizeof(mesh::Vertex) / 4>;
+  using Triangle = std::array<VertexBits, 3>;
+  std::vector<Triangle> triangles;
+  for (std::size_t t = 0; t < mesh.indices.size(); t += 3) {
+    Triangle triangle;
+    for (std::size_t k = 0; k < 3; ++k)
+      std::memcpy(triangle[k].data(), &mesh.vertices[mesh.indices[t + k]],
+                  sizeof(mesh::Vertex));
+    const auto first = std::min_element(triangle.begin(), triangle.end());
+    std::rotate(triangle.begin(), first, triangle.end());
+    triangles.push_back(triangle);
+  }
+  std::sort(triangles.begin(), triangles.end());
+  return triangles;
+}
+
 bool consistent_faces() {
   using Segments = std::vector<std::pair<int, int>>;
   for (int axis = 0; axis < 3; ++axis) {
@@ -410,6 +429,10 @@ int run_tests() {
   CHECK(host);
   auto host2 = ring.value().extract_host(field.view());
   CHECK(host2);
+  CHECK(canonical_triangles(host.value()) ==
+        canonical_triangles(signs.value()));
+  CHECK(canonical_triangles(host2.value()) ==
+        canonical_triangles(signs.value()));
   config.share_vertices = true;
   CHECK(!mesh::HierarchicalMarchingCubes::create(gpu.device, gpu.allocator,
                                                  config));
