@@ -8,7 +8,8 @@
 // rate-distortion table the codec's defaults come from.
 //
 //   codec_replica <scene_dir> [--voxel 0.01] [--encode-every 1] [--k 64]
-//                 [--step 0.2] [--max-frames N] [--preload] [--sweep]
+//                 [--step 0.2] [--quant-table uniform|band|radial]
+//                 [--max-frames N] [--preload] [--sweep]
 //                 [-o prefix]
 //
 // Configure with -DCMAKE_BUILD_TYPE=Release before quoting any timing.
@@ -55,6 +56,7 @@ struct Options {
   int encode_every = 1;  // 0: code only the final grid
   bool preload = false;
   bool sweep = false;
+  std::string quant_table = "uniform";
   codec::EncoderConfig codec;  // --k, --step
 };
 
@@ -89,9 +91,9 @@ vr::Result<Options> parse_args(int argc, char** argv) {
   int k = int(o.codec.params.coefficient_count);
   for (int i = 1; i < argc; ++i) {
     const std::string a = argv[i];
-    const bool takes_value = a == "-o" || a == "--voxel" ||
-                             a == "--encode-every" || a == "--k" ||
-                             a == "--step" || a == "--max-frames";
+    const bool takes_value =
+        a == "-o" || a == "--voxel" || a == "--encode-every" || a == "--k" ||
+        a == "--step" || a == "--max-frames" || a == "--quant-table";
     if (takes_value && i + 1 >= argc) {
       return vr::Status::invalid_argument(a + " needs a value");
     }
@@ -104,9 +106,10 @@ vr::Result<Options> parse_args(int argc, char** argv) {
       VR_TRY(parse_number(a, v, o.encode_every));
     } else if (a == "--k") {
       VR_TRY(parse_number(a, v, k));
-    } else if (a == "--step") {  // DC and AC alike: room0 found no gain apart
-      VR_TRY(parse_number(a, v, o.codec.params.dc_step));
-      o.codec.params.ac_step = o.codec.params.dc_step;
+    } else if (a == "--step") {
+      VR_TRY(parse_number(a, v, o.codec.params.quantization_scale));
+    } else if (a == "--quant-table") {
+      o.quant_table = v;
     } else if (a == "--max-frames") {
       VR_TRY(parse_number(a, v, o.max_frames));
     } else if (a == "--preload") {
@@ -122,7 +125,8 @@ vr::Result<Options> parse_args(int argc, char** argv) {
   if (o.scene_dir.empty()) {
     return vr::Status::invalid_argument(
         "usage: codec_replica <scene_dir> [--voxel m] [--encode-every n] "
-        "[--k n] [--step f] [--max-frames n] [--preload] [--sweep] "
+        "[--k n] [--step f] [--quant-table uniform|band|radial] "
+        "[--max-frames n] [--preload] [--sweep] "
         "[-o prefix]");
   }
   if (!(o.voxel > 0.0f) || o.max_frames < 1 || o.encode_every < 0 || k < 1) {
@@ -131,6 +135,7 @@ vr::Result<Options> parse_args(int argc, char** argv) {
         "--k >= 1");
   }
   o.codec.params.coefficient_count = std::uint32_t(k);
+  VR_TRY(vr_example::apply_quantization_table(o.codec.params, o.quant_table));
   VR_TRY(o.codec.params.validate());
   return o;
 }
@@ -162,11 +167,10 @@ vr::Status run(const Options& opt) {
             mesh::MarchingCubes::create(device, allocator));
   VR_ASSIGN(vr_example::CodecStream stream,
             vr_example::CodecStream::create(device, allocator, opt.codec));
-  std::printf("%zu frames at %.3f m voxels; K %u, step %.3f / %.3f\n",
+  std::printf("%zu frames at %.3f m voxels; K %u, table %s, scale %.3f\n",
               capture.frame_count(), double(opt.voxel),
-              opt.codec.params.coefficient_count,
-              double(opt.codec.params.dc_step),
-              double(opt.codec.params.ac_step));
+              opt.codec.params.coefficient_count, opt.quant_table.c_str(),
+              double(opt.codec.params.quantization_scale));
 
   // Fuse, and code the grid every --encode-every frames and at the end.
   VR_TRY(capture.start());
