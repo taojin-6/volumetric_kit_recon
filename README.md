@@ -52,6 +52,47 @@ ctest --test-dir "$recon_root/build" --output-on-failure
 Consume it from another CMake project via `find_package(volumetric_kit_recon)`
 or `FetchContent`, then link a tier (e.g. `volumetric_kit::recon_core`).
 
+### Benchmark a recorded room
+
+The default examples include `fuse_replica`, a headless replay of a posed
+Replica-SLAM scene (`results/` and `traj.txt`, with `../cam_params.json`).
+Use a Release build and an explicit truncation distance when comparing voxel
+sizes; otherwise the example defaults to `4 * voxel_size`.
+
+```sh
+"$recon_root/build/examples/fuse_replica/fuse_replica" /absolute/path/to/room0 \
+    --voxel 0.01 --trunc 0.04 --max-frames 400 --preload \
+    --device-extract --mesh-every 1 \
+    --timings-csv "$recon_root/build/room0-10mm.csv" \
+    --out "$recon_root/build/room0-10mm.ply"
+```
+
+`--timings-csv` adds one row per fused frame and prints p50/p95/p99 timing
+summaries. `pipeline_host_ms` is the sum of the wall-clock calls for fusion
+and that frame's scheduled extraction. It excludes input polling/decoding,
+preloading, the optional dirty-block survey, reporting, and final PLY export.
+The CSV is buffered in memory and written after the run. The existing `done`
+fps still includes final mesh extraction/export and is not online latency.
+
+Allocation, integration and active-set rows distinguish host wall time
+(including fence waits) from device timestamps. The active-set host row is
+inside integration's host row; do not add it twice. Mesh phase columns are
+host wall times; `mesh_device_ms` is blank because the extractor exposes no
+device timestamps. Other blank fields mean an absent stage or an unavailable
+device measurement, not zero elapsed time. Frames without a scheduled mesh
+have `mesh_present=0`, blank mesh timing fields and zero mesh counters.
+`mesh_retry` marks more than one extraction dispatch; `mesh_incremental`
+reports what `--incremental` actually did, including fallback to full meshing.
+`mesh_remeshed_blocks` counts all active blocks for a full extract.
+
+Percentiles use nearest ranks over measured samples, including startup and
+retry frames. Mesh summaries include only frames with a scheduled extract;
+the pipeline summary includes every fused frame. The CSV's `frame` is the
+one-based fused-frame ordinal (after `--stride`). Keep frame selection,
+meshing cadence, truncation, flags and hardware identical for A/B runs, run
+them interleaved on a shared machine, and follow [PERF.md](PERF.md) before
+claiming a performance improvement.
+
 ### Optional: Orbbec SDK
 
 The Orbbec (Femto Mega) capture code is off by default and needs the

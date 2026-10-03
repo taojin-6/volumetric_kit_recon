@@ -15,13 +15,19 @@
 // <scene_dir> is a Replica scene folder (contains results/ and traj.txt); the
 // intrinsics default to <scene_dir>/../cam_params.json.
 
+#include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
 #include <limits>
+#include <locale>
 #include <optional>
 #include <string>
 #include <thread>
@@ -137,7 +143,111 @@ struct Options {
   bool incremental = false;
   int num_buckets = 16384;  // initial map size; grows on overflow via resize
   bool preload = false;     // decode every frame up front (RAM for decode time)
+  std::string timings_csv;  // optional per-frame fusion + extraction timings
 };
+
+// The device columns are optional: absence is not a measured zero. In
+// particular, ExtractTimings exposes wall-clock phases, not GPU timestamps.
+enum TimingColumn : std::size_t {
+  kPipelineHost,
+  kFuseHost,
+  kAllocateHost,
+  kAllocateDevice,
+  kActiveSetHost,
+  kActiveSetDevice,
+  kIntegrateHost,
+  kIntegrateDevice,
+  kResizeHost,
+  kResizeDevice,
+  kMeshHost,
+  kMeshDevice,
+  kMeshCompactHost,
+  kMeshInputHost,
+  kMeshArenaHost,
+  kMeshDescriptorHost,
+  kMeshDispatchHost,
+  kMeshReadbackHost,
+  kTimingColumnCount,
+};
+
+constexpr std::array<const char*, kTimingColumnCount> kTimingNames = {
+    "pipeline_host_ms",        "fuse_host_ms",          "allocate_host_ms",
+    "allocate_device_ms",      "active_set_host_ms",    "active_set_device_ms",
+    "integrate_host_ms",       "integrate_device_ms",   "resize_host_ms",
+    "resize_device_ms",        "mesh_host_ms",          "mesh_device_ms",
+    "mesh_compact_host_ms",    "mesh_input_host_ms",    "mesh_arena_host_ms",
+    "mesh_descriptor_host_ms", "mesh_dispatch_host_ms", "mesh_readback_host_ms",
+};
+
+struct FrameTiming {
+  std::array<std::optional<double>, kTimingColumnCount> values{};
+  bool mesh_present = false;
+  mesh::ExtractTimings mesh{};
+};
+
+void record_fusion_timings(FrameTiming& timing,
+                           const vr::StageMetrics& metrics) {
+  constexpr std::array<const char*, 4> names = {"allocate", "  ..active set",
+                                                "integrate", "resize"};
+  for (const vr::StageRow& row : metrics.rows()) {
+    for (std::size_t i = 0; i < names.size(); ++i) {
+      if (std::strcmp(row.name, names[i]) != 0) continue;
+      timing.values[kAllocateHost + 2 * i] = row.cpu_ms;
+      if (row.has_gpu) timing.values[kAllocateDevice + 2 * i] = row.gpu_ms;
+    }
+  }
+}
+
+vr::Status write_frame_timings(std::ofstream& out,
+                               const std::vector<FrameTiming>& frames) {
+  out << "frame";
+  for (const char* name : kTimingNames) out << ',' << name;
+  out << ",mesh_present,mesh_dispatches,mesh_retry,mesh_incremental,"
+         "mesh_active_blocks,mesh_remeshed_blocks,mesh_triangles,mesh_arena_"
+         "bytes\n";
+  out << std::fixed << std::setprecision(6);
+  for (std::size_t i = 0; i < frames.size(); ++i) {
+    const FrameTiming& frame = frames[i];
+    out << i + 1;
+    for (const auto& value : frame.values) {
+      out << ',';
+      if (value) out << *value;
+    }
+    const mesh::ExtractTimings& m = frame.mesh;
+    out << ',' << frame.mesh_present << ',' << m.dispatches << ','
+        << (m.dispatches > 1) << ',' << m.incremental << ',' << m.active_blocks
+        << ',' << (m.incremental ? m.remeshed_blocks : m.active_blocks) << ','
+        << m.emitted_triangles << ',' << m.arena_bytes << '\n';
+  }
+  out.close();
+  if (!out) return vr::Status::io_error("failed to write --timings-csv file");
+
+  std::printf(
+      "online    fusion + scheduled extraction; excludes input, surveys, "
+      "logging and final export\n"
+      "          all frames, including startup and retries; nearest-rank "
+      "percentiles (ms)\n");
+  for (std::size_t column = 0; column < kTimingNames.size(); ++column) {
+    std::vector<double> samples;
+    samples.reserve(frames.size());
+    for (const FrameTiming& frame : frames) {
+      if (frame.values[column]) samples.push_back(*frame.values[column]);
+    }
+    if (samples.empty()) continue;
+    std::sort(samples.begin(), samples.end());
+    const auto percentile = [&](double q) {
+      return samples[static_cast<std::size_t>(
+                         std::ceil(q * static_cast<double>(samples.size()))) -
+                     1];
+    };
+    std::printf("  %-24s n=%zu p50 %.6f  p95 %.6f  p99 %.6f\n",
+                kTimingNames[column], samples.size(), percentile(0.50),
+                percentile(0.95), percentile(0.99));
+  }
+  std::printf(
+      "  mesh_device_ms unavailable: extractor reports host phases only\n");
+  return {};
+}
 
 const char* arg_value(int argc, char** argv, int& i) {
   if (i + 1 >= argc) {
@@ -207,6 +317,11 @@ vr::Result<Options> parse_args(int argc, char** argv) {
         return vr::Status::invalid_argument("--buckets");
     } else if (a == "--preload") {
       opt.preload = true;
+    } else if (a == "--timings-csv") {
+      const char* v = arg_value(argc, argv, i);
+      if (v == nullptr || v[0] == '\0' || v[0] == '-')
+        return vr::Status::invalid_argument("--timings-csv needs a file path");
+      opt.timings_csv = v;
     } else if (a[0] == '-') {
       return vr::Status::invalid_argument("unknown flag: " + a);
     } else if (opt.scene_dir.empty()) {
@@ -220,7 +335,20 @@ vr::Result<Options> parse_args(int argc, char** argv) {
         "usage: fuse_replica <scene_dir> [-o out.ply] [--share-vertices] "
         "[--device-extract] [--incremental] [--dirty-every n] "
         "[--voxel m] "
-        "[--max-frames n] [--stride n] [--max-depth m] [--preload]");
+        "[--max-frames n] [--stride n] [--max-depth m] [--preload] "
+        "[--timings-csv path]");
+  }
+  if (!opt.timings_csv.empty()) {
+    std::error_code csv_error, out_error, same_error;
+    const auto csv_path =
+        std::filesystem::weakly_canonical(opt.timings_csv, csv_error);
+    const auto out_path = std::filesystem::weakly_canonical(opt.out, out_error);
+    // Canonical paths catch two names for a not-yet-created file; equivalent
+    // catches hard links when both outputs already exist.
+    if ((!csv_error && !out_error && csv_path == out_path) ||
+        std::filesystem::equivalent(opt.timings_csv, opt.out, same_error))
+      return vr::Status::invalid_argument(
+          "--timings-csv and --out must differ");
   }
   // --incremental only exists on the device path, so it turns it on rather than
   // being ignored beside it. Ignoring it was worse than it looks: the
@@ -281,6 +409,18 @@ vr::Result<Options> parse_args(int argc, char** argv) {
 }
 
 vr::Status run(const Options& opt) {
+  // Fail an unusable output path before decoding or reconstructing the scene.
+  // Rows are held in RAM and written after the run so file I/O cannot stall
+  // between two measured frames.
+  const bool record_timings = !opt.timings_csv.empty();
+  std::ofstream timings_file;
+  if (record_timings) {
+    timings_file.imbue(std::locale::classic());
+    timings_file.open(opt.timings_csv);
+    if (!timings_file)
+      return vr::Status::io_error("cannot open --timings-csv: " +
+                                  opt.timings_csv);
+  }
   // --- Device bring-up (headless: no surface needed) ---
   VR_ASSIGN(vr::Instance instance, vr::Instance::create({}));
   VR_ASSIGN(VkPhysicalDevice gpu, instance.select_physical_device());
@@ -372,6 +512,9 @@ vr::Status run(const Options& opt) {
   // inside it, and the gap is submit overhead plus the host round trips the
   // stage makes.
   vr::StageMetrics stage_totals;
+  vr::StageMetrics frame_metrics;
+  std::vector<FrameTiming> frame_timings;
+  if (record_timings) frame_timings.reserve(replica.frame_count());
   std::size_t dirty_samples = 0;
   std::uint64_t sum_dirty = 0, sum_remesh = 0, sum_active = 0;
   std::uint32_t last_dirty = 0, last_active_blocks = 0, last_remesh = 0;
@@ -394,8 +537,24 @@ vr::Status run(const Options& opt) {
       continue;
     }
     const sensor::CapturedFrame& frame = *polled;
-    VR_TRY(vr_example::fuse_frame(volume, integrator, frame, opt.max_weight,
-                                  &stage_totals));
+    FrameTiming frame_timing;
+    std::chrono::steady_clock::time_point fuse_start;
+    if (record_timings) {
+      frame_metrics.clear();
+      fuse_start = std::chrono::steady_clock::now();
+    }
+    VR_TRY(vr_example::fuse_frame(
+        volume, integrator, frame, opt.max_weight,
+        record_timings ? &frame_metrics : &stage_totals));
+    if (record_timings) {
+      const double elapsed = std::chrono::duration<double, std::milli>(
+                                 std::chrono::steady_clock::now() - fuse_start)
+                                 .count();
+      frame_timing.values[kFuseHost] = elapsed;
+      frame_timing.values[kPipelineHost] = elapsed;
+      record_fusion_timings(frame_timing, frame_metrics);
+      stage_totals.merge(frame_metrics);
+    }
     ++fused;
 
     if (opt.dirty_every > 0 &&
@@ -435,6 +594,8 @@ vr::Status run(const Options& opt) {
       // mistaken for a per-frame cost.
       mesh::ExtractTimings rt{};
       std::size_t tris = 0;
+      std::chrono::steady_clock::time_point mesh_start;
+      if (record_timings) mesh_start = std::chrono::steady_clock::now();
       if (opt.device_extract) {
         // The DeviceMesh borrows the extractor's buffers and is dropped here --
         // at the default slot_count of 1 the next extract invalidates it, which
@@ -455,6 +616,22 @@ vr::Status run(const Options& opt) {
         VR_ASSIGN(mesh::Mesh preview,
                   extractor.extract_host(volume, 0.0f, &rt));
         tris = preview.triangle_count();
+      }
+      if (record_timings) {
+        const double elapsed =
+            std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - mesh_start)
+                .count();
+        frame_timing.values[kMeshHost] = elapsed;
+        *frame_timing.values[kPipelineHost] += elapsed;
+        frame_timing.values[kMeshCompactHost] = rt.compact_ms;
+        frame_timing.values[kMeshInputHost] = rt.input_upload_ms;
+        frame_timing.values[kMeshArenaHost] = rt.arena_alloc_ms;
+        frame_timing.values[kMeshDescriptorHost] = rt.descriptor_ms;
+        frame_timing.values[kMeshDispatchHost] = rt.dispatch_ms;
+        frame_timing.values[kMeshReadbackHost] = rt.readback_ms;
+        frame_timing.mesh_present = true;
+        frame_timing.mesh = rt;
       }
       ++remeshes;
       sum_total += rt.total_ms();
@@ -477,6 +654,7 @@ vr::Status run(const Options& opt) {
         std::printf("  fused %zu frames, %zu triangles so far\n", fused, tris);
       }
     }
+    if (record_timings) frame_timings.push_back(frame_timing);
   }
 
   if (remeshes > 0) {
@@ -612,6 +790,7 @@ vr::Status run(const Options& opt) {
       "%zu triangles -> %s\n",
       fused, secs, fused / (secs > 0.0 ? secs : 1.0),
       final_mesh.vertices.size(), final_mesh.triangle_count(), opt.out.c_str());
+  if (record_timings) VR_TRY(write_frame_timings(timings_file, frame_timings));
   return {};
 }
 
