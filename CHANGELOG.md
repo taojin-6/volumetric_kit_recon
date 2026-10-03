@@ -32,6 +32,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- docs: make `AGENTS.md` the concise shared working guide for Codex and
+  Claude Code, with `CLAUDE.md` importing it. Move detailed contracts,
+  implementation status, and gotchas into `DESIGN.md`, and put the complete
+  decision index beside its dated rationale in `DECISIONS.md`.
 - `codec`: **frame v2, 37% smaller on room0.** A partial observed mask is
   coded a plane and a line at a time against its neighbours, and a sign
   inside its mantissa's raw field: 11.0 B/block at 1 cm where v1 was 17.4,

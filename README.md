@@ -9,12 +9,11 @@ It is the standalone sibling of
 Vulkan/MoltenVK renderer). The two are independent libraries that meet at a thin
 interop seam: `recon` builds the volume, `gfx` renders it.
 
-> **Status: early.** The repository is conventions scaffolding plus the `core`
-> foundation tier. The `volume` / `tsdf` / `mesh` / `interop` tiers are landing
-> next, as Vulkan compute (MoltenVK on Apple). See [DESIGN.md](DESIGN.md) for the
-> architecture, [CLAUDE.md](CLAUDE.md) for the conventions and the
-> locked-decision index, and [DECISIONS.md](DECISIONS.md) for the dated record
-> behind each decision.
+> Start with [AGENTS.md](AGENTS.md) for shared working conventions and commands.
+> [DESIGN.md](DESIGN.md) describes the architecture, current implementation,
+> and remaining work. [DECISIONS.md](DECISIONS.md#decision-index) holds the
+> locked-decision index and dated rationale; [PERF.md](PERF.md) tracks live
+> rig performance work.
 
 ## Why
 
@@ -25,27 +24,29 @@ CI-gated, and split into clean, independently consumable tiers.
 
 ## Design at a glance
 
-- **Tiered, like gfx:** `core` → `volume` → `tsdf` → `mesh` → `interop`. A tier
-  may depend only on tiers to its left.
+- **Tiered, like gfx:** `core` → `volume` → `tsdf` → `mesh` → `texture` →
+  `interop`, with `sensor` off `core`, `codec` off `volume`, and `eval` off
+  `mesh`. A tier may depend only on tiers to its left.
 - **One Vulkan path everywhere:** compute runs as Vulkan compute shaders
   (GLSL → SPIR-V), with MoltenVK on Apple — Linux / Android / macOS / iOS /
   Windows from one source, mirroring `volumetric_kit_gfx`. No Metal/CUDA split.
 - **Exception-free:** fallible calls return `Status` / `Result<T>`; mobile builds
   with `-fno-exceptions` are first-class.
-- **Trivial renderer handoff:** because the renderer is *also* Vulkan, geometry
-  goes to `volumetric_kit_gfx` as glTF/mesh data today and, later, as a shared
-  `VkBuffer`/`VkImage` on a common device — the easy same-API, same-device case,
-  with no cross-API memory translation.
+- **Shared-device renderer handoff:** the live viewers draw recon's mesh
+  buffers on one `VkDevice` shared with `volumetric_kit_gfx`. The host/file
+  handoff remains available for standalone workflows; see the
+  [interop contracts](DESIGN.md#the-interop-seam).
 
 ## Building
 
-Requires CMake ≥ 3.21 and a C++17 compiler (plus the Vulkan SDK / MoltenVK once
-the Vulkan core lands).
+Requires CMake ≥ 3.21, a C++17 compiler, and the Vulkan toolchain (MoltenVK on
+Apple). See the CI workflows for platform dependency installation.
 
 ```sh
-cmake -B build
-cmake --build build
-ctest --test-dir build
+recon_root="$(git rev-parse --show-toplevel)"
+cmake -S "$recon_root" -B "$recon_root/build" -DCMAKE_BUILD_TYPE=Release
+cmake --build "$recon_root/build" --parallel
+ctest --test-dir "$recon_root/build" --output-on-failure
 ```
 
 Consume it from another CMake project via `find_package(volumetric_kit_recon)`
@@ -60,7 +61,8 @@ convention is `<workspace>/third_party/OrbbecSDK_v<version>`), and point the
 build at its root:
 
 ```sh
-cmake -B build -DVR_WITH_ORBBEC=ON -DOrbbecSDK_ROOT=<sdk>
+cmake -S "$recon_root" -B "$recon_root/build" -DCMAKE_BUILD_TYPE=Release \
+    -DVR_WITH_ORBBEC=ON -DOrbbecSDK_ROOT=<sdk>
 # or once, for every repo that finds it:  export OrbbecSDK_ROOT=<sdk>
 ```
 
@@ -101,7 +103,8 @@ installed, found through pkg-config:
 ```sh
 brew install ffmpeg pkgconf        # macOS
 sudo apt install pkg-config libavcodec-dev libavutil-dev libswscale-dev
-cmake -B build -DVR_WITH_FFMPEG=ON
+cmake -S "$recon_root" -B "$recon_root/build" -DCMAKE_BUILD_TYPE=Release \
+    -DVR_WITH_FFMPEG=ON
 # require a back end (cuda, videotoolbox, vaapi) in the test:
 VR_TEST_HEVC_BACKEND=cuda ctest --test-dir build -R video
 ```

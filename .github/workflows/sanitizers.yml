@@ -59,7 +59,7 @@ jobs:
 
       # lavapipe is REQUIRED here: the whole point of this job is to run the
       # Vulkan-touching code under ASan/UBSan/LSan. If no device comes up we FAIL
-      # loudly — a green run that silently skipped those tests (per CLAUDE.md, the
+      # loudly — a green run that silently skipped those tests (per AGENTS.md, the
       # leak / use-after-free / double-free class) is worse than a red one.
       - name: Require a Vulkan device (lavapipe)
         if: steps.detect.outputs.present == 'true'
