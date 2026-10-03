@@ -143,6 +143,46 @@ VR_TEST_HEVC_BACKEND=cuda ctest --test-dir build -R video
 It decodes on the first hardware back end that works (NVIDIA ahead of an
 integrated GPU on Linux), else in software.
 
+## Codec evaluation
+
+`codec_replica` runs the grid codec on a fused room sequence. `codec_mesh`
+uses `tsdf::MeshIntegrator` to convert an OBJ to a TSDF, compresses and
+decodes that grid, then extracts the decoded surface with marching cubes.
+Both support `--quant-table uniform|band|radial`, `--step` for the global
+quantization scale, and `--sweep` for the shared rate-distortion study.
+
+Rafa2's supplied OBJ has no declared physical unit and its person is tilted
+in the stored coordinates. The explicit head-up vector below is the
+visually checked long principal axis. The example rotates it to +Y,
+centres X/Z, puts the feet at Y=0, and scales the projected height to 1.7 m.
+It prints the original and normalized bounds and leaves the asset unchanged.
+This is a height normalization, not an assertion about the source's unit.
+
+```sh
+dataset_root=/absolute/path/to/datasets
+"$recon_root/build/examples/codec_replica/codec_replica" \
+  "$dataset_root/replica_room0/room0" --max-frames 400 \
+  --voxel 0.01 --encode-every 0 --preload --sweep
+
+"$recon_root/build/examples/codec_mesh/codec_mesh" \
+  "$dataset_root/Rafa2/Frame_00001_textured.obj" \
+  --height 1.7 --up-vector -0.9120591159,0.0661250017,-0.4046920474 \
+  --voxel 0.005 --mode signed --sweep -o "$recon_root/build/rafa2"
+```
+
+The mesh example writes `_input.ply` (normalized original), `_source.ply`
+(uncompressed TSDF surface), `_decoded.ply`, and the compressed `.vrtc`
+frame. Conversion error, codec-only error and total error are reported
+separately. `--inspect-only` checks the input and normalization without a
+GPU run. The signed mode checks indexed topology and winding; it does not
+establish freedom from self-intersections. `--mode shell` supports open or
+inconsistently wound meshes, with an intentional surface offset.
+
+Use a Release build for measurements. The current format is v3, with a
+shared 512-entry quantization table and global scale in each frame; older
+versions are refused. See [the codec contract](DESIGN.md#codec) and
+[the measurement record](DECISIONS.md#2026-10-02--per-basis-quantization-and-a-normalized-mesh-codec-fixture).
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

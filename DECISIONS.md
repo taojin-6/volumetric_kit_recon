@@ -284,6 +284,10 @@ entries relevant to your task; later amendments supersede earlier rules.
   topology epoch; an adopted buffer states its memory. Mesh binning's capacity
   scan and the planar RGB route stay, with measured costs.
 
+- [**2026-10-02**](#2026-10-02--per-basis-quantization-and-a-normalized-mesh-codec-fixture) —
+  Per-basis quantization replaces the DC/AC split; frame v3 carries the table,
+  and a normalized Rafa2 mesh joins room0 in the codec study.
+
 ## Decision record
 
 ### 2026-06-21 — Single Vulkan path (MoltenVK on Apple), like gfx.
@@ -8790,6 +8794,156 @@ it covered uint32 overflow of bin entries, which is unreachable:
 `triangle_candidate_offsets` refuses more than 2^32 candidates, and candidates
 bound the entries. The public mesh test covers split dispatches, compact-list
 growth, the second scan level and the oversized-bin refusal.
+
+### 2026-10-02 — Per-basis quantization and a normalized mesh codec fixture.
+
+**Contract.** `CodecParams` replaces `dc_step` and `ac_step` with
+`quantization_scale` and 512 `quantization_weights`, indexed by canonical
+frequency `(u,v,w)` as `u + 8*v + 64*w`. The effective step is their product,
+in fractions of `trunc_dist`, for the existing round-half-to-even scalar
+quantizer. DC is entry zero. All blocks share the same table, independently
+of the retained coefficient count K. A table's DC weight of one is a useful
+normalization convention for comparing global scales; it is not a format
+restriction. Every factor must be positive and finite, and every effective
+step, including those beyond K, must satisfy the existing step bounds.
+
+The host computes effective steps once and uploads them to device-local
+memory in the transform's `CommandBatch`. This matters for extreme but valid
+factorizations: subnormal factors with a normal product must not be flushed
+to zero by shader arithmetic. Both directions use the same canonical table
+through the zigzag map. The DCT, observed mask and entropy models are
+unchanged; each coefficient already had its own rANS probability model.
+
+**Frame v3.** The former two steps become the global scale and a required
+weight count of 512. The complete float table follows the 44-byte prefix,
+making the fixed parameter header 2092 bytes. This adds 2048 bytes per
+frame, counted in every reported size, with no per-block table overhead.
+`read_frame_info` recovers the complete parameters without entropy decoding.
+All intra frames remain self-contained; v1 and v2 are `Unsupported`.
+
+**The study.** The C++ examples share three candidate tables, all with DC
+weight one and axis-permutation symmetry:
+
+- `uniform`: `Q(u,v,w) = 1`;
+- `band`: `Q(u,v,w) = 1 + 0.25*(u+v+w)`;
+- `radial`: `Q(u,v,w) = 1 + 0.125*(u*u+v*v+w*w)`.
+
+These are deterministic hypotheses, not fitted tables. The radial table
+can distinguish bases within a total-frequency band. K = 64 is the prior
+baseline and cuts shell 6; 84 and 120 retain complete shells through degree
+6 and 7; 512 retains every mode. Each is measured at scales 0.05, 0.1, 0.2,
+0.4 and 0.8, plus a uniform K = 512 / scale = 0.002 near-lossless control.
+The complete 61-row study uses a warm-up and three timed encode/decode
+rounds. Host and device timings are separate; quality measurement and mesh
+extraction are outside them. Decoding repeatedly measures steady state on
+an already-sized player grid, excluding resize/retry cost. The table shape
+is judged against total frame bytes and mesh error, not equal scale values
+across differently weighted tables. Default weights remain uniform while
+the new candidates are evaluated.
+
+**Rafa2 units and orientation.** The supplied `Rafa2/Frame_00001_textured.obj`
+declares VologramsAPI, 24,998 vertices and 50,000 triangles, but no physical
+unit or up axis. Its raw bounds are X [-0.28273, 0.47853],
+Y [-0.10953, 0.054242], Z [0.67838, 1.1272]. Projection inspection shows a
+complete person tilted in XZ, with the head towards -X/-Z. The explicit
+head-up vector `(-0.9120591159, 0.0661250017, -0.4046920474)` is the negative
+long principal axis of the vertex positions, visually checked for sign.
+Its full projected extent is 0.795690789501 source units; scaling by
+2.136508330159 gives a bounding height of 1.7 m. This is the normalization
+convention, not a claim of a recovered source unit or measured stature.
+`codec_mesh` rotates this direction to +Y with a proper rotation, centres
+X/Z and places the minimum Y at zero, without changing the source asset.
+
+The indexed mesh has one connected component, 75,000 edges and no boundary,
+nonmanifold or inconsistently oriented edges. Its signed volume is positive
+(0.008094958217 source units cubed), with no degenerate triangles. This
+supports the signed closest-face conversion; self-intersections were not
+checked. The actual path is `allocate_from_triangles` →
+`tsdf::MeshIntegrator` → `codec::Encoder` → `codec::Decoder` into a separate
+grid → `mesh::MarchingCubes`. The example reports conversion against the
+normalized original, codec loss against the uncompressed extracted surface,
+and total decoded error against the normalized original separately. PLYs
+for all three surfaces and the actual compressed frame can be saved.
+
+**Measured locally, M5 Max, Release, Vulkan/MoltenVK.** Room0 fuses all 400
+available frames and measures the final grid (24,885 encoded blocks), not
+the stream-average workload of the earlier decisions. Rafa2 is one supplied
+mesh frame, at both 1 cm (600 encoded blocks) and 5 mm (2,395). Every dataset
+runs the complete 61-configuration sweep. Distances below are sampled
+mesh-to-mesh accuracy RMS / coverage RMS in mm; the metric samples every
+fourth vertex. Reach is 4 cm at 1 cm voxels and 2 cm at 5 mm voxels; samples
+beyond reach are counted separately, never folded into RMS. Times are
+means over three warmed codec calls, host ms and device ms respectively.
+
+| Content | Table / K / scale | Frame bytes | RMS acc / cov (mm) | Host encode / decode (ms) | Device encode / decode (ms) |
+|---|---|---:|---|---|---|
+| Room0, 1 cm | uniform / 64 / 0.2 | 273,871 | 0.640 / 0.814 | 17.11 / 15.46 | 1.19 / 0.90 |
+| Room0, 1 cm | radial / 64 / 0.1 | 271,663 | 0.654 / 0.815 | 17.73 / 15.59 | 1.86 / 1.13 |
+| Rafa2, 1 cm | uniform / 64 / 0.2 | 19,986 | 0.889 / 0.838 | 1.28 / 1.42 | 0.08 / 0.05 |
+| Rafa2, 1 cm | radial / 64 / 0.1 | 19,454 | 0.983 / 0.893 | 1.11 / 1.11 | 0.07 / 0.05 |
+| Rafa2, 5 mm | uniform / 64 / 0.2 | 68,737 | 0.416 / 0.392 | 3.45 / 3.21 | 0.18 / 0.13 |
+| Rafa2, 5 mm | radial / 64 / 0.1 | 66,971 | 0.434 / 0.406 | 3.24 / 3.38 | 0.20 / 0.12 |
+
+These paired rows are close in rate, not exactly matched. Their rate/error
+tradeoff does not establish a consistent improvement, so the default table
+remains uniform. The band table at K = 64 / scale = 0.1 gives 69,686 bytes
+and 0.401 / 0.375 mm on 5 mm Rafa2: slightly better than the baseline and
+slightly larger. A fitted table should be compared at explicitly matched
+rates before being promoted. K = 512 removes the cutoff but remains costly:
+room0's band / 512 / 0.2 is 259,494 bytes at 0.666 / 0.659 mm, costing
+76.50 / 125.30 host ms; the low error alone does not make it a live default.
+All three listed room0 rows (uniform/radial K = 64 and band K = 512) have
+zero accuracy samples and 29 coverage samples beyond reach; all listed
+Rafa2 rows have zero in either direction. The near-lossless control's
+accuracy RMS is 0.019 mm at 1 cm Rafa2 and 0.010 mm at 5 mm Rafa2.
+
+For Rafa2 the separate mesh-to-TSDF conversion accuracy / coverage RMS is
+0.091 / 0.403 mm at 1 cm and 0.030 / 0.163 mm at 5 mm. With default codec
+parameters the total decoded-to-original error is 0.891 / 0.857 mm and
+0.415 / 0.381 mm, respectively. These errors are measured independently,
+not added. The float-input normalization prints projected height
+0.795690825737 and scale 2.13650823286; exported input Y is
+[0, 1.70000004768] m. Its tiny difference from the double-precision OBJ
+inspection above is rounding into the production float vertex format.
+
+**Reproduce** with the Release executables and an absolute `dataset_root`:
+
+```sh
+"$recon_root/build/examples/codec_replica/codec_replica" \
+  "$dataset_root/replica_room0/room0" --max-frames 400 \
+  --voxel 0.01 --encode-every 0 --preload --sweep
+"$recon_root/build/examples/codec_mesh/codec_mesh" \
+  "$dataset_root/Rafa2/Frame_00001_textured.obj" \
+  --height 1.7 --up-vector -0.9120591159,0.0661250017,-0.4046920474 \
+  --voxel 0.005 --mode signed --sweep -o "$recon_root/build/rafa2"
+```
+
+Repeat Rafa2 with `--voxel 0.01` for its coarser row. To export the measured
+nonuniform example, use `--quant-table radial --step 0.1 --k 64` and a
+different output prefix. Sweeps print the entire table; sizes include all
+headers, masks, coordinates, entropy tables and coefficients. Timings do
+not establish capture-to-display throughput or discrete-GPU performance.
+Rafa2 has only one frame, so it supplies no temporal quality evidence.
+
+The exported 5 mm radial / K = 64 / scale = 0.1 frame was independently
+parsed: 66,971 bytes, 2,395 blocks, all 512 intended weights, and section
+lengths consuming the exact file. Its marching-cubes output has 199,864
+triangles (198,220 before coding). A shared-view rendering of normalized
+input, uncompressed TSDF and decoded output retains the body silhouette,
+but shows fine rippling/faceting after coding. Sub-millimetre positional
+RMS is not visual losslessness; smooth-surface shading remains a reason to
+tune tables and examine more than the aggregate positional metric.
+
+**Validation.** The Release build is warning-clean with
+`VR_WARNINGS_AS_ERRORS=ON`; all 45 tests pass. The three GPU codec tests also
+pass with the Khronos layer explicitly enabled and synchronization
+validation on, as does the full 5 mm radial Rafa2 conversion/codec/meshing
+example, with no validation messages. Added regressions cover nonuniform and directional basis
+weights, A/B/A table changes on a transform and public decoder, malformed
+and truncated v3 parameters, effective-step bounds and valid subnormal
+factorizations, input-unit invariance, oblique height normalization and
+winding preservation, and OBJ/topology refusals. No discrete GPU or new
+sanitizer run was performed for this change.
 
 ## Measured lessons
 

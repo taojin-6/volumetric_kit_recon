@@ -1,6 +1,15 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Tao Jin
 
+# OBJ parsing, explicit unit/height normalization and topology checks are
+# host-only and remain testable when example executables are disabled.
+add_executable(recon_mesh_input_test mesh_input_test.cpp
+                                     ../examples/common/mesh_input.cpp)
+target_include_directories(recon_mesh_input_test PRIVATE ../examples/common)
+target_link_libraries(recon_mesh_input_test PRIVATE volumetric_kit::recon_mesh)
+vr_target_warnings(recon_mesh_input_test)
+add_test(NAME recon_mesh_input COMMAND recon_mesh_input_test)
+
 # Smoke test: compiles the core public headers (Status/Result, POD math,
 # version) and links recon_core, proving the tier builds, links, and runs under
 # -Werror. A full GoogleTest suite replaces this as the tiers land (see the
