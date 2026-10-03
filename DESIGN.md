@@ -1188,7 +1188,9 @@ to the SDK's own undistortion and registration on a still scene (the
 
 ### codec
 
-The intra codec is implemented; GPU rANS remains deferred. Quantization is
+The intra codec is implemented. Its rANS encoding runs on the device or the
+host, writing the same bytes (2026-10-03); decoding is on the host.
+Quantization is
 one scalar quantizer with a step per DCT basis (2026-10-02):
 `step[u,v,w] = quantization_scale * quantization_weights[u + 8*v + 64*w]`.
 DC is the table's first entry. All blocks share the same 512-entry table, but
@@ -1213,6 +1215,19 @@ blocks, N observed blocks and a predicted prefix G, readback is
 `8 + 16*max(G,N)` bytes, at most `8 + 16*A`, instead of `4 + 20*A`.
 An empty input submits nothing. Append order is unspecified; the CPU coordinate
 sort is still what makes the frame deterministic.
+`EncoderConfig::entropy` picks where the frame's rANS coding runs. On the
+device (`detail::DeviceFrameWriter`), the forward output stays in VRAM: the
+forward's batch also counts every model's symbols and each block's coder
+steps, and only those counts cross to the host, which builds the tables with
+the host writer's own `frame_tables`. A second batch writes every block's
+steps in parallel, codes one segment per invocation into a slot sized by its
+steps, packs the streams, and reads back only the lengths and the payload.
+Bulk buffers are device-local and retained; the bus carries the counts, four
+bytes a block each way, and the payload, against 64 + 2K bytes a block of
+coefficients and masks on the host path. A segment is one serial chain, so
+`kAuto`, the default, codes on the device from `kMinDeviceSegments` (48)
+segments and on the host below; smaller segments give the device
+parallelism at a few percent of size.
 `Decoder::decode(frame, grid)` leaves the caller's grid holding exactly the
 frame. It merges the grid's sorted active set with the frame's
 coordinates, removing, allocating, and keeping shared blocks in their

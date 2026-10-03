@@ -65,7 +65,8 @@ vr::Result<Options> parse_args(int argc, char** argv) {
     const std::string a = argv[i];
     const bool takes_value =
         a == "-o" || a == "--voxel" || a == "--encode-every" || a == "--k" ||
-        a == "--step" || a == "--max-frames" || a == "--quant-table";
+        a == "--step" || a == "--max-frames" || a == "--quant-table" ||
+        a == "--entropy" || a == "--segment-size";
     if (takes_value && i + 1 >= argc) {
       return vr::Status::invalid_argument(a + " needs a value");
     }
@@ -84,6 +85,13 @@ vr::Result<Options> parse_args(int argc, char** argv) {
       o.quant_table = v;
     } else if (a == "--max-frames") {
       VR_TRY(vr_example::parse_number(a, v, o.max_frames));
+    } else if (a == "--entropy") {
+      VR_TRY(vr_example::parse_entropy(a, v, o.codec.entropy));
+    } else if (a == "--segment-size") {
+      int r = 0;
+      VR_TRY(vr_example::parse_number(a, v, r));
+      if (r < 1) return vr::Status::invalid_argument(a + " must be >= 1");
+      o.codec.segment_size = std::uint32_t(r);
     } else if (a == "--preload") {
       o.preload = true;
     } else if (a == "--sweep") {
@@ -98,7 +106,8 @@ vr::Result<Options> parse_args(int argc, char** argv) {
     return vr::Status::invalid_argument(
         "usage: codec_replica <scene_dir> [--voxel m] [--encode-every n] "
         "[--k n] [--step f] [--quant-table uniform|band|radial] "
-        "[--max-frames n] [--preload] [--sweep] "
+        "[--max-frames n] [--entropy auto|host|device] [--segment-size n] "
+        "[--preload] [--sweep] "
         "[-o prefix]");
   }
   if (!(o.voxel > 0.0f) || o.max_frames < 1 || o.encode_every < 0 || k < 1) {
