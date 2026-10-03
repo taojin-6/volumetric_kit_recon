@@ -18,8 +18,9 @@ add_library(recon_volume)
 add_library(volumetric_kit::recon_volume ALIAS recon_volume)
 
 target_sources(
-  recon_volume PRIVATE hierarchy_layout.cpp triangle_candidates.cpp
-                       voxel_hash_map.cpp voxel_block_grid.cpp)
+  recon_volume
+  PRIVATE hierarchical_grid.cpp hierarchy_layout.cpp triangle_candidates.cpp
+          voxel_hash_map.cpp voxel_block_grid.cpp)
 
 # Per-tier export header (VR_VOLUME_API / VR_VOLUME_STATIC_DEFINE), isolated
 # from recon_core's so the macros never collide on one include path.
@@ -66,6 +67,9 @@ vr_embed_shaders(
   SHADERS
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/block_stamp.comp"
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/block_zero.comp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/hierarchical_roots.comp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/hierarchical_leaves.comp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/hierarchical_split.comp"
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/hash_init.comp"
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/hash_allocate_coords.comp"
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/hash_allocate_depth.comp"

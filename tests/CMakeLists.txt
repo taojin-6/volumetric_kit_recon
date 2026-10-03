@@ -125,6 +125,14 @@ target_link_libraries(recon_volume_block_grid_test
 vr_target_warnings(recon_volume_block_grid_test)
 add_test(NAME recon_volume_block_grid COMMAND recon_volume_block_grid_test)
 
+add_executable(recon_volume_hierarchical_grid_test
+               volume_hierarchical_grid_test.cpp)
+target_link_libraries(recon_volume_hierarchical_grid_test
+                      PRIVATE volumetric_kit::recon_volume Vulkan::Vulkan)
+vr_target_warnings(recon_volume_hierarchical_grid_test)
+add_test(NAME recon_volume_hierarchical_grid
+         COMMAND recon_volume_hierarchical_grid_test)
+
 # volume block stamps: every allocation path stamps the blocks it asks for with
 # the map's tick, the block pass stamps those holding weight, and
 # free_stale_blocks frees those neither for more than max_age ticks; resize

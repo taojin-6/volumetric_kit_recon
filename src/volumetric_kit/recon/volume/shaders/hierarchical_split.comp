@@ -1,0 +1,86 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_scalar_block_layout : require
+#include "hierarchical_types.glsl"
+
+// One workgroup owns one unique leaf. No parent is published until all eight
+// child payloads and records exist; consumers run only after this dispatch.
+layout(local_size_x = 256) in;
+layout(set = 0, binding = 0, scalar) buffer Nodes { HierarchicalNode nodes[]; };
+layout(set = 0, binding = 1, scalar) readonly buffer Leaves { uint leaves[]; };
+layout(set = 0, binding = 2, scalar) readonly buffer Requests { uint desired[]; };
+layout(set = 0, binding = 3, scalar) buffer Tsdf { float tsdf[]; };
+layout(set = 0, binding = 4, scalar) buffer Weight { float weight[]; };
+layout(set = 0, binding = 5, scalar) buffer Color { uint colors[]; };
+layout(set = 0, binding = 6, scalar) buffer Pool { uint groups_used; };
+layout(set = 0, binding = 7, scalar) buffer Stats { uint stats[]; };
+layout(push_constant, scalar) uniform Push {
+  uint base;
+  uint root_capacity;
+  uint group_capacity;
+  uint max_splits;
+  uint has_color;
+  float weight_cap;
+} pc;
+
+shared uint s_first;
+shared uint s_parent;
+
+void main() {
+  uint lane = gl_LocalInvocationID.x;
+  if (lane == 0u) {
+    s_first = 0xffffffffu;
+    s_parent = leaves[pc.base + gl_WorkGroupID.x];
+    HierarchicalNode parent = nodes[s_parent];
+    if (parent.children == 0u && desired[s_parent] < parent.level) {
+      // Child coordinate multiplication must not wrap on an extreme root.
+      if (any(lessThan(parent.coord, ivec3(-1073741824))) ||
+          any(greaterThan(parent.coord, ivec3(1073741823)))) {
+        atomicAdd(stats[3], 1u);
+      } else if (atomicAdd(stats[4], 1u) >= pc.max_splits) {
+        atomicAdd(stats[1], 1u);
+      } else {
+        uint group = atomicAdd(groups_used, 0u);
+        while (group < pc.group_capacity) {
+          uint previous = atomicCompSwap(groups_used, group, group + 1u);
+          if (previous == group) break;
+          group = previous;
+        }
+        if (group == pc.group_capacity) {
+          atomicAdd(stats[2], 1u);
+        } else {
+          s_first = pc.root_capacity + 8u * group;
+        }
+      }
+    }
+  }
+  barrier();
+  if (s_first == 0xffffffffu) return;
+  HierarchicalNode parent = nodes[s_parent];
+  if (lane < 8u) {
+    ivec3 octant = ivec3(int(lane & 1u), int((lane >> 1) & 1u), int(lane >> 2));
+    uint child = s_first + lane;
+    nodes[child].coord = parent.coord * 2 + octant;
+    nodes[child].ptr = int(child * 512u);
+    nodes[child].level = parent.level - 1u;
+    nodes[child].children = 0u;
+  }
+  for (uint i = lane; i < 4096u; i += 256u) {
+    uint octant = i / 512u;
+    uint local = i % 512u;
+    uvec3 fine = uvec3(local & 7u, (local >> 3) & 7u, local >> 6) +
+                  uvec3(octant & 1u, (octant >> 1) & 1u, octant >> 2) * 8u;
+    uvec3 coarse = fine / 2u;
+    uint src = uint(parent.ptr) + coarse.x + 8u * (coarse.y + 8u * coarse.z);
+    uint dst = (s_first + octant) * 512u + local;
+    tsdf[dst] = tsdf[src];
+    weight[dst] = min(weight[src], pc.weight_cap);
+    if (pc.has_color != 0u) colors[dst] = colors[src];
+  }
+  memoryBarrierBuffer();
+  barrier();
+  if (lane == 0u) {
+    nodes[s_parent].children = s_first + 1u;
+    atomicAdd(stats[0], 1u);
+  }
+}

@@ -1,0 +1,22 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#define VR_HASH_COMMON_NO_PUSH_CONSTANTS
+#include "hash_common.glsl"
+#include "hierarchical_types.glsl"
+
+layout(local_size_x = 256) in;
+layout(set = 0, binding = 0, scalar) readonly buffer Roots { BlockIndex roots[]; };
+layout(set = 0, binding = 1, scalar) buffer Nodes { HierarchicalNode nodes[]; };
+layout(push_constant, scalar) uniform Push { uint count; uint max_level; } pc;
+
+void main() {
+  uint i = gl_GlobalInvocationID.x;
+  if (i >= pc.count) return;
+  BlockIndex root = roots[i];
+  uint node = uint(root.ptr) / 512u;
+  if (nodes[node].ptr >= 0) return;  // preserve existing descendants
+  nodes[node].coord = root.coord;
+  nodes[node].ptr = root.ptr;
+  nodes[node].level = pc.max_level;
+  nodes[node].children = 0u;
+}

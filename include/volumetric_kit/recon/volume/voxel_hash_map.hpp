@@ -497,6 +497,11 @@ class VR_VOLUME_API VoxelHashMap {
   /// @return The entry buffer, or `VK_NULL_HANDLE` on a moved-from map.
   VkBuffer entries_buffer() const noexcept;
 
+  /// @brief Borrow the entry buffer for a device-resident consumer.
+  /// @return The table's buffer object, empty on a moved-from map. Borrowed
+  ///         only until resize, move, or destruction, as @ref entries_buffer.
+  const Buffer& entries() const noexcept { return entries_; }
+
   /// @brief Bytes in @ref entries_buffer, for a `VK_WHOLE_SIZE`-free binding.
   ///
   /// Pair it with @ref entries_buffer: bind the range rather than

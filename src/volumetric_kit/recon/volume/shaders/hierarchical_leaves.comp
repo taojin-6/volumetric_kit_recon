@@ -1,0 +1,18 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_scalar_block_layout : require
+#include "hierarchical_types.glsl"
+
+layout(local_size_x = 256) in;
+layout(set = 0, binding = 0, scalar) readonly buffer Nodes { HierarchicalNode nodes[]; };
+layout(set = 0, binding = 1, scalar) writeonly buffer Leaves { uint leaves[]; };
+layout(set = 0, binding = 2, scalar) buffer Count { uint count; };
+layout(push_constant, scalar) uniform Push { uint capacity; } pc;
+
+void main() {
+  uint i = gl_GlobalInvocationID.x;
+  if (i >= pc.capacity) return;
+  if (nodes[i].ptr >= 0 && nodes[i].children == 0u) {
+    leaves[atomicAdd(count, 1u)] = i;
+  }
+}
