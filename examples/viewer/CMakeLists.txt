@@ -85,7 +85,7 @@ set(_viewer_common_inc "${CMAKE_CURRENT_SOURCE_DIR}"
 # fuse_render: fuse a sequence, render the coloured mesh to a PNG headlessly
 # (gfx OffscreenTarget + HybridMeshPipeline). No window -- runnable in CI.
 add_executable(fuse_render fuse_render.cpp)
-target_link_libraries(fuse_render PRIVATE ${_viewer_recon_libs} vr_stb_image
+target_link_libraries(fuse_render PRIVATE ${_viewer_recon_libs}
                                           ${_viewer_gfx_libs} Vulkan::Vulkan)
 target_include_directories(fuse_render PRIVATE ${_viewer_common_inc})
 vr_target_warnings(fuse_render)

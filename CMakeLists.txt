@@ -49,6 +49,8 @@ option(VR_WITH_FFMPEG
 option(VR_WITH_CUDA
        "Keep NVIDIA-decoded pictures on the device (requires the CUDA toolkit)"
        OFF)
+option(VR_WITH_ASSIMP
+       "Build the Assimp-backed mesh loader (requires an installed Assimp)" OFF)
 
 # Semicolon list of sanitizers (e.g. "address;undefined"); empty = off. Applied
 # globally -- see cmake/vr_sanitizers.cmake for why.
@@ -77,10 +79,12 @@ endif()
 if(VR_WITH_CUDA)
   include(vr_cuda)
 endif()
+if(VR_WITH_ASSIMP)
+  find_package(assimp CONFIG REQUIRED)
+endif()
 
-# Vendored deps (VMA today) via pinned FetchContent. Exposes VR_VMA_INCLUDE_DIR
-# to the tiers below (recon_core compiles VMA in one TU); added before src/ so
-# that variable is in scope when the core target wires it.
+# Pinned implementation dependencies expose private include paths to the tiers
+# below; no vendored target becomes part of the installed link interface.
 add_subdirectory(third_party)
 
 add_subdirectory(src)

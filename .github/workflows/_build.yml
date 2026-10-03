@@ -49,6 +49,13 @@ on:
         required: false
         type: boolean
         default: false
+      assimp:
+        description: >-
+          Install Assimp and build the optional mesh loader with
+          VR_WITH_ASSIMP=ON.
+        required: false
+        type: boolean
+        default: false
       hevc_backend:
         description: >-
           The HEVC decode back end this leg promises (cuda, videotoolbox),
@@ -139,6 +146,11 @@ jobs:
           if [ "${{ inputs.ffmpeg }}" = "true" ]; then
             pkgs="$pkgs pkg-config libavcodec-dev libavutil-dev libswscale-dev"
           fi
+          if [ "${{ inputs.assimp }}" = "true" ]; then
+            # Ubuntu 22.04's Assimp CMake export references libz.so but does
+            # not pull in the development package that provides that link.
+            pkgs="$pkgs libassimp-dev zlib1g-dev"
+          fi
           # shellcheck disable=SC2086  # intentional: split $pkgs into separate args
           sudo apt-get install -y --no-install-recommends $pkgs
           # The CUDA toolkit for VR_WITH_CUDA (cmake/vr_cuda.cmake): cuda.h,
@@ -181,6 +193,9 @@ jobs:
           extra=""
           if [ "${{ inputs.ffmpeg }}" = "true" ]; then
             extra="ffmpeg pkgconf"
+          fi
+          if [ "${{ inputs.assimp }}" = "true" ]; then
+            extra="$extra assimp"
           fi
           ok=0
           for attempt in 1 2 3; do
@@ -340,7 +355,8 @@ jobs:
             if cmake -S . -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
                 -DVR_WITH_ORBBEC=${{ inputs.orbbec_sdk && 'ON' || 'OFF' }} \
                 -DVR_WITH_FFMPEG=${{ inputs.ffmpeg && 'ON' || 'OFF' }} \
-                -DVR_WITH_CUDA=${{ inputs.cuda && 'ON' || 'OFF' }}; then
+                -DVR_WITH_CUDA=${{ inputs.cuda && 'ON' || 'OFF' }} \
+                -DVR_WITH_ASSIMP=${{ inputs.assimp && 'ON' || 'OFF' }}; then
               ok=1
               break
             fi

@@ -30,13 +30,13 @@
 #include <vector>
 
 #include "fuse_frame.hpp"
-#include "ply_writer.hpp"
 #include "replica_capture.hpp"
 #include "volumetric_kit/recon/core/allocator.hpp"
 #include "volumetric_kit/recon/core/device.hpp"
 #include "volumetric_kit/recon/core/instance.hpp"
 #include "volumetric_kit/recon/core/result.hpp"
 #include "volumetric_kit/recon/core/stage_metrics.hpp"
+#include "volumetric_kit/recon/io/ply_writer.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
 #include "volumetric_kit/recon/mesh/mesh.hpp"
 #include "volumetric_kit/recon/sensor/camera_capture.hpp"
@@ -604,7 +604,7 @@ vr::Status run(const Options& opt) {
           ? 100.0 * static_cast<double>(t.emitted_triangles) /
                 t.triangle_capacity
           : 0.0);
-  VR_TRY(vr_example::write_ply(opt.out, final_mesh));
+  VR_TRY(vr::io::write_ply(opt.out, final_mesh));
   const auto t_end = std::chrono::steady_clock::now();
   const double secs = std::chrono::duration<double>(t_end - t_start).count();
   std::printf(

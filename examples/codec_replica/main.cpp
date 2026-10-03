@@ -26,12 +26,12 @@
 #include "codec_stream.hpp"
 #include "codec_sweep.hpp"
 #include "fuse_frame.hpp"
-#include "ply_writer.hpp"
 #include "replica_capture.hpp"
 #include "volumetric_kit/recon/core/allocator.hpp"
 #include "volumetric_kit/recon/core/device.hpp"
 #include "volumetric_kit/recon/core/instance.hpp"
 #include "volumetric_kit/recon/eval/mesh_distance.hpp"
+#include "volumetric_kit/recon/io/ply_writer.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
 
@@ -201,8 +201,8 @@ vr::Status run(const Options& opt) {
   // Written first, so a comparison that refuses a mesh still leaves the
   // meshes to look at.
   if (!opt.out_prefix.empty()) {
-    VR_TRY(vr_example::write_ply(opt.out_prefix + "_source.ply", source));
-    VR_TRY(vr_example::write_ply(opt.out_prefix + "_decoded.ply", decoded));
+    VR_TRY(vr::io::write_ply(opt.out_prefix + "_source.ply", source));
+    VR_TRY(vr::io::write_ply(opt.out_prefix + "_decoded.ply", decoded));
   }
   // A band's width of reach, and an F-score at half a voxel, inside the
   // reconstruction's own resolution so it moves with the codec. The source is

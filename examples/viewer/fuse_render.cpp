@@ -39,6 +39,7 @@
 #include "volumetric_kit/recon/core/device.hpp"
 #include "volumetric_kit/recon/core/instance.hpp"
 #include "volumetric_kit/recon/core/result.hpp"
+#include "volumetric_kit/recon/io/image_io.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
 #include "volumetric_kit/recon/mesh/mesh.hpp"
 #include "volumetric_kit/recon/sensor/camera_capture.hpp"
@@ -60,9 +61,6 @@
 #include "volumetric_kit/gfx/core/vulkan.hpp"
 #include "volumetric_kit/gfx/pipelines/gpu_mesh.hpp"
 #include "volumetric_kit/gfx/pipelines/hybrid_mesh_pipeline.hpp"
-
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#include "stb_image_write.h"
 
 namespace vr = volumetric_kit::recon;
 namespace vol = volumetric_kit::recon::volume;
@@ -591,9 +589,15 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "no readback pixels\n");
     return 1;
   }
-  if (stbi_write_png(opt.out.c_str(), opt.width, opt.height, 4, pixels,
-                     opt.width * 4) == 0) {
-    std::fprintf(stderr, "stbi_write_png failed for %s\n", opt.out.c_str());
+  // gfx sizes the readback buffer to the target's extent at the RGBA8 texel
+  // size chosen above; it exposes no byte count of its own.
+  const VkExtent2D extent = target.extent();
+  const vr::Status written = vr::io::write_png_rgba8(
+      opt.out, pixels,
+      static_cast<std::size_t>(extent.width) * extent.height * 4, extent.width,
+      extent.height);
+  if (!written) {
+    std::fprintf(stderr, "write PNG: %s\n", written.message().c_str());
     return 1;
   }
   // Vertices as well as triangles, and the ratio between them: that ratio is

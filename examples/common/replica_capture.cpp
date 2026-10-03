@@ -16,7 +16,7 @@
 #include <system_error>
 #include <utility>
 
-#include "image_io.hpp"
+#include "volumetric_kit/recon/io/image_io.hpp"
 #include "volumetric_kit/recon/sensor/camera_conventions.hpp"
 
 namespace vr_example {
@@ -316,10 +316,12 @@ vr::Result<RgbdFrame> ReplicaCapture::load(std::size_t index) const {
   // Size-checked against the camera structs the frame is stamped with, so the
   // buffer a consumer indexes by `depth_camera.width * height` is exactly that
   // long.
-  VR_ASSIGN(frame.color, load_color_packed(color_path, color_camera_.width,
-                                           color_camera_.height));
-  VR_ASSIGN(frame.depth, load_depth_metres(depth_path, depth_camera_.width,
-                                           depth_camera_.height, depth_scale_));
+  VR_ASSIGN(frame.color,
+            vr::io::load_color_packed(color_path, color_camera_.width,
+                                      color_camera_.height));
+  VR_ASSIGN(frame.depth,
+            vr::io::load_depth_metres(depth_path, depth_camera_.width,
+                                      depth_camera_.height, depth_scale_));
   // Both cameras from the one trajectory entry: depth and colour are one
   // registered camera on Replica, so the two poses cannot drift apart.
   // color_encoding stays defaulted -- the default *is* the declaration

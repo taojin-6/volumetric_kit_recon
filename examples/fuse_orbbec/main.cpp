@@ -41,12 +41,12 @@
 
 #include "fuse_device_frame.hpp"
 #include "fuse_frame.hpp"
-#include "ply_writer.hpp"
 #include "volumetric_kit/recon/core/allocator.hpp"
 #include "volumetric_kit/recon/core/device.hpp"
 #include "volumetric_kit/recon/core/instance.hpp"
 #include "volumetric_kit/recon/core/result.hpp"
 #include "volumetric_kit/recon/core/stage_metrics.hpp"
+#include "volumetric_kit/recon/io/ply_writer.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
 #include "volumetric_kit/recon/mesh/mesh.hpp"
 #include "volumetric_kit/recon/sensor/camera_capture.hpp"
@@ -481,7 +481,7 @@ vr::Status run(const Options& opt) {
 
   // --- Mesh -> PLY ---
   VR_ASSIGN(mesh::Mesh final_mesh, extractor.extract_host(volume, 0.0f));
-  VR_TRY(vr_example::write_ply(opt.out, final_mesh));
+  VR_TRY(vr::io::write_ply(opt.out, final_mesh));
   std::printf(
       "done: fused %d frames in %.1fs (%.1f fps), mesh %zu vertices / %zu "
       "triangles -> %s\n",

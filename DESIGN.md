@@ -56,9 +56,10 @@ conventions and Vulkan setup.
   engine's `VK_DEVICE_HOST`-style macros are renamed `VR_*` on port.)
 - CMake: `find_package(volumetric_kit_recon)`; component targets
   `volumetric_kit::recon_core`, `…_volume`, `…_tsdf`, `…_mesh`, `…_texture`,
-  `…_sensor`, `…_codec`, `…_eval`, `…_interop` (+ later `…_track`, `…_stream`),
+  `…_sensor`, `…_codec`, `…_eval`, `…_io`, `…_interop` (+ later `…_track`, `…_stream`),
   plus `…_sensor_utils` (GPU pre-processing), the opt-in `…_sensor_orbbec`
-  driver (`VR_WITH_ORBBEC`) and `…_sensor_video` decoder (`VR_WITH_FFMPEG`);
+  driver (`VR_WITH_ORBBEC`), `…_sensor_video` decoder (`VR_WITH_FFMPEG`), and
+  `…_io_assimp` mesh importer (`VR_WITH_ASSIMP`);
   umbrella alias
   `volumetric_kit::recon`.
 
@@ -68,7 +69,7 @@ Strict left-to-right dependency rule: a tier may depend only on tiers to its
 left. No upward includes.
 
 `core` → `volume` → `tsdf` → `mesh` → `texture` → `interop`, with `sensor`
-branching off **`core`**, `codec` off **`volume`** and `eval` off **`mesh`**
+branching off **`core`**, `codec` off **`volume`** and `eval`/`io` off **`mesh`**
 (later: `track`, `stream`).
 
 - **`core`** — the Vulkan foundation *and* the vocabulary every tier trades in
@@ -89,8 +90,12 @@ branching off **`core`**, `codec` off **`volume`** and `eval` off **`mesh`**
   / rehash as compute shaders. (POD layouts already landed in `volume/hash_types.hpp`.)
 - **`tsdf`** — TSDF integration compute shaders (classic + dynamic), and a
   triangle mesh's distance field written in (signed, or as a shell).
-- **`mesh`** — marching-cubes compute shaders, host mesh containers, and
-  OBJ/PLY + glTF/GLB export.
+- **`mesh`** — marching-cubes compute shaders and host mesh containers.
+- **`io`** — host asset loading and export, branching off `mesh`; encoded
+  images, depth PNGs and PLY/PNG export are in `recon_io`, static mesh import
+  in the optional Assimp-backed `recon_io_assimp`. GPU tiers never link back
+  to file I/O. Dataset playback and camera conventions remain with their
+  capture adapters.
 - **`texture`** — projective texturing: fills the mesh's per-vertex `uv0` with a
   posed camera's image coordinates where it has line of sight (per-vertex-color
   fallback elsewhere), or with several cameras' coordinates into an atlas of
@@ -1281,6 +1286,42 @@ rounding, where Ericson's region test lost it now and then. A `stride` picks
 vertices by a hash of their position, so the figures reproduce whatever
 order marching cubes' atomics emitted the mesh in.
 
+### io
+
+`io::load_color_packed` decodes JPEG/PNG to top-left row-major encoded RGB
+bytes in the existing `R | G<<8 | B<<16` packing. It performs no implicit
+linearization or profile conversion; the capture adapter declares the input
+encoding. `io::load_depth_metres` requires a genuine 16-bit single-channel
+PNG and a finite positive units-per-metre divisor. Zero samples stay zero.
+Expected dimensions are explicit so a camera cannot silently use different
+intrinsics. The PNG writer takes already-encoded RGBA8 and opens its output
+only after encoding succeeds; PLY export converts linear mesh colors to
+canonical sRGB bytes (clamped, NaN as 0) and preserves triangle indices.
+Errors name the file and backend reason. Public functions validate their input
+and translate backend exceptions that reach them into `Status`/`Result`
+(tinyply's writer is `noexcept`); private third-party types never appear in
+installed headers.
+
+`recon_io_assimp` adds `io::load_mesh` and its owned `TriangleMesh` position /
+index container. Assimp handles format decoding and triangulation. Recon
+walks every node instance with composed transforms and corrects triangle
+winding when the determinant is negative. Exactly coincident positions join
+across UV/material seams, with no tolerance-based merging. This is geometry
+import, not topology repair: degenerate and duplicate triangles are retained,
+and manifold/sign checks belong to the consumer. Non-triangle primitives,
+animation, skinning, morph targets and invalid transforms on mesh instances
+are refused; nodes without meshes are not checked.
+
+Mesh coordinates retain the imported scene's scale; neither a metre unit nor
+a target height is guessed. No Assimp normalization or handedness flags are
+enabled, and importer unit/up-axis conversions are switched off where the
+installed Assimp allows: before 5.3 it still applies Collada's `<unit>`, and
+5.4.x converts FBX regardless. This is a host boundary for file input and output, separate from
+GPU-resident reconstruction. The default build has no Assimp dependency;
+`VR_WITH_ASSIMP=ON` finds an installed package and exports a separate target.
+The image and PLY backends use the existing pinned stb and tinyply sources,
+now private implementation dependencies of the installed I/O library.
+
 ## Examples
 
 (`examples/`.) Five of the six poll their frames through
@@ -1369,8 +1410,8 @@ correct and unquantified — expect it roughly linear in the visible fraction on
 the `ExtractTimings` rows that scale with the active set (the upload, the
 dispatch, the arena; `readback_ms` and `descriptor_ms` are per-call constants
 and will read flat), and quote nothing until a run says so. Beside that:
-first-class glTF/GLB export via tinygltf + the gfx-vertex converter (the
-example's tinyply dump is deliberately a throwaway). On `mesh`, the greppable
+first-class glTF/GLB export in `io` and the gfx-vertex converter. PLY export
+has moved from the example into the validated I/O module. On `mesh`, the greppable
 `TODO(mesh)`s: cross-block vertex sharing, per-vertex normals, extending
 incremental extraction past one slot, revisiting degenerate retirement if
 relocation proves common rather than rare — and, the sharing kernel's form of

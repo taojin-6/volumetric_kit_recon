@@ -274,6 +274,11 @@ entries relevant to your task; later amendments supersede earlier rules.
   Mesh input binning keeps counts, cursors and occupied bins on the device,
   retains scratch, and reads only validation and bounded dispatch control.
 
+- [**2026-10-03**](#2026-10-03--asset-loading-and-export-belong-to-io-with-assimp-as-an-optional-private-backend) —
+  Asset loading and export move into the installed `io` tier; Assimp adds
+  optional static mesh import, while dataset and normalization policy stay
+  with consumers.
+
 ## Decision record
 
 ### 2026-06-21 — Single Vulkan path (MoltenVK on Apple), like gfx.
@@ -8667,6 +8672,74 @@ The RTX logs are `mesh-{sparse,dense}-bench-{1,2,3}.log` under the remote
 `.worktrees/gpu-residency-base-e4db453/` and
 `.worktrees/gpu-mesh-fix-13adbb3/` checkouts. The demonstrated structural
 change is bounded control transfer and retained bulk storage.
+
+### 2026-10-03 — Asset loading and export belong to io, with Assimp as an optional private backend.
+
+The codec mesh example exposed a missing library boundary: image decoding
+and PLY writing lived in `examples/common`, and loading one OBJ required a
+new example parser. Asset I/O is useful independently of reconstruction or
+that example. Move the existing JPEG/PNG readers and PLY writer, plus the
+viewer's PNG export, into the installed `recon_io` target. It depends on
+`mesh` for the host mesh container; no GPU tier depends on it. This supersedes
+the architecture's earlier assignment of future mesh file export to `mesh`.
+Future OBJ/glTF exporters belong in `io`; they are not implemented here.
+
+The public namespace is `volumetric_kit::recon::io`, with headers under
+`io/`. APIs return owned host data or `Status`, validate file-boundary
+inputs, and keep backend types private. Encoded image bytes remain encoded;
+depth import requires an actual 16-bit grayscale PNG and explicit finite
+units per metre. PLY's RGB bytes are sRGB-encoded from the mesh's linear
+colors. RGBA8 PNG export expects already-encoded pixels. These file operations
+do not create GPU resources or initiate readback; a caller explicitly chooses
+to export a host mesh or image. Replica's frame selection, trajectory parsing
+and camera contract remain in its capture adapter. Sensor/video decoding and
+rig calibration retain their existing contracts.
+
+Use Assimp for reusable static mesh parsing, behind a separate optional
+`recon_io_assimp` target. `VR_WITH_ASSIMP` defaults OFF; ON finds an installed
+Assimp CMake package, as the repository does for other compiled optional
+backends. No Assimp source download or change to the CMake 3.21 floor is
+needed. The installed package re-finds the Assimp that backend was built
+against (same major, no older), including the private link requirement of a
+static archive. A cross-compile
+must provide a target-platform package. Existing stb/tinyply pins move from
+the examples to private library build dependencies. stb symbols and settings
+are translation-unit-local; tinyply uses a private namespace, so static
+consumers can provide their own independent copies of either backend.
+
+`load_mesh` produces positions and triangle indices, discarding appearance.
+Assimp decodes the asset and triangulates polygons; our conversion traverses
+the scene and applies every mesh instance's composed node transform. A
+negative determinant reverses indices to preserve orientation. Singular,
+nonfinite and non-affine transforms of mesh instances are refused; nodes
+without meshes are not checked. Animated, skinned or morphed
+assets require an explicitly evaluated static asset and return Unsupported.
+Remaining point/line primitives are refused rather than silently dropped.
+
+The loader joins exactly coincident finite positions, including material/UV
+seams. It does not use Assimp's approximate vertex-joining or topology-repair
+passes, and preserves duplicate and degenerate triangles for the consumer's
+audit. It does not impose a target height, rotate to a guessed up direction,
+or claim unknown source coordinates are metres. Importer unit and up-axis
+conversions are switched off; Assimp before 5.3 still applies Collada's
+`<unit>`, and 5.4.x converts FBX regardless. Rafa2's explicit 1.7 m
+normalization remains a codec-example policy; adopting this loader there is
+a separate change from this standalone module review.
+
+Validation on Apple M5 Max with installed Assimp 6.0.5: Release builds are
+warning-clean with warnings as errors, and the Assimp/FFmpeg-enabled full
+suite passes 52/52. Host tests cover the PNG round trip and color packing,
+16-bit depth units, 8-bit depth refusal, and the PLY byte layout. Mesh import
+has no model-file tests; CI builds the loader against Assimp 5.2 and 6.0.
+Both viewer executables compile with the new PNG API; no physical display
+check is claimed.
+
+A host-only import of the actual Rafa2 OBJ retains 24,998 vertices, 50,000
+triangles and 75,000 consistently paired edges, positive signed volume
+0.00809495816868, and projected head-up extent 0.795690825727 source units.
+The loader leaves that source extent intact; the consumer must explicitly
+normalize it to 1.7 m. This verifies asset ingestion, not a new codec or
+end-to-end timing result.
 
 ## Measured lessons
 

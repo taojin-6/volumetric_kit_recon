@@ -49,6 +49,14 @@ if(@VR_WITH_FFMPEG@)
   endif()
 endif()
 
+# Static recon_io_assimp retains its private Assimp dependency as LINK_ONLY.
+# Recreate that imported target before reading the shared export set: the
+# Assimp the package was built against is the hint, and Assimp's own version
+# rule holds a consumer to its major version, no older.
+if(@VR_WITH_ASSIMP@)
+  find_dependency(assimp @assimp_VERSION@ CONFIG HINTS "@assimp_DIR@")
+endif()
+
 include("${CMAKE_CURRENT_LIST_DIR}/volumetric_kit_reconTargets.cmake")
 
 check_required_components(volumetric_kit_recon)
