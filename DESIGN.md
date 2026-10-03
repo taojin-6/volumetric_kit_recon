@@ -641,8 +641,9 @@ backing memory. `is_device_local()` accepts `DEVICE_LOCAL` with or without
 `HOST_VISIBLE`. The VMA allocator and exported-buffer factory both record the
 actual allocation type. `StorageInput` refuses a borrowed buffer with unknown
 or non-local memory before submitting work, even when its size and storage
-usage fit. Existing adopters must supply the bound allocation's actual memory
-metadata. Callers holding non-local data can pass a host array for staging, or
+usage fit. Adopters must supply the bound allocation's actual memory
+metadata: the adopting constructor has no default for it, and `std::nullopt`
+says it is unknown. Callers holding non-local data can pass a host array for staging, or
 upload/copy into `device_storage_buffer` with `CommandBatch` before using the
 device overload. Transfer-only sources and the documented small-parameter or
 host-read-table exceptions do not gain a blanket residency restriction.
@@ -698,7 +699,8 @@ a buffer CUDA imports, on a device that `exports_memory()`:
 `VK_KHR_external_memory_fd`, which `create` enables where offered and
 `requirements()` names as optional (`external_memory`); beside it,
 `find_memory_type` is the type a resource bound by hand takes, the first
-that fits, which Vulkan's ordering makes the plainest. `Image`
+that fits, which Vulkan's ordering makes the plainest; it never returns a
+protected, lazily allocated or AMD device-coherent type. `Image`
 (`core/image.hpp`) holds a `VkImage` another API made, freed by its
 maker's deleter and kept in one layout a copy reads (GENERAL or
 TRANSFER_SRC_OPTIMAL), and `CommandBatch::copy` copies an R8 or R8G8 one
@@ -798,8 +800,8 @@ has made stale. While the last one still holds, the call returns it again,
 dispatching and reporting nothing, so an extract after a fuse reuses the
 fuse's compaction (2026-09-30).
 `topology_epoch()` lives on the *map* — the object that frees a block
-index — and is a globally unique token re-drawn at `create` and at every
-`remove`/`clear`, never at `resize`: a slot-keyed cache (mesh's spans)
+index — and is a globally unique token re-drawn at `create`, at every
+`clear` and at every `remove` that accepts its input, never at `resize`: a slot-keyed cache (mesh's spans)
 anchors on it, so no path may free an index without moving it
 and no two grids may ever share a value. Host `diagnostics()` scans occupancy;
 `load_factor()` is the constant-time read a per-frame caller can afford (a
@@ -840,7 +842,8 @@ since the tick it last meshed at.
 inverse-square-with-behind-dropoff weight, running average capped at
 `max_weight`. Depth is sampled bilinearly, nearest at image edges, across
 discontinuities, or when any tap is non-positive or non-finite. A NaN hole
-therefore leaves a valid nearest sample usable. `IntegrationMode` selects
+therefore leaves a valid nearest sample usable. Zero is a missing sample even
+when `min_depth` is zero, in allocation and integration alike. `IntegrationMode` selects
 **classic** (keep free space ahead
 of the surface) or **dynamic** (clear it, so a receded surface leaves no
 ghost). An optional `ColorFrame` fuses colour through its own separate

@@ -279,6 +279,11 @@ entries relevant to your task; later amendments supersede earlier rules.
   optional static mesh import, while dataset and normalization policy stay
   with consumers.
 
+- [**2026-10-03**](#2026-10-03--follow-ups-to-the-2026-10-02-merges-zero-depth-is-missing-in-every-reader-only-an-accepted-remove-moves-the-topology-epoch-and-an-adopted-buffer-states-its-memory) —
+  Zero depth is missing in every reader; only an accepted remove moves the
+  topology epoch; an adopted buffer states its memory. Mesh binning's capacity
+  scan and the planar RGB route stay, with measured costs.
+
 ## Decision record
 
 ### 2026-06-21 — Single Vulkan path (MoltenVK on Apple), like gfx.
@@ -8740,6 +8745,51 @@ triangles and 75,000 consistently paired edges, positive signed volume
 The loader leaves that source extent intact; the consumer must explicitly
 normalize it to 1.7 m. This verifies asset ingestion, not a new codec or
 end-to-end timing result.
+
+### 2026-10-03 — Follow-ups to the 2026-10-02 merges: zero depth is missing in every reader, only an accepted remove moves the topology epoch, and an adopted buffer states its memory.
+
+From a review of #137, #143, #145, #146, #148 and #149.
+
+**Zero depth.** Amends the 2026-10-02 zero-near follow-up, which guarded only
+the colour sight line. With `min_depth == 0`, depth allocation unprojected
+each hole to the camera origin, integration fused `sdf = -zc` around the
+camera, and `occluded_ok` accepted a hole. Every depth reader now requires
+`d > 0` before its range test. With all-zero depth and a zero near bound, the
+regression allocates no block and writes no weight; it fails with either the
+allocation or the integration guard removed.
+
+**Remove.** `VoxelHashMap::remove` moved the topology epoch before checking
+its input, so a zero-count or refused call invalidated every cached block list
+and forced a full re-mesh. Both overloads now move it in the shared input path,
+after validation and before the dispatch.
+
+**Residency.** Amends the 2026-10-02 residency entry. `Buffer`'s adopting
+constructor has no default for the memory info: an adopter that omitted it
+compiled, then failed on every device input. One that does not know passes
+`std::nullopt`. `find_memory_type` always skips protected, lazily allocated
+and AMD device-coherent types, which need features `Device::create` leaves
+off.
+
+**Kept, with measured costs.**
+- Mesh binning scans the grid's whole capacity on the device, as the host scan
+  it replaced did. For two triangles on the M5 Max, Release, medians of nine in
+  three runs, device time is about 0.06 ms at 16k slots, 0.08–0.10 at 131k,
+  0.13–0.30 at 393k and 0.18 at 786k. Scanning only touched slots needs an
+  indirect multi-level dispatch, which mesh conversion does not justify.
+  Retained scratch is about 16 bytes per slot (0.4% of an 8³ grid's `tsdf`
+  and `weight`) plus the largest mesh's inputs and bins.
+- Before swscale 9, RGB24 output goes through planar RGB for exact vertical
+  chroma weights. A 4K frame on native arm64 Ubuntu 24.04 (swscale 7.5, GCC 13)
+  takes 34.5 ms that way against 25.5 ms on the packed path, which rounds the
+  weights; the interleave is 0.5 ms of it. GCC's x86-64 baseline leaves the
+  interleave scalar; that is not measured natively.
+
+**The bin-plan shader test is removed.** It dispatched the private scan
+shaders with hand-copied push constants, against the public-API test rule. Only
+it covered uint32 overflow of bin entries, which is unreachable:
+`triangle_candidate_offsets` refuses more than 2^32 candidates, and candidates
+bound the entries. The public mesh test covers split dispatches, compact-list
+growth, the second scan level and the oversized-bin refusal.
 
 ## Measured lessons
 

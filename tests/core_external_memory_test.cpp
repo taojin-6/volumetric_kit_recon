@@ -64,6 +64,13 @@ int main() {
   CHECK(plain.has_value() == unmapped_local);
   CHECK(!vr::find_memory_type(dev, 0, 0));
   CHECK(!vr::find_memory_type(dev, 1u << *local, kLocal, kLocal));
+  // Types that need features Device::create leaves off are never chosen.
+  for (VkMemoryPropertyFlags unusable :
+       {VK_MEMORY_PROPERTY_PROTECTED_BIT,
+        VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT,
+        VK_MEMORY_PROPERTY_DEVICE_COHERENT_BIT_AMD}) {
+    CHECK(!vr::find_memory_type(dev, ~0u, unusable));
+  }
 
   if (!dev.exports_memory()) {
     CHECK(vr::create_exported_buffer(dev, 256).status().domain() ==

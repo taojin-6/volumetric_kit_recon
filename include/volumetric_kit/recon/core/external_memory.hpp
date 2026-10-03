@@ -41,7 +41,9 @@ struct ExportedBuffer {
 /// Vulkan orders a memory type ahead of any whose flags strictly contain its
 /// own, so the first match is the plainest. Asked for device-local alone, it
 /// is a type the host cannot map wherever @p type_bits allows one, which keeps
-/// the resource out of a ReBAR system's host-visible BAR heap.
+/// the resource out of a ReBAR system's host-visible BAR heap. Protected,
+/// lazily allocated and AMD device-coherent types are always skipped: the
+/// features they need are not enabled by @ref Device::create.
 /// @param device    The device whose memory types are searched.
 /// @param type_bits `VkMemoryRequirements::memoryTypeBits` of the resource.
 /// @param required  Flags the type must have; 0 for any.
