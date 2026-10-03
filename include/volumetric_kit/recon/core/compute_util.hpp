@@ -14,6 +14,7 @@
 /// copied verbatim into every tier. Hoisted here so a tier declares neither.
 /// The **policy** (which buffers, which bindings) stays in the tier.
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -22,6 +23,7 @@
 #include "volumetric_kit/recon/core/allocator.hpp"
 #include "volumetric_kit/recon/core/buffer.hpp"
 #include "volumetric_kit/recon/core/command_batch.hpp"
+#include "volumetric_kit/recon/core/device.hpp"
 #include "volumetric_kit/recon/core/result.hpp"
 #include "volumetric_kit/recon/core/vulkan.hpp"
 
@@ -166,6 +168,35 @@ inline Result<Buffer> device_storage_buffer(
   desc.queue_families = queue_families;
   desc.queue_family_count = queue_family_count;
   return allocator.create_buffer(desc);
+}
+
+/// @brief Make @p buffer, retained device-local scratch, hold at least
+///        @p bytes.
+///
+/// A buffer that fits is kept. Otherwise the old one is released before its
+/// replacement is created, so a grow never holds both, and the replacement
+/// takes 1.5x headroom (within @p max_range), so an input that creeps up
+/// does not reallocate on every call. Contents are not preserved.
+/// @param device     Names the buffer for GPU captures.
+/// @param allocator  The allocator to create on.
+/// @param buffer     The retained buffer; empty after a failed grow.
+/// @param bytes      The range the next binding covers. Zero keeps the buffer.
+/// @param max_range  The device limit, from @ref max_storage_buffer_range.
+/// @param name       Debug name, `tier.buffer`, which also labels the range
+///                   error.
+/// @return OK, @ref Status::Code::InvalidArgument when @p bytes exceeds
+///         @p max_range, or an allocation failure.
+inline Status ensure_device_scratch(const Device& device, Allocator& allocator,
+                                    Buffer& buffer, VkDeviceSize bytes,
+                                    VkDeviceSize max_range, const char* name) {
+  VR_TRY(check_storage_buffer_range(name, bytes, max_range));
+  if (buffer.size() >= bytes) return {};
+  buffer = Buffer();
+  VR_ASSIGN(buffer, device_storage_buffer(
+                        allocator, std::min(max_range, bytes + bytes / 2)));
+  device.set_object_name(VK_OBJECT_TYPE_BUFFER,
+                         debug_object_handle(buffer.handle()), name);
+  return {};
 }
 
 /// @brief An image a call reads as a storage binding: a host array the call

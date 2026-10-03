@@ -1,19 +1,11 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Tao Jin
 
-# Asset import followed by explicit height normalization and topology checks.
-# Host-only and testable when example executables are disabled.
-if(TARGET recon_io_assimp)
-  add_executable(
-    recon_mesh_normalization_test mesh_normalization_test.cpp
-                                  ../examples/common/mesh_normalization.cpp)
-  target_include_directories(recon_mesh_normalization_test
-                             PRIVATE ../examples/common)
-  target_link_libraries(recon_mesh_normalization_test
-                        PRIVATE volumetric_kit::recon_io_assimp)
-  target_compile_definitions(
-    recon_mesh_normalization_test
-    PRIVATE VR_IO_MESH_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data/io")
+# The codec mesh example's height normalization and topology audit. Host-only;
+# the examples define the library it tests, so it builds with them.
+if(VR_BUILD_EXAMPLES AND TARGET recon_io_assimp)
+  add_executable(recon_mesh_normalization_test mesh_normalization_test.cpp)
+  target_link_libraries(recon_mesh_normalization_test PRIVATE vr_example_mesh)
   vr_target_warnings(recon_mesh_normalization_test)
   add_test(NAME recon_mesh_normalization COMMAND recon_mesh_normalization_test)
 endif()

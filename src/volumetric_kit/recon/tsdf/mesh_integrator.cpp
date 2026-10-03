@@ -200,17 +200,8 @@ Result<MeshIntegrator> MeshIntegrator::create(Device& device,
 
 Status MeshIntegrator::ensure_scratch(Buffer& buffer, VkDeviceSize bytes,
                                       const char* name) {
-  VR_TRY(check_storage_buffer_range(name, bytes, max_storage_buffer_range_));
-  if (buffer.size() >= bytes) return Status{};
-  // Modest geometric headroom, always inside one storage binding's limit.
-  const VkDeviceSize grown =
-      std::min(max_storage_buffer_range_, buffer.size() + buffer.size() / 2);
-  VR_ASSIGN(Buffer replacement,
-            device_storage_buffer(*allocator_, std::max(bytes, grown)));
-  buffer = std::move(replacement);
-  device_->set_object_name(VK_OBJECT_TYPE_BUFFER,
-                           debug_object_handle(buffer.handle()), name);
-  return Status{};
+  return ensure_device_scratch(*device_, *allocator_, buffer, bytes,
+                               max_storage_buffer_range_, name);
 }
 
 Result<MeshIntegrateStats> MeshIntegrator::integrate(

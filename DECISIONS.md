@@ -285,8 +285,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   scan and the planar RGB route stay, with measured costs.
 
 - [**2026-10-02**](#2026-10-02--per-basis-quantization-and-a-normalized-mesh-codec-fixture) —
-  Per-basis quantization replaces the DC/AC split; frame v3 carries the table,
-  and a normalized Rafa2 mesh joins room0 in the codec study.
+  Per-basis quantization replaces the DC/AC split; frame v3 carries the kept
+  bases' weights, and a normalized Rafa2 mesh joins room0 in the codec study.
 - [**2026-10-03**](#2026-10-03--compact-the-codecs-observed-list-on-the-device-and-retain-transform-scratch) —
   Compact the codec's observed list on the device, predict its readback prefix
   to avoid an unconditional extra fence, and retain transform scratch.
@@ -8811,24 +8811,27 @@ growth, the second scan level and the oversized-bin refusal.
 `quantization_scale` and 512 `quantization_weights`, indexed by canonical
 frequency `(u,v,w)` as `u + 8*v + 64*w`. The effective step is their product,
 in fractions of `trunc_dist`, for the existing round-half-to-even scalar
-quantizer. DC is entry zero. All blocks share the same table, independently
-of the retained coefficient count K. A table's DC weight of one is a useful
-normalization convention for comparing global scales; it is not a format
-restriction. Every factor must be positive and finite, and every effective
-step, including those beyond K, must satisfy the existing step bounds.
+quantizer. DC is entry zero. All blocks share the same table. Only the K bases the
+zigzag cutoff keeps use their weights, so only those are checked and carried.
+A table's DC weight of one is a useful normalization convention for comparing
+global scales; it is not a format restriction. The scale and each kept weight
+must be positive and normal, and each kept basis's effective step must satisfy
+the existing step bounds. Normal factors keep validity independent of a host
+or device that flushes subnormals to zero; the first draft accepted subnormal
+factors with a normal product, and checked weights beyond K too.
 
 The host computes effective steps once and uploads them to device-local
-memory in the transform's `CommandBatch`. This matters for extreme but valid
-factorizations: subnormal factors with a normal product must not be flushed
-to zero by shader arithmetic. Both directions use the same canonical table
-through the zigzag map. The DCT, observed mask and entropy models are
+memory in the transform's `CommandBatch`. Both directions use the same
+canonical table through the zigzag map. The DCT, observed mask and entropy models are
 unchanged; each coefficient already had its own rANS probability model.
 
-**Frame v3.** The former two steps become the global scale and a required
-weight count of 512. The complete float table follows the 44-byte prefix,
-making the fixed parameter header 2092 bytes. This adds 2048 bytes per
-frame, counted in every reported size, with no per-block table overhead.
-`read_frame_info` recovers the complete parameters without entropy decoding.
+**Frame v3.** The former two steps become the global scale and a weight
+count equal to K. The kept bases' float weights follow the 44-byte prefix in
+zigzag order, so the fixed header is `44 + 4K` bytes: 300 at K = 64 and
+2,092 at K = 512, with no per-block table overhead. Weights beyond K never
+apply, are not carried, and read back as 1. The first draft carried all 512
+weights, 2,048 bytes in every frame and about a tenth of a 1 cm Rafa2 frame.
+`read_frame_info` recovers the parameters without entropy decoding.
 All intra frames remain self-contained; v1 and v2 are `Unsupported`.
 
 **The study.** The C++ examples share three candidate tables, all with DC
@@ -8894,6 +8897,11 @@ means over three warmed codec calls, host ms and device ms respectively.
 | Rafa2, 5 mm | uniform / 64 / 0.2 | 68,737 | 0.416 / 0.392 | 3.45 / 3.21 | 0.18 / 0.13 |
 | Rafa2, 5 mm | radial / 64 / 0.1 | 66,971 | 0.434 / 0.406 | 3.24 / 3.38 | 0.20 / 0.12 |
 
+Frame bytes here were measured with the first draft's 512-weight header. The
+final header carries K weights, so each K = 64 frame is 1,792 bytes smaller
+with an identical payload (1 cm Rafa2 uniform: 18,194 bytes); the K = 512
+rows are unchanged.
+
 These paired rows are close in rate, not exactly matched. Their rate/error
 tradeoff does not establish a consistent improvement, so the default table
 remains uniform. The band table at K = 64 / scale = 0.1 gives 69,686 bytes
@@ -8936,7 +8944,8 @@ not establish capture-to-display throughput or discrete-GPU performance.
 Rafa2 has only one frame, so it supplies no temporal quality evidence.
 
 The exported 5 mm radial / K = 64 / scale = 0.1 frame was independently
-parsed: 66,971 bytes, 2,395 blocks, all 512 intended weights, and section
+parsed: 66,971 bytes, 2,395 blocks, all 512 weights of the first-draft
+header, and section
 lengths consuming the exact file. Its marching-cubes output has 199,864
 triangles (198,220 before coding). A shared-view rendering of normalized
 input, uncompressed TSDF and decoded output retains the body silhouette,
@@ -8950,8 +8959,8 @@ pass with the Khronos layer explicitly enabled and synchronization
 validation on, as does the full 5 mm radial Rafa2 conversion/codec/meshing
 example, with no validation messages. Added regressions cover nonuniform and directional basis
 weights, A/B/A table changes on a transform and public decoder, malformed
-and truncated v3 parameters, effective-step bounds and valid subnormal
-factorizations, input-unit invariance, oblique height normalization and
+and truncated v3 parameters, effective-step bounds, subnormal factors,
+input-unit invariance, oblique height normalization and
 winding preservation, and OBJ/topology refusals. No discrete GPU or new
 sanitizer run was performed for this change.
 
@@ -8975,10 +8984,11 @@ Downloading the exact list only after learning its count would require two
 fence waits every time. Instead the filter follows the hash map's
 `collect_compacted`: download the count and a predicted list prefix in the
 same batch, then download a missing tail only if the result grew past the
-prediction. The first non-empty call without a previous result predicts the
-whole input; later calls predict the last observed count plus 25%, capped by
-the current input count. A prior empty result predicts zero, so regrowth can
-need the second batch. Empty inputs submit nothing. The returned observed
+prediction. A call with no previous non-zero count (the first, or one after an empty
+result) predicts the whole input; later calls predict the last observed count
+plus 25%, capped by the current input count. The first draft predicted zero
+after an empty result, so the next non-empty call always paid the second
+batch. Empty inputs submit nothing. The returned observed
 count is checked against input capacity before resizing or reading a tail.
 
 For A input blocks, N observed blocks and prefix G, total observed readback is
@@ -8992,11 +9002,15 @@ readback on encode and upload on decode.
 
 **Retain scratch.** Each transform owns grow-only device buffers for the
 observed output, sorted input list, packed coefficients and masks. A fitting
-call makes no new allocation for these buffers. Descriptors bind logical
+call makes no new allocation for these buffers. A grow releases the old
+buffer before creating its replacement, with 1.5x headroom, so a slowly
+growing input does not reallocate on every frame and never holds both;
+`ensure_device_scratch` in `core/compute_util.hpp` does this for the codec
+and the mesh integrator alike. Descriptors bind logical
 ranges, and transfers use logical counts, so a smaller list or K cannot expose
 an old suffix. Scratch remains at its largest size until destruction; at A
 input blocks, N coded blocks and padded coefficient count Kp the high-water
-sizes are 16A, 16N, 2NKp and 64N bytes respectively. The obsolete flags buffer
+sizes are up to 1.5x 16A, 16N, 2NKp and 64N bytes respectively. The obsolete flags buffer
 is removed. Batch staging allocations remain per-call; the per-basis 2 KiB
 effective-step upload and its barriers are unchanged.
 
@@ -9071,11 +9085,17 @@ OBJ parser and duplicate geometry container are removed. PLY exports use
 `io::write_ply`, matching the room example. This completes the codec adoption
 left separate by the asset I/O decision above.
 
-`examples/common/mesh_normalization.*` contains the explicit height/up
-convention, topology audit and conversion to the evaluator's host mesh.
+`examples/common/mesh_normalization.*`, built once as `vr_example_mesh`,
+contains the explicit height/up convention, topology audit and conversion to
+the evaluator's host mesh. The audit runs after normalization, on the float
+metres the conversion reads, so a triangle that collapses there counts as
+degenerate. Its test uses in-code meshes, not a model file. Both codec
+examples share `parse_number.hpp` for their numeric flags, and `codec_mesh`
+grows its grid only for a capacity limit, retrying lock contention.
 These are consumer choices, so they stay outside the format loader.
 Quantization-table candidates likewise remain codec-example policy.
-`codec_mesh` and its normalization test require `VR_WITH_ASSIMP=ON`; the
+`codec_mesh` and its normalization test require `VR_WITH_ASSIMP=ON` (the
+test also needs the examples); the
 room codec, production codec library and remaining tests build without it.
 
 The 1.7 m Rafa2 convention and signed-mode checks are unchanged. Assimp's
@@ -9094,6 +9114,14 @@ The pipeline emits all three PLYs and a 66,973-byte frame, decodes 2,395
 blocks, and extracts 199,864 decoded triangles. This is a functional smoke
 run with validation enabled, not a latency benchmark. An Assimp-disabled
 Release/Werror build also succeeds, and its image/PLY host tests pass.
+
+**Review follow-up.** Rebased onto #156 and #158. On Apple M5 Max, Release
+with warnings as errors and Assimp, all 52 tests pass, and an Assimp-off build
+passes its codec and IO tests. The codec DCT, encoder and decoder tests and
+the mesh-integrate test report no messages with the Khronos layer forced on
+and synchronization validation. `codec_mesh` on a box OBJ writes a
+15,179-byte frame whose 300-byte header carries 64 weights. No new rate or
+latency measurement was made.
 
 ## Measured lessons
 

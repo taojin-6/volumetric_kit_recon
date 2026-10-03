@@ -185,7 +185,7 @@ establish freedom from self-intersections. `--mode shell` supports open or
 inconsistently wound meshes, with an intentional surface offset.
 
 Use a Release build for measurements. The current format is v3, with a
-shared 512-entry quantization table and global scale in each frame; older
+global scale and the K kept bases' quantization weights in each frame; older
 versions are refused. See [the codec contract](DESIGN.md#codec) and
 [the measurement record](DECISIONS.md#2026-10-02--per-basis-quantization-and-a-normalized-mesh-codec-fixture).
 

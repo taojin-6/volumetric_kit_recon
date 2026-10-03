@@ -36,6 +36,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Claude Code, with `CLAUDE.md` importing it. Move detailed contracts,
   implementation status, and gotchas into `DESIGN.md`, and put the complete
   decision index beside its dated rationale in `DECISIONS.md`.
+- `codec`: **per-basis quantization, frame v3.** `CodecParams::dc_step` and
+  `ac_step` are gone, replaced by `quantization_scale` and 512
+  `quantization_weights` in `x + 8*y + 64*z` order; each step is their
+  product. Only the K kept bases' weights are used, checked and carried, and
+  the scale and those weights must be normal. The v3 header carries the K
+  weights after its 44-byte prefix (`44 + 4K` bytes, 300 at K = 64), which is
+  what `read_frame_info` now needs; v1 and v2 frames are `Unsupported`.
+  Callers that set `dc_step` / `ac_step`, such as the iOS scanner and the gfx
+  players, must move to the scale and weights. The encoder compacts its
+  observed list on the device and keeps its transform scratch between calls.
+  See the 2026-10-02 and 2026-10-03 codec decisions.
 - `codec`: **frame v2, 37% smaller on room0.** A partial observed mask is
   coded a plane and a line at a time against its neighbours, and a sign
   inside its mantissa's raw field: 11.0 B/block at 1 cm where v1 was 17.4,

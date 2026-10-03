@@ -15,18 +15,16 @@
 // Configure with -DCMAKE_BUILD_TYPE=Release before quoting any timing.
 
 #include <algorithm>
-#include <cerrno>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
-#include <cstdlib>
-#include <limits>
 #include <string>
 #include <thread>
 
 #include "codec_stream.hpp"
 #include "codec_sweep.hpp"
 #include "fuse_frame.hpp"
+#include "parse_number.hpp"
 #include "replica_capture.hpp"
 #include "volumetric_kit/recon/core/allocator.hpp"
 #include "volumetric_kit/recon/core/device.hpp"
@@ -60,32 +58,6 @@ struct Options {
   codec::EncoderConfig codec;  // --k, --step
 };
 
-// A whole, finite number, or an error naming the flag: a trailing "abc" or
-// an "x" read as 0 would change what the run measures without a word.
-vr::Status parse_number(const std::string& flag, const char* v, float& out) {
-  char* end = nullptr;
-  errno = 0;
-  const float f = std::strtof(v, &end);
-  if (end == v || *end != '\0' || errno != 0 || !std::isfinite(f)) {
-    return vr::Status::invalid_argument(flag + ": not a number: " + v);
-  }
-  out = f;
-  return {};
-}
-
-vr::Status parse_number(const std::string& flag, const char* v, int& out) {
-  char* end = nullptr;
-  errno = 0;
-  const long long n = std::strtoll(v, &end, 10);
-  if (end == v || *end != '\0' || errno != 0 ||
-      n < std::numeric_limits<int>::min() ||
-      n > std::numeric_limits<int>::max()) {
-    return vr::Status::invalid_argument(flag + ": not an integer: " + v);
-  }
-  out = int(n);
-  return {};
-}
-
 vr::Result<Options> parse_args(int argc, char** argv) {
   Options o;
   int k = int(o.codec.params.coefficient_count);
@@ -101,17 +73,17 @@ vr::Result<Options> parse_args(int argc, char** argv) {
     if (a == "-o") {
       o.out_prefix = v;
     } else if (a == "--voxel") {
-      VR_TRY(parse_number(a, v, o.voxel));
+      VR_TRY(vr_example::parse_number(a, v, o.voxel));
     } else if (a == "--encode-every") {
-      VR_TRY(parse_number(a, v, o.encode_every));
+      VR_TRY(vr_example::parse_number(a, v, o.encode_every));
     } else if (a == "--k") {
-      VR_TRY(parse_number(a, v, k));
+      VR_TRY(vr_example::parse_number(a, v, k));
     } else if (a == "--step") {
-      VR_TRY(parse_number(a, v, o.codec.params.quantization_scale));
+      VR_TRY(vr_example::parse_number(a, v, o.codec.params.quantization_scale));
     } else if (a == "--quant-table") {
       o.quant_table = v;
     } else if (a == "--max-frames") {
-      VR_TRY(parse_number(a, v, o.max_frames));
+      VR_TRY(vr_example::parse_number(a, v, o.max_frames));
     } else if (a == "--preload") {
       o.preload = true;
     } else if (a == "--sweep") {

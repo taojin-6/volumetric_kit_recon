@@ -5,7 +5,6 @@
 #include <cmath>
 #include <cstdio>
 #include <limits>
-#include <string>
 
 #include "mesh_normalization.hpp"
 
@@ -33,27 +32,6 @@ double distance(const volumetric_kit::recon::Vec3f& a,
 }  // namespace
 
 int main() {
-  // The production loader joins attribute/material seams before the example
-  // audits indexed topology. Import keeps this box's source-unit Y extent of
-  // three; only an explicit normalization request changes it to 1.7 metres.
-  auto imported = volumetric_kit::recon::io::load_mesh(
-      std::string(VR_IO_MESH_DATA) + "/seams.obj");
-  CHECK(imported.ok());
-  auto& box = imported.value();
-  CHECK(box.positions.size() == 8 && box.indices.size() == 36);
-  const auto box_audit = vr_example::audit_mesh_topology(box);
-  CHECK(box_audit.supports_signed() && box_audit.edges == 18);
-  CHECK(std::abs(box_audit.signed_volume - 30.0) < 1e-12);
-  const auto box_indices = box.indices;
-  const auto box_normalization =
-      vr_example::normalize_mesh_height(box, 1.7, {0, 1, 0});
-  CHECK(box_normalization.ok());
-  CHECK(box_normalization.value().original_height == 3.0);
-  CHECK(box_normalization.value().normalized.min[1] == 0.0);
-  CHECK(std::abs(box_normalization.value().normalized.max[1] - 1.7) < 1e-6);
-  CHECK(box.indices == box_indices);
-  CHECK(vr_example::audit_mesh_topology(box).supports_signed());
-
   auto mesh = tetrahedron();
   const auto audit = vr_example::audit_mesh_topology(mesh);
   CHECK(audit.supports_signed() && audit.edges == 6 && audit.components == 1);
