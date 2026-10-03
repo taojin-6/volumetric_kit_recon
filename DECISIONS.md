@@ -1,15 +1,264 @@
 # Locked decisions
 
-The dated design record for `volumetric_kit_recon` — the *why* behind each
-locked decision, with its measurements, the review findings that shaped it,
-and what each fix was verified against.
+The dated design record for `volumetric_kit_recon`: each rule's rationale,
+measurements, review findings, and verification. Newest context wins.
 
-Each dated; newest context wins. Change the decision *and* this list together.
+[AGENTS.md](AGENTS.md) is the concise shared working guide;
+[DESIGN.md](DESIGN.md) describes the implementation and detailed contracts.
+When a decision changes, update its index entry and dated rationale here in
+the same commit, plus the affected contract in DESIGN.md and any essential
+shared rule in AGENTS.md.
 
-[CLAUDE.md](CLAUDE.md) carries the one-line index of these plus the rules
-that follow from them. Change a decision and both files in the same commit.
+## Decision index
 
----
+The index and dated entries are in the same chronological order. Read the
+entries relevant to your task; later amendments supersede earlier rules.
+
+- [**2026-06-21**](#2026-06-21--single-vulkan-path-moltenvk-on-apple-like-gfx) —
+  Single Vulkan path (MoltenVK on Apple), like gfx.
+- [**2026-06-21**](#2026-06-21--trivial-interop-same-vulkan-api) —
+  Trivial interop (same Vulkan API).
+- [**2026-06-21**](#2026-06-21--independent-siblings-gfx-untouched) —
+  Independent siblings; gfx untouched.
+- [**2026-06-21**](#2026-06-21--vertical-slice-first) —
+  Vertical slice first.
+- [**2026-06-21**](#2026-06-21--codec-ships-dct-only) —
+  Codec ships DCT-only.
+- [**2026-07-04**](#2026-07-04--native-cuda-accelerator-under-the-vulkan-baseline) —
+  Native CUDA accelerator, under the Vulkan baseline.
+- [**2026-07-04**](#2026-07-04--glm-for-hostdevice-math-dropped-the-hand-rolled-pod-types) —
+  GLM for host/device math (dropped the hand-rolled POD types).
+- [**2026-07-04**](#2026-07-04--zero-copy-interop--one-shared-vkdevice--a-createadopt-seam-refines-trivial-interop-above) —
+  Zero-copy interop = one shared `VkDevice` + a create/adopt seam (refines
+  "Trivial interop" above).
+- [**2026-07-05**](#2026-07-05--shader-buffer-abi-is-scalar-block-layout-not-std430) —
+  Shader buffer ABI is scalar block layout, not `std430`.
+- [**2026-07-05**](#2026-07-05--compute-core-is-explicit-not-reflected-dispatch-via-submit_single_time) —
+  Compute core is explicit, not reflected; dispatch via `submit_single_time`.
+- [**2026-07-05**](#2026-07-05--per-voxel-storage-is-a-structure-of-arrays-attribute-store-voxelblockgrid-not-the-prior-engines-aos-voxel-in-the-hashmap) —
+  Per-voxel storage is a structure-of-arrays attribute store
+  (`VoxelBlockGrid`), not the prior engine's AoS `Voxel`-in-the-hashmap.
+- [**2026-07-06**](#2026-07-06--per-kernel-resources-are-bundled-corecompute_kernelhpp-still-not-reflected) —
+  Per-kernel resources are bundled (`core/compute_kernel.hpp`), still not
+  reflected.
+- [**2026-07-06**](#2026-07-06--hybrid-color-renders-through-a-gfx-pipeline-amends-interop-seam-a-needs-zero-gfx-changes) —
+  Hybrid color renders through a gfx pipeline (amends "interop seam A needs
+  zero gfx changes").
+- [**2026-07-06**](#depth-sampling-convention) —
+  Depth sampling is texture-centred (pixel centres at i+0.5), a deliberate
+  ~½-pixel convention.
+- [**2026-07-07**](#2026-07-07--the-viewer-example-opts-into-gfx-behind-vr_build_viewer-amends-independent-siblings-gfx-untouched) —
+  The viewer example opts into gfx behind `VR_BUILD_VIEWER` (amends
+  "Independent siblings; gfx untouched").
+- [**2026-07-07**](#2026-07-07--projective-texturing-is-a-new-texture-tier-live-single-camera-first) —
+  Projective texturing is a new `texture` tier; live single-camera first.
+- [**2026-08-01**](#2026-08-01--perf-instrumentation-starts-in-the-viewer-example-not-a-shared-contract-package) —
+  Perf instrumentation starts in the viewer example, not a shared contract
+  package.
+- [**2026-08-01**](#2026-08-01--ios-is-a-downstream-concern-recon-cross-compiles-to-it-unchanged) —
+  iOS is a downstream concern; recon cross-compiles to it unchanged.
+- [**2026-08-02**](#2026-08-02--meshvertex-is-the-renderers-vertex-layout) —
+  `mesh::Vertex` *is* the renderer's vertex layout.
+- [**2026-08-02**](#2026-08-02--the-neutral-shared-vkdevice-bootstrap-lands-in-the-viewer-example-and-prefers-two-families-over-a-shared-queue) —
+  The neutral shared-`VkDevice` bootstrap lands in the viewer example, and
+  prefers two families over a shared queue.
+- [**2026-08-02**](#2026-08-02--the-sensor-tier-is-a-contract-not-a-driver-collection-a-capture-driver-lives-here-only-if-this-repo-can-build) —
+  The `sensor` tier is a *contract*, not a driver collection: a capture driver
+  lives here only if this repo can build
+- [**2026-08-02**](#2026-08-02--the-mesh-arenas-extra-buffer-usage-is-declared-by-the-consumer-not-named-by-this-tier--and-usage-alone-does-not-reach-seam-b) —
+  The mesh arena's extra buffer usage is declared by the *consumer*, not named
+  by this tier — and usage alone does not reach seam B.
+- [**2026-08-02**](#2026-08-02--one-color-space-rule-and-a-named-working-space-8-bit-color-is-encoded-float-color-is-linear-converted-once-at-the-sensor-boundary-and-encoded-once-at-presentation) —
+  One color-space rule, and a *named* working space: 8-bit color is encoded,
+  float color is linear, converted once at the sensor boundary and encoded once
+  at presentation.
+- [**2026-08-03**](#2026-08-03--a-buffer-names-the-families-that-will-read-it-and-the-dispatch-barrier-widens-only-as-far-as-its-queue-family-may) —
+  A buffer names the *families* that will read it, and the dispatch barrier
+  widens only as far as its queue family may.
+- [**2026-08-03**](#2026-08-03--the-mesh-arena-is-a-ring-of-slots-released-by-the-host-not-a-timeline-semaphore) —
+  The mesh arena is a ring of slots released by the *host*, not a timeline
+  semaphore.
+- [**2026-08-03**](#2026-08-03--the-draw-command-is-written-by-the-kernel-that-counts-it-and-the-counters-unit-changes-from-triangles-to-indices) —
+  The draw command is written by the kernel that counts it, and the counter's
+  unit changes from triangles to indices.
+- [**2026-08-03**](#2026-08-03--nothing-in-the-mesh-extractor-reads-the-current-slot-except-the-code-that-writes-it-the-capacity-plan-is-slot-independent-and-a-slot-is-marked-outstanding-only-where-a-devicemesh-is-handed-out) —
+  Nothing in the mesh extractor reads "the current slot" except the code that
+  writes it: the capacity plan is slot-independent, and a slot is marked
+  outstanding only where a `DeviceMesh` is handed out.
+- [**2026-08-04**](#2026-08-04--a-limit-a-lifetime-or-a-staleness-the-caller-cannot-see-is-the-librarys-to-check-not-to-document) —
+  A limit, a lifetime, or a staleness the caller cannot see is the library's to
+  check, not to document.
+- [**2026-08-08**](#2026-08-08--the-sparse-mesh-kernel-resolves-its-own-222-neighbourhood-by-probing-the-hash-table-on-device-and-mesh-therefore-reads-a-volume-buffer--a-coupling-paid-for-not-stumbled-into) —
+  The sparse mesh kernel resolves its own 2×2×2 neighbourhood by probing the
+  hash table on-device, and `mesh` therefore reads a `volume` buffer — a
+  coupling paid for, not stumbled into.
+- [**2026-08-08**](#2026-08-08--the-overflow-scan-stays-exhaustive-what-gets-bounded-is-its-cost-per-slot-not-its-length) —
+  The overflow scan stays exhaustive; what gets bounded is its cost per slot,
+  not its length.
+- [**2026-08-08**](#2026-08-08--fuse_viewer-draws-recons-buffers-interop-seam-b-end-to-end-and-the-release-mark-must-be-published-before-the-mesh-is-taken) —
+  `fuse_viewer` draws recon's buffers: interop seam B, end to end, and the
+  release mark must be published *before* the mesh is taken.
+- [**2026-08-08**](#2026-08-08--in-block-vertex-sharing-is-a-second-compiled-kernel-not-a-branch-and-the-two-emitters-must-interpolate-an-edge-in-the-same-direction) —
+  In-block vertex sharing is a *second compiled kernel*, not a branch, and the
+  two emitters must interpolate an edge in the same direction.
+- [**2026-08-09**](#2026-08-09--a-dirty-block-is-one-the-fuse-changed-the-flags-are-anchored-to-a-grid-the-library-checks-and-tracking-them-is-opt-in) —
+  A dirty block is one the fuse *changed*, the flags are anchored to a grid the
+  library checks, and tracking them is opt-in.
+- [**2026-08-09**](#2026-08-09--incremental-mesh-extraction-is-worth-building-at-a-4x-ceiling-not-the-18x-one-window-suggested-and-the-worst-frame-rather-than-the-median-sizes-its-design-amends-the-dirty-block-decision-above) —
+  Incremental mesh extraction is worth building at a ~4x ceiling, not the ~18x
+  one window suggested, and the worst frame rather than the median sizes its
+  design (amends the dirty-block decision above).
+- [**2026-08-09**](#2026-08-09--timings-are-core-vocabulary-and-the-device-half-is-measured-not-inferred-counters-stay-in-the-tier-that-means-them) —
+  Timings are `core` vocabulary and the device half is measured, not inferred;
+  counters stay in the tier that means them.
+- [**2026-08-10**](#2026-08-10--a-breakdown-row-is-one-the-callers-row-already-contains-so-the-host-total-skips-it-and-the-device-total-must-not-and-a-ceiling-the-library-knows-is-the-librarys-to-name) —
+  A breakdown row is one the *caller's* row already contains, so the host total
+  skips it and the device total must not; and a ceiling the library knows is the
+  library's to name.
+- [**2026-08-11**](#2026-08-11--the-per-block-span-table-is-opt-in-is-retired-by-generation-rather-than-described-in-prose-is-anchored-per-block-slot-to-a-globally-unique-topology-token-and-is-one-table-for-the-whole-ring-rather-than-one-per-slot) —
+  The per-block span table is opt-in, is retired by generation rather than
+  described in prose, is anchored per block slot to a globally unique topology
+  token, and is one table for the whole ring rather than one per slot.
+- [**2026-08-11**](#2026-08-11--projective-texturing-decides-visibility-per-vertex-and-a-negative-uv0-carries-its-atlas-coordinate-rather-than-discarding-it-amends-the-2026-07-07-texture-tier-decision-and-retires-the-share_vertices-refusal-the-2026-08-04-entry-records) —
+  Projective texturing decides visibility per *vertex*, and a negative `uv0`
+  carries its atlas coordinate rather than discarding it (amends the 2026-07-07
+  texture-tier decision, and retires the `share_vertices` refusal the
+  2026-08-04 entry records).
+- [**2026-08-11**](#2026-08-11--an-incremental-extract-trusts-one-struct-cleared-on-every-path-and-re-established-only-where-a-mesh-is-handed-out-every-refusal-is-a-silent-fallback-and-the-fallback-is-reported) —
+  An incremental extract trusts one struct, cleared on every path and
+  re-established only where a mesh is handed out; every refusal is a silent
+  fallback, and the fallback is *reported*.
+- [**2026-08-11**](#2026-08-11--incremental-extraction-runs-under-share_vertices-because-that-kernel-owns-its-index-run-and-so-retires-more-cheaply-not-less-reverses-the-share_vertices-clause-of-the-incremental-dispatch-decision-above) —
+  Incremental extraction runs under `share_vertices`, because that kernel owns
+  its index run and so retires *more* cheaply, not less (reverses the
+  `share_vertices` clause of the incremental-dispatch decision above).
+- [**2026-08-12**](#2026-08-12--meshing-a-cameras-view-is-a-caller-supplied-block-list-not-a-camera-the-mesh-tier-holds-and-it-stays-apart-from-incremental-extraction-rather-than-stacking-with-it) —
+  Meshing a camera's view is a caller-supplied block list, not a camera the mesh
+  tier holds; and it stays apart from incremental extraction rather than
+  stacking with it.
+- [**2026-08-30**](#2026-08-30--a-profiler-label-belongs-to-the-kernel-not-to-the-timed-span-vk_ext_debug_utils-is-requested-independently-of-validation-and-the-instance-extension-is-declared-across-the-adopt-seam) —
+  A profiler label belongs to the kernel, not to the timed span;
+  `VK_EXT_debug_utils` is requested independently of validation, and the
+  *instance* extension is declared across the adopt seam.
+- [**2026-08-31**](#2026-08-31--the-dense-extract-goes-extract-becomes-extract_host-so-the-two-workflows-are-named-rather-than-inferred) —
+  The dense extract goes; `extract` becomes `extract_host`, so the two
+  workflows are named rather than inferred.
+- [**2026-08-31**](#2026-08-31--a-triangles-work-unit-is-the-candidate-block-not-the-triangle-and-the-band-it-allocates-is-measured-from-the-surface-not-dilated-from-a-point) —
+  A triangle's work unit is the candidate *block*, not the triangle; and the
+  band it allocates is measured from the surface, not dilated from a point.
+- [**2026-09-14**](#2026-09-14--the-examples-poll-their-frames-through-the-sensor-contract-the-replica-reader-is-an-icameracapture-a-source-says-when-it-is-exhausted-and-a-frame-kept-past-the-next-poll-is-copied--the-last-one-included) —
+  The examples poll their frames through the sensor contract: the Replica
+  reader is an `ICameraCapture`, a source says when it is exhausted, and a
+  frame kept past the next poll is copied — the last one included.
+- [**2026-09-24**](#2026-09-24--the-orbbec-sdk-is-a-prerequisite-behind-vr_with_orbbec-installed-once-for-the-family-found-and-never-fetched) —
+  The Orbbec SDK is a prerequisite behind `VR_WITH_ORBBEC`: installed once for
+  the family, found, and never fetched.
+- [**2026-09-26**](#2026-09-26--the-orbbec-driver-lands-as-sensororbbec-a-target-of-its-own-it-undistorts-colour-and-then-registers-depth-to-it-on-the-host-and-it-reads-the-rigs-sync-roles-without-writing-them) —
+  The Orbbec driver lands as `sensor/orbbec`, a target of its own: it
+  undistorts colour and then registers depth to it on the host, and it reads
+  the rig's sync roles without writing them.
+- [**2026-09-26**](#2026-09-26--the-tsdf-codec-is-one-codec-tier-over-volume-with-separate-encoder-and-decoder-classes-a-geometry-only-intra-frame-of-per-block-dct-coefficients-an-observed-voxel-mask-and-sorted-block-coordinates-entropy-coded-by-chunked-static-table-rans) —
+  The TSDF codec is one `codec` tier over `volume`, with separate `Encoder` and
+  `Decoder` classes: a geometry-only intra frame of per-block DCT coefficients,
+  an observed-voxel mask and sorted block coordinates, entropy-coded by chunked
+  static-table rANS.
+- [**2026-09-27**](#2026-09-27--the-v1-frame-is-independent-rans-segments-of-sorted-blocks-every-integer-a-class-plus-raw-bits-behind-fixed-per-frame-tables-and-a-section-table-the-decoders-end-check-is-for-consistency-not-integrity-amends-the-2026-09-26-entrys-interleaved-lanes) —
+  The v1 frame is independent rANS segments of sorted blocks, every integer a
+  class plus raw bits, behind fixed per-frame tables and a section table; the
+  decoder's end check is for consistency, not integrity (amends the 2026-09-26
+  entry's interleaved lanes).
+- [**2026-09-27**](#2026-09-27--the-rig-is-orbbecrig-it-checks-the-cameras-against-the-rigs-sync-configuration-and-writes-it-only-when-asked-starts-the-secondaries-before-the-primary-keeps-the-cameras-on-the-hosts-clock-and-builds-each-set-around-a-primary-frame-poses-come-from-the-calibration-file) —
+  The rig is `OrbbecRig`: it checks the cameras against the rig's sync
+  configuration and writes it only when asked, starts the secondaries before
+  the primary, keeps the cameras on the host's clock, and builds each set
+  around a primary frame; poses come from the calibration file.
+- [**2026-09-27**](#2026-09-27--encoder-and-decoder-are-the-codecs-public-api-encoding-drops-never-observed-blocks-and-sorts-the-rest-decoding-makes-a-callers-grid-hold-exactly-the-frame-by-diffing-its-block-set-everything-checkable-is-checked-before-the-grid-is-touched-and-a-grid-too-small-for-the-frame-is-refused-rather-than-grown) —
+  `Encoder` and `Decoder` are the codec's public API: encoding drops
+  never-observed blocks and sorts the rest, decoding makes a caller's grid hold
+  exactly the frame by diffing its block set, everything checkable is checked
+  before the grid is touched, and a grid too small for the frame is refused
+  rather than grown.
+- [**2026-09-27**](#2026-09-27--the-video-decoder-is-recon_sensor_video-a-target-of-its-own-over-an-installed-ffmpeg-hevc-in-host-pictures-out-on-the-first-hardware-back-end-that-decodes-a-built-in-clip-nvidia-ahead-of-an-integrated-gpu-each-ci-leg-requires-the-hardware-it-has) —
+  The video decoder is `recon_sensor_video`, a target of its own over an
+  installed FFmpeg: HEVC in, host pictures out, on the first hardware back end
+  that decodes a built-in clip, NVIDIA ahead of an integrated GPU; each CI leg
+  requires the hardware it has.
+- [**2026-09-27**](#2026-09-27--room0-sets-the-codecs-provisional-defaults-k--64-with-one-step-of-02-for-dc-and-ac-alike-the-coefficient-count-sets-the-quality-and-a-coarse-uniform-step-costs-almost-nothing-at-it-and-the-host-rans-coder-fits-a-frame-interval-at-1-cm-so-the-gpu-coder-waits) —
+  Room0 sets the codec's provisional defaults, K = 64 with one step of 0.2 for
+  DC and AC alike: the coefficient count sets the quality and a coarse uniform
+  step costs almost nothing at it, and the host rANS coder fits a frame
+  interval at 1 cm, so the GPU coder waits.
+- [**2026-09-27**](#2026-09-27--quality-measurement-is-a-tier-of-its-own-eval-branching-off-mesh-mesh-to-mesh-accuracy-coverage-and-f-score-host-side-and-deterministic-and-production-infrastructure-rather-than-an-excluded-research-harness) —
+  Quality measurement is a tier of its own, `eval`, branching off `mesh`:
+  mesh-to-mesh accuracy, coverage and F-score, host-side and deterministic,
+  and production infrastructure rather than an excluded research harness.
+- [**2026-09-27**](#2026-09-27--a-mesh-becomes-a-tsdf-two-ways-in-the-tsdf-tier-signed-by-the-closest-triangles-normal-for-a-closed-mesh-or-as-an-unsigned-shell-for-any-mesh--binned-per-block-over-the-allocations-own-candidates-with-no-topology) —
+  A mesh becomes a TSDF two ways, in the `tsdf` tier: signed by the closest
+  triangle's normal, for a closed mesh, or as an unsigned shell, for any mesh
+  — binned per block over the allocation's own candidates, with no topology.
+- [**2026-09-28**](#2026-09-28--the-orbbec-driver-streams-colour-as-h265-on-request-every-colour-frame-is-decoded-in-order-on-a-thread-per-camera-ahead-of-the-mailbox-a-lost-frame-is-read-off-the-frame-index-not-the-clock-and-the-femto-megas-stream-is-decoded-as-bt601-full-range-which-it-codes-and-does-not-say) —
+  The Orbbec driver streams colour as H.265 on request: every colour frame is
+  decoded, in order, on a thread per camera ahead of the mailbox; a lost frame
+  is read off the frame index, not the clock; and the Femto Mega's stream is
+  decoded as BT.601 full range, which it codes and does not say.
+- [**2026-09-28**](#2026-09-28--projective-texturing-from-several-views-chooses-a-view-per-triangle-on-an-unshared-mesh-into-an-atlas-of-the-views-images-side-by-side-the-single-camera-pass-stays-per-vertex) —
+  Projective texturing from several views chooses a view per triangle, on an
+  unshared mesh, into an atlas of the views' images side by side, in
+  floor(sqrt(n)) rows; the single-camera pass stays per vertex.
+- [**2026-09-28**](#2026-09-28--gpu-pre-processing-is-recon_sensor_utils-a-driver-hands-out-the-frame-as-captured-the-device-undistorts-depth-and-undistorts-and-converts-colour-and-fusion-reads-the-buffers-in-place-depth-and-colour-each-with-its-own-camera-rather-than-registered) —
+  GPU pre-processing is `recon_sensor_utils`: a driver hands out the frame as
+  captured, the device undistorts depth and undistorts and converts colour,
+  and fusion reads the buffers in place, depth and colour each with its own
+  camera rather than registered.
+- [**2026-09-28**](#2026-09-28--memory-the-kernels-use-lives-on-the-device-on-every-platform-and-the-host-only-records-commands-against-it-one-commandbatch-per-call-parameters-inline-bulk-bytes-staged-at-the-edges-small-results-read-back) —
+  Memory the kernels use lives on the device on every platform, and the host
+  only records commands against it: one `CommandBatch` per call, parameters
+  inline, bulk bytes staged at the edges, small results read back.
+- [**2026-09-28**](#2026-09-28--a-decoded-colour-frame-never-leaves-the-gpu-the-platforms-hardware-decoder-for-h265-and-mjpeg-alike-hands-its-picture-to-vulkan-in-place-and-gpuframeprep-takes-i420-or-nv12-from-the-host-or-the-device) —
+  A decoded colour frame never leaves the GPU: the platform's hardware
+  decoder, for H.265 and MJPEG alike, hands its picture to Vulkan in place,
+  and `GpuFramePrep` takes I420 or NV12 from the host or the device.
+- [**2026-09-28**](#2026-09-28--a-device-takes-submits-from-several-threads-at-once-each-records-on-a-command-pool-of-its-own-and-only-the-queue-is-locked) —
+  A `Device` takes submits from several threads at once: each records on a
+  command pool of its own, and only the queue is locked.
+- [**2026-09-28**](#2026-09-28--projective-texturing-takes-a-colour-camera-of-its-own-and-depth-on-the-device-the-depth-camera-decides-what-is-visible-its-map-what-the-colour-camera-sees-and-the-colour-camera-gives-the-coordinate-a-views-device-depth-and-coverage-are-copied-on-the-device-rather-than-staged) —
+  Projective texturing takes a colour camera of its own and depth on the
+  device: the depth camera decides what is visible, its map what the colour
+  camera sees, and the colour camera gives the coordinate; a view's device
+  depth and coverage are copied on the device rather than staged.
+- [**2026-09-29**](#2026-09-29--rig_viewer-draws-a-live-orbbec-rig-raw-sets-prepared-fused-and-textured-on-the-gpu-the-atlas-filled-by-device-copies-recorded-in-gfxs-frame-and-the-frame-preps-colour-shared-with-gfxs-queue-family) —
+  `rig_viewer` draws a live Orbbec rig: raw sets prepared, fused and textured
+  on the GPU, the atlas filled by device copies recorded in gfx's frame, and
+  the frame prep's colour shared with gfx's queue family.
+- [**2026-09-30**](#2026-09-30--a-rigs-cameras-fuse-in-one-batch-each-dispatch-binds-a-descriptor-set-of-its-own-over-the-same-kernel-and-the-set-is-compacted-once) —
+  A rig's cameras fuse in one batch: each dispatch binds a descriptor set of
+  its own over the same kernel, and the set is compacted once.
+- [**2026-09-30**](#2026-09-30--depth-allocation-works-a-16-x-16-pixel-tile-a-workgroup-and-dilates-each-distinct-block-of-the-tile-once-its-band-shared-out-over-the-lanes) —
+  Depth allocation works a 16 x 16 pixel tile a workgroup and dilates each
+  distinct block of the tile once, its band shared out over the lanes.
+- [**2026-09-30**](#2026-09-30--with-the-spans-off-an-extracts-active-list-stays-on-the-device-and-the-map-hands-back-its-last-compaction-while-nothing-has-changed-since) —
+  With the spans off, an extract's active list stays on the device, and the
+  map hands back its last compaction while nothing has changed since.
+- [**2026-10-01**](#2026-10-01--every-block-slot-carries-stamps-ticks-of-one-clock-on-the-map-each-written-by-the-pass-that-knows-its-fact-the-grid-frees-the-blocks-no-allocation-has-asked-for-and-no-voxel-has-weighted-in-max_age-ticks) —
+  Every block slot carries stamps, ticks of one clock on the map, each
+  written by the pass that knows its fact; the grid frees the blocks no
+  allocation has asked for and no voxel has weighted in `max_age` ticks.
+- [**2026-10-01**](#2026-10-01--the-dirty-flags-become-the-changed-stamp-every-pass-that-writes-voxels-advances-the-maps-clock-and-stamps-what-it-changed-always-and-an-incremental-extract-keeps-the-tick-it-last-meshed-at-amends-the-2026-08-09-dirty-block-decision-and-the-stamps-entry-above) —
+  The dirty flags become the `changed` stamp: every pass that writes voxels
+  advances the map's clock and stamps what it changed, always, and an
+  incremental extract keeps the tick it last meshed at (amends the
+  2026-08-09 dirty-block decision and the stamps entry above).
+- [**2026-10-01**](#2026-10-01--the-codec-review-frame-v2-codes-a-partial-mask-a-plane-and-a-line-at-a-time-against-its-neighbours-and-a-sign-inside-its-mantissas-field-the-transform-finds-every-block-by-its-coordinate-one-commandbatch-a-call-over-device-memory-the-encoder-takes-the-maps-own-list-and-drops-never-observed-blocks-before-the-transform-and-the-decoder-stamps-only-what-it-changes-amends-the-changed-stamp-entry-above) —
+  The codec review: frame v2 codes a partial mask a plane and a line at a
+  time against its neighbours and a sign inside its mantissa's field; the
+  transform finds every block by its coordinate, one `CommandBatch` a call
+  over device memory; the encoder takes the map's own list and drops
+  never-observed blocks before the transform; and the decoder stamps only
+  what it changes (amends the `changed`-stamp entry above).
+- [**2026-10-02**](#2026-10-02--shared-instructions-live-in-a-concise-agentsmd-claudemd-imports-it-designmd-holds-implementation-detail-and-decisionsmd-holds-the-decision-index-and-rationale) —
+  Shared instructions live in a concise AGENTS.md; CLAUDE.md imports it, DESIGN.md holds implementation detail, and DECISIONS.md holds the decision index and rationale.
+
+## Decision record
 
 ### 2026-06-21 — Single Vulkan path (MoltenVK on Apple), like gfx.
 
@@ -200,6 +449,8 @@ color}` shape (synthesizing `tangent`). *Amends* the 2026-06-21 "zero gfx
 changes" stance in the interop seam below. (*Superseded in part on 2026-08-02*:
 `mesh::Vertex` now **is** gfx's layout, so there is no shape to map — see that
 decision.)
+
+<a id="depth-sampling-convention"></a>
 
 ### 2026-07-06 — Depth sampling is texture-centred (pixel centres at i+0.5), a deliberate ~½-pixel convention.
 
@@ -2206,7 +2457,7 @@ via `gpu_ms >= cpu_ms` (32 accumulated spans against one call's wall clock is a
 factor, not a coin flip); 80 consecutive runs of the replacement pass.
 
 First numbers, **Release** (`-DCMAKE_BUILD_TYPE=Release`; at `-O0` these are
-worthless — see the build-type gotcha in CLAUDE.md), on the deliberately tiny
+worthless — see the build-type gotcha in DESIGN.md), on the deliberately tiny
 fixture the test runs (64x64 depth, three triangles), so they are
 fixed-overhead-dominated and not a workload claim:
 
@@ -3114,7 +3365,7 @@ the work a capture should charge to the kernel.
 one worth profiling.** `Instance::create` enabled `VK_EXT_debug_utils` only
 when validation was on, since the only consumer was the validation messenger.
 That left exactly the build a profiler attaches to with no labels, and it is
-the build whose numbers mean anything (the `-O0` gotcha in CLAUDE.md is the
+the build whose numbers mean anything (the `-O0` gotcha in DESIGN.md is the
 same lesson from the other side). `InstanceConfig::request_debug_utils`
 defaults **on**: the label entry points are driver stubs when nothing is
 capturing, so the cost is a predictable branch, and the alternative — a build
@@ -3201,7 +3452,7 @@ to gate on, which is the same missing-channel finding from the other side.
 
 **The label was inside the timed span, which silently redefined every published
 `gpu_ms`.** `dispatch()` recorded begin/end inside the lambda `submit_single_time`
-brackets with timestamps, so every device figure in this file, in CLAUDE.md and
+brackets with timestamps, so every device figure in this file, in DESIGN.md and
 on the `fuse_viewer` overlay began measuring two marker commands as well as the
 work. Measured as noise on MoltenVK (allocate 0.470 vs 0.476 ms, interleaved),
 but a debug group can force an encoder boundary and encoder boundaries are
@@ -8093,6 +8344,31 @@ and an element under 4 bytes, and `free_stale_blocks` already refuses it.
   34% of a 30 fps interval to encode and 31% to decode at 1 cm. That is less
   than before, so the GPU coder waits on the same terms as the room0 entry,
   and the transform's `TODO(codec)` stays.
+
+### 2026-10-02 — Shared instructions live in a concise AGENTS.md; CLAUDE.md imports it, DESIGN.md holds implementation detail, and DECISIONS.md holds the decision index and rationale.
+
+Codex and Claude Code work on the same repository and need the same rules.
+`AGENTS.md` is the canonical entry point for shared instructions; `CLAUDE.md`
+contains `@AGENTS.md`, with no second copy to drift and no pointer back to it.
+
+The previous `CLAUDE.md` was 1,317 lines and 97,275 bytes. Its architecture,
+Vulkan gotchas, tier contracts, examples, and remaining-work notes now live in
+`DESIGN.md`; its complete dated index now lives above this record. Existing
+decision entries and measured lessons are retained. The short entry point
+routes each task to the relevant sections rather than requiring the whole
+implementation history before every edit.
+
+When a contract changes, update its current description in `DESIGN.md` and
+its index entry and dated rationale here in the same commit. Update
+`AGENTS.md` only when an essential shared rule changes. `PERF.md` continues
+to hold the live rig work plan. Shared guidance is committed with the project
+so either agent can resume from it; concurrent tasks use separate worktrees.
+
+This reorganizes documentation without changing implementation contracts.
+The migrated tier descriptions replace the older overview's superseded
+incremental-meshing, queue-selection, and timeline-ring status. The existing
+color-space rationale remains, with `fuse_render`'s already-shipped sRGB
+target described as current behavior.
 
 ## Measured lessons
 

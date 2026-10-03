@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Tao Jin
 
 // Move-semantics tests for the compute core's RAII handle owners. Per the
-// CLAUDE.md RAII rules, every move-only owner must: move-construct (leaving the
+// AGENTS.md RAII rules, every move-only owner must: move-construct (leaving the
 // source empty), move-assign over a live object (freeing the old resource), and
 // survive a self-move. Under the sanitizer CI job these become real
 // leak/double-free detectors -- a forgotten reset or a missing self-move guard

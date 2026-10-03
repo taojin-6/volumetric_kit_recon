@@ -75,7 +75,7 @@ Measured, each from where it is recorded. Quote new figures the same way.
 | atlas copy, GPU, 4 cameras at 720p | 0.23 ms | DECISIONS.md, 2026-09-29 |
 | VideoToolbox image → buffer copy, 4K | 0.28–0.31 ms GPU, M5 Max | `undistort_color.comp:21` |
 | one submit and fence wait | ~0.38 ms, RTX 5090 | `voxel_hash_map.cpp:658` |
-| one timed submit | ~0.13 ms extra, MoltenVK | CLAUDE.md, `core` |
+| one timed submit | ~0.13 ms extra, MoltenVK | [DESIGN.md, core](DESIGN.md#core) |
 
 With one camera, host time is about 2.2 times device time for allocate plus
 integrate. Four in a row account for most of the rig's fuse time. The
@@ -113,7 +113,8 @@ kernels.
 - **A batched path computes what the per-camera path computes.** Show it
   with a test, voxel by voxel or block by block.
 - **Changing a tier's contract or a locked decision** means updating
-  CLAUDE.md and DECISIONS.md in the same PR.
+  its description in DESIGN.md and its index entry and rationale in
+  DECISIONS.md in the same PR, plus AGENTS.md if an essential shared rule changes.
 
 ## Work items
 

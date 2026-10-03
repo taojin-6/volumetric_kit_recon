@@ -5,7 +5,7 @@
 // the whole chain -- Instance -> Device -> Allocator -> Buffer -> Descriptor ->
 // ComputePipeline -> record/dispatch/wait -> readback -- and asserts the shader
 // wrote what it should. This is the "validate MoltenVK compute before building
-// on it" de-risk gate the CLAUDE.md roadmap calls for: it exercises the real
+// on it" de-risk gate DESIGN.md calls for: it exercises the real
 // driver, not a mock.
 //
 // Like the availability smokes, it exits 0 (skip) when the environment has no

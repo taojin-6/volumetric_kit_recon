@@ -14,7 +14,7 @@
 /// block layout** (`GL_EXT_scalar_block_layout`) block byte-for-byte -- the
 /// host side of the buffer ABI the Vulkan compute shaders read (the shader
 /// keeps its `layout(scalar)` definition in lockstep; see the gotchas in
-/// CLAUDE.md). Plain `std430` is deliberately not used: it 16-byte-aligns a
+/// DESIGN.md). Plain `std430` is deliberately not used: it 16-byte-aligns a
 /// `vec3`, breaking the byte-for-byte match for the voxel-hash structs that
 /// embed one. And GLM qualifies its operators `__host__ __device__` under nvcc,
 /// so the same types and math are callable inside the native-CUDA accelerator's

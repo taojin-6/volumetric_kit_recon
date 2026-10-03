@@ -256,7 +256,7 @@ int main() {
     }
   }
 
-  // --- Move-only semantics (CLAUDE.md requires these for every move-only
+  // --- Move-only semantics (AGENTS.md requires these for every move-only
   // type). Device: move-construct empties the source; move-assign over a live
   // object frees the old resources and adopts the new; self-move is a no-op.
   // Under the sanitizer CI job these become real double-free / leak detectors.
