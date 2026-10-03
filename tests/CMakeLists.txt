@@ -442,6 +442,18 @@ target_include_directories(
 vr_target_warnings(recon_codec_dct_test)
 add_test(NAME recon_codec_dct COMMAND recon_codec_dct_test)
 
+# codec tier, the device frame writer: every frame it writes is the host
+# writer's, byte for byte, across block counts, K, segment sizes and int32
+# coordinate extremes. Skips without a device.
+add_executable(recon_codec_device_frame_test codec_device_frame_test.cpp)
+target_link_libraries(recon_codec_device_frame_test
+                      PRIVATE volumetric_kit::recon_codec Vulkan::Vulkan)
+target_include_directories(
+  recon_codec_device_frame_test
+  PRIVATE ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/codec)
+vr_target_warnings(recon_codec_device_frame_test)
+add_test(NAME recon_codec_device_frame COMMAND recon_codec_device_frame_test)
+
 # codec tier, entropy coding: the rANS reference coder (normalization, round
 # trips, a probability-one symbol's zero cost, size against the ideal code
 # length, truncation and bit flips) and the v1 intra frame built on it (round
