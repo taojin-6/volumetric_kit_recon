@@ -274,6 +274,8 @@ vr::Result<Options> parse_args(int argc, char** argv) {
       opt.preload = true;
     else if (arg == "--device-extract")
       opt.device_extract = true;
+    else if (arg == "--support-coarsening")
+      opt.refinement.support_coarsening = true;
     else if (arg.empty() || arg[0] == '-')
       return vr::Status::invalid_argument("unknown flag: " + arg);
     else if (opt.scene_dir.empty())
@@ -290,7 +292,7 @@ vr::Result<Options> parse_args(int argc, char** argv) {
         "[--voxel m] [--levels 1..4] [--trunc m] [--buckets n] [--max-nodes n] "
         "[--max-splits n] [--max-merges n] [--merge-stability n] "
         "[--refine-every n] [--surface-error m] [--noise-floor m] "
-        "[--pixel-stride n] "
+        "[--pixel-stride n] [--support-coarsening] "
         "[--max-frames n] [--stride n] "
         "[--mesh-every n] [--preload] [--device-extract] [--timings-csv path]");
   if (!(opt.voxel > 0 && opt.trunc > 0 && opt.max_weight > 0) ||
@@ -371,11 +373,12 @@ vr::Status run(const Options& opt) {
       "  budgets: %d root slots, %d total nodes, %d splits / %d merges per "
       "update, merge stability %d\n"
       "  policy: refine every %d frames, error %.6fm, noise %.6fm, pixel "
-      "stride %d\n",
+      "stride %d, conservative coarsening support %s\n",
       opt.levels, opt.voxel, std::ldexp(opt.voxel, opt.levels - 1), opt.trunc,
       opt.buckets * 8, opt.max_nodes, opt.max_splits, opt.max_merges,
       opt.merge_stability, opt.refine_every, opt.refinement.surface_error,
-      opt.refinement.noise_floor, opt.pixel_stride);
+      opt.refinement.noise_floor, opt.pixel_stride,
+      opt.refinement.support_coarsening ? "on" : "off");
   if (opt.preload) {
     std::printf(
         "preloading %.0f MiB...\n",
