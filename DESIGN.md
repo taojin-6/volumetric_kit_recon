@@ -635,6 +635,9 @@ only when they share a buffer one writes, unless they are fills, uploads
 or copies rising through it without overlap, and no command in the run
 writes a copy's source. `zero` clears a range at any
 alignment. `dispatch()` is a batch of one.
+Descriptor-set copies share their binding-mutation counter. A dispatch records
+the set handle and counter; `submit` refuses a set changed through any copy or
+a recorded wrapper reassigned to another set, before any GPU work is submitted.
 An upload of up to 64 KiB, 4-byte aligned, goes inline
 (`vkCmdUpdateBuffer`) and a larger one through a staging buffer the batch
 allocates, which `reserve_upload` hands to a caller packing its own bytes;
@@ -809,8 +812,10 @@ since the tick it last meshed at.
 `TsdfIntegrator` fuses a posed depth frame into a grid's
 `tsdf`/`weight`: projective `sdf = depth − Zc`, `±trunc_dist`, an
 inverse-square-with-behind-dropoff weight, running average capped at
-`max_weight`. Depth is sampled bilinearly, nearest at image edges and across
-discontinuities. `IntegrationMode` selects **classic** (keep free space ahead
+`max_weight`. Depth is sampled bilinearly, nearest at image edges, across
+discontinuities, or when any tap is non-positive or non-finite. A NaN hole
+therefore leaves a valid nearest sample usable. `IntegrationMode` selects
+**classic** (keep free space ahead
 of the surface) or **dynamic** (clear it, so a receded surface leaves no
 ghost). An optional `ColorFrame` fuses colour through its own separate
 `ColorCameraParams`; a voxel's first colour observation assigns rather than
@@ -879,7 +884,10 @@ extract that wrote them, since a LIFO-reused slot names a different block and
 a block dropped from the active set keeps its last stamp. Nothing in the
 table itself says "not mine": a grow carries every old span forward, so
 `block_spans()` is a fetch for slots `block_span_valid` approved, not an
-array to iterate. The vertex arena
+array to iterate. Before an incremental GPU dispatch, active slots without a
+stamp from the previous extract have their spans zeroed. This includes reused
+slots absent from a full fallback and newly allocated slots with no voxel
+changes yet; neither may inherit another block's arena range. The vertex arena
 is fitted to the surface, grow-only, and held as a **ring of slots** the
 consumer releases by generation; the kernel writes a real
 `VkDrawIndexedIndirectCommand`. `extract_device` returns a borrowed
@@ -944,7 +952,8 @@ full extract**, which is why `ExtractTimings::incremental` reports which pass
 the caller got and `remeshed_blocks` (counted on-device, since the dilation
 never reaches the host) reports what it saved — `dispatches` counts refit
 rounds and reads 1 on both. Occupancy past `kMaxArenaOccupancy`x the live
-count (summed off the spans, never from the arena's own total, which ratchets)
+count (summed off all current active spans, including newly emitted blocks,
+never from the arena's own total, which ratchets)
 withholds the state so the next pass compacts — asked on **both** axes under
 sharing, since retirement leaves dead triangles occupying index slots while
 dead vertices are merely unreachable, so the two buffers drift apart and
@@ -988,6 +997,9 @@ where its image recorded the vertex, both cameras see the same side of the
 surface, and its line of sight is clear: the pass walks that line's
 projection across the depth map, at most 64 samples, for a surface in front
 of it, which is what catches the parallax fringe beside an occluding edge.
+The sight line is clipped in camera space to the near bound and image side
+planes before projection. A zero or very small near bound cannot bypass the
+walk or spend its sample budget outside the image.
 A registered image is the case where the two cameras are one (the
 2026-09-28 colour-camera decision). Opt-in `StageMetrics*` on every overload
 reports a `"texture"` row with both halves, the several-view inputs'
@@ -1091,8 +1103,13 @@ VideoToolbox's hardware JPEG decoder (`vt_jpeg.cpp`), leaving one past the
 device's image extent to software.
 **`sensor/utils`'s `GpuFramePrep`** undistorts a `RawFrame` on the device:
 depth sampled at the nearest pixel, colour bilinearly and converted from
-Y'CbCr in the same pass, each camera keeping its intrinsics and pose. Its
-`DeviceFrame` feeds the `Buffer` overloads of `allocate_from_depth` and
+Y'CbCr in the same pass, each camera keeping its intrinsics and pose.
+`ChromaLocation` follows the picture through `DecodedPicture`, the Orbbec
+frame handoff and `YuvImage`: JPEG is centred, and HEVC keeps the decoded tag
+with left alignment when unspecified. Host resampling preserves that location,
+and the GPU samples it consistently for host planes, device buffers and NV12
+images. Existing callers that leave the field unset keep left alignment. The
+resulting `DeviceFrame` feeds the `Buffer` overloads of `allocate_from_depth` and
 `integrate` (and `ColorFrame::buffer`, with `coverage_in_alpha`, since a
 pixel the lens maps outside the picture is a 0 word), so nothing is
 uploaded and nothing registered. Colour comes as I420 or NV12, as host

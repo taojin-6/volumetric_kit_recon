@@ -98,7 +98,7 @@ void stamp_changed(uint block_slot) {
 // Pixel centres sit at (i + 0.5) -- the taps shift by -0.5 to match -- so the
 // "nearest" (containing) pixel is floor(u), floor(v), i.e. int(u), int(v) given
 // the caller's u, v >= 0. Falls back to that sample when a bilinear tap is out
-// of bounds, invalid (<= 0), or the four taps straddle a depth discontinuity
+// of bounds, invalid (non-finite or <= 0), or the taps straddle a depth discontinuity
 // (max - min > trunc_dist) that would blend across a surface edge. This
 // texture-centred convention -- taps *and* fallback -- is a deliberate recon
 // choice (DECISIONS.md, the depth-sampling decision); it is self-consistent,
@@ -124,6 +124,12 @@ float sample_depth(float u, float v) {
   float d10 = depth[y0 * w + x0 + 1];
   float d01 = depth[(y0 + 1) * w + x0];
   float d11 = depth[(y0 + 1) * w + x0 + 1];
+  // min/max do not reliably propagate NaN. Reject each tap before either the
+  // range test or mix, even when that tap's interpolation weight is zero.
+  vec4 taps = vec4(d00, d10, d01, d11);
+  if (any(isnan(taps)) || any(isinf(taps))) {
+    return depth[nv * w + nu];
+  }
   float lo = min(min(d00, d10), min(d01, d11));
   float hi = max(max(d00, d10), max(d01, d11));
   if (lo <= 0.0 || (hi - lo) > pc.grid.trunc_dist) {

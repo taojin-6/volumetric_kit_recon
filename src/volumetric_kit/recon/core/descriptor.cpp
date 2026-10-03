@@ -99,15 +99,15 @@ void DescriptorSet::write_storage_buffer(std::uint32_t binding, VkBuffer buffer,
 
   VkWriteDescriptorSet write{};
   write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-  write.dstSet = set_;
+  write.dstSet = state_->set;
   write.dstBinding = binding;
   write.dstArrayElement = 0;
   write.descriptorCount = 1;
   write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
   write.pBufferInfo = &buffer_info;
 
-  vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
-  ++writes_;
+  vkUpdateDescriptorSets(state_->device, 1, &write, 0, nullptr);
+  ++state_->writes;
 }
 
 }  // namespace volumetric_kit::recon

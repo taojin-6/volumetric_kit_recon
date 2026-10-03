@@ -113,7 +113,7 @@ struct FrameInput : volume::DepthInput {
 /// @ref IntegrationMode::Dynamic instead clears stale geometry ahead of a
 /// receded surface (classic keeps a smooth field there). Depth is sampled
 /// bilinearly, falling back to nearest-neighbour at image edges and across
-/// depth discontinuities.
+/// depth discontinuities or taps that are non-positive or non-finite.
 ///
 /// @warning The @ref Device and @ref Allocator passed to @ref create must
 ///          outlive this object; it stores references to them.

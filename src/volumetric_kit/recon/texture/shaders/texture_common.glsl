@@ -324,14 +324,28 @@ bool color_sees(DepthCameraParams c, uint base, vec3 q, vec2 px, vec3 e,
   if (!(q.z > c.min_depth)) {
     return true;  // nothing measured lies in front of it
   }
-  // The walk's far end: where the line crosses the near limit, or e itself
-  // when e is no nearer than that.
-  float s = e.z < c.min_depth ? (q.z - c.min_depth) / (q.z - e.z) : 1.0;
+  // Clip in camera space before dividing by z. With a zero near bound and
+  // lateral baseline, e lies at z=0: projecting it used to skip the entire
+  // visibility test. Clipping to the image's four side planes also keeps a
+  // very small positive near bound from spending all 64 samples off-image.
+  float near_z = max(c.min_depth, 0.0);
+  float s = e.z < near_z ? (q.z - near_z) / (q.z - e.z) : 1.0;
+  vec2 edge = vec2(float(c.width) - 1.0, float(c.height) - 1.0);
+  vec2 q_h = vec2(c.fx * q.x + c.cx * q.z, c.fy * q.y + c.cy * q.z);
+  vec2 e_h = vec2(c.fx * e.x + c.cx * e.z, c.fy * e.y + c.cy * e.z);
+  vec4 q_side = vec4(q_h, edge * q.z - q_h);
+  vec4 e_side = vec4(e_h, edge * e.z - e_h);
+  for (int side = 0; side < 4; ++side) {
+    if (e_side[side] < 0.0) {
+      s = min(s, q_side[side] / (q_side[side] - e_side[side]));
+    }
+  }
   vec3 end = mix(q, e, s);
   vec2 end_px;
   if (!camera_to_image(c, end, end_px)) {
-    return true;
+    return true;  // a sight line ending at the depth camera's origin
   }
+  end_px = clamp(end_px, vec2(0.0), edge);  // round-off at the clipped edge
   vec2 along = end_px - px;
   float len = length(along);
   if (!(len >= 1.0 && len < 1e6)) {

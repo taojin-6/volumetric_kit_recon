@@ -59,10 +59,11 @@ class PictureConverter {
     AVPixelFormat target = AV_PIX_FMT_NONE;
     VideoColorMatrix matrix = VideoColorMatrix::Bt709;
     bool full_range = false;
+    ChromaLocation chroma_location = ChromaLocation::Left;
     bool same(const Setup& o) const noexcept {
       return width == o.width && height == o.height && source == o.source &&
              target == o.target && matrix == o.matrix &&
-             full_range == o.full_range;
+             full_range == o.full_range && chroma_location == o.chroma_location;
     }
   };
 
