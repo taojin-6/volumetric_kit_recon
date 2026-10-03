@@ -195,6 +195,12 @@ Result<Buffer> Allocator::create_buffer(const BufferDesc& desc) {
 
   VmaAllocationCreateInfo alloc_info{};
   alloc_info.usage = to_vma_usage(desc.memory);
+  if (desc.memory == MemoryUsage::DeviceLocal) {
+    // A preference alone lets VMA spill bulk kernel data into a non-local
+    // heap. Require residency, including on unified-memory devices where the
+    // selected type can also be HOST_VISIBLE.
+    alloc_info.requiredFlags |= VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+  }
   if (desc.mapped) {
     alloc_info.flags |= VMA_ALLOCATION_CREATE_MAPPED_BIT;
     alloc_info.flags |=
@@ -225,10 +231,19 @@ Result<Buffer> Allocator::create_buffer(const BufferDesc& desc) {
   // both without VMA appearing in buffer.hpp. The captured *Impl reference* is
   // what keeps the VmaAllocator alive for as long as this Buffer can free
   // through it -- see the note on Impl.
-  return Buffer(buffer, desc.size, desc.usage, buffer_info.sharingMode,
-                out_info.pMappedData, [impl = impl_, buffer, allocation]() {
-                  vmaDestroyBuffer(impl->allocator, buffer, allocation);
-                });
+  const VkPhysicalDeviceMemoryProperties* memory_properties = nullptr;
+  vmaGetMemoryProperties(impl_->allocator, &memory_properties);
+  const VkMemoryType& type =
+      memory_properties->memoryTypes[out_info.memoryType];
+  const BufferMemoryInfo memory{type.propertyFlags, out_info.memoryType,
+                                type.heapIndex};
+  return Buffer(
+      buffer, desc.size, desc.usage, buffer_info.sharingMode,
+      out_info.pMappedData,
+      [impl = impl_, buffer, allocation]() {
+        vmaDestroyBuffer(impl->allocator, buffer, allocation);
+      },
+      memory);
 }
 
 MemoryStats Allocator::memory_stats() const {

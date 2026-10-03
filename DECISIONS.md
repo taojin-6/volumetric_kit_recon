@@ -262,6 +262,10 @@ entries relevant to your task; later amendments supersede earlier rules.
   invalid depth taps, and zero-near visibility; zero holes never occlude a
   colour sight line.
 
+- [**2026-10-02**](#2026-10-02--device-local-allocation-is-required-and-buffer-residency-is-explicit) —
+  Device-local allocation is required and buffer residency is explicit;
+  borrowed device inputs refuse unknown or non-local backing memory.
+
 - [**2026-10-03**](#2026-10-03--garbage-collection-deletes-from-the-device-stale-list) —
   Garbage collection passes its device coordinate list directly to deletion,
   retaining host readback only for control counts.
@@ -8453,6 +8457,77 @@ The compatibility targets remain the distro FFmpeg packages in CI's Ubuntu
 22.04, 24.04 and 26.04 jobs; no package upgrade is required. Local reproductions
 of the converter and JPEG tests pass with FFmpeg 4.4.6, 6.1.1 and 9.0.2,
 without relaxing numerical tolerances.
+
+### 2026-10-02 — Device-local allocation is required and buffer residency is explicit.
+
+The memory audit found that `MemoryUsage::DeviceLocal` selected VMA's
+`AUTO_PREFER_DEVICE` policy without requiring `DEVICE_LOCAL`. Under pressure
+or on a different memory topology, the allocator could therefore choose
+non-local memory despite the residency contract. `StorageInput` checked a
+borrowed buffer's storage usage and extent but had no memory information to
+check; the TSDF device-input tests themselves used mapped upload buffers.
+This was a correctness-of-contract gap, not a new measured slowdown.
+
+**Allocation and provenance.** Require `VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT`
+for `MemoryUsage::DeviceLocal` while retaining VMA's device preference.
+Failure to find or allocate a suitable type is an allocation failure, never
+a silent fallback. `HOST_VISIBLE` remains allowed alongside `DEVICE_LOCAL`:
+unified and host-visible device memory are local. This corrects the earlier
+shorthand equating all host-visible memory with system RAM. The 2026-09-28
+measurements describe the selected memory on those runs, not every memory
+type carrying that flag.
+
+`BufferMemoryInfo` records the selected type's actual property flags, type
+index and heap index. `Buffer::memory_info()` returns an optional value,
+absent for an empty buffer or an adoption without provenance; moves and
+destruction clear it with the other metadata. Both VMA allocation and the
+raw Vulkan exported-buffer factory populate it from the selected memory
+type. `Buffer::is_device_local()` tests the recorded `DEVICE_LOCAL` flag.
+
+**Borrowed inputs and migration.** `StorageInput` refuses unknown and
+non-local device inputs with `InvalidArgument`, including small images; an
+image's contract must not change at a size threshold. This covers depth
+allocation/fusion, fusion color, GPU-prep device color and the texturer's
+direct device inputs. A caller adopting a raw buffer supplies the actual
+bound allocation's metadata as the constructor's final optional argument.
+Existing source still compiles without that argument, but such a buffer no
+longer qualifies as a device input. A host caller can use the host-array
+overload, or explicitly upload/copy into `device_storage_buffer` through a
+`CommandBatch`. Transfer-only input copies and documented small parameter
+or host-read-table exceptions remain legal; this is not a blanket ban on
+mapped buffers or generic compute bindings.
+
+**Regression coverage.** Device-input TSDF tests now upload genuine local
+buffers, and unknown adoption is refused by allocation/fusion before any
+work, including on an empty grid. Core tests compare allocation metadata
+with the physical-device memory table, exercise every compatible raw memory
+type offered by the driver, accept types carrying both host visibility and
+device locality, reject non-local types when present, and cover metadata
+through move construction, live assignment, self-move and reset. Exported
+buffer metadata is checked when that extension is available. No performance
+claim follows from these checks; discrete-GPU pressure/failure behavior and
+timings remain separate hardware evidence.
+
+Release with warnings as errors on Apple M5 Max: the full default suite
+passed 45/45, and nine affected core, sensor, TSDF and texture tests passed
+with the Khronos layer and synchronization validation enabled. The driver
+offered local type 0 (`0x1`) and host-visible local type 1 (`0xf`) on heap 0;
+both were accepted. It offered no non-local compatible type and no opaque-FD
+export, so those capability-specific branches were not exercised on Apple.
+
+The Linux RTX 4090 run of `27c331f`, Release with warnings as errors,
+`VR_WITH_FFMPEG=ON` and `VR_WITH_CUDA=ON` (CUDA 13.4.92), passed 49/49 full
+tests and 10/10 targeted tests with forced Khronos synchronization validation.
+These included buffer memory and external export, command batching, TSDF
+device and camera-set inputs, GPU frame prep, and HEVC/JPEG video paths.
+The allocator selected type 1, heap 0, flags `0x1` (`DEVICE_LOCAL`). Raw
+non-local types 0/2/3 on heap 1, with flags `0x0`/`0x6`/`0xe`, were refused
+by `StorageInput`; type 4 on heap 0, flags `0x7`, was accepted despite also
+being host-visible. This verifies allocation policy, recorded provenance
+and input acceptance on a discrete GPU; it is not a performance result or
+an allocation-pressure stress test. Logs are `tests.log` and `sync-tests.log`
+under the remote checkout
+`/home/taojin/ws/volumetric_kit/volumetric_kit_recon/.worktrees/gpu-residency-fix-27c331f/`.
 
 ### 2026-10-03 — Garbage collection deletes from the device stale list.
 

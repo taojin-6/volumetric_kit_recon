@@ -66,6 +66,8 @@ core → volume → tsdf → mesh → texture → interop
   validate the shader ABI.
 - Kernel memory is device-local, reached through `CommandBatch`. Preserve
   the documented exceptions for small parameters and host-read tables.
+  Require `DEVICE_LOCAL` for bulk allocations and verify borrowed input
+  metadata; `HOST_VISIBLE` may coexist with device locality on UMA or BAR.
 - Zero-copy recon/gfx interop uses one shared `VkDevice`. The mesh ring is
   retired by the host's release report; preserve the documented queue and
   resource lifetime contracts.

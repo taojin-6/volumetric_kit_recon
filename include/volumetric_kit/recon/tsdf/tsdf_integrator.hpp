@@ -69,9 +69,10 @@ struct ColorFrame {
 
   /// The same image already on the device, in the same layout: a storage
   /// buffer of at least `cam.width * cam.height` words, read in place with no
-  /// upload (a GPU pre-processing pass's output). Set this or @ref pixels, not
-  /// both. Borrowed for the call. After @ref encoding, so `{pixels, cam,
-  /// encoding}` still initializes a host frame.
+  /// upload (a GPU pre-processing pass's output). Its memory metadata must
+  /// establish device locality, as required by @ref StorageInput. Set this or
+  /// @ref pixels, not both. Borrowed for the call. After @ref encoding, so
+  /// `{pixels, cam, encoding}` still initializes a host frame.
   const Buffer* buffer = nullptr;
 
   /// The image marks its own coverage in each word's high byte: 0 is a pixel
@@ -227,7 +228,8 @@ class VR_TSDF_API TsdfIntegrator {
   ///               call; the writer's dispatch must have finished, which a
   ///               `dispatch` on this device guarantees.
   /// @return As the host overload; @ref Status::Code::InvalidArgument also for
-  ///         a @p depth that is empty, not a storage buffer, or smaller than
+  ///         a @p depth that is empty, not a storage buffer, has unknown or
+  ///         non-device-local memory, or is smaller than
   ///         the image.
   Status integrate(volume::VoxelBlockGrid& grid, const Buffer& depth,
                    const DepthCameraParams& cam, float max_weight = 5.0f,

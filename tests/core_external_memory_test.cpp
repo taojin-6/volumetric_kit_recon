@@ -82,6 +82,12 @@ int main() {
   CHECK(exported.fd >= 0);
   CHECK(exported.memory_size >= kWords * sizeof(std::uint32_t));
   CHECK(exported.buffer.size() == kWords * sizeof(std::uint32_t));
+  CHECK(exported.buffer.is_device_local());
+  CHECK(exported.buffer.memory_info().has_value());
+  const auto& backing = *exported.buffer.memory_info();
+  CHECK(backing.type_index < memory.memoryTypeCount);
+  CHECK(backing.properties == flags(backing.type_index));
+  CHECK(backing.heap_index == memory.memoryTypes[backing.type_index].heapIndex);
   CHECK(close(exported.fd) == 0);
 
   // It is an ordinary storage buffer to a batch.

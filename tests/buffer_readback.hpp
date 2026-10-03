@@ -12,6 +12,7 @@
 #include "volumetric_kit/recon/core/allocator.hpp"
 #include "volumetric_kit/recon/core/buffer.hpp"
 #include "volumetric_kit/recon/core/command_batch.hpp"
+#include "volumetric_kit/recon/core/compute_util.hpp"
 #include "volumetric_kit/recon/core/device.hpp"
 #include "volumetric_kit/recon/core/result.hpp"
 
@@ -25,6 +26,18 @@ struct Gpu {
   vr::Device& device;
   vr::Allocator& allocator;
 };
+
+// A genuinely resident input, uploaded at the test boundary.
+inline vr::Result<vr::Buffer> upload_device_buffer(const vr::Device& device,
+                                                   vr::Allocator& allocator,
+                                                   const void* data,
+                                                   VkDeviceSize bytes) {
+  VR_ASSIGN(vr::Buffer buffer, vr::device_storage_buffer(allocator, bytes));
+  vr::CommandBatch batch(device, allocator);
+  VR_TRY(batch.upload(buffer, 0, data, bytes));
+  VR_TRY(batch.submit());
+  return buffer;
+}
 
 // The first `count` elements of `buffer`, which needs TRANSFER_SRC usage.
 template <typename T>

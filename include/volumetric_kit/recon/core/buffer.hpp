@@ -4,29 +4,44 @@
 #pragma once
 
 /// @file buffer.hpp
-/// @brief A `VkBuffer` plus its VMA allocation, owned and freed together.
+/// @brief A `VkBuffer` plus its backing allocation, owned and freed together.
 
+#include <cstdint>
 #include <functional>
+#include <optional>
 
 #include "volumetric_kit/recon/core/export.hpp"
 #include "volumetric_kit/recon/core/vulkan.hpp"
 
 namespace volumetric_kit::recon {
 
-/// @brief Owns a `VkBuffer` and the VMA allocation backing it, freeing both
+/// @brief Actual memory type backing a buffer, queried at allocation time.
+///
+/// Indices refer to the allocating physical device's memory properties.
+/// `HOST_VISIBLE` and `DEVICE_LOCAL` can both be set, on unified memory and
+/// host-visible device heaps; mapping support does not imply system memory.
+struct BufferMemoryInfo {
+  VkMemoryPropertyFlags properties = 0;  ///< Selected type's property flags.
+  std::uint32_t type_index = 0;          ///< Selected Vulkan memory type.
+  std::uint32_t heap_index = 0;          ///< Heap backing the selected type.
+};
+
+/// @brief Owns a `VkBuffer` and the allocation backing it, freeing both
 ///        together.
 ///
-/// Constructed only by @ref Allocator::create_buffer. The VMA allocation is
+/// Constructed by @ref Allocator::create_buffer or by adopting a buffer.
+/// A VMA allocation is
 /// held inside a type-erased `std::function<void()>` deleter, so
 /// `<vk_mem_alloc.h>` never reaches this header or a consumer (the
 /// backend-out-of-headers rule). A buffer created with `BufferDesc::mapped`
-/// exposes a persistent host pointer through @ref mapped; a device-local
-/// buffer's @ref mapped is `nullptr`.
+/// exposes a persistent host pointer through @ref mapped. An allocation
+/// requested with `MemoryUsage::DeviceLocal` is never mapped; an allocation
+/// requested as host-visible can also have the device-local memory flag.
 ///
-/// @warning A Buffer must not outlive the @ref Allocator that created it: the
-///          deleter frees the `VkBuffer` and its allocation through that
-///          allocator, so freeing once the Allocator is gone is a
-///          use-after-free.
+/// A VMA-backed buffer retains the allocator's implementation until it is
+/// freed, including across allocator moves. The Vulkan instance and device
+/// must still outlive it. An adopted buffer's deleter must likewise retain
+/// everything it needs to release the buffer and allocation.
 class VR_CORE_API Buffer {
  public:
   /// @brief Construct an empty buffer (owns nothing; `valid()` is false).
@@ -42,9 +57,13 @@ class VR_CORE_API Buffer {
   /// @param sharing  The `VkSharingMode` it was created with.
   /// @param mapped   Persistent host pointer, or `nullptr` if unmapped.
   /// @param deleter  Frees the buffer and its allocation exactly once.
+  /// @param memory   Actual backing memory metadata, or `std::nullopt` when
+  ///                 unknown. An adopter supplying it must query the bound
+  ///                 allocation's selected memory type, not infer it from
+  ///                 usage.
   Buffer(VkBuffer handle, VkDeviceSize size, VkBufferUsageFlags usage,
-         VkSharingMode sharing, void* mapped,
-         std::function<void()> deleter) noexcept;
+         VkSharingMode sharing, void* mapped, std::function<void()> deleter,
+         std::optional<BufferMemoryInfo> memory = std::nullopt) noexcept;
 
   ~Buffer();
   Buffer(Buffer&& other) noexcept;
@@ -83,6 +102,17 @@ class VR_CORE_API Buffer {
   VkSharingMode sharing_mode() const noexcept { return sharing_; }
   /// @return The persistent host pointer, or `nullptr` when not host-mapped.
   void* mapped() const noexcept { return mapped_; }
+  /// @return Actual backing memory metadata, or `std::nullopt` for an empty
+  ///         buffer or an adopted buffer whose memory type was not supplied.
+  const std::optional<BufferMemoryInfo>& memory_info() const noexcept {
+    return memory_;
+  }
+  /// @return Whether the known backing memory has `DEVICE_LOCAL` set.
+  ///         `HOST_VISIBLE` is allowed too; unknown memory returns false.
+  bool is_device_local() const noexcept {
+    return memory_.has_value() &&
+           (memory_->properties & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0;
+  }
   /// @return `true` if this owns a buffer.
   bool valid() const noexcept { return buffer_ != VK_NULL_HANDLE; }
 
@@ -94,6 +124,7 @@ class VR_CORE_API Buffer {
   VkBufferUsageFlags usage_ = 0;
   VkSharingMode sharing_ = VK_SHARING_MODE_EXCLUSIVE;
   void* mapped_ = nullptr;
+  std::optional<BufferMemoryInfo> memory_;
   std::function<void()> deleter_;
 };
 

@@ -29,6 +29,12 @@ target_link_libraries(recon_core_memory_stats_test
 vr_target_warnings(recon_core_memory_stats_test)
 add_test(NAME recon_core_memory_stats COMMAND recon_core_memory_stats_test)
 
+add_executable(recon_core_buffer_memory_test core_buffer_memory_test.cpp)
+target_link_libraries(recon_core_buffer_memory_test
+                      PRIVATE volumetric_kit::recon_core)
+vr_target_warnings(recon_core_buffer_memory_test)
+add_test(NAME recon_core_buffer_memory COMMAND recon_core_buffer_memory_test)
+
 # The reporting vocabulary (host-only, runs on every leg) and the GPU timer
 # behind it (skips without a device). The load-bearing assertion is that the
 # device span comes in UNDER the wall clock around the same blocking submit --

@@ -141,11 +141,6 @@ int allocate(vol::VoxelBlockGrid& grid, const Depth& depth,
   return 1;
 }
 
-vr::Result<vr::Buffer> upload(vr::Allocator& allocator, const void* data,
-                              std::size_t bytes) {
-  return vr::upload_storage_buffer(allocator, data, bytes);
-}
-
 // Observed voxels (weight > 0) of `g`: how many took black as their colour,
 // and how many took none.
 struct ColorCounts {
@@ -190,8 +185,8 @@ int test_coverage(vr::Device& dev, vr::Allocator& alloc,
                          : (200u | (100u << 8) | (50u << 16) | 0xFF000000u);
     }
   }
-  auto color_buf =
-      upload(alloc, color.data(), color.size() * sizeof(std::uint32_t));
+  auto color_buf = vr_test::upload_device_buffer(
+      dev, alloc, color.data(), color.size() * sizeof(std::uint32_t));
   CHECK(color_buf.ok());
   tsdf::ColorFrame frame{};
   frame.buffer = &color_buf.value();
@@ -278,10 +273,15 @@ int main() {
   auto integrator = tsdf::TsdfIntegrator::create(dev, alloc);
   CHECK(integrator.ok());
 
-  auto depth_buf = upload(alloc, depth.data(), depth.size() * sizeof(float));
-  auto color_buf =
-      upload(alloc, color.data(), color.size() * sizeof(std::uint32_t));
+  auto depth_buf = vr_test::upload_device_buffer(dev, alloc, depth.data(),
+                                                 depth.size() * sizeof(float));
+  auto color_buf = vr_test::upload_device_buffer(
+      dev, alloc, color.data(), color.size() * sizeof(std::uint32_t));
   CHECK(depth_buf.ok() && color_buf.ok());
+  CHECK(depth_buf.value().is_device_local() &&
+        color_buf.value().is_device_local());
+  CHECK(depth_buf.value().mapped() == nullptr &&
+        color_buf.value().mapped() == nullptr);
 
   // Host arrays into one grid, storage buffers into the other; twice, so the
   // running average runs too.
@@ -313,12 +313,29 @@ int main() {
   // Refusals: an empty buffer, one smaller than the image, one that is not a
   // storage buffer, and a colour frame naming both images.
   const auto invalid = vr::Status::Code::InvalidArgument;
+  // Borrowing an existing VkBuffer without its memory provenance is refused
+  // before allocating blocks or updating any voxel, even on unified memory.
+  const vr::Buffer unknown(depth_buf->handle(), depth_buf->size(),
+                           depth_buf->usage(), depth_buf->sharing_mode(),
+                           nullptr, {});
+  CHECK(
+      device_grid->map().allocate_from_depth(unknown, cam).status().domain() ==
+      invalid);
+  CHECK(integrator->integrate(device_grid.value(), unknown, cam).domain() ==
+        invalid);
+  tsdf::ColorFrame unknown_color = device_color;
+  unknown_color.buffer = &unknown;
+  CHECK(integrator
+            ->integrate(device_grid.value(), depth_buf.value(), cam, 5.0f,
+                        tsdf::IntegrationMode::Classic, &unknown_color)
+            .domain() == invalid);
   const vr::Buffer empty;
   CHECK(device_grid->map().allocate_from_depth(empty, cam).status().domain() ==
         invalid);
   CHECK(integrator->integrate(device_grid.value(), empty, cam).domain() ==
         invalid);
-  auto small = upload(alloc, depth.data(), sizeof(float) * kWidth);
+  auto small = vr_test::upload_device_buffer(dev, alloc, depth.data(),
+                                             sizeof(float) * kWidth);
   CHECK(small.ok());
   CHECK(device_grid->map()
             .allocate_from_depth(small.value(), cam)
@@ -355,6 +372,8 @@ int main() {
   // buffers rather than returning before it looks at them.
   auto empty_grid = make_grid(dev, alloc);
   CHECK(empty_grid.ok());
+  CHECK(integrator->integrate(empty_grid.value(), unknown, cam).domain() ==
+        invalid);
   CHECK(integrator->integrate(empty_grid.value(), empty, cam).domain() ==
         invalid);
   CHECK(

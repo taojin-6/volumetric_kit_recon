@@ -236,14 +236,16 @@ int main() {
   // Cameras 0 and 2 are on the device, 1 on the host; 2 has no colour.
   std::vector<vr::Buffer> depth_bufs;
   for (int c = 0; c < kCameras; ++c) {
-    auto buf = vr::upload_storage_buffer(alloc, views[c].depth.data(),
-                                         views[c].depth.size() * sizeof(float));
+    auto buf =
+        vr_test::upload_device_buffer(dev, alloc, views[c].depth.data(),
+                                      views[c].depth.size() * sizeof(float));
     CHECK(buf.ok());
+    CHECK(buf.value().is_device_local() && buf.value().mapped() == nullptr);
     depth_bufs.push_back(std::move(buf).value());
   }
-  auto color0 =
-      vr::upload_storage_buffer(alloc, views[0].color.data(),
-                                views[0].color.size() * sizeof(std::uint32_t));
+  auto color0 = vr_test::upload_device_buffer(
+      dev, alloc, views[0].color.data(),
+      views[0].color.size() * sizeof(std::uint32_t));
   CHECK(color0.ok());
   const auto color_cam = [&](const View& v) {
     return vr::ColorCameraParams{v.cam.fx,          v.cam.fy,    v.cam.cx,
@@ -331,8 +333,8 @@ int main() {
   {
     auto grid = make_grid(dev, alloc);
     CHECK(grid.ok());
-    auto small = vr::upload_storage_buffer(alloc, views[2].depth.data(),
-                                           sizeof(float) * kWidth);
+    auto small = vr_test::upload_device_buffer(
+        dev, alloc, views[2].depth.data(), sizeof(float) * kWidth);
     CHECK(small.ok());
     std::vector<vol::DepthInput> bad_depths(frames.begin(), frames.end());
     bad_depths[2] = {vr::StorageInput(small.value()), views[2].cam};
