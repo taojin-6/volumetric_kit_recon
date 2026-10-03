@@ -13,8 +13,10 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
 #include <limits>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -155,7 +157,10 @@ class CodecStream {
   }
 
   /// @brief Encode @p source as one frame and decode it into the player.
-  vr::Status code(vr::volume::VoxelBlockGrid& source) {
+  /// @param frame_path Optional output file for the successfully decoded
+  ///                   compressed frame; file I/O is outside codec timings.
+  vr::Status code(vr::volume::VoxelBlockGrid& source,
+                  const std::string& frame_path = {}) {
     VR_ASSIGN(const Bytes frame, encoder_.encode(source, &encode_rows_));
     if (!player_) {
       VR_ASSIGN(vr::volume::VoxelBlockGrid g,
@@ -163,6 +168,19 @@ class CodecStream {
       player_.emplace(std::move(g));
     }
     VR_TRY(decode_growing(decoder_, frame, *player_, &decode_rows_, &grows_));
+    if (!frame_path.empty()) {
+      if (frame.size() >
+          std::size_t(std::numeric_limits<std::streamsize>::max())) {
+        return vr::Status::invalid_argument("frame is too large to write");
+      }
+      std::ofstream output(frame_path, std::ios::binary);
+      output.write(reinterpret_cast<const char*>(frame.data()),
+                   static_cast<std::streamsize>(frame.size()));
+      output.close();
+      if (!output) {
+        return vr::Status::io_error("cannot write codec frame: " + frame_path);
+      }
+    }
     VR_ASSIGN(const vr::codec::FrameInfo info,
               vr::codec::read_frame_info(frame.data(), frame.size()));
     ++frames_;
@@ -201,15 +219,18 @@ class CodecStream {
     std::printf("\n");
     print_stage_rows("encode", encode_rows_, frames_);
     print_stage_rows("decode", decode_rows_, frames_);
-    // Against the source's frame interval: what coding every frame live
-    // would have to fit, whatever this run's cadence.
-    const double budget = 1e3 / fps;
     const double enc = row_ms(encode_rows_, "  ..rans encode") / frames_;
     const double dec = row_ms(decode_rows_, "  ..rans decode") / frames_;
-    std::printf(
-        "  host rANS: %.2f ms encode, %.2f ms decode per coded frame "
-        "(%.0f%% / %.0f%% of a %.1f ms source frame interval)\n",
-        enc, dec, 100.0 * enc / budget, 100.0 * dec / budget, budget);
+    std::printf("  host rANS: %.2f ms encode, %.2f ms decode per coded frame",
+                enc, dec);
+    if (every > 0) {
+      // Against the source's interval: what coding every frame live must fit.
+      // A standalone mesh or final-grid snapshot has no measured frame rate.
+      const double budget = 1e3 / fps;
+      std::printf(" (%.0f%% / %.0f%% of a %.1f ms source frame interval)",
+                  100.0 * enc / budget, 100.0 * dec / budget, budget);
+    }
+    std::printf("\n");
   }
 
  private:

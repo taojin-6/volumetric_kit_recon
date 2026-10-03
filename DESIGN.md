@@ -1188,18 +1188,31 @@ to the SDK's own undistortion and registration on a still scene (the
 
 ### codec
 
-four of five PRs in (2026-09-26 lists them). The defaults
-are room0's, and provisional until the per-band quantization study: K = 64
-with one step of 0.2 for DC and AC alike (2026-09-27). At 1 cm that is
-11.0 B/block (374x under raw) since frame v2 (2026-10-01), 0.64 mm
-accuracy RMS, and host coding inside a 30 fps frame interval. The public API
+The intra codec is implemented; GPU rANS remains deferred. Quantization is
+one scalar quantizer with a step per DCT basis (2026-10-02):
+`step[u,v,w] = quantization_scale * quantization_weights[u + 8*v + 64*w]`.
+DC is the table's first entry. All blocks share the same 512-entry table, but
+only the K kept bases use their weights: the global scale and those K weights
+travel once in the self-contained v3 frame.
+The defaults retain room0's K = 64 and uniform effective step 0.2, expressed
+as scale 0.2 and weights of one. Frequency-dependent tables are measured
+candidates, not a claim that high frequencies always deserve fewer bits.
+The public API
 is `CodecParams`, **`Encoder`** (`encoder.hpp`) and **`Decoder`** with
 `read_frame_info` (`decoder.hpp`). `Encoder::encode(grid)` takes the map's
 own active list (`compact_active_blocks_on_device`, so a fuse's list is
 reused and its own kept for the extract after), keeps the blocks with an
-observed voxel (`DctTransform::observed`, on the device), sorts them by
+observed voxel (`DctTransform::observed`, compacted on the device), sorts them by
 (z, y, x), transforms them, and writes the frame. The same content gives
-the same bytes whatever the hash table's order.
+the same bytes whatever the hash table's order. The filter reads back its count
+and rejection tally together with a predicted prefix of the compacted list:
+the last observed count plus 25%, bounded by the current input count; the full
+input count when there is no previous non-zero count. Only an outgrown prediction needs a second
+transfer-only submit for the tail. It downloads no per-input flags. For A input
+blocks, N observed blocks and a predicted prefix G, readback is
+`8 + 16*max(G,N)` bytes, at most `8 + 16*A`, instead of `4 + 20*A`.
+An empty input submits nothing. Append order is unspecified; the CPU coordinate
+sort is still what makes the frame deterministic.
 `Decoder::decode(frame, grid)` leaves the caller's grid holding exactly the
 frame. It merges the grid's sorted active set with the frame's
 coordinates, removing, allocating, and keeping shared blocks in their
@@ -1222,10 +1235,20 @@ reference coder and the intra frame. The transform takes a
 `volume::BlockList` to a `DctBlocks` — K quantized 16-bit coefficients per
 block in 3-D zigzag order, a 16-word observed mask, and the params and
 `trunc_dist` they were made with — and back, each call one `CommandBatch`
-over device-local buffers. The SDF is normalized by `trunc_dist`
+over device-local buffers. The compacted observed list, uploaded sorted list,
+coefficient buffer and mask buffer are retained and grow only when a call needs
+more capacity, releasing the old buffer first and taking 1.5x headroom
+(`ensure_device_scratch`); descriptor ranges and transfers use the current
+logical sizes.
+They remain allocated until the transform is destroyed. The per-call staging
+inside `CommandBatch` remains transient, and the CPU rANS boundary still reads
+coefficients/masks back on encode and uploads them on decode. The SDF is normalized by `trunc_dist`
 before the transform and the steps are fractions of it, so the inverse
 refuses a `DctBlocks`
-whose `trunc_dist` is not its grid's. `CodecParams::validate` refuses a step
+whose `trunc_dist` is not its grid's. `CodecParams::validate` checks the scale,
+each kept basis's weight and its effective step; weights beyond K are unused.
+The scale and kept weights must be normal, so a flush-to-zero host or device
+agrees on validity. It refuses a step
 small enough for the ±32767 clamp to engage (√512 / 32767), and one past
 `kMaxStep` (64), where every coefficient is 0 and a decoded one could
 overflow to infinity. The forward
@@ -1240,7 +1263,9 @@ Each block is found by that probe and its ptr never read, so the decoder
 lists blocks it has just allocated by coordinate alone. "Observed" is
 `volume::kObservedWeight`, the threshold the mesher reads too. The inverse
 writes weight 1.0 on observed voxels and a fresh block's zeros elsewhere.
-The frame (`bitstream.hpp`, the 2026-09-27 entry) is segments of R sorted
+The v3 frame (`bitstream.hpp`, the 2026-10-02 entry) carries the K kept
+weights in its parameter header, `44 + 4K` bytes (300 at K = 64); older
+versions are refused. `read_frame_info` reads them without entropy decoding. Its payload remains segments of R sorted
 blocks (default 64). Each segment is one independent rANS stream
 (`rans.hpp`: a 32-bit state, 16-bit words and 12-bit probabilities, integer
 only, the reference the GPU kernels must match byte for byte). Every integer
@@ -1385,6 +1410,30 @@ and sampling it would measure the fusion's bias too. `--sweep` prints the
 rate–distortion table the defaults are chosen from. Its `main.cpp` stays the
 example's story; the stream, its report and the sweep are
 `examples/common/codec_stream.hpp` and `codec_sweep.hpp`.
+
+**`codec_mesh`** loads static geometry through the optional Assimp-backed
+`io::load_mesh`, explicitly normalizes its projected height and up direction
+into metres, allocates its triangle band and writes its field
+with `tsdf::MeshIntegrator`. It then encodes, decodes into a separate grid,
+and extracts both grids with `mesh::MarchingCubes`. It reports conversion
+error against the normalized input mesh separately from codec error against
+the uncompressed extracted surface. Rafa2 is the first mesh fixture: its
+file declares no unit, and its tilted body needs an explicit up vector
+before scaling to 1.7 m (see the 2026-10-02 decision for the measured bounds
+and normalization). The original asset is left unchanged. File parsing and
+PLY export belong to `io`. `examples/codec_mesh/mesh_normalization.*` holds
+the demo's height convention and topology audit, which exist only to scale
+this test asset and are not library code. The mesh example is built only
+with `VR_WITH_ASSIMP=ON`.
+
+Both examples take `--quant-table uniform|band|radial` and `--step` for a
+single configuration. Their common `--sweep` compares all three table
+families at K = 64, 84, 120 and 512. The middle two retain complete frequency
+shells; K = 64 cuts a shell and is kept as the existing baseline. Each
+configuration has a warm-up and three timed codec rounds; mesh extraction
+and quality evaluation are outside those timings. Full frame bytes include
+the quantization table. These are deterministic candidate tables, not fitted
+JPEG image tables: the criterion is decoded geometry at a given total size.
 
 ## Next work
 

@@ -284,6 +284,16 @@ entries relevant to your task; later amendments supersede earlier rules.
   topology epoch; an adopted buffer states its memory. Mesh binning's capacity
   scan and the planar RGB route stay, with measured costs.
 
+- [**2026-10-02**](#2026-10-02--per-basis-quantization-and-a-normalized-mesh-codec-fixture) —
+  Per-basis quantization replaces the DC/AC split; frame v3 carries the kept
+  bases' weights, and a normalized Rafa2 mesh joins room0 in the codec study.
+- [**2026-10-03**](#2026-10-03--compact-the-codecs-observed-list-on-the-device-and-retain-transform-scratch) —
+  Compact the codec's observed list on the device, predict its readback prefix
+  to avoid an unconditional extra fence, and retain transform scratch.
+- [**2026-10-03**](#2026-10-03--codec-mesh-evaluation-consumes-the-shared-io-loader) —
+  The codec example uses Assimp-backed asset loading and shared PLY export;
+  height normalization and topology checks remain example policy.
+
 ## Decision record
 
 ### 2026-06-21 — Single Vulkan path (MoltenVK on Apple), like gfx.
@@ -8283,6 +8293,10 @@ lacks. A block the grid gained could only come from a writer during the
 call, which `Decoder` already forbids.
 
 **The encoder takes the map's own list and keeps only observed blocks.**
+*Amended 2026-10-03:* the observed kernel now appends a compact list on the
+device, with a predicted-prefix readback instead of the full input and flags;
+see the dated entry below. The coordinate sort and CPU entropy boundary stay.
+
 `compact_active_blocks_on_device` returns a fuse's list while it still
 holds, and its compaction is kept for the extract after. Before, the
 encoder's host compaction invalidated the fuse's list, so an extract after
@@ -8790,6 +8804,325 @@ it covered uint32 overflow of bin entries, which is unreachable:
 `triangle_candidate_offsets` refuses more than 2^32 candidates, and candidates
 bound the entries. The public mesh test covers split dispatches, compact-list
 growth, the second scan level and the oversized-bin refusal.
+
+### 2026-10-02 — Per-basis quantization and a normalized mesh codec fixture.
+
+**Contract.** `CodecParams` replaces `dc_step` and `ac_step` with
+`quantization_scale` and 512 `quantization_weights`, indexed by canonical
+frequency `(u,v,w)` as `u + 8*v + 64*w`. The effective step is their product,
+in fractions of `trunc_dist`, for the existing round-half-to-even scalar
+quantizer. DC is entry zero. All blocks share the same table. Only the K bases the
+zigzag cutoff keeps use their weights, so only those are checked and carried.
+A table's DC weight of one is a useful normalization convention for comparing
+global scales; it is not a format restriction. The scale and each kept weight
+must be positive and normal, and each kept basis's effective step must satisfy
+the existing step bounds. Normal factors keep validity independent of a host
+or device that flushes subnormals to zero; the first draft accepted subnormal
+factors with a normal product, and checked weights beyond K too.
+
+The host computes effective steps once and uploads them to device-local
+memory in the transform's `CommandBatch`. Both directions use the same
+canonical table through the zigzag map. The DCT, observed mask and entropy models are
+unchanged; each coefficient already had its own rANS probability model.
+
+**Frame v3.** The former two steps become the global scale and a weight
+count equal to K. The kept bases' float weights follow the 44-byte prefix in
+zigzag order, so the fixed header is `44 + 4K` bytes: 300 at K = 64 and
+2,092 at K = 512, with no per-block table overhead. Weights beyond K never
+apply, are not carried, and read back as 1. The first draft carried all 512
+weights, 2,048 bytes in every frame and about a tenth of a 1 cm Rafa2 frame.
+`read_frame_info` recovers the parameters without entropy decoding.
+All intra frames remain self-contained; v1 and v2 are `Unsupported`.
+
+**The study.** The C++ examples share three candidate tables, all with DC
+weight one and axis-permutation symmetry:
+
+- `uniform`: `Q(u,v,w) = 1`;
+- `band`: `Q(u,v,w) = 1 + 0.25*(u+v+w)`;
+- `radial`: `Q(u,v,w) = 1 + 0.125*(u*u+v*v+w*w)`.
+
+These are deterministic hypotheses, not fitted tables. The radial table
+can distinguish bases within a total-frequency band. K = 64 is the prior
+baseline and cuts shell 6; 84 and 120 retain complete shells through degree
+6 and 7; 512 retains every mode. Each is measured at scales 0.05, 0.1, 0.2,
+0.4 and 0.8, plus a uniform K = 512 / scale = 0.002 near-lossless control.
+The complete 61-row study uses a warm-up and three timed encode/decode
+rounds. Host and device timings are separate; quality measurement and mesh
+extraction are outside them. Decoding repeatedly measures steady state on
+an already-sized player grid, excluding resize/retry cost. The table shape
+is judged against total frame bytes and mesh error, not equal scale values
+across differently weighted tables. Default weights remain uniform while
+the new candidates are evaluated.
+
+**Rafa2 units and orientation.** The supplied `Rafa2/Frame_00001_textured.obj`
+declares VologramsAPI, 24,998 vertices and 50,000 triangles, but no physical
+unit or up axis. Its raw bounds are X [-0.28273, 0.47853],
+Y [-0.10953, 0.054242], Z [0.67838, 1.1272]. Projection inspection shows a
+complete person tilted in XZ, with the head towards -X/-Z. The explicit
+head-up vector `(-0.9120591159, 0.0661250017, -0.4046920474)` is the negative
+long principal axis of the vertex positions, visually checked for sign.
+Its full projected extent is 0.795690789501 source units; scaling by
+2.136508330159 gives a bounding height of 1.7 m. This is the normalization
+convention, not a claim of a recovered source unit or measured stature.
+`codec_mesh` rotates this direction to +Y with a proper rotation, centres
+X/Z and places the minimum Y at zero, without changing the source asset.
+
+The indexed mesh has one connected component, 75,000 edges and no boundary,
+nonmanifold or inconsistently oriented edges. Its signed volume is positive
+(0.008094958217 source units cubed), with no degenerate triangles. This
+supports the signed closest-face conversion; self-intersections were not
+checked. The actual path is `allocate_from_triangles` →
+`tsdf::MeshIntegrator` → `codec::Encoder` → `codec::Decoder` into a separate
+grid → `mesh::MarchingCubes`. The example reports conversion against the
+normalized original, codec loss against the uncompressed extracted surface,
+and total decoded error against the normalized original separately. PLYs
+for all three surfaces and the actual compressed frame can be saved.
+
+**Measured locally, M5 Max, Release, Vulkan/MoltenVK.** Room0 fuses all 400
+available frames and measures the final grid (24,885 encoded blocks), not
+the stream-average workload of the earlier decisions. Rafa2 is one supplied
+mesh frame, at both 1 cm (600 encoded blocks) and 5 mm (2,395). Every dataset
+runs the complete 61-configuration sweep. Distances below are sampled
+mesh-to-mesh accuracy RMS / coverage RMS in mm; the metric samples every
+fourth vertex. Reach is 4 cm at 1 cm voxels and 2 cm at 5 mm voxels; samples
+beyond reach are counted separately, never folded into RMS. Times are
+means over three warmed codec calls, host ms and device ms respectively.
+
+| Content | Table / K / scale | Frame bytes | RMS acc / cov (mm) | Host encode / decode (ms) | Device encode / decode (ms) |
+|---|---|---:|---|---|---|
+| Room0, 1 cm | uniform / 64 / 0.2 | 273,871 | 0.640 / 0.814 | 17.11 / 15.46 | 1.19 / 0.90 |
+| Room0, 1 cm | radial / 64 / 0.1 | 271,663 | 0.654 / 0.815 | 17.73 / 15.59 | 1.86 / 1.13 |
+| Rafa2, 1 cm | uniform / 64 / 0.2 | 19,986 | 0.889 / 0.838 | 1.28 / 1.42 | 0.08 / 0.05 |
+| Rafa2, 1 cm | radial / 64 / 0.1 | 19,454 | 0.983 / 0.893 | 1.11 / 1.11 | 0.07 / 0.05 |
+| Rafa2, 5 mm | uniform / 64 / 0.2 | 68,737 | 0.416 / 0.392 | 3.45 / 3.21 | 0.18 / 0.13 |
+| Rafa2, 5 mm | radial / 64 / 0.1 | 66,971 | 0.434 / 0.406 | 3.24 / 3.38 | 0.20 / 0.12 |
+
+Frame bytes here were measured with the first draft's 512-weight header. The
+final header carries K weights, so each K = 64 frame is 1,792 bytes smaller
+with an identical payload (1 cm Rafa2 uniform: 18,194 bytes); the K = 512
+rows are unchanged.
+
+These paired rows are close in rate, not exactly matched. Their rate/error
+tradeoff does not establish a consistent improvement, so the default table
+remains uniform. The band table at K = 64 / scale = 0.1 gives 69,686 bytes
+and 0.401 / 0.375 mm on 5 mm Rafa2: slightly better than the baseline and
+slightly larger. A fitted table should be compared at explicitly matched
+rates before being promoted. K = 512 removes the cutoff but remains costly:
+room0's band / 512 / 0.2 is 259,494 bytes at 0.666 / 0.659 mm, costing
+76.50 / 125.30 host ms; the low error alone does not make it a live default.
+All three listed room0 rows (uniform/radial K = 64 and band K = 512) have
+zero accuracy samples and 29 coverage samples beyond reach; all listed
+Rafa2 rows have zero in either direction. The near-lossless control's
+accuracy RMS is 0.019 mm at 1 cm Rafa2 and 0.010 mm at 5 mm Rafa2.
+
+For Rafa2 the separate mesh-to-TSDF conversion accuracy / coverage RMS is
+0.091 / 0.403 mm at 1 cm and 0.030 / 0.163 mm at 5 mm. With default codec
+parameters the total decoded-to-original error is 0.891 / 0.857 mm and
+0.415 / 0.381 mm, respectively. These errors are measured independently,
+not added. The float-input normalization prints projected height
+0.795690825737 and scale 2.13650823286; exported input Y is
+[0, 1.70000004768] m. Its tiny difference from the double-precision OBJ
+inspection above is rounding into the production float vertex format.
+
+**Reproduce** with the Release executables and an absolute `dataset_root`:
+
+```sh
+"$recon_root/build/examples/codec_replica/codec_replica" \
+  "$dataset_root/replica_room0/room0" --max-frames 400 \
+  --voxel 0.01 --encode-every 0 --preload --sweep
+"$recon_root/build/examples/codec_mesh/codec_mesh" \
+  "$dataset_root/Rafa2/Frame_00001_textured.obj" \
+  --height 1.7 --up-vector -0.9120591159,0.0661250017,-0.4046920474 \
+  --voxel 0.005 --mode signed --sweep -o "$recon_root/build/rafa2"
+```
+
+Repeat Rafa2 with `--voxel 0.01` for its coarser row. To export the measured
+nonuniform example, use `--quant-table radial --step 0.1 --k 64` and a
+different output prefix. Sweeps print the entire table; sizes include all
+headers, masks, coordinates, entropy tables and coefficients. Timings do
+not establish capture-to-display throughput or discrete-GPU performance.
+Rafa2 has only one frame, so it supplies no temporal quality evidence.
+
+The exported 5 mm radial / K = 64 / scale = 0.1 frame was independently
+parsed: 66,971 bytes, 2,395 blocks, all 512 weights of the first-draft
+header, and section
+lengths consuming the exact file. Its marching-cubes output has 199,864
+triangles (198,220 before coding). A shared-view rendering of normalized
+input, uncompressed TSDF and decoded output retains the body silhouette,
+but shows fine rippling/faceting after coding. Sub-millimetre positional
+RMS is not visual losslessness; smooth-surface shading remains a reason to
+tune tables and examine more than the aggregate positional metric.
+
+**Validation.** The Release build is warning-clean with
+`VR_WARNINGS_AS_ERRORS=ON`; all 45 tests pass. The three GPU codec tests also
+pass with the Khronos layer explicitly enabled and synchronization
+validation on, as does the full 5 mm radial Rafa2 conversion/codec/meshing
+example, with no validation messages. Added regressions cover nonuniform and directional basis
+weights, A/B/A table changes on a transform and public decoder, malformed
+and truncated v3 parameters, effective-step bounds, subnormal factors,
+input-unit invariance, oblique height normalization and
+winding preservation, and OBJ/topology refusals. No discrete GPU or new
+sanitizer run was performed for this change.
+
+### 2026-10-03 — Compact the codec's observed list on the device and retain transform scratch.
+
+The GPU memory audit found two avoidable costs inside an otherwise staged
+codec. The observed filter downloaded every allocated `BlockIndex` (16 bytes)
+plus a four-byte flag, then discarded unobserved entries on the CPU. Forward
+and inverse also recreated their list, coefficient and mask buffers on every
+call. This change is stacked on the per-basis v3 codec; it changes neither the
+frame format nor the CPU coordinate sort and rANS reference implementation.
+
+**Compact before readback.** One workgroup still checks one block's weights
+and resolves its coordinate through the hash table. Its leader atomically
+appends the input `BlockIndex` when any voxel is observed. A two-word counter
+buffer holds rejected and observed counts, reset before the call's dispatches.
+Output order is unspecified; `Encoder` still sorts by (z, y, x), preserving
+the same content's exact frame bytes regardless of scheduling.
+
+Downloading the exact list only after learning its count would require two
+fence waits every time. Instead the filter follows the hash map's
+`collect_compacted`: download the count and a predicted list prefix in the
+same batch, then download a missing tail only if the result grew past the
+prediction. A call with no previous non-zero count (the first, or one after an empty
+result) predicts the whole input; later calls predict the last observed count
+plus 25%, capped by the current input count. The first draft predicted zero
+after an empty result, so the next non-empty call always paid the second
+batch. Empty inputs submit nothing. The returned observed
+count is checked against input capacity before resizing or reading a tail.
+
+For A input blocks, N observed blocks and prefix G, total observed readback is
+`8 + 16*max(G,N)` bytes, bounded by `8 + 16*A`, against the old `4 + 20*A`.
+The steady one-in-five case predicts about A/4 and transfers about `4*A + 8`
+bytes, with one submission. The first/all-observed case transfers `16*A + 8`.
+These are byte counts, not a latency claim; atomics add device work and growth
+can still add a fence. Device compaction/sorting of coordinates and GPU rANS
+remain separate work. The host coder still requires the coefficient/mask
+readback on encode and upload on decode.
+
+**Retain scratch.** Each transform owns grow-only device buffers for the
+observed output, sorted input list, packed coefficients and masks. A fitting
+call makes no new allocation for these buffers. A grow releases the old
+buffer before creating its replacement, with 1.5x headroom, so a slowly
+growing input does not reallocate on every frame and never holds both;
+`ensure_device_scratch` in `core/compute_util.hpp` does this for the codec
+and the mesh integrator alike. Descriptors bind logical
+ranges, and transfers use logical counts, so a smaller list or K cannot expose
+an old suffix. Scratch remains at its largest size until destruction; at A
+input blocks, N coded blocks and padded coefficient count Kp the high-water
+sizes are up to 1.5x 16A, 16N, 2NKp and 64N bytes respectively. The obsolete flags buffer
+is removed. Batch staging allocations remain per-call; the per-basis 2 KiB
+effective-step upload and its barriers are unchanged.
+
+**Validation.** Release with `VR_WARNINGS_AS_ERRORS=ON` builds and all 45 tests
+pass. New GPU regressions cover mixed/all/none observed results, zero-count
+regrowth, input growth/shrinkage, empty input, original coordinates and ptrs,
+and forced two-workgroup dispatch chunks. Forward/inverse reuse through count
+and K changes, odd padding and emptiness is compared with the independent CPU
+DCT reference, including unchanged blocks outside the current list. Existing
+tests retain deterministic frame bytes, stale-list refusal and A/B/A
+quantization-table coverage. The three GPU codec tests also pass with the
+Khronos layer explicitly enabled and synchronization validation on, with no
+validation messages. The same full 45-test suite and three forced-Khronos
+synchronization-validation codec tests pass on the RTX 4090 in Release.
+
+**Apple timing check.** A one-off C++ harness linked
+the unchanged `23c6e36` baseline and this change separately, both Release/O3 on
+Apple M5 Max through Vulkan/MoltenVK. It allocated 32,768 blocks in a 65,536-slot
+grid, marked one voxel in each selected block, and timed only `observed` with
+five warmups and 50 measured calls per density. Allocation, weight upload and
+active-list construction are outside the measurement. Host spans include
+recording, submission, waiting and readback; device spans cover dispatches.
+
+Two alternating baseline/changed runs showed device warm-up drift in the first
+baseline run, so these are the second pair, not an aggregated speedup claim:
+
+| Observed blocks | Baseline host mean / median / p95 (ms) | Changed host mean / median / p95 (ms) | Baseline / changed device mean (ms) |
+|---:|---|---|---|
+| 0 | 0.408 / 0.380 / 0.488 | 0.348 / 0.305 / 0.404 | 0.164 / 0.147 |
+| 6,554 | 0.333 / 0.328 / 0.365 | 0.294 / 0.292 / 0.327 | 0.117 / 0.118 |
+| 32,768 | 0.381 / 0.379 / 0.395 | 0.313 / 0.312 / 0.324 | 0.116 / 0.120 |
+
+The old pass reads 655,364 bytes at every density. The warmed new pass reads
+8, 131,080 and 524,296 bytes respectively. The all-observed row illustrates
+the small extra atomic device work despite less host traffic. This is a
+synthetic filter-only check; it does not measure total codec latency, scratch
+allocation savings, real capture-to-display throughput, or discrete-GPU gains.
+
+**RTX 4090 timing check.** The same `/tmp/codec_observed_bench.cpp` harness ran
+on the idle RTX 4090 host `taojin-desktop`, both variants built Release/O3:
+baseline `23c6e36` and implementation `525bdf7` (before this documentation-only
+amendment). One interleaved baseline/changed pair was excluded as warm-up;
+three subsequent pairs each used five warmups and 50 measured calls per case.
+The workload and timing scopes are exactly those above. Each table entry is
+the **median of the three per-run medians**, with the minimum and maximum
+per-run median in brackets; these are not pooled-sample percentiles.
+
+| Observed blocks | Baseline host (ms) | Changed host (ms) | Baseline device (ms) | Changed device (ms) |
+|---:|---|---|---|---|
+| 0 | 0.1241 [0.1221–0.1254] | 0.0511 [0.0507–0.0512] | 0.0245 [0.0244–0.0247] | 0.0240 [0.0239–0.0243] |
+| 6,554 | 0.1643 [0.1643–0.2315] | 0.0695 [0.0693–0.0697] | 0.0246 [0.0244–0.0246] | 0.0246 [0.0246–0.0247] |
+| 32,768 | 0.1428 [0.1427–0.2113] | 0.1120 [0.1120–0.1148] | 0.0248 [0.0248–0.0250] | 0.0334 [0.0334–0.0335] |
+
+The second baseline run's host times rose without a corresponding device-time
+increase, consistent with host scheduling noise; the ranges retain that run.
+Host filter latency is lower at all three densities. With every block observed,
+the append atomics increase device time from about 0.0248 to 0.0334 ms even
+though less readback and host work reduce total filter time. This establishes
+a discrete-GPU improvement for this synthetic filter workload, not total codec
+or live-pipeline throughput, and does not isolate retained-transform-scratch
+savings. Raw runs 1–3 are retained on `taojin-desktop` under
+`/home/taojin/ws/volumetric_kit/volumetric_kit_recon/.worktrees/`, in
+`gpu-codec-base-23c6e36/observed-bench-{1,2,3}.log` and
+`gpu-codec-fix-525bdf7/observed-bench-{1,2,3}.log`.
+
+### 2026-10-03 — Codec mesh evaluation consumes the shared io loader.
+
+The codec change is stacked above the standalone asset I/O module. Its
+`codec_mesh` example now calls `io::load_mesh` directly and passes the owned
+`io::TriangleMesh` into its normalization and topology checks. The bespoke
+OBJ parser and duplicate geometry container are removed. PLY exports use
+`io::write_ply`, matching the room example. This completes the codec adoption
+left separate by the asset I/O decision above.
+
+`examples/codec_mesh/mesh_normalization.*` contains the explicit height/up
+convention, topology audit and conversion to the evaluator's host mesh. Rafa2
+is a test and demo asset, so this is demo policy, compiled into `codec_mesh`
+alone and not tested as library code. The audit runs after normalization, on
+the float metres the conversion reads, so a triangle that collapses there
+counts as degenerate. Both codec examples share `parse_number.hpp` for their
+numeric flags, and `codec_mesh` grows its grid only for a capacity limit,
+retrying lock contention. These are consumer choices, so they stay outside
+the format loader.
+Quantization-table candidates likewise remain codec-example policy.
+`codec_mesh` requires `VR_WITH_ASSIMP=ON`; the room codec, production codec
+library and tests build without it.
+
+The 1.7 m Rafa2 convention and signed-mode checks are unchanged. Assimp's
+format parsing, triangulation and exact position joining are now inherited
+from `io`; successful import still does not certify a closed manifold.
+Earlier rate-distortion and latency tables describe their recorded builds,
+not a new performance measurement of this integration.
+
+Validation of the stacked integration on Apple M5 Max: Release with warnings
+as errors, Assimp and FFmpeg passes all 54 tests. The three GPU codec tests
+and the actual 5 mm Rafa2 radial/K64/0.1 pipeline pass with Khronos
+synchronization validation forced on, without validation diagnostics. The
+import retains 24,998 vertices and 50,000 triangles with closed, consistently
+oriented edges; explicit normalization produces Y bounds [0, 1.70000005] m.
+The pipeline emits all three PLYs and a 66,973-byte frame, decodes 2,395
+blocks, and extracts 199,864 decoded triangles. This is a functional smoke
+run with validation enabled, not a latency benchmark. An Assimp-disabled
+Release/Werror build also succeeds, and its image/PLY host tests pass.
+
+**Review follow-up.** Rebased onto #156 and #158. On Apple M5 Max, Release
+with warnings as errors and Assimp, all 51 tests pass, and an Assimp-off build
+passes its codec and IO tests. The codec DCT, encoder and decoder tests and
+the mesh-integrate test report no messages with the Khronos layer forced on
+and synchronization validation. `codec_mesh` on a box OBJ writes a
+15,179-byte frame whose 300-byte header carries 64 weights. No new rate or
+latency measurement was made. The normalization's own test, listed in the
+2026-10-02 validation, is removed with it from the shared code.
 
 ## Measured lessons
 
