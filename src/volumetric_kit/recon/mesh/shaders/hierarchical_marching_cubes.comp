@@ -68,6 +68,7 @@ struct Sample {
 // whole-array copies per triangle; direct access preserves reference use in
 // MSL without requiring compiler-specific optimization flags.
 Sample samples[8];
+bool samples_regular;
 shared uint partial[256];
 shared uint block_base;
 shared uint block_cursor;
@@ -119,6 +120,7 @@ bool cellSigns(HierarchicalNode owner, uint candidate, out int code) {
 
 bool gather(HierarchicalNode owner, uint candidate, bool need_color, out int code) {
   code = 0;
+  samples_regular = true;
   ivec3 corner = ivec3(int(candidate % 9u), int((candidate / 9u) % 9u), int(candidate / 81u));
   int scale = 1 << int(owner.level);
   ivec3 q = (owner.coord * 8 + corner) * scale;
@@ -127,6 +129,7 @@ bool gather(HierarchicalNode owner, uint candidate, bool need_color, out int cod
     ivec3 query;
     uint si;
     if (!sampleStorage(owner, corner, q, c, node, query, si)) return false;
+    samples_regular = samples_regular && node.level == owner.level;
     float w = weights[si];
     float d = tsdf[si];
     if (!(w >= pc.weight_threshold) || isnan(d) || isinf(d)) return false;
@@ -174,18 +177,26 @@ bool triangle(int code, int t, out vec3 p[3], out vec3 color[3]) {
 // by the dual cell's Jacobian: cross-level cells are generally not cubes.
 // This also avoids unstable geometric normals on near-tangent sliver triangles.
 vec3 dualNormal() {
-  vec3 dx = samples[1].position + samples[2].position + samples[5].position + samples[6].position -
-            samples[0].position - samples[3].position - samples[4].position - samples[7].position;
-  vec3 dy = samples[2].position + samples[3].position + samples[6].position + samples[7].position -
-            samples[0].position - samples[1].position - samples[4].position - samples[5].position;
-  vec3 dz = samples[4].position + samples[5].position + samples[6].position + samples[7].position -
-            samples[0].position - samples[1].position - samples[2].position - samples[3].position;
   float sx = samples[1].distance + samples[2].distance + samples[5].distance + samples[6].distance -
              samples[0].distance - samples[3].distance - samples[4].distance - samples[7].distance;
   float sy = samples[2].distance + samples[3].distance + samples[6].distance + samples[7].distance -
              samples[0].distance - samples[1].distance - samples[4].distance - samples[5].distance;
   float sz = samples[4].distance + samples[5].distance + samples[6].distance + samples[7].distance -
              samples[0].distance - samples[1].distance - samples[2].distance - samples[3].distance;
+  // Equal-level samples form a regular axis-aligned cube. Its Jacobian is a
+  // positive scalar times identity, which cancels when the gradient normalizes.
+  if (samples_regular) {
+    vec3 gradient = vec3(sx, sy, sz);
+    float squared = dot(gradient, gradient);
+    if (!(squared > 0.0) || isinf(squared)) return vec3(0.0);
+    return gradient * inversesqrt(squared);
+  }
+  vec3 dx = samples[1].position + samples[2].position + samples[5].position + samples[6].position -
+            samples[0].position - samples[3].position - samples[4].position - samples[7].position;
+  vec3 dy = samples[2].position + samples[3].position + samples[6].position + samples[7].position -
+            samples[0].position - samples[1].position - samples[4].position - samples[5].position;
+  vec3 dz = samples[4].position + samples[5].position + samples[6].position + samples[7].position -
+            samples[0].position - samples[1].position - samples[2].position - samples[3].position;
   float determinant = dot(dx, cross(dy, dz));
   vec3 normal = cross(dy, dz) * sx + cross(dz, dx) * sy + cross(dx, dy) * sz;
   float squared = dot(normal, normal);
