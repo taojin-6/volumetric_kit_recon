@@ -104,13 +104,25 @@ struct HierarchicalMarchingCubes::Impl {
                                  config.queue_families,
                                  config.queue_family_count);
   }
+  std::uint64_t triangle_limit() const noexcept {
+    return std::min<std::uint64_t>(
+        std::numeric_limits<std::uint32_t>::max() / 3u,
+        std::min(max_range / (3 * sizeof(Vertex)),
+                 max_range / (3 * sizeof(std::uint32_t))));
+  }
   Status grow(Slot& slot, std::uint64_t capacity) {
     capacity = std::max<std::uint64_t>(1, capacity);
-    if (capacity > std::numeric_limits<std::uint32_t>::max() / 3u) {
+    const auto limit = triangle_limit();
+    if (capacity > limit) {
       return Status::out_of_memory(
-          "hierarchical mesh exceeds uint32 index capacity");
+          "hierarchical mesh exceeds device output capacity");
     }
     if (capacity <= slot.capacity) return {};
+    // Reserve growth headroom only after the device's actual output outgrows
+    // this slot. Clamp the headroom, never the required count, to device
+    // limits.
+    capacity = std::min(limit, std::max(capacity, std::uint64_t(slot.capacity) +
+                                                      slot.capacity / 2u));
     const VkDeviceSize vertices_bytes = capacity * 3 * sizeof(Vertex);
     const VkDeviceSize indices_bytes = capacity * 3 * sizeof(std::uint32_t);
     VR_TRY(check_storage_buffer_range("hierarchical mesh vertices",
@@ -237,9 +249,12 @@ Result<DeviceMesh> HierarchicalMarchingCubes::extract_device(
   Draw draw;
   for (unsigned attempt = 0; attempt < 2; ++attempt) {
     auto start = Clock::now();
-    const std::uint64_t plan = attempt == 0
-                                   ? std::uint64_t(field.leaf_count) * 64
-                                   : draw.command.indexCount / 3u;
+    std::uint64_t plan = slot.capacity;
+    if (attempt != 0) {
+      plan = draw.command.indexCount / 3u;
+    } else if (plan == 0) {
+      plan = std::min(p.triangle_limit(), std::uint64_t(field.leaf_count) * 64);
+    }
     VR_TRY(p.grow(slot, plan));
     if (timings) timings->arena_alloc_ms += elapsed(start);
     start = Clock::now();

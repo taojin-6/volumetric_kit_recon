@@ -412,6 +412,30 @@ int main() {
   CHECK(!mesh::HierarchicalMarchingCubes::create(gpu.device, gpu.allocator,
                                                  config));
 
+  // Topology growth alone must not reallocate an arena whose actual output
+  // still fits. Unobserved leaves have no surface at either resolution.
+  Fixture unobserved;
+  auto retained =
+      mesh::HierarchicalMarchingCubes::create(gpu.device, gpu.allocator);
+  CHECK(retained);
+  VkBuffer previous_vertices = VK_NULL_HANDLE;
+  std::uint64_t previous_capacity = 0;
+  for (const bool refine : {false, true}) {
+    CHECK(build(unobserved, gpu, refine).ok());
+    vr::CommandBatch batch(gpu.device, gpu.allocator);
+    CHECK(batch.fill(unobserved.weights, 0, unobserved.weights.size(), 0).ok());
+    CHECK(batch.submit().ok());
+    auto view =
+        retained.value().extract_device(unobserved.view(), 0.0f, &timings);
+    CHECK(view && view.value().triangle_count == 0);
+    if (refine) {
+      CHECK(view.value().vertices == previous_vertices);
+      CHECK(timings.triangle_capacity == previous_capacity);
+    }
+    previous_vertices = view.value().vertices;
+    previous_capacity = timings.triangle_capacity;
+  }
+
   auto bad = field.view();
   bad.node_capacity *= 2;
   CHECK(!bad.validate().ok());
