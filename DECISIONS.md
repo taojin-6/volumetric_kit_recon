@@ -9085,18 +9085,18 @@ OBJ parser and duplicate geometry container are removed. PLY exports use
 `io::write_ply`, matching the room example. This completes the codec adoption
 left separate by the asset I/O decision above.
 
-`examples/common/mesh_normalization.*`, built once as `vr_example_mesh`,
-contains the explicit height/up convention, topology audit and conversion to
-the evaluator's host mesh. The audit runs after normalization, on the float
-metres the conversion reads, so a triangle that collapses there counts as
-degenerate. Its test uses in-code meshes, not a model file. Both codec
-examples share `parse_number.hpp` for their numeric flags, and `codec_mesh`
-grows its grid only for a capacity limit, retrying lock contention.
-These are consumer choices, so they stay outside the format loader.
+`examples/codec_mesh/mesh_normalization.*` contains the explicit height/up
+convention, topology audit and conversion to the evaluator's host mesh. Rafa2
+is a test and demo asset, so this is demo policy, compiled into `codec_mesh`
+alone and not tested as library code. The audit runs after normalization, on
+the float metres the conversion reads, so a triangle that collapses there
+counts as degenerate. Both codec examples share `parse_number.hpp` for their
+numeric flags, and `codec_mesh` grows its grid only for a capacity limit,
+retrying lock contention. These are consumer choices, so they stay outside
+the format loader.
 Quantization-table candidates likewise remain codec-example policy.
-`codec_mesh` and its normalization test require `VR_WITH_ASSIMP=ON` (the
-test also needs the examples); the
-room codec, production codec library and remaining tests build without it.
+`codec_mesh` requires `VR_WITH_ASSIMP=ON`; the room codec, production codec
+library and tests build without it.
 
 The 1.7 m Rafa2 convention and signed-mode checks are unchanged. Assimp's
 format parsing, triangulation and exact position joining are now inherited
@@ -9116,12 +9116,13 @@ run with validation enabled, not a latency benchmark. An Assimp-disabled
 Release/Werror build also succeeds, and its image/PLY host tests pass.
 
 **Review follow-up.** Rebased onto #156 and #158. On Apple M5 Max, Release
-with warnings as errors and Assimp, all 52 tests pass, and an Assimp-off build
+with warnings as errors and Assimp, all 51 tests pass, and an Assimp-off build
 passes its codec and IO tests. The codec DCT, encoder and decoder tests and
 the mesh-integrate test report no messages with the Khronos layer forced on
 and synchronization validation. `codec_mesh` on a box OBJ writes a
 15,179-byte frame whose 300-byte header carries 64 weights. No new rate or
-latency measurement was made.
+latency measurement was made. The normalization's own test, listed in the
+2026-10-02 validation, is removed with it from the shared code.
 
 ## Measured lessons
 

@@ -1421,9 +1421,10 @@ the uncompressed extracted surface. Rafa2 is the first mesh fixture: its
 file declares no unit, and its tilted body needs an explicit up vector
 before scaling to 1.7 m (see the 2026-10-02 decision for the measured bounds
 and normalization). The original asset is left unchanged. File parsing and
-PLY export belong to `io`; `examples/common/mesh_normalization.*` retains
-the example's height convention and topology audit. The mesh example and
-its normalization test are built only with `VR_WITH_ASSIMP=ON`.
+PLY export belong to `io`. `examples/codec_mesh/mesh_normalization.*` holds
+the demo's height convention and topology audit, which exist only to scale
+this test asset and are not library code. The mesh example is built only
+with `VR_WITH_ASSIMP=ON`.
 
 Both examples take `--quant-table uniform|band|radial` and `--step` for a
 single configuration. Their common `--sweep` compares all three table

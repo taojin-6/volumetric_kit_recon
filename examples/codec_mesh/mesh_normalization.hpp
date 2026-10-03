@@ -3,8 +3,10 @@
 
 #pragma once
 
-// Mesh normalization and topology policy for codec examples. Asset loading
-// belongs to io; target height and orientation are explicit caller choices.
+// codec_mesh's own preprocessing: scales its demo asset (Rafa2, which
+// declares no unit or up axis) to a 1.7 m figure and checks its topology
+// before signed conversion. The kind of adaptation a user adds for their own
+// data; the library takes geometry as given.
 
 #include <array>
 #include <cstddef>

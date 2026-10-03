@@ -1,15 +1,6 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Tao Jin
 
-# The codec mesh example's height normalization and topology audit. Host-only;
-# the examples define the library it tests, so it builds with them.
-if(VR_BUILD_EXAMPLES AND TARGET recon_io_assimp)
-  add_executable(recon_mesh_normalization_test mesh_normalization_test.cpp)
-  target_link_libraries(recon_mesh_normalization_test PRIVATE vr_example_mesh)
-  vr_target_warnings(recon_mesh_normalization_test)
-  add_test(NAME recon_mesh_normalization COMMAND recon_mesh_normalization_test)
-endif()
-
 # Smoke test: compiles the core public headers (Status/Result, POD math,
 # version) and links recon_core, proving the tier builds, links, and runs under
 # -Werror. A full GoogleTest suite replaces this as the tiers land (see the
