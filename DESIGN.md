@@ -864,6 +864,13 @@ Restriction averages observed samples in metric TSDF and linear color space,
 keeps unsupported coarse samples unobserved, and recycles child groups for
 later splits. A merge event budget and caller-set persistence bound churn.
 Per-level leaf populations share the compact-list count readback.
+`update_topology` records one split followed by one merge in a single
+`CommandBatch`, preserving their separate counters in staging slices before
+resetting shared device counters. After initial leaf preparation, it uses one
+submission and completion wait. Merge selection scans the updated nodes, so
+no intermediate leaf-list rebuild or count readback is needed. The standalone
+operations retain their behavior; the combined call reports one
+`hierarchy update` host/device stage.
 
 `HierarchicalTsdfIntegrator` shares the uniform fusion arithmetic through a
 shader body compiled separately for each addressing scheme. Its classifier

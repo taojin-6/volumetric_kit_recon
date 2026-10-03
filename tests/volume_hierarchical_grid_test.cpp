@@ -120,6 +120,183 @@ int check_prolongation_support(vr::Device& dev, vr::Allocator& alloc) {
   return 0;
 }
 
+// Exercise the public batched path against split-then-merge, including a
+// split and a merge in the same update. One eligible split at a time makes
+// the free-group assignment deterministic, so payload bits can be compared.
+int check_batched_topology(vr::Device& dev, vr::Allocator& alloc) {
+  vol::HierarchicalGridConfig config;
+  config.finest.voxel_size = 0.03125f;
+  config.finest.trunc_dist = 1.0f;
+  config.finest.bucket_size = 8;
+  config.finest.num_buckets = 4;
+  config.finest.num_blocks = 32;
+  config.level_count = 3;
+  config.child_block_capacity = 16;
+  config.color = true;
+  auto made_a = vol::HierarchicalGrid::create(dev, alloc, config);
+  auto made_b = vol::HierarchicalGrid::create(dev, alloc, config);
+  CHECK(made_a && made_b);
+  auto separate = std::move(made_a).value();
+  auto combined = std::move(made_b).value();
+  const vol::BlockIndex roots[]{{vr::Vec3i(-1, 0, 0), -1},
+                                {vr::Vec3i(0, 0, 0), -1}};
+  // Allocate individually so both forests assign the same root sample slots.
+  for (const auto& root : roots) {
+    auto allocated_a = separate.allocate_roots(&root, 1);
+    auto allocated_b = combined.allocate_roots(&root, 1);
+    CHECK(allocated_a && allocated_a.value() == 0);
+    CHECK(allocated_b && allocated_b.value() == 0);
+  }
+  auto left = separate.prepare_leaves();
+  auto right = combined.prepare_leaves();
+  CHECK(left && right);
+  const auto capacity = separate.node_capacity();
+  auto nodes = vr_test::read_back<vol::HierarchicalNode>(
+      dev, alloc, *left->nodes, capacity);
+  CHECK(nodes);
+  std::uint32_t root_a = capacity, root_b = capacity;
+  std::vector<float> sdf(std::size_t(capacity) * 512, 0.0f),
+      weight(sdf.size(), 0.0f);
+  std::vector<std::uint32_t> color(sdf.size(), 0);
+  for (std::uint32_t i = 0; i < capacity; ++i) {
+    const auto& node = nodes.value()[i];
+    if (node.ptr < 0) continue;
+    if (node.coord.x == -1) root_a = i;
+    if (node.coord.x == 0) root_b = i;
+    for (std::uint32_t j = 0; j < 512; ++j) {
+      const auto offset = std::size_t(node.ptr) + j;
+      // Affine TSDF, nonuniform confidence, and encoded color exercise all
+      // shared buffers across the split/counter-reset/merge barriers.
+      sdf[offset] =
+          float(node.coord.x) * 0.125f +
+          (float(j % 8) + 2 * float((j / 8) % 8) - float(j / 64)) / 64;
+      weight[offset] = 2.0f + float(j % 3);
+      color[offset] = 0xff000000u | (j * 7919u & 0x00ffffffu);
+    }
+  }
+  CHECK(root_a < capacity && root_b < capacity);
+  for (auto* field : {&left.value(), &right.value()}) {
+    CHECK(vr_test::write_back(dev, alloc, *field->tsdf, sdf));
+    CHECK(vr_test::write_back(dev, alloc, *field->weight, weight));
+    CHECK(vr_test::write_back(dev, alloc, *field->color, color));
+  }
+  auto requests =
+      vr::device_storage_buffer(alloc, (capacity + 7u) * sizeof(std::uint32_t));
+  CHECK(requests);
+  std::vector<std::uint32_t> desired(capacity, ~0u);
+  const auto compare = [&]() -> int {
+    left = separate.prepare_leaves();
+    right = combined.prepare_leaves();
+    CHECK(left && right && left->leaf_count == right->leaf_count);
+    CHECK(separate.leaf_counts() == combined.leaf_counts());
+    auto lhs_nodes = vr_test::read_back<vol::HierarchicalNode>(
+        dev, alloc, *left->nodes, capacity);
+    auto rhs_nodes = vr_test::read_back<vol::HierarchicalNode>(
+        dev, alloc, *right->nodes, capacity);
+    CHECK(lhs_nodes && rhs_nodes);
+    for (std::uint32_t i = 0; i < capacity; ++i) {
+      const auto& lhs = lhs_nodes.value()[i];
+      const auto& rhs = rhs_nodes.value()[i];
+      CHECK(lhs.coord == rhs.coord && lhs.ptr == rhs.ptr &&
+            lhs.level == rhs.level && lhs.children == rhs.children);
+    }
+    auto lhs_leaves = vr_test::read_back<std::uint32_t>(
+        dev, alloc, *left->leaf_indices, left->leaf_count);
+    auto rhs_leaves = vr_test::read_back<std::uint32_t>(
+        dev, alloc, *right->leaf_indices, right->leaf_count);
+    CHECK(lhs_leaves && rhs_leaves);
+    std::sort(lhs_leaves->begin(), lhs_leaves->end());
+    std::sort(rhs_leaves->begin(), rhs_leaves->end());
+    CHECK(lhs_leaves.value() == rhs_leaves.value());
+    for (const auto& pair : {std::pair{left->tsdf, right->tsdf},
+                             std::pair{left->weight, right->weight},
+                             std::pair{left->color, right->color}}) {
+      auto lhs = vr_test::read_back<std::uint32_t>(dev, alloc, *pair.first,
+                                                   sdf.size());
+      auto rhs = vr_test::read_back<std::uint32_t>(dev, alloc, *pair.second,
+                                                   sdf.size());
+      CHECK(lhs && rhs && lhs.value() == rhs.value());
+    }
+    return 0;
+  };
+  const auto update = [&](std::uint32_t splits, std::uint32_t merges,
+                          std::uint32_t stable, std::uint32_t expected_split,
+                          std::uint32_t expected_merge,
+                          std::uint32_t expected_pending,
+                          std::uint32_t expected_exhausted = 0) -> int {
+    CHECK(vr_test::write_back(dev, alloc, requests.value(), desired));
+    auto split = separate.split(requests.value(), splits, 0.5f);
+    auto merge = separate.merge(requests.value(), merges, stable);
+    vr::StageMetrics metrics;
+    auto both = combined.update_topology(requests.value(), splits, merges,
+                                         stable, 0.5f, &metrics);
+    CHECK(split && merge && both);
+    CHECK(split->split == expected_split && split->split == both->split.split);
+    CHECK(split->deferred == both->split.deferred &&
+          split->rejected == both->split.rejected &&
+          split->exhausted == expected_exhausted &&
+          split->exhausted == both->split.exhausted);
+    CHECK(merge->merged == expected_merge &&
+          merge->merged == both->merge.merged);
+    CHECK(merge->deferred == both->merge.deferred &&
+          merge->pending == expected_pending &&
+          merge->pending == both->merge.pending);
+    CHECK(!right->is_current());
+    CHECK(std::any_of(metrics.rows().begin(), metrics.rows().end(),
+                      [](const vr::StageRow& row) {
+                        return std::string_view(row.name) == "hierarchy update";
+                      }));
+    return compare();
+  };
+  const auto request_children = [&](std::uint32_t parent,
+                                    std::uint32_t level) -> int {
+    nodes = vr_test::read_back<vol::HierarchicalNode>(dev, alloc, *right->nodes,
+                                                      capacity);
+    CHECK(nodes && nodes.value()[parent].children != 0);
+    const auto first = nodes.value()[parent].children - 1;
+    for (std::uint32_t i = first; i < first + 8; ++i) desired[i] = level;
+    return 0;
+  };
+  CHECK(compare() == 0);
+  CHECK(vr_test::write_back(dev, alloc, requests.value(), desired));
+  CHECK(combined.update_topology(requests.value(), 0, 0));
+  CHECK(right->is_current());
+  CHECK(!combined.update_topology(requests.value(), 1, 1, 0));
+  CHECK(!combined.update_topology(requests.value(), 1, 1, 1, 0.0f));
+  CHECK(!combined.update_topology(requests.value(), 1, 1, 1,
+                                  std::numeric_limits<float>::quiet_NaN()));
+  vr::Buffer invalid;
+  CHECK(!combined.update_topology(invalid, 1, 1));
+  vol::HierarchicalGrid empty_owner;
+  CHECK(!empty_owner.update_topology(requests.value(), 1, 1));
+  CHECK(right->is_current());
+
+  desired[root_a] = 1;
+  CHECK(update(1, 0, 2, 1, 0, 0) == 0);
+  std::fill(desired.begin(), desired.end(), ~0u);
+  CHECK(request_children(root_a, 2) == 0);
+  CHECK(update(0, 1, 2, 0, 0, 1) == 0);  // first qualifying observation
+  desired[root_b] = 1;
+  CHECK(update(1, 1, 2, 1, 1, 0) == 0);  // split B, then merge A
+  std::fill(desired.begin(), desired.end(), ~0u);
+  desired[root_a] = 1;
+  CHECK(request_children(root_b, 2) == 0);
+  CHECK(update(1, 1, 1, 1, 1, 0) == 0);  // reuse A's group, then free B's
+  std::fill(desired.begin(), desired.end(), ~0u);
+  desired[root_b] = 1;
+  CHECK(update(1, 0, 1, 1, 0, 0) == 0);  // reuse B's group, filling pool
+  std::fill(desired.begin(), desired.end(), ~0u);
+  nodes = vr_test::read_back<vol::HierarchicalNode>(dev, alloc, *right->nodes,
+                                                    capacity);
+  CHECK(nodes);
+  desired[nodes.value()[root_a].children - 1] = 0;
+  CHECK(update(1, 1, 1, 0, 0, 0, 1) ==
+        0);  // split counters survive merge reset
+  std::fill(desired.begin(), desired.end(), ~0u);
+  CHECK(update(1, 1, 1, 0, 0, 0) == 0);  // no eligible requests
+  return 0;
+}
+
 int main() {
   vr::set_log_handler([](vr::LogLevel level, std::string_view message) {
     if (level == vr::LogLevel::Error) {
@@ -146,6 +323,7 @@ int main() {
   CHECK(allocator.ok());
   auto& dev = device.value();
   auto& alloc = allocator.value();
+  CHECK(check_batched_topology(dev, alloc) == 0);
   vol::HierarchicalGrid uncreated;
   CHECK(!uncreated.valid() && uncreated.node_capacity() == 0);
   CHECK(!uncreated.prepare_leaves() && !uncreated.clear());

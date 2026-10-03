@@ -46,6 +46,12 @@ struct HierarchicalMergeStats {
       0;  ///< Observed candidates still below the age limit.
 };
 
+/// @brief Separate refinement and coarsening counts from one topology update.
+struct HierarchicalTopologyStats {
+  HierarchicalSplitStats split;  ///< Results of the refinement pass.
+  HierarchicalMergeStats merge;  ///< Results of the following coarsening pass.
+};
+
 /// @brief A sparse root hash and an octree of device-resident 8-cubed blocks.
 ///
 /// Only leaves are integrated or meshed. Parent payloads remain available for
@@ -180,6 +186,30 @@ class VR_VOLUME_API HierarchicalGrid {
                                        std::uint32_t max_merges,
                                        std::uint32_t stable_updates = 8,
                                        StageMetrics* metrics = nullptr);
+
+  /// @brief Split then merge using one command batch and completion wait.
+  ///
+  /// For valid inputs, equivalent to one @ref split followed by one @ref merge
+  /// with the same requests and controls. All inputs are validated before
+  /// either operation. Once the initial leaf list is prepared, both
+  /// operations share a submission and counter readback; no intermediate
+  /// leaf-list rebuild is needed. New children remain unrequested when using
+  /// an observation snapshot with UINT32_MAX in inactive slots. Groups freed
+  /// by merging are available to a later update, not this update's split.
+  /// Acquire a fresh field view afterward before integration or meshing.
+  /// @param requests Desired levels with the same contract as @ref split.
+  /// @param max_splits Refinement event budget; zero skips refinement.
+  /// @param max_merges Coarsening event budget; zero skips coarsening and its
+  ///                   persistence update.
+  /// @param stable_updates Consecutive coarsening updates required, at least 1.
+  /// @param transfer_weight_cap Positive finite inherited-weight cap.
+  /// @param metrics Optional combined host/device stage row.
+  /// @return Separate split and merge counts, or a non-OK status. Both zero
+  ///         budgets leave topology and borrowed views unchanged.
+  Result<HierarchicalTopologyStats> update_topology(
+      const Buffer& requests, std::uint32_t max_splits,
+      std::uint32_t max_merges, std::uint32_t stable_updates = 8,
+      float transfer_weight_cap = 1.0f, StageMetrics* metrics = nullptr);
 
   /// @brief Discard all roots, descendants, and attributes and reset the pool.
   /// @return OK, or a non-OK status on an empty grid or backend failure.

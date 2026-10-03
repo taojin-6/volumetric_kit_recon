@@ -165,6 +165,91 @@ struct HierarchicalGrid::Impl {
                                  generation,
                                  &generation};
   }
+  Status check_requests(const Buffer& requests) const {
+    if (!requests.valid() ||
+        (requests.usage() & VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) == 0 ||
+        requests.size() < VkDeviceSize(capacity) * sizeof(std::uint32_t)) {
+      return Status::invalid_argument(
+          "HierarchicalGrid: invalid desired-level buffer");
+    }
+    return {};
+  }
+  Status record_split(CommandBatch& batch, const Buffer& requests,
+                      std::uint32_t max_splits, float transfer_weight_cap,
+                      std::uint32_t* counters, GpuStageScope* stage) {
+    Impl& p = *this;
+    const VkDeviceSize request_bytes =
+        VkDeviceSize(capacity) * sizeof(std::uint32_t);
+    bind(p.split_kernel, 0, p.nodes);
+    bind(p.split_kernel, 1, p.leaves);
+    // External storage may be larger than maxStorageBufferRange. Bind only
+    // its required prefix, which is smaller than the sample array checked
+    // against that device limit at grid creation.
+    p.split_kernel.set.write_storage_buffer(2, requests.handle(), 0,
+                                            request_bytes);
+    bind(p.split_kernel, 3, p.tsdf);
+    bind(p.split_kernel, 4, p.weight);
+    bind(p.split_kernel, 5, p.color);
+    bind(p.split_kernel, 6, p.group_counter);
+    bind(p.split_kernel, 7, p.stats);
+    bind(p.split_kernel, 8, p.free_groups);
+    bind(p.split_kernel, 9, p.merge_ages);
+    VR_TRY(batch.zero(p.stats, 0, 5 * sizeof(std::uint32_t)));
+    SplitPush push{0,
+                   static_cast<std::uint32_t>(p.config.finest.num_blocks),
+                   p.config.child_block_capacity / 8u,
+                   max_splits,
+                   p.config.color ? 1u : 0u,
+                   transfer_weight_cap};
+    while (push.base < p.leaf_count) {
+      const auto groups = std::min(p.max_groups, p.leaf_count - push.base);
+      VR_TRY(batch.dispatch(p.split_kernel, &push, sizeof(push), groups,
+                            p.max_groups, stage));
+      push.base += groups;
+    }
+    VR_TRY(batch.readback(p.stats, 0, 5 * sizeof(std::uint32_t), counters));
+    return {};
+  }
+  Status record_merge(CommandBatch& batch, const Buffer& requests,
+                      std::uint32_t max_merges, std::uint32_t stable_updates,
+                      std::uint32_t* counters, GpuStageScope* stage) {
+    Impl& p = *this;
+    const VkDeviceSize request_bytes =
+        VkDeviceSize(capacity) * sizeof(std::uint32_t);
+    bind(p.merge_candidate_kernel, 0, p.nodes);
+    p.merge_candidate_kernel.set.write_storage_buffer(1, requests.handle(), 0,
+                                                      request_bytes);
+    bind(p.merge_candidate_kernel, 2, p.merge_ages);
+    bind(p.merge_candidate_kernel, 3, p.merge_candidates);
+    bind(p.merge_candidate_kernel, 4, p.stats);
+    bind(p.merge_candidate_kernel, 5, p.merge_dispatch);
+    bind(p.merge_kernel, 0, p.nodes);
+    bind(p.merge_kernel, 1, p.merge_candidates);
+    bind(p.merge_kernel, 2, p.tsdf);
+    bind(p.merge_kernel, 3, p.weight);
+    bind(p.merge_kernel, 4, p.color);
+    bind(p.merge_kernel, 5, p.group_counter);
+    bind(p.merge_kernel, 6, p.free_groups);
+    bind(p.merge_kernel, 7, p.stats);
+    bind(p.merge_kernel, 8, p.merge_ages);
+    VR_TRY(batch.zero(p.stats, 0, 5 * sizeof(std::uint32_t)));
+    const std::uint32_t dispatch_args[3]{0, 1, 1};
+    VR_TRY(batch.upload(p.merge_dispatch, 0, dispatch_args,
+                        sizeof(dispatch_args)));
+    // The candidate kernel bounds the indirect dispatch without a host count
+    // readback. Larger requested budgets continue through later calls.
+    const MergeCandidatePush candidate_push{p.capacity, stable_updates,
+                                            std::min(max_merges, p.max_groups)};
+    VR_TRY(batch.dispatch(p.merge_candidate_kernel, &candidate_push,
+                          sizeof(candidate_push), (p.capacity + 255u) / 256u,
+                          p.max_groups, stage));
+    MergePush push{0, static_cast<std::uint32_t>(p.config.finest.num_blocks),
+                   p.config.color ? 1u : 0u};
+    VR_TRY(batch.dispatch_indirect(p.merge_kernel, &push, sizeof(push),
+                                   p.merge_dispatch, 0, stage));
+    VR_TRY(batch.readback(p.stats, 0, 5 * sizeof(std::uint32_t), counters));
+    return {};
+  }
   Status reset_storage() {
     invalidate();
     leaves_dirty = true;
@@ -410,48 +495,18 @@ Result<HierarchicalSplitStats> HierarchicalGrid::split(
     if (!valid())
       return Status::invalid_argument("HierarchicalGrid: empty grid");
     Impl& p = *impl_;
-    const VkDeviceSize request_bytes =
-        VkDeviceSize(p.capacity) * sizeof(std::uint32_t);
-    if (!requests.valid() ||
-        (requests.usage() & VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) == 0 ||
-        requests.size() < request_bytes || !(transfer_weight_cap > 0.0f) ||
-        !std::isfinite(transfer_weight_cap)) {
+    VR_TRY(p.check_requests(requests));
+    if (!(transfer_weight_cap > 0.0f) || !std::isfinite(transfer_weight_cap)) {
       return Status::invalid_argument("HierarchicalGrid: invalid split input");
     }
     if (max_splits == 0) return HierarchicalSplitStats{};
     VR_ASSIGN(const auto field, prepare_leaves(metrics));
     if (field.leaf_count == 0) return HierarchicalSplitStats{};
     GpuStageScope stage(metrics, p.timer, "hierarchy split");
-    bind(p.split_kernel, 0, p.nodes);
-    bind(p.split_kernel, 1, p.leaves);
-    // External storage may be larger than maxStorageBufferRange. Bind only
-    // its required prefix, which is smaller than the sample array checked
-    // against that device limit at grid creation.
-    p.split_kernel.set.write_storage_buffer(2, requests.handle(), 0,
-                                            request_bytes);
-    bind(p.split_kernel, 3, p.tsdf);
-    bind(p.split_kernel, 4, p.weight);
-    bind(p.split_kernel, 5, p.color);
-    bind(p.split_kernel, 6, p.group_counter);
-    bind(p.split_kernel, 7, p.stats);
-    bind(p.split_kernel, 8, p.free_groups);
-    bind(p.split_kernel, 9, p.merge_ages);
     std::uint32_t counters[5]{};
     CommandBatch batch(p.device, p.allocator);
-    VR_TRY(batch.zero(p.stats, 0, sizeof(counters)));
-    SplitPush push{0,
-                   static_cast<std::uint32_t>(p.config.finest.num_blocks),
-                   p.config.child_block_capacity / 8u,
-                   max_splits,
-                   p.config.color ? 1u : 0u,
-                   transfer_weight_cap};
-    while (push.base < field.leaf_count) {
-      const auto groups = std::min(p.max_groups, field.leaf_count - push.base);
-      VR_TRY(batch.dispatch(p.split_kernel, &push, sizeof(push), groups,
-                            p.max_groups, &stage));
-      push.base += groups;
-    }
-    VR_TRY(batch.readback(p.stats, 0, sizeof(counters), counters));
+    VR_TRY(p.record_split(batch, requests, max_splits, transfer_weight_cap,
+                          counters, &stage));
     p.invalidate();
     p.leaves_dirty = true;  // a failed submission may have changed topology
     VR_TRY(batch.submit());
@@ -467,56 +522,65 @@ Result<HierarchicalMergeStats> HierarchicalGrid::merge(
     if (!valid())
       return Status::invalid_argument("HierarchicalGrid: empty grid");
     Impl& p = *impl_;
-    const VkDeviceSize request_bytes =
-        VkDeviceSize(p.capacity) * sizeof(std::uint32_t);
-    if (!requests.valid() ||
-        (requests.usage() & VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) == 0 ||
-        requests.size() < request_bytes || stable_updates == 0) {
+    VR_TRY(p.check_requests(requests));
+    if (stable_updates == 0) {
       return Status::invalid_argument("HierarchicalGrid: invalid merge input");
     }
     if (max_merges == 0) return HierarchicalMergeStats{};
     VR_ASSIGN(const auto field, prepare_leaves(metrics));
     if (field.leaf_count == 0) return HierarchicalMergeStats{};
     GpuStageScope stage(metrics, p.timer, "hierarchy merge");
-    bind(p.merge_candidate_kernel, 0, p.nodes);
-    p.merge_candidate_kernel.set.write_storage_buffer(1, requests.handle(), 0,
-                                                      request_bytes);
-    bind(p.merge_candidate_kernel, 2, p.merge_ages);
-    bind(p.merge_candidate_kernel, 3, p.merge_candidates);
-    bind(p.merge_candidate_kernel, 4, p.stats);
-    bind(p.merge_candidate_kernel, 5, p.merge_dispatch);
-    bind(p.merge_kernel, 0, p.nodes);
-    bind(p.merge_kernel, 1, p.merge_candidates);
-    bind(p.merge_kernel, 2, p.tsdf);
-    bind(p.merge_kernel, 3, p.weight);
-    bind(p.merge_kernel, 4, p.color);
-    bind(p.merge_kernel, 5, p.group_counter);
-    bind(p.merge_kernel, 6, p.free_groups);
-    bind(p.merge_kernel, 7, p.stats);
-    bind(p.merge_kernel, 8, p.merge_ages);
     std::uint32_t counters[5]{};
     CommandBatch batch(p.device, p.allocator);
-    VR_TRY(batch.zero(p.stats, 0, sizeof(counters)));
-    const std::uint32_t dispatch_args[3]{0, 1, 1};
-    VR_TRY(batch.upload(p.merge_dispatch, 0, dispatch_args,
-                        sizeof(dispatch_args)));
-    // The candidate kernel bounds the indirect dispatch without a host count
-    // readback. Larger requested budgets continue through later calls.
-    const MergeCandidatePush candidate_push{p.capacity, stable_updates,
-                                            std::min(max_merges, p.max_groups)};
-    VR_TRY(batch.dispatch(p.merge_candidate_kernel, &candidate_push,
-                          sizeof(candidate_push), (p.capacity + 255u) / 256u,
-                          p.max_groups, &stage));
-    MergePush push{0, static_cast<std::uint32_t>(p.config.finest.num_blocks),
-                   p.config.color ? 1u : 0u};
-    VR_TRY(batch.dispatch_indirect(p.merge_kernel, &push, sizeof(push),
-                                   p.merge_dispatch, 0, &stage));
-    VR_TRY(batch.readback(p.stats, 0, sizeof(counters), counters));
+    VR_TRY(p.record_merge(batch, requests, max_merges, stable_updates, counters,
+                          &stage));
     p.invalidate();
     p.leaves_dirty = true;
     VR_TRY(batch.submit());
     if (counters[0] == 0) p.leaves_dirty = false;
     return HierarchicalMergeStats{counters[0], counters[1], counters[2]};
+  });
+}
+
+Result<HierarchicalTopologyStats> HierarchicalGrid::update_topology(
+    const Buffer& requests, std::uint32_t max_splits, std::uint32_t max_merges,
+    std::uint32_t stable_updates, float transfer_weight_cap,
+    StageMetrics* metrics) {
+  return allocation_boundary([&]() -> Result<HierarchicalTopologyStats> {
+    if (!valid())
+      return Status::invalid_argument("HierarchicalGrid: empty grid");
+    Impl& p = *impl_;
+    VR_TRY(p.check_requests(requests));
+    if (stable_updates == 0 || !(transfer_weight_cap > 0.0f) ||
+        !std::isfinite(transfer_weight_cap)) {
+      return Status::invalid_argument(
+          "HierarchicalGrid: invalid topology input");
+    }
+    if (max_splits == 0 && max_merges == 0) return HierarchicalTopologyStats{};
+    VR_ASSIGN(const auto field, prepare_leaves(metrics));
+    if (field.leaf_count == 0) return HierarchicalTopologyStats{};
+    GpuStageScope stage(metrics, p.timer, "hierarchy update");
+    std::uint32_t split_counters[5]{}, merge_counters[5]{};
+    CommandBatch batch(p.device, p.allocator);
+    if (max_splits != 0) {
+      VR_TRY(p.record_split(batch, requests, max_splits, transfer_weight_cap,
+                            split_counters, &stage));
+    }
+    if (max_merges != 0) {
+      // The split counters are copied before their storage is reset. Both
+      // copies occupy distinct staging slices and reach the host after this
+      // single submission. Merge selection reads nodes, not the stale leaves.
+      VR_TRY(p.record_merge(batch, requests, max_merges, stable_updates,
+                            merge_counters, &stage));
+    }
+    p.invalidate();
+    p.leaves_dirty = true;  // a failed submission may have changed topology
+    VR_TRY(batch.submit());
+    p.leaves_dirty = split_counters[0] != 0 || merge_counters[0] != 0;
+    return HierarchicalTopologyStats{
+        {split_counters[0], split_counters[1], split_counters[2],
+         split_counters[3]},
+        {merge_counters[0], merge_counters[1], merge_counters[2]}};
   });
 }
 
