@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "buffer_readback.hpp"
+#include "volumetric_kit/recon/core/compute_util.hpp"
 #include "volumetric_kit/recon/core/instance.hpp"
 #include "volumetric_kit/recon/core/log.hpp"
 #include "volumetric_kit/recon/tsdf/hierarchical_tsdf_integrator.hpp"
@@ -224,6 +225,136 @@ int main() {
     const auto& child = nodes.value()[leaf];
     for (int i = 0; i < 512; ++i)
       CHECK(weights.value()[std::size_t(child.ptr) + i] == 0);
+  }
+
+  // Surface hits cover four front children. Optional support includes the
+  // empty back children, but only for a smooth currently observed sibling
+  // group. This exercises actual classifier -> hysteresis -> merge behavior.
+  std::fill(depth.begin(), depth.end(), 1.01f);
+  CHECK(integrator.integrate(view, frames).ok());
+  requests = integrator.classify(view, frames);
+  CHECK(requests.ok());
+  desired = vr_test::read_back<std::uint32_t>(
+      device, allocator, *requests.value(), view.node_capacity);
+  CHECK(desired.ok());
+  std::size_t surface_children = 0;
+  for (auto leaf : leaves.value())
+    if (desired.value()[leaf] == 1u) ++surface_children;
+  CHECK(surface_children == 4);
+  tsdf::HierarchicalRefinementParams merge_params;
+  merge_params.support_coarsening = true;
+  requests = integrator.classify(view, frames, merge_params);
+  CHECK(requests.ok());
+  desired = vr_test::read_back<std::uint32_t>(
+      device, allocator, *requests.value(), view.node_capacity);
+  CHECK(desired.ok());
+  for (auto leaf : leaves.value()) CHECK(desired.value()[leaf] == 1u);
+  auto merged = grid.merge(*requests.value(), 1, 2);
+  CHECK(merged.ok() && merged->merged == 0 && merged->pending == 1);
+  view_result = grid.prepare_leaves();
+  CHECK(view_result.ok());
+  view = view_result.value();
+
+  // A historical weighted sample behind the current truncation band blocks
+  // coarsening, even though another sibling still has valid surface evidence.
+  std::uint32_t back_leaf = UINT32_MAX;
+  for (auto leaf : leaves.value()) {
+    if (nodes.value()[leaf].coord.z == 7) back_leaf = leaf;
+  }
+  CHECK(back_leaf != UINT32_MAX);
+  const auto back_ptr = nodes.value()[back_leaf].ptr;
+  for (float historical_weight : {1.0f, 0.0f}) {
+    vr::CommandBatch update(device, allocator);
+    CHECK(update
+              .upload(*view.weight, VkDeviceSize(back_ptr) * sizeof(float),
+                      &historical_weight, sizeof(float))
+              .ok());
+    CHECK(update.submit().ok());
+    requests = integrator.classify(view, frames, merge_params);
+    CHECK(requests.ok());
+    desired = vr_test::read_back<std::uint32_t>(
+        device, allocator, *requests.value(), view.node_capacity);
+    CHECK(desired.ok());
+    CHECK(desired.value()[back_leaf] ==
+          (historical_weight > 0 ? UINT32_MAX : 1u));
+    if (historical_weight > 0) {
+      merged = grid.merge(*requests.value(), 1, 2);
+      CHECK(merged.ok() && merged->merged == 0 && merged->pending == 0);
+      view_result = grid.prepare_leaves();
+      CHECK(view_result.ok());
+      view = view_result.value();
+    }
+  }
+  // Missing interior pixels and a camera with no surface hit in this sibling
+  // group cannot create coarsening evidence. Fine surface votes still veto.
+  for (bool no_surface : {false, true}) {
+    std::fill(depth.begin(), depth.end(), no_surface ? 0.7f : 1.01f);
+    if (!no_surface)
+      for (int y = 18; y < 22; ++y)
+        for (int x = 18; x < 22; ++x) depth[std::size_t(y * 32 + x)] = 0.0f;
+    requests = integrator.classify(view, frames, merge_params);
+    CHECK(requests.ok());
+    merged = grid.merge(*requests.value(), 1, 2);
+    CHECK(merged.ok() && merged->merged == 0 && merged->pending == 0);
+    view_result = grid.prepare_leaves();
+    CHECK(view_result.ok());
+    view = view_result.value();
+  }
+  std::fill(depth.begin(), depth.end(), 1.01f);
+  for (int pass = 0; pass < 2; ++pass) {
+    requests = integrator.classify(view, frames, merge_params);
+    CHECK(requests.ok());
+    merged = grid.merge(*requests.value(), 1, 2);
+    CHECK(merged.ok() && merged->merged == (pass == 1 ? 1u : 0u));
+    view_result = grid.prepare_leaves();
+    CHECK(view_result.ok());
+    view = view_result.value();
+  }
+  view_result = grid.prepare_leaves();
+  CHECK(view_result.ok() && view_result->leaf_count == 1u);
+  view = view_result.value();
+
+  // Batched distinct camera/depth inputs must exactly match sequential calls.
+  // The batch uses device depth for camera two, the sequential path host depth.
+  auto batch_grid_result =
+      vol::HierarchicalGrid::create(device, allocator, config);
+  auto serial_grid_result =
+      vol::HierarchicalGrid::create(device, allocator, config);
+  CHECK(batch_grid_result.ok() && serial_grid_result.ok());
+  auto batch_grid = std::move(batch_grid_result).value();
+  auto serial_grid = std::move(serial_grid_result).value();
+  CHECK(batch_grid.allocate_roots(&root, 1).value() == 0);
+  CHECK(serial_grid.allocate_roots(&root, 1).value() == 0);
+  auto batch_view = batch_grid.prepare_leaves();
+  auto serial_view = serial_grid.prepare_leaves();
+  CHECK(batch_view.ok() && serial_view.ok());
+  std::vector<float> second_depth(32 * 32, 1.07f);
+  auto second = frame;
+  second.camera.cam_to_world[3].x = 0.1f;
+  second.camera.cam_to_world[3].z = 0.03f;
+  second.depth = vr::StorageInput(second_depth.data());
+  auto device_depth =
+      vr::device_storage_buffer(allocator, second_depth.size() * sizeof(float));
+  CHECK(device_depth.ok());
+  vr::CommandBatch upload_depth(device, allocator);
+  CHECK(upload_depth
+            .upload(device_depth.value(), 0, second_depth.data(),
+                    second_depth.size() * sizeof(float))
+            .ok());
+  CHECK(upload_depth.submit().ok());
+  auto second_device = second;
+  second_device.depth = vr::StorageInput(device_depth.value());
+  CHECK(integrator.integrate(batch_view.value(), {frame, second_device}).ok());
+  CHECK(integrator.integrate(serial_view.value(), {frame}).ok());
+  CHECK(integrator.integrate(serial_view.value(), {second}).ok());
+  for (const auto pair :
+       {std::make_pair(batch_view->tsdf, serial_view->tsdf),
+        std::make_pair(batch_view->weight, serial_view->weight)}) {
+    auto batched = vr_test::read_back<float>(device, allocator, *pair.first,
+                                             batch_view->node_capacity * 512u);
+    auto serial = vr_test::read_back<float>(device, allocator, *pair.second,
+                                            serial_view->node_capacity * 512u);
+    CHECK(batched.ok() && serial.ok() && batched.value() == serial.value());
   }
 
   CHECK(!integrator

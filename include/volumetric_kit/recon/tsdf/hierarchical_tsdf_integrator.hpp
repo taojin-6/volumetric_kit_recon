@@ -27,6 +27,15 @@ struct HierarchicalRefinementParams {
   float noise_floor = 0.0005f;     ///< Residual ignored as measurement noise.
   std::uint32_t pixel_stride = 4;  ///< Sample one pixel in each stride square.
   std::uint32_t patch_radius = 4;  ///< Tangent patch radius in depth pixels.
+  /// Enable an additional GPU pass for conservative merge evidence. It requires
+  /// a direct incoming surface vote in the sibling group, valid depth at every
+  /// projected sample, and a smooth center/corner footprint. Existing weighted
+  /// samples must be visible within the physical truncation band. Entirely
+  /// unknown children may receive evidence behind the observed surface because
+  /// they contain no historical samples to lose. Fine surface votes remain a
+  /// veto; this pass never refines band or free-space leaves. Off by default
+  /// because scanning each refined leaf adds work when merges are not used.
+  bool support_coarsening = false;
 };
 
 /// @brief Fuses cell-centered hierarchical leaves without changing uniform
@@ -83,7 +92,9 @@ class VR_TSDF_API HierarchicalTsdfIntegrator {
   /// @return A borrowed device buffer of node_capacity uint32 values: desired
   ///         level per current leaf, UINT32_MAX for no evidence. Valid until
   ///         the next classify call, integrator move, or destruction. Consume
-  ///         it with HierarchicalGrid::split before changing field topology.
+  ///         it with HierarchicalGrid::split or merge before changing topology.
+  ///         With support_coarsening enabled, unsupported coarse surface votes
+  ///         are suppressed; any fine surface request is preserved.
   Result<const Buffer*> classify(
       const volume::HierarchicalFieldView& field,
       const std::vector<FrameInput>& frames,

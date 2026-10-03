@@ -64,6 +64,7 @@ vr_embed_shaders(
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/tsdf_integrate.comp"
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/hierarchical_integrate.comp"
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/hierarchical_classify.comp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/hierarchical_support.comp"
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/mesh_bin.comp"
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/mesh_scan_counts.comp"
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/mesh_scan_sums.comp"

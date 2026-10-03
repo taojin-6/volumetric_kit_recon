@@ -1,0 +1,105 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "hierarchical_classify_common.glsl"
+
+// Optional conservative coarsening evidence. Each workgroup owns one leaf and
+// never creates a finer request from a projected empty/band leaf. Surface votes
+// are immutable during this pass, so support cannot spread between siblings.
+layout(local_size_x = 256) in;
+layout(set = 0, binding = 2, scalar) buffer Requests { uint requests[]; };
+layout(set = 0, binding = 5, scalar) readonly buffer SurfaceRequests { uint surface_requests[]; };
+layout(set = 0, binding = 6, scalar) readonly buffer Leaves { uint leaves[]; };
+layout(set = 0, binding = 7, scalar) readonly buffer Weight { float weight[]; };
+shared uint supported;
+shared uint initially_supported;
+shared uint desired;
+
+bool projectSample(vec3 world, out ivec2 pixel, out float z) {
+  vec3 camera_point = transpose(mat3(cam.cam_to_world)) *
+      (world - cam.cam_to_world[3].xyz);
+  z = camera_point.z;
+  if (!(z > 0.0)) return false;
+  vec2 uv = vec2(cam.fx, cam.fy) * camera_point.xy / z + vec2(cam.cx, cam.cy);
+  if (!all(greaterThanEqual(uv, vec2(0.0))) ||
+      !all(lessThan(uv, vec2(cam.width, cam.height)))) return false;
+  pixel = ivec2(uv);
+  return true;
+}
+
+bool siblingSurface(HierarchicalNode node) {
+  // Locate child zero of this leaf's parent; a merge needs all eight children
+  // to remain direct leaves at the same level. No allocator alignment is used.
+  if (pc.node_capacity < 8u) return false;
+  ivec3 base = vrHierarchyFloorDiv(node.coord, 2) * 2;
+  uint first;
+  ivec3 local;
+  if (!vrHierarchyLocate((base * 8 + ivec3(4)) * (1 << int(node.level)),
+                         pc.root_grid, pc.max_level, pc.node_capacity,
+                         first, local) || first > pc.node_capacity - 8u) return false;
+  bool observed = false;
+  for (uint i = 0u; i < 8u; ++i) {
+    HierarchicalNode sibling = vr_hierarchy_nodes[first + i];
+    ivec3 offset = ivec3(int(i & 1u), int((i >> 1u) & 1u), int(i >> 2u));
+    if (sibling.ptr < 0 || sibling.children != 0u ||
+        sibling.level != node.level || sibling.coord != base + offset) return false;
+    observed = observed || surface_requests[first + i] != 0xffffffffu;
+  }
+  return observed;
+}
+
+void main() {
+  uint leaf = pc.first_leaf + gl_WorkGroupID.x;
+  if (leaf >= pc.sample_count) return;
+  uint node_id = leaves[leaf];
+  HierarchicalNode node = vr_hierarchy_nodes[node_id];
+  uint surface = surface_requests[node_id];
+  uint lane = gl_LocalInvocationID.x;
+  // Keep direct detail requests unchanged. Roots cannot merge, so only the
+  // surface pass decides their refinement. Each frame contributes by min.
+  if (node.level == pc.max_level || surface <= node.level) {
+    if (lane == 0u) atomicMin(requests[node_id], surface);
+    return;
+  }
+  float spacing = pc.finest_voxel_size * float(1u << node.level);
+  if (lane == 0u) {
+    supported = siblingSurface(node) ? 1u : 0u;
+    desired = pc.max_level;
+    ivec2 pixel;
+    float z;
+    uint candidate;
+    bool is_smooth;
+    vec3 center = (vec3(node.coord) * 8.0 + vec3(4.0)) * spacing;
+    if (!projectSample(center, pixel, z) ||
+        !patchLevel(pixel, candidate, is_smooth) || !is_smooth) supported = 0u;
+    else desired = max(node.level, candidate);
+    initially_supported = supported;
+  }
+  barrier();
+  if (initially_supported == 0u) return;
+  for (uint i = lane; i < 512u; i += 256u) {
+    uvec3 local = uvec3(i & 7u, (i >> 3u) & 7u, i >> 6u);
+    vec3 world = (vec3(node.coord) * 8.0 + vec3(local) + vec3(0.5)) * spacing;
+    ivec2 pixel;
+    float z;
+    vec3 depth_point;
+    if (!projectSample(world, pixel, z) || !pointAt(pixel, depth_point)) {
+      atomicAnd(supported, 0u);
+      continue;
+    }
+    // Unknown samples may lie behind the surface: there is no historical
+    // observation to discard. Every positive-weight sample must currently be
+    // visible within the same physical truncation band used by fusion.
+    if (weight[uint(node.ptr) + i] > 0.0 &&
+        z > depth_point.z + pc.root_grid.trunc_dist) atomicAnd(supported, 0u);
+    if (all(bvec3(local.x == 0u || local.x == 7u,
+                  local.y == 0u || local.y == 7u,
+                  local.z == 0u || local.z == 7u))) {
+      uint candidate;
+      bool is_smooth;
+      if (!patchLevel(pixel, candidate, is_smooth) || !is_smooth) atomicAnd(supported, 0u);
+      else atomicMin(desired, max(node.level, candidate));
+    }
+  }
+  barrier();
+  if (lane == 0u && supported != 0u) atomicMin(requests[node_id], min(surface, desired));
+}

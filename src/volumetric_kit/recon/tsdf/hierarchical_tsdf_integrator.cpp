@@ -17,6 +17,7 @@
 
 #include "hierarchical_classify_comp.spv.hpp"
 #include "hierarchical_integrate_comp.spv.hpp"
+#include "hierarchical_support_comp.spv.hpp"
 
 namespace volumetric_kit::recon::tsdf {
 namespace {
@@ -64,8 +65,9 @@ struct ClassifyPush {
   std::uint32_t patch_radius;
   std::uint32_t columns;
   std::uint32_t sample_count;
+  std::uint32_t first_leaf;
 };
-static_assert(sizeof(ClassifyPush) == 68, "classify scalar push ABI");
+static_assert(sizeof(ClassifyPush) == 72, "classify scalar push ABI");
 static_assert(offsetof(ClassifyPush, sample_count) == 64,
               "classify scalar push ABI");
 
@@ -173,12 +175,15 @@ struct HierarchicalTsdfIntegrator::Impl {
   DescriptorPool pool;
   ComputeKernel integrate;
   ComputeKernel classify;
+  ComputeKernel support;
   KernelSets integrate_sets;
   KernelSets classify_sets;
+  KernelSets support_sets;
   Buffer camera;
   Buffer color_camera;
   Buffer dummy;
   Buffer requests;
+  Buffer supported_requests;
   GpuTimer timer;
   VkDeviceSize max_range = 0;
   std::uint32_t max_groups = 0;
@@ -224,6 +229,9 @@ Result<HierarchicalTsdfIntegrator> HierarchicalTsdfIntegrator::create(
     VR_TRY(builder.add(
         p->classify, "hierarchical_classify", vr_hierarchical_classify_comp_spv,
         vr_hierarchical_classify_comp_spv_size, 5, &classify_push));
+    VR_TRY(builder.add(
+        p->support, "hierarchical_support", vr_hierarchical_support_comp_spv,
+        vr_hierarchical_support_comp_spv_size, 8, &classify_push));
     VR_ASSIGN(p->pool, builder.build());
     VR_ASSIGN(p->camera,
               device_storage_buffer(allocator, sizeof(DepthCameraParams)));
@@ -361,7 +369,22 @@ Result<const Buffer*> HierarchicalTsdfIntegrator::classify(
     if (frame_count != 0) {
       VR_TRY(p.classify_sets.reserve(*p.device, p.classify, frame_count));
     }
-    VR_TRY(p.timer.reserve(*p.device, frame_count));
+    const bool support = params.support_coarsening && field.leaf_count != 0;
+    if (support && p.supported_requests.size() < request_bytes) {
+      VR_ASSIGN(p.supported_requests,
+                device_storage_buffer(*p.allocator, request_bytes));
+    }
+    if (support && frame_count != 0) {
+      VR_TRY(p.support_sets.reserve(*p.device, p.support, frame_count));
+    }
+    const std::uint64_t dispatches =
+        std::uint64_t(frame_count) *
+        (1u + (support ? group_count(field.leaf_count, p.max_groups) : 0u));
+    if (dispatches > std::numeric_limits<std::uint32_t>::max()) {
+      return Status::invalid_argument(
+          "hierarchical TSDF: too many classifier dispatches");
+    }
+    VR_TRY(p.timer.reserve(*p.device, static_cast<std::uint32_t>(dispatches)));
     // Validate every dispatch before recording even the request reset.
     for (std::size_t i : sizes.live) {
       const auto& cam = frames[i].camera;
@@ -375,6 +398,7 @@ Result<const Buffer*> HierarchicalTsdfIntegrator::classify(
       }
     }
     std::vector<Buffer> uploads(frames.size());
+    std::vector<VkBuffer> depth_buffers(frames.size());
     CommandBatch batch(*p.device, *p.allocator);
     VR_TRY(batch.fill(p.requests, 0, request_bytes, UINT32_MAX));
     for (std::size_t k = 0; k < sizes.live.size(); ++k) {
@@ -384,6 +408,7 @@ Result<const Buffer*> HierarchicalTsdfIntegrator::classify(
       VR_ASSIGN(
           const VkBuffer depth,
           frame.depth.buffer(batch, *p.allocator, sizes.depth[i], uploads[i]));
+      depth_buffers[i] = depth;
       VR_TRY(
           batch.upload(p.camera, 0, &frame.camera, sizeof(DepthCameraParams)));
       set.write_storage_buffer(0, depth, 0, sizes.depth[i]);
@@ -393,17 +418,61 @@ Result<const Buffer*> HierarchicalTsdfIntegrator::classify(
       set.write_storage_buffer(4, field.root_hash->handle(), 0, VK_WHOLE_SIZE);
       const auto columns = group_count(frame.camera.width, params.pixel_stride);
       const auto rows = group_count(frame.camera.height, params.pixel_stride);
-      const ClassifyPush push{
-          field.root_grid,     field.finest_voxel_size, params.surface_error,
-          params.noise_floor,  field.max_level,         field.node_capacity,
-          params.pixel_stride, params.patch_radius,     columns,
-          columns * rows};
+      const ClassifyPush push{field.root_grid,
+                              field.finest_voxel_size,
+                              params.surface_error,
+                              params.noise_floor,
+                              field.max_level,
+                              field.node_capacity,
+                              params.pixel_stride,
+                              params.patch_radius,
+                              columns,
+                              columns * rows,
+                              0u};
       VR_TRY(batch.dispatch(p.classify, set, &push, sizeof(push),
                             group_count(push.sample_count, 256), p.max_groups,
                             &stage));
     }
+    if (support) {
+      VR_TRY(batch.fill(p.supported_requests, 0, request_bytes, UINT32_MAX));
+      for (std::size_t k = 0; k < sizes.live.size(); ++k) {
+        const std::size_t i = sizes.live[k];
+        const auto& set = p.support_sets[k];
+        VR_TRY(batch.upload(p.camera, 0, &frames[i].camera,
+                            sizeof(DepthCameraParams)));
+        set.write_storage_buffer(0, depth_buffers[i], 0, sizes.depth[i]);
+        set.write_storage_buffer(1, p.camera.handle(), 0, VK_WHOLE_SIZE);
+        set.write_storage_buffer(2, p.supported_requests.handle(), 0,
+                                 request_bytes);
+        set.write_storage_buffer(3, field.nodes->handle(), 0, VK_WHOLE_SIZE);
+        set.write_storage_buffer(4, field.root_hash->handle(), 0,
+                                 VK_WHOLE_SIZE);
+        set.write_storage_buffer(5, p.requests.handle(), 0, request_bytes);
+        set.write_storage_buffer(6, field.leaf_indices->handle(), 0,
+                                 VK_WHOLE_SIZE);
+        set.write_storage_buffer(7, field.weight->handle(), 0, VK_WHOLE_SIZE);
+        ClassifyPush push{field.root_grid,
+                          field.finest_voxel_size,
+                          params.surface_error,
+                          params.noise_floor,
+                          field.max_level,
+                          field.node_capacity,
+                          params.pixel_stride,
+                          params.patch_radius,
+                          0u,
+                          field.leaf_count,
+                          0u};
+        while (push.first_leaf < field.leaf_count) {
+          const auto count =
+              std::min(p.max_groups, field.leaf_count - push.first_leaf);
+          VR_TRY(batch.dispatch(p.support, set, &push, sizeof(push), count,
+                                p.max_groups, &stage));
+          push.first_leaf += count;
+        }
+      }
+    }
     VR_TRY(batch.submit());
-    return &p.requests;
+    return support ? &p.supported_requests : &p.requests;
   });
 }
 
