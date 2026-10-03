@@ -103,6 +103,8 @@ enum TimingColumn : std::size_t {
   kMergeDevice,
   kLeavesHost,
   kLeavesDevice,
+  kTopologyHost,
+  kTopologyDevice,
   kTimingColumnCount,
 };
 constexpr std::array<const char*, kTimingColumnCount> kTimingNames = {
@@ -114,7 +116,8 @@ constexpr std::array<const char*, kTimingColumnCount> kTimingNames = {
     "mesh_descriptor_host_ms", "mesh_dispatch_host_ms", "mesh_readback_host_ms",
     "classify_host_ms",        "classify_device_ms",    "split_host_ms",
     "split_device_ms",         "merge_host_ms",         "merge_device_ms",
-    "leaves_host_ms",          "leaves_device_ms"};
+    "leaves_host_ms",          "leaves_device_ms",      "topology_host_ms",
+    "topology_device_ms"};
 
 struct FrameTiming {
   std::array<std::optional<double>, kTimingColumnCount> values{};
@@ -137,7 +140,8 @@ void record_stages(FrameTiming& frame, const vr::StageMetrics& metrics) {
                                   {"hierarchical classify", kClassifyHost},
                                   {"hierarchy split", kSplitHost},
                                   {"hierarchy merge", kMergeHost},
-                                  {"hierarchy leaves", kLeavesHost}};
+                                  {"hierarchy leaves", kLeavesHost},
+                                  {"hierarchy update", kTopologyHost}};
   for (const auto& row : metrics.rows()) {
     for (const auto& mapping : mappings) {
       if (std::strcmp(row.name, mapping.name) != 0) continue;
@@ -439,19 +443,14 @@ vr::Status run(const Options& opt) {
         (opt.max_splits > 0 || opt.max_merges > 0)) {
       VR_ASSIGN(const vr::Buffer* desired,
                 integrator.classify(field, inputs, opt.refinement, &stages));
-      if (opt.max_splits > 0) {
-        VR_ASSIGN(
-            timing.split,
-            grid.split(*desired, static_cast<std::uint32_t>(opt.max_splits),
-                       1.0f, &stages));
-      }
-      if (opt.max_merges > 0) {
-        VR_ASSIGN(
-            timing.merge,
-            grid.merge(*desired, static_cast<std::uint32_t>(opt.max_merges),
-                       static_cast<std::uint32_t>(opt.merge_stability),
-                       &stages));
-      }
+      VR_ASSIGN(
+          const vol::HierarchicalTopologyStats topology,
+          grid.update_topology(
+              *desired, static_cast<std::uint32_t>(opt.max_splits),
+              static_cast<std::uint32_t>(opt.max_merges),
+              static_cast<std::uint32_t>(opt.merge_stability), 1.0f, &stages));
+      timing.split = topology.split;
+      timing.merge = topology.merge;
       VR_ASSIGN(field, grid.prepare_leaves(&stages));
     }
     VR_TRY(integrator.integrate(field, inputs, opt.max_weight,
