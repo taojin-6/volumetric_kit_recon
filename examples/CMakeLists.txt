@@ -47,6 +47,21 @@ target_include_directories(vr_tinyply SYSTEM
 
 add_subdirectory(common)
 add_subdirectory(fuse_replica)
+add_executable(fuse_replica_hierarchical fuse_replica_hierarchical.cpp)
+target_link_libraries(
+  fuse_replica_hierarchical
+  PRIVATE vr_example_common volumetric_kit::recon_tsdf
+          volumetric_kit::recon_mesh volumetric_kit::recon_volume
+          Vulkan::Vulkan)
+vr_target_warnings(fuse_replica_hierarchical)
+if(VR_BUILD_TESTS)
+  add_test(
+    NAME recon_hierarchical_room_cli
+    COMMAND
+      ${CMAKE_COMMAND} -DPROGRAM=$<TARGET_FILE:fuse_replica_hierarchical>
+      -DSCRATCH=${CMAKE_CURRENT_BINARY_DIR} -P
+      ${PROJECT_SOURCE_DIR}/tests/hierarchical_room_cli_test.cmake)
+endif()
 add_subdirectory(codec_replica)
 # The live counterpart, when the Orbbec driver is built.
 if(TARGET volumetric_kit::recon_sensor_orbbec)
