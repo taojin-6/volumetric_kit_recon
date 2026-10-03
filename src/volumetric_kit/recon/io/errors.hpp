@@ -3,7 +3,7 @@
 
 #pragma once
 
-// Private helpers shared by the io implementation files.
+// Error Status helpers shared by the io implementation files.
 
 #include <exception>
 #include <new>
