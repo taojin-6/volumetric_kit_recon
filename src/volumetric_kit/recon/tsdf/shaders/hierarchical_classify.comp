@@ -35,9 +35,13 @@ layout(push_constant, scalar) uniform Push {
   uint sample_count;
 } pc;
 
+bool insideImage(ivec2 pixel) {
+  return all(greaterThanEqual(pixel, ivec2(0))) &&
+      pixel.x < int(cam.width) && pixel.y < int(cam.height);
+}
+
 bool pointAt(ivec2 pixel, out vec3 point) {
-  if (any(lessThan(pixel, ivec2(0))) ||
-      pixel.x >= int(cam.width) || pixel.y >= int(cam.height)) return false;
+  if (!insideImage(pixel)) return false;
   float d = depth[uint(pixel.y) * cam.width + uint(pixel.x)];
   if (!(d >= cam.min_depth && d <= cam.max_depth)) return false;
   point = vec3((float(pixel.x) + 0.5 - cam.cx) * d / cam.fx,
@@ -67,9 +71,18 @@ void main() {
   const ivec2 shifts[8] = ivec2[8](ivec2(-1, 0), ivec2(1, 0),
       ivec2(0, -1), ivec2(0, 1), ivec2(-1, -1), ivec2(1, -1),
       ivec2(-1, 1), ivec2(1, 1));
+  // An image boundary supplies no surrounding evidence. An invalid depth
+  // inside the image next to a valid foreground point is a silhouette and
+  // must retain detail, even though a tangent plane cannot be estimated.
+  for (int i = 0; i < 8; ++i) {
+    if (!insideImage(pixel + radius * shifts[i])) return;
+  }
   bool discontinuity = false;
   for (int i = 0; i < 8; ++i) {
-    if (!pointAt(pixel + radius * shifts[i], points[i])) return;
+    if (!pointAt(pixel + radius * shifts[i], points[i])) {
+      atomicMin(requests[node_id], 0u);
+      return;
+    }
     discontinuity = discontinuity ||
         abs(points[i].z - center.z) > pc.root_grid.trunc_dist;
   }

@@ -20,7 +20,8 @@ namespace volumetric_kit::recon::tsdf {
 /// The classifier compares a local depth patch with its tangent plane and
 /// scales the residual to each candidate spacing. This is a refinement
 /// heuristic, not a bound on reconstruction error. Depth discontinuities
-/// request the finest supported level. Unseen nodes receive no request.
+/// and valid foreground beside missing depth request the finest supported
+/// level. Image boundaries and unseen nodes receive no request.
 struct HierarchicalRefinementParams {
   float surface_error = 0.002f;    ///< Allowed estimated plane error, metres.
   float noise_floor = 0.0005f;     ///< Residual ignored as measurement noise.
@@ -42,7 +43,8 @@ class VR_TSDF_API HierarchicalTsdfIntegrator {
   /// @brief Build fusion and refinement pipelines.
   /// @param device Compute device that outlives this integrator.
   /// @param allocator Allocator that outlives this integrator.
-  /// @return A live integrator, or a backend/allocation error.
+  /// @return A live integrator, invalid_argument for empty device/allocator,
+  ///         or a backend/allocation error.
   static Result<HierarchicalTsdfIntegrator> create(Device& device,
                                                    Allocator& allocator);
 
@@ -74,7 +76,8 @@ class VR_TSDF_API HierarchicalTsdfIntegrator {
 
   /// @brief Estimate desired leaf levels directly from incoming depth.
   /// @param field Current field; this pass changes no TSDF values or topology.
-  /// @param frames Depth frames; color is not used by this pass.
+  /// @param frames Depth frames; color is not used by this pass. Empty frame
+  ///               sets clear every request to UINT32_MAX.
   /// @param params Refinement controls, validated before dispatch.
   /// @param metrics Optional host/device timing rows.
   /// @return A borrowed device buffer of node_capacity uint32 values: desired

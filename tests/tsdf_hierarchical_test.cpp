@@ -52,6 +52,13 @@ int main() {
   CHECK(allocator_result.ok());
   auto allocator = std::move(allocator_result).value();
 
+  CHECK(!tsdf::HierarchicalTsdfIntegrator::create(device,
+                                                  allocator_result.value())
+             .ok());
+  CHECK(!tsdf::HierarchicalTsdfIntegrator::create(device_result.value(),
+                                                  allocator)
+             .ok());
+
   vol::HierarchicalGridConfig config;
   config.finest = vol::VoxelGridParams{0.02f, 8, 512, 0.08f, 4, 32, 128, 128};
   config.level_count = 2;
@@ -123,6 +130,33 @@ int main() {
   desired = vr_test::read_back<std::uint32_t>(
       device, allocator, *requests.value(), view.node_capacity);
   CHECK(desired.ok() && desired.value()[leaves.value()[0]] == 1u);
+  // A narrow valid silhouette surrounded by absent/nonfinite depth still
+  // requests detail; no complete tangent patch exists on this foreground.
+  for (float missing : {0.0f, std::numeric_limits<float>::quiet_NaN(),
+                        std::numeric_limits<float>::infinity()}) {
+    std::fill(depth.begin(), depth.end(), missing);
+    for (int y = 8; y < 24; ++y)
+      for (int x = 16; x < 18; ++x) depth[std::size_t(y * 32 + x)] = 1.01f;
+    requests = integrator.classify(view, frames);
+    CHECK(requests.ok());
+    desired = vr_test::read_back<std::uint32_t>(
+        device, allocator, *requests.value(), view.node_capacity);
+    CHECK(desired.ok() && desired.value()[leaves.value()[0]] == 0u);
+  }
+  // No live frames must clear old evidence rather than failing descriptor
+  // allocation or leaving the previous silhouette's refinement request.
+  auto zero_frame = frame;
+  zero_frame.camera.width = zero_frame.camera.height = 0;
+  for (const auto& no_live : {std::vector<tsdf::FrameInput>{},
+                              std::vector<tsdf::FrameInput>{zero_frame}}) {
+    requests = integrator.classify(view, no_live);
+    CHECK(requests.ok());
+    desired = vr_test::read_back<std::uint32_t>(
+        device, allocator, *requests.value(), view.node_capacity);
+    CHECK(desired.ok());
+    CHECK(std::all_of(desired.value().begin(), desired.value().end(),
+                      [](std::uint32_t value) { return value == UINT32_MAX; }));
+  }
   std::fill(depth.begin(), depth.end(), 1.01f);
   for (int y = 0; y < 32; ++y) {
     for (int x = 16; x < 32; ++x) depth[std::size_t(y * 32 + x)] = 1.15f;
