@@ -670,6 +670,45 @@ int main() {
     CHECK(got_b == z);
   }
 
+  // Copies alias the Vulkan set. Writes through any copy must reject both
+  // the kernel's default binding and an explicitly supplied binding.
+  for (bool explicit_set : {false, true}) {
+    for (bool copy_assign : {false, true}) {
+      const std::vector<std::uint32_t> z(kCount, 0);
+      vr::CommandBatch clear(device, allocator);
+      CHECK(clear.upload(a, 0, z.data(), kBytes).ok());
+      CHECK(clear.upload(b, 0, z.data(), kBytes).ok());
+      CHECK(clear.submit().ok());
+
+      add.set.write_storage_buffer(0, a.handle(), 0, kBytes);
+      vr::DescriptorSet recorded = add.set;
+      vr::CommandBatch batch(device, allocator);
+      const Push push{kCount, 7};
+      if (explicit_set) {
+        CHECK(
+            batch
+                .dispatch(add, recorded, &push, sizeof(push), 4, rig.max_groups)
+                .ok());
+      } else {
+        CHECK(batch.dispatch(add, &push, sizeof(push), 4, rig.max_groups).ok());
+      }
+      vr::DescriptorSet alias;
+      if (copy_assign)
+        alias = recorded;
+      else
+        alias = vr::DescriptorSet(recorded);
+      alias.write_storage_buffer(0, b.handle(), 0, kBytes);
+      CHECK(batch.submit().domain() == vr::Status::Code::InvalidArgument);
+
+      std::vector<std::uint32_t> got_b(kCount, 1);
+      vr::CommandBatch look(device, allocator);
+      CHECK(look.readback(a, 0, kBytes, got.data()).ok());
+      CHECK(look.readback(b, 0, kBytes, got_b.data()).ok());
+      CHECK(look.submit().ok());
+      CHECK(got == z && got_b == z);
+    }
+  }
+
   // One kernel dispatched twice in one batch over different buffers, each on
   // a set of its own; and an extra set rewritten after its dispatch is refused
   // as the kernel's own is.
@@ -729,6 +768,14 @@ int main() {
     CHECK(batch.submit().ok());
     CHECK(got == plus(p, 3));
     CHECK(got_b == plus(q, 2));
+
+    vr::DescriptorSet swapped = sa;
+    vr::CommandBatch reassigned(device, allocator);
+    CHECK(reassigned
+              .dispatch(add, swapped, &one, sizeof(one), groups, rig.max_groups)
+              .ok());
+    swapped = sb;
+    CHECK(reassigned.submit().domain() == vr::Status::Code::InvalidArgument);
 
     vr::CommandBatch rewritten(device, allocator);
     CHECK(rewritten.dispatch(add, sb, &one, sizeof(one), groups, rig.max_groups)

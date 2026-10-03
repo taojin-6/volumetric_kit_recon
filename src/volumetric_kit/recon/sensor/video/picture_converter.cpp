@@ -116,6 +116,26 @@ void describe_color(
     picture.full_range = full_range(frame);
   }
   picture.encoding = resolve_encoding(frame.color_trc, frame.color_primaries);
+  switch (frame.chroma_location) {
+    case AVCHROMA_LOC_CENTER:
+      picture.chroma_location = ChromaLocation::Center;
+      break;
+    case AVCHROMA_LOC_TOPLEFT:
+      picture.chroma_location = ChromaLocation::TopLeft;
+      break;
+    case AVCHROMA_LOC_TOP:
+      picture.chroma_location = ChromaLocation::Top;
+      break;
+    case AVCHROMA_LOC_BOTTOMLEFT:
+      picture.chroma_location = ChromaLocation::BottomLeft;
+      break;
+    case AVCHROMA_LOC_BOTTOM:
+      picture.chroma_location = ChromaLocation::Bottom;
+      break;
+    default:
+      picture.chroma_location = ChromaLocation::Left;
+      break;
+  }
 }
 
 Result<DecodedPicture> PictureConverter::convert(
@@ -139,9 +159,15 @@ Result<DecodedPicture> PictureConverter::convert(
 
   const AVFrame* source = &frame;
   if (layout != VideoPixelLayout::Yuv420 || !is_host_yuv420(format)) {
-    const AVPixelFormat target = layout == VideoPixelLayout::Rgb24
-                                     ? AV_PIX_FMT_RGB24
-                                     : AV_PIX_FMT_YUV420P;
+    const bool rgb = layout == VideoPixelLayout::Rgb24;
+    // Before swscale 9, packed RGB's one-luma-row path rounds vertical
+    // chroma weights to 0 or 1/2 (FFmpeg commit 095f8038fa). Planar RGB
+    // uses the general filter, preserving the 1/4 and 3/4 weights too.
+    const bool planar_rgb =
+        rgb && LIBSWSCALE_VERSION_MAJOR < 9 && desc->log2_chroma_h != 0;
+    const AVPixelFormat target = !rgb         ? AV_PIX_FMT_YUV420P
+                                 : planar_rgb ? AV_PIX_FMT_GBRP
+                                              : AV_PIX_FMT_RGB24;
     if (out_ == nullptr) out_.reset(av_frame_alloc());
     if (out_ == nullptr) return ffmpeg_alloc_error(who_, "an output frame");
     if (out_->width != frame.width || out_->height != frame.height ||
@@ -153,40 +179,67 @@ Result<DecodedPicture> PictureConverter::convert(
       const int err = av_frame_get_buffer(out_.get(), 0);
       if (err < 0) return ffmpeg_error(who_, "allocating a picture", err);
     }
-    const Setup setup{frame.width, frame.height,   format,
-                      target,      picture.matrix, picture.full_range};
+    const Setup setup{frame.width,
+                      frame.height,
+                      format,
+                      target,
+                      picture.matrix,
+                      picture.full_range,
+                      picture.chroma_location};
     if (sws_ == nullptr || !setup.same(setup_)) {
       // Full horizontal chroma interpolation and accurate rounding: the
       // default path replicates chroma and rounds coarsely.
-      sws_.reset(sws_getContext(
-          frame.width, frame.height, format, frame.width, frame.height, target,
-          SWS_BILINEAR | SWS_ACCURATE_RND | SWS_FULL_CHR_H_INT, nullptr,
-          nullptr, nullptr));
-      if (sws_ == nullptr) {
-        return Status::io_error(std::string(who_) +
-                                ": swscale cannot convert " + desc->name +
-                                " to " + av_get_pix_fmt_name(target));
+      SwsContextPtr next(sws_alloc_context());
+      if (next == nullptr)
+        return ffmpeg_alloc_error(who_, "a conversion context");
+      const auto chroma = chroma_offset(picture.chroma_location);
+      const int x = static_cast<int>(256 * chroma[0]);
+      const int y = static_cast<int>(256 * chroma[1]);
+      // Only subsampled axes have a chroma offset. RGB, and 4:2:2's
+      // vertical axis, sample at the luma centres themselves.
+      const struct {
+        const char* name;
+        int value;
+      } options[] = {
+          {"srcw", frame.width},
+          {"srch", frame.height},
+          {"dstw", frame.width},
+          {"dsth", frame.height},
+          {"src_format", format},
+          {"dst_format", target},
+          {"sws_flags", SWS_BILINEAR | SWS_ACCURATE_RND | SWS_FULL_CHR_H_INT},
+          {"src_h_chr_pos", desc->log2_chroma_w != 0 ? x : 0},
+          {"src_v_chr_pos", desc->log2_chroma_h != 0 ? y : 0},
+          {"dst_h_chr_pos", rgb ? 0 : x},
+          {"dst_v_chr_pos", rgb ? 0 : y}};
+      for (const auto& option : options) {
+        const int err =
+            av_opt_set_int(next.get(), option.name, option.value, 0);
+        if (err < 0)
+          return ffmpeg_error(who_, "setting chroma conversion", err);
       }
+      const int initialized = sws_init_context(next.get(), nullptr, nullptr);
+      if (initialized < 0)
+        return ffmpeg_error(who_, "initializing conversion", initialized);
       // One matrix both ways: swscale reads the source table for a YUV
       // source and the target table for a YUV target (an RGB-coded stream).
       // A YUV target keeps the source's range, which is what the label says;
       // left alone, swscale takes a YUVJ source to limited range.
       const int* coefficients = sws_getCoefficients(sws_matrix(picture.matrix));
       const int range = picture.full_range ? 1 : 0;
-      const int target_range = target == AV_PIX_FMT_RGB24 ? 1 : range;
-      const int set = sws_setColorspaceDetails(sws_.get(), coefficients, range,
+      const int target_range = rgb ? 1 : range;
+      const int set = sws_setColorspaceDetails(next.get(), coefficients, range,
                                                coefficients, target_range, 0,
                                                1 << 16, 1 << 16);
       // Before swscale 7, a YUV (or grey) source to a YUV target reports -1
       // after taking both ranges: there is no RGB table to build (FFmpeg
       // 4.4's libswscale/utils.c).
-      const bool yuv_to_yuv = target != AV_PIX_FMT_RGB24 &&
-                              (desc->flags & AV_PIX_FMT_FLAG_RGB) == 0;
+      const bool yuv_to_yuv = !rgb && (desc->flags & AV_PIX_FMT_FLAG_RGB) == 0;
       if (set < 0 && !(kYuvSetupReportsFailure && yuv_to_yuv)) {
-        sws_.reset();
         return Status::io_error(std::string(who_) +
                                 ": swscale refused the colour matrix");
       }
+      sws_ = std::move(next);
       setup_ = setup;
     }
     // A negative AVERROR since FFmpeg 5, and 0 from 4.4 on a bad slice.
@@ -197,6 +250,24 @@ Result<DecodedPicture> PictureConverter::convert(
                           rows < 0 ? rows : AVERROR(EINVAL));
     }
     source = out_.get();
+    if (planar_rgb) {
+      const std::size_t stride = std::size_t{picture.width} * 3;
+      rgb_.resize(stride * picture.height);
+      for (int y = 0; y < frame.height; ++y) {
+        const auto* g = source->data[0] + y * source->linesize[0];
+        const auto* b = source->data[1] + y * source->linesize[1];
+        const auto* r = source->data[2] + y * source->linesize[2];
+        auto* row = rgb_.data() + y * stride;
+        for (int x = 0; x < frame.width; ++x) {
+          row[3 * x] = r[x];
+          row[3 * x + 1] = g[x];
+          row[3 * x + 2] = b[x];
+        }
+      }
+      picture.plane[0] = rgb_.data();
+      picture.stride[0] = stride;
+      return picture;
+    }
   }
 
   const int planes = layout == VideoPixelLayout::Rgb24 ? 1 : 3;

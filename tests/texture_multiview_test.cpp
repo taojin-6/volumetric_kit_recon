@@ -673,8 +673,12 @@ int main() {
   // single-camera pass carries the triangle's vertices under the right-hand
   // colour camera and textures them under the others, while a triangle far
   // from the occluder is textured under all three.
-  {
-    std::vector<float> occluded = wall_depth(cam0);
+  for (float min_depth : {0.1f, 0.0f, 1e-8f}) {
+    vr::DepthCameraParams sight_cam0 = cam0;
+    vr::DepthCameraParams sight_cam2 = cam2;
+    sight_cam0.min_depth = min_depth;
+    sight_cam2.min_depth = min_depth;
+    std::vector<float> occluded = wall_depth(sight_cam0);
     for (std::uint32_t v = 100; v <= 140; ++v) {
       for (std::uint32_t u = 160; u <= 200; ++u) {
         occluded[v * kW + u] = 1.5f;
@@ -685,12 +689,12 @@ int main() {
     add_small_triangle(fringe, -0.7f, 0.0f, 0.048f);   // pixel 76, far off
     identity_indices(fringe);
     const tex::TextureView right =
-        color_view(occluded.data(), cam0, color_beside(cam0, 0.2f));
-    const tex::TextureView left =
-        color_view(occluded.data(), cam0, color_beside(cam0, -0.2f));
-    const tex::TextureView registered{occluded.data(), cam0};
+        color_view(occluded.data(), sight_cam0, color_beside(sight_cam0, 0.2f));
+    const tex::TextureView left = color_view(occluded.data(), sight_cam0,
+                                             color_beside(sight_cam0, -0.2f));
+    const tex::TextureView registered{occluded.data(), sight_cam0};
     const tex::TextureView clear =
-        color_view(depth2.data(), cam2, color_beside(cam2, 0.05f));
+        color_view(depth2.data(), sight_cam2, color_beside(sight_cam2, 0.05f));
 
     for (const tex::TextureView* first : {&right, &left, &registered}) {
       const std::vector<tex::TextureView> two = {*first, clear};

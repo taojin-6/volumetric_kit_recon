@@ -114,6 +114,84 @@ int test_resolve_encoding() {
   return 0;
 }
 
+// One converter follows changes to the chroma tag, including when swscale
+// resamples or converts to RGB. The same continuous ramps give the same RGB
+// at even and odd luma pixels, regardless of their chroma sample locations.
+int test_chroma_locations() {
+  using Location = sensor::ChromaLocation;
+  struct Case {
+    AVChromaLocation tag;
+    Location location;
+    int dx;
+    int dy;
+  };
+  const Case cases[] = {{AVCHROMA_LOC_UNSPECIFIED, Location::Left, 0, 5},
+                        {AVCHROMA_LOC_CENTER, Location::Center, 5, 5},
+                        {AVCHROMA_LOC_TOPLEFT, Location::TopLeft, 0, 0},
+                        {AVCHROMA_LOC_TOP, Location::Top, 5, 0},
+                        {AVCHROMA_LOC_BOTTOMLEFT, Location::BottomLeft, 0, 10},
+                        {AVCHROMA_LOC_BOTTOM, Location::Bottom, 5, 10},
+                        {AVCHROMA_LOC_LEFT, Location::Left, 0, 5}};
+  video::PictureConverter converter("test");
+  for (const auto format :
+       {AV_PIX_FMT_YUV420P, AV_PIX_FMT_NV12, AV_PIX_FMT_YUV422P}) {
+    for (const auto layout :
+         {VideoPixelLayout::Yuv420, VideoPixelLayout::Rgb24}) {
+      for (const auto& c : cases) {
+        auto frame = solid(format, 16, 16, 128, 128, 128);
+        frame->colorspace = AVCOL_SPC_SMPTE170M;
+        frame->color_range = AVCOL_RANGE_JPEG;
+        frame->chroma_location = c.tag;
+        const bool subsampled_y = format != AV_PIX_FMT_YUV422P;
+        for (int y = 0; y < (subsampled_y ? 8 : 16); ++y) {
+          for (int x = 0; x < 8; ++x) {
+            const auto u = static_cast<std::uint8_t>(48 + 20 * x + c.dx);
+            const auto v = static_cast<std::uint8_t>(
+                48 + (subsampled_y ? 20 * y + c.dy : 10 * y));
+            frame->data[1][y * frame->linesize[1] +
+                           (format == AV_PIX_FMT_NV12 ? 2 * x : x)] = u;
+            if (format == AV_PIX_FMT_NV12) {
+              frame->data[1][y * frame->linesize[1] + 2 * x + 1] = v;
+            } else {
+              frame->data[2][y * frame->linesize[2] + x] = v;
+            }
+          }
+        }
+        auto picture = converter.convert(*frame, layout);
+        CHECK(picture.ok());
+        CHECK(picture->chroma_location == c.location);
+        if (layout == VideoPixelLayout::Rgb24) {
+          for (int y : {7, 8}) {
+            for (int x : {7, 8}) {
+              const auto* pixel =
+                  picture->plane[0] + y * picture->stride[0] + 3 * x;
+              const auto want =
+                  yuv_reference::rgb(128, 48 + 10 * x, 48 + 10 * y,
+                                     picture->matrix, picture->full_range);
+              for (int channel = 0; channel < 3; ++channel) {
+                if (std::abs(pixel[channel] - want[channel]) > 2) {
+                  std::fprintf(stderr,
+                               "%s chroma %d at (%d, %d) channel %d: %d, "
+                               "want %d\n",
+                               av_get_pix_fmt_name(format), c.tag, x, y,
+                               channel, pixel[channel], want[channel]);
+                  CHECK(false);
+                }
+              }
+            }
+          }
+        } else {
+          CHECK(std::abs(picture->plane[1][4 * picture->stride[1] + 4] -
+                         (128 + c.dx)) <= 1);
+          CHECK(std::abs(picture->plane[2][4 * picture->stride[2] + 4] -
+                         (128 + c.dy)) <= 1);
+        }
+      }
+    }
+  }
+  return 0;
+}
+
 int test_yuv420_passes_through() {
   video::PictureConverter converter("test");
   const auto frame = solid(AV_PIX_FMT_YUV420P, 64, 32, 100, 90, 160);
@@ -300,6 +378,7 @@ int test_refusals() {
 int main() {
   if (test_resolve_matrix() != 0) return 1;
   if (test_resolve_encoding() != 0) return 1;
+  if (test_chroma_locations() != 0) return 1;
   if (test_yuv420_passes_through() != 0) return 1;
   if (test_nv12_splits_exactly() != 0) return 1;
   if (test_rgb_follows_matrix_and_range() != 0) return 1;

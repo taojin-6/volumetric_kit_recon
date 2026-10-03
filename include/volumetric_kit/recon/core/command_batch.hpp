@@ -221,7 +221,8 @@ class VR_CORE_API CommandBatch {
   ///        `dispatch()` does but in this batch.
   /// @param kernel      A built kernel whose descriptor set is written. The
   ///                    set is bound when @ref submit records, so rewriting
-  ///                    it before then makes @ref submit refuse the batch.
+  ///                    it through any copy, or replacing it, before then
+  ///                    makes @ref submit refuse the batch.
   /// @param push        Push-constant bytes, copied here.
   /// @param push_size   Their size: a multiple of 4, at most the kernel's
   ///                    @ref ComputeKernel::push_bytes; 0 pushes nothing.
@@ -241,7 +242,8 @@ class VR_CORE_API CommandBatch {
   /// So one batch can dispatch a kernel several times over different
   /// buffers, each dispatch binding a set of its own of the kernel's layout
   /// (@ref KernelSets). The kernel's own set's rule holds for @p set:
-  /// rewritten before @ref submit, the batch is refused.
+  /// rewritten through any copy or replaced before @ref submit, the batch
+  /// is refused.
   /// @param set  A written set of @p kernel's layout, which must stay alive
   ///             until @ref submit returns: the batch keeps a pointer to
   ///             it, and binds and checks that object, not a copy. The
@@ -297,8 +299,9 @@ class VR_CORE_API CommandBatch {
   /// most once.
   /// @return OK; the first refusal a recording call returned; InvalidArgument
   ///         for a second submit, a moved-from batch, or a kernel whose set
-  ///         was rewritten after its dispatch was recorded; or a staging or
-  ///         Vulkan failure. A submit that fails before the device has the
+  ///         was rewritten through any copy or replaced after its dispatch
+  ///         was recorded; or a staging or Vulkan failure. A submit that
+  ///         fails before the device has the
   ///         buffer drops its spans (`GpuTimer::discard`); one whose wait
   ///         fails retires the timers they belong to (`GpuTimer::abandon`).
   Status submit();
@@ -327,13 +330,14 @@ class VR_CORE_API CommandBatch {
     std::uint32_t value = 0;  // fill word, workgroup count, or acquired-from
     std::uint32_t to_family = 0;  // an acquire's destination family
     const ComputeKernel* kernel = nullptr;
-    const DescriptorSet* set = nullptr;  // the set a dispatch binds
-    std::uint64_t set_writes = 0;        // its writes, when recorded
-    std::vector<unsigned char> data;     // push constants, or an inline upload
-    GpuStageScope* stage = nullptr;      // a dispatch's or an upload's span
-    void* host_dst = nullptr;            // a readback's destination
-    bool staged = false;                 // a Copy from this batch's own staging
-    VkImage image = VK_NULL_HANDLE;      // an ImageCopy's source
+    const DescriptorSet* set = nullptr;           // the set a dispatch binds
+    VkDescriptorSet set_handle = VK_NULL_HANDLE;  // its handle, when recorded
+    std::uint64_t set_writes = 0;                 // its writes, when recorded
+    std::vector<unsigned char> data;  // push constants, or an inline upload
+    GpuStageScope* stage = nullptr;   // a dispatch's or an upload's span
+    void* host_dst = nullptr;         // a readback's destination
+    bool staged = false;              // a Copy from this batch's own staging
+    VkImage image = VK_NULL_HANDLE;   // an ImageCopy's source
     VkImageLayout image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
     std::uint32_t width = 0;   // an ImageCopy's texels a row
     std::uint32_t height = 0;  // and rows

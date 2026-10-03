@@ -257,6 +257,9 @@ entries relevant to your task; later amendments supersede earlier rules.
   what it changes (amends the `changed`-stamp entry above).
 - [**2026-10-02**](#2026-10-02--shared-instructions-live-in-a-concise-agentsmd-claudemd-imports-it-designmd-holds-implementation-detail-and-decisionsmd-holds-the-decision-index-and-rationale) —
   Shared instructions live in a concise AGENTS.md; CLAUDE.md imports it, DESIGN.md holds implementation detail, and DECISIONS.md holds the decision index and rationale.
+- [**2026-10-02**](#2026-10-02--gpu-regressions-guard-span-ownership-chroma-placement-descriptor-aliases-invalid-depth-taps-and-zero-near-visibility) —
+  GPU regressions guard span ownership, chroma placement, descriptor aliases,
+  invalid depth taps, and zero-near visibility.
 
 ## Decision record
 
@@ -8369,6 +8372,73 @@ The migrated tier descriptions replace the older overview's superseded
 incremental-meshing, queue-selection, and timeline-ring status. The existing
 color-space rationale remains, with `fuse_render`'s already-shipped sRGB
 target described as current behavior.
+
+### 2026-10-02 — GPU regressions guard span ownership, chroma placement, descriptor aliases, invalid depth taps, and zero-near visibility.
+
+Five correctness reproductions exposed gaps in otherwise passing tests.
+
+- **Incremental spans are checked before the GPU reuses them.** Removing a
+  block, running a full fallback, then allocating a replacement in the freed
+  slot left an old span pointing at the survivor's newly compacted triangles.
+  Before an incremental dispatch, zero each active slot whose host stamp is
+  not the previous extract's serial, including clean newly allocated slots.
+  Sum all current active spans afterward, including newly emitted blocks.
+  This refines the 2026-08-11 span and incremental-dispatch decisions without
+  restoring a whole-table clear or changing the 2026-10-01 changed stamps.
+  Both sharing modes now retain all 196 fixture triangles instead of 98.
+- **Chroma location travels with the planes.** `DecodedPicture` and
+  `YuvImage` carry `ChromaLocation`, left by default for existing callers.
+  JPEG decoders declare centre; HEVC preserves the frame's tag, defaulting to
+  left when unspecified. The Orbbec handoff preserves it for host and device
+  pictures. GPU preparation uses the corresponding luma-grid offsets for
+  I420 and NV12 in every storage form. Host resampling specifies the source
+  and destination positions and includes the tag in its conversion cache;
+  axes without subsampling have zero offset. This amends the 2026-09-28
+  preprocessing contract, which assumed left-aligned chroma for every input.
+- **Descriptor copies share mutation tracking.** Copies already shared the
+  Vulkan set but had separate write counters, so rebinding through a copy
+  could silently redirect a recorded dispatch. The counter now belongs to
+  shared state. A batch records both handle and counter, rejecting alias
+  writes and wrapper reassignment before submitting any work. The wrapper
+  passed to `dispatch` must still outlive `submit`, as the 2026-09-30 batching
+  decision requires.
+- **Every bilinear depth tap must be finite.** NaN and either infinity now
+  trigger the same nearest-sample fallback as a non-positive hole, before
+  interpolation. A valid nearest sample beside a NaN therefore fuses with
+  weight 1, as beside a zero, instead of disappearing with weight 0.
+- **Colour sight lines are clipped before projection.** Clip to the depth
+  camera's near bound and image side planes in camera space. A lateral
+  colour camera at depth zero then ends the walk at the image edge, and a
+  tiny positive near bound cannot exhaust the 64 samples outside the image.
+  The registered-camera case still has no segment to walk.
+
+Verification: Release on Apple M5 Max through MoltenVK, FFmpeg and Orbbec
+enabled; all 57 CTests pass with `VR_TEST_HEVC_BACKEND=videotoolbox`.
+Regressions exercise slot reuse with sharing on/off and with/without an empty
+intermediate extract; copied and reassigned descriptor wrappers; all four
+depth taps with zero, NaN and both infinities; and near bounds 0.1, 0 and
+1e-8 for single-view and multi-view texturing. Chroma tests use continuous
+ramps for all six locations and verify host resampling, storage-layout
+equivalence, and the SDK frame handoff. JPEG software and VideoToolbox device
+pictures prepare within 1 channel code of an independent centred-sampling
+and colour-matrix reference, while its left-aligned control differs by at
+least 30 codes on the same fixture. CUDA/nvJPEG and physical-camera capture
+were not run on this host.
+
+**CI exposed an older swscale interpolation bug.** Ubuntu 22.04 and 24.04
+failed the host chroma ramp and the JPEG test's original swscale reference;
+the current library passed both. Before libswscale 9, packed RGB's
+one-luma-row path rounds vertical chroma weights to zero or one half,
+including the one-quarter and three-quarter weights centred 4:2:0 needs
+([FFmpeg fix 095f8038fa](https://github.com/FFmpeg/FFmpeg/commit/095f8038fa9180842cd38d4d61c7c47a02aad9ed)).
+Host RGB conversion on those libraries now uses the planar RGB filter and
+interleaves its output. The JPEG GPU test uses independently calculated
+sampling weights and matrix constants, so a broken library cannot define
+the expected image. The host ramps cover even and odd rows and columns.
+The compatibility targets remain the distro FFmpeg packages in CI's Ubuntu
+22.04, 24.04 and 26.04 jobs; no package upgrade is required. Local reproductions
+of the converter and JPEG tests pass with FFmpeg 4.4.6, 6.1.1 and 9.0.2,
+without relaxing numerical tolerances.
 
 ## Measured lessons
 

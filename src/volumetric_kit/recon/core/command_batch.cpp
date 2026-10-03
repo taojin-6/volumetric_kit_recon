@@ -379,6 +379,7 @@ CommandBatch::Op CommandBatch::dispatch_op(
   op.kind = kind;
   op.kernel = &kernel;
   op.set = &set;
+  op.set_handle = set.handle();
   op.set_writes = set.writes();
   if (push_size > 0) {
     const auto* bytes = static_cast<const unsigned char*>(push);
@@ -641,7 +642,8 @@ Status CommandBatch::submit() {
   // The set is bound only now, so a write since its dispatch was recorded
   // would run that dispatch on the later binding.
   for (const Op& op : ops_) {
-    if (op.set != nullptr && op.set->writes() != op.set_writes) {
+    if (op.set != nullptr && (op.set->handle() != op.set_handle ||
+                              op.set->writes() != op.set_writes)) {
       return Status::invalid_argument(
           "CommandBatch::submit: a kernel's descriptor set was rewritten "
           "after its dispatch was recorded");

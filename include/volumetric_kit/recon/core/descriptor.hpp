@@ -8,6 +8,7 @@
 ///        resources (storage buffers).
 
 #include <cstdint>
+#include <memory>
 
 #include "volumetric_kit/recon/core/export.hpp"
 #include "volumetric_kit/recon/core/result.hpp"
@@ -86,6 +87,7 @@ class VR_CORE_API DescriptorPool {
 ///        typed update helpers.
 ///
 /// Freely copyable -- it borrows the set handle rather than owning it.
+/// Copies share the write counter used to reject stale command batches.
 class VR_CORE_API DescriptorSet {
  public:
   DescriptorSet() noexcept = default;
@@ -93,7 +95,7 @@ class VR_CORE_API DescriptorSet {
   /// @brief Wrap an already-allocated set. Called by @ref
   /// DescriptorPool::allocate.
   DescriptorSet(VkDevice device, VkDescriptorSet set) noexcept
-      : device_(device), set_(set) {}
+      : state_(std::make_shared<State>(State{device, set, 0})) {}
 
   /// @brief Bind a storage buffer (SSBO) at @p binding.
   /// @param binding  The `layout(binding=)` slot in the shader.
@@ -105,17 +107,24 @@ class VR_CORE_API DescriptorSet {
                             VkDeviceSize offset, VkDeviceSize range) const;
 
   /// @return The set handle (`VK_NULL_HANDLE` when empty).
-  VkDescriptorSet handle() const noexcept { return set_; }
+  VkDescriptorSet handle() const noexcept {
+    return state_ != nullptr ? state_->set : VK_NULL_HANDLE;
+  }
   /// @return `true` if this refers to a set.
-  bool valid() const noexcept { return set_ != VK_NULL_HANDLE; }
-  /// @return How many writes this object has made, so a @ref CommandBatch
-  ///         can refuse a set rewritten after it recorded a dispatch.
-  std::uint64_t writes() const noexcept { return writes_; }
+  bool valid() const noexcept { return handle() != VK_NULL_HANDLE; }
+  /// @return How many writes this view and its copies have made, so a
+  ///         @ref CommandBatch can refuse a set rewritten through any alias.
+  std::uint64_t writes() const noexcept {
+    return state_ != nullptr ? state_->writes : 0;
+  }
 
  private:
-  VkDevice device_ = VK_NULL_HANDLE;
-  VkDescriptorSet set_ = VK_NULL_HANDLE;
-  mutable std::uint64_t writes_ = 0;
+  struct State {
+    VkDevice device;
+    VkDescriptorSet set;
+    std::uint64_t writes;
+  };
+  std::shared_ptr<State> state_;
 };
 
 }  // namespace volumetric_kit::recon

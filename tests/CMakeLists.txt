@@ -525,8 +525,9 @@ if(VR_WITH_FFMPEG)
   add_test(NAME recon_sensor_video_hevc COMMAND recon_sensor_video_hevc_test)
 
   add_executable(recon_sensor_video_jpeg_test sensor_video_jpeg_test.cpp)
-  target_link_libraries(recon_sensor_video_jpeg_test
-                        PRIVATE volumetric_kit::recon_sensor_video)
+  target_link_libraries(
+    recon_sensor_video_jpeg_test PRIVATE volumetric_kit::recon_sensor_video
+                                         volumetric_kit::recon_sensor_utils)
   target_compile_definitions(
     recon_sensor_video_jpeg_test
     PRIVATE VR_JPEG_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data/jpeg"

@@ -23,6 +23,7 @@
 
 #include "volumetric_kit/recon/core/color_space.hpp"
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
+#include "volumetric_kit/recon/sensor/chroma_location.hpp"
 #include "volumetric_kit/recon/sensor/lens.hpp"
 
 namespace volumetric_kit::recon {
@@ -50,8 +51,8 @@ inline constexpr std::uint32_t kQueueFamilyExternal = ~std::uint32_t{0} - 1;
 /// @brief An 8-bit Y'CbCr 4:2:0 picture, on the host or already on the
 ///        device, and the matrix and range it was coded with.
 ///
-/// Chroma is sited as H.265 and MPEG-2 place it by default: horizontally with
-/// the even luma columns, vertically between two luma rows. The planes are Y,
+/// Chroma's position is given by @ref YuvImage::chroma_location, defaulting to
+/// H.265's left alignment. JPEG uses centred chroma. The planes are Y,
 /// then Cb and Cr at half size (rounded up) for I420, or Y then CbCr for
 /// NV12, whose chroma rows hold both samples of each pair. They are host
 /// memory in @ref plane or, where a decoder left its picture on the GPU,
@@ -108,6 +109,7 @@ struct YuvImage {
   float kr = 0.299f;
   float kb = 0.114f;       ///< See @ref kr.
   bool full_range = true;  ///< Y in 0..255 rather than 16..235.
+  ChromaLocation chroma_location = ChromaLocation::Left;  ///< Sample positions.
 };
 
 /// @brief One RGB-D frame as the cameras captured it. A view: the driver's

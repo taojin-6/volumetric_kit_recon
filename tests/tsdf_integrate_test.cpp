@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
 #include <vector>
 
 #include "grid_readback.hpp"
@@ -245,6 +246,56 @@ int changed_stamps_case(vr::Device& device, vr::Allocator& allocator) {
   return 0;
 }
 
+// A non-finite neighbor is a hole, like zero, not a poisoned sample.
+int nonfinite_depth_taps_case(const vr_test::Gpu& ctx) {
+  const float hole[] = {1.0f, 0.0f, std::numeric_limits<float>::quiet_NaN(),
+                        std::numeric_limits<float>::infinity(),
+                        -std::numeric_limits<float>::infinity()};
+  vol::VoxelGridParams gp{};
+  gp.block_size = 8;
+  gp.voxels_per_block = 512;
+  gp.bucket_size = 8;
+  gp.num_buckets = 128;
+  gp.num_blocks = 1024;
+  gp.max_chain = 128;
+  gp.voxel_size = 0.125f;
+  gp.trunc_dist = 0.1f;
+  const vol::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
+                                      {"weight", sizeof(float)}};
+  auto integrator = vr::tsdf::TsdfIntegrator::create(ctx.device, ctx.allocator);
+  CHECK(integrator.ok());
+  for (float invalid : hole) {
+    // Every bilinear corner, with a different valid containing pixel.
+    for (int tap : {0, 1, 3, 4}) {
+      auto made =
+          vol::VoxelBlockGrid::create(ctx.device, ctx.allocator, gp, attrs, 2);
+      CHECK(made.ok());
+      auto grid = std::move(made).value();
+      vol::BlockIndex block{};
+      block.coord = vr::Vec3i(0, 0, 1);
+      CHECK(grid.map().allocate(&block, 1).value() == 0);
+      auto active = grid.map().compact_active_blocks();
+      CHECK(active.ok() && active->size() == 1);
+      vr::DepthCameraParams cam{};
+      cam.fx = cam.fy = 1.0f;
+      cam.cx = tap == 4 ? 0.75f : 1.25f;
+      cam.cy = tap == 4 ? 0.75f : 1.25f;
+      cam.width = cam.height = 3;
+      cam.min_depth = 0.1f;
+      cam.max_depth = 5.0f;
+      cam.cam_to_world = vr::Mat4f(1.0f);
+      std::vector<float> depth(9, 1.0f);
+      depth[tap] = invalid;
+      CHECK(integrator->integrate(grid, depth.data(), cam, 100.0f).ok());
+      auto weight = vr_test::read_attribute<float>(ctx.device, ctx.allocator,
+                                                   grid, "weight");
+      CHECK(weight.ok());
+      CHECK(weight.value()[active->front().ptr] == 1.0f);
+    }
+  }
+  return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -274,6 +325,8 @@ int main() {
                  allocator.status().message().c_str());
     return 1;
   }
+  CHECK(nonfinite_depth_taps_case({device.value(), allocator.value()}) == 0);
+
   // Copies of a grid attribute; the arrays are device-local.
   const auto floats = [&](const vol::VoxelBlockGrid& g, const char* name) {
     return vr_test::read_attribute<float>(device.value(), allocator.value(), g,
