@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "buffer_readback.hpp"
+#include "volumetric_kit/recon/core/color_space.hpp"
 #include "volumetric_kit/recon/core/compute_util.hpp"
 #include "volumetric_kit/recon/core/instance.hpp"
 #include "volumetric_kit/recon/core/log.hpp"
@@ -28,6 +29,96 @@ namespace vol = volumetric_kit::recon::volume;
   } while (0)
 
 std::atomic<int> validation_errors{0};
+
+int check_prolongation_support(vr::Device& dev, vr::Allocator& alloc) {
+  vol::HierarchicalGridConfig config;
+  config.finest.voxel_size = 0.005f;
+  config.finest.trunc_dist = 0.4f;
+  config.finest.bucket_size = 8;
+  config.finest.num_buckets = 4;
+  config.finest.num_blocks = 32;
+  config.level_count = 2;
+  config.child_block_capacity = 8;
+  config.color = true;
+  auto made = vol::HierarchicalGrid::create(dev, alloc, config);
+  CHECK(made);
+  auto grid = std::move(made).value();
+  const vol::BlockIndex root{vr::Vec3i(-1, -1, -1), -1};
+  auto allocated = grid.allocate_roots(&root, 1);
+  CHECK(allocated && allocated.value() == 0);
+  auto field = grid.prepare_leaves();
+  CHECK(field);
+  auto ids =
+      vr_test::read_back<std::uint32_t>(dev, alloc, *field->leaf_indices, 1);
+  CHECK(ids);
+  const auto parent = ids->front();
+  const auto offset = VkDeviceSize(parent) * 512 * sizeof(float);
+  std::vector<float> sdf(512), weights(512, 5.0f);
+  std::vector<std::uint32_t> colors(512);
+  for (unsigned i = 0; i < 512; ++i) {
+    sdf[i] = (float(i) - 255.5f) * 0.001f;
+    colors[i] = (i & 1u) != 0 ? 0xff0000ffu : 0xffff0000u;
+  }
+  weights[3 + 8 * (3 + 8 * 3)] = 0.0f;
+  colors[3 + 8 * (3 + 8 * 3)] = 0u;
+  weights[5 + 8 * (5 + 8 * 5)] = 0.25f;
+  colors[1 + 8 * (1 + 8 * 1)] = 0u;
+  vr::CommandBatch batch(dev, alloc);
+  CHECK(batch.upload(*field->tsdf, offset, sdf.data(), 512 * sizeof(float)));
+  CHECK(batch.upload(*field->weight, offset, weights.data(),
+                     512 * sizeof(float)));
+  CHECK(batch.upload(*field->color, offset, colors.data(),
+                     512 * sizeof(std::uint32_t)));
+  CHECK(batch.submit());
+  auto requests = vr::device_storage_buffer(
+      alloc, grid.node_capacity() * sizeof(std::uint32_t));
+  CHECK(requests);
+  std::vector<std::uint32_t> desired(grid.node_capacity(),
+                                     std::numeric_limits<std::uint32_t>::max());
+  desired[parent] = 0;
+  CHECK(vr_test::write_back(dev, alloc, requests.value(), desired));
+  auto split = grid.split(requests.value(), 1, 0.5f);
+  CHECK(split && split->split == 1);
+  field = grid.prepare_leaves();
+  CHECK(field && field->leaf_count == 8);
+  auto nodes = vr_test::read_back<vol::HierarchicalNode>(
+      dev, alloc, *field->nodes, grid.node_capacity());
+  const auto sample_count = std::size_t(grid.node_capacity()) * 512;
+  auto out_sdf =
+      vr_test::read_back<float>(dev, alloc, *field->tsdf, sample_count);
+  auto out_weights =
+      vr_test::read_back<float>(dev, alloc, *field->weight, sample_count);
+  auto out_colors = vr_test::read_back<std::uint32_t>(dev, alloc, *field->color,
+                                                      sample_count);
+  CHECK(nodes && out_sdf && out_weights && out_colors);
+  const auto at = [&](unsigned x, unsigned y, unsigned z) {
+    const auto octant = x / 8 + 2 * (y / 8) + 4 * (z / 8);
+    const auto child = nodes.value()[parent].children - 1 + octant;
+    return std::size_t(child) * 512 + x % 8 + 8 * (y % 8 + 8 * (z % 8));
+  };
+  // An unobserved nearest parent remains unobserved. A known nearest sample
+  // with an unknown interpolation neighbor retains the nearest value.
+  CHECK(out_weights.value()[at(6, 6, 6)] == 0.0f);
+  CHECK(out_colors.value()[at(6, 6, 6)] == 0u);
+  CHECK(out_sdf.value()[at(5, 5, 5)] == sdf[2 + 8 * (2 + 8 * 2)]);
+  CHECK(out_weights.value()[at(5, 5, 5)] == 0.5f);
+  CHECK(out_colors.value()[at(5, 5, 5)] == colors[2 + 8 * (2 + 8 * 2)]);
+  // Interpolation cannot give a weak contributor its stronger neighbors'
+  // confidence; the caller cap is an additional upper bound.
+  CHECK(out_weights.value()[at(9, 9, 9)] == 0.25f);
+  CHECK(std::abs(out_sdf.value()[at(9, 9, 9)] -
+                 (4.25f * 73 - 255.5f) * 0.001f) < 1e-6f);
+  // Unknown color does not invalidate geometry or become observed black.
+  CHECK(out_colors.value()[at(3, 3, 3)] == 0u);
+  CHECK(out_weights.value()[at(3, 3, 3)] == 0.5f);
+  CHECK(std::abs(out_sdf.value()[at(3, 3, 3)] -
+                 (1.25f * 73 - 255.5f) * 0.001f) < 1e-6f);
+  CHECK(out_colors.value()[at(1, 1, 1)] == colors[0]);
+  // The outer sample layer keeps its parent value instead of extrapolating.
+  CHECK(out_sdf.value()[at(0, 0, 0)] == sdf[0]);
+  CHECK(out_sdf.value()[at(15, 15, 15)] == sdf[511]);
+  return 0;
+}
 
 int main() {
   vr::set_log_handler([](vr::LogLevel level, std::string_view message) {
@@ -140,17 +231,18 @@ int main() {
   CHECK(xs ==
         std::set<int>({-1, 0, 1}));  // device ABI, including signed coords
 
-  // Distinct parent samples reveal incorrect octants, local addressing, or a
-  // color-copy stride. The transfer must cap confidence without changing TSDF.
+  // An affine signed plane and alternating linear red/blue samples reveal
+  // incorrect octants, cell-center offsets, encoded-color interpolation or
+  // confidence growth. Interior prolongation must reproduce the plane.
   const auto samples = static_cast<std::size_t>(grid.node_capacity()) * 512u;
   std::vector<float> tsdf(samples, 0.0f), weight(samples, 0.0f);
   std::vector<std::uint32_t> color(samples, 0u);
   for (auto id : leaves_before.value()) {
     for (std::uint32_t local = 0; local < 512; ++local) {
       const auto i = static_cast<std::size_t>(id) * 512u + local;
-      tsdf[i] = static_cast<float>(local) * 0.001f;
+      tsdf[i] = (static_cast<float>(local) - 255.5f) * 0.001f;
       weight[i] = 5.0f;
-      color[i] = 0xff000000u + local;
+      color[i] = (local & 1u) != 0 ? 0xff0000ffu : 0xffff0000u;
     }
   }
   CHECK(vr_test::write_back(dev, alloc, *before->tsdf, tsdf));
@@ -194,15 +286,31 @@ int main() {
       CHECK(child.ptr ==
             static_cast<std::int32_t>((parent.children - 1 + oct) * 512u));
       for (std::uint32_t local = 0; local < 512; ++local) {
+        const auto fx = (local & 7u) + (oct & 1u) * 8u;
+        const auto fy = ((local >> 3) & 7u) + ((oct >> 1) & 1u) * 8u;
+        const auto fz = (local >> 6) + (oct >> 2) * 8u;
         const auto x = ((local & 7u) + (oct & 1u) * 8u) / 2u;
         const auto y = (((local >> 3) & 7u) + ((oct >> 1) & 1u) * 8u) / 2u;
         const auto z = ((local >> 6) + (oct >> 2) * 8u) / 2u;
         const auto src =
             static_cast<std::size_t>(parent.ptr) + x + 8u * (y + 8u * z);
         const auto dst = static_cast<std::size_t>(child.ptr) + local;
-        CHECK(tsdf_after.value()[dst] == tsdf[src]);
+        if (fx > 0 && fx < 15 && fy > 0 && fy < 15 && fz > 0 && fz < 15) {
+          const float px = float(fx) * 0.5f - 0.25f;
+          const float py = float(fy) * 0.5f - 0.25f;
+          const float pz = float(fz) * 0.5f - 0.25f;
+          const float expected = (px + 8 * py + 64 * pz - 255.5f) * 0.001f;
+          CHECK(std::abs(tsdf_after.value()[dst] - expected) < 1e-6f);
+          const float fraction = px - std::floor(px);
+          const float red =
+              (int(std::floor(px)) & 1) != 0 ? 1 - fraction : fraction;
+          CHECK(color_after.value()[dst] ==
+                vr::pack_linear_to_srgb(vr::Vec3f(red, 0, 1 - red)));
+        } else {
+          CHECK(tsdf_after.value()[dst] == tsdf[src]);
+          CHECK(color_after.value()[dst] == color[src]);
+        }
         CHECK(weight_after.value()[dst] == 1.0f);
-        CHECK(color_after.value()[dst] == color[src]);
       }
     }
   }
@@ -425,6 +533,7 @@ int main() {
   config.child_block_capacity = 16;
   config.level_count = 5;
   CHECK(!vol::HierarchicalGrid::create(dev, alloc, config));
+  CHECK(check_prolongation_support(dev, alloc) == 0);
   CHECK(validation_errors == 0);
   std::printf("recon hierarchical grid test passed\n");
   return 0;

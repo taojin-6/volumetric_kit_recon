@@ -2,6 +2,7 @@
 #extension GL_GOOGLE_include_directive : require
 #extension GL_EXT_scalar_block_layout : require
 #include "hierarchical_types.glsl"
+#include "volumetric_kit/recon/core/shaders/color_common.glsl"
 
 // One workgroup owns one unique leaf. No parent is published until all eight
 // child payloads and records exist; consumers run only after this dispatch.
@@ -27,6 +28,10 @@ layout(push_constant, scalar) uniform Push {
 
 shared uint s_first;
 shared uint s_parent;
+shared float parent_tsdf[512];
+shared float parent_weight[512];
+shared uint parent_color[512];
+shared vec3 parent_linear_color[512];
 
 void main() {
   uint lane = gl_LocalInvocationID.x;
@@ -59,6 +64,15 @@ void main() {
   barrier();
   if (s_first == 0xffffffffu) return;
   HierarchicalNode parent = nodes[s_parent];
+  // Decode each coarse color once; 4096 children reuse these 512 parent taps.
+  for (uint j = lane; j < 512u; j += 256u) {
+    uint src = uint(parent.ptr) + j;
+    parent_tsdf[j] = tsdf[src];
+    parent_weight[j] = weight[src];
+    parent_color[j] = pc.has_color != 0u ? colors[src] : 0u;
+    parent_linear_color[j] = vrUnpackSrgbToLinear(parent_color[j]);
+  }
+  barrier();
   if (lane < 8u) {
     ivec3 octant = ivec3(int(lane & 1u), int((lane >> 1) & 1u), int(lane >> 2));
     uint child = s_first + lane;
@@ -74,11 +88,52 @@ void main() {
     uvec3 fine = uvec3(local & 7u, (local >> 3) & 7u, local >> 6) +
                   uvec3(octant & 1u, (octant >> 1) & 1u, octant >> 2) * 8u;
     uvec3 coarse = fine / 2u;
-    uint src = uint(parent.ptr) + coarse.x + 8u * (coarse.y + 8u * coarse.z);
+    uint src = coarse.x + 8u * (coarse.y + 8u * coarse.z);
     uint dst = (s_first + octant) * 512u + local;
-    tsdf[dst] = tsdf[src];
-    weight[dst] = min(weight[src], pc.weight_cap);
-    if (pc.has_color != 0u) colors[dst] = colors[src];
+    float value = parent_tsdf[src];
+    float confidence = min(parent_weight[src], pc.weight_cap);
+    uint color = parent_color[src];
+    // Cell-centered child position in the parent's sample coordinates.
+    // Convex interpolation is valid only inside observed parent support.
+    // Boundary and unknown-tap cases retain nearest-parent initialization;
+    // extrapolation would invent support outside the known truncation band.
+    vec3 position = (vec3(fine) + vec3(0.5)) * 0.5 - vec3(0.5);
+    ivec3 lower = ivec3(floor(position));
+    vec3 fraction = fract(position);
+    if (all(greaterThanEqual(lower, ivec3(0))) && all(lessThan(lower, ivec3(7)))) {
+      float interpolated = 0.0;
+      float minimum_weight = pc.weight_cap;
+      vec3 linear_color = vec3(0.0);
+      bool observed = true;
+      bool color_observed = true;
+      for (uint tap = 0u; tap < 8u; ++tap) {
+        ivec3 offset = ivec3(int(tap & 1u), int((tap >> 1) & 1u), int(tap >> 2));
+        ivec3 p = lower + offset;
+        uint index = uint(p.x + 8 * (p.y + 8 * p.z));
+        float w = parent_weight[index];
+        float d = parent_tsdf[index];
+        if (!(w >= 1e-6) || isnan(w) || isinf(w) || isnan(d) || isinf(d)) {
+          observed = false;
+          break;
+        }
+        vec3 factors = mix(vec3(1.0) - fraction, fraction, vec3(offset));
+        float coefficient = factors.x * factors.y * factors.z;
+        interpolated += coefficient * d;
+        minimum_weight = min(minimum_weight, w);
+        if (pc.has_color != 0u) {
+          color_observed = color_observed && parent_color[index] != 0u;
+          linear_color += coefficient * parent_linear_color[index];
+        }
+      }
+      if (observed) {
+        value = interpolated;
+        confidence = minimum_weight;
+        if (pc.has_color != 0u && color_observed) color = vrPackLinearToSrgb(linear_color);
+      }
+    }
+    tsdf[dst] = value;
+    weight[dst] = confidence;
+    if (pc.has_color != 0u) colors[dst] = color;
   }
   memoryBarrierBuffer();
   barrier();

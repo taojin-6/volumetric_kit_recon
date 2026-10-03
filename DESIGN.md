@@ -848,8 +848,14 @@ The uniform `VoxelBlockGrid` and its node sampling remain unchanged.
 `HierarchicalGrid` owns fixed coarse roots and a separate child-node budget.
 Allocation initializes roots on the GPU; `prepare_leaves` caches the compact
 leaf list until topology changes. `split` publishes an eight-child group only
-after initializing its samples. Inherited confidence is capped, since
-resampling a coarse field cannot recover previously lost detail. Exhausted
+after initializing its samples. Interior child centers trilinearly interpolate
+metric TSDF only when all eight parent taps are observed; color interpolates in
+linear light only when all eight colors are known. At the outer parent sample
+layer or beside unknown support, initialization retains the nearest parent
+sample. This convex transfer reproduces affine TSDFs inside observed support
+without extrapolating the truncation band. Inherited confidence is the minimum
+contributing weight, capped by the caller, since resampling a coarse field
+cannot recover previously lost detail or add observations. Exhausted
 root/child capacity and deferred refinement remain explicit results.
 `merge` requires consecutive coarsening requests from all eight leaf children;
 missing or finer evidence resets the history. Selection and restriction run

@@ -49,9 +49,12 @@ struct HierarchicalMergeStats {
 /// @brief A sparse root hash and an octree of device-resident 8-cubed blocks.
 ///
 /// Only leaves are integrated or meshed. Parent payloads remain available for
-/// transfer; children inherit nearest-parent samples with weight capped by the
-/// caller. Such transfer preserves observations approximately and introduces
-/// no new detail; subsequent depth observations must refine the field.
+/// transfer. Interior child samples interpolate metric TSDF from eight observed
+/// parent samples and interpolate color in linear light when all colors exist.
+/// Unsupported or boundary samples retain the nearest parent's value. Inherited
+/// confidence is bounded by every contributing weight and the caller's cap.
+/// Interior transfer preserves an observed affine field but cannot recover
+/// lost detail; subsequent depth observations must refine the field.
 ///
 /// All nodes, leaf indices, and attributes stay on the device. Operations read
 /// back control counts only. Capacities are explicit and fixed; failed root
@@ -142,7 +145,8 @@ class VR_VOLUME_API HierarchicalGrid {
   /// @param requests Desired-level buffer with at least node_capacity uints.
   /// @param max_splits Maximum parents split by this call; zero does no work.
   /// @param transfer_weight_cap Maximum inherited observation weight, finite
-  ///                            and positive. New observations correct it.
+  ///                            and positive. Interpolated confidence is also
+  ///                            bounded by the least confident contributor.
   /// @param metrics Optional host/device stage rows.
   /// @return Completed, budget-deferred, and capacity-exhausted event counts,
   ///         or a non-OK status. Capacity exhaustion leaves leaves intact.
