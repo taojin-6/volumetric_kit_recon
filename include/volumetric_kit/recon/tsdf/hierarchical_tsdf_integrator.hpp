@@ -18,7 +18,9 @@ namespace volumetric_kit::recon::tsdf {
 /// @brief Metric controls for an incoming-depth refinement estimate.
 ///
 /// The classifier compares a local depth patch with its tangent plane and
-/// scales the residual to each candidate spacing. This is a refinement
+/// scales the residual to each candidate spacing. Candidate cell normal spans
+/// must also fit the projective truncation band at the observed view angle, so
+/// a grazing planar surface can require fine samples. This is a refinement
 /// heuristic, not a bound on reconstruction error. Depth discontinuities
 /// and valid foreground beside missing depth request the finest supported
 /// level. Image boundaries and unseen nodes receive no request.

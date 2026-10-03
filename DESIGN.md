@@ -862,11 +862,18 @@ Per-level leaf populations share the compact-list count readback.
 `HierarchicalTsdfIntegrator` shares the uniform fusion arithmetic through a
 shader body compiled separately for each addressing scheme. Its classifier
 uses incoming depth patch tangent-plane residuals, subtracts a noise floor,
-and estimates a desired spacing. Large depth jumps request fine samples only
-with nonplanarity evidence, so grazing planes can remain coarse. Invalid or
-unseen patches supply no coarsening evidence. The result is a device-resident
-desired-level array consumed before topology changes. This is a heuristic,
-not a geometric error bound or semantic human detector. Fusion supports
+and estimates a desired spacing. A candidate cell's normal span must also fit
+inside the view-dependent projective band: `h * ||n_world||_1 <=
+T * |dot(n_camera, p_camera / p_camera.z)|`. This matters even on a perfectly
+flat grazing surface, where coarse negative samples may never receive weight.
+The finest available level is used when no spacing satisfies both estimates;
+this heuristic does not guarantee support at arbitrarily grazing angles.
+Depth discontinuities and valid silhouettes beside missing depth request fine
+samples. Invalid or unseen patches supply no coarsening evidence. The result
+is a device-resident desired-level array consumed before topology changes.
+Optional `support_coarsening` checks current depth coverage and historical
+sample visibility before supplying sibling support for merges. Neither policy
+changes the common metric truncation distance. Fusion supports
 Classic/Dynamic modes and splits dispatches at the device's workgroup limit.
 
 These storage and fusion APIs are separate from adaptive meshing and room

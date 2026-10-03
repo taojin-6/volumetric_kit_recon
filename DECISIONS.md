@@ -280,6 +280,10 @@ entries relevant to your task; later amendments supersede earlier rules.
   Mesh input binning keeps counts, cursors and occupied bins on the device,
   retains scratch, and reads only validation and bounded dispatch control.
 
+- [**2026-10-02**](#2026-10-02--hierarchical-refinement-respects-observed-projective-band-support-even-on-flat-surfaces) —
+  Hierarchical refinement respects observed projective-band support even on
+  flat surfaces.
+
 ## Decision record
 
 ### 2026-06-21 — Single Vulkan path (MoltenVK on Apple), like gfx.
@@ -8794,6 +8798,42 @@ silently use the uniform codec format.
 contract. The field view and GLSL lookup establish the consumer ABI. It adds
 no adaptive dispatch to existing uniform entry points. Runtime storage,
 fusion, seam extraction, and measured acceptance remain subsequent work.
+
+### 2026-10-02 — Hierarchical refinement respects observed projective-band support even on flat surfaces.
+
+A tangent-plane residual alone is insufficient to choose a coarse TSDF
+spacing. Fusion truncates camera-Z distance, so its usable band measured
+along the surface normal shrinks at grazing incidence. With no weighted
+negative corner, marching cubes cannot extract the surface even when its
+normal is perfectly constant.
+
+A debug-only C++ readback after 400 room0 frames located this failure at
+`x=0.15m, y=2.35m`: the 20mm leaf sample at `z=1.23m` had
+`TSDF=+0.00270193m, weight=15.6001`; the adjacent `z=1.25m` sample had zero
+weight. That latter sample projected into valid depth in 168 frames, but
+all observed camera-Z distances were below the common `-40mm` cutoff
+(range `-88.3074mm` to `-43.0927mm`). The gap was missing field support,
+not a hierarchy-transition extraction failure. The readback was diagnostic
+only and is not part of the online implementation.
+
+The incoming-depth classifier now requires each candidate spacing `h` to
+satisfy both its plane-error estimate and
+`h * ||n_world||_1 <= T * |dot(n_camera, p_camera / p_camera.z)|`.
+The left side bounds a grid cell's normal span; the right side is the
+projective truncation width in that direction. This uses the patch normal
+already computed by the classifier, adds no pass/readback, and also prevents
+coarsening a grazing leaf to a spacing without observed negative support.
+All levels continue to use the same metric `T`. When even the finest level
+cannot satisfy the estimate, the classifier selects that finest level;
+finite resolution and finite observation coverage remain explicit limits.
+
+The GPU regression observes the same analytic planar surface at grazing
+incidence through narrow and wide common bands: a 40mm band requests 5mm
+samples, while a 200mm band allows 20mm samples. The existing frontal and
+slanted-plane cases, silhouette handling, and conservative merge evidence
+remain covered. Room performance and proxy-mesh coverage are separate
+acceptance measurements; this policy does not claim that all planar regions
+can remain coarse.
 
 ## Measured lessons
 

@@ -92,10 +92,18 @@ bool patchLevel(ivec2 pixel, out uint desired, out bool is_smooth) {
   if (!discontinuity) {
     // A smooth patch's departure from its tangent plane is quadratic in
     // length. Choose the coarsest candidate that fits this local estimate.
+    // A flat patch can still lose its negative samples at grazing incidence:
+    // the camera-Z truncation band becomes narrow in the surface-normal
+    // direction. Bound one cell's normal span by that observed band width.
+    // Level zero is the available fallback even when it cannot meet the bound.
+    vec3 world_normal = mat3(cam.cam_to_world) * normal;
+    float normal_span = dot(abs(world_normal), vec3(1.0));
+    float observed_band = pc.root_grid.trunc_dist *
+        abs(dot(normal, center / center.z));
     for (uint level = 1u; level <= pc.max_level; ++level) {
       float spacing = pc.finest_voxel_size * float(1u << level);
       float estimate = residual * spacing * spacing / max(radius2, 1e-12);
-      if (estimate <= pc.surface_error) desired = level;
+      if (estimate <= pc.surface_error && spacing * normal_span <= observed_band) desired = level;
     }
   }
   return true;

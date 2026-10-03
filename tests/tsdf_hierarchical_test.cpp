@@ -314,6 +314,57 @@ int main() {
   CHECK(view_result.ok() && view_result->leaf_count == 1u);
   view = view_result.value();
 
+  // The same perfectly planar world-Z surface needs fine spacing when viewed
+  // nearly tangentially through a narrow projective band. A wider common band
+  // permits coarse spacing; no per-level truncation is introduced.
+  const float grazing_cos = 0.15f;
+  const float grazing_sin = std::sqrt(1.0f - grazing_cos * grazing_cos);
+  auto grazing_camera = camera;
+  grazing_camera.fx = grazing_camera.fy = 256.0f;
+  grazing_camera.max_depth = 3.0f;
+  grazing_camera.cam_to_world[0][0] = grazing_cos;
+  grazing_camera.cam_to_world[0][2] = -grazing_sin;
+  grazing_camera.cam_to_world[2][0] = grazing_sin;
+  grazing_camera.cam_to_world[2][2] = grazing_cos;
+  grazing_camera.cam_to_world[3].x = 0.08f - grazing_sin;
+  grazing_camera.cam_to_world[3].y = 0.08f;
+  grazing_camera.cam_to_world[3].z = 1.01f - grazing_cos;
+  std::vector<float> grazing_depth(32 * 32);
+  for (int y = 0; y < 32; ++y)
+    for (int x = 0; x < 32; ++x) {
+      float ray_x = (float(x) + 0.5f - 16.0f) / 256.0f;
+      grazing_depth[std::size_t(y * 32 + x)] =
+          grazing_cos / (grazing_cos - grazing_sin * ray_x);
+    }
+  const tsdf::FrameInput grazing_frame{
+      {vr::StorageInput(grazing_depth.data()), grazing_camera}, nullptr};
+  for (float band : {0.04f, 0.20f}) {
+    auto grazing_config = config;
+    grazing_config.finest.voxel_size = 0.005f;
+    grazing_config.finest.trunc_dist = band;
+    grazing_config.level_count = 3;
+    auto grazing_grid_result =
+        vol::HierarchicalGrid::create(device, allocator, grazing_config);
+    CHECK(grazing_grid_result.ok());
+    auto grazing_grid = std::move(grazing_grid_result).value();
+    vol::BlockIndex grazing_root{vr::Vec3i(0, 0, 6), 0};
+    CHECK(grazing_grid.allocate_roots(&grazing_root, 1).value() == 0);
+    auto grazing_view = grazing_grid.prepare_leaves();
+    CHECK(grazing_view.ok());
+    auto grazing_requests =
+        integrator.classify(grazing_view.value(), {grazing_frame});
+    CHECK(grazing_requests.ok());
+    auto grazing_leaves = vr_test::read_back<std::uint32_t>(
+        device, allocator, *grazing_view->leaf_indices,
+        grazing_view->leaf_count);
+    auto grazing_desired = vr_test::read_back<std::uint32_t>(
+        device, allocator, *grazing_requests.value(),
+        grazing_view->node_capacity);
+    CHECK(grazing_leaves.ok() && grazing_desired.ok());
+    CHECK(grazing_desired.value()[grazing_leaves.value()[0]] ==
+          (band < 0.1f ? 0u : 2u));
+  }
+
   // Batched distinct camera/depth inputs must exactly match sequential calls.
   // The batch uses device depth for camera two, the sequential path host depth.
   auto batch_grid_result =
