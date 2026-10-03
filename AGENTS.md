@@ -138,10 +138,10 @@ git -C "$recon_root" diff --check
   contracts or broad changes warrant it. CI also covers Debug and sanitizers.
 - For documentation-only changes, check formatting, links, and consistency;
   a build is unnecessary. The hooks can be scoped with `pre-commit run --files`.
-- `VR_BUILD_VIEWER`, `VR_WITH_ORBBEC`, `VR_WITH_FFMPEG`, and `VR_WITH_CUDA`
-  enable optional paths. Orbbec and FFmpeg are installed prerequisites, never
-  fetched by this repository. Distinguish unavailable hardware checks from
-  checks that actually passed.
+- `VR_BUILD_VIEWER`, `VR_WITH_ORBBEC`, `VR_WITH_FFMPEG`, `VR_WITH_CUDA`, and
+  `VR_WITH_ASSIMP` enable optional paths. Orbbec, FFmpeg and Assimp are
+  installed prerequisites, never fetched by this repository. Distinguish
+  unavailable hardware checks from checks that actually passed.
 - For batching/barrier changes, run synchronization validation
   (`VK_KHRONOS_VALIDATION_VALIDATE_SYNC=true`). Measure phases before choosing
   an optimization; follow PERF.md for live rig work and discrete-GPU evidence.

@@ -8699,8 +8699,9 @@ Use Assimp for reusable static mesh parsing, behind a separate optional
 `recon_io_assimp` target. `VR_WITH_ASSIMP` defaults OFF; ON finds an installed
 Assimp CMake package, as the repository does for other compiled optional
 backends. No Assimp source download or change to the CMake 3.21 floor is
-needed. The installed package re-finds Assimp when that backend was built,
-including the private link requirement of a static archive. A cross-compile
+needed. The installed package re-finds the Assimp that backend was built
+against (same major, no older), including the private link requirement of a
+static archive. A cross-compile
 must provide a target-platform package. Existing stb/tinyply pins move from
 the examples to private library build dependencies. stb symbols and settings
 are translation-unit-local; tinyply uses a private namespace, so static
@@ -8710,7 +8711,8 @@ consumers can provide their own independent copies of either backend.
 Assimp decodes the asset and triangulates polygons; our conversion traverses
 the scene and applies every mesh instance's composed node transform. A
 negative determinant reverses indices to preserve orientation. Singular,
-nonfinite and non-affine transforms are refused. Animated, skinned or morphed
+nonfinite and non-affine transforms of mesh instances are refused; nodes
+without meshes are not checked. Animated, skinned or morphed
 assets require an explicitly evaluated static asset and return Unsupported.
 Remaining point/line primitives are refused rather than silently dropped.
 
@@ -8718,7 +8720,9 @@ The loader joins exactly coincident finite positions, including material/UV
 seams. It does not use Assimp's approximate vertex-joining or topology-repair
 passes, and preserves duplicate and degenerate triangles for the consumer's
 audit. It does not impose a target height, rotate to a guessed up direction,
-or claim unknown source coordinates are metres. Rafa2's explicit 1.7 m
+or claim unknown source coordinates are metres. Importer unit and up-axis
+conversions are switched off; Assimp before 5.3 still applies Collada's
+`<unit>`, and 5.4.x converts FBX regardless. Rafa2's explicit 1.7 m
 normalization remains a codec-example policy; adopting this loader there is
 a separate change from this standalone module review.
 

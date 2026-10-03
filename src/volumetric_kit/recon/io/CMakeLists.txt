@@ -90,15 +90,11 @@ if(VR_WITH_ASSIMP)
     recon_io_assimp
     PRIVATE "$<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-fexceptions>"
             "$<$<CXX_COMPILER_ID:MSVC>:/EHsc>")
+  # recon_io carries the public and generated include directories.
   target_link_libraries(
     recon_io_assimp
     PUBLIC recon_io
     PRIVATE assimp::assimp)
-  target_include_directories(
-    recon_io_assimp
-    PUBLIC "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>"
-           "$<BUILD_INTERFACE:${_vr_io_generated_inc}>"
-           "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
   vr_target_warnings(recon_io_assimp)
 
   if(VR_INSTALL)

@@ -784,9 +784,13 @@ if(TARGET recon_io_assimp)
   add_executable(recon_io_mesh_load_test io_mesh_load_test.cpp)
   target_link_libraries(recon_io_mesh_load_test
                         PRIVATE volumetric_kit::recon_io_assimp)
+  # Assimp before 5.3 always applies a Collada file's <unit>.
   target_compile_definitions(
     recon_io_mesh_load_test
-    PRIVATE VR_IO_MESH_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data/io")
+    PRIVATE
+      VR_IO_MESH_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data/io"
+      VR_ASSIMP_SKIPS_COLLADA_UNIT=$<VERSION_GREATER_EQUAL:${assimp_VERSION},5.3>
+  )
   vr_target_warnings(recon_io_mesh_load_test)
   add_test(NAME recon_io_mesh_load COMMAND recon_io_mesh_load_test)
 endif()

@@ -106,8 +106,15 @@ int basic_formats() {
   const std::vector<Point> expected_positions{{1, 2, 3}, {5, 2, 3}, {1, 8, 3}};
   const auto expected_triangles =
       canonical({Triangle{{{1, 2, 3}, {5, 2, 3}, {1, 8, 3}}}});
-  for (const char* filename :
-       {"triangle.obj", "triangle.ply", "triangle.gltf"}) {
+  // A zero-scaled helper node without meshes must not refuse the asset.
+  std::vector<const char*> filenames{"triangle.obj", "triangle.ply",
+                                     "triangle.gltf",
+                                     "hidden_singular_node.gltf"};
+#if VR_ASSIMP_SKIPS_COLLADA_UNIT
+  // Neither its Z-up axis nor its centimetre unit is applied.
+  filenames.push_back("triangle_zup_cm.dae");
+#endif
+  for (const char* filename : filenames) {
     const auto result = load(filename);
     CHECK(result.ok());
     const auto& mesh = result.value();

@@ -24,6 +24,10 @@ is required at test time.
 - `animated.gltf`, `morph.gltf` and `skinned.gltf` use valid minimal animation,
   morph-target and skin structures. Static-only loading must report
   `Unsupported`, rather than silently returning a different pose.
+- `hidden_singular_node.gltf` is `triangle.gltf` plus a mesh-less node scaled
+  to zero. Only transforms that place geometry are validated, so it loads.
+- `triangle_zup_cm.dae` is the same triangle in a Z-up, centimetre Collada
+  file. The importer's axis and unit conversions stay off (unit: Assimp 5.3+).
 - `singular_transform.gltf` uses zero Y scale; `projective_transform.gltf`
   has a non-affine matrix. `overflow_transform.gltf` combines finite local
   translations that exceed the output float range. All must be refused.

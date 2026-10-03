@@ -589,10 +589,13 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "no readback pixels\n");
     return 1;
   }
+  // gfx sizes the readback buffer to the target's extent at the RGBA8 texel
+  // size chosen above; it exposes no byte count of its own.
+  const VkExtent2D extent = target.extent();
   const vr::Status written = vr::io::write_png_rgba8(
-      opt.out, pixels, static_cast<std::size_t>(opt.width) * opt.height * 4,
-      static_cast<std::uint32_t>(opt.width),
-      static_cast<std::uint32_t>(opt.height));
+      opt.out, pixels,
+      static_cast<std::size_t>(extent.width) * extent.height * 4, extent.width,
+      extent.height);
   if (!written) {
     std::fprintf(stderr, "write PNG: %s\n", written.message().c_str());
     return 1;

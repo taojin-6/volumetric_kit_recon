@@ -1294,10 +1294,13 @@ linearization or profile conversion; the capture adapter declares the input
 encoding. `io::load_depth_metres` requires a genuine 16-bit single-channel
 PNG and a finite positive units-per-metre divisor. Zero samples stay zero.
 Expected dimensions are explicit so a camera cannot silently use different
-intrinsics. The PNG writer takes already-encoded RGBA8; PLY export converts
-linear mesh colors to canonical sRGB bytes and preserves triangle indices.
-Public functions validate their input and translate backend exceptions into
-`Status`/`Result`; private third-party types never appear in installed headers.
+intrinsics. The PNG writer takes already-encoded RGBA8 and opens its output
+only after encoding succeeds; PLY export converts linear mesh colors to
+canonical sRGB bytes (clamped, NaN as 0) and preserves triangle indices.
+Errors name the file and backend reason. Public functions validate their input
+and translate backend exceptions that reach them into `Status`/`Result`
+(tinyply's writer is `noexcept`); private third-party types never appear in
+installed headers.
 
 `recon_io_assimp` adds `io::load_mesh` and its owned `TriangleMesh` position /
 index container. Assimp handles format decoding and triangulation. Recon
@@ -1306,11 +1309,14 @@ winding when the determinant is negative. Exactly coincident positions join
 across UV/material seams, with no tolerance-based merging. This is geometry
 import, not topology repair: degenerate and duplicate triangles are retained,
 and manifold/sign checks belong to the consumer. Non-triangle primitives,
-animation, skinning, morph targets and invalid transforms are refused.
+animation, skinning, morph targets and invalid transforms on mesh instances
+are refused; nodes without meshes are not checked.
 
 Mesh coordinates retain the imported scene's scale; neither a metre unit nor
 a target height is guessed. No Assimp normalization or handedness flags are
-enabled. This is a host boundary for file input and output, separate from
+enabled, and importer unit/up-axis conversions are switched off where the
+installed Assimp allows: before 5.3 it still applies Collada's `<unit>`, and
+5.4.x converts FBX regardless. This is a host boundary for file input and output, separate from
 GPU-resident reconstruction. The default build has no Assimp dependency;
 `VR_WITH_ASSIMP=ON` finds an installed package and exports a separate target.
 The image and PLY backends use the existing pinned stb and tinyply sources,
