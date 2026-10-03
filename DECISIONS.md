@@ -272,6 +272,9 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-03**](#2026-10-03--garbage-collection-deletes-from-the-device-stale-list) —
   Garbage collection passes its device coordinate list directly to deletion,
   retaining host readback only for control counts.
+- [**2026-10-02**](#hierarchical-field-contract) — Dyadic block ownership and
+  a separate cell-centered field preserve uniform-grid sampling and make
+  adaptive boundaries explicit.
 
 - [**2026-10-02**](#2026-10-02--mesh-input-binning-keeps-counts-cursors-and-occupied-bins-on-the-device-retains-scratch-and-reads-only-validation-and-bounded-dispatch-control) —
   Mesh input binning keeps counts, cursors and occupied bins on the device,
@@ -8742,6 +8745,55 @@ These checks were repeated after the rebase, including all nine full and
 three short room replays, with the same geometric results.
 No adaptive reconstruction, quality improvement, memory saving or
 discrete-GPU performance was measured by this change.
+
+<a id="hierarchical-field-contract"></a>
+
+### 2026-10-02 — A hierarchical field has explicit dyadic cell ownership and cell-centered samples; the uniform node-sampled path stays independent.
+
+**Motivation.** A room contains broad planar surfaces and small features that
+need different spatial sampling. The requested implementation must adapt
+online. The agreed provisional gates are under 5% overhead with adaptivity
+disabled and adaptive online reconstruction within 10% of the existing 1 cm
+pipeline while adding local detail. These are acceptance targets, not measured
+claims. Room0 is the repeatable fixture; static room replay does not establish
+moving-body quality or live multi-camera performance.
+
+**Contract.** Keep 8-cubed payloads and metric projective distances with a
+common physical truncation band. Level zero is finest; level l doubles the
+spacing l times. Blocks own half-open dyadic cell regions. Their scalar
+samples sit at cell centers. Existing `VoxelBlockGrid` retains its node
+sampling and independent kernels; creating several uniform grids does not
+establish hierarchical ownership.
+
+The initial device layout is a coarse root hash followed by an octree forest
+with contiguous eight-child groups. Root capacity is fixed because root hash
+slots and child nodes share one index space; allowing root growth without
+indirection would alias child IDs. Only leaves are fused and meshed. Parent
+payloads may remain for transfer and must be counted in memory figures.
+The borrowed field view has generation checks, byte-identical host/GLSL node
+layouts, device-resident leaves and attributes, and a bounded integer locator.
+
+**Why cell centers.** They align the nested cell partition used by GPU dual
+mesh extraction, following [Wald's AMR method](https://arxiv.org/abs/2004.08475).
+That method connects actual sample locations across coarse/fine boundaries;
+it avoids requiring independently fused node grids to produce identical
+coincident boundary values. This selects a representation contract, not a
+claim that seam correctness or performance has already been validated.
+
+**Review sequence.** Separate measurement infrastructure, hierarchy ownership
+and field ABI, GPU storage/split operations, shared-math fusion, adaptive
+meshing, and online policy/room comparison into reviewable changes. Split
+publication must initialize all children before exposing them, with bounded
+event and memory budgets. Coarse initialization cannot recreate old detail;
+new observations must correct transferred values. Coarsening needs evidence
+and hysteresis. Topology edits initially require full extraction; adaptive
+incremental reuse and codec transport need their own contracts and must not
+silently use the uniform codec format.
+
+**This change.** Host ownership/overflow tests establish the coordinate
+contract. The field view and GLSL lookup establish the consumer ABI. It adds
+no adaptive dispatch to existing uniform entry points. Runtime storage,
+fusion, seam extraction, and measured acceptance remain subsequent work.
 
 ## Measured lessons
 

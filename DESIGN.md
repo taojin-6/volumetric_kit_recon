@@ -828,6 +828,29 @@ allocator still asks for stays, and `rig_viewer` runs it every
 `--free-after` sets; `mesh`'s incremental extract re-meshes what changed
 since the tick it last meshed at.
 
+#### Hierarchical field foundation
+
+`HierarchyLayout` defines level-qualified block addresses, dyadic spacing,
+and half-open physical block ownership. It is distinct from the uniform
+grid's nearest-node `world_to_block`: parent/child regions must partition
+space exactly, including at negative coordinates. Every payload remains
+8 cubed; the physical truncation distance is common across levels.
+
+`HierarchicalFieldView` is the borrowed device contract for a separate,
+cell-centered adaptive field. Its coarse root hash points into a forest of
+24-byte scalar-layout `HierarchicalNode`s; child groups contain eight nodes
+and only leaves appear in the compacted device list. Distances and weights
+remain device-local SoA arrays, indexed by each node's sample base. A
+topology generation invalidates borrowed views after mutation. The first
+device contract supports at most four levels and a fixed root capacity.
+The uniform `VoxelBlockGrid` and its node sampling remain unchanged.
+
+This foundation defines geometry, borrowing, and shader lookup, not a
+working adaptive capture path by itself. Storage mutation, online fusion,
+dual-cell meshing, and performance acceptance are separate changes; their
+status belongs to the implementation entries as each lands. See the
+2026-10-02 hierarchy decision and PERF.md's H2 row.
+
 ### tsdf
 
 `TsdfIntegrator` fuses a posed depth frame into a grid's
