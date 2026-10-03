@@ -74,17 +74,16 @@ shared uint block_base;
 shared uint block_cursor;
 shared HierarchicalNode neighbor_nodes[27];
 shared uint neighbor_valid[27];
+shared float sign_tile[1000];
+shared uint tile_signs;
 
 bool coordLess(ivec3 a, ivec3 b) {
   return a.z != b.z ? a.z < b.z : (a.y != b.y ? a.y < b.y : a.x < b.x);
 }
 
-bool sampleStorage(HierarchicalNode owner, ivec3 corner, ivec3 q, int c,
-                   out HierarchicalNode node, out ivec3 query, out uint index) {
-  ivec3 shift = mcCornerShift(c);
-  ivec3 local = corner + shift - ivec3(1);
+bool sampleCellStorage(HierarchicalNode owner, ivec3 local, ivec3 query,
+                       out HierarchicalNode node, out uint index) {
   node = owner;
-  query = q + shift - ivec3(1);
   if (any(lessThan(local, ivec3(0))) || any(greaterThanEqual(local, ivec3(8)))) {
     ivec3 region = ivec3(lessThan(local, ivec3(0))) * -1 + ivec3(greaterThanEqual(local, ivec3(8)));
     int ni = region.x + 1 + 3 * (region.y + 1 + 3 * (region.z + 1));
@@ -98,21 +97,24 @@ bool sampleStorage(HierarchicalNode owner, ivec3 corner, ivec3 q, int c,
   return true;
 }
 
+bool sampleStorage(HierarchicalNode owner, ivec3 corner, ivec3 q, int c,
+                   out HierarchicalNode node, out ivec3 query, out uint index) {
+  ivec3 shift = mcCornerShift(c);
+  ivec3 local = corner + shift - ivec3(1);
+  query = q + shift - ivec3(1);
+  return sampleCellStorage(owner, local, query, node, index);
+}
+
 // Most candidates do not cross the surface. Reject those using only signs and
 // observation weights, before building private sample arrays or interpolating
 // geometry. Active cells still use the exact coincident/area filter below.
-bool cellSigns(HierarchicalNode owner, uint candidate, out int code) {
+bool cellSigns(uint candidate, out int code) {
   code = 0;
   ivec3 corner = ivec3(int(candidate % 9u), int((candidate / 9u) % 9u), int(candidate / 81u));
-  ivec3 q = (owner.coord * 8 + corner) * (1 << int(owner.level));
   for (int c = 0; c < 8; ++c) {
-    HierarchicalNode node;
-    ivec3 query;
-    uint si;
-    if (!sampleStorage(owner, corner, q, c, node, query, si)) return false;
-    float w = weights[si];
-    float d = tsdf[si];
-    if (!(w >= pc.weight_threshold) || isnan(d) || isinf(d)) return false;
+    ivec3 local = corner + mcCornerShift(c);
+    float d = sign_tile[local.x + 10 * (local.y + 10 * local.z)];
+    if (isnan(d)) return false;
     if (d < pc.iso) code |= 1 << c;
   }
   return code != 0 && code != 255;
@@ -226,6 +228,7 @@ void main() {
     if (tid == 0u) atomicOr(rejected, 1u);
     return;
   }
+  if (tid == 0u) tile_signs = 0u;
   // Every adjacent region is aligned at the owner's level. It is covered by
   // one same/coarser leaf, or its level node is internal and all of its leaves
   // are finer, in which case this owner cannot emit an incident dual cell.
@@ -255,6 +258,29 @@ void main() {
     }
   }
   barrier();
+  // One shared SDF value for every owner-level cell in the [-1,8]^3 halo.
+  // Accepted neighbors are same/coarser leaves, so querying the lower corner
+  // of an owner-level cell addresses the same sample as q + shift - 1 in the
+  // full gather. NaN represents absent, non-owned or unobserved samples.
+  uint lane_signs = 0u;
+  for (uint ti = tid; ti < 1000u; ti += 256u) {
+    ivec3 local = ivec3(int(ti % 10u), int((ti / 10u) % 10u), int(ti / 100u)) - ivec3(1);
+    ivec3 query = (owner.coord * 8 + local) * (1 << int(owner.level));
+    HierarchicalNode node;
+    uint si;
+    float d = uintBitsToFloat(0x7fc00000u);
+    if (sampleCellStorage(owner, local, query, node, si)) {
+      float value = tsdf[si];
+      if (weights[si] >= pc.weight_threshold && !isnan(value) && !isinf(value)) {
+        d = value;
+        lane_signs |= d < pc.iso ? 1u : 2u;
+      }
+    }
+    sign_tile[ti] = d;
+  }
+  if (lane_signs != 0u) atomicOr(tile_signs, lane_signs);
+  barrier();
+  if (tile_signs != 3u) return;
   uint masks[3];
   uint count = 0u;
   for (uint k = 0u; k < 3u; ++k) {
@@ -262,7 +288,7 @@ void main() {
     uint candidate = tid + k * 256u;
     if (candidate >= 729u) continue;
     int code;
-    if (!cellSigns(owner, candidate, code)) continue;
+    if (!cellSigns(candidate, code)) continue;
     if (!gather(owner, candidate, false, code)) continue;
     int n = mcCellTriangleCount(code);
     for (int t = 0; t < n; ++t) {
