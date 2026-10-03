@@ -90,6 +90,16 @@ target_link_libraries(recon_volume_coords_test
 vr_target_warnings(recon_volume_coords_test)
 add_test(NAME recon_volume_coords COMMAND recon_volume_coords_test)
 
+# Dyadic block ownership and parent/child addressing, including negative
+# coordinates and overflow. Host-only; no adaptive GPU path is implied.
+add_executable(recon_volume_hierarchy_layout_test
+               volume_hierarchy_layout_test.cpp)
+target_link_libraries(recon_volume_hierarchy_layout_test
+                      PRIVATE volumetric_kit::recon_volume)
+vr_target_warnings(recon_volume_hierarchy_layout_test)
+add_test(NAME recon_volume_hierarchy_layout
+         COMMAND recon_volume_hierarchy_layout_test)
+
 add_executable(recon_volume_hash_test volume_hash_test.cpp)
 target_link_libraries(recon_volume_hash_test
                       PRIVATE volumetric_kit::recon_volume)
