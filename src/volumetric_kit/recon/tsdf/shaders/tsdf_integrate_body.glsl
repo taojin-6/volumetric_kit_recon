@@ -112,7 +112,9 @@ void stamp_changed(uint block_slot) {
 // "nearest" (containing) pixel is floor(u), floor(v), i.e. int(u), int(v) given
 // the caller's u, v >= 0. Falls back to that sample when a bilinear tap is out
 // of bounds, invalid (non-finite or <= 0), or the taps straddle a depth discontinuity
-// (max - min > trunc_dist) that would blend across a surface edge. This
+// (max - min above the depth-jump limit) that would blend across a surface
+// edge. Uniform fusion uses trunc_dist; adaptive fusion configures this
+// sensor criterion independently of its physical band. This
 // texture-centred convention -- taps *and* fallback -- is a deliberate recon
 // choice (DECISIONS.md, the depth-sampling decision); it is self-consistent,
 // unlike the prior engine's sampleDepthBilinear, which rounded the fallback to
@@ -145,7 +147,11 @@ float sample_depth(float u, float v) {
   }
   float lo = min(min(d00, d10), min(d01, d11));
   float hi = max(max(d00, d10), max(d01, d11));
+#ifdef VR_HIERARCHICAL
+  if (lo <= 0.0 || (hi - lo) > pc.depth_discontinuity) {
+#else
   if (lo <= 0.0 || (hi - lo) > pc.grid.trunc_dist) {
+#endif
     return depth[nv * w + nu];  // an invalid tap, or a depth discontinuity across the taps
   }
   float fx = su - float(x0);

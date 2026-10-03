@@ -365,6 +365,87 @@ int main() {
           (band < 0.1f ? 0u : 2u));
   }
 
+  // Widening the field band must not mix across a sensor depth edge. At the
+  // probed sample z=1.03m, u=v=1: 60mm-separated bilinear taps would create a
+  // false zero, while the containing pixel's plane is correctly +30mm away.
+  auto edge_camera = camera;
+  edge_camera.fx = edge_camera.fy = 1.0f;
+  edge_camera.cx = edge_camera.cy = 1.0f - 0.01f / 1.03f;
+  edge_camera.width = edge_camera.height = 2;
+  const std::vector<float> edge_depth{1.0f, 1.06f, 1.0f, 1.06f};
+  const tsdf::FrameInput edge_frame{
+      {vr::StorageInput(edge_depth.data()), edge_camera}, nullptr};
+  for (int variant = 0; variant < 3; ++variant) {
+    auto edge_config = config;
+    edge_config.finest.trunc_dist = variant == 0 ? 0.04f : 0.08f;
+    edge_config.level_count = 1;
+    auto edge_grid_result =
+        vol::HierarchicalGrid::create(device, allocator, edge_config);
+    CHECK(edge_grid_result.ok());
+    auto edge_grid = std::move(edge_grid_result).value();
+    vol::BlockIndex edge_root{vr::Vec3i(0, 0, 6), 0};
+    CHECK(edge_grid.allocate_roots(&edge_root, 1).value() == 0);
+    auto edge_view = edge_grid.prepare_leaves();
+    CHECK(edge_view.ok());
+    auto edge_integrator_result = tsdf::HierarchicalTsdfIntegrator::create(
+        device, allocator, variant == 2 ? 0.08f : 0.04f);
+    CHECK(edge_integrator_result.ok());
+    auto edge_integrator = std::move(edge_integrator_result).value();
+    CHECK(edge_integrator.integrate(edge_view.value(), {edge_frame}).ok());
+    auto edge_nodes = vr_test::read_back<vol::HierarchicalNode>(
+        device, allocator, *edge_view->nodes, edge_view->node_capacity);
+    auto edge_leaves = vr_test::read_back<std::uint32_t>(
+        device, allocator, *edge_view->leaf_indices, edge_view->leaf_count);
+    auto edge_values = vr_test::read_back<float>(
+        device, allocator, *edge_view->tsdf, edge_view->node_capacity * 512u);
+    CHECK(edge_nodes.ok() && edge_leaves.ok() && edge_values.ok());
+    const auto sample = edge_nodes.value()[edge_leaves.value()[0]].ptr + 3 * 64;
+    const float expected = variant == 2 ? 0.0f : 0.03f;
+    CHECK(std::abs(edge_values.value()[std::size_t(sample)] - expected) <
+          2e-6f);
+  }
+  // Refinement uses the same independently configured sensor criterion.
+  auto jump_config = config;
+  jump_config.finest.voxel_size = 0.01f;
+  jump_config.finest.trunc_dist = 0.08f;
+  auto jump_grid_result =
+      vol::HierarchicalGrid::create(device, allocator, jump_config);
+  CHECK(jump_grid_result.ok());
+  auto jump_grid = std::move(jump_grid_result).value();
+  vol::BlockIndex jump_root{vr::Vec3i(0, 0, 6), 0};
+  CHECK(jump_grid.allocate_roots(&jump_root, 1).value() == 0);
+  auto jump_view = jump_grid.prepare_leaves();
+  CHECK(jump_view.ok());
+  auto jump_leaves = vr_test::read_back<std::uint32_t>(
+      device, allocator, *jump_view->leaf_indices, jump_view->leaf_count);
+  CHECK(jump_leaves.ok());
+  std::vector<float> jump_depth(32 * 32, 1.0f);
+  for (int y = 0; y < 32; ++y)
+    for (int x = 16; x < 32; ++x) jump_depth[std::size_t(y * 32 + x)] = 1.06f;
+  const tsdf::FrameInput jump_frame{
+      {vr::StorageInput(jump_depth.data()), camera}, nullptr};
+  for (float jump : {0.04f, 0.08f}) {
+    tsdf::HierarchicalRefinementParams jump_params;
+    jump_params.depth_discontinuity = jump;
+    auto jump_requests =
+        integrator.classify(jump_view.value(), {jump_frame}, jump_params);
+    CHECK(jump_requests.ok());
+    auto jump_values = vr_test::read_back<std::uint32_t>(
+        device, allocator, *jump_requests.value(), jump_view->node_capacity);
+    CHECK(jump_values.ok());
+    CHECK(jump_values.value()[jump_leaves.value()[0]] ==
+          (jump < 0.06f ? 0u : 1u));
+  }
+  for (float invalid_jump :
+       {0.0f, -1.0f, std::numeric_limits<float>::infinity(),
+        std::numeric_limits<float>::quiet_NaN()}) {
+    CHECK(!tsdf::HierarchicalTsdfIntegrator::create(device, allocator,
+                                                    invalid_jump));
+    tsdf::HierarchicalRefinementParams invalid_params;
+    invalid_params.depth_discontinuity = invalid_jump;
+    CHECK(!integrator.classify(view, frames, invalid_params));
+  }
+
   // Batched distinct camera/depth inputs must exactly match sequential calls.
   // The batch uses device depth for camera two, the sequential path host depth.
   auto batch_grid_result =

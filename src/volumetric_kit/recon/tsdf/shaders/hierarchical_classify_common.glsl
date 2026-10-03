@@ -30,6 +30,7 @@ layout(push_constant, scalar) uniform Push {
   uint columns;
   uint sample_count;
   uint first_leaf;
+  float depth_discontinuity;
 } pc;
 
 bool insideImage(ivec2 pixel) {
@@ -70,7 +71,7 @@ bool patchLevel(ivec2 pixel, out uint desired, out bool is_smooth) {
       return true;
     }
     discontinuity = discontinuity ||
-        abs(points[i].z - center.z) > pc.root_grid.trunc_dist;
+        abs(points[i].z - center.z) > pc.depth_discontinuity;
   }
   vec3 normal = cross(points[1] - points[0], points[3] - points[2]);
   float magnitude = length(normal);

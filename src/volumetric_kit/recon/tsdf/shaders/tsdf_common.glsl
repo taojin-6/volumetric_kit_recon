@@ -112,5 +112,6 @@ layout(push_constant, scalar) uniform PushConstants {
   uint coverage_in_alpha;  // 1 = a colour word with a zero high byte is no colour
 #ifdef VR_HIERARCHICAL
   uint first_leaf;
+  float depth_discontinuity;
 #endif
 } pc;

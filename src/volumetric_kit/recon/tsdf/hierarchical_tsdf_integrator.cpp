@@ -49,8 +49,9 @@ struct IntegratePush {
   std::uint32_t tick;
   std::uint32_t coverage_in_alpha;
   std::uint32_t first_leaf;
+  float depth_discontinuity;
 };
-static_assert(sizeof(IntegratePush) == 64, "TSDF scalar push ABI");
+static_assert(sizeof(IntegratePush) == 68, "TSDF scalar push ABI");
 static_assert(offsetof(IntegratePush, coverage_in_alpha) == 56,
               "TSDF scalar push ABI");
 
@@ -66,10 +67,16 @@ struct ClassifyPush {
   std::uint32_t columns;
   std::uint32_t sample_count;
   std::uint32_t first_leaf;
+  float depth_discontinuity;
 };
-static_assert(sizeof(ClassifyPush) == 72, "classify scalar push ABI");
+static_assert(sizeof(ClassifyPush) == 76, "classify scalar push ABI");
 static_assert(offsetof(ClassifyPush, sample_count) == 64,
               "classify scalar push ABI");
+
+static_assert(offsetof(IntegratePush, depth_discontinuity) == 64,
+              "TSDF depth threshold ABI");
+static_assert(offsetof(ClassifyPush, depth_discontinuity) == 72,
+              "classify depth threshold ABI");
 
 StorageInput color_input(const ColorFrame& color) {
   return color.buffer != nullptr ? StorageInput(*color.buffer)
@@ -187,6 +194,7 @@ struct HierarchicalTsdfIntegrator::Impl {
   GpuTimer timer;
   VkDeviceSize max_range = 0;
   std::uint32_t max_groups = 0;
+  float depth_discontinuity = 0.04f;
 };
 
 HierarchicalTsdfIntegrator::HierarchicalTsdfIntegrator(
@@ -206,14 +214,19 @@ bool HierarchicalTsdfIntegrator::valid() const noexcept {
 }
 
 Result<HierarchicalTsdfIntegrator> HierarchicalTsdfIntegrator::create(
-    Device& device, Allocator& allocator) {
+    Device& device, Allocator& allocator, float depth_discontinuity) {
   return allocation_boundary([&]() -> Result<HierarchicalTsdfIntegrator> {
     if (device.handle() == VK_NULL_HANDLE ||
         device.physical_device() == VK_NULL_HANDLE || !allocator.valid()) {
       return Status::invalid_argument(
           "hierarchical TSDF: invalid device or allocator");
     }
+    if (!std::isfinite(depth_discontinuity) || !(depth_discontinuity > 0)) {
+      return Status::invalid_argument(
+          "hierarchical TSDF: invalid depth discontinuity");
+    }
     auto p = std::make_unique<Impl>();
+    p->depth_discontinuity = depth_discontinuity;
     p->device = &device;
     p->allocator = &allocator;
     VkPushConstantRange integrate_push{};
@@ -329,7 +342,8 @@ Status HierarchicalTsdfIntegrator::integrate(
           field.color != nullptr ? 1u : 0u,
           0u,
           frame.color != nullptr && frame.color->coverage_in_alpha ? 1u : 0u,
-          0u};
+          0u,
+          p.depth_discontinuity};
       while (push.first_leaf < field.leaf_count) {
         push.count = std::min(chunk_leaves, field.leaf_count - push.first_leaf);
         VR_TRY(batch.dispatch(p.integrate, set, &push, sizeof(push),
@@ -355,7 +369,9 @@ Result<const Buffer*> HierarchicalTsdfIntegrator::classify(
     if (!std::isfinite(params.surface_error) || !(params.surface_error > 0) ||
         !std::isfinite(params.noise_floor) || params.noise_floor < 0 ||
         params.pixel_stride == 0 || params.pixel_stride > 64 ||
-        params.patch_radius == 0 || params.patch_radius > 64) {
+        params.patch_radius == 0 || params.patch_radius > 64 ||
+        !std::isfinite(params.depth_discontinuity) ||
+        !(params.depth_discontinuity > 0)) {
       return Status::invalid_argument(
           "hierarchical TSDF: invalid refinement controls");
     }
@@ -428,7 +444,8 @@ Result<const Buffer*> HierarchicalTsdfIntegrator::classify(
                               params.patch_radius,
                               columns,
                               columns * rows,
-                              0u};
+                              0u,
+                              params.depth_discontinuity};
       VR_TRY(batch.dispatch(p.classify, set, &push, sizeof(push),
                             group_count(push.sample_count, 256), p.max_groups,
                             &stage));
@@ -461,7 +478,8 @@ Result<const Buffer*> HierarchicalTsdfIntegrator::classify(
                           params.patch_radius,
                           0u,
                           field.leaf_count,
-                          0u};
+                          0u,
+                          params.depth_discontinuity};
         while (push.first_leaf < field.leaf_count) {
           const auto count =
               std::min(p.max_groups, field.leaf_count - push.first_leaf);

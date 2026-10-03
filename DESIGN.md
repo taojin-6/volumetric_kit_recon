@@ -875,6 +875,11 @@ Optional `support_coarsening` checks current depth coverage and historical
 sample visibility before supplying sibling support for merges. Neither policy
 changes the common metric truncation distance. Fusion supports
 Classic/Dynamic modes and splits dispatches at the device's workgroup limit.
+Adaptive bilinear sampling and patch classification use an independent,
+positive finite `depth_discontinuity` (default 40mm); widening the field's
+common `T` therefore does not permit mixing across larger sensor depth jumps.
+Configure the integrator and refinement parameters consistently. The uniform
+path continues to use its existing truncation distance for depth-edge rejection.
 
 These storage and fusion APIs are separate from adaptive meshing and room
 performance acceptance. Uniform marching cubes and the uniform codec cannot

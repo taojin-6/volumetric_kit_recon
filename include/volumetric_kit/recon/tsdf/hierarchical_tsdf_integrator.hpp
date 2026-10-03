@@ -38,14 +38,20 @@ struct HierarchicalRefinementParams {
   /// veto; this pass never refines band or free-space leaves. Off by default
   /// because scanning each refined leaf adds work when merges are not used.
   bool support_coarsening = false;
+  /// Positive finite camera-depth jump in metres used to identify a patch
+  /// discontinuity. Independent of the field's physical truncation band;
+  /// widening that band does not make sensor depth edges appear smooth.
+  float depth_discontinuity = 0.04f;
 };
 
 /// @brief Fuses cell-centered hierarchical leaves without changing uniform
 /// fusion.
 ///
-/// Uses the same projective distance, depth sampling, color convention, and
-/// integration weights as TsdfIntegrator. Only sample placement and addressing
-/// differ. Frames are dispatched in order in one CommandBatch. All field and
+/// Uses the same projective distance, color convention, and integration
+/// weights as TsdfIntegrator. Adaptive sample placement/addressing differs,
+/// and its bilinear depth sampling has an independent depth-jump threshold:
+/// widening the field band does not blend across sensor depth discontinuities.
+/// Frames are dispatched in order in one CommandBatch. All field and
 /// refinement buffers stay on the device; no voxel readback is performed.
 /// Calls must be serialized with the grid and its other consumers. Device and
 /// allocator passed to create must outlive this object.
@@ -54,10 +60,14 @@ class VR_TSDF_API HierarchicalTsdfIntegrator {
   /// @brief Build fusion and refinement pipelines.
   /// @param device Compute device that outlives this integrator.
   /// @param allocator Allocator that outlives this integrator.
-  /// @return A live integrator, invalid_argument for empty device/allocator,
+  /// @param depth_discontinuity Positive finite camera-depth jump in metres
+  ///        above which bilinear taps fall back to the nearest depth pixel.
+  ///        Independent of the field truncation distance; default 40mm.
+  /// @return A live integrator, invalid_argument for empty device/allocator or
+  ///         invalid depth_discontinuity,
   ///         or a backend/allocation error.
-  static Result<HierarchicalTsdfIntegrator> create(Device& device,
-                                                   Allocator& allocator);
+  static Result<HierarchicalTsdfIntegrator> create(
+      Device& device, Allocator& allocator, float depth_discontinuity = 0.04f);
 
   HierarchicalTsdfIntegrator() noexcept;
   ~HierarchicalTsdfIntegrator();

@@ -8835,6 +8835,18 @@ remain covered. Room performance and proxy-mesh coverage are separate
 acceptance measurements; this policy does not claim that all planar regions
 can remain coarse.
 
+**Adaptive sensor depth edges remain independent of the field band.**
+Widening the common projective band also widened the inherited bilinear
+sample rejection threshold, permitting interpolation across 40–80mm depth
+jumps when `T=80mm`. Adaptive integration now takes a positive finite
+`depth_discontinuity` at creation (default 40mm); the incoming patch classifier
+has the same independent parameter. This changes neither per-level `T` nor
+uniform fusion's threshold or shader. At an analytic 60mm depth jump, the
+regression verifies that `T=40mm` and `T=80mm` with a 40mm sensor limit both
+produce the nearest plane's `+30mm` TSDF; an explicitly requested 80mm sensor
+limit instead produces the blended zero. The wider band's room quality must
+still be measured; this test isolates depth-edge sampling behavior.
+
 ## Measured lessons
 
 Not decisions, but the measurements that overturned an assumption about
