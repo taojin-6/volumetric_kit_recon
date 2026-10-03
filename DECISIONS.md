@@ -262,6 +262,10 @@ entries relevant to your task; later amendments supersede earlier rules.
   invalid depth taps, and zero-near visibility; zero holes never occlude a
   colour sight line.
 
+- [**2026-10-03**](#2026-10-03--garbage-collection-deletes-from-the-device-stale-list) —
+  Garbage collection passes its device coordinate list directly to deletion,
+  retaining host readback only for control counts.
+
 ## Decision record
 
 ### 2026-06-21 — Single Vulkan path (MoltenVK on Apple), like gfx.
@@ -8449,6 +8453,36 @@ The compatibility targets remain the distro FFmpeg packages in CI's Ubuntu
 22.04, 24.04 and 26.04 jobs; no package upgrade is required. Local reproductions
 of the converter and JPEG tests pass with FFmpeg 4.4.6, 6.1.1 and 9.0.2,
 without relaxing numerical tolerances.
+
+### 2026-10-03 — Garbage collection deletes from the device stale list.
+
+The 2026-10-01 block-stamp decision downloaded the stale list after zeroing
+its attributes, then uploaded the same coordinates for `VoxelHashMap::remove`.
+The new `remove(const Buffer&, count, ...)` overload binds that list where the
+GPU produced it. Both overloads share the same input validation, topology
+epoch invalidation, per-entry completion flags, and retry/failure protocol.
+The map still does not clear attributes itself: the grid completes their
+zeroing before it gives the map the device list.
+
+For S stale blocks this removes 16*S bytes of download, 16*S bytes of upload,
+the host coordinate vector, and the temporary device coordinate allocation.
+The small stale count and deletion failure/heap counters are still read back;
+the existing synchronous submit boundaries remain. This is a transfer-volume
+reduction, not a claimed latency improvement without measurement.
+
+Regression coverage exercises device-list deletion with duplicate and absent
+coordinates, a live trailing coordinate beyond the supplied count, repeated
+deletion, heap reuse, cached-list invalidation, and invalid buffer sizes/usage.
+The contention fixture alternates host and device inputs. Repeated garbage
+collection grows then reuses the stale list with a shorter live prefix, while
+the existing stamp test checks zeroed attributes and preservation of observed
+or recently requested blocks.
+
+Release builds with warnings as errors pass all 44 tests on both the M5 Max
+and RTX 4090. The six volume allocation, deletion, resize, and block-stamp
+tests also pass with the Khronos layer and synchronization validation forced
+on both devices. These checks validate correctness and synchronization; no
+garbage-collection latency comparison was made.
 
 ## Measured lessons
 

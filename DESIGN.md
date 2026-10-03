@@ -762,6 +762,10 @@ and `remove` before any index is freed, `remove` by a kernel that finds
 each coord's block itself, so its cost is the count's, not the grid's),
 `resize` copies there, a call's
 inputs are uploaded in its first round, and a round reads back its counts.
+The map's device-buffer `remove` overload binds a producer's coordinate list
+directly. Garbage collection uses it after zeroing the listed attributes, so
+the stale-block list stays on the GPU through deletion; only the stale and
+retry counts reach the host.
 A compaction still reads its list back, in the count's own submit while the
 set stays within a quarter past its last count (the 2026-09-28 residency
 decision), except `compact_active_blocks_on_device`'s: its
