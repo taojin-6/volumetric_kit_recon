@@ -274,7 +274,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   retaining host readback only for control counts.
 - [**2026-10-02**](#hierarchical-field-contract) — Dyadic block ownership and
   a separate cell-centered field preserve uniform-grid sampling and make
-  adaptive boundaries explicit.
+  adaptive boundaries explicit; acceptance requires every-frame extraction,
+  local quality evidence and bounded disabled/adaptive overhead.
 
 - [**2026-10-02**](#2026-10-02--mesh-input-binning-keeps-counts-cursors-and-occupied-bins-on-the-device-retains-scratch-and-reads-only-validation-and-bounded-dispatch-control) —
   Mesh input binning keeps counts, cursors and occupied bins on the device,
@@ -8756,11 +8757,14 @@ discrete-GPU performance was measured by this change.
 
 **Motivation.** A room contains broad planar surfaces and small features that
 need different spatial sampling. The requested implementation must adapt
-online. The agreed provisional gates are under 5% overhead with adaptivity
+online. The agreed acceptance gates are under 5% overhead with adaptivity
 disabled and adaptive online reconstruction within 10% of the existing 1 cm
-pipeline while adding local detail. These are acceptance targets, not measured
-claims. Room0 is the repeatable fixture; static room replay does not establish
-moving-body quality or live multi-camera performance.
+pipeline while adding local detail. The accepted workload extracts a mesh
+**every frame**; reducing extraction cadence does not satisfy that gate.
+Finest spacing is configurable, and 5 mm is a tested setting rather than a
+requirement. These are acceptance targets, not measured claims. Room0 is the
+repeatable fixture; static room replay does not establish moving-body quality
+or live multi-camera performance.
 
 **Contract.** Keep 8-cubed payloads and metric projective distances with a
 common physical truncation band. Level zero is finest; level l doubles the
@@ -8798,6 +8802,33 @@ silently use the uniform codec format.
 contract. The field view and GLSL lookup establish the consumer ABI. It adds
 no adaptive dispatch to existing uniform entry points. Runtime storage,
 fusion, seam extraction, and measured acceptance remain subsequent work.
+
+**Implementation and experiment update, 2026-10-02.** The draft now includes
+device-resident fixed-capacity storage, bounded split/merge, cell-centered
+fusion, incoming-depth classification and full adaptive dual extraction.
+Observed interior transfer interpolates metric TSDF and linear color with
+bounded confidence; unknown support and outer parent samples retain nearest
+initialization. Transfer cannot recover observations lost before refinement.
+The tested room policy classifies every four frames while fusion and mesh
+extraction continue every frame. Event-budget deferrals and capacity
+exhaustion are reported separately; the optional conservative coarsening
+support pass remains off by default.
+
+The M5 Max Release 400-frame snapshot at `8b1d24e` costs 5.078579 ms/frame
+for 5/10/20 mm adaptive sampling versus 3.594793 ms for uniform 10 mm
+(+41.3%), with no exhausted requests. Against the same-input uniform 5 mm
+mesh **proxy**, detail-region coverage p95 improves from 2.080917 to
+1.367840 mm and accuracy p95 from 1.706589 to 1.378183 mm, while F-score
+at 5 mm falls from 0.996884 to 0.993094. Thus local p95 improvement does
+not establish an overall quality win, and the adaptive timing gate is unmet.
+A prior CSV-disabled instrumentation comparison found +0.62% in median
+sums of legacy allocate/integrate/mesh host means; it did not measure the
+new per-frame online metric or establish the final adaptive-disabled gate.
+Final repeated interleaved and discrete-GPU acceptance remain open.
+[PERF H2](PERF.md#h2--online-hierarchical-room-experiment-draft) records the
+instrumentation, sample strata, exact commands and timing boundaries. These
+are provisional development observations, with no NVIDIA, moving-human or
+adaptive-codec claim.
 
 ### 2026-10-02 — Hierarchical refinement respects observed projective-band support even on flat surfaces.
 

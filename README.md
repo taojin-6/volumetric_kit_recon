@@ -93,6 +93,56 @@ meshing cadence, truncation, flags and hardware identical for A/B runs, run
 them interleaved on a shared machine, and follow [PERF.md](PERF.md) before
 claiming a performance improvement.
 
+### Adaptive room reconstruction (draft)
+
+`fuse_replica_hierarchical` runs GPU root allocation, bounded refinement,
+TSDF fusion and dual-cell mesh extraction on a posed Replica-SLAM sequence.
+It uses a separate cell-centered field with 8³ samples per leaf; level zero
+is finest and each following level doubles the spacing. The uniform
+`VoxelBlockGrid` path remains independent. Finest spacing is configurable;
+the current experiment uses 5/10/20 mm levels with a common 40 mm physical
+truncation band.
+
+The scene directory contains `results/frameNNNNNN.jpg`, matching
+`depthNNNNNN.png`, and `traj.txt`; intrinsics default to `../cam_params.json`
+or can be supplied with `--cam-params`.
+
+```sh
+recon_root="$(git rev-parse --show-toplevel)"
+room0="/absolute/path/to/Replica/room0"
+cmake -S "$recon_root" -B "$recon_root/build" -DCMAKE_BUILD_TYPE=Release \
+    -DVR_BUILD_EXAMPLES=ON -DVR_WARNINGS_AS_ERRORS=ON
+cmake --build "$recon_root/build" --parallel --target \
+    fuse_replica fuse_replica_hierarchical compare_mesh_quality
+mkdir -p "$recon_root/build/room-validation"
+"$recon_root/build/examples/fuse_replica_hierarchical" "$room0" \
+    --voxel 0.005 --levels 3 --trunc 0.04 --depth-jump 0.04 \
+    --buckets 2048 --max-nodes 131072 --max-splits 64 --max-merges 64 \
+    --merge-stability 8 --refine-every 4 --surface-error 0.002 \
+    --noise-floor 0.0005 --pixel-stride 4 --max-frames 400 \
+    --mesh-every 1 --preload --device-extract \
+    --timings-csv "$recon_root/build/room-validation/adaptive.csv" \
+    --out "$recon_root/build/room-validation/adaptive.ply"
+```
+
+Fusion and extraction run every frame in this experiment. `--refine-every 4`
+classifies and applies topology budgets on frames 1, 5, 9, …; excess split
+requests are reported as deferred and can be requested by later classifications.
+`--max-nodes` includes fixed root slots (`8 * --buckets`), internal parents
+and child slots, not
+just active leaves. Logs and CSV report per-level leaf counts, deferred and
+exhausted requests. `--support-coarsening` enables an additional conservative
+support pass and is off by default. Preloading this 400-frame fixture uses
+about 2.5 GB of host RAM.
+
+The draft reduces detail-region p95 distances from a 5 mm uniform mesh proxy,
+but has not met the accepted **within +10% online time versus uniform 1 cm**
+target with extraction every frame. See
+[H2 measurements and reproduction](PERF.md#h2--online-hierarchical-room-experiment-draft)
+for the paired baseline, quality metric, timing boundaries and remaining
+validation. Static replay does not establish moving-body reconstruction or
+live rig performance; adaptive codec transport is not implemented.
+
 ### Optional: Orbbec SDK
 
 The Orbbec (Femto Mega) capture code is off by default and needs the

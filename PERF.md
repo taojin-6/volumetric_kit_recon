@@ -138,7 +138,7 @@ kernels.
 | L2 | Pipeline sets | overlaps set N's GPU work with set N+1's host work | L | P6 | later |
 | L3 | Read VideoToolbox's plane images directly | 0.28–0.31 ms GPU per 4K frame, Apple only | M | — | later |
 | L4 | Sample the atlas in place rather than copy it | measure the copy at 4K first | L | gfx | kept |
-| H2 | Online hierarchical blocks with selective fine detail | less work on planar regions at a fixed detail target; measure first | L | online phase measurements | in progress: online room replay with device topology/fusion/extraction and per-frame timing is available; batched updates tested; room timing and quality acceptance pending |
+| H2 | Online hierarchical blocks with selective fine detail | finer local sampling with <5% disabled overhead and at most +10% adaptive online time versus uniform 1 cm; extract every frame | L | paired online phases and local proxy quality | in progress, draft (`feat/hierarchical-extraction`): measured M5 Max room0 detail improvement; provisional 5.079 vs 3.595 ms/frame (+41.3%), adaptive target unmet; discrete-GPU acceptance open |
 
 The suggested order: P8 first, so every later figure is honest; D1–D3
 whenever convenient; then P1, P3, P5, P4, P2 + P6; then P7, and P9 once it
@@ -574,7 +574,122 @@ After P6, the GPU could run set N while the host polls and decodes set N+1.
 - Measure before revisiting. Sampling the buffers in place needs a gfx
   pipeline variant.
 
-### H2 — Adaptive extraction: measure the generated shader as well as the GLSL
+### H2 — Online hierarchical room experiment (draft)
+
+**Accepted workload and gates.** Allocate, refine, fuse and extract online,
+with **mesh extraction every frame** on the same input and poses as the
+uniform 1 cm pipeline. Disabled overhead must stay below 5%; adaptive online
+time must be at most 10% higher while improving local detail. A lower mesh
+cadence does not satisfy this workload. Finest spacing is configurable:
+5 mm is the current tested setting, not a required resolution or a general
+optimum. The comparison must state its tested spacings and common physical
+truncation band.
+
+**Provisional snapshot, 2026-10-02, adaptive `8b1d24e`.** Release with warnings
+as errors, Apple M5 Max, MoltenVK; the first 400 Replica room0 frames at
+1200 × 680, stride 1, preloaded, 400 device extractions. Both executables
+collect stage instrumentation. Online host time includes recording, submits,
+fence completion, startup, arena growth and retries; it excludes image
+decode/preload and input I/O, logging, CSV writes, final mesh readback/export,
+and the later CPU quality evaluation. Fusion includes allocation and active
+set work; the adaptive column also includes classification, split/merge and
+leaf-list preparation. Mesh phases are host timings only:
+`mesh_device_ms` is unavailable and stays empty, never filled from host time.
+
+| mean per input frame, ms | uniform 10 mm | adaptive 5/10/20 mm |
+|---|---:|---:|
+| fusion and topology, host | 1.684997 | 1.908773 |
+| mesh, host | 1.909796 | 3.169806 |
+| online total, host | 3.594793 | 5.078579 |
+
+The adaptive mean is **41.3% higher**, so the +10% gate is unmet. These
+development runs are provisional, not final interleaved acceptance. A prior
+three-run instrumentation study against pristine `209b23e` found median
+sums of the legacy allocate/integrate/mesh host means of 3.568 versus
+3.546 ms (+0.62%); CSV was disabled on the instrumented side and stage
+instrumentation was present on both. The new per-frame online metric was
+unavailable with CSV off. That checks measurement-path overhead at that
+revision, not the final adaptive-disabled gate. Repeat the final candidates
+interleaved on the shared Mac,
+retaining all frames, and separately validate an NVIDIA/discrete-GPU run.
+
+The adaptive configuration uses a 40 mm common field band, independent
+40 mm sensor depth-jump threshold, 16,384 fixed root slots and 131,072 total
+node slots. It classifies on frames 1, 5, 9, … (`--refine-every 4`), allows
+64 splits and 64 merges per update, and requires eight consecutive qualifying
+coarsening updates. Conservative `--support-coarsening` is off. This run made
+5,827 splits, no merges, 74,590 deferred split requests summed across updates,
+and **zero exhausted requests**. Deferrals can count a region repeatedly;
+they are neither unique blocks nor a promise that refinement is immediate.
+Final leaf populations were 29,600 at 5 mm, 13,316 at 10 mm and 6,565 at 20 mm.
+The fixed field arrays occupied 809,304,064 bytes, including unused/internal
+sample slots but excluding root-map metadata, scratch, mesh arenas and input
+preload memory. Fewer coarse-region samples do not imply lower total memory
+for this fixed-capacity implementation.
+
+**Local quality is proxy agreement, not ground truth.** The C++
+`compare_mesh_quality` example uses the production `eval::MeshDistance`
+tier against a uniform 5 mm reconstruction of the same 400 frames and poses.
+It requests 200,000 deterministic area-weighted samples per mesh, a 40 mm
+query reach and 5 mm F-score threshold. Reference-only 10 cm spatial cells
+define strata from normal coherence: planar at least `cos(10°)²`, detail at
+most `cos(25°)²`, at least eight reference samples per classified cell.
+Accuracy queries go from candidate to proxy; coverage queries go from proxy
+to candidate. Mean/p95 exclude beyond-reach queries; F includes them as
+misses. More triangles alone is not the quality criterion.
+
+| detail-region metric | uniform 10 mm | adaptive 5/10/20 mm |
+|---|---:|---:|
+| coverage distance p95, mm | 2.080917 | 1.367840 |
+| accuracy distance p95, mm | 1.706589 | 1.378183 |
+| F-score at 5 mm | 0.996884 | 0.993094 |
+
+The p95 distances improve, but the adaptive F-score is lower: the residual
+tail is not resolved. Broad regions can remain coarse, while grazing planar
+regions still require fine spacing to retain observed TSDF support. This
+fixture establishes neither human/moving-body quality nor live multi-camera
+performance. Adaptive incremental extraction and codec transport remain
+separate work; no existing uniform codec format is claimed to support this
+field.
+
+**Reproduction.** Build the three examples and run the adaptive command in
+[README](README.md#adaptive-room-reconstruction-draft). Use the same scene,
+camera metadata, frame count and `--mesh-every 1` for the baseline and proxy:
+
+```sh
+"$recon_root/build/examples/fuse_replica/fuse_replica" "$room0" \
+    --voxel 0.01 --trunc 0.04 --buckets 16384 --max-frames 400 \
+    --mesh-every 1 --preload --device-extract \
+    --timings-csv "$recon_root/build/room-validation/uniform.csv" \
+    --out "$recon_root/build/room-validation/uniform.ply"
+"$recon_root/build/examples/fuse_replica/fuse_replica" "$room0" \
+    --voxel 0.005 --trunc 0.04 --buckets 32768 --max-frames 400 \
+    --mesh-every 1 --preload --device-extract \
+    --timings-csv "$recon_root/build/room-validation/fine.csv" \
+    --out "$recon_root/build/room-validation/fine.ply"
+"$recon_root/build/examples/compare_mesh_quality" \
+    "$recon_root/build/room-validation/fine.ply" \
+    "$recon_root/build/room-validation/adaptive.ply" \
+    --samples 200000 --reach 0.04 --threshold 0.005 --cell 0.1 \
+    --cells-csv "$recon_root/build/room-validation/quality-adaptive-cells.csv"
+"$recon_root/build/examples/compare_mesh_quality" \
+    "$recon_root/build/room-validation/fine.ply" \
+    "$recon_root/build/room-validation/uniform.ply" \
+    --samples 200000 --reach 0.04 --threshold 0.005 --cell 0.1 \
+    --cells-csv "$recon_root/build/room-validation/quality-uniform-cells.csv"
+```
+
+The uniform CSV instrumentation is the change introduced by `6cd7f42`.
+Recorded development artifacts are
+`.worktrees/hierarchical-grid/build/room-validation/prolong40-400.{csv,log,ply}`
+and `quality-prolong40.log` / `quality-prolong40-cells.csv`, with baseline/proxy
+artifacts `uniform-400`, `fine-400` and `quality-uniform` under
+`.worktrees/hierarchical-room/build/room-validation/`. The CSV-disabled study is
+under `.worktrees/hierarchical-bench/build/timings-209b23e/`, three
+`baseline-*` and `off-*` logs. These local artifacts preserve this snapshot;
+later shader optimizations need their own paired measurements.
+
+#### Shader diagnosis during implementation
 
 **Exploratory measurements, 2026-10-02.** Release, Apple M5 Max, MoltenVK,
 Replica room0; preload the same first 20 or 400 frames, fuse and extract every
