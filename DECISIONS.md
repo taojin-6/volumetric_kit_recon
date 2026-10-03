@@ -8501,12 +8501,15 @@ mapped buffers or generic compute bindings.
 buffers, and unknown adoption is refused by allocation/fusion before any
 work, including on an empty grid. Core tests compare allocation metadata
 with the physical-device memory table, exercise every compatible raw memory
-type offered by the driver, accept types carrying both host visibility and
-device locality, reject non-local types when present, and cover metadata
-through move construction, live assignment, self-move and reset. Exported
-buffer metadata is checked when that extension is available. No performance
-claim follows from these checks; discrete-GPU pressure/failure behavior and
-timings remain separate hardware evidence.
+type usable with the enabled device features, accept types carrying both host
+visibility and device locality, reject non-local types when present, and
+cover metadata through move construction, live assignment, self-move and reset.
+Exported buffer metadata is checked when that extension is available. The raw
+allocator skips AMD device-coherent types because `Device::create` does not enable
+`deviceCoherentMemory`; a synthetic memory table tests that refusal on other
+GPUs too, using a compatible index so a missing guard would allocate a buffer.
+No performance claim follows from these checks; discrete-GPU pressure/failure
+behavior and timings remain separate hardware evidence.
 
 Release with warnings as errors on Apple M5 Max: the full default suite
 passed 45/45, and nine affected core, sensor, TSDF and texture tests passed

@@ -3,7 +3,7 @@
 
 // Residency is a property of the selected Vulkan memory type, not of whether
 // the buffer happens to be mapped. Exercise allocator and raw-adopted buffers
-// on every compatible type the driver offers, including unified/BAR memory.
+// on every compatible type the device can use, including unified/BAR memory.
 
 #include <cstdint>
 #include <cstdio>
@@ -47,6 +47,16 @@ bool matches(const vr::Buffer& buffer,
 vr::Result<std::optional<vr::Buffer>> raw_buffer(
     const vr::Device& device, std::uint32_t index,
     const VkPhysicalDeviceMemoryProperties& properties) {
+  const auto& type = properties.memoryTypes[index];
+  // Device::create enables neither protectedMemory nor deviceCoherentMemory.
+  // AMD coherent types are still enumerated without the feature, but using
+  // them violates VUID-vkAllocateMemory-deviceCoherentMemory-02790. Lazy memory
+  // is for transient images, not these buffers.
+  if ((type.propertyFlags & (VK_MEMORY_PROPERTY_PROTECTED_BIT |
+                             VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT |
+                             VK_MEMORY_PROPERTY_DEVICE_COHERENT_BIT_AMD)) != 0)
+    return std::optional<vr::Buffer>{};
+
   VkBufferCreateInfo desc{};
   desc.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
   desc.size = kBytes;
@@ -75,7 +85,6 @@ vr::Result<std::optional<vr::Buffer>> raw_buffer(
       vkFreeMemory(device.handle(), memory, nullptr);
     return vr::vk_error(result, "raw test buffer");
   }
-  const auto& type = properties.memoryTypes[index];
   return std::optional<vr::Buffer>(vr::Buffer(
       handle, kBytes, kUsage, VK_SHARING_MODE_EXCLUSIVE, nullptr,
       [vk = device.handle(), handle, memory]() {
@@ -130,6 +139,17 @@ int main() {
     std::printf("  device allocation: type=%u heap=%u flags=0x%x\n",
                 memory.type_index, memory.heap_index, memory.properties);
   }
+
+  // Exercise the AMD skip even on drivers without coherent memory types.
+  // Keep a known-compatible index: without the guard, raw_buffer allocates a
+  // real buffer and this check fails instead of silently skipping the case.
+  auto coherent_properties = properties;
+  const auto local_type = allocated->memory_info()->type_index;
+  coherent_properties.memoryTypes[local_type].propertyFlags |=
+      VK_MEMORY_PROPERTY_DEVICE_COHERENT_BIT_AMD;
+  auto coherent = raw_buffer(device.value(), local_type, coherent_properties);
+  CHECK(coherent.ok() && !coherent.value());
+
   desc.size = 0;
   CHECK(!allocator->create_buffer(desc));
   CHECK(!vr::device_storage_buffer(allocator.value(), 0));
@@ -152,9 +172,6 @@ int main() {
   bool saw_host_local = false;
   for (std::uint32_t i = 0; i < properties.memoryTypeCount; ++i) {
     const auto flags = properties.memoryTypes[i].propertyFlags;
-    if ((flags & (VK_MEMORY_PROPERTY_PROTECTED_BIT |
-                  VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT)) != 0)
-      continue;
     auto raw = raw_buffer(device.value(), i, properties);
     CHECK(raw.ok());
     if (!raw.value()) continue;
