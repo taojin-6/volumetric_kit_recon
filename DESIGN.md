@@ -999,7 +999,9 @@ projection across the depth map, at most 64 samples, for a surface in front
 of it, which is what catches the parallax fringe beside an occluding edge.
 The sight line is clipped in camera space to the near bound and image side
 planes before projection. A zero or very small near bound cannot bypass the
-walk or spend its sample budget outside the image.
+walk or spend its sample budget outside the image. Only positive, in-range
+depth samples can occlude that line; a zero-valued hole is ignored even when
+the accepted near bound is zero.
 A registered image is the case where the two cameras are one (the
 2026-09-28 colour-camera decision). Opt-in `StageMetrics*` on every overload
 reports a `"texture"` row with both halves, the several-view inputs'
