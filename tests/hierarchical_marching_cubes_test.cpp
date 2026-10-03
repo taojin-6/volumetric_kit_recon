@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -15,6 +16,7 @@
 #include "buffer_readback.hpp"
 #include "volumetric_kit/recon/core/compute_util.hpp"
 #include "volumetric_kit/recon/core/instance.hpp"
+#include "volumetric_kit/recon/core/log.hpp"
 #include "volumetric_kit/recon/mesh/hierarchical_geometry.hpp"
 #include "volumetric_kit/recon/mesh/hierarchical_marching_cubes.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes_tables.hpp"
@@ -259,7 +261,7 @@ vr::Status change_field(Fixture& f, const vr_test::Gpu& gpu,
 }
 }  // namespace
 
-int main() {
+int run_tests() {
   CHECK(consistent_faces());
   vol::HierarchicalNode owner{vr::Vec3i(-1, 0, 0), 0, 1, 0};
   auto vertex = mesh::hierarchical_dual_vertex(owner, vr::Vec3i(8, 0, 0));
@@ -452,4 +454,24 @@ int main() {
       "seams passed\n",
       uniform.value().indices.size() / 3, adaptive.value().indices.size() / 3);
   return 0;
+}
+
+int main() {
+  std::atomic<unsigned> validation_errors{0};
+  vr::set_log_handler([&](vr::LogLevel level, std::string_view message) {
+    if (level == vr::LogLevel::Error) ++validation_errors;
+    if (level == vr::LogLevel::Warning || level == vr::LogLevel::Error) {
+      std::fprintf(stderr, "%.*s\n", int(message.size()), message.data());
+    }
+  });
+  // run_tests destroys every Vulkan resource before the layer's error count
+  // is checked, so errors during both dispatch and destruction fail the test.
+  const int result = run_tests();
+  vr::set_log_handler({});
+  if (result == 0 && validation_errors.load() != 0) {
+    std::fprintf(stderr, "FAIL: %u validation errors\n",
+                 validation_errors.load());
+    return 1;
+  }
+  return result;
 }
