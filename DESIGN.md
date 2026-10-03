@@ -851,6 +851,13 @@ leaf list until topology changes. `split` publishes an eight-child group only
 after initializing its samples. Inherited confidence is capped, since
 resampling a coarse field cannot recover previously lost detail. Exhausted
 root/child capacity and deferred refinement remain explicit results.
+`merge` requires consecutive coarsening requests from all eight leaf children;
+missing or finer evidence resets the history. Selection and restriction run
+in separate GPU passes, preventing ancestor/descendant overlap in one update.
+Restriction averages observed samples in metric TSDF and linear color space,
+keeps unsupported coarse samples unobserved, and recycles child groups for
+later splits. A merge event budget and caller-set persistence bound churn.
+Per-level leaf populations share the compact-list count readback.
 
 `HierarchicalTsdfIntegrator` shares the uniform fusion arithmetic through a
 shader body compiled separately for each addressing scheme. Its classifier
