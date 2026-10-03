@@ -45,8 +45,8 @@ jobs:
       # integrated GPU, and VideoToolbox on the Mac. `cuda` puts the 24.04 leg
       # on VR_WITH_CUDA=ON, the toolkit installed per job, so NVDEC's pictures
       # are handed out on the device and checked there.
-      # `assimp` covers installed mesh import on Linux and macOS; the other
-      # legs verify that base image / PLY IO builds and installs without it.
+      # `assimp` builds the optional mesh loader on Linux and macOS; the other
+      # legs build image / PLY IO without it.
       matrix:
         include:
           - os: ubuntu-22.04

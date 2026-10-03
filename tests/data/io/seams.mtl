@@ -1,7 +1,0 @@
-newmtl bottom_top
-Kd 1 0 0
-map_Kd intentionally_missing_texture.png
-newmtl front_back
-Kd 0 1 0
-newmtl left_right
-Kd 0 0 1

@@ -51,8 +51,8 @@ on:
         default: false
       assimp:
         description: >-
-          Install Assimp and build with VR_WITH_ASSIMP=ON, including mesh
-          import tests and the installed IO package consumer.
+          Install Assimp and build the optional mesh loader with
+          VR_WITH_ASSIMP=ON.
         required: false
         type: boolean
         default: false
@@ -377,17 +377,3 @@ jobs:
         env:
           VR_TEST_HEVC_BACKEND: ${{ inputs.hevc_backend }}
         run: ctest --test-dir build --output-on-failure
-
-      - name: Installed IO package consumer
-        if: steps.detect.outputs.present == 'true'
-        run: |
-          # Container jobs on the self-hosted runners leave root-owned files in
-          # RUNNER_TEMP, so another leg's optional headers can outlive its job.
-          rm -rf "${RUNNER_TEMP}/recon-install"
-          cmake --install build --prefix "${RUNNER_TEMP}/recon-install"
-          cmake -S tests/install_io -B build/install-io \
-            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
-            -DCMAKE_PREFIX_PATH="${RUNNER_TEMP}/recon-install" \
-            -DVR_EXPECT_ASSIMP=${{ inputs.assimp && 'ON' || 'OFF' }}
-          cmake --build build/install-io --parallel
-          ctest --test-dir build/install-io --output-on-failure

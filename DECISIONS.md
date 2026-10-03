@@ -8728,14 +8728,11 @@ a separate change from this standalone module review.
 
 Validation on Apple M5 Max with installed Assimp 6.0.5: Release builds are
 warning-clean with warnings as errors, and the Assimp/FFmpeg-enabled full
-suite passes 53/53. Host regressions cover image packing, 16-bit depth units
-and refusals, PNG byte round trips, PLY schema/color/index handling, OBJ/PLY/
-glTF import, exact joins, transforms/instances/reflections, and unsupported
-dynamic assets. Static installs with Assimp OFF and ON, plus a shared ON
-install, each pass an independent package consumer compiled with exceptions
-disabled. Both viewer executables compile with the new PNG API; no physical
-display check is claimed. CI is configured for Assimp ON and OFF plus
-sanitizers.
+suite passes 52/52. Host tests cover the PNG round trip and color packing,
+16-bit depth units, 8-bit depth refusal, and the PLY byte layout. Mesh import
+has no model-file tests; CI builds the loader against Assimp 5.2 and 6.0.
+Both viewer executables compile with the new PNG API; no physical display
+check is claimed.
 
 A host-only import of the actual Rafa2 OBJ retains 24,998 vertices, 50,000
 triangles and 75,000 consistently paired edges, positive signed volume
