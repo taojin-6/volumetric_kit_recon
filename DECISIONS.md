@@ -8903,19 +8903,28 @@ their event counters remain separate. Combined time cannot be assigned to
 two artificial per-operation measurements. Batch/serial field equivalence
 and failure/lifetime behavior are tested with synchronization validation.
 
-The selected M5 Max Release room experiment uses 7.5/15/30 mm samples,
+The recorded M5 Max Release room experiment uses 7.5/15/30 mm samples,
 65,536 total nodes and classification every four frames; fusion and mesh
 extraction still run on **all 400 frames**. Defaults remain 5/10/20 mm, and
 the earlier 5 mm measurements retain their separate configuration labels.
+Baseline `d08e4f9` and disabled/adaptive `73c1d3b` were both based on
+`e4db453`; these measurements preceded the PR #146 rebase onto `ab0e738`.
 Three interleaved runs per variant give median per-frame online run means
 of 3.571605 ms for uniform 10 mm, 3.545425 ms for the same uniform path with
 adaptive code compiled in but unused, and 3.854842 ms for adaptive sampling.
-The local mean-time gates pass (+7.93% adaptive, −0.73% disabled), including
+The local mean-time gates passed at those measured revisions (+7.93%
+adaptive, −0.73% disabled), including
 startup and retries. Median run p95/p99 are nevertheless slower adaptively:
 5.025667/9.211208 ms versus 3.956167/4.524459 ms. The disabled comparison
 uses per-frame online traces and is distinct from the earlier +0.62% legacy
 stage-sum instrumentation check. No discrete-GPU performance inference
 follows from the Mac result.
+
+A source audit found that PR #146 changes no call path exercised by these
+room runners, including unchanged depth-allocation source. This is source
+evidence, not validation of rebuilt binary layout or timing. The stack
+rebased onto `ab0e738` has not been retimed; its baseline and candidate need
+new measurements on that common main base before claiming a gate pass.
 
 All three adaptive outputs improve detail-region p95 distance to the
 same-input uniform 5 mm proxy: accuracy 1.538702–1.614423 mm versus

@@ -138,7 +138,7 @@ kernels.
 | L2 | Pipeline sets | overlaps set N's GPU work with set N+1's host work | L | P6 | later |
 | L3 | Read VideoToolbox's plane images directly | 0.28–0.31 ms GPU per 4K frame, Apple only | M | — | later |
 | L4 | Sample the atlas in place rather than copy it | measure the copy at 4K first | L | gfx | kept |
-| H2 | Online hierarchical blocks with selective fine detail | finer local sampling with <5% disabled overhead and at most +10% adaptive online time versus uniform 1 cm; extract every frame | L | paired online phases and local proxy quality | in progress, draft: M5 Max mean gates met at 7.5/15/30 mm, 65,536 slots (+7.93% adaptive, −0.73% disabled); detail p95 improves but F-score/global/planar quality and latency tails worsen; 5 mm over budget; discrete-GPU acceptance open |
+| H2 | Online hierarchical blocks with selective fine detail | finer local sampling with <5% disabled overhead and at most +10% adaptive online time versus uniform 1 cm; extract every frame | L | paired online phases and local proxy quality | in progress, draft: pre-rebase M5 Max mean gates met at 7.5/15/30 mm, 65,536 slots (+7.93% adaptive, −0.73% disabled); detail p95 improves but F-score/global/planar quality and latency tails worsen; 5 mm over budget; ab0e738 remeasurement and discrete-GPU acceptance open |
 
 The suggested order: P8 first, so every later figure is honest; D1–D3
 whenever convenient; then P1, P3, P5, P4, P2 + P6; then P7, and P9 once it
@@ -582,7 +582,7 @@ uniform 1 cm pipeline. Disabled overhead must stay below 5%; adaptive online
 time must be at most 10% higher while improving local detail. A lower mesh
 cadence does not satisfy this workload. Finest spacing is configurable;
 the comparison must state its tested spacings and common physical truncation
-band. Defaults remain 5/10/20 mm, but the current candidate explicitly uses
+band. Defaults remain 5/10/20 mm, but the measured `73c1d3b` candidate uses
 7.5/15/30 mm with 65,536 total node slots and `--refine-every 4`.
 
 **Combined topology stage.** `HierarchicalGrid::update_topology` validates
@@ -596,7 +596,7 @@ columns stay blank on this path: their individual times are not measured.
 Classification and final leaf-list preparation remain separate measured
 stages. The zero-budget path performs no topology work.
 
-**Final interleaved local timing comparison, 2026-10-03.** Release/Werror,
+**Interleaved local timing comparison before the PR #146 rebase, 2026-10-03.** Release/Werror,
 Apple M5 Max, MoltenVK, same first 400 room0 frames at 1200 × 680 and poses;
 three runs each for the uniform 10 mm baseline, the same uniform path with
 adaptive code compiled in but unused, and adaptive 7.5/15/30 mm. Every run
@@ -607,7 +607,16 @@ subsampling is used. The adaptive configuration has 16,384 root slots,
 coarsening updates, a four-frame classification cadence, and conservative
 coarsening support off. Sensor depth-jump rejection remains 40 mm.
 Baseline executable revision is `d08e4f9`; disabled and adaptive executables
-are `73c1d3b`.
+are `73c1d3b`. Both are based on `e4db453`, before main advanced to
+`ab0e738`. The tables and output comparisons below describe those measured
+revisions, not the later rebased stack.
+
+A source audit of PR #146 found no changed call path exercised by these
+room runners; their depth-allocation source is unchanged. The new main
+changes device-list stale deletion and the explicit-coordinate/point input
+helper. This audit does not validate rebuilt binary layout or timing. The
+stack rebased onto `ab0e738` has not been retimed, so its gate status remains
+unmeasured.
 
 The table reports medians across three runs; each run's mean and nearest-rank
 percentiles use every `pipeline_host_ms` frame, including startup, growth and
@@ -631,8 +640,9 @@ online total. The adaptive topology stage's median per-input-frame mean is
 0.076480 ms host / 0.019391 ms device: all 400 frames remain in the
 denominator although topology updates run on 100 frames.
 
-The **local mean gates pass** for this explicit configuration: adaptive
-overhead is +7.93023% and disabled overhead is −0.7330%. The small disabled
+The **local mean gates passed at the measured revisions** for this
+configuration: adaptive overhead is +7.93023% and disabled overhead is
+−0.7330%. The small disabled
 difference is within shared-machine variation, not an optimization claim.
 Adaptive p95 and p99 remain slower; the result does not establish a latency
 tail improvement, a default-5-mm result or discrete-GPU performance. This
@@ -711,7 +721,7 @@ Artifacts: `.worktrees/hierarchical-grid/build/room-validation/final-5mm-batched
 
 **Historical provisional snapshot, 2026-10-02, adaptive `8b1d24e`.** This
 predates combined topology submission and uses a different resolution and
-node budget from the current candidate. Release with warnings
+node budget from the measured `73c1d3b` candidate. Release with warnings
 as errors, Apple M5 Max, MoltenVK; the first 400 Replica room0 frames at
 1200 × 680, stride 1, preloaded, 400 device extractions. Both executables
 collect stage instrumentation. Online host time includes recording, submits,
@@ -737,7 +747,7 @@ instrumentation was present on both. The new per-frame online metric was
 unavailable with CSV off. That checks measurement-path overhead at that
 revision, not the final adaptive-disabled gate. The later per-frame paired
 comparison above supersedes this instrumentation-only evidence for the
-current candidate; NVIDIA/discrete-GPU timing remains unmeasured.
+measured `73c1d3b` candidate; NVIDIA/discrete-GPU timing remains unmeasured.
 
 The adaptive configuration uses a 40 mm common field band, independent
 40 mm sensor depth-jump threshold, 16,384 fixed root slots and 131,072 total
@@ -799,15 +809,17 @@ camera metadata, frame count and `--mesh-every 1` for the baseline and proxy:
     --cells-csv "$recon_root/build/room-validation/quality-uniform-cells.csv"
 ```
 
-For the disabled comparison, build `d08e4f9` in a separate checkout with
-the same Release/Werror options and run its uniform executable alongside
-the current checkout's uniform executable. "Disabled" means the existing
+To reproduce the recorded comparison, build `d08e4f9` and `73c1d3b` in
+separate checkouts with the same Release/Werror options and run their
+uniform executables. "Disabled" means the existing
 `fuse_replica` path with the adaptive code compiled in but unused; it does
 not mean a one-level hierarchical field. Run three interleaved captures per
 variant, including the adaptive command, using distinct numbered CSV/PLY
-paths; retain all startup, retry and slow frames. The current uniform output
-can supply the quality baseline because its canonical geometry was verified
-identical to the baseline build.
+paths; retain all startup, retry and slow frames. The recorded canonical
+position/topology identity applies only to outputs from those measured
+revisions. For acceptance after the `ab0e738` rebase, rebuild baseline and
+candidate on that common main base, then repeat the interleaved captures
+and canonical-geometry comparison.
 
 The uniform CSV instrumentation is the change introduced by `6cd7f42`.
 Recorded development artifacts are

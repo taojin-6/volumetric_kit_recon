@@ -141,12 +141,15 @@ counts, deferred and exhausted requests. `--support-coarsening` enables an addit
 support pass and is off by default. Preloading this 400-frame fixture uses
 about 2.5 GB of host RAM.
 
-The 7.5/15/30 mm comparison meets the local M5 Max mean-time gates:
+The 7.5/15/30 mm comparison met the local M5 Max mean-time gates at the
+measured revisions (`d08e4f9` baseline and `73c1d3b` candidate, both based
+on `e4db453`):
 adaptive +7.93% and the uniform path with adaptive code present −0.73%,
 using medians of three interleaved 400-frame run means. Adaptive p95/p99
 latency is slower; this does not establish a tail-latency or cross-GPU win.
-Detail-region p95 distances to the 5 mm proxy improve, while overall/planar
-distances and the 5 mm F-score are worse. See
+The stack rebased onto `ab0e738` has not been retimed.
+Those recorded outputs improve detail-region p95 distances to the 5 mm
+proxy, while overall/planar distances and the 5 mm F-score are worse. See
 [H2 measurements and reproduction](PERF.md#h2--online-hierarchical-room-experiment-draft)
 for the paired baseline, proxy quality, timing boundaries and remaining
 validation. Static replay does not establish moving-body reconstruction or
