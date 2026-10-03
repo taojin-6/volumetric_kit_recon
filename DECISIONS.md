@@ -8614,9 +8614,10 @@ planning retries. Steady calls keep the previous submission count apart from
 the bounded partition difference. No geometry, topology or pointer identity
 is used as a cache-validity shortcut.
 
-**Validation.** Release with warnings as errors on Apple M5 Max:
+**Validation.** The full Release suite passes 45/45 on both Apple M5 Max
+(warnings as errors) and RTX 4090. On both GPUs,
 `recon_tsdf_mesh_integrate`, `recon_tsdf_mesh_bins` and
-`recon_volume_allocate_triangles` pass, including forced Khronos
+`recon_volume_allocate_triangles` also pass 3/3 with forced Khronos
 synchronization validation. The independent distance/winding oracle still
 covers signed/shell conversion, deterministic bytes, missing blocks,
 refusals and split submissions. A new 65,544-slot partial hierarchy grows the
@@ -8640,9 +8641,32 @@ and 320,000 triangles at 16,384-slot capacity for the dense case.
 | dense triangles | 21.346 / 20.930 / 20.855 | 21.717 / 20.940 / 21.238 | 12.866 / 12.722 / 13.053 | 13.541 / 12.468 / 13.493 |
 
 The scan adds GPU work; sparse host time is variable and the dense case is
-roughly flat/slightly slower on this shared Mac. Discrete-GPU measurements
-are pending. The demonstrated change is bounded control transfer and
-retained bulk storage, not a general frame-rate improvement.
+roughly flat/slightly slower on this shared Mac.
+
+**RTX 4090 evidence.** The same C++ harness and Release `-O3` workload,
+baseline `e4db453` against source `13adbb3`: one excluded warmup pair, then
+three interleaved baseline/change pairs, each with three warmups and nine
+measured integrations. Allocation and object creation remain outside timing.
+
+| case | baseline host medians, ms | changed host medians, ms | baseline device medians, ms | changed device medians, ms |
+|---|---|---|---|---|
+| sparse capacity | 0.920386 / 0.955022 / 0.906461 | 0.124897 / 0.124780 / 0.124343 | 0.009824 / 0.009376 / 0.009504 | 0.036864 / 0.036736 / 0.035904 |
+| dense triangles | 16.065795 / 16.326386 / 16.322679 | 16.962439 / 16.474617 / 16.198409 | 8.807296 / 8.781312 / 8.792128 | 8.853760 / 9.141056 / 9.090464 |
+
+The median of those three host medians is about 7.4x faster for the sparse
+case (0.920386 → 0.124780 ms), while dense host time is 0.9% slower
+(16.322679 → 16.474617 ms) and dense device time is 3.4% slower
+(8.792128 → 9.090464 ms). Sparse device time also rises, from 0.009504 to
+0.036736 ms: removing the CPU work and transfers saves wall time there even
+though the GPU now performs the scan. This is a capacity-bound win with a
+measured limiting case, not a general frame-rate improvement.
+
+Both versions on both GPUs report 392 blocks; sparse has 472 bin entries
+and one write submission, dense has 2,281,214 entries and three submissions.
+The RTX logs are `mesh-{sparse,dense}-bench-{1,2,3}.log` under the remote
+`.worktrees/gpu-residency-base-e4db453/` and
+`.worktrees/gpu-mesh-fix-13adbb3/` checkouts. The demonstrated structural
+change is bounded control transfer and retained bulk storage.
 
 ## Measured lessons
 
