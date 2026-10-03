@@ -35,10 +35,12 @@ static_assert(offsetof(HierarchicalNode, level) == 16, "hierarchical node ABI");
 static_assert(offsetof(HierarchicalNode, children) == 20,
               "hierarchical node ABI");
 
-/// @brief Read-only device view of a cell-centered adaptive field.
+/// @brief Borrowed device storage of a cell-centered adaptive field.
 ///
-/// All buffers use STORAGE_BUFFER, belong to the consumer's VkDevice, and
-/// remain alive and quiescent throughout its call. The root hash uses
+/// All buffers use STORAGE_BUFFER and belong to the consumer's VkDevice.
+/// Calls are externally serialized: meshing reads the field, while integration
+/// writes its sample arrays; no topology mutation may overlap either call.
+/// Buffer objects remain alive throughout the call. The root hash uses
 /// `root_grid`; its block pointer divided by 512 is a root node index.
 /// Children occupy eight consecutive nodes in x + 2*y + 4*z order.
 /// The leaf list contains each active leaf exactly once. Sample arrays have
@@ -76,7 +78,7 @@ struct HierarchicalFieldView {
       return Status::invalid_argument("HierarchicalFieldView: stale view");
     }
     VR_TRY(root_grid.validate());
-    if (root_grid.block_size != 8 || max_level > 20 || node_capacity == 0 ||
+    if (root_grid.block_size != 8 || max_level > 3 || node_capacity == 0 ||
         node_capacity >
             std::uint32_t(std::numeric_limits<std::int32_t>::max()) / 512u ||
         leaf_count > node_capacity ||
