@@ -68,7 +68,7 @@ struct Options {
   int pixel_stride = 4;
   int max_frames = 1 << 30;
   int stride = 1;
-  int mesh_every = 50;
+  int mesh_every = 1;
   bool preload = false;
   bool device_extract = false;
   tsdf::HierarchicalRefinementParams refinement{};
