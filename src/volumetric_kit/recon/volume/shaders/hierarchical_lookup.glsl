@@ -24,7 +24,9 @@ bool vrHierarchyLocateAtLevel(ivec3 finest_cell, VoxelGridParams root_grid,
   node_id = 0u;
   local = ivec3(0);
   if (max_level > 3u || stop_level > max_level || node_capacity == 0u) return false;
-  ivec3 root_coord = vrHierarchyFloorDiv(finest_cell, 8 << int(max_level));
+  // Arithmetic right shifts are floor division by a power of two, including
+  // negative cells. Every hierarchy divisor is dyadic; avoid runtime IDiv.
+  ivec3 root_coord = finest_cell >> int(max_level + 3u);
   int root_ptr = vrFindBlockPtr(root_coord, root_grid.num_buckets,
                                 root_grid.bucket_size, root_grid.max_chain);
   if (root_ptr < 0 || root_ptr % 512 != 0) return false;
@@ -34,20 +36,20 @@ bool vrHierarchyLocateAtLevel(ivec3 finest_cell, VoxelGridParams root_grid,
     HierarchicalNode node = vr_hierarchy_nodes[node_id];
     uint level = max_level - step;
     if (node.level != level ||
-        node.coord != vrHierarchyFloorDiv(finest_cell, 8 << int(level))) return false;
+        node.coord != (finest_cell >> int(level + 3u))) return false;
     if (node.children == 0u) {
       if (node.ptr < 0 || node.ptr % 512 != 0 ||
           uint(node.ptr) / 512u >= node_capacity) return false;
-      local = vrHierarchyFloorDiv(finest_cell, 1 << int(level)) - node.coord * 8;
+      local = (finest_cell >> int(level)) - node.coord * 8;
       return true;
     }
     if (level == 0u || node_capacity < 8u ||
         node.children - 1u > node_capacity - 8u) return false;
     if (level == stop_level) {
-      local = vrHierarchyFloorDiv(finest_cell, 1 << int(level)) - node.coord * 8;
+      local = (finest_cell >> int(level)) - node.coord * 8;
       return true;
     }
-    ivec3 child_coord = vrHierarchyFloorDiv(finest_cell, 8 << int(level - 1u));
+    ivec3 child_coord = finest_cell >> int(level + 2u);
     ivec3 octant = child_coord & ivec3(1);
     node_id = node.children - 1u + uint(octant.x + 2 * octant.y + 4 * octant.z);
   }

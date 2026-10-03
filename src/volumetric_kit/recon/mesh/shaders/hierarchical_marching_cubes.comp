@@ -84,7 +84,9 @@ bool sampleStorage(HierarchicalNode owner, ivec3 corner, ivec3 q, int c,
     int ni = region.x + 1 + 3 * (region.y + 1 + 3 * (region.z + 1));
     if (neighbor_valid[ni] == 0u) return false;
     node = neighbor_nodes[ni];
-    local = vrHierarchyFloorDiv(query, 1 << int(node.level)) - node.coord * 8;
+    // Signed GLSL right shift is arithmetic, hence exact floor division by
+    // 2^level even for negative cells, without runtime signed integer divide.
+    local = (query >> int(node.level)) - node.coord * 8;
   }
   index = uint(node.ptr) + uint(local.x + 8 * (local.y + 8 * local.z));
   return true;
@@ -124,7 +126,7 @@ bool gather(HierarchicalNode owner, uint candidate, bool need_color, out Sample 
     float d = tsdf[si];
     if (!(w >= pc.weight_threshold) || isnan(d) || isinf(d)) return false;
     int h = 1 << int(node.level);
-    ivec3 lower = vrHierarchyFloorDiv(query, h) * h;
+    ivec3 lower = (query >> int(node.level)) * h;
     samples[c].lower = lower;
     samples[c].position = (vec3(lower) + vec3(float(h) * 0.5)) * pc.voxel_size;
     samples[c].distance = d;
@@ -203,7 +205,7 @@ void main() {
   }
   // Leave room for the +boundary vertex and the -1 incident-cell query;
   // reject before any signed multiply, including INT_MIN input coordinates.
-  int limit = 2147483646 / (8 << int(owner.level)) - 1;
+  int limit = (2147483646 >> int(owner.level + 3u)) - 1;
   if (any(lessThan(owner.coord, ivec3(-limit))) || any(greaterThan(owner.coord, ivec3(limit)))) {
     if (tid == 0u) atomicOr(rejected, 1u);
     return;
