@@ -158,10 +158,12 @@ integrated GPU on Linux), else in software.
 
 ## Adaptive resolution
 
-`adaptive_viewer` (a `-DVR_BUILD_VIEWER=ON` build) fuses into 2 cm, 1 cm and
-5 mm grids and gives a block finer voxels where the depth is systematically
-off the coarser surface. Its Adaptive panel has the threshold (`eps mm`), the
-per-level block counts, and level colours:
+`tsdf::AdaptiveGrid` fuses into 2 cm, 1 cm and 5 mm voxel block grids and
+gives a block finer voxels where the depth is systematically off the coarser
+surface; `owned_blocks(level)` says what each level meshes.
+`adaptive_viewer` (a `-DVR_BUILD_VIEWER=ON` build) shows it live, with the
+threshold (`eps mm`), the per-level block counts, and level colours in its
+Adaptive panel:
 
 ```sh
 build/examples/viewer/adaptive_viewer <replica>/room0 --cam-params <replica>/cam_params.json --preload

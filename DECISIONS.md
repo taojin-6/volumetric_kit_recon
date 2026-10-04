@@ -301,9 +301,9 @@ entries relevant to your task; later amendments supersede earlier rules.
   of at most 1,024 blocks, and the decoder picks the device per frame from 80
   segments.
 - [**2026-10-03**](#2026-10-03--adaptive-resolution-is-a-stack-of-uniform-grids-refined-where-the-depth-is-systematically-off-the-coarser-surface) —
-  Adaptive resolution is a stack of ordinary uniform grids, a block refined
-  where the depth is systematically off the coarser surface; the octree trial
-  (#138–#155) is retired.
+  Adaptive resolution (`tsdf::AdaptiveGrid`) is a stack of ordinary uniform
+  grids, a block refined where the depth is systematically off the coarser
+  surface; the octree trial (#138–#155) is retired.
 - [**2026-10-03**](#2026-10-03--error-handling-comes-from-volumetric_kit_core) —
   Error handling comes from `volumetric_kit_core`: `vr::Status`/`Result` are
   the core's types, `VR_TRY`/`VR_ASSIGN`/`VR_CHECK` its macros under recon's
@@ -9340,8 +9340,8 @@ one 40 mm band at 30 mm cells forced grazing walls fine. It also bypassed
 stamps, GC, incremental extraction and the codec. On the RTX 5090 it cost
 +14.6% over uniform 1 cm with worse global and planar quality.
 
-**Design** (`examples/viewer/adaptive_levels.hpp`, a prototype beside
-`adaptive_viewer`). Each level is an ordinary `VoxelBlockGrid`, the voxel
+**Design** (`tsdf::AdaptiveGrid`, `tsdf/adaptive_grid.hpp`). Each level is an
+ordinary `VoxelBlockGrid`, the voxel
 halving per level (2 cm, 1 cm, 5 mm by default), each with a 4-voxel band. The
 coarsest fuses the full depth. A finer level allocates only from depth whose
 points fall in refined coarser blocks (a GPU mask) and integrates the full
@@ -9349,7 +9349,9 @@ depth, so it still carves free space. A block's parent is `key / 2` in the
 coarser grid's hash; nothing stores a pointer. Each level meshes the blocks it
 owns -- the finest whose ancestors are refined and have fused for a check
 interval -- through the culled extract, and gfx draws the levels together.
-Seams are not stitched.
+Seams are not stitched. It takes the integrator's `FrameInput` sets (host or
+device depth, optional colour), allocates and integrates each level once per
+set, and grows a level's map when it fills.
 
 **Criterion.** A depth point's residual is the coarser grid's TSDF at it over
 the TSDF's gradient length: fused distances run along camera rays, 1 / cos(t)
@@ -9359,9 +9361,12 @@ the ratio is the distance along the normal at any angle. Residuals sum per
 systematic offset is mean^2 - variance / n: frame-to-frame noise cancels, the
 grid's shape error does not. A real sensor also leaves an offset no grid fits,
 so the median coarsest block's offset is taken as the floor. A block refines
-when its offset exceeds floor + eps and twice its remaining noise, and
-coarsens after three checks below floor + eps / 2. Checks run every five sets;
-eps is a live slider.
+when its offset exceeds floor + eps and twice its remaining noise. It
+coarsens after three checks below floor + eps / 2, or once its surface is gone
+-- no observed voxel within a voxel of a zero crossing, as when Dynamic fusion
+clears a person who left -- but a block merely out of view keeps its detail.
+Checks run every five sets; eps is a live slider. A block is judged from two
+sampled cells: a small object cut by block boundaries splits its evidence.
 
 **Evidence** (Apple M5 Max, Release). An offline prototype study on room0
 (final grids, noise-free depth) at eps = 1 mm needed 0.86x the voxels of
@@ -9369,8 +9374,11 @@ uniform 1 cm, and its mesh came within 0.26 / 0.46 mm (accuracy / coverage
 p95) of the uniform 5 mm mesh, against 0.79 / 0.86 mm for uniform 1 cm (F at
 2 mm: 0.994 versus 0.985). Live, `adaptive_viewer` fuses room0's 400
 preloaded frames into all three levels and fully re-meshes and textures them
-every frame in 7.7 ms of host time per frame (GPU about 1.2 ms), refining 541
-of 8,692 2 cm blocks over a 0.13 mm floor. On one Femto Mega, per-frame
+whenever the renderer has taken the last mesh, in 7.2 ms of host time per
+frame (171 remeshes), refining 571 of 8,692 2 cm blocks over a 0.14 mm floor.
+A GPU test fuses a wall with a 4 cm sphere in front of it: only the sphere's
+block refines, and once the sphere is gone it coarsens and the finer blocks
+are removed. On one Femto Mega, per-frame
 residual noise is about 3.4 mm, and the floor is about 3 mm on host-registered
 depth and 7 mm on GPU-prepared depth, the same at 2 cm and 1 cm: sensor
 structure no voxel size fits, hence the floor. At eps = 1 mm about 6% of 2 cm
@@ -9382,8 +9390,7 @@ the rig, whose calibration is stale, overlapping floor refines. Next is
 checking that a refined block's offset actually fell at the finer level, and
 reverting it otherwise. The mesh is textured from the set's first camera only,
 its colour read back once a remesh. Each level submits its own allocate and
-integrate, and ownership compacts every grid on the host. The controller moves
-into a tier once its behaviour settles.
+integrate, and ownership compacts every grid on the host.
 
 ### 2026-10-03 — Error handling comes from volumetric_kit_core.
 
