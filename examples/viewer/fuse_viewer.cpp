@@ -417,19 +417,20 @@ void draw_reconstruction_panel(const ReconstructionPanel& panel) {
     ImGui::Text("  %d buckets", panel.map_buckets);
   }
   ImGui::Separator();
-  // recon's device memory: its own VMA allocator's share of the device. On a
-  // shared/adopted device each library allocates separately, so this is recon's
-  // footprint, not the process total.
+  // recon's device memory: its own VMA allocator's share of the device
+  // (reserved_bytes), against the heap's budget. On a shared/adopted device
+  // each library allocates separately, so this is recon's footprint, not the
+  // process total -- which usage_bytes is, where the driver reports budgets.
   for (std::uint32_t heap = 0; heap < panel.recon_memory.heap_count; ++heap) {
     const vr::HeapStats& stats = panel.recon_memory.heaps[heap];
-    if (stats.budget_bytes == 0 && stats.usage_bytes == 0) continue;
+    if (stats.reserved_bytes == 0) continue;
     char overlay[64];
     std::snprintf(overlay, sizeof(overlay), "%.0f / %.0f MiB",
-                  to_mebibytes(stats.usage_bytes),
+                  to_mebibytes(stats.reserved_bytes),
                   to_mebibytes(stats.budget_bytes));
     char label[32];
     std::snprintf(label, sizeof(label), "recon heap %u", heap);
-    gauge(label, static_cast<double>(stats.usage_bytes),
+    gauge(label, static_cast<double>(stats.reserved_bytes),
           static_cast<double>(stats.budget_bytes), 0.9, overlay);
   }
   if (panel.preloaded_bytes != 0) {

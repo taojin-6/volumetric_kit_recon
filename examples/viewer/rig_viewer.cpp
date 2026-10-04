@@ -653,11 +653,13 @@ void draw_rig_panel(const RigPanel& panel,
                     ? "  -- grow now"
                     : "");
   }
+  // recon's own share of each heap (reserved_bytes), against its budget, as
+  // fuse_viewer's panel shows it.
   for (std::uint32_t heap = 0; heap < panel.recon_memory.heap_count; ++heap) {
     const vr::HeapStats& stats = panel.recon_memory.heaps[heap];
-    if (stats.budget_bytes == 0 && stats.usage_bytes == 0) continue;
+    if (stats.reserved_bytes == 0) continue;
     ImGui::Text("recon heap %u  %.0f / %.0f MiB", heap,
-                to_mebibytes(stats.usage_bytes),
+                to_mebibytes(stats.reserved_bytes),
                 to_mebibytes(stats.budget_bytes));
   }
   ImGui::End();

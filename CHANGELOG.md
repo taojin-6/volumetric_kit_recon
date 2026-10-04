@@ -61,6 +61,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - `storage_buffer` is `mapped_storage_buffer` (device-local, mapped;
     `Unsupported` where the device has none), and `max_storage_buffer_range`
     takes the `Device`.
+  - `HeapStats::usage_bytes` is the heap's usage -- the whole process's where
+    `VK_EXT_memory_budget` is enabled -- and `reserved_bytes` is recon's own
+    allocator's share; the viewers' memory panels now show the latter.
   - `BufferMemoryInfo` is `MemoryInfo`; an `Image` is adopted from an
     `ImageInfo`; `submit_single_time` takes an optional `keep_alive` and
     `in_flight`, or a `GpuStageScope` to time the work.
