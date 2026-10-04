@@ -653,11 +653,13 @@ void draw_rig_panel(const RigPanel& panel,
                     ? "  -- grow now"
                     : "");
   }
+  // recon's own share of each heap (reserved_bytes), against its budget, as
+  // fuse_viewer's panel shows it.
   for (std::uint32_t heap = 0; heap < panel.recon_memory.heap_count; ++heap) {
     const vr::HeapStats& stats = panel.recon_memory.heaps[heap];
-    if (stats.budget_bytes == 0 && stats.usage_bytes == 0) continue;
+    if (stats.reserved_bytes == 0) continue;
     ImGui::Text("recon heap %u  %.0f / %.0f MiB", heap,
-                to_mebibytes(stats.usage_bytes),
+                to_mebibytes(stats.reserved_bytes),
                 to_mebibytes(stats.budget_bytes));
   }
   ImGui::End();
@@ -670,10 +672,9 @@ int run(GLFWwindow* window, const Options& opt) {
   fuse_viewer::SharedDeviceConfig shared_config;
   shared_config.enable_validation = opt.validation;
   shared_config.app_name = "rig_viewer";
-  fuse_viewer::SharedDevice shared;
-  if (!fuse_viewer::build_shared_device(window, shared_config, shared)) {
-    return 1;
-  }
+  const std::unique_ptr<fuse_viewer::vkc::SharedDevice> shared =
+      fuse_viewer::build_shared_device(window, shared_config);
+  if (shared == nullptr) return 1;
 
   vg::app::WindowedAppConfig config;
   config.app_name = "rig_viewer";
@@ -681,14 +682,14 @@ int run(GLFWwindow* window, const Options& opt) {
   config.swapchain.depth_format = VK_FORMAT_D32_SFLOAT;
   config.frames_in_flight = 2;
   auto app_r = vg::app::WindowedApp::adopt(
-      fuse_viewer::gfx_adopt_payload(shared), config,
+      fuse_viewer::gfx_adopt_payload(*shared), config,
       [&shared](VkInstance instance) -> vg::Result<VkSurfaceKHR> {
-        if (instance != shared.instance) {
+        if (instance != shared->instance().handle()) {
           return vg::Status::invalid_argument(
               "surface factory: the app adopted a different VkInstance than "
               "the bootstrap created the surface on");
         }
-        return shared.release_surface();
+        return shared->release_surface();
       });
   if (!app_r.ok()) {
     std::fprintf(stderr, "WindowedApp::adopt: %s\n",
@@ -698,14 +699,14 @@ int run(GLFWwindow* window, const Options& opt) {
   vg::app::WindowedApp app = std::move(app_r).value();
 
   auto recon_device_result =
-      vr::Device::adopt(fuse_viewer::recon_adopt_payload(shared), {});
+      vr::Device::adopt(shared->compute_payload(), vr::device_requirements());
   if (!recon_device_result) {
     std::fprintf(stderr, "recon Device::adopt: %s\n",
                  recon_device_result.status().message().c_str());
     return 1;
   }
-  auto recon_allocator_result =
-      vr::Allocator::create(shared.instance, recon_device_result.value());
+  auto recon_allocator_result = vr::Allocator::create(
+      shared->instance().handle(), recon_device_result.value());
   if (!recon_allocator_result) {
     std::fprintf(stderr, "recon allocator: %s\n",
                  recon_allocator_result.status().message().c_str());
@@ -740,6 +741,7 @@ int run(GLFWwindow* window, const Options& opt) {
   rig_options.apply_sync_config = opt.apply_sync;
   rig_options.raw = true;
   rig_options.device = &rdevice;
+  rig_options.allocator = &rallocator;
   if (opt.hevc) rig_options.color_codec = rsensor::OrbbecColorCodec::Hevc;
   if (opt.color_width != 0) {
     rig_options.color_width = opt.color_width;
@@ -794,8 +796,8 @@ int run(GLFWwindow* window, const Options& opt) {
   rmesh::MarchingCubesConfig mc_config;
   mc_config.extra_vertex_usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
   mc_config.extra_index_usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
-  mc_config.queue_families[0] = shared.compute_family;
-  mc_config.queue_families[1] = shared.graphics_family;
+  mc_config.queue_families[0] = shared->compute_family();
+  mc_config.queue_families[1] = shared->graphics_family();
   mc_config.queue_family_count = 2;
   mc_config.slot_count = config.frames_in_flight + 1;
   auto extractor_result =
@@ -817,8 +819,8 @@ int run(GLFWwindow* window, const Options& opt) {
   // share them with gfx's family too -- the same reasoning as the mesh buffers
   // above, and the same unconditional pair. Depth only recon reads.
   rsensor::GpuFramePrepConfig prep_config;
-  prep_config.color_queue_families[0] = shared.compute_family;
-  prep_config.color_queue_families[1] = shared.graphics_family;
+  prep_config.color_queue_families[0] = shared->compute_family();
+  prep_config.color_queue_families[1] = shared->graphics_family();
   prep_config.color_queue_family_count = 2;
   prep_config.depth_within_color = opt.depth_within_color;
   std::vector<rsensor::GpuFramePrep> preps;
@@ -1090,7 +1092,8 @@ int run(GLFWwindow* window, const Options& opt) {
   // Set by whatever ended fusion early, so a scripted run exits non-zero.
   std::atomic<bool> fuse_failed{false};
   std::atomic<bool> quit{false};
-  const bool cross_family = shared.graphics_family != shared.compute_family;
+  const bool cross_family =
+      shared->graphics_family() != shared->compute_family();
 
   std::thread fuse_thread([&]() {
     try {

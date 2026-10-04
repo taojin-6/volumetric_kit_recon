@@ -22,14 +22,10 @@
 #include <memory>
 
 #include "volumetric_kit/recon/core/color_space.hpp"
+#include "volumetric_kit/recon/core/fwd.hpp"
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
 #include "volumetric_kit/recon/sensor/chroma_location.hpp"
 #include "volumetric_kit/recon/sensor/lens.hpp"
-
-namespace volumetric_kit::recon {
-class Buffer;
-class Image;
-}  // namespace volumetric_kit::recon
 
 namespace volumetric_kit::recon::sensor {
 

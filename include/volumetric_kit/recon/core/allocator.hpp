@@ -4,226 +4,37 @@
 #pragma once
 
 /// @file allocator.hpp
-/// @brief The VMA allocator: recon's device-memory arena and the factory for
-///        @ref Buffer.
+/// @brief recon's names for the core's VMA-backed allocator and its memory
+///        placements.
+///
+/// Re-exported from volumetric_kit_core (DECISIONS.md, 2026-10-04); the
+/// contract is the core header's, `volumetric_kit/core/vulkan/allocator.hpp`.
+///
+/// Every buffer and image the GPU works on is placed with
+/// @ref MemoryUsage::DeviceOnly, so a discrete GPU never reads it across the
+/// bus; only staging and readback buffers live in system memory.
+///
+/// @code
+/// VR_ASSIGN(Allocator allocator,
+///           Allocator::create(instance.handle(), device));
+/// BufferDesc desc;
+/// desc.size = bytes;
+/// desc.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;  // DeviceOnly by default
+/// VR_ASSIGN(Buffer grid, allocator.create_buffer(desc));
+/// @endcode
 
-#include <cstdint>
-#include <memory>
-
-#include "volumetric_kit/recon/core/export.hpp"
+#include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/recon/core/result.hpp"
-#include "volumetric_kit/recon/core/vulkan.hpp"
 
 namespace volumetric_kit::recon {
 
-class Device;
-class Buffer;
-
-/// @brief Where a buffer's memory should live.
-///
-/// Memory the kernels touch is `DeviceLocal`, and the host reaches it through
-/// a @ref CommandBatch: on a discrete GPU non-device-local host memory is
-/// reached over PCIe (the 2026-09-28 residency
-/// decision). `HostVisible` is for what the host produces or consumes --
-/// staging, readback, small parameters.
-enum class MemoryUsage {
-  Auto,         ///< Let VMA choose based on usage (`VMA_MEMORY_USAGE_AUTO`).
-  DeviceLocal,  ///< Require device-local memory; allocation fails if
-                ///< unavailable.
-  HostVisible,  ///< Prefer host-visible (CPU-mappable) memory.
-};
-
-/// @brief Host access pattern for a mapped buffer; selects the VMA host-access
-///        allocation flag.
-enum class HostAccess {
-  Random,  ///< Reads and writes in any order (`..._HOST_ACCESS_RANDOM`).
-  SequentialWrite,  ///< Write-once, front-to-back (`..._SEQUENTIAL_WRITE`).
-};
-
-/// @brief One memory heap's usage and budget, in bytes.
-///
-/// Both figures are VMA's running accounting of the heap, not a live driver
-/// query: @ref usage_bytes is what VMA has allocated out of it, @ref
-/// budget_bytes is how much VMA estimates is safely usable. They are heuristics
-/// unless `VK_EXT_memory_budget` is enabled, which lets VMA read the driver's
-/// authoritative figures.
-///
-/// TODO(core): enable `VK_EXT_memory_budget` on @ref Device::create (and
-/// require it in @ref DeviceRequirements for the adopt path) so these become
-/// the driver's own numbers rather than VMA's estimate.
-struct HeapStats {
-  std::uint64_t usage_bytes = 0;   ///< Bytes VMA has allocated from the heap.
-  std::uint64_t budget_bytes = 0;  ///< Bytes VMA estimates are usable in it.
-};
-
-/// @brief A snapshot of per-heap memory usage across the device's memory heaps.
-///
-/// Allocation-free: a fixed `VK_MAX_MEMORY_HEAPS` array with a live count, so
-/// it can be filled and returned by value without touching the host heap. Only
-/// the leading @ref heap_count entries of @ref heaps carry valid figures.
-///
-/// On a unified-memory (UMA) GPU -- Apple silicon through MoltenVK, this repo's
-/// primary target -- system and device memory are one pool, so the device
-/// typically reports a single unified heap rather than the separate
-/// device-local / host-visible heaps a discrete GPU exposes.
-struct MemoryStats {
-  std::uint32_t heap_count = 0;  ///< Number of valid entries in @ref heaps.
-  HeapStats heaps[VK_MAX_MEMORY_HEAPS]{};  ///< Per-heap usage/budget.
-};
-
-/// @brief Parameters for @ref Allocator::create_buffer.
-struct BufferDesc {
-  /// Size in bytes; must be non-zero.
-  VkDeviceSize size = 0;
-  /// Usage flags (e.g. `VK_BUFFER_USAGE_STORAGE_BUFFER_BIT`); must be non-zero.
-  VkBufferUsageFlags usage = 0;
-  /// Where the memory should live.
-  MemoryUsage memory = MemoryUsage::Auto;
-  /// Persistently map the allocation (host-visible only). A mapped buffer's
-  /// memory is reachable through @ref Buffer::mapped for the buffer's lifetime.
-  bool mapped = false;
-  /// Host access pattern; consulted only when @ref mapped is set.
-  HostAccess host_access = HostAccess::Random;
-
-  /// @brief The queue families that will access this buffer.
-  ///
-  /// Left null (the default), the buffer is `VK_SHARING_MODE_EXCLUSIVE` and is
-  /// owned by whichever family first uses it -- correct for everything this
-  /// library allocates for itself.
-  ///
-  /// It is *not* correct for a buffer a renderer will read directly (interop
-  /// seam B). On Apple the reconstruction compute and the renderer are handed
-  /// queues from **different families**, and reading an EXCLUSIVE buffer from a
-  /// family that does not own it is undefined -- the contents are not
-  /// guaranteed to be there, with no error and often no visible symptom on the
-  /// device that happened to work.
-  ///
-  /// Enumerate the families that will touch it and this picks the mode: two or
-  /// more distinct indices give `VK_SHARING_MODE_CONCURRENT`, one gives
-  /// EXCLUSIVE, because a single family *is* exclusive and Vulkan rejects
-  /// CONCURRENT with fewer than two. Duplicates are ignored for that count, so
-  /// a caller can pass its compute and render families unconditionally and get
-  /// EXCLUSIVE for free wherever the two turn out to be the same family --
-  /// which is the common case off Apple, and where CONCURRENT would otherwise
-  /// cost access performance for nothing.
-  ///
-  /// At most @ref kMaxQueueFamilies distinct entries; more is an error rather
-  /// than a truncation, since a partial list would name fewer families than
-  /// actually touch the buffer -- the original bug in a different hat.
-  ///
-  /// The array need only outlive the @ref Allocator::create_buffer call.
-  const std::uint32_t* queue_families = nullptr;
-  /// Number of entries in @ref queue_families; must be zero when it is null.
-  std::uint32_t queue_family_count = 0;
-
-  /// Ceiling on the *distinct* families one buffer can be shared between.
-  ///
-  /// Two is the case that exists -- one reconstruction family, one renderer
-  /// family -- and the headroom is for a third consumer rather than for a
-  /// device with an unusual queue layout, since what is counted here is
-  /// *consumers*, not what the driver exposes. Published so a caller can see
-  /// the limit it is checked against.
-  static constexpr std::uint32_t kMaxQueueFamilies = 4;
-};
-
-/// @brief Check the entry count of a config that carries its queue families
-///        in a fixed array of @ref BufferDesc::kMaxQueueFamilies, as
-///        `mesh::MarchingCubesConfig` and `sensor::GpuFramePrepConfig` do.
-///
-/// For the tier's `create`, so a count past the array is refused there
-/// rather than read past its end at the first buffer. The Allocator bounds
-/// the *distinct* families; this bounds what the array can hold at all.
-///
-/// @param count   The config's entry count.
-/// @param caller  Named in the message, e.g. `"MarchingCubes::create"`.
-/// @return OK, or @ref Status::Code::InvalidArgument past the array.
-VR_CORE_API Status check_queue_family_count(std::uint32_t count,
-                                            const char* caller);
-
-/// @brief Owns a `VmaAllocator` built over a `VkDevice`, and creates
-///        VMA-backed @ref Buffer resources on it.
-///
-/// A separate object from @ref Device rather than a member of it: a device
-/// obtained through @ref Device::adopt (shared with the renderer) still gets
-/// its own allocator here -- VMA allocators are independent bookkeeping over
-/// the same `VkDevice` memory, so each library manages its own. Build one per
-/// @ref Device.
-///
-/// @warning The `VkInstance` and @ref Device passed to @ref create must outlive
-///          this allocator *and* every @ref Buffer it creates; it stores their
-///          handles, and a Buffer is freed against that `VkDevice`.
-///
-/// Thread-safe: VMA locks its own state, so batches on several threads may
-/// allocate their staging from one allocator at once.
-///
-/// @note A @ref Buffer does **not** have to be destroyed before the Allocator
-///       that created it. Each Buffer holds a reference to the underlying VMA
-///       allocator, which is destroyed once the Allocator and every Buffer made
-///       from it are gone. This is deliberate rather than incidental: an
-///       ordering rule stated in prose cannot express move-assignment, where
-///       `a = std::move(b)` ends the resource's life while the wrapper `a`
-///       visibly lives on -- so a reader who satisfied "destroy Buffers first"
-///       by keeping the object alive still got a use-after-free.
-///
-/// @code
-/// Result<Allocator> alloc = Allocator::create(instance.handle(), device);
-/// if (!alloc) return alloc.status();
-/// @endcode
-class VR_CORE_API Allocator {
- public:
-  /// @brief Create a VMA allocator over @p device.
-  /// @param instance  The instance @p device belongs to.
-  /// @param device    The logical device to allocate on (must outlive this).
-  /// @return The allocator, or a non-OK @ref Status:
-  ///         @ref Status::Code::InvalidArgument for a null @p instance or an
-  ///         invalid @p device; @ref Status::Code::Backend if
-  ///         `vmaCreateAllocator` fails.
-  static Result<Allocator> create(VkInstance instance, const Device& device);
-
-  ~Allocator();
-  Allocator(Allocator&& other) noexcept;
-  Allocator& operator=(Allocator&& other) noexcept;
-  Allocator(const Allocator&) = delete;
-  Allocator& operator=(const Allocator&) = delete;
-
-  /// @brief Allocate a `VkBuffer` and its backing memory per @p desc.
-  /// @param desc  Size, usage, memory location, and mapping request.
-  /// @return The buffer, or a non-OK @ref Status:
-  ///         @ref Status::Code::InvalidArgument for a zero size/usage, a
-  ///         `mapped` device-local request, a host-visible request that is not
-  ///         `mapped`, more than @ref BufferDesc::kMaxQueueFamilies distinct
-  ///         queue families, or a queue-family index the device does not have;
-  ///         @ref Status::Code::Backend if VMA fails.
-  Result<Buffer> create_buffer(const BufferDesc& desc);
-
-  /// @brief Sample per-heap memory usage and budget across the device's heaps.
-  ///
-  /// The figures cover what *this* allocator has allocated -- a device shared
-  /// with the renderer (@ref Device::adopt) gives each library its own VMA
-  /// allocator, so each reports only its own share of the same `VkDevice`
-  /// memory.
-  ///
-  /// @return A @ref MemoryStats whose @ref MemoryStats::heap_count names the
-  ///         device's memory heaps and whose first that-many @ref
-  ///         MemoryStats::heaps entries carry each heap's usage/budget in
-  ///         bytes. A moved-from allocator reports `heap_count == 0`.
-  /// @note The byte figures are VMA heuristics unless `VK_EXT_memory_budget` is
-  ///       enabled; see @ref HeapStats. On UMA (Apple) GPUs expect one heap.
-  MemoryStats memory_stats() const;
-
-  /// @return `true` if this owns an allocator (`false` when moved-from).
-  bool valid() const noexcept { return impl_ != nullptr; }
-
- private:
-  Allocator() = default;
-
-  // pImpl so the VmaAllocator handle -- and thus <vk_mem_alloc.h> -- stays out
-  // of this public header. ~Impl frees the allocator, which is what lets the
-  // move operations above default correctly. Shared rather than unique because
-  // every Buffer's deleter holds a reference (see the @note above); the
-  // Allocator itself stays move-only, so nothing here is copyable.
-  struct Impl;
-  std::shared_ptr<Impl> impl_;
-};
+using core::Allocator;
+using core::BufferDesc;
+using core::check_queue_family_count;
+using core::HeapStats;
+using core::HostAccess;
+using core::ImageDesc;
+using core::MemoryStats;
+using core::MemoryUsage;
 
 }  // namespace volumetric_kit::recon

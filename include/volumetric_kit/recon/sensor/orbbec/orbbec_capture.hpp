@@ -18,15 +18,12 @@
 #include <string>
 
 #include "volumetric_kit/recon/core/camera_params.hpp"
+#include "volumetric_kit/recon/core/fwd.hpp"
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
 #include "volumetric_kit/recon/core/result.hpp"
 #include "volumetric_kit/recon/sensor/camera_capture.hpp"
 #include "volumetric_kit/recon/sensor/orbbec/export.hpp"
 #include "volumetric_kit/recon/sensor/raw_frame.hpp"
-
-namespace volumetric_kit::recon {
-class Device;
-}  // namespace volumetric_kit::recon
 
 namespace volumetric_kit::recon::sensor {
 
@@ -161,6 +158,11 @@ struct OrbbecStreamOptions {
   /// never crosses to the host. Null, or a decode elsewhere, gives host
   /// planes. Borrowed: it must outlive the capture and every frame on it.
   const Device* device = nullptr;
+  /// With @ref device, the allocator NVDEC's and nvJPEG's pictures are made
+  /// through (exported device-only memory); without it, their pictures come
+  /// to the host. VideoToolbox's need none. Borrowed: it must outlive the
+  /// capture and every frame on it.
+  Allocator* allocator = nullptr;
 };
 
 /// @brief One Orbbec RGB-D camera, polled for posed frames with depth

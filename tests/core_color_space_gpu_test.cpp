@@ -30,10 +30,12 @@
 #include <fstream>
 #include <vector>
 
+#include "buffer_readback.hpp"
 #include "volumetric_kit/recon/core/allocator.hpp"
 #include "volumetric_kit/recon/core/buffer.hpp"
 #include "volumetric_kit/recon/core/color_space.hpp"
 #include "volumetric_kit/recon/core/compute_pipeline.hpp"
+#include "volumetric_kit/recon/core/compute_util.hpp"
 #include "volumetric_kit/recon/core/descriptor.hpp"
 #include "volumetric_kit/recon/core/device.hpp"
 #include "volumetric_kit/recon/core/instance.hpp"
@@ -74,14 +76,15 @@ int main() {
                  instance.status().message().c_str());
     return 0;
   }
-  vr::Result<VkPhysicalDevice> gpu = instance.value().select_physical_device();
+  vr::Result<vr::PhysicalDeviceInfo> gpu =
+      instance.value().select_physical_device(vr::device_requirements());
   if (!gpu) {
     std::fprintf(stderr, "no compute-capable device (%s); skipping\n",
                  gpu.status().message().c_str());
     return 0;
   }
-  vr::Result<vr::Device> device =
-      vr::Device::create(instance.value(), gpu.value(), {});
+  vr::Result<vr::Device> device = vr::Device::create(
+      instance.value(), gpu.value(), vr::device_requirements());
   if (!device) {
     std::fprintf(stderr, "device create failed: %s\n",
                  device.status().message().c_str());
@@ -95,13 +98,10 @@ int main() {
     return 1;
   }
 
+  // Device-only, as every buffer a kernel writes: the host reads the results
+  // back through a batch rather than across the bus.
   auto make_buffer = [&](std::size_t bytes) {
-    vr::BufferDesc desc;
-    desc.size = bytes;
-    desc.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-    desc.memory = vr::MemoryUsage::HostVisible;
-    desc.mapped = true;
-    return allocator.value().create_buffer(desc);
+    return vr::device_storage_buffer(allocator.value(), bytes);
   };
   vr::Result<vr::Buffer> linear_buf = make_buffer(kCodes * sizeof(float));
   vr::Result<vr::Buffer> round_buf =
@@ -187,9 +187,9 @@ int main() {
         VkMemoryBarrier barrier{};
         barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
         barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        barrier.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+        barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                             VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &barrier, 0,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &barrier, 0,
                              nullptr, 0, nullptr);
       });
   if (!submitted) {
@@ -197,14 +197,17 @@ int main() {
     return 1;
   }
 
-  const auto* gpu_linear =
-      static_cast<const float*>(linear_buf.value().mapped());
-  const auto* gpu_round =
-      static_cast<const std::uint32_t*>(round_buf.value().mapped());
-  if (gpu_linear == nullptr || gpu_round == nullptr) {
-    std::fprintf(stderr, "buffers were not host-mapped\n");
+  vr::Result<std::vector<float>> linear_out = vr_test::read_back<float>(
+      device.value(), allocator.value(), linear_buf.value(), kCodes);
+  vr::Result<std::vector<std::uint32_t>> round_out =
+      vr_test::read_back<std::uint32_t>(device.value(), allocator.value(),
+                                        round_buf.value(), kCodes);
+  if (!linear_out || !round_out) {
+    std::fprintf(stderr, "readback failed\n");
     return 1;
   }
+  const float* gpu_linear = linear_out.value().data();
+  const std::uint32_t* gpu_round = round_out.value().data();
 
   // 1e-5 absolute is far tighter than the ~0.0036 gap between the exact curve
   // and pow(x, 2.2) at its worst, so a substituted approximation fails loudly

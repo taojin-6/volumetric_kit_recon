@@ -307,8 +307,8 @@ geometry buffers directly.
 - **Device locality and host visibility are independent flags.** Non-local
   host memory costs PCIe traffic on a discrete GPU, a cost hidden by Apple's
   unified memory. A type with both `DEVICE_LOCAL` and `HOST_VISIBLE` is still
-  local (UMA or BAR). Every buffer `storage_buffer` makes is host-visible;
-  its actual locality is recorded in `Buffer::memory_info()`. The hash table's
+  local (UMA or BAR). A buffer's actual memory type is recorded in
+  `Buffer::memory_info()`. The hash table's
   bucket locks used non-local host memory until an RTX 5090 took 1.97 s to
   allocate a 5 000-triangle sheet
   (3.4 ms device-local) and lost a 320 000-triangle one to the driver's
@@ -321,8 +321,8 @@ geometry buffers directly.
   `CommandBatch`; and the CPU never reads VRAM directly, since BAR memory
   reads uncached (6.6 s for one mesh download).
   Small parameters may stay host-visible: under 64 KB, it measured nothing.
-  So may a table the host reads in place, as `mesh`'s span table is: the
-  kernel writes each block's entry once, and `block_spans()` is a pointer. A
+  A table the host reads, as `mesh`'s span table, is device-only like the
+  rest, and comes back by readback in the batch that wrote it (2026-10-04). A
   GPU test failing on the Linux boxes with a bare `vkWaitForFences` is a lost
   device: read the host's kernel log for the Xid before calling it load.
 - **A bare `cmake -S . -B build` leaves `CMAKE_BUILD_TYPE` empty, so everything
@@ -636,6 +636,13 @@ arbitrary; it usually isn't.
 
 ### core
 
+The Vulkan foundation below is volumetric_kit_core's vulkan tier
+(DECISIONS.md, 2026-10-04): `core/` names its types in `vr::`, and what is
+recon's own is `device_requirements()` (what recon's kernels need of a device),
+the camera and colour-space vocabulary and the vector types. The description
+stays here because recon's tiers are written against it; the contract is the
+core's headers.
+
 the Vulkan compute foundation: VMA `Allocator`, RAII `Buffer`,
 `ShaderModule`, descriptor + `ComputePipeline` wrappers, the `ComputeKernel`
 bundle + `KernelSetBuilder`, the shared-queue-safe
@@ -643,10 +650,11 @@ bundle + `KernelSetBuilder`, the shared-queue-safe
 each submit records on a command pool of its own, kept with its fence for
 the next, and only the queue submit is locked; a kernel's set, a buffer and a `GpuTimer` stay the caller's to
 keep to one thread), and the shared `dispatch()` /
-`group_count` / `storage_buffer` / range-guard helpers of `compute_util.hpp`
+`group_count` / `mapped_storage_buffer` / range-guard helpers of `compute_util.hpp`
 — `StorageInput` among them, the host array (staged onto the device in the
 call's batch) or device buffer a call binds at its image's exact range.
-`MemoryUsage::DeviceLocal` requires `VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT`:
+`MemoryUsage::DeviceOnly` requires device-local memory the host cannot map
+where the GPU has any (else the device-local pool, never the BAR window):
 allocation fails instead of spilling into a non-local heap. `Buffer::memory_info()`
 records the selected memory type's flags, type index and heap index; its
 optional value is absent for an empty buffer or an adoption with unknown
@@ -658,8 +666,8 @@ usage fit. Adopters must supply the bound allocation's actual memory
 metadata: the adopting constructor has no default for it, and `std::nullopt`
 says it is unknown. Callers holding non-local data can pass a host array for staging, or
 upload/copy into `device_storage_buffer` with `CommandBatch` before using the
-device overload. Transfer-only sources and the documented small-parameter or
-host-read-table exceptions do not gain a blanket residency restriction.
+device overload. Transfer-only sources and the documented small-parameter
+exception do not gain a blanket residency restriction.
 **`CommandBatch`** (`core/command_batch.hpp`)
 is how the host reaches device memory: one call's uploads, fills, copies,
 dispatches (indirect too) and readbacks in one command buffer, one fence
@@ -740,11 +748,9 @@ extension, so it cannot ride `enabled_device_extensions` and is **declared,
 never probed** — the loader's answer for a disabled extension is not portable
 (null from a conformant loader, a live pointer from a directly-linked
 MoltenVK). Both seams carry the declaration:
-`AdoptedDevice::enabled_debug_utils` on adopt and
-`DeviceConfig::instance_debug_utils_enabled` on create, the latter filled in
-by the `Device::create(const Instance&, …)` overload every recon call site
-uses; `DeviceRequirements::debug_utils` is how an embedder hears recon wants
-it at all. It is never required — its absence costs the capture's names and
+`AdoptedDevice::enabled_debug_utils` on adopt and the
+`instance_debug_utils_enabled` argument on create, the latter filled in by the
+`Device::create(const Instance&, …)` overload every recon call site uses. It is never required — its absence costs the capture's names and
 nothing else — and resolution is **all-or-nothing**, so a driver returning
 two of the three entry points reports no labels rather than a region that can
 be opened and not closed. The label is recorded *outside* the `GpuTimer`
@@ -945,9 +951,10 @@ consumer releases by generation; the kernel writes a real
 `VkDrawIndexedIndirectCommand`. `extract_device` returns a borrowed
 `DeviceMesh` (valid until the next extract, enforced by a generation stamp),
 `download` takes the single host copy and bridges the two workflows. The
-arena, index run and draw command are device-local, and each extract
-attempt is one batch that reads back only the 32-byte command; the span
-table stays host-visible, since the host reads it. With the spans off the
+arena, index run, draw command and span table are device-only, and each
+extract attempt is one batch that reads back the 32-byte command and, with
+the spans on, the span table up to the highest active slot, into the host
+copy `block_spans()` returns. With the spans off the
 active list never reaches the host: the extract compacts onto the device,
 or takes the fuse's list back from the map, and binds it in place
 (2026-09-30). An
@@ -1521,11 +1528,9 @@ depth and coverage in the pass between calls, blending views at their seams,
 and a per-triangle tile
 index in gfx so a shared mesh can be textured from several views; and the
 multi-keyframe post-scan atlas, which the multi-view path can carry. On
-`core`: the `TODO(core)` for `VK_EXT_memory_budget` on `Device::create`,
-which would turn the viewer's heap gauges from VMA heuristics into driver
-truth. The debug-utils labels that TODO
-sat beside **have landed** (2026-08-30) — on the *kernel* rather than the span,
-which is the correction that entry records.
+`core`: the `TODO(core)` on `device_requirements()`, to refuse a device
+without `scalarBlockLayout` once the core's `Device` records the features it
+enabled (2026-10-04).
 
 **On `tsdf`**, mesh → TSDF has its two modes (2026-09-27), a second way into
 the grid the codec encodes: a mesh sequence converts frame by frame. Both modes

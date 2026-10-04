@@ -304,6 +304,11 @@ entries relevant to your task; later amendments supersede earlier rules.
   Error handling comes from `volumetric_kit_core`: `vr::Status`/`Result` are
   the core's types, `VR_TRY`/`VR_ASSIGN`/`VR_CHECK` its macros under recon's
   names, and recon logs through its one sink with source `"vr"`.
+- [**2026-10-04**](#2026-10-04--the-vulkan-foundation-comes-from-volumetric_kit_core) —
+  The Vulkan foundation comes from `volumetric_kit_core`'s vulkan tier: `core/`
+  names its types in `vr::`, `device_requirements()` states what recon's
+  kernels need, and the viewer builds its device with the core's
+  `SharedDevice`.
 
 ## Decision record
 
@@ -9364,6 +9369,102 @@ and each pair must merge into one overload or it is a redefinition.
 **Validation.** Apple M-series, macOS, Release with warnings as errors, Orbbec,
 FFmpeg, Assimp and the viewer: the build is warning-free and all 61 tests
 pass, the GPU tests on MoltenVK. CUDA paths build only in CI's CUDA leg.
+
+### 2026-10-04 — The Vulkan foundation comes from volumetric_kit_core.
+
+**The rule.** recon's instance, device, VMA allocator, buffers, images,
+descriptors, shader modules, compute pipelines and kernels, command batches,
+GPU timers, stage metrics and exported buffers are volumetric_kit_core's
+vulkan tier, not recon's own. The headers under `core/` keep their names and
+now only name the core's types in `vr::` (using-declarations, so `vr::Device`
+*is* `volumetric_kit::core::Device`); `core/vulkan.hpp` forwards to the core's
+umbrella, and `VR_VK_TRY` is the core's `VKC_VK_TRY` under recon's name, with
+the other macros. `recon_core` compiles only its version query and links
+`volumetric_kit::core_vulkan` PUBLIC; recon no longer fetches or compiles VMA.
+What stays recon's is what no other sibling needs: the camera and colour-space
+vocabulary, the vector types, and `device_requirements()`.
+
+**Why.** The core's vulkan tier was seeded from recon's foundation and then
+hardened across five stages (core V1–V5): explicit memory placement, so a
+discrete GPU never reads kernel memory across the bus; a command batch with
+staged uploads; timers with tagged spans; exported buffers counted against
+the heap budget; and the shared device. Keeping recon's copy would have meant
+two foundations drifting again, and gfx and the iOS app could not hand a
+`VkBuffer` across without two device types meeting at the seam.
+
+**What recon states.** `device_requirements()` is the one statement of what
+recon's kernels need: the core's defaults (a compute queue, timeline
+semaphores) plus `scalarBlockLayout`, every recon shader's buffer ABI, and
+`VK_KHR_external_memory_fd` and `VK_EXT_metal_objects` as optional
+extensions. The core's default leaves `scalarBlockLayout` off, as calib needs
+none; so `Device::create(instance, gpu, {})`, which was right when `{}` was
+recon's own `DeviceConfig`, would now make a device recon's kernels cannot run
+on. Every call site passes `device_requirements()`, and an embedder merges it
+with its own. Nothing in recon can tell a device made without it, as the
+core's `Device` does not record the features it enabled; a `TODO(core)` on
+`device_requirements()` waits for that, so a kernel can refuse such a device.
+`core/fwd.hpp` forward-declares the core's classes in its
+namespace and names them in `vr::`: a `class Device;` in `vr::` would declare
+an unrelated class that collides with the using-declaration.
+
+**What changed with the merge.**
+
+- *Memory is placed explicitly.* `DeviceLocal`, `HostVisible` and `Auto` are
+  gone; a buffer is `DeviceOnly`, `DeviceMapped` (device-local, host-mapped)
+  or `Staging` (host memory, transfer only). recon's tiers already allocated
+  through `device_storage_buffer` and the command batch, so three sites
+  changed. `GpuFramePrep`'s kept upload buffer is `Staging`. The colour-parity
+  test reads its results back through a batch instead of mapping what the
+  kernel wrote.
+- *The block-span table.* The marching-cubes span table was the one buffer
+  the host and a kernel both read and wrote in place, in host-visible memory
+  a discrete GPU's kernel reaches across PCIe. The core gives a shader no
+  host memory, and its mapped device memory is the BAR window on a discrete
+  GPU, which the host reads uncached (and a write-only mapping not at all),
+  may not exist, and can fill. So the table is device-only, and the host
+  keeps a copy: each dispatch reads back the spans up to the highest active
+  slot in its own batch, an incremental extract uploads the entries it
+  clears, and a grow copies the table on the device. `block_spans()` returns
+  the copy, and `arena_bytes` counts its 16 bytes per block.
+- *Exported buffers take an allocator.* The core makes them through VMA so
+  they count against the heap budget, so `CudaPictures` needs an `Allocator`.
+  `HevcDecoder::Options`, `JpegDecoder::Options` and `OrbbecStreamOptions`
+  gain an `allocator` beside `device`. Without one, NVDEC's and nvJPEG's
+  pictures come to the host, said once as a warning like any other device
+  path that does not open.
+- *Tests.* Nine tests of the foundation itself (`device`, `compute_raii`,
+  `compute_smoke`, `core_buffer_memory`, `core_buffer_sharing`,
+  `core_command_batch`, `core_external_memory`, `core_memory_stats`,
+  `core_stage_metrics`) are gone. The core's suite covers the same ground,
+  having been ported from them. `vulkan_smoke` stays, now creating a device
+  from `device_requirements()`: that recon's statement is one a real driver
+  meets is recon's to test.
+
+**The viewer.** `examples/viewer/shared_device.hpp` was the neutral bootstrap
+of the 2026-08-02 decision; the core's `SharedDevice` is that bootstrap
+generalized (it replaces this one and the iOS app's), so the viewer's header
+now only makes the GLFW surface and converts gfx's requirements and payload,
+as gfx still has a device type of its own. The queue-plan preference is the
+core's, unchanged. Every queue now has a mutex (it was set only under the
+shared-queue plan), as the core's `wait_idle` is a third thread touching both
+queues.
+
+**The VMA link hazard.** Until gfx adopts the core, a program linking both
+carries two VMA implementations: gfx's `vma_impl.cpp`, and the core's,
+compiled into `core_vulkan`'s `allocator.cpp`. A static link loads an archive
+member only for a symbol still undefined, so it links when the core's
+`allocator.o` is loaded first -- as in the viewers, whose link line names
+`core_vulkan` before `gfx_core` -- and fails with duplicate symbols when gfx's
+`vma_impl.o` is. The iOS app links both, so it bumps recon and gfx together,
+once gfx compiles no VMA of its own.
+
+**Validation.** Apple M5 Max, macOS, Debug with warnings as errors: all 39
+tests pass, and all 52 with FFmpeg, Assimp and Orbbec (the camera tests skip
+without a serial), each run with the Khronos validation layer forced on and no
+message reported. GCC 16, Release: builds warning-free. The viewers build;
+`fuse_viewer` fused 60 Replica room0 frames on the core's shared device (two
+families on MoltenVK) under validation, drawing through gfx with no message.
+CUDA paths build only in CI's CUDA leg.
 
 ## Measured lessons
 

@@ -4,54 +4,25 @@
 #pragma once
 
 /// @file vk_result.hpp
-/// @brief Bridge a Vulkan `VkResult` into the backend-neutral core `Status`.
+/// @brief recon's names for the core's bridge from a `VkResult` to a backend
+///        `Status`.
 ///
-/// @ref result.hpp stays free of any GPU-API include so the `Status`/`Result`
-/// idiom serves every tier. This header is the one place the Vulkan core turns
-/// a failed `VkResult` into a `Status` (domain @ref Status::Code::Backend,
-/// detail = the `VkResult` value), and where @ref VR_VK_TRY lives -- the
-/// `VkResult` analogue of @ref VR_TRY.
+/// Re-exported from volumetric_kit_core (DECISIONS.md, 2026-10-04); the
+/// contract is the core header's, `volumetric_kit/core/vulkan/vk_result.hpp`.
 
-#include <cstdint>
-#include <string>
-#include <string_view>
-
+#include "volumetric_kit/core/vulkan/vk_result.hpp"
 #include "volumetric_kit/recon/core/result.hpp"
-#include "volumetric_kit/recon/core/vulkan.hpp"
 
 namespace volumetric_kit::recon {
 
-/// @brief Wrap a non-success `VkResult` as a backend @ref Status.
-/// @param code  The `VkResult` returned by a failed Vulkan call.
-/// @param what  Human-readable context (e.g. the failing call site).
-/// @pre @p code is not `VK_SUCCESS`: test the call's result first. Violating
-///      this aborts, as @ref Status::backend_error does.
-/// @return A non-OK `Status` (domain @ref Status::Code::Backend) carrying
-///         @p code as its @ref Status::detail.
-inline Status vk_error(VkResult code, std::string_view what) {
-  return Status::backend_error(static_cast<std::int64_t>(code),
-                               std::string(what));
-}
+using core::vk_error;
+using core::vk_result;
 
 }  // namespace volumetric_kit::recon
 
-/// @brief Evaluate a `VkResult` expression and early-return a backend `Status`
-///        if it is not `VK_SUCCESS`.
+// TODO: rename VR_VK_TRY to the core's VKC_VK_TRY with VR_TRY (result.hpp).
+
+/// @brief Early-return a backend `Status` from a failed `VkResult`; the core's
+///        `VKC_VK_TRY` under recon's name.
 /// @param expr  An expression yielding a `VkResult`.
-///
-/// Usable only inside a function returning `Status` or `Result<T>`. The `#expr`
-/// stringization gives the failure message the failing call site.
-///
-/// @code
-/// Status init() {
-///   VR_VK_TRY(vkCreateInstance(&ci, nullptr, &instance_));
-///   return {};
-/// }
-/// @endcode
-#define VR_VK_TRY(expr)                                        \
-  do {                                                         \
-    VkResult _vr_vk = (expr);                                  \
-    if (_vr_vk != VK_SUCCESS) {                                \
-      return ::volumetric_kit::recon::vk_error(_vr_vk, #expr); \
-    }                                                          \
-  } while (0)
+#define VR_VK_TRY(expr) VKC_VK_TRY(expr)

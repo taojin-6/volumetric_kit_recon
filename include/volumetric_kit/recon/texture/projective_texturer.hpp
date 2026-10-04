@@ -15,6 +15,7 @@
 #include "volumetric_kit/recon/core/camera_params.hpp"
 #include "volumetric_kit/recon/core/compute_kernel.hpp"
 #include "volumetric_kit/recon/core/descriptor.hpp"
+#include "volumetric_kit/recon/core/fwd.hpp"
 #include "volumetric_kit/recon/core/gpu_timer.hpp"
 #include "volumetric_kit/recon/core/result.hpp"
 #include "volumetric_kit/recon/core/stage_metrics.hpp"
@@ -22,13 +23,6 @@
 #include "volumetric_kit/recon/mesh/mesh.hpp"
 #include "volumetric_kit/recon/texture/export.hpp"
 #include "volumetric_kit/recon/texture/texture_atlas.hpp"
-
-namespace volumetric_kit::recon {
-class CommandBatch;
-class Device;
-class Allocator;
-class StorageInput;
-}  // namespace volumetric_kit::recon
 
 namespace volumetric_kit::recon::texture {
 

@@ -417,19 +417,20 @@ void draw_reconstruction_panel(const ReconstructionPanel& panel) {
     ImGui::Text("  %d buckets", panel.map_buckets);
   }
   ImGui::Separator();
-  // recon's device memory: its own VMA allocator's share of the device. On a
-  // shared/adopted device each library allocates separately, so this is recon's
-  // footprint, not the process total.
+  // recon's device memory: its own VMA allocator's share of the device
+  // (reserved_bytes), against the heap's budget. On a shared/adopted device
+  // each library allocates separately, so this is recon's footprint, not the
+  // process total -- which usage_bytes is, where the driver reports budgets.
   for (std::uint32_t heap = 0; heap < panel.recon_memory.heap_count; ++heap) {
     const vr::HeapStats& stats = panel.recon_memory.heaps[heap];
-    if (stats.budget_bytes == 0 && stats.usage_bytes == 0) continue;
+    if (stats.reserved_bytes == 0) continue;
     char overlay[64];
     std::snprintf(overlay, sizeof(overlay), "%.0f / %.0f MiB",
-                  to_mebibytes(stats.usage_bytes),
+                  to_mebibytes(stats.reserved_bytes),
                   to_mebibytes(stats.budget_bytes));
     char label[32];
     std::snprintf(label, sizeof(label), "recon heap %u", heap);
-    gauge(label, static_cast<double>(stats.usage_bytes),
+    gauge(label, static_cast<double>(stats.reserved_bytes),
           static_cast<double>(stats.budget_bytes), 0.9, overlay);
   }
   if (panel.preloaded_bytes != 0) {
@@ -485,10 +486,9 @@ int run(GLFWwindow* window, const Options& opt) {
   // must be gone before the instance and device are destroyed.
   fuse_viewer::SharedDeviceConfig shared_config;
   shared_config.enable_validation = opt.validation;
-  fuse_viewer::SharedDevice shared;
-  if (!fuse_viewer::build_shared_device(window, shared_config, shared)) {
-    return 1;
-  }
+  const std::unique_ptr<fuse_viewer::vkc::SharedDevice> shared =
+      fuse_viewer::build_shared_device(window, shared_config);
+  if (shared == nullptr) return 1;
 
   vg::app::WindowedAppConfig config;
   config.app_name = "fuse_viewer";
@@ -499,18 +499,18 @@ int run(GLFWwindow* window, const Options& opt) {
   // one -- so the factory hands over the one the bootstrap made rather than
   // creating a second. Ownership transfers with it.
   auto app_r = vg::app::WindowedApp::adopt(
-      fuse_viewer::gfx_adopt_payload(shared), config,
+      fuse_viewer::gfx_adopt_payload(*shared), config,
       [&shared](VkInstance instance) -> vg::Result<VkSurfaceKHR> {
         // adopt calls this with the instance from the payload, so this can only
         // trip if the two ever stop coming from the same SharedDevice -- at
         // which point the surface would belong to a different instance than the
         // swapchain built on it.
-        if (instance != shared.instance) {
+        if (instance != shared->instance().handle()) {
           return vg::Status::invalid_argument(
               "surface factory: the app adopted a different VkInstance than "
               "the bootstrap created the surface on");
         }
-        return shared.release_surface();
+        return shared->release_surface();
       });
   if (!app_r.ok()) {
     std::fprintf(stderr, "WindowedApp::adopt: %s\n",
@@ -523,14 +523,14 @@ int run(GLFWwindow* window, const Options& opt) {
   // allocators are independent bookkeeping over one VkDevice's memory, so each
   // library manages its own even when the device is shared.
   auto recon_device_result =
-      vr::Device::adopt(fuse_viewer::recon_adopt_payload(shared), {});
+      vr::Device::adopt(shared->compute_payload(), vr::device_requirements());
   if (!recon_device_result) {
     std::fprintf(stderr, "recon Device::adopt: %s\n",
                  recon_device_result.status().message().c_str());
     return 1;
   }
-  auto recon_allocator_result =
-      vr::Allocator::create(shared.instance, recon_device_result.value());
+  auto recon_allocator_result = vr::Allocator::create(
+      shared->instance().handle(), recon_device_result.value());
   if (!recon_allocator_result) {
     std::fprintf(stderr, "recon allocator: %s\n",
                  recon_allocator_result.status().message().c_str());
@@ -590,8 +590,8 @@ int run(GLFWwindow* window, const Options& opt) {
   // buffers EXCLUSIVE under kTwoFamilies (what MoltenVK actually gives), where
   // gfx reading them from the family that does not own them is undefined with
   // nothing to report it.
-  mc_config.queue_families[0] = shared.compute_family;
-  mc_config.queue_families[1] = shared.graphics_family;
+  mc_config.queue_families[0] = shared->compute_family();
+  mc_config.queue_families[1] = shared->graphics_family();
   mc_config.queue_family_count = 2;
   // One slot per frame in flight, plus one: the frames still in flight each
   // hold a generation, and one more is being extracted. Derived from the value
@@ -1353,7 +1353,7 @@ int run(GLFWwindow* window, const Options& opt) {
         taken_version = 0;
       } else if (taken_version != 0) {
         if (const char* why = fuse_viewer::unbindable_reason(
-                taken, shared.graphics_family != shared.compute_family)) {
+                taken, shared->graphics_family() != shared->compute_family())) {
           std::fprintf(stderr,
                        "fuse_viewer: the extracted mesh cannot be bound as "
                        "geometry (%s); drawing stops here\n",

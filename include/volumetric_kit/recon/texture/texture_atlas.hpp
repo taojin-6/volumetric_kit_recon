@@ -16,12 +16,9 @@
 #include <vector>
 
 #include "volumetric_kit/recon/core/camera_params.hpp"
+#include "volumetric_kit/recon/core/fwd.hpp"
 #include "volumetric_kit/recon/core/result.hpp"
 #include "volumetric_kit/recon/texture/export.hpp"
-
-namespace volumetric_kit::recon {
-class Buffer;
-}  // namespace volumetric_kit::recon
 
 namespace volumetric_kit::recon::texture {
 

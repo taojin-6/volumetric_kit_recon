@@ -2,21 +2,24 @@
 # Copyright (c) 2026 Tao Jin
 
 # --- recon_core: Tier 1 -----------------------------------------------------
-# Foundation tier: the Vulkan foundation (instance, device, ... mirroring gfx's
-# core), recon's names for volumetric_kit_core's Status/Result error handling,
-# log sink and contract checks, and the GLM-backed vector/matrix vocabulary.
-# Every other tier depends on this. Vulkan is reached only through the
-# core/vulkan.hpp umbrella, and the Status type stays backend-neutral (no
-# VkResult in result.hpp -- vk_result.hpp bridges VkResult -> Status). Deps:
-# header-only GLM + the Vulkan loader/headers.
+# Foundation tier: recon's names for volumetric_kit_core's error handling, log
+# sink and contract checks (base tier) and for its Vulkan foundation --
+# instance, device, allocator, buffers, images, descriptors, compute pipelines
+# and kernels, command batches, GPU timers, external memory (vulkan tier) --
+# plus what is recon's own: the requirements recon's kernels place on a device,
+# the camera and colour-space vocabulary, and the GLM-backed vector/matrix
+# types. Every other tier depends on this. Vulkan is reached only through the
+# core/vulkan.hpp umbrella. Deps: volumetric_kit_core, header-only GLM and the
+# Vulkan loader/headers.
 include(GenerateExportHeader)
 include(GNUInstallDirs)
 
-# The device serializes submits with std::mutex, so recon_core needs the
-# platform threading runtime. Link it explicitly rather than relying on the
-# compiler's implicit pthread, so the static archive resolves on toolchains that
-# require it -- GCC/libstdc++ on Linux with --as-needed, Android, and static
-# links. (macOS folds pthread into libc, which would otherwise hide the gap.)
+# The core's device serializes submits with std::mutex and recon's sensor tier
+# runs capture threads, so everything above recon_core needs the platform
+# threading runtime. Link it explicitly rather than relying on the compiler's
+# implicit pthread, so the static archive resolves on toolchains that require it
+# -- GCC/libstdc++ on Linux with --as-needed, Android, and static links. (macOS
+# folds pthread into libc, which would otherwise hide the gap.)
 find_package(Threads REQUIRED)
 
 # GLM: header-only vector/matrix math. PUBLIC -- it appears in public headers
@@ -33,10 +36,11 @@ find_package(Threads REQUIRED)
 # (brew/apt/vcpkg/Conan) or a FetchContent pin.
 find_package(glm CONFIG REQUIRED)
 
-# The Vulkan loader + headers. PUBLIC: the public instance/device headers reach
-# Vulkan through core/vulkan.hpp and so include <vulkan/vulkan.h>, meaning every
-# consumer compiles against it and links the loader (the package Config re-finds
-# Vulkan). MoltenVK is the loader/driver on Apple.
+# The Vulkan loader + headers. PUBLIC: the public headers reach Vulkan through
+# core/vulkan.hpp and so include <vulkan/vulkan.h>, meaning every consumer
+# compiles against it and links the loader (the package Config re-finds Vulkan).
+# MoltenVK is the loader/driver on Apple. The core's vulkan tier links it too;
+# naming it here keeps recon's own use explicit.
 find_package(Vulkan REQUIRED)
 
 set(_vr_generated_inc "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
@@ -44,33 +48,9 @@ set(_vr_generated_inc "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
 add_library(recon_core)
 add_library(volumetric_kit::recon_core ALIAS recon_core)
 
-target_sources(
-  recon_core
-  PRIVATE version.cpp
-          instance.cpp
-          device.cpp
-          # Timestamp spans around a dispatch, resolved once its fence has
-          # signalled. Its companion stage_metrics.hpp is deliberately absent
-          # from this list: that header is Vulkan-free and header-only, so a
-          # pure-host consumer reports timings without preprocessing a driver
-          # header.
-          gpu_timer.cpp
-          # Vulkan compute foundation: the VMA allocator + RAII buffer, the
-          # SPIR-V shader module, descriptor + compute-pipeline wrappers, and
-          # the single TU that instantiates VMA (VMA_IMPLEMENTATION). Dispatch +
-          # submit live on Device (device.cpp).
-          allocator.cpp
-          buffer.cpp
-          image.cpp
-          shader.cpp
-          descriptor.cpp
-          compute_pipeline.cpp
-          compute_kernel.cpp
-          # One call's uploads, fills, copies, dispatches and readbacks in one
-          # submit.
-          command_batch.cpp
-          external_memory.cpp
-          vma_impl.cpp)
+# The Vulkan foundation is the core's (core_vulkan); what recon compiles of its
+# own here is only the version query. The rest of the tier is header-only.
+target_sources(recon_core PRIVATE version.cpp)
 
 # Generated headers: the VR_CORE_API export macro + the configured version
 # header. The export header is per-tier (core/export.hpp + VR_CORE_API +
@@ -102,32 +82,19 @@ endif()
 
 target_compile_features(recon_core PUBLIC cxx_std_17)
 
-# PUBLIC: consumers compile our public headers (which include GLM, and the
-# core's Status / Result / log sink) and, for a static archive, must also link
-# the threading runtime -- so the exported target carries these requirements
-# (the Config.cmake re-finds Threads, glm and volumetric_kit_core).
+# PUBLIC: consumers compile our public headers (which include GLM and the core's
+# base and vulkan tiers) and, for a static archive, must also link the threading
+# runtime -- so the exported target carries these requirements (the Config.cmake
+# re-finds Threads, glm, Vulkan and volumetric_kit_core).
 target_link_libraries(
-  recon_core PUBLIC volumetric_kit::core_base Threads::Threads glm::glm
-                    Vulkan::Vulkan)
+  recon_core PUBLIC volumetric_kit::core_base volumetric_kit::core_vulkan
+                    Threads::Threads glm::glm Vulkan::Vulkan)
 
 target_include_directories(
   recon_core
   PUBLIC "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>"
          "$<BUILD_INTERFACE:${_vr_generated_inc}>"
          "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
-
-# VMA is a private implementation detail: only allocator.cpp and vma_impl.cpp
-# include <vk_mem_alloc.h>, never a public header, so it is neither propagated
-# to consumers nor part of the installed interface. SYSTEM keeps VMA's own
-# headers out of recon_core's -Werror surface.
-if(NOT VR_VMA_INCLUDE_DIR)
-  message(
-    FATAL_ERROR
-      "recon_core: VR_VMA_INCLUDE_DIR is unset -- third_party/ (VMA) must be "
-      "configured before src/ (see the root CMakeLists add_subdirectory order)."
-  )
-endif()
-target_include_directories(recon_core SYSTEM PRIVATE "${VR_VMA_INCLUDE_DIR}")
 
 vr_target_warnings(recon_core)
 

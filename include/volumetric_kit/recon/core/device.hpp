@@ -4,548 +4,72 @@
 #pragma once
 
 /// @file device.hpp
-/// @brief The logical device: a compute (+ transfer) queue, its command pools,
-///        and the create-or-adopt seam that lets recon run standalone or share
-///        one `VkDevice` with the renderer.
+/// @brief recon's names for the core's logical device, and what recon's
+///        kernels require of one.
+///
+/// Re-exported from volumetric_kit_core (DECISIONS.md, 2026-10-04); the
+/// contract is the core header's, `volumetric_kit/core/vulkan/device.hpp`.
+///
+/// What recon adds is @ref device_requirements: the one statement of what
+/// recon's kernels need, which a standalone caller passes to
+/// `Instance::select_physical_device` and `Device::create`, and an embedder
+/// merges with its own (`merge`, or a `SharedDeviceConfig`) before building a
+/// shared device.
+///
+/// @code
+/// const DeviceRequirements reqs = device_requirements();
+/// VR_ASSIGN(PhysicalDeviceInfo gpu, instance.select_physical_device(reqs));
+/// VR_ASSIGN(Device device, Device::create(instance, gpu, reqs));
+/// @endcode
 
-#include <cstdint>
-#include <functional>
-#include <mutex>
-#include <type_traits>
-#include <vector>
-
-#include "volumetric_kit/recon/core/export.hpp"
+#include "volumetric_kit/core/vulkan/device.hpp"
+#include "volumetric_kit/core/vulkan/device_requirements.hpp"
+#include "volumetric_kit/core/vulkan/physical_device_info.hpp"
 #include "volumetric_kit/recon/core/result.hpp"
 #include "volumetric_kit/recon/core/vulkan.hpp"
 
 namespace volumetric_kit::recon {
 
-/// @brief Cast any Vulkan handle to the `std::uint64_t`
-///        @ref Device::set_object_name takes.
+using core::AdoptedDevice;
+using core::check_device_support;
+using core::debug_object_handle;
+using core::Device;
+using core::DeviceRequirements;
+using core::DeviceSupport;
+using core::merge;
+using core::PhysicalDeviceInfo;
+
+/// @brief What recon's kernels require of a device.
 ///
-/// One cast will not do for both word sizes, which is the whole reason this
-/// exists: `VK_DEFINE_NON_DISPATCHABLE_HANDLE` is a *pointer* on 64-bit targets
-/// and a bare `uint64_t` on 32-bit ones, so `reinterpret_cast` is required on
-/// the first and ill-formed on the second. recon targets both (a 32-bit
-/// `armeabi-v7a` Android build among them), so the choice is made here once
-/// rather than at each naming site.
+/// A compute queue with timeline semaphores (the core's defaults) and
+/// `scalarBlockLayout`, the buffer ABI every recon shader declares
+/// (`layout(scalar)`; DECISIONS.md, 2026-07-05). Two extensions are optional
+/// and enabled where offered: `VK_KHR_external_memory_fd`, through which a
+/// hardware decoder's picture lands in recon's buffers without a host trip
+/// (external_memory.hpp), and `VK_EXT_metal_objects`, through which a
+/// VideoToolbox picture does on Apple. They are named here, not left to the
+/// device's creator, so a merged bootstrap that never hears of them does not
+/// silently send every decoded picture through the host.
 ///
-/// `VK_NULL_HANDLE` needs its own branch, and needs it on exactly the platform
-/// the other two do not cover: it is `nullptr` where handles are pointers, and
-/// `std::nullptr_t` is not a pointer type to `std::is_pointer_v`, so without
-/// this the 64-bit build takes the `static_cast` branch and fails to compile
-/// while the 32-bit one (where it is a literal `0`) succeeds -- the inverse of
-/// the portability this exists to provide.
-template <typename Handle>
-inline std::uint64_t debug_object_handle(Handle handle) noexcept {
-  if constexpr (std::is_null_pointer_v<Handle>) {
-    (void)handle;
-    return 0;
-  } else if constexpr (std::is_pointer_v<Handle>) {
-    return reinterpret_cast<std::uint64_t>(handle);
-  } else {
-    return static_cast<std::uint64_t>(handle);
-  }
-}
-
-// Forward-declared rather than included: gpu_timer.hpp needs Device to read the
-// physical device and compute family, so including it here would be circular.
-// The timed submit takes a pointer, so a declaration is all this header needs.
-class GpuTimer;
-
-// Forward-declared for the create() overload below, which reads one bool off
-// it. instance.hpp does not include this header, so a full include would work
-// -- but it would make every consumer of a Device pay for the instance's
-// layer/extension machinery to pass a reference through.
-class Instance;
-
-/// @brief Parameters for @ref Device::create / @ref Device::adopt.
-struct DeviceConfig {
-  /// Core (1.0) device features to enable (fed into
-  /// `VkPhysicalDeviceFeatures2`).
-  VkPhysicalDeviceFeatures features = {};
-  /// Device extensions to enable beyond those implied above; each is validated
-  /// against the device's supported list (create) or its declared enabled list
-  /// (adopt).
-  std::vector<const char*> extra_device_extensions;
-  /// Whether `VK_EXT_debug_utils` is enabled on the `VkInstance` passed to
-  /// @ref Device::create — the declare/verify partner of @ref
-  /// AdoptedDevice::enabled_debug_utils, for the create path.
-  ///
-  /// Declared rather than detected because Vulkan cannot be asked what a
-  /// `VkInstance` enabled, and asking the loader for an entry point of an
-  /// extension that was *not* enabled is not portable: a conformant loader
-  /// returns null, a directly-linked MoltenVK (iOS) returns a live pointer
-  /// recon must not call.
-  ///
-  /// Defaults false, so a raw `VkInstance` of unknown provenance costs the
-  /// capture's names and nothing else. The @ref Device::create overload taking
-  /// a recon @ref Instance fills this in from @ref
-  /// Instance::debug_utils_enabled, which is why no recon call site sets it by
-  /// hand.
-  bool instance_debug_utils_enabled = false;
-};
-
-/// @brief What recon needs from a `VkDevice`, published so an embedder sharing
-///        one device across libraries can merge everyone's requirements, create
-///        a device satisfying the union, and hand it to each via @ref
-///        Device::adopt.
-///
-/// Raw Vulkan data only, so the bundle carries no type a sibling library must
-/// import. Derived from a @ref DeviceConfig by @ref Device::requirements.
-struct DeviceRequirements {
-  /// Minimum device Vulkan version (recon targets 1.2 core: timeline
-  /// semaphores).
-  std::uint32_t api_version = VK_API_VERSION_1_2;
-  /// Queue capabilities at least one assigned queue must carry. recon needs a
-  /// **compute** queue; a compute-capable family implicitly supports transfer
-  /// (Vulkan guarantees transfer operations on any compute or graphics queue),
-  /// so only the compute bit is required. An embedder building the shared
-  /// device must not additionally demand `VK_QUEUE_TRANSFER_BIT`, which a
-  /// conformant compute family may legally not advertise.
-  VkQueueFlags queue_flags = VK_QUEUE_COMPUTE_BIT;
-  /// Device extensions to enable.
-  std::vector<const char*> device_extensions;
-  /// Core (1.0) features to enable.
-  VkPhysicalDeviceFeatures features = {};
-  /// `timelineSemaphore` (1.2 core) — recon's sync primitive and the interop
-  /// handoff.
-  bool timeline_semaphore = true;
-  /// `scalarBlockLayout` (1.2 core) — the buffer ABI every recon compute shader
-  /// reads its POD structs through (2026-07-05); required.
-  bool scalar_block_layout = true;
-  /// `VK_EXT_debug_utils` — recon names its dispatches and buffers through it
-  /// (see @ref Device::set_object_name), so a GPU capture reads
-  /// `tsdf_integrate` rather than an anonymous dispatch.
-  ///
-  /// The one **instance** extension in this struct, and the reason the struct
-  /// carries a flag rather than a name in @ref device_extensions: that array is
-  /// what gets passed to `vkCreateDevice`, and this belongs to
-  /// `vkCreateInstance`. An embedder merging these requirements enables it on
-  /// its instance and reports back through @ref
-  /// AdoptedDevice::enabled_debug_utils (or @ref
-  /// DeviceConfig::instance_debug_utils_enabled).
-  ///
-  /// Purely diagnostic and optional: recon runs identically without it, so
-  /// an embedder that cannot enable it drops it rather than failing the
-  /// merge.
-  bool debug_utils = false;
-  /// `VK_KHR_external_memory_fd`, which lets a hardware decoder hand its
-  /// pictures over on the device (@ref create_exported_buffer). Optional
-  /// too: an embedder enables it where the device offers it and lists it in
-  /// @ref AdoptedDevice::enabled_device_extensions; without it, pictures come
-  /// through the host.
-  bool external_memory = false;
-  /// `VK_EXT_metal_objects` (MoltenVK), which lets a VideoToolbox picture's
-  /// planes be imported as images and stay on the GPU. Optional, as
-  /// @ref external_memory is.
-  bool metal_objects = false;
-};
-
-/// @brief A `VkDevice` the caller already created, plus what the caller ENABLED
-///        on it, handed to @ref Device::adopt.
-///
-/// The `enabled_*` fields exist because Vulkan gives no way to query which
-/// extensions or features were enabled at device-creation time; the creator
-/// declares them so @ref Device::adopt can verify recon's needs are met. The
-/// pointed-to extension array need only outlive the `adopt` call.
-struct AdoptedDevice {
-  VkInstance instance = VK_NULL_HANDLE;
-  VkPhysicalDevice physical_device = VK_NULL_HANDLE;
-  VkDevice device = VK_NULL_HANDLE;
-
-  /// The compute-capable queue assigned to recon, and its family.
-  std::uint32_t compute_family = 0;
-  VkQueue compute_queue = VK_NULL_HANDLE;
-  /// When non-null, the assigned queue is shared with another library; every
-  /// `vkQueueSubmit` on it must hold this mutex (Vulkan requires queue submits
-  /// be externally synchronized). When null, the @ref Device locks the queue
-  /// with a mutex of its own.
-  std::mutex* submit_mutex = nullptr;
-
-  /// Device extensions the creator enabled on `device` (for `adopt`'s
-  /// set-comparison verify).
-  const char* const* enabled_device_extensions = nullptr;
-  std::uint32_t enabled_device_extension_count = 0;
-  /// Core (1.0) features the creator enabled on `device`. @ref Device::adopt
-  /// rejects the device if any feature recon's @ref DeviceConfig requests is
-  /// not set here.
-  VkPhysicalDeviceFeatures enabled_features = {};
-  /// Whether the creator enabled `timelineSemaphore` on `device`. It is Vulkan
-  /// 1.2 core but must still be *enabled* at device creation, and that cannot
-  /// be queried back, so the creator declares it; recon's default config
-  /// requires it.
-  bool enabled_timeline_semaphore = false;
-  /// Whether the creator enabled `scalarBlockLayout` on `device` (1.2 core, but
-  /// must be enabled at creation and can't be queried back). recon requires it.
-  bool enabled_scalar_block_layout = false;
-  /// Whether the creator enabled `VK_EXT_debug_utils` on @ref instance.
-  ///
-  /// Declared rather than listed in @ref enabled_device_extensions because
-  /// debug utils is an **instance** extension, so it is not in that array and
-  /// cannot be: the array carries what was enabled on the *device*. Vulkan
-  /// offers no way to query either back, hence the same declare/verify shape
-  /// the two feature flags above use.
-  ///
-  /// Purely diagnostic -- recon never requires it. `false` (the default) costs
-  /// only the profiler labels: @ref Device::set_object_name and the per-kernel
-  /// dispatch labels become no-ops, and @ref Device::debug_labels_available
-  /// reports false. An embedder that wants a capture to name recon's dispatches
-  /// and buffers enables the extension on its instance and sets this.
-  bool enabled_debug_utils = false;
-};
-
-/// @brief Owns *or borrows* a `VkDevice` and its compute (+ transfer) queue,
-///        and owns the command pools it submits from. Holds no
-///        surface/swapchain — recon is headless.
-///
-/// @warning The @ref Instance / device in the create or adopt inputs must
-///          outlive this object; it stores only borrowed handles.
+/// @warning Pass these to every `Device::create` and `Device::adopt` recon
+///          runs on. The core's default requirements leave
+///          `scalarBlockLayout` off, and nothing in recon can tell: its
+///          kernels are created and run without an error on such a device,
+///          with their buffers read at the wrong offsets.
 ///
 /// @code
-/// Result<Device> device = Device::create(instance, physical, {});
-/// if (!device) return device.status();
+/// VR_ASSIGN(Device device,
+///           Device::create(instance, gpu, device_requirements()));
 /// @endcode
-class VR_CORE_API Device {
- public:
-  /// @brief Create and OWN a logical device on @p physical (Vulkan >= 1.2 with
-  /// a
-  ///        compute queue family), enabling `timelineSemaphore` and any
-  ///        `config` features/extensions.
-  /// @param instance  The instance @p physical belongs to; must outlive the
-  ///                  returned device (a lifetime contract, unused at
-  ///                  creation).
-  /// @param physical  The physical device to build on.
-  /// @param config    Features and extensions to enable. @ref
-  ///                  DeviceConfig::instance_debug_utils_enabled must say
-  ///                  whether @p instance enabled `VK_EXT_debug_utils`; it
-  ///                  cannot be detected, and the overload below fills it in
-  ///                  for a recon-created instance.
-  /// @return The device, or a non-OK @ref Status:
-  ///         @ref Status::Code::InvalidArgument for a null @p physical;
-  ///         @ref Status::Code::Unsupported below Vulkan 1.2, without a compute
-  ///         family, or missing a requested extension / `timelineSemaphore`.
-  static Result<Device> create(VkInstance instance, VkPhysicalDevice physical,
-                               const DeviceConfig& config);
-
-  /// @brief @ref create against a recon-created @ref Instance, which is the
-  ///        only form that can get the debug-utils declaration right on its
-  ///        own.
-  ///
-  /// Identical to the overload above but for reading @ref
-  /// Instance::debug_utils_enabled into @ref
-  /// DeviceConfig::instance_debug_utils_enabled, overriding whatever @p config
-  /// carried: the instance in hand is the authority on what the instance
-  /// enabled, so a caller cannot disagree with it by accident. Prefer this
-  /// wherever an @ref Instance is available — the `VkInstance` overload exists
-  /// for an embedder whose instance recon did not create.
-  ///
-  /// @param instance  The instance @p physical belongs to; must outlive the
-  ///                  returned device.
-  /// @param physical  The physical device to build on.
-  /// @param config    Features and extensions to enable.
-  /// @return As the overload above.
-  static Result<Device> create(const Instance& instance,
-                               VkPhysicalDevice physical,
-                               const DeviceConfig& config);
-
-  /// @brief Adopt a `VkDevice` an embedder already created, **without owning
-  ///        it** — the destructor leaves the `VkDevice` alone (it still creates
-  ///        and owns its own command pools). Use this to run recon on a device
-  ///        shared with the renderer.
-  /// @param adopted  The existing handles, the compute queue assigned to recon,
-  ///                 and what the creator enabled on the device.
-  /// @param config   The same config recon would pass to @ref create; its needs
-  ///                 are validated against @p adopted.
-  /// @return The (non-owning) device, or a non-OK @ref Status:
-  ///         @ref Status::Code::InvalidArgument for null handles;
-  ///         @ref Status::Code::Unsupported when @p adopted is below
-  ///         Vulkan 1.2, its assigned queue family lacks compute, or a required
-  ///         extension/feature was not enabled on it.
-  static Result<Device> adopt(const AdoptedDevice& adopted,
-                              const DeviceConfig& config);
-
-  /// @brief The device requirements implied by @p config — the set an embedder
-  ///        merges with other libraries' to build one shared device.
-  static DeviceRequirements requirements(const DeviceConfig& config);
-
-  ~Device();
-  Device(Device&& other) noexcept;
-  Device& operator=(Device&& other) noexcept;
-  Device(const Device&) = delete;
-  Device& operator=(const Device&) = delete;
-
-  /// @return The logical device (`VK_NULL_HANDLE` when moved-from).
-  VkDevice handle() const noexcept { return device_; }
-  /// @return The physical device it was created on / adopted from.
-  VkPhysicalDevice physical_device() const noexcept { return physical_; }
-  /// @return The compute-capable queue-family index.
-  std::uint32_t compute_family() const noexcept { return compute_family_; }
-  /// @brief The capabilities @ref compute_family advertises (`VK_QUEUE_*`).
-  ///
-  /// recon requires only `VK_QUEUE_COMPUTE_BIT`, so the family it is handed may
-  /// be compute-*only* -- a dedicated async-compute family on a discrete GPU,
-  /// or anything an embedder assigns through @ref adopt. That matters because
-  /// Vulkan permits a pipeline barrier to name only stages the recording
-  /// command buffer's queue family supports, and
-  /// `VK_PIPELINE_STAGE_VERTEX_INPUT_BIT` requires `VK_QUEUE_GRAPHICS_BIT`; the
-  /// shared @ref dispatch consults this before widening its destination scope
-  /// for a renderer. Read from the driver at create/adopt, never assumed.
-  VkQueueFlags compute_family_flags() const noexcept {
-    return compute_family_flags_;
-  }
-  /// @return The compute queue.
-  VkQueue compute_queue() const noexcept { return compute_queue_; }
-  /// @return Whether this wrapper owns (and will destroy) the `VkDevice`.
-  ///         `false` for a device obtained through @ref adopt.
-  bool owns_device() const noexcept { return owns_device_; }
-
-  /// @return Whether `VK_EXT_debug_utils` label entry points resolved, so
-  ///         @ref set_object_name and the dispatch labels reach a profiler.
-  ///
-  /// A capability report, not a request: false when the instance did not
-  /// enable the extension (see @ref InstanceConfig::request_debug_utils and
-  /// @ref AdoptedDevice::enabled_debug_utils) or the driver returned no entry
-  /// point. Every labelling call is a well-defined no-op in that case, so a
-  /// caller never has to branch on this -- it exists for a test asserting the
-  /// labels are really there, and for a diagnostic that says why a capture
-  /// came back unnamed.
-  ///
-  /// Reading one pointer answers for all three: resolution is all-or-nothing,
-  /// so a driver that returns two of them leaves this false rather than
-  /// reporting a capability only two thirds of which is there.
-  bool debug_labels_available() const noexcept {
-    return set_object_name_ != nullptr;
-  }
-
-  /// @return Whether this device exports memory as a file descriptor
-  ///         (`VK_KHR_external_memory_fd`), which @ref
-  ///         create_exported_buffer needs: enabled by @ref create where the
-  ///         GPU offers it, and on @ref adopt where the creator declares it.
-  bool exports_memory() const noexcept { return get_memory_fd_ != nullptr; }
-
-  /// @brief `vkGetMemoryFdKHR`: an opaque file descriptor for @p memory,
-  ///        which the caller then owns.
-  /// @return `VK_ERROR_EXTENSION_NOT_PRESENT` when @ref exports_memory is
-  ///         false; otherwise the call's result.
-  VkResult memory_fd(VkDeviceMemory memory, int* fd) const noexcept;
-
-  /// @return Whether this device imports Metal textures as images
-  ///         (`VK_EXT_metal_objects`), which a VideoToolbox picture needs to
-  ///         stay on the GPU: enabled by @ref create where the GPU offers it,
-  ///         and on @ref adopt where the creator declares it.
-  bool imports_metal_textures() const noexcept { return metal_objects_; }
-
-  /// @brief Name a Vulkan object so a GPU capture shows that name instead of a
-  ///        raw handle.
-  ///
-  /// A no-op when @ref debug_labels_available is false, and deliberately
-  /// `void`: a diagnostic that cannot fail is one no caller has to check, and
-  /// naming is never load-bearing. @p name is copied by the driver, so it need
-  /// not outlive the call -- unlike @ref StageRow::name, which is borrowed.
-  ///
-  /// @param type    The object's `VkObjectType` (e.g.
-  ///                `VK_OBJECT_TYPE_BUFFER`).
-  /// @param handle  The object handle, cast to `std::uint64_t`.
-  /// @param name    The name to attach; ignored when null.
-  ///
-  /// @code
-  /// device.set_object_name(VK_OBJECT_TYPE_BUFFER,
-  ///                        reinterpret_cast<std::uint64_t>(buf.handle()),
-  ///                        "tsdf");
-  /// @endcode
-  void set_object_name(VkObjectType type, std::uint64_t handle,
-                       const char* name) const noexcept;
-
-  /// @brief Open a named region in @p cmd, closed by @ref end_debug_label.
-  ///
-  /// What a profiler renders as one row per dispatch: Nsight shows these as
-  /// trace ranges, and MoltenVK maps them onto Metal debug groups so an Xcode
-  /// capture reads the same names. A no-op when @ref debug_labels_available is
-  /// false.
-  ///
-  /// Deliberately **not** tied to @ref GpuStageScope. A span exists only where
-  /// the caller asked for @ref StageMetrics, and asking costs a timestamp
-  /// (~0.13 ms per submit on MoltenVK) -- so pairing labels to spans would
-  /// perturb the very workload a profiler is measuring, and would leave an
-  /// uninstrumented call unnamed in the capture. Labels are free and
-  /// unconditional; spans are opt-in and measured.
-  ///
-  /// @param cmd   A recording command buffer.
-  /// @param name  The region's name; the call is skipped when null (Vulkan
-  ///              requires a non-null label name).
-  void begin_debug_label(VkCommandBuffer cmd, const char* name) const noexcept;
-
-  /// @brief Close the region opened by @ref begin_debug_label on @p cmd.
-  ///
-  /// Takes @p name so the pair skips on **identical** conditions: a null name
-  /// makes @ref begin_debug_label open nothing, and a bare `end_debug_label`
-  /// would then pop a region that was never pushed
-  /// (`VUID-vkCmdEndDebugUtilsLabelEXT-commandBuffer-01912`; a `popDebugGroup`
-  /// against an unpushed encoder under MoltenVK). @p name is not otherwise
-  /// used — `vkCmdEndDebugUtilsLabelEXT` takes none — so pass whatever was
-  /// passed to @ref begin_debug_label.
-  ///
-  /// A no-op when @ref debug_labels_available is false, so it pairs with a
-  /// skipped @ref begin_debug_label without the caller tracking which happened.
-  /// @param cmd   The command buffer the region was opened on.
-  /// @param name  The name @ref begin_debug_label was called with.
-  void end_debug_label(VkCommandBuffer cmd, const char* name) const noexcept;
-  /// @return The mutex every submit on @ref compute_queue holds: the
-  ///         embedder's (@ref AdoptedDevice::submit_mutex) on a queue shared
-  ///         with another library, else this device's own. Never null. Hold
-  ///         it only around a `vkQueueSubmit` of your own; @ref queue_submit
-  ///         takes it for you.
-  std::mutex* submit_mutex() const noexcept {
-    return submit_mutex_ != nullptr ? submit_mutex_ : &queue_mutex_;
-  }
-
-  /// @brief Submit to the compute queue, holding @ref submit_mutex.
-  ///
-  /// Vulkan requires queue submits be externally synchronized, so this is
-  /// safe from several threads at once. Prefer @ref submit_single_time for a
-  /// one-shot dispatch; this is the lower-level primitive for a caller
-  /// batching its own command buffers.
-  /// @param count    Number of `VkSubmitInfo`s in @p submits.
-  /// @param submits  The submit batch.
-  /// @param fence    Fence signalled on completion (may be `VK_NULL_HANDLE`).
-  /// @return The `VkResult` from `vkQueueSubmit`.
-  VkResult queue_submit(std::uint32_t count, const VkSubmitInfo* submits,
-                        VkFence fence) const;
-
-  /// @brief Record a one-time command buffer, submit it to the compute queue,
-  ///        and block until the GPU finishes — the simplest dispatch primitive.
-  ///
-  /// Takes a primary command buffer of this call's own, begins it
-  /// (`ONE_TIME_SUBMIT`), invokes @p record to fill it (bind pipeline, bind
-  /// descriptors, push constants, dispatch, barriers), then ends, submits
-  /// (through @ref queue_submit, so it is shared-queue-safe), and waits on an
-  /// internal fence. Both the command buffer and the fence are kept for a
-  /// later submit, except when the device may still run them, as after a
-  /// failed wait, when they are left to it until the device is destroyed.
-  /// Blocking, so it is a bring-up / single-shot primitive; the fusion tiers
-  /// will batch many dispatches per submit on their own.
-  ///
-  /// Thread-safe: several threads may submit on one @ref Device at once. Each
-  /// call records on a command pool no other call is using, so recording
-  /// takes no lock and @p record may itself submit on this device; only the
-  /// `vkQueueSubmit` is serialized, through @ref queue_submit. What a caller
-  /// records must still be its own: a kernel's descriptor set, a buffer and a
-  /// @ref GpuTimer are not locked. The @ref Allocator a batch stages through
-  /// is.
-  /// @param record  Records compute commands into the given command buffer.
-  /// @return OK once the work completes, or a non-OK @ref Status if any Vulkan
-  ///         step fails.
-  Status submit_single_time(
-      const std::function<void(VkCommandBuffer)>& record) const;
-
-  /// @brief @ref submit_single_time, with a GPU timestamp span around the
-  ///        recorded work.
-  ///
-  /// Identical to the overload above except that @p timer opens a span before
-  /// @p record and closes it after, and the span is **resolved once the fence
-  /// has signalled** — which is the whole reason this overload exists rather
-  /// than leaving a caller to bracket the work itself. Reading a timestamp
-  /// before its submit completes returns nothing useful, and nothing about the
-  /// call site makes that visible: it is a staleness the caller cannot see, so
-  /// the library sequences it (the 2026-08-04 rule).
-  ///
-  /// Because this blocks on the fence, the span is readable the instant it
-  /// returns — no deferred publish, no per-slot ring. See @ref GpuTimer.
-  ///
-  /// One span per submit. A caller batching several dispatches into one
-  /// command buffer, as @ref CommandBatch does, brackets them itself with
-  /// @ref GpuTimer::begin / @ref GpuTimer::end and calls
-  /// @ref GpuTimer::resolve after this returns.
-  ///
-  /// Spans accumulate in @p timer until @ref GpuTimer::report_into publishes
-  /// them, so a caller creating one timer and submitting through it must
-  /// publish (or @ref GpuTimer::reset) once a frame — see @ref GpuTimer.
-  ///
-  /// @param record  Records compute commands into the given command buffer.
-  /// @param timer   Collects the span; `nullptr` makes this exactly the
-  ///                untimed overload. A timer whose device reports no usable
-  ///                timestamps records nothing and is not an error.
-  /// @param label   Span label, borrowed for as long as the metrics it is
-  ///                published into are read (see @ref StageRow::name). Null
-  ///                labels the span `"gpu"`.
-  /// @param debug_label  Name for the `VK_EXT_debug_utils` region wrapped
-  ///                around the submission, or null for none. Recorded here
-  ///                rather than by @p record so that it sits **outside** the
-  ///                timestamp pair: a debug label can force an encoder
-  ///                boundary (MoltenVK maps it to
-  ///                `push`/`popDebugGroup`), and a span that measured the
-  ///                markers around the work rather than the work would make
-  ///                every published `gpu_ms` depend on whether a profiler was
-  ///                being catered to.
-  /// @param in_flight    Optional; set to `true` when the fence wait failed
-  ///                or the submit lost the device, which leaves the buffer
-  ///                and fence to a device that may still run them, so
-  ///                whatever the buffer records must stay alive too; `false`
-  ///                otherwise.
-  /// @return OK once the work completes, or a non-OK @ref Status if any Vulkan
-  ///         step fails. A failure to *resolve* the span never appears here:
-  ///         the work has already succeeded by then, and an optional
-  ///         diagnostic must not be able to fail it. Such a span is logged and
-  ///         left unmeasured instead.
-  Status submit_single_time(const std::function<void(VkCommandBuffer)>& record,
-                            GpuTimer* timer, const char* label,
-                            const char* debug_label = nullptr,
-                            bool* in_flight = nullptr) const;
-
- private:
-  Device() = default;
-  void destroy() noexcept;
-
-  VkPhysicalDevice physical_ = VK_NULL_HANDLE;
-  VkDevice device_ = VK_NULL_HANDLE;
-  // False when the device was adopted (@ref adopt): destroy() then tears down
-  // only the command pools and fences this wrapper made and leaves the
-  // VkDevice to its owner. Reset on every ownership transfer.
-  bool owns_device_ = true;
-  // The embedder's, on a queue shared with another library; else null, and
-  // queue_mutex_ guards the queue. A mutex cannot move, so a device moved to
-  // uses its own.
-  std::mutex* submit_mutex_ = nullptr;
-  mutable std::mutex queue_mutex_;
-
-  // A command buffer on a pool of its own, and the fence its submit signals.
-  // Vulkan requires a pool be externally synchronized, so each submit takes
-  // one no other submit holds and records with no lock: a free one, or a new
-  // one when every one is in use. It is given back, its fence reset, once its
-  // wait is done, and made_ keeps every one made, so destroy() frees them all;
-  // one left to the device is marked pending there, and waited for first. The
-  // fence is kept too: making and freeing one cost an RTX 5090 about 0.3 ms a
-  // submit.
-  struct Command {
-    VkCommandPool pool = VK_NULL_HANDLE;
-    VkCommandBuffer buffer = VK_NULL_HANDLE;
-    VkFence fence = VK_NULL_HANDLE;
-    bool pending = false;  // set only in made_
-  };
-  Result<Command> take_command() const;
-  void give_back(Command command) const noexcept;
-  mutable std::mutex commands_mutex_;  // guards made_ and free_commands_
-  mutable std::vector<Command> made_;
-  mutable std::vector<Command> free_commands_;
-
-  std::uint32_t compute_family_ = 0;
-  VkQueueFlags compute_family_flags_ = 0;
-  VkQueue compute_queue_ = VK_NULL_HANDLE;
-  // VK_EXT_debug_utils label entry points, resolved once at create/adopt and
-  // null when the instance did not enable the extension -- which is what makes
-  // every labelling call a branch on a null pointer rather than a per-call
-  // vkGetInstanceProcAddr. Extension functions must be fetched through the
-  // loader, so they cannot be called directly. Reset on every ownership
-  // transfer, with the rest of the metadata.
-  PFN_vkSetDebugUtilsObjectNameEXT set_object_name_ = nullptr;
-  PFN_vkCmdBeginDebugUtilsLabelEXT begin_label_ = nullptr;
-  PFN_vkCmdEndDebugUtilsLabelEXT end_label_ = nullptr;
-  // VK_KHR_external_memory_fd's export, resolved only where it is enabled,
-  // so a null pointer is the answer to exports_memory(). Reset with the rest.
-  PFN_vkGetMemoryFdKHR get_memory_fd_ = nullptr;
-  // Whether VK_EXT_metal_objects is enabled. Reset with the rest.
-  bool metal_objects_ = false;
-};
+/// @return The requirements; a caller may add to them before creating.
+// TODO(core): refuse a device without scalarBlockLayout when a kernel is
+// created, once the core's Device records the features it enabled.
+inline DeviceRequirements device_requirements() {
+  DeviceRequirements reqs;
+  reqs.scalar_block_layout = true;
+  reqs.optional_extensions = {VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
+                              "VK_EXT_metal_objects"};
+  return reqs;
+}
 
 }  // namespace volumetric_kit::recon

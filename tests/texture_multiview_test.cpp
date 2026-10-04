@@ -239,7 +239,7 @@ std::shared_ptr<const vr::Buffer> to_device(
   vr::BufferDesc desc;
   desc.size = VkDeviceSize(data.size()) * sizeof(T);
   desc.usage = usage;
-  desc.memory = vr::MemoryUsage::DeviceLocal;
+  desc.memory = vr::MemoryUsage::DeviceOnly;
   vr::Result<vr::Buffer> buffer = allocator.create_buffer(desc);
   if (!buffer ||
       !vr_test::write_back(device, allocator, buffer.value(), data).ok()) {
@@ -324,14 +324,15 @@ int main() {
                  instance.status().message().c_str());
     return 0;
   }
-  vr::Result<VkPhysicalDevice> gpu = instance.value().select_physical_device();
+  vr::Result<vr::PhysicalDeviceInfo> gpu =
+      instance.value().select_physical_device(vr::device_requirements());
   if (!gpu) {
     std::fprintf(stderr, "no compute-capable device (%s); skipping\n",
                  gpu.status().message().c_str());
     return 0;
   }
-  vr::Result<vr::Device> device =
-      vr::Device::create(instance.value(), gpu.value(), {});
+  vr::Result<vr::Device> device = vr::Device::create(
+      instance.value(), gpu.value(), vr::device_requirements());
   CHECK(device.ok());
   vr::Result<vr::Allocator> allocator =
       vr::Allocator::create(instance.value().handle(), device.value());
@@ -919,8 +920,8 @@ int main() {
         vr::device_storage_buffer(allocator.value(), map_bytes);
     vr::Result<vr::Buffer> short_map =
         vr::device_storage_buffer(allocator.value(), map_bytes - sizeof(float));
-    vr::Result<vr::Buffer> no_copy =
-        vr::storage_buffer(allocator.value(), map_bytes);
+    vr::Result<vr::Buffer> no_copy = allocator.value().create_buffer(
+        {map_bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT});
     CHECK(whole.ok() && short_map.ok() && no_copy.ok());
     CHECK((no_copy->usage() & VK_BUFFER_USAGE_TRANSFER_SRC_BIT) == 0);
     std::vector<tex::TextureView> both = views;
