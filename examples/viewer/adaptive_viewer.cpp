@@ -3,7 +3,7 @@
 
 // adaptive_viewer: fuse_viewer with resolution chosen per block. A Replica
 // sequence is fused into uniform grids at halving voxel sizes (2 cm, 1 cm and
-// 5 mm by default; adaptive_levels.hpp). The coarsest covers everything; a
+// 5 mm by default; tsdf::AdaptiveGrid). The coarsest covers everything; a
 // block refines when the depth does not line up with its iso-surface, and the
 // finer grid then allocates there. Each level meshes the blocks it owns
 // through the existing culled extract, is textured with the same keyframe,
@@ -28,7 +28,7 @@
 //
 //   adaptive_viewer <scene_dir> [--cam-params path] [--base-voxel 0.02]
 //                   [--levels 3] [--eps-mm 1]
-//                   [--max-view-deg 0] [--check-every 5] [--max-frames N]
+//                   [--check-every 5] [--max-frames N]
 //                   [--min-depth m] [--max-depth m] [--width 1280]
 //                   [--height 720] [--unlit] [--no-texture] [--show-levels]
 //                   [--preload] [--no-overlay] [--validation]
@@ -58,7 +58,7 @@
 #include <imgui_impl_glfw.h>
 #include <glm/glm.hpp>
 
-#include "adaptive_levels.hpp"
+#include "adaptive_tint_comp.spv.hpp"
 #include "recon_gfx_bridge.hpp"  // vertex-layout static_asserts
 #include "replica_capture.hpp"
 #include "rgbd_frame.hpp"
@@ -67,6 +67,9 @@
 #include "viewer_common.hpp"
 
 #include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "volumetric_kit/core/vulkan/command_batch.hpp"
+#include "volumetric_kit/core/vulkan/compute_kernel.hpp"
+#include "volumetric_kit/core/vulkan/compute_util.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/mesh/device_mesh.hpp"
@@ -81,6 +84,7 @@
 #include "volumetric_kit/recon/sensor/rig_calibration.hpp"
 #endif
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
+#include "volumetric_kit/recon/tsdf/adaptive_grid.hpp"
 
 #include "volumetric_kit/gfx/app/windowed_app.hpp"
 #include "volumetric_kit/gfx/camera/camera.hpp"
@@ -103,6 +107,7 @@ namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
 namespace vol = volumetric_kit::recon::volume;
 namespace rmesh = volumetric_kit::recon::mesh;
+namespace rtsdf = volumetric_kit::recon::tsdf;
 namespace rtex = volumetric_kit::recon::texture;
 namespace rsensor = volumetric_kit::recon::sensor;
 namespace vg = volumetric_kit::gfx;
@@ -114,7 +119,8 @@ namespace {
 struct Options {
   std::string scene_dir;
   std::string cam_params;
-  adaptive::Config adaptive;
+  rtsdf::AdaptiveGridConfig adaptive;
+  float eps_mm = 1.0f;  // AdaptiveGridConfig::refine_offset, in mm
   // Unset: 0.1-8 m for a sequence, the driver's range (0.25-5 m) live.
   std::optional<float> min_depth;
   std::optional<float> max_depth;
@@ -164,15 +170,17 @@ bool parse_args(int argc, char** argv, Options& o) {
       ok = x != nullptr;
       if (ok) o.cam_params = x;
     } else if (a == "--base-voxel") {
-      ok = number(o.adaptive.base_voxel);
+      ok = number(o.adaptive.voxel_size);
     } else if (a == "--levels") {
-      ok = integer(o.adaptive.levels);
+      int x = 0;
+      ok = integer(x) && x > 0;
+      o.adaptive.levels = std::uint32_t(x);
     } else if (a == "--eps-mm") {
-      ok = number(o.adaptive.eps_mm);
-    } else if (a == "--max-view-deg") {
-      ok = number(o.adaptive.max_view_deg);
+      ok = number(o.eps_mm) && o.eps_mm > 0.0f;
     } else if (a == "--check-every") {
-      ok = integer(o.adaptive.check_every);
+      int x = 0;
+      ok = integer(x) && x > 0;
+      o.adaptive.check_every = std::uint32_t(x);
     } else if (a == "--max-frames") {
       ok = integer(o.max_frames);
     } else if (a == "--min-depth") {
@@ -251,7 +259,7 @@ bool parse_args(int argc, char** argv, Options& o) {
                  "[--dynamic | --static] [--max-weight w] [--color WxH] "
                  "[--fps n] [--cam-params path] "
                  "[--base-voxel m] [--levels 2..4] [--eps-mm e] "
-                 "[--max-view-deg d] [--check-every n] "
+                 "[--check-every n] "
                  "[--max-frames n] [--min-depth m] [--max-depth m] "
                  "[--unlit] [--no-texture] [--show-levels] [--preload] "
                  "[--no-overlay] [--validation]\n");
@@ -269,6 +277,7 @@ bool parse_args(int argc, char** argv, Options& o) {
   }
 #endif
   if (o.max_frames < 0) o.max_frames = live ? 0 : 400;
+  o.adaptive.refine_offset = o.eps_mm * 1e-3f;
   o.adaptive.mode = o.dynamic.value_or(live)
                         ? vr::tsdf::IntegrationMode::Dynamic
                         : vr::tsdf::IntegrationMode::Classic;
@@ -531,13 +540,20 @@ struct Panel {
   std::size_t total = 0;
   double fuse_ms = 0.0;       // the newest frame
   double fuse_mean_ms = 0.0;  // over every fused frame
-  std::vector<adaptive::LevelStats> levels;
+  std::vector<rtsdf::AdaptiveLevelStats> levels;
+  float floor = 0.0f;  // the sensor floor, metres
   std::vector<std::uint32_t> triangles;
+};
+
+// The "show levels" paint's push constants (adaptive_tint.comp).
+struct TintPush {
+  float color[4];
+  std::uint32_t count;
 };
 
 void draw_adaptive_panel(const Panel& panel, std::atomic<bool>& show_levels,
                          std::atomic<float>& eps_mm, bool& follow,
-                         const adaptive::Config& config) {
+                         const rtsdf::AdaptiveGridConfig& config) {
   if (!ImGui::Begin("Adaptive")) {
     ImGui::End();
     return;
@@ -554,7 +570,7 @@ void draw_adaptive_panel(const Panel& panel, std::atomic<bool>& show_levels,
                          ImGuiSliderFlags_Logarithmic)) {
     eps_mm.store(eps);
   }
-  const double floor_mm = panel.levels.empty() ? 0.0 : panel.levels[0].floor_mm;
+  const double floor_mm = 1000.0 * double(panel.floor);
   ImGui::Text("wall baseline %.2f mm: refine blocks off by > %.2f mm", floor_mm,
               floor_mm + double(eps));
   bool show = show_levels.load();
@@ -567,11 +583,12 @@ void draw_adaptive_panel(const Panel& panel, std::atomic<bool>& show_levels,
   ImGui::Text(
       "level  voxel   blocks refined   owned  triangles  offset  noise");
   for (std::size_t l = 0; l < panel.levels.size(); ++l) {
-    const adaptive::LevelStats& s = panel.levels[l];
-    ImGui::Text("%5zu  %4.1fmm %7zu %7zu %7zu %10u  %4.2fmm %4.2fmm", l,
-                1000.0 * double(s.voxel), s.blocks, s.refined, s.owned,
+    const rtsdf::AdaptiveLevelStats& s = panel.levels[l];
+    ImGui::Text("%5zu  %4.1fmm %7u %7u %7u %10u  %4.2fmm %4.2fmm", l,
+                1000.0 * double(s.voxel_size), s.blocks, s.refined, s.owned,
                 l < panel.triangles.size() ? panel.triangles[l] : 0u,
-                s.median_offset_mm, s.median_noise_mm);
+                1000.0 * double(s.median_offset),
+                1000.0 * double(s.median_noise));
   }
   ImGui::TextDisabled("offset / noise: the median block's, at that level");
   ImGui::End();
@@ -630,13 +647,56 @@ int run(GLFWwindow* window, const Options& opt) {
   Source source = std::move(source_r).value();
   const vr::ColorCameraParams cam = source.frame_camera;
 
-  auto levels_r = adaptive::Levels::create(rdevice, rallocator, opt.adaptive);
-  if (!levels_r) {
-    std::fprintf(stderr, "adaptive: %s\n", levels_r.status().message().c_str());
+  auto grid_r = rtsdf::AdaptiveGrid::create(rdevice, rallocator, opt.adaptive);
+  if (!grid_r) {
+    std::fprintf(stderr, "adaptive grid: %s\n",
+                 grid_r.status().message().c_str());
     return 1;
   }
-  adaptive::Levels& levels = *levels_r.value();
-  const std::size_t level_count = levels.count();
+  rtsdf::AdaptiveGrid grid = std::move(grid_r).value();
+  // The "show levels" paint: one kernel over a mesh's vertices. The pool is
+  // declared first so it outlives the kernel's set.
+  vkc::DescriptorPool tint_pool;
+  vkc::ComputeKernel tint_kernel;
+  {
+    const VkPushConstantRange push{VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                                   sizeof(TintPush)};
+    vkc::KernelSetBuilder builder(rdevice);
+    vkc::Status built =
+        builder.add(tint_kernel, "adaptive_tint", vr_adaptive_tint_comp_spv,
+                    vr_adaptive_tint_comp_spv_size, 1, &push);
+    auto pool_r =
+        built.ok() ? builder.build() : vkc::Result<vkc::DescriptorPool>(built);
+    if (!pool_r) {
+      std::fprintf(stderr, "tint: %s\n", pool_r.status().message().c_str());
+      return 1;
+    }
+    tint_pool = std::move(pool_r).value();
+  }
+  VkPhysicalDeviceProperties properties{};
+  vkGetPhysicalDeviceProperties(rdevice.physical_device(), &properties);
+  const std::uint32_t max_groups =
+      properties.limits.maxComputeWorkGroupCount[0];
+  auto paint_level = [&](const rmesh::DeviceMesh& mesh, std::size_t level) {
+    if (mesh.vertex_count == 0 || mesh.vertices == VK_NULL_HANDLE) {
+      return vkc::Status{};
+    }
+    static constexpr float kColor[4][3] = {{0.15f, 0.55f, 0.15f},
+                                           {0.85f, 0.70f, 0.10f},
+                                           {0.80f, 0.15f, 0.10f},
+                                           {0.45f, 0.10f, 0.60f}};
+    const TintPush push{
+        {kColor[level][0], kColor[level][1], kColor[level][2], 1.0f},
+        mesh.vertex_count};
+    tint_kernel.set.write_storage_buffer(0, mesh.vertices, 0,
+                                         VkDeviceSize(mesh.vertex_count) * 64u);
+    vkc::CommandBatch batch(rdevice, rallocator);
+    vkc::Status recorded =
+        batch.dispatch(tint_kernel, &push, sizeof(push),
+                       (mesh.vertex_count + 255u) / 256u, max_groups);
+    return recorded.ok() ? batch.submit() : recorded;
+  };
+  const std::size_t level_count = grid.level_count();
 
   rmesh::MarchingCubesConfig mc_config;
   mc_config.extra_vertex_usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
@@ -768,7 +828,7 @@ int run(GLFWwindow* window, const Options& opt) {
   std::atomic<bool> fusing_done{false};
   std::atomic<bool> quit{false};
   std::atomic<bool> show_levels{opt.show_levels};
-  std::atomic<float> eps_mm{opt.adaptive.eps_mm};
+  std::atomic<float> eps_mm{opt.eps_mm};
 
   std::thread fuse_thread([&]() {
     try {
@@ -796,14 +856,17 @@ int run(GLFWwindow* window, const Options& opt) {
       // Mesh each level's own blocks, texture (or tint) them, publish.
       auto remesh = [&](const Keyframe* keyframe) {
         remesh_stages.clear();
-        std::vector<std::vector<vol::BlockIndex>> owned;
+        std::vector<std::vector<vol::BlockIndex>> owned(level_count);
         {
           vkc::StageScope scope(remesh_stages, "ownership");
-          const vkc::Status s = levels.owned(owned);
-          if (!s.ok()) {
-            std::fprintf(stderr, "adaptive_viewer: ownership: %s\n",
-                         s.message().c_str());
-            return;
+          for (std::uint32_t l = 0; l < level_count; ++l) {
+            vkc::Result<std::vector<vol::BlockIndex>> o = grid.owned_blocks(l);
+            if (!o) {
+              std::fprintf(stderr, "adaptive_viewer: ownership: %s\n",
+                           o.status().message().c_str());
+              return;
+            }
+            owned[l] = std::move(o).value();
           }
         }
         const bool tint = show_levels.load();
@@ -813,10 +876,11 @@ int run(GLFWwindow* window, const Options& opt) {
         Bundle bundle;
         bundle.meshes.resize(level_count);
         for (std::size_t l = 0; l < level_count; ++l) {
-          const vol::BlockList list = levels.grid(l).block_list(owned[l]);
+          vol::VoxelBlockGrid& level = grid.level(std::uint32_t(l));
+          const vol::BlockList list = level.block_list(owned[l]);
           vkc::Result<rmesh::DeviceMesh> m = [&]() {
             vkc::StageScope scope(remesh_stages, "extract");
-            return extractors[l].extract_device(levels.grid(l), 0.0f, list);
+            return extractors[l].extract_device(level, 0.0f, list);
           }();
           if (!m) {
             std::fprintf(stderr, "adaptive_viewer: extract level %zu: %s\n", l,
@@ -826,7 +890,7 @@ int run(GLFWwindow* window, const Options& opt) {
           vkc::Status painted;
           if (tint) {
             vkc::StageScope scope(remesh_stages, "tint");
-            painted = levels.tint(m.value(), l);
+            painted = paint_level(m.value(), l);
           } else if (textured && !m.value().empty()) {
             painted = texturer->texture(m.value(), keyframe->view,
                                         keyframe->occlusion, &remesh_stages);
@@ -890,7 +954,8 @@ int run(GLFWwindow* window, const Options& opt) {
       vr_example::RgbdFrame last_host;
       std::optional<Keyframe> last_key;
       PolledSet frames;
-      std::vector<adaptive::Input> inputs;
+      std::vector<rtsdf::FrameInput> inputs;
+      std::vector<rtsdf::ColorFrame> colors;  // the inputs point into it
       std::size_t sets = 0;
       bool warned_silent = false;
       auto last_arrival = std::chrono::steady_clock::now();
@@ -928,22 +993,29 @@ int run(GLFWwindow* window, const Options& opt) {
         last_arrival = std::chrono::steady_clock::now();
         // The set as the levels take it, and its first camera as keyframe.
         inputs.clear();
-        vkc::Status fused;
+        colors.clear();
+        colors.reserve(frames.host.size() + 8);
         Keyframe key;
-        for (std::size_t c = 0; c < frames.host.size() && fused.ok(); ++c) {
-          vkc::Result<adaptive::Input> in = levels.upload(frames.host[c], c);
-          if (in) {
-            inputs.push_back(std::move(in).value());
-          } else {
-            fused = in.status();
+        for (const rsensor::CapturedFrame& f : frames.host) {
+          const rtsdf::ColorFrame* color = nullptr;
+          if (f.has_color()) {
+            colors.push_back({f.color, f.color_camera, f.color_encoding});
+            color = &colors.back();
           }
+          inputs.push_back(
+              {{vkc::StorageInput(f.depth), f.depth_camera}, color});
         }
         if (!frames.host.empty()) key = keyframe_of(frames.host.front());
 #ifdef VR_ADAPTIVE_ORBBEC
+        colors.reserve(colors.size() + frames.device.size());
         for (const rsensor::DeviceFrame& f : frames.device) {
-          adaptive::Input in{f.depth, f.depth_camera, std::nullopt};
-          if (f.has_color()) in.color = vr_example::device_color(f);
-          inputs.push_back(std::move(in));
+          const rtsdf::ColorFrame* color = nullptr;
+          if (f.has_color()) {
+            colors.push_back(vr_example::device_color(f));
+            color = &colors.back();
+          }
+          inputs.push_back(
+              {{vkc::StorageInput(*f.depth), f.depth_camera}, color});
         }
         if (!frames.device.empty()) key = keyframe_of(frames.device.front());
 #endif
@@ -951,8 +1023,8 @@ int run(GLFWwindow* window, const Options& opt) {
           std::lock_guard<std::mutex> lock(share_mtx);
           shared_poses.push_back(key.view.cam.cam_to_world);
         }
-        levels.set_eps_mm(eps_mm.load());
-        if (fused.ok()) fused = levels.fuse(inputs, &stages);
+        grid.set_refine_offset(eps_mm.load() * 1e-3f);
+        const vkc::Status fused = grid.fuse(inputs, &stages);
         if (!fused.ok()) {
           std::fprintf(stderr, "adaptive_viewer: fuse (frame %zu): %s\n", i,
                        fused.message().c_str());
@@ -972,7 +1044,11 @@ int run(GLFWwindow* window, const Options& opt) {
           shared_panel.fuse_ms = stages.total_cpu_ms(/*exclude=*/"frame");
           fuse_total_ms += shared_panel.fuse_ms;
           shared_panel.fuse_mean_ms = fuse_total_ms / double(++sets);
-          shared_panel.levels = levels.stats();
+          shared_panel.levels.clear();
+          for (std::uint32_t l = 0; l < level_count; ++l) {
+            shared_panel.levels.push_back(grid.stats(l));
+          }
+          shared_panel.floor = grid.sensor_floor();
         }
         if (!frames.host.empty()) {
           last_host.assign(frames.host.front());
@@ -1078,6 +1154,7 @@ int run(GLFWwindow* window, const Options& opt) {
       panel.fuse_ms = shared_panel.fuse_ms;
       panel.fuse_mean_ms = shared_panel.fuse_mean_ms;
       panel.levels = shared_panel.levels;
+      panel.floor = shared_panel.floor;
       for (std::size_t l = 0; l < level_count; ++l) {
         shared_released[l] = fuse_viewer::retire_and_release_mark(
             frame_generations[l], render_frame.slot, live[l].generation,
@@ -1148,14 +1225,15 @@ int run(GLFWwindow* window, const Options& opt) {
           "tick %d: %.1f fps, fused %zu/%zu, fuse %.2f ms (mean %.2f), "
           "floor %.2f mm |",
           tick, fps, panel.fused, panel.total, panel.fuse_ms,
-          panel.fuse_mean_ms,
-          panel.levels.empty() ? 0.0 : panel.levels[0].floor_mm);
+          panel.fuse_mean_ms, 1000.0 * double(panel.floor));
       for (std::size_t l = 0; l < level_count; ++l) {
-        const adaptive::LevelStats s =
-            l < panel.levels.size() ? panel.levels[l] : adaptive::LevelStats{};
-        std::printf(" L%zu %zu blk %zu ref %zu own %u tri off %.2f noise %.2f;",
-                    l, s.blocks, s.refined, s.owned, panel.triangles[l],
-                    s.median_offset_mm, s.median_noise_mm);
+        const rtsdf::AdaptiveLevelStats s = l < panel.levels.size()
+                                                ? panel.levels[l]
+                                                : rtsdf::AdaptiveLevelStats{};
+        std::printf(" L%zu %u blk %u ref %u own %u tri off %.2f noise %.2f;", l,
+                    s.blocks, s.refined, s.owned, panel.triangles[l],
+                    1000.0 * double(s.median_offset),
+                    1000.0 * double(s.median_noise));
       }
       std::printf("\n");
     }

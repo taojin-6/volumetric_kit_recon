@@ -140,10 +140,10 @@ set_source_files_properties(
   "${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp"
   PROPERTIES COMPILE_OPTIONS "$<IF:$<CXX_COMPILER_ID:MSVC>,/w,-w>")
 
-# adaptive_viewer: fuse_viewer with resolution chosen per block -- uniform grids
-# at halving voxel sizes, a block refined where the depth misses the coarser
-# grid's surface (adaptive_levels.hpp). Its residual, depth-mask and level-tint
-# kernels are embedded here, beside the example, while it is a prototype.
+# adaptive_viewer: fuse_viewer over tsdf::AdaptiveGrid -- uniform grids at
+# halving voxel sizes, a block refined where the depth is systematically off the
+# coarser grid's surface -- drawing every level. Only its level-colour paint is
+# a kernel of its own.
 add_executable(
   adaptive_viewer adaptive_viewer.cpp
                   "${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp")
@@ -154,13 +154,8 @@ target_include_directories(adaptive_viewer PRIVATE ${_viewer_common_inc})
 target_include_directories(adaptive_viewer SYSTEM
                            PRIVATE "${imgui_SOURCE_DIR}/backends")
 include(vr_embed)
-vr_embed_shaders(
-  adaptive_viewer
-  SHADERS
-  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/adaptive_residual.comp"
-  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/adaptive_bias.comp"
-  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/adaptive_mask.comp"
-  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/adaptive_tint.comp")
+vr_embed_shaders(adaptive_viewer SHADERS
+                 "${CMAKE_CURRENT_SOURCE_DIR}/shaders/adaptive_tint.comp")
 # Live cameras: their raw frames are prepared on the GPU (recon_sensor_utils,
 # which decodes through recon_sensor_video).
 if(TARGET volumetric_kit::recon_sensor_orbbec

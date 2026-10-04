@@ -7,10 +7,12 @@
 // offset there, since noise averages away but the grid's shape error does not.
 // The block reports the mean over its sampled cells of that estimate and of
 // s^2 / n (how much noise is left in it), then halves every cell's sums, so
-// older frames fade and moving surfaces update.
+// older frames fade and moving surfaces update. It also counts the block's
+// surface voxels -- observed, within a voxel of the zero crossing -- which
+// tell a block whose surface is gone from one merely out of view.
 //
-// Scores, per block slot, in (0.02 mm)^2 units: offset^2, noise left^2, noise
-// per sample^2, cells sampled.
+// Scores, two per block slot: offset^2, noise left^2 and noise per sample^2 in
+// (0.02 mm)^2 units, and cells sampled; then surface voxels.
 
 #version 450
 #extension GL_GOOGLE_include_directive : require
@@ -28,17 +30,21 @@ layout(set = 0, binding = 1, scalar) buffer Accum { int accum[]; };
 layout(set = 0, binding = 2, scalar) writeonly buffer Scores {
   vec4 scores[];
 };
+layout(set = 0, binding = 3, scalar) readonly buffer Tsdf { float tsdf[]; };
+layout(set = 0, binding = 4, scalar) readonly buffer Weight { float weight[]; };
 
 layout(push_constant, scalar) uniform Push {
   uint count;
   uint base;
   uint voxels_per_block;
+  float voxel_size;
 } pc;
 
 shared float s_offset[64];
 shared float s_left[64];
 shared float s_noise[64];
 shared float s_cells[64];
+shared float s_surface[64];
 
 void main() {
   uint b = pc.base + gl_WorkGroupID.x;
@@ -66,6 +72,16 @@ void main() {
   s_left[lane] = left;
   s_noise[lane] = noise;
   s_cells[lane] = cells;
+  // Eight voxels a lane: the block's surface voxels.
+  float surface = 0.0;
+  uint first = uint(blocks[b].ptr);
+  for (uint v = lane; v < pc.voxels_per_block; v += 64u) {
+    surface += weight[first + v] >= 1e-6 &&
+                       abs(tsdf[first + v]) < pc.voxel_size
+                   ? 1.0
+                   : 0.0;
+  }
+  s_surface[lane] = surface;
   barrier();
   for (uint half_size = 32u; half_size > 0u; half_size >>= 1) {
     if (lane < half_size) {
@@ -73,13 +89,15 @@ void main() {
       s_left[lane] += s_left[lane + half_size];
       s_noise[lane] += s_noise[lane + half_size];
       s_cells[lane] += s_cells[lane + half_size];
+      s_surface[lane] += s_surface[lane + half_size];
     }
     barrier();
   }
   if (lane == 0u) {
     float c = max(s_cells[0], 1.0);
-    scores[slot] =
+    scores[2u * slot] =
         vec4(s_offset[0] / c, s_left[0] / c, s_noise[0] / c, s_cells[0]);
+    scores[2u * slot + 1u] = vec4(s_surface[0], 0.0, 0.0, 0.0);
   }
   accum[i] = n >> 1;
   accum[i + 1u] = sum / 2;
