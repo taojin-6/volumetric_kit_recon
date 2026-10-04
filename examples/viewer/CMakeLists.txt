@@ -140,6 +140,38 @@ set_source_files_properties(
   "${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp"
   PROPERTIES COMPILE_OPTIONS "$<IF:$<CXX_COMPILER_ID:MSVC>,/w,-w>")
 
+# adaptive_viewer: fuse_viewer with resolution chosen per block -- uniform grids
+# at halving voxel sizes, a block refined where the depth misses the coarser
+# grid's surface (adaptive_levels.hpp). Its residual, depth-mask and level-tint
+# kernels are embedded here, beside the example, while it is a prototype.
+add_executable(
+  adaptive_viewer adaptive_viewer.cpp
+                  "${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp")
+target_link_libraries(
+  adaptive_viewer PRIVATE ${_viewer_recon_libs} ${_viewer_gfx_libs}
+                          volumetric_kit::gfx_ui glfw Vulkan::Vulkan)
+target_include_directories(adaptive_viewer PRIVATE ${_viewer_common_inc})
+target_include_directories(adaptive_viewer SYSTEM
+                           PRIVATE "${imgui_SOURCE_DIR}/backends")
+include(vr_embed)
+vr_embed_shaders(
+  adaptive_viewer
+  SHADERS
+  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/adaptive_residual.comp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/adaptive_bias.comp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/adaptive_mask.comp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/adaptive_tint.comp")
+# Live cameras: their raw frames are prepared on the GPU (recon_sensor_utils,
+# which decodes through recon_sensor_video).
+if(TARGET volumetric_kit::recon_sensor_orbbec
+   AND TARGET volumetric_kit::recon_sensor_video)
+  target_link_libraries(
+    adaptive_viewer PRIVATE volumetric_kit::recon_sensor_orbbec
+                            volumetric_kit::recon_sensor_utils)
+  target_compile_definitions(adaptive_viewer PRIVATE VR_ADAPTIVE_ORBBEC=1)
+endif()
+vr_target_warnings(adaptive_viewer)
+
 # rig_viewer: fuse_viewer's sibling for a live, synced rig of Orbbec cameras,
 # every camera's frame prepared, fused and textured on the GPU. Built only where
 # the Orbbec driver is (VR_WITH_ORBBEC) with its colour decoders
