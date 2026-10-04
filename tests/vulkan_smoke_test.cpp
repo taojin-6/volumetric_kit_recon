@@ -3,18 +3,16 @@
 
 // Vulkan availability smoke: proves recon's build finds Vulkan, the
 // core/vulkan.hpp umbrella compiles, and the platform's Vulkan driver (MoltenVK
-// on Apple) can create an instance and expose a COMPUTE-capable queue family.
-// Compute -- not graphics -- is the capability this backend actually needs, so
-// the check targets it directly. This is the "validate the GPU path early"
-// de-risk before the Vulkan core (device/allocator/compute pipeline) is built.
-//
-// It drives the same Instance::create + select_physical_device path the rest of
-// the core uses, rather than re-implementing the portability-enumeration and
-// compute-family dance, so the loader detail stays in one place (instance.cpp).
+// on Apple) offers a device that meets recon's requirements
+// (core/device.hpp's device_requirements) and creates one on it. The Vulkan
+// foundation behind it is volumetric_kit_core's, tested there; what this pins
+// is recon's side: that the requirements recon states are ones a real driver
+// meets.
 
 #include <cstdint>
 #include <cstdio>
 
+#include "volumetric_kit/recon/core/device.hpp"
 #include "volumetric_kit/recon/core/instance.hpp"
 #include "volumetric_kit/recon/core/vulkan.hpp"
 
@@ -40,15 +38,29 @@ int main() {
     return 0;
   }
 
-  vr::Result<VkPhysicalDevice> gpu = instance.value().select_physical_device();
+  // recon's requirements, not the core's defaults: scalarBlockLayout is what
+  // every recon kernel's buffer ABI needs, so a device the core accepts can
+  // still be one recon cannot run on.
+  const vr::DeviceRequirements reqs = vr::device_requirements();
+  vr::Result<vr::PhysicalDeviceInfo> gpu =
+      instance.value().select_physical_device(reqs);
   if (!gpu) {
-    std::fprintf(stderr, "%u device(s) but none compute-capable (%s)\n",
+    std::fprintf(stderr,
+                 "%u device(s) but none meets recon's requirements (%s)\n",
                  device_count, gpu.status().message().c_str());
     return 1;
   }
+  vr::Result<vr::Device> device =
+      vr::Device::create(instance.value(), gpu.value(), reqs);
+  if (!device) {
+    std::fprintf(stderr, "device create failed on %s: %s\n",
+                 gpu.value().properties().deviceName,
+                 device.status().message().c_str());
+    return 1;
+  }
 
-  std::printf("Vulkan instance created; %u device(s); compute-capable: yes\n",
-              device_count);
+  std::printf("Vulkan instance created; %u device(s); recon runs on %s\n",
+              device_count, gpu.value().properties().deviceName);
   std::puts("recon Vulkan compute smoke passed");
   return 0;
 }

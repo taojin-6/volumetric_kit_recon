@@ -636,6 +636,13 @@ arbitrary; it usually isn't.
 
 ### core
 
+The Vulkan foundation below is volumetric_kit_core's vulkan tier
+(DECISIONS.md, 2026-10-04): `core/` names its types in `vr::`, and what is
+recon's own is `device_requirements()` (what recon's kernels need of a device),
+the camera and colour-space vocabulary and the vector types. The description
+stays here because recon's tiers are written against it; the contract is the
+core's headers.
+
 the Vulkan compute foundation: VMA `Allocator`, RAII `Buffer`,
 `ShaderModule`, descriptor + `ComputePipeline` wrappers, the `ComputeKernel`
 bundle + `KernelSetBuilder`, the shared-queue-safe
@@ -643,10 +650,11 @@ bundle + `KernelSetBuilder`, the shared-queue-safe
 each submit records on a command pool of its own, kept with its fence for
 the next, and only the queue submit is locked; a kernel's set, a buffer and a `GpuTimer` stay the caller's to
 keep to one thread), and the shared `dispatch()` /
-`group_count` / `storage_buffer` / range-guard helpers of `compute_util.hpp`
+`group_count` / `mapped_storage_buffer` / range-guard helpers of `compute_util.hpp`
 — `StorageInput` among them, the host array (staged onto the device in the
 call's batch) or device buffer a call binds at its image's exact range.
-`MemoryUsage::DeviceLocal` requires `VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT`:
+`MemoryUsage::DeviceOnly` requires device-local memory the host cannot map
+where the GPU has any (else the device-local pool, never the BAR window):
 allocation fails instead of spilling into a non-local heap. `Buffer::memory_info()`
 records the selected memory type's flags, type index and heap index; its
 optional value is absent for an empty buffer or an adoption with unknown
@@ -740,11 +748,9 @@ extension, so it cannot ride `enabled_device_extensions` and is **declared,
 never probed** — the loader's answer for a disabled extension is not portable
 (null from a conformant loader, a live pointer from a directly-linked
 MoltenVK). Both seams carry the declaration:
-`AdoptedDevice::enabled_debug_utils` on adopt and
-`DeviceConfig::instance_debug_utils_enabled` on create, the latter filled in
-by the `Device::create(const Instance&, …)` overload every recon call site
-uses; `DeviceRequirements::debug_utils` is how an embedder hears recon wants
-it at all. It is never required — its absence costs the capture's names and
+`AdoptedDevice::enabled_debug_utils` on adopt and the
+`instance_debug_utils_enabled` argument on create, the latter filled in by the
+`Device::create(const Instance&, …)` overload every recon call site uses. It is never required — its absence costs the capture's names and
 nothing else — and resolution is **all-or-nothing**, so a driver returning
 two of the three entry points reports no labels rather than a region that can
 be opened and not closed. The label is recorded *outside* the `GpuTimer`

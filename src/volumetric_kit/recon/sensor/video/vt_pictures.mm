@@ -151,12 +151,17 @@ Result<Image> VtPictures::Impl::plane_image(CVPixelBufferRef pixels,
     vkDestroyImage(dev, image, nullptr);
     return error("binding a picture plane");
   }
-  return Image(image, format, width, height, info.usage,
-               VK_IMAGE_LAYOUT_GENERAL, [dev, image, memory_handle, texture] {
-                 vkDestroyImage(dev, image, nullptr);
-                 vkFreeMemory(dev, memory_handle, nullptr);
-                 static_cast<void>(texture);  // released with the capture
-               });
+  ImageInfo adopted;
+  adopted.image = image;
+  adopted.format = format;
+  adopted.extent = info.extent;
+  adopted.usage = info.usage;
+  adopted.layout = VK_IMAGE_LAYOUT_GENERAL;
+  return Image(adopted, [dev, image, memory_handle, texture] {
+    vkDestroyImage(dev, image, nullptr);
+    vkFreeMemory(dev, memory_handle, nullptr);
+    static_cast<void>(texture);  // released with the capture
+  });
 }
 
 Result<std::shared_ptr<Surface>> VtPictures::Impl::import_surface(
@@ -180,19 +185,15 @@ Result<std::shared_ptr<Surface>> VtPictures::Impl::import_surface(
     b[i].image = images[i];
     b[i].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
   }
-  bool in_flight = false;
-  const Status moved = device->submit_single_time(
+  // The surface rides along: should the submit fail with the barrier still on
+  // the device, the device keeps the images it names until it has run.
+  VR_TRY(device->submit_single_time(
       [&](VkCommandBuffer cmd) {
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                              VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
                              nullptr, 2, b);
       },
-      nullptr, nullptr, nullptr, &in_flight);
-  if (!moved.ok()) {
-    // The device may still hold the barrier naming them.
-    if (in_flight) static_cast<void>(new std::shared_ptr<Surface>(out));
-    return moved;
-  }
+      out));
   return out;
 }
 

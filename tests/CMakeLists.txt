@@ -11,39 +11,15 @@ vr_target_warnings(recon_core_smoke_test)
 add_test(NAME recon_core_smoke COMMAND recon_core_smoke_test)
 
 # Vulkan availability smoke: proves the build finds Vulkan and the platform
-# driver (MoltenVK on Apple) exposes a compute-capable device. The only test
-# that links the Vulkan loader directly; recon_core carries the include tree for
-# core/vulkan.hpp. Exits 0 (skip) where no driver/device is present.
+# driver (MoltenVK on Apple) offers a device that meets recon's requirements
+# (core/device.hpp). The Vulkan foundation itself -- device, allocator, buffers,
+# kernels, batches, timers, external memory -- is volumetric_kit_core's and is
+# tested there, not here. Exits 0 (skip) where no driver/device is present.
 add_executable(recon_vulkan_smoke_test vulkan_smoke_test.cpp)
 target_link_libraries(recon_vulkan_smoke_test PRIVATE volumetric_kit::recon_core
                                                       Vulkan::Vulkan)
 vr_target_warnings(recon_vulkan_smoke_test)
 add_test(NAME recon_vulkan_smoke COMMAND recon_vulkan_smoke_test)
-
-# core tier: the device-memory figures Allocator::memory_stats reports (what the
-# viewer's perf overlay shows). Behavioural, not absolute -- the bytes are VMA's
-# accounting. Skips where no device is present.
-add_executable(recon_core_memory_stats_test core_memory_stats_test.cpp)
-target_link_libraries(recon_core_memory_stats_test
-                      PRIVATE volumetric_kit::recon_core)
-vr_target_warnings(recon_core_memory_stats_test)
-add_test(NAME recon_core_memory_stats COMMAND recon_core_memory_stats_test)
-
-add_executable(recon_core_buffer_memory_test core_buffer_memory_test.cpp)
-target_link_libraries(recon_core_buffer_memory_test
-                      PRIVATE volumetric_kit::recon_core)
-vr_target_warnings(recon_core_buffer_memory_test)
-add_test(NAME recon_core_buffer_memory COMMAND recon_core_buffer_memory_test)
-
-# The reporting vocabulary (host-only, runs on every leg) and the GPU timer
-# behind it (skips without a device). The load-bearing assertion is that the
-# device span comes in UNDER the wall clock around the same blocking submit --
-# separating the two is the entire reason GpuTimer exists.
-add_executable(recon_core_stage_metrics_test core_stage_metrics_test.cpp)
-target_link_libraries(recon_core_stage_metrics_test
-                      PRIVATE volumetric_kit::recon_core)
-vr_target_warnings(recon_core_stage_metrics_test)
-add_test(NAME recon_core_stage_metrics COMMAND recon_core_stage_metrics_test)
 
 # Every tier reports, and reports the DEVICE half. The load-bearing assertion is
 # per row: gpu_ms < cpu_ms, since the host span wraps the submit the device span
@@ -57,18 +33,6 @@ target_link_libraries(
           volumetric_kit::recon_volume volumetric_kit::recon_core)
 vr_target_warnings(recon_tier_stage_metrics_test)
 add_test(NAME recon_tier_stage_metrics COMMAND recon_tier_stage_metrics_test)
-
-add_executable(recon_core_buffer_sharing_test core_buffer_sharing_test.cpp)
-target_link_libraries(recon_core_buffer_sharing_test
-                      PRIVATE volumetric_kit::recon_core)
-# queue_family_set.hpp is internal (non-installed): its location under src/ is
-# what keeps it out of the public API, so the test reaches it by include path
-# rather than the tier exporting it for one caller's benefit.
-target_include_directories(
-  recon_core_buffer_sharing_test
-  PRIVATE ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/core)
-vr_target_warnings(recon_core_buffer_sharing_test)
-add_test(NAME recon_core_buffer_sharing COMMAND recon_core_buffer_sharing_test)
 
 # volume tier: the sparse voxel-hash POD layouts. The static_assert size/offset
 # guards in hash_types.hpp are the real test (a build failure there is the
@@ -296,60 +260,7 @@ target_link_libraries(
 vr_target_warnings(recon_texture_device_mesh_test)
 add_test(NAME recon_texture_device_mesh COMMAND recon_texture_device_mesh_test)
 
-# core device seam: Instance + Device create/adopt. Links recon_core, which now
-# carries the Vulkan headers/loader. Skips at runtime where no compute device is
-# present.
-add_executable(recon_device_test device_test.cpp)
-target_link_libraries(recon_device_test PRIVATE volumetric_kit::recon_core)
-vr_target_warnings(recon_device_test)
-add_test(NAME recon_device COMMAND recon_device_test)
-
-# Vulkan compute smoke: the end-to-end de-risk gate for the compute core. Builds
-# Instance -> Device -> Allocator -> Buffer -> Descriptor -> ComputePipeline,
-# dispatches fill.comp through the platform driver (MoltenVK on Apple), and
-# verifies the readback. vr_compile_shaders compiles the GLSL to SPIR-V; the
-# .spv path is handed to the test as VR_FILL_SPV. Skips (exit 0) where no
-# driver/device is present.
 include(vr_shaders)
-add_executable(recon_compute_smoke_test compute_smoke_test.cpp)
-vr_compile_shaders(recon_compute_smoke_test SHADERS
-                   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fill.comp")
-target_compile_definitions(
-  recon_compute_smoke_test
-  PRIVATE VR_FILL_SPV="${CMAKE_CURRENT_BINARY_DIR}/shaders/fill.comp.spv")
-target_link_libraries(recon_compute_smoke_test
-                      PRIVATE volumetric_kit::recon_core Vulkan::Vulkan)
-vr_target_warnings(recon_compute_smoke_test)
-add_test(NAME recon_compute_smoke COMMAND recon_compute_smoke_test)
-
-# CommandBatch: every recording call over a device-local and a host-visible
-# buffer, in orders that would expose a command run out of place; inline and
-# staged uploads, several readbacks in one batch, refusals and timed dispatches.
-# add.comp reads what it writes, so a command run out of order leaves a
-# different value.
-add_executable(recon_core_command_batch_test core_command_batch_test.cpp)
-vr_compile_shaders(recon_core_command_batch_test SHADERS
-                   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/add.comp")
-target_compile_definitions(
-  recon_core_command_batch_test
-  PRIVATE VR_ADD_SPV="${CMAKE_CURRENT_BINARY_DIR}/shaders/add.comp.spv")
-target_link_libraries(recon_core_command_batch_test
-                      PRIVATE volumetric_kit::recon_core Vulkan::Vulkan)
-vr_target_warnings(recon_core_command_batch_test)
-add_test(NAME recon_core_command_batch COMMAND recon_core_command_batch_test)
-
-# An exported buffer: a descriptor where the device exports memory, a refusal
-# where it does not (MoltenVK), and an ordinary storage buffer to a batch; and
-# the memory type it binds. Not on Windows, which has no file descriptors to
-# close.
-if(NOT WIN32)
-  add_executable(recon_core_external_memory_test core_external_memory_test.cpp)
-  target_link_libraries(recon_core_external_memory_test
-                        PRIVATE volumetric_kit::recon_core Vulkan::Vulkan)
-  vr_target_warnings(recon_core_external_memory_test)
-  add_test(NAME recon_core_external_memory
-           COMMAND recon_core_external_memory_test)
-endif()
 
 # Color-space vocabulary: the exact piecewise sRGB curve, the packed helpers the
 # fusion kernels mirror, and the primaries matrices. Pure host math over core,
@@ -380,16 +291,6 @@ vr_target_warnings(recon_core_color_space_gpu_test)
 add_test(NAME recon_core_color_space_gpu
          COMMAND recon_core_color_space_gpu_test)
 
-# Move-semantics tests for the compute core's RAII handle owners (Buffer's
-# std::function deleter + the UniqueHandle mechanism behind the rest). The
-# sanitizer CI job turns these into leak / double-free detectors. Skips (exit 0)
-# where no device is present.
-add_executable(recon_compute_raii_test compute_raii_test.cpp)
-target_link_libraries(recon_compute_raii_test PRIVATE volumetric_kit::recon_core
-                                                      Vulkan::Vulkan)
-vr_target_warnings(recon_compute_raii_test)
-add_test(NAME recon_compute_raii COMMAND recon_compute_raii_test)
-
 # sensor tier: the camera-convention conversions -- the OpenGL/ARKit -> CV pose
 # change of basis and the registered-depth intrinsics rescale. These are the two
 # things a capture integration gets *silently* wrong (a flipped axis or a
@@ -418,8 +319,7 @@ add_test(NAME recon_sensor_rig_calibration
 
 # codec tier, host half: CodecParams validation and the DCT's two tables (basis
 # orthonormality, the zigzag order against the prior engine's). CPU-only, so it
-# always runs. The tables are internal (non-installed), reached by include path
-# as core_buffer_sharing_test reaches queue_family_set.hpp.
+# always runs. The tables are internal (non-installed), reached by include path.
 add_executable(recon_codec_params_test codec_params_test.cpp)
 target_link_libraries(recon_codec_params_test
                       PRIVATE volumetric_kit::recon_codec)

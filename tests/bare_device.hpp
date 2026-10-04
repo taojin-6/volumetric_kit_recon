@@ -20,14 +20,15 @@ inline vr::Result<vr::Device> bare_device(const vr::Instance& instance,
                                           const vr::Device& device) {
   vr::AdoptedDevice view;
   view.instance = instance.handle();
+  view.instance_api_version = instance.api_version();
   view.physical_device = device.physical_device();
   view.device = device.handle();
-  view.compute_family = device.compute_family();
-  view.compute_queue = device.compute_queue();
+  view.queue_family = device.queue_family();
+  view.queue = device.queue();
   view.submit_mutex = device.submit_mutex();
   view.enabled_timeline_semaphore = true;
   view.enabled_scalar_block_layout = true;
-  return vr::Device::adopt(view, {});
+  return vr::Device::adopt(view, vr::device_requirements());
 }
 
 }  // namespace vr_test

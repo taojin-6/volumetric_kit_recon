@@ -186,13 +186,14 @@ int main() {
     std::fprintf(stderr, "no Vulkan instance; skipping\n");
     return 0;
   }
-  vr::Result<VkPhysicalDevice> gpu = instance.value().select_physical_device();
+  vr::Result<vr::PhysicalDeviceInfo> gpu =
+      instance.value().select_physical_device(vr::device_requirements());
   if (!gpu) {
     std::fprintf(stderr, "no compute-capable device; skipping\n");
     return 0;
   }
-  vr::Result<vr::Device> device =
-      vr::Device::create(instance.value(), gpu.value(), {});
+  vr::Result<vr::Device> device = vr::Device::create(
+      instance.value(), gpu.value(), vr::device_requirements());
   CHECK(device.ok());
   vr::Result<vr::Allocator> allocator =
       vr::Allocator::create(instance.value().handle(), device.value());
@@ -483,7 +484,7 @@ int main() {
       copy_only.size = half.size() * sizeof(std::uint32_t);
       copy_only.usage =
           VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-      copy_only.memory = vr::MemoryUsage::DeviceLocal;
+      copy_only.memory = vr::MemoryUsage::DeviceOnly;
       vr::Result<vr::Buffer> unbindable =
           allocator.value().create_buffer(copy_only);
       CHECK(short_coverage.ok() && unbindable.ok());

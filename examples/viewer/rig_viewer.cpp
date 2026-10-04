@@ -697,8 +697,8 @@ int run(GLFWwindow* window, const Options& opt) {
   }
   vg::app::WindowedApp app = std::move(app_r).value();
 
-  auto recon_device_result =
-      vr::Device::adopt(fuse_viewer::recon_adopt_payload(shared), {});
+  auto recon_device_result = vr::Device::adopt(
+      fuse_viewer::recon_adopt_payload(shared), vr::device_requirements());
   if (!recon_device_result) {
     std::fprintf(stderr, "recon Device::adopt: %s\n",
                  recon_device_result.status().message().c_str());
@@ -740,6 +740,7 @@ int run(GLFWwindow* window, const Options& opt) {
   rig_options.apply_sync_config = opt.apply_sync;
   rig_options.raw = true;
   rig_options.device = &rdevice;
+  rig_options.allocator = &rallocator;
   if (opt.hevc) rig_options.color_codec = rsensor::OrbbecColorCodec::Hevc;
   if (opt.color_width != 0) {
     rig_options.color_width = opt.color_width;

@@ -70,7 +70,7 @@ std::uint32_t g_fps = 30;
 
 sensor::OrbbecCapture::Options options_for(
     const char* serial, std::uint32_t w, std::uint32_t h, bool raw,
-    const vr::Device* device = nullptr,
+    const vr::Device* device = nullptr, vr::Allocator* allocator = nullptr,
     sensor::OrbbecColorCodec codec = sensor::OrbbecColorCodec::Hevc) {
   sensor::OrbbecCapture::Options o;
   o.serial = serial;
@@ -80,6 +80,7 @@ sensor::OrbbecCapture::Options options_for(
   o.color_codec = codec;
   o.raw = raw;
   o.device = device;
+  o.allocator = allocator;
   return o;
 }
 
@@ -143,7 +144,7 @@ int grab_gpu(const char* serial, std::uint32_t w, std::uint32_t h,
   std::printf("raw %s%s:\n", sensor::to_string(codec),
               forced ? ", the device path forced to fail" : "");
   auto opened = sensor::OrbbecCapture::open(
-      options_for(serial, w, h, true, &decode_on, codec));
+      options_for(serial, w, h, true, &decode_on, &allocator, codec));
   if (!opened) {
     std::fprintf(stderr, "FAIL: open raw: %s\n",
                  opened.status().message().c_str());
@@ -445,9 +446,10 @@ int main() {
   }
   auto instance = vr::Instance::create({});
   CHECK(instance.ok());
-  auto gpu = instance->select_physical_device();
+  auto gpu = instance->select_physical_device(vr::device_requirements());
   CHECK(gpu.ok());
-  auto device = vr::Device::create(instance.value(), gpu.value(), {});
+  auto device = vr::Device::create(instance.value(), gpu.value(),
+                                   vr::device_requirements());
   CHECK(device.ok());
   auto allocator = vr::Allocator::create(instance->handle(), device.value());
   CHECK(allocator.ok());

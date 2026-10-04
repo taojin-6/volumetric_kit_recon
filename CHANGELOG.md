@@ -37,6 +37,40 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `core`: **the Vulkan foundation comes from `volumetric_kit_core`'s vulkan
+  tier**. `Instance`, `Device`, `Allocator`, `Buffer`, `Image`, the descriptor
+  and pipeline wrappers, `ComputeKernel`, `CommandBatch`, `GpuTimer`,
+  `StageMetrics` and the exported buffers are the core's types, named in `vr::`
+  as before, so one `VkDevice` and its buffers pass between recon, gfx (once it
+  adopts the core) and an embedder unchanged. recon no longer compiles VMA:
+  the core's `core_vulkan` does, and `recon_core` links it PUBLIC. Migrating:
+  - `vr::device_requirements()` states what recon's kernels need
+    (`scalarBlockLayout`, and external memory and Metal objects where
+    offered). `Instance::select_physical_device(reqs)` returns a
+    `PhysicalDeviceInfo`, and `Device::create(instance, gpu, reqs)` and
+    `Device::adopt(payload, reqs)` take the requirements in place of
+    `DeviceConfig`, which is gone with `Device::requirements`.
+  - `Device::compute_family()` / `compute_queue()` are `queue_family()` /
+    `queue()`, and so are `AdoptedDevice`'s fields; an adopted device also
+    declares `instance_api_version`.
+  - Memory is placed explicitly (`MemoryUsage`): `DeviceOnly`, the default,
+    for anything a kernel touches; `DeviceMapped` for device-local memory the
+    host maps; `Staging` for host-memory transfer buffers, `TRANSFER` usage
+    only. `DeviceLocal`, `HostVisible`, `Auto` and `BufferDesc::mapped` are
+    gone; mapped placements are always mapped.
+  - `storage_buffer` is `mapped_storage_buffer` (device-local, mapped;
+    `Unsupported` where the device has none), and `max_storage_buffer_range`
+    takes the `Device`.
+  - `BufferMemoryInfo` is `MemoryInfo`; an `Image` is adopted from an
+    `ImageInfo`; `submit_single_time` takes an optional `keep_alive` and
+    `in_flight`, or a `GpuStageScope` to time the work.
+  - `create_exported_buffer(device, allocator, bytes)` takes the allocator,
+    and its descriptor is a `UniqueFd`. So `HevcDecoder::Options`,
+    `JpegDecoder::Options` and `OrbbecStreamOptions` gain an `allocator`
+    beside `device`: NVDEC's and nvJPEG's pictures stay on the device only
+    when one is given.
+  - Headers that only name these types include `core/fwd.hpp`; a forward
+    declaration in `vr::` would declare a different class.
 - `core`: **error handling comes from `volumetric_kit_core`**, fetched pinned by
   commit and re-found by the installed package. `vr::Status` and `vr::Result`
   are the core's types, so they pass to calib unchanged (gfx keeps its own

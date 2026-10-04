@@ -225,14 +225,15 @@ int main() {
                  instance.status().message().c_str());
     return 0;
   }
-  vr::Result<VkPhysicalDevice> gpu = instance.value().select_physical_device();
+  vr::Result<vr::PhysicalDeviceInfo> gpu =
+      instance.value().select_physical_device(vr::device_requirements());
   if (!gpu) {
     std::fprintf(stderr, "no compute-capable device (%s); skipping\n",
                  gpu.status().message().c_str());
     return 0;
   }
-  vr::Result<vr::Device> device =
-      vr::Device::create(instance.value(), gpu.value(), {});
+  vr::Result<vr::Device> device = vr::Device::create(
+      instance.value(), gpu.value(), vr::device_requirements());
   CHECK(device.ok());
   vr::Result<vr::Allocator> allocator =
       vr::Allocator::create(instance.value().handle(), device.value());
@@ -347,8 +348,7 @@ int main() {
   vr::BufferDesc transfer_only;
   transfer_only.size = depth.size() * sizeof(float);
   transfer_only.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-  transfer_only.memory = vr::MemoryUsage::HostVisible;
-  transfer_only.mapped = true;
+  transfer_only.memory = vr::MemoryUsage::Staging;
   auto not_storage = alloc.create_buffer(transfer_only);
   CHECK(not_storage.ok());
   CHECK(device_grid->map()

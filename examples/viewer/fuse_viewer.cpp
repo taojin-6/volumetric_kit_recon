@@ -522,8 +522,8 @@ int run(GLFWwindow* window, const Options& opt) {
   // recon takes its share of the same device. It gets its own VMA allocator --
   // allocators are independent bookkeeping over one VkDevice's memory, so each
   // library manages its own even when the device is shared.
-  auto recon_device_result =
-      vr::Device::adopt(fuse_viewer::recon_adopt_payload(shared), {});
+  auto recon_device_result = vr::Device::adopt(
+      fuse_viewer::recon_adopt_payload(shared), vr::device_requirements());
   if (!recon_device_result) {
     std::fprintf(stderr, "recon Device::adopt: %s\n",
                  recon_device_result.status().message().c_str());

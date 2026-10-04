@@ -4,24 +4,25 @@
 # Vendored dependencies (pinned FetchContent). recon takes Vulkan and glm from
 # the system (find_package in the root + core CMakeLists). Besides the family's
 # volumetric_kit_core, what is vendored here is header-only with no system
-# package to rely on across our targets (Linux/Android/macOS/iOS/Windows): VMA,
-# nlohmann/json, stb and tinyply below. recon_core compiles VMA in one TU, so it
-# is a hard dependency: the root CMakeLists adds this subdirectory
-# unconditionally and the fetch below runs on the first configure (a network is
-# required then; afterwards the FetchContent cache serves it).
-#
-# The include dir is exported to the parent scope; the core tier compiles VMA's
-# implementation in a single TU (core/vma_impl.cpp) and attaches this dir as a
-# SYSTEM include so VMA's headers stay out of our -Werror surface.
+# package to rely on across our targets (Linux/Android/macOS/iOS):
+# nlohmann/json, stb and tinyply below. The root CMakeLists adds this
+# subdirectory unconditionally and the fetches below run on the first configure
+# (a network is required then; afterwards the FetchContent cache serves it).
 
 include(FetchContent)
 
 # --- volumetric_kit_core: the family's shared foundation ---------------------
-# recon's Status / Result / VR_CHECK / log sink come from its base tier
-# (DECISIONS.md, 2026-10-03), so they are the same types calib uses. Unlike the
-# header-only vendored libraries below, it is a compiled library and a PUBLIC
-# dependency of recon_core. Pinned by commit, never main; an application that
-# also fetches calib declares the core first, and FetchContent keeps the first
+# recon's Status / Result / VR_CHECK / log sink come from its base tier, and its
+# Vulkan foundation -- instance, device, VMA allocator, buffers, images,
+# descriptors, compute pipelines, command batches, GPU timers, external memory
+# and the SharedDevice -- from its vulkan tier (DECISIONS.md, 2026-10-03 and
+# 2026-10-04), so they are the same types calib and gfx use, and one VkDevice
+# can serve all three. Unlike the header-only vendored libraries below, it is a
+# compiled library and a PUBLIC dependency of recon_core. VMA comes with it: the
+# core compiles VMA's implementation privately in core_vulkan, so recon no
+# longer fetches or compiles its own (a second VMA_IMPLEMENTATION in the same
+# link would collide). Pinned by commit, never main; an application that also
+# fetches calib or gfx declares the core first, and FetchContent keeps the first
 # declaration of a name, so this pin then yields to the application's. Work on
 # both checkouts at once with
 # -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CORE=<core checkout>. The core's
@@ -29,41 +30,24 @@ include(FetchContent)
 # VR_INSTALL: recon's install must carry the core its exported targets link, and
 # an application that embeds recon without installing it gets none.
 #
-# The pin is main after core PR #1, which landed the base tier.
+# The pin is main after core PR #9, which landed the vulkan tier's last stage
+# (V5, the SharedDevice).
 #
 # TODO: pin a release tag once the core tags one (v0.1.0).
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG 7fb874932462abbd95a15f3fab73e671c48a1d7d)
+  GIT_TAG d7eb7a796f0b0975188223064f6ecb12090e1e89)
 set(VKC_INSTALL ${VR_INSTALL})
+set(VKC_WITH_VULKAN ON)
 FetchContent_MakeAvailable(volumetric_kit_core)
-
-# --- VMA: Vulkan Memory Allocator (header-only; built in one recon_core TU) ---
-# Matches volumetric_kit_gfx's pin so the two siblings allocate through the same
-# VMA version -- relevant once they share a VkDevice at the interop seam.
-FetchContent_Declare(
-  VulkanMemoryAllocator
-  GIT_REPOSITORY
-    https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
-  GIT_TAG v3.4.0
-  GIT_SHALLOW TRUE)
-
-FetchContent_MakeAvailable(VulkanMemoryAllocator)
-
-# Expose the vendored header location to the library target (see the SYSTEM
-# include + vma_impl.cpp in core/CMakeLists.txt).
-set(VR_VMA_INCLUDE_DIR
-    "${vulkanmemoryallocator_SOURCE_DIR}/include"
-    PARENT_SCOPE)
 
 # --- nlohmann/json (header-only; parsed in one recon_sensor TU) ---------------
 # The rig pose file (sensor/rig_poses.hpp) is JSON. The release's source
 # archive, hash-pinned; only its include/ tree is used, so its CMake is not run
-# (SOURCE_SUBDIR names a directory the archive does not have). Like VMA, it is a
-# PRIVATE SYSTEM include of the one target that parses, never part of the
-# installed interface. volumetric_kit_gfx carries the same library through
-# tinygltf.
+# (SOURCE_SUBDIR names a directory the archive does not have). It is a PRIVATE
+# SYSTEM include of the one target that parses, never part of the installed
+# interface. volumetric_kit_gfx carries the same library through tinygltf.
 if(POLICY CMP0135)
   cmake_policy(SET CMP0135 NEW) # extracted files get the extraction time
 endif()
