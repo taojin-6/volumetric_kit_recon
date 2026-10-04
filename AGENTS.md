@@ -108,7 +108,10 @@ these rules:
 - An internal class that only aggregates such owners skips these rules: it
   deletes copy and move, and `create()` returns `Result<std::unique_ptr<T>>`,
   as the codec's transform, frame writer and reader do. With no moved-from
-  state, there is no move list to keep in step with its members.
+  state, there is no move list to keep in step with its members. A public
+  aggregate with a member that is unsafe to self-move (a `std::` container)
+  defaults its move constructor and deletes move assignment, as
+  `VoxelBlockGrid` does.
 
 ## Working with Git
 
