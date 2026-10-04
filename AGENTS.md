@@ -105,6 +105,10 @@ these rules:
 - Test move construction and the emptied source, assignment over a live object,
   and self-move through a pointer to avoid `-Wself-move`. Sanitizer CI checks
   these for leaks and double frees.
+- An internal class that only aggregates such owners skips these rules: it
+  deletes copy and move, and `create()` returns `Result<std::unique_ptr<T>>`,
+  as the codec's transform, frame writer and reader do. With no moved-from
+  state, there is no move list to keep in step with its members.
 
 ## Working with Git
 
