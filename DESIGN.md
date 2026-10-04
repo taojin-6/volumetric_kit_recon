@@ -51,7 +51,9 @@ conventions and Vulkan setup.
 - Namespace: `volumetric_kit::recon`. Internally and in docs, `vr::` abbreviates
   `volumetric_kit::recon::`.
 - Headers: `include/volumetric_kit/recon/<tier>/…`.
-- Macros: `VR_` prefix (`VR_TRY`, `VR_ASSIGN`, `VR_CHECK`, `VR_CORE_API`).
+- Macros: `VR_` prefix (`VR_TRY`, `VR_ASSIGN`, `VR_CHECK`, `VR_CORE_API`); the
+  first three are volumetric_kit_core's `VKC_TRY` / `VKC_ASSIGN` / `VKC_CHECK`
+  under recon's names, pending a rename.
   Deliberately *not* the `VK_` prefix — that belongs to Vulkan. (The prior
   engine's `VK_DEVICE_HOST`-style macros are renamed `VR_*` on port.)
 - CMake: `find_package(volumetric_kit_recon)`; component targets
@@ -81,8 +83,8 @@ branching off **`core`**, `codec` off **`volume`** and `eval`/`io` off **`mesh`*
   uploads, dispatches and readbacks into one submit,
   compute-pipeline + descriptor-set wrappers (and the `ComputeKernel` bundle +
   `KernelSetBuilder` that groups a kernel's layout/pipeline/set behind one
-  shared pool), sync (fences, timeline semaphores), the `Status`/`Result` idiom,
-  a pluggable log handler, and
+  shared pool), sync (fences, timeline semaphores), recon's names for the
+  core's `Status`/`Result` idiom and log sink, and
   the GLM-backed vector/matrix math. Vulkan is reached through one umbrella header
   (`core/vulkan.hpp`), as in gfx — no other code includes `<vulkan/...>`
   directly.
@@ -150,11 +152,22 @@ Native CUDA is an optional NVIDIA accelerator under this baseline (the
 
 No exceptions cross the API boundary (mobile builds use `-fno-exceptions`).
 Fallible calls return `Status` (success or an error domain + message) or
-`Result<T>` (a value or a `Status`). `VR_TRY` and `VR_ASSIGN` remove the
-check-and-propagate boilerplate. Programmer errors (precondition violations) fail
-fast via `VR_CHECK` (log + abort), distinct from recoverable runtime failures.
-`Status` is intentionally backend-neutral — a generic `int64_t` detail code, not
-a Vulkan or CUDA type — so the same idiom serves every tier.
+`Result<T>` (a value or a `Status`), both `[[nodiscard]]`. `VR_TRY` and
+`VR_ASSIGN` remove the check-and-propagate boilerplate. Programmer errors
+(precondition violations) fail fast via `VR_CHECK` (log + abort), distinct from
+recoverable runtime failures. `Status` is intentionally backend-neutral — a
+generic `int64_t` detail code, not a Vulkan or CUDA type — so the same idiom
+serves every tier; `core/vk_result.hpp` turns a failed `VkResult` into
+`Code::Backend` (`vk_error`, `VR_VK_TRY`), and `Status::with_context` prefixes
+a message without losing its domain or detail.
+
+All of it is volumetric_kit_core's (the 2026-10-03 decision): `vr::Status` and
+`vr::Result` are using-declarations of the core's types, so a recon error is
+the same type as calib's or gfx's, and the three macros are the core's under
+recon's names. Diagnostics go through the core's one process-wide log sink;
+recon's `log_message(level, message)` tags them with source `"vr"`, which the
+default sink prints as `[vr <level>]`, and an application's handler receives
+`(level, source, message)`.
 
 ## The interop seam
 

@@ -4,38 +4,22 @@
 #pragma once
 
 /// @file check.hpp
-/// @brief Fail-fast contract checks (`VR_CHECK`) for programmer errors.
+/// @brief recon's name for the core's fail-fast contract check.
 ///
-/// Fail-fast contract checks for *programmer errors* (precondition violations),
-/// as distinct from recoverable runtime failures -- those flow through `Status`
-/// / `Result`. On failure `VR_CHECK` logs at Error through the diagnostic sink,
-/// then calls `std::abort()`. Active in every build (not just debug).
-///
-/// The library is built and consumed with `-fno-exceptions` on mobile, so abort
-/// -- not `throw` -- is the portable way to terminate on a bug: it raises
-/// SIGABRT, which crash reporters (Crashlytics, os_log, Android tombstones)
-/// capture, and it never leaves the empty-`optional` / use-after-error UB that
-/// a silently-skipped check would.
+/// `VR_CHECK` is volumetric_kit_core's `VKC_CHECK`: for *programmer errors*
+/// (precondition violations), as distinct from recoverable runtime failures,
+/// which flow through `Status` / `Result`. On failure it logs at Error through
+/// the family's log sink (source `"core"`), then calls `std::abort()`, in every
+/// build. Abort rather than `throw`, because mobile consumers build with
+/// `-fno-exceptions` and crash reporters capture SIGABRT.
 
-#include <string_view>
+#include "volumetric_kit/core/base/check.hpp"
 
-#include "volumetric_kit/recon/core/export.hpp"
+// TODO: rename to VKC_CHECK with VR_TRY / VR_ASSIGN (result.hpp), then delete
+// this alias.
 
-namespace volumetric_kit::recon::detail {
-
-/// Report a failed `VR_CHECK` (log + abort). Never returns.
-[[noreturn]] VR_CORE_API void check_failed(const char* file, int line,
-                                           const char* expr,
-                                           std::string_view msg);
-
-}  // namespace volumetric_kit::recon::detail
-
-/// Abort (after logging) unless `cond` holds. For programmer errors only --
-/// recoverable runtime failures must use `Status` / `Result` instead.
-#define VR_CHECK(cond, msg)                                                    \
-  do {                                                                         \
-    if (!(cond)) {                                                             \
-      ::volumetric_kit::recon::detail::check_failed(__FILE__, __LINE__, #cond, \
-                                                    (msg));                    \
-    }                                                                          \
-  } while (0)
+/// @brief Abort, after logging, unless @p cond holds; the core's
+///        @ref VKC_CHECK under recon's name.
+/// @param cond  A precondition expression that must hold.
+/// @param msg   A description of the contract.
+#define VR_CHECK(cond, msg) VKC_CHECK(cond, msg)

@@ -37,6 +37,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `core`: **error handling comes from `volumetric_kit_core`**, fetched pinned by
+  commit and re-found by the installed package. `vr::Status` and `vr::Result`
+  are the core's types, so they pass to calib and gfx unchanged. Migrating:
+  - A log handler takes `(level, source, message)`; recon's messages carry
+    source `"vr"`, and `vr::log_message(level, message)` is unchanged.
+  - `Status::Code::Numerical` is new, so an exhaustive `switch` over the codes
+    needs a case (the iOS app's `RendererErrors.mm` does).
+  - `Status` and `Result` are `[[nodiscard]]`; discard one with `(void)`.
+  - `Status::backend_error(0, …)` aborts; `Status::with_context` prefixes a
+    message and keeps the domain and detail.
+  - `std::move(r).value()` and `*std::move(r)` return the value, not a
+    reference into `r`.
+  - `VR_TRY` / `VR_ASSIGN` / `VR_CHECK` are the core's `VKC_*` macros under
+    recon's names; a failed `VR_CHECK` logs with source `"core"`.
 - docs: make `AGENTS.md` the concise shared working guide for Codex and
   Claude Code, with `CLAUDE.md` importing it. Move detailed contracts,
   implementation status, and gotchas into `DESIGN.md`, and put the complete

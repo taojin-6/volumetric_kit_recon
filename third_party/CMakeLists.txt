@@ -16,6 +16,27 @@
 
 include(FetchContent)
 
+# --- volumetric_kit_core: the family's shared foundation ---------------------
+# recon's Status / Result / VR_CHECK / log sink come from its base tier
+# (DECISIONS.md, 2026-10-03), so they are the same types calib and gfx use.
+# Unlike the header-only vendored libraries below, it is a compiled library and
+# a PUBLIC dependency of recon_core. Pinned by commit, never main; an
+# application that also fetches calib or gfx declares the core first, and
+# FetchContent keeps the first declaration of a name, so this pin then yields to
+# the application's. Work on both checkouts at once with
+# -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CORE=<core checkout>. The core's
+# tests and -Werror stay off in a subproject; its install rules stay on, so
+# recon's install carries the core its exported targets link.
+#
+# The pin is main after core PR #1, which landed the base tier.
+#
+# TODO: pin a release tag once the core tags one (v0.1.0).
+FetchContent_Declare(
+  volumetric_kit_core
+  GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
+  GIT_TAG 7fb874932462abbd95a15f3fab73e671c48a1d7d)
+FetchContent_MakeAvailable(volumetric_kit_core)
+
 # --- VMA: Vulkan Memory Allocator (header-only; built in one recon_core TU) ---
 # Matches volumetric_kit_gfx's pin so the two siblings allocate through the same
 # VMA version -- relevant once they share a VkDevice at the interop seam.

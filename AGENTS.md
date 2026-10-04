@@ -14,6 +14,10 @@ geometry and compressed bitstreams → renderer handoff.
   MoltenVK on Apple. Optional native CUDA work must preserve baseline numerics.
 - `volumetric_kit_gfx` is an independent sibling. Work in this repository;
   changes to sibling repositories need their own task and conventions.
+- recon builds on [`volumetric_kit_core`](https://github.com/taojin-6/volumetric_kit_core),
+  the family's shared foundation (fetched, pinned by commit): its error
+  handling and log sink now, and the Vulkan core next, seeded from recon's.
+  Code two or more siblings need belongs there, as a task in that repository.
 - The prior `implicit_world_reconstruction` implementation is an algorithm
   reference for ports; `implicit_surface_compression` is research reference
   only. Never build or write in either prior repository.
@@ -65,8 +69,11 @@ core → volume → tsdf → mesh → texture → interop
   docs), nested per tier. Headers: `include/volumetric_kit/recon/<tier>/…`.
 - Macros use `VR_`; `VK_` belongs to Vulkan. CMake targets use
   `volumetric_kit::recon_<tier>`; see [package targets](DESIGN.md#naming-conventions-use-these-consistently).
-- Fallible APIs return `Status` / `Result<T>`; use `VR_TRY` / `VR_ASSIGN`.
+- Fallible APIs return `Status` / `Result<T>` -- the core's types, named in
+  `vr::` by `core/result.hpp` -- and propagate with `VR_TRY` / `VR_ASSIGN`.
   No exceptions cross the API boundary. Programmer errors use `VR_CHECK`.
+  The three macros are the core's `VKC_*` under recon's names until a rename
+  (a `TODO` in `core/result.hpp`); recon logs with source `"vr"`.
 - Include Vulkan through `core/vulkan.hpp`. Keep host PODs and GLSL
   `layout(scalar)` definitions byte-identical; host assertions alone cannot
   validate the shader ABI.
@@ -81,7 +88,7 @@ core → volume → tsdf → mesh → texture → interop
   BT.709/D65, with exact sRGB as its canonical encoded form. Convert at the
   sensor boundary and encode at presentation.
 - Full Doxygen on public classes/functions, matching
-  `include/volumetric_kit/recon/core/result.hpp`. Deleted copy/defaulted move
+  `include/volumetric_kit/recon/core/command_batch.hpp`. Deleted copy/defaulted move
   declarations already convey ownership; do not repeat "move-only" in prose.
 - No `friend` declarations. Test through public APIs with behavior-level tests.
 - Mark deferred work with a greppable `TODO:` comment (existing tier-tagged

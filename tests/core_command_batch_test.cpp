@@ -241,7 +241,8 @@ int run_kind(const Rig& rig, int kind) {
 
 int main() {
   // Installed before the instance, so the layer's output reaches the counter.
-  vr::set_log_handler([](vr::LogLevel level, std::string_view message) {
+  vr::set_log_handler([](vr::LogLevel level, std::string_view /*source*/,
+                         std::string_view message) {
     if (level == vr::LogLevel::Error) {
       ++g_errors;
       std::fprintf(stderr, "[vulkan error] %.*s\n",
@@ -1031,13 +1032,14 @@ int main() {
             {
               vr::GpuStageScope stage(&metrics, timer.value(), "staged");
               // A failed call poisons the batch, so submit returns the first
-              // refusal.
+              // refusal: each recording call's own Status is deliberately
+              // discarded, and submit's is checked below.
               vr::CommandBatch batch(on, allocator);
-              batch.upload(mine, 0, in.data(), kBytes);
-              batch.upload(mine, kBytes, staged.data(), kStaged, &stage);
-              add_to(batch, own, mine, 3);
-              batch.readback(mine, 0, kBytes, out.data());
-              batch.readback(mine, kBytes + kStaged - 4, 4, &last);
+              (void)batch.upload(mine, 0, in.data(), kBytes);
+              (void)batch.upload(mine, kBytes, staged.data(), kStaged, &stage);
+              (void)add_to(batch, own, mine, 3);
+              (void)batch.readback(mine, 0, kBytes, out.data());
+              (void)batch.readback(mine, kBytes + kStaged - 4, 4, &last);
               submitted = batch.submit();
             }
             if (!submitted.ok()) {

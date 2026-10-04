@@ -105,7 +105,8 @@ int main() {
   vr::LogLevel seen_level = vr::LogLevel::Error;
   std::string seen_message;
   int seen_count = 0;
-  vr::set_log_handler([&](vr::LogLevel level, std::string_view message) {
+  vr::set_log_handler([&](vr::LogLevel level, std::string_view /*source*/,
+                          std::string_view message) {
     seen_level = level;
     seen_message.assign(message.data(), message.size());
     ++seen_count;
