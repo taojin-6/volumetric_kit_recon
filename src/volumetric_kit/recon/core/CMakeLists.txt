@@ -3,19 +3,20 @@
 
 # --- recon_core: Tier 1 -----------------------------------------------------
 # Foundation tier: the Vulkan foundation (instance, device, ... mirroring gfx's
-# core), backend-neutral Status/Result error handling, logging, contract checks,
-# and the GLM-backed vector/matrix vocabulary. Every other tier depends on this.
-# Vulkan is reached only through the core/vulkan.hpp umbrella, and the Status
-# type stays backend-neutral (no VkResult in result.hpp -- vk_result.hpp bridges
-# VkResult -> Status). Deps: header-only GLM + the Vulkan loader/headers.
+# core), recon's names for volumetric_kit_core's Status/Result error handling,
+# log sink and contract checks, and the GLM-backed vector/matrix vocabulary.
+# Every other tier depends on this. Vulkan is reached only through the
+# core/vulkan.hpp umbrella, and the Status type stays backend-neutral (no
+# VkResult in result.hpp -- vk_result.hpp bridges VkResult -> Status). Deps:
+# header-only GLM + the Vulkan loader/headers.
 include(GenerateExportHeader)
 include(GNUInstallDirs)
 
-# log.cpp uses std::mutex, so recon_core needs the platform threading runtime.
-# Link it explicitly rather than relying on the compiler's implicit pthread, so
-# the static archive resolves on toolchains that require it -- GCC/libstdc++ on
-# Linux with --as-needed, Android, and static links. (macOS folds pthread into
-# libc, which would otherwise hide the gap.)
+# The device serializes submits with std::mutex, so recon_core needs the
+# platform threading runtime. Link it explicitly rather than relying on the
+# compiler's implicit pthread, so the static archive resolves on toolchains that
+# require it -- GCC/libstdc++ on Linux with --as-needed, Android, and static
+# links. (macOS folds pthread into libc, which would otherwise hide the gap.)
 find_package(Threads REQUIRED)
 
 # GLM: header-only vector/matrix math. PUBLIC -- it appears in public headers
@@ -46,9 +47,6 @@ add_library(volumetric_kit::recon_core ALIAS recon_core)
 target_sources(
   recon_core
   PRIVATE version.cpp
-          log.cpp
-          check.cpp
-          result.cpp
           instance.cpp
           device.cpp
           # Timestamp spans around a dispatch, resolved once its fence has
@@ -104,11 +102,13 @@ endif()
 
 target_compile_features(recon_core PUBLIC cxx_std_17)
 
-# PUBLIC: consumers compile our public headers (which include GLM) and, for a
-# static archive, must also link the threading runtime -- so the exported target
-# carries both requirements (the Config.cmake re-finds Threads and glm).
-target_link_libraries(recon_core PUBLIC Threads::Threads glm::glm
-                                        Vulkan::Vulkan)
+# PUBLIC: consumers compile our public headers (which include GLM, and the
+# core's Status / Result / log sink) and, for a static archive, must also link
+# the threading runtime -- so the exported target carries these requirements
+# (the Config.cmake re-finds Threads, glm and volumetric_kit_core).
+target_link_libraries(
+  recon_core PUBLIC volumetric_kit::core_base Threads::Threads glm::glm
+                    Vulkan::Vulkan)
 
 target_include_directories(
   recon_core

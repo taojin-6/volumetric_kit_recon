@@ -71,6 +71,20 @@ if(VR_INSTALL)
     NAMESPACE volumetric_kit::
     DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/volumetric_kit_recon")
 
+  # The installed package re-finds the core at the MAJOR.MINOR this build used:
+  # the core's version file accepts only the same minor before 1.0. A core built
+  # here carries its version on core_base; an installed one that a parent
+  # project found carries none, but find_package set its version.
+  get_target_property(_vr_core_version volumetric_kit::core_base VERSION)
+  if(NOT _vr_core_version)
+    set(_vr_core_version "${volumetric_kit_core_VERSION}")
+  endif()
+  string(REGEX MATCH "^[0-9]+\\.[0-9]+" VR_CORE_MAJOR_MINOR
+               "${_vr_core_version}")
+  if(NOT VR_CORE_MAJOR_MINOR)
+    message(FATAL_ERROR "volumetric_kit_core's version is unknown")
+  endif()
+
   include(CMakePackageConfigHelpers)
   configure_package_config_file(
     "${PROJECT_SOURCE_DIR}/cmake/volumetric_kit_reconConfig.cmake.in"

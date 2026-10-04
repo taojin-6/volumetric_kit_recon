@@ -3,7 +3,6 @@
 
 #include "volumetric_kit/recon/core/compute_kernel.hpp"
 
-#include <string>
 #include <utility>
 #include <vector>
 
@@ -20,38 +19,18 @@ namespace {
 // and backend detail. A tier registers up to eight kernels in one create(), and
 // the underlying Status names only the Vulkan call ("ComputePipeline::create:
 // ..."), so without this a binding-count disagreement says nothing about
-// *which* shader disagreed. Rebuilt through the public factories because the
-// domain constructor is private -- deliberately, so a domain cannot be paired
-// with a detail it did not come from.
-Status named_failure(const char* name, const Status& why) {
-  std::string what = (name != nullptr ? name : "<unnamed kernel>");
-  what += ": ";
-  what += why.message();
-  switch (why.domain()) {
-    case Status::Code::InvalidArgument:
-      return Status::invalid_argument(std::move(what));
-    case Status::Code::NotFound:
-      return Status::not_found(std::move(what));
-    case Status::Code::Unsupported:
-      return Status::unsupported(std::move(what));
-    case Status::Code::OutOfMemory:
-      return Status::out_of_memory(std::move(what));
-    case Status::Code::IoError:
-      return Status::io_error(std::move(what));
-    case Status::Code::Backend:
-      return Status::backend_error(why.detail(), std::move(what));
-    case Status::Code::Ok:
-      break;
-  }
-  // Unreachable: only reached with an OK status, which no caller below passes.
-  return why;
+// *which* shader disagreed. with_context keeps the domain and detail with no
+// switch over the codes, so a code the core adds needs no case here.
+Status named_failure(const char* name, Status why) {
+  return std::move(why).with_context(name != nullptr ? name
+                                                     : "<unnamed kernel>");
 }
 
 // VR_ASSIGN, but attributing the failure to the kernel being built. Every step
 // of add() goes through it, so no build failure can reach a tier unnamed.
 template <typename T>
 Status assign_named(T& out, Result<T>&& from, const char* name) {
-  if (!from) return named_failure(name, from.status());
+  if (!from) return named_failure(name, std::move(from).status());
   out = std::move(from).value();
   return {};
 }

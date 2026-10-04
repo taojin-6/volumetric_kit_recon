@@ -300,6 +300,10 @@ entries relevant to your task; later amendments supersede earlier rules.
   rANS decoding runs on the device, block for block the host's, in segments
   of at most 1,024 blocks, and the decoder picks the device per frame from 80
   segments.
+- [**2026-10-03**](#2026-10-03--error-handling-comes-from-volumetric_kit_core) —
+  Error handling comes from `volumetric_kit_core`: `vr::Status`/`Result` are
+  the core's types, `VR_TRY`/`VR_ASSIGN`/`VR_CHECK` its macros under recon's
+  names, and recon logs through its one sink with source `"vr"`.
 
 ## Decision record
 
@@ -9309,6 +9313,57 @@ segment remain a `TODO(codec)` in the writer.
 tests pass, and the four GPU codec tests report no messages with the Khronos
 layer forced on and synchronization validation. RTX 5090, Ubuntu 24.04
 container: the seven codec tests pass. No sanitizer run was made locally.
+
+### 2026-10-03 — Error handling comes from volumetric_kit_core.
+
+**The rule.** recon's `Status`, `Result`, `VR_TRY`, `VR_ASSIGN`, `VR_CHECK`
+and log sink are volumetric_kit_core's base tier, not recon's own.
+`core/result.hpp`, `core/check.hpp` and `core/log.hpp` now only name the
+core's types and functions in `vr::` (using-declarations, so `vr::Status` *is*
+`volumetric_kit::core::Status`) and define the three macros as the core's
+`VKC_TRY` / `VKC_ASSIGN` / `VKC_CHECK`. recon's `log_message(level, message)`
+calls the core's with source `"vr"`. `third_party/` fetches the core pinned by
+commit; `recon_core` links `volumetric_kit::core_base` PUBLIC, and the installed
+package re-finds the core at the minor version it was built with.
+`core/vk_result.hpp` (`vk_error`, `VR_VK_TRY`) stays here until the core's
+vulkan tier exists.
+
+**Why.** recon's and gfx's bottom layers were copies that had drifted, and the
+family made `volumetric_kit_core` the one copy every sibling depends on (its
+DECISIONS.md, "One core for the family"). The error types go first: they are
+small, every tier names them, and sharing them is what lets a recon `Status`
+pass to calib unchanged, and to gfx once it adopts the core. The Vulkan core
+follows as the core's vulkan tier, seeded from recon's.
+
+**What changed with the merge.** The core's `Status` is the union of the
+three siblings': it adds `Code::Numerical` (calib's solver failures), and its
+`backend_error(0, …)` aborts, as a success code is no failure. `named_failure`
+in `compute_kernel.cpp`, which rebuilt a `Status` through a switch over every
+code to prefix a kernel's name, is `with_context(name)` now, so a code the core
+adds needs no case here. `Status` and `Result` are `[[nodiscard]]`; across
+recon, with the Orbbec, FFmpeg, Assimp and viewer paths built, that flagged
+only the five recording calls in `core_command_batch_test`'s threaded test,
+which rely on a poisoned batch's `submit` returning the first refusal and now
+discard their own `Status` explicitly. The rvalue accessors return `T` by
+value. A failed `VR_CHECK` now logs with source `"core"`; the macro calls the
+core's `check_failed` itself rather than forwarding to `VKC_CHECK`, which would
+expand macros in the condition before stringizing it.
+
+**Why the macros keep their names.** Renaming 837 uses across about 60 files
+would conflict with every branch open on 2026-10-03 (six PRs and as many
+worktrees). The aliases cost nothing at runtime; a `TODO` in
+`core/result.hpp` marks the rename, after which they go.
+
+**Consumers.** The iOS app's `RendererErrors.mm` switches over every
+`vr::Status::Code` under `-Werror=switch`, so it learns `Numerical` in the PR
+that bumps its recon pin (ios pins its siblings by commit from 2026-10-03).
+gfx still has its own `vg::Status`, so the app keeps an `error_code` and a
+`describe` overload for each; when gfx adopts the core the two types are one,
+and each pair must merge into one overload or it is a redefinition.
+
+**Validation.** Apple M-series, macOS, Release with warnings as errors, Orbbec,
+FFmpeg, Assimp and the viewer: the build is warning-free and all 61 tests
+pass, the GPU tests on MoltenVK. CUDA paths build only in CI's CUDA leg.
 
 ## Measured lessons
 

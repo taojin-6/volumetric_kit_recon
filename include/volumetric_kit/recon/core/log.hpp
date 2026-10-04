@@ -4,41 +4,35 @@
 #pragma once
 
 /// @file log.hpp
-/// @brief A pluggable logging seam -- a caller-installable diagnostic handler.
+/// @brief recon's side of the family's one log sink.
 ///
-/// The library imposes no logging framework on consumers: it emits through a
-/// handler they can install, defaulting to stderr for warnings and errors. This
-/// is the deliberate replacement for the glog dependency the salvaged code
-/// carried.
+/// The sink is volumetric_kit_core's: one process-wide handler for calib,
+/// recon and gfx alike, defaulting to stderr for warnings and errors. The
+/// library imposes no logging framework on consumers; an application installs
+/// its own handler with @ref set_log_handler (the core's, named here) and
+/// receives each message with its level and source. recon's messages carry the
+/// source @ref kLogSource, so the default sink keeps printing `[vr <level>]`.
 
-#include <functional>
 #include <string_view>
 
-#include "volumetric_kit/recon/core/export.hpp"
+#include "volumetric_kit/core/base/log.hpp"
 
 namespace volumetric_kit::recon {
 
-/// @brief Severity of a diagnostic passed to a @ref LogHandler.
-///
-/// The built-in default sink emits @ref LogLevel::Warning and @ref
-/// LogLevel::Error to stderr and drops @ref LogLevel::Debug and @ref
-/// LogLevel::Info; an installed handler receives every level and decides for
-/// itself.
-enum class LogLevel {
-  Debug,    ///< Verbose developer tracing; dropped by the default sink.
-  Info,     ///< Normal progress information; dropped by the default sink.
-  Warning,  ///< A recoverable problem; emitted to stderr by the default sink.
-  Error,    ///< A failure; emitted to stderr by the default sink.
-};
+using core::LogHandler;
+using core::LogLevel;
+using core::set_log_handler;
 
-using LogHandler = std::function<void(LogLevel, std::string_view)>;
+/// @brief The source recon's diagnostics carry; the default sink prints
+///        `[vr <level>]`.
+inline constexpr std::string_view kLogSource = "vr";
 
-/// Install the diagnostic sink. Pass a default-constructed (empty) handler to
-/// restore the built-in default (warnings + errors to stderr). Thread-safe.
-VR_CORE_API void set_log_handler(LogHandler handler);
-
-/// Emit a diagnostic through the current handler (or the default sink).
-/// Thread-safe.
-VR_CORE_API void log_message(LogLevel level, std::string_view message);
+/// @brief Emit a recon diagnostic through the family's sink, with source
+///        @ref kLogSource. Thread-safe.
+/// @param level    The message's severity.
+/// @param message  The message; it need not be NUL-terminated.
+inline void log_message(LogLevel level, std::string_view message) {
+  core::log_message(level, kLogSource, message);
+}
 
 }  // namespace volumetric_kit::recon

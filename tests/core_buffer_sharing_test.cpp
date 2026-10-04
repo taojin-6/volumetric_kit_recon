@@ -106,7 +106,8 @@ int main() {
 
   // Installed before the instance, so the layer's output reaches the counter.
   // Errors are printed as well as counted: a bare count is undiagnosable.
-  vr::set_log_handler([](vr::LogLevel level, std::string_view message) {
+  vr::set_log_handler([](vr::LogLevel level, std::string_view /*source*/,
+                         std::string_view message) {
     if (level == vr::LogLevel::Error) {
       ++g_errors;
       std::fprintf(stderr, "[vulkan error] %.*s\n",
