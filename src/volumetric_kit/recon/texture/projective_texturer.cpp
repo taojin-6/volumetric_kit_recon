@@ -173,6 +173,7 @@ Status read_back_vertices(const Device& device, Allocator& allocator,
 
 Result<ProjectiveTexturer> ProjectiveTexturer::create(Device& device,
                                                       Allocator& allocator) {
+  VR_TRY(check_device_requirements(device, "ProjectiveTexturer::create"));
   ProjectiveTexturer tex;
   tex.device_ = &device;
   tex.allocator_ = &allocator;

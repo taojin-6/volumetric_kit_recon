@@ -37,6 +37,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `core`: **a device that did not enable what recon's kernels need is
+  refused.** `MarchingCubes`, `VoxelHashMap` (and so `VoxelBlockGrid`),
+  `TsdfIntegrator`, `MeshIntegrator`, `ProjectiveTexturer`, `GpuFramePrep`
+  and the codec's encoder and decoder return `Unsupported` from `create`,
+  naming the missing feature, where they used to run their `layout(scalar)`
+  kernels on a device without `scalarBlockLayout`. Create or adopt every
+  device recon runs on with `vr::device_requirements()`;
+  `vr::check_device_requirements(device, who)` is the check.
 - `core`: **the Vulkan foundation comes from `volumetric_kit_core`'s vulkan
   tier**. `Instance`, `Device`, `Allocator`, `Buffer`, `Image`, the descriptor
   and pipeline wrappers, `ComputeKernel`, `CommandBatch`, `GpuTimer`,

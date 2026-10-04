@@ -130,6 +130,7 @@ std::uint32_t group_count(std::uint32_t items) {
 
 Result<MeshIntegrator> MeshIntegrator::create(Device& device,
                                               Allocator& allocator) {
+  VR_TRY(check_device_requirements(device, "MeshIntegrator::create"));
   MeshIntegrator integ;
   integ.device_ = &device;
   integ.allocator_ = &allocator;

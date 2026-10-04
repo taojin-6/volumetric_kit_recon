@@ -296,9 +296,10 @@ geometry buffers directly.
   decision). Scalar layout is the C/CUDA layout, so one struct maps 1:1 across
   CPU / GLSL / CUDA. The `static_assert`s on the C++ side guard only the host
   packing; keep the `layout(scalar)` GLSL definitions in lockstep.
-  `Device::create` enables the `scalarBlockLayout` feature (and `adopt` requires
-  the creator did); `vr_compile_shaders` validates the emitted SPIR-V with
-  `--scalar-block-layout`.
+  `device_requirements()` asks for the `scalarBlockLayout` feature, and every
+  `create` that builds kernels refuses a device that did not enable it
+  (`check_device_requirements`); `vr_compile_shaders` validates the emitted
+  SPIR-V with `--scalar-block-layout`.
 - **GLSL compute is the baseline; CUDA is the optional accelerator.** In the
   Vulkan path, warp/wave tricks become Vulkan subgroup ops and device atomics use
   GLSL atomics; the prior engine's kernels are a reference for the *algorithm*,
@@ -1527,10 +1528,7 @@ samples directly (it needs `core` images), keeping a static keyframe set's
 depth and coverage in the pass between calls, blending views at their seams,
 and a per-triangle tile
 index in gfx so a shared mesh can be textured from several views; and the
-multi-keyframe post-scan atlas, which the multi-view path can carry. On
-`core`: the `TODO(core)` on `device_requirements()`, to refuse a device
-without `scalarBlockLayout` once the core's `Device` records the features it
-enabled (2026-10-04).
+multi-keyframe post-scan atlas, which the multi-view path can carry.
 
 **On `tsdf`**, mesh → TSDF has its two modes (2026-09-27), a second way into
 the grid the codec encodes: a mesh sequence converts frame by frame. Both modes

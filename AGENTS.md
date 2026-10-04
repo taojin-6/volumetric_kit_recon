@@ -77,7 +77,8 @@ core → volume → tsdf → mesh → texture → interop
   (a `TODO` in `core/result.hpp`); recon logs with source `"vr"`.
 - Include Vulkan through `core/vulkan.hpp`. Keep host PODs and GLSL
   `layout(scalar)` definitions byte-identical; host assertions alone cannot
-  validate the shader ABI.
+  validate the shader ABI. A `create` that builds kernels first calls
+  `check_device_requirements`.
 - Kernel memory is device-local, reached through `CommandBatch`. Preserve
   the documented exception for small parameters; the host reads results
   back through the batch, never through a mapping.
