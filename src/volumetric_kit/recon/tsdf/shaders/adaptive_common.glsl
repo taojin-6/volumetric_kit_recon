@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Tao Jin
 
-// Shared by the adaptive viewer's residual and mask kernels: the depth camera
+// Shared by AdaptiveGrid's residual and mask kernels: the depth camera
 // and the unprojection integration agrees with. The includer declares the
 // Depth binding (`depth[]`) and the Camera binding before including this.
 
