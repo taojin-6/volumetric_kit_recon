@@ -207,6 +207,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `codec`: **rANS decoding on the device.** `DecoderConfig::entropy`
+  (`Decoder::create`'s new argument) picks where a frame decodes, as the
+  encoder's does; all decode the same blocks and refuse a corrupt frame.
+  On the device only the tables and payload go up and the coordinates come
+  back; the coefficients stay in VRAM for the inverse. `kAuto` decodes on
+  the device from `kMinDeviceDecodeSegments` (80), and
+  `kMinDeviceSegments` is renamed `kMinDeviceEncodeSegments`. The device
+  refuses segments longer than `kMaxDeviceDecodeSegmentSize` (1,024 blocks),
+  so a stream cannot run one invocation past a GPU watchdog. Both coders'
+  `kAuto` now tries a failed kernel build once and reports device failures
+  other than a frame the device cannot hold.
+  `EntropyCoding` moves to `codec_params.hpp`. Room0's decode at 1 cm goes
+  from 8.54 to 3.29 ms on M5 Max and from 8.07 to 4.08 ms on RTX 5090. See
+  the 2026-10-03 decoding decision.
 - `codec`: **rANS encoding on the device.** `EncoderConfig::entropy` picks
   `EntropyCoding::kAuto` (the default: the device from 48 segments, the
   host below or when the device cannot code the frame), `kHost` or

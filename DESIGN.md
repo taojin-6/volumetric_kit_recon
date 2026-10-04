@@ -1188,9 +1188,8 @@ to the SDK's own undistortion and registration on a still scene (the
 
 ### codec
 
-The intra codec is implemented. Its rANS encoding runs on the device or the
-host, writing the same bytes (2026-10-03); decoding is on the host.
-Quantization is
+The intra codec is implemented. Its rANS coding runs on the device or the
+host, both ways with the same result (2026-10-03). Quantization is
 one scalar quantizer with a step per DCT basis (2026-10-02):
 `step[u,v,w] = quantization_scale * quantization_weights[u + 8*v + 64*w]`.
 DC is the table's first entry. All blocks share the same 512-entry table, but
@@ -1225,10 +1224,25 @@ steps, packs the streams, and reads back only the lengths and the payload.
 Bulk buffers are device-local and retained; the bus carries the counts, four
 bytes a block each way, and the payload, against 64 + 2K bytes a block of
 coefficients and masks on the host path. A segment is one serial chain, so
-`kAuto`, the default, codes on the device from `kMinDeviceSegments` (48)
+`kAuto`, the default, codes on the device from `kMinDeviceEncodeSegments` (48)
 segments and on the host below, and on the host too for a frame the device
 cannot code; smaller segments give the device parallelism at a few percent
 of size.
+`DecoderConfig::entropy` picks where the decoding runs. On the device
+(`detail::DeviceFrameReader`), the host parses the frame
+(`parse_intra_frame`) and uploads only its tables and payload. One batch
+expands each table into a 4096-slot lookup, decodes one segment per
+workgroup into the inverse transform's layout, and reads back the
+coordinates and each segment's fault, which `check_segment` judges exactly
+as the host reader does. The coefficients and masks stay in VRAM for the
+inverse (`DctTransform::inverse` over `ResidentBlocks`). The decode's symbol
+walk is inside its serial chain, so `kAuto` decodes on the device only from
+`kMinDeviceDecodeSegments` (80). The frame sets how long one invocation runs,
+so the device refuses segments longer than `kMaxDeviceDecodeSegmentSize`
+(1,024 blocks), keeping an invocation near 50 ms. Both coders' `kAuto` uses
+the host for a frame the device cannot hold (`InvalidArgument` or
+`OutOfMemory`), and for every frame once the device kernels fail to build,
+which it tries once; it reports any other device failure.
 `Decoder::decode(frame, grid)` leaves the caller's grid holding exactly the
 frame. It merges the grid's sorted active set with the frame's
 coordinates, removing, allocating, and keeping shared blocks in their
@@ -1257,7 +1271,7 @@ more capacity, releasing the old buffer first and taking 1.5x headroom
 (`ensure_device_scratch`); descriptor ranges and transfers use the current
 logical sizes.
 They remain allocated until the transform is destroyed. The per-call staging
-inside `CommandBatch` remains transient, and the CPU rANS boundary still reads
+inside `CommandBatch` remains transient, and the host rANS path reads
 coefficients/masks back on encode and uploads them on decode. The SDF is normalized by `trunc_dist`
 before the transform and the steps are fractions of it, so the inverse
 refuses a `DctBlocks`
