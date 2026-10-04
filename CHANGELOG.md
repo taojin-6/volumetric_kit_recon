@@ -8,6 +8,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
+- `volume`: **`VoxelBlockGrid`'s move assignment**. A grid is move-
+  constructible only; replace one with `std::optional::emplace`, as the iOS
+  scanner and the codec examples already do. The assignment had to name every
+  member to guard against `std::vector` self-move, had missed one before, and
+  nothing outside its tests used it.
 - `core`: **`Device::command_pool()`**. Each submit takes a pool of its own,
   so there is no one pool to hand out, and a caller recording on it would
   race the device's submits. Nothing outside the tests called it.
