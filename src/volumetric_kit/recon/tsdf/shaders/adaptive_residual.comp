@@ -10,9 +10,13 @@
 // 2 x 2 voxels around the point's nearest node, so each cell keeps a count, a
 // sum and a sum of squares, which adaptive_offset.comp turns into the
 // surface's systematic offset there. Fixed point: the residual, clamped to
-// 1 cm, in 0.02 mm units.
+// 1 cm, in 0.02 mm units. A cell stops taking samples at kMaxSamples, so its
+// sum of squares (at most 500^2 a sample) stays inside an int; each check
+// halves it.
 //
-// Accum, per block slot: 64 cells of (count, sum, sum of squares).
+// Accum is the grid's `residual` attribute, two bytes a voxel: a block's 256
+// ints start at its voxel base over two, and its 64 cells of (count, sum, sum
+// of squares) take the first 192.
 
 #version 450
 #extension GL_GOOGLE_include_directive : require
@@ -31,8 +35,10 @@ layout(set = 0, binding = 4, scalar) buffer Accum { int accum[]; };
 #include "adaptive_common.glsl"
 
 layout(set = 0, binding = 5, scalar) readonly buffer Camera {
-  AdaptiveCamera cam;
+  DepthCameraParams cam;
 };
+
+const int kMaxSamples = 8192;
 
 layout(push_constant, scalar) uniform Push {
   VoxelGridParams grid;
@@ -100,10 +106,12 @@ void main() {
   int ptr = find(b);
   if (ptr < 0) return;
   ivec3 cell = (node - b * 8) >> 1;
-  uint slot = uint(ptr) / uint(pc.grid.voxels_per_block);
-  uint i = slot * 192u + uint(cell.x + 4 * (cell.y + 4 * cell.z)) * 3u;
+  uint i = uint(ptr) / 2u + uint(cell.x + 4 * (cell.y + 4 * cell.z)) * 3u;
+  if (atomicAdd(accum[i], 1) >= kMaxSamples) {
+    atomicAdd(accum[i], -1);  // full: give the count back
+    return;
+  }
   int q = int(round(clamp(r, -0.01, 0.01) / 2e-5));
-  atomicAdd(accum[i], 1);
   atomicAdd(accum[i + 1u], q);
   atomicAdd(accum[i + 2u], q * q);
 }

@@ -44,7 +44,8 @@ struct AdaptiveGridConfig {
   float refine_offset = 0.001f;
   /// Residuals are sampled at one pixel in each stride x stride square.
   std::uint32_t pixel_stride = 4;
-  /// Sampled cells (of 2 x 2 x 2 voxels) a block needs to be judged.
+  /// Sampled cells (of 2 x 2 x 2 voxels, 64 a block) a block needs to be
+  /// judged, 1 to 64.
   std::uint32_t min_cells = 2;
   /// Frame sets between refinement checks.
   std::uint32_t check_every = 5;
@@ -74,6 +75,8 @@ struct AdaptiveLevelStats {
 /// is the coarser block containing it (its coordinate halved), found through
 /// the coarser level's own hash; nothing stores a pointer. Each level is a
 /// complete grid: stamps, GC, extraction and the codec work on it unchanged.
+/// Every level but the finest also carries a `residual` attribute, its cells'
+/// residual sums, which removal and clearing zero like any other.
 ///
 /// Refinement is decided from the depth itself. A sampled point's residual is
 /// the coarser level's TSDF there over the TSDF's gradient length: fused

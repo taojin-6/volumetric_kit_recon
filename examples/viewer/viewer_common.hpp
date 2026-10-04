@@ -4,13 +4,14 @@
 #pragma once
 
 /// @file examples/viewer/viewer_common.hpp
-/// @brief What `fuse_viewer` and `rig_viewer` share beyond the device
-///        bootstrap: the scope guards their teardown order rests on, and the
-///        render side of recon's mesh ring -- the release mark and the check
-///        that a published mesh can be bound as geometry.
+/// @brief What the live viewers share beyond the device bootstrap: the scope
+///        guards their teardown order rests on, the render side of recon's
+///        mesh ring -- the release mark and the check that a published mesh
+///        can be bound as geometry -- and the orbit camera's state.
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstdint>
 #include <thread>
 #include <vector>
@@ -18,6 +19,7 @@
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 #include <imgui_impl_glfw.h>
+#include <glm/glm.hpp>
 
 #include "volumetric_kit/gfx/app/windowed_app.hpp"
 #include "volumetric_kit/gfx/core/vulkan.hpp"
@@ -123,5 +125,42 @@ inline const char* unbindable_reason(const rmesh::DeviceMesh& mesh,
   }
   return nullptr;
 }
+
+// A turntable around `target`, about a camera's image-up axis. recon's world
+// is the capture's, whose cameras follow OpenCV (+Y down), so gfx's
+// OrbitCamera -- which fixes world +Y as up -- would stand it on its head.
+struct OrbitView {
+  glm::vec3 target{0.0f};
+  glm::vec3 up{0.0f, -1.0f, 0.0f};
+  glm::vec3 forward{0.0f, 0.0f, 1.0f};
+  glm::vec3 right{1.0f, 0.0f, 0.0f};
+  float distance = 2.0f;
+  float azimuth = 0.0f;
+  float elevation = 0.0f;
+
+  // Look from a capture pose at the point `distance` ahead of it.
+  static OrbitView from_pose(const glm::mat4& c2w, float distance) {
+    OrbitView v;
+    v.forward = glm::normalize(glm::vec3(c2w[2]));
+    v.up = -glm::normalize(glm::vec3(c2w[1]));
+    v.right = glm::normalize(glm::cross(v.forward, v.up));
+    v.target = glm::vec3(c2w[3]) + distance * v.forward;
+    v.distance = distance;
+    return v;
+  }
+  // At azimuth = elevation = 0 the eye is `distance` behind the target along
+  // `forward`: where the camera looks from, when it looks at it.
+  glm::vec3 eye() const {
+    const glm::vec3 around =
+        std::cos(azimuth) * -forward + std::sin(azimuth) * right;
+    return target +
+           distance * (std::cos(elevation) * around + std::sin(elevation) * up);
+  }
+};
+
+// Scroll arrives through a callback; the render loop reads what built up.
+struct ScrollInput {
+  double pending = 0.0;
+};
 
 }  // namespace fuse_viewer

@@ -5,9 +5,11 @@
 // front of it. The wall's coarsest blocks fit the depth exactly, so they stay
 // coarse; the sphere's do not, so they refine, and the finer level owns
 // blocks only near it. With the sphere gone (Dynamic), the refined blocks
-// coarsen and the finer level's blocks are removed. Invalid configurations
-// and frames are refused, and the grid moves as an RAII owner should. Run
-// under the Khronos layer where installed; its errors fail the test.
+// coarsen and the finer level's blocks are removed. A cleared level's blocks
+// start with no residual history, though the heap hands their slots out
+// again. Invalid configurations and frames are refused, and the grid moves as
+// an RAII owner should. Run under the Khronos layer where installed; its
+// errors fail the test.
 // Exits 0 (skip) where no device is present.
 
 #include <atomic>
@@ -24,6 +26,7 @@
 #include "volumetric_kit/core/vulkan/compute_util.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/instance.hpp"
+#include "volumetric_kit/recon/core/color_space.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/tsdf/adaptive_grid.hpp"
 #include "volumetric_kit/recon/volume/hash_types.hpp"
@@ -67,9 +70,9 @@ vr::DepthCameraParams camera() {
 }
 
 // The depth the camera sees: the wall, and the sphere when present.
-std::vector<float> depth_image(bool sphere) {
+std::vector<float> depth_image(bool sphere, float wall = kWall) {
   const vr::DepthCameraParams cam = camera();
-  std::vector<float> depth(kWidth * kHeight, kWall);
+  std::vector<float> depth(kWidth * kHeight, wall);
   if (!sphere) return depth;
   for (std::uint32_t v = 0; v < kHeight; ++v) {
     for (std::uint32_t u = 0; u < kWidth; ++u) {
@@ -153,6 +156,27 @@ int test_refines_near_detail(vkc::Device& dev, vkc::Allocator& alloc) {
   return 0;
 }
 
+// Blocks drawn into a cleared level's freed slots carry none of the sums
+// their slots held: a flat wall fused after the sphere's blocks refined, at
+// block coordinates of its own, refines nothing.
+int test_cleared_slots_start_fresh(vkc::Device& dev, vkc::Allocator& alloc) {
+  auto made = tsdf::AdaptiveGrid::create(dev, alloc, config());
+  CHECK(made.ok());
+  tsdf::AdaptiveGrid grid = std::move(made).value();
+  CHECK(fuse(grid, depth_image(true), 20).ok());
+  CHECK(grid.stats(0).refined > 0);
+  for (std::uint32_t l = 0; l < grid.level_count(); ++l) {
+    CHECK(grid.level(l).clear().ok());
+  }
+  // Twice as far, so it covers more blocks than the sphere scene held.
+  CHECK(fuse(grid, depth_image(false, 2.0f * kWall), 6).ok());
+  std::printf("  after clearing: refined %u of %u coarse blocks\n",
+              grid.stats(0).refined, grid.stats(0).blocks);
+  CHECK(grid.stats(0).blocks > 0);
+  CHECK(grid.stats(0).refined == 0);
+  return 0;
+}
+
 int test_refusals(vkc::Device& dev, vkc::Allocator& alloc) {
   const auto refused = [&](tsdf::AdaptiveGridConfig c) {
     auto g = tsdf::AdaptiveGrid::create(dev, alloc, c);
@@ -176,6 +200,12 @@ int test_refusals(vkc::Device& dev, vkc::Allocator& alloc) {
   c = config();
   c.check_every = 0;
   CHECK(refused(c));
+  c = config();
+  c.min_cells = 0;
+  CHECK(refused(c));
+  c = config();
+  c.min_cells = 65;
+  CHECK(refused(c));
 
   auto made = tsdf::AdaptiveGrid::create(dev, alloc, config());
   CHECK(made.ok());
@@ -189,6 +219,15 @@ int test_refusals(vkc::Device& dev, vkc::Allocator& alloc) {
   CHECK(grid.fuse({{{vkc::StorageInput(static_cast<const void*>(nullptr)),
                      camera()},
                     nullptr}})
+            .domain() == vkc::Status::Code::InvalidArgument);
+  // Colour the integrator would refuse is refused before anything is fused.
+  const std::vector<std::uint32_t> pixels(kWidth * kHeight, 0x808080u);
+  tsdf::ColorFrame linear;
+  linear.pixels = pixels.data();
+  const vr::DepthCameraParams d = camera();
+  linear.cam = {d.fx, d.fy, d.cx, d.cy, d.width, d.height, d.cam_to_world};
+  linear.encoding.transfer = vr::ColorEncoding::Transfer::Linear;
+  CHECK(grid.fuse({{{vkc::StorageInput(depth.data()), camera()}, &linear}})
             .domain() == vkc::Status::Code::InvalidArgument);
   auto blocks = grid.level(0).map().compact_active_blocks();
   CHECK(blocks.ok() && blocks.value().empty());  // nothing was fused
@@ -271,6 +310,9 @@ int main() {
 
   std::printf("refines near detail, coarsens when it leaves\n");
   if (test_refines_near_detail(device.value(), allocator.value()) != 0)
+    return 1;
+  std::printf("cleared slots start fresh\n");
+  if (test_cleared_slots_start_fresh(device.value(), allocator.value()) != 0)
     return 1;
   std::printf("refusals\n");
   if (test_refusals(device.value(), allocator.value()) != 0) return 1;
