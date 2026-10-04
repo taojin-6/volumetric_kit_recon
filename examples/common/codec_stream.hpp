@@ -224,8 +224,9 @@ class CodecStream {
     print_stage_rows("decode", decode_rows_, frames_);
     const double enc = row_ms(encode_rows_, "  ..rans encode") / frames_;
     const double dec = row_ms(decode_rows_, "  ..rans decode") / frames_;
-    std::printf("  rANS: %.2f ms encode, %.2f ms decode per coded frame (host)",
-                enc, dec);
+    std::printf(
+        "  rANS: %.2f ms encode, %.2f ms decode wall clock per coded frame",
+        enc, dec);
     if (every > 0) {
       // Against the source's interval: what coding every frame live must fit.
       // A standalone mesh or final-grid snapshot has no measured frame rate.

@@ -1237,7 +1237,12 @@ coordinates and each segment's fault, which `check_segment` judges exactly
 as the host reader does. The coefficients and masks stay in VRAM for the
 inverse (`DctTransform::inverse` over `ResidentBlocks`). The decode's symbol
 walk is inside its serial chain, so `kAuto` decodes on the device only from
-`kMinDeviceDecodeSegments` (80).
+`kMinDeviceDecodeSegments` (80). The frame sets how long one invocation runs,
+so the device refuses segments longer than `kMaxDeviceDecodeSegmentSize`
+(1,024 blocks), keeping an invocation near 50 ms. Both coders' `kAuto` uses
+the host for a frame the device cannot hold (`InvalidArgument` or
+`OutOfMemory`), and for every frame once the device kernels fail to build,
+which it tries once; it reports any other device failure.
 `Decoder::decode(frame, grid)` leaves the caller's grid holding exactly the
 frame. It merges the grid's sorted active set with the frame's
 coordinates, removing, allocating, and keeping shared blocks in their

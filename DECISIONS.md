@@ -297,8 +297,9 @@ entries relevant to your task; later amendments supersede earlier rules.
   rANS encoding runs on the device, byte for byte the host's frame, and the
   encoder picks the device per frame from 48 segments.
 - [**2026-10-03**](#2026-10-03--rans-decoding-runs-on-the-device-block-for-block-the-hosts-chosen-from-80-segments) —
-  rANS decoding runs on the device, block for block and refusal for refusal
-  the host's, and the decoder picks the device per frame from 80 segments.
+  rANS decoding runs on the device, block for block the host's, in segments
+  of at most 1,024 blocks, and the decoder picks the device per frame from 80
+  segments.
 
 ## Decision record
 
@@ -9226,8 +9227,8 @@ locally.
 ### 2026-10-03 — rANS decoding runs on the device, block for block the host's, chosen from 80 segments.
 
 The 2026-09-26 decision's fifth PR, for the decoder. The v3 format is
-unchanged, and the device decodes every frame to `read_intra_frame`'s blocks
-and refuses every frame it refuses, with the same message.
+unchanged. The device decodes every frame it can hold to `read_intra_frame`'s
+blocks, and refuses every corrupt segment it refuses, with the same message.
 
 **The pipeline.** The host parses the frame: the header, sections, tables,
 segment lengths and the heap check (`parse_intra_frame`, which
@@ -9286,6 +9287,19 @@ the fixed cost stays and each covers fewer blocks: 1 cm Rafa2 wins only at
 R = 8 on the RTX 5090. Like the encoder, `kAuto` builds the device reader at
 its first device frame and decodes on the host any frame the device could
 not; `kHost` and `kDevice` force one. The examples' `--entropy` sets both.
+
+**What the device refuses.** The frame sets the segment length, and one
+invocation decodes a whole segment, so a stream of long segments could run
+one invocation past a GPU watchdog and lose the device shared with the
+renderer. The device therefore decodes segments of at most
+`kMaxDeviceDecodeSegmentSize` (1,024 blocks, about 50 ms at the measured 30 to
+45 µs a block). `kDevice` refuses a longer segment, and a frame past
+`maxStorageBufferRange` or free memory, which the host decodes; every buffer
+size is checked before any grows. Both coders now share the `kAuto` policy
+(`entropy_choice.hpp`): the host takes a frame the device refused as
+`InvalidArgument` or `OutOfMemory`, and every frame after a failed kernel
+build, which is tried once; any other device failure is reported, where the
+encoder's `kAuto` hid it before.
 
 **Not done.** Lanes within a segment (format v4) would shorten the chain,
 which is what decoding few segments on the device needs; host threads per
