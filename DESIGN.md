@@ -921,7 +921,9 @@ allocates from the depth that falls in refined coarser blocks (a GPU mask)
 and integrates the whole frame. A block's parent is its coordinate halved in
 the coarser hash. Before a set is fused, its sampled depth points' distances
 to each coarse level's surface (TSDF over its gradient length) add to per-cell
-sums; every few sets, a check turns each cell into its systematic offset
+sums, held in the level's `residual` attribute so removal, clearing and growth
+keep them with their blocks; every few sets, a check turns each cell into its
+systematic offset
 (mean^2 - variance / n), subtracts the sensor's floor (the median coarsest
 block's), and refines or coarsens blocks, removing finer blocks a coarsened
 region leaves. `owned_blocks(l)` lists what each level meshes, for the culled

@@ -116,6 +116,9 @@ namespace win = volumetric_kit::gfx::windowing;
 
 namespace {
 
+using fuse_viewer::OrbitView;
+using fuse_viewer::ScrollInput;
+
 struct Options {
   std::string scene_dir;
   std::string cam_params;
@@ -474,11 +477,22 @@ vkc::Result<Source> open_source(const Options& opt,
     options.serial = opt.serial;
     apply_streams(opt, device, options);
     VKC_TRY(add_preps(source, device, allocator, 1));
-    for (const rsensor::RigCameraCalibration& c : calibration) {
-      if (c.serial == opt.serial || calibration.size() == 1) {
-        options.serial = c.serial;
-        options.cam_to_world = c.cam_to_world;
+    if (!calibration.empty()) {
+      // Posed from the file: the named camera, or the file's only one.
+      const auto it = std::find_if(
+          calibration.begin(), calibration.end(), [&](const auto& c) {
+            return opt.serial.empty() ? calibration.size() == 1
+                                      : c.serial == opt.serial;
+          });
+      if (it == calibration.end()) {
+        return vkc::Status::not_found(
+            opt.calibration +
+            (opt.serial.empty()
+                 ? std::string(" poses several cameras; name one with --serial")
+                 : " has no camera " + opt.serial));
       }
+      options.serial = it->serial;
+      options.cam_to_world = it->cam_to_world;
     }
     VKC_ASSIGN(rsensor::OrbbecCapture camera,
                rsensor::OrbbecCapture::open(options));
@@ -500,40 +514,6 @@ vkc::Result<Source> open_source(const Options& opt,
   source.replica.emplace(std::move(replica));
   return source;
 }
-
-// A turntable around `target` about the first camera's image-up axis (the
-// world follows OpenCV, +Y down), as rig_viewer's.
-struct OrbitView {
-  glm::vec3 target{0.0f};
-  glm::vec3 up{0.0f, -1.0f, 0.0f};
-  glm::vec3 forward{0.0f, 0.0f, 1.0f};
-  glm::vec3 right{1.0f, 0.0f, 0.0f};
-  float distance = 2.0f;
-  float azimuth = 0.0f;
-  float elevation = 0.0f;
-
-  // Look from a capture pose at the point `distance` ahead of it.
-  static OrbitView from_pose(const glm::mat4& c2w, float distance) {
-    OrbitView v;
-    v.forward = glm::normalize(glm::vec3(c2w[2]));
-    v.up = -glm::normalize(glm::vec3(c2w[1]));
-    v.right = glm::normalize(glm::cross(v.forward, v.up));
-    v.target = glm::vec3(c2w[3]) + distance * v.forward;
-    v.distance = distance;
-    return v;
-  }
-  glm::vec3 eye() const {
-    const glm::vec3 around =
-        std::cos(azimuth) * -forward + std::sin(azimuth) * right;
-    return target +
-           distance * (std::cos(elevation) * around + std::sin(elevation) * up);
-  }
-};
-
-// Scroll arrives through a callback; the render loop reads what built up.
-struct ScrollInput {
-  double pending = 0.0;
-};
 
 struct Panel {
   std::size_t fused = 0;
@@ -962,9 +942,9 @@ int run(GLFWwindow* window, const Options& opt) {
       for (std::size_t i = 0; started.ok() && !quit.load();) {
         stages.clear();
         for (const char* stage :
-             {"frame", "adaptive upload", "adaptive check", "adaptive residual",
-              "allocate", "resize", "integrate", "  ..active set", "ownership",
-              "extract", "tint", "texture", "atlas pack"}) {
+             {"frame", "adaptive check", "adaptive residual", "allocate",
+              "resize", "integrate", "  ..active set", "ownership", "extract",
+              "tint", "texture", "atlas pack"}) {
           stages.seed(stage);
         }
         auto polled = [&]() {

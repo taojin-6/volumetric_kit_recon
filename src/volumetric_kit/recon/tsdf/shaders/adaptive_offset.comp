@@ -6,13 +6,16 @@
 // s^2 over n samples; m^2 - s^2 / n is an unbiased estimate of the squared
 // offset there, since noise averages away but the grid's shape error does not.
 // The block reports the mean over its sampled cells of that estimate and of
-// s^2 / n (how much noise is left in it), then halves every cell's sums, so
-// older frames fade and moving surfaces update. It also counts the block's
-// surface voxels -- observed, within a voxel of the zero crossing -- which
-// tell a block whose surface is gone from one merely out of view.
+// s^2 / n (how much noise is left in it), then halves every cell's count and
+// scales its sums by the same ratio, so its mean and mean square hold where an
+// odd count rounds down; older frames fade and moving surfaces update. It also
+// counts the block's surface voxels -- observed, within a voxel of the zero
+// crossing -- which tell a block whose surface is gone from one merely out of
+// view.
 //
-// Scores, two per block slot: offset^2, noise left^2 and noise per sample^2 in
-// (0.02 mm)^2 units, and cells sampled; then surface voxels.
+// Scores, two per listed block: offset^2, noise left^2 and noise per sample^2
+// in (0.02 mm)^2 units, and cells sampled; then surface voxels. Accum is the
+// grid's `residual` attribute, laid out as adaptive_residual.comp says.
 
 #version 450
 #extension GL_GOOGLE_include_directive : require
@@ -50,8 +53,7 @@ void main() {
   uint b = pc.base + gl_WorkGroupID.x;
   if (b >= pc.count) return;
   uint lane = gl_LocalInvocationID.x;
-  uint slot = uint(blocks[b].ptr) / pc.voxels_per_block;
-  uint i = slot * 192u + lane * 3u;
+  uint i = uint(blocks[b].ptr) / 2u + lane * 3u;
   int n = accum[i];
   int sum = accum[i + 1u];
   int sq = accum[i + 2u];
@@ -95,11 +97,13 @@ void main() {
   }
   if (lane == 0u) {
     float c = max(s_cells[0], 1.0);
-    scores[2u * slot] =
+    scores[2u * b] =
         vec4(s_offset[0] / c, s_left[0] / c, s_noise[0] / c, s_cells[0]);
-    scores[2u * slot + 1u] = vec4(s_surface[0], 0.0, 0.0, 0.0);
+    scores[2u * b + 1u] = vec4(s_surface[0], 0.0, 0.0, 0.0);
   }
-  accum[i] = n >> 1;
-  accum[i + 1u] = sum / 2;
-  accum[i + 2u] = sq >> 1;
+  int kept = n >> 1;
+  float ratio = n > 0 ? float(kept) / float(n) : 0.0;
+  accum[i] = kept;
+  accum[i + 1u] = int(round(float(sum) * ratio));
+  accum[i + 2u] = int(round(float(sq) * ratio));
 }

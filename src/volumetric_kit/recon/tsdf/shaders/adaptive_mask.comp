@@ -16,7 +16,15 @@
 layout(local_size_x = 256) in;
 
 layout(set = 0, binding = 0, scalar) readonly buffer Depth { float depth[]; };
-layout(set = 0, binding = 2, scalar) readonly buffer Flags { uint flags[]; };
+// Per coarse block slot: the block flagged there at the last check. The coord
+// tells it from a block that took the slot since.
+struct RefineFlag {
+  ivec3 coord;
+  uint refined;
+};
+layout(set = 0, binding = 2, scalar) readonly buffer Flags {
+  RefineFlag flags[];
+};
 layout(set = 0, binding = 3, scalar) writeonly buffer Masked {
   float masked[];
 };
@@ -24,7 +32,7 @@ layout(set = 0, binding = 3, scalar) writeonly buffer Masked {
 #include "adaptive_common.glsl"
 
 layout(set = 0, binding = 4, scalar) readonly buffer Camera {
-  AdaptiveCamera cam;
+  DepthCameraParams cam;
 };
 
 layout(push_constant, scalar) uniform Push { VoxelGridParams coarse; } pc;
@@ -36,11 +44,12 @@ void main() {
   float kept = 0.0;
   if (unproject(cam, id % cam.width, id / cam.width, p)) {
     vec3 w = (cam.cam_to_world * vec4(p, 1.0)).xyz;
-    int ptr = vrFindBlockPtr(region_block(w, pc.coarse.voxel_size),
-                             pc.coarse.num_buckets, pc.coarse.bucket_size,
-                             pc.coarse.max_chain);
-    if (ptr >= 0 && flags[uint(ptr) / uint(pc.coarse.voxels_per_block)] != 0u) {
-      kept = depth[id];
+    ivec3 block = region_block(w, pc.coarse.voxel_size);
+    int ptr = vrFindBlockPtr(block, pc.coarse.num_buckets,
+                             pc.coarse.bucket_size, pc.coarse.max_chain);
+    if (ptr >= 0) {
+      RefineFlag f = flags[uint(ptr) / uint(pc.coarse.voxels_per_block)];
+      if (f.refined != 0u && f.coord == block) kept = depth[id];
     }
   }
   masked[id] = kept;

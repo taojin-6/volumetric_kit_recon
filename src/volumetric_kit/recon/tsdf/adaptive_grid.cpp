@@ -60,9 +60,15 @@ struct MaskPush {
   volume::VoxelGridParams coarse;
 };
 
-// Residuals are summed in 0.02 mm units; 64 cells of three ints per block.
+// Residuals are summed in 0.02 mm units.
 constexpr double kUnit2 = 2e-5 * 2e-5;
-constexpr std::size_t kCellInts = 64 * 3;
+
+// Mirrors adaptive_mask.comp's RefineFlag: a coarse slot's block, flagged.
+struct RefineFlag {
+  Vec3i coord{0};
+  std::uint32_t refined = 0;
+};
+static_assert(sizeof(RefineFlag) == 16, "RefineFlag must match its GLSL");
 
 void bind(const core::DescriptorSet& set, std::uint32_t binding,
           const core::Buffer& b) {
@@ -73,8 +79,9 @@ core::Status check_config(const AdaptiveGridConfig& c) {
   const auto positive = [](float v) { return std::isfinite(v) && v > 0.0f; };
   if (c.levels < 2 || c.levels > 4 || !positive(c.voxel_size) ||
       !positive(c.trunc_voxels) || !positive(c.max_weight) ||
-      !positive(c.refine_offset) || c.pixel_stride == 0 || c.check_every == 0 ||
-      c.calm_checks == 0 || c.num_buckets < 1 ||
+      !positive(c.refine_offset) || c.pixel_stride == 0 || c.min_cells == 0 ||
+      c.min_cells > 64 || c.check_every == 0 || c.calm_checks == 0 ||
+      c.num_buckets < 1 ||
       std::int64_t{c.num_buckets} * 8 >
           std::numeric_limits<std::int32_t>::max()) {
     return core::Status::invalid_argument(
@@ -108,9 +115,11 @@ struct AdaptiveGrid::Impl {
   std::vector<core::Buffer> uploads;  // [c]: camera c's host depth, staged
   // [l][c]: camera c's allocation depth for level l >= 1.
   std::vector<std::vector<core::Buffer>> masked;
-  // [l], per block slot of level l < last: cell sums, block scores, flags.
-  std::vector<core::Buffer> accum, scores, flags;
-  std::vector<std::vector<std::uint32_t>> flags_host;
+  // [l], for level l < last: per block slot, its refinement flag; per block
+  // of a check's list, its scores. The cell sums are the level's `residual`
+  // attribute, so removing, clearing and growing the grid keep them right.
+  std::vector<core::Buffer> scores, flags;
+  std::vector<std::vector<RefineFlag>> flags_host;
   std::vector<std::unordered_map<std::uint64_t, State>> state;
   std::vector<std::unordered_set<std::uint64_t>> refined, ready;
   std::vector<AdaptiveLevelStats> stats;
@@ -122,10 +131,13 @@ struct AdaptiveGrid::Impl {
 
   core::Status init() {
     const std::size_t n = config.levels;
-    const volume::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
-                                           {"weight", sizeof(float)},
-                                           {"color", sizeof(std::uint32_t)}};
     for (std::size_t l = 0; l < n; ++l) {
+      std::vector<volume::AttributeSpec> attrs{{"tsdf", sizeof(float)},
+                                               {"weight", sizeof(float)}};
+      if (config.color) attrs.push_back({"color", sizeof(std::uint32_t)});
+      // A coarse level's cell sums: two bytes a voxel is 256 ints a block, of
+      // which the 64 cells' (count, sum, sum of squares) take 192.
+      if (l + 1 < n) attrs.push_back({"residual", 2});
       const float voxel = std::ldexp(config.voxel_size, -int(l));
       volume::VoxelGridParams grid{};
       grid.voxel_size = voxel;
@@ -137,8 +149,8 @@ struct AdaptiveGrid::Impl {
       grid.num_blocks = grid.bucket_size * grid.num_buckets;
       grid.max_chain = 128;
       VKC_ASSIGN(volume::VoxelBlockGrid level,
-                 volume::VoxelBlockGrid::create(device, allocator, grid, attrs,
-                                                config.color ? 3u : 2u));
+                 volume::VoxelBlockGrid::create(device, allocator, grid,
+                                                attrs.data(), attrs.size()));
       levels.push_back(std::move(level));
       AdaptiveLevelStats s;
       s.voxel_size = voxel;
@@ -147,7 +159,6 @@ struct AdaptiveGrid::Impl {
     VKC_ASSIGN(TsdfIntegrator made, TsdfIntegrator::create(device, allocator));
     integrator.emplace(std::move(made));
     masked.resize(n);
-    accum.resize(n - 1);
     scores.resize(n - 1);
     flags.resize(n - 1);
     flags_host.resize(n - 1);
@@ -184,23 +195,19 @@ struct AdaptiveGrid::Impl {
     return {};
   }
 
-  // Per-slot buffers follow the level's heap, which grows on overflow; a
-  // grown level starts its sums again.
+  // The flags and scores follow the level's heap, which grows on overflow;
+  // the flags carry over.
   core::Status fit(std::size_t l) {
     const std::size_t slots = std::size_t(levels[l].grid().num_blocks);
     if (flags_host[l].size() == slots && flags[l].valid()) return {};
-    flags_host[l].resize(slots, 0u);
+    flags_host[l].resize(slots);
     VKC_ASSIGN(flags[l], core::device_storage_buffer(
-                             allocator, slots * sizeof(std::uint32_t)));
-    VKC_ASSIGN(accum[l], core::device_storage_buffer(
-                             allocator, slots * kCellInts * sizeof(int)));
+                             allocator, slots * sizeof(RefineFlag)));
     VKC_ASSIGN(scores[l], core::device_storage_buffer(
                               allocator, slots * 8 * sizeof(float)));
     core::CommandBatch batch(device, allocator);
     VKC_TRY(batch.upload(flags[l], 0, flags_host[l].data(),
-                         slots * sizeof(std::uint32_t)));
-    VKC_TRY(batch.zero(accum[l], 0, accum[l].size()));
-    VKC_TRY(batch.zero(scores[l], 0, scores[l].size()));
+                         slots * sizeof(RefineFlag)));
     return batch.submit();
   }
 
@@ -221,6 +228,7 @@ struct AdaptiveGrid::Impl {
           std::numeric_limits<std::int32_t>::max()) {
         return core::Status::out_of_memory("AdaptiveGrid: a level cannot grow");
       }
+      core::StageScope scope(metrics, "resize");
       VKC_TRY(levels[l].resize(std::int32_t(grown)));
     }
     return core::Status::out_of_memory("AdaptiveGrid: allocation kept failing");
@@ -229,8 +237,9 @@ struct AdaptiveGrid::Impl {
   // Stage the set's cameras and host depth, add its residuals to each coarse
   // level's cell sums -- before it is fused, so it is not judged against
   // itself -- and write each camera's allocation depth for the finer levels
-  // from the last check's flags. One submit.
-  core::Status accumulate_and_mask(const std::vector<FrameInput>& frames) {
+  // from the last check's flags. One submit. A host image's frame then names
+  // its staged copy, so the levels do not upload it again.
+  core::Status accumulate_and_mask(std::vector<FrameInput>& frames) {
     const std::uint32_t n = std::uint32_t(frames.size());
     while (cameras.size() < n) {
       VKC_ASSIGN(core::Buffer b, core::device_storage_buffer(
@@ -268,6 +277,7 @@ struct AdaptiveGrid::Impl {
       volume::VoxelBlockGrid& g = levels[l];
       VKC_ASSIGN(const volume::AttributeView tsdf, g.attribute("tsdf"));
       VKC_ASSIGN(const volume::AttributeView weight, g.attribute("weight"));
+      VKC_ASSIGN(const volume::AttributeView sums, g.attribute("residual"));
       for (std::size_t c = 0; c < n; ++c) {
         const DepthCameraParams& cam = frames[c].camera;
         const VkDeviceSize depth_bytes =
@@ -281,7 +291,7 @@ struct AdaptiveGrid::Impl {
                                g.map().entries_buffer_size());
         bind(r, 2, *tsdf.buffer);
         bind(r, 3, *weight.buffer);
-        bind(r, 4, accum[l]);
+        bind(r, 4, *sums.buffer);
         bind(r, 5, cameras[c]);
         const ResidualPush rpush{g.grid(), stride, columns, count};
         VKC_TRY(batch.dispatch(residual[l], r, &rpush, sizeof(rpush),
@@ -300,31 +310,43 @@ struct AdaptiveGrid::Impl {
                                (pixels + 255u) / 256u, max_groups));
       }
     }
-    return batch.submit();
+    VKC_TRY(batch.submit());
+    for (std::size_t c = 0; c < n; ++c) {
+      if (depth[c] == uploads[c].handle()) {
+        frames[c].depth = core::StorageInput(uploads[c]);
+      }
+    }
+    return {};
   }
 
   // Turn the cell sums into block offsets, decide refinement per block, and
   // drop finer blocks a coarsened region left behind.
   core::Status check() {
     const std::size_t n = levels.size();
+    // [l]: level l's active blocks; a coarse level's come back as its device
+    // list, beside the scores of each.
+    std::vector<std::vector<volume::BlockIndex>> active(n);
     std::vector<std::vector<float>> score(n - 1);
     for (std::size_t l = 0; l + 1 < n; ++l) {
       VKC_TRY(fit(l));
       VKC_ASSIGN(const volume::DeviceBlockList list,
                  levels[l].map().compact_active_blocks_on_device());
       if (list.count == 0) continue;
+      const VkDeviceSize list_bytes =
+          VkDeviceSize(list.count) * sizeof(volume::BlockIndex);
       const core::ComputeKernel& k = offset[l];
-      k.set.write_storage_buffer(
-          0, list.buffer->handle(), 0,
-          VkDeviceSize(list.count) * sizeof(volume::BlockIndex));
+      k.set.write_storage_buffer(0, list.buffer->handle(), 0, list_bytes);
       VKC_ASSIGN(const volume::AttributeView tsdf, levels[l].attribute("tsdf"));
       VKC_ASSIGN(const volume::AttributeView weight,
                  levels[l].attribute("weight"));
-      bind(k.set, 1, accum[l]);
+      VKC_ASSIGN(const volume::AttributeView sums,
+                 levels[l].attribute("residual"));
+      bind(k.set, 1, *sums.buffer);
       bind(k.set, 2, scores[l]);
       bind(k.set, 3, *tsdf.buffer);
       bind(k.set, 4, *weight.buffer);
-      score[l].resize(flags_host[l].size() * 8);
+      active[l].resize(list.count);
+      score[l].resize(std::size_t(list.count) * 8);
       core::CommandBatch batch(device, allocator);
       for (std::uint32_t base = 0; base < list.count; base += max_groups) {
         const OffsetPush push{list.count, base, 512u,
@@ -333,20 +355,17 @@ struct AdaptiveGrid::Impl {
                                std::min(max_groups, list.count - base),
                                max_groups));
       }
+      VKC_TRY(batch.readback(*list.buffer, 0, list_bytes, active[l].data()));
       VKC_TRY(batch.readback(scores[l], 0, score[l].size() * sizeof(float),
                              score[l].data()));
       VKC_TRY(batch.submit());
     }
-    std::vector<std::vector<volume::BlockIndex>> active(n);
+    VKC_ASSIGN(active[n - 1], levels[n - 1].map().compact_active_blocks());
     for (std::size_t l = 0; l < n; ++l) {
-      VKC_ASSIGN(active[l], levels[l].map().compact_active_blocks());
       stats[l].blocks = std::uint32_t(active[l].size());
     }
-    const auto scored = [&](std::size_t l, const volume::BlockIndex& b) {
-      return &score[l][8 * (std::size_t(b.ptr) / 512u)];
-    };
-    const auto judged = [&](std::size_t l, const volume::BlockIndex& b) {
-      const float* sc = scored(l, b);
+    const auto judged = [&](std::size_t l, std::size_t i) {
+      const float* sc = &score[l][8 * i];
       return sc[3] >= float(config.min_cells) ? sc : nullptr;
     };
     const auto median = [](std::vector<double>& v) {
@@ -358,26 +377,28 @@ struct AdaptiveGrid::Impl {
 
     // The sensor's floor: the median coarsest block's offset.
     double floor2 = 0.0;
-    if (!score[0].empty()) {
+    {
       std::vector<double> all;
-      for (const volume::BlockIndex& b : active[0]) {
-        if (const float* sc = judged(0, b)) all.push_back(sc[0] * kUnit2);
+      for (std::size_t i = 0; i < active[0].size(); ++i) {
+        if (const float* sc = judged(0, i)) all.push_back(sc[0] * kUnit2);
       }
       floor2 = std::max(0.0, median(all));
     }
     floor = float(std::sqrt(floor2));
 
+    // TODO(tsdf): check that a refined block's offset fell at the finer
+    // level, and coarsen it otherwise: calibration error and ToF bias refine
+    // too, and no voxel size fits them.
     const double eps = config.refine_offset;
     for (std::size_t l = 0; l + 1 < n; ++l) {
-      if (score[l].empty()) continue;
       std::unordered_map<std::uint64_t, State> next;
       next.reserve(active[l].size());
       std::vector<double> offsets, noises;
-      for (const volume::BlockIndex& b : active[l]) {
-        const std::uint64_t k = key(b.coord);
+      for (std::size_t i = 0; i < active[l].size(); ++i) {
+        const std::uint64_t k = key(active[l][i].coord);
         const auto it = state[l].find(k);
         State s = it == state[l].end() ? State{} : it->second;
-        if (const float* sc = judged(l, b)) {
+        if (const float* sc = judged(l, i)) {
           const double offset2 = double(sc[0]) * kUnit2;
           const double left2 = double(sc[1]) * kUnit2;
           offsets.push_back(std::sqrt(std::max(0.0, offset2)));
@@ -390,7 +411,7 @@ struct AdaptiveGrid::Impl {
           } else {
             s.calm = excess < eps / 2 ? s.calm + 1 : 0;
           }
-        } else if (s.refined && scored(l, b)[4] == 0.0f) {
+        } else if (s.refined && score[l][8 * i + 4] == 0.0f) {
           ++s.calm;  // its surface is gone, not just out of view
         }
         if (s.refined && s.calm >= config.calm_checks) s = State{};
@@ -405,7 +426,7 @@ struct AdaptiveGrid::Impl {
     for (std::size_t l = 0; l + 1 < n; ++l) {
       refined[l].clear();
       ready[l].clear();
-      std::fill(flags_host[l].begin(), flags_host[l].end(), 0u);
+      std::fill(flags_host[l].begin(), flags_host[l].end(), RefineFlag{});
       for (const volume::BlockIndex& b : active[l]) {
         const std::uint64_t k = key(b.coord);
         const auto it = state[l].find(k);
@@ -413,7 +434,7 @@ struct AdaptiveGrid::Impl {
         const std::uint64_t up = key(parent(b.coord));
         if (l > 0 && refined[l - 1].count(up) == 0) continue;
         refined[l].insert(k);
-        flags_host[l][std::size_t(b.ptr) / 512u] = 1u;
+        flags_host[l][std::size_t(b.ptr) / 512u] = RefineFlag{b.coord, 1u};
         if ((l == 0 || ready[l - 1].count(up) != 0) &&
             it->second.since < sets) {
           ready[l].insert(k);
@@ -425,7 +446,7 @@ struct AdaptiveGrid::Impl {
       core::CommandBatch batch(device, allocator);
       for (std::size_t l = 0; l + 1 < n; ++l) {
         VKC_TRY(batch.upload(flags[l], 0, flags_host[l].data(),
-                             flags_host[l].size() * sizeof(std::uint32_t)));
+                             flags_host[l].size() * sizeof(RefineFlag)));
       }
       VKC_TRY(batch.submit());
     }
@@ -488,38 +509,39 @@ core::Status AdaptiveGrid::fuse(const std::vector<FrameInput>& frames,
     return core::Status::invalid_argument("AdaptiveGrid: empty grid");
   if (frames.empty()) return {};
   Impl& p = *impl_;
-  for (const FrameInput& f : frames) {
+  // Without colour attributes, the frames' colour is not fused.
+  std::vector<FrameInput> inputs = frames;
+  if (!p.config.color) {
+    for (FrameInput& f : inputs) f.color = nullptr;
+  }
+  // Refused before a check or the residuals change anything.
+  for (const FrameInput& f : inputs) {
     const DepthCameraParams& cam = f.camera;
     if (cam.width == 0 || cam.height == 0 || !(cam.fx > 0.0f) ||
         !(cam.fy > 0.0f)) {
       return core::Status::invalid_argument(
           "AdaptiveGrid: invalid depth camera");
     }
-    VKC_TRY(
-        f.depth.check("AdaptiveGrid: depth",
-                      VkDeviceSize(cam.width) * cam.height * sizeof(float)));
   }
+  VKC_TRY(p.integrator->check(inputs));
   if (p.sets > 0 && p.sets % p.config.check_every == 0) {
     core::StageScope scope(metrics, "adaptive check");
     VKC_TRY(p.check());
   }
   {
     core::StageScope scope(metrics, "adaptive residual");
-    VKC_TRY(p.accumulate_and_mask(frames));
+    VKC_TRY(p.accumulate_and_mask(inputs));
   }
-  const std::vector<volume::DepthInput> depths(frames.begin(), frames.end());
-  // Without colour attributes, the frames' colour is not fused.
-  std::vector<FrameInput> inputs = frames;
-  if (!p.config.color) {
-    for (FrameInput& f : inputs) f.color = nullptr;
-  }
+  const std::vector<volume::DepthInput> depths(inputs.begin(), inputs.end());
+  // TODO(tsdf): one submit for every level's allocate and integrate, if a
+  // rig's host rows show the per-level submits.
   for (std::size_t l = 0; l < p.levels.size(); ++l) {
     if (l == 0) {
       VKC_TRY(p.allocate(0, depths, metrics));
     } else {
       std::vector<volume::DepthInput> from;
-      for (std::size_t c = 0; c < frames.size(); ++c) {
-        from.push_back({core::StorageInput(p.masked[l][c]), frames[c].camera});
+      for (std::size_t c = 0; c < inputs.size(); ++c) {
+        from.push_back({core::StorageInput(p.masked[l][c]), inputs[c].camera});
       }
       VKC_TRY(p.allocate(l, from, metrics));
     }
@@ -536,6 +558,9 @@ core::Result<std::vector<volume::BlockIndex>> AdaptiveGrid::owned_blocks(
     return core::Status::invalid_argument("AdaptiveGrid: no such level");
   }
   Impl& p = *impl_;
+  // TODO(tsdf): keep the owned lists on the device for the culled extract,
+  // rather than compacting every level on the host.
+  // TODO(tsdf): stitch the seams where a level's mesh meets the next one's.
   VKC_ASSIGN(const std::vector<volume::BlockIndex> active,
              p.levels[level].map().compact_active_blocks());
   std::vector<volume::BlockIndex> out;
