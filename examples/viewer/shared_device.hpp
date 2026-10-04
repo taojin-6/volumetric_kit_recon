@@ -41,34 +41,6 @@ namespace vkc = volumetric_kit::core;
 namespace vr = volumetric_kit::recon;
 namespace vg = volumetric_kit::gfx;
 
-/// @brief The shared device, and what the viewers read off it.
-///
-/// Holds the core's `SharedDevice`, which owns the instance, device and
-/// surface and destroys them after both adopters have released their wrappers:
-/// declare this before the app and recon's device so it outlives them.
-struct SharedDevice {
-  /// The family's shared device; null until @ref build_shared_device fills it.
-  std::unique_ptr<vkc::SharedDevice> device;
-  /// The instance both libraries adopt.
-  VkInstance instance = VK_NULL_HANDLE;
-  /// gfx's family (graphics + present) and recon's (compute). Equal under
-  /// every plan but `QueuePlan::TwoFamilies`.
-  std::uint32_t graphics_family = 0;
-  std::uint32_t compute_family = 0;
-
-  /// @brief Give up ownership of the surface to the caller.
-  ///
-  /// gfx's surface factory contract is that the app adopts and later destroys
-  /// what the factory returns, but the surface had to exist first -- picking a
-  /// physical device requires testing present support against a real surface.
-  /// So it is created with the device and handed over, and stops being tracked
-  /// there; destroying it twice would be a use-after-free at teardown.
-  /// @return The surface, or `VK_NULL_HANDLE` once released.
-  VkSurfaceKHR release_surface() {
-    return device != nullptr ? device->release_surface() : VK_NULL_HANDLE;
-  }
-};
-
 /// @brief Knobs the embedder controls; everything else is derived from what
 ///        the two libraries publish.
 struct SharedDeviceConfig {
@@ -109,18 +81,22 @@ inline vkc::DeviceRequirements core_requirements(
 /// @brief Build one instance + device satisfying both libraries, and the
 ///        window's surface on it.
 ///
+/// The returned device owns the instance, device and surface, and destroys
+/// them after both adopters have released their wrappers: declare it before
+/// the app and recon's device so it outlives them. The surface is handed to
+/// gfx's factory through `release_surface()`, since picking a present-capable
+/// device needed it first.
+///
 /// @param window  The GLFW window to present to; its required instance
 ///                extensions are enabled and its surface created here.
 /// @param config  Embedder-owned knobs (validation, app name).
-/// @param out     Filled on success.
-/// @return `false`, with a specific reason on stderr, when the loader, the
-///         hardware, or the driver cannot satisfy the union. The caller must
-///         treat that as fatal: running the two libraries on separate devices
-///         would silently give up the shared-`VkBuffer` seam this bootstrap
-///         exists to establish.
-inline bool build_shared_device(GLFWwindow* window,
-                                const SharedDeviceConfig& config,
-                                SharedDevice& out) {
+/// @return The device; null, with a specific reason on stderr, when the
+///         loader, the hardware, or the driver cannot satisfy the union. The
+///         caller must treat that as fatal: running the two libraries on
+///         separate devices would silently give up the shared-`VkBuffer` seam
+///         this bootstrap exists to establish.
+inline std::unique_ptr<vkc::SharedDevice> build_shared_device(
+    GLFWwindow* window, const SharedDeviceConfig& config) {
   vkc::SharedDeviceConfig shared;
   shared.instance.app_name = config.app_name;
   shared.instance.enable_validation = config.enable_validation;
@@ -130,7 +106,7 @@ inline bool build_shared_device(GLFWwindow* window,
   if (glfw_extensions == nullptr) {
     std::fprintf(stderr,
                  "shared device: GLFW found no Vulkan surface support\n");
-    return false;
+    return nullptr;
   }
   for (std::uint32_t i = 0; i < glfw_extension_count; ++i) {
     shared.instance.extensions.push_back(glfw_extensions[i]);
@@ -155,31 +131,23 @@ inline bool build_shared_device(GLFWwindow* window,
   if (!made) {
     std::fprintf(stderr, "shared device: %s\n",
                  made.status().message().c_str());
-    return false;
+    return nullptr;
   }
-  out.device = std::move(made).value();
-  out.instance = out.device->instance().handle();
-  out.graphics_family = out.device->graphics_family();
-  out.compute_family = out.device->compute_family();
-  std::printf("shared device: %s\n", out.device->summary().c_str());
-  if (out.device->plan() == vkc::QueuePlan::SharedQueue) {
+  std::unique_ptr<vkc::SharedDevice> device = std::move(made).value();
+  std::printf("shared device: %s\n", device->summary().c_str());
+  if (device->plan() == vkc::QueuePlan::SharedQueue) {
     std::fprintf(stderr,
                  "shared device: one queue shared under a mutex -- fusion and "
                  "rendering will serialize\n");
   }
-  return true;
+  return device;
 }
 
-/// @brief The payload `recon::Device::adopt` needs from a @ref SharedDevice.
-inline vr::AdoptedDevice recon_adopt_payload(const SharedDevice& shared) {
-  return shared.device->compute_payload();
-}
-
-/// @brief The payload `gfx::app::WindowedApp::adopt` needs from a
-///        @ref SharedDevice: the core's graphics payload, field for field.
+/// @brief The payload `gfx::app::WindowedApp::adopt` needs from the shared
+///        device: the core's graphics payload, field for field.
 // TODO: drop once gfx adopts the core's AdoptedDevice.
-inline vg::AdoptedDevice gfx_adopt_payload(const SharedDevice& shared) {
-  const vkc::AdoptedDevice core = shared.device->graphics_payload();
+inline vg::AdoptedDevice gfx_adopt_payload(const vkc::SharedDevice& shared) {
+  const vkc::AdoptedDevice core = shared.graphics_payload();
   vg::AdoptedDevice adopted;
   adopted.instance = core.instance;
   adopted.physical_device = core.physical_device;

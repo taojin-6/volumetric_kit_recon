@@ -41,6 +41,14 @@ FetchContent_Declare(
 set(VKC_INSTALL ${VR_INSTALL})
 set(VKC_WITH_VULKAN ON)
 FetchContent_MakeAvailable(volumetric_kit_core)
+# The set() above is lost when calib or the application made the core available
+# first, without its vulkan tier.
+if(NOT TARGET volumetric_kit::core_vulkan)
+  message(
+    FATAL_ERROR
+      "recon needs volumetric_kit_core's vulkan tier: set VKC_WITH_VULKAN ON "
+      "before the first FetchContent_MakeAvailable of the core")
+endif()
 
 # --- nlohmann/json (header-only; parsed in one recon_sensor TU) ---------------
 # The rig pose file (sensor/rig_poses.hpp) is JSON. The release's source

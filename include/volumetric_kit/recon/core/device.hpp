@@ -7,14 +7,8 @@
 /// @brief recon's names for the core's logical device, and what recon's
 ///        kernels require of one.
 ///
-/// recon defines no Vulkan foundation of its own: it uses volumetric_kit_core's
-/// vulkan tier (DECISIONS.md, 2026-10-04, "The Vulkan foundation comes from
-/// volumetric_kit_core"), so a recon `Device` is the same type an embedder
-/// holds
-/// -- and gfx, once it adopts the core -- and one `VkDevice` serves them all.
-/// The using-declarations below let recon and its consumers keep writing these
-/// names in recon's namespace. The contract is the core header's,
-/// `volumetric_kit/core/vulkan/device.hpp`.
+/// Re-exported from volumetric_kit_core (DECISIONS.md, 2026-10-04); the
+/// contract is the core header's, `volumetric_kit/core/vulkan/device.hpp`.
 ///
 /// What recon adds is @ref device_requirements: the one statement of what
 /// recon's kernels need, which a standalone caller passes to
@@ -57,11 +51,19 @@ using core::PhysicalDeviceInfo;
 /// device's creator, so a merged bootstrap that never hears of them does not
 /// silently send every decoded picture through the host.
 ///
+/// @warning Pass these to every `Device::create` and `Device::adopt` recon
+///          runs on. The core's default requirements leave
+///          `scalarBlockLayout` off, and nothing in recon can tell: its
+///          kernels are created and run without an error on such a device,
+///          with their buffers read at the wrong offsets.
+///
 /// @code
-/// VR_ASSIGN(Device device, Device::create(instance, gpu,
-/// device_requirements()));
+/// VR_ASSIGN(Device device,
+///           Device::create(instance, gpu, device_requirements()));
 /// @endcode
 /// @return The requirements; a caller may add to them before creating.
+// TODO(core): refuse a device without scalarBlockLayout when a kernel is
+// created, once the core's Device records the features it enabled.
 inline DeviceRequirements device_requirements() {
   DeviceRequirements reqs;
   reqs.scalar_block_layout = true;

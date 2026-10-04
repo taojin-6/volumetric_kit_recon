@@ -74,6 +74,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     when one is given.
   - Headers that only name these types include `core/fwd.hpp`; a forward
     declaration in `vr::` would declare a different class.
+  - The marching-cubes span table is device-only, so `block_spans()` returns
+    a host copy each extract reads back, and `ExtractTimings::arena_bytes`
+    counts it (16 bytes per block).
+  - `vr_compile_shaders` and `vr_embed_shaders` forward to the core's
+    `vkc_compile_shaders` and `vkc_embed_shaders`; `cmake/embed_spirv.cmake`
+    is gone. The core must be made available with `VKC_WITH_VULKAN ON`, which
+    configuring now checks.
 - `core`: **error handling comes from `volumetric_kit_core`**, fetched pinned by
   commit and re-found by the installed package. `vr::Status` and `vr::Result`
   are the core's types, so they pass to calib unchanged (gfx keeps its own

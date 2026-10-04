@@ -9400,7 +9400,10 @@ extensions. The core's default leaves `scalarBlockLayout` off, as calib needs
 none; so `Device::create(instance, gpu, {})`, which was right when `{}` was
 recon's own `DeviceConfig`, would now make a device recon's kernels cannot run
 on. Every call site passes `device_requirements()`, and an embedder merges it
-with its own. `core/fwd.hpp` forward-declares the core's classes in its
+with its own. Nothing in recon can tell a device made without it, as the
+core's `Device` does not record the features it enabled; a `TODO(core)` on
+`device_requirements()` waits for that, so a kernel can refuse such a device.
+`core/fwd.hpp` forward-declares the core's classes in its
 namespace and names them in `vr::`: a `class Device;` in `vr::` would declare
 an unrelated class that collides with the using-declaration.
 
@@ -9413,14 +9416,16 @@ an unrelated class that collides with the using-declaration.
   changed. `GpuFramePrep`'s kept upload buffer is `Staging`. The colour-parity
   test reads its results back through a batch instead of mapping what the
   kernel wrote.
-- *The block-span table.* The marching-cubes span table is the one buffer
-  the host and a kernel both read and write in place. It was host-visible
-  memory, which a discrete GPU's kernel reaches across PCIe. It is now
-  `DeviceMapped`: cached where the device has it (unified memory, where the
-  host's reads are free), else the BAR window, so the kernel's stores stay in
-  VRAM and the host's few thousand reads of active spans cross uncached. A
-  `TODO` marks the device-only table with a readback of the active spans, if
-  a discrete-GPU profile shows those reads.
+- *The block-span table.* The marching-cubes span table was the one buffer
+  the host and a kernel both read and wrote in place, in host-visible memory
+  a discrete GPU's kernel reaches across PCIe. The core gives a shader no
+  host memory, and its mapped device memory is the BAR window on a discrete
+  GPU, which the host reads uncached (and a write-only mapping not at all),
+  may not exist, and can fill. So the table is device-only, and the host
+  keeps a copy: each dispatch reads back the spans up to the highest active
+  slot in its own batch, an incremental extract uploads the entries it
+  clears, and a grow copies the table on the device. `block_spans()` returns
+  the copy, and `arena_bytes` counts its 16 bytes per block.
 - *Exported buffers take an allocator.* The core makes them through VMA so
   they count against the heap budget, so `CudaPictures` needs an `Allocator`.
   `HevcDecoder::Options`, `JpegDecoder::Options` and `OrbbecStreamOptions`

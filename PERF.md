@@ -100,7 +100,8 @@ kernels.
   `CommandBatch`, never through a mapping, and never reads VRAM through the
   BAR (the 2026-09-28 residency decision).
 - **One `CommandBatch` cannot dispatch the same `ComputeKernel` twice if its
-  set is rewritten in between** (`command_batch.cpp:632`). Batch several
+  set is rewritten in between** (the core's `CommandBatch::submit` refuses
+  it). Batch several
   cameras with one kernel instance per camera, or with a kernel that takes
   them all.
 - **Run sync validation on any change to batching or barriers**

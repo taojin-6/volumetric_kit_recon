@@ -59,8 +59,10 @@ kernels, command batches, timers -- which recon names in `vr::` and which one
 `VkDevice` shares with gfx.
 An installed recon carries the core beside it, and `find_package` finds both.
 An application that also fetches calib, which builds on the core too, declares
-`volumetric_kit_core` first, so both build against one copy; to build against a local core
-checkout, pass `-DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CORE=<path>`.
+`volumetric_kit_core` first, so both build against one copy, and sets
+`VKC_WITH_VULKAN ON` before the first `FetchContent_MakeAvailable` of it; to
+build against a local core checkout, pass
+`-DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CORE=<path>`.
 
 ### Asset I/O
 

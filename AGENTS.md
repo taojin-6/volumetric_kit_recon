@@ -79,7 +79,8 @@ core → volume → tsdf → mesh → texture → interop
   `layout(scalar)` definitions byte-identical; host assertions alone cannot
   validate the shader ABI.
 - Kernel memory is device-local, reached through `CommandBatch`. Preserve
-  the documented exceptions for small parameters and host-read tables.
+  the documented exception for small parameters; the host reads results
+  back through the batch, never through a mapping.
   Require `DEVICE_LOCAL` for bulk allocations and verify borrowed input
   metadata; `HOST_VISIBLE` may coexist with device locality on UMA or BAR.
 - Zero-copy recon/gfx interop uses one shared `VkDevice`. The mesh ring is
