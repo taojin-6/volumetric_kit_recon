@@ -3,7 +3,6 @@
 
 #include "volumetric_kit/recon/core/compute_kernel.hpp"
 
-#include <string>
 #include <utility>
 #include <vector>
 
@@ -22,15 +21,16 @@ namespace {
 // ..."), so without this a binding-count disagreement says nothing about
 // *which* shader disagreed. with_context keeps the domain and detail with no
 // switch over the codes, so a code the core adds needs no case here.
-Status named_failure(const char* name, const Status& why) {
-  return why.with_context(name != nullptr ? name : "<unnamed kernel>");
+Status named_failure(const char* name, Status why) {
+  return std::move(why).with_context(name != nullptr ? name
+                                                     : "<unnamed kernel>");
 }
 
 // VR_ASSIGN, but attributing the failure to the kernel being built. Every step
 // of add() goes through it, so no build failure can reach a tier unnamed.
 template <typename T>
 Status assign_named(T& out, Result<T>&& from, const char* name) {
-  if (!from) return named_failure(name, from.status());
+  if (!from) return named_failure(name, std::move(from).status());
   out = std::move(from).value();
   return {};
 }

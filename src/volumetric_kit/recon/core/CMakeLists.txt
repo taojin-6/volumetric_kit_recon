@@ -3,19 +3,20 @@
 
 # --- recon_core: Tier 1 -----------------------------------------------------
 # Foundation tier: the Vulkan foundation (instance, device, ... mirroring gfx's
-# core), backend-neutral Status/Result error handling, logging, contract checks,
-# and the GLM-backed vector/matrix vocabulary. Every other tier depends on this.
-# Vulkan is reached only through the core/vulkan.hpp umbrella, and the Status
-# type stays backend-neutral (no VkResult in result.hpp -- vk_result.hpp bridges
-# VkResult -> Status). Deps: header-only GLM + the Vulkan loader/headers.
+# core), recon's names for volumetric_kit_core's Status/Result error handling,
+# log sink and contract checks, and the GLM-backed vector/matrix vocabulary.
+# Every other tier depends on this. Vulkan is reached only through the
+# core/vulkan.hpp umbrella, and the Status type stays backend-neutral (no
+# VkResult in result.hpp -- vk_result.hpp bridges VkResult -> Status). Deps:
+# header-only GLM + the Vulkan loader/headers.
 include(GenerateExportHeader)
 include(GNUInstallDirs)
 
-# log.cpp uses std::mutex, so recon_core needs the platform threading runtime.
-# Link it explicitly rather than relying on the compiler's implicit pthread, so
-# the static archive resolves on toolchains that require it -- GCC/libstdc++ on
-# Linux with --as-needed, Android, and static links. (macOS folds pthread into
-# libc, which would otherwise hide the gap.)
+# The device serializes submits with std::mutex, so recon_core needs the
+# platform threading runtime. Link it explicitly rather than relying on the
+# compiler's implicit pthread, so the static archive resolves on toolchains that
+# require it -- GCC/libstdc++ on Linux with --as-needed, Android, and static
+# links. (macOS folds pthread into libc, which would otherwise hide the gap.)
 find_package(Threads REQUIRED)
 
 # GLM: header-only vector/matrix math. PUBLIC -- it appears in public headers

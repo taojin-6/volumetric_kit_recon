@@ -10,9 +10,9 @@
 /// recon defines no error types of its own. It uses the family's shared ones,
 /// from volumetric_kit_core's base tier (DECISIONS.md, 2026-10-03, "Error
 /// handling comes from volumetric_kit_core"), so a `Status` from recon is the
-/// same type as one from calib or gfx and passes between them unchanged. The
-/// using-declarations below let recon and its consumers keep writing `Status`
-/// and `Result<T>` in this namespace.
+/// same type as one from calib and passes to it unchanged; gfx keeps its own
+/// `Status` until it adopts the core. The using-declarations below let recon
+/// and its consumers keep writing `Status` and `Result<T>` in this namespace.
 ///
 /// No exceptions cross the API boundary: mobile consumers build with
 /// `-fno-exceptions`. Fallible calls return `Status` or `Result<T>`, both
@@ -29,6 +29,7 @@
 /// @endcode
 
 #include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/recon/core/check.hpp"
 
 namespace volumetric_kit::recon {
 
@@ -41,7 +42,7 @@ using core::to_string;
 // TODO: rename VR_TRY / VR_ASSIGN (and VR_CHECK, check.hpp) to the core's
 // VKC_TRY / VKC_ASSIGN / VKC_CHECK across recon once the branches open on
 // 2026-10-03 have landed, then delete these aliases. Until then the old names
-// keep those branches merging cleanly; new code may use either.
+// keep those branches merging cleanly, and new code uses them too.
 
 /// @brief recon's name for the core's @ref VKC_TRY: evaluate a `Status`
 ///        expression and early-return it if not OK.

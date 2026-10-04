@@ -83,8 +83,9 @@ if(VR_WITH_ASSIMP)
   find_package(assimp CONFIG REQUIRED)
 endif()
 
-# Pinned implementation dependencies expose private include paths to the tiers
-# below; no vendored target becomes part of the installed link interface.
+# Pinned dependencies: volumetric_kit_core, linked PUBLIC and installed beside
+# recon, and implementation dependencies that expose private include paths to
+# the tiers below and never become part of the installed link interface.
 add_subdirectory(third_party)
 
 add_subdirectory(src)

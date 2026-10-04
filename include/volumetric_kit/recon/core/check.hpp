@@ -22,4 +22,14 @@
 ///        @ref VKC_CHECK under recon's name.
 /// @param cond  A precondition expression that must hold.
 /// @param msg   A description of the contract.
-#define VR_CHECK(cond, msg) VKC_CHECK(cond, msg)
+///
+/// Spelled out rather than forwarded to `VKC_CHECK`: forwarding would expand
+/// macros in @p cond before `#cond` stringizes it, so a failure would report
+/// `n <= 16U` for `n <= VK_UUID_SIZE`.
+#define VR_CHECK(cond, msg)                                                   \
+  do {                                                                        \
+    if (!(cond)) {                                                            \
+      ::volumetric_kit::core::detail::check_failed(__FILE__, __LINE__, #cond, \
+                                                   (msg));                    \
+    }                                                                         \
+  } while (0)

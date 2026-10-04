@@ -24,6 +24,8 @@ namespace volumetric_kit::recon {
 /// @brief Wrap a non-success `VkResult` as a backend @ref Status.
 /// @param code  The `VkResult` returned by a failed Vulkan call.
 /// @param what  Human-readable context (e.g. the failing call site).
+/// @pre @p code is not `VK_SUCCESS`: test the call's result first. Violating
+///      this aborts, as @ref Status::backend_error does.
 /// @return A non-OK `Status` (domain @ref Status::Code::Backend) carrying
 ///         @p code as its @ref Status::detail.
 inline Status vk_error(VkResult code, std::string_view what) {

@@ -39,16 +39,23 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - `core`: **error handling comes from `volumetric_kit_core`**, fetched pinned by
   commit and re-found by the installed package. `vr::Status` and `vr::Result`
-  are the core's types, so they pass to calib and gfx unchanged. Migrating:
+  are the core's types, so they pass to calib unchanged (gfx keeps its own
+  `Status` until it adopts the core). Migrating:
   - A log handler takes `(level, source, message)`; recon's messages carry
     source `"vr"`, and `vr::log_message(level, message)` is unchanged.
   - `Status::Code::Numerical` is new, so an exhaustive `switch` over the codes
     needs a case (the iOS app's `RendererErrors.mm` does).
   - `Status` and `Result` are `[[nodiscard]]`; discard one with `(void)`.
-  - `Status::backend_error(0, …)` aborts; `Status::with_context` prefixes a
-    message and keeps the domain and detail.
+  - `Status::backend_error(0, …)` aborts, and so does
+    `vk_error(VK_SUCCESS, …)`; `Status::with_context` prefixes a message and
+    keeps the domain and detail.
   - `std::move(r).value()` and `*std::move(r)` return the value, not a
     reference into `r`.
+  - `Result`'s success constructor refuses a pointer for `Result<bool>` and
+    `nullptr` for a string-like `T`; return a `Status` for those errors.
+  - `set_log_handler` returns only once no other thread is still in the
+    previous handler, so a handler must not wait for a thread that may call
+    `set_log_handler`.
   - `VR_TRY` / `VR_ASSIGN` / `VR_CHECK` are the core's `VKC_*` macros under
     recon's names; a failed `VR_CHECK` logs with source `"core"`.
 - docs: make `AGENTS.md` the concise shared working guide for Codex and

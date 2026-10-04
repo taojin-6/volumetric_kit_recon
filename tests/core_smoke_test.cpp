@@ -100,21 +100,23 @@ int main() {
         "version components compose to version_string");
 
   // Logging seam: an installed handler receives every level (including Info,
-  // which the default sink drops); restoring the empty handler falls back to
-  // the default sink.
+  // which the default sink drops) with recon's source; restoring the empty
+  // handler falls back to the default sink.
   vr::LogLevel seen_level = vr::LogLevel::Error;
+  std::string seen_source;
   std::string seen_message;
   int seen_count = 0;
-  vr::set_log_handler([&](vr::LogLevel level, std::string_view /*source*/,
+  vr::set_log_handler([&](vr::LogLevel level, std::string_view source,
                           std::string_view message) {
     seen_level = level;
+    seen_source.assign(source.data(), source.size());
     seen_message.assign(message.data(), message.size());
     ++seen_count;
   });
   vr::log_message(vr::LogLevel::Info, "smoke test ran");
   check(seen_count == 1 && seen_level == vr::LogLevel::Info &&
-            seen_message == "smoke test ran",
-        "installed log handler receives the message");
+            seen_source == "vr" && seen_message == "smoke test ran",
+        "installed log handler receives the message with source \"vr\"");
   vr::set_log_handler({});  // restore the default sink
   vr::log_message(vr::LogLevel::Info, "after reset");
   check(seen_count == 1, "empty handler restores default sink (Info dropped)");

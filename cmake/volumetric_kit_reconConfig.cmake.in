@@ -3,16 +3,19 @@
 
 @PACKAGE_INIT@
 
-# recon_core links the platform threading runtime (std::mutex in the logging
-# seam) and header-only GLM (its public vector/matrix types), which the exported
+# recon_core links the platform threading runtime (std::mutex in the device)
+# and header-only GLM (its public vector/matrix types), which the exported
 # targets reference as Threads::Threads and the glm target -- re-find both here
 # so the imported targets exist for consumers. Later tiers that take further
 # public dependencies (e.g. a glTF writer in the mesh tier, or the CUDA runtime
 # in the interop tier) add their re-find here too.
 include(CMakeFindDependencyMacro)
 # volumetric_kit_core is PUBLIC (Status / Result / the log sink in every tier's
-# signatures), at the minor version this package was built against.
-find_dependency(volumetric_kit_core @VR_CORE_MAJOR_MINOR@ CONFIG)
+# signatures), at the minor version this package was built against. The prefix
+# this package is installed in is the hint, as recon's install carries the core
+# beside it; CMAKE_PREFIX_PATH still takes precedence.
+find_dependency(volumetric_kit_core @VR_CORE_MAJOR_MINOR@ CONFIG HINTS
+                "${PACKAGE_PREFIX_DIR}")
 find_dependency(Threads)
 # CONFIG mode, matching how the build finds glm (find_package(glm CONFIG)): glm
 # ships a package config, not a CMake find module, so forcing CONFIG stops a

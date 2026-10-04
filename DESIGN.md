@@ -163,8 +163,8 @@ a message without losing its domain or detail.
 
 All of it is volumetric_kit_core's (the 2026-10-03 decision): `vr::Status` and
 `vr::Result` are using-declarations of the core's types, so a recon error is
-the same type as calib's or gfx's, and the three macros are the core's under
-recon's names. Diagnostics go through the core's one process-wide log sink;
+the same type as calib's (gfx keeps its own `Status` until it adopts the core),
+and the three macros are the core's under recon's names. Diagnostics go through the core's one process-wide log sink;
 recon's `log_message(level, message)` tags them with source `"vr"`, which the
 default sink prints as `[vr <level>]`, and an application's handler receives
 `(level, source, message)`.
