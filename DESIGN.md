@@ -1449,6 +1449,13 @@ depth only inside each colour camera's view unless given `--all-depth`, and
 texturing a camera a set lacks from its last frame, a fallback view
 (`--hold-ms`). The two viewers share `viewer_common.hpp`: the teardown guards, and the render side of
 the mesh ring.
+**`adaptive_viewer`** (`VR_BUILD_VIEWER`; live cameras also need
+`VR_WITH_ORBBEC` and `VR_WITH_FFMPEG`) fuses into uniform grids at halving
+voxel sizes and refines each block where the depth is systematically off the
+coarser surface (`adaptive_levels.hpp`, the 2026-10-03 adaptive-resolution
+decision). It plays a Replica sequence, one camera (`--orbbec`) or a rig
+(`--rig`), live frames prepared on the GPU; each level meshes the blocks it
+owns through the culled extract, and gfx draws them together.
 **`codec_replica`** fuses a Replica sequence as `fuse_replica` does, and
 streams the growing grid through the codec: every `--encode-every` frames it
 encodes, then decodes into a player grid built from `read_frame_info` and
