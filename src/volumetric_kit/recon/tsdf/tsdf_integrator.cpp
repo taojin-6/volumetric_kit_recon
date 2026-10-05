@@ -83,7 +83,7 @@ core::StorageInput color_input(const ColorFrame& color) noexcept {
 
 // This tier's local_size, bound once so every call site reads group_count(n).
 std::uint32_t group_count(std::uint32_t items) {
-  return volumetric_kit::core::group_count(items, kLocalSize);
+  return core::group_count(items, kLocalSize);
 }
 
 }  // namespace

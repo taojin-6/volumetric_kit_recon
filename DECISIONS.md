@@ -303,16 +303,17 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-03**](#2026-10-03--error-handling-comes-from-volumetric_kit_core) —
   Error handling comes from `volumetric_kit_core`: `vr::Status`/`Result` are
   the core's types, `VR_TRY`/`VR_ASSIGN`/`VR_CHECK` its macros under recon's
-  names, and recon logs through its one sink with source `"vr"`.
+  names, and recon logs through its one sink with source `"vr"`. The names
+  are amended below: recon now writes `core::Status` and `VKC_TRY`.
 - [**2026-10-04**](#2026-10-04--the-vulkan-foundation-comes-from-volumetric_kit_core) —
   The Vulkan foundation comes from `volumetric_kit_core`'s vulkan tier: `core/`
   names its types in `vr::`, `device_requirements()` states what recon's
   kernels need, and the viewer builds its device with the core's
-  `SharedDevice`.
+  `SharedDevice`. The `vr::` names are amended below.
 - [**2026-10-04**](#2026-10-04--recon-writes-the-cores-types-and-macros-under-the-cores-names-amends-the-two-entries-above) —
   recon writes the core's types and macros under the core's names
   (`core::Status`, `VKC_TRY`); the re-export headers and the `VR_*` aliases
-  are gone.
+  are gone (amends the two entries above).
 
 ## Decision record
 
@@ -9484,14 +9485,18 @@ recon's own: `device_requirements.hpp` (was `device.hpp`; only
 `device_requirements()` and `check_device_requirements()`), `log.hpp`
 (`log_message`, source `"vr"`), `fwd.hpp` (the core's classes forward-declared
 in the core's namespace), and the camera, colour-space and vector vocabulary.
+recon declares no `core` namespace of its own: `core::Status` in recon's
+namespaces finds `volumetric_kit::core` only because nothing nearer is named
+`core`.
 
 **Why.** The aliases kept the branches open on 2026-10-03 merging cleanly
 ("Why the macros keep their names", above). The one still live, #162, now
 waits for the migration to finish, so that reason is gone, and two spellings
 of one type cost every reader: the viewer met the same device as `vr::Device`
 and `vkc::Device`, and each re-export header was one more file to keep in step
-with the core's. gfx and calib still name the core's types in their own
-namespaces; recon no longer does.
+with the core's. calib, and gfx from its #100, still name the core's types in
+their own namespaces; recon no longer does. (The viewer's gfx pin, #98,
+predates that and still has gfx's own `vg::Status`.)
 
 **What it costs.** #162 and the August branches (#70, #73–#75, #78) rebase
 over about 180 files. The rewrite is mechanical: the four macros, `vr::X` →

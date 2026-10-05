@@ -35,7 +35,7 @@ repos:
   - repo: local
     hooks:
       - id: vulkan-include-umbrella
-        name: enforce core/vulkan.hpp Vulkan-include umbrella
+        name: enforce core/vulkan/vulkan.hpp Vulkan-include umbrella
         entry: '^\s*#\s*include\s*[<"]vulkan/'
         language: pygrep
         files: \.(h|hpp|hxx|inl|ipp|c|cc|cpp|cxx|cu|cuh|mm)$

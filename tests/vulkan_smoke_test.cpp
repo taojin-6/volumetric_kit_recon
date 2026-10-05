@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Tao Jin
 
-// Vulkan availability smoke: proves recon's build finds Vulkan, the
-// core/vulkan.hpp umbrella compiles, and the platform's Vulkan driver (MoltenVK
-// on Apple) offers a device that meets recon's requirements
-// (core/device.hpp's device_requirements) and creates one on it. The Vulkan
+// Vulkan availability smoke: proves recon's build finds Vulkan, the core's
+// core/vulkan/vulkan.hpp umbrella compiles, and the platform's Vulkan driver
+// (MoltenVK on Apple) offers a device that meets recon's requirements
+// (core/device_requirements.hpp) and creates one on it. The Vulkan
 // foundation behind it is volumetric_kit_core's, tested there; what this pins
 // is recon's side: that the requirements recon states are ones a real driver
 // meets.

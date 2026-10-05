@@ -119,7 +119,7 @@ static_assert(offsetof(ViewParams, fallback) == 212, "ViewParams layout drift");
 constexpr float kDepthWeight = 0.01f;
 
 // group_count / device_storage_buffer / StorageInput are shared across the
-// compute tiers -- see core/compute_util.hpp.
+// compute tiers -- see the core's core/vulkan/compute_util.hpp.
 
 // The depth camera as the colour camera of an image registered to it, which
 // both kernels then texture from as from any other: the same intrinsics, size

@@ -66,7 +66,7 @@ struct ColorFrame {
   /// The same image already on the device, in the same layout: a storage
   /// buffer of at least `cam.width * cam.height` words, read in place with no
   /// upload (a GPU pre-processing pass's output). Its memory metadata must
-  /// establish device locality, as required by @ref StorageInput. Set this or
+  /// establish device locality, as required by `StorageInput`. Set this or
   /// @ref pixels, not both. Borrowed for the call. After @ref encoding, so
   /// `{pixels, cam, encoding}` still initializes a host frame.
   const core::Buffer* buffer = nullptr;
@@ -112,7 +112,7 @@ struct FrameInput : volume::DepthInput {
 /// bilinearly, falling back to nearest-neighbour at image edges and across
 /// depth discontinuities or taps that are non-positive or non-finite.
 ///
-/// @warning The @ref Device and @ref Allocator passed to @ref create must
+/// @warning The `Device` and `Allocator` passed to @ref create must
 ///          outlive this object; it stores references to them.
 class VR_TSDF_API TsdfIntegrator {
  public:
@@ -120,7 +120,7 @@ class VR_TSDF_API TsdfIntegrator {
   /// @param device     The compute device (must outlive this object).
   /// @param allocator  The allocator its transient buffers come from (must
   ///                   outlive this).
-  /// @return The integrator, or a non-OK @ref Status if a pipeline or
+  /// @return The integrator, or a non-OK `Status` if a pipeline or
   ///         descriptor object fails to build.
   static core::Result<TsdfIntegrator> create(core::Device& device,
                                              core::Allocator& allocator);
@@ -178,7 +178,7 @@ class VR_TSDF_API TsdfIntegrator {
   ///        follows the depth projection). Color also shares the SDF weight
   ///        cap, so a changed color converges over several frames once the
   ///        weight saturates.
-  /// @param metrics  Optional @ref StageMetrics collecting this call's timing:
+  /// @param metrics  Optional `StageMetrics` collecting this call's timing:
   ///                  an `"integrate"` host row around the whole call, and its
   ///                  device half from a timestamp span around the fusion
   ///                  dispatch. `nullptr` measures nothing -- no timer runs, no
@@ -201,8 +201,8 @@ class VR_TSDF_API TsdfIntegrator {
   ///                  beneath this one. Without it that kernel's device time
   ///                  would fall into the gap above and read as submit
   ///                  overhead.
-  /// @return OK on success, or a non-OK @ref Status:
-  ///         @ref Status::Code::InvalidArgument if the integrator is
+  /// @return OK on success, or a non-OK `Status`:
+  ///         `Status::Code::InvalidArgument` if the integrator is
   ///         moved-from, @p depth is null, @p grid lacks a `float`
   ///         `tsdf`/`weight` attribute, @p color is set but empty or @p grid
   ///         lacks a `uint32` `color` attribute, or the active set is too large
@@ -224,7 +224,7 @@ class VR_TSDF_API TsdfIntegrator {
   ///               `cam.width * cam.height` floats, row-major. Borrowed for the
   ///               call; the writer's dispatch must have finished, which a
   ///               `dispatch` on this device guarantees.
-  /// @return As the host overload; @ref Status::Code::InvalidArgument also for
+  /// @return As the host overload; `Status::Code::InvalidArgument` also for
   ///         a @p depth that is empty, not a storage buffer, has unknown or
   ///         non-device-local memory, or is smaller than
   ///         the image.

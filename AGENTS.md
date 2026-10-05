@@ -68,7 +68,9 @@ core → volume → tsdf → mesh → texture → interop
   Asset I/O is host-side at file boundaries; Assimp is an optional private
   backend of `recon_io_assimp`, never a dependency of GPU kernels.
 - C++17, no compiler extensions. Namespace `volumetric_kit::recon` (`vr::` in
-  docs), nested per tier. Headers: `include/volumetric_kit/recon/<tier>/…`.
+  docs), nested per tier except `core`, which stays in `volumetric_kit::recon`:
+  recon declares no `core` namespace, so `core::` always means the core's.
+  Headers: `include/volumetric_kit/recon/<tier>/…`.
 - recon's own macros use `VR_`; `VK_` belongs to Vulkan. CMake targets use
   `volumetric_kit::recon_<tier>`; see [package targets](DESIGN.md#naming-conventions-use-these-consistently).
 - Fallible APIs return the core's `core::Status` / `core::Result<T>` and
@@ -93,7 +95,8 @@ core → volume → tsdf → mesh → texture → interop
 - Full Doxygen on public classes/functions, matching
   `include/volumetric_kit/recon/sensor/camera_capture.hpp`. Deleted
   copy/defaulted move declarations already convey ownership; do not repeat
-  "move-only" in prose.
+  "move-only" in prose. `@ref` only recon's own names; write the core's in
+  backticks (`Status::Code::Unsupported`).
 - No `friend` declarations. Test through public APIs with behavior-level tests.
 - Mark deferred work with a greppable `TODO:` comment (existing tier-tagged
   `TODO(mesh)` / `TODO(sensor)` comments remain useful task pointers).

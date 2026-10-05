@@ -4,7 +4,7 @@
 #pragma once
 
 /// @file examples/viewer/stage_metrics.hpp
-/// @brief The interop seam for timings: recon's @ref vkc::StageMetrics rows
+/// @brief The interop seam for timings: recon's `vkc::StageMetrics` rows
 ///        mapped into the renderer's @ref vg::FrameMetrics shape.
 ///
 /// This file used to *implement* the collector, because recon had none. It now

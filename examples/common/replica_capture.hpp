@@ -86,7 +86,7 @@ class ReplicaCapture final : public vr::sensor::ICameraCapture {
   /// @param cam_params_path  Path to the `cam_params.json` holding
   ///                         `w,h,fx,fy,cx,cy,scale`.
   /// @param options          Frame selection + depth range.
-  /// @return The capture, not yet started; or a non-OK @ref vkc::Status if the
+  /// @return The capture, not yet started; or a non-OK `vkc::Status` if the
   ///         intrinsics or trajectory cannot be read/parsed, if
   ///         `options.frame_stride` is 0, or if the depth range is rejected
   ///         (negative, or `min_depth` not below `max_depth`) -- named as this
@@ -137,7 +137,7 @@ class ReplicaCapture final : public vr::sensor::ICameraCapture {
   ///                the decode stops early and returns what it has, so a
   ///                caller shutting down is not held up by a long preload. The
   ///                frames it did not reach still decode on demand.
-  /// @return How many frames were cached, or a non-OK @ref vkc::Status (the
+  /// @return How many frames were cached, or a non-OK `vkc::Status` (the
   ///         capture is running, or a frame failed to decode).
   vkc::Result<std::size_t> preload(const std::atomic<bool>* cancel = nullptr);
 

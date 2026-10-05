@@ -126,7 +126,7 @@ struct MeshIntegrateStats {
 /// past @ref kMaxBinTriangles is refused rather than measured: decimate the
 /// mesh toward the voxel size first.
 ///
-/// @warning The @ref Device and @ref Allocator passed to @ref create must
+/// @warning The `Device` and `Allocator` passed to @ref create must
 ///          outlive this object; it stores references to them. The grid must be
 ///          quiescent across the call: the binning kernel probes its hash table
 ///          without a lock, as the mesh tier does.
@@ -152,7 +152,7 @@ class VR_TSDF_API MeshIntegrator {
   /// @param device     The compute device (must outlive this object).
   /// @param allocator  The allocator its retained buffers come from (must
   ///                   outlive this).
-  /// @return The integrator, or a non-OK @ref Status if a pipeline or
+  /// @return The integrator, or a non-OK `Status` if a pipeline or
   ///         descriptor object fails to build.
   static core::Result<MeshIntegrator> create(core::Device& device,
                                              core::Allocator& allocator);
@@ -181,8 +181,8 @@ class VR_TSDF_API MeshIntegrator {
   /// @param params          The mode, and the shell's thickness.
   /// @param metrics         Optional: receives a `"mesh integrate"` row with
   ///                        both halves.
-  /// @return What was written, or a non-OK @ref Status:
-  ///         @ref Status::Code::InvalidArgument for a moved-from integrator; a
+  /// @return What was written, or a non-OK `Status`:
+  ///         `Status::Code::InvalidArgument` for a moved-from integrator; a
   ///         grid without float `tsdf` / `weight`; an unknown mode or a shell
   ///         thickness outside `[sqrt(3)/2, trunc_dist)`; a null @p vertices /
   ///         @p indices with triangles to read, an index at or past

@@ -185,7 +185,7 @@ struct OrbbecStreamOptions {
 /// A camera wired as a sync secondary starts cleanly and then delivers nothing
 /// unless its primary streams; @ref device_info names its role. A camera the
 /// SDK reports removed never streams again through this object: @ref poll and
-/// @ref start return @ref Status::Code::IoError and @ref exhausted is `true`.
+/// @ref start return `Status::Code::IoError` and @ref exhausted is `true`.
 ///
 /// @warning Not thread-safe: open, start, poll and stop from one thread. The
 ///          SDK delivers frames on a thread of its own, which this class
@@ -222,16 +222,16 @@ class VR_SENSOR_ORBBEC_API OrbbecCapture final : public ICameraCapture {
   ///
   /// @param options  The camera and its streams.
   /// @return The capture, not yet started; or:
-  ///         - @ref Status::Code::InvalidArgument for options that cannot
+  ///         - `Status::Code::InvalidArgument` for options that cannot
   ///           describe a stream -- a zero size or rate, a depth range that is
   ///           negative, non-finite or empty, a pose that is not finite --
   ///           checked before the SDK is touched; or an empty
   ///           @ref Options::serial with more than one camera answering
   ///           within the discovery window;
-  ///         - @ref Status::Code::NotFound if no camera (or not the named one)
+  ///         - `Status::Code::NotFound` if no camera (or not the named one)
   ///           answered within @ref Options::discovery_timeout_ms, naming the
   ///           cameras that did;
-  ///         - @ref Status::Code::Unsupported if the camera has no depth or
+  ///         - `Status::Code::Unsupported` if the camera has no depth or
   ///           colour mode matching the options (the modes it offers are
   ///           listed), reports its image mirrored, flipped or rotated, or
   ///           is in software-triggering mode; for H.265 colour or raw
@@ -239,7 +239,7 @@ class VR_SENSOR_ORBBEC_API OrbbecCapture final : public ICameraCapture {
   ///           raw MJPEG) reports a calibration other than its RGB mode's,
   ///           or -- before the SDK is touched -- if the build has no video
   ///           decoders (VR_WITH_FFMPEG);
-  ///         - @ref Status::Code::IoError for any other SDK failure, with the
+  ///         - `Status::Code::IoError` for any other SDK failure, with the
   ///           SDK's message.
   static core::Result<OrbbecCapture> open(const Options& options);
 
@@ -262,13 +262,13 @@ class VR_SENSOR_ORBBEC_API OrbbecCapture final : public ICameraCapture {
   OrbbecCaptureStats stats() const noexcept;
 
   /// @brief Start both streams. Idempotent: starting a running capture is OK.
-  /// @return OK once streaming; @ref Status::Code::InvalidArgument on a
-  ///         moved-from capture; @ref Status::Code::IoError if the SDK refuses
+  /// @return OK once streaming; `Status::Code::InvalidArgument` on a
+  ///         moved-from capture; `Status::Code::IoError` if the SDK refuses
   ///         or the camera has disconnected. For H.265 colour, whose decoder
-  ///         opens here: @ref Status::Code::Unsupported if FFmpeg has no HEVC
-  ///         decoder, and @ref Status::Code::IoError if it will not open one
+  ///         opens here: `Status::Code::Unsupported` if FFmpeg has no HEVC
+  ///         decoder, and `Status::Code::IoError` if it will not open one
   ///         or its thread will not start. For raw MJPEG, likewise
-  ///         @ref Status::Code::IoError if the JPEG decoder will not open or
+  ///         `Status::Code::IoError` if the JPEG decoder will not open or
   ///         its thread will not start.
   core::Status start() override;
 
@@ -290,10 +290,10 @@ class VR_SENSOR_ORBBEC_API OrbbecCapture final : public ICameraCapture {
   ///
   /// @return The frame; an empty optional when no new pair has arrived, the
   ///         capture is not started, or the pair was skipped; or
-  ///         @ref Status::Code::IoError if the camera disconnected, a pair
+  ///         `Status::Code::IoError` if the camera disconnected, a pair
   ///         does not match the stream @ref open negotiated, or ~a second's
   ///         worth of pairs in a row could not be processed; and
-  ///         @ref Status::Code::InvalidArgument on a moved-from capture.
+  ///         `Status::Code::InvalidArgument` on a moved-from capture.
   core::Result<std::optional<CapturedFrame>> poll() override;
 
   /// @brief Take the newest synchronised pair not yet handed out, as the
@@ -305,9 +305,9 @@ class VR_SENSOR_ORBBEC_API OrbbecCapture final : public ICameraCapture {
   /// colour camera, composed with the camera's depth-to-colour extrinsic. The
   /// frame borrows the pair it was read from, until the next poll or
   /// @ref stop, as @ref poll's does.
-  /// @return As @ref poll; @ref Status::Code::InvalidArgument also when the
+  /// @return As @ref poll; `Status::Code::InvalidArgument` also when the
   ///         capture was not opened with @ref OrbbecStreamOptions::raw, and
-  ///         @ref poll returns it when it was; @ref Status::Code::Unsupported
+  ///         @ref poll returns it when it was; `Status::Code::Unsupported`
   ///         for a stream whose transfer or primaries @ref ColorEncoding
   ///         cannot name.
   core::Result<std::optional<RawFrame>> poll_raw() override;

@@ -135,7 +135,7 @@ namespace volumetric_kit::recon::texture {
 /// A registered image is the case where the two cameras are one, and every
 /// test above then passes wherever the depth camera's does.
 ///
-/// @warning The @ref Device and @ref Allocator passed to @ref create must
+/// @warning The `Device` and `Allocator` passed to @ref create must
 ///          outlive this object; it stores references to them.
 class VR_TEXTURE_API ProjectiveTexturer {
  public:
@@ -143,7 +143,7 @@ class VR_TEXTURE_API ProjectiveTexturer {
   /// @param device     The compute device (must outlive this object).
   /// @param allocator  The allocator its transient buffers come from (must
   ///                   outlive this).
-  /// @return The texturer, or a non-OK @ref Status if a pipeline or descriptor
+  /// @return The texturer, or a non-OK `Status` if a pipeline or descriptor
   ///         object fails to build.
   static core::Result<ProjectiveTexturer> create(core::Device& device,
                                                  core::Allocator& allocator);
@@ -181,13 +181,13 @@ class VR_TEXTURE_API ProjectiveTexturer {
   ///                  discontinuity bound the bilinear sampler falls back to
   ///                  nearest across, so it does not blend foreground and
   ///                  background depth at a surface edge.
-  /// @param metrics  Optional @ref StageMetrics collecting a `"texture"` host
+  /// @param metrics  Optional `StageMetrics` collecting a `"texture"` host
   ///                  row and, from a timestamp span around the dispatch, its
   ///                  device half. `nullptr` measures nothing. See
   ///                  @ref tsdf::TsdfIntegrator::integrate for why the two
   ///                  halves are worth separating.
   /// @return OK on success (including a mesh with no vertices, a no-op), or a
-  ///         non-OK @ref Status: @ref Status::Code::InvalidArgument if the
+  ///         non-OK `Status`: `Status::Code::InvalidArgument` if the
   ///         texturer is moved-from, @p depth is null, @p cam is empty, the
   ///         vertex count exceeds a single 1-D dispatch, or a vertex / depth
   ///         buffer would exceed the device `maxStorageBufferRange`; otherwise
@@ -217,13 +217,13 @@ class VR_TEXTURE_API ProjectiveTexturer {
   /// @param depth  As the host overload.
   /// @param cam    As the host overload.
   /// @param occlusion_threshold  As the host overload.
-  /// @param metrics  Optional @ref StageMetrics collecting a `"texture"` host
+  /// @param metrics  Optional `StageMetrics` collecting a `"texture"` host
   ///                  row and, from a timestamp span around the dispatch, its
   ///                  device half. `nullptr` measures nothing. See
   ///                  @ref tsdf::TsdfIntegrator::integrate for why the two
   ///                  halves are worth separating.
   /// @return OK on success, or the same failures as the host overload except
-  ///         those about host arrays; @ref Status::Code::InvalidArgument if
+  ///         those about host arrays; `Status::Code::InvalidArgument` if
   ///         @p mesh names no buffers or has been superseded.
   core::Status texture(const mesh::DeviceMesh& mesh, const float* depth,
                        const DepthCameraParams& cam,
@@ -239,7 +239,7 @@ class VR_TEXTURE_API ProjectiveTexturer {
   /// @param depth  A storage buffer holding at least `cam.width * cam.height`
   ///               floats, row-major, in metres. The writer's dispatch must
   ///               have finished, which a dispatch on this device guarantees.
-  /// @return As the host-depth overload; @ref Status::Code::InvalidArgument
+  /// @return As the host-depth overload; `Status::Code::InvalidArgument`
   ///         also for a @p depth that is empty, not a storage buffer, or
   ///         smaller than the image.
   core::Status texture(const mesh::DeviceMesh& mesh, const core::Buffer& depth,
@@ -276,7 +276,7 @@ class VR_TEXTURE_API ProjectiveTexturer {
   ///                of the colour camera's line of sight a surface must be to
   ///                block it.
   /// @param metrics  As the host overload.
-  /// @return As the overload above; @ref Status::Code::InvalidArgument also
+  /// @return As the overload above; `Status::Code::InvalidArgument` also
   ///         for a view with no depth or with both a host and a device one, a
   ///         colour camera with no image, an image size that is one-sided or
   ///         not the colour camera's, or a coverage that is not a storage
@@ -334,7 +334,7 @@ class VR_TEXTURE_API ProjectiveTexturer {
   /// @param occlusion_threshold  As the single-camera overload.
   /// @param metrics  Optional; a `"texture"` row, as the single-camera
   ///                 overload.
-  /// @return OK (an empty mesh is a no-op); @ref Status::Code::InvalidArgument
+  /// @return OK (an empty mesh is a no-op); `Status::Code::InvalidArgument`
   ///         for a moved-from texturer, no views, a view with no depth or with
   ///         both a host and a device one, a device depth or coverage that is
   ///         smaller than its image or cannot be copied from, an empty camera

@@ -124,7 +124,7 @@ static_assert(offsetof(MeshBin, begin) == 4, "MeshBin layout drift");
 static_assert(offsetof(MeshBin, count) == 8, "MeshBin layout drift");
 
 std::uint32_t group_count(std::uint32_t items) {
-  return volumetric_kit::core::group_count(items, kLocalSize);
+  return core::group_count(items, kLocalSize);
 }
 
 }  // namespace

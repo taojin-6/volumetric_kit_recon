@@ -117,7 +117,7 @@ struct AtlasLayout {
 /// @param max_extent  The largest atlas width and height the renderer takes:
 ///                    its device's `maxImageDimension2D`
 ///                    (@ref ProjectiveTexturer::max_atlas_extent).
-/// @return The layout; @ref Status::Code::InvalidArgument for no views, an
+/// @return The layout; `Status::Code::InvalidArgument` for no views, an
 ///         empty image, or an image or a stack of rows larger than
 ///         @p max_extent -- the code @ref ProjectiveTexturer::texture gives a
 ///         layout past the device's extent.
@@ -130,7 +130,7 @@ VR_TEXTURE_API core::Result<AtlasLayout> side_by_side_atlas(
 /// @param layout  Where each image goes.
 /// @param atlas   Resized to `layout.width * layout.height`; pixels no tile
 ///                covers are zero.
-/// @return OK; @ref Status::Code::InvalidArgument for a null @p atlas, an
+/// @return OK; `Status::Code::InvalidArgument` for a null @p atlas, an
 ///         image count other than the tile count, a null image, a tile
 ///         outside the atlas, or two tiles that overlap.
 VR_TEXTURE_API core::Status pack_atlas(

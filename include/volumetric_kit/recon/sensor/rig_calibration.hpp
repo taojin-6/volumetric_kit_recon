@@ -57,7 +57,7 @@ struct RigCameraCalibration {
 
 /// @brief Parse a calibration document.
 /// @return One entry per camera, ordered by serial; or
-///         @ref Status::Code::InvalidArgument naming what is wrong: not JSON,
+///         `Status::Code::InvalidArgument` naming what is wrong: not JSON,
 ///         no `device_calibration` object or no camera in it, a camera without
 ///         a `pose` of two 3-vectors, or a field that fails
 ///         @ref validate_rig_calibration.
@@ -66,7 +66,7 @@ parse_rig_calibration(const std::string& json);
 
 /// @brief Read and parse the calibration file at @p path.
 /// @return As @ref parse_rig_calibration, messages naming the file; or
-///         @ref Status::Code::IoError if it cannot be read.
+///         `Status::Code::IoError` if it cannot be read.
 VR_SENSOR_API core::Result<std::vector<RigCameraCalibration>>
 read_rig_calibration(const std::string& path);
 
@@ -80,9 +80,9 @@ VR_SENSOR_API core::Status validate_rig_calibration(
 /// @brief Write @p cameras as a calibration document (the
 ///        `device_calibration` section alone) that @ref read_rig_calibration
 ///        reads back to within float round-off.
-/// @return OK; @ref Status::Code::InvalidArgument for a calibration
+/// @return OK; `Status::Code::InvalidArgument` for a calibration
 ///         @ref validate_rig_calibration refuses; or
-///         @ref Status::Code::IoError if the file cannot be written.
+///         `Status::Code::IoError` if the file cannot be written.
 VR_SENSOR_API core::Status write_rig_calibration(
     const std::string& path, const std::vector<RigCameraCalibration>& cameras);
 

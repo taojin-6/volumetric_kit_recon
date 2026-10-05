@@ -83,7 +83,7 @@ struct OrbbecRigStats {
 /// @ref OrbbecStreamOptions::raw reads the same two ways raw, through
 /// @ref poll_raw_set and @ref poll_raw, and @ref raw_frames says so. Read
 /// one way between one @ref start and the next; the others return
-/// @ref Status::Code::InvalidArgument.
+/// `Status::Code::InvalidArgument`.
 ///
 /// @warning Not thread-safe: open, start, poll and stop from one thread.
 class VR_SENSOR_ORBBEC_API OrbbecRig final : public ICameraCapture {
@@ -115,17 +115,17 @@ class VR_SENSOR_ORBBEC_API OrbbecRig final : public ICameraCapture {
 
   /// @brief Find every camera, reconcile its sync settings, check its role and
   ///        streams, and read its calibration. Does not start streaming.
-  /// @return The rig; or @ref Status::Code::InvalidArgument for options that
+  /// @return The rig; or `Status::Code::InvalidArgument` for options that
   ///         cannot describe one (fewer than two cameras, a repeated serial,
   ///         a calibration that is invalid or misses a camera, a sync
   ///         tolerance of zero or of half a frame period or more, a stream
   ///         @ref OrbbecCapture::open would refuse);
-  ///         @ref Status::Code::NotFound naming the cameras that did not
-  ///         answer; @ref Status::Code::Unsupported for cameras whose sync
+  ///         `Status::Code::NotFound` naming the cameras that did not
+  ///         answer; `Status::Code::Unsupported` for cameras whose sync
   ///         settings differ from @ref Options::sync (named, field by field)
   ///         without @ref Options::apply_sync_config, for a rig that is not
   ///         one primary and its secondaries, or a camera
-  ///         @ref OrbbecCapture::open would refuse; @ref Status::Code::IoError
+  ///         @ref OrbbecCapture::open would refuse; `Status::Code::IoError`
   ///         for another SDK failure.
   static core::Result<OrbbecRig> open(const Options& options);
 
@@ -149,8 +149,8 @@ class VR_SENSOR_ORBBEC_API OrbbecRig final : public ICameraCapture {
 
   /// @brief Sync the cameras' clocks and start every camera, secondaries
   ///        first. Idempotent.
-  /// @return OK once all stream; @ref Status::Code::InvalidArgument on a
-  ///         moved-from rig; @ref Status::Code::IoError if a camera refuses
+  /// @return OK once all stream; `Status::Code::InvalidArgument` on a
+  ///         moved-from rig; `Status::Code::IoError` if a camera refuses
   ///         or has disconnected; for H.265 colour or raw MJPEG, what
   ///         @ref OrbbecCapture::start returns when a camera's decoder does
   ///         not start. On any failure, none is left streaming.
@@ -170,9 +170,9 @@ class VR_SENSOR_ORBBEC_API OrbbecRig final : public ICameraCapture {
   /// rig's sets.
   ///
   /// @return The set; an empty optional when none is ready or the rig is not
-  ///         started; @ref Status::Code::IoError if a camera disconnected or
+  ///         started; `Status::Code::IoError` if a camera disconnected or
   ///         its frames stopped processing (see @ref OrbbecCapture::poll);
-  ///         @ref Status::Code::InvalidArgument on a moved-from rig, a rig
+  ///         `Status::Code::InvalidArgument` on a moved-from rig, a rig
   ///         opened raw, or after another reader since the last
   ///         @ref start.
   core::Result<std::optional<OrbbecRigFrameSet>> poll_set();
@@ -182,7 +182,7 @@ class VR_SENSOR_ORBBEC_API OrbbecRig final : public ICameraCapture {
   ///        to them on the host. The cameras are independent, so
   ///        `sensor::prepare_set` prepares them on the GPU at once, one
   ///        thread per camera.
-  /// @return As @ref poll_set; @ref Status::Code::InvalidArgument also on a
+  /// @return As @ref poll_set; `Status::Code::InvalidArgument` also on a
   ///         rig not opened raw.
   core::Result<std::optional<OrbbecRigRawSet>> poll_raw_set();
 
