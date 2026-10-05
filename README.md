@@ -156,6 +156,26 @@ VR_TEST_HEVC_BACKEND=cuda ctest --test-dir build -R video
 It decodes on the first hardware back end that works (NVIDIA ahead of an
 integrated GPU on Linux), else in software.
 
+## Adaptive resolution
+
+`tsdf::AdaptiveGrid` fuses into 2 cm, 1 cm and 5 mm voxel block grids and
+gives a block finer voxels where the depth is systematically off the coarser
+surface; `owned_blocks(level)` says what each level meshes.
+`adaptive_viewer` (a `-DVR_BUILD_VIEWER=ON` build) shows it live, with the
+threshold (`eps mm`), the per-level block counts, and level colours in its
+Adaptive panel:
+
+```sh
+build/examples/viewer/adaptive_viewer <replica>/room0 --cam-params <replica>/cam_params.json --preload
+# live, with -DVR_WITH_ORBBEC=ON -DVR_WITH_FFMPEG=ON:
+build/examples/viewer/adaptive_viewer --orbbec --serial <serial>
+build/examples/viewer/adaptive_viewer --rig config/femto_mega_sync.json \
+    --calibration calib.json [--color 3840x2160]
+```
+
+Live runs fuse dynamically with a weight cap of 20 (`--static`,
+`--max-weight`). See the 2026-10-03 adaptive-resolution decision.
+
 ## Codec evaluation
 
 `codec_replica` runs the grid codec on a fused room sequence. `codec_mesh`

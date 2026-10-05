@@ -261,6 +261,14 @@ class VR_TSDF_API TsdfIntegrator {
                          IntegrationMode mode = IntegrationMode::Classic,
                          core::StageMetrics* metrics = nullptr);
 
+  /// @brief The frame checks @ref integrate runs before any work, for a caller
+  ///        that must refuse a set before it changes state of its own.
+  /// @param frames  As @ref integrate takes them.
+  /// @return OK, or the `Status::Code::InvalidArgument` @ref integrate
+  ///         would return for them: a moved-from integrator, or a depth or
+  ///         colour image it refuses. The grid's attributes are not checked.
+  core::Status check(const std::vector<FrameInput>& frames) const;
+
   /// @return `true` if this owns a live pipeline (`false` when moved-from).
   bool valid() const noexcept { return kernel_.valid(); }
 
