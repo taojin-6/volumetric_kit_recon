@@ -28,10 +28,21 @@ struct BlockIndex {
   int ptr;
 };
 
-// Camera intrinsics + pose + depth range. The integrate kernel derives world ->
-// camera from the rigid cam_to_world, so the pose is passed straight through --
-// no separate pre-inverted struct.
-#include "depth_camera.glsl"
+// Camera intrinsics + pose + depth range (mirrors DepthCameraParams
+// byte-for-byte: scalars at their 4-byte offsets, the cam_to_world mat4 at 32).
+// The integrate kernel derives world -> camera from the rigid cam_to_world, so
+// the pose is passed straight through -- no separate pre-inverted struct.
+struct DepthCameraParams {
+  float fx;
+  float fy;
+  float cx;
+  float cy;
+  float min_depth;
+  float max_depth;
+  uint width;
+  uint height;
+  mat4 cam_to_world;
+};
 
 // The (separate) color camera, mirroring ColorCameraParams byte-for-byte:
 // the color-camera analogue of DepthCameraParams without the (color-irrelevant)

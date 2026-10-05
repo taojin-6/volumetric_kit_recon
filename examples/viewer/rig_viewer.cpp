@@ -144,9 +144,6 @@ namespace win = volumetric_kit::gfx::windowing;
 
 namespace {
 
-using fuse_viewer::OrbitView;
-using fuse_viewer::ScrollInput;
-
 // Ctrl+C (or a SIGTERM) in the terminal closes the window rather than ending
 // the process there: the render loop then leaves as it does on a click, the
 // fuse thread stops the rig, and the cameras are released. Killed outright, the
@@ -397,6 +394,28 @@ bool parse_args(int argc, char** argv, Options& o) {
   return true;
 }
 
+// A turntable around `target`, about the primary camera's image-up axis.
+// recon's world is the rig's, whose cameras follow OpenCV (+Y down), so gfx's
+// OrbitCamera -- which fixes world +Y as up -- would stand it on its head.
+struct OrbitView {
+  glm::vec3 target{0.0f};
+  glm::vec3 up{0.0f, -1.0f, 0.0f};
+  glm::vec3 forward{0.0f, 0.0f, 1.0f};
+  glm::vec3 right{1.0f, 0.0f, 0.0f};
+  float distance = 2.0f;
+  float azimuth = 0.0f;
+  float elevation = 0.0f;
+
+  // At azimuth = elevation = 0 the eye is `distance` behind the target along
+  // `forward`: where the primary camera looks from, when it looks at it.
+  glm::vec3 eye() const {
+    const glm::vec3 around =
+        std::cos(azimuth) * -forward + std::sin(azimuth) * right;
+    return target +
+           distance * (std::cos(elevation) * around + std::sin(elevation) * up);
+  }
+};
+
 // The point nearest every camera's optical axis in the least-squares sense --
 // where a rig built around a subject is looking. `fallback` when the axes are
 // (nearly) parallel, as one camera's always is, or meet behind any camera.
@@ -421,6 +440,11 @@ glm::vec3 axes_meet(const std::vector<glm::mat4>& poses, glm::vec3 fallback) {
   }
   return p;
 }
+
+// Scroll arrives through a callback; the render loop reads what built up.
+struct ScrollInput {
+  double pending = 0.0;
+};
 
 // One atlas image: the gfx texture a mesh version's uv0 index into, and the
 // descriptor set binding it. Reused once nothing holds it but the pool (see
