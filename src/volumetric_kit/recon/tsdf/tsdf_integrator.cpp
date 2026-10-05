@@ -89,6 +89,7 @@ std::uint32_t group_count(std::uint32_t items) {
 
 Result<TsdfIntegrator> TsdfIntegrator::create(Device& device,
                                               Allocator& allocator) {
+  VR_TRY(check_device_requirements(device, "TsdfIntegrator::create"));
   TsdfIntegrator integ;
   integ.device_ = &device;
   integ.allocator_ = &allocator;

@@ -9400,9 +9400,11 @@ extensions. The core's default leaves `scalarBlockLayout` off, as calib needs
 none; so `Device::create(instance, gpu, {})`, which was right when `{}` was
 recon's own `DeviceConfig`, would now make a device recon's kernels cannot run
 on. Every call site passes `device_requirements()`, and an embedder merges it
-with its own. Nothing in recon can tell a device made without it, as the
-core's `Device` does not record the features it enabled; a `TODO(core)` on
-`device_requirements()` waits for that, so a kernel can refuse such a device.
+with its own. A device made without it is refused rather than run on: every
+recon `create` that builds kernels first calls `check_device_requirements`,
+which holds the device to `device_requirements()` through the core's
+`Device::check_enabled` (core #11). A device records what it enabled, as
+Vulkan cannot be asked, so the check sees an adopter's declaration too.
 `core/fwd.hpp` forward-declares the core's classes in its
 namespace and names them in `vr::`: a `class Device;` in `vr::` would declare
 an unrelated class that collides with the using-declaration.

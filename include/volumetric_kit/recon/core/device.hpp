@@ -51,25 +51,41 @@ using core::PhysicalDeviceInfo;
 /// device's creator, so a merged bootstrap that never hears of them does not
 /// silently send every decoded picture through the host.
 ///
-/// @warning Pass these to every `Device::create` and `Device::adopt` recon
-///          runs on. The core's default requirements leave
-///          `scalarBlockLayout` off, and nothing in recon can tell: its
-///          kernels are created and run without an error on such a device,
-///          with their buffers read at the wrong offsets.
+/// Pass these to every `Device::create` and `Device::adopt` recon runs on.
+/// The core's default requirements leave `scalarBlockLayout` off, and a
+/// recon class that builds kernels refuses such a device
+/// (@ref check_device_requirements).
 ///
 /// @code
 /// VR_ASSIGN(Device device,
 ///           Device::create(instance, gpu, device_requirements()));
 /// @endcode
 /// @return The requirements; a caller may add to them before creating.
-// TODO(core): refuse a device without scalarBlockLayout when a kernel is
-// created, once the core's Device records the features it enabled.
 inline DeviceRequirements device_requirements() {
   DeviceRequirements reqs;
   reqs.scalar_block_layout = true;
   reqs.optional_extensions = {VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
                               "VK_EXT_metal_objects"};
   return reqs;
+}
+
+/// @brief Refuse a device that did not enable what recon's kernels need.
+///
+/// Called first by every recon `create` that builds kernels: on a device
+/// without `scalarBlockLayout` the kernels would build and run without an
+/// error, reading their buffers at the wrong offsets. Optional extensions are
+/// not required.
+///
+/// @code
+/// VR_TRY(check_device_requirements(device, "MarchingCubes::create"));
+/// @endcode
+/// @param device  The device the kernels are for.
+/// @param who     The caller, prefixed to a refusal.
+/// @return OK; or `Device::check_enabled`'s @ref Status::Code::Unsupported
+///         naming what @ref device_requirements needs and the device did not
+///         enable.
+inline Status check_device_requirements(const Device& device, const char* who) {
+  return device.check_enabled(device_requirements()).with_context(who);
 }
 
 }  // namespace volumetric_kit::recon
