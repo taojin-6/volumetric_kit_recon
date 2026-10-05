@@ -23,10 +23,10 @@
 #include <vector>
 
 #include "grid_layout.hpp"
-#include "volumetric_kit/recon/core/allocator.hpp"
-#include "volumetric_kit/recon/core/device.hpp"
-#include "volumetric_kit/recon/core/result.hpp"
-#include "volumetric_kit/recon/core/stage_metrics.hpp"
+#include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/base/stage_metrics.hpp"
+#include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/recon/sensor/camera_capture.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
@@ -36,6 +36,7 @@
 namespace vr_example {
 
 namespace vr = volumetric_kit::recon;
+namespace vkc = volumetric_kit::core;
 
 /// @brief The volume every example fuses into: 8x8x8-voxel blocks hashed into
 ///        buckets of eight, carrying the three attributes @ref fuse_frame
@@ -53,8 +54,8 @@ namespace vr = volumetric_kit::recon;
 /// @param num_buckets  Initial hash-bucket count; `8 * num_buckets` must fit
 ///                     an `int32_t`.
 /// @return The grid, or @ref vr::volume::VoxelBlockGrid::create's error.
-inline vr::Result<vr::volume::VoxelBlockGrid> create_fusion_grid(
-    vr::Device& device, vr::Allocator& allocator, float voxel_size,
+inline vkc::Result<vr::volume::VoxelBlockGrid> create_fusion_grid(
+    vkc::Device& device, vkc::Allocator& allocator, float voxel_size,
     float trunc_dist, std::int32_t num_buckets = 16384) {
   const vr::volume::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
                                              {"weight", sizeof(float)},
@@ -67,12 +68,13 @@ inline vr::Result<vr::volume::VoxelBlockGrid> create_fusion_grid(
 /// @brief The loop both @ref allocate_band overloads run: @p allocate takes the
 ///        failures' split and returns the allocations that failed.
 template <typename Allocate>
-vr::Status allocate_band_with(vr::volume::VoxelBlockGrid& grid,
-                              Allocate&& allocate, vr::StageMetrics* metrics) {
+vkc::Status allocate_band_with(vr::volume::VoxelBlockGrid& grid,
+                               Allocate&& allocate,
+                               vkc::StageMetrics* metrics) {
   constexpr int kRounds = 5;
   for (int round = 0; round < kRounds; ++round) {
     vr::volume::AllocFailures failures;
-    VR_ASSIGN(const std::uint32_t failed, allocate(&failures));
+    VKC_ASSIGN(const std::uint32_t failed, allocate(&failures));
     if (failed == 0) {
       return {};
     }
@@ -90,7 +92,7 @@ vr::Status allocate_band_with(vr::volume::VoxelBlockGrid& grid,
         static_cast<std::int64_t>(grid.grid().num_buckets) * 2;
     if (grown * grid.grid().bucket_size >
         std::numeric_limits<std::int32_t>::max()) {
-      return vr::Status::out_of_memory(
+      return vkc::Status::out_of_memory(
           "allocate_band: map cannot grow further without overflowing the "
           "block index");
     }
@@ -100,18 +102,18 @@ vr::Status allocate_band_with(vr::volume::VoxelBlockGrid& grid,
     // consumer should poll it and grow on a threshold instead of waiting for
     // the failure -- linear probing degrades sharply past ~0.7, so growing at
     // the cliff means every insert before it ran at its slowest.
-    const vr::Result<float> load = grid.map().load_factor();
+    const vkc::Result<float> load = grid.map().load_factor();
     std::printf(
         "  map overflow at %.3f load (%u fails: %u chain, %u heap, %u table) "
         "-> resize to %lld buckets\n",
         load.ok() ? load.value() : -1.0f, failed, failures.chain, failures.heap,
         failures.table, static_cast<long long>(grown));
     {
-      vr::StageScope resize_span(metrics, "resize");
-      VR_TRY(grid.resize(static_cast<std::int32_t>(grown)));
+      vkc::StageScope resize_span(metrics, "resize");
+      VKC_TRY(grid.resize(static_cast<std::int32_t>(grown)));
     }
   }
-  return vr::Status::out_of_memory(
+  return vkc::Status::out_of_memory(
       "allocate_band: allocation kept overflowing after " +
       std::to_string(kRounds) + " rounds");
 }
@@ -139,19 +141,19 @@ vr::Status allocate_band_with(vr::volume::VoxelBlockGrid& grid,
 ///
 /// @param grid     The volume to allocate into.
 /// @param depth    The depth image: a host array (`const float*`) or a device
-///                 `vr::Buffer`, whichever `allocate_from_depth` overload the
+///                 `vkc::Buffer`, whichever `allocate_from_depth` overload the
 ///                 frame's source feeds.
 /// @param camera   Its camera, which drives the unprojection and the range
 ///                 gate.
 /// @param metrics  Optional stage rows (`"allocate"`, `"resize"`); null
 ///                 measures nothing.
 /// @return OK once every surface block is allocated; @ref
-///         vr::Status::Code::OutOfMemory if the map cannot grow further or
+///         vkc::Status::Code::OutOfMemory if the map cannot grow further or
 ///         kept overflowing after five rounds; or the tier's own error.
 template <typename Depth>
-vr::Status allocate_band(vr::volume::VoxelBlockGrid& grid, const Depth& depth,
-                         const vr::DepthCameraParams& camera,
-                         vr::StageMetrics* metrics) {
+vkc::Status allocate_band(vr::volume::VoxelBlockGrid& grid, const Depth& depth,
+                          const vr::DepthCameraParams& camera,
+                          vkc::StageMetrics* metrics) {
   return allocate_band_with(
       grid,
       [&](vr::volume::AllocFailures* failures) {
@@ -162,10 +164,10 @@ vr::Status allocate_band(vr::volume::VoxelBlockGrid& grid, const Depth& depth,
 
 /// @brief @ref allocate_band for several cameras' frames at once, each round
 ///        one submit for them all.
-inline vr::Status allocate_band(
+inline vkc::Status allocate_band(
     vr::volume::VoxelBlockGrid& grid,
     const std::vector<vr::volume::DepthInput>& frames,
-    vr::StageMetrics* metrics) {
+    vkc::StageMetrics* metrics) {
   return allocate_band_with(
       grid,
       [&](vr::volume::AllocFailures* failures) {
@@ -190,11 +192,11 @@ inline vr::Status allocate_band(
 /// @param max_weight  The running-average cap (`TsdfIntegrator::integrate`).
 /// @param metrics     Optional stage rows; null measures nothing.
 /// @return OK, or the first error of the two steps.
-inline vr::Status fuse_frame(vr::volume::VoxelBlockGrid& grid,
-                             vr::tsdf::TsdfIntegrator& integrator,
-                             const vr::sensor::CapturedFrame& frame,
-                             float max_weight, vr::StageMetrics* metrics) {
-  VR_TRY(allocate_band(grid, frame.depth, frame.depth_camera, metrics));
+inline vkc::Status fuse_frame(vr::volume::VoxelBlockGrid& grid,
+                              vr::tsdf::TsdfIntegrator& integrator,
+                              const vr::sensor::CapturedFrame& frame,
+                              float max_weight, vkc::StageMetrics* metrics) {
+  VKC_TRY(allocate_band(grid, frame.depth, frame.depth_camera, metrics));
   const vr::tsdf::ColorFrame color{frame.color, frame.color_camera,
                                    frame.color_encoding};
   return integrator.integrate(grid, frame.depth, frame.depth_camera, max_weight,

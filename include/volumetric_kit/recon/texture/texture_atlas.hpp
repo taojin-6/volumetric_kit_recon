@@ -15,9 +15,9 @@
 #include <optional>
 #include <vector>
 
+#include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/recon/core/camera_params.hpp"
 #include "volumetric_kit/recon/core/fwd.hpp"
-#include "volumetric_kit/recon/core/result.hpp"
 #include "volumetric_kit/recon/texture/export.hpp"
 
 namespace volumetric_kit::recon::texture {
@@ -73,7 +73,7 @@ struct TextureView {
   /// device guarantees. Held, not borrowed, so a `GpuFramePrep` that hands
   /// out its frames' buffers reuses this one only once no view holds it
   /// either. Null when @ref depth holds the depth instead.
-  std::shared_ptr<const Buffer> depth_buffer = nullptr;
+  std::shared_ptr<const core::Buffer> depth_buffer = nullptr;
   /// The camera the tile's image was taken with, when it is not registered to
   /// @ref cam. Unset (the default) means registered, as described above.
   std::optional<ColorCameraParams> color_camera = std::nullopt;
@@ -83,7 +83,7 @@ struct TextureView {
   /// nothing. A vertex on such a pixel is not textured from this view. Bound
   /// as storage or copied from, as @ref depth_buffer is, and held as it is.
   /// Null (the default) means every pixel of the image counts.
-  std::shared_ptr<const Buffer> coverage = nullptr;
+  std::shared_ptr<const core::Buffer> coverage = nullptr;
   /// Whether this view textures only the triangles no other view qualifies
   /// for: among the views that do, any one not marked wins over any marked
   /// one, whatever their scores. For a frame older than the rest, such as a
@@ -117,11 +117,11 @@ struct AtlasLayout {
 /// @param max_extent  The largest atlas width and height the renderer takes:
 ///                    its device's `maxImageDimension2D`
 ///                    (@ref ProjectiveTexturer::max_atlas_extent).
-/// @return The layout; @ref Status::Code::InvalidArgument for no views, an
+/// @return The layout; `Status::Code::InvalidArgument` for no views, an
 ///         empty image, or an image or a stack of rows larger than
 ///         @p max_extent -- the code @ref ProjectiveTexturer::texture gives a
 ///         layout past the device's extent.
-VR_TEXTURE_API Result<AtlasLayout> side_by_side_atlas(
+VR_TEXTURE_API core::Result<AtlasLayout> side_by_side_atlas(
     const std::vector<TextureView>& views, std::uint32_t max_extent);
 
 /// @brief Copy each view's image into its tile of @p atlas.
@@ -130,11 +130,11 @@ VR_TEXTURE_API Result<AtlasLayout> side_by_side_atlas(
 /// @param layout  Where each image goes.
 /// @param atlas   Resized to `layout.width * layout.height`; pixels no tile
 ///                covers are zero.
-/// @return OK; @ref Status::Code::InvalidArgument for a null @p atlas, an
+/// @return OK; `Status::Code::InvalidArgument` for a null @p atlas, an
 ///         image count other than the tile count, a null image, a tile
 ///         outside the atlas, or two tiles that overlap.
-VR_TEXTURE_API Status
-pack_atlas(const std::vector<const std::uint32_t*>& images,
-           const AtlasLayout& layout, std::vector<std::uint32_t>* atlas);
+VR_TEXTURE_API core::Status pack_atlas(
+    const std::vector<const std::uint32_t*>& images, const AtlasLayout& layout,
+    std::vector<std::uint32_t>* atlas);
 
 }  // namespace volumetric_kit::recon::texture

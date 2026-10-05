@@ -28,6 +28,7 @@
 #include "volumetric_kit/recon/sensor/orbbec/orbbec_capture.hpp"
 
 namespace vr = volumetric_kit::recon;
+namespace vkc = volumetric_kit::core;
 namespace sensor = volumetric_kit::recon::sensor;
 
 #define CHECK(cond)                                                        \
@@ -40,7 +41,7 @@ namespace sensor = volumetric_kit::recon::sensor;
 
 #define CHECK_OK(expr)                                                        \
   do {                                                                        \
-    const vr::Status _s = (expr);                                             \
+    const vkc::Status _s = (expr);                                            \
     if (!_s.ok()) {                                                           \
       std::fprintf(stderr, "FAIL %s:%d: %s: %s\n", __FILE__, __LINE__, #expr, \
                    _s.message().c_str());                                     \
@@ -131,7 +132,7 @@ int main() {
     hevc.color_codec = sensor::OrbbecColorCodec::Hevc;
     const auto t0 = std::chrono::steady_clock::now();
     const auto refused = sensor::OrbbecCapture::open(hevc);
-    CHECK(refused.status().domain() == vr::Status::Code::Unsupported);
+    CHECK(refused.status().domain() == vkc::Status::Code::Unsupported);
     CHECK(std::chrono::steady_clock::now() - t0 < std::chrono::seconds(1));
   }
 #endif
@@ -320,7 +321,7 @@ int main() {
   for (const double g : gains) CHECK(g > 0.95 && g < 1.05);
 #else
   // Built without the HEVC decoder: H.265 colour is refused, not faked.
-  CHECK(hevc_opened.status().domain() == vr::Status::Code::Unsupported);
+  CHECK(hevc_opened.status().domain() == vkc::Status::Code::Unsupported);
 #endif
 
   std::printf("orbbec capture tests passed\n");

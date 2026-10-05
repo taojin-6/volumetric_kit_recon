@@ -15,10 +15,10 @@
 #include <utility>
 #include <vector>
 
-#include "volumetric_kit/recon/core/device.hpp"
-#include "volumetric_kit/recon/core/external_memory.hpp"
-#include "volumetric_kit/recon/core/image.hpp"
-#include "volumetric_kit/recon/core/vulkan.hpp"
+#include "volumetric_kit/core/vulkan/device.hpp"
+#include "volumetric_kit/core/vulkan/external_memory.hpp"
+#include "volumetric_kit/core/vulkan/image.hpp"
+#include "volumetric_kit/core/vulkan/vulkan.hpp"
 
 namespace volumetric_kit::recon::sensor::video {
 namespace {
@@ -36,8 +36,8 @@ struct Surface {
   Surface& operator=(const Surface&) = delete;
 
   IOSurfaceRef surface;
-  Image luma;
-  Image chroma;
+  core::Image luma;
+  core::Image chroma;
   std::uint64_t seen = 0;  // the last picture that arrived on it
 };
 
@@ -59,11 +59,11 @@ struct Held {
 // @p image bound to memory of its own, or null. MoltenVK binds a texture's
 // own storage, so the memory is a formality: device-local and not
 // host-visible, which it would back with a buffer.
-VkDeviceMemory bind_memory(const Device& device, VkImage image) {
+VkDeviceMemory bind_memory(const core::Device& device, VkImage image) {
   const VkDevice dev = device.handle();
   VkMemoryRequirements needs{};
   vkGetImageMemoryRequirements(dev, image, &needs);
-  const std::optional<std::uint32_t> type = find_memory_type(
+  const std::optional<std::uint32_t> type = core::find_memory_type(
       device, needs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
   if (!type) return VK_NULL_HANDLE;
@@ -85,29 +85,29 @@ VkDeviceMemory bind_memory(const Device& device, VkImage image) {
 }  // namespace
 
 struct VtPictures::Impl {
-  const Device* device = nullptr;
+  const core::Device* device = nullptr;
   const char* who = nullptr;
   id<MTLDevice> metal = nil;  // the one MoltenVK runs the device on
   std::vector<std::shared_ptr<Surface>> surfaces;
   std::uint64_t pictures = 0;
 
-  Status error(const std::string& what) const {
-    return Status::io_error(std::string(who) + ": " + what);
+  core::Status error(const std::string& what) const {
+    return core::Status::io_error(std::string(who) + ": " + what);
   }
 
   // Plane @p plane of @p surface as an image of @p format, still UNDEFINED.
-  Result<Image> plane_image(CVPixelBufferRef pixels, IOSurfaceRef surface,
-                            int plane, VkFormat format,
-                            MTLPixelFormat metal_format);
+  core::Result<core::Image> plane_image(CVPixelBufferRef pixels,
+                                        IOSurfaceRef surface, int plane,
+                                        VkFormat format,
+                                        MTLPixelFormat metal_format);
   // @p surface's two planes as images in GENERAL.
-  Result<std::shared_ptr<Surface>> import_surface(CVPixelBufferRef pixels,
-                                                  IOSurfaceRef surface);
+  core::Result<std::shared_ptr<Surface>> import_surface(CVPixelBufferRef pixels,
+                                                        IOSurfaceRef surface);
 };
 
-Result<Image> VtPictures::Impl::plane_image(CVPixelBufferRef pixels,
-                                            IOSurfaceRef surface, int plane,
-                                            VkFormat format,
-                                            MTLPixelFormat metal_format) {
+core::Result<core::Image> VtPictures::Impl::plane_image(
+    CVPixelBufferRef pixels, IOSurfaceRef surface, int plane, VkFormat format,
+    MTLPixelFormat metal_format) {
   const auto width =
       static_cast<std::uint32_t>(CVPixelBufferGetWidthOfPlane(pixels, plane));
   const auto height =
@@ -151,26 +151,26 @@ Result<Image> VtPictures::Impl::plane_image(CVPixelBufferRef pixels,
     vkDestroyImage(dev, image, nullptr);
     return error("binding a picture plane");
   }
-  ImageInfo adopted;
+  core::ImageInfo adopted;
   adopted.image = image;
   adopted.format = format;
   adopted.extent = info.extent;
   adopted.usage = info.usage;
   adopted.layout = VK_IMAGE_LAYOUT_GENERAL;
-  return Image(adopted, [dev, image, memory_handle, texture] {
+  return core::Image(adopted, [dev, image, memory_handle, texture] {
     vkDestroyImage(dev, image, nullptr);
     vkFreeMemory(dev, memory_handle, nullptr);
     static_cast<void>(texture);  // released with the capture
   });
 }
 
-Result<std::shared_ptr<Surface>> VtPictures::Impl::import_surface(
+core::Result<std::shared_ptr<Surface>> VtPictures::Impl::import_surface(
     CVPixelBufferRef pixels, IOSurfaceRef surface) {
   auto out = std::make_shared<Surface>(surface);
-  VR_ASSIGN(out->luma, plane_image(pixels, surface, 0, VK_FORMAT_R8_UNORM,
-                                   MTLPixelFormatR8Unorm));
-  VR_ASSIGN(out->chroma, plane_image(pixels, surface, 1, VK_FORMAT_R8G8_UNORM,
-                                     MTLPixelFormatRG8Unorm));
+  VKC_ASSIGN(out->luma, plane_image(pixels, surface, 0, VK_FORMAT_R8_UNORM,
+                                    MTLPixelFormatR8Unorm));
+  VKC_ASSIGN(out->chroma, plane_image(pixels, surface, 1, VK_FORMAT_R8G8_UNORM,
+                                      MTLPixelFormatRG8Unorm));
   // Into GENERAL, once. Vulkan may discard contents on a transition from
   // UNDEFINED, but Metal has no layouts, so MoltenVK keeps them.
   VkImageMemoryBarrier b[2]{};
@@ -187,7 +187,7 @@ Result<std::shared_ptr<Surface>> VtPictures::Impl::import_surface(
   }
   // The surface rides along: should the submit fail with the barrier still on
   // the device, the device keeps the images it names until it has run.
-  VR_TRY(device->submit_single_time(
+  VKC_TRY(device->submit_single_time(
       [&](VkCommandBuffer cmd) {
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                              VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
@@ -197,12 +197,12 @@ Result<std::shared_ptr<Surface>> VtPictures::Impl::import_surface(
   return out;
 }
 
-Result<std::unique_ptr<VtPictures>> VtPictures::create(const Device& device,
-                                                       const char* who) {
+core::Result<std::unique_ptr<VtPictures>> VtPictures::create(
+    const core::Device& device, const char* who) {
   if (!device.imports_metal_textures()) {
-    return Status::unsupported(std::string(who) +
-                               ": the device imports no Metal textures "
-                               "(VK_EXT_metal_objects)");
+    return core::Status::unsupported(std::string(who) +
+                                     ": the device imports no Metal textures "
+                                     "(VK_EXT_metal_objects)");
   }
   // The MTLDevice, off the texture of a probe image: exporting the device
   // itself needs the instance to have asked for it when it was made, which
@@ -244,8 +244,8 @@ Result<std::unique_ptr<VtPictures>> VtPictures::create(const Device& device,
   vkDestroyImage(dev, probe, nullptr);
   vkFreeMemory(dev, memory, nullptr);
   if (metal == nil) {
-    return Status::unsupported(std::string(who) +
-                               ": the device names no Metal device");
+    return core::Status::unsupported(std::string(who) +
+                                     ": the device names no Metal device");
   }
   auto impl = std::make_unique<Impl>();
   impl->device = &device;
@@ -257,8 +257,9 @@ Result<std::unique_ptr<VtPictures>> VtPictures::create(const Device& device,
 VtPictures::VtPictures(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
 VtPictures::~VtPictures() = default;
 
-Result<bool> VtPictures::import(CVPixelBufferRef pixels, std::uint32_t width,
-                                std::uint32_t height, DecodedPicture& out) {
+core::Result<bool> VtPictures::import(CVPixelBufferRef pixels,
+                                      std::uint32_t width, std::uint32_t height,
+                                      DecodedPicture& out) {
   const OSType format = CVPixelBufferGetPixelFormatType(pixels);
   IOSurfaceRef surface = CVPixelBufferGetIOSurface(pixels);
   if ((format != kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange &&
@@ -286,7 +287,7 @@ Result<bool> VtPictures::import(CVPixelBufferRef pixels, std::uint32_t width,
   if (found != surfaces.end()) {
     entry = *found;
   } else {
-    VR_ASSIGN(entry, impl.import_surface(pixels, surface));
+    VKC_ASSIGN(entry, impl.import_surface(pixels, surface));
     surfaces.push_back(entry);
   }
   entry->seen = now;
@@ -297,8 +298,8 @@ Result<bool> VtPictures::import(CVPixelBufferRef pixels, std::uint32_t width,
   out.plane[0] = out.plane[1] = out.plane[2] = nullptr;
   out.stride[0] = out.stride[1] = out.stride[2] = 0;
   out.device = nullptr;
-  out.image[0] = std::shared_ptr<const Image>(held, &entry->luma);
-  out.image[1] = std::shared_ptr<const Image>(held, &entry->chroma);
+  out.image[0] = std::shared_ptr<const core::Image>(held, &entry->luma);
+  out.image[1] = std::shared_ptr<const core::Image>(held, &entry->chroma);
   return true;
 }
 

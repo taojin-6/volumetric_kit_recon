@@ -29,11 +29,12 @@
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 
+#include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/shared_device.hpp"
+#include "volumetric_kit/core/vulkan/vk_result.hpp"
 #include "volumetric_kit/gfx/app/windowed_app.hpp"
 #include "volumetric_kit/gfx/core/device.hpp"
-#include "volumetric_kit/recon/core/device.hpp"
-#include "volumetric_kit/recon/core/vk_result.hpp"
+#include "volumetric_kit/recon/core/device_requirements.hpp"
 
 namespace fuse_viewer {
 
@@ -120,13 +121,13 @@ inline std::unique_ptr<vkc::SharedDevice> build_shared_device(
   shared.graphics =
       detail::core_requirements(vg::Device::requirements(gfx_config));
   shared.make_surface =
-      [window](VkInstance instance) -> vr::Result<VkSurfaceKHR> {
+      [window](VkInstance instance) -> vkc::Result<VkSurfaceKHR> {
     VkSurfaceKHR surface = VK_NULL_HANDLE;
-    VR_VK_TRY(glfwCreateWindowSurface(instance, window, nullptr, &surface));
+    VKC_VK_TRY(glfwCreateWindowSurface(instance, window, nullptr, &surface));
     return surface;
   };
 
-  vr::Result<std::unique_ptr<vkc::SharedDevice>> made =
+  vkc::Result<std::unique_ptr<vkc::SharedDevice>> made =
       vkc::SharedDevice::create(shared);
   if (!made) {
     std::fprintf(stderr, "shared device: %s\n",

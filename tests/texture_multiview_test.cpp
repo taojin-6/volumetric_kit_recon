@@ -37,13 +37,14 @@
 #include <utility>
 #include <vector>
 
-#include "volumetric_kit/recon/core/allocator.hpp"
-#include "volumetric_kit/recon/core/buffer.hpp"
-#include "volumetric_kit/recon/core/compute_util.hpp"
-#include "volumetric_kit/recon/core/device.hpp"
-#include "volumetric_kit/recon/core/instance.hpp"
+#include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "volumetric_kit/core/vulkan/buffer.hpp"
+#include "volumetric_kit/core/vulkan/compute_util.hpp"
+#include "volumetric_kit/core/vulkan/device.hpp"
+#include "volumetric_kit/core/vulkan/instance.hpp"
+#include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
-#include "volumetric_kit/recon/core/result.hpp"
 #include "volumetric_kit/recon/mesh/mesh.hpp"
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
 #include "volumetric_kit/recon/texture/texture_atlas.hpp"
@@ -51,6 +52,7 @@
 #include "buffer_readback.hpp"
 
 namespace vr = volumetric_kit::recon;
+namespace vkc = volumetric_kit::core;
 namespace tex = volumetric_kit::recon::texture;
 namespace rmesh = volumetric_kit::recon::mesh;
 
@@ -230,22 +232,22 @@ void add_small_triangle(rmesh::Mesh& m, float x, float y, float size,
 // `data` in a new device-local buffer, held as a view holds one; `usage`
 // defaults to device_storage_buffer's.
 template <typename T>
-std::shared_ptr<const vr::Buffer> to_device(
-    const vr::Device& device, vr::Allocator& allocator,
+std::shared_ptr<const vkc::Buffer> to_device(
+    const vkc::Device& device, vkc::Allocator& allocator,
     const std::vector<T>& data,
     VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
                                VK_BUFFER_USAGE_TRANSFER_DST_BIT) {
-  vr::BufferDesc desc;
+  vkc::BufferDesc desc;
   desc.size = VkDeviceSize(data.size()) * sizeof(T);
   desc.usage = usage;
-  desc.memory = vr::MemoryUsage::DeviceOnly;
-  vr::Result<vr::Buffer> buffer = allocator.create_buffer(desc);
+  desc.memory = vkc::MemoryUsage::DeviceOnly;
+  vkc::Result<vkc::Buffer> buffer = allocator.create_buffer(desc);
   if (!buffer ||
       !vr_test::write_back(device, allocator, buffer.value(), data).ok()) {
     return nullptr;
   }
-  return std::make_shared<const vr::Buffer>(std::move(buffer).value());
+  return std::make_shared<const vkc::Buffer>(std::move(buffer).value());
 }
 
 // Colour camera `k`'s image marking its coverage as GpuFramePrep does: grey
@@ -308,7 +310,7 @@ int check_triangle(const rmesh::Mesh& m, std::size_t t, int want,
 int texture_alone(tex::ProjectiveTexturer& texturer,
                   const tex::TextureView& view, int want, rmesh::Mesh m) {
   const std::vector<tex::TextureView> one = {view};
-  vr::Result<tex::AtlasLayout> layout =
+  vkc::Result<tex::AtlasLayout> layout =
       tex::side_by_side_atlas(one, texturer.max_atlas_extent());
   CHECK(layout.ok());
   CHECK(texturer.texture(m, one, layout.value()).ok());
@@ -318,26 +320,26 @@ int texture_alone(tex::ProjectiveTexturer& texturer,
 }  // namespace
 
 int main() {
-  vr::Result<vr::Instance> instance = vr::Instance::create({});
+  vkc::Result<vkc::Instance> instance = vkc::Instance::create({});
   if (!instance) {
     std::fprintf(stderr, "no Vulkan instance (%s); skipping\n",
                  instance.status().message().c_str());
     return 0;
   }
-  vr::Result<vr::PhysicalDeviceInfo> gpu =
+  vkc::Result<vkc::PhysicalDeviceInfo> gpu =
       instance.value().select_physical_device(vr::device_requirements());
   if (!gpu) {
     std::fprintf(stderr, "no compute-capable device (%s); skipping\n",
                  gpu.status().message().c_str());
     return 0;
   }
-  vr::Result<vr::Device> device = vr::Device::create(
+  vkc::Result<vkc::Device> device = vkc::Device::create(
       instance.value(), gpu.value(), vr::device_requirements());
   CHECK(device.ok());
-  vr::Result<vr::Allocator> allocator =
-      vr::Allocator::create(instance.value().handle(), device.value());
+  vkc::Result<vkc::Allocator> allocator =
+      vkc::Allocator::create(instance.value().handle(), device.value());
   CHECK(allocator.ok());
-  vr::Result<tex::ProjectiveTexturer> created =
+  vkc::Result<tex::ProjectiveTexturer> created =
       tex::ProjectiveTexturer::create(device.value(), allocator.value());
   CHECK(created.ok());
   tex::ProjectiveTexturer texturer = std::move(created).value();
@@ -388,7 +390,7 @@ int main() {
     rmesh::Mesh facing;
     add_wall_triangle(facing, -0.3f, 0.3f);
     identity_indices(facing);
-    vr::Result<tex::AtlasLayout> one =
+    vkc::Result<tex::AtlasLayout> one =
         tex::side_by_side_atlas({views[0]}, texturer.max_atlas_extent());
     CHECK(one.ok());
     CHECK(texturer.texture(facing, {views[0]}, one.value()).ok());
@@ -405,7 +407,7 @@ int main() {
     tex::TextureView low{half_depth.data(), half, kW, kH};
     const std::vector<tex::TextureView> lows = {low};
     const std::vector<tex::TextureView> fulls = {views[1]};
-    vr::Result<tex::AtlasLayout> layout =
+    vkc::Result<tex::AtlasLayout> layout =
         tex::side_by_side_atlas(lows, texturer.max_atlas_extent());
     CHECK(layout.ok());
     CHECK(layout->width == kW && layout->height == kH);
@@ -429,13 +431,13 @@ int main() {
     lopsided.image_height = 0;
     CHECK(tex::side_by_side_atlas({lopsided}, texturer.max_atlas_extent())
               .status()
-              .domain() == vr::Status::Code::InvalidArgument);
+              .domain() == vkc::Status::Code::InvalidArgument);
   }
 
   // One row: three views stay side by side, 960 x 240, tiles at x = 0, 320,
   // 640.
   {
-    vr::Result<tex::AtlasLayout> layout =
+    vkc::Result<tex::AtlasLayout> layout =
         tex::side_by_side_atlas(views, texturer.max_atlas_extent());
     CHECK(layout.ok());
     CHECK(layout->width == 3 * kW && layout->height == kH);
@@ -453,7 +455,7 @@ int main() {
   // one, which view 0 cannot take, and the right goes to view 0.
   {
     std::vector<tex::TextureView> two = {views[1], views[0]};
-    vr::Result<tex::AtlasLayout> layout =
+    vkc::Result<tex::AtlasLayout> layout =
         tex::side_by_side_atlas(two, texturer.max_atlas_extent());
     CHECK(layout.ok());
     for (const bool fallback : {false, true}) {
@@ -472,7 +474,7 @@ int main() {
   // Two rows: an extent of 700 fits two tiles a row, so view 2 wraps to the
   // second, at (0, 240) of a 640 x 480 atlas.
   {
-    vr::Result<tex::AtlasLayout> layout = tex::side_by_side_atlas(views, 700);
+    vkc::Result<tex::AtlasLayout> layout = tex::side_by_side_atlas(views, 700);
     CHECK(layout.ok());
     CHECK(layout->width == 2 * kW && layout->height == 2 * kH);
     CHECK(layout->tiles[2].x == 0 && layout->tiles[2].y == kH);
@@ -491,7 +493,7 @@ int main() {
   // sizes, so the pass's own depth buffer holds zeros going in: a copy that
   // moved nothing would read those, not the host run's identical bytes.
   {
-    vr::Result<tex::AtlasLayout> layout =
+    vkc::Result<tex::AtlasLayout> layout =
         tex::side_by_side_atlas(views, texturer.max_atlas_extent());
     CHECK(layout.ok());
     rmesh::Mesh from_host = mesh;
@@ -542,7 +544,7 @@ int main() {
     for (tex::TextureView& v : colored) {
       v.color_camera = color_beside(v.cam, 0.05f);
     }
-    vr::Result<tex::AtlasLayout> layout =
+    vkc::Result<tex::AtlasLayout> layout =
         tex::side_by_side_atlas(colored, texturer.max_atlas_extent());
     CHECK(layout.ok());
     CHECK(layout->width == 3 * 640 && layout->height == 480);
@@ -560,19 +562,19 @@ int main() {
     wrong.image_height = kH;
     CHECK(tex::side_by_side_atlas({wrong}, texturer.max_atlas_extent())
               .status()
-              .domain() == vr::Status::Code::InvalidArgument);
+              .domain() == vkc::Status::Code::InvalidArgument);
     std::vector<tex::TextureView> wrong_views = colored;
     wrong_views[0] = wrong;
     rmesh::Mesh untouched = mesh;
     CHECK(texturer.texture(untouched, wrong_views, layout.value()).domain() ==
-          vr::Status::Code::InvalidArgument);
+          vkc::Status::Code::InvalidArgument);
     CHECK(untouched.vertices[0].uv0 == vr::Vec2f(0.25f, 0.25f));
     // So is a colour camera with no image.
     tex::TextureView blank = colored[0];
     blank.color_camera->width = 0;
     CHECK(tex::side_by_side_atlas({blank}, texturer.max_atlas_extent())
               .status()
-              .domain() == vr::Status::Code::InvalidArgument);
+              .domain() == vkc::Status::Code::InvalidArgument);
   }
 
   // The colour camera must see the triangle as well: the centre triangle,
@@ -613,7 +615,7 @@ int main() {
     for (tex::TextureView& v : colored) {
       v.color_camera = color_beside(v.cam, 0.05f);
     }
-    vr::Result<tex::AtlasLayout> layout =
+    vkc::Result<tex::AtlasLayout> layout =
         tex::side_by_side_atlas(colored, texturer.max_atlas_extent());
     CHECK(layout.ok());
     rmesh::Mesh from_host = mesh;
@@ -699,7 +701,7 @@ int main() {
 
     for (const tex::TextureView* first : {&right, &left, &registered}) {
       const std::vector<tex::TextureView> two = {*first, clear};
-      vr::Result<tex::AtlasLayout> layout =
+      vkc::Result<tex::AtlasLayout> layout =
           tex::side_by_side_atlas(two, texturer.max_atlas_extent());
       CHECK(layout.ok());
       rmesh::Mesh m = fringe;
@@ -774,7 +776,7 @@ int main() {
   // divides).
   {
     const std::vector<tex::TextureView> one = {views[0]};
-    vr::Result<tex::AtlasLayout> layout =
+    vkc::Result<tex::AtlasLayout> layout =
         tex::side_by_side_atlas(one, texturer.max_atlas_extent());
     CHECK(layout.ok());
     rmesh::Mesh multi = mesh;
@@ -798,7 +800,7 @@ int main() {
     small.height = 2;
     const std::vector<tex::TextureView> two = {{nullptr, small},
                                                {nullptr, small}};
-    vr::Result<tex::AtlasLayout> layout = tex::side_by_side_atlas(two, 16);
+    vkc::Result<tex::AtlasLayout> layout = tex::side_by_side_atlas(two, 16);
     CHECK(layout.ok());
     CHECK(layout->width == 8 && layout->height == 2);
     const std::vector<std::uint32_t> a(8, 0xaaaaaau);
@@ -814,16 +816,16 @@ int main() {
     CHECK(!tex::pack_atlas({a.data()}, layout.value(), &atlas).ok());
     CHECK(!tex::pack_atlas({a.data(), nullptr}, layout.value(), &atlas).ok());
     CHECK(tex::pack_atlas({a.data(), b.data()}, layout.value(), nullptr)
-              .domain() == vr::Status::Code::InvalidArgument);
+              .domain() == vkc::Status::Code::InvalidArgument);
     // Two tiles over one another: the second would overwrite the first.
     tex::AtlasLayout overlapping = layout.value();
     overlapping.tiles[1].x = 2;
     CHECK(tex::pack_atlas({a.data(), b.data()}, overlapping, &atlas).domain() ==
-          vr::Status::Code::InvalidArgument);
+          vkc::Status::Code::InvalidArgument);
     // Three 4-wide in an extent of 8: two rows, the second half empty.
     const std::vector<tex::TextureView> three = {
         {nullptr, small}, {nullptr, small}, {nullptr, small}};
-    vr::Result<tex::AtlasLayout> wrapped = tex::side_by_side_atlas(three, 8);
+    vkc::Result<tex::AtlasLayout> wrapped = tex::side_by_side_atlas(three, 8);
     CHECK(wrapped.ok());
     CHECK(wrapped->width == 8 && wrapped->height == 4);
     CHECK(wrapped->tiles[2].x == 0 && wrapped->tiles[2].y == 2);
@@ -834,14 +836,14 @@ int main() {
     CHECK(packed[3 * 8 + 5] == 0u);  // nothing covers it
     // In a wide extent, three stay in one row, four make two rows of two, and
     // five three columns.
-    vr::Result<tex::AtlasLayout> row = tex::side_by_side_atlas(three, 64);
+    vkc::Result<tex::AtlasLayout> row = tex::side_by_side_atlas(three, 64);
     CHECK(row.ok() && row->width == 12 && row->height == 2);
     const std::vector<tex::TextureView> four(4, {nullptr, small});
-    vr::Result<tex::AtlasLayout> square = tex::side_by_side_atlas(four, 64);
+    vkc::Result<tex::AtlasLayout> square = tex::side_by_side_atlas(four, 64);
     CHECK(square.ok() && square->width == 8 && square->height == 4);
     CHECK(square->tiles[3].x == 4 && square->tiles[3].y == 2);
     const std::vector<tex::TextureView> five(5, {nullptr, small});
-    vr::Result<tex::AtlasLayout> wide = tex::side_by_side_atlas(five, 64);
+    vkc::Result<tex::AtlasLayout> wide = tex::side_by_side_atlas(five, 64);
     CHECK(wide.ok() && wide->width == 12 && wide->height == 4);
     CHECK(wide->tiles[3].x == 0 && wide->tiles[3].y == 2);
     // Two views a row, unless the second would pass the extent: 4 + 6 > 8.
@@ -849,33 +851,33 @@ int main() {
     wider.width = 6;
     const std::vector<tex::TextureView> uneven = {{nullptr, small},
                                                   {nullptr, wider}};
-    vr::Result<tex::AtlasLayout> early = tex::side_by_side_atlas(uneven, 8);
+    vkc::Result<tex::AtlasLayout> early = tex::side_by_side_atlas(uneven, 8);
     CHECK(early.ok() && early->width == 6 && early->height == 4);
     CHECK(early->tiles[1].x == 0 && early->tiles[1].y == 2);
     CHECK(tex::side_by_side_atlas({}, 16).status().domain() ==
-          vr::Status::Code::InvalidArgument);
+          vkc::Status::Code::InvalidArgument);
     // Past the extent is InvalidArgument, as texture() says of a layout past
     // the device's.
     CHECK(tex::side_by_side_atlas(two, 3).status().domain() ==
-          vr::Status::Code::InvalidArgument);  // wider than the extent
+          vkc::Status::Code::InvalidArgument);  // wider than the extent
     CHECK(tex::side_by_side_atlas(three, 4).status().domain() ==
-          vr::Status::Code::InvalidArgument);  // three rows of 2 > 4 tall
+          vkc::Status::Code::InvalidArgument);  // three rows of 2 > 4 tall
     vr::DepthCameraParams empty = small;
     empty.width = 0;
     CHECK(tex::side_by_side_atlas({{nullptr, empty}}, 16).status().domain() ==
-          vr::Status::Code::InvalidArgument);
+          vkc::Status::Code::InvalidArgument);
   }
 
   // Refusals, each before anything is written.
   {
-    vr::Result<tex::AtlasLayout> layout =
+    vkc::Result<tex::AtlasLayout> layout =
         tex::side_by_side_atlas(views, texturer.max_atlas_extent());
     CHECK(layout.ok());
     const auto refused = [&](rmesh::Mesh m,
                              const std::vector<tex::TextureView>& v,
                              const tex::AtlasLayout& l) {
-      const vr::Status s = texturer.texture(m, v, l);
-      return s.domain() == vr::Status::Code::InvalidArgument &&
+      const vkc::Status s = texturer.texture(m, v, l);
+      return s.domain() == vkc::Status::Code::InvalidArgument &&
              m.vertices[0].uv0 == vr::Vec2f(0.25f, 0.25f);
     };
     CHECK(refused(mesh, {}, layout.value()));  // no views
@@ -916,23 +918,23 @@ int main() {
     // Device depth: given beside the host one, a float short of its map,
     // empty, and in a buffer a batch cannot copy from.
     const VkDeviceSize map_bytes = VkDeviceSize(kW) * kH * sizeof(float);
-    vr::Result<vr::Buffer> whole =
-        vr::device_storage_buffer(allocator.value(), map_bytes);
-    vr::Result<vr::Buffer> short_map =
-        vr::device_storage_buffer(allocator.value(), map_bytes - sizeof(float));
-    vr::Result<vr::Buffer> no_copy = allocator.value().create_buffer(
+    vkc::Result<vkc::Buffer> whole =
+        vkc::device_storage_buffer(allocator.value(), map_bytes);
+    vkc::Result<vkc::Buffer> short_map = vkc::device_storage_buffer(
+        allocator.value(), map_bytes - sizeof(float));
+    vkc::Result<vkc::Buffer> no_copy = allocator.value().create_buffer(
         {map_bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT});
     CHECK(whole.ok() && short_map.ok() && no_copy.ok());
     CHECK((no_copy->usage() & VK_BUFFER_USAGE_TRANSFER_SRC_BIT) == 0);
     std::vector<tex::TextureView> both = views;
     both[1].depth_buffer =
-        std::make_shared<const vr::Buffer>(std::move(whole).value());
+        std::make_shared<const vkc::Buffer>(std::move(whole).value());
     CHECK(refused(mesh, both, layout.value()));
-    const std::shared_ptr<const vr::Buffer> bad_buffers[] = {
-        std::make_shared<const vr::Buffer>(std::move(short_map).value()),
-        std::make_shared<const vr::Buffer>(),
-        std::make_shared<const vr::Buffer>(std::move(no_copy).value())};
-    for (const std::shared_ptr<const vr::Buffer>& bad : bad_buffers) {
+    const std::shared_ptr<const vkc::Buffer> bad_buffers[] = {
+        std::make_shared<const vkc::Buffer>(std::move(short_map).value()),
+        std::make_shared<const vkc::Buffer>(),
+        std::make_shared<const vkc::Buffer>(std::move(no_copy).value())};
+    for (const std::shared_ptr<const vkc::Buffer>& bad : bad_buffers) {
       std::vector<tex::TextureView> device_view = views;
       device_view[1].depth = nullptr;
       device_view[1].depth_buffer = bad;

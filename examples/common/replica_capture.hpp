@@ -26,14 +26,15 @@
 #include <vector>
 
 #include "rgbd_frame.hpp"
+#include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/recon/core/camera_params.hpp"
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
-#include "volumetric_kit/recon/core/result.hpp"
 #include "volumetric_kit/recon/sensor/camera_capture.hpp"
 
 namespace vr_example {
 
 namespace vr = volumetric_kit::recon;
+namespace vkc = volumetric_kit::core;
 
 /// @brief A Replica-SLAM RGB-D sequence -- `<scene>/results/frameNNNNNN.jpg` +
 ///        `depthNNNNNN.png`, per-frame poses in `<scene>/traj.txt`, intrinsics
@@ -85,15 +86,15 @@ class ReplicaCapture final : public vr::sensor::ICameraCapture {
   /// @param cam_params_path  Path to the `cam_params.json` holding
   ///                         `w,h,fx,fy,cx,cy,scale`.
   /// @param options          Frame selection + depth range.
-  /// @return The capture, not yet started; or a non-OK @ref vr::Status if the
+  /// @return The capture, not yet started; or a non-OK `vkc::Status` if the
   ///         intrinsics or trajectory cannot be read/parsed, if
   ///         `options.frame_stride` is 0, or if the depth range is rejected
   ///         (negative, or `min_depth` not below `max_depth`) -- named as this
   ///         capture's, so a caller that never set one of the two knows which
   ///         default it is arguing with.
-  static vr::Result<ReplicaCapture> open(const std::string& scene_dir,
-                                         const std::string& cam_params_path,
-                                         const Options& options);
+  static vkc::Result<ReplicaCapture> open(const std::string& scene_dir,
+                                          const std::string& cam_params_path,
+                                          const Options& options);
 
   // Hand-written rather than defaulted so a moved-from capture is EMPTY: a
   // defaulted move empties the vectors but copies `end_`, `running_` and
@@ -136,9 +137,9 @@ class ReplicaCapture final : public vr::sensor::ICameraCapture {
   ///                the decode stops early and returns what it has, so a
   ///                caller shutting down is not held up by a long preload. The
   ///                frames it did not reach still decode on demand.
-  /// @return How many frames were cached, or a non-OK @ref vr::Status (the
+  /// @return How many frames were cached, or a non-OK `vkc::Status` (the
   ///         capture is running, or a frame failed to decode).
-  vr::Result<std::size_t> preload(const std::atomic<bool>* cancel = nullptr);
+  vkc::Result<std::size_t> preload(const std::atomic<bool>* cancel = nullptr);
 
   /// @return Bytes @ref preload would hold, so a caller can report the cost up
   ///         front rather than discover it after a multi-gigabyte decode.
@@ -150,7 +151,7 @@ class ReplicaCapture final : public vr::sensor::ICameraCapture {
   /// @brief Begin playback. Idempotent: starting a running capture leaves its
   ///        position alone. After @ref stop, playback resumes from the first
   ///        frame.
-  vr::Status start() override;
+  vkc::Status start() override;
 
   /// @brief Stop playback and drop the frame the last @ref poll handed out.
   ///        Idempotent. The @ref preload cache is kept.
@@ -170,7 +171,7 @@ class ReplicaCapture final : public vr::sensor::ICameraCapture {
   ///         started; or the decode error of a frame that is on disk but
   ///         unreadable, which leaves the position unchanged so the next poll
   ///         retries the same frame.
-  vr::Result<std::optional<vr::sensor::CapturedFrame>> poll() override;
+  vkc::Result<std::optional<vr::sensor::CapturedFrame>> poll() override;
 
   /// @return `true` once every frame this capture plays has been handed out
   ///         (or there were none) -- the replay's end of sequence, which its
@@ -184,7 +185,7 @@ class ReplicaCapture final : public vr::sensor::ICameraCapture {
   // Decode one frame straight from disk, bypassing the cache, fully stamped:
   // the poll path hands out its view as is. The preload path shares it so
   // both decode identically.
-  vr::Result<RgbdFrame> load(std::size_t index) const;
+  vkc::Result<RgbdFrame> load(std::size_t index) const;
 
   Options options_{};
   float depth_scale_ = 1.0f;  ///< Units per metre: metres = raw_uint16 / this.

@@ -8,6 +8,27 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
+- `core`: **recon's names for the core's types and macros.** `vr::Status`,
+  `vr::Result`, `vr::Device`, `vr::Buffer` and every other core type or
+  function `core/` re-exported into `vr::` are gone, with the headers that did
+  it (`result.hpp`, `check.hpp`, `vk_result.hpp`, `vulkan.hpp`,
+  `allocator.hpp`, `buffer.hpp`, `command_batch.hpp`, `compute_kernel.hpp`,
+  `compute_pipeline.hpp`, `compute_util.hpp`, `descriptor.hpp`,
+  `external_memory.hpp`, `gpu_timer.hpp`, `image.hpp`, `instance.hpp`,
+  `shader.hpp`, `stage_metrics.hpp`, `unique_handle.hpp`), and so are
+  `VR_TRY`, `VR_ASSIGN`, `VR_CHECK` and `VR_VK_TRY`. Migrating:
+  - `vr::X` is `volumetric_kit::core::X`; include the core's header of the
+    same name, `volumetric_kit/core/base/` for `result`, `check` and
+    `stage_metrics`, `volumetric_kit/core/vulkan/` for the rest.
+  - `VR_TRY`, `VR_ASSIGN`, `VR_CHECK` and `VR_VK_TRY` are `VKC_TRY`,
+    `VKC_ASSIGN`, `VKC_CHECK` and `VKC_VK_TRY`.
+  - `core/device.hpp` is `core/device_requirements.hpp`, holding only
+    `vr::device_requirements()` and `vr::check_device_requirements()`.
+  - `vr::log_message` and `vr::kLogSource` stay; `LogLevel`, `LogHandler` and
+    `set_log_handler` are the core's.
+  - `core/fwd.hpp` forward-declares the core's classes in the core's namespace
+    only.
+
 - `volume`: **`VoxelBlockGrid`'s move assignment**. A grid is move-
   constructible only; replace one with `std::optional::emplace`, as the iOS
   scanner and the codec examples already do. The assignment had to name every

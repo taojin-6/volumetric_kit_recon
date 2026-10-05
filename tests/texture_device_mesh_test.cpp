@@ -30,12 +30,13 @@
 #include <utility>
 #include <vector>
 
-#include "volumetric_kit/recon/core/allocator.hpp"
-#include "volumetric_kit/recon/core/compute_util.hpp"
-#include "volumetric_kit/recon/core/device.hpp"
-#include "volumetric_kit/recon/core/gpu_timer.hpp"
-#include "volumetric_kit/recon/core/instance.hpp"
-#include "volumetric_kit/recon/core/stage_metrics.hpp"
+#include "volumetric_kit/core/base/stage_metrics.hpp"
+#include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "volumetric_kit/core/vulkan/compute_util.hpp"
+#include "volumetric_kit/core/vulkan/device.hpp"
+#include "volumetric_kit/core/vulkan/gpu_timer.hpp"
+#include "volumetric_kit/core/vulkan/instance.hpp"
+#include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
 #include "volumetric_kit/recon/mesh/mesh.hpp"
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
@@ -46,6 +47,7 @@
 #include "grid_readback.hpp"
 
 namespace vr = volumetric_kit::recon;
+namespace vkc = volumetric_kit::core;
 namespace vol = volumetric_kit::recon::volume;
 namespace mesh = volumetric_kit::recon::mesh;
 namespace rtex = volumetric_kit::recon::texture;
@@ -80,8 +82,8 @@ bool near(vr::Vec2f a, vr::Vec2f b, float tolerance) {
   return std::fabs(a.x - b.x) <= tolerance && std::fabs(a.y - b.y) <= tolerance;
 }
 
-const vr::StageRow* find_row(const vr::StageMetrics& m, const char* name) {
-  for (const vr::StageRow& row : m.rows()) {
+const vkc::StageRow* find_row(const vkc::StageMetrics& m, const char* name) {
+  for (const vkc::StageRow& row : m.rows()) {
     if (std::strcmp(row.name, name) == 0) return &row;
   }
   return nullptr;
@@ -133,10 +135,10 @@ bool fill_grid(const vr_test::Gpu& ctx, vol::VoxelBlockGrid& grid,
       }
     }
   }
-  vr::Result<std::uint32_t> failed = grid.map().allocate(
+  vkc::Result<std::uint32_t> failed = grid.map().allocate(
       blocks.data(), static_cast<std::uint32_t>(blocks.size()));
   if (!failed || failed.value() != 0) return false;
-  vr::Result<std::vector<vol::BlockIndex>> active =
+  vkc::Result<std::vector<vol::BlockIndex>> active =
       grid.map().compact_active_blocks();
   if (!active) return false;
 
@@ -181,36 +183,36 @@ bool fill_grid(const vr_test::Gpu& ctx, vol::VoxelBlockGrid& grid,
 }  // namespace
 
 int main() {
-  vr::Result<vr::Instance> instance = vr::Instance::create({});
+  vkc::Result<vkc::Instance> instance = vkc::Instance::create({});
   if (!instance) {
     std::fprintf(stderr, "no Vulkan instance; skipping\n");
     return 0;
   }
-  vr::Result<vr::PhysicalDeviceInfo> gpu =
+  vkc::Result<vkc::PhysicalDeviceInfo> gpu =
       instance.value().select_physical_device(vr::device_requirements());
   if (!gpu) {
     std::fprintf(stderr, "no compute-capable device; skipping\n");
     return 0;
   }
-  vr::Result<vr::Device> device = vr::Device::create(
+  vkc::Result<vkc::Device> device = vkc::Device::create(
       instance.value(), gpu.value(), vr::device_requirements());
   CHECK(device.ok());
-  vr::Result<vr::Allocator> allocator =
-      vr::Allocator::create(instance.value().handle(), device.value());
+  vkc::Result<vkc::Allocator> allocator =
+      vkc::Allocator::create(instance.value().handle(), device.value());
   CHECK(allocator.ok());
   const vr_test::Gpu ctx{device.value(), allocator.value()};
-  vr::Result<mesh::MarchingCubes> extractor_result =
+  vkc::Result<mesh::MarchingCubes> extractor_result =
       mesh::MarchingCubes::create(device.value(), allocator.value());
   CHECK(extractor_result.ok());
   mesh::MarchingCubes extractor = std::move(extractor_result).value();
-  vr::Result<rtex::ProjectiveTexturer> texturer_result =
+  vkc::Result<rtex::ProjectiveTexturer> texturer_result =
       rtex::ProjectiveTexturer::create(device.value(), allocator.value());
   CHECK(texturer_result.ok());
   rtex::ProjectiveTexturer texturer = std::move(texturer_result).value();
 
   const vol::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
                                       {"weight", sizeof(float)}};
-  vr::Result<vol::VoxelBlockGrid> grid_result = vol::VoxelBlockGrid::create(
+  vkc::Result<vol::VoxelBlockGrid> grid_result = vol::VoxelBlockGrid::create(
       device.value(), allocator.value(), sphere_grid_params(), attrs, 2);
   CHECK(grid_result.ok());
   vol::VoxelBlockGrid grid = std::move(grid_result).value();
@@ -241,7 +243,7 @@ int main() {
 
   // One extraction feeds both paths, so the geometry -- and its order -- is
   // identical for the index-by-index comparison below.
-  vr::Result<mesh::DeviceMesh> device_mesh_result =
+  vkc::Result<mesh::DeviceMesh> device_mesh_result =
       extractor.extract_device(grid, 0.0f);
   CHECK(device_mesh_result.ok());
   const mesh::DeviceMesh device_mesh = device_mesh_result.value();
@@ -250,7 +252,7 @@ int main() {
   CHECK(device_mesh.vertex_count == device_mesh.triangle_count * 3);
 
   // Reference: the host path, on a copy taken before any texturing.
-  vr::Result<mesh::Mesh> host_result = extractor.download(device_mesh);
+  vkc::Result<mesh::Mesh> host_result = extractor.download(device_mesh);
   CHECK(host_result.ok());
   mesh::Mesh host_mesh = std::move(host_result).value();
   CHECK(host_mesh.vertices.size() == device_mesh.vertex_count);
@@ -262,21 +264,21 @@ int main() {
   // is otherwise covered nowhere -- deleting its timer argument or its publish
   // left the whole suite green. Every return between the stage scope and the
   // dispatch is a chance to skip the publish.
-  vr::StageMetrics metrics;
+  vkc::StageMetrics metrics;
   CHECK(texturer.texture(device_mesh, depth.data(), cam, 0.02f, &metrics).ok());
-  const vr::StageRow* row = find_row(metrics, "texture");
+  const vkc::StageRow* row = find_row(metrics, "texture");
   CHECK(row != nullptr);
   CHECK(row->cpu_ms > 0.0);
   // A device that reports timestamps must produce the device half here; one
   // that does not is a supported configuration, and the probe -- not the tier
   // under test -- is what tells the two apart.
-  vr::Result<vr::GpuTimer> probe = vr::GpuTimer::create(device.value());
+  vkc::Result<vkc::GpuTimer> probe = vkc::GpuTimer::create(device.value());
   CHECK(probe.ok());
   if (probe.value().available()) {
     CHECK(row->has_gpu);
     CHECK(row->gpu_ms < row->cpu_ms);
   }
-  vr::Result<mesh::Mesh> device_result = extractor.download(device_mesh);
+  vkc::Result<mesh::Mesh> device_result = extractor.download(device_mesh);
   CHECK(device_result.ok());
   const mesh::Mesh device_out = std::move(device_result).value();
 
@@ -318,7 +320,7 @@ int main() {
   {
     const std::vector<float> nothing(depth.size(), 0.0f);
     CHECK(texturer.texture(device_mesh, nothing.data(), cam).ok());
-    vr::Result<mesh::Mesh> scrambled = extractor.download(device_mesh);
+    vkc::Result<mesh::Mesh> scrambled = extractor.download(device_mesh);
     CHECK(scrambled.ok());
     std::size_t differ = 0;
     for (std::size_t i = 0; i < host_mesh.vertices.size(); ++i) {
@@ -330,25 +332,25 @@ int main() {
 
     std::vector<float> padded = depth;
     padded.push_back(-1.0f);
-    vr::Result<vr::Buffer> device_depth = vr::device_storage_buffer(
+    vkc::Result<vkc::Buffer> device_depth = vkc::device_storage_buffer(
         allocator.value(), padded.size() * sizeof(float));
     CHECK(device_depth.ok());
     CHECK(vr_test::write_back(device.value(), allocator.value(),
                               device_depth.value(), padded)
               .ok());
     CHECK(texturer.texture(device_mesh, device_depth.value(), cam).ok());
-    vr::Result<mesh::Mesh> restored = extractor.download(device_mesh);
+    vkc::Result<mesh::Mesh> restored = extractor.download(device_mesh);
     CHECK(restored.ok());
     for (std::size_t i = 0; i < host_mesh.vertices.size(); ++i) {
       CHECK(restored.value().vertices[i].uv0 == host_mesh.vertices[i].uv0);
     }
 
     // Refused: a buffer a word short of the image, and an empty one.
-    vr::Result<vr::Buffer> short_depth = vr::device_storage_buffer(
+    vkc::Result<vkc::Buffer> short_depth = vkc::device_storage_buffer(
         allocator.value(), depth.size() * sizeof(float) - sizeof(float));
     CHECK(short_depth.ok());
     CHECK(!texturer.texture(device_mesh, short_depth.value(), cam).ok());
-    CHECK(!texturer.texture(device_mesh, vr::Buffer{}, cam).ok());
+    CHECK(!texturer.texture(device_mesh, vkc::Buffer{}, cam).ok());
   }
 
   // A colour camera of its own, as a GpuFramePrep frame has: the depth on the
@@ -367,14 +369,14 @@ int main() {
   // gives every vertex the sentinel, though the depth camera sees half of
   // them.
   {
-    vr::Result<vr::Buffer> depth_result = vr::device_storage_buffer(
+    vkc::Result<vkc::Buffer> depth_result = vkc::device_storage_buffer(
         allocator.value(), depth.size() * sizeof(float));
     CHECK(depth_result.ok());
     CHECK(vr_test::write_back(device.value(), allocator.value(),
                               depth_result.value(), depth)
               .ok());
     const auto device_depth =
-        std::make_shared<const vr::Buffer>(std::move(depth_result).value());
+        std::make_shared<const vkc::Buffer>(std::move(depth_result).value());
     const auto view_from = [&](const vr::ColorCameraParams& k) {
       rtex::TextureView view;
       view.cam = cam;
@@ -385,7 +387,7 @@ int main() {
 
     const std::vector<float> nothing(depth.size(), 0.0f);
     CHECK(texturer.texture(device_mesh, nothing.data(), cam).ok());
-    vr::Result<mesh::Mesh> blind = extractor.download(device_mesh);
+    vkc::Result<mesh::Mesh> blind = extractor.download(device_mesh);
     CHECK(blind.ok());
     for (const mesh::Vertex& v : blind.value().vertices) {
       CHECK(v.uv0.x < 0.0f);
@@ -394,7 +396,7 @@ int main() {
                                      cam.cy,          cam.width, cam.height,
                                      cam.cam_to_world};
     CHECK(texturer.texture(device_mesh, view_from(same)).ok());
-    vr::Result<mesh::Mesh> as_same = extractor.download(device_mesh);
+    vkc::Result<mesh::Mesh> as_same = extractor.download(device_mesh);
     CHECK(as_same.ok());
     for (std::size_t i = 0; i < host_mesh.vertices.size(); ++i) {
       const vr::Vec2f got = as_same.value().vertices[i].uv0;
@@ -414,13 +416,13 @@ int main() {
     aside.cam_to_world[3] += vr::Vec4f(0.05f, 0.0f, 0.0f, 0.0f);
     // Timed, as the registered overloads are: this is the one a device frame
     // takes, and nothing else would notice it dropping its row.
-    vr::StageMetrics color_metrics;
+    vkc::StageMetrics color_metrics;
     CHECK(texturer.texture(device_mesh, view_from(aside), 0.02f, &color_metrics)
               .ok());
-    const vr::StageRow* color_row = find_row(color_metrics, "texture");
+    const vkc::StageRow* color_row = find_row(color_metrics, "texture");
     CHECK(color_row != nullptr);
     CHECK(color_row->cpu_ms > 0.0);
-    vr::Result<mesh::Mesh> as_aside = extractor.download(device_mesh);
+    vkc::Result<mesh::Mesh> as_aside = extractor.download(device_mesh);
     CHECK(as_aside.ok());
     std::size_t textured_aside = 0;
     for (std::size_t i = 0; i < host_mesh.vertices.size(); ++i) {
@@ -445,7 +447,7 @@ int main() {
       for (std::size_t y = 0; y < 256; ++y) {
         for (std::size_t x = 0; x < 128; ++x) half[y * 256 + x] = 0xFF404040u;
       }
-      vr::Result<vr::Buffer> coverage = vr::device_storage_buffer(
+      vkc::Result<vkc::Buffer> coverage = vkc::device_storage_buffer(
           allocator.value(), half.size() * sizeof(std::uint32_t));
       CHECK(coverage.ok());
       CHECK(vr_test::write_back(device.value(), allocator.value(),
@@ -453,9 +455,9 @@ int main() {
                 .ok());
       rtex::TextureView covered = view_from(aside);
       covered.coverage =
-          std::make_shared<const vr::Buffer>(std::move(coverage).value());
+          std::make_shared<const vkc::Buffer>(std::move(coverage).value());
       CHECK(texturer.texture(device_mesh, covered).ok());
-      vr::Result<mesh::Mesh> as_covered = extractor.download(device_mesh);
+      vkc::Result<mesh::Mesh> as_covered = extractor.download(device_mesh);
       CHECK(as_covered.ok());
       std::size_t left = 0;
       std::size_t right = 0;
@@ -478,24 +480,24 @@ int main() {
       }
       CHECK(left > 0 && right > 0);
 
-      vr::Result<vr::Buffer> short_coverage = vr::device_storage_buffer(
+      vkc::Result<vkc::Buffer> short_coverage = vkc::device_storage_buffer(
           allocator.value(), half.size() * sizeof(std::uint32_t) - 4);
-      vr::BufferDesc copy_only;
+      vkc::BufferDesc copy_only;
       copy_only.size = half.size() * sizeof(std::uint32_t);
       copy_only.usage =
           VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-      copy_only.memory = vr::MemoryUsage::DeviceOnly;
-      vr::Result<vr::Buffer> unbindable =
+      copy_only.memory = vkc::MemoryUsage::DeviceOnly;
+      vkc::Result<vkc::Buffer> unbindable =
           allocator.value().create_buffer(copy_only);
       CHECK(short_coverage.ok() && unbindable.ok());
-      covered.coverage =
-          std::make_shared<const vr::Buffer>(std::move(short_coverage).value());
+      covered.coverage = std::make_shared<const vkc::Buffer>(
+          std::move(short_coverage).value());
       CHECK(texturer.texture(device_mesh, covered).domain() ==
-            vr::Status::Code::InvalidArgument);
+            vkc::Status::Code::InvalidArgument);
       covered.coverage =
-          std::make_shared<const vr::Buffer>(std::move(unbindable).value());
+          std::make_shared<const vkc::Buffer>(std::move(unbindable).value());
       CHECK(texturer.texture(device_mesh, covered).domain() ==
-            vr::Status::Code::InvalidArgument);
+            vkc::Status::Code::InvalidArgument);
     }
 
     // A colour camera too narrow for all the depth camera sees: 16 x 16 at the
@@ -509,7 +511,7 @@ int main() {
     narrow.width = 16;
     narrow.height = 16;
     CHECK(texturer.texture(device_mesh, view_from(narrow)).ok());
-    vr::Result<mesh::Mesh> as_narrow = extractor.download(device_mesh);
+    vkc::Result<mesh::Mesh> as_narrow = extractor.download(device_mesh);
     CHECK(as_narrow.ok());
     std::size_t inside = 0;
     std::size_t outside = 0;
@@ -542,7 +544,7 @@ int main() {
     away.cam_to_world[0] = -aside.cam_to_world[0];
     away.cam_to_world[2] = -aside.cam_to_world[2];
     CHECK(texturer.texture(device_mesh, view_from(away)).ok());
-    vr::Result<mesh::Mesh> as_away = extractor.download(device_mesh);
+    vkc::Result<mesh::Mesh> as_away = extractor.download(device_mesh);
     CHECK(as_away.ok());
     for (const mesh::Vertex& v : as_away.value().vertices) {
       CHECK(v.uv0 == vr::Vec2f(-1.0f, -1.0f));
@@ -553,15 +555,15 @@ int main() {
     vr::ColorCameraParams blank = aside;
     blank.height = 0;
     CHECK(texturer.texture(device_mesh, view_from(blank)).domain() ==
-          vr::Status::Code::InvalidArgument);
+          vkc::Status::Code::InvalidArgument);
     rtex::TextureView both = view_from(aside);
     both.depth = depth.data();
     CHECK(texturer.texture(device_mesh, both).domain() ==
-          vr::Status::Code::InvalidArgument);
+          vkc::Status::Code::InvalidArgument);
     rtex::TextureView neither = view_from(aside);
     neither.depth_buffer = nullptr;
     CHECK(texturer.texture(device_mesh, neither).domain() ==
-          vr::Status::Code::InvalidArgument);
+          vkc::Status::Code::InvalidArgument);
   }
 
   // Without MarchingCubesConfig::share_vertices -- this extractor's default --
@@ -600,7 +602,7 @@ int main() {
   }
   const std::vector<rtex::TextureView> views = {{depth.data(), cam},
                                                 {depth.data(), side}};
-  vr::Result<rtex::AtlasLayout> layout =
+  vkc::Result<rtex::AtlasLayout> layout =
       rtex::side_by_side_atlas(views, texturer.max_atlas_extent());
   CHECK(layout.ok());
   {
@@ -608,19 +610,19 @@ int main() {
     CHECK(texturer.texture(host_views, views, layout.value()).ok());
     // Timed, for the reason the single-camera call above is: nothing else
     // would notice this overload losing its stage scope or its publish.
-    vr::StageMetrics views_metrics;
+    vkc::StageMetrics views_metrics;
     CHECK(
         texturer
             .texture(device_mesh, views, layout.value(), 0.02f, &views_metrics)
             .ok());
-    const vr::StageRow* views_row = find_row(views_metrics, "texture");
+    const vkc::StageRow* views_row = find_row(views_metrics, "texture");
     CHECK(views_row != nullptr);
     CHECK(views_row->cpu_ms > 0.0);
     if (probe.value().available()) {
       CHECK(views_row->has_gpu);
       CHECK(views_row->gpu_ms < views_row->cpu_ms);
     }
-    vr::Result<mesh::Mesh> read = extractor.download(device_mesh);
+    vkc::Result<mesh::Mesh> read = extractor.download(device_mesh);
     CHECK(read.ok());
     const mesh::Mesh& device_views = read.value();
     CHECK(device_views.vertices.size() == host_views.vertices.size());
@@ -642,12 +644,12 @@ int main() {
   // must -- downloading a superseded view would silently return the newer
   // geometry under the older counts.
   {
-    vr::Result<mesh::DeviceMesh> first = extractor.extract_device(grid, 0.0f);
+    vkc::Result<mesh::DeviceMesh> first = extractor.extract_device(grid, 0.0f);
     CHECK(first.ok());
     const mesh::DeviceMesh superseded = first.value();
     CHECK(!superseded.empty());
 
-    vr::Result<mesh::DeviceMesh> second = extractor.extract_device(grid, 0.0f);
+    vkc::Result<mesh::DeviceMesh> second = extractor.extract_device(grid, 0.0f);
     CHECK(second.ok());
     const mesh::DeviceMesh live = second.value();
 
@@ -683,19 +685,19 @@ int main() {
   // have to mesh the dense field to reach this, and then it could never grow
   // again for any later case.
   {
-    vr::Result<mesh::MarchingCubes> growing_result =
+    vkc::Result<mesh::MarchingCubes> growing_result =
         mesh::MarchingCubes::create(device.value(), allocator.value());
     CHECK(growing_result.ok());
     mesh::MarchingCubes growing = std::move(growing_result).value();
 
-    vr::Result<vol::VoxelBlockGrid> dense_result = vol::VoxelBlockGrid::create(
+    vkc::Result<vol::VoxelBlockGrid> dense_result = vol::VoxelBlockGrid::create(
         device.value(), allocator.value(), sphere_grid_params(), attrs, 2);
     CHECK(dense_result.ok());
     vol::VoxelBlockGrid dense = std::move(dense_result).value();
     CHECK(fill_grid(ctx, dense, Field::kDense));
 
     mesh::ExtractTimings before;
-    vr::Result<mesh::DeviceMesh> first =
+    vkc::Result<mesh::DeviceMesh> first =
         growing.extract_device(grid, 0.0f, &before);
     CHECK(first.ok());
     const mesh::DeviceMesh stale = first.value();
@@ -715,11 +717,11 @@ int main() {
   // A DeviceMesh from another extractor is rejected too: generations are
   // per-object, so one extractor's stamp never authorises another's buffers.
   {
-    vr::Result<mesh::MarchingCubes> other_result =
+    vkc::Result<mesh::MarchingCubes> other_result =
         mesh::MarchingCubes::create(device.value(), allocator.value());
     CHECK(other_result.ok());
     mesh::MarchingCubes other = std::move(other_result).value();
-    vr::Result<mesh::DeviceMesh> foreign = other.extract_device(grid, 0.0f);
+    vkc::Result<mesh::DeviceMesh> foreign = other.extract_device(grid, 0.0f);
     CHECK(foreign.ok());
     CHECK(!foreign.value().empty());
     CHECK(!extractor.download(foreign.value()).ok());
@@ -733,7 +735,7 @@ int main() {
   // it (the handles are non-null, and a grow-only arena reused in place even
   // names the same VkBuffer), which is what DeviceMesh::is_current is for.
   {
-    vr::Result<mesh::DeviceMesh> live = extractor.extract_device(grid, 0.0f);
+    vkc::Result<mesh::DeviceMesh> live = extractor.extract_device(grid, 0.0f);
     CHECK(live.ok() && !live.value().empty());
     const mesh::DeviceMesh held = live.value();
     CHECK(held.is_current());
@@ -742,19 +744,19 @@ int main() {
     CHECK(texturer.texture(held, views, layout.value()).ok());
 
     // Extract again on the same extractor; `held` is now superseded.
-    vr::Result<mesh::DeviceMesh> next = extractor.extract_device(grid, 0.0f);
+    vkc::Result<mesh::DeviceMesh> next = extractor.extract_device(grid, 0.0f);
     CHECK(next.ok());
     CHECK(!held.is_current());
     CHECK(next.value().is_current());
     // valid() still says yes -- the handles are non-null -- which is exactly
     // why it is not the check that matters here.
     CHECK(held.valid());
-    vr::Status stale_texture = texturer.texture(held, depth.data(), cam);
+    vkc::Status stale_texture = texturer.texture(held, depth.data(), cam);
     CHECK(!stale_texture.ok());
-    CHECK(stale_texture.domain() == vr::Status::Code::InvalidArgument);
+    CHECK(stale_texture.domain() == vkc::Status::Code::InvalidArgument);
     // The several-view overload binds the same buffers, so it asks too.
     CHECK(texturer.texture(held, views, layout.value()).domain() ==
-          vr::Status::Code::InvalidArgument);
+          vkc::Status::Code::InvalidArgument);
     // The live view from the same extractor still textures.
     CHECK(texturer.texture(next.value(), depth.data(), cam).ok());
   }
@@ -774,11 +776,11 @@ int main() {
   {
     mesh::MarchingCubesConfig share_config;
     share_config.share_vertices = true;
-    vr::Result<mesh::MarchingCubes> share_result = mesh::MarchingCubes::create(
+    vkc::Result<mesh::MarchingCubes> share_result = mesh::MarchingCubes::create(
         device.value(), allocator.value(), share_config);
     CHECK(share_result.ok());
     mesh::MarchingCubes share_mc = std::move(share_result).value();
-    vr::Result<mesh::DeviceMesh> shared = share_mc.extract_device(grid, 0.0f);
+    vkc::Result<mesh::DeviceMesh> shared = share_mc.extract_device(grid, 0.0f);
     CHECK(shared.ok());
     CHECK(!shared.value().empty());
     CHECK(shared.value().shares_vertices);
@@ -788,19 +790,19 @@ int main() {
     // path could not have produced a result for at all -- not merely the same
     // mesh relabelled.
     CHECK(shared.value().vertex_count < 3 * shared.value().triangle_count);
-    vr::Status shared_texture =
+    vkc::Status shared_texture =
         texturer.texture(shared.value(), depth.data(), cam);
     CHECK(shared_texture.ok());
     // Several views choose per triangle, which a shared vertex cannot follow.
     CHECK(texturer.texture(shared.value(), views, layout.value()).domain() ==
-          vr::Status::Code::InvalidArgument);
+          vkc::Status::Code::InvalidArgument);
 
     // Read the result back. `ok()` alone would pass against a kernel that
     // wrote the sentinel everywhere, inverted its visibility test, sized the
     // dispatch by the TRIANGLE count (leaving two thirds of a shared mesh's
     // vertices untouched), or bound the wrong descriptor slot -- every failure
     // this mesh exists to catch returns OK.
-    vr::Result<mesh::Mesh> shared_host = share_mc.download(shared.value());
+    vkc::Result<mesh::Mesh> shared_host = share_mc.download(shared.value());
     CHECK(shared_host.ok());
     const mesh::Mesh shared_out = std::move(shared_host).value();
     CHECK(shared_out.vertices.size() == shared.value().vertex_count);

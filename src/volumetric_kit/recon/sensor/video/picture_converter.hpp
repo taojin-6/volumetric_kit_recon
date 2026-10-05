@@ -10,8 +10,8 @@
 #include <vector>
 
 #include "ffmpeg.hpp"
+#include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/recon/core/color_space.hpp"
-#include "volumetric_kit/recon/core/result.hpp"
 #include "volumetric_kit/recon/sensor/video/decoded_picture.hpp"
 
 namespace volumetric_kit::recon::sensor::video {
@@ -46,9 +46,10 @@ class PictureConverter {
   ///        declares no matrix is converted by @p unlabelled_color, if given.
   /// @return The picture; InvalidArgument for a hardware or unconvertible
   ///         format; IoError if swscale fails.
-  Result<DecodedPicture> convert(const AVFrame& frame, VideoPixelLayout layout,
-                                 const std::optional<VideoColorDescription>&
-                                     unlabelled_color = std::nullopt);
+  core::Result<DecodedPicture> convert(
+      const AVFrame& frame, VideoPixelLayout layout,
+      const std::optional<VideoColorDescription>& unlabelled_color =
+          std::nullopt);
 
  private:
   // What sws_ converts. Any change rebuilds it: swscale can reuse a freed

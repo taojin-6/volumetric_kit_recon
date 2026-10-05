@@ -12,17 +12,19 @@
 #include <utility>
 #include <vector>
 
-#include "volumetric_kit/recon/core/allocator.hpp"
-#include "volumetric_kit/recon/core/device.hpp"
-#include "volumetric_kit/recon/core/instance.hpp"
+#include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "volumetric_kit/core/vulkan/device.hpp"
+#include "volumetric_kit/core/vulkan/instance.hpp"
+#include "volumetric_kit/core/vulkan/vulkan.hpp"
+#include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
-#include "volumetric_kit/recon/core/vulkan.hpp"
 #include "volumetric_kit/recon/volume/hash.hpp"
 #include "volumetric_kit/recon/volume/hash_types.hpp"
 #include "volumetric_kit/recon/volume/voxel_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
 
 namespace vr = volumetric_kit::recon;
+namespace vkc = volumetric_kit::core;
 namespace vol = volumetric_kit::recon::volume;
 
 #define CHECK(cond)                                                        \
@@ -61,28 +63,28 @@ std::vector<vol::BlockIndex> coords_in_bucket(int target_bucket,
 }  // namespace
 
 int main() {
-  vr::Result<vr::Instance> instance = vr::Instance::create({});
+  vkc::Result<vkc::Instance> instance = vkc::Instance::create({});
   if (!instance) {
     std::fprintf(stderr, "no Vulkan instance (%s); skipping\n",
                  instance.status().message().c_str());
     return 0;
   }
-  vr::Result<vr::PhysicalDeviceInfo> gpu =
+  vkc::Result<vkc::PhysicalDeviceInfo> gpu =
       instance.value().select_physical_device(vr::device_requirements());
   if (!gpu) {
     std::fprintf(stderr, "no compute-capable device (%s); skipping\n",
                  gpu.status().message().c_str());
     return 0;
   }
-  vr::Result<vr::Device> device = vr::Device::create(
+  vkc::Result<vkc::Device> device = vkc::Device::create(
       instance.value(), gpu.value(), vr::device_requirements());
   if (!device) {
     std::fprintf(stderr, "device create failed: %s\n",
                  device.status().message().c_str());
     return 1;
   }
-  vr::Result<vr::Allocator> allocator =
-      vr::Allocator::create(instance.value().handle(), device.value());
+  vkc::Result<vkc::Allocator> allocator =
+      vkc::Allocator::create(instance.value().handle(), device.value());
   if (!allocator) {
     std::fprintf(stderr, "allocator create failed: %s\n",
                  allocator.status().message().c_str());
@@ -101,7 +103,7 @@ int main() {
   grid.max_chain = 128;
   const int total_slots = grid.num_buckets * grid.bucket_size;
 
-  vr::Result<vol::VoxelHashMap> map_result =
+  vkc::Result<vol::VoxelHashMap> map_result =
       vol::VoxelHashMap::create(device.value(), allocator.value(), grid);
   if (!map_result) {
     std::fprintf(stderr, "VoxelHashMap::create failed: %s\n",
@@ -114,7 +116,7 @@ int main() {
   // because the buffers are HOST_COHERENT, so it confirms init ran but does not
   // independently prove the init->host visibility barrier -- that is
   // unobservable on coherent memory and would only bite device-local buffers.)
-  vr::Result<vol::HashDiagnostics> empty = map.diagnostics();
+  vkc::Result<vol::HashDiagnostics> empty = map.diagnostics();
   CHECK(empty.ok());
   CHECK(empty.value().active_count == 0);
   CHECK(empty.value().overflow_count == 0);
@@ -128,11 +130,11 @@ int main() {
   std::vector<vol::BlockIndex> coords =
       coords_in_bucket(0, grid.num_buckets, 7);
   CHECK(coords.size() == 7);
-  vr::Result<std::uint32_t> alloc =
+  vkc::Result<std::uint32_t> alloc =
       map.allocate(coords.data(), static_cast<std::uint32_t>(coords.size()));
   CHECK(alloc.ok() && alloc.value() == 0);
 
-  vr::Result<vol::HashDiagnostics> diag = map.diagnostics();
+  vkc::Result<vol::HashDiagnostics> diag = map.diagnostics();
   CHECK(diag.ok());
   const vol::HashDiagnostics& d = diag.value();
   CHECK(d.active_count == 7);

@@ -31,11 +31,12 @@
 
 #include "fuse_frame.hpp"
 #include "replica_capture.hpp"
-#include "volumetric_kit/recon/core/allocator.hpp"
-#include "volumetric_kit/recon/core/device.hpp"
-#include "volumetric_kit/recon/core/instance.hpp"
-#include "volumetric_kit/recon/core/result.hpp"
-#include "volumetric_kit/recon/core/stage_metrics.hpp"
+#include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/base/stage_metrics.hpp"
+#include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "volumetric_kit/core/vulkan/device.hpp"
+#include "volumetric_kit/core/vulkan/instance.hpp"
+#include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/io/ply_writer.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
 #include "volumetric_kit/recon/mesh/mesh.hpp"
@@ -46,6 +47,7 @@
 #include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
 
 namespace vr = volumetric_kit::recon;
+namespace vkc = volumetric_kit::core;
 namespace vol = volumetric_kit::recon::volume;
 namespace tsdf = volumetric_kit::recon::tsdf;
 namespace mesh = volumetric_kit::recon::mesh;
@@ -62,15 +64,16 @@ struct ChangedBlocks {
   std::uint32_t remesh = 0;
 };
 
-vr::Result<ChangedBlocks> changed_since(
+vkc::Result<ChangedBlocks> changed_since(
     const vol::VoxelBlockGrid& grid, const std::vector<vol::BlockIndex>& active,
     std::uint32_t since) {
   const auto vpb = static_cast<std::uint32_t>(grid.grid().voxels_per_block);
   if (vpb == 0) {
-    return vr::Status::invalid_argument("changed_since: voxels_per_block is 0");
+    return vkc::Status::invalid_argument(
+        "changed_since: voxels_per_block is 0");
   }
-  VR_ASSIGN(const std::vector<vol::BlockStamp> stamps,
-            grid.map().read_block_stamps());
+  VKC_ASSIGN(const std::vector<vol::BlockStamp> stamps,
+             grid.map().read_block_stamps());
   // 21 bits an axis, through unsigned casts since coordinates go negative.
   const auto key = [](const vr::Vec3i& c) {
     constexpr std::uint64_t kMask = (std::uint64_t{1} << 21) - 1;
@@ -146,7 +149,7 @@ const char* arg_value(int argc, char** argv, int& i) {
   return argv[++i];
 }
 
-vr::Result<Options> parse_args(int argc, char** argv) {
+vkc::Result<Options> parse_args(int argc, char** argv) {
   Options opt;
   for (int i = 1; i < argc; ++i) {
     const std::string a = argv[i];
@@ -164,12 +167,12 @@ vr::Result<Options> parse_args(int argc, char** argv) {
     };
     if (a == "-o" || a == "--out") {
       const char* v = arg_value(argc, argv, i);
-      if (v == nullptr) return vr::Status::invalid_argument("-o needs a path");
+      if (v == nullptr) return vkc::Status::invalid_argument("-o needs a path");
       opt.out = v;
     } else if (a == "--cam-params") {
       const char* v = arg_value(argc, argv, i);
       if (v == nullptr)
-        return vr::Status::invalid_argument("--cam-params path");
+        return vkc::Status::invalid_argument("--cam-params path");
       opt.cam_params = v;
     } else if (a == "--device-extract") {
       opt.device_extract = true;
@@ -179,44 +182,44 @@ vr::Result<Options> parse_args(int argc, char** argv) {
       opt.incremental = true;
     } else if (a == "--dirty-every") {
       if (!need_int(opt.dirty_every))
-        return vr::Status::invalid_argument("--dirty-every");
+        return vkc::Status::invalid_argument("--dirty-every");
     } else if (a == "--voxel") {
-      if (!need(opt.voxel)) return vr::Status::invalid_argument("--voxel");
+      if (!need(opt.voxel)) return vkc::Status::invalid_argument("--voxel");
     } else if (a == "--trunc") {
-      if (!need(opt.trunc)) return vr::Status::invalid_argument("--trunc");
+      if (!need(opt.trunc)) return vkc::Status::invalid_argument("--trunc");
     } else if (a == "--min-depth") {
       if (!need(opt.min_depth))
-        return vr::Status::invalid_argument("--min-depth");
+        return vkc::Status::invalid_argument("--min-depth");
     } else if (a == "--max-depth") {
       if (!need(opt.max_depth))
-        return vr::Status::invalid_argument("--max-depth");
+        return vkc::Status::invalid_argument("--max-depth");
     } else if (a == "--max-weight") {
       if (!need(opt.max_weight))
-        return vr::Status::invalid_argument("--max-weight");
+        return vkc::Status::invalid_argument("--max-weight");
     } else if (a == "--max-frames") {
       if (!need_int(opt.max_frames))
-        return vr::Status::invalid_argument("--max-frames");
+        return vkc::Status::invalid_argument("--max-frames");
     } else if (a == "--stride") {
       if (!need_int(opt.stride))
-        return vr::Status::invalid_argument("--stride");
+        return vkc::Status::invalid_argument("--stride");
     } else if (a == "--mesh-every") {
       if (!need_int(opt.mesh_every))
-        return vr::Status::invalid_argument("--mesh-every");
+        return vkc::Status::invalid_argument("--mesh-every");
     } else if (a == "--buckets") {
       if (!need_int(opt.num_buckets))
-        return vr::Status::invalid_argument("--buckets");
+        return vkc::Status::invalid_argument("--buckets");
     } else if (a == "--preload") {
       opt.preload = true;
     } else if (a[0] == '-') {
-      return vr::Status::invalid_argument("unknown flag: " + a);
+      return vkc::Status::invalid_argument("unknown flag: " + a);
     } else if (opt.scene_dir.empty()) {
       opt.scene_dir = a;
     } else {
-      return vr::Status::invalid_argument("unexpected argument: " + a);
+      return vkc::Status::invalid_argument("unexpected argument: " + a);
     }
   }
   if (opt.scene_dir.empty()) {
-    return vr::Status::invalid_argument(
+    return vkc::Status::invalid_argument(
         "usage: fuse_replica <scene_dir> [-o out.ply] [--share-vertices] "
         "[--device-extract] [--incremental] [--dirty-every n] "
         "[--voxel m] "
@@ -244,29 +247,29 @@ vr::Result<Options> parse_args(int argc, char** argv) {
   for (const float knob :
        {opt.voxel, opt.trunc, opt.min_depth, opt.max_depth, opt.max_weight}) {
     if (!std::isfinite(knob)) {
-      return vr::Status::invalid_argument(
+      return vkc::Status::invalid_argument(
           "numeric options (--voxel/--trunc/--min-depth/--max-depth/"
           "--max-weight) must be finite");
     }
   }
   if (!(opt.voxel > 0.0f)) {
-    return vr::Status::invalid_argument("--voxel must be > 0");
+    return vkc::Status::invalid_argument("--voxel must be > 0");
   }
   if (opt.trunc <= 0.0f) {
     opt.trunc = 4.0f * opt.voxel;  // default the band to 4 voxels
   }
   if (!(opt.max_depth > 0.0f)) {
-    return vr::Status::invalid_argument("--max-depth must be > 0");
+    return vkc::Status::invalid_argument("--max-depth must be > 0");
   }
   if (opt.min_depth < 0.0f || opt.min_depth >= opt.max_depth) {
-    return vr::Status::invalid_argument(
+    return vkc::Status::invalid_argument(
         "--min-depth must be in [0, --max-depth)");
   }
   if (!(opt.max_weight > 0.0f)) {
-    return vr::Status::invalid_argument("--max-weight must be > 0");
+    return vkc::Status::invalid_argument("--max-weight must be > 0");
   }
   if (opt.max_frames < 1) {
-    return vr::Status::invalid_argument("--max-frames must be >= 1");
+    return vkc::Status::invalid_argument("--max-frames must be >= 1");
   }
   // num_blocks = bucket_size (8) * num_buckets is an int32; keep the product in
   // range so it cannot overflow to a negative that still passes validate().
@@ -274,21 +277,21 @@ vr::Result<Options> parse_args(int argc, char** argv) {
   if (opt.num_buckets < 1 ||
       static_cast<std::int64_t>(opt.num_buckets) * kBucketSize >
           std::numeric_limits<std::int32_t>::max()) {
-    return vr::Status::invalid_argument(
+    return vkc::Status::invalid_argument(
         "--buckets must be >= 1 and small enough that 8 * buckets fits int32");
   }
   return opt;
 }
 
-vr::Status run(const Options& opt) {
+vkc::Status run(const Options& opt) {
   // --- Device bring-up (headless: no surface needed) ---
-  VR_ASSIGN(vr::Instance instance, vr::Instance::create({}));
-  VR_ASSIGN(vr::PhysicalDeviceInfo gpu,
-            instance.select_physical_device(vr::device_requirements()));
-  VR_ASSIGN(vr::Device device,
-            vr::Device::create(instance, gpu, vr::device_requirements()));
-  VR_ASSIGN(vr::Allocator allocator,
-            vr::Allocator::create(instance.handle(), device));
+  VKC_ASSIGN(vkc::Instance instance, vkc::Instance::create({}));
+  VKC_ASSIGN(vkc::PhysicalDeviceInfo gpu,
+             instance.select_physical_device(vr::device_requirements()));
+  VKC_ASSIGN(vkc::Device device,
+             vkc::Device::create(instance, gpu, vr::device_requirements()));
+  VKC_ASSIGN(vkc::Allocator allocator,
+             vkc::Allocator::create(instance.handle(), device));
 
   // --- Capture ---
   // The sequence arrives through the sensor contract: frame selection and the
@@ -300,9 +303,9 @@ vr::Status run(const Options& opt) {
   capture_options.frame_stride = static_cast<std::size_t>(opt.stride);
   capture_options.min_depth = opt.min_depth;
   capture_options.max_depth = opt.max_depth;
-  VR_ASSIGN(vr_example::ReplicaCapture replica,
-            vr_example::ReplicaCapture::open(opt.scene_dir, opt.cam_params,
-                                             capture_options));
+  VKC_ASSIGN(vr_example::ReplicaCapture replica,
+             vr_example::ReplicaCapture::open(opt.scene_dir, opt.cam_params,
+                                              capture_options));
   const vr::ColorCameraParams& cam = replica.color_camera();
   std::printf(
       "capture: %zu frames to play, %ux%u @ fx=%.1f fy=%.1f cx=%.1f cy=%.1f, "
@@ -311,21 +314,21 @@ vr::Status run(const Options& opt) {
       cam.cy, replica.depth_scale());
 
   // --- Volume + pipeline ---
-  VR_ASSIGN(vol::VoxelBlockGrid volume,
-            vr_example::create_fusion_grid(device, allocator, opt.voxel,
-                                           opt.trunc, opt.num_buckets));
-  VR_ASSIGN(tsdf::TsdfIntegrator integrator,
-            tsdf::TsdfIntegrator::create(device, allocator));
-  VR_ASSIGN(mesh::MarchingCubes extractor,
-            mesh::MarchingCubes::create(device, allocator, [&] {
-              mesh::MarchingCubesConfig c;
-              c.share_vertices = opt.share_vertices;
-              // The span table is what an incremental extract re-meshes
-              // against, and it is sized by the grid rather than the surface --
-              // so it stays off unless asked for.
-              c.track_block_spans = opt.incremental;
-              return c;
-            }()));
+  VKC_ASSIGN(vol::VoxelBlockGrid volume,
+             vr_example::create_fusion_grid(device, allocator, opt.voxel,
+                                            opt.trunc, opt.num_buckets));
+  VKC_ASSIGN(tsdf::TsdfIntegrator integrator,
+             tsdf::TsdfIntegrator::create(device, allocator));
+  VKC_ASSIGN(mesh::MarchingCubes extractor,
+             mesh::MarchingCubes::create(device, allocator, [&] {
+               mesh::MarchingCubesConfig c;
+               c.share_vertices = opt.share_vertices;
+               // The span table is what an incremental extract re-meshes
+               // against, and it is sized by the grid rather than the surface
+               // -- so it stays off unless asked for.
+               c.track_block_spans = opt.incremental;
+               return c;
+             }()));
 
   // Optionally decode the whole sequence up front. Deliberately *outside* the
   // timed region below: streaming spends ~75% of the loop in JPEG/PNG decode,
@@ -338,7 +341,7 @@ vr::Status run(const Options& opt) {
         "preloading %.0f MB...\n",
         static_cast<double>(replica.preload_bytes_projected()) / (1024 * 1024));
     const auto preload_start = std::chrono::steady_clock::now();
-    VR_ASSIGN(const std::size_t cached_frames, replica.preload());
+    VKC_ASSIGN(const std::size_t cached_frames, replica.preload());
     const double preload_seconds =
         std::chrono::duration<double>(std::chrono::steady_clock::now() -
                                       preload_start)
@@ -350,7 +353,7 @@ vr::Status run(const Options& opt) {
 
   // From here on the source is the contract, not the dataset.
   sensor::ICameraCapture& capture = replica;
-  VR_TRY(capture.start());
+  VKC_TRY(capture.start());
 
   const auto t_start = std::chrono::steady_clock::now();
   std::size_t fused = 0;
@@ -373,7 +376,7 @@ vr::Status run(const Options& opt) {
   // is wall clock around a fence-blocked submit, the device row is the kernel
   // inside it, and the gap is submit overhead plus the host round trips the
   // stage makes.
-  vr::StageMetrics stage_totals;
+  vkc::StageMetrics stage_totals;
   std::size_t dirty_samples = 0;
   std::uint64_t sum_dirty = 0, sum_remesh = 0, sum_active = 0;
   std::uint32_t last_dirty = 0, last_active_blocks = 0, last_remesh = 0;
@@ -385,8 +388,8 @@ vr::Status run(const Options& opt) {
     // device report alike; only the source knows whether that is the end. A
     // decode failure on a frame that is present is a real error and stops the
     // run.
-    VR_ASSIGN(const std::optional<sensor::CapturedFrame> polled,
-              capture.poll());
+    VKC_ASSIGN(const std::optional<sensor::CapturedFrame> polled,
+               capture.poll());
     if (!polled) {
       if (capture.exhausted()) {
         break;
@@ -396,8 +399,8 @@ vr::Status run(const Options& opt) {
       continue;
     }
     const sensor::CapturedFrame& frame = *polled;
-    VR_TRY(vr_example::fuse_frame(volume, integrator, frame, opt.max_weight,
-                                  &stage_totals));
+    VKC_TRY(vr_example::fuse_frame(volume, integrator, frame, opt.max_weight,
+                                   &stage_totals));
     ++fused;
 
     if (opt.dirty_every > 0 &&
@@ -405,10 +408,10 @@ vr::Status run(const Options& opt) {
       // The sample is the UNION of this window's `--dirty-every` frames, which
       // is exactly what an incremental extract running at that cadence would
       // have to redo.
-      VR_ASSIGN(std::vector<vol::BlockIndex> all,
-                volume.map().compact_active_blocks());
-      VR_ASSIGN(const ChangedBlocks sample,
-                changed_since(volume, all, dirty_since));
+      VKC_ASSIGN(std::vector<vol::BlockIndex> all,
+                 volume.map().compact_active_blocks());
+      VKC_ASSIGN(const ChangedBlocks sample,
+                 changed_since(volume, all, dirty_since));
       dirty_since = volume.map().tick();
       const std::uint32_t dirty = sample.changed;
       const std::uint32_t remesh = sample.remesh;
@@ -445,17 +448,17 @@ vr::Status run(const Options& opt) {
         if (opt.incremental) {
           // The extractor keeps the tick it last meshed at, so this re-meshes
           // what the fuses since changed and nothing needs resetting.
-          VR_ASSIGN(mesh::DeviceMesh dm,
-                    extractor.extract_device_incremental(volume, 0.0f, &rt));
+          VKC_ASSIGN(mesh::DeviceMesh dm,
+                     extractor.extract_device_incremental(volume, 0.0f, &rt));
           tris = dm.triangle_count;
         } else {
-          VR_ASSIGN(mesh::DeviceMesh dm,
-                    extractor.extract_device(volume, 0.0f, &rt));
+          VKC_ASSIGN(mesh::DeviceMesh dm,
+                     extractor.extract_device(volume, 0.0f, &rt));
           tris = dm.triangle_count;
         }
       } else {
-        VR_ASSIGN(mesh::Mesh preview,
-                  extractor.extract_host(volume, 0.0f, &rt));
+        VKC_ASSIGN(mesh::Mesh preview,
+                   extractor.extract_host(volume, 0.0f, &rt));
         tris = preview.triangle_count();
       }
       ++remeshes;
@@ -534,7 +537,7 @@ vr::Status run(const Options& opt) {
   if (fused > 0 && !stage_totals.empty()) {
     const double n = static_cast<double>(fused);
     std::printf("stages    per fused frame, mean over %zu frames\n", fused);
-    for (const vr::StageRow& row : stage_totals.rows()) {
+    for (const vkc::StageRow& row : stage_totals.rows()) {
       if (row.has_gpu) {
         std::printf("  %-9s host %7.3f ms   device %7.3f ms   (%5.1f%%)\n",
                     row.name, row.cpu_ms / n, row.gpu_ms / n,
@@ -582,7 +585,7 @@ vr::Status run(const Options& opt) {
   // fuse_viewer shows the same struct interactively; this prints it so a sweep
   // over --voxel can be diffed.
   mesh::ExtractTimings t{};
-  VR_ASSIGN(mesh::Mesh final_mesh, extractor.extract_host(volume, 0.0f, &t));
+  VKC_ASSIGN(mesh::Mesh final_mesh, extractor.extract_host(volume, 0.0f, &t));
   // cells is what the dispatch actually walks: one workgroup per active block,
   // striding over that block's voxels. Printed beside the triangles because the
   // RATIO is the interesting number -- a low emit rate means the kernel is
@@ -606,7 +609,7 @@ vr::Status run(const Options& opt) {
           ? 100.0 * static_cast<double>(t.emitted_triangles) /
                 t.triangle_capacity
           : 0.0);
-  VR_TRY(vr::io::write_ply(opt.out, final_mesh));
+  VKC_TRY(vr::io::write_ply(opt.out, final_mesh));
   const auto t_end = std::chrono::steady_clock::now();
   const double secs = std::chrono::duration<double>(t_end - t_start).count();
   std::printf(
@@ -620,12 +623,12 @@ vr::Status run(const Options& opt) {
 }  // namespace
 
 int main(int argc, char** argv) {
-  vr::Result<Options> opt = parse_args(argc, argv);
+  vkc::Result<Options> opt = parse_args(argc, argv);
   if (!opt) {
     std::fprintf(stderr, "%s\n", opt.status().message().c_str());
     return 2;
   }
-  const vr::Status status = run(opt.value());
+  const vkc::Status status = run(opt.value());
   if (!status.ok()) {
     std::fprintf(stderr, "fuse_replica failed: %s\n", status.message().c_str());
     return 1;

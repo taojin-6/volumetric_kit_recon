@@ -35,10 +35,11 @@
 #include "rgbd_frame.hpp"       // vr_example::RgbdFrame
 
 // recon tiers
-#include "volumetric_kit/recon/core/allocator.hpp"
-#include "volumetric_kit/recon/core/device.hpp"
-#include "volumetric_kit/recon/core/instance.hpp"
-#include "volumetric_kit/recon/core/result.hpp"
+#include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "volumetric_kit/core/vulkan/device.hpp"
+#include "volumetric_kit/core/vulkan/instance.hpp"
+#include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/io/image_io.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
 #include "volumetric_kit/recon/mesh/mesh.hpp"
@@ -63,6 +64,7 @@
 #include "volumetric_kit/gfx/pipelines/hybrid_mesh_pipeline.hpp"
 
 namespace vr = volumetric_kit::recon;
+namespace vkc = volumetric_kit::core;
 namespace vol = volumetric_kit::recon::volume;
 namespace rtsdf = volumetric_kit::recon::tsdf;
 namespace rmesh = volumetric_kit::recon::mesh;
@@ -255,15 +257,15 @@ struct Reconstruction {
   float sensor_vfov = 0.0f;
 };
 
-vr::Result<Reconstruction> fuse(const Options& opt,
-                                std::vector<glm::mat4>& poses) {
-  VR_ASSIGN(vr::Instance instance, vr::Instance::create({}));
-  VR_ASSIGN(vr::PhysicalDeviceInfo gpu,
-            instance.select_physical_device(vr::device_requirements()));
-  VR_ASSIGN(vr::Device device,
-            vr::Device::create(instance, gpu, vr::device_requirements()));
-  VR_ASSIGN(vr::Allocator allocator,
-            vr::Allocator::create(instance.handle(), device));
+vkc::Result<Reconstruction> fuse(const Options& opt,
+                                 std::vector<glm::mat4>& poses) {
+  VKC_ASSIGN(vkc::Instance instance, vkc::Instance::create({}));
+  VKC_ASSIGN(vkc::PhysicalDeviceInfo gpu,
+             instance.select_physical_device(vr::device_requirements()));
+  VKC_ASSIGN(vkc::Device device,
+             vkc::Device::create(instance, gpu, vr::device_requirements()));
+  VKC_ASSIGN(vkc::Allocator allocator,
+             vkc::Allocator::create(instance.handle(), device));
 
   // The sequence arrives through the sensor contract; only this construction
   // knows it is a disk. The frame cap and the depth gate are the capture's
@@ -273,9 +275,9 @@ vr::Result<Reconstruction> fuse(const Options& opt,
       static_cast<std::size_t>(std::max(0, opt.max_frames));
   capture_options.min_depth = opt.min_depth;
   capture_options.max_depth = opt.max_depth;
-  VR_ASSIGN(vr_example::ReplicaCapture replica,
-            vr_example::ReplicaCapture::open(opt.scene_dir, opt.cam_params,
-                                             capture_options));
+  VKC_ASSIGN(vr_example::ReplicaCapture replica,
+             vr_example::ReplicaCapture::open(opt.scene_dir, opt.cam_params,
+                                              capture_options));
   const vr::ColorCameraParams& cam = replica.color_camera();
   // Split about the principal point rather than assuming it is centred: cy is
   // 339.5 on Replica, not height/2.
@@ -284,15 +286,15 @@ vr::Result<Reconstruction> fuse(const Options& opt,
       std::atan((static_cast<float>(cam.height) - static_cast<float>(cam.cy)) /
                 static_cast<float>(cam.fy));
 
-  VR_ASSIGN(
+  VKC_ASSIGN(
       vol::VoxelBlockGrid volume,
       vr_example::create_fusion_grid(device, allocator, opt.voxel, opt.trunc));
-  VR_ASSIGN(rtsdf::TsdfIntegrator integrator,
-            rtsdf::TsdfIntegrator::create(device, allocator));
+  VKC_ASSIGN(rtsdf::TsdfIntegrator integrator,
+             rtsdf::TsdfIntegrator::create(device, allocator));
   rmesh::MarchingCubesConfig mc_config;
   mc_config.share_vertices = opt.share_vertices;
-  VR_ASSIGN(rmesh::MarchingCubes extractor,
-            rmesh::MarchingCubes::create(device, allocator, mc_config));
+  VKC_ASSIGN(rmesh::MarchingCubes extractor,
+             rmesh::MarchingCubes::create(device, allocator, mc_config));
 
   // Decode the sequence up front when asked, so the fuse loop below runs at
   // GPU speed instead of at JPEG/PNG decode speed (~75% of a streaming loop).
@@ -301,7 +303,7 @@ vr::Result<Reconstruction> fuse(const Options& opt,
     std::printf(
         "preloading %.0f MB...\n",
         static_cast<double>(replica.preload_bytes_projected()) / (1024 * 1024));
-    VR_ASSIGN(const std::size_t cached_frames, replica.preload());
+    VKC_ASSIGN(const std::size_t cached_frames, replica.preload());
     std::printf("preloaded %zu frames (%.0f MB)\n", cached_frames,
                 static_cast<double>(replica.preloaded_bytes()) / (1024 * 1024));
   }
@@ -321,7 +323,7 @@ vr::Result<Reconstruction> fuse(const Options& opt,
 
   // From here on the source is the contract, not the dataset.
   rsensor::ICameraCapture& capture = replica;
-  VR_TRY(capture.start());
+  VKC_TRY(capture.start());
   std::size_t fused = 0;
   for (;;) {
     // An empty poll is "nothing this tick", which a replay and an idle live
@@ -329,8 +331,8 @@ vr::Result<Reconstruction> fuse(const Options& opt,
     // decode failure -- a truncated JPEG, a wrong-size depth PNG -- is a real
     // failure and ends the run, where treating it as the end of the sequence
     // once made this leg write a partial-room PNG and exit 0.
-    VR_ASSIGN(const std::optional<rsensor::CapturedFrame> polled,
-              capture.poll());
+    VKC_ASSIGN(const std::optional<rsensor::CapturedFrame> polled,
+               capture.poll());
     if (!polled) {
       if (capture.exhausted()) {
         break;
@@ -347,14 +349,14 @@ vr::Result<Reconstruction> fuse(const Options& opt,
     // Allocate the band (growing the map on overflow, as fuse_replica does)
     // and integrate depth + colour; a frame whose band never fully allocated
     // is refused rather than fused with silent holes.
-    VR_TRY(vr_example::fuse_frame(volume, integrator, frame, 20.0f, nullptr));
+    VKC_TRY(vr_example::fuse_frame(volume, integrator, frame, 20.0f, nullptr));
     ++fused;
   }
   std::printf("fused %zu frames\n", fused);
 
   Reconstruction recon;
   recon.sensor_vfov = sensor_vfov;
-  VR_ASSIGN(recon.mesh, extractor.extract_host(volume));
+  VKC_ASSIGN(recon.mesh, extractor.extract_host(volume));
 
   // Project the retained keyframe onto the mesh (the live single-camera
   // texturing slice). Its uv0 mark the triangles that keyframe saw unoccluded;
@@ -363,9 +365,9 @@ vr::Result<Reconstruction> fuse(const Options& opt,
   // keeps full sensor resolution where the camera had line of sight.
   if (!keyframe.empty() && !recon.mesh.vertices.empty()) {
     const rsensor::CapturedFrame kf = keyframe.view();
-    VR_ASSIGN(rtex::ProjectiveTexturer texturer,
-              rtex::ProjectiveTexturer::create(device, allocator));
-    VR_TRY(texturer.texture(recon.mesh, kf.depth, kf.depth_camera));
+    VKC_ASSIGN(rtex::ProjectiveTexturer texturer,
+               rtex::ProjectiveTexturer::create(device, allocator));
+    VKC_TRY(texturer.texture(recon.mesh, kf.depth, kf.depth_camera));
 
     // Atlas = the keyframe's colour image at full resolution -- exactly what
     // uv0 = (pixel + 0.5)/size index -- brought to the canonical form through
@@ -377,8 +379,8 @@ vr::Result<Reconstruction> fuse(const Options& opt,
     const std::size_t pixels = static_cast<std::size_t>(kf.color_camera.width) *
                                kf.color_camera.height;
     recon.atlas.resize(pixels);
-    VR_TRY(rsensor::to_canonical(kf.color, pixels, kf.color_encoding,
-                                 recon.atlas.data()));
+    VKC_TRY(rsensor::to_canonical(kf.color, pixels, kf.color_encoding,
+                                  recon.atlas.data()));
     recon.atlas_w = kf.color_camera.width;
     recon.atlas_h = kf.color_camera.height;
     std::printf("textured with frame %zu (%ux%u atlas)\n", keyframe_index,
@@ -395,7 +397,7 @@ int main(int argc, char** argv) {
 
   // 1. Fuse + extract the reconstruction (recon device).
   std::vector<glm::mat4> poses;
-  vr::Result<Reconstruction> recon_result = fuse(opt, poses);
+  vkc::Result<Reconstruction> recon_result = fuse(opt, poses);
   if (!recon_result) {
     std::fprintf(stderr, "fuse failed: %s\n",
                  recon_result.status().message().c_str());
@@ -594,7 +596,7 @@ int main(int argc, char** argv) {
   // gfx sizes the readback buffer to the target's extent at the RGBA8 texel
   // size chosen above; it exposes no byte count of its own.
   const VkExtent2D extent = target.extent();
-  const vr::Status written = vr::io::write_png_rgba8(
+  const vkc::Status written = vr::io::write_png_rgba8(
       opt.out, pixels,
       static_cast<std::size_t>(extent.width) * extent.height * 4, extent.width,
       extent.height);

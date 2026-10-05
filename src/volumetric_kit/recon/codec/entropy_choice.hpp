@@ -12,8 +12,8 @@
 
 #include <cstdint>
 
+#include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/recon/codec/codec_params.hpp"
-#include "volumetric_kit/recon/core/result.hpp"
 
 namespace volumetric_kit::recon::codec::detail {
 
@@ -29,10 +29,10 @@ inline bool codes_on_device(EntropyCoding coding, std::uint64_t segments,
 ///         under `kAuto`, one the device cannot hold (past
 ///         `maxStorageBufferRange` or a segment limit, or past free memory).
 ///         Any other failure is the device's, and is reported.
-inline bool retry_on_host(EntropyCoding coding, const Status& s) {
+inline bool retry_on_host(EntropyCoding coding, const core::Status& s) {
   return coding == EntropyCoding::kAuto &&
-         (s.domain() == Status::Code::InvalidArgument ||
-          s.domain() == Status::Code::OutOfMemory);
+         (s.domain() == core::Status::Code::InvalidArgument ||
+          s.domain() == core::Status::Code::OutOfMemory);
 }
 
 }  // namespace volumetric_kit::recon::codec::detail

@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Tao Jin
 
-// Vulkan availability smoke: proves recon's build finds Vulkan, the
-// core/vulkan.hpp umbrella compiles, and the platform's Vulkan driver (MoltenVK
-// on Apple) offers a device that meets recon's requirements
-// (core/device.hpp's device_requirements) and creates one on it. The Vulkan
+// Vulkan availability smoke: proves recon's build finds Vulkan, the core's
+// core/vulkan/vulkan.hpp umbrella compiles, and the platform's Vulkan driver
+// (MoltenVK on Apple) offers a device that meets recon's requirements
+// (core/device_requirements.hpp) and creates one on it. The Vulkan
 // foundation behind it is volumetric_kit_core's, tested there; what this pins
 // is recon's side: that the requirements recon states are ones a real driver
 // meets.
@@ -12,14 +12,16 @@
 #include <cstdint>
 #include <cstdio>
 
-#include "volumetric_kit/recon/core/device.hpp"
-#include "volumetric_kit/recon/core/instance.hpp"
-#include "volumetric_kit/recon/core/vulkan.hpp"
+#include "volumetric_kit/core/vulkan/device.hpp"
+#include "volumetric_kit/core/vulkan/instance.hpp"
+#include "volumetric_kit/core/vulkan/vulkan.hpp"
+#include "volumetric_kit/recon/core/device_requirements.hpp"
 
 namespace vr = volumetric_kit::recon;
+namespace vkc = volumetric_kit::core;
 
 int main() {
-  vr::Result<vr::Instance> instance = vr::Instance::create({});
+  vkc::Result<vkc::Instance> instance = vkc::Instance::create({});
   if (!instance) {
     // No Vulkan driver on this machine (e.g. a headless CI runner without an
     // ICD). Treat as a skip, not a failure: the smoke gates on driver
@@ -41,8 +43,8 @@ int main() {
   // recon's requirements, not the core's defaults: scalarBlockLayout is what
   // every recon kernel's buffer ABI needs, so a device the core accepts can
   // still be one recon cannot run on.
-  const vr::DeviceRequirements reqs = vr::device_requirements();
-  vr::Result<vr::PhysicalDeviceInfo> gpu =
+  const vkc::DeviceRequirements reqs = vr::device_requirements();
+  vkc::Result<vkc::PhysicalDeviceInfo> gpu =
       instance.value().select_physical_device(reqs);
   if (!gpu) {
     std::fprintf(stderr,
@@ -50,8 +52,8 @@ int main() {
                  device_count, gpu.status().message().c_str());
     return 1;
   }
-  vr::Result<vr::Device> device =
-      vr::Device::create(instance.value(), gpu.value(), reqs);
+  vkc::Result<vkc::Device> device =
+      vkc::Device::create(instance.value(), gpu.value(), reqs);
   if (!device) {
     std::fprintf(stderr, "device create failed on %s: %s\n",
                  gpu.value().properties().deviceName,

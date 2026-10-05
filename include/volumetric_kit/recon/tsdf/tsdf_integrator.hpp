@@ -12,15 +12,15 @@
 #include <cstdint>
 #include <vector>
 
-#include "volumetric_kit/recon/core/buffer.hpp"
+#include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/base/stage_metrics.hpp"
+#include "volumetric_kit/core/vulkan/buffer.hpp"
+#include "volumetric_kit/core/vulkan/compute_kernel.hpp"
+#include "volumetric_kit/core/vulkan/descriptor.hpp"
+#include "volumetric_kit/core/vulkan/gpu_timer.hpp"
 #include "volumetric_kit/recon/core/camera_params.hpp"
 #include "volumetric_kit/recon/core/color_space.hpp"
-#include "volumetric_kit/recon/core/compute_kernel.hpp"
-#include "volumetric_kit/recon/core/descriptor.hpp"
 #include "volumetric_kit/recon/core/fwd.hpp"
-#include "volumetric_kit/recon/core/gpu_timer.hpp"
-#include "volumetric_kit/recon/core/result.hpp"
-#include "volumetric_kit/recon/core/stage_metrics.hpp"
 #include "volumetric_kit/recon/tsdf/export.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
@@ -66,10 +66,10 @@ struct ColorFrame {
   /// The same image already on the device, in the same layout: a storage
   /// buffer of at least `cam.width * cam.height` words, read in place with no
   /// upload (a GPU pre-processing pass's output). Its memory metadata must
-  /// establish device locality, as required by @ref StorageInput. Set this or
+  /// establish device locality, as required by `StorageInput`. Set this or
   /// @ref pixels, not both. Borrowed for the call. After @ref encoding, so
   /// `{pixels, cam, encoding}` still initializes a host frame.
-  const Buffer* buffer = nullptr;
+  const core::Buffer* buffer = nullptr;
 
   /// The image marks its own coverage in each word's high byte: 0 is a pixel
   /// with no colour, such as one a lens maps outside the captured picture,
@@ -112,7 +112,7 @@ struct FrameInput : volume::DepthInput {
 /// bilinearly, falling back to nearest-neighbour at image edges and across
 /// depth discontinuities or taps that are non-positive or non-finite.
 ///
-/// @warning The @ref Device and @ref Allocator passed to @ref create must
+/// @warning The `Device` and `Allocator` passed to @ref create must
 ///          outlive this object; it stores references to them.
 class VR_TSDF_API TsdfIntegrator {
  public:
@@ -120,9 +120,10 @@ class VR_TSDF_API TsdfIntegrator {
   /// @param device     The compute device (must outlive this object).
   /// @param allocator  The allocator its transient buffers come from (must
   ///                   outlive this).
-  /// @return The integrator, or a non-OK @ref Status if a pipeline or
+  /// @return The integrator, or a non-OK `Status` if a pipeline or
   ///         descriptor object fails to build.
-  static Result<TsdfIntegrator> create(Device& device, Allocator& allocator);
+  static core::Result<TsdfIntegrator> create(core::Device& device,
+                                             core::Allocator& allocator);
 
   // Rule of zero: every owned pipeline / layout / pool self-frees and self-
   // resets on move; device_ / allocator_ are borrowed, so the defaulted moves
@@ -177,7 +178,7 @@ class VR_TSDF_API TsdfIntegrator {
   ///        follows the depth projection). Color also shares the SDF weight
   ///        cap, so a changed color converges over several frames once the
   ///        weight saturates.
-  /// @param metrics  Optional @ref StageMetrics collecting this call's timing:
+  /// @param metrics  Optional `StageMetrics` collecting this call's timing:
   ///                  an `"integrate"` host row around the whole call, and its
   ///                  device half from a timestamp span around the fusion
   ///                  dispatch. `nullptr` measures nothing -- no timer runs, no
@@ -200,19 +201,19 @@ class VR_TSDF_API TsdfIntegrator {
   ///                  beneath this one. Without it that kernel's device time
   ///                  would fall into the gap above and read as submit
   ///                  overhead.
-  /// @return OK on success, or a non-OK @ref Status:
-  ///         @ref Status::Code::InvalidArgument if the integrator is
+  /// @return OK on success, or a non-OK `Status`:
+  ///         `Status::Code::InvalidArgument` if the integrator is
   ///         moved-from, @p depth is null, @p grid lacks a `float`
   ///         `tsdf`/`weight` attribute, @p color is set but empty or @p grid
   ///         lacks a `uint32` `color` attribute, or the active set is too large
   ///         for a single 1-D dispatch (its voxel count exceeds the device's
   ///         `maxComputeWorkGroupCount[0]`, or 2^32 threads); otherwise a
   ///         buffer or dispatch failure.
-  Status integrate(volume::VoxelBlockGrid& grid, const float* depth,
-                   const DepthCameraParams& cam, float max_weight = 5.0f,
-                   IntegrationMode mode = IntegrationMode::Classic,
-                   const ColorFrame* color = nullptr,
-                   StageMetrics* metrics = nullptr);
+  core::Status integrate(volume::VoxelBlockGrid& grid, const float* depth,
+                         const DepthCameraParams& cam, float max_weight = 5.0f,
+                         IntegrationMode mode = IntegrationMode::Classic,
+                         const ColorFrame* color = nullptr,
+                         core::StageMetrics* metrics = nullptr);
 
   /// @brief @ref integrate from a depth image already on the device.
   ///
@@ -223,15 +224,16 @@ class VR_TSDF_API TsdfIntegrator {
   ///               `cam.width * cam.height` floats, row-major. Borrowed for the
   ///               call; the writer's dispatch must have finished, which a
   ///               `dispatch` on this device guarantees.
-  /// @return As the host overload; @ref Status::Code::InvalidArgument also for
+  /// @return As the host overload; `Status::Code::InvalidArgument` also for
   ///         a @p depth that is empty, not a storage buffer, has unknown or
   ///         non-device-local memory, or is smaller than
   ///         the image.
-  Status integrate(volume::VoxelBlockGrid& grid, const Buffer& depth,
-                   const DepthCameraParams& cam, float max_weight = 5.0f,
-                   IntegrationMode mode = IntegrationMode::Classic,
-                   const ColorFrame* color = nullptr,
-                   StageMetrics* metrics = nullptr);
+  core::Status integrate(volume::VoxelBlockGrid& grid,
+                         const core::Buffer& depth,
+                         const DepthCameraParams& cam, float max_weight = 5.0f,
+                         IntegrationMode mode = IntegrationMode::Classic,
+                         const ColorFrame* color = nullptr,
+                         core::StageMetrics* metrics = nullptr);
 
   /// @brief @ref integrate several cameras' frames at once: one compaction and
   ///        one submit for them all, rather than two submits a frame.
@@ -253,11 +255,11 @@ class VR_TSDF_API TsdfIntegrator {
   /// @param metrics     As @ref integrate: one `"integrate"` row, a device span
   ///                    per frame, over one `"  ..active set"` sub-row.
   /// @return As @ref integrate.
-  Status integrate(volume::VoxelBlockGrid& grid,
-                   const std::vector<FrameInput>& frames,
-                   float max_weight = 5.0f,
-                   IntegrationMode mode = IntegrationMode::Classic,
-                   StageMetrics* metrics = nullptr);
+  core::Status integrate(volume::VoxelBlockGrid& grid,
+                         const std::vector<FrameInput>& frames,
+                         float max_weight = 5.0f,
+                         IntegrationMode mode = IntegrationMode::Classic,
+                         core::StageMetrics* metrics = nullptr);
 
   /// @return `true` if this owns a live pipeline (`false` when moved-from).
   bool valid() const noexcept { return kernel_.valid(); }
@@ -266,8 +268,8 @@ class VR_TSDF_API TsdfIntegrator {
   TsdfIntegrator() = default;
 
   // Borrowed (must outlive this).
-  Device* device_ = nullptr;
-  Allocator* allocator_ = nullptr;
+  core::Device* device_ = nullptr;
+  core::Allocator* allocator_ = nullptr;
 
   // Cached maxComputeWorkGroupCount[0] -- the device cap on a 1-D dispatch's
   // groupCountX; integrate() rejects an active set that would exceed it.
@@ -279,26 +281,26 @@ class VR_TSDF_API TsdfIntegrator {
   // The integrate kernel's bundled layout + pipeline + descriptor set, its set
   // allocated from pool_ (which must outlive it) by KernelSetBuilder at
   // create().
-  ComputeKernel kernel_;
-  DescriptorPool pool_;
+  core::ComputeKernel kernel_;
+  core::DescriptorPool pool_;
   // The kernel's sets, one a frame of a call, so one batch fuses several
   // cameras; kernel_.set goes unused. Grown to the most frames a call has
   // had; every set is written whole each call.
-  KernelSets frame_sets_;
+  core::KernelSets frame_sets_;
   // The device-span collector, created once rather than per call: a query pool
   // of a few timestamps is negligible, and a lazily-created one would need a
   // mutable member and a failure path on a diagnostic. Idle -- no query
   // written, no span recorded -- until a caller passes a StageMetrics.
-  GpuTimer gpu_timer_;
+  core::GpuTimer gpu_timer_;
   // Fixed-size camera-params SSBO (DepthCameraParams), rewritten inline ahead
   // of each frame's dispatch rather than reallocated per frame (mirrors the
   // volume tier's persistent camera params).
-  Buffer cam_buf_;
+  core::Buffer cam_buf_;
   // Color path: the persistent (separate) color-camera SSBO, and a 1-element
   // dummy bound to the color-image + color-attribute slots when no color frame
   // is fused (so every declared descriptor stays bound).
-  Buffer color_cam_buf_;
-  Buffer color_dummy_;
+  core::Buffer color_cam_buf_;
+  core::Buffer color_dummy_;
 };
 
 }  // namespace volumetric_kit::recon::tsdf

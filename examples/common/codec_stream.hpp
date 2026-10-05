@@ -21,16 +21,17 @@
 #include <vector>
 
 #include "grid_layout.hpp"
+#include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/recon/codec/decoder.hpp"
 #include "volumetric_kit/recon/codec/encoder.hpp"
-#include "volumetric_kit/recon/core/result.hpp"
-#include "volumetric_kit/recon/core/stage_metrics.hpp"
 #include "volumetric_kit/recon/eval/mesh_distance.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 
 namespace vr_example {
 
 namespace vr = volumetric_kit::recon;
+namespace vkc = volumetric_kit::core;
 
 using Bytes = std::vector<std::uint8_t>;
 
@@ -47,10 +48,10 @@ inline std::int32_t player_buckets(std::uint32_t blocks) {
 /// @brief A grid for a stream, from a frame's header: its geometry, `tsdf` +
 ///        `weight` only (all a frame carries, and all the Decoder accepts),
 ///        in the examples' layout, sized for the frame's own blocks.
-inline vr::Result<vr::volume::VoxelBlockGrid> player_grid(
-    vr::Device& device, vr::Allocator& allocator, const Bytes& frame) {
-  VR_ASSIGN(const vr::codec::FrameInfo info,
-            vr::codec::read_frame_info(frame.data(), frame.size()));
+inline vkc::Result<vr::volume::VoxelBlockGrid> player_grid(
+    vkc::Device& device, vkc::Allocator& allocator, const Bytes& frame) {
+  VKC_ASSIGN(const vr::codec::FrameInfo info,
+             vr::codec::read_frame_info(frame.data(), frame.size()));
   const vr::volume::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
                                              {"weight", sizeof(float)}};
   return vr::volume::VoxelBlockGrid::create(
@@ -68,22 +69,22 @@ inline vr::Result<vr::volume::VoxelBlockGrid> player_grid(
 /// other error is returned as itself. Only the attempt that succeeds is timed
 /// into @p rows, so a frame that grew the grid on the way is reported as one
 /// decode.
-inline vr::Status decode_growing(vr::codec::Decoder& dec, const Bytes& frame,
-                                 vr::volume::VoxelBlockGrid& grid,
-                                 vr::StageMetrics* rows, int* grows) {
+inline vkc::Status decode_growing(vr::codec::Decoder& dec, const Bytes& frame,
+                                  vr::volume::VoxelBlockGrid& grid,
+                                  vkc::StageMetrics* rows, int* grows) {
   constexpr int kContendedRetries = 2;
-  VR_ASSIGN(const vr::codec::FrameInfo info,
-            vr::codec::read_frame_info(frame.data(), frame.size()));
+  VKC_ASSIGN(const vr::codec::FrameInfo info,
+             vr::codec::read_frame_info(frame.data(), frame.size()));
   int contended = 0;
   for (;;) {
-    vr::StageMetrics attempt;
-    const vr::Status s = dec.decode(frame.data(), frame.size(), grid,
-                                    rows != nullptr ? &attempt : nullptr);
+    vkc::StageMetrics attempt;
+    const vkc::Status s = dec.decode(frame.data(), frame.size(), grid,
+                                     rows != nullptr ? &attempt : nullptr);
     if (s.ok()) {
       if (rows != nullptr) rows->merge(attempt);
       return s;
     }
-    if (s.domain() == vr::Status::Code::OutOfMemory) {
+    if (s.domain() == vkc::Status::Code::OutOfMemory) {
       const std::int64_t grown =
           std::max<std::int64_t>(2 * std::int64_t(grid.grid().num_buckets),
                                  player_buckets(info.block_count));
@@ -91,9 +92,9 @@ inline vr::Status decode_growing(vr::codec::Decoder& dec, const Bytes& frame,
           std::numeric_limits<std::int32_t>::max()) {
         return s;
       }
-      VR_TRY(grid.resize(std::int32_t(grown)));
+      VKC_TRY(grid.resize(std::int32_t(grown)));
       ++*grows;
-    } else if (s.domain() != vr::Status::Code::IoError ||
+    } else if (s.domain() != vkc::Status::Code::IoError ||
                ++contended > kContendedRetries) {
       return s;
     }
@@ -101,18 +102,18 @@ inline vr::Status decode_growing(vr::codec::Decoder& dec, const Bytes& frame,
 }
 
 /// @return A row's host milliseconds, or 0 if @p m has no row of that name.
-inline double row_ms(const vr::StageMetrics& m, const char* name) {
-  for (const vr::StageRow& r : m.rows()) {
+inline double row_ms(const vkc::StageMetrics& m, const char* name) {
+  for (const vkc::StageRow& r : m.rows()) {
     if (std::strcmp(r.name, name) == 0) return r.cpu_ms;
   }
   return 0.0;
 }
 
 /// @brief Print @p rows, each divided by @p per (host ms / device ms).
-inline void print_stage_rows(const char* title, const vr::StageMetrics& rows,
+inline void print_stage_rows(const char* title, const vkc::StageMetrics& rows,
                              std::size_t per) {
   std::printf("  %s, per coded frame (host ms / device ms):\n", title);
-  for (const vr::StageRow& r : rows.rows()) {
+  for (const vkc::StageRow& r : rows.rows()) {
     std::printf("    %-18s %8.3f", r.name, r.cpu_ms / double(per));
     if (r.has_gpu) {
       std::printf("  %8.3f\n", r.gpu_ms / double(per));
@@ -147,45 +148,45 @@ class CodecStream {
   /// The player grid is built from the first frame's header, sized for its
   /// blocks, and grows as later frames need. The decoder runs its rANS
   /// coding where @p config says the encoder does.
-  static vr::Result<CodecStream> create(
-      vr::Device& device, vr::Allocator& allocator,
+  static vkc::Result<CodecStream> create(
+      vkc::Device& device, vkc::Allocator& allocator,
       const vr::codec::EncoderConfig& config) {
-    VR_ASSIGN(vr::codec::Encoder enc,
-              vr::codec::Encoder::create(device, allocator, config));
+    VKC_ASSIGN(vr::codec::Encoder enc,
+               vr::codec::Encoder::create(device, allocator, config));
     vr::codec::DecoderConfig dc;
     dc.entropy = config.entropy;
-    VR_ASSIGN(vr::codec::Decoder dec,
-              vr::codec::Decoder::create(device, allocator, dc));
+    VKC_ASSIGN(vr::codec::Decoder dec,
+               vr::codec::Decoder::create(device, allocator, dc));
     return CodecStream(device, allocator, std::move(enc), std::move(dec));
   }
 
   /// @brief Encode @p source as one frame and decode it into the player.
   /// @param frame_path Optional output file for the successfully decoded
   ///                   compressed frame; file I/O is outside codec timings.
-  vr::Status code(vr::volume::VoxelBlockGrid& source,
-                  const std::string& frame_path = {}) {
-    VR_ASSIGN(const Bytes frame, encoder_.encode(source, &encode_rows_));
+  vkc::Status code(vr::volume::VoxelBlockGrid& source,
+                   const std::string& frame_path = {}) {
+    VKC_ASSIGN(const Bytes frame, encoder_.encode(source, &encode_rows_));
     if (!player_) {
-      VR_ASSIGN(vr::volume::VoxelBlockGrid g,
-                player_grid(*device_, *allocator_, frame));
+      VKC_ASSIGN(vr::volume::VoxelBlockGrid g,
+                 player_grid(*device_, *allocator_, frame));
       player_.emplace(std::move(g));
     }
-    VR_TRY(decode_growing(decoder_, frame, *player_, &decode_rows_, &grows_));
+    VKC_TRY(decode_growing(decoder_, frame, *player_, &decode_rows_, &grows_));
     if (!frame_path.empty()) {
       if (frame.size() >
           std::size_t(std::numeric_limits<std::streamsize>::max())) {
-        return vr::Status::invalid_argument("frame is too large to write");
+        return vkc::Status::invalid_argument("frame is too large to write");
       }
       std::ofstream output(frame_path, std::ios::binary);
       output.write(reinterpret_cast<const char*>(frame.data()),
                    static_cast<std::streamsize>(frame.size()));
       output.close();
       if (!output) {
-        return vr::Status::io_error("cannot write codec frame: " + frame_path);
+        return vkc::Status::io_error("cannot write codec frame: " + frame_path);
       }
     }
-    VR_ASSIGN(const vr::codec::FrameInfo info,
-              vr::codec::read_frame_info(frame.data(), frame.size()));
+    VKC_ASSIGN(const vr::codec::FrameInfo info,
+               vr::codec::read_frame_info(frame.data(), frame.size()));
     ++frames_;
     bytes_ += double(frame.size());
     blocks_ += double(info.block_count);
@@ -238,20 +239,20 @@ class CodecStream {
   }
 
  private:
-  CodecStream(vr::Device& device, vr::Allocator& allocator,
+  CodecStream(vkc::Device& device, vkc::Allocator& allocator,
               vr::codec::Encoder enc, vr::codec::Decoder dec)
       : device_(&device),
         allocator_(&allocator),
         encoder_(std::move(enc)),
         decoder_(std::move(dec)) {}
 
-  vr::Device* device_;
-  vr::Allocator* allocator_;
+  vkc::Device* device_;
+  vkc::Allocator* allocator_;
   vr::codec::Encoder encoder_;
   vr::codec::Decoder decoder_;
   std::optional<vr::volume::VoxelBlockGrid> player_;
-  vr::StageMetrics encode_rows_;
-  vr::StageMetrics decode_rows_;
+  vkc::StageMetrics encode_rows_;
+  vkc::StageMetrics decode_rows_;
   std::size_t frames_ = 0;
   double bytes_ = 0.0;
   double blocks_ = 0.0;

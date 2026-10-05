@@ -24,26 +24,22 @@ repos:
         additional_dependencies: [cmakelang, pyyaml]
 
   # Enforce the Vulkan-include umbrella: first-party code includes
-  # "volumetric_kit/recon/core/vulkan.hpp", never <vulkan/...> directly, so the
-  # loader/dispatch choice (link-time loader today; volk later) stays a detail of
-  # that one header, which forwards to volumetric_kit_core's. Fails if any tracked
+  # volumetric_kit_core's "volumetric_kit/core/vulkan/vulkan.hpp", never
+  # <vulkan/...> directly, so the loader/dispatch choice (link-time loader today;
+  # volk later) stays a detail of that one header. Fails if any tracked
   # C / C++ / CUDA / Obj-C++ source includes a <vulkan/...> path. The pattern is
   # anchored to the start of a line (after optional whitespace) so it matches real
   # `#include` directives, not the path quoted inside a comment or a Doxygen @code
-  # block. Exemptions: examples/ (consumer demo code, not library code, may use
-  # Vulkan directly) and vulkan.hpp itself.
+  # block. Exemption: examples/ (consumer demo code, not library code, may use
+  # Vulkan directly).
   - repo: local
     hooks:
       - id: vulkan-include-umbrella
-        name: enforce core/vulkan.hpp Vulkan-include umbrella
+        name: enforce core/vulkan/vulkan.hpp Vulkan-include umbrella
         entry: '^\s*#\s*include\s*[<"]vulkan/'
         language: pygrep
         files: \.(h|hpp|hxx|inl|ipp|c|cc|cpp|cxx|cu|cuh|mm)$
-        exclude: |
-          (?x)^(
-            examples/.*|
-            include/volumetric_kit/recon/core/vulkan\.hpp
-          )$
+        exclude: ^examples/
 
 # pre-commit.ci (https://pre-commit.ci) runs these same hooks on every PR and
 # pushes the auto-fixes back to the branch, so formatting lands even when a

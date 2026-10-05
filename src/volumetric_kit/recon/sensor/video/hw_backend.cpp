@@ -73,25 +73,26 @@ std::optional<bool> hardware_decodes(VideoDecodeBackend backend,
   return std::nullopt;
 }
 
-Result<BufferRef> open_hardware_device(VideoDecodeBackend backend,
-                                       const char* name) {
+core::Result<BufferRef> open_hardware_device(VideoDecodeBackend backend,
+                                             const char* name) {
   const AVHWDeviceType type = device_type(backend);
   if (type == AV_HWDEVICE_TYPE_NONE) {
-    return Status::invalid_argument(std::string("no device for back end ") +
-                                    to_string(backend));
+    return core::Status::invalid_argument(
+        std::string("no device for back end ") + to_string(backend));
   }
   AVBufferRef* device = nullptr;
   const int err = av_hwdevice_ctx_create(&device, type, name, nullptr, 0);
   if (err < 0) {
-    return Status::unsupported(std::string(to_string(backend)) +
-                               ": no device opens: " + ffmpeg_message(err));
+    return core::Status::unsupported(
+        std::string(to_string(backend)) +
+        ": no device opens: " + ffmpeg_message(err));
   }
   return BufferRef(device);
 }
 
 void warn_host_pictures(const char* who, const std::string& label,
                         const std::string& why) {
-  log_message(LogLevel::Warning,
+  log_message(core::LogLevel::Warning,
               (label.empty() ? std::string() : label + ": ") + who + ": " +
                   why + "; from here on its pictures come to the host");
 }

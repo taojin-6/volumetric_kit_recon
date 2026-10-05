@@ -12,13 +12,14 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "volumetric_kit/recon/core/result.hpp"
+#include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/recon/io/mesh_io.hpp"
 #include "volumetric_kit/recon/mesh/mesh.hpp"
 
 namespace vr_example {
 
 namespace vr = volumetric_kit::recon;
+namespace vkc = volumetric_kit::core;
 using Point3d = std::array<double, 3>;
 
 /// Axis-aligned position bounds, in the positions' current units.
@@ -56,7 +57,7 @@ struct MeshTopology {
 /// height. Input units are unspecified; height is in metres. A positive
 /// determinant rotation preserves winding. Invalid inputs leave the geometry
 /// unchanged.
-vr::Result<MeshNormalization> normalize_mesh_height(
+vkc::Result<MeshNormalization> normalize_mesh_height(
     vr::io::TriangleMesh& geometry, double height, const Point3d& up);
 
 /// Check indexed topology and signed component volumes for a loaded mesh.

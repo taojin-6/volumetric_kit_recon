@@ -12,8 +12,8 @@
 include(FetchContent)
 
 # --- volumetric_kit_core: the family's shared foundation ---------------------
-# recon's Status / Result / VR_CHECK / log sink come from its base tier, and its
-# Vulkan foundation -- instance, device, VMA allocator, buffers, images,
+# recon's Status / Result / VKC_CHECK / log sink come from its base tier, and
+# its Vulkan foundation -- instance, device, VMA allocator, buffers, images,
 # descriptors, compute pipelines, command batches, GPU timers, external memory
 # and the SharedDevice -- from its vulkan tier (DECISIONS.md, 2026-10-03 and
 # 2026-10-04), so they are the same types calib and gfx use, and one VkDevice

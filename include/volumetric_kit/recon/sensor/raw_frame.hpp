@@ -82,7 +82,7 @@ struct YuvImage {
   /// reads as a torn picture. The frame holds the buffer, so the decoder
   /// cannot reuse it while the frame is prepared, and a prepare whose wait
   /// fails holds it for good, as the device may still read it.
-  std::shared_ptr<const Buffer> device;
+  std::shared_ptr<const core::Buffer> device;
   std::uint64_t offset[3] = {};  ///< Each plane's byte offset in @ref device.
   /// The queue family that wrote @ref device, which the pass takes it over
   /// from before reading: another family of the device, whose writer
@@ -97,7 +97,7 @@ struct YuvImage {
   /// halved and rounded up, and read from its corner. The pass copies them
   /// into its input in its batch, so their writer must have finished, as
   /// for @ref device, and the frame holds them as it does @ref device.
-  std::shared_ptr<const Image> image[2];
+  std::shared_ptr<const core::Image> image[2];
   std::uint32_t width = 0;   ///< Luma width (pixels).
   std::uint32_t height = 0;  ///< Luma height (pixels).
   /// The matrix's red and blue weights: BT.601 is 0.299 and 0.114, BT.709

@@ -26,9 +26,9 @@
 #include <cstdint>
 #include <optional>
 
+#include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/recon/core/camera_params.hpp"
 #include "volumetric_kit/recon/core/color_space.hpp"
-#include "volumetric_kit/recon/core/result.hpp"
 #include "volumetric_kit/recon/sensor/export.hpp"
 #include "volumetric_kit/recon/sensor/raw_frame.hpp"
 
@@ -47,11 +47,11 @@ namespace volumetric_kit::recon::sensor {
 /// // `failed` counts blocks the map had no room for. Neither call reports a
 /// // shortfall any other way, and neither return is [[nodiscard]], so
 /// // dropping them fuses a frame with silent holes -- grow and retry instead.
-/// VR_ASSIGN(std::uint32_t failed,
-///           grid.map().allocate_from_depth(frame.depth, frame.depth_camera));
+/// VKC_ASSIGN(std::uint32_t failed,
+///            grid.map().allocate_from_depth(frame.depth, frame.depth_camera));
 /// if (failed != 0) {
-///   VR_TRY(grid.resize(grid.grid().num_buckets * 2));  // then retry the frame
-///   return Status::out_of_memory("map full; grew it, frame not fused");
+///   VKC_TRY(grid.resize(grid.grid().num_buckets * 2));  // then retry
+///   return core::Status::out_of_memory("map full; grew it, frame not fused");
 /// }
 /// // Carry the encoding across. `ColorFrame::encoding` defaults to canonical,
 /// // so leaving it out does not mean "unspecified" -- it *declares* canonical,
@@ -60,9 +60,9 @@ namespace volumetric_kit::recon::sensor {
 /// // sensor::to_canonical gets an error rather than a dim reconstruction.
 /// tsdf::ColorFrame color{frame.color, frame.color_camera,
 ///                        frame.color_encoding};
-/// VR_TRY(integrator.integrate(grid, frame.depth, frame.depth_camera, 5.0f,
-///                             tsdf::IntegrationMode::Classic,
-///                             frame.has_color() ? &color : nullptr));
+/// VKC_TRY(integrator.integrate(grid, frame.depth, frame.depth_camera, 5.0f,
+///                              tsdf::IntegrationMode::Classic,
+///                              frame.has_color() ? &color : nullptr));
 /// @endcode
 struct CapturedFrame {
   /// Row-major depth in **metres**, `depth_camera.width * height` samples. A
@@ -127,7 +127,7 @@ class VR_SENSOR_API ICameraCapture {
   /// @brief Begin producing frames. Idempotent: starting a running device is
   /// OK.
   /// @return OK once running, or why the device could not start.
-  virtual Status start() = 0;
+  virtual core::Status start() = 0;
 
   /// @brief Stop producing frames and release the device.
   ///
@@ -137,35 +137,36 @@ class VR_SENSOR_API ICameraCapture {
 
   /// @brief The "no new frame this tick" return, spelled out for implementers.
   ///
-  /// @ref poll returns `Result<std::optional<CapturedFrame>>`, and @ref Result
+  /// @ref poll returns `Result<std::optional<CapturedFrame>>`, and `Result`
   /// converts implicitly only from *exactly* its value type. Every natural
   /// spelling therefore fails, and none of the failures is obvious from the
   /// signature:
   /// - `return std::nullopt;` needs two user-defined conversions
-  ///   (`nullopt_t` → `std::optional` → @ref Result) and does not compile;
-  /// - `return {};` is ambiguous between @ref Result's value and @ref Status
+  ///   (`nullopt_t` → `std::optional` → `Result`) and does not compile;
+  /// - `return {};` is ambiguous between `Result`'s value and `Status`
   ///   constructors;
   /// - `return Status{};` compiles and then **aborts**, because an OK
-  ///   @ref Status is not a failure and @ref Result checks that.
+  ///   `Status` is not a failure and `Result` checks that.
   ///
   /// Use this and @ref some_frame instead of rediscovering the wrapping.
   ///
-  /// @return An OK @ref Result holding an empty optional.
-  static Result<std::optional<CapturedFrame>> no_frame() {
+  /// @return An OK `Result` holding an empty optional.
+  static core::Result<std::optional<CapturedFrame>> no_frame() {
     return std::optional<CapturedFrame>{};
   }
 
   /// @brief The "here is the frame" return, the counterpart to @ref no_frame.
   ///
   /// `return frame;` does not compile for the same reason `return
-  /// std::nullopt;` does not: `CapturedFrame` → `std::optional` → @ref Result
+  /// std::nullopt;` does not: `CapturedFrame` → `std::optional` → `Result`
   /// is two user-defined conversions. Both of @ref poll's success paths
   /// therefore go through a helper rather than through a wrap the caller has to
   /// get right.
   ///
   /// @param frame  The frame to hand over.
-  /// @return An OK @ref Result holding @p frame.
-  static Result<std::optional<CapturedFrame>> some_frame(CapturedFrame frame) {
+  /// @return An OK `Result` holding @p frame.
+  static core::Result<std::optional<CapturedFrame>> some_frame(
+      CapturedFrame frame) {
     return std::optional<CapturedFrame>{frame};
   }
 
@@ -174,7 +175,7 @@ class VR_SENSOR_API ICameraCapture {
   /// Returns an empty optional (@ref no_frame) when no new frame has arrived
   /// since the last call — the ordinary case for a consumer polling faster
   /// than the sensor runs, and **not** an error. Only a genuine device failure
-  /// is a non-OK @ref Status. (Same shape as `gfx`'s
+  /// is a non-OK `Status`. (Same shape as `gfx`'s
   /// `WindowedApp::begin_frame`, which likewise separates "nothing this tick"
   /// from "something is wrong".)
   ///
@@ -193,7 +194,7 @@ class VR_SENSOR_API ICameraCapture {
   /// @endcode
   ///
   /// @return The frame; an empty optional if none is ready; or a device error.
-  virtual Result<std::optional<CapturedFrame>> poll() = 0;
+  virtual core::Result<std::optional<CapturedFrame>> poll() = 0;
 
   /// @brief Whether this source will never hand out another frame.
   ///
@@ -206,7 +207,7 @@ class VR_SENSOR_API ICameraCapture {
   /// overrides it to say when its sequence is over.
   ///
   /// @code
-  /// VR_ASSIGN(const std::optional<CapturedFrame> polled, capture.poll());
+  /// VKC_ASSIGN(const std::optional<CapturedFrame> polled, capture.poll());
   /// if (!polled) {
   ///   if (capture.exhausted()) break;  // a replay's end of sequence
   ///   wait_a_moment();                 // a live device's "not yet"
@@ -228,10 +229,10 @@ class VR_SENSOR_API ICameraCapture {
   /// dropped rather than queued, and the frame borrows the source's buffers
   /// until its next call. A source that hands out none keeps the default.
   /// @return The frame; an empty optional if none is ready; a device error;
-  ///         or, the default, @ref Status::Code::Unsupported from a source
+  ///         or, the default, `Status::Code::Unsupported` from a source
   ///         that hands out no raw frames.
-  virtual Result<std::optional<RawFrame>> poll_raw() {
-    return Status::unsupported(
+  virtual core::Result<std::optional<RawFrame>> poll_raw() {
+    return core::Status::unsupported(
         "ICameraCapture: this source hands out no raw frames");
   }
 

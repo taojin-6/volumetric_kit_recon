@@ -63,9 +63,10 @@ include(vr_sanitizers)
 
 # --- Dependencies + library --------------------------------------------------
 # The Vulkan loader (linked at runtime) + headers, from the system SDK (MoltenVK
-# on Apple). Public: the core tier reaches Vulkan through core/vulkan.hpp, so
-# the requirement is carried on the exported target and the package Config
-# re-runs find_dependency(Vulkan). Mirrors volumetric_kit_gfx.
+# on Apple). Public: recon's headers reach Vulkan through the core's
+# core/vulkan/vulkan.hpp, so the requirement is carried on the exported target
+# and the package Config re-runs find_dependency(Vulkan). Mirrors
+# volumetric_kit_gfx.
 find_package(Vulkan REQUIRED)
 
 # The Orbbec SDK (ob::OrbbecSDK), found the same way: installed once, outside

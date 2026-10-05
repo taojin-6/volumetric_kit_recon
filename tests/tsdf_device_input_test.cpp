@@ -19,12 +19,13 @@
 #include <tuple>
 #include <vector>
 
-#include "volumetric_kit/recon/core/allocator.hpp"
-#include "volumetric_kit/recon/core/buffer.hpp"
-#include "volumetric_kit/recon/core/compute_util.hpp"
-#include "volumetric_kit/recon/core/device.hpp"
-#include "volumetric_kit/recon/core/instance.hpp"
-#include "volumetric_kit/recon/core/result.hpp"
+#include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "volumetric_kit/core/vulkan/buffer.hpp"
+#include "volumetric_kit/core/vulkan/compute_util.hpp"
+#include "volumetric_kit/core/vulkan/device.hpp"
+#include "volumetric_kit/core/vulkan/instance.hpp"
+#include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
 #include "volumetric_kit/recon/volume/hash_types.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
@@ -33,6 +34,7 @@
 #include "grid_readback.hpp"
 
 namespace vr = volumetric_kit::recon;
+namespace vkc = volumetric_kit::core;
 namespace vol = volumetric_kit::recon::volume;
 namespace tsdf = volumetric_kit::recon::tsdf;
 
@@ -64,8 +66,8 @@ vol::VoxelGridParams grid_params() {
   return grid;
 }
 
-vr::Result<vol::VoxelBlockGrid> make_grid(vr::Device& device,
-                                          vr::Allocator& allocator) {
+vkc::Result<vol::VoxelBlockGrid> make_grid(vkc::Device& device,
+                                           vkc::Allocator& allocator) {
   const vol::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
                                       {"weight", sizeof(float)},
                                       {"color", sizeof(std::uint32_t)}};
@@ -74,9 +76,9 @@ vr::Result<vol::VoxelBlockGrid> make_grid(vr::Device& device,
 }
 
 // Every active block's coordinate and first voxel (`ptr` is a voxel offset).
-vr::Result<std::map<Coord, std::int32_t>> blocks_of(vol::VoxelBlockGrid& g) {
-  VR_ASSIGN(std::vector<vol::BlockIndex> active,
-            g.map().compact_active_blocks());
+vkc::Result<std::map<Coord, std::int32_t>> blocks_of(vol::VoxelBlockGrid& g) {
+  VKC_ASSIGN(std::vector<vol::BlockIndex> active,
+             g.map().compact_active_blocks());
   std::map<Coord, std::int32_t> out;
   for (const vol::BlockIndex& b : active) {
     out[Coord{b.coord.x, b.coord.y, b.coord.z}] = b.ptr;
@@ -147,16 +149,16 @@ struct ColorCounts {
   std::size_t black = 0;
   std::size_t none = 0;
 };
-vr::Result<ColorCounts> color_counts(const vr_test::Gpu& ctx,
-                                     vol::VoxelBlockGrid& g) {
-  VR_ASSIGN(const std::vector<vol::BlockIndex> active,
-            g.map().compact_active_blocks());
-  VR_ASSIGN(
+vkc::Result<ColorCounts> color_counts(const vr_test::Gpu& ctx,
+                                      vol::VoxelBlockGrid& g) {
+  VKC_ASSIGN(const std::vector<vol::BlockIndex> active,
+             g.map().compact_active_blocks());
+  VKC_ASSIGN(
       const std::vector<float> weight,
       vr_test::read_attribute<float>(ctx.device, ctx.allocator, g, "weight"));
-  VR_ASSIGN(const std::vector<std::uint32_t> color,
-            vr_test::read_attribute<std::uint32_t>(ctx.device, ctx.allocator, g,
-                                                   "color"));
+  VKC_ASSIGN(const std::vector<std::uint32_t> color,
+             vr_test::read_attribute<std::uint32_t>(ctx.device, ctx.allocator,
+                                                    g, "color"));
   ColorCounts out;
   for (const vol::BlockIndex& b : active) {
     for (std::int32_t k = 0; k < grid_params().voxels_per_block; ++k) {
@@ -172,7 +174,7 @@ vr::Result<ColorCounts> color_counts(const vr_test::Gpu& ctx,
 // The left half of the colour image says it has no colour (a zero high byte,
 // and black): with coverage_in_alpha nothing fuses from it, and without it
 // the black is fused as colour, as it would be from any host image.
-int test_coverage(vr::Device& dev, vr::Allocator& alloc,
+int test_coverage(vkc::Device& dev, vkc::Allocator& alloc,
                   tsdf::TsdfIntegrator& integrator,
                   const std::vector<float>& depth,
                   const vr::DepthCameraParams& cam) {
@@ -219,27 +221,27 @@ int test_coverage(vr::Device& dev, vr::Allocator& alloc,
 }  // namespace
 
 int main() {
-  vr::Result<vr::Instance> instance = vr::Instance::create({});
+  vkc::Result<vkc::Instance> instance = vkc::Instance::create({});
   if (!instance) {
     std::fprintf(stderr, "no Vulkan instance (%s); skipping\n",
                  instance.status().message().c_str());
     return 0;
   }
-  vr::Result<vr::PhysicalDeviceInfo> gpu =
+  vkc::Result<vkc::PhysicalDeviceInfo> gpu =
       instance.value().select_physical_device(vr::device_requirements());
   if (!gpu) {
     std::fprintf(stderr, "no compute-capable device (%s); skipping\n",
                  gpu.status().message().c_str());
     return 0;
   }
-  vr::Result<vr::Device> device = vr::Device::create(
+  vkc::Result<vkc::Device> device = vkc::Device::create(
       instance.value(), gpu.value(), vr::device_requirements());
   CHECK(device.ok());
-  vr::Result<vr::Allocator> allocator =
-      vr::Allocator::create(instance.value().handle(), device.value());
+  vkc::Result<vkc::Allocator> allocator =
+      vkc::Allocator::create(instance.value().handle(), device.value());
   CHECK(allocator.ok());
-  vr::Device& dev = device.value();
-  vr::Allocator& alloc = allocator.value();
+  vkc::Device& dev = device.value();
+  vkc::Allocator& alloc = allocator.value();
   const vr_test::Gpu ctx{dev, alloc};
 
   // A tilted, rippled surface 0.6-0.8 m away with a colour gradient over it,
@@ -313,12 +315,12 @@ int main() {
 
   // Refusals: an empty buffer, one smaller than the image, one that is not a
   // storage buffer, and a colour frame naming both images.
-  const auto invalid = vr::Status::Code::InvalidArgument;
+  const auto invalid = vkc::Status::Code::InvalidArgument;
   // Borrowing an existing VkBuffer without its memory provenance is refused
   // before allocating blocks or updating any voxel, even on unified memory.
-  const vr::Buffer unknown(depth_buf->handle(), depth_buf->size(),
-                           depth_buf->usage(), depth_buf->sharing_mode(),
-                           nullptr, {}, std::nullopt);
+  const vkc::Buffer unknown(depth_buf->handle(), depth_buf->size(),
+                            depth_buf->usage(), depth_buf->sharing_mode(),
+                            nullptr, {}, std::nullopt);
   CHECK(
       device_grid->map().allocate_from_depth(unknown, cam).status().domain() ==
       invalid);
@@ -330,7 +332,7 @@ int main() {
             ->integrate(device_grid.value(), depth_buf.value(), cam, 5.0f,
                         tsdf::IntegrationMode::Classic, &unknown_color)
             .domain() == invalid);
-  const vr::Buffer empty;
+  const vkc::Buffer empty;
   CHECK(device_grid->map().allocate_from_depth(empty, cam).status().domain() ==
         invalid);
   CHECK(integrator->integrate(device_grid.value(), empty, cam).domain() ==
@@ -345,10 +347,10 @@ int main() {
   CHECK(
       integrator->integrate(device_grid.value(), small.value(), cam).domain() ==
       invalid);
-  vr::BufferDesc transfer_only;
+  vkc::BufferDesc transfer_only;
   transfer_only.size = depth.size() * sizeof(float);
   transfer_only.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-  transfer_only.memory = vr::MemoryUsage::Staging;
+  transfer_only.memory = vkc::MemoryUsage::Staging;
   auto not_storage = alloc.create_buffer(transfer_only);
   CHECK(not_storage.ok());
   CHECK(device_grid->map()

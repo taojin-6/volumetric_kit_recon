@@ -138,7 +138,7 @@ void describe_color(
   }
 }
 
-Result<DecodedPicture> PictureConverter::convert(
+core::Result<DecodedPicture> PictureConverter::convert(
     const AVFrame& frame, VideoPixelLayout layout,
     const std::optional<VideoColorDescription>& unlabelled_color) {
   const auto format = static_cast<AVPixelFormat>(frame.format);
@@ -146,9 +146,9 @@ Result<DecodedPicture> PictureConverter::convert(
   if (desc == nullptr || (desc->flags & AV_PIX_FMT_FLAG_HWACCEL) != 0 ||
       sws_isSupportedInput(format) == 0 || frame.width <= 0 ||
       frame.height <= 0) {
-    return Status::invalid_argument(std::string(who_) + ": cannot convert a " +
-                                    (desc != nullptr ? desc->name : "unknown") +
-                                    " frame");
+    return core::Status::invalid_argument(
+        std::string(who_) + ": cannot convert a " +
+        (desc != nullptr ? desc->name : "unknown") + " frame");
   }
 
   DecodedPicture picture;
@@ -236,8 +236,8 @@ Result<DecodedPicture> PictureConverter::convert(
       // 4.4's libswscale/utils.c).
       const bool yuv_to_yuv = !rgb && (desc->flags & AV_PIX_FMT_FLAG_RGB) == 0;
       if (set < 0 && !(kYuvSetupReportsFailure && yuv_to_yuv)) {
-        return Status::io_error(std::string(who_) +
-                                ": swscale refused the colour matrix");
+        return core::Status::io_error(std::string(who_) +
+                                      ": swscale refused the colour matrix");
       }
       sws_ = std::move(next);
       setup_ = setup;
