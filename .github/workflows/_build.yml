@@ -64,6 +64,13 @@ on:
         required: false
         type: string
         default: ''
+      build_types:
+        description: >-
+          JSON array of the CMAKE_BUILD_TYPEs this leg builds and tests, one
+          job each, e.g. '["Release"]'.
+        required: false
+        type: string
+        default: '["Debug","Release"]'
 
 jobs:
   build:
@@ -86,10 +93,11 @@ jobs:
       IN_CONTAINER: ${{ inputs.container != '' }}
     strategy:
       fail-fast: false
-      # Build + test both an unoptimized Debug and an optimized Release/NDEBUG
-      # configuration, so an NDEBUG-only or optimizer-exposed break is caught.
+      # One job per build type the caller asks for: ci.yml runs an optimized
+      # Release/NDEBUG build on every OS, and an unoptimized Debug one on one OS,
+      # so an NDEBUG-only or optimizer-exposed break is still caught.
       matrix:
-        build_type: [Debug, Release]
+        build_type: ${{ fromJSON(inputs.build_types) }}
     steps:
       # Bare ubuntu:* images lack git (actions/checkout needs it) and sudo (the
       # install steps use it); we run as root in the container, so install them
@@ -372,6 +380,8 @@ jobs:
         if: steps.detect.outputs.present == 'true'
         run: cmake --build build --parallel
 
+      # Runs CTEST_PARALLEL_LEVEL tests at once: from the runner's .env on the
+      # Mac, from the container env ci.yml sets on the Ubuntu legs.
       - name: Test
         if: steps.detect.outputs.present == 'true'
         env:

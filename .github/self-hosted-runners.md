@@ -21,8 +21,9 @@ the native Apple toolchain + MoltenVK.
 A self-hosted runner takes **one job at a time**, so to run the legs in parallel
 you register **several runner instances** on the box, all sharing the
 `vk-linux-gpu` label; GitHub then dispatches the queued legs across them. The
-build matrix emits 6 Linux jobs (3 OSes × Debug/Release), so 6 instances give
-full parallelism — fewer just means some legs queue.
+build matrix emits 3 Linux jobs per CI run (3 OSes, Release only; Debug runs
+on macOS), so 3 instances cover one run, and 6 let two runs, or one box carrying
+the other's legs while it is offline, proceed without queueing.
 
 ## Host prerequisites (one-time)
 
@@ -67,7 +68,7 @@ have them flat in `~/actions-runner-recon-<i>`; `teardown-runners.sh` handles bo
 TOKEN="<REGISTRATION_TOKEN>"
 RUNNER_VERSION="2.330.0"          # whatever the runner page shows
 URL="https://github.com/taojin-6/volumetric_kit_recon"
-N=6                                # one per Linux build leg (3 OS x Debug/Release)
+N=6                                # 3 Linux legs per run (3 OS, Release); 6 = two runs at once
 THREADS=4                          # N*THREADS ~= core count -> no oversubscription
 
 mkdir -p ~/ci-runners
@@ -78,8 +79,10 @@ for i in $(seq 1 "$N"); do
   dir=~/ci-runners/volumetric_kit_recon/runner-$i   # per-repo dir; won't collide with other repos' runners
   mkdir -p "$dir" && tar xzf ~/ci-runners/actions-runner.tar.gz -C "$dir"
   ( cd "$dir"
-    # Loaded into every job on this runner -> caps cmake/ctest fan-out so the
-    # parallel legs share the cores instead of each grabbing all of them.
+    # Loaded into every job run directly on this runner -> caps cmake/ctest
+    # fan-out so the parallel legs share the cores instead of each grabbing all
+    # of them. It does NOT reach a job container: ci.yml repeats the values in
+    # each Ubuntu leg's container env, so keep the two in step.
     printf 'CMAKE_BUILD_PARALLEL_LEVEL=%s\nCTEST_PARALLEL_LEVEL=%s\n' "$THREADS" "$THREADS" > .env
     ./config.sh --unattended --url "$URL" --token "$TOKEN" \
       --labels vk-linux-gpu --name "$(hostname)-recon-$i" --work _work   # do NOT sudo config.sh

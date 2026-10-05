@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Register N self-hosted GitHub Actions runners on THIS Linux box, all labelled
-# `vk-linux-gpu`, so ci.yml's 6 Ubuntu legs (3 OSes x Debug/Release) run in
+# `vk-linux-gpu`, so ci.yml's 3 Ubuntu legs (3 OSes, Release) run in
 # OS-matched containers against the real GPU driver instead of hosted lavapipe.
 #
 # Prereqs: Docker Engine + NVIDIA Container Toolkit (so containers see the GPU) —
@@ -19,7 +19,7 @@ set -euo pipefail
 REPO="taojin-6/volumetric_kit_recon"
 SLUG="recon"                         # name scope so repos don't collide on GitHub
 LABEL="vk-linux-gpu"
-N=6                                  # one per Linux build leg (3 OS x Debug/Release)
+N=6                                  # 3 Linux legs per run (3 OS, Release); 6 = two runs at once
 BASE="$HOME/ci-runners"              # every repo's runners under one dir
 RUNNER_ROOT="${BASE}/${REPO#*/}"     # ...this repo's under its own name
 
@@ -71,8 +71,10 @@ for i in $(seq 1 "$N"); do
   echo "==> [${i}/${N}] ${dir}"
   if [ ! -f "${dir}/.runner" ]; then
     mkdir -p "$dir"; tar xzf "$TAR" -C "$dir"
-    # Loaded into every job -> caps cmake/ctest fan-out so the parallel legs share
-    # the cores instead of each grabbing all of them.
+    # Loaded into every job run directly on this runner -> caps cmake/ctest
+    # fan-out so the parallel legs share the cores instead of each grabbing all
+    # of them. It does NOT reach a job container: ci.yml repeats the values in
+    # each Ubuntu leg's container env, so keep the two in step.
     printf 'CMAKE_BUILD_PARALLEL_LEVEL=%s\nCTEST_PARALLEL_LEVEL=%s\n' "$THREADS" "$THREADS" > "${dir}/.env"
     ( cd "$dir" && ./config.sh --unattended --url "https://github.com/${REPO}" \
         --token "$TOKEN" --labels "$LABEL" --name "$(hostname -s)-${SLUG}-${i}" --work _work --replace )

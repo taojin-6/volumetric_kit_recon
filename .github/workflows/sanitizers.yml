@@ -92,6 +92,9 @@ jobs:
       # the escape hatch is to split this run: CPU-only tests with full leak
       # detection, driver-backed tests with ASAN_OPTIONS=detect_leaks=0 (ASan +
       # UBSan still on). Prefer extending the suppressions first.
+      #
+      # --parallel: a hosted runner sets no CTEST_PARALLEL_LEVEL, so ctest would
+      # otherwise run the suite one test at a time.
       - name: Test
         if: steps.detect.outputs.present == 'true'
-        run: ctest --test-dir build --output-on-failure
+        run: ctest --test-dir build --output-on-failure --parallel "$(nproc)"
