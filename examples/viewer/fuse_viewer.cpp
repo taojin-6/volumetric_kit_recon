@@ -95,12 +95,14 @@
 #include "recon_gfx_bridge.hpp"
 #include "replica_capture.hpp"  // vr_example::ReplicaCapture
 #include "shared_device.hpp"
-#include "stage_metrics.hpp"  // fuse_viewer::to_sections
 #include "viewer_common.hpp"
 
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "volumetric_kit/core/vulkan/descriptor.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
+#include "volumetric_kit/core/vulkan/image.hpp"
+#include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/mesh/device_mesh.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
@@ -114,14 +116,11 @@
 
 #include "volumetric_kit/gfx/app/windowed_app.hpp"
 #include "volumetric_kit/gfx/camera/camera.hpp"
-#include "volumetric_kit/gfx/core/descriptor.hpp"
 #include "volumetric_kit/gfx/core/frame_metrics.hpp"
 #include "volumetric_kit/gfx/core/profiler.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
-#include "volumetric_kit/gfx/core/result.hpp"
 #include "volumetric_kit/gfx/core/sampler.hpp"
 #include "volumetric_kit/gfx/core/texture_upload.hpp"
-#include "volumetric_kit/gfx/core/vulkan.hpp"
 #include "volumetric_kit/gfx/pipelines/hybrid_mesh_pipeline.hpp"
 #include "volumetric_kit/gfx/pipelines/live_mesh.hpp"
 #include "volumetric_kit/gfx/ui/imgui_overlay.hpp"
@@ -452,9 +451,9 @@ void draw_reconstruction_panel(const ReconstructionPanel& panel) {
 // texture needs. `set` is declared after `pool` only for tidy teardown; the set
 // is a non-owning handle, so the order is not load-bearing.
 struct AtlasVersion {
-  vg::Texture tex;
-  vg::DescriptorPool pool;
-  vg::DescriptorSet set;
+  vkc::Image tex;
+  vkc::DescriptorPool pool;
+  vkc::DescriptorSet set;
 };
 
 // A keyframe's colour image in the canonical packed form (R | G<<8 | B<<16 |
@@ -483,32 +482,34 @@ struct AtlasPixels {
 // CAMetalLayer.
 int run(GLFWwindow* window, const Options& opt) {
   // --- One VkDevice, adopted by both libraries ------------------------------
-  // Declared first so it outlives every wrapper that borrows it: the gfx app
-  // and recon's device/allocator below hold raw handles into this, and both
-  // must be gone before the instance and device are destroyed.
-  fuse_viewer::SharedDeviceConfig shared_config;
-  shared_config.enable_validation = opt.validation;
-  const std::unique_ptr<fuse_viewer::vkc::SharedDevice> shared =
-      fuse_viewer::build_shared_device(window, shared_config);
-  if (shared == nullptr) return 1;
-
+  // The shared device is declared before every wrapper that borrows it, so it
+  // outlives them: the gfx app and recon's device/allocator below hold raw
+  // handles into it, and both must be gone before the instance and device are
+  // destroyed. gfx's requirements are the app config's, which adopt verifies.
   vg::app::WindowedAppConfig config;
   config.app_name = "fuse_viewer";
   config.swapchain.extent = fuse_viewer::window_extent(window);
   config.swapchain.depth_format = VK_FORMAT_D32_SFLOAT;
   config.frames_in_flight = 2;
+  fuse_viewer::SharedDeviceConfig shared_config;
+  shared_config.enable_validation = opt.validation;
+  shared_config.graphics = config.device;
+  const std::unique_ptr<fuse_viewer::vkc::SharedDevice> shared =
+      fuse_viewer::build_shared_device(window, shared_config);
+  if (shared == nullptr) return 1;
+
   // The surface already exists -- picking a present-capable device required
   // one -- so the factory hands over the one the bootstrap made rather than
   // creating a second. Ownership transfers with it.
   auto app_r = vg::app::WindowedApp::adopt(
-      fuse_viewer::gfx_adopt_payload(*shared), config,
-      [&shared](VkInstance instance) -> vg::Result<VkSurfaceKHR> {
+      shared->graphics_payload(), config,
+      [&shared](VkInstance instance) -> vkc::Result<VkSurfaceKHR> {
         // adopt calls this with the instance from the payload, so this can only
         // trip if the two ever stop coming from the same SharedDevice -- at
         // which point the surface would belong to a different instance than the
         // swapchain built on it.
         if (instance != shared->instance().handle()) {
-          return vg::Status::invalid_argument(
+          return vkc::Status::invalid_argument(
               "surface factory: the app adopted a different VkInstance than "
               "the bootstrap created the surface on");
         }
@@ -646,8 +647,9 @@ int run(GLFWwindow* window, const Options& opt) {
   // The render side gets real GPU spans (this device reports 64
   // timestampValidBits through MoltenVK) plus fps and whole-frame CPU time;
   // attaching it to the app makes the frame loop drive begin_frame/end_frame.
-  // recon's stages are measured separately -- see stage_metrics.hpp for why
-  // they are wall-clock CPU rows.
+  // recon's stages are measured separately, as wall-clock rows unless a
+  // vkc::GpuTimer timed them (StageRow::has_gpu says which): every recon
+  // dispatch blocks on its fence, so a host span covers the device work too.
   vg::ProfilerConfig profiler_config;
   profiler_config.frames_in_flight = config.frames_in_flight;
   auto profiler_result = vg::Profiler::create(app.device(), profiler_config);
@@ -735,13 +737,13 @@ int run(GLFWwindow* window, const Options& opt) {
     const VkDescriptorPoolSize pool_size{
         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
     auto pool_result =
-        vg::DescriptorPool::create(app.device().handle(), &pool_size, 1, 1);
+        vkc::DescriptorPool::create(app.device().handle(), &pool_size, 1, 1);
     if (!pool_result.ok()) {
       std::fprintf(stderr, "atlas pool: %s\n",
                    pool_result.status().message().c_str());
       return nullptr;
     }
-    vg::DescriptorPool atlas_pool = std::move(pool_result).value();
+    vkc::DescriptorPool atlas_pool = std::move(pool_result).value();
     auto set_result = atlas_pool.allocate(pipeline.descriptor_set_layout(0));
     if (!set_result.ok()) {
       std::fprintf(stderr, "atlas set: %s\n",
@@ -800,7 +802,7 @@ int run(GLFWwindow* window, const Options& opt) {
   std::atomic<bool> quit{false};
   // Newest fused frame's stage breakdown + the volume's footprint, published
   // for the overlay under share_mtx alongside the mesh.
-  std::vector<vg::FrameMetrics::Section> shared_fuse_stages;
+  std::vector<vkc::StageRow> shared_fuse_stages;
   double shared_fuse_ms = 0.0;
   vkc::MemoryStats shared_recon_memory;
   std::int32_t shared_map_buckets = 0;
@@ -1110,7 +1112,7 @@ int run(GLFWwindow* window, const Options& opt) {
           }
           const float load_factor = lf ? lf.value() : -1.0f;
           std::lock_guard<std::mutex> lock(share_mtx);
-          shared_fuse_stages = fuse_viewer::to_sections(fuse_stages);
+          shared_fuse_stages = fuse_stages.rows();
           // Fusion cost, so the dataset read is excluded: it is dataloading,
           // not fusion, and while streaming it dwarfs the rest (~10 ms of
           // JPEG/PNG decode). It stays visible as its own `frame` row.
@@ -1239,7 +1241,7 @@ int run(GLFWwindow* window, const Options& opt) {
   std::size_t view_frame = 0;
   // The fuse thread's newest published stage rows + counters, copied out under
   // share_mtx each frame so the panels read a consistent snapshot.
-  std::vector<vg::FrameMetrics::Section> fuse_stages_snapshot;
+  std::vector<vkc::StageRow> fuse_stages_snapshot;
   ReconstructionPanel recon_panel;
 
   std::printf(
@@ -1525,7 +1527,7 @@ int run(GLFWwindow* window, const Options& opt) {
     }
     render_frame.target->end(render_frame.cmd);
 
-    const vg::Status present = app.end_frame(render_frame);
+    const vkc::Status present = app.end_frame(render_frame);
     if (!present.ok() && !win::swapchain_stale(present)) {
       std::fprintf(stderr, "end_frame: %s\n", present.message().c_str());
       exit_code = 1;
@@ -1535,7 +1537,10 @@ int run(GLFWwindow* window, const Options& opt) {
   }
 
   quit.store(true);  // stop the fuse thread promptly; QuitJoin joins it on exit
-  app.wait_idle();
+  if (const vkc::Status idle = app.wait_idle(); !idle) {
+    std::fprintf(stderr, "wait_idle: %s\n", idle.message().c_str());
+    exit_code = 1;
+  }
   return exit_code;
 }
 

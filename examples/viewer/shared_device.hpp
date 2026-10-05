@@ -11,14 +11,17 @@
 /// Neither owns the device: each publishes its requirements, the family's
 /// `SharedDevice` (volumetric_kit_core) satisfies their union and makes the
 /// window's surface on the instance, and each library adopts the same handles
-/// -- recon through `Device::adopt`, gfx through `WindowedApp::adopt`. That is
-/// what makes zero-copy possible at all: a `VkBuffer` is valid only on the
-/// device that created it, so recon geometry can be drawn by gfx *only* if
-/// there is one device.
+/// -- recon through the core's `Device::adopt`, gfx through
+/// `WindowedApp::adopt`. That is what makes zero-copy possible at all: a
+/// `VkBuffer` is valid only on the device that created it, so recon geometry
+/// can be drawn by gfx *only* if there is one device.
 ///
-/// What is left here is the viewer's side: the GLFW surface, and gfx's
-/// requirements and payload in the core's terms, as gfx still has a device type
-/// of its own.
+/// What is left here is the viewer's side: the GLFW surface. recon and gfx
+/// both state their requirements as the core's `DeviceRequirements` and adopt
+/// the core's `AdoptedDevice`, so the shared device's payloads go to each
+/// unconverted: `graphics_payload()` to `WindowedApp::adopt`,
+/// `compute_payload()` to `vkc::Device::adopt` with
+/// `vr::device_requirements()`.
 
 #include <cstdint>
 #include <cstdio>
@@ -32,8 +35,7 @@
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/shared_device.hpp"
 #include "volumetric_kit/core/vulkan/vk_result.hpp"
-#include "volumetric_kit/gfx/app/windowed_app.hpp"
-#include "volumetric_kit/gfx/core/device.hpp"
+#include "volumetric_kit/gfx/core/device_requirements.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 
 namespace fuse_viewer {
@@ -53,31 +55,10 @@ struct SharedDeviceConfig {
   bool enable_validation = false;
   /// Reported to the driver in `VkApplicationInfo`.
   const char* app_name = "fuse_viewer";
+  /// What gfx needs: the `WindowedAppConfig::device` the app is adopted with,
+  /// so the shared device enables what `WindowedApp::adopt` verifies.
+  vkc::DeviceRequirements graphics = vg::device_requirements();
 };
-
-namespace detail {
-
-// gfx's requirements in the core's terms.
-// TODO: drop once gfx adopts the core's DeviceRequirements.
-inline vkc::DeviceRequirements core_requirements(
-    const vg::DeviceRequirements& gfx) {
-  vkc::DeviceRequirements reqs;
-  reqs.api_version = gfx.api_version;
-  reqs.queue_flags = gfx.queue_flags;
-  reqs.needs_present = gfx.needs_present;
-  for (const char* name : gfx.device_extensions) {
-    reqs.extensions.emplace_back(name);
-  }
-  reqs.features = gfx.features;
-  reqs.timeline_semaphore = gfx.timeline_semaphore;
-  reqs.dynamic_rendering = gfx.dynamic_rendering;
-  // The core raises the bits it enables in the chain's structs, so it takes
-  // them mutable; gfx hands out the chain its DeviceConfig was given.
-  reqs.feature_chain = const_cast<void*>(gfx.feature_chain);
-  return reqs;
-}
-
-}  // namespace detail
 
 /// @brief Build one instance + device satisfying both libraries, and the
 ///        window's surface on it.
@@ -90,7 +71,7 @@ inline vkc::DeviceRequirements core_requirements(
 ///
 /// @param window  The GLFW window to present to; its required instance
 ///                extensions are enabled and its surface created here.
-/// @param config  Embedder-owned knobs (validation, app name).
+/// @param config  Embedder-owned knobs (validation, app name, gfx's needs).
 /// @return The device; null, with a specific reason on stderr, when the
 ///         loader, the hardware, or the driver cannot satisfy the union. The
 ///         caller must treat that as fatal: running the two libraries on
@@ -115,11 +96,9 @@ inline std::unique_ptr<vkc::SharedDevice> build_shared_device(
 
   // Neither library is consulted about the other: each states its needs, and
   // the shared device satisfies the union. gfx needs present; recon compute.
-  vg::DeviceConfig gfx_config;
-  gfx_config.needs_present = true;
   shared.compute = vr::device_requirements();
-  shared.graphics =
-      detail::core_requirements(vg::Device::requirements(gfx_config));
+  shared.graphics = config.graphics;
+  shared.graphics.needs_present = true;
   shared.make_surface =
       [window](VkInstance instance) -> vkc::Result<VkSurfaceKHR> {
     VkSurfaceKHR surface = VK_NULL_HANDLE;
@@ -142,35 +121,6 @@ inline std::unique_ptr<vkc::SharedDevice> build_shared_device(
                  "rendering will serialize\n");
   }
   return device;
-}
-
-/// @brief The payload `gfx::app::WindowedApp::adopt` needs from the shared
-///        device: the core's graphics payload, field for field.
-// TODO: drop once gfx adopts the core's AdoptedDevice.
-inline vg::AdoptedDevice gfx_adopt_payload(const vkc::SharedDevice& shared) {
-  const vkc::AdoptedDevice core = shared.graphics_payload();
-  vg::AdoptedDevice adopted;
-  adopted.instance = core.instance;
-  adopted.physical_device = core.physical_device;
-  adopted.device = core.device;
-  adopted.graphics_family = core.queue_family;
-  adopted.graphics_queue = core.queue;
-  adopted.has_present = core.has_present;
-  adopted.present_family = core.present_family;
-  adopted.present_queue = core.present_queue;
-  // The graphics queue presents, so its mutex covers both.
-  adopted.submit_mutex = core.submit_mutex;
-  adopted.enabled_device_extensions = core.enabled_extensions;
-  adopted.enabled_device_extension_count = core.enabled_extension_count;
-  adopted.enabled_features = core.enabled_features.core;
-  // Read back from what the shared device enabled, never asserted here: gfx's
-  // adopt verifies against this declaration rather than against
-  // physical-device support, because Vulkan cannot be asked what a *logical*
-  // device enabled.
-  adopted.enabled_timeline_semaphore = core.enabled_features.timeline_semaphore;
-  adopted.enabled_dynamic_rendering = core.enabled_features.dynamic_rendering;
-  adopted.enabled_debug_utils = core.enabled_debug_utils;
-  return adopted;
 }
 
 }  // namespace fuse_viewer

@@ -34,11 +34,14 @@
 #include "replica_capture.hpp"  // vr_example::ReplicaCapture (examples/common)
 #include "rgbd_frame.hpp"       // vr_example::RgbdFrame
 
-// recon tiers
+// core and recon tiers
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "volumetric_kit/core/vulkan/descriptor.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
+#include "volumetric_kit/core/vulkan/image.hpp"
 #include "volumetric_kit/core/vulkan/instance.hpp"
+#include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/io/image_io.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
@@ -54,12 +57,10 @@
 // gfx
 #include "volumetric_kit/gfx/app/headless_app.hpp"
 #include "volumetric_kit/gfx/camera/camera.hpp"
-#include "volumetric_kit/gfx/core/descriptor.hpp"
 #include "volumetric_kit/gfx/core/offscreen_target.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/core/sampler.hpp"
 #include "volumetric_kit/gfx/core/texture_upload.hpp"
-#include "volumetric_kit/gfx/core/vulkan.hpp"
 #include "volumetric_kit/gfx/pipelines/gpu_mesh.hpp"
 #include "volumetric_kit/gfx/pipelines/hybrid_mesh_pipeline.hpp"
 
@@ -523,7 +524,7 @@ int main(int argc, char** argv) {
                  atlas_tex_r.status().message().c_str());
     return 1;
   }
-  vg::Texture atlas_tex = std::move(atlas_tex_r).value();
+  vkc::Image atlas_tex = std::move(atlas_tex_r).value();
   auto sampler_r = vg::Sampler::create(app.device().handle());
   if (!sampler_r.ok()) {
     std::fprintf(stderr, "sampler: %s\n", sampler_r.status().message().c_str());
@@ -533,20 +534,20 @@ int main(int argc, char** argv) {
   const VkDescriptorPoolSize pool_size{
       VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
   auto pool_result =
-      vg::DescriptorPool::create(app.device().handle(), &pool_size, 1, 1);
+      vkc::DescriptorPool::create(app.device().handle(), &pool_size, 1, 1);
   if (!pool_result.ok()) {
     std::fprintf(stderr, "descriptor pool: %s\n",
                  pool_result.status().message().c_str());
     return 1;
   }
-  vg::DescriptorPool pool = std::move(pool_result).value();
+  vkc::DescriptorPool pool = std::move(pool_result).value();
   auto set_result = pool.allocate(pipeline.descriptor_set_layout(0));
   if (!set_result.ok()) {
     std::fprintf(stderr, "atlas set: %s\n",
                  set_result.status().message().c_str());
     return 1;
   }
-  vg::DescriptorSet atlas_set = std::move(set_result).value();
+  vkc::DescriptorSet atlas_set = std::move(set_result).value();
   atlas_set.write_combined_image_sampler(
       0, atlas_tex.view(), sampler.handle(),
       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
@@ -562,7 +563,7 @@ int main(int argc, char** argv) {
   frame.draws = &draw;
   frame.draw_count = 1;
 
-  const vg::Status rendered =
+  const vkc::Status rendered =
       app.device().submit_single_time([&](VkCommandBuffer cmd) {
         target.prepare(cmd);
         const vg::RenderTarget rt = target.target();

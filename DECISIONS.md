@@ -314,6 +314,10 @@ entries relevant to your task; later amendments supersede earlier rules.
   recon writes the core's types and macros under the core's names
   (`core::Status`, `VKC_TRY`); the re-export headers and the `VR_*` aliases
   are gone (amends the two entries above).
+- [**2026-10-05**](#2026-10-05--the-viewers-build-on-gfxs-core-migration) —
+  The viewers pin gfx #106, after gfx moved onto the core: recon and gfx share
+  one `Status`, `Device` and `StageRow`, so the device and timing seams
+  convert nothing, and a program linking both carries one VMA.
 
 ## Decision record
 
@@ -9369,7 +9373,9 @@ worktrees). The aliases cost nothing at runtime; a `TODO` in
 that bumps its recon pin (ios pins its siblings by commit from 2026-10-03).
 gfx still has its own `vg::Status`, so the app keeps an `error_code` and a
 `describe` overload for each; when gfx adopts the core the two types are one,
-and each pair must merge into one overload or it is a redefinition.
+and each pair must merge into one overload or it is a redefinition. (gfx has
+since adopted the core, at its #100-#106, so the app merges each pair when it
+bumps both pins.)
 
 **Validation.** Apple M-series, macOS, Release with warnings as errors, Orbbec,
 FFmpeg, Assimp and the viewer: the build is warning-free and all 61 tests
@@ -9451,7 +9457,8 @@ an unrelated class that collides with the using-declaration.
 of the 2026-08-02 decision; the core's `SharedDevice` is that bootstrap
 generalized (it replaces this one and the iOS app's), so the viewer's header
 now only makes the GLFW surface and converts gfx's requirements and payload,
-as gfx still has a device type of its own. The queue-plan preference is the
+as gfx still has a device type of its own. (Since 2026-10-05 it converts
+nothing: gfx takes the core's types.) The queue-plan preference is the
 core's, unchanged. Every queue now has a mutex (it was set only under the
 shared-queue plan), as the core's `wait_idle` is a third thread touching both
 queues.
@@ -9463,7 +9470,8 @@ member only for a symbol still undefined, so it links when the core's
 `allocator.o` is loaded first -- as in the viewers, whose link line names
 `core_vulkan` before `gfx_core` -- and fails with duplicate symbols when gfx's
 `vma_impl.o` is. The iOS app links both, so it bumps recon and gfx together,
-once gfx compiles no VMA of its own.
+once gfx compiles no VMA of its own. (gfx #104 removed its `vma_impl.cpp`, so
+the hazard is gone at the viewers' gfx pin, #106, from 2026-10-05.)
 
 **Validation.** Apple M5 Max, macOS, Debug with warnings as errors: all 39
 tests pass, and all 52 with FFmpeg, Assimp and Orbbec (the camera tests skip
@@ -9496,7 +9504,8 @@ of one type cost every reader: the viewer met the same device as `vr::Device`
 and `vkc::Device`, and each re-export header was one more file to keep in step
 with the core's. calib, and gfx from its #100, still name the core's types in
 their own namespaces; recon no longer does. (The viewer's gfx pin, #98,
-predates that and still has gfx's own `vg::Status`.)
+predates that and still has gfx's own `vg::Status`; since 2026-10-05 it is
+gfx #106, which names the core's types as recon does.)
 
 **What it costs.** #162 and the August branches (#70, #73–#75, #78) rebase
 over about 180 files. The rewrite is mechanical: the four macros, `vr::X` →
@@ -9506,6 +9515,46 @@ from before the core, takes the new spellings when it bumps the pin.
 **Validation.** Apple M5 Max, macOS, Debug with warnings as errors, Orbbec,
 FFmpeg, Assimp and the viewer: the build is warning-free and all 52 tests
 pass. The CUDA paths build only in CI's CUDA leg; their diff was read by hand.
+
+### 2026-10-05 — The viewers build on gfx's core migration.
+
+The viewers' gfx pin moves from #98 to #106. gfx #100-#106 moved gfx onto
+volumetric_kit_core and dropped its own names for the core's types, so recon
+and gfx now share one `Status`, `Device`, `AdoptedDevice`,
+`DeviceRequirements`, `Image` and `StageRow`. Amends the device and timing
+seams recorded above ("gfx still has its own `vg::Status`", "converts gfx's
+requirements and payload", "The viewer's gfx pin, #98, predates that", and
+`examples/viewer/stage_metrics.hpp` as the row mapping) and resolves the
+2026-10-04 VMA link hazard.
+
+- **The device seam converts nothing.** The viewers build the shared device
+  from the same `WindowedAppConfig::device` they adopt the app with, so gfx's
+  requirements have one source, and hand `WindowedApp::adopt` the core's
+  `graphics_payload()` as it is; the two field-by-field converters, and the
+  `TODO`s that waited for gfx, are gone.
+- **The timing seam converts nothing.** gfx's `FrameMetrics::sections` is a
+  vector of the core's `StageRow`, the type recon's `StageMetrics` holds, so
+  the fuse thread publishes its `rows()` as they are, the render thread
+  appends them to the overlay's sections, and `stage_metrics.hpp` is deleted.
+- **One VMA.** gfx #104 removed its `vma_impl.cpp`, so a program linking both
+  carries only the core's, and the iOS app's condition for bumping recon and
+  gfx together is met.
+- **What did change.** The viewers name gfx's former types as the core's
+  (`vkc::Image`, `vkc::DescriptorPool`, `vkc::Status`), and the two
+  `wait_idle` calls whose `Status` gfx now returns `[[nodiscard]]` report a
+  failure in the exit code. Memory placement changed too: gfx's `DeviceLocal`
+  preferred VRAM and fell back to host memory, but the core's `DeviceOnly`,
+  which also places every image, refuses (the 2026-10-02 device-local rule).
+  If VRAM runs out, `rig_viewer` says so once on stderr: its colour-by-camera
+  tiles keep their camera colour, and a remesh without an atlas image keeps
+  the previous view until one is acquired.
+
+**Validation.** Apple M5 Max, macOS, Release with warnings as errors, Orbbec,
+FFmpeg and the viewer: the build is warning-free and the 43 tests that need
+no camera pass. `fuse_render` on 60 Replica room0 frames renders a PNG
+byte-identical to the #98 pin's; `fuse_viewer` fused 120 frames on the shared
+device under the Khronos validation layer with no message. The live rig
+(`rig_viewer`) could not be run: the cameras' network was down at the time.
 
 ## Measured lessons
 

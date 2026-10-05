@@ -58,6 +58,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `examples`: **the viewers' gfx pin moves from #98 to #106**, after gfx
+  moved onto volumetric_kit_core (gfx #100-#106). recon and gfx now share one
+  `Status`, `Device` and `StageRow`: the viewers build the shared device from
+  their `WindowedAppConfig::device` and hand gfx its `graphics_payload()`
+  unconverted, `stage_metrics.hpp` and its `to_sections` mapping are gone
+  (recon's stage rows are the overlay's), and the viewers' textures and
+  descriptor objects are the core's `vkc::Image`, `vkc::DescriptorPool` and
+  `vkc::DescriptorSet`. Their images and buffers are `DeviceOnly`, which
+  refuses where gfx's `DeviceLocal` fell back to host memory. `fuse_render`
+  renders byte-identically at the new pin.
 - `core`: **a device that did not enable what recon's kernels need is
   refused.** `MarchingCubes`, `VoxelHashMap` (and so `VoxelBlockGrid`),
   `TsdfIntegrator`, `MeshIntegrator`, `ProjectiveTexturer`, `GpuFramePrep`

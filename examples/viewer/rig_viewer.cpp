@@ -89,14 +89,16 @@
 // place through its own attribute offsets (see fuse_viewer.cpp).
 #include "recon_gfx_bridge.hpp"
 #include "shared_device.hpp"
-#include "stage_metrics.hpp"  // fuse_viewer::to_sections
 #include "viewer_common.hpp"
 
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/buffer.hpp"
+#include "volumetric_kit/core/vulkan/descriptor.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
+#include "volumetric_kit/core/vulkan/image.hpp"
+#include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/mesh/device_mesh.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
@@ -113,17 +115,12 @@
 
 #include "volumetric_kit/gfx/app/windowed_app.hpp"
 #include "volumetric_kit/gfx/camera/camera.hpp"
-#include "volumetric_kit/gfx/core/allocator.hpp"
-#include "volumetric_kit/gfx/core/descriptor.hpp"
 #include "volumetric_kit/gfx/core/frame_metrics.hpp"
 #include "volumetric_kit/gfx/core/image_barrier.hpp"
 #include "volumetric_kit/gfx/core/profiler.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
-#include "volumetric_kit/gfx/core/result.hpp"
 #include "volumetric_kit/gfx/core/sampler.hpp"
-#include "volumetric_kit/gfx/core/texture.hpp"
 #include "volumetric_kit/gfx/core/texture_upload.hpp"
-#include "volumetric_kit/gfx/core/vulkan.hpp"
 #include "volumetric_kit/gfx/pipelines/hybrid_mesh_pipeline.hpp"
 #include "volumetric_kit/gfx/pipelines/live_mesh.hpp"
 #include "volumetric_kit/gfx/ui/imgui_overlay.hpp"
@@ -450,9 +447,9 @@ struct ScrollInput {
 // descriptor set binding it. Reused once nothing holds it but the pool (see
 // acquire), so a live rig does not allocate an atlas per remesh.
 struct AtlasImage {
-  vg::Texture tex;
-  vg::DescriptorPool pool;
-  vg::DescriptorSet set;
+  vkc::Image tex;
+  vkc::DescriptorPool pool;
+  vkc::DescriptorSet set;
 };
 
 // A camera's newest frame with colour, and the set it came in (sets count
@@ -671,23 +668,24 @@ void draw_rig_panel(const RigPanel& panel,
 // main destroys the window (see fuse_viewer's run()).
 int run(GLFWwindow* window, const Options& opt) {
   // --- One VkDevice, adopted by both libraries (as fuse_viewer) ------------
-  fuse_viewer::SharedDeviceConfig shared_config;
-  shared_config.enable_validation = opt.validation;
-  shared_config.app_name = "rig_viewer";
-  const std::unique_ptr<fuse_viewer::vkc::SharedDevice> shared =
-      fuse_viewer::build_shared_device(window, shared_config);
-  if (shared == nullptr) return 1;
-
   vg::app::WindowedAppConfig config;
   config.app_name = "rig_viewer";
   config.swapchain.extent = fuse_viewer::window_extent(window);
   config.swapchain.depth_format = VK_FORMAT_D32_SFLOAT;
   config.frames_in_flight = 2;
+  fuse_viewer::SharedDeviceConfig shared_config;
+  shared_config.enable_validation = opt.validation;
+  shared_config.app_name = "rig_viewer";
+  shared_config.graphics = config.device;
+  const std::unique_ptr<fuse_viewer::vkc::SharedDevice> shared =
+      fuse_viewer::build_shared_device(window, shared_config);
+  if (shared == nullptr) return 1;
+
   auto app_r = vg::app::WindowedApp::adopt(
-      fuse_viewer::gfx_adopt_payload(*shared), config,
-      [&shared](VkInstance instance) -> vg::Result<VkSurfaceKHR> {
+      shared->graphics_payload(), config,
+      [&shared](VkInstance instance) -> vkc::Result<VkSurfaceKHR> {
         if (instance != shared->instance().handle()) {
-          return vg::Status::invalid_argument(
+          return vkc::Status::invalid_argument(
               "surface factory: the app adopted a different VkInstance than "
               "the bootstrap created the surface on");
         }
@@ -916,14 +914,14 @@ int run(GLFWwindow* window, const Options& opt) {
   vg::Sampler sampler = std::move(sampler_result).value();
 
   // A texture + its own pool + a set binding it, as fuse_viewer's bundle.
-  using AtlasResult = vg::Result<std::shared_ptr<AtlasImage>>;
-  auto bind_atlas = [&](vg::Texture texture) -> AtlasResult {
+  using AtlasResult = vkc::Result<std::shared_ptr<AtlasImage>>;
+  auto bind_atlas = [&](vkc::Image texture) -> AtlasResult {
     const VkDescriptorPoolSize pool_size{
         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
     auto pool_result =
-        vg::DescriptorPool::create(app.device().handle(), &pool_size, 1, 1);
+        vkc::DescriptorPool::create(app.device().handle(), &pool_size, 1, 1);
     if (!pool_result.ok()) return pool_result.status();
-    vg::DescriptorPool atlas_pool = std::move(pool_result).value();
+    vkc::DescriptorPool atlas_pool = std::move(pool_result).value();
     auto set_result = atlas_pool.allocate(pipeline.descriptor_set_layout(0));
     if (!set_result.ok()) return set_result.status();
     auto atlas = std::make_shared<AtlasImage>();
@@ -978,7 +976,7 @@ int run(GLFWwindow* window, const Options& opt) {
       {245, 140, 40},
       {200, 200, 200},
   }};
-  std::vector<vg::Buffer> solid_buffers;
+  std::vector<vkc::Buffer> solid_buffers;
   std::vector<VkBuffer> solid_handles;
   auto ensure_solid = [&](VkCommandBuffer cmd) -> bool {
     if (solid_handles.size() == cameras) return true;
@@ -986,11 +984,11 @@ int run(GLFWwindow* window, const Options& opt) {
     solid_handles.clear();
     for (std::size_t c = 0; c < cameras; ++c) {
       const rtex::AtlasTile& tile = layout.tiles[c];
-      vg::BufferDesc desc;
+      vkc::BufferDesc desc;
       desc.size = VkDeviceSize(tile.width) * tile.height * 4u;
       desc.usage =
           VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-      desc.memory = vg::MemoryUsage::DeviceLocal;
+      desc.memory = vkc::MemoryUsage::DeviceOnly;
       auto buffer = app.allocator().create_buffer(desc);
       if (!buffer.ok()) {
         std::fprintf(stderr, "rig_viewer: colour-by-camera buffer: %s\n",
@@ -1036,7 +1034,7 @@ int run(GLFWwindow* window, const Options& opt) {
         return atlas;
       }
     }
-    vg::TextureDesc desc;
+    vkc::ImageDesc desc;
     desc.extent = {width, height};
     desc.format = VK_FORMAT_R8G8B8A8_SRGB;
     desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
@@ -1088,7 +1086,7 @@ int run(GLFWwindow* window, const Options& opt) {
   AtlasJob pending_job;
   std::uint64_t published_version = 0;
   std::uint64_t shared_released_through = 0;
-  std::vector<vg::FrameMetrics::Section> shared_fuse_stages;
+  std::vector<vkc::StageRow> shared_fuse_stages;
   RigPanel shared_panel;
   std::atomic<bool> fusing_done{false};
   // Set by whatever ended fusion early, so a scripted run exits non-zero.
@@ -1433,7 +1431,7 @@ int run(GLFWwindow* window, const Options& opt) {
           const vkc::Result<float> lf = volume.map().load_factor();
           const rsensor::OrbbecRigStats stats = rig.stats();
           std::lock_guard<std::mutex> lock(share_mtx);
-          shared_fuse_stages = fuse_viewer::to_sections(fuse_stages);
+          shared_fuse_stages = fuse_stages.rows();
           shared_panel.fuse_ms = fuse_ms;
           shared_panel.remesh_ms = remesh_stages.total_cpu_ms();
           shared_panel.sets_fused = sets;
@@ -1481,7 +1479,7 @@ int run(GLFWwindow* window, const Options& opt) {
   std::uint64_t newest_taken_generation = 0;
   bool mesh_unusable = false;
   bool atlas_error_said = false;  // until an atlas image is acquired again
-  std::vector<vg::FrameMetrics::Section> fuse_stages_snapshot;
+  std::vector<vkc::StageRow> fuse_stages_snapshot;
   RigPanel panel;
   double last_x = 0.0, last_y = 0.0;
   bool have_last = false;
@@ -1577,7 +1575,7 @@ int run(GLFWwindow* window, const Options& opt) {
               atlas_error_said = false;
               // Filled in this command buffer, so ahead of the copy.
               const bool solid = show_sources && ensure_solid(render_frame.cmd);
-              record_atlas_copy(render_frame.cmd, next->tex.image(), taken_job,
+              record_atlas_copy(render_frame.cmd, next->tex.handle(), taken_job,
                                 solid ? &solid_handles : nullptr);
               ++atlas_copies;
               for (AtlasTileSource& source : taken_job.tiles) {
@@ -1791,7 +1789,7 @@ int run(GLFWwindow* window, const Options& opt) {
     }
     render_frame.target->end(render_frame.cmd);
 
-    const vg::Status present = app.end_frame(render_frame);
+    const vkc::Status present = app.end_frame(render_frame);
     if (!present.ok() && !win::swapchain_stale(present)) {
       std::fprintf(stderr, "end_frame: %s\n", present.message().c_str());
       exit_code = 1;
@@ -1826,7 +1824,10 @@ int run(GLFWwindow* window, const Options& opt) {
   // Joined here rather than by fuse_guard, so fuse_failed is final when read.
   quit.store(true);
   fuse_thread.join();
-  app.wait_idle();
+  if (const vkc::Status idle = app.wait_idle(); !idle) {
+    std::fprintf(stderr, "wait_idle: %s\n", idle.message().c_str());
+    exit_code = 1;
+  }
   // The fuse thread said why on stderr; the exit code is for a script.
   if (fuse_failed.load()) exit_code = 1;
   std::printf(

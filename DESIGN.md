@@ -161,8 +161,8 @@ a message without losing its domain or detail.
 All of it is volumetric_kit_core's (the 2026-10-03 decision), and recon writes
 it under the core's names (2026-10-04): `core::Status` in recon's namespaces,
 `volumetric_kit::core::Status` to a consumer, so a recon error is the same type
-as calib's, and as gfx's from its #100 (the viewer's gfx pin, #98, still has
-its own `vg::Status`). Diagnostics go through the core's one process-wide log sink;
+as calib's, and as gfx's from its #100 (the viewers pin gfx #106, which names
+the core's types as recon does). Diagnostics go through the core's one process-wide log sink;
 recon's `log_message(level, message)` tags them with source `"vr"`, which the
 default sink prints as `[vr <level>]`, and an application's handler receives
 `(level, source, message)`.
@@ -235,10 +235,11 @@ Two pieces make adoption safe and keep the repos independent:
   under-provisioned it, rather than crashing three layers later.
 
 The shared bundle is expressed entirely in **raw Vulkan handles plus plain PODs**
-(`AdoptedDevice`), never a type either repo imports from the other; each repo
-defines its own structurally-identical copy and the integrating application fills
-both. That application owns the shared instance/device and a small bootstrap that
-computes the union — the only place that knows about both libraries, so the two
+(`AdoptedDevice`). recon and gfx both take it, and `DeviceRequirements`, from
+volumetric_kit_core, never from each other, so the integrating application hands
+each the core's payload unconverted. That application owns the shared
+instance/device and a small bootstrap that computes the union (the core's
+`SharedDevice`) — the only place that knows about both libraries, so the two
 stay true independent siblings. The neutral bootstrap prefers separate queue
 families, using concurrent sharing or explicit ownership transfer for shared
 resources; when that is unavailable, the libraries share a queue behind a
