@@ -51,9 +51,9 @@ conventions and Vulkan setup.
 - Namespace: `volumetric_kit::recon`. Internally and in docs, `vr::` abbreviates
   `volumetric_kit::recon::`.
 - Headers: `include/volumetric_kit/recon/<tier>/…`.
-- Macros: `VR_` prefix (`VR_TRY`, `VR_ASSIGN`, `VR_CHECK`, `VR_CORE_API`); the
-  first three are volumetric_kit_core's `VKC_TRY` / `VKC_ASSIGN` / `VKC_CHECK`
-  under recon's names, pending a rename.
+- Macros: `VR_` prefix (`VR_CORE_API`, `VR_WITH_ORBBEC`); the error and
+  contract macros are volumetric_kit_core's, used under its names (`VKC_TRY`,
+  `VKC_ASSIGN`, `VKC_CHECK`, `VKC_VK_TRY`).
   Deliberately *not* the `VK_` prefix — that belongs to Vulkan. (The prior
   engine's `VK_DEVICE_HOST`-style macros are renamed `VR_*` on port.)
 - CMake: `find_package(volumetric_kit_recon)`; component targets
@@ -83,11 +83,10 @@ branching off **`core`**, `codec` off **`volume`** and `eval`/`io` off **`mesh`*
   uploads, dispatches and readbacks into one submit,
   compute-pipeline + descriptor-set wrappers (and the `ComputeKernel` bundle +
   `KernelSetBuilder` that groups a kernel's layout/pipeline/set behind one
-  shared pool), sync (fences, timeline semaphores), recon's names for the
-  core's `Status`/`Result` idiom and log sink, and
-  the GLM-backed vector/matrix math. Vulkan is reached through one umbrella header
-  (`core/vulkan.hpp`), as in gfx — no other code includes `<vulkan/...>`
-  directly.
+  shared pool), sync (fences, timeline semaphores), the core's `Status`/`Result`
+  idiom and log sink, and the GLM-backed vector/matrix math. Vulkan is reached
+  through the core's one umbrella header (`core/vulkan/vulkan.hpp`) — no other
+  code includes `<vulkan/...>` directly.
 - **`volume`** — the sparse voxel hash map in Vulkan buffers; allocate / compact
   / rehash as compute shaders. (POD layouts already landed in `volume/hash_types.hpp`.)
 - **`tsdf`** — TSDF integration compute shaders (classic + dynamic), and a
@@ -152,19 +151,19 @@ Native CUDA is an optional NVIDIA accelerator under this baseline (the
 
 No exceptions cross the API boundary (mobile builds use `-fno-exceptions`).
 Fallible calls return `Status` (success or an error domain + message) or
-`Result<T>` (a value or a `Status`), both `[[nodiscard]]`. `VR_TRY` and
-`VR_ASSIGN` remove the check-and-propagate boilerplate. Programmer errors
-(precondition violations) fail fast via `VR_CHECK` (log + abort), distinct from
+`Result<T>` (a value or a `Status`), both `[[nodiscard]]`. `VKC_TRY` and
+`VKC_ASSIGN` remove the check-and-propagate boilerplate. Programmer errors
+(precondition violations) fail fast via `VKC_CHECK` (log + abort), distinct from
 recoverable runtime failures. `Status` is intentionally backend-neutral — a
 generic `int64_t` detail code, not a Vulkan or CUDA type — so the same idiom
-serves every tier; `core/vk_result.hpp` turns a failed `VkResult` into
-`Code::Backend` (`vk_error`, `VR_VK_TRY`), and `Status::with_context` prefixes
+serves every tier; the core's `vk_result.hpp` turns a failed `VkResult` into
+`Code::Backend` (`vk_error`, `VKC_VK_TRY`), and `Status::with_context` prefixes
 a message without losing its domain or detail.
 
-All of it is volumetric_kit_core's (the 2026-10-03 decision): `vr::Status` and
-`vr::Result` are using-declarations of the core's types, so a recon error is
-the same type as calib's (gfx keeps its own `Status` until it adopts the core),
-and the three macros are the core's under recon's names. Diagnostics go through the core's one process-wide log sink;
+All of it is volumetric_kit_core's (the 2026-10-03 decision), and recon writes
+it under the core's names (2026-10-04): `core::Status` in recon's namespaces,
+`volumetric_kit::core::Status` to a consumer, so a recon error is the same type
+as calib's and gfx's. Diagnostics go through the core's one process-wide log sink;
 recon's `log_message(level, message)` tags them with source `"vr"`, which the
 default sink prints as `[vr <level>]`, and an application's handler receives
 `(level, source, message)`.
@@ -285,7 +284,7 @@ geometry buffers directly.
   assume a single-family two-queue carve-out is available; check `queueCount`
   and plan the fallback (see the 2026-08-02 bootstrap decision, which does).
 - **Vulkan via the link-time loader through one umbrella header**
-  (`core/vulkan.hpp`), exactly as gfx — never `#include <vulkan/...>` directly,
+  (the core's `core/vulkan/vulkan.hpp`) — never `#include <vulkan/...>` directly,
   so adopting volk later for the iOS/Android loader stays a one-header change.
 - **Host buffer layout must match the shader.** Host POD structs (`HashEntry`,
   `Voxel`, …) and their GLSL mirrors must agree byte-for-byte, so the shaders
@@ -638,8 +637,8 @@ arbitrary; it usually isn't.
 ### core
 
 The Vulkan foundation below is volumetric_kit_core's vulkan tier
-(DECISIONS.md, 2026-10-04): `core/` names its types in `vr::`, and what is
-recon's own is `device_requirements()` (what recon's kernels need of a device),
+(DECISIONS.md, 2026-10-04): recon uses its types under the core's names, and
+what is recon's own is `device_requirements()` (what recon's kernels need of a device),
 the camera and colour-space vocabulary and the vector types. The description
 stays here because recon's tiers are written against it; the contract is the
 core's headers.

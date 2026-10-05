@@ -55,8 +55,9 @@ or `FetchContent`, then link a tier (e.g. `volumetric_kit::recon_core`).
 recon builds on [`volumetric_kit_core`](https://github.com/taojin-6/volumetric_kit_core),
 the family's shared foundation, fetched pinned by commit on the first configure:
 its error handling, and its Vulkan foundation -- device, allocator, buffers,
-kernels, command batches, timers -- which recon names in `vr::` and which one
-`VkDevice` shares with gfx.
+kernels, command batches, timers -- whose types recon uses under the core's
+names (`volumetric_kit::core::Status`, `volumetric_kit::core::Device`) and which
+one `VkDevice` shares with gfx.
 An installed recon carries the core beside it, and `find_package` finds both.
 An application that also fetches calib, which builds on the core too, declares
 `volumetric_kit_core` first, so both build against one copy, and sets

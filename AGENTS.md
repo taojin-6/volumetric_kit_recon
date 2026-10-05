@@ -17,7 +17,8 @@ geometry and compressed bitstreams → renderer handoff.
 - recon builds on [`volumetric_kit_core`](https://github.com/taojin-6/volumetric_kit_core),
   the family's shared foundation (fetched, pinned by commit): its error
   handling and log sink, and its Vulkan foundation (device, allocator,
-  buffers, kernels, batches, timers), which `core/` names in `vr::`.
+  buffers, kernels, batches, timers), used under the core's names
+  (`core::Status`, `core::Device`).
   Code two or more siblings need belongs there, as a task in that repository.
 - The prior `implicit_world_reconstruction` implementation is an algorithm
   reference for ports; `implicit_surface_compression` is research reference
@@ -68,17 +69,16 @@ core → volume → tsdf → mesh → texture → interop
   backend of `recon_io_assimp`, never a dependency of GPU kernels.
 - C++17, no compiler extensions. Namespace `volumetric_kit::recon` (`vr::` in
   docs), nested per tier. Headers: `include/volumetric_kit/recon/<tier>/…`.
-- Macros use `VR_`; `VK_` belongs to Vulkan. CMake targets use
+- recon's own macros use `VR_`; `VK_` belongs to Vulkan. CMake targets use
   `volumetric_kit::recon_<tier>`; see [package targets](DESIGN.md#naming-conventions-use-these-consistently).
-- Fallible APIs return `Status` / `Result<T>` -- the core's types, named in
-  `vr::` by `core/result.hpp` -- and propagate with `VR_TRY` / `VR_ASSIGN`.
-  No exceptions cross the API boundary. Programmer errors use `VR_CHECK`.
-  The three macros are the core's `VKC_*` under recon's names until a rename
-  (a `TODO` in `core/result.hpp`); recon logs with source `"vr"`.
-- Include Vulkan through `core/vulkan.hpp`. Keep host PODs and GLSL
-  `layout(scalar)` definitions byte-identical; host assertions alone cannot
-  validate the shader ABI. A `create` that builds kernels first calls
-  `check_device_requirements`.
+- Fallible APIs return the core's `core::Status` / `core::Result<T>` and
+  propagate with `VKC_TRY` / `VKC_ASSIGN`. No exceptions cross the API
+  boundary. Programmer errors use `VKC_CHECK`. recon does not re-export core
+  names into `vr::`; it logs with source `"vr"` (`core/log.hpp`).
+- Include Vulkan through the core's `volumetric_kit/core/vulkan/vulkan.hpp`.
+  Keep host PODs and GLSL `layout(scalar)` definitions byte-identical; host
+  assertions alone cannot validate the shader ABI. A `create` that builds
+  kernels first calls `check_device_requirements`.
 - Kernel memory is device-local, reached through `CommandBatch`. Preserve
   the documented exception for small parameters; the host reads results
   back through the batch, never through a mapping.
