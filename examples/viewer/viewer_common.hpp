@@ -19,8 +19,8 @@
 #include <GLFW/glfw3.h>
 #include <imgui_impl_glfw.h>
 
+#include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/gfx/app/windowed_app.hpp"
-#include "volumetric_kit/gfx/core/vulkan.hpp"
 #include "volumetric_kit/recon/mesh/device_mesh.hpp"
 
 namespace fuse_viewer {

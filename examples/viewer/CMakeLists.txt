@@ -61,7 +61,14 @@ FetchContent_Declare(
   #
   # And at or past gfx #98, whose kHybridMeshNormals is rig_viewer's normals
   # shading mode. A compile floor: the flag does not exist before it.
-  GIT_TAG 32550b414ab749068cb9b0c5b9791a35f5b59147 # gfx #98
+  #
+  # And at or past gfx #106, the end of gfx's move onto volumetric_kit_core
+  # (#101-#106): gfx takes the core's DeviceRequirements and AdoptedDevice, so
+  # shared_device.hpp hands it the shared device's graphics payload unconverted,
+  # its textures are the core's Image, and FrameMetrics holds the core's
+  # StageRow, so recon's stage rows reach the overlay as they are. A compile
+  # floor: before it gfx has a Device, Status and Texture of its own.
+  GIT_TAG 53e8f6389fe9cd9462e7000c49cc758d29c8149a # gfx #106
   GIT_SHALLOW FALSE)
 FetchContent_MakeAvailable(volumetric_kit_gfx)
 

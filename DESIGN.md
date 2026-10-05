@@ -161,8 +161,8 @@ a message without losing its domain or detail.
 All of it is volumetric_kit_core's (the 2026-10-03 decision), and recon writes
 it under the core's names (2026-10-04): `core::Status` in recon's namespaces,
 `volumetric_kit::core::Status` to a consumer, so a recon error is the same type
-as calib's, and as gfx's from its #100 (the viewer's gfx pin, #98, still has
-its own `vg::Status`). Diagnostics go through the core's one process-wide log sink;
+as calib's, and as gfx's from its #100 (the viewers pin gfx #106, which names
+the core's types as recon does). Diagnostics go through the core's one process-wide log sink;
 recon's `log_message(level, message)` tags them with source `"vr"`, which the
 default sink prints as `[vr <level>]`, and an application's handler receives
 `(level, source, message)`.
