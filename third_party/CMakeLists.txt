@@ -30,15 +30,16 @@ include(FetchContent)
 # VR_INSTALL: recon's install must carry the core its exported targets link, and
 # an application that embeds recon without installing it gets none.
 #
-# The pin is core PR #11 (Device::check_enabled), which recon's kernels call.
-#
-# TODO: pin core PR #11's merge commit once it merges.
+# The pin is main after core PR #13. Its PR #11 added Device::check_enabled,
+# which recon's kernels call; PR #12 bounds vk_result to VkResult's range; PR
+# #13 sets the oldest Vulkan headers the tier builds on (1.3.204, 1.3.208 on
+# Apple) and adds format.hpp.
 #
 # TODO: pin a release tag once the core tags one (v0.1.0).
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG 8ddd088bd576209653746197caf8a8f65b864d29)
+  GIT_TAG a60398b7aeb2cad722a3f79cb71696bda10fc054)
 set(VKC_INSTALL ${VR_INSTALL})
 set(VKC_WITH_VULKAN ON)
 FetchContent_MakeAvailable(volumetric_kit_core)

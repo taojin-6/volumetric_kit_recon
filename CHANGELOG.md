@@ -45,6 +45,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   kernels on a device without `scalarBlockLayout`. Create or adopt every
   device recon runs on with `vr::device_requirements()`;
   `vr::check_device_requirements(device, who)` is the check.
+- `core`: **volumetric_kit_core is pinned at main after its PR #13** (was
+  PR #10), for PR #11's `Device::check_enabled`. Migrating:
+  - `vr::AdoptedDevice` declares its features in one `enabled_features`
+    (`EnabledFeatures`): `enabled_features` → `enabled_features.core`, and
+    `enabled_timeline_semaphore`, `enabled_scalar_block_layout` and
+    `enabled_dynamic_rendering` → `enabled_features.timeline_semaphore`,
+    `.scalar_block_layout` and `.dynamic_rendering`.
+  - Vulkan headers 1.3.204 or newer are required, 1.3.208 on Apple; older ones
+    fail at configure or in the core's `vulkan.hpp`.
+  - `vk_result` returns empty for a backend detail outside `VkResult`'s range.
+  - Rebuild after bumping the pin: `Device` changes size.
 - `core`: **the Vulkan foundation comes from `volumetric_kit_core`'s vulkan
   tier**. `Instance`, `Device`, `Allocator`, `Buffer`, `Image`, the descriptor
   and pipeline wrappers, `ComputeKernel`, `CommandBatch`, `GpuTimer`,

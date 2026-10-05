@@ -26,8 +26,8 @@ inline vr::Result<vr::Device> bare_device(const vr::Instance& instance,
   view.queue_family = device.queue_family();
   view.queue = device.queue();
   view.submit_mutex = device.submit_mutex();
-  view.enabled_timeline_semaphore = true;
-  view.enabled_scalar_block_layout = true;
+  view.enabled_features.timeline_semaphore = true;
+  view.enabled_features.scalar_block_layout = true;
   return vr::Device::adopt(view, vr::device_requirements());
 }
 

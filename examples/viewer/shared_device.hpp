@@ -161,13 +161,13 @@ inline vg::AdoptedDevice gfx_adopt_payload(const vkc::SharedDevice& shared) {
   adopted.submit_mutex = core.submit_mutex;
   adopted.enabled_device_extensions = core.enabled_extensions;
   adopted.enabled_device_extension_count = core.enabled_extension_count;
-  adopted.enabled_features = core.enabled_features;
+  adopted.enabled_features = core.enabled_features.core;
   // Read back from what the shared device enabled, never asserted here: gfx's
   // adopt verifies against this declaration rather than against
   // physical-device support, because Vulkan cannot be asked what a *logical*
   // device enabled.
-  adopted.enabled_timeline_semaphore = core.enabled_timeline_semaphore;
-  adopted.enabled_dynamic_rendering = core.enabled_dynamic_rendering;
+  adopted.enabled_timeline_semaphore = core.enabled_features.timeline_semaphore;
+  adopted.enabled_dynamic_rendering = core.enabled_features.dynamic_rendering;
   adopted.enabled_debug_utils = core.enabled_debug_utils;
   return adopted;
 }
