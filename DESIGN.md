@@ -913,6 +913,23 @@ missing-block, overflow, bin-size and binding-range validation
 (2026-10-02). Ties break on the triangle index, so the same mesh writes the same
 bytes. Each call is a tick, and every block it writes is stamped `changed`.
 
+`AdaptiveGrid` (`tsdf/adaptive_grid.hpp`) fuses into a stack of ordinary
+`VoxelBlockGrid` levels, the voxel halving per level (2 cm, 1 cm, 5 mm by
+default), and refines a block where the depth is systematically off the
+coarser level's surface. The coarsest level fuses every frame; a finer level
+allocates from the depth that falls in refined coarser blocks (a GPU mask)
+and integrates the whole frame. A block's parent is its coordinate halved in
+the coarser hash. Before a set is fused, its sampled depth points' distances
+to each coarse level's surface (TSDF over its gradient length) add to per-cell
+sums, held in the level's `residual` attribute so removal, clearing and growth
+keep them with their blocks; every few sets, a check turns each cell into its
+systematic offset
+(mean^2 - variance / n), subtracts the sensor's floor (the median coarsest
+block's), and refines or coarsens blocks, removing finer blocks a coarsened
+region leaves. `owned_blocks(l)` lists what each level meshes, for the culled
+extract. Each level is a complete grid: stamps, GC, extraction and the codec
+see it as any other. See the 2026-10-03 adaptive-resolution decision.
+
 ### mesh
 
 `MarchingCubes` over a sparse `VoxelBlockGrid`, and only that
@@ -1449,6 +1466,12 @@ depth only inside each colour camera's view unless given `--all-depth`, and
 texturing a camera a set lacks from its last frame, a fallback view
 (`--hold-ms`). The two viewers share `viewer_common.hpp`: the teardown guards, and the render side of
 the mesh ring.
+**`adaptive_viewer`** (`VR_BUILD_VIEWER`; live cameras also need
+`VR_WITH_ORBBEC` and `VR_WITH_FFMPEG`) drives `tsdf::AdaptiveGrid` from a
+Replica sequence, one camera (`--orbbec`) or a rig (`--rig`), live frames
+prepared on the GPU. Each level meshes its owned blocks through the culled
+extract, textured from the set's first camera or painted by level, and gfx
+draws them together.
 **`codec_replica`** fuses a Replica sequence as `fuse_replica` does, and
 streams the growing grid through the codec: every `--encode-every` frames it
 encodes, then decodes into a player grid built from `read_frame_info` and

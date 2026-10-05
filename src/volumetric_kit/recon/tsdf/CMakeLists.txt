@@ -15,7 +15,8 @@ set(_vr_tsdf_generated_inc "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
 add_library(recon_tsdf)
 add_library(volumetric_kit::recon_tsdf ALIAS recon_tsdf)
 
-target_sources(recon_tsdf PRIVATE mesh_integrator.cpp tsdf_integrator.cpp)
+target_sources(recon_tsdf PRIVATE adaptive_grid.cpp mesh_integrator.cpp
+                                  tsdf_integrator.cpp)
 
 # Per-tier export header (VR_TSDF_API / VR_TSDF_STATIC_DEFINE), isolated so the
 # macros never collide with another tier's on one include path.
@@ -67,7 +68,10 @@ vr_embed_shaders(
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/mesh_scan_add.comp"
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/mesh_compact_bins.comp"
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/mesh_bin_ranges.comp"
-  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/mesh_integrate.comp")
+  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/mesh_integrate.comp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/adaptive_residual.comp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/adaptive_offset.comp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/adaptive_mask.comp")
 
 vr_target_warnings(recon_tsdf)
 

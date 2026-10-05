@@ -1,0 +1,109 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Tao Jin
+
+// Per active block: how far its surface is systematically off the depth, with
+// the sensor noise taken out. Each cell's residuals have mean m and variance
+// s^2 over n samples; m^2 - s^2 / n is an unbiased estimate of the squared
+// offset there, since noise averages away but the grid's shape error does not.
+// The block reports the mean over its sampled cells of that estimate and of
+// s^2 / n (how much noise is left in it), then halves every cell's count and
+// scales its sums by the same ratio, so its mean and mean square hold where an
+// odd count rounds down; older frames fade and moving surfaces update. It also
+// counts the block's surface voxels -- observed, within a voxel of the zero
+// crossing -- which tell a block whose surface is gone from one merely out of
+// view.
+//
+// Scores, two per listed block: offset^2, noise left^2 and noise per sample^2
+// in (0.02 mm)^2 units, and cells sampled; then surface voxels. Accum is the
+// grid's `residual` attribute, laid out as adaptive_residual.comp says.
+
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_scalar_block_layout : require
+
+#define VR_HASH_COMMON_NO_PUSH_CONSTANTS
+#include "volumetric_kit/recon/volume/shaders/hash_common.glsl"
+
+layout(local_size_x = 64) in;
+
+layout(set = 0, binding = 0, scalar) readonly buffer Blocks {
+  BlockIndex blocks[];
+};
+layout(set = 0, binding = 1, scalar) buffer Accum { int accum[]; };
+layout(set = 0, binding = 2, scalar) writeonly buffer Scores {
+  vec4 scores[];
+};
+layout(set = 0, binding = 3, scalar) readonly buffer Tsdf { float tsdf[]; };
+layout(set = 0, binding = 4, scalar) readonly buffer Weight { float weight[]; };
+
+layout(push_constant, scalar) uniform Push {
+  uint count;
+  uint base;
+  uint voxels_per_block;
+  float voxel_size;
+} pc;
+
+shared float s_offset[64];
+shared float s_left[64];
+shared float s_noise[64];
+shared float s_cells[64];
+shared float s_surface[64];
+
+void main() {
+  uint b = pc.base + gl_WorkGroupID.x;
+  if (b >= pc.count) return;
+  uint lane = gl_LocalInvocationID.x;
+  uint i = uint(blocks[b].ptr) / 2u + lane * 3u;
+  int n = accum[i];
+  int sum = accum[i + 1u];
+  int sq = accum[i + 2u];
+  float offset = 0.0;
+  float left = 0.0;
+  float noise = 0.0;
+  float cells = 0.0;
+  if (n >= 2) {
+    float fn = float(n);
+    float mean = float(sum) / fn;
+    float var = max(0.0, (float(sq) - fn * mean * mean) / (fn - 1.0));
+    offset = mean * mean - var / fn;
+    left = var / fn;
+    noise = var;
+    cells = 1.0;
+  }
+  s_offset[lane] = offset;
+  s_left[lane] = left;
+  s_noise[lane] = noise;
+  s_cells[lane] = cells;
+  // Eight voxels a lane: the block's surface voxels.
+  float surface = 0.0;
+  uint first = uint(blocks[b].ptr);
+  for (uint v = lane; v < pc.voxels_per_block; v += 64u) {
+    surface += weight[first + v] >= 1e-6 &&
+                       abs(tsdf[first + v]) < pc.voxel_size
+                   ? 1.0
+                   : 0.0;
+  }
+  s_surface[lane] = surface;
+  barrier();
+  for (uint half_size = 32u; half_size > 0u; half_size >>= 1) {
+    if (lane < half_size) {
+      s_offset[lane] += s_offset[lane + half_size];
+      s_left[lane] += s_left[lane + half_size];
+      s_noise[lane] += s_noise[lane + half_size];
+      s_cells[lane] += s_cells[lane + half_size];
+      s_surface[lane] += s_surface[lane + half_size];
+    }
+    barrier();
+  }
+  if (lane == 0u) {
+    float c = max(s_cells[0], 1.0);
+    scores[2u * b] =
+        vec4(s_offset[0] / c, s_left[0] / c, s_noise[0] / c, s_cells[0]);
+    scores[2u * b + 1u] = vec4(s_surface[0], 0.0, 0.0, 0.0);
+  }
+  int kept = n >> 1;
+  float ratio = n > 0 ? float(kept) / float(n) : 0.0;
+  accum[i] = kept;
+  accum[i + 1u] = int(round(float(sum) * ratio));
+  accum[i + 2u] = int(round(float(sq) * ratio));
+}

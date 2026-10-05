@@ -175,41 +175,24 @@ core::Status TsdfIntegrator::integrate(VoxelBlockGrid& grid,
                    max_weight, mode, metrics);
 }
 
-core::Status TsdfIntegrator::integrate(VoxelBlockGrid& grid,
-                                       const std::vector<FrameInput>& frames,
-                                       float max_weight, IntegrationMode mode,
-                                       core::StageMetrics* metrics) {
-  // Opened before the validity check so a refused call still costs its row -- a
-  // stage that reports nothing when it fails reads on an overlay as a stage
-  // that did not run, which is the reading a frozen pipeline most needs not to
-  // give. Inert when metrics is null, and it publishes both halves on every
-  // return below rather than only the one that reaches the dispatch.
-  core::GpuStageScope stage(metrics, gpu_timer_, "integrate");
+core::Status TsdfIntegrator::check(
+    const std::vector<FrameInput>& frames) const {
   if (!valid()) {
     return core::Status::invalid_argument(
         "TsdfIntegrator::integrate: moved-from integrator");
   }
-  // Every frame's O(1) checks come first, ahead of the compaction dispatch and
-  // every binding below, so a refused call does no work and leaves the
-  // persistent set as it was -- an empty grid included. A frame with no pixels
-  // dispatches nothing, as allocate_from_depth allocates nothing for it.
-  std::vector<std::size_t> live;  // the frames that dispatch, in order
-  std::vector<VkDeviceSize> depth_bytes(frames.size());
-  std::vector<VkDeviceSize> color_bytes(frames.size(), 0);
-  bool any_color = false;
-  for (std::size_t i = 0; i < frames.size(); ++i) {
-    const DepthCameraParams& cam = frames[i].camera;
-    const auto pixels = static_cast<std::size_t>(cam.width) *
-                        static_cast<std::size_t>(cam.height);
-    depth_bytes[i] = VkDeviceSize(pixels) * sizeof(float);
-    VKC_TRY(frames[i].depth.check("TsdfIntegrator::integrate: depth",
-                                  depth_bytes[i]));
-    if (pixels == 0) continue;
-    live.push_back(i);
+  // A frame with no pixels dispatches nothing, as allocate_from_depth
+  // allocates nothing for it.
+  for (const FrameInput& frame : frames) {
+    const DepthCameraParams& cam = frame.camera;
+    const VkDeviceSize depth_bytes =
+        VkDeviceSize(cam.width) * cam.height * sizeof(float);
+    VKC_TRY(frame.depth.check("TsdfIntegrator::integrate: depth", depth_bytes));
+    if (depth_bytes == 0) continue;
     VKC_TRY(core::check_storage_buffer_range(
-        "TsdfIntegrator::integrate: the depth buffer", depth_bytes[i],
+        "TsdfIntegrator::integrate: the depth buffer", depth_bytes,
         max_storage_buffer_range_));
-    const ColorFrame* color = frames[i].color;
+    const ColorFrame* color = frame.color;
     if (color == nullptr) continue;
     if ((color->pixels == nullptr && color->buffer == nullptr) ||
         color->cam.width == 0 || color->cam.height == 0) {
@@ -221,14 +204,14 @@ core::Status TsdfIntegrator::integrate(VoxelBlockGrid& grid,
           "TsdfIntegrator::integrate: color frame sets both pixels and "
           "buffer");
     }
-    color_bytes[i] = VkDeviceSize(color->cam.width) * color->cam.height *
-                     sizeof(std::uint32_t);
+    const VkDeviceSize color_bytes = VkDeviceSize(color->cam.width) *
+                                     color->cam.height * sizeof(std::uint32_t);
     VKC_TRY(
         color_input(*color).check("TsdfIntegrator::integrate: the colour "
                                   "image",
-                                  color_bytes[i]));
+                                  color_bytes));
     VKC_TRY(core::check_storage_buffer_range(
-        "TsdfIntegrator::integrate: the colour buffer", color_bytes[i],
+        "TsdfIntegrator::integrate: the colour buffer", color_bytes,
         max_storage_buffer_range_));
     // The kernel decodes with exactly one curve, so a frame that is not already
     // in the canonical encoded form is refused rather than fused through the
@@ -242,6 +225,37 @@ core::Status TsdfIntegrator::integrate(VoxelBlockGrid& grid,
           "encoded form (sRGB transfer, BT.709 primaries); convert it at the "
           "capture boundary with sensor::to_canonical");
     }
+  }
+  return {};
+}
+
+core::Status TsdfIntegrator::integrate(VoxelBlockGrid& grid,
+                                       const std::vector<FrameInput>& frames,
+                                       float max_weight, IntegrationMode mode,
+                                       core::StageMetrics* metrics) {
+  // Opened before the checks so a refused call still costs its row -- a stage
+  // that reports nothing when it fails reads on an overlay as a stage that did
+  // not run, which is the reading a frozen pipeline most needs not to give.
+  // Inert when metrics is null, and it publishes both halves on every return
+  // below rather than only the one that reaches the dispatch.
+  core::GpuStageScope stage(metrics, gpu_timer_, "integrate");
+  // Every frame's O(1) checks come first, ahead of the compaction dispatch and
+  // every binding below, so a refused call does no work and leaves the
+  // persistent set as it was -- an empty grid included.
+  VKC_TRY(check(frames));
+  std::vector<std::size_t> live;  // the frames that dispatch, in order
+  std::vector<VkDeviceSize> depth_bytes(frames.size());
+  std::vector<VkDeviceSize> color_bytes(frames.size(), 0);
+  bool any_color = false;
+  for (std::size_t i = 0; i < frames.size(); ++i) {
+    const DepthCameraParams& cam = frames[i].camera;
+    depth_bytes[i] = VkDeviceSize(cam.width) * cam.height * sizeof(float);
+    if (depth_bytes[i] == 0) continue;
+    live.push_back(i);
+    const ColorFrame* color = frames[i].color;
+    if (color == nullptr) continue;
+    color_bytes[i] = VkDeviceSize(color->cam.width) * color->cam.height *
+                     sizeof(std::uint32_t);
     any_color = true;
   }
   if (live.empty()) {
