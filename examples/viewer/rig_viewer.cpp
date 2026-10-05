@@ -95,7 +95,10 @@
 #include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/buffer.hpp"
+#include "volumetric_kit/core/vulkan/descriptor.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
+#include "volumetric_kit/core/vulkan/image.hpp"
+#include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/mesh/device_mesh.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
@@ -110,11 +113,6 @@
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
 
-#include "volumetric_kit/core/base/result.hpp"
-#include "volumetric_kit/core/vulkan/allocator.hpp"
-#include "volumetric_kit/core/vulkan/descriptor.hpp"
-#include "volumetric_kit/core/vulkan/image.hpp"
-#include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/gfx/app/windowed_app.hpp"
 #include "volumetric_kit/gfx/camera/camera.hpp"
 #include "volumetric_kit/gfx/core/frame_metrics.hpp"
@@ -670,18 +668,19 @@ void draw_rig_panel(const RigPanel& panel,
 // main destroys the window (see fuse_viewer's run()).
 int run(GLFWwindow* window, const Options& opt) {
   // --- One VkDevice, adopted by both libraries (as fuse_viewer) ------------
-  fuse_viewer::SharedDeviceConfig shared_config;
-  shared_config.enable_validation = opt.validation;
-  shared_config.app_name = "rig_viewer";
-  const std::unique_ptr<fuse_viewer::vkc::SharedDevice> shared =
-      fuse_viewer::build_shared_device(window, shared_config);
-  if (shared == nullptr) return 1;
-
   vg::app::WindowedAppConfig config;
   config.app_name = "rig_viewer";
   config.swapchain.extent = fuse_viewer::window_extent(window);
   config.swapchain.depth_format = VK_FORMAT_D32_SFLOAT;
   config.frames_in_flight = 2;
+  fuse_viewer::SharedDeviceConfig shared_config;
+  shared_config.enable_validation = opt.validation;
+  shared_config.app_name = "rig_viewer";
+  shared_config.graphics = config.device;
+  const std::unique_ptr<fuse_viewer::vkc::SharedDevice> shared =
+      fuse_viewer::build_shared_device(window, shared_config);
+  if (shared == nullptr) return 1;
+
   auto app_r = vg::app::WindowedApp::adopt(
       shared->graphics_payload(), config,
       [&shared](VkInstance instance) -> vkc::Result<VkSurfaceKHR> {

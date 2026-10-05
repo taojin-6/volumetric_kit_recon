@@ -235,10 +235,11 @@ Two pieces make adoption safe and keep the repos independent:
   under-provisioned it, rather than crashing three layers later.
 
 The shared bundle is expressed entirely in **raw Vulkan handles plus plain PODs**
-(`AdoptedDevice`), never a type either repo imports from the other; each repo
-defines its own structurally-identical copy and the integrating application fills
-both. That application owns the shared instance/device and a small bootstrap that
-computes the union — the only place that knows about both libraries, so the two
+(`AdoptedDevice`). recon and gfx both take it, and `DeviceRequirements`, from
+volumetric_kit_core, never from each other, so the integrating application hands
+each the core's payload unconverted. That application owns the shared
+instance/device and a small bootstrap that computes the union (the core's
+`SharedDevice`) — the only place that knows about both libraries, so the two
 stay true independent siblings. The neutral bootstrap prefers separate queue
 families, using concurrent sharing or explicit ownership transfer for shared
 resources; when that is unavailable, the libraries share a queue behind a

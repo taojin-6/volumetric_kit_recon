@@ -41,12 +41,6 @@ FetchContent_Declare(
   # compilation entirely, which is why it only surfaced once CI started
   # discarding stale trees.
   #
-  # And at or past gfx #92, which made AdoptedDevice's enabled_* block the
-  # authority `Device::adopt` verifies against. shared_device.hpp's
-  # gfx_adopt_payload sets those fields, so it does not compile before it -- and
-  # a pin that stopped short would not merely lose a check but fail the adopt,
-  # since the fields default to "not enabled".
-  #
   # And at or past gfx #93, which decodes a negative uv0 as the carried
   # coordinate `-uv - 1` rather than substituting (0, 0). This floor is a
   # RENDERING one, not a compile one, and it is the only one here that fails
@@ -63,11 +57,16 @@ FetchContent_Declare(
   # shading mode. A compile floor: the flag does not exist before it.
   #
   # And at or past gfx #106, the end of gfx's move onto volumetric_kit_core
-  # (#101-#106): gfx takes the core's DeviceRequirements and AdoptedDevice, so
+  # (#100-#106): gfx takes the core's DeviceRequirements and AdoptedDevice, so
   # shared_device.hpp hands it the shared device's graphics payload unconverted,
   # its textures are the core's Image, and FrameMetrics holds the core's
   # StageRow, so recon's stage rows reach the overlay as they are. A compile
   # floor: before it gfx has a Device, Status and Texture of its own.
+  #
+  # gfx builds against recon's core pin (third_party/CMakeLists.txt declares the
+  # core first, so it wins over gfx's VG_VKC_PIN). The two pins agree at
+  # a60398b; move them together, or gfx fails to compile against a core it was
+  # not written for.
   GIT_TAG 53e8f6389fe9cd9462e7000c49cc758d29c8149a # gfx #106
   GIT_SHALLOW FALSE)
 FetchContent_MakeAvailable(volumetric_kit_gfx)

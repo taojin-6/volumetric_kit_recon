@@ -11,16 +11,17 @@
 /// Neither owns the device: each publishes its requirements, the family's
 /// `SharedDevice` (volumetric_kit_core) satisfies their union and makes the
 /// window's surface on the instance, and each library adopts the same handles
-/// -- recon through `Device::adopt`, gfx through `WindowedApp::adopt`. That is
-/// what makes zero-copy possible at all: a `VkBuffer` is valid only on the
-/// device that created it, so recon geometry can be drawn by gfx *only* if
-/// there is one device.
+/// -- recon through the core's `Device::adopt`, gfx through
+/// `WindowedApp::adopt`. That is what makes zero-copy possible at all: a
+/// `VkBuffer` is valid only on the device that created it, so recon geometry
+/// can be drawn by gfx *only* if there is one device.
 ///
 /// What is left here is the viewer's side: the GLFW surface. recon and gfx
 /// both state their requirements as the core's `DeviceRequirements` and adopt
 /// the core's `AdoptedDevice`, so the shared device's payloads go to each
 /// unconverted: `graphics_payload()` to `WindowedApp::adopt`,
-/// `compute_payload()` to recon's `Device::adopt`.
+/// `compute_payload()` to `vkc::Device::adopt` with
+/// `vr::device_requirements()`.
 
 #include <cstdint>
 #include <cstdio>
@@ -34,7 +35,6 @@
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/shared_device.hpp"
 #include "volumetric_kit/core/vulkan/vk_result.hpp"
-#include "volumetric_kit/gfx/app/windowed_app.hpp"
 #include "volumetric_kit/gfx/core/device_requirements.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 
@@ -55,6 +55,9 @@ struct SharedDeviceConfig {
   bool enable_validation = false;
   /// Reported to the driver in `VkApplicationInfo`.
   const char* app_name = "fuse_viewer";
+  /// What gfx needs: the `WindowedAppConfig::device` the app is adopted with,
+  /// so the shared device enables what `WindowedApp::adopt` verifies.
+  vkc::DeviceRequirements graphics = vg::device_requirements();
 };
 
 /// @brief Build one instance + device satisfying both libraries, and the
@@ -68,7 +71,7 @@ struct SharedDeviceConfig {
 ///
 /// @param window  The GLFW window to present to; its required instance
 ///                extensions are enabled and its surface created here.
-/// @param config  Embedder-owned knobs (validation, app name).
+/// @param config  Embedder-owned knobs (validation, app name, gfx's needs).
 /// @return The device; null, with a specific reason on stderr, when the
 ///         loader, the hardware, or the driver cannot satisfy the union. The
 ///         caller must treat that as fatal: running the two libraries on
@@ -94,7 +97,7 @@ inline std::unique_ptr<vkc::SharedDevice> build_shared_device(
   // Neither library is consulted about the other: each states its needs, and
   // the shared device satisfies the union. gfx needs present; recon compute.
   shared.compute = vr::device_requirements();
-  shared.graphics = vg::device_requirements();
+  shared.graphics = config.graphics;
   shared.graphics.needs_present = true;
   shared.make_surface =
       [window](VkInstance instance) -> vkc::Result<VkSurfaceKHR> {

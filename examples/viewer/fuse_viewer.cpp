@@ -99,7 +99,10 @@
 
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "volumetric_kit/core/vulkan/descriptor.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
+#include "volumetric_kit/core/vulkan/image.hpp"
+#include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/mesh/device_mesh.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
@@ -111,9 +114,6 @@
 #include "volumetric_kit/recon/volume/voxel_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
 
-#include "volumetric_kit/core/base/result.hpp"
-#include "volumetric_kit/core/vulkan/descriptor.hpp"
-#include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/gfx/app/windowed_app.hpp"
 #include "volumetric_kit/gfx/camera/camera.hpp"
 #include "volumetric_kit/gfx/core/frame_metrics.hpp"
@@ -482,20 +482,22 @@ struct AtlasPixels {
 // CAMetalLayer.
 int run(GLFWwindow* window, const Options& opt) {
   // --- One VkDevice, adopted by both libraries ------------------------------
-  // Declared first so it outlives every wrapper that borrows it: the gfx app
-  // and recon's device/allocator below hold raw handles into this, and both
-  // must be gone before the instance and device are destroyed.
-  fuse_viewer::SharedDeviceConfig shared_config;
-  shared_config.enable_validation = opt.validation;
-  const std::unique_ptr<fuse_viewer::vkc::SharedDevice> shared =
-      fuse_viewer::build_shared_device(window, shared_config);
-  if (shared == nullptr) return 1;
-
+  // The shared device is declared before every wrapper that borrows it, so it
+  // outlives them: the gfx app and recon's device/allocator below hold raw
+  // handles into it, and both must be gone before the instance and device are
+  // destroyed. gfx's requirements are the app config's, which adopt verifies.
   vg::app::WindowedAppConfig config;
   config.app_name = "fuse_viewer";
   config.swapchain.extent = fuse_viewer::window_extent(window);
   config.swapchain.depth_format = VK_FORMAT_D32_SFLOAT;
   config.frames_in_flight = 2;
+  fuse_viewer::SharedDeviceConfig shared_config;
+  shared_config.enable_validation = opt.validation;
+  shared_config.graphics = config.device;
+  const std::unique_ptr<fuse_viewer::vkc::SharedDevice> shared =
+      fuse_viewer::build_shared_device(window, shared_config);
+  if (shared == nullptr) return 1;
+
   // The surface already exists -- picking a present-capable device required
   // one -- so the factory hands over the one the bootstrap made rather than
   // creating a second. Ownership transfers with it.

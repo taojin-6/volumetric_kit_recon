@@ -34,11 +34,14 @@
 #include "replica_capture.hpp"  // vr_example::ReplicaCapture (examples/common)
 #include "rgbd_frame.hpp"       // vr_example::RgbdFrame
 
-// recon tiers
+// core and recon tiers
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "volumetric_kit/core/vulkan/descriptor.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
+#include "volumetric_kit/core/vulkan/image.hpp"
 #include "volumetric_kit/core/vulkan/instance.hpp"
+#include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/io/image_io.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
@@ -52,8 +55,6 @@
 #include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
 
 // gfx
-#include "volumetric_kit/core/vulkan/descriptor.hpp"
-#include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/gfx/app/headless_app.hpp"
 #include "volumetric_kit/gfx/camera/camera.hpp"
 #include "volumetric_kit/gfx/core/offscreen_target.hpp"
