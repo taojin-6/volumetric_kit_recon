@@ -98,9 +98,10 @@
 #include "stage_metrics.hpp"  // fuse_viewer::to_sections
 #include "viewer_common.hpp"
 
-#include "volumetric_kit/recon/core/allocator.hpp"
-#include "volumetric_kit/recon/core/device.hpp"
-#include "volumetric_kit/recon/core/result.hpp"
+#include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "volumetric_kit/core/vulkan/device.hpp"
+#include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/mesh/device_mesh.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
 #include "volumetric_kit/recon/sensor/camera_capture.hpp"
@@ -129,6 +130,7 @@
 #include "volumetric_kit/gfx/windowing/swapchain.hpp"
 
 namespace vr = volumetric_kit::recon;
+namespace vkc = volumetric_kit::core;
 namespace vol = volumetric_kit::recon::volume;
 namespace rtsdf = volumetric_kit::recon::tsdf;
 namespace rmesh = volumetric_kit::recon::mesh;
@@ -300,7 +302,7 @@ struct ReconstructionPanel {
   float map_load_factor = 0.0f;
   double fuse_ms = 0.0;
   std::uint64_t preloaded_bytes = 0;
-  vr::MemoryStats recon_memory;
+  vkc::MemoryStats recon_memory;
   rmesh::ExtractTimings extract;
 };
 
@@ -422,7 +424,7 @@ void draw_reconstruction_panel(const ReconstructionPanel& panel) {
   // each library allocates separately, so this is recon's footprint, not the
   // process total -- which usage_bytes is, where the driver reports budgets.
   for (std::uint32_t heap = 0; heap < panel.recon_memory.heap_count; ++heap) {
-    const vr::HeapStats& stats = panel.recon_memory.heaps[heap];
+    const vkc::HeapStats& stats = panel.recon_memory.heaps[heap];
     if (stats.reserved_bytes == 0) continue;
     char overlay[64];
     std::snprintf(overlay, sizeof(overlay), "%.0f / %.0f MiB",
@@ -523,21 +525,21 @@ int run(GLFWwindow* window, const Options& opt) {
   // allocators are independent bookkeeping over one VkDevice's memory, so each
   // library manages its own even when the device is shared.
   auto recon_device_result =
-      vr::Device::adopt(shared->compute_payload(), vr::device_requirements());
+      vkc::Device::adopt(shared->compute_payload(), vr::device_requirements());
   if (!recon_device_result) {
     std::fprintf(stderr, "recon Device::adopt: %s\n",
                  recon_device_result.status().message().c_str());
     return 1;
   }
-  auto recon_allocator_result = vr::Allocator::create(
+  auto recon_allocator_result = vkc::Allocator::create(
       shared->instance().handle(), recon_device_result.value());
   if (!recon_allocator_result) {
     std::fprintf(stderr, "recon allocator: %s\n",
                  recon_allocator_result.status().message().c_str());
     return 1;
   }
-  vr::Device& rdevice = recon_device_result.value();
-  vr::Allocator& rallocator = recon_allocator_result.value();
+  vkc::Device& rdevice = recon_device_result.value();
+  vkc::Allocator& rallocator = recon_allocator_result.value();
 
   // The sequence arrives through the sensor contract: the frame cap and the
   // depth gate are the capture's options, so every frame it hands out is
@@ -800,7 +802,7 @@ int run(GLFWwindow* window, const Options& opt) {
   // for the overlay under share_mtx alongside the mesh.
   std::vector<vg::FrameMetrics::Section> shared_fuse_stages;
   double shared_fuse_ms = 0.0;
-  vr::MemoryStats shared_recon_memory;
+  vkc::MemoryStats shared_recon_memory;
   std::int32_t shared_map_buckets = 0;
   std::int32_t shared_map_blocks = 0;
   float shared_map_load_factor = 0.0f;
@@ -812,7 +814,7 @@ int run(GLFWwindow* window, const Options& opt) {
     // bad_alloc) would call std::terminate; contain it so shutdown stays clean.
     try {
       // Scratch for this thread only; copied under share_mtx once per frame.
-      vr::StageMetrics fuse_stages;
+      vkc::StageMetrics fuse_stages;
       // The remesh-only rows -- extract and its breakdown, texture, atlas pack
       // -- measured here rather than straight into `fuse_stages`, and merged in
       // on every frame whether or not this one remeshed.
@@ -827,7 +829,7 @@ int run(GLFWwindow* window, const Options& opt) {
       // the newest remesh, exactly as `extract_stats` beside them does; the
       // panel's `fuse ms/frame` therefore reads as the cost of a fused frame
       // that also remeshed.
-      vr::StageMetrics remesh_stages;
+      vkc::StageMetrics remesh_stages;
       // Held across frames so the panel keeps showing the newest remesh's
       // sizes between remeshes, rather than blanking to zero.
       rmesh::ExtractTimings extract_stats;
@@ -862,7 +864,7 @@ int run(GLFWwindow* window, const Options& opt) {
           // here: rows accumulate by name, and wrapping the call as well would
           // count the host span twice while adding nothing. What the tier's row
           // has that a wrapper's cannot is the device half.
-          const vr::Status texture_status =
+          const vkc::Status texture_status =
               texturer->texture(device_mesh, keyframe->depth,
                                 keyframe->depth_camera, 0.02f, &remesh_stages);
           if (texture_status.ok()) {
@@ -875,12 +877,12 @@ int run(GLFWwindow* window, const Options& opt) {
             // JPEGs: the identity plus an opaque alpha). The atlas is
             // uploaded as _SRGB, which assumes canonical bytes; packing them
             // by hand would assume it silently.
-            vr::StageScope scope(remesh_stages, "atlas pack");
+            vkc::StageScope scope(remesh_stages, "atlas pack");
             const std::size_t pixels =
                 static_cast<std::size_t>(keyframe->color_camera.width) *
                 keyframe->color_camera.height;
             atlas.pixels.resize(pixels);
-            const vr::Status packed = rsensor::to_canonical(
+            const vkc::Status packed = rsensor::to_canonical(
                 keyframe->color, pixels, keyframe->color_encoding,
                 atlas.pixels.data());
             if (packed.ok()) {
@@ -956,7 +958,7 @@ int run(GLFWwindow* window, const Options& opt) {
       // From here on the source is the contract, not the dataset: the loop
       // polls an ICameraCapture& and a live driver slots in at the open above.
       rsensor::ICameraCapture& capture = replica;
-      const vr::Status started = capture.start();
+      const vkc::Status started = capture.start();
       if (!started.ok()) {
         std::fprintf(stderr, "fuse_viewer: capture start: %s\n",
                      started.message().c_str());
@@ -991,7 +993,7 @@ int run(GLFWwindow* window, const Options& opt) {
         // cost the preload exists to hoist out of this loop). Timed either way,
         // so --preload's effect is visible as this row collapsing to ~0.
         auto polled = [&]() {
-          vr::StageScope scope(fuse_stages, "frame");
+          vkc::StageScope scope(fuse_stages, "frame");
           return capture.poll();
         }();
         if (!polled) {
@@ -1027,7 +1029,7 @@ int run(GLFWwindow* window, const Options& opt) {
         // allocated frame, and is reported: every stage in this loop says
         // why it stopped, or the panel freezes at "fused N / M" looking like
         // a normal finish.
-        const vr::Status fuse_status = vr_example::fuse_frame(
+        const vkc::Status fuse_status = vr_example::fuse_frame(
             volume, integrator, frame, 20.0f, &fuse_stages);
         if (!fuse_status.ok()) {
           std::fprintf(stderr, "fuse_viewer: fuse (frame %zu): %s\n", i,
@@ -1046,8 +1048,8 @@ int run(GLFWwindow* window, const Options& opt) {
             release_and_may_publish()) {
           remesh_stages.clear();
           rmesh::ExtractTimings extract_timings;
-          vr::Result<rmesh::DeviceMesh> extracted = [&]() {
-            vr::StageScope scope(remesh_stages, "extract");
+          vkc::Result<rmesh::DeviceMesh> extracted = [&]() {
+            vkc::StageScope scope(remesh_stages, "extract");
             return extractor.extract_device(volume, 0.0f, &extract_timings);
           }();
           // Break the extract row down in place. The phases sum to the
@@ -1091,7 +1093,7 @@ int run(GLFWwindow* window, const Options& opt) {
         // recon allocator belongs to the fuse thread's device; VMA's own
         // synchronisation makes the read safe either way.
         {
-          const vr::MemoryStats recon_memory = rallocator.memory_stats();
+          const vkc::MemoryStats recon_memory = rallocator.memory_stats();
           // Read out here beside memory_stats and for the same reason: it is a
           // host field behind a Result whose Status carries a string, and the
           // render thread is waiting on this lock. Constant-time, so
@@ -1101,7 +1103,7 @@ int run(GLFWwindow* window, const Options& opt) {
           // will not have to already know the threshold" cannot answer an
           // unknown with the last good fraction, which is the one reading that
           // looks exactly like a healthy map.
-          const vr::Result<float> lf = volume.map().load_factor();
+          const vkc::Result<float> lf = volume.map().load_factor();
           if (!lf) {
             std::fprintf(stderr, "fuse_viewer: load_factor (frame %zu): %s\n",
                          i, lf.status().message().c_str());

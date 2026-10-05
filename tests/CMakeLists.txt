@@ -12,9 +12,10 @@ add_test(NAME recon_core_smoke COMMAND recon_core_smoke_test)
 
 # Vulkan availability smoke: proves the build finds Vulkan and the platform
 # driver (MoltenVK on Apple) offers a device that meets recon's requirements
-# (core/device.hpp). The Vulkan foundation itself -- device, allocator, buffers,
-# kernels, batches, timers, external memory -- is volumetric_kit_core's and is
-# tested there, not here. Exits 0 (skip) where no driver/device is present.
+# (core/device_requirements.hpp). The Vulkan foundation itself -- device,
+# allocator, buffers, kernels, batches, timers, external memory -- is
+# volumetric_kit_core's and is tested there, not here. Exits 0 (skip) where no
+# driver/device is present.
 add_executable(recon_vulkan_smoke_test vulkan_smoke_test.cpp)
 target_link_libraries(recon_vulkan_smoke_test PRIVATE volumetric_kit::recon_core
                                                       Vulkan::Vulkan)

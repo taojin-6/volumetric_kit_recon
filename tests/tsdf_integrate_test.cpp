@@ -16,14 +16,15 @@
 #include <vector>
 
 #include "grid_readback.hpp"
-#include "volumetric_kit/recon/core/allocator.hpp"
+#include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "volumetric_kit/core/vulkan/command_batch.hpp"
+#include "volumetric_kit/core/vulkan/device.hpp"
+#include "volumetric_kit/core/vulkan/instance.hpp"
+#include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/recon/core/color_space.hpp"
-#include "volumetric_kit/recon/core/command_batch.hpp"
-#include "volumetric_kit/recon/core/device.hpp"
-#include "volumetric_kit/recon/core/instance.hpp"
+#include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
-#include "volumetric_kit/recon/core/result.hpp"
-#include "volumetric_kit/recon/core/vulkan.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
 #include "volumetric_kit/recon/volume/hash_types.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
@@ -31,6 +32,7 @@
 #include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
 
 namespace vr = volumetric_kit::recon;
+namespace vkc = volumetric_kit::core;
 namespace vol = volumetric_kit::recon::volume;
 namespace tsdf = volumetric_kit::recon::tsdf;
 
@@ -81,7 +83,7 @@ vr::ColorCameraParams color_cam_of(const vr::DepthCameraParams& d) {
 // ahead of the surface is fused too (that is the point of classic), so the
 // first fuse legitimately changes the bz=12 blocks as well and the fixture
 // loses the separation it is built on.
-int changed_stamps_case(vr::Device& device, vr::Allocator& allocator) {
+int changed_stamps_case(vkc::Device& device, vkc::Allocator& allocator) {
   vol::VoxelGridParams gp{};
   gp.voxel_size = 0.005f;
   gp.block_size = 8;
@@ -94,7 +96,7 @@ int changed_stamps_case(vr::Device& device, vr::Allocator& allocator) {
   const vol::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
                                       {"weight", sizeof(float)}};
 
-  vr::Result<vol::VoxelBlockGrid> grid_a =
+  vkc::Result<vol::VoxelBlockGrid> grid_a =
       vol::VoxelBlockGrid::create(device, allocator, gp, attrs, 2);
   CHECK(grid_a.ok());
   vol::VoxelBlockGrid a = std::move(grid_a).value();
@@ -131,7 +133,7 @@ int changed_stamps_case(vr::Device& device, vr::Allocator& allocator) {
   const std::vector<float> depth_near(px, 0.50f);  // band lands in bz = 12
   const std::vector<float> depth_far(px, 0.60f);   // both recede -> clear
 
-  vr::Result<tsdf::TsdfIntegrator> integ_result =
+  vkc::Result<tsdf::TsdfIntegrator> integ_result =
       tsdf::TsdfIntegrator::create(device, allocator);
   CHECK(integ_result.ok());
   tsdf::TsdfIntegrator integ = std::move(integ_result).value();
@@ -144,9 +146,9 @@ int changed_stamps_case(vr::Device& device, vr::Allocator& allocator) {
   // for a failed read.
   const auto changed_z = [](vol::VoxelBlockGrid& g, std::uint32_t since) {
     std::vector<int> z;
-    vr::Result<std::vector<vol::BlockIndex>> active =
+    vkc::Result<std::vector<vol::BlockIndex>> active =
         g.map().compact_active_blocks();
-    vr::Result<std::vector<vol::BlockStamp>> st = g.map().read_block_stamps();
+    vkc::Result<std::vector<vol::BlockStamp>> st = g.map().read_block_stamps();
     if (!active.ok() || !st.ok()) return std::vector<int>{-1};
     for (const vol::BlockIndex& b : active.value()) {
       const vol::BlockStamp& s =
@@ -211,10 +213,10 @@ int changed_stamps_case(vr::Device& device, vr::Allocator& allocator) {
   // with its own tick: a max would keep the old one, which reads as older
   // than every cursor taken since.
   {
-    vr::Result<std::vector<vol::BlockStamp>> st = a.map().read_block_stamps();
+    vkc::Result<std::vector<vol::BlockStamp>> st = a.map().read_block_stamps();
     CHECK(st.ok());
     for (vol::BlockStamp& s : st.value()) s.changed = 0xFFFFFFF0u;
-    vr::CommandBatch batch(device, allocator);
+    vkc::CommandBatch batch(device, allocator);
     CHECK(batch
               .upload(a.map().stamps_buffer(), 0, st.value().data(),
                       st.value().size() * sizeof(vol::BlockStamp))
@@ -229,7 +231,7 @@ int changed_stamps_case(vr::Device& device, vr::Allocator& allocator) {
   //
   // One integrator driven over two grids, as this suite does: a fuse into `b`
   // stamps `b` and moves `b`'s clock, and leaves `a` alone.
-  vr::Result<vol::VoxelBlockGrid> grid_b =
+  vkc::Result<vol::VoxelBlockGrid> grid_b =
       vol::VoxelBlockGrid::create(device, allocator, gp, attrs, 2);
   CHECK(grid_b.ok());
   vol::VoxelBlockGrid b = std::move(grid_b).value();
@@ -341,28 +343,28 @@ int zero_depth_case(const vr_test::Gpu& ctx) {
 }  // namespace
 
 int main() {
-  vr::Result<vr::Instance> instance = vr::Instance::create({});
+  vkc::Result<vkc::Instance> instance = vkc::Instance::create({});
   if (!instance) {
     std::fprintf(stderr, "no Vulkan instance (%s); skipping\n",
                  instance.status().message().c_str());
     return 0;
   }
-  vr::Result<vr::PhysicalDeviceInfo> gpu =
+  vkc::Result<vkc::PhysicalDeviceInfo> gpu =
       instance.value().select_physical_device(vr::device_requirements());
   if (!gpu) {
     std::fprintf(stderr, "no compute-capable device (%s); skipping\n",
                  gpu.status().message().c_str());
     return 0;
   }
-  vr::Result<vr::Device> device = vr::Device::create(
+  vkc::Result<vkc::Device> device = vkc::Device::create(
       instance.value(), gpu.value(), vr::device_requirements());
   if (!device) {
     std::fprintf(stderr, "device create failed: %s\n",
                  device.status().message().c_str());
     return 1;
   }
-  vr::Result<vr::Allocator> allocator =
-      vr::Allocator::create(instance.value().handle(), device.value());
+  vkc::Result<vkc::Allocator> allocator =
+      vkc::Allocator::create(instance.value().handle(), device.value());
   if (!allocator) {
     std::fprintf(stderr, "allocator create failed: %s\n",
                  allocator.status().message().c_str());
@@ -396,7 +398,7 @@ int main() {
 
   const vol::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
                                       {"weight", sizeof(float)}};
-  vr::Result<vol::VoxelBlockGrid> grid_result = vol::VoxelBlockGrid::create(
+  vkc::Result<vol::VoxelBlockGrid> grid_result = vol::VoxelBlockGrid::create(
       device.value(), allocator.value(), grid, attrs, 2);
   if (!grid_result) {
     std::fprintf(stderr, "VoxelBlockGrid::create failed: %s\n",
@@ -405,7 +407,7 @@ int main() {
   }
   vol::VoxelBlockGrid vbg = std::move(grid_result).value();
 
-  vr::Result<tsdf::TsdfIntegrator> integ_result =
+  vkc::Result<tsdf::TsdfIntegrator> integ_result =
       tsdf::TsdfIntegrator::create(device.value(), allocator.value());
   if (!integ_result) {
     std::fprintf(stderr, "TsdfIntegrator::create failed: %s\n",
@@ -426,7 +428,7 @@ int main() {
   CHECK(vbg.map()
             .allocate(blocks.data(), static_cast<std::uint32_t>(blocks.size()))
             .value() == 0);
-  vr::Result<std::vector<vol::BlockIndex>> active =
+  vkc::Result<std::vector<vol::BlockIndex>> active =
       vbg.map().compact_active_blocks();
   CHECK(active.ok() && active.value().size() == blocks.size());
 
@@ -510,7 +512,7 @@ int main() {
   // no-op. Fresh grid + one frame, then cross-check every fused voxel's sdf
   // against an independent glm::inverse projection -- the general inverse the
   // rigid R^T must equal.
-  vr::Result<vol::VoxelBlockGrid> grid2 = vol::VoxelBlockGrid::create(
+  vkc::Result<vol::VoxelBlockGrid> grid2 = vol::VoxelBlockGrid::create(
       device.value(), allocator.value(), grid, attrs, 2);
   CHECK(grid2.ok());
   vol::VoxelBlockGrid vbg2 = std::move(grid2).value();
@@ -529,7 +531,7 @@ int main() {
   CHECK(integ.integrate(vbg2, depth.data(), cam2, /*max_weight=*/5.0f).ok());
 
   const vr::Mat4f world_to_cam = glm::inverse(cam2.cam_to_world);
-  vr::Result<std::vector<vol::BlockIndex>> active2 =
+  vkc::Result<std::vector<vol::BlockIndex>> active2 =
       vbg2.map().compact_active_blocks();
   CHECK(active2.ok());
   const std::vector<float> tsdf2 = floats(vbg2, "tsdf");
@@ -567,14 +569,14 @@ int main() {
   const std::size_t corner_local =
       static_cast<std::size_t>(local_index(0, 0, 0, bs));
 
-  vr::Result<vol::VoxelBlockGrid> dyn = vol::VoxelBlockGrid::create(
+  vkc::Result<vol::VoxelBlockGrid> dyn = vol::VoxelBlockGrid::create(
       device.value(), allocator.value(), grid, attrs, 2);
   CHECK(dyn.ok());
   vol::VoxelBlockGrid vbg_dyn = std::move(dyn).value();
   CHECK(vbg_dyn.map()
             .allocate(blocks.data(), static_cast<std::uint32_t>(blocks.size()))
             .value() == 0);
-  vr::Result<std::vector<vol::BlockIndex>> dyn_active =
+  vkc::Result<std::vector<vol::BlockIndex>> dyn_active =
       vbg_dyn.map().compact_active_blocks();
   CHECK(dyn_active.ok());
   const std::int32_t pd = find_ptr(dyn_active.value(), vr::Vec3i(0, 0, 12));
@@ -603,14 +605,14 @@ int main() {
   CHECK(dyn_weight[vn] > 0.0f);  // near-surface voxel fused, not over-cleared
 
   // Classic keeps the same free-space voxel (fresh grid, same two frames).
-  vr::Result<vol::VoxelBlockGrid> cls = vol::VoxelBlockGrid::create(
+  vkc::Result<vol::VoxelBlockGrid> cls = vol::VoxelBlockGrid::create(
       device.value(), allocator.value(), grid, attrs, 2);
   CHECK(cls.ok());
   vol::VoxelBlockGrid vbg_cls = std::move(cls).value();
   CHECK(vbg_cls.map()
             .allocate(blocks.data(), static_cast<std::uint32_t>(blocks.size()))
             .value() == 0);
-  vr::Result<std::vector<vol::BlockIndex>> cls_active =
+  vkc::Result<std::vector<vol::BlockIndex>> cls_active =
       vbg_cls.map().compact_active_blocks();
   CHECK(cls_active.ok());
   const std::int32_t pcl = find_ptr(cls_active.value(), vr::Vec3i(0, 0, 12));
@@ -637,14 +639,14 @@ int main() {
   for (std::uint32_t y = 0; y < bcam.height; ++y) {
     depth_interp[static_cast<std::size_t>(y) * bw + 321] = 0.50f;
   }
-  vr::Result<vol::VoxelBlockGrid> bi = vol::VoxelBlockGrid::create(
+  vkc::Result<vol::VoxelBlockGrid> bi = vol::VoxelBlockGrid::create(
       device.value(), allocator.value(), grid, attrs, 2);
   CHECK(bi.ok());
   vol::VoxelBlockGrid vbg_bi = std::move(bi).value();
   CHECK(vbg_bi.map()
             .allocate(blocks.data(), static_cast<std::uint32_t>(blocks.size()))
             .value() == 0);
-  vr::Result<std::vector<vol::BlockIndex>> bi_active =
+  vkc::Result<std::vector<vol::BlockIndex>> bi_active =
       vbg_bi.map().compact_active_blocks();
   CHECK(bi_active.ok());
   const std::int32_t pbi = find_ptr(bi_active.value(), vr::Vec3i(0, 0, 12));
@@ -669,14 +671,14 @@ int main() {
   for (std::uint32_t y = 0; y < bcam.height; ++y) {
     depth_edge[static_cast<std::size_t>(y) * bw + 320] = 0.58f;
   }
-  vr::Result<vol::VoxelBlockGrid> ed = vol::VoxelBlockGrid::create(
+  vkc::Result<vol::VoxelBlockGrid> ed = vol::VoxelBlockGrid::create(
       device.value(), allocator.value(), grid, attrs, 2);
   CHECK(ed.ok());
   vol::VoxelBlockGrid vbg_ed = std::move(ed).value();
   CHECK(vbg_ed.map()
             .allocate(blocks.data(), static_cast<std::uint32_t>(blocks.size()))
             .value() == 0);
-  vr::Result<std::vector<vol::BlockIndex>> ed_active =
+  vkc::Result<std::vector<vol::BlockIndex>> ed_active =
       vbg_ed.map().compact_active_blocks();
   CHECK(ed_active.ok());
   const std::int32_t ped = find_ptr(ed_active.value(), vr::Vec3i(0, 0, 12));
@@ -696,14 +698,14 @@ int main() {
   const vol::AttributeSpec cattrs[] = {{"tsdf", sizeof(float)},
                                        {"weight", sizeof(float)},
                                        {"color", sizeof(std::uint32_t)}};
-  vr::Result<vol::VoxelBlockGrid> cg = vol::VoxelBlockGrid::create(
+  vkc::Result<vol::VoxelBlockGrid> cg = vol::VoxelBlockGrid::create(
       device.value(), allocator.value(), grid, cattrs, 3);
   CHECK(cg.ok());
   vol::VoxelBlockGrid vbg_c = std::move(cg).value();
   CHECK(vbg_c.map()
             .allocate(blocks.data(), static_cast<std::uint32_t>(blocks.size()))
             .value() == 0);
-  vr::Result<std::vector<vol::BlockIndex>> c_active =
+  vkc::Result<std::vector<vol::BlockIndex>> c_active =
       vbg_c.map().compact_active_blocks();
   CHECK(c_active.ok());
   const std::int32_t cp12 = find_ptr(c_active.value(), vr::Vec3i(0, 0, 12));
@@ -750,14 +752,14 @@ int main() {
   vr::DepthCameraParams off_cam = cam;
   off_cam.cam_to_world = vr::Mat4f(1.0f);
   off_cam.cam_to_world[3] = vr::Vec4f(10.0f, 0.0f, 0.0f, 1.0f);
-  vr::Result<vol::VoxelBlockGrid> og = vol::VoxelBlockGrid::create(
+  vkc::Result<vol::VoxelBlockGrid> og = vol::VoxelBlockGrid::create(
       device.value(), allocator.value(), grid, cattrs, 3);
   CHECK(og.ok());
   vol::VoxelBlockGrid vbg_o = std::move(og).value();
   CHECK(vbg_o.map()
             .allocate(blocks.data(), static_cast<std::uint32_t>(blocks.size()))
             .value() == 0);
-  vr::Result<std::vector<vol::BlockIndex>> o_active =
+  vkc::Result<std::vector<vol::BlockIndex>> o_active =
       vbg_o.map().compact_active_blocks();
   CHECK(o_active.ok());
   const std::int32_t op12 = find_ptr(o_active.value(), vr::Vec3i(0, 0, 12));
@@ -779,14 +781,14 @@ int main() {
   // depth weight has already accumulated. Warm up a voxel with two depth-only
   // frames, then fuse a color frame: it must take the full sampled RGB. (Keying
   // the assign on the depth weight instead darkened it to ~half here.)
-  vr::Result<vol::VoxelBlockGrid> wg = vol::VoxelBlockGrid::create(
+  vkc::Result<vol::VoxelBlockGrid> wg = vol::VoxelBlockGrid::create(
       device.value(), allocator.value(), grid, cattrs, 3);
   CHECK(wg.ok());
   vol::VoxelBlockGrid vbg_wu = std::move(wg).value();
   CHECK(vbg_wu.map()
             .allocate(blocks.data(), static_cast<std::uint32_t>(blocks.size()))
             .value() == 0);
-  vr::Result<std::vector<vol::BlockIndex>> wu_active =
+  vkc::Result<std::vector<vol::BlockIndex>> wu_active =
       vbg_wu.map().compact_active_blocks();
   CHECK(wu_active.ok());
   const std::int32_t wup12 = find_ptr(wu_active.value(), vr::Vec3i(0, 0, 12));
@@ -904,14 +906,14 @@ int main() {
   // `color` attribute -- even on a depth-only (color == nullptr) frame -- so a
   // receded surface leaves no color ghost. (Gating the clear on a color frame
   // being supplied stranded the old color on a depth-only recede.)
-  vr::Result<vol::VoxelBlockGrid> zg = vol::VoxelBlockGrid::create(
+  vkc::Result<vol::VoxelBlockGrid> zg = vol::VoxelBlockGrid::create(
       device.value(), allocator.value(), grid, cattrs, 3);
   CHECK(zg.ok());
   vol::VoxelBlockGrid vbg_dz = std::move(zg).value();
   CHECK(vbg_dz.map()
             .allocate(blocks.data(), static_cast<std::uint32_t>(blocks.size()))
             .value() == 0);
-  vr::Result<std::vector<vol::BlockIndex>> dz_active =
+  vkc::Result<std::vector<vol::BlockIndex>> dz_active =
       vbg_dz.map().compact_active_blocks();
   CHECK(dz_active.ok());
   const std::int32_t dzp12 = find_ptr(dz_active.value(), vr::Vec3i(0, 0, 12));

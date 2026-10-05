@@ -18,6 +18,8 @@
 
 namespace vr_example {
 
+namespace vkc = volumetric_kit::core;
+
 /// @brief How a prepared frame's colour is fused: through its own camera, the
 ///        coverage read off its high byte. Meaningful only when the frame
 ///        @ref vr::sensor::DeviceFrame::has_color.
@@ -43,12 +45,12 @@ inline vr::tsdf::ColorFrame device_color(const vr::sensor::DeviceFrame& frame) {
 ///                    surface; `Dynamic` clears it, so a surface that moves
 ///                    away leaves no ghost.
 /// @return OK, or the first error of the two steps.
-inline vr::Status fuse_frame(
+inline vkc::Status fuse_frame(
     vr::volume::VoxelBlockGrid& grid, vr::tsdf::TsdfIntegrator& integrator,
     const vr::sensor::DeviceFrame& frame, float max_weight,
-    vr::StageMetrics* metrics,
+    vkc::StageMetrics* metrics,
     vr::tsdf::IntegrationMode mode = vr::tsdf::IntegrationMode::Classic) {
-  VR_TRY(allocate_band(grid, *frame.depth, frame.depth_camera, metrics));
+  VKC_TRY(allocate_band(grid, *frame.depth, frame.depth_camera, metrics));
   const vr::tsdf::ColorFrame color = device_color(frame);
   return integrator.integrate(grid, *frame.depth, frame.depth_camera,
                               max_weight, mode,
@@ -60,10 +62,10 @@ inline vr::Status fuse_frame(
 ///        frame fused in one, so a set costs a few submits rather than a few a
 ///        frame. An empty entry is skipped.
 /// @return OK, or the first error of the two steps.
-inline vr::Status fuse_set(
+inline vkc::Status fuse_set(
     vr::volume::VoxelBlockGrid& grid, vr::tsdf::TsdfIntegrator& integrator,
     const std::vector<std::optional<vr::sensor::DeviceFrame>>& frames,
-    float max_weight, vr::StageMetrics* metrics,
+    float max_weight, vkc::StageMetrics* metrics,
     vr::tsdf::IntegrationMode mode = vr::tsdf::IntegrationMode::Classic) {
   std::vector<vr::tsdf::ColorFrame> colors;
   std::vector<vr::tsdf::FrameInput> inputs;
@@ -76,12 +78,12 @@ inline vr::Status fuse_set(
       color = &colors.back();
     }
     inputs.push_back(
-        {{vr::StorageInput(*frame->depth), frame->depth_camera}, color});
+        {{vkc::StorageInput(*frame->depth), frame->depth_camera}, color});
   }
   // Each input's depth half, sliced off.
   const std::vector<vr::volume::DepthInput> depths(inputs.begin(),
                                                    inputs.end());
-  VR_TRY(allocate_band(grid, depths, metrics));
+  VKC_TRY(allocate_band(grid, depths, metrics));
   return integrator.integrate(grid, inputs, max_weight, mode, metrics);
 }
 

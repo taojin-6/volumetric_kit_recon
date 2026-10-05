@@ -14,7 +14,7 @@
 #include <string>
 #include <vector>
 
-#include "volumetric_kit/recon/core/result.hpp"
+#include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/recon/sensor/orbbec/orbbec_capture.hpp"
 
 namespace volumetric_kit::recon::sensor::orbbec {
@@ -23,7 +23,7 @@ namespace volumetric_kit::recon::sensor::orbbec {
 /// since the primary's first trigger is what the secondaries wait for -- or
 /// why the rig cannot run: no primary, more than one, or a camera that would
 /// stream on its own clock rather than on the primary's trigger.
-Result<std::vector<std::size_t>> rig_start_order(
+core::Result<std::vector<std::size_t>> rig_start_order(
     const std::vector<OrbbecSyncMode>& modes,
     const std::vector<std::string>& serials);
 

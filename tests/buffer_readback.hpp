@@ -9,57 +9,57 @@
 #include <cstddef>
 #include <vector>
 
-#include "volumetric_kit/recon/core/allocator.hpp"
-#include "volumetric_kit/recon/core/buffer.hpp"
-#include "volumetric_kit/recon/core/command_batch.hpp"
-#include "volumetric_kit/recon/core/compute_util.hpp"
-#include "volumetric_kit/recon/core/device.hpp"
-#include "volumetric_kit/recon/core/result.hpp"
+#include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "volumetric_kit/core/vulkan/buffer.hpp"
+#include "volumetric_kit/core/vulkan/command_batch.hpp"
+#include "volumetric_kit/core/vulkan/compute_util.hpp"
+#include "volumetric_kit/core/vulkan/device.hpp"
 
 namespace vr_test {
 
-namespace vr = volumetric_kit::recon;
+namespace vkc = volumetric_kit::core;
 
 // The device and allocator a test runs on, handed to its helpers. Held by
 // reference: main keeps both where it created them.
 struct Gpu {
-  vr::Device& device;
-  vr::Allocator& allocator;
+  vkc::Device& device;
+  vkc::Allocator& allocator;
 };
 
 // A genuinely resident input, uploaded at the test boundary.
-inline vr::Result<vr::Buffer> upload_device_buffer(const vr::Device& device,
-                                                   vr::Allocator& allocator,
-                                                   const void* data,
-                                                   VkDeviceSize bytes) {
-  VR_ASSIGN(vr::Buffer buffer, vr::device_storage_buffer(allocator, bytes));
-  vr::CommandBatch batch(device, allocator);
-  VR_TRY(batch.upload(buffer, 0, data, bytes));
-  VR_TRY(batch.submit());
+inline vkc::Result<vkc::Buffer> upload_device_buffer(const vkc::Device& device,
+                                                     vkc::Allocator& allocator,
+                                                     const void* data,
+                                                     VkDeviceSize bytes) {
+  VKC_ASSIGN(vkc::Buffer buffer, vkc::device_storage_buffer(allocator, bytes));
+  vkc::CommandBatch batch(device, allocator);
+  VKC_TRY(batch.upload(buffer, 0, data, bytes));
+  VKC_TRY(batch.submit());
   return buffer;
 }
 
 // The first `count` elements of `buffer`, which needs TRANSFER_SRC usage.
 template <typename T>
-vr::Result<std::vector<T>> read_back(const vr::Device& device,
-                                     vr::Allocator& allocator,
-                                     const vr::Buffer& buffer,
-                                     std::size_t count) {
+vkc::Result<std::vector<T>> read_back(const vkc::Device& device,
+                                      vkc::Allocator& allocator,
+                                      const vkc::Buffer& buffer,
+                                      std::size_t count) {
   std::vector<T> out(count);
-  vr::CommandBatch batch(device, allocator);
-  VR_TRY(
+  vkc::CommandBatch batch(device, allocator);
+  VKC_TRY(
       batch.readback(buffer, 0, VkDeviceSize(count) * sizeof(T), out.data()));
-  VR_TRY(batch.submit());
+  VKC_TRY(batch.submit());
   return out;
 }
 
 // Write `data` over the start of `buffer`, which needs TRANSFER_DST usage.
 template <typename T>
-vr::Status write_back(const vr::Device& device, vr::Allocator& allocator,
-                      const vr::Buffer& buffer, const std::vector<T>& data) {
-  vr::CommandBatch batch(device, allocator);
-  VR_TRY(batch.upload(buffer, 0, data.data(),
-                      VkDeviceSize(data.size()) * sizeof(T)));
+vkc::Status write_back(const vkc::Device& device, vkc::Allocator& allocator,
+                       const vkc::Buffer& buffer, const std::vector<T>& data) {
+  vkc::CommandBatch batch(device, allocator);
+  VKC_TRY(batch.upload(buffer, 0, data.data(),
+                       VkDeviceSize(data.size()) * sizeof(T)));
   return batch.submit();
 }
 

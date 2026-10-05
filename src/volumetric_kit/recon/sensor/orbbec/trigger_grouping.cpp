@@ -7,7 +7,7 @@
 
 namespace volumetric_kit::recon::sensor::orbbec {
 
-Result<std::vector<std::size_t>> rig_start_order(
+core::Result<std::vector<std::size_t>> rig_start_order(
     const std::vector<OrbbecSyncMode>& modes,
     const std::vector<std::string>& serials) {
   std::vector<std::size_t> order;
@@ -19,14 +19,14 @@ Result<std::vector<std::size_t>> rig_start_order(
   for (std::size_t i = 0; i < modes.size(); ++i) {
     if (modes[i] == OrbbecSyncMode::Primary) {
       if (primary) {
-        return Status::unsupported("OrbbecRig: more than one sync primary (" +
-                                   roles + ")");
+        return core::Status::unsupported(
+            "OrbbecRig: more than one sync primary (" + roles + ")");
       }
       primary = i;
     } else if (waits_for_primary(modes[i])) {
       order.push_back(i);
     } else {
-      return Status::unsupported(
+      return core::Status::unsupported(
           "OrbbecRig: camera " + serials[i] + " is " + to_string(modes[i]) +
           ", so it streams on its own clock rather than on the primary's "
           "trigger (" +
@@ -34,7 +34,7 @@ Result<std::vector<std::size_t>> rig_start_order(
     }
   }
   if (!primary) {
-    return Status::unsupported(
+    return core::Status::unsupported(
         "OrbbecRig: no sync primary, so nothing triggers the others (" + roles +
         ")");
   }

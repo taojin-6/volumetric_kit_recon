@@ -32,18 +32,20 @@
 #include <cstring>
 #include <vector>
 
-#include "volumetric_kit/recon/core/allocator.hpp"
-#include "volumetric_kit/recon/core/device.hpp"
-#include "volumetric_kit/recon/core/gpu_timer.hpp"
-#include "volumetric_kit/recon/core/instance.hpp"
-#include "volumetric_kit/recon/core/stage_metrics.hpp"
-#include "volumetric_kit/recon/core/vulkan.hpp"
+#include "volumetric_kit/core/base/stage_metrics.hpp"
+#include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "volumetric_kit/core/vulkan/device.hpp"
+#include "volumetric_kit/core/vulkan/gpu_timer.hpp"
+#include "volumetric_kit/core/vulkan/instance.hpp"
+#include "volumetric_kit/core/vulkan/vulkan.hpp"
+#include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/mesh/mesh.hpp"
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 
 namespace vr = volumetric_kit::recon;
+namespace vkc = volumetric_kit::core;
 
 #define CHECK(cond)                                                          \
   do {                                                                       \
@@ -64,8 +66,8 @@ constexpr std::uint32_t kHeight = 64;
 // fixture's fuse is a fraction of a millisecond).
 constexpr int kPastOneWindow = 40;
 
-const vr::StageRow* find(const vr::StageMetrics& m, const char* name) {
-  for (const vr::StageRow& row : m.rows()) {
+const vkc::StageRow* find(const vkc::StageMetrics& m, const char* name) {
+  for (const vkc::StageRow& row : m.rows()) {
     if (std::strcmp(row.name, name) == 0) return &row;
   }
   return nullptr;
@@ -81,9 +83,9 @@ const vr::StageRow* find(const vr::StageMetrics& m, const char* name) {
 // spans against one call's wall clock is a factor, not a coin flip -- where
 // `has_gpu` alone would wave a leak through, since spans left over from earlier
 // calls publish under the same label and set it.
-bool row_reports_both_halves(const vr::StageMetrics& m, const char* stage,
+bool row_reports_both_halves(const vkc::StageMetrics& m, const char* stage,
                              bool device_can_time, const char* context) {
-  const vr::StageRow* row = find(m, stage);
+  const vkc::StageRow* row = find(m, stage);
   if (row == nullptr) {
     std::fprintf(stderr, "FAIL (%s): no row for stage '%s'\n", context, stage);
     return false;
@@ -135,25 +137,25 @@ vr::DepthCameraParams plane_camera() {
 }  // namespace
 
 int main() {
-  vr::Result<vr::Instance> instance = vr::Instance::create({});
+  vkc::Result<vkc::Instance> instance = vkc::Instance::create({});
   if (!instance) {
     std::fprintf(stderr, "no Vulkan instance; skipping\n");
     return 0;
   }
-  vr::Result<vr::PhysicalDeviceInfo> gpu =
+  vkc::Result<vkc::PhysicalDeviceInfo> gpu =
       instance.value().select_physical_device(vr::device_requirements());
   if (!gpu) {
     std::fprintf(stderr, "no compute device; skipping\n");
     return 0;
   }
-  vr::Result<vr::Device> device = vr::Device::create(
+  vkc::Result<vkc::Device> device = vkc::Device::create(
       instance.value(), gpu.value(), vr::device_requirements());
   if (!device) {
     std::fprintf(stderr, "no device; skipping\n");
     return 0;
   }
-  vr::Result<vr::Allocator> allocator =
-      vr::Allocator::create(instance.value().handle(), device.value());
+  vkc::Result<vkc::Allocator> allocator =
+      vkc::Allocator::create(instance.value().handle(), device.value());
   CHECK(allocator);
 
   vr::volume::VoxelGridParams params = vr::volume::VoxelGridParams::defaults();
@@ -167,16 +169,16 @@ int main() {
 
   const vr::volume::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
                                              {"weight", sizeof(float)}};
-  vr::Result<vr::volume::VoxelBlockGrid> grid =
+  vkc::Result<vr::volume::VoxelBlockGrid> grid =
       vr::volume::VoxelBlockGrid::create(device.value(), allocator.value(),
                                          params, attrs, 2);
   CHECK(grid);
 
-  vr::Result<vr::tsdf::TsdfIntegrator> integrator =
+  vkc::Result<vr::tsdf::TsdfIntegrator> integrator =
       vr::tsdf::TsdfIntegrator::create(device.value(), allocator.value());
   CHECK(integrator);
 
-  vr::Result<vr::texture::ProjectiveTexturer> texturer =
+  vkc::Result<vr::texture::ProjectiveTexturer> texturer =
       vr::texture::ProjectiveTexturer::create(device.value(),
                                               allocator.value());
   CHECK(texturer);
@@ -192,7 +194,7 @@ int main() {
   // member and never created it: every row was host-only, every row printed
   // "timestamps unavailable", and nothing failed. A capability the test can
   // establish independently must not be inferred from the thing under test.
-  vr::Result<vr::GpuTimer> probe = vr::GpuTimer::create(device.value());
+  vkc::Result<vkc::GpuTimer> probe = vkc::GpuTimer::create(device.value());
   CHECK(probe);
   const bool device_can_time = probe.value().available();
 
@@ -208,7 +210,7 @@ int main() {
     CHECK(grid.value().map().allocate_from_depth(depth.data(), cam));
     CHECK(integrator.value().integrate(grid.value(), depth.data(), cam));
   }
-  vr::StageMetrics after_untimed;
+  vkc::StageMetrics after_untimed;
   CHECK(integrator.value().integrate(grid.value(), depth.data(), cam, 5.0f,
                                      vr::tsdf::IntegrationMode::Classic,
                                      nullptr, &after_untimed));
@@ -223,8 +225,8 @@ int main() {
   // Cleared, so the allocation takes blocks and the integrate compacts rather
   // than reuse the last list, which reports no row.
   CHECK(grid.value().clear().ok());
-  vr::StageMetrics metrics;
-  vr::Result<std::uint32_t> allocated = grid.value().map().allocate_from_depth(
+  vkc::StageMetrics metrics;
+  vkc::Result<std::uint32_t> allocated = grid.value().map().allocate_from_depth(
       depth.data(), cam, nullptr, &metrics);
   CHECK(allocated);
   CHECK(integrator.value().integrate(grid.value(), depth.data(), cam, 5.0f,
@@ -251,7 +253,7 @@ int main() {
                            "texture"};
   for (const char* stage : kStages) {
     CHECK(row_reports_both_halves(metrics, stage, device_can_time, "spine"));
-    const vr::StageRow* row = find(metrics, stage);
+    const vkc::StageRow* row = find(metrics, stage);
     if (!row->has_gpu) {
       // A queue family reporting zero timestampValidBits is a supported
       // configuration, so reporting host-only is right -- but only once the
@@ -272,7 +274,7 @@ int main() {
   // where the host total cannot. Skipping them lost this kernel from every
   // total while its host time stayed counted through "integrate".
   {
-    const vr::StageRow* active_set = find(metrics, "  ..active set");
+    const vkc::StageRow* active_set = find(metrics, "  ..active set");
     CHECK(active_set != nullptr);
     if (active_set->has_gpu) {
       // Compared with a tolerance, not for equality: the two totals accumulate
@@ -298,7 +300,7 @@ int main() {
   // Nothing allocated since, so the next integrate reuses that list: no
   // compaction runs, and none is reported.
   {
-    vr::StageMetrics reused;
+    vkc::StageMetrics reused;
     CHECK(integrator.value().integrate(grid.value(), depth.data(), cam, 5.0f,
                                        vr::tsdf::IntegrationMode::Classic,
                                        nullptr, &reused));
@@ -313,9 +315,9 @@ int main() {
   // caller's host total; at top level the same prefix would leave the row out
   // of every total, so the row is named as the stage it is.
   {
-    vr::StageMetrics nested;
+    vkc::StageMetrics nested;
     {
-      vr::StageScope outer(nested, "fuse");
+      vkc::StageScope outer(nested, "fuse");
       CHECK(grid.value().map().compact_active_blocks(&nested));
     }
     CHECK(find(nested, "  ..active set") != nullptr);
@@ -323,7 +325,7 @@ int main() {
     // Counted once, through the stage that wraps it.
     CHECK(nested.total_cpu_ms() == find(nested, "fuse")->cpu_ms);
 
-    vr::StageMetrics top;
+    vkc::StageMetrics top;
     CHECK(grid.value().map().compact_active_blocks(&top));
     CHECK(find(top, "active set") != nullptr);
     CHECK(find(top, "  ..active set") == nullptr);
@@ -335,7 +337,7 @@ int main() {
   // through the same row -- a caller who switches to it to make the trip
   // cheaper has to be able to read what that bought, not watch the row vanish.
   {
-    vr::StageMetrics frustum;
+    vkc::StageMetrics frustum;
     CHECK(grid.value().map().compact_active_blocks_in_frustum(cam, &frustum));
     CHECK(row_reports_both_halves(frustum, "active set", device_can_time,
                                   "frustum compaction"));
@@ -353,7 +355,7 @@ int main() {
   // ~16 µs on this fixture, small enough that ordinary jitter clears any ratio
   // wide enough to be meaningful, and a span that resolves inside one timestamp
   // tick is a legitimate 0.0 that fails every `<` against another 0.0.
-  vr::StageMetrics last;
+  vkc::StageMetrics last;
   for (int n = 0; n < kPastOneWindow; ++n) {
     last.clear();
     CHECK(integrator.value().integrate(grid.value(), depth.data(), cam, 5.0f,

@@ -12,14 +12,16 @@
 #include <cstdint>
 #include <cstdio>
 
-#include "volumetric_kit/recon/core/device.hpp"
-#include "volumetric_kit/recon/core/instance.hpp"
-#include "volumetric_kit/recon/core/vulkan.hpp"
+#include "volumetric_kit/core/vulkan/device.hpp"
+#include "volumetric_kit/core/vulkan/instance.hpp"
+#include "volumetric_kit/core/vulkan/vulkan.hpp"
+#include "volumetric_kit/recon/core/device_requirements.hpp"
 
 namespace vr = volumetric_kit::recon;
+namespace vkc = volumetric_kit::core;
 
 int main() {
-  vr::Result<vr::Instance> instance = vr::Instance::create({});
+  vkc::Result<vkc::Instance> instance = vkc::Instance::create({});
   if (!instance) {
     // No Vulkan driver on this machine (e.g. a headless CI runner without an
     // ICD). Treat as a skip, not a failure: the smoke gates on driver
@@ -41,8 +43,8 @@ int main() {
   // recon's requirements, not the core's defaults: scalarBlockLayout is what
   // every recon kernel's buffer ABI needs, so a device the core accepts can
   // still be one recon cannot run on.
-  const vr::DeviceRequirements reqs = vr::device_requirements();
-  vr::Result<vr::PhysicalDeviceInfo> gpu =
+  const vkc::DeviceRequirements reqs = vr::device_requirements();
+  vkc::Result<vkc::PhysicalDeviceInfo> gpu =
       instance.value().select_physical_device(reqs);
   if (!gpu) {
     std::fprintf(stderr,
@@ -50,8 +52,8 @@ int main() {
                  device_count, gpu.status().message().c_str());
     return 1;
   }
-  vr::Result<vr::Device> device =
-      vr::Device::create(instance.value(), gpu.value(), reqs);
+  vkc::Result<vkc::Device> device =
+      vkc::Device::create(instance.value(), gpu.value(), reqs);
   if (!device) {
     std::fprintf(stderr, "device create failed on %s: %s\n",
                  gpu.value().properties().deviceName,

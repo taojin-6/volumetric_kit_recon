@@ -12,7 +12,7 @@
 #include <vector>
 
 #include "ffmpeg.hpp"
-#include "volumetric_kit/recon/core/result.hpp"
+#include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/recon/sensor/video/video_backend.hpp"
 
 namespace volumetric_kit::recon::sensor::video {
@@ -40,8 +40,8 @@ std::optional<bool> hardware_decodes(VideoDecodeBackend backend,
 
 /// @return A device context for @p backend on the default device;
 ///         Unsupported if this FFmpeg lacks it or no device opens.
-Result<BufferRef> open_hardware_device(VideoDecodeBackend backend,
-                                       const char* name = nullptr);
+core::Result<BufferRef> open_hardware_device(VideoDecodeBackend backend,
+                                             const char* name = nullptr);
 
 /// @brief Warn, through core's log handler, that a decoder's pictures come to
 ///        the host from here on because of @p why: on a discrete GPU every

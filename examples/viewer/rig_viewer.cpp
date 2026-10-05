@@ -92,11 +92,12 @@
 #include "stage_metrics.hpp"  // fuse_viewer::to_sections
 #include "viewer_common.hpp"
 
-#include "volumetric_kit/recon/core/allocator.hpp"
-#include "volumetric_kit/recon/core/buffer.hpp"
-#include "volumetric_kit/recon/core/device.hpp"
-#include "volumetric_kit/recon/core/result.hpp"
-#include "volumetric_kit/recon/core/stage_metrics.hpp"
+#include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/base/stage_metrics.hpp"
+#include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "volumetric_kit/core/vulkan/buffer.hpp"
+#include "volumetric_kit/core/vulkan/device.hpp"
+#include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/mesh/device_mesh.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
 #include "volumetric_kit/recon/sensor/orbbec/orbbec_capture.hpp"
@@ -131,6 +132,7 @@
 #include "volumetric_kit/gfx/windowing/swapchain.hpp"
 
 namespace vr = volumetric_kit::recon;
+namespace vkc = volumetric_kit::core;
 namespace vol = volumetric_kit::recon::volume;
 namespace rtsdf = volumetric_kit::recon::tsdf;
 namespace rmesh = volumetric_kit::recon::mesh;
@@ -488,7 +490,7 @@ std::vector<TextureSource> texture_sources(
 // it (R, G, B and coverage in each word -- the bytes of R8G8B8A8), and the
 // tile it goes to.
 struct AtlasTileSource {
-  std::shared_ptr<const vr::Buffer> color;
+  std::shared_ptr<const vkc::Buffer> color;
   rtex::AtlasTile tile;
   std::size_t camera = 0;  // which camera, for the colour-by-camera view
 };
@@ -583,7 +585,7 @@ struct RigPanel {
   std::int32_t map_blocks = 0;
   double fuse_ms = 0.0;    // the newest set's prep, allocate and integrate
   double remesh_ms = 0.0;  // the newest remesh's extract and texture
-  vr::MemoryStats recon_memory;
+  vkc::MemoryStats recon_memory;
   bool silent = false;  // no set within kSilenceLimit
   // Meshes the window committed per second, over the last second: how often
   // what is drawn changes, the viewer's live rate. Filled on the render
@@ -656,7 +658,7 @@ void draw_rig_panel(const RigPanel& panel,
   // recon's own share of each heap (reserved_bytes), against its budget, as
   // fuse_viewer's panel shows it.
   for (std::uint32_t heap = 0; heap < panel.recon_memory.heap_count; ++heap) {
-    const vr::HeapStats& stats = panel.recon_memory.heaps[heap];
+    const vkc::HeapStats& stats = panel.recon_memory.heaps[heap];
     if (stats.reserved_bytes == 0) continue;
     ImGui::Text("recon heap %u  %.0f / %.0f MiB", heap,
                 to_mebibytes(stats.reserved_bytes),
@@ -699,21 +701,21 @@ int run(GLFWwindow* window, const Options& opt) {
   vg::app::WindowedApp app = std::move(app_r).value();
 
   auto recon_device_result =
-      vr::Device::adopt(shared->compute_payload(), vr::device_requirements());
+      vkc::Device::adopt(shared->compute_payload(), vr::device_requirements());
   if (!recon_device_result) {
     std::fprintf(stderr, "recon Device::adopt: %s\n",
                  recon_device_result.status().message().c_str());
     return 1;
   }
-  auto recon_allocator_result = vr::Allocator::create(
+  auto recon_allocator_result = vkc::Allocator::create(
       shared->instance().handle(), recon_device_result.value());
   if (!recon_allocator_result) {
     std::fprintf(stderr, "recon allocator: %s\n",
                  recon_allocator_result.status().message().c_str());
     return 1;
   }
-  vr::Device& rdevice = recon_device_result.value();
-  vr::Allocator& rallocator = recon_allocator_result.value();
+  vkc::Device& rdevice = recon_device_result.value();
+  vkc::Allocator& rallocator = recon_allocator_result.value();
 
   // --- The rig, opened raw onto the shared device --------------------------
   // After the device, which it decodes onto and must outlive it. Opened here,
@@ -1097,9 +1099,9 @@ int run(GLFWwindow* window, const Options& opt) {
 
   std::thread fuse_thread([&]() {
     try {
-      vr::StageMetrics fuse_stages;
+      vkc::StageMetrics fuse_stages;
       // The remesh rows, held between remeshes (see fuse_viewer).
-      vr::StageMetrics remesh_stages;
+      vkc::StageMetrics remesh_stages;
       std::size_t cameras_textured = 0;
       std::size_t cameras_held = 0;
       std::uint64_t held_views = 0;
@@ -1118,7 +1120,7 @@ int run(GLFWwindow* window, const Options& opt) {
       // from a buffer EXCLUSIVE to recon's is undefined with nothing to report
       // it. Checked before the camera textures the mesh: once uv0 point into
       // its tile, the tile must be filled.
-      auto copyable = [&](const vr::Buffer& color,
+      auto copyable = [&](const vkc::Buffer& color,
                           const rtex::AtlasTile& tile) {
         return color.valid() &&
                (color.usage() & VK_BUFFER_USAGE_TRANSFER_SRC_BIT) != 0 &&
@@ -1177,7 +1179,7 @@ int run(GLFWwindow* window, const Options& opt) {
             views_held += sources[c].held ? 1 : 0;
           }
           if (!views.empty()) {
-            const vr::Status textured = texturer.texture(
+            const vkc::Status textured = texturer.texture(
                 mesh, views, present, occlusion.load(), &remesh_stages);
             if (textured.ok()) {
               cameras_textured = views.size();
@@ -1275,8 +1277,8 @@ int run(GLFWwindow* window, const Options& opt) {
       };
       auto remesh = [&](const std::vector<TextureSource>& sources) {
         remesh_stages.clear();
-        vr::Result<rmesh::DeviceMesh> extracted = [&]() {
-          vr::StageScope scope(remesh_stages, "extract");
+        vkc::Result<rmesh::DeviceMesh> extracted = [&]() {
+          vkc::StageScope scope(remesh_stages, "extract");
           return extractor.extract_device(volume, 0.0f);
         }();
         // Published even when empty: an extract claims a ring slot either
@@ -1293,7 +1295,7 @@ int run(GLFWwindow* window, const Options& opt) {
         }
       };
 
-      const vr::Status started = rig.start();
+      const vkc::Status started = rig.start();
       if (!started.ok()) {
         std::fprintf(stderr, "rig_viewer: rig start: %s\n",
                      started.message().c_str());
@@ -1344,7 +1346,7 @@ int run(GLFWwindow* window, const Options& opt) {
         auto prepared = [&]() {
           // One row for the set: the cameras prepare at once, so their sum
           // would overstate it.
-          vr::StageScope scope(fuse_stages, "frame prep");
+          vkc::StageScope scope(fuse_stages, "frame prep");
           return rsensor::prepare_set(preps, set.frames);
         }();
         if (!prepared) {
@@ -1355,7 +1357,7 @@ int run(GLFWwindow* window, const Options& opt) {
         }
         const std::vector<std::optional<rsensor::DeviceFrame>>& frames =
             prepared.value();
-        const vr::Status fused = vr_example::fuse_set(
+        const vkc::Status fused = vr_example::fuse_set(
             volume, integrator, frames, max_weight.load(), &fuse_stages,
             dynamic_on.load() ? rtsdf::IntegrationMode::Dynamic
                               : rtsdf::IntegrationMode::Classic);
@@ -1373,7 +1375,7 @@ int run(GLFWwindow* window, const Options& opt) {
         // a failed pass is reported and fusion goes on.
         const auto free_after = static_cast<std::uint32_t>(opt.free_after);
         if (free_after != 0 && sets % free_after == 0) {
-          const vr::Result<std::uint32_t> freed =
+          const vkc::Result<std::uint32_t> freed =
               volume.free_stale_blocks(free_after, &fuse_stages);
           if (!freed) {
             std::fprintf(stderr, "rig_viewer: free blocks: %s\n",
@@ -1427,8 +1429,8 @@ int run(GLFWwindow* window, const Options& opt) {
         const double fuse_ms = fuse_stages.total_cpu_ms(/*exclude=*/"poll");
         fuse_stages.merge(remesh_stages);
         {
-          const vr::MemoryStats memory = rallocator.memory_stats();
-          const vr::Result<float> lf = volume.map().load_factor();
+          const vkc::MemoryStats memory = rallocator.memory_stats();
+          const vkc::Result<float> lf = volume.map().load_factor();
           const rsensor::OrbbecRigStats stats = rig.stats();
           std::lock_guard<std::mutex> lock(share_mtx);
           shared_fuse_stages = fuse_viewer::to_sections(fuse_stages);
@@ -1468,7 +1470,7 @@ int run(GLFWwindow* window, const Options& opt) {
   // colour buffers it reads stay with this frame's slot until the slot comes
   // round again.
   std::vector<std::shared_ptr<AtlasImage>> slot_atlas(config.frames_in_flight);
-  std::vector<std::vector<std::shared_ptr<const vr::Buffer>>> slot_sources(
+  std::vector<std::vector<std::shared_ptr<const vkc::Buffer>>> slot_sources(
       config.frames_in_flight);
   std::shared_ptr<AtlasImage> current_atlas = white_atlas;
   rmesh::DeviceMesh live_view;

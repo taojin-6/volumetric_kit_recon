@@ -14,8 +14,8 @@
 #include <cstdint>
 #include <memory>
 
+#include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/recon/core/fwd.hpp"
-#include "volumetric_kit/recon/core/result.hpp"
 #include "volumetric_kit/recon/sensor/video/decoded_picture.hpp"
 
 namespace volumetric_kit::recon::sensor::video {
@@ -24,8 +24,8 @@ class VtPictures {
  public:
   // Unsupported where @p device imports no Metal textures. @p who names the
   // decoder in errors.
-  static Result<std::unique_ptr<VtPictures>> create(const Device& device,
-                                                    const char* who);
+  static core::Result<std::unique_ptr<VtPictures>> create(
+      const core::Device& device, const char* who);
   ~VtPictures();
   VtPictures(const VtPictures&) = delete;
   VtPictures& operator=(const VtPictures&) = delete;
@@ -37,8 +37,8 @@ class VtPictures {
   // kept while pictures keep arriving. False for a picture
   // this does not take -- not 8-bit NV12, not on an IOSurface, or smaller
   // than the picture -- which comes to the host instead.
-  Result<bool> import(CVPixelBufferRef pixels, std::uint32_t width,
-                      std::uint32_t height, DecodedPicture& out);
+  core::Result<bool> import(CVPixelBufferRef pixels, std::uint32_t width,
+                            std::uint32_t height, DecodedPicture& out);
 
  private:
   struct Impl;

@@ -35,11 +35,12 @@
 #include <vector>
 
 #include "test_meshes.hpp"
-#include "volumetric_kit/recon/core/allocator.hpp"
-#include "volumetric_kit/recon/core/device.hpp"
-#include "volumetric_kit/recon/core/instance.hpp"
+#include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "volumetric_kit/core/vulkan/device.hpp"
+#include "volumetric_kit/core/vulkan/instance.hpp"
+#include "volumetric_kit/core/vulkan/vulkan.hpp"
+#include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
-#include "volumetric_kit/recon/core/vulkan.hpp"
 #include "volumetric_kit/recon/tsdf/mesh_integrator.hpp"
 #include "volumetric_kit/recon/volume/hash_types.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
@@ -50,6 +51,7 @@
 #include "grid_readback.hpp"
 
 namespace vr = volumetric_kit::recon;
+namespace vkc = volumetric_kit::core;
 namespace vol = volumetric_kit::recon::volume;
 namespace ts = volumetric_kit::recon::tsdf;
 
@@ -169,7 +171,7 @@ Mesh soup(const Mesh& m) {
 // ---- Grid plumbing ---------------------------------------------------------
 
 std::vector<vol::BlockIndex> active_blocks(vol::VoxelBlockGrid& grid) {
-  vr::Result<std::vector<vol::BlockIndex>> a =
+  vkc::Result<std::vector<vol::BlockIndex>> a =
       grid.map().compact_active_blocks();
   return a.ok() ? std::move(a).value() : std::vector<vol::BlockIndex>{};
 }
@@ -323,27 +325,27 @@ Expect signed_sheets(vr::Vec3f p, const std::vector<Rect>& sheets, float z0,
 }  // namespace
 
 int main() {
-  vr::Result<vr::Instance> instance = vr::Instance::create({});
+  vkc::Result<vkc::Instance> instance = vkc::Instance::create({});
   if (!instance) {
     std::fprintf(stderr, "no Vulkan instance (%s); skipping\n",
                  instance.status().message().c_str());
     return 0;
   }
-  vr::Result<vr::PhysicalDeviceInfo> gpu =
+  vkc::Result<vkc::PhysicalDeviceInfo> gpu =
       instance.value().select_physical_device(vr::device_requirements());
   if (!gpu) {
     std::fprintf(stderr, "no compute-capable device (%s); skipping\n",
                  gpu.status().message().c_str());
     return 0;
   }
-  vr::Result<vr::Device> device_r = vr::Device::create(
+  vkc::Result<vkc::Device> device_r = vkc::Device::create(
       instance.value(), gpu.value(), vr::device_requirements());
   CHECK(device_r.ok());
-  vr::Device& device = device_r.value();
-  vr::Result<vr::Allocator> allocator_r =
-      vr::Allocator::create(instance.value().handle(), device);
+  vkc::Device& device = device_r.value();
+  vkc::Result<vkc::Allocator> allocator_r =
+      vkc::Allocator::create(instance.value().handle(), device);
   CHECK(allocator_r.ok());
-  vr::Allocator& allocator = allocator_r.value();
+  vkc::Allocator& allocator = allocator_r.value();
   const vr_test::Gpu ctx{device, allocator};
 
   // 10 mm voxels in 8-voxel blocks, a 40 mm (4-voxel) band: coarse enough that
@@ -361,12 +363,12 @@ int main() {
 
   const vol::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
                                       {"weight", sizeof(float)}};
-  vr::Result<vol::VoxelBlockGrid> grid_r =
+  vkc::Result<vol::VoxelBlockGrid> grid_r =
       vol::VoxelBlockGrid::create(device, allocator, gp, attrs, 2);
   CHECK(grid_r.ok());
   vol::VoxelBlockGrid grid = std::move(grid_r).value();
 
-  vr::Result<ts::MeshIntegrator> integ_r =
+  vkc::Result<ts::MeshIntegrator> integ_r =
       ts::MeshIntegrator::create(device, allocator);
   CHECK(integ_r.ok());
   ts::MeshIntegrator integ = std::move(integ_r).value();
@@ -374,13 +376,13 @@ int main() {
 
   // Allocate `m`'s band into a cleared grid, then write it.
   auto convert = [&](const Mesh& m, const ts::MeshSdfParams& params)
-      -> vr::Result<ts::MeshIntegrateStats> {
-    VR_TRY(grid.clear());
-    VR_ASSIGN(std::uint32_t failed, grid.map().allocate_from_triangles(
-                                        m.v.data(), m.vertex_count(),
-                                        m.i.data(), m.triangle_count()));
+      -> vkc::Result<ts::MeshIntegrateStats> {
+    VKC_TRY(grid.clear());
+    VKC_ASSIGN(std::uint32_t failed, grid.map().allocate_from_triangles(
+                                         m.v.data(), m.vertex_count(),
+                                         m.i.data(), m.triangle_count()));
     if (failed != 0) {
-      return vr::Status::out_of_memory("allocate_from_triangles failed");
+      return vkc::Status::out_of_memory("allocate_from_triangles failed");
     }
     return integ.integrate(grid, m.v.data(), m.vertex_count(), m.i.data(),
                            m.triangle_count(), params);
@@ -391,7 +393,7 @@ int main() {
 
   // ---- 1. Signed tetrahedron: the sharp-edge case -------------------------
   const Mesh tet = tetrahedron(vr::Vec3f(0.203f, 0.117f, -0.089f), 0.1f);
-  vr::Result<ts::MeshIntegrateStats> tet_stats = convert(tet, kSigned);
+  vkc::Result<ts::MeshIntegrateStats> tet_stats = convert(tet, kSigned);
   if (!tet_stats.ok()) {
     std::fprintf(stderr, "tetrahedron: %s\n",
                  tet_stats.status().message().c_str());
@@ -423,14 +425,14 @@ int main() {
   // And every block written stamped changed, at a tick of the call's own.
   const std::map<Coord, std::vector<float>> tet_bytes = by_coord(ctx, grid);
   const std::uint32_t tick_before = grid.map().tick();
-  vr::Result<ts::MeshIntegrateStats> again =
+  vkc::Result<ts::MeshIntegrateStats> again =
       integ.integrate(grid, tet.v.data(), tet.vertex_count(), tet.i.data(),
                       tet.triangle_count(), kSigned);
   CHECK(again.ok());
   CHECK(by_coord(ctx, grid) == tet_bytes);
   CHECK(grid.map().tick() == tick_before + 1);
   {
-    vr::Result<std::vector<vol::BlockStamp>> st =
+    vkc::Result<std::vector<vol::BlockStamp>> st =
         grid.map().read_block_stamps();
     CHECK(st.ok());
     std::uint32_t stamped = 0;
@@ -470,7 +472,7 @@ int main() {
 
   // ---- 4. Signed dented cube: concave edges and a concave vertex ---------
   const Mesh cube = dented_cube(vr::Vec3f(0.013f, -0.021f, 0.017f), 0.3f);
-  vr::Result<ts::MeshIntegrateStats> cube_stats = convert(cube, kSigned);
+  vkc::Result<ts::MeshIntegrateStats> cube_stats = convert(cube, kSigned);
   CHECK(cube_stats.ok());
   CHECK(cube_stats.value().triangles == 12);
   if (verify(ctx, grid, "signed dented cube",
@@ -561,7 +563,7 @@ int main() {
   {
     const float sx0 = -0.487f, sx1 = 0.513f, sy0 = -0.493f, sy1 = 0.507f;
     const Mesh sheet = divided_quad(sx0, sx1, sy0, sy1, z0, 400);
-    vr::Result<ts::MeshIntegrateStats> sheet_stats = convert(sheet, kSigned);
+    vkc::Result<ts::MeshIntegrateStats> sheet_stats = convert(sheet, kSigned);
     if (!sheet_stats.ok()) {
       std::fprintf(stderr, "divided sheet: %s\n",
                    sheet_stats.status().message().c_str());
@@ -603,7 +605,7 @@ int main() {
             .allocate_from_triangles(tet.v.data(), tet.vertex_count(),
                                      tet.i.data(), tet.triangle_count())
             .ok());
-  vr::Result<ts::MeshIntegrateStats> beside =
+  vkc::Result<ts::MeshIntegrateStats> beside =
       integ.integrate(grid, tet.v.data(), tet.vertex_count(), tet.i.data(),
                       tet.triangle_count(), kSigned);
   CHECK(beside.ok());
@@ -621,7 +623,7 @@ int main() {
   auto refused = [&](const Mesh& m, const ts::MeshSdfParams& params,
                      const char* needle) -> bool {
     const std::vector<float> before = snapshot(ctx, grid);
-    vr::Result<ts::MeshIntegrateStats> r =
+    vkc::Result<ts::MeshIntegrateStats> r =
         integ.integrate(grid, m.v.data(), m.vertex_count(), m.i.data(),
                         m.triangle_count(), params);
     if (r.ok()) {
@@ -693,7 +695,7 @@ int main() {
     const std::uint32_t bad[3] = {0, 1, 4};
     CHECK(!integ.integrate(grid, tet.v.data(), 4, bad, 1, kSigned).ok());
     // No triangles: nothing to write, and not an error.
-    vr::Result<ts::MeshIntegrateStats> none =
+    vkc::Result<ts::MeshIntegrateStats> none =
         integ.integrate(grid, tet.v.data(), 4, tet.i.data(), 0, kSigned);
     CHECK(none.ok());
     CHECK(none.value().blocks == 0);
@@ -702,7 +704,7 @@ int main() {
   // A grid without a weight attribute.
   {
     const vol::AttributeSpec tsdf_only[] = {{"tsdf", sizeof(float)}};
-    vr::Result<vol::VoxelBlockGrid> bare =
+    vkc::Result<vol::VoxelBlockGrid> bare =
         vol::VoxelBlockGrid::create(device, allocator, gp, tsdf_only, 1);
     CHECK(bare.ok());
     CHECK(!integ
@@ -727,12 +729,12 @@ int main() {
     CHECK(wide_r.ok());
     vol::VoxelBlockGrid wide = std::move(wide_r).value();
     Mesh moving = divided_quad(-0.487f, 0.513f, -0.493f, 0.507f, z0, 1);
-    auto write = [&]() -> vr::Result<ts::MeshIntegrateStats> {
-      VR_TRY(wide.clear());
-      VR_ASSIGN(auto failed, wide.map().allocate_from_triangles(
-                                 moving.v.data(), moving.vertex_count(),
-                                 moving.i.data(), moving.triangle_count()));
-      if (failed != 0) return vr::Status::out_of_memory("wide allocation");
+    auto write = [&]() -> vkc::Result<ts::MeshIntegrateStats> {
+      VKC_TRY(wide.clear());
+      VKC_ASSIGN(auto failed, wide.map().allocate_from_triangles(
+                                  moving.v.data(), moving.vertex_count(),
+                                  moving.i.data(), moving.triangle_count()));
+      if (failed != 0) return vkc::Status::out_of_memory("wide allocation");
       return integ.integrate(wide, moving.v.data(), moving.vertex_count(),
                              moving.i.data(), moving.triangle_count(), kSigned);
     };
@@ -771,7 +773,7 @@ int main() {
                .integrate(grid, tet.v.data(), tet.vertex_count(), tet.i.data(),
                           tet.triangle_count(), kSigned)
                .ok());
-    vr::Result<ts::MeshIntegrator> other_r =
+    vkc::Result<ts::MeshIntegrator> other_r =
         ts::MeshIntegrator::create(device, allocator);
     CHECK(other_r.ok());
     ts::MeshIntegrator other = std::move(other_r).value();

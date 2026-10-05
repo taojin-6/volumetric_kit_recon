@@ -15,7 +15,7 @@
 
 #include "trigger_grouping.hpp"
 
-namespace vr = volumetric_kit::recon;
+namespace vkc = volumetric_kit::core;
 namespace sensor = volumetric_kit::recon::sensor;
 namespace orbbec = volumetric_kit::recon::sensor::orbbec;
 
@@ -279,7 +279,7 @@ int test_start_order() {
     const auto r = orbbec::rig_start_order(modes, sns);
     if (r.ok()) return false;
     std::printf("  refused as expected: %s\n", r.status().message().c_str());
-    return r.status().domain() == vr::Status::Code::Unsupported;
+    return r.status().domain() == vkc::Status::Code::Unsupported;
   };
   CHECK(unsupported({M::SecondarySynced, M::SecondarySynced, M::SecondarySynced,
                      M::SecondarySynced}));  // no primary

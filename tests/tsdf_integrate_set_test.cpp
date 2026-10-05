@@ -20,12 +20,13 @@
 #include <tuple>
 #include <vector>
 
-#include "volumetric_kit/recon/core/allocator.hpp"
-#include "volumetric_kit/recon/core/buffer.hpp"
-#include "volumetric_kit/recon/core/compute_util.hpp"
-#include "volumetric_kit/recon/core/device.hpp"
-#include "volumetric_kit/recon/core/instance.hpp"
-#include "volumetric_kit/recon/core/result.hpp"
+#include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "volumetric_kit/core/vulkan/buffer.hpp"
+#include "volumetric_kit/core/vulkan/compute_util.hpp"
+#include "volumetric_kit/core/vulkan/device.hpp"
+#include "volumetric_kit/core/vulkan/instance.hpp"
+#include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
 #include "volumetric_kit/recon/volume/hash_types.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
@@ -34,6 +35,7 @@
 #include "grid_readback.hpp"
 
 namespace vr = volumetric_kit::recon;
+namespace vkc = volumetric_kit::core;
 namespace vol = volumetric_kit::recon::volume;
 namespace tsdf = volumetric_kit::recon::tsdf;
 
@@ -67,8 +69,8 @@ vol::VoxelGridParams grid_params() {
   return grid;
 }
 
-vr::Result<vol::VoxelBlockGrid> make_grid(vr::Device& device,
-                                          vr::Allocator& allocator) {
+vkc::Result<vol::VoxelBlockGrid> make_grid(vkc::Device& device,
+                                           vkc::Allocator& allocator) {
   const vol::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
                                       {"weight", sizeof(float)},
                                       {"color", sizeof(std::uint32_t)}};
@@ -124,9 +126,9 @@ View make_view(int index) {
 }
 
 // Every active block's coordinate and first voxel (`ptr` is a voxel offset).
-vr::Result<std::map<Coord, std::int32_t>> blocks_of(vol::VoxelBlockGrid& g) {
-  VR_ASSIGN(std::vector<vol::BlockIndex> active,
-            g.map().compact_active_blocks());
+vkc::Result<std::map<Coord, std::int32_t>> blocks_of(vol::VoxelBlockGrid& g) {
+  VKC_ASSIGN(std::vector<vol::BlockIndex> active,
+             g.map().compact_active_blocks());
   std::map<Coord, std::int32_t> out;
   for (const vol::BlockIndex& b : active) {
     out[Coord{b.coord.x, b.coord.y, b.coord.z}] = b.ptr;
@@ -137,10 +139,10 @@ vr::Result<std::map<Coord, std::int32_t>> blocks_of(vol::VoxelBlockGrid& g) {
 // The same blocks, and in each the same bits of weight, tsdf and colour in
 // every voxel. A slot can differ: allocation order is the GPU's.
 // The blocks of `g` stamped changed after `since`.
-vr::Result<std::uint32_t> changed_after(const vol::VoxelBlockGrid& g,
-                                        std::uint32_t since) {
-  VR_ASSIGN(const std::vector<vol::BlockStamp> stamps,
-            g.map().read_block_stamps());
+vkc::Result<std::uint32_t> changed_after(const vol::VoxelBlockGrid& g,
+                                         std::uint32_t since) {
+  VKC_ASSIGN(const std::vector<vol::BlockStamp> stamps,
+             g.map().read_block_stamps());
   std::uint32_t n = 0;
   for (const vol::BlockStamp& st : stamps) {
     n += vol::tick_after(st.changed, since) ? 1u : 0u;
@@ -203,27 +205,27 @@ int settle(Allocate&& allocate) {
 }  // namespace
 
 int main() {
-  vr::Result<vr::Instance> instance = vr::Instance::create({});
+  vkc::Result<vkc::Instance> instance = vkc::Instance::create({});
   if (!instance) {
     std::fprintf(stderr, "no Vulkan instance (%s); skipping\n",
                  instance.status().message().c_str());
     return 0;
   }
-  vr::Result<vr::PhysicalDeviceInfo> gpu =
+  vkc::Result<vkc::PhysicalDeviceInfo> gpu =
       instance.value().select_physical_device(vr::device_requirements());
   if (!gpu) {
     std::fprintf(stderr, "no compute-capable device (%s); skipping\n",
                  gpu.status().message().c_str());
     return 0;
   }
-  vr::Result<vr::Device> device = vr::Device::create(
+  vkc::Result<vkc::Device> device = vkc::Device::create(
       instance.value(), gpu.value(), vr::device_requirements());
   CHECK(device.ok());
-  vr::Result<vr::Allocator> allocator =
-      vr::Allocator::create(instance.value().handle(), device.value());
+  vkc::Result<vkc::Allocator> allocator =
+      vkc::Allocator::create(instance.value().handle(), device.value());
   CHECK(allocator.ok());
-  vr::Device& dev = device.value();
-  vr::Allocator& alloc = allocator.value();
+  vkc::Device& dev = device.value();
+  vkc::Allocator& alloc = allocator.value();
   const vr_test::Gpu ctx{dev, alloc};
 
   std::vector<View> views;
@@ -235,7 +237,7 @@ int main() {
     }
   }
   // Cameras 0 and 2 are on the device, 1 on the host; 2 has no colour.
-  std::vector<vr::Buffer> depth_bufs;
+  std::vector<vkc::Buffer> depth_bufs;
   for (int c = 0; c < kCameras; ++c) {
     auto buf =
         vr_test::upload_device_buffer(dev, alloc, views[c].depth.data(),
@@ -260,16 +262,16 @@ int main() {
   tsdf::ColorFrame c1{views[1].color.data(), color_cam(views[1]), {}};
 
   const std::vector<tsdf::FrameInput> frames{
-      {{vr::StorageInput(depth_bufs[0]), views[0].cam}, &c0},
-      {{vr::StorageInput(views[1].depth.data()), views[1].cam}, &c1},
-      {{vr::StorageInput(depth_bufs[2]), views[2].cam}, nullptr}};
+      {{vkc::StorageInput(depth_bufs[0]), views[0].cam}, &c0},
+      {{vkc::StorageInput(views[1].depth.data()), views[1].cam}, &c1},
+      {{vkc::StorageInput(depth_bufs[2]), views[2].cam}, nullptr}};
   // The set, with an empty frame second, and the list it allocates from.
   vr::DepthCameraParams empty_cam = views[1].cam;
   empty_cam.width = 0;
   std::vector<tsdf::FrameInput> set_frames = frames;
   set_frames.insert(
       set_frames.begin() + 1,
-      tsdf::FrameInput{{vr::StorageInput(views[1].depth.data()), empty_cam},
+      tsdf::FrameInput{{vkc::StorageInput(views[1].depth.data()), empty_cam},
                        &c1});
   const std::vector<vol::DepthInput> depths(set_frames.begin(),
                                             set_frames.end());
@@ -298,7 +300,7 @@ int main() {
       }
       for (int c = 0; c < kCameras; ++c) {
         const tsdf::FrameInput& f = frames[c];
-        const vr::Status fused =
+        const vkc::Status fused =
             c == 1 ? integrator->integrate(one.value(), views[1].depth.data(),
                                            f.camera, 5.0f, mode, f.color)
                    : integrator->integrate(one.value(), depth_bufs[c], f.camera,
@@ -338,9 +340,9 @@ int main() {
         dev, alloc, views[2].depth.data(), sizeof(float) * kWidth);
     CHECK(small.ok());
     std::vector<vol::DepthInput> bad_depths(frames.begin(), frames.end());
-    bad_depths[2] = {vr::StorageInput(small.value()), views[2].cam};
+    bad_depths[2] = {vkc::StorageInput(small.value()), views[2].cam};
     CHECK(grid->map().allocate_from_depth(bad_depths).status().domain() ==
-          vr::Status::Code::InvalidArgument);
+          vkc::Status::Code::InvalidArgument);
     auto none = blocks_of(grid.value());
     CHECK(none.ok() && none.value().empty());
 
@@ -348,9 +350,9 @@ int main() {
             return grid->map().allocate_from_depth(depths, why);
           }) == 0);
     std::vector<tsdf::FrameInput> bad = frames;
-    bad[2] = {{vr::StorageInput(small.value()), views[2].cam}, nullptr};
+    bad[2] = {{vkc::StorageInput(small.value()), views[2].cam}, nullptr};
     CHECK(integrator->integrate(grid.value(), bad).domain() ==
-          vr::Status::Code::InvalidArgument);
+          vkc::Status::Code::InvalidArgument);
     auto weight =
         vr_test::read_attribute<float>(dev, alloc, grid.value(), "weight");
     CHECK(weight.ok());

@@ -35,13 +35,15 @@
 
 #include "bare_device.hpp"
 #include "buffer_readback.hpp"
-#include "volumetric_kit/recon/core/allocator.hpp"
-#include "volumetric_kit/recon/core/device.hpp"
-#include "volumetric_kit/recon/core/instance.hpp"
+#include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "volumetric_kit/core/vulkan/device.hpp"
+#include "volumetric_kit/core/vulkan/instance.hpp"
+#include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/sensor/orbbec/orbbec_capture.hpp"
 #include "volumetric_kit/recon/sensor/utils/gpu_frame_prep.hpp"
 
 namespace vr = volumetric_kit::recon;
+namespace vkc = volumetric_kit::core;
 namespace sensor = volumetric_kit::recon::sensor;
 
 #define CHECK(cond)                                                        \
@@ -70,7 +72,7 @@ std::uint32_t g_fps = 30;
 
 sensor::OrbbecCapture::Options options_for(
     const char* serial, std::uint32_t w, std::uint32_t h, bool raw,
-    const vr::Device* device = nullptr, vr::Allocator* allocator = nullptr,
+    const vkc::Device* device = nullptr, vkc::Allocator* allocator = nullptr,
     sensor::OrbbecColorCodec codec = sensor::OrbbecColorCodec::Hevc) {
   sensor::OrbbecCapture::Options o;
   o.serial = serial;
@@ -137,8 +139,8 @@ int grab_host(const char* serial, std::uint32_t w, std::uint32_t h,
 // Raw frames decoded onto `decode_on`, prepared on `device`. A `decode_on`
 // other than `device` is one the decoder keeps nothing on.
 int grab_gpu(const char* serial, std::uint32_t w, std::uint32_t h,
-             sensor::OrbbecColorCodec codec, vr::Device& device,
-             const vr::Device& decode_on, vr::Allocator& allocator,
+             sensor::OrbbecColorCodec codec, vkc::Device& device,
+             const vkc::Device& decode_on, vkc::Allocator& allocator,
              sensor::GpuFramePrep& prep, Frame* out) {
   const bool forced = &decode_on != &device;
   std::printf("raw %s%s:\n", sensor::to_string(codec),
@@ -444,14 +446,14 @@ int main() {
   if (const char* fps = std::getenv("VR_ORBBEC_TEST_FPS")) {
     if (std::atoi(fps) > 0) g_fps = static_cast<std::uint32_t>(std::atoi(fps));
   }
-  auto instance = vr::Instance::create({});
+  auto instance = vkc::Instance::create({});
   CHECK(instance.ok());
   auto gpu = instance->select_physical_device(vr::device_requirements());
   CHECK(gpu.ok());
-  auto device = vr::Device::create(instance.value(), gpu.value(),
-                                   vr::device_requirements());
+  auto device = vkc::Device::create(instance.value(), gpu.value(),
+                                    vr::device_requirements());
   CHECK(device.ok());
-  auto allocator = vr::Allocator::create(instance->handle(), device.value());
+  auto allocator = vkc::Allocator::create(instance->handle(), device.value());
   CHECK(allocator.ok());
   auto prep = sensor::GpuFramePrep::create(device.value(), allocator.value());
   CHECK(prep.ok());

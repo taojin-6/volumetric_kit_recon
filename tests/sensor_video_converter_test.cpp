@@ -365,11 +365,11 @@ int test_refusals() {
   auto frame = solid(AV_PIX_FMT_YUV420P, 64, 32, 100, 90, 160);
   frame->format = AV_PIX_FMT_VIDEOTOOLBOX;  // a hardware surface
   CHECK(converter.convert(*frame, VideoPixelLayout::Rgb24).status().domain() ==
-        volumetric_kit::recon::Status::Code::InvalidArgument);
+        volumetric_kit::core::Status::Code::InvalidArgument);
   frame->format = AV_PIX_FMT_YUV420P;
   frame->width = 0;
   CHECK(converter.convert(*frame, VideoPixelLayout::Rgb24).status().domain() ==
-        volumetric_kit::recon::Status::Code::InvalidArgument);
+        volumetric_kit::core::Status::Code::InvalidArgument);
   return 0;
 }
 

@@ -27,8 +27,8 @@ constexpr double kPi = 3.14159265358979323846;
 constexpr float kOrthonormalTolerance = 1e-4f;
 constexpr float kBottomRowTolerance = 1e-6f;
 
-Status bad(const std::string& what) {
-  return Status::invalid_argument("rig calibration: " + what);
+core::Status bad(const std::string& what) {
+  return core::Status::invalid_argument("rig calibration: " + what);
 }
 
 // Row-major 3x3, in double: the conversions below are where precision goes.
@@ -125,7 +125,7 @@ void extrinsic_from(const Mat4f& cam_to_world, double rvec[3], double tvec[3]) {
   rodrigues_from_rotation(R, rvec);
 }
 
-Status check_camera(const RigCameraCalibration& camera) {
+core::Status check_camera(const RigCameraCalibration& camera) {
   const std::string who = "camera " + camera.serial + ": ";
   const Mat4f& m = camera.cam_to_world;
   for (int c = 0; c < 4; ++c) {
@@ -169,8 +169,8 @@ Status check_camera(const RigCameraCalibration& camera) {
   return {};
 }
 
-Result<float> number(const json& object, const char* key,
-                     const std::string& where) {
+core::Result<float> number(const json& object, const char* key,
+                           const std::string& where) {
   const auto it = object.find(key);
   if (it == object.end() || !it->is_number()) {
     return bad(where + "missing number \"" + key + "\"");
@@ -178,18 +178,19 @@ Result<float> number(const json& object, const char* key,
   return it->get<float>();
 }
 
-Result<PinholeIntrinsics> pinhole(const json& j, const std::string& where) {
+core::Result<PinholeIntrinsics> pinhole(const json& j,
+                                        const std::string& where) {
   if (!j.is_object()) return bad(where + "not an object");
   PinholeIntrinsics p;
-  VR_ASSIGN(p.fx, number(j, "fx", where));
-  VR_ASSIGN(p.fy, number(j, "fy", where));
-  VR_ASSIGN(p.cx, number(j, "cx", where));
-  VR_ASSIGN(p.cy, number(j, "cy", where));
+  VKC_ASSIGN(p.fx, number(j, "fx", where));
+  VKC_ASSIGN(p.fy, number(j, "fy", where));
+  VKC_ASSIGN(p.cx, number(j, "cx", where));
+  VKC_ASSIGN(p.cy, number(j, "cy", where));
   return p;
 }
 
-Status vector3(const json& object, const char* key, double out[3],
-               const std::string& where) {
+core::Status vector3(const json& object, const char* key, double out[3],
+                     const std::string& where) {
   const auto it = object.find(key);
   if (it == object.end() || !it->is_array() || it->size() != 3) {
     return bad(where + "\"" + key + "\" is not 3 numbers");
@@ -205,7 +206,7 @@ Status vector3(const json& object, const char* key, double out[3],
 
 }  // namespace
 
-Status validate_rig_calibration(
+core::Status validate_rig_calibration(
     const std::vector<RigCameraCalibration>& cameras) {
   if (cameras.empty()) return bad("no cameras");
   for (std::size_t i = 0; i < cameras.size(); ++i) {
@@ -222,12 +223,12 @@ Status validate_rig_calibration(
         return bad("camera " + serial + " appears twice");
       }
     }
-    VR_TRY(check_camera(cameras[i]));
+    VKC_TRY(check_camera(cameras[i]));
   }
   return {};
 }
 
-Result<std::vector<RigCameraCalibration>> parse_rig_calibration(
+core::Result<std::vector<RigCameraCalibration>> parse_rig_calibration(
     const std::string& text) {
   json doc;
   try {
@@ -251,44 +252,44 @@ Result<std::vector<RigCameraCalibration>> parse_rig_calibration(
       return bad(where + "no \"pose\" object");
     }
     double rvec[3], tvec[3];
-    VR_TRY(vector3(*pose, "rvec", rvec, where + "pose "));
-    VR_TRY(vector3(*pose, "tvec", tvec, where + "pose "));
+    VKC_TRY(vector3(*pose, "rvec", rvec, where + "pose "));
+    VKC_TRY(vector3(*pose, "tvec", tvec, where + "pose "));
     camera.cam_to_world = cam_to_world_from(rvec, tvec);
     for (const auto& [key, field] :
          {std::pair{"intrinsics", &camera.intrinsics},
           std::pair{"optimal_intrinsics", &camera.optimal_intrinsics}}) {
       const auto j = it->find(key);
       if (j == it->end()) continue;
-      VR_ASSIGN(*field, pinhole(*j, where + key + " "));
+      VKC_ASSIGN(*field, pinhole(*j, where + key + " "));
     }
     const auto distortion = it->find("distortion");
     if (distortion != it->end()) {
       const std::string w = where + "distortion ";
       if (!distortion->is_object()) return bad(w + "not an object");
       LensDistortion d;
-      VR_ASSIGN(d.k1, number(*distortion, "k1", w));
-      VR_ASSIGN(d.k2, number(*distortion, "k2", w));
-      VR_ASSIGN(d.p1, number(*distortion, "p1", w));
-      VR_ASSIGN(d.p2, number(*distortion, "p2", w));
-      VR_ASSIGN(d.k3, number(*distortion, "k3", w));
-      VR_ASSIGN(d.k4, number(*distortion, "k4", w));
-      VR_ASSIGN(d.k5, number(*distortion, "k5", w));
-      VR_ASSIGN(d.k6, number(*distortion, "k6", w));
+      VKC_ASSIGN(d.k1, number(*distortion, "k1", w));
+      VKC_ASSIGN(d.k2, number(*distortion, "k2", w));
+      VKC_ASSIGN(d.p1, number(*distortion, "p1", w));
+      VKC_ASSIGN(d.p2, number(*distortion, "p2", w));
+      VKC_ASSIGN(d.k3, number(*distortion, "k3", w));
+      VKC_ASSIGN(d.k4, number(*distortion, "k4", w));
+      VKC_ASSIGN(d.k5, number(*distortion, "k5", w));
+      VKC_ASSIGN(d.k6, number(*distortion, "k6", w));
       camera.distortion = d;
     }
     cameras.push_back(std::move(camera));
   }
-  VR_TRY(validate_rig_calibration(cameras));
+  VKC_TRY(validate_rig_calibration(cameras));
   return cameras;
 }
 
-Result<std::vector<RigCameraCalibration>> read_rig_calibration(
+core::Result<std::vector<RigCameraCalibration>> read_rig_calibration(
     const std::string& path) {
   // stdio rather than a stream: a stream reports a failed read -- a directory,
   // say -- as the end of the file.
   std::FILE* in = std::fopen(path.c_str(), "rb");
   if (in == nullptr) {
-    return Status::io_error("rig calibration: cannot open " + path);
+    return core::Status::io_error("rig calibration: cannot open " + path);
   }
   std::string text;
   char buf[4096];
@@ -296,17 +297,19 @@ Result<std::vector<RigCameraCalibration>> read_rig_calibration(
   while ((n = std::fread(buf, 1, sizeof(buf), in)) > 0) text.append(buf, n);
   const bool failed = std::ferror(in) != 0;
   std::fclose(in);
-  if (failed) return Status::io_error("rig calibration: cannot read " + path);
+  if (failed)
+    return core::Status::io_error("rig calibration: cannot read " + path);
   auto cameras = parse_rig_calibration(text);
   if (!cameras.ok()) {
-    return Status::invalid_argument(path + ": " + cameras.status().message());
+    return core::Status::invalid_argument(path + ": " +
+                                          cameras.status().message());
   }
   return cameras;
 }
 
-Status write_rig_calibration(const std::string& path,
-                             const std::vector<RigCameraCalibration>& cameras) {
-  VR_TRY(validate_rig_calibration(cameras));
+core::Status write_rig_calibration(
+    const std::string& path, const std::vector<RigCameraCalibration>& cameras) {
+  VKC_TRY(validate_rig_calibration(cameras));
   // Written by hand so each vector stays on one line. The classic locale keeps
   // JSON's decimal point; 9 digits round-trip a float, 17 a double.
   std::ostringstream out;
@@ -349,12 +352,12 @@ Status write_rig_calibration(const std::string& path,
 
   std::FILE* file = std::fopen(path.c_str(), "wb");
   if (file == nullptr) {
-    return Status::io_error("rig calibration: cannot create " + path);
+    return core::Status::io_error("rig calibration: cannot create " + path);
   }
   const std::string text = out.str();
   const bool ok = std::fwrite(text.data(), 1, text.size(), file) == text.size();
   if (std::fclose(file) != 0 || !ok) {
-    return Status::io_error("rig calibration: cannot write " + path);
+    return core::Status::io_error("rig calibration: cannot write " + path);
   }
   return {};
 }

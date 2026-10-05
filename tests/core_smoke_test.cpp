@@ -9,12 +9,13 @@
 #include <string>
 #include <string_view>
 
+#include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/recon/core/log.hpp"
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
-#include "volumetric_kit/recon/core/result.hpp"
 #include "volumetric_kit/recon/version.hpp"
 
 namespace vr = volumetric_kit::recon;
+namespace vkc = volumetric_kit::core;
 
 namespace {
 
@@ -27,34 +28,34 @@ void check(bool cond, const char* what) {
   }
 }
 
-vr::Result<int> halve(int n) {
-  if (n % 2 != 0) return vr::Status::invalid_argument("odd input");
+vkc::Result<int> halve(int n) {
+  if (n % 2 != 0) return vkc::Status::invalid_argument("odd input");
   return n / 2;
 }
 
-vr::Status run_assign() {
-  VR_ASSIGN(int h, halve(8));
-  return h == 4 ? vr::Status{} : vr::Status::unsupported("unexpected");
+vkc::Status run_assign() {
+  VKC_ASSIGN(int h, halve(8));
+  return h == 4 ? vkc::Status{} : vkc::Status::unsupported("unexpected");
 }
 
 }  // namespace
 
 int main() {
   // Status basics.
-  check(vr::Status{}.ok(), "default Status is ok");
-  const vr::Status err = vr::Status::not_found("x");
+  check(vkc::Status{}.ok(), "default Status is ok");
+  const vkc::Status err = vkc::Status::not_found("x");
   check(!err.ok(), "error Status is not ok");
-  check(err.domain() == vr::Status::Code::NotFound, "domain preserved");
-  check(vr::to_string(err.domain()) == "NotFound", "to_string(domain)");
-  check(vr::Status::backend_error(42, "gpu").detail() == 42, "backend detail");
+  check(err.domain() == vkc::Status::Code::NotFound, "domain preserved");
+  check(vkc::to_string(err.domain()) == "NotFound", "to_string(domain)");
+  check(vkc::Status::backend_error(42, "gpu").detail() == 42, "backend detail");
 
   // Result<T> success + failure (one Result, checked for both ok and value).
-  const vr::Result<int> five = halve(10);
+  const vkc::Result<int> five = halve(10);
   check(five.ok() && five.value() == 5, "Result success");
   check(!halve(7).ok(), "Result failure");
 
-  // VR_ASSIGN propagation.
-  check(run_assign().ok(), "VR_ASSIGN unwraps value");
+  // VKC_ASSIGN propagation.
+  check(run_assign().ok(), "VKC_ASSIGN unwraps value");
 
   // POD math.
   const vr::Vec3f a{1.0f, 0.0f, 0.0f};
@@ -102,23 +103,23 @@ int main() {
   // Logging seam: an installed handler receives every level (including Info,
   // which the default sink drops) with recon's source; restoring the empty
   // handler falls back to the default sink.
-  vr::LogLevel seen_level = vr::LogLevel::Error;
+  vkc::LogLevel seen_level = vkc::LogLevel::Error;
   std::string seen_source;
   std::string seen_message;
   int seen_count = 0;
-  vr::set_log_handler([&](vr::LogLevel level, std::string_view source,
-                          std::string_view message) {
+  vkc::set_log_handler([&](vkc::LogLevel level, std::string_view source,
+                           std::string_view message) {
     seen_level = level;
     seen_source.assign(source.data(), source.size());
     seen_message.assign(message.data(), message.size());
     ++seen_count;
   });
-  vr::log_message(vr::LogLevel::Info, "smoke test ran");
-  check(seen_count == 1 && seen_level == vr::LogLevel::Info &&
+  vr::log_message(vkc::LogLevel::Info, "smoke test ran");
+  check(seen_count == 1 && seen_level == vkc::LogLevel::Info &&
             seen_source == "vr" && seen_message == "smoke test ran",
         "installed log handler receives the message with source \"vr\"");
-  vr::set_log_handler({});  // restore the default sink
-  vr::log_message(vr::LogLevel::Info, "after reset");
+  vkc::set_log_handler({});  // restore the default sink
+  vr::log_message(vkc::LogLevel::Info, "after reset");
   check(seen_count == 1, "empty handler restores default sink (Info dropped)");
 
   if (g_failures == 0) {

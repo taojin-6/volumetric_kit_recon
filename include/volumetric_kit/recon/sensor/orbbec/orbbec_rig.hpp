@@ -13,8 +13,8 @@
 #include <optional>
 #include <vector>
 
+#include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/recon/core/camera_params.hpp"
-#include "volumetric_kit/recon/core/result.hpp"
 #include "volumetric_kit/recon/sensor/camera_capture.hpp"
 #include "volumetric_kit/recon/sensor/orbbec/export.hpp"
 #include "volumetric_kit/recon/sensor/orbbec/orbbec_capture.hpp"
@@ -127,7 +127,7 @@ class VR_SENSOR_ORBBEC_API OrbbecRig final : public ICameraCapture {
   ///         one primary and its secondaries, or a camera
   ///         @ref OrbbecCapture::open would refuse; @ref Status::Code::IoError
   ///         for another SDK failure.
-  static Result<OrbbecRig> open(const Options& options);
+  static core::Result<OrbbecRig> open(const Options& options);
 
   OrbbecRig(OrbbecRig&& other) noexcept;
   OrbbecRig& operator=(OrbbecRig&& other) noexcept;
@@ -154,7 +154,7 @@ class VR_SENSOR_ORBBEC_API OrbbecRig final : public ICameraCapture {
   ///         or has disconnected; for H.265 colour or raw MJPEG, what
   ///         @ref OrbbecCapture::start returns when a camera's decoder does
   ///         not start. On any failure, none is left streaming.
-  Status start() override;
+  core::Status start() override;
 
   /// @brief Stop every camera and drop the frames held. Idempotent. The
   ///        cameras stay open, and held.
@@ -175,7 +175,7 @@ class VR_SENSOR_ORBBEC_API OrbbecRig final : public ICameraCapture {
   ///         @ref Status::Code::InvalidArgument on a moved-from rig, a rig
   ///         opened raw, or after another reader since the last
   ///         @ref start.
-  Result<std::optional<OrbbecRigFrameSet>> poll_set();
+  core::Result<std::optional<OrbbecRigFrameSet>> poll_set();
 
   /// @brief @ref poll_set for a rig opened with @ref OrbbecStreamOptions::raw:
   ///        the trigger's frames as the cameras captured them, nothing done
@@ -184,18 +184,18 @@ class VR_SENSOR_ORBBEC_API OrbbecRig final : public ICameraCapture {
   ///        thread per camera.
   /// @return As @ref poll_set; @ref Status::Code::InvalidArgument also on a
   ///         rig not opened raw.
-  Result<std::optional<OrbbecRigRawSet>> poll_raw_set();
+  core::Result<std::optional<OrbbecRigRawSet>> poll_raw_set();
 
   /// @brief The next frame of the current set, taking a new set when this one
   ///        is spent. Frames of one set come in camera order; a missing
   ///        camera is skipped.
   /// @return As @ref poll_set, one frame at a time.
-  Result<std::optional<CapturedFrame>> poll() override;
+  core::Result<std::optional<CapturedFrame>> poll() override;
 
   /// @brief @ref poll for a rig opened raw: the next frame of the current
   ///        @ref poll_raw_set set.
   /// @return As @ref poll_raw_set, one frame at a time.
-  Result<std::optional<RawFrame>> poll_raw() override;
+  core::Result<std::optional<RawFrame>> poll_raw() override;
 
   /// @return `true` if the rig was opened with @ref OrbbecStreamOptions::raw,
   ///         so its frames come through @ref poll_raw and @ref poll_raw_set;

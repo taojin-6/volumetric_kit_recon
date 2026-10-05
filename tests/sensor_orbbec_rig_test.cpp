@@ -27,9 +27,10 @@
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
 #if VR_TEST_HEVC
 #include "buffer_readback.hpp"
-#include "volumetric_kit/recon/core/allocator.hpp"
-#include "volumetric_kit/recon/core/device.hpp"
-#include "volumetric_kit/recon/core/instance.hpp"
+#include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "volumetric_kit/core/vulkan/device.hpp"
+#include "volumetric_kit/core/vulkan/instance.hpp"
+#include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/sensor/utils/gpu_frame_prep.hpp"
 #endif
 #include "volumetric_kit/recon/sensor/orbbec/orbbec_rig.hpp"
@@ -37,6 +38,7 @@
 #include "volumetric_kit/recon/sensor/rig_calibration.hpp"
 
 namespace vr = volumetric_kit::recon;
+namespace vkc = volumetric_kit::core;
 namespace sensor = volumetric_kit::recon::sensor;
 
 #define CHECK(cond)                                                        \
@@ -49,7 +51,7 @@ namespace sensor = volumetric_kit::recon::sensor;
 
 #define CHECK_OK(expr)                                                        \
   do {                                                                        \
-    const vr::Status _s = (expr);                                             \
+    const vkc::Status _s = (expr);                                            \
     if (!_s.ok()) {                                                           \
       std::fprintf(stderr, "FAIL %s:%d: %s: %s\n", __FILE__, __LINE__, #expr, \
                    _s.message().c_str());                                     \
@@ -111,7 +113,7 @@ int main() {
     differing.sync.devices.back().sync.depth_delay_us += 40;
     const auto refused = sensor::OrbbecRig::open(differing);
     CHECK(!refused.ok() &&
-          refused.status().domain() == vr::Status::Code::Unsupported);
+          refused.status().domain() == vkc::Status::Code::Unsupported);
     std::printf("  refused as expected: %s\n",
                 refused.status().message().c_str());
     CHECK(refused.status().message().find(
@@ -228,7 +230,7 @@ int main() {
   {
     auto polled = rig.poll();
     CHECK(!polled.ok() &&
-          polled.status().domain() == vr::Status::Code::InvalidArgument);
+          polled.status().domain() == vkc::Status::Code::InvalidArgument);
   }
 
   // Stop, idempotently; a restart streams again with fresh counters, and may
@@ -294,8 +296,9 @@ int main() {
   // Not opened raw.
   CHECK(!hevc.raw_frames());
   CHECK(hevc.poll_raw_set().status().domain() ==
-        vr::Status::Code::InvalidArgument);
-  CHECK(hevc.poll_raw().status().domain() == vr::Status::Code::InvalidArgument);
+        vkc::Status::Code::InvalidArgument);
+  CHECK(hevc.poll_raw().status().domain() ==
+        vkc::Status::Code::InvalidArgument);
 
   // The rig raw, over either codec: whole sets as the cameras captured them,
   // each posed by its calibration, prepared on the GPU at once, one thread
@@ -303,16 +306,16 @@ int main() {
   {
     sensor::OrbbecRig closed = std::move(hevc);
   }  // frees the cameras
-  vr::Result<vr::Instance> instance = vr::Instance::create({});
+  vkc::Result<vkc::Instance> instance = vkc::Instance::create({});
   CHECK(instance.ok());
-  vr::Result<vr::PhysicalDeviceInfo> gpu =
+  vkc::Result<vkc::PhysicalDeviceInfo> gpu =
       instance.value().select_physical_device(vr::device_requirements());
   CHECK(gpu.ok());
-  vr::Result<vr::Device> device = vr::Device::create(
+  vkc::Result<vkc::Device> device = vkc::Device::create(
       instance.value(), gpu.value(), vr::device_requirements());
   CHECK(device.ok());
-  vr::Result<vr::Allocator> allocator =
-      vr::Allocator::create(instance.value().handle(), device.value());
+  vkc::Result<vkc::Allocator> allocator =
+      vkc::Allocator::create(instance.value().handle(), device.value());
   CHECK(allocator.ok());
   std::vector<sensor::GpuFramePrep> preps;
   for (std::size_t c = 0; c < n; ++c) {
@@ -334,9 +337,9 @@ int main() {
     CHECK(raw_rig.raw_frames());
     CHECK_OK(raw_rig.start());
     CHECK(raw_rig.poll_set().status().domain() ==
-          vr::Status::Code::InvalidArgument);
+          vkc::Status::Code::InvalidArgument);
     CHECK(raw_rig.poll().status().domain() ==
-          vr::Status::Code::InvalidArgument);
+          vkc::Status::Code::InvalidArgument);
     // Each depth camera sits a few centimetres from its colour camera, by the
     // camera's own extrinsic, so a depth frame posed by another camera, or
     // without the extrinsic, shows.
@@ -415,11 +418,11 @@ int main() {
       ++k;
     }
     CHECK(raw_rig.poll_raw_set().status().domain() ==
-          vr::Status::Code::InvalidArgument);
+          vkc::Status::Code::InvalidArgument);
     raw_rig.stop();
   }  // frees the cameras
 #else
-  CHECK(hevc_opened.status().domain() == vr::Status::Code::Unsupported);
+  CHECK(hevc_opened.status().domain() == vkc::Status::Code::Unsupported);
 #endif
 
   std::printf("orbbec rig tests passed\n");

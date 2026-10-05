@@ -76,11 +76,11 @@ struct OrbbecRig::Impl {
 
   ~Impl() { stop_all(); }
 
-  Status read_with(Reader wanted) {
+  core::Status read_with(Reader wanted) {
     const bool raw_reader =
         wanted == Reader::RawSets || wanted == Reader::RawFrames;
     if (raw != raw_reader) {
-      return Status::invalid_argument(
+      return core::Status::invalid_argument(
           raw ? "OrbbecRig: opened for raw frames; take them with poll_raw_set "
                 "or poll_raw"
               : "OrbbecRig: poll_raw_set and poll_raw need a rig opened with "
@@ -88,18 +88,18 @@ struct OrbbecRig::Impl {
     }
     if (reader == Reader::Unchosen) reader = wanted;
     if (reader == wanted) return {};
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "OrbbecRig: read with one of the set and frame polls until the next "
         "start");
   }
 
   // The next ready trigger's frames, each processed, or read raw.
   template <typename Frame>
-  Result<std::optional<OrbbecRigSet<Frame>>> take();
+  core::Result<std::optional<OrbbecRigSet<Frame>>> take();
 
   // The next frame of `set`, taking a new set when it is spent.
   template <typename Frame>
-  Result<std::optional<Frame>> next(OrbbecRigSet<Frame>& set);
+  core::Result<std::optional<Frame>> next(OrbbecRigSet<Frame>& set);
 
   void release_ids() {
     for (const std::uint64_t id : released) {
@@ -129,9 +129,9 @@ OrbbecRig::OrbbecRig(OrbbecRig&& other) noexcept = default;
 OrbbecRig& OrbbecRig::operator=(OrbbecRig&& other) noexcept = default;
 OrbbecRig::~OrbbecRig() = default;
 
-Result<OrbbecRig> OrbbecRig::open(const Options& options) {
-  VR_TRY(orbbec::validate(options));
-  VR_TRY(orbbec::check_color_codec(options, "OrbbecRig"));
+core::Result<OrbbecRig> OrbbecRig::open(const Options& options) {
+  VKC_TRY(orbbec::validate(options));
+  VKC_TRY(orbbec::check_color_codec(options, "OrbbecRig"));
   auto impl = std::make_unique<Impl>();
   impl->raw = options.raw;
   std::vector<std::string> serials;
@@ -142,17 +142,17 @@ Result<OrbbecRig> OrbbecRig::open(const Options& options) {
     if (options.configure_sdk_logging) orbbec::configure_sdk_logging();
     impl->context = std::make_shared<ob::Context>();
     impl->context->enableNetDeviceEnumeration(true);
-    VR_ASSIGN(const auto devices,
-              orbbec::discover(*impl->context, serials,
-                               options.discovery_timeout_ms, "OrbbecRig"));
+    VKC_ASSIGN(const auto devices,
+               orbbec::discover(*impl->context, serials,
+                                options.discovery_timeout_ms, "OrbbecRig"));
     for (std::size_t i = 0; i < devices.size(); ++i) {
       Mat4f pose(1.0f);
       for (const RigCameraCalibration& c : options.calibration) {
         if (c.serial == serials[i]) pose = c.cam_to_world;
       }
-      VR_ASSIGN(auto stream, orbbec::CameraStream::create(
-                                 impl->context, devices[i], options, pose,
-                                 options.configure_sdk_logging, "OrbbecRig"));
+      VKC_ASSIGN(auto stream, orbbec::CameraStream::create(
+                                  impl->context, devices[i], options, pose,
+                                  options.configure_sdk_logging, "OrbbecRig"));
       stream->set_queue_depth(kQueueDepth);
       impl->streams.push_back(std::move(stream));
     }
@@ -164,7 +164,7 @@ Result<OrbbecRig> OrbbecRig::open(const Options& options) {
       auto diff =
           orbbec::sync_differences(wanted, impl->streams[i]->sync_settings());
       if (!diff.empty() && options.apply_sync_config) {
-        VR_TRY(impl->streams[i]->apply_sync(wanted));
+        VKC_TRY(impl->streams[i]->apply_sync(wanted));
         diff =
             orbbec::sync_differences(wanted, impl->streams[i]->sync_settings());
       }
@@ -175,7 +175,7 @@ Result<OrbbecRig> OrbbecRig::open(const Options& options) {
       }
     }
     if (!differences.empty()) {
-      return Status::unsupported(
+      return core::Status::unsupported(
           "OrbbecRig: cameras differ from the sync configuration: " +
           differences +
           (options.apply_sync_config
@@ -186,7 +186,7 @@ Result<OrbbecRig> OrbbecRig::open(const Options& options) {
     for (const auto& stream : impl->streams) {
       modes.push_back(stream->info().sync_mode);
     }
-    VR_ASSIGN(impl->start_order, orbbec::rig_start_order(modes, serials));
+    VKC_ASSIGN(impl->start_order, orbbec::rig_start_order(modes, serials));
   } catch (const std::exception& e) {  // ob::Error is one
     return orbbec::sdk_error("OrbbecRig", "opening the rig", e);
   }
@@ -241,16 +241,17 @@ bool OrbbecRig::exhausted() const noexcept {
   return false;
 }
 
-Status OrbbecRig::start() {
+core::Status OrbbecRig::start() {
   if (impl_ == nullptr) {
-    return Status::invalid_argument("OrbbecRig: start on a moved-from rig");
+    return core::Status::invalid_argument(
+        "OrbbecRig: start on a moved-from rig");
   }
   Impl& r = *impl_;
   if (r.running) {
     // Not "already started" once a camera has gone away: a running stream's
     // start() is OK, and a disconnected one's names the camera.
     for (const auto& stream : r.streams) {
-      const Status started = stream->start();
+      const core::Status started = stream->start();
       if (!started.ok()) {
         r.stop_all();
         return started;
@@ -265,7 +266,7 @@ Status OrbbecRig::start() {
     return orbbec::sdk_error("OrbbecRig", "syncing the cameras' clocks", e);
   }
   for (const std::size_t i : r.start_order) {
-    const Status started = r.streams[i]->start();
+    const core::Status started = r.streams[i]->start();
     if (!started.ok()) {
       r.stop_all();
       return started;
@@ -282,24 +283,26 @@ void OrbbecRig::stop() noexcept {
   if (impl_ != nullptr) impl_->stop_all();
 }
 
-Result<std::optional<OrbbecRigFrameSet>> OrbbecRig::poll_set() {
+core::Result<std::optional<OrbbecRigFrameSet>> OrbbecRig::poll_set() {
   if (impl_ == nullptr) {
-    return Status::invalid_argument("OrbbecRig: poll on a moved-from rig");
+    return core::Status::invalid_argument(
+        "OrbbecRig: poll on a moved-from rig");
   }
-  VR_TRY(impl_->read_with(Impl::Reader::Sets));
+  VKC_TRY(impl_->read_with(Impl::Reader::Sets));
   return impl_->take<CapturedFrame>();
 }
 
-Result<std::optional<OrbbecRigRawSet>> OrbbecRig::poll_raw_set() {
+core::Result<std::optional<OrbbecRigRawSet>> OrbbecRig::poll_raw_set() {
   if (impl_ == nullptr) {
-    return Status::invalid_argument("OrbbecRig: poll on a moved-from rig");
+    return core::Status::invalid_argument(
+        "OrbbecRig: poll on a moved-from rig");
   }
-  VR_TRY(impl_->read_with(Impl::Reader::RawSets));
+  VKC_TRY(impl_->read_with(Impl::Reader::RawSets));
   return impl_->take<RawFrame>();
 }
 
 template <typename Frame>
-Result<std::optional<OrbbecRigSet<Frame>>> OrbbecRig::Impl::take() {
+core::Result<std::optional<OrbbecRigSet<Frame>>> OrbbecRig::Impl::take() {
   using Set = OrbbecRigSet<Frame>;
   Impl& r = *this;
   if (!r.running) return std::optional<Set>{};
@@ -307,7 +310,7 @@ Result<std::optional<OrbbecRigSet<Frame>>> OrbbecRig::Impl::take() {
   std::vector<std::shared_ptr<ob::FrameSet>> pairs;
   for (std::size_t c = 0; c < r.streams.size(); ++c) {
     pairs.clear();
-    VR_TRY(r.streams[c]->take_all(&pairs));
+    VKC_TRY(r.streams[c]->take_all(&pairs));
     for (auto& pair : pairs) {
       const std::uint64_t ts = orbbec::CameraStream::timestamp_us(*pair);
       if (ts == 0) {  // no clock to group it by
@@ -336,7 +339,7 @@ Result<std::optional<OrbbecRigSet<Frame>>> OrbbecRig::Impl::take() {
   Set set;
   set.timestamp_ns = group->timestamp_us * 1000;
   set.frames.resize(r.streams.size());
-  Status failure;
+  core::Status failure;
   for (std::size_t c = 0; c < r.streams.size(); ++c) {
     if (!group->ids[c]) continue;
     const auto it = r.held.find(*group->ids[c]);
@@ -374,32 +377,35 @@ Result<std::optional<OrbbecRigSet<Frame>>> OrbbecRig::Impl::take() {
 }
 
 template <typename Frame>
-Result<std::optional<Frame>> OrbbecRig::Impl::next(OrbbecRigSet<Frame>& set) {
+core::Result<std::optional<Frame>> OrbbecRig::Impl::next(
+    OrbbecRigSet<Frame>& set) {
   for (;;) {
     while (cursor < set.frames.size()) {
       const std::optional<Frame>& frame = set.frames[cursor++];
       if (frame) return frame;
     }
-    VR_ASSIGN(std::optional<OrbbecRigSet<Frame>> taken, take<Frame>());
+    VKC_ASSIGN(std::optional<OrbbecRigSet<Frame>> taken, take<Frame>());
     if (!taken) return std::optional<Frame>{};
     set = std::move(*taken);
     cursor = 0;
   }
 }
 
-Result<std::optional<CapturedFrame>> OrbbecRig::poll() {
+core::Result<std::optional<CapturedFrame>> OrbbecRig::poll() {
   if (impl_ == nullptr) {
-    return Status::invalid_argument("OrbbecRig: poll on a moved-from rig");
+    return core::Status::invalid_argument(
+        "OrbbecRig: poll on a moved-from rig");
   }
-  VR_TRY(impl_->read_with(Impl::Reader::Frames));
+  VKC_TRY(impl_->read_with(Impl::Reader::Frames));
   return impl_->next(impl_->current);
 }
 
-Result<std::optional<RawFrame>> OrbbecRig::poll_raw() {
+core::Result<std::optional<RawFrame>> OrbbecRig::poll_raw() {
   if (impl_ == nullptr) {
-    return Status::invalid_argument("OrbbecRig: poll on a moved-from rig");
+    return core::Status::invalid_argument(
+        "OrbbecRig: poll on a moved-from rig");
   }
-  VR_TRY(impl_->read_with(Impl::Reader::RawFrames));
+  VKC_TRY(impl_->read_with(Impl::Reader::RawFrames));
   return impl_->next(impl_->current_raw);
 }
 

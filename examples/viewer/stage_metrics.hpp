@@ -4,7 +4,7 @@
 #pragma once
 
 /// @file examples/viewer/stage_metrics.hpp
-/// @brief The interop seam for timings: recon's @ref vr::StageMetrics rows
+/// @brief The interop seam for timings: recon's @ref vkc::StageMetrics rows
 ///        mapped into the renderer's @ref vg::FrameMetrics shape.
 ///
 /// This file used to *implement* the collector, because recon had none. It now
@@ -26,34 +26,34 @@
 /// was measured separately, and it maps straight onto the renderer's field of
 /// the same name -- so the overlay's GPU column is blank for a stage recon
 /// timed only on the host, and populated for one it timed with a
-/// `vr::GpuTimer`. Neither side has to know which is which.
+/// `vkc::GpuTimer`. Neither side has to know which is which.
 
 #include <vector>
 
+#include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/gfx/core/frame_metrics.hpp"
-#include "volumetric_kit/recon/core/stage_metrics.hpp"
 
 namespace fuse_viewer {
 
 namespace vg = volumetric_kit::gfx;
-namespace vr = volumetric_kit::recon;
+namespace vkc = volumetric_kit::core;
 
 /// @brief Map recon's stage rows into the renderer's section rows.
 ///
 /// A field-for-field copy; the two structs agree on all four. Labels cross as
 /// pointers on both sides, so the strings must outlive every read of the result
-/// -- one rule for the whole vocabulary: `vr::GpuTimer` borrows its span labels
-/// on the same terms rather than owning copies, so a row published here is as
-/// safe as the literal a tier reported it with. These rows are then read by the
-/// render thread, which is why that matters.
+/// -- one rule for the whole vocabulary: `vkc::GpuTimer` borrows its span
+/// labels on the same terms rather than owning copies, so a row published here
+/// is as safe as the literal a tier reported it with. These rows are then read
+/// by the render thread, which is why that matters.
 ///
 /// @param metrics  The rows a fuse iteration collected.
 /// @return The same rows in the renderer's shape.
 inline std::vector<vg::FrameMetrics::Section> to_sections(
-    const vr::StageMetrics& metrics) {
+    const vkc::StageMetrics& metrics) {
   std::vector<vg::FrameMetrics::Section> sections;
   sections.reserve(metrics.rows().size());
-  for (const vr::StageRow& row : metrics.rows()) {
+  for (const vkc::StageRow& row : metrics.rows()) {
     sections.push_back({row.name, row.cpu_ms, row.gpu_ms, row.has_gpu});
   }
   return sections;

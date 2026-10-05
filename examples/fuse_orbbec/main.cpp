@@ -41,11 +41,12 @@
 
 #include "fuse_device_frame.hpp"
 #include "fuse_frame.hpp"
-#include "volumetric_kit/recon/core/allocator.hpp"
-#include "volumetric_kit/recon/core/device.hpp"
-#include "volumetric_kit/recon/core/instance.hpp"
-#include "volumetric_kit/recon/core/result.hpp"
-#include "volumetric_kit/recon/core/stage_metrics.hpp"
+#include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/base/stage_metrics.hpp"
+#include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "volumetric_kit/core/vulkan/device.hpp"
+#include "volumetric_kit/core/vulkan/instance.hpp"
+#include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/io/ply_writer.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
 #include "volumetric_kit/recon/mesh/mesh.hpp"
@@ -59,6 +60,7 @@
 #include "volumetric_kit/recon/volume/voxel_grid.hpp"
 
 namespace vr = volumetric_kit::recon;
+namespace vkc = volumetric_kit::core;
 namespace vol = volumetric_kit::recon::volume;
 namespace tsdf = volumetric_kit::recon::tsdf;
 namespace mesh = volumetric_kit::recon::mesh;
@@ -92,7 +94,7 @@ struct Options {
   float max_weight = 20.0f;
 };
 
-vr::Result<Options> parse_args(int argc, char** argv) {
+vkc::Result<Options> parse_args(int argc, char** argv) {
   Options opt;
   for (int i = 1; i < argc; ++i) {
     const std::string a = argv[i];
@@ -110,19 +112,19 @@ vr::Result<Options> parse_args(int argc, char** argv) {
     if (a == "--serial") {
       const char* s = take();
       if (s == nullptr)
-        return vr::Status::invalid_argument("--serial needs SN");
+        return vkc::Status::invalid_argument("--serial needs SN");
       opt.serial = s;
     } else if (a == "--rig" || a == "--calibration") {
       const char* s = take();
       if (s == nullptr)
-        return vr::Status::invalid_argument(a + " needs a path");
+        return vkc::Status::invalid_argument(a + " needs a path");
       (a == "--rig" ? opt.rig : opt.calibration) = s;
     } else if (a == "--apply-sync") {
       opt.apply_sync = true;
     } else if (a == "--hevc" || a == "--mjpeg") {
       const bool hevc = a == "--hevc";
       if (opt.hevc && *opt.hevc != hevc) {
-        return vr::Status::invalid_argument("--hevc or --mjpeg, not both");
+        return vkc::Status::invalid_argument("--hevc or --mjpeg, not both");
       }
       opt.hevc = hevc;
     } else if (a == "--gpu") {
@@ -132,7 +134,7 @@ vr::Result<Options> parse_args(int argc, char** argv) {
       unsigned w = 0, h = 0;
       if (s == nullptr || std::sscanf(s, "%ux%u", &w, &h) != 2 || w == 0 ||
           h == 0) {
-        return vr::Status::invalid_argument(
+        return vkc::Status::invalid_argument(
             "--color needs WxH, e.g. 1920x1080");
       }
       opt.color_width = w;
@@ -140,37 +142,38 @@ vr::Result<Options> parse_args(int argc, char** argv) {
     } else if (a == "--fps") {
       const char* s = take();
       if (s == nullptr || std::atoi(s) < 1) {
-        return vr::Status::invalid_argument("--fps needs N >= 1");
+        return vkc::Status::invalid_argument("--fps needs N >= 1");
       }
       opt.fps = static_cast<std::uint32_t>(std::atoi(s));
     } else if (a == "--frames") {
       const char* s = take();
-      if (s == nullptr) return vr::Status::invalid_argument("--frames needs N");
+      if (s == nullptr)
+        return vkc::Status::invalid_argument("--frames needs N");
       opt.frames = std::atoi(s);
     } else if (a == "-o" || a == "--out") {
       const char* s = take();
-      if (s == nullptr) return vr::Status::invalid_argument("-o needs a path");
+      if (s == nullptr) return vkc::Status::invalid_argument("-o needs a path");
       opt.out = s;
     } else if (a == "--voxel") {
       if (!take_float(opt.voxel))
-        return vr::Status::invalid_argument("--voxel");
+        return vkc::Status::invalid_argument("--voxel");
     } else if (a == "--trunc") {
       if (!take_float(opt.trunc))
-        return vr::Status::invalid_argument("--trunc");
+        return vkc::Status::invalid_argument("--trunc");
     } else if (a == "--min-depth") {
       float d = 0.0f;
-      if (!take_float(d)) return vr::Status::invalid_argument("--min-depth");
+      if (!take_float(d)) return vkc::Status::invalid_argument("--min-depth");
       opt.min_depth = d;
     } else if (a == "--max-depth") {
       float d = 0.0f;
-      if (!take_float(d)) return vr::Status::invalid_argument("--max-depth");
+      if (!take_float(d)) return vkc::Status::invalid_argument("--max-depth");
       opt.max_depth = d;
     } else if (a == "--max-weight") {
       if (!take_float(opt.max_weight)) {
-        return vr::Status::invalid_argument("--max-weight");
+        return vkc::Status::invalid_argument("--max-weight");
       }
     } else {
-      return vr::Status::invalid_argument(
+      return vkc::Status::invalid_argument(
           "unknown argument: " + a +
           "\nusage: fuse_orbbec [--serial SN | --rig sync.json [--apply-sync]] "
           "[--calibration calib.json] [--frames N] [--hevc | --mjpeg] "
@@ -183,19 +186,19 @@ vr::Result<Options> parse_args(int argc, char** argv) {
   // bound below by comparing false; refuse non-finite values first.
   for (const float knob : {opt.voxel, opt.trunc, opt.max_weight}) {
     if (!std::isfinite(knob)) {
-      return vr::Status::invalid_argument(
+      return vkc::Status::invalid_argument(
           "--voxel, --trunc and --max-weight must be finite");
     }
   }
   if (!(opt.voxel > 0.0f)) {
-    return vr::Status::invalid_argument("--voxel must be > 0");
+    return vkc::Status::invalid_argument("--voxel must be > 0");
   }
   if (opt.trunc <= 0.0f) opt.trunc = 4.0f * opt.voxel;
   if (!(opt.max_weight > 0.0f)) {
-    return vr::Status::invalid_argument("--max-weight must be > 0");
+    return vkc::Status::invalid_argument("--max-weight must be > 0");
   }
   if (opt.frames < 1) {
-    return vr::Status::invalid_argument("--frames must be >= 1");
+    return vkc::Status::invalid_argument("--frames must be >= 1");
   }
   return opt;
 }
@@ -258,8 +261,8 @@ void print_camera(const sensor::OrbbecDeviceInfo& info,
 // The colour stream the command line asked for, over the driver's defaults.
 // Raw frames' colour is decoded onto `device`, where the hardware leaves it,
 // in buffers made through `allocator`.
-void apply_streams(const Options& opt, const vr::Device& device,
-                   vr::Allocator& allocator,
+void apply_streams(const Options& opt, const vkc::Device& device,
+                   vkc::Allocator& allocator,
                    sensor::OrbbecStreamOptions& streams) {
   if (opt.hevc.value_or(opt.gpu)) {
     streams.color_codec = sensor::OrbbecColorCodec::Hevc;
@@ -278,29 +281,29 @@ void apply_streams(const Options& opt, const vr::Device& device,
 
 // Opened on the GPU the frames are decoded and fused on. The depth gate is
 // validated by the driver, which names both values when it refuses one.
-vr::Result<Source> open_source(const Options& opt, const vr::Device& device,
-                               vr::Allocator& allocator) {
+vkc::Result<Source> open_source(const Options& opt, const vkc::Device& device,
+                                vkc::Allocator& allocator) {
   if (!opt.rig.empty() && !opt.serial.empty()) {
-    return vr::Status::invalid_argument(
+    return vkc::Status::invalid_argument(
         "--rig and --serial exclude each other");
   }
   if (opt.apply_sync && opt.rig.empty()) {
-    return vr::Status::invalid_argument("--apply-sync needs --rig");
+    return vkc::Status::invalid_argument("--apply-sync needs --rig");
   }
   std::vector<sensor::RigCameraCalibration> calibration;
   if (!opt.calibration.empty()) {
-    VR_ASSIGN(calibration, sensor::read_rig_calibration(opt.calibration));
+    VKC_ASSIGN(calibration, sensor::read_rig_calibration(opt.calibration));
   }
   Source source;
   if (!opt.rig.empty()) {
     sensor::OrbbecRig::Options rig_options;
-    VR_ASSIGN(rig_options.sync, sensor::read_orbbec_sync_config(opt.rig));
+    VKC_ASSIGN(rig_options.sync, sensor::read_orbbec_sync_config(opt.rig));
     rig_options.calibration = calibration;
     rig_options.apply_sync_config = opt.apply_sync;
     if (opt.min_depth) rig_options.min_depth = *opt.min_depth;
     if (opt.max_depth) rig_options.max_depth = *opt.max_depth;
     apply_streams(opt, device, allocator, rig_options);
-    VR_ASSIGN(source.rig, sensor::OrbbecRig::open(rig_options));
+    VKC_ASSIGN(source.rig, sensor::OrbbecRig::open(rig_options));
     for (std::size_t i = 0; i < source.rig->camera_count(); ++i) {
       print_camera(source.rig->device_info(i), source.rig->color_camera(i));
     }
@@ -317,7 +320,7 @@ vr::Result<Source> open_source(const Options& opt, const vr::Device& device,
                                     : c.serial == opt.serial;
         });
     if (it == calibration.end()) {
-      return vr::Status::not_found(
+      return vkc::Status::not_found(
           opt.calibration + (opt.serial.empty()
                                  ? std::string(" poses several cameras; name "
                                                "one with --serial")
@@ -329,7 +332,7 @@ vr::Result<Source> open_source(const Options& opt, const vr::Device& device,
   if (opt.min_depth) capture_options.min_depth = *opt.min_depth;
   if (opt.max_depth) capture_options.max_depth = *opt.max_depth;
   apply_streams(opt, device, allocator, capture_options);
-  VR_ASSIGN(source.camera, sensor::OrbbecCapture::open(capture_options));
+  VKC_ASSIGN(source.camera, sensor::OrbbecCapture::open(capture_options));
   const sensor::OrbbecDeviceInfo& info = source.camera->device_info();
   print_camera(info, source.camera->color_camera());
   source.waits_for_primary = sensor::waits_for_primary(info.sync_mode);
@@ -342,31 +345,31 @@ vr::Result<Source> open_source(const Options& opt, const vr::Device& device,
   return source;
 }
 
-vr::Status run(const Options& opt) {
+vkc::Status run(const Options& opt) {
   // --- GPU, first: the cameras' pictures are decoded onto it ---
-  VR_ASSIGN(vr::Instance instance, vr::Instance::create({}));
-  VR_ASSIGN(vr::PhysicalDeviceInfo gpu,
-            instance.select_physical_device(vr::device_requirements()));
-  VR_ASSIGN(vr::Device device,
-            vr::Device::create(instance, gpu, vr::device_requirements()));
-  VR_ASSIGN(vr::Allocator allocator,
-            vr::Allocator::create(instance.handle(), device));
+  VKC_ASSIGN(vkc::Instance instance, vkc::Instance::create({}));
+  VKC_ASSIGN(vkc::PhysicalDeviceInfo gpu,
+             instance.select_physical_device(vr::device_requirements()));
+  VKC_ASSIGN(vkc::Device device,
+             vkc::Device::create(instance, gpu, vr::device_requirements()));
+  VKC_ASSIGN(vkc::Allocator allocator,
+             vkc::Allocator::create(instance.handle(), device));
 
   // An optional so the run can release the cameras before the extract:
   // stop() ends the streams but keeps the cameras held for a restart. After
   // the device, so every picture on it goes first.
   std::optional<Source> source;
-  VR_ASSIGN(source, open_source(opt, device, allocator));
+  VKC_ASSIGN(source, open_source(opt, device, allocator));
 
   // --- Volume ---
 
-  VR_ASSIGN(
+  VKC_ASSIGN(
       vol::VoxelBlockGrid volume,
       vr_example::create_fusion_grid(device, allocator, opt.voxel, opt.trunc));
-  VR_ASSIGN(tsdf::TsdfIntegrator integrator,
-            tsdf::TsdfIntegrator::create(device, allocator));
-  VR_ASSIGN(mesh::MarchingCubes extractor,
-            mesh::MarchingCubes::create(device, allocator, {}));
+  VKC_ASSIGN(tsdf::TsdfIntegrator integrator,
+             tsdf::TsdfIntegrator::create(device, allocator));
+  VKC_ASSIGN(mesh::MarchingCubes extractor,
+             mesh::MarchingCubes::create(device, allocator, {}));
   // The source says which frames it hands out: raw ones (--gpu) are prepared
   // on the device first, and a raw rig's whole sets at once, a pass a camera.
   sensor::ICameraCapture& capture = source->capture();
@@ -376,14 +379,14 @@ vr::Status run(const Options& opt) {
   std::size_t passes = 0;
   if (raw_frames) passes = raw_sets ? source->rig->camera_count() : 1;
   for (std::size_t c = 0; c < passes; ++c) {
-    VR_ASSIGN(sensor::GpuFramePrep one,
-              sensor::GpuFramePrep::create(device, allocator));
+    VKC_ASSIGN(sensor::GpuFramePrep one,
+               sensor::GpuFramePrep::create(device, allocator));
     preps.push_back(std::move(one));
   }
 
   // --- Fuse ---
-  VR_TRY(capture.start());
-  vr::StageMetrics stage_totals;
+  VKC_TRY(capture.start());
+  vkc::StageMetrics stage_totals;
   int fused = 0;
   int reported = 0;  // the count last reported; a set may step past 100
   const auto t_start = std::chrono::steady_clock::now();
@@ -399,13 +402,13 @@ vr::Status run(const Options& opt) {
     std::optional<sensor::RawFrame> raw;
     std::optional<sensor::OrbbecRigRawSet> set;
     if (raw_sets) {
-      VR_ASSIGN(set, source->rig->poll_raw_set());
+      VKC_ASSIGN(set, source->rig->poll_raw_set());
       got = set && set->count() > 0;
     } else if (raw_frames) {
-      VR_ASSIGN(raw, capture.poll_raw());
+      VKC_ASSIGN(raw, capture.poll_raw());
       got = raw.has_value();
     } else {
-      VR_ASSIGN(polled, capture.poll());
+      VKC_ASSIGN(polled, capture.poll());
       got = polled.has_value();
     }
     if (got) {
@@ -418,7 +421,7 @@ vr::Status run(const Options& opt) {
       // A live camera polled faster than it runs. Silence past the limit is a
       // camera that is not coming, and saying which kind beats a hang.
       if (std::chrono::steady_clock::now() - last_frame > kSilenceLimit) {
-        return vr::Status::io_error(
+        return vkc::Status::io_error(
             "no frame from " + source->name + " in " +
             std::to_string(kSilenceLimit.count()) + " s" +
             (source->waits_for_primary
@@ -435,8 +438,8 @@ vr::Status run(const Options& opt) {
       // Timed as one row: the cameras run at once, so their sum would
       // overstate what the set costs.
       const auto t_prep = std::chrono::steady_clock::now();
-      VR_ASSIGN(const std::vector<std::optional<sensor::DeviceFrame>> frames,
-                sensor::prepare_set(preps, set->frames));
+      VKC_ASSIGN(const std::vector<std::optional<sensor::DeviceFrame>> frames,
+                 sensor::prepare_set(preps, set->frames));
       stage_totals.add_cpu("frame prep",
                            std::chrono::duration<double, std::milli>(
                                std::chrono::steady_clock::now() - t_prep)
@@ -449,18 +452,18 @@ vr::Status run(const Options& opt) {
         }
         take.push_back(frame);
       }
-      VR_TRY(vr_example::fuse_set(volume, integrator, take, opt.max_weight,
-                                  &stage_totals));
+      VKC_TRY(vr_example::fuse_set(volume, integrator, take, opt.max_weight,
+                                   &stage_totals));
       fused += static_cast<int>(take.size());
     } else if (raw) {
-      VR_ASSIGN(const sensor::DeviceFrame frame,
-                preps.front().prepare(*raw, &stage_totals));
-      VR_TRY(vr_example::fuse_frame(volume, integrator, frame, opt.max_weight,
-                                    &stage_totals));
+      VKC_ASSIGN(const sensor::DeviceFrame frame,
+                 preps.front().prepare(*raw, &stage_totals));
+      VKC_TRY(vr_example::fuse_frame(volume, integrator, frame, opt.max_weight,
+                                     &stage_totals));
       ++fused;
     } else {
-      VR_TRY(vr_example::fuse_frame(volume, integrator, *polled, opt.max_weight,
-                                    &stage_totals));
+      VKC_TRY(vr_example::fuse_frame(volume, integrator, *polled,
+                                     opt.max_weight, &stage_totals));
       ++fused;
     }
     if (fused / 100 > reported / 100) {
@@ -477,7 +480,7 @@ vr::Status run(const Options& opt) {
   source.reset();
 
   std::printf("stages    per fused frame, mean over %d frames\n", fused);
-  for (const vr::StageRow& row : stage_totals.rows()) {
+  for (const vkc::StageRow& row : stage_totals.rows()) {
     if (row.has_gpu) {
       std::printf("  %-9s host %7.3f ms   device %7.3f ms\n", row.name,
                   row.cpu_ms / fused, row.gpu_ms / fused);
@@ -488,8 +491,8 @@ vr::Status run(const Options& opt) {
   }
 
   // --- Mesh -> PLY ---
-  VR_ASSIGN(mesh::Mesh final_mesh, extractor.extract_host(volume, 0.0f));
-  VR_TRY(vr::io::write_ply(opt.out, final_mesh));
+  VKC_ASSIGN(mesh::Mesh final_mesh, extractor.extract_host(volume, 0.0f));
+  VKC_TRY(vr::io::write_ply(opt.out, final_mesh));
   std::printf(
       "done: fused %d frames in %.1fs (%.1f fps), mesh %zu vertices / %zu "
       "triangles -> %s\n",
@@ -501,12 +504,12 @@ vr::Status run(const Options& opt) {
 }  // namespace
 
 int main(int argc, char** argv) {
-  vr::Result<Options> opt = parse_args(argc, argv);
+  vkc::Result<Options> opt = parse_args(argc, argv);
   if (!opt) {
     std::fprintf(stderr, "%s\n", opt.status().message().c_str());
     return 2;
   }
-  const vr::Status status = run(opt.value());
+  const vkc::Status status = run(opt.value());
   if (!status.ok()) {
     std::fprintf(stderr, "fuse_orbbec failed: %s\n", status.message().c_str());
     return 1;

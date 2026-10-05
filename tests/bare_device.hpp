@@ -7,18 +7,20 @@
 // handed it can keep no picture on the GPU: the device path fails to open on
 // any machine, which is how a test reaches the fallback to host pictures.
 
-#include "volumetric_kit/recon/core/device.hpp"
-#include "volumetric_kit/recon/core/instance.hpp"
-#include "volumetric_kit/recon/core/result.hpp"
+#include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/vulkan/device.hpp"
+#include "volumetric_kit/core/vulkan/instance.hpp"
+#include "volumetric_kit/recon/core/device_requirements.hpp"
 
 namespace vr_test {
 
 namespace vr = volumetric_kit::recon;
+namespace vkc = volumetric_kit::core;
 
 // `device` again, borrowed: it must outlive the result.
-inline vr::Result<vr::Device> bare_device(const vr::Instance& instance,
-                                          const vr::Device& device) {
-  vr::AdoptedDevice view;
+inline vkc::Result<vkc::Device> bare_device(const vkc::Instance& instance,
+                                            const vkc::Device& device) {
+  vkc::AdoptedDevice view;
   view.instance = instance.handle();
   view.instance_api_version = instance.api_version();
   view.physical_device = device.physical_device();
@@ -28,7 +30,7 @@ inline vr::Result<vr::Device> bare_device(const vr::Instance& instance,
   view.submit_mutex = device.submit_mutex();
   view.enabled_features.timeline_semaphore = true;
   view.enabled_features.scalar_block_layout = true;
-  return vr::Device::adopt(view, vr::device_requirements());
+  return vkc::Device::adopt(view, vr::device_requirements());
 }
 
 }  // namespace vr_test

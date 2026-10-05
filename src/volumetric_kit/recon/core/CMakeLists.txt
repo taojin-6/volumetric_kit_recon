@@ -2,15 +2,14 @@
 # Copyright (c) 2026 Tao Jin
 
 # --- recon_core: Tier 1 -----------------------------------------------------
-# Foundation tier: recon's names for volumetric_kit_core's error handling, log
-# sink and contract checks (base tier) and for its Vulkan foundation --
-# instance, device, allocator, buffers, images, descriptors, compute pipelines
-# and kernels, command batches, GPU timers, external memory (vulkan tier) --
-# plus what is recon's own: the requirements recon's kernels place on a device,
-# the camera and colour-space vocabulary, and the GLM-backed vector/matrix
-# types. Every other tier depends on this. Vulkan is reached only through the
-# core/vulkan.hpp umbrella. Deps: volumetric_kit_core, header-only GLM and the
-# Vulkan loader/headers.
+# Foundation tier: what is recon's own beneath every other tier -- the
+# requirements recon's kernels place on a device, recon's log source, the camera
+# and colour-space vocabulary, and the GLM-backed vector/matrix types -- over
+# volumetric_kit_core's error handling, log sink and contract checks (base tier)
+# and its Vulkan foundation (vulkan tier), which recon's tiers use under the
+# core's names. Every other tier depends on this. Vulkan is reached only through
+# the core's core/vulkan/vulkan.hpp umbrella. Deps: volumetric_kit_core,
+# header-only GLM and the Vulkan loader/headers.
 include(GenerateExportHeader)
 include(GNUInstallDirs)
 
@@ -37,10 +36,10 @@ find_package(Threads REQUIRED)
 find_package(glm CONFIG REQUIRED)
 
 # The Vulkan loader + headers. PUBLIC: the public headers reach Vulkan through
-# core/vulkan.hpp and so include <vulkan/vulkan.h>, meaning every consumer
-# compiles against it and links the loader (the package Config re-finds Vulkan).
-# MoltenVK is the loader/driver on Apple. The core's vulkan tier links it too;
-# naming it here keeps recon's own use explicit.
+# the core's core/vulkan/vulkan.hpp and so include <vulkan/vulkan.h>, meaning
+# every consumer compiles against it and links the loader (the package Config
+# re-finds Vulkan). MoltenVK is the loader/driver on Apple. The core's vulkan
+# tier links it too; naming it here keeps recon's own use explicit.
 find_package(Vulkan REQUIRED)
 
 set(_vr_generated_inc "${CMAKE_CURRENT_BINARY_DIR}/generated/include")

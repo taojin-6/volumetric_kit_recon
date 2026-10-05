@@ -11,14 +11,14 @@
 #include <array>
 #include <cstdint>
 
-#include "volumetric_kit/recon/core/buffer.hpp"
-#include "volumetric_kit/recon/core/compute_kernel.hpp"
-#include "volumetric_kit/recon/core/descriptor.hpp"
+#include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/base/stage_metrics.hpp"
+#include "volumetric_kit/core/vulkan/buffer.hpp"
+#include "volumetric_kit/core/vulkan/compute_kernel.hpp"
+#include "volumetric_kit/core/vulkan/descriptor.hpp"
+#include "volumetric_kit/core/vulkan/gpu_timer.hpp"
 #include "volumetric_kit/recon/core/fwd.hpp"
-#include "volumetric_kit/recon/core/gpu_timer.hpp"
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
-#include "volumetric_kit/recon/core/result.hpp"
-#include "volumetric_kit/recon/core/stage_metrics.hpp"
 #include "volumetric_kit/recon/tsdf/export.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 
@@ -154,7 +154,8 @@ class VR_TSDF_API MeshIntegrator {
   ///                   outlive this).
   /// @return The integrator, or a non-OK @ref Status if a pipeline or
   ///         descriptor object fails to build.
-  static Result<MeshIntegrator> create(Device& device, Allocator& allocator);
+  static core::Result<MeshIntegrator> create(core::Device& device,
+                                             core::Allocator& allocator);
 
   // Rule of zero: every owned pipeline / pool / buffer self-frees and
   // self-resets on move; device_ / allocator_ are borrowed, so the defaulted
@@ -194,13 +195,11 @@ class VR_TSDF_API MeshIntegrator {
   ///         Otherwise whatever a buffer or a dispatch returns; a dispatch
   ///         that fails after the first has written leaves the blocks before
   ///         it written.
-  Result<MeshIntegrateStats> integrate(volume::VoxelBlockGrid& grid,
-                                       const Vec3f* vertices,
-                                       std::uint32_t vertex_count,
-                                       const std::uint32_t* indices,
-                                       std::uint32_t triangle_count,
-                                       const MeshSdfParams& params = {},
-                                       StageMetrics* metrics = nullptr);
+  core::Result<MeshIntegrateStats> integrate(
+      volume::VoxelBlockGrid& grid, const Vec3f* vertices,
+      std::uint32_t vertex_count, const std::uint32_t* indices,
+      std::uint32_t triangle_count, const MeshSdfParams& params = {},
+      core::StageMetrics* metrics = nullptr);
 
   /// @return `true` if this owns live pipelines (`false` when moved-from).
   bool valid() const noexcept { return bin_.valid() && integrate_.valid(); }
@@ -208,11 +207,12 @@ class VR_TSDF_API MeshIntegrator {
  private:
   MeshIntegrator() = default;
 
-  Status ensure_scratch(Buffer& buffer, VkDeviceSize bytes, const char* name);
+  core::Status ensure_scratch(core::Buffer& buffer, VkDeviceSize bytes,
+                              const char* name);
 
   // Borrowed (must outlive this).
-  Device* device_ = nullptr;
-  Allocator* allocator_ = nullptr;
+  core::Device* device_ = nullptr;
+  core::Allocator* allocator_ = nullptr;
 
   // Device limits read once at create(): the cap on a 1-D dispatch's
   // groupCountX, and on one storage-buffer binding's range. Every input here is
@@ -222,35 +222,35 @@ class VR_TSDF_API MeshIntegrator {
 
   // The binning kernel (dispatched twice: count, then fill) and the integrate
   // kernel, their sets allocated from pool_ (which must outlive them).
-  ComputeKernel bin_;
-  ComputeKernel integrate_;
-  ComputeKernel scan_counts_;
-  std::array<ComputeKernel, 3> scan_sums_;
-  std::array<ComputeKernel, 2> scan_add_;
-  ComputeKernel compact_bins_;
-  ComputeKernel bin_ranges_;
-  DescriptorPool pool_;
+  core::ComputeKernel bin_;
+  core::ComputeKernel integrate_;
+  core::ComputeKernel scan_counts_;
+  std::array<core::ComputeKernel, 3> scan_sums_;
+  std::array<core::ComputeKernel, 2> scan_add_;
+  core::ComputeKernel compact_bins_;
+  core::ComputeKernel bin_ranges_;
+  core::DescriptorPool pool_;
   // The device-span collector, idle until a caller passes a StageMetrics.
-  GpuTimer gpu_timer_;
+  core::GpuTimer gpu_timer_;
   // The count pass's one output the host must read before anything is
   // written: how many band blocks the hash table could not find.
-  Buffer missing_;
+  core::Buffer missing_;
   // A 1-element stand-in for the fill pass's output during the count pass, so
   // every declared descriptor stays bound.
-  Buffer dummy_;
+  core::Buffer dummy_;
   // Grow-only bulk storage; descriptors are rebound before recording each
   // call so mesh changes, grid replacement and allocation growth are safe.
-  Buffer vertices_;
-  Buffer indices_;
-  Buffer offsets_;
-  Buffer counts_;
-  Buffer coordinates_;
-  Buffer item_slots_;
-  Buffer bins_;
-  Buffer blocks_;
-  Buffer ranges_;
+  core::Buffer vertices_;
+  core::Buffer indices_;
+  core::Buffer offsets_;
+  core::Buffer counts_;
+  core::Buffer coordinates_;
+  core::Buffer item_slots_;
+  core::Buffer bins_;
+  core::Buffer blocks_;
+  core::Buffer ranges_;
   // 256-way scan levels, including the final 16-byte validation summary.
-  std::array<Buffer, 4> scan_levels_;
+  std::array<core::Buffer, 4> scan_levels_;
 };
 
 }  // namespace volumetric_kit::recon::tsdf

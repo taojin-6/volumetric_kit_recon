@@ -29,8 +29,8 @@
 #include <string>
 #include <vector>
 
+#include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
-#include "volumetric_kit/recon/core/result.hpp"
 #include "volumetric_kit/recon/sensor/export.hpp"
 #include "volumetric_kit/recon/sensor/lens.hpp"
 
@@ -61,21 +61,21 @@ struct RigCameraCalibration {
 ///         no `device_calibration` object or no camera in it, a camera without
 ///         a `pose` of two 3-vectors, or a field that fails
 ///         @ref validate_rig_calibration.
-VR_SENSOR_API Result<std::vector<RigCameraCalibration>> parse_rig_calibration(
-    const std::string& json);
+VR_SENSOR_API core::Result<std::vector<RigCameraCalibration>>
+parse_rig_calibration(const std::string& json);
 
 /// @brief Read and parse the calibration file at @p path.
 /// @return As @ref parse_rig_calibration, messages naming the file; or
 ///         @ref Status::Code::IoError if it cannot be read.
-VR_SENSOR_API Result<std::vector<RigCameraCalibration>> read_rig_calibration(
-    const std::string& path);
+VR_SENSOR_API core::Result<std::vector<RigCameraCalibration>>
+read_rig_calibration(const std::string& path);
 
 /// @brief The checks a calibration must pass to be read or written: at least
 ///        one camera, each serial non-empty, UTF-8 and unique, `cam_to_world`
 ///        a rigid transform, and any intrinsics finite with positive focal
 ///        lengths, any distortion finite.
-VR_SENSOR_API Status
-validate_rig_calibration(const std::vector<RigCameraCalibration>& cameras);
+VR_SENSOR_API core::Status validate_rig_calibration(
+    const std::vector<RigCameraCalibration>& cameras);
 
 /// @brief Write @p cameras as a calibration document (the
 ///        `device_calibration` section alone) that @ref read_rig_calibration
@@ -83,7 +83,7 @@ validate_rig_calibration(const std::vector<RigCameraCalibration>& cameras);
 /// @return OK; @ref Status::Code::InvalidArgument for a calibration
 ///         @ref validate_rig_calibration refuses; or
 ///         @ref Status::Code::IoError if the file cannot be written.
-VR_SENSOR_API Status write_rig_calibration(
+VR_SENSOR_API core::Status write_rig_calibration(
     const std::string& path, const std::vector<RigCameraCalibration>& cameras);
 
 }  // namespace volumetric_kit::recon::sensor

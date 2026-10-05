@@ -15,6 +15,7 @@
 #include "volumetric_kit/recon/sensor/rig_calibration.hpp"
 
 namespace vr = volumetric_kit::recon;
+namespace vkc = volumetric_kit::core;
 namespace sensor = volumetric_kit::recon::sensor;
 
 #define CHECK(cond)                                                        \
@@ -65,7 +66,7 @@ bool refused(const std::string& json) {
   const auto r = sensor::parse_rig_calibration(json);
   if (r.ok()) return false;
   std::printf("  refused as expected: %s\n", r.status().message().c_str());
-  return r.status().domain() == vr::Status::Code::InvalidArgument;
+  return r.status().domain() == vkc::Status::Code::InvalidArgument;
 }
 
 // A rotation of `angle` about unit `axis`, with a translation, as
@@ -171,7 +172,7 @@ int test_round_trip() {
            .ok());
   const auto missing = sensor::read_rig_calibration(path + ".missing");
   CHECK(!missing.ok() &&
-        missing.status().domain() == vr::Status::Code::IoError);
+        missing.status().domain() == vkc::Status::Code::IoError);
   return 0;
 }
 

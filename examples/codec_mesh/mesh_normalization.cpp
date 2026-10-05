@@ -10,6 +10,8 @@
 #include <numeric>
 #include <utility>
 
+namespace vkc = volumetric_kit::core;
+
 namespace vr_example {
 namespace {
 
@@ -48,12 +50,12 @@ bool MeshTopology::supports_signed() const noexcept {
          nonpositive_components == 0;
 }
 
-vr::Result<MeshNormalization> normalize_mesh_height(
+vkc::Result<MeshNormalization> normalize_mesh_height(
     vr::io::TriangleMesh& geometry, double height, const Point3d& up) {
   const double norm = dot(up, up);
   if (geometry.positions.empty() || !std::isfinite(height) || !(height > 0.0) ||
       !std::isfinite(norm) || !(norm > 0.0)) {
-    return vr::Status::invalid_argument(
+    return vkc::Status::invalid_argument(
         "normalization needs geometry, positive height and finite nonzero up");
   }
   MeshNormalization result;
@@ -75,7 +77,7 @@ vr::Result<MeshNormalization> normalize_mesh_height(
     const Point3d r{dot(x, p), dot(result.up, p), dot(z, p)};
     for (std::size_t a = 0; a < 3; ++a) {
       if (!std::isfinite(r[a])) {
-        return vr::Status::invalid_argument(
+        return vkc::Status::invalid_argument(
             "normalization: nonfinite position");
       }
       lo[a] = std::min(lo[a], r[a]);
@@ -85,7 +87,7 @@ vr::Result<MeshNormalization> normalize_mesh_height(
   }
   result.original_height = hi[1] - lo[1];
   if (!(result.original_height > 0.0)) {
-    return vr::Status::invalid_argument(
+    return vkc::Status::invalid_argument(
         "normalization: zero height along up vector");
   }
   result.metres_per_unit = height / result.original_height;
@@ -98,7 +100,7 @@ vr::Result<MeshNormalization> normalize_mesh_height(
       normalized[a] = (p[a] - origin[a]) * result.metres_per_unit;
       if (!std::isfinite(normalized[a]) ||
           std::abs(normalized[a]) > std::numeric_limits<float>::max()) {
-        return vr::Status::invalid_argument(
+        return vkc::Status::invalid_argument(
             "normalization: output overflows float");
       }
     }
@@ -107,7 +109,7 @@ vr::Result<MeshNormalization> normalize_mesh_height(
   }
   result.normalized = bounds(positions);
   if (!(result.normalized.max[1] > result.normalized.min[1])) {
-    return vr::Status::invalid_argument(
+    return vkc::Status::invalid_argument(
         "normalization: height collapses at float precision");
   }
   geometry.positions = std::move(positions);

@@ -11,14 +11,14 @@
 #include <cstdint>
 #include <vector>
 
-#include "volumetric_kit/recon/core/buffer.hpp"
+#include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/base/stage_metrics.hpp"
+#include "volumetric_kit/core/vulkan/buffer.hpp"
+#include "volumetric_kit/core/vulkan/compute_kernel.hpp"
+#include "volumetric_kit/core/vulkan/descriptor.hpp"
+#include "volumetric_kit/core/vulkan/gpu_timer.hpp"
 #include "volumetric_kit/recon/core/camera_params.hpp"
-#include "volumetric_kit/recon/core/compute_kernel.hpp"
-#include "volumetric_kit/recon/core/descriptor.hpp"
 #include "volumetric_kit/recon/core/fwd.hpp"
-#include "volumetric_kit/recon/core/gpu_timer.hpp"
-#include "volumetric_kit/recon/core/result.hpp"
-#include "volumetric_kit/recon/core/stage_metrics.hpp"
 #include "volumetric_kit/recon/mesh/device_mesh.hpp"
 #include "volumetric_kit/recon/mesh/mesh.hpp"
 #include "volumetric_kit/recon/texture/export.hpp"
@@ -145,8 +145,8 @@ class VR_TEXTURE_API ProjectiveTexturer {
   ///                   outlive this).
   /// @return The texturer, or a non-OK @ref Status if a pipeline or descriptor
   ///         object fails to build.
-  static Result<ProjectiveTexturer> create(Device& device,
-                                           Allocator& allocator);
+  static core::Result<ProjectiveTexturer> create(core::Device& device,
+                                                 core::Allocator& allocator);
 
   // Rule of zero: every owned pipeline / layout / pool self-frees and self-
   // resets on move; device_ / allocator_ are borrowed, so the defaulted moves
@@ -192,10 +192,10 @@ class VR_TEXTURE_API ProjectiveTexturer {
   ///         vertex count exceeds a single 1-D dispatch, or a vertex / depth
   ///         buffer would exceed the device `maxStorageBufferRange`; otherwise
   ///         a buffer or dispatch failure.
-  Status texture(mesh::Mesh& mesh, const float* depth,
-                 const DepthCameraParams& cam,
-                 float occlusion_threshold = 0.02f,
-                 StageMetrics* metrics = nullptr);
+  core::Status texture(mesh::Mesh& mesh, const float* depth,
+                       const DepthCameraParams& cam,
+                       float occlusion_threshold = 0.02f,
+                       core::StageMetrics* metrics = nullptr);
 
   /// @brief Texture a mesh that is already on the device, in place.
   ///
@@ -225,10 +225,10 @@ class VR_TEXTURE_API ProjectiveTexturer {
   /// @return OK on success, or the same failures as the host overload except
   ///         those about host arrays; @ref Status::Code::InvalidArgument if
   ///         @p mesh names no buffers or has been superseded.
-  Status texture(const mesh::DeviceMesh& mesh, const float* depth,
-                 const DepthCameraParams& cam,
-                 float occlusion_threshold = 0.02f,
-                 StageMetrics* metrics = nullptr);
+  core::Status texture(const mesh::DeviceMesh& mesh, const float* depth,
+                       const DepthCameraParams& cam,
+                       float occlusion_threshold = 0.02f,
+                       core::StageMetrics* metrics = nullptr);
 
   /// @brief @ref texture for a depth frame already on the device, bound in
   ///        place, so the depth never visits the host.
@@ -242,10 +242,10 @@ class VR_TEXTURE_API ProjectiveTexturer {
   /// @return As the host-depth overload; @ref Status::Code::InvalidArgument
   ///         also for a @p depth that is empty, not a storage buffer, or
   ///         smaller than the image.
-  Status texture(const mesh::DeviceMesh& mesh, const Buffer& depth,
-                 const DepthCameraParams& cam,
-                 float occlusion_threshold = 0.02f,
-                 StageMetrics* metrics = nullptr);
+  core::Status texture(const mesh::DeviceMesh& mesh, const core::Buffer& depth,
+                       const DepthCameraParams& cam,
+                       float occlusion_threshold = 0.02f,
+                       core::StageMetrics* metrics = nullptr);
 
   /// @brief @ref texture from one @ref TextureView: its depth on the host or
   ///        the device, and its colour image registered to the depth camera
@@ -267,7 +267,7 @@ class VR_TEXTURE_API ProjectiveTexturer {
   /// view.depth_buffer = f.depth;
   /// view.color_camera = f.color_camera;
   /// view.coverage = f.color;
-  /// VR_TRY(texturer.texture(mesh, view));  // uv0 now addresses f.color
+  /// VKC_TRY(texturer.texture(mesh, view));  // uv0 now addresses f.color
   /// @endcode
   /// @param mesh    As the other device overloads.
   /// @param view    The frame. A device depth or coverage is bound in place,
@@ -281,16 +281,16 @@ class VR_TEXTURE_API ProjectiveTexturer {
   ///         colour camera with no image, an image size that is one-sided or
   ///         not the colour camera's, or a coverage that is not a storage
   ///         buffer or is smaller than the image.
-  Status texture(const mesh::DeviceMesh& mesh, const TextureView& view,
-                 float occlusion_threshold = 0.02f,
-                 StageMetrics* metrics = nullptr);
+  core::Status texture(const mesh::DeviceMesh& mesh, const TextureView& view,
+                       float occlusion_threshold = 0.02f,
+                       core::StageMetrics* metrics = nullptr);
 
   /// @brief As the @ref TextureView overload above, for a host mesh, uploaded
   ///        and read back as the first host overload is.
   /// @return As that overload and the first host overload.
-  Status texture(mesh::Mesh& mesh, const TextureView& view,
-                 float occlusion_threshold = 0.02f,
-                 StageMetrics* metrics = nullptr);
+  core::Status texture(mesh::Mesh& mesh, const TextureView& view,
+                       float occlusion_threshold = 0.02f,
+                       core::StageMetrics* metrics = nullptr);
 
   /// @brief Texture @p mesh from several posed views, each triangle from the
   ///        one that sees it best, into an atlas of their images.
@@ -343,18 +343,20 @@ class VR_TEXTURE_API ProjectiveTexturer {
   ///         views, overlaps itself or lies past @ref max_atlas_extent, a
   ///         shared, superseded or buffer-less mesh, or depth or coverage too
   ///         large for one binding; else a dispatch failure.
-  Status texture(const mesh::DeviceMesh& mesh,
-                 const std::vector<TextureView>& views,
-                 const AtlasLayout& layout, float occlusion_threshold = 0.02f,
-                 StageMetrics* metrics = nullptr);
+  core::Status texture(const mesh::DeviceMesh& mesh,
+                       const std::vector<TextureView>& views,
+                       const AtlasLayout& layout,
+                       float occlusion_threshold = 0.02f,
+                       core::StageMetrics* metrics = nullptr);
 
   /// @brief As the device overload, for a host mesh, uploaded and read back.
   /// @param mesh  Unshared: `indices` must be `0, 1, 2, ...`, one per vertex.
   /// @return As the device overload; a mesh whose indices are not that run is
   ///         InvalidArgument.
-  Status texture(mesh::Mesh& mesh, const std::vector<TextureView>& views,
-                 const AtlasLayout& layout, float occlusion_threshold = 0.02f,
-                 StageMetrics* metrics = nullptr);
+  core::Status texture(mesh::Mesh& mesh, const std::vector<TextureView>& views,
+                       const AtlasLayout& layout,
+                       float occlusion_threshold = 0.02f,
+                       core::StageMetrics* metrics = nullptr);
 
   /// @return The largest atlas width or height this device samples
   ///         (`maxImageDimension2D`), to lay an atlas out within; 0 for a
@@ -370,8 +372,8 @@ class VR_TEXTURE_API ProjectiveTexturer {
   ProjectiveTexturer() = default;
 
   // Borrowed (must outlive this).
-  Device* device_ = nullptr;
-  Allocator* allocator_ = nullptr;
+  core::Device* device_ = nullptr;
+  core::Allocator* allocator_ = nullptr;
 
   // Cached maxComputeWorkGroupCount[0] -- the device cap on a 1-D dispatch's
   // groupCountX; texture() rejects a vertex count that would exceed it.
@@ -385,22 +387,22 @@ class VR_TEXTURE_API ProjectiveTexturer {
 
   // The view-selection kernel's bundled layout + pipeline + descriptor set, its
   // set allocated from pool_ (which must outlive it) by KernelSetBuilder.
-  ComputeKernel kernel_;
+  core::ComputeKernel kernel_;
   // The several-view kernel (texture_multiview.comp), from the same pool.
-  ComputeKernel multiview_kernel_;
+  core::ComputeKernel multiview_kernel_;
   // Device spans for the texturing dispatch; idle until a caller asks. See
   // tsdf::TsdfIntegrator's member of the same name.
-  GpuTimer gpu_timer_;
-  DescriptorPool pool_;
+  core::GpuTimer gpu_timer_;
+  core::DescriptorPool pool_;
   // Fixed-size camera-params SSBO (the depth camera, then the colour camera
   // the single-camera kernel reads when it has one): bound once at create()
   // and rewritten inline in each texture()'s batch, like the tsdf tier's
   // camera SSBO. Device-local, as every buffer here is.
-  Buffer cam_buf_;
+  core::Buffer cam_buf_;
   // A host depth frame's device copy for the single-camera pass. Grow-only,
   // like the views' buffers below, so a live pass texturing every remesh
   // allocates only its staging once the frame fits.
-  Buffer depth_buf_;
+  core::Buffer depth_buf_;
   // The several-view pass's inputs: every view's depth end to end, every
   // marked image's coverage end to end, and the views. Grow-only and
   // rewritten each call, like cam_buf_, so a rig texturing every frame
@@ -408,43 +410,48 @@ class VR_TEXTURE_API ProjectiveTexturer {
   //
   // TODO(texture): keep a static keyframe set's depth and coverage here
   // between calls; every call stages or copies every view's afresh.
-  Buffer view_depth_buf_;
-  Buffer view_coverage_buf_;
-  Buffer views_buf_;
+  core::Buffer view_depth_buf_;
+  core::Buffer view_coverage_buf_;
+  core::Buffer views_buf_;
 
   // Every single-camera DeviceMesh overload: `view` gives the cameras, the
   // image and its coverage, and `depth` the depth, the host array or device
   // buffer the caller passed (the view's own depth fields are not read).
-  Status texture(const mesh::DeviceMesh& mesh, const TextureView& view,
-                 const StorageInput& depth, float occlusion_threshold,
-                 StageMetrics* metrics);
+  core::Status texture(const mesh::DeviceMesh& mesh, const TextureView& view,
+                       const core::StorageInput& depth,
+                       float occlusion_threshold, core::StageMetrics* metrics);
   // Both single-camera host-mesh overloads, as the one above.
-  Status texture(mesh::Mesh& mesh, const TextureView& view,
-                 const StorageInput& depth, float occlusion_threshold,
-                 StageMetrics* metrics);
+  core::Status texture(mesh::Mesh& mesh, const TextureView& view,
+                       const core::StorageInput& depth,
+                       float occlusion_threshold, core::StageMetrics* metrics);
   // What every single-camera overload checks before anything is recorded.
-  Status check_view(const TextureView& view, const StorageInput& depth) const;
+  core::Status check_view(const TextureView& view,
+                          const core::StorageInput& depth) const;
   // Every single-camera overload, once the vertices are on the device: records
   // the depth, the cameras and the dispatch into `batch`, binding
   // `vertex_range` bytes of `vertices`. It may replace depth_buf_, as
   // texture_views may its buffers.
-  Status texture_vertices(CommandBatch& batch, VkBuffer vertices,
-                          VkDeviceSize vertex_range, std::uint32_t vertex_count,
-                          const TextureView& view, const StorageInput& depth,
-                          float occlusion_threshold, GpuStageScope* stage);
+  core::Status texture_vertices(core::CommandBatch& batch, VkBuffer vertices,
+                                VkDeviceSize vertex_range,
+                                std::uint32_t vertex_count,
+                                const TextureView& view,
+                                const core::StorageInput& depth,
+                                float occlusion_threshold,
+                                core::GpuStageScope* stage);
   // Both multi-view overloads, once the vertices are on the device: records
   // the views and the dispatch into `batch`.
   //
   // It may replace view_depth_buf_, view_coverage_buf_ and views_buf_, so
   // nothing already in `batch` may refer to them: the callers record only the
   // vertices first.
-  Status texture_views(CommandBatch& batch, VkBuffer vertices,
-                       std::uint32_t triangles,
-                       const std::vector<TextureView>& views,
-                       const AtlasLayout& layout, float occlusion_threshold,
-                       GpuStageScope* stage);
-  Status check_views(const std::vector<TextureView>& views,
-                     const AtlasLayout& layout) const;
+  core::Status texture_views(core::CommandBatch& batch, VkBuffer vertices,
+                             std::uint32_t triangles,
+                             const std::vector<TextureView>& views,
+                             const AtlasLayout& layout,
+                             float occlusion_threshold,
+                             core::GpuStageScope* stage);
+  core::Status check_views(const std::vector<TextureView>& views,
+                           const AtlasLayout& layout) const;
 };
 
 }  // namespace volumetric_kit::recon::texture

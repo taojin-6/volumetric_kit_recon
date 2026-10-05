@@ -19,6 +19,8 @@
 #include "volumetric_kit/recon/io/image_io.hpp"
 #include "volumetric_kit/recon/sensor/camera_conventions.hpp"
 
+namespace vkc = volumetric_kit::core;
+
 namespace vr_example {
 namespace {
 
@@ -138,11 +140,11 @@ ReplicaCapture& ReplicaCapture::operator=(ReplicaCapture&& other) noexcept {
   return *this;
 }
 
-vr::Result<ReplicaCapture> ReplicaCapture::open(
+vkc::Result<ReplicaCapture> ReplicaCapture::open(
     const std::string& scene_dir, const std::string& cam_params_path,
     const Options& options) {
   if (options.frame_stride == 0) {
-    return vr::Status::invalid_argument(
+    return vkc::Status::invalid_argument(
         "ReplicaCapture::open: frame_stride must be >= 1");
   }
   ReplicaCapture capture;
@@ -152,7 +154,7 @@ vr::Result<ReplicaCapture> ReplicaCapture::open(
   // --- Intrinsics (cam_params.json) ---
   const std::optional<std::string> cam_json = read_file(cam_params_path);
   if (!cam_json) {
-    return vr::Status::invalid_argument(
+    return vkc::Status::invalid_argument(
         "ReplicaCapture::open: cannot read cam params: " + cam_params_path);
   }
   const std::array<const char*, 7> keys = {"fx", "fy", "cx",   "cy",
@@ -161,7 +163,7 @@ vr::Result<ReplicaCapture> ReplicaCapture::open(
   for (std::size_t k = 0; k < keys.size(); ++k) {
     const std::optional<float> v = json_number(*cam_json, keys[k]);
     if (!v) {
-      return vr::Status::invalid_argument(
+      return vkc::Status::invalid_argument(
           std::string("ReplicaCapture::open: cam params missing key '") +
           keys[k] + "'");
     }
@@ -175,7 +177,7 @@ vr::Result<ReplicaCapture> ReplicaCapture::open(
   // poison every projection -- not just the ones the old check covered.
   for (const float value : values) {
     if (!std::isfinite(value)) {
-      return vr::Status::invalid_argument(
+      return vkc::Status::invalid_argument(
           "ReplicaCapture::open: cam params has a non-finite value");
     }
   }
@@ -186,7 +188,7 @@ vr::Result<ReplicaCapture> ReplicaCapture::open(
     // fx/fy > 0 (a zero focal length divides by zero in the unprojection
     // x = (u - cx) * d / fx), scale > 0, and width/height in a sane [1, 65535]
     // so the uint32 cast below is well-defined.
-    return vr::Status::invalid_argument(
+    return vkc::Status::invalid_argument(
         "ReplicaCapture::open: cam params has a zero/invalid intrinsic, "
         "dimension, or scale");
   }
@@ -207,12 +209,12 @@ vr::Result<ReplicaCapture> ReplicaCapture::open(
   color.cy = values[3];
   color.width = static_cast<std::uint32_t>(w);
   color.height = static_cast<std::uint32_t>(h);
-  vr::Result<vr::DepthCameraParams> depth =
+  vkc::Result<vr::DepthCameraParams> depth =
       vr::sensor::depth_from_registered_color(color, color.width, color.height,
                                               options.min_depth,
                                               options.max_depth);
   if (!depth) {
-    return vr::Status::invalid_argument(
+    return vkc::Status::invalid_argument(
         "ReplicaCapture::open: depth range rejected (min_depth " +
         std::to_string(options.min_depth) + " m, max_depth " +
         std::to_string(options.max_depth) + " m): " + depth.status().message());
@@ -223,7 +225,7 @@ vr::Result<ReplicaCapture> ReplicaCapture::open(
   // transposed into the column-major glm matrix the pipeline uploads. ---
   std::ifstream traj(scene_dir + "/traj.txt");
   if (!traj) {
-    return vr::Status::invalid_argument(
+    return vkc::Status::invalid_argument(
         "ReplicaCapture::open: cannot read trajectory: " + scene_dir +
         "/traj.txt");
   }
@@ -238,7 +240,7 @@ vr::Result<ReplicaCapture> ReplicaCapture::open(
       // A blank line before this data line is an interior gap: skipping it
       // would silently shift every later pose off its frame index (poses are
       // matched to frameNNNNNN by position), so reject it instead.
-      return vr::Status::invalid_argument(
+      return vkc::Status::invalid_argument(
           "ReplicaCapture::open: blank line inside the trajectory (before "
           "pose " +
           std::to_string(capture.poses_.size()) + ")");
@@ -253,7 +255,7 @@ vr::Result<ReplicaCapture> ReplicaCapture::open(
       }
     }
     if (!ok) {
-      return vr::Status::invalid_argument(
+      return vkc::Status::invalid_argument(
           "ReplicaCapture::open: malformed trajectory line " +
           std::to_string(capture.poses_.size()));
     }
@@ -266,7 +268,7 @@ vr::Result<ReplicaCapture> ReplicaCapture::open(
     capture.poses_.push_back(pose);
   }
   if (capture.poses_.empty()) {
-    return vr::Status::invalid_argument(
+    return vkc::Status::invalid_argument(
         "ReplicaCapture::open: trajectory has no poses");
   }
 
@@ -302,11 +304,11 @@ std::size_t ReplicaCapture::frame_count() const noexcept {
   return end_ == 0 ? 0 : (end_ - 1) / options_.frame_stride + 1;
 }
 
-vr::Result<RgbdFrame> ReplicaCapture::load(std::size_t index) const {
+vkc::Result<RgbdFrame> ReplicaCapture::load(std::size_t index) const {
   if (index >= end_ || index >= poses_.size()) {
-    return vr::Status::invalid_argument("ReplicaCapture::load: index " +
-                                        std::to_string(index) +
-                                        " past the sequence");
+    return vkc::Status::invalid_argument("ReplicaCapture::load: index " +
+                                         std::to_string(index) +
+                                         " past the sequence");
   }
   const std::string color_path =
       frame_path(results_dir_, "frame", index, ".jpg");
@@ -316,12 +318,12 @@ vr::Result<RgbdFrame> ReplicaCapture::load(std::size_t index) const {
   // Size-checked against the camera structs the frame is stamped with, so the
   // buffer a consumer indexes by `depth_camera.width * height` is exactly that
   // long.
-  VR_ASSIGN(frame.color,
-            vr::io::load_color_packed(color_path, color_camera_.width,
-                                      color_camera_.height));
-  VR_ASSIGN(frame.depth,
-            vr::io::load_depth_metres(depth_path, depth_camera_.width,
-                                      depth_camera_.height, depth_scale_));
+  VKC_ASSIGN(frame.color,
+             vr::io::load_color_packed(color_path, color_camera_.width,
+                                       color_camera_.height));
+  VKC_ASSIGN(frame.depth,
+             vr::io::load_depth_metres(depth_path, depth_camera_.width,
+                                       depth_camera_.height, depth_scale_));
   // Both cameras from the one trajectory entry: depth and colour are one
   // registered camera on Replica, so the two poses cannot drift apart.
   // color_encoding stays defaulted -- the default *is* the declaration
@@ -334,10 +336,10 @@ vr::Result<RgbdFrame> ReplicaCapture::load(std::size_t index) const {
   return frame;
 }
 
-vr::Result<std::size_t> ReplicaCapture::preload(
+vkc::Result<std::size_t> ReplicaCapture::preload(
     const std::atomic<bool>* cancel) {
   if (running_) {
-    return vr::Status::invalid_argument(
+    return vkc::Status::invalid_argument(
         "ReplicaCapture::preload: call before start(); the frame the last "
         "poll handed out may borrow from the cache this replaces");
   }
@@ -352,7 +354,7 @@ vr::Result<std::size_t> ReplicaCapture::preload(
     if (cancel != nullptr && cancel->load()) {
       break;
     }
-    vr::Result<RgbdFrame> frame_result = load(index);
+    vkc::Result<RgbdFrame> frame_result = load(index);
     if (!frame_result) {
       cache_.clear();
       return frame_result.status();
@@ -385,7 +387,7 @@ std::size_t ReplicaCapture::preloaded_bytes() const noexcept {
   return bytes;
 }
 
-vr::Status ReplicaCapture::start() {
+vkc::Status ReplicaCapture::start() {
   running_ = true;
   return {};
 }
@@ -396,7 +398,7 @@ void ReplicaCapture::stop() noexcept {
   current_owned_.reset();
 }
 
-vr::Result<std::optional<vr::sensor::CapturedFrame>> ReplicaCapture::poll() {
+vkc::Result<std::optional<vr::sensor::CapturedFrame>> ReplicaCapture::poll() {
   if (!running_ || exhausted()) {
     return no_frame();
   }
@@ -412,7 +414,7 @@ vr::Result<std::optional<vr::sensor::CapturedFrame>> ReplicaCapture::poll() {
     current_owned_.reset();
     stored = &*cache_[index];
   } else {
-    VR_ASSIGN(current_owned_, load(index));
+    VKC_ASSIGN(current_owned_, load(index));
     stored = &*current_owned_;
   }
   // Advance without overshooting: `index + stride` could wrap for a huge

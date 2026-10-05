@@ -31,19 +31,21 @@
 #include <vector>
 
 #include "buffer_readback.hpp"
-#include "volumetric_kit/recon/core/allocator.hpp"
-#include "volumetric_kit/recon/core/buffer.hpp"
+#include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "volumetric_kit/core/vulkan/buffer.hpp"
+#include "volumetric_kit/core/vulkan/compute_pipeline.hpp"
+#include "volumetric_kit/core/vulkan/compute_util.hpp"
+#include "volumetric_kit/core/vulkan/descriptor.hpp"
+#include "volumetric_kit/core/vulkan/device.hpp"
+#include "volumetric_kit/core/vulkan/instance.hpp"
+#include "volumetric_kit/core/vulkan/shader.hpp"
+#include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/recon/core/color_space.hpp"
-#include "volumetric_kit/recon/core/compute_pipeline.hpp"
-#include "volumetric_kit/recon/core/compute_util.hpp"
-#include "volumetric_kit/recon/core/descriptor.hpp"
-#include "volumetric_kit/recon/core/device.hpp"
-#include "volumetric_kit/recon/core/instance.hpp"
+#include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
-#include "volumetric_kit/recon/core/shader.hpp"
-#include "volumetric_kit/recon/core/vulkan.hpp"
 
 namespace vr = volumetric_kit::recon;
+namespace vkc = volumetric_kit::core;
 
 namespace {
 
@@ -70,28 +72,28 @@ std::vector<std::uint32_t> load_spirv(const char* path) {
 }  // namespace
 
 int main() {
-  vr::Result<vr::Instance> instance = vr::Instance::create({});
+  vkc::Result<vkc::Instance> instance = vkc::Instance::create({});
   if (!instance) {
     std::fprintf(stderr, "no Vulkan instance (%s); skipping\n",
                  instance.status().message().c_str());
     return 0;
   }
-  vr::Result<vr::PhysicalDeviceInfo> gpu =
+  vkc::Result<vkc::PhysicalDeviceInfo> gpu =
       instance.value().select_physical_device(vr::device_requirements());
   if (!gpu) {
     std::fprintf(stderr, "no compute-capable device (%s); skipping\n",
                  gpu.status().message().c_str());
     return 0;
   }
-  vr::Result<vr::Device> device = vr::Device::create(
+  vkc::Result<vkc::Device> device = vkc::Device::create(
       instance.value(), gpu.value(), vr::device_requirements());
   if (!device) {
     std::fprintf(stderr, "device create failed: %s\n",
                  device.status().message().c_str());
     return 1;
   }
-  vr::Result<vr::Allocator> allocator =
-      vr::Allocator::create(instance.value().handle(), device.value());
+  vkc::Result<vkc::Allocator> allocator =
+      vkc::Allocator::create(instance.value().handle(), device.value());
   if (!allocator) {
     std::fprintf(stderr, "allocator create failed: %s\n",
                  allocator.status().message().c_str());
@@ -101,10 +103,10 @@ int main() {
   // Device-only, as every buffer a kernel writes: the host reads the results
   // back through a batch rather than across the bus.
   auto make_buffer = [&](std::size_t bytes) {
-    return vr::device_storage_buffer(allocator.value(), bytes);
+    return vkc::device_storage_buffer(allocator.value(), bytes);
   };
-  vr::Result<vr::Buffer> linear_buf = make_buffer(kCodes * sizeof(float));
-  vr::Result<vr::Buffer> round_buf =
+  vkc::Result<vkc::Buffer> linear_buf = make_buffer(kCodes * sizeof(float));
+  vkc::Result<vkc::Buffer> round_buf =
       make_buffer(kCodes * sizeof(std::uint32_t));
   if (!linear_buf || !round_buf) {
     std::fprintf(stderr, "buffer create failed\n");
@@ -116,9 +118,9 @@ int main() {
     std::fprintf(stderr, "could not read SPIR-V at %s\n", VR_COLOR_PARITY_SPV);
     return 1;
   }
-  vr::Result<vr::ShaderModule> shader =
-      vr::ShaderModule::create(device.value().handle(), code.data(),
-                               code.size() * sizeof(std::uint32_t));
+  vkc::Result<vkc::ShaderModule> shader =
+      vkc::ShaderModule::create(device.value().handle(), code.data(),
+                                code.size() * sizeof(std::uint32_t));
   if (!shader) {
     std::fprintf(stderr, "shader create failed: %s\n",
                  shader.status().message().c_str());
@@ -132,8 +134,8 @@ int main() {
     bindings[i].descriptorCount = 1;
     bindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
   }
-  vr::Result<vr::DescriptorSetLayout> layout =
-      vr::DescriptorSetLayout::create(device.value().handle(), bindings, 2);
+  vkc::Result<vkc::DescriptorSetLayout> layout =
+      vkc::DescriptorSetLayout::create(device.value().handle(), bindings, 2);
   if (!layout) {
     std::fprintf(stderr, "layout create failed: %s\n",
                  layout.status().message().c_str());
@@ -142,14 +144,14 @@ int main() {
   VkDescriptorPoolSize pool_size{};
   pool_size.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
   pool_size.descriptorCount = 2;
-  vr::Result<vr::DescriptorPool> pool =
-      vr::DescriptorPool::create(device.value().handle(), &pool_size, 1, 1);
+  vkc::Result<vkc::DescriptorPool> pool =
+      vkc::DescriptorPool::create(device.value().handle(), &pool_size, 1, 1);
   if (!pool) {
     std::fprintf(stderr, "pool create failed: %s\n",
                  pool.status().message().c_str());
     return 1;
   }
-  vr::Result<vr::DescriptorSet> set =
+  vkc::Result<vkc::DescriptorSet> set =
       pool.value().allocate(layout.value().handle());
   if (!set) {
     std::fprintf(stderr, "set allocate failed: %s\n",
@@ -162,12 +164,12 @@ int main() {
                                    VK_WHOLE_SIZE);
 
   VkDescriptorSetLayout set_layout = layout.value().handle();
-  vr::ComputePipelineDesc pipeline_desc;
+  vkc::ComputePipelineDesc pipeline_desc;
   pipeline_desc.shader = &shader.value();
   pipeline_desc.set_layouts = &set_layout;
   pipeline_desc.set_layout_count = 1;
-  vr::Result<vr::ComputePipeline> pipeline =
-      vr::ComputePipeline::create(device.value().handle(), pipeline_desc);
+  vkc::Result<vkc::ComputePipeline> pipeline =
+      vkc::ComputePipeline::create(device.value().handle(), pipeline_desc);
   if (!pipeline) {
     std::fprintf(stderr, "pipeline create failed: %s\n",
                  pipeline.status().message().c_str());
@@ -175,7 +177,7 @@ int main() {
   }
 
   const VkDescriptorSet descriptor_set = set.value().handle();
-  const vr::Status submitted =
+  const vkc::Status submitted =
       device.value().submit_single_time([&](VkCommandBuffer cmd) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
                           pipeline.value().handle());
@@ -197,9 +199,9 @@ int main() {
     return 1;
   }
 
-  vr::Result<std::vector<float>> linear_out = vr_test::read_back<float>(
+  vkc::Result<std::vector<float>> linear_out = vr_test::read_back<float>(
       device.value(), allocator.value(), linear_buf.value(), kCodes);
-  vr::Result<std::vector<std::uint32_t>> round_out =
+  vkc::Result<std::vector<std::uint32_t>> round_out =
       vr_test::read_back<std::uint32_t>(device.value(), allocator.value(),
                                         round_buf.value(), kCodes);
   if (!linear_out || !round_out) {

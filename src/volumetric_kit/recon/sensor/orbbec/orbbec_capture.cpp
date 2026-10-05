@@ -70,9 +70,9 @@ OrbbecCapture& OrbbecCapture::operator=(OrbbecCapture&& other) noexcept =
     default;
 OrbbecCapture::~OrbbecCapture() = default;
 
-Result<OrbbecCapture> OrbbecCapture::open(const Options& options) {
-  VR_TRY(orbbec::validate(options));
-  VR_TRY(orbbec::check_color_codec(options, "OrbbecCapture"));
+core::Result<OrbbecCapture> OrbbecCapture::open(const Options& options) {
+  VKC_TRY(orbbec::validate(options));
+  VKC_TRY(orbbec::check_color_codec(options, "OrbbecCapture"));
   auto impl = std::make_unique<Impl>();
   try {
     if (options.configure_sdk_logging) orbbec::configure_sdk_logging();
@@ -80,13 +80,14 @@ Result<OrbbecCapture> OrbbecCapture::open(const Options& options) {
     impl->context->enableNetDeviceEnumeration(true);
     std::vector<std::string> serials;
     if (!options.serial.empty()) serials.push_back(options.serial);
-    VR_ASSIGN(const auto devices,
-              orbbec::discover(*impl->context, serials,
-                               options.discovery_timeout_ms, "OrbbecCapture"));
-    VR_ASSIGN(impl->stream,
-              orbbec::CameraStream::create(
-                  impl->context, devices.front(), options, options.cam_to_world,
-                  options.configure_sdk_logging, "OrbbecCapture"));
+    VKC_ASSIGN(const auto devices,
+               orbbec::discover(*impl->context, serials,
+                                options.discovery_timeout_ms, "OrbbecCapture"));
+    VKC_ASSIGN(impl->stream,
+               orbbec::CameraStream::create(impl->context, devices.front(),
+                                            options, options.cam_to_world,
+                                            options.configure_sdk_logging,
+                                            "OrbbecCapture"));
   } catch (const std::exception& e) {  // ob::Error is one
     return orbbec::sdk_error("OrbbecCapture", "opening the camera", e);
   }
@@ -111,9 +112,9 @@ bool OrbbecCapture::exhausted() const noexcept {
   return impl_ == nullptr || impl_->stream->disconnected();
 }
 
-Status OrbbecCapture::start() {
+core::Status OrbbecCapture::start() {
   if (impl_ == nullptr) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "OrbbecCapture: start on a moved-from capture");
   }
   return impl_->stream->start();
@@ -123,30 +124,30 @@ void OrbbecCapture::stop() noexcept {
   if (impl_ != nullptr) impl_->stream->stop();
 }
 
-Result<std::optional<CapturedFrame>> OrbbecCapture::poll() {
+core::Result<std::optional<CapturedFrame>> OrbbecCapture::poll() {
   if (impl_ == nullptr) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "OrbbecCapture: poll on a moved-from capture");
   }
   if (impl_->stream->raw()) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "OrbbecCapture: opened for raw frames; take them with poll_raw");
   }
-  VR_ASSIGN(std::shared_ptr<ob::FrameSet> pair, impl_->stream->take());
+  VKC_ASSIGN(std::shared_ptr<ob::FrameSet> pair, impl_->stream->take());
   if (pair == nullptr) return no_frame();
   return impl_->stream->process(pair);
 }
 
-Result<std::optional<RawFrame>> OrbbecCapture::poll_raw() {
+core::Result<std::optional<RawFrame>> OrbbecCapture::poll_raw() {
   if (impl_ == nullptr) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "OrbbecCapture: poll_raw on a moved-from capture");
   }
   if (!impl_->stream->raw()) {
-    return Status::invalid_argument(
+    return core::Status::invalid_argument(
         "OrbbecCapture: poll_raw needs a capture opened with raw = true");
   }
-  VR_ASSIGN(std::shared_ptr<ob::FrameSet> pair, impl_->stream->take());
+  VKC_ASSIGN(std::shared_ptr<ob::FrameSet> pair, impl_->stream->take());
   if (pair == nullptr) return std::optional<RawFrame>();
   return impl_->stream->process_raw(pair);
 }

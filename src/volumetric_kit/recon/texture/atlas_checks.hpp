@@ -14,7 +14,7 @@
 #include <cstdint>
 #include <string>
 
-#include "volumetric_kit/recon/core/result.hpp"
+#include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/recon/texture/texture_atlas.hpp"
 
 namespace volumetric_kit::recon::texture::detail {
@@ -33,14 +33,15 @@ struct ImageSize {
 /// @return The size; InvalidArgument when exactly one of the two is zero, when
 ///         a given size is not the colour camera's, or when the size is
 ///         empty.
-Result<ImageSize> view_image_size(const TextureView& view, std::size_t index,
-                                  const std::string& who);
+core::Result<ImageSize> view_image_size(const TextureView& view,
+                                        std::size_t index,
+                                        const std::string& who);
 
 /// @brief Refuse a layout whose tiles do not lie inside it, or overlap: a
 ///        tile over another would take its pixels in @ref pack_atlas, and a
 ///        triangle given the lower view would sample the upper one's image.
 /// @param who  The caller's name, prefixed to a refusal.
 /// @return OK, or InvalidArgument.
-Status check_tiles(const AtlasLayout& layout, const std::string& who);
+core::Status check_tiles(const AtlasLayout& layout, const std::string& who);
 
 }  // namespace volumetric_kit::recon::texture::detail

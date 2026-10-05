@@ -17,10 +17,10 @@
 #include <optional>
 #include <string>
 
+#include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/recon/core/camera_params.hpp"
 #include "volumetric_kit/recon/core/fwd.hpp"
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
-#include "volumetric_kit/recon/core/result.hpp"
 #include "volumetric_kit/recon/sensor/camera_capture.hpp"
 #include "volumetric_kit/recon/sensor/orbbec/export.hpp"
 #include "volumetric_kit/recon/sensor/raw_frame.hpp"
@@ -157,12 +157,12 @@ struct OrbbecStreamOptions {
   /// (`YuvImage::device` or `YuvImage::image`) rather than host planes, so it
   /// never crosses to the host. Null, or a decode elsewhere, gives host
   /// planes. Borrowed: it must outlive the capture and every frame on it.
-  const Device* device = nullptr;
+  const core::Device* device = nullptr;
   /// With @ref device, the allocator NVDEC's and nvJPEG's pictures are made
   /// through (exported device-only memory); without it, their pictures come
   /// to the host. VideoToolbox's need none. Borrowed: it must outlive the
   /// capture and every frame on it.
-  Allocator* allocator = nullptr;
+  core::Allocator* allocator = nullptr;
 };
 
 /// @brief One Orbbec RGB-D camera, polled for posed frames with depth
@@ -241,7 +241,7 @@ class VR_SENSOR_ORBBEC_API OrbbecCapture final : public ICameraCapture {
   ///           decoders (VR_WITH_FFMPEG);
   ///         - @ref Status::Code::IoError for any other SDK failure, with the
   ///           SDK's message.
-  static Result<OrbbecCapture> open(const Options& options);
+  static core::Result<OrbbecCapture> open(const Options& options);
 
   OrbbecCapture(OrbbecCapture&& other) noexcept;
   OrbbecCapture& operator=(OrbbecCapture&& other) noexcept;
@@ -270,7 +270,7 @@ class VR_SENSOR_ORBBEC_API OrbbecCapture final : public ICameraCapture {
   ///         or its thread will not start. For raw MJPEG, likewise
   ///         @ref Status::Code::IoError if the JPEG decoder will not open or
   ///         its thread will not start.
-  Status start() override;
+  core::Status start() override;
 
   /// @brief Stop both streams and drop the frame the last @ref poll handed
   ///        out. Idempotent, and safe on a capture that never started.
@@ -294,7 +294,7 @@ class VR_SENSOR_ORBBEC_API OrbbecCapture final : public ICameraCapture {
   ///         does not match the stream @ref open negotiated, or ~a second's
   ///         worth of pairs in a row could not be processed; and
   ///         @ref Status::Code::InvalidArgument on a moved-from capture.
-  Result<std::optional<CapturedFrame>> poll() override;
+  core::Result<std::optional<CapturedFrame>> poll() override;
 
   /// @brief Take the newest synchronised pair not yet handed out, as the
   ///        cameras captured it: raw depth, the decoded Y'CbCr planes with
@@ -310,7 +310,7 @@ class VR_SENSOR_ORBBEC_API OrbbecCapture final : public ICameraCapture {
   ///         @ref poll returns it when it was; @ref Status::Code::Unsupported
   ///         for a stream whose transfer or primaries @ref ColorEncoding
   ///         cannot name.
-  Result<std::optional<RawFrame>> poll_raw() override;
+  core::Result<std::optional<RawFrame>> poll_raw() override;
 
   /// @return `true` if the capture was opened with
   ///         @ref OrbbecStreamOptions::raw, so its frames come through
