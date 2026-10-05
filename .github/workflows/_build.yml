@@ -372,6 +372,8 @@ jobs:
         if: steps.detect.outputs.present == 'true'
         run: cmake --build build --parallel
 
+      # Runs CTEST_PARALLEL_LEVEL tests at once: from the runner's .env on the
+      # Mac, from the container env ci.yml sets on the Ubuntu legs.
       - name: Test
         if: steps.detect.outputs.present == 'true'
         env:

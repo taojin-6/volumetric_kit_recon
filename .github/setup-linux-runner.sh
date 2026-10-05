@@ -71,8 +71,10 @@ for i in $(seq 1 "$N"); do
   echo "==> [${i}/${N}] ${dir}"
   if [ ! -f "${dir}/.runner" ]; then
     mkdir -p "$dir"; tar xzf "$TAR" -C "$dir"
-    # Loaded into every job -> caps cmake/ctest fan-out so the parallel legs share
-    # the cores instead of each grabbing all of them.
+    # Loaded into every job run directly on this runner -> caps cmake/ctest
+    # fan-out so the parallel legs share the cores instead of each grabbing all
+    # of them. It does NOT reach a job container: ci.yml repeats the values in
+    # each Ubuntu leg's container env, so keep the two in step.
     printf 'CMAKE_BUILD_PARALLEL_LEVEL=%s\nCTEST_PARALLEL_LEVEL=%s\n' "$THREADS" "$THREADS" > "${dir}/.env"
     ( cd "$dir" && ./config.sh --unattended --url "https://github.com/${REPO}" \
         --token "$TOKEN" --labels "$LABEL" --name "$(hostname -s)-${SLUG}-${i}" --work _work --replace )

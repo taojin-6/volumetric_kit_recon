@@ -78,8 +78,10 @@ for i in $(seq 1 "$N"); do
   dir=~/ci-runners/volumetric_kit_recon/runner-$i   # per-repo dir; won't collide with other repos' runners
   mkdir -p "$dir" && tar xzf ~/ci-runners/actions-runner.tar.gz -C "$dir"
   ( cd "$dir"
-    # Loaded into every job on this runner -> caps cmake/ctest fan-out so the
-    # parallel legs share the cores instead of each grabbing all of them.
+    # Loaded into every job run directly on this runner -> caps cmake/ctest
+    # fan-out so the parallel legs share the cores instead of each grabbing all
+    # of them. It does NOT reach a job container: ci.yml repeats the values in
+    # each Ubuntu leg's container env, so keep the two in step.
     printf 'CMAKE_BUILD_PARALLEL_LEVEL=%s\nCTEST_PARALLEL_LEVEL=%s\n' "$THREADS" "$THREADS" > .env
     ./config.sh --unattended --url "$URL" --token "$TOKEN" \
       --labels vk-linux-gpu --name "$(hostname)-recon-$i" --work _work   # do NOT sudo config.sh
