@@ -304,6 +304,26 @@ target_link_libraries(recon_sensor_conventions_test
 vr_target_warnings(recon_sensor_conventions_test)
 add_test(NAME recon_sensor_conventions COMMAND recon_sensor_conventions_test)
 
+# sensor tier: the trigger grouper, driven by synthetic streams -- drops, a
+# silent sensor, a slow poll, a clock off by more than the tolerance, a late
+# frame, the start-up frames. Host-only.
+add_executable(recon_sensor_trigger_grouper_test
+               sensor_trigger_grouper_test.cpp)
+target_link_libraries(recon_sensor_trigger_grouper_test
+                      PRIVATE volumetric_kit::recon_sensor)
+vr_target_warnings(recon_sensor_trigger_grouper_test)
+add_test(NAME recon_sensor_trigger_grouper
+         COMMAND recon_sensor_trigger_grouper_test)
+
+# sensor tier: the sensor array over scripted fake sensors -- the arrays it
+# refuses, its start order, trigger and sequence grouping, poses from the
+# calibration. Host-only.
+add_executable(recon_sensor_array_test sensor_array_test.cpp)
+target_link_libraries(recon_sensor_array_test
+                      PRIVATE volumetric_kit::recon_sensor_array)
+vr_target_warnings(recon_sensor_array_test)
+add_test(NAME recon_sensor_array COMMAND recon_sensor_array_test)
+
 # sensor tier: the RGB-D sensor contract, implemented by a fake and driven
 # through the base class -- the no_frame/some_frame returns, poll's newest and
 # drain's oldest-first, frames that hold their pixels. Host-only.
@@ -548,11 +568,9 @@ if(VR_WITH_ORBBEC)
   add_test(NAME recon_sensor_orbbec_sync_config
            COMMAND recon_sensor_orbbec_sync_config_test)
 
-  # The rig's grouping of frames into sync triggers and its start order, driven
-  # by synthetic streams -- drops, a silent camera, a slow poll, a clock off by
-  # more than the tolerance, a late frame, the start-up frames. No camera.
-  # Internal and unexported, so the test compiles the source itself, as the
-  # conversion test does.
+  # The rig's start order and the rigs it refuses. No camera. Internal and
+  # unexported, so the test compiles the source itself, as the conversion test
+  # does.
   add_executable(
     recon_sensor_orbbec_grouping_test
     sensor_orbbec_grouping_test.cpp

@@ -16,6 +16,7 @@
 #include "camera_stream.hpp"
 #include "frame_conversion.hpp"
 #include "trigger_grouping.hpp"
+#include "volumetric_kit/recon/sensor/trigger_grouper.hpp"
 
 namespace volumetric_kit::recon::sensor {
 
@@ -42,7 +43,7 @@ struct OrbbecRig::Impl {
   std::vector<std::size_t> start_order;  // secondaries, then the primary
   std::size_t primary = 0;
   std::uint32_t clock_sync_interval_ms = 0;
-  orbbec::TriggerGrouper grouper{orbbec::TriggerGrouper::Config{}};
+  TriggerGrouper grouper{TriggerGrouper::Config{}};
 
   // Pairs taken from a stream and not yet processed or discarded, by the id
   // the grouper knows them by. Declared after `streams`, so they are released
@@ -192,7 +193,7 @@ core::Result<OrbbecRig> OrbbecRig::open(const Options& options) {
   }
   impl->primary = impl->start_order.back();
   impl->clock_sync_interval_ms = options.clock_sync_interval_ms;
-  orbbec::TriggerGrouper::Config grouping;
+  TriggerGrouper::Config grouping;
   grouping.cameras = options.sync.devices.size();
   grouping.anchor = impl->primary;
   grouping.tolerance_us = options.sync_tolerance_us;
@@ -200,7 +201,7 @@ core::Result<OrbbecRig> OrbbecRig::open(const Options& options) {
   // short enough that a silent one costs one set, not several.
   grouping.max_wait_us = 1500000u / options.fps;
   grouping.queue_depth = kQueueDepth;
-  impl->grouper = orbbec::TriggerGrouper(grouping);
+  impl->grouper = TriggerGrouper(grouping);
   return OrbbecRig(std::move(impl));
 }
 
@@ -327,7 +328,7 @@ core::Result<std::optional<OrbbecRigSet<Frame>>> OrbbecRig::Impl::take() {
   // Every set holds the primary's frame, so the secondaries' frames of the
   // triggers before the primary's first frame reaches the host (~0.5 s of
   // them) never make one.
-  const std::optional<orbbec::TriggerGrouper::Group> group =
+  const std::optional<TriggerGrouper::Group> group =
       r.grouper.take(now, &r.released);
   r.release_ids();
   if (!group) return std::optional<Set>{};
