@@ -329,6 +329,9 @@ entries relevant to your task; later amendments supersede earlier rules.
   check, the lens's forward template, rigid checks, and each sensor's pose
   from the calibration file's version-1 layout. Unprojection, rescaling,
   version 2 and the writer go until a caller needs them.
+- [**2026-10-06**](#2026-10-06--tests-use-no-real-hardware-amends-the-2026-09-26-orbbec-driver-entry) —
+  Tests use no real hardware: the three camera tests are removed, and a
+  camera is checked by hand through `fuse_orbbec`.
 
 ## Decision record
 
@@ -9674,6 +9677,25 @@ first caller.
 FFmpeg and the viewer: the 54 tests pass, and the rig's calibration file
 reads all four poses. The rig hardware test, which now writes its file as
 JSON, was not run.
+
+### 2026-10-06 — Tests use no real hardware (amends the 2026-09-26 Orbbec driver entry).
+
+`recon_sensor_orbbec_capture`, `recon_sensor_orbbec_gpu_prep` and
+`recon_sensor_orbbec_rig` are removed, about 1,260 lines. Each skipped unless
+an environment variable named a camera or the rig's sync file, and no CI leg
+sets one, so they ran only by hand at the rig. A test now runs wherever the
+suite builds; a camera is checked by hand through `fuse_orbbec`, and reported
+as run or not run.
+
+- **What stays, with no camera:** the conversion test (units, layouts, the
+  sync-mode mapping, the option checks `open` makes, and now the refusal of
+  H.265 colour without the decoders, moved from the capture test), the
+  sync-configuration, grouping, H.265 and MJPEG tests, and the SDK smoke
+  test, which passes with no device.
+- **What goes:** the checks only a camera gives — the frame contract on a
+  live stream, restart, the GPU pass against the SDK's host alignment, and
+  the rig's trigger sets. The measurements they produced stay in the entries
+  that cite them.
 
 ## Measured lessons
 

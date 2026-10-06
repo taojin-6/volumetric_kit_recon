@@ -1118,8 +1118,8 @@ produces real frames through it; and **`sensor/orbbec`'s `OrbbecCapture`**
 *then* registers depth to it — the SDK's registration ignores the colour
 lens, so the order is what puts both on one pinhole camera, posed by
 `Options::cam_to_world`. It reads the camera's rig sync role
-(`waits_for_primary`) and never writes it, and its hardware test opens only
-the camera `VR_ORBBEC_TEST_SERIAL` names (the 2026-09-26 decision).
+(`waits_for_primary`) and never writes it. No test opens a camera (the
+2026-10-06 no-hardware decision); `fuse_orbbec` is how one is checked.
 **`OrbbecRig`** reads several synced cameras as one: `poll_set()` hands out
 one set per primary frame, with a missing secondary's slot left empty, and
 `poll()` hands out the same frames one at a time — one of the two per
@@ -1136,9 +1136,7 @@ unless `apply_sync_config` writes it; the lab rig's is
 camera's pose comes from the
 **calibration file** (`camera/array_calibration.hpp`), which must pose
 every camera of the rig. Both classes share the
-internal `CameraStream`. The rig's hardware test opens only the rig
-`VR_ORBBEC_TEST_RIG` names and never writes to it (the 2026-09-27
-decision).
+internal `CameraStream`.
 `color_codec = Hevc` (`VR_WITH_FFMPEG`) puts H.265 on the wire: each
 camera's `HevcColorDecoder` decodes every colour frame, in order, ahead of
 the mailbox, as BT.601 full range unless the stream names its matrix, and
@@ -1230,10 +1228,7 @@ H.265 colour is decoded onto that device and stays there, the picture
 carried through the mailbox by an SDK frame whose bytes only name it, so
 a copy of the frame owns nothing (`picture_frames.hpp`); for raw MJPEG it
 streams the camera's JPEGs, and each camera's `JpegColorDecoder` decodes
-them on a thread of its own onto the device. Its hardware test holds both
-codecs
-to the SDK's own undistortion and registration on a still scene (the
-2026-09-28 GPU pre-processing decision).
+them on a thread of its own onto the device.
 
 ### codec
 

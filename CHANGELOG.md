@@ -25,6 +25,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
+- tests: **the tests that opened real cameras**,
+  `recon_sensor_orbbec_capture`, `recon_sensor_orbbec_gpu_prep` and
+  `recon_sensor_orbbec_rig`, with their `VR_ORBBEC_TEST_SERIAL`,
+  `VR_ORBBEC_TEST_RIG`, `VR_ORBBEC_TEST_COLOR` and `VR_ORBBEC_TEST_FPS`
+  variables. The capture test's one camera-free check, H.265 colour refused
+  in a build without the decoders, moved to `recon_sensor_orbbec_conversion`.
+
 - `sensor`: **`rig_calibration.hpp`**, replaced by
   `camera/array_calibration.hpp`. Migrating: `read_rig_calibration` is
   `camera::read_array_calibration`, which returns an `ArrayCalibration`; a
