@@ -346,7 +346,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   calibration.
 - [**2026-10-06**](#2026-10-06--an-arrays-set-is-prepared-in-one-batch-every-stream-of-every-sensor-one-submit-and-one-wait-host-colour-staged-on-a-thread-per-camera-first) —
   An array's set is prepared in one batch, every stream of every sensor, one
-  submit and one wait; host colour is staged on a thread per camera first.
+  submit and one wait; host colour is staged on a thread per camera first,
+  and `prepare_set` goes.
 
 ## Decision record
 
@@ -9872,33 +9873,48 @@ was; the rig's start order is `recon_sensor_orbbec_start_order`.
 `GpuFramePrep::prepare_batch`, a pass per sensor: every frame is checked
 first, so a refused set costs no work; device planes are taken over; each
 pass stages its host data on a thread of its own; then every pass records
-its copies and kernels into one `CommandBatch`, submitted and waited on
-once. `prepare` is the same four steps for one frame, and `prepare_set`, a
-thread and a submit per camera, stays for `rig_viewer` until it opens an
-array.
+its uploads, and after them every pass its kernels, into one `CommandBatch`,
+submitted and waited on once. Recording the uploads first saves a barrier
+a camera: they write buffers of their own, so none is needed between them.
+`prepare` is the same steps for one frame. `prepare_set`, a thread and a submit per camera,
+is removed: `fuse_orbbec --rig` and `rig_viewer` call `prepare_batch` until
+they open an array, rather than keep two ways to prepare a set.
 
 **Why one batch, given PERF.md's P2 found it no faster.** It is not: it is
 level. The 2026-10-01 measurement lost on the Mac's host colour because the
 batch staged four 4K frames one after another; staging them on threads
-first closes that (median of 60 sets of four 640 x 576 depth and 3840 x 2160
-colour frames, M5 Max, Release, threads against one batch: 1.72 vs 1.76 ms
-for host colour, 0.97 vs 1.00 ms for colour already on the device; 0.38 vs
-0.41 ms for host colour at 1280 x 720). What it buys is the unit the
-pipelined stages need: one submit per set, which the core's async submit can
-order behind the previous stage on a timeline instead of four submits on
-four threads. The RTX 5090 measured level before the threaded staging and is
-not re-measured here.
+first closes that. Median of 100 sets of four 640 x 576 depth and
+3840 x 2160 colour frames, M5 Max, Release, each pair interleaved, three
+runs: one batch against a thread and a submit per camera, 1.68 vs 1.66 ms
+for host colour and 0.97 vs 0.95 ms for device colour; the uploads recorded
+first against each pass's uploads and kernels together, 1.69 vs 1.74 ms and
+0.99 vs 1.01 ms.
 
-**Validation.** Apple M5 Max, macOS, Release with warnings as errors, Orbbec,
-FFmpeg and the viewer: the 55 tests pass. `recon_sensor_array_process`
-prepares a three-sensor recording's sets -- one missing a frame -- and holds
-each prepared frame to `prepare` on its own, byte for byte, posed by the
-calibration; `recon_sensor_gpu_frame_prep` alternates `prepare_set` and
-`prepare_batch` against `prepare` and checks the batch's refusals. Both run
-clean under the Khronos layer's synchronization validation. The split
-`prepare` was checked by hand on CL2A141000N over Wi-Fi through `fuse_orbbec
---gpu`: the default stream, `--mjpeg` and `--hevc` each fuse 30 frames into
-a mesh.
+What it buys is one batch a set, the shape the pipelined stages (DESIGN.md's
+Next work, step 4) need: a set's work submitted once, through the core's
+`submit_async`, behind the previous stage on a timeline, where four threads
+would make four submits to order. Until then it submits and waits, which a
+`TODO:` at the submit marks. A failed submit abandons every pass's staging
+and device planes, since the work may still run and `CommandBatch::submit`
+cannot say whether it does; `PendingBatch::in_flight` will. The RTX 5090 was
+level before the threaded staging and is not re-measured.
+
+**Validation.** Apple M5 Max, macOS, Release with warnings as errors,
+Orbbec, FFmpeg and the viewer: the 55 tests pass.
+`recon_sensor_array_process` prepares a three-sensor recording's sets -- one
+missing a frame -- and holds each prepared frame to `prepare` on its own,
+byte for byte, posed by the calibration. `recon_sensor_gpu_frame_prep` does
+the same for a batch whose colour comes as host planes, device planes taken
+over from outside Vulkan and NV12 plane images, with depth kept within
+colour; it checks that a refused set times no row, so no work began, and
+that a dozen cameras' set is still timed (the timer's default window, 32
+spans, held eight cameras' host colour). Both run clean under the Khronos
+layer's synchronization validation. Dropping the timer's reserve, or opening
+the stage before the checks, fails the test. The split `prepare` was checked
+by hand on CL2A141000N over Wi-Fi through `fuse_orbbec --gpu`: the default
+stream, `--mjpeg` and `--hevc` each fuse 30 frames into a mesh. `fuse_orbbec
+--rig` and `rig_viewer` on `prepare_batch` build, and were not run on the
+rig.
 
 ## Measured lessons
 

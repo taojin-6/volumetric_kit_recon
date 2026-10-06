@@ -33,7 +33,8 @@ Baseline: `main` at `36b6d86` (2026-09-30).
 
 For one set of four cameras, one iteration of `rig_viewer`'s fuse thread
 (`examples/viewer/rig_viewer.cpp:1270`), at the baseline. P1 has since made
-allocate, compaction and integrate one submit each per set; see its row.
+allocate, compaction and integrate one submit each per set, and P2 frame
+prep; see their rows.
 
 | stage | code | submits | order | read back |
 |---|---|---|---|---|
@@ -298,13 +299,15 @@ is measured.
 ### P2 — Record a set's frame prep in one batch
 
 > **Landed (2026-10-06) as `GpuFramePrep::prepare_batch`, behind
-> `SensorArray::process`, for the pipeline rather than for speed:** one
-> submit a set is what the pipelined stages chain on a timeline. Host colour
-> now stages on a thread per camera before the one recording, which closes
-> the Mac's gap below: median of 60 sets, M5 Max, threads against one batch,
-> 1.72 vs 1.76 ms for host colour at 4K, 0.97 vs 1.00 ms for device colour,
-> 0.38 vs 0.41 ms for host colour at 720p. The RTX 5090 was at parity before
-> the threaded staging and is not re-measured.
+> `SensorArray::process`, for the pipeline rather than for speed:** one batch
+> a set is what the pipelined stages will submit behind the previous stage
+> on a timeline (a `TODO:` at its submit). Host colour now stages on a
+> thread per camera before the one recording, and every pass's uploads are
+> recorded before any pass's kernels, which closes the Mac's gap below to
+> parity: median of 100 sets, M5 Max, one batch against threads, 1.68 vs
+> 1.66 ms for host colour at 4K, 0.97 vs 0.95 ms for device colour.
+> `prepare_set` is removed; its callers use `prepare_batch`. The RTX 5090
+> was at parity before the threaded staging and is not re-measured.
 >
 > **Built, measured, dropped (2026-10-01).** The per-camera threads already
 > overlap the four submits, so one batch saves nothing.

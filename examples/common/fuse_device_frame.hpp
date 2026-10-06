@@ -57,10 +57,11 @@ inline vkc::Status fuse_frame(
                               frame.has_color() ? &color : nullptr, metrics);
 }
 
-/// @brief @ref fuse_frame for a set of frames, as `sensor::prepare_set` hands
-///        them out: every frame's band allocated in one call, then every
-///        frame fused in one, so a set costs a few submits rather than a few a
-///        frame. An empty entry is skipped.
+/// @brief @ref fuse_frame for a set of frames, as
+///        `sensor::GpuFramePrep::prepare_batch` hands them out: every frame's
+///        band allocated in one call, then every frame fused in one, so a set
+///        costs a few submits rather than a few a frame. An empty entry is
+///        skipped.
 /// @return OK, or the first error of the two steps.
 inline vkc::Status fuse_set(
     vr::volume::VoxelBlockGrid& grid, vr::tsdf::TsdfIntegrator& integrator,

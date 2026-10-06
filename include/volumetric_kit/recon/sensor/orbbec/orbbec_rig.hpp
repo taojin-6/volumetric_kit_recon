@@ -180,9 +180,8 @@ class VR_SENSOR_ORBBEC_API OrbbecRig final : public ICameraCapture {
 
   /// @brief @ref poll_set for a rig opened with @ref OrbbecStreamOptions::raw:
   ///        the trigger's frames as the cameras captured them, nothing done
-  ///        to them on the host. The cameras are independent, so
-  ///        `sensor::prepare_set` prepares them on the GPU at once, one
-  ///        thread per camera.
+  ///        to them on the host, for `GpuFramePrep::prepare_batch` to
+  ///        prepare on the GPU in one batch.
   /// @return As @ref poll_set; `Status::Code::InvalidArgument` also on a
   ///         rig not opened raw.
   core::Result<std::optional<OrbbecRigRawSet>> poll_raw_set();

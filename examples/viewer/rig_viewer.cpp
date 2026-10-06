@@ -9,14 +9,14 @@
 //
 // Nothing the cameras produce visits the host after it arrives. The rig hands
 // out raw sets whose colour the hardware decoder left on the GPU;
-// sensor::prepare_set undistorts and converts each camera's frame there; the
-// frames fuse through the device-input overloads; the marching-cubes mesh is
-// textured from every camera of the set (texture::ProjectiveTexturer, each
-// view's depth on the device, its colour camera its own, and its colour the
-// coverage that keeps the lens's black corners off the mesh); and the atlas is
-// filled by copying each camera's colour buffer into its tile of a gfx image,
-// recorded in the renderer's own frame before the draw. The only copies are
-// device to device.
+// sensor::GpuFramePrep::prepare_batch undistorts and converts every camera's
+// frame there, in one batch; the frames fuse through the device-input
+// overloads; the marching-cubes mesh is textured from every camera of the set
+// (texture::ProjectiveTexturer, each view's depth on the device, its colour
+// camera its own, and its colour the coverage that keeps the lens's black
+// corners off the mesh); and the atlas is filled by copying each camera's
+// colour buffer into its tile of a gfx image, recorded in the renderer's own
+// frame before the draw. The only copies are device to device.
 //
 // What makes the atlas copy safe, each checked or derived rather than assumed:
 //   * sharing -- the frame prep's colour is made CONCURRENT across recon's
@@ -30,7 +30,7 @@
 //     atlas image is reused only once no frame in flight and no committed
 //     mesh holds it.
 //   * visibility -- as for the mesh: the frame prep fence-waits its batch
-//     before prepare_set returns, and gfx's later vkQueueSubmit makes those
+//     before prepare_batch returns, and gfx's later vkQueueSubmit makes those
 //     writes visible to the copy.
 //
 // The atlas is laid out once, from the rig's colour cameras, with
@@ -1343,10 +1343,9 @@ int run(GLFWwindow* window, const Options& opt) {
         const rsensor::OrbbecRigRawSet& set = *polled.value();
         const std::uint64_t set_ns = set.timestamp_ns;
         auto prepared = [&]() {
-          // One row for the set: the cameras prepare at once, so their sum
-          // would overstate it.
+          // One row for the set: the cameras prepare in one batch.
           vkc::StageScope scope(fuse_stages, "frame prep");
-          return rsensor::prepare_set(preps, set.frames);
+          return rsensor::GpuFramePrep::prepare_batch(preps, set.frames);
         }();
         if (!prepared) {
           std::fprintf(stderr, "rig_viewer: frame prep: %s\n",
