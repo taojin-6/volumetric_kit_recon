@@ -386,4 +386,7 @@ jobs:
         if: steps.detect.outputs.present == 'true'
         env:
           VR_TEST_HEVC_BACKEND: ${{ inputs.hevc_backend }}
+          # Every leg has a device, so a GPU test that cannot get one fails
+          # rather than skips (tests/no_device.hpp).
+          VR_REQUIRE_VULKAN_DEVICE: '1'
         run: ctest --test-dir build --output-on-failure

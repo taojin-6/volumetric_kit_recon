@@ -97,4 +97,8 @@ jobs:
       # otherwise run the suite one test at a time.
       - name: Test
         if: steps.detect.outputs.present == 'true'
+        env:
+          # lavapipe is required above, so a GPU test that cannot get a device
+          # fails rather than skips (tests/no_device.hpp).
+          VR_REQUIRE_VULKAN_DEVICE: '1'
         run: ctest --test-dir build --output-on-failure --parallel "$(nproc)"
