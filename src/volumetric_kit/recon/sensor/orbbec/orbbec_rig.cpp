@@ -5,6 +5,7 @@
 
 #include <chrono>
 #include <exception>
+#include <optional>
 #include <string>
 #include <type_traits>
 #include <unordered_map>
@@ -43,7 +44,8 @@ struct OrbbecRig::Impl {
   std::vector<std::size_t> start_order;  // secondaries, then the primary
   std::size_t primary = 0;
   std::uint32_t clock_sync_interval_ms = 0;
-  TriggerGrouper grouper{TriggerGrouper::Config{}};
+  // Built by open once the primary is known: a grouper needs its anchor.
+  std::optional<TriggerGrouper> grouper;
 
   // Pairs taken from a stream and not yet processed or discarded, by the id
   // the grouper knows them by. Declared after `streams`, so they are released
@@ -115,7 +117,7 @@ struct OrbbecRig::Impl {
   void stop_all() noexcept {
     for (auto& s : streams) s->stop();
     running = false;
-    grouper.clear(&released);
+    if (grouper) grouper->clear(&released);
     release_ids();
     held.clear();
     current = OrbbecRigFrameSet{};
@@ -201,7 +203,7 @@ core::Result<OrbbecRig> OrbbecRig::open(const Options& options) {
   // short enough that a silent one costs one set, not several.
   grouping.max_wait_us = 1500000u / options.fps;
   grouping.queue_depth = kQueueDepth;
-  impl->grouper = TriggerGrouper(grouping);
+  impl->grouper.emplace(grouping);
   return OrbbecRig(std::move(impl));
 }
 
@@ -320,7 +322,7 @@ core::Result<std::optional<OrbbecRigSet<Frame>>> OrbbecRig::Impl::take() {
       }
       const std::uint64_t id = r.next_id++;
       r.held.emplace(id, Impl::Held{c, std::move(pair)});
-      r.grouper.add(c, ts, id, now, &r.released);
+      r.grouper->add(c, ts, id, now, &r.released);
     }
   }
   r.release_ids();
@@ -329,7 +331,7 @@ core::Result<std::optional<OrbbecRigSet<Frame>>> OrbbecRig::Impl::take() {
   // triggers before the primary's first frame reaches the host (~0.5 s of
   // them) never make one.
   const std::optional<TriggerGrouper::Group> group =
-      r.grouper.take(now, &r.released);
+      r.grouper->take(now, &r.released);
   r.release_ids();
   if (!group) return std::optional<Set>{};
 
