@@ -25,7 +25,7 @@
 #include <string>
 #include <vector>
 
-#include "rgbd_frame.hpp"
+#include "owned_frame.hpp"
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/recon/core/camera_params.hpp"
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
@@ -47,7 +47,7 @@ namespace vkc = volumetric_kit::core;
 /// pixels belong to this object and are valid only until the next @ref poll
 /// (or @ref stop) -- *any* next poll, including the empty one that reports the
 /// end of the sequence, and a poll that fails to decode. A consumer keeping a
-/// frame past that point copies it into an @ref RgbdFrame of its own.
+/// frame past that point copies it into an @ref OwnedFrame of its own.
 ///
 /// @ref open reads the intrinsics and every pose up front, then probes which
 /// of the frames it will play are actually on disk (a trajectory routinely
@@ -185,7 +185,7 @@ class ReplicaCapture final : public vr::sensor::ICameraCapture {
   // Decode one frame straight from disk, bypassing the cache, fully stamped:
   // the poll path hands out its view as is. The preload path shares it so
   // both decode identically.
-  vkc::Result<RgbdFrame> load(std::size_t index) const;
+  vkc::Result<OwnedFrame> load(std::size_t index) const;
 
   Options options_{};
   float depth_scale_ = 1.0f;  ///< Units per metre: metres = raw_uint16 / this.
@@ -202,14 +202,14 @@ class ReplicaCapture final : public vr::sensor::ICameraCapture {
   std::size_t end_ = 0;
   // Indexed by frame index; an empty slot is a frame the preload skipped (or a
   // preload that never ran). Empty when streaming.
-  std::vector<std::optional<RgbdFrame>> cache_;
+  std::vector<std::optional<OwnedFrame>> cache_;
 
   bool running_ = false;
   std::size_t next_ = 0;  ///< Index of the frame the next poll hands out.
   // The frame the last poll decoded, when it decoded one (streaming); the
   // storage the view it handed out borrows. Empty after a cache hit, whose
   // frame the cache owns.
-  std::optional<RgbdFrame> current_owned_;
+  std::optional<OwnedFrame> current_owned_;
 };
 
 }  // namespace vr_example

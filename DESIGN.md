@@ -1118,7 +1118,8 @@ produces real frames through it; and **`sensor/orbbec`'s `OrbbecCapture`**
 (`VR_WITH_ORBBEC`), a live Femto Mega. Its `poll()` undistorts colour and
 *then* registers depth to it — the SDK's registration ignores the colour
 lens, so the order is what puts both on one pinhole camera, posed by
-`Options::cam_to_world`. It reads the camera's rig sync role
+`Options::cam_to_world` (double, refused at `open` unless rigid). It reads
+the camera's rig sync role
 (`waits_for_primary`) and never writes it. No test opens a camera (the
 2026-10-06 no-hardware decision); `fuse_orbbec` is how one is checked.
 **`OrbbecRig`** reads several synced cameras as one: `poll_set()` hands out
@@ -1197,7 +1198,8 @@ keeping its intrinsics. The frame carries each camera's `camera::CameraModel`
 in double, narrowed to float once for the passes; the colour camera's pose,
 `color_to_world`, and the sensor's `depth_to_color`, both refused unless
 rigid, pose the outputs; a sequence number; and `pixels`, the owner of its
-host pixels, so a consumer may keep frames past the next poll.
+host pixels, so a consumer may keep frames past the next poll and past the
+capture.
 `ChromaLocation` follows the picture through `DecodedPicture`, the Orbbec
 frame handoff and `YuvImage`: JPEG is centred, and HEVC keeps the decoded tag
 with left alignment when unspecified. Host resampling preserves that location;
@@ -1227,9 +1229,10 @@ default; `rig_viewer` turns it on) zeroes depth outside the colour camera's
 view, by the colour pass's own coverage test, so nothing is fused that no
 colour camera can colour. `OrbbecCapture` opened with
 `raw` hands out `RgbdFrame`s through the contract's `poll_raw`, each holding
-its SDK pair, with the models and the depth-to-colour extrinsic from the
-factory calibration (the extrinsic's rotation made one: the Femto Mega's is
-not, the 2026-10-06 sensor-frame decision), the depth frame's index as the
+its SDK pair and the SDK context, with the models and the depth-to-colour
+extrinsic from the factory calibration (the extrinsic's rotation made one:
+the Femto Mega's is not, the 2026-10-06 sensor-frame decision; `open`
+refuses one that does not come out a rotation), the depth frame's index as the
 sequence, the planes
 converted by the matrix and range the stream codes them in, and
 `fuse_orbbec --gpu` fuses them. Given `OrbbecStreamOptions::device`, its
@@ -1453,7 +1456,7 @@ grid layout `grid_layout.hpp` defines, which its `create_fusion_grid` builds and
 `codec_replica`'s player shares), and a frame kept past the next
 poll — `fuse_render`'s keyframe, `fuse_viewer`'s newest fused frame for its
 final texture pass — is copied into an
-`RgbdFrame` of its own (`examples/common/rgbd_frame.hpp`, the type the
+`OwnedFrame` of its own (`examples/common/owned_frame.hpp`, the type the
 reader decodes into; `CapturedFrame` is its view), never borrowed: the empty
 poll that ends a replay is a poll. `fuse_replica`
 runs the spine on a posed

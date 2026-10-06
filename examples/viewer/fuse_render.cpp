@@ -29,10 +29,10 @@
 
 #include <glm/glm.hpp>
 
-#include "fuse_frame.hpp"  // vr_example::fuse_frame
+#include "fuse_frame.hpp"   // vr_example::fuse_frame
+#include "owned_frame.hpp"  // vr_example::OwnedFrame
 #include "recon_gfx_bridge.hpp"
 #include "replica_capture.hpp"  // vr_example::ReplicaCapture (examples/common)
-#include "rgbd_frame.hpp"       // vr_example::RgbdFrame
 
 // core and recon tiers
 #include "volumetric_kit/core/base/result.hpp"
@@ -320,7 +320,7 @@ vkc::Result<Reconstruction> fuse(const Options& opt,
        static_cast<std::size_t>(opt.follow) < replica.frame_count())
           ? static_cast<std::size_t>(opt.follow)
           : replica.frame_count() / 2;
-  vr_example::RgbdFrame keyframe;
+  vr_example::OwnedFrame keyframe;
 
   // From here on the source is the contract, not the dataset.
   rsensor::ICameraCapture& capture = replica;

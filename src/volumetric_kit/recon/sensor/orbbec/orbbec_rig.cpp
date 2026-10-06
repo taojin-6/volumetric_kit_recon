@@ -146,10 +146,10 @@ core::Result<OrbbecRig> OrbbecRig::open(const Options& options) {
                orbbec::discover(*impl->context, serials,
                                 options.discovery_timeout_ms, "OrbbecRig"));
     for (std::size_t i = 0; i < devices.size(); ++i) {
-      Mat4f pose(1.0f);
+      camera::Mat4d pose(1.0);
       const camera::SensorCalibration* sensor =
           camera::find_sensor(options.calibration, serials[i]);
-      if (sensor != nullptr) pose = Mat4f(sensor->color_to_world);
+      if (sensor != nullptr) pose = sensor->color_to_world;
       VKC_ASSIGN(auto stream, orbbec::CameraStream::create(
                                   impl->context, devices[i], options, pose,
                                   options.configure_sdk_logging, "OrbbecRig"));
@@ -334,8 +334,8 @@ core::Result<std::optional<OrbbecRigSet<Frame>>> OrbbecRig::Impl::take() {
 
   // TODO(sensor): process a host set's frames in parallel, one thread per
   // camera; one after another they take ~11 ms for four (the 2026-09-27
-  // decision). A raw set's are views, and prepare_set runs their GPU passes
-  // in parallel.
+  // decision). A raw set's frames only hold their pairs, and prepare_set runs
+  // their GPU passes in parallel.
   Set set;
   set.timestamp_ns = group->timestamp_us * 1000;
   set.frames.resize(r.streams.size());
@@ -349,8 +349,9 @@ core::Result<std::optional<OrbbecRigSet<Frame>>> OrbbecRig::Impl::take() {
       r.streams[c]->discard();
       continue;
     }
-    // A raw frame is a view of the camera's own buffers, so it costs no more
-    // than the grouping; the per-camera work is the GPU pass's.
+    // A raw frame holds the camera's own buffers rather than copying them, so
+    // it costs no more than the grouping; the per-camera work is the GPU
+    // pass's.
     auto processed = [&] {
       if constexpr (std::is_same_v<Frame, RgbdFrame>) {
         return r.streams[c]->process_raw(pair);
@@ -362,7 +363,7 @@ core::Result<std::optional<OrbbecRigSet<Frame>>> OrbbecRig::Impl::take() {
       failure = processed.status();
       continue;
     }
-    set.frames[c] = processed.value();  // empty when the SDK failed on it
+    set.frames[c] = std::move(processed).value();  // empty if the SDK failed
   }
   if (!failure.ok()) {
     // The set is not handed out, so neither are the frames processed for it.

@@ -206,8 +206,10 @@ class VR_SENSOR_ORBBEC_API OrbbecCapture final : public ICameraCapture {
     std::uint32_t discovery_timeout_ms = 8000;
     /// Colour camera -> world, in this repo's convention (+Z forward, +Y
     /// down; column-major) -- the pose of the whole frame, since depth is
-    /// registered to colour. Identity places the world at the camera.
-    Mat4f cam_to_world = Mat4f(1.0f);
+    /// registered to colour. Identity places the world at the camera. Must be
+    /// rigid (`camera::check_rigid`), which @ref open checks; a host frame
+    /// carries it narrowed to float.
+    camera::Mat4d cam_to_world = camera::Mat4d(1.0);
     /// Switch off the SDK's log file (it writes `./Log/` at DEBUG by default)
     /// and route its console sink at WARN, at @ref open; for H.265 colour or
     /// raw frames, also set FFmpeg's log level to ERROR, at the first
@@ -304,8 +306,8 @@ class VR_SENSOR_ORBBEC_API OrbbecCapture final : public ICameraCapture {
   /// `RgbdFrame::color_to_world` is @ref Options::cam_to_world, and
   /// `RgbdFrame::depth_to_color` the camera's factory extrinsic. The frame
   /// holds the pair it was read from (`RgbdFrame::pixels`), so it outlives
-  /// the next poll; the SDK has that pair's buffers back once every copy of
-  /// the frame is gone.
+  /// the next poll and the capture; the SDK has that pair's buffers back once
+  /// every copy of the frame is gone.
   /// @return As @ref poll; `Status::Code::InvalidArgument` also when the
   ///         capture was not opened with @ref OrbbecStreamOptions::raw, and
   ///         @ref poll returns it when it was; `Status::Code::Unsupported`

@@ -79,8 +79,8 @@
 #include <imgui_impl_glfw.h>
 #include <glm/glm.hpp>
 
-#include "fuse_frame.hpp"  // vr_example::fuse_frame
-#include "rgbd_frame.hpp"  // vr_example::RgbdFrame
+#include "fuse_frame.hpp"   // vr_example::fuse_frame
+#include "owned_frame.hpp"  // vr_example::OwnedFrame
 // Not for to_gfx_mesh -- seam B deleted this file's only call to it. Kept for
 // the vertex-layout static_asserts it carries, which matter MORE without the
 // host copy that used to justify them: gfx now reads recon's arena in place
@@ -974,7 +974,7 @@ int run(GLFWwindow* window, const Options& opt) {
       // every allocate/integrate failure exit (ASan-reproduced) and survived
       // the ordinary exit only on a detail of ReplicaCapture no contract
       // promises. ~0.1 ms per frame at -O2, against ~2 ms of fusion.
-      vr_example::RgbdFrame last_frame;
+      vr_example::OwnedFrame last_frame;
       // `i` counts frames handed out, so it advances at the bottom of the
       // body rather than in the loop header: an empty poll from a source that
       // is not exhausted retries without consuming a frame index.

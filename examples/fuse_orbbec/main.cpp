@@ -328,7 +328,7 @@ vkc::Result<Source> open_source(const Options& opt, const vkc::Device& device,
                : " does not pose camera " + opt.serial));
     }
     capture_options.serial = sensor->id;
-    capture_options.cam_to_world = vr::Mat4f(sensor->color_to_world);
+    capture_options.cam_to_world = sensor->color_to_world;
   }
   if (opt.min_depth) capture_options.min_depth = *opt.min_depth;
   if (opt.max_depth) capture_options.max_depth = *opt.max_depth;

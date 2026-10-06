@@ -38,10 +38,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `depth_cam_to_world` is `color_to_world * depth_to_color`.
   `sensor/lens.hpp` (`LensCamera`, `LensDistortion`, `distort_normalized`)
   is gone: use `camera::CameraModel` and `camera::distort_rational`.
+  `OrbbecCapture::Options::cam_to_world` is a `camera::Mat4d`, refused at
+  `open` unless rigid. The examples' own frame type is `OwnedFrame`
+  (`examples/common/owned_frame.hpp`), so it is not taken for this one.
 - `sensor/orbbec`: **the raw path's depth-to-colour extrinsic is a
   rotation.** The Femto Mega's factory one is 1.2% off orthonormal; the
   driver takes its nearest rotation, which moves depth up to about 4 px
-  along x in a 720p colour image.
+  along x in a 720p colour image, and `open` refuses one that does not come
+  out a rotation.
 
 ### Removed
 

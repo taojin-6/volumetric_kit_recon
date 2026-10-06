@@ -304,7 +304,7 @@ std::size_t ReplicaCapture::frame_count() const noexcept {
   return end_ == 0 ? 0 : (end_ - 1) / options_.frame_stride + 1;
 }
 
-vkc::Result<RgbdFrame> ReplicaCapture::load(std::size_t index) const {
+vkc::Result<OwnedFrame> ReplicaCapture::load(std::size_t index) const {
   if (index >= end_ || index >= poses_.size()) {
     return vkc::Status::invalid_argument("ReplicaCapture::load: index " +
                                          std::to_string(index) +
@@ -314,7 +314,7 @@ vkc::Result<RgbdFrame> ReplicaCapture::load(std::size_t index) const {
       frame_path(results_dir_, "frame", index, ".jpg");
   const std::string depth_path =
       frame_path(results_dir_, "depth", index, ".png");
-  RgbdFrame frame;
+  OwnedFrame frame;
   // Size-checked against the camera structs the frame is stamped with, so the
   // buffer a consumer indexes by `depth_camera.width * height` is exactly that
   // long.
@@ -354,7 +354,7 @@ vkc::Result<std::size_t> ReplicaCapture::preload(
     if (cancel != nullptr && cancel->load()) {
       break;
     }
-    vkc::Result<RgbdFrame> frame_result = load(index);
+    vkc::Result<OwnedFrame> frame_result = load(index);
     if (!frame_result) {
       cache_.clear();
       return frame_result.status();
@@ -378,7 +378,7 @@ std::size_t ReplicaCapture::preload_bytes_projected() const noexcept {
 
 std::size_t ReplicaCapture::preloaded_bytes() const noexcept {
   std::size_t bytes = 0;
-  for (const std::optional<RgbdFrame>& cached : cache_) {
+  for (const std::optional<OwnedFrame>& cached : cache_) {
     if (cached) {
       bytes += cached->depth.size() * sizeof(float) +
                cached->color.size() * sizeof(std::uint32_t);
@@ -409,7 +409,7 @@ vkc::Result<std::optional<vr::sensor::CapturedFrame>> ReplicaCapture::poll() {
   // from here (the contract's "until the next poll"). A failed decode returns
   // above the assignment and leaves the position unchanged, so the next poll
   // retries the same frame.
-  const RgbdFrame* stored = nullptr;
+  const OwnedFrame* stored = nullptr;
   if (index < cache_.size() && cache_[index]) {
     current_owned_.reset();
     stored = &*cache_[index];

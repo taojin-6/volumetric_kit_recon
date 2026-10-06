@@ -9714,12 +9714,15 @@ the plan above. It is the frame every driver will hand out once
   `color_to_world` is where the sensor sits, from a calibration or a
   tracker; `depth_to_color` is the sensor's own. The pass poses the depth
   camera at their product and refuses either unless rigid.
+  `OrbbecCapture::Options::cam_to_world` is double too and refused at `open`
+  unless rigid, so the driver never hands the pass a pose it refuses.
 - **A sequence number**, the device's count of its frames, so a gap is a
   lost frame; the Orbbec driver stamps the depth frame's index.
 - **The pixels it holds** (`pixels`), not ones it borrows until the next
   poll: a sensor array groups frames by trigger before it prepares any, so
   it keeps several of each sensor. The Orbbec driver hands over the SDK's
-  pair, so its buffers go back once every copy of the frame is gone.
+  pair with the SDK context, so its buffers go back once every copy of the
+  frame is gone, before the SDK does, even after the capture.
 
 **The Femto Mega's factory depth-to-colour rotation is not a rotation.**
 Read through the SDK (2.9.3, firmware 1.3.1) from all four cameras of the
@@ -9731,7 +9734,8 @@ matrix as it came, so depth landed 0.6% short along the colour camera's x
 (about 4 px at a 720p image's edge), and fusion, which inverts a pose by its
 transpose, doubled the inconsistency. `camera::nearest_rotation`, the polar
 factor, recovers the Rodrigues rotation to about 1e-5 rad, and the driver
-applies it to every extrinsic it reads. The hardware test's comparison of the
+applies it to every extrinsic it reads, refusing at `open` one that does not
+come out a rotation (a zeroed or reflected matrix). The hardware test's comparison of the
 prepared depth with the SDK's own host alignment moved from a 5.3 mm to a
 6.7 mm median, consistent with the SDK aligning through the defective
 matrix. Which is closer to the scene is for calib to measure, against the

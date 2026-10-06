@@ -17,7 +17,8 @@
 ///
 /// That is why the camera types come from `core/camera_params.hpp` rather than
 /// from the fusion tiers that also consume them: this header — and
-/// `recon_sensor`'s whole link line — reaches `core` alone, so a driver
+/// `recon_sensor`'s whole link line, `core` and the GPU-free `camera` tier —
+/// stays clear of Vulkan, so a driver
 /// implementing @ref ICameraCapture out of tree (an ARKit source in
 /// `volumetric_kit_ios` is Objective-C++) compiles against the math vocabulary
 /// and never preprocesses the Vulkan surface. *Consuming* a frame still means
