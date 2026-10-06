@@ -324,6 +324,16 @@ target_link_libraries(recon_sensor_array_test
 vr_target_warnings(recon_sensor_array_test)
 add_test(NAME recon_sensor_array COMMAND recon_sensor_array_test)
 
+# sensor tier: a sensor array's sets prepared on the GPU in one batch, each
+# frame as GpuFramePrep makes it alone and posed by the calibration. Skips
+# without a device.
+add_executable(recon_sensor_array_process_test sensor_array_process_test.cpp)
+target_link_libraries(recon_sensor_array_process_test
+                      PRIVATE volumetric_kit::recon_sensor_array)
+vr_target_warnings(recon_sensor_array_process_test)
+add_test(NAME recon_sensor_array_process
+         COMMAND recon_sensor_array_process_test)
+
 # sensor tier: the RGB-D sensor contract, implemented by a fake and driven
 # through the base class -- the no_frame/some_frame returns, poll's newest and
 # drain's oldest-first, frames that hold their pixels. Host-only.
