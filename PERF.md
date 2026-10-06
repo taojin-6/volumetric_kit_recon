@@ -90,8 +90,8 @@ kernels.
     `-O0`.
   - Read the stage rows' host and device halves. A stage whose host time
     far exceeds its device time is bound by its submits.
-  - `fuse_orbbec --rig sync.json --calibration calib.json --gpu --frames N`
-    is the headless loop.
+  - `fuse_orbbec --rig sync.json --calibration calib.json --frames N` is the
+    headless loop.
   - An Nsight Systems or Xcode capture shows the gaps between submits, with
     each kernel named by its debug-utils label.
   - On the NVIDIA home box, use the kit in `~/recon-bench`. The Mac is
@@ -191,7 +191,7 @@ is measured.
     order and carries its `tsdf`, `weight` and colour in registers, so it
     reads and writes memory once.
   - `fuse_set` in `examples/common/fuse_device_frame.hpp`, used by
-    `rig_viewer` and `fuse_orbbec --rig --gpu`.
+    `rig_viewer` and `fuse_orbbec`.
 - **Binding N buffers.** Use descriptor arrays with dynamic indexing
   (`shaderStorageBufferArrayDynamicIndexing`, an optional core 1.0 feature).
   - `Device::create` does not enable it today; see the reasoning at
@@ -478,7 +478,7 @@ improvement awaits measurement; the figures below describe the original GC.
   `jpeg_decoder.cpp:434`).
   - On NVIDIA that is 12 MB a camera a frame at 4K over PCIe, plus host
     conversion and staging.
-  - `OrbbecCaptureStats` has no field that shows it.
+  - The driver's stats had no field that showed it.
 - **Change.** Count host pictures in the stats, say it once on stderr, and
   show it on `rig_viewer`'s Rig panel.
 - **Accept.** A forced device-path failure moves the counter.
@@ -513,7 +513,8 @@ improvement awaits measurement; the figures below describe the original GC.
     import uses an opaque file descriptor.
   - Windows (D3D11VA), VAAPI on Linux, and software decoding hand pictures
     to the host, and `GpuFramePrep` stages them up.
-  - They are correct, but not resident.
+  - They are correct, but not resident. They go next: the decoders hand out
+    device pictures only (the 2026-10-06 raw-frames decision).
   - Windows would need `VK_KHR_external_memory_win32` beside the fd path.
 
 ### L1 — Shared-vertex, incremental remesh (blocked on gfx)

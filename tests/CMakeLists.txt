@@ -548,10 +548,6 @@ if(VR_WITH_ORBBEC)
   target_include_directories(
     recon_sensor_orbbec_conversion_test
     PRIVATE ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec)
-  # Without the decoders, it checks that H.265 colour is refused.
-  target_compile_definitions(
-    recon_sensor_orbbec_conversion_test
-    PRIVATE VR_TEST_HEVC=$<TARGET_EXISTS:recon_sensor_video>)
   vr_target_warnings(recon_sensor_orbbec_conversion_test)
   add_test(NAME recon_sensor_orbbec_conversion
            COMMAND recon_sensor_orbbec_conversion_test)
@@ -596,53 +592,49 @@ if(VR_WITH_ORBBEC)
            COMMAND recon_sensor_orbbec_start_order_test)
 
   # The driver's H.265 colour decoder, with no camera: the committed patch clip
-  # wrapped in SDK frames (VR_WITH_FFMPEG as well). Internal and unexported, so
-  # the test compiles its source itself.
-  if(TARGET recon_sensor_video)
-    add_executable(
-      recon_sensor_orbbec_hevc_test
-      sensor_orbbec_hevc_test.cpp
-      ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec/hevc_color.cpp
-      ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec/picture_frames.cpp
-    )
-    target_link_libraries(
-      recon_sensor_orbbec_hevc_test
-      PRIVATE volumetric_kit::recon_sensor_orbbec
-              volumetric_kit::recon_sensor_video ob::OrbbecSDK)
-    target_include_directories(
-      recon_sensor_orbbec_hevc_test
-      PRIVATE ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec)
-    target_compile_definitions(
-      recon_sensor_orbbec_hevc_test
-      PRIVATE VR_HEVC_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data/hevc"
-              VR_TEST_WITH_CUDA=$<BOOL:${VR_WITH_CUDA}>)
-    vr_target_warnings(recon_sensor_orbbec_hevc_test)
-    add_test(NAME recon_sensor_orbbec_hevc
-             COMMAND recon_sensor_orbbec_hevc_test)
+  # wrapped in SDK frames. Internal and unexported, so the test compiles its
+  # source itself.
+  add_executable(
+    recon_sensor_orbbec_hevc_test
+    sensor_orbbec_hevc_test.cpp
+    ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec/hevc_color.cpp
+    ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec/picture_frames.cpp
+  )
+  target_link_libraries(
+    recon_sensor_orbbec_hevc_test
+    PRIVATE volumetric_kit::recon_sensor_orbbec
+            volumetric_kit::recon_sensor_video ob::OrbbecSDK)
+  target_include_directories(
+    recon_sensor_orbbec_hevc_test
+    PRIVATE ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec)
+  target_compile_definitions(
+    recon_sensor_orbbec_hevc_test
+    PRIVATE VR_HEVC_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data/hevc"
+            VR_TEST_WITH_CUDA=$<BOOL:${VR_WITH_CUDA}>)
+  vr_target_warnings(recon_sensor_orbbec_hevc_test)
+  add_test(NAME recon_sensor_orbbec_hevc COMMAND recon_sensor_orbbec_hevc_test)
 
-    # The raw MJPEG colour decoder, with no camera: the committed JPEG wrapped
-    # in SDK frames.
-    add_executable(
-      recon_sensor_orbbec_jpeg_test
-      sensor_orbbec_jpeg_test.cpp
-      ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec/jpeg_color.cpp
-      ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec/picture_frames.cpp
-    )
-    target_link_libraries(
-      recon_sensor_orbbec_jpeg_test
-      PRIVATE volumetric_kit::recon_sensor_orbbec
-              volumetric_kit::recon_sensor_video ob::OrbbecSDK)
-    target_include_directories(
-      recon_sensor_orbbec_jpeg_test
-      PRIVATE ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec)
-    target_compile_definitions(
-      recon_sensor_orbbec_jpeg_test
-      PRIVATE VR_JPEG_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data/jpeg"
-              VR_TEST_WITH_CUDA=$<BOOL:${VR_WITH_CUDA}>)
-    vr_target_warnings(recon_sensor_orbbec_jpeg_test)
-    add_test(NAME recon_sensor_orbbec_jpeg
-             COMMAND recon_sensor_orbbec_jpeg_test)
-  endif()
+  # The MJPEG colour decoder, with no camera: the committed JPEG wrapped in SDK
+  # frames.
+  add_executable(
+    recon_sensor_orbbec_jpeg_test
+    sensor_orbbec_jpeg_test.cpp
+    ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec/jpeg_color.cpp
+    ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec/picture_frames.cpp
+  )
+  target_link_libraries(
+    recon_sensor_orbbec_jpeg_test
+    PRIVATE volumetric_kit::recon_sensor_orbbec
+            volumetric_kit::recon_sensor_video ob::OrbbecSDK)
+  target_include_directories(
+    recon_sensor_orbbec_jpeg_test
+    PRIVATE ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec)
+  target_compile_definitions(
+    recon_sensor_orbbec_jpeg_test
+    PRIVATE VR_JPEG_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data/jpeg"
+            VR_TEST_WITH_CUDA=$<BOOL:${VR_WITH_CUDA}>)
+  vr_target_warnings(recon_sensor_orbbec_jpeg_test)
+  add_test(NAME recon_sensor_orbbec_jpeg COMMAND recon_sensor_orbbec_jpeg_test)
 
   if(WIN32)
     # Windows resolves a DLL on PATH, not through an rpath, and the SDK is
@@ -652,11 +644,8 @@ if(VR_WITH_ORBBEC)
     # and the test cannot start. TODO(ci): no leg runs this on Windows.
     set(_vr_orbbec_tests
         recon_orbbec_sdk_smoke recon_sensor_orbbec_conversion
-        recon_sensor_orbbec_start_order recon_sensor_orbbec_sync_config)
-    if(TARGET recon_sensor_orbbec_hevc_test)
-      list(APPEND _vr_orbbec_tests recon_sensor_orbbec_hevc
-           recon_sensor_orbbec_jpeg)
-    endif()
+        recon_sensor_orbbec_start_order recon_sensor_orbbec_sync_config
+        recon_sensor_orbbec_hevc recon_sensor_orbbec_jpeg)
     set_tests_properties(
       ${_vr_orbbec_tests}
       PROPERTIES ENVIRONMENT_MODIFICATION

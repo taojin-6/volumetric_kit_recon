@@ -30,6 +30,7 @@ on:
         description: >-
           Install the pinned Orbbec SDK and build with VR_WITH_ORBBEC=ON, so
           this leg compiles cmake/vr_orbbec.cmake and runs the SDK smoke test.
+          Needs ffmpeg.
         required: false
         type: boolean
         default: false

@@ -5,6 +5,9 @@
 
 // A decoded host frame in the layout the caller asked for, through swscale.
 // Codec-neutral. Internal.
+//
+// TODO(sensor): host pictures go; the decoders hand out device pictures only
+// (the 2026-10-06 raw-frames decision).
 
 #include <optional>
 #include <vector>

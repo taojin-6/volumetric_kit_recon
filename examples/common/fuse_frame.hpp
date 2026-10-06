@@ -140,9 +140,7 @@ vkc::Status allocate_band_with(vr::volume::VoxelBlockGrid& grid,
 /// there is no scope around the loop here.
 ///
 /// @param grid     The volume to allocate into.
-/// @param depth    The depth image: a host array (`const float*`) or a device
-///                 `vkc::Buffer`, whichever `allocate_from_depth` overload the
-///                 frame's source feeds.
+/// @param depth    The host depth image, in metres.
 /// @param camera   Its camera, which drives the unprojection and the range
 ///                 gate.
 /// @param metrics  Optional stage rows (`"allocate"`, `"resize"`); null
@@ -150,10 +148,10 @@ vkc::Status allocate_band_with(vr::volume::VoxelBlockGrid& grid,
 /// @return OK once every surface block is allocated; @ref
 ///         vkc::Status::Code::OutOfMemory if the map cannot grow further or
 ///         kept overflowing after five rounds; or the tier's own error.
-template <typename Depth>
-vkc::Status allocate_band(vr::volume::VoxelBlockGrid& grid, const Depth& depth,
-                          const vr::DepthCameraParams& camera,
-                          vkc::StageMetrics* metrics) {
+inline vkc::Status allocate_band(vr::volume::VoxelBlockGrid& grid,
+                                 const float* depth,
+                                 const vr::DepthCameraParams& camera,
+                                 vkc::StageMetrics* metrics) {
   return allocate_band_with(
       grid,
       [&](vr::volume::AllocFailures* failures) {

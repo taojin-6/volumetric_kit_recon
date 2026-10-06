@@ -31,9 +31,11 @@
 #include "volumetric_kit/recon/core/camera_params.hpp"
 #include "volumetric_kit/recon/core/color_space.hpp"
 #include "volumetric_kit/recon/sensor/export.hpp"
-#include "volumetric_kit/recon/sensor/rgbd_frame.hpp"
 
 namespace volumetric_kit::recon::sensor {
+
+// TODO(sensor): ICameraCapture and CapturedFrame go when the Replica source
+// moves onto IRgbdSensor (the 2026-10-06 plan).
 
 /// @brief One posed RGB-D frame, in the shape the fusion tiers already consume.
 ///
@@ -218,29 +220,6 @@ class VR_SENSOR_API ICameraCapture {
   ///
   /// @return `true` once no further @ref poll can return a frame.
   virtual bool exhausted() const noexcept { return false; }
-
-  /// @brief Take the newest frame not yet returned as the cameras captured
-  ///        it, before undistortion and colour conversion: the @ref RgbdFrame
-  ///        `sensor/utils`'s GPU pass prepares.
-  ///
-  /// A source hands its frames out one way or the other, chosen when it is
-  /// opened, and @ref raw_frames says which, so a consumer asks once and then
-  /// polls this or @ref poll. Otherwise it is @ref poll: an empty optional is
-  /// "nothing this tick" (@ref exhausted tells the two apart), and frames are
-  /// dropped rather than queued; unlike a @ref CapturedFrame, the frame holds
-  /// its pixels (`RgbdFrame::pixels`). A source that hands out none keeps the
-  /// default.
-  /// @return The frame; an empty optional if none is ready; a device error;
-  ///         or, the default, `Status::Code::Unsupported` from a source
-  ///         that hands out no raw frames.
-  virtual core::Result<std::optional<RgbdFrame>> poll_raw() {
-    return core::Status::unsupported(
-        "ICameraCapture: this source hands out no raw frames");
-  }
-
-  /// @return `true` if this source hands its frames out through @ref poll_raw,
-  ///         and @ref poll refuses; `false`, the default, the other way round.
-  virtual bool raw_frames() const noexcept { return false; }
 
  protected:
   ICameraCapture() = default;
