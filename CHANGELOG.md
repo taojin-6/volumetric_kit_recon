@@ -112,6 +112,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
+- `mesh` / `volume`: **view-culled meshing**, which nothing called:
+  `MarchingCubes::extract_device(grid, iso, const BlockList&)`,
+  `VoxelHashMap::compact_active_blocks_in_frustum`, `volume/frustum.hpp`
+  (`FrustumPlanes`, `make_frustum_planes`) and the frustum kernel.
+  `volume::BlockList` stays for the codec. Test: `recon_volume_frustum`
+  goes.
 - **Windows and MSVC**: the MSVC compiler flags and `_MSC_VER`/`WIN32`
   branches in the build, the codec and the tests. recon builds with GCC or
   Clang on Linux, Android, macOS and iOS.

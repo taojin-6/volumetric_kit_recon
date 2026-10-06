@@ -162,7 +162,7 @@ class VR_VOLUME_API VoxelBlockGrid {
   }
 
   /// @brief Anchor a compacted block list to this grid, ready to pass to a
-  ///        consumer that meshes a subset.
+  ///        consumer of a subset, such as the codec's transform.
   ///
   /// The pairing @ref BlockList documents as a discipline, made a call instead:
   /// the pointer, the count and the epoch all come from one expression, so the
@@ -174,7 +174,7 @@ class VR_VOLUME_API VoxelBlockGrid {
   ///          and must not be reallocated under it. Call this beside the
   ///          consumer rather than caching the result.
   /// @param blocks  A compacted active set, typically straight from
-  ///                @ref VoxelHashMap::compact_active_blocks_in_frustum.
+  ///                @ref VoxelHashMap::compact_active_blocks.
   /// @return The list, stamped with this grid's current @ref topology_epoch.
   BlockList block_list(const std::vector<BlockIndex>& blocks) const noexcept {
     return BlockList{blocks.data(), static_cast<std::uint32_t>(blocks.size()),

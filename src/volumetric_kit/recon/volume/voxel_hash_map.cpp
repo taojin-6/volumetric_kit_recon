@@ -26,7 +26,6 @@
 #include "hash_allocate_points_comp.spv.hpp"
 #include "hash_allocate_triangles_comp.spv.hpp"
 #include "hash_compact_comp.spv.hpp"
-#include "hash_compact_frustum_comp.spv.hpp"
 #include "hash_delete_coords_comp.spv.hpp"
 #include "hash_init_comp.spv.hpp"
 #include "hash_rehash_comp.spv.hpp"
@@ -178,10 +177,6 @@ core::Result<VoxelHashMap> VoxelHashMap::create(core::Device& device,
   // resized bundle.
   VKC_ASSIGN(map.camera_params_,
              core::device_storage_buffer(allocator, sizeof(DepthCameraParams)));
-  // Frustum planes for compact_active_blocks_in_frustum: likewise a small
-  // (96 B), fixed-size buffer, persisted at binding 3 of compact_frustum_.set.
-  VKC_ASSIGN(map.frustum_planes_,
-             core::device_storage_buffer(allocator, sizeof(FrustumPlanes)));
 
   // A 1-D dispatch's groupCountX is capped by maxComputeWorkGroupCount[0] (>=
   // 65535 guaranteed); cache it so every dispatch can reject an over-large
@@ -203,9 +198,8 @@ core::Result<VoxelHashMap> VoxelHashMap::create(core::Device& device,
   // Every kernel pushes the shared PushConstants block. allocate-from-coords
   // and -from-points have the same 7-binding shape but each owns its kernel;
   // depth adds the camera-params buffer at binding 6 (8 bindings), delete its
-  // done flags there; frustum compaction adds the planes buffer at binding 3 (4
-  // bindings). The stamps go last in every kernel that writes them: init's 4,
-  // the allocators' and delete's after their own inputs.
+  // done flags there. The stamps go last in every kernel that writes them:
+  // init's 4, the allocators' and delete's after their own inputs.
   VkPushConstantRange push{};
   push.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
   push.offset = 0;
@@ -231,9 +225,6 @@ core::Result<VoxelHashMap> VoxelHashMap::create(core::Device& device,
   VKC_TRY(kb.add(map.triangles_, "hash_allocate_triangles",
                  vr_hash_allocate_triangles_comp_spv,
                  vr_hash_allocate_triangles_comp_spv_size, 9, &push));
-  VKC_TRY(kb.add(map.compact_frustum_, "hash_compact_frustum",
-                 vr_hash_compact_frustum_comp_spv,
-                 vr_hash_compact_frustum_comp_spv_size, 4, &push));
   VKC_TRY(kb.add(map.rehash_, "hash_rehash", vr_hash_rehash_comp_spv,
                  vr_hash_rehash_comp_spv_size, 6, &push));
   VKC_ASSIGN(map.pool_, kb.build());
@@ -284,15 +275,6 @@ void VoxelHashMap::write_persistent_bindings() {
   compact_.set.write_storage_buffer(1, compacted_.handle(), 0, VK_WHOLE_SIZE);
   compact_.set.write_storage_buffer(2, active_count_.handle(), 0,
                                     VK_WHOLE_SIZE);
-  // Frustum compaction shares the compaction output + counter with plain
-  // compact; its planes buffer (binding 3) is persistent, rewritten per call.
-  compact_frustum_.set.write_storage_buffer(0, entries, 0, VK_WHOLE_SIZE);
-  compact_frustum_.set.write_storage_buffer(1, compacted_.handle(), 0,
-                                            VK_WHOLE_SIZE);
-  compact_frustum_.set.write_storage_buffer(2, active_count_.handle(), 0,
-                                            VK_WHOLE_SIZE);
-  compact_frustum_.set.write_storage_buffer(3, frustum_planes_.handle(), 0,
-                                            VK_WHOLE_SIZE);
 
   // Name each buffer for a GPU capture, here rather than at create: this runs
   // on every path that swaps a buffer in -- create AND each resize commit --
@@ -312,7 +294,6 @@ void VoxelHashMap::write_persistent_bindings() {
         {active_count_.handle(), "hash.active_count"},
         {stamps, "hash.stamps"},
         {camera_params_.handle(), "hash.camera_params"},
-        {frustum_planes_.handle(), "hash.frustum_planes"},
     };
     for (const auto& entry : named) {
       device_->set_object_name(VK_OBJECT_TYPE_BUFFER,
@@ -724,9 +705,7 @@ core::Result<std::uint32_t> VoxelHashMap::remove(const core::Buffer& coords,
 }
 
 core::Result<std::uint32_t> VoxelHashMap::compact_into_device_list(
-    const core::ComputeKernel& kernel, core::GpuStageScope* stage,
-    const std::function<core::Status(core::CommandBatch&)>& prepare,
-    BlockIndex* head, std::uint32_t head_count) {
+    core::GpuStageScope* stage, BlockIndex* head, std::uint32_t head_count) {
   // The active set is at most num_blocks entries; the persistent output buffer
   // is sized to that upper bound, so no grow/retry is needed for this slice.
   const auto capacity = static_cast<std::uint32_t>(grid_.num_blocks);
@@ -734,11 +713,8 @@ core::Result<std::uint32_t> VoxelHashMap::compact_into_device_list(
   ++compaction_serial_;  // before the submit, which may have run in part
   std::uint32_t count = 0;
   core::CommandBatch batch(*device_, *allocator_);
-  if (prepare) {
-    VKC_TRY(prepare(batch));
-  }
   VKC_TRY(batch.fill(active_count_, 0, sizeof(count), 0u));
-  VKC_TRY(batch.dispatch(kernel, &push, sizeof(push),
+  VKC_TRY(batch.dispatch(compact_, &push, sizeof(push),
                          group_count(total_entries()), max_workgroup_count_x_,
                          stage));
   VKC_TRY(batch.readback(active_count_, 0, sizeof(count), &count));
@@ -749,22 +725,20 @@ core::Result<std::uint32_t> VoxelHashMap::compact_into_device_list(
 }
 
 core::Result<std::vector<BlockIndex>> VoxelHashMap::collect_compacted(
-    const core::ComputeKernel& kernel, std::uint32_t& last_count,
-    core::GpuStageScope* stage,
-    const std::function<core::Status(core::CommandBatch&)>& prepare) {
+    core::GpuStageScope* stage) {
   // The list comes back beside its count, as far as a guess a quarter past
-  // this kernel's last count, so a set that has not outgrown it costs one
+  // the last count, so a set that has not outgrown it costs one
   // submit rather than two (0.38 ms each on an RTX 5090).
   // TODO(volume): size the fuse's and the extract's dispatches on the device,
   // so no count reaches the host either.
   const std::uint32_t guess =
       static_cast<std::uint32_t>(std::min<std::uint64_t>(
-          grid_.num_blocks, std::uint64_t(last_count) + last_count / 4));
+          grid_.num_blocks,
+          std::uint64_t(last_active_count_) + last_active_count_ / 4));
   std::vector<BlockIndex> active(guess);
-  VKC_ASSIGN(
-      const std::uint32_t count,
-      compact_into_device_list(kernel, stage, prepare, active.data(), guess));
-  last_count = count;
+  VKC_ASSIGN(const std::uint32_t count,
+             compact_into_device_list(stage, active.data(), guess));
+  last_active_count_ = count;
   active.resize(count);
   if (count > guess) {
     // It outgrew the guess: the rest in a second submit.
@@ -800,7 +774,7 @@ core::Result<std::vector<BlockIndex>> VoxelHashMap::compact_active_blocks(
     return core::Status::invalid_argument(
         "VoxelHashMap::compact_active_blocks: moved-from map");
   }
-  return collect_compacted(compact_, last_active_count_, &stage);
+  return collect_compacted(&stage);
 }
 
 core::Result<DeviceBlockList> VoxelHashMap::compact_active_blocks_on_device(
@@ -813,8 +787,7 @@ core::Result<DeviceBlockList> VoxelHashMap::compact_active_blocks_on_device(
     return core::Status::invalid_argument(
         "VoxelHashMap::compact_active_blocks_on_device: moved-from map");
   }
-  VKC_ASSIGN(const std::uint32_t count,
-             compact_into_device_list(compact_, &stage));
+  VKC_ASSIGN(const std::uint32_t count, compact_into_device_list(&stage));
   last_device_list_ = DeviceBlockList{&compacted_, count, topology_epoch_,
                                       compaction_serial_, heap_free_};
   return last_device_list_;
@@ -848,34 +821,6 @@ core::Status VoxelHashMap::check_device_block_list(const DeviceBlockList& list,
         "resized, removed or cleared since");
   }
   return {};
-}
-
-core::Result<std::vector<BlockIndex>>
-VoxelHashMap::compact_active_blocks_in_frustum(const FrustumPlanes& planes,
-                                               core::StageMetrics* metrics) {
-  core::GpuStageScope stage(metrics, gpu_timer_, active_set_row(metrics));
-  if (!valid()) {
-    return core::Status::invalid_argument(
-        "VoxelHashMap::compact_active_blocks_in_frustum: moved-from map");
-  }
-  // The six planes are per-call; they go inline into the persistent buffer
-  // bound once at binding 3 of the frustum set (like camera_params_).
-  return collect_compacted(compact_frustum_, last_frustum_count_, &stage,
-                           [&](core::CommandBatch& batch) {
-                             return batch.upload(frustum_planes_, 0,
-                                                 planes.data(),
-                                                 sizeof(FrustumPlanes));
-                           });
-}
-
-core::Result<std::vector<BlockIndex>>
-VoxelHashMap::compact_active_blocks_in_frustum(const DepthCameraParams& camera,
-                                               core::StageMetrics* metrics) {
-  return compact_active_blocks_in_frustum(
-      make_frustum_planes(camera.fx, camera.fy, camera.cx, camera.cy,
-                          camera.width, camera.height, camera.min_depth,
-                          camera.max_depth, camera.cam_to_world),
-      metrics);
 }
 
 core::Status VoxelHashMap::clear() {

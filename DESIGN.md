@@ -769,7 +769,7 @@ bracket, so no `gpu_ms` measures the markers around the work.
 ### volume
 
 `VoxelHashMap` drives init / allocate-from-coords, -depth,
--points, -triangles / remove / compact / compact-in-frustum / resize as GLSL
+-points, -triangles / remove / compact / resize as GLSL
 kernels
 (`volume/shaders/hash_*.comp`) over the scalar-block-layout ABI. Depth
 allocation unprojects a posed frame and dilates each surface block into the
@@ -789,23 +789,10 @@ so mesh-to-SDF evaluates the field with the same function. That pass is the
 public `triangle_candidate_offsets`, and the decode and band test are
 `volume/shaders/triangle_candidates.glsl`: `tsdf`'s mesh integrator bins over
 both, so the blocks allocated and the blocks binned cannot drift apart.
-Frustum-culled compaction gives the per-frame working set, from a depth
-camera's pinhole
-intrinsics or — since 2026-08-12 — from a *render* camera's `view_proj`, whose
-planes are read off the matrix itself and so hold for any handedness, provided
-depth maps to `[0, 1]` (gfx's convention; a GL matrix puts the near plane at
-the harmonic mean `2nf/(n+f)`, over-culling a shell about one near-distance
-thick — pinned by a block that lies inside it). That
-overload's `margin_m` widens every plane **except the near one** by a distance
-in metres, applied after normalizing, for a consumer whose cull runs a few
-frames behind its draw; widening near too would move it behind the eye at
-`margin_m > z_near` and admit a cone of geometry behind the camera. A
-degenerate or non-finite matrix leaves its planes unnormalized and unwidened,
-so the cull degrades to keeping blocks rather than dropping them.
-The result travels as a `BlockList` — pointer, count, and the
+A compacted list travels as a `BlockList` — pointer, count, and the
 `topology_epoch` it was compacted at, paired by `VoxelBlockGrid::block_list`
-so the three cannot be mispaired — which is what `mesh` meshes a subset
-from. `resize` preserves block indices,
+so the three cannot be mispaired — which is what the `codec` transforms.
+(Frustum-culled compaction went with view-culled meshing, 2026-10-06.) `resize` preserves block indices,
 so per-voxel data survives a grow. `VoxelBlockGrid` composes the map with
 independently-allocated SoA attribute arrays (`tsdf`, `weight`, `color`, …),
 each `num_blocks·voxels_per_block`, so a consumer materialises only what it
@@ -967,32 +954,7 @@ the spans on, the span table up to the highest active slot, into the host
 copy `block_spans()` returns. With the spans off the
 active list never reaches the host: the extract compacts onto the device,
 or takes the fuse's list back from the map, and binds it in place
-(2026-09-30). An
-`extract_device` overload meshes a
-caller-supplied `volume::BlockList` instead of compacting the whole map —
-what a camera's frustum-culled set arrives as, though nothing in the extractor
-knows a frustum produced it (2026-08-12). The arena is rebuilt from that
-dispatch alone, so a block outside the list costs no triangles and no *live*
-bytes — the arena is grow-only, so one full extract sizes it for the whole set
-and it never shrinks back;
-the surface does not hole at the cull edge, since the on-device probe still
-resolves neighbours that were never dispatched; the list is refused if its
-`topology_epoch` has moved (a LIFO-reused `ptr` being a lie that meshes
-cleanly), if it holds more blocks than the heap has slots, or if it is null
-with a count — all three `VoxelBlockGrid::check_block_list`, which `codec`
-shares, and all three above the slot claim, so a refusal is a **rollback**
-and an outstanding `DeviceMesh` survives it; and `compact_ms` reads 0 while
-every row that scales with the active set shrinks with it (`readback_ms` and
-`descriptor_ms` are per-call constants and do **not**). The list must be
-duplicate-free — unchecked, and a repeat emits the block twice and races its
-span — and is built by `VoxelBlockGrid::block_list`, whose rvalue overload
-is deleted so a temporary compaction cannot leave it dangling.
-Offered on `extract_device` **only** — an incremental pass keeps the triangles
-of blocks it does not re-mesh, so culling would leave them drawn and give the
-arena win back. *Alternating* the two is safe, though: a culled pass publishes
-no `arena_state_` (and records no density, a culled set being denser per block
-than the map it came from), so the next incremental request falls back to a
-full extract and reports it. `share_vertices` selects a second
+(2026-09-30). `share_vertices` selects a second
 compiled kernel that indexes in-block vertices — 3.4x fewer on room0, and
 textured like any other mesh since the `texture` tier moved to a per-vertex
 verdict (2026-08-11). `DeviceMesh::shares_vertices` still publishes it,
@@ -1576,16 +1538,8 @@ claimed slot); and the ~4x win the 2026-08-09 entry sized it for is **still
 unmeasured**, because room0 re-meshes 81.67% of its blocks per window and so
 caps at ~1.22x. The iPad's 25% dirty rate is where the number lives, and
 `fuse_replica --incremental` now reports `incremental` / `remeshed_blocks` so a
-run cannot quietly measure the fallback instead. Beside it: **view-culled meshing has landed as a
-library API and has no in-tree consumer yet** — `extract_device` takes a
-`volume::BlockList`, `make_frustum_planes` takes a `view_proj`, and what is
-missing is a caller that culls: `fuse_viewer` would have to publish its render
-camera across the fusion-thread boundary, and the scanner that motivates it
-lives in `volumetric_kit_ios` — a `TODO(mesh)` on the overload. So the win is
-correct and unquantified — expect it roughly linear in the visible fraction on
-the `ExtractTimings` rows that scale with the active set (the upload, the
-dispatch, the arena; `readback_ms` and `descriptor_ms` are per-call constants
-and will read flat), and quote nothing until a run says so. Beside that:
+run cannot quietly measure the fallback instead. View-culled meshing was retired for want of a caller
+that culls (2026-10-06); it returns with its first one, and a measurement. Beside that:
 first-class glTF/GLB export in `io` and the gfx-vertex converter. PLY export
 has moved from the example into the validated I/O module. On `mesh`, the greppable
 `TODO(mesh)`s: cross-block vertex sharing, per-vertex normals, extending

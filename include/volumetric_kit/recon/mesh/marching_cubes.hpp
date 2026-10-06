@@ -67,7 +67,7 @@ struct ExtractTimings {
   /// Compacting the hash map's active block list (a dispatch + readback), near
   /// zero when the map's last device list still holds (spans off).
   double compact_ms = 0.0;
-  /// With a host list (the spans on, or a caller's subset), allocating the
+  /// With a host list (the spans on), allocating the
   /// active-block input buffer and staging the list, whose copy runs in
   /// @ref dispatch_ms's submit. Near zero otherwise: the device list is bound
   /// in place.
@@ -109,8 +109,7 @@ struct ExtractTimings {
   /// `false` for every @ref MarchingCubes::extract_device call, and for an
   /// @ref MarchingCubes::extract_device_incremental one that could not make
   /// the trade soundly -- the first extract against a grid, a topology change,
-  /// a preceding culled extract, a
-  /// @ref MarchingCubesConfig::slot_count above one, an arena that had to
+  /// a @ref MarchingCubesConfig::slot_count above one, an arena that had to
   /// grow, or an iso other than the last extract's. Each of those is
   /// invisible to the caller and each turns the feature off *permanently*
   /// (a config flag) or *silently* (a fallback), so the answer is reported
@@ -465,9 +464,9 @@ static_assert(std::is_trivially_copyable_v<BlockSpan>,
 /// - **Live** -- @ref extract_device returns a borrowed `Device`Mesh the
 ///   renderer draws straight out of, with no host round trip, and the caller
 ///   releases slots by generation through @ref release_through as its frames
-///   retire. @ref extract_device_incremental and the
-///   @ref volume::BlockList overload are modes of this one, not separate
-///   workflows. @ref download bridges the two for a caller that wants both.
+///   retire. @ref extract_device_incremental is a mode of this one, not a
+///   separate workflow. @ref download bridges the two for a caller that wants
+///   both.
 ///
 /// The split is the destination, which is why the return types differ:
 /// @ref Mesh owns its vertices, `Device`Mesh names buffers this extractor
@@ -822,16 +821,7 @@ class VR_MESH_API MarchingCubes {
   ///   where a full pass is what compacts the retired triangles away;
   /// - @ref MarchingCubesConfig::slot_count above one (see the `TODO(mesh)`
   ///   above this class), since the retained triangles are in the slot the
-  ///   *last* extract filled and a ring hands this one a different slot;
-  /// - a **preceding culled extract** -- the
-  ///   @ref extract_device(volume::VoxelBlockGrid&, float,
-  ///   const volume::BlockList&, ExtractTimings*) overload -- which rebuilt the
-  ///   arena from the blocks the caller named and so wrote spans for only
-  ///   those. Every other block still holds a range describing the arena that
-  ///   pass replaced, which is exactly what an incremental one would re-mesh
-  ///   against, so a culled pass publishes no state for the next call to trust.
-  ///   Alternating the two entry points is therefore *safe* and costs one full
-  ///   extract per switch; it is not a combination to avoid.
+  ///   *last* extract filled and a ring hands this one a different slot.
   ///
   /// Which one it got is reported as @ref ExtractTimings::incremental, beside
   /// the @ref ExtractTimings::remeshed_blocks that says how much it saved.
@@ -896,124 +886,6 @@ class VR_MESH_API MarchingCubes {
   ///         call still invalidates an earlier `Device`Mesh).
   core::Result<DeviceMesh> extract_device(volume::VoxelBlockGrid& grid,
                                           float iso = 0.0f,
-                                          ExtractTimings* timings = nullptr);
-
-  /// @brief Extract as @ref extract_device does, but mesh only @p blocks --
-  ///        the caller's own compacted subset of the grid's active set.
-  ///
-  /// The motivating subset is a camera's: @ref
-  /// volume::VoxelHashMap::compact_active_blocks_in_frustum culls the active
-  /// set to what a view can see, and a scanning device that renders a small
-  /// part of a large volume then meshes only that part. Nothing here is
-  /// specific to a frustum, though -- a region of interest, a chunk queue or a
-  /// level-of-detail selection are the same call.
-  ///
-  /// This is the *only* difference from @ref extract_device: the set arrives
-  /// instead of being compacted, so @ref ExtractTimings::compact_ms reads 0 and
-  /// every phase that scales with the active set shrinks with it. The arena is
-  /// rebuilt from this dispatch alone, so a block outside @p blocks contributes
-  /// no triangles to the mesh and no *live bytes* to the arena -- which is what
-  /// makes this worth doing on a memory-bound device, rather than only a
-  /// cheaper dispatch.
-  ///
-  /// @note "No live bytes", not "no bytes". The arena is retained and
-  ///       grow-only (see the @ref MarchingCubes note on the ring), so culling
-  ///       lowers what the arena *holds*, never what it has already reserved:
-  ///       one full extract -- a warm-up frame, a pose that is not ready yet,
-  ///       or any of the documented fallbacks above -- sizes it for the whole
-  ///       active set and it stays that size. Cull from the first extract to
-  ///       get the resident figure, and read @ref ExtractTimings::arena_bytes
-  ///       rather than assuming it.
-  ///
-  /// @note Two @ref ExtractTimings rows do **not** shrink with the set, so the
-  ///       cull will look partly ineffective if they are read as if they did:
-  ///       @ref ExtractTimings::readback_ms reads near zero on this path
-  ///       and @ref ExtractTimings::descriptor_ms is a fixed set of descriptor
-  ///       writes, both per-call constants. What scales is the upload, the
-  ///       dispatch, the arena, and whatever draws or textures the result.
-  ///
-  /// @note The mesh does **not** hole at the cull boundary. The kernel resolves
-  ///       each block's 2x2x2 neighbourhood by probing the hash table
-  ///       on-device, so a block on the edge of @p blocks still samples correct
-  ///       corner values out of neighbours that were never dispatched; the
-  ///       surface simply ends there. A host-built neighbour table -- what this
-  ///       tier used before the 2026-08-08 decision -- could not have done
-  ///       this.
-  ///
-  /// @note Culling does not make the *compaction* cheaper. The frustum kernel
-  ///       still scans every hash-table slot; what shrinks is the readback, the
-  ///       upload, this dispatch, the arena, and whatever draws or textures the
-  ///       result.
-  ///
-  /// @warning Deliberately **not** offered on @ref
-  ///          extract_device_incremental, and the two do not compose today: an
-  ///          incremental pass keeps the triangles of every block it does not
-  ///          re-mesh, and a block outside @p blocks is simply not dispatched,
-  ///          so it would keep its geometry below the watermark and go on being
-  ///          drawn. That is not wrong, but it gives back the arena and draw
-  ///          savings and leaves only the dispatch one -- so the two are kept
-  ///          as separate answers to the same cost rather than stacked.
-  ///          *Alternating* them across calls is safe: this overload publishes
-  ///          no arena state, so the next incremental request falls back to a
-  ///          full extract and says so (see @ref extract_device_incremental's
-  ///          fallback list).
-  ///
-  /// @warning @p blocks must not name the same block twice. Nothing checks it
-  ///          -- a duplicate is something the caller can see and a set-wise
-  ///          test is O(count) of host work per frame -- and the consequence is
-  ///          silent: one workgroup is dispatched per entry, each reserves its
-  ///          own arena range, so the block's surface is emitted twice
-  ///          (coincident geometry, z-fighting, double the arena) and the two
-  ///          race to write its span, leaving the loser's range live but
-  ///          undescribed. The internal producers cannot emit one; a caller
-  ///          unioning two cameras' compactions must merge them first.
-  ///
-  /// @param grid     The sparse volume to mesh, as @ref extract_device takes
-  ///                 it.
-  /// @param iso      The iso-value to extract at (0 for a TSDF surface).
-  /// @param blocks   The blocks to mesh: a subset of @p grid's active set,
-  ///                 duplicate-free, and anchored to @p grid -- build it with
-  ///                 @ref volume::VoxelBlockGrid::block_list rather than
-  ///                 assembling the triple by hand. Read for the duration of
-  ///                 this call and not retained. An empty list is legal and
-  ///                 meshes nothing, exactly as an empty map does -- including
-  ///                 a default-constructed one, which is exempt from the epoch
-  ///                 check because it names no block.
-  /// @param timings  As @ref extract_device, except @ref
-  ///                 ExtractTimings::compact_ms is 0 and @ref
-  ///                 ExtractTimings::active_blocks reports @p blocks's count --
-  ///                 which is the instrument that says what the cull bought.
-  /// @return The mesh in this extractor's device buffers, borrowed exactly as
-  ///         @ref extract_device's is, or that overload's `Status`, plus
-  ///         `Status::Code::InvalidArgument` when @p blocks is internally
-  ///         inconsistent (a null pointer with a non-zero count), holds more
-  ///         blocks than @p grid's heap has slots, or was compacted against a
-  ///         topology @p grid has since left behind. The last is refused rather
-  ///         than meshed: the block heap is LIFO, so a `remove()` since the
-  ///         compaction has handed those block pointers to different blocks,
-  ///         and the extract would silently mesh whatever voxels now live
-  ///         there.
-  ///
-  ///         All three are checked before this call claims anything, so --
-  ///         unlike the failures @ref extract_host's `@warning` describes --
-  ///         they
-  ///         **are** a rollback: no output slot is claimed, no generation is
-  ///         bumped, and every outstanding `Device`Mesh stays exactly as
-  ///         valid as it was. That matters because a consumer culling a frame
-  ///         behind hits the epoch refusal on every frame after a `remove()`,
-  ///         and having to re-extract and redraw on each one would cost more
-  ///         than the cull saves.
-  // TODO(mesh): no in-tree consumer culls yet, so the win is correct and
-  // unquantified. fuse_viewer is the natural one and needs its render camera
-  // published across the fusion-thread boundary; the scanner that motivates it
-  // lives in volumetric_kit_ios.
-  // TODO(mesh): does not compose with extract_device_incremental. Alternating
-  // them is safe (a culled pass publishes no arena state, so the next
-  // incremental one falls back), but a pass that is both culled AND incremental
-  // would need the retained triangles of the blocks it did not dispatch.
-  core::Result<DeviceMesh> extract_device(volume::VoxelBlockGrid& grid,
-                                          float iso,
-                                          const volume::BlockList& blocks,
                                           ExtractTimings* timings = nullptr);
 
   /// @brief Copy a `Device`Mesh's live vertices + indices into a host
@@ -1385,13 +1257,6 @@ class VR_MESH_API MarchingCubes {
   // wrapper arms and disarms, so no exception unwinding out of here can leave
   // the plain extract_device asking for one.
   //
-  // @p blocks is null when this call compacts the whole active set itself (onto
-  // the device with the spans off, else to the host), and points at the
-  // caller's subset otherwise -- borrowed for this call alone, and a parameter
-  // for the same reason: it is a bare host pointer into a std::vector the
-  // caller owns, so latching it on the extractor would leave a dangling read
-  // for the NEXT extract rather than a stale one for this.
-  //
   // Whether the pass is actually incremental is decided HERE, not by which
   // entry point was called: every clause is something the caller cannot see.
   //
@@ -1401,7 +1266,6 @@ class VR_MESH_API MarchingCubes {
   // to grep. See kEntryHost in the .cpp.
   core::Result<DeviceMesh> extract_device_impl(volume::VoxelBlockGrid& grid,
                                                float iso, bool incremental,
-                                               const volume::BlockList* blocks,
                                                ExtractTimings* timings,
                                                const char* entry);
 

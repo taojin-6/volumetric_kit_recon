@@ -363,14 +363,13 @@ void main() {
   }
   BlockIndex block = active_blocks[block_i];
 
-  // A caller-supplied active set can name a block slot this grid never handed
-  // out: the host bounds the LIST LENGTH in O(1), but bounding every ptr is
-  // O(count) of host work per frame, which the extract deliberately does not
-  // spend. Left unbounded, a fabricated ptr is an out-of-bounds STORE into
-  // block_spans below, not merely a read of the wrong voxels -- and
-  // robustBufferAccess is enabled nowhere in this repo. The condition is
-  // uniform across the workgroup (every thread reads the same `block`), so this
-  // returns as a whole group and reaches no barrier divergently.
+  // The map's own compaction names only slots it handed out, but an
+  // out-of-range ptr would be an out-of-bounds STORE into block_spans below,
+  // not merely a read of the wrong voxels, and robustBufferAccess is enabled
+  // nowhere in this repo, so it is bounded here for one comparison. The
+  // condition is uniform across the workgroup (every thread reads the same
+  // `block`), so this returns as a whole group and reaches no barrier
+  // divergently.
   if (block.ptr < 0 ||
       uint(block.ptr) / uint(pc.voxels_per_block) >= pc.num_block_slots) {
     return;

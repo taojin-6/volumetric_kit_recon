@@ -71,7 +71,6 @@ vr_embed_shaders(
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/hash_allocate_points.comp"
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/hash_allocate_triangles.comp"
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/hash_compact.comp"
-  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/hash_compact_frustum.comp"
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/hash_delete_coords.comp"
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/hash_rehash.comp")
 

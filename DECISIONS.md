@@ -368,6 +368,9 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-06**](#2026-10-06--platforms-linux-android-macos-and-ios-with-gcc-or-clang-windows-and-msvc-are-not-supported-amends-the-2026-06-21-vulkan-path-entry) —
   Platforms: Linux, Android, macOS and iOS, with GCC or Clang; Windows and
   MSVC are not supported.
+- [**2026-10-06**](#2026-10-06--view-culled-meshing-is-retired-until-a-caller-culls-frustum-compaction-and-the-blocklist-extract-overload-go-amends-2026-08-12) —
+  View-culled meshing is retired until a caller culls: frustum compaction and
+  the `BlockList` extract overload go.
 
 ## Decision record
 
@@ -3169,6 +3172,9 @@ everything relocates there for reasons unrelated to this. Marked `TODO(mesh)`
 at the span write.
 
 ### 2026-08-12 — Meshing a camera's view is a caller-supplied block list, not a camera the mesh tier holds; and it stays apart from incremental extraction rather than stacking with it.
+
+*Amended 2026-10-06 (below):* retired, with frustum compaction, for want of a
+caller; the shape argued here is the one to restore with the first.
 
 A scanning device renders a small part of a large volume — the iPad case, where
 the viewport shows a room corner while the map holds the whole floor. Meshing
@@ -10158,6 +10164,32 @@ of `vr_target_warnings`, `VR_SANITIZE`'s MSVC refusal, `/EHsc` and `/w` in
 codec's `_BitScanReverse64`. (The video decoders' `D3d11va` went with the
 back-end selection, in the device-only decoder entry.) Supporting Windows
 would be a new decision, landing with its CI leg -- and the core's.
+
+### 2026-10-06 — View-culled meshing is retired until a caller culls: frustum compaction and the `BlockList` extract overload go (amends 2026-08-12).
+
+**The rule.** `MarchingCubes::extract_device(grid, iso, const BlockList&)`,
+`VoxelHashMap::compact_active_blocks_in_frustum` (both overloads),
+`volume/frustum.hpp` and `hash_compact_frustum.comp` go, with the frustum
+kernel and planes buffer every `VoxelHashMap::create` built, the `blocks`
+plumbing through `extract_device_impl`, and their tests
+(`recon_volume_frustum`, the culled cases of `recon_mesh_sparse` and
+`recon_tier_stage_metrics`). `volume::BlockList`, `VoxelBlockGrid::block_list`
+and `check_block_list` stay: the codec's transform takes them.
+
+**Why.** Nothing culled. No example, gfx, calib or the iOS scanner called the
+overload or the frustum compaction. The 2026-08-12 entry left the win
+unquantified and the API waiting for a consumer, which
+this repository no longer keeps code for. What it cost: a kernel and a
+buffer in every hash map, two clauses in the incremental predicate and the
+arena-state publication that existed only to keep a culled pass from
+poisoning the next incremental one, and about 900 lines with tests.
+
+**Restoring it.** The 2026-08-12 shape still holds -- the set arrives, the
+camera does not -- and returns with its first caller and a measurement of
+the rows that scale with the active set.
+
+**Validation.** Apple M5 Max, macOS, Release with warnings as errors, Orbbec
+and FFmpeg: the 53 tests pass with `VR_TEST_HEVC_BACKEND=videotoolbox`.
 
 ## Measured lessons
 

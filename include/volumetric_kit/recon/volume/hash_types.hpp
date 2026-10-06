@@ -99,8 +99,7 @@ constexpr bool tick_after(std::uint32_t a, std::uint32_t b) noexcept {
 ///        pass should run over -- borrowed from whoever compacted it.
 ///
 /// Non-owning: it names the caller's storage, typically the `std::vector` from
-/// @ref VoxelHashMap::compact_active_blocks or
-/// @ref VoxelHashMap::compact_active_blocks_in_frustum, and a consumer reads it
+/// @ref VoxelHashMap::compact_active_blocks, and a consumer reads it
 /// for the duration of the call it is passed to and does not retain it.
 ///
 /// @ref epoch is what makes the list safe to carry away from the map that
@@ -127,10 +126,10 @@ constexpr bool tick_after(std::uint32_t a, std::uint32_t b) noexcept {
 struct BlockList {
   /// The compacted blocks. Null only when @ref count is 0.
   const BlockIndex* blocks = nullptr;
-  /// How many blocks @ref blocks addresses. Zero is a legal empty set (a
-  /// camera looking at nothing), not an error -- and an empty list names no
+  /// How many blocks @ref blocks addresses. Zero is a legal empty set, not an
+  /// error -- and an empty list names no
   /// block, so it is exempt from the @ref epoch check a consumer makes. That is
-  /// what lets a default-constructed `BlockList{}` mean "nothing visible"
+  /// what lets a default-constructed `BlockList{}` mean "nothing"
   /// rather than being refused for carrying an epoch (0) no live grid has.
   std::uint32_t count = 0;
   /// The @ref VoxelBlockGrid::topology_epoch the list was compacted at.

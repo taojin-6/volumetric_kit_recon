@@ -191,17 +191,6 @@ vr_target_warnings(recon_volume_allocate_triangles_test)
 add_test(NAME recon_volume_allocate_triangles
          COMMAND recon_volume_allocate_triangles_test)
 
-# volume frustum-culled compaction: allocate blocks at known world positions
-# (one dead-centre, others behind / beyond-far / off to the side), then verify
-# compact_active_blocks_in_frustum returns only the in-view block while plain
-# compaction returns all -- proving the plane math + the on-device AABB cull.
-# Skips (exit 0) where no device is present.
-add_executable(recon_volume_frustum_test volume_frustum_test.cpp)
-target_link_libraries(recon_volume_frustum_test
-                      PRIVATE volumetric_kit::recon_volume Vulkan::Vulkan)
-vr_target_warnings(recon_volume_frustum_test)
-add_test(NAME recon_volume_frustum COMMAND recon_volume_frustum_test)
-
 # Sparse marching cubes: mesh an analytic sphere written into a real multi-block
 # VoxelBlockGrid, exercising cross-block neighbour sampling, and prove the same
 # field meshes identically however it is divided into blocks. Skips (exit 0)
