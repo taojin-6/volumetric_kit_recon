@@ -76,9 +76,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   counts one, not `lost`.
 - `sensor/orbbec`: **every frame is handed out as captured**, for the GPU
   pass. `OrbbecRig` is no longer an `ICameraCapture`: its one read is
-  `poll_set`, formerly `poll_raw_set`, handing out an `OrbbecRigSet` (formerly
-  `OrbbecRigRawSet`) of `RgbdFrame`s, and `color_camera(i)` is the colour
-  camera's factory `camera::CameraModel`, its pose `color_to_world(i)`. The
+  `poll_set`, formerly `poll_raw_set`, handing out an `OrbbecRigSet` of
+  `RgbdFrame`s, and `color_camera(i)` is the colour camera's factory
+  `camera::CameraModel`, its pose `color_to_world(i)`. `OrbbecRigSet` is no
+  longer a template: what was `OrbbecRigSet<RgbdFrame>` (`OrbbecRigRawSet`) is
+  plain `OrbbecRigSet`, and `OrbbecRigFrameSet` is gone. A colour camera is
+  read off the H.265 or MJPG mode streamed, no longer the RGB mode, so `open`
+  no longer refuses a camera whose two modes' calibrations differ. The
   shared types move out of `orbbec_capture.hpp`: `OrbbecStreamOptions`,
   `OrbbecDeviceInfo`, `OrbbecColorCodec` and `OrbbecStreamStats` (formerly
   `OrbbecCaptureStats`) to `orbbec_stream.hpp`, and `OrbbecSyncMode`,

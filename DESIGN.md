@@ -1139,12 +1139,12 @@ options, the camera's report, and its counters (`OrbbecStreamStats`).
 `HevcColorDecoder` decodes every colour frame, in order, ahead of the
 mailbox, as BT.601 full range unless the stream names its matrix, and posts
 the picture with its depth, so everything after is MJPEG's path. A frame's
-colour camera is read off the RGB mode's profile, whose calibration `open`
-holds to be the wire mode's, byte for byte. The SDK hands over every colour frame, depth or not; a
-pair without depth is dropped after decoding. A gap in the frame index, or
-an empty frame, waits for the next key frame, where the decoder is reset;
-pictures come out in display order, each settling its own pair. All of it
-is counted in `stats().lost` (the 2026-09-28 decision).
+colour camera is read off the profile of the mode streamed. The SDK hands
+over every colour frame, depth or not; a pair without depth is dropped
+after decoding. A gap in the frame index, or an empty frame, waits for the
+next key frame, where the decoder is reset; pictures come out in display
+order, each settling its own pair. All of it is counted in `stats().lost`
+(the 2026-09-28 decision).
 **`sensor/video`'s `HevcDecoder`** (`VR_WITH_FFMPEG`) decodes H.265 access
 units to host pictures, `Rgb24` or the `Yuv420` planes with their matrix
 and range, plus the stream's transfer and primaries as an optional
@@ -1621,7 +1621,9 @@ and nvJPEG hand their pictures over on the device, and VideoToolbox both
 kinds, and a raw Orbbec frame's colour stays on the device over either
 codec; what is left there is the colour kernel reading Apple's plane images
 directly, measured first (`undistort_color.comp`), and the decoders' host
-pictures where no device path opens, which go next. For H.265: the camera's
+pictures where no device path opens, which go next. Until then, software
+H.265 decodes on one thread with little headroom at 4K (`hevc_color.cpp`),
+and H.265 is `fuse_orbbec`'s default. For H.265: the camera's
 encoder settings, its key-frame interval above all, which sets what a lost
 frame costs (`camera_stream.cpp`). The rig's next consumer is calib's
 viewer, showing its synchronised sets.

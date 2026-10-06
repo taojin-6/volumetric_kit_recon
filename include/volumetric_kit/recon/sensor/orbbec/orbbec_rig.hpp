@@ -104,7 +104,7 @@ class VR_SENSOR_ORBBEC_API OrbbecRig final {
   ///         cannot describe one (fewer than two cameras, a repeated serial,
   ///         a calibration that is invalid or does not pose a camera, a sync
   ///         tolerance of zero or of half a frame period or more, a stream
-  ///         @ref OrbbecSensor::open would refuse);
+  ///         or a factory calibration @ref OrbbecSensor::open would refuse);
   ///         `Status::Code::NotFound` naming the cameras that did not
   ///         answer; `Status::Code::Unsupported` for cameras whose sync
   ///         settings differ from @ref Options::sync (named, field by field)

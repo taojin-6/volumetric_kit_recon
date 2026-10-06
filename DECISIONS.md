@@ -204,7 +204,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   decoded, in order, on a thread per camera ahead of the mailbox; a lost frame
   is read off the frame index, not the clock; and the Femto Mega's stream is
   decoded as BT.601 full range, which it codes and does not say. Its RGB
-  output went on 2026-10-06.
+  output, and the RGB mode its calibration was read from, went on
+  2026-10-06.
 - [**2026-09-28**](#2026-09-28--projective-texturing-from-several-views-chooses-a-view-per-triangle-on-an-unshared-mesh-into-an-atlas-of-the-views-images-side-by-side-the-single-camera-pass-stays-per-vertex) —
   Projective texturing from several views chooses a view per triangle, on an
   unshared mesh, into an atlas of the views' images side by side, in
@@ -5631,6 +5632,8 @@ mostly pseudonormal ones, and went with them.
 *Amended 2026-10-06 (below):* the decoder hands on the planes, or the picture
 the hardware left on the device, never an RGB frame: the `Rgb24` frame
 stamped with the RGB profile described here fed the host path, which is gone.
+A frame's colour camera is read off the H.265 mode's own profile, so the
+byte comparison under "The calibration" went with the RGB mode.
 
 **The rule.** `OrbbecStreamOptions::color_codec` is `Mjpeg` (the default)
 or `Hevc`. With `Hevc` the camera sends H.265, and each camera's
@@ -6701,6 +6704,10 @@ Sharing one pool across threads, as a mutant, fails the test 3 of 3 with
 3 of 3 on the queue. With neither, it passes 20 of 20 on the M5 Max.
 
 ### 2026-09-28 — A decoded colour frame never leaves the GPU: the platform's hardware decoder, for H.265 and MJPEG alike, hands its picture to Vulkan in place, and `GpuFramePrep` takes I420 or NV12 from the host or the device.
+
+*Amended 2026-10-06 (below):* the MJPG mode's calibration is no longer
+compared with the RGB mode's; a frame's colour camera is read off the mode
+streamed.
 
 **The rule.** The camera stream arrives on the host, the RGB-D frame goes to
 the GPU once, and undistortion, colour conversion and fusion all run there.
@@ -9956,6 +9963,12 @@ each camera with its factory model, for `GpuFramePrep`. Removed:
 - `ICameraCapture::poll_raw` and `raw_frames`, which only the two Orbbec
   classes implemented.
 - The H.265 decoder's RGB frames and the RGB profile it stamped on them.
+- The RGB mode `open` read each colour camera from, and its byte comparison
+  with the mode streamed. Only the host path streamed the RGB mode, so the
+  comparison could refuse a camera over a calibration nothing used, with no
+  path left to open it. A colour camera is read off the H.265 or MJPG mode
+  streamed, the pictures the decoder hands out. The two matched byte for byte
+  on the Femto Mega at 720p, 1080p and 4K, so the rig's models are unchanged.
 - `fuse_orbbec`'s `--gpu`. It always reads raw, H.265 unless `--mjpeg`, and
   every poll goes through `prepare_batch` and `fuse_set`, one camera as a
   set of one. `--host-clock` stays for one camera: it is not host
@@ -9984,7 +9997,11 @@ cameras one at a time, uploading float depth and packed colour for each.
 where no device path opens (software, VAAPI, NVDEC without `VR_WITH_CUDA`)
 or the stream was given no device or allocator. `VideoPixelLayout::Rgb24`
 and swscale's RGB conversion, which lose their caller here, go with that
-step rather than be rewritten twice.
+step rather than be rewritten twice. Software H.265 decodes on one thread
+with little headroom at 4K until then, and H.265 is now `fuse_orbbec`'s
+default. `OrbbecRig` goes once the examples read a `SensorArray`, which
+first needs `OrbbecSensor` to check and write the sync settings the rig
+does.
 
 **Validation.** Apple M5 Max, macOS, Release with warnings as errors,
 Orbbec, FFmpeg and the viewer: the 55 tests pass. The conversion test now

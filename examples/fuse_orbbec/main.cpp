@@ -210,6 +210,8 @@ vkc::Result<Options> parse_args(int argc, char** argv) {
 }
 
 // One camera or a rig, its frames as the cameras captured them.
+// TODO(sensor): read a SensorArray of OrbbecSensors instead, once
+// OrbbecSensor checks and writes the sync settings OrbbecRig does.
 struct Source {
   std::optional<sensor::OrbbecSensor> sensor;
   std::optional<sensor::OrbbecRig> rig;
@@ -349,9 +351,13 @@ vkc::Result<Source> open_source(const Options& opt, const vkc::Device& device,
   apply_streams(opt, device, allocator, sensor_options);
   VKC_ASSIGN(source.sensor, sensor::OrbbecSensor::open(sensor_options));
   const sensor::OrbbecDeviceInfo& info = source.sensor->device_info();
-  print_camera(info, *source.sensor->info().color,
-               sensor_options.color_to_world);
-  std::printf("  %s clock\n", sensor::to_string(source.sensor->info().clock));
+  const sensor::SensorInfo& sensor_info = source.sensor->info();
+  print_camera(info, *sensor_info.color, sensor_options.color_to_world);
+  const camera::CameraModel& depth = *sensor_info.depth;
+  std::printf("  depth %ux%u @ fx=%.1f fy=%.1f cx=%.1f cy=%.1f\n  %s clock\n",
+              depth.size.width, depth.size.height, depth.intrinsics.fx,
+              depth.intrinsics.fy, depth.intrinsics.cx, depth.intrinsics.cy,
+              sensor::to_string(sensor_info.clock));
   source.waits_for_primary = sensor::waits_for_primary(info.sync_mode);
   if (source.waits_for_primary) {
     std::printf(

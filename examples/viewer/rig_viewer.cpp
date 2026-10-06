@@ -8,7 +8,7 @@
 // and the same HybridMeshPipeline drawing recon's buffers in place.
 //
 // Nothing the cameras produce visits the host after it arrives. The rig hands
-// out raw sets whose colour the hardware decoder left on the GPU;
+// out sets as captured, their colour left on the GPU by the hardware decoder;
 // sensor::GpuFramePrep::prepare_batch undistorts and converts every camera's
 // frame there, in one batch; the frames fuse through the device-input
 // overloads; the marching-cubes mesh is textured from every camera of the set
@@ -180,7 +180,7 @@ struct Options {
   std::string rig;          // the sync configuration; required
   std::string calibration;  // poses by serial; empty: all at the origin
   bool apply_sync = false;  // write the sync configuration where it differs
-  // H.265 colour unless --mjpeg: raw MJPEG takes about nine times the
+  // H.265 colour unless --mjpeg: MJPEG takes about nine times the
   // bandwidth (185 against 21 Mbit/s a camera at 4K).
   bool hevc = true;
   std::uint32_t color_width = 0;  // 0 keeps the driver's default mode
@@ -716,7 +716,7 @@ int run(GLFWwindow* window, const Options& opt) {
   vkc::Device& rdevice = recon_device_result.value();
   vkc::Allocator& rallocator = recon_allocator_result.value();
 
-  // --- The rig, opened raw onto the shared device --------------------------
+  // --- The rig, opened onto the shared device ------------------------------
   // After the device, which it decodes onto and must outlive it. Opened here,
   // on the main thread, so a camera that does not answer ends the run with its
   // reason before the window starts drawing; the fuse thread starts it.
