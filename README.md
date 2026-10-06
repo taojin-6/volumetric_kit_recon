@@ -28,8 +28,9 @@ CI-gated, and split into clean, independently consumable tiers.
   `interop`, with `sensor` off `core`, `codec` off `volume`, and `eval`/`io` off
   `mesh`. A tier may depend only on tiers to its left.
 - **One Vulkan path everywhere:** compute runs as Vulkan compute shaders
-  (GLSL → SPIR-V), with MoltenVK on Apple — Linux / Android / macOS / iOS /
-  Windows from one source, mirroring `volumetric_kit_gfx`. No Metal/CUDA split.
+  (GLSL → SPIR-V), with MoltenVK on Apple — Linux / Android / macOS / iOS
+  from one source, mirroring `volumetric_kit_gfx`. No Metal/CUDA split. GCC or
+  Clang; Windows and MSVC are not supported.
 - **Exception-free:** fallible calls return `Status` / `Result<T>`; mobile builds
   with `-fno-exceptions` are first-class.
 - **Shared-device renderer handoff:** the live viewers draw recon's mesh

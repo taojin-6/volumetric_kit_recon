@@ -122,6 +122,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
+- **Windows and MSVC**: the MSVC compiler flags and `_MSC_VER`/`WIN32`
+  branches in the build, the codec and the tests. recon builds with GCC or
+  Clang on Linux, Android, macOS and iOS.
 - `sensor/video`: **software decoding, VAAPI and host pictures**:
   `VideoDecodeBackend`, `HevcDecoder::hardware_backends` and `backend`, the
   `layout`, `threads` and `label` options, `JpegDecodeBackend`,

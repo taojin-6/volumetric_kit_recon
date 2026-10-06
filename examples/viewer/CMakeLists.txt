@@ -141,10 +141,8 @@ vr_target_warnings(fuse_viewer)
 # ...but ImGui's own TU carries its own warning posture and would trip that
 # policy. The source-level opt-out follows the target flags on the command line,
 # so it wins; only this third-party TU is exempt, fuse_viewer.cpp stays strict.
-# MSVC spells "no warnings" /w, everyone else -w.
-set_source_files_properties(
-  "${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp"
-  PROPERTIES COMPILE_OPTIONS "$<IF:$<CXX_COMPILER_ID:MSVC>,/w,-w>")
+set_source_files_properties("${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp"
+                            PROPERTIES COMPILE_OPTIONS -w)
 
 # rig_viewer: fuse_viewer's sibling for a live, synced rig of Orbbec cameras,
 # every camera's frame prepared, fused and textured on the GPU. Built only where
