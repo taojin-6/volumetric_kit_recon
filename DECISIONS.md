@@ -318,6 +318,11 @@ entries relevant to your task; later amendments supersede earlier rules.
   The viewers pin gfx #106, after gfx moved onto the core: recon and gfx share
   one `Status`, `Device` and `StageRow`, so the device and timing seams
   convert nothing, and a program linking both carries one VMA.
+- [**2026-10-06**](#2026-10-06--the-familys-camera-vocabulary-is-recons-camera-tier-a-double-precision-camera-model-and-the-sensor-arrays-calibration-file-version-2) —
+  The family's camera vocabulary is recon's `camera` tier: a double-precision
+  camera model with one templated projection, rigid transforms, and the
+  sensor array's calibration file, version 2. It links the core's base tier
+  and GLM, not Vulkan.
 
 ## Decision record
 
@@ -9555,6 +9560,63 @@ no camera pass. `fuse_render` on 60 Replica room0 frames renders a PNG
 byte-identical to the #98 pin's; `fuse_viewer` fused 120 frames on the shared
 device under the Khronos validation layer with no message. The live rig
 (`rig_viewer`) could not be run: the cameras' network was down at the time.
+
+### 2026-10-06 — The family's camera vocabulary is recon's `camera` tier: a double-precision camera model and the sensor array's calibration file, version 2.
+
+calib solves for camera models and writes the rig's calibration; recon's
+drivers report their factory calibration and read the poses; ios fills the
+same types from ARKit. Until now each had its own: recon a float
+`sensor::LensCamera` and the rig file in `sensor`, which links `recon_core`
+and so Vulkan; calib a double `PinholeBrownConrady` of five coefficients,
+which cannot hold the Femto Mega's factory `k4`-`k6`. Core PR #14 proposed
+a camera tier in the core and was closed (camera stays out of the core). The
+2026-10-06 plan makes recon the library calib and ios build on for cameras and
+sensors; this tier is its first step. The sensor interface (`IRgbdSensor`,
+`RgbdFrame`), the vendor-neutral `SensorArray` that replaces `OrbbecRig`, and
+pipelined processing follow (DESIGN.md, [Next work](DESIGN.md#next-work)).
+
+- **A tier of its own, under `sensor`.** `recon_camera` links `core_base` and
+  GLM only, so calib's solver links no Vulkan to use it.
+- **Double on the host, float once at upload.** Calibration solves in double
+  and the file is written in the shortest form that reads back exactly. float
+  would save nothing measurable (a set converts a few models) and cost both:
+  Ceres evaluates in double, and float rounds a written calibration.
+- **One projection for every scalar.** `distort_rational<T>` and
+  `project_rational<T>` take plain arrays: double on the host, float in the
+  sensor tier's lens, which `lens.glsl` mirrors, and a solver's dual numbers.
+- **OpenCV's rational model only.** Its eight coefficients cover
+  Brown-Conrady (`k4 = k5 = k6 = 0`) and the Femto's `BROWN_CONRADY_K6`.
+  `CameraModel` carries no model tag yet; the file's `distortion.model` does,
+  so a fisheye model is a tagged alternative, not a format change.
+- **Unprojection stays inside the invertible radius**: calib's Newton with
+  backtracking, generalised. The radius is where the distorted radius stops
+  growing or the denominator reaches zero, found by a 2% scan in r² and
+  bisection, since the rational model has no closed form for it.
+- **Rescaling refuses another aspect ratio** (the half-pixel rule otherwise):
+  the Femto's 4:3 colour modes crop its 16:9 sensor.
+- **The calibration file, version 2** (`camera/array_calibration.hpp`):
+  `format` and `version`; sensors by id, each with its colour camera's pose
+  (OpenCV's extrinsic, as version 1), colour and depth models that record
+  their `width` and `height` and whether they are `factory` or `calibrated`,
+  and `depth_to_color`; and an optional world, a sensor or an AprilTag. Every
+  field of a sensor is optional, so a calib session records factory lenses in
+  the same format, unposed. Unknown keys are ignored and a later version is
+  refused. Version 1 is read and never written: its intrinsics are kept only
+  where they record their image, and `optimal_intrinsics`, the legacy
+  pipeline's undistortion target, is dropped. A write goes to a temporary
+  file renamed into place.
+- `OrbbecRig::Options::calibration` takes the `ArrayCalibration`, which must
+  pose every camera of the rig.
+
+**Validation.** Apple M5 Max, macOS, Release with warnings as errors, Orbbec,
+FFmpeg and the viewer: the build is warning-free and the 54 tests pass; the
+camera tests that need the rig skip without it. `project` reproduces
+`cv::projectPoints` to 1e-9 px and `rotation_from_rodrigues` `cv::Rodrigues`
+to 1e-15 (OpenCV 5.0.0). Mutation check: dropping the half-pixel term,
+swapping `p1` and `p2`, ignoring the denominator's pole, taking the axis
+from `sin` past pi/2, keeping version-1 intrinsics without a size, loosening
+the world sensor's origin check, letting Newton leave the invertible radius,
+and inverting `depth_to_color` each fail a test.
 
 ## Measured lessons
 

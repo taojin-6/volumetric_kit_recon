@@ -128,7 +128,7 @@ discovery window (8 s).
 
 A synced rig runs from its sync configuration (the lab rig's is
 `config/femto_mega_sync.json`, in the Orbbec SDK's layout) and a calibration
-file (`sensor/rig_calibration.hpp`) for the poses. The rig refuses cameras whose sync settings differ from the file;
+file (`camera/array_calibration.hpp`) for the poses. The rig refuses cameras whose sync settings differ from the file;
 `--apply-sync` writes it to them:
 
 ```sh

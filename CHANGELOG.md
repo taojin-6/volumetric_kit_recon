@@ -6,7 +6,36 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `camera`: **the family's camera vocabulary**, a tier of its own
+  (`volumetric_kit::recon_camera`) that links the core's base tier and GLM,
+  and no Vulkan, so calib and the drivers use it too:
+  - `CameraModel` (image size, intrinsics and OpenCV's rational lens, in
+    double), with `check_camera_model`, `scale_camera_model`, `project`, and
+    `unproject` to 1e-9 px inside `invertible_radius2`;
+  - `distort_rational<T>` and `project_rational<T>`, the one projection,
+    templated on the scalar so a solver differentiates through it;
+  - rigid transforms and their Rodrigues form (`geometry.hpp`);
+  - the sensor array's calibration file, version 2
+    (`array_calibration.hpp`): sensors by id, each optionally posed, with
+    colour and depth models that record their image size and whether they
+    are factory or calibrated, `depth_to_color`, and the world (a sensor or
+    an AprilTag). Version 1 files still read.
+  Tests: `recon_camera_model`, `recon_camera_geometry`,
+  `recon_camera_array_calibration`.
+
 ### Removed
+
+- `sensor`: **`rig_calibration.hpp`**, replaced by
+  `camera/array_calibration.hpp`. Migrating: `read_rig_calibration` is
+  `camera::read_array_calibration`, which returns an `ArrayCalibration`; a
+  `RigCameraCalibration`'s `serial` and `cam_to_world` are a
+  `SensorCalibration`'s `id` and `color_to_world` (optional, in double);
+  `OrbbecRig::Options::calibration` takes the `ArrayCalibration`. Its
+  intrinsics are the colour camera's `CameraModel`, kept from a version-1
+  file only where they record `width` and `height`; `optimal_intrinsics` is
+  not read.
 
 - `core`: **recon's names for the core's types and macros.** `vr::Status`,
   `vr::Result`, `vr::Device`, `vr::Buffer` and every other core type or
