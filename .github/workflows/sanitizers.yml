@@ -75,14 +75,41 @@ jobs:
             exit 1
           fi
 
-      # Debug + clang gives the most reliable sanitizer + mesa interop.
+      # Cache the FetchContent dependency tree (sources and builds), as
+      # _build.yml does, so it is not re-fetched and recompiled every run. Here
+      # the dependencies are compiled with the sanitizers too (VR_SANITIZE sets
+      # its flags globally), so besides the pins the key carries everything that
+      # changes their objects: the compiler, the runner image, this workflow (the
+      # sanitizer and build settings below) and vr_sanitizers.cmake. The
+      # workspace path is in it as in _build.yml, since FetchContent bakes it in.
+      # No restore-keys: a stale match would link objects built for something
+      # else.
+      - name: Dependency cache key
+        if: steps.detect.outputs.present == 'true'
+        id: deps
+        run: |
+          hash() { sha256sum | cut -c1-12; }
+          ws=$(printf '%s' "${GITHUB_WORKSPACE}" | hash)
+          cc=$(clang --version | head -1 | hash)
+          echo "key=sanitizers-deps-ws${ws}-cc${cc}-img${ImageVersion:-none}" >> "${GITHUB_OUTPUT}"
+
+      - name: Cache third-party deps
+        if: steps.detect.outputs.present == 'true'
+        uses: actions/cache@v6
+        with:
+          path: build/_deps
+          key: ${{ steps.deps.outputs.key }}-${{ hashFiles('third_party/CMakeLists.txt', 'CMakeLists.txt', 'cmake/vr_sanitizers.cmake', '.github/workflows/sanitizers.yml') }}
+
+      # Debug + clang gives the most reliable sanitizer + mesa interop. No
+      # examples: this job never runs them.
       - name: Configure
         if: steps.detect.outputs.present == 'true'
         run: |
           cmake -S . -B build \
             -DCMAKE_BUILD_TYPE=Debug \
             -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
-            -DVR_SANITIZE="address;undefined" -DVR_WITH_FFMPEG=ON
+            -DVR_SANITIZE="address;undefined" -DVR_WITH_FFMPEG=ON \
+            -DVR_BUILD_EXAMPLES=OFF
 
       - name: Build
         if: steps.detect.outputs.present == 'true'
@@ -94,7 +121,8 @@ jobs:
       # UBSan still on). Prefer extending the suppressions first.
       #
       # --parallel: a hosted runner sets no CTEST_PARALLEL_LEVEL, so ctest would
-      # otherwise run the suite one test at a time.
+      # otherwise run the suite one test at a time. The slowest tests start
+      # first, by the COST tests/CMakeLists.txt gives them.
       - name: Test
         if: steps.detect.outputs.present == 'true'
         run: ctest --test-dir build --output-on-failure --parallel "$(nproc)"
