@@ -24,6 +24,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `recon_camera_array_calibration`.
 - `camera`: **`nearest_rotation`**, the polar factor of a matrix near a
   rotation.
+- `sensor`: **`IRgbdSensor`** (`rgbd_sensor.hpp`), the interface every
+  driver implements: `SensorInfo` (id, the cameras' factory models,
+  `depth_to_color`, rig role, clock, pose source, rate), a queue of
+  `set_queue_depth` frames, `poll` for the newest and `drain` for all,
+  oldest first, and `SensorStats`. Test: `recon_sensor_rgbd_sensor`.
+- `sensor/orbbec`: **`OrbbecSensor`**, the Femto Mega as an `IRgbdSensor`:
+  frames as captured, for the GPU pass, the pose in double, and
+  `clock_sync_interval_ms` for the host's clock. Checked by hand at a camera,
+  as tests use no hardware.
 
 ### Changed
 
