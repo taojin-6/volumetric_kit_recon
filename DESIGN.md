@@ -1203,9 +1203,8 @@ host clock (`SyncMode::Trigger`), or by equal sequence numbers, in order and
 reading no clock (`SyncMode::Sequence`) -- and stamps each frame with its
 sensor's pose from the `ArrayCalibration`. Opened with a device, its
 `process(set)` prepares a set through `GpuFramePrep::prepare_batch`: every
-frame checked, host colour staged on a thread per camera, then every pass's
-uploads and every pass's kernels recorded into one `CommandBatch`, one
-submit and one wait.
+frame checked, then every pass's uploads and every pass's kernels recorded
+into one `CommandBatch`, one submit and one wait.
 **`sensor/utils`'s `GpuFramePrep`** undistorts an `RgbdFrame`
 (`sensor/rgbd_frame.hpp`) on the device: depth sampled at the nearest pixel,
 colour bilinearly and converted from Y'CbCr in the same pass, each camera
@@ -1213,28 +1212,29 @@ keeping its intrinsics. The frame carries each camera's `camera::CameraModel`
 in double, narrowed to float once for the passes; the colour camera's pose,
 `color_to_world`, and the sensor's `depth_to_color`, both refused unless
 rigid, pose the outputs; a sequence number; and `pixels`, the owner of its
-host pixels, so a consumer may keep frames past the next poll and past the
+depth, so a consumer may keep frames past the next poll and past the
 capture.
 `ChromaLocation` follows the picture through `DecodedPicture`, the Orbbec
 frame handoff and `YuvImage`: JPEG is centred, and HEVC keeps the decoded tag
 with left alignment when unspecified.
-The GPU samples the location consistently for host planes, device buffers and
-NV12 images. Existing callers that leave the field unset keep left alignment. The
+The GPU samples the location consistently for planes in a buffer and NV12
+images. Existing callers that leave the field unset keep left alignment. The
 resulting `DeviceFrame` feeds the `Buffer` overloads of `allocate_from_depth` and
 `integrate` (and `ColorFrame::buffer`, with `coverage_in_alpha`, since a
 pixel the lens maps outside the picture is a 0 word), so nothing is
-uploaded and nothing registered. Colour comes as I420 or NV12, as host
-planes or already on the device (`YuvImage::device`, with per-plane
-offsets and strides), and device planes are bound where they are, from
+uploaded and nothing registered. Colour comes as I420 or NV12 on the device
+only (the 2026-10-06 device-only `GpuFramePrep` decision): planes in a
+buffer (`YuvImage::device`, with per-plane offsets and strides) are bound
+where they are, from
 the first plane, once the batch has taken them over from the queue family
 that wrote them (`YuvImage::queue_family`; the 2026-09-28 decoded-frame
 decision). NV12's planes may come as images instead (`YuvImage::image`),
-which the batch copies into the pass's input. The raw frame's host data goes up
-through one batch into device-local inputs, its planes packed into a staging buffer the
-pass keeps whatever their strides, and both passes run in the same submit,
-the copy timed with them. Kept because several passes allocating a 4K
-frame's staging at once made VMA allocate a block for every set (46 ms a
-rig set on an RTX 5090, 4.8 ms kept). The frame *holds* its device-local
+which the batch copies into the pass's input. The depth goes up through one
+batch into a device-local input, by a staging buffer the pass keeps, and
+both passes run in the same submit, the copy timed with them. The staging is
+kept because several passes allocating a 4K frame's at once made VMA
+allocate a block for every set (46 ms a rig set on an RTX 5090, 4.8 ms
+kept). The frame *holds* its device-local
 buffers, and `prepare` reuses one only once no frame does, so a frame kept
 past the next is still itself; the whole frame is checked before anything
 is uploaded, a depth range from 0 included. `depth_within_color` (off by

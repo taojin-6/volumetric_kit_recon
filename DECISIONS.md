@@ -353,7 +353,7 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-06**](#2026-10-06--an-arrays-set-is-prepared-in-one-batch-every-stream-of-every-sensor-one-submit-and-one-wait-host-colour-staged-on-a-thread-per-camera-first) —
   An array's set is prepared in one batch, every stream of every sensor, one
   submit and one wait; host colour is staged on a thread per camera first,
-  and `prepare_set` goes.
+  and `prepare_set` goes. (Host colour and the threads went later that day.)
 - [**2026-10-06**](#2026-10-06--every-orbbec-frame-is-handed-out-as-captured-the-sdks-host-path-orbbeccapture-and-fuse_orbbec---gpu-go-amends-the-2026-09-26-2026-09-27-and-2026-09-28-orbbec-entries) —
   Every Orbbec frame is handed out as captured: the SDK's host path,
   `OrbbecCapture` and `fuse_orbbec --gpu` go, and the Orbbec driver needs
@@ -362,6 +362,9 @@ entries relevant to your task; later amendments supersede earlier rules.
   The video decoders hand out pictures on the device only: the hardware path
   is fixed per build, a stream the hardware refuses is an error, and off
   Apple `VR_WITH_FFMPEG` needs `VR_WITH_CUDA`.
+- [**2026-10-06**](#2026-10-06--gpuframeprep-takes-colour-on-the-device-only-and-a-sets-depth-is-staged-on-one-thread-amends-the-2026-09-28-decoded-frame-and-2026-10-06-one-batch-entries) —
+  `GpuFramePrep` takes colour on the device only, and a set's depth is
+  staged on one thread.
 
 ## Decision record
 
@@ -6725,6 +6728,8 @@ streamed.
 *Amended 2026-10-06 (below):* the software decoding and fallbacks this entry
 kept are gone, with nvJPEG's `GPU_HYBRID` back end: every picture is a
 device picture, and a device path that fails is an error.
+*Amended again the same day (below):* `GpuFramePrep` takes colour from the
+device only.
 
 **The rule.** The camera stream arrives on the host, the RGB-D frame goes to
 the GPU once, and undistortion, colour conversion and fusion all run there.
@@ -9917,6 +9922,10 @@ was; the rig's start order is `recon_sensor_orbbec_start_order`.
 
 ### 2026-10-06 — An array's set is prepared in one batch: every stream of every sensor, one submit and one wait, host colour staged on a thread per camera first.
 
+*Amended the same day (the device-only `GpuFramePrep` entry, below):* colour
+comes on the device only, and with only depth to stage, the thread per
+camera measured level with one thread and went.
+
 `SensorArray::process(set)` prepares a set through
 `GpuFramePrep::prepare_batch`, a pass per sensor: every frame is checked
 first, so a refused set costs no work; device planes are taken over; each
@@ -10093,6 +10102,42 @@ FFmpeg and the viewer: the 54 tests pass with
 the MJPEG decoder's stop on `Unsupported`, or the H.265 decoder's on a
 refused stream fails its test. CI's 24.04 leg on an RTX 4090 passes the
 H.265 tests on NVDEC, the first run of that path. Not run on a camera.
+
+### 2026-10-06 — `GpuFramePrep` takes colour on the device only, and a set's depth is staged on one thread (amends the 2026-09-28 decoded-frame and 2026-10-06 one-batch entries).
+
+**The rule.** `GpuFramePrep` takes a frame's colour on the device only: I420
+or NV12 planes in a buffer (`YuvImage::device`), or NV12's planes as images
+(`YuvImage::image`). `YuvImage::plane`, the host planes, goes, with their
+staging and the repacking of their rows. Only depth goes up from the host:
+one copy into the pass's staging, and one in its batch. `prepare_batch`
+stages each camera's depth on the calling thread; its thread per camera
+(`run_each`) goes.
+
+**Why.** Nothing made host colour any more. The decoders hand out device
+pictures only (the entry above), so the host planes were a path only the
+tests took, against the rule that a frame is on the GPU from its arrival.
+With colour on the device, the threads staged only depth, 0.7 MB a camera
+at 640 x 576, and measured level with one thread. Median of 400 sets of four
+cameras, each pair interleaved, Apple M5 Max, Release, NV12 colour in a
+device buffer, threads against one thread:
+
+| depth, colour | threads | one thread |
+|---|---|---|
+| 640 x 576, 3840 x 2160 | 1.035 ms | 1.025 ms |
+| 1024 x 1024, 3840 x 2160 | 1.054 ms | 1.063 ms |
+| 640 x 576, 1280 x 720 | 1.033 ms | 1.024 ms |
+
+The RTX 5090 is not re-measured: the staging is the same host copy there.
+
+**Tests.** The prep tests upload each picture as a decoder leaves it, I420 in
+a device buffer, its rows padded where a test asks, and keep their buffer
+and image layouts; the host-plane cases go. `recon_sensor_array_process`'s
+recording holds its colour in a device buffer.
+
+**Validation.** Apple M5 Max, macOS, Release, Orbbec and FFmpeg: the 54 tests
+pass with `VR_TEST_HEVC_BACKEND=videotoolbox`, and
+`recon_sensor_gpu_frame_prep` and `recon_sensor_array_process` run clean
+under the Khronos layer's synchronization validation.
 
 ## Measured lessons
 
