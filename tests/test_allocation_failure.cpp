@@ -25,9 +25,28 @@ void* operator new(std::size_t bytes) {
 void operator delete(void* p) noexcept { std::free(p); }
 void* operator new[](std::size_t bytes) { return ::operator new(bytes); }
 void operator delete[](void* p) noexcept { ::operator delete(p); }
-#if defined(__cpp_sized_deallocation)
+// A linked library may use sized delete even when this compiler does not
+// emit it, so both forms must free through the replacement above.
 void operator delete(void* p, std::size_t) noexcept { ::operator delete(p); }
 void operator delete[](void* p, std::size_t) noexcept {
   ::operator delete[](p);
 }
-#endif
+
+// The default nothrow operators can use the sanitizer's allocator directly.
+// Route them through the same allocation/deallocation pair as throwing new.
+void* operator new(std::size_t bytes, const std::nothrow_t&) noexcept {
+  try {
+    return ::operator new(bytes);
+  } catch (const std::bad_alloc&) {
+    return nullptr;
+  }
+}
+void* operator new[](std::size_t bytes, const std::nothrow_t&) noexcept {
+  return ::operator new(bytes, std::nothrow);
+}
+void operator delete(void* p, const std::nothrow_t&) noexcept {
+  ::operator delete(p);
+}
+void operator delete[](void* p, const std::nothrow_t&) noexcept {
+  ::operator delete[](p);
+}
