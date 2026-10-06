@@ -20,7 +20,7 @@
 #include "volumetric_kit/recon/sensor/orbbec/export.hpp"
 #include "volumetric_kit/recon/sensor/orbbec/orbbec_capture.hpp"
 #include "volumetric_kit/recon/sensor/orbbec/orbbec_sync_config.hpp"
-#include "volumetric_kit/recon/sensor/raw_frame.hpp"
+#include "volumetric_kit/recon/sensor/rgbd_frame.hpp"
 
 namespace volumetric_kit::recon::sensor {
 
@@ -28,8 +28,9 @@ namespace volumetric_kit::recon::sensor {
 ///        (@ref OrbbecRigFrameSet) or as the cameras captured them
 ///        (@ref OrbbecRigRawSet, for `sensor/utils`'s GPU pass).
 ///
-/// Borrows the rig's storage: valid until the rig's next poll or
-/// @ref OrbbecRig::stop.
+/// A processed set borrows the rig's storage, valid until the rig's next poll
+/// or @ref OrbbecRig::stop; a raw set's frames hold their own
+/// (`RgbdFrame::pixels`).
 template <typename Frame>
 struct OrbbecRigSet {
   /// The trigger's time on the rig's clock (ns): the primary's frame's.
@@ -51,7 +52,7 @@ struct OrbbecRigSet {
 };
 
 using OrbbecRigFrameSet = OrbbecRigSet<CapturedFrame>;
-using OrbbecRigRawSet = OrbbecRigSet<RawFrame>;
+using OrbbecRigRawSet = OrbbecRigSet<RgbdFrame>;
 
 /// @brief Counters a caller reads to see how the rig is keeping up.
 struct OrbbecRigStats {
@@ -195,7 +196,7 @@ class VR_SENSOR_ORBBEC_API OrbbecRig final : public ICameraCapture {
   /// @brief @ref poll for a rig opened raw: the next frame of the current
   ///        @ref poll_raw_set set.
   /// @return As @ref poll_raw_set, one frame at a time.
-  core::Result<std::optional<RawFrame>> poll_raw() override;
+  core::Result<std::optional<RgbdFrame>> poll_raw() override;
 
   /// @return `true` if the rig was opened with @ref OrbbecStreamOptions::raw,
   ///         so its frames come through @ref poll_raw and @ref poll_raw_set;

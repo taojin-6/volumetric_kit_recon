@@ -309,10 +309,8 @@ add_test(NAME recon_sensor_conventions COMMAND recon_sensor_conventions_test)
 # sensor array's calibration file (poses read, the refusals, a file in the build
 # tree). Host-only, so they always run.
 add_executable(recon_camera_model_test camera_model_test.cpp)
-# recon_sensor brings recon_camera: the test compares the sensor tier's float
-# lens with the camera model.
 target_link_libraries(recon_camera_model_test
-                      PRIVATE volumetric_kit::recon_sensor)
+                      PRIVATE volumetric_kit::recon_camera)
 vr_target_warnings(recon_camera_model_test)
 add_test(NAME recon_camera_model COMMAND recon_camera_model_test)
 

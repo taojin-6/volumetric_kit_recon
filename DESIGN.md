@@ -1089,10 +1089,11 @@ caller.
   all double, and `check_camera_model`. Conventions: +Z forward, +Y down,
   pixel centres at integers, intrinsics in pixels of the model's size.
 - **`camera/projection.hpp`** — `distort_rational<T>`, the lens's forward
-  model: float in `sensor/lens.hpp` (which `lens.glsl` mirrors), double as
-  the tests' reference.
+  model, which `sensor/utils`' `lens.glsl` mirrors in float; the tests'
+  reference.
 - **`camera/geometry.hpp`** — GLM's double types, `check_rigid`,
-  `rigid_inverse`, and the rotation of a Rodrigues vector.
+  `rigid_inverse`, `nearest_rotation` (the polar factor, for an SDK's
+  rotation that is not one), and the rotation of a Rodrigues vector.
   `RodriguesTransform` is OpenCV's `x' = R(rvec) x + tvec`.
 - **`camera/array_calibration.hpp`** — the sensor array's calibration file,
   the family's `device_calibration` layout: each sensor's colour-camera pose
@@ -1117,7 +1118,8 @@ produces real frames through it; and **`sensor/orbbec`'s `OrbbecCapture`**
 (`VR_WITH_ORBBEC`), a live Femto Mega. Its `poll()` undistorts colour and
 *then* registers depth to it — the SDK's registration ignores the colour
 lens, so the order is what puts both on one pinhole camera, posed by
-`Options::cam_to_world`. It reads the camera's rig sync role
+`Options::cam_to_world` (double, refused at `open` unless rigid). It reads
+the camera's rig sync role
 (`waits_for_primary`) and never writes it. No test opens a camera (the
 2026-10-06 no-hardware decision); `fuse_orbbec` is how one is checked.
 **`OrbbecRig`** reads several synced cameras as one: `poll_set()` hands out
@@ -1189,9 +1191,15 @@ made once per surface and kept, handed out in `DecodedPicture::image`,
 and `JpegDecoder` takes an 8-bit 4:2:0 JPEG to the same images through
 VideoToolbox's hardware JPEG decoder (`vt_jpeg.cpp`), leaving one past the
 device's image extent to software.
-**`sensor/utils`'s `GpuFramePrep`** undistorts a `RawFrame` on the device:
-depth sampled at the nearest pixel, colour bilinearly and converted from
-Y'CbCr in the same pass, each camera keeping its intrinsics and pose.
+**`sensor/utils`'s `GpuFramePrep`** undistorts an `RgbdFrame`
+(`sensor/rgbd_frame.hpp`) on the device: depth sampled at the nearest pixel,
+colour bilinearly and converted from Y'CbCr in the same pass, each camera
+keeping its intrinsics. The frame carries each camera's `camera::CameraModel`
+in double, narrowed to float once for the passes; the colour camera's pose,
+`color_to_world`, and the sensor's `depth_to_color`, both refused unless
+rigid, pose the outputs; a sequence number; and `pixels`, the owner of its
+host pixels, so a consumer may keep frames past the next poll and past the
+capture.
 `ChromaLocation` follows the picture through `DecodedPicture`, the Orbbec
 frame handoff and `YuvImage`: JPEG is centred, and HEVC keeps the decoded tag
 with left alignment when unspecified. Host resampling preserves that location;
@@ -1220,8 +1228,12 @@ is uploaded, a depth range from 0 included. `depth_within_color` (off by
 default; `rig_viewer` turns it on) zeroes depth outside the colour camera's
 view, by the colour pass's own coverage test, so nothing is fused that no
 colour camera can colour. `OrbbecCapture` opened with
-`raw` hands out `RawFrame`s through the contract's `poll_raw`, lenses and
-the depth-to-colour extrinsic from the factory calibration, the planes
+`raw` hands out `RgbdFrame`s through the contract's `poll_raw`, each holding
+its SDK pair and the SDK context, with the models and the depth-to-colour
+extrinsic from the factory calibration (the extrinsic's rotation made one:
+the Femto Mega's is not, the 2026-10-06 sensor-frame decision; `open`
+refuses one that does not come out a rotation), the depth frame's index as the
+sequence, the planes
 converted by the matrix and range the stream codes them in, and
 `fuse_orbbec --gpu` fuses them. Given `OrbbecStreamOptions::device`, its
 H.265 colour is decoded onto that device and stays there, the picture
@@ -1444,7 +1456,7 @@ grid layout `grid_layout.hpp` defines, which its `create_fusion_grid` builds and
 `codec_replica`'s player shares), and a frame kept past the next
 poll — `fuse_render`'s keyframe, `fuse_viewer`'s newest fused frame for its
 final texture pass — is copied into an
-`RgbdFrame` of its own (`examples/common/rgbd_frame.hpp`, the type the
+`OwnedFrame` of its own (`examples/common/owned_frame.hpp`, the type the
 reader decodes into; `CapturedFrame` is its view), never borrowed: the empty
 poll that ends a replay is a poll. `fuse_replica`
 runs the spine on a posed
@@ -1514,14 +1526,14 @@ JPEG image tables: the criterion is decoded geometry at a given total size.
 **Cameras and sensors for the family (the 2026-10-06 plan).** recon is the
 library calib and ios build on for cameras and sensors. The `camera` tier has
 landed; the stack continues:
-1. **The sensor interface.** `IRgbdSensor`, one device, standalone or in an
-   array; `RgbdFrame`, `RawFrame` generalised (depth as u16 and a scale or
-   float metres, colour as YUV 4:2:0 or RGBA8 wherever it lives, each
-   camera's `CameraModel`, a sequence number, an optional per-frame pose), the
-   one frame type every driver hands out; `SensorInfo` (factory models for
-   the active mode, `depth_to_color`, sync role, clock, fixed or tracked
-   pose). `OrbbecCapture` becomes `OrbbecSensor`; `ICameraCapture`,
-   `CapturedFrame` and `LensCamera` go.
+1. **The sensor interface.** `RgbdFrame` has landed: each camera's
+   `CameraModel`, `color_to_world` and `depth_to_color`, a sequence number,
+   and pixels it holds. Next, `IRgbdSensor`, one device, standalone or in an
+   array, and `SensorInfo` (factory models for the active mode,
+   `depth_to_color`, sync role, clock, fixed or tracked pose);
+   `OrbbecCapture` becomes `OrbbecSensor`. Then the Replica source moves
+   onto it, the frame gains float depth and RGBA8 colour, and
+   `ICameraCapture` and `CapturedFrame` go.
 2. **`SensorArray`**, vendor-neutral: per-member sync (anchor, triggered,
    sequence; nearest-frame later), start order from the sync roles, poses
    from the calibration file, and `process(set)`, every stream of every

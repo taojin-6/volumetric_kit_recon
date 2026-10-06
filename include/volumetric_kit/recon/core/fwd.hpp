@@ -9,7 +9,7 @@
 ///
 /// A header that only names a `Device`, `Buffer` or `CommandBatch` by pointer
 /// or reference includes this rather than the full header -- and so includes no
-/// Vulkan, which keeps the capture contract (sensor/raw_frame.hpp) compilable
+/// Vulkan, which keeps the capture contract (sensor/rgbd_frame.hpp) compilable
 /// without a GPU API. The classes are volumetric_kit_core's, so they are
 /// declared in its namespace.
 ///

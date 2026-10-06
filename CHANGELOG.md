@@ -22,6 +22,30 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     layout.
   Tests: `recon_camera_model`, `recon_camera_geometry`,
   `recon_camera_array_calibration`.
+- `camera`: **`nearest_rotation`**, the polar factor of a matrix near a
+  rotation.
+
+### Changed
+
+- `sensor`: **`RawFrame` is `RgbdFrame`** (`sensor/rgbd_frame.hpp`). Each
+  camera is a `camera::CameraModel` in double; the poses are
+  `color_to_world` and the sensor's `depth_to_color`, in double, both
+  refused by `GpuFramePrep` unless rigid; frames carry a `sequence`; and a
+  frame holds its host pixels (`pixels`) rather than borrowing them until
+  the next poll. Migrating: `RawFrame` is `RgbdFrame`;
+  `depth_camera`/`color_camera` are `CameraModel`s (`size`, `intrinsics`,
+  `distortion`); `color_cam_to_world` is `color_to_world` and
+  `depth_cam_to_world` is `color_to_world * depth_to_color`.
+  `sensor/lens.hpp` (`LensCamera`, `LensDistortion`, `distort_normalized`)
+  is gone: use `camera::CameraModel` and `camera::distort_rational`.
+  `OrbbecCapture::Options::cam_to_world` is a `camera::Mat4d`, refused at
+  `open` unless rigid. The examples' own frame type is `OwnedFrame`
+  (`examples/common/owned_frame.hpp`), so it is not taken for this one.
+- `sensor/orbbec`: **the raw path's depth-to-colour extrinsic is a
+  rotation.** The Femto Mega's factory one is 1.2% off orthonormal; the
+  driver takes its nearest rotation, which moves depth up to about 4 px
+  along x in a 720p colour image, and `open` refuses one that does not come
+  out a rotation.
 
 ### Removed
 

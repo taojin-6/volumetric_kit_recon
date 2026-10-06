@@ -3,7 +3,7 @@
 
 #pragma once
 
-/// @file examples/common/rgbd_frame.hpp
+/// @file examples/common/owned_frame.hpp
 /// @brief A posed RGB-D frame with storage of its own: what a reader decodes
 ///        into, and what a consumer keeps. `sensor::CapturedFrame` is the
 ///        borrowed view of one.
@@ -32,7 +32,7 @@ namespace vr_example {
 namespace vr = volumetric_kit::recon;
 
 /// @brief A posed RGB-D frame that owns its pixels.
-struct RgbdFrame {
+struct OwnedFrame {
   /// Depth in metres, `depth_camera.width * height`, row-major.
   std::vector<float> depth;
   /// Packed RGB (`R | G<<8 | B<<16`), `color_camera.width * height`; empty

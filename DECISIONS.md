@@ -332,6 +332,10 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-06**](#2026-10-06--tests-use-no-real-hardware-amends-the-2026-09-26-orbbec-driver-entry) —
   Tests use no real hardware: the three camera tests are removed, and a
   camera is checked by hand through `fuse_orbbec`.
+- [**2026-10-06**](#2026-10-06--a-sensors-frame-is-rgbdframe-each-cameras-cameramodel-the-poses-in-double-a-sequence-number-and-the-pixels-it-holds-and-the-femto-megas-factory-extrinsic-is-made-a-rotation) —
+  A sensor's frame is `RgbdFrame`: each camera's `CameraModel`, the poses in
+  double, a sequence number, and the pixels it holds. The Femto Mega's factory
+  depth-to-colour rotation is not one, and is made one.
 
 ## Decision record
 
@@ -9696,6 +9700,54 @@ as run or not run.
   live stream, restart, the GPU pass against the SDK's host alignment, and
   the rig's trigger sets. The measurements they produced stay in the entries
   that cite them.
+
+### 2026-10-06 — A sensor's frame is `RgbdFrame`: each camera's `CameraModel`, the poses in double, a sequence number, and the pixels it holds; and the Femto Mega's factory extrinsic is made a rotation.
+
+`RgbdFrame` (`sensor/rgbd_frame.hpp`) replaces `RawFrame`, the second step of
+the plan above. It is the frame every driver will hand out once
+`IRgbdSensor` lands; `sensor::LensCamera` and `LensDistortion` are gone.
+
+- **Each camera's `camera::CameraModel`**, lens included, in double.
+  `GpuFramePrep` narrows it to float once, as `lens.glsl` reads it, and
+  refuses a model past float's range.
+- **The colour camera's pose and the sensor's extrinsic**, not two poses:
+  `color_to_world` is where the sensor sits, from a calibration or a
+  tracker; `depth_to_color` is the sensor's own. The pass poses the depth
+  camera at their product and refuses either unless rigid.
+  `OrbbecCapture::Options::cam_to_world` is double too and refused at `open`
+  unless rigid, so the driver never hands the pass a pose it refuses.
+- **A sequence number**, the device's count of its frames, so a gap is a
+  lost frame; the Orbbec driver stamps the depth frame's index.
+- **The pixels it holds** (`pixels`), not ones it borrows until the next
+  poll: a sensor array groups frames by trigger before it prepares any, so
+  it keeps several of each sensor. The Orbbec driver hands over the SDK's
+  pair with the SDK context, so its buffers go back once every copy of the
+  frame is gone, before the SDK does, even after the capture.
+
+**The Femto Mega's factory depth-to-colour rotation is not a rotation.**
+Read through the SDK (2.9.3, firmware 1.3.1) from all four cameras of the
+lab rig, it describes the depth camera's tilt, 6.1° to 6.7° about x, but its
+first element is cos θ where Rodrigues' formula gives
+cos θ + (1 − cos θ) k_x² ≈ 1: the other eight match that formula to 1e-5,
+and the rows are 1.15% to 1.36% off orthonormal. The raw path used the
+matrix as it came, so depth landed 0.6% short along the colour camera's x
+(about 4 px at a 720p image's edge), and fusion, which inverts a pose by its
+transpose, doubled the inconsistency. `camera::nearest_rotation`, the polar
+factor, recovers the Rodrigues rotation to about 1e-5 rad, and the driver
+applies it to every extrinsic it reads, refusing at `open` one that does not
+come out a rotation (a zeroed or reflected matrix). The hardware test's comparison of the
+prepared depth with the SDK's own host alignment moved from a 5.3 mm to a
+6.7 mm median, consistent with the SDK aligning through the defective
+matrix. Which is closer to the scene is for calib to measure, against the
+colour board.
+
+**Validation.** Apple M5 Max, macOS, Release with warnings as errors, Orbbec,
+FFmpeg and the viewer: the 51 tests pass, `recon_sensor_gpu_frame_prep` on
+the device with the new pose composition and refusals. Before the camera
+tests went (the entry above), on the rig's primary, CL2A141000N, over Wi-Fi:
+`recon_sensor_orbbec_gpu_prep` passed raw H.265, raw MJPEG and the forced
+host-colour path, the first frame kept intact through the 45 polls after it
+and prepared, and the sequence rising.
 
 ## Measured lessons
 
