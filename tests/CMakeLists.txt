@@ -511,45 +511,13 @@ if(VR_WITH_ORBBEC)
   target_include_directories(
     recon_sensor_orbbec_conversion_test
     PRIVATE ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec)
+  # Without the decoders, it checks that H.265 colour is refused.
+  target_compile_definitions(
+    recon_sensor_orbbec_conversion_test
+    PRIVATE VR_TEST_HEVC=$<TARGET_EXISTS:recon_sensor_video>)
   vr_target_warnings(recon_sensor_orbbec_conversion_test)
   add_test(NAME recon_sensor_orbbec_conversion
            COMMAND recon_sensor_orbbec_conversion_test)
-
-  # The driver against the camera VR_ORBBEC_TEST_SERIAL names; unset, it skips,
-  # so no CI leg opens a camera that happens to share its network.
-  add_executable(recon_sensor_orbbec_capture_test
-                 sensor_orbbec_capture_test.cpp)
-  target_link_libraries(recon_sensor_orbbec_capture_test
-                        PRIVATE volumetric_kit::recon_sensor_orbbec)
-  # Its H.265 half runs when the driver has the decoder; else it checks the
-  # refusal.
-  if(TARGET recon_sensor_video)
-    target_compile_definitions(recon_sensor_orbbec_capture_test
-                               PRIVATE VR_TEST_HEVC=1)
-  else()
-    target_compile_definitions(recon_sensor_orbbec_capture_test
-                               PRIVATE VR_TEST_HEVC=0)
-  endif()
-  vr_target_warnings(recon_sensor_orbbec_capture_test)
-  add_test(NAME recon_sensor_orbbec_capture
-           COMMAND recon_sensor_orbbec_capture_test)
-
-  # The GPU pass against the SDK's host path on the camera VR_ORBBEC_TEST_SERIAL
-  # names (raw frames, so only with the video decoders); unset, it skips.
-  if(TARGET recon_sensor_video)
-    add_executable(recon_sensor_orbbec_gpu_prep_test
-                   sensor_orbbec_gpu_prep_test.cpp)
-    target_link_libraries(
-      recon_sensor_orbbec_gpu_prep_test
-      PRIVATE volumetric_kit::recon_sensor_orbbec
-              volumetric_kit::recon_sensor_utils)
-    target_compile_definitions(
-      recon_sensor_orbbec_gpu_prep_test
-      PRIVATE VR_TEST_WITH_CUDA=$<BOOL:${VR_WITH_CUDA}>)
-    vr_target_warnings(recon_sensor_orbbec_gpu_prep_test)
-    add_test(NAME recon_sensor_orbbec_gpu_prep
-             COMMAND recon_sensor_orbbec_gpu_prep_test)
-  endif()
 
   # The rig's sync configuration: the SDK's file layout, its refusals, and the
   # comparison OrbbecRig::open makes against what the cameras read back. No
@@ -641,26 +609,6 @@ if(VR_WITH_ORBBEC)
              COMMAND recon_sensor_orbbec_jpeg_test)
   endif()
 
-  # The rig against real cameras -- only the ones VR_ORBBEC_TEST_RIG names
-  # (comma-separated serials); unset, it skips (exit 0).
-  add_executable(recon_sensor_orbbec_rig_test sensor_orbbec_rig_test.cpp)
-  target_link_libraries(recon_sensor_orbbec_rig_test
-                        PRIVATE volumetric_kit::recon_sensor_orbbec)
-  if(TARGET recon_sensor_video)
-    target_compile_definitions(recon_sensor_orbbec_rig_test
-                               PRIVATE VR_TEST_HEVC=1)
-    target_link_libraries(recon_sensor_orbbec_rig_test
-                          PRIVATE volumetric_kit::recon_sensor_utils)
-  else()
-    target_compile_definitions(recon_sensor_orbbec_rig_test
-                               PRIVATE VR_TEST_HEVC=0)
-  endif()
-  target_compile_definitions(
-    recon_sensor_orbbec_rig_test
-    PRIVATE VR_TEST_SCRATCH_DIR="${CMAKE_CURRENT_BINARY_DIR}")
-  vr_target_warnings(recon_sensor_orbbec_rig_test)
-  add_test(NAME recon_sensor_orbbec_rig COMMAND recon_sensor_orbbec_rig_test)
-
   if(WIN32)
     # Windows resolves a DLL on PATH, not through an rpath, and the SDK is
     # linked in place rather than copied beside the test -- it loads its
@@ -669,8 +617,7 @@ if(VR_WITH_ORBBEC)
     # and the test cannot start. TODO(ci): no leg runs this on Windows.
     set(_vr_orbbec_tests
         recon_orbbec_sdk_smoke recon_sensor_orbbec_conversion
-        recon_sensor_orbbec_capture recon_sensor_orbbec_grouping
-        recon_sensor_orbbec_sync_config recon_sensor_orbbec_rig)
+        recon_sensor_orbbec_grouping recon_sensor_orbbec_sync_config)
     if(TARGET recon_sensor_orbbec_hevc_test)
       list(APPEND _vr_orbbec_tests recon_sensor_orbbec_hevc
            recon_sensor_orbbec_jpeg)

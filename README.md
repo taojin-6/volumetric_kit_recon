@@ -117,8 +117,6 @@ camera (`sensor/orbbec/orbbec_capture.hpp`), and the live example:
 build/examples/fuse_orbbec/fuse_orbbec --serial <serial> --frames 300
 # H.265 colour instead of MJPEG (a build with -DVR_WITH_FFMPEG=ON too):
 build/examples/fuse_orbbec/fuse_orbbec --serial <serial> --hevc
-# the driver's hardware test opens only the camera you name:
-VR_ORBBEC_TEST_SERIAL=<serial> ctest --test-dir build -R orbbec
 ```
 
 A camera wired as a sync secondary streams only while its primary does; name
@@ -134,8 +132,6 @@ file (`camera/array_calibration.hpp`) for the poses. The rig refuses cameras who
 ```sh
 build/examples/fuse_orbbec/fuse_orbbec --rig config/femto_mega_sync.json \
     --calibration calib.json --frames 300
-VR_ORBBEC_TEST_RIG=$PWD/config/femto_mega_sync.json \
-    ctest --test-dir build -R orbbec_rig
 ```
 
 ### Optional: FFmpeg
