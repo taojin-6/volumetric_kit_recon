@@ -572,18 +572,18 @@ if(VR_WITH_ORBBEC)
   # unexported, so the test compiles the source itself, as the conversion test
   # does.
   add_executable(
-    recon_sensor_orbbec_grouping_test
-    sensor_orbbec_grouping_test.cpp
-    ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec/trigger_grouping.cpp
+    recon_sensor_orbbec_start_order_test
+    sensor_orbbec_start_order_test.cpp
+    ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec/rig_start_order.cpp
   )
-  target_link_libraries(recon_sensor_orbbec_grouping_test
+  target_link_libraries(recon_sensor_orbbec_start_order_test
                         PRIVATE volumetric_kit::recon_sensor_orbbec)
   target_include_directories(
-    recon_sensor_orbbec_grouping_test
+    recon_sensor_orbbec_start_order_test
     PRIVATE ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec)
-  vr_target_warnings(recon_sensor_orbbec_grouping_test)
-  add_test(NAME recon_sensor_orbbec_grouping
-           COMMAND recon_sensor_orbbec_grouping_test)
+  vr_target_warnings(recon_sensor_orbbec_start_order_test)
+  add_test(NAME recon_sensor_orbbec_start_order
+           COMMAND recon_sensor_orbbec_start_order_test)
 
   # The driver's H.265 colour decoder, with no camera: the committed patch clip
   # wrapped in SDK frames (VR_WITH_FFMPEG as well). Internal and unexported, so
@@ -642,7 +642,7 @@ if(VR_WITH_ORBBEC)
     # and the test cannot start. TODO(ci): no leg runs this on Windows.
     set(_vr_orbbec_tests
         recon_orbbec_sdk_smoke recon_sensor_orbbec_conversion
-        recon_sensor_orbbec_grouping recon_sensor_orbbec_sync_config)
+        recon_sensor_orbbec_start_order recon_sensor_orbbec_sync_config)
     if(TARGET recon_sensor_orbbec_hevc_test)
       list(APPEND _vr_orbbec_tests recon_sensor_orbbec_hevc
            recon_sensor_orbbec_jpeg)

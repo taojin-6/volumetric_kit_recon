@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-#include "trigger_grouping.hpp"
+#include "rig_start_order.hpp"
 
 namespace vkc = volumetric_kit::core;
 namespace sensor = volumetric_kit::recon::sensor;
@@ -52,6 +52,6 @@ int test_start_order() {
 
 int main() {
   if (test_start_order() != 0) return 1;
-  std::printf("orbbec grouping tests passed\n");
+  std::printf("orbbec start order tests passed\n");
   return 0;
 }

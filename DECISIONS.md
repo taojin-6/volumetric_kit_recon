@@ -9833,8 +9833,17 @@ target `recon_sensor_array`): the array of `IRgbdSensor`s that replaces
   secondaries, all on the host clock. `SyncMode::Sequence` groups equal
   sequence numbers, every set in order once each sensor has sent its frame,
   moved past it or ended; it reads no clock, so a recording replays the same
-  sets every time, which is what calib's session replay needs.
-- **Refused for now, each a `TODO(sensor)`:** tracked sensors (an iPhone's
+  sets every time, which is what calib's session replay needs. A frame for a
+  set already handed out joins none, and a sensor ahead of one that has
+  fallen behind holds `queue_depth` frames, its oldest let go, so the array's
+  memory is bounded in both modes.
+- **Lifecycle.** A failed start, a stop, the destructor and a move over a
+  running array all stop the primary first. Starting a running array starts
+  each sensor again, as `OrbbecRig` did, so a camera that has gone away says
+  so. A refused `open` leaves the sensors with the caller, and a drain that
+  fails partway has its earlier frames, counted delivered, grouped before the
+  failure is returned.
+- **Refused for now, each a `TODO:`:** tracked sensors (an iPhone's
   pose needs registering to the array's world) and free-running members of a
   triggered array (joined by their nearest frame).
 - `process(set)`, every stream of every sensor in one GPU batch, is the next
@@ -9843,13 +9852,16 @@ target `recon_sensor_array`): the array of `IRgbdSensor`s that replaces
 
 **Validation.** Apple M5 Max, macOS, Release with warnings as errors, Orbbec,
 FFmpeg and the viewer: the 54 tests pass. `recon_sensor_array` drives
-scripted sensors through the refusals, the start and stop order and a
-failed start, trigger sets (complete, a silent secondary, the newest set,
-frames without a clock) and sequence sets (out of turn, a missing frame,
-waiting on a live sensor, a recording's end); 50 runs in a row pass, its
-waits notwithstanding. Not applying the poses, not waiting on a live sensor
-in sequence mode, and not checking the clock each fail it.
-`recon_sensor_trigger_grouper` is the grouping test the rig's was.
+scripted sensors through the refusals, the start and stop order, a failed
+start, a start of a running array and a move over one, trigger sets
+(complete, a silent secondary, the newest set, frames without a clock) and
+sequence sets (out of turn, a missing frame, waiting on a live sensor, a
+recording's end, a late frame, a sensor far ahead, a restart), and a drain
+that fails partway; 50 runs in a row pass, its waits notwithstanding. Not
+applying the poses, not waiting on a live sensor in sequence mode, and not
+checking the clock each fail it, as does undoing any lifecycle or sequence
+rule above. `recon_sensor_trigger_grouper` is the grouping test the rig's
+was; the rig's start order is `recon_sensor_orbbec_start_order`.
 
 ## Measured lessons
 

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Tao Jin
 
-#include "trigger_grouping.hpp"
+#include "rig_start_order.hpp"
 
 #include <optional>
 

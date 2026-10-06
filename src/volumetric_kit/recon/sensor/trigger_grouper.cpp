@@ -6,14 +6,22 @@
 #include <algorithm>
 #include <iterator>
 
+#include "volumetric_kit/core/base/check.hpp"
+
 namespace volumetric_kit::recon::sensor {
 
 TriggerGrouper::TriggerGrouper(const Config& config)
-    : config_(config), queues_(config.cameras) {}
+    : config_(config), queues_(config.cameras) {
+  VKC_CHECK(config.anchor < config.cameras,
+            "TriggerGrouper: the anchor must be one of the cameras");
+  VKC_CHECK(config.queue_depth > 0,
+            "TriggerGrouper: a queue holds at least one frame");
+}
 
 void TriggerGrouper::add(std::size_t camera, std::uint64_t ts_us,
                          std::uint64_t id, std::uint64_t now_us,
                          std::vector<std::uint64_t>* released) {
+  VKC_CHECK(camera < queues_.size(), "TriggerGrouper::add: no such camera");
   std::deque<Entry>& q = queues_[camera];
   // Kept in timestamp order: a clock re-sync can step a camera's clock back.
   auto at = q.end();

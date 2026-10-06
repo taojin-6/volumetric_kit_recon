@@ -15,7 +15,7 @@
 
 #include "camera_stream.hpp"
 #include "frame_conversion.hpp"
-#include "trigger_grouping.hpp"
+#include "rig_start_order.hpp"
 #include "volumetric_kit/recon/sensor/trigger_grouper.hpp"
 
 namespace volumetric_kit::recon::sensor {

@@ -66,6 +66,8 @@ class VR_SENSOR_API TriggerGrouper {
   };
 
   /// @param config  The sensors and tolerances.
+  /// @pre `Config::anchor` is below `Config::cameras`, and
+  ///      `Config::queue_depth` is at least 1.
   explicit TriggerGrouper(const Config& config);
 
   /// @brief Hold a frame for grouping.
