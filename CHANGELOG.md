@@ -12,8 +12,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`volumetric_kit::recon_camera`) that links the core's base tier and GLM,
   and no Vulkan, so calib and the drivers use it too:
   - `CameraModel` (image size, intrinsics and OpenCV's rational lens, in
-    double), with `check_camera_model`, `scale_camera_model`, `project`, and
-    `unproject` to 1e-9 px inside `invertible_radius2`;
+    double), with `check_camera_model`, `scale_camera_model`, and
+    `CameraProjection`, whose `project` and `unproject` (to 1e-9 px) keep
+    inside the lens's `invertible_radius2`;
   - `distort_rational<T>` and `project_rational<T>`, the one projection,
     templated on the scalar so a solver differentiates through it;
   - rigid transforms and their Rodrigues form (`geometry.hpp`);

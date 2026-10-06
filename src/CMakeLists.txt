@@ -9,8 +9,8 @@ include(GNUInstallDirs)
 
 # camera is the family's camera vocabulary -- the camera model, rigid
 # transforms, the sensor array's calibration file -- over the family core's base
-# tier and GLM alone, with no Vulkan: calib and a capture driver use it as well
-# as the fusion tiers (the 2026-10-06 decision).
+# tier and GLM alone, linking no Vulkan: calib and a capture driver use it as
+# well as the fusion tiers (the 2026-10-06 decision).
 add_subdirectory(volumetric_kit/recon/camera)
 add_subdirectory(volumetric_kit/recon/core)
 add_subdirectory(volumetric_kit/recon/volume)

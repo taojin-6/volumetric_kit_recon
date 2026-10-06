@@ -80,8 +80,8 @@ links the family core's base tier and GLM, and no other recon tier.
 
 - **`camera`** — the family's camera vocabulary, used by calib and the
   drivers as well as by recon: the double-precision `CameraModel` (image
-  size, intrinsics, OpenCV's rational lens) with `project`/`unproject` and
-  rescaling, its projection as scalar templates, rigid transforms and their
+  size, intrinsics, OpenCV's rational lens) with rescaling and a
+  `CameraProjection` that projects and unprojects, its projection as scalar templates, rigid transforms and their
   Rodrigues form, and the sensor array's calibration file
   (`camera/array_calibration.hpp`). No Vulkan (the 2026-10-06 decision).
 
@@ -1086,10 +1086,12 @@ tier build on it (the 2026-10-06 decision).
 - **`camera/camera_model.hpp`** — `CameraModel`: `ImageSize`,
   `PinholeIntrinsics` and `RationalDistortion` (OpenCV's eight coefficients),
   all double. `check_camera_model` validates one; `scale_camera_model`
-  rescales about pixel centres and refuses another aspect ratio; `project`
-  is the forward model; `unproject` returns the normalized ray to 1e-9 px,
-  by Newton's method inside `invertible_radius2`, and refuses a pixel no ray
-  inside it reaches. Conventions: +Z forward, +Y down, pixel centres at
+  rescales about pixel centres and refuses another aspect ratio.
+  `CameraProjection::create` checks a model and finds its lens's
+  `invertible_radius2` once; its `project` is the forward model, and refuses
+  a point past that radius, and its `unproject` returns the normalized ray,
+  by Newton's method inside it, that `project` maps within 1e-9 px of the
+  pixel, or refuses a pixel no ray inside it reaches. Conventions: +Z forward, +Y down, pixel centres at
   integers, intrinsics in pixels of the model's size.
 - **`camera/projection.hpp`** — `distort_rational<T>` and
   `project_rational<T>` over plain arrays, the one implementation: double in
@@ -1103,7 +1105,8 @@ tier build on it (the 2026-10-06 decision).
   `ArrayCalibration` holds the world (unspecified, a sensor, or an AprilTag)
   and each sensor's optional colour pose, colour and depth models with their
   `IntrinsicsSource`, and `depth_to_color`. Numbers are written in their
-  shortest exact form, through a temporary file renamed into place.
+  shortest exact form, through a synced temporary file renamed into place
+  (beside a symbolic link's target, keeping the file's permissions).
 
 ### sensor
 
