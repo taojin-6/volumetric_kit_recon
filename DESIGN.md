@@ -1053,7 +1053,7 @@ saw nothing), the buffers held by `shared_ptr`. The single-camera pass takes
 one view (the `DeviceMesh` and host `Mesh` overloads), and the several-view
 overloads texture from **several** into an atlas of their images side by
 side, in floor(sqrt(n)) rows so four views make two rows of two
-(`texture_atlas.hpp`: `side_by_side_atlas`, `pack_atlas`), one thread per
+(`texture_atlas.hpp`: `side_by_side_atlas`), one thread per
 **triangle**: each takes the view facing it most squarely among those
 that see its **front** and all three of its vertices, a `fallback` view
 only where no other does, and all three point into that view's tile. Per

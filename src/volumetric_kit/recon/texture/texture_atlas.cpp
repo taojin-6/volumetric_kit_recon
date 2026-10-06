@@ -4,7 +4,6 @@
 #include "volumetric_kit/recon/texture/texture_atlas.hpp"
 
 #include <algorithm>
-#include <cstring>
 #include <string>
 
 #include "atlas_checks.hpp"
@@ -127,40 +126,6 @@ core::Result<AtlasLayout> side_by_side_atlas(
   layout.width = static_cast<std::uint32_t>(width);
   layout.height = static_cast<std::uint32_t>(height);
   return layout;
-}
-
-core::Status pack_atlas(const std::vector<const std::uint32_t*>& images,
-                        const AtlasLayout& layout,
-                        std::vector<std::uint32_t>* atlas) {
-  // TODO(texture): pack on the GPU into an image gfx samples directly, rather
-  // than on the host for gfx to upload; that needs images in core.
-  const std::string who = "pack_atlas: ";
-  if (atlas == nullptr) {
-    return core::Status::invalid_argument(who + "atlas is null");
-  }
-  if (images.size() != layout.tiles.size()) {
-    return core::Status::invalid_argument(
-        who + std::to_string(images.size()) + " images for " +
-        std::to_string(layout.tiles.size()) + " tiles");
-  }
-  for (std::size_t i = 0; i < images.size(); ++i) {
-    if (images[i] == nullptr) {
-      return core::Status::invalid_argument(who + "image " + std::to_string(i) +
-                                            " is null");
-    }
-  }
-  VKC_TRY(detail::check_tiles(layout, who));
-  const std::size_t w = layout.width;
-  atlas->assign(w * layout.height, 0u);
-  for (std::size_t i = 0; i < images.size(); ++i) {
-    const AtlasTile& t = layout.tiles[i];
-    for (std::uint32_t row = 0; row < t.height; ++row) {
-      std::memcpy(atlas->data() + (t.y + row) * w + t.x,
-                  images[i] + static_cast<std::size_t>(row) * t.width,
-                  t.width * sizeof(std::uint32_t));
-    }
-  }
-  return {};
 }
 
 }  // namespace volumetric_kit::recon::texture

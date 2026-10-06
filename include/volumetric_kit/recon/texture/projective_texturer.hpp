@@ -230,23 +230,6 @@ class VR_TEXTURE_API ProjectiveTexturer {
                        float occlusion_threshold = 0.02f,
                        core::StageMetrics* metrics = nullptr);
 
-  /// @brief @ref texture for a depth frame already on the device, bound in
-  ///        place, so the depth never visits the host.
-  ///
-  /// The atlas must still be registered to @p cam, as for the host overload.
-  /// A `sensor::GpuFramePrep` frame's is not -- its colour keeps a camera of
-  /// its own -- so it takes the @ref TextureView overload below.
-  /// @param depth  A storage buffer holding at least `cam.width * cam.height`
-  ///               floats, row-major, in metres. The writer's dispatch must
-  ///               have finished, which a dispatch on this device guarantees.
-  /// @return As the host-depth overload; `Status::Code::InvalidArgument`
-  ///         also for a @p depth that is empty, not a storage buffer, or
-  ///         smaller than the image.
-  core::Status texture(const mesh::DeviceMesh& mesh, const core::Buffer& depth,
-                       const DepthCameraParams& cam,
-                       float occlusion_threshold = 0.02f,
-                       core::StageMetrics* metrics = nullptr);
-
   /// @brief @ref texture from one @ref TextureView: its depth on the host or
   ///        the device, and its colour image registered to the depth camera
   ///        or taken by a colour camera of its own, whose coverage it may

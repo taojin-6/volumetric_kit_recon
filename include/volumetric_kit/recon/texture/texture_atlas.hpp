@@ -124,17 +124,4 @@ struct AtlasLayout {
 VR_TEXTURE_API core::Result<AtlasLayout> side_by_side_atlas(
     const std::vector<TextureView>& views, std::uint32_t max_extent);
 
-/// @brief Copy each view's image into its tile of @p atlas.
-/// @param images  One image per tile, each `tile.width * tile.height` 32-bit
-///                pixels, row-major (the mesh colour's packed RGB, or RGBA8).
-/// @param layout  Where each image goes.
-/// @param atlas   Resized to `layout.width * layout.height`; pixels no tile
-///                covers are zero.
-/// @return OK; `Status::Code::InvalidArgument` for a null @p atlas, an
-///         image count other than the tile count, a null image, a tile
-///         outside the atlas, or two tiles that overlap.
-VR_TEXTURE_API core::Status pack_atlas(
-    const std::vector<const std::uint32_t*>& images, const AtlasLayout& layout,
-    std::vector<std::uint32_t>* atlas);
-
 }  // namespace volumetric_kit::recon::texture
