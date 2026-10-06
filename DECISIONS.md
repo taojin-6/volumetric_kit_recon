@@ -344,6 +344,9 @@ entries relevant to your task; later amendments supersede earlier rules.
   Several sensors are a `SensorArray`, vendor-neutral: started in their rig's
   order, grouped by trigger or by sequence number, and posed by the
   calibration.
+- [**2026-10-06**](#2026-10-06--an-arrays-set-is-prepared-in-one-batch-every-stream-of-every-sensor-one-submit-and-one-wait-host-colour-staged-on-a-thread-per-camera-first) —
+  An array's set is prepared in one batch, every stream of every sensor, one
+  submit and one wait; host colour is staged on a thread per camera first.
 
 ## Decision record
 
@@ -9862,6 +9865,40 @@ applying the poses, not waiting on a live sensor in sequence mode, and not
 checking the clock each fail it, as does undoing any lifecycle or sequence
 rule above. `recon_sensor_trigger_grouper` is the grouping test the rig's
 was; the rig's start order is `recon_sensor_orbbec_start_order`.
+
+### 2026-10-06 — An array's set is prepared in one batch: every stream of every sensor, one submit and one wait, host colour staged on a thread per camera first.
+
+`SensorArray::process(set)` prepares a set through
+`GpuFramePrep::prepare_batch`, a pass per sensor: every frame is checked
+first, so a refused set costs no work; device planes are taken over; each
+pass stages its host data on a thread of its own; then every pass records
+its copies and kernels into one `CommandBatch`, submitted and waited on
+once. `prepare` is the same four steps for one frame, and `prepare_set`, a
+thread and a submit per camera, stays for `rig_viewer` until it opens an
+array.
+
+**Why one batch, given PERF.md's P2 found it no faster.** It is not: it is
+level. The 2026-10-01 measurement lost on the Mac's host colour because the
+batch staged four 4K frames one after another; staging them on threads
+first closes that (median of 60 sets of four 640 x 576 depth and 3840 x 2160
+colour frames, M5 Max, Release, threads against one batch: 1.72 vs 1.76 ms
+for host colour, 0.97 vs 1.00 ms for colour already on the device; 0.38 vs
+0.41 ms for host colour at 1280 x 720). What it buys is the unit the
+pipelined stages need: one submit per set, which the core's async submit can
+order behind the previous stage on a timeline instead of four submits on
+four threads. The RTX 5090 measured level before the threaded staging and is
+not re-measured here.
+
+**Validation.** Apple M5 Max, macOS, Release with warnings as errors, Orbbec,
+FFmpeg and the viewer: the 55 tests pass. `recon_sensor_array_process`
+prepares a three-sensor recording's sets -- one missing a frame -- and holds
+each prepared frame to `prepare` on its own, byte for byte, posed by the
+calibration; `recon_sensor_gpu_frame_prep` alternates `prepare_set` and
+`prepare_batch` against `prepare` and checks the batch's refusals. Both run
+clean under the Khronos layer's synchronization validation. The split
+`prepare` was checked by hand on CL2A141000N over Wi-Fi through `fuse_orbbec
+--gpu`: the default stream, `--mjpeg` and `--hevc` each fuse 30 frames into
+a mesh.
 
 ## Measured lessons
 

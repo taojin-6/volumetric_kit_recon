@@ -1210,7 +1210,10 @@ drains every sensor each `poll_set`, groups the frames into a `FrameSet` --
 by the sensor tier's `TriggerGrouper` around the primary's frames on the
 host clock (`SyncMode::Trigger`), or by equal sequence numbers, in order and
 reading no clock (`SyncMode::Sequence`) -- and stamps each frame with its
-sensor's pose from the `ArrayCalibration`.
+sensor's pose from the `ArrayCalibration`. Opened with a device, its
+`process(set)` prepares a set through `GpuFramePrep::prepare_batch`: every
+frame checked, host colour staged on a thread per camera, then every pass
+recorded into one `CommandBatch`, one submit and one wait.
 **`sensor/utils`'s `GpuFramePrep`** undistorts an `RgbdFrame`
 (`sensor/rgbd_frame.hpp`) on the device: depth sampled at the nearest pixel,
 colour bilinearly and converted from Y'CbCr in the same pass, each camera
@@ -1556,8 +1559,9 @@ landed; the stack continues:
    `CapturedFrame`, `OrbbecCapture` and the SDK's host path go.
 2. **`SensorArray`**, vendor-neutral, has landed: start order from the sync
    roles, trigger or sequence grouping, poses from the calibration file
-   (nearest-frame and tracked members later). Next `process(set)`, every
-   stream of every sensor in one GPU batch; then `OrbbecRig` goes.
+   (nearest-frame and tracked members later), and `process(set)`, every
+   stream of every sensor in one GPU batch. Next `OrbbecRig` goes, and
+   `rig_viewer` and `fuse_orbbec` open an array of `OrbbecSensor`s.
 3. **Luma readback** in `sensor/utils`, wherever the decoder left the
    picture, for calib's detector.
 4. **Pipelined stages**: the core's `CommandBatch` submits without waiting,
