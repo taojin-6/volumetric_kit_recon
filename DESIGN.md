@@ -1399,9 +1399,8 @@ transport's.
 `MeshDistance` (point-to-surface distance up to a reach,
 through a hash of cells half the reach on a side, searched nearest first
 and pruned by distance, over a **copy** of the triangles),
-`compare_meshes` giving accuracy, coverage and an optional F-score, and
-`ReferenceMesh`, which indexes a reference once so a sweep can judge many
-meshes against it. They refuse, with `Status`, what would read out of
+and `ReferenceMesh`, which indexes a reference once so a sweep can judge
+many meshes against it, giving accuracy, coverage and an optional F-score. They refuse, with `Status`, what would read out of
 bounds, overflow or mean nothing:
 - a bad reach, or indices out of range;
 - a corner that is not finite or past the cell keys' range;
