@@ -93,14 +93,25 @@ int main() {
   for (const sensor::OrbbecSyncDevice& d : sync.value().devices) {
     camera::SensorCalibration c;
     c.id = d.serial;
-    c.color_to_world = camera::Mat4d(1.0);
-    (*c.color_to_world)[3] =
+    c.color_to_world[3] =
         glm::dvec4(static_cast<double>(poses.sensors.size()), 0.5, -1.0, 1.0);
     poses.sensors.push_back(c);
   }
+  // Unturned, so each pose's tvec is minus the camera's position.
+  std::string json = "{\"device_calibration\": {";
+  for (const camera::SensorCalibration& c : poses.sensors) {
+    const camera::Vec3d t = -camera::Vec3d(c.color_to_world[3]);
+    json += (c.id == poses.sensors.front().id ? "\"" : ", \"") + c.id +
+            "\": {\"pose\": {\"rvec\": [0, 0, 0], \"tvec\": [" +
+            std::to_string(t.x) + ", " + std::to_string(t.y) + ", " +
+            std::to_string(t.z) + "]}}";
+  }
+  json += "}}";
   const std::string path =
       std::string(VR_TEST_SCRATCH_DIR) + "/orbbec_rig_test.json";
-  CHECK_OK(camera::write_array_calibration(path, poses));
+  std::FILE* file = std::fopen(path.c_str(), "wb");
+  CHECK(file != nullptr);
+  CHECK(std::fputs(json.c_str(), file) >= 0 && std::fclose(file) == 0);
   auto read = camera::read_array_calibration(path);
   CHECK(read.ok());
 
@@ -138,7 +149,7 @@ int main() {
                 i == rig.primary() ? "  (started last)" : "");
     CHECK(info.serial == poses.sensors[i].id);
     CHECK(near(rig.color_camera(i).cam_to_world,
-               vr::Mat4f(*poses.sensors[i].color_to_world)));
+               vr::Mat4f(poses.sensors[i].color_to_world)));
   }
   CHECK(rig.device_info(rig.primary()).sync_mode ==
         sensor::OrbbecSyncMode::Primary);
@@ -185,9 +196,9 @@ int main() {
         CHECK(f.depth != nullptr && f.has_color());
         // Posed by its own camera.
         CHECK(near(f.color_camera.cam_to_world,
-                   vr::Mat4f(*poses.sensors[i].color_to_world)));
+                   vr::Mat4f(poses.sensors[i].color_to_world)));
         CHECK(near(f.depth_camera.cam_to_world,
-                   vr::Mat4f(*poses.sensors[i].color_to_world)));
+                   vr::Mat4f(poses.sensors[i].color_to_world)));
         // On the trigger's clock, within the tolerance.
         const std::uint64_t skew_us =
             (f.timestamp_ns > set.timestamp_ns
@@ -260,7 +271,7 @@ int main() {
     const vr::Mat4f& pose = polled.value()->color_camera.cam_to_world;
     CHECK(std::any_of(poses.sensors.begin(), poses.sensors.end(),
                       [&](const auto& p) {
-                        return near(vr::Mat4f(*p.color_to_world), pose);
+                        return near(vr::Mat4f(p.color_to_world), pose);
                       }));
     ++k;
   }
@@ -371,7 +382,7 @@ int main() {
         const sensor::RawFrame& f = *set.frames[c];
         CHECK(f.depth != nullptr && f.has_color());
         CHECK(near(f.color_cam_to_world,
-                   vr::Mat4f(*poses.sensors[c].color_to_world)));
+                   vr::Mat4f(poses.sensors[c].color_to_world)));
         const vr::Mat4f rel =
             glm::inverse(f.color_cam_to_world) * f.depth_cam_to_world;
         CHECK(glm::length(vr::Vec3f(rel[3])) < 0.1f);
@@ -421,7 +432,7 @@ int main() {
       const vr::Mat4f& pose = polled.value()->color_cam_to_world;
       CHECK(std::any_of(poses.sensors.begin(), poses.sensors.end(),
                         [&](const auto& p) {
-                          return near(vr::Mat4f(*p.color_to_world), pose);
+                          return near(vr::Mat4f(p.color_to_world), pose);
                         }));
       ++k;
     }

@@ -315,27 +315,20 @@ vkc::Result<Source> open_source(const Options& opt, const vkc::Device& device,
   capture_options.serial = opt.serial;
   const std::vector<camera::SensorCalibration>& sensors = calibration.sensors;
   if (!sensors.empty()) {
-    // One camera, posed from the file: the named one, or the file's only
-    // posed one (a sensor may record its lens alone).
-    const auto posed = [](const camera::SensorCalibration& s) {
-      return s.color_to_world.has_value();
-    };
-    const camera::SensorCalibration* sensor = nullptr;
-    if (!opt.serial.empty()) {
-      sensor = camera::find_sensor(calibration, opt.serial);
-    } else if (std::count_if(sensors.begin(), sensors.end(), posed) == 1) {
-      sensor = &*std::find_if(sensors.begin(), sensors.end(), posed);
-    }
-    if (sensor == nullptr || !posed(*sensor)) {
+    // One camera, posed from the file: the named one, or the file's only.
+    const camera::SensorCalibration* sensor =
+        !opt.serial.empty()   ? camera::find_sensor(calibration, opt.serial)
+        : sensors.size() == 1 ? &sensors[0]
+                              : nullptr;
+    if (sensor == nullptr) {
       return vkc::Status::not_found(
           opt.calibration +
           (opt.serial.empty()
-               ? std::string(" does not pose exactly one camera; name one "
-                             "with --serial")
+               ? std::string(" poses several cameras; name one with --serial")
                : " does not pose camera " + opt.serial));
     }
     capture_options.serial = sensor->id;
-    capture_options.cam_to_world = vr::Mat4f(*sensor->color_to_world);
+    capture_options.cam_to_world = vr::Mat4f(sensor->color_to_world);
   }
   if (opt.min_depth) capture_options.min_depth = *opt.min_depth;
   if (opt.max_depth) capture_options.max_depth = *opt.max_depth;
