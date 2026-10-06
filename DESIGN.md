@@ -1196,8 +1196,13 @@ device's image extent to software.
 opened modes, `depth_to_color`, rig role, clock, pose source, rate), and
 frames held up to `set_queue_depth`, the newest taken by `poll` or all,
 oldest first, by `drain`. **`OrbbecSensor`** implements it over the same
-`CameraStream` as `OrbbecCapture`, raw only, with
-`clock_sync_interval_ms` putting the camera on the host's clock.
+`CameraStream` as `OrbbecCapture`, raw only: `open` refuses a `min_depth` of
+0, which the GPU pass would, and a camera in a sync mode the driver does not
+know; `sync_clock_to_host` sets this camera's clock (`timerSyncWithHost`, not
+the context's `enableDeviceClockSync`, which re-syncs every camera the
+process opened) to the host's at each `start`, before it streams; and its
+`stats()` counts the driver's lost frames failed, a JPEG the decoder had no
+time for being dropped.
 **`sensor/utils`'s `GpuFramePrep`** undistorts an `RgbdFrame`
 (`sensor/rgbd_frame.hpp`) on the device: depth sampled at the nearest pixel,
 colour bilinearly and converted from Y'CbCr in the same pass, each camera
@@ -1481,9 +1486,11 @@ The live counterpart is its own example, not a `fuse_replica` flag:
 **`fuse_orbbec`** (`VR_WITH_ORBBEC`) fuses an `OrbbecCapture` through the same
 `fuse_frame.hpp` and writes a PLY after `--frames` frames; `--rig sync.json`
 fuses the rig as an `OrbbecRig`, posed by `--calibration`. With `--gpu` the
-source serves raw frames, which the loop learns from `raw_frames()`, and each
-is prepared by `GpuFramePrep` and fused through `fuse_device_frame.hpp`, the
-one header that pulls in `sensor/utils`.
+frames are raw, each prepared by `GpuFramePrep` and fused through
+`fuse_device_frame.hpp`, the one header that pulls in `sensor/utils`; one
+camera is then read as an `OrbbecSensor`, `--host-clock` syncing its clock,
+and the run prints its `SensorInfo` and how far its first frame sits from the
+host's clock.
 **`rig_viewer`** (`VR_BUILD_VIEWER` with `VR_WITH_ORBBEC` and
 `VR_WITH_FFMPEG`) is `fuse_viewer`'s live-rig sibling: raw sets prepared,
 fused and textured from every camera on the GPU, and the atlas filled by

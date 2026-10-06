@@ -2,14 +2,16 @@
 // Copyright (c) 2026 Tao Jin
 
 // fuse_orbbec: live reconstruction from an Orbbec (Femto Mega) camera or a
-// synced rig of them. Opens sensor::OrbbecCapture or sensor::OrbbecRig, fuses
-// each frame it hands out into a sparse TSDF volume -- the same per-frame fuse
+// synced rig of them. Opens sensor::OrbbecCapture, sensor::OrbbecSensor (one
+// camera, --gpu) or sensor::OrbbecRig, fuses each frame it hands out into a
+// sparse TSDF volume -- the same per-frame fuse
 // the dataset example runs (examples/common/fuse_frame.hpp) -- and after
 // --frames frames extracts a marching-cubes mesh and writes it to a binary PLY.
 //
 //   fuse_orbbec [--serial SN | --rig sync.json [--apply-sync]]
 //               [--calibration calib.json] [--frames 300] [-o fuse_orbbec.ply]
-//               [--hevc | --mjpeg] [--gpu] [--color 1280x720] [--fps 30]
+//               [--hevc | --mjpeg] [--gpu [--host-clock]] [--color 1280x720]
+//               [--fps 30]
 //               [--voxel 0.02] [--trunc m] [--min-depth m] [--max-depth m]
 //               [--max-weight 20]
 //
@@ -21,7 +23,8 @@
 // it streams H.265 unless --mjpeg says otherwise, since MJPEG needs about
 // nine times the bandwidth. With --rig, each set's cameras are prepared at
 // once, one thread per camera (sensor::prepare_set), and fused one after
-// another.
+// another; one camera is read through the sensor interface (OrbbecSensor),
+// and --host-clock sets its clock to the host's at the start.
 // --rig fuses every camera of a sync configuration (femto_mega_sync.json) as
 // one rig, refusing cameras that differ from it unless --apply-sync writes it
 // to them. --calibration poses each camera from a calibration file
@@ -54,6 +57,7 @@
 #include "volumetric_kit/recon/sensor/camera_capture.hpp"
 #include "volumetric_kit/recon/sensor/orbbec/orbbec_capture.hpp"
 #include "volumetric_kit/recon/sensor/orbbec/orbbec_rig.hpp"
+#include "volumetric_kit/recon/sensor/orbbec/orbbec_sensor.hpp"
 #include "volumetric_kit/recon/sensor/orbbec/orbbec_sync_config.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
@@ -82,6 +86,7 @@ struct Options {
   // H.265 colour rather than MJPEG; unset, H.265 for --gpu alone.
   std::optional<bool> hevc;
   bool gpu = false;               // raw frames, prepared on the GPU
+  bool host_clock = false;        // one --gpu camera on the host's clock
   std::uint32_t color_width = 0;  // 0 keeps the driver's default mode
   std::uint32_t color_height = 0;
   std::uint32_t fps = 0;
@@ -130,6 +135,8 @@ vkc::Result<Options> parse_args(int argc, char** argv) {
       opt.hevc = hevc;
     } else if (a == "--gpu") {
       opt.gpu = true;
+    } else if (a == "--host-clock") {
+      opt.host_clock = true;
     } else if (a == "--color") {
       const char* s = take();
       unsigned w = 0, h = 0;
@@ -178,7 +185,7 @@ vkc::Result<Options> parse_args(int argc, char** argv) {
           "unknown argument: " + a +
           "\nusage: fuse_orbbec [--serial SN | --rig sync.json [--apply-sync]] "
           "[--calibration calib.json] [--frames N] [--hevc | --mjpeg] "
-          "[--gpu] [--color WxH] [--fps N] "
+          "[--gpu [--host-clock]] [--color WxH] [--fps N] "
           "[-o out.ply] [--voxel m] [--trunc m] [--min-depth m] "
           "[--max-depth m] [--max-weight w]");
     }
@@ -201,12 +208,18 @@ vkc::Result<Options> parse_args(int argc, char** argv) {
   if (opt.frames < 1) {
     return vkc::Status::invalid_argument("--frames must be >= 1");
   }
+  if (opt.host_clock && (!opt.gpu || !opt.rig.empty())) {
+    return vkc::Status::invalid_argument(
+        "--host-clock is for one camera with --gpu; a rig syncs its own");
+  }
   return opt;
 }
 
-// One camera or a rig, behind the capture contract the fuse loop reads.
+// One camera or a rig: one raw camera behind the sensor interface, the
+// others behind the capture contract the fuse loop reads.
 struct Source {
   std::optional<sensor::OrbbecCapture> camera;
+  std::optional<sensor::OrbbecSensor> sensor;
   std::optional<sensor::OrbbecRig> rig;
   bool waits_for_primary = false;  // one camera, and a sync secondary
   std::string name;                // for the silence message
@@ -214,6 +227,7 @@ struct Source {
   sensor::ICameraCapture& capture() {
     return camera ? static_cast<sensor::ICameraCapture&>(*camera) : *rig;
   }
+  vkc::Status start() { return sensor ? sensor->start() : capture().start(); }
   void print_stats() const {
     const auto line = [](const char* who,
                          const sensor::OrbbecCaptureStats& st) {
@@ -234,6 +248,10 @@ struct Source {
     };
     if (camera) {
       line(camera->device_info().serial.c_str(), camera->stats());
+      return;
+    }
+    if (sensor) {
+      line(sensor->device_info().serial.c_str(), sensor->orbbec_stats());
       return;
     }
     const sensor::OrbbecRigStats st = rig->stats();
@@ -257,6 +275,26 @@ void print_camera(const sensor::OrbbecDeviceInfo& info,
       sensor::to_string(info.sync_mode), cam.width, cam.height, cam.fx, cam.fy,
       cam.cx, cam.cy, cam.cam_to_world[3].x, cam.cam_to_world[3].y,
       cam.cam_to_world[3].z);
+}
+
+// A camera as it captures: each one's factory model at the opened mode, its
+// role and its clock.
+void print_sensor(const sensor::OrbbecDeviceInfo& device,
+                  const sensor::SensorInfo& info, const camera::Mat4d& pose) {
+  std::printf("camera: %s %s, firmware %s, %s %s, sync %s, %s clock\n",
+              info.model.c_str(), info.id.c_str(),
+              device.firmware_version.c_str(), device.connection_type.c_str(),
+              device.ip_address.c_str(), sensor::to_string(device.sync_mode),
+              sensor::to_string(info.clock));
+  const auto line = [](const char* what, const camera::CameraModel& cam) {
+    std::printf("  %s %ux%u @ fx=%.1f fy=%.1f cx=%.1f cy=%.1f\n", what,
+                cam.size.width, cam.size.height, cam.intrinsics.fx,
+                cam.intrinsics.fy, cam.intrinsics.cx, cam.intrinsics.cy);
+  };
+  if (info.color) line("colour", *info.color);
+  if (info.depth) line("depth ", *info.depth);
+  std::printf("  colour camera at (%.3f, %.3f, %.3f) m\n", pose[3].x, pose[3].y,
+              pose[3].z);
 }
 
 // The colour stream the command line asked for, over the driver's defaults.
@@ -311,8 +349,8 @@ vkc::Result<Source> open_source(const Options& opt, const vkc::Device& device,
     source.name = "the rig";
     return source;
   }
-  sensor::OrbbecCapture::Options capture_options;
-  capture_options.serial = opt.serial;
+  std::string serial = opt.serial;
+  camera::Mat4d color_to_world(1.0);
   const std::vector<camera::SensorCalibration>& sensors = calibration.sensors;
   if (!sensors.empty()) {
     // One camera, posed from the file: the named one, or the file's only.
@@ -327,15 +365,33 @@ vkc::Result<Source> open_source(const Options& opt, const vkc::Device& device,
                ? std::string(" poses several cameras; name one with --serial")
                : " does not pose camera " + opt.serial));
     }
-    capture_options.serial = sensor->id;
-    capture_options.cam_to_world = sensor->color_to_world;
+    serial = sensor->id;
+    color_to_world = sensor->color_to_world;
   }
-  if (opt.min_depth) capture_options.min_depth = *opt.min_depth;
-  if (opt.max_depth) capture_options.max_depth = *opt.max_depth;
-  apply_streams(opt, device, allocator, capture_options);
-  VKC_ASSIGN(source.camera, sensor::OrbbecCapture::open(capture_options));
-  const sensor::OrbbecDeviceInfo& info = source.camera->device_info();
-  print_camera(info, source.camera->color_camera());
+  if (opt.gpu) {
+    sensor::OrbbecSensor::Options sensor_options;
+    sensor_options.serial = serial;
+    sensor_options.color_to_world = color_to_world;
+    sensor_options.sync_clock_to_host = opt.host_clock;
+    if (opt.min_depth) sensor_options.min_depth = *opt.min_depth;
+    if (opt.max_depth) sensor_options.max_depth = *opt.max_depth;
+    apply_streams(opt, device, allocator, sensor_options);
+    VKC_ASSIGN(source.sensor, sensor::OrbbecSensor::open(sensor_options));
+    print_sensor(source.sensor->device_info(), source.sensor->info(),
+                 color_to_world);
+  } else {
+    sensor::OrbbecCapture::Options capture_options;
+    capture_options.serial = serial;
+    capture_options.cam_to_world = color_to_world;
+    if (opt.min_depth) capture_options.min_depth = *opt.min_depth;
+    if (opt.max_depth) capture_options.max_depth = *opt.max_depth;
+    apply_streams(opt, device, allocator, capture_options);
+    VKC_ASSIGN(source.camera, sensor::OrbbecCapture::open(capture_options));
+    print_camera(source.camera->device_info(), source.camera->color_camera());
+  }
+  const sensor::OrbbecDeviceInfo& info = source.sensor
+                                             ? source.sensor->device_info()
+                                             : source.camera->device_info();
   source.waits_for_primary = sensor::waits_for_primary(info.sync_mode);
   if (source.waits_for_primary) {
     std::printf(
@@ -371,14 +427,12 @@ vkc::Status run(const Options& opt) {
              tsdf::TsdfIntegrator::create(device, allocator));
   VKC_ASSIGN(mesh::MarchingCubes extractor,
              mesh::MarchingCubes::create(device, allocator, {}));
-  // The source says which frames it hands out: raw ones (--gpu) are prepared
-  // on the device first, and a raw rig's whole sets at once, a pass a camera.
-  sensor::ICameraCapture& capture = source->capture();
-  const bool raw_frames = capture.raw_frames();
-  const bool raw_sets = raw_frames && source->rig;
+  // Raw frames (--gpu) are prepared on the device first, and a raw rig's
+  // whole sets at once, a pass a camera.
+  const bool raw_sets = opt.gpu && source->rig;
   std::vector<sensor::GpuFramePrep> preps;
   std::size_t passes = 0;
-  if (raw_frames) passes = raw_sets ? source->rig->camera_count() : 1;
+  if (opt.gpu) passes = raw_sets ? source->rig->camera_count() : 1;
   for (std::size_t c = 0; c < passes; ++c) {
     VKC_ASSIGN(sensor::GpuFramePrep one,
                sensor::GpuFramePrep::create(device, allocator));
@@ -386,7 +440,7 @@ vkc::Status run(const Options& opt) {
   }
 
   // --- Fuse ---
-  VKC_TRY(capture.start());
+  VKC_TRY(source->start());
   vkc::StageMetrics stage_totals;
   int fused = 0;
   int reported = 0;  // the count last reported; a set may step past 100
@@ -405,11 +459,11 @@ vkc::Status run(const Options& opt) {
     if (raw_sets) {
       VKC_ASSIGN(set, source->rig->poll_raw_set());
       got = set && set->count() > 0;
-    } else if (raw_frames) {
-      VKC_ASSIGN(raw, capture.poll_raw());
+    } else if (source->sensor) {
+      VKC_ASSIGN(raw, source->sensor->poll());
       got = raw.has_value();
     } else {
-      VKC_ASSIGN(polled, capture.poll());
+      VKC_ASSIGN(polled, source->capture().poll());
       got = polled.has_value();
     }
     if (got) {
@@ -435,6 +489,16 @@ vkc::Status run(const Options& opt) {
       continue;
     }
     last_frame = std::chrono::steady_clock::now();
+    if (raw && fused == 0 && source->sensor) {
+      // The SDK's host clock is the system clock: on it (--host-clock), the
+      // frame is milliseconds old; the camera's own is where it was last set.
+      const auto host = std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::system_clock::now().time_since_epoch());
+      std::printf("  first frame %.1f ms before the host's clock\n",
+                  (static_cast<double>(host.count()) -
+                   static_cast<double>(raw->timestamp_ns)) /
+                      1e6);
+    }
     if (set) {
       // Timed as one row: the cameras run at once, so their sum would
       // overstate what the set costs.

@@ -31,8 +31,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   oldest first, and `SensorStats`. Test: `recon_sensor_rgbd_sensor`.
 - `sensor/orbbec`: **`OrbbecSensor`**, the Femto Mega as an `IRgbdSensor`:
   frames as captured, for the GPU pass, the pose in double, and
-  `clock_sync_interval_ms` for the host's clock. Checked by hand at a camera,
-  as tests use no hardware.
+  `sync_clock_to_host` for the host's clock. `fuse_orbbec --gpu` reads one
+  camera through it (`--host-clock`), which is how it is checked, as tests
+  use no hardware.
 
 ### Changed
 
@@ -55,6 +56,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   driver takes its nearest rotation, which moves depth up to about 4 px
   along x in a 720p colour image, and `open` refuses one that does not come
   out a rotation.
+- `sensor/orbbec`: **raw frames need `min_depth > 0`**, as the GPU pass
+  does: `OrbbecCapture` and `OrbbecRig` opened `raw` refuse 0 at `open`
+  instead of handing out frames `GpuFramePrep` refuses. **A raw MJPEG pair
+  the JPEG decoder had no time for is counted `dropped`**, as the mailbox
+  counts one, not `lost`.
 
 ### Removed
 
