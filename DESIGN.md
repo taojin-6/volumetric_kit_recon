@@ -78,12 +78,11 @@ branching off **`core`**, `codec` off **`volume`** and `eval`/`io` off **`mesh`*
 (later: `track`, `stream`). `camera` sits under `sensor` and beside `core`: it
 links the family core's base tier and GLM, and no other recon tier.
 
-- **`camera`** — the family's camera vocabulary, used by calib and the
-  drivers as well as by recon: the double-precision `CameraModel` (image
-  size, intrinsics, OpenCV's rational lens) with rescaling and a
-  `CameraProjection` that projects and unprojects, its projection as scalar templates, rigid transforms and their
-  Rodrigues form, and the sensor array's calibration file
-  (`camera/array_calibration.hpp`). No Vulkan (the 2026-10-06 decision).
+- **`camera`** — the camera vocabulary the drivers and the sensor tier
+  share: the double-precision `CameraModel` (image size, intrinsics, OpenCV's
+  rational lens), the lens as a scalar template, rigid transforms, and the
+  sensor array's calibration file (`camera/array_calibration.hpp`). No
+  Vulkan (the 2026-10-06 decisions).
 
 - **`core`** — recon's own vocabulary every tier trades in: the GLM math
   aliases, the posed pinhole `DepthCameraParams`/`ColorCameraParams` of
@@ -1080,33 +1079,24 @@ read back in a batch of its own.
 
 ### camera
 
-`recon_camera` links `core_base` and GLM; calib, the drivers and the sensor
-tier build on it (the 2026-10-06 decision).
+`recon_camera` links `core_base` and GLM; the drivers and the sensor tier
+build on it. It holds only what a capture uses (the second 2026-10-06
+decision): unprojection, rescaling and writing the file come with their first
+caller.
 
 - **`camera/camera_model.hpp`** — `CameraModel`: `ImageSize`,
   `PinholeIntrinsics` and `RationalDistortion` (OpenCV's eight coefficients),
-  all double. `check_camera_model` validates one; `scale_camera_model`
-  rescales about pixel centres and refuses another aspect ratio.
-  `CameraProjection::create` checks a model and finds its lens's
-  `invertible_radius2` once; its `project` is the forward model, and refuses
-  a point past that radius, and its `unproject` returns the normalized ray,
-  by Newton's method inside it, that `project` maps within 1e-9 px of the
-  pixel, or refuses a pixel no ray inside it reaches. Conventions: +Z forward, +Y down, pixel centres at
-  integers, intrinsics in pixels of the model's size.
-- **`camera/projection.hpp`** — `distort_rational<T>` and
-  `project_rational<T>` over plain arrays, the one implementation: double in
-  `camera_model.hpp`, float in `sensor/lens.hpp` (which `lens.glsl`
-  mirrors), and a solver's dual numbers.
+  all double, and `check_camera_model`. Conventions: +Z forward, +Y down,
+  pixel centres at integers, intrinsics in pixels of the model's size.
+- **`camera/projection.hpp`** — `distort_rational<T>`, the lens's forward
+  model: float in `sensor/lens.hpp` (which `lens.glsl` mirrors), double as
+  the tests' reference.
 - **`camera/geometry.hpp`** — GLM's double types, `check_rigid`,
-  `rigid_inverse`, and Rodrigues both ways, accurate through pi.
+  `rigid_inverse`, and the rotation of a Rodrigues vector.
   `RodriguesTransform` is OpenCV's `x' = R(rvec) x + tvec`.
 - **`camera/array_calibration.hpp`** — the sensor array's calibration file,
-  version 2 written, versions 1 and 2 read; the header documents the format.
-  `ArrayCalibration` holds the world (unspecified, a sensor, or an AprilTag)
-  and each sensor's optional colour pose, colour and depth models with their
-  `IntrinsicsSource`, and `depth_to_color`. Numbers are written in their
-  shortest exact form, through a synced temporary file renamed into place
-  (beside a symbolic link's target, keeping the file's permissions).
+  the family's `device_calibration` layout: each sensor's colour-camera pose
+  by serial. Every other key is ignored.
 
 ### sensor
 

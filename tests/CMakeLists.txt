@@ -304,12 +304,10 @@ target_link_libraries(recon_sensor_conventions_test
 vr_target_warnings(recon_sensor_conventions_test)
 add_test(NAME recon_sensor_conventions COMMAND recon_sensor_conventions_test)
 
-# camera tier: the camera model (checks, rescaling about pixel centres,
-# projection against OpenCV's numbers, unprojection inside the invertible
-# radius, the scalar templates under a dual number), its geometry (rigid checks,
-# Rodrigues at its edge cases), and the sensor array's calibration file (both
-# versions, the refusals, a round trip through a file in the build tree).
-# Host-only, so they always run.
+# camera tier: the camera model (its checks, the lens template against OpenCV's
+# numbers), its geometry (rigid checks, Rodrigues against OpenCV), and the
+# sensor array's calibration file (poses read, the refusals, a file in the build
+# tree). Host-only, so they always run.
 add_executable(recon_camera_model_test camera_model_test.cpp)
 # recon_sensor brings recon_camera: the test compares the sensor tier's float
 # lens with the camera model.

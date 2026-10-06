@@ -172,7 +172,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   configuration and writes it only when asked, starts the secondaries before
   the primary, keeps the cameras on the host's clock, and builds each set
   around a primary frame; poses come from the calibration file. The file
-  moved to the `camera` tier, as version 2, on 2026-10-06.
+  moved to the `camera` tier on 2026-10-06.
 - [**2026-09-27**](#2026-09-27--encoder-and-decoder-are-the-codecs-public-api-encoding-drops-never-observed-blocks-and-sorts-the-rest-decoding-makes-a-callers-grid-hold-exactly-the-frame-by-diffing-its-block-set-everything-checkable-is-checked-before-the-grid-is-touched-and-a-grid-too-small-for-the-frame-is-refused-rather-than-grown) —
   `Encoder` and `Decoder` are the codec's public API: encoding drops
   never-observed blocks and sorts the rest, decoding makes a caller's grid hold
@@ -323,7 +323,12 @@ entries relevant to your task; later amendments supersede earlier rules.
   The family's camera vocabulary is recon's `camera` tier: a double-precision
   camera model with one templated projection, rigid transforms, and the
   sensor array's calibration file, version 2. It links the core's base tier
-  and GLM, not Vulkan.
+  and GLM, not Vulkan. Cut back the same day, below.
+- [**2026-10-06**](#2026-10-06--the-camera-tier-keeps-only-what-a-capture-uses-amends-the-entry-above) —
+  The camera tier keeps only what a capture uses: the camera model and its
+  check, the lens's forward template, rigid checks, and each sensor's pose
+  from the calibration file's version-1 layout. Unprojection, rescaling,
+  version 2 and the writer go until a caller needs them.
 
 ## Decision record
 
@@ -4647,8 +4652,9 @@ which a test keeps valid; the library never reads `config/` itself.
   at ~170 Mbit/s per camera, so the rig needs the wired link.
 
 **The calibration file** (`sensor/rig_calibration.hpp`, in `recon_sensor`;
-*amended 2026-10-06 (below):* now `camera/array_calibration.hpp`, version 2,
-in `recon_camera`, which `recon_sensor` links) is the family's config
+*amended 2026-10-06 (below):* now `camera/array_calibration.hpp`, in
+`recon_camera`, which `recon_sensor` links, and it reads only the poses) is
+the family's config
 layout: `device_calibration.<serial>` with `intrinsics`, `distortion`,
 `optimal_intrinsics` and `pose {rvec, tvec}`; other sections are ignored.
 `pose` is the colour camera's OpenCV extrinsic
@@ -9567,6 +9573,8 @@ device under the Khronos validation layer with no message. The live rig
 
 ### 2026-10-06 — The family's camera vocabulary is recon's `camera` tier: a double-precision camera model and the sensor array's calibration file, version 2.
 
+*Amended the same day (below):* the tier keeps only what a capture uses.
+
 calib solves for camera models and writes the rig's calibration; recon's
 drivers report their factory calibration and read the poses; ios fills the
 same types from ARKit. Until now each had its own: recon a float
@@ -9637,6 +9645,35 @@ radius check, measuring `unproject`'s residual in normalized coordinates (as
 first written: 5 of 518,400 pixels of a rig lens came back past 1e-9 px),
 and writing through a symbolic link or without the old permissions. Every
 pixel of the four rig lenses round-trips within 1e-9 px.
+
+### 2026-10-06 — The camera tier keeps only what a capture uses (amends the entry above).
+
+Once the tier merged, most of it had no caller outside its own tests:
+`CameraProjection` (host projection and Newton unprojection),
+`invertible_radius2`, `scale_camera_model`, `project_rational`, version 2 of
+the calibration file with its writer, and `rodrigues_from_rotation`.
+Reconstruction undistorts on the GPU with the forward model alone (the
+2026-09-28 pre-processing decision), so it never inverts a lens, and calib,
+the intended user, keeps its own camera model and links none of this. They
+are removed, about 1,400 lines with their tests; each comes back with its
+first caller.
+
+- **What stays.** `CameraModel` and `check_camera_model` (`RgbdFrame` and the
+  GPU frame prep carry and check it); `distort_rational<T>` (the sensor
+  tier's float lens, which `lens.glsl` mirrors, and the tests' double
+  reference); `check_rigid`, `rigid_inverse` and `rotation_from_rodrigues`
+  (the driver's and the array's checks, and reading a pose).
+- **The calibration file is the family's `device_calibration` layout
+  again**, read for each sensor's pose by serial; lens fields and every other
+  key are ignored. Version 2 had no writer outside the tests and no file in
+  use: the rig's file is version 1.
+- **`SensorCalibration::color_to_world` is a plain `Mat4d`**, since every
+  sensor the file lists has a pose.
+
+**Validation.** Apple M5 Max, macOS, Release with warnings as errors, Orbbec,
+FFmpeg and the viewer: the 54 tests pass, and the rig's calibration file
+reads all four poses. The rig hardware test, which now writes its file as
+JSON, was not run.
 
 ## Measured lessons
 
