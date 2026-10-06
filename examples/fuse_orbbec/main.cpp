@@ -400,7 +400,7 @@ vkc::Status run(const Options& opt) {
     const auto t_poll = std::chrono::steady_clock::now();
     bool got = false;
     std::optional<sensor::CapturedFrame> polled;
-    std::optional<sensor::RawFrame> raw;
+    std::optional<sensor::RgbdFrame> raw;
     std::optional<sensor::OrbbecRigRawSet> set;
     if (raw_sets) {
       VKC_ASSIGN(set, source->rig->poll_raw_set());

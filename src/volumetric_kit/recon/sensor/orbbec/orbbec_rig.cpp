@@ -298,7 +298,7 @@ core::Result<std::optional<OrbbecRigRawSet>> OrbbecRig::poll_raw_set() {
         "OrbbecRig: poll on a moved-from rig");
   }
   VKC_TRY(impl_->read_with(Impl::Reader::RawSets));
-  return impl_->take<RawFrame>();
+  return impl_->take<RgbdFrame>();
 }
 
 template <typename Frame>
@@ -352,7 +352,7 @@ core::Result<std::optional<OrbbecRigSet<Frame>>> OrbbecRig::Impl::take() {
     // A raw frame is a view of the camera's own buffers, so it costs no more
     // than the grouping; the per-camera work is the GPU pass's.
     auto processed = [&] {
-      if constexpr (std::is_same_v<Frame, RawFrame>) {
+      if constexpr (std::is_same_v<Frame, RgbdFrame>) {
         return r.streams[c]->process_raw(pair);
       } else {
         return r.streams[c]->process(pair);
@@ -400,7 +400,7 @@ core::Result<std::optional<CapturedFrame>> OrbbecRig::poll() {
   return impl_->next(impl_->current);
 }
 
-core::Result<std::optional<RawFrame>> OrbbecRig::poll_raw() {
+core::Result<std::optional<RgbdFrame>> OrbbecRig::poll_raw() {
   if (impl_ == nullptr) {
     return core::Status::invalid_argument(
         "OrbbecRig: poll on a moved-from rig");

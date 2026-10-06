@@ -30,7 +30,7 @@
 #include "volumetric_kit/recon/core/camera_params.hpp"
 #include "volumetric_kit/recon/core/color_space.hpp"
 #include "volumetric_kit/recon/sensor/export.hpp"
-#include "volumetric_kit/recon/sensor/raw_frame.hpp"
+#include "volumetric_kit/recon/sensor/rgbd_frame.hpp"
 
 namespace volumetric_kit::recon::sensor {
 
@@ -219,19 +219,20 @@ class VR_SENSOR_API ICameraCapture {
   virtual bool exhausted() const noexcept { return false; }
 
   /// @brief Take the newest frame not yet returned as the cameras captured
-  ///        it, before undistortion and colour conversion: the @ref RawFrame
+  ///        it, before undistortion and colour conversion: the @ref RgbdFrame
   ///        `sensor/utils`'s GPU pass prepares.
   ///
   /// A source hands its frames out one way or the other, chosen when it is
   /// opened, and @ref raw_frames says which, so a consumer asks once and then
   /// polls this or @ref poll. Otherwise it is @ref poll: an empty optional is
-  /// "nothing this tick" (@ref exhausted tells the two apart), frames are
-  /// dropped rather than queued, and the frame borrows the source's buffers
-  /// until its next call. A source that hands out none keeps the default.
+  /// "nothing this tick" (@ref exhausted tells the two apart), and frames are
+  /// dropped rather than queued; unlike a @ref CapturedFrame, the frame holds
+  /// its pixels (`RgbdFrame::pixels`). A source that hands out none keeps the
+  /// default.
   /// @return The frame; an empty optional if none is ready; a device error;
   ///         or, the default, `Status::Code::Unsupported` from a source
   ///         that hands out no raw frames.
-  virtual core::Result<std::optional<RawFrame>> poll_raw() {
+  virtual core::Result<std::optional<RgbdFrame>> poll_raw() {
     return core::Status::unsupported(
         "ICameraCapture: this source hands out no raw frames");
   }

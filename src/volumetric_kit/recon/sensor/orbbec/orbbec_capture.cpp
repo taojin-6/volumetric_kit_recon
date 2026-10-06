@@ -138,7 +138,7 @@ core::Result<std::optional<CapturedFrame>> OrbbecCapture::poll() {
   return impl_->stream->process(pair);
 }
 
-core::Result<std::optional<RawFrame>> OrbbecCapture::poll_raw() {
+core::Result<std::optional<RgbdFrame>> OrbbecCapture::poll_raw() {
   if (impl_ == nullptr) {
     return core::Status::invalid_argument(
         "OrbbecCapture: poll_raw on a moved-from capture");
@@ -148,7 +148,7 @@ core::Result<std::optional<RawFrame>> OrbbecCapture::poll_raw() {
         "OrbbecCapture: poll_raw needs a capture opened with raw = true");
   }
   VKC_ASSIGN(std::shared_ptr<ob::FrameSet> pair, impl_->stream->take());
-  if (pair == nullptr) return std::optional<RawFrame>();
+  if (pair == nullptr) return std::optional<RgbdFrame>();
   return impl_->stream->process_raw(pair);
 }
 
