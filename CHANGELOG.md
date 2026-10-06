@@ -110,6 +110,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - build: **off Apple, `VR_WITH_FFMPEG` needs `VR_WITH_CUDA`**, and the FFmpeg
   floor is 6.1 (libavcodec 60.31); libswscale is no longer used.
 
+### Fixed
+
+- `sensor/video`: preserve VideoToolbox JPEG session, decode and callback
+  errors, so hardware malfunctions and allocation failures stop the Orbbec
+  colour decoder instead of looking like corrupt frames. Bad JPEG data
+  remains recoverable.
+- `sensor/video`: validate a candidate cropped HEVC SPS before refusing the
+  stream on Apple. A truncated SPS no longer poisons subsequent valid frames,
+  including after `HevcDecoder::reset`.
+
 ### Removed
 
 - `sensor/video`: **software decoding, VAAPI and host pictures**:

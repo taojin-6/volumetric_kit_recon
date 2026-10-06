@@ -1165,7 +1165,10 @@ the hardware cannot decode or hand out -- not 8-bit 4:2:0, or on
 VideoToolbox a display window off the coded corner, which FFmpeg hands over
 already cut from the wrong corner, so the decoder reads each SPS there --
 is refused, `Unsupported`, from then on, after the pictures decoded before
-it. **`JpegDecoder`** decodes a baseline 8-bit 4:2:0 JPEG, BT.601 full
+it. A candidate cropped SPS is first parsed in full by FFmpeg, without its
+slices and with parse errors enabled; a malformed one is `IoError` and
+cannot latch a crop refusal.
+**`JpegDecoder`** decodes a baseline 8-bit 4:2:0 JPEG, BT.601 full
 range as JFIF defines it, with no FFmpeg: on nvJPEG's hardware JPEG engine
 into the same kind of buffer, I420, or through VideoToolbox's hardware
 decoder (`vt_jpeg.cpp`) into the same images. Another subsampling, or a
@@ -1176,9 +1179,12 @@ codes are the contract: `IoError` is data that does not decode and costs
 only itself (and, for H.265, the frames to the next key frame);
 `Unsupported` is a stream the hardware refuses, or a `create` with no
 device path (no device or allocator, or a GPU the build's path cannot
-reach); `Backend` or `OutOfMemory` is the device path failing. The Orbbec
-driver's colour decoders stop for good on any code but `IoError`, and the
-sensor's `poll` returns it, so a refused stream or a failing device path is
+reach); `Backend` or `OutOfMemory` is the device path failing. VideoToolbox
+JPEG errors retain that distinction from session creation, the decode call
+and its callback. Its decode-time `kVTParameterErr` also denotes corrupt
+JPEG data (including a truncated fixture), so it is `IoError` there. The
+Orbbec driver's colour decoders stop for good on any code but `IoError`, and
+the sensor's `poll` returns it, so a refused stream or a failing device path is
 not quiet. FFmpeg's `AVERROR_EXTERNAL` (a hardware call failed) reads as
 `Backend`; a hardware failure it reports otherwise reads as lost frames.
 `VR_TEST_HEVC_BACKEND` makes the decoder tests fail rather than skip where

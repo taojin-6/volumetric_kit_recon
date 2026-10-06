@@ -486,6 +486,32 @@ if(VR_WITH_FFMPEG)
     PRIVATE VR_JPEG_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data/jpeg")
   vr_target_warnings(recon_sensor_video_jpeg_test)
   add_test(NAME recon_sensor_video_jpeg COMMAND recon_sensor_video_jpeg_test)
+
+  if(APPLE)
+    # Compile the public JPEG decoder here so the executable's native-call
+    # replacements intercept it in both static and shared library builds.
+    add_executable(
+      recon_sensor_video_vt_jpeg_error_test
+      sensor_video_vt_jpeg_error_test.cpp ${_vr_video_src}/jpeg_decoder.cpp
+      ${_vr_video_src}/vt_jpeg.cpp ${_vr_video_src}/vt_pictures.mm)
+    set_source_files_properties(${_vr_video_src}/vt_pictures.mm
+                                PROPERTIES COMPILE_OPTIONS -fobjc-arc)
+    target_link_libraries(
+      recon_sensor_video_vt_jpeg_error_test
+      PRIVATE volumetric_kit::recon_sensor_video
+              "-framework VideoToolbox"
+              "-framework CoreMedia"
+              "-framework CoreVideo"
+              "-framework IOSurface"
+              "-framework Metal"
+              "-framework Foundation")
+    target_compile_definitions(
+      recon_sensor_video_vt_jpeg_error_test
+      PRIVATE VR_JPEG_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data/jpeg")
+    vr_target_warnings(recon_sensor_video_vt_jpeg_error_test)
+    add_test(NAME recon_sensor_video_vt_jpeg_error
+             COMMAND recon_sensor_video_vt_jpeg_error_test)
+  endif()
 endif()
 
 # eval tier: closest points, the reach clamp, the summary statistics, accuracy /
