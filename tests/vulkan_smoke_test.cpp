@@ -17,18 +17,18 @@
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 
+#include "no_device.hpp"
+
 namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
 
 int main() {
   vkc::Result<vkc::Instance> instance = vkc::Instance::create({});
   if (!instance) {
-    // No Vulkan driver on this machine (e.g. a headless CI runner without an
-    // ICD). Treat as a skip, not a failure: the smoke gates on driver
-    // availability, which is environmental, not a code defect.
-    std::fprintf(stderr, "no Vulkan instance (%s); skipping\n",
-                 instance.status().message().c_str());
-    return 0;
+    // No Vulkan driver on this machine: environmental, so a skip, except where
+    // CI requires a device (no_device.hpp).
+    return vr_test::no_device("no Vulkan instance",
+                              instance.status().message());
   }
 
   // Distinguish "no devices at all" (environmental -> skip) from "devices exist
@@ -36,8 +36,7 @@ int main() {
   std::uint32_t device_count = 0;
   vkEnumeratePhysicalDevices(instance.value().handle(), &device_count, nullptr);
   if (device_count == 0) {
-    std::fprintf(stderr, "no physical devices; skipping\n");
-    return 0;
+    return vr_test::no_device("no physical devices");
   }
 
   // recon's requirements, not the core's defaults: scalarBlockLayout is what
