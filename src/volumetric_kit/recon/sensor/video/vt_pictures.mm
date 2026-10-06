@@ -92,7 +92,7 @@ struct VtPictures::Impl {
   std::uint64_t pictures = 0;
 
   core::Status error(const std::string& what) const {
-    return core::Status::io_error(std::string(who) + ": " + what);
+    return core::Status::out_of_memory(std::string(who) + ": " + what);
   }
 
   // Plane @p plane of @p surface as an image of @p format, still UNDEFINED.
@@ -257,19 +257,24 @@ core::Result<std::unique_ptr<VtPictures>> VtPictures::create(
 VtPictures::VtPictures(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
 VtPictures::~VtPictures() = default;
 
-core::Result<bool> VtPictures::import(CVPixelBufferRef pixels,
-                                      std::uint32_t width, std::uint32_t height,
-                                      DecodedPicture& out) {
+core::Status VtPictures::import(CVPixelBufferRef pixels, std::uint32_t width,
+                                std::uint32_t height, DecodedPicture& out) {
   const OSType format = CVPixelBufferGetPixelFormatType(pixels);
   IOSurfaceRef surface = CVPixelBufferGetIOSurface(pixels);
-  if ((format != kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange &&
-       format != kCVPixelFormatType_420YpCbCr8BiPlanarFullRange) ||
-      surface == nullptr || CVPixelBufferGetPlaneCount(pixels) != 2 ||
+  if (format != kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange &&
+      format != kCVPixelFormatType_420YpCbCr8BiPlanarFullRange) {
+    return core::Status::unsupported(std::string(impl_->who) +
+                                     ": VideoToolbox's picture is not 8-bit "
+                                     "NV12");
+  }
+  if (surface == nullptr || CVPixelBufferGetPlaneCount(pixels) != 2 ||
       CVPixelBufferGetWidthOfPlane(pixels, 0) < width ||
       CVPixelBufferGetHeightOfPlane(pixels, 0) < height ||
       CVPixelBufferGetWidthOfPlane(pixels, 1) < (width + 1) / 2 ||
       CVPixelBufferGetHeightOfPlane(pixels, 1) < (height + 1) / 2) {
-    return false;
+    return core::Status::unsupported(std::string(impl_->who) +
+                                     ": VideoToolbox's picture is not on an "
+                                     "IOSurface of its size");
   }
   Impl& impl = *impl_;
   const std::uint64_t now = ++impl.pictures;
@@ -295,12 +300,9 @@ core::Result<bool> VtPictures::import(CVPixelBufferRef pixels,
   out.width = width;
   out.height = height;
   out.layout = VideoPixelLayout::Nv12;
-  out.plane[0] = out.plane[1] = out.plane[2] = nullptr;
-  out.stride[0] = out.stride[1] = out.stride[2] = 0;
-  out.device = nullptr;
   out.image[0] = std::shared_ptr<const core::Image>(held, &entry->luma);
   out.image[1] = std::shared_ptr<const core::Image>(held, &entry->chroma);
-  return true;
+  return {};
 }
 
 }  // namespace volumetric_kit::recon::sensor::video

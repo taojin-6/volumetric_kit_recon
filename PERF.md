@@ -131,7 +131,7 @@ kernels.
 | P6 | Take the remaining host decisions off the critical path | at most ~0.5 ms/set on the RTX 5090, ~0.7 on the M5 Max (measured gap) | M | P1, P5 | open |
 | P7 | Free the blocks nothing asks for or weights | measured: the map 7.3k → 2.9k blocks in 600 sets, integrate's device time −40% on the M5 Max, −50% on the RTX 5090; a static room keeps its size | M | — | landed (#132); device-list follow-up landed (#146) |
 | P9 | Allocate only the band blocks a sample can weight | ~60% of a static room's active set holds no weight; compaction, integrate and meshing scale with it | M | — | open, measure first |
-| D1 | Report a decoder's fallback to host pictures | makes a silent 12 MB/camera/frame PCIe regression visible | S | — | landed (#130) |
+| D1 | Report a decoder's fallback to host pictures | makes a silent 12 MB/camera/frame PCIe regression visible | S | — | superseded: the decoders hand out device pictures only |
 | D2 | Put `--show-sources`' buffers on the device | ~133 MB over PCIe per remesh with the view on | S | — | landed (#130) |
 | D3 | Keep exported picture buffers out of the BAR | robustness on ReBAR systems | S | — | not needed (#130) |
 | MESH1 | Keep mesh-input bins and cursors on-device and retain scratch | RTX 4090 sparse-capacity host 0.920 → 0.125 ms (7.4x); dense host +0.9%, device +3.4%; Apple timing mixed | M | — | landed (#149), measured Release on M5 Max and RTX 4090; mesh input only, outside the live rig |
@@ -472,6 +472,11 @@ improvement awaits measurement; the figures below describe the original GC.
 
 ### D1 — Report a decoder's fallback to host pictures
 
+> **Superseded.** The decoders hand out device pictures only, and a device
+> path that fails is an error the sensor's poll returns, not a fallback (the
+> 2026-10-06 device-only decoder decision). The counter and the warning are
+> gone.
+
 - **Problem.** When the device path fails once (out of memory, or refused by
   CUDA or the import), it is dropped without a word, and every later picture
   comes to the host (`hevc_decoder.cpp:541`, `:553`;
@@ -507,15 +512,10 @@ improvement awaits measurement; the figures below describe the original GC.
 
 ### Known gaps, not planned
 
-- **Decoded colour stays on the device only on Linux with CUDA
-  (`VR_WITH_CUDA`) and on Apple.**
-  - `VR_WITH_CUDA` is Linux only (`cmake/vr_cuda.cmake:23`), since the
-    import uses an opaque file descriptor.
-  - Windows (D3D11VA), VAAPI on Linux, and software decoding hand pictures
-    to the host, and `GpuFramePrep` stages them up.
-  - They are correct, but not resident. They go next: the decoders hand out
-    device pictures only (the 2026-10-06 raw-frames decision).
-  - Windows would need `VK_KHR_external_memory_win32` beside the fd path.
+- **The decoders run only on NVIDIA with CUDA (`VR_WITH_CUDA`, Linux) and on
+  Apple.** An integrated GPU's decoder (VAAPI) would need its surfaces
+  imported into Vulkan (DMA-BUF); none is planned. An NVIDIA GPU without a
+  hardware JPEG engine decodes no MJPEG.
 
 ### L1 — Shared-vertex, incremental remesh (blocked on gfx)
 

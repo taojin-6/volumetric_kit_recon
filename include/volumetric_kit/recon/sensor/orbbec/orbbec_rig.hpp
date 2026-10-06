@@ -162,10 +162,10 @@ class VR_SENSOR_ORBBEC_API OrbbecRig final {
   ///
   /// @return The set; an empty optional when none is ready or the rig is not
   ///         started; `Status::Code::IoError` if a camera disconnected or
-  ///         its frames stopped processing, and `Status::Code::Unsupported`
-  ///         for a colour stream `ColorEncoding` cannot name (see
-  ///         @ref OrbbecSensor::poll); or `Status::Code::InvalidArgument` on
-  ///         a moved-from rig.
+  ///         its frames stopped processing; `Status::Code::Unsupported`,
+  ///         `Status::Code::Backend` or `Status::Code::OutOfMemory` as
+  ///         @ref OrbbecSensor::poll returns them; or
+  ///         `Status::Code::InvalidArgument` on a moved-from rig.
   core::Result<std::optional<OrbbecRigSet>> poll_set();
 
   /// @return `true` on a moved-from rig and once any camera has disconnected.

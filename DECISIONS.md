@@ -185,7 +185,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   The video decoder is `recon_sensor_video`, a target of its own over an
   installed FFmpeg: HEVC in, host pictures out, on the first hardware back end
   that decodes a built-in clip, NVIDIA ahead of an integrated GPU; each CI leg
-  requires the hardware it has.
+  requires the hardware it has. The decoders hand out device pictures only
+  since 2026-10-06.
 - [**2026-09-27**](#2026-09-27--room0-sets-the-codecs-provisional-defaults-k--64-with-one-step-of-02-for-dc-and-ac-alike-the-coefficient-count-sets-the-quality-and-a-coarse-uniform-step-costs-almost-nothing-at-it-and-the-host-rans-coder-fits-a-frame-interval-at-1-cm-so-the-gpu-coder-waits) —
   Room0 sets the codec's provisional defaults, K = 64 with one step of 0.2 for
   DC and AC alike: the coefficient count sets the quality and a coarse uniform
@@ -205,7 +206,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   is read off the frame index, not the clock; and the Femto Mega's stream is
   decoded as BT.601 full range, which it codes and does not say. Its RGB
   output, and the RGB mode its calibration was read from, went on
-  2026-10-06.
+  2026-10-06, and its host decoding the same day.
 - [**2026-09-28**](#2026-09-28--projective-texturing-from-several-views-chooses-a-view-per-triangle-on-an-unshared-mesh-into-an-atlas-of-the-views-images-side-by-side-the-single-camera-pass-stays-per-vertex) —
   Projective texturing from several views chooses a view per triangle, on an
   unshared mesh, into an atlas of the views' images side by side, in
@@ -222,7 +223,8 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-09-28**](#2026-09-28--a-decoded-colour-frame-never-leaves-the-gpu-the-platforms-hardware-decoder-for-h265-and-mjpeg-alike-hands-its-picture-to-vulkan-in-place-and-gpuframeprep-takes-i420-or-nv12-from-the-host-or-the-device) —
   A decoded colour frame never leaves the GPU: the platform's hardware
   decoder, for H.265 and MJPEG alike, hands its picture to Vulkan in place,
-  and `GpuFramePrep` takes I420 or NV12 from the host or the device.
+  and `GpuFramePrep` takes I420 or NV12 from the host or the device. The
+  software decoding and fallbacks it kept went on 2026-10-06.
 - [**2026-09-28**](#2026-09-28--a-device-takes-submits-from-several-threads-at-once-each-records-on-a-command-pool-of-its-own-and-only-the-queue-is-locked) —
   A `Device` takes submits from several threads at once: each records on a
   command pool of its own, and only the queue is locked.
@@ -356,6 +358,10 @@ entries relevant to your task; later amendments supersede earlier rules.
   Every Orbbec frame is handed out as captured: the SDK's host path,
   `OrbbecCapture` and `fuse_orbbec --gpu` go, and the Orbbec driver needs
   the video decoders.
+- [**2026-10-06**](#2026-10-06--the-video-decoders-hand-out-pictures-on-the-device-only-the-hardware-path-is-fixed-per-build-a-stream-the-hardware-refuses-is-an-error-and-off-apple-vr_with_ffmpeg-needs-vr_with_cuda-amends-the-2026-09-27-decoder-2026-09-28-decoded-frame-and-2026-10-06-raw-frames-entries) —
+  The video decoders hand out pictures on the device only: the hardware path
+  is fixed per build, a stream the hardware refuses is an error, and off
+  Apple `VR_WITH_FFMPEG` needs `VR_WITH_CUDA`.
 
 ## Decision record
 
@@ -4921,6 +4927,11 @@ changed sources and tests also compile at `-O3 -Werror` under GCC 13.3 in an
 
 ### 2026-09-27 — The video decoder is `recon_sensor_video`, a target of its own over an installed FFmpeg: HEVC in, host pictures out, on the first hardware back end that decodes a built-in clip, NVIDIA ahead of an integrated GPU; each CI leg requires the hardware it has.
 
+*Amended 2026-10-06 (below):* host pictures, `Auto`, the probe clip and
+software decoding are gone. The decoders hand out device pictures only, on
+NVDEC through CUDA or on VideoToolbox, and only the 24.04 and macOS legs
+build them.
+
 **The rule.** `HevcDecoder` (`sensor/video/hevc_decoder.hpp`) takes an Annex B
 H.265 stream one access unit at a time and hands out host pictures, as
 `Rgb24` or as the decoded `Yuv420` planes with the matrix and range to convert
@@ -5634,6 +5645,9 @@ the hardware left on the device, never an RGB frame: the `Rgb24` frame
 stamped with the RGB profile described here fed the host path, which is gone.
 A frame's colour camera is read off the H.265 mode's own profile, so the
 byte comparison under "The calibration" went with the RGB mode.
+*Amended again the same day (the device-only decoder entry, below):* it
+decodes on NVDEC or VideoToolbox only, hands on the picture on the device
+only, and a stream the hardware refuses stops it.
 
 **The rule.** `OrbbecStreamOptions::color_codec` is `Mjpeg` (the default)
 or `Hevc`. With `Hevc` the camera sends H.265, and each camera's
@@ -6708,6 +6722,9 @@ Sharing one pool across threads, as a mutant, fails the test 3 of 3 with
 *Amended 2026-10-06 (below):* the MJPG mode's calibration is no longer
 compared with the RGB mode's; a frame's colour camera is read off the mode
 streamed.
+*Amended 2026-10-06 (below):* the software decoding and fallbacks this entry
+kept are gone, with nvJPEG's `GPU_HYBRID` back end: every picture is a
+device picture, and a device path that fails is an error.
 
 **The rule.** The camera stream arrives on the host, the RGB-D frame goes to
 the GPU once, and undistortion, colour conversion and fusion all run there.
@@ -9997,11 +10014,9 @@ cameras one at a time, uploading float depth and packed colour for each.
 where no device path opens (software, VAAPI, NVDEC without `VR_WITH_CUDA`)
 or the stream was given no device or allocator. `VideoPixelLayout::Rgb24`
 and swscale's RGB conversion, which lose their caller here, go with that
-step rather than be rewritten twice. Software H.265 decodes on one thread
-with little headroom at 4K until then, and H.265 is now `fuse_orbbec`'s
-default. `OrbbecRig` goes once the examples read a `SensorArray`, which
-first needs `OrbbecSensor` to check and write the sync settings the rig
-does.
+step rather than be rewritten twice. *Done the same day (below).*
+`OrbbecRig` goes once the examples read a `SensorArray`, which first needs
+`OrbbecSensor` to check and write the sync settings the rig does.
 
 **Validation.** Apple M5 Max, macOS, Release with warnings as errors,
 Orbbec, FFmpeg and the viewer: the 55 tests pass. The conversion test now
@@ -10009,6 +10024,72 @@ checks the stream options, `OrbbecSensor::open`'s refusals and the factory
 models' intrinsics checks; the H.265 test checks every decoded pair's I420
 planes and their colour description. `fuse_orbbec` and `rig_viewer` build;
 neither was run on a camera.
+
+### 2026-10-06 — The video decoders hand out pictures on the device only: the hardware path is fixed per build, a stream the hardware refuses is an error, and off Apple `VR_WITH_FFMPEG` needs `VR_WITH_CUDA` (amends the 2026-09-27 decoder, 2026-09-28 decoded-frame and 2026-10-06 raw-frames entries).
+
+**The rule.** Once a frame arrives it goes to the GPU and is processed there,
+decoding included. `HevcDecoder` and `JpegDecoder` hand out pictures on the
+device only, on one hardware path fixed per build: VideoToolbox on Apple
+(H.265 through FFmpeg, JPEG directly), and elsewhere NVDEC through FFmpeg and
+nvJPEG's hardware engine, both through CUDA. Removed:
+
+- software decoding, VAAPI, NVDEC without `VR_WITH_CUDA`, and copying a
+  hardware picture to the host;
+- the fallbacks: `Auto`'s move to software on a refusal, a failed device path
+  sending every later picture to the host, and nvJPEG's `GPU_HYBRID` back end
+  with the software decode of what it refused. `GPU_HYBRID` decodes the
+  entropy on the host, 4.2 ms of CPU a 4K frame against the engine's 0.38
+  (the 2026-09-28 decoded-frame decision);
+- the selection that had nothing left to choose: `VideoDecodeBackend`,
+  `hardware_backends()`, the probe clip, `JpegDecodeBackend`, `backend()`,
+  H.265's `layout` and `threads`, both decoders' `label`, and the JPEG
+  decoder's FFmpeg (it uses none now);
+- `PictureConverter` and libswscale with it, `VideoPixelLayout::Rgb24` and
+  `DecodedPicture::plane`. The colour helpers stay, as `frame_color.hpp`;
+- the host-picture warning, `OrbbecStreamStats::host_pictures` (PERF.md's D1)
+  and the Orbbec driver's I420 host frames.
+
+**The codes are the contract.**
+- `IoError`: data that does not decode. It costs that frame, and for H.265
+  the frames to the next key frame.
+- `Unsupported`: a stream or JPEG the hardware does not take, or a `create`
+  with no device path (no device or allocator, or a GPU the build's path
+  cannot reach). An H.265 stream is held to 8-bit 4:2:0 at its SPS, through
+  `sw_pix_fmt` (`YUVJ420P` too, a stream whose VUI says full range), and on
+  VideoToolbox to no crop at the left or top; a JPEG to baseline 8-bit 4:2:0
+  within 16384 a side on nvJPEG's engine and the device's image extent on
+  Apple. An H.265 refusal stands from then on, after the pictures decoded
+  before it.
+- `Backend` or `OutOfMemory`: the device path failed. A CUDA error is
+  `Backend` now, not `IoError`.
+
+The Orbbec colour decoders stop on any code but `IoError`, and
+`CameraStream::take` returns it, so `OrbbecSensor::poll` and
+`OrbbecRig::poll_set` report a stream that can no longer be decoded rather
+than starve quietly. The audit of 2026-10-06 found that, once the fallbacks
+went, a decoder that kept failing would have looked like a slow camera.
+
+**Off Apple, `VR_WITH_FFMPEG` needs `VR_WITH_CUDA`**, refused at configure,
+and the FFmpeg floor rises to 6.1 (Ubuntu 24.04). In CI the 24.04 leg (CUDA:
+NVDEC and nvJPEG on Blackwell) and the Mac (VideoToolbox) build and test the
+decoders. The 22.04, 26.04 and sanitizer jobs no longer build them, so FFmpeg
+4.4 and 7.x on NVDEC, and the decoders under the sanitizers, lose coverage.
+
+**The tests** read each device picture back and hold it to the pattern the
+fixture was made from, rather than to a software decode; bit-exactness against
+software and swscale's RGB checks go with it. They skip where no device path
+opens, unless `VR_TEST_HEVC_BACKEND` promises one, as CI's legs do.
+
+**Not taken.** A failed device path is not latched inside the decoders: their
+consumer stops at the first. The Orbbec driver still opens without a device
+and refuses at `start`, which keeps its option checks testable with no GPU.
+
+**Validation.** Apple M5 Max, macOS, Release with warnings as errors, Orbbec,
+FFmpeg and the viewer: the 54 tests pass with
+`VR_TEST_HEVC_BACKEND=videotoolbox`. Mutating VideoToolbox's crop refusal,
+the MJPEG decoder's stop on `Unsupported`, or the H.265 decoder's on a
+refused stream fails its test. The CUDA path compiles first on CI's 24.04
+leg. Not run on a camera.
 
 ## Measured lessons
 

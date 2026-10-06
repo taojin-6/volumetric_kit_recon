@@ -48,12 +48,13 @@ jobs:
       # (the SDK installed per job; see _build.yml), and leaves the others on
       # the default OFF, so both configurations build on every PR.
       #
-      # `ffmpeg` builds the video decoder on every leg, each against its own
-      # FFmpeg (22.04's 4.4 is the floor), and `hevc_backend` names the
-      # hardware each must decode on: NVDEC in the Linux containers, never an
-      # integrated GPU, and VideoToolbox on the Mac. `cuda` puts the 24.04 leg
-      # on VR_WITH_CUDA=ON, the toolkit installed per job, so NVDEC's pictures
-      # are handed out on the device and checked there.
+      # `ffmpeg` builds the video decoders, which hand out pictures on the
+      # device only (the 2026-10-06 device-only decoder decision): on 24.04
+      # with `cuda` (VR_WITH_CUDA=ON, the toolkit installed per job: NVDEC and
+      # nvJPEG; 24.04's FFmpeg 6.1 is the floor) and on the Mac
+      # (VideoToolbox). `hevc_backend` names the hardware each must decode
+      # on, so their tests fail rather than skip without it. The other Linux
+      # legs build without them.
       # `assimp` builds the optional mesh loader on Linux and macOS; the other
       # legs build image / PLY IO without it.
       matrix:
@@ -62,9 +63,7 @@ jobs:
             runner: vk-linux-gpu
             container: '{"image":"ubuntu:22.04","options":"--gpus all","env":{"NVIDIA_DRIVER_CAPABILITIES":"all","CMAKE_BUILD_PARALLEL_LEVEL":"4","CTEST_PARALLEL_LEVEL":"4"}}'
             build_types: '["Release"]'
-            ffmpeg: true
             assimp: true
-            hevc_backend: cuda
           - os: ubuntu-24.04
             runner: vk-linux-gpu
             container: '{"image":"ubuntu:24.04","options":"--gpus all","env":{"NVIDIA_DRIVER_CAPABILITIES":"all","CMAKE_BUILD_PARALLEL_LEVEL":"4","CTEST_PARALLEL_LEVEL":"4"}}'
@@ -77,8 +76,6 @@ jobs:
             runner: vk-linux-gpu
             container: '{"image":"ubuntu:26.04","options":"--gpus all","env":{"NVIDIA_DRIVER_CAPABILITIES":"all","CMAKE_BUILD_PARALLEL_LEVEL":"4","CTEST_PARALLEL_LEVEL":"4"}}'
             build_types: '["Release"]'
-            ffmpeg: true
-            hevc_backend: cuda
           - os: macos-26
             runner: mac
             container: ''

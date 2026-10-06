@@ -448,51 +448,32 @@ target_link_libraries(
 vr_target_warnings(recon_codec_decoder_test)
 add_test(NAME recon_codec_decoder COMMAND recon_codec_decoder_test)
 
-# The video decoder (VR_WITH_FFMPEG only). The converter test builds frames by
-# hand and the back-end test asks the platform, no decoding; both compile the
-# internal source themselves, as the Orbbec conversion test does. The decoder
-# test decodes the committed clips on software and on every hardware back end
-# found; VR_TEST_HEVC_BACKEND makes one required. The JPEG decoder test decodes
-# the committed JPEGs, on nvJPEG too in a VR_WITH_CUDA build.
+# The video decoders (VR_WITH_FFMPEG only). The frame colour test reads the
+# colour off frames built by hand, no codec; it compiles the internal source
+# itself, as the Orbbec conversion test does. The decoder tests decode the
+# committed clips and JPEGs on this machine's hardware, onto the device; on a
+# GPU with no device path they skip, unless VR_TEST_HEVC_BACKEND says this leg
+# has one, where they fail.
 if(VR_WITH_FFMPEG)
   set(_vr_video_src ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/video)
   add_executable(
-    recon_sensor_video_converter_test
-    sensor_video_converter_test.cpp ${_vr_video_src}/picture_converter.cpp
-    ${_vr_video_src}/ffmpeg.cpp)
+    recon_sensor_video_frame_color_test sensor_video_frame_color_test.cpp
+                                        ${_vr_video_src}/frame_color.cpp)
   target_link_libraries(
-    recon_sensor_video_converter_test PRIVATE volumetric_kit::recon_sensor_video
-                                              PkgConfig::VR_FFMPEG)
-  target_include_directories(recon_sensor_video_converter_test
+    recon_sensor_video_frame_color_test
+    PRIVATE volumetric_kit::recon_sensor_video PkgConfig::VR_FFMPEG)
+  target_include_directories(recon_sensor_video_frame_color_test
                              PRIVATE ${_vr_video_src})
-  vr_target_warnings(recon_sensor_video_converter_test)
-  add_test(NAME recon_sensor_video_converter
-           COMMAND recon_sensor_video_converter_test)
-
-  add_executable(
-    recon_sensor_video_backend_test
-    sensor_video_backend_test.cpp ${_vr_video_src}/hw_backend.cpp
-    ${_vr_video_src}/ffmpeg.cpp)
-  target_link_libraries(
-    recon_sensor_video_backend_test PRIVATE volumetric_kit::recon_sensor_video
-                                            PkgConfig::VR_FFMPEG)
-  if(APPLE)
-    target_link_libraries(recon_sensor_video_backend_test
-                          PRIVATE "-framework VideoToolbox")
-  endif()
-  target_include_directories(recon_sensor_video_backend_test
-                             PRIVATE ${_vr_video_src})
-  vr_target_warnings(recon_sensor_video_backend_test)
-  add_test(NAME recon_sensor_video_backend
-           COMMAND recon_sensor_video_backend_test)
+  vr_target_warnings(recon_sensor_video_frame_color_test)
+  add_test(NAME recon_sensor_video_frame_color
+           COMMAND recon_sensor_video_frame_color_test)
 
   add_executable(recon_sensor_video_hevc_test sensor_video_hevc_test.cpp)
   target_link_libraries(recon_sensor_video_hevc_test
                         PRIVATE volumetric_kit::recon_sensor_video)
   target_compile_definitions(
     recon_sensor_video_hevc_test
-    PRIVATE VR_HEVC_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data/hevc"
-            VR_TEST_WITH_CUDA=$<BOOL:${VR_WITH_CUDA}>)
+    PRIVATE VR_HEVC_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data/hevc")
   vr_target_warnings(recon_sensor_video_hevc_test)
   add_test(NAME recon_sensor_video_hevc COMMAND recon_sensor_video_hevc_test)
 
@@ -502,8 +483,7 @@ if(VR_WITH_FFMPEG)
                                          volumetric_kit::recon_sensor_utils)
   target_compile_definitions(
     recon_sensor_video_jpeg_test
-    PRIVATE VR_JPEG_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data/jpeg"
-            VR_TEST_WITH_CUDA=$<BOOL:${VR_WITH_CUDA}>)
+    PRIVATE VR_JPEG_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data/jpeg")
   vr_target_warnings(recon_sensor_video_jpeg_test)
   add_test(NAME recon_sensor_video_jpeg COMMAND recon_sensor_video_jpeg_test)
 endif()
@@ -609,8 +589,7 @@ if(VR_WITH_ORBBEC)
     PRIVATE ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec)
   target_compile_definitions(
     recon_sensor_orbbec_hevc_test
-    PRIVATE VR_HEVC_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data/hevc"
-            VR_TEST_WITH_CUDA=$<BOOL:${VR_WITH_CUDA}>)
+    PRIVATE VR_HEVC_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data/hevc")
   vr_target_warnings(recon_sensor_orbbec_hevc_test)
   add_test(NAME recon_sensor_orbbec_hevc COMMAND recon_sensor_orbbec_hevc_test)
 
@@ -631,8 +610,7 @@ if(VR_WITH_ORBBEC)
     PRIVATE ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec)
   target_compile_definitions(
     recon_sensor_orbbec_jpeg_test
-    PRIVATE VR_JPEG_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data/jpeg"
-            VR_TEST_WITH_CUDA=$<BOOL:${VR_WITH_CUDA}>)
+    PRIVATE VR_JPEG_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data/jpeg")
   vr_target_warnings(recon_sensor_orbbec_jpeg_test)
   add_test(NAME recon_sensor_orbbec_jpeg COMMAND recon_sensor_orbbec_jpeg_test)
 

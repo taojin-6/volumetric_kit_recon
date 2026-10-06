@@ -29,4 +29,15 @@ inline int no_device(const char* what, const std::string& why = {}) {
   return required ? 1 : 0;
 }
 
+// What a decoder test returns when the decoders have no device path here (no
+// GPU this build's hardware path reaches): it skips, or fails where CI sets
+// VR_TEST_HEVC_BACKEND, as on every leg that promises one.
+inline int no_decoder(const std::string& why) {
+  const char* promise = std::getenv("VR_TEST_HEVC_BACKEND");
+  const bool required = promise != nullptr && *promise != '\0';
+  std::fprintf(stderr, "no device path for the decoders (%s); %s\n",
+               why.c_str(), required ? "failing" : "skipping");
+  return required ? 1 : 0;
+}
+
 }  // namespace vr_test

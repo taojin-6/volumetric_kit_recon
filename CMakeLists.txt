@@ -41,14 +41,16 @@ option(VR_WITH_ORBBEC
        OFF)
 # OFF by default for the same reasons: FFmpeg is a prerequisite you install
 # (cmake/vr_ffmpeg.cmake), and the iOS build takes none.
-option(VR_WITH_FFMPEG
-       "Build the FFmpeg-backed video decoder (requires an installed FFmpeg)"
-       OFF)
-# OFF by default too: NVIDIA's decoders hand their pictures over on the device
-# only with the CUDA toolkit installed (cmake/vr_cuda.cmake).
-option(VR_WITH_CUDA
-       "Keep NVIDIA-decoded pictures on the device (requires the CUDA toolkit)"
-       OFF)
+option(
+  VR_WITH_FFMPEG
+  "Build the hardware video decoders (requires FFmpeg, and VR_WITH_CUDA off Apple)"
+  OFF)
+# OFF by default too: off Apple, the video decoders decode on NVIDIA's hardware
+# through CUDA, so VR_WITH_FFMPEG needs it there (cmake/vr_cuda.cmake).
+option(
+  VR_WITH_CUDA
+  "Decode video on NVIDIA's hardware, onto the device (requires the CUDA toolkit)"
+  OFF)
 option(VR_WITH_ASSIMP
        "Build the Assimp-backed mesh loader (requires an installed Assimp)" OFF)
 

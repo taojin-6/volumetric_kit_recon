@@ -48,10 +48,10 @@ if(@VR_WITH_FFMPEG@)
     set(volumetric_kit_recon_FOUND FALSE)
     string(CONCAT volumetric_kit_recon_NOT_FOUND_MESSAGE
         "volumetric_kit_recon was built against FFmpeg libavcodec "
-        "@VR_FFMPEG_libavcodec_VERSION@, libavutil @VR_FFMPEG_libavutil_VERSION@ "
-        "and libswscale @VR_FFMPEG_libswscale_VERSION@; pkg-config finds no "
-        "FFmpeg of those major versions at those versions or later. Point "
-        "PKG_CONFIG_PATH at that FFmpeg.")
+        "@VR_FFMPEG_libavcodec_VERSION@ and libavutil "
+        "@VR_FFMPEG_libavutil_VERSION@; pkg-config finds no FFmpeg of those "
+        "major versions at those versions or later. Point PKG_CONFIG_PATH at "
+        "that FFmpeg.")
     return()
   endif()
 endif()
