@@ -307,7 +307,10 @@ is measured.
 > parity: median of 100 sets, M5 Max, one batch against threads, 1.68 vs
 > 1.66 ms for host colour at 4K, 0.97 vs 0.95 ms for device colour.
 > `prepare_set` is removed; its callers use `prepare_batch`. The RTX 5090
-> was at parity before the threaded staging and is not re-measured.
+> was at parity before the threaded staging and is not re-measured. Later
+> that day colour came on the device only, and the threads, staging only
+> depth, measured level with one thread and went (DECISIONS.md, the
+> device-only `GpuFramePrep` entry).
 >
 > **Built, measured, dropped (2026-10-01).** The per-camera threads already
 > overlap the four submits, so one batch saves nothing.

@@ -121,6 +121,16 @@ vr_target_warnings(recon_sensor_gpu_frame_prep_test)
 add_test(NAME recon_sensor_gpu_frame_prep
          COMMAND recon_sensor_gpu_frame_prep_test)
 
+# Allocation failure while staging is an OutOfMemory result, and a retained
+# frame survives it. Separate executable for its replacement operator new.
+add_executable(recon_sensor_gpu_frame_prep_oom_test
+               sensor_gpu_frame_prep_oom_test.cpp test_allocation_failure.cpp)
+target_link_libraries(recon_sensor_gpu_frame_prep_oom_test
+                      PRIVATE volumetric_kit::recon_sensor_utils)
+vr_target_warnings(recon_sensor_gpu_frame_prep_oom_test)
+add_test(NAME recon_sensor_gpu_frame_prep_oom
+         COMMAND recon_sensor_gpu_frame_prep_oom_test)
+
 # The device-input overloads of allocate_from_depth and integrate: the same
 # frame fused from host arrays and from storage buffers must give the same grid.
 # Skips (exit 0) where no device is present.

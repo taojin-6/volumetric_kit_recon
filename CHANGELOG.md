@@ -36,8 +36,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `recon_sensor_array`.
 - `sensor/array`: **`SensorArray::process`**, a set prepared on the GPU in
   one batch, through the new **`GpuFramePrep::prepare_batch`** (every
-  camera's uploads, then every camera's passes, in one `CommandBatch`, host
-  colour staged on a thread per camera first). Test:
+  camera's uploads, then every camera's passes, in one `CommandBatch`).
+  Test:
   `recon_sensor_array_process`.
 - `sensor`: **`TriggerGrouper`** (`trigger_grouper.hpp`), the rig's grouping
   of frames into triggers, moved out of the Orbbec driver. Test:
@@ -132,6 +132,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `recon_sensor_video_converter` becomes `recon_sensor_video_frame_color`.
 - `sensor/orbbec`: **`OrbbecStreamStats::host_pictures`**, with nothing left
   to count.
+- `sensor`: **host colour planes**: `YuvImage::plane`. `GpuFramePrep` takes
+  colour on the device only, as a buffer or NV12 images, and stages only
+  depth, on the calling thread.
 
 - `sensor/orbbec`: **`OrbbecCapture` and the SDK's host path**: the
   undistortion and registration on the host (`ob::UnDistortionFilter`,
