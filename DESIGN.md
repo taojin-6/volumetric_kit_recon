@@ -53,7 +53,7 @@ conventions and Vulkan setup.
   `volumetric_kit::recon`: recon declares no `core` namespace, which would
   capture every `core::Status` its code writes.
 - Headers: `include/volumetric_kit/recon/<tier>/…`.
-- Macros: `VR_` prefix (`VR_CORE_API`, `VR_DEVICE_HOST`); the error and
+- Macros: `VR_` prefix (`VR_CORE_API`, `VR_WITH_CUDA`); the error and
   contract macros are volumetric_kit_core's, used under its names (`VKC_TRY`,
   `VKC_ASSIGN`, `VKC_CHECK`, `VKC_VK_TRY`).
   Deliberately *not* the `VK_` prefix — that belongs to Vulkan. (The prior
@@ -769,7 +769,7 @@ bracket, so no `gpu_ms` measures the markers around the work.
 ### volume
 
 `VoxelHashMap` drives init / allocate-from-coords, -depth,
--points, -triangles / remove / compact / compact-in-frustum / resize as GLSL
+-triangles / remove / compact / compact-in-frustum / resize as GLSL
 kernels
 (`volume/shaders/hash_*.comp`) over the scalar-block-layout ABI. Depth
 allocation unprojects a posed frame and dilates each surface block into the
@@ -849,7 +849,7 @@ Every block slot carries a `BlockStamp` (`hash_types.hpp`): ticks of the
 map's clock (`tick()`), in a device buffer beside the heap
 (`stamps_buffer()`), each written by the pass that knows its fact
 (2026-10-01). Every allocation kernel stamps `requested` on each block it
-asks for, inserted or found, and the grid's block pass (`stamp_blocks`)
+asks for, inserted or found, and the grid's block pass (in `free_stale_blocks`)
 stamps `weighted` on each holding an observed voxel. Every pass that
 writes voxels -- `TsdfIntegrator`, `MeshIntegrator`, the codec's
 inverse -- advances the clock first and stamps `changed` on what it

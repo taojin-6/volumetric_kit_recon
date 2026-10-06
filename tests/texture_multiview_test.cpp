@@ -73,7 +73,7 @@ constexpr float kWallZ = 3.0f;
 
 // A camera at `eye` looking along `forward` (in the x-z plane), y down.
 vr::DepthCameraParams camera(vr::Vec3f eye, vr::Vec3f forward) {
-  const vr::Vec3f z = vr::normalize(forward);
+  const vr::Vec3f z = glm::normalize(forward);
   const vr::Vec3f y(0.0f, 1.0f, 0.0f);
   const vr::Vec3f x = vr::cross(y, z);  // so that x cross y = z
   vr::DepthCameraParams c{};
@@ -754,7 +754,7 @@ int main() {
     const std::vector<float> wall = wall_depth(cam0);
     rmesh::Mesh tilted;
     add_small_triangle(tilted, 0.0f, 0.3f, 0.04f,
-                       vr::normalize(vr::Vec3f(-1.0f, 0.0f, -0.03f)));
+                       glm::normalize(vr::Vec3f(-1.0f, 0.0f, -0.03f)));
     identity_indices(tilted);
     const tex::TextureView right =
         color_view(wall.data(), cam0, color_beside(cam0, 0.2f));

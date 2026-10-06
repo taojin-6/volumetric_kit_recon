@@ -26,10 +26,7 @@
 /// column-major, matching GLM / Vulkan conventions; a default-constructed
 /// `glm::mat4` is indeterminate -- spell the identity `Mat4f(1.0f)`.
 
-#include <glm/ext/vector_uint3_sized.hpp>  // glm::u8vec3
 #include <glm/glm.hpp>
-
-#include "volumetric_kit/recon/core/device_macros.hpp"
 
 namespace volumetric_kit::recon {
 
@@ -39,8 +36,6 @@ using Vec2f = glm::vec2;
 using Vec3f = glm::vec3;
 /// @brief 3-component signed-integer vector (e.g. voxel-block coordinates).
 using Vec3i = glm::ivec3;
-/// @brief 3-component unsigned 8-bit vector (packed 3 B; per-voxel RGB color).
-using Vec3u8 = glm::u8vec3;
 /// @brief 4-component float vector (packed 16 B; homogeneous points, ...).
 using Vec4f = glm::vec4;
 /// @brief 3x3 column-major matrix (36 B; element (row, col) is `m[col][row]`).
@@ -52,13 +47,10 @@ using Mat4f = glm::mat4;
 
 // The buffer ABI depends on these packing exactly as documented above; pin the
 // sizes so a GLM configuration change (e.g. forced SIMD alignment) becomes a
-// compile error rather than silent buffer corruption. `Vec3u8` is guarded
-// nowhere else -- it appears only behind a pointer in the volume tier, so no
-// struct-offset assert transitively pins it the way `Vec3i` is pinned.
+// compile error rather than silent buffer corruption.
 static_assert(sizeof(Vec2f) == 8, "Vec2f must pack to 8 bytes");
 static_assert(sizeof(Vec3f) == 12, "Vec3f must pack to 12 bytes");
 static_assert(sizeof(Vec3i) == 12, "Vec3i must pack to 12 bytes");
-static_assert(sizeof(Vec3u8) == 3, "Vec3u8 must pack to 3 bytes");
 static_assert(sizeof(Vec4f) == 16, "Vec4f must pack to 16 bytes");
 static_assert(sizeof(Mat4f) == 64, "Mat4f must pack to 64 bytes");
 
@@ -69,20 +61,5 @@ static_assert(sizeof(Mat4f) == 64, "Mat4f must pack to 64 bytes");
 using glm::cross;
 using glm::dot;
 using glm::length;
-
-/// @brief Unit vector in the direction of @p v, or @p v unchanged when its
-///        length is zero -- never divides by zero.
-///
-/// Deliberately *not* a re-export of `glm::normalize`, which yields NaNs for a
-/// zero-length input. Degenerate (zero-area) geometry produces zero normals in
-/// fusion and meshing, so this guard preserves the prior engine's safe
-/// behaviour. Marked @c VR_DEVICE_HOST so it stays callable from CUDA device
-/// code alongside the GLM operators.
-/// @param v  The vector to normalize.
-/// @return @p v scaled to unit length, or @p v unchanged when its length is 0.
-VR_DEVICE_HOST inline Vec3f normalize(Vec3f v) {
-  const float len = glm::length(v);
-  return len > 0.0f ? v / len : v;
-}
 
 }  // namespace volumetric_kit::recon

@@ -158,14 +158,12 @@ int main() {
       vkc::Allocator::create(instance.value().handle(), device.value());
   CHECK(allocator);
 
-  vr::volume::VoxelGridParams params = vr::volume::VoxelGridParams::defaults();
-  params.num_buckets = 64;
-  params.bucket_size = 8;
-  params.num_blocks = params.num_buckets * params.bucket_size;
-  params.block_size = 8;
-  params.voxels_per_block =
-      params.block_size * params.block_size * params.block_size;
-  params.voxel_size = 0.02f;
+  const vr::volume::VoxelGridParams params{
+      /*voxel_size=*/0.02f,     /*block_size=*/8,
+      /*voxels_per_block=*/512,
+      /*trunc_dist=*/0.04f,     /*bucket_size=*/8,
+      /*num_buckets=*/64,
+      /*num_blocks=*/512,       /*max_chain=*/128};
 
   const vr::volume::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
                                              {"weight", sizeof(float)}};

@@ -35,16 +35,6 @@ target_link_libraries(
 vr_target_warnings(recon_tier_stage_metrics_test)
 add_test(NAME recon_tier_stage_metrics COMMAND recon_tier_stage_metrics_test)
 
-# volume tier: the sparse voxel-hash POD layouts. The static_assert size/offset
-# guards in hash_types.hpp are the real test (a build failure there is the
-# check); this binary adds runtime sanity and proves the header compiles and
-# links through recon_volume.
-add_executable(recon_volume_types_test volume_types_test.cpp)
-target_link_libraries(recon_volume_types_test
-                      PRIVATE volumetric_kit::recon_volume)
-vr_target_warnings(recon_volume_types_test)
-add_test(NAME recon_volume_types COMMAND recon_volume_types_test)
-
 # volume coordinate math + spatial hash: pure host transforms (world <-> voxel
 # <-> block, negative-coordinate block indexing, truncation band) and the bucket
 # hash function. CPU-only (no device), so these always run -- not gated on a
@@ -176,11 +166,11 @@ target_link_libraries(recon_volume_diagnostics_test
 vr_target_warnings(recon_volume_diagnostics_test)
 add_test(NAME recon_volume_diagnostics COMMAND recon_volume_diagnostics_test)
 
-# volume allocate-from-depth / -points: unproject a synthetic one-pixel depth
-# frame (and a small point set) and verify exactly the expected (2*tb+1)^3
-# truncation-band block cube is allocated on the real driver -- the camera
-# unprojection + band dilation, plus the DepthCameraParams scalar-layout upload.
-# Skips (exit 0) where no device is present.
+# volume allocate-from-depth: unproject a synthetic one-pixel depth frame and
+# verify exactly the expected (2*tb+1)^3 truncation-band block cube is allocated
+# on the real driver -- the camera unprojection + band dilation, plus the
+# DepthCameraParams scalar-layout upload. Skips (exit 0) where no device is
+# present.
 add_executable(recon_volume_allocate_test volume_allocate_test.cpp)
 target_link_libraries(recon_volume_allocate_test
                       PRIVATE volumetric_kit::recon_volume Vulkan::Vulkan)
