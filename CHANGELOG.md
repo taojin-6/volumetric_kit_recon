@@ -45,9 +45,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `recon_sensor_orbbec_start_order`, formerly `recon_sensor_orbbec_grouping`.
 - `sensor/orbbec`: **`OrbbecSensor`**, the Femto Mega as an `IRgbdSensor`:
   frames as captured, for the GPU pass, the pose in double, and
-  `sync_clock_to_host` for the host's clock. `fuse_orbbec --gpu` reads one
-  camera through it (`--host-clock`), which is how it is checked, as tests
-  use no hardware.
+  `sync_clock_to_host` for the host's clock. `fuse_orbbec` reads one camera
+  through it, which is how it is checked, as tests use no hardware.
 
 ### Changed
 
@@ -75,8 +74,33 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   instead of handing out frames `GpuFramePrep` refuses. **A raw MJPEG pair
   the JPEG decoder had no time for is counted `dropped`**, as the mailbox
   counts one, not `lost`.
+- `sensor/orbbec`: **every frame is handed out as captured**, for the GPU
+  pass. `OrbbecRig` is no longer an `ICameraCapture`: its one read is
+  `poll_set`, formerly `poll_raw_set`, handing out an `OrbbecRigSet` (formerly
+  `OrbbecRigRawSet`) of `RgbdFrame`s, and `color_camera(i)` is the colour
+  camera's factory `camera::CameraModel`, its pose `color_to_world(i)`. The
+  shared types move out of `orbbec_capture.hpp`: `OrbbecStreamOptions`,
+  `OrbbecDeviceInfo`, `OrbbecColorCodec` and `OrbbecStreamStats` (formerly
+  `OrbbecCaptureStats`) to `orbbec_stream.hpp`, and `OrbbecSyncMode`,
+  `waits_for_primary` and its `to_string` to `orbbec_sync_config.hpp`.
+- build: **`VR_WITH_ORBBEC` needs `VR_WITH_FFMPEG`**, refused at configure
+  without it: the driver decodes each camera's colour itself.
+- `examples`: **`fuse_orbbec` always prepares its frames on the GPU**, H.265
+  unless `--mjpeg`, a camera or a rig's set through `prepare_batch` and
+  `fuse_set`.
 
 ### Removed
+
+- `sensor/orbbec`: **`OrbbecCapture` and the SDK's host path**: the
+  undistortion and registration on the host (`ob::UnDistortionFilter`,
+  `ob::Align`), the conversion to metres and packed RGB, the H.265
+  decoder's RGB frames, and `OrbbecStreamOptions::raw`. With them go
+  `OrbbecRig::poll`, its processed `poll_set` and `poll_raw`, and
+  `ICameraCapture::poll_raw` and `raw_frames`, which only the two Orbbec
+  classes implemented, and `to_string(OrbbecColorCodec)`, which had no
+  caller. Migrating: open one camera as an `OrbbecSensor`.
+- `examples`: **`fuse_orbbec --gpu`.** Every frame is prepared on the GPU,
+  so the switch chose nothing; `--host-clock` stays, for one camera.
 
 - `sensor`: **`prepare_set`**, a thread and a submit per camera, replaced by
   `GpuFramePrep::prepare_batch`, which takes the same passes and frames and
@@ -86,8 +110,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `recon_sensor_orbbec_capture`, `recon_sensor_orbbec_gpu_prep` and
   `recon_sensor_orbbec_rig`, with their `VR_ORBBEC_TEST_SERIAL`,
   `VR_ORBBEC_TEST_RIG`, `VR_ORBBEC_TEST_COLOR` and `VR_ORBBEC_TEST_FPS`
-  variables. The capture test's one camera-free check, H.265 colour refused
-  in a build without the decoders, moved to `recon_sensor_orbbec_conversion`.
+  variables.
 
 - `sensor`: **`rig_calibration.hpp`**, replaced by
   `camera/array_calibration.hpp`. Migrating: `read_rig_calibration` is

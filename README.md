@@ -106,19 +106,19 @@ build at its root:
 
 ```sh
 cmake -S "$recon_root" -B "$recon_root/build" -DCMAKE_BUILD_TYPE=Release \
-    -DVR_WITH_ORBBEC=ON -DOrbbecSDK_ROOT=<sdk>
+    -DVR_WITH_ORBBEC=ON -DVR_WITH_FFMPEG=ON -DOrbbecSDK_ROOT=<sdk>
 # or once, for every repo that finds it:  export OrbbecSDK_ROOT=<sdk>
 ```
 
-That builds `volumetric_kit::recon_sensor_orbbec`, an `ICameraCapture` over one
-camera (`sensor/orbbec/orbbec_capture.hpp`), and the live example:
+The driver decodes each camera's colour itself, so it needs FFmpeg too (see
+below). That builds `volumetric_kit::recon_sensor_orbbec` -- `OrbbecSensor`,
+one camera as an `IRgbdSensor` (`sensor/orbbec/orbbec_sensor.hpp`), and
+`OrbbecRig` -- and the live example, which prepares every frame on the GPU:
 
 ```sh
 build/examples/fuse_orbbec/fuse_orbbec --serial <serial> --frames 300
-# H.265 colour instead of MJPEG (a build with -DVR_WITH_FFMPEG=ON too):
-build/examples/fuse_orbbec/fuse_orbbec --serial <serial> --hevc
-# Raw frames prepared on the GPU, the camera on the host's clock:
-build/examples/fuse_orbbec/fuse_orbbec --serial <serial> --gpu --host-clock
+# MJPEG colour instead of H.265, at about nine times the bandwidth at 4K:
+build/examples/fuse_orbbec/fuse_orbbec --serial <serial> --mjpeg
 ```
 
 A camera wired as a sync secondary streams only while its primary does; name

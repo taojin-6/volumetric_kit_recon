@@ -1106,31 +1106,25 @@ the capture *contract*: `ICameraCapture` polled for a
 `CapturedFrame` (frames dropped, not queued) and asked `exhausted()` after
 an empty poll, since "nothing this tick" from a live device and "nothing,
 ever" from a replay are the same empty optional (2026-09-14; non-pure,
-`false` by default, so a live driver overrides nothing). A source opened
-for raw frames hands them out through `poll_raw()` instead, and
-`raw_frames()` says which of the two it serves (non-pure too:
-`Unsupported` and `false`) — plus the boundary
+`false` by default, so a live driver overrides nothing) — plus the boundary
 math that is silently wrong when guessed — `cv_from_gl_camera`,
 `depth_from_registered_color`, `to_canonical`. Links `recon_core` alone;
-drivers live with the platform that can build *and* test them. Two
-implementers in this tree: `examples/common/replica_capture.hpp`, which
+drivers live with the platform that can build *and* test them. Its one
+implementer in this tree is `examples/common/replica_capture.hpp`, which
 plays a Replica sequence back through the contract, so every example run
-produces real frames through it; and **`sensor/orbbec`'s `OrbbecCapture`**
-(`VR_WITH_ORBBEC`), a live Femto Mega. Its `poll()` undistorts colour and
-*then* registers depth to it — the SDK's registration ignores the colour
-lens, so the order is what puts both on one pinhole camera, posed by
-`Options::cam_to_world` (double, refused at `open` unless rigid). It reads
-the camera's rig sync role
-(`waits_for_primary`) and never writes it. No test opens a camera (the
-2026-10-06 no-hardware decision); `fuse_orbbec` is how one is checked.
-**`OrbbecRig`** reads several synced cameras as one: `poll_set()` hands out
-one set per primary frame, with a missing secondary's slot left empty, and
-`poll()` hands out the same frames one at a time — one of the two per
-`start()`. Opened with `raw`, it reads the same two ways raw, through
-`poll_raw_set()` and `poll_raw()`, as `raw_frames()` says, and
-`GpuFramePrep::prepare_batch` prepares a raw set in one batch, a
-`GpuFramePrep` per camera. A secondary's frame near no primary frame
-is let go, so a camera
+produces real frames through it. **`sensor/orbbec`** (`VR_WITH_ORBBEC`, which
+needs `VR_WITH_FFMPEG` for the colour decoders) is the live Femto Mega,
+through the sensor interface below: **`OrbbecSensor`** for one camera, and
+**`OrbbecRig`** for a synced rig. Both hand out every frame as captured,
+for the GPU pass; nothing on the host undistorts, registers or converts (the
+2026-10-06 raw-frames decision). Each reads the camera's rig sync role
+(`waits_for_primary`) and writes it only when the rig is asked to. No test
+opens a camera (the 2026-10-06 no-hardware decision); `fuse_orbbec` is how
+one is checked. `OrbbecRig` reads several synced cameras as one:
+`poll_set()` hands out one set per primary frame, with a missing
+secondary's slot left empty, and `GpuFramePrep::prepare_batch` prepares a
+set in one batch, a `GpuFramePrep` per camera. A secondary's frame near no
+primary frame is let go, so a camera
 whose clock is off costs its own frames, not the rig's sets. It opens from
 the rig's **sync configuration** (`orbbec_sync_config.hpp`, the SDK's
 `femto_mega_sync.json` layout) and refuses cameras that differ from it
@@ -1139,13 +1133,14 @@ unless `apply_sync_config` writes it; the lab rig's is
 camera's pose comes from the
 **calibration file** (`camera/array_calibration.hpp`), which must pose
 every camera of the rig. Both classes share the
-internal `CameraStream`.
-`color_codec = Hevc` (`VR_WITH_FFMPEG`) puts H.265 on the wire: each
-camera's `HevcColorDecoder` decodes every colour frame, in order, ahead of
-the mailbox, as BT.601 full range unless the stream names its matrix, and
-posts RGB frames stamped with the RGB mode's profile -- whose calibration
-`open` holds to be the H.265 mode's, byte for byte -- so everything after
-is MJPEG's path. The SDK hands over every colour frame, depth or not; a
+internal `CameraStream`, and the types of `orbbec_stream.hpp`: the stream
+options, the camera's report, and its counters (`OrbbecStreamStats`).
+`color_codec = Hevc` puts H.265 on the wire: each camera's
+`HevcColorDecoder` decodes every colour frame, in order, ahead of the
+mailbox, as BT.601 full range unless the stream names its matrix, and posts
+the picture with its depth, so everything after is MJPEG's path. A frame's
+colour camera is read off the RGB mode's profile, whose calibration `open`
+holds to be the wire mode's, byte for byte. The SDK hands over every colour frame, depth or not; a
 pair without depth is dropped after decoding. A gap in the frame index, or
 an empty frame, waits for the next key frame, where the decoder is reset;
 pictures come out in display order, each settling its own pair. All of it
@@ -1177,7 +1172,7 @@ every one after the device path fails (the 2026-09-28 decoded-frame
 decision). The decoder says once, as a warning ahead of which
 `Options::label` names whose decoder it is, every way a device's
 pictures end up on the host: a device path that never opens, one that
-fails, Auto's move to software. `OrbbecCaptureStats::host_pictures`
+fails, Auto's move to software. `OrbbecStreamStats::host_pictures`
 counts them, so a run that should stay on the device can be held to 0.
 **`JpegDecoder`** decodes MJPEG's JPEGs as I420, BT.601 full
 range: given a device, with `VR_WITH_CUDA`, nvJPEG decodes an 8-bit 4:2:0
@@ -1196,10 +1191,9 @@ device's image extent to software.
 `SensorInfo` from when it opens (id, the cameras' factory models at the
 opened modes, `depth_to_color`, rig role, clock, pose source, rate), and
 frames held up to `set_queue_depth`, the newest taken by `poll` or all,
-oldest first, by `drain`. **`OrbbecSensor`** implements it over the same
-`CameraStream` as `OrbbecCapture`, raw only: `open` refuses a `min_depth` of
-0, which the GPU pass would, and a camera in a sync mode the driver does not
-know; `sync_clock_to_host` sets this camera's clock (`timerSyncWithHost`, not
+oldest first, by `drain`. **`OrbbecSensor`** implements it: `open` refuses
+a `min_depth` of 0, which the GPU pass would, and a camera in a sync mode
+the driver does not know; `sync_clock_to_host` sets this camera's clock (`timerSyncWithHost`, not
 the context's `enableDeviceClockSync`, which re-syncs every camera the
 process opened) to the host's at each `start`, before it streams; and its
 `stats()` counts the driver's lost frames failed, a JPEG the decoder had no
@@ -1251,20 +1245,18 @@ past the next is still itself; the whole frame is checked before anything
 is uploaded, a depth range from 0 included. `depth_within_color` (off by
 default; `rig_viewer` turns it on) zeroes depth outside the colour camera's
 view, by the colour pass's own coverage test, so nothing is fused that no
-colour camera can colour. `OrbbecCapture` opened with
-`raw` hands out `RgbdFrame`s through the contract's `poll_raw`, each holding
-its SDK pair and the SDK context, with the models and the depth-to-colour
-extrinsic from the factory calibration (the extrinsic's rotation made one:
-the Femto Mega's is not, the 2026-10-06 sensor-frame decision; `open`
-refuses one that does not come out a rotation), the depth frame's index as the
-sequence, the planes
-converted by the matrix and range the stream codes them in, and
-`fuse_orbbec --gpu` fuses them. Given `OrbbecStreamOptions::device`, its
-H.265 colour is decoded onto that device and stays there, the picture
-carried through the mailbox by an SDK frame whose bytes only name it, so
-a copy of the frame owns nothing (`picture_frames.hpp`); for raw MJPEG it
-streams the camera's JPEGs, and each camera's `JpegColorDecoder` decodes
-them on a thread of its own onto the device.
+colour camera can colour. An Orbbec frame holds its SDK pair and the SDK
+context, with the models and the depth-to-colour extrinsic from the factory
+calibration (the extrinsic's rotation made one: the Femto Mega's is not, the
+2026-10-06 sensor-frame decision; `open` refuses one that does not come out a
+rotation), the depth frame's index as the sequence, and the planes
+converted by the matrix and range the stream codes them in. Given
+`OrbbecStreamOptions::device`, its H.265 colour is decoded onto that device
+and stays there, the picture carried through the mailbox by an SDK frame
+whose bytes only name it, so a copy of the frame owns nothing
+(`picture_frames.hpp`); for MJPEG it streams the camera's JPEGs, and each
+camera's `JpegColorDecoder` decodes them on a thread of its own onto the
+device.
 
 ### codec
 
@@ -1462,12 +1454,13 @@ now private implementation dependencies of the installed I/O library.
 
 ## Examples
 
-(`examples/`.) Five of the six poll their frames through
+(`examples/`.) The four dataset examples poll their frames through
 `sensor::ICameraCapture&` — the fuse loop never learns what is behind it.
-`rig_viewer` reads the rig's raw *sets* (`OrbbecRig::poll_raw_set`) instead,
-as `fuse_orbbec --gpu --rig` does, since the contract has no set, and both
-fuse each set through `fuse_device_frame.hpp`'s `fuse_set`: every camera's
-band in one allocation, then every camera in one integrate. The
+The two live ones read Orbbec cameras raw, `rig_viewer` a rig's sets
+(`OrbbecRig::poll_set`) and `fuse_orbbec` a camera or a rig, prepare each on
+the GPU in one batch (`GpuFramePrep::prepare_batch`) and fuse it through
+`fuse_device_frame.hpp`'s `fuse_set`: every camera's band in one
+allocation, then every camera in one integrate. The
 four dataset examples take `ReplicaCapture` as the source: frame cap, stride
 and the depth gate are its options, stamped on each frame it hands out, and its
 disk probe at `open` visits only the frames those options select. An empty
@@ -1495,14 +1488,12 @@ directly, and carrying the two-panel perf overlay. The four dataset examples
 take `--preload`, which makes the loop measure compute rather than the
 JPEG/PNG decoder.
 The live counterpart is its own example, not a `fuse_replica` flag:
-**`fuse_orbbec`** (`VR_WITH_ORBBEC`) fuses an `OrbbecCapture` through the same
-`fuse_frame.hpp` and writes a PLY after `--frames` frames; `--rig sync.json`
-fuses the rig as an `OrbbecRig`, posed by `--calibration`. With `--gpu` the
-frames are raw, each prepared by `GpuFramePrep` and fused through
-`fuse_device_frame.hpp`, the one header that pulls in `sensor/utils`; one
-camera is then read as an `OrbbecSensor`, `--host-clock` syncing its clock,
-and the run prints its `SensorInfo` and how far its first frame sits from the
-host's clock.
+**`fuse_orbbec`** (`VR_WITH_ORBBEC`) reads one camera as an `OrbbecSensor`,
+or with `--rig sync.json` a rig as an `OrbbecRig`, posed by
+`--calibration`, prepares each poll's frames on the GPU and fuses them
+through `fuse_device_frame.hpp`, the one header that pulls in
+`sensor/utils`, and writes a PLY after `--frames` frames. Colour is H.265
+unless `--mjpeg`.
 **`rig_viewer`** (`VR_BUILD_VIEWER` with `VR_WITH_ORBBEC` and
 `VR_WITH_FFMPEG`) is `fuse_viewer`'s live-rig sibling: raw sets prepared,
 fused and textured from every camera on the GPU, and the atlas filled by
@@ -1555,9 +1546,9 @@ landed; the stack continues:
 1. **The sensor interface.** `RgbdFrame` (each camera's `CameraModel`,
    `color_to_world` and `depth_to_color`, a sequence number, pixels it holds)
    and `IRgbdSensor` with `SensorInfo` have landed, the Femto Mega as
-   `OrbbecSensor`. Next the Replica source moves onto the interface, the
-   frame gains float depth and RGBA8 colour, and `ICameraCapture`,
-   `CapturedFrame`, `OrbbecCapture` and the SDK's host path go.
+   `OrbbecSensor`, and `OrbbecCapture` and the SDK's host path are gone.
+   Next the Replica source moves onto the interface, the frame gains float
+   depth and RGBA8 colour, and `ICameraCapture` and `CapturedFrame` go.
 2. **`SensorArray`**, vendor-neutral, has landed: start order from the sync
    roles, trigger or sequence grouping, poses from the calibration file
    (nearest-frame and tracked members later), and `process(set)`, every
@@ -1629,14 +1620,11 @@ none, and the run's CPU eightfold down) and for the rig's raw sets. NVDEC
 and nvJPEG hand their pictures over on the device, and VideoToolbox both
 kinds, and a raw Orbbec frame's colour stays on the device over either
 codec; what is left there is the colour kernel reading Apple's plane images
-directly, measured first (`undistort_color.comp`); and processing a host rig
-set's frames in parallel, one thread per camera, rather than the ~11 ms one
-after another costs for four (`orbbec_rig.cpp`). For H.265: the camera's
+directly, measured first (`undistort_color.comp`), and the decoders' host
+pictures where no device path opens, which go next. For H.265: the camera's
 encoder settings, its key-frame interval above all, which sets what a lost
-frame costs (`camera_stream.cpp`),
-and software decoding at 4K, one thread with little headroom
-(`hevc_color.cpp`). The rig's next consumer is calib's viewer, showing its
-synchronised sets.
+frame costs (`camera_stream.cpp`). The rig's next consumer is calib's
+viewer, showing its synchronised sets.
 
 **Device residency, the steps after `core`** (the 2026-09-28 residency
 decision ranks them): `volume`, `tsdf`, `mesh` and `texture` are resident,

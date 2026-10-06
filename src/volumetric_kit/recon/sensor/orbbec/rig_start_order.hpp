@@ -12,7 +12,7 @@
 #include <vector>
 
 #include "volumetric_kit/core/base/result.hpp"
-#include "volumetric_kit/recon/sensor/orbbec/orbbec_capture.hpp"
+#include "volumetric_kit/recon/sensor/orbbec/orbbec_sync_config.hpp"
 
 namespace volumetric_kit::recon::sensor::orbbec {
 

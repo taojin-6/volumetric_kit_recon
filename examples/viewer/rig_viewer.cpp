@@ -103,8 +103,8 @@
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/mesh/device_mesh.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
-#include "volumetric_kit/recon/sensor/orbbec/orbbec_capture.hpp"
 #include "volumetric_kit/recon/sensor/orbbec/orbbec_rig.hpp"
+#include "volumetric_kit/recon/sensor/orbbec/orbbec_stream.hpp"
 #include "volumetric_kit/recon/sensor/orbbec/orbbec_sync_config.hpp"
 #include "volumetric_kit/recon/sensor/utils/gpu_frame_prep.hpp"
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
@@ -625,7 +625,7 @@ void draw_rig_panel(const RigPanel& panel,
   }
   ImGui::Separator();
   for (std::size_t i = 0; i < panel.stats.cameras.size(); ++i) {
-    const rsensor::OrbbecCaptureStats& st = panel.stats.cameras[i];
+    const rsensor::OrbbecStreamStats& st = panel.stats.cameras[i];
     ImGui::Text("%s  %llu in, %llu dropped, %llu failed, %llu lost",
                 i < serials.size() ? serials[i].c_str() : "?",
                 static_cast<unsigned long long>(st.received),
@@ -633,7 +633,7 @@ void draw_rig_panel(const RigPanel& panel,
                 static_cast<unsigned long long>(st.failed),
                 static_cast<unsigned long long>(st.lost));
     // Colour that should have stayed on the GPU and did not: on a discrete
-    // GPU every such frame crossed the bus (OrbbecCaptureStats::host_pictures).
+    // GPU every such frame crossed the bus (OrbbecStreamStats::host_pictures).
     if (st.host_pictures != 0) {
       ImGui::TextColored(ImVec4(0.9f, 0.5f, 0.2f, 1.0f),
                          "  %llu with colour on the host",
@@ -740,7 +740,6 @@ int run(GLFWwindow* window, const Options& opt) {
     rig_options.calibration = std::move(calibration).value();
   }
   rig_options.apply_sync_config = opt.apply_sync;
-  rig_options.raw = true;
   rig_options.device = &rdevice;
   rig_options.allocator = &rallocator;
   if (opt.hevc) rig_options.color_codec = rsensor::OrbbecColorCodec::Hevc;
@@ -761,13 +760,13 @@ int run(GLFWwindow* window, const Options& opt) {
   std::vector<std::string> serials;
   std::vector<glm::mat4> camera_poses;
   for (std::size_t i = 0; i < cameras; ++i) {
-    const vr::ColorCameraParams& cam = rig.color_camera(i);
+    const rcamera::CameraModel& cam = rig.color_camera(i);
     serials.push_back(rig.device_info(i).serial);
-    camera_poses.push_back(cam.cam_to_world);
+    camera_poses.emplace_back(rig.color_to_world(i));
+    const glm::vec3 at(camera_poses.back()[3]);
     std::printf("camera %zu: %s%s, colour %ux%u, at (%.3f, %.3f, %.3f) m\n", i,
                 serials.back().c_str(), i == rig.primary() ? " (primary)" : "",
-                cam.width, cam.height, cam.cam_to_world[3].x,
-                cam.cam_to_world[3].y, cam.cam_to_world[3].z);
+                cam.size.width, cam.size.height, at.x, at.y, at.z);
   }
   if (opt.calibration.empty() && cameras > 1) {
     std::fprintf(stderr,
@@ -840,8 +839,8 @@ int run(GLFWwindow* window, const Options& opt) {
   {
     std::vector<rtex::TextureView> sizes(cameras);
     for (std::size_t i = 0; i < cameras; ++i) {
-      sizes[i].image_width = rig.color_camera(i).width;
-      sizes[i].image_height = rig.color_camera(i).height;
+      sizes[i].image_width = rig.color_camera(i).size.width;
+      sizes[i].image_height = rig.color_camera(i).size.height;
     }
     auto laid_out =
         rtex::side_by_side_atlas(sizes, texturer.max_atlas_extent());
@@ -1060,9 +1059,11 @@ int run(GLFWwindow* window, const Options& opt) {
         0.5f * (rig_options.min_depth + rig_options.max_depth);
     home.target = axes_meet(camera_poses, eye + home.forward * depth_mid);
     home.distance = std::max(0.3f, glm::length(home.target - eye));
-    const vr::ColorCameraParams& cam = rig.color_camera(rig.primary());
-    vfov = 2.0f * std::atan(static_cast<float>(cam.height) /
-                            (2.0f * std::max(1.0f, cam.fy)));
+    const rcamera::CameraModel& cam = rig.color_camera(rig.primary());
+    vfov = 2.0f *
+           std::atan(
+               static_cast<float>(cam.size.height) /
+               (2.0f * std::max(1.0f, static_cast<float>(cam.intrinsics.fy))));
   }
   OrbitView view = home;
   // Looking out of camera i, set by the View panel, until a drag orbits away.
@@ -1306,7 +1307,7 @@ int run(GLFWwindow* window, const Options& opt) {
       bool said_silent = false;
       while (started.ok() && !quit.load()) {
         const auto poll_start = std::chrono::steady_clock::now();
-        auto polled = rig.poll_raw_set();
+        auto polled = rig.poll_set();
         const double poll_ms =
             std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - poll_start)
@@ -1340,7 +1341,7 @@ int run(GLFWwindow* window, const Options& opt) {
           fuse_stages.seed(stage);
         }
         fuse_stages.add_cpu("poll", poll_ms);
-        const rsensor::OrbbecRigRawSet& set = *polled.value();
+        const rsensor::OrbbecRigSet& set = *polled.value();
         const std::uint64_t set_ns = set.timestamp_ns;
         auto prepared = [&]() {
           // One row for the set: the cameras prepare in one batch.

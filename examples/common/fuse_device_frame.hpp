@@ -4,8 +4,8 @@
 #pragma once
 
 /// @file examples/common/fuse_device_frame.hpp
-/// @brief @ref vr_example::fuse_frame for a frame `sensor::GpuFramePrep` left
-///        on the device.
+/// @brief @ref vr_example::fuse_frame for the frames `sensor::GpuFramePrep`
+///        left on the device: @ref vr_example::fuse_set.
 ///
 /// Apart from `fuse_frame.hpp` so that only an example running the GPU pass
 /// includes `sensor/utils`, and only it links `recon_sensor_utils`.
@@ -32,36 +32,20 @@ inline vr::tsdf::ColorFrame device_color(const vr::sensor::DeviceFrame& frame) {
   return color;
 }
 
-/// @brief @ref fuse_frame for a frame already on the device, as
-///        `sensor::GpuFramePrep` hands it out: nothing is uploaded, and depth
-///        and colour are fused with their own cameras, the colour's coverage
-///        read off its high byte.
+/// @brief @ref fuse_frame for a set of frames already on the device, as
+///        `sensor::GpuFramePrep::prepare_batch` hands them out: nothing is
+///        uploaded, and depth and colour are fused with their own cameras.
+///        Every frame's band is allocated in one call, then every frame fused
+///        in one, so a set costs a few submits rather than a few a frame. An
+///        empty entry is skipped.
 /// @param grid        The volume to fuse into.
 /// @param integrator  The integrator.
-/// @param frame       The prepared frame.
+/// @param frames      The prepared frames.
 /// @param max_weight  The running-average cap (`TsdfIntegrator::integrate`).
 /// @param metrics     Optional stage rows; null measures nothing.
 /// @param mode        `Classic` (the default) keeps free space ahead of a
 ///                    surface; `Dynamic` clears it, so a surface that moves
 ///                    away leaves no ghost.
-/// @return OK, or the first error of the two steps.
-inline vkc::Status fuse_frame(
-    vr::volume::VoxelBlockGrid& grid, vr::tsdf::TsdfIntegrator& integrator,
-    const vr::sensor::DeviceFrame& frame, float max_weight,
-    vkc::StageMetrics* metrics,
-    vr::tsdf::IntegrationMode mode = vr::tsdf::IntegrationMode::Classic) {
-  VKC_TRY(allocate_band(grid, *frame.depth, frame.depth_camera, metrics));
-  const vr::tsdf::ColorFrame color = device_color(frame);
-  return integrator.integrate(grid, *frame.depth, frame.depth_camera,
-                              max_weight, mode,
-                              frame.has_color() ? &color : nullptr, metrics);
-}
-
-/// @brief @ref fuse_frame for a set of frames, as
-///        `sensor::GpuFramePrep::prepare_batch` hands them out: every frame's
-///        band allocated in one call, then every frame fused in one, so a set
-///        costs a few submits rather than a few a frame. An empty entry is
-///        skipped.
 /// @return OK, or the first error of the two steps.
 inline vkc::Status fuse_set(
     vr::volume::VoxelBlockGrid& grid, vr::tsdf::TsdfIntegrator& integrator,

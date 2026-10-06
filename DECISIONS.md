@@ -156,7 +156,8 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-09-26**](#2026-09-26--the-orbbec-driver-lands-as-sensororbbec-a-target-of-its-own-it-undistorts-colour-and-then-registers-depth-to-it-on-the-host-and-it-reads-the-rigs-sync-roles-without-writing-them) —
   The Orbbec driver lands as `sensor/orbbec`, a target of its own: it
   undistorts colour and then registers depth to it on the host, and it reads
-  the rig's sync roles without writing them.
+  the rig's sync roles without writing them. The host path went on
+  2026-10-06: every frame is handed out as captured.
 - [**2026-09-26**](#2026-09-26--the-tsdf-codec-is-one-codec-tier-over-volume-with-separate-encoder-and-decoder-classes-a-geometry-only-intra-frame-of-per-block-dct-coefficients-an-observed-voxel-mask-and-sorted-block-coordinates-entropy-coded-by-chunked-static-table-rans) —
   The TSDF codec is one `codec` tier over `volume`, with separate `Encoder` and
   `Decoder` classes: a geometry-only intra frame of per-block DCT coefficients,
@@ -172,7 +173,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   configuration and writes it only when asked, starts the secondaries before
   the primary, keeps the cameras on the host's clock, and builds each set
   around a primary frame; poses come from the calibration file. The file
-  moved to the `camera` tier on 2026-10-06.
+  moved to the `camera` tier on 2026-10-06, and the rig's sets became raw
+  only the same day.
 - [**2026-09-27**](#2026-09-27--encoder-and-decoder-are-the-codecs-public-api-encoding-drops-never-observed-blocks-and-sorts-the-rest-decoding-makes-a-callers-grid-hold-exactly-the-frame-by-diffing-its-block-set-everything-checkable-is-checked-before-the-grid-is-touched-and-a-grid-too-small-for-the-frame-is-refused-rather-than-grown) —
   `Encoder` and `Decoder` are the codec's public API: encoding drops
   never-observed blocks and sorts the rest, decoding makes a caller's grid hold
@@ -201,7 +203,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   The Orbbec driver streams colour as H.265 on request: every colour frame is
   decoded, in order, on a thread per camera ahead of the mailbox; a lost frame
   is read off the frame index, not the clock; and the Femto Mega's stream is
-  decoded as BT.601 full range, which it codes and does not say.
+  decoded as BT.601 full range, which it codes and does not say. Its RGB
+  output went on 2026-10-06.
 - [**2026-09-28**](#2026-09-28--projective-texturing-from-several-views-chooses-a-view-per-triangle-on-an-unshared-mesh-into-an-atlas-of-the-views-images-side-by-side-the-single-camera-pass-stays-per-vertex) —
   Projective texturing from several views chooses a view per triangle, on an
   unshared mesh, into an atlas of the views' images side by side, in
@@ -348,6 +351,10 @@ entries relevant to your task; later amendments supersede earlier rules.
   An array's set is prepared in one batch, every stream of every sensor, one
   submit and one wait; host colour is staged on a thread per camera first,
   and `prepare_set` goes.
+- [**2026-10-06**](#2026-10-06--every-orbbec-frame-is-handed-out-as-captured-the-sdks-host-path-orbbeccapture-and-fuse_orbbec---gpu-go-amends-the-2026-09-26-2026-09-27-and-2026-09-28-orbbec-entries) —
+  Every Orbbec frame is handed out as captured: the SDK's host path,
+  `OrbbecCapture` and `fuse_orbbec --gpu` go, and the Orbbec driver needs
+  the video decoders.
 
 ## Decision record
 
@@ -4004,6 +4011,10 @@ wait included — see that entry.)
 
 ### 2026-09-26 — The Orbbec driver lands as `sensor/orbbec`, a target of its own: it undistorts colour and then registers depth to it on the host, and it reads the rig's sync roles without writing them.
 
+*Amended 2026-10-06 (below):* the host path is gone. `OrbbecCapture`, the
+SDK's undistortion and registration, and the host conversion are removed;
+every frame is handed out as captured and prepared on the GPU.
+
 The 2026-08-02 rule admits a driver this repo can build and test, and CI builds
 against the Orbbec SDK (the 2026-09-24 decision), so the Femto Mega driver lives
 here: `OrbbecCapture final : sensor::ICameraCapture`, target
@@ -4617,6 +4628,10 @@ check refuses.
   reader's block decode.
 
 ### 2026-09-27 — The rig is `OrbbecRig`: it checks the cameras against the rig's sync configuration and writes it only when asked, starts the secondaries before the primary, keeps the cameras on the host's clock, and builds each set around a primary frame; poses come from the calibration file.
+
+*Amended 2026-10-06 (below):* a set's frames are as captured, read through
+`poll_set`; the rig processes nothing on the host and is no longer an
+`ICameraCapture`.
 
 **The rule.** `OrbbecRig` (`sensor/orbbec/orbbec_rig.hpp`) is opened from the
 rig's sync configuration (`orbbec_sync_config.hpp`: the SDK's
@@ -5613,6 +5628,10 @@ mostly pseudonormal ones, and went with them.
 
 ### 2026-09-28 — The Orbbec driver streams colour as H.265 on request: every colour frame is decoded, in order, on a thread per camera ahead of the mailbox; a lost frame is read off the frame index, not the clock; and the Femto Mega's stream is decoded as BT.601 full range, which it codes and does not say.
 
+*Amended 2026-10-06 (below):* the decoder hands on the planes, or the picture
+the hardware left on the device, never an RGB frame: the `Rgb24` frame
+stamped with the RGB profile described here fed the host path, which is gone.
+
 **The rule.** `OrbbecStreamOptions::color_codec` is `Mjpeg` (the default)
 or `Hevc`. With `Hevc` the camera sends H.265, and each camera's
 `HevcColorDecoder` (`sensor/orbbec/hevc_color.hpp`, built only with
@@ -5891,6 +5910,10 @@ are not blended, so exposure differences show as seams between triangles
 textured from different views. A shared mesh waits on a per-triangle tile
 index in gfx.
 ### 2026-09-28 — GPU pre-processing is `recon_sensor_utils`: a driver hands out the frame as captured, the device undistorts depth and undistorts and converts colour, and fusion reads the buffers in place, depth and colour each with its own camera rather than registered.
+
+*Amended 2026-10-06 (below):* raw frames no longer come through
+`ICameraCapture`: `OrbbecSensor::poll` and `OrbbecRig::poll_set` hand them
+out, and the examples fuse them with `fuse_set` alone.
 
 **The rule.** `GpuFramePrep` (`sensor/utils/gpu_frame_prep.hpp`) takes a
 `RawFrame` (`sensor/raw_frame.hpp`): raw depth, the decoded Y'CbCr 4:2:0
@@ -9802,7 +9825,8 @@ that replaces `OrbbecRig`.
 - **Beside `OrbbecCapture` for now.** `OrbbecCapture`, `ICameraCapture`,
   `CapturedFrame` and the SDK's host path go when the Replica source moves
   onto the interface (a `TODO(sensor)`), and `OrbbecRig` when the array
-  lands.
+  lands. *Amended the same day (below):* `OrbbecCapture` and the host path
+  went first, apart from the Replica source.
 
 **Validation.** Apple M5 Max, macOS, Release with warnings as errors, Orbbec,
 FFmpeg and the viewer: the 52 tests pass. `recon_sensor_rgbd_sensor` drives
@@ -9915,6 +9939,59 @@ by hand on CL2A141000N over Wi-Fi through `fuse_orbbec --gpu`: the default
 stream, `--mjpeg` and `--hevc` each fuse 30 frames into a mesh. `fuse_orbbec
 --rig` and `rig_viewer` on `prepare_batch` build, and were not run on the
 rig.
+
+### 2026-10-06 — Every Orbbec frame is handed out as captured: the SDK's host path, `OrbbecCapture` and `fuse_orbbec --gpu` go (amends the 2026-09-26, 2026-09-27 and 2026-09-28 Orbbec entries).
+
+**The rule.** Once a frame arrives it goes to the GPU and is processed there.
+The Orbbec driver therefore has one path: raw depth and the decoded colour,
+each camera with its factory model, for `GpuFramePrep`. Removed:
+
+- `OrbbecCapture`, the SDK's host undistortion and registration
+  (`ob::UnDistortionFilter`, `ob::Align`), the host conversion to metres and
+  packed RGB, and `OrbbecStreamOptions::raw`.
+- The rig's host reads (`poll`, the processed `poll_set`) and `poll_raw`:
+  `OrbbecRig` is no longer an `ICameraCapture`. Its one read is `poll_set`,
+  formerly `poll_raw_set`, handing out an `OrbbecRigSet` of `RgbdFrame`s, and
+  `color_camera` is the factory `CameraModel`, with `color_to_world` beside it.
+- `ICameraCapture::poll_raw` and `raw_frames`, which only the two Orbbec
+  classes implemented.
+- The H.265 decoder's RGB frames and the RGB profile it stamped on them.
+- `fuse_orbbec`'s `--gpu`. It always reads raw, H.265 unless `--mjpeg`, and
+  every poll goes through `prepare_batch` and `fuse_set`, one camera as a
+  set of one. `--host-clock` stays for one camera: it is not host
+  processing, and it is how `OrbbecSensor::Options::sync_clock_to_host`,
+  which a `SensorArray` grouping by trigger needs, is checked by hand.
+- `VR_ORBBEC_WITH_VIDEO`: `VR_WITH_ORBBEC` now needs `VR_WITH_FFMPEG`, since
+  a driver without the decoders could open no camera. Both CI legs that
+  build the driver build FFmpeg.
+- The `TODO(calib)` comparing the made depth-to-colour rotation with the
+  SDK's matrix through its host alignment: that alignment is gone, and
+  calib's own solve answers the question.
+
+The types the two remaining classes share move to `orbbec_stream.hpp`
+(`OrbbecStreamOptions`, `OrbbecDeviceInfo`, `OrbbecColorCodec`, and
+`OrbbecStreamStats`, formerly `OrbbecCaptureStats`), and `OrbbecSyncMode` to
+`orbbec_sync_config.hpp`.
+
+**Why now, not with the Replica source.** The plan tied the removal to the
+Replica source moving onto `IRgbdSensor`, but nothing in it depends on
+`OrbbecCapture`. Meanwhile the host path was `fuse_orbbec`'s default, at
+15.5 ms of host time a 4K frame and eight times the run's CPU (the
+2026-09-28 GPU pre-processing decision), and a rig through it fused its
+cameras one at a time, uploading float depth and packed colour for each.
+
+**Left for the next step.** The video decoders still hand out host pictures
+where no device path opens (software, VAAPI, NVDEC without `VR_WITH_CUDA`)
+or the stream was given no device or allocator. `VideoPixelLayout::Rgb24`
+and swscale's RGB conversion, which lose their caller here, go with that
+step rather than be rewritten twice.
+
+**Validation.** Apple M5 Max, macOS, Release with warnings as errors,
+Orbbec, FFmpeg and the viewer: the 55 tests pass. The conversion test now
+checks the stream options, `OrbbecSensor::open`'s refusals and the factory
+models' intrinsics checks; the H.265 test checks every decoded pair's I420
+planes and their colour description. `fuse_orbbec` and `rig_viewer` build;
+neither was run on a camera.
 
 ## Measured lessons
 
