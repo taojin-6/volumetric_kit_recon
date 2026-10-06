@@ -33,7 +33,7 @@ renderer. They meet only at the interop seam.
 
 - **`volumetric_kit_recon`** (this repo) — capture → fusion → meshing →
   compression as **Vulkan compute** (GLSL → SPIR-V; MoltenVK on Apple), one code
-  path across Linux / Android / macOS / iOS / Windows. Produces meshes / volumes
+  path across Linux / Android / macOS / iOS. Produces meshes / volumes
   / compressed TSDF bitstreams.
 - **`volumetric_kit_gfx`** — the Vulkan/MoltenVK renderer. Consumes meshes /
   point clouds / glTF.
@@ -143,8 +143,9 @@ links the family core's base tier and GLM, and no other recon tier.
 
 Compute runs as **Vulkan compute shaders** (GLSL → SPIR-V), with **MoltenVK** on
 Apple — exactly the cross-platform strategy `volumetric_kit_gfx` uses for
-rendering. One code path serves Linux, Android, macOS, iOS, and Windows, rather
-than a Metal + CUDA split. Vulkan is reached through a single umbrella header so
+rendering. One code path serves Linux, Android, macOS and iOS, built with GCC
+or Clang, rather than a Metal + CUDA split (Windows and MSVC are not
+supported: the 2026-10-06 platforms decision). Vulkan is reached through a single umbrella header so
 the loader choice (link-time loader now, volk later for iOS/Android) stays a
 detail. Because the renderer is also Vulkan, the two libraries can share a
 `VkDevice` — which is what makes the geometry handoff cheap (see the interop

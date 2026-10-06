@@ -5,15 +5,8 @@
 # (a consumer's build should not inherit our warning policy). Used as
 # `vr_target_warnings(<target>)` on every first-party target.
 function(vr_target_warnings target)
-  if(MSVC)
-    target_compile_options(${target} PRIVATE /W4)
-    if(VR_WARNINGS_AS_ERRORS)
-      target_compile_options(${target} PRIVATE /WX)
-    endif()
-  else()
-    target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
-    if(VR_WARNINGS_AS_ERRORS)
-      target_compile_options(${target} PRIVATE -Werror)
-    endif()
+  target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
+  if(VR_WARNINGS_AS_ERRORS)
+    target_compile_options(${target} PRIVATE -Werror)
   endif()
 endfunction()

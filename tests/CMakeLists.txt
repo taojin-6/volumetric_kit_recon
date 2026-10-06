@@ -613,22 +613,6 @@ if(VR_WITH_ORBBEC)
     PRIVATE VR_JPEG_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data/jpeg")
   vr_target_warnings(recon_sensor_orbbec_jpeg_test)
   add_test(NAME recon_sensor_orbbec_jpeg COMMAND recon_sensor_orbbec_jpeg_test)
-
-  if(WIN32)
-    # Windows resolves a DLL on PATH, not through an rpath, and the SDK is
-    # linked in place rather than copied beside the test -- it loads its
-    # extensions/ from beside its own DLL, so a copy would run without them.
-    # ENVIRONMENT_MODIFICATION needs CMake >= 3.22; an older ctest ignores it
-    # and the test cannot start. TODO(ci): no leg runs this on Windows.
-    set(_vr_orbbec_tests
-        recon_orbbec_sdk_smoke recon_sensor_orbbec_conversion
-        recon_sensor_orbbec_start_order recon_sensor_orbbec_sync_config
-        recon_sensor_orbbec_hevc recon_sensor_orbbec_jpeg)
-    set_tests_properties(
-      ${_vr_orbbec_tests}
-      PROPERTIES ENVIRONMENT_MODIFICATION
-                 "PATH=path_list_prepend:$<TARGET_FILE_DIR:ob::OrbbecSDK>")
-  endif()
 endif()
 
 # Host asset I/O remains testable without creating a Vulkan device.

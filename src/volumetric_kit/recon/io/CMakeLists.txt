@@ -31,9 +31,7 @@ endif()
 target_compile_features(recon_io PUBLIC cxx_std_17)
 # Catch backend / allocation exceptions at the Status boundary even when a
 # consuming application globally disables exceptions. Keep this private.
-target_compile_options(
-  recon_io PRIVATE "$<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-fexceptions>"
-                   "$<$<CXX_COMPILER_ID:MSVC>:/EHsc>")
+target_compile_options(recon_io PRIVATE -fexceptions)
 target_link_libraries(recon_io PUBLIC recon_mesh)
 target_include_directories(
   recon_io
@@ -44,9 +42,8 @@ target_include_directories(recon_io SYSTEM PRIVATE "${VR_STB_INCLUDE_DIR}"
                                                    "${VR_TINYPLY_INCLUDE_DIR}")
 vr_target_warnings(recon_io)
 # Only vendored implementation TUs opt out of first-party warnings.
-set_source_files_properties(
-  stb_impl.cpp tinyply_impl.cpp
-  PROPERTIES COMPILE_OPTIONS "$<IF:$<CXX_COMPILER_ID:MSVC>,/w,-w>")
+set_source_files_properties(stb_impl.cpp tinyply_impl.cpp
+                            PROPERTIES COMPILE_OPTIONS -w)
 
 if(VR_INSTALL)
   install(
@@ -86,10 +83,7 @@ if(VR_WITH_ASSIMP)
                                PUBLIC VR_IO_ASSIMP_STATIC_DEFINE)
   endif()
   target_compile_features(recon_io_assimp PUBLIC cxx_std_17)
-  target_compile_options(
-    recon_io_assimp
-    PRIVATE "$<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-fexceptions>"
-            "$<$<CXX_COMPILER_ID:MSVC>:/EHsc>")
+  target_compile_options(recon_io_assimp PRIVATE -fexceptions)
   # recon_io carries the public and generated include directories.
   target_link_libraries(
     recon_io_assimp

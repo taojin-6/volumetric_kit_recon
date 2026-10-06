@@ -14,12 +14,6 @@
 # Example: cmake -B build -DCMAKE_BUILD_TYPE=Debug
 # -DVR_SANITIZE="address;undefined"
 if(VR_SANITIZE)
-  if(MSVC)
-    message(
-      FATAL_ERROR
-        "VR_SANITIZE is not supported with MSVC; use a Clang or GCC build.")
-  endif()
-
   # address;undefined -> address,undefined (the -fsanitize= argument form).
   list(JOIN VR_SANITIZE "," _vr_sanitize_list)
   set(_vr_sanitize_flags -fsanitize=${_vr_sanitize_list}

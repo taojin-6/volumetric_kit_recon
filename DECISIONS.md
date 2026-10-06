@@ -365,10 +365,15 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-06**](#2026-10-06--gpuframeprep-takes-colour-on-the-device-only-and-a-sets-depth-is-staged-on-one-thread-amends-the-2026-09-28-decoded-frame-and-2026-10-06-one-batch-entries) —
   `GpuFramePrep` takes colour on the device only, and a set's depth is
   staged on one thread.
+- [**2026-10-06**](#2026-10-06--platforms-linux-android-macos-and-ios-with-gcc-or-clang-windows-and-msvc-are-not-supported-amends-the-2026-06-21-vulkan-path-entry) —
+  Platforms: Linux, Android, macOS and iOS, with GCC or Clang; Windows and
+  MSVC are not supported.
 
 ## Decision record
 
 ### 2026-06-21 — Single Vulkan path (MoltenVK on Apple), like gfx.
+
+*Amended 2026-10-06 (the platforms entry, below):* Windows is not a target.
 
 Compute is
 Vulkan compute (GLSL → SPIR-V), one path across Linux / Android / macOS / iOS /
@@ -10138,6 +10143,21 @@ recording holds its colour in a device buffer.
 pass with `VR_TEST_HEVC_BACKEND=videotoolbox`, and
 `recon_sensor_gpu_frame_prep` and `recon_sensor_array_process` run clean
 under the Khronos layer's synchronization validation.
+
+### 2026-10-06 — Platforms: Linux, Android, macOS and iOS, with GCC or Clang; Windows and MSVC are not supported (amends the 2026-06-21 Vulkan-path entry).
+
+recon builds for Linux, Android, macOS and iOS, with GCC or Clang (Apple's
+included), as the family's core and calib do (their "Platforms" decisions;
+calib's b98d8e4). Windows and MSVC are not supported: the core, whose headers
+recon's include, builds nowhere else; the CUDA interop is Linux's and the
+apps are Apple's; and no CI leg runs Windows, so a Windows branch could only
+rot untested. The code and build assume those compilers outright: no
+`_WIN32` or `_MSC_VER` paths and no MSVC flags. Removed: the MSVC branches
+of `vr_target_warnings`, `VR_SANITIZE`'s MSVC refusal, `/EHsc` and `/w` in
+`recon_io` and the viewer, the Orbbec tests' Windows `PATH` block, and the
+codec's `_BitScanReverse64`. (The video decoders' `D3d11va` went with the
+back-end selection, in the device-only decoder entry.) Supporting Windows
+would be a new decision, landing with its CI leg -- and the core's.
 
 ## Measured lessons
 
