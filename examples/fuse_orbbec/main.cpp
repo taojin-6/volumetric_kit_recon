@@ -21,8 +21,8 @@
 // converts on the GPU (sensor::GpuFramePrep) instead of on the host, fusing
 // depth and colour with their own cameras, the colour decoded onto the GPU;
 // it streams H.265 unless --mjpeg says otherwise, since MJPEG needs about
-// nine times the bandwidth. With --rig, each set's cameras are prepared at
-// once, one thread per camera (sensor::prepare_set), and fused one after
+// nine times the bandwidth. With --rig, each set's cameras are prepared in
+// one batch (sensor::GpuFramePrep::prepare_batch), and fused one after
 // another; one camera is read through the sensor interface (OrbbecSensor),
 // and --host-clock sets its clock to the host's at the start.
 // --rig fuses every camera of a sync configuration (femto_mega_sync.json) as
@@ -500,11 +500,10 @@ vkc::Status run(const Options& opt) {
                       1e6);
     }
     if (set) {
-      // Timed as one row: the cameras run at once, so their sum would
-      // overstate what the set costs.
+      // Timed as one row: the cameras run in one batch.
       const auto t_prep = std::chrono::steady_clock::now();
       VKC_ASSIGN(const std::vector<std::optional<sensor::DeviceFrame>> frames,
-                 sensor::prepare_set(preps, set->frames));
+                 sensor::GpuFramePrep::prepare_batch(preps, set->frames));
       stage_totals.add_cpu("frame prep",
                            std::chrono::duration<double, std::milli>(
                                std::chrono::steady_clock::now() - t_prep)

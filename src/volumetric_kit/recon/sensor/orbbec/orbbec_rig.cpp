@@ -335,8 +335,8 @@ core::Result<std::optional<OrbbecRigSet<Frame>>> OrbbecRig::Impl::take() {
 
   // TODO(sensor): process a host set's frames in parallel, one thread per
   // camera; one after another they take ~11 ms for four (the 2026-09-27
-  // decision). A raw set's frames only hold their pairs, and prepare_set runs
-  // their GPU passes in parallel.
+  // decision). A raw set's frames only hold their pairs, and prepare_batch
+  // runs their GPU passes in one batch.
   Set set;
   set.timestamp_ns = group->timestamp_us * 1000;
   set.frames.resize(r.streams.size());

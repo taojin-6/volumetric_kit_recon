@@ -33,7 +33,8 @@ Baseline: `main` at `36b6d86` (2026-09-30).
 
 For one set of four cameras, one iteration of `rig_viewer`'s fuse thread
 (`examples/viewer/rig_viewer.cpp:1270`), at the baseline. P1 has since made
-allocate, compaction and integrate one submit each per set; see its row.
+allocate, compaction and integrate one submit each per set, and P2 frame
+prep; see their rows.
 
 | stage | code | submits | order | read back |
 |---|---|---|---|---|
@@ -126,7 +127,7 @@ kernels.
 | P3 | Deduplicate depth allocation before dilating | measured −50% a set on the M5 Max, −62% on the RTX 5090 (over P1) | M | — | landed (#128) |
 | P5 | Extract from the fuse's device block list | measured −14% an extract on the M5 Max, −35% on the RTX 5090 | M | P1 for the shared list | landed (#129) |
 | P4 | Bind texture views in place, with no per-remesh copies | measured 0.26–0.51 ms GPU per remesh at 4K, 0.04–0.12 at 720p | M | P1's descriptor-array decision | deferred |
-| P2 | Record a set's frame prep in one batch | measured no gain; slower for host colour on the Mac | S | — | not worth it |
+| P2 | Record a set's frame prep in one batch | measured parity once host colour stages on threads; the pipeline's unit of work | S | — | landed (`SensorArray::process`) |
 | P6 | Take the remaining host decisions off the critical path | at most ~0.5 ms/set on the RTX 5090, ~0.7 on the M5 Max (measured gap) | M | P1, P5 | open |
 | P7 | Free the blocks nothing asks for or weights | measured: the map 7.3k → 2.9k blocks in 600 sets, integrate's device time −40% on the M5 Max, −50% on the RTX 5090; a static room keeps its size | M | — | landed (#132); device-list follow-up landed (#146) |
 | P9 | Allocate only the band blocks a sample can weight | ~60% of a static room's active set holds no weight; compaction, integrate and meshing scale with it | M | — | open, measure first |
@@ -297,6 +298,17 @@ is measured.
 
 ### P2 — Record a set's frame prep in one batch
 
+> **Landed (2026-10-06) as `GpuFramePrep::prepare_batch`, behind
+> `SensorArray::process`, for the pipeline rather than for speed:** one batch
+> a set is what the pipelined stages will submit behind the previous stage
+> on a timeline (a `TODO:` at its submit). Host colour now stages on a
+> thread per camera before the one recording, and every pass's uploads are
+> recorded before any pass's kernels, which closes the Mac's gap below to
+> parity: median of 100 sets, M5 Max, one batch against threads, 1.68 vs
+> 1.66 ms for host colour at 4K, 0.97 vs 0.95 ms for device colour.
+> `prepare_set` is removed; its callers use `prepare_batch`. The RTX 5090
+> was at parity before the threaded staging and is not re-measured.
+>
 > **Built, measured, dropped (2026-10-01).** The per-camera threads already
 > overlap the four submits, so one batch saves nothing.
 >

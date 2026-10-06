@@ -34,6 +34,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   primary, frames grouped into a `FrameSet` by trigger on the host clock or
   by sequence number, each posed by an `ArrayCalibration`. Test:
   `recon_sensor_array`.
+- `sensor/array`: **`SensorArray::process`**, a set prepared on the GPU in
+  one batch, through the new **`GpuFramePrep::prepare_batch`** (every
+  camera's uploads, then every camera's passes, in one `CommandBatch`, host
+  colour staged on a thread per camera first). Test:
+  `recon_sensor_array_process`.
 - `sensor`: **`TriggerGrouper`** (`trigger_grouper.hpp`), the rig's grouping
   of frames into triggers, moved out of the Orbbec driver. Test:
   `recon_sensor_trigger_grouper`; the driver's start order is tested by
@@ -73,6 +78,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
+- `sensor`: **`prepare_set`**, a thread and a submit per camera, replaced by
+  `GpuFramePrep::prepare_batch`, which takes the same passes and frames and
+  returns the same frames. `fuse_orbbec --rig` and `rig_viewer` prepare
+  their sets through it.
 - tests: **the tests that opened real cameras**,
   `recon_sensor_orbbec_capture`, `recon_sensor_orbbec_gpu_prep` and
   `recon_sensor_orbbec_rig`, with their `VR_ORBBEC_TEST_SERIAL`,
