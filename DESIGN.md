@@ -1170,7 +1170,8 @@ range as JFIF defines it, with no FFmpeg: on nvJPEG's hardware JPEG engine
 into the same kind of buffer, I420, or through VideoToolbox's hardware
 decoder (`vt_jpeg.cpp`) into the same images. Another subsampling, or a
 JPEG larger than the hardware takes (16384 a side on nvJPEG's engine, the
-device's image extent on Apple), is `Unsupported`. For both decoders the
+device's image extent on Apple), is `Unsupported`, as is every JPEG on a GPU
+with no hardware JPEG engine (an RTX 4090, say). For both decoders the
 codes are the contract: `IoError` is data that does not decode and costs
 only itself (and, for H.265, the frames to the next key frame);
 `Unsupported` is a stream the hardware refuses, or a `create` with no
@@ -1181,8 +1182,8 @@ sensor's `poll` returns it, so a refused stream or a failing device path is
 not quiet. FFmpeg's `AVERROR_EXTERNAL` (a hardware call failed) reads as
 `Backend`; a hardware failure it reports otherwise reads as lost frames.
 `VR_TEST_HEVC_BACKEND` makes the decoder tests fail rather than skip where
-no device path opens, which is how CI holds its legs to NVDEC and nvJPEG
-on 24.04 and VideoToolbox on the Mac.
+no device path opens, which is how CI holds its legs to NVDEC on 24.04 (and
+nvJPEG where the GPU has the engine) and VideoToolbox on the Mac.
 **`IRgbdSensor`** (`sensor/rgbd_sensor.hpp`) is one sensor: its
 `SensorInfo` from when it opens (id, the cameras' factory models at the
 opened modes, `depth_to_color`, rig role, clock, pose source, rate), and

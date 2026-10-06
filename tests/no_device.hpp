@@ -40,4 +40,15 @@ inline int no_decoder(const std::string& why) {
   return required ? 1 : 0;
 }
 
+// As no_decoder for JpegDecoder, except that a GPU with no hardware JPEG
+// engine always skips: NVIDIA's are few (the RTX 5090 has one, the RTX 4090
+// on one CI host none), and nothing stands in for it.
+inline int no_jpeg_decoder(const std::string& why) {
+  if (why.find("no hardware JPEG engine") != std::string::npos) {
+    std::fprintf(stderr, "%s; skipping\n", why.c_str());
+    return 0;
+  }
+  return no_decoder(why);
+}
+
 }  // namespace vr_test

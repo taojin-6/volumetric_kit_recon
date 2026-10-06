@@ -10071,14 +10071,17 @@ went, a decoder that kept failing would have looked like a slow camera.
 
 **Off Apple, `VR_WITH_FFMPEG` needs `VR_WITH_CUDA`**, refused at configure,
 and the FFmpeg floor rises to 6.1 (Ubuntu 24.04). In CI the 24.04 leg (CUDA:
-NVDEC and nvJPEG on Blackwell) and the Mac (VideoToolbox) build and test the
-decoders. The 22.04, 26.04 and sanitizer jobs no longer build them, so FFmpeg
+NVDEC, and nvJPEG where the GPU has the engine) and the Mac (VideoToolbox)
+build and test the decoders. A GPU with no hardware JPEG engine decodes no
+MJPEG: one CI host's is now an RTX 4090, which has none (nvJPEG status 7),
+so the JPEG tests skip there and run on the RTX 5090 host. The 22.04, 26.04 and sanitizer jobs no longer build them, so FFmpeg
 4.4 and 7.x on NVDEC, and the decoders under the sanitizers, lose coverage.
 
 **The tests** read each device picture back and hold it to the pattern the
 fixture was made from, rather than to a software decode; bit-exactness against
 software and swscale's RGB checks go with it. They skip where no device path
-opens, unless `VR_TEST_HEVC_BACKEND` promises one, as CI's legs do.
+opens, unless `VR_TEST_HEVC_BACKEND` promises one, as CI's legs do; a GPU
+with no JPEG engine skips the JPEG tests regardless.
 
 **Not taken.** A failed device path is not latched inside the decoders: their
 consumer stops at the first. The Orbbec driver still opens without a device
@@ -10088,8 +10091,8 @@ and refuses at `start`, which keeps its option checks testable with no GPU.
 FFmpeg and the viewer: the 54 tests pass with
 `VR_TEST_HEVC_BACKEND=videotoolbox`. Mutating VideoToolbox's crop refusal,
 the MJPEG decoder's stop on `Unsupported`, or the H.265 decoder's on a
-refused stream fails its test. The CUDA path compiles first on CI's 24.04
-leg. Not run on a camera.
+refused stream fails its test. CI's 24.04 leg on an RTX 4090 passes the
+H.265 tests on NVDEC, the first run of that path. Not run on a camera.
 
 ## Measured lessons
 
