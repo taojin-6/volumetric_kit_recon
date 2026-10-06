@@ -304,19 +304,36 @@ target_link_libraries(recon_sensor_conventions_test
 vr_target_warnings(recon_sensor_conventions_test)
 add_test(NAME recon_sensor_conventions COMMAND recon_sensor_conventions_test)
 
-# sensor tier: the rig calibration file -- the family's config layout, the
-# world->camera pose turned into camera->world, Rodrigues' edge cases, the
-# refusals, and a round trip through a file in the build tree. Host-only.
-add_executable(recon_sensor_rig_calibration_test
-               sensor_rig_calibration_test.cpp)
-target_link_libraries(recon_sensor_rig_calibration_test
+# camera tier: the camera model (checks, rescaling about pixel centres,
+# projection against OpenCV's numbers, unprojection inside the invertible
+# radius, the scalar templates under a dual number), its geometry (rigid checks,
+# Rodrigues at its edge cases), and the sensor array's calibration file (both
+# versions, the refusals, a round trip through a file in the build tree).
+# Host-only, so they always run.
+add_executable(recon_camera_model_test camera_model_test.cpp)
+# recon_sensor brings recon_camera: the test compares the sensor tier's float
+# lens with the camera model.
+target_link_libraries(recon_camera_model_test
                       PRIVATE volumetric_kit::recon_sensor)
+vr_target_warnings(recon_camera_model_test)
+add_test(NAME recon_camera_model COMMAND recon_camera_model_test)
+
+add_executable(recon_camera_geometry_test camera_geometry_test.cpp)
+target_link_libraries(recon_camera_geometry_test
+                      PRIVATE volumetric_kit::recon_camera)
+vr_target_warnings(recon_camera_geometry_test)
+add_test(NAME recon_camera_geometry COMMAND recon_camera_geometry_test)
+
+add_executable(recon_camera_array_calibration_test
+               camera_array_calibration_test.cpp)
+target_link_libraries(recon_camera_array_calibration_test
+                      PRIVATE volumetric_kit::recon_camera)
 target_compile_definitions(
-  recon_sensor_rig_calibration_test
+  recon_camera_array_calibration_test
   PRIVATE VR_TEST_SCRATCH_DIR="${CMAKE_CURRENT_BINARY_DIR}")
-vr_target_warnings(recon_sensor_rig_calibration_test)
-add_test(NAME recon_sensor_rig_calibration
-         COMMAND recon_sensor_rig_calibration_test)
+vr_target_warnings(recon_camera_array_calibration_test)
+add_test(NAME recon_camera_array_calibration
+         COMMAND recon_camera_array_calibration_test)
 
 # codec tier, host half: CodecParams validation and the DCT's two tables (basis
 # orthonormality, the zigzag order against the prior engine's). CPU-only, so it

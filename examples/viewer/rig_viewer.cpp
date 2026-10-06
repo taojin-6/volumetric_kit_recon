@@ -99,13 +99,13 @@
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/image.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
+#include "volumetric_kit/recon/camera/array_calibration.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/mesh/device_mesh.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
 #include "volumetric_kit/recon/sensor/orbbec/orbbec_capture.hpp"
 #include "volumetric_kit/recon/sensor/orbbec/orbbec_rig.hpp"
 #include "volumetric_kit/recon/sensor/orbbec/orbbec_sync_config.hpp"
-#include "volumetric_kit/recon/sensor/rig_calibration.hpp"
 #include "volumetric_kit/recon/sensor/utils/gpu_frame_prep.hpp"
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
 #include "volumetric_kit/recon/texture/texture_atlas.hpp"
@@ -135,6 +135,7 @@ namespace rtsdf = volumetric_kit::recon::tsdf;
 namespace rmesh = volumetric_kit::recon::mesh;
 namespace rtex = volumetric_kit::recon::texture;
 namespace rsensor = volumetric_kit::recon::sensor;
+namespace rcamera = volumetric_kit::recon::camera;
 namespace vg = volumetric_kit::gfx;
 namespace vgp = volumetric_kit::gfx::pipelines;
 namespace win = volumetric_kit::gfx::windowing;
@@ -730,9 +731,9 @@ int run(GLFWwindow* window, const Options& opt) {
     rig_options.sync = std::move(sync).value();
   }
   if (!opt.calibration.empty()) {
-    auto calibration = rsensor::read_rig_calibration(opt.calibration);
-    if (!calibration) {
-      std::fprintf(stderr, "%s: %s\n", opt.calibration.c_str(),
+    auto calibration = rcamera::read_array_calibration(opt.calibration);
+    if (!calibration) {  // the message names the file
+      std::fprintf(stderr, "rig_viewer: %s\n",
                    calibration.status().message().c_str());
       return 1;
     }

@@ -11,9 +11,13 @@
 /// (`core/camera_params.hpp`), so a lens appears only here, where a frame is
 /// undistorted: by `sensor/utils`'s GPU pass, whose GLSL mirrors
 /// @ref distort_normalized, or by a driver's own filter.
+///
+/// TODO(sensor): the raw frame takes the camera tier's `CameraModel` in the
+/// sensor-interface PR, and these two types go.
 
 #include <cstdint>
 
+#include "volumetric_kit/recon/camera/projection.hpp"
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
 
 namespace volumetric_kit::recon::sensor {
@@ -45,22 +49,17 @@ struct LensCamera {
 /// @brief Where the lens moves a point: normalized pinhole coordinates
 ///        (`x = (u - cx) / fx`) to the normalized coordinates it is imaged at.
 ///
-/// OpenCV's forward model: a rational radial term and a tangential one. The
+/// OpenCV's forward model, the camera tier's `distort_rational` in float. The
 /// GPU undistortion samples the captured image at this point for each pixel of
 /// the undistorted one, which is why only the forward direction is needed.
 /// @param d  The lens.
 /// @param p  A normalized pinhole point.
 /// @return The normalized point @p p is imaged at.
 inline Vec2f distort_normalized(const LensDistortion& d, Vec2f p) noexcept {
-  const float r2 = p.x * p.x + p.y * p.y;
-  const float r4 = r2 * r2;
-  const float r6 = r4 * r2;
-  const float radial = (1.0f + d.k1 * r2 + d.k2 * r4 + d.k3 * r6) /
-                       (1.0f + d.k4 * r2 + d.k5 * r4 + d.k6 * r6);
-  const float xy = p.x * p.y;
-  return Vec2f(
-      p.x * radial + 2.0f * d.p1 * xy + d.p2 * (r2 + 2.0f * p.x * p.x),
-      p.y * radial + d.p1 * (r2 + 2.0f * p.y * p.y) + 2.0f * d.p2 * xy);
+  const float c[8] = {d.k1, d.k2, d.p1, d.p2, d.k3, d.k4, d.k5, d.k6};
+  Vec2f out;
+  camera::distort_rational(c, p.x, p.y, &out.x, &out.y);
+  return out;
 }
 
 }  // namespace volumetric_kit::recon::sensor

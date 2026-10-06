@@ -25,7 +25,7 @@
 // --rig fuses every camera of a sync configuration (femto_mega_sync.json) as
 // one rig, refusing cameras that differ from it unless --apply-sync writes it
 // to them. --calibration poses each camera from a calibration file
-// (sensor/rig_calibration.hpp); without it every camera sits at the origin.
+// (camera/array_calibration.hpp); without it every camera sits at the origin.
 // The run gives up after ten seconds without a frame rather than waiting.
 
 #include <algorithm>
@@ -46,6 +46,7 @@
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/instance.hpp"
+#include "volumetric_kit/recon/camera/array_calibration.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/io/ply_writer.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
@@ -54,7 +55,6 @@
 #include "volumetric_kit/recon/sensor/orbbec/orbbec_capture.hpp"
 #include "volumetric_kit/recon/sensor/orbbec/orbbec_rig.hpp"
 #include "volumetric_kit/recon/sensor/orbbec/orbbec_sync_config.hpp"
-#include "volumetric_kit/recon/sensor/rig_calibration.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_grid.hpp"
@@ -65,6 +65,7 @@ namespace vol = volumetric_kit::recon::volume;
 namespace tsdf = volumetric_kit::recon::tsdf;
 namespace mesh = volumetric_kit::recon::mesh;
 namespace sensor = volumetric_kit::recon::sensor;
+namespace camera = volumetric_kit::recon::camera;
 
 namespace {
 
@@ -290,9 +291,9 @@ vkc::Result<Source> open_source(const Options& opt, const vkc::Device& device,
   if (opt.apply_sync && opt.rig.empty()) {
     return vkc::Status::invalid_argument("--apply-sync needs --rig");
   }
-  std::vector<sensor::RigCameraCalibration> calibration;
+  camera::ArrayCalibration calibration;
   if (!opt.calibration.empty()) {
-    VKC_ASSIGN(calibration, sensor::read_rig_calibration(opt.calibration));
+    VKC_ASSIGN(calibration, camera::read_array_calibration(opt.calibration));
   }
   Source source;
   if (!opt.rig.empty()) {
@@ -312,22 +313,23 @@ vkc::Result<Source> open_source(const Options& opt, const vkc::Device& device,
   }
   sensor::OrbbecCapture::Options capture_options;
   capture_options.serial = opt.serial;
-  if (!calibration.empty()) {
+  const std::vector<camera::SensorCalibration>& sensors = calibration.sensors;
+  if (!sensors.empty()) {
     // One camera, posed from the file: the named one, or the file's only.
-    const auto it = std::find_if(
-        calibration.begin(), calibration.end(), [&](const auto& c) {
-          return opt.serial.empty() ? calibration.size() == 1
-                                    : c.serial == opt.serial;
+    const auto it =
+        std::find_if(sensors.begin(), sensors.end(), [&](const auto& s) {
+          return opt.serial.empty() ? sensors.size() == 1 : s.id == opt.serial;
         });
-    if (it == calibration.end()) {
+    if (it == sensors.end() || !it->color_to_world) {
       return vkc::Status::not_found(
-          opt.calibration + (opt.serial.empty()
-                                 ? std::string(" poses several cameras; name "
-                                               "one with --serial")
-                                 : " has no camera " + opt.serial));
+          opt.calibration +
+          (it == sensors.end() && opt.serial.empty()
+               ? std::string(" poses several cameras; name one with --serial")
+               : " does not pose camera " +
+                     (it == sensors.end() ? opt.serial : it->id)));
     }
-    capture_options.serial = it->serial;
-    capture_options.cam_to_world = it->cam_to_world;
+    capture_options.serial = it->id;
+    capture_options.cam_to_world = vr::Mat4f(*it->color_to_world);
   }
   if (opt.min_depth) capture_options.min_depth = *opt.min_depth;
   if (opt.max_depth) capture_options.max_depth = *opt.max_depth;

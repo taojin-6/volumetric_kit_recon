@@ -30,16 +30,17 @@
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/instance.hpp"
+#include "volumetric_kit/recon/camera/array_calibration.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/sensor/utils/gpu_frame_prep.hpp"
 #endif
 #include "volumetric_kit/recon/sensor/orbbec/orbbec_rig.hpp"
 #include "volumetric_kit/recon/sensor/orbbec/orbbec_sync_config.hpp"
-#include "volumetric_kit/recon/sensor/rig_calibration.hpp"
 
 namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
 namespace sensor = volumetric_kit::recon::sensor;
+namespace camera = volumetric_kit::recon::camera;
 
 #define CHECK(cond)                                                        \
   do {                                                                     \
@@ -88,18 +89,19 @@ int main() {
   }
   // A distinct pose per camera, so a frame stamped with the wrong camera's
   // pose shows -- through a calibration file, as the rig is fed in practice.
-  std::vector<sensor::RigCameraCalibration> poses;
+  camera::ArrayCalibration poses;
   for (const sensor::OrbbecSyncDevice& d : sync.value().devices) {
-    sensor::RigCameraCalibration c;
-    c.serial = d.serial;
-    c.cam_to_world[3] =
-        vr::Vec4f(static_cast<float>(poses.size()), 0.5f, -1.0f, 1.0f);
-    poses.push_back(c);
+    camera::SensorCalibration c;
+    c.id = d.serial;
+    c.color_to_world = camera::Mat4d(1.0);
+    (*c.color_to_world)[3] =
+        glm::dvec4(static_cast<double>(poses.sensors.size()), 0.5, -1.0, 1.0);
+    poses.sensors.push_back(c);
   }
   const std::string path =
       std::string(VR_TEST_SCRATCH_DIR) + "/orbbec_rig_test.json";
-  CHECK_OK(sensor::write_rig_calibration(path, poses));
-  auto read = sensor::read_rig_calibration(path);
+  CHECK_OK(camera::write_array_calibration(path, poses));
+  auto read = camera::read_array_calibration(path);
   CHECK(read.ok());
 
   sensor::OrbbecRig::Options options;
@@ -127,15 +129,16 @@ int main() {
   }
   sensor::OrbbecRig rig = std::move(opened).value();
   const std::size_t n = rig.camera_count();
-  CHECK(n == poses.size());
+  CHECK(n == poses.sensors.size());
   for (std::size_t i = 0; i < n; ++i) {
     const sensor::OrbbecDeviceInfo& info = rig.device_info(i);
     std::printf("  [%zu] %s  %s  %s  sync %s%s\n", i, info.serial.c_str(),
                 info.ip_address.c_str(), info.firmware_version.c_str(),
                 sensor::to_string(info.sync_mode),
                 i == rig.primary() ? "  (started last)" : "");
-    CHECK(info.serial == poses[i].serial);
-    CHECK(near(rig.color_camera(i).cam_to_world, poses[i].cam_to_world));
+    CHECK(info.serial == poses.sensors[i].id);
+    CHECK(near(rig.color_camera(i).cam_to_world,
+               vr::Mat4f(*poses.sensors[i].color_to_world)));
   }
   CHECK(rig.device_info(rig.primary()).sync_mode ==
         sensor::OrbbecSyncMode::Primary);
@@ -181,8 +184,10 @@ int main() {
         const sensor::CapturedFrame& f = *set.frames[i];
         CHECK(f.depth != nullptr && f.has_color());
         // Posed by its own camera.
-        CHECK(near(f.color_camera.cam_to_world, poses[i].cam_to_world));
-        CHECK(near(f.depth_camera.cam_to_world, poses[i].cam_to_world));
+        CHECK(near(f.color_camera.cam_to_world,
+                   vr::Mat4f(*poses.sensors[i].color_to_world)));
+        CHECK(near(f.depth_camera.cam_to_world,
+                   vr::Mat4f(*poses.sensors[i].color_to_world)));
         // On the trigger's clock, within the tolerance.
         const std::uint64_t skew_us =
             (f.timestamp_ns > set.timestamp_ns
@@ -253,9 +258,10 @@ int main() {
       continue;
     }
     const vr::Mat4f& pose = polled.value()->color_camera.cam_to_world;
-    CHECK(std::any_of(poses.begin(), poses.end(), [&](const auto& p) {
-      return near(p.cam_to_world, pose);
-    }));
+    CHECK(std::any_of(poses.sensors.begin(), poses.sensors.end(),
+                      [&](const auto& p) {
+                        return near(vr::Mat4f(*p.color_to_world), pose);
+                      }));
     ++k;
   }
   // Each set holds one to n frames, so 3n frames took 3 to 3n sets.
@@ -364,7 +370,8 @@ int main() {
         if (!set.frames[c]) continue;
         const sensor::RawFrame& f = *set.frames[c];
         CHECK(f.depth != nullptr && f.has_color());
-        CHECK(near(f.color_cam_to_world, poses[c].cam_to_world));
+        CHECK(near(f.color_cam_to_world,
+                   vr::Mat4f(*poses.sensors[c].color_to_world)));
         const vr::Mat4f rel =
             glm::inverse(f.color_cam_to_world) * f.depth_cam_to_world;
         CHECK(glm::length(vr::Vec3f(rel[3])) < 0.1f);
@@ -412,9 +419,10 @@ int main() {
         continue;
       }
       const vr::Mat4f& pose = polled.value()->color_cam_to_world;
-      CHECK(std::any_of(poses.begin(), poses.end(), [&](const auto& p) {
-        return near(p.cam_to_world, pose);
-      }));
+      CHECK(std::any_of(poses.sensors.begin(), poses.sensors.end(),
+                        [&](const auto& p) {
+                          return near(vr::Mat4f(*p.color_to_world), pose);
+                        }));
       ++k;
     }
     CHECK(raw_rig.poll_raw_set().status().domain() ==
