@@ -122,6 +122,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
+- **Test-only public API**, which no example, sibling or app called:
+  - `core`: `device_macros.hpp` (`VR_DEVICE_HOST`), `vr::normalize`,
+    `Vec3u8`;
+  - `volume`: `Voxel`, `VoxelData`, `HashTable`,
+    `VoxelHashMap::allocate_from_points`, `VoxelBlockGrid::stamp_blocks`,
+    `VoxelGridParams::defaults()`; `VoxelBlockGrid::create` now refuses an
+    attribute whose block is not whole 4-byte words;
+  - `mesh`: `ExtractTimings::uncached_cells_per_block`;
+  - `texture`: `pack_atlas` and `texture(DeviceMesh, Buffer depth, cam)`;
+  - `codec`: `Encoder::config()`;
+  - `eval`: `compare_meshes` (use `ReferenceMesh`) and `MeshDistance::reach`.
+  Test: `recon_volume_types` goes.
 - **Windows and MSVC**: the MSVC compiler flags and `_MSC_VER`/`WIN32`
   branches in the build, the codec and the tests. recon builds with GCC or
   Clang on Linux, Android, macOS and iOS.

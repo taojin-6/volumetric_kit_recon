@@ -1601,8 +1601,7 @@ surface oscillating around a threshold stops relocating on every up-tick —
 and `ExtractTimings`' device half — which must
 bracket several dispatches in **one** timed submit, since a timed submit costs
 ~0.13 ms on MoltenVK and four of the six phases run under that. On `texture`,
-the `TODO(texture)`s: packing the multi-view atlas on the GPU into an image gfx
-samples directly (it needs `core` images), keeping a static keyframe set's
+the `TODO(texture)`s: keeping a static keyframe set's
 depth and coverage in the pass between calls, blending views at their seams,
 and a per-triangle tile
 index in gfx so a shared mesh can be textured from several views; and the
