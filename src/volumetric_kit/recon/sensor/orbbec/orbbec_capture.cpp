@@ -56,9 +56,6 @@ const char* to_string(OrbbecColorCodec codec) noexcept {
 }
 
 struct OrbbecCapture::Impl {
-  // Declared first so it is destroyed last: the stream's SDK objects belong
-  // to it.
-  std::shared_ptr<ob::Context> context;
   std::unique_ptr<orbbec::CameraStream> stream;
 };
 
@@ -74,23 +71,10 @@ core::Result<OrbbecCapture> OrbbecCapture::open(const Options& options) {
   VKC_TRY(orbbec::validate(options));
   VKC_TRY(orbbec::check_color_codec(options, "OrbbecCapture"));
   auto impl = std::make_unique<Impl>();
-  try {
-    if (options.configure_sdk_logging) orbbec::configure_sdk_logging();
-    impl->context = std::make_shared<ob::Context>();
-    impl->context->enableNetDeviceEnumeration(true);
-    std::vector<std::string> serials;
-    if (!options.serial.empty()) serials.push_back(options.serial);
-    VKC_ASSIGN(const auto devices,
-               orbbec::discover(*impl->context, serials,
-                                options.discovery_timeout_ms, "OrbbecCapture"));
-    VKC_ASSIGN(impl->stream,
-               orbbec::CameraStream::create(impl->context, devices.front(),
-                                            options, options.cam_to_world,
-                                            options.configure_sdk_logging,
-                                            "OrbbecCapture"));
-  } catch (const std::exception& e) {  // ob::Error is one
-    return orbbec::sdk_error("OrbbecCapture", "opening the camera", e);
-  }
+  VKC_ASSIGN(impl->stream,
+             orbbec::open_camera(options.serial, options.discovery_timeout_ms,
+                                 options.configure_sdk_logging, options,
+                                 options.cam_to_world, "OrbbecCapture"));
   return OrbbecCapture(std::move(impl));
 }
 

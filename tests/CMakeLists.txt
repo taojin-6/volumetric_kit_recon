@@ -304,6 +304,15 @@ target_link_libraries(recon_sensor_conventions_test
 vr_target_warnings(recon_sensor_conventions_test)
 add_test(NAME recon_sensor_conventions COMMAND recon_sensor_conventions_test)
 
+# sensor tier: the RGB-D sensor contract, implemented by a fake and driven
+# through the base class -- the no_frame/some_frame returns, poll's newest and
+# drain's oldest-first, frames that hold their pixels. Host-only.
+add_executable(recon_sensor_rgbd_sensor_test sensor_rgbd_sensor_test.cpp)
+target_link_libraries(recon_sensor_rgbd_sensor_test
+                      PRIVATE volumetric_kit::recon_sensor)
+vr_target_warnings(recon_sensor_rgbd_sensor_test)
+add_test(NAME recon_sensor_rgbd_sensor COMMAND recon_sensor_rgbd_sensor_test)
+
 # camera tier: the camera model (its checks, the lens template against OpenCV's
 # numbers), its geometry (rigid checks, Rodrigues against OpenCV), and the
 # sensor array's calibration file (poses read, the refusals, a file in the build

@@ -117,6 +117,8 @@ camera (`sensor/orbbec/orbbec_capture.hpp`), and the live example:
 build/examples/fuse_orbbec/fuse_orbbec --serial <serial> --frames 300
 # H.265 colour instead of MJPEG (a build with -DVR_WITH_FFMPEG=ON too):
 build/examples/fuse_orbbec/fuse_orbbec --serial <serial> --hevc
+# Raw frames prepared on the GPU, the camera on the host's clock:
+build/examples/fuse_orbbec/fuse_orbbec --serial <serial> --gpu --host-clock
 ```
 
 A camera wired as a sync secondary streams only while its primary does; name

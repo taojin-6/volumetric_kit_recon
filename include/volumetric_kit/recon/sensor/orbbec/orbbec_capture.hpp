@@ -12,6 +12,10 @@
 /// headers. Linking still needs the SDK's library, which the target carries.
 /// The measurements behind the frame path are in the 2026-09-26 decision.
 
+// TODO(sensor): OrbbecCapture, ICameraCapture, CapturedFrame and the SDK's
+// host path, OrbbecStreamOptions::raw with it, go when the Replica source
+// moves onto IRgbdSensor (the 2026-10-06 plan); OrbbecSensor replaces them.
+
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -97,7 +101,8 @@ struct OrbbecCaptureStats {
   /// Pairs handed out by @ref OrbbecCapture::poll.
   std::uint64_t delivered = 0;
   /// Pairs replaced by a newer one before any poll took them -- the contract's
-  /// "dropped, not queued", counted.
+  /// "dropped, not queued", counted -- or, for raw MJPEG, before the JPEG
+  /// decoder did.
   std::uint64_t dropped = 0;
   /// Pairs a poll took but could not hand out, skipped or refused.
   std::uint64_t failed = 0;
@@ -107,10 +112,10 @@ struct OrbbecCaptureStats {
   /// gap in the stream (a frame lost on the network, or empty), a decode
   /// error or a decoder falling two seconds behind, until the next key
   /// frame, and before the first. For raw MJPEG, a JPEG that did not
-  /// decode, a pair missing a frame, and a pair a newer one replaced while
-  /// the decoder was busy; zero for host MJPEG. Each is counted once, so
-  /// `delivered + dropped + failed + lost <= received`; the difference is a
-  /// pair still pending or discarded by @ref OrbbecCapture::stop.
+  /// decode and a pair missing a frame; zero for host MJPEG. Each is counted
+  /// once, so `delivered + dropped + failed + lost <= received`; the
+  /// difference is a pair still pending or discarded by
+  /// @ref OrbbecCapture::stop.
   std::uint64_t lost = 0;
   /// Of @ref delivered, the raw frames handed out with their colour on the host
   /// although the stream was opened onto a device

@@ -336,6 +336,10 @@ entries relevant to your task; later amendments supersede earlier rules.
   A sensor's frame is `RgbdFrame`: each camera's `CameraModel`, the poses in
   double, a sequence number, and the pixels it holds. The Femto Mega's factory
   depth-to-colour rotation is not one, and is made one.
+- [**2026-10-06**](#2026-10-06--a-sensor-is-an-irgbdsensor-what-it-is-before-a-frame-sensorinfo-frames-polled-newest-or-drained-oldest-first-and-the-femto-mega-is-orbbecsensor) —
+  A sensor is an `IRgbdSensor`: what it is before a frame (`SensorInfo`),
+  frames polled newest or drained oldest first. The Femto Mega is
+  `OrbbecSensor`.
 
 ## Decision record
 
@@ -9748,6 +9752,62 @@ tests went (the entry above), on the rig's primary, CL2A141000N, over Wi-Fi:
 `recon_sensor_orbbec_gpu_prep` passed raw H.265, raw MJPEG and the forced
 host-colour path, the first frame kept intact through the 45 polls after it
 and prepared, and the sequence rising.
+
+### 2026-10-06 — A sensor is an `IRgbdSensor`: what it is before a frame (`SensorInfo`), frames polled newest or drained oldest first; and the Femto Mega is `OrbbecSensor`.
+
+The third step of the 2026-10-06 plan (`sensor/rgbd_sensor.hpp`): the
+interface every driver implements, used on its own or by the sensor array
+that replaces `OrbbecRig`.
+
+- **`SensorInfo` is what a sensor is before a frame exists**: its id (the
+  serial a calibration names), its cameras' factory models at the opened
+  modes, its factory `depth_to_color`, its rig role, which clock its
+  timestamps are on, whether a calibration or the sensor itself poses it,
+  and its rate. An array needs each of these before it starts: the roles
+  order the starts, grouping needs one clock, the id finds the pose.
+- **Polled, not called back, and two ways to take frames.** A sensor holds
+  up to `set_queue_depth` frames, set before `start`; `poll` hands out the
+  newest and lets the older go, `drain` hands out every held frame oldest
+  first. A standalone consumer polls; an array sets a deeper queue and drains,
+  so frames of one trigger are still held when it groups them -- the
+  Orbbec mailbox's `take`/`take_all`, made the contract. A `drain` that
+  fails partway keeps the frames before the failure, handed out, rather
+  than losing good frames to a sensor that just broke.
+- **Counters every driver has** (`SensorStats`: received, delivered, dropped,
+  failed). A driver keeps its own beside them: `OrbbecSensor::orbbec_stats`
+  splits failed into failed and lost and counts host pictures. A raw MJPEG
+  pair the JPEG decoder had no time for is dropped, as the mailbox's are,
+  not lost, so backpressure never reads as decode failures.
+- **`OrbbecSensor`** is the raw path behind the interface: frames as
+  captured, each holding its SDK pair, models and extrinsic from the
+  factory calibration, the pose given in double. `open` refuses what would
+  only fail later: a `min_depth` of 0, which the GPU pass refuses, and a
+  sync mode the driver does not know, whose start an array could not order.
+- **`sync_clock_to_host` syncs this camera alone, once per `start`.** The
+  context's `enableDeviceClockSync` runs one SDK thread over every camera
+  the process created (`DeviceManager`, SDK 2.9.3), so one sensor's option
+  would re-sync another that reports its own clock, and run on after it. The
+  camera's own `timerSyncWithHost`, before it streams, keeps timestamps
+  monotonic within a session, and a camera that cannot sync fails `start`
+  rather than reporting `ClockDomain::Host` falsely. Its drift over a
+  session is unmeasured (a `TODO(sensor)`).
+- **Beside `OrbbecCapture` for now.** `OrbbecCapture`, `ICameraCapture`,
+  `CapturedFrame` and the SDK's host path go when the Replica source moves
+  onto the interface (a `TODO(sensor)`), and `OrbbecRig` when the array
+  lands.
+
+**Validation.** Apple M5 Max, macOS, Release with warnings as errors, Orbbec,
+FFmpeg and the viewer: the 52 tests pass. `recon_sensor_rgbd_sensor` drives
+a fake through the interface, and `recon_sensor_orbbec_conversion` checks
+what `OrbbecSensor::open` refuses before it touches the SDK. `OrbbecSensor`
+was checked by hand, not by a test (tests use no hardware), through
+`fuse_orbbec --gpu`, which reads one camera through it, on CL2A141000N: H.265
+and MJPEG each fused 60 frames at about 30 fps, printing both cameras'
+factory models, every received pair accounted for (H.265: 64 received, 60
+fused, 3 dropped, 1 lost). With `--host-clock` the first frame sat 197-243
+ms behind the host's system clock; without it, 276 ms, the camera keeping
+the clock the run before set. The example does not `drain`: the fake checks
+it, and the array's example will at a camera.
 
 ## Measured lessons
 
