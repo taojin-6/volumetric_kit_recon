@@ -14,13 +14,13 @@
 #include <vector>
 
 #include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/recon/camera/array_calibration.hpp"
 #include "volumetric_kit/recon/core/camera_params.hpp"
 #include "volumetric_kit/recon/sensor/camera_capture.hpp"
 #include "volumetric_kit/recon/sensor/orbbec/export.hpp"
 #include "volumetric_kit/recon/sensor/orbbec/orbbec_capture.hpp"
 #include "volumetric_kit/recon/sensor/orbbec/orbbec_sync_config.hpp"
 #include "volumetric_kit/recon/sensor/raw_frame.hpp"
-#include "volumetric_kit/recon/sensor/rig_calibration.hpp"
 
 namespace volumetric_kit::recon::sensor {
 
@@ -94,10 +94,10 @@ class VR_SENSOR_ORBBEC_API OrbbecRig final : public ICameraCapture {
     /// sync settings -- what @ref read_orbbec_sync_config returns. At least
     /// two: one primary, the rest its secondaries.
     OrbbecRigSyncConfig sync;
-    /// Each camera's pose, by serial -- what @ref read_rig_calibration
-    /// returns; it may list other cameras too. Empty places every camera at
-    /// the world origin.
-    std::vector<RigCameraCalibration> calibration;
+    /// Each camera's pose, by serial -- what
+    /// `camera::read_array_calibration` returns; it may list other sensors
+    /// too. No sensors places every camera at the world origin.
+    camera::ArrayCalibration calibration;
     /// Write @ref sync to each camera whose stored settings differ, where it
     /// persists, rather than refusing to open.
     bool apply_sync_config = false;
@@ -117,7 +117,7 @@ class VR_SENSOR_ORBBEC_API OrbbecRig final : public ICameraCapture {
   ///        streams, and read its calibration. Does not start streaming.
   /// @return The rig; or `Status::Code::InvalidArgument` for options that
   ///         cannot describe one (fewer than two cameras, a repeated serial,
-  ///         a calibration that is invalid or misses a camera, a sync
+  ///         a calibration that is invalid or does not pose a camera, a sync
   ///         tolerance of zero or of half a frame period or more, a stream
   ///         @ref OrbbecCapture::open would refuse);
   ///         `Status::Code::NotFound` naming the cameras that did not

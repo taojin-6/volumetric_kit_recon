@@ -147,8 +147,10 @@ core::Result<OrbbecRig> OrbbecRig::open(const Options& options) {
                                 options.discovery_timeout_ms, "OrbbecRig"));
     for (std::size_t i = 0; i < devices.size(); ++i) {
       Mat4f pose(1.0f);
-      for (const RigCameraCalibration& c : options.calibration) {
-        if (c.serial == serials[i]) pose = c.cam_to_world;
+      const camera::SensorCalibration* sensor =
+          camera::find_sensor(options.calibration, serials[i]);
+      if (sensor != nullptr && sensor->color_to_world) {
+        pose = Mat4f(*sensor->color_to_world);
       }
       VKC_ASSIGN(auto stream, orbbec::CameraStream::create(
                                   impl->context, devices[i], options, pose,

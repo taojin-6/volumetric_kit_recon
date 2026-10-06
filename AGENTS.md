@@ -60,10 +60,11 @@ Dependencies flow left to right:
 core → volume → tsdf → mesh → texture → interop
   │        └→ codec     ├→ eval
   │                    └→ io
-  └→ sensor                   (later: track, stream)
+  └→ sensor ← camera          (later: track, stream)
 ```
 
-- No upward includes. `sensor` depends on `core`, `codec` on `volume`, and
+- No upward includes. `camera` depends on the family core's base tier and GLM
+  only, `sensor` on `camera` and `core`, `codec` on `volume`, and
   `eval` and `io` on `mesh`; driver/decoder/pre-processing targets stay separate.
   Asset I/O is host-side at file boundaries; Assimp is an optional private
   backend of `recon_io_assimp`, never a dependency of GPU kernels.

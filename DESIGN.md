@@ -59,7 +59,8 @@ conventions and Vulkan setup.
   Deliberately *not* the `VK_` prefix — that belongs to Vulkan. (The prior
   engine's `VK_DEVICE_HOST`-style macros are renamed `VR_*` on port.)
 - CMake: `find_package(volumetric_kit_recon)`; component targets
-  `volumetric_kit::recon_core`, `…_volume`, `…_tsdf`, `…_mesh`, `…_texture`,
+  `volumetric_kit::recon_camera`, `…_core`, `…_volume`, `…_tsdf`, `…_mesh`,
+  `…_texture`,
   `…_sensor`, `…_codec`, `…_eval`, `…_io`, `…_interop` (+ later `…_track`, `…_stream`),
   plus `…_sensor_utils` (GPU pre-processing), the opt-in `…_sensor_orbbec`
   driver (`VR_WITH_ORBBEC`), `…_sensor_video` decoder (`VR_WITH_FFMPEG`), and
@@ -74,7 +75,15 @@ left. No upward includes.
 
 `core` → `volume` → `tsdf` → `mesh` → `texture` → `interop`, with `sensor`
 branching off **`core`**, `codec` off **`volume`** and `eval`/`io` off **`mesh`**
-(later: `track`, `stream`).
+(later: `track`, `stream`). `camera` sits under `sensor` and beside `core`: it
+links the family core's base tier and GLM, and no other recon tier.
+
+- **`camera`** — the family's camera vocabulary, used by calib and the
+  drivers as well as by recon: the double-precision `CameraModel` (image
+  size, intrinsics, OpenCV's rational lens) with rescaling and a
+  `CameraProjection` that projects and unprojects, its projection as scalar templates, rigid transforms and their
+  Rodrigues form, and the sensor array's calibration file
+  (`camera/array_calibration.hpp`). No Vulkan (the 2026-10-06 decision).
 
 - **`core`** — recon's own vocabulary every tier trades in: the GLM math
   aliases, the posed pinhole `DepthCameraParams`/`ColorCameraParams` of
@@ -107,12 +116,11 @@ branching off **`core`**, `codec` off **`volume`** and `eval`/`io` off **`mesh`*
   registered-depth intrinsics) and colour (`to_canonical`). Reads
   `DepthCameraParams` + `ColorCameraParams` from `core/camera_params.hpp` and
   `ColorEncoding` from `core/color_space.hpp`, so it
-  depends on **`core` alone** — it sits beside the fusion tiers, not on top of
-  them — and bundles **no drivers**: one ships here only if this repo can build
+  depends on **`camera` and `core` alone** — it sits beside the fusion tiers,
+  not on top of them — and bundles **no drivers**: one ships here only if this repo can build
   *and* test it (the 2026-08-02 decision). The one that does, Orbbec, is a
   target of its own (`sensor/orbbec/`), so `recon_sensor` never links a vendor
-  SDK. It also reads and writes the rig calibration file calib produces
-  (`rig_calibration.hpp`). The HEVC and JPEG decoders are another target of
+  SDK. The HEVC and JPEG decoders are another target of
   their own (`sensor/video/`, over FFmpeg), link `core` alone, and know no
   camera.
   The GPU pre-processing is a third (`sensor/utils/`, Vulkan and shaders), so
@@ -1070,6 +1078,36 @@ a device view's depth and coverage copied into the several-view pass's
 buffers, device to device; a host `Mesh`, the export path, is staged up and
 read back in a batch of its own.
 
+### camera
+
+`recon_camera` links `core_base` and GLM; calib, the drivers and the sensor
+tier build on it (the 2026-10-06 decision).
+
+- **`camera/camera_model.hpp`** — `CameraModel`: `ImageSize`,
+  `PinholeIntrinsics` and `RationalDistortion` (OpenCV's eight coefficients),
+  all double. `check_camera_model` validates one; `scale_camera_model`
+  rescales about pixel centres and refuses another aspect ratio.
+  `CameraProjection::create` checks a model and finds its lens's
+  `invertible_radius2` once; its `project` is the forward model, and refuses
+  a point past that radius, and its `unproject` returns the normalized ray,
+  by Newton's method inside it, that `project` maps within 1e-9 px of the
+  pixel, or refuses a pixel no ray inside it reaches. Conventions: +Z forward, +Y down, pixel centres at
+  integers, intrinsics in pixels of the model's size.
+- **`camera/projection.hpp`** — `distort_rational<T>` and
+  `project_rational<T>` over plain arrays, the one implementation: double in
+  `camera_model.hpp`, float in `sensor/lens.hpp` (which `lens.glsl`
+  mirrors), and a solver's dual numbers.
+- **`camera/geometry.hpp`** — GLM's double types, `check_rigid`,
+  `rigid_inverse`, and Rodrigues both ways, accurate through pi.
+  `RodriguesTransform` is OpenCV's `x' = R(rvec) x + tvec`.
+- **`camera/array_calibration.hpp`** — the sensor array's calibration file,
+  version 2 written, versions 1 and 2 read; the header documents the format.
+  `ArrayCalibration` holds the world (unspecified, a sensor, or an AprilTag)
+  and each sensor's optional colour pose, colour and depth models with their
+  `IntrinsicsSource`, and `depth_to_color`. Numbers are written in their
+  shortest exact form, through a synced temporary file renamed into place
+  (beside a symbolic link's target, keeping the file's permissions).
+
 ### sensor
 
 the capture *contract*: `ICameraCapture` polled for a
@@ -1106,8 +1144,8 @@ the rig's **sync configuration** (`orbbec_sync_config.hpp`, the SDK's
 unless `apply_sync_config` writes it; the lab rig's is
 `config/femto_mega_sync.json`, which only the example and tests name. Each
 camera's pose comes from the
-**calibration file** (`sensor/rig_calibration.hpp`, the family's config
-layout: OpenCV world-to-camera `rvec`/`tvec`). Both classes share the
+**calibration file** (`camera/array_calibration.hpp`), which must pose
+every camera of the rig. Both classes share the
 internal `CameraStream`. The rig's hardware test opens only the rig
 `VR_ORBBEC_TEST_RIG` names and never writes to it (the 2026-09-27
 decision).
@@ -1487,6 +1525,33 @@ the quantization table. These are deterministic candidate tables, not fitted
 JPEG image tables: the criterion is decoded geometry at a given total size.
 
 ## Next work
+
+**Cameras and sensors for the family (the 2026-10-06 plan).** recon is the
+library calib and ios build on for cameras and sensors. The `camera` tier has
+landed; the stack continues:
+1. **The sensor interface.** `IRgbdSensor`, one device, standalone or in an
+   array; `RgbdFrame`, `RawFrame` generalised (depth as u16 and a scale or
+   float metres, colour as YUV 4:2:0 or RGBA8 wherever it lives, each
+   camera's `CameraModel`, a sequence number, an optional per-frame pose), the
+   one frame type every driver hands out; `SensorInfo` (factory models for
+   the active mode, `depth_to_color`, sync role, clock, fixed or tracked
+   pose). `OrbbecCapture` becomes `OrbbecSensor`; `ICameraCapture`,
+   `CapturedFrame` and `LensCamera` go.
+2. **`SensorArray`**, vendor-neutral: per-member sync (anchor, triggered,
+   sequence; nearest-frame later), start order from the sync roles, poses
+   from the calibration file, and `process(set)`, every stream of every
+   sensor in one GPU batch. `OrbbecRig` goes; its grouper and start order
+   move here.
+3. **Luma readback** in `sensor/utils`, wherever the decoder left the
+   picture, for calib's detector.
+4. **Pipelined stages**: the core's `CommandBatch` submits without waiting,
+   ordered by timeline semaphores; the per-set host waits go (an
+   allocation's failure count and occupancy read a set late); then a
+   pipeline over acquire, prep, the grid chain (fuse, mesh, texture, still
+   serial) and consumers.
+5. **Later: mixed arrays** of fixed sensors and tracked ones (iPhones):
+   nearest-frame members, registration of a tracked sensor's world, a network
+   sensor with an ios sender, and clock offsets.
 
 **Incremental mesh extraction has landed, all three stages** —
 `MarchingCubes::extract_device_incremental`, over the span table of the

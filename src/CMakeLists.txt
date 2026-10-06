@@ -7,6 +7,11 @@
 # depend only on tiers to its left) is expressed by what each links.
 include(GNUInstallDirs)
 
+# camera is the family's camera vocabulary -- the camera model, rigid
+# transforms, the sensor array's calibration file -- over the family core's base
+# tier and GLM alone, linking no Vulkan: calib and a capture driver use it as
+# well as the fusion tiers (the 2026-10-06 decision).
+add_subdirectory(volumetric_kit/recon/camera)
 add_subdirectory(volumetric_kit/recon/core)
 add_subdirectory(volumetric_kit/recon/volume)
 add_subdirectory(volumetric_kit/recon/tsdf)
@@ -20,11 +25,12 @@ add_subdirectory(volumetric_kit/recon/io)
 # both to its left, so the strict dependency rule holds.
 add_subdirectory(volumetric_kit/recon/texture)
 # sensor is the capture contract: ICameraCapture + CapturedFrame + the camera
-# convention conversions. It depends on core alone -- the camera-parameter
-# structs it trades in are core vocabulary (core/camera_params.hpp), not voxels
-# or fusion -- so it sits beside the fusion tiers rather than on top of them,
-# and stays implementable from outside this repo, with drivers deliberately left
-# to whoever can build and test them (the 2026-08-02 decision).
+# convention conversions. It depends on camera and core alone -- the
+# camera-parameter structs it trades in are core vocabulary
+# (core/camera_params.hpp), not voxels or fusion -- so it sits beside the fusion
+# tiers rather than on top of them, and stays implementable from outside this
+# repo, with drivers deliberately left to whoever can build and test them (the
+# 2026-08-02 decision).
 add_subdirectory(volumetric_kit/recon/sensor)
 add_subdirectory(volumetric_kit/recon/codec)
 # Quality measurement for the tests and examples that judge a reconstruction or
@@ -39,7 +45,8 @@ add_library(recon INTERFACE)
 add_library(volumetric_kit::recon ALIAS recon)
 target_link_libraries(
   recon
-  INTERFACE recon_core
+  INTERFACE recon_camera
+            recon_core
             recon_volume
             recon_tsdf
             recon_mesh
