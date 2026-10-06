@@ -5,7 +5,7 @@
 
 // A device adopted with none of its optional extensions declared, so a decoder
 // handed it can keep no picture on the GPU: the device path fails to open on
-// any machine, which is how a test reaches the fallback to host pictures.
+// any machine, which is how a test reaches a decoder's refusal of it.
 
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"

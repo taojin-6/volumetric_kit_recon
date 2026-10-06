@@ -632,13 +632,6 @@ void draw_rig_panel(const RigPanel& panel,
                 static_cast<unsigned long long>(st.dropped),
                 static_cast<unsigned long long>(st.failed),
                 static_cast<unsigned long long>(st.lost));
-    // Colour that should have stayed on the GPU and did not: on a discrete
-    // GPU every such frame crossed the bus (OrbbecStreamStats::host_pictures).
-    if (st.host_pictures != 0) {
-      ImGui::TextColored(ImVec4(0.9f, 0.5f, 0.2f, 1.0f),
-                         "  %llu with colour on the host",
-                         static_cast<unsigned long long>(st.host_pictures));
-    }
   }
   ImGui::Separator();
   ImGui::Text("mesh v%llu  %zu vertices / %zu triangles",

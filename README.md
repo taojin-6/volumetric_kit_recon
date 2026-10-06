@@ -107,13 +107,15 @@ build at its root:
 ```sh
 cmake -S "$recon_root" -B "$recon_root/build" -DCMAKE_BUILD_TYPE=Release \
     -DVR_WITH_ORBBEC=ON -DVR_WITH_FFMPEG=ON -DOrbbecSDK_ROOT=<sdk>
+# on Linux, add -DVR_WITH_CUDA=ON
 # or once, for every repo that finds it:  export OrbbecSDK_ROOT=<sdk>
 ```
 
-The driver decodes each camera's colour itself, so it needs FFmpeg too (see
-below). That builds `volumetric_kit::recon_sensor_orbbec` -- `OrbbecSensor`,
-one camera as an `IRgbdSensor` (`sensor/orbbec/orbbec_sensor.hpp`), and
-`OrbbecRig` -- and the live example, which prepares every frame on the GPU:
+The driver decodes each camera's colour itself, so it needs the video
+decoders too (see below; on Linux, CUDA as well). That builds
+`volumetric_kit::recon_sensor_orbbec` -- `OrbbecSensor`, one camera as an
+`IRgbdSensor` (`sensor/orbbec/orbbec_sensor.hpp`), and `OrbbecRig` -- and the
+live example, which prepares every frame on the GPU:
 
 ```sh
 build/examples/fuse_orbbec/fuse_orbbec --serial <serial> --frames 300
@@ -138,21 +140,20 @@ build/examples/fuse_orbbec/fuse_orbbec --rig config/femto_mega_sync.json \
 
 ### Optional: FFmpeg
 
-The HEVC decoder (`volumetric_kit::recon_sensor_video`,
-`sensor/video/hevc_decoder.hpp`) is off by default and needs FFmpeg ≥ 4.4
-installed, found through pkg-config:
+The HEVC and JPEG decoders (`volumetric_kit::recon_sensor_video`,
+`sensor/video/`) are off by default and need FFmpeg ≥ 6.1 installed, found
+through pkg-config. They decode on the GPU's hardware and hand their pictures
+out on the device only: VideoToolbox on macOS, NVDEC and nvJPEG on Linux,
+which need the CUDA 13 toolkit's headers as well (`cmake/vr_cuda.cmake`):
 
 ```sh
 brew install ffmpeg pkgconf        # macOS
-sudo apt install pkg-config libavcodec-dev libavutil-dev libswscale-dev
+sudo apt install pkg-config libavcodec-dev libavutil-dev
 cmake -S "$recon_root" -B "$recon_root/build" -DCMAKE_BUILD_TYPE=Release \
-    -DVR_WITH_FFMPEG=ON
-# require a back end (cuda, videotoolbox, vaapi) in the test:
+    -DVR_WITH_FFMPEG=ON              # on Linux, and -DVR_WITH_CUDA=ON
+# fail, rather than skip, where the decoders find no device path:
 VR_TEST_HEVC_BACKEND=cuda ctest --test-dir build -R video
 ```
-
-It decodes on the first hardware back end that works (NVIDIA ahead of an
-integrated GPU on Linux), else in software.
 
 ## Codec evaluation
 

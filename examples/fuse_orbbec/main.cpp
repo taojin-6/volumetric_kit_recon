@@ -243,12 +243,6 @@ struct Source {
           static_cast<unsigned long long>(st.dropped),
           static_cast<unsigned long long>(st.failed),
           static_cast<unsigned long long>(st.lost));
-      // Colour meant to stay on the GPU that came to the host instead
-      // (OrbbecStreamStats::host_pictures).
-      if (st.host_pictures != 0) {
-        std::printf("  %s: %llu frames with colour on the host\n", who,
-                    static_cast<unsigned long long>(st.host_pictures));
-      }
     };
     if (sensor) {
       line(sensor->device_info().serial.c_str(), sensor->orbbec_stats());

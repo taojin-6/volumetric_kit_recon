@@ -121,8 +121,8 @@ links the family core's base tier and GLM, and no other recon tier.
   *and* test it (the 2026-08-02 decision). The one that does, Orbbec, is a
   target of its own (`sensor/orbbec/`), so `recon_sensor` never links a vendor
   SDK. The HEVC and JPEG decoders are another target of
-  their own (`sensor/video/`, over FFmpeg), link `core` alone, and know no
-  camera.
+  their own (`sensor/video/`, on the GPU's hardware), link `core` alone, and
+  know no camera.
   The GPU pre-processing is a third (`sensor/utils/`, Vulkan and shaders), so
   `recon_sensor` itself stays free of both.
 - **`codec`** — the per-frame TSDF geometry codec: separate `Encoder` and
@@ -1145,48 +1145,51 @@ after decoding. A gap in the frame index, or an empty frame, waits for the
 next key frame, where the decoder is reset; pictures come out in display
 order, each settling its own pair. All of it is counted in `stats().lost`
 (the 2026-09-28 decision).
-**`sensor/video`'s `HevcDecoder`** (`VR_WITH_FFMPEG`) decodes H.265 access
-units to host pictures, `Rgb24` or the `Yuv420` planes with their matrix
-and range, plus the stream's transfer and primaries as an optional
-`ColorEncoding` (empty when that type cannot name them).
-`Options::unlabelled_color` stands in for a stream that names no matrix,
-and `reset()` restarts a stream after lost access units. `Auto` takes the
-first hardware back end that decodes HEVC (VideoToolbox, asked through
-`VTIsHardwareDecodeSupported`; CUDA, then VAAPI on Linux, each by decoding
-a built-in clip), probing only as far as it needs, else software.
-It moves to software when the hardware refuses a stream, and the pictures
-the hardware still held come out too. A named back end is never swapped for
-another; it returns `Unsupported` instead. A display window off the coded
-corner is cropped on the host, except on VideoToolbox, which cannot be
-(FFmpeg hands its pictures over already cut from the wrong corner), so the
-decoder reads each SPS there and treats such a stream as refused.
-`VR_TEST_HEVC_BACKEND` makes its test require one back end, which is how
-CI holds the Linux legs to NVDEC (the 2026-09-27 decoder decision). With
-`Options::device` and `VR_WITH_CUDA` (Linux, the CUDA 13 toolkit's
-headers; libcuda is loaded at run time), an NVDEC picture stays on the
-GPU: copied device to device into a Vulkan buffer CUDA imported (`core`'s
-`create_exported_buffer`, on a device that `exports_memory`), and handed
-out as NV12 in `DecodedPicture::device`, which a reader acquires from
-`VK_QUEUE_FAMILY_EXTERNAL`; any other picture comes to the host, as does
-every one after the device path fails (the 2026-09-28 decoded-frame
-decision). The decoder says once, as a warning ahead of which
-`Options::label` names whose decoder it is, every way a device's
-pictures end up on the host: a device path that never opens, one that
-fails, Auto's move to software. `OrbbecStreamStats::host_pictures`
-counts them, so a run that should stay on the device can be held to 0.
-**`JpegDecoder`** decodes MJPEG's JPEGs as I420, BT.601 full
-range: given a device, with `VR_WITH_CUDA`, nvJPEG decodes an 8-bit 4:2:0
-one into the same kind of buffer, on the GPU's hardware JPEG engine where
-it has one (`backend()`) and its cores for the rest, and libnvjpeg too is
-loaded at run time. A JPEG nvJPEG refuses goes to software alone; any
-other failure lets the device path go. Anything else decodes in software
-to host planes, 4:2:2 converted. On VideoToolbox, given a device that
-`imports_metal_textures`, an H.265 picture's two IOSurface planes become
-Metal textures imported as `Image`s (`vt_pictures.mm`, Objective-C++),
-made once per surface and kept, handed out in `DecodedPicture::image`,
-and `JpegDecoder` takes an 8-bit 4:2:0 JPEG to the same images through
-VideoToolbox's hardware JPEG decoder (`vt_jpeg.cpp`), leaving one past the
-device's image extent to software.
+**`sensor/video`'s decoders** (`VR_WITH_FFMPEG`) hand out pictures on the
+device only (the 2026-10-06 device-only decoder decision), on the hardware
+of the device they are given, fixed per build: VideoToolbox on Apple, and
+through CUDA elsewhere, so off Apple `VR_WITH_FFMPEG` needs `VR_WITH_CUDA`
+(the CUDA 13 toolkit's headers; libcuda and libnvjpeg are loaded at run
+time). **`HevcDecoder`** decodes H.265 access units through FFmpeg's
+hardware decoding: NVDEC's picture copied device to device into a Vulkan
+buffer CUDA imported (`core`'s `create_exported_buffer`, on a device that
+`exports_memory`), handed out as NV12 in `DecodedPicture::device`, which a
+reader acquires from `VK_QUEUE_FAMILY_EXTERNAL`; VideoToolbox's two
+IOSurface planes as Metal textures imported as `Image`s (`vt_pictures.mm`,
+Objective-C++), made once per surface and kept, in `DecodedPicture::image`.
+Each picture carries the stream's matrix and range and its transfer and
+primaries as an optional `ColorEncoding` (empty when that type cannot name
+them); `Options::unlabelled_color` stands in for a stream that names no
+matrix, and `reset()` restarts a stream after lost access units. A stream
+the hardware cannot decode or hand out -- not 8-bit 4:2:0, or on
+VideoToolbox a display window off the coded corner, which FFmpeg hands over
+already cut from the wrong corner, so the decoder reads each SPS there --
+is refused, `Unsupported`, from then on, after the pictures decoded before
+it. A candidate cropped SPS is first parsed in full by FFmpeg, without its
+slices and with parse errors enabled; a malformed one is `IoError` and
+cannot latch a crop refusal.
+**`JpegDecoder`** decodes a baseline 8-bit 4:2:0 JPEG, BT.601 full
+range as JFIF defines it, with no FFmpeg: on nvJPEG's hardware JPEG engine
+into the same kind of buffer, I420, or through VideoToolbox's hardware
+decoder (`vt_jpeg.cpp`) into the same images. Another subsampling, or a
+JPEG larger than the hardware takes (16384 a side on nvJPEG's engine, the
+device's image extent on Apple), is `Unsupported`, as is every JPEG on a GPU
+with no hardware JPEG engine (an RTX 4090, say). For both decoders the
+codes are the contract: `IoError` is data that does not decode and costs
+only itself (and, for H.265, the frames to the next key frame);
+`Unsupported` is a stream the hardware refuses, or a `create` with no
+device path (no device or allocator, or a GPU the build's path cannot
+reach); `Backend` or `OutOfMemory` is the device path failing. VideoToolbox
+JPEG errors retain that distinction from session creation, the decode call
+and its callback. Its decode-time `kVTParameterErr` also denotes corrupt
+JPEG data (including a truncated fixture), so it is `IoError` there. The
+Orbbec driver's colour decoders stop for good on any code but `IoError`, and
+the sensor's `poll` returns it, so a refused stream or a failing device path is
+not quiet. FFmpeg's `AVERROR_EXTERNAL` (a hardware call failed) reads as
+`Backend`; a hardware failure it reports otherwise reads as lost frames.
+`VR_TEST_HEVC_BACKEND` makes the decoder tests fail rather than skip where
+no device path opens, which is how CI holds its legs to NVDEC on 24.04 (and
+nvJPEG where the GPU has the engine) and VideoToolbox on the Mac.
 **`IRgbdSensor`** (`sensor/rgbd_sensor.hpp`) is one sensor: its
 `SensorInfo` from when it opens (id, the cameras' factory models at the
 opened modes, `depth_to_color`, rig role, clock, pose source, rate), and
@@ -1220,9 +1223,7 @@ host pixels, so a consumer may keep frames past the next poll and past the
 capture.
 `ChromaLocation` follows the picture through `DecodedPicture`, the Orbbec
 frame handoff and `YuvImage`: JPEG is centred, and HEVC keeps the decoded tag
-with left alignment when unspecified. Host resampling preserves that location;
-with libswscale before 9, vertically subsampled inputs go through planar RGB
-before packing RGB24 to avoid its packed converter's rounded chroma weights.
+with left alignment when unspecified.
 The GPU samples the location consistently for host planes, device buffers and
 NV12 images. Existing callers that leave the field unset keep left alignment. The
 resulting `DeviceFrame` feeds the `Buffer` overloads of `allocate_from_depth` and
@@ -1620,10 +1621,7 @@ none, and the run's CPU eightfold down) and for the rig's raw sets. NVDEC
 and nvJPEG hand their pictures over on the device, and VideoToolbox both
 kinds, and a raw Orbbec frame's colour stays on the device over either
 codec; what is left there is the colour kernel reading Apple's plane images
-directly, measured first (`undistort_color.comp`), and the decoders' host
-pictures where no device path opens, which go next. Until then, software
-H.265 decodes on one thread with little headroom at 4K (`hevc_color.cpp`),
-and H.265 is `fuse_orbbec`'s default. For H.265: the camera's
+directly, measured first (`undistort_color.comp`). For H.265: the camera's
 encoder settings, its key-frame interval above all, which sets what a lost
 frame costs (`camera_stream.cpp`). The rig's next consumer is calib's
 viewer, showing its synchronised sets.

@@ -92,8 +92,46 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `examples`: **`fuse_orbbec` always prepares its frames on the GPU**, H.265
   unless `--mjpeg`, a camera or a rig's set through `prepare_batch` and
   `fuse_set`.
+- `sensor/video`: **the decoders hand out pictures on the device only**, on
+  the build's one hardware path: VideoToolbox on Apple, NVDEC and nvJPEG's
+  hardware engine through CUDA elsewhere. Their status codes are the
+  contract: `IoError` for data that does not decode, `Unsupported` for a
+  stream the hardware does not take (sticky for H.265) or a `create` with no
+  device path, `Backend` or `OutOfMemory` for a device path that failed.
+  `HevcDecoder::Options` is `unlabelled_color`, `configure_ffmpeg_logging`,
+  `device` (required) and `allocator` (required with NVDEC);
+  `JpegDecoder::Options` is `device` and `allocator`. Migrating: pass the
+  device and allocator, and read pictures from `DecodedPicture::device` or
+  `image`.
+- `sensor/orbbec`: **a colour stream the hardware cannot decode stops the
+  camera**: `OrbbecSensor::poll` and `OrbbecRig::poll_set` return the
+  decoder's `Unsupported`, `Backend` or `OutOfMemory`; the driver's start
+  returns `Unsupported` without a device.
+- build: **off Apple, `VR_WITH_FFMPEG` needs `VR_WITH_CUDA`**, and the FFmpeg
+  floor is 6.1 (libavcodec 60.31); libswscale is no longer used.
+
+### Fixed
+
+- `sensor/video`: preserve VideoToolbox JPEG session, decode and callback
+  errors, so hardware malfunctions and allocation failures stop the Orbbec
+  colour decoder instead of looking like corrupt frames. Bad JPEG data
+  remains recoverable.
+- `sensor/video`: validate a candidate cropped HEVC SPS before refusing the
+  stream on Apple. A truncated SPS no longer poisons subsequent valid frames,
+  including after `HevcDecoder::reset`.
 
 ### Removed
+
+- `sensor/video`: **software decoding, VAAPI and host pictures**:
+  `VideoDecodeBackend`, `HevcDecoder::hardware_backends` and `backend`, the
+  `layout`, `threads` and `label` options, `JpegDecodeBackend`,
+  `JpegDecoder::backend` and its `label` and `configure_ffmpeg_logging`,
+  `VideoPixelLayout::Rgb24`, `DecodedPicture::plane`, nvJPEG's `GPU_HYBRID`
+  back end, and the warning a decoder gave when its pictures came to the
+  host. Test: `recon_sensor_video_backend` goes, and
+  `recon_sensor_video_converter` becomes `recon_sensor_video_frame_color`.
+- `sensor/orbbec`: **`OrbbecStreamStats::host_pictures`**, with nothing left
+  to count.
 
 - `sensor/orbbec`: **`OrbbecCapture` and the SDK's host path**: the
   undistortion and registration on the host (`ob::UnDistortionFilter`,

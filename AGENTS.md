@@ -165,7 +165,9 @@ git -C "$recon_root" diff --check
   a build is unnecessary. The hooks can be scoped with `pre-commit run --files`.
 - `VR_BUILD_VIEWER`, `VR_WITH_ORBBEC`, `VR_WITH_FFMPEG`, `VR_WITH_CUDA`, and
   `VR_WITH_ASSIMP` enable optional paths. Orbbec, FFmpeg and Assimp are
-  installed prerequisites, never fetched by this repository.
+  installed prerequisites, never fetched by this repository. The video
+  decoders hand out device pictures only, so off Apple `VR_WITH_FFMPEG` needs
+  `VR_WITH_CUDA`, and `VR_WITH_ORBBEC` needs `VR_WITH_FFMPEG`.
 - Tests use no real hardware: a camera is checked by hand through its example
   (`fuse_orbbec`). Report such a check as run or not run, never as a test.
 - For batching/barrier changes, run synchronization validation
