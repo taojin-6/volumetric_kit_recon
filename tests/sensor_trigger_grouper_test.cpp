@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Tao Jin
 
-// How OrbbecRig turns per-camera frames into one set per sync trigger, and the
-// order it starts a rig in -- with synthetic streams, no camera. The streams
+// How the trigger grouper turns per-sensor frames into one set per sync
+// trigger -- with synthetic streams, no camera. The streams
 // are shaped like the rig's: 30 fps, secondaries a fraction of a millisecond
 // to ~2 ms off the primary, frames arriving in any order across cameras. Each
 // set is built around a primary frame.
@@ -13,11 +13,9 @@
 #include <string>
 #include <vector>
 
-#include "trigger_grouping.hpp"
+#include "volumetric_kit/recon/sensor/trigger_grouper.hpp"
 
-namespace vkc = volumetric_kit::core;
 namespace sensor = volumetric_kit::recon::sensor;
-namespace orbbec = volumetric_kit::recon::sensor::orbbec;
 
 #define CHECK(cond)                                                        \
   do {                                                                     \
@@ -35,8 +33,8 @@ constexpr std::size_t kPrimary = 2;
 // Each camera's offset from the primary on the synced clock, as measured.
 constexpr std::uint64_t kOffset[kCameras] = {1300, 400, 0, 1600};
 
-orbbec::TriggerGrouper::Config config() {
-  orbbec::TriggerGrouper::Config c;
+sensor::TriggerGrouper::Config config() {
+  sensor::TriggerGrouper::Config c;
   c.cameras = kCameras;
   c.anchor = kPrimary;
   c.tolerance_us = 5000;
@@ -52,7 +50,7 @@ std::uint64_t ts_of(std::size_t c, std::uint64_t t) {
 }
 
 int test_perfect_stream() {
-  orbbec::TriggerGrouper g(config());
+  sensor::TriggerGrouper g(config());
   std::vector<std::uint64_t> released;
   std::uint64_t now = 0;
   for (std::uint64_t t = 0; t < 10; ++t) {
@@ -78,7 +76,7 @@ int test_perfect_stream() {
 int test_dropped_frame() {
   // Camera 1 drops trigger 1's frame. The set goes out without it once camera
   // 1's frame for trigger 2 shows it has moved past -- not a whole wait later.
-  orbbec::TriggerGrouper g(config());
+  sensor::TriggerGrouper g(config());
   std::vector<std::uint64_t> released;
   std::uint64_t now = 0;
   for (std::size_t c = 0; c < kCameras; ++c) {
@@ -102,7 +100,7 @@ int test_dropped_frame() {
 int test_silent_camera() {
   // Camera 3 sends nothing at all: each set waits max_wait for it, then goes
   // out without it.
-  orbbec::TriggerGrouper g(config());
+  sensor::TriggerGrouper g(config());
   std::vector<std::uint64_t> released;
   for (std::size_t c : {0u, 1u, 2u}) {
     g.add(c, ts_of(c, 0), id_of(c, 0), 100, &released);
@@ -117,7 +115,7 @@ int test_silent_camera() {
 int test_slow_poll() {
   // Six triggers arrive before one poll: the newest goes out; the older five
   // are released, and the queues never hold more than their depth.
-  orbbec::TriggerGrouper g(config());
+  sensor::TriggerGrouper g(config());
   std::vector<std::uint64_t> released;
   for (std::uint64_t t = 0; t < 6; ++t) {
     for (std::size_t c = 0; c < kCameras; ++c) {
@@ -143,7 +141,7 @@ int clock_beyond_tolerance(std::int64_t offset_us) {
   // polls, with each trigger's frames arriving a few hundred microseconds
   // apart: every trigger still goes out once, holding the other three cameras,
   // and camera 0's frames are let go rather than handed out on their own.
-  orbbec::TriggerGrouper g(config());
+  sensor::TriggerGrouper g(config());
   std::vector<std::uint64_t> released;
   constexpr std::uint64_t kTriggers = 30;
   constexpr std::uint64_t kArrival[kCameras] = {300, 100, 0, 200};
@@ -182,7 +180,7 @@ int test_late_frame_after_its_set() {
   // Camera 1's frame for trigger 0 arrives after trigger 0 went out without
   // it, while the other cameras' trigger-1 frames wait on camera 1. It is let
   // go -- not handed out as a set of its own, older than the one before it.
-  orbbec::TriggerGrouper g(config());
+  sensor::TriggerGrouper g(config());
   std::vector<std::uint64_t> released;
   for (std::size_t c : {0u, 2u, 3u}) {
     g.add(c, ts_of(c, 0), id_of(c, 0), 0, &released);
@@ -206,7 +204,7 @@ int test_secondaries_before_primary() {
   // The primary's first triggers reach the secondaries ~0.5 s before its own
   // first frame reaches the host (measured: ~16 triggers). None of those
   // frames makes a set; the first set is the primary's first frame's.
-  orbbec::TriggerGrouper g(config());
+  sensor::TriggerGrouper g(config());
   std::vector<std::uint64_t> released;
   for (std::uint64_t t = 0; t < 6; ++t) {
     for (std::size_t c : {0u, 1u, 3u}) {
@@ -229,7 +227,7 @@ int test_secondaries_before_primary() {
 int test_dropped_primary_frame() {
   // The primary's frame names a trigger, so a trigger it dropped is not
   // handed out; the secondaries' frames for it are let go.
-  orbbec::TriggerGrouper g(config());
+  sensor::TriggerGrouper g(config());
   std::vector<std::uint64_t> released;
   for (std::size_t c = 0; c < kCameras; ++c) {
     g.add(c, ts_of(c, 0), id_of(c, 0), 0, &released);
@@ -251,7 +249,7 @@ int test_dropped_primary_frame() {
 int test_out_of_order_within_camera() {
   // A clock re-sync can step a camera's clock back a little; its frames are
   // still grouped by timestamp.
-  orbbec::TriggerGrouper g(config());
+  sensor::TriggerGrouper g(config());
   std::vector<std::uint64_t> released;
   g.add(1, ts_of(1, 1), id_of(1, 1), 0, &released);
   g.add(1, ts_of(1, 0), id_of(1, 0), 0, &released);
@@ -263,30 +261,6 @@ int test_out_of_order_within_camera() {
   // clear() gives everything held back.
   g.clear(&released);
   CHECK(released.size() == 1 && released[0] == id_of(1, 1));
-  return 0;
-}
-
-int test_start_order() {
-  using M = sensor::OrbbecSyncMode;
-  const std::vector<std::string> sns = {"G", "A4", "N", "6G"};
-  // The rig as wired: the primary is started last.
-  const auto order = orbbec::rig_start_order(
-      {M::SecondarySynced, M::SecondarySynced, M::Primary, M::SecondarySynced},
-      sns);
-  CHECK(order.ok());
-  CHECK((order.value() == std::vector<std::size_t>{0, 1, 3, 2}));
-  const auto unsupported = [&](std::vector<M> modes) {
-    const auto r = orbbec::rig_start_order(modes, sns);
-    if (r.ok()) return false;
-    std::printf("  refused as expected: %s\n", r.status().message().c_str());
-    return r.status().domain() == vkc::Status::Code::Unsupported;
-  };
-  CHECK(unsupported({M::SecondarySynced, M::SecondarySynced, M::SecondarySynced,
-                     M::SecondarySynced}));  // no primary
-  CHECK(unsupported(
-      {M::Primary, M::SecondarySynced, M::Primary, M::SecondarySynced}));
-  CHECK(unsupported(
-      {M::Standalone, M::SecondarySynced, M::Primary, M::SecondarySynced}));
   return 0;
 }
 
@@ -302,7 +276,6 @@ int main() {
   if (test_secondaries_before_primary() != 0) return 1;
   if (test_dropped_primary_frame() != 0) return 1;
   if (test_out_of_order_within_camera() != 0) return 1;
-  if (test_start_order() != 0) return 1;
-  std::printf("orbbec grouping tests passed\n");
+  std::printf("trigger grouper tests passed\n");
   return 0;
 }

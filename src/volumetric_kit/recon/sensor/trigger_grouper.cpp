@@ -1,53 +1,27 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Tao Jin
 
-#include "trigger_grouping.hpp"
+#include "volumetric_kit/recon/sensor/trigger_grouper.hpp"
 
 #include <algorithm>
+#include <iterator>
 
-namespace volumetric_kit::recon::sensor::orbbec {
+#include "volumetric_kit/core/base/check.hpp"
 
-core::Result<std::vector<std::size_t>> rig_start_order(
-    const std::vector<OrbbecSyncMode>& modes,
-    const std::vector<std::string>& serials) {
-  std::vector<std::size_t> order;
-  std::optional<std::size_t> primary;
-  std::string roles;
-  for (std::size_t i = 0; i < modes.size(); ++i) {
-    roles += (i == 0 ? "" : ", ") + serials[i] + " " + to_string(modes[i]);
-  }
-  for (std::size_t i = 0; i < modes.size(); ++i) {
-    if (modes[i] == OrbbecSyncMode::Primary) {
-      if (primary) {
-        return core::Status::unsupported(
-            "OrbbecRig: more than one sync primary (" + roles + ")");
-      }
-      primary = i;
-    } else if (waits_for_primary(modes[i])) {
-      order.push_back(i);
-    } else {
-      return core::Status::unsupported(
-          "OrbbecRig: camera " + serials[i] + " is " + to_string(modes[i]) +
-          ", so it streams on its own clock rather than on the primary's "
-          "trigger (" +
-          roles + ")");
-    }
-  }
-  if (!primary) {
-    return core::Status::unsupported(
-        "OrbbecRig: no sync primary, so nothing triggers the others (" + roles +
-        ")");
-  }
-  order.push_back(*primary);
-  return order;
-}
+namespace volumetric_kit::recon::sensor {
 
 TriggerGrouper::TriggerGrouper(const Config& config)
-    : config_(config), queues_(config.cameras) {}
+    : config_(config), queues_(config.cameras) {
+  VKC_CHECK(config.anchor < config.cameras,
+            "TriggerGrouper: the anchor must be one of the cameras");
+  VKC_CHECK(config.queue_depth > 0,
+            "TriggerGrouper: a queue holds at least one frame");
+}
 
 void TriggerGrouper::add(std::size_t camera, std::uint64_t ts_us,
                          std::uint64_t id, std::uint64_t now_us,
                          std::vector<std::uint64_t>* released) {
+  VKC_CHECK(camera < queues_.size(), "TriggerGrouper::add: no such camera");
   std::deque<Entry>& q = queues_[camera];
   // Kept in timestamp order: a clock re-sync can step a camera's clock back.
   auto at = q.end();
@@ -117,4 +91,4 @@ void TriggerGrouper::clear(std::vector<std::uint64_t>* released) {
   }
 }
 
-}  // namespace volumetric_kit::recon::sensor::orbbec
+}  // namespace volumetric_kit::recon::sensor

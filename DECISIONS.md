@@ -340,6 +340,10 @@ entries relevant to your task; later amendments supersede earlier rules.
   A sensor is an `IRgbdSensor`: what it is before a frame (`SensorInfo`),
   frames polled newest or drained oldest first. The Femto Mega is
   `OrbbecSensor`.
+- [**2026-10-06**](#2026-10-06--several-sensors-are-a-sensorarray-vendor-neutral-started-in-their-rigs-order-grouped-by-trigger-or-by-sequence-number-and-posed-by-the-calibration) —
+  Several sensors are a `SensorArray`, vendor-neutral: started in their rig's
+  order, grouped by trigger or by sequence number, and posed by the
+  calibration.
 
 ## Decision record
 
@@ -9808,6 +9812,56 @@ fused, 3 dropped, 1 lost). With `--host-clock` the first frame sat 197-243
 ms behind the host's system clock; without it, 276 ms, the camera keeping
 the clock the run before set. The example does not `drain`: the fake checks
 it, and the array's example will at a camera.
+
+### 2026-10-06 — Several sensors are a `SensorArray`, vendor-neutral: started in their rig's order, grouped by trigger or by sequence number, and posed by the calibration.
+
+The fourth step of the 2026-10-06 plan (`sensor/array/sensor_array.hpp`,
+target `recon_sensor_array`): the array of `IRgbdSensor`s that replaces
+`OrbbecRig`, built from what `OrbbecRig` did that no vendor owns.
+
+- **What it reads of each sensor is its `SensorInfo`.** The roles order the
+  starts (secondaries, then free-running sensors, the primary last) and the
+  stops (the reverse); the id finds the pose in the `ArrayCalibration`, which
+  must pose every sensor and is stamped on each frame's `color_to_world`.
+  What a vendor's rig needs beyond that -- checking and writing sync settings,
+  the SDK's clock sync -- is set when its driver opens the sensor.
+- **Two ways frames form sets.** `SyncMode::Trigger` is the rig's grouping,
+  `TriggerGrouper` moved out of the Orbbec driver into the sensor tier
+  unchanged: around the primary's frames, within `tolerance_us` on the host's
+  clock, a missing secondary waited for a frame and a half of the slowest
+  sensor, the newest ready set handed out. It needs one primary, the rest
+  secondaries, all on the host clock. `SyncMode::Sequence` groups equal
+  sequence numbers, every set in order once each sensor has sent its frame,
+  moved past it or ended; it reads no clock, so a recording replays the same
+  sets every time, which is what calib's session replay needs. A frame for a
+  set already handed out joins none, and a sensor ahead of one that has
+  fallen behind holds `queue_depth` frames, its oldest let go, so the array's
+  memory is bounded in both modes.
+- **Lifecycle.** A failed start, a stop, the destructor and a move over a
+  running array all stop the primary first. Starting a running array starts
+  each sensor again, as `OrbbecRig` did, so a camera that has gone away says
+  so. A refused `open` leaves the sensors with the caller, and a drain that
+  fails partway has its earlier frames, counted delivered, grouped before the
+  failure is returned.
+- **Refused for now, each a `TODO:`:** tracked sensors (an iPhone's
+  pose needs registering to the array's world) and free-running members of a
+  triggered array (joined by their nearest frame).
+- `process(set)`, every stream of every sensor in one GPU batch, is the next
+  PR; then `OrbbecRig` goes and `rig_viewer` and `fuse_orbbec` open an array of
+  `OrbbecSensor`s.
+
+**Validation.** Apple M5 Max, macOS, Release with warnings as errors, Orbbec,
+FFmpeg and the viewer: the 54 tests pass. `recon_sensor_array` drives
+scripted sensors through the refusals, the start and stop order, a failed
+start, a start of a running array and a move over one, trigger sets
+(complete, a silent secondary, the newest set, frames without a clock) and
+sequence sets (out of turn, a missing frame, waiting on a live sensor, a
+recording's end, a late frame, a sensor far ahead, a restart), and a drain
+that fails partway; 50 runs in a row pass, its waits notwithstanding. Not
+applying the poses, not waiting on a live sensor in sequence mode, and not
+checking the clock each fail it, as does undoing any lifecycle or sequence
+rule above. `recon_sensor_trigger_grouper` is the grouping test the rig's
+was; the rig's start order is `recon_sensor_orbbec_start_order`.
 
 ## Measured lessons
 

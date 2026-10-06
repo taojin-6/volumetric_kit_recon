@@ -53,6 +53,7 @@ target_link_libraries(
             recon_texture
             recon_sensor
             recon_sensor_utils
+            recon_sensor_array
             recon_codec
             recon_eval
             recon_io)

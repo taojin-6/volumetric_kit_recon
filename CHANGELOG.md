@@ -29,6 +29,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `depth_to_color`, rig role, clock, pose source, rate), a queue of
   `set_queue_depth` frames, `poll` for the newest and `drain` for all,
   oldest first, and `SensorStats`. Test: `recon_sensor_rgbd_sensor`.
+- `sensor/array`: **`SensorArray`** (`volumetric_kit::recon_sensor_array`),
+  several `IRgbdSensor`s read as one: secondaries started before the
+  primary, frames grouped into a `FrameSet` by trigger on the host clock or
+  by sequence number, each posed by an `ArrayCalibration`. Test:
+  `recon_sensor_array`.
+- `sensor`: **`TriggerGrouper`** (`trigger_grouper.hpp`), the rig's grouping
+  of frames into triggers, moved out of the Orbbec driver. Test:
+  `recon_sensor_trigger_grouper`; the driver's start order is tested by
+  `recon_sensor_orbbec_start_order`, formerly `recon_sensor_orbbec_grouping`.
 - `sensor/orbbec`: **`OrbbecSensor`**, the Femto Mega as an `IRgbdSensor`:
   frames as captured, for the GPU pass, the pose in double, and
   `sync_clock_to_host` for the host's clock. `fuse_orbbec --gpu` reads one

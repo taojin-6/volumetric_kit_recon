@@ -62,7 +62,8 @@ conventions and Vulkan setup.
   `volumetric_kit::recon_camera`, `…_core`, `…_volume`, `…_tsdf`, `…_mesh`,
   `…_texture`,
   `…_sensor`, `…_codec`, `…_eval`, `…_io`, `…_interop` (+ later `…_track`, `…_stream`),
-  plus `…_sensor_utils` (GPU pre-processing), the opt-in `…_sensor_orbbec`
+  plus `…_sensor_utils` (GPU pre-processing), `…_sensor_array` (several
+  sensors read as one), the opt-in `…_sensor_orbbec`
   driver (`VR_WITH_ORBBEC`), `…_sensor_video` decoder (`VR_WITH_FFMPEG`), and
   `…_io_assimp` mesh importer (`VR_WITH_ASSIMP`);
   umbrella alias
@@ -1203,6 +1204,13 @@ the context's `enableDeviceClockSync`, which re-syncs every camera the
 process opened) to the host's at each `start`, before it streams; and its
 `stats()` counts the driver's lost frames failed, a JPEG the decoder had no
 time for being dropped.
+**`SensorArray`** (`sensor/array/`, target `recon_sensor_array`) reads
+several `IRgbdSensor`s as one: it starts the secondaries before the primary,
+drains every sensor each `poll_set`, groups the frames into a `FrameSet` --
+by the sensor tier's `TriggerGrouper` around the primary's frames on the
+host clock (`SyncMode::Trigger`), or by equal sequence numbers, in order and
+reading no clock (`SyncMode::Sequence`) -- and stamps each frame with its
+sensor's pose from the `ArrayCalibration`.
 **`sensor/utils`'s `GpuFramePrep`** undistorts an `RgbdFrame`
 (`sensor/rgbd_frame.hpp`) on the device: depth sampled at the nearest pixel,
 colour bilinearly and converted from Y'CbCr in the same pass, each camera
@@ -1546,11 +1554,10 @@ landed; the stack continues:
    `OrbbecSensor`. Next the Replica source moves onto the interface, the
    frame gains float depth and RGBA8 colour, and `ICameraCapture`,
    `CapturedFrame`, `OrbbecCapture` and the SDK's host path go.
-2. **`SensorArray`**, vendor-neutral: per-member sync (anchor, triggered,
-   sequence; nearest-frame later), start order from the sync roles, poses
-   from the calibration file, and `process(set)`, every stream of every
-   sensor in one GPU batch. `OrbbecRig` goes; its grouper and start order
-   move here.
+2. **`SensorArray`**, vendor-neutral, has landed: start order from the sync
+   roles, trigger or sequence grouping, poses from the calibration file
+   (nearest-frame and tracked members later). Next `process(set)`, every
+   stream of every sensor in one GPU batch; then `OrbbecRig` goes.
 3. **Luma readback** in `sensor/utils`, wherever the decoder left the
    picture, for calib's detector.
 4. **Pipelined stages**: the core's `CommandBatch` submits without waiting,
