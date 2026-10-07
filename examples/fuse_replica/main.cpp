@@ -58,7 +58,7 @@ namespace {
 // The active blocks stamped changed after `since`, and how many blocks those
 // put back to marching cubes: a cell reads corners at `base + {0,1}^3`, so a
 // block re-meshes when any of its own `+{0,1}^3` neighbourhood changed -- the
-// set an incremental extract would redo.
+// set a changed-only re-mesh would redo.
 struct ChangedBlocks {
   std::uint32_t changed = 0;
   std::uint32_t remesh = 0;
@@ -83,7 +83,7 @@ vkc::Result<ChangedBlocks> changed_since(
   };
   std::unordered_set<std::uint64_t> changed;
   for (const vol::BlockIndex& b : active) {
-    // A slot past the stamps counts as changed, as the extract's kernel has it.
+    // A slot past the stamps counts as changed.
     const std::size_t slot = static_cast<std::uint32_t>(b.ptr) / vpb;
     if (slot >= stamps.size() || vol::tick_after(stamps[slot].changed, since)) {
       changed.insert(key(b.coord));
@@ -133,11 +133,6 @@ struct Options {
   // Unlike a frustum survey this counts only blocks the integrator actually
   // changed: those whose `changed` stamp is newer than the last report's tick.
   int dirty_every = 0;
-  // Re-mesh only the blocks changed since the last extract, through
-  // MarchingCubes::extract_device_incremental. Implies the extractor's span
-  // table (the ranges it re-meshes against) and --device-extract (the only
-  // path it exists on).
-  bool incremental = false;
   int num_buckets = 16384;  // initial map size; grows on overflow via resize
   bool preload = false;     // decode every frame up front (RAM for decode time)
 };
@@ -178,8 +173,6 @@ vkc::Result<Options> parse_args(int argc, char** argv) {
       opt.device_extract = true;
     } else if (a == "--share-vertices") {
       opt.share_vertices = true;
-    } else if (a == "--incremental") {
-      opt.incremental = true;
     } else if (a == "--dirty-every") {
       if (!need_int(opt.dirty_every))
         return vkc::Status::invalid_argument("--dirty-every");
@@ -221,15 +214,10 @@ vkc::Result<Options> parse_args(int argc, char** argv) {
   if (opt.scene_dir.empty()) {
     return vkc::Status::invalid_argument(
         "usage: fuse_replica <scene_dir> [-o out.ply] [--share-vertices] "
-        "[--device-extract] [--incremental] [--dirty-every n] "
+        "[--device-extract] [--dirty-every n] "
         "[--voxel m] "
         "[--max-frames n] [--stride n] [--max-depth m] [--preload]");
   }
-  // --incremental only exists on the device path, so it turns it on rather than
-  // being ignored beside it. Ignoring it was worse than it looks: the
-  // grid-sized span table is switched on by the flag itself, so the run paid
-  // for it and then took the host extract anyway -- and nothing said so.
-  if (opt.incremental) opt.device_extract = true;
   if (opt.cam_params.empty()) {
     opt.cam_params = opt.scene_dir + "/../cam_params.json";
   }
@@ -323,10 +311,6 @@ vkc::Status run(const Options& opt) {
              mesh::MarchingCubes::create(device, allocator, [&] {
                mesh::MarchingCubesConfig c;
                c.share_vertices = opt.share_vertices;
-               // The span table is what an incremental extract re-meshes
-               // against, and it is sized by the grid rather than the surface
-               // -- so it stays off unless asked for.
-               c.track_block_spans = opt.incremental;
                return c;
              }()));
 
@@ -360,13 +344,6 @@ vkc::Status run(const Options& opt) {
   // Remesh accumulators; see the report below.
   std::size_t remeshes = 0;
   std::uint64_t sum_dispatches = 0;
-  // Extracts that really were incremental, and what they re-meshed. Separate
-  // from `remeshes` because the extractor falls back silently by design, so
-  // "asked for" and "got" are different numbers and only the second one
-  // explains the timings above.
-  std::size_t incremental_extracts = 0;
-  std::uint64_t sum_remeshed = 0;
-  std::uint64_t sum_incr_active = 0;
   double sum_total = 0.0, sum_compact = 0.0, sum_arena = 0.0;
   double sum_dispatch = 0.0, sum_read = 0.0;
   mesh::ExtractTimings last_rt{};
@@ -406,8 +383,8 @@ vkc::Status run(const Options& opt) {
     if (opt.dirty_every > 0 &&
         (fused % static_cast<std::size_t>(opt.dirty_every)) == 0) {
       // The sample is the UNION of this window's `--dirty-every` frames, which
-      // is exactly what an incremental extract running at that cadence would
-      // have to redo.
+      // is exactly what a changed-only re-mesh at that cadence would have to
+      // redo.
       VKC_ASSIGN(std::vector<vol::BlockIndex> all,
                  volume.map().compact_active_blocks());
       VKC_ASSIGN(const ChangedBlocks sample,
@@ -445,17 +422,9 @@ vkc::Status run(const Options& opt) {
         // at the default slot_count of 1 the next extract invalidates it, which
         // is exactly what a benchmark wants and what a real consumer must not
         // do.
-        if (opt.incremental) {
-          // The extractor keeps the tick it last meshed at, so this re-meshes
-          // what the fuses since changed and nothing needs resetting.
-          VKC_ASSIGN(mesh::DeviceMesh dm,
-                     extractor.extract_device_incremental(volume, 0.0f, &rt));
-          tris = dm.triangle_count;
-        } else {
-          VKC_ASSIGN(mesh::DeviceMesh dm,
-                     extractor.extract_device(volume, 0.0f, &rt));
-          tris = dm.triangle_count;
-        }
+        VKC_ASSIGN(mesh::DeviceMesh dm,
+                   extractor.extract_device(volume, 0.0f, &rt));
+        tris = dm.triangle_count;
       } else {
         VKC_ASSIGN(mesh::Mesh preview,
                    extractor.extract_host(volume, 0.0f, &rt));
@@ -468,15 +437,6 @@ vkc::Status run(const Options& opt) {
       sum_dispatch += rt.dispatch_ms;
       sum_read += rt.readback_ms;
       sum_dispatches += rt.dispatches;
-      // Counted, not assumed. Every clause the extractor decides on is
-      // invisible from here, and a run that silently fell back to full
-      // extracts would otherwise be reported as measuring the feature -- which
-      // is the only way a benchmark of it can lie.
-      if (rt.incremental) {
-        ++incremental_extracts;
-        sum_remeshed += rt.remeshed_blocks;
-        sum_incr_active += rt.active_blocks;
-      }
       last_rt = rt;
       if (fused % 100 == 0) {
         std::printf("  fused %zu frames, %zu triangles so far\n", fused, tris);
@@ -499,20 +459,6 @@ vkc::Status run(const Options& opt) {
         last_rt.active_blocks, cells / 1e6, last_rt.emitted_triangles,
         cells > 0.0 ? 100.0 * last_rt.emitted_triangles / cells : 0.0,
         static_cast<double>(sum_dispatches) / n);
-    if (opt.incremental) {
-      // Both halves, because either alone reads as success. "0 of 40
-      // incremental" is a run that measured the fallback; "40 of 40, 98%
-      // re-meshed" is a run that measured the feature doing all the work
-      // anyway, which is what a writer stamping every block it visits, rather
-      // than those it changed, produces.
-      std::printf(
-          "  incr    %zu of %zu extracts incremental, mean %.1f%% of blocks "
-          "re-meshed\n",
-          incremental_extracts, remeshes,
-          sum_incr_active > 0 ? 100.0 * static_cast<double>(sum_remeshed) /
-                                    static_cast<double>(sum_incr_active)
-                              : 0.0);
-    }
   }
 
   // Per-stage host vs device, averaged over the fused frames.
@@ -553,13 +499,13 @@ vkc::Status run(const Options& opt) {
     // Ratios of the summed counts, so each window is weighted by its own active
     // set rather than voting equally (see the accumulation site). "changed" is
     // what the fuse actually moved; "remesh" is that dilated into the -x/-y/-z
-    // octant, which is the set an incremental extract would have to redo.
+    // octant, which is the set a changed-only re-mesh would have to redo.
     //
     // Deliberately NOT reported as a speedup. Only the marching-cubes dispatch
     // scales with the block count; of the phases printed above it, compact
     // walks every table slot regardless, arena alloc is sized by the whole
-    // surface, and readback copies all of it. The share below is the ceiling an
-    // incremental extract could aim at, not a factor anything runs faster by.
+    // surface, and readback copies all of it. The share below is the ceiling a
+    // changed-only re-mesh could aim at, not a factor anything runs faster by.
     const auto pct = [](std::uint64_t num, std::uint64_t den) {
       return den > 0
                  ? 100.0 * static_cast<double>(num) / static_cast<double>(den)

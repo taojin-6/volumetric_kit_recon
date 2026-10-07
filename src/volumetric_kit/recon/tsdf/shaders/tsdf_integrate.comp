@@ -56,12 +56,13 @@ layout(set = 0, binding = 7, scalar) readonly buffer ColorCamera {
 // happened". The dispatch covers every active block and returns early for most
 // of them; a frustum test counts the whole view cone; and in classic mode the
 // free-space cone ahead of the surface is fused too, so a flag set by the mere
-// act of storing would collapse to "the camera could see it" and re-mesh the
-// whole view every frame. Only a store that leaves tsdf/weight/color holding a
-// different value may stamp it, which is why the marks below sit AFTER the
-// writes they describe and are guarded by a comparison against the old value:
-// a voxel converged at max_weight re-stores bit-identical numbers, and that is
-// the steady state of any revisiting scan, not a corner case.
+// act of storing would collapse to "the camera could see it" and show a stamp
+// reader the whole view as changed every frame. Only a store that leaves
+// tsdf/weight/color holding a different value may stamp it, which is why the
+// marks below sit AFTER the writes they describe and are guarded by a
+// comparison against the old value: a voxel converged at max_weight re-stores
+// bit-identical numbers, and that is the steady state of any revisiting scan,
+// not a corner case.
 //
 // Indexed by block SLOT (ptr / voxels_per_block), which the map keeps across
 // a resize and zeroes when it frees the block, so a stamp always describes

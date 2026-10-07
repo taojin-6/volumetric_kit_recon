@@ -330,8 +330,8 @@ geometry buffers directly.
   `CommandBatch`; and the CPU never reads VRAM directly, since BAR memory
   reads uncached (6.6 s for one mesh download).
   Small parameters may stay host-visible: under 64 KB, it measured nothing.
-  A table the host reads, as `mesh`'s span table, is device-only like the
-  rest, and comes back by readback in the batch that wrote it (2026-10-04). A
+  A table the host reads is device-only like the rest, and comes back by
+  readback in the batch that wrote it (2026-10-04). A
   GPU test failing on the Linux boxes with a bare `vkWaitForFences` is a lost
   device: read the host's kernel log for the Xid before calling it load.
 - **A bare `cmake -S . -B build` leaves `CMAKE_BUILD_TYPE` empty, so everything
@@ -748,7 +748,7 @@ submission in a region named by `ComputeKernel::name`, and
 and exists only where the caller asked for `StageMetrics`, so pairing them
 would perturb the captured workload and leave uninstrumented calls anonymous.
 Naming is re-applied wherever a handle is replaced — a grid `resize`, a hash
-rehash, a mesh-arena grow, a span-table grow — since a name
+rehash, a mesh-arena grow — since a name
 lives on the handle. One change
 serves both profilers: Nsight renders the regions as trace ranges (and
 groups a capture by `VkPipeline`, which `KernelSetBuilder::add` therefore
@@ -830,9 +830,9 @@ dispatching and reporting nothing, so an extract after a fuse reuses the
 fuse's compaction (2026-09-30).
 `topology_epoch()` lives on the *map* — the object that frees a block
 index — and is a globally unique token re-drawn at `create`, at every
-`clear` and at every `remove` that accepts its input, never at `resize`: a slot-keyed cache (mesh's spans)
-anchors on it, so no path may free an index without moving it
-and no two grids may ever share a value. Host `diagnostics()` scans occupancy;
+`clear` and at every `remove` that accepts its input, never at `resize`: a
+compacted `BlockList` anchors on it, so no path may free an index without
+moving it and no two grids may ever share a value. Host `diagnostics()` scans occupancy;
 `load_factor()` is the constant-time read a per-frame caller can afford (a
 host copy of the heap counter, read back by every round that moves it, which
 `diagnostics()` checks against the device's own), and
@@ -861,8 +861,8 @@ nothing. A consumer compares ticks and resets nothing:
 `free_stale_blocks(max_age)` frees the blocks whose newer stamp is older
 than that, zeroing them with a kernel over the pass's list, so the band the
 allocator still asks for stays, and `rig_viewer` runs it every
-`--free-after` sets; `mesh`'s incremental extract re-meshes what changed
-since the tick it last meshed at.
+`--free-after` sets; the iOS scanner reads `changed` through
+`read_block_stamps`.
 
 ### tsdf
 
@@ -934,40 +934,22 @@ its ring slot back so a PLY writer never learns the ring exists — and
 released by generation. One workgroup per active block, with the cross-block 2×2×2
 neighbourhood resolved by probing the hash table on-device. A block counts
 its output, reserves one range for all of it with a single atomic, and
-only then writes, so **a block's output is contiguous in the arena** —
-the precondition for meshing only the blocks a fuse changed, taken at ~10% on
-the dispatch. True of **both** sparse kernels: `share_vertices` reserves two
-ranges rather than one, since a shared vertex breaks `v = 3t`, and measured no
-cost. Each cursor is bounded by its block's own reservation, so a count that
-disagreed with the emit would drop geometry rather than write over the next
-block's range. Opt-in `track_block_spans` publishes that range as
-`block_spans()` — vertex and **triangle** base/count per block slot, the
-mapping stage 3 re-meshes against and the host cannot derive, since the
-atomics hand ranges out in workgroup arrival order. Off by default (it is
-sized by the grid, not the surface), borrowed, and readable only while
-`block_spans_generation()` still names the mesh you hold —
-`block_span_valid(grid, slot)` answers the same question per slot, against
-the `topology_epoch` the spans were written for and the *serial* of the
-extract that wrote them, since a LIFO-reused slot names a different block and
-a block dropped from the active set keeps its last stamp. Nothing in the
-table itself says "not mine": a grow carries every old span forward, so
-`block_spans()` is a fetch for slots `block_span_valid` approved, not an
-array to iterate. Before an incremental GPU dispatch, active slots without a
-stamp from the previous extract have their spans zeroed. This includes reused
-slots absent from a full fallback and newly allocated slots with no voxel
-changes yet; neither may inherit another block's arena range. The vertex arena
+only then writes, so **a block's output is contiguous in the arena** (both
+sparse kernels; `share_vertices` reserves two ranges, since a shared vertex
+breaks `v = 3t`). Each cursor is bounded by its block's own reservation, so a
+count that disagreed with the emit would drop geometry rather than write over
+the next block's range. Every extract meshes the whole active set or a
+caller's list and rewrites its slot from zero; incremental extraction was
+removed on 2026-10-06. The vertex arena
 is fitted to the surface, grow-only, and held as a **ring of slots** the
 consumer releases by generation; the kernel writes a real
 `VkDrawIndexedIndirectCommand`. `extract_device` returns a borrowed
 `DeviceMesh` (valid until the next extract, enforced by a generation stamp),
 `download` takes the single host copy and bridges the two workflows. The
-arena, index run, draw command and span table are device-only, and each
-extract attempt is one batch that reads back the 32-byte command and, with
-the spans on, the span table up to the highest active slot, into the host
-copy `block_spans()` returns. With the spans off the
-active list never reaches the host: the extract compacts onto the device,
-or takes the fuse's list back from the map, and binds it in place
-(2026-09-30). An
+arena, index run and draw command are device-only, and each extract attempt
+is one batch that reads back the 28-byte command. A whole-map extract never
+brings the active list to the host: it compacts onto the device, or takes
+the fuse's list back from the map, and binds it in place (2026-09-30). An
 `extract_device` overload meshes a
 caller-supplied `volume::BlockList` instead of compacting the whole map —
 what a camera's frustum-culled set arrives as, though nothing in the extractor
@@ -984,50 +966,17 @@ shares, and all three above the slot claim, so a refusal is a **rollback**
 and an outstanding `DeviceMesh` survives it; and `compact_ms` reads 0 while
 every row that scales with the active set shrinks with it (`readback_ms` and
 `descriptor_ms` are per-call constants and do **not**). The list must be
-duplicate-free — unchecked, and a repeat emits the block twice and races its
-span — and is built by `VoxelBlockGrid::block_list`, whose rvalue overload
-is deleted so a temporary compaction cannot leave it dangling.
-Offered on `extract_device` **only** — an incremental pass keeps the triangles
-of blocks it does not re-mesh, so culling would leave them drawn and give the
-arena win back. *Alternating* the two is safe, though: a culled pass publishes
-no `arena_state_` (and records no density, a culled set being denser per block
-than the map it came from), so the next incremental request falls back to a
-full extract and reports it. `share_vertices` selects a second
+duplicate-free — unchecked, and a repeat emits the block twice — and is built
+by `VoxelBlockGrid::block_list`, whose rvalue overload is deleted so a
+temporary compaction cannot leave it dangling. A culled pass records no
+density, a culled set being denser per block than the map it came from.
+`share_vertices` selects a second
 compiled kernel that indexes in-block vertices — 3.4x fewer on room0, and
 textured like any other mesh since the `texture` tier moved to a per-vertex
 verdict (2026-08-11). `DeviceMesh::shares_vertices` still publishes it,
 because `v = 3t` no longer holds and a consumer sizing an arena cannot derive
 that from the buffers, and because the `texture` tier's several-view atlas
 chooses per triangle and so refuses a shared mesh (2026-09-28).
-`extract_device_incremental` re-meshes only the blocks changed since its
-last extract: it keeps the map's tick that extract ran at, reads each
-block's `changed` stamp against it (2026-10-01), dilates the *changed* set
-into the *re-mesh* set on-device
-over the 2×2×2 neighbourhood the gather already resolved, reuses each block's
-existing range where the new count fits and appends past the watermark where
-it does not, retiring what it leaves behind to zero-area triangles. It runs
-under `share_vertices` (2026-08-11), which reuses **two** ranges rather than
-one — in place only when *both* counts fit, since a triangle indexes into the
-vertex range beside it — and which retires an order of magnitude more cheaply,
-not less: that kernel owns its index run, so a dead triangle costs 12 bytes
-against the default kernel's 192, and its dead vertices need no writing at
-all. What it
-may trust is one `{watermark, epoch, serial, tick, iso}` struct, cleared at the top of
-**both** extract paths and re-established only on the publishing return, so
-no failure leaves it describing geometry that is
-gone; the anchor is compared *above* the call that re-anchors it, or it
-compares a value with itself. Everything else is a **silent fallback to a
-full extract**, which is why `ExtractTimings::incremental` reports which pass
-the caller got and `remeshed_blocks` (counted on-device, since the dilation
-never reaches the host) reports what it saved — `dispatches` counts refit
-rounds and reads 1 on both. Occupancy past `kMaxArenaOccupancy`x the live
-count (summed off all current active spans, including newly emitted blocks,
-never from the arena's own total, which ratchets)
-withholds the state so the next pass compacts — asked on **both** axes under
-sharing, since retirement leaves dead triangles occupying index slots while
-dead vertices are merely unreachable, so the two buffers drift apart and
-either can be the binding one. `slot_count == 1` only, so it
-is off in `fuse_viewer` today — a `TODO(mesh)` on the class.
 
 ### texture
 
@@ -1408,9 +1357,8 @@ bounds, overflow or mean nothing:
   `kMaxCellsPerTriangle` cells each;
 - a threshold past the reach.
 
-The surface is every triangle but one collapsed to a point, which is what
-an incremental extract retires a triangle to. The points measured are the
-vertices those triangles use. The closest point is the face projection
+The surface is every triangle but one collapsed to a point. The points
+measured are the vertices those triangles use. The closest point is the face projection
 when it lands inside, else the nearest edge, so a degenerate triangle
 counts as the segment it collapses to and a thin one is measured to float
 rounding, where Ericson's region test lost it now and then. A `stride` picks
@@ -1478,11 +1426,9 @@ final texture pass — is copied into an
 reader decodes into; `CapturedFrame` is its view), never borrowed: the empty
 poll that ends a replay is a poll. `fuse_replica`
 runs the spine on a posed
-Replica-SLAM RGB-D sequence and writes a PLY; `--incremental` drives the
-changed-only extract and implies `--device-extract`, and `--dirty-every`
-reports the changed and re-mesh fractions over windows of its own, each
-keeping its own tick, so the two run together. Behind the off-by-default
-`VR_BUILD_VIEWER`: `fuse_render` writes a headless colour PNG (seam A — it
+Replica-SLAM RGB-D sequence and writes a PLY; `--dirty-every` reports the
+changed and re-mesh fractions over windows of its own, keeping its own tick.
+Behind the off-by-default `VR_BUILD_VIEWER`: `fuse_render` writes a headless colour PNG (seam A — it
 builds two devices by design), and `fuse_viewer` opens a live window on one
 shared `VkDevice`, fusing on a background thread, drawing recon's buffers
 directly, and carrying the two-panel perf overlay. The four dataset examples
@@ -1566,22 +1512,11 @@ landed; the stack continues:
    nearest-frame members, registration of a tracked sensor's world, a network
    sensor with an ios sender, and clock offsets.
 
-**Incremental mesh extraction has landed, all three stages** —
-`MarchingCubes::extract_device_incremental`, over the span table of the
-2026-08-11 table decision and the `changed` stamps of the second 2026-10-01
-one (which replaced the 2026-08-09 dirty flags); read both,
-plus the two 2026-08-11 dispatch entries (the second reverses the first's
-`share_vertices` clause), before touching it. It runs under `share_vertices`,
-which is the configuration the memory-bound consumer wants — unsharing to avoid
-it cost 4 177 MB against 33 MB on the iPad. Two things it does
-**not** yet do, and both are `TODO(mesh)`s: it runs at `slot_count == 1` only,
-so it is silently off in `fuse_viewer` (extending the ring is the open design
-question — release-gated range reuse, or copying the retained run into the newly
-claimed slot); and the ~4x win the 2026-08-09 entry sized it for is **still
-unmeasured**, because room0 re-meshes 81.67% of its blocks per window and so
-caps at ~1.22x. The iPad's 25% dirty rate is where the number lives, and
-`fuse_replica --incremental` now reports `incremental` / `remeshed_blocks` so a
-run cannot quietly measure the fallback instead. Beside it: **view-culled meshing has landed as a
+**Incremental mesh extraction was removed** (2026-10-06): nothing live
+used it and its win was never measured. It comes back only with a
+measurement on a large scan (room0 replicated several times over can stand
+in for one), against a full extract with view culling.
+**View-culled meshing has landed as a
 library API and has no in-tree consumer yet** — `extract_device` takes a
 `volume::BlockList`, `make_frustum_planes` takes a `view_proj`, and what is
 missing is a caller that culls: `fuse_viewer` would have to publish its render
@@ -1593,12 +1528,10 @@ dispatch, the arena; `readback_ms` and `descriptor_ms` are per-call constants
 and will read flat), and quote nothing until a run says so. Beside that:
 first-class glTF/GLB export in `io` and the gfx-vertex converter. PLY export
 has moved from the example into the validated I/O module. On `mesh`, the greppable
-`TODO(mesh)`s: cross-block vertex sharing, per-vertex normals, extending
-incremental extraction past one slot, revisiting degenerate retirement if
-relocation proves common rather than rare — and, the sharing kernel's form of
-that same question, recording a block's *reservation* beside its live span so a
-surface oscillating around a threshold stops relocating on every up-tick —
-and `ExtractTimings`' device half — which must
+`TODO(mesh)`s: cross-block vertex sharing, per-vertex normals, measuring a
+return of the default kernel to the per-triangle append (the per-block
+reservation cost ~10% of the dispatch and was taken for incremental
+extraction) — and `ExtractTimings`' device half — which must
 bracket several dispatches in **one** timed submit, since a timed submit costs
 ~0.13 ms on MoltenVK and four of the six phases run under that. On `texture`,
 the `TODO(texture)`s: keeping a static keyframe set's

@@ -122,6 +122,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
+- `mesh`: **incremental extraction** (BREAKING).
+  `MarchingCubes::extract_device_incremental`,
+  `MarchingCubesConfig::track_block_spans`, `BlockSpan`, `block_spans()`,
+  `block_span_capacity()`, `block_spans_generation()`, `block_span_valid()`,
+  and `ExtractTimings::incremental` and `remeshed_blocks`. Every extract
+  meshes the whole active set or a caller's `BlockList`. The sparse kernels
+  lose their span and stamp bindings, three push constants and a scratch
+  word (the push block is 52 bytes, the command buffer 28). The `changed`
+  stamp, its writers and `read_block_stamps` stay. `fuse_replica` loses
+  `--incremental`. The iOS scanner's `incremental_benchmark` mode, compiled
+  into every scanner build, must be removed before it re-pins.
 - **Test-only public API**, which no example, sibling or app called:
   - `core`: `device_macros.hpp` (`VR_DEVICE_HOST`), `vr::normalize`,
     `Vec3u8`;

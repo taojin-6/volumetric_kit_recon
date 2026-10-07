@@ -142,7 +142,7 @@ class VR_TSDF_API TsdfIntegrator {
   /// **different** value counts, so a scan revisiting converged surface at
   /// `max_weight` stamps nothing, and Dynamic's clear of a weighted voxel
   /// counts as a change. A consumer keeps the tick it last read at and asks
-  /// which blocks are newer: an incremental mesh extract keeps its own.
+  /// which blocks are newer.
   /// @param grid        The block grid; must carry `float` `tsdf` + `weight`
   ///                    attributes (see @ref VoxelBlockGrid::create). Its
   ///                    active set (@ref

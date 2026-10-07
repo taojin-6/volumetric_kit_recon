@@ -107,7 +107,7 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-08-09**](#2026-08-09--incremental-mesh-extraction-is-worth-building-at-a-4x-ceiling-not-the-18x-one-window-suggested-and-the-worst-frame-rather-than-the-median-sizes-its-design-amends-the-dirty-block-decision-above) —
   Incremental mesh extraction is worth building at a ~4x ceiling, not the ~18x
   one window suggested, and the worst frame rather than the median sizes its
-  design (amends the dirty-block decision above).
+  design (amends the dirty-block decision above). It was removed on 2026-10-06.
 - [**2026-08-09**](#2026-08-09--timings-are-core-vocabulary-and-the-device-half-is-measured-not-inferred-counters-stay-in-the-tier-that-means-them) —
   Timings are `core` vocabulary and the device half is measured, not inferred;
   counters stay in the tier that means them.
@@ -118,7 +118,8 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-08-11**](#2026-08-11--the-per-block-span-table-is-opt-in-is-retired-by-generation-rather-than-described-in-prose-is-anchored-per-block-slot-to-a-globally-unique-topology-token-and-is-one-table-for-the-whole-ring-rather-than-one-per-slot) —
   The per-block span table is opt-in, is retired by generation rather than
   described in prose, is anchored per block slot to a globally unique topology
-  token, and is one table for the whole ring rather than one per slot.
+  token, and is one table for the whole ring rather than one per slot. The table
+  went on 2026-10-06.
 - [**2026-08-11**](#2026-08-11--projective-texturing-decides-visibility-per-vertex-and-a-negative-uv0-carries-its-atlas-coordinate-rather-than-discarding-it-amends-the-2026-07-07-texture-tier-decision-and-retires-the-share_vertices-refusal-the-2026-08-04-entry-records) —
   Projective texturing decides visibility per *vertex*, and a negative `uv0`
   carries its atlas coordinate rather than discarding it (amends the 2026-07-07
@@ -127,15 +128,16 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-08-11**](#2026-08-11--an-incremental-extract-trusts-one-struct-cleared-on-every-path-and-re-established-only-where-a-mesh-is-handed-out-every-refusal-is-a-silent-fallback-and-the-fallback-is-reported) —
   An incremental extract trusts one struct, cleared on every path and
   re-established only where a mesh is handed out; every refusal is a silent
-  fallback, and the fallback is *reported*.
+  fallback, and the fallback is *reported*. Removed on 2026-10-06.
 - [**2026-08-11**](#2026-08-11--incremental-extraction-runs-under-share_vertices-because-that-kernel-owns-its-index-run-and-so-retires-more-cheaply-not-less-reverses-the-share_vertices-clause-of-the-incremental-dispatch-decision-above) —
   Incremental extraction runs under `share_vertices`, because that kernel owns
   its index run and so retires *more* cheaply, not less (reverses the
-  `share_vertices` clause of the incremental-dispatch decision above).
+  `share_vertices` clause of the incremental-dispatch decision above). Removed
+  on 2026-10-06.
 - [**2026-08-12**](#2026-08-12--meshing-a-cameras-view-is-a-caller-supplied-block-list-not-a-camera-the-mesh-tier-holds-and-it-stays-apart-from-incremental-extraction-rather-than-stacking-with-it) —
   Meshing a camera's view is a caller-supplied block list, not a camera the mesh
   tier holds; and it stays apart from incremental extraction rather than
-  stacking with it.
+  stacking with it. Incremental extraction went on 2026-10-06.
 - [**2026-08-30**](#2026-08-30--a-profiler-label-belongs-to-the-kernel-not-to-the-timed-span-vk_ext_debug_utils-is-requested-independently-of-validation-and-the-instance-extension-is-declared-across-the-adopt-seam) —
   A profiler label belongs to the kernel, not to the timed span;
   `VK_EXT_debug_utils` is requested independently of validation, and the
@@ -245,7 +247,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   distinct block of the tile once, its band shared out over the lanes.
 - [**2026-09-30**](#2026-09-30--with-the-spans-off-an-extracts-active-list-stays-on-the-device-and-the-map-hands-back-its-last-compaction-while-nothing-has-changed-since) —
   With the spans off, an extract's active list stays on the device, and the
-  map hands back its last compaction while nothing has changed since.
+  map hands back its last compaction while nothing has changed since. The spans
+  went on 2026-10-06.
 - [**2026-10-01**](#2026-10-01--every-block-slot-carries-stamps-ticks-of-one-clock-on-the-map-each-written-by-the-pass-that-knows-its-fact-the-grid-frees-the-blocks-no-allocation-has-asked-for-and-no-voxel-has-weighted-in-max_age-ticks) —
   Every block slot carries stamps, ticks of one clock on the map, each
   written by the pass that knows its fact; the grid frees the blocks no
@@ -254,7 +257,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   The dirty flags become the `changed` stamp: every pass that writes voxels
   advances the map's clock and stamps what it changed, always, and an
   incremental extract keeps the tick it last meshed at (amends the
-  2026-08-09 dirty-block decision and the stamps entry above).
+  2026-08-09 dirty-block decision and the stamps entry above). The incremental
+  extract went on 2026-10-06; the stamp stays.
 - [**2026-10-01**](#2026-10-01--the-codec-review-frame-v2-codes-a-partial-mask-a-plane-and-a-line-at-a-time-against-its-neighbours-and-a-sign-inside-its-mantissas-field-the-transform-finds-every-block-by-its-coordinate-one-commandbatch-a-call-over-device-memory-the-encoder-takes-the-maps-own-list-and-drops-never-observed-blocks-before-the-transform-and-the-decoder-stamps-only-what-it-changes-amends-the-changed-stamp-entry-above) —
   The codec review: frame v2 codes a partial mask a plane and a line at a
   time against its neighbours and a sign inside its mantissa's field; the
@@ -267,7 +271,7 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-02**](#2026-10-02--gpu-regressions-guard-span-ownership-chroma-placement-descriptor-aliases-invalid-depth-taps-and-zero-near-visibility) —
   GPU regressions guard span ownership, chroma placement, descriptor aliases,
   invalid depth taps, and zero-near visibility; zero holes never occlude a
-  colour sight line.
+  colour sight line. The span check went on 2026-10-06.
 
 - [**2026-10-02**](#2026-10-02--device-local-allocation-is-required-and-buffer-residency-is-explicit) —
   Device-local allocation is required and buffer residency is explicit;
@@ -371,6 +375,9 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-06**](#2026-10-06--public-api-serves-a-caller-entry-points-only-tests-used-go-or-move-into-their-tests-amends-the-2026-07-04-glm-entry) —
   Public API serves a caller: entry points only tests used go, or move into
   their tests.
+- [**2026-10-06**](#2026-10-06--incremental-mesh-extraction-is-removed-the-changed-stamp-stays-and-the-mesher-no-longer-reads-it-amends-the-2026-08-09-2026-08-11-2026-08-12-2026-09-30-2026-10-01-and-2026-10-02-mesh-entries) —
+  Incremental mesh extraction is removed; the `changed` stamp stays, and the
+  mesher no longer reads it.
 
 ## Decision record
 
@@ -1988,6 +1995,10 @@ default kernel's 44 B is unchanged, and the gap is the decision.)
 
 ### 2026-08-09 — A dirty block is one the fuse *changed*, the flags are anchored to a grid the library checks, and tracking them is opt-in.
 
+*Amended 2026-10-06 (below):* incremental mesh extraction is removed. The
+`changed` stamp that replaced these flags stays; the mesher no longer reads
+it.
+
 `tsdf` can now
 report which blocks a fuse invalidated — the input an incremental re-mesh
 needs, and the first thing on the roadmap that the whole-volume extract's
@@ -2087,6 +2098,9 @@ exercised by no fixture, since every fixture here dispatches one frame at a
 time.
 
 ### 2026-08-09 — Incremental mesh extraction is worth building at a ~4x ceiling, not the ~18x one window suggested, and the worst frame rather than the median sizes its design (amends the dirty-block decision above).
+
+*Amended 2026-10-06 (below):* incremental mesh extraction is removed. Its win
+was never measured past this entry's ceiling estimate.
 
 The dirty-block decision above measured coverage on **room0** — 62% of active
 blocks changed per 20-frame window, 59% per single frame, **83%** once dilated
@@ -2681,6 +2695,9 @@ read also moved out of the `share_mtx` critical section, beside the
 
 ### 2026-08-11 — The per-block span table is opt-in, is retired by generation rather than described in prose, is anchored per block slot to a globally unique topology token, and is one table for the whole ring rather than one per slot.
 
+*Amended 2026-10-06 (below):* the span table is removed with incremental
+mesh extraction.
+
 Stage 2 left both sparse kernels computing a block-to-range mapping and throwing
 it away. Publishing it as `MarchingCubes::block_spans()` is what stage 3
 (dirty-only dispatch) re-meshes against, and it is not derivable on the host: the
@@ -2965,6 +2982,9 @@ vertices is 1 GiB at 64 B each, the common `maxStorageBufferRange` floor, so the
 binding range runs out at the same point and does so naming the mesh.
 ### 2026-08-11 — An incremental extract trusts one struct, cleared on every path and re-established only where a mesh is handed out; every refusal is a silent fallback, and the fallback is *reported*.
 
+*Amended 2026-10-06 (below):* incremental mesh extraction and the arena
+state this entry describes are removed.
+
 **Stage 3 of the 2026-08-09 incremental-extraction plan.** Blocks whose
 `+{0,1}³` neighbourhood a fuse did not change keep the triangles they already
 have, at the offsets `block_spans()` names, and cost one workgroup that returns
@@ -3089,6 +3109,9 @@ here.
 
 ### 2026-08-11 — Incremental extraction runs under `share_vertices`, because that kernel owns its index run and so retires *more* cheaply, not less (reverses the `share_vertices` clause of the incremental-dispatch decision above).
 
+*Amended 2026-10-06 (below):* incremental mesh extraction is removed;
+`share_vertices` stays.
+
 The stage-3 entry above refuses `share_vertices`, on the grounds that a
 relocated block cannot retire the range it leaves behind unless it owns its
 vertices three-per-triangle. That argument is backwards, and the refusal cost
@@ -3176,6 +3199,10 @@ everything relocates there for reasons unrelated to this. Marked `TODO(mesh)`
 at the span write.
 
 ### 2026-08-12 — Meshing a camera's view is a caller-supplied block list, not a camera the mesh tier holds; and it stays apart from incremental extraction rather than stacking with it.
+
+*Amended 2026-10-06 (below):* incremental mesh extraction is removed, so the
+"kept apart from incremental extraction" clause has nothing left to keep
+apart. The culled overload and its density guard stay.
 
 A scanning device renders a small part of a large volume — the iPad case, where
 the viewport shows a room corner while the map holds the whole floor. Meshing
@@ -7956,6 +7983,9 @@ of allocation's device time has not been broken down.
 
 ### 2026-09-30 — With the spans off, an extract's active list stays on the device, and the map hands back its last compaction while nothing has changed since.
 
+*Amended 2026-10-06 (below):* the spans are removed, so a whole-map extract
+always binds the map's device list.
+
 **The rule.**
 - **No host list.** With `track_block_spans` off, `extract_device` and
   `extract_host` no longer bring the active list to the host and upload it
@@ -8174,6 +8204,10 @@ M5 Max and 1 ms on the RTX 5090, once every 30 sets.
   little to save.
 
 ### 2026-10-01 — The dirty flags become the `changed` stamp: every pass that writes voxels advances the map's clock and stamps what it changed, always, and an incremental extract keeps the tick it last meshed at (amends the 2026-08-09 dirty-block decision and the stamps entry above).
+
+*Amended 2026-10-06 (below):* the stamp and every writer of it stay, and
+`read_block_stamps` serves the iOS scanner; its mesh reader, the incremental
+extract, is removed.
 
 **The rule.**
 - **Writers advance the clock.** Three calls write voxels, and each advances
@@ -8534,6 +8568,9 @@ color-space rationale remains, with `fuse_render`'s already-shipped sRGB
 target described as current behavior.
 
 ### 2026-10-02 — GPU regressions guard span ownership, chroma placement, descriptor aliases, invalid depth taps, and zero-near visibility.
+
+*Amended 2026-10-06 (below):* the span-ownership item no longer applies;
+the span table is removed with incremental mesh extraction.
 
 Five correctness reproductions exposed gaps in otherwise passing tests.
 
@@ -10205,6 +10242,69 @@ will call.
 
 **Validation.** Apple M5 Max, macOS, Release with warnings as errors, Orbbec
 and FFmpeg: the 53 tests pass with `VR_TEST_HEVC_BACKEND=videotoolbox`.
+
+### 2026-10-06 — Incremental mesh extraction is removed; the `changed` stamp stays, and the mesher no longer reads it (amends the 2026-08-09, 2026-08-11, 2026-08-12, 2026-09-30, 2026-10-01 and 2026-10-02 mesh entries).
+
+**The rule.** `MarchingCubes` meshes the whole active set (`extract_host`,
+`extract_device`) or a caller's `BlockList`, and every extract rewrites its
+slot from zero. There is no incremental mode.
+
+**Why.** Nothing live used it. `fuse_viewer`, `rig_viewer` and the shipping
+iOS scanner run with `slot_count` 3 and the spans off, a configuration the
+incremental path refused by falling back to a full extract; only
+`fuse_replica --incremental` and an iOS benchmark build turned it on. Its win
+was never measured: room0 caps it at ~1.2x (83% of blocks re-mesh per
+window), and the iPad's ~4x is the 2026-08-09 entry's ceiling estimate, not a
+timed extract. And it is what made view culling complicated: the culled
+overload had to withhold arena state, the span table needed a generation, a
+per-slot stamp and a topology anchor, and retirement left degenerates that
+needed an occupancy ceiling. View culling, a later change, makes an extract
+cost the visible region instead.
+
+**What goes.** `extract_device_incremental`;
+`MarchingCubesConfig::track_block_spans`; `BlockSpan`, `block_spans()`,
+`block_span_capacity()`, `block_spans_generation()`, `block_span_valid()` and
+the span table behind them (device buffer, host copy, per-slot stamps, serial
+and epoch anchors, stale-span clearing, span readbacks); the arena state
+(watermark, tick, iso) and `kMaxArenaOccupancy`; `ExtractTimings::incremental`
+and `remeshed_blocks`. In both sparse kernels: the span writes, the stamp
+dilation, in-place range reuse and the retire pass, the span and stamp
+bindings (the default kernel now binds 8, the sharing one 9), the
+`write_spans`, `incremental` and `since` push constants (the block is now 52
+bytes) and the `remeshed_blocks` scratch word (the command buffer is now 28
+bytes). `fuse_replica --incremental` and its report; the GLSL `tick_after`,
+left with no caller. With no spans, a whole-map extract always binds the map's device list.
+
+**What stays.** `share_vertices`; the slot ring (`slot_count`,
+`release_through`, generations); the culled `BlockList` overload and its
+density guard; the per-block range reservation in both kernels (the default
+kernel's ~10% dispatch cost was taken for incremental extraction, and going
+back to the per-triangle append is a measured follow-up, a `TODO(mesh)` in the
+kernel); the sharing kernel's degenerate triple for a dropped triangle; the
+`changed` stamp, every writer of it (`TsdfIntegrator`, `MeshIntegrator`, the
+codec's inverse) and `read_block_stamps`, which the iOS scanner reads; and
+`fuse_replica --dirty-every`, which measures the changed fraction from the
+stamps.
+
+**Downstream.** The iOS scanner's `incremental_benchmark` mode is a runtime
+flag compiled into every scanner build: `apps/scanner/Bridge/Fusion.mm` sets
+`track_block_spans` and calls `extract_device_incremental`, and `Readout.mm`
+reads `ExtractTimings::incremental` and `remeshed_blocks`. The scanner must
+remove the mode before it re-pins this recon.
+
+**How it could return.** With a measurement on a large scan: a scene whose
+map dwarfs the region a frame changes, which room0 replicated several times
+over can stand in for. Measure the extract's time per frame against a full
+extract with view culling, phase by phase, before building anything; and
+design it with the ring and culling from the start rather than as a mode they
+refuse.
+
+**Validation.** Apple M5 Max, macOS, Release with warnings as errors, the
+viewers, Orbbec and FFmpeg: the 55 tests pass with
+`VR_TEST_HEVC_BACKEND=videotoolbox`, and `recon_mesh_marching_cubes_sparse`,
+`recon_mesh_marching_cubes_config` and `recon_texture_device_mesh` run clean
+under the Khronos layer's synchronization validation. Not measured: the
+sparse kernels' dispatch time (each lost one barrier per workgroup).
 
 ## Measured lessons
 

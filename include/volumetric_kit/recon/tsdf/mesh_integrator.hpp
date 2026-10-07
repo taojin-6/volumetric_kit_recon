@@ -131,9 +131,8 @@ struct MeshIntegrateStats {
 ///          quiescent across the call: the binning kernel probes its hash table
 ///          without a lock, as the mesh tier does.
 ///
-/// @note Every block this writes is stamped changed (@ref integrate), so
-///       `mesh::MarchingCubes::extract_device_incremental` re-meshes it as it
-///       does a block a fuse changed.
+/// @note Every block this writes is stamped changed (@ref integrate), as a
+///       fuse stamps one.
 class VR_TSDF_API MeshIntegrator {
  public:
   /// The most triangles one block's bin may hold. Each voxel of the block
