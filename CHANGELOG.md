@@ -63,6 +63,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   high byte ignored. `GpuFramePrep` stages them after the depth, one copy
   each in its batch, and samples them as it samples the planes. Test:
   `recon_sensor_gpu_frame_prep`.
+- `sensor/orbbec`: **`OrbbecSensor::Options::sync` and `apply_sync`**: `open`
+  checks the camera against its entry of the rig's sync file
+  (`read_orbbec_sync_config`) and refuses a difference, `Unsupported`,
+  naming each field, unless `apply_sync` writes the settings, only where
+  they differ, since they persist in the camera's flash. Software triggering
+  is refused after any write, so `apply_sync` can repair it. Test:
+  `recon_sensor_orbbec_conversion`.
 
 ### Changed
 
@@ -156,6 +163,32 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   gone); the viewers keep their keyframe as a `DeviceFrame`, texture through
   its colour camera and read its colour back for the atlas. `--min-depth`
   must be above 0, as the GPU pass needs.
+- `sensor/orbbec`: **`sync_clock_to_host` stamps the SDK's global
+  timestamps**: the camera's clock mapped onto the host's
+  `std::chrono::system_clock` and re-fitted as the two drift, not the
+  camera's own clock set once. `open` refuses a camera without them,
+  `Unsupported`; each `start` still sets the camera's clock once before it
+  streams. `ClockDomain::Host` is documented as `std::chrono::system_clock`.
+- `sensor/array`: **`SensorArray::Options::tolerance_us` defaults to 0**,
+  meaning 0.4 of the fastest member's frame period (13 333 µs at 30 fps), or
+  5 000 µs when no member reports a rate, where it was a fixed 5 000 µs. An
+  explicit 0 was refused; an explicit value keeps the other checks.
+- `sensor/array`: **`TriggerGrouper` is the array's internals** (BREAKING):
+  `sensor/trigger_grouper.hpp` is no longer installed or exported by
+  `recon_sensor`, and is built into `recon_sensor_array`.
+  `recon_sensor_trigger_grouper` compiles its source.
+- build: **the Orbbec SDK floor is 2.10.6**, for its global timestamps. CI
+  installs the pinned release through one composite action,
+  `.github/actions/install-orbbec-sdk`, which the build and viewer legs share.
+- CI: **the viewer leg compiles `rig_viewer`**, with FFmpeg and the Orbbec SDK
+  installed, beside `fuse_viewer` and `fuse_render`.
+- `examples`: **`fuse_orbbec` and `rig_viewer` read their cameras as a
+  `SensorArray`**: an `OrbbecSensor` per camera of the `--rig` file, or
+  `fuse_orbbec`'s one camera, each set prepared by `SensorArray::process`.
+  `fuse_orbbec` reports the cameras' open time, the array's counters and, for
+  a rig, each secondary's mean and worst skew to the primary. `rig_viewer`'s
+  panel shows the array's counters, frames in no set among them, and loses
+  its `lost` column, which `SensorStats` counts as failed.
 
 ### Fixed
 
@@ -172,9 +205,24 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `volume`: an allocation whose failures are all capacity limits (chain
   full, heap empty, table full) stops after that round, instead of
   dispatching twice more to fail the same way before the caller grows.
+- `sensor/orbbec`, `sensor/array`: **a long rig session keeps its sets.**
+  Cameras on their own clocks, synced once, drifted 3–6 µs/s apart and
+  outgrew the 5 ms window in about ten minutes; `OrbbecRig`'s re-sync every
+  minute put each camera on a new offset, and once two streaming cameras
+  were reported removed. The global timestamps held a 15-minute probe flat,
+  well inside 0.4 of a frame period.
 
 ### Removed
 
+- `sensor/orbbec`: **`OrbbecRig`** (`orbbec_rig.hpp`, BREAKING), with
+  `OrbbecRigSet`, `OrbbecRigStats`, the rig's start order and its
+  process-wide clock re-sync (`enableDeviceClockSync`).
+  `OrbbecRigSyncConfig` and `read_orbbec_sync_config` stay. Migrating: open
+  an `OrbbecSensor` per entry of the sync file, with its `serial` and `sync`,
+  `apply_sync` for `apply_sync_config`, and `sync_clock_to_host = true`, and
+  read them as a `SensorArray` posed by its `Options::calibration`. Test:
+  `recon_sensor_orbbec_start_order` goes; `recon_sensor_array` tests the
+  array's start order.
 - `mesh`: **incremental extraction** (BREAKING).
   `MarchingCubes::extract_device_incremental`,
   `MarchingCubesConfig::track_block_spans`, `BlockSpan`, `block_spans()`,

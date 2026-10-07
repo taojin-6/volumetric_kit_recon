@@ -7,10 +7,11 @@
 // neutral bootstrap in shared_device.hpp), the same fuse thread and mesh ring,
 // and the same HybridMeshPipeline drawing recon's buffers in place.
 //
-// Nothing the cameras produce visits the host after it arrives. The rig hands
-// out sets as captured, their colour left on the GPU by the hardware decoder;
-// sensor::GpuFramePrep::prepare_batch undistorts and converts every camera's
-// frame there, in one batch; the frames fuse through the device-input
+// Nothing the cameras produce visits the host after it arrives. Each camera of
+// the sync file is a sensor::OrbbecSensor, and a sensor::SensorArray reads
+// them as one: it hands out sets as captured, their colour left on the GPU by
+// the hardware decoder, and SensorArray::process undistorts and converts every
+// camera's frame there, in one batch; the frames fuse through the device-input
 // overloads; the marching-cubes mesh is textured from every camera of the set
 // (texture::ProjectiveTexturer, each view's depth on the device, its colour
 // camera its own, and its colour the coverage that keeps the lens's black
@@ -30,7 +31,7 @@
 //     atlas image is reused only once no frame in flight and no committed
 //     mesh holds it.
 //   * visibility -- as for the mesh: the frame prep fence-waits its batch
-//     before prepare_batch returns, and gfx's later vkQueueSubmit makes those
+//     before process returns, and gfx's later vkQueueSubmit makes those
 //     writes visible to the copy.
 //
 // The atlas is laid out once, from the rig's colour cameras, with
@@ -99,12 +100,15 @@
 #include "volumetric_kit/core/vulkan/image.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/recon/camera/array_calibration.hpp"
+#include "volumetric_kit/recon/camera/camera_model.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/mesh/device_mesh.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
-#include "volumetric_kit/recon/sensor/orbbec/orbbec_rig.hpp"
+#include "volumetric_kit/recon/sensor/array/sensor_array.hpp"
+#include "volumetric_kit/recon/sensor/orbbec/orbbec_sensor.hpp"
 #include "volumetric_kit/recon/sensor/orbbec/orbbec_stream.hpp"
 #include "volumetric_kit/recon/sensor/orbbec/orbbec_sync_config.hpp"
+#include "volumetric_kit/recon/sensor/rgbd_sensor.hpp"
 #include "volumetric_kit/recon/sensor/utils/gpu_frame_prep.hpp"
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
 #include "volumetric_kit/recon/texture/texture_atlas.hpp"
@@ -214,7 +218,7 @@ struct Options {
   // set with a remesh cost about 21.6 ms on the M5 Max at 1 cm (four cameras
   // fused, extracted and textured), inside the 33 ms a 30 fps rig leaves.
   int remesh_every = 1;
-  // How old, on the rig's clock, a camera's last frame may be and still
+  // How old, on the host's clock, a camera's last frame may be and still
   // texture the mesh when a set lacks the camera, whose triangles would
   // otherwise flicker to fused colour. The SDK drops a secondary's frame now
   // and then, and a lost H.265 frame costs every frame to the next key frame
@@ -468,7 +472,7 @@ struct TextureSource {
 };
 
 // Per camera, its newest frame: this set's, or an earlier one taken at most
-// `hold_ns` before `set_ns` on the rig's clock (Options::hold_ms).
+// `hold_ns` before `set_ns` on the host's clock (Options::hold_ms).
 std::vector<TextureSource> texture_sources(
     const std::vector<std::optional<NewestFrame>>& newest, std::uint64_t set,
     std::uint64_t set_ns, std::uint64_t hold_ns) {
@@ -560,7 +564,7 @@ constexpr const char* kUntexturedNames[kUntexturedReasons] = {
     "empty extract", "no colour", "texturing off", "texture failed"};
 
 // What the rig side reports beside the renderer's metrics, sampled on the
-// fuse thread (which owns the rig) and copied out by the render thread every
+// fuse thread (which owns the array) and copied out by the render thread every
 // frame, so it holds only what changes.
 struct RigPanel {
   std::uint64_t sets_fused = 0;
@@ -575,7 +579,7 @@ struct RigPanel {
   std::uint64_t held_views = 0;
   std::uint64_t short_remeshes = 0;
   std::array<std::uint64_t, kUntexturedReasons> untextured{};
-  rsensor::OrbbecRigStats stats;
+  rsensor::SensorArrayStats stats;
   std::size_t vertices = 0;
   std::size_t triangles = 0;
   std::uint64_t mesh_version = 0;
@@ -605,6 +609,8 @@ void draw_rig_panel(const RigPanel& panel,
               static_cast<unsigned long long>(panel.sets_fused),
               static_cast<unsigned long long>(panel.frames_fused),
               static_cast<unsigned long long>(panel.stats.incomplete));
+  ImGui::Text("frames   %llu in no set",
+              static_cast<unsigned long long>(panel.stats.unmatched));
   if (panel.silent) {
     ImGui::TextColored(ImVec4(0.9f, 0.5f, 0.2f, 1.0f),
                        "no set from the rig in %lld s",
@@ -624,14 +630,13 @@ void draw_rig_panel(const RigPanel& panel,
                 static_cast<unsigned long long>(panel.untextured[r]));
   }
   ImGui::Separator();
-  for (std::size_t i = 0; i < panel.stats.cameras.size(); ++i) {
-    const rsensor::OrbbecStreamStats& st = panel.stats.cameras[i];
-    ImGui::Text("%s  %llu in, %llu dropped, %llu failed, %llu lost",
+  for (std::size_t i = 0; i < panel.stats.sensors.size(); ++i) {
+    const rsensor::SensorStats& st = panel.stats.sensors[i];
+    ImGui::Text("%s  %llu in, %llu dropped, %llu failed",
                 i < serials.size() ? serials[i].c_str() : "?",
                 static_cast<unsigned long long>(st.received),
                 static_cast<unsigned long long>(st.dropped),
-                static_cast<unsigned long long>(st.failed),
-                static_cast<unsigned long long>(st.lost));
+                static_cast<unsigned long long>(st.failed));
   }
   ImGui::Separator();
   ImGui::Text("mesh v%llu  %zu vertices / %zu triangles",
@@ -709,20 +714,18 @@ int run(GLFWwindow* window, const Options& opt) {
   vkc::Device& rdevice = recon_device_result.value();
   vkc::Allocator& rallocator = recon_allocator_result.value();
 
-  // --- The rig, opened onto the shared device ------------------------------
-  // After the device, which it decodes onto and must outlive it. Opened here,
-  // on the main thread, so a camera that does not answer ends the run with its
-  // reason before the window starts drawing; the fuse thread starts it.
-  rsensor::OrbbecRig::Options rig_options;
-  {
-    auto sync = rsensor::read_orbbec_sync_config(opt.rig);
-    if (!sync) {
-      std::fprintf(stderr, "%s: %s\n", opt.rig.c_str(),
-                   sync.status().message().c_str());
-      return 1;
-    }
-    rig_options.sync = std::move(sync).value();
+  // --- The cameras, opened onto the shared device as one array -------------
+  // One OrbbecSensor per camera of the sync file, after the device, which
+  // they decode onto and which must outlive them. Opened here, on the main
+  // thread, so a camera that does not answer ends the run with its reason
+  // before the window starts drawing; the fuse thread starts them.
+  auto sync = rsensor::read_orbbec_sync_config(opt.rig);
+  if (!sync) {
+    std::fprintf(stderr, "%s: %s\n", opt.rig.c_str(),
+                 sync.status().message().c_str());
+    return 1;
   }
+  rsensor::SensorArray::Options array_options;
   if (!opt.calibration.empty()) {
     auto calibration = rcamera::read_array_calibration(opt.calibration);
     if (!calibration) {  // the message names the file
@@ -730,36 +733,79 @@ int run(GLFWwindow* window, const Options& opt) {
                    calibration.status().message().c_str());
       return 1;
     }
-    rig_options.calibration = std::move(calibration).value();
+    array_options.calibration = std::move(calibration).value();
   }
-  rig_options.apply_sync_config = opt.apply_sync;
-  rig_options.device = &rdevice;
-  rig_options.allocator = &rallocator;
-  if (opt.hevc) rig_options.color_codec = rsensor::OrbbecColorCodec::Hevc;
+  array_options.device = &rdevice;
+  array_options.allocator = &rallocator;
+  // The colour buffers are what gfx copies into its atlas, so the array's
+  // passes share them with gfx's family too -- the same reasoning as the mesh
+  // buffers below, and the same unconditional pair. Depth only recon reads.
+  array_options.prep.color_queue_families[0] = shared->compute_family();
+  array_options.prep.color_queue_families[1] = shared->graphics_family();
+  array_options.prep.color_queue_family_count = 2;
+  array_options.prep.depth_within_color = opt.depth_within_color;
+  // The streams, the same for every camera.
+  rsensor::OrbbecSensor::Options sensor_options;
+  sensor_options.device = &rdevice;
+  sensor_options.allocator = &rallocator;
+  if (opt.hevc) sensor_options.color_codec = rsensor::OrbbecColorCodec::Hevc;
   if (opt.color_width != 0) {
-    rig_options.color_width = opt.color_width;
-    rig_options.color_height = opt.color_height;
+    sensor_options.color_width = opt.color_width;
+    sensor_options.color_height = opt.color_height;
   }
-  if (opt.fps != 0) rig_options.fps = opt.fps;
-  if (opt.min_depth) rig_options.min_depth = *opt.min_depth;
-  if (opt.max_depth) rig_options.max_depth = *opt.max_depth;
-  auto rig_result = rsensor::OrbbecRig::open(rig_options);
-  if (!rig_result) {
-    std::fprintf(stderr, "rig: %s\n", rig_result.status().message().c_str());
+  if (opt.fps != 0) sensor_options.fps = opt.fps;
+  if (opt.min_depth) sensor_options.min_depth = *opt.min_depth;
+  if (opt.max_depth) sensor_options.max_depth = *opt.max_depth;
+  sensor_options.apply_sync = opt.apply_sync;
+  sensor_options.sync_clock_to_host = true;  // sets group on the host clock
+  std::vector<std::unique_ptr<rsensor::IRgbdSensor>> sensors;
+  for (const rsensor::OrbbecSyncDevice& entry : sync.value().devices) {
+    rsensor::OrbbecSensor::Options camera_options = sensor_options;
+    camera_options.serial = entry.serial;
+    camera_options.sync = entry.sync;
+    auto opened = rsensor::OrbbecSensor::open(camera_options);
+    if (!opened) {
+      std::fprintf(stderr, "rig_viewer: camera %s: %s\n", entry.serial.c_str(),
+                   opened.status().message().c_str());
+      return 1;
+    }
+    sensors.push_back(
+        std::make_unique<rsensor::OrbbecSensor>(std::move(opened).value()));
+  }
+  auto array_result =
+      rsensor::SensorArray::open(std::move(sensors), array_options);
+  if (!array_result) {
+    std::fprintf(stderr, "rig_viewer: %s\n",
+                 array_result.status().message().c_str());
     return 1;
   }
-  rsensor::OrbbecRig rig = std::move(rig_result).value();
-  const std::size_t cameras = rig.camera_count();
+  rsensor::SensorArray array = std::move(array_result).value();
+  const std::size_t cameras = array.size();
   std::vector<std::string> serials;
+  std::vector<rcamera::CameraModel> color_cameras;
   std::vector<glm::mat4> camera_poses;
   for (std::size_t i = 0; i < cameras; ++i) {
-    const rcamera::CameraModel& cam = rig.color_camera(i);
-    serials.push_back(rig.device_info(i).serial);
-    camera_poses.emplace_back(rig.color_to_world(i));
+    const rsensor::SensorInfo& info = array.sensor(i).info();
+    if (!info.color) {
+      std::fprintf(stderr, "rig_viewer: camera %s has no colour\n",
+                   info.id.c_str());
+      return 1;
+    }
+    serials.push_back(info.id);
+    color_cameras.push_back(*info.color);
+    // Where the array poses the camera's frames: the origin without a
+    // calibration.
+    const rcamera::SensorCalibration* calibrated =
+        rcamera::find_sensor(array_options.calibration, info.id);
+    camera_poses.push_back(calibrated != nullptr
+                               ? glm::mat4(calibrated->color_to_world)
+                               : glm::mat4(1.0f));
+    const rcamera::CameraModel& cam = color_cameras.back();
     const glm::vec3 at(camera_poses.back()[3]);
     std::printf("camera %zu: %s%s, colour %ux%u, at (%.3f, %.3f, %.3f) m\n", i,
-                serials.back().c_str(), i == rig.primary() ? " (primary)" : "",
-                cam.size.width, cam.size.height, at.x, at.y, at.z);
+                serials.back().c_str(),
+                i == array.primary() ? " (primary)" : "", cam.size.width,
+                cam.size.height, at.x, at.y, at.z);
   }
   if (opt.calibration.empty() && cameras > 1) {
     std::fprintf(stderr,
@@ -768,7 +814,7 @@ int run(GLFWwindow* window, const Options& opt) {
                  cameras);
   }
 
-  // --- recon: volume, integrator, extractor, texturer, frame prep ---------
+  // --- recon: volume, integrator, extractor, texturer ----------------------
   auto grid_result =
       vr_example::create_fusion_grid(rdevice, rallocator, opt.voxel, opt.trunc);
   if (!grid_result) {
@@ -808,23 +854,6 @@ int run(GLFWwindow* window, const Options& opt) {
     return 1;
   }
   rtex::ProjectiveTexturer texturer = std::move(texturer_result).value();
-  // The colour buffers are what gfx copies into its atlas, so the passes
-  // share them with gfx's family too -- the same reasoning as the mesh buffers
-  // above, and the same unconditional pair. Depth only recon reads.
-  rsensor::GpuFramePrepConfig prep_config;
-  prep_config.color_queue_families[0] = shared->compute_family();
-  prep_config.color_queue_families[1] = shared->graphics_family();
-  prep_config.color_queue_family_count = 2;
-  prep_config.depth_within_color = opt.depth_within_color;
-  std::vector<rsensor::GpuFramePrep> preps;
-  for (std::size_t i = 0; i < cameras; ++i) {
-    auto prep = rsensor::GpuFramePrep::create(rdevice, rallocator, prep_config);
-    if (!prep) {
-      std::fprintf(stderr, "frame prep: %s\n", prep.status().message().c_str());
-      return 1;
-    }
-    preps.push_back(std::move(prep).value());
-  }
 
   // The atlas: one tile per camera, laid out once from the rig's colour
   // cameras. A set textures from the cameras it has, into their own tiles.
@@ -832,8 +861,8 @@ int run(GLFWwindow* window, const Options& opt) {
   {
     std::vector<rtex::TextureView> sizes(cameras);
     for (std::size_t i = 0; i < cameras; ++i) {
-      sizes[i].image_width = rig.color_camera(i).size.width;
-      sizes[i].image_height = rig.color_camera(i).size.height;
+      sizes[i].image_width = color_cameras[i].size.width;
+      sizes[i].image_height = color_cameras[i].size.height;
     }
     auto laid_out =
         rtex::side_by_side_atlas(sizes, texturer.max_atlas_extent());
@@ -1043,16 +1072,16 @@ int run(GLFWwindow* window, const Options& opt) {
   OrbitView home;
   float vfov = 1.0f;
   {
-    const glm::mat4& c2w = camera_poses[rig.primary()];
+    const glm::mat4& c2w = camera_poses[array.primary()];
     const glm::vec3 eye(c2w[3]);
     home.forward = glm::normalize(glm::vec3(c2w[2]));
     home.up = -glm::normalize(glm::vec3(c2w[1]));  // image up is -cameraY
     home.right = glm::normalize(glm::cross(home.forward, home.up));
     const float depth_mid =
-        0.5f * (rig_options.min_depth + rig_options.max_depth);
+        0.5f * (sensor_options.min_depth + sensor_options.max_depth);
     home.target = axes_meet(camera_poses, eye + home.forward * depth_mid);
     home.distance = std::max(0.3f, glm::length(home.target - eye));
-    const rcamera::CameraModel& cam = rig.color_camera(rig.primary());
+    const rcamera::CameraModel& cam = color_cameras[array.primary()];
     vfov = 2.0f *
            std::atan(
                static_cast<float>(cam.size.height) /
@@ -1073,7 +1102,7 @@ int run(GLFWwindow* window, const Options& opt) {
   bool show_sources = opt.show_sources;
 
   // --- Fuse thread ----------------------------------------------------------
-  // The rig, the frame prep, fusion, extraction and texturing all run here;
+  // The array, its frame prep, fusion, extraction and texturing all run here;
   // the render thread only copies the atlas and draws. Shared state is under
   // share_mtx, as in fuse_viewer, and so is the ring's release mark.
   std::mutex share_mtx;
@@ -1313,9 +1342,9 @@ int run(GLFWwindow* window, const Options& opt) {
         }
       };
 
-      const vkc::Status started = rig.start();
+      const vkc::Status started = array.start();
       if (!started.ok()) {
-        std::fprintf(stderr, "rig_viewer: rig start: %s\n",
+        std::fprintf(stderr, "rig_viewer: start: %s\n",
                      started.message().c_str());
         fuse_failed.store(true);
       }
@@ -1337,7 +1366,7 @@ int run(GLFWwindow* window, const Options& opt) {
       };
       while (started.ok() && !quit.load()) {
         const auto poll_start = std::chrono::steady_clock::now();
-        auto polled = rig.poll_set();
+        auto polled = array.poll_set();
         const double poll_ms =
             std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - poll_start)
@@ -1348,7 +1377,7 @@ int run(GLFWwindow* window, const Options& opt) {
           fuse_failed.store(true);
           break;
         }
-        if (!polled.value() || polled.value()->count() == 0) {
+        if (!polled.value()) {
           // Published only when it changes: this path runs every millisecond.
           const bool silent =
               std::chrono::steady_clock::now() - last_set > kSilenceLimit;
@@ -1373,7 +1402,7 @@ int run(GLFWwindow* window, const Options& opt) {
           fuse_stages.seed(stage);
         }
         fuse_stages.add_cpu("poll", poll_ms);
-        const rsensor::OrbbecRigSet& set = *polled.value();
+        const rsensor::FrameSet& set = *polled.value();
         const std::uint64_t set_ns = set.timestamp_ns;
         last_set_ns = set_ns;
         // Released before this set's prep when no later set may texture from
@@ -1382,11 +1411,8 @@ int run(GLFWwindow* window, const Options& opt) {
         if (hold_ns == 0 || !texture_on.load()) {
           newest.assign(cameras, std::nullopt);
         }
-        auto prepared = [&]() {
-          // One row for the set: the cameras prepare in one batch.
-          vkc::StageScope scope(fuse_stages, "frame prep");
-          return rsensor::GpuFramePrep::prepare_batch(preps, set.frames);
-        }();
+        // One "frame prep" row for the set: the cameras prepare in one batch.
+        auto prepared = array.process(set, &fuse_stages);
         if (!prepared) {
           std::fprintf(stderr, "rig_viewer: frame prep: %s\n",
                        prepared.status().message().c_str());
@@ -1395,7 +1421,7 @@ int run(GLFWwindow* window, const Options& opt) {
           break;
         }
         const std::vector<std::optional<rsensor::DeviceFrame>>& frames =
-            prepared.value();
+            prepared.value().frames;
         const vkc::Status fused = vr_example::fuse_set(
             volume, integrator, frames, max_weight.load(), &fuse_stages,
             dynamic_on.load() ? rtsdf::IntegrationMode::Dynamic
@@ -1466,7 +1492,7 @@ int run(GLFWwindow* window, const Options& opt) {
         {
           const vkc::MemoryStats memory = rallocator.memory_stats();
           const vkc::Result<float> lf = volume.map().load_factor();
-          const rsensor::OrbbecRigStats stats = rig.stats();
+          const rsensor::SensorArrayStats stats = array.stats();
           std::lock_guard<std::mutex> lock(share_mtx);
           shared_fuse_stages = fuse_stages.rows();
           shared_panel.fuse_ms = fuse_ms;
@@ -1490,7 +1516,7 @@ int run(GLFWwindow* window, const Options& opt) {
       // intact, but the view still moves: re-mesh what it sees whenever it
       // changes, until the window closes.
       if (started.ok() && map_usable && !quit.load()) {
-        rig.stop();
+        array.stop();
         fusing_done.store(true);
         while (!quit.load()) {
           if (!remesh_if_view_moved()) {
@@ -1503,7 +1529,7 @@ int run(GLFWwindow* window, const Options& opt) {
       fuse_failed.store(true);
     }
     // Outside the try, so an exception stops the cameras too.
-    rig.stop();
+    array.stop();
     fusing_done.store(true);
   });
   fuse_viewer::QuitJoin fuse_guard{fuse_thread, quit};
@@ -1713,7 +1739,7 @@ int run(GLFWwindow* window, const Options& opt) {
     const float aspect = static_cast<float>(extent.width) /
                          static_cast<float>(std::max(1u, extent.height));
     const float far_plane =
-        2.0f * (view.distance + std::max(rig_options.max_depth, 1.0f));
+        2.0f * (view.distance + std::max(sensor_options.max_depth, 1.0f));
     glm::mat4 view_proj(1.0f);
     if (from_camera) {
       const glm::mat4& c2w = camera_poses[*from_camera];

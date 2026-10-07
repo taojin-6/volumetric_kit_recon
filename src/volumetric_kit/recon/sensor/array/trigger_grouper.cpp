@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Tao Jin
 
-#include "volumetric_kit/recon/sensor/trigger_grouper.hpp"
+#include "trigger_grouper.hpp"
 
 #include <algorithm>
 #include <iterator>
@@ -23,7 +23,7 @@ void TriggerGrouper::add(std::size_t camera, std::uint64_t ts_us,
                          std::vector<std::uint64_t>* released) {
   VKC_CHECK(camera < queues_.size(), "TriggerGrouper::add: no such camera");
   std::deque<Entry>& q = queues_[camera];
-  // Kept in timestamp order: a clock re-sync can step a camera's clock back.
+  // Kept in timestamp order: a camera's clock can step back.
   auto at = q.end();
   while (at != q.begin() && std::prev(at)->ts_us > ts_us) --at;
   q.insert(at, Entry{ts_us, id, now_us});
