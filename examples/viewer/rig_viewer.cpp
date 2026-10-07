@@ -1320,6 +1320,10 @@ int run(GLFWwindow* window, const Options& opt) {
                      started.message().c_str());
         fuse_failed.store(true);
       }
+      // Whether the map and the device are still fit to mesh: false after a
+      // failed frame prep or fuse, not after a capture failure, which leaves
+      // what was fused intact.
+      bool map_usable = true;
       std::uint64_t sets = 0;
       std::uint64_t frames_fused = 0;
       auto last_set = std::chrono::steady_clock::now();
@@ -1388,6 +1392,7 @@ int run(GLFWwindow* window, const Options& opt) {
           std::fprintf(stderr, "rig_viewer: frame prep: %s\n",
                        prepared.status().message().c_str());
           fuse_failed.store(true);
+          map_usable = false;
           break;
         }
         const std::vector<std::optional<rsensor::DeviceFrame>>& frames =
@@ -1400,6 +1405,7 @@ int run(GLFWwindow* window, const Options& opt) {
           std::fprintf(stderr, "rig_viewer: fuse: %s\n",
                        fused.message().c_str());
           fuse_failed.store(true);
+          map_usable = false;
           break;
         }
         for (const std::optional<rsensor::DeviceFrame>& frame : frames) {
@@ -1481,9 +1487,10 @@ int run(GLFWwindow* window, const Options& opt) {
         }
         if (last) break;
       }
-      // A --sets run has stopped fusing, but the view still moves: re-mesh
-      // what it sees whenever it changes, until the window closes.
-      if (!fuse_failed.load() && !quit.load()) {
+      // A --sets run has stopped fusing, or the capture failed with the map
+      // intact, but the view still moves: re-mesh what it sees whenever it
+      // changes, until the window closes.
+      if (started.ok() && map_usable && !quit.load()) {
         rig.stop();
         fusing_done.store(true);
         while (!quit.load()) {
