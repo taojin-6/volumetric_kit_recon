@@ -136,6 +136,15 @@ target_link_libraries(recon_tsdf_integrate_set_test
 vr_target_warnings(recon_tsdf_integrate_set_test)
 add_test(NAME recon_tsdf_integrate_set COMMAND recon_tsdf_integrate_set_test)
 
+# tsdf integrate cull: fusing only the blocks the frames' frusta reach must give
+# the grid fusing every active block gives, bit for bit, at each edge of that
+# reach. Skips (exit 0) where no device is present.
+add_executable(recon_tsdf_integrate_cull_test tsdf_integrate_cull_test.cpp)
+target_link_libraries(recon_tsdf_integrate_cull_test
+                      PRIVATE volumetric_kit::recon_tsdf Vulkan::Vulkan)
+vr_target_warnings(recon_tsdf_integrate_cull_test)
+add_test(NAME recon_tsdf_integrate_cull COMMAND recon_tsdf_integrate_cull_test)
+
 # volume delete: allocate a cube, remove a subset, verify the survivors + heap
 # reuse (chain splice / successor pull-up) on the real driver. Skips (exit 0)
 # where no device is present.
@@ -191,8 +200,9 @@ add_test(NAME recon_volume_allocate_triangles
 # volume frustum-culled compaction: allocate blocks at known world positions
 # (one dead-centre, others behind / beyond-far / off to the side), then verify
 # compact_active_blocks_in_frustum returns only the in-view block while plain
-# compaction returns all -- proving the plane math + the on-device AABB cull.
-# Skips (exit 0) where no device is present.
+# compaction returns all -- proving the plane math + the on-device AABB cull --
+# and that several frusta on the device keep their union. Skips (exit 0) where
+# no device is present.
 add_executable(recon_volume_frustum_test volume_frustum_test.cpp)
 target_link_libraries(recon_volume_frustum_test
                       PRIVATE volumetric_kit::recon_volume Vulkan::Vulkan)

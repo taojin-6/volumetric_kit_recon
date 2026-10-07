@@ -34,7 +34,8 @@ Baseline: `main` at `36b6d86` (2026-09-30).
 For one set of four cameras, one iteration of `rig_viewer`'s fuse thread
 (`examples/viewer/rig_viewer.cpp:1270`), at the baseline. P1 has since made
 allocate, compaction and integrate one submit each per set, and P2 frame
-prep; see their rows.
+prep; see their rows. Since 2026-10-06 the compaction keeps only the blocks
+the set's frusta reach, so integrate scales with them rather than the map.
 
 | stage | code | submits | order | read back |
 |---|---|---|---|---|
@@ -125,7 +126,7 @@ kernels.
 | P8 | Sample the viewer's GPU timing | measured 0.04–0.07 ms/set, not the 1.7 estimated | S | — | not worth it |
 | P1 | Fuse a set's cameras in one allocate, one compaction and one integrate | measured −14% a set on the M5 Max, −21% on the RTX 5090 | L | — | landed (#127) |
 | P3 | Deduplicate depth allocation before dilating | measured −50% a set on the M5 Max, −62% on the RTX 5090 (over P1) | M | — | landed (#128) |
-| P5 | Extract from the fuse's device block list | measured −14% an extract on the M5 Max, −35% on the RTX 5090 | M | P1 for the shared list | landed (#129) |
+| P5 | Extract from the fuse's device block list | measured −14% an extract on the M5 Max, −35% on the RTX 5090 | M | P1 for the shared list | landed (#129); a fuse's list is no longer reused (2026-10-06) |
 | P4 | Bind texture views in place, with no per-remesh copies | measured 0.26–0.51 ms GPU per remesh at 4K, 0.04–0.12 at 720p | M | P1's descriptor-array decision | deferred |
 | P2 | Record a set's frame prep in one batch | measured parity once host colour stages on threads; the pipeline's unit of work | S | — | landed (`SensorArray::process`) |
 | P6 | Take the remaining host decisions off the critical path | at most ~0.5 ms/set on the RTX 5090, ~0.7 on the M5 Max (measured gap) | M | P1, P5 | open |
@@ -251,6 +252,11 @@ is measured.
 > device, and the map hands its last compaction back while nothing has
 > changed since, so the extract reuses the fuse's with no new API. See
 > DECISIONS.md, 2026-09-30 and 2026-10-06.
+> *Since 2026-10-06* a fuse compacts only the blocks its frusta reach and
+> leaves no full list, so an extract after a set that allocated compacts
+> again on the device (the "compacted here" column, not "the fuse's list");
+> the reuse now serves only what follows an extract. The net effect of fuse
+> plus extract on the rig is not measured. See DECISIONS.md, 2026-10-06.
 
 - **Problem.** `extract_device` compacts the whole map again, reads the list
   back to the host (`collect_compacted`, `voxel_hash_map.cpp:653`) and

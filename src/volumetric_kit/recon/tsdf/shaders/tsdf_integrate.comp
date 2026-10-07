@@ -1,16 +1,17 @@
 #version 450
 
 // Projective TSDF integration (classic or dynamic). One thread per voxel of each
-// active block: project the voxel centre into the depth camera, compute the
-// truncated signed distance (sdf = depth - Zc, positive in front of the
-// surface), and fuse it into the tsdf/weight attributes by a weighted running
-// average. Dynamic mode additionally hard-clears a voxel that projects into free
-// space past the truncation band (a surface that has receded). Ported from
-// classic_tsdf.metal / classic_tsdf.cu (the neural/triplane channels are out of
-// scope). Each voxel is owned by exactly one thread (a unique block ptr + local
-// index), so the tsdf/weight/color read-modify-write needs no atomics. The one
-// exception is the block's `changed` stamp at binding 8, which every thread of
-// a block shares -- see there.
+// listed block (the active blocks the frames' frusta reach): project the voxel
+// centre into the depth camera, compute the truncated signed distance
+// (sdf = depth - Zc, positive in front of the surface), and fuse it into the
+// tsdf/weight attributes by a weighted running average. Dynamic mode
+// additionally hard-clears a voxel that projects into free space past the
+// truncation band (a surface that has receded). Ported from classic_tsdf.metal
+// / classic_tsdf.cu (the neural/triplane channels are out of scope). Each voxel
+// is owned by exactly one thread (a unique block ptr + local index), so the
+// tsdf/weight/color read-modify-write needs no atomics. The one exception is
+// the block's `changed` stamp at binding 8, which every thread of a block
+// shares -- see there.
 
 #extension GL_GOOGLE_include_directive : require
 #extension GL_KHR_shader_subgroup_basic : require
@@ -53,13 +54,14 @@ layout(set = 0, binding = 7, scalar) readonly buffer ColorCamera {
 //
 // Not "the block was in the active set", not "the block was in the frustum",
 // and -- the distinction that costs the most to get wrong -- not "a store
-// happened". The dispatch covers every active block and returns early for most
-// of them; a frustum test counts the whole view cone; and in classic mode the
-// free-space cone ahead of the surface is fused too, so a flag set by the mere
-// act of storing would collapse to "the camera could see it" and show a stamp
-// reader the whole view as changed every frame. Only a store that leaves
-// tsdf/weight/color holding a different value may stamp it, which is why the
-// marks below sit AFTER the writes they describe and are guarded by a
+// happened". The dispatch covers every block the frames' frusta reach and
+// returns early for most of their voxels; a frustum test counts the whole view
+// cone; and in classic mode the free-space cone ahead of the surface is fused
+// too, so a flag set by the mere act of storing would collapse to "the camera
+// could see it" and show a stamp reader the whole view as changed every frame.
+// Only a store that leaves tsdf/weight/color holding a different value may
+// stamp it, which is why the marks below sit AFTER the writes they describe and
+// are guarded by a
 // comparison against the old value: a voxel converged at max_weight re-stores
 // bit-identical numbers, and that is the steady state of any revisiting scan,
 // not a corner case.

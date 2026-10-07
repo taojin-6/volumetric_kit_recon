@@ -802,7 +802,11 @@ frames behind its draw; widening near too would move it behind the eye at
 `margin_m > z_near` and admit a cone of geometry behind the camera. A
 degenerate or non-finite matrix leaves its planes unnormalized and unwidened,
 so the cull degrades to keeping blocks rather than dropping them.
-The result travels as a `BlockList` — pointer, count, and the
+`compact_active_blocks_in_frusta_on_device` keeps the blocks inside any of
+several frusta in one scan, on the device in a list of its own, which
+`check_device_block_list` refuses as not the active set; fusion culls with
+it (2026-10-06).
+The host result travels as a `BlockList` — pointer, count, and the
 `topology_epoch` it was compacted at, paired by `VoxelBlockGrid::block_list`
 so the three cannot be mispaired — which is what `mesh` meshes a subset
 from. `resize` preserves block indices,
@@ -824,10 +828,11 @@ set stays within a quarter past its last count (the 2026-09-28 residency
 decision), except `compact_active_blocks_on_device`'s: its
 `DeviceBlockList` stays on the device, stamped with the epoch, a
 compaction serial and the heap's free count, and `check_device_block_list`
-refuses one that a compaction, allocation, resize, remove, clear or move
-has made stale. While the last one still holds, the call returns it again,
-dispatching and reporting nothing, so an extract after a fuse reuses the
-fuse's compaction (2026-09-30).
+refuses one that a full compaction, allocation, resize, remove, clear or
+move has made stale. While the last one still holds, the call returns it
+again, dispatching and reporting nothing, so the encoder after an extract
+reuses the extract's compaction (2026-09-30). A fuse culls instead and leaves
+none.
 `topology_epoch()` lives on the *map* — the object that frees a block
 index — and is a globally unique token re-drawn at `create`, at every
 `clear` and at every `remove` that accepts its input, never at `resize`: a
@@ -885,14 +890,24 @@ clear included, so converged surface stamps nothing -- always, one lane a
 subgroup reading the stamp before its atomic, which measured as nothing
 (2026-10-01). Opt-in `StageMetrics*` reports an
 `"integrate"` row with both halves, over a `"  ..active set"` sub-row for the
-compaction dispatch it also makes. That compaction leaves its list on the
-device (`compact_active_blocks_on_device`), so a fuse is two submits, the
-compaction's count the only thing read back; the frames are staged.
+compaction dispatch it also makes. That compaction keeps only the blocks
+the frames can change: one frustum a frame from its depth camera, no near
+cut (Dynamic clears free space up to the camera), far at
+`max_depth + trunc_dist`, the union compacted in one scan
+(`compact_active_blocks_in_frusta_on_device`). The kernel changes a voxel
+only inside that reach, so the result is bit-identical to fusing every active
+block, while the dispatch scales with the reached blocks, not the map. A
+frame with a non-positive focal length, whose principal point lies outside
+its image (the side widening then stops containing it), or whose planes are
+not finite fuses the whole active set; the pose must be rigid. A grid with blocks ticks even when none is
+reached (2026-10-06). The list stays on the device, so a fuse is two
+submits, the compaction's count the only thing read back; the frames are
+staged.
 `integrate` also takes a list of frames
 (`FrameInput`, a `DepthInput` and its colour, so one list feeds both
 calls): one compaction and one submit for them all, each frame a dispatch
-of its own in order, so every voxel takes them in turn as integrating them
-one at a time does, bit for bit over the same blocks. A frame with no
+of its own over the union in order, so every voxel takes them in turn as
+integrating them one at a time does, bit for bit. A frame with no
 pixels fuses nothing, as it allocates nothing (2026-09-30).
 `MeshIntegrator` writes a triangle mesh's distance field instead
 (2026-09-27), **overwriting** every voxel of every block the band reaches:
@@ -949,7 +964,7 @@ consumer releases by generation; the kernel writes a real
 arena, index run and draw command are device-only, and each extract attempt
 is one batch that reads back the 28-byte command. A whole-map extract never
 brings the active list to the host: it compacts onto the device, or takes
-the fuse's list back from the map, and binds it in place (2026-09-30). An
+the map's last list back from it, and binds it in place (2026-09-30). An
 `extract_device` overload meshes a
 caller-supplied `volume::BlockList` instead of compacting the whole map —
 what a camera's frustum-culled set arrives as, though nothing in the extractor
@@ -1224,7 +1239,7 @@ candidates, not a claim that high frequencies always deserve fewer bits.
 The public API
 is `CodecParams`, **`Encoder`** (`encoder.hpp`) and **`Decoder`** with
 `read_frame_info` (`decoder.hpp`). `Encoder::encode(grid)` takes the map's
-own active list (`compact_active_blocks_on_device`, so a fuse's list is
+own active list (`compact_active_blocks_on_device`, so an extract's list is
 reused and its own kept for the extract after), keeps the blocks with an
 observed voxel (`DctTransform::observed`, compacted on the device), sorts them by
 (z, y, x), transforms them, and writes the frame. The same content gives
