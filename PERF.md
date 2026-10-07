@@ -43,8 +43,8 @@ prep; see their rows.
 | allocate | `allocate_from_depth` → `dispatch_with_retry`, `voxel_hash_map.cpp:376` | 1 per retry round, per camera | serial | failure tally, heap counter |
 | compaction | `compact_active_blocks_on_device`, `tsdf_integrator.cpp:314` | 1 per camera | serial | active count |
 | integrate | `tsdf_integrator.cpp:411` | 1 per camera | serial | nothing |
-| extract compaction | `compact_active_blocks`, `marching_cubes.cpp:1332` | 1 (2 if the list outgrew its guess) | serial | count and the **whole list** |
-| extract | `marching_cubes.cpp:1762` | 1 (2 on a refit) | serial | 32-byte draw command |
+| extract compaction | `compact_active_blocks_on_device`, `marching_cubes.cpp:1042` | 1, or none while the fuse's list holds | serial | active count |
+| extract | `marching_cubes.cpp:1341` | 1 (2 on a refit) | serial | 28-byte draw command |
 | texture | `projective_texturer.cpp:737` | 1 | serial | nothing |
 | atlas copy and draw | `rig_viewer.cpp:498`, gfx's frame | gfx's own | render thread | nothing |
 
@@ -135,7 +135,7 @@ kernels.
 | D2 | Put `--show-sources`' buffers on the device | ~133 MB over PCIe per remesh with the view on | S | — | landed (#130) |
 | D3 | Keep exported picture buffers out of the BAR | robustness on ReBAR systems | S | — | not needed (#130) |
 | MESH1 | Keep mesh-input bins and cursors on-device and retain scratch | RTX 4090 sparse-capacity host 0.920 → 0.125 ms (7.4x); dense host +0.9%, device +3.4%; Apple timing mixed | M | — | landed (#149), measured Release on M5 Max and RTX 4090; mesh input only, outside the live rig |
-| L1 | Shared-vertex, incremental remesh for the rig | ~3.4× fewer vertices; remesh cost tracks change, not size | L | gfx | blocked |
+| L1 | Shared-vertex remesh for the rig | ~3.4× fewer vertices | L | gfx | blocked |
 | L2 | Pipeline sets | overlaps set N's GPU work with set N+1's host work | L | P6 | later |
 | L3 | Read VideoToolbox's plane images directly | 0.28–0.31 ms GPU per 4K frame, Apple only | M | — | later |
 | L4 | Sample the atlas in place rather than copy it | measure the copy at 4K first | L | gfx | kept |
@@ -247,21 +247,19 @@ is measured.
 
 ### P5 — Extract from the fuse's device block list
 
-> **Landed**, though not as the fix below has it. With spans off the list
-> stays on the device, and the map hands its last compaction back while
-> nothing has changed since, so the extract reuses the fuse's with no new
-> API. See DECISIONS.md, 2026-09-30.
+> **Landed**, though not as the fix below has it. The list stays on the
+> device, and the map hands its last compaction back while nothing has
+> changed since, so the extract reuses the fuse's with no new API. See
+> DECISIONS.md, 2026-09-30 and 2026-10-06.
 
 - **Problem.** `extract_device` compacts the whole map again, reads the list
   back to the host (`collect_compacted`, `voxel_hash_map.cpp:653`) and
   uploads it again (`marching_cubes.cpp:1332`, `:1525`). That is a device →
   host → device trip and two waits on every remesh. The host never reads the
-  list unless `track_block_spans` is on (`TODO(mesh)` at
-  `marching_cubes.cpp:1505`, and the `TODO(volume)` at
-  `voxel_hash_map.cpp:659`).
+  list (the `TODO(volume)` at `voxel_hash_map.cpp:659`).
 - **Change.**
   - An `extract_device` overload that takes a `volume::DeviceBlockList`,
-    checked by `check_device_block_list`, for use when spans are off.
+    checked by `check_device_block_list`.
   - The fuse's single compaction (P1) supplies the list, and its count is
     already on the host, so a remesh compacts nothing.
   - Before P1 lands, the extract can compact to the device list itself.
@@ -442,8 +440,8 @@ improvement awaits measurement; the figures below describe the original GC.
     freed and allocated again each set, and `requested` keeps the band.
   - A kernel zeroes the listed blocks' attributes on the device, and the
     list is read back and removed by coordinate.
-  - Removing moves `topology_epoch`, which invalidates the span table;
-    incremental extraction falls back to a full extract when that happens.
+  - Removing moves `topology_epoch`, so a block list compacted before it is
+    refused.
 
 ### P9 — Allocate only the band blocks a sample can weight
 
@@ -520,7 +518,7 @@ improvement awaits measurement; the figures below describe the original GC.
   imported into Vulkan (DMA-BUF); none is planned. An NVIDIA GPU without a
   hardware JPEG engine decodes no MJPEG.
 
-### L1 — Shared-vertex, incremental remesh (blocked on gfx)
+### L1 — Shared-vertex remesh (blocked on gfx)
 
 - **The cost.**
   - The rig's mesh is unshared, because texturing from several views
@@ -531,8 +529,9 @@ improvement awaits measurement; the figures below describe the original GC.
 - **The unblock.** A per-triangle tile index in gfx (the `TODO(texture)` at
   `projective_texturer.cpp:722`). It would allow `share_vertices`, 3.4×
   fewer vertices on room0.
-- **After that.** Incremental extraction, which also needs support for
-  `slot_count > 1` (`TODO(mesh)` on `MarchingCubes`).
+- **Not after that.** Incremental extraction was removed (DECISIONS.md,
+  2026-10-06); view culling is the planned way to make a remesh cost the
+  visible region rather than the whole map.
 
 ### L2 — Pipeline sets
 

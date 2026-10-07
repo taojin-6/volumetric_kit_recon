@@ -47,10 +47,9 @@ linked documents.
 | Live rig performance | [PERF.md](PERF.md), including its measurement rules and the item's row |
 | Remaining work or an unmeasured claim | [Next work](DESIGN.md#next-work) and [Measured lessons](DECISIONS.md#measured-lessons) |
 
-Before changing incremental mesh extraction, read [mesh](DESIGN.md#mesh) and
-[Next work](DESIGN.md#next-work), plus the 2026-08-11 span/dispatch decisions
-and the 2026-10-01 changed-stamp decision they cite. The second 2026-08-11
-dispatch entry supersedes the first one's `share_vertices` restriction.
+Incremental mesh extraction was removed on 2026-10-06; before bringing back
+any changed-only meshing, read that decision: it returns only with a
+measurement on a large scan.
 
 ## Architecture and conventions
 

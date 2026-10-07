@@ -14,7 +14,4 @@ struct BlockStamp {
   uint changed;
 };
 
-// Whether tick a is later than tick b, modulo 2^32 (volume::tick_after).
-bool tick_after(uint a, uint b) { return int(a - b) > 0; }
-
 #endif
