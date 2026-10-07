@@ -10700,8 +10700,11 @@ stored. `fuse_replica`, streaming and with `--preload --stride 2`, and
 layout, each vertex's colour the one its depth's column was painted, and
 `--min-depth 0` is refused. `fuse_render` and `fuse_viewer` were not
 compiled here (the viewer is off; CI's viewer leg builds them), nor was
-`rig_viewer`, whose source lost only an include. The before/after `fuse_replica`
-comparison on room0 is run separately.
+`rig_viewer`, whose source lost only an include. On room0, the first 200
+frames at 2 cm, `fuse_replica` before and after this change, streaming and
+with `--preload`, give the same 309,353 triangles, positions, normals and
+colours bit for bit; only their order differs, as compaction's does from
+run to run.
 
 ## Measured lessons
 
