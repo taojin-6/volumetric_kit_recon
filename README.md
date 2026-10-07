@@ -100,7 +100,7 @@ Cross-compiles must supply Assimp for the target platform, not a host package.
 ### Optional: Orbbec SDK
 
 The Orbbec (Femto Mega) capture code is off by default and needs the
-[Orbbec SDK](https://github.com/orbbec/OrbbecSDK_v2/releases) ≥ 2.9.3
+[Orbbec SDK](https://github.com/orbbec/OrbbecSDK_v2/releases) ≥ 2.10.6
 installed. It is not fetched: install it once, outside the repo (the family
 convention is `<workspace>/third_party/OrbbecSDK_v<version>`), and point the
 build at its root:
@@ -115,8 +115,9 @@ cmake -S "$recon_root" -B "$recon_root/build" -DCMAKE_BUILD_TYPE=Release \
 The driver decodes each camera's colour itself, so it needs the video
 decoders too (see below; on Linux, CUDA as well). That builds
 `volumetric_kit::recon_sensor_orbbec` -- `OrbbecSensor`, one camera as an
-`IRgbdSensor` (`sensor/orbbec/orbbec_sensor.hpp`), and `OrbbecRig` -- and the
-live example, which prepares every frame on the GPU:
+`IRgbdSensor` (`sensor/orbbec/orbbec_sensor.hpp`), which a `SensorArray`
+reads as a synced rig -- and the live example, which prepares every frame on
+the GPU:
 
 ```sh
 build/examples/fuse_orbbec/fuse_orbbec --serial <serial> --frames 300
@@ -131,8 +132,8 @@ discovery window (8 s).
 
 A synced rig runs from its sync configuration (the lab rig's is
 `config/femto_mega_sync.json`, in the Orbbec SDK's layout) and a calibration
-file (`camera/array_calibration.hpp`) for the poses. The rig refuses cameras whose sync settings differ from the file;
-`--apply-sync` writes it to them:
+file (`camera/array_calibration.hpp`) for the poses. A camera whose sync
+settings differ from the file is refused; `--apply-sync` writes them to it:
 
 ```sh
 build/examples/fuse_orbbec/fuse_orbbec --rig config/femto_mega_sync.json \

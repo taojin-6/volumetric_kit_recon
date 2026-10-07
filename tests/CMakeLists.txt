@@ -325,13 +325,19 @@ target_link_libraries(recon_sensor_conventions_test
 vr_target_warnings(recon_sensor_conventions_test)
 add_test(NAME recon_sensor_conventions COMMAND recon_sensor_conventions_test)
 
-# sensor tier: the trigger grouper, driven by synthetic streams -- drops, a
-# silent sensor, a slow poll, a clock off by more than the tolerance, a late
-# frame, the start-up frames. Host-only.
-add_executable(recon_sensor_trigger_grouper_test
-               sensor_trigger_grouper_test.cpp)
+# sensor tier: the sensor array's trigger grouper, driven by synthetic streams
+# -- drops, a silent sensor, a slow poll, a clock off by more than the
+# tolerance, a late frame, the start-up frames. Host-only. Internal and
+# unexported, so the test compiles its source itself, as the Orbbec tests do.
+set(_vr_sensor_array_src
+    ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/array)
+add_executable(
+  recon_sensor_trigger_grouper_test sensor_trigger_grouper_test.cpp
+                                    ${_vr_sensor_array_src}/trigger_grouper.cpp)
 target_link_libraries(recon_sensor_trigger_grouper_test
                       PRIVATE volumetric_kit::recon_sensor)
+target_include_directories(recon_sensor_trigger_grouper_test
+                           PRIVATE ${_vr_sensor_array_src})
 vr_target_warnings(recon_sensor_trigger_grouper_test)
 add_test(NAME recon_sensor_trigger_grouper
          COMMAND recon_sensor_trigger_grouper_test)
@@ -580,7 +586,7 @@ if(VR_WITH_ORBBEC)
            COMMAND recon_sensor_orbbec_conversion_test)
 
   # The rig's sync configuration: the SDK's file layout, its refusals, and the
-  # comparison OrbbecRig::open makes against what the cameras read back. No
+  # comparison OrbbecSensor::open makes against what the camera reads back. No
   # camera; compiles frame_conversion.cpp itself, as the conversion test does.
   add_executable(
     recon_sensor_orbbec_sync_config_test
@@ -601,22 +607,24 @@ if(VR_WITH_ORBBEC)
   add_test(NAME recon_sensor_orbbec_sync_config
            COMMAND recon_sensor_orbbec_sync_config_test)
 
-  # The rig's start order and the rigs it refuses. No camera. Internal and
-  # unexported, so the test compiles the source itself, as the conversion test
-  # does.
+  # Public open() against a camera stub: SDK normalization after a sync write
+  # must be refused. Compile the sensor here so the stub also works in shared
+  # builds; no real camera or SDK context is opened.
   add_executable(
-    recon_sensor_orbbec_start_order_test
-    sensor_orbbec_start_order_test.cpp
-    ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec/rig_start_order.cpp
+    recon_sensor_orbbec_sync_apply_test
+    sensor_orbbec_sync_apply_test.cpp
+    ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec/orbbec_sensor.cpp
+    ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec/frame_conversion.cpp
   )
-  target_link_libraries(recon_sensor_orbbec_start_order_test
-                        PRIVATE volumetric_kit::recon_sensor_orbbec)
+  target_link_libraries(
+    recon_sensor_orbbec_sync_apply_test
+    PRIVATE volumetric_kit::recon_sensor_orbbec ob::OrbbecSDK)
   target_include_directories(
-    recon_sensor_orbbec_start_order_test
+    recon_sensor_orbbec_sync_apply_test
     PRIVATE ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec)
-  vr_target_warnings(recon_sensor_orbbec_start_order_test)
-  add_test(NAME recon_sensor_orbbec_start_order
-           COMMAND recon_sensor_orbbec_start_order_test)
+  vr_target_warnings(recon_sensor_orbbec_sync_apply_test)
+  add_test(NAME recon_sensor_orbbec_sync_apply
+           COMMAND recon_sensor_orbbec_sync_apply_test)
 
   # The driver's H.265 colour decoder, with no camera: the committed patch clip
   # wrapped in SDK frames. Internal and unexported, so the test compiles its

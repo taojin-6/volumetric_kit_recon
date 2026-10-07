@@ -145,20 +145,23 @@ set_source_files_properties("${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp"
                             PROPERTIES COMPILE_OPTIONS -w)
 
 # rig_viewer: fuse_viewer's sibling for a live, synced rig of Orbbec cameras,
-# every camera's frame prepared, fused and textured on the GPU. Built only where
-# the Orbbec driver is (VR_WITH_ORBBEC).
-#
-# The viewer CI leg builds without the Orbbec SDK, so this target is not in it;
-# it is compiled wherever the SDK is installed, the lab machines included.
-# TODO(examples): a CI leg with the Orbbec SDK and the viewer both on, so
-# rig_viewer's use of recon's and gfx's APIs is compiled on every PR.
+# read as a sensor array, every camera's frame prepared, fused and textured on
+# the GPU. Built only where the Orbbec driver is (VR_WITH_ORBBEC); the viewer CI
+# leg installs the SDK, so it is compiled on every PR with the other two.
 if(TARGET volumetric_kit::recon_sensor_orbbec)
   add_executable(rig_viewer rig_viewer.cpp
                             "${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp")
+  # recon_sensor_array ahead of the list, which names recon_sensor_utils: a
+  # library named before one that links it is named again, as above.
   target_link_libraries(
     rig_viewer
-    PRIVATE ${_viewer_recon_libs} volumetric_kit::recon_sensor_orbbec
-            ${_viewer_gfx_libs} volumetric_kit::gfx_ui glfw Vulkan::Vulkan)
+    PRIVATE volumetric_kit::recon_sensor_array
+            ${_viewer_recon_libs}
+            volumetric_kit::recon_sensor_orbbec
+            ${_viewer_gfx_libs}
+            volumetric_kit::gfx_ui
+            glfw
+            Vulkan::Vulkan)
   target_include_directories(rig_viewer PRIVATE ${_viewer_common_inc})
   target_include_directories(rig_viewer SYSTEM
                              PRIVATE "${imgui_SOURCE_DIR}/backends")

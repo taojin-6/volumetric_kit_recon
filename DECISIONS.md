@@ -155,7 +155,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   reader became an `IRgbdSensor`, and the copy went, on 2026-10-07.)
 - [**2026-09-24**](#2026-09-24--the-orbbec-sdk-is-a-prerequisite-behind-vr_with_orbbec-installed-once-for-the-family-found-and-never-fetched) —
   The Orbbec SDK is a prerequisite behind `VR_WITH_ORBBEC`: installed once for
-  the family, found, and never fetched.
+  the family, found, and never fetched. The floor rose to 2.10.6 on
+  2026-10-07.
 - [**2026-09-26**](#2026-09-26--the-orbbec-driver-lands-as-sensororbbec-a-target-of-its-own-it-undistorts-colour-and-then-registers-depth-to-it-on-the-host-and-it-reads-the-rigs-sync-roles-without-writing-them) —
   The Orbbec driver lands as `sensor/orbbec`, a target of its own: it
   undistorts colour and then registers depth to it on the host, and it reads
@@ -177,7 +178,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   the primary, keeps the cameras on the host's clock, and builds each set
   around a primary frame; poses come from the calibration file. The file
   moved to the `camera` tier on 2026-10-06, and the rig's sets became raw
-  only the same day.
+  only the same day. `OrbbecRig` went on 2026-10-07: a rig is a
+  `SensorArray` of `OrbbecSensor`s, on the SDK's global timestamps.
 - [**2026-09-27**](#2026-09-27--encoder-and-decoder-are-the-codecs-public-api-encoding-drops-never-observed-blocks-and-sorts-the-rest-decoding-makes-a-callers-grid-hold-exactly-the-frame-by-diffing-its-block-set-everything-checkable-is-checked-before-the-grid-is-touched-and-a-grid-too-small-for-the-frame-is-refused-rather-than-grown) —
   `Encoder` and `Decoder` are the codec's public API: encoding drops
   never-observed blocks and sorts the rest, decoding makes a caller's grid hold
@@ -239,7 +241,8 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-09-29**](#2026-09-29--rig_viewer-draws-a-live-orbbec-rig-raw-sets-prepared-fused-and-textured-on-the-gpu-the-atlas-filled-by-device-copies-recorded-in-gfxs-frame-and-the-frame-preps-colour-shared-with-gfxs-queue-family) —
   `rig_viewer` draws a live Orbbec rig: raw sets prepared, fused and textured
   on the GPU, the atlas filled by device copies recorded in gfx's frame, and
-  the frame prep's colour shared with gfx's queue family.
+  the frame prep's colour shared with gfx's queue family. It reads a
+  `SensorArray` since 2026-10-07.
 - [**2026-09-30**](#2026-09-30--a-rigs-cameras-fuse-in-one-batch-each-dispatch-binds-a-descriptor-set-of-its-own-over-the-same-kernel-and-the-set-is-compacted-once) —
   A rig's cameras fuse in one batch: each dispatch binds a descriptor set of
   its own over the same kernel, and the set is compacted once.
@@ -350,11 +353,14 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-06**](#2026-10-06--a-sensor-is-an-irgbdsensor-what-it-is-before-a-frame-sensorinfo-frames-polled-newest-or-drained-oldest-first-and-the-femto-mega-is-orbbecsensor) —
   A sensor is an `IRgbdSensor`: what it is before a frame (`SensorInfo`),
   frames polled newest or drained oldest first. The Femto Mega is
-  `OrbbecSensor`. (The Replica source followed on 2026-10-07.)
+  `OrbbecSensor`. (The Replica source followed on 2026-10-07, and
+  `sync_clock_to_host` became the SDK's global timestamps.)
 - [**2026-10-06**](#2026-10-06--several-sensors-are-a-sensorarray-vendor-neutral-started-in-their-rigs-order-grouped-by-trigger-or-by-sequence-number-and-posed-by-the-calibration) —
   Several sensors are a `SensorArray`, vendor-neutral: started in their rig's
   order, grouped by trigger or by sequence number, and posed by the
-  calibration. (Sequence grouping went later that day.)
+  calibration. (Sequence grouping went later that day; on 2026-10-07
+  `TriggerGrouper` became its internals and the tolerance 0.4 of a frame
+  period.)
 - [**2026-10-06**](#2026-10-06--an-arrays-set-is-prepared-in-one-batch-every-stream-of-every-sensor-one-submit-and-one-wait-host-colour-staged-on-a-thread-per-camera-first) —
   An array's set is prepared in one batch, every stream of every sensor, one
   submit and one wait; host colour is staged on a thread per camera first,
@@ -400,6 +406,12 @@ entries relevant to your task; later amendments supersede earlier rules.
   `OwnedFrame` go, and `io` loads depth as stored. What the iOS scanner
   calls stays until it migrates; the frame gains no float depth. The viewer
   retains its last successful keyframe through a failed preparation or fuse.
+- [**2026-10-07**](#2026-10-07--a-rig-is-an-orbbecsensor-per-camera-in-a-sensorarray-on-the-sdks-global-timestamps-sdk-2106-or-later-each-camera-is-checked-against-its-sync-settings-at-open-and-written-only-when-asked-the-tolerance-is-04-of-a-frame-period-and-orbbecrig-its-start-order-and-the-public-triggergrouper-go-amends-the-2026-09-24-sdk-2026-09-27-rig-and-2026-10-06-irgbdsensor-and-sensorarray-entries) —
+  A rig is an `OrbbecSensor` per camera in a `SensorArray`, on the SDK's
+  global timestamps (SDK 2.10.6 or later): each camera is checked against
+  its sync settings at `open`, written only when asked and checked for SDK
+  normalization after a write; the tolerance is 0.4 of a frame period, and
+  `OrbbecRig`, its start order and the public `TriggerGrouper` go.
 
 ## Decision record
 
@@ -3985,6 +3997,10 @@ of those example runs clean.
 
 ### 2026-09-24 — The Orbbec SDK is a prerequisite behind `VR_WITH_ORBBEC`: installed once for the family, found, and never fetched.
 
+*Amended 2026-10-07 (the rig entry, below):* the floor and CI's pin are
+2.10.6, for its global timestamps, and CI installs it through one composite
+action, `.github/actions/install-orbbec-sdk`.
+
 The next capture source is the Orbbec rig — Femto Mega units, calibrated by
 `volumetric_kit_calib` for their poses — and its driver needs the Orbbec SDK
 v2. The SDK is a prebuilt binary (a universal dylib plus plugin libraries in
@@ -4108,6 +4124,9 @@ wait included — see that entry.)
 *Amended 2026-10-06 (below):* the host path is gone. `OrbbecCapture`, the
 SDK's undistortion and registration, and the host conversion are removed;
 every frame is handed out as captured and prepared on the GPU.
+*Amended 2026-10-07 (the rig entry, below):* `OrbbecSensor` writes a
+camera's sync settings when asked (`apply_sync`), and only where they
+differ; software triggering is refused after any write.
 
 The 2026-08-02 rule admits a driver this repo can build and test, and CI builds
 against the Orbbec SDK (the 2026-09-24 decision), so the Femto Mega driver lives
@@ -4726,6 +4745,12 @@ check refuses.
 *Amended 2026-10-06 (below):* a set's frames are as captured, read through
 `poll_set`; the rig processes nothing on the host and is no longer an
 `ICameraCapture`.
+*Amended 2026-10-07 (below):* `OrbbecRig` is gone. Each camera is an
+`OrbbecSensor`, checked against its entry of the sync file at `open` and
+written only with `apply_sync`; a `SensorArray` starts and groups them, on
+the SDK's global timestamps rather than `enableDeviceClockSync`, within 0.4
+of a frame period rather than 5 ms. A read after a write comes from the
+SDK's cache, so it does not prove the write, as this entry says it does.
 
 **The rule.** `OrbbecRig` (`sensor/orbbec/orbbec_rig.hpp`) is opened from the
 rig's sync configuration (`orbbec_sync_config.hpp`: the SDK's
@@ -7480,6 +7505,10 @@ synchronization validation, a copy joining the run whatever wrote its source.
 
 ### 2026-09-29 — `rig_viewer` draws a live Orbbec rig: raw sets prepared, fused and textured on the GPU, the atlas filled by device copies recorded in gfx's frame, and the frame prep's colour shared with gfx's queue family.
 
+*Amended 2026-10-07 (the rig entry, below):* it opens an `OrbbecSensor` per
+camera of the sync file and reads them as a `SensorArray`, each set prepared
+by `SensorArray::process`; CI's viewer leg compiles it.
+
 **The rule.** `examples/viewer/rig_viewer` is `fuse_viewer`'s sibling for a
 live, synced rig of Orbbec cameras. It opens `OrbbecRig` raw, onto the device
 it shares with gfx, and keeps everything a camera produces on the GPU after
@@ -7813,9 +7842,9 @@ which the counter named and the person at the window confirmed.
   nothing yet.
 - 4K colour on the rig, which makes a 7680 x 4320 atlas and about 133 MB of
   copies per remesh. (Since run: the fourth amendment above.)
-- A CI leg that builds `rig_viewer`: the viewer leg has no Orbbec SDK, so it is
-  compiled only where the SDK is installed (a `TODO(examples)` in the
-  viewer's CMakeLists).
+- A CI leg that builds `rig_viewer`: the viewer leg had no Orbbec SDK, so it
+  was compiled only where the SDK was installed. (Since done: the viewer leg
+  installs FFmpeg and the SDK; the 2026-10-07 rig entry.)
 
 ### 2026-09-30 — A rig's cameras fuse in one batch: each dispatch binds a descriptor set of its own over the same kernel, and the set is compacted once.
 
@@ -9806,7 +9835,8 @@ pipelined processing follow (DESIGN.md, [Next work](DESIGN.md#next-work)).
   file of the process's own, synced and renamed into place, beside a
   symbolic link's target, with the replaced file's permissions.
 - `OrbbecRig::Options::calibration` takes the `ArrayCalibration`, which must
-  pose every camera of the rig.
+  pose every camera of the rig. *Amended 2026-10-07 (below):* `OrbbecRig` is
+  gone; `SensorArray::Options::calibration` takes it.
 
 **Validation.** Apple M5 Max, macOS, Release with warnings as errors, Orbbec,
 FFmpeg and the viewer: the build is warning-free and the 54 tests pass; the
@@ -9955,7 +9985,10 @@ that replaces `OrbbecRig`.
   camera's own `timerSyncWithHost`, before it streams, keeps timestamps
   monotonic within a session, and a camera that cannot sync fails `start`
   rather than reporting `ClockDomain::Host` falsely. Its drift over a
-  session is unmeasured (a `TODO(sensor)`).
+  session is unmeasured (a `TODO(sensor)`). *Amended 2026-10-07 (below):*
+  measured, 3–6 µs/s between cameras, so the option now stamps the SDK's
+  global timestamps, the camera's clock mapped onto the host's; the one
+  sync before each `start` stays.
 - **Beside `OrbbecCapture` for now.** `OrbbecCapture`, `ICameraCapture`,
   `CapturedFrame` and the SDK's host path go when the Replica source moves
   onto the interface (a `TODO(sensor)`), and `OrbbecRig` when the array
@@ -9981,6 +10014,9 @@ it, and the array's example will at a camera.
 
 *Amended 2026-10-06 (trigger only, below):* `SyncMode::Sequence` went, and
 with it `SyncMode`: an array groups by trigger only.
+*Amended 2026-10-07 (the rig entry, below):* `OrbbecRig` and its start order
+are gone, `TriggerGrouper` is the array's internals, and `tolerance_us`
+defaults to 0.4 of the fastest member's frame period.
 
 The fourth step of the 2026-10-06 plan (`sensor/array/sensor_array.hpp`,
 target `recon_sensor_array`): the array of `IRgbdSensor`s that replaces
@@ -10045,7 +10081,8 @@ submitted and waited on once. Recording the uploads first saves a barrier
 a camera: they write buffers of their own, so none is needed between them.
 `prepare` is the same steps for one frame. `prepare_set`, a thread and a submit per camera,
 is removed: `fuse_orbbec --rig` and `rig_viewer` call `prepare_batch` until
-they open an array, rather than keep two ways to prepare a set.
+they open an array, rather than keep two ways to prepare a set. *They open
+one since 2026-10-07 (below).*
 
 **Why one batch, given PERF.md's P2 found it no faster.** It is not: it is
 level. The 2026-10-01 measurement lost on the Mac's host colour because the
@@ -10135,7 +10172,8 @@ or the stream was given no device or allocator. `VideoPixelLayout::Rgb24`
 and swscale's RGB conversion, which lose their caller here, go with that
 step rather than be rewritten twice. *Done the same day (below).*
 `OrbbecRig` goes once the examples read a `SensorArray`, which first needs
-`OrbbecSensor` to check and write the sync settings the rig does.
+`OrbbecSensor` to check and write the sync settings the rig does. *Done
+2026-10-07 (below).*
 
 **Validation.** Apple M5 Max, macOS, Release with warnings as errors,
 Orbbec, FFmpeg and the viewer: the 55 tests pass. The conversion test now
@@ -10717,6 +10755,160 @@ failure after successful preparation both leave the previous depth, atlas
 bytes, coverage and cameras intact, and the retained frame still textures
 the surface. A successful retry replaces it. The viewer publishes the pose
 only after the helper succeeds, alongside the fused-frame count.
+
+### 2026-10-07 — A rig is an `OrbbecSensor` per camera in a `SensorArray`, on the SDK's global timestamps (SDK 2.10.6 or later): each camera is checked against its sync settings at `open` and written only when asked, the tolerance is 0.4 of a frame period, and `OrbbecRig`, its start order and the public `TriggerGrouper` go (amends the 2026-09-24 SDK, 2026-09-27 rig and 2026-10-06 `IRgbdSensor` and `SensorArray` entries).
+
+The array's plan finishes (DESIGN.md's Next work, step 2): `fuse_orbbec`
+and `rig_viewer` open one `OrbbecSensor` per camera of the rig's sync
+configuration and read them as one `SensorArray`. What `OrbbecRig` did for
+the Orbbec SDK moves into `OrbbecSensor`, one camera at a time; the rest was
+already the array's.
+
+**The rule.**
+- **A camera's sync settings are checked at its `open`.**
+  `OrbbecSensor::Options::sync` takes the camera's entry of the rig's file
+  (`read_orbbec_sync_config`). `open` compares it with what the camera
+  stores (`sync_differences`, which reads `SECONDARY_SYNCED` as `SECONDARY`)
+  and refuses a difference, `Unsupported`, naming the camera and each field,
+  unless `apply_sync` writes them. `apply_sync` without `sync` is
+  `InvalidArgument`, before the SDK is touched. The role and the
+  software-triggering and unknown-mode refusals are decided after any write,
+  so `apply_sync` can repair a camera left in software triggering.
+- **Written only on a difference, then checked for SDK normalization.**
+  The settings persist in the camera's flash, which Orbbec's sample warns
+  frequent writes wear. After
+  a write the SDK answers a read from its cache of the effective settings,
+  not the camera (`DeviceSyncConfiguratorOldProtocol::getSyncConfig`).
+  That cache still matters: its setter forces a primary's
+  `triggerOutEnable = true` and `triggerOutDelayUs = 0` before writing and
+  caching. `open` compares again and refuses any remaining difference,
+  `Unsupported`, naming the camera and fields. Removing the old rig's
+  comparison falsely accepted a request for `false` / `250`; a public
+  `OrbbecSensor::open` test with a camera stub reproduces it without hardware.
+  This checks normalization, not persistence: the next `open` reads the
+  camera and checks the stored settings.
+- **`sync_clock_to_host` means the SDK's global timestamps.** `open` refuses
+  a camera without them (`isGlobalTimestampSupported`) and enables them
+  (`enableGlobalTimestamp(true)`; the SDK's own config leaves the Femto
+  Mega's off). Each `start` still sets the camera's clock to the host's once,
+  before it streams (`timerSyncWithHost`), and the SDK then re-fits its
+  mapping synchronously, so the first frames are mapped. `timestamp_ns` is
+  the depth frame's `getGlobalTimeStampUs()`: the camera's clock mapped onto
+  the host's, the mapping re-fitted every 10 s (2.10.6). Nothing re-syncs a
+  streaming camera, and nothing calls `enableDeviceClockSync`. A zero, no
+  mapping yet, stays zero, and the array counts it unmatched.
+  `ClockDomain::Host` is `std::chrono::system_clock`, the SDK's default host
+  clock; recon never calls `setTimestampClockType`, which is process-wide.
+- **The tolerance follows the frame rate.** `SensorArray::Options::tolerance_us`
+  defaults to 0, meaning 0.4 of the fastest member's frame period
+  (13 333 µs at 30 fps), or 5 000 µs when no member reports a rate. An
+  explicit value keeps the old checks: non-zero, under half a period.
+- **`TriggerGrouper` is the array's internals**
+  (`src/volumetric_kit/recon/sensor/array/`, unexported, not installed). Its
+  test compiles the source, as the Orbbec internal tests do.
+- **What goes.** `OrbbecRig`, `OrbbecRigSet`, `OrbbecRigStats`, the rig's
+  start order (`rig_start_order` and `recon_sensor_orbbec_start_order`; the
+  array's order is tested by `recon_sensor_array`) and
+  `orbbec::validate(OrbbecRig::Options)`; `CameraStream`'s rig-only
+  `timestamp_us`, `withdraw` and `color_to_world`; and `discover`'s list of
+  serials. The redundant `Pipeline::enableFrameSync()` goes too: the
+  `Pipeline` constructor turns frame sync on. `OrbbecRigSyncConfig` and
+  `read_orbbec_sync_config` stay, for the rig's file.
+- **SDK 2.10.6 is the floor** in `cmake/vr_orbbec.cmake`, and CI's pin, now
+  one composite action (`.github/actions/install-orbbec-sdk`) that
+  `_build.yml` and `viewer.yml` share. The viewer leg installs FFmpeg and the
+  SDK, so it compiles `rig_viewer` with the other viewers on every PR.
+
+**Why: measured on the rig.** Four Femto Megas on the wired 2.5 GbE link,
+each triggered by the primary through a sync hub, depth 640 x 576 at
+30 fps; a secondary's timestamp minus the primary's for
+the same trigger, from probes on the SDK outside recon:
+
+| Clock | Skew | Over time |
+|---|---|---|
+| device, one `timerSyncWithHost` per camera | 1–2.6 ms at start | 3.1, 3.5 and 6.0 µs/s apart: medians 6.3–8.4 ms after 21 min; a 5 ms window fails after ~10 min |
+| device, `timerSyncWithHost` every 60 s, as `OrbbecRig`'s `enableDeviceClockSync` did | about ±2.5 ms | bounded, but each sync lands on a new offset |
+| global, SDK 2.9.3, one sync before start | medians 0.8–4.2 ms | bounded but biased; worst ~5.8 ms over 15 min |
+| global, SDK 2.10.6, one sync before start | medians under 0.5 ms, typically −1.2 to +2.5 ms | flat over 15 min, while the same run's device timestamps drifted from 1.0–1.6 to 4.0–6.1 ms |
+
+Rare single frames land 10–15 ms off, in the device timestamps as much as
+the global ones, so they are not the mapping's. One past the window is let
+go, costing that camera one set.
+
+This is Orbbec's current recipe (SDK 2.10.6's
+`3.advanced.multi_devices_sync` sample and `docs/tutorial/timestamp.md`):
+global timestamps on every camera, one `timerSyncWithHost` each before any
+stream, the secondaries started before the primary, frames matched on the
+global timestamp within half a frame period, and no periodic re-sync. Its
+5 ms is only the spread its `analyze_sync.py` flags as abnormal.
+
+**Why not the alternatives.**
+- **Device timestamps synced once** drift apart without bound: even
+  13.3 ms is gone within about half an hour.
+- **Periodic re-sync** steps every camera to a new random offset at each
+  sync and blocks ~60 ms a camera. Once, in the 60 s run, the SDK's network
+  enumerator reported two streaming cameras removed, and every later sync
+  failed with "Device is deactivated/disconnected". Global timestamps bound
+  the error without touching the camera's clock.
+- **`Context::enableDeviceClockSync`** is process-wide, since the SDK's
+  `Context` and `DeviceManager` are singletons: it re-syncs every camera the
+  process opened, calib's included, belongs to whichever context called it
+  last, returns before its first pass (`OrbbecRig::start` raced it), and
+  holds the device-manager mutex through each pass, stalling every device
+  open and close. Orbbec's sample replaced it with the per-camera call on
+  2026-09-29.
+- **The hardware timer reset** over the sync cable gives a rig clock, not
+  the host's, so frames could not report `ClockDomain::Host`. Orbbec's staff
+  call it exclusive with host sync on the Femto Mega, the SDK registers only
+  its enable flag and signal there, and the clocks drift on after it.
+  Grouping needs no sub-millisecond agreement: the trigger already aligns
+  the exposures.
+- **The grouper tracking each member's offset** would let device timestamps
+  group, but leaves Orbbec frames off the host clock that `ClockDomain::Host`
+  promises and calib needs, and adds per-member state to a vendor-neutral
+  class for an unmeasured gain. It is worth a look only if global timestamps
+  show a large, constant per-camera bias.
+
+**Why 0.4 of a period.** The trigger exposes every camera once a period, the
+0–480 µs depth delays aside, so a timestamp only says which trigger a frame
+belongs to. Any window under half a period does that while the clock error
+stays inside it: at 30 fps a frame within 13.3 ms of its trigger matches it,
+and the neighbouring trigger's, 20 ms or more away, never does. The fixed
+5 ms was tighter than anything Orbbec uses and refused 2.9.3's global worst
+case.
+
+**Not handled.** If a re-fit fails, the SDK keeps its previous mapping and
+only logs it, so a global timestamp can be non-zero and off by the step
+until the next re-fit; the array's zero check cannot see that. An
+`OrbbecSDKConfig.xml` in the working directory can switch the SDK's host
+clock to a monotonic one; recon does not read `getTimestampClockType`.
+
+**Verified.** Apple M5 Max, macOS, Release with warnings as errors, Orbbec
+SDK 2.10.6 and FFmpeg: the 57 tests pass. `recon_sensor_array` groups by the
+derived default with and without a rate (a secondary just inside it joins
+the set, one just outside joins none), refuses an explicit 500 µs at 1 kHz
+and accepts 499 µs; `recon_sensor_orbbec_conversion` refuses `apply_sync`
+without `sync` and an absent camera, by name. The public-open test
+`recon_sensor_orbbec_sync_apply` uses a camera stub to check that SDK
+normalization is refused (and fails without the post-write comparison),
+matching settings are never written, a write repairs software triggering,
+and a write error is preserved. Configure refuses an SDK below 2.10.6.
+`rig_viewer` was not compiled here (the viewer is off locally); CI's viewer
+leg compiles it.
+
+On the rig, by hand (not a test), `fuse_orbbec --rig
+config/femto_mega_sync.json`, H.265 720p at 30 fps, opened the four cameras
+in 2.1–2.3 s and ran 19.8 min: 35 279 sets, 3.0% missing a camera. Each
+secondary's mean skew to the primary was +0.13, +0.32 and +0.49 ms, its
+160, 320 and 480 µs depth delay, flat over the run; the worst 2.8, 2.7 and
+10.9 ms (one stray frame). The SDK reported no camera removed. The sets
+missing a camera are H.265 colour lost to the decoder, 0.2–1% of each
+camera's frames, through the same path as before. A sync file with one
+secondary's depth delay changed was refused, naming the camera and the
+field, and the camera kept its setting. Restarted three times with MJPEG,
+1–3 of the first 31 sets missed a camera, so the start needs no settling
+wait. One camera fused at 30 fps with and without `--host-clock`. Not run:
+`apply_sync`'s write (it rewrites flash) and `rig_viewer`.
 
 ## Measured lessons
 

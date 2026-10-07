@@ -1078,26 +1078,22 @@ implementer every dataset example runs is
 `examples/common/replica_sensor.hpp`, which plays a Replica sequence back
 through the interface, its frames prepared on the GPU as a camera's.
 **`sensor/orbbec`** (`VR_WITH_ORBBEC`, which
-needs `VR_WITH_FFMPEG` for the colour decoders) is the live Femto Mega,
-through the sensor interface below: **`OrbbecSensor`** for one camera, and
-**`OrbbecRig`** for a synced rig. Both hand out every frame as captured,
-for the GPU pass; nothing on the host undistorts, registers or converts (the
-2026-10-06 raw-frames decision). Each reads the camera's rig sync role
-(`waits_for_primary`) and writes it only when the rig is asked to. No test
-opens a camera (the 2026-10-06 no-hardware decision); `fuse_orbbec` is how
-one is checked. `OrbbecRig` reads several synced cameras as one:
-`poll_set()` hands out one set per primary frame, with a missing
-secondary's slot left empty, and `GpuFramePrep::prepare_batch` prepares a
-set in one batch, a `GpuFramePrep` per camera. A secondary's frame near no
-primary frame is let go, so a camera
-whose clock is off costs its own frames, not the rig's sets. It opens from
-the rig's **sync configuration** (`orbbec_sync_config.hpp`, the SDK's
-`femto_mega_sync.json` layout) and refuses cameras that differ from it
-unless `apply_sync_config` writes it; the lab rig's is
-`config/femto_mega_sync.json`, which only the example and tests name. Each
-camera's pose comes from the
-**calibration file** (`camera/array_calibration.hpp`), which must pose
-every camera of the rig. Both classes share the
+needs `VR_WITH_FFMPEG` for the colour decoders, and the Orbbec SDK 2.10.6 or
+later) is the live Femto Mega, through the sensor interface below:
+**`OrbbecSensor`**, one camera. A synced rig is an `OrbbecSensor` per camera
+in a `SensorArray` (the 2026-10-07 rig decision). It hands out every frame
+as captured, for the GPU pass; nothing on the host undistorts, registers or
+converts (the 2026-10-06 raw-frames decision). It reads the camera's rig
+sync role (`waits_for_primary`), and given the camera's entry of the rig's
+**sync configuration** (`Options::sync`; `orbbec_sync_config.hpp`, the
+SDK's `femto_mega_sync.json` layout) refuses a camera whose stored settings
+differ, unless `apply_sync` writes them, only where they differ, since they
+persist in its flash. The SDK's effective settings are compared again after
+the write: normalization that still differs is refused, `Unsupported`;
+its cached response does not verify persistence on the camera.
+The lab rig's is `config/femto_mega_sync.json`, which
+only the examples and tests name. No test opens a camera (the 2026-10-06
+no-hardware decision); `fuse_orbbec` is how one is checked. Behind it is the
 internal `CameraStream`, and the types of `orbbec_stream.hpp`: the stream
 options, the camera's report, and its counters (`OrbbecStreamStats`).
 `color_codec = Hevc` puts H.265 on the wire: each camera's
@@ -1160,18 +1156,23 @@ nvJPEG where the GPU has the engine) and VideoToolbox on the Mac.
 opened modes, `depth_to_color`, rig role, clock, pose source, rate), and
 frames held up to `set_queue_depth`, the newest taken by `poll` or all,
 oldest first, by `drain`. **`OrbbecSensor`** implements it: `open` refuses
-a `min_depth` of 0, which the GPU pass would, and a camera in a sync mode
-the driver does not know; `sync_clock_to_host` sets this camera's clock (`timerSyncWithHost`, not
-the context's `enableDeviceClockSync`, which re-syncs every camera the
-process opened) to the host's at each `start`, before it streams; and its
-`stats()` counts the driver's lost frames failed, a JPEG the decoder had no
-time for being dropped.
+a `min_depth` of 0, which the GPU pass would, a camera in a sync mode the
+driver does not know, and one whose sync settings differ from
+`Options::sync` without `apply_sync`; `sync_clock_to_host` stamps each frame
+with the SDK's global timestamp, the camera's clock mapped onto the host's
+`std::chrono::system_clock` and re-fitted as the two drift, refusing at
+`open` a camera without one, and sets the camera's clock to the host's once
+at each `start`, before it streams (`timerSyncWithHost`, never the
+process-wide `enableDeviceClockSync`); and its `stats()` counts the driver's
+lost frames failed, a JPEG the decoder had no time for being dropped.
 **`SensorArray`** (`sensor/array/`, target `recon_sensor_array`) reads
 several `IRgbdSensor`s as one: it starts the secondaries before the primary,
 drains every sensor each `poll_set`, groups the frames into a `FrameSet` by
-the sensor tier's `TriggerGrouper`, around the primary's frames on the host
-clock, and stamps each frame with its sensor's pose from the
-`ArrayCalibration`. Opened with a device, its
+its internal `TriggerGrouper`, around the primary's frames on the host
+clock within `tolerance_us` (by default 0.4 of the fastest member's frame
+period, 13.3 ms at 30 fps), and stamps each frame with its sensor's pose
+from the `ArrayCalibration`, which must pose every sensor. Opened with a
+device, its
 `process(set)` prepares a set through `GpuFramePrep::prepare_batch`: every
 frame checked, then every pass's uploads and every pass's kernels recorded
 into one `CommandBatch`, one submit and one wait.
@@ -1432,9 +1433,9 @@ each frame's encoding declaration carried across, into the one grid layout
 `grid_layout.hpp` defines, which its `create_fusion_grid` builds and
 `codec_replica`'s player shares. The four dataset examples poll their frames
 through `sensor::IRgbdSensor&` — the fuse loop never learns what is behind
-it — and prepare each on its own. The two live ones read Orbbec cameras raw,
-`rig_viewer` a rig's sets (`OrbbecRig::poll_set`) and `fuse_orbbec` a camera
-or a rig, and prepare a set in one batch (`GpuFramePrep::prepare_batch`).
+it — and prepare each on its own. The two live ones read Orbbec cameras raw
+as a `SensorArray` of `OrbbecSensor`s, `fuse_orbbec` one camera or a rig and
+`rig_viewer` a rig, and prepare each set in one batch (`SensorArray::process`).
 The four dataset examples take `ReplicaSensor` as the source: frame cap,
 stride and the depth gate are its options, stamped on each frame it hands
 out, and its disk probe at `open` visits only the frames those options
@@ -1464,14 +1465,19 @@ the view moves (2026-10-06). The four dataset examples
 take `--preload`, which makes the loop measure compute rather than the
 JPEG/PNG decoder.
 The live counterpart is its own example, not a `fuse_replica` flag:
-**`fuse_orbbec`** (`VR_WITH_ORBBEC`) reads one camera as an `OrbbecSensor`,
-or with `--rig sync.json` a rig as an `OrbbecRig`, posed by
-`--calibration`, prepares each poll's frames on the GPU and fuses them
-through `fuse_set`, and writes a PLY after `--frames` frames. Colour is H.265
-unless `--mjpeg`.
+**`fuse_orbbec`** (`VR_WITH_ORBBEC`) reads one `OrbbecSensor`, or with
+`--rig sync.json` one per camera of the file on the host's clock
+(`--apply-sync` writing the settings a camera differs in), as a
+`SensorArray` posed by `--calibration`; it prepares each set on the GPU,
+fuses it through `fuse_set`, and writes a PLY after `--frames` frames. It
+reports the cameras' open time, the array's counters and, for a rig, each
+secondary's mean and worst skew to the primary. Colour is H.265 unless
+`--mjpeg`.
 **`rig_viewer`** (`VR_BUILD_VIEWER` with `VR_WITH_ORBBEC` and
-`VR_WITH_FFMPEG`) is `fuse_viewer`'s live-rig sibling: raw sets prepared,
-fused and textured from every camera on the GPU, and the atlas filled by
+`VR_WITH_FFMPEG`; CI's viewer leg compiles it) is `fuse_viewer`'s live-rig
+sibling: an `OrbbecSensor` per camera of the sync file read as a
+`SensorArray`, its raw sets prepared, fused and textured from every camera
+on the GPU, and the atlas filled by
 device copies recorded in gfx's frame (the 2026-09-29 decision), fusing
 depth only inside each colour camera's view unless given `--all-depth`, and
 texturing a camera a set lacks from its last frame, a fallback view
@@ -1531,8 +1537,10 @@ landed; the stack continues:
 2. **`SensorArray`**, vendor-neutral, has landed: start order from the sync
    roles, trigger grouping, poses from the calibration file
    (nearest-frame and tracked members later), and `process(set)`, every
-   stream of every sensor in one GPU batch. Next `OrbbecRig` goes, and
-   `rig_viewer` and `fuse_orbbec` open an array of `OrbbecSensor`s.
+   stream of every sensor in one GPU batch. `OrbbecRig` is gone:
+   `fuse_orbbec` and `rig_viewer` open a `SensorArray` of `OrbbecSensor`s on
+   the SDK's global timestamps (2026-10-07), their skew measured flat over a
+   20-minute `fuse_orbbec` run; sessions of hours are still to measure.
 3. **Luma readback** in `sensor/utils`, wherever the decoder left the
    picture, for calib's detector.
 4. **Pipelined stages**: the core's `CommandBatch` submits without waiting,

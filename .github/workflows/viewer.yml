@@ -9,10 +9,11 @@ name: viewer (reusable)
 # which returns `Result<DeviceMesh>`, so `-DVR_BUILD_VIEWER=ON` failed to build
 # at 8a439fc and nothing noticed. This leg closes it.
 #
-# Build-only on purpose: the live viewer needs a window and both examples need
-# a posed RGB-D dataset that CI does not carry, so there is nothing to run. The
-# compile + link is the whole point -- it is the API seam between recon and gfx
-# (and the ImGui platform backend the example owns) that drifts.
+# Build-only on purpose: the live viewers need a window, and a dataset or a rig
+# of cameras that CI does not carry, so there is nothing to run. The compile +
+# link is the whole point -- it is the API seam between recon and gfx (and the
+# ImGui platform backend the examples own) that drifts. FFmpeg and the Orbbec
+# SDK are installed too, so rig_viewer is compiled with the other two.
 on:
   workflow_call:
 
@@ -43,10 +44,12 @@ jobs:
         run: |
           # Same set as the macOS build leg, plus glfw: the viewer owns its
           # window, so examples/viewer/CMakeLists.txt does find_package(glfw3).
+          # ffmpeg (found through pkgconf) for the decoders the Orbbec driver
+          # needs.
           ok=0
           for attempt in 1 2 3; do
             if brew install cmake glm molten-vk vulkan-headers vulkan-loader \
-                vulkan-tools shaderc glfw; then
+                vulkan-tools shaderc glfw ffmpeg pkgconf; then
               ok=1
               break
             fi
@@ -57,6 +60,10 @@ jobs:
             echo "::error::brew install failed after 3 attempts"
             exit 1
           }
+
+      # rig_viewer is built only with the Orbbec driver (VR_WITH_ORBBEC).
+      - name: Install the Orbbec SDK
+        uses: ./.github/actions/install-orbbec-sdk
 
       # No actions/cache step here, unlike every other leg -- deliberately, and
       # measured. build/_deps with gfx in it is a 131 MiB tarball: saving it took
@@ -75,7 +82,8 @@ jobs:
           ok=0
           for attempt in 1 2 3; do
             if cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
-                -DVR_BUILD_VIEWER=ON -DVR_BUILD_TESTS=OFF; then
+                -DVR_BUILD_VIEWER=ON -DVR_BUILD_TESTS=OFF \
+                -DVR_WITH_FFMPEG=ON -DVR_WITH_ORBBEC=ON; then
               ok=1
               break
             fi
@@ -91,4 +99,6 @@ jobs:
       # this leg fails for the reason it exists rather than on some unrelated
       # target, and so it does not re-do what the build legs already cover.
       - name: Build viewer examples
-        run: cmake --build build --parallel --target fuse_viewer fuse_render
+        run: |
+          cmake --build build --parallel \
+            --target fuse_viewer fuse_render rig_viewer

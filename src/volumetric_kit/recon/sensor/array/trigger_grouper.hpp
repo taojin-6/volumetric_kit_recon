@@ -3,22 +3,18 @@
 
 #pragma once
 
-/// @file sensor/trigger_grouper.hpp
-/// @brief Frames from several hardware-synchronised sensors, grouped into one
-///        set per sync trigger by their timestamps on a shared clock.
-///
-/// Pure bookkeeping over timestamps and the caller's opaque frame ids -- it
-/// holds no frame -- so a host test drives it with synthetic streams. A
-/// sensor array groups its sets with it; the measurements behind its rules
-/// are in the 2026-09-27 rig decision.
+// Internal (not installed): SensorArray's grouping of frames from several
+// hardware-synchronised sensors into one set per sync trigger, by their
+// timestamps on a shared clock. Pure bookkeeping over timestamps and the
+// caller's opaque frame ids -- it holds no frame -- so a host test drives it
+// with synthetic streams, compiling this source itself. The measurements
+// behind its rules are in the 2026-09-27 rig decision.
 
 #include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <optional>
 #include <vector>
-
-#include "volumetric_kit/recon/sensor/export.hpp"
 
 namespace volumetric_kit::recon::sensor {
 
@@ -39,7 +35,7 @@ namespace volumetric_kit::recon::sensor {
 ///   // group->ids[c]: camera c's frame for the trigger, if it came
 /// }
 /// @endcode
-class VR_SENSOR_API TriggerGrouper {
+class TriggerGrouper {
  public:
   /// @brief The sensors and the grouping's tolerances.
   struct Config {
