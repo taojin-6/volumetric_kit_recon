@@ -147,6 +147,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `sensor/video`: validate a candidate cropped HEVC SPS before refusing the
   stream on Apple. A truncated SPS no longer poisons subsequent valid frames,
   including after `HevcDecoder::reset`.
+- `volume`: an allocation whose failures are all capacity limits (chain
+  full, heap empty, table full) stops after that round, instead of
+  dispatching twice more to fail the same way before the caller grows.
 
 ### Removed
 
