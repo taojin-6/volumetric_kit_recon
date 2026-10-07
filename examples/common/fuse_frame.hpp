@@ -41,7 +41,7 @@ namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
 
 /// @brief The volume every example fuses into: 8x8x8-voxel blocks hashed into
-///        buckets of eight, carrying the three attributes @ref fuse_frame
+///        buckets of eight, carrying the three attributes @ref fuse_set
 ///        writes -- `tsdf`, `weight` and `color`.
 ///
 /// The layout is @ref example_grid_params, which every example shares; the
