@@ -378,6 +378,10 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-06**](#2026-10-06--incremental-mesh-extraction-is-removed-the-changed-stamp-stays-and-the-mesher-no-longer-reads-it-amends-the-2026-08-09-2026-08-11-2026-08-12-2026-09-30-2026-10-01-and-2026-10-02-mesh-entries) —
   Incremental mesh extraction is removed; the `changed` stamp stays, and the
   mesher no longer reads it.
+- [**2026-10-06**](#2026-10-06--fusion-runs-over-the-blocks-the-scanning-cameras-reach-one-frustum-a-frame-no-near-cut-far-at-max_depth--trunc_dist-their-union-compacted-in-one-scan-amends-the-2026-08-12-view-meshing-and-the-2026-09-30-one-batch-and-device-list-entries) —
+  Fusion runs over the blocks the scanning cameras reach: one frustum a
+  frame, no near cut, far at `max_depth + trunc_dist`, their union compacted
+  in one scan.
 
 ## Decision record
 
@@ -3203,6 +3207,10 @@ at the span write.
 *Amended 2026-10-06 (below):* incremental mesh extraction is removed, so the
 "kept apart from incremental extraction" clause has nothing left to keep
 apart. The culled overload and its density guard stay.
+*Amended 2026-10-06 (below):* fusion now consumes the frustum compaction too:
+`TsdfIntegrator::integrate` culls to the scanning cameras' frusta, on the
+device and in one scan for a rig's set, which the header had claimed and no
+code did.
 
 A scanning device renders a small part of a large volume — the iPad case, where
 the viewport shows a room corner while the map holds the whole floor. Meshing
@@ -7774,6 +7782,9 @@ which the counter named and the person at the window confirmed.
 
 ### 2026-09-30 — A rig's cameras fuse in one batch: each dispatch binds a descriptor set of its own over the same kernel, and the set is compacted once.
 
+*Amended 2026-10-06 (below):* the one compaction is now of the blocks the
+set's frusta reach, their union, rather than of the whole active set.
+
 **The rule.** `VoxelHashMap::allocate_from_depth` and
 `TsdfIntegrator::integrate` take a list of frames (`volume::DepthInput`,
 `tsdf::FrameInput`), and record every frame's dispatch, in order, into one
@@ -7985,6 +7996,11 @@ of allocation's device time has not been broken down.
 
 *Amended 2026-10-06 (below):* the spans are removed, so a whole-map extract
 always binds the map's device list.
+*Amended 2026-10-06 (below):* a fuse culls to its frusta and leaves no full
+list, so an extract after a fuse compacts the full list itself, and the reuse
+serves whoever follows the extract (the encoder, the grid's block pass);
+`recon_tier_stage_metrics` now expects a fuse's row every call. The frustum
+list has a buffer of its own and never counts as the active set.
 
 **The rule.**
 - **No host list.** With `track_block_spans` off, `extract_device` and
@@ -8453,6 +8469,9 @@ call, which `Decoder` already forbids.
 *Amended 2026-10-03:* the observed kernel now appends a compact list on the
 device, with a predicted-prefix readback instead of the full input and flags;
 see the dated entry below. The coordinate sort and CPU entropy boundary stay.
+*Amended 2026-10-06 (below):* a fuse culls to its frusta and leaves no full
+list, so the encoder takes back an extract's list, and an encode straight
+after a fuse compacts the full list itself.
 
 `compact_active_blocks_on_device` returns a fuse's list while it still
 holds, and its compaction is kept for the extract after. Before, the
@@ -10305,6 +10324,100 @@ viewers, Orbbec and FFmpeg: the 55 tests pass with
 `recon_mesh_marching_cubes_config` and `recon_texture_device_mesh` run clean
 under the Khronos layer's synchronization validation. Not measured: the
 sparse kernels' dispatch time (each lost one barrier per workgroup).
+
+### 2026-10-06 — Fusion runs over the blocks the scanning cameras reach: one frustum a frame, no near cut, far at `max_depth + trunc_dist`, their union compacted in one scan (amends the 2026-08-12 view-meshing and the 2026-09-30 one-batch and device-list entries).
+
+**The rule.** `TsdfIntegrator::integrate` builds one frustum for each frame
+it fuses -- the depth camera's intrinsics and pose, **no near cut** (near 0),
+far at `max_depth + trunc_dist`, sides widened as `make_frustum_planes`
+widens them -- and dispatches every frame over the active blocks inside
+**any** of them, compacted in one scan of the table by the new
+`VoxelHashMap::compact_active_blocks_in_frusta_on_device`. A frame whose
+principal point lies outside its image, or whose planes are not finite,
+falls back to the whole active set (`compact_active_blocks_on_device`), as
+every call used before. The tick is unchanged: an empty grid does not tick,
+and a grid the frames do not reach does, dispatching nothing (the map's full
+list, asked for only then, tells the two apart). The dispatch-size refusal
+now counts the reached blocks. Marching cubes is untouched here: culling it
+by the viewing camera is a later change.
+
+**Why it is the same result, bit for bit.** The fusion kernel changes a
+voxel only after `project_to_image` accepts it -- `zc > 0` and the
+projection inside the image -- and the sampled depth `d` passes
+`d <= max_depth`, and `d - zc >= -trunc_dist`. So a changed voxel has
+`0 < zc <= d + trunc_dist <= max_depth + trunc_dist`, in front of the camera
+and inside the image: inside the frustum. Dynamic's clear needs only
+`zc > 0`, which is why there is no near plane at `min_depth`: free space
+nearer than `min_depth` is cleared too. The sides contain the image only
+under three conditions, each checked or required:
+- the focal lengths are positive and the principal point lies inside the
+  image: the 0.9 focal scale moves a side plane outward only then (with
+  `cx < 0` it moves the left plane *inward*, culling visible voxels -- the
+  test's witness);
+- every plane is finite; NaN, as a non-finite `max_depth` produces, is
+  refused rather than reasoned about;
+- the pose is rigid, which `DepthCameraParams` already requires: the planes go
+  to world by the pose's inverse-transpose, the kernel by `transpose(R)`.
+
+The block test is conservative per frustum: the AABB spans every voxel node
+of the block with half a voxel to spare, and a p-vertex test keeps a box
+that any point of it could pass. The half voxel and the widening also cover
+the float rounding between the two computations. Each voxel is one
+thread's and the frames run in order, so fusing a block no frame changes is
+a no-op, and a list holding every block some frame reaches gives what the
+whole active set gave: tsdf, weight, colour and `changed` stamps alike.
+
+**What the dispatch now scales with.** The blocks the frames reach, not the
+map: a rig fusing a corner of a large map no longer runs a thread per voxel
+of the whole map per camera. The compaction still scans every hash slot, as
+before. Measured on room0 at 1 cm, Apple M5 Max, Release, the map's 27 046
+blocks replicated along x (copies, so the cameras see one room), integrate
+per frame over 60 frames after 100, cull and the forced full list
+interleaved on each frame, median, device time (fusion plus compaction):
+
+| map | reached | culled | full list |
+|---|---|---|---|
+| 1 room, 27 046 blocks | 90% | 0.72–0.80 ms | 0.76–0.85 ms |
+| 4 rooms, 108 184 blocks | 23% | 0.60 ms | 1.38 ms |
+| 16 rooms, 432 736 blocks | 5.8% | 0.48–0.71 ms | 3.31–5.20 ms |
+
+(two runs where a range is given; the Mac is shared and noisy). On a map one
+room deep, the frustum reaches nearly all of it at an 8 m `max_depth`, and
+the cull costs nothing measurable.
+
+**What stays.** `MeshIntegrator` writes the blocks its triangles bin into,
+so it is input-driven already and keeps its own path. The full list's reuse
+(2026-09-30) is not evicted: the frustum list has a buffer of its own,
+`check_device_block_list` refuses it as not the active set, and an extract
+or the encoder after a fuse compacts the full list itself (a fuse no longer
+leaves one). The host `compact_active_blocks_in_frustum` overloads run the
+same kernel with one frustum and now write that buffer too. Nothing is
+cached: the frusta change every frame.
+
+**Not taken.** A tighter frustum (no widening, or the principal point's own
+offset) would need a second `make_frustum_planes`; the fallback costs only
+the frames whose principal point is outside the image, which no supported
+camera has.
+
+**Verified.** `recon_tsdf_integrate_cull` fuses the same frames into two grids,
+each call of B's opening and closing with a frame of zero depth whose frustum
+reaches every block, and compares tsdf, weight, colour, all three stamps and the
+tick byte for byte: a static wall; a receding wall in dynamic and classic; a
+block past `max_depth` but in the band; free space nearer than `min_depth`; two
+cameras seeing different places; and a principal point outside the image. It
+also checks that one camera reaches fewer blocks than the map holds, and the
+tick of a missed and an empty grid. Mutants with the far plane at `max_depth`, a
+near plane at `min_depth`, the first frame's frustum for every frame, no
+principal-point fallback, and either tick rule broken each fail it.
+`recon_volume_frustum` checks the union of two frusta, neither containing the
+other, each block once, and that the full list still holds after both frustum
+forms.
+
+**Validation.** Apple M5 Max, macOS, Release with warnings as errors, Orbbec
+and FFmpeg: the 56 tests pass with `VR_TEST_HEVC_BACKEND=videotoolbox`, and
+`recon_tsdf_integrate_cull`, `recon_tsdf_integrate_set`,
+`recon_tsdf_integrate` and `recon_volume_frustum` run clean under the Khronos
+layer's synchronization validation.
 
 ## Measured lessons
 

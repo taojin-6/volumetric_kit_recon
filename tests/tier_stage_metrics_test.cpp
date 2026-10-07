@@ -220,8 +220,7 @@ int main() {
                                 "after untimed calls"));
 
   // --- (2) + (3) every tier reports, and the halves differ ------------------
-  // Cleared, so the allocation takes blocks and the integrate compacts rather
-  // than reuse the last list, which reports no row.
+  // Cleared, so the allocation takes blocks for the integrate to compact.
   CHECK(grid.value().clear().ok());
   vkc::StageMetrics metrics;
   vkc::Result<std::uint32_t> allocated = grid.value().map().allocate_from_depth(
@@ -295,15 +294,15 @@ int main() {
     CHECK(metrics.total_cpu_ms() == metrics.total_cpu_ms("  ..active set"));
   }
 
-  // Nothing allocated since, so the next integrate reuses that list: no
-  // compaction runs, and none is reported.
+  // The cull is the frame's own, so the next integrate compacts again, with
+  // nothing allocated since, and reports it again.
   {
-    vkc::StageMetrics reused;
+    vkc::StageMetrics again;
     CHECK(integrator.value().integrate(grid.value(), depth.data(), cam, 5.0f,
                                        vr::tsdf::IntegrationMode::Classic,
-                                       nullptr, &reused));
-    CHECK(find(reused, "integrate") != nullptr);
-    CHECK(find(reused, "  ..active set") == nullptr);
+                                       nullptr, &again));
+    CHECK(find(again, "integrate") != nullptr);
+    CHECK(find(again, "  ..active set") != nullptr);
   }
 
   // --- the same compaction, asked for from both positions --------------------

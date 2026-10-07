@@ -97,15 +97,16 @@ struct FrameInput : volume::DepthInput {
 ///        `weight` attributes by projective TSDF integration (classic or
 ///        dynamic).
 ///
-/// One GLSL dispatch runs a thread per voxel of every active block: it projects
-/// the voxel centre into the depth camera, computes the truncated projective
-/// signed distance (`sdf = depth - Zc`, positive in front of the surface), and
-/// fuses it into `tsdf`/`weight` by a weighted running average (inverse-square
-/// observation weight with a behind-surface dropoff, capped at `max_weight`).
-/// Node-centred voxels (`voxel * voxel_size`), matching @ref voxel_to_world and
-/// the prior engine's numerics. Each voxel is owned by exactly one thread (a
-/// unique `BlockIndex::ptr + local`), so the fusion needs no atomics but the
-/// one shared write per block: its `changed` stamp (see @ref integrate).
+/// One GLSL dispatch runs a thread per voxel of every active block the frame
+/// can reach (see @ref integrate): it projects the voxel centre into the depth
+/// camera, computes the truncated projective signed distance
+/// (`sdf = depth - Zc`, positive in front of the surface), and fuses it into
+/// `tsdf`/`weight` by a weighted running average (inverse-square observation
+/// weight with a behind-surface dropoff, capped at `max_weight`). Node-centred
+/// voxels (`voxel * voxel_size`), matching @ref voxel_to_world and the prior
+/// engine's numerics. Each voxel is owned by exactly one thread (a unique
+/// `BlockIndex::ptr + local`), so the fusion needs no atomics but the one
+/// shared write per block: its `changed` stamp (see @ref integrate).
 ///
 /// @ref IntegrationMode::Dynamic instead clears stale geometry ahead of a
 /// receded surface (classic keeps a smooth field there). Depth is sampled
@@ -144,16 +145,26 @@ class VR_TSDF_API TsdfIntegrator {
   /// counts as a change. A consumer keeps the tick it last read at and asks
   /// which blocks are newer.
   /// @param grid        The block grid; must carry `float` `tsdf` + `weight`
-  ///                    attributes (see @ref VoxelBlockGrid::create). Its
-  ///                    active set (@ref
-  ///                    VoxelHashMap::compact_active_blocks_on_device) is
-  ///                    fused.
+  ///                    attributes (see @ref VoxelBlockGrid::create). The
+  ///                    blocks of its active set the frame can change are
+  ///                    fused: those inside the camera's frustum, from the
+  ///                    camera to `max_depth + trunc_dist`, side planes
+  ///                    widened as @ref volume::make_frustum_planes widens
+  ///                    them (@ref
+  ///                    volume::VoxelHashMap::compact_active_blocks_in_frusta_on_device).
+  ///                    The result is the one fusing every active block gives,
+  ///                    bit for bit; a camera whose focal lengths are not
+  ///                    positive, whose principal point lies outside its image,
+  ///                    or whose frustum is not finite, fuses every active
+  ///                    block. The tick advances whenever the grid has a block,
+  ///                    reached or not.
   /// @param depth       Row-major depth image in **metres**, length
   ///                    `cam.width * cam.height` (the host applies any raw
   ///                    sensor depth-scale first, as @ref
   ///                    VoxelHashMap::allocate_from_depth does).
   /// @param cam         Intrinsics + camera->world pose + depth range; the
-  ///                    integrator inverts the pose to project world -> camera.
+  ///                    integrator inverts the pose to project world -> camera,
+  ///                    and the cull relies on it being rigid.
   /// @param max_weight  The running-average weight cap (the ported default is
   ///                    5.0).
   /// @param mode        Classic keeps free space ahead of the surface; dynamic
@@ -194,10 +205,10 @@ class VR_TSDF_API TsdfIntegrator {
   ///                  kernel. A tier whose host row dwarfs its device row is
   ///                  not a slow kernel.
   ///
-  ///                  A fuse runs *two* dispatches, so the second -- the active
-  ///                  set's compaction (@ref
-  ///                  volume::VoxelHashMap::compact_active_blocks_on_device) --
-  ///                  reports itself as a `"  ..active set"` breakdown row
+  ///                  A fuse runs *two* dispatches, so the second -- the
+  ///                  compaction of the blocks the frame reaches (@ref
+  ///                  volume::VoxelHashMap::compact_active_blocks_in_frusta_on_device)
+  ///                  -- reports itself as a `"  ..active set"` breakdown row
   ///                  beneath this one. Without it that kernel's device time
   ///                  would fall into the gap above and read as submit
   ///                  overhead.
@@ -205,10 +216,10 @@ class VR_TSDF_API TsdfIntegrator {
   ///         `Status::Code::InvalidArgument` if the integrator is
   ///         moved-from, @p depth is null, @p grid lacks a `float`
   ///         `tsdf`/`weight` attribute, @p color is set but empty or @p grid
-  ///         lacks a `uint32` `color` attribute, or the active set is too large
-  ///         for a single 1-D dispatch (its voxel count exceeds the device's
-  ///         `maxComputeWorkGroupCount[0]`, or 2^32 threads); otherwise a
-  ///         buffer or dispatch failure.
+  ///         lacks a `uint32` `color` attribute, or the blocks the frame
+  ///         reaches are too many for a single 1-D dispatch (their voxel count
+  ///         exceeds the device's `maxComputeWorkGroupCount[0]`, or 2^32
+  ///         threads); otherwise a buffer or dispatch failure.
   core::Status integrate(volume::VoxelBlockGrid& grid, const float* depth,
                          const DepthCameraParams& cam, float max_weight = 5.0f,
                          IntegrationMode mode = IntegrationMode::Classic,
@@ -238,13 +249,16 @@ class VR_TSDF_API TsdfIntegrator {
   /// @brief @ref integrate several cameras' frames at once: one compaction and
   ///        one submit for them all, rather than two submits a frame.
   ///
-  /// Each frame is a dispatch of its own over the one active set, in order, so
-  /// every voxel takes the frames in turn as integrating them one after another
+  /// Each frame is a dispatch of its own over one list -- the active blocks
+  /// any of the frames reaches, compacted in one scan -- in order, so every
+  /// voxel takes the frames in turn as integrating them one after another
   /// does: the same arithmetic in the same order, Dynamic's clearing included.
-  /// The set is compacted once, so allocate every frame's band first (@ref
-  /// volume::VoxelHashMap::allocate_from_depth takes them together too); a
-  /// block first allocated for a later frame is then fused from the earlier
-  /// ones as well. The call is one tick, so a rig's set ages as one fuse.
+  /// A frame changes no block outside its own reach, so the shared list costs
+  /// it only idle threads. The set is compacted once, so allocate every frame's
+  /// band first (@ref volume::VoxelHashMap::allocate_from_depth takes them
+  /// together too); a block first allocated for a later frame is then fused
+  /// from the earlier ones as well. The call is one tick, so a rig's set ages
+  /// as one fuse.
   /// @param grid        As @ref integrate.
   /// @param frames      The frames, each checked as @ref integrate checks one
   ///                    before any work. One with no pixels fuses nothing, as
@@ -272,7 +286,7 @@ class VR_TSDF_API TsdfIntegrator {
   core::Allocator* allocator_ = nullptr;
 
   // Cached maxComputeWorkGroupCount[0] -- the device cap on a 1-D dispatch's
-  // groupCountX; integrate() rejects an active set that would exceed it.
+  // groupCountX; integrate() rejects a block list that would exceed it.
   std::uint32_t max_workgroup_count_x_ = 0;
   // The ceiling on one storage-buffer binding's range, read once at create().
   // The depth and colour frames are staged and bound whole each integrate().

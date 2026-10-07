@@ -47,9 +47,24 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   frames as captured, for the GPU pass, the pose in double, and
   `sync_clock_to_host` for the host's clock. `fuse_orbbec` reads one camera
   through it, which is how it is checked, as tests use no hardware.
+- `volume`: **`VoxelHashMap::compact_active_blocks_in_frusta_on_device`**,
+  the active blocks inside any of several frusta, compacted in one scan and
+  left on the device in a list of their own, which
+  `check_device_block_list` refuses as not the active set. Tests:
+  `recon_volume_frustum`, `recon_tsdf_integrate_cull`.
 
 ### Changed
 
+- `tsdf`: **`TsdfIntegrator::integrate` fuses only the blocks its frames
+  reach**: one frustum a frame from its depth camera, no near cut, far at
+  `max_depth + trunc_dist`, the union compacted in one scan. The result is
+  bit-identical, Dynamic's clearing included; the dispatch scales with the
+  reached blocks rather than the map (room0 at 1 cm replicated 16 times on an
+  M5 Max: 0.5-0.7 ms against 3.3-5.2 ms of device time a frame). A frame
+  whose principal point lies outside its image fuses the whole active set.
+  The dispatch-size refusal counts the reached blocks, and a fuse no longer
+  leaves the map's full list for an extract to reuse. The host
+  `compact_active_blocks_in_frustum` no longer invalidates that list either.
 - `sensor`: **`RawFrame` is `RgbdFrame`** (`sensor/rgbd_frame.hpp`). Each
   camera is a `camera::CameraModel` in double; the poses are
   `color_to_world` and the sensor's `depth_to_color`, in double, both
@@ -356,7 +371,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   with the same decoded surface, and encode / decode 14.3 / 14.0 ms where
   they were 17.6 / 16.0 (M5 Max, Release). A v1 frame is `Unsupported`. The
   transform is device-resident, one `CommandBatch` a call, with 16-bit
-  coefficients. The encoder reuses a fuse's active list and drops
+  coefficients. The encoder reuses the map's last active list and drops
   never-observed blocks before the transform. The decoder checks geometry
   off the header first, stamps `changed` only on blocks it alters, and
   reports a broken heap as `InvalidArgument` rather than `IoError`.
