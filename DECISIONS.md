@@ -10465,14 +10465,14 @@ view moves between the cull and the draw; the near plane takes none — and
 re-meshes after fusing, at `--remesh-every`, as before, and whenever the view
 moved while nothing fused: a live source between frames, `fuse_viewer`'s
 replay after fusion, an idle rig or one a `--sets` run stopped, and a rig
-whose capture failed with the map intact. The block box the compaction tests
-covers the cells a block meshes, which reach a half-voxel past its voxels to
-the next block's first: with the voxels' box alone, a block whose voxels lay
-behind the near plane, which takes no margin, lost its in-view boundary
-triangles (all 162 of a plane at 1 cm, found in review). So both
-fuse threads now run until the window closes. Before the render thread has
-published a view, the fuse thread meshes the whole map. A view that sees
-nothing meshes nothing. No option was added.
+whose capture failed with the map intact. So both fuse threads now run until
+the window closes. Before the render thread has published a view, the fuse
+thread meshes the whole map. A view that sees nothing meshes nothing. No
+option was added. The block box the compaction tests covers the cells a block
+meshes, which reach a half-voxel past its voxels to the next block's first:
+with the voxels' box alone, a block whose voxels lay behind the near plane,
+which takes no margin, lost its in-view boundary triangles (all 162 of a
+plane at 1 cm, found in review).
 
 **What goes.** The host-list `extract_device(grid, iso, const BlockList&)` and
 the host `compact_active_blocks_in_frustum(FrustumPlanes)` and
