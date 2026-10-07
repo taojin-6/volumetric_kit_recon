@@ -323,8 +323,8 @@ add_test(NAME recon_sensor_trigger_grouper
          COMMAND recon_sensor_trigger_grouper_test)
 
 # sensor tier: the sensor array over scripted fake sensors -- the arrays it
-# refuses, its start order, trigger and sequence grouping, poses from the
-# calibration. Host-only.
+# refuses, its start order, trigger grouping, poses from the calibration.
+# Host-only.
 add_executable(recon_sensor_array_test sensor_array_test.cpp)
 target_link_libraries(recon_sensor_array_test
                       PRIVATE volumetric_kit::recon_sensor_array)
