@@ -1179,8 +1179,8 @@ keeping its intrinsics. The frame carries each camera's `camera::CameraModel`
 in double, narrowed to float once for the passes; the colour camera's pose,
 `color_to_world`, and the sensor's `depth_to_color`, both refused unless
 rigid, pose the outputs; a sequence number; and `pixels`, the owner of its
-depth, so a consumer may keep frames past the next poll and past the
-capture.
+depth and any host colour, so a consumer may keep frames past the next poll
+and past the capture.
 `ChromaLocation` follows the picture through `DecodedPicture`, the Orbbec
 frame handoff and `YuvImage`: JPEG is centred, and HEVC keeps the decoded tag
 with left alignment when unspecified.
@@ -1189,16 +1189,22 @@ images. Existing callers that leave the field unset keep left alignment. The
 resulting `DeviceFrame` feeds the `Buffer` overloads of `allocate_from_depth` and
 `integrate` (and `ColorFrame::buffer`, with `coverage_in_alpha`, since a
 pixel the lens maps outside the picture is a 0 word), so nothing is
-uploaded and nothing registered. Colour comes as I420 or NV12 on the device
-only (the 2026-10-06 device-only `GpuFramePrep` decision): planes in a
+uploaded and nothing registered. Y'CbCr colour comes as I420 or NV12 on the
+device only (the 2026-10-06 device-only `GpuFramePrep` decision): planes in a
 buffer (`YuvImage::device`, with per-plane offsets and strides) are bound
 where they are, from
 the first plane, once the batch has taken them over from the queue family
 that wrote them (`YuvImage::queue_family`; the 2026-09-28 decoded-frame
 decision). NV12's planes may come as images instead (`YuvImage::image`),
-which the batch copies into the pass's input. The depth goes up through one
-batch into a device-local input, by a staging buffer the pass keeps, and
-both passes run in the same submit, the copy timed with them. The staging is
+which the batch copies into the pass's input. A dataset decoded on the host
+hands its colour over as packed R'G'B' words instead
+(`RgbdFrame::color_packed`, `io::load_color_packed`'s layout; the
+2026-10-07 packed-colour decision), copied into the pass's input like the
+images; the colour pass samples R, G and B as byte planes four bytes apart,
+through the same bilinear sampler and coverage test. The depth, and any
+packed colour after it, goes up through one batch into device-local inputs,
+by a staging buffer the pass keeps, and both passes run in the same submit,
+the copies timed with them. The staging is
 kept because several passes allocating a 4K frame's at once made VMA
 allocate a block for every set (46 ms a rig set on an RTX 5090, 4.8 ms
 kept). The frame *holds* its device-local

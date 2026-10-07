@@ -368,7 +368,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   Apple `VR_WITH_FFMPEG` needs `VR_WITH_CUDA`.
 - [**2026-10-06**](#2026-10-06--gpuframeprep-takes-colour-on-the-device-only-and-a-sets-depth-is-staged-on-one-thread-amends-the-2026-09-28-decoded-frame-and-2026-10-06-one-batch-entries) —
   `GpuFramePrep` takes colour on the device only, and a set's depth is
-  staged on one thread.
+  staged on one thread. (Packed host colour came back the next day.)
 - [**2026-10-06**](#2026-10-06--platforms-linux-android-macos-and-ios-with-gcc-or-clang-windows-and-msvc-are-not-supported-amends-the-2026-06-21-vulkan-path-entry) —
   Platforms: Linux, Android, macOS and iOS, with GCC or Clang; Windows and
   MSVC are not supported.
@@ -389,6 +389,10 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-06**](#2026-10-06--a-sensor-array-groups-its-frames-by-trigger-only-syncmode-and-sequence-grouping-go-amends-the-2026-10-06-sensorarray-entry) —
   A sensor array groups its frames by trigger only: `SyncMode` and sequence
   grouping go.
+- [**2026-10-07**](#2026-10-07--gpuframeprep-stages-a-host-frames-packed-colour-beside-its-depth-amends-the-2026-10-06-device-only-gpuframeprep-entry) —
+  `GpuFramePrep` stages a host frame's packed colour beside its depth
+  (`RgbdFrame::color_packed`): one copy in the pass's own batch, no host
+  conversion, no threads.
 
 ## Decision record
 
@@ -10192,6 +10196,10 @@ H.265 tests on NVDEC, the first run of that path. Not run on a camera.
 
 ### 2026-10-06 — `GpuFramePrep` takes colour on the device only, and a set's depth is staged on one thread (amends the 2026-09-28 decoded-frame and 2026-10-06 one-batch entries).
 
+*Amended 2026-10-07 (below):* host colour is back, as packed R'G'B' words
+(`RgbdFrame::color_packed`) staged beside the depth on the calling thread
+and copied up in the pass's own batch; Y'CbCr planes stay device-only.
+
 **The rule.** `GpuFramePrep` takes a frame's colour on the device only: I420
 or NV12 planes in a buffer (`YuvImage::device`), or NV12's planes as images
 (`YuvImage::image`). `YuvImage::plane`, the host planes, goes, with their
@@ -10556,6 +10564,42 @@ an exhausted sensor through trigger grouping, and opens one free-running
 sensor on its own clock; `recon_sensor_array_process` groups its three
 sensors by trigger, one set a poll, the set missing a sensor waited for and
 then handed out without it.
+
+### 2026-10-07 — `GpuFramePrep` stages a host frame's packed colour beside its depth (amends the 2026-10-06 device-only `GpuFramePrep` entry).
+
+**The rule.** A frame may carry its colour on the host as packed R'G'B'
+words, `RgbdFrame::color_packed`: the colour camera's size, row-major,
+`R | G << 8 | B << 16` with the high byte ignored (`io::load_color_packed`'s
+layout), held by `pixels`, and set instead of `YuvImage`'s planes, never
+beside them. `GpuFramePrep` stages the words as it stages host depth: one
+copy into the pass's staging, after the depth, and one in its batch into the
+colour input. The colour pass reads R, G and B as byte planes four bytes
+apart through the planes' own bilinear sampler, so its clamping, weights and
+coverage byte are the Y'CbCr path's; a push constant, `packed_rgb`, picks
+the branch (`ColorParams` is 108 bytes). `prepare_batch` stages each
+camera's packed colour with its depth, on the calling thread. Depth stays
+16-bit with `metres_per_unit`: the frame gains no float depth.
+
+**Why.** The Replica examples' source, a dataset decoded on the host,
+becomes an `IRgbdSensor` whose frames go through the pass as the cameras'
+do, so host colour has a real caller again; the 2026-10-06 entry dropped it
+because nothing made it. The words go into the staging as decoded, with no
+conversion on the host, so a frame is still one upload in the pass's own
+batch, and Y'CbCr planes stay on the device.
+
+**The threads stay gone.** Host colour staged one camera after another lost
+to a thread per camera at four 4K cameras on the Mac (the 2026-10-01
+measurement, in the one-batch entry). The one caller is a single camera; a
+rig with host colour measures that again before the threads come back.
+
+**Validation.** Apple M5 Max, macOS, Release with warnings as errors, Orbbec
+and FFmpeg: the 56 tests pass. `recon_sensor_gpu_frame_prep` holds packed
+words through a pinhole to their input exactly, the junk high byte replaced
+by full coverage, and through a lens to a host bilinear reference within a
+code, no coverage byte off; refuses words beside planes before any work, and
+a PQ transfer; and prepares a fifth camera's packed colour in a batch byte
+for byte as `prepare` does alone, depth kept within colour. It runs clean
+under the Khronos layer's synchronization validation.
 
 ## Measured lessons
 

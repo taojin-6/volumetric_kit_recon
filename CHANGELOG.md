@@ -58,6 +58,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   or its frusta list while it holds, and the extract refuses any other before
   it claims a ring slot. A later frustum compaction now makes an earlier
   frusta list stale. Test: `recon_mesh_marching_cubes_sparse`.
+- `sensor`: **`RgbdFrame::color_packed`**, colour on the host as a dataset
+  decodes it: packed R'G'B' words in `io::load_color_packed`'s layout, the
+  high byte ignored. `GpuFramePrep` stages them after the depth, one copy
+  each in its batch, and samples them as it samples the planes. Test:
+  `recon_sensor_gpu_frame_prep`.
 
 ### Changed
 
@@ -197,8 +202,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `sensor/orbbec`: **`OrbbecStreamStats::host_pictures`**, with nothing left
   to count.
 - `sensor`: **host colour planes**: `YuvImage::plane`. `GpuFramePrep` takes
-  colour on the device only, as a buffer or NV12 images, and stages only
-  depth, on the calling thread.
+  Y'CbCr colour on the device only, as a buffer or NV12 images, and stages
+  a frame on the calling thread.
 
 - `sensor/orbbec`: **`OrbbecCapture` and the SDK's host path**: the
   undistortion and registration on the host (`ob::UnDistortionFilter`,
