@@ -64,9 +64,9 @@ FetchContent_Declare(
   # floor: before it gfx has a Device, Status and Texture of its own.
   #
   # gfx builds against recon's core pin (third_party/CMakeLists.txt declares the
-  # core first, so it wins over gfx's VG_VKC_PIN). The two pins agree at
-  # a60398b; move them together, or gfx fails to compile against a core it was
-  # not written for.
+  # core first, so it wins over gfx's VG_VKC_PIN), which may run ahead of gfx's
+  # own -- its check takes that commit or newer -- only by core changes that add
+  # API: recon's a8b63d1 (core #15, submit_async) to gfx's a60398b.
   GIT_TAG 53e8f6389fe9cd9462e7000c49cc758d29c8149a # gfx #106
   GIT_SHALLOW FALSE)
 FetchContent_MakeAvailable(volumetric_kit_gfx)
