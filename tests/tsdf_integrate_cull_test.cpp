@@ -317,7 +317,7 @@ int main() {
   }
   // A principal point 30 px left of the image, which the side widening does
   // not cover: the camera sees x >= 0.5 z, but the widened left plane keeps
-  // only x >= 0.556 z, which culls block (5, y, 11) -- x up to 0.475, z from
+  // only x >= 0.556 z, which culls block (5, y, 11) -- x up to 0.48, z from
   // 0.875 -- whose free space at x 0.47, z 0.88 the camera sees. So the
   // integrate fuses every block.
   if (run(ctx, integ, "principal point outside", Mode::Classic,

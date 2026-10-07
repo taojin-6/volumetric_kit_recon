@@ -199,10 +199,10 @@ add_test(NAME recon_volume_allocate_triangles
 
 # volume frustum-culled compaction: allocate blocks at known world positions
 # (one dead-centre, others behind / beyond-far / off to the side), then verify
-# compact_active_blocks_in_frustum returns only the in-view block while plain
-# compaction returns all -- proving the plane math + the on-device AABB cull --
-# and that several frusta on the device keep their union. Skips (exit 0) where
-# no device is present.
+# compact_active_blocks_in_frusta_on_device keeps only the in-view blocks while
+# plain compaction returns all -- proving the plane math + the on-device AABB
+# cull -- and that several frusta keep their union. Skips (exit 0) where no
+# device is present.
 add_executable(recon_volume_frustum_test volume_frustum_test.cpp)
 target_link_libraries(recon_volume_frustum_test
                       PRIVATE volumetric_kit::recon_volume Vulkan::Vulkan)

@@ -541,13 +541,13 @@ vkc::Status run(const Options& opt) {
                        static_cast<double>(volume.grid().voxels_per_block);
   std::printf(
       "extract   %.1f ms in %u dispatch(es)\n"
-      "  phases  compact %.2f  inputs %.2f  arena %.2f  desc %.2f  "
+      "  phases  compact %.2f  arena %.2f  desc %.2f  "
       "dispatch %.2f  read %.2f\n"
       "  blocks  %u active -> %.2fM cells, %u tris emitted (%.2f%% of cells)\n"
       "  arena   %.1f MB resident, %u tris planned (%.1f%% full)\n",
-      t.total_ms(), t.dispatches, t.compact_ms, t.input_upload_ms,
-      t.arena_alloc_ms, t.descriptor_ms, t.dispatch_ms, t.readback_ms,
-      t.active_blocks, cells / 1e6, t.emitted_triangles,
+      t.total_ms(), t.dispatches, t.compact_ms, t.arena_alloc_ms,
+      t.descriptor_ms, t.dispatch_ms, t.readback_ms, t.active_blocks,
+      cells / 1e6, t.emitted_triangles,
       cells > 0.0 ? 100.0 * t.emitted_triangles / cells : 0.0,
       static_cast<double>(t.arena_bytes) / (1024.0 * 1024.0),
       t.triangle_capacity,

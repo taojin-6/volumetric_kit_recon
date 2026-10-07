@@ -110,6 +110,7 @@
 #include "volumetric_kit/recon/sensor/color_conventions.hpp"
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
+#include "volumetric_kit/recon/volume/frustum.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
@@ -796,6 +797,11 @@ int run(GLFWwindow* window, const Options& opt) {
   // extract_device; deferring costs at most one remesh of latency and keeps
   // recon's extractor touched by exactly one thread.
   std::uint64_t shared_released_through = 0;
+  // The render camera, published by the render thread with a serial that
+  // moves when the view does (0: none yet). The fuse thread meshes what it
+  // sees.
+  glm::mat4 shared_view_proj(1.0f);
+  std::uint64_t shared_view_serial = 0;
   std::vector<glm::mat4> shared_poses;  // trajectory, grows as frames fuse
   std::atomic<std::size_t> fused_count{0};
   std::atomic<bool> fusing_done{false};
@@ -828,13 +834,10 @@ int run(GLFWwindow* window, const Options& opt) {
       // instrument this repo's history credits with catching the arena-alloc
       // and neighbour-table regressions, and against its own rule that a row
       // which is usually zero is worse than an absent one. Held, they describe
-      // the newest remesh, exactly as `extract_stats` beside them does; the
+      // the newest remesh, exactly as `shared_extract` does; the
       // panel's `fuse ms/frame` therefore reads as the cost of a fused frame
       // that also remeshed.
       vkc::StageMetrics remesh_stages;
-      // Held across frames so the panel keeps showing the newest remesh's
-      // sizes between remeshes, rather than blanking to zero.
-      rmesh::ExtractTimings extract_stats;
       // Texture `device_mesh` with one keyframe, then publish it plus that
       // keyframe's colour image as the atlas its uv0 index into. On any
       // texturing failure -- or when --no-texture -- the atlas stays empty and
@@ -928,6 +931,80 @@ int run(GLFWwindow* window, const Options& opt) {
         if (mark != 0) extractor.release_through(mark);
         return !uncollected;
       };
+      // Mesh what the render camera sees (the 2026-10-06 decision): the blocks
+      // inside its frustum, widened by kViewMargin for the frames the view
+      // moves on before the mesh is drawn. The whole map until the render
+      // thread has published a view.
+      constexpr float kViewMargin = 0.25f;  // metres
+      std::uint64_t meshed_view = 0;
+      auto extract_view = [&](rmesh::ExtractTimings* timings)
+          -> vkc::Result<rmesh::DeviceMesh> {
+        glm::mat4 view_proj;
+        {
+          std::lock_guard<std::mutex> lock(share_mtx);
+          view_proj = shared_view_proj;
+          meshed_view = shared_view_serial;
+        }
+        if (meshed_view == 0) {
+          return extractor.extract_device(volume, 0.0f, timings);
+        }
+        const auto start = std::chrono::steady_clock::now();
+        VKC_ASSIGN(const vol::DeviceBlockList visible,
+                   volume.map().compact_active_blocks_in_frusta_on_device(
+                       {vol::make_frustum_planes(view_proj, kViewMargin)}));
+        const double compact_ms = std::chrono::duration<double, std::milli>(
+                                      std::chrono::steady_clock::now() - start)
+                                      .count();
+        auto mesh = extractor.extract_device(volume, 0.0f, visible, timings);
+        // The compaction is this call's, so its row reports it.
+        if (timings != nullptr) timings->compact_ms = compact_ms;
+        return mesh;
+      };
+      auto view_moved = [&]() {
+        std::lock_guard<std::mutex> lock(share_mtx);
+        return shared_view_serial != meshed_view;
+      };
+      // Extract, break the extract row down, and publish the mesh textured
+      // with `keyframe`.
+      auto remesh = [&](const rsensor::CapturedFrame* keyframe) {
+        remesh_stages.clear();
+        rmesh::ExtractTimings extract_timings;
+        vkc::Result<rmesh::DeviceMesh> extracted = [&]() {
+          vkc::StageScope scope(remesh_stages, "extract");
+          return extract_view(&extract_timings);
+        }();
+        // Break the extract row down in place. The phases sum to the
+        // `extract` row above rather than adding to it, so they carry
+        // StageMetrics::kBreakdownPrefix -- which is what makes the table
+        // read as a hierarchy *and* keeps total_cpu_ms from counting the
+        // extract twice.
+        remesh_stages.add_cpu("  ..compact", extract_timings.compact_ms);
+        remesh_stages.add_cpu("  ..arena alloc",
+                              extract_timings.arena_alloc_ms);
+        remesh_stages.add_cpu("  ..descriptors", extract_timings.descriptor_ms);
+        remesh_stages.add_cpu("  ..dispatch", extract_timings.dispatch_ms);
+        remesh_stages.add_cpu("  ..readback", extract_timings.readback_ms);
+        // Held until the next remesh, so the panel keeps showing its sizes.
+        {
+          std::lock_guard<std::mutex> lock(share_mtx);
+          shared_extract = extract_timings;
+        }
+        // Published even when it meshed nothing, which the host-mesh path
+        // did not need to do. An empty extract still claims and stamps a ring
+        // slot, so a mesh that never reaches a consumer is a slot nothing can
+        // ever release -- slot_count of those and every later extract is
+        // refused, permanently. It draws nothing either way: recon resets the
+        // command, so indexCount is 0.
+        if (extracted) {
+          publish(extracted.value(), keyframe);
+        } else {
+          // Every other stage in this loop reports its failure; this one used
+          // to be silent, which under seam B reads as a frozen mesh with a
+          // healthy frame counter beside it.
+          std::fprintf(stderr, "fuse_viewer: extract: %s\n",
+                       extracted.status().message().c_str());
+        }
+      };
       // Decode the whole sequence up front when asked, so the loop below is
       // gated by fusion rather than by JPEG/PNG decode (~75% of a streaming
       // loop). Done here, on the fuse thread, so the window is already up and
@@ -986,9 +1063,8 @@ int run(GLFWwindow* window, const Options& opt) {
         fuse_stages.clear();
         for (const char* stage :
              {"frame", "allocate", "resize", "integrate", "  ..active set",
-              "extract", "  ..compact", "  ..inputs", "  ..arena alloc",
-              "  ..descriptors", "  ..dispatch", "  ..readback", "texture",
-              "atlas pack"}) {
+              "extract", "  ..compact", "  ..arena alloc", "  ..descriptors",
+              "  ..dispatch", "  ..readback", "texture", "atlas pack"}) {
           fuse_stages.seed(stage);
         }
         // A preload cache hit, else a disk read + JPEG/PNG decode (the CPU
@@ -1014,8 +1090,14 @@ int run(GLFWwindow* window, const Options& opt) {
           if (capture.exhausted()) {
             break;
           }
-          // A live sensor polled faster than it runs: yield and ask again.
-          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+          // A live sensor polled faster than it runs: re-mesh if the view
+          // moved, else yield, and ask again.
+          if (view_moved() && release_and_may_publish()) {
+            const rsensor::CapturedFrame keyframe = last_frame.view();
+            remesh(last_frame.empty() ? nullptr : &keyframe);
+          } else {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+          }
           continue;
         }
         const rsensor::CapturedFrame& frame = *polled.value();
@@ -1048,41 +1130,7 @@ int run(GLFWwindow* window, const Options& opt) {
         // common path, not a corner.
         if ((i % static_cast<std::size_t>(opt.remesh_every)) == 0 &&
             release_and_may_publish()) {
-          remesh_stages.clear();
-          rmesh::ExtractTimings extract_timings;
-          vkc::Result<rmesh::DeviceMesh> extracted = [&]() {
-            vkc::StageScope scope(remesh_stages, "extract");
-            return extractor.extract_device(volume, 0.0f, &extract_timings);
-          }();
-          // Break the extract row down in place. The phases sum to the
-          // `extract` row above rather than adding to it, so they carry
-          // StageMetrics::kBreakdownPrefix -- which is what makes the table
-          // read as a hierarchy *and* keeps total_cpu_ms from counting the
-          // extract twice.
-          remesh_stages.add_cpu("  ..compact", extract_timings.compact_ms);
-          remesh_stages.add_cpu("  ..inputs", extract_timings.input_upload_ms);
-          remesh_stages.add_cpu("  ..arena alloc",
-                                extract_timings.arena_alloc_ms);
-          remesh_stages.add_cpu("  ..descriptors",
-                                extract_timings.descriptor_ms);
-          remesh_stages.add_cpu("  ..dispatch", extract_timings.dispatch_ms);
-          remesh_stages.add_cpu("  ..readback", extract_timings.readback_ms);
-          extract_stats = extract_timings;
-          // Published even when it meshed nothing, which the host-mesh path
-          // did not need to do. An empty extract still claims and stamps a ring
-          // slot, so a mesh that never reaches a consumer is a slot nothing can
-          // ever release -- slot_count of those and every later extract is
-          // refused, permanently. It draws nothing either way: recon resets the
-          // command, so indexCount is 0.
-          if (extracted) {
-            publish(extracted.value(), &frame);
-          } else {
-            // Every other stage in this loop reports its failure; this one used
-            // to be silent, which under seam B reads as a frozen mesh with a
-            // healthy frame counter beside it.
-            std::fprintf(stderr, "fuse_viewer: extract (frame %zu): %s\n", i,
-                         extracted.status().message().c_str());
-          }
+          remesh(&frame);
         }
         // Merge the newest remesh's rows in, on every frame -- see
         // remesh_stages. merge() matches by name, so they land in the slots the
@@ -1121,17 +1169,16 @@ int run(GLFWwindow* window, const Options& opt) {
           shared_map_buckets = volume.grid().num_buckets;
           shared_map_blocks = volume.grid().num_blocks;
           shared_map_load_factor = load_factor;
-          shared_extract = extract_stats;
         }
         // Retain this frame (the newest keyframe) for the final extract below.
         last_frame.assign(frame);
         ++i;
       }
-      // Skip the full-volume final extract when the user has already quit, so
-      // the join at shutdown does not stall on a whole marching-cubes pass.
+      // Skip the final extract when the user has already quit, so the join at
+      // shutdown does not stall on a marching-cubes pass.
       if (!quit.load()) {
-        // Unlike a remesh inside the loop, this one is worth waiting for: it is
-        // the complete surface, and there is no later extract to supersede it.
+        // Unlike a remesh inside the loop, this one is worth waiting for: it
+        // meshes the last frames fused, and only a view change supersedes it.
         // So rather than skip on an uncollected publish, give the render thread
         // a moment to take it -- it collects on every iteration, so this is
         // normally one frame. Bounded, because a window the compositor has
@@ -1145,8 +1192,8 @@ int run(GLFWwindow* window, const Options& opt) {
         }
       }
       // Re-checked after the wait, which can span a whole second: `quit` is
-      // what says the window is gone, and running a full marching-cubes pass
-      // into a closed window is exactly what the guard above exists to avoid.
+      // what says the window is gone, and running a marching-cubes pass into a
+      // closed window is exactly what the guard above exists to avoid.
       // The two used to be adjacent statements, so the gap did not exist.
       if (!quit.load()) {
         // Apply the release the render thread reported, then extract *whether
@@ -1163,35 +1210,27 @@ int run(GLFWwindow* window, const Options& opt) {
                        "mesh (window hidden, or drawing stopped); extracting "
                        "the final mesh anyway\n");
         }
-        // Measured like any other extract, and *published* like one below.
-        // Without this the panel's arena row keeps describing the last in-loop
-        // extract while the mesh row describes this one -- and they genuinely
-        // differ, since fusing the remaining frames refines the field and the
-        // zero-crossing set is not monotonic (400-frame room0: 330 394
-        // triangles at the last remesh, 330 389 here). Two halves of one
-        // read-out taken from different extracts, frozen that way for the whole
-        // replay, is exactly the trap the ExtractTimings rows exist to avoid.
-        rmesh::ExtractTimings final_timings;
-        auto m = extractor.extract_device(volume, 0.0f, &final_timings);
-        if (m) {
-          {
-            std::lock_guard<std::mutex> lock(share_mtx);
-            shared_extract = final_timings;
-          }
-          // Texture the final mesh with the last keyframe, or leave it
-          // untextured if no frame ever fused.
+        // Textured with the last keyframe, or untextured if no frame ever
+        // fused.
+        const rsensor::CapturedFrame keyframe = last_frame.view();
+        remesh(last_frame.empty() ? nullptr : &keyframe);
+      }
+      // Fusion is over, but the view still moves -- the replay walks the
+      // trajectory -- so re-mesh what it sees whenever it changes.
+      fusing_done.store(true);
+      std::printf("fuse thread: done (%zu frames)\n", fused_count.load());
+      while (!quit.load()) {
+        if (view_moved() && release_and_may_publish()) {
           const rsensor::CapturedFrame keyframe = last_frame.view();
-          publish(m.value(), last_frame.empty() ? nullptr : &keyframe);
+          remesh(last_frame.empty() ? nullptr : &keyframe);
         } else {
-          std::fprintf(stderr, "fuse_viewer: final extract: %s\n",
-                       m.status().message().c_str());
+          std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
       }
     } catch (const std::exception& e) {
       std::fprintf(stderr, "fuse_viewer: fuse thread aborted: %s\n", e.what());
     }
     fusing_done.store(true);
-    std::printf("fuse thread: done (%zu frames)\n", fused_count.load());
   });
   fuse_viewer::QuitJoin fuse_guard{fuse_thread, quit};
 
@@ -1425,6 +1464,12 @@ int run(GLFWwindow* window, const Options& opt) {
           vg::camera::Camera::look_at_perspective(
               eye, eye + fwd, up, vfov, aspect, 0.05f, 2.0f * opt.max_depth)
               .view_proj();
+      // For the fuse thread to mesh; the serial moves only with the view.
+      std::lock_guard<std::mutex> lock(share_mtx);
+      if (view_proj != shared_view_proj) {
+        shared_view_proj = view_proj;
+        ++shared_view_serial;
+      }
     }
     // Park the generation this frame reads, for the *next* frame that lands on
     // this slot to retire. Any committed view, drawn or not: an empty mesh

@@ -330,12 +330,16 @@ int main() {
     CHECK(top.total_cpu_ms() > 0.0);
   }
 
-  // The frustum overload is the same round trip over a smaller set, and reports
-  // through the same row -- a caller who switches to it to make the trip
-  // cheaper has to be able to read what that bought, not watch the row vanish.
+  // The frustum compaction reports through the same row -- a caller who
+  // switches to it to make the trip cheaper has to be able to read what that
+  // bought, not watch the row vanish.
   {
     vkc::StageMetrics frustum;
-    CHECK(grid.value().map().compact_active_blocks_in_frustum(cam, &frustum));
+    CHECK(grid.value().map().compact_active_blocks_in_frusta_on_device(
+        {vr::volume::make_frustum_planes(cam.fx, cam.fy, cam.cx, cam.cy,
+                                         cam.width, cam.height, cam.min_depth,
+                                         cam.max_depth, cam.cam_to_world)},
+        &frustum));
     CHECK(row_reports_both_halves(frustum, "active set", device_can_time,
                                   "frustum compaction"));
   }
