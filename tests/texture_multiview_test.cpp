@@ -73,7 +73,7 @@ constexpr float kWallZ = 3.0f;
 
 // A camera at `eye` looking along `forward` (in the x-z plane), y down.
 vr::DepthCameraParams camera(vr::Vec3f eye, vr::Vec3f forward) {
-  const vr::Vec3f z = vr::normalize(forward);
+  const vr::Vec3f z = glm::normalize(forward);
   const vr::Vec3f y(0.0f, 1.0f, 0.0f);
   const vr::Vec3f x = vr::cross(y, z);  // so that x cross y = z
   vr::DepthCameraParams c{};
@@ -754,7 +754,7 @@ int main() {
     const std::vector<float> wall = wall_depth(cam0);
     rmesh::Mesh tilted;
     add_small_triangle(tilted, 0.0f, 0.3f, 0.04f,
-                       vr::normalize(vr::Vec3f(-1.0f, 0.0f, -0.03f)));
+                       glm::normalize(vr::Vec3f(-1.0f, 0.0f, -0.03f)));
     identity_indices(tilted);
     const tex::TextureView right =
         color_view(wall.data(), cam0, color_beside(cam0, 0.2f));
@@ -802,25 +802,7 @@ int main() {
     vkc::Result<tex::AtlasLayout> layout = tex::side_by_side_atlas(two, 16);
     CHECK(layout.ok());
     CHECK(layout->width == 8 && layout->height == 2);
-    const std::vector<std::uint32_t> a(8, 0xaaaaaau);
-    const std::vector<std::uint32_t> b(8, 0xbbbbbbu);
-    std::vector<std::uint32_t> atlas;
-    CHECK(tex::pack_atlas({a.data(), b.data()}, layout.value(), &atlas).ok());
-    CHECK(atlas.size() == 16);
-    for (std::size_t row = 0; row < 2; ++row) {
-      for (std::size_t x = 0; x < 8; ++x) {
-        CHECK(atlas[row * 8 + x] == (x < 4 ? 0xaaaaaau : 0xbbbbbbu));
-      }
-    }
-    CHECK(!tex::pack_atlas({a.data()}, layout.value(), &atlas).ok());
-    CHECK(!tex::pack_atlas({a.data(), nullptr}, layout.value(), &atlas).ok());
-    CHECK(tex::pack_atlas({a.data(), b.data()}, layout.value(), nullptr)
-              .domain() == vkc::Status::Code::InvalidArgument);
-    // Two tiles over one another: the second would overwrite the first.
-    tex::AtlasLayout overlapping = layout.value();
-    overlapping.tiles[1].x = 2;
-    CHECK(tex::pack_atlas({a.data(), b.data()}, overlapping, &atlas).domain() ==
-          vkc::Status::Code::InvalidArgument);
+    CHECK(layout->tiles[1].x == 4 && layout->tiles[1].y == 0);
     // Three 4-wide in an extent of 8: two rows, the second half empty.
     const std::vector<tex::TextureView> three = {
         {nullptr, small}, {nullptr, small}, {nullptr, small}};
@@ -828,11 +810,6 @@ int main() {
     CHECK(wrapped.ok());
     CHECK(wrapped->width == 8 && wrapped->height == 4);
     CHECK(wrapped->tiles[2].x == 0 && wrapped->tiles[2].y == 2);
-    std::vector<std::uint32_t> packed;
-    CHECK(tex::pack_atlas({a.data(), b.data(), a.data()}, wrapped.value(),
-                          &packed)
-              .ok());
-    CHECK(packed[3 * 8 + 5] == 0u);  // nothing covers it
     // In a wide extent, three stay in one row, four make two rows of two, and
     // five three columns.
     vkc::Result<tex::AtlasLayout> row = tex::side_by_side_atlas(three, 64);

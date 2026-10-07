@@ -4,9 +4,9 @@
 #pragma once
 
 /// @file atlas_checks.hpp
-/// @brief The checks @ref side_by_side_atlas, @ref pack_atlas and
-///        @ref ProjectiveTexturer share, so a view's tile size and a layout's
-///        soundness mean one thing to all three.
+/// @brief The checks @ref side_by_side_atlas and @ref ProjectiveTexturer
+///        share, so a view's tile size and a layout's soundness mean one
+///        thing to both.
 ///
 /// Internal (under src/, never installed).
 
@@ -38,7 +38,6 @@ core::Result<ImageSize> view_image_size(const TextureView& view,
                                         const std::string& who);
 
 /// @brief Refuse a layout whose tiles do not lie inside it, or overlap: a
-///        tile over another would take its pixels in @ref pack_atlas, and a
 ///        triangle given the lower view would sample the upper one's image.
 /// @param who  The caller's name, prefixed to a refusal.
 /// @return OK, or InvalidArgument.

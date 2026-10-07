@@ -22,17 +22,17 @@ include(GNUInstallDirs)
 find_package(Threads REQUIRED)
 
 # GLM: header-only vector/matrix math. PUBLIC -- it appears in public headers
-# (math/vector_types.hpp aliases glm::vec*/glm::mat4) and must be callable from
-# CUDA device code, so consumers need it too (the package Config re-finds it).
-# An imported CONFIG target brings glm's headers in as SYSTEM includes, so glm
-# internals don't trip -Werror. We link the canonical glm::glm target, which
-# every glm packaging provides -- the name we link here is baked into the
-# exported target and must resolve on every consumer's platform, and the newer
-# glm::glm-header-only target does not exist on older packagings (e.g. Ubuntu's
-# libglm-dev), which would break their find_package(volumetric_kit_recon). glm
-# is header-only in our use, so linking glm::glm carries no runtime library. If
-# a target platform lacks a system glm, supply it via the package manager
-# (brew/apt/vcpkg/Conan) or a FetchContent pin.
+# (math/vector_types.hpp aliases glm::vec*/glm::mat4), so consumers need it too
+# (the package Config re-finds it). An imported CONFIG target brings glm's
+# headers in as SYSTEM includes, so glm internals don't trip -Werror. We link
+# the canonical glm::glm target, which every glm packaging provides -- the name
+# we link here is baked into the exported target and must resolve on every
+# consumer's platform, and the newer glm::glm-header-only target does not exist
+# on older packagings (e.g. Ubuntu's libglm-dev), which would break their
+# find_package(volumetric_kit_recon). glm is header-only in our use, so linking
+# glm::glm carries no runtime library. If a target platform lacks a system glm,
+# supply it via the package manager (brew/apt/vcpkg/Conan) or a FetchContent
+# pin.
 find_package(glm CONFIG REQUIRED)
 
 # The Vulkan loader + headers. PUBLIC: the public headers reach Vulkan through

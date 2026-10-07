@@ -53,7 +53,7 @@ conventions and Vulkan setup.
   `volumetric_kit::recon`: recon declares no `core` namespace, which would
   capture every `core::Status` its code writes.
 - Headers: `include/volumetric_kit/recon/<tier>/…`.
-- Macros: `VR_` prefix (`VR_CORE_API`, `VR_DEVICE_HOST`); the error and
+- Macros: `VR_` prefix (`VR_CORE_API`, `VR_WITH_CUDA`); the error and
   contract macros are volumetric_kit_core's, used under its names (`VKC_TRY`,
   `VKC_ASSIGN`, `VKC_CHECK`, `VKC_VK_TRY`).
   Deliberately *not* the `VK_` prefix — that belongs to Vulkan. (The prior
@@ -769,7 +769,7 @@ bracket, so no `gpu_ms` measures the markers around the work.
 ### volume
 
 `VoxelHashMap` drives init / allocate-from-coords, -depth,
--points, -triangles / remove / compact / compact-in-frustum / resize as GLSL
+-triangles / remove / compact / compact-in-frustum / resize as GLSL
 kernels
 (`volume/shaders/hash_*.comp`) over the scalar-block-layout ABI. Depth
 allocation unprojects a posed frame and dilates each surface block into the
@@ -849,7 +849,7 @@ Every block slot carries a `BlockStamp` (`hash_types.hpp`): ticks of the
 map's clock (`tick()`), in a device buffer beside the heap
 (`stamps_buffer()`), each written by the pass that knows its fact
 (2026-10-01). Every allocation kernel stamps `requested` on each block it
-asks for, inserted or found, and the grid's block pass (`stamp_blocks`)
+asks for, inserted or found, and the grid's block pass (in `free_stale_blocks`)
 stamps `weighted` on each holding an observed voxel. Every pass that
 writes voxels -- `TsdfIntegrator`, `MeshIntegrator`, the codec's
 inverse -- advances the clock first and stamps `changed` on what it
@@ -1053,7 +1053,7 @@ saw nothing), the buffers held by `shared_ptr`. The single-camera pass takes
 one view (the `DeviceMesh` and host `Mesh` overloads), and the several-view
 overloads texture from **several** into an atlas of their images side by
 side, in floor(sqrt(n)) rows so four views make two rows of two
-(`texture_atlas.hpp`: `side_by_side_atlas`, `pack_atlas`), one thread per
+(`texture_atlas.hpp`: `side_by_side_atlas`), one thread per
 **triangle**: each takes the view facing it most squarely among those
 that see its **front** and all three of its vertices, a `fallback` view
 only where no other does, and all three point into that view's tile. Per
@@ -1399,9 +1399,8 @@ transport's.
 `MeshDistance` (point-to-surface distance up to a reach,
 through a hash of cells half the reach on a side, searched nearest first
 and pruned by distance, over a **copy** of the triangles),
-`compare_meshes` giving accuracy, coverage and an optional F-score, and
-`ReferenceMesh`, which indexes a reference once so a sweep can judge many
-meshes against it. They refuse, with `Status`, what would read out of
+and `ReferenceMesh`, which indexes a reference once so a sweep can judge
+many meshes against it, giving accuracy, coverage and an optional F-score. They refuse, with `Status`, what would read out of
 bounds, overflow or mean nothing:
 - a bad reach, or indices out of range;
 - a corner that is not finite or past the cell keys' range;
@@ -1602,8 +1601,7 @@ surface oscillating around a threshold stops relocating on every up-tick —
 and `ExtractTimings`' device half — which must
 bracket several dispatches in **one** timed submit, since a timed submit costs
 ~0.13 ms on MoltenVK and four of the six phases run under that. On `texture`,
-the `TODO(texture)`s: packing the multi-view atlas on the GPU into an image gfx
-samples directly (it needs `core` images), keeping a static keyframe set's
+the `TODO(texture)`s: keeping a static keyframe set's
 depth and coverage in the pass between calls, blending views at their seams,
 and a per-triangle tile
 index in gfx so a shared mesh can be textured from several views; and the

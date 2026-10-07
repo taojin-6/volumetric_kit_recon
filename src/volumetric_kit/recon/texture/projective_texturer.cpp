@@ -264,15 +264,6 @@ core::Status ProjectiveTexturer::texture(const mesh::DeviceMesh& mesh,
 }
 
 core::Status ProjectiveTexturer::texture(const mesh::DeviceMesh& mesh,
-                                         const core::Buffer& depth,
-                                         const DepthCameraParams& cam,
-                                         float occlusion_threshold,
-                                         core::StageMetrics* metrics) {
-  return texture(mesh, TextureView{nullptr, cam}, core::StorageInput(depth),
-                 occlusion_threshold, metrics);
-}
-
-core::Status ProjectiveTexturer::texture(const mesh::DeviceMesh& mesh,
                                          const TextureView& view,
                                          float occlusion_threshold,
                                          core::StageMetrics* metrics) {

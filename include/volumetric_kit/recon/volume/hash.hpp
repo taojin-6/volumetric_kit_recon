@@ -8,7 +8,6 @@
 
 #include <cstdint>
 
-#include "volumetric_kit/recon/core/device_macros.hpp"
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
 
 namespace volumetric_kit::recon::volume {
@@ -75,8 +74,7 @@ inline constexpr std::uint32_t kHashPrimeZ = 83492791u;
 ///                     (enforced by @ref VoxelGridParams::validate); a value of
 ///                     0 is undefined -- integer division by zero.
 /// @return The bucket index the coordinate hashes to.
-VR_DEVICE_HOST inline std::uint32_t hash_bucket(Vec3i block,
-                                                std::int32_t num_buckets) {
+inline std::uint32_t hash_bucket(Vec3i block, std::int32_t num_buckets) {
   const std::uint32_t hash =
       (static_cast<std::uint32_t>(block.x) * kHashPrimeX) ^
       (static_cast<std::uint32_t>(block.y) * kHashPrimeY) ^

@@ -368,6 +368,9 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-06**](#2026-10-06--platforms-linux-android-macos-and-ios-with-gcc-or-clang-windows-and-msvc-are-not-supported-amends-the-2026-06-21-vulkan-path-entry) —
   Platforms: Linux, Android, macOS and iOS, with GCC or Clang; Windows and
   MSVC are not supported.
+- [**2026-10-06**](#2026-10-06--public-api-serves-a-caller-entry-points-only-tests-used-go-or-move-into-their-tests-amends-the-2026-07-04-glm-entry) —
+  Public API serves a caller: entry points only tests used go, or move into
+  their tests.
 
 ## Decision record
 
@@ -432,6 +435,10 @@ compute tiers, and the CUDA↔Vulkan interop exception noted above. *Amends* the
 **not** demote Vulkan.
 
 ### 2026-07-04 — GLM for host/device math (dropped the hand-rolled POD types).
+
+*Amended 2026-10-06 (the test-only API entry, below):* `vr::normalize` and
+`Vec3u8` went with `device_macros.hpp`; the `vr::` aliases and the `dot`,
+`cross` and `length` re-exports stay.
 
 The `vr::Vec3f/Vec3i/Vec4f/Mat4f` vocabulary aliases GLM instead of hand-rolled
 structs. GLM gives tested math, byte-for-byte packed layouts for the Vulkan
@@ -10158,6 +10165,46 @@ of `vr_target_warnings`, `VR_SANITIZE`'s MSVC refusal, `/EHsc` and `/w` in
 codec's `_BitScanReverse64`. (The video decoders' `D3d11va` went with the
 back-end selection, in the device-only decoder entry.) Supporting Windows
 would be a new decision, landing with its CI leg -- and the core's.
+
+### 2026-10-06 — Public API serves a caller: entry points only tests used go, or move into their tests (amends the 2026-07-04 GLM entry).
+
+**The rule.** A public function, type or option has a caller outside the
+tests -- an example, a sibling, the iOS app -- or it goes. A test that needs
+a host-array convenience writes it from the public members.
+
+**What went** (the 2026-10-06 audit's item 4b), by tier:
+- `core`: `device_macros.hpp` (`VR_DEVICE_HOST` and friends; no CUDA
+  translation unit exists, and the first brings them back), `vr::normalize`
+  and `Vec3u8`.
+- `volume`: the salvaged AoS `Voxel`, `VoxelData` and `HashTable`;
+  `allocate_from_points` and its kernel, built into every map;
+  `VoxelBlockGrid::stamp_blocks`, whose pass `free_stale_blocks` runs;
+  `VoxelGridParams::defaults()`, a configuration nothing ran; and the
+  sub-word attribute path: `VoxelBlockGrid::create` refuses an attribute
+  whose block is not whole 4-byte words, so `remove` always zeroes on the
+  device.
+- `mesh`: `ExtractTimings::uncached_cells_per_block`, which only a block
+  larger than 8 reports. The 2026-08-04 rule -- a limit the caller cannot
+  see is the library's to check -- applies to limits a caller can reach.
+- `texture`: `pack_atlas`, superseded by rig_viewer's device copies (which
+  closes the 2026-09-28 projective-texturing entry's open item), and the
+  device-depth `texture` overload.
+- `codec`: `DeviceFrameWriter::write` and `DeviceFrameReader::read` move
+  into their test; `check_intra_frame` becomes file-local; `RansWriter::size`
+  and `Encoder::config` go, and `Encoder` defaults its moves, as `Decoder`
+  does.
+- `eval`: `compare_meshes`, which `ReferenceMesh` does, and
+  `MeshDistance::reach`.
+
+**What stays, though only tests call it:** `VoxelHashMap::diagnostics()`, the
+one window on the device heap counter; the host multi-view and single-view
+`TextureView` `texture` overloads, how the tests drive both kernels with
+hand-built geometry; `FrequencyTable::empty`, which the table itself uses;
+and the camera tier's `distort_rational` and Rodrigues helpers, which calib
+will call.
+
+**Validation.** Apple M5 Max, macOS, Release with warnings as errors, Orbbec
+and FFmpeg: the 53 tests pass with `VR_TEST_HEVC_BACKEND=videotoolbox`.
 
 ## Measured lessons
 
