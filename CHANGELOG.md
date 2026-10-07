@@ -75,6 +75,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- build: **the core pin moves to core #15** (a8b63d1), which adds
+  `CommandBatch::submit_async`, for the pipelined stages to come; recon's
+  calls are unchanged. gfx, pinned at core #13, builds against it.
 - tests: **no test looks for a camera.** `recon_orbbec_sdk_smoke` checks only
   the runtime SDK version, no longer opening a context and enumerating USB
   and network devices, and the conversion test's absent-camera case, which
