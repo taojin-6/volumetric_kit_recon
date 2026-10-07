@@ -93,7 +93,7 @@ core → volume → tsdf → mesh → texture → interop
   BT.709/D65, with exact sRGB as its canonical encoded form. Convert at the
   sensor boundary and encode at presentation.
 - Full Doxygen on public classes/functions, matching
-  `include/volumetric_kit/recon/sensor/camera_capture.hpp`. Deleted
+  `include/volumetric_kit/recon/sensor/rgbd_sensor.hpp`. Deleted
   copy/defaulted move declarations already convey ownership; do not repeat
   "move-only" in prose. `@ref` only recon's own names; write the core's in
   backticks (`Status::Code::Unsupported`).

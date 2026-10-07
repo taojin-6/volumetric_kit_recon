@@ -95,8 +95,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `sensor/lens.hpp` (`LensCamera`, `LensDistortion`, `distort_normalized`)
   is gone: use `camera::CameraModel` and `camera::distort_rational`.
   `OrbbecCapture::Options::cam_to_world` is a `camera::Mat4d`, refused at
-  `open` unless rigid. The examples' own frame type is `OwnedFrame`
-  (`examples/common/owned_frame.hpp`), so it is not taken for this one.
+  `open` unless rigid.
 - `sensor/orbbec`: **the raw path's depth-to-colour extrinsic is a
   rotation.** The Femto Mega's factory one is 1.2% off orthonormal; the
   driver takes its nearest rotation, which moves depth up to about 4 px
@@ -142,6 +141,21 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   returns `Unsupported` without a device.
 - build: **off Apple, `VR_WITH_FFMPEG` needs `VR_WITH_CUDA`**, and the FFmpeg
   floor is 6.1 (libavcodec 60.31); libswscale is no longer used.
+- `io`: **`load_depth_metres` is `load_depth_u16`** (BREAKING): the samples
+  as stored, under the same 16-bit grayscale checks, with no scale; the
+  caller says what a unit is. Migrating: hand the samples to an `RgbdFrame`
+  with `metres_per_unit = 1.0f / depth_scale`, or multiply by that
+  yourself.
+- `examples`: **the Replica examples read an `IRgbdSensor` and prepare their
+  frames on the GPU.** `ReplicaCapture` is `ReplicaSensor`
+  (`examples/common/replica_sensor.hpp`): the depth PNG's samples as stored
+  and the colour as packed words, one pinhole camera for both, posed by the
+  trajectory. `fuse_replica`, `codec_replica`, `fuse_render` and
+  `fuse_viewer` prepare each frame with `GpuFramePrep` and fuse it through
+  `fuse_set`, which `fuse_frame.hpp` now holds (`fuse_device_frame.hpp` is
+  gone); the viewers keep their keyframe as a `DeviceFrame`, texture through
+  its colour camera and read its colour back for the atlas. `--min-depth`
+  must be above 0, as the GPU pass needs.
 
 ### Fixed
 
@@ -204,6 +218,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `sensor`: **host colour planes**: `YuvImage::plane`. `GpuFramePrep` takes
   Y'CbCr colour on the device only, as a buffer or NV12 images, and stages
   a frame on the calling thread.
+- `sensor`: **`ICameraCapture` and `CapturedFrame`** (`camera_capture.hpp`,
+  BREAKING). A source implements `IRgbdSensor` and hands out `RgbdFrame`s,
+  which `GpuFramePrep` prepares for fusion. The iOS scanner, which
+  implements `ICameraCapture` at its pin, moves onto `IRgbdSensor` when it
+  re-pins, quantising ARKit's float depth to 16-bit units; the host-depth
+  overloads, `ColorFrame::pixels`, `to_canonical`, `cv_from_gl_camera` and
+  `depth_from_registered_color` it calls stay until then.
+- `examples`: **`OwnedFrame`** (`owned_frame.hpp`). A frame holds its
+  pixels, so a consumer keeps the `RgbdFrame`, or the `DeviceFrame`
+  prepared from it.
 
 - `sensor/orbbec`: **`OrbbecCapture` and the SDK's host path**: the
   undistortion and registration on the host (`ob::UnDistortionFilter`,

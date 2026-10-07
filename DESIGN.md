@@ -110,12 +110,13 @@ links the family core's base tier and GLM, and no other recon tier.
   their images, a compute pass. A colour image is registered to its depth
   camera or taken by a colour camera of its own, whose line of sight the
   depth map decides too; depth may be on the host or the device.
-- **`sensor`** — the capture *contract*: `ICameraCapture`, the `CapturedFrame`
-  view the fusion tiers consume, and the boundary conversions a capture
-  integration gets silently wrong — camera conventions (pose handedness,
-  registered-depth intrinsics) and colour (`to_canonical`). Reads
-  `DepthCameraParams` + `ColorCameraParams` from `core/camera_params.hpp` and
-  `ColorEncoding` from `core/color_space.hpp`, so it
+- **`sensor`** — the sensor *interface*: `IRgbdSensor`, the `RgbdFrame` it
+  hands out as captured (each camera's `camera::CameraModel`, the pixels it
+  holds), and the boundary conversions a capture integration gets silently
+  wrong — camera conventions (pose handedness, registered-depth intrinsics)
+  and colour (`to_canonical`). Reads `camera`'s models, the
+  `core/camera_params.hpp` pinhole cameras and `ColorEncoding` from
+  `core/color_space.hpp`, so it
   depends on **`camera` and `core` alone** — it sits beside the fusion tiers,
   not on top of them — and bundles **no drivers**: one ships here only if this repo can build
   *and* test it (the 2026-08-02 decision). The one that does, Orbbec, is a
@@ -413,7 +414,7 @@ Concretely:
 
 | Representation | Space | Why |
 | --- | --- | --- |
-| Sensor `CapturedFrame::color` (8-bit) | encoded, as declared | as delivered; the driver declares the curve and converts nothing |
+| Sensor `RgbdFrame` colour (8-bit) | encoded, as declared | as delivered; the driver declares the curve and converts nothing |
 | Voxel `color` attribute (`uint32`) | encoded, canonical | 8 bits are only enough when spent perceptually |
 | `mesh::Vertex::color` (`Vec4f`) | **linear** working | float working value; also what glTF `COLOR_0` specifies |
 | Atlas image (8-bit texture) | encoded, `_SRGB` format | the sampler decodes and filters in linear, for free |
@@ -441,7 +442,7 @@ struct ColorEncoding {
 };
 ```
 
-It rides **beside** the camera — a field on `sensor::CapturedFrame` and
+It rides **beside** the camera — a field on `sensor::RgbdFrame` and
 `tsdf::ColorFrame` — and deliberately *not* inside `ColorCameraParams`. That
 struct is uploaded verbatim to the fusion kernels under scalar block layout,
 pinned at 88 bytes by `static_assert`s with GLSL mirrors in `tsdf/shaders/` and
@@ -605,7 +606,7 @@ source repos are left untouched on disk — never build or write in them.
   hardcoded paths, and machine-specific config.
 - **Drop:** the prior engine's own renderer (gfx replaces it) and its SwiftUI
   demo app (reference only). Its sensor driver framework is rebuilt behind a
-  clean `ICameraCapture` in the later `sensor` tier — the **interface** is
+  clean `IRgbdSensor` in the later `sensor` tier — the **interface** is
   rebuilt here; each *driver* is placed by the buildable-and-testable rule (see
   the 2026-08-02 sensor-tier decision), so a platform-only driver such as ARKit
   lives with the app that can build and run it.
@@ -1064,17 +1065,19 @@ caller.
 
 ### sensor
 
-the capture *contract*: `ICameraCapture` polled for a
-`CapturedFrame` (frames dropped, not queued) and asked `exhausted()` after
-an empty poll, since "nothing this tick" from a live device and "nothing,
-ever" from a replay are the same empty optional (2026-09-14; non-pure,
-`false` by default, so a live driver overrides nothing) — plus the boundary
-math that is silently wrong when guessed — `cv_from_gl_camera`,
-`depth_from_registered_color`, `to_canonical`. Links `recon_core` alone;
-drivers live with the platform that can build *and* test them. Its one
-implementer in this tree is `examples/common/replica_capture.hpp`, which
-plays a Replica sequence back through the contract, so every example run
-produces real frames through it. **`sensor/orbbec`** (`VR_WITH_ORBBEC`, which
+the sensor *interface*: `IRgbdSensor` (below) polled for an `RgbdFrame`
+and asked `exhausted()` after an empty poll, since "nothing this tick" from
+a live device and "nothing, ever" from a replay are the same empty optional
+(2026-09-14; non-pure, `false` by default, so a live driver overrides
+nothing) — plus the boundary math that is silently wrong when guessed —
+`cv_from_gl_camera`, `depth_from_registered_color`, `to_canonical`, which
+only the iOS scanner and the tests call until the scanner moves onto the
+interface (2026-10-07). Links `recon_camera` and `recon_core` alone;
+drivers live with the platform that can build *and* test them. The
+implementer every dataset example runs is
+`examples/common/replica_sensor.hpp`, which plays a Replica sequence back
+through the interface, its frames prepared on the GPU as a camera's.
+**`sensor/orbbec`** (`VR_WITH_ORBBEC`, which
 needs `VR_WITH_FFMPEG` for the colour decoders) is the live Femto Mega,
 through the sensor interface below: **`OrbbecSensor`** for one camera, and
 **`OrbbecRig`** for a synced rig. Both hand out every frame as captured,
@@ -1387,8 +1390,9 @@ order marching cubes' atomics emitted the mesh in.
 `io::load_color_packed` decodes JPEG/PNG to top-left row-major encoded RGB
 bytes in the existing `R | G<<8 | B<<16` packing. It performs no implicit
 linearization or profile conversion; the capture adapter declares the input
-encoding. `io::load_depth_metres` requires a genuine 16-bit single-channel
-PNG and a finite positive units-per-metre divisor. Zero samples stay zero.
+encoding. `io::load_depth_u16` requires a genuine 16-bit single-channel PNG
+and returns its samples as stored: what a unit is, is the caller's to say
+(the Replica sensor's `RgbdFrame::metres_per_unit`).
 Expected dimensions are explicit so a camera cannot silently use different
 intrinsics. The PNG writer takes already-encoded RGBA8 and opens its output
 only after encoding succeeds; PLY export converts linear mesh colors to
@@ -1420,28 +1424,30 @@ now private implementation dependencies of the installed I/O library.
 
 ## Examples
 
-(`examples/`.) The four dataset examples poll their frames through
-`sensor::ICameraCapture&` — the fuse loop never learns what is behind it.
-The two live ones read Orbbec cameras raw, `rig_viewer` a rig's sets
-(`OrbbecRig::poll_set`) and `fuse_orbbec` a camera or a rig, prepare each on
-the GPU in one batch (`GpuFramePrep::prepare_batch`) and fuse it through
-`fuse_device_frame.hpp`'s `fuse_set`: every camera's band in one
-allocation, then every camera in one integrate. The
-four dataset examples take `ReplicaCapture` as the source: frame cap, stride
-and the depth gate are its options, stamped on each frame it hands out, and its
-disk probe at `open` visits only the frames those options select. An empty
-poll is retried after a millisecond until the source reports itself
+(`examples/`.) Every example that fuses prepares its frames on the GPU
+(`sensor::GpuFramePrep`) and fuses them through
+`examples/common/fuse_frame.hpp`'s `fuse_set`: every frame's band in one
+allocation, the map grown on overflow, then every frame in one integrate,
+each frame's encoding declaration carried across, into the one grid layout
+`grid_layout.hpp` defines, which its `create_fusion_grid` builds and
+`codec_replica`'s player shares. The four dataset examples poll their frames
+through `sensor::IRgbdSensor&` — the fuse loop never learns what is behind
+it — and prepare each on its own. The two live ones read Orbbec cameras raw,
+`rig_viewer` a rig's sets (`OrbbecRig::poll_set`) and `fuse_orbbec` a camera
+or a rig, and prepare a set in one batch (`GpuFramePrep::prepare_batch`).
+The four dataset examples take `ReplicaSensor` as the source: frame cap,
+stride and the depth gate are its options, stamped on each frame it hands
+out, and its disk probe at `open` visits only the frames those options
+select. Its frames carry the depth PNG's samples as stored and the colour
+as packed words (`RgbdFrame::color_packed`), one pinhole camera for both. An
+empty poll is retried after a millisecond until the source reports itself
 `exhausted()`, so a live driver in the same construction site waits and the
-replay ends. Each frame fuses
-through `examples/common/fuse_frame.hpp` (the one allocate-and-grow-then-
-integrate loop, carrying the frame's encoding declaration across, into the one
-grid layout `grid_layout.hpp` defines, which its `create_fusion_grid` builds and
-`codec_replica`'s player shares), and a frame kept past the next
-poll — `fuse_render`'s keyframe, `fuse_viewer`'s newest fused frame for its
-final texture pass — is copied into an
-`OwnedFrame` of its own (`examples/common/owned_frame.hpp`, the type the
-reader decodes into; `CapturedFrame` is its view), never borrowed: the empty
-poll that ends a replay is a poll. `fuse_replica`
+replay ends. A frame kept past the next poll — `fuse_render`'s keyframe,
+`fuse_viewer`'s newest frame for its final texture pass — is kept as
+prepared, a `DeviceFrame` holding its buffers, and textures through its own
+colour camera, its colour read back to the host for the atlas;
+`fuse_viewer` lets its frame go right before the next prepare, so the pass
+reuses the buffers. `fuse_replica`
 runs the spine on a posed
 Replica-SLAM RGB-D sequence and writes a PLY; `--dirty-every` reports the
 changed and re-mesh fractions over windows of its own, keeping its own tick.
@@ -1458,8 +1464,7 @@ The live counterpart is its own example, not a `fuse_replica` flag:
 **`fuse_orbbec`** (`VR_WITH_ORBBEC`) reads one camera as an `OrbbecSensor`,
 or with `--rig sync.json` a rig as an `OrbbecRig`, posed by
 `--calibration`, prepares each poll's frames on the GPU and fuses them
-through `fuse_device_frame.hpp`, the one header that pulls in
-`sensor/utils`, and writes a PLY after `--frames` frames. Colour is H.265
+through `fuse_set`, and writes a PLY after `--frames` frames. Colour is H.265
 unless `--mjpeg`.
 **`rig_viewer`** (`VR_BUILD_VIEWER` with `VR_WITH_ORBBEC` and
 `VR_WITH_FFMPEG`) is `fuse_viewer`'s live-rig sibling: raw sets prepared,
@@ -1513,9 +1518,13 @@ landed; the stack continues:
 1. **The sensor interface.** `RgbdFrame` (each camera's `CameraModel`,
    `color_to_world` and `depth_to_color`, a sequence number, pixels it holds)
    and `IRgbdSensor` with `SensorInfo` have landed, the Femto Mega as
-   `OrbbecSensor`, and `OrbbecCapture` and the SDK's host path are gone.
-   Next the Replica source moves onto the interface, the frame gains float
-   depth and RGBA8 colour, and `ICameraCapture` and `CapturedFrame` go.
+   `OrbbecSensor`, and `OrbbecCapture` and the SDK's host path are gone. The
+   Replica source is an `IRgbdSensor` too, its colour packed host words
+   (`RgbdFrame::color_packed`), and `ICameraCapture` and `CapturedFrame`
+   are gone (2026-10-07). The frame gains no float depth: the iOS scanner,
+   which still calls the host-depth and convention entry points kept for
+   it, quantises ARKit's float depth to 16 bits when it moves onto the
+   interface.
 2. **`SensorArray`**, vendor-neutral, has landed: start order from the sync
    roles, trigger grouping, poses from the calibration file
    (nearest-frame and tracked members later), and `process(set)`, every

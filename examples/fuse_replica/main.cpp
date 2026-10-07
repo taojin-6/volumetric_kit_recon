@@ -3,8 +3,9 @@
 
 // fuse_replica: the end-to-end reconstruction example. Polls a posed RGB-D
 // sequence in the Replica-SLAM layout (nvblox's fuse_replica dataset) through
-// the sensor tier's ICameraCapture contract, fuses each frame into a sparse
-// TSDF volume (allocate the truncation band, then integrate depth + colour),
+// the sensor tier's IRgbdSensor interface, prepares each frame on the GPU
+// (sensor::GpuFramePrep) as a camera's, fuses it into a sparse TSDF volume
+// (allocate the truncation band, then integrate depth + colour),
 // periodically extracts a marching-cubes mesh, and writes the final coloured
 // mesh to a binary PLY for inspection. This is the headless spine; the
 // live-viewer variant renders the growing mesh each frame through the
@@ -30,7 +31,7 @@
 #include <vector>
 
 #include "fuse_frame.hpp"
-#include "replica_capture.hpp"
+#include "replica_sensor.hpp"
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
@@ -40,7 +41,9 @@
 #include "volumetric_kit/recon/io/ply_writer.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
 #include "volumetric_kit/recon/mesh/mesh.hpp"
-#include "volumetric_kit/recon/sensor/camera_capture.hpp"
+#include "volumetric_kit/recon/sensor/rgbd_frame.hpp"
+#include "volumetric_kit/recon/sensor/rgbd_sensor.hpp"
+#include "volumetric_kit/recon/sensor/utils/gpu_frame_prep.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_grid.hpp"
@@ -249,9 +252,10 @@ vkc::Result<Options> parse_args(int argc, char** argv) {
   if (!(opt.max_depth > 0.0f)) {
     return vkc::Status::invalid_argument("--max-depth must be > 0");
   }
-  if (opt.min_depth < 0.0f || opt.min_depth >= opt.max_depth) {
+  // Above 0, which the GPU pass reads as "no return".
+  if (!(opt.min_depth > 0.0f) || opt.min_depth >= opt.max_depth) {
     return vkc::Status::invalid_argument(
-        "--min-depth must be in [0, --max-depth)");
+        "--min-depth must be in (0, --max-depth)");
   }
   if (!(opt.max_weight > 0.0f)) {
     return vkc::Status::invalid_argument("--max-weight must be > 0");
@@ -282,24 +286,23 @@ vkc::Status run(const Options& opt) {
              vkc::Allocator::create(instance.handle(), device));
 
   // --- Capture ---
-  // The sequence arrives through the sensor contract: frame selection and the
-  // depth gate are the capture's options, the intrinsics and pose ride on each
-  // frame, and the loop below never learns it is reading a disk. A live source
-  // replaces this one construction.
-  vr_example::ReplicaCapture::Options capture_options;
+  // The sequence arrives through the sensor interface: frame selection and
+  // the depth gate are the sensor's options, the cameras and pose ride on
+  // each frame, and the loop below never learns it is reading a disk. A live
+  // source replaces this one construction.
+  vr_example::ReplicaSensor::Options capture_options;
   capture_options.frame_limit = static_cast<std::size_t>(opt.max_frames);
   capture_options.frame_stride = static_cast<std::size_t>(opt.stride);
   capture_options.min_depth = opt.min_depth;
   capture_options.max_depth = opt.max_depth;
-  VKC_ASSIGN(vr_example::ReplicaCapture replica,
-             vr_example::ReplicaCapture::open(opt.scene_dir, opt.cam_params,
-                                              capture_options));
-  const vr::ColorCameraParams& cam = replica.color_camera();
+  VKC_ASSIGN(vr_example::ReplicaSensor replica,
+             vr_example::ReplicaSensor::open(opt.scene_dir, opt.cam_params,
+                                             capture_options));
+  const vr::camera::CameraModel& cam = *replica.info().color;
   std::printf(
-      "capture: %zu frames to play, %ux%u @ fx=%.1f fy=%.1f cx=%.1f cy=%.1f, "
-      "depth scale %.1f\n",
-      replica.frame_count(), cam.width, cam.height, cam.fx, cam.fy, cam.cx,
-      cam.cy, replica.depth_scale());
+      "capture: %zu frames to play, %ux%u @ fx=%.1f fy=%.1f cx=%.1f cy=%.1f\n",
+      replica.frame_count(), cam.size.width, cam.size.height, cam.intrinsics.fx,
+      cam.intrinsics.fy, cam.intrinsics.cx, cam.intrinsics.cy);
 
   // --- Volume + pipeline ---
   VKC_ASSIGN(vol::VoxelBlockGrid volume,
@@ -307,6 +310,8 @@ vkc::Status run(const Options& opt) {
                                             opt.trunc, opt.num_buckets));
   VKC_ASSIGN(tsdf::TsdfIntegrator integrator,
              tsdf::TsdfIntegrator::create(device, allocator));
+  VKC_ASSIGN(sensor::GpuFramePrep prep,
+             sensor::GpuFramePrep::create(device, allocator));
   VKC_ASSIGN(mesh::MarchingCubes extractor,
              mesh::MarchingCubes::create(device, allocator, [&] {
                mesh::MarchingCubesConfig c;
@@ -335,8 +340,8 @@ vkc::Status run(const Options& opt) {
                 preload_seconds);
   }
 
-  // From here on the source is the contract, not the dataset.
-  sensor::ICameraCapture& capture = replica;
+  // From here on the source is the interface, not the dataset.
+  sensor::IRgbdSensor& capture = replica;
   VKC_TRY(capture.start());
 
   const auto t_start = std::chrono::steady_clock::now();
@@ -365,8 +370,7 @@ vkc::Status run(const Options& opt) {
     // device report alike; only the source knows whether that is the end. A
     // decode failure on a frame that is present is a real error and stops the
     // run.
-    VKC_ASSIGN(const std::optional<sensor::CapturedFrame> polled,
-               capture.poll());
+    VKC_ASSIGN(const std::optional<sensor::RgbdFrame> polled, capture.poll());
     if (!polled) {
       if (capture.exhausted()) {
         break;
@@ -375,9 +379,10 @@ vkc::Status run(const Options& opt) {
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
       continue;
     }
-    const sensor::CapturedFrame& frame = *polled;
-    VKC_TRY(vr_example::fuse_frame(volume, integrator, frame, opt.max_weight,
-                                   &stage_totals));
+    VKC_ASSIGN(const sensor::DeviceFrame frame,
+               prep.prepare(*polled, &stage_totals));
+    VKC_TRY(vr_example::fuse_set(volume, integrator, {frame}, opt.max_weight,
+                                 &stage_totals));
     ++fused;
 
     if (opt.dirty_every > 0 &&

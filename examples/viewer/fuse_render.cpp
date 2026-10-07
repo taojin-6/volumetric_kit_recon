@@ -2,8 +2,9 @@
 // Copyright (c) 2026 Tao Jin
 
 // fuse_render: the recon -> gfx interop demo, headless. Fuse a posed Replica
-// RGB-D sequence -- polled through the sensor tier's ICameraCapture contract --
-// into a sparse TSDF+colour volume with volumetric_kit_recon,
+// RGB-D sequence -- polled through the sensor tier's IRgbdSensor interface and
+// prepared on the GPU (sensor::GpuFramePrep) as a camera's frames are -- into
+// a sparse TSDF+colour volume with volumetric_kit_recon,
 // extract a marching-cubes mesh, hand it across the interop seam (a host mesh:
 // recon extracts on its device, gfx uploads on its own), and render the
 // coloured reconstruction to a PNG through volumetric_kit_gfx's
@@ -29,14 +30,14 @@
 
 #include <glm/glm.hpp>
 
-#include "fuse_frame.hpp"   // vr_example::fuse_frame
-#include "owned_frame.hpp"  // vr_example::OwnedFrame
+#include "fuse_frame.hpp"  // vr_example::fuse_set
 #include "recon_gfx_bridge.hpp"
-#include "replica_capture.hpp"  // vr_example::ReplicaCapture (examples/common)
+#include "replica_sensor.hpp"  // vr_example::ReplicaSensor (examples/common)
 
 // core and recon tiers
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "volumetric_kit/core/vulkan/command_batch.hpp"
 #include "volumetric_kit/core/vulkan/descriptor.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/image.hpp"
@@ -46,8 +47,9 @@
 #include "volumetric_kit/recon/io/image_io.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
 #include "volumetric_kit/recon/mesh/mesh.hpp"
-#include "volumetric_kit/recon/sensor/camera_capture.hpp"
-#include "volumetric_kit/recon/sensor/color_conventions.hpp"
+#include "volumetric_kit/recon/sensor/rgbd_frame.hpp"
+#include "volumetric_kit/recon/sensor/rgbd_sensor.hpp"
+#include "volumetric_kit/recon/sensor/utils/gpu_frame_prep.hpp"
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
@@ -223,11 +225,10 @@ bool parse_args(int argc, char** argv, Options& o) {
     std::fprintf(stderr, "--max-depth must be finite and > 0\n");
     return false;
   }
-  // The same range rule the capture applies, checked here where the flags
+  // The same range rule the sensor applies, checked here where the flags
   // still have their names -- as fuse_replica does.
-  if (!std::isfinite(o.min_depth) || o.min_depth < 0.0f ||
-      o.min_depth >= o.max_depth) {
-    std::fprintf(stderr, "--min-depth must be in [0, --max-depth)\n");
+  if (!(o.min_depth > 0.0f) || o.min_depth >= o.max_depth) {
+    std::fprintf(stderr, "--min-depth must be in (0, --max-depth)\n");
     return false;
   }
   if (!std::isfinite(o.yaw) || !std::isfinite(o.pitch)) {
@@ -245,9 +246,10 @@ bool parse_args(int argc, char** argv, Options& o) {
 // empty when texturing is off, and the caller binds a 1x1 white dummy instead.
 struct Reconstruction {
   rmesh::Mesh mesh;
-  // Canonical packed pixels (R | G<<8 | B<<16 | 0xFF<<24), atlas_w * atlas_h
-  // -- the bytes of an RGBA8 upload on a little-endian host, which every
-  // Vulkan platform this repo targets is.
+  // Canonical packed pixels (R | G<<8 | B<<16, the coverage byte on top: 0xFF
+  // wherever the lens saw), atlas_w * atlas_h -- the bytes of an RGBA8 upload
+  // on a little-endian host, which every Vulkan platform this repo targets
+  // is.
   std::vector<std::uint32_t> atlas;
   std::uint32_t atlas_w = 0;
   std::uint32_t atlas_h = 0;
@@ -268,30 +270,33 @@ vkc::Result<Reconstruction> fuse(const Options& opt,
   VKC_ASSIGN(vkc::Allocator allocator,
              vkc::Allocator::create(instance.handle(), device));
 
-  // The sequence arrives through the sensor contract; only this construction
-  // knows it is a disk. The frame cap and the depth gate are the capture's
+  // The sequence arrives through the sensor interface; only this construction
+  // knows it is a disk. The frame cap and the depth gate are the sensor's
   // options, so every frame it hands out is already gated.
-  vr_example::ReplicaCapture::Options capture_options;
+  vr_example::ReplicaSensor::Options capture_options;
   capture_options.frame_limit =
       static_cast<std::size_t>(std::max(0, opt.max_frames));
   capture_options.min_depth = opt.min_depth;
   capture_options.max_depth = opt.max_depth;
-  VKC_ASSIGN(vr_example::ReplicaCapture replica,
-             vr_example::ReplicaCapture::open(opt.scene_dir, opt.cam_params,
-                                              capture_options));
-  const vr::ColorCameraParams& cam = replica.color_camera();
+  VKC_ASSIGN(vr_example::ReplicaSensor replica,
+             vr_example::ReplicaSensor::open(opt.scene_dir, opt.cam_params,
+                                             capture_options));
+  const vr::camera::CameraModel& cam = *replica.info().color;
+  const float cy = static_cast<float>(cam.intrinsics.cy);
+  const float fy = static_cast<float>(cam.intrinsics.fy);
   // Split about the principal point rather than assuming it is centred: cy is
   // 339.5 on Replica, not height/2.
   const float sensor_vfov =
-      std::atan(static_cast<float>(cam.cy) / static_cast<float>(cam.fy)) +
-      std::atan((static_cast<float>(cam.height) - static_cast<float>(cam.cy)) /
-                static_cast<float>(cam.fy));
+      std::atan(cy / fy) +
+      std::atan((static_cast<float>(cam.size.height) - cy) / fy);
 
   VKC_ASSIGN(
       vol::VoxelBlockGrid volume,
       vr_example::create_fusion_grid(device, allocator, opt.voxel, opt.trunc));
   VKC_ASSIGN(rtsdf::TsdfIntegrator integrator,
              rtsdf::TsdfIntegrator::create(device, allocator));
+  VKC_ASSIGN(rsensor::GpuFramePrep prep,
+             rsensor::GpuFramePrep::create(device, allocator));
   rmesh::MarchingCubesConfig mc_config;
   mc_config.share_vertices = opt.share_vertices;
   VKC_ASSIGN(rmesh::MarchingCubes extractor,
@@ -299,7 +304,7 @@ vkc::Result<Reconstruction> fuse(const Options& opt,
 
   // Decode the sequence up front when asked, so the fuse loop below runs at
   // GPU speed instead of at JPEG/PNG decode speed (~75% of a streaming loop).
-  // Costs ~6 MB per frame of RAM, announced before it is spent.
+  // Costs ~4.9 MB per frame of RAM, announced before it is spent.
   if (opt.preload) {
     std::printf(
         "preloading %.0f MB...\n",
@@ -309,21 +314,20 @@ vkc::Result<Reconstruction> fuse(const Options& opt,
                 static_cast<double>(replica.preloaded_bytes()) / (1024 * 1024));
   }
 
-  // The keyframe the mesh is textured with, retained as it goes by: the
-  // --follow frame if given, else the middle of the sequence. A frame is a
-  // view the capture recycles on the next poll, so keeping one past that point
-  // means copying it -- exactly what a live consumer does with a keyframe, and
-  // why this no longer reaches back into the dataset for it once fusion is
-  // done.
+  // The keyframe the mesh is textured with, kept as prepared as it goes by:
+  // the --follow frame if given, else the middle of the sequence. It holds its
+  // buffers on the device, so the next prepare writes to new ones -- exactly
+  // what a live consumer does with a keyframe, and why this never reaches
+  // back into the dataset for it once fusion is done.
   const std::size_t keyframe_index =
       (opt.follow >= 0 &&
        static_cast<std::size_t>(opt.follow) < replica.frame_count())
           ? static_cast<std::size_t>(opt.follow)
           : replica.frame_count() / 2;
-  vr_example::OwnedFrame keyframe;
+  std::optional<rsensor::DeviceFrame> keyframe;
 
-  // From here on the source is the contract, not the dataset.
-  rsensor::ICameraCapture& capture = replica;
+  // From here on the source is the interface, not the dataset.
+  rsensor::IRgbdSensor& capture = replica;
   VKC_TRY(capture.start());
   std::size_t fused = 0;
   for (;;) {
@@ -332,8 +336,7 @@ vkc::Result<Reconstruction> fuse(const Options& opt,
     // decode failure -- a truncated JPEG, a wrong-size depth PNG -- is a real
     // failure and ends the run, where treating it as the end of the sequence
     // once made this leg write a partial-room PNG and exit 0.
-    VKC_ASSIGN(const std::optional<rsensor::CapturedFrame> polled,
-               capture.poll());
+    VKC_ASSIGN(const std::optional<rsensor::RgbdFrame> polled, capture.poll());
     if (!polled) {
       if (capture.exhausted()) {
         break;
@@ -342,15 +345,15 @@ vkc::Result<Reconstruction> fuse(const Options& opt,
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
       continue;
     }
-    const rsensor::CapturedFrame& frame = *polled;
+    VKC_ASSIGN(rsensor::DeviceFrame frame, prep.prepare(*polled));
     poses.push_back(frame.depth_camera.cam_to_world);
-    if (opt.texture && fused == keyframe_index && frame.has_color()) {
-      keyframe.assign(frame);
-    }
     // Allocate the band (growing the map on overflow, as fuse_replica does)
     // and integrate depth + colour; a frame whose band never fully allocated
     // is refused rather than fused with silent holes.
-    VKC_TRY(vr_example::fuse_frame(volume, integrator, frame, 20.0f, nullptr));
+    VKC_TRY(vr_example::fuse_set(volume, integrator, {frame}, 20.0f, nullptr));
+    if (opt.texture && fused == keyframe_index && frame.has_color()) {
+      keyframe = std::move(frame);
+    }
     ++fused;
   }
   std::printf("fused %zu frames\n", fused);
@@ -364,24 +367,32 @@ vkc::Result<Reconstruction> fuse(const Options& opt,
   // the rest keep the sentinel and render with fused voxel colour. The atlas
   // the uv0 index into is that frame's own colour image (below), so texturing
   // keeps full sensor resolution where the camera had line of sight.
-  if (!keyframe.empty() && !recon.mesh.vertices.empty()) {
-    const rsensor::CapturedFrame kf = keyframe.view();
+  if (keyframe && !recon.mesh.vertices.empty()) {
+    const rsensor::DeviceFrame& kf = *keyframe;
     VKC_ASSIGN(rtex::ProjectiveTexturer texturer,
                rtex::ProjectiveTexturer::create(device, allocator));
-    VKC_TRY(texturer.texture(recon.mesh, kf.depth, kf.depth_camera));
+    // Through the colour camera, the coverage read off the colour's high
+    // byte: the frame as the GPU pass left it, as for any camera.
+    rtex::TextureView view;
+    view.cam = kf.depth_camera;
+    view.depth_buffer = kf.depth;
+    view.color_camera = kf.color_camera;
+    view.coverage = kf.color;
+    VKC_TRY(texturer.texture(recon.mesh, view));
 
     // Atlas = the keyframe's colour image at full resolution -- exactly what
-    // uv0 = (pixel + 0.5)/size index -- brought to the canonical form through
-    // the sensor boundary's one conversion, honouring the frame's encoding
-    // declaration on this leg exactly as the integrator does on the fuse leg
-    // (for Replica's sRGB JPEGs that is the identity plus an opaque alpha).
-    // The atlas is uploaded as _SRGB below, which assumes canonical bytes;
-    // packing them here by hand would assume it silently.
+    // uv0 = (pixel + 0.5)/size index -- read back from the device. The pass
+    // refuses colour it cannot make canonical, so these are canonical bytes,
+    // R | G<<8 | B<<16 and the coverage byte, opaque wherever the lens saw.
+    // The atlas is uploaded as _SRGB below, which assumes exactly that, onto
+    // gfx's own device: hence the host copy (seam A).
     const std::size_t pixels = static_cast<std::size_t>(kf.color_camera.width) *
                                kf.color_camera.height;
     recon.atlas.resize(pixels);
-    VKC_TRY(rsensor::to_canonical(kf.color, pixels, kf.color_encoding,
-                                  recon.atlas.data()));
+    vkc::CommandBatch batch(device, allocator);
+    VKC_TRY(batch.readback(*kf.color, 0, pixels * sizeof(std::uint32_t),
+                           recon.atlas.data()));
+    VKC_TRY(batch.submit());
     recon.atlas_w = kf.color_camera.width;
     recon.atlas_h = kf.color_camera.height;
     std::printf("textured with frame %zu (%ux%u atlas)\n", keyframe_index,

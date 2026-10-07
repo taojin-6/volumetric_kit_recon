@@ -24,13 +24,13 @@ add_subdirectory(volumetric_kit/recon/io)
 # mesh (the Mesh it textures) + volume (DepthCameraParams + the projection ABI),
 # both to its left, so the strict dependency rule holds.
 add_subdirectory(volumetric_kit/recon/texture)
-# sensor is the capture contract: ICameraCapture + CapturedFrame + the camera
-# convention conversions. It depends on camera and core alone -- the
-# camera-parameter structs it trades in are core vocabulary
-# (core/camera_params.hpp), not voxels or fusion -- so it sits beside the fusion
-# tiers rather than on top of them, and stays implementable from outside this
-# repo, with drivers deliberately left to whoever can build and test them (the
-# 2026-08-02 decision).
+# sensor is the sensor interface: IRgbdSensor + RgbdFrame + the camera and
+# colour convention conversions. It depends on camera and core alone -- the
+# camera types it trades in are camera::CameraModel and core vocabulary, not
+# voxels or fusion -- so it sits beside the fusion tiers rather than on top of
+# them, and stays implementable from outside this repo, with drivers
+# deliberately left to whoever can build and test them (the 2026-08-02
+# decision).
 add_subdirectory(volumetric_kit/recon/sensor)
 add_subdirectory(volumetric_kit/recon/codec)
 # Quality measurement for the tests and examples that judge a reconstruction or

@@ -191,8 +191,9 @@ is measured.
     compaction and one dispatch. Each voxel loops over the cameras in input
     order and carries its `tsdf`, `weight` and colour in registers, so it
     reads and writes memory once.
-  - `fuse_set` in `examples/common/fuse_device_frame.hpp`, used by
-    `rig_viewer` and `fuse_orbbec`.
+  - `fuse_set` in `examples/common/fuse_frame.hpp` (`fuse_device_frame.hpp`
+    until 2026-10-07), used by `rig_viewer`, `fuse_orbbec` and, since then,
+    the Replica examples.
 - **Binding N buffers.** Use descriptor arrays with dynamic indexing
   (`shaderStorageBufferArrayDynamicIndexing`, an optional core 1.0 feature).
   - `Device::create` does not enable it today; see the reasoning at

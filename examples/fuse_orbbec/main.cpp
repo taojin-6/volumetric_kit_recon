@@ -5,7 +5,7 @@
 // synced rig of them. Opens sensor::OrbbecSensor (one camera) or
 // sensor::OrbbecRig, prepares each frame on the GPU (sensor::GpuFramePrep), a
 // rig's set in one batch, fuses it into a sparse TSDF volume
-// (examples/common/fuse_device_frame.hpp), and after --frames frames extracts
+// (examples/common/fuse_frame.hpp), and after --frames frames extracts
 // a marching-cubes mesh and writes it to a binary PLY.
 //
 //   fuse_orbbec [--serial SN | --rig sync.json [--apply-sync]]
@@ -38,7 +38,7 @@
 #include <thread>
 #include <vector>
 
-#include "fuse_device_frame.hpp"
+#include "fuse_frame.hpp"
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"

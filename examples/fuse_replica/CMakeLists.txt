@@ -6,6 +6,6 @@
 add_executable(fuse_replica main.cpp)
 
 target_link_libraries(
-  fuse_replica PRIVATE vr_example_common volumetric_kit::recon_tsdf
-                       Vulkan::Vulkan)
+  fuse_replica PRIVATE vr_example_common volumetric_kit::recon_sensor_utils
+                       volumetric_kit::recon_tsdf Vulkan::Vulkan)
 vr_target_warnings(fuse_replica)
