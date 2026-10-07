@@ -110,6 +110,7 @@
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
 #include "volumetric_kit/recon/texture/texture_atlas.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
+#include "volumetric_kit/recon/volume/frustum.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
 
@@ -1081,6 +1082,9 @@ int run(GLFWwindow* window, const Options& opt) {
   AtlasJob pending_job;
   std::uint64_t published_version = 0;
   std::uint64_t shared_released_through = 0;
+  // The render camera, and a serial that moves when it does (see fuse_viewer).
+  glm::mat4 shared_view_proj(1.0f);
+  std::uint64_t shared_view_serial = 0;
   std::vector<vkc::StageRow> shared_fuse_stages;
   RigPanel shared_panel;
   std::atomic<bool> fusing_done{false};
@@ -1268,11 +1272,33 @@ int run(GLFWwindow* window, const Options& opt) {
                     100.0 * occlusion.load(),
                     dynamic_on.load() ? "dynamic" : "static", ms);
       };
+      // Mesh what the render camera sees, as fuse_viewer does: the blocks
+      // inside its frustum, widened by kViewMargin for the frames the view
+      // moves on before the mesh is drawn.
+      constexpr float kViewMargin = 0.25f;  // metres
+      std::uint64_t meshed_view = 0;
+      auto extract_view = [&]() -> vkc::Result<rmesh::DeviceMesh> {
+        glm::mat4 view_proj;
+        {
+          std::lock_guard<std::mutex> lock(share_mtx);
+          view_proj = shared_view_proj;
+          meshed_view = shared_view_serial;
+        }
+        if (meshed_view == 0) return extractor.extract_device(volume, 0.0f);
+        VKC_ASSIGN(const vol::DeviceBlockList visible,
+                   volume.map().compact_active_blocks_in_frusta_on_device(
+                       {vol::make_frustum_planes(view_proj, kViewMargin)}));
+        return extractor.extract_device(volume, 0.0f, visible);
+      };
+      auto view_moved = [&]() {
+        std::lock_guard<std::mutex> lock(share_mtx);
+        return shared_view_serial != meshed_view;
+      };
       auto remesh = [&](const std::vector<TextureSource>& sources) {
         remesh_stages.clear();
         vkc::Result<rmesh::DeviceMesh> extracted = [&]() {
           vkc::StageScope scope(remesh_stages, "extract");
-          return extractor.extract_device(volume, 0.0f);
+          return extract_view();
         }();
         // Published even when empty: an extract claims a ring slot either
         // way (see fuse_viewer).
@@ -1297,7 +1323,15 @@ int run(GLFWwindow* window, const Options& opt) {
       std::uint64_t sets = 0;
       std::uint64_t frames_fused = 0;
       auto last_set = std::chrono::steady_clock::now();
+      std::uint64_t last_set_ns = 0;
       bool said_silent = false;
+      // Re-mesh when the view moved while no set fused, from the last set's
+      // frames: an idle rig, or one a --sets run has stopped.
+      auto remesh_if_view_moved = [&]() {
+        if (!view_moved() || !release_and_may_publish()) return false;
+        remesh(texture_sources(newest, sets, last_set_ns, hold_ns));
+        return true;
+      };
       while (started.ok() && !quit.load()) {
         const auto poll_start = std::chrono::steady_clock::now();
         auto polled = rig.poll_set();
@@ -1320,7 +1354,9 @@ int run(GLFWwindow* window, const Options& opt) {
             std::lock_guard<std::mutex> lock(share_mtx);
             shared_panel.silent = silent;
           }
-          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+          if (!remesh_if_view_moved()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+          }
           continue;
         }
         last_set = std::chrono::steady_clock::now();
@@ -1336,6 +1372,13 @@ int run(GLFWwindow* window, const Options& opt) {
         fuse_stages.add_cpu("poll", poll_ms);
         const rsensor::OrbbecRigSet& set = *polled.value();
         const std::uint64_t set_ns = set.timestamp_ns;
+        last_set_ns = set_ns;
+        // Released before this set's prep when no later set may texture from
+        // them, so it can reuse their buffers; till then a view-change remesh
+        // textures from them.
+        if (hold_ns == 0 || !texture_on.load()) {
+          newest.assign(cameras, std::nullopt);
+        }
         auto prepared = [&]() {
           // One row for the set: the cameras prepare in one batch.
           vkc::StageScope scope(fuse_stages, "frame prep");
@@ -1380,12 +1423,12 @@ int run(GLFWwindow* window, const Options& opt) {
           }
         }
 
-        // The last set of a --sets run is always meshed: it is the complete
-        // surface, and nothing later will supersede it. So it waits a moment
-        // for the renderer to collect the previous mesh, then extracts whether
-        // or not it did, as fuse_viewer's final extract does -- a minimized
-        // window never collects, and skipping lost the surface with nothing
-        // said. Not once the window has closed, where a full extract and
+        // The last set of a --sets run is always meshed: it meshes the last
+        // sets fused, and only a view change supersedes it. So it waits a
+        // moment for the renderer to collect the previous mesh, then extracts
+        // whether or not it did, as fuse_viewer's final extract does -- a
+        // minimized window never collects, and skipping lost the surface with
+        // nothing said. Not once the window has closed, where an extract and
         // texture would only stall the join.
         const bool last =
             opt.sets > 0 && sets >= static_cast<std::uint64_t>(opt.sets);
@@ -1410,11 +1453,6 @@ int run(GLFWwindow* window, const Options& opt) {
                          "the last set anyway\n");
             remesh(texture_sources(newest, sets, set_ns, hold_ns));
           }
-        }
-        // Kept past this set only while a later remesh can texture from them:
-        // a kept frame stops its camera's frame prep reusing the buffers.
-        if (hold_ns == 0 || !texture_on.load()) {
-          newest.assign(cameras, std::nullopt);
         }
         // Fusion alone, before the remesh rows go in: those describe the
         // newest remesh, not this set, and are reported beside it.
@@ -1442,6 +1480,17 @@ int run(GLFWwindow* window, const Options& opt) {
           shared_panel.silent = false;
         }
         if (last) break;
+      }
+      // A --sets run has stopped fusing, but the view still moves: re-mesh
+      // what it sees whenever it changes, until the window closes.
+      if (!fuse_failed.load() && !quit.load()) {
+        rig.stop();
+        fusing_done.store(true);
+        while (!quit.load()) {
+          if (!remesh_if_view_moved()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+          }
+        }
       }
     } catch (const std::exception& e) {
       std::fprintf(stderr, "rig_viewer: fuse thread aborted: %s\n", e.what());
@@ -1672,6 +1721,14 @@ int run(GLFWwindow* window, const Options& opt) {
           vg::camera::Camera::look_at_perspective(
               view.eye(), view.target, view.up, vfov, aspect, 0.05f, far_plane)
               .view_proj();
+    }
+    {
+      // For the fuse thread to mesh; the serial moves only with the view.
+      std::lock_guard<std::mutex> lock(share_mtx);
+      if (view_proj != shared_view_proj) {
+        shared_view_proj = view_proj;
+        ++shared_view_serial;
+      }
     }
 
     if (overlay) {

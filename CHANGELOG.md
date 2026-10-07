@@ -52,6 +52,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   left on the device in a list of their own, which
   `check_device_block_list` refuses as not the active set. Tests:
   `recon_volume_frustum`, `recon_tsdf_integrate_cull`.
+- `mesh` / `volume`: **marching cubes over a device block list**.
+  `MarchingCubes::extract_device(grid, iso, const DeviceBlockList&, timings)`
+  meshes exactly the listed blocks, bound in place, with no hole at the cull
+  edge; `VoxelHashMap::check_device_block_subset` accepts the map's active set
+  or its frusta list while it holds, and the extract refuses any other before
+  it claims a ring slot. A later frustum compaction now makes an earlier
+  frusta list stale. Test: `recon_mesh_marching_cubes_sparse`.
 
 ### Changed
 
@@ -63,8 +70,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   M5 Max: 0.5-0.7 ms against 3.3-5.2 ms of device time a frame). A frame
   whose principal point lies outside its image fuses the whole active set.
   The dispatch-size refusal counts the reached blocks, and a fuse no longer
-  leaves the map's full list for an extract to reuse. The host
-  `compact_active_blocks_in_frustum` no longer invalidates that list either.
+  leaves the map's full list for an extract to reuse.
+- `fuse_viewer`, `rig_viewer`: **mesh only what the render camera sees**.
+  The render thread publishes its `view_proj`; the fuse thread meshes the
+  blocks inside it, 0.25 m wider, after fusing (at `--remesh-every`) and
+  whenever the view moves while nothing fuses, so both fuse threads now run
+  until the window closes. The whole map is meshed until a view exists.
+- `mesh`: **a culled extract records its triangle density**, as a full one
+  does, so a viewer that only culls stops refitting on every extract. A full
+  extract after a culled one may plan high once.
 - `sensor`: **`RawFrame` is `RgbdFrame`** (`sensor/rgbd_frame.hpp`). Each
   camera is a `camera::CameraModel` in double; the poses are
   `color_to_world` and the sensor's `depth_to_color`, in double, both
@@ -141,13 +155,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `MarchingCubes::extract_device_incremental`,
   `MarchingCubesConfig::track_block_spans`, `BlockSpan`, `block_spans()`,
   `block_span_capacity()`, `block_spans_generation()`, `block_span_valid()`,
-  and `ExtractTimings::incremental` and `remeshed_blocks`. Every extract
-  meshes the whole active set or a caller's `BlockList`. The sparse kernels
+  and `ExtractTimings::incremental`, `remeshed_blocks` and `input_upload_ms`.
+  Every extract meshes the whole active set or a caller's block list. The sparse kernels
   lose their span and stamp bindings, three push constants and a scratch
   word (the push block is 52 bytes, the command buffer 28). The `changed`
   stamp, its writers and `read_block_stamps` stay. `fuse_replica` loses
   `--incremental`. The iOS scanner's `incremental_benchmark` mode, compiled
   into every scanner build, must be removed before it re-pins.
+- `mesh` / `volume`: **the host-list culled extract** (BREAKING):
+  `MarchingCubes::extract_device(grid, iso, const BlockList&, timings)` and
+  `VoxelHashMap::compact_active_blocks_in_frustum` (both overloads). Cull with
+  `compact_active_blocks_in_frusta_on_device` and the `DeviceBlockList`
+  overload. `BlockList`, `VoxelBlockGrid::block_list` and `check_block_list`
+  stay for the codec. Nothing is uploaded, so `ExtractTimings::input_upload_ms`
+  goes; the iOS scanner drops its two `inputs` rows when it re-pins.
 - **Test-only public API**, which no example, sibling or app called:
   - `core`: `device_macros.hpp` (`VR_DEVICE_HOST`), `vr::normalize`,
     `Vec3u8`;

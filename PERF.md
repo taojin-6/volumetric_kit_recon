@@ -44,8 +44,8 @@ the set's frusta reach, so integrate scales with them rather than the map.
 | allocate | `allocate_from_depth` → `dispatch_with_retry`, `voxel_hash_map.cpp:376` | 1 per retry round, per camera | serial | failure tally, heap counter |
 | compaction | `compact_active_blocks_on_device`, `tsdf_integrator.cpp:314` | 1 per camera | serial | active count |
 | integrate | `tsdf_integrator.cpp:411` | 1 per camera | serial | nothing |
-| extract compaction | `compact_active_blocks_on_device`, `marching_cubes.cpp:1042` | 1, or none while the fuse's list holds | serial | active count |
-| extract | `marching_cubes.cpp:1341` | 1 (2 on a refit) | serial | 28-byte draw command |
+| extract compaction | `compact_active_blocks_in_frusta_on_device` on the render camera's frustum, `rig_viewer.cpp:1289` | 1 per remesh | serial | active count |
+| extract | `marching_cubes.cpp:1309` | 1 (2 on a refit) | serial | 28-byte draw command |
 | texture | `projective_texturer.cpp:737` | 1 | serial | nothing |
 | atlas copy and draw | `rig_viewer.cpp:498`, gfx's frame | gfx's own | render thread | nothing |
 
@@ -536,8 +536,9 @@ improvement awaits measurement; the figures below describe the original GC.
   `projective_texturer.cpp:722`). It would allow `share_vertices`, 3.4×
   fewer vertices on room0.
 - **Not after that.** Incremental extraction was removed (DECISIONS.md,
-  2026-10-06); view culling is the planned way to make a remesh cost the
-  visible region rather than the whole map.
+  2026-10-06); `rig_viewer` now meshes only its render camera's view
+  (2026-10-06), so a remesh costs the visible region rather than the whole
+  map. Not yet measured on the rig.
 
 ### L2 — Pipeline sets
 
