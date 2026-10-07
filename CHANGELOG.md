@@ -31,9 +31,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   oldest first, and `SensorStats`. Test: `recon_sensor_rgbd_sensor`.
 - `sensor/array`: **`SensorArray`** (`volumetric_kit::recon_sensor_array`),
   several `IRgbdSensor`s read as one: secondaries started before the
-  primary, frames grouped into a `FrameSet` by trigger on the host clock or
-  by sequence number, each posed by an `ArrayCalibration`. Test:
-  `recon_sensor_array`.
+  primary, frames grouped into a `FrameSet` by trigger on the host clock,
+  each posed by an `ArrayCalibration`. Test: `recon_sensor_array`.
 - `sensor/array`: **`SensorArray::process`**, a set prepared on the GPU in
   one batch, through the new **`GpuFramePrep::prepare_batch`** (every
   camera's uploads, then every camera's passes, in one `CommandBatch`).

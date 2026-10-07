@@ -1165,11 +1165,10 @@ process opened) to the host's at each `start`, before it streams; and its
 time for being dropped.
 **`SensorArray`** (`sensor/array/`, target `recon_sensor_array`) reads
 several `IRgbdSensor`s as one: it starts the secondaries before the primary,
-drains every sensor each `poll_set`, groups the frames into a `FrameSet` --
-by the sensor tier's `TriggerGrouper` around the primary's frames on the
-host clock (`SyncMode::Trigger`), or by equal sequence numbers, in order and
-reading no clock (`SyncMode::Sequence`) -- and stamps each frame with its
-sensor's pose from the `ArrayCalibration`. Opened with a device, its
+drains every sensor each `poll_set`, groups the frames into a `FrameSet` by
+the sensor tier's `TriggerGrouper`, around the primary's frames on the host
+clock, and stamps each frame with its sensor's pose from the
+`ArrayCalibration`. Opened with a device, its
 `process(set)` prepares a set through `GpuFramePrep::prepare_batch`: every
 frame checked, then every pass's uploads and every pass's kernels recorded
 into one `CommandBatch`, one submit and one wait.
@@ -1512,7 +1511,7 @@ landed; the stack continues:
    Next the Replica source moves onto the interface, the frame gains float
    depth and RGBA8 colour, and `ICameraCapture` and `CapturedFrame` go.
 2. **`SensorArray`**, vendor-neutral, has landed: start order from the sync
-   roles, trigger or sequence grouping, poses from the calibration file
+   roles, trigger grouping, poses from the calibration file
    (nearest-frame and tracked members later), and `process(set)`, every
    stream of every sensor in one GPU batch. Next `OrbbecRig` goes, and
    `rig_viewer` and `fuse_orbbec` open an array of `OrbbecSensor`s.

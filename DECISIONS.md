@@ -353,7 +353,7 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-06**](#2026-10-06--several-sensors-are-a-sensorarray-vendor-neutral-started-in-their-rigs-order-grouped-by-trigger-or-by-sequence-number-and-posed-by-the-calibration) —
   Several sensors are a `SensorArray`, vendor-neutral: started in their rig's
   order, grouped by trigger or by sequence number, and posed by the
-  calibration.
+  calibration. (Sequence grouping went later that day.)
 - [**2026-10-06**](#2026-10-06--an-arrays-set-is-prepared-in-one-batch-every-stream-of-every-sensor-one-submit-and-one-wait-host-colour-staged-on-a-thread-per-camera-first) —
   An array's set is prepared in one batch, every stream of every sensor, one
   submit and one wait; host colour is staged on a thread per camera first,
@@ -386,6 +386,9 @@ entries relevant to your task; later amendments supersede earlier rules.
   Marching cubes meshes what the viewing camera sees: an extract over the
   device frusta list, the viewers re-meshing on a fuse or a view change, and
   a culled pass records its density.
+- [**2026-10-06**](#2026-10-06--a-sensor-array-groups-its-frames-by-trigger-only-syncmode-and-sequence-grouping-go-amends-the-2026-10-06-sensorarray-entry) —
+  A sensor array groups its frames by trigger only: `SyncMode` and sequence
+  grouping go.
 
 ## Decision record
 
@@ -9953,6 +9956,9 @@ it, and the array's example will at a camera.
 
 ### 2026-10-06 — Several sensors are a `SensorArray`, vendor-neutral: started in their rig's order, grouped by trigger or by sequence number, and posed by the calibration.
 
+*Amended 2026-10-06 (trigger only, below):* `SyncMode::Sequence` went, and
+with it `SyncMode`: an array groups by trigger only.
+
 The fourth step of the 2026-10-06 plan (`sensor/array/sensor_array.hpp`,
 target `recon_sensor_array`): the array of `IRgbdSensor`s that replaces
 `OrbbecRig`, built from what `OrbbecRig` did that no vendor owns.
@@ -10524,6 +10530,32 @@ Both culls hold their cost to what the cameras see while the whole-map cost
 grows with the map. The integrate row's host time is noisier (one room: 2.3
 culled against 1.8 ms; eight: 1.9 against 4.1). Not run: the viewers (built
 only; no interactive session), and the RTX 5090.
+
+### 2026-10-06 — A sensor array groups its frames by trigger only: `SyncMode` and sequence grouping go (amends the 2026-10-06 `SensorArray` entry).
+
+**Why.** The owner: "we don't need it. the main use case for sensor array is
+for live synced camera capture which frames arrive within fixed time
+interval." Nothing outside recon's tests grouped by sequence -- no example,
+calib or ios code opens a `SensorArray` yet -- and it had a known bug: a
+sensor repeating a sequence number sent its set out twice.
+
+**What goes.** `SyncMode`, its `to_string` and `SensorArray::Options::sync`,
+which with one mode left chose nothing; the per-sensor queues, the last set's
+number, and the start-order slot for a second primary. An array groups by
+`TriggerGrouper` around the primary's frames on the host clock; more than one
+sensor needs one primary, the rest secondaries, all on that clock, and a
+single sensor needs neither. `SensorArray::exhausted` is `true` once any
+sensor is. `queue_depth`, `tolerance_us`, `IRgbdSensor::exhausted`,
+`RgbdFrame::sequence` and `FrameSet::sequence` (the primary's frame's) stay.
+A replay that must give the same sets every time -- calib's session replay,
+which sequence grouping was for -- is a new decision when one needs it.
+
+**Verified.** Apple M5 Max, macOS, Release with warnings as errors:
+`recon_sensor_array` drops its sequence cases and runs the failed drain and
+an exhausted sensor through trigger grouping, and opens one free-running
+sensor on its own clock; `recon_sensor_array_process` groups its three
+sensors by trigger, one set a poll, the set missing a sensor waited for and
+then handed out without it.
 
 ## Measured lessons
 

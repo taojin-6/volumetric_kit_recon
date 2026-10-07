@@ -9,8 +9,8 @@
 ///
 /// Pure bookkeeping over timestamps and the caller's opaque frame ids -- it
 /// holds no frame -- so a host test drives it with synthetic streams. A
-/// sensor array uses it for `SyncMode::Trigger`; the measurements behind its
-/// rules are in the 2026-09-27 rig decision.
+/// sensor array groups its sets with it; the measurements behind its rules
+/// are in the 2026-09-27 rig decision.
 
 #include <cstddef>
 #include <cstdint>
