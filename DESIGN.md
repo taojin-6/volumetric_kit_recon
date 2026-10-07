@@ -1443,13 +1443,16 @@ as packed words (`RgbdFrame::color_packed`), one pinhole camera for both. An
 empty poll is retried after a millisecond until the source reports itself
 `exhausted()`, so a live driver in the same construction site waits and the
 replay ends. A frame kept past the next poll — `fuse_render`'s keyframe,
-`fuse_viewer`'s newest frame for its final texture pass — is kept as
-prepared, a `DeviceFrame` holding its buffers, and textures through its own
-colour camera, its colour read back to the host for the atlas;
-`fuse_viewer` lets its frame go right before the next prepare, so the pass
-reuses the buffers. `fuse_replica`
-runs the spine on a posed
-Replica-SLAM RGB-D sequence and writes a PLY; `--dirty-every` reports the
+`fuse_viewer`'s newest successfully fused frame for its final texture pass —
+is kept as prepared, a `DeviceFrame` holding its buffers, and textures through
+its own colour camera, its colour read back to the host for the atlas;
+`fuse_viewer` keeps that frame through the next preparation and fusion,
+replacing it only on success (`fuse_keyframe`). A failure therefore leaves
+its depth, colour and cameras available for the final and later remeshes.
+Preparing while the previous frame is held allocates a separate output pair.
+
+`fuse_replica` runs the spine on a posed Replica-SLAM RGB-D sequence and
+writes a PLY; `--dirty-every` reports the
 changed and re-mesh fractions over windows of its own, keeping its own tick.
 Behind the off-by-default `VR_BUILD_VIEWER`: `fuse_render` writes a headless colour PNG (seam A — it
 builds two devices by design), and `fuse_viewer` opens a live window on one

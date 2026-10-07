@@ -1061,11 +1061,9 @@ int run(GLFWwindow* window, const Options& opt) {
         std::fprintf(stderr, "fuse_viewer: capture start: %s\n",
                      started.message().c_str());
       }
-      // The newest frame as prepared, kept so the final extract (after the
-      // loop) and a remesh on a view change texture with the last keyframe
-      // rather than losing its texture. It holds its buffers on the device,
-      // so it is let go right before each prepare, which then reuses them
-      // instead of allocating a new pair.
+      // The newest successfully fused frame, kept through the next prepare
+      // and fuse attempt. A failure must leave its pixels and cameras intact
+      // for the final extract and later remeshes on a view change.
       std::optional<rsensor::DeviceFrame> last_frame;
       // `i` counts frames handed out, so it advances at the bottom of the
       // body rather than in the loop header: an empty poll from a source that
@@ -1115,37 +1113,22 @@ int run(GLFWwindow* window, const Options& opt) {
           }
           continue;
         }
-        // Undistorted and converted on the GPU, into the pass's own buffers
-        // once the last frame lets go of them; the tier fills its own
-        // "frame prep" row.
-        last_frame.reset();
-        vkc::Result<rsensor::DeviceFrame> prepared =
-            prep.prepare(*polled.value(), &fuse_stages);
-        if (!prepared) {
-          std::fprintf(stderr, "fuse_viewer: frame prep (frame %zu): %s\n", i,
-                       prepared.status().message().c_str());
+        // Prepare, allocate the band (growing on overflow), and integrate.
+        // Each tier fills its own stage rows. Commit the new keyframe only
+        // after all three succeed; a failure still remeshes with the previous
+        // frame's texture. The error names the stage that stopped fusion.
+        const vkc::Status fuse_status =
+            vr_example::fuse_keyframe(volume, integrator, prep, *polled.value(),
+                                      last_frame, 20.0f, &fuse_stages);
+        if (!fuse_status.ok()) {
+          std::fprintf(stderr, "fuse_viewer: frame %zu: %s\n", i,
+                       fuse_status.message().c_str());
           break;
         }
-        last_frame = std::move(prepared).value();
         const rsensor::DeviceFrame& frame = *last_frame;
         {
           std::lock_guard<std::mutex> lock(share_mtx);
           shared_poses.push_back(frame.depth_camera.cam_to_world);
-        }
-        // Allocate the band (growing the map on overflow) and integrate depth
-        // + colour, the tiers filling their own "allocate" / "integrate" rows
-        // (each decomposes: the retry rounds under one name, the active-set
-        // compaction as "  ..active set") and the grow its "resize" row. Any
-        // hard failure ends fusion here rather than integrating a partially
-        // allocated frame, and is reported: every stage in this loop says
-        // why it stopped, or the panel freezes at "fused N / M" looking like
-        // a normal finish.
-        const vkc::Status fuse_status = vr_example::fuse_set(
-            volume, integrator, {frame}, 20.0f, &fuse_stages);
-        if (!fuse_status.ok()) {
-          std::fprintf(stderr, "fuse_viewer: fuse (frame %zu): %s\n", i,
-                       fuse_status.message().c_str());
-          break;
         }
         fused_count.store(i + 1);
         // Do not publish over a mesh the renderer has not collected: it still

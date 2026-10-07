@@ -22,6 +22,7 @@
 #include <limits>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "grid_layout.hpp"
@@ -199,6 +200,32 @@ inline vkc::Status fuse_set(
                                                    inputs.end());
   VKC_TRY(allocate_band(grid, depths, metrics));
   return integrator.integrate(grid, inputs, max_weight, mode, metrics);
+}
+
+/// @brief Prepare and fuse one frame, retaining it as the next keyframe only
+///        after both steps succeed.
+///
+/// Keeps the previous keyframe's buffers alive throughout the attempt, so a
+/// preparation or fusion failure leaves its pixels and cameras available for
+/// texturing the final mesh. The prep allocates separate outputs while the
+/// previous frame holds its own; this does not roll back changes to the grid.
+/// @param grid        The volume to fuse into.
+/// @param integrator  The integrator; `IntegrationMode::Classic`.
+/// @param prep        The frame preparation pass.
+/// @param frame       The captured frame to prepare and fuse.
+/// @param keyframe    The newest successfully fused frame; unchanged on error.
+/// @param max_weight  The running-average cap (`TsdfIntegrator::integrate`).
+/// @param metrics     Optional stage rows; null measures nothing.
+/// @return OK with @p keyframe replaced, or the preparation or fusion error.
+inline vkc::Status fuse_keyframe(
+    vr::volume::VoxelBlockGrid& grid, vr::tsdf::TsdfIntegrator& integrator,
+    vr::sensor::GpuFramePrep& prep, const vr::sensor::RgbdFrame& frame,
+    std::optional<vr::sensor::DeviceFrame>& keyframe, float max_weight,
+    vkc::StageMetrics* metrics) {
+  VKC_ASSIGN(vr::sensor::DeviceFrame prepared, prep.prepare(frame, metrics));
+  VKC_TRY(fuse_set(grid, integrator, {prepared}, max_weight, metrics));
+  keyframe = std::move(prepared);
+  return {};
 }
 
 }  // namespace vr_example

@@ -159,6 +159,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `fuse_viewer`: retain the last successfully fused keyframe through a
+  preparation or fusion failure, so final and later remeshes keep its
+  projected texture. Regression: `recon_example_fuse_keyframe`.
 - `sensor/video`: preserve VideoToolbox JPEG session, decode and callback
   errors, so hardware malfunctions and allocation failures stop the Orbbec
   colour decoder instead of looking like corrupt frames. Bad JPEG data

@@ -398,7 +398,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   The Replica source is an `IRgbdSensor` and the examples fuse what
   `GpuFramePrep` prepares: `ICameraCapture`, `CapturedFrame` and
   `OwnedFrame` go, and `io` loads depth as stored. What the iOS scanner
-  calls stays until it migrates; the frame gains no float depth.
+  calls stays until it migrates; the frame gains no float depth. The viewer
+  retains its last successful keyframe through a failed preparation or fuse.
 
 ## Decision record
 
@@ -10655,9 +10656,13 @@ source, one frame type, one fusion path.
   viewers keep their keyframe as its `DeviceFrame`, texture through its
   colour camera with the single-view `TextureView`, and read its colour
   back with a `CommandBatch` for the atlas; `to_canonical` leaves them, as
-  `prepare` refuses colour that is not canonical. `fuse_viewer` lets go of
-  its kept frame right before each prepare, so the pass reuses its outputs,
-  and shows a `frame prep` row; its `atlas pack` row is `atlas readback`,
+  `prepare` refuses colour that is not canonical. `fuse_viewer` keeps its
+  last successfully fused frame until the next preparation and fusion both
+  succeed (`fuse_keyframe`), so a failed attempt leaves the final and later
+  remeshes textured. This holds one previous output pair while the pass
+  allocates the next; releasing it before preparation reused the buffers
+  but lost the keyframe on a refused pose. It shows a `frame prep` row;
+  its `atlas pack` row is `atlas readback`,
   with a `TODO(examples)` to copy the atlas on the device as `rig_viewer`
   does.
 - **`ICameraCapture`, `CapturedFrame` and `OwnedFrame` go**, with the
@@ -10705,6 +10710,13 @@ frames at 2 cm, `fuse_replica` before and after this change, streaming and
 with `--preload`, give the same 309,353 triangles, positions, normals and
 colours bit for bit; only their order differs, as compaction's does from
 run to run.
+
+**Review regression.** `recon_example_fuse_keyframe` drives the viewer's
+fusion helper without a window or dataset. A refused pose and an integration
+failure after successful preparation both leave the previous depth, atlas
+bytes, coverage and cameras intact, and the retained frame still textures
+the surface. A successful retry replaces it. The viewer publishes the pose
+only after the helper succeeds, alongside the fused-frame count.
 
 ## Measured lessons
 
