@@ -2,9 +2,10 @@
 // Copyright (c) 2026 Tao Jin
 
 // fuse_viewer: the live recon -> gfx interop demo. Opens a window and fuses a
-// posed Replica RGB-D sequence -- polled through the sensor tier's
-// ICameraCapture contract, so a live camera is a construction-site swap -- into
-// a sparse TSDF+colour volume frame by frame (volumetric_kit_recon),
+// posed Replica RGB-D sequence -- polled through the sensor tier's IRgbdSensor
+// interface and prepared on the GPU (sensor::GpuFramePrep), so a live camera
+// is a construction-site swap -- into a sparse TSDF+colour volume frame by
+// frame (volumetric_kit_recon),
 // periodically re-extracting a marching-cubes mesh, and
 // drawing the growing, coloured reconstruction each frame through
 // volumetric_kit_gfx's HybridMeshPipeline following the capture trajectory --
@@ -79,8 +80,7 @@
 #include <imgui_impl_glfw.h>
 #include <glm/glm.hpp>
 
-#include "fuse_frame.hpp"   // vr_example::fuse_frame
-#include "owned_frame.hpp"  // vr_example::OwnedFrame
+#include "fuse_frame.hpp"  // vr_example::fuse_set
 // Not for to_gfx_mesh -- seam B deleted this file's only call to it. Kept for
 // the vertex-layout static_asserts it carries, which matter MORE without the
 // host copy that used to justify them: gfx now reads recon's arena in place
@@ -93,12 +93,13 @@
 // is the two *structs* -- that gfx's vertex-input description reads those
 // offsets with that stride is asserted nowhere, and cannot be from here.)
 #include "recon_gfx_bridge.hpp"
-#include "replica_capture.hpp"  // vr_example::ReplicaCapture
+#include "replica_sensor.hpp"  // vr_example::ReplicaSensor
 #include "shared_device.hpp"
 #include "viewer_common.hpp"
 
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
+#include "volumetric_kit/core/vulkan/command_batch.hpp"
 #include "volumetric_kit/core/vulkan/descriptor.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/image.hpp"
@@ -106,8 +107,9 @@
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/mesh/device_mesh.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
-#include "volumetric_kit/recon/sensor/camera_capture.hpp"
-#include "volumetric_kit/recon/sensor/color_conventions.hpp"
+#include "volumetric_kit/recon/sensor/rgbd_frame.hpp"
+#include "volumetric_kit/recon/sensor/rgbd_sensor.hpp"
+#include "volumetric_kit/recon/sensor/utils/gpu_frame_prep.hpp"
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
 #include "volumetric_kit/recon/volume/frustum.hpp"
@@ -270,11 +272,10 @@ bool parse_args(int argc, char** argv, Options& o) {
     std::fprintf(stderr, "--max-depth must be finite and > 0\n");
     return false;
   }
-  // The same range rule the capture applies, checked here where the flags
+  // The same range rule the sensor applies, checked here where the flags
   // still have their names -- as fuse_replica does.
-  if (!std::isfinite(o.min_depth) || o.min_depth < 0.0f ||
-      o.min_depth >= o.max_depth) {
-    std::fprintf(stderr, "--min-depth must be in [0, --max-depth)\n");
+  if (!(o.min_depth > 0.0f) || o.min_depth >= o.max_depth) {
+    std::fprintf(stderr, "--min-depth must be in (0, --max-depth)\n");
     return false;
   }
   if (o.cam_params.empty()) o.cam_params = o.scene_dir + "/../cam_params.json";
@@ -457,12 +458,12 @@ struct AtlasVersion {
   vkc::DescriptorSet set;
 };
 
-// A keyframe's colour image in the canonical packed form (R | G<<8 | B<<16 |
-// 0xFF<<24 -- the bytes of an RGBA8 upload on the little-endian hosts every
-// Vulkan platform here is), with the extent it was captured at. The extent
-// travels with the pixels rather than being read off a dataset-wide constant,
-// because the frame it came from is the only thing that knows it -- a capture
-// is free to hand over frames of any size the contract allows.
+// A keyframe's colour image in the canonical packed form (R | G<<8 | B<<16,
+// the coverage byte on top -- the bytes of an RGBA8 upload on the
+// little-endian hosts every Vulkan platform here is), with the extent it was
+// captured at. The extent travels with the pixels rather than being read off a
+// dataset-wide constant, because the frame it came from is the only thing that
+// knows it -- a sensor is free to hand over frames of any size.
 struct AtlasPixels {
   std::vector<std::uint32_t> pixels;
   std::uint32_t width = 0;
@@ -543,25 +544,25 @@ int run(GLFWwindow* window, const Options& opt) {
   vkc::Device& rdevice = recon_device_result.value();
   vkc::Allocator& rallocator = recon_allocator_result.value();
 
-  // The sequence arrives through the sensor contract: the frame cap and the
-  // depth gate are the capture's options, so every frame it hands out is
-  // already gated, and the fuse thread below drives an ICameraCapture& that
+  // The sequence arrives through the sensor interface: the frame cap and the
+  // depth gate are the sensor's options, so every frame it hands out is
+  // already gated, and the fuse thread below drives an IRgbdSensor& that
   // never learns it is reading a disk. Declared here, before the fuse thread
   // that drives it, so it outlives that thread.
-  vr_example::ReplicaCapture::Options capture_options;
+  vr_example::ReplicaSensor::Options capture_options;
   capture_options.frame_limit =
       static_cast<std::size_t>(std::max(0, opt.max_frames));
   capture_options.min_depth = opt.min_depth;
   capture_options.max_depth = opt.max_depth;
-  auto capture_result = vr_example::ReplicaCapture::open(
+  auto capture_result = vr_example::ReplicaSensor::open(
       opt.scene_dir, opt.cam_params, capture_options);
   if (!capture_result) {
     std::fprintf(stderr, "capture: %s\n",
                  capture_result.status().message().c_str());
     return 1;
   }
-  vr_example::ReplicaCapture replica = std::move(capture_result).value();
-  const vr::ColorCameraParams& cam = replica.color_camera();
+  vr_example::ReplicaSensor replica = std::move(capture_result).value();
+  const vr::camera::CameraModel& cam = *replica.info().color;
 
   auto grid_result =
       vr_example::create_fusion_grid(rdevice, rallocator, opt.voxel, opt.trunc);
@@ -577,6 +578,14 @@ int run(GLFWwindow* window, const Options& opt) {
     return 1;
   }
   rtsdf::TsdfIntegrator integrator = std::move(integrator_result).value();
+  // The frame prep, like the integrator, used only on the fuse thread below.
+  auto prep_result = rsensor::GpuFramePrep::create(rdevice, rallocator);
+  if (!prep_result) {
+    std::fprintf(stderr, "frame prep: %s\n",
+                 prep_result.status().message().c_str());
+    return 1;
+  }
+  rsensor::GpuFramePrep prep = std::move(prep_result).value();
   // The extractor's output buffers are what gfx draws, so this file -- the one
   // place that knows both siblings -- states what the renderer needs of them.
   // recon names none of it: the mesh tier is deliberately not compiled against
@@ -631,8 +640,10 @@ int run(GLFWwindow* window, const Options& opt) {
   }
 
   const std::size_t frame_count = replica.frame_count();
-  const float vfov = 2.0f * std::atan(static_cast<float>(cam.height) /
-                                      (2.0f * std::max(1.0f, cam.fy)));
+  const float vfov =
+      2.0f *
+      std::atan(static_cast<float>(cam.size.height) /
+                (2.0f * std::max(1.0f, static_cast<float>(cam.intrinsics.fy))));
 
   // --- gfx: pipeline + 1x1 white atlas set ----------------------------------
   auto pipeline_result = vgp::HybridMeshPipeline::create(
@@ -823,9 +834,9 @@ int run(GLFWwindow* window, const Options& opt) {
     try {
       // Scratch for this thread only; copied under share_mtx once per frame.
       vkc::StageMetrics fuse_stages;
-      // The remesh-only rows -- extract and its breakdown, texture, atlas pack
-      // -- measured here rather than straight into `fuse_stages`, and merged in
-      // on every frame whether or not this one remeshed.
+      // The remesh-only rows -- extract and its breakdown, texture, atlas
+      // readback -- measured here rather than straight into `fuse_stages`, and
+      // merged in on every frame whether or not this one remeshed.
       //
       // The gate below fires only on the fused frames the renderer has kept up
       // with, and fusion routinely outruns it (a preloaded run fuses several
@@ -858,7 +869,7 @@ int run(GLFWwindow* window, const Options& opt) {
       // does not exist, and the white dummy bound in its place would draw every
       // visible triangle white.
       auto publish = [&](const rmesh::DeviceMesh& device_mesh,
-                         const rsensor::CapturedFrame* keyframe) {
+                         const rsensor::DeviceFrame* keyframe) {
         AtlasPixels atlas;
         if (texturer && keyframe != nullptr && keyframe->has_color() &&
             !device_mesh.empty()) {
@@ -869,28 +880,36 @@ int run(GLFWwindow* window, const Options& opt) {
           // here: rows accumulate by name, and wrapping the call as well would
           // count the host span twice while adding nothing. What the tier's row
           // has that a wrapper's cannot is the device half.
+          //
+          // Through the colour camera, the coverage read off the colour's
+          // high byte: the frame as the GPU pass left it, as for any camera.
+          rtex::TextureView view;
+          view.cam = keyframe->depth_camera;
+          view.depth_buffer = keyframe->depth;
+          view.color_camera = keyframe->color_camera;
+          view.coverage = keyframe->color;
           const vkc::Status texture_status =
-              texturer->texture(device_mesh, keyframe->depth,
-                                keyframe->depth_camera, 0.02f, &remesh_stages);
+              texturer->texture(device_mesh, view, 0.02f, &remesh_stages);
           if (texture_status.ok()) {
-            // Its own row, not folded into "texture": bringing a full sensor
-            // frame to the canonical form is host work of the same order as
-            // the texturing dispatch, so charging it to the GPU pass would
-            // misattribute it. The sensor boundary's one conversion, so the
-            // frame's encoding declaration is honoured on this leg exactly as
-            // the integrator honours it on the fuse leg (for Replica's sRGB
-            // JPEGs: the identity plus an opaque alpha). The atlas is
-            // uploaded as _SRGB, which assumes canonical bytes; packing them
-            // by hand would assume it silently.
-            vkc::StageScope scope(remesh_stages, "atlas pack");
+            // Its own row, not folded into "texture": a full colour frame
+            // crossing to the host is a cost of its own beside the texturing
+            // dispatch. The pass refuses colour it cannot make canonical, so
+            // these are the canonical bytes the _SRGB upload assumes.
+            // TODO(examples): copy the atlas on the device, as rig_viewer
+            // does, rather than through the host.
+            vkc::StageScope scope(remesh_stages, "atlas readback");
             const std::size_t pixels =
                 static_cast<std::size_t>(keyframe->color_camera.width) *
                 keyframe->color_camera.height;
             atlas.pixels.resize(pixels);
-            const vkc::Status packed = rsensor::to_canonical(
-                keyframe->color, pixels, keyframe->color_encoding,
-                atlas.pixels.data());
-            if (packed.ok()) {
+            const vkc::Status read = [&]() -> vkc::Status {
+              vkc::CommandBatch batch(rdevice, rallocator);
+              VKC_TRY(batch.readback(*keyframe->color, 0,
+                                     pixels * sizeof(std::uint32_t),
+                                     atlas.pixels.data()));
+              return batch.submit();
+            }();
+            if (read.ok()) {
               atlas.width = keyframe->color_camera.width;
               atlas.height = keyframe->color_camera.height;
             } else {
@@ -899,7 +918,7 @@ int run(GLFWwindow* window, const Options& opt) {
               // white, so say why rather than let that read as a texturing
               // result.
               std::fprintf(stderr, "fuse_viewer: atlas: %s\n",
-                           packed.message().c_str());
+                           read.message().c_str());
               atlas.clear();
             }
           } else {
@@ -966,7 +985,7 @@ int run(GLFWwindow* window, const Options& opt) {
       };
       // Extract, break the extract row down, and publish the mesh textured
       // with `keyframe`.
-      auto remesh = [&](const rsensor::CapturedFrame* keyframe) {
+      auto remesh = [&](const rsensor::DeviceFrame* keyframe) {
         remesh_stages.clear();
         rmesh::ExtractTimings extract_timings;
         vkc::Result<rmesh::DeviceMesh> extracted = [&]() {
@@ -1034,24 +1053,18 @@ int run(GLFWwindow* window, const Options& opt) {
         std::lock_guard<std::mutex> lock(share_mtx);
         shared_preloaded_bytes = cache_bytes;
       }
-      // From here on the source is the contract, not the dataset: the loop
-      // polls an ICameraCapture& and a live driver slots in at the open above.
-      rsensor::ICameraCapture& capture = replica;
+      // From here on the source is the interface, not the dataset: the loop
+      // polls an IRgbdSensor& and a live driver slots in at the open above.
+      rsensor::IRgbdSensor& capture = replica;
       const vkc::Status started = capture.start();
       if (!started.ok()) {
         std::fprintf(stderr, "fuse_viewer: capture start: %s\n",
                      started.message().c_str());
       }
-      // The newest fused frame, retained so the final extract (after the loop)
-      // textures with the last keyframe rather than losing its texture. A
-      // copy, not a view: the poll that ends the loop -- the empty one that
-      // reports the sequence over, or one whose frame then fails to fuse --
-      // is a poll, and the contract lets the capture recycle the previous
-      // frame's pixels on any poll. Held as a view, this read freed memory on
-      // every allocate/integrate failure exit (ASan-reproduced) and survived
-      // the ordinary exit only on a detail of ReplicaCapture no contract
-      // promises. ~0.1 ms per frame at -O2, against ~2 ms of fusion.
-      vr_example::OwnedFrame last_frame;
+      // The newest successfully fused frame, kept through the next prepare
+      // and fuse attempt. A failure must leave its pixels and cameras intact
+      // for the final extract and later remeshes on a view change.
+      std::optional<rsensor::DeviceFrame> last_frame;
       // `i` counts frames handed out, so it advances at the bottom of the
       // body rather than in the loop header: an empty poll from a source that
       // is not exhausted retries without consuming a frame index.
@@ -1062,9 +1075,10 @@ int run(GLFWwindow* window, const Options& opt) {
         // remeshes instead of dropping out and shuffling the table.
         fuse_stages.clear();
         for (const char* stage :
-             {"frame", "allocate", "resize", "integrate", "  ..active set",
-              "extract", "  ..compact", "  ..arena alloc", "  ..descriptors",
-              "  ..dispatch", "  ..readback", "texture", "atlas pack"}) {
+             {"frame", "frame prep", "allocate", "resize", "integrate",
+              "  ..active set", "extract", "  ..compact", "  ..arena alloc",
+              "  ..descriptors", "  ..dispatch", "  ..readback", "texture",
+              "atlas readback"}) {
           fuse_stages.seed(stage);
         }
         // A preload cache hit, else a disk read + JPEG/PNG decode (the CPU
@@ -1093,32 +1107,28 @@ int run(GLFWwindow* window, const Options& opt) {
           // A live sensor polled faster than it runs: re-mesh if the view
           // moved, else yield, and ask again.
           if (view_moved() && release_and_may_publish()) {
-            const rsensor::CapturedFrame keyframe = last_frame.view();
-            remesh(last_frame.empty() ? nullptr : &keyframe);
+            remesh(last_frame ? &*last_frame : nullptr);
           } else {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
           }
           continue;
         }
-        const rsensor::CapturedFrame& frame = *polled.value();
+        // Prepare, allocate the band (growing on overflow), and integrate.
+        // Each tier fills its own stage rows. Commit the new keyframe only
+        // after all three succeed; a failure still remeshes with the previous
+        // frame's texture. The error names the stage that stopped fusion.
+        const vkc::Status fuse_status =
+            vr_example::fuse_keyframe(volume, integrator, prep, *polled.value(),
+                                      last_frame, 20.0f, &fuse_stages);
+        if (!fuse_status.ok()) {
+          std::fprintf(stderr, "fuse_viewer: frame %zu: %s\n", i,
+                       fuse_status.message().c_str());
+          break;
+        }
+        const rsensor::DeviceFrame& frame = *last_frame;
         {
           std::lock_guard<std::mutex> lock(share_mtx);
           shared_poses.push_back(frame.depth_camera.cam_to_world);
-        }
-        // Allocate the band (growing the map on overflow) and integrate depth
-        // + colour, the tiers filling their own "allocate" / "integrate" rows
-        // (each decomposes: the retry rounds under one name, the active-set
-        // compaction as "  ..active set") and the grow its "resize" row. Any
-        // hard failure ends fusion here rather than integrating a partially
-        // allocated frame, and is reported: every stage in this loop says
-        // why it stopped, or the panel freezes at "fused N / M" looking like
-        // a normal finish.
-        const vkc::Status fuse_status = vr_example::fuse_frame(
-            volume, integrator, frame, 20.0f, &fuse_stages);
-        if (!fuse_status.ok()) {
-          std::fprintf(stderr, "fuse_viewer: fuse (frame %zu): %s\n", i,
-                       fuse_status.message().c_str());
-          break;
         }
         fused_count.store(i + 1);
         // Do not publish over a mesh the renderer has not collected: it still
@@ -1170,8 +1180,6 @@ int run(GLFWwindow* window, const Options& opt) {
           shared_map_blocks = volume.grid().num_blocks;
           shared_map_load_factor = load_factor;
         }
-        // Retain this frame (the newest keyframe) for the final extract below.
-        last_frame.assign(frame);
         ++i;
       }
       // Skip the final extract when the user has already quit, so the join at
@@ -1212,8 +1220,7 @@ int run(GLFWwindow* window, const Options& opt) {
         }
         // Textured with the last keyframe, or untextured if no frame ever
         // fused.
-        const rsensor::CapturedFrame keyframe = last_frame.view();
-        remesh(last_frame.empty() ? nullptr : &keyframe);
+        remesh(last_frame ? &*last_frame : nullptr);
       }
       // Fusion is over, but the view still moves -- the replay walks the
       // trajectory -- so re-mesh what it sees whenever it changes.
@@ -1221,8 +1228,7 @@ int run(GLFWwindow* window, const Options& opt) {
       std::printf("fuse thread: done (%zu frames)\n", fused_count.load());
       while (!quit.load()) {
         if (view_moved() && release_and_may_publish()) {
-          const rsensor::CapturedFrame keyframe = last_frame.view();
-          remesh(last_frame.empty() ? nullptr : &keyframe);
+          remesh(last_frame ? &*last_frame : nullptr);
         } else {
           std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }

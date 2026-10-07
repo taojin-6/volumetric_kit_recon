@@ -10,5 +10,6 @@ add_executable(codec_replica main.cpp)
 target_link_libraries(
   codec_replica
   PRIVATE vr_example_common volumetric_kit::recon_codec
-          volumetric_kit::recon_eval volumetric_kit::recon_tsdf Vulkan::Vulkan)
+          volumetric_kit::recon_eval volumetric_kit::recon_sensor_utils
+          volumetric_kit::recon_tsdf Vulkan::Vulkan)
 vr_target_warnings(codec_replica)

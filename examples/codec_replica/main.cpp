@@ -25,7 +25,7 @@
 #include "codec_sweep.hpp"
 #include "fuse_frame.hpp"
 #include "parse_number.hpp"
-#include "replica_capture.hpp"
+#include "replica_sensor.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/instance.hpp"
@@ -33,6 +33,7 @@
 #include "volumetric_kit/recon/eval/mesh_distance.hpp"
 #include "volumetric_kit/recon/io/ply_writer.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
+#include "volumetric_kit/recon/sensor/utils/gpu_frame_prep.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
 
 namespace vr = volumetric_kit::recon;
@@ -133,10 +134,10 @@ vkc::Status run(const Options& opt) {
   VKC_ASSIGN(vkc::Allocator allocator,
              vkc::Allocator::create(instance.handle(), device));
 
-  vr_example::ReplicaCapture::Options capture_options;
+  vr_example::ReplicaSensor::Options capture_options;
   capture_options.frame_limit = std::size_t(opt.max_frames);
-  VKC_ASSIGN(vr_example::ReplicaCapture capture,
-             vr_example::ReplicaCapture::open(
+  VKC_ASSIGN(vr_example::ReplicaSensor capture,
+             vr_example::ReplicaSensor::open(
                  opt.scene_dir, opt.scene_dir + "/../cam_params.json",
                  capture_options));
   if (opt.preload) {
@@ -149,6 +150,8 @@ vkc::Status run(const Options& opt) {
                                             kBuckets));
   VKC_ASSIGN(vr::tsdf::TsdfIntegrator integrator,
              vr::tsdf::TsdfIntegrator::create(device, allocator));
+  VKC_ASSIGN(vr::sensor::GpuFramePrep prep,
+             vr::sensor::GpuFramePrep::create(device, allocator));
   VKC_ASSIGN(mesh::MarchingCubes extractor,
              mesh::MarchingCubes::create(device, allocator));
   VKC_ASSIGN(vr_example::CodecStream stream,
@@ -169,8 +172,9 @@ vkc::Status run(const Options& opt) {
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
       continue;
     }
-    VKC_TRY(vr_example::fuse_frame(volume, integrator, *frame, kMaxWeight,
-                                   nullptr));
+    VKC_ASSIGN(const vr::sensor::DeviceFrame prepared, prep.prepare(*frame));
+    VKC_TRY(vr_example::fuse_set(volume, integrator, {prepared}, kMaxWeight,
+                                 nullptr));
     ++fused;
     if (opt.encode_every > 0 && fused % std::size_t(opt.encode_every) == 0) {
       VKC_TRY(stream.code(volume));

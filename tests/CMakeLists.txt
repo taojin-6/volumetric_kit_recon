@@ -118,6 +118,20 @@ vr_target_warnings(recon_sensor_gpu_frame_prep_oom_test)
 add_test(NAME recon_sensor_gpu_frame_prep_oom
          COMMAND recon_sensor_gpu_frame_prep_oom_test)
 
+# The viewer's retained keyframe survives preparation and integration errors,
+# and still supplies depth, coverage and atlas pixels for projective texturing.
+# Headless: uses the example's fusion helper, without gfx or a dataset.
+add_executable(recon_example_fuse_keyframe_test example_fuse_keyframe_test.cpp)
+target_include_directories(recon_example_fuse_keyframe_test
+                           PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
+target_link_libraries(
+  recon_example_fuse_keyframe_test
+  PRIVATE volumetric_kit::recon_sensor_utils volumetric_kit::recon_tsdf
+          volumetric_kit::recon_texture)
+vr_target_warnings(recon_example_fuse_keyframe_test)
+add_test(NAME recon_example_fuse_keyframe
+         COMMAND recon_example_fuse_keyframe_test)
+
 # The device-input overloads of allocate_from_depth and integrate: the same
 # frame fused from host arrays and from storage buffers must give the same grid.
 # Skips (exit 0) where no device is present.

@@ -64,7 +64,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   prefers two families over a shared queue.
 - [**2026-08-02**](#2026-08-02--the-sensor-tier-is-a-contract-not-a-driver-collection-a-capture-driver-lives-here-only-if-this-repo-can-build) —
   The `sensor` tier is a *contract*, not a driver collection: a capture driver
-  lives here only if this repo can build
+  lives here only if this repo can build (`ICameraCapture` went 2026-10-07)
 - [**2026-08-02**](#2026-08-02--the-mesh-arenas-extra-buffer-usage-is-declared-by-the-consumer-not-named-by-this-tier--and-usage-alone-does-not-reach-seam-b) —
   The mesh arena's extra buffer usage is declared by the *consumer*, not named
   by this tier — and usage alone does not reach seam B.
@@ -151,7 +151,8 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-09-14**](#2026-09-14--the-examples-poll-their-frames-through-the-sensor-contract-the-replica-reader-is-an-icameracapture-a-source-says-when-it-is-exhausted-and-a-frame-kept-past-the-next-poll-is-copied--the-last-one-included) —
   The examples poll their frames through the sensor contract: the Replica
   reader is an `ICameraCapture`, a source says when it is exhausted, and a
-  frame kept past the next poll is copied — the last one included.
+  frame kept past the next poll is copied — the last one included. (The
+  reader became an `IRgbdSensor`, and the copy went, on 2026-10-07.)
 - [**2026-09-24**](#2026-09-24--the-orbbec-sdk-is-a-prerequisite-behind-vr_with_orbbec-installed-once-for-the-family-found-and-never-fetched) —
   The Orbbec SDK is a prerequisite behind `VR_WITH_ORBBEC`: installed once for
   the family, found, and never fetched.
@@ -349,7 +350,7 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-06**](#2026-10-06--a-sensor-is-an-irgbdsensor-what-it-is-before-a-frame-sensorinfo-frames-polled-newest-or-drained-oldest-first-and-the-femto-mega-is-orbbecsensor) —
   A sensor is an `IRgbdSensor`: what it is before a frame (`SensorInfo`),
   frames polled newest or drained oldest first. The Femto Mega is
-  `OrbbecSensor`.
+  `OrbbecSensor`. (The Replica source followed on 2026-10-07.)
 - [**2026-10-06**](#2026-10-06--several-sensors-are-a-sensorarray-vendor-neutral-started-in-their-rigs-order-grouped-by-trigger-or-by-sequence-number-and-posed-by-the-calibration) —
   Several sensors are a `SensorArray`, vendor-neutral: started in their rig's
   order, grouped by trigger or by sequence number, and posed by the
@@ -368,7 +369,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   Apple `VR_WITH_FFMPEG` needs `VR_WITH_CUDA`.
 - [**2026-10-06**](#2026-10-06--gpuframeprep-takes-colour-on-the-device-only-and-a-sets-depth-is-staged-on-one-thread-amends-the-2026-09-28-decoded-frame-and-2026-10-06-one-batch-entries) —
   `GpuFramePrep` takes colour on the device only, and a set's depth is
-  staged on one thread.
+  staged on one thread. (Packed host colour came back the next day.)
 - [**2026-10-06**](#2026-10-06--platforms-linux-android-macos-and-ios-with-gcc-or-clang-windows-and-msvc-are-not-supported-amends-the-2026-06-21-vulkan-path-entry) —
   Platforms: Linux, Android, macOS and iOS, with GCC or Clang; Windows and
   MSVC are not supported.
@@ -389,6 +390,16 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-06**](#2026-10-06--a-sensor-array-groups-its-frames-by-trigger-only-syncmode-and-sequence-grouping-go-amends-the-2026-10-06-sensorarray-entry) —
   A sensor array groups its frames by trigger only: `SyncMode` and sequence
   grouping go.
+- [**2026-10-07**](#2026-10-07--gpuframeprep-stages-a-host-frames-packed-colour-beside-its-depth-amends-the-2026-10-06-device-only-gpuframeprep-entry) —
+  `GpuFramePrep` stages a host frame's packed colour beside its depth
+  (`RgbdFrame::color_packed`): one copy in the pass's own batch, no host
+  conversion, no threads.
+- [**2026-10-07**](#2026-10-07--the-replica-source-is-an-irgbdsensor-and-the-examples-fuse-what-gpuframeprep-prepares-icameracapture-capturedframe-and-ownedframe-go-and-io-loads-depth-as-stored-amends-the-2026-08-02-sensor-tier-2026-09-14-examples-and-2026-10-06-irgbdsensor-entries) —
+  The Replica source is an `IRgbdSensor` and the examples fuse what
+  `GpuFramePrep` prepares: `ICameraCapture`, `CapturedFrame` and
+  `OwnedFrame` go, and `io` loads depth as stored. What the iOS scanner
+  calls stays until it migrates; the frame gains no float depth. The viewer
+  retains its last successful keyframe through a failed preparation or fuse.
 
 ## Decision record
 
@@ -866,7 +877,10 @@ the window renders, and **zero validation errors** with the layer on.
 and test** it.** The
 tier's first slice is platform-neutral C++ — an `ICameraCapture` interface, a
 `CapturedFrame` POD, and the coordinate/intrinsics conversion helpers — with
-**no** driver implementations bundled in. The first real source, **ARKit,
+**no** driver implementations bundled in. (*Amended 2026-10-07 (below):* the
+interface is `IRgbdSensor`, handing out `RgbdFrame`s; `ICameraCapture`,
+`CapturedFrame` and the conventions test's `FakeCapture` are gone.) The
+first real source, **ARKit,
 lives in `volumetric_kit_ios`**, not here. The rule that places it: a driver
 belongs in this repo when this repo's CI can compile and exercise it (a
 cross-platform C++ SDK — an Orbbec driver would qualify); otherwise it belongs
@@ -3802,6 +3816,13 @@ mesh-to-SDF pass will evaluate the field with the same function, so the blocks
 allocated here and the voxels written there cannot drift apart.
 
 ### 2026-09-14 — The examples poll their frames through the sensor contract: the Replica reader is an `ICameraCapture`, a source says when it is exhausted, and a frame kept past the next poll is copied — the last one included.
+
+*Amended 2026-10-07 (below):* the Replica reader is `ReplicaSensor`, an
+`IRgbdSensor`, and the examples fuse what `GpuFramePrep` prepares from its
+frames. A frame holds its pixels, so nothing is copied to be kept:
+`OwnedFrame` is gone, and the viewers keep the prepared `DeviceFrame`. The
+move constructor is defaulted, the frames to play moving with their vector,
+so a moved-from sensor plays nothing; assignment is deleted.
 
 The sensor tier had shipped a contract with no producer and no consumer in
 this tree. Its only implementer was the ARKit driver in `volumetric_kit_ios`,
@@ -9939,7 +9960,9 @@ that replaces `OrbbecRig`.
   `CapturedFrame` and the SDK's host path go when the Replica source moves
   onto the interface (a `TODO(sensor)`), and `OrbbecRig` when the array
   lands. *Amended the same day (below):* `OrbbecCapture` and the host path
-  went first, apart from the Replica source.
+  went first, apart from the Replica source. *Amended 2026-10-07 (below):*
+  the Replica source is an `IRgbdSensor`, and `ICameraCapture` and
+  `CapturedFrame` are gone.
 
 **Validation.** Apple M5 Max, macOS, Release with warnings as errors, Orbbec,
 FFmpeg and the viewer: the 52 tests pass. `recon_sensor_rgbd_sensor` drives
@@ -10191,6 +10214,10 @@ refused stream fails its test. CI's 24.04 leg on an RTX 4090 passes the
 H.265 tests on NVDEC, the first run of that path. Not run on a camera.
 
 ### 2026-10-06 — `GpuFramePrep` takes colour on the device only, and a set's depth is staged on one thread (amends the 2026-09-28 decoded-frame and 2026-10-06 one-batch entries).
+
+*Amended 2026-10-07 (below):* host colour is back, as packed R'G'B' words
+(`RgbdFrame::color_packed`) staged beside the depth on the calling thread
+and copied up in the pass's own batch; Y'CbCr planes stay device-only.
 
 **The rule.** `GpuFramePrep` takes a frame's colour on the device only: I420
 or NV12 planes in a buffer (`YuvImage::device`), or NV12's planes as images
@@ -10556,6 +10583,140 @@ an exhausted sensor through trigger grouping, and opens one free-running
 sensor on its own clock; `recon_sensor_array_process` groups its three
 sensors by trigger, one set a poll, the set missing a sensor waited for and
 then handed out without it.
+
+### 2026-10-07 — `GpuFramePrep` stages a host frame's packed colour beside its depth (amends the 2026-10-06 device-only `GpuFramePrep` entry).
+
+**The rule.** A frame may carry its colour on the host as packed R'G'B'
+words, `RgbdFrame::color_packed`: the colour camera's size, row-major,
+`R | G << 8 | B << 16` with the high byte ignored (`io::load_color_packed`'s
+layout), held by `pixels`, and set instead of `YuvImage`'s planes, never
+beside them. `GpuFramePrep` stages the words as it stages host depth: one
+copy into the pass's staging, after the depth, and one in its batch into the
+colour input. The colour pass reads R, G and B as byte planes four bytes
+apart through the planes' own bilinear sampler, so its clamping, weights and
+coverage byte are the Y'CbCr path's; a push constant, `packed_rgb`, picks
+the branch (`ColorParams` is 108 bytes). `prepare_batch` stages each
+camera's packed colour with its depth, on the calling thread. Depth stays
+16-bit with `metres_per_unit`: the frame gains no float depth.
+
+**Why.** The Replica examples' source, a dataset decoded on the host,
+becomes an `IRgbdSensor` whose frames go through the pass as the cameras'
+do, so host colour has a real caller again; the 2026-10-06 entry dropped it
+because nothing made it. The words go into the staging as decoded, with no
+conversion on the host, so a frame is still one upload in the pass's own
+batch, and Y'CbCr planes stay on the device.
+
+**The threads stay gone.** Host colour staged one camera after another lost
+to a thread per camera at four 4K cameras on the Mac (the 2026-10-01
+measurement, in the one-batch entry). The one caller is a single camera; a
+rig with host colour measures that again before the threads come back.
+
+**Validation.** Apple M5 Max, macOS, Release with warnings as errors, Orbbec
+and FFmpeg: the 56 tests pass. `recon_sensor_gpu_frame_prep` holds packed
+words through a pinhole to their input exactly, the junk high byte replaced
+by full coverage, and through a lens to a host bilinear reference within a
+code, no coverage byte off; refuses words beside planes before any work, and
+a PQ transfer; and prepares a fifth camera's packed colour in a batch byte
+for byte as `prepare` does alone, depth kept within colour. It runs clean
+under the Khronos layer's synchronization validation.
+
+### 2026-10-07 — The Replica source is an `IRgbdSensor` and the examples fuse what `GpuFramePrep` prepares: `ICameraCapture`, `CapturedFrame` and `OwnedFrame` go, and `io` loads depth as stored (amends the 2026-08-02 sensor-tier, 2026-09-14 examples and 2026-10-06 `IRgbdSensor` entries).
+
+The first step of the 2026-10-06 plan finishes: one interface for every
+source, one frame type, one fusion path.
+
+**The rule.**
+- **The Replica source is an `IRgbdSensor`**: `ReplicaSensor`
+  (`examples/common/replica_sensor.hpp`, formerly `ReplicaCapture`). Its
+  `SensorInfo` names one pinhole `camera::CameraModel`, no distortion, for
+  both cameras, since Replica renders depth and colour from one, with an
+  identity `depth_to_color`; `FreeRun`, `Device` clock (every timestamp 0,
+  "none"), `PoseSource::Tracked` (each frame carries its trajectory pose;
+  the enum's doc now names a recording) and fps 0. A frame's depth is the
+  PNG's 16-bit samples as stored, with `metres_per_unit = 1.0f / scale`
+  computed in float as the old loader did; its colour is
+  `RgbdFrame::color_packed`, declared canonical; its `color_to_world` is the
+  trajectory pose, parsed in float as before and widened, so the pass
+  narrows it back exactly; its `sequence` is how many frames the sensor
+  handed out before it, so a stride is not a loss; and `pixels` owns both
+  images. `poll` stays consumer-paced, `drain` appends what `poll` would
+  return, `set_queue_depth` accepts at least 1 before `start` and changes
+  nothing, and `stats` counts received and delivered. `open` refuses a
+  `min_depth` of 0, which the pass reads as "no return", as
+  `OrbbecSensor::open` does, and the three examples' `--min-depth` takes
+  (0, max). The preload holds 6 bytes a pixel, not 8. The move constructor is
+  defaulted and assignment deleted: the frames to play are one vector of
+  entries, so a moved-from sensor plays nothing and is exhausted.
+- **Every example fuses a `DeviceFrame`.** `fuse_replica`, `codec_replica`,
+  `fuse_render` and `fuse_viewer` prepare each polled frame with one
+  `GpuFramePrep` and fuse it through `fuse_set`, which `fuse_frame.hpp` now
+  holds (`fuse_device_frame.hpp` folded into it; the host-depth
+  `allocate_band` and `fuse_frame(CapturedFrame)` went, and
+  `allocate_band_with` folded into the one `allocate_band` left). The
+  viewers keep their keyframe as its `DeviceFrame`, texture through its
+  colour camera with the single-view `TextureView`, and read its colour
+  back with a `CommandBatch` for the atlas; `to_canonical` leaves them, as
+  `prepare` refuses colour that is not canonical. `fuse_viewer` keeps its
+  last successfully fused frame until the next preparation and fusion both
+  succeed (`fuse_keyframe`), so a failed attempt leaves the final and later
+  remeshes textured. This holds one previous output pair while the pass
+  allocates the next; releasing it before preparation reused the buffers
+  but lost the keyframe on a refused pose. It shows a `frame prep` row;
+  its `atlas pack` row is `atlas readback`,
+  with a `TODO(examples)` to copy the atlas on the device as `rig_viewer`
+  does.
+- **`ICameraCapture`, `CapturedFrame` and `OwnedFrame` go**, with the
+  conventions test's `FakeCapture`; `recon_sensor_rgbd_sensor` covers the
+  interface.
+- **`io::load_depth_metres` is `io::load_depth_u16`**: the samples as
+  stored, under the same 16-bit grayscale checks. Its one non-test caller
+  was the Replica source, which now hands the samples on with their unit.
+
+**Why.** A frame borrowed its pixels until the next poll, so a consumer
+copied one to keep it (`OwnedFrame`); an `RgbdFrame` holds them, so the copy
+has nothing to do. Every Replica run now goes through the pass a camera's
+frame does, so the dataset examples exercise the path the live rig runs
+rather than a host path no camera uses.
+
+**What stays for the iOS scanner, and why.** The scanner, pinned at an older
+recon, implements `ICameraCapture` and fuses host frames. What it calls
+stays until it moves onto the interface: `VoxelHashMap::allocate_from_depth`
+over host depth, `TsdfIntegrator::integrate`'s host overloads,
+`ColorFrame::pixels`, `ProjectiveTexturer`'s host-depth overloads,
+`sensor::to_canonical`, `cv_from_gl_camera` and
+`depth_from_registered_color`. The 2026-10-06 test-only API rule counts a
+sibling app's caller, so these are the scanner's, not test-only; they go or
+move with its migration. `depth_from_registered_color` returns a
+`DepthCameraParams`, which `RgbdFrame` has no slot for, so that migration
+needs a `CameraModel` rescale for the 256x192 depth; it is not written
+before it has that caller.
+
+**No float depth.** DESIGN's Next work had the frame gaining float depth
+for ARKit. It does not: depth stays 16-bit with `metres_per_unit`, one depth
+format for the pass's one depth kernel, 2 bytes a pixel up. When the scanner
+moves onto the interface it quantises ARKit's float `sceneDepth` on the
+host, in 0.1 mm units, say, which reach 6.55 m.
+
+**Verified.** Apple M5 Max, macOS, Release with warnings as errors, Orbbec
+and FFmpeg: the 56 tests pass, `fuse_replica`, `codec_replica` and
+`fuse_orbbec` build, and `recon_io_image` reads the 16-bit fixture as
+stored. `fuse_replica`, streaming and with `--preload --stride 2`, and
+`codec_replica` ran on a synthetic three-frame 64x48 scene in Replica's
+layout, each vertex's colour the one its depth's column was painted, and
+`--min-depth 0` is refused. `fuse_render` and `fuse_viewer` were not
+compiled here (the viewer is off; CI's viewer leg builds them), nor was
+`rig_viewer`, whose source lost only an include. On room0, the first 200
+frames at 2 cm, `fuse_replica` before and after this change, streaming and
+with `--preload`, give the same 309,353 triangles, positions, normals and
+colours bit for bit; only their order differs, as compaction's does from
+run to run.
+
+**Review regression.** `recon_example_fuse_keyframe` drives the viewer's
+fusion helper without a window or dataset. A refused pose and an integration
+failure after successful preparation both leave the previous depth, atlas
+bytes, coverage and cameras intact, and the retained frame still textures
+the surface. A successful retry replaces it. The viewer publishes the pose
+only after the helper succeeds, alongside the fused-frame count.
 
 ## Measured lessons
 

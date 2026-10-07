@@ -83,8 +83,7 @@
 #include <imgui_impl_glfw.h>
 #include <glm/glm.hpp>
 
-#include "fuse_device_frame.hpp"  // vr_example::fuse_set
-#include "fuse_frame.hpp"         // vr_example::create_fusion_grid
+#include "fuse_frame.hpp"  // vr_example::create_fusion_grid, fuse_set
 // For the vertex-layout static_asserts it carries: gfx reads recon's arena in
 // place through its own attribute offsets (see fuse_viewer.cpp).
 #include "recon_gfx_bridge.hpp"

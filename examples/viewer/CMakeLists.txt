@@ -82,7 +82,7 @@ find_package(glfw3 REQUIRED)
 # link it, which is why that one is named. Resist re-adding the covered tiers
 # for readability's sake; the warning comes straight back.
 set(_viewer_recon_libs volumetric_kit::recon_tsdf volumetric_kit::recon_texture
-                       vr_example_common)
+                       volumetric_kit::recon_sensor_utils vr_example_common)
 set(_viewer_gfx_libs volumetric_kit::gfx_app volumetric_kit::gfx_pipelines
                      volumetric_kit::gfx_camera)
 set(_viewer_common_inc "${CMAKE_CURRENT_SOURCE_DIR}"
@@ -157,13 +157,8 @@ if(TARGET volumetric_kit::recon_sensor_orbbec)
                             "${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp")
   target_link_libraries(
     rig_viewer
-    PRIVATE ${_viewer_recon_libs}
-            volumetric_kit::recon_sensor_orbbec
-            volumetric_kit::recon_sensor_utils
-            ${_viewer_gfx_libs}
-            volumetric_kit::gfx_ui
-            glfw
-            Vulkan::Vulkan)
+    PRIVATE ${_viewer_recon_libs} volumetric_kit::recon_sensor_orbbec
+            ${_viewer_gfx_libs} volumetric_kit::gfx_ui glfw Vulkan::Vulkan)
   target_include_directories(rig_viewer PRIVATE ${_viewer_common_inc})
   target_include_directories(rig_viewer SYSTEM
                              PRIVATE "${imgui_SOURCE_DIR}/backends")
