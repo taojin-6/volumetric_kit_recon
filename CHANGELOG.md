@@ -75,6 +75,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- tests: **no test looks for a camera.** `recon_orbbec_sdk_smoke` checks only
+  the runtime SDK version, no longer opening a context and enumerating USB
+  and network devices, and the conversion test's absent-camera case, which
+  ran the same discovery, goes.
 - `tsdf`: **`TsdfIntegrator::integrate` fuses only the blocks its frames
   reach**: one frustum a frame from its depth camera, no near cut, far at
   `max_depth + trunc_dist`, the union compacted in one scan. The result is

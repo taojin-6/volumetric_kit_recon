@@ -345,7 +345,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   version 2 and the writer go until a caller needs them.
 - [**2026-10-06**](#2026-10-06--tests-use-no-real-hardware-amends-the-2026-09-26-orbbec-driver-entry) —
   Tests use no real hardware: the three camera tests are removed, and a
-  camera is checked by hand through `fuse_orbbec`.
+  camera is checked by hand through `fuse_orbbec`. *Amended 2026-10-07:* no
+  test looks for a camera either.
 - [**2026-10-06**](#2026-10-06--a-sensors-frame-is-rgbdframe-each-cameras-cameramodel-the-poses-in-double-a-sequence-number-and-the-pixels-it-holds-and-the-femto-megas-factory-extrinsic-is-made-a-rotation) —
   A sensor's frame is `RgbdFrame`: each camera's `CameraModel`, the poses in
   double, a sequence number, and the pixels it holds. The Femto Mega's factory
@@ -9883,6 +9884,12 @@ JSON, was not run.
 
 ### 2026-10-06 — Tests use no real hardware (amends the 2026-09-26 Orbbec driver entry).
 
+*Amended 2026-10-07:* no test looks for a camera either. The SDK smoke test
+checks only the runtime version, and no longer opens a context and
+enumerates devices, which probed USB and the network; the conversion test's
+refusal of an absent camera went with the same probe. Every test passes
+with the process denied network access.
+
 `recon_sensor_orbbec_capture`, `recon_sensor_orbbec_gpu_prep` and
 `recon_sensor_orbbec_rig` are removed, about 1,260 lines. Each skipped unless
 an environment variable named a camera or the rig's sync file, and no CI leg
@@ -10888,7 +10895,7 @@ SDK 2.10.6 and FFmpeg: the 57 tests pass. `recon_sensor_array` groups by the
 derived default with and without a rate (a secondary just inside it joins
 the set, one just outside joins none), refuses an explicit 500 µs at 1 kHz
 and accepts 499 µs; `recon_sensor_orbbec_conversion` refuses `apply_sync`
-without `sync` and an absent camera, by name. The public-open test
+without `sync`. The public-open test
 `recon_sensor_orbbec_sync_apply` uses a camera stub to check that SDK
 normalization is refused (and fails without the post-write comparison),
 matching settings are never written, a write repairs software triggering,

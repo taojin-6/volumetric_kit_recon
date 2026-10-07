@@ -552,9 +552,7 @@ add_test(NAME recon_eval_mesh_distance COMMAND recon_eval_mesh_distance_test)
 
 # The Orbbec SDK prerequisite (VR_WITH_ORBBEC only): the copy the build found is
 # the one that loads -- runtime version == configured version, since the SDK is
-# linked in place from an install outside the repo -- and an SDK context opens
-# and enumerates devices. Needs no camera (zero devices passes); enumeration
-# probes the network for Ethernet devices, so it takes a couple of seconds.
+# linked in place from an install outside the repo. It opens no SDK context.
 if(VR_WITH_ORBBEC)
   add_executable(recon_orbbec_sdk_smoke_test orbbec_sdk_smoke_test.cpp)
   target_link_libraries(recon_orbbec_sdk_smoke_test PRIVATE ob::OrbbecSDK)
