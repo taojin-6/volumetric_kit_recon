@@ -10441,6 +10441,85 @@ and FFmpeg: the 56 tests pass with `VR_TEST_HEVC_BACKEND=videotoolbox`, and
 `recon_tsdf_integrate` and `recon_volume_frustum` run clean under the Khronos
 layer's synchronization validation.
 
+### 2026-10-06 — Marching cubes meshes what the viewing camera sees: an extract over the device frusta list, the viewers re-meshing on a fuse or a view change, and a culled pass records its density (amends the 2026-08-12 view-meshing entry and the 2026-10-06 incremental-removal and fusion-culling entries).
+
+**The rule.** `MarchingCubes::extract_device(grid, iso, const
+volume::DeviceBlockList&, timings)` meshes exactly the listed blocks, binding
+the list in place as the whole-map path binds the map's own; only its count
+reaches the host. The list must be the grid's own map's, from
+`compact_active_blocks_in_frusta_on_device` or
+`compact_active_blocks_on_device`, and still hold: the new
+`VoxelHashMap::check_device_block_subset` refuses a list from another or a
+moved map, and one that a later compaction of the same kind, a resize, an
+allocation, a remove or a clear has made stale, before the extract claims a
+ring slot. `check_device_block_list` still refuses a frusta list as the
+active set. The frusta list gained a serial of its own for this: before, a
+second frustum compaction rewrote the buffer and left the first list looking
+current.
+
+**The viewers.** `fuse_viewer` and `rig_viewer`'s render threads publish
+`view_proj` under the shared mutex, with a serial that moves only when the
+view does. The fuse thread meshes the blocks inside
+`make_frustum_planes(view_proj, 0.25 m)` — the margin covers the frames the
+view moves between the cull and the draw; the near plane takes none — and
+re-meshes after fusing, at `--remesh-every`, as before, and whenever the view
+moved while nothing fused: a live source between frames, `fuse_viewer`'s
+replay after fusion, an idle rig or one a `--sets` run stopped. So both
+fuse threads now run until the window closes. Before the render thread has
+published a view, the fuse thread meshes the whole map. A view that sees
+nothing meshes nothing. No option was added.
+
+**What goes.** The host-list `extract_device(grid, iso, const BlockList&)` and
+the host `compact_active_blocks_in_frustum(FrustumPlanes)` and
+`(DepthCameraParams)`, which only it and tests used (the 2026-10-06 public
+API entry). `volume::BlockList`, `VoxelBlockGrid::block_list` and
+`check_block_list` stay: the codec uses them. `make_frustum_planes(view_proj,
+margin_m)` stays: the viewers call it. `ExtractTimings::input_upload_ms`
+goes: nothing is uploaded on any path.
+
+**Density.** A culled pass records `tris_per_block_` and
+`verts_per_1000_tris_` as a full one does. The 2026-08-12 guard kept a culled
+set, denser per block, from inflating the next full extract's plan (3.6x,
+measured then) while one extractor alternated the two. The viewers now only
+cull, and under the guard their plan stayed on the 64-triangle seed for
+good: a dense view refit (`dispatches == 2`) on every call. A full extract
+after a culled one may now plan high once, and its grow-only arena keeps
+that; the viewers extract the whole map only before a view exists, which is
+before any culled pass.
+
+**Verified.** `recon_mesh_marching_cubes_sparse` splits the sphere's 216
+blocks with two box frusta into disjoint halves of 108, meshes each through
+the new overload, and requires the two triangle multisets to merge into the
+full mesh exactly; the whole map as a frusta list reproduces the internal
+compaction. It refuses a list a later frustum compaction rewrote (and the
+mesh handed out before stays valid), a list from another grid, and one an
+allocation made stale; an empty list meshes nothing. One dense block meshed
+through a list refits from the seed, and the next culled extract, into the
+ring's other unsized slot, does not. Each fails under its mutation: meshing
+the whole map whatever the list, skipping the subset check, and not
+recording a culled pass's density. `recon_volume_frustum` runs its cases
+through the device compaction and checks the subset check across two frustum
+compactions.
+
+**Measured.** A scratch bench (not in the repo) replicated room0 along x,
+12 m apart, streamed 60 frames into room 0 and meshed the view of the last
+frame's camera (far 12 m), on an Apple M5 Max, Release, alone on the machine,
+one run each; fusion is the integrate row's device median, meshing the wall
+median of 15 extracts including the compaction. "Before" is the same bench
+built at the incremental-removal commit, without either cull.
+
+| map | blocks | fusion culled | before | meshing view | whole map |
+|---|---|---|---|---|---|
+| 1 room, 1 cm | 32 819 | 0.91 ms | 1.14 ms | 1.77 ms (22 530 blocks) | 2.10 ms |
+| 4 rooms, 1 cm | 131 276 | 1.12 ms | 1.87 ms | 1.78 ms | 7.57 ms |
+| 8 rooms, 1 cm | 262 552 | 0.90 ms | 2.58 ms | 1.78 ms | 14.86 ms |
+| 16 rooms, 2 cm | 138 736 | 0.44 ms | 1.75 ms | 0.79 ms (5 964 blocks) | 7.67 ms |
+
+Both culls hold their cost to what the cameras see while the whole-map cost
+grows with the map. The integrate row's host time is noisier (one room: 2.3
+culled against 1.8 ms; eight: 1.9 against 4.1). Not run: the viewers (built
+only; no interactive session), and the RTX 5090.
+
 ## Measured lessons
 
 Not decisions, but the measurements that overturned an assumption about
@@ -10568,66 +10647,3 @@ that shipped in none. The retry loop had read two rounds without progress as a
 capacity limit, which a remove never hits, and every round re-ran every coord,
 so blocks already removed took their locks again. The residue was plain
 contention, so the lock order was dropped.
-
-### 2026-10-06 — Marching cubes meshes what the viewing camera sees: an extract over the device frusta list, the viewers re-meshing on a fuse or a view change, and a culled pass records its density (amends the 2026-08-12 view-meshing entry and the 2026-10-06 incremental-removal and fusion-culling entries).
-
-**The rule.** `MarchingCubes::extract_device(grid, iso, const
-volume::DeviceBlockList&, timings)` meshes exactly the listed blocks, binding
-the list in place as the whole-map path binds the map's own; only its count
-reaches the host. The list must be the grid's own map's, from
-`compact_active_blocks_in_frusta_on_device` or
-`compact_active_blocks_on_device`, and still hold: the new
-`VoxelHashMap::check_device_block_subset` refuses a list from another or a
-moved map, and one that a later compaction of the same kind, a resize, an
-allocation, a remove or a clear has made stale, before the extract claims a
-ring slot. `check_device_block_list` still refuses a frusta list as the
-active set. The frusta list gained a serial of its own for this: before, a
-second frustum compaction rewrote the buffer and left the first list looking
-current.
-
-**The viewers.** `fuse_viewer` and `rig_viewer`'s render threads publish
-`view_proj` under the shared mutex, with a serial that moves only when the
-view does. The fuse thread meshes the blocks inside
-`make_frustum_planes(view_proj, 0.25 m)` — the margin covers the frames the
-view moves between the cull and the draw; the near plane takes none — and
-re-meshes after fusing, at `--remesh-every`, as before, and whenever the view
-moved while nothing fused: a live source between frames, `fuse_viewer`'s
-replay after fusion, an idle rig or one a `--sets` run stopped. So both
-fuse threads now run until the window closes. Before the render thread has
-published a view, the fuse thread meshes the whole map. A view that sees
-nothing meshes nothing. No option was added.
-
-**What goes.** The host-list `extract_device(grid, iso, const BlockList&)` and
-the host `compact_active_blocks_in_frustum(FrustumPlanes)` and
-`(DepthCameraParams)`, which only it and tests used (the 2026-10-06 public
-API entry). `volume::BlockList`, `VoxelBlockGrid::block_list` and
-`check_block_list` stay: the codec uses them. `make_frustum_planes(view_proj,
-margin_m)` stays: the viewers call it. `ExtractTimings::input_upload_ms`
-goes: nothing is uploaded on any path.
-
-**Density.** A culled pass records `tris_per_block_` and
-`verts_per_1000_tris_` as a full one does. The 2026-08-12 guard kept a culled
-set, denser per block, from inflating the next full extract's plan (3.6x,
-measured then) while one extractor alternated the two. The viewers now only
-cull, and under the guard their plan stayed on the 64-triangle seed for
-good: a dense view refit (`dispatches == 2`) on every call. A full extract
-after a culled one may now plan high once, and its grow-only arena keeps
-that; the viewers extract the whole map only before a view exists, which is
-before any culled pass.
-
-**Verified.** `recon_mesh_marching_cubes_sparse` splits the sphere's 216
-blocks with two box frusta into disjoint halves of 108, meshes each through
-the new overload, and requires the two triangle multisets to merge into the
-full mesh exactly; the whole map as a frusta list reproduces the internal
-compaction. It refuses a list a later frustum compaction rewrote (and the
-mesh handed out before stays valid), a list from another grid, and one an
-allocation made stale; an empty list meshes nothing. One dense block meshed
-through a list refits from the seed, and the next culled extract, into the
-ring's other unsized slot, does not. Each fails under its mutation: meshing
-the whole map whatever the list, skipping the subset check, and not
-recording a culled pass's density. `recon_volume_frustum` runs its cases
-through the device compaction and checks the subset check across two frustum
-compactions.
-
-**Not measured.** The win on a large scan, and the viewers were built, not
-run.
