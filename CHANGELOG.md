@@ -67,9 +67,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   checks the camera against its entry of the rig's sync file
   (`read_orbbec_sync_config`) and refuses a difference, `Unsupported`,
   naming each field, unless `apply_sync` writes the settings, only where
-  they differ, since they persist in the camera's flash. Software triggering
-  is refused after any write, so `apply_sync` can repair it. Test:
-  `recon_sensor_orbbec_conversion`.
+  they differ, since they persist in the camera's flash. The SDK's effective
+  settings are checked again after writing; normalization that still differs
+  is refused. Software triggering is refused after any write, so
+  `apply_sync` can repair it. Tests: `recon_sensor_orbbec_conversion`,
+  `recon_sensor_orbbec_sync_apply`.
 
 ### Changed
 

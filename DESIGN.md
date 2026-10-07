@@ -1088,7 +1088,10 @@ sync role (`waits_for_primary`), and given the camera's entry of the rig's
 **sync configuration** (`Options::sync`; `orbbec_sync_config.hpp`, the
 SDK's `femto_mega_sync.json` layout) refuses a camera whose stored settings
 differ, unless `apply_sync` writes them, only where they differ, since they
-persist in its flash. The lab rig's is `config/femto_mega_sync.json`, which
+persist in its flash. The SDK's effective settings are compared again after
+the write: normalization that still differs is refused, `Unsupported`;
+its cached response does not verify persistence on the camera.
+The lab rig's is `config/femto_mega_sync.json`, which
 only the examples and tests name. No test opens a camera (the 2026-10-06
 no-hardware decision); `fuse_orbbec` is how one is checked. Behind it is the
 internal `CameraStream`, and the types of `orbbec_stream.hpp`: the stream

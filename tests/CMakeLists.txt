@@ -607,6 +607,25 @@ if(VR_WITH_ORBBEC)
   add_test(NAME recon_sensor_orbbec_sync_config
            COMMAND recon_sensor_orbbec_sync_config_test)
 
+  # Public open() against a camera stub: SDK normalization after a sync write
+  # must be refused. Compile the sensor here so the stub also works in shared
+  # builds; no real camera or SDK context is opened.
+  add_executable(
+    recon_sensor_orbbec_sync_apply_test
+    sensor_orbbec_sync_apply_test.cpp
+    ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec/orbbec_sensor.cpp
+    ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec/frame_conversion.cpp
+  )
+  target_link_libraries(
+    recon_sensor_orbbec_sync_apply_test
+    PRIVATE volumetric_kit::recon_sensor_orbbec ob::OrbbecSDK)
+  target_include_directories(
+    recon_sensor_orbbec_sync_apply_test
+    PRIVATE ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec)
+  vr_target_warnings(recon_sensor_orbbec_sync_apply_test)
+  add_test(NAME recon_sensor_orbbec_sync_apply
+           COMMAND recon_sensor_orbbec_sync_apply_test)
+
   # The driver's H.265 colour decoder, with no camera: the committed patch clip
   # wrapped in SDK frames. Internal and unexported, so the test compiles its
   # source itself.

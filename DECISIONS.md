@@ -409,9 +409,9 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-07**](#2026-10-07--a-rig-is-an-orbbecsensor-per-camera-in-a-sensorarray-on-the-sdks-global-timestamps-sdk-2106-or-later-each-camera-is-checked-against-its-sync-settings-at-open-and-written-only-when-asked-the-tolerance-is-04-of-a-frame-period-and-orbbecrig-its-start-order-and-the-public-triggergrouper-go-amends-the-2026-09-24-sdk-2026-09-27-rig-and-2026-10-06-irgbdsensor-and-sensorarray-entries) —
   A rig is an `OrbbecSensor` per camera in a `SensorArray`, on the SDK's
   global timestamps (SDK 2.10.6 or later): each camera is checked against
-  its sync settings at `open` and written only when asked, the tolerance is
-  0.4 of a frame period, and `OrbbecRig`, its start order and the public
-  `TriggerGrouper` go.
+  its sync settings at `open`, written only when asked and checked for SDK
+  normalization after a write; the tolerance is 0.4 of a frame period, and
+  `OrbbecRig`, its start order and the public `TriggerGrouper` go.
 
 ## Decision record
 
@@ -10774,12 +10774,19 @@ already the array's.
   `InvalidArgument`, before the SDK is touched. The role and the
   software-triggering and unknown-mode refusals are decided after any write,
   so `apply_sync` can repair a camera left in software triggering.
-- **Written only on a difference, and not re-read.** The settings persist in
-  the camera's flash, which Orbbec's sample warns frequent writes wear. After
-  a write the SDK answers a read from its own cache of the write, not the
-  camera (`DeviceSyncConfiguratorOldProtocol::getSyncConfig`), so a re-read
-  in the same process proves nothing, though the 2026-09-27 rig re-diffed as
-  if it did. The next `open` reads the camera and is the check.
+- **Written only on a difference, then checked for SDK normalization.**
+  The settings persist in the camera's flash, which Orbbec's sample warns
+  frequent writes wear. After
+  a write the SDK answers a read from its cache of the effective settings,
+  not the camera (`DeviceSyncConfiguratorOldProtocol::getSyncConfig`).
+  That cache still matters: its setter forces a primary's
+  `triggerOutEnable = true` and `triggerOutDelayUs = 0` before writing and
+  caching. `open` compares again and refuses any remaining difference,
+  `Unsupported`, naming the camera and fields. Removing the old rig's
+  comparison falsely accepted a request for `false` / `250`; a public
+  `OrbbecSensor::open` test with a camera stub reproduces it without hardware.
+  This checks normalization, not persistence: the next `open` reads the
+  camera and checks the stored settings.
 - **`sync_clock_to_host` means the SDK's global timestamps.** `open` refuses
   a camera without them (`isGlobalTimestampSupported`) and enables them
   (`enableGlobalTimestamp(true)`; the SDK's own config leaves the Femto
@@ -10877,13 +10884,17 @@ until the next re-fit; the array's zero check cannot see that. An
 clock to a monotonic one; recon does not read `getTimestampClockType`.
 
 **Verified.** Apple M5 Max, macOS, Release with warnings as errors, Orbbec
-SDK 2.10.6 and FFmpeg: the 56 tests pass. `recon_sensor_array` groups by the
+SDK 2.10.6 and FFmpeg: the 57 tests pass. `recon_sensor_array` groups by the
 derived default with and without a rate (a secondary just inside it joins
 the set, one just outside joins none), refuses an explicit 500 µs at 1 kHz
 and accepts 499 µs; `recon_sensor_orbbec_conversion` refuses `apply_sync`
-without `sync` and an absent camera, by name. Configure refuses an SDK below
-2.10.6. `rig_viewer` was not compiled here (the viewer is off locally); CI's
-viewer leg compiles it.
+without `sync` and an absent camera, by name. The public-open test
+`recon_sensor_orbbec_sync_apply` uses a camera stub to check that SDK
+normalization is refused (and fails without the post-write comparison),
+matching settings are never written, a write repairs software triggering,
+and a write error is preserved. Configure refuses an SDK below 2.10.6.
+`rig_viewer` was not compiled here (the viewer is off locally); CI's viewer
+leg compiles it.
 
 On the rig, by hand (not a test), `fuse_orbbec --rig
 config/femto_mega_sync.json`, H.265 720p at 30 fps, opened the four cameras
