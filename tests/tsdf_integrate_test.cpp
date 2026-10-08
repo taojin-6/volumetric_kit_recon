@@ -269,7 +269,8 @@ int nonfinite_depth_taps_case(const vr_test::Gpu& ctx) {
   auto integrator = vr::tsdf::TsdfIntegrator::create(ctx.device, ctx.allocator);
   CHECK(integrator.ok());
   for (float invalid : hole) {
-    // Every bilinear corner, with a different valid containing pixel.
+    // Every bilinear corner of the voxel's 2x2, its nearest pixel valid: tap 0
+    // at u = v = 0.25, the others at 0.75.
     for (int tap : {0, 1, 3, 4}) {
       auto made =
           vol::VoxelBlockGrid::create(ctx.device, ctx.allocator, gp, attrs, 2);
@@ -282,8 +283,8 @@ int nonfinite_depth_taps_case(const vr_test::Gpu& ctx) {
       CHECK(active.ok() && active->size() == 1);
       vr::DepthCameraParams cam{};
       cam.fx = cam.fy = 1.0f;
-      cam.cx = tap == 4 ? 0.75f : 1.25f;
-      cam.cy = tap == 4 ? 0.75f : 1.25f;
+      cam.cx = tap == 0 ? 0.75f : 0.25f;
+      cam.cy = tap == 0 ? 0.75f : 0.25f;
       cam.width = cam.height = 3;
       cam.min_depth = 0.1f;
       cam.max_depth = 5.0f;
@@ -296,6 +297,159 @@ int nonfinite_depth_taps_case(const vr_test::Gpu& ctx) {
       CHECK(weight.ok());
       CHECK(weight.value()[active->front().ptr] == 1.0f);
     }
+  }
+  return 0;
+}
+
+// A camera with a NaN or an infinity anywhere the kernel reads it, depth or
+// colour, is refused before any work: every projection through it would be
+// NaN, and no frustum bounds the call. A list with one such frame fuses none
+// of the others, and the grid's tick stays where it was.
+int nonfinite_camera_case(const vr_test::Gpu& ctx) {
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  const float inf = std::numeric_limits<float>::infinity();
+  vol::VoxelGridParams gp{};
+  gp.block_size = 8;
+  gp.voxels_per_block = 512;
+  gp.bucket_size = 8;
+  gp.num_buckets = 128;
+  gp.num_blocks = 1024;
+  gp.max_chain = 128;
+  gp.voxel_size = 0.125f;
+  gp.trunc_dist = 0.1f;
+  const vol::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
+                                      {"weight", sizeof(float)},
+                                      {"color", sizeof(std::uint32_t)}};
+  auto integrator = vr::tsdf::TsdfIntegrator::create(ctx.device, ctx.allocator);
+  auto made =
+      vol::VoxelBlockGrid::create(ctx.device, ctx.allocator, gp, attrs, 3);
+  CHECK(integrator.ok() && made.ok());
+  auto grid = std::move(made).value();
+  vol::BlockIndex block{};
+  block.coord = vr::Vec3i(0, 0, 1);
+  CHECK(grid.map().allocate(&block, 1).value() == 0);
+
+  vr::DepthCameraParams cam{};
+  cam.fx = cam.fy = 1.0f;
+  cam.cx = cam.cy = 1.0f;
+  cam.width = cam.height = 3;
+  cam.min_depth = 0.1f;
+  cam.max_depth = 5.0f;
+  cam.cam_to_world = vr::Mat4f(1.0f);
+  const std::vector<float> depth(9, 1.0f);
+  const std::vector<std::uint32_t> pixels(9, 0xFF336699u);
+
+  std::vector<vr::DepthCameraParams> bad_depth(6, cam);
+  bad_depth[0].cam_to_world[3].x = nan;  // a NaN pose
+  bad_depth[1].cam_to_world[0].y = inf;  // and an infinite rotation entry
+  bad_depth[2].fx = nan;
+  bad_depth[3].cy = -inf;
+  bad_depth[4].min_depth = nan;
+  bad_depth[5].max_depth = inf;
+  std::vector<vr::ColorCameraParams> bad_color(4, color_cam_of(cam));
+  bad_color[0].cam_to_world[3].z = nan;  // a NaN colour pose
+  bad_color[1].cam_to_world[2].x = -inf;
+  bad_color[2].fy = nan;
+  bad_color[3].cx = inf;
+
+  const std::uint32_t tick = grid.map().tick();
+  const auto refused = [&](const vkc::Status& st) {
+    return st.domain() == vkc::Status::Code::InvalidArgument &&
+           grid.map().tick() == tick;
+  };
+  const tsdf::ColorFrame good_color{pixels.data(), color_cam_of(cam)};
+  for (const vr::DepthCameraParams& bad : bad_depth) {
+    CHECK(refused(integrator->integrate(grid, depth.data(), bad)));
+    const std::vector<tsdf::FrameInput> list = {
+        {{vkc::StorageInput(depth.data()), cam}, &good_color},
+        {{vkc::StorageInput(depth.data()), bad}, nullptr}};
+    CHECK(refused(integrator->integrate(grid, list)));
+  }
+  for (const vr::ColorCameraParams& bad : bad_color) {
+    const tsdf::ColorFrame frame{pixels.data(), bad};
+    CHECK(
+        refused(integrator->integrate(grid, depth.data(), cam, 5.0f,
+                                      tsdf::IntegrationMode::Classic, &frame)));
+  }
+  auto weight =
+      vr_test::read_attribute<float>(ctx.device, ctx.allocator, grid, "weight");
+  CHECK(weight.ok());
+  for (const float w : weight.value()) CHECK(w == 0.0f);
+
+  // The same frames with finite cameras fuse.
+  CHECK(integrator
+            ->integrate(grid, depth.data(), cam, 5.0f,
+                        tsdf::IntegrationMode::Classic, &good_color)
+            .ok());
+  CHECK(grid.map().tick() == tick + 1);
+  return 0;
+}
+
+// Colour is read at the pixel whose centre is nearest the voxel's projection,
+// pixel centres at integer coordinates: rounded, not floored, and clamped into
+// the image, whose last half pixel rounds past it. Each pixel's colour names
+// it (R its column, G its row), and the first observation assigns it, so the
+// fused colour says which pixel was read.
+int color_pixel_case(const vr_test::Gpu& ctx) {
+  vol::VoxelGridParams gp{};
+  gp.block_size = 8;
+  gp.voxels_per_block = 512;
+  gp.bucket_size = 8;
+  gp.num_buckets = 128;
+  gp.num_blocks = 1024;
+  gp.max_chain = 128;
+  gp.voxel_size = 0.125f;
+  gp.trunc_dist = 0.1f;
+  const vol::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
+                                      {"weight", sizeof(float)},
+                                      {"color", sizeof(std::uint32_t)}};
+  auto integrator = vr::tsdf::TsdfIntegrator::create(ctx.device, ctx.allocator);
+  CHECK(integrator.ok());
+  constexpr std::uint32_t kSide = 8;
+  const std::vector<float> depth(kSide * kSide, 1.0f);
+  std::vector<std::uint32_t> pixels(depth.size());
+  for (std::uint32_t y = 0; y < kSide; ++y) {
+    for (std::uint32_t x = 0; x < kSide; ++x) {
+      pixels[y * kSide + x] = 0xFF000000u | (y << 8) | x;
+    }
+  }
+  // The voxel at world (0, 0, 1) -- its block's first -- projects to the
+  // principal point. {cx, cy, the pixel read}.
+  const struct {
+    float cx, cy;
+    std::uint32_t x, y;
+  } cases[] = {{2.25f, 3.75f, 2, 4},  // rounded, down and up
+               {3.5f, 4.49f, 4, 4},   // half up
+               {7.75f, 0.0f, 7, 0}};  // clamped into the image
+  for (const auto& c : cases) {
+    auto made =
+        vol::VoxelBlockGrid::create(ctx.device, ctx.allocator, gp, attrs, 3);
+    CHECK(made.ok());
+    auto grid = std::move(made).value();
+    vol::BlockIndex block{};
+    block.coord = vr::Vec3i(0, 0, 1);
+    CHECK(grid.map().allocate(&block, 1).value() == 0);
+    auto active = grid.map().compact_active_blocks();
+    CHECK(active.ok() && active->size() == 1);
+    vr::DepthCameraParams cam{};
+    cam.fx = cam.fy = 1.0f;
+    cam.cx = c.cx;
+    cam.cy = c.cy;
+    cam.width = cam.height = kSide;
+    cam.min_depth = 0.1f;
+    cam.max_depth = 5.0f;
+    cam.cam_to_world = vr::Mat4f(1.0f);
+    const tsdf::ColorFrame frame{pixels.data(), color_cam_of(cam)};
+    CHECK(integrator
+              ->integrate(grid, depth.data(), cam, 5.0f,
+                          tsdf::IntegrationMode::Classic, &frame)
+              .ok());
+    auto color = vr_test::read_attribute<std::uint32_t>(
+        ctx.device, ctx.allocator, grid, "color");
+    CHECK(color.ok());
+    const std::uint32_t got = color.value()[active->front().ptr];
+    CHECK((got & 0xFFu) == c.x);
+    CHECK(((got >> 8) & 0xFFu) == c.y);
   }
   return 0;
 }
@@ -372,6 +526,8 @@ int main() {
   }
   CHECK(nonfinite_depth_taps_case({device.value(), allocator.value()}) == 0);
   CHECK(zero_depth_case({device.value(), allocator.value()}) == 0);
+  CHECK(nonfinite_camera_case({device.value(), allocator.value()}) == 0);
+  CHECK(color_pixel_case({device.value(), allocator.value()}) == 0);
 
   // Copies of a grid attribute; the arrays are device-local.
   const auto floats = [&](const vol::VoxelBlockGrid& g, const char* name) {
@@ -623,11 +779,12 @@ int main() {
   const std::vector<float> cls_weight = floats(vbg_cls, "weight");
   CHECK(cls_weight[vc] > 0.0f);  // kept (clamped to +trunc, fused)
 
-  // Bilinear depth sampling. cx = 321.0 puts the on-axis voxel's projection at
-  // pixel u = 321.0, so the bilinear taps straddle columns 320 and 321 at
-  // fx = 0.5 (a 50/50 blend). The on-axis voxel is at world z = 0.48.
+  // Bilinear depth sampling. Pixel centres sit at integer coordinates, so
+  // cx = 320.5 puts the on-axis voxel's projection halfway between columns 320
+  // and 321: a 50/50 blend, whose nearest pixel is 321. The on-axis voxel is
+  // at world z = 0.48.
   vr::DepthCameraParams bcam = cam;
-  bcam.cx = 321.0f;
+  bcam.cx = 320.5f;
   const std::size_t bw = bcam.width;
   const std::size_t on_axis =
       static_cast<std::size_t>(local_index(0, 0, 0, bs));
@@ -660,13 +817,13 @@ int main() {
   CHECK(!approx(bi_tsdf[vbi], 0.02f, 5e-3f));  // NOT nearest: 0.50 - 0.48
 
   // (discontinuity) A 0.48 / 0.58 step across the taps (> trunc) is a depth
-  // edge, so the sampler falls back to the nearest sample (0.48) rather than
-  // blending to 0.53. This runs in classic mode, where a regression that DID
-  // blend across the edge would not drop the voxel: sdf = 0.53 - 0.48 = 0.05 >
-  // trunc is clamped to +trunc and fused at tsdf ~ +0.04. So the tsdf ~ 0 check
-  // below is what separates the fallback (0.48 -> sdf 0) from a cross-edge
-  // blend (tsdf ~ +0.04); the weight check only confirms the voxel fused at
-  // all.
+  // edge, so the sampler falls back to the nearest sample (column 321, 0.48)
+  // rather than blending to 0.53. This runs in classic mode, where a
+  // regression that DID blend across the edge would not drop the voxel:
+  // sdf = 0.53 - 0.48 = 0.05 > trunc is clamped to +trunc and fused at
+  // tsdf ~ +0.04. So the tsdf ~ 0 check below is what separates the fallback
+  // (0.48 -> sdf 0) from a cross-edge blend (tsdf ~ +0.04); the weight check
+  // only confirms the voxel fused at all.
   std::vector<float> depth_edge(depth.size(), 0.48f);
   for (std::uint32_t y = 0; y < bcam.height; ++y) {
     depth_edge[static_cast<std::size_t>(y) * bw + 320] = 0.58f;

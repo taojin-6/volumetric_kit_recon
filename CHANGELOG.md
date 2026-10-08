@@ -201,6 +201,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `tsdf`: **fusion samples at integer pixel centres**, the convention
+  `GpuFramePrep`, the camera tier, allocation and texturing use: no
+  half-pixel tap shift, and the nearest-pixel fallback and the colour sample
+  rounded and clamped rather than floored. A slanted plane through
+  `GpuFramePrep` now crosses zero within 0.06 mm of the truth at 1 cm voxels,
+  where it was off by up to 5.5 mm, in each camera's own image direction.
+  Regressions: `recon_sensor_gpu_frame_prep`, `recon_tsdf_integrate`.
+- `tsdf`: `TsdfIntegrator::integrate` **refuses a depth or colour camera with
+  a non-finite intrinsic, depth bound or pose entry** before any work, where
+  it fused the whole active set through NaN projections; the kernel's
+  projection rejects a NaN pixel too. Regression: `recon_tsdf_integrate`.
 - `fuse_viewer`: retain the last successfully fused keyframe through a
   preparation or fusion failure, so final and later remeshes keep its
   projected texture. Regression: `recon_example_fuse_keyframe`.

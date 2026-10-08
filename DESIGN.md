@@ -877,11 +877,13 @@ allocator still asks for stays, and `rig_viewer` runs it every
 `TsdfIntegrator` fuses a posed depth frame into a grid's
 `tsdf`/`weight`: projective `sdf = depth − Zc`, `±trunc_dist`, an
 inverse-square-with-behind-dropoff weight, running average capped at
-`max_weight`. Depth is sampled bilinearly, nearest at image edges, across
-discontinuities, or when any tap is non-positive or non-finite. A NaN hole
-therefore leaves a valid nearest sample usable. Zero is a missing sample even
-when `min_depth` is zero, in allocation and integration alike. `IntegrationMode` selects
-**classic** (keep free space ahead
+`max_weight`. Depth is sampled bilinearly at integer pixel centres, nearest
+at image edges, across discontinuities, or when any tap is non-positive or
+non-finite, and colour at the nearest pixel (2026-10-08). A NaN hole
+therefore leaves a valid nearest sample usable, and a camera with a
+non-finite intrinsic, depth bound or pose entry is refused. Zero is a
+missing sample even when `min_depth` is zero, in allocation and integration
+alike. `IntegrationMode` selects **classic** (keep free space ahead
 of the surface) or **dynamic** (clear it, so a receded surface leaves no
 ghost). An optional `ColorFrame` fuses colour through its own separate
 `ColorCameraParams`; a voxel's first colour observation assigns rather than

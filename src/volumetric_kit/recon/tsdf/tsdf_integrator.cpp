@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <string>
 #include <vector>
 
 #include "volumetric_kit/core/vulkan/command_batch.hpp"
@@ -76,6 +77,29 @@ static_assert(offsetof(PushConstants, tick) == 52,
               "PushConstants layout drift");
 static_assert(offsetof(PushConstants, coverage_in_alpha) == 56,
               "PushConstants layout drift");
+
+// Whether every entry of a camera the kernel reads is finite. One NaN or
+// infinity in a pose or an intrinsic makes every projection NaN, and then no
+// frustum bounds the call either.
+bool finite(const Mat4f& m) {
+  for (int c = 0; c < 4; ++c) {
+    for (int r = 0; r < 4; ++r) {
+      if (!std::isfinite(m[c][r])) return false;
+    }
+  }
+  return true;
+}
+bool finite(const ColorCameraParams& cam) {
+  return std::isfinite(cam.fx) && std::isfinite(cam.fy) &&
+         std::isfinite(cam.cx) && std::isfinite(cam.cy) &&
+         finite(cam.cam_to_world);
+}
+bool finite(const DepthCameraParams& cam) {
+  return std::isfinite(cam.fx) && std::isfinite(cam.fy) &&
+         std::isfinite(cam.cx) && std::isfinite(cam.cy) &&
+         std::isfinite(cam.min_depth) && std::isfinite(cam.max_depth) &&
+         finite(cam.cam_to_world);
+}
 
 // Where a colour frame's image is: its host pixels or its device buffer (the
 // caller has checked that exactly one is set).
@@ -237,6 +261,12 @@ core::Status TsdfIntegrator::integrate(VoxelBlockGrid& grid,
                                   depth_bytes[i]));
     if (pixels == 0) continue;
     live.push_back(i);
+    if (!finite(cam)) {
+      return core::Status::invalid_argument(
+          "TsdfIntegrator::integrate: frame " + std::to_string(i) +
+          "'s depth camera has a non-finite intrinsic, depth bound or pose "
+          "entry");
+    }
     VKC_TRY(core::check_storage_buffer_range(
         "TsdfIntegrator::integrate: the depth buffer", depth_bytes[i],
         max_storage_buffer_range_));
@@ -246,6 +276,11 @@ core::Status TsdfIntegrator::integrate(VoxelBlockGrid& grid,
         color->cam.width == 0 || color->cam.height == 0) {
       return core::Status::invalid_argument(
           "TsdfIntegrator::integrate: color frame is empty");
+    }
+    if (!finite(color->cam)) {
+      return core::Status::invalid_argument(
+          "TsdfIntegrator::integrate: frame " + std::to_string(i) +
+          "'s color camera has a non-finite intrinsic or pose entry");
     }
     if (color->pixels != nullptr && color->buffer != nullptr) {
       return core::Status::invalid_argument(
