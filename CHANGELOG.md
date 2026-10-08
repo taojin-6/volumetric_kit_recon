@@ -75,6 +75,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `codec`: **one text for the frame's models and block grammar.** The rANS
+  kernels include it as GLSL and the host compiles it as C++
+  (`shaders/frame_models.glsl`, `shaders/frame_grammar.glsl`), so the host's
+  writer and reader and the device's walk and decode are the same lines; the
+  device walks a block in the host writer's order. Frames are unchanged, byte
+  for byte. Tests: golden v3 frames pin the bytes both writers write
+  (`recon_codec_bitstream`, `recon_codec_device_frame`).
 - build: **the core pin moves to core #15** (a8b63d1), which adds
   `CommandBatch::submit_async`, for the pipelined stages to come; recon's
   calls are unchanged. gfx, pinned at core #13, builds against it.
