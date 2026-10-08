@@ -610,7 +610,7 @@ add_test(NAME recon_eval_mesh_distance COMMAND recon_eval_mesh_distance_test)
 # linked in place from an install outside the repo. It opens no SDK context.
 if(VR_WITH_ORBBEC)
   add_executable(recon_orbbec_sdk_smoke_test orbbec_sdk_smoke_test.cpp)
-  target_link_libraries(recon_orbbec_sdk_smoke_test PRIVATE ob::OrbbecSDK)
+  vr_link_orbbec_sdk(recon_orbbec_sdk_smoke_test)
   target_compile_definitions(
     recon_orbbec_sdk_smoke_test
     PRIVATE VR_ORBBEC_SDK_VERSION_MAJOR=${VR_ORBBEC_SDK_VERSION_MAJOR}
@@ -628,9 +628,9 @@ if(VR_WITH_ORBBEC)
     sensor_orbbec_conversion_test.cpp
     ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec/frame_conversion.cpp
   )
-  target_link_libraries(
-    recon_sensor_orbbec_conversion_test
-    PRIVATE volumetric_kit::recon_sensor_orbbec ob::OrbbecSDK)
+  target_link_libraries(recon_sensor_orbbec_conversion_test
+                        PRIVATE volumetric_kit::recon_sensor_orbbec)
+  vr_link_orbbec_sdk(recon_sensor_orbbec_conversion_test)
   target_include_directories(
     recon_sensor_orbbec_conversion_test
     PRIVATE ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec)
@@ -646,9 +646,9 @@ if(VR_WITH_ORBBEC)
     sensor_orbbec_sync_config_test.cpp
     ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec/frame_conversion.cpp
   )
-  target_link_libraries(
-    recon_sensor_orbbec_sync_config_test
-    PRIVATE volumetric_kit::recon_sensor_orbbec ob::OrbbecSDK)
+  target_link_libraries(recon_sensor_orbbec_sync_config_test
+                        PRIVATE volumetric_kit::recon_sensor_orbbec)
+  vr_link_orbbec_sdk(recon_sensor_orbbec_sync_config_test)
   target_include_directories(
     recon_sensor_orbbec_sync_config_test
     PRIVATE ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec)
@@ -671,9 +671,9 @@ if(VR_WITH_ORBBEC)
     ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec/orbbec_sensor.cpp
     ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec/frame_conversion.cpp
   )
-  target_link_libraries(
-    recon_sensor_orbbec_sync_apply_test
-    PRIVATE volumetric_kit::recon_sensor_orbbec ob::OrbbecSDK)
+  target_link_libraries(recon_sensor_orbbec_sync_apply_test
+                        PRIVATE volumetric_kit::recon_sensor_orbbec)
+  vr_link_orbbec_sdk(recon_sensor_orbbec_sync_apply_test)
   target_include_directories(
     recon_sensor_orbbec_sync_apply_test
     PRIVATE ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec)
@@ -713,9 +713,9 @@ if(VR_WITH_ORBBEC)
     ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec/picture_frames.cpp
   )
   target_link_libraries(
-    recon_sensor_orbbec_hevc_test
-    PRIVATE volumetric_kit::recon_sensor_orbbec
-            volumetric_kit::recon_sensor_video ob::OrbbecSDK)
+    recon_sensor_orbbec_hevc_test PRIVATE volumetric_kit::recon_sensor_orbbec
+                                          volumetric_kit::recon_sensor_video)
+  vr_link_orbbec_sdk(recon_sensor_orbbec_hevc_test)
   target_include_directories(
     recon_sensor_orbbec_hevc_test
     PRIVATE ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec)
@@ -734,9 +734,9 @@ if(VR_WITH_ORBBEC)
     ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec/picture_frames.cpp
   )
   target_link_libraries(
-    recon_sensor_orbbec_jpeg_test
-    PRIVATE volumetric_kit::recon_sensor_orbbec
-            volumetric_kit::recon_sensor_video ob::OrbbecSDK)
+    recon_sensor_orbbec_jpeg_test PRIVATE volumetric_kit::recon_sensor_orbbec
+                                          volumetric_kit::recon_sensor_video)
+  vr_link_orbbec_sdk(recon_sensor_orbbec_jpeg_test)
   target_include_directories(
     recon_sensor_orbbec_jpeg_test
     PRIVATE ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec)

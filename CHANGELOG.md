@@ -101,6 +101,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- build: **every target that calls the Orbbec SDK compiles with exceptions,
+  privately** (`vr_link_orbbec_sdk`), so the driver builds where
+  `CMAKE_CXX_FLAGS` turns exceptions off.
 - `sensor/utils`: **`GpuFramePrep::prepare` is `prepare_batch` over a set
   of one**, so a frame its checks refuse no longer times a `"frame prep"`
   row.
