@@ -104,6 +104,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- examples: **one command-line parser, one stage table, and reports out of
+  the mains.** Every example parses its flags through
+  `examples/common/cli.hpp`'s `Cli` (which takes in `parse_number.hpp`), and
+  each flag family is declared and validated once: `FusionFlags`,
+  `ReplicaFlags`, `OrbbecFlags`, `CodecFlags` and the viewers'
+  `WindowFlags`. A number is read whole (`--max-frames 10x` is refused), a
+  value below a flag's minimum is refused rather than raised to it,
+  `--dynamic` and `--static` refuse each other, and every error prints the
+  generated usage. `fuse_render` and `fuse_viewer` gain `--max-weight`, and
+  `codec_replica` the fusion flags and `--cam-params`. Stage rows print
+  through `stage_table.hpp`; `fuse_replica`'s survey and extract reports are
+  `remesh_report.hpp`, and the viewers' panels and reports
+  `viewer_panels.hpp` and `rig_report.hpp`. Tests: `recon_example_cli`,
+  `recon_example_stage_table`, `recon_example_remesh_report`.
 - examples: **`fuse_viewer` and `rig_viewer` hand meshes over through
   `mesh::MeshExchange`**, and their copies of the protocol go, with
   `viewer_common.hpp`'s `retire_and_release_mark` and `unbindable_reason`.

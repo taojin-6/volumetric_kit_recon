@@ -1489,6 +1489,24 @@ replacing it only on success (`fuse_keyframe`). A failure therefore leaves
 its depth, colour and cameras available for the final and later remeshes.
 Preparing while the previous frame is held allocates a separate output pair.
 
+Every example reads its command line through `examples/common/cli.hpp`'s
+`Cli`: each flag is declared once with the variable it sets, a number is read
+whole and finite, a value below a flag's minimum is refused, and an error is
+printed with the usage line the declarations generate. Flags a family of
+examples shares are declared and validated once: `FusionFlags` (`--voxel`,
+`--trunc`, `--min-depth`, `--max-depth`, `--max-weight`; the band defaults to
+four voxels, `grid_layout.hpp`'s `default_trunc`) in every example that fuses
+a sensor, `ReplicaFlags` (`<scene_dir>`, `--cam-params`, `--max-frames`,
+`--preload`) in the four dataset ones, `OrbbecFlags` (`--rig`,
+`--calibration`, `--apply-sync`, `--hevc | --mjpeg`, `--color`, `--fps`) in
+the two live ones, `CodecFlags` in the two codec ones, and `WindowFlags`
+(`viewer_common.hpp`) in the two windows. Stage rows print through one table,
+`stage_table.hpp`. Reports live beside the helpers rather than in a `main`:
+`fuse_replica`'s extract reports and `--dirty-every` survey in
+`remesh_report.hpp`, the viewers' panels in `viewer_panels.hpp`, and
+`rig_viewer`'s panel, progress line and `--texture-stats` in `rig_report.hpp`.
+A `main.cpp` is the example's story: options, setup, the loop, the report.
+
 `fuse_replica` runs the spine on a posed Replica-SLAM RGB-D sequence and
 writes a PLY; `--dirty-every` reports the
 changed and re-mesh fractions over windows of its own, keeping its own tick.
@@ -1531,9 +1549,8 @@ frame rate, and both calls' stage rows. It then judges the last decoded
 surface against the source's, mesh to mesh, with the `eval` tier: accuracy,
 coverage and the F-score at half a voxel, since a fused TSDF is projective
 and sampling it would measure the fusion's bias too. `--sweep` prints the
-rate–distortion table the defaults are chosen from. Its `main.cpp` stays the
-example's story; the stream, its report and the sweep are
-`examples/common/codec_stream.hpp` and `codec_sweep.hpp`.
+rate–distortion table the defaults are chosen from. The stream, its report
+and the sweep are `examples/common/codec_stream.hpp` and `codec_sweep.hpp`.
 
 **`codec_mesh`** loads static geometry through the optional Assimp-backed
 `io::load_mesh`, explicitly normalizes its projected height and up direction
