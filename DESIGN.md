@@ -1165,17 +1165,20 @@ device only (the 2026-10-06 device-only decoder decision), on the hardware
 of the device they are given, fixed per build: VideoToolbox on Apple, and
 through CUDA elsewhere, so off Apple `VR_WITH_FFMPEG` needs `VR_WITH_CUDA`
 (the CUDA 13 toolkit's headers; libcuda and libnvjpeg are loaded at run
-time). **`HevcDecoder`** decodes H.265 access units through FFmpeg's
+time). A **`DecodedPicture`** is a frame's colour as it is: its
+`YuvImage` (`DecodedPicture::yuv`: the planes, the queue family that wrote
+them, the size, the matrix's weights, the range and the chroma siting), with
+the stream's pts and its transfer and primaries as an optional
+`ColorEncoding` (empty when that type cannot name them) beside it.
+**`HevcDecoder`** decodes H.265 access units through FFmpeg's
 hardware decoding: NVDEC's picture copied device to device into a Vulkan
 buffer CUDA imported (`core`'s `create_exported_buffer`, on a device that
-`exports_memory`), handed out as NV12 in `DecodedPicture::device`, which a
-reader acquires from `VK_QUEUE_FAMILY_EXTERNAL`; VideoToolbox's two
-IOSurface planes as Metal textures imported as `Image`s (`vt_pictures.mm`,
-Objective-C++), made once per surface and kept, in `DecodedPicture::image`.
-Each picture carries the stream's matrix and range and its transfer and
-primaries as an optional `ColorEncoding` (empty when that type cannot name
-them); `Options::unlabelled_color` stands in for a stream that names no
-matrix, and `reset()` restarts a stream after lost access units. A stream
+`exports_memory`), handed out as NV12 in `YuvImage::device` with
+`kQueueFamilyExternal`; VideoToolbox's two IOSurface planes as Metal
+textures imported as `Image`s (`vt_pictures.mm`, Objective-C++), made once
+per surface and kept, in `YuvImage::image`.
+`Options::unlabelled_color` stands in for a stream that names no matrix,
+and `reset()` restarts a stream after lost access units. A stream
 the hardware cannot decode or hand out -- not 8-bit 4:2:0, or on
 VideoToolbox a display window off the coded corner, which FFmpeg hands over
 already cut from the wrong corner, so the decoder reads each SPS there --
@@ -1239,9 +1242,8 @@ in double, narrowed to float once for the passes; the colour camera's pose,
 rigid, pose the outputs; a sequence number; and `pixels`, the owner of its
 depth and any host colour, so a consumer may keep frames past the next poll
 and past the capture.
-`ChromaLocation` follows the picture through `DecodedPicture`, the Orbbec
-frame handoff and `YuvImage`: JPEG is centred, and HEVC keeps the decoded tag
-with left alignment when unspecified.
+`ChromaLocation` travels in the picture's `YuvImage`: JPEG is centred, and
+HEVC keeps the decoded tag with left alignment when unspecified.
 The GPU samples the location consistently for planes in a buffer and NV12
 images. Existing callers that leave the field unset keep left alignment. The
 resulting `DeviceFrame` feeds the `Buffer` overloads of `allocate_from_depth` and

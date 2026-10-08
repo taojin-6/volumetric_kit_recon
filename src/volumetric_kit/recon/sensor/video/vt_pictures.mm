@@ -258,7 +258,7 @@ VtPictures::VtPictures(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
 VtPictures::~VtPictures() = default;
 
 core::Status VtPictures::import(CVPixelBufferRef pixels, std::uint32_t width,
-                                std::uint32_t height, DecodedPicture& out) {
+                                std::uint32_t height, YuvImage& out) {
   const OSType format = CVPixelBufferGetPixelFormatType(pixels);
   IOSurfaceRef surface = CVPixelBufferGetIOSurface(pixels);
   if (format != kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange &&
@@ -297,11 +297,12 @@ core::Status VtPictures::import(CVPixelBufferRef pixels, std::uint32_t width,
   }
   entry->seen = now;
   const auto held = std::make_shared<const Held>(entry, pixels);
-  out.width = width;
-  out.height = height;
-  out.layout = VideoPixelLayout::Nv12;
+  out.layout = YuvLayout::Nv12;
+  out.device.reset();
   out.image[0] = std::shared_ptr<const core::Image>(held, &entry->luma);
   out.image[1] = std::shared_ptr<const core::Image>(held, &entry->chroma);
+  out.width = width;
+  out.height = height;
   return {};
 }
 

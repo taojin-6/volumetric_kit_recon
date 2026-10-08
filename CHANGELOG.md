@@ -114,6 +114,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   validation layer's same-size allocations cannot consume its failure.
 - build: **the core pin moves to core #18's merge** (511fed0), including #17's
   `core_test_policy`, which recon's tests build with `VKC_BUILD_TEST_SUPPORT`.
+- `sensor/video`: **a `DecodedPicture` is its `YuvImage`**
+  (`DecodedPicture::yuv`), with `pts` and `encoding` beside it (BREAKING):
+  one description of a device picture, which a frame takes as its colour
+  unchanged (`frame.color = picture.yuv`). The decoder fills all of it, a
+  CUDA buffer's `kQueueFamilyExternal` included. `YuvImage`, `YuvLayout` and
+  the queue-family constants move to `sensor/yuv_image.hpp`, which
+  `rgbd_frame.hpp` includes. Migrating: `width`, `height`, `layout`,
+  `device`, `offset`, `stride`, `image`, `full_range` and `chroma_location`
+  are `picture.yuv`'s; `picture.matrix` is `picture.yuv.kr` and `kb`
+  (`ycbcr_weights`); `VideoPixelLayout` is `YuvLayout` (`Yuv420` is `I420`).
 - build: **`VR_WARNINGS_AS_ERRORS` defaults on at the top level only**, as
   `VR_BUILD_TESTS` does, so a project that fetches recon no longer compiles
   it with `-Werror`. Test: `recon_subproject_defaults`.
