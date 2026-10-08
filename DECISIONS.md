@@ -10958,16 +10958,17 @@ down from one past the last step of its run (`step_ends`, in place of
 `step_offsets`), so the steps buffer is unchanged and the walk is
 `emit_block` itself.
 
-**Golden frames.** `tests/codec_frames.hpp` pins four fixtures: 700 blocks at
-K = 64 and R = 64, 40 at K = 512 and R = 16, 65 at K = 21 and R = 7, and
-int32-extreme coordinates at R = 1. Each has its content hash, frame size
-and FNV-1a. The host writer must write them and read them back; the device
-writer must write them, and the device reader must read them as the host
-does. Every CI leg asserts the same constants, so a host or device that
-codes differently on one machine fails too. A lockstep edit of the shared
-grammar, swapping the line context's first two models, passed every round
-trip and the host/device comparison and failed the golden frames on both
-sides. The constants change only with `kFrameVersion`.
+**Golden frames.** `tests/codec_frames.hpp` pins five: 700 blocks at K = 64
+and R = 64, 40 at K = 512 and R = 16, 65 at K = 21 and R = 7, and
+int32-extreme coordinates at R = 64, which steps up to 2^32 - 1 on every
+axis, and at R = 1, which writes each in full. Each has its content hash,
+frame size and FNV-1a. The host writer must write them and read them back;
+the device writer must write them, and the device reader must read them as
+the host does. Every CI leg asserts the same constants, so a host or device
+that codes differently on one machine fails too. A lockstep edit of the
+shared grammar, swapping the line context's first two models, passed every
+round trip and the host/device comparison and failed the golden frames on
+both sides. The constants change only with `kFrameVersion`.
 
 **Measured**, Release, room0 at 1 cm for 60 frames on an M5 Max shared with
 other jobs, before and after in alternation: frames identical (173,606 bytes
