@@ -758,6 +758,44 @@ target_link_libraries(recon_io_ply_test PRIVATE volumetric_kit::recon_io)
 vr_target_warnings(recon_io_ply_test)
 add_test(NAME recon_io_ply COMMAND recon_io_ply_test)
 
+# What a sibling that fetches recon gets (subproject/): its configure, from a
+# clean tree, with each dependency this build fetched as a local source, so it
+# needs no network.
+file(
+  GLOB _vr_fetched
+  LIST_DIRECTORIES true
+  "${FETCHCONTENT_BASE_DIR}/*-src")
+set(_vr_fetched_sources)
+foreach(_vr_source IN LISTS _vr_fetched)
+  get_filename_component(_vr_name "${_vr_source}" NAME)
+  string(REGEX REPLACE "-src$" "" _vr_name "${_vr_name}")
+  string(TOUPPER "${_vr_name}" _vr_name)
+  list(APPEND _vr_fetched_sources
+       "-DFETCHCONTENT_SOURCE_DIR_${_vr_name}=${_vr_source}")
+endforeach()
+# A dependency this build took from a local source instead, as given.
+get_cmake_property(_vr_cache CACHE_VARIABLES)
+foreach(_vr_var IN LISTS _vr_cache)
+  if(_vr_var MATCHES "^FETCHCONTENT_SOURCE_DIR_" AND NOT "${${_vr_var}}"
+                                                     STREQUAL "")
+    list(APPEND _vr_fetched_sources "-D${_vr_var}=${${_vr_var}}")
+  endif()
+endforeach()
+set(_vr_subproject "${CMAKE_CURRENT_BINARY_DIR}/subproject")
+add_test(NAME recon_subproject_clean COMMAND "${CMAKE_COMMAND}" -E rm -rf
+                                             "${_vr_subproject}")
+set_tests_properties(recon_subproject_clean PROPERTIES FIXTURES_SETUP
+                                                       vr_subproject)
+add_test(
+  NAME recon_subproject_defaults
+  COMMAND
+    "${CMAKE_COMMAND}" -S "${CMAKE_CURRENT_SOURCE_DIR}/subproject" -B
+    "${_vr_subproject}" -G "${CMAKE_GENERATOR}"
+    "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+    "-DVR_SOURCE_DIR=${PROJECT_SOURCE_DIR}" ${_vr_fetched_sources})
+set_tests_properties(recon_subproject_defaults PROPERTIES FIXTURES_REQUIRED
+                                                          vr_subproject)
+
 # Start the slowest tests first under `ctest --parallel`. Without a COST, CTest
 # runs tests in the order they were added, and a fresh CI runner has no timing
 # history, so a slow test added late finished last. Seconds under the sanitizers

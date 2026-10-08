@@ -101,6 +101,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- build: **`VR_WARNINGS_AS_ERRORS` defaults on at the top level only**, as
+  `VR_BUILD_TESTS` does, so a project that fetches recon no longer compiles
+  it with `-Werror`. Test: `recon_subproject_defaults`.
 - build: **every target that calls the Orbbec SDK compiles with exceptions,
   privately** (`vr_link_orbbec_sdk`), so the driver builds where
   `CMAKE_CXX_FLAGS` turns exceptions off.
