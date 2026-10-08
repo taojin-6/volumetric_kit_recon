@@ -4,10 +4,11 @@
 #pragma once
 
 /// @file recon_gfx_bridge.hpp
-/// @brief Interop-seam-A converter: a reconstruction mesh (recon::mesh::Mesh)
-///        into the renderer's ingestion shape (gfx::assets::Mesh). Lives in the
-///        neutral demo app -- the ONLY place aware of both siblings -- so
-///        neither library depends on the other.
+/// @brief recon's meshes in gfx's shapes: a host mesh as a
+///        `gfx::assets::Mesh` (interop seam A), and an extractor's buffers as
+///        a `gfx::pipelines::LiveMesh` (seam B). Lives in the neutral demo app
+///        -- the ONLY place aware of both siblings -- so neither library
+///        depends on the other.
 
 #include <cstddef>
 #include <cstring>
@@ -15,12 +16,28 @@
 #include <utility>
 
 #include "volumetric_kit/gfx/assets/mesh.hpp"
+#include "volumetric_kit/gfx/pipelines/live_mesh.hpp"
+#include "volumetric_kit/recon/mesh/device_mesh.hpp"
 #include "volumetric_kit/recon/mesh/mesh.hpp"
 
 namespace fuse_viewer {
 
 namespace rmesh = volumetric_kit::recon::mesh;
 namespace gassets = volumetric_kit::gfx::assets;
+namespace gpipelines = volumetric_kit::gfx::pipelines;
+
+/// @brief recon's buffers named as a `LiveMesh`, drawn in place (seam B).
+///
+/// Three handles copied, nothing owned; the index count stays on the device,
+/// in the indirect command recon's kernel wrote. Bind only a mesh
+/// `mesh::MeshExchange` committed and that is neither empty nor invalid.
+inline gpipelines::LiveMesh to_live_mesh(const rmesh::DeviceMesh& mesh) {
+  gpipelines::LiveMesh live;
+  live.vertices = mesh.vertices;
+  live.indices = mesh.indices;
+  live.indirect = mesh.indirect;
+  return live;
+}
 
 /// @brief Adopt a reconstruction mesh as a renderer mesh for the hybrid-mesh
 ///        pipeline.
@@ -39,19 +56,13 @@ namespace gassets = volumetric_kit::gfx::assets;
 /// must test the SIGN and not `== (-1, -1)`, since a negative uv0 also carries
 /// its coordinate as `-uv - 1` (see `mesh/mesh.hpp`).
 ///
-/// This copy exists only for a consumer that hands gfx a *host* mesh (interop
-/// seam A), and `fuse_render` is now the only one: it builds *two* devices by
-/// design, and a `VkBuffer` is valid only on the device that created it, so
-/// zero-copy is structurally out of reach there without adopting the shared
-/// bootstrap -- which would delete the only coverage the two-device path has.
-///
-/// `fuse_viewer` no longer calls this. All four of the blockers the seam-B
-/// `TODO(mesh)` on `MarchingCubesConfig` used to enumerate -- the arena's
-/// lifetime, its queue-family sharing mode, the dispatch barrier's visibility
-/// scope, and the indirect draw -- are marked SETTLED there as of 2026-08-03,
-/// and since 2026-08-08 that viewer binds recon's arena, index run and
-/// `VkDrawIndexedIndirectCommand` directly as a `pipelines::LiveMesh`. It still
-/// includes this header, for the layout assertions below rather than the copy.
+/// This copy exists only for a consumer that hands gfx a *host* mesh, and
+/// `fuse_render` is the only one: it builds *two* devices by design, and a
+/// `VkBuffer` is valid only on the device that created it, so zero-copy is
+/// structurally out of reach there. The live viewers bind recon's buffers
+/// through @ref to_live_mesh instead, and the layout assertions below are
+/// what make that safe: gfx reads recon's arena through its own attribute
+/// offsets.
 inline gassets::Mesh to_gfx_mesh(const rmesh::Mesh& mesh) {
   static_assert(sizeof(rmesh::Vertex) == sizeof(gassets::Vertex),
                 "recon and gfx vertex layouts have diverged in size");
