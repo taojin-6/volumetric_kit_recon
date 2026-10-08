@@ -13,11 +13,9 @@
 // set. And a set with one bad frame is refused before anything is fused.
 // Exits 0 (skip) where no device is present.
 
-#include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
-#include <map>
-#include <tuple>
 #include <vector>
 
 #include "volumetric_kit/core/base/result.hpp"
@@ -34,6 +32,7 @@
 
 #include "grid_readback.hpp"
 #include "no_device.hpp"
+#include "sphere_scene.hpp"
 
 namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
@@ -50,12 +49,9 @@ namespace tsdf = volumetric_kit::recon::tsdf;
 
 namespace {
 
-constexpr std::uint32_t kWidth = 160;
-constexpr std::uint32_t kHeight = 120;
+constexpr std::uint32_t kWidth = vr_test::kSphereWidth;
+constexpr std::uint32_t kHeight = vr_test::kSphereHeight;
 constexpr int kCameras = 3;
-constexpr float kRadius = 0.25f;  // the sphere, at the world origin
-
-using Coord = std::tuple<int, int, int>;
 
 vol::VoxelGridParams grid_params() {
   vol::VoxelGridParams grid{};
@@ -79,66 +75,6 @@ vkc::Result<vol::VoxelBlockGrid> make_grid(vkc::Device& device,
                                      3);
 }
 
-// One camera on a circle round the sphere, looking at it, and what it sees.
-struct View {
-  vr::DepthCameraParams cam{};
-  std::vector<float> depth;
-  std::vector<std::uint32_t> color;
-};
-
-View make_view(int index) {
-  const float angle = 2.1f * static_cast<float>(index);
-  const vr::Vec3f eye(0.9f * std::sin(angle), 0.1f * static_cast<float>(index),
-                      -0.9f * std::cos(angle));
-  // OpenCV axes: z forward, y down, x = y cross z.
-  const vr::Vec3f z = glm::normalize(-eye);
-  const vr::Vec3f x = glm::normalize(glm::cross(vr::Vec3f(0, 1, 0), z));
-  const vr::Vec3f y = glm::cross(z, x);
-  View v;
-  v.cam.fx = 140.0f;
-  v.cam.fy = 140.0f;
-  v.cam.cx = 79.5f;
-  v.cam.cy = 59.5f;
-  v.cam.min_depth = 0.1f;
-  v.cam.max_depth = 5.0f;
-  v.cam.width = kWidth;
-  v.cam.height = kHeight;
-  v.cam.cam_to_world = vr::Mat4f(vr::Vec4f(x, 0), vr::Vec4f(y, 0),
-                                 vr::Vec4f(z, 0), vr::Vec4f(eye, 1));
-  v.depth.assign(kWidth * kHeight, 0.0f);
-  v.color.assign(kWidth * kHeight, 0u);
-  for (std::uint32_t row = 0; row < kHeight; ++row) {
-    for (std::uint32_t col = 0; col < kWidth; ++col) {
-      const vr::Vec3f ray = glm::normalize(
-          (static_cast<float>(col) + 0.5f - v.cam.cx) / v.cam.fx * x +
-          (static_cast<float>(row) + 0.5f - v.cam.cy) / v.cam.fy * y + z);
-      // |eye + t ray| = r, the nearer root.
-      const float b = glm::dot(eye, ray);
-      const float disc = b * b - glm::dot(eye, eye) + kRadius * kRadius;
-      const std::size_t i = row * kWidth + col;
-      v.color[i] = (col * 255 / kWidth) | ((row * 255 / kHeight) << 8) |
-                   (static_cast<std::uint32_t>(60 * index) << 16) | 0xFF000000u;
-      if (disc <= 0.0f) continue;  // misses: no return
-      const float t = -b - std::sqrt(disc);
-      v.depth[i] = t * glm::dot(ray, z);
-    }
-  }
-  return v;
-}
-
-// Every active block's coordinate and first voxel (`ptr` is a voxel offset).
-vkc::Result<std::map<Coord, std::int32_t>> blocks_of(vol::VoxelBlockGrid& g) {
-  VKC_ASSIGN(std::vector<vol::BlockIndex> active,
-             g.map().compact_active_blocks());
-  std::map<Coord, std::int32_t> out;
-  for (const vol::BlockIndex& b : active) {
-    out[Coord{b.coord.x, b.coord.y, b.coord.z}] = b.ptr;
-  }
-  return out;
-}
-
-// The same blocks, and in each the same bits of weight, tsdf and colour in
-// every voxel. A slot can differ: allocation order is the GPU's.
 // The blocks of `g` stamped changed after `since`.
 vkc::Result<std::uint32_t> changed_after(const vol::VoxelBlockGrid& g,
                                          std::uint32_t since) {
@@ -151,46 +87,18 @@ vkc::Result<std::uint32_t> changed_after(const vol::VoxelBlockGrid& g,
   return n;
 }
 
+// The same blocks with the same bits, and enough of them observed.
 int check_same(const vr_test::Gpu& ctx, vol::VoxelBlockGrid& a,
                vol::VoxelBlockGrid& b) {
-  auto ba = blocks_of(a);
-  auto bb = blocks_of(b);
-  CHECK(ba.ok() && bb.ok());
-  CHECK(!ba.value().empty());
-  CHECK(ba.value().size() == bb.value().size());
-  const auto view = [&](vol::VoxelBlockGrid& g, const char* name) {
-    return vr_test::read_attribute<std::uint32_t>(ctx.device, ctx.allocator, g,
-                                                  name)
-        .value();
-  };
-  const std::vector<std::uint32_t> wa = view(a, "weight");
-  const std::vector<std::uint32_t> wb = view(b, "weight");
-  const std::vector<std::uint32_t> ta = view(a, "tsdf");
-  const std::vector<std::uint32_t> tb = view(b, "tsdf");
-  const std::vector<std::uint32_t> ca = view(a, "color");
-  const std::vector<std::uint32_t> cb = view(b, "color");
-  const std::size_t voxels = grid_params().voxels_per_block;
   std::size_t observed = 0;
-  for (const auto& [coord, ptr] : ba.value()) {
-    const auto other = bb.value().find(coord);
-    CHECK(other != bb.value().end());
-    for (std::size_t k = 0; k < voxels; ++k) {
-      const std::size_t ia = static_cast<std::size_t>(ptr) + k;
-      const std::size_t ib = static_cast<std::size_t>(other->second) + k;
-      CHECK(wa[ia] == wb[ib]);
-      CHECK(ta[ia] == tb[ib]);
-      CHECK(ca[ia] == cb[ib]);
-      observed += wa[ia] != 0 ? 1 : 0;
-    }
-  }
-  std::printf("  %zu blocks, %zu voxels observed\n", ba.value().size(),
-              observed);
+  CHECK(vr_test::same_grids(ctx, a, b, &observed));
+  std::printf("  %zu voxels observed\n", observed);
   CHECK(observed > 10000);
   return 0;
 }
 
-// Allocate, retrying rounds that only lost bucket-lock races (as
-// examples/common/fuse_frame.hpp does).
+// Allocate, retrying rounds that only lost bucket-lock races, so both grids
+// hold every block.
 template <typename Allocate>
 int settle(Allocate&& allocate) {
   for (int round = 0; round < 5; ++round) {
@@ -227,8 +135,8 @@ int main() {
   vkc::Allocator& alloc = allocator.value();
   const vr_test::Gpu ctx{dev, alloc};
 
-  std::vector<View> views;
-  for (int c = 0; c < kCameras; ++c) views.push_back(make_view(c));
+  std::vector<vr_test::SphereView> views;
+  for (int c = 0; c < kCameras; ++c) views.push_back(vr_test::sphere_view(c));
   // Camera 0 marks its coverage: a band of its colour says it has none.
   for (std::uint32_t row = 0; row < kHeight; ++row) {
     for (std::uint32_t col = 60; col < 80; ++col) {
@@ -249,7 +157,7 @@ int main() {
       dev, alloc, views[0].color.data(),
       views[0].color.size() * sizeof(std::uint32_t));
   CHECK(color0.ok());
-  const auto color_cam = [&](const View& v) {
+  const auto color_cam = [&](const vr_test::SphereView& v) {
     return vr::ColorCameraParams{v.cam.fx,          v.cam.fy,    v.cam.cx,
                                  v.cam.cy,          v.cam.width, v.cam.height,
                                  v.cam.cam_to_world};
@@ -342,7 +250,7 @@ int main() {
     bad_depths[2] = {vkc::StorageInput(small.value()), views[2].cam};
     CHECK(grid->map().allocate_from_depth(bad_depths).status().domain() ==
           vkc::Status::Code::InvalidArgument);
-    auto none = blocks_of(grid.value());
+    auto none = vr_test::blocks_of(grid.value());
     CHECK(none.ok() && none.value().empty());
 
     CHECK(settle([&](vol::AllocFailures* why) {

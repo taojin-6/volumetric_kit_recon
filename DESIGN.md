@@ -95,8 +95,10 @@ links the family core's base tier and GLM, and no other recon tier.
   core's one umbrella header (`core/vulkan/vulkan.hpp`) — no other code
   includes `<vulkan/...>` directly.
 - **`volume`** — the sparse voxel hash map in Vulkan buffers; allocate / compact
-  / rehash as compute shaders. (POD layouts already landed in `volume/hash_types.hpp`.)
-- **`tsdf`** — TSDF integration compute shaders (classic + dynamic), and a
+  / rehash as compute shaders, and when a grid grows (`GridGrowth`). (POD
+  layouts already landed in `volume/hash_types.hpp`.)
+- **`tsdf`** — TSDF integration compute shaders (classic + dynamic), the
+  `Fuser` that fuses a set of frames (grow, allocate, integrate), and a
   triangle mesh's distance field written in (signed, or as a shell).
 - **`mesh`** — marching-cubes compute shaders and host mesh containers.
 - **`io`** — host asset loading and export, branching off `mesh`; encoded
@@ -846,6 +848,18 @@ host copy of the heap counter, read back by every round that moves it, which
 `diagnostics()` checks against the device's own), and
 `kGrowThreshold` is the occupancy it says to grow at — named here so a UI or
 an embedder cannot draw a ceiling that disagrees with it.
+`GridGrowth` grows a grid at it (`grow_ahead`) or for an allocation that hit
+a capacity limit (`grow`, which a codec player also calls with the frame's
+size): it doubles, or goes to the size asked for, clamped to the
+`GrowthPolicy`'s ceiling and the grid's own (`VoxelBlockGrid::max_num_buckets`:
+block pointers within int32, each attribute array within one binding). The
+policy's `headroom` callback, read only once a grow is due, declines a grow
+whose `VoxelBlockGrid::bytes_at` (every attribute array and the map's
+grid-sized table at the new size) it will not cover; an unknown reading
+declines nothing, and 0 declines everything. A decline, or a resize that ran
+out of memory, holds at that size for `retry_after` ticks of the map's clock
+and is then asked again; any other resize failure is an error. A grow is a
+`"resize"` row (2026-10-08).
 `allocate_from_depth` also takes a list of frames (`DepthInput`), every
 frame dispatched in each round's one submit, on a set of its own; a round
 that retries dispatches them all again, and the rounds are the call's, not
@@ -914,6 +928,16 @@ calls): one compaction and one submit for them all, each frame a dispatch
 of its own over the union in order, so every voxel takes them in turn as
 integrating them one at a time does, bit for bit. A frame with no
 pixels fuses nothing, as it allocates nothing (2026-09-30).
+`Fuser` is the fusion driver every caller shares (2026-10-08). `fuse` takes
+a set of `FrameInput`s: `GridGrowth::grow_ahead`, then every band in one
+`allocate_from_depth`; on a capacity limit, `GridGrowth::grow` and one more
+allocation, at most `FuserConfig::max_grows_per_set` grows a set, ahead
+included; then one `integrate`. It does not retry lost lock races, which the
+allocation's own rounds handle and the next set asks for again. Blocks it
+could not place are reported in its `FuseReport` with their reasons, and the
+set fuses into the rest. Past `refuse_allocation_above` (off at 1) a set
+allocates nothing new. The fuser owns its integrator and remembers its
+grid's refusals, so it fuses one grid.
 `MeshIntegrator` writes a triangle mesh's distance field instead
 (2026-09-27), **overwriting** every voxel of every block the band reaches:
 weight 1 within `trunc_dist` of the mesh, the codec inverse's fresh zeros
