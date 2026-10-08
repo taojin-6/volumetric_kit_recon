@@ -1783,7 +1783,9 @@ measured lesson "A flake read as a livelock".*)
 *Amended 2026-10-08 (the exchange entry, below):* the protocol is
 `mesh::MeshExchange`'s, and the mark also stops below a parked take, which
 obligation (3) requires and the fallback below broke before anything was
-committed.
+committed. The panel snapshot is no longer read in the take's section:
+its extract rows come in the mesh's payload (see the exchange entry), and
+`AtlasVersion` is `viewer_atlas.hpp`'s `Atlas`.
 
 *Amends* the 2026-07-07 viewer decision ("the mesh **handoff** is still a host
 mesh (interop seam A)") and closes the interop seam's "what is left is a
@@ -11182,10 +11184,14 @@ the handoff:
   (latching), and commits any other once `commit` (the consumer's atlas, made
   from the payload) accepts it, parking it when it does not. `live()` is what
   to draw.
-- The payload is what the mesh's `uv0` index into (`fuse_viewer`'s keyframe
-  pixels, `rig_viewer`'s atlas job), so the mesh and its atlas stay one value
-  by construction. `unbindable_reason` checks a mesh against the usage bits
-  and `cross_family` of a `MeshExchangeConfig`, which default to an indexed
+- The payload is whatever must stay with the mesh: what its `uv0` index
+  into (`fuse_viewer`'s keyframe pixels, `rig_viewer`'s atlas job), so the
+  mesh and its atlas stay one value by construction, and in `fuse_viewer`
+  the extract's timings, which its panel shows beside the mesh. `commit`
+  runs outside the lock while the producer may be extracting the next mesh,
+  so anything read from the producer then can describe a newer one.
+  `unbindable_reason` checks a mesh against the usage bits and
+  `cross_family` of a `MeshExchangeConfig`, which default to an indexed
   indirect draw's.
 
 **A parked take caps the mark.** Before anything was committed, the mark
@@ -11213,19 +11219,27 @@ keeps behind `VR_BUILD_VIEWER`.
 and a `SharedView` (`viewer_common.hpp`: the render camera, published with a
 serial, and the view-culled extract) in place of their copies.
 `retire_and_release_mark` and `unbindable_reason` leave `viewer_common.hpp`.
-The iOS bridge adopts the type in its I1 port.
+The iOS bridge adopts the type in its I1 port. The atlas a mesh is drawn
+with, an image with a pool and set of its own, is `viewer_atlas.hpp`'s
+`Atlas` in `fuse_render`, `fuse_viewer` and `rig_viewer` alike, made by
+`upload_atlas`, `white_atlas` or, for an image filled on the device,
+`bind_atlas`.
 
 **Verified.** Apple M5 Max, macOS, Release with warnings as errors, Orbbec
 SDK 2.10.6, FFmpeg and the viewers. `recon_mesh_exchange` runs on the host
-and covers: the take order; a generation released once the frames drawing it
-retire; no refused extract with fusion outrunning the renderer; the parked
-take under a failed claim and a forced extract; an empty null-handle mesh;
-the latch; the bounded wait; generations at the top of the range; and 500
-seeded runs with failed claims, empty extracts, failed atlases, skipped
-frames and forced extracts, in which no slot the consumer holds is
-reclaimed and the ring keeps publishing once the failures stop. Without the
-cap, the parked test, the top-of-range test and the seeded runs fail. The
-viewers build; neither was run against a window or the rig.
+and covers: the take order; a commit running while the producer publishes,
+which sees only its own payload; a generation released once the frames
+drawing it retire; no refused extract with fusion outrunning the renderer;
+the parked take under a failed claim and a forced extract; an empty
+null-handle mesh; the latch; the bounded wait; generations at the top of
+the range; and 500 seeded runs with failed claims, empty extracts, failed
+atlases, skipped frames and forced extracts, in which no slot the consumer
+holds is reclaimed and the ring keeps publishing once the failures stop.
+Without the cap, the parked test, the top-of-range test and the seeded runs
+fail, and with the commit under the lock, the commit test does. The viewers
+build, and `recon_example_viewer_atlas` makes an uploaded, a white and a
+bound atlas on a headless device; neither viewer was run against a window
+or the rig.
 
 ## Measured lessons
 

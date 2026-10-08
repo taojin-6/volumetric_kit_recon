@@ -100,6 +100,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `viewer_common.hpp`'s `retire_and_release_mark` and `unbindable_reason`.
   The view they mesh is `viewer_common.hpp`'s `SharedView`, and
   `recon_gfx_bridge.hpp`'s `to_live_mesh` names recon's buffers for gfx.
+  `fuse_viewer`'s panel takes its extract rows from the payload of the mesh
+  it draws. `fuse_render` and both viewers make their atlas with
+  `viewer_atlas.hpp` in place of three copies. Test:
+  `recon_example_viewer_atlas`.
 - `codec`: **one text for the frame's models and block grammar.** The rANS
   kernels include it as GLSL and the host compiles it as C++
   (`shaders/frame_models.glsl`, `shaders/frame_grammar.glsl`), so the host's

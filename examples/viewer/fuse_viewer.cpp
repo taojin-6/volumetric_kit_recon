@@ -84,14 +84,13 @@
 #include "recon_gfx_bridge.hpp"  // to_live_mesh, and the vertex-layout asserts
 #include "replica_sensor.hpp"    // vr_example::ReplicaSensor
 #include "shared_device.hpp"
+#include "viewer_atlas.hpp"
 #include "viewer_common.hpp"
 
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/command_batch.hpp"
-#include "volumetric_kit/core/vulkan/descriptor.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
-#include "volumetric_kit/core/vulkan/image.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/mesh/device_mesh.hpp"
@@ -112,7 +111,6 @@
 #include "volumetric_kit/gfx/core/profiler.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/core/sampler.hpp"
-#include "volumetric_kit/gfx/core/texture_upload.hpp"
 #include "volumetric_kit/gfx/pipelines/hybrid_mesh_pipeline.hpp"
 #include "volumetric_kit/gfx/pipelines/live_mesh.hpp"
 #include "volumetric_kit/gfx/ui/imgui_overlay.hpp"
@@ -432,21 +430,6 @@ void draw_reconstruction_panel(const ReconstructionPanel& panel) {
   ImGui::End();
 }
 
-// One live atlas version: the keyframe image the current mesh's uv0 index into,
-// plus the descriptor set that binds it to the hybrid pipeline. Each newly
-// textured mesh builds a fresh bundle carrying its OWN pool (gfx frees a set
-// only with its pool, never individually), so the whole bundle self-frees when
-// its last owner drops it. The render thread keeps the in-flight versions alive
-// across the frame ring via shared_ptr, so an atlas a still-pending frame bound
-// outlives its replacement -- the "per-slot atlas ringing" a live-updated
-// texture needs. `set` is declared after `pool` only for tidy teardown; the set
-// is a non-owning handle, so the order is not load-bearing.
-struct AtlasVersion {
-  vkc::Image tex;
-  vkc::DescriptorPool pool;
-  vkc::DescriptorSet set;
-};
-
 // A keyframe's colour image in the canonical packed form (R | G<<8 | B<<16,
 // the coverage byte on top -- the bytes of an RGBA8 upload on the
 // little-endian hosts every Vulkan platform here is), with the extent it was
@@ -464,6 +447,14 @@ struct AtlasPixels {
     width = 0;
     height = 0;
   }
+};
+
+// What travels with a mesh through the exchange: the keyframe image its uv0
+// index into (empty for none), and the extract's timings, which the panel
+// shows beside the mesh they describe.
+struct MeshPayload {
+  AtlasPixels atlas;
+  rmesh::ExtractTimings extract;
 };
 
 // Owns the WindowedApp (and the VkSurfaceKHR built from `window`) plus every
@@ -707,7 +698,7 @@ int run(GLFWwindow* window, const Options& opt) {
   // ImGui backend requires: its Shutdown touches the context the overlay owns.
   const fuse_viewer::ImGuiGlfwShutdown imgui_glfw_guard{opt.overlay};
 
-  // One sampler shared by every atlas version (immutable; outlives them all).
+  // One sampler shared by every atlas (immutable; outlives them all).
   auto sampler_result = vg::Sampler::create(app.device().handle());
   if (!sampler_result.ok()) {
     std::fprintf(stderr, "sampler: %s\n",
@@ -716,62 +707,19 @@ int run(GLFWwindow* window, const Options& opt) {
   }
   vg::Sampler sampler = std::move(sampler_result).value();
 
-  // Build one atlas bundle (texture + its own pool + a combined-image-sampler
-  // set bound to `sampler`) from `width * height * 4` bytes of RGBA8 pixels.
-  // Returns nullptr on failure so a transient upload error keeps the previous
-  // atlas rather than crashing.
-  auto build_atlas =
-      [&](const void* pixels, std::uint32_t width,
-          std::uint32_t height) -> std::shared_ptr<AtlasVersion> {
-    vg::ImageUploadDesc upload_desc;
-    upload_desc.extent = {width, height};
-    // _SRGB: the atlas holds canonical-encoded 8-bit camera pixels, so the
-    // sampler decodes and filters in linear for free -- and the swapchain
-    // (already _SRGB) applies the one encode at the end. See the 2026-08-02
-    // color-space decision.
-    upload_desc.format = VK_FORMAT_R8G8B8A8_SRGB;
-    upload_desc.pixels = pixels;
-    upload_desc.size = static_cast<std::size_t>(width) * height * 4;
-    auto texture_result =
-        vg::upload_texture(app.device(), app.allocator(), upload_desc);
-    if (!texture_result.ok()) {
-      std::fprintf(stderr, "atlas upload: %s\n",
-                   texture_result.status().message().c_str());
-      return nullptr;
-    }
-    const VkDescriptorPoolSize pool_size{
-        VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
-    auto pool_result =
-        vkc::DescriptorPool::create(app.device().handle(), &pool_size, 1, 1);
-    if (!pool_result.ok()) {
-      std::fprintf(stderr, "atlas pool: %s\n",
-                   pool_result.status().message().c_str());
-      return nullptr;
-    }
-    vkc::DescriptorPool atlas_pool = std::move(pool_result).value();
-    auto set_result = atlas_pool.allocate(pipeline.descriptor_set_layout(0));
-    if (!set_result.ok()) {
-      std::fprintf(stderr, "atlas set: %s\n",
-                   set_result.status().message().c_str());
-      return nullptr;
-    }
-    auto atlas_version = std::make_shared<AtlasVersion>();
-    atlas_version->tex = std::move(texture_result).value();
-    atlas_version->pool = std::move(atlas_pool);
-    atlas_version->set = std::move(set_result).value();
-    atlas_version->set.write_combined_image_sampler(
-        0, atlas_version->tex.view(), sampler.handle(),
-        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    return atlas_version;
-  };
-
-  // The initial + fallback atlas: a 1x1 white texel, bound whenever the current
-  // mesh carries no keyframe (texturing off, or nothing in line of sight), so
-  // the hybrid shader cleanly takes the per-vertex-colour path (uv0 sentinel).
-  const std::uint8_t white[4] = {255, 255, 255, 255};
-  std::shared_ptr<AtlasVersion> white_atlas = build_atlas(white, 1, 1);
-  if (!white_atlas) return 1;
-  std::shared_ptr<AtlasVersion> current_atlas = white_atlas;
+  // The initial atlas, and the one bound for a mesh with no keyframe
+  // (texturing off, or nothing in line of sight).
+  auto white_result = fuse_viewer::white_atlas(
+      app.device(), app.allocator(), pipeline.descriptor_set_layout(0),
+      sampler.handle());
+  if (!white_result.ok()) {
+    std::fprintf(stderr, "white atlas: %s\n",
+                 white_result.status().message().c_str());
+    return 1;
+  }
+  const std::shared_ptr<fuse_viewer::Atlas> white_atlas =
+      std::move(white_result).value();
+  std::shared_ptr<fuse_viewer::Atlas> current_atlas = white_atlas;
 
   // --- Background fuse thread: load + decode + fuse + extract off the render
   // thread (per-frame JPEG/PNG decode is CPU-heavy and would otherwise gate the
@@ -784,13 +732,12 @@ int run(GLFWwindow* window, const Options& opt) {
   // sharing a queue. recon's device wrapper is used solely on this thread.
   // -------------------------------------------
   // The mesh handoff: recon's buffers, borrowed -- handles and counts, not
-  // bytes -- each with its keyframe's RGBA8 (empty = none), the atlas its uv0
-  // index into.
+  // bytes -- each with its MeshPayload.
   rmesh::MeshExchangeConfig exchange_config;
   exchange_config.frames_in_flight = config.frames_in_flight;
   exchange_config.cross_family =
       shared->graphics_family() != shared->compute_family();
-  rmesh::MeshExchange<AtlasPixels> exchange(exchange_config);
+  rmesh::MeshExchange<MeshPayload> exchange(exchange_config);
   fuse_viewer::SharedView shared_view;  // the render camera, meshed
   std::mutex share_mtx;
   std::vector<glm::mat4> shared_poses;  // trajectory, grows as frames fuse
@@ -798,7 +745,7 @@ int run(GLFWwindow* window, const Options& opt) {
   std::atomic<bool> fusing_done{false};
   std::atomic<bool> quit{false};
   // Newest fused frame's stage breakdown + the volume's footprint, published
-  // for the overlay under share_mtx alongside the mesh.
+  // for the overlay under share_mtx.
   std::vector<vkc::StageRow> shared_fuse_stages;
   double shared_fuse_ms = 0.0;
   vkc::MemoryStats shared_recon_memory;
@@ -806,7 +753,6 @@ int run(GLFWwindow* window, const Options& opt) {
   std::int32_t shared_map_blocks = 0;
   float shared_map_load_factor = 0.0f;
   std::uint64_t shared_preloaded_bytes = 0;
-  rmesh::ExtractTimings shared_extract;
 
   std::thread fuse_thread([&]() {
     // Any throw escaping this thread function (e.g. a decode/allocation
@@ -825,15 +771,14 @@ int run(GLFWwindow* window, const Options& opt) {
       // instrument this repo's history credits with catching the arena-alloc
       // and neighbour-table regressions, and against its own rule that a row
       // which is usually zero is worse than an absent one. Held, they describe
-      // the newest remesh, exactly as `shared_extract` does; the
-      // panel's `fuse ms/frame` therefore reads as the cost of a fused frame
-      // that also remeshed.
+      // the newest remesh; the panel's `fuse ms/frame` therefore reads as the
+      // cost of a fused frame that also remeshed.
       vkc::StageMetrics remesh_stages;
-      // Texture `device_mesh` with one keyframe, then publish it plus that
-      // keyframe's colour image as the atlas its uv0 index into. On any
-      // texturing failure -- or when --no-texture -- the atlas stays empty and
-      // the render thread binds the white dummy (every triangle falls back to
-      // fused voxel colour).
+      // Texture `device_mesh` with one keyframe, then publish it with that
+      // keyframe's colour image, the atlas its uv0 index into, and the
+      // `timings` of the extract that made it. On any texturing failure -- or
+      // when --no-texture -- the atlas stays empty and the render thread binds
+      // the white dummy (every triangle falls back to fused voxel colour).
       //
       // The mesh and its atlas are ONE value, published and taken together.
       // uv0 is a normalized coordinate into the image of the camera that
@@ -849,8 +794,11 @@ int run(GLFWwindow* window, const Options& opt) {
       // does not exist, and the white dummy bound in its place would draw every
       // visible triangle white.
       auto publish = [&](const rmesh::DeviceMesh& device_mesh,
-                         const rsensor::DeviceFrame* keyframe) {
-        AtlasPixels atlas;
+                         const rsensor::DeviceFrame* keyframe,
+                         const rmesh::ExtractTimings& timings) {
+        MeshPayload payload;
+        payload.extract = timings;
+        AtlasPixels& atlas = payload.atlas;
         if (texturer && keyframe != nullptr && keyframe->has_color() &&
             !device_mesh.empty()) {
           // Textures the extractor's buffers in place -- no upload, no
@@ -906,7 +854,7 @@ int run(GLFWwindow* window, const Options& opt) {
                          texture_status.message().c_str());
           }
         }
-        exchange.publish(device_mesh, std::move(atlas));
+        exchange.publish(device_mesh, std::move(payload));
       };
       // Extract, break the extract row down, and publish the mesh textured
       // with `keyframe`.
@@ -928,15 +876,10 @@ int run(GLFWwindow* window, const Options& opt) {
         remesh_stages.add_cpu("  ..descriptors", extract_timings.descriptor_ms);
         remesh_stages.add_cpu("  ..dispatch", extract_timings.dispatch_ms);
         remesh_stages.add_cpu("  ..readback", extract_timings.readback_ms);
-        // Held until the next remesh, so the panel keeps showing its sizes.
-        {
-          std::lock_guard<std::mutex> lock(share_mtx);
-          shared_extract = extract_timings;
-        }
         // Published even when it meshed nothing: it holds a ring slot all the
         // same (see MeshExchange::publish).
         if (extracted) {
-          publish(extracted.value(), keyframe);
+          publish(extracted.value(), keyframe, extract_timings);
         } else {
           // Every other stage in this loop reports its failure; this one used
           // to be silent, which under seam B reads as a frozen mesh with a
@@ -1157,7 +1100,7 @@ int run(GLFWwindow* window, const Options& opt) {
   // --- Render thread (main): pick up the newest mesh + trajectory, upload,
   // draw following the capture path.
   // ------------------------------------------------
-  std::vector<std::shared_ptr<AtlasVersion>> slot_atlas(
+  std::vector<std::shared_ptr<fuse_viewer::Atlas>> slot_atlas(
       config.frames_in_flight);
   std::vector<glm::mat4> poses;
   std::size_t view_frame = 0;
@@ -1189,23 +1132,36 @@ int run(GLFWwindow* window, const Options& opt) {
     const win::Frame& render_frame = *frame.value();
 
     // Retire this slot's last frame and take the newest mesh (begin_frame
-    // fence-waited the slot), then commit it with its atlas: its keyframe
-    // image, else the white dummy. A failed upload keeps the mesh parked and
-    // the previous pair drawn, so the drawn mesh and the atlas its uv0 index
-    // into always come from the same version.
+    // fence-waited the slot), then commit it with its payload: its atlas (the
+    // keyframe image, else the white dummy) and the panel's extract rows. A
+    // failed upload keeps the mesh parked and the previous mesh, atlas and
+    // rows shown, so all three always come from the same extract. The commit
+    // runs while the fuse thread may already be extracting the next mesh,
+    // which is why the rows come in the payload. An empty mesh skips the
+    // callback, so the rows stay those of the last mesh that drew anything.
     {
       // Scoped over the whole step, so the row reports ~0 on a frame with no
       // new mesh instead of vanishing from the table.
       vg::Profiler::Scope upload_scope = profiler.cpu_scope("atlas upload");
       const rmesh::ExchangeOutcome outcome = exchange.begin_frame(
           render_frame.slot,
-          [&](const rmesh::DeviceMesh&, const AtlasPixels& pixels) {
-            std::shared_ptr<AtlasVersion> next =
-                pixels.empty() ? white_atlas
-                               : build_atlas(pixels.pixels.data(), pixels.width,
-                                             pixels.height);
-            if (!next) return false;
+          [&](const rmesh::DeviceMesh&, const MeshPayload& payload) {
+            std::shared_ptr<fuse_viewer::Atlas> next = white_atlas;
+            if (!payload.atlas.empty()) {
+              auto uploaded = fuse_viewer::upload_atlas(
+                  app.device(), app.allocator(),
+                  pipeline.descriptor_set_layout(0), sampler.handle(),
+                  payload.atlas.pixels.data(), payload.atlas.width,
+                  payload.atlas.height);
+              if (!uploaded.ok()) {
+                std::fprintf(stderr, "fuse_viewer: atlas: %s\n",
+                             uploaded.status().message().c_str());
+                return false;
+              }
+              next = std::move(uploaded).value();
+            }
             current_atlas = std::move(next);
+            recon_panel.extract = payload.extract;
             return true;
           });
       if (outcome == rmesh::ExchangeOutcome::kRefused) {
@@ -1216,10 +1172,8 @@ int run(GLFWwindow* window, const Options& opt) {
       }
     }
     const rmesh::DeviceMesh& live_view = exchange.live();
-    // The panel snapshot, after begin_frame: its per-slot fence wait can span
-    // a whole frame, during which the fuse thread routinely publishes, so a
-    // snapshot taken before it printed one generation's counts above
-    // another's arena.
+    // The fuse thread's newest counters: they describe the volume and the
+    // fuse loop, not the drawn mesh, whose rows the commit above set.
     {
       std::lock_guard<std::mutex> lock(share_mtx);
       // Append only the new tail (shared_poses only grows) rather than
@@ -1234,7 +1188,6 @@ int run(GLFWwindow* window, const Options& opt) {
       recon_panel.map_blocks = shared_map_blocks;
       recon_panel.map_load_factor = shared_map_load_factor;
       recon_panel.preloaded_bytes = shared_preloaded_bytes;
-      recon_panel.extract = shared_extract;
     }
     const std::size_t done_frames = fused_count.load();
     const bool done = fusing_done.load();
