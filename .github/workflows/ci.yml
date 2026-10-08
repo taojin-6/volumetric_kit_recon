@@ -31,12 +31,14 @@ jobs:
       # containerised. _build.yml keys its install steps off `runner.os`, so the
       # macOS leg's Homebrew/MoltenVK path is unchanged and only the Ubuntu legs
       # use a container; NVIDIA_DRIVER_CAPABILITIES=all makes the toolkit mount
-      # the Vulkan ICD for those. See .github/self-hosted-runners.md.
+      # the Vulkan ICD for those. See the core's tools/runners/README.md.
       #
       # The build and test fan-out is set in the container env, too: a runner's
       # .env reaches jobs run directly on it (the Mac) but not a job container,
-      # where ctest would otherwise run the suite one test at a time. 4 matches
-      # the .env setup-linux-runner.sh writes (24 cores / 6 runners).
+      # where ctest would otherwise run the suite one test at a time. 4 is a
+      # 24-core host over recon's 6 runners.
+      # TODO: gfx's 6 runners share each host, so 2 would match the split the
+      # core's setup-runners.sh writes for jobs on the host.
       #
       # Release runs on every OS; Debug only on macOS, where it is cheap. That
       # halves the jobs on the Linux GPU boxes, which gfx's CI shares, and

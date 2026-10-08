@@ -368,6 +368,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   independent growth of the two output buffers, which a first extract over a
   thin shell followed by one over a dense field reaches without a second entry
   point.
+- CI: **the self-hosted runner scripts and their guide**
+  (`.github/setup-linux-runner.sh`, `setup-mac-runner.sh`,
+  `teardown-runners.sh`, `self-hosted-runners.md`). The core's
+  `tools/runners` replaces them, for recon's and gfx's runners alike.
 
 ### Changed
 

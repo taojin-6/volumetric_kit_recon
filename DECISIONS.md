@@ -413,10 +413,10 @@ entries relevant to your task; later amendments supersede earlier rules.
   its sync settings at `open`, written only when asked and checked for SDK
   normalization after a write; the tolerance is 0.4 of a frame period, and
   `OrbbecRig`, its start order and the public `TriggerGrouper` go.
-- [**2026-10-08**](#2026-10-08--a-pull-request-from-a-fork-gets-no-ci) —
+- [**2026-10-08**](#2026-10-08--a-pull-request-from-a-fork-gets-no-ci-and-the-runner-tooling-is-the-cores) —
   A pull request from a fork gets no CI: every job is skipped for it and
   `required` fails, lint checks both, and the core's runner hook is the
-  backstop.
+  backstop. The runner tooling is the core's.
 
 ## Decision record
 
@@ -10921,7 +10921,7 @@ field, and the camera kept its setting. Restarted three times with MJPEG,
 wait. One camera fused at 30 fps with and without `--host-clock`. Not run:
 `apply_sync`'s write (it rewrites flash) and `rig_viewer`.
 
-### 2026-10-08 — A pull request from a fork gets no CI.
+### 2026-10-08 — A pull request from a fork gets no CI, and the runner tooling is the core's.
 
 recon is public, and its build and viewer legs run on self-hosted runners:
 persistent machines, the Mac's jobs in its logged-in user session. A fork's
@@ -10940,6 +10940,9 @@ there.
   approval setting for fork pull requests is the first gate, and the
   job-started hook the core's runner tooling installs on each runner, which
   refuses the job on the host, is the backstop.
+- **The runner tooling has one copy, the core's
+  [`tools/runners`](https://github.com/taojin-6/volumetric_kit_core/tree/main/tools/runners)**,
+  with its guide; recon keeps none.
 
 ## Measured lessons
 
