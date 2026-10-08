@@ -8,6 +8,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `tsdf`: **`Fuser`** (`fuser.hpp`), the fusion driver every caller shares:
+  a set of `FrameInput`s fused by growing the grid ahead of need, allocating
+  every band in one call, growing again for a capacity limit (at most
+  `FuserConfig::max_grows_per_set` grows a set) and integrating, with a
+  `FuseReport` of what the set did and what it left out. A set past
+  `refuse_allocation_above` allocates nothing new. Test: `recon_tsdf_fuser`.
+- `volume`: **`GridGrowth`** (`grid_growth.hpp`), every grow of a grid by a
+  `GrowthPolicy` (growth on or off, a bucket ceiling, a `headroom`
+  callback): ahead of need past `kGrowThreshold`, or for a capacity limit; a
+  known headroom too small for the grown grid, 0 included, declines it, and
+  a decline or a resize that ran out of memory is asked again after
+  `retry_after` ticks. **`VoxelBlockGrid::max_num_buckets`** and
+  **`bytes_at`**: the largest size a resize accepts, and the bytes the grid
+  takes at a size. Test: `recon_volume_grid_growth`.
 - `camera`: **the camera vocabulary**, a tier of its own
   (`volumetric_kit::recon_camera`) that links the core's base tier and GLM,
   and no Vulkan, so a driver uses it without a GPU API:
