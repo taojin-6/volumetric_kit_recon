@@ -633,6 +633,22 @@ target_link_libraries(
 vr_target_warnings(recon_codec_decoder_test)
 add_test(NAME recon_codec_decoder COMMAND recon_codec_decoder_test)
 
+# Apple's pixel buffers imported as images (recon_sensor_apple, any Apple build,
+# with or without FFmpeg): buffers made here, read back in place, prepared as a
+# frame's colour, and the refusals. Skips without a device.
+if(APPLE)
+  add_executable(recon_sensor_apple_pixel_buffer_importer_test
+                 sensor_apple_pixel_buffer_importer_test.cpp)
+  target_link_libraries(
+    recon_sensor_apple_pixel_buffer_importer_test
+    PRIVATE volumetric_kit::core_test_policy volumetric_kit::recon_sensor_apple
+            volumetric_kit::recon_sensor_utils "-framework CoreFoundation"
+            "-framework CoreVideo")
+  vr_target_warnings(recon_sensor_apple_pixel_buffer_importer_test)
+  add_test(NAME recon_sensor_apple_pixel_buffer_importer
+           COMMAND recon_sensor_apple_pixel_buffer_importer_test)
+endif()
+
 # The video decoders (VR_WITH_FFMPEG only). The frame colour test reads the
 # colour off frames built by hand, no codec; it compiles the internal source
 # itself, as the Orbbec conversion test does. The decoder tests decode the
@@ -680,18 +696,14 @@ if(VR_WITH_FFMPEG)
     add_executable(
       recon_sensor_video_vt_jpeg_error_test
       sensor_video_vt_jpeg_error_test.cpp ${_vr_video_src}/jpeg_decoder.cpp
-      ${_vr_video_src}/vt_jpeg.cpp ${_vr_video_src}/vt_pictures.mm)
-    set_source_files_properties(${_vr_video_src}/vt_pictures.mm
-                                PROPERTIES COMPILE_OPTIONS -fobjc-arc)
+      ${_vr_video_src}/vt_jpeg.cpp)
     target_link_libraries(
       recon_sensor_video_vt_jpeg_error_test
       PRIVATE volumetric_kit::recon_sensor_video
+              volumetric_kit::recon_sensor_apple
               "-framework VideoToolbox"
               "-framework CoreMedia"
               "-framework CoreVideo"
-              "-framework IOSurface"
-              "-framework Metal"
-              "-framework Foundation"
               volumetric_kit::core_test_policy)
     target_compile_definitions(
       recon_sensor_video_vt_jpeg_error_test

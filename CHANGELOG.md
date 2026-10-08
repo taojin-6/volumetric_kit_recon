@@ -98,6 +98,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is refused. Software triggering is refused after any write, so
   `apply_sync` can repair it. Tests: `recon_sensor_orbbec_conversion`,
   `recon_sensor_orbbec_sync_apply`.
+- `sensor/apple`: **`PixelBufferImporter`**
+  (`volumetric_kit::recon_sensor_apple`), an 8-bit NV12 `CVPixelBuffer` on
+  an IOSurface as a `YuvImage`'s plane images, in place. Public, and built on
+  every Apple platform, iOS included, with no FFmpeg, so an iOS camera's
+  colour (ARKit's `capturedImage`) can reach `GpuFramePrep` without a
+  conversion on the host. It was `sensor/video`'s private `VtPictures`; the
+  decoders' VideoToolbox pictures go through it. Test:
+  `recon_sensor_apple_pixel_buffer_importer`.
 
 ### Changed
 

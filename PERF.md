@@ -39,7 +39,7 @@ the set's frusta reach, so integrate scales with them rather than the map.
 
 | stage | code | submits | order | read back |
 |---|---|---|---|---|
-| decode | `hevc_color.cpp`, `cuda_pictures.cpp`, `vt_pictures.mm` | own thread per camera | ahead of the poll | nothing |
+| decode | `hevc_color.cpp`, `cuda_pictures.cpp`, `pixel_buffer_importer.mm` | own thread per camera | ahead of the poll | nothing |
 | frame prep | `prepare_set`, `gpu_frame_prep.cpp:640` | 1 per camera | parallel threads | nothing |
 | allocate | `allocate_from_depth` → `dispatch_with_retry`, `voxel_hash_map.cpp:376` | 1 per retry round, per camera | serial | failure tally, heap counter |
 | compaction | `compact_active_blocks_on_device`, `tsdf_integrator.cpp:314` | 1 per camera | serial | active count |
@@ -522,7 +522,7 @@ improvement awaits measurement; the figures below describe the original GC.
   memory type (`external_memory.cpp:62-67`). On a ReBAR system that type can
   be the host-visible BAR heap.
 - **Change.** Prefer `DEVICE_LOCAL` without `HOST_VISIBLE`, as
-  `vt_pictures.mm`'s `bind_memory` already does.
+  `pixel_buffer_importer.mm`'s `bind_memory` already does.
 
 ### Known gaps, not planned
 

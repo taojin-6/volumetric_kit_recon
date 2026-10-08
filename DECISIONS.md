@@ -459,6 +459,9 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-08**](#2026-10-08--a-decoded-picture-is-its-yuvimage-with-its-pts-and-encoding-the-one-description-of-a-device-picture-which-a-frame-takes-as-it-is-amends-the-2026-09-28-decoded-frame-and-2026-10-02-gpu-regression-entries) —
   A decoded picture is its `YuvImage`, with its pts and encoding: one
   description of a device picture, which a frame takes as it is.
+- [**2026-10-08**](#2026-10-08--apples-pixel-buffer-importer-is-public-pixelbufferimporter-in-recon_sensor_apple-on-every-apple-build-ios-included-with-no-ffmpeg) —
+  Apple's pixel-buffer importer is public: `PixelBufferImporter` in
+  `recon_sensor_apple`, on every Apple build, iOS included, with no FFmpeg.
 
 ## Decision record
 
@@ -11633,6 +11636,33 @@ Without JFIF's description or `describe_color`'s weights, a test fails. The
 decoder tests check the queue family each producer sets, so NVDEC's and
 nvJPEG's `kQueueFamilyExternal` is CI's CUDA leg to check, as is the CUDA
 code itself. Not run on a camera.
+
+### 2026-10-08 — Apple's pixel-buffer importer is public: `PixelBufferImporter` in `recon_sensor_apple`, on every Apple build, iOS included, with no FFmpeg.
+
+`PixelBufferImporter` (`sensor/apple/pixel_buffer_importer.hpp`, target
+`recon_sensor_apple`), formerly the decoders' private `VtPictures`, is built
+on every Apple platform, iOS included, and needs no FFmpeg, which it never
+used, so an iOS camera can hand its colour (ARKit's `capturedImage`) to
+`GpuFramePrep` on the device rather than convert it on the host. Its import,
+surface cache and hold are as they were. It fills a `YuvImage`'s planes,
+drops any buffer the image named, and leaves the colour description to its
+caller, since a pixel buffer's format need not say how its samples are
+coded.
+
+- **In recon, not the family core.** What it fills is recon's `YuvImage`,
+  and the iOS app reaches it through recon.
+- **`VtJpeg` stays inside `JpegDecoder`**, its public face, and so behind
+  `VR_WITH_FFMPEG`: on iOS it would reach a VideoToolbox key iOS has only
+  from 17, above the app's floor of 16.
+
+**Validation.** Apple M5 Max, macOS, Release with warnings as errors: the 59
+tests pass with Orbbec and FFmpeg (`VR_TEST_HEVC_BACKEND=videotoolbox`), and
+the 49 of a build with neither, `recon_sensor_apple_pixel_buffer_importer`
+among them. It and the H.265 and JPEG decoder tests run clean under the
+Khronos validation layer with synchronization validation; without the
+import's drop of a stale buffer it fails. The importer compiles against the
+iOS 16 SDK with `-Werror`, once it includes `IOSurfaceRef.h` (iOS has no
+`IOSurface.h`). Not run on an iPhone.
 
 ## Measured lessons
 
