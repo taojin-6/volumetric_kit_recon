@@ -50,6 +50,10 @@ cmake --build "$recon_root/build" --parallel
 ctest --test-dir "$recon_root/build" --output-on-failure
 ```
 
+The GPU tests follow the core's test policy (its README, "Build and test"):
+`VKC_REQUIRE_VULKAN_DEVICE`, `VKC_TEST_VALIDATION` and
+`VKC_TEST_SYNC_VALIDATION`, which CI sets.
+
 Consume it from another CMake project via `find_package(volumetric_kit_recon)`
 or `FetchContent`, then link a tier (e.g. `volumetric_kit::recon_core`).
 Fetched, recon builds its library tiers alone: its tests, examples and

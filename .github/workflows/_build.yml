@@ -73,6 +73,13 @@ on:
         required: false
         type: string
         default: '["Debug","Release"]'
+      sync_validation:
+        description: >-
+          Run the tests under the validation layer's synchronization
+          validation too (VKC_TEST_SYNC_VALIDATION).
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   build:
@@ -198,7 +205,7 @@ jobs:
           # Retry to ride out transient Homebrew fetch/DNS blips on the runner.
           # glm supplies the GLM math headers recon_core's types alias; molten-vk
           # is the Vulkan driver; shaderc provides glslc for the compute shaders;
-          # vulkan-loader/-headers/-tools complete the SDK.
+          # vulkan-loader/-headers/-tools/-validationlayers complete the SDK.
           # ffmpeg (with pkgconf to find it) for a VR_WITH_FFMPEG leg.
           extra=""
           if [ "${{ inputs.ffmpeg }}" = "true" ]; then
@@ -211,7 +218,7 @@ jobs:
           for attempt in 1 2 3; do
             # shellcheck disable=SC2086  # intentional: split $extra
             if brew install cmake glm molten-vk vulkan-headers vulkan-loader \
-                vulkan-tools shaderc $extra; then
+                vulkan-tools vulkan-validationlayers shaderc $extra; then
               ok=1
               break
             fi
@@ -223,6 +230,11 @@ jobs:
             exit 1
           }
           # make ships with the Xcode command-line tools.
+          # The validation layer's manifest names its library without a path;
+          # the Test step alone searches Homebrew's lib for it, as job-wide
+          # its libraries would shadow those of every other tool.
+          echo "VR_LAYER_LIBRARY_PATH=$(brew --prefix)/lib" >> "$GITHUB_ENV"
+          echo "VK_LAYER_PATH=$(brew --prefix)/share/vulkan/explicit_layer.d" >> "$GITHUB_ENV"
 
       # The Orbbec SDK, on the legs that build VR_WITH_ORBBEC: the pinned
       # release, installed as a developer does (see the action).
@@ -352,7 +364,11 @@ jobs:
         if: steps.detect.outputs.present == 'true'
         env:
           VR_TEST_HEVC_BACKEND: ${{ inputs.hevc_backend }}
-          # Every leg has a device, so a GPU test that cannot get one fails
-          # rather than skips (tests/no_device.hpp).
-          VR_REQUIRE_VULKAN_DEVICE: '1'
+          # The core's test policy (tests/gpu_test.hpp). Every leg has a device
+          # and the validation layer, so a GPU test fails rather than skips
+          # without either, and fails on any error the layer reports.
+          VKC_REQUIRE_VULKAN_DEVICE: '1'
+          VKC_TEST_VALIDATION: '1'
+          VKC_TEST_SYNC_VALIDATION: ${{ inputs.sync_validation && '1' || '' }}
+          DYLD_LIBRARY_PATH: ${{ env.VR_LAYER_LIBRARY_PATH }}
         run: ctest --test-dir build --output-on-failure

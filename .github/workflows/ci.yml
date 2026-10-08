@@ -55,6 +55,10 @@ jobs:
       # legs build without them.
       # `assimp` builds the optional mesh loader on Linux and macOS; the other
       # legs build image / PLY IO without it.
+      #
+      # Every leg runs the tests under the Khronos validation layer, and
+      # `sync_validation` adds synchronization validation on the NVIDIA legs,
+      # as the sanitizer job does on lavapipe.
       matrix:
         include:
           - os: ubuntu-24.04
@@ -66,10 +70,12 @@ jobs:
             ffmpeg: true
             cuda: true
             hevc_backend: cuda
+            sync_validation: true
           - os: ubuntu-26.04
             runner: vk-linux-gpu
             container: '{"image":"ubuntu:26.04","options":"--gpus all","env":{"NVIDIA_DRIVER_CAPABILITIES":"all","CMAKE_BUILD_PARALLEL_LEVEL":"4","CTEST_PARALLEL_LEVEL":"4"}}'
             build_types: '["Release"]'
+            sync_validation: true
           - os: macos-26
             runner: mac
             container: ''
@@ -89,6 +95,7 @@ jobs:
       cuda: ${{ matrix.cuda || false }}
       assimp: ${{ matrix.assimp || false }}
       hevc_backend: ${{ matrix.hevc_backend || '' }}
+      sync_validation: ${{ matrix.sync_validation || false }}
 
   viewer:
     uses: ./.github/workflows/viewer.yml

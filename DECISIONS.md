@@ -452,6 +452,10 @@ entries relevant to your task; later amendments supersede earlier rules.
   The viewers draw with gfx's `StreamedAtlas` on its frame timeline: gfx
   owns the atlas ring, the in-frame copy and what a frame holds, and
   `fuse_viewer` copies its keyframe on the device.
+- [**2026-10-08**](#2026-10-08--recons-gpu-tests-run-on-the-cores-test-policy-the-validation-layer-on-every-ci-leg-fails-a-test-on-any-error-it-reports-and-a-skip-is-a-skip) —
+  recon's GPU tests run on the core's test policy: the validation layer on
+  every CI leg fails a test on any error it reports, a leaked object's
+  included, and a skip is a skip.
 
 ## Decision record
 
@@ -11533,6 +11537,43 @@ hangs on frame 2. All 69 tests pass in Release; the atlas test and a separate
 queue-submit OOM probe pass with the Khronos layer loaded and synchronization
 validation enabled. Both live viewers build with warnings as errors; no
 live-camera or interactive-viewer check was run for this fix.
+
+### 2026-10-08 — recon's GPU tests run on the core's test policy: the validation layer on every CI leg fails a test on any error it reports, and a skip is a skip.
+
+recon's tests made their instances without validation, and CI installed the
+layer without loading it, so a missing barrier or a leaked object went
+unreported; the core's tests ran under it.
+
+- **One harness, on the core's.** `run_on_gpu` (`tests/gpu_test.hpp`) makes
+  the instance, the physical device that meets recon's requirements, the
+  device and an allocator on `volumetric_kit::core_test_policy` (core PR
+  #17, included in the core #18 merge pin), and runs a test on them.
+  `no_device.hpp`, `bare_device.hpp` and each recon device setup go. The
+  viewer-atlas test keeps its gfx `HeadlessApp` and uses the same validation
+  session, layer check and log capture around that context. `VKC_REQUIRE_VULKAN_DEVICE`, `VKC_TEST_VALIDATION` and
+  `VKC_TEST_SYNC_VALIDATION` mean what they mean in the core, and
+  `VR_REQUIRE_VULKAN_DEVICE` goes; `VR_TEST_HEVC_BACKEND` stays recon's.
+- **Everything a test makes is destroyed inside the log capture**, so an
+  object it leaks, which the layer reports at `vkDestroyDevice`, fails it.
+- **A skip exits 77** (`test::kSkipExitCode`), every test's
+  `SKIP_RETURN_CODE`, so CTest reports it as skipped rather than passed.
+- **A device short of recon's requirements fails every GPU test**, not
+  the Vulkan smoke test alone.
+- **CI** sets `VKC_REQUIRE_VULKAN_DEVICE` and `VKC_TEST_VALIDATION` on every
+  leg, and `VKC_TEST_SYNC_VALIDATION` on the NVIDIA legs and the sanitizer
+  job.
+- **LSan no longer suppresses the loader's module** (`leak:libvulkan.so`),
+  which is on the stack of every Vulkan call; `leak:loader_` keeps the
+  loader's own allocations. A handle leaked into lavapipe stays under
+  `leak:lvp_`; the layer reports it instead.
+
+**Initial validation.** Apple M5 Max, MoltenVK 1.4.2, the layer 1.4.363, Release with
+Orbbec and FFmpeg: the 59 tests pass with `VKC_REQUIRE_VULKAN_DEVICE=1
+VKC_TEST_VALIDATION=1`, and again with `VKC_TEST_SYNC_VALIDATION=1`; the layer
+reports no error in recon's code in either run. `recon_gpu_test_harness`
+checks that an error in a test's calls, a leaked semaphore and, under
+synchronization validation, a missing barrier each fail a test that returned
+0.
 
 ## Measured lessons
 

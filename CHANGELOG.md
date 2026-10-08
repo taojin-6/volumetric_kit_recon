@@ -101,6 +101,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- tests: **the GPU tests run on the core's test policy**
+  (`tests/gpu_test.hpp`), and CI runs them under the Khronos validation
+  layer: any error it reports fails the test, a leaked object's included,
+  with synchronization validation on the NVIDIA legs and the sanitizer job.
+  `VR_REQUIRE_VULKAN_DEVICE` becomes the core's `VKC_REQUIRE_VULKAN_DEVICE`,
+  and a skipped test exits 77, which CTest reports as skipped. The sanitizer
+  job's LSan no longer suppresses `libvulkan.so`. Test:
+  `recon_gpu_test_harness`.
+- build: **the core pin moves to core #18's merge** (511fed0), including #17's
+  `core_test_policy`, which recon's tests build with `VKC_BUILD_TEST_SUPPORT`.
 - build: **`VR_WARNINGS_AS_ERRORS` defaults on at the top level only**, as
   `VR_BUILD_TESTS` does, so a project that fetches recon no longer compiles
   it with `-Werror`. Test: `recon_subproject_defaults`.

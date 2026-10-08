@@ -1,12 +1,14 @@
 name: sanitizers
 
 # AddressSanitizer + UndefinedBehaviorSanitizer + LeakSanitizer, Linux-only
-# (LeakSanitizer isn't available on macOS). Builds against lavapipe (software
-# Vulkan) with validation layers on, so the Vulkan-touching tests run under the
-# sanitizers — this is what catches the leak / use-after-free / double-free class
-# the unit tests alone can't detect. Not on the GPU box: there LSan reports the
-# proprietary driver's internal allocations as leaks. Invoked by ci.yml, which
-# owns the push / pull_request triggers and the concurrency group.
+# (LeakSanitizer isn't available on macOS). Runs the Vulkan-touching tests on
+# lavapipe (software Vulkan) under the sanitizers and the Khronos validation
+# layer with synchronization validation — this is what catches the leak /
+# use-after-free / double-free class the unit tests alone can't detect, and the
+# layer reports a leaked Vulkan object, which LSan cannot see past the driver's
+# suppressions. Not on the GPU box: there LSan reports the proprietary driver's
+# internal allocations as leaks. Invoked by ci.yml, which owns the push /
+# pull_request triggers and the concurrency group.
 on:
   workflow_call:
 
@@ -126,7 +128,10 @@ jobs:
       - name: Test
         if: steps.detect.outputs.present == 'true'
         env:
-          # lavapipe is required above, so a GPU test that cannot get a device
-          # fails rather than skips (tests/no_device.hpp).
-          VR_REQUIRE_VULKAN_DEVICE: '1'
+          # The core's test policy (tests/gpu_test.hpp). lavapipe is required
+          # above, so a GPU test fails rather than skips without a device, and
+          # fails on any error the layer reports, missing barriers included.
+          VKC_REQUIRE_VULKAN_DEVICE: '1'
+          VKC_TEST_VALIDATION: '1'
+          VKC_TEST_SYNC_VALIDATION: '1'
         run: ctest --test-dir build --output-on-failure --parallel "$(nproc)"
