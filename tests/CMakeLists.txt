@@ -136,6 +136,50 @@ vr_target_warnings(recon_example_fuse_keyframe_test)
 add_test(NAME recon_example_fuse_keyframe
          COMMAND recon_example_fuse_keyframe_test)
 
+# The examples' one command-line parser and the flag sets they declare through
+# it (examples/common/cli.hpp and *_flags.hpp): numbers read whole and finite,
+# unknown, missing and out-of-range arguments refused with the usage line, the
+# generated usage, and each flag set's defaults and validation; the Orbbec flags
+# where the driver is built. Host only.
+add_executable(recon_example_cli_test example_cli_test.cpp)
+target_include_directories(recon_example_cli_test
+                           PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
+# recon_sensor_orbbec links recon_sensor; naming both repeats its archive.
+if(TARGET volumetric_kit::recon_sensor_orbbec)
+  target_link_libraries(
+    recon_example_cli_test PRIVATE volumetric_kit::recon_codec
+                                   volumetric_kit::recon_sensor_orbbec)
+  target_compile_definitions(recon_example_cli_test
+                             PRIVATE VR_TEST_ORBBEC_FLAGS=1)
+else()
+  target_link_libraries(
+    recon_example_cli_test PRIVATE volumetric_kit::recon_codec
+                                   volumetric_kit::recon_sensor)
+endif()
+vr_target_warnings(recon_example_cli_test)
+add_test(NAME recon_example_cli COMMAND recon_example_cli_test)
+
+# The examples' one stage table (examples/common/stage_table.hpp). Host only.
+add_executable(recon_example_stage_table_test example_stage_table_test.cpp)
+target_include_directories(recon_example_stage_table_test
+                           PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
+target_link_libraries(recon_example_stage_table_test
+                      PRIVATE volumetric_kit::recon_core)
+vr_target_warnings(recon_example_stage_table_test)
+add_test(NAME recon_example_stage_table COMMAND recon_example_stage_table_test)
+
+# fuse_replica's --dirty-every survey (examples/common/remesh_report.hpp): the
+# changed blocks after a tick, the blocks they put back to marching cubes, and
+# the survey's windows. Skips (exit 0) with no device.
+add_executable(recon_example_remesh_report_test example_remesh_report_test.cpp)
+target_include_directories(recon_example_remesh_report_test
+                           PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
+target_link_libraries(recon_example_remesh_report_test
+                      PRIVATE volumetric_kit::recon_mesh)
+vr_target_warnings(recon_example_remesh_report_test)
+add_test(NAME recon_example_remesh_report
+         COMMAND recon_example_remesh_report_test)
+
 # tsdf fuser: a set fused through tsdf::Fuser, growing on the way, matches the
 # tier calls on a grid that never needed to; it grows ahead before any failure,
 # refuses incomplete bands by default, and keeps fusing only when the caller
