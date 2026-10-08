@@ -1516,13 +1516,15 @@ Preparing while the previous frame is held allocates a separate output pair.
 
 Every example reads its command line through `examples/common/cli.hpp`'s
 `Cli`: each flag is declared once with the variable it sets, a number is read
-whole and finite, a value below a flag's minimum is refused, and an error is
-printed with the usage line the declarations generate. Flags a family of
-examples shares are declared and validated once: `FusionFlags` (`--voxel`,
-`--trunc`, `--min-depth`, `--max-depth`, `--max-weight`; the band defaults to
-four voxels, `grid_layout.hpp`'s `default_trunc`) in every example that fuses
-a sensor, `ReplicaFlags` (`<scene_dir>`, `--cam-params`, `--max-frames`,
-`--preload`) in the four dataset ones, `OrbbecFlags` (`--rig`,
+whole and finite, a value below a flag's minimum is refused, flags of which a
+command line gives one form a group (`[a | b]`, or `(a | b)` when one is
+required), and an error is printed with the usage line the declarations
+generate. Flags a family of examples shares are declared and validated once:
+`FusionFlags` (`--voxel`, `--trunc`, `--min-depth`, `--max-depth`,
+`--max-weight`; the band defaults to four voxels, `grid_layout.hpp`'s
+`default_trunc`, and `check_voxel` is every example's `--voxel` rule) in every
+example that fuses a sensor, `ReplicaFlags` (`<scene_dir>`, `--cam-params`,
+`--max-frames`, `--preload`) in the four dataset ones, `OrbbecFlags` (`--rig`,
 `--calibration`, `--apply-sync`, `--hevc | --mjpeg`, `--color`, `--fps`) in
 the two live ones, `CodecFlags` in the two codec ones, and `WindowFlags`
 (`viewer_common.hpp`) in the two windows. Stage rows print through one table,

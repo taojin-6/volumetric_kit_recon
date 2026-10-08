@@ -95,7 +95,8 @@ vkc::Result<Options> parse_args(int argc, char** argv) {
   vr_example::Cli cli("fuse_orbbec");
   cli.option("--serial", "SN", opt.serial);
   opt.cameras.add_to(cli);
-  cli.flag("--host-clock", opt.host_clock)
+  cli.one_of({"--serial", "--rig"})
+      .flag("--host-clock", opt.host_clock)
       .option("--frames", "N", opt.frames, 1)
       .option({"-o", "--out"}, "out.ply", opt.out);
   opt.fusion.add_to(cli);
@@ -104,10 +105,6 @@ vkc::Result<Options> parse_args(int argc, char** argv) {
       return vkc::Status::invalid_argument(
           "--host-clock is for one camera; a rig is always on the host's "
           "clock");
-    }
-    if (!opt.cameras.rig.empty() && !opt.serial.empty()) {
-      return vkc::Status::invalid_argument(
-          "--rig and --serial exclude each other");
     }
     return vkc::Status{};
   });
