@@ -76,7 +76,7 @@ FetchContent_Declare(
   # API. They agree at 5913731 (core #18).
   #
   # TODO: pin gfx main once #118, #120 and #123 merge.
-  GIT_TAG d2ebcc89b6d83562d362003d46b20ac9d201e793 # gfx #123
+  GIT_TAG 2ab9e86e5d0109af3da91f6dc7981fefdea90491 # gfx #123
   GIT_SHALLOW FALSE)
 FetchContent_MakeAvailable(volumetric_kit_gfx)
 
