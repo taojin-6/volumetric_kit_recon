@@ -11227,6 +11227,10 @@ byte-identical. Neither viewer nor `fuse_orbbec` was run.
   own buffer, into the ring image no unfinished frame uses, and binds
   `use(frame.number)`. The ring is the frames in flight plus one, so the
   copy never waits.
+- The first textured job makes the ring, which for four 4K cameras is about
+  400 MB, so a viewer that textures nothing holds none. A ring that cannot
+  be made refuses the job like a refused copy: the mesh stays parked, the
+  viewer says so once, and the next frame tries again.
 - gfx's `RetireQueue` on the frame loop's timeline holds the job's buffers
   until the timeline reaches that frame, so a frame prep reuses one only
   after the copy has read it.
@@ -11261,15 +11265,21 @@ its v0.1.0 tag once its stack (#17, #19 and #20, plus #18) merges.
 SDK 2.10.6, FFmpeg and the viewers; 65 of 65 tests pass.
 `recon_example_viewer_atlas` runs under the validation layer with
 synchronization validation and no message. It checks each tile's copy
-region, `copyable`'s refusals, a frame's colour held while the frame waits
-and let go once it completes, a refused copy that holds nothing and keeps
-the picture, and an untextured mesh that binds no atlas. `fuse_render` on
-room0's first 120 frames, built from the base and from this change, at the
-orbit view, `--follow 60`, `--no-texture` and `--follow 60 --lit`: every
-PNG after is byte-identical to one before. The fused mesh varies run to run
-in both builds: eight runs of each build give the same two variants of a
-lit or untextured follow view, a pixel apart. Neither live viewer was run
-against a window or the rig.
+region, `copyable`'s refusals, an atlas that allocates nothing until its
+first textured job and refuses the job when the ring cannot be made, a
+frame's colour held while the frame waits and let go once it completes, a
+refused copy that holds nothing and keeps the picture, and an untextured
+mesh that binds no atlas. `fuse_render` on room0's first 120 frames, built
+from the base and from this change, at the orbit view, `--follow 60`,
+`--no-texture` and `--follow 60 --lit`: every PNG after is byte-identical
+to one before. The fused mesh varies run to run in both builds: eight runs
+of each build give the same two variants of a lit or untextured follow
+view, a pixel apart. `fuse_viewer` on room0's first 80 frames ran in a
+window for 45 s under synchronization validation (Khronos layer 1.4.363),
+on MoltenVK's two queue families, so each keyframe's colour crosses
+families: 5,280 frames and 2,653 textured meshes published, with no
+message. That is macOS evidence only. `rig_viewer` was not run, since it
+needs the rig.
 
 ## Measured lessons
 

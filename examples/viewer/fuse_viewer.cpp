@@ -360,18 +360,9 @@ int run(GLFWwindow* window, const Options& opt) {
   // The keyframe's whole colour image is the atlas: one tile, the colour
   // camera's size. A keyframe of another size is not textured.
   const rtex::AtlasTile keyframe_tile{0, 0, cam.size.width, cam.size.height};
-  std::unique_ptr<fuse_viewer::LiveAtlas> atlas;
-  if (opt.texture) {
-    auto atlas_result = fuse_viewer::LiveAtlas::create(
-        pipeline, app.allocator(), app.frame_loop().timeline(),
-        {keyframe_tile.width, keyframe_tile.height}, config.frames_in_flight);
-    if (!atlas_result.ok()) {
-      std::fprintf(stderr, "atlas: %s\n",
-                   atlas_result.status().message().c_str());
-      return 1;
-    }
-    atlas = std::move(atlas_result).value();
-  }
+  fuse_viewer::LiveAtlas atlas(
+      pipeline, app.allocator(), app.frame_loop().timeline(),
+      {keyframe_tile.width, keyframe_tile.height}, config.frames_in_flight);
 
   // --- gfx profiler: the renderer's own per-frame CPU/GPU timings ------------
   // The render side gets real GPU spans (this device reports 64
@@ -799,6 +790,7 @@ int run(GLFWwindow* window, const Options& opt) {
   // share_mtx each frame so the panels read a consistent snapshot.
   std::vector<vkc::StageRow> fuse_stages_snapshot;
   fuse_viewer::ReconstructionPanel recon_panel;
+  bool atlas_error_said = false;  // until an atlas commits again
 
   std::printf(
       "fuse_viewer: %zu frames, fusing on a background thread; close the "
@@ -825,13 +817,14 @@ int run(GLFWwindow* window, const Options& opt) {
     // Retire this slot's last frame and take the newest mesh (begin_frame
     // waited for the slot's last frame), then commit it with its payload: its
     // atlas, the keyframe's colour copied in this command buffer before the
-    // frame's rendering begins, and the panel's extract rows. A refused copy
-    // keeps the mesh parked and the previous mesh, atlas and rows shown, so
-    // all three always come from the same extract. The commit runs while the
-    // fuse thread may already be extracting the next mesh, which is why the
-    // rows come in the payload. An empty mesh skips the callback, so the rows
-    // stay those of the last mesh that drew anything.
-    if (atlas) atlas->poll();
+    // frame's rendering begins, and the panel's extract rows. A refused copy,
+    // or an atlas that could not be made, keeps the mesh parked and the
+    // previous mesh, atlas and rows shown, so all three always come from the
+    // same extract. The commit runs while the fuse thread may already be
+    // extracting the next mesh, which is why the rows come in the payload. An
+    // empty mesh skips the callback, so the rows stay those of the last mesh
+    // that drew anything.
+    atlas.poll();
     {
       // Scoped over the whole step, so the row reports ~0 on a frame with no
       // new mesh instead of vanishing from the table.
@@ -840,15 +833,18 @@ int run(GLFWwindow* window, const Options& opt) {
       const rmesh::ExchangeOutcome outcome = exchange.begin_frame(
           render_frame.slot,
           [&](const rmesh::DeviceMesh&, const MeshPayload& payload) {
-            if (atlas) {
-              const vkc::Status committed = atlas->commit(
-                  render_frame.cmd, render_frame.number, payload.atlas);
-              if (!committed.ok()) {
+            const vkc::Status committed = atlas.commit(
+                render_frame.cmd, render_frame.number, payload.atlas);
+            if (!committed.ok()) {
+              // Retried every frame, so said once until it succeeds.
+              if (!atlas_error_said) {
                 std::fprintf(stderr, "fuse_viewer: atlas: %s\n",
                              committed.message().c_str());
-                return false;
+                atlas_error_said = true;
               }
+              return false;
             }
+            atlas_error_said = false;
             recon_panel.extract = payload.extract;
             return true;
           });
@@ -986,8 +982,7 @@ int run(GLFWwindow* window, const Options& opt) {
         hybrid_frame.view_proj = view_proj;
         hybrid_frame.light_dir = glm::vec3(0.4f, 0.9f, 0.5f);
         hybrid_frame.flags = opt.lit ? vgp::kHybridMeshLit : 0u;
-        hybrid_frame.atlas =
-            atlas ? atlas->use(render_frame.number) : VK_NULL_HANDLE;
+        hybrid_frame.atlas = atlas.use(render_frame.number);
         hybrid_frame.draws = &draw;
         hybrid_frame.draw_count = 1;
         pipeline.submit(render_frame.cmd, hybrid_frame);

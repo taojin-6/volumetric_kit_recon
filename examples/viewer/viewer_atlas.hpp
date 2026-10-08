@@ -93,17 +93,21 @@ inline std::vector<vg::ImageCopy> atlas_copies(
 ///        the mesh.
 ///
 /// The ring of images, the copy and its ordering are gfx's. What this adds is
-/// the colour buffers' lifetime: the copy reads them when the frame runs, so
-/// they are held until the frame loop's timeline reaches the frame's number
-/// (gfx's `RetireQueue`), and a frame prep reuses one only after that. A mesh
-/// no camera textured draws in its vertex colour.
+/// when the ring is made and the colour buffers' lifetime. The ring, the
+/// frames in flight plus one images of the whole atlas, is made by the first
+/// textured job, so a viewer that never textures a mesh holds none. The copy
+/// reads the colour buffers when the frame runs, so they are held until the
+/// frame loop's timeline reaches the frame's number (gfx's `RetireQueue`),
+/// and a frame prep reuses one only after that. A mesh no camera textured
+/// draws in its vertex colour.
 ///
 /// Commit a mesh's job in the frame that commits the mesh, so the mesh's
 /// `uv0` and the picture they index into change together.
 class LiveAtlas {
  public:
   /// @brief An atlas of @p extent for @p pipeline, its frames numbered on
-  ///        @p frames.
+  ///        @p frames. It allocates nothing until the first textured
+  ///        @ref commit.
   /// @param pipeline          The pipeline that draws with it.
   /// @param allocator         Allocates the images.
   /// @param frames            The frame loop's timeline
@@ -112,19 +116,18 @@ class LiveAtlas {
   /// @param frames_in_flight  The frame loop's. The ring is one deeper, so
   ///                          a copy, one a frame, never waits for a frame.
   /// @warning @p pipeline, @p allocator and @p frames must outlive it.
-  static vkc::Result<std::unique_ptr<LiveAtlas>> create(
-      const vgp::HybridMeshPipeline& pipeline, vkc::Allocator& allocator,
-      const vkc::TimelineSemaphore& frames, VkExtent2D extent,
-      std::uint32_t frames_in_flight) {
-    vgp::StreamedAtlasDesc desc;
-    desc.extent = extent;
+  LiveAtlas(const vgp::HybridMeshPipeline& pipeline, vkc::Allocator& allocator,
+            const vkc::TimelineSemaphore& frames, VkExtent2D extent,
+            std::uint32_t frames_in_flight)
+      : pipeline_(&pipeline),
+        allocator_(&allocator),
+        frames_(&frames),
+        held_(frames) {
+    desc_.extent = extent;
     // The frame prep's colour is canonical-encoded 8-bit, so the sampler
     // decodes and filters in linear (the 2026-08-02 colour-space decision).
-    desc.format = VK_FORMAT_R8G8B8A8_SRGB;
-    desc.slots = frames_in_flight + 1;
-    VKC_ASSIGN(vgp::StreamedAtlas atlas,
-               vgp::StreamedAtlas::create(pipeline, allocator, frames, desc));
-    return std::unique_ptr<LiveAtlas>(new LiveAtlas(std::move(atlas), frames));
+    desc_.format = VK_FORMAT_R8G8B8A8_SRGB;
+    desc_.slots = frames_in_flight + 1;
   }
 
   LiveAtlas(const LiveAtlas&) = delete;
@@ -141,15 +144,22 @@ class LiveAtlas {
   ///        frame @p frame 's command buffer @p cmd, before the rendering
   ///        scope, and hold its colour buffers until the frame completes. An
   ///        empty job records nothing, and the frames draw in vertex colour.
+  ///        The first textured job makes the ring.
   /// @param solid  Each camera's solid-colour buffer to copy from instead of
   ///               its image, or null.
-  /// @return OK; or the update's refusal, which leaves the atlas as it was.
+  /// @return OK; or why the job was not committed -- the ring could not be
+  ///         made, or gfx refused the update -- which leaves the atlas as it
+  ///         was, holding nothing new. The next textured job tries again.
   vkc::Status commit(VkCommandBuffer cmd, std::uint64_t frame,
                      const AtlasJob& job,
                      const std::vector<vkc::Buffer>* solid = nullptr) {
     if (job.empty()) {
       textured_ = false;
       return vkc::Status{};
+    }
+    if (!atlas_.valid()) {
+      VKC_ASSIGN(atlas_, vgp::StreamedAtlas::create(*pipeline_, *allocator_,
+                                                    *frames_, desc_));
     }
     const std::vector<vg::ImageCopy> copies = atlas_copies(job, solid);
     VKC_TRY(atlas_.record_update(cmd, frame, copies.data(),
@@ -172,11 +182,12 @@ class LiveAtlas {
   }
 
  private:
-  LiveAtlas(vgp::StreamedAtlas atlas, const vkc::TimelineSemaphore& frames)
-      : atlas_(std::move(atlas)), held_(frames) {}
-
-  vgp::StreamedAtlas atlas_;
-  vg::RetireQueue held_;  // the colour buffers each frame's copy reads
+  const vgp::HybridMeshPipeline* pipeline_;
+  vkc::Allocator* allocator_;
+  const vkc::TimelineSemaphore* frames_;
+  vgp::StreamedAtlasDesc desc_;
+  vgp::StreamedAtlas atlas_;  // empty until the first textured job
+  vg::RetireQueue held_;      // the colour buffers each frame's copy reads
   bool textured_ = false;
 };
 
