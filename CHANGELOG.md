@@ -11,7 +11,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `sensor/orbbec`: **`open_orbbec_sensors`** (`orbbec_sensor.hpp`), a rig's
   cameras opened from its sync file, in its order: each an `OrbbecSensor`
   checked against its entry and on the host's clock, ready for
-  `SensorArray::open`. Test: `recon_sensor_orbbec_open_sensors`.
+  `SensorArray::open`. `fuse_orbbec --rig` and `rig_viewer` open their rig
+  through it. Test: `recon_sensor_orbbec_open_sensors`.
 - `mesh`: **`MeshExchange<Payload>`** (`mesh_exchange.hpp`), the handoff of
   `extract_device`'s meshes, each with a payload drawn with it (its atlas),
   from the extracting thread to a renderer drawing them in place: the
