@@ -141,9 +141,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   complete-or-error behavior. `fuse_viewer` and `rig_viewer` explicitly accept
   partial coverage. `allocate_band` goes from `examples/common/fuse_frame.hpp`;
   `codec_mesh` and the codec player share `volume::grow_grid`.
-- build: **the core pin moves to core #15** (a8b63d1), which adds
-  `CommandBatch::submit_async`, for the pipelined stages to come; recon's
-  calls are unchanged. gfx, pinned at core #13, builds against it.
+- build: **the core pin moves to core #18** (5913731), which adds
+  `CommandBatch::submit_async` (#15), for the pipelined stages to come, and
+  the timeline-value checks the viewers' gfx requires; recon's calls are
+  unchanged.
 - tests: **no test looks for a camera.** `recon_orbbec_sdk_smoke` checks only
   the runtime SDK version, no longer opening a context and enumerating USB
   and network devices, and the conversion test's absent-camera case, which
