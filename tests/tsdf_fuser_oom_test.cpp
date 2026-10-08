@@ -12,7 +12,7 @@
 #include <string>
 #include <vector>
 
-#include "no_device.hpp"
+#include "gpu_test.hpp"
 #include "sphere_scene.hpp"
 #include "test_allocation_failure.hpp"
 #include "volumetric_kit/core/vulkan/instance.hpp"
@@ -50,16 +50,7 @@ void fail_allocation(std::size_t bytes) {
   vr_test::allocation_failure.armed = true;
 }
 
-int run() {
-  auto instance = vkc::Instance::create({});
-  if (!instance)
-    return vr_test::no_device("no instance", instance.status().message());
-  auto gpu = instance->select_physical_device(vr::device_requirements());
-  if (!gpu) return vr_test::no_device("no device", gpu.status().message());
-  auto device = vkc::Device::create(*instance, *gpu, vr::device_requirements());
-  CHECK(device.ok());
-  auto allocator = vkc::Allocator::create(instance->handle(), *device);
-  CHECK(allocator.ok());
+int gpu_main(vr_test::GpuContext& gpu) {
   std::vector<vr_test::SphereView> views;
   views.reserve(3);
   for (int c = 0; c < 3; ++c) views.push_back(vr_test::sphere_view(c));
@@ -69,13 +60,13 @@ int run() {
         {{vkc::StorageInput(view.depth.data()), view.cam}, nullptr});
   }
 
-  auto grid = make_grid(*device, *allocator, 127);
-  auto fuser = tsdf::Fuser::create(*device, *allocator);
+  auto grid = make_grid(gpu.device, gpu.allocator, 127);
+  auto fuser = tsdf::Fuser::create(gpu.device, gpu.allocator);
   CHECK(grid.ok() && fuser.ok());
   CHECK(fuser->fuse(*grid, frames).ok());
   const auto before_blocks = vr_test::blocks_of(*grid);
-  const auto before =
-      vr_test::read_attribute<float>(*device, *allocator, *grid, "weight");
+  const auto before = vr_test::read_attribute<float>(gpu.device, gpu.allocator,
+                                                     *grid, "weight");
   CHECK(before_blocks.ok() && before.ok());
   const std::uint32_t tick = grid->map().tick();
   auto& failure = vr_test::allocation_failure;
@@ -87,8 +78,8 @@ int run() {
   CHECK(failure.injected && !refused.ok());
   CHECK(refused.status().domain() == vkc::Status::Code::OutOfMemory);
   CHECK(grid->map().tick() == tick);
-  auto after =
-      vr_test::read_attribute<float>(*device, *allocator, *grid, "weight");
+  auto after = vr_test::read_attribute<float>(gpu.device, gpu.allocator, *grid,
+                                              "weight");
   CHECK(after.ok() && *before == *after);
 
   // Fail the heap-rebuild scratch after resize has installed its new table.
@@ -102,19 +93,21 @@ int run() {
   CHECK(grid->grid().num_buckets == 127);
   const auto kept = vr_test::blocks_of(*grid);
   CHECK(kept.ok() && *kept == *before_blocks);
-  after = vr_test::read_attribute<float>(*device, *allocator, *grid, "weight");
+  after = vr_test::read_attribute<float>(gpu.device, gpu.allocator, *grid,
+                                         "weight");
   CHECK(after.ok() && *before == *after);
   CHECK(vol::grow_grid(*grid).ok());
   CHECK(grid->grid().num_buckets == 254);
-  after = vr_test::read_attribute<float>(*device, *allocator, *grid, "weight");
+  after = vr_test::read_attribute<float>(gpu.device, gpu.allocator, *grid,
+                                         "weight");
   CHECK(after.ok() && after->size() == 2 * before->size());
   CHECK(std::equal(before->begin(), before->end(), after->begin()));
   CHECK(fuser->fuse(*grid, frames).ok());
 
   // A failed grow-ahead need not reject a strict set already fully present.
   {
-    auto strict = tsdf::Fuser::create(*device, *allocator);
-    auto near_full = make_grid(*device, *allocator, 101);
+    auto strict = tsdf::Fuser::create(gpu.device, gpu.allocator);
+    auto near_full = make_grid(gpu.device, gpu.allocator, 101);
     CHECK(strict.ok() && near_full.ok());
     CHECK(strict->fuse(*near_full, frames).ok());
     CHECK(near_full->map().load_factor().value() >
@@ -135,8 +128,8 @@ int run() {
 
   // A resize OOM on an incomplete strict set is reported before integration.
   {
-    auto strict = tsdf::Fuser::create(*device, *allocator);
-    auto small = make_grid(*device, *allocator, 8);
+    auto strict = tsdf::Fuser::create(gpu.device, gpu.allocator);
+    auto small = make_grid(gpu.device, gpu.allocator, 8);
     CHECK(strict.ok() && small.ok());
     const auto before_tick = small->map().tick();
     fail_allocation(3 * sizeof(vkc::Buffer));
@@ -146,8 +139,8 @@ int run() {
     CHECK(failed.status().domain() == vkc::Status::Code::OutOfMemory);
     CHECK(failed.status().message().find("grow_grid") != std::string::npos);
     CHECK(small->map().tick() == before_tick);
-    auto weights =
-        vr_test::read_attribute<float>(*device, *allocator, *small, "weight");
+    auto weights = vr_test::read_attribute<float>(gpu.device, gpu.allocator,
+                                                  *small, "weight");
     CHECK(weights.ok() &&
           std::all_of(weights->begin(), weights->end(),
                       [](float weight) { return weight == 0.0f; }));
@@ -159,8 +152,8 @@ int run() {
   tsdf::FuserConfig live;
   live.max_grows_per_set = 2;
   live.allow_partial = true;
-  auto partial = tsdf::Fuser::create(*device, *allocator, live);
-  auto small = make_grid(*device, *allocator, 8);
+  auto partial = tsdf::Fuser::create(gpu.device, gpu.allocator, live);
+  auto small = make_grid(gpu.device, gpu.allocator, 8);
   CHECK(partial.ok() && small.ok());
   const auto refused_tick = small->map().tick();
   fail_allocation(3 * sizeof(vkc::Buffer));
@@ -169,8 +162,8 @@ int run() {
   CHECK(failure.injected && report.ok() && report->grows == 0);
   CHECK(report->growth_error.domain() == vkc::Status::Code::OutOfMemory);
   CHECK(report->dropped > 0 && small->map().tick() == refused_tick + 1);
-  auto weights =
-      vr_test::read_attribute<float>(*device, *allocator, *small, "weight");
+  auto weights = vr_test::read_attribute<float>(gpu.device, gpu.allocator,
+                                                *small, "weight");
   CHECK(weights.ok() &&
         std::any_of(weights->begin(), weights->end(),
                     [](float weight) { return weight > 0.0f; }));
@@ -191,7 +184,9 @@ int run() {
 
 }  // namespace
 
-int main() try { return run(); } catch (const std::bad_alloc&) {
+int main() try {
+  return vr_test::run_on_gpu(gpu_main);
+} catch (const std::bad_alloc&) {
   vr_test::allocation_failure.armed = false;
   std::fputs("FAIL: bad_alloc escaped fusion or growth\n", stderr);
   return 1;

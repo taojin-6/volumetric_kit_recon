@@ -7,61 +7,22 @@
 // (core/device_requirements.hpp) and creates one on it. The Vulkan
 // foundation behind it is volumetric_kit_core's, tested there; what this pins
 // is recon's side: that the requirements recon states are ones a real driver
-// meets.
+// meets. gpu_test.hpp fails it where a device exists but falls short of them.
 
-#include <cstdint>
 #include <cstdio>
 
-#include "volumetric_kit/core/vulkan/device.hpp"
-#include "volumetric_kit/core/vulkan/instance.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
-#include "volumetric_kit/recon/core/device_requirements.hpp"
 
-#include "no_device.hpp"
+#include "gpu_test.hpp"
 
-namespace vr = volumetric_kit::recon;
-namespace vkc = volumetric_kit::core;
+namespace {
 
-int main() {
-  vkc::Result<vkc::Instance> instance = vkc::Instance::create({});
-  if (!instance) {
-    // No Vulkan driver on this machine: environmental, so a skip, except where
-    // CI requires a device (no_device.hpp).
-    return vr_test::no_device("no Vulkan instance",
-                              instance.status().message());
-  }
-
-  // Distinguish "no devices at all" (environmental -> skip) from "devices exist
-  // but none is compute-capable" (a real failure of the path we depend on).
-  std::uint32_t device_count = 0;
-  vkEnumeratePhysicalDevices(instance.value().handle(), &device_count, nullptr);
-  if (device_count == 0) {
-    return vr_test::no_device("no physical devices");
-  }
-
-  // recon's requirements, not the core's defaults: scalarBlockLayout is what
-  // every recon kernel's buffer ABI needs, so a device the core accepts can
-  // still be one recon cannot run on.
-  const vkc::DeviceRequirements reqs = vr::device_requirements();
-  vkc::Result<vkc::PhysicalDeviceInfo> gpu =
-      instance.value().select_physical_device(reqs);
-  if (!gpu) {
-    std::fprintf(stderr,
-                 "%u device(s) but none meets recon's requirements (%s)\n",
-                 device_count, gpu.status().message().c_str());
-    return 1;
-  }
-  vkc::Result<vkc::Device> device =
-      vkc::Device::create(instance.value(), gpu.value(), reqs);
-  if (!device) {
-    std::fprintf(stderr, "device create failed on %s: %s\n",
-                 gpu.value().properties().deviceName,
-                 device.status().message().c_str());
-    return 1;
-  }
-
-  std::printf("Vulkan instance created; %u device(s); recon runs on %s\n",
-              device_count, gpu.value().properties().deviceName);
+int gpu_main(vr_test::GpuContext& gpu) {
+  std::printf("recon runs on %s\n", gpu.physical.properties().deviceName);
   std::puts("recon Vulkan compute smoke passed");
   return 0;
 }
+
+}  // namespace
+
+int main() { return vr_test::run_on_gpu(gpu_main); }

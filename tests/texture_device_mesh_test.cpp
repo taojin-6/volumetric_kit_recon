@@ -20,7 +20,7 @@
 // exact and index-by-index -- no need to work around the nondeterministic
 // triangle order marching cubes' atomic append produces between two extracts.
 //
-// Needs a device, so the whole test skips (exit 0) where none is present.
+// Needs a device, so the whole test skips where none is present.
 
 #include <cmath>
 #include <cstdint>
@@ -35,8 +35,6 @@
 #include "volumetric_kit/core/vulkan/compute_util.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/gpu_timer.hpp"
-#include "volumetric_kit/core/vulkan/instance.hpp"
-#include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
 #include "volumetric_kit/recon/mesh/mesh.hpp"
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
@@ -44,8 +42,8 @@
 #include "volumetric_kit/recon/volume/hash_types.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 
+#include "gpu_test.hpp"
 #include "grid_readback.hpp"
-#include "no_device.hpp"
 
 namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
@@ -181,43 +179,23 @@ bool fill_grid(const vr_test::Gpu& ctx, vol::VoxelBlockGrid& grid,
              .ok();
 }
 
-}  // namespace
-
-int main() {
-  vkc::Result<vkc::Instance> instance = vkc::Instance::create({});
-  if (!instance) {
-    return vr_test::no_device("no Vulkan instance",
-                              instance.status().message());
-  }
-  vkc::Result<vkc::PhysicalDeviceInfo> gpu =
-      instance.value().select_physical_device(vr::device_requirements());
-  if (!gpu) {
-    return vr_test::no_device("no compute-capable device",
-                              gpu.status().message());
-  }
-  vkc::Result<vkc::Device> device = vkc::Device::create(
-      instance.value(), gpu.value(), vr::device_requirements());
-  CHECK(device.ok());
-  vkc::Result<vkc::Allocator> allocator =
-      vkc::Allocator::create(instance.value().handle(), device.value());
-  CHECK(allocator.ok());
-  const vr_test::Gpu ctx{device.value(), allocator.value()};
+int gpu_main(vr_test::GpuContext& gpu) {
   vkc::Result<mesh::MarchingCubes> extractor_result =
-      mesh::MarchingCubes::create(device.value(), allocator.value());
+      mesh::MarchingCubes::create(gpu.device, gpu.allocator);
   CHECK(extractor_result.ok());
   mesh::MarchingCubes extractor = std::move(extractor_result).value();
   vkc::Result<rtex::ProjectiveTexturer> texturer_result =
-      rtex::ProjectiveTexturer::create(device.value(), allocator.value());
+      rtex::ProjectiveTexturer::create(gpu.device, gpu.allocator);
   CHECK(texturer_result.ok());
   rtex::ProjectiveTexturer texturer = std::move(texturer_result).value();
 
   const vol::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
                                       {"weight", sizeof(float)}};
   vkc::Result<vol::VoxelBlockGrid> grid_result = vol::VoxelBlockGrid::create(
-      device.value(), allocator.value(), sphere_grid_params(), attrs, 2);
+      gpu.device, gpu.allocator, sphere_grid_params(), attrs, 2);
   CHECK(grid_result.ok());
   vol::VoxelBlockGrid grid = std::move(grid_result).value();
-  CHECK(fill_grid(ctx, grid));
+  CHECK(fill_grid(gpu, grid));
 
   // A camera in front of the sphere looking down +Z (recon's OpenCV
   // convention), with a constant depth at the sphere's near surface: the
@@ -273,7 +251,7 @@ int main() {
   // A device that reports timestamps must produce the device half here; one
   // that does not is a supported configuration, and the probe -- not the tier
   // under test -- is what tells the two apart.
-  vkc::Result<vkc::GpuTimer> probe = vkc::GpuTimer::create(device.value());
+  vkc::Result<vkc::GpuTimer> probe = vkc::GpuTimer::create(gpu.device);
   CHECK(probe.ok());
   if (probe.value().available()) {
     CHECK(row->has_gpu);
@@ -327,11 +305,11 @@ int main() {
   // gives every vertex the sentinel, though the depth camera sees half of
   // them.
   {
-    vkc::Result<vkc::Buffer> depth_result = vkc::device_storage_buffer(
-        allocator.value(), depth.size() * sizeof(float));
+    vkc::Result<vkc::Buffer> depth_result =
+        vkc::device_storage_buffer(gpu.allocator, depth.size() * sizeof(float));
     CHECK(depth_result.ok());
-    CHECK(vr_test::write_back(device.value(), allocator.value(),
-                              depth_result.value(), depth)
+    CHECK(vr_test::write_back(gpu.device, gpu.allocator, depth_result.value(),
+                              depth)
               .ok());
     const auto device_depth =
         std::make_shared<const vkc::Buffer>(std::move(depth_result).value());
@@ -406,11 +384,11 @@ int main() {
         for (std::size_t x = 0; x < 128; ++x) half[y * 256 + x] = 0xFF404040u;
       }
       vkc::Result<vkc::Buffer> coverage = vkc::device_storage_buffer(
-          allocator.value(), half.size() * sizeof(std::uint32_t));
+          gpu.allocator, half.size() * sizeof(std::uint32_t));
       CHECK(coverage.ok());
-      CHECK(vr_test::write_back(device.value(), allocator.value(),
-                                coverage.value(), half)
-                .ok());
+      CHECK(
+          vr_test::write_back(gpu.device, gpu.allocator, coverage.value(), half)
+              .ok());
       rtex::TextureView covered = view_from(aside);
       covered.coverage =
           std::make_shared<const vkc::Buffer>(std::move(coverage).value());
@@ -439,14 +417,14 @@ int main() {
       CHECK(left > 0 && right > 0);
 
       vkc::Result<vkc::Buffer> short_coverage = vkc::device_storage_buffer(
-          allocator.value(), half.size() * sizeof(std::uint32_t) - 4);
+          gpu.allocator, half.size() * sizeof(std::uint32_t) - 4);
       vkc::BufferDesc copy_only;
       copy_only.size = half.size() * sizeof(std::uint32_t);
       copy_only.usage =
           VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
       copy_only.memory = vkc::MemoryUsage::DeviceOnly;
       vkc::Result<vkc::Buffer> unbindable =
-          allocator.value().create_buffer(copy_only);
+          gpu.allocator.create_buffer(copy_only);
       CHECK(short_coverage.ok() && unbindable.ok());
       covered.coverage = std::make_shared<const vkc::Buffer>(
           std::move(short_coverage).value());
@@ -644,15 +622,15 @@ int main() {
   // again for any later case.
   {
     vkc::Result<mesh::MarchingCubes> growing_result =
-        mesh::MarchingCubes::create(device.value(), allocator.value());
+        mesh::MarchingCubes::create(gpu.device, gpu.allocator);
     CHECK(growing_result.ok());
     mesh::MarchingCubes growing = std::move(growing_result).value();
 
     vkc::Result<vol::VoxelBlockGrid> dense_result = vol::VoxelBlockGrid::create(
-        device.value(), allocator.value(), sphere_grid_params(), attrs, 2);
+        gpu.device, gpu.allocator, sphere_grid_params(), attrs, 2);
     CHECK(dense_result.ok());
     vol::VoxelBlockGrid dense = std::move(dense_result).value();
-    CHECK(fill_grid(ctx, dense, Field::kDense));
+    CHECK(fill_grid(gpu, dense, Field::kDense));
 
     mesh::ExtractTimings before;
     vkc::Result<mesh::DeviceMesh> first =
@@ -676,7 +654,7 @@ int main() {
   // per-object, so one extractor's stamp never authorises another's buffers.
   {
     vkc::Result<mesh::MarchingCubes> other_result =
-        mesh::MarchingCubes::create(device.value(), allocator.value());
+        mesh::MarchingCubes::create(gpu.device, gpu.allocator);
     CHECK(other_result.ok());
     mesh::MarchingCubes other = std::move(other_result).value();
     vkc::Result<mesh::DeviceMesh> foreign = other.extract_device(grid, 0.0f);
@@ -734,8 +712,8 @@ int main() {
   {
     mesh::MarchingCubesConfig share_config;
     share_config.share_vertices = true;
-    vkc::Result<mesh::MarchingCubes> share_result = mesh::MarchingCubes::create(
-        device.value(), allocator.value(), share_config);
+    vkc::Result<mesh::MarchingCubes> share_result =
+        mesh::MarchingCubes::create(gpu.device, gpu.allocator, share_config);
     CHECK(share_result.ok());
     mesh::MarchingCubes share_mc = std::move(share_result).value();
     vkc::Result<mesh::DeviceMesh> shared = share_mc.extract_device(grid, 0.0f);
@@ -805,3 +783,7 @@ int main() {
       host_mesh.triangle_count(), textured, host_mesh.vertices.size());
   return 0;
 }
+
+}  // namespace
+
+int main() { return vr_test::run_on_gpu(gpu_main); }

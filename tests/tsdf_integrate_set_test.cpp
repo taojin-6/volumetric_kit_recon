@@ -14,7 +14,7 @@
 // empty frame, which both calls skip. The set grows the map's and the
 // integrator's sets past an earlier call's, and stamps changed the blocks the
 // reference changes, so the stamps are bound on every set. And a set with one
-// bad frame is refused before anything is fused. Exits 0 (skip) where no
+// bad frame is refused before anything is fused. Skips where no
 // device is present.
 
 #include <cmath>
@@ -29,15 +29,13 @@
 #include "volumetric_kit/core/vulkan/buffer.hpp"
 #include "volumetric_kit/core/vulkan/compute_util.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
-#include "volumetric_kit/core/vulkan/instance.hpp"
-#include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
 #include "volumetric_kit/recon/volume/hash_types.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
 
+#include "gpu_test.hpp"
 #include "grid_readback.hpp"
-#include "no_device.hpp"
 #include "sphere_scene.hpp"
 
 namespace vr = volumetric_kit::recon;
@@ -164,29 +162,9 @@ int settle(Allocate&& allocate) {
   return 1;
 }
 
-}  // namespace
-
-int main() {
-  vkc::Result<vkc::Instance> instance = vkc::Instance::create({});
-  if (!instance) {
-    return vr_test::no_device("no Vulkan instance",
-                              instance.status().message());
-  }
-  vkc::Result<vkc::PhysicalDeviceInfo> gpu =
-      instance.value().select_physical_device(vr::device_requirements());
-  if (!gpu) {
-    return vr_test::no_device("no compute-capable device",
-                              gpu.status().message());
-  }
-  vkc::Result<vkc::Device> device = vkc::Device::create(
-      instance.value(), gpu.value(), vr::device_requirements());
-  CHECK(device.ok());
-  vkc::Result<vkc::Allocator> allocator =
-      vkc::Allocator::create(instance.value().handle(), device.value());
-  CHECK(allocator.ok());
-  vkc::Device& dev = device.value();
-  vkc::Allocator& alloc = allocator.value();
-  const vr_test::Gpu ctx{dev, alloc};
+int gpu_main(vr_test::GpuContext& gpu) {
+  vkc::Device& dev = gpu.device;
+  vkc::Allocator& alloc = gpu.allocator;
 
   std::vector<vr_test::SphereView> views;
   for (int c = 0; c < kCameras; ++c) views.push_back(vr_test::sphere_view(c));
@@ -308,7 +286,7 @@ int main() {
       CHECK(dirty_set.value() == dirty_one.value());
     }
     std::printf("%s:\n", classic ? "classic" : "dynamic");
-    if (check_same(ctx, one.value(), set.value(), classic) != 0) return 1;
+    if (check_same(gpu, one.value(), set.value(), classic) != 0) return 1;
   }
 
   // A set with one bad frame -- here the last, its depth smaller than its
@@ -347,3 +325,7 @@ int main() {
   std::puts("tsdf_integrate_set: OK");
   return 0;
 }
+
+}  // namespace
+
+int main() { return vr_test::run_on_gpu(gpu_main); }

@@ -27,7 +27,7 @@
 // one view against the single-camera pass; a half-resolution depth map under
 // a full-resolution tile against the full-resolution one; the atlas layout
 // and packing on their own; the refusals; and a moved-from texturer. Skips
-// (exit 0) where no device is present.
+// where no device is present.
 
 #include <algorithm>
 #include <cmath>
@@ -42,15 +42,13 @@
 #include "volumetric_kit/core/vulkan/buffer.hpp"
 #include "volumetric_kit/core/vulkan/compute_util.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
-#include "volumetric_kit/core/vulkan/instance.hpp"
-#include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
 #include "volumetric_kit/recon/mesh/mesh.hpp"
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
 #include "volumetric_kit/recon/texture/texture_atlas.hpp"
 
 #include "buffer_readback.hpp"
-#include "no_device.hpp"
+#include "gpu_test.hpp"
 
 namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
@@ -318,28 +316,9 @@ int texture_alone(tex::ProjectiveTexturer& texturer,
   return check_triangle(m, 0, want, one, layout.value());
 }
 
-}  // namespace
-
-int main() {
-  vkc::Result<vkc::Instance> instance = vkc::Instance::create({});
-  if (!instance) {
-    return vr_test::no_device("no Vulkan instance",
-                              instance.status().message());
-  }
-  vkc::Result<vkc::PhysicalDeviceInfo> gpu =
-      instance.value().select_physical_device(vr::device_requirements());
-  if (!gpu) {
-    return vr_test::no_device("no compute-capable device",
-                              gpu.status().message());
-  }
-  vkc::Result<vkc::Device> device = vkc::Device::create(
-      instance.value(), gpu.value(), vr::device_requirements());
-  CHECK(device.ok());
-  vkc::Result<vkc::Allocator> allocator =
-      vkc::Allocator::create(instance.value().handle(), device.value());
-  CHECK(allocator.ok());
+int gpu_main(vr_test::GpuContext& gpu) {
   vkc::Result<tex::ProjectiveTexturer> created =
-      tex::ProjectiveTexturer::create(device.value(), allocator.value());
+      tex::ProjectiveTexturer::create(gpu.device, gpu.allocator);
   CHECK(created.ok());
   tex::ProjectiveTexturer texturer = std::move(created).value();
   CHECK(texturer.max_atlas_extent() >= 4096);  // the Vulkan minimum
@@ -503,7 +482,7 @@ int main() {
     for (std::size_t i = 0; i < on_device.size(); ++i) {
       on_device[i].depth = nullptr;
       on_device[i].depth_buffer =
-          to_device(device.value(), allocator.value(), *maps[i]);
+          to_device(gpu.device, gpu.allocator, *maps[i]);
       CHECK(on_device[i].depth_buffer != nullptr);
     }
     // The one beside the host views in a buffer the pass can copy from but
@@ -511,7 +490,7 @@ int main() {
     std::vector<tex::TextureView> mixed = views;
     mixed[1].depth = nullptr;
     mixed[1].depth_buffer = to_device(
-        device.value(), allocator.value(), depth1,
+        gpu.device, gpu.allocator, depth1,
         VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
     CHECK(mixed[1].depth_buffer != nullptr);
     const std::vector<float> nothing(depth0.size(), 0.0f);
@@ -627,11 +606,10 @@ int main() {
     const auto none = [](std::uint32_t, std::uint32_t) { return false; };
     for (std::size_t i = 0; i < rig.size(); ++i) {
       rig[i].depth = nullptr;
-      rig[i].depth_buffer =
-          to_device(device.value(), allocator.value(), *maps[i]);
-      rig[i].coverage = to_device(device.value(), allocator.value(),
+      rig[i].depth_buffer = to_device(gpu.device, gpu.allocator, *maps[i]);
+      rig[i].coverage = to_device(gpu.device, gpu.allocator,
                                   coverage_image(*rig[i].color_camera, all));
-      blind[i].coverage = to_device(device.value(), allocator.value(),
+      blind[i].coverage = to_device(gpu.device, gpu.allocator,
                                     coverage_image(*rig[i].color_camera, none));
       CHECK(rig[i].depth_buffer && rig[i].coverage && blind[i].coverage);
     }
@@ -649,7 +627,7 @@ int main() {
     // The centre triangle lies in rows 134 to 158 of view 0's image, and
     // nothing else view 0 takes lies above row 170.
     rig[0].coverage = to_device(
-        device.value(), allocator.value(),
+        gpu.device, gpu.allocator,
         coverage_image(*rig[0].color_camera,
                        [](std::uint32_t, std::uint32_t y) { return y > 170; }));
     CHECK(rig[0].coverage != nullptr);
@@ -895,10 +873,10 @@ int main() {
     // empty, and in a buffer a batch cannot copy from.
     const VkDeviceSize map_bytes = VkDeviceSize(kW) * kH * sizeof(float);
     vkc::Result<vkc::Buffer> whole =
-        vkc::device_storage_buffer(allocator.value(), map_bytes);
-    vkc::Result<vkc::Buffer> short_map = vkc::device_storage_buffer(
-        allocator.value(), map_bytes - sizeof(float));
-    vkc::Result<vkc::Buffer> no_copy = allocator.value().create_buffer(
+        vkc::device_storage_buffer(gpu.allocator, map_bytes);
+    vkc::Result<vkc::Buffer> short_map =
+        vkc::device_storage_buffer(gpu.allocator, map_bytes - sizeof(float));
+    vkc::Result<vkc::Buffer> no_copy = gpu.allocator.create_buffer(
         {map_bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT});
     CHECK(whole.ok() && short_map.ok() && no_copy.ok());
     CHECK((no_copy->usage() & VK_BUFFER_USAGE_TRANSFER_SRC_BIT) == 0);
@@ -938,3 +916,7 @@ int main() {
   std::printf("texture multiview: OK\n");
   return 0;
 }
+
+}  // namespace
+
+int main() { return vr_test::run_on_gpu(gpu_main); }

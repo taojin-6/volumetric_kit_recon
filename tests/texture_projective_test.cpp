@@ -43,15 +43,13 @@
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
-#include "volumetric_kit/core/vulkan/instance.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
-#include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
 #include "volumetric_kit/recon/mesh/mesh.hpp"
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
 #include "volumetric_kit/recon/volume/voxel_hash_map.hpp"  // DepthCameraParams
 
-#include "no_device.hpp"
+#include "gpu_test.hpp"
 
 namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
@@ -149,37 +147,9 @@ rmesh::Vertex vtx(float x, float y, float z,
   return v;
 }
 
-}  // namespace
-
-int main() {
-  vkc::Result<vkc::Instance> instance = vkc::Instance::create({});
-  if (!instance) {
-    return vr_test::no_device("no Vulkan instance",
-                              instance.status().message());
-  }
-  vkc::Result<vkc::PhysicalDeviceInfo> gpu =
-      instance.value().select_physical_device(vr::device_requirements());
-  if (!gpu) {
-    return vr_test::no_device("no compute-capable device",
-                              gpu.status().message());
-  }
-  vkc::Result<vkc::Device> device = vkc::Device::create(
-      instance.value(), gpu.value(), vr::device_requirements());
-  if (!device) {
-    std::fprintf(stderr, "device create failed: %s\n",
-                 device.status().message().c_str());
-    return 1;
-  }
-  vkc::Result<vkc::Allocator> allocator =
-      vkc::Allocator::create(instance.value().handle(), device.value());
-  if (!allocator) {
-    std::fprintf(stderr, "allocator create failed: %s\n",
-                 allocator.status().message().c_str());
-    return 1;
-  }
-
+int gpu_main(vr_test::GpuContext& gpu) {
   vkc::Result<tex::ProjectiveTexturer> tex_result =
-      tex::ProjectiveTexturer::create(device.value(), allocator.value());
+      tex::ProjectiveTexturer::create(gpu.device, gpu.allocator);
   if (!tex_result) {
     std::fprintf(stderr, "ProjectiveTexturer::create failed: %s\n",
                  tex_result.status().message().c_str());
@@ -634,3 +604,7 @@ int main() {
       "larger frame grew the depth copy\n");
   return 0;
 }
+
+}  // namespace
+
+int main() { return vr_test::run_on_gpu(gpu_main); }

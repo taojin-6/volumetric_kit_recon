@@ -16,7 +16,7 @@
 // same voxel and F clears nothing G fuses, so that is every clear before every
 // fuse, computed without the set's split. And G's far wall must mesh. A third
 // set, F's wall receded 10 cm, must clear the old surface in a set as well.
-// Exits 0 (skip) where no device is present.
+// Skips where no device is present.
 
 #include <algorithm>
 #include <array>
@@ -39,8 +39,8 @@
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
 
+#include "gpu_test.hpp"
 #include "grid_readback.hpp"
-#include "no_device.hpp"
 
 namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
@@ -262,26 +262,9 @@ std::int64_t voxel_at(const std::map<Coord, std::int32_t>& blocks, float x,
 
 }  // namespace
 
-int main() {
-  vkc::Result<vkc::Instance> instance = vkc::Instance::create({});
-  if (!instance) {
-    return vr_test::no_device("no Vulkan instance",
-                              instance.status().message());
-  }
-  vkc::Result<vkc::PhysicalDeviceInfo> gpu =
-      instance.value().select_physical_device(vr::device_requirements());
-  if (!gpu) {
-    return vr_test::no_device("no compute-capable device",
-                              gpu.status().message());
-  }
-  vkc::Result<vkc::Device> device = vkc::Device::create(
-      instance.value(), gpu.value(), vr::device_requirements());
-  CHECK(device.ok());
-  vkc::Result<vkc::Allocator> allocator =
-      vkc::Allocator::create(instance.value().handle(), device.value());
-  CHECK(allocator.ok());
-  vkc::Device& dev = device.value();
-  vkc::Allocator& alloc = allocator.value();
+int gpu_main(vr_test::GpuContext& gpu) {
+  vkc::Device& dev = gpu.device;
+  vkc::Allocator& alloc = gpu.allocator;
 
   auto integrator = tsdf::TsdfIntegrator::create(dev, alloc);
   CHECK(integrator.ok());
@@ -365,3 +348,5 @@ int main() {
   std::puts("tsdf_integrate_dynamic_set: OK");
   return 0;
 }
+
+int main() { return vr_test::run_on_gpu(gpu_main); }

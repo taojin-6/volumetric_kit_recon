@@ -22,8 +22,8 @@
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
 
+#include "gpu_test.hpp"
 #include "grid_readback.hpp"
-#include "no_device.hpp"
 #include "sphere_scene.hpp"
 
 namespace vr = volumetric_kit::recon;
@@ -85,23 +85,9 @@ vkc::Result<bool> fused_any(const vr_test::Gpu& gpu,
 
 }  // namespace
 
-int main() {
-  auto instance = vkc::Instance::create({});
-  if (!instance) {
-    return vr_test::no_device("no Vulkan instance",
-                              instance.status().message());
-  }
-  auto gpu = instance->select_physical_device(vr::device_requirements());
-  if (!gpu) {
-    return vr_test::no_device("no compute-capable device",
-                              gpu.status().message());
-  }
-  auto device = vkc::Device::create(*instance, *gpu, vr::device_requirements());
-  CHECK(device.ok());
-  auto allocator = vkc::Allocator::create(instance->handle(), *device);
-  CHECK(allocator.ok());
-  vkc::Device& dev = *device;
-  vkc::Allocator& alloc = *allocator;
+int gpu_main(vr_test::GpuContext& gpu) {
+  vkc::Device& dev = gpu.device;
+  vkc::Allocator& alloc = gpu.allocator;
   const vr_test::Gpu ctx{dev, alloc};
 
   // The set: three cameras, depth and colour on the host.
@@ -240,3 +226,5 @@ int main() {
   std::puts("tsdf_fuser: OK");
   return 0;
 }
+
+int main() { return vr_test::run_on_gpu(gpu_main); }
