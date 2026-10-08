@@ -8,6 +8,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `mesh`: **`MeshExchange<Payload>`** (`mesh_exchange.hpp`), the handoff of
+  `extract_device`'s meshes, each with a payload drawn with it (its atlas),
+  from the extracting thread to a renderer drawing them in place: the
+  release mark computed as a frame retires and the newest mesh taken under
+  one lock, a mesh the consumer cannot commit yet parked and retried, an
+  empty mesh committed as "draw nothing", an unbindable one latching, and
+  the release applied on the producer's thread. Header-only, with no gfx
+  dependency; `unbindable_reason` checks a mesh against the usage and
+  sharing its consumer binds it with. Test: `recon_mesh_exchange`.
 - `tsdf`: **`Fuser`** (`fuser.hpp`), the fusion driver every caller shares:
   a set of `FrameInput`s fused by growing the grid ahead of need, allocating
   every band in one call, growing again for a capacity limit (at most
