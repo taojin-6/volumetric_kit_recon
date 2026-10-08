@@ -540,7 +540,7 @@ value is in, not how many bits hold it.
 
 The color-space contract is implemented across these boundaries:
 
-- `tsdf/shaders/tsdf_integrate.comp` decodes both operands, blends, re-encodes.
+- `tsdf/shaders/tsdf_integrate.glsl` decodes both operands, blends, re-encodes.
 - `mesh/shaders/marching_cubes_common.glsl` decodes the corner colors and writes
   the interpolated result as linear float.
 - The examples move their atlas and offscreen formats to `_SRGB`, and encode on
@@ -920,9 +920,14 @@ staged.
 `integrate` also takes a list of frames
 (`FrameInput`, a `DepthInput` and its colour, so one list feeds both
 calls): one compaction and one submit for them all, each frame a dispatch
-of its own over the union in order, so every voxel takes them in turn as
-integrating them one at a time does, bit for bit. A frame with no
-pixels fuses nothing, as it allocates nothing (2026-09-30).
+of its own over the union in order. Under Classic every voxel takes them in
+turn as integrating them one at a time does, bit for bit. A Dynamic set is
+one instant: the clear kernel (`tsdf_clear.comp`, the integrate kernel's
+body `tsdf_integrate.glsl` built without its fuse) runs for every frame
+before the integrate kernel fuses any, so one camera's free space never
+erases what another fuses in the same set, and the grid does not depend on
+the frames' order but for the running average's arithmetic (2026-10-08). A
+frame with no pixels fuses nothing, as it allocates nothing (2026-09-30).
 `Fuser` owns the shared grow/allocate/integrate sequence (2026-10-10). It
 grows ahead past `kGrowThreshold`, allocates every frame's band in one
 `allocate_from_depth`, grows and retries on capacity failures, then integrates
@@ -1635,6 +1640,10 @@ the grid the codec encodes: a mesh sequence converts frame by frame. Both modes
 cost the same, measured on an 81 920-triangle sphere at scan density (M5 Max,
 Release): 12.8 ms to write, 10.8 ms of it on the GPU, after 14.2 ms to
 allocate; 12.6 ms and 10.6 ms resident (the 2026-09-28 residency decision).
+Dynamic's clear is still a hard reset from one ray: clearing on evidence (a
+weight decrement, an incidence term) and behind a pixel with no return are
+the next steps, each judged on the lab rig (`TODO(tsdf)` in
+`tsdf_integrate.glsl`, 2026-10-08).
 
 **On `sensor`**, each a `TODO(sensor)`: the GPU pre-processing has landed for
 one camera (`GpuFramePrep`, the 2026-09-28 GPU pre-processing decision: at 4K

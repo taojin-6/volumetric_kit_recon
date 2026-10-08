@@ -113,8 +113,9 @@ kernels.
   one thread; `Device` takes submits from several.
 - **No GPU wait between recon and gfx.** The mesh ring is released by the
   host's report (the 2026-08-03 decision).
-- **A batched path computes what the per-camera path computes.** Show it
-  with a test, voxel by voxel or block by block.
+- **A batched path computes what the per-camera path computes** (a Dynamic
+  set what its clears and then its fuses compute). Show it with a test,
+  voxel by voxel or block by block.
 - **Changing a tier's contract or a locked decision** means updating
   its description in DESIGN.md and its index entry and rationale in
   DECISIONS.md in the same PR, plus AGENTS.md if an essential shared rule changes.
@@ -171,7 +172,10 @@ is measured.
 > one at a time. The camera-looping kernel below is deferred until integrate's
 > device time is shown to matter. Figures and rationale are in DECISIONS.md,
 > 2026-09-30. What is left: the extract still compacts again (P5). A retry
-> round still re-dispatches every camera, but since P3 one is rare.
+> round still re-dispatches every camera, but since P3 one is rare. Since
+> 2026-10-08 a Dynamic set clears with every camera before it fuses with any,
+> a second dispatch a camera: 1.22 → 1.92 ms of integrate a 4-camera set on
+> the M5 Max (synthetic). The looping kernel would make it one pass again.
 
 - **Problem.** `rig_viewer.cpp:1323` loops over the cameras through
   `fuse_frame` (`examples/common/fuse_device_frame.hpp`), and per camera:
@@ -205,10 +209,11 @@ is measured.
     feature. A fixed set of `kMaxCameras` bindings with a switch is the
     alternative that needs no feature.
 - **Semantics.** The per-voxel arithmetic is the same, in the same camera
-  order, as today's sequential dispatches, Dynamic's clearing included,
-  since each voxel belongs to one thread. The one difference is that a
-  block first allocated by a later camera in the set is also fused by the
-  earlier ones: more observations, not fewer.
+  order, as today's dispatches (under Dynamic every camera's clear, then
+  every camera's fuse: DECISIONS.md, 2026-10-08), since each voxel belongs
+  to one thread. The one difference is that a block first allocated by a
+  later camera in the set is also fused by the earlier ones: more
+  observations, not fewer.
 - **Measure and accept.**
   - A test fusing a pre-allocated grid both ways, compared voxel by voxel.
     Say whether it matches exactly or within a tolerance, and why.
@@ -433,7 +438,7 @@ improvement awaits measurement; the figures below describe the original GC.
 
 - **Problem.**
   - Dynamic integration clears a receded surface's voxels to weight 0 (the
-    free-space branch in `tsdf_integrate.comp`) but never frees their
+    free-space branch in `tsdf_integrate.glsl`) but never frees their
     blocks, and nothing on the live path calls `remove`.
   - The active set therefore grows with the history of motion, and so does
     every per-set pass over it: compaction, integrate, marching cubes.

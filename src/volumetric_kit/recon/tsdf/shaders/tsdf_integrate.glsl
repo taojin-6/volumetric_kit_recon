@@ -13,6 +13,15 @@
 // tsdf/weight/color read-modify-write needs no atomics. The one exception is
 // the block's `changed` stamp at binding 8, which every thread of a block
 // shares -- see there.
+//
+// The body of the integrate kernel (tsdf_integrate.comp) and the clear kernel
+// (tsdf_clear.comp), which #include it after their #version, with one
+// descriptor layout. VR_TSDF_CLEAR_ONLY builds the clear kernel: Dynamic's
+// clear alone, which a Dynamic set of several frames runs for every frame
+// before any frame's fuse (the integrate kernel with fuse_only), so the set's
+// cameras act as one instant. It skips a voxel holding no weight before
+// projecting it, as most of what a set reaches holds none, a test the
+// integrate kernel does not pay for (DECISIONS.md, 2026-10-08).
 
 #extension GL_GOOGLE_include_directive : require
 #extension GL_KHR_shader_subgroup_basic : require
@@ -25,6 +34,12 @@
 #include "volumetric_kit/recon/volume/shaders/block_stamp.glsl"
 
 layout(local_size_x = 256) in;
+
+#ifdef VR_TSDF_CLEAR_ONLY
+const bool kClearOnly = true;
+#else
+const bool kClearOnly = false;
+#endif
 
 layout(set = 0, binding = 0, scalar) buffer Tsdf { float tsdf[]; };
 layout(set = 0, binding = 1, scalar) buffer Weight { float weight[]; };
@@ -152,6 +167,9 @@ void main() {
   // constant, so the divide is a real reciprocal sequence -- it used to be
   // recomputed inline at each mark site.
   uint block_slot = uint(block.ptr) / vpb;
+  if (kClearOnly && !(weight[uint(block.ptr) + local] > 0.0)) {
+    return;  // nothing to clear
+  }
 
   // Voxel world position: node convention (voxel * voxel_size), matching
   // volume/voxel_coords.hpp::voxel_to_world and the prior engine.
@@ -185,7 +203,7 @@ void main() {
     return;  // occluded: well behind the surface
   }
   uint idx = uint(block.ptr) + local;
-  if (sdf > trunc_dist && pc.mode == kModeDynamic) {
+  if (sdf > trunc_dist && (kClearOnly || pc.mode == kModeDynamic)) {
     // Free space in front of the surface, past the band: under dynamic
     // integration the surface has receded past this voxel, so hard-clear any
     // stale geometry back to the pristine unobserved state (tsdf 0 / weight 0 --
@@ -195,8 +213,14 @@ void main() {
     // classic_tsdf.cu stale-clearing branch, which zeroes color here too --
     // whenever the grid carries a color attribute (has_color_attr), not only on
     // a frame that supplies a color image, so a depth-only recede leaves no
-    // color ghost either.
-    if (weight[idx] > 0.0) {
+    // color ghost either. A Dynamic set's fuse (fuse_only) leaves it alone: the
+    // clear kernel has run for every frame of the set first, so a camera that
+    // sees past a voxel another camera of the set places in its band clears
+    // only the voxel's history, and the set's fuse follows.
+    // TODO(tsdf): clear on evidence -- a weight decrement, an incidence term --
+    // and behind a pixel with no return, each judged on the lab rig
+    // (DECISIONS.md, 2026-10-08).
+    if (pc.fuse_only == 0u && weight[idx] > 0.0) {
       tsdf[idx] = 0.0;
       weight[idx] = 0.0;
       if (pc.has_color_attr != 0u) {
@@ -208,6 +232,9 @@ void main() {
       // on this path: a voxel at weight 0 is in the state the clear writes.
       stamp_changed(block_slot);
     }
+    return;
+  }
+  if (kClearOnly) {
     return;
   }
   sdf = clamp(sdf, -trunc_dist, trunc_dist);

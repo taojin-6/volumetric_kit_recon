@@ -1,0 +1,9 @@
+#version 450
+
+// The clear kernel: Dynamic integration's clear of one frame alone, for a set
+// of several frames. The body is tsdf_integrate.glsl, shared with
+// tsdf_integrate.comp.
+
+#extension GL_GOOGLE_include_directive : require
+#define VR_TSDF_CLEAR_ONLY
+#include "tsdf_integrate.glsl"

@@ -3,7 +3,8 @@
 
 // Shared definitions for the TSDF compute kernels: the device struct layouts
 // (scalar block layout, byte-identical to the host POD structs) and the
-// push-constant block. #included by tsdf_integrate.comp.
+// push-constant block. #included by tsdf_integrate.glsl, the body of the
+// integrate and clear kernels.
 //
 // VoxelGridParams / BlockIndex mirror volume/{voxel_grid,hash_types}.hpp (the
 // same scalar-layout structs the volume kernels use in hash_common.glsl);
@@ -122,4 +123,7 @@ layout(push_constant, scalar) uniform PushConstants {
   uint has_color_attr;  // 1 = binding 6 is the grid's color attribute (clearable)
   uint tick;            // the map's tick, which a changed block is stamped with
   uint coverage_in_alpha;  // 1 = a colour word with a zero high byte is no colour
+  // 1 = a Dynamic set's fuse, whose clears tsdf_clear.comp ran for every frame
+  // of the set first: free space past the band is left alone.
+  uint fuse_only;
 } pc;

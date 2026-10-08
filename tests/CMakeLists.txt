@@ -164,13 +164,27 @@ vr_target_warnings(recon_tsdf_device_input_test)
 add_test(NAME recon_tsdf_device_input COMMAND recon_tsdf_device_input_test)
 
 # tsdf integrate set: several cameras allocated and fused in one call each must
-# give the grid fusing them one at a time gives, bit for bit. Skips (exit 0)
-# where no device is present.
+# give, under classic, the grid fusing them one at a time gives, bit for bit,
+# and under dynamic the grid the same set in the other order gives. Skips (exit
+# 0) where no device is present.
 add_executable(recon_tsdf_integrate_set_test tsdf_integrate_set_test.cpp)
 target_link_libraries(recon_tsdf_integrate_set_test
                       PRIVATE volumetric_kit::recon_tsdf Vulkan::Vulkan)
 vr_target_warnings(recon_tsdf_integrate_set_test)
 add_test(NAME recon_tsdf_integrate_set COMMAND recon_tsdf_integrate_set_test)
+
+# tsdf integrate dynamic set: a frontal camera and a grazing one that sees past
+# its band, fused as a Dynamic set in either order, must give the same grid and
+# mesh and keep the frontal camera's surface whole. Skips (exit 0) where no
+# device is present.
+add_executable(recon_tsdf_integrate_dynamic_set_test
+               tsdf_integrate_dynamic_set_test.cpp)
+target_link_libraries(
+  recon_tsdf_integrate_dynamic_set_test
+  PRIVATE volumetric_kit::recon_tsdf volumetric_kit::recon_mesh Vulkan::Vulkan)
+vr_target_warnings(recon_tsdf_integrate_dynamic_set_test)
+add_test(NAME recon_tsdf_integrate_dynamic_set
+         COMMAND recon_tsdf_integrate_dynamic_set_test)
 
 # tsdf integrate cull: fusing only the blocks the frames' frusta reach must give
 # the grid fusing every active block gives, bit for bit, at each edge of that

@@ -1,7 +1,7 @@
 #version 450
 
 // The integrate kernel: projective TSDF integration of one frame, classic or
-// dynamic. Its body is tsdf_integrate.glsl.
+// dynamic. The body is tsdf_integrate.glsl, shared with tsdf_clear.comp.
 
 #extension GL_GOOGLE_include_directive : require
 #include "tsdf_integrate.glsl"

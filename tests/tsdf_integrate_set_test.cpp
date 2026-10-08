@@ -4,18 +4,24 @@
 // The several-camera overloads of VoxelHashMap::allocate_from_depth and
 // TsdfIntegrator::integrate against the one-frame ones. Three cameras round a
 // sphere, fused twice into one grid one frame at a time and into another as a
-// set, must give the same blocks and the same tsdf, weight and colour bit for
-// bit, classic and dynamic: each frame is a dispatch of its own in both, in the
-// same order. The frames mix host arrays and storage buffers, colour and none,
-// and the set carries an empty frame, which both calls skip. The set grows the
-// map's and the integrator's sets past an earlier call's, and stamps changed
-// the blocks one frame at a time changes, so the stamps are bound on every
-// set. And a set with one bad frame is refused before anything is fused.
-// Exits 0 (skip) where no device is present.
+// set, must give, classic, the same blocks and the same tsdf, weight and colour
+// bit for bit: each frame is a dispatch of its own in both, in the same order.
+// Dynamic, a set is one instant, every frame's clear before any frame's fuse,
+// and the cameras disagree near their silhouettes, so the reference is the set
+// in the other order: the same blocks, the same voxels observed and coloured,
+// and the same field but for the running average's rounding. The frames mix
+// host arrays and storage buffers, colour and none, and the set carries an
+// empty frame, which both calls skip. The set grows the map's and the
+// integrator's sets past an earlier call's, and stamps changed the blocks the
+// reference changes, so the stamps are bound on every set. And a set with one
+// bad frame is refused before anything is fused. Exits 0 (skip) where no
+// device is present.
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <vector>
 
 #include "volumetric_kit/core/base/result.hpp"
@@ -87,12 +93,59 @@ vkc::Result<std::uint32_t> changed_after(const vol::VoxelBlockGrid& g,
   return n;
 }
 
-// The same blocks with the same bits, and enough of them observed.
+// A float attribute's element from its bits.
+float bits_float(std::uint32_t bits) {
+  float f = 0.0f;
+  std::memcpy(&f, &bits, sizeof(f));
+  return f;
+}
+
+// The same blocks, and in each the same bits of weight, tsdf and colour in
+// every voxel; or, not `exact`, the same voxels observed and coloured, and
+// weight and tsdf within rounding. A slot can differ: allocation order is the
+// GPU's.
 int check_same(const vr_test::Gpu& ctx, vol::VoxelBlockGrid& a,
-               vol::VoxelBlockGrid& b) {
+               vol::VoxelBlockGrid& b, bool exact) {
+  auto ba = vr_test::blocks_of(a);
+  auto bb = vr_test::blocks_of(b);
+  CHECK(ba.ok() && bb.ok());
+  CHECK(!ba.value().empty());
+  CHECK(ba.value().size() == bb.value().size());
+  const auto view = [&](vol::VoxelBlockGrid& g, const char* name) {
+    return vr_test::read_attribute<std::uint32_t>(ctx.device, ctx.allocator, g,
+                                                  name)
+        .value();
+  };
+  const std::vector<std::uint32_t> wa = view(a, "weight");
+  const std::vector<std::uint32_t> wb = view(b, "weight");
+  const std::vector<std::uint32_t> ta = view(a, "tsdf");
+  const std::vector<std::uint32_t> tb = view(b, "tsdf");
+  const std::vector<std::uint32_t> ca = view(a, "color");
+  const std::vector<std::uint32_t> cb = view(b, "color");
+  const std::size_t voxels = grid_params().voxels_per_block;
   std::size_t observed = 0;
-  CHECK(vr_test::same_grids(ctx, a, b, &observed));
-  std::printf("  %zu voxels observed\n", observed);
+  for (const auto& [coord, ptr] : ba.value()) {
+    const auto other = bb.value().find(coord);
+    CHECK(other != bb.value().end());
+    for (std::size_t k = 0; k < voxels; ++k) {
+      const std::size_t ia = static_cast<std::size_t>(ptr) + k;
+      const std::size_t ib = static_cast<std::size_t>(other->second) + k;
+      if (exact) {
+        CHECK(wa[ia] == wb[ib]);
+        CHECK(ta[ia] == tb[ib]);
+        CHECK(ca[ia] == cb[ib]);
+      } else {
+        CHECK((wa[ia] == 0) == (wb[ib] == 0));
+        CHECK((ca[ia] == 0) == (cb[ib] == 0));
+        CHECK(std::fabs(bits_float(wa[ia]) - bits_float(wb[ib])) <=
+              1e-5f * bits_float(wa[ia]));
+        CHECK(std::fabs(bits_float(ta[ia]) - bits_float(tb[ib])) <= 1e-6f);
+      }
+      observed += wa[ia] != 0 ? 1 : 0;
+    }
+  }
+  std::printf("  %zu blocks, %zu voxels observed\n", ba.value().size(),
+              observed);
   CHECK(observed > 10000);
   return 0;
 }
@@ -183,38 +236,58 @@ int main() {
   const std::vector<vol::DepthInput> depths(set_frames.begin(),
                                             set_frames.end());
 
+  // The set in the other order, dynamic's reference.
+  const std::vector<tsdf::FrameInput> reversed(set_frames.rbegin(),
+                                               set_frames.rend());
+  const std::vector<vol::DepthInput> reversed_depths(reversed.begin(),
+                                                     reversed.end());
+
   auto integrator = tsdf::TsdfIntegrator::create(dev, alloc);
   CHECK(integrator.ok());
   for (const tsdf::IntegrationMode mode :
        {tsdf::IntegrationMode::Classic, tsdf::IntegrationMode::Dynamic}) {
-    auto one = make_grid(dev, alloc);
+    const bool classic = mode == tsdf::IntegrationMode::Classic;
+    // The other order moves the running average wherever the weight cap cuts
+    // it, so dynamic's cap lies past what two passes reach.
+    const float max_weight = classic ? 5.0f : 100.0f;
+    auto one = make_grid(dev, alloc);  // the reference
     auto set = make_grid(dev, alloc);
     CHECK(one.ok() && set.ok());
     // Twice, so the running average and the colour blend run too. Each pass
     // allocates every frame's band before fusing any, as the set does, and
-    // counts the blocks each grid stamped changed after its tick going in:
-    // four ticks a pass for one frame at a time, one for the set.
+    // counts the blocks each grid stamped changed after its tick going in: a
+    // tick a frame for one frame at a time, one for a set.
     for (int pass = 0; pass < 2; ++pass) {
       const std::uint32_t one_since = one->map().tick();
       const std::uint32_t set_since = set->map().tick();
-      for (int c = 0; c < kCameras; ++c) {
+      if (classic) {
+        for (int c = 0; c < kCameras; ++c) {
+          CHECK(settle([&](vol::AllocFailures* why) {
+                  return c == 1 ? one->map().allocate_from_depth(
+                                      views[1].depth.data(), views[1].cam, why)
+                                : one->map().allocate_from_depth(
+                                      depth_bufs[c], views[c].cam, why);
+                }) == 0);
+        }
+        for (int c = 0; c < kCameras; ++c) {
+          const tsdf::FrameInput& f = frames[c];
+          const vkc::Status fused =
+              c == 1
+                  ? integrator->integrate(one.value(), views[1].depth.data(),
+                                          f.camera, max_weight, mode, f.color)
+                  : integrator->integrate(one.value(), depth_bufs[c], f.camera,
+                                          max_weight, mode, f.color);
+          CHECK(fused.ok());
+        }
+        CHECK(one->map().tick() == one_since + std::uint32_t{kCameras});
+      } else {
         CHECK(settle([&](vol::AllocFailures* why) {
-                return c == 1 ? one->map().allocate_from_depth(
-                                    views[1].depth.data(), views[1].cam, why)
-                              : one->map().allocate_from_depth(
-                                    depth_bufs[c], views[c].cam, why);
+                return one->map().allocate_from_depth(reversed_depths, why);
               }) == 0);
+        CHECK(integrator->integrate(one.value(), reversed, max_weight, mode)
+                  .ok());
+        CHECK(one->map().tick() == one_since + 1);
       }
-      for (int c = 0; c < kCameras; ++c) {
-        const tsdf::FrameInput& f = frames[c];
-        const vkc::Status fused =
-            c == 1 ? integrator->integrate(one.value(), views[1].depth.data(),
-                                           f.camera, 5.0f, mode, f.color)
-                   : integrator->integrate(one.value(), depth_bufs[c], f.camera,
-                                           5.0f, mode, f.color);
-        CHECK(fused.ok());
-      }
-      CHECK(one->map().tick() == one_since + std::uint32_t{kCameras});
       auto dirty_one = changed_after(one.value(), one_since);
       CHECK(dirty_one.ok() && dirty_one.value() > 0);
       if (pass == 0) {
@@ -227,15 +300,15 @@ int main() {
       CHECK(settle([&](vol::AllocFailures* why) {
               return set->map().allocate_from_depth(depths, why);
             }) == 0);
-      CHECK(integrator->integrate(set.value(), set_frames, 5.0f, mode).ok());
+      CHECK(integrator->integrate(set.value(), set_frames, max_weight, mode)
+                .ok());
       CHECK(set->map().tick() == set_since + 1);
       auto dirty_set = changed_after(set.value(), set_since);
       CHECK(dirty_set.ok());
       CHECK(dirty_set.value() == dirty_one.value());
     }
-    std::printf("%s:\n",
-                mode == tsdf::IntegrationMode::Classic ? "classic" : "dynamic");
-    if (check_same(ctx, one.value(), set.value()) != 0) return 1;
+    std::printf("%s:\n", classic ? "classic" : "dynamic");
+    if (check_same(ctx, one.value(), set.value(), classic) != 0) return 1;
   }
 
   // A set with one bad frame -- here the last, its depth smaller than its
