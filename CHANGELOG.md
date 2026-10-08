@@ -101,6 +101,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `sensor/utils`: **`GpuFramePrep::prepare` is `prepare_batch` over a set
+  of one**, so a frame its checks refuse no longer times a `"frame prep"`
+  row.
 - examples: **`fuse_viewer` and `rig_viewer` hand meshes over through
   `mesh::MeshExchange`**, and their copies of the protocol go, with
   `viewer_common.hpp`'s `retire_and_release_mark` and `unbindable_reason`.
@@ -254,6 +257,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `sensor/utils`: **`GpuFramePrep` builds with `-fno-exceptions`**, and a host
+  with no memory to hold a new output refuses the frame `OutOfMemory`,
+  through `prepare` as through `prepare_batch`, with no exception. Test:
+  `recon_sensor_gpu_frame_prep_oom`.
 - `sensor/orbbec`: `OrbbecSensor::open` names the camera when the SDK throws
   while finding one asked for by serial, and when its factory intrinsics or
   extrinsic are refused, so a rig's failing camera is known. Test:

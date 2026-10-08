@@ -11,8 +11,10 @@ namespace vr_test {
 // replacement operators are compiled separately from their callers so GCC
 // does not inline delete's free and mistake it for a mismatched deallocation.
 struct AllocationFailure {
+  // While set, each throwing allocation records its size in `bytes`.
   bool measure = false;
   std::size_t bytes = 0;
+  // While set, the next nothrow allocation of `bytes` fails, once.
   bool armed = false;
   bool injected = false;
 };
