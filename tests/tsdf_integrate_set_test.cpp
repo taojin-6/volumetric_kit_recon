@@ -206,11 +206,11 @@ int gpu_main(vr_test::GpuContext& gpu) {
   // The set, with an empty frame second, and the list it allocates from.
   vr::DepthCameraParams empty_cam = views[1].cam;
   empty_cam.width = 0;
-  std::vector<tsdf::FrameInput> set_frames = frames;
-  set_frames.insert(
-      set_frames.begin() + 1,
-      tsdf::FrameInput{{vkc::StorageInput(views[1].depth.data()), empty_cam},
-                       &c1});
+  const std::vector<tsdf::FrameInput> set_frames{
+      frames[0],
+      {{vkc::StorageInput(views[1].depth.data()), empty_cam}, &c1},
+      frames[1],
+      frames[2]};
   const std::vector<vol::DepthInput> depths(set_frames.begin(),
                                             set_frames.end());
 
