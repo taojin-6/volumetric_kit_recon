@@ -39,8 +39,8 @@ include(FetchContent)
 # viewers' gfx checks its frames' timeline values with, and refuses an older
 # core.
 #
-# TODO: pin core main once its PR #18 merges, and a release tag once the core
-# tags one (v0.1.0).
+# TODO: pin the core's v0.1.0 tag once its stack (#17, #19 and #20, plus #18)
+# merges and is tagged.
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git

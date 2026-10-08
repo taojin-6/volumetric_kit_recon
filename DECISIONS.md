@@ -11493,7 +11493,8 @@ blocking upload, descriptor pool and set per remesh on the render thread.
 **What stays.** `MeshExchange` retires per frame slot: `begin_frame`
 still waits for a slot's last frame on its fence before handing the slot
 out. The pins are open PRs: gfx #123 (on #120 and #118) and the core's #18,
-which that gfx requires; both move to their mains once merged.
+which that gfx requires. gfx moves to its main once merged, and the core to
+its v0.1.0 tag once its stack (#17, #19 and #20, plus #18) merges.
 
 **Verified.** Apple M5 Max, macOS, Release with warnings as errors, Orbbec
 SDK 2.10.6, FFmpeg and the viewers; 65 of 65 tests pass.
