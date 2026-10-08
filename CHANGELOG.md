@@ -122,11 +122,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   validation layer's same-size allocations cannot consume its failure.
 - build: **the core pin moves to core #18's merge** (511fed0), including #17's
   `core_test_policy`, which recon's tests build with `VKC_BUILD_TEST_SUPPORT`.
-- `sensor/orbbec`: **the MJPEG and H.265 colour decoders run on one
-  `DecodeWorker`** (`decode_worker.hpp`, internal): the queue and what a
-  full one drops, the thread's start and stop, the counts, and the failure
-  that ends decoding, written once rather than in each decoder. Behaviour is
-  unchanged. Test: `recon_sensor_orbbec_decode_worker`.
+- `sensor/orbbec`: **both colour decoders decode on a `DecodeWorker`, one
+  per decoder** (`decode_worker.hpp`, internal): the queue and what a full
+  one drops, the thread's start and stop, the counts, and the failure that
+  ends decoding, written once rather than in each decoder. An H.265 pair the
+  queue has no memory to hold now makes the decoder wait for a key frame
+  from the pair after it, where it began waiting at the oldest pair queued;
+  behaviour is otherwise unchanged. Tests:
+  `recon_sensor_orbbec_decode_worker`, and `recon_sensor_orbbec_hevc` for a
+  queue that overflows.
 - `sensor/video`: **a `DecodedPicture` is its `YuvImage`**
   (`DecodedPicture::yuv`), with `pts` and `encoding` beside it (BREAKING):
   one description of a device picture, which a frame takes as its colour

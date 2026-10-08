@@ -723,10 +723,10 @@ target_link_libraries(recon_eval_mesh_distance_test
 vr_target_warnings(recon_eval_mesh_distance_test)
 add_test(NAME recon_eval_mesh_distance COMMAND recon_eval_mesh_distance_test)
 
-# The thread the Orbbec driver's colour decoders decode on (decode_worker.hpp),
-# driven by a fake decode. It names no SDK type, so it is tested without the
-# driver too, on every leg, the sanitizers' included; with exceptions, as the
-# driver is compiled, since it catches what a decode throws.
+# The worker each Orbbec colour decoder decodes on (decode_worker.hpp), driven
+# by a fake decode. It names no SDK type, so it is tested without the driver
+# too, on every leg, the sanitizers' included; with exceptions, as the driver is
+# compiled, since it catches what a decode throws.
 add_executable(recon_sensor_orbbec_decode_worker_test
                sensor_orbbec_decode_worker_test.cpp)
 target_link_libraries(recon_sensor_orbbec_decode_worker_test

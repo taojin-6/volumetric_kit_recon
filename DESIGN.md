@@ -1298,9 +1298,9 @@ and stays there, the picture carried through the mailbox by an SDK frame
 whose bytes only name it, so a copy of the frame owns nothing
 (`picture_frames.hpp`); for MJPEG it streams the camera's JPEGs, and each
 camera's `JpegColorDecoder` decodes them on a thread of its own onto the
-device. Both colour decoders run on one `DecodeWorker`
-(`decode_worker.hpp`), which owns the queue, what a full one drops, the
-thread, and the failure that ends decoding.
+device. Each colour decoder, MJPEG's and H.265's, decodes on a
+`DecodeWorker` of its own (`decode_worker.hpp`), which owns its queue, what
+a full one drops, its thread, and the failure that ends decoding.
 
 ### codec
 
