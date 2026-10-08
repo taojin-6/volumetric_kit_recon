@@ -444,6 +444,11 @@ entries relevant to your task; later amendments supersede earlier rules.
   `GpuFramePrep` shares one preparation path, and `-Werror` defaults on
   only in a top-level build.
 
+- [**2026-10-08**](#2026-10-08--the-examples-parse-their-command-lines-with-one-parser-declare-each-shared-flag-family-once-print-stage-rows-in-one-table-and-keep-their-reports-out-of-their-mains-amends-the-2026-09-27-eval-and-2026-10-03-codec-mesh-entries) —
+  The examples parse their command lines with one parser, declare each
+  shared flag family once, print stage rows in one table, and keep their
+  reports out of their mains.
+
 ## Decision record
 
 ### 2026-06-21 — Single Vulkan path (MoltenVK on Apple), like gfx.
@@ -5526,7 +5531,8 @@ that half percent. One was re-run: the 1 cm defaults' accuracy RMS reads
 `refactor(examples): keep codec_replica's entry point concise`). The player
 policy, the report printers and the sweep live in `examples/common`
 (`codec_stream.hpp`, `codec_sweep.hpp`). `main.cpp` is the example's story:
-options, setup, the fuse loop, the report.
+options, setup, the fuse loop, the report. *Amended 2026-10-08 (below):*
+every example's, its command line, flags and stage table included.
 
 **Verified.** The full suite passes, 35 of 35. `recon_eval_mesh_distance`
 replaces the example-header test: the closest point in every region of a
@@ -9401,7 +9407,9 @@ the float metres the conversion reads, so a triangle that collapses there
 counts as degenerate. Both codec examples share `parse_number.hpp` for their
 numeric flags, and `codec_mesh` grows its grid only for a capacity limit,
 retrying lock contention. These are consumer choices, so they stay outside
-the format loader.
+the format loader. *Amended 2026-10-08 (below):* `parse_number` is
+`cli.hpp`'s, and both examples declare their codec flags through
+`codec_flags.hpp`.
 Quantization-table candidates likewise remain codec-example policy.
 `codec_mesh` requires `VR_WITH_ASSIMP=ON`; the room codec, production codec
 library and tests build without it.
@@ -11376,6 +11384,52 @@ its allocation-failure regression, sensor-array processing, the retained
 keyframe and fusion allocation-failure tests also pass with the Khronos
 layer loaded and synchronization validation enabled. No live-camera or
 interactive viewer check was run.
+
+### 2026-10-08 — The examples parse their command lines with one parser, declare each shared flag family once, print stage rows in one table, and keep their reports out of their mains (amends the 2026-09-27 `eval` and 2026-10-03 codec-mesh entries).
+
+**The rule.** An example's `main.cpp` is its story, and what two examples
+share lives in `examples/common` (`examples/viewer` for the windows). A
+command line is `cli.hpp`'s `Cli`: each flag is declared once with the
+variable it sets and the name of its value, so the usage line is generated
+and cannot leave a flag out. A number is the whole argument and finite, so
+`--max-frames 10x` and `--width abc` are refused where `atoi` read 10 and 0.
+A flag family is declared and validated once (`FusionFlags`,
+`ReplicaFlags`, `OrbbecFlags`, `CodecFlags`, `WindowFlags`); the four-voxel
+band and the depth rule had been restated in five parsers, beside a strict
+`parse_number` only the codec examples used. Stage rows print through
+`stage_table.hpp`, one format with the device's share of each host span,
+where three printers differed. `fuse_replica`'s survey and extract reports
+and the viewers' panels and reports moved out of the mains with them.
+
+**What a command line sees.** A valid one runs as before. The spellings
+unify:
+- every example prints an error's cause and the whole usage line, and
+  exits 2;
+- a value below a flag's minimum is refused rather than raised to it:
+  `--stride`, `--remesh-every`, `--max-frames`, `--width` and `--height`
+  at 1; `--mesh-every`, `--dirty-every`, `--hold-ms`, `--free-after`,
+  `--sets` and `rig_viewer`'s `--frames` at 0;
+- `--dynamic` and `--static` refuse each other, as `--hevc` and `--mjpeg`
+  and `--lit` and `--normals` do;
+- every example that fuses takes the five fusion flags, so `fuse_render`
+  and `fuse_viewer` gain `--max-weight`, and `codec_replica` gains them and
+  `--cam-params`; its `--preload` reports its size as the others' does;
+- a depth end given alone is checked against the other's default by the
+  source, which names both values.
+
+**Not taken.** Splitting each viewer's fuse thread into a class of its own.
+Their `run()` keeps the shared-device bootstrap and the fuse thread, and the
+split waits for the bootstrap to be shared.
+
+**Verified.** Apple M5 Max, Release, every example built (Orbbec, FFmpeg,
+Assimp and the viewers). `recon_example_cli` covers `parse_number`, every
+`Cli` refusal and the generated usage, and each flag family's defaults and
+validation; `recon_example_stage_table` the table; and
+`recon_example_remesh_report` the survey's dilation on a device, failing
+with the dilation flipped. Before and after on room0: `fuse_replica`'s mesh
+is the same set of triangles, `codec_replica`'s bytes and distances and
+`codec_mesh`'s on Rafa2 print the same, and `fuse_render`'s PNG is
+byte-identical. Neither viewer nor `fuse_orbbec` was run.
 
 ## Measured lessons
 
