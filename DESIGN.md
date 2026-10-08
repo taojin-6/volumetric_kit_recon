@@ -935,9 +935,10 @@ allocation, at most `FuserConfig::max_grows_per_set` grows a set, ahead
 included; then one `integrate`. It does not retry lost lock races, which the
 allocation's own rounds handle and the next set asks for again. Blocks it
 could not place are reported in its `FuseReport` with their reasons, and the
-set fuses into the rest. Past `refuse_allocation_above` (off at 1) a set
-allocates nothing new. The fuser owns its integrator and remembers its
-grid's refusals, so it fuses one grid.
+set fuses into the rest. Past `refuse_allocation_above` (off at 1; with
+growth on, no lower than `kGrowThreshold`) a set allocates nothing new. The
+fuser owns its integrator and remembers its grid's refusals, so it fuses one
+grid.
 `MeshIntegrator` writes a triangle mesh's distance field instead
 (2026-09-27), **overwriting** every voxel of every block the band reaches:
 weight 1 within `trunc_dist` of the mesh, the codec inverse's fresh zeros
@@ -1327,10 +1328,11 @@ nothing else (`VoxelBlockGrid::attribute_count`), since a kept block would
 carry any other one stale. A grid too small for the frame is `OutOfMemory`,
 whether its heap has too few slots or its hash table cannot place the
 blocks. Both are recovered by growing the grid and decoding again; the
-decoder never grows one (a player calls `GridGrowth::grow`). Lock contention that outlasts four rounds is `IoError`, never
-`OutOfMemory`, and a free heap that refuses a removed block is
-`InvalidArgument`. A failure after the grid has changed leaves it holding neither
-frame until a decode succeeds. Both classes report `StageMetrics`
+decoder never grows one (a player calls `GridGrowth::grow`). Lock
+contention that outlasts four rounds is `IoError`, never `OutOfMemory`, and
+a free heap that refuses a removed block is `InvalidArgument`. A failure
+after the grid has changed leaves it holding neither frame until a decode
+succeeds. Both classes report `StageMetrics`
 (`"codec encode"` / `"codec decode"`). Their breakdown rows share no name
 except the map's own `"  ..active set"`. The private pieces under
 `src/volumetric_kit/recon/codec/` are the `DctTransform`, the rANS
@@ -1579,9 +1581,8 @@ landed; the stack continues:
 4. **Pipelined stages**: the core's `CommandBatch` submits without waiting,
    ordered by timeline semaphores; the per-set host waits go, in
    `tsdf::Fuser` (an allocation's failure count and occupancy read a set
-   late); then a
-   pipeline over acquire, prep, the grid chain (fuse, mesh, texture, still
-   serial) and consumers.
+   late); then a pipeline over acquire, prep, the grid chain (fuse, mesh,
+   texture, still serial) and consumers.
 5. **Later: mixed arrays** of fixed sensors and tracked ones (iPhones):
    nearest-frame members, registration of a tracked sensor's world, a network
    sensor with an ios sender, and clock offsets.

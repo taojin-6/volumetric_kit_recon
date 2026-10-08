@@ -137,7 +137,7 @@ struct Options {
   // Unlike a frustum survey this counts only blocks the integrator actually
   // changed: those whose `changed` stamp is newer than the last report's tick.
   int dirty_every = 0;
-  int num_buckets = 16384;  // initial map size; grows on overflow via resize
+  int num_buckets = 16384;  // initial map size; the fuser grows it
   bool preload = false;     // decode every frame up front (RAM for decode time)
 };
 

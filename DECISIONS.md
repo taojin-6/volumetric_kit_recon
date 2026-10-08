@@ -11123,7 +11123,9 @@ failures a set late, inside this loop, so the loop is now the library's.
   (`FuseReport`: both growth events, the grows, what was left out and why,
   the occupancy after), and the set fuses into the rest. Past
   `refuse_allocation_above` (off at 1) a set allocates nothing new and
-  still fuses.
+  still fuses. With growth on, `create` refuses a value below
+  `kGrowThreshold`: the set would stop allocating before a grow ahead is
+  due, and the grid would never grow again.
 - **Every recon caller fuses through it.** `fuse_replica`, `codec_replica`,
   `fuse_orbbec`, `fuse_render`, `fuse_viewer` and `rig_viewer` hold a
   `Fuser` where they held a `TsdfIntegrator`; `allocate_band` goes, and
@@ -11161,10 +11163,6 @@ races: the allocation re-dispatches while they resolve, and a residue is
 asked for again by the next set. A set allocates at most
 `max_grows_per_set` + 1 times. `allocate_band`'s five rounds over the
 allocation's own ten went.
-
-**The 2026-09-27 decoder entry**, amended: the decoder still refuses a grid
-too small for the frame, and the library now grows one; a player calls
-`GridGrowth::grow` with the frame's size.
 
 **What the iOS scanner does.** It is pinned to recon #168 and keeps
 `Core/GrowthPolicy` and its fuse loop until its I1 port adopts
