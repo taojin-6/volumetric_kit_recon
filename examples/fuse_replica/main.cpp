@@ -5,7 +5,8 @@
 // sequence in the Replica-SLAM layout (nvblox's fuse_replica dataset) through
 // the sensor tier's IRgbdSensor interface, prepares each frame on the GPU
 // (sensor::GpuFramePrep) as a camera's, fuses it into a sparse TSDF volume
-// (allocate the truncation band, then integrate depth + colour),
+// (tsdf::Fuser: grow the map ahead of need, allocate the truncation band,
+// then integrate depth + colour),
 // periodically extracts a marching-cubes mesh, and writes the final coloured
 // mesh to a binary PLY for inspection. This is the headless spine; the
 // live-viewer variant renders the growing mesh each frame through the
@@ -44,7 +45,7 @@
 #include "volumetric_kit/recon/sensor/rgbd_frame.hpp"
 #include "volumetric_kit/recon/sensor/rgbd_sensor.hpp"
 #include "volumetric_kit/recon/sensor/utils/gpu_frame_prep.hpp"
-#include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
+#include "volumetric_kit/recon/tsdf/fuser.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
@@ -263,12 +264,11 @@ vkc::Result<Options> parse_args(int argc, char** argv) {
   if (opt.max_frames < 1) {
     return vkc::Status::invalid_argument("--max-frames must be >= 1");
   }
-  // num_blocks = bucket_size (8) * num_buckets is an int32; keep the product in
+  // num_blocks = bucket_size * num_buckets is an int32; keep the product in
   // range so it cannot overflow to a negative that still passes validate().
-  constexpr std::int64_t kBucketSize = 8;
-  if (opt.num_buckets < 1 ||
-      static_cast<std::int64_t>(opt.num_buckets) * kBucketSize >
-          std::numeric_limits<std::int32_t>::max()) {
+  if (opt.num_buckets < 1 || static_cast<std::int64_t>(opt.num_buckets) *
+                                     vr_example::kExampleBucketSize >
+                                 std::numeric_limits<std::int32_t>::max()) {
     return vkc::Status::invalid_argument(
         "--buckets must be >= 1 and small enough that 8 * buckets fits int32");
   }
@@ -308,8 +308,7 @@ vkc::Status run(const Options& opt) {
   VKC_ASSIGN(vol::VoxelBlockGrid volume,
              vr_example::create_fusion_grid(device, allocator, opt.voxel,
                                             opt.trunc, opt.num_buckets));
-  VKC_ASSIGN(tsdf::TsdfIntegrator integrator,
-             tsdf::TsdfIntegrator::create(device, allocator));
+  VKC_ASSIGN(tsdf::Fuser fuser, tsdf::Fuser::create(device, allocator));
   VKC_ASSIGN(sensor::GpuFramePrep prep,
              sensor::GpuFramePrep::create(device, allocator));
   VKC_ASSIGN(mesh::MarchingCubes extractor,
@@ -381,7 +380,7 @@ vkc::Status run(const Options& opt) {
     }
     VKC_ASSIGN(const sensor::DeviceFrame frame,
                prep.prepare(*polled, &stage_totals));
-    VKC_TRY(vr_example::fuse_set(volume, integrator, {frame}, opt.max_weight,
+    VKC_TRY(vr_example::fuse_set(fuser, volume, {frame}, opt.max_weight,
                                  &stage_totals));
     ++fused;
 

@@ -95,10 +95,10 @@ int main() {
   CHECK(allocator.ok());
   auto volume =
       vr_example::create_fusion_grid(*device, *allocator, 0.05f, 0.15f, 256);
-  auto integrator = vr::tsdf::TsdfIntegrator::create(*device, *allocator);
+  auto fuser = vr::tsdf::Fuser::create(*device, *allocator);
   auto prep = sensor::GpuFramePrep::create(*device, *allocator);
   auto texturer = vr::texture::ProjectiveTexturer::create(*device, *allocator);
-  CHECK(volume.ok() && integrator.ok() && prep.ok() && texturer.ok());
+  CHECK(volume.ok() && fuser.ok() && prep.ok() && texturer.ok());
 
   std::vector<std::uint16_t> raw_depth(kPixels, 1000);
   std::vector<std::uint32_t> raw_color(kPixels, kColor);
@@ -115,12 +115,12 @@ int main() {
 
   // A rejected first frame must not invent a keyframe.
   frame.color_to_world[0][0] = 2.0;
-  CHECK(!vr_example::fuse_keyframe(*volume, *integrator, *prep, frame, keyframe,
+  CHECK(!vr_example::fuse_keyframe(*fuser, *volume, *prep, frame, keyframe,
                                    20.0f, nullptr)
              .ok());
   CHECK(!keyframe);
   frame.color_to_world = vr::camera::Mat4d(1.0);
-  CHECK(vr_example::fuse_keyframe(*volume, *integrator, *prep, frame, keyframe,
+  CHECK(vr_example::fuse_keyframe(*fuser, *volume, *prep, frame, keyframe,
                                   20.0f, nullptr)
             .ok());
   CHECK(check_retained({*device, *allocator}, *texturer, keyframe) == 0);
@@ -128,8 +128,8 @@ int main() {
   // A later bad pose fails preparation without discarding the good frame.
   frame.timestamp_ns = 2;
   frame.color_to_world[0][0] = 2.0;
-  const auto refused = vr_example::fuse_keyframe(
-      *volume, *integrator, *prep, frame, keyframe, 20.0f, nullptr);
+  const auto refused = vr_example::fuse_keyframe(*fuser, *volume, *prep, frame,
+                                                 keyframe, 20.0f, nullptr);
   CHECK(!refused.ok());
   CHECK(refused.message().find("GpuFramePrep") != std::string::npos);
   CHECK(check_retained({*device, *allocator}, *texturer, keyframe) == 0);
@@ -147,15 +147,18 @@ int main() {
   std::fill(raw_color.begin(), raw_color.end(), 0x001122CCu);
   frame.color_to_world = vr::camera::Mat4d(1.0);
   frame.color_to_world[3][0] = 0.25;
+  // A second fuser: the first remembers the grid it fuses.
+  auto depth_only_fuser = vr::tsdf::Fuser::create(*device, *allocator);
+  CHECK(depth_only_fuser.ok());
   const auto failed = vr_example::fuse_keyframe(
-      *depth_only, *integrator, *prep, frame, keyframe, 20.0f, nullptr);
+      *depth_only_fuser, *depth_only, *prep, frame, keyframe, 20.0f, nullptr);
   CHECK(failed.domain() == vkc::Status::Code::InvalidArgument);
   CHECK(failed.message().find("VoxelBlockGrid::attribute") !=
         std::string::npos);
   CHECK(check_retained({*device, *allocator}, *texturer, keyframe) == 0);
 
   // A subsequent successful fuse commits the new frame and its atlas.
-  CHECK(vr_example::fuse_keyframe(*volume, *integrator, *prep, frame, keyframe,
+  CHECK(vr_example::fuse_keyframe(*fuser, *volume, *prep, frame, keyframe,
                                   20.0f, nullptr)
             .ok());
   CHECK(keyframe && keyframe->timestamp_ns == 2);

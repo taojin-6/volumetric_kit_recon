@@ -422,6 +422,11 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-08**](#2026-10-08--the-single-camera-texture-pass-needs-the-vertex-to-face-the-depth-camera-and-both-texture-passes-check-a-view-one-way-amends-the-2026-08-11-per-vertex-and-2026-09-28-colour-camera-entries) —
   The single-camera texture pass needs the vertex to face the depth camera,
   and both texture passes check a view one way.
+- [**2026-10-08**](#2026-10-08--fusion-is-the-librarys-tsdffuser-grows-a-grid-ahead-of-need-allocates-a-sets-bands-grows-again-for-a-capacity-limit-within-one-per-set-bound-and-integrates-and-volumegridgrowth-decides-every-grow-a-refusal-expiring-rather-than-standing-amends-the-2026-09-27-decoder-entry) —
+  Fusion is the library's: `tsdf::Fuser` grows a grid ahead of need,
+  allocates a set's bands, grows again for a capacity limit within one
+  per-set bound and integrates, and `volume::GridGrowth` decides every
+  grow, a refusal expiring rather than standing.
 - [**2026-10-10**](#2026-10-10--only-the-owner-triggers-ci-and-the-runner-tooling-is-the-cores) —
   Only the owner triggers CI, by the repository's Actions policy; no job
   carries a fork guard. The runner tooling is the core's.
@@ -4861,6 +4866,11 @@ process released one. A set's frames are processed one camera after another
 (a `TODO(sensor)`). No real rig poses exist yet; that waits on calib.
 
 ### 2026-09-27 — `Encoder` and `Decoder` are the codec's public API: encoding drops never-observed blocks and sorts the rest, decoding makes a caller's grid hold exactly the frame by diffing its block set, everything checkable is checked before the grid is touched, and a grid too small for the frame is refused rather than grown.
+
+*Amended 2026-10-08 (the fusion entry, below):* the library grows grids:
+`volume::GridGrowth` decides every grow and `tsdf::Fuser` grows for fusion,
+so `allocate_band` is gone. The decoder still refuses a grid too small for
+the frame; a player grows it with `GridGrowth::grow`.
 
 The third of the 2026-09-26 entry's five PRs, and the first public API the
 codec has had: `codec/encoder.hpp` (`Encoder`, `EncoderConfig`) and
@@ -11078,6 +11088,113 @@ mutations fails `recon_texture_projective`: the agreeing-signs test (a 1 cm
 sheet's back textured, registered and with a colour camera 5 cm aside); the
 facing test without its zero-normal exemption; and the single-camera pass
 without the depth-range check (both bounds zero, and inverted).
+
+### 2026-10-08 — Fusion is the library's: `tsdf::Fuser` grows a grid ahead of need, allocates a set's bands, grows again for a capacity limit within one per-set bound and integrates, and `volume::GridGrowth` decides every grow, a refusal expiring rather than standing (amends the 2026-09-27 decoder entry).
+
+The per-set fusion chain was example code (`examples/common/fuse_frame.hpp`)
+and the iOS scanner's, with different rules. recon's grew only once an
+allocation had failed, so a live map ran up to the occupancy the map's own
+header says to grow at and on into the band where every insert is slowest.
+The scanner grew ahead at `kGrowThreshold` with a memory check, and its
+reactive loop skipped that check. Roadmap step 4 reads an allocation's
+failures a set late, inside this loop, so the loop is now the library's.
+
+**The rule.**
+- **`volume::GridGrowth` decides every grow** (`volume/grid_growth.hpp`), by
+  a `GrowthPolicy`: whether to grow at all, a bucket ceiling (by default the
+  grid's own, `VoxelBlockGrid::max_num_buckets`), and a `headroom` callback.
+  `grow_ahead` doubles once `load_factor()` exceeds `kGrowThreshold`;
+  `grow` doubles, or goes to a size the caller asks for, after an
+  allocation hit a capacity limit. Both clamp to the ceiling, read the
+  headroom only once a grow is due, and decline a grow whose
+  `VoxelBlockGrid::bytes_at` (every attribute array and the map's
+  grid-sized table at the new size: what the resize allocates beside the
+  live grid) it will not cover. A decline, or a resize that ran out of
+  memory (`OutOfMemory`, or an out-of-memory `VkResult`), holds at that size
+  for `retry_after` ticks of the map's clock (60, one a fused set) and is
+  then asked again; any other resize failure is an error. A grow is a
+  `"resize"` row.
+- **`tsdf::Fuser` is the fusion driver** (`tsdf/fuser.hpp`). It owns a
+  `TsdfIntegrator` and a `GridGrowth` for the grid it fuses. `fuse` takes a
+  set of `FrameInput`s: a grow ahead, every band in one
+  `allocate_from_depth`, and on a capacity limit a grow and one more
+  allocation, until the set has grown `max_grows_per_set` times (2, ahead
+  included); then one `integrate`. Blocks it could not place are reported
+  (`FuseReport`: both growth events, the grows, what was left out and why,
+  the occupancy after), and the set fuses into the rest. Past
+  `refuse_allocation_above` (off at 1) a set allocates nothing new and
+  still fuses.
+- **Every recon caller fuses through it.** `fuse_replica`, `codec_replica`,
+  `fuse_orbbec`, `fuse_render`, `fuse_viewer` and `rig_viewer` hold a
+  `Fuser` where they held a `TsdfIntegrator`; `allocate_band` goes, and
+  `fuse_frame.hpp` keeps the `DeviceFrame` hand-off (`fuse_set`, with
+  `device_color`'s encoding declaration), the lines a set's report prints,
+  the example grid and the viewer's keyframe helper. `codec_mesh`'s mesh
+  allocation and the codec player's `decode_growing` grow through
+  `GridGrowth::grow`, so the doubling and its int32 guard have one home.
+
+**Why these tiers.** Growing is a grid's: the codec player and the mesh
+allocation grow grids and link no `tsdf`, so the decision is the volume
+tier's. The set's sequence integrates, so it is the `tsdf` tier's. A
+`DeviceFrame` is `sensor/utils`', which no fusion tier sees, so its
+hand-off stays at the caller.
+
+**The scanner's policy, with its holes fixed.** Its semantics carry over:
+the strict test against `kGrowThreshold`, the ceiling, the headroom read
+only once a grow is due, a memory decline that expires after 60 frames, and
+the occupancy past which it stops allocating (its 0.85, here an opt-in).
+Four of its behaviours do not:
+- A reading at the limit is zero headroom and declines. The scanner read
+  the kernel's clamped 0 as an unknown ceiling and approved the doubling.
+- A resize the allocator refused expires as a memory decline does. The
+  scanner pinned growth at that size for the rest of the scan, but since the
+  core migration the allocator refuses at the heap budget, a pressure that
+  can pass.
+- The grow for a capacity limit goes through the same decision, headroom
+  and refusals included. The scanner's reactive loop resized directly and
+  could request the doubling its headroom check had just declined.
+- A failed grow never skips the set's integration. The scanner returned
+  before integrating.
+
+**Retries are bounded in one place.** The fuser does not retry lost lock
+races: the allocation re-dispatches while they resolve, and a residue is
+asked for again by the next set. A set allocates at most
+`max_grows_per_set` + 1 times. `allocate_band`'s five rounds over the
+allocation's own ten went.
+
+**The 2026-09-27 decoder entry**, amended: the decoder still refuses a grid
+too small for the frame, and the library now grows one; a player calls
+`GridGrowth::grow` with the frame's size.
+
+**What the iOS scanner does.** It is pinned to recon #168 and keeps
+`Core/GrowthPolicy` and its fuse loop until its I1 port adopts
+`tsdf::Fuser`, with `headroom` the least of its jetsam and GPU working-set
+headroom, its `max_buckets` and `refuse_allocation_above = 0.85`. Its
+`kAttributeBytesPerVoxel` then goes, as `bytes_at` reads the grid's own
+attributes. If the port prepares frames with `GpuFramePrep`, the
+`DeviceFrame` hand-off needs a library home first.
+
+**Not done.** Growing the table and the block pool apart (a chain or
+table limit answered without doubling every attribute array) is a
+follow-up; every grow still doubles both.
+
+**Verified.** Apple M5 Max, macOS, Release with warnings as errors, Orbbec
+SDK 2.10.6, FFmpeg and the viewers: the 59 tests pass. `recon_volume_grid_growth`
+covers grow-ahead past the threshold only, the ceiling, growth off, a
+declined headroom (0 included) against an unknown one, a refusal holding
+for `retry_after` ticks by either entry point, and a resize whose rehash
+cannot place its blocks being asked again rather than never.
+`recon_tsdf_fuser` fuses three cameras round a sphere from two buckets,
+growing for capacity and ahead on the way, into the grid the tier calls give
+on a table with room, bit for bit; grows ahead before any allocation fails;
+and keeps fusing when the headroom, the policy, the per-set bound or a
+failed resize stops a grow. Each fix above was checked to fail its test
+when reverted. On room0, the first 200 frames at 2 cm, `fuse_replica`
+gives 309,353 triangles with the default table, which never grows, as on
+2026-10-07, and the same triangles bit for bit (positions, normals,
+colours) from 512 and 1024 buckets, growing on the way. From 64 buckets
+the first frame needs four doublings and the bound allows two, so it
+leaves 121,449 blocks out, says so, and the mesh has 99 fewer triangles.
 
 ### 2026-10-10 — Only the owner triggers CI, and the runner tooling is the core's.
 

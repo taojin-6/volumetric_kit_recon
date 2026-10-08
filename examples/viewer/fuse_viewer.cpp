@@ -80,7 +80,7 @@
 #include <imgui_impl_glfw.h>
 #include <glm/glm.hpp>
 
-#include "fuse_frame.hpp"  // vr_example::fuse_set
+#include "fuse_frame.hpp"  // vr_example::fuse_keyframe
 // Not for to_gfx_mesh -- seam B deleted this file's only call to it. Kept for
 // the vertex-layout static_asserts it carries, which matter MORE without the
 // host copy that used to justify them: gfx now reads recon's arena in place
@@ -111,7 +111,7 @@
 #include "volumetric_kit/recon/sensor/rgbd_sensor.hpp"
 #include "volumetric_kit/recon/sensor/utils/gpu_frame_prep.hpp"
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
-#include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
+#include "volumetric_kit/recon/tsdf/fuser.hpp"
 #include "volumetric_kit/recon/volume/frustum.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_grid.hpp"
@@ -571,14 +571,14 @@ int run(GLFWwindow* window, const Options& opt) {
     return 1;
   }
   vol::VoxelBlockGrid volume = std::move(grid_result).value();
-  auto integrator_result = rtsdf::TsdfIntegrator::create(rdevice, rallocator);
-  if (!integrator_result) {
-    std::fprintf(stderr, "integrator: %s\n",
-                 integrator_result.status().message().c_str());
+  auto fuser_result = rtsdf::Fuser::create(rdevice, rallocator);
+  if (!fuser_result) {
+    std::fprintf(stderr, "fuser: %s\n",
+                 fuser_result.status().message().c_str());
     return 1;
   }
-  rtsdf::TsdfIntegrator integrator = std::move(integrator_result).value();
-  // The frame prep, like the integrator, used only on the fuse thread below.
+  rtsdf::Fuser fuser = std::move(fuser_result).value();
+  // The frame prep, like the fuser, used only on the fuse thread below.
   auto prep_result = rsensor::GpuFramePrep::create(rdevice, rallocator);
   if (!prep_result) {
     std::fprintf(stderr, "frame prep: %s\n",
@@ -625,7 +625,7 @@ int run(GLFWwindow* window, const Options& opt) {
     return 1;
   }
   rmesh::MarchingCubes extractor = std::move(extractor_result).value();
-  // Projective texturer (recon device; used, like the integrator/extractor,
+  // Projective texturer (recon device; used, like the fuser and extractor,
   // only on the fuse thread below). Cheap to keep even when --no-texture, but
   // build it only when texturing so the disabled path stays a pure A/B.
   std::optional<rtex::ProjectiveTexturer> texturer;
@@ -1113,12 +1113,12 @@ int run(GLFWwindow* window, const Options& opt) {
           }
           continue;
         }
-        // Prepare, allocate the band (growing on overflow), and integrate.
-        // Each tier fills its own stage rows. Commit the new keyframe only
-        // after all three succeed; a failure still remeshes with the previous
-        // frame's texture. The error names the stage that stopped fusion.
+        // Prepare, then fuse (grow ahead, allocate the band, integrate). Each
+        // tier fills its own stage rows. Commit the new keyframe only after
+        // both succeed; a failure still remeshes with the previous frame's
+        // texture. The error names the stage that stopped fusion.
         const vkc::Status fuse_status =
-            vr_example::fuse_keyframe(volume, integrator, prep, *polled.value(),
+            vr_example::fuse_keyframe(fuser, volume, prep, *polled.value(),
                                       last_frame, 20.0f, &fuse_stages);
         if (!fuse_status.ok()) {
           std::fprintf(stderr, "fuse_viewer: frame %zu: %s\n", i,

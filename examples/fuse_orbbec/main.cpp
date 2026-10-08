@@ -5,7 +5,7 @@
 // synced rig of them. Reads its cameras (sensor::OrbbecSensor) as a
 // sensor::SensorArray, which groups a rig's frames by trigger and prepares each
 // set on the GPU in one batch, fuses it into a sparse TSDF volume
-// (examples/common/fuse_frame.hpp), and after --frames frames extracts a
+// (tsdf::Fuser), and after --frames frames extracts a
 // marching-cubes mesh and writes it to a binary PLY.
 //
 //   fuse_orbbec [--serial SN | --rig sync.json [--apply-sync]]
@@ -59,7 +59,7 @@
 #include "volumetric_kit/recon/sensor/orbbec/orbbec_sync_config.hpp"
 #include "volumetric_kit/recon/sensor/rgbd_sensor.hpp"
 #include "volumetric_kit/recon/sensor/utils/gpu_frame_prep.hpp"
-#include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
+#include "volumetric_kit/recon/tsdf/fuser.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_grid.hpp"
 
@@ -400,8 +400,7 @@ vkc::Status run(const Options& opt) {
   VKC_ASSIGN(
       vol::VoxelBlockGrid volume,
       vr_example::create_fusion_grid(device, allocator, opt.voxel, opt.trunc));
-  VKC_ASSIGN(tsdf::TsdfIntegrator integrator,
-             tsdf::TsdfIntegrator::create(device, allocator));
+  VKC_ASSIGN(tsdf::Fuser fuser, tsdf::Fuser::create(device, allocator));
   VKC_ASSIGN(mesh::MarchingCubes extractor,
              mesh::MarchingCubes::create(device, allocator, {}));
 
@@ -468,7 +467,7 @@ vkc::Status run(const Options& opt) {
       }
       take.push_back(frame);
     }
-    VKC_TRY(vr_example::fuse_set(volume, integrator, take, opt.max_weight,
+    VKC_TRY(vr_example::fuse_set(fuser, volume, take, opt.max_weight,
                                  &stage_totals));
     fused += static_cast<int>(take.size());
     if (fused / 100 > reported / 100) {

@@ -34,7 +34,7 @@
 #include "volumetric_kit/recon/io/ply_writer.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
 #include "volumetric_kit/recon/sensor/utils/gpu_frame_prep.hpp"
-#include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
+#include "volumetric_kit/recon/tsdf/fuser.hpp"
 
 namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
@@ -148,8 +148,7 @@ vkc::Status run(const Options& opt) {
   VKC_ASSIGN(vr::volume::VoxelBlockGrid volume,
              vr_example::create_fusion_grid(device, allocator, opt.voxel, trunc,
                                             kBuckets));
-  VKC_ASSIGN(vr::tsdf::TsdfIntegrator integrator,
-             vr::tsdf::TsdfIntegrator::create(device, allocator));
+  VKC_ASSIGN(vr::tsdf::Fuser fuser, vr::tsdf::Fuser::create(device, allocator));
   VKC_ASSIGN(vr::sensor::GpuFramePrep prep,
              vr::sensor::GpuFramePrep::create(device, allocator));
   VKC_ASSIGN(mesh::MarchingCubes extractor,
@@ -173,8 +172,8 @@ vkc::Status run(const Options& opt) {
       continue;
     }
     VKC_ASSIGN(const vr::sensor::DeviceFrame prepared, prep.prepare(*frame));
-    VKC_TRY(vr_example::fuse_set(volume, integrator, {prepared}, kMaxWeight,
-                                 nullptr));
+    VKC_TRY(
+        vr_example::fuse_set(fuser, volume, {prepared}, kMaxWeight, nullptr));
     ++fused;
     if (opt.encode_every > 0 && fused % std::size_t(opt.encode_every) == 0) {
       VKC_TRY(stream.code(volume));

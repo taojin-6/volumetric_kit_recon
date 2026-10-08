@@ -1326,8 +1326,8 @@ checked before the grid is touched. The attributes must be `tsdf` and `weight` a
 nothing else (`VoxelBlockGrid::attribute_count`), since a kept block would
 carry any other one stale. A grid too small for the frame is `OutOfMemory`,
 whether its heap has too few slots or its hash table cannot place the
-blocks. Both are recovered by `resize` and decoding again; the library never
-grows a grid. Lock contention that outlasts four rounds is `IoError`, never
+blocks. Both are recovered by growing the grid and decoding again; the
+decoder never grows one (a player calls `GridGrowth::grow`). Lock contention that outlasts four rounds is `IoError`, never
 `OutOfMemory`, and a free heap that refuses a removed block is
 `InvalidArgument`. A failure after the grid has changed leaves it holding neither
 frame until a decode succeeds. Both classes report `StageMetrics`
@@ -1459,10 +1459,10 @@ now private implementation dependencies of the installed I/O library.
 ## Examples
 
 (`examples/`.) Every example that fuses prepares its frames on the GPU
-(`sensor::GpuFramePrep`) and fuses them through
-`examples/common/fuse_frame.hpp`'s `fuse_set`: every frame's band in one
-allocation, the map grown on overflow, then every frame in one integrate,
-each frame's encoding declaration carried across, into the one grid layout
+(`sensor::GpuFramePrep`) and fuses them through `tsdf::Fuser`, by
+`examples/common/fuse_frame.hpp`'s `fuse_set`, which hands each
+`DeviceFrame` over with its encoding declaration and prints what a set did
+to the grid (a grow, a declined one, blocks left out), into the one grid layout
 `grid_layout.hpp` defines, which its `create_fusion_grid` builds and
 `codec_replica`'s player shares. The four dataset examples poll their frames
 through `sensor::IRgbdSensor&` — the fuse loop never learns what is behind
@@ -1577,8 +1577,9 @@ landed; the stack continues:
 3. **Luma readback** in `sensor/utils`, wherever the decoder left the
    picture, for calib's detector.
 4. **Pipelined stages**: the core's `CommandBatch` submits without waiting,
-   ordered by timeline semaphores; the per-set host waits go (an
-   allocation's failure count and occupancy read a set late); then a
+   ordered by timeline semaphores; the per-set host waits go, in
+   `tsdf::Fuser` (an allocation's failure count and occupancy read a set
+   late); then a
    pipeline over acquire, prep, the grid chain (fuse, mesh, texture, still
    serial) and consumers.
 5. **Later: mixed arrays** of fixed sensors and tracked ones (iPhones):

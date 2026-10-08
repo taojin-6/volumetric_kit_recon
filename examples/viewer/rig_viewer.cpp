@@ -112,7 +112,7 @@
 #include "volumetric_kit/recon/sensor/utils/gpu_frame_prep.hpp"
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
 #include "volumetric_kit/recon/texture/texture_atlas.hpp"
-#include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
+#include "volumetric_kit/recon/tsdf/fuser.hpp"
 #include "volumetric_kit/recon/volume/frustum.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
@@ -814,7 +814,7 @@ int run(GLFWwindow* window, const Options& opt) {
                  cameras);
   }
 
-  // --- recon: volume, integrator, extractor, texturer ----------------------
+  // --- recon: volume, fuser, extractor, texturer --------------------------
   auto grid_result =
       vr_example::create_fusion_grid(rdevice, rallocator, opt.voxel, opt.trunc);
   if (!grid_result) {
@@ -822,13 +822,13 @@ int run(GLFWwindow* window, const Options& opt) {
     return 1;
   }
   vol::VoxelBlockGrid volume = std::move(grid_result).value();
-  auto integrator_result = rtsdf::TsdfIntegrator::create(rdevice, rallocator);
-  if (!integrator_result) {
-    std::fprintf(stderr, "integrator: %s\n",
-                 integrator_result.status().message().c_str());
+  auto fuser_result = rtsdf::Fuser::create(rdevice, rallocator);
+  if (!fuser_result) {
+    std::fprintf(stderr, "fuser: %s\n",
+                 fuser_result.status().message().c_str());
     return 1;
   }
-  rtsdf::TsdfIntegrator integrator = std::move(integrator_result).value();
+  rtsdf::Fuser fuser = std::move(fuser_result).value();
   // What gfx needs of the mesh buffers, as fuse_viewer states it: the draw's
   // usage bits, both queue families, and a ring a slot deeper than the frames
   // in flight. Unshared, for the several-view texturing.
@@ -1423,7 +1423,7 @@ int run(GLFWwindow* window, const Options& opt) {
         const std::vector<std::optional<rsensor::DeviceFrame>>& frames =
             prepared.value().frames;
         const vkc::Status fused = vr_example::fuse_set(
-            volume, integrator, frames, max_weight.load(), &fuse_stages,
+            fuser, volume, frames, max_weight.load(), &fuse_stages,
             dynamic_on.load() ? rtsdf::IntegrationMode::Dynamic
                               : rtsdf::IntegrationMode::Classic);
         if (!fused.ok()) {
