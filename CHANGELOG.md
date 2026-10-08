@@ -89,6 +89,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- examples: **every example fuses through `tsdf::Fuser`**, so the live
+  rig grows its map ahead of need rather than after a failed allocation,
+  and a set the map cannot hold fuses what fits and says what it left out.
+  `allocate_band` goes from `examples/common/fuse_frame.hpp`, and
+  `codec_mesh` and the codec player grow through `GridGrowth::grow`.
 - build: **the core pin moves to core #15** (a8b63d1), which adds
   `CommandBatch::submit_async`, for the pipelined stages to come; recon's
   calls are unchanged. gfx, pinned at core #13, builds against it.

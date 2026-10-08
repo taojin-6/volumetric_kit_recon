@@ -5,9 +5,10 @@
 
 // A codec stream as a player sees it: encode a grid, decode the frame into a
 // player grid built from the first frame's header, and keep the totals the
-// examples report. The player-side policy lives here -- growing the grid when
-// a frame outgrows it, retrying lock contention -- because it is a player's,
-// not the library's (the Decoder refuses rather than grows).
+// examples report. The player-side policy lives here -- when to grow the grid
+// for a frame that outgrows it, retrying lock contention -- because it is a
+// player's, not the decoder's (the Decoder refuses rather than grows); the
+// grow itself is the volume tier's (volume::GridGrowth).
 
 #include <algorithm>
 #include <cstdint>
@@ -26,6 +27,7 @@
 #include "volumetric_kit/recon/codec/decoder.hpp"
 #include "volumetric_kit/recon/codec/encoder.hpp"
 #include "volumetric_kit/recon/eval/mesh_distance.hpp"
+#include "volumetric_kit/recon/volume/grid_growth.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 
 namespace vr_example {
@@ -62,7 +64,8 @@ inline vkc::Result<vr::volume::VoxelBlockGrid> player_grid(
 }
 
 /// @brief Decode, growing the grid on OutOfMemory -- the recovery the
-///        Decoder names -- and decoding again, twice at most, on IoError.
+///        Decoder names -- to at least the frame's @ref player_buckets, and
+///        decoding again, twice at most, on IoError.
 ///
 /// IoError is how the Decoder reports bucket-lock contention that outlasted
 /// its own rounds, which another decode clears, and nothing else; every
@@ -75,6 +78,7 @@ inline vkc::Status decode_growing(vr::codec::Decoder& dec, const Bytes& frame,
   constexpr int kContendedRetries = 2;
   VKC_ASSIGN(const vr::codec::FrameInfo info,
              vr::codec::read_frame_info(frame.data(), frame.size()));
+  vr::volume::GridGrowth growth;
   int contended = 0;
   for (;;) {
     vkc::StageMetrics attempt;
@@ -85,14 +89,13 @@ inline vkc::Status decode_growing(vr::codec::Decoder& dec, const Bytes& frame,
       return s;
     }
     if (s.domain() == vkc::Status::Code::OutOfMemory) {
-      const std::int64_t grown =
-          std::max<std::int64_t>(2 * std::int64_t(grid.grid().num_buckets),
-                                 player_buckets(info.block_count));
-      if (grown * kExampleBucketSize >
-          std::numeric_limits<std::int32_t>::max()) {
-        return s;
+      VKC_ASSIGN(const vr::volume::GrowthEvent grown,
+                 growth.grow(grid, player_buckets(info.block_count)));
+      if (!grown.grew()) {
+        return grown.outcome == vr::volume::GrowthOutcome::ResizeFailed
+                   ? grown.error
+                   : s;
       }
-      VKC_TRY(grid.resize(std::int32_t(grown)));
       ++*grows;
     } else if (s.domain() != vkc::Status::Code::IoError ||
                ++contended > kContendedRetries) {
