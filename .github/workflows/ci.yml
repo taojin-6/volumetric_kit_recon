@@ -15,9 +15,7 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# A pull request from a fork gets no CI (DECISIONS.md, 2026-10-08): every job
-# below but `required` carries the fork guard `if:`, so the workflows it calls
-# never start, and `required` fails. lint's `fork guards` job checks both.
+# Every job but `required` carries the fork guard (DECISIONS.md, 2026-10-08).
 jobs:
   build:
     name: ${{ matrix.os }}

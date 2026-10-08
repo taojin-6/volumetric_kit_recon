@@ -40,8 +40,9 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
-      # TODO: re-pin to the merge commit of volumetric_kit_core#16 once it
-      # lands; this is that pull request's head.
+      # TODO: this is volumetric_kit_core#16's head. Once it lands, move the
+      # core pin in third_party/CMakeLists.txt to a commit with tools/ci and
+      # read this ref from that GIT_TAG, so recon pins the core once.
       - uses: actions/checkout@v7
         with:
           repository: taojin-6/volumetric_kit_core

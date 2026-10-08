@@ -414,9 +414,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   normalization after a write; the tolerance is 0.4 of a frame period, and
   `OrbbecRig`, its start order and the public `TriggerGrouper` go.
 - [**2026-10-08**](#2026-10-08--a-pull-request-from-a-fork-gets-no-ci-and-the-runner-tooling-is-the-cores) —
-  A pull request from a fork gets no CI: every job is skipped for it and
-  `required` fails, lint checks both, and the core's runner hook is the
-  backstop. The runner tooling is the core's.
+  A pull request from a fork gets no CI, hosted jobs included; lint runs the
+  core's guard checker. The runner tooling is the core's.
 
 ## Decision record
 
@@ -10923,26 +10922,18 @@ wait. One camera fused at 30 fps with and without `--host-clock`. Not run:
 
 ### 2026-10-08 — A pull request from a fork gets no CI, and the runner tooling is the core's.
 
-recon is public, and its build and viewer legs run on self-hosted runners:
-persistent machines, the Mac's jobs in its logged-in user session. A fork's
-pull request runs nothing here, hosted jobs included. To test one, a
-maintainer pushes its branch to this repository and opens a pull request from
-there.
+The core's decision
+[Fork pull requests get no self-hosted CI](https://github.com/taojin-6/volumetric_kit_core/blob/main/DECISIONS.md#fork-pull-requests-get-no-self-hosted-ci)
+holds here, with its rationale. The runner tooling is the core's
+`tools/runners`; recon keeps no copy.
 
-- **The workflows skip and fail.** Every job of `ci.yml` but the `required`
-  gate carries the fork guard, so the workflows it calls never start, and the
-  gate fails, since a job skipped by its `if:` counts as passed.
-  lint's `fork guards` job runs the core's `tools/ci/check_fork_guards.py`,
-  from a pinned checkout, on `.github/workflows`, so an edit that drops either
-  fails CI.
-- **A fork's pull request can edit those guards out**, since GitHub runs a
-  `pull_request` workflow from the pull request itself. The repository's
-  approval setting for fork pull requests is the first gate, and the
-  job-started hook the core's runner tooling installs on each runner, which
-  refuses the job on the host, is the backstop.
-- **The runner tooling has one copy, the core's
-  [`tools/runners`](https://github.com/taojin-6/volumetric_kit_core/tree/main/tools/runners)**,
-  with its guide; recon keeps none.
+- **No job runs for a fork's pull request, the hosted ones included.**
+- **lint's `fork guards` job runs the core's `tools/ci/check_fork_guards.py`**
+  on `.github/workflows`, from a pinned checkout of the core.
+- **A fork's pull request can edit the guards out**, so the repository's
+  approval setting for fork pull requests, "Require approval for all external
+  contributors", is the first gate, and the core's runner hook is the
+  backstop.
 
 ## Measured lessons
 
