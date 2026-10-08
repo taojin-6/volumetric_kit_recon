@@ -415,6 +415,9 @@ entries relevant to your task; later amendments supersede earlier rules.
   `OrbbecRig`, its start order and the public `TriggerGrouper` go.
 - [**2026-10-08**](#2026-10-08--fusion-samples-at-integer-pixel-centres-and-refuses-a-non-finite-camera-amends-the-2026-07-06-depth-sampling-entry) —
   Fusion samples at integer pixel centres and refuses a non-finite camera.
+- [**2026-10-08**](#2026-10-08--the-single-camera-texture-pass-needs-the-vertex-to-face-the-depth-camera-and-both-texture-passes-check-a-view-one-way-amends-the-2026-08-11-per-vertex-and-2026-09-28-colour-camera-entries) —
+  The single-camera texture pass needs the vertex to face the depth camera,
+  and both texture passes check a view one way.
 
 ## Decision record
 
@@ -2907,6 +2910,10 @@ name** — the same fix `SparsePushConstants` already applies to its own adjacen
 same-typed scalars.
 
 ### 2026-08-11 — Projective texturing decides visibility per *vertex*, and a negative `uv0` carries its atlas coordinate rather than discarding it (amends the 2026-07-07 texture-tier decision, and retires the `share_vertices` refusal the 2026-08-04 entry records).
+
+*Amended 2026-10-08 (below):* a vertex is textured only where its normal
+points toward the depth camera, and a view whose depth range admits no sample
+is refused.
 
 `ProjectiveTexturer` refused any mesh built with
 `MarchingCubesConfig::share_vertices`. It decided visibility per **triangle**
@@ -7349,6 +7356,9 @@ silent, and an exported picture buffer was already out of the BAR.
 
 ### 2026-09-28 — Projective texturing takes a colour camera of its own and depth on the device: the depth camera decides what is visible, its map what the colour camera sees, and the colour camera gives the coordinate; a view's device depth and coverage are copied on the device rather than staged.
 
+*Amended 2026-10-08 (below):* per vertex, the normal must point toward both
+cameras, not only put them on one side.
+
 **The rule.** A `TextureView` may carry a `color_camera`, the camera its
 tile's image was taken with; its depth as a `depth_buffer` on the device in
 place of the host `depth` array, exactly one of the two; and a `coverage`, the
@@ -10966,6 +10976,34 @@ infinite poses, focal lengths, principal points and depth bounds, each
 refused with the tick unchanged). The kernel's negated projection has no
 test of its own: with the host refusal, no finite camera gives it a NaN.
 Not run: `fuse_orbbec` and `rig_viewer` on the rig.
+
+### 2026-10-08 — The single-camera texture pass needs the vertex to face the depth camera, and both texture passes check a view one way (amends the 2026-08-11 per-vertex and 2026-09-28 colour-camera entries).
+
+**The rule.**
+- **The vertex faces both cameras.** The single-camera pass textures a
+  vertex only where its normal points toward the depth camera and the colour
+  camera, where the two signs only had to agree; a zero normal still passes.
+  It is the per-vertex form of the several-view pass's facing test.
+- **One view check:** one depth, a depth map, a depth range with
+  `min_depth < max_depth`, and an image. Each pass then checks the depth and
+  coverage buffers as it uses them, bound in place or copied. The
+  single-camera overloads that take a depth pointer build a `TextureView`
+  and go through the same path.
+
+**Why.**
+- With a registered image, or both cameras behind the surface, the two signs
+  agree. The back of a sheet thinner than the occlusion threshold lies
+  within it of the front the depth camera measured, so it took the front's
+  image: the case the several-view pass's facing test exists for.
+- Only the several-view pass refused an empty depth range, under which the
+  single-camera pass carried every vertex and returned OK.
+
+**Verified.** On the entry above's build, the 57 tests pass, the texture
+tests with no message from the Khronos validation layer. Each of these
+mutations fails `recon_texture_projective`: the agreeing-signs test (a 1 cm
+sheet's back textured, registered and with a colour camera 5 cm aside), and
+the single-camera pass without the depth-range check (both bounds zero, and
+inverted).
 
 ## Measured lessons
 

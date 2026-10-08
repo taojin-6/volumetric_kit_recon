@@ -997,9 +997,11 @@ chooses per triangle and so refuses a shared mesh (2026-09-28).
 
 `ProjectiveTexturer` rewrites every `Vertex::uv0` against one
 posed frame, one thread per **vertex**: it is kept where the vertex is in
-front, in frame, and **unoccluded** (projected depth agrees with the depth
-map). Three outcomes, not two, and a consumer must test the **sign** and
-never `== (-1,-1)`: a visible vertex gets `uv`, one in frame but occluded
+front, in frame, its normal points toward the camera (a zero normal passes),
+and it is **unoccluded** (projected depth agrees with the depth map), so the
+back of a sheet thinner than the threshold does not take its front's image
+(2026-10-08). Three outcomes, not two, and a consumer must test the **sign**
+and never `== (-1,-1)`: a visible vertex gets `uv`, one in frame but occluded
 gets `-uv - 1` — negative, so gfx takes the per-vertex-colour path, but the
 coordinate is *carried* so a mixed triangle interpolates between real
 projections instead of smearing toward the atlas origin — and one behind the
@@ -1023,11 +1025,12 @@ that see its **front** and all three of its vertices, a `fallback` view
 only where no other does, and all three point into that view's tile. Per
 triangle because vertices in different tiles
 would interpolate across the atlas, so that path needs an unshared mesh and
-refuses a shared one, as it refuses a view with no depth range and tiles
-that overlap (2026-09-28). With a colour camera the depth camera still
-decides visibility, and the coordinate is the colour camera's, kept only
-where its image recorded the vertex, both cameras see the same side of the
-surface, and its line of sight is clear: the pass walks that line's
+refuses a shared one, as it refuses tiles that overlap (2026-09-28). Both
+passes refuse a view with no depth range, through one view check. With a
+colour camera the depth camera still decides visibility, and the coordinate
+is the colour camera's, kept only where its image recorded the vertex, it
+faces the surface's front as the depth camera does, and its line of sight is
+clear: the pass walks that line's
 projection across the depth map, at most 64 samples, for a surface in front
 of it, which is what catches the parallax fringe beside an occluding edge.
 The sight line is clipped in camera space to the near bound and image side

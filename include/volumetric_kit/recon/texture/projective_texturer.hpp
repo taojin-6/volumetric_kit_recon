@@ -34,11 +34,14 @@ namespace volumetric_kit::recon::texture {
 /// One GLSL dispatch runs a thread per **vertex**. It projects the vertex into
 /// the camera (rigid `world -> camera` from the camera's `cam_to_world`,
 /// pinhole intrinsics) and calls it visible when it is in front of the camera,
-/// inside the image, and **unoccluded** -- its projected camera-space depth
-/// agreeing with the frame's depth map at that pixel within
-/// `occlusion_threshold`. That depth test is the "line of sight" check: a
-/// vertex hidden behind nearer geometry projects onto a pixel whose sensor
-/// depth is much closer, so it fails and stays untextured.
+/// inside the image, on the side of the surface its normal leaves by, and
+/// **unoccluded** -- its projected camera-space depth agreeing with the
+/// frame's depth map at that pixel within `occlusion_threshold`. That depth
+/// test is the "line of sight" check: a vertex hidden behind nearer geometry
+/// projects onto a pixel whose sensor depth is much closer, so it fails and
+/// stays untextured. The back of a sheet thinner than the threshold passes it,
+/// within the threshold of the front the camera measured, which is what the
+/// side test refuses; a vertex with a zero normal has no side and passes it.
 ///
 /// **Per vertex, not per triangle**, and that is what makes this pass safe on a
 /// mesh built with `mesh::MarchingCubesConfig::share_vertices`. Every input to
@@ -120,7 +123,7 @@ namespace volumetric_kit::recon::texture {
 /// depth map answers with both cameras' intrinsics and poses:
 /// - it lands inside the colour image, on a pixel the image recorded
 ///   (@ref TextureView::coverage);
-/// - both cameras see the same side of the surface there, by its normal;
+/// - the colour camera is on the side its normal leaves by too;
 /// - the depth camera sees it unoccluded, as above;
 /// - and the colour camera's line of sight is clear. That line, from the
 ///   vertex back to the colour camera, projects into the depth image along the
@@ -188,10 +191,11 @@ class VR_TEXTURE_API ProjectiveTexturer {
   ///                  halves are worth separating.
   /// @return OK on success (including a mesh with no vertices, a no-op), or a
   ///         non-OK `Status`: `Status::Code::InvalidArgument` if the
-  ///         texturer is moved-from, @p depth is null, @p cam is empty, the
-  ///         vertex count exceeds a single 1-D dispatch, or a vertex / depth
-  ///         buffer would exceed the device `maxStorageBufferRange`; otherwise
-  ///         a buffer or dispatch failure.
+  ///         texturer is moved-from, @p depth is null, @p cam is empty or
+  ///         its depth range has `min_depth >= max_depth` (under which no
+  ///         sample would count), the vertex count exceeds a single 1-D
+  ///         dispatch, or a vertex / depth buffer would exceed the device
+  ///         `maxStorageBufferRange`; otherwise a buffer or dispatch failure.
   core::Status texture(mesh::Mesh& mesh, const float* depth,
                        const DepthCameraParams& cam,
                        float occlusion_threshold = 0.02f,
@@ -397,19 +401,8 @@ class VR_TEXTURE_API ProjectiveTexturer {
   core::Buffer view_coverage_buf_;
   core::Buffer views_buf_;
 
-  // Every single-camera DeviceMesh overload: `view` gives the cameras, the
-  // image and its coverage, and `depth` the depth, the host array or device
-  // buffer the caller passed (the view's own depth fields are not read).
-  core::Status texture(const mesh::DeviceMesh& mesh, const TextureView& view,
-                       const core::StorageInput& depth,
-                       float occlusion_threshold, core::StageMetrics* metrics);
-  // Both single-camera host-mesh overloads, as the one above.
-  core::Status texture(mesh::Mesh& mesh, const TextureView& view,
-                       const core::StorageInput& depth,
-                       float occlusion_threshold, core::StageMetrics* metrics);
   // What every single-camera overload checks before anything is recorded.
-  core::Status check_view(const TextureView& view,
-                          const core::StorageInput& depth) const;
+  core::Status check_view(const TextureView& view) const;
   // Every single-camera overload, once the vertices are on the device: records
   // the depth, the cameras and the dispatch into `batch`, binding
   // `vertex_range` bytes of `vertices`. It may replace depth_buf_, as
@@ -418,7 +411,6 @@ class VR_TEXTURE_API ProjectiveTexturer {
                                 VkDeviceSize vertex_range,
                                 std::uint32_t vertex_count,
                                 const TextureView& view,
-                                const core::StorageInput& depth,
                                 float occlusion_threshold,
                                 core::GpuStageScope* stage);
   // Both multi-view overloads, once the vertices are on the device: records

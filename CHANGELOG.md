@@ -212,6 +212,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   a non-finite intrinsic, depth bound or pose entry** before any work, where
   it fused the whole active set through NaN projections; the kernel's
   projection rejects a NaN pixel too. Regression: `recon_tsdf_integrate`.
+- `texture`: the single-camera pass **textures a vertex only where its normal
+  points toward the depth camera** (and the colour camera), as the
+  several-view pass does per triangle, so the back of a sheet thinner than
+  the occlusion threshold no longer takes its front's image. Regression:
+  `recon_texture_projective`.
+- `texture`: the single-camera pass **refuses a depth range with
+  `min_depth >= max_depth`**, as the several-view pass does, rather than
+  returning OK with every vertex carried; both passes check a view through
+  one function. Regression: `recon_texture_projective`.
 - `fuse_viewer`: retain the last successfully fused keyframe through a
   preparation or fusion failure, so final and later remeshes keep its
   projected texture. Regression: `recon_example_fuse_keyframe`.

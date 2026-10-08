@@ -11,7 +11,7 @@
 // behind-camera one projects nowhere and keeps the bare (-1,-1). Then
 // re-texture with a closer depth map and verify the once-visible triangle
 // reverts (uv0 is overwritten each call). A translated pose confirms the
-// world->camera transform is applied. Then FIVE discriminating cases:
+// world->camera transform is applied. Then SIX discriminating cases:
 //
 //   1. the occlusion threshold accepts a small within-tolerance offset and
 //      rejects an out-of-tolerance one (and honours an explicit tighter
@@ -27,10 +27,13 @@
 //      vertex via the nearest-tap fallback (the discontinuity guard);
 //   5. a MIXED triangle -- one visible vertex, two occluded but in frame --
 //      which is the configuration the whole -uv-1 encoding exists to serve and
-//      which only a per-vertex verdict can produce.
+//      which only a per-vertex verdict can produce;
+//   6. the back of a sheet thinner than the threshold passes the depth test
+//      but faces away from the camera, and is not textured with the front's
+//      image.
 //
-// Runs on the real driver (MoltenVK / NVIDIA); exits 0 (skip) where no device
-// is present.
+// A depth range under which no sample counts is refused. Runs on the real
+// driver (MoltenVK / NVIDIA); exits 0 (skip) where no device is present.
 
 #include <cmath>
 #include <cstdint>
@@ -133,12 +136,14 @@ vr::Vec2f expected_uv(const vr::Vec3f& world,
   return vr::Vec2f(au, av);
 }
 
-// A vertex with the given world position; normal/color are irrelevant to the
-// single-camera view-selection path (occlusion uses only position + depth).
-rmesh::Vertex vtx(float x, float y, float z) {
+// A vertex with the given world position and normal, by default toward a
+// camera at the origin looking down +Z: the pass textures only the side of
+// the surface a vertex's normal leaves by.
+rmesh::Vertex vtx(float x, float y, float z,
+                  vr::Vec3f normal = vr::Vec3f(0.0f, 0.0f, -1.0f)) {
   rmesh::Vertex v{};
   v.position = vr::Vec3f(x, y, z);
-  v.normal = vr::Vec3f(0.0f, 0.0f, -1.0f);
+  v.normal = normal;
   v.color = vr::Vec4f(1.0f, 1.0f, 1.0f, 1.0f);
   v.uv0 = vr::Vec2f(0.25f, 0.25f);  // non-sentinel, must be overwritten
   return v;
@@ -336,10 +341,12 @@ int main() {
   // point 2 m along +X is straight ahead (projects to the principal point); a
   // +Z world offset maps to -X in camera space (u shifts left). The
   // principal-point assertion is hand-computed, independent of expected_uv's
-  // own formula.
+  // own formula. The normals face back along world -X, toward the camera.
+  const vr::Vec3f toward_r(-1.0f, 0.0f, 0.0f);
   rmesh::Mesh mesh3;
-  mesh3.vertices = {vtx(2.0f, 0.0f, 0.0f), vtx(2.0f, 0.1f, 0.0f),
-                    vtx(2.0f, 0.0f, 0.1f)};
+  mesh3.vertices = {vtx(2.0f, 0.0f, 0.0f, toward_r),
+                    vtx(2.0f, 0.1f, 0.0f, toward_r),
+                    vtx(2.0f, 0.0f, 0.1f, toward_r)};
   mesh3.indices = {0, 1, 2};
   vr::DepthCameraParams cam_r = cam;
   cam_r.cam_to_world = vr::Mat4f(1.0f);
@@ -527,6 +534,59 @@ int main() {
     CHECK(is_offscreen(uv));
   }
 
+  // A sheet 1 cm thick, under the 2 cm threshold: its front at z = 1 m faces
+  // the camera, its back at 1.01 m faces away, and the depth map shows the
+  // front. The back passes the depth test, within the threshold of the front
+  // the camera measured, but faces away from it, so only the front is
+  // textured and the back, in frame, carries its coordinate. The same with a
+  // colour camera of its own 5 cm to the side.
+  {
+    const vr::Vec3f away(0.0f, 0.0f, 1.0f);
+    rmesh::Mesh sheet;
+    sheet.vertices = {
+        vtx(-0.02f, -0.02f, 1.0f),     vtx(0.02f, -0.02f, 1.0f),
+        vtx(0.0f, 0.02f, 1.0f),        vtx(-0.02f, -0.02f, 1.01f, away),
+        vtx(0.0f, 0.02f, 1.01f, away), vtx(0.02f, -0.02f, 1.01f, away)};
+    sheet.indices = {0, 1, 2, 3, 4, 5};
+    tex::TextureView registered{depth.data(), cam};
+    tex::TextureView beside = registered;
+    beside.color_camera =
+        vr::ColorCameraParams{cam.fx,    cam.fy,     cam.cx,          cam.cy,
+                              cam.width, cam.height, cam.cam_to_world};
+    beside.color_camera->cam_to_world[3] = vr::Vec4f(0.05f, 0.0f, 0.0f, 1.0f);
+    for (const tex::TextureView* view : {&registered, &beside}) {
+      rmesh::Mesh m = sheet;
+      CHECK(texturer.texture(m, *view).ok());
+      for (int i = 0; i < 3; ++i) {
+        CHECK(!uses_vertex_color(m.vertices[i].uv0));
+      }
+      for (int i = 3; i < 6; ++i) {
+        CHECK(uses_vertex_color(m.vertices[i].uv0));
+        CHECK(!is_offscreen(m.vertices[i].uv0));
+      }
+    }
+  }
+
+  // A depth range under which no sample counts -- both bounds zero, as a
+  // camera converted from ColorCameraParams arrives, or inverted -- is
+  // refused, as the several-view pass refuses it, rather than returning OK
+  // with every vertex carried.
+  {
+    vr::DepthCameraParams no_range = cam;
+    no_range.min_depth = 0.0f;
+    no_range.max_depth = 0.0f;
+    vr::DepthCameraParams inverted = cam;
+    inverted.min_depth = 2.0f;
+    inverted.max_depth = 1.0f;
+    for (const vr::DepthCameraParams& bad : {no_range, inverted}) {
+      rmesh::Mesh m = mesh2;
+      CHECK(texturer.texture(m, depth.data(), bad).domain() ==
+            vkc::Status::Code::InvalidArgument);
+      CHECK(texturer.texture(m, tex::TextureView{depth.data(), bad}).domain() ==
+            vkc::Status::Code::InvalidArgument);
+    }
+  }
+
   // A frame twice the size after the smaller ones: the texturer's depth copy
   // is kept across calls, so it has to grow rather than take a short one.
   {
@@ -564,7 +624,9 @@ int main() {
       "discontinuity textured a foreground vertex via the nearest-tap "
       "fallback, a mixed triangle interpolated between real projections "
       "rather than toward the atlas origin, a mesh with no indices was still "
-      "overwritten, a non-finite position took the sentinel, and a larger "
-      "frame grew the depth copy\n");
+      "overwritten, a non-finite position took the sentinel, the back of a "
+      "thin sheet was not textured with its front's image, a depth range "
+      "under which no sample counts was refused, and a larger frame grew the "
+      "depth copy\n");
   return 0;
 }
