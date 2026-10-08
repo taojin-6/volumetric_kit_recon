@@ -1130,7 +1130,8 @@ through the interface, its frames prepared on the GPU as a camera's.
 needs `VR_WITH_FFMPEG` for the colour decoders, and the Orbbec SDK 2.10.6 or
 later) is the live Femto Mega, through the sensor interface below:
 **`OrbbecSensor`**, one camera. A synced rig is an `OrbbecSensor` per camera
-in a `SensorArray` (the 2026-10-07 rig decision). It hands out every frame
+in a `SensorArray` (the 2026-10-07 rig decision), opened from its sync file by
+`open_orbbec_sensors`. It hands out every frame
 as captured, for the GPU pass; nothing on the host undistorts, registers or
 converts (the 2026-10-06 raw-frames decision). It reads the camera's rig
 sync role (`waits_for_primary`), and given the camera's entry of the rig's
