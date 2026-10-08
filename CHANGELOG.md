@@ -98,6 +98,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- examples: **`fuse_viewer` and `rig_viewer` hand meshes over through
+  `mesh::MeshExchange`**, and their copies of the protocol go, with
+  `viewer_common.hpp`'s `retire_and_release_mark` and `unbindable_reason`.
+  The view they mesh is `viewer_common.hpp`'s `SharedView`, and
+  `recon_gfx_bridge.hpp`'s `to_live_mesh` names recon's buffers for gfx.
 - examples: **every example fuses through `tsdf::Fuser`**, so the live
   rig grows its map ahead of need rather than after a failed allocation,
   and a set the map cannot hold fuses what fits and says what it left out.
@@ -229,6 +234,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `fuse_viewer`, `rig_viewer`: **a parked mesh keeps its ring slot.** Before
+  anything was committed, the release mark covered a mesh whose atlas had
+  failed and was waiting to be retried, so an extract could reclaim its slot
+  and the viewer then drew freed buffers. The mark now stops below it.
+  Regression: `recon_mesh_exchange`.
 - `fuse_viewer`: retain the last successfully fused keyframe through a
   preparation or fusion failure, so final and later remeshes keep its
   projected texture. Regression: `recon_example_fuse_keyframe`.

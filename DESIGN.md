@@ -215,8 +215,8 @@ Two contracts — both simpler now that recon and gfx are both Vulkan.
   against a swapchain rebuild on the shared queue. All four blockers are
   settled, and **`fuse_viewer` is the consumer that draws it** as of 2026-08-08
   — `pipelines::LiveMesh` over recon's arena, index run and indirect command,
-  with the ring released by generation as its frames retire (see that decision
-  for the ordering the release report has to honour). `fuse_render` stays on
+  with the ring released by generation as its frames retire, through
+  `mesh::MeshExchange` (2026-10-08). `fuse_render` stays on
   seam A, since it builds two devices by design.
 
 ### Device ownership: create or adopt
@@ -1015,6 +1015,16 @@ verdict (2026-08-11). `DeviceMesh::shares_vertices` still publishes it,
 because `v = 3t` no longer holds and a consumer sizing an arena cannot derive
 that from the buffers, and because the `texture` tier's several-view atlas
 chooses per triangle and so refuses a shared mesh (2026-09-28).
+`MeshExchange<Payload>` (`mesh/mesh_exchange.hpp`) hands `extract_device`'s
+meshes from the extracting thread to a renderer drawing them in place, each
+with the payload it is drawn with (its atlas), and owns the ring's release
+(2026-10-08): the renderer's `begin_frame` retires a frame slot, computes the
+mark below every generation a frame in flight, the live mesh or a parked
+take holds, and takes the newest mesh, under one lock; the producer applies
+the mark on its own thread before each extract. Header-only and gfx-free;
+it takes any ring with `release_through`, so a host model of the ring tests
+it. The `DeviceMesh` →
+`LiveMesh` adapter is the viewers' `recon_gfx_bridge.hpp`.
 
 ### texture
 
@@ -1507,8 +1517,9 @@ on the GPU, and the atlas filled by
 device copies recorded in gfx's frame (the 2026-09-29 decision), fusing
 depth only inside each colour camera's view unless given `--all-depth`, and
 texturing a camera a set lacks from its last frame, a fallback view
-(`--hold-ms`). The two viewers share `viewer_common.hpp`: the teardown guards, and the render side of
-the mesh ring.
+(`--hold-ms`). The two viewers hand meshes over through `mesh::MeshExchange`
+and share `viewer_common.hpp`: the teardown guards and the render camera the
+fuse thread meshes (`SharedView`).
 **`codec_replica`** fuses a Replica sequence as `fuse_replica` does, and
 streams the growing grid through the codec: every `--encode-every` frames it
 encodes, then decodes into a player grid built from `read_frame_info` and
