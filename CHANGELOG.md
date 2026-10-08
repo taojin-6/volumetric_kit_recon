@@ -11,8 +11,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `sensor/orbbec`: **`open_orbbec_sensors`** (`orbbec_sensor.hpp`), a rig's
   cameras opened from its sync file, in its order: each an `OrbbecSensor`
   checked against its entry and on the host's clock, ready for
-  `SensorArray::open`. `fuse_orbbec --rig` and `rig_viewer` open their rig
-  through it. Test: `recon_sensor_orbbec_open_sensors`.
+  `SensorArray::open`. Options naming a serial, sync settings or a pose are
+  refused. `fuse_orbbec --rig` and `rig_viewer` open their rig through it.
+  Test: `recon_sensor_orbbec_open_sensors`.
 - `mesh`: **`MeshExchange<Payload>`** (`mesh_exchange.hpp`), the handoff of
   `extract_device`'s meshes, each with a payload drawn with it (its atlas),
   from the extracting thread to a renderer drawing them in place: the
@@ -243,6 +244,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `sensor/orbbec`: `OrbbecSensor::open` names the camera when the SDK throws
+  while finding one asked for by serial, and when its factory intrinsics or
+  extrinsic are refused, so a rig's failing camera is known. Test:
+  `recon_sensor_orbbec_conversion`.
 - `fuse_viewer`, `rig_viewer`: **a parked mesh keeps its ring slot.** Before
   anything was committed, the release mark covered a mesh whose atlas had
   failed and was waiting to be retried, so an extract could reclaim its slot
@@ -273,12 +278,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `sensor/orbbec`: **`OrbbecRig`** (`orbbec_rig.hpp`, BREAKING), with
   `OrbbecRigSet`, `OrbbecRigStats`, the rig's start order and its
   process-wide clock re-sync (`enableDeviceClockSync`).
-  `OrbbecRigSyncConfig` and `read_orbbec_sync_config` stay. Migrating: open
-  an `OrbbecSensor` per entry of the sync file, with its `serial` and `sync`,
-  `apply_sync` for `apply_sync_config`, and `sync_clock_to_host = true`, and
-  read them as a `SensorArray` posed by its `Options::calibration`. Test:
-  `recon_sensor_orbbec_start_order` goes; `recon_sensor_array` tests the
-  array's start order.
+  `OrbbecRigSyncConfig` and `read_orbbec_sync_config` stay. Migrating:
+  `open_orbbec_sensors(sync_path, options)`, with `apply_sync` for
+  `apply_sync_config`, read as a `SensorArray` posed by its
+  `Options::calibration`. Test: `recon_sensor_orbbec_start_order` goes;
+  `recon_sensor_array` tests the array's start order.
 - `mesh`: **incremental extraction** (BREAKING).
   `MarchingCubes::extract_device_incremental`,
   `MarchingCubesConfig::track_block_spans`, `BlockSpan`, `block_spans()`,
