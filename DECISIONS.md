@@ -10831,8 +10831,9 @@ only after the helper succeeds, alongside the fused-frame count.
 each camera, in the file's order, with its entry as `Options::sync` and on
 the host's clock, returning the sensors `SensorArray::open` takes; the
 caller's options give the streams and `apply_sync`, never a serial or sync
-settings. `fuse_orbbec` and `rig_viewer` call it, as calib's live app is to,
-so a new rule for a rig's cameras is made once. It only reads the file. Test:
+settings, which the file gives, or a pose, which the array's calibration
+gives. `fuse_orbbec` and `rig_viewer` call it, as calib's live app is to, so
+a new rule for a rig's cameras is made once. Test:
 `recon_sensor_orbbec_open_sensors`, against the camera stub the sync-apply
 test uses (`tests/orbbec_camera_stub.cpp`).
 
