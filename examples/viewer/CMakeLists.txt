@@ -75,11 +75,8 @@ FetchContent_Declare(
   # own -- its check takes that commit or newer -- only by core changes that add
   # API. They agree at 5913731 (core #18).
   #
-  # TODO: this pin is a placeholder. gfx's ubuntu-24.04 GPU and sanitizer legs
-  # fail at it: synchronization validation reports a write-after-read hazard in
-  # StreamedAtlas's update. Re-pin at gfx's fix, and at gfx main once #118, #120
-  # and #123 merge.
-  GIT_TAG 2ab9e86e5d0109af3da91f6dc7981fefdea90491 # gfx #123
+  # TODO: re-pin at gfx main once #118, #120 and #123 merge.
+  GIT_TAG bd831039279c9416447a7f8bfb23f0bbb2be7608 # gfx #123
   GIT_SHALLOW FALSE)
 FetchContent_MakeAvailable(volumetric_kit_gfx)
 
