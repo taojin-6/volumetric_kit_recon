@@ -175,7 +175,8 @@ add_test(NAME recon_tsdf_integrate_set COMMAND recon_tsdf_integrate_set_test)
 
 # tsdf integrate dynamic set: a frontal camera and a grazing one that sees past
 # its band, fused as a Dynamic set in either order, must give the same grid and
-# mesh and keep the frontal camera's surface whole. Skips (exit 0) where no
+# mesh, the grid fusing the grazing one and then the frontal one a call each
+# gives, and keep the frontal camera's surface whole. Skips (exit 0) where no
 # device is present.
 add_executable(recon_tsdf_integrate_dynamic_set_test
                tsdf_integrate_dynamic_set_test.cpp)

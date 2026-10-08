@@ -11305,12 +11305,17 @@ FFmpeg and the viewer), the 58 tests pass, and the tsdf tests raise no
 message under the Khronos validation layer with synchronization validation.
 `recon_tsdf_integrate_dynamic_set` fuses a frontal camera and one 2 mm in
 front of its wall, looking along it at a far wall, as a set in both orders,
-twice: the grids agree bit for bit, their meshes vertex for vertex, and the
-frontal camera's wall keeps all 19 210 triangles it has fused alone, and its
-colour. `recon_tsdf_integrate_set` now compares a Dynamic set with the same
-set reversed. Each frame's clear and fuse in turn, as before, fails both;
-fuses before clears leave 6 008 triangles on the wall; a split fuse without
-colour loses it.
+twice. The grids agree bit for bit with each other and with the grazing
+camera and then the frontal one fused a call each: the two never fuse one
+voxel and the frontal one clears nothing the grazing one fuses, so that
+order is every clear before every fuse, without the split. Their meshes
+agree vertex for vertex, the far wall meshes, and the frontal camera's wall
+keeps all 19 210 triangles it has fused alone, and its colour.
+`recon_tsdf_integrate_set` now compares a Dynamic set with the same set
+reversed. Each frame's clear and fuse in turn, as before, fails both; fuses
+before clears leave 6 008 triangles on the wall; a split fuse without colour
+loses it; a set that skips a depth-only frame's fuse, or its clear, fails
+`recon_tsdf_integrate_dynamic_set`.
 Not run: `rig_viewer` on the rig.
 
 Still open: clearing on evidence (a weight decrement, an incidence term)

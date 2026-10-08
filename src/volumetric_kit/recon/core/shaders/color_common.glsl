@@ -2,8 +2,9 @@
 // Copyright (c) 2026 Tao Jin
 
 // The device mirror of core/color_space.hpp: the one transfer curve every
-// compute tier converts through. #included by tsdf/shaders/tsdf_integrate.comp
-// and mesh/shaders/marching_cubes{,_sparse}.comp -- from `core` rather than
+// compute tier converts through. #included by tsdf/shaders/tsdf_integrate.glsl
+// (the body of the integrate and clear kernels) and
+// mesh/shaders/marching_cubes_sparse{,_shared}.comp -- from `core` rather than
 // from a tier, because `sensor` (which owns the boundary *policy*) branches off
 // `core` beside the fusion tiers and cannot be included by them, while the
 // curve itself is vocabulary four tiers need. This is the only cross-tier GLSL

@@ -11,9 +11,12 @@
 // grids must agree bit for bit, so their meshes must too, and F's surface
 // must be whole: as many triangles on it as F fused alone gives, and F's
 // colour in it. Fusing each camera after the other, G erased F's band where it
-// looked and the mesh had a hole there in one order only. A third set, F's
-// wall receded 10 cm, must clear the old surface in a set as well. Exits 0
-// (skip) where no device is present.
+// looked and the mesh had a hole there in one order only. Both grids must also
+// match, bit for bit, G and then F fused one call each: F and G never fuse the
+// same voxel and F clears nothing G fuses, so that is every clear before every
+// fuse, computed without the set's split. And G's far wall must mesh. A third
+// set, F's wall receded 10 cm, must clear the old surface in a set as well.
+// Exits 0 (skip) where no device is present.
 
 #include <algorithm>
 #include <array>
@@ -58,8 +61,9 @@ namespace {
 constexpr std::uint32_t kWidth = 160;
 constexpr std::uint32_t kHeight = 120;
 constexpr float kVoxel = 0.01f;
-constexpr float kWall = 1.005f;  // F's wall, between two voxel planes
-constexpr float kRecede = 0.1f;  // how far it moves back in the third set
+constexpr float kWall = 1.005f;   // F's wall, between two voxel planes
+constexpr float kRecede = 0.1f;   // how far it moves back in the third set
+constexpr float kFarWall = 2.0f;  // G's wall, x = 2
 constexpr std::uint32_t kColor = 0xFF3366CCu;
 
 using Coord = std::tuple<int, int, int>;
@@ -113,7 +117,7 @@ View frontal(float depth) {
 }
 
 // G: 2 mm in front of F's wall (z = 1.003, past the voxel plane z = 1.00) at
-// x = -1, looking down +x at a wall at x = 2. Its image's down axis is world
+// x = -1, looking down +x at its wall at x = 2. Its image's down axis is world
 // -z and its principal point is the top row, so every ray runs level or away
 // from F's wall: the voxels of F's near band (z = 0.97 to 1.00) inside its
 // view lie metres short of its depth of 3 m, free space far past its band.
@@ -124,7 +128,7 @@ View grazing() {
   const vr::Mat4f pose(vr::Vec4f(x, 0.0f), vr::Vec4f(y, 0.0f),
                        vr::Vec4f(z, 0.0f),
                        vr::Vec4f(-1.0f, 0.0f, 1.003f, 1.0f));
-  return view(pose, 280.0f, 0.0f, 3.0f);
+  return view(pose, 280.0f, 0.0f, kFarWall + 1.0f);
 }
 
 // Allocate every frame's band, retrying rounds that only lost bucket-lock
@@ -144,19 +148,26 @@ int allocate(vol::VoxelBlockGrid& grid, const std::vector<View>& views) {
   return 1;
 }
 
-// Allocate for `views`, then fuse them as one Dynamic set; F (always the one
-// with the frontal camera's pose) brings its colour.
+// Allocate for `views`, then fuse them under Dynamic as one set or, `each`,
+// one call a frame in turn; F (always the one with the frontal camera's pose)
+// brings its colour.
 int fuse(tsdf::TsdfIntegrator& integrator, vol::VoxelBlockGrid& grid,
-         const std::vector<View>& views, const tsdf::ColorFrame& color) {
+         const std::vector<View>& views, const tsdf::ColorFrame& color,
+         bool each = false) {
+  constexpr tsdf::IntegrationMode kDynamic = tsdf::IntegrationMode::Dynamic;
   if (allocate(grid, views) != 0) return 1;
   std::vector<tsdf::FrameInput> frames;
   for (const View& v : views) {
     const bool is_f = v.cam.cam_to_world == vr::Mat4f(1.0f);
-    frames.push_back(
-        {{vkc::StorageInput(v.depth.data()), v.cam}, is_f ? &color : nullptr});
+    const tsdf::ColorFrame* c = is_f ? &color : nullptr;
+    if (each) {
+      CHECK(integrator.integrate(grid, v.depth.data(), v.cam, 5.0f, kDynamic, c)
+                .ok());
+    } else {
+      frames.push_back({{vkc::StorageInput(v.depth.data()), v.cam}, c});
+    }
   }
-  CHECK(integrator.integrate(grid, frames, 5.0f, tsdf::IntegrationMode::Dynamic)
-            .ok());
+  if (!each) CHECK(integrator.integrate(grid, frames, 5.0f, kDynamic).ok());
   return 0;
 }
 
@@ -200,12 +211,13 @@ int check_same(vkc::Device& device, vkc::Allocator& allocator,
   return 0;
 }
 
-// A mesh's vertices sorted by position, and how many of its triangles lie on
-// a wall at z = `wall` in F's view (every corner within a voxel of it), which
-// leaves out G's far wall.
+// A mesh's vertices sorted by position, how many of its triangles lie on a
+// wall at z = `wall` in F's view (every corner within a voxel of it), which
+// leaves out G's far wall, and how many lie on G's far wall.
 struct MeshSummary {
   std::vector<std::array<float, 3>> vertices;
   std::size_t on_wall = 0;
+  std::size_t on_far_wall = 0;
 };
 
 vkc::Result<MeshSummary> summarize(mesh::MarchingCubes& mc,
@@ -218,11 +230,14 @@ vkc::Result<MeshSummary> summarize(mesh::MarchingCubes& mc,
   std::sort(s.vertices.begin(), s.vertices.end());
   for (std::size_t t = 0; t < m.triangle_count(); ++t) {
     bool on = true;
+    bool on_g = true;
     for (std::size_t c = 0; c < 3; ++c) {
       const vr::Vec3f& p = m.vertices[m.indices[3 * t + c]].position;
       on = on && std::fabs(p.z - wall) < kVoxel && std::fabs(p.x) < 1.0f;
+      on_g = on_g && std::fabs(p.x - kFarWall) < kVoxel;
     }
     s.on_wall += on ? 1 : 0;
+    s.on_far_wall += on_g ? 1 : 0;
   }
   return s;
 }
@@ -292,22 +307,26 @@ int main() {
   std::printf("F alone: %zu triangles on its wall\n", reference->on_wall);
   CHECK(reference->on_wall > 1000);
 
-  // The set in both orders, twice.
+  // The set in both orders, twice, and G then F one call each, the reference.
   auto fg = make_grid(dev, alloc);
   auto gf = make_grid(dev, alloc);
-  CHECK(fg.ok() && gf.ok());
+  auto seq = make_grid(dev, alloc);
+  CHECK(fg.ok() && gf.ok() && seq.ok());
   for (int set = 0; set < 2; ++set) {
     CHECK(fuse(integrator.value(), fg.value(), {f, g}, color) == 0);
     CHECK(fuse(integrator.value(), gf.value(), {g, f}, color) == 0);
+    CHECK(fuse(integrator.value(), seq.value(), {g, f}, color, true) == 0);
   }
   if (check_same(dev, alloc, fg.value(), gf.value()) != 0) return 1;
+  if (check_same(dev, alloc, fg.value(), seq.value()) != 0) return 1;
   auto mesh_fg = summarize(mc.value(), fg.value(), kWall);
   auto mesh_gf = summarize(mc.value(), gf.value(), kWall);
   CHECK(mesh_fg.ok() && mesh_gf.ok());
-  std::printf("F, G: %zu triangles on F's wall; G, F: %zu\n", mesh_fg->on_wall,
-              mesh_gf->on_wall);
+  std::printf("F, G: %zu triangles on F's wall; G, F: %zu; %zu on G's\n",
+              mesh_fg->on_wall, mesh_gf->on_wall, mesh_fg->on_far_wall);
   CHECK(mesh_fg->vertices == mesh_gf->vertices);
   CHECK(mesh_fg->on_wall == reference->on_wall);
+  CHECK(mesh_fg->on_far_wall > 1000);
 
   // Where G looks -- x = 0, y = 0, a metre down its axis -- F's near band
   // holds weight and F's colour.
@@ -331,7 +350,9 @@ int main() {
   const View back = frontal(kWall + kRecede);
   CHECK(fuse(integrator.value(), fg.value(), {back, g}, color) == 0);
   CHECK(fuse(integrator.value(), gf.value(), {g, back}, color) == 0);
+  CHECK(fuse(integrator.value(), seq.value(), {g, back}, color, true) == 0);
   if (check_same(dev, alloc, fg.value(), gf.value()) != 0) return 1;
+  if (check_same(dev, alloc, fg.value(), seq.value()) != 0) return 1;
   auto old_wall = summarize(mc.value(), fg.value(), kWall);
   auto new_wall = summarize(mc.value(), fg.value(), kWall + kRecede);
   CHECK(old_wall.ok() && new_wall.ok());
@@ -339,6 +360,7 @@ int main() {
               old_wall->on_wall, new_wall->on_wall);
   CHECK(old_wall->on_wall == 0);
   CHECK(new_wall->on_wall > 1000);
+  CHECK(new_wall->on_far_wall == mesh_fg->on_far_wall);
 
   std::puts("tsdf_integrate_dynamic_set: OK");
   return 0;
