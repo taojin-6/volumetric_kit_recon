@@ -8,9 +8,9 @@
 ///
 /// Each flag is declared once, with the variable it sets and the name of its
 /// value, and the usage line is made from those declarations, so it cannot
-/// leave a flag out. A number is read whole and finite: `10x`, `nan` and an
-/// empty value are refused, naming the flag. Header-only, with no recon tier,
-/// so every example and its tests include it.
+/// leave a flag out. A number is read whole and finite: `10x`, ` 5`, `nan`
+/// and an empty value are refused, naming the flag. Header-only, with no
+/// recon tier, so every example and its tests include it.
 ///
 /// @code
 /// Options opt;
@@ -22,6 +22,7 @@
 /// VKC_TRY(cli.parse(argc, argv));  // the message carries the usage line
 /// @endcode
 
+#include <cctype>
 #include <cerrno>
 #include <cmath>
 #include <cstdint>
@@ -34,14 +35,21 @@
 #include <utility>
 #include <vector>
 
+#include "volumetric_kit/core/base/check.hpp"
 #include "volumetric_kit/core/base/result.hpp"
 
 namespace vr_example {
 
 namespace vkc = volumetric_kit::core;
 
+/// @return Whether @p text starts with white space, which `strtod` and
+///         `strtoll` would skip: a number is the whole text.
+inline bool starts_with_space(const char* text) {
+  return std::isspace(static_cast<unsigned char>(text[0])) != 0;
+}
+
 /// @brief Parse @p text, the value of @p flag, as a finite number: the
-///        whole text, so `10x` and an empty value are refused.
+///        whole text, so `10x`, ` 5` and an empty value are refused.
 /// @return OK with @p out set, or InvalidArgument naming @p flag; @p out is
 ///         unchanged on error.
 inline vkc::Status parse_number(const std::string& flag, const char* text,
@@ -49,7 +57,8 @@ inline vkc::Status parse_number(const std::string& flag, const char* text,
   char* end = nullptr;
   errno = 0;
   const double value = std::strtod(text, &end);
-  if (end == text || *end != '\0' || errno != 0 || !std::isfinite(value)) {
+  if (starts_with_space(text) || end == text || *end != '\0' || errno != 0 ||
+      !std::isfinite(value)) {
     return vkc::Status::invalid_argument(flag +
                                          ": not a finite number: " + text);
   }
@@ -75,7 +84,7 @@ inline vkc::Status parse_number(const std::string& flag, const char* text,
   char* end = nullptr;
   errno = 0;
   const long long value = std::strtoll(text, &end, 10);
-  if (end == text || *end != '\0' || errno != 0 ||
+  if (starts_with_space(text) || end == text || *end != '\0' || errno != 0 ||
       value < std::numeric_limits<int>::min() ||
       value > std::numeric_limits<int>::max()) {
     return vkc::Status::invalid_argument(flag + ": not an integer: " + text);
@@ -84,15 +93,15 @@ inline vkc::Status parse_number(const std::string& flag, const char* text,
   return {};
 }
 
-/// Parse @p text, the value of @p flag, as a decimal count: the whole text,
-/// at least 0.
+/// Parse @p text, the value of @p flag, as a decimal count: digits only, so
+/// a sign is refused as white space is.
 inline vkc::Status parse_number(const std::string& flag, const char* text,
                                 std::uint32_t& out) {
   char* end = nullptr;
   errno = 0;
-  const long long value = std::strtoll(text, &end, 10);
-  if (end == text || *end != '\0' || errno != 0 || value < 0 ||
-      value > std::numeric_limits<std::uint32_t>::max()) {
+  const unsigned long long value = std::strtoull(text, &end, 10);
+  if (std::isdigit(static_cast<unsigned char>(text[0])) == 0 || *end != '\0' ||
+      errno != 0 || value > std::numeric_limits<std::uint32_t>::max()) {
     return vkc::Status::invalid_argument(flag + ": not a count: " + text);
   }
   out = static_cast<std::uint32_t>(value);
@@ -103,8 +112,9 @@ inline vkc::Status parse_number(const std::string& flag, const char* text,
 ///        variables they set, parsed in one pass.
 ///
 /// A flag that takes a value takes the next argument whatever it looks like,
-/// so `--up-axis -y` works. An argument starting with `-` that names no flag
-/// is refused, as is a positional argument past those declared, and a
+/// so `--up-axis -y` works; a flag given twice keeps the last. An argument
+/// starting with `-` that names no flag is refused, as are a positional
+/// argument past those declared, a second flag of a @ref one_of group, and a
 /// command line without a positional or a @ref require "required" flag.
 /// After the arguments, every @ref check runs, in declaration order. Every
 /// error is InvalidArgument, its message `<program>: <what>` followed by the
@@ -192,33 +202,38 @@ class Cli {
   }
 
   /// @brief Make the flag declared as @p name one every command line must
-  ///        give; the usage line shows it without brackets.
+  ///        give, or, in a @ref one_of group, the group: the usage line
+  ///        shows the flag without brackets, the group in parentheses.
   /// @pre @p name was declared.
   Cli& require(const char* name) {
-    for (Flag& flag : flags_) {
-      for (const std::string& spelling : flag.names) {
-        if (spelling == name) flag.required = true;
-      }
-    }
+    declared(name).required = true;
     return *this;
   }
 
-  /// @brief Switches that each set @p out to their own value, of which one
-  ///        command line names one: `[--hevc | --mjpeg]`. Repeating a switch
-  ///        is allowed; a second, different one is refused.
+  /// @brief Group flags already declared, of which a command line gives one:
+  ///        a second, different one is refused. The usage line shows them
+  ///        where the first was declared, `[--serial SN | --rig sync.json]`,
+  ///        or `(--up-axis a | --up-vector v)` once @ref require "required".
+  /// @pre Each of @p names was declared.
+  Cli& one_of(std::initializer_list<const char*> names) {
+    VKC_CHECK(names.size() >= 2, "Cli::one_of groups two flags or more");
+    const int group = declared(*names.begin()).group;
+    for (const char* name : names) join(declared(name).group, group);
+    return *this;
+  }
+
+  /// @brief Switches that each set @p out to their own value, a @ref one_of
+  ///        group: `[--hevc | --mjpeg]`.
   template <typename T>
   Cli& choice(std::vector<std::pair<const char*, T>> switches, T& out) {
-    const int group = next_group_++;
+    const int group = next_group_;
     for (const std::pair<const char*, T>& option : switches) {
       const T value = option.second;
-      flags_.push_back({{option.first},
-                        nullptr,
-                        [&out, value](const std::string&, const char*) {
-                          out = value;
-                          return vkc::Status{};
-                        },
-                        group,
-                        false});
+      on(option.first, nullptr, [&out, value](const std::string&, const char*) {
+        out = value;
+        return vkc::Status{};
+      });
+      join(flags_.back().group, group);
     }
     return *this;
   }
@@ -241,13 +256,12 @@ class Cli {
   /// @return OK, or InvalidArgument: `<program>: <what>`, then the usage.
   vkc::Status parse(int argc, const char* const* argv) const {
     std::size_t positional = 0;
-    std::vector<bool> given(flags_.size(), false);
-    // Per group, the flag given first: a choice takes one.
-    std::vector<const Flag*> chosen(static_cast<std::size_t>(next_group_));
+    // Per group, the flag given first: a group takes one.
+    std::vector<const Flag*> given(static_cast<std::size_t>(next_group_));
     for (int i = 1; i < argc; ++i) {
       const std::string arg = argv[i];
-      const Flag* flag = find(arg);
-      if (flag == nullptr) {
+      const std::size_t index = index_of(arg);
+      if (index == flags_.size()) {
         if (!arg.empty() && arg[0] == '-') {
           return error("unknown flag: " + arg);
         }
@@ -257,26 +271,29 @@ class Cli {
         *positionals_[positional++].out = arg;
         continue;
       }
-      const Flag*& first = chosen[static_cast<std::size_t>(flag->group)];
-      if (first != nullptr && first != flag) return error(not_both(*flag));
-      first = flag;
+      const Flag& flag = flags_[index];
+      const Flag*& first = given[static_cast<std::size_t>(flag.group)];
+      if (first != nullptr && first != &flag) {
+        return error(names_of(flag.group) + ", not both");
+      }
+      first = &flag;
       const char* value = nullptr;
-      if (flag->metavar != nullptr) {
+      if (flag.metavar != nullptr) {
         if (i + 1 >= argc) return error(arg + " needs a value");
         value = argv[++i];
       }
-      if (const vkc::Status s = flag->handler(arg, value); !s.ok()) {
+      if (const vkc::Status s = flag.handler(arg, value); !s.ok()) {
         return error(s.message());
       }
-      given[static_cast<std::size_t>(flag - flags_.data())] = true;
     }
     if (positional < positionals_.size()) {
       return error(std::string("needs <") + positionals_[positional].name +
                    ">");
     }
-    for (std::size_t f = 0; f < flags_.size(); ++f) {
-      if (flags_[f].required && !given[f]) {
-        return error("needs " + flags_[f].names.front());
+    for (const Flag& flag : flags_) {
+      if (group_required(flag.group) &&
+          given[static_cast<std::size_t>(flag.group)] == nullptr) {
+        return error("needs " + names_of(flag.group));
       }
     }
     for (const std::function<vkc::Status()>& rule : checks_) {
@@ -293,18 +310,30 @@ class Cli {
     for (const Positional& p : positionals_) {
       items.push_back("<" + std::string(p.name) + ">");
     }
-    for (std::size_t i = 0; i < flags_.size();) {
+    // Each group once, where its first flag was declared.
+    std::vector<bool> shown(static_cast<std::size_t>(next_group_), false);
+    for (const Flag& flag : flags_) {
+      if (shown[static_cast<std::size_t>(flag.group)]) continue;
+      shown[static_cast<std::size_t>(flag.group)] = true;
       std::string item;
-      std::size_t j = i;
-      for (; j < flags_.size() && flags_[j].group == flags_[i].group; ++j) {
-        if (j != i) item += " | ";
-        item += flags_[j].names.front();
-        if (flags_[j].metavar != nullptr) {
-          item += std::string(" ") + flags_[j].metavar;
+      bool several = false;
+      for (const Flag& member : flags_) {
+        if (member.group != flag.group) continue;
+        if (!item.empty()) {
+          item += " | ";
+          several = true;
+        }
+        item += member.names.front();
+        if (member.metavar != nullptr) {
+          item += std::string(" ") + member.metavar;
         }
       }
-      items.push_back(flags_[i].required ? item : "[" + item + "]");
-      i = j;
+      if (!group_required(flag.group)) {
+        item = "[" + item + "]";
+      } else if (several) {
+        item = "(" + item + ")";
+      }
+      items.push_back(item);
     }
     constexpr std::size_t kColumns = 80;
     const std::string indent(head.size() + 1, ' ');
@@ -327,8 +356,8 @@ class Cli {
     std::vector<std::string> names;
     const char* metavar;  // null: a switch
     Handler handler;
-    int group;  // a choice's switches share one, shown together
-    bool required;
+    int group;      // a one_of group's flags share one, shown together
+    bool required;  // makes its group required
   };
   struct Positional {
     const char* name;
@@ -353,23 +382,45 @@ class Cli {
     return {};
   }
 
-  // "--a or --b, not both", for @p flag's group.
-  std::string not_both(const Flag& flag) const {
-    std::string names;
-    for (const Flag& other : flags_) {
-      if (other.group != flag.group) continue;
-      names += (names.empty() ? "" : " or ") + other.names.front();
-    }
-    return names + ", not both";
-  }
-
-  const Flag* find(const std::string& arg) const {
-    for (const Flag& flag : flags_) {
-      for (const std::string& name : flag.names) {
-        if (name == arg) return &flag;
+  // The index of the flag spelt @p arg; flags_.size() when none is.
+  std::size_t index_of(const std::string& arg) const {
+    for (std::size_t f = 0; f < flags_.size(); ++f) {
+      for (const std::string& name : flags_[f].names) {
+        if (name == arg) return f;
       }
     }
-    return nullptr;
+    return flags_.size();
+  }
+
+  Flag& declared(const char* name) {
+    const std::size_t index = index_of(name);
+    VKC_CHECK(index < flags_.size(),
+              "Cli: a flag named before it was declared");
+    return flags_[index];
+  }
+
+  // Move every flag of group @p from into group @p to.
+  void join(int from, int to) {
+    for (Flag& flag : flags_) {
+      if (flag.group == from) flag.group = to;
+    }
+  }
+
+  bool group_required(int group) const {
+    for (const Flag& flag : flags_) {
+      if (flag.group == group && flag.required) return true;
+    }
+    return false;
+  }
+
+  // "--a or --b": the flags of @p group.
+  std::string names_of(int group) const {
+    std::string names;
+    for (const Flag& flag : flags_) {
+      if (flag.group != group) continue;
+      names += (names.empty() ? "" : " or ") + flag.names.front();
+    }
+    return names;
   }
 
   vkc::Status error(const std::string& what) const {

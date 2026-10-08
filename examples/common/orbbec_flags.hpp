@@ -9,8 +9,8 @@
 ///        --mjpeg`, `--color`, `--fps`) -- and the stream options they set.
 ///        Compiled only into the examples built with the Orbbec driver.
 
+#include <cstddef>
 #include <cstdint>
-#include <cstdio>
 #include <string>
 
 #include "cli.hpp"
@@ -46,10 +46,15 @@ struct OrbbecFlags {
         .choice<bool>({{"--hevc", true}, {"--mjpeg", false}}, hevc)
         .on("--color", "WxH",
             [this](const std::string& flag, const char* value) {
-              unsigned width = 0, height = 0;
-              int used = 0;
-              if (std::sscanf(value, "%ux%u%n", &width, &height, &used) != 2 ||
-                  value[used] != '\0' || width == 0 || height == 0) {
+              // Each side a count (parse_number): digits only, above 0.
+              const std::string text = value;
+              const std::size_t x = text.find('x');
+              std::uint32_t width = 0, height = 0;
+              if (x == std::string::npos ||
+                  !parse_number(flag, text.substr(0, x).c_str(), width).ok() ||
+                  !parse_number(flag, text.substr(x + 1).c_str(), height)
+                       .ok() ||
+                  width == 0 || height == 0) {
                 return vkc::Status::invalid_argument(
                     flag + " needs WxH, e.g. 1920x1080");
               }

@@ -11148,35 +11148,35 @@ or the rig.
 
 ### 2026-10-08 — The examples parse their command lines with one parser, declare each shared flag family once, print stage rows in one table, and keep their reports out of their mains (amends the 2026-09-27 `eval` and 2026-10-03 codec-mesh entries).
 
-**The rule.** An example's `main.cpp` is its story, and what two examples
-share lives in `examples/common` (`examples/viewer` for the windows). A
-command line is `cli.hpp`'s `Cli`: each flag is declared once with the
-variable it sets and the name of its value, so the usage line is generated
-and cannot leave a flag out. A number is the whole argument and finite, so
-`--max-frames 10x` and `--width abc` are refused where `atoi` read 10 and 0.
-A flag family is declared and validated once (`FusionFlags`,
-`ReplicaFlags`, `OrbbecFlags`, `CodecFlags`, `WindowFlags`); the four-voxel
-band and the depth rule had been restated in five parsers, beside a strict
-`parse_number` only the codec examples used. Stage rows print through
-`stage_table.hpp`, one format with the device's share of each host span,
-where three printers differed. `fuse_replica`'s survey and extract reports
-and the viewers' panels and reports moved out of the mains with them.
+**Decision.** Every example reads its command line through
+`examples/common/cli.hpp`'s `Cli`, declares each flag family it shares once,
+prints stage rows through `stage_table.hpp`, and keeps its reports out of
+its `main`; [Examples](DESIGN.md#examples) states the parser's rules, the
+families and where the reports live. With one home per rule, two examples
+cannot read the same flag differently.
 
 **What a command line sees.** A valid one runs as before. The spellings
 unify:
 - every example prints an error's cause and the whole usage line, and
   exits 2;
+- a number is the whole argument, so `--max-frames 10x`, `--width abc`,
+  `--fps +25` and `--color -1x1080` are refused;
 - a value below a flag's minimum is refused rather than raised to it:
   `--stride`, `--remesh-every`, `--max-frames`, `--width` and `--height`
   at 1; `--mesh-every`, `--dirty-every`, `--hold-ms`, `--free-after`,
   `--sets` and `rig_viewer`'s `--frames` at 0;
-- `--dynamic` and `--static` refuse each other, as `--hevc` and `--mjpeg`
-  and `--lit` and `--normals` do;
+- `--dynamic` and `--static` refuse each other, as `--hevc` and `--mjpeg`,
+  `--lit` and `--normals`, `--serial` and `--rig`, and `--up-axis` and
+  `--up-vector` do; `codec_mesh` keeps the last of a repeated `--up-axis`
+  or `--up-vector`, as every flag does;
 - every example that fuses takes the five fusion flags, so `fuse_render`
   and `fuse_viewer` gain `--max-weight`, and `codec_replica` gains them and
   `--cam-params`; its `--preload` reports its size as the others' does;
 - a depth end given alone is checked against the other's default by the
-  source, which names both values.
+  source, which names both values;
+- `rig_viewer`'s Rig panel draws the map occupancy and recon heaps with
+  `fuse_viewer`'s gauges, which change colour at the grow threshold and at
+  90% of budget.
 
 **Not taken.** Splitting each viewer's fuse thread into a class of its own.
 Their `run()` keeps the shared-device bootstrap and the fuse thread, and the
@@ -11184,10 +11184,10 @@ split waits for the bootstrap to be shared.
 
 **Verified.** Apple M5 Max, Release, every example built (Orbbec, FFmpeg,
 Assimp and the viewers). `recon_example_cli` covers `parse_number`, every
-`Cli` refusal and the generated usage, and each flag family's defaults and
-validation; `recon_example_stage_table` the table; and
-`recon_example_remesh_report` the survey's dilation on a device, failing
-with the dilation flipped. Before and after on room0: `fuse_replica`'s mesh
+`Cli` refusal, one-of groups and the generated usage, `check_voxel`, and
+each flag family's defaults and validation; `recon_example_stage_table` the
+table; and `recon_example_remesh_report` the survey's dilation on a device,
+failing with the dilation flipped. Before and after on room0: `fuse_replica`'s mesh
 is the same set of triangles, `codec_replica`'s bytes and distances and
 `codec_mesh`'s on Rafa2 print the same, and `fuse_render`'s PNG is
 byte-identical. Neither viewer nor `fuse_orbbec` was run.

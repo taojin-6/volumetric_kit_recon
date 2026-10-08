@@ -4,9 +4,9 @@
 // The examples' one command-line parser (examples/common/cli.hpp) and the
 // flag sets every example declares through it: numbers read whole and
 // finite, a flag's value taken whatever it looks like, unknown and missing
-// arguments refused with the usage line, required flags and exclusive
-// switches, checks run after the arguments, and the fusion, Replica, codec
-// and Orbbec flags' defaults and validation. Host only.
+// arguments refused with the usage line, required flags and one-of groups,
+// checks run after the arguments, the voxel rule, and the fusion, Replica,
+// codec and Orbbec flags' defaults and validation. Host only.
 
 #include <cmath>
 #include <cstdint>
@@ -18,6 +18,7 @@
 #include "cli.hpp"
 #include "codec_flags.hpp"
 #include "fusion_flags.hpp"
+#include "grid_layout.hpp"
 #include "replica_flags.hpp"
 #if VR_TEST_ORBBEC_FLAGS
 #include "orbbec_flags.hpp"
@@ -53,7 +54,8 @@ int numbers() {
   CHECK(vr_example::parse_number("--x", "0.25", d).ok() && d == 0.25);
   CHECK(vr_example::parse_number("--x", "-1e3", d).ok() && d == -1000.0);
   // The whole text, finite, in range; a refusal leaves the value alone.
-  for (const char* bad : {"", "10x", "0.5 ", "nan", "inf", "1e999", "x"}) {
+  for (const char* bad :
+       {"", "10x", "0.5 ", " 0.5", "nan", "inf", "1e999", "x"}) {
     d = 7.0;
     const vkc::Status s = vr_example::parse_number("--x", bad, d);
     CHECK(s.domain() == vkc::Status::Code::InvalidArgument);
@@ -64,15 +66,17 @@ int numbers() {
   CHECK(vr_example::parse_number("--x", "-2.5", f).ok() && f == -2.5f);
   int i = 3;
   CHECK(vr_example::parse_number("--n", "-42", i).ok() && i == -42);
-  for (const char* bad : {"10x", "", "1.5", "2147483648", "0x10"}) {
+  for (const char* bad : {"10x", "", " 5", "1.5", "2147483648", "0x10"}) {
     i = 3;
     CHECK(!vr_example::parse_number("--n", bad, i).ok() && i == 3);
   }
   std::uint32_t u = 9;
   CHECK(vr_example::parse_number("--n", "4294967295", u).ok() &&
         u == 4294967295u);
-  CHECK(!vr_example::parse_number("--n", "-1", u).ok() && u == 4294967295u);
-  CHECK(!vr_example::parse_number("--n", "4294967296", u).ok());
+  // A count is digits only: no sign, no white space.
+  for (const char* bad : {"-1", "-0", "+1", " 1", "4294967296", "1e3", ""}) {
+    CHECK(!vr_example::parse_number("--n", bad, u).ok() && u == 4294967295u);
+  }
   return 0;
 }
 
@@ -147,6 +151,28 @@ int parser() {
   CHECK(has(parse(required, {}), "prog: needs --rig"));
   CHECK(parse(required, {"--rig", "r.json"}).ok() && rig == "r.json");
   CHECK(required.usage() == "usage: prog --rig sync.json");
+
+  // A one_of group of flags that take values, declared apart: one of them,
+  // the last when repeated; a second, different one is refused.
+  vr_example::Cli grouped("prog");
+  std::string serial;
+  grouped.option("--serial", "SN", serial)
+      .option("--frames", "N", o.frames)
+      .option("--rig", "sync.json", rig)
+      .one_of({"--serial", "--rig"});
+  CHECK(parse(grouped, {}).ok());
+  CHECK(parse(grouped, {"--rig", "a.json", "--rig", "b.json"}).ok() &&
+        rig == "b.json");
+  CHECK(has(parse(grouped, {"--serial", "1", "--rig", "r.json"}),
+            "prog: --serial or --rig, not both"));
+  CHECK(
+      has(parse(grouped, {"--rig", "r.json", "--frames", "2", "--serial", "1"}),
+          "prog: --serial or --rig, not both"));
+  // Required, the group needs one of its flags.
+  grouped.require("--rig");
+  CHECK(
+      has(parse(grouped, {"--frames", "2"}), "prog: needs --serial or --rig"));
+  CHECK(parse(grouped, {"--serial", "7"}).ok() && serial == "7");
   return 0;
 }
 
@@ -167,6 +193,19 @@ int usage() {
         "            [--a-rather-long-flag-name value] "
         "[--another-long-flag value]\n"
         "            [--third value]");
+
+  // A group is shown where its first flag was declared: in brackets when
+  // optional, in parentheses when required.
+  vr_example::Cli grouped("tool");
+  grouped.option("--serial", "SN", s)
+      .option("--frames", "N", n)
+      .option("--rig", "sync.json", s)
+      .one_of({"--serial", "--rig"});
+  CHECK(grouped.usage() ==
+        "usage: tool [--serial SN | --rig sync.json] [--frames N]");
+  grouped.require("--serial");
+  CHECK(grouped.usage() ==
+        "usage: tool (--serial SN | --rig sync.json) [--frames N]");
   return 0;
 }
 
@@ -208,13 +247,25 @@ int fusion_flags() {
   };
   CHECK(refused({"--voxel", "0"}, "--voxel must be > 0"));
   CHECK(refused({"--voxel", "-0.01"}, "--voxel must be > 0"));
-  CHECK(refused({"--voxel", "3e38"}, "--voxel or --trunc is too large"));
+  CHECK(refused({"--voxel", "3e38"}, "--voxel is too large"));
+  CHECK(
+      refused({"--voxel", "3e38", "--trunc", "0.05"}, "--voxel is too large"));
   CHECK(refused({"--min-depth", "0"}, "must be > 0"));
   CHECK(refused({"--max-depth", "-1"}, "must be > 0"));
   CHECK(refused({"--min-depth", "2", "--max-depth", "2"},
                 "--min-depth must be below --max-depth"));
   CHECK(refused({"--max-weight", "0"}, "--max-weight must be > 0"));
   CHECK(refused({"--trunc", "inf"}, "--trunc: not a finite number"));
+  return 0;
+}
+
+int voxel_rule() {
+  CHECK(vr_example::check_voxel(0.01f).ok());
+  CHECK(vr_example::check_voxel(8e37f).ok());  // a band of 3.2e38
+  for (const float bad : {0.0f, -0.01f, std::nanf("")}) {
+    CHECK(has(vr_example::check_voxel(bad), "--voxel must be > 0"));
+  }
+  CHECK(has(vr_example::check_voxel(9e37f), "--voxel is too large"));
   return 0;
 }
 
@@ -286,7 +337,9 @@ int orbbec_flags() {
     c.add_to(cli);
     return has(parse(cli, args), why);
   };
-  for (const char* bad : {"1920", "1920x", "0x1080", "1920x1080p", "x"}) {
+  for (const char* bad :
+       {"1920", "1920x", "0x1080", "1920x1080p", "x", "-1x1080", "1920x 1080",
+        "+1920x1080", " 1920x1080", "1920x1080x2"}) {
     CHECK(refused({"--color", bad}, "--color needs WxH"));
   }
   CHECK(refused({"--fps", "0"}, "--fps must be >= 1"));
@@ -303,6 +356,7 @@ int main() {
   CHECK(parser() == 0);
   CHECK(usage() == 0);
   CHECK(fusion_flags() == 0);
+  CHECK(voxel_rule() == 0);
   CHECK(replica_flags() == 0);
   CHECK(codec_flags() == 0);
 #if VR_TEST_ORBBEC_FLAGS

@@ -8,7 +8,6 @@
 ///        with one validation: `--voxel`, `--trunc`, `--min-depth`,
 ///        `--max-depth` and `--max-weight`.
 
-#include <cmath>
 #include <optional>
 #include <string>
 
@@ -45,17 +44,13 @@ struct FusionFlags {
   }
 
   /// @brief Validate and default @ref trunc; @ref add_to's check. Numbers are
-  ///        already finite (@ref parse_number). A depth end given alone is
-  ///        checked against the other's default by the source, which names
-  ///        both values when it refuses.
+  ///        already finite (@ref parse_number), and @ref check_voxel keeps
+  ///        the default band so. A depth end given alone is checked against
+  ///        the other's default by the source, which names both values when
+  ///        it refuses.
   vkc::Status finish() {
-    if (!(voxel > 0.0f)) {
-      return vkc::Status::invalid_argument("--voxel must be > 0");
-    }
+    VKC_TRY(check_voxel(voxel));
     if (trunc <= 0.0f) trunc = default_trunc(voxel);
-    if (!std::isfinite(trunc)) {
-      return vkc::Status::invalid_argument("--voxel or --trunc is too large");
-    }
     if ((min_depth && !(*min_depth > 0.0f)) ||
         (max_depth && !(*max_depth > 0.0f))) {
       return vkc::Status::invalid_argument(
