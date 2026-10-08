@@ -21,10 +21,8 @@ jobs:
   viewer:
     name: viewer build
     # macOS: MoltenVK is the target this example is developed against, and the
-    # viewer's gfx + GLFW dependencies are already provisioned there. The
-    # trusted-code guard that keeps fork PRs off this self-hosted runner sits on
-    # the *caller* job in ci.yml, exactly as it does for the build legs, so a
-    # skip reaches the `required` gate the same way theirs does.
+    # viewer's gfx + GLFW dependencies are already provisioned there. The fork
+    # guard is on the caller job in ci.yml, as for every workflow ci.yml calls.
     runs-on: mac
     # Measured cold on this runner -- no cache, full gfx + ImGui + spirv-cross
     # fetch and build -- the whole job is ~96 s (28 s configure, 9 s build). 20

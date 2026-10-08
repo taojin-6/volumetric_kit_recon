@@ -15,14 +15,12 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# A pull request from a fork gets no CI (DECISIONS.md, 2026-10-08): every job
+# below but `required` carries the fork guard `if:`, so the workflows it calls
+# never start, and `required` fails. lint's `fork guards` job checks both.
 jobs:
   build:
     name: ${{ matrix.os }}
-    # The build legs run on persistent self-hosted runners, so only hand them
-    # trusted code: same-repo PRs and pushes. Fork PRs skip these legs (and then
-    # `required` fails, blocking auto-merge until a maintainer runs CI). The repo
-    # is private today so forks can't reach this regardless — it's a guard for if
-    # it ever goes public.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     strategy:
       fail-fast: false
@@ -97,31 +95,34 @@ jobs:
       hevc_backend: ${{ matrix.hevc_backend || '' }}
 
   viewer:
-    # Self-hosted like the build legs, so it carries their trusted-code guard.
-    # It lives here on the caller rather than inside viewer.yml so a fork PR
-    # skips this job outright and reaches `required` as `skipped` — the same
-    # shape the build legs already produce, which is what the gate below is
-    # written against.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     uses: ./.github/workflows/viewer.yml
 
   lint:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     uses: ./.github/workflows/lint.yml
 
   sanitizers:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     uses: ./.github/workflows/sanitizers.yml
 
   required:
     # The single status check branch protection requires. It passes only when
-    # every build leg, lint, and sanitizers succeeded, and FAILS (never skips)
-    # on any other outcome: a skipped required check never reports its result
-    # and would block every merge forever. Runs on a hosted runner so the gate
-    # can always report, even while a platform is mid-migration to self-hosted.
+    # every build leg, the viewer, lint, and sanitizers succeeded, and FAILS
+    # (never skips) on any other outcome, a fork's pull request included: a
+    # job skipped by its `if:` counts as passed. Runs on a hosted runner so the
+    # gate can always report, even while a platform is mid-migration to
+    # self-hosted.
     needs: [build, viewer, lint, sanitizers]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
+      - name: Refuse a pull request from a fork
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        run: |
+          echo "::error::CI does not run for a pull request from a fork. A maintainer will push its branch to ${{ github.repository }} to run CI."
+          exit 1
       - name: Assert every required job succeeded
         run: |
           echo "build=${{ needs.build.result }}" \

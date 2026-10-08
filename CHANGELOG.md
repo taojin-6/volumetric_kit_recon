@@ -75,6 +75,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- CI: **a pull request from a fork gets no CI.** Every job `ci.yml` runs for
+  a pull request is skipped for a fork's, and `required` fails for it. lint's
+  new `fork guards` job checks both with the core's `check_fork_guards.py`.
 - build: **the core pin moves to core #15** (a8b63d1), which adds
   `CommandBatch::submit_async`, for the pipelined stages to come; recon's
   calls are unchanged. gfx, pinned at core #13, builds against it.
