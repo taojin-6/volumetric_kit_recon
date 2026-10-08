@@ -636,12 +636,14 @@ if(VR_WITH_ORBBEC)
   add_test(NAME recon_sensor_orbbec_sync_config
            COMMAND recon_sensor_orbbec_sync_config_test)
 
-  # Public open() against a camera stub: SDK normalization after a sync write
-  # must be refused. Compile the sensor here so the stub also works in shared
-  # builds; no real camera or SDK context is opened.
+  # Public open() against a camera stub (orbbec_camera_stub.cpp): SDK
+  # normalization after a sync write must be refused. Compile the sensor here so
+  # the stub also works in shared builds; no real camera or SDK context is
+  # opened.
   add_executable(
     recon_sensor_orbbec_sync_apply_test
     sensor_orbbec_sync_apply_test.cpp
+    orbbec_camera_stub.cpp
     ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec/orbbec_sensor.cpp
     ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec/frame_conversion.cpp
   )
@@ -654,6 +656,28 @@ if(VR_WITH_ORBBEC)
   vr_target_warnings(recon_sensor_orbbec_sync_apply_test)
   add_test(NAME recon_sensor_orbbec_sync_apply
            COMMAND recon_sensor_orbbec_sync_apply_test)
+
+  # A rig opened from its sync file (open_orbbec_sensors) against the same
+  # camera stub, with the fixture files in data/orbbec_sync.
+  add_executable(
+    recon_sensor_orbbec_open_sensors_test
+    sensor_orbbec_open_sensors_test.cpp
+    orbbec_camera_stub.cpp
+    ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec/orbbec_sensor.cpp
+    ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec/frame_conversion.cpp
+  )
+  target_link_libraries(
+    recon_sensor_orbbec_open_sensors_test
+    PRIVATE volumetric_kit::recon_sensor_orbbec ob::OrbbecSDK)
+  target_include_directories(
+    recon_sensor_orbbec_open_sensors_test
+    PRIVATE ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec)
+  target_compile_definitions(
+    recon_sensor_orbbec_open_sensors_test
+    PRIVATE VR_SYNC_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/data/orbbec_sync")
+  vr_target_warnings(recon_sensor_orbbec_open_sensors_test)
+  add_test(NAME recon_sensor_orbbec_open_sensors
+           COMMAND recon_sensor_orbbec_open_sensors_test)
 
   # The driver's H.265 colour decoder, with no camera: the committed patch clip
   # wrapped in SDK frames. Internal and unexported, so the test compiles its
