@@ -96,6 +96,21 @@ target_link_libraries(fuse_render PRIVATE ${_viewer_recon_libs}
 target_include_directories(fuse_render PRIVATE ${_viewer_common_inc})
 vr_target_warnings(fuse_render)
 
+# The atlas all three viewers bind (viewer_atlas.hpp), on a headless gfx device.
+# Defined here, where gfx is fetched. Skips (exit 0) with no device.
+if(VR_BUILD_TESTS)
+  add_executable(recon_example_viewer_atlas_test
+                 "${PROJECT_SOURCE_DIR}/tests/example_viewer_atlas_test.cpp")
+  target_link_libraries(recon_example_viewer_atlas_test
+                        PRIVATE volumetric_kit::gfx_app Vulkan::Vulkan)
+  target_include_directories(
+    recon_example_viewer_atlas_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}"
+                                            "${PROJECT_SOURCE_DIR}/tests")
+  vr_target_warnings(recon_example_viewer_atlas_test)
+  add_test(NAME recon_example_viewer_atlas
+           COMMAND recon_example_viewer_atlas_test)
+endif()
+
 # The Dear ImGui sources gfx fetched for its ui tier. gfx exports the path only
 # into its own scope (third_party/CMakeLists.txt sets VG_IMGUI_SOURCE_DIR
 # PARENT_SCOPE), so ask FetchContent for the populated dir instead of reaching

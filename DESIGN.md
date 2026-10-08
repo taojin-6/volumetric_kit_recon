@@ -1017,7 +1017,7 @@ that from the buffers, and because the `texture` tier's several-view atlas
 chooses per triangle and so refuses a shared mesh (2026-09-28).
 `MeshExchange<Payload>` (`mesh/mesh_exchange.hpp`) hands `extract_device`'s
 meshes from the extracting thread to a renderer drawing them in place, each
-with the payload it is drawn with (its atlas), and owns the ring's release
+with a payload that stays with it (its atlas), and owns the ring's release
 (2026-10-08): the renderer's `begin_frame` retires a frame slot, computes the
 mark below every generation a frame in flight, the live mesh or a parked
 take holds, and takes the newest mesh, under one lock; the producer applies
@@ -1519,7 +1519,9 @@ depth only inside each colour camera's view unless given `--all-depth`, and
 texturing a camera a set lacks from its last frame, a fallback view
 (`--hold-ms`). The two viewers hand meshes over through `mesh::MeshExchange`
 and share `viewer_common.hpp`: the teardown guards and the render camera the
-fuse thread meshes (`SharedView`).
+fuse thread meshes (`SharedView`). `fuse_render` and both viewers bind their
+atlas, an image with a descriptor pool and set of its own, through
+`viewer_atlas.hpp`.
 **`codec_replica`** fuses a Replica sequence as `fuse_replica` does, and
 streams the growing grid through the codec: every `--encode-every` frames it
 encodes, then decodes into a player grid built from `read_frame_info` and
