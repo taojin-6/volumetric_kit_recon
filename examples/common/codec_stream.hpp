@@ -13,7 +13,6 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
-#include <cstring>
 #include <fstream>
 #include <limits>
 #include <optional>
@@ -22,6 +21,7 @@
 #include <vector>
 
 #include "grid_layout.hpp"
+#include "stage_table.hpp"
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/recon/codec/decoder.hpp"
@@ -106,24 +106,8 @@ inline vkc::Status decode_growing(vr::codec::Decoder& dec, const Bytes& frame,
 
 /// @return A row's host milliseconds, or 0 if @p m has no row of that name.
 inline double row_ms(const vkc::StageMetrics& m, const char* name) {
-  for (const vkc::StageRow& r : m.rows()) {
-    if (std::strcmp(r.name, name) == 0) return r.cpu_ms;
-  }
-  return 0.0;
-}
-
-/// @brief Print @p rows, each divided by @p per (host ms / device ms).
-inline void print_stage_rows(const char* title, const vkc::StageMetrics& rows,
-                             std::size_t per) {
-  std::printf("  %s, per coded frame (host ms / device ms):\n", title);
-  for (const vkc::StageRow& r : rows.rows()) {
-    std::printf("    %-18s %8.3f", r.name, r.cpu_ms / double(per));
-    if (r.has_gpu) {
-      std::printf("  %8.3f\n", r.gpu_ms / double(per));
-    } else {
-      std::printf("         -\n");
-    }
-  }
+  const vkc::StageRow* row = find_row(m, name);
+  return row != nullptr ? row->cpu_ms : 0.0;
 }
 
 /// @brief Print an accuracy / coverage / F-score comparison, in mm.
@@ -224,8 +208,8 @@ class CodecStream {
                   per_frame * 8.0 * coded_fps / 1e6, coded_fps, every, fps);
     }
     std::printf("\n");
-    print_stage_rows("encode", encode_rows_, frames_);
-    print_stage_rows("decode", decode_rows_, frames_);
+    print_stage_rows("encode, per coded frame", encode_rows_, frames_, 2);
+    print_stage_rows("decode, per coded frame", decode_rows_, frames_, 2);
     const double enc = row_ms(encode_rows_, "  ..rans encode") / frames_;
     const double dec = row_ms(decode_rows_, "  ..rans decode") / frames_;
     std::printf(

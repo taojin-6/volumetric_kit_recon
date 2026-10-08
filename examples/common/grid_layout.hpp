@@ -22,6 +22,10 @@ namespace vr = volumetric_kit::recon;
 /// Blocks per hash bucket, and heap slots per bucket.
 inline constexpr std::int32_t kExampleBucketSize = 8;
 
+/// @return The truncation band every example defaults to: four voxels, so
+///         the band's width in voxels does not move with @p voxel_size.
+inline float default_trunc(float voxel_size) { return 4.0f * voxel_size; }
+
 /// @brief 8x8x8-voxel blocks hashed into buckets of eight, one heap slot per
 ///        bucket entry, chains of up to 128.
 /// @param voxel_size   Voxel edge (metres).

@@ -34,7 +34,6 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
-#include <cstdlib>
 #include <memory>
 #include <optional>
 #include <string>
@@ -42,7 +41,11 @@
 #include <utility>
 #include <vector>
 
+#include "cli.hpp"
 #include "fuse_frame.hpp"
+#include "fusion_flags.hpp"
+#include "orbbec_flags.hpp"
+#include "stage_table.hpp"
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
@@ -79,144 +82,36 @@ namespace {
 constexpr auto kSilenceLimit = std::chrono::seconds(10);
 
 struct Options {
-  std::string serial;       // one camera; empty: the only one found
-  std::string rig;          // a sync configuration: fuse its cameras as a rig
-  std::string calibration;  // poses by serial; empty: all at the origin
-  bool apply_sync = false;  // write the sync configuration where it differs
-  bool hevc = true;         // H.265 colour rather than MJPEG
+  std::string serial;  // one camera; empty: the only one found
+  vr_example::OrbbecFlags cameras;
+  vr_example::FusionFlags fusion{0.02f};
   bool host_clock = false;  // one camera on the host's clock
-  std::uint32_t color_width = 0;  // 0 keeps the driver's default mode
-  std::uint32_t color_height = 0;
-  std::uint32_t fps = 0;
-  int frames = 300;  // a camera never runs out, so the run needs an end
+  int frames = 300;         // a camera never runs out, so the run needs an end
   std::string out = "fuse_orbbec.ply";
-  float voxel = 0.02f;  // metres
-  float trunc = 0.0f;   // truncation distance (metres); 0 => 4 * voxel
-  // The depth gate; unset keeps the driver's own defaults.
-  std::optional<float> min_depth;
-  std::optional<float> max_depth;
-  float max_weight = 20.0f;
 };
 
 vkc::Result<Options> parse_args(int argc, char** argv) {
   Options opt;
-  bool codec_given = false;
-  for (int i = 1; i < argc; ++i) {
-    const std::string a = argv[i];
-    const char* v = (i + 1 < argc) ? argv[i + 1] : nullptr;
-    auto take = [&]() -> const char* {
-      if (v != nullptr) ++i;
-      return v;
-    };
-    auto take_float = [&](float& dst) -> bool {
-      const char* s = take();
-      if (s == nullptr) return false;
-      dst = std::strtof(s, nullptr);
-      return true;
-    };
-    if (a == "--serial") {
-      const char* s = take();
-      if (s == nullptr)
-        return vkc::Status::invalid_argument("--serial needs SN");
-      opt.serial = s;
-    } else if (a == "--rig" || a == "--calibration") {
-      const char* s = take();
-      if (s == nullptr)
-        return vkc::Status::invalid_argument(a + " needs a path");
-      (a == "--rig" ? opt.rig : opt.calibration) = s;
-    } else if (a == "--apply-sync") {
-      opt.apply_sync = true;
-    } else if (a == "--hevc" || a == "--mjpeg") {
-      const bool hevc = a == "--hevc";
-      if (codec_given && opt.hevc != hevc) {
-        return vkc::Status::invalid_argument("--hevc or --mjpeg, not both");
-      }
-      opt.hevc = hevc;
-      codec_given = true;
-    } else if (a == "--host-clock") {
-      opt.host_clock = true;
-    } else if (a == "--color") {
-      const char* s = take();
-      unsigned w = 0, h = 0;
-      if (s == nullptr || std::sscanf(s, "%ux%u", &w, &h) != 2 || w == 0 ||
-          h == 0) {
-        return vkc::Status::invalid_argument(
-            "--color needs WxH, e.g. 1920x1080");
-      }
-      opt.color_width = w;
-      opt.color_height = h;
-    } else if (a == "--fps") {
-      const char* s = take();
-      if (s == nullptr || std::atoi(s) < 1) {
-        return vkc::Status::invalid_argument("--fps needs N >= 1");
-      }
-      opt.fps = static_cast<std::uint32_t>(std::atoi(s));
-    } else if (a == "--frames") {
-      const char* s = take();
-      if (s == nullptr)
-        return vkc::Status::invalid_argument("--frames needs N");
-      opt.frames = std::atoi(s);
-    } else if (a == "-o" || a == "--out") {
-      const char* s = take();
-      if (s == nullptr) return vkc::Status::invalid_argument("-o needs a path");
-      opt.out = s;
-    } else if (a == "--voxel") {
-      if (!take_float(opt.voxel))
-        return vkc::Status::invalid_argument("--voxel");
-    } else if (a == "--trunc") {
-      if (!take_float(opt.trunc))
-        return vkc::Status::invalid_argument("--trunc");
-    } else if (a == "--min-depth") {
-      float d = 0.0f;
-      if (!take_float(d)) return vkc::Status::invalid_argument("--min-depth");
-      opt.min_depth = d;
-    } else if (a == "--max-depth") {
-      float d = 0.0f;
-      if (!take_float(d)) return vkc::Status::invalid_argument("--max-depth");
-      opt.max_depth = d;
-    } else if (a == "--max-weight") {
-      if (!take_float(opt.max_weight)) {
-        return vkc::Status::invalid_argument("--max-weight");
-      }
-    } else {
+  vr_example::Cli cli("fuse_orbbec");
+  cli.option("--serial", "SN", opt.serial);
+  opt.cameras.add_to(cli);
+  cli.flag("--host-clock", opt.host_clock)
+      .option("--frames", "N", opt.frames, 1)
+      .option({"-o", "--out"}, "out.ply", opt.out);
+  opt.fusion.add_to(cli);
+  cli.check([&opt] {
+    if (opt.host_clock && !opt.cameras.rig.empty()) {
       return vkc::Status::invalid_argument(
-          "unknown argument: " + a +
-          "\nusage: fuse_orbbec [--serial SN | --rig sync.json [--apply-sync]] "
-          "[--calibration calib.json] [--frames N] [--hevc | --mjpeg] "
-          "[--host-clock] [--color WxH] [--fps N] "
-          "[-o out.ply] [--voxel m] [--trunc m] [--min-depth m] "
-          "[--max-depth m] [--max-weight w]");
+          "--host-clock is for one camera; a rig is always on the host's "
+          "clock");
     }
-  }
-  // strtof takes "nan"/"inf" without complaint, and a NaN knob passes every
-  // bound below by comparing false; refuse non-finite values first.
-  for (const float knob : {opt.voxel, opt.trunc, opt.max_weight}) {
-    if (!std::isfinite(knob)) {
+    if (!opt.cameras.rig.empty() && !opt.serial.empty()) {
       return vkc::Status::invalid_argument(
-          "--voxel, --trunc and --max-weight must be finite");
+          "--rig and --serial exclude each other");
     }
-  }
-  if (!(opt.voxel > 0.0f)) {
-    return vkc::Status::invalid_argument("--voxel must be > 0");
-  }
-  if (opt.trunc <= 0.0f) opt.trunc = 4.0f * opt.voxel;
-  if (!(opt.max_weight > 0.0f)) {
-    return vkc::Status::invalid_argument("--max-weight must be > 0");
-  }
-  if (opt.frames < 1) {
-    return vkc::Status::invalid_argument("--frames must be >= 1");
-  }
-  if (opt.host_clock && !opt.rig.empty()) {
-    return vkc::Status::invalid_argument(
-        "--host-clock is for one camera; a rig is always on the host's clock");
-  }
-  if (!opt.rig.empty() && !opt.serial.empty()) {
-    return vkc::Status::invalid_argument(
-        "--rig and --serial exclude each other");
-  }
-  if (opt.apply_sync && opt.rig.empty()) {
-    return vkc::Status::invalid_argument("--apply-sync needs --rig");
-  }
+    return vkc::Status{};
+  });
+  VKC_TRY(cli.parse(argc, argv));
   return opt;
 }
 
@@ -246,25 +141,6 @@ void print_camera(const sensor::OrbbecSensor& opened,
       depth.intrinsics.cy);
 }
 
-// The streams the command line asked for, over the driver's defaults, the
-// colour decoded onto `device`, where the hardware leaves it, in buffers made
-// through `allocator`.
-void apply_streams(const Options& opt, const vkc::Device& device,
-                   vkc::Allocator& allocator,
-                   sensor::OrbbecStreamOptions& streams) {
-  streams.color_codec = opt.hevc ? sensor::OrbbecColorCodec::Hevc
-                                 : sensor::OrbbecColorCodec::Mjpeg;
-  streams.device = &device;
-  streams.allocator = &allocator;
-  if (opt.color_width != 0) {
-    streams.color_width = opt.color_width;
-    streams.color_height = opt.color_height;
-  }
-  if (opt.fps != 0) streams.fps = opt.fps;
-  if (opt.min_depth) streams.min_depth = *opt.min_depth;
-  if (opt.max_depth) streams.max_depth = *opt.max_depth;
-}
-
 // The run's cameras, opened on the GPU their frames are decoded and fused on:
 // one, or every camera of a sync configuration (open_orbbec_sensors). The
 // depth gate is validated by the driver, which names both values when it
@@ -273,12 +149,12 @@ vkc::Result<std::vector<std::unique_ptr<sensor::IRgbdSensor>>> open_cameras(
     const Options& opt, const camera::ArrayCalibration& calibration,
     const vkc::Device& device, vkc::Allocator& allocator) {
   sensor::OrbbecSensor::Options o;
-  apply_streams(opt, device, allocator, o);
+  opt.cameras.apply(opt.fusion, device, allocator, o);
   std::vector<std::unique_ptr<sensor::IRgbdSensor>> sensors;
   const auto t_open = std::chrono::steady_clock::now();
-  if (!opt.rig.empty()) {
-    o.apply_sync = opt.apply_sync;
-    VKC_ASSIGN(sensors, sensor::open_orbbec_sensors(opt.rig, o));
+  if (!opt.cameras.rig.empty()) {
+    o.apply_sync = opt.cameras.apply_sync;
+    VKC_ASSIGN(sensors, sensor::open_orbbec_sensors(opt.cameras.rig, o));
   } else {
     o.serial = opt.serial;
     const std::vector<camera::SensorCalibration>& posed = calibration.sensors;
@@ -290,7 +166,7 @@ vkc::Result<std::vector<std::unique_ptr<sensor::IRgbdSensor>>> open_cameras(
                               : nullptr;
       if (sensor == nullptr) {
         return vkc::Status::not_found(
-            opt.calibration +
+            opt.cameras.calibration +
             (opt.serial.empty()
                  ? std::string(" poses several cameras; name one with --serial")
                  : " does not pose camera " + opt.serial));
@@ -307,7 +183,7 @@ vkc::Result<std::vector<std::unique_ptr<sensor::IRgbdSensor>>> open_cameras(
     print_camera(static_cast<const sensor::OrbbecSensor&>(*opened),
                  calibration);
   }
-  if (opt.rig.empty() &&
+  if (opt.cameras.rig.empty() &&
       sensors[0]->info().role == sensor::SyncRole::Secondary) {
     std::printf(
         "  note: a sync secondary delivers frames only on another camera's "
@@ -368,9 +244,9 @@ vkc::Status run(const Options& opt) {
   // ends the streams but keeps the cameras held for a restart. After the
   // device, so every picture on it goes first.
   sensor::SensorArray::Options array_options;
-  if (!opt.calibration.empty()) {
+  if (!opt.cameras.calibration.empty()) {
     VKC_ASSIGN(array_options.calibration,
-               camera::read_array_calibration(opt.calibration));
+               camera::read_array_calibration(opt.cameras.calibration));
   }
   array_options.device = &device;
   array_options.allocator = &allocator;
@@ -381,7 +257,7 @@ vkc::Status run(const Options& opt) {
     VKC_ASSIGN(array,
                sensor::SensorArray::open(std::move(sensors), array_options));
   }
-  const bool rig = !opt.rig.empty();
+  const bool rig = !opt.cameras.rig.empty();
   const std::string name =
       rig ? std::string("the rig") : "camera " + array->sensor(0).info().id;
   const bool secondary =
@@ -389,9 +265,9 @@ vkc::Status run(const Options& opt) {
 
   // --- Volume ---
 
-  VKC_ASSIGN(
-      vol::VoxelBlockGrid volume,
-      vr_example::create_fusion_grid(device, allocator, opt.voxel, opt.trunc));
+  VKC_ASSIGN(vol::VoxelBlockGrid volume,
+             vr_example::create_fusion_grid(device, allocator, opt.fusion.voxel,
+                                            opt.fusion.trunc));
   VKC_ASSIGN(tsdf::Fuser fuser, tsdf::Fuser::create(device, allocator));
   VKC_ASSIGN(mesh::MarchingCubes extractor,
              mesh::MarchingCubes::create(device, allocator, {}));
@@ -459,7 +335,7 @@ vkc::Status run(const Options& opt) {
       }
       take.push_back(frame);
     }
-    VKC_TRY(vr_example::fuse_set(fuser, volume, take, opt.max_weight,
+    VKC_TRY(vr_example::fuse_set(fuser, volume, take, opt.fusion.max_weight,
                                  &stage_totals));
     fused += static_cast<int>(take.size());
     if (fused / 100 > reported / 100) {
@@ -475,16 +351,9 @@ vkc::Status run(const Options& opt) {
   print_stats(*array, skews);
   array.reset();
 
-  std::printf("stages    per fused frame, mean over %d frames\n", fused);
-  for (const vkc::StageRow& row : stage_totals.rows()) {
-    if (row.has_gpu) {
-      std::printf("  %-9s host %7.3f ms   device %7.3f ms\n", row.name,
-                  row.cpu_ms / fused, row.gpu_ms / fused);
-    } else {
-      std::printf("  %-9s host %7.3f ms   device       -\n", row.name,
-                  row.cpu_ms / fused);
-    }
-  }
+  vr_example::print_stage_rows(
+      "stages per fused frame, mean over " + std::to_string(fused) + " frames",
+      stage_totals, static_cast<std::size_t>(fused));
 
   // --- Mesh -> PLY ---
   VKC_ASSIGN(mesh::Mesh final_mesh, extractor.extract_host(volume, 0.0f));
