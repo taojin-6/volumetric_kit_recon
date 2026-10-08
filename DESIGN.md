@@ -160,6 +160,9 @@ Native CUDA is an optional NVIDIA accelerator under this baseline (the
 ## Error handling
 
 No exceptions cross the API boundary (mobile builds use `-fno-exceptions`).
+The library tiers and their tests build with `-fno-exceptions`; only code that
+calls a library that throws -- `recon_io`'s backends, the Orbbec SDK --
+compiles with exceptions, privately, and turns each into a `Status`.
 Fallible calls return `Status` (success or an error domain + message) or
 `Result<T>` (a value or a `Status`), both `[[nodiscard]]`. `VKC_TRY` and
 `VKC_ASSIGN` remove the check-and-propagate boilerplate. Programmer errors

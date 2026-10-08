@@ -55,6 +55,12 @@ jobs:
       # legs build without them.
       # `assimp` builds the optional mesh loader on Linux and macOS; the other
       # legs build image / PLY IO without it.
+      #
+      # `ubuntu-24.04-no-exceptions` builds the library tiers and their tests
+      # with -fno-exceptions, as calib and ios may consume them, and with the
+      # Orbbec driver, whose SDK calls compile with exceptions all the same
+      # (cmake/vr_orbbec.cmake). The examples, applications free to throw,
+      # are left out.
       matrix:
         include:
           - os: ubuntu-24.04
@@ -70,6 +76,16 @@ jobs:
             runner: vk-linux-gpu
             container: '{"image":"ubuntu:26.04","options":"--gpus all","env":{"NVIDIA_DRIVER_CAPABILITIES":"all","CMAKE_BUILD_PARALLEL_LEVEL":"4","CTEST_PARALLEL_LEVEL":"4"}}'
             build_types: '["Release"]'
+          - os: ubuntu-24.04-no-exceptions
+            runner: vk-linux-gpu
+            container: '{"image":"ubuntu:24.04","options":"--gpus all","env":{"NVIDIA_DRIVER_CAPABILITIES":"all","CMAKE_BUILD_PARALLEL_LEVEL":"4","CTEST_PARALLEL_LEVEL":"4"}}'
+            build_types: '["Release"]'
+            orbbec_sdk: true
+            ffmpeg: true
+            cuda: true
+            hevc_backend: cuda
+            cxx_flags: -fno-exceptions
+            no_examples: true
           - os: macos-26
             runner: mac
             container: ''
@@ -89,6 +105,8 @@ jobs:
       cuda: ${{ matrix.cuda || false }}
       assimp: ${{ matrix.assimp || false }}
       hevc_backend: ${{ matrix.hevc_backend || '' }}
+      cxx_flags: ${{ matrix.cxx_flags || '' }}
+      examples: ${{ !matrix.no_examples }}
 
   viewer:
     uses: ./.github/workflows/viewer.yml

@@ -439,6 +439,12 @@ entries relevant to your task; later amendments supersede earlier rules.
   A Dynamic set clears with every camera before it fuses with any, through a
   clear kernel of its own; a single frame and Classic are unchanged.
 
+- [**2026-10-08**](#2026-10-08--recon-builds-in-a--fno-exceptions-consumer-only-the-code-that-calls-a-throwing-library-compiles-with-exceptions-privately-and--werror-is-the-top-level-builds) —
+  recon builds in a `-fno-exceptions` consumer: only code that calls a
+  throwing library compiles with exceptions, privately; `GpuFramePrep`
+  reports a host out of memory without catching; `-Werror` is the top-level
+  build's.
+
 ## Decision record
 
 ### 2026-06-21 — Single Vulkan path (MoltenVK on Apple), like gfx.
@@ -11333,6 +11339,50 @@ Not run: `rig_viewer` on the rig.
 
 Still open: clearing on evidence (a weight decrement, an incidence term)
 and behind a pixel with no return, each judged on the lab rig.
+
+### 2026-10-08 — recon builds in a `-fno-exceptions` consumer: only the code that calls a throwing library compiles with exceptions, privately, and `-Werror` is the top-level build's.
+
+calib builds with `-fno-exceptions` and is to link recon's sensor tiers;
+ios fetches recon under whatever compiler its image has.
+
+- **The library tiers and their tests build with `-fno-exceptions`.** CI's
+  `ubuntu-24.04-no-exceptions` leg builds and runs them so, with the Orbbec
+  driver, FFmpeg and CUDA, as calib's own leg does; the examples, which are
+  applications, are left out.
+- **Exceptions only where a library throws, and privately.** `recon_io` and
+  `recon_io_assimp` compiled with them already, for stb, tinyply and
+  Assimp. So now does every target that calls the Orbbec SDK, which reports
+  every failure by throwing `ob::Error`, through `vr_link_orbbec_sdk`
+  (`cmake/vr_orbbec.cmake`): the driver catches around each SDK call, and
+  its callbacks and decoding threads catch everything, so none crosses its
+  API. Clang lets a system header's `throw` through under
+  `-fno-exceptions`; GCC does not, so the SDK's headers alone need the flag
+  on Linux.
+- **`GpuFramePrep` reports a host out of memory without catching.** The
+  `catch (std::bad_alloc)` around the batch's staging goes. What it caught,
+  a new output's `shared_ptr` holder, comes from a nothrow allocator, and a
+  refused holder refuses the frame `OutOfMemory`, the frame held before
+  intact. `prepare` is `prepare_batch` over a set of one, so a frame its
+  checks refuse times no row, as a set does. Every other host allocation
+  stays unchecked: the 2026-09-27 v1 frame entry declined catching
+  `std::bad_alloc`.
+- **`VR_WARNINGS_AS_ERRORS` defaults to `PROJECT_IS_TOP_LEVEL`**, as the
+  core's and calib's do: a consumer's newer compiler then reports recon's
+  new warnings rather than failing its build. recon's CI builds at the top
+  level and keeps `-Werror`. `recon_subproject_defaults` configures recon as
+  a subproject and holds its tests, examples, install rules and `-Werror`
+  off.
+
+**Validation.** Apple M5 Max, macOS, Release, with Orbbec and FFmpeg: the 59
+tests pass, and pass again in a second build with
+`-DCMAKE_CXX_FLAGS=-fno-exceptions`, Assimp on and the examples off. The
+frame prep's two tests and `recon_sensor_array_process` run clean under the
+Khronos layer's synchronization validation. Without the change,
+`recon_sensor_gpu_frame_prep_oom` (no nothrow allocation to fail),
+`recon_sensor_gpu_frame_prep` (a refused frame timed) and
+`recon_subproject_defaults` fail. GCC 16 compiles the changed sources under
+`-fno-exceptions` and refuses the SDK's headers without `-fexceptions`; the
+whole GCC build is CI's.
 
 ## Measured lessons
 

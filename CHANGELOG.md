@@ -107,6 +107,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - build: **every target that calls the Orbbec SDK compiles with exceptions,
   privately** (`vr_link_orbbec_sdk`), so the driver builds where
   `CMAKE_CXX_FLAGS` turns exceptions off.
+- CI: **an `ubuntu-24.04-no-exceptions` leg** builds and tests the library
+  tiers, the Orbbec driver included, with `-fno-exceptions`.
 - `sensor/utils`: **`GpuFramePrep::prepare` is `prepare_batch` over a set
   of one**, so a frame its checks refuse no longer times a `"frame prep"`
   row.
