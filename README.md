@@ -52,9 +52,9 @@ ctest --test-dir "$recon_root/build" --output-on-failure
 
 Consume it from another CMake project via `find_package(volumetric_kit_recon)`
 or `FetchContent`, then link a tier (e.g. `volumetric_kit::recon_core`).
-Fetched, recon builds its library tiers alone: its tests, examples, install
-rules and `-Werror` (`VR_WARNINGS_AS_ERRORS`) default on only when it is the
-top-level project.
+Fetched, recon builds its library tiers alone: its tests, examples and
+`-Werror` (`VR_WARNINGS_AS_ERRORS`) default on only when it is the top-level
+project.
 
 recon builds on [`volumetric_kit_core`](https://github.com/taojin-6/volumetric_kit_core),
 the family's shared foundation, fetched pinned by commit on the first configure:

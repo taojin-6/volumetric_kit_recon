@@ -265,10 +265,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- `sensor/utils`: **`GpuFramePrep` builds with `-fno-exceptions`**, and a host
-  with no memory to hold a new output refuses the frame `OutOfMemory`,
-  through `prepare` as through `prepare_batch`, with no exception. Test:
-  `recon_sensor_gpu_frame_prep_oom`.
+- `sensor/utils`: **`GpuFramePrep` builds with `-fno-exceptions`.** Its
+  `catch (std::bad_alloc)` goes, and with it the `OutOfMemory`
+  `prepare_batch` returned for a host out of memory while staging (`prepare`
+  never did). Checked by the `-fno-exceptions` CI leg.
 - `sensor/orbbec`: `OrbbecSensor::open` names the camera when the SDK throws
   while finding one asked for by serial, and when its factory intrinsics or
   extrinsic are refused, so a rig's failing camera is known. Test:

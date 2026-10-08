@@ -162,7 +162,9 @@ Native CUDA is an optional NVIDIA accelerator under this baseline (the
 No exceptions cross the API boundary (mobile builds use `-fno-exceptions`).
 The library tiers and their tests build with `-fno-exceptions`; only code that
 calls a library that throws -- `recon_io`'s backends, the Orbbec SDK --
-compiles with exceptions, privately, and turns each into a `Status`.
+compiles with exceptions, privately, and turns each into a `Status`. The rest
+catches nothing: a host out of memory there escapes where exceptions are on
+and ends the process where they are off.
 Fallible calls return `Status` (success or an error domain + message) or
 `Result<T>` (a value or a `Status`), both `[[nodiscard]]`. `VKC_TRY` and
 `VKC_ASSIGN` remove the check-and-propagate boilerplate. Programmer errors
@@ -1266,11 +1268,9 @@ kept because several passes allocating a 4K frame's at once made VMA
 allocate a block for every set (46 ms a rig set on an RTX 5090, 4.8 ms
 kept). The frame *holds* its device-local
 buffers, and `prepare` reuses one only once no frame does, so a frame kept
-past the next is still itself; a host with no memory to hold a new one
-refuses the frame `OutOfMemory`, without throwing. The whole frame is
-checked before anything is uploaded or timed, a depth range from 0
-included; `prepare` is `prepare_batch` over a set of one.
-`depth_within_color` (off by
+past the next is still itself; the whole frame is checked before anything
+is uploaded or timed, a depth range from 0 included, and `prepare` is
+`prepare_batch` over a set of one. `depth_within_color` (off by
 default; `rig_viewer` turns it on) zeroes depth outside the colour camera's
 view, by the colour pass's own coverage test, so nothing is fused that no
 colour camera can colour. An Orbbec frame holds its SDK pair and the SDK

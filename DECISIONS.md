@@ -442,8 +442,7 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-08**](#2026-10-08--recon-builds-in-a--fno-exceptions-consumer-only-the-code-that-calls-a-throwing-library-compiles-with-exceptions-privately-and--werror-is-the-top-level-builds) —
   recon builds in a `-fno-exceptions` consumer: only code that calls a
   throwing library compiles with exceptions, privately; `GpuFramePrep`
-  reports a host out of memory without catching; `-Werror` is the top-level
-  build's.
+  catches nothing; `-Werror` is the top-level build's.
 
 ## Decision record
 
@@ -11358,28 +11357,27 @@ ios fetches recon under whatever compiler its image has.
   API. Clang lets a system header's `throw` through under
   `-fno-exceptions`; GCC does not, so the SDK's headers alone need the flag
   on Linux.
-- **`GpuFramePrep` reports a host out of memory without catching.** The
-  `catch (std::bad_alloc)` around the batch's staging goes. What it caught,
-  a new output's `shared_ptr` holder, comes from a nothrow allocator, and a
-  refused holder refuses the frame `OutOfMemory`, the frame held before
-  intact. `prepare` is `prepare_batch` over a set of one, so a frame its
-  checks refuse times no row, as a set does. Every other host allocation
-  stays unchecked: the 2026-09-27 v1 frame entry declined catching
-  `std::bad_alloc`.
+- **`GpuFramePrep` catches nothing.** The `catch (std::bad_alloc)` around
+  the batch's staging goes, and with it the `OutOfMemory` `prepare_batch`
+  returned for a host allocation there. Holding a new output without
+  throwing would not bring it back: making the output's buffer allocates on
+  the host first, for the core's `Buffer` deleter and, on MoltenVK, in the
+  driver, and those throw. A host out of memory goes unreported, as the
+  2026-09-27 v1 frame entry decided for the codec. `prepare` is `prepare_batch` over a set of one, so
+  a frame its checks refuse times no row, as a set does.
 - **`VR_WARNINGS_AS_ERRORS` defaults to `PROJECT_IS_TOP_LEVEL`**, as the
   core's and calib's do: a consumer's newer compiler then reports recon's
   new warnings rather than failing its build. recon's CI builds at the top
   level and keeps `-Werror`. `recon_subproject_defaults` configures recon as
-  a subproject and holds its tests, examples, install rules and `-Werror`
-  off.
+  a subproject and holds its tests, examples and `-Werror` off.
 
-**Validation.** Apple M5 Max, macOS, Release, with Orbbec and FFmpeg: the 59
+**Validation.** Apple M5 Max, macOS, Release, with Orbbec and FFmpeg: the 58
 tests pass, and pass again in a second build with
-`-DCMAKE_CXX_FLAGS=-fno-exceptions`, Assimp on and the examples off. The
-frame prep's two tests and `recon_sensor_array_process` run clean under the
-Khronos layer's synchronization validation. Without the change,
-`recon_sensor_gpu_frame_prep_oom` (no nothrow allocation to fail),
-`recon_sensor_gpu_frame_prep` (a refused frame timed) and
+`-DCMAKE_CXX_FLAGS=-fno-exceptions`, Assimp on and the examples off; before
+the change that build stops at the `try` in `gpu_frame_prep.cpp` and in the
+Orbbec driver. The frame prep's test and `recon_sensor_array_process` run
+clean under the Khronos layer's synchronization validation. Without the
+change, `recon_sensor_gpu_frame_prep` (a refused frame timed) and
 `recon_subproject_defaults` fail. GCC 16 compiles the changed sources under
 `-fno-exceptions` and refuses the SDK's headers without `-fexceptions`; the
 whole GCC build is CI's.

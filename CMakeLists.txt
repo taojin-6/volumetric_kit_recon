@@ -30,7 +30,7 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 # when we are the root project, not pulled in via add_subdirectory/FetchContent;
 # the "build the extras", "generate install rules" and -Werror defaults follow
 # from it. A consumer's newer compiler then shows it our new warnings rather
-# than failing its build (tests/subproject checks these defaults).
+# than failing its build (tests/subproject checks the extras and -Werror).
 option(VR_BUILD_EXAMPLES "Build example programs" ${PROJECT_IS_TOP_LEVEL})
 option(VR_BUILD_TESTS "Build tests" ${PROJECT_IS_TOP_LEVEL})
 option(VR_INSTALL "Generate install/export rules" ${PROJECT_IS_TOP_LEVEL})
