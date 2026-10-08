@@ -15,10 +15,13 @@
 #include <limits>
 #include <vector>
 
+#include "buffer_readback.hpp"
 #include "grid_readback.hpp"
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/command_batch.hpp"
+#include "volumetric_kit/core/vulkan/compute_kernel.hpp"
+#include "volumetric_kit/core/vulkan/compute_util.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/instance.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
@@ -32,6 +35,7 @@
 #include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
 
 #include "no_device.hpp"
+#include "project_pinhole_comp.spv.hpp"
 
 namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
@@ -385,6 +389,82 @@ int nonfinite_camera_case(const vr_test::Gpu& ctx) {
   return 0;
 }
 
+// The kernel's projection, tsdf_common.glsl's project_pinhole, run alone
+// (shaders/project_pinhole.comp): it refuses a NaN depth or pixel, which
+// ordered compares pass, as every comparison with NaN is false. integrate
+// refuses a non-finite camera first, but finite inputs can still overflow to
+// one: the last case's point and camera are a float range apart, and the
+// rotation's zeros times that infinite offset are NaN.
+struct ProjectionCase {
+  vr::DepthCameraParams cam;
+  vr::Vec3f world;
+};
+static_assert(sizeof(ProjectionCase) == 108,
+              "mirrors Case in shaders/project_pinhole.comp");
+
+int projection_nan_case(const vr_test::Gpu& ctx) {
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  vr::DepthCameraParams cam{};
+  cam.fx = cam.fy = 100.0f;
+  cam.cx = cam.cy = 50.0f;
+  cam.width = cam.height = 100;
+  cam.min_depth = 0.1f;
+  cam.max_depth = 5.0f;
+  cam.cam_to_world = vr::Mat4f(1.0f);
+  std::vector<ProjectionCase> cases(7, ProjectionCase{cam, {}});
+  cases[0].world = vr::Vec3f(0.1f, -0.2f, 1.0f);  // projects to (60, 30)
+  cases[1].world = vr::Vec3f(nan, 0.0f, 1.0f);    // a NaN pixel
+  cases[2].world = vr::Vec3f(0.0f, 0.0f, nan);    // a NaN depth
+  cases[3].world = cases[0].world;
+  cases[3].cam.fx = nan;  // a NaN focal length
+  cases[4].world = cases[0].world;
+  cases[4].cam.cam_to_world[3].x = nan;  // a NaN translation
+  cases[5].world = cases[0].world;
+  cases[5].cam.cam_to_world[0].x = nan;  // a NaN rotation entry
+  const float far = std::numeric_limits<float>::max();
+  cases[6].world = vr::Vec3f(-far, 0.0f, 1.0f);
+  cases[6].cam.cam_to_world[3].x = far;  // finite, and a float range away
+  const auto n = static_cast<std::uint32_t>(cases.size());
+
+  vkc::ComputeKernel kernel;
+  vkc::KernelSetBuilder builder(ctx.device);
+  CHECK(builder
+            .add(kernel, "project_pinhole", vr_project_pinhole_comp_spv,
+                 vr_project_pinhole_comp_spv_size, 3)
+            .ok());
+  auto pool = builder.build();
+  auto in = vr_test::upload_device_buffer(
+      ctx.device, ctx.allocator, cases.data(), n * sizeof(ProjectionCase));
+  auto accepted =
+      vkc::device_storage_buffer(ctx.allocator, n * sizeof(std::uint32_t));
+  auto pixels =
+      vkc::device_storage_buffer(ctx.allocator, n * sizeof(vr::Vec2f));
+  CHECK(pool.ok() && in.ok() && accepted.ok() && pixels.ok());
+  kernel.set.write_storage_buffer(0, in->handle(), 0, VK_WHOLE_SIZE);
+  kernel.set.write_storage_buffer(1, accepted->handle(), 0, VK_WHOLE_SIZE);
+  kernel.set.write_storage_buffer(2, pixels->handle(), 0, VK_WHOLE_SIZE);
+  CHECK(vkc::dispatch(ctx.device, kernel, nullptr, 0, vkc::group_count(n, 64),
+                      ctx.device.caps().limits().maxComputeWorkGroupCount[0])
+            .ok());
+  auto got = vr_test::read_back<std::uint32_t>(ctx.device, ctx.allocator,
+                                               *accepted, n);
+  auto px =
+      vr_test::read_back<vr::Vec2f>(ctx.device, ctx.allocator, *pixels, 1);
+  CHECK(got.ok() && px.ok());
+  CHECK(got.value()[0] == 1u);
+  CHECK(approx(px.value()[0].x, 60.0f, 1e-4f) &&
+        approx(px.value()[0].y, 30.0f, 1e-4f));
+  std::uint32_t nan_accepted = 0;
+  for (std::uint32_t i = 1; i < n; ++i) {
+    if (got.value()[i] != 0u) {
+      std::fprintf(stderr, "NaN projection case %u accepted\n", i);
+      ++nan_accepted;
+    }
+  }
+  CHECK(nan_accepted == 0);
+  return 0;
+}
+
 // Colour is read at the pixel whose centre is nearest the voxel's projection,
 // pixel centres at integer coordinates: rounded, not floored, and clamped into
 // the image, whose last half pixel rounds past it. Each pixel's colour names
@@ -527,6 +607,7 @@ int main() {
   CHECK(nonfinite_depth_taps_case({device.value(), allocator.value()}) == 0);
   CHECK(zero_depth_case({device.value(), allocator.value()}) == 0);
   CHECK(nonfinite_camera_case({device.value(), allocator.value()}) == 0);
+  CHECK(projection_nan_case({device.value(), allocator.value()}) == 0);
   CHECK(color_pixel_case({device.value(), allocator.value()}) == 0);
 
   // Copies of a grid attribute; the arrays are device-local.

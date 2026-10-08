@@ -10971,11 +10971,12 @@ off-centre principal point and fused from `GpuFramePrep` at 1 cm voxels,
 crosses zero within 0.06 mm of the plane along 14 194 voxel columns; with
 the half-pixel shift, within 5.5 mm (`recon_sensor_gpu_frame_prep`). Each of
 these mutations fails a test: the old taps and fallback; the colour sample
-floored, or rounded without the clamp; and no finiteness check (NaN and
+floored, or rounded without the clamp; no finiteness check (NaN and
 infinite poses, focal lengths, principal points and depth bounds, each
-refused with the tick unchanged). The kernel's negated projection has no
-test of its own: with the host refusal, no finite camera gives it a NaN.
-Not run: `fuse_orbbec` and `rig_viewer` on the rig.
+refused with the tick unchanged); and the projection's ordered compares,
+which `recon_tsdf_integrate` runs alone and which pass a NaN point, focal
+length or pose entry, and a finite point and translation a float range
+apart. Not run: `fuse_orbbec` and `rig_viewer` on the rig.
 
 ### 2026-10-08 — The single-camera texture pass needs the vertex to face the depth camera, and both texture passes check a view one way (amends the 2026-08-11 per-vertex and 2026-09-28 colour-camera entries).
 
@@ -11001,9 +11002,9 @@ Not run: `fuse_orbbec` and `rig_viewer` on the rig.
 **Verified.** On the entry above's build, the 57 tests pass, the texture
 tests with no message from the Khronos validation layer. Each of these
 mutations fails `recon_texture_projective`: the agreeing-signs test (a 1 cm
-sheet's back textured, registered and with a colour camera 5 cm aside), and
-the single-camera pass without the depth-range check (both bounds zero, and
-inverted).
+sheet's back textured, registered and with a colour camera 5 cm aside); the
+facing test without its zero-normal exemption; and the single-camera pass
+without the depth-range check (both bounds zero, and inverted).
 
 ## Measured lessons
 

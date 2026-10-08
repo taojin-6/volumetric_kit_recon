@@ -538,15 +538,18 @@ int main() {
   // the camera, its back at 1.01 m faces away, and the depth map shows the
   // front. The back passes the depth test, within the threshold of the front
   // the camera measured, but faces away from it, so only the front is
-  // textured and the back, in frame, carries its coordinate. The same with a
+  // textured and the back, in frame, carries its coordinate. A vertex on the
+  // front with a zero normal has no side and is textured. The same with a
   // colour camera of its own 5 cm to the side.
   {
     const vr::Vec3f away(0.0f, 0.0f, 1.0f);
+    const vr::Vec3f none(0.0f);
     rmesh::Mesh sheet;
     sheet.vertices = {
         vtx(-0.02f, -0.02f, 1.0f),     vtx(0.02f, -0.02f, 1.0f),
         vtx(0.0f, 0.02f, 1.0f),        vtx(-0.02f, -0.02f, 1.01f, away),
-        vtx(0.0f, 0.02f, 1.01f, away), vtx(0.02f, -0.02f, 1.01f, away)};
+        vtx(0.0f, 0.02f, 1.01f, away), vtx(0.02f, -0.02f, 1.01f, away),
+        vtx(0.0f, 0.0f, 1.0f, none)};
     sheet.indices = {0, 1, 2, 3, 4, 5};
     tex::TextureView registered{depth.data(), cam};
     tex::TextureView beside = registered;
@@ -564,6 +567,7 @@ int main() {
         CHECK(uses_vertex_color(m.vertices[i].uv0));
         CHECK(!is_offscreen(m.vertices[i].uv0));
       }
+      CHECK(!uses_vertex_color(m.vertices[6].uv0));
     }
   }
 
@@ -625,8 +629,8 @@ int main() {
       "fallback, a mixed triangle interpolated between real projections "
       "rather than toward the atlas origin, a mesh with no indices was still "
       "overwritten, a non-finite position took the sentinel, the back of a "
-      "thin sheet was not textured with its front's image, a depth range "
-      "under which no sample counts was refused, and a larger frame grew the "
-      "depth copy\n");
+      "thin sheet was not textured with its front's image while a zero normal "
+      "was, a depth range under which no sample counts was refused, and a "
+      "larger frame grew the depth copy\n");
   return 0;
 }
