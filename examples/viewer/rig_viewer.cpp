@@ -554,16 +554,9 @@ int run(GLFWwindow* window, const Options& opt) {
     return 1;
   }
   vgp::HybridMeshPipeline pipeline = std::move(pipeline_result).value();
-  auto atlas_result = fuse_viewer::LiveAtlas::create(
+  fuse_viewer::LiveAtlas atlas(
       pipeline, app.allocator(), app.frame_loop().timeline(),
       {layout.width, layout.height}, config.frames_in_flight);
-  if (!atlas_result.ok()) {
-    std::fprintf(stderr, "atlas: %s\n",
-                 atlas_result.status().message().c_str());
-    return 1;
-  }
-  const std::unique_ptr<fuse_viewer::LiveAtlas> atlas =
-      std::move(atlas_result).value();
 
   vg::ProfilerConfig profiler_config;
   profiler_config.frames_in_flight = config.frames_in_flight;
@@ -1082,12 +1075,13 @@ int run(GLFWwindow* window, const Options& opt) {
       continue;
     }
     const win::Frame& render_frame = *frame.value();
-    atlas->poll();
+    atlas.poll();
 
     // Retire this slot's last frame, take the newest mesh, and commit it
     // with its atlas, copied in this command buffer -- before the frame's
-    // rendering begins, since a copy may not sit inside it. A copy refused
-    // keeps the mesh parked for the next frame.
+    // rendering begins, since a copy may not sit inside it. A copy refused,
+    // or an atlas that could not be made, keeps the mesh parked for the next
+    // frame.
     {
       vg::Profiler::Scope copy_scope =
           profiler.gpu_scope(render_frame.cmd, "atlas copy");
@@ -1100,8 +1094,8 @@ int run(GLFWwindow* window, const Options& opt) {
             const bool solid =
                 !job.empty() && show_sources && ensure_solid(render_frame.cmd);
             const vkc::Status committed =
-                atlas->commit(render_frame.cmd, render_frame.number, job,
-                              solid ? &solid_buffers : nullptr);
+                atlas.commit(render_frame.cmd, render_frame.number, job,
+                             solid ? &solid_buffers : nullptr);
             if (!committed.ok()) {
               // Retried every frame, so said once until it succeeds.
               if (!atlas_error_said) {
@@ -1296,7 +1290,7 @@ int run(GLFWwindow* window, const Options& opt) {
         hybrid_frame.view_proj = view_proj;
         hybrid_frame.light_dir = -view.up + 0.5f * view.right - view.forward;
         hybrid_frame.flags = shading_flags(shading);
-        hybrid_frame.atlas = atlas->use(render_frame.number);
+        hybrid_frame.atlas = atlas.use(render_frame.number);
         hybrid_frame.draws = &draw;
         hybrid_frame.draw_count = 1;
         pipeline.submit(render_frame.cmd, hybrid_frame);

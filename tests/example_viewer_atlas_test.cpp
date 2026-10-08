@@ -4,11 +4,12 @@
 // The atlas the live viewers draw with (examples/viewer/viewer_atlas.hpp):
 // each tile is copied from its camera's colour buffer, or its solid-colour
 // one, rows of the tile's width placed at the tile; a buffer gfx cannot copy
-// is refused before it textures anything; and LiveAtlas holds a frame's
-// colour buffers until the frame loop's timeline reaches that frame, binds
-// nothing (vertex colour) for an untextured mesh, and leaves the atlas as it
-// was when a copy is refused. The copies run on a headless device, which the
-// test skips (exit 0) without.
+// is refused before it textures anything; and LiveAtlas allocates its ring
+// only for the first textured job, refusing the job (and holding nothing)
+// when the ring cannot be made, holds a frame's colour buffers until the
+// frame loop's timeline reaches that frame, binds nothing (vertex colour) for
+// an untextured mesh, and leaves the atlas as it was when a copy is refused.
+// The copies run on a headless device, which the test skips (exit 0) without.
 
 #include <cstdint>
 #include <cstdio>
@@ -129,11 +130,8 @@ int live_atlas_holds_a_frames_colour(vg::app::HeadlessApp& app) {
   CHECK(frames.ok());
   auto gate = vkc::TimelineSemaphore::create(app.device());
   CHECK(gate.ok());
-  auto made = LiveAtlas::create(pipeline.value(), app.allocator(),
-                                frames.value(), {4, 2}, 2);
-  CHECK(made.ok());
-  const std::unique_ptr<LiveAtlas> atlas = std::move(made).value();
-  CHECK(atlas->use(1) == VK_NULL_HANDLE);  // nothing committed: vertex colour
+  LiveAtlas atlas(pipeline.value(), app.allocator(), frames.value(), {4, 2}, 2);
+  CHECK(atlas.use(1) == VK_NULL_HANDLE);  // nothing committed: vertex colour
 
   // Two cameras, a 2 x 2 tile each.
   auto left = make_color(app.allocator(), {1, 2, 3, 4});
@@ -148,22 +146,22 @@ int live_atlas_holds_a_frames_colour(vg::app::HeadlessApp& app) {
   VkDescriptorSet bound = VK_NULL_HANDLE;
   auto frame1 = app.device().submit_pending(
       [&](VkCommandBuffer cmd) {
-        committed = atlas->commit(cmd, 1, job);
-        bound = atlas->use(1);
+        committed = atlas.commit(cmd, 1, job);
+        bound = atlas.use(1);
       },
       {{&gate.value(), 1}}, {{&frames.value(), 1}});
   CHECK(frame1.ok());
   CHECK(committed.ok());
   CHECK(bound != VK_NULL_HANDLE);
   job.tiles.clear();  // the published job is gone; the atlas holds the colour
-  atlas->poll();
+  atlas.poll();
   CHECK(left.value().use_count() == 2);
   CHECK(right.value().use_count() == 2);
 
   // Once frame 1 completes, the colour is let go.
   CHECK(gate.value().signal(1).ok());
   CHECK(frame1.value().wait().ok());
-  atlas->poll();
+  atlas.poll();
   CHECK(left.value().use_count() == 1);
   CHECK(right.value().use_count() == 1);
 
@@ -174,8 +172,8 @@ int live_atlas_holds_a_frames_colour(vg::app::HeadlessApp& app) {
   vkc::Status refused;
   auto frame2 = app.device().submit_pending(
       [&](VkCommandBuffer cmd) {
-        refused = atlas->commit(cmd, 2, outside);
-        bound = atlas->use(2);
+        refused = atlas.commit(cmd, 2, outside);
+        bound = atlas.use(2);
       },
       {}, {{&frames.value(), 2}});
   CHECK(frame2.ok());
@@ -188,14 +186,98 @@ int live_atlas_holds_a_frames_colour(vg::app::HeadlessApp& app) {
   // A mesh no camera textured draws in vertex colour.
   auto frame3 = app.device().submit_pending(
       [&](VkCommandBuffer cmd) {
-        committed = atlas->commit(cmd, 3, AtlasJob{});
-        bound = atlas->use(3);
+        committed = atlas.commit(cmd, 3, AtlasJob{});
+        bound = atlas.use(3);
       },
       {}, {{&frames.value(), 3}});
   CHECK(frame3.ok());
   CHECK(committed.ok());
   CHECK(bound == VK_NULL_HANDLE);
   CHECK(frame3.value().wait().ok());
+  return 0;
+}
+
+// The bytes of the allocator's live allocations, over every heap.
+std::uint64_t allocated(const vkc::Allocator& allocator) {
+  const vkc::MemoryStats stats = allocator.memory_stats();
+  std::uint64_t bytes = 0;
+  for (std::uint32_t h = 0; h < stats.heap_count; ++h) {
+    bytes += stats.heaps[h].allocation_bytes;
+  }
+  return bytes;
+}
+
+// The ring is made by the first textured job, not before, and a ring that
+// cannot be made refuses the job, which the next frame retries.
+int live_atlas_allocates_for_its_first_textured_job(vg::app::HeadlessApp& app) {
+  vg::RenderTargetLayout target;
+  target.color_formats[0] = VK_FORMAT_R8G8B8A8_SRGB;
+  target.color_count = 1;
+  target.depth_format = VK_FORMAT_D32_SFLOAT;
+  auto pipeline =
+      vgp::HybridMeshPipeline::create(app.device(), app.allocator(), target);
+  CHECK(pipeline.ok());
+  auto frames = vkc::TimelineSemaphore::create(app.device());
+  CHECK(frames.ok());
+  auto color = make_color(app.allocator(), {1, 2, 3, 4});
+  CHECK(color.ok());
+  AtlasJob job;
+  job.tiles.push_back({color.value(), rtex::AtlasTile{0, 0, 2, 2}, 0});
+
+  // Made, then given an untextured mesh: nothing allocated.
+  const std::uint64_t before = allocated(app.allocator());
+  LiveAtlas atlas(pipeline.value(), app.allocator(), frames.value(), {4, 2}, 2);
+  vkc::Status committed;
+  VkDescriptorSet bound = VK_NULL_HANDLE;
+  auto frame1 = app.device().submit_pending(
+      [&](VkCommandBuffer cmd) {
+        committed = atlas.commit(cmd, 1, AtlasJob{});
+        bound = atlas.use(1);
+      },
+      {}, {{&frames.value(), 1}});
+  CHECK(frame1.ok());
+  CHECK(committed.ok());
+  CHECK(bound == VK_NULL_HANDLE);
+  CHECK(frame1.value().wait().ok());
+  CHECK(allocated(app.allocator()) == before);
+
+  // The first textured job makes the ring: three 4 x 2 RGBA8 images.
+  auto frame2 = app.device().submit_pending(
+      [&](VkCommandBuffer cmd) {
+        committed = atlas.commit(cmd, 2, job);
+        bound = atlas.use(2);
+      },
+      {}, {{&frames.value(), 2}});
+  CHECK(frame2.ok());
+  CHECK(committed.ok());
+  CHECK(bound != VK_NULL_HANDLE);
+  CHECK(frame2.value().wait().ok());
+  CHECK(allocated(app.allocator()) >= before + 3u * 4u * 2u * 4u);
+  atlas.poll();
+  CHECK(color.value().use_count() == 2);  // `job`'s and this test's
+
+  // An atlas wider than the device allows: made all the same, and each
+  // textured job is refused, holding nothing and drawing in vertex colour.
+  auto wide_frames = vkc::TimelineSemaphore::create(app.device());
+  CHECK(wide_frames.ok());
+  const std::uint32_t too_wide =
+      app.device().caps().limits().maxImageDimension2D + 1u;
+  LiveAtlas wide(pipeline.value(), app.allocator(), wide_frames.value(),
+                 {too_wide, 2}, 2);
+  for (std::uint64_t frame = 1; frame <= 2; ++frame) {
+    auto submitted = app.device().submit_pending(
+        [&](VkCommandBuffer cmd) {
+          committed = wide.commit(cmd, frame, job);
+          bound = wide.use(frame);
+        },
+        {}, {{&wide_frames.value(), frame}});
+    CHECK(submitted.ok());
+    CHECK(!committed.ok());
+    CHECK(bound == VK_NULL_HANDLE);
+    CHECK(submitted.value().wait().ok());
+    wide.poll();
+    CHECK(color.value().use_count() == 2);
+  }
   return 0;
 }
 
@@ -212,6 +294,10 @@ int main() {
     return vr_test::no_device("no Vulkan device", app.status().message());
   }
   if (const int rc = copyable_checks_the_buffer(app.value().allocator())) {
+    return rc;
+  }
+  if (const int rc =
+          live_atlas_allocates_for_its_first_textured_job(app.value())) {
     return rc;
   }
   if (const int rc = live_atlas_holds_a_frames_colour(app.value())) return rc;
