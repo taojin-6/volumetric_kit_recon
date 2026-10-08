@@ -26,10 +26,10 @@
 //     an EXCLUSIVE buffer is undefined in the way that appears to work.
 //     Verified per buffer before its camera textures the mesh, so a buffer gfx
 //     cannot copy costs that camera's triangles rather than the mesh's texture.
-//   * lifetime -- the colour buffers a copy reads are held by the frame slot
-//     that recorded it until begin_frame fence-waits that slot again, and an
-//     atlas image is reused only once no frame in flight and no committed
-//     mesh holds it.
+//   * lifetime -- the atlas is gfx's StreamedAtlas, whose images are reused
+//     only once the frame loop's timeline passes the last frame that drew
+//     them, and the colour buffers a copy reads are held until the frame that
+//     copies them completes (viewer_atlas.hpp's LiveAtlas).
 //   * visibility -- as for the mesh: the frame prep fence-waits its batch
 //     before process returns, and gfx's later vkQueueSubmit makes those
 //     writes visible to the copy.
@@ -120,10 +120,8 @@
 #include "volumetric_kit/gfx/app/windowed_app.hpp"
 #include "volumetric_kit/gfx/camera/camera.hpp"
 #include "volumetric_kit/gfx/core/frame_metrics.hpp"
-#include "volumetric_kit/gfx/core/image_barrier.hpp"
 #include "volumetric_kit/gfx/core/profiler.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
-#include "volumetric_kit/gfx/core/sampler.hpp"
 #include "volumetric_kit/gfx/pipelines/hybrid_mesh_pipeline.hpp"
 #include "volumetric_kit/gfx/pipelines/live_mesh.hpp"
 #include "volumetric_kit/gfx/ui/imgui_overlay.hpp"
@@ -355,68 +353,6 @@ std::vector<TextureSource> texture_sources(
   return out;
 }
 
-// One camera's share of an atlas: its colour buffer, as the frame prep left
-// it (R, G, B and coverage in each word -- the bytes of R8G8B8A8), and the
-// tile it goes to.
-struct AtlasTileSource {
-  std::shared_ptr<const vkc::Buffer> color;
-  rtex::AtlasTile tile;
-  std::size_t camera = 0;  // which camera, for the colour-by-camera view
-};
-
-// What a mesh version's atlas is made from: the cameras that textured it,
-// each copied into its tile. Empty for a mesh textured by none.
-struct AtlasJob {
-  std::uint32_t width = 0;
-  std::uint32_t height = 0;
-  std::vector<AtlasTileSource> tiles;
-  bool empty() const noexcept { return tiles.empty(); }
-};
-
-// Record `job` into `image`, a whole atlas: every tile copied from its
-// camera's buffer, then the image made ready for the fragment shader. The
-// previous contents are discarded (UNDEFINED), since a version samples only the
-// tiles it wrote -- a camera missing from the set left no triangle pointing at
-// its tile. With `solid`, each tile is copied from that camera's solid-colour
-// buffer instead (at least a tile's size), so every triangle shows the camera
-// that textured it.
-void record_atlas_copy(VkCommandBuffer cmd, VkImage image, const AtlasJob& job,
-                       const std::vector<VkBuffer>* solid = nullptr) {
-  vg::ImageBarrierDesc to_copy;
-  to_copy.image = image;
-  // Nothing to wait for: acquire hands out only an image no frame in flight
-  // binds, and every frame that bound it has been fence-waited.
-  to_copy.src_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-  to_copy.dst_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
-  to_copy.dst_access = VK_ACCESS_TRANSFER_WRITE_BIT;
-  to_copy.old_layout = VK_IMAGE_LAYOUT_UNDEFINED;
-  to_copy.new_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-  vg::cmd_image_barrier(cmd, to_copy);
-  for (const AtlasTileSource& source : job.tiles) {
-    VkBufferImageCopy region{};
-    region.bufferRowLength = source.tile.width;
-    region.bufferImageHeight = source.tile.height;
-    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    region.imageSubresource.layerCount = 1;
-    region.imageOffset = {static_cast<std::int32_t>(source.tile.x),
-                          static_cast<std::int32_t>(source.tile.y), 0};
-    region.imageExtent = {source.tile.width, source.tile.height, 1};
-    const VkBuffer from =
-        solid != nullptr ? (*solid)[source.camera] : source.color->handle();
-    vkCmdCopyBufferToImage(cmd, from, image,
-                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-  }
-  vg::ImageBarrierDesc to_sample;
-  to_sample.image = image;
-  to_sample.src_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
-  to_sample.src_access = VK_ACCESS_TRANSFER_WRITE_BIT;
-  to_sample.dst_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-  to_sample.dst_access = VK_ACCESS_SHADER_READ_BIT;
-  to_sample.old_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-  to_sample.new_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-  vg::cmd_image_barrier(cmd, to_sample);
-}
-
 // Owns the WindowedApp and every device resource, so they are gone before
 // main destroys the window (see fuse_viewer's run()).
 int run(GLFWwindow* window, const Options& opt) {
@@ -609,15 +545,25 @@ int run(GLFWwindow* window, const Options& opt) {
                 layout.tiles.size());
   }
 
-  // --- gfx: pipeline, profiler, overlay, sampler ---------------------------
+  // --- gfx: pipeline, atlas, profiler, overlay -----------------------------
   auto pipeline_result = vgp::HybridMeshPipeline::create(
-      app.device().handle(), app.swapchain().layout());
+      app.device(), app.allocator(), app.swapchain().layout());
   if (!pipeline_result.ok()) {
     std::fprintf(stderr, "pipeline: %s\n",
                  pipeline_result.status().message().c_str());
     return 1;
   }
   vgp::HybridMeshPipeline pipeline = std::move(pipeline_result).value();
+  auto atlas_result = fuse_viewer::LiveAtlas::create(
+      pipeline, app.allocator(), app.frame_loop().timeline(),
+      {layout.width, layout.height}, config.frames_in_flight);
+  if (!atlas_result.ok()) {
+    std::fprintf(stderr, "atlas: %s\n",
+                 atlas_result.status().message().c_str());
+    return 1;
+  }
+  const std::unique_ptr<fuse_viewer::LiveAtlas> atlas =
+      std::move(atlas_result).value();
 
   vg::ProfilerConfig profiler_config;
   profiler_config.frames_in_flight = config.frames_in_flight;
@@ -661,27 +607,6 @@ int run(GLFWwindow* window, const Options& opt) {
   }
   const fuse_viewer::ImGuiGlfwShutdown imgui_glfw_guard{opt.window.overlay};
 
-  auto sampler_result = vg::Sampler::create(app.device().handle());
-  if (!sampler_result.ok()) {
-    std::fprintf(stderr, "sampler: %s\n",
-                 sampler_result.status().message().c_str());
-    return 1;
-  }
-  vg::Sampler sampler = std::move(sampler_result).value();
-
-  using Atlas = fuse_viewer::Atlas;
-  using AtlasResult = vkc::Result<std::shared_ptr<Atlas>>;
-  // The atlas bound for a mesh no camera textured.
-  AtlasResult white_result = fuse_viewer::white_atlas(
-      app.device(), app.allocator(), pipeline.descriptor_set_layout(0),
-      sampler.handle());
-  if (!white_result.ok()) {
-    std::fprintf(stderr, "white atlas: %s\n",
-                 white_result.status().message().c_str());
-    return 1;
-  }
-  const std::shared_ptr<Atlas> white_atlas = std::move(white_result).value();
-
   // The colour-by-camera view's sources: one device-local buffer a camera,
   // its tile's size, filled with that camera's colour (sRGB bytes, as the
   // atlas holds). Made the first time the view is switched on, since at 4K
@@ -699,11 +624,9 @@ int run(GLFWwindow* window, const Options& opt) {
       {200, 200, 200},
   }};
   std::vector<vkc::Buffer> solid_buffers;
-  std::vector<VkBuffer> solid_handles;
   auto ensure_solid = [&](VkCommandBuffer cmd) -> bool {
-    if (solid_handles.size() == cameras) return true;
+    if (solid_buffers.size() == cameras) return true;
     solid_buffers.clear();
-    solid_handles.clear();
     for (std::size_t c = 0; c < cameras; ++c) {
       const rtex::AtlasTile& tile = layout.tiles[c];
       vkc::BufferDesc desc;
@@ -716,10 +639,8 @@ int run(GLFWwindow* window, const Options& opt) {
         std::fprintf(stderr, "rig_viewer: colour-by-camera buffer: %s\n",
                      buffer.status().message().c_str());
         solid_buffers.clear();
-        solid_handles.clear();
         return false;
       }
-      solid_handles.push_back(buffer.value().handle());
       solid_buffers.push_back(std::move(buffer).value());
     }
     // Filled only once every buffer exists, so a failed allocation above
@@ -729,7 +650,7 @@ int run(GLFWwindow* window, const Options& opt) {
       const std::uint32_t word = std::uint32_t{rgb[0]} |
                                  (std::uint32_t{rgb[1]} << 8) |
                                  (std::uint32_t{rgb[2]} << 16) | 0xFF000000u;
-      vkCmdFillBuffer(cmd, solid_handles[c], 0, VK_WHOLE_SIZE, word);
+      vkCmdFillBuffer(cmd, solid_buffers[c].handle(), 0, VK_WHOLE_SIZE, word);
     }
     // The fills land before the atlas copy reads them, later in this buffer.
     VkMemoryBarrier filled{};
@@ -740,33 +661,6 @@ int run(GLFWwindow* window, const Options& opt) {
                          VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &filled, 0,
                          nullptr, 0, nullptr);
     return true;
-  };
-
-  // Atlas images the copies fill, reused once only the pool holds one: the
-  // committed version holds its image, and so does every frame slot that
-  // bound it, until begin_frame fence-waits that slot. _SRGB, since the frame
-  // prep's colour is canonical-encoded 8-bit and the sampler then filters in
-  // linear (the 2026-08-02 colour-space decision, as `upload_atlas`).
-  std::vector<std::shared_ptr<Atlas>> atlas_pool;
-  auto acquire_atlas = [&](std::uint32_t width,
-                           std::uint32_t height) -> AtlasResult {
-    for (const std::shared_ptr<Atlas>& atlas : atlas_pool) {
-      if (atlas.use_count() == 1 && atlas->tex.extent().width == width &&
-          atlas->tex.extent().height == height) {
-        return atlas;
-      }
-    }
-    vkc::ImageDesc desc;
-    desc.extent = {width, height};
-    desc.format = VK_FORMAT_R8G8B8A8_SRGB;
-    desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-    auto image = app.allocator().create_image(desc);
-    if (!image.ok()) return image.status();
-    AtlasResult atlas = fuse_viewer::bind_atlas(
-        app.device().handle(), pipeline.descriptor_set_layout(0),
-        sampler.handle(), std::move(image).value());
-    if (atlas.ok()) atlas_pool.push_back(atlas.value());
-    return atlas;
   };
 
   // --- The view -------------------------------------------------------------
@@ -812,7 +706,7 @@ int run(GLFWwindow* window, const Options& opt) {
   rmesh::MeshExchangeConfig exchange_config;
   exchange_config.frames_in_flight = config.frames_in_flight;
   exchange_config.cross_family = cross_family;
-  rmesh::MeshExchange<AtlasJob> exchange(exchange_config);
+  rmesh::MeshExchange<fuse_viewer::AtlasJob> exchange(exchange_config);
   fuse_viewer::SharedView shared_view;  // the render camera, meshed
   std::mutex share_mtx;
   std::vector<vkc::StageRow> shared_fuse_stages;
@@ -840,26 +734,12 @@ int run(GLFWwindow* window, const Options& opt) {
           static_cast<std::uint64_t>(opt.hold_ms) * 1000000u;
       std::vector<bool> uncopyable_reported(cameras, false);
 
-      // Whether gfx can copy `color` into `tile`: a copy source, as large as
-      // the tile, and CONCURRENT where gfx is on another family, since a copy
-      // from a buffer EXCLUSIVE to recon's is undefined with nothing to report
-      // it. Checked before the camera textures the mesh: once uv0 point into
-      // its tile, the tile must be filled.
-      auto copyable = [&](const vkc::Buffer& color,
-                          const rtex::AtlasTile& tile) {
-        return color.valid() &&
-               (color.usage() & VK_BUFFER_USAGE_TRANSFER_SRC_BIT) != 0 &&
-               (!cross_family ||
-                color.sharing_mode() == VK_SHARING_MODE_CONCURRENT) &&
-               color.size() >= VkDeviceSize(tile.width) * tile.height * 4u;
-      };
-
       // Texture `mesh` from each camera's source (texture_sources: the set's
       // frame, or the camera's held one) and publish the two together: uv0
       // index into those images, so the mesh and its atlas are one value.
       auto publish = [&](const rmesh::DeviceMesh& mesh,
                          const std::vector<TextureSource>& sources) {
-        AtlasJob job;
+        fuse_viewer::AtlasJob job;
         std::size_t views_held = 0;
         std::size_t why = fuse_viewer::kTextureOff;
         if (!texture_on.load()) {
@@ -870,12 +750,11 @@ int run(GLFWwindow* window, const Options& opt) {
           why = fuse_viewer::kNoColour;
           std::vector<rtex::TextureView> views;
           rtex::AtlasLayout present{layout.width, layout.height, {}};
-          job.width = layout.width;
-          job.height = layout.height;
           for (std::size_t c = 0; c < sources.size() && c < cameras; ++c) {
             if (sources[c].frame == nullptr) continue;
             const rsensor::DeviceFrame& f = *sources[c].frame;
-            if (!copyable(*f.color, layout.tiles[c])) {
+            if (!fuse_viewer::copyable(*f.color, layout.tiles[c],
+                                       cross_family)) {
               // Said once a camera: its format is fixed at open, so every
               // set would repeat it.
               if (!uncopyable_reported[c]) {
@@ -921,10 +800,10 @@ int run(GLFWwindow* window, const Options& opt) {
                              textured.message().c_str());
                 texture_error_reported = true;
               }
-              job = AtlasJob{};
+              job = fuse_viewer::AtlasJob{};
             }
           } else {
-            job = AtlasJob{};
+            job = fuse_viewer::AtlasJob{};
           }
         }
         if (job.empty()) {
@@ -1165,14 +1044,8 @@ int run(GLFWwindow* window, const Options& opt) {
   fuse_viewer::QuitJoin fuse_guard{fuse_thread, quit};
 
   // --- Render thread (main) -------------------------------------------------
-  // A taken version's atlas job is recorded into this frame's command buffer,
-  // and the colour buffers it reads stay with this frame's slot until the slot
-  // comes round again.
-  std::vector<std::shared_ptr<Atlas>> slot_atlas(config.frames_in_flight);
-  std::vector<std::vector<std::shared_ptr<const vkc::Buffer>>> slot_sources(
-      config.frames_in_flight);
-  std::shared_ptr<Atlas> current_atlas = white_atlas;
-  bool atlas_error_said = false;  // until an atlas image is acquired again
+  // A taken version's atlas job is recorded into this frame's command buffer.
+  bool atlas_error_said = false;  // until an atlas commits again
   std::vector<vkc::StageRow> fuse_stages_snapshot;
   fuse_viewer::RigPanel panel;
   double last_x = 0.0, last_y = 0.0;
@@ -1209,47 +1082,37 @@ int run(GLFWwindow* window, const Options& opt) {
       continue;
     }
     const win::Frame& render_frame = *frame.value();
-    // begin_frame fence-waited this slot: what its last frame bound or copied
-    // from is free.
-    slot_atlas[render_frame.slot].reset();
-    slot_sources[render_frame.slot].clear();
+    atlas->poll();
 
     // Retire this slot's last frame, take the newest mesh, and commit it
     // with its atlas, copied in this command buffer -- before the frame's
-    // rendering begins, since a copy may not sit inside it. No image to copy
-    // into keeps the mesh parked for the next frame.
+    // rendering begins, since a copy may not sit inside it. A copy refused
+    // keeps the mesh parked for the next frame.
     {
       vg::Profiler::Scope copy_scope =
           profiler.gpu_scope(render_frame.cmd, "atlas copy");
       const rmesh::ExchangeOutcome outcome = exchange.begin_frame(
-          render_frame.slot, [&](const rmesh::DeviceMesh&, AtlasJob& job) {
+          render_frame.slot,
+          [&](const rmesh::DeviceMesh&, const fuse_viewer::AtlasJob& job) {
             // Every tile is one the fuse thread found copyable, since it
-            // left out any camera whose colour is not.
-            std::shared_ptr<Atlas> next = white_atlas;
-            if (!job.empty()) {
-              AtlasResult acquired = acquire_atlas(job.width, job.height);
-              if (!acquired.ok()) {
-                // Retried every frame, so said once until it succeeds.
-                if (!atlas_error_said) {
-                  std::fprintf(stderr, "rig_viewer: atlas image: %s\n",
-                               acquired.status().message().c_str());
-                  atlas_error_said = true;
-                }
-                return false;
+            // left out any camera whose colour is not. The solid colours are
+            // filled in this command buffer, so ahead of the copy.
+            const bool solid =
+                !job.empty() && show_sources && ensure_solid(render_frame.cmd);
+            const vkc::Status committed =
+                atlas->commit(render_frame.cmd, render_frame.number, job,
+                              solid ? &solid_buffers : nullptr);
+            if (!committed.ok()) {
+              // Retried every frame, so said once until it succeeds.
+              if (!atlas_error_said) {
+                std::fprintf(stderr, "rig_viewer: atlas: %s\n",
+                             committed.message().c_str());
+                atlas_error_said = true;
               }
-              next = std::move(acquired).value();
-              atlas_error_said = false;
-              // Filled in this command buffer, so ahead of the copy.
-              const bool solid = show_sources && ensure_solid(render_frame.cmd);
-              record_atlas_copy(render_frame.cmd, next->tex.handle(), job,
-                                solid ? &solid_handles : nullptr);
-              ++atlas_copies;
-              for (AtlasTileSource& source : job.tiles) {
-                slot_sources[render_frame.slot].push_back(
-                    std::move(source.color));
-              }
+              return false;
             }
-            current_atlas = std::move(next);
+            atlas_error_said = false;
+            atlas_copies += job.empty() ? 0 : 1;
             return true;
           });
       if (outcome == rmesh::ExchangeOutcome::kRefused) {
@@ -1284,7 +1147,6 @@ int run(GLFWwindow* window, const Options& opt) {
       }
       panel.mesh_rate = mesh_rate;
     }
-    slot_atlas[render_frame.slot] = current_atlas;
 
     // --- Input: orbit, pan, zoom, unless a panel has the mouse -------------
     {
@@ -1434,7 +1296,7 @@ int run(GLFWwindow* window, const Options& opt) {
         hybrid_frame.view_proj = view_proj;
         hybrid_frame.light_dir = -view.up + 0.5f * view.right - view.forward;
         hybrid_frame.flags = shading_flags(shading);
-        hybrid_frame.atlas = slot_atlas[render_frame.slot]->set.handle();
+        hybrid_frame.atlas = atlas->use(render_frame.number);
         hybrid_frame.draws = &draw;
         hybrid_frame.draw_count = 1;
         pipeline.submit(render_frame.cmd, hybrid_frame);

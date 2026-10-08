@@ -448,6 +448,10 @@ entries relevant to your task; later amendments supersede earlier rules.
   The examples parse their command lines with one parser, declare each
   shared flag family once, print stage rows in one table, and keep their
   reports out of their mains.
+- [**2026-10-08**](#2026-10-08--the-viewers-draw-with-gfxs-streamedatlas-on-its-frame-timeline-gfx-owns-the-atlas-ring-the-in-frame-copy-and-what-a-frame-holds-and-fuse_viewer-copies-its-keyframe-on-the-device-amends-the-2026-08-08-seam-b-2026-09-29-rig_viewer-2026-10-05-viewers-2026-10-07-replica-and-2026-10-08-exchange-entries) —
+  The viewers draw with gfx's `StreamedAtlas` on its frame timeline: gfx
+  owns the atlas ring, the in-frame copy and what a frame holds, and
+  `fuse_viewer` copies its keyframe on the device.
 
 ## Decision record
 
@@ -1796,6 +1800,10 @@ measured lesson "A flake read as a livelock".*)
 
 ### 2026-08-08 — `fuse_viewer` draws recon's buffers: interop seam B, end to end, and the release mark must be published *before* the mesh is taken.
 
+*Amended 2026-10-08 (the streamed-atlas entry, below):* the atlas is gfx's
+`StreamedAtlas`, and what a frame's copy reads is held until the frame loop's
+timeline reaches the frame, so the per-slot atlas and colour-buffer holds are
+gone.
 *Amended 2026-10-08 (the exchange entry, below):* the protocol is
 `mesh::MeshExchange`'s, and the mark also stops below a parked take, which
 obligation (3) requires and the fallback below broke before anything was
@@ -7574,6 +7582,10 @@ by `SensorArray::process`; CI's viewer leg compiles it.
 *Amended 2026-10-08 (the exchange entry, below):* both viewers hand meshes
 over through `mesh::MeshExchange`; `viewer_common.hpp` keeps the teardown
 guards and the render camera they mesh.
+*Amended 2026-10-08 (the streamed-atlas entry, below):* the atlas is gfx's
+`StreamedAtlas`, and what a frame's copy reads is held until the frame loop's
+timeline reaches the frame, so the per-slot atlas and colour-buffer holds are
+gone.
 
 **The rule.** `examples/viewer/rig_viewer` is `fuse_viewer`'s sibling for a
 live, synced rig of Orbbec cameras. It opens `OrbbecRig` raw, onto the device
@@ -9813,6 +9825,9 @@ pass. The CUDA paths build only in CI's CUDA leg; their diff was read by hand.
 
 ### 2026-10-05 — The viewers build on gfx's core migration.
 
+*Amended 2026-10-08 (the streamed-atlas entry, below):* the viewers pin gfx
+#123, and recon the core at #18, which that gfx requires.
+
 The viewers' gfx pin moves from #98 to #106. gfx #100-#106 moved gfx onto
 volumetric_kit_core and dropped its own names for the core's types, so recon
 and gfx now share one `Status`, `Device`, `AdoptedDevice`,
@@ -10741,6 +10756,10 @@ under the Khronos layer's synchronization validation.
 
 ### 2026-10-07 — The Replica source is an `IRgbdSensor` and the examples fuse what `GpuFramePrep` prepares: `ICameraCapture`, `CapturedFrame` and `OwnedFrame` go, and `io` loads depth as stored (amends the 2026-08-02 sensor-tier, 2026-09-14 examples and 2026-10-06 `IRgbdSensor` entries).
 
+*Amended 2026-10-08 (the streamed-atlas entry, below):* `fuse_viewer` copies
+its keyframe's colour into the atlas on the device, and its
+`atlas readback` row is gone.
+
 The first step of the 2026-10-06 plan finishes: one interface for every
 source, one frame type, one fusion path.
 
@@ -11196,6 +11215,10 @@ tooling is the core's `tools/runners`; recon keeps no copy.
 
 ### 2026-10-08 — The fuse-to-render handoff is `mesh::MeshExchange`: one gfx-free library type owns the ring's release, a parked take caps the mark, and an empty mesh draws nothing (amends the 2026-08-08 seam-B and 2026-09-29 `rig_viewer` entries).
 
+*Amended 2026-10-08 (the streamed-atlas entry, below):* the atlas a mesh is
+drawn with is gfx's `StreamedAtlas`, and `viewer_atlas.hpp`'s `Atlas`,
+`upload_atlas`, `white_atlas` and `bind_atlas` are gone.
+
 The protocol the 2026-08-08 entry derived was example code. `fuse_viewer`
 and `rig_viewer` each held the take, commit and park state machine and the
 producer's release, `viewer_common.hpp` held the mark and the bindable
@@ -11430,6 +11453,61 @@ failing with the dilation flipped. Before and after on room0: `fuse_replica`'s m
 is the same set of triangles, `codec_replica`'s bytes and distances and
 `codec_mesh`'s on Rafa2 print the same, and `fuse_render`'s PNG is
 byte-identical. Neither viewer nor `fuse_orbbec` was run.
+
+### 2026-10-08 — The viewers draw with gfx's `StreamedAtlas` on its frame timeline: gfx owns the atlas ring, the in-frame copy and what a frame holds, and `fuse_viewer` copies its keyframe on the device (amends the 2026-08-08 seam-B, 2026-09-29 `rig_viewer`, 2026-10-05 viewers, 2026-10-07 Replica and 2026-10-08 exchange entries).
+
+**The rule.** `fuse_viewer` and `rig_viewer` draw a live mesh with gfx's
+`pipelines::StreamedAtlas`, through `viewer_atlas.hpp`'s `LiveAtlas`:
+
+- A mesh's payload is an `AtlasJob`: the colour buffer of each camera that
+  textured it, with its tile. The fuse thread checks each buffer with
+  `copyable` before its camera textures the mesh, as `rig_viewer` did.
+- The frame that commits the mesh records one update, every tile from its
+  own buffer, into the ring image no unfinished frame uses, and binds
+  `use(frame.number)`. The ring is the frames in flight plus one, so the
+  copy never waits.
+- gfx's `RetireQueue` on the frame loop's timeline holds the job's buffers
+  until the timeline reaches that frame, so a frame prep reuses one only
+  after the copy has read it.
+- A mesh no camera textured binds no atlas, and `HybridMeshPipeline` draws
+  it in vertex colour against the fallback it owns.
+
+`fuse_viewer` textures from one camera, so its job is one tile, the whole
+colour image: its frame prep shares the colour with gfx's queue family, as
+`rig_viewer`'s does, and the keyframe never visits the host. A keyframe
+whose colour is not the colour camera's size, or not copyable, is not
+textured, since the atlas is laid out once. `fuse_render` keeps its two
+devices and its host readback (seam A), and uploads the keyframe into a
+one-image `StreamedAtlas` in the frame that draws it.
+
+**Why gfx's.** The ring, the barrier-ordered copy and "free it once the
+frame that used it completes" are the renderer's to get right once, for
+these viewers and the iOS renderer alike. gfx numbers its frames on a
+timeline (gfx #118) and owns the atlas ring and the copy (#120), from
+several buffers at once (#123), which a rig's atlas needs: one update a
+camera would take a ring image each. What the viewers held instead goes:
+`rig_viewer`'s image pool, its recorded barriers and copies, both viewers'
+per-slot holds of an atlas and its colour buffers, and `fuse_viewer`'s
+blocking upload, descriptor pool and set per remesh on the render thread.
+
+**What stays.** `MeshExchange` retires per frame slot: `begin_frame`
+still waits for a slot's last frame on its fence before handing the slot
+out. The pins are open PRs: gfx #123 (on #120 and #118) and the core's #18,
+which that gfx requires; both move to their mains once merged.
+
+**Verified.** Apple M5 Max, macOS, Release with warnings as errors, Orbbec
+SDK 2.10.6, FFmpeg and the viewers; 65 of 65 tests pass.
+`recon_example_viewer_atlas` runs under the validation layer with
+synchronization validation and no message. It checks each tile's copy
+region, `copyable`'s refusals, a frame's colour held while the frame waits
+and let go once it completes, a refused copy that holds nothing and keeps
+the picture, and an untextured mesh that binds no atlas. `fuse_render` on
+room0's first 120 frames, built from the base and from this change, at the
+orbit view, `--follow 60`, `--no-texture` and `--follow 60 --lit`: every
+PNG after is byte-identical to one before. The fused mesh varies run to run
+in both builds: eight runs of each build give the same two variants of a
+lit or untextured follow view, a pixel apart. Neither live viewer was run
+against a window or the rig.
 
 ## Measured lessons
 

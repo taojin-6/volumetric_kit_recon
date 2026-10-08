@@ -1,16 +1,20 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Tao Jin
 
-// The atlas the viewers draw with (examples/viewer/viewer_atlas.hpp): host
-// pixels are uploaded as an _SRGB image of their extent, ready to sample, and
-// bound through a pool and set of their own; the white dummy is one texel; an
-// image made elsewhere, as rig_viewer's device-copied atlas, is adopted as
-// is; and an empty upload is refused. Needs a device, so it skips (exit 0)
-// where none is present.
+// The atlas the live viewers draw with (examples/viewer/viewer_atlas.hpp):
+// each tile is copied from its camera's colour buffer, or its solid-colour
+// one, rows of the tile's width placed at the tile; a buffer gfx cannot copy
+// is refused before it textures anything; and LiveAtlas holds a frame's
+// colour buffers until the frame loop's timeline reaches that frame, binds
+// nothing (vertex colour) for an untextured mesh, and leaves the atlas as it
+// was when a copy is refused. The copies run on a headless device, which the
+// test skips (exit 0) without.
 
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -18,10 +22,12 @@
 #include "viewer_atlas.hpp"
 
 #include "volumetric_kit/core/vulkan/allocator.hpp"
-#include "volumetric_kit/core/vulkan/descriptor.hpp"
+#include "volumetric_kit/core/vulkan/buffer.hpp"
+#include "volumetric_kit/core/vulkan/sync.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/gfx/app/headless_app.hpp"
-#include "volumetric_kit/gfx/core/sampler.hpp"
+#include "volumetric_kit/gfx/core/render_target.hpp"
+#include "volumetric_kit/gfx/pipelines/hybrid_mesh_pipeline.hpp"
 
 #define CHECK(cond)                                                        \
   do {                                                                     \
@@ -35,86 +41,180 @@ namespace {
 
 namespace vkc = volumetric_kit::core;
 namespace vg = volumetric_kit::gfx;
-using fuse_viewer::Atlas;
+namespace vgp = volumetric_kit::gfx::pipelines;
+namespace rtex = volumetric_kit::recon::texture;
+using fuse_viewer::AtlasJob;
+using fuse_viewer::LiveAtlas;
 
-bool ready_srgb(const Atlas& atlas, std::uint32_t width, std::uint32_t height) {
-  return atlas.tex.valid() && atlas.tex.width() == width &&
-         atlas.tex.height() == height &&
-         atlas.tex.format() == VK_FORMAT_R8G8B8A8_SRGB &&
-         atlas.tex.layout() == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL &&
-         atlas.pool.handle() != VK_NULL_HANDLE && atlas.set.valid();
+// A rig of two cameras: 3 x 2 tiles side by side, then a third tile below
+// the first, which the job leaves out.
+int copies_place_each_tile() {
+  const auto a = std::make_shared<const vkc::Buffer>();
+  const auto b = std::make_shared<const vkc::Buffer>();
+  AtlasJob job;
+  job.tiles.push_back({a, rtex::AtlasTile{0, 0, 3, 2}, 0});
+  job.tiles.push_back({b, rtex::AtlasTile{3, 0, 3, 2}, 1});
+
+  const std::vector<vg::ImageCopy> copies = fuse_viewer::atlas_copies(job);
+  CHECK(copies.size() == 2);
+  CHECK(copies[0].source == a.get());
+  CHECK(copies[1].source == b.get());
+  for (const vg::ImageCopy& copy : copies) {
+    CHECK(copy.region.bufferOffset == 0);
+    CHECK(copy.region.bufferRowLength == 3);
+    CHECK(copy.region.bufferImageHeight == 2);
+    CHECK(copy.region.imageSubresource.aspectMask == VK_IMAGE_ASPECT_COLOR_BIT);
+    CHECK(copy.region.imageSubresource.mipLevel == 0);
+    CHECK(copy.region.imageSubresource.layerCount == 1);
+    CHECK(copy.region.imageOffset.y == 0 && copy.region.imageOffset.z == 0);
+    CHECK(copy.region.imageExtent.width == 3);
+    CHECK(copy.region.imageExtent.height == 2);
+    CHECK(copy.region.imageExtent.depth == 1);
+  }
+  CHECK(copies[0].region.imageOffset.x == 0);
+  CHECK(copies[1].region.imageOffset.x == 3);
+
+  // The colour-by-camera view: each tile from its camera's solid buffer.
+  const std::vector<vkc::Buffer> solid(2);
+  const std::vector<vg::ImageCopy> sourced =
+      fuse_viewer::atlas_copies(job, &solid);
+  CHECK(sourced.size() == 2);
+  CHECK(sourced[0].source == &solid[0]);
+  CHECK(sourced[1].source == &solid[1]);
+
+  CHECK(fuse_viewer::atlas_copies(AtlasJob{}).empty());
+  return 0;
 }
 
-int run(vg::app::HeadlessApp& app) {
-  auto sampler_result = vg::Sampler::create(app.device().handle());
-  CHECK(sampler_result.ok());
-  const vg::Sampler sampler = std::move(sampler_result).value();
-  // As the hybrid-mesh pipeline's set 0: one combined image sampler.
-  VkDescriptorSetLayoutBinding binding{};
-  binding.binding = 0;
-  binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-  binding.descriptorCount = 1;
-  binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-  auto layout_result =
-      vkc::DescriptorSetLayout::create(app.device().handle(), &binding, 1);
-  CHECK(layout_result.ok());
-  const vkc::DescriptorSetLayout layout = std::move(layout_result).value();
+// A mapped colour buffer of `words`, with `usage`.
+vkc::Result<std::shared_ptr<const vkc::Buffer>> make_color(
+    vkc::Allocator& allocator, const std::vector<std::uint32_t>& words,
+    VkBufferUsageFlags usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT) {
+  vkc::BufferDesc desc;
+  desc.size = words.size() * sizeof(std::uint32_t);
+  desc.usage = usage;
+  desc.memory = vkc::MemoryUsage::Staging;
+  VKC_ASSIGN(vkc::Buffer buffer, allocator.create_buffer(desc));
+  std::memcpy(buffer.mapped(), words.data(), desc.size);
+  return std::make_shared<const vkc::Buffer>(std::move(buffer));
+}
 
-  // A 3 x 2 keyframe image: its extent, not a square or a fixed size.
-  const std::vector<std::uint32_t> pixels = {
-      0xFF0000FFu, 0xFF00FF00u, 0xFFFF0000u,
-      0xFFFFFFFFu, 0x00000000u, 0xFF808080u,
-  };
-  auto uploaded =
-      fuse_viewer::upload_atlas(app.device(), app.allocator(), layout.handle(),
-                                sampler.handle(), pixels.data(), 3, 2);
-  CHECK(uploaded.ok());
-  const std::shared_ptr<Atlas> keyframe = std::move(uploaded).value();
-  CHECK(ready_srgb(*keyframe, 3, 2));
+int copyable_checks_the_buffer(vkc::Allocator& allocator) {
+  const rtex::AtlasTile tile{0, 0, 2, 2};
+  auto fits = make_color(allocator, std::vector<std::uint32_t>(4, 0));
+  CHECK(fits.ok());
+  // EXCLUSIVE to one family: copyable on it, not from another family.
+  CHECK(fuse_viewer::copyable(*fits.value(), tile, false));
+  CHECK(!fuse_viewer::copyable(*fits.value(), tile, true));
+  auto short_of_it = make_color(allocator, std::vector<std::uint32_t>(3, 0));
+  CHECK(short_of_it.ok());
+  CHECK(!fuse_viewer::copyable(*short_of_it.value(), tile, false));
+  auto not_a_source = make_color(allocator, std::vector<std::uint32_t>(4, 0),
+                                 VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+  CHECK(not_a_source.ok());
+  CHECK(!fuse_viewer::copyable(*not_a_source.value(), tile, false));
+  CHECK(!fuse_viewer::copyable(vkc::Buffer{}, tile, false));
+  return 0;
+}
 
-  // Each atlas has a pool of its own, so one frees without the other.
-  auto white = fuse_viewer::white_atlas(app.device(), app.allocator(),
-                                        layout.handle(), sampler.handle());
-  CHECK(white.ok());
-  CHECK(ready_srgb(*white.value(), 1, 1));
-  CHECK(white.value()->pool.handle() != keyframe->pool.handle());
-  CHECK(white.value()->set.handle() != keyframe->set.handle());
+int live_atlas_holds_a_frames_colour(vg::app::HeadlessApp& app) {
+  vg::RenderTargetLayout target;
+  target.color_formats[0] = VK_FORMAT_R8G8B8A8_SRGB;
+  target.color_count = 1;
+  target.depth_format = VK_FORMAT_D32_SFLOAT;
+  auto pipeline =
+      vgp::HybridMeshPipeline::create(app.device(), app.allocator(), target);
+  CHECK(pipeline.ok());
+  auto frames = vkc::TimelineSemaphore::create(app.device());
+  CHECK(frames.ok());
+  auto gate = vkc::TimelineSemaphore::create(app.device());
+  CHECK(gate.ok());
+  auto made = LiveAtlas::create(pipeline.value(), app.allocator(),
+                                frames.value(), {4, 2}, 2);
+  CHECK(made.ok());
+  const std::unique_ptr<LiveAtlas> atlas = std::move(made).value();
+  CHECK(atlas->use(1) == VK_NULL_HANDLE);  // nothing committed: vertex colour
 
-  // An image made elsewhere, filled later by device copies.
-  vkc::ImageDesc desc;
-  desc.extent = {4, 4};
-  desc.format = VK_FORMAT_R8G8B8A8_SRGB;
-  desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-  auto image = app.allocator().create_image(desc);
-  CHECK(image.ok());
-  const VkImage handle = image.value().handle();
-  const VkImageView view = image.value().view();
-  auto bound =
-      fuse_viewer::bind_atlas(app.device().handle(), layout.handle(),
-                              sampler.handle(), std::move(image).value());
-  CHECK(bound.ok());
-  CHECK(bound.value()->tex.handle() == handle);
-  CHECK(bound.value()->tex.view() == view);
-  CHECK(bound.value()->set.valid());
+  // Two cameras, a 2 x 2 tile each.
+  auto left = make_color(app.allocator(), {1, 2, 3, 4});
+  auto right = make_color(app.allocator(), {5, 6, 7, 8});
+  CHECK(left.ok() && right.ok());
+  AtlasJob job;
+  job.tiles.push_back({left.value(), rtex::AtlasTile{0, 0, 2, 2}, 0});
+  job.tiles.push_back({right.value(), rtex::AtlasTile{2, 0, 2, 2}, 1});
 
-  // Nothing to upload.
-  CHECK(!fuse_viewer::upload_atlas(app.device(), app.allocator(),
-                                   layout.handle(), sampler.handle(), nullptr,
-                                   0, 0)
-             .ok());
+  // Frame 1 copies the job and is held at the gate, so it has not run.
+  vkc::Status committed;
+  VkDescriptorSet bound = VK_NULL_HANDLE;
+  auto frame1 = app.device().submit_pending(
+      [&](VkCommandBuffer cmd) {
+        committed = atlas->commit(cmd, 1, job);
+        bound = atlas->use(1);
+      },
+      {{&gate.value(), 1}}, {{&frames.value(), 1}});
+  CHECK(frame1.ok());
+  CHECK(committed.ok());
+  CHECK(bound != VK_NULL_HANDLE);
+  job.tiles.clear();  // the published job is gone; the atlas holds the colour
+  atlas->poll();
+  CHECK(left.value().use_count() == 2);
+  CHECK(right.value().use_count() == 2);
+
+  // Once frame 1 completes, the colour is let go.
+  CHECK(gate.value().signal(1).ok());
+  CHECK(frame1.value().wait().ok());
+  atlas->poll();
+  CHECK(left.value().use_count() == 1);
+  CHECK(right.value().use_count() == 1);
+
+  // A copy gfx refuses -- a tile past the atlas's edge -- holds nothing and
+  // leaves frame 1's picture bound.
+  AtlasJob outside;
+  outside.tiles.push_back({left.value(), rtex::AtlasTile{3, 0, 2, 2}, 0});
+  vkc::Status refused;
+  auto frame2 = app.device().submit_pending(
+      [&](VkCommandBuffer cmd) {
+        refused = atlas->commit(cmd, 2, outside);
+        bound = atlas->use(2);
+      },
+      {}, {{&frames.value(), 2}});
+  CHECK(frame2.ok());
+  CHECK(!refused.ok());
+  CHECK(bound != VK_NULL_HANDLE);
+  CHECK(frame2.value().wait().ok());
+  outside.tiles.clear();
+  CHECK(left.value().use_count() == 1);
+
+  // A mesh no camera textured draws in vertex colour.
+  auto frame3 = app.device().submit_pending(
+      [&](VkCommandBuffer cmd) {
+        committed = atlas->commit(cmd, 3, AtlasJob{});
+        bound = atlas->use(3);
+      },
+      {}, {{&frames.value(), 3}});
+  CHECK(frame3.ok());
+  CHECK(committed.ok());
+  CHECK(bound == VK_NULL_HANDLE);
+  CHECK(frame3.value().wait().ok());
   return 0;
 }
 
 }  // namespace
 
 int main() {
+  if (const int rc = copies_place_each_tile()) return rc;
+
   vg::app::HeadlessAppConfig config;
   config.app_name = "recon_example_viewer_atlas_test";
+  config.enable_validation = true;
   auto app = vg::app::HeadlessApp::create(config);
   if (!app.ok()) {
     return vr_test::no_device("no Vulkan device", app.status().message());
   }
-  if (const int rc = run(app.value())) return rc;
+  if (const int rc = copyable_checks_the_buffer(app.value().allocator())) {
+    return rc;
+  }
+  if (const int rc = live_atlas_holds_a_frames_colour(app.value())) return rc;
   std::puts("viewer_atlas: OK");
   return 0;
 }

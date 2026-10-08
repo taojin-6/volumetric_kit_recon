@@ -177,7 +177,7 @@ a message without losing its domain or detail.
 All of it is volumetric_kit_core's (the 2026-10-03 decision), and recon writes
 it under the core's names (2026-10-04): `core::Status` in recon's namespaces,
 `volumetric_kit::core::Status` to a consumer, so a recon error is the same type
-as calib's, and as gfx's from its #100 (the viewers pin gfx #106, which names
+as calib's, and as gfx's from its #100 (the viewers pin gfx #123, which names
 the core's types as recon does). Diagnostics go through the core's one process-wide log sink;
 recon's `log_message(level, message)` tags them with source `"vr"`, which the
 default sink prints as `[vr <level>]`, and an application's handler receives
@@ -1508,7 +1508,8 @@ empty poll is retried after a millisecond until the source reports itself
 replay ends. A frame kept past the next poll — `fuse_render`'s keyframe,
 `fuse_viewer`'s newest successfully fused frame for its final texture pass —
 is kept as prepared, a `DeviceFrame` holding its buffers, and textures through
-its own colour camera, its colour read back to the host for the atlas;
+its own colour camera: `fuse_render` reads its colour back to the host for
+the atlas, and `fuse_viewer` copies it into the atlas on the device;
 `fuse_viewer` keeps that frame through the next preparation and fusion,
 replacing it only on success (`fuse_keyframe`). A failure therefore leaves
 its depth, colour and cameras available for the final and later remeshes.
@@ -1565,9 +1566,14 @@ depth only inside each colour camera's view unless given `--all-depth`, and
 texturing a camera a set lacks from its last frame, a fallback view
 (`--hold-ms`). The two viewers hand meshes over through `mesh::MeshExchange`
 and share `viewer_common.hpp`: the teardown guards and the render camera the
-fuse thread meshes (`SharedView`). `fuse_render` and both viewers bind their
-atlas, an image with a descriptor pool and set of its own, through
-`viewer_atlas.hpp`.
+fuse thread meshes (`SharedView`). Both draw with gfx's `StreamedAtlas`
+through `viewer_atlas.hpp`'s `LiveAtlas`: a mesh's payload names the colour
+buffers of the cameras that textured it and their tiles, the frame that
+commits the mesh copies them into the atlas, and gfx's `RetireQueue` holds
+them until the frame loop's timeline reaches that frame; an untextured mesh
+draws in vertex colour against the pipeline's own fallback (2026-10-08).
+`fuse_render` uploads its keyframe into a `StreamedAtlas` in the frame that
+draws it.
 **`codec_replica`** fuses a Replica sequence as `fuse_replica` does, and
 streams the growing grid through the codec: every `--encode-every` frames it
 encodes, then decodes into a player grid built from `read_frame_info` and

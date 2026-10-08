@@ -37,7 +37,6 @@
 #include "recon_gfx_bridge.hpp"
 #include "replica_flags.hpp"
 #include "replica_sensor.hpp"  // vr_example::ReplicaSensor (examples/common)
-#include "viewer_atlas.hpp"
 
 // core and recon tiers
 #include "volumetric_kit/core/base/result.hpp"
@@ -45,6 +44,7 @@
 #include "volumetric_kit/core/vulkan/command_batch.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/instance.hpp"
+#include "volumetric_kit/core/vulkan/sync.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/io/image_io.hpp"
@@ -64,9 +64,9 @@
 #include "volumetric_kit/gfx/camera/camera.hpp"
 #include "volumetric_kit/gfx/core/offscreen_target.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
-#include "volumetric_kit/gfx/core/sampler.hpp"
 #include "volumetric_kit/gfx/pipelines/gpu_mesh.hpp"
 #include "volumetric_kit/gfx/pipelines/hybrid_mesh_pipeline.hpp"
+#include "volumetric_kit/gfx/pipelines/streamed_atlas.hpp"
 
 namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
@@ -130,7 +130,7 @@ vkc::Result<Options> parse_args(int argc, char** argv) {
 
 // The reconstruction handed to the renderer: the textured mesh plus the RGBA8
 // atlas its uv0 index into (the keyframe image projected onto it). `atlas` is
-// empty when texturing is off, and the caller binds a 1x1 white dummy instead.
+// empty when texturing is off, and the mesh draws in its vertex colour.
 struct Reconstruction {
   rmesh::Mesh mesh;
   // Canonical packed pixels (R | G<<8 | B<<16, the coverage byte on top: 0xFF
@@ -370,8 +370,8 @@ int main(int argc, char** argv) {
   }
   vg::OffscreenTarget target = std::move(target_r).value();
 
-  auto pipeline_result =
-      vgp::HybridMeshPipeline::create(app.device().handle(), target.layout());
+  auto pipeline_result = vgp::HybridMeshPipeline::create(
+      app.device(), app.allocator(), target.layout());
   if (!pipeline_result.ok()) {
     std::fprintf(stderr, "HybridMeshPipeline: %s\n",
                  pipeline_result.status().message().c_str());
@@ -389,26 +389,27 @@ int main(int argc, char** argv) {
   vgp::GpuMesh gpu_mesh = std::move(gpu_r).value();
 
   // 4. Atlas: the keyframe's colour image where texturing ran (uv0 index into
-  // it), else the white dummy.
-  auto sampler_r = vg::Sampler::create(app.device().handle());
-  if (!sampler_r.ok()) {
-    std::fprintf(stderr, "sampler: %s\n", sampler_r.status().message().c_str());
+  // it), uploaded in the frame that draws it; else none, and the mesh draws in
+  // its vertex colour. The one frame is number 1 on a timeline of its own.
+  auto frames_r = vkc::TimelineSemaphore::create(app.device());
+  if (!frames_r.ok()) {
+    std::fprintf(stderr, "timeline: %s\n", frames_r.status().message().c_str());
     return 1;
   }
-  vg::Sampler sampler = std::move(sampler_r).value();
-  auto atlas_r = recon.atlas.empty()
-                     ? fuse_viewer::white_atlas(
-                           app.device(), app.allocator(),
-                           pipeline.descriptor_set_layout(0), sampler.handle())
-                     : fuse_viewer::upload_atlas(
-                           app.device(), app.allocator(),
-                           pipeline.descriptor_set_layout(0), sampler.handle(),
-                           recon.atlas.data(), recon.atlas_w, recon.atlas_h);
-  if (!atlas_r.ok()) {
-    std::fprintf(stderr, "atlas: %s\n", atlas_r.status().message().c_str());
-    return 1;
+  const vkc::TimelineSemaphore frames = std::move(frames_r).value();
+  std::optional<vgp::StreamedAtlas> atlas;
+  if (!recon.atlas.empty()) {
+    vgp::StreamedAtlasDesc atlas_desc;
+    atlas_desc.extent = {recon.atlas_w, recon.atlas_h};
+    atlas_desc.slots = 1;
+    auto atlas_r = vgp::StreamedAtlas::create(pipeline, app.allocator(), frames,
+                                              atlas_desc);
+    if (!atlas_r.ok()) {
+      std::fprintf(stderr, "atlas: %s\n", atlas_r.status().message().c_str());
+      return 1;
+    }
+    atlas = std::move(atlas_r).value();
   }
-  const std::shared_ptr<fuse_viewer::Atlas> atlas = std::move(atlas_r).value();
 
   // 5. Render one frame to the offscreen target, then read it back.
   const vgp::HybridMeshDraw draw{&gpu_mesh};
@@ -417,12 +418,18 @@ int main(int argc, char** argv) {
   frame.view_proj = view_proj;
   frame.light_dir = glm::vec3(0.4f, 0.9f, 0.5f);
   frame.flags = opt.lit ? vgp::kHybridMeshLit : 0u;
-  frame.atlas = atlas->set.handle();
   frame.draws = &draw;
   frame.draw_count = 1;
 
-  const vkc::Status rendered =
-      app.device().submit_single_time([&](VkCommandBuffer cmd) {
+  vkc::Status uploaded;
+  auto rendered = app.device().submit_pending(
+      [&](VkCommandBuffer cmd) {
+        if (atlas) {
+          uploaded =
+              atlas->record_upload(cmd, 1, recon.atlas.data(),
+                                   recon.atlas.size() * sizeof(std::uint32_t));
+          frame.atlas = atlas->use(1);
+        }
         target.prepare(cmd);
         const vg::RenderTarget rt = target.target();
         vg::RenderTargetBeginInfo begin_info;
@@ -441,9 +448,13 @@ int main(int argc, char** argv) {
         pipeline.submit(cmd, frame);
         rt.end(cmd);
         target.record_readback(cmd);
-      });
-  if (!rendered.ok()) {
-    std::fprintf(stderr, "render: %s\n", rendered.message().c_str());
+      },
+      {}, {{&frames, 1}});
+  const vkc::Status done =
+      rendered.ok() ? rendered.value().wait() : rendered.status();
+  if (!done.ok() || !uploaded.ok()) {
+    std::fprintf(stderr, "render: %s\n",
+                 (done.ok() ? uploaded : done).message().c_str());
     return 1;
   }
 

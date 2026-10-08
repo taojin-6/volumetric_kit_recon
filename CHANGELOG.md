@@ -124,9 +124,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   The view they mesh is `viewer_common.hpp`'s `SharedView`, and
   `recon_gfx_bridge.hpp`'s `to_live_mesh` names recon's buffers for gfx.
   `fuse_viewer`'s panel takes its extract rows from the payload of the mesh
-  it draws. `fuse_render` and both viewers make their atlas with
-  `viewer_atlas.hpp` in place of three copies. Test:
-  `recon_example_viewer_atlas`.
+  it draws.
 - `codec`: **one text for the frame's models and block grammar.** The rANS
   kernels include it as GLSL and the host compiles it as C++
   (`shaders/frame_models.glsl`, `shaders/frame_grammar.glsl`), so the host's
@@ -141,6 +139,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   complete-or-error behavior. `fuse_viewer` and `rig_viewer` explicitly accept
   partial coverage. `allocate_band` goes from `examples/common/fuse_frame.hpp`;
   `codec_mesh` and the codec player share `volume::grow_grid`.
+- examples: **the viewers draw with gfx's `StreamedAtlas` on its frame
+  timeline.** gfx holds the ring of atlas images, the copy recorded in the
+  frame and what a frame keeps alive, so `rig_viewer`'s image pool, its
+  hand-recorded copy and both viewers' per-slot holds go; `viewer_atlas.hpp`
+  keeps `LiveAtlas`, which holds a frame's colour buffers on gfx's
+  `RetireQueue`. `fuse_viewer` copies its keyframe's colour on the device as
+  `rig_viewer` does, so its `atlas readback` row and the blocking upload per
+  remesh go. An untextured mesh draws in vertex colour against the
+  pipeline's fallback, so the white atlas goes. `fuse_render`'s PNGs are
+  unchanged. Test: `recon_example_viewer_atlas`. The viewers pin gfx #123.
 - build: **the core pin moves to core #18** (5913731), which adds
   `CommandBatch::submit_async` (#15), for the pipelined stages to come, and
   the timeline-value checks the viewers' gfx requires; recon's calls are
