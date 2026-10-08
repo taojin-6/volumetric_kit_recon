@@ -278,6 +278,16 @@ vr_target_warnings(recon_mesh_marching_cubes_config_test)
 add_test(NAME recon_mesh_marching_cubes_config
          COMMAND recon_mesh_marching_cubes_config_test)
 
+# mesh MeshExchange: the fuse-to-render handoff against a host model of the ring
+# -- the mark, the take, a parked take never released, an empty mesh drawing
+# nothing, the latch, and a seeded run with failures in which no slot the
+# consumer holds is reclaimed. Host only, so it always runs.
+add_executable(recon_mesh_exchange_test mesh_exchange_test.cpp)
+target_link_libraries(recon_mesh_exchange_test
+                      PRIVATE volumetric_kit::recon_mesh)
+vr_target_warnings(recon_mesh_exchange_test)
+add_test(NAME recon_mesh_exchange COMMAND recon_mesh_exchange_test)
+
 # texture projective: texture a mesh of three triangles (one the camera sees
 # head-on, one occluded by a closer depth reading, one behind the camera) and
 # verify the visible triangle gets the exact projected atlas UVs while the
