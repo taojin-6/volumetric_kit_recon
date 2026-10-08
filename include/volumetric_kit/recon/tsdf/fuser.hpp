@@ -27,24 +27,28 @@ struct FuserConfig {
   /// When the grid grows: the ceiling, the memory, and whether at all.
   volume::GrowthPolicy growth;
   /// The most times one set may grow the grid, ahead of need and for a
-  /// capacity limit together. Each grow for a capacity limit is followed by
-  /// one more allocation, so a set allocates at most this many times plus
-  /// one. Lost bucket-lock races are not retried here: the allocation
-  /// re-dispatches while they resolve, and what is left is asked for again
-  /// by the next set.
+  /// capacity limit together; 0 never grows. Each grow for a capacity limit
+  /// is followed by one more allocation, so a set allocates at most this
+  /// many times plus one. Lost bucket-lock races are not retried here: the
+  /// allocation re-dispatches while they resolve, and what is left is asked
+  /// for again by the next set.
   int max_grows_per_set = 2;
   /// The occupancy past which a set allocates nothing new, so a grid that
   /// cannot grow stops feeding the allocator's overflow scan; the set's
   /// frames still fuse into the blocks already there. 1 (the default)
-  /// never stops.
+  /// never stops. With growth on it is at least
+  /// @ref volume::VoxelHashMap::kGrowThreshold: below it, a set would stop
+  /// allocating before a grow ahead is due, and the grid would never grow.
   float refuse_allocation_above = 1.0f;
 };
 
 /// @brief What @ref Fuser::fuse did to the grid, for a caller to report.
 struct FuseReport {
-  /// The grow ahead of need, before allocating.
+  /// The grow ahead of need, before allocating; `NotDue` when
+  /// @ref FuserConfig::max_grows_per_set is 0.
   volume::GrowthEvent ahead;
-  /// The last grow for a capacity limit; `NotDue` when the set needed none.
+  /// The last grow for a capacity limit; `NotDue` when the set needed none
+  /// or had spent @ref FuserConfig::max_grows_per_set.
   volume::GrowthEvent grow;
   /// How many times the set grew the grid.
   int grows = 0;
@@ -90,8 +94,9 @@ class VR_TSDF_API Fuser {
   /// @return The fuser; `Status::Code::InvalidArgument` for a negative
   ///         @ref FuserConfig::max_grows_per_set or
   ///         @ref volume::GrowthPolicy::max_buckets, or a
-  ///         @ref FuserConfig::refuse_allocation_above outside (0, 1]; or
-  ///         what @ref TsdfIntegrator::create returns.
+  ///         @ref FuserConfig::refuse_allocation_above outside (0, 1] or,
+  ///         with growth on, below @ref volume::VoxelHashMap::kGrowThreshold;
+  ///         or what @ref TsdfIntegrator::create returns.
   static core::Result<Fuser> create(core::Device& device,
                                     core::Allocator& allocator,
                                     FuserConfig config = {});

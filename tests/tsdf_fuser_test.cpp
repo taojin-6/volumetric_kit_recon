@@ -6,10 +6,12 @@
 // allocate every band, then integrate -- on a grid that never needed to grow,
 // bit for bit. It grows ahead of need, before any allocation fails. A grow
 // the headroom declines (a reading at the limit included), the policy
-// forbids, or the per-set bound stops leaves blocks out but still fuses the
-// set, and so does a resize that runs out of memory, which is asked again
-// after retry_after sets rather than never. Past refuse_allocation_above a set
-// allocates nothing new. Exits 0 (skip) where no device is present.
+// forbids, or the per-set bound (the grow ahead included) stops leaves blocks
+// out but still fuses the set, and so does a resize that runs out of memory,
+// which is asked again after retry_after sets rather than never. Past
+// refuse_allocation_above a set allocates nothing new; with growth on, a
+// value below kGrowThreshold is refused. Exits 0 (skip) where no device is
+// present.
 
 #include <cmath>
 #include <cstddef>
@@ -253,7 +255,9 @@ int main() {
   }
 
   // The per-set bound: one grow, then the set fuses what fits; none, and the
-  // set never asks.
+  // set never asks. The grow ahead counts against it: the second set, on a
+  // full grid, grows ahead once under a bound of one and not at all under
+  // zero, and asks for no grow for its capacity limit.
   for (const int bound : {0, 1}) {
     tsdf::FuserConfig config;
     config.max_grows_per_set = bound;
@@ -266,6 +270,15 @@ int main() {
     CHECK(grid->grid().num_buckets == 1 << bound);
     CHECK(report->grow.outcome ==
           (bound == 0 ? GrowthOutcome::NotDue : GrowthOutcome::Grew));
+    CHECK(report->dropped > 0 && report->failures.capacity_limited());
+    CHECK(report->load_factor > vol::VoxelHashMap::kGrowThreshold);
+    report = fuser->fuse(*grid, set);
+    CHECK(report.ok());
+    CHECK(report->grows == bound);
+    CHECK(report->ahead.outcome ==
+          (bound == 0 ? GrowthOutcome::NotDue : GrowthOutcome::Grew));
+    CHECK(report->grow.outcome == GrowthOutcome::NotDue);
+    CHECK(grid->grid().num_buckets == 1 << (2 * bound));
     CHECK(report->dropped > 0 && report->failures.capacity_limited());
   }
 
@@ -354,6 +367,14 @@ int main() {
     bad.growth.max_buckets = -1;
     CHECK(make_fuser(dev, alloc, bad).status().domain() ==
           vkc::Status::Code::InvalidArgument);
+    // A stop below the grow threshold would refuse allocation before a grow
+    // ahead is due, for good; at it, the grow ahead runs first.
+    bad = {};
+    bad.refuse_allocation_above = 0.6f;
+    CHECK(make_fuser(dev, alloc, bad).status().domain() ==
+          vkc::Status::Code::InvalidArgument);
+    bad.refuse_allocation_above = vol::VoxelHashMap::kGrowThreshold;
+    CHECK(make_fuser(dev, alloc, bad).ok());
 
     auto fuser = make_fuser(dev, alloc);
     auto grid = make_grid(dev, alloc, params(1024));

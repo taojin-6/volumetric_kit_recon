@@ -25,6 +25,12 @@ core::Result<Fuser> Fuser::create(core::Device& device,
     return core::Status::invalid_argument(
         "Fuser::create: refuse_allocation_above must be in (0, 1]");
   }
+  if (config.growth.enabled &&
+      config.refuse_allocation_above < volume::VoxelHashMap::kGrowThreshold) {
+    return core::Status::invalid_argument(
+        "Fuser::create: with growth on, refuse_allocation_above must be >= "
+        "VoxelHashMap::kGrowThreshold");
+  }
   VKC_ASSIGN(TsdfIntegrator integrator,
              TsdfIntegrator::create(device, allocator));
   return Fuser(std::move(integrator), std::move(config));
@@ -43,8 +49,10 @@ core::Result<FuseReport> Fuser::fuse(volume::VoxelBlockGrid& grid,
     return core::Status::invalid_argument("Fuser::fuse: moved-from fuser");
   }
   FuseReport report;
-  VKC_ASSIGN(report.ahead, growth_.grow_ahead(grid, metrics));
-  report.grows = report.ahead.grew() ? 1 : 0;
+  if (config_.max_grows_per_set > 0) {
+    VKC_ASSIGN(report.ahead, growth_.grow_ahead(grid, metrics));
+    report.grows = report.ahead.grew() ? 1 : 0;
+  }
 
   VKC_ASSIGN(const float load, grid.map().load_factor());
   if (load > config_.refuse_allocation_above) {
