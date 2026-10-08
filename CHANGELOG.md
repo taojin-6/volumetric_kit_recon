@@ -126,9 +126,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`DecodedPicture::yuv`), with `pts` and `encoding` beside it (BREAKING):
   one description of a device picture, which a frame takes as its colour
   unchanged (`frame.color = picture.yuv`). The decoder fills all of it, a
-  CUDA buffer's `kQueueFamilyExternal` included. `YuvImage`, `YuvLayout` and
-  the queue-family constants move to `sensor/yuv_image.hpp`, which
-  `rgbd_frame.hpp` includes. Migrating: `width`, `height`, `layout`,
+  CUDA buffer's `kQueueFamilyExternal` included. `YuvImage`, `YuvLayout`,
+  the queue-family constants, `VideoColorMatrix`, `YcbcrWeights` and
+  `ycbcr_weights` move to `sensor/yuv_image.hpp`, which `rgbd_frame.hpp` and
+  `decoded_picture.hpp` include. Migrating: `width`, `height`, `layout`,
   `device`, `offset`, `stride`, `image`, `full_range` and `chroma_location`
   are `picture.yuv`'s; `picture.matrix` is `picture.yuv.kr` and `kb`
   (`ycbcr_weights`); `VideoPixelLayout` is `YuvLayout` (`Yuv420` is `I420`).
@@ -137,6 +138,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   it with `-Werror`. Test: `recon_subproject_defaults`.
 - build: **every target that calls the Orbbec SDK compiles with exceptions,
   privately** (`vr_link_orbbec_sdk`), so it can catch the SDK's errors.
+- CI: **the macOS leg builds `recon_sensor_apple` without FFmpeg and for
+  iOS**: its Release job builds and runs
+  `recon_sensor_apple_pixel_buffer_importer` with no FFmpeg, and compiles the
+  importer for iOS 16.
 - `sensor/utils`: **`GpuFramePrep::prepare` is `prepare_batch` over a set
   of one**, so a frame its checks refuse no longer times a `"frame prep"`
   row.

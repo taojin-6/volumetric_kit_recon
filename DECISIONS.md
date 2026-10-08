@@ -11624,11 +11624,12 @@ would read CUDA's writes without taking them over, or fuse the wrong colour,
 which `GpuFramePrep`'s checks cannot tell.
 
 **Where it lives.** `yuv_image.hpp` is a header of `recon_sensor` that names
-no camera, so `recon_sensor_video` describes its pictures with it linking
-`recon_core` alone, as it already used `chroma_location.hpp`. A picture
-carries the weights, which name any matrix; `VideoColorMatrix` and
-`ycbcr_weights` stay the decoders' vocabulary for the matrices a stream
-names.
+no camera, so `recon_sensor_video` describes its pictures with it without
+linking the camera tier, as it already used `chroma_location.hpp`. A picture
+carries the weights, which name any matrix. `VideoColorMatrix` and
+`ycbcr_weights`, a named matrix's weights, live beside it, so a source that
+is no decoder, such as an iOS camera whose buffer names its matrix, maps the
+matrix with no header of the FFmpeg-gated decoders.
 
 **Validation.** Apple M5 Max, macOS, Release with warnings as errors, Orbbec
 and FFmpeg: the 58 tests pass with `VR_TEST_HEVC_BACKEND=videotoolbox`.
@@ -11654,6 +11655,9 @@ coded.
 - **`VtJpeg` stays inside `JpegDecoder`**, its public face, and so behind
   `VR_WITH_FFMPEG`: on iOS it would reach a VideoToolbox key iOS has only
   from 17, above the app's floor of 16.
+- **CI holds both promises.** The macOS leg, whose own build has FFmpeg,
+  builds and runs the importer's test again without it, and compiles the
+  importer for iOS 16 with exceptions enabled and `-Werror`.
 
 **Validation.** Apple M5 Max, macOS, Release with warnings as errors: the 59
 tests pass with Orbbec and FFmpeg (`VR_TEST_HEVC_BACKEND=videotoolbox`), and
@@ -11663,6 +11667,16 @@ Khronos validation layer with synchronization validation; without the
 import's drop of a stale buffer it fails. The importer compiles against the
 iOS 16 SDK with `-Werror`, once it includes `IOSurfaceRef.h` (iOS has no
 `IOSurface.h`). Not run on an iPhone.
+
+
+**Rebase verification (2026-10-10).** All 71 tests pass on macOS Release
+with synchronization validation, warnings as errors, FFmpeg, Orbbec SDK
+2.10.6, Assimp and the viewers enabled. The importer uses the core GPU test
+policy introduced in #208; the existing OOM and viewer teardown regressions
+remain intact. The no-FFmpeg importer build and test pass under the same
+validation policy, and its implementation and public header compile for
+arm64 iOS 16 with the iOS 27 SDK. The CI compile check keeps exceptions
+enabled. No camera, iPhone or interactive viewer was exercised.
 
 ## Measured lessons
 
