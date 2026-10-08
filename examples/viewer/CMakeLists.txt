@@ -63,11 +63,20 @@ FetchContent_Declare(
   # StageRow, so recon's stage rows reach the overlay as they are. A compile
   # floor: before it gfx has a Device, Status and Texture of its own.
   #
+  # And at or past gfx #123 (on #120 and #118): frames numbered on a timeline,
+  # with a RetireQueue keyed on those numbers; StreamedAtlas, the ring of atlas
+  # images updated inside the frame, from several buffers at once (each camera's
+  # tile from its own colour buffer); and a HybridMeshPipeline that owns the
+  # fallback for a frame with no atlas. A compile floor: the viewers hold no
+  # atlas ring, fallback or frame-slot keep-alive of their own.
+  #
   # gfx builds against recon's core pin (third_party/CMakeLists.txt declares the
   # core first, so it wins over gfx's VG_VKC_PIN), which may run ahead of gfx's
   # own -- its check takes that commit or newer -- only by core changes that add
-  # API: recon's a8b63d1 (core #15, submit_async) to gfx's a60398b.
-  GIT_TAG 53e8f6389fe9cd9462e7000c49cc758d29c8149a # gfx #106
+  # API. They agree at 5913731 (core #18).
+  #
+  # TODO: pin gfx main once #118, #120 and #123 merge.
+  GIT_TAG d2ebcc89b6d83562d362003d46b20ac9d201e793 # gfx #123
   GIT_SHALLOW FALSE)
 FetchContent_MakeAvailable(volumetric_kit_gfx)
 
@@ -96,13 +105,15 @@ target_link_libraries(fuse_render PRIVATE ${_viewer_recon_libs}
 target_include_directories(fuse_render PRIVATE ${_viewer_common_inc})
 vr_target_warnings(fuse_render)
 
-# The atlas all three viewers bind (viewer_atlas.hpp), on a headless gfx device.
-# Defined here, where gfx is fetched. Skips (exit 0) with no device.
+# The atlas both live viewers draw with (viewer_atlas.hpp), on a headless gfx
+# device. Defined here, where gfx is fetched. Skips (exit 0) with no device.
 if(VR_BUILD_TESTS)
   add_executable(recon_example_viewer_atlas_test
                  "${PROJECT_SOURCE_DIR}/tests/example_viewer_atlas_test.cpp")
-  target_link_libraries(recon_example_viewer_atlas_test
-                        PRIVATE volumetric_kit::gfx_app Vulkan::Vulkan)
+  target_link_libraries(
+    recon_example_viewer_atlas_test
+    PRIVATE volumetric_kit::recon_texture volumetric_kit::gfx_app
+            volumetric_kit::gfx_pipelines Vulkan::Vulkan)
   target_include_directories(
     recon_example_viewer_atlas_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}"
                                             "${PROJECT_SOURCE_DIR}/tests")
