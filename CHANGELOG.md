@@ -107,8 +107,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   with synchronization validation on the NVIDIA legs and the sanitizer job.
   `VR_REQUIRE_VULKAN_DEVICE` becomes the core's `VKC_REQUIRE_VULKAN_DEVICE`,
   and a skipped test exits 77, which CTest reports as skipped. The sanitizer
-  job's LSan no longer suppresses `libvulkan.so`. Test:
-  `recon_gpu_test_harness`.
+  job's LSan no longer suppresses by the Vulkan loader's or the validation
+  layer's module, so a leak in the core's debug messenger callback is
+  reported. Test: `recon_gpu_test_harness`.
 - build: **the core pin moves to core #18's merge** (511fed0), including #17's
   `core_test_policy`, which recon's tests build with `VKC_BUILD_TEST_SUPPORT`.
 - build: **`VR_WARNINGS_AS_ERRORS` defaults on at the top level only**, as

@@ -11562,9 +11562,11 @@ unreported; the core's tests ran under it.
 - **CI** sets `VKC_REQUIRE_VULKAN_DEVICE` and `VKC_TEST_VALIDATION` on every
   leg, and `VKC_TEST_SYNC_VALIDATION` on the NVIDIA legs and the sanitizer
   job.
-- **LSan no longer suppresses the loader's module** (`leak:libvulkan.so`),
-  which is on the stack of every Vulkan call; `leak:loader_` keeps the
-  loader's own allocations. A handle leaked into lavapipe stays under
+- **LSan suppresses neither the loader's module nor the layer's**
+  (`leak:libvulkan.so`, `leak:libVkLayer_khronos_validation`): they are on
+  the stack of every Vulkan call and of the core's debug messenger callback,
+  so either would hide a first-party leak made there. `leak:loader_` keeps
+  the loader's own allocations. A handle leaked into lavapipe stays under
   `leak:lvp_`; the layer reports it instead.
 
 **Initial validation.** Apple M5 Max, MoltenVK 1.4.2, the layer 1.4.363, Release with
@@ -11574,6 +11576,17 @@ reports no error in recon's code in either run. `recon_gpu_test_harness`
 checks that an error in a test's calls, a leaked semaphore and, under
 synchronization validation, a missing barrier each fail a test that returned
 0.
+
+
+**Rebase verification (2026-10-10).** The core pin is the merged #18
+(`511fed0`), including #17's test policy and legacy validation-environment
+fix. The regressions added through recon #207 use the policy too, including
+host OOM and viewer-atlas teardown. On macOS Release with warnings as errors,
+Orbbec SDK 2.10.6, FFmpeg, Assimp and the viewers enabled, all 70 tests pass
+with synchronization validation. Only the harness's deliberate violations
+produce validation errors. The harness also passes with inherited legacy
+layer settings; a missing Vulkan driver exits 77, or 1 when required.
+No camera or interactive viewer was exercised in this rebase.
 
 ## Measured lessons
 

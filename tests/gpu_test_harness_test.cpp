@@ -8,8 +8,30 @@
 // harness destroys the device; under synchronization validation, a missing
 // barrier fails it too. Then the decoders' skips. Skips where the
 // layer or a device is missing, unless VKC_REQUIRE_VULKAN_DEVICE is set.
+//
+// Under LeakSanitizer on Linux, with the sanitizer job's suppressions
+// (tools/lsan.supp), a block leaked where the layer reports an error -- in the
+// error handler the core's debug messenger callback reaches, under the
+// loader's and the layer's frames -- is reported.
 
+#include <cstdint>
 #include <cstdio>
+#include <cstdlib>
+#include <string_view>
+
+#if defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define VR_TEST_LSAN 1
+#endif
+#endif
+#if defined(__SANITIZE_ADDRESS__)
+#define VR_TEST_LSAN 1
+#endif
+#if defined(VR_TEST_LSAN) && defined(__linux__)
+#include <sanitizer/lsan_interface.h>
+#else
+#undef VR_TEST_LSAN
+#endif
 
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/testing/vulkan_policy.hpp"
@@ -80,6 +102,40 @@ int races(vr_test::GpuContext& gpu) {
   return submitted.ok() ? 0 : 2;
 }
 
+#ifdef VR_TEST_LSAN
+// The block leak_a_block leaks, its address XORed so that LSan's scan of the
+// globals finds no pointer to it.
+constexpr std::uintptr_t kHide =
+    static_cast<std::uintptr_t>(0xa5a5a5a5a5a5a5a5u);
+volatile std::uintptr_t hidden_block = 0;
+
+void leak_a_block(std::string_view /*message*/) {
+  if (hidden_block == 0) {
+    hidden_block = reinterpret_cast<std::uintptr_t>(std::malloc(64)) ^ kHide;
+  }
+}
+
+// Overwrites the stack the leaking call used, so that no stale copy of the
+// block's address there makes it reachable. Uninstrumented, so the array is
+// on the stack rather than ASan's fake stack.
+__attribute__((noinline, no_sanitize("address"))) void scrub_stack() {
+  volatile unsigned char scratch[256 * 1024];
+  for (volatile unsigned char& byte : scratch) byte = 0;
+}
+
+int lsan_reports_leak_in_error_handler() {
+  scrub_stack();
+  CHECK(__lsan_do_recoverable_leak_check() == 0);  // none before the test's
+  CHECK(vr_test::run_on_gpu(misuses, leak_a_block) == 1);
+  CHECK(hidden_block != 0);
+  scrub_stack();
+  const bool reported = __lsan_do_recoverable_leak_check() != 0;
+  std::free(reinterpret_cast<void*>(hidden_block ^ kHide));
+  CHECK(reported);
+  return 0;
+}
+#endif
+
 int decoder_skips() {
   {
     const test::ScopedEnv none("VR_TEST_HEVC_BACKEND", nullptr);
@@ -114,6 +170,9 @@ int main() {
   }
   const test::ScopedEnv sync("VKC_TEST_SYNC_VALIDATION", "1");
   CHECK(vr_test::run_on_gpu(races) == 1);
+#ifdef VR_TEST_LSAN
+  if (lsan_reports_leak_in_error_handler() != 0) return 1;
+#endif
   std::puts("gpu_test_harness: OK");
   return 0;
 }

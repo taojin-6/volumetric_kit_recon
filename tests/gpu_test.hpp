@@ -20,6 +20,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <utility>
 
 #include "buffer_readback.hpp"
 #include "volumetric_kit/core/base/result.hpp"
@@ -96,13 +97,14 @@ int run_on_gpu(Test& test) {
 
 // Runs `test`, an `int(GpuContext&)` returning the test's exit code, on a
 // device that meets recon's requirements, under the validation the
-// environment asks for. Returns the process's exit code: the test's, or 1
+// environment asks for. Each error the layer reports goes to `on_error`, or
+// to stderr without one. Returns the process's exit code: the test's, or 1
 // where the layer reported an error; test::kSkipExitCode, or 1 under
 // VKC_REQUIRE_VULKAN_DEVICE, where there is no device.
 template <typename Test>
-int run_on_gpu(Test&& test) {
+int run_on_gpu(Test&& test, vkc::test::LogCapture::ErrorHandler on_error = {}) {
   const vkc::test::ValidationSession validation;
-  const vkc::test::LogCapture log;
+  const vkc::test::LogCapture log(std::move(on_error));
   return log.exit_code(detail::run_on_gpu(test));
 }
 

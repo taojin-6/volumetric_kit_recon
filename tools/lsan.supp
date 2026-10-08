@@ -15,12 +15,10 @@ leak:util_queue
 leak:libLLVM
 
 # The Vulkan loader's own allocations (ICD and layer discovery), by its
-# `loader_` functions, never by its module: libvulkan.so is on the stack of every
-# Vulkan call, so naming it would hide every first-party leak made through one.
+# `loader_` functions. Neither the loader's module nor the validation layer's is
+# named: they are on the stack of every Vulkan call and of the core's debug
+# messenger callback, so either would hide a first-party leak made there.
 leak:loader_
-
-# The Khronos validation layer's internal state (VKC_TEST_VALIDATION).
-leak:libVkLayer_khronos_validation
 
 # dlopen-resident globals from loading the driver / layers.
 leak:__libc_dlopen

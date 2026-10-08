@@ -22,7 +22,9 @@ add_test(NAME recon_vulkan_smoke COMMAND recon_vulkan_smoke_test)
 
 # The GPU tests' harness (gpu_test.hpp): a test fails on an error the validation
 # layer reports, a leaked object's included, and skips as the core's test policy
-# and VR_TEST_HEVC_BACKEND say. Skips without the layer or a device.
+# and VR_TEST_HEVC_BACKEND say. Under LeakSanitizer, tools/lsan.supp leaves a
+# block leaked where the layer reports an error reported. Skips without the
+# layer or a device.
 add_executable(recon_gpu_test_harness_test gpu_test_harness_test.cpp)
 target_link_libraries(
   recon_gpu_test_harness_test PRIVATE volumetric_kit::recon_core
@@ -614,7 +616,7 @@ endforeach()
 # bound of its source, meshing to the analytic sphere it came from, frame after
 # frame into one grid, untouched on every early refusal, and OutOfMemory that a
 # resize recovers. Public headers only, plus the shared codec_fixture.hpp; the
-# decoder test links recon_mesh, which the tier may not. Both skips with no
+# decoder test links recon_mesh, which the tier may not. Both skip with no
 # device.
 add_executable(recon_codec_encoder_test codec_encoder_test.cpp)
 target_link_libraries(
