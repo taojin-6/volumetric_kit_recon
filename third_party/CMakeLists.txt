@@ -30,31 +30,37 @@ include(FetchContent)
 # VR_INSTALL: recon's install must carry the core its exported targets link, and
 # an application that embeds recon without installing it gets none.
 #
-# The pin is core PR #18's head, on main after core PR #15. Its PR #11 added
-# Device::check_enabled, which recon's kernels call; PR #12 bounds vk_result to
-# VkResult's range; PR #13 sets the oldest Vulkan headers the tier builds on
-# (1.3.204, 1.3.208 on Apple) and adds format.hpp; PR #15 adds
-# CommandBatch::submit_async, which the pipelined stages will submit through
-# (DESIGN.md's Next work); PR #18 makes check_timeline_points public, which the
-# viewers' gfx checks its frames' timeline values with, and refuses an older
-# core.
+# The pin is core PR #18's merge, including the merged test policy from #17. PR
+# #15 adds CommandBatch::submit_async for the pipelined stages to come; #17
+# supplies tests/gpu_test.hpp's policy; #18 exposes the timeline-value checks
+# the viewers' gfx requires. This revision also includes #23's Vulkan header
+# floor of 1.3.275, matching recon's supported CI platforms.
 #
-# TODO: pin the core's v0.1.0 tag once its stack (#17, #19 and #20, plus #18)
-# merges and is tagged.
+# TODO: pin the core's v0.1.0 tag once it is tagged.
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG 5913731fd5a1c0b81f5d354d28f0fbdf60b261ec)
+  GIT_TAG 511fed0d0db110d2581ea18c0974412f3919655d)
 set(VKC_INSTALL ${VR_INSTALL})
 set(VKC_WITH_VULKAN ON)
+if(VR_BUILD_TESTS)
+  set(VKC_BUILD_TEST_SUPPORT ON)
+endif()
 FetchContent_MakeAvailable(volumetric_kit_core)
-# The set() above is lost when calib or the application made the core available
-# first, without its vulkan tier.
+# The set()s above are lost when calib or the application made the core
+# available first, without its vulkan tier or its test support.
 if(NOT TARGET volumetric_kit::core_vulkan)
   message(
     FATAL_ERROR
       "recon needs volumetric_kit_core's vulkan tier: set VKC_WITH_VULKAN ON "
       "before the first FetchContent_MakeAvailable of the core")
+endif()
+if(VR_BUILD_TESTS AND NOT TARGET volumetric_kit::core_test_policy)
+  message(
+    FATAL_ERROR
+      "recon's tests need volumetric_kit_core's test support: set "
+      "VKC_BUILD_TEST_SUPPORT ON before the first FetchContent_MakeAvailable "
+      "of the core")
 endif()
 
 # --- nlohmann/json (header-only; parsed in one recon_sensor TU) ---------------

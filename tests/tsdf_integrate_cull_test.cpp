@@ -10,7 +10,7 @@
 // the tick. The scenarios are the reach's edges: a surface receding under
 // dynamic (cleared free space) and classic, a block past max_depth but within
 // the band, free space nearer than min_depth, two cameras seeing different
-// places, and a principal point outside the image. Exits 0 (skip) where no
+// places, and a principal point outside the image. Skips where no
 // device is present.
 
 #include <array>
@@ -22,8 +22,6 @@
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
-#include "volumetric_kit/core/vulkan/instance.hpp"
-#include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
 #include "volumetric_kit/recon/volume/frustum.hpp"
@@ -31,8 +29,8 @@
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
 
+#include "gpu_test.hpp"
 #include "grid_readback.hpp"
-#include "no_device.hpp"
 
 namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
@@ -253,42 +251,21 @@ int run(const vr_test::Gpu& ctx, tsdf::TsdfIntegrator& integrator,
   return 0;
 }
 
-}  // namespace
-
-int main() {
-  vkc::Result<vkc::Instance> instance = vkc::Instance::create({});
-  if (!instance) {
-    return vr_test::no_device("no Vulkan instance",
-                              instance.status().message());
-  }
-  vkc::Result<vkc::PhysicalDeviceInfo> gpu =
-      instance.value().select_physical_device(vr::device_requirements());
-  if (!gpu) {
-    return vr_test::no_device("no compute-capable device",
-                              gpu.status().message());
-  }
-  vkc::Result<vkc::Device> device = vkc::Device::create(
-      instance.value(), gpu.value(), vr::device_requirements());
-  CHECK(device.ok());
-  vkc::Result<vkc::Allocator> allocator =
-      vkc::Allocator::create(instance.value().handle(), device.value());
-  CHECK(allocator.ok());
-  const vr_test::Gpu ctx{device.value(), allocator.value()};
-  auto integrator =
-      tsdf::TsdfIntegrator::create(device.value(), allocator.value());
+int gpu_main(vr_test::GpuContext& gpu) {
+  auto integrator = tsdf::TsdfIntegrator::create(gpu.device, gpu.allocator);
   CHECK(integrator.ok());
   tsdf::TsdfIntegrator& integ = integrator.value();
   using Mode = tsdf::IntegrationMode;
 
   // A wall fused twice in place.
-  if (run(ctx, integ, "static", Mode::Classic, {{wall(1.0f)}, {wall(1.0f)}},
+  if (run(gpu, integ, "static", Mode::Classic, {{wall(1.0f)}, {wall(1.0f)}},
           Layer{kZ, 12}) != 0) {
     return 1;
   }
   // The wall recedes from 0.6 m to 1.2 m: dynamic clears the free space it
   // left, classic fuses it.
   for (const Mode mode : {Mode::Dynamic, Mode::Classic}) {
-    if (run(ctx, integ,
+    if (run(gpu, integ,
             mode == Mode::Dynamic ? "receding, dynamic" : "receding, classic",
             mode, {{wall(0.6f)}, {wall(1.2f)}}, Layer{kZ, 15}) != 0) {
       return 1;
@@ -296,13 +273,13 @@ int main() {
   }
   // A wall at 1.03 m with max_depth 1.032: layer 13 starts at 1.035, past
   // max_depth, and its first voxels, 1 cm behind the wall, are fused.
-  if (run(ctx, integ, "past max_depth", Mode::Classic,
+  if (run(gpu, integ, "past max_depth", Mode::Classic,
           {{wall(1.03f, vr::Vec3f(0.0f), 0.1f, 1.032f)}}, Layer{kZ, 13}) != 0) {
     return 1;
   }
   // A wall at 0.3 m, then one at 1.0 m seen with min_depth 0.5: the free space
   // at 0.3 m, nearer than min_depth, is still cleared.
-  if (run(ctx, integ, "nearer than min_depth", Mode::Dynamic,
+  if (run(gpu, integ, "nearer than min_depth", Mode::Dynamic,
           {{wall(0.3f)}, {wall(1.0f, vr::Vec3f(0.0f), 0.5f)}},
           Layer{kZ, 12}) != 0) {
     return 1;
@@ -311,7 +288,7 @@ int main() {
   // layer 17, which the first camera's frustum does not reach.
   const std::vector<Frame> pair{wall(1.0f),
                                 wall(1.4f, vr::Vec3f(2.0f, 0.0f, 0.0f))};
-  if (run(ctx, integ, "two cameras", Mode::Classic, {pair, pair},
+  if (run(gpu, integ, "two cameras", Mode::Classic, {pair, pair},
           Layer{kZ, 17}) != 0) {
     return 1;
   }
@@ -320,7 +297,7 @@ int main() {
   // only x >= 0.556 z, which culls block (5, y, 11) -- x up to 0.48, z from
   // 0.875 -- whose free space at x 0.47, z 0.88 the camera sees. So the
   // integrate fuses every block.
-  if (run(ctx, integ, "principal point outside", Mode::Classic,
+  if (run(gpu, integ, "principal point outside", Mode::Classic,
           {{wall(1.0f, vr::Vec3f(0.0f), 0.1f, 5.0f, -30.0f)}},
           Layer{kX, 5}) != 0) {
     return 1;
@@ -330,7 +307,7 @@ int main() {
   // reach more of it, though not the band blocks the allocation dilated past
   // the images' sides.
   {
-    auto g = make_grid(ctx.device, ctx.allocator);
+    auto g = make_grid(gpu.device, gpu.allocator);
     CHECK(g.ok());
     std::vector<vol::DepthInput> depths;
     for (const Frame& f : pair) {
@@ -360,7 +337,7 @@ int main() {
     const std::uint32_t tick = g->map().tick();
     CHECK(integ.integrate(g.value(), lone).ok());
     CHECK(g->map().tick() == tick + 1);
-    auto empty = make_grid(ctx.device, ctx.allocator);
+    auto empty = make_grid(gpu.device, gpu.allocator);
     CHECK(empty.ok());
     const std::uint32_t empty_tick = empty->map().tick();
     CHECK(integ.integrate(empty.value(), lone).ok());
@@ -370,3 +347,7 @@ int main() {
   std::printf("recon tsdf integrate cull test passed\n");
   return 0;
 }
+
+}  // namespace
+
+int main() { return vr_test::run_on_gpu(gpu_main); }

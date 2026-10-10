@@ -24,15 +24,13 @@
 #include "volumetric_kit/core/vulkan/buffer.hpp"
 #include "volumetric_kit/core/vulkan/compute_util.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
-#include "volumetric_kit/core/vulkan/instance.hpp"
-#include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
 #include "volumetric_kit/recon/volume/hash_types.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
 
+#include "gpu_test.hpp"
 #include "grid_readback.hpp"
-#include "no_device.hpp"
 
 namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
@@ -218,29 +216,9 @@ int test_coverage(vkc::Device& dev, vkc::Allocator& alloc,
   return 0;
 }
 
-}  // namespace
-
-int main() {
-  vkc::Result<vkc::Instance> instance = vkc::Instance::create({});
-  if (!instance) {
-    return vr_test::no_device("no Vulkan instance",
-                              instance.status().message());
-  }
-  vkc::Result<vkc::PhysicalDeviceInfo> gpu =
-      instance.value().select_physical_device(vr::device_requirements());
-  if (!gpu) {
-    return vr_test::no_device("no compute-capable device",
-                              gpu.status().message());
-  }
-  vkc::Result<vkc::Device> device = vkc::Device::create(
-      instance.value(), gpu.value(), vr::device_requirements());
-  CHECK(device.ok());
-  vkc::Result<vkc::Allocator> allocator =
-      vkc::Allocator::create(instance.value().handle(), device.value());
-  CHECK(allocator.ok());
-  vkc::Device& dev = device.value();
-  vkc::Allocator& alloc = allocator.value();
-  const vr_test::Gpu ctx{dev, alloc};
+int gpu_main(vr_test::GpuContext& gpu) {
+  vkc::Device& dev = gpu.device;
+  vkc::Allocator& alloc = gpu.allocator;
 
   // A tilted, rippled surface 0.6-0.8 m away with a colour gradient over it,
   // so allocation and fusion both vary across the image.
@@ -302,7 +280,7 @@ int main() {
                           tsdf::IntegrationMode::Classic, &device_color)
               .ok());
   }
-  if (check_same(ctx, host_grid.value(), device_grid.value()) != 0) return 1;
+  if (check_same(gpu, host_grid.value(), device_grid.value()) != 0) return 1;
 
   // A device colour image beside a host depth frame is fine too.
   CHECK(integrator
@@ -388,3 +366,7 @@ int main() {
   std::puts("tsdf_device_input: OK");
   return 0;
 }
+
+}  // namespace
+
+int main() { return vr_test::run_on_gpu(gpu_main); }

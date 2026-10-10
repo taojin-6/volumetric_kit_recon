@@ -23,10 +23,8 @@
 #include "volumetric_kit/core/vulkan/compute_kernel.hpp"
 #include "volumetric_kit/core/vulkan/compute_util.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
-#include "volumetric_kit/core/vulkan/instance.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/recon/core/color_space.hpp"
-#include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
 #include "volumetric_kit/recon/volume/hash_types.hpp"
@@ -34,7 +32,7 @@
 #include "volumetric_kit/recon/volume/voxel_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
 
-#include "no_device.hpp"
+#include "gpu_test.hpp"
 #include "project_pinhole_comp.spv.hpp"
 
 namespace vr = volumetric_kit::recon;
@@ -576,49 +574,21 @@ int zero_depth_case(const vr_test::Gpu& ctx) {
   return 0;
 }
 
-}  // namespace
-
-int main() {
-  vkc::Result<vkc::Instance> instance = vkc::Instance::create({});
-  if (!instance) {
-    return vr_test::no_device("no Vulkan instance",
-                              instance.status().message());
-  }
-  vkc::Result<vkc::PhysicalDeviceInfo> gpu =
-      instance.value().select_physical_device(vr::device_requirements());
-  if (!gpu) {
-    return vr_test::no_device("no compute-capable device",
-                              gpu.status().message());
-  }
-  vkc::Result<vkc::Device> device = vkc::Device::create(
-      instance.value(), gpu.value(), vr::device_requirements());
-  if (!device) {
-    std::fprintf(stderr, "device create failed: %s\n",
-                 device.status().message().c_str());
-    return 1;
-  }
-  vkc::Result<vkc::Allocator> allocator =
-      vkc::Allocator::create(instance.value().handle(), device.value());
-  if (!allocator) {
-    std::fprintf(stderr, "allocator create failed: %s\n",
-                 allocator.status().message().c_str());
-    return 1;
-  }
-  CHECK(nonfinite_depth_taps_case({device.value(), allocator.value()}) == 0);
-  CHECK(zero_depth_case({device.value(), allocator.value()}) == 0);
-  CHECK(nonfinite_camera_case({device.value(), allocator.value()}) == 0);
-  CHECK(projection_nan_case({device.value(), allocator.value()}) == 0);
-  CHECK(color_pixel_case({device.value(), allocator.value()}) == 0);
+int gpu_main(vr_test::GpuContext& gpu) {
+  CHECK(nonfinite_depth_taps_case({gpu.device, gpu.allocator}) == 0);
+  CHECK(zero_depth_case({gpu.device, gpu.allocator}) == 0);
+  CHECK(nonfinite_camera_case({gpu.device, gpu.allocator}) == 0);
+  CHECK(projection_nan_case({gpu.device, gpu.allocator}) == 0);
+  CHECK(color_pixel_case({gpu.device, gpu.allocator}) == 0);
 
   // Copies of a grid attribute; the arrays are device-local.
   const auto floats = [&](const vol::VoxelBlockGrid& g, const char* name) {
-    return vr_test::read_attribute<float>(device.value(), allocator.value(), g,
-                                          name)
+    return vr_test::read_attribute<float>(gpu.device, gpu.allocator, g, name)
         .value();
   };
   const auto words = [&](const vol::VoxelBlockGrid& g, const char* name) {
-    return vr_test::read_attribute<std::uint32_t>(device.value(),
-                                                  allocator.value(), g, name)
+    return vr_test::read_attribute<std::uint32_t>(gpu.device, gpu.allocator, g,
+                                                  name)
         .value();
   };
 
@@ -635,8 +605,8 @@ int main() {
 
   const vol::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
                                       {"weight", sizeof(float)}};
-  vkc::Result<vol::VoxelBlockGrid> grid_result = vol::VoxelBlockGrid::create(
-      device.value(), allocator.value(), grid, attrs, 2);
+  vkc::Result<vol::VoxelBlockGrid> grid_result =
+      vol::VoxelBlockGrid::create(gpu.device, gpu.allocator, grid, attrs, 2);
   if (!grid_result) {
     std::fprintf(stderr, "VoxelBlockGrid::create failed: %s\n",
                  grid_result.status().message().c_str());
@@ -645,7 +615,7 @@ int main() {
   vol::VoxelBlockGrid vbg = std::move(grid_result).value();
 
   vkc::Result<tsdf::TsdfIntegrator> integ_result =
-      tsdf::TsdfIntegrator::create(device.value(), allocator.value());
+      tsdf::TsdfIntegrator::create(gpu.device, gpu.allocator);
   if (!integ_result) {
     std::fprintf(stderr, "TsdfIntegrator::create failed: %s\n",
                  integ_result.status().message().c_str());
@@ -688,7 +658,7 @@ int main() {
   // The changed stamps have their own fixture (see changed_stamps_case): the
   // geometry a plane fixture produces cannot separate a written block from one
   // ahead of the band.
-  CHECK(changed_stamps_case(device.value(), allocator.value()) == 0);
+  CHECK(changed_stamps_case(gpu.device, gpu.allocator) == 0);
 
   CHECK(integ.integrate(vbg, depth.data(), cam, /*max_weight=*/5.0f).ok());
 
@@ -749,8 +719,8 @@ int main() {
   // no-op. Fresh grid + one frame, then cross-check every fused voxel's sdf
   // against an independent glm::inverse projection -- the general inverse the
   // rigid R^T must equal.
-  vkc::Result<vol::VoxelBlockGrid> grid2 = vol::VoxelBlockGrid::create(
-      device.value(), allocator.value(), grid, attrs, 2);
+  vkc::Result<vol::VoxelBlockGrid> grid2 =
+      vol::VoxelBlockGrid::create(gpu.device, gpu.allocator, grid, attrs, 2);
   CHECK(grid2.ok());
   vol::VoxelBlockGrid vbg2 = std::move(grid2).value();
   CHECK(vbg2.map()
@@ -806,8 +776,8 @@ int main() {
   const std::size_t corner_local =
       static_cast<std::size_t>(local_index(0, 0, 0, bs));
 
-  vkc::Result<vol::VoxelBlockGrid> dyn = vol::VoxelBlockGrid::create(
-      device.value(), allocator.value(), grid, attrs, 2);
+  vkc::Result<vol::VoxelBlockGrid> dyn =
+      vol::VoxelBlockGrid::create(gpu.device, gpu.allocator, grid, attrs, 2);
   CHECK(dyn.ok());
   vol::VoxelBlockGrid vbg_dyn = std::move(dyn).value();
   CHECK(vbg_dyn.map()
@@ -842,8 +812,8 @@ int main() {
   CHECK(dyn_weight[vn] > 0.0f);  // near-surface voxel fused, not over-cleared
 
   // Classic keeps the same free-space voxel (fresh grid, same two frames).
-  vkc::Result<vol::VoxelBlockGrid> cls = vol::VoxelBlockGrid::create(
-      device.value(), allocator.value(), grid, attrs, 2);
+  vkc::Result<vol::VoxelBlockGrid> cls =
+      vol::VoxelBlockGrid::create(gpu.device, gpu.allocator, grid, attrs, 2);
   CHECK(cls.ok());
   vol::VoxelBlockGrid vbg_cls = std::move(cls).value();
   CHECK(vbg_cls.map()
@@ -877,8 +847,8 @@ int main() {
   for (std::uint32_t y = 0; y < bcam.height; ++y) {
     depth_interp[static_cast<std::size_t>(y) * bw + 321] = 0.50f;
   }
-  vkc::Result<vol::VoxelBlockGrid> bi = vol::VoxelBlockGrid::create(
-      device.value(), allocator.value(), grid, attrs, 2);
+  vkc::Result<vol::VoxelBlockGrid> bi =
+      vol::VoxelBlockGrid::create(gpu.device, gpu.allocator, grid, attrs, 2);
   CHECK(bi.ok());
   vol::VoxelBlockGrid vbg_bi = std::move(bi).value();
   CHECK(vbg_bi.map()
@@ -909,8 +879,8 @@ int main() {
   for (std::uint32_t y = 0; y < bcam.height; ++y) {
     depth_edge[static_cast<std::size_t>(y) * bw + 320] = 0.58f;
   }
-  vkc::Result<vol::VoxelBlockGrid> ed = vol::VoxelBlockGrid::create(
-      device.value(), allocator.value(), grid, attrs, 2);
+  vkc::Result<vol::VoxelBlockGrid> ed =
+      vol::VoxelBlockGrid::create(gpu.device, gpu.allocator, grid, attrs, 2);
   CHECK(ed.ok());
   vol::VoxelBlockGrid vbg_ed = std::move(ed).value();
   CHECK(vbg_ed.map()
@@ -936,8 +906,8 @@ int main() {
   const vol::AttributeSpec cattrs[] = {{"tsdf", sizeof(float)},
                                        {"weight", sizeof(float)},
                                        {"color", sizeof(std::uint32_t)}};
-  vkc::Result<vol::VoxelBlockGrid> cg = vol::VoxelBlockGrid::create(
-      device.value(), allocator.value(), grid, cattrs, 3);
+  vkc::Result<vol::VoxelBlockGrid> cg =
+      vol::VoxelBlockGrid::create(gpu.device, gpu.allocator, grid, cattrs, 3);
   CHECK(cg.ok());
   vol::VoxelBlockGrid vbg_c = std::move(cg).value();
   CHECK(vbg_c.map()
@@ -990,8 +960,8 @@ int main() {
   vr::DepthCameraParams off_cam = cam;
   off_cam.cam_to_world = vr::Mat4f(1.0f);
   off_cam.cam_to_world[3] = vr::Vec4f(10.0f, 0.0f, 0.0f, 1.0f);
-  vkc::Result<vol::VoxelBlockGrid> og = vol::VoxelBlockGrid::create(
-      device.value(), allocator.value(), grid, cattrs, 3);
+  vkc::Result<vol::VoxelBlockGrid> og =
+      vol::VoxelBlockGrid::create(gpu.device, gpu.allocator, grid, cattrs, 3);
   CHECK(og.ok());
   vol::VoxelBlockGrid vbg_o = std::move(og).value();
   CHECK(vbg_o.map()
@@ -1019,8 +989,8 @@ int main() {
   // depth weight has already accumulated. Warm up a voxel with two depth-only
   // frames, then fuse a color frame: it must take the full sampled RGB. (Keying
   // the assign on the depth weight instead darkened it to ~half here.)
-  vkc::Result<vol::VoxelBlockGrid> wg = vol::VoxelBlockGrid::create(
-      device.value(), allocator.value(), grid, cattrs, 3);
+  vkc::Result<vol::VoxelBlockGrid> wg =
+      vol::VoxelBlockGrid::create(gpu.device, gpu.allocator, grid, cattrs, 3);
   CHECK(wg.ok());
   vol::VoxelBlockGrid vbg_wu = std::move(wg).value();
   CHECK(vbg_wu.map()
@@ -1144,8 +1114,8 @@ int main() {
   // `color` attribute -- even on a depth-only (color == nullptr) frame -- so a
   // receded surface leaves no color ghost. (Gating the clear on a color frame
   // being supplied stranded the old color on a depth-only recede.)
-  vkc::Result<vol::VoxelBlockGrid> zg = vol::VoxelBlockGrid::create(
-      device.value(), allocator.value(), grid, cattrs, 3);
+  vkc::Result<vol::VoxelBlockGrid> zg =
+      vol::VoxelBlockGrid::create(gpu.device, gpu.allocator, grid, cattrs, 3);
   CHECK(zg.ok());
   vol::VoxelBlockGrid vbg_dz = std::move(zg).value();
   CHECK(vbg_dz.map()
@@ -1184,3 +1154,7 @@ int main() {
       touched, cross_checked);
   return 0;
 }
+
+}  // namespace
+
+int main() { return vr_test::run_on_gpu(gpu_main); }

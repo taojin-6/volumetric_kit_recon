@@ -11,7 +11,7 @@
 // an untextured mesh, and leaves the atlas as it was when a copy is refused.
 // Teardown keeps submitted copies' sources alive and releases the sources of
 // a later frame that never reached the queue without waiting for its number.
-// The copies run on a headless device, which the test skips (exit 0) without.
+// The copies run on a headless device, which the test skips without.
 
 #include <chrono>
 #include <cstdint>
@@ -23,8 +23,8 @@
 #include <utility>
 #include <vector>
 
-#include "no_device.hpp"
 #include "viewer_atlas.hpp"
+#include "volumetric_kit/core/testing/vulkan_policy.hpp"
 
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/buffer.hpp"
@@ -358,17 +358,22 @@ int live_atlas_allocates_for_its_first_textured_job(vg::app::HeadlessApp& app) {
   return 0;
 }
 
-}  // namespace
-
-int main() {
+int run_atlas_tests() {
   if (const int rc = copies_place_each_tile()) return rc;
 
   vg::app::HeadlessAppConfig config;
   config.app_name = "recon_example_viewer_atlas_test";
-  config.enable_validation = true;
+  config.enable_validation = vkc::test::instance_config().enable_validation;
   auto app = vg::app::HeadlessApp::create(config);
   if (!app.ok()) {
-    return vr_test::no_device("no Vulkan device", app.status().message());
+    return vkc::test::no_device_exit_code("no Vulkan device (" +
+                                          app.status().message() + ")");
+  }
+  if (const vkc::Status loaded =
+          vkc::test::check_layer_loaded(app.value().instance());
+      !loaded.ok()) {
+    std::fprintf(stderr, "%s\n", loaded.message().c_str());
+    return 1;
   }
   if (const int rc = copyable_checks_the_buffer(app.value().allocator())) {
     return rc;
@@ -384,4 +389,12 @@ int main() {
   }
   std::puts("viewer_atlas: OK");
   return 0;
+}
+
+}  // namespace
+
+int main() {
+  const vkc::test::ValidationSession validation;
+  const vkc::test::LogCapture log;
+  return log.exit_code(run_atlas_tests());
 }

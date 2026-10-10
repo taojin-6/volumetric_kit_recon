@@ -14,9 +14,7 @@
 
 #include "buffer_readback.hpp"
 #include "fuse_frame.hpp"
-#include "no_device.hpp"
-#include "volumetric_kit/core/vulkan/instance.hpp"
-#include "volumetric_kit/recon/core/device_requirements.hpp"
+#include "gpu_test.hpp"
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
 
 namespace vr = volumetric_kit::recon;
@@ -37,7 +35,8 @@ constexpr std::uint32_t kWidth = 16, kHeight = 12;
 constexpr std::size_t kPixels = kWidth * kHeight;
 constexpr std::uint32_t kColor = 0x00563412u;
 
-int check_retained(vr_test::Gpu gpu, vr::texture::ProjectiveTexturer& texturer,
+int check_retained(const vr_test::Gpu& gpu,
+                   vr::texture::ProjectiveTexturer& texturer,
                    const std::optional<sensor::DeviceFrame>& keyframe) {
   CHECK(keyframe && keyframe->has_color());
   CHECK(keyframe->timestamp_ns == 1);
@@ -76,28 +75,13 @@ int check_retained(vr_test::Gpu gpu, vr::texture::ProjectiveTexturer& texturer,
   return 0;
 }
 
-}  // namespace
-
-int main() {
-  auto instance = vkc::Instance::create({});
-  if (!instance) {
-    return vr_test::no_device("no Vulkan instance",
-                              instance.status().message());
-  }
-  auto gpu = instance->select_physical_device(vr::device_requirements());
-  if (!gpu) {
-    return vr_test::no_device("no compute-capable device",
-                              gpu.status().message());
-  }
-  auto device = vkc::Device::create(*instance, *gpu, vr::device_requirements());
-  CHECK(device.ok());
-  auto allocator = vkc::Allocator::create(instance->handle(), *device);
-  CHECK(allocator.ok());
-  auto volume =
-      vr_example::create_fusion_grid(*device, *allocator, 0.05f, 0.15f, 256);
-  auto fuser = vr::tsdf::Fuser::create(*device, *allocator);
-  auto prep = sensor::GpuFramePrep::create(*device, *allocator);
-  auto texturer = vr::texture::ProjectiveTexturer::create(*device, *allocator);
+int gpu_main(vr_test::GpuContext& gpu) {
+  auto volume = vr_example::create_fusion_grid(gpu.device, gpu.allocator, 0.05f,
+                                               0.15f, 256);
+  auto fuser = vr::tsdf::Fuser::create(gpu.device, gpu.allocator);
+  auto prep = sensor::GpuFramePrep::create(gpu.device, gpu.allocator);
+  auto texturer =
+      vr::texture::ProjectiveTexturer::create(gpu.device, gpu.allocator);
   CHECK(volume.ok() && fuser.ok() && prep.ok() && texturer.ok());
 
   std::vector<std::uint16_t> raw_depth(kPixels, 1000);
@@ -123,7 +107,7 @@ int main() {
   CHECK(vr_example::fuse_keyframe(*fuser, *volume, *prep, frame, keyframe,
                                   20.0f, nullptr)
             .ok());
-  CHECK(check_retained({*device, *allocator}, *texturer, keyframe) == 0);
+  CHECK(check_retained(gpu, *texturer, keyframe) == 0);
 
   // A later bad pose fails preparation without discarding the good frame.
   frame.timestamp_ns = 2;
@@ -132,7 +116,7 @@ int main() {
                                                  keyframe, 20.0f, nullptr);
   CHECK(!refused.ok());
   CHECK(refused.message().find("GpuFramePrep") != std::string::npos);
-  CHECK(check_retained({*device, *allocator}, *texturer, keyframe) == 0);
+  CHECK(check_retained(gpu, *texturer, keyframe) == 0);
 
   // Preparation and allocation succeed, but fusion refuses a volume without
   // a colour attribute. Different pixels and pose expose an early replacement
@@ -140,22 +124,22 @@ int main() {
   const vr::volume::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
                                              {"weight", sizeof(float)}};
   auto depth_only = vr::volume::VoxelBlockGrid::create(
-      *device, *allocator, vr_example::example_grid_params(0.05f, 0.15f, 256),
-      attrs, 2);
+      gpu.device, gpu.allocator,
+      vr_example::example_grid_params(0.05f, 0.15f, 256), attrs, 2);
   CHECK(depth_only.ok());
   std::fill(raw_depth.begin(), raw_depth.end(), 2000);
   std::fill(raw_color.begin(), raw_color.end(), 0x001122CCu);
   frame.color_to_world = vr::camera::Mat4d(1.0);
   frame.color_to_world[3][0] = 0.25;
   // A second fuser: the first remembers the grid it fuses.
-  auto depth_only_fuser = vr::tsdf::Fuser::create(*device, *allocator);
+  auto depth_only_fuser = vr::tsdf::Fuser::create(gpu.device, gpu.allocator);
   CHECK(depth_only_fuser.ok());
   const auto failed = vr_example::fuse_keyframe(
       *depth_only_fuser, *depth_only, *prep, frame, keyframe, 20.0f, nullptr);
   CHECK(failed.domain() == vkc::Status::Code::InvalidArgument);
   CHECK(failed.message().find("VoxelBlockGrid::attribute") !=
         std::string::npos);
-  CHECK(check_retained({*device, *allocator}, *texturer, keyframe) == 0);
+  CHECK(check_retained(gpu, *texturer, keyframe) == 0);
 
   // A subsequent successful fuse commits the new frame and its atlas.
   CHECK(vr_example::fuse_keyframe(*fuser, *volume, *prep, frame, keyframe,
@@ -163,9 +147,9 @@ int main() {
             .ok());
   CHECK(keyframe && keyframe->timestamp_ns == 2);
   CHECK(keyframe->color_camera.cam_to_world[3][0] == 0.25f);
-  auto depth =
-      vr_test::read_back<float>(*device, *allocator, *keyframe->depth, kPixels);
-  auto color = vr_test::read_back<std::uint32_t>(*device, *allocator,
+  auto depth = vr_test::read_back<float>(gpu.device, gpu.allocator,
+                                         *keyframe->depth, kPixels);
+  auto color = vr_test::read_back<std::uint32_t>(gpu.device, gpu.allocator,
                                                  *keyframe->color, kPixels);
   CHECK(depth.ok() && *depth == std::vector<float>(kPixels, 2.0f));
   CHECK(color.ok() &&
@@ -173,3 +157,7 @@ int main() {
   std::puts("example_fuse_keyframe: OK");
   return 0;
 }
+
+}  // namespace
+
+int main() { return vr_test::run_on_gpu(gpu_main); }

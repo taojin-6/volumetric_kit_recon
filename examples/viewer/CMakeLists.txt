@@ -73,7 +73,7 @@ FetchContent_Declare(
   # gfx builds against recon's core pin (third_party/CMakeLists.txt declares the
   # core first, so it wins over gfx's VG_VKC_PIN), which may run ahead of gfx's
   # own -- its check takes that commit or newer -- only by core changes that add
-  # API. They agree at 5913731 (core #18).
+  # API. recon uses #18's merge, which also includes the core test policy (#17).
   #
   # TODO: re-pin at gfx main once #118, #120 and #123 merge.
   GIT_TAG bd831039279c9416447a7f8bfb23f0bbb2be7608 # gfx #123
@@ -106,14 +106,16 @@ target_include_directories(fuse_render PRIVATE ${_viewer_common_inc})
 vr_target_warnings(fuse_render)
 
 # The atlas both live viewers draw with (viewer_atlas.hpp), on a headless gfx
-# device. Defined here, where gfx is fetched. Skips (exit 0) with no device.
+# device. Defined here, where gfx is fetched. Skips with no device under the
+# core policy.
 if(VR_BUILD_TESTS)
   add_executable(recon_example_viewer_atlas_test
                  "${PROJECT_SOURCE_DIR}/tests/example_viewer_atlas_test.cpp")
   target_link_libraries(
     recon_example_viewer_atlas_test
-    PRIVATE volumetric_kit::recon_texture volumetric_kit::gfx_app
-            volumetric_kit::gfx_pipelines Vulkan::Vulkan)
+    PRIVATE volumetric_kit::core_test_policy volumetric_kit::recon_texture
+            volumetric_kit::gfx_app volumetric_kit::gfx_pipelines
+            Vulkan::Vulkan)
   target_include_directories(
     recon_example_viewer_atlas_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}"
                                             "${PROJECT_SOURCE_DIR}/tests")
@@ -121,7 +123,8 @@ if(VR_BUILD_TESTS)
   add_test(NAME recon_example_viewer_atlas
            COMMAND recon_example_viewer_atlas_test)
   # Bound a regression that waits for a frame which was never submitted.
-  set_tests_properties(recon_example_viewer_atlas PROPERTIES TIMEOUT 30)
+  set_tests_properties(recon_example_viewer_atlas
+                       PROPERTIES TIMEOUT 30 SKIP_RETURN_CODE 77)
 endif()
 
 # The Dear ImGui sources gfx fetched for its ui tier. gfx exports the path only

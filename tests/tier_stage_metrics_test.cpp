@@ -36,15 +36,13 @@
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/gpu_timer.hpp"
-#include "volumetric_kit/core/vulkan/instance.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
-#include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/mesh/mesh.hpp"
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 
-#include "no_device.hpp"
+#include "gpu_test.hpp"
 
 namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
@@ -136,28 +134,7 @@ vr::DepthCameraParams plane_camera() {
   return cam;
 }
 
-}  // namespace
-
-int main() {
-  vkc::Result<vkc::Instance> instance = vkc::Instance::create({});
-  if (!instance) {
-    return vr_test::no_device("no Vulkan instance",
-                              instance.status().message());
-  }
-  vkc::Result<vkc::PhysicalDeviceInfo> gpu =
-      instance.value().select_physical_device(vr::device_requirements());
-  if (!gpu) {
-    return vr_test::no_device("no compute device", gpu.status().message());
-  }
-  vkc::Result<vkc::Device> device = vkc::Device::create(
-      instance.value(), gpu.value(), vr::device_requirements());
-  if (!device) {
-    return vr_test::no_device("no device", device.status().message());
-  }
-  vkc::Result<vkc::Allocator> allocator =
-      vkc::Allocator::create(instance.value().handle(), device.value());
-  CHECK(allocator);
-
+int gpu_main(vr_test::GpuContext& gpu) {
   const vr::volume::VoxelGridParams params{
       /*voxel_size=*/0.02f,     /*block_size=*/8,
       /*voxels_per_block=*/512,
@@ -168,17 +145,16 @@ int main() {
   const vr::volume::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
                                              {"weight", sizeof(float)}};
   vkc::Result<vr::volume::VoxelBlockGrid> grid =
-      vr::volume::VoxelBlockGrid::create(device.value(), allocator.value(),
-                                         params, attrs, 2);
+      vr::volume::VoxelBlockGrid::create(gpu.device, gpu.allocator, params,
+                                         attrs, 2);
   CHECK(grid);
 
   vkc::Result<vr::tsdf::TsdfIntegrator> integrator =
-      vr::tsdf::TsdfIntegrator::create(device.value(), allocator.value());
+      vr::tsdf::TsdfIntegrator::create(gpu.device, gpu.allocator);
   CHECK(integrator);
 
   vkc::Result<vr::texture::ProjectiveTexturer> texturer =
-      vr::texture::ProjectiveTexturer::create(device.value(),
-                                              allocator.value());
+      vr::texture::ProjectiveTexturer::create(gpu.device, gpu.allocator);
   CHECK(texturer);
 
   const vr::DepthCameraParams cam = plane_camera();
@@ -192,7 +168,7 @@ int main() {
   // member and never created it: every row was host-only, every row printed
   // "timestamps unavailable", and nothing failed. A capability the test can
   // establish independently must not be inferred from the thing under test.
-  vkc::Result<vkc::GpuTimer> probe = vkc::GpuTimer::create(device.value());
+  vkc::Result<vkc::GpuTimer> probe = vkc::GpuTimer::create(gpu.device);
   CHECK(probe);
   const bool device_can_time = probe.value().available();
 
@@ -368,3 +344,7 @@ int main() {
 
   return 0;
 }
+
+}  // namespace
+
+int main() { return vr_test::run_on_gpu(gpu_main); }

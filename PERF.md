@@ -107,7 +107,7 @@ kernels.
   cameras with one kernel instance per camera, or with a kernel that takes
   them all.
 - **Run sync validation on any change to batching or barriers**
-  (`VK_KHRONOS_VALIDATION_VALIDATE_SYNC=true`). A missing barrier passes a
+  (`VKC_TEST_SYNC_VALIDATION=1`). A missing barrier passes a
   plain run and fails only through the test's error counter.
 - **Threads:** a kernel's descriptor set, a `Buffer` and a `GpuTimer` stay on
   one thread; `Device` takes submits from several.

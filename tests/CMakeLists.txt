@@ -11,13 +11,26 @@ add_test(NAME recon_core_smoke COMMAND recon_core_smoke_test)
 # driver (MoltenVK on Apple) offers a device that meets recon's requirements
 # (core/device_requirements.hpp). The Vulkan foundation itself -- device,
 # allocator, buffers, kernels, batches, timers, external memory -- is
-# volumetric_kit_core's and is tested there, not here. Exits 0 (skip) where no
+# volumetric_kit_core's and is tested there, not here. Skips where no
 # driver/device is present.
 add_executable(recon_vulkan_smoke_test vulkan_smoke_test.cpp)
-target_link_libraries(recon_vulkan_smoke_test PRIVATE volumetric_kit::recon_core
-                                                      Vulkan::Vulkan)
+target_link_libraries(
+  recon_vulkan_smoke_test PRIVATE volumetric_kit::recon_core Vulkan::Vulkan
+                                  volumetric_kit::core_test_policy)
 vr_target_warnings(recon_vulkan_smoke_test)
 add_test(NAME recon_vulkan_smoke COMMAND recon_vulkan_smoke_test)
+
+# The GPU tests' harness (gpu_test.hpp): a test fails on an error the validation
+# layer reports, a leaked object's included, and skips as the core's test policy
+# and VR_TEST_HEVC_BACKEND say. Under LeakSanitizer, tools/lsan.supp leaves a
+# block leaked where the layer reports an error reported. Skips without the
+# layer or a device.
+add_executable(recon_gpu_test_harness_test gpu_test_harness_test.cpp)
+target_link_libraries(
+  recon_gpu_test_harness_test PRIVATE volumetric_kit::recon_core
+                                      volumetric_kit::core_test_policy)
+vr_target_warnings(recon_gpu_test_harness_test)
+add_test(NAME recon_gpu_test_harness COMMAND recon_gpu_test_harness_test)
 
 # Every tier reports, and reports the DEVICE half. The load-bearing assertion is
 # per row: gpu_ms < cpu_ms, since the host span wraps the submit the device span
@@ -28,7 +41,8 @@ add_executable(recon_tier_stage_metrics_test tier_stage_metrics_test.cpp)
 target_link_libraries(
   recon_tier_stage_metrics_test
   PRIVATE volumetric_kit::recon_texture volumetric_kit::recon_tsdf
-          volumetric_kit::recon_volume volumetric_kit::recon_core)
+          volumetric_kit::recon_volume volumetric_kit::recon_core
+          volumetric_kit::core_test_policy)
 vr_target_warnings(recon_tier_stage_metrics_test)
 add_test(NAME recon_tier_stage_metrics COMMAND recon_tier_stage_metrics_test)
 
@@ -50,40 +64,46 @@ add_test(NAME recon_volume_hash COMMAND recon_volume_hash_test)
 
 # volume GPU hash map: build a VoxelHashMap, allocate a cube of block coords,
 # compact, and verify the active set + the HashEntry scalar-layout round-trip on
-# the real driver (MoltenVK / NVIDIA). Skips (exit 0) where no device is
-# present.
+# the real driver (MoltenVK / NVIDIA). Skips where no device is present.
 add_executable(recon_volume_hash_map_test volume_hash_map_test.cpp)
-target_link_libraries(recon_volume_hash_map_test
-                      PRIVATE volumetric_kit::recon_volume Vulkan::Vulkan)
+target_link_libraries(
+  recon_volume_hash_map_test
+  PRIVATE volumetric_kit::recon_volume Vulkan::Vulkan
+          volumetric_kit::core_test_policy)
 vr_target_warnings(recon_volume_hash_map_test)
 add_test(NAME recon_volume_hash_map COMMAND recon_volume_hash_map_test)
 
 # volume block grid: declare independent SoA per-voxel attributes, verify they
 # are distinct + correctly-sized buffers keyed by the block pool, the composed
-# map allocates, and the error / move paths. Skips (exit 0) with no device.
+# map allocates, and the error / move paths. Skips with no device.
 add_executable(recon_volume_block_grid_test volume_block_grid_test.cpp)
-target_link_libraries(recon_volume_block_grid_test
-                      PRIVATE volumetric_kit::recon_volume Vulkan::Vulkan)
+target_link_libraries(
+  recon_volume_block_grid_test
+  PRIVATE volumetric_kit::recon_volume Vulkan::Vulkan
+          volumetric_kit::core_test_policy)
 vr_target_warnings(recon_volume_block_grid_test)
 add_test(NAME recon_volume_block_grid COMMAND recon_volume_block_grid_test)
 
 # volume block stamps: every allocation path stamps the blocks it asks for with
 # the map's tick, the block pass stamps those holding weight, and
 # free_stale_blocks frees those neither for more than max_age ticks; resize
-# keeps the records, remove and clear zero them. Skips (exit 0) with no device.
+# keeps the records, remove and clear zero them. Skips with no device.
 add_executable(recon_volume_block_stamps_test volume_block_stamps_test.cpp)
-target_link_libraries(recon_volume_block_stamps_test
-                      PRIVATE volumetric_kit::recon_volume Vulkan::Vulkan)
+target_link_libraries(
+  recon_volume_block_stamps_test
+  PRIVATE volumetric_kit::recon_volume Vulkan::Vulkan
+          volumetric_kit::core_test_policy)
 vr_target_warnings(recon_volume_block_stamps_test)
 add_test(NAME recon_volume_block_stamps COMMAND recon_volume_block_stamps_test)
 
 # tsdf integrate: fuse a synthetic constant-depth plane into a VoxelBlockGrid
 # and verify the classic projective TSDF math per voxel (sdf, truncation, weight
 # + cap). It also runs the kernel's projection alone (shaders/project_pinhole)
-# on inputs that make its depth or pixel NaN. Skips (exit 0) with no device.
+# on inputs that make its depth or pixel NaN. Skips with no device.
 add_executable(recon_tsdf_integrate_test tsdf_integrate_test.cpp)
-target_link_libraries(recon_tsdf_integrate_test
-                      PRIVATE volumetric_kit::recon_tsdf Vulkan::Vulkan)
+target_link_libraries(
+  recon_tsdf_integrate_test PRIVATE volumetric_kit::recon_tsdf Vulkan::Vulkan
+                                    volumetric_kit::core_test_policy)
 include(vr_embed)
 vr_embed_shaders(recon_tsdf_integrate_test SHADERS
                  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/project_pinhole.comp")
@@ -94,20 +114,23 @@ add_test(NAME recon_tsdf_integrate COMMAND recon_tsdf_integrate_test)
 # pseudonormals, or as a shell) and check every voxel of every written block
 # against a brute-force host reference -- an independent closest point, and the
 # winding number for inside/outside -- on a sharp tetrahedron, a dented cube, an
-# open quad and a triangle soup, plus determinism and every refusal. Skips (exit
-# 0) with no device.
+# open quad and a triangle soup, plus determinism and every refusal. Skips with
+# no device.
 add_executable(recon_tsdf_mesh_integrate_test tsdf_mesh_integrate_test.cpp)
-target_link_libraries(recon_tsdf_mesh_integrate_test
-                      PRIVATE volumetric_kit::recon_tsdf Vulkan::Vulkan)
+target_link_libraries(
+  recon_tsdf_mesh_integrate_test
+  PRIVATE volumetric_kit::recon_tsdf Vulkan::Vulkan
+          volumetric_kit::core_test_policy)
 vr_target_warnings(recon_tsdf_mesh_integrate_test)
 add_test(NAME recon_tsdf_mesh_integrate COMMAND recon_tsdf_mesh_integrate_test)
 # GPU pre-processing (recon_sensor_utils) on synthetic frames: undistortion in
 # the right direction, the colour matrix, a host reference of the sampling, the
-# refusals, and fusing the result. Skips (exit 0) where no device is present.
+# refusals, and fusing the result. Skips where no device is present.
 add_executable(recon_sensor_gpu_frame_prep_test sensor_gpu_frame_prep_test.cpp)
 target_link_libraries(
-  recon_sensor_gpu_frame_prep_test PRIVATE volumetric_kit::recon_sensor_utils
-                                           volumetric_kit::recon_tsdf)
+  recon_sensor_gpu_frame_prep_test
+  PRIVATE volumetric_kit::recon_sensor_utils volumetric_kit::recon_tsdf
+          volumetric_kit::core_test_policy)
 vr_target_warnings(recon_sensor_gpu_frame_prep_test)
 add_test(NAME recon_sensor_gpu_frame_prep
          COMMAND recon_sensor_gpu_frame_prep_test)
@@ -116,8 +139,9 @@ add_test(NAME recon_sensor_gpu_frame_prep
 # frame survives it. Separate executable for its replacement operator new.
 add_executable(recon_sensor_gpu_frame_prep_oom_test
                sensor_gpu_frame_prep_oom_test.cpp test_allocation_failure.cpp)
-target_link_libraries(recon_sensor_gpu_frame_prep_oom_test
-                      PRIVATE volumetric_kit::recon_sensor_utils)
+target_link_libraries(
+  recon_sensor_gpu_frame_prep_oom_test
+  PRIVATE volumetric_kit::core_test_policy volumetric_kit::recon_sensor_utils)
 vr_target_warnings(recon_sensor_gpu_frame_prep_oom_test)
 add_test(NAME recon_sensor_gpu_frame_prep_oom
          COMMAND recon_sensor_gpu_frame_prep_oom_test)
@@ -131,7 +155,7 @@ target_include_directories(recon_example_fuse_keyframe_test
 target_link_libraries(
   recon_example_fuse_keyframe_test
   PRIVATE volumetric_kit::recon_sensor_utils volumetric_kit::recon_tsdf
-          volumetric_kit::recon_texture)
+          volumetric_kit::recon_texture volumetric_kit::core_test_policy)
 vr_target_warnings(recon_example_fuse_keyframe_test)
 add_test(NAME recon_example_fuse_keyframe
          COMMAND recon_example_fuse_keyframe_test)
@@ -174,8 +198,9 @@ add_test(NAME recon_example_stage_table COMMAND recon_example_stage_table_test)
 add_executable(recon_example_remesh_report_test example_remesh_report_test.cpp)
 target_include_directories(recon_example_remesh_report_test
                            PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
-target_link_libraries(recon_example_remesh_report_test
-                      PRIVATE volumetric_kit::recon_mesh)
+target_link_libraries(
+  recon_example_remesh_report_test PRIVATE volumetric_kit::core_test_policy
+                                           volumetric_kit::recon_mesh)
 vr_target_warnings(recon_example_remesh_report_test)
 add_test(NAME recon_example_remesh_report
          COMMAND recon_example_remesh_report_test)
@@ -185,35 +210,41 @@ add_test(NAME recon_example_remesh_report
 # refuses incomplete bands by default, and keeps fusing only when the caller
 # explicitly allows partial coverage. Skips (exit 0) with no device.
 add_executable(recon_tsdf_fuser_test tsdf_fuser_test.cpp)
-target_link_libraries(recon_tsdf_fuser_test PRIVATE volumetric_kit::recon_tsdf
-                                                    Vulkan::Vulkan)
+target_link_libraries(
+  recon_tsdf_fuser_test PRIVATE volumetric_kit::core_test_policy
+                                volumetric_kit::recon_tsdf Vulkan::Vulkan)
 vr_target_warnings(recon_tsdf_fuser_test)
 add_test(NAME recon_tsdf_fuser COMMAND recon_tsdf_fuser_test)
 
 # Host OOM stays in Status, resize rolls back, and private live backoff expires.
 add_executable(recon_tsdf_fuser_oom_test tsdf_fuser_oom_test.cpp
                                          test_allocation_failure.cpp)
-target_link_libraries(recon_tsdf_fuser_oom_test
-                      PRIVATE volumetric_kit::recon_tsdf Vulkan::Vulkan)
+target_link_libraries(
+  recon_tsdf_fuser_oom_test PRIVATE volumetric_kit::core_test_policy
+                                    volumetric_kit::recon_tsdf Vulkan::Vulkan)
 vr_target_warnings(recon_tsdf_fuser_oom_test)
 add_test(NAME recon_tsdf_fuser_oom COMMAND recon_tsdf_fuser_oom_test)
 
 # The device-input overloads of allocate_from_depth and integrate: the same
 # frame fused from host arrays and from storage buffers must give the same grid.
-# Skips (exit 0) where no device is present.
+# Skips where no device is present.
 add_executable(recon_tsdf_device_input_test tsdf_device_input_test.cpp)
-target_link_libraries(recon_tsdf_device_input_test
-                      PRIVATE volumetric_kit::recon_tsdf Vulkan::Vulkan)
+target_link_libraries(
+  recon_tsdf_device_input_test
+  PRIVATE volumetric_kit::recon_tsdf Vulkan::Vulkan
+          volumetric_kit::core_test_policy)
 vr_target_warnings(recon_tsdf_device_input_test)
 add_test(NAME recon_tsdf_device_input COMMAND recon_tsdf_device_input_test)
 
 # tsdf integrate set: several cameras allocated and fused in one call each must
 # give, under classic, the grid fusing them one at a time gives, bit for bit,
-# and under dynamic the grid the same set in the other order gives. Skips (exit
-# 0) where no device is present.
+# and under dynamic the grid the same set in the other order gives. Skips where
+# no device is present.
 add_executable(recon_tsdf_integrate_set_test tsdf_integrate_set_test.cpp)
-target_link_libraries(recon_tsdf_integrate_set_test
-                      PRIVATE volumetric_kit::recon_tsdf Vulkan::Vulkan)
+target_link_libraries(
+  recon_tsdf_integrate_set_test
+  PRIVATE volumetric_kit::recon_tsdf Vulkan::Vulkan
+          volumetric_kit::core_test_policy)
 vr_target_warnings(recon_tsdf_integrate_set_test)
 add_test(NAME recon_tsdf_integrate_set COMMAND recon_tsdf_integrate_set_test)
 
@@ -226,63 +257,73 @@ add_executable(recon_tsdf_integrate_dynamic_set_test
                tsdf_integrate_dynamic_set_test.cpp)
 target_link_libraries(
   recon_tsdf_integrate_dynamic_set_test
-  PRIVATE volumetric_kit::recon_tsdf volumetric_kit::recon_mesh Vulkan::Vulkan)
+  PRIVATE volumetric_kit::core_test_policy volumetric_kit::recon_tsdf
+          volumetric_kit::recon_mesh Vulkan::Vulkan)
 vr_target_warnings(recon_tsdf_integrate_dynamic_set_test)
 add_test(NAME recon_tsdf_integrate_dynamic_set
          COMMAND recon_tsdf_integrate_dynamic_set_test)
 
 # tsdf integrate cull: fusing only the blocks the frames' frusta reach must give
 # the grid fusing every active block gives, bit for bit, at each edge of that
-# reach. Skips (exit 0) where no device is present.
+# reach. Skips where no device is present.
 add_executable(recon_tsdf_integrate_cull_test tsdf_integrate_cull_test.cpp)
-target_link_libraries(recon_tsdf_integrate_cull_test
-                      PRIVATE volumetric_kit::recon_tsdf Vulkan::Vulkan)
+target_link_libraries(
+  recon_tsdf_integrate_cull_test
+  PRIVATE volumetric_kit::recon_tsdf Vulkan::Vulkan
+          volumetric_kit::core_test_policy)
 vr_target_warnings(recon_tsdf_integrate_cull_test)
 add_test(NAME recon_tsdf_integrate_cull COMMAND recon_tsdf_integrate_cull_test)
 
 # volume delete: allocate a cube, remove a subset, verify the survivors + heap
-# reuse (chain splice / successor pull-up) on the real driver. Skips (exit 0)
-# where no device is present.
+# reuse (chain splice / successor pull-up) on the real driver. Skips where no
+# device is present.
 add_executable(recon_volume_delete_test volume_delete_test.cpp)
-target_link_libraries(recon_volume_delete_test
-                      PRIVATE volumetric_kit::recon_volume Vulkan::Vulkan)
+target_link_libraries(
+  recon_volume_delete_test PRIVATE volumetric_kit::recon_volume Vulkan::Vulkan
+                                   volumetric_kit::core_test_policy)
 vr_target_warnings(recon_volume_delete_test)
 add_test(NAME recon_volume_delete COMMAND recon_volume_delete_test)
 
 # volume resize: allocate, grow the table to more buckets, and verify the active
-# set survives + further allocation past the old capacity works. Skips (exit 0)
-# with no device.
+# set survives + further allocation past the old capacity works. Skips with no
+# device.
 add_executable(recon_volume_resize_test volume_resize_test.cpp)
-target_link_libraries(recon_volume_resize_test
-                      PRIVATE volumetric_kit::recon_volume Vulkan::Vulkan)
+target_link_libraries(
+  recon_volume_resize_test PRIVATE volumetric_kit::recon_volume Vulkan::Vulkan
+                                   volumetric_kit::core_test_policy)
 vr_target_warnings(recon_volume_resize_test)
 add_test(NAME recon_volume_resize COMMAND recon_volume_resize_test)
 
 # Stateless volume growth: doubling, an explicit minimum, content retention, and
 # rejection of invalid or unreachable sizes. Skips (exit 0) with no device.
 add_executable(recon_volume_grid_growth_test volume_grid_growth_test.cpp)
-target_link_libraries(recon_volume_grid_growth_test
-                      PRIVATE volumetric_kit::recon_volume Vulkan::Vulkan)
+target_link_libraries(
+  recon_volume_grid_growth_test
+  PRIVATE volumetric_kit::core_test_policy volumetric_kit::recon_volume
+          Vulkan::Vulkan)
 vr_target_warnings(recon_volume_grid_growth_test)
 add_test(NAME recon_volume_grid_growth COMMAND recon_volume_grid_growth_test)
 
 # volume diagnostics: force a collision chain (coords hashing to one bucket) and
-# verify the reported active / overflow / chain-length + heap stats. Skips (exit
-# 0) where no device is present.
+# verify the reported active / overflow / chain-length + heap stats. Skips where
+# no device is present.
 add_executable(recon_volume_diagnostics_test volume_diagnostics_test.cpp)
-target_link_libraries(recon_volume_diagnostics_test
-                      PRIVATE volumetric_kit::recon_volume Vulkan::Vulkan)
+target_link_libraries(
+  recon_volume_diagnostics_test
+  PRIVATE volumetric_kit::recon_volume Vulkan::Vulkan
+          volumetric_kit::core_test_policy)
 vr_target_warnings(recon_volume_diagnostics_test)
 add_test(NAME recon_volume_diagnostics COMMAND recon_volume_diagnostics_test)
 
 # volume allocate-from-depth: unproject a synthetic one-pixel depth frame and
 # verify exactly the expected (2*tb+1)^3 truncation-band block cube is allocated
 # on the real driver -- the camera unprojection + band dilation, plus the
-# DepthCameraParams scalar-layout upload. Skips (exit 0) where no device is
-# present.
+# DepthCameraParams scalar-layout upload. Skips where no device is present.
 add_executable(recon_volume_allocate_test volume_allocate_test.cpp)
-target_link_libraries(recon_volume_allocate_test
-                      PRIVATE volumetric_kit::recon_volume Vulkan::Vulkan)
+target_link_libraries(
+  recon_volume_allocate_test
+  PRIVATE volumetric_kit::recon_volume Vulkan::Vulkan
+          volumetric_kit::core_test_policy)
 vr_target_warnings(recon_volume_allocate_test)
 add_test(NAME recon_volume_allocate COMMAND recon_volume_allocate_test)
 
@@ -290,12 +331,14 @@ add_test(NAME recon_volume_allocate COMMAND recon_volume_allocate_test)
 # the real driver that every block holding a voxel within trunc_dist is present
 # -- brute-forced on the host against an independent closest-point -- that a
 # triangle wider than the band leaves no hole (where the point path does), and
-# that the distance prune keeps the bounding box's far corners out. Skips (exit
-# 0) where no device is present.
+# that the distance prune keeps the bounding box's far corners out. Skips where
+# no device is present.
 add_executable(recon_volume_allocate_triangles_test
                volume_allocate_triangles_test.cpp)
-target_link_libraries(recon_volume_allocate_triangles_test
-                      PRIVATE volumetric_kit::recon_volume Vulkan::Vulkan)
+target_link_libraries(
+  recon_volume_allocate_triangles_test
+  PRIVATE volumetric_kit::recon_volume Vulkan::Vulkan
+          volumetric_kit::core_test_policy)
 vr_target_warnings(recon_volume_allocate_triangles_test)
 add_test(NAME recon_volume_allocate_triangles
          COMMAND recon_volume_allocate_triangles_test)
@@ -304,22 +347,25 @@ add_test(NAME recon_volume_allocate_triangles
 # (one dead-centre, others behind / beyond-far / off to the side), then verify
 # compact_active_blocks_in_frusta_on_device keeps only the in-view blocks while
 # plain compaction returns all -- proving the plane math + the on-device AABB
-# cull -- and that several frusta keep their union. Skips (exit 0) where no
-# device is present.
+# cull -- and that several frusta keep their union. Skips where no device is
+# present.
 add_executable(recon_volume_frustum_test volume_frustum_test.cpp)
-target_link_libraries(recon_volume_frustum_test
-                      PRIVATE volumetric_kit::recon_volume Vulkan::Vulkan)
+target_link_libraries(
+  recon_volume_frustum_test PRIVATE volumetric_kit::recon_volume Vulkan::Vulkan
+                                    volumetric_kit::core_test_policy)
 vr_target_warnings(recon_volume_frustum_test)
 add_test(NAME recon_volume_frustum COMMAND recon_volume_frustum_test)
 
 # Sparse marching cubes: mesh an analytic sphere written into a real multi-block
 # VoxelBlockGrid, exercising cross-block neighbour sampling, and prove the same
-# field meshes identically however it is divided into blocks. Skips (exit 0)
-# where no device is present.
+# field meshes identically however it is divided into blocks. Skips where no
+# device is present.
 add_executable(recon_mesh_marching_cubes_sparse_test
                marching_cubes_sparse_test.cpp)
-target_link_libraries(recon_mesh_marching_cubes_sparse_test
-                      PRIVATE volumetric_kit::recon_mesh Vulkan::Vulkan)
+target_link_libraries(
+  recon_mesh_marching_cubes_sparse_test
+  PRIVATE volumetric_kit::recon_mesh Vulkan::Vulkan
+          volumetric_kit::core_test_policy)
 vr_target_warnings(recon_mesh_marching_cubes_sparse_test)
 add_test(NAME recon_mesh_marching_cubes_sparse
          COMMAND recon_mesh_marching_cubes_sparse_test)
@@ -327,12 +373,13 @@ add_test(NAME recon_mesh_marching_cubes_sparse
 # mesh MarchingCubesConfig: prove a consumer's extra buffer usage reaches the
 # vertex arena and index run -- on the first allocation AND across a grow -- and
 # that an unsupported bit is rejected at create(). recon itself never sets one,
-# so this is the only place the non-zero path runs. Skips (exit 0) with no
-# device.
+# so this is the only place the non-zero path runs. Skips with no device.
 add_executable(recon_mesh_marching_cubes_config_test
                marching_cubes_config_test.cpp)
-target_link_libraries(recon_mesh_marching_cubes_config_test
-                      PRIVATE volumetric_kit::recon_mesh Vulkan::Vulkan)
+target_link_libraries(
+  recon_mesh_marching_cubes_config_test
+  PRIVATE volumetric_kit::recon_mesh Vulkan::Vulkan
+          volumetric_kit::core_test_policy)
 vr_target_warnings(recon_mesh_marching_cubes_config_test)
 add_test(NAME recon_mesh_marching_cubes_config
          COMMAND recon_mesh_marching_cubes_config_test)
@@ -352,10 +399,12 @@ add_test(NAME recon_mesh_exchange COMMAND recon_mesh_exchange_test)
 # verify the visible triangle gets the exact projected atlas UVs while the
 # others keep the (-1,-1) sentinel; a closer depth map reverts the textured
 # triangle, and a translated pose shifts the projection (the world->camera
-# transform). Skips (exit 0) where no device is present.
+# transform). Skips where no device is present.
 add_executable(recon_texture_projective_test texture_projective_test.cpp)
-target_link_libraries(recon_texture_projective_test
-                      PRIVATE volumetric_kit::recon_texture Vulkan::Vulkan)
+target_link_libraries(
+  recon_texture_projective_test
+  PRIVATE volumetric_kit::recon_texture Vulkan::Vulkan
+          volumetric_kit::core_test_policy)
 vr_target_warnings(recon_texture_projective_test)
 add_test(NAME recon_texture_projective COMMAND recon_texture_projective_test)
 
@@ -364,8 +413,10 @@ add_test(NAME recon_texture_projective COMMAND recon_texture_projective_test)
 # tile; the atlas layout and packing; the refusals. Skips where no device is
 # present.
 add_executable(recon_texture_multiview_test texture_multiview_test.cpp)
-target_link_libraries(recon_texture_multiview_test
-                      PRIVATE volumetric_kit::recon_texture Vulkan::Vulkan)
+target_link_libraries(
+  recon_texture_multiview_test
+  PRIVATE volumetric_kit::recon_texture Vulkan::Vulkan
+          volumetric_kit::core_test_policy)
 vr_target_warnings(recon_texture_multiview_test)
 add_test(NAME recon_texture_multiview COMMAND recon_texture_multiview_test)
 
@@ -377,7 +428,7 @@ add_executable(recon_texture_device_mesh_test texture_device_mesh_test.cpp)
 target_link_libraries(
   recon_texture_device_mesh_test
   PRIVATE volumetric_kit::recon_texture volumetric_kit::recon_mesh
-          Vulkan::Vulkan)
+          Vulkan::Vulkan volumetric_kit::core_test_policy)
 vr_target_warnings(recon_texture_device_mesh_test)
 add_test(NAME recon_texture_device_mesh COMMAND recon_texture_device_mesh_test)
 
@@ -396,8 +447,8 @@ add_test(NAME recon_core_color_space COMMAND recon_core_color_space_test)
 # ...and the device half of the same claim: run core/shaders/color_common.glsl
 # over all 256 codes on the real driver and compare against the host curve. Two
 # implementations of one transfer function is the silent drift the 2026-08-02
-# decision exists to prevent, so it is pinned rather than trusted. Skips (exit
-# 0) where no device is present.
+# decision exists to prevent, so it is pinned rather than trusted. Skips where
+# no device is present.
 add_executable(recon_core_color_space_gpu_test core_color_space_gpu_test.cpp)
 vr_compile_shaders(recon_core_color_space_gpu_test SHADERS
                    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/color_parity.comp")
@@ -406,8 +457,10 @@ target_compile_definitions(
   PRIVATE
     VR_COLOR_PARITY_SPV="${CMAKE_CURRENT_BINARY_DIR}/shaders/color_parity.comp.spv"
 )
-target_link_libraries(recon_core_color_space_gpu_test
-                      PRIVATE volumetric_kit::recon_core Vulkan::Vulkan)
+target_link_libraries(
+  recon_core_color_space_gpu_test
+  PRIVATE volumetric_kit::recon_core Vulkan::Vulkan
+          volumetric_kit::core_test_policy)
 vr_target_warnings(recon_core_color_space_gpu_test)
 add_test(NAME recon_core_color_space_gpu
          COMMAND recon_core_color_space_gpu_test)
@@ -454,8 +507,9 @@ add_test(NAME recon_sensor_array COMMAND recon_sensor_array_test)
 # frame as GpuFramePrep makes it alone and posed by the calibration. Skips
 # without a device.
 add_executable(recon_sensor_array_process_test sensor_array_process_test.cpp)
-target_link_libraries(recon_sensor_array_process_test
-                      PRIVATE volumetric_kit::recon_sensor_array)
+target_link_libraries(
+  recon_sensor_array_process_test PRIVATE volumetric_kit::recon_sensor_array
+                                          volumetric_kit::core_test_policy)
 vr_target_warnings(recon_sensor_array_process_test)
 add_test(NAME recon_sensor_array_process
          COMMAND recon_sensor_array_process_test)
@@ -511,10 +565,11 @@ add_test(NAME recon_codec_params COMMAND recon_codec_params_test)
 # codec tier, GPU half: the internal DctTransform's forward kernel against a
 # double-precision reference, the orthonormal reconstruction bounds, the
 # observed mask, batching past one dispatch, the refusals and the moves. Skips
-# (exit 0) with no device.
+# with no device.
 add_executable(recon_codec_dct_test codec_dct_test.cpp)
-target_link_libraries(recon_codec_dct_test PRIVATE volumetric_kit::recon_codec
-                                                   Vulkan::Vulkan)
+target_link_libraries(
+  recon_codec_dct_test PRIVATE volumetric_kit::recon_codec Vulkan::Vulkan
+                               volumetric_kit::core_test_policy)
 target_include_directories(
   recon_codec_dct_test
   PRIVATE ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/codec)
@@ -526,8 +581,10 @@ add_test(NAME recon_codec_dct COMMAND recon_codec_dct_test)
 # int32 coordinate extremes, and every frame the reader reads, or corrupt
 # payload it refuses, is the host reader's. Skips without a device.
 add_executable(recon_codec_device_frame_test codec_device_frame_test.cpp)
-target_link_libraries(recon_codec_device_frame_test
-                      PRIVATE volumetric_kit::recon_codec Vulkan::Vulkan)
+target_link_libraries(
+  recon_codec_device_frame_test
+  PRIVATE volumetric_kit::recon_codec Vulkan::Vulkan
+          volumetric_kit::core_test_policy)
 target_include_directories(
   recon_codec_device_frame_test
   PRIVATE ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/codec)
@@ -559,18 +616,20 @@ endforeach()
 # bound of its source, meshing to the analytic sphere it came from, frame after
 # frame into one grid, untouched on every early refusal, and OutOfMemory that a
 # resize recovers. Public headers only, plus the shared codec_fixture.hpp; the
-# decoder test links recon_mesh, which the tier may not. Both skip (exit 0) with
-# no device.
+# decoder test links recon_mesh, which the tier may not. Both skip with no
+# device.
 add_executable(recon_codec_encoder_test codec_encoder_test.cpp)
-target_link_libraries(recon_codec_encoder_test
-                      PRIVATE volumetric_kit::recon_codec Vulkan::Vulkan)
+target_link_libraries(
+  recon_codec_encoder_test PRIVATE volumetric_kit::recon_codec Vulkan::Vulkan
+                                   volumetric_kit::core_test_policy)
 vr_target_warnings(recon_codec_encoder_test)
 add_test(NAME recon_codec_encoder COMMAND recon_codec_encoder_test)
 
 add_executable(recon_codec_decoder_test codec_decoder_test.cpp)
 target_link_libraries(
-  recon_codec_decoder_test PRIVATE volumetric_kit::recon_codec
-                                   volumetric_kit::recon_mesh Vulkan::Vulkan)
+  recon_codec_decoder_test
+  PRIVATE volumetric_kit::recon_codec volumetric_kit::recon_mesh Vulkan::Vulkan
+          volumetric_kit::core_test_policy)
 vr_target_warnings(recon_codec_decoder_test)
 add_test(NAME recon_codec_decoder COMMAND recon_codec_decoder_test)
 
@@ -595,8 +654,9 @@ if(VR_WITH_FFMPEG)
            COMMAND recon_sensor_video_frame_color_test)
 
   add_executable(recon_sensor_video_hevc_test sensor_video_hevc_test.cpp)
-  target_link_libraries(recon_sensor_video_hevc_test
-                        PRIVATE volumetric_kit::recon_sensor_video)
+  target_link_libraries(
+    recon_sensor_video_hevc_test PRIVATE volumetric_kit::recon_sensor_video
+                                         volumetric_kit::core_test_policy)
   target_compile_definitions(
     recon_sensor_video_hevc_test
     PRIVATE VR_HEVC_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data/hevc")
@@ -605,8 +665,9 @@ if(VR_WITH_FFMPEG)
 
   add_executable(recon_sensor_video_jpeg_test sensor_video_jpeg_test.cpp)
   target_link_libraries(
-    recon_sensor_video_jpeg_test PRIVATE volumetric_kit::recon_sensor_video
-                                         volumetric_kit::recon_sensor_utils)
+    recon_sensor_video_jpeg_test
+    PRIVATE volumetric_kit::recon_sensor_video
+            volumetric_kit::recon_sensor_utils volumetric_kit::core_test_policy)
   target_compile_definitions(
     recon_sensor_video_jpeg_test
     PRIVATE VR_JPEG_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data/jpeg")
@@ -630,7 +691,8 @@ if(VR_WITH_FFMPEG)
               "-framework CoreVideo"
               "-framework IOSurface"
               "-framework Metal"
-              "-framework Foundation")
+              "-framework Foundation"
+              volumetric_kit::core_test_policy)
     target_compile_definitions(
       recon_sensor_video_vt_jpeg_error_test
       PRIVATE VR_JPEG_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data/jpeg")
@@ -757,8 +819,9 @@ if(VR_WITH_ORBBEC)
     ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec/picture_frames.cpp
   )
   target_link_libraries(
-    recon_sensor_orbbec_hevc_test PRIVATE volumetric_kit::recon_sensor_orbbec
-                                          volumetric_kit::recon_sensor_video)
+    recon_sensor_orbbec_hevc_test
+    PRIVATE volumetric_kit::recon_sensor_orbbec
+            volumetric_kit::recon_sensor_video volumetric_kit::core_test_policy)
   vr_link_orbbec_sdk(recon_sensor_orbbec_hevc_test)
   target_include_directories(
     recon_sensor_orbbec_hevc_test
@@ -778,8 +841,9 @@ if(VR_WITH_ORBBEC)
     ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec/picture_frames.cpp
   )
   target_link_libraries(
-    recon_sensor_orbbec_jpeg_test PRIVATE volumetric_kit::recon_sensor_orbbec
-                                          volumetric_kit::recon_sensor_video)
+    recon_sensor_orbbec_jpeg_test
+    PRIVATE volumetric_kit::recon_sensor_orbbec
+            volumetric_kit::recon_sensor_video volumetric_kit::core_test_policy)
   vr_link_orbbec_sdk(recon_sensor_orbbec_jpeg_test)
   target_include_directories(
     recon_sensor_orbbec_jpeg_test
@@ -850,3 +914,10 @@ set_tests_properties(recon_eval_mesh_distance PROPERTIES COST 29)
 set_tests_properties(recon_mesh_marching_cubes_sparse PROPERTIES COST 25)
 set_tests_properties(recon_codec_decoder PROPERTIES COST 23)
 set_tests_properties(recon_codec_device_frame PROPERTIES COST 17)
+
+# A test skips by exiting with the core's test::kSkipExitCode (gpu_test.hpp).
+get_property(
+  _vr_tests
+  DIRECTORY
+  PROPERTY TESTS)
+set_tests_properties(${_vr_tests} PROPERTIES SKIP_RETURN_CODE 77)

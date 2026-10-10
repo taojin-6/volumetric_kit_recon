@@ -6,14 +6,14 @@
 // back to marching cubes every block whose +{0,1}^3 neighbourhood holds it
 // -- the 2x2x2 at and below it -- and nothing else; a window closes at the
 // map's tick, so the next sees only later changes, and an empty map samples
-// no window. Exits 0 (skip) where no device is present.
+// no window. Skips where no device is present.
 
 #include <cstdint>
 #include <cstdio>
 #include <vector>
 
+#include "gpu_test.hpp"
 #include "grid_layout.hpp"
-#include "no_device.hpp"
 #include "remesh_report.hpp"
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
@@ -59,26 +59,12 @@ vkc::Status touch(vkc::Device& device, vkc::Allocator& allocator,
 
 }  // namespace
 
-int main() {
-  auto instance = vkc::Instance::create({});
-  if (!instance) {
-    return vr_test::no_device("no Vulkan instance",
-                              instance.status().message());
-  }
-  auto gpu = instance->select_physical_device(vr::device_requirements());
-  if (!gpu) {
-    return vr_test::no_device("no compute-capable device",
-                              gpu.status().message());
-  }
-  auto device = vkc::Device::create(*instance, *gpu, vr::device_requirements());
-  CHECK(device.ok());
-  auto allocator = vkc::Allocator::create(instance->handle(), *device);
-  CHECK(allocator.ok());
+int gpu_main(vr_test::GpuContext& gpu) {
   const vol::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
                                       {"weight", sizeof(float)}};
   auto made = vol::VoxelBlockGrid::create(
-      *device, *allocator, vr_example::example_grid_params(0.01f, 0.04f, 256),
-      attrs, 2);
+      gpu.device, gpu.allocator,
+      vr_example::example_grid_params(0.01f, 0.04f, 256), attrs, 2);
   CHECK(made.ok());
   vol::VoxelBlockGrid& grid = made.value();
 
@@ -100,7 +86,7 @@ int main() {
   CHECK(grid.map().allocate(cube.data(), 27).ok());
   const std::uint32_t before = grid.map().tick();
   grid.map().advance_tick();
-  CHECK(touch(*device, *allocator, grid, vr::Vec3i(1, 1, 1)).ok());
+  CHECK(touch(gpu.device, gpu.allocator, grid, vr::Vec3i(1, 1, 1)).ok());
 
   auto active = grid.map().compact_active_blocks();
   CHECK(active.ok() && active.value().size() == 27);
@@ -112,7 +98,7 @@ int main() {
   // A corner block reaches only itself inside the cube.
   grid.map().advance_tick();
   const std::uint32_t middle = grid.map().tick() - 1;
-  CHECK(touch(*device, *allocator, grid, vr::Vec3i(0, 0, 0)).ok());
+  CHECK(touch(gpu.device, gpu.allocator, grid, vr::Vec3i(0, 0, 0)).ok());
   blocks = vr_example::changed_since(grid, active.value(), middle);
   CHECK(blocks.ok());
   CHECK(blocks.value().changed == 1 && blocks.value().remesh == 1);
@@ -131,3 +117,5 @@ int main() {
   std::puts("example_remesh_report: OK");
   return 0;
 }
+
+int main() { return vr_test::run_on_gpu(gpu_main); }
