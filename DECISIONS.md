@@ -439,10 +439,10 @@ entries relevant to your task; later amendments supersede earlier rules.
   A Dynamic set clears with every camera before it fuses with any, through a
   clear kernel of its own; a single frame and Classic are unchanged.
 
-- [**2026-10-08**](#2026-10-08--recon-builds-in-a--fno-exceptions-consumer-only-the-code-that-calls-a-throwing-library-compiles-with-exceptions-privately-and--werror-is-the-top-level-builds) —
-  recon builds in a `-fno-exceptions` consumer: only code that calls a
-  throwing library compiles with exceptions, privately; `GpuFramePrep`
-  catches nothing; `-Werror` is the top-level build's.
+- [**2026-10-10**](#2026-10-10--recon-keeps-exception-handlers-shares-frame-preparation-and-leaves-warning-policy-to-consumers) —
+  recon keeps exception handlers and the normal CI configuration;
+  `GpuFramePrep` shares one preparation path, and `-Werror` defaults on
+  only in a top-level build.
 
 ## Decision record
 
@@ -11339,48 +11339,43 @@ Not run: `rig_viewer` on the rig.
 Still open: clearing on evidence (a weight decrement, an incidence term)
 and behind a pixel with no return, each judged on the lab rig.
 
-### 2026-10-08 — recon builds in a `-fno-exceptions` consumer: only the code that calls a throwing library compiles with exceptions, privately, and `-Werror` is the top-level build's.
+### 2026-10-10 — recon keeps exception handlers, shares frame preparation, and leaves warning policy to consumers.
 
-calib builds with `-fno-exceptions` and is to link recon's sensor tiers;
-ios fetches recon under whatever compiler its image has.
+**Build with C++ exceptions enabled.** CI uses the normal exception-enabled
+configurations. The handlers that translate backend errors and checked host
+allocation failures into `Status` remain in place. `Fuser`, `grow_grid` and
+rehash keep their allocation-failure handling, and the shared
+`test_allocation_failure` helper remains for their regression and the frame
+preparation regression.
 
-- **The library tiers and their tests build with `-fno-exceptions`.** CI's
-  `ubuntu-24.04-no-exceptions` leg builds and runs them so, with the Orbbec
-  driver, FFmpeg and CUDA, as calib's own leg does; the examples, which are
-  applications, are left out.
-- **Exceptions only where a library throws, and privately.** `recon_io` and
-  `recon_io_assimp` compiled with them already, for stb, tinyply and
-  Assimp. So now does every target that calls the Orbbec SDK, which reports
-  every failure by throwing `ob::Error`, through `vr_link_orbbec_sdk`
-  (`cmake/vr_orbbec.cmake`): the driver catches around each SDK call, and
-  its callbacks and decoding threads catch everything, so none crosses its
-  API. Clang lets a system header's `throw` through under
-  `-fno-exceptions`; GCC does not, so the SDK's headers alone need the flag
-  on Linux.
-- **`GpuFramePrep` catches nothing.** The `catch (std::bad_alloc)` around
-  the batch's staging goes, and with it the `OutOfMemory` `prepare_batch`
-  returned for a host allocation there. Holding a new output without
-  throwing would not bring it back: making the output's buffer allocates on
-  the host first, for the core's `Buffer` deleter and, on MoltenVK, in the
-  driver, and those throw. A host out of memory goes unreported, as the
-  2026-09-27 v1 frame entry decided for the codec. `prepare` is `prepare_batch` over a set of one, so
-  a frame its checks refuse times no row, as a set does.
-- **`VR_WARNINGS_AS_ERRORS` defaults to `PROJECT_IS_TOP_LEVEL`**, as the
-  core's and calib's do: a consumer's newer compiler then reports recon's
-  new warnings rather than failing its build. recon's CI builds at the top
-  level and keeps `-Werror`. `recon_subproject_defaults` configures recon as
-  a subproject and holds its tests, examples and `-Werror` off.
+**One preparation path.** `GpuFramePrep::prepare` and `prepare_batch` use
+one private path. All input checks run before the timing row opens, so a
+refused frame adds no row. A host allocation failure while staging returns
+`OutOfMemory` through both entry points; previously returned frames stay
+intact and the call can be retried. The shared path retains the batch's
+`std::bad_alloc` catch, which the single-frame path previously lacked.
 
-**Validation.** Apple M5 Max, macOS, Release, with Orbbec and FFmpeg: the 58
-tests pass, and pass again in a second build with
-`-DCMAKE_CXX_FLAGS=-fno-exceptions`, Assimp on and the examples off; before
-the change that build stops at the `try` in `gpu_frame_prep.cpp` and in the
-Orbbec driver. The frame prep's test and `recon_sensor_array_process` run
-clean under the Khronos layer's synchronization validation. Without the
-change, `recon_sensor_gpu_frame_prep` (a refused frame timed) and
-`recon_subproject_defaults` fail. GCC 16 compiles the changed sources under
-`-fno-exceptions` and refuses the SDK's headers without `-fexceptions`; the
-whole GCC build is CI's.
+**SDK exceptions stay private.** `vr_link_orbbec_sdk` links the Orbbec SDK
+and enables exceptions privately for each target compiling its calls or
+headers, including `recon_sensor_orbbec_open_sensors_test`. This follows the
+I/O targets' existing treatment of their throwing backends; it does not
+change a consumer's compiler flags.
+
+**Consumer defaults.** `VR_WARNINGS_AS_ERRORS` defaults to
+`PROJECT_IS_TOP_LEVEL`, as the core's and calib's do. A consumer's newer
+compiler reports warnings without failing its build; recon's own CI keeps
+`-Werror`. `recon_subproject_defaults` configures recon as a subproject and
+checks that its tests, examples and `-Werror` default off.
+
+**Validation.** Apple M5 Max, macOS, Release, with Orbbec, FFmpeg, Assimp,
+examples and viewer targets enabled: the build and all 66 tests pass. The
+allocation-failure regression checks both single and batch preparation,
+retained frame contents and retry; linking it against the pre-fix
+implementation reproduces an escaping `std::bad_alloc`. Frame preparation,
+its allocation-failure regression, sensor-array processing, the retained
+keyframe and fusion allocation-failure tests also pass with the Khronos
+layer loaded and synchronization validation enabled. No live-camera or
+interactive viewer check was run.
 
 ## Measured lessons
 

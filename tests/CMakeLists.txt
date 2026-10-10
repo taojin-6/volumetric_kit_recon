@@ -112,6 +112,16 @@ vr_target_warnings(recon_sensor_gpu_frame_prep_test)
 add_test(NAME recon_sensor_gpu_frame_prep
          COMMAND recon_sensor_gpu_frame_prep_test)
 
+# Allocation failure while staging is an OutOfMemory result, and a retained
+# frame survives it. Separate executable for its replacement operator new.
+add_executable(recon_sensor_gpu_frame_prep_oom_test
+               sensor_gpu_frame_prep_oom_test.cpp test_allocation_failure.cpp)
+target_link_libraries(recon_sensor_gpu_frame_prep_oom_test
+                      PRIVATE volumetric_kit::recon_sensor_utils)
+vr_target_warnings(recon_sensor_gpu_frame_prep_oom_test)
+add_test(NAME recon_sensor_gpu_frame_prep_oom
+         COMMAND recon_sensor_gpu_frame_prep_oom_test)
+
 # The viewer's retained keyframe survives preparation and integration errors,
 # and still supplies depth, coverage and atlas pixels for projective texturing.
 # Headless: uses the example's fusion helper, without gfx or a dataset.
@@ -680,9 +690,9 @@ if(VR_WITH_ORBBEC)
     ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec/orbbec_sensor.cpp
     ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec/frame_conversion.cpp
   )
-  target_link_libraries(
-    recon_sensor_orbbec_open_sensors_test
-    PRIVATE volumetric_kit::recon_sensor_orbbec ob::OrbbecSDK)
+  target_link_libraries(recon_sensor_orbbec_open_sensors_test
+                        PRIVATE volumetric_kit::recon_sensor_orbbec)
+  vr_link_orbbec_sdk(recon_sensor_orbbec_open_sensors_test)
   target_include_directories(
     recon_sensor_orbbec_open_sensors_test
     PRIVATE ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec)
@@ -766,9 +776,10 @@ endforeach()
 # A dependency this build took from a local source instead, as given.
 get_cmake_property(_vr_cache CACHE_VARIABLES)
 foreach(_vr_var IN LISTS _vr_cache)
-  if(_vr_var MATCHES "^FETCHCONTENT_SOURCE_DIR_" AND NOT "${${_vr_var}}"
-                                                     STREQUAL "")
-    list(APPEND _vr_fetched_sources "-D${_vr_var}=${${_vr_var}}")
+  if(_vr_var MATCHES "^FETCHCONTENT_SOURCE_DIR_")
+    if(NOT "${${_vr_var}}" STREQUAL "")
+      list(APPEND _vr_fetched_sources "-D${_vr_var}=${${_vr_var}}")
+    endif()
   endif()
 endforeach()
 set(_vr_subproject "${CMAKE_CURRENT_BINARY_DIR}/subproject")

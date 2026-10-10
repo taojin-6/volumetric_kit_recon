@@ -73,20 +73,6 @@ on:
         required: false
         type: string
         default: '["Debug","Release"]'
-      cxx_flags:
-        description: >-
-          CMAKE_CXX_FLAGS for the build, which the fetched dependencies are
-          compiled with too, e.g. -fno-exceptions. Empty passes none.
-        required: false
-        type: string
-        default: ''
-      examples:
-        description: >-
-          Build the examples (VR_BUILD_EXAMPLES). Off for a leg that builds
-          the library tiers and their tests alone.
-        required: false
-        type: boolean
-        default: true
 
 jobs:
   build:
@@ -341,8 +327,6 @@ jobs:
           ok=0
           for attempt in 1 2 3; do
             if cmake -S . -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
-                -DCMAKE_CXX_FLAGS="${{ inputs.cxx_flags }}" \
-                -DVR_BUILD_EXAMPLES=${{ inputs.examples && 'ON' || 'OFF' }} \
                 -DVR_WITH_ORBBEC=${{ inputs.orbbec_sdk && 'ON' || 'OFF' }} \
                 -DVR_WITH_FFMPEG=${{ inputs.ffmpeg && 'ON' || 'OFF' }} \
                 -DVR_WITH_CUDA=${{ inputs.cuda && 'ON' || 'OFF' }} \

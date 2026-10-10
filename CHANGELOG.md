@@ -105,10 +105,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `VR_BUILD_TESTS` does, so a project that fetches recon no longer compiles
   it with `-Werror`. Test: `recon_subproject_defaults`.
 - build: **every target that calls the Orbbec SDK compiles with exceptions,
-  privately** (`vr_link_orbbec_sdk`), so the driver builds where
-  `CMAKE_CXX_FLAGS` turns exceptions off.
-- CI: **an `ubuntu-24.04-no-exceptions` leg** builds and tests the library
-  tiers, the Orbbec driver included, with `-fno-exceptions`.
+  privately** (`vr_link_orbbec_sdk`), so it can catch the SDK's errors.
 - `sensor/utils`: **`GpuFramePrep::prepare` is `prepare_batch` over a set
   of one**, so a frame its checks refuse no longer times a `"frame prep"`
   row.
@@ -265,10 +262,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- `sensor/utils`: **`GpuFramePrep` builds with `-fno-exceptions`.** Its
-  `catch (std::bad_alloc)` goes, and with it the `OutOfMemory`
-  `prepare_batch` returned for a host out of memory while staging (`prepare`
-  never did). Checked by the `-fno-exceptions` CI leg.
+- `sensor/utils`: **`GpuFramePrep::prepare` returns `OutOfMemory` for a
+  host allocation failure while staging**, as `prepare_batch` already did.
+  Both preserve previously returned frames and permit a retry. Regression:
+  `recon_sensor_gpu_frame_prep_oom`.
 - `sensor/orbbec`: `OrbbecSensor::open` names the camera when the SDK throws
   while finding one asked for by serial, and when its factory intrinsics or
   extrinsic are refused, so a rig's failing camera is known. Test:
