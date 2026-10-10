@@ -134,7 +134,14 @@ class LiveAtlas {
   LiveAtlas& operator=(const LiveAtlas&) = delete;
   LiveAtlas(LiveAtlas&&) = delete;
   LiveAtlas& operator=(LiveAtlas&&) = delete;
-  ~LiveAtlas() = default;
+  ~LiveAtlas() {
+    // StreamedAtlas waits for submitted frames, or drains the queues if the
+    // newest frame never reached them. Keep the copy sources through that
+    // wait, then reclaim them without waiting for an unsubmitted frame's
+    // timeline value, which nothing will signal.
+    atlas_ = {};
+    held_.reclaim();
+  }
 
   /// @brief Let go of the colour buffers of the frames that have completed.
   ///        Once a frame.

@@ -1572,6 +1572,9 @@ buffers of the cameras that textured it and their tiles, the frame that
 commits the mesh copies them into the atlas, and gfx's `RetireQueue` holds
 them until the frame loop's timeline reaches that frame; an untextured mesh
 draws in vertex colour against the pipeline's own fallback (2026-10-08).
+At teardown, `LiveAtlas` destroys the gfx atlas first, waiting for submitted
+work or draining the queues when the newest frame was never submitted, then
+reclaims the retained colour buffers without waiting for that frame's number.
 `fuse_render` uploads its keyframe into a `StreamedAtlas` in the frame that
 draws it.
 **`codec_replica`** fuses a Replica sequence as `fuse_replica` does, and

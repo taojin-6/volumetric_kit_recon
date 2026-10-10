@@ -11473,6 +11473,11 @@ byte-identical. Neither viewer nor `fuse_orbbec` was run.
 - gfx's `RetireQueue` on the frame loop's timeline holds the job's buffers
   until the timeline reaches that frame, so a frame prep reuses one only
   after the copy has read it.
+- At teardown, `LiveAtlas` destroys the gfx atlas before reclaiming those
+  buffers. gfx waits for submitted frames or drains the queues if the
+  newest frame was never submitted; draining the retire queue first would
+  wait forever for that frame's unsignalled number after a failed submit
+  and failed recovery. Sources stay alive until the submitted copies finish.
 - A mesh no camera textured binds no atlas, and `HybridMeshPipeline` draws
   it in vertex colour against the fallback it owns.
 
@@ -11519,6 +11524,15 @@ on MoltenVK's two queue families, so each keyframe's colour crosses
 families: 5,280 frames and 2,653 textured meshes published, with no
 message. That is macOS evidence only. `rig_viewer` was not run, since it
 needs the rig.
+
+**Teardown verification (2026-10-10).** A regression records a second
+atlas update without submitting it while the first copy waits on a gate.
+Both sources stay alive until the gate opens; destruction returns with the
+timeline still at frame 1 and both sources released. The original destructor
+hangs on frame 2. All 69 tests pass in Release; the atlas test and a separate
+queue-submit OOM probe pass with the Khronos layer loaded and synchronization
+validation enabled. Both live viewers build with warnings as errors; no
+live-camera or interactive-viewer check was run for this fix.
 
 ## Measured lessons
 

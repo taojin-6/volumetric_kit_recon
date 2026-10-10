@@ -120,6 +120,8 @@ if(VR_BUILD_TESTS)
   vr_target_warnings(recon_example_viewer_atlas_test)
   add_test(NAME recon_example_viewer_atlas
            COMMAND recon_example_viewer_atlas_test)
+  # Bound a regression that waits for a frame which was never submitted.
+  set_tests_properties(recon_example_viewer_atlas PROPERTIES TIMEOUT 30)
 endif()
 
 # The Dear ImGui sources gfx fetched for its ui tier. gfx exports the path only

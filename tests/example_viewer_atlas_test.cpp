@@ -9,13 +9,17 @@
 // when the ring cannot be made, holds a frame's colour buffers until the
 // frame loop's timeline reaches that frame, binds nothing (vertex colour) for
 // an untextured mesh, and leaves the atlas as it was when a copy is refused.
+// Teardown keeps submitted copies' sources alive and releases the sources of
+// a later frame that never reached the queue without waiting for its number.
 // The copies run on a headless device, which the test skips (exit 0) without.
 
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <memory>
 #include <optional>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -24,6 +28,7 @@
 
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/buffer.hpp"
+#include "volumetric_kit/core/vulkan/command_pool.hpp"
 #include "volumetric_kit/core/vulkan/sync.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/gfx/app/headless_app.hpp"
@@ -197,6 +202,78 @@ int live_atlas_holds_a_frames_colour(vg::app::HeadlessApp& app) {
   return 0;
 }
 
+// A frame that failed before submission leaves the same state as an ended
+// command buffer that is never queued. An earlier copy is still in flight:
+// teardown must wait for that copy, then free both sources without waiting
+// for the unsubmitted frame's number, which nothing will ever signal.
+int live_atlas_teardown_after_an_unsubmitted_frame(vg::app::HeadlessApp& app) {
+  vg::RenderTargetLayout target;
+  target.color_formats[0] = VK_FORMAT_R8G8B8A8_SRGB;
+  target.color_count = 1;
+  target.depth_format = VK_FORMAT_D32_SFLOAT;
+  auto pipeline =
+      vgp::HybridMeshPipeline::create(app.device(), app.allocator(), target);
+  CHECK(pipeline.ok());
+  auto frames = vkc::TimelineSemaphore::create(app.device());
+  CHECK(frames.ok());
+  auto gate = vkc::TimelineSemaphore::create(app.device());
+  CHECK(gate.ok());
+  auto pool = vkc::CommandPool::create(app.device().handle(),
+                                       app.device().queue_family());
+  CHECK(pool.ok());
+  auto cmd = pool.value().allocate_primary();
+  CHECK(cmd.ok());
+  auto first = make_color(app.allocator(), {1, 2, 3, 4});
+  auto second = make_color(app.allocator(), {5, 6, 7, 8});
+  CHECK(first.ok() && second.ok());
+  const std::weak_ptr<const vkc::Buffer> first_source = first.value();
+  const std::weak_ptr<const vkc::Buffer> second_source = second.value();
+  auto atlas = std::make_unique<LiveAtlas>(pipeline.value(), app.allocator(),
+                                           frames.value(), VkExtent2D{2, 2}, 2);
+
+  AtlasJob job;
+  job.tiles.push_back({first.value(), rtex::AtlasTile{0, 0, 2, 2}, 0});
+  vkc::Status committed;
+  auto frame1 = app.device().submit_pending(
+      [&](VkCommandBuffer recording) {
+        committed = atlas->commit(recording, 1, job);
+      },
+      {{&gate.value(), 1}}, {{&frames.value(), 1}});
+  // Open the gate even if a later check fails, before PendingSubmit waits.
+  struct OpenGate {
+    vkc::TimelineSemaphore& gate;
+    ~OpenGate() {
+      const auto reached = gate.value();
+      if (reached.ok() && reached.value() < 1) (void)gate.signal(1);
+    }
+  } open_gate{gate.value()};
+  CHECK(frame1.ok() && committed.ok());
+
+  job.tiles[0].color = second.value();
+  CHECK(cmd.value().begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT).ok());
+  CHECK(atlas->commit(cmd.value().handle(), 2, job).ok());
+  CHECK(cmd.value().end().ok());
+  job.tiles.clear();
+  first.value().reset();
+  second.value().reset();
+
+  bool sources_held = false;
+  vkc::Status opened;
+  std::thread release([&] {
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    sources_held = !first_source.expired() && !second_source.expired();
+    opened = gate.value().signal(1);
+  });
+  atlas.reset();
+  release.join();
+  CHECK(opened.ok() && sources_held);
+  CHECK(frame1.value().wait().ok());
+  const auto reached = frames.value().value();
+  CHECK(reached.ok() && reached.value() == 1);  // frame 2 was never submitted
+  CHECK(first_source.expired() && second_source.expired());
+  return 0;
+}
+
 // The bytes of the allocator's live allocations, over every heap.
 std::uint64_t allocated(const vkc::Allocator& allocator) {
   const vkc::MemoryStats stats = allocator.memory_stats();
@@ -301,6 +378,10 @@ int main() {
     return rc;
   }
   if (const int rc = live_atlas_holds_a_frames_colour(app.value())) return rc;
+  if (const int rc =
+          live_atlas_teardown_after_an_unsubmitted_frame(app.value())) {
+    return rc;
+  }
   std::puts("viewer_atlas: OK");
   return 0;
 }

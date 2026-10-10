@@ -280,6 +280,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `fuse_viewer`, `rig_viewer`: **atlas teardown completes when a frame was
+  never submitted.** The atlas drains submitted work before releasing its
+  colour buffers, without waiting for an unsignalled frame number after a
+  failed frame and recovery submit. Regression: `recon_example_viewer_atlas`.
 - `sensor/utils`: **`GpuFramePrep::prepare` returns `OutOfMemory` for a
   host allocation failure while staging**, as `prepare_batch` already did.
   Both preserve previously returned frames and permit a retry. Regression:
