@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <memory>
 #include <optional>
 #include <string>
 #include <thread>
@@ -33,14 +34,13 @@
 #include "fuse_frame.hpp"  // vr_example::fuse_set
 #include "recon_gfx_bridge.hpp"
 #include "replica_sensor.hpp"  // vr_example::ReplicaSensor (examples/common)
+#include "viewer_atlas.hpp"
 
 // core and recon tiers
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/command_batch.hpp"
-#include "volumetric_kit/core/vulkan/descriptor.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
-#include "volumetric_kit/core/vulkan/image.hpp"
 #include "volumetric_kit/core/vulkan/instance.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
@@ -62,7 +62,6 @@
 #include "volumetric_kit/gfx/core/offscreen_target.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/core/sampler.hpp"
-#include "volumetric_kit/gfx/core/texture_upload.hpp"
 #include "volumetric_kit/gfx/pipelines/gpu_mesh.hpp"
 #include "volumetric_kit/gfx/pipelines/hybrid_mesh_pipeline.hpp"
 
@@ -510,56 +509,26 @@ int main(int argc, char** argv) {
   vgp::GpuMesh gpu_mesh = std::move(gpu_r).value();
 
   // 4. Atlas: the keyframe's colour image where texturing ran (uv0 index into
-  // it), else a 1x1 white dummy (the binding is required; the shader takes the
-  // vertex-colour path wherever uv0 is the sentinel).
-  const std::uint8_t white[4] = {255, 255, 255, 255};
-  const bool has_atlas = !recon.atlas.empty();
-  vg::ImageUploadDesc upload_desc;
-  upload_desc.extent =
-      has_atlas ? VkExtent2D{recon.atlas_w, recon.atlas_h} : VkExtent2D{1, 1};
-  // _SRGB: the atlas holds canonical-encoded 8-bit camera pixels, so the
-  // sampler decodes (and filters!) in linear for free -- filtering is an
-  // average, and an average of encoded values is the bug this all exists to
-  // fix. The 1x1 white fallback is 255 in either format.
-  upload_desc.format = VK_FORMAT_R8G8B8A8_SRGB;
-  upload_desc.pixels = has_atlas ? static_cast<const void*>(recon.atlas.data())
-                                 : static_cast<const void*>(white);
-  upload_desc.size =
-      has_atlas ? recon.atlas.size() * sizeof(std::uint32_t) : sizeof(white);
-  auto atlas_tex_r =
-      vg::upload_texture(app.device(), app.allocator(), upload_desc);
-  if (!atlas_tex_r.ok()) {
-    std::fprintf(stderr, "atlas upload: %s\n",
-                 atlas_tex_r.status().message().c_str());
-    return 1;
-  }
-  vkc::Image atlas_tex = std::move(atlas_tex_r).value();
+  // it), else the white dummy.
   auto sampler_r = vg::Sampler::create(app.device().handle());
   if (!sampler_r.ok()) {
     std::fprintf(stderr, "sampler: %s\n", sampler_r.status().message().c_str());
     return 1;
   }
   vg::Sampler sampler = std::move(sampler_r).value();
-  const VkDescriptorPoolSize pool_size{
-      VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
-  auto pool_result =
-      vkc::DescriptorPool::create(app.device().handle(), &pool_size, 1, 1);
-  if (!pool_result.ok()) {
-    std::fprintf(stderr, "descriptor pool: %s\n",
-                 pool_result.status().message().c_str());
+  auto atlas_r = recon.atlas.empty()
+                     ? fuse_viewer::white_atlas(
+                           app.device(), app.allocator(),
+                           pipeline.descriptor_set_layout(0), sampler.handle())
+                     : fuse_viewer::upload_atlas(
+                           app.device(), app.allocator(),
+                           pipeline.descriptor_set_layout(0), sampler.handle(),
+                           recon.atlas.data(), recon.atlas_w, recon.atlas_h);
+  if (!atlas_r.ok()) {
+    std::fprintf(stderr, "atlas: %s\n", atlas_r.status().message().c_str());
     return 1;
   }
-  vkc::DescriptorPool pool = std::move(pool_result).value();
-  auto set_result = pool.allocate(pipeline.descriptor_set_layout(0));
-  if (!set_result.ok()) {
-    std::fprintf(stderr, "atlas set: %s\n",
-                 set_result.status().message().c_str());
-    return 1;
-  }
-  vkc::DescriptorSet atlas_set = std::move(set_result).value();
-  atlas_set.write_combined_image_sampler(
-      0, atlas_tex.view(), sampler.handle(),
-      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+  const std::shared_ptr<fuse_viewer::Atlas> atlas = std::move(atlas_r).value();
 
   // 5. Render one frame to the offscreen target, then read it back.
   const vgp::HybridMeshDraw draw{&gpu_mesh};
@@ -568,7 +537,7 @@ int main(int argc, char** argv) {
   frame.view_proj = view_proj;
   frame.light_dir = glm::vec3(0.4f, 0.9f, 0.5f);
   frame.flags = opt.lit ? vgp::kHybridMeshLit : 0u;
-  frame.atlas = atlas_set.handle();
+  frame.atlas = atlas->set.handle();
   frame.draws = &draw;
   frame.draw_count = 1;
 

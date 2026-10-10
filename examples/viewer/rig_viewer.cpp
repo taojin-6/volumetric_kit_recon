@@ -84,18 +84,16 @@
 #include <imgui_impl_glfw.h>
 #include <glm/glm.hpp>
 
-#include "fuse_frame.hpp"  // vr_example::create_fusion_grid, fuse_set
-// For the vertex-layout static_asserts it carries: gfx reads recon's arena in
-// place through its own attribute offsets (see fuse_viewer.cpp).
-#include "recon_gfx_bridge.hpp"
+#include "fuse_frame.hpp"        // vr_example::create_fusion_grid, fuse_set
+#include "recon_gfx_bridge.hpp"  // to_live_mesh, and the vertex-layout asserts
 #include "shared_device.hpp"
+#include "viewer_atlas.hpp"
 #include "viewer_common.hpp"
 
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/buffer.hpp"
-#include "volumetric_kit/core/vulkan/descriptor.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/image.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
@@ -104,6 +102,7 @@
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/mesh/device_mesh.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
+#include "volumetric_kit/recon/mesh/mesh_exchange.hpp"
 #include "volumetric_kit/recon/sensor/array/sensor_array.hpp"
 #include "volumetric_kit/recon/sensor/orbbec/orbbec_sensor.hpp"
 #include "volumetric_kit/recon/sensor/orbbec/orbbec_stream.hpp"
@@ -113,7 +112,6 @@
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
 #include "volumetric_kit/recon/texture/texture_atlas.hpp"
 #include "volumetric_kit/recon/tsdf/fuser.hpp"
-#include "volumetric_kit/recon/volume/frustum.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
 
@@ -124,7 +122,6 @@
 #include "volumetric_kit/gfx/core/profiler.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/core/sampler.hpp"
-#include "volumetric_kit/gfx/core/texture_upload.hpp"
 #include "volumetric_kit/gfx/pipelines/hybrid_mesh_pipeline.hpp"
 #include "volumetric_kit/gfx/pipelines/live_mesh.hpp"
 #include "volumetric_kit/gfx/ui/imgui_overlay.hpp"
@@ -446,15 +443,6 @@ glm::vec3 axes_meet(const std::vector<glm::mat4>& poses, glm::vec3 fallback) {
 // Scroll arrives through a callback; the render loop reads what built up.
 struct ScrollInput {
   double pending = 0.0;
-};
-
-// One atlas image: the gfx texture a mesh version's uv0 index into, and the
-// descriptor set binding it. Reused once nothing holds it but the pool (see
-// acquire), so a live rig does not allocate an atlas per remesh.
-struct AtlasImage {
-  vkc::Image tex;
-  vkc::DescriptorPool pool;
-  vkc::DescriptorSet set;
 };
 
 // A camera's newest frame with colour, and the set it came in (sets count
@@ -939,52 +927,18 @@ int run(GLFWwindow* window, const Options& opt) {
   }
   vg::Sampler sampler = std::move(sampler_result).value();
 
-  // A texture + its own pool + a set binding it, as fuse_viewer's bundle.
-  using AtlasResult = vkc::Result<std::shared_ptr<AtlasImage>>;
-  auto bind_atlas = [&](vkc::Image texture) -> AtlasResult {
-    const VkDescriptorPoolSize pool_size{
-        VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
-    auto pool_result =
-        vkc::DescriptorPool::create(app.device().handle(), &pool_size, 1, 1);
-    if (!pool_result.ok()) return pool_result.status();
-    vkc::DescriptorPool atlas_pool = std::move(pool_result).value();
-    auto set_result = atlas_pool.allocate(pipeline.descriptor_set_layout(0));
-    if (!set_result.ok()) return set_result.status();
-    auto atlas = std::make_shared<AtlasImage>();
-    atlas->tex = std::move(texture);
-    atlas->pool = std::move(atlas_pool);
-    atlas->set = std::move(set_result).value();
-    atlas->set.write_combined_image_sampler(
-        0, atlas->tex.view(), sampler.handle(),
-        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    return atlas;
-  };
-
-  // The fallback atlas, bound for a mesh no camera textured: a 1x1 white
-  // texel its sentinel uv0 never select.
-  std::shared_ptr<AtlasImage> white_atlas;
-  {
-    const std::uint8_t white[4] = {255, 255, 255, 255};
-    vg::ImageUploadDesc upload_desc;
-    upload_desc.extent = {1, 1};
-    upload_desc.format = VK_FORMAT_R8G8B8A8_SRGB;
-    upload_desc.pixels = white;
-    upload_desc.size = sizeof(white);
-    auto uploaded =
-        vg::upload_texture(app.device(), app.allocator(), upload_desc);
-    if (!uploaded.ok()) {
-      std::fprintf(stderr, "white atlas: %s\n",
-                   uploaded.status().message().c_str());
-      return 1;
-    }
-    AtlasResult bound = bind_atlas(std::move(uploaded).value());
-    if (!bound.ok()) {
-      std::fprintf(stderr, "white atlas: %s\n",
-                   bound.status().message().c_str());
-      return 1;
-    }
-    white_atlas = std::move(bound).value();
+  using Atlas = fuse_viewer::Atlas;
+  using AtlasResult = vkc::Result<std::shared_ptr<Atlas>>;
+  // The atlas bound for a mesh no camera textured.
+  AtlasResult white_result = fuse_viewer::white_atlas(
+      app.device(), app.allocator(), pipeline.descriptor_set_layout(0),
+      sampler.handle());
+  if (!white_result.ok()) {
+    std::fprintf(stderr, "white atlas: %s\n",
+                 white_result.status().message().c_str());
+    return 1;
   }
+  const std::shared_ptr<Atlas> white_atlas = std::move(white_result).value();
 
   // The colour-by-camera view's sources: one device-local buffer a camera,
   // its tile's size, filled with that camera's colour (sRGB bytes, as the
@@ -1050,11 +1004,11 @@ int run(GLFWwindow* window, const Options& opt) {
   // committed version holds its image, and so does every frame slot that
   // bound it, until begin_frame fence-waits that slot. _SRGB, since the frame
   // prep's colour is canonical-encoded 8-bit and the sampler then filters in
-  // linear (the 2026-08-02 colour-space decision, as fuse_viewer's upload).
-  std::vector<std::shared_ptr<AtlasImage>> atlas_pool;
+  // linear (the 2026-08-02 colour-space decision, as `upload_atlas`).
+  std::vector<std::shared_ptr<Atlas>> atlas_pool;
   auto acquire_atlas = [&](std::uint32_t width,
                            std::uint32_t height) -> AtlasResult {
-    for (const std::shared_ptr<AtlasImage>& atlas : atlas_pool) {
+    for (const std::shared_ptr<Atlas>& atlas : atlas_pool) {
       if (atlas.use_count() == 1 && atlas->tex.extent().width == width &&
           atlas->tex.extent().height == height) {
         return atlas;
@@ -1066,7 +1020,9 @@ int run(GLFWwindow* window, const Options& opt) {
     desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     auto image = app.allocator().create_image(desc);
     if (!image.ok()) return image.status();
-    AtlasResult atlas = bind_atlas(std::move(image).value());
+    AtlasResult atlas = fuse_viewer::bind_atlas(
+        app.device().handle(), pipeline.descriptor_set_layout(0),
+        sampler.handle(), std::move(image).value());
     if (atlas.ok()) atlas_pool.push_back(atlas.value());
     return atlas;
   };
@@ -1107,24 +1063,22 @@ int run(GLFWwindow* window, const Options& opt) {
 
   // --- Fuse thread ----------------------------------------------------------
   // The array, its frame prep, fusion, extraction and texturing all run here;
-  // the render thread only copies the atlas and draws. Shared state is under
-  // share_mtx, as in fuse_viewer, and so is the ring's release mark.
+  // the render thread only copies the atlas and draws. The mesh crosses with
+  // its atlas job through the exchange; the rest is under share_mtx.
+  const bool cross_family =
+      shared->graphics_family() != shared->compute_family();
+  rmesh::MeshExchangeConfig exchange_config;
+  exchange_config.frames_in_flight = config.frames_in_flight;
+  exchange_config.cross_family = cross_family;
+  rmesh::MeshExchange<AtlasJob> exchange(exchange_config);
+  fuse_viewer::SharedView shared_view;  // the render camera, meshed
   std::mutex share_mtx;
-  std::optional<rmesh::DeviceMesh> pending_mesh;
-  AtlasJob pending_job;
-  std::uint64_t published_version = 0;
-  std::uint64_t shared_released_through = 0;
-  // The render camera, and a serial that moves when it does (see fuse_viewer).
-  glm::mat4 shared_view_proj(1.0f);
-  std::uint64_t shared_view_serial = 0;
   std::vector<vkc::StageRow> shared_fuse_stages;
   RigPanel shared_panel;
   std::atomic<bool> fusing_done{false};
   // Set by whatever ended fusion early, so a scripted run exits non-zero.
   std::atomic<bool> fuse_failed{false};
   std::atomic<bool> quit{false};
-  const bool cross_family =
-      shared->graphics_family() != shared->compute_family();
 
   std::thread fuse_thread([&]() {
     try {
@@ -1236,23 +1190,7 @@ int run(GLFWwindow* window, const Options& opt) {
           cameras_held = 0;
           ++untextured[why];
         }
-        std::lock_guard<std::mutex> lock(share_mtx);
-        pending_mesh = mesh;
-        pending_job = std::move(job);
-        ++published_version;
-      };
-      // The release mark, applied on this thread, and whether it may publish
-      // (see fuse_viewer).
-      auto release_and_may_publish = [&]() {
-        std::uint64_t mark = 0;
-        bool uncollected = false;
-        {
-          std::lock_guard<std::mutex> lock(share_mtx);
-          mark = shared_released_through;
-          uncollected = pending_mesh.has_value();
-        }
-        if (mark != 0) extractor.release_through(mark);
-        return !uncollected;
+        exchange.publish(mesh, std::move(job));
       };
       // --texture-stats: read `mesh` back and count, per camera, the triangles
       // it textured (uv0 inside its tile; a triangle's three share one) and
@@ -1304,36 +1242,13 @@ int run(GLFWwindow* window, const Options& opt) {
                     100.0 * occlusion.load(),
                     dynamic_on.load() ? "dynamic" : "static", ms);
       };
-      // Mesh what the render camera sees, as fuse_viewer does: the blocks
-      // inside its frustum, widened by kViewMargin for the frames the view
-      // moves on before the mesh is drawn.
-      constexpr float kViewMargin = 0.25f;  // metres
-      std::uint64_t meshed_view = 0;
-      auto extract_view = [&]() -> vkc::Result<rmesh::DeviceMesh> {
-        glm::mat4 view_proj;
-        {
-          std::lock_guard<std::mutex> lock(share_mtx);
-          view_proj = shared_view_proj;
-          meshed_view = shared_view_serial;
-        }
-        if (meshed_view == 0) return extractor.extract_device(volume, 0.0f);
-        VKC_ASSIGN(const vol::DeviceBlockList visible,
-                   volume.map().compact_active_blocks_in_frusta_on_device(
-                       {vol::make_frustum_planes(view_proj, kViewMargin)}));
-        return extractor.extract_device(volume, 0.0f, visible);
-      };
-      auto view_moved = [&]() {
-        std::lock_guard<std::mutex> lock(share_mtx);
-        return shared_view_serial != meshed_view;
-      };
       auto remesh = [&](const std::vector<TextureSource>& sources) {
         remesh_stages.clear();
         vkc::Result<rmesh::DeviceMesh> extracted = [&]() {
           vkc::StageScope scope(remesh_stages, "extract");
-          return extract_view();
+          return shared_view.extract(extractor, volume, nullptr);
         }();
-        // Published even when empty: an extract claims a ring slot either
-        // way (see fuse_viewer).
+        // Published even when empty: it holds a ring slot all the same.
         if (extracted) {
           publish(extracted.value(), sources);
           // Before the next extract, which retires this mesh.
@@ -1364,7 +1279,10 @@ int run(GLFWwindow* window, const Options& opt) {
       // Re-mesh when the view moved while no set fused, from the last set's
       // frames: an idle rig, or one a --sets run has stopped.
       auto remesh_if_view_moved = [&]() {
-        if (!view_moved() || !release_and_may_publish()) return false;
+        if (!shared_view.moved() ||
+            !exchange.release_and_may_publish(extractor)) {
+          return false;
+        }
         remesh(texture_sources(newest, sets, last_set_ns, hold_ns));
         return true;
       };
@@ -1467,19 +1385,11 @@ int run(GLFWwindow* window, const Options& opt) {
         // texture would only stall the join.
         const bool last =
             opt.sets > 0 && sets >= static_cast<std::uint64_t>(opt.sets);
-        if (last) {
-          for (int wait = 0; wait < 500 && !quit.load(); ++wait) {
-            {
-              std::lock_guard<std::mutex> lock(share_mtx);
-              if (!pending_mesh) break;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
-          }
-        }
+        if (last) exchange.wait_collected(std::chrono::seconds(1), quit);
         if (!quit.load() &&
             (last ||
              sets % static_cast<std::uint64_t>(opt.remesh_every) == 0)) {
-          if (release_and_may_publish()) {
+          if (exchange.release_and_may_publish(extractor)) {
             remesh(texture_sources(newest, sets, set_ns, hold_ns));
           } else if (last) {
             std::fprintf(stderr,
@@ -1539,24 +1449,13 @@ int run(GLFWwindow* window, const Options& opt) {
   fuse_viewer::QuitJoin fuse_guard{fuse_thread, quit};
 
   // --- Render thread (main) -------------------------------------------------
-  // The mesh ring's bookkeeping is fuse_viewer's, and its two decisions are
-  // viewer_common.hpp's: retire, then take, under one lock; release everything
-  // older than the oldest generation a frame in flight draws; retry a take
-  // that could not be committed rather than drop it. What is new is the atlas:
-  // a taken version's job is recorded into this frame's command buffer, and the
-  // colour buffers it reads stay with this frame's slot until the slot comes
-  // round again.
-  std::vector<std::shared_ptr<AtlasImage>> slot_atlas(config.frames_in_flight);
+  // A taken version's atlas job is recorded into this frame's command buffer,
+  // and the colour buffers it reads stay with this frame's slot until the slot
+  // comes round again.
+  std::vector<std::shared_ptr<Atlas>> slot_atlas(config.frames_in_flight);
   std::vector<std::vector<std::shared_ptr<const vkc::Buffer>>> slot_sources(
       config.frames_in_flight);
-  std::shared_ptr<AtlasImage> current_atlas = white_atlas;
-  rmesh::DeviceMesh live_view;
-  rmesh::DeviceMesh taken;
-  AtlasJob taken_job;
-  std::uint64_t taken_version = 0;
-  std::vector<std::uint64_t> frame_generations(config.frames_in_flight, 0);
-  std::uint64_t newest_taken_generation = 0;
-  bool mesh_unusable = false;
+  std::shared_ptr<Atlas> current_atlas = white_atlas;
   bool atlas_error_said = false;  // until an atlas image is acquired again
   std::vector<vkc::StageRow> fuse_stages_snapshot;
   RigPanel panel;
@@ -1599,89 +1498,57 @@ int run(GLFWwindow* window, const Options& opt) {
     slot_atlas[render_frame.slot].reset();
     slot_sources[render_frame.slot].clear();
 
+    // Retire this slot's last frame, take the newest mesh, and commit it
+    // with its atlas, copied in this command buffer -- before the frame's
+    // rendering begins, since a copy may not sit inside it. No image to copy
+    // into keeps the mesh parked for the next frame.
+    {
+      vg::Profiler::Scope copy_scope =
+          profiler.gpu_scope(render_frame.cmd, "atlas copy");
+      const rmesh::ExchangeOutcome outcome = exchange.begin_frame(
+          render_frame.slot, [&](const rmesh::DeviceMesh&, AtlasJob& job) {
+            // Every tile is one the fuse thread found copyable, since it
+            // left out any camera whose colour is not.
+            std::shared_ptr<Atlas> next = white_atlas;
+            if (!job.empty()) {
+              AtlasResult acquired = acquire_atlas(job.width, job.height);
+              if (!acquired.ok()) {
+                // Retried every frame, so said once until it succeeds.
+                if (!atlas_error_said) {
+                  std::fprintf(stderr, "rig_viewer: atlas image: %s\n",
+                               acquired.status().message().c_str());
+                  atlas_error_said = true;
+                }
+                return false;
+              }
+              next = std::move(acquired).value();
+              atlas_error_said = false;
+              // Filled in this command buffer, so ahead of the copy.
+              const bool solid = show_sources && ensure_solid(render_frame.cmd);
+              record_atlas_copy(render_frame.cmd, next->tex.handle(), job,
+                                solid ? &solid_handles : nullptr);
+              ++atlas_copies;
+              for (AtlasTileSource& source : job.tiles) {
+                slot_sources[render_frame.slot].push_back(
+                    std::move(source.color));
+              }
+            }
+            current_atlas = std::move(next);
+            return true;
+          });
+      if (outcome == rmesh::ExchangeOutcome::kRefused) {
+        std::fprintf(stderr,
+                     "rig_viewer: the extracted mesh cannot be bound as "
+                     "geometry (%s); drawing stops here\n",
+                     exchange.refused());
+      }
+    }
+    const rmesh::DeviceMesh& live_view = exchange.live();
     {
       std::lock_guard<std::mutex> lock(share_mtx);
       fuse_stages_snapshot = shared_fuse_stages;
       // The mesh rows are filled below, from what this frame draws.
       panel = shared_panel;
-
-      shared_released_through = fuse_viewer::retire_and_release_mark(
-          frame_generations, render_frame.slot, live_view.generation,
-          newest_taken_generation);
-      if (pending_mesh && !mesh_unusable && taken_version == 0) {
-        taken = *pending_mesh;
-        pending_mesh.reset();
-        taken_job = std::move(pending_job);
-        pending_job = AtlasJob{};
-        taken_version = published_version;
-        newest_taken_generation = taken.generation;
-      }
-    }
-
-    // Commit a taken mesh with its atlas, the copy recorded here -- before the
-    // frame's rendering begins, since a copy may not sit inside it.
-    {
-      vg::Profiler::Scope copy_scope =
-          profiler.gpu_scope(render_frame.cmd, "atlas copy");
-      if (taken_version != 0 && taken.empty()) {
-        // An empty extract draws nothing; committed for the ring (see
-        // fuse_viewer).
-        live_view = taken;
-        taken = rmesh::DeviceMesh{};
-        taken_job = AtlasJob{};
-        taken_version = 0;
-      } else if (taken_version != 0) {
-        if (const char* why =
-                fuse_viewer::unbindable_reason(taken, cross_family)) {
-          std::fprintf(stderr,
-                       "rig_viewer: the extracted mesh cannot be bound as "
-                       "geometry (%s); drawing stops here\n",
-                       why);
-          mesh_unusable = true;
-          // Dropped, so this is said once (see fuse_viewer).
-          taken = rmesh::DeviceMesh{};
-          taken_job = AtlasJob{};
-          taken_version = 0;
-        } else {
-          // Every tile is one the fuse thread found copyable, since it left
-          // out any camera whose colour is not.
-          std::shared_ptr<AtlasImage> next = white_atlas;
-          if (!taken_job.empty()) {
-            AtlasResult acquired =
-                acquire_atlas(taken_job.width, taken_job.height);
-            if (acquired.ok()) {
-              next = std::move(acquired).value();
-              atlas_error_said = false;
-              // Filled in this command buffer, so ahead of the copy.
-              const bool solid = show_sources && ensure_solid(render_frame.cmd);
-              record_atlas_copy(render_frame.cmd, next->tex.handle(), taken_job,
-                                solid ? &solid_handles : nullptr);
-              ++atlas_copies;
-              for (AtlasTileSource& source : taken_job.tiles) {
-                slot_sources[render_frame.slot].push_back(
-                    std::move(source.color));
-              }
-            } else {
-              next = nullptr;
-              // Retried every frame, below, so said once until it succeeds.
-              if (!atlas_error_said) {
-                std::fprintf(stderr, "rig_viewer: atlas image: %s\n",
-                             acquired.status().message().c_str());
-                atlas_error_said = true;
-              }
-            }
-          }
-          // No image to copy into keeps the pair for the next frame, as a
-          // failed upload does in fuse_viewer; anything else commits.
-          if (next) {
-            live_view = taken;
-            current_atlas = std::move(next);
-            taken = rmesh::DeviceMesh{};
-            taken_job = AtlasJob{};
-            taken_version = 0;
-          }
-        }
-      }
     }
     panel.vertices = live_view.vertex_count;
     panel.triangles = live_view.triangle_count;
@@ -1702,7 +1569,6 @@ int run(GLFWwindow* window, const Options& opt) {
       panel.mesh_rate = mesh_rate;
     }
     slot_atlas[render_frame.slot] = current_atlas;
-    frame_generations[render_frame.slot] = live_view.generation;
 
     // --- Input: orbit, pan, zoom, unless a panel has the mouse -------------
     {
@@ -1758,14 +1624,7 @@ int run(GLFWwindow* window, const Options& opt) {
               view.eye(), view.target, view.up, vfov, aspect, 0.05f, far_plane)
               .view_proj();
     }
-    {
-      // For the fuse thread to mesh; the serial moves only with the view.
-      std::lock_guard<std::mutex> lock(share_mtx);
-      if (view_proj != shared_view_proj) {
-        shared_view_proj = view_proj;
-        ++shared_view_serial;
-      }
-    }
+    shared_view.publish(view_proj);  // for the fuse thread to mesh
 
     if (overlay) {
       ImGui_ImplGlfw_NewFrame();
@@ -1853,11 +1712,7 @@ int run(GLFWwindow* window, const Options& opt) {
           profiler.gpu_scope(render_frame.cmd, "mesh draw");
       if (live_view.valid() && !live_view.empty()) {
         // recon's buffers, named rather than copied, as in fuse_viewer.
-        vgp::LiveMesh live;
-        live.vertices = live_view.vertices;
-        live.indices = live_view.indices;
-        live.indirect = live_view.indirect;
-        const vgp::HybridMeshDraw draw{live};
+        const vgp::HybridMeshDraw draw{fuse_viewer::to_live_mesh(live_view)};
         vgp::HybridMeshFrame hybrid_frame;
         hybrid_frame.extent = extent;
         hybrid_frame.view_proj = view_proj;

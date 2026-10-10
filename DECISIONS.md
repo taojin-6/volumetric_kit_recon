@@ -428,6 +428,10 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-10**](#2026-10-10--only-the-owner-triggers-ci-and-the-runner-tooling-is-the-cores) —
   Only the owner triggers CI, by the repository's Actions policy; no job
   carries a fork guard. The runner tooling is the core's.
+- [**2026-10-08**](#2026-10-08--the-fuse-to-render-handoff-is-meshmeshexchange-one-gfx-free-library-type-owns-the-rings-release-a-parked-take-caps-the-mark-and-an-empty-mesh-draws-nothing-amends-the-2026-08-08-seam-b-and-2026-09-29-rig_viewer-entries) —
+  The fuse-to-render handoff is `mesh::MeshExchange`: one gfx-free library
+  type owns the ring's release, a parked take caps the mark, and an empty
+  mesh draws nothing.
 
 ## Decision record
 
@@ -1775,6 +1779,13 @@ bucket's lock. The early exit now fires only on a capacity limit; see the
 measured lesson "A flake read as a livelock".*)
 
 ### 2026-08-08 — `fuse_viewer` draws recon's buffers: interop seam B, end to end, and the release mark must be published *before* the mesh is taken.
+
+*Amended 2026-10-08 (the exchange entry, below):* the protocol is
+`mesh::MeshExchange`'s, and the mark also stops below a parked take, which
+obligation (3) requires and the fallback below broke before anything was
+committed. The panel snapshot is no longer read in the take's section:
+its extract rows come in the mesh's payload (see the exchange entry), and
+`AtlasVersion` is `viewer_atlas.hpp`'s `Atlas`.
 
 *Amends* the 2026-07-07 viewer decision ("the mesh **handoff** is still a host
 mesh (interop seam A)") and closes the interop seam's "what is left is a
@@ -7543,6 +7554,9 @@ synchronization validation, a copy joining the run whatever wrote its source.
 *Amended 2026-10-07 (the rig entry, below):* it opens an `OrbbecSensor` per
 camera of the sync file and reads them as a `SensorArray`, each set prepared
 by `SensorArray::process`; CI's viewer leg compiles it.
+*Amended 2026-10-08 (the exchange entry, below):* both viewers hand meshes
+over through `mesh::MeshExchange`; `viewer_common.hpp` keeps the teardown
+guards and the render camera they mesh.
 
 **The rule.** `examples/viewer/rig_viewer` is `fuse_viewer`'s sibling for a
 live, synced rig of Orbbec cameras. It opens `OrbbecRig` raw, onto the device
@@ -11146,6 +11160,86 @@ refuses any other account's run before it creates a job. So no job in
 the approval of every outside contributor's run stays on as a second gate. A
 fork's change gets CI once a maintainer pushes its branch here. The runner
 tooling is the core's `tools/runners`; recon keeps no copy.
+
+### 2026-10-08 — The fuse-to-render handoff is `mesh::MeshExchange`: one gfx-free library type owns the ring's release, a parked take caps the mark, and an empty mesh draws nothing (amends the 2026-08-08 seam-B and 2026-09-29 `rig_viewer` entries).
+
+The protocol the 2026-08-08 entry derived was example code. `fuse_viewer`
+and `rig_viewer` each held the take, commit and park state machine and the
+producer's release, `viewer_common.hpp` held the mark and the bindable
+check, and the iOS bridge held a third copy that had drifted: it refuses an
+empty mesh, which then stays uncollected and stops meshing for the session.
+Each new consumer had to re-derive obligations that were each first found
+as a field bug.
+
+**The rule.** `mesh::MeshExchange<Payload>` (`mesh/mesh_exchange.hpp`) owns
+the handoff:
+- Producer: `release_and_may_publish(ring)` applies the consumer's mark to
+  anything with `release_through`, on the calling thread, and says whether a
+  published mesh is still uncollected; `publish(mesh, payload)`; and
+  `wait_collected(timeout, cancel)`, the bounded wait before a final extract.
+- Consumer: `begin_frame(slot, commit)`, once a frame after the renderer's
+  fence wait for that slot. It retires the slot, computes the mark, and takes
+  the newest mesh unless one is parked or the exchange has latched, all under
+  one lock. It then commits an empty mesh at once, refuses an unbindable one
+  (latching), and commits any other once `commit` (the consumer's atlas, made
+  from the payload) accepts it, parking it when it does not. `live()` is what
+  to draw.
+- The payload is whatever must stay with the mesh: what its `uv0` index
+  into (`fuse_viewer`'s keyframe pixels, `rig_viewer`'s atlas job), so the
+  mesh and its atlas stay one value by construction, and in `fuse_viewer`
+  the extract's timings, which its panel shows beside the mesh. `commit`
+  runs outside the lock while the producer may be extracting the next mesh,
+  so anything read from the producer then can describe a newer one.
+  `unbindable_reason` checks a mesh against the usage bits and
+  `cross_family` of a `MeshExchangeConfig`, which default to an indexed
+  indirect draw's.
+
+**A parked take caps the mark.** Before anything was committed, the mark
+fell back to the newest generation taken, and a parked take is that
+generation. A first mesh whose atlas failed was released while it waited.
+An extract that failed after claiming then moved the ring's cursor toward
+its slot, a final or last-set extract forced over an uncollected mesh
+reclaimed it, and the retried commit drew freed buffers. The mark now stops
+one below a parked generation.
+
+**An empty mesh draws nothing.** It is taken like any other, committed
+without the bindable check or the payload's commit, and released with the
+rest.
+
+**Why the mesh tier, not an `interop` target.** The protocol belongs to the
+ring and names no gfx type, so it sits beside `MarchingCubes` in
+`recon_mesh`, header-only, and a host model of the ring tests it without a
+device. The `DeviceMesh` to `LiveMesh` adapter needs gfx's type, so it stays
+in `examples/viewer/recon_gfx_bridge.hpp` (`to_live_mesh`) beside the
+vertex-layout asserts. An `interop` target linking gfx would make recon's
+package depend on its renderer sibling, which the 2026-07-07 viewer decision
+keeps behind `VR_BUILD_VIEWER`.
+
+**What moved.** `fuse_viewer` and `rig_viewer` each hold a `MeshExchange`
+and a `SharedView` (`viewer_common.hpp`: the render camera, published with a
+serial, and the view-culled extract) in place of their copies.
+`retire_and_release_mark` and `unbindable_reason` leave `viewer_common.hpp`.
+The iOS bridge adopts the type in its I1 port. The atlas a mesh is drawn
+with, an image with a pool and set of its own, is `viewer_atlas.hpp`'s
+`Atlas` in `fuse_render`, `fuse_viewer` and `rig_viewer` alike, made by
+`upload_atlas`, `white_atlas` or, for an image filled on the device,
+`bind_atlas`.
+
+**Verified.** Apple M5 Max, macOS, Release with warnings as errors, Orbbec
+SDK 2.10.6, FFmpeg and the viewers. `recon_mesh_exchange` runs on the host
+and covers: the take order; a commit running while the producer publishes,
+which sees only its own payload; a generation released once the frames
+drawing it retire; no refused extract with fusion outrunning the renderer;
+the parked take under a failed claim and a forced extract; an empty
+null-handle mesh; the latch; the bounded wait; generations at the top of
+the range; and 500 seeded runs with failed claims, empty extracts, failed
+atlases, skipped frames and forced extracts, in which no slot the consumer
+holds is reclaimed and the ring keeps publishing once the failures stop.
+Without the cap, the parked test, the top-of-range test and the seeded runs
+fail, and with the commit under the lock, the commit test does. The viewers
+build, and `recon_example_viewer_atlas` makes an uploaded, a white and a
+bound atlas on a headless device; neither viewer was run against a window
+or the rig.
 
 ## Measured lessons
 

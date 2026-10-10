@@ -5,28 +5,37 @@
 
 /// @file examples/viewer/viewer_common.hpp
 /// @brief What `fuse_viewer` and `rig_viewer` share beyond the device
-///        bootstrap: the scope guards their teardown order rests on, and the
-///        render side of recon's mesh ring -- the release mark and the check
-///        that a published mesh can be bound as geometry.
+///        bootstrap and recon's `mesh::MeshExchange`: the scope guards their
+///        teardown order rests on, and the render camera the fuse thread
+///        meshes.
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
+#include <mutex>
 #include <thread>
-#include <vector>
 
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 #include <imgui_impl_glfw.h>
+#include <glm/glm.hpp>
 
+#include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/gfx/app/windowed_app.hpp"
 #include "volumetric_kit/recon/mesh/device_mesh.hpp"
+#include "volumetric_kit/recon/mesh/marching_cubes.hpp"
+#include "volumetric_kit/recon/volume/frustum.hpp"
+#include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
+#include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
 
 namespace fuse_viewer {
 
 namespace vg = volumetric_kit::gfx;
+namespace vkc = volumetric_kit::core;
 namespace rmesh = volumetric_kit::recon::mesh;
+namespace vol = volumetric_kit::recon::volume;
 
 /// @return The window's framebuffer size, at least 1 x 1.
 inline VkExtent2D window_extent(GLFWwindow* window) {
@@ -67,61 +76,59 @@ struct ProfilerDetach {
   ~ProfilerDetach() { app.set_profiler(nullptr); }
 };
 
-/// @brief Retire @p slot's generation and return the mark the fuse thread
-///        may release recon's ring through.
-///
-/// Called once begin_frame has fence-waited @p slot, so the frame that last
-/// used it has completed. What remains in @p frame_generations is exactly the
-/// generations frames still in flight are reading, read as a SET: one
-/// generation is normally drawn by several consecutive frames, so the retired
-/// frame's is often still read by a newer one, and releasing on it would hand
-/// recon a slot a live vkCmdDrawIndexedIndirect reads (a grow frees its
-/// buffers outright). Everything strictly below their minimum is finished.
-///
-/// With no other frame in flight holding one, the floor is what this frame is
-/// about to draw, @p live_generation. Only when nothing has been committed at
-/// all (generation 0, since recon numbers extracts from 1) does everything
-/// taken so far, @p newest_taken, become releasable -- the path that drains
-/// the ring when takes are accepted but never drawn.
-inline std::uint64_t retire_and_release_mark(
-    std::vector<std::uint64_t>& frame_generations, std::uint32_t slot,
-    std::uint64_t live_generation, std::uint64_t newest_taken) {
-  frame_generations[slot] = 0;
-  std::uint64_t oldest_in_flight = 0;
-  for (const std::uint64_t g : frame_generations) {
-    if (g != 0 && (oldest_in_flight == 0 || g < oldest_in_flight)) {
-      oldest_in_flight = g;
+/// @brief The render camera, handed from the render thread to the fuse
+///        thread, which meshes what it sees (the 2026-10-06 decision).
+class SharedView {
+ public:
+  /// Margin the view's frustum is widened by, for the frames the view moves
+  /// on before the mesh is drawn.
+  static constexpr float kMargin = 0.25f;  // metres
+
+  /// Render thread: this frame's view. The serial moves only when it does.
+  void publish(const glm::mat4& view_proj) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (view_proj != view_proj_) {
+      view_proj_ = view_proj;
+      ++serial_;
     }
   }
-  if (oldest_in_flight == 0) oldest_in_flight = live_generation;
-  return oldest_in_flight > 0 ? oldest_in_flight - 1 : newest_taken;
-}
 
-/// @brief Why gfx may not bind @p mesh as geometry, or null if it may.
-///
-/// Verified, not assumed: recon reports the usage and sharing mode its
-/// buffers were made with because Vulkan cannot be asked, and binding one
-/// that lacks a usage bit is undefined with layers off. The sharing mode is
-/// the term that can vary: reading an EXCLUSIVE buffer from a family that does
-/// not own it is undefined, and on Apple undefined in the way that appears to
-/// work. Checked only when @p cross_family, since recon collapses the pair to
-/// EXCLUSIVE on one family, which is correct there.
-///
-/// Not for an empty mesh, which may carry null handles by design and draws
-/// nothing.
-inline const char* unbindable_reason(const rmesh::DeviceMesh& mesh,
-                                     bool cross_family) {
-  if (cross_family && mesh.sharing_mode != VK_SHARING_MODE_CONCURRENT) {
-    return "its buffers are EXCLUSIVE but recon and gfx are on different "
-           "queue families, so binding them would be undefined";
+  /// Fuse thread: whether the view moved since the last @ref extract.
+  bool moved() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return serial_ != meshed_;
   }
-  if (!mesh.valid() ||
-      (mesh.vertex_usage & VK_BUFFER_USAGE_VERTEX_BUFFER_BIT) == 0 ||
-      (mesh.index_usage & VK_BUFFER_USAGE_INDEX_BUFFER_BIT) == 0 ||
-      (mesh.indirect_usage & VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT) == 0) {
-    return "usage bits or handles missing";
+
+  /// Fuse thread: mesh the blocks inside the view, widened by @ref kMargin;
+  /// the whole map until a view is published. @p timings, when given, carries
+  /// the compaction as its `compact_ms`.
+  vkc::Result<rmesh::DeviceMesh> extract(rmesh::MarchingCubes& extractor,
+                                         vol::VoxelBlockGrid& volume,
+                                         rmesh::ExtractTimings* timings) {
+    glm::mat4 view_proj;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      view_proj = view_proj_;
+      meshed_ = serial_;
+    }
+    if (meshed_ == 0) return extractor.extract_device(volume, 0.0f, timings);
+    const auto start = std::chrono::steady_clock::now();
+    VKC_ASSIGN(const vol::DeviceBlockList visible,
+               volume.map().compact_active_blocks_in_frusta_on_device(
+                   {vol::make_frustum_planes(view_proj, kMargin)}));
+    const double compact_ms = std::chrono::duration<double, std::milli>(
+                                  std::chrono::steady_clock::now() - start)
+                                  .count();
+    auto mesh = extractor.extract_device(volume, 0.0f, visible, timings);
+    if (timings != nullptr) timings->compact_ms = compact_ms;
+    return mesh;
   }
-  return nullptr;
-}
+
+ private:
+  mutable std::mutex mutex_;
+  glm::mat4 view_proj_{1.0f};
+  std::uint64_t serial_ = 0;  // 0: no view yet
+  std::uint64_t meshed_ = 0;  // the serial last meshed; the fuse thread's
+};
 
 }  // namespace fuse_viewer

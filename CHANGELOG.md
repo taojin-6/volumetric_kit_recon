@@ -8,6 +8,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `mesh`: **`MeshExchange<Payload>`** (`mesh_exchange.hpp`), the handoff of
+  `extract_device`'s meshes, each with a payload drawn with it (its atlas),
+  from the extracting thread to a renderer drawing them in place: the
+  release mark computed as a frame retires and the newest mesh taken under
+  one lock, a mesh the consumer cannot commit yet parked and retried, an
+  empty mesh committed as "draw nothing", an unbindable one latching, and
+  the release applied on the producer's thread. Header-only, with no gfx
+  dependency; `unbindable_reason` checks a mesh against the usage and
+  sharing its consumer binds it with. Test: `recon_mesh_exchange`.
 - `tsdf`: **`Fuser`** (`fuser.hpp`), the shared grow/allocate/integrate
   sequence. Grows ahead at the map's threshold and defaults to requiring a
   complete band before integration. `FuserConfig::allow_partial` explicitly
@@ -86,6 +95,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- examples: **`fuse_viewer` and `rig_viewer` hand meshes over through
+  `mesh::MeshExchange`**, and their copies of the protocol go, with
+  `viewer_common.hpp`'s `retire_and_release_mark` and `unbindable_reason`.
+  The view they mesh is `viewer_common.hpp`'s `SharedView`, and
+  `recon_gfx_bridge.hpp`'s `to_live_mesh` names recon's buffers for gfx.
+  `fuse_viewer`'s panel takes its extract rows from the payload of the mesh
+  it draws. `fuse_render` and both viewers make their atlas with
+  `viewer_atlas.hpp` in place of three copies. Test:
+  `recon_example_viewer_atlas`.
 - `codec`: **one text for the frame's models and block grammar.** The rANS
   kernels include it as GLSL and the host compiles it as C++
   (`shaders/frame_models.glsl`, `shaders/frame_grammar.glsl`), so the host's
@@ -230,6 +248,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `fuse_viewer`, `rig_viewer`: **a parked mesh keeps its ring slot.** Before
+  anything was committed, the release mark covered a mesh whose atlas had
+  failed and was waiting to be retried, so an extract could reclaim its slot
+  and the viewer then drew freed buffers. The mark now stops below it.
+  Regression: `recon_mesh_exchange`.
 - `tsdf`: **fusion samples at integer pixel centres**, the convention
   `GpuFramePrep`, the camera tier, allocation and texturing use: no
   half-pixel tap shift, and the nearest-pixel fallback and the colour sample
