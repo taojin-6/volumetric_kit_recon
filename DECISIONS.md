@@ -456,6 +456,12 @@ entries relevant to your task; later amendments supersede earlier rules.
   recon's GPU tests run on the core's test policy: the validation layer on
   every CI leg fails a test on any error it reports, a leaked object's
   included, and a skip is a skip.
+- [**2026-10-08**](#2026-10-08--a-decoded-picture-is-its-yuvimage-with-its-pts-and-encoding-the-one-description-of-a-device-picture-which-a-frame-takes-as-it-is-amends-the-2026-09-28-decoded-frame-and-2026-10-02-gpu-regression-entries) —
+  A decoded picture is its `YuvImage`, with its pts and encoding: one
+  description of a device picture, which a frame takes as it is.
+- [**2026-10-08**](#2026-10-08--apples-pixel-buffer-importer-is-public-pixelbufferimporter-in-recon_sensor_apple-on-every-apple-build-ios-included-with-no-ffmpeg) —
+  Apple's pixel-buffer importer is public: `PixelBufferImporter` in
+  `recon_sensor_apple`, on every Apple build, iOS included, with no FFmpeg.
 
 ## Decision record
 
@@ -6906,6 +6912,8 @@ Sharing one pool across threads, as a mutant, fails the test 3 of 3 with
 *Amended 2026-10-06 (below):* the MJPG mode's calibration is no longer
 compared with the RGB mode's; a frame's colour camera is read off the mode
 streamed.
+*Amended 2026-10-08 (below):* `place_device_color` goes: a decoded picture
+carries its `YuvImage`, which a frame takes as it is.
 *Amended 2026-10-06 (below):* the software decoding and fallbacks this entry
 kept are gone, with nvJPEG's `GPU_HYBRID` back end: every picture is a
 device picture, and a device path that fails is an error.
@@ -8741,6 +8749,8 @@ target described as current behavior.
 
 *Amended 2026-10-06 (below):* the span-ownership item no longer applies;
 the span table is removed with incremental mesh extraction.
+*Amended 2026-10-08 (below):* chroma location travels in one place, the
+picture's `YuvImage`, which `DecodedPicture` carries.
 
 Five correctness reproductions exposed gaps in otherwise passing tests.
 
@@ -11594,6 +11604,79 @@ owners, consuming the failure before growth. The test now captures that
 allocation site in a direct grow and replays failures there. The original
 test fails and the corrected test passes on Linux with that exact layer;
 validation remains enabled throughout.
+
+### 2026-10-08 — A decoded picture is its `YuvImage` with its pts and encoding: the one description of a device picture, which a frame takes as it is (amends the 2026-09-28 decoded-frame and 2026-10-02 GPU-regression entries).
+
+**The rule.** `YuvImage` (`sensor/yuv_image.hpp`) is the one description of
+a picture on the device: its planes and the queue family that wrote them, its
+size, the matrix's weights, the range and the chroma siting. A decoder's
+`DecodedPicture` is that `YuvImage` (`DecodedPicture::yuv`) with the pts and
+the optional `ColorEncoding` beside it, and a frame takes it as its colour
+unchanged. Whoever writes the picture describes it: `CudaPictures` and
+nvJPEG give a CUDA buffer `kQueueFamilyExternal` (`place_cuda_buffer`),
+`describe_color` an H.265 stream's weights, range and siting, and
+`JpegDecoder::decode` JFIF's BT.601 full range and centred chroma, once for
+both back ends. `VideoPixelLayout`, `DecodedPicture`'s own copies of the
+fields and the Orbbec driver's `place_device_color` go. Two types had
+described one picture, so each new source of decoded pictures had to map one
+onto the other, and a source that missed the queue family or the matrix
+would read CUDA's writes without taking them over, or fuse the wrong colour,
+which `GpuFramePrep`'s checks cannot tell.
+
+**Where it lives.** `yuv_image.hpp` is a header of `recon_sensor` that names
+no camera, so `recon_sensor_video` describes its pictures with it without
+linking the camera tier, as it already used `chroma_location.hpp`. A picture
+carries the weights, which name any matrix. `VideoColorMatrix` and
+`ycbcr_weights`, a named matrix's weights, live beside it, so a source that
+is no decoder, such as an iOS camera whose buffer names its matrix, maps the
+matrix with no header of the FFmpeg-gated decoders.
+
+**Validation.** Apple M5 Max, macOS, Release with warnings as errors, Orbbec
+and FFmpeg: the 58 tests pass with `VR_TEST_HEVC_BACKEND=videotoolbox`.
+Without JFIF's description or `describe_color`'s weights, a test fails. The
+decoder tests check the queue family each producer sets, so NVDEC's and
+nvJPEG's `kQueueFamilyExternal` is CI's CUDA leg to check, as is the CUDA
+code itself. Not run on a camera.
+
+### 2026-10-08 — Apple's pixel-buffer importer is public: `PixelBufferImporter` in `recon_sensor_apple`, on every Apple build, iOS included, with no FFmpeg.
+
+`PixelBufferImporter` (`sensor/apple/pixel_buffer_importer.hpp`, target
+`recon_sensor_apple`), formerly the decoders' private `VtPictures`, is built
+on every Apple platform, iOS included, and needs no FFmpeg, which it never
+used, so an iOS camera can hand its colour (ARKit's `capturedImage`) to
+`GpuFramePrep` on the device rather than convert it on the host. Its import,
+surface cache and hold are as they were. It fills a `YuvImage`'s planes,
+drops any buffer the image named, and leaves the colour description to its
+caller, since a pixel buffer's format need not say how its samples are
+coded.
+
+- **In recon, not the family core.** What it fills is recon's `YuvImage`,
+  and the iOS app reaches it through recon.
+- **`VtJpeg` stays inside `JpegDecoder`**, its public face, and so behind
+  `VR_WITH_FFMPEG`: on iOS it would reach a VideoToolbox key iOS has only
+  from 17, above the app's floor of 16.
+- **CI holds both promises.** The macOS leg, whose own build has FFmpeg,
+  builds and runs the importer's test again without it, and compiles the
+  importer for iOS 16 with exceptions enabled and `-Werror`.
+
+**Validation.** Apple M5 Max, macOS, Release with warnings as errors: the 59
+tests pass with Orbbec and FFmpeg (`VR_TEST_HEVC_BACKEND=videotoolbox`), and
+the 49 of a build with neither, `recon_sensor_apple_pixel_buffer_importer`
+among them. It and the H.265 and JPEG decoder tests run clean under the
+Khronos validation layer with synchronization validation; without the
+import's drop of a stale buffer it fails. The importer compiles against the
+iOS 16 SDK with `-Werror`, once it includes `IOSurfaceRef.h` (iOS has no
+`IOSurface.h`). Not run on an iPhone.
+
+
+**Rebase verification (2026-10-10).** All 71 tests pass on macOS Release
+with synchronization validation, warnings as errors, FFmpeg, Orbbec SDK
+2.10.6, Assimp and the viewers enabled. The importer uses the core GPU test
+policy introduced in #208; the existing OOM and viewer teardown regressions
+remain intact. The no-FFmpeg importer build and test pass under the same
+validation policy, and its implementation and public header compile for
+arm64 iOS 16 with the iOS 27 SDK. The CI compile check keeps exceptions
+enabled. No camera, iPhone or interactive viewer was exercised.
 
 ## Measured lessons
 

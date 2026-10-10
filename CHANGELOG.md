@@ -98,6 +98,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is refused. Software triggering is refused after any write, so
   `apply_sync` can repair it. Tests: `recon_sensor_orbbec_conversion`,
   `recon_sensor_orbbec_sync_apply`.
+- `sensor/apple`: **`PixelBufferImporter`**
+  (`volumetric_kit::recon_sensor_apple`), an 8-bit NV12 `CVPixelBuffer` on
+  an IOSurface as a `YuvImage`'s plane images, in place. Public, and built on
+  every Apple platform, iOS included, with no FFmpeg, so an iOS camera's
+  colour (ARKit's `capturedImage`) can reach `GpuFramePrep` without a
+  conversion on the host. It was `sensor/video`'s private `VtPictures`; the
+  decoders' VideoToolbox pictures go through it. Test:
+  `recon_sensor_apple_pixel_buffer_importer`.
 
 ### Changed
 
@@ -114,11 +122,26 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   validation layer's same-size allocations cannot consume its failure.
 - build: **the core pin moves to core #18's merge** (511fed0), including #17's
   `core_test_policy`, which recon's tests build with `VKC_BUILD_TEST_SUPPORT`.
+- `sensor/video`: **a `DecodedPicture` is its `YuvImage`**
+  (`DecodedPicture::yuv`), with `pts` and `encoding` beside it (BREAKING):
+  one description of a device picture, which a frame takes as its colour
+  unchanged (`frame.color = picture.yuv`). The decoder fills all of it, a
+  CUDA buffer's `kQueueFamilyExternal` included. `YuvImage`, `YuvLayout`,
+  the queue-family constants, `VideoColorMatrix`, `YcbcrWeights` and
+  `ycbcr_weights` move to `sensor/yuv_image.hpp`, which `rgbd_frame.hpp` and
+  `decoded_picture.hpp` include. Migrating: `width`, `height`, `layout`,
+  `device`, `offset`, `stride`, `image`, `full_range` and `chroma_location`
+  are `picture.yuv`'s; `picture.matrix` is `picture.yuv.kr` and `kb`
+  (`ycbcr_weights`); `VideoPixelLayout` is `YuvLayout` (`Yuv420` is `I420`).
 - build: **`VR_WARNINGS_AS_ERRORS` defaults on at the top level only**, as
   `VR_BUILD_TESTS` does, so a project that fetches recon no longer compiles
   it with `-Werror`. Test: `recon_subproject_defaults`.
 - build: **every target that calls the Orbbec SDK compiles with exceptions,
   privately** (`vr_link_orbbec_sdk`), so it can catch the SDK's errors.
+- CI: **the macOS leg builds `recon_sensor_apple` without FFmpeg and for
+  iOS**: its Release job builds and runs
+  `recon_sensor_apple_pixel_buffer_importer` with no FFmpeg, and compiles the
+  importer for iOS 16.
 - `sensor/utils`: **`GpuFramePrep::prepare` is `prepare_batch` over a set
   of one**, so a frame its checks refuse no longer times a `"frame prep"`
   row.

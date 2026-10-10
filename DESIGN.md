@@ -63,7 +63,8 @@ conventions and Vulkan setup.
   `…_texture`,
   `…_sensor`, `…_codec`, `…_eval`, `…_io`, `…_interop` (+ later `…_track`, `…_stream`),
   plus `…_sensor_utils` (GPU pre-processing), `…_sensor_array` (several
-  sensors read as one), the opt-in `…_sensor_orbbec`
+  sensors read as one), `…_sensor_apple` (Apple's pixel buffers as images),
+  the opt-in `…_sensor_orbbec`
   driver (`VR_WITH_ORBBEC`), `…_sensor_video` decoder (`VR_WITH_FFMPEG`), and
   `…_io_assimp` mesh importer (`VR_WITH_ASSIMP`);
   umbrella alias
@@ -124,10 +125,11 @@ links the family core's base tier and GLM, and no other recon tier.
   *and* test it (the 2026-08-02 decision). The one that does, Orbbec, is a
   target of its own (`sensor/orbbec/`), so `recon_sensor` never links a vendor
   SDK. The HEVC and JPEG decoders are another target of
-  their own (`sensor/video/`, on the GPU's hardware), link `core` alone, and
-  know no camera.
-  The GPU pre-processing is a third (`sensor/utils/`, Vulkan and shaders), so
-  `recon_sensor` itself stays free of both.
+  their own (`sensor/video/`, on the GPU's hardware) and link no camera tier:
+  `core` and, on Apple, the Apple importer (`sensor/apple/`), which links
+  `core` alone.
+  The GPU pre-processing is a fourth (`sensor/utils/`, Vulkan and shaders), so
+  `recon_sensor` itself stays free of all of them.
 - **`codec`** — the per-frame TSDF geometry codec: separate `Encoder` and
   `Decoder` classes over a private 8³ DCT transform, a geometry-only intra
   frame (block coordinates, an observed-voxel mask, the first K coefficients),
@@ -1165,17 +1167,19 @@ device only (the 2026-10-06 device-only decoder decision), on the hardware
 of the device they are given, fixed per build: VideoToolbox on Apple, and
 through CUDA elsewhere, so off Apple `VR_WITH_FFMPEG` needs `VR_WITH_CUDA`
 (the CUDA 13 toolkit's headers; libcuda and libnvjpeg are loaded at run
-time). **`HevcDecoder`** decodes H.265 access units through FFmpeg's
+time). A **`DecodedPicture`** is a frame's colour as it is: its
+`YuvImage` (`DecodedPicture::yuv`: the planes, the queue family that wrote
+them, the size, the matrix's weights, the range and the chroma siting), with
+the stream's pts and its transfer and primaries as an optional
+`ColorEncoding` (empty when that type cannot name them) beside it.
+**`HevcDecoder`** decodes H.265 access units through FFmpeg's
 hardware decoding: NVDEC's picture copied device to device into a Vulkan
 buffer CUDA imported (`core`'s `create_exported_buffer`, on a device that
-`exports_memory`), handed out as NV12 in `DecodedPicture::device`, which a
-reader acquires from `VK_QUEUE_FAMILY_EXTERNAL`; VideoToolbox's two
-IOSurface planes as Metal textures imported as `Image`s (`vt_pictures.mm`,
-Objective-C++), made once per surface and kept, in `DecodedPicture::image`.
-Each picture carries the stream's matrix and range and its transfer and
-primaries as an optional `ColorEncoding` (empty when that type cannot name
-them); `Options::unlabelled_color` stands in for a stream that names no
-matrix, and `reset()` restarts a stream after lost access units. A stream
+`exports_memory`), handed out as NV12 in `YuvImage::device` with
+`kQueueFamilyExternal`; VideoToolbox's two IOSurface planes as images in
+`YuvImage::image`, through `sensor/apple`'s `PixelBufferImporter`.
+`Options::unlabelled_color` stands in for a stream that names no matrix,
+and `reset()` restarts a stream after lost access units. A stream
 the hardware cannot decode or hand out -- not 8-bit 4:2:0, or on
 VideoToolbox a display window off the coded corner, which FFmpeg hands over
 already cut from the wrong corner, so the decoder reads each SPS there --
@@ -1205,6 +1209,16 @@ not quiet. FFmpeg's `AVERROR_EXTERNAL` (a hardware call failed) reads as
 `VR_TEST_HEVC_BACKEND` makes the decoder tests fail rather than skip where
 no device path opens, which is how CI holds its legs to NVDEC on 24.04 (and
 nvJPEG where the GPU has the engine) and VideoToolbox on the Mac.
+**`sensor/apple`'s `PixelBufferImporter`** (`recon_sensor_apple`, on every
+Apple build, iOS included, with no FFmpeg) hands an 8-bit NV12
+`CVPixelBuffer` on an IOSurface to Vulkan in place: each plane becomes a
+Metal texture imported as an image (`VK_EXT_metal_objects`), made once per
+surface and kept while pictures keep arriving on it, the images holding the
+pixel buffer. It sets a `YuvImage`'s planes and leaves the
+matrix, range and chroma siting to its caller, who alone knows how the
+samples are coded (a stream's unlabelled colour, say). An iOS camera's
+pictures, such as ARKit's `capturedImage`, can come through it with no
+conversion on the host.
 **`IRgbdSensor`** (`sensor/rgbd_sensor.hpp`) is one sensor: its
 `SensorInfo` from when it opens (id, the cameras' factory models at the
 opened modes, `depth_to_color`, rig role, clock, pose source, rate), and
@@ -1239,9 +1253,8 @@ in double, narrowed to float once for the passes; the colour camera's pose,
 rigid, pose the outputs; a sequence number; and `pixels`, the owner of its
 depth and any host colour, so a consumer may keep frames past the next poll
 and past the capture.
-`ChromaLocation` follows the picture through `DecodedPicture`, the Orbbec
-frame handoff and `YuvImage`: JPEG is centred, and HEVC keeps the decoded tag
-with left alignment when unspecified.
+`ChromaLocation` travels in the picture's `YuvImage`: JPEG is centred, and
+HEVC keeps the decoded tag with left alignment when unspecified.
 The GPU samples the location consistently for planes in a buffer and NV12
 images. Existing callers that leave the field unset keep left alignment. The
 resulting `DeviceFrame` feeds the `Buffer` overloads of `allocate_from_depth` and

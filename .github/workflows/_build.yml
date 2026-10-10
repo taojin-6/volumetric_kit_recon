@@ -372,3 +372,88 @@ jobs:
           VKC_TEST_SYNC_VALIDATION: ${{ inputs.sync_validation && '1' || '' }}
           DYLD_LIBRARY_PATH: ${{ env.VR_LAYER_LIBRARY_PATH }}
         run: ctest --test-dir build --output-on-failure
+
+      # recon_sensor_apple promises two builds the step above does not make
+      # (DECISIONS.md, 2026-10-08): with no FFmpeg, and for iOS. So build and
+      # run the importer's test again without FFmpeg, in a tree of its own
+      # that reuses the sources FetchContent fetched for build/ (as gfx's
+      # Xcode check does), then compile the importer, and its header as plain
+      # C++, for the iOS app's floor with that tree's include paths and
+      # definitions and ARC. Release only: neither promise
+      # depends on the build type.
+      - name: Apple importer with no FFmpeg, and for iOS (macOS)
+        if: >-
+          steps.detect.outputs.present == 'true' && runner.os == 'macOS'
+          && matrix.build_type == 'Release'
+        env:
+          VKC_REQUIRE_VULKAN_DEVICE: '1'
+          VKC_TEST_VALIDATION: '1'
+          VKC_TEST_SYNC_VALIDATION: ${{ inputs.sync_validation && '1' || '' }}
+          DYLD_LIBRARY_PATH: ${{ env.VR_LAYER_LIBRARY_PATH }}
+        run: |
+          shopt -s nullglob
+          flags=()
+          for src in build/_deps/*-src; do
+            dep=$(basename "${src}" -src | tr '[:lower:]' '[:upper:]')
+            flags+=("-DFETCHCONTENT_SOURCE_DIR_${dep}=${PWD}/${src}")
+          done
+          rm -rf build-apple
+          cmake -S . -B build-apple -DCMAKE_BUILD_TYPE=Release \
+            -DVR_BUILD_EXAMPLES=OFF -DVR_WITH_ORBBEC=OFF -DVR_WITH_FFMPEG=OFF \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON "${flags[@]}"
+          cmake --build build-apple --parallel \
+            --target recon_sensor_apple_pixel_buffer_importer_test
+          ctest --test-dir build-apple --output-on-failure --no-tests=error \
+            -R '^recon_sensor_apple_pixel_buffer_importer$'
+
+          # The iOS SDK ships with full Xcode only, and xcode-select may name
+          # the command line tools where Xcode is installed: fall back to an
+          # Xcode.app, through DEVELOPER_DIR, which is per process.
+          unset DEVELOPER_DIR
+          if ! xcrun --sdk iphoneos --show-sdk-path >/dev/null 2>&1; then
+            for app in /Applications/Xcode*.app; do
+              dir="${app}/Contents/Developer"
+              if DEVELOPER_DIR="${dir}" xcrun --sdk iphoneos --show-sdk-path \
+                  >/dev/null 2>&1; then
+                export DEVELOPER_DIR="${dir}"
+                break
+              fi
+            done
+          fi
+          if ! sdk=$(xcrun --sdk iphoneos --show-sdk-path 2>&1); then
+            echo "::error::no iOS SDK; the runner needs full Xcode: ${sdk}"
+            exit 1
+          fi
+          echo "iOS SDK: ${sdk}"
+
+          # The importer's include paths and definitions, from its compile
+          # command in build-apple.
+          importer=src/volumetric_kit/recon/sensor/apple/pixel_buffer_importer.mm
+          python3 -I -c '
+          import json, os, shlex, sys
+          db, want = sys.argv[1], os.path.realpath(sys.argv[2])
+          for entry in json.load(open(db)):
+              path = os.path.join(entry["directory"], entry["file"])
+              if os.path.realpath(path) != want:
+                  continue
+              args = iter(entry.get("arguments") or shlex.split(entry["command"]))
+              for arg in args:
+                  if arg in ("-I", "-isystem", "-D"):
+                      print(arg)
+                      print(next(args))
+                  elif arg.startswith(("-I", "-isystem", "-D")):
+                      print(arg)
+              sys.exit(0)
+          sys.exit("no compile command for " + want)
+          ' build-apple/compile_commands.json "${importer}" \
+            > build-apple/importer_flags.txt
+          args=()
+          while IFS= read -r arg; do
+            args+=("${arg}")
+          done < build-apple/importer_flags.txt
+          ios=(xcrun --sdk iphoneos clang++ -target arm64-apple-ios16.0
+               -std=c++17 -Wall -Wextra -Wpedantic -Werror
+               -fsyntax-only "${args[@]}")
+          "${ios[@]}" -x objective-c++ -fobjc-arc "${importer}"
+          echo '#include "volumetric_kit/recon/sensor/apple/pixel_buffer_importer.hpp"' \
+            | "${ios[@]}" -x c++ -

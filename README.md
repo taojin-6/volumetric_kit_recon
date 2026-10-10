@@ -164,6 +164,10 @@ cmake -S "$recon_root" -B "$recon_root/build" -DCMAKE_BUILD_TYPE=Release \
 VR_TEST_HEVC_BACKEND=cuda ctest --test-dir build -R video
 ```
 
+VideoToolbox's pictures reach Vulkan through `PixelBufferImporter`
+(`volumetric_kit::recon_sensor_apple`, `sensor/apple/`), which every Apple
+build has, iOS included, with or without FFmpeg.
+
 ## Codec evaluation
 
 `codec_replica` runs the grid codec on a fused room sequence. `codec_mesh`

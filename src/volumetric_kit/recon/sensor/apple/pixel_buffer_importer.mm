@@ -4,9 +4,9 @@
 // Before anything includes Vulkan: VK_EXT_metal_objects' structures.
 #define VK_USE_PLATFORM_METAL_EXT
 
-#include "vt_pictures.hpp"
+#include "volumetric_kit/recon/sensor/apple/pixel_buffer_importer.hpp"
 
-#include <IOSurface/IOSurface.h>
+#include <IOSurface/IOSurfaceRef.h>
 #include <Metal/Metal.h>
 
 #include <algorithm>
@@ -20,15 +20,16 @@
 #include "volumetric_kit/core/vulkan/image.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
 
-namespace volumetric_kit::recon::sensor::video {
+namespace volumetric_kit::recon::sensor {
 namespace {
 
-// A surface no picture has arrived on in this many has left VideoToolbox's
-// pool, as after a reset, and is let go; frames still holding it keep it.
+// A surface no picture has arrived on in this many has left its producer's
+// pool, as a decoder's after a reset, and is let go; frames still holding it
+// keep it.
 constexpr std::uint64_t kStale = 64;
 
-// A surface's two planes as images, made once: VideoToolbox cycles its
-// pictures through a few surfaces (five for the lab's 4K clip).
+// A surface's two planes as images, made once: a producer cycles its
+// pictures through a few surfaces (VideoToolbox five for the lab's 4K clip).
 struct Surface {
   explicit Surface(IOSurfaceRef s) : surface(s) { CFRetain(s); }
   ~Surface() { CFRelease(surface); }
@@ -41,8 +42,8 @@ struct Surface {
   std::uint64_t seen = 0;  // the last picture that arrived on it
 };
 
-// What a picture's images hold: their surface, and the pixel buffer, so
-// VideoToolbox does not reuse the surface while anything reads it.
+// What a picture's images hold: their surface, and the pixel buffer, so its
+// producer does not reuse the surface while anything reads it.
 struct Held {
   Held(std::shared_ptr<const Surface> s, CVPixelBufferRef p)
       : surface(std::move(s)), pixels(p) {
@@ -84,15 +85,15 @@ VkDeviceMemory bind_memory(const core::Device& device, VkImage image) {
 
 }  // namespace
 
-struct VtPictures::Impl {
+struct PixelBufferImporter::Impl {
   const core::Device* device = nullptr;
-  const char* who = nullptr;
+  std::string who;
   id<MTLDevice> metal = nil;  // the one MoltenVK runs the device on
   std::vector<std::shared_ptr<Surface>> surfaces;
   std::uint64_t pictures = 0;
 
   core::Status error(const std::string& what) const {
-    return core::Status::out_of_memory(std::string(who) + ": " + what);
+    return core::Status::out_of_memory(who + ": " + what);
   }
 
   // Plane @p plane of @p surface as an image of @p format, still UNDEFINED.
@@ -105,7 +106,7 @@ struct VtPictures::Impl {
                                                         IOSurfaceRef surface);
 };
 
-core::Result<core::Image> VtPictures::Impl::plane_image(
+core::Result<core::Image> PixelBufferImporter::Impl::plane_image(
     CVPixelBufferRef pixels, IOSurfaceRef surface, int plane, VkFormat format,
     MTLPixelFormat metal_format) {
   const auto width =
@@ -164,8 +165,9 @@ core::Result<core::Image> VtPictures::Impl::plane_image(
   });
 }
 
-core::Result<std::shared_ptr<Surface>> VtPictures::Impl::import_surface(
-    CVPixelBufferRef pixels, IOSurfaceRef surface) {
+core::Result<std::shared_ptr<Surface>>
+PixelBufferImporter::Impl::import_surface(CVPixelBufferRef pixels,
+                                          IOSurfaceRef surface) {
   auto out = std::make_shared<Surface>(surface);
   VKC_ASSIGN(out->luma, plane_image(pixels, surface, 0, VK_FORMAT_R8_UNORM,
                                     MTLPixelFormatR8Unorm));
@@ -197,10 +199,10 @@ core::Result<std::shared_ptr<Surface>> VtPictures::Impl::import_surface(
   return out;
 }
 
-core::Result<std::unique_ptr<VtPictures>> VtPictures::create(
-    const core::Device& device, const char* who) {
+core::Result<PixelBufferImporter> PixelBufferImporter::create(
+    const core::Device& device, std::string who) {
   if (!device.imports_metal_textures()) {
-    return core::Status::unsupported(std::string(who) +
+    return core::Status::unsupported(who +
                                      ": the device imports no Metal textures "
                                      "(VK_EXT_metal_objects)");
   }
@@ -244,37 +246,48 @@ core::Result<std::unique_ptr<VtPictures>> VtPictures::create(
   vkDestroyImage(dev, probe, nullptr);
   vkFreeMemory(dev, memory, nullptr);
   if (metal == nil) {
-    return core::Status::unsupported(std::string(who) +
+    return core::Status::unsupported(who +
                                      ": the device names no Metal device");
   }
   auto impl = std::make_unique<Impl>();
   impl->device = &device;
-  impl->who = who;
+  impl->who = std::move(who);
   impl->metal = metal;
-  return std::unique_ptr<VtPictures>(new VtPictures(std::move(impl)));
+  return PixelBufferImporter(std::move(impl));
 }
 
-VtPictures::VtPictures(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
-VtPictures::~VtPictures() = default;
+PixelBufferImporter::PixelBufferImporter(std::unique_ptr<Impl> impl) noexcept
+    : impl_(std::move(impl)) {}
+PixelBufferImporter::PixelBufferImporter(PixelBufferImporter&& other) noexcept =
+    default;
+PixelBufferImporter& PixelBufferImporter::operator=(
+    PixelBufferImporter&& other) noexcept = default;
+PixelBufferImporter::~PixelBufferImporter() = default;
 
-core::Status VtPictures::import(CVPixelBufferRef pixels, std::uint32_t width,
-                                std::uint32_t height, DecodedPicture& out) {
+core::Status PixelBufferImporter::import(CVPixelBufferRef pixels,
+                                         std::uint32_t width,
+                                         std::uint32_t height, YuvImage& out) {
+  if (impl_ == nullptr) {
+    return core::Status::invalid_argument("PixelBufferImporter: moved from");
+  }
+  if (pixels == nullptr) {
+    return core::Status::invalid_argument(impl_->who + ": no pixel buffer");
+  }
   const OSType format = CVPixelBufferGetPixelFormatType(pixels);
   IOSurfaceRef surface = CVPixelBufferGetIOSurface(pixels);
   if (format != kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange &&
       format != kCVPixelFormatType_420YpCbCr8BiPlanarFullRange) {
-    return core::Status::unsupported(std::string(impl_->who) +
-                                     ": VideoToolbox's picture is not 8-bit "
-                                     "NV12");
+    return core::Status::unsupported(impl_->who +
+                                     ": the pixel buffer is not 8-bit NV12");
   }
   if (surface == nullptr || CVPixelBufferGetPlaneCount(pixels) != 2 ||
       CVPixelBufferGetWidthOfPlane(pixels, 0) < width ||
       CVPixelBufferGetHeightOfPlane(pixels, 0) < height ||
       CVPixelBufferGetWidthOfPlane(pixels, 1) < (width + 1) / 2 ||
       CVPixelBufferGetHeightOfPlane(pixels, 1) < (height + 1) / 2) {
-    return core::Status::unsupported(std::string(impl_->who) +
-                                     ": VideoToolbox's picture is not on an "
-                                     "IOSurface of its size");
+    return core::Status::unsupported(impl_->who +
+                                     ": the pixel buffer is not on an "
+                                     "IOSurface of the picture's size");
   }
   Impl& impl = *impl_;
   const std::uint64_t now = ++impl.pictures;
@@ -297,12 +310,13 @@ core::Status VtPictures::import(CVPixelBufferRef pixels, std::uint32_t width,
   }
   entry->seen = now;
   const auto held = std::make_shared<const Held>(entry, pixels);
-  out.width = width;
-  out.height = height;
-  out.layout = VideoPixelLayout::Nv12;
+  out.layout = YuvLayout::Nv12;
+  out.device.reset();
   out.image[0] = std::shared_ptr<const core::Image>(held, &entry->luma);
   out.image[1] = std::shared_ptr<const core::Image>(held, &entry->chroma);
+  out.width = width;
+  out.height = height;
   return {};
 }
 
-}  // namespace volumetric_kit::recon::sensor::video
+}  // namespace volumetric_kit::recon::sensor
