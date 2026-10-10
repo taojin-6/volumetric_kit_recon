@@ -15,6 +15,10 @@ struct AllocationFailure {
   std::size_t bytes = 0;
   bool armed = false;
   bool injected = false;
+  // Optionally replay a failure at a captured allocation site, so an
+  // unrelated allocation of the same size cannot consume it.
+  const void* site = nullptr;
+  const void* injected_site = nullptr;
 };
 
 // Limit injection to the calling thread, so a driver's worker cannot consume

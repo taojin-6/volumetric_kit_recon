@@ -11588,6 +11588,13 @@ produce validation errors. The harness also passes with inherited legacy
 layer settings; a missing Vulkan driver exits 77, or 1 when required.
 No camera or interactive viewer was exercised in this rebase.
 
+Ubuntu 24.04 and sanitizer CI exposed a collision in the fuser OOM test:
+validation layer 1.3.275 allocated the same byte count as resize's buffer
+owners, consuming the failure before growth. The test now captures that
+allocation site in a direct grow and replays failures there. The original
+test fails and the corrected test passes on Linux with that exact layer;
+validation remains enabled throughout.
+
 ## Measured lessons
 
 Not decisions, but the measurements that overturned an assumption about

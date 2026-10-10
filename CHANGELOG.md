@@ -110,6 +110,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   job's LSan no longer suppresses by the Vulkan loader's or the validation
   layer's module, so a leak in the core's debug messenger callback is
   reported. Test: `recon_gpu_test_harness`.
+  The fuser OOM regression captures the resize allocation site so the
+  validation layer's same-size allocations cannot consume its failure.
 - build: **the core pin moves to core #18's merge** (511fed0), including #17's
   `core_test_policy`, which recon's tests build with `VKC_BUILD_TEST_SUPPORT`.
 - build: **`VR_WARNINGS_AS_ERRORS` defaults on at the top level only**, as

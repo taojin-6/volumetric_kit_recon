@@ -44,10 +44,11 @@ vkc::Result<vol::VoxelBlockGrid> make_grid(vkc::Device& device,
   return vol::VoxelBlockGrid::create(device, allocator, params, attrs, 3);
 }
 
-void fail_allocation(std::size_t bytes) {
+void fail_allocation(std::size_t bytes, const void* site = nullptr) {
   vr_test::allocation_failure = {};
   vr_test::allocation_failure.bytes = bytes;
   vr_test::allocation_failure.armed = true;
+  vr_test::allocation_failure.site = site;
 }
 
 int gpu_main(vr_test::GpuContext& gpu) {
@@ -82,6 +83,18 @@ int gpu_main(vr_test::GpuContext& gpu) {
                                               "weight");
   CHECK(after.ok() && *before == *after);
 
+  // Resize allocates its attribute-buffer owners before any Vulkan work.
+  // Capture that site in a direct grow; later fuser calls must fail there,
+  // even when the validation layer first allocates the same number of bytes.
+  fail_allocation(3 * sizeof(vkc::Buffer));
+  const auto refused_resize = vol::grow_grid(*grid);
+  failure.armed = false;
+  CHECK(failure.injected &&
+        refused_resize.domain() == vkc::Status::Code::OutOfMemory);
+  CHECK(refused_resize.message().find("grow_grid") != std::string::npos);
+  const void* resize_site = failure.injected_site;
+  CHECK(resize_site != nullptr && grid->grid().num_buckets == 127);
+
   // Fail the heap-rebuild scratch after resize has installed its new table.
   // The helper must roll back before returning OutOfMemory; otherwise later
   // fusion sees a grown map with the old, undersized attribute arrays.
@@ -113,7 +126,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
     CHECK(near_full->map().load_factor().value() >
           vol::VoxelHashMap::kGrowThreshold);
     const auto before_tick = near_full->map().tick();
-    fail_allocation(3 * sizeof(vkc::Buffer));
+    fail_allocation(3 * sizeof(vkc::Buffer), resize_site);
     const auto report = strict->fuse(*near_full, frames);
     failure.armed = false;
     CHECK(failure.injected && report.ok() && report->dropped == 0);
@@ -132,7 +145,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
     auto small = make_grid(gpu.device, gpu.allocator, 8);
     CHECK(strict.ok() && small.ok());
     const auto before_tick = small->map().tick();
-    fail_allocation(3 * sizeof(vkc::Buffer));
+    fail_allocation(3 * sizeof(vkc::Buffer), resize_site);
     const auto failed = strict->fuse(*small, pair);
     failure.armed = false;
     CHECK(failure.injected && !failed.ok());
@@ -156,7 +169,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
   auto small = make_grid(gpu.device, gpu.allocator, 8);
   CHECK(partial.ok() && small.ok());
   const auto refused_tick = small->map().tick();
-  fail_allocation(3 * sizeof(vkc::Buffer));
+  fail_allocation(3 * sizeof(vkc::Buffer), resize_site);
   auto report = partial->fuse(*small, pair);
   failure.armed = false;
   CHECK(failure.injected && report.ok() && report->grows == 0);
@@ -168,7 +181,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
         std::any_of(weights->begin(), weights->end(),
                     [](float weight) { return weight > 0.0f; }));
 
-  fail_allocation(3 * sizeof(vkc::Buffer));
+  fail_allocation(3 * sizeof(vkc::Buffer), resize_site);
   report = partial->fuse(*small, pair);
   failure.armed = false;
   CHECK(!failure.injected && report.ok() && report->grows == 0);
