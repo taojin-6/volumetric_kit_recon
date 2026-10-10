@@ -128,9 +128,8 @@ int check_same(const vr_test::Gpu& ctx, vol::VoxelBlockGrid& a,
   return 0;
 }
 
-// Allocate the band, retrying rounds that only lost bucket-lock races (as
-// examples/common/fuse_frame.hpp does), so both grids end with the same
-// blocks.
+// Allocate the band, retrying rounds that only lost bucket-lock races, so
+// both grids end with the same blocks.
 template <typename Depth>
 int allocate(vol::VoxelBlockGrid& grid, const Depth& depth,
              const vr::DepthCameraParams& camera) {

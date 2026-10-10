@@ -95,8 +95,10 @@ links the family core's base tier and GLM, and no other recon tier.
   core's one umbrella header (`core/vulkan/vulkan.hpp`) — no other code
   includes `<vulkan/...>` directly.
 - **`volume`** — the sparse voxel hash map in Vulkan buffers; allocate / compact
-  / rehash as compute shaders. (POD layouts already landed in `volume/hash_types.hpp`.)
-- **`tsdf`** — TSDF integration compute shaders (classic + dynamic), and a
+  / rehash as compute shaders, and a stateless `grow_grid` helper. (POD
+  layouts already landed in `volume/hash_types.hpp`.)
+- **`tsdf`** — TSDF integration compute shaders (classic + dynamic), the
+  `Fuser` that fuses a set of frames (grow, allocate, integrate), and a
   triangle mesh's distance field written in (signed, or as a shell).
 - **`mesh`** — marching-cubes compute shaders and host mesh containers.
 - **`io`** — host asset loading and export, branching off `mesh`; encoded
@@ -846,6 +848,13 @@ host copy of the heap counter, read back by every round that moves it, which
 `diagnostics()` checks against the device's own), and
 `kGrowThreshold` is the occupancy it says to grow at — named here so a UI or
 an embedder cannot draw a ceiling that disagrees with it.
+`grow_grid` centralizes the growth arithmetic: double, or reach a larger
+requested minimum, within `VoxelBlockGrid::max_num_buckets` (block pointers
+within int32, each attribute array within one binding). It retains no policy
+or retry state and reports resize failures through `Status`. `bytes_at`
+reports the attributes and grid-sized table's storage footprint. It excludes
+transient rehash/staging buffers, host scratch and allocator/driver overhead,
+so it is not a peak-memory budget for resize (2026-10-10).
 `allocate_from_depth` also takes a list of frames (`DepthInput`), every
 frame dispatched in each round's one submit, on a set of its own; a round
 that retries dispatches them all again, and the rounds are the call's, not
@@ -914,6 +923,26 @@ calls): one compaction and one submit for them all, each frame a dispatch
 of its own over the union in order, so every voxel takes them in turn as
 integrating them one at a time does, bit for bit. A frame with no
 pixels fuses nothing, as it allocates nothing (2026-09-30).
+`Fuser` owns the shared grow/allocate/integrate sequence (2026-10-10). It
+grows ahead past `kGrowThreshold`, allocates every frame's band in one
+`allocate_from_depth`, grows and retries on capacity failures, then integrates
+once. `max_grows_per_set` bounds successful grows including grow-ahead
+(default 4; zero fixes capacity). The default requires a complete band and
+retries pure lock contention up to four times beyond the tier's own rounds.
+An incomplete band returns an error before integration; a failed call may
+already have resized or allocated zeroed blocks. An unsuccessful grow-ahead
+can still be followed by successful allocation into the existing grid.
+
+`allow_partial` explicitly opts live callers into integrating what fits.
+`fuse_viewer` and `rig_viewer` enable it with a two-grow bound. That mode
+leaves pure lock contention for the next set and privately backs off a failed
+grow for 60 map ticks at the same size. Its fuser belongs to one grid.
+`FuseReport` carries the before/after bucket counts, grows, allocation
+failures, any failed-grow status and final occupancy; failed allocation
+requests can refer to the same block repeatedly. Host allocation exceptions
+become `OutOfMemory`, and a host failure during rehash rolls the map back.
+Scanner-specific memory callbacks and allocation-stop thresholds are deferred
+to the iOS port, alongside the actual caller and peak-memory measurements.
 `MeshIntegrator` writes a triangle mesh's distance field instead
 (2026-09-27), **overwriting** every voxel of every block the band reaches:
 weight 1 within `trunc_dist` of the mesh, the codec inverse's fresh zeros
@@ -1302,11 +1331,12 @@ checked before the grid is touched. The attributes must be `tsdf` and `weight` a
 nothing else (`VoxelBlockGrid::attribute_count`), since a kept block would
 carry any other one stale. A grid too small for the frame is `OutOfMemory`,
 whether its heap has too few slots or its hash table cannot place the
-blocks. Both are recovered by `resize` and decoding again; the library never
-grows a grid. Lock contention that outlasts four rounds is `IoError`, never
-`OutOfMemory`, and a free heap that refuses a removed block is
-`InvalidArgument`. A failure after the grid has changed leaves it holding neither
-frame until a decode succeeds. Both classes report `StageMetrics`
+blocks. Both are recovered by growing the grid and decoding again; the
+decoder never grows one (a player calls `grow_grid`). Lock
+contention that outlasts four rounds is `IoError`, never `OutOfMemory`, and
+a free heap that refuses a removed block is `InvalidArgument`. A failure
+after the grid has changed leaves it holding neither frame until a decode
+succeeds. Both classes report `StageMetrics`
 (`"codec encode"` / `"codec decode"`). Their breakdown rows share no name
 except the map's own `"  ..active set"`. The private pieces under
 `src/volumetric_kit/recon/codec/` are the `DctTransform`, the rANS
@@ -1435,10 +1465,10 @@ now private implementation dependencies of the installed I/O library.
 ## Examples
 
 (`examples/`.) Every example that fuses prepares its frames on the GPU
-(`sensor::GpuFramePrep`) and fuses them through
-`examples/common/fuse_frame.hpp`'s `fuse_set`: every frame's band in one
-allocation, the map grown on overflow, then every frame in one integrate,
-each frame's encoding declaration carried across, into the one grid layout
+(`sensor::GpuFramePrep`) and fuses them through `tsdf::Fuser`, by
+`examples/common/fuse_frame.hpp`'s `fuse_set`, which hands each
+`DeviceFrame` over with its encoding declaration and prints what a set did
+to the grid (a grow, a declined one, blocks left out), into the one grid layout
 `grid_layout.hpp` defines, which its `create_fusion_grid` builds and
 `codec_replica`'s player shares. The four dataset examples poll their frames
 through `sensor::IRgbdSensor&` — the fuse loop never learns what is behind
@@ -1553,10 +1583,10 @@ landed; the stack continues:
 3. **Luma readback** in `sensor/utils`, wherever the decoder left the
    picture, for calib's detector.
 4. **Pipelined stages**: the core's `CommandBatch` submits without waiting,
-   ordered by timeline semaphores; the per-set host waits go (an
-   allocation's failure count and occupancy read a set late); then a
-   pipeline over acquire, prep, the grid chain (fuse, mesh, texture, still
-   serial) and consumers.
+   ordered by timeline semaphores; the per-set host waits go, in
+   `tsdf::Fuser` (an allocation's failure count and occupancy read a set
+   late); then a pipeline over acquire, prep, the grid chain (fuse, mesh,
+   texture, still serial) and consumers.
 5. **Later: mixed arrays** of fixed sensors and tracked ones (iPhones):
    nearest-frame members, registration of a tracked sensor's world, a network
    sensor with an ios sender, and clock offsets.

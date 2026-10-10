@@ -422,6 +422,9 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-08**](#2026-10-08--the-single-camera-texture-pass-needs-the-vertex-to-face-the-depth-camera-and-both-texture-passes-check-a-view-one-way-amends-the-2026-08-11-per-vertex-and-2026-09-28-colour-camera-entries) —
   The single-camera texture pass needs the vertex to face the depth camera,
   and both texture passes check a view one way.
+- [**2026-10-10**](#2026-10-10--fusion-is-library-code-with-strict-defaults-and-opt-in-partial-coverage) —
+  `tsdf::Fuser` owns grow/allocate/integrate with strict defaults and opt-in
+  partial coverage; `volume::grow_grid` shares stateless growth arithmetic.
 - [**2026-10-10**](#2026-10-10--only-the-owner-triggers-ci-and-the-runner-tooling-is-the-cores) —
   Only the owner triggers CI, by the repository's Actions policy; no job
   carries a fork guard. The runner tooling is the core's.
@@ -4861,6 +4864,11 @@ process released one. A set's frames are processed one camera after another
 (a `TODO(sensor)`). No real rig poses exist yet; that waits on calib.
 
 ### 2026-09-27 — `Encoder` and `Decoder` are the codec's public API: encoding drops never-observed blocks and sorts the rest, decoding makes a caller's grid hold exactly the frame by diffing its block set, everything checkable is checked before the grid is touched, and a grid too small for the frame is refused rather than grown.
+
+*Amended 2026-10-10 (the fusion entry, below):* `tsdf::Fuser` grows for
+fusion through the stateless `volume::grow_grid` helper, replacing
+`allocate_band`. The decoder still refuses a grid too small for its frame;
+a player grows it with `grow_grid`.
 
 The third of the 2026-09-26 entry's five PRs, and the first public API the
 codec has had: `codec/encoder.hpp` (`Encoder`, `EncoderConfig`) and
@@ -11078,6 +11086,54 @@ mutations fails `recon_texture_projective`: the agreeing-signs test (a 1 cm
 sheet's back textured, registered and with a colour camera 5 cm aside); the
 facing test without its zero-normal exemption; and the single-camera pass
 without the depth-range check (both bounds zero, and inverted).
+
+### 2026-10-10 — Fusion is library code, with strict defaults and opt-in partial coverage.
+
+`tsdf::Fuser` owns the per-set sequence formerly in
+`examples/common/fuse_frame.hpp`: grow ahead past `kGrowThreshold`, allocate
+all frame bands, grow and retry capacity failures, then integrate the set.
+This puts the shared sequence in the library ahead of the pipeline work,
+while the `DeviceFrame` hand-off stays with callers because `tsdf` cannot
+include `sensor/utils`.
+
+**Complete coverage is the default.** `FuserConfig` has two options:
+`max_grows_per_set` (4, including grow-ahead; 0 fixes capacity) and
+`allow_partial` (false). Strict fusion returns an error before integration
+when a band remains incomplete, and retries pure lock contention up to four
+times beyond the allocation tier's own rounds. A failed call may already have
+grown the grid or allocated zeroed blocks. Grow-ahead is opportunistic: if it
+runs out of memory but the band fits the existing grid, fusion can succeed.
+
+`fuse_viewer` and `rig_viewer` explicitly accept partial coverage and use a
+two-grow bound. In this mode the remaining lock races wait for the next set,
+and a failed grow backs off for 60 map ticks at the same grid size. The
+backoff belongs to the fuser privately. `FuseReport` carries the before/after
+bucket counts, grows, allocation failures, any grow error and final load.
+The failure tally counts requests, not unique missing blocks.
+
+**Shared mechanism stays small.** `volume::grow_grid` doubles or reaches a
+larger requested minimum, within `VoxelBlockGrid::max_num_buckets`; an
+unreachable minimum is refused before mutation. It keeps no state and serves
+fusion, `codec_mesh` and the codec player without linking the latter two to
+`tsdf`. Host allocation failures return `OutOfMemory`. A failure during
+rehash restores the old map and heap before the caller can continue.
+
+`VoxelBlockGrid::bytes_at` shares the map's buffer-size table and reports the
+grid-sized storage footprint. It excludes temporary rehash and staging
+buffers, host scratch, and allocator/driver overhead. It cannot be used by
+itself to approve a resize against available memory. The scanner's memory
+callback and allocation-stop threshold are deferred to its iOS port, where
+the caller and peak-memory validation can land together. iOS keeps its own
+policy until that port; this change does not modify the iOS repository.
+
+**Regression coverage.** A three-camera sphere starting from eight buckets
+needs four doublings and now matches a roomy reference grid bit for bit.
+Strict failure leaves weights and the integration tick unchanged; partial
+mode reports failures and integrates what fits. Fault injection covers a
+failed input-vector allocation, a resize failure after the new table was
+installed, preserved voxel data, subsequent retries, and private live
+backoff. Separate growth tests cover content retention and invalid or
+unreachable requested minima.
 
 ### 2026-10-10 — Only the owner triggers CI, and the runner tooling is the core's.
 

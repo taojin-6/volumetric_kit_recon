@@ -51,7 +51,7 @@
 #include "volumetric_kit/recon/sensor/rgbd_sensor.hpp"
 #include "volumetric_kit/recon/sensor/utils/gpu_frame_prep.hpp"
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
-#include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
+#include "volumetric_kit/recon/tsdf/fuser.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
@@ -293,8 +293,7 @@ vkc::Result<Reconstruction> fuse(const Options& opt,
   VKC_ASSIGN(
       vol::VoxelBlockGrid volume,
       vr_example::create_fusion_grid(device, allocator, opt.voxel, opt.trunc));
-  VKC_ASSIGN(rtsdf::TsdfIntegrator integrator,
-             rtsdf::TsdfIntegrator::create(device, allocator));
+  VKC_ASSIGN(rtsdf::Fuser fuser, rtsdf::Fuser::create(device, allocator));
   VKC_ASSIGN(rsensor::GpuFramePrep prep,
              rsensor::GpuFramePrep::create(device, allocator));
   rmesh::MarchingCubesConfig mc_config;
@@ -347,10 +346,9 @@ vkc::Result<Reconstruction> fuse(const Options& opt,
     }
     VKC_ASSIGN(rsensor::DeviceFrame frame, prep.prepare(*polled));
     poses.push_back(frame.depth_camera.cam_to_world);
-    // Allocate the band (growing the map on overflow, as fuse_replica does)
-    // and integrate depth + colour; a frame whose band never fully allocated
-    // is refused rather than fused with silent holes.
-    VKC_TRY(vr_example::fuse_set(volume, integrator, {frame}, 20.0f, nullptr));
+    // Grow the map ahead of need, allocate the band and integrate depth +
+    // colour, as fuse_replica does; an incomplete band is an error.
+    VKC_TRY(vr_example::fuse_set(fuser, volume, {frame}, 20.0f, nullptr));
     if (opt.texture && fused == keyframe_index && frame.has_color()) {
       keyframe = std::move(frame);
     }

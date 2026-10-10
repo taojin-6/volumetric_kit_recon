@@ -8,6 +8,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `tsdf`: **`Fuser`** (`fuser.hpp`), the shared grow/allocate/integrate
+  sequence. Grows ahead at the map's threshold and defaults to requiring a
+  complete band before integration. `FuserConfig::allow_partial` explicitly
+  opts live callers into partial coverage, with private growth backoff.
+  `FuseReport` reports growth and allocation failures. Tests:
+  `recon_tsdf_fuser`, `recon_tsdf_fuser_oom`.
+- `volume`: **`grow_grid`** (`grid_growth.hpp`), a stateless doubling or
+  grow-to-minimum helper; **`VoxelBlockGrid::max_num_buckets`** and
+  **`bytes_at`**, the capacity ceiling and grid storage footprint. The latter
+  excludes resize scratch and allocator overhead. Host OOM during rehash
+  rolls the map back before returning an error. Test: `recon_volume_grid_growth`.
 - `camera`: **the camera vocabulary**, a tier of its own
   (`volumetric_kit::recon_camera`) that links the core's base tier and GLM,
   and no Vulkan, so a driver uses it without a GPU API:
@@ -85,6 +96,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - CI: **only the owner triggers CI.** The repository's Actions policy lets no
   other account trigger a workflow, so a fork's pull request never reaches the
   self-hosted runners, and the build and viewer jobs' fork guards go.
+- examples: **every example fuses through `tsdf::Fuser`**, keeping offline
+  complete-or-error behavior. `fuse_viewer` and `rig_viewer` explicitly accept
+  partial coverage. `allocate_band` goes from `examples/common/fuse_frame.hpp`;
+  `codec_mesh` and the codec player share `volume::grow_grid`.
 - build: **the core pin moves to core #15** (a8b63d1), which adds
   `CommandBatch::submit_async`, for the pipelined stages to come; recon's
   calls are unchanged. gfx, pinned at core #13, builds against it.

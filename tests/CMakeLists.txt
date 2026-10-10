@@ -136,6 +136,24 @@ vr_target_warnings(recon_example_fuse_keyframe_test)
 add_test(NAME recon_example_fuse_keyframe
          COMMAND recon_example_fuse_keyframe_test)
 
+# tsdf fuser: a set fused through tsdf::Fuser, growing on the way, matches the
+# tier calls on a grid that never needed to; it grows ahead before any failure,
+# refuses incomplete bands by default, and keeps fusing only when the caller
+# explicitly allows partial coverage. Skips (exit 0) with no device.
+add_executable(recon_tsdf_fuser_test tsdf_fuser_test.cpp)
+target_link_libraries(recon_tsdf_fuser_test PRIVATE volumetric_kit::recon_tsdf
+                                                    Vulkan::Vulkan)
+vr_target_warnings(recon_tsdf_fuser_test)
+add_test(NAME recon_tsdf_fuser COMMAND recon_tsdf_fuser_test)
+
+# Host OOM stays in Status, resize rolls back, and private live backoff expires.
+add_executable(recon_tsdf_fuser_oom_test tsdf_fuser_oom_test.cpp
+                                         test_allocation_failure.cpp)
+target_link_libraries(recon_tsdf_fuser_oom_test
+                      PRIVATE volumetric_kit::recon_tsdf Vulkan::Vulkan)
+vr_target_warnings(recon_tsdf_fuser_oom_test)
+add_test(NAME recon_tsdf_fuser_oom COMMAND recon_tsdf_fuser_oom_test)
+
 # The device-input overloads of allocate_from_depth and integrate: the same
 # frame fused from host arrays and from storage buffers must give the same grid.
 # Skips (exit 0) where no device is present.
@@ -180,6 +198,14 @@ target_link_libraries(recon_volume_resize_test
                       PRIVATE volumetric_kit::recon_volume Vulkan::Vulkan)
 vr_target_warnings(recon_volume_resize_test)
 add_test(NAME recon_volume_resize COMMAND recon_volume_resize_test)
+
+# Stateless volume growth: doubling, an explicit minimum, content retention, and
+# rejection of invalid or unreachable sizes. Skips (exit 0) with no device.
+add_executable(recon_volume_grid_growth_test volume_grid_growth_test.cpp)
+target_link_libraries(recon_volume_grid_growth_test
+                      PRIVATE volumetric_kit::recon_volume Vulkan::Vulkan)
+vr_target_warnings(recon_volume_grid_growth_test)
+add_test(NAME recon_volume_grid_growth COMMAND recon_volume_grid_growth_test)
 
 # volume diagnostics: force a collision chain (coords hashing to one bucket) and
 # verify the reported active / overflow / chain-length + heap stats. Skips (exit

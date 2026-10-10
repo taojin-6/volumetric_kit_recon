@@ -363,13 +363,14 @@ With P1, P2 and P5 in place, three host decisions still split a set:
 - **The compaction count, which sizes the integrate dispatch.** Dispatch
   indirect off the device's count (`CommandBatch::dispatch_indirect`; the
   `TODO(tsdf)` at `tsdf_integrator.cpp:312`).
-- **Allocation failures, which decide a retry or a grow.**
-  - Grow ahead of need at `kGrowThreshold`, off `load_factor()`, before the
-    set.
-  - Read the tally back in the set's one submit.
-  - A residue of lost lock races lands on the next set.
+- **Allocation failures, which decide a grow.** `tsdf::Fuser` grows ahead
+  of need at `kGrowThreshold` before the set. Live viewers explicitly use
+  `allow_partial` and leave residual lock races to the next set; offline
+  callers require complete allocation (2026-10-10). What is left:
+  - Read the tally back in the set's one submit, so a grow for a capacity
+    limit lands a set late.
   - That one-set lag is for the live viewer only. The examples that write a
-    mesh (`fuse_replica` and the rest) keep today's synchronous loop.
+    mesh (`fuse_replica` and the rest) keep the synchronous grow.
 - **The triangle count, which sizes the texture dispatch and the arena
   refit.** Keep it: a refit is rare once the plan has measured density.
 
