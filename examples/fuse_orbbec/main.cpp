@@ -266,26 +266,20 @@ void apply_streams(const Options& opt, const vkc::Device& device,
 }
 
 // The run's cameras, opened on the GPU their frames are decoded and fused on:
-// one, or every camera of a sync configuration on the host's clock. The depth
-// gate is validated by the driver, which names both values when it refuses
-// one.
+// one, or every camera of a sync configuration (open_orbbec_sensors). The
+// depth gate is validated by the driver, which names both values when it
+// refuses one.
 vkc::Result<std::vector<std::unique_ptr<sensor::IRgbdSensor>>> open_cameras(
     const Options& opt, const camera::ArrayCalibration& calibration,
     const vkc::Device& device, vkc::Allocator& allocator) {
-  std::vector<sensor::OrbbecSensor::Options> cameras;
+  sensor::OrbbecSensor::Options o;
+  apply_streams(opt, device, allocator, o);
+  std::vector<std::unique_ptr<sensor::IRgbdSensor>> sensors;
+  const auto t_open = std::chrono::steady_clock::now();
   if (!opt.rig.empty()) {
-    VKC_ASSIGN(const sensor::OrbbecRigSyncConfig rig,
-               sensor::read_orbbec_sync_config(opt.rig));
-    for (const sensor::OrbbecSyncDevice& entry : rig.devices) {
-      sensor::OrbbecSensor::Options o;
-      o.serial = entry.serial;
-      o.sync = entry.sync;
-      o.apply_sync = opt.apply_sync;
-      o.sync_clock_to_host = true;
-      cameras.push_back(o);
-    }
+    o.apply_sync = opt.apply_sync;
+    VKC_ASSIGN(sensors, sensor::open_orbbec_sensors(opt.rig, o));
   } else {
-    sensor::OrbbecSensor::Options o;
     o.serial = opt.serial;
     const std::vector<camera::SensorCalibration>& posed = calibration.sensors;
     if (!posed.empty()) {
@@ -304,22 +298,20 @@ vkc::Result<std::vector<std::unique_ptr<sensor::IRgbdSensor>>> open_cameras(
       o.serial = sensor->id;
     }
     o.sync_clock_to_host = opt.host_clock;
-    cameras.push_back(o);
-  }
-  std::vector<std::unique_ptr<sensor::IRgbdSensor>> sensors;
-  const auto t_open = std::chrono::steady_clock::now();
-  for (sensor::OrbbecSensor::Options& o : cameras) {
-    apply_streams(opt, device, allocator, o);
     VKC_ASSIGN(sensor::OrbbecSensor opened, sensor::OrbbecSensor::open(o));
-    print_camera(opened, calibration);
-    const sensor::OrbbecSyncMode mode = opened.device_info().sync_mode;
-    if (opt.rig.empty() && sensor::waits_for_primary(mode)) {
-      std::printf(
-          "  note: a sync %s delivers frames only on another camera's signal\n",
-          sensor::to_string(mode));
-    }
     sensors.push_back(
         std::make_unique<sensor::OrbbecSensor>(std::move(opened)));
+  }
+  for (const std::unique_ptr<sensor::IRgbdSensor>& opened : sensors) {
+    // Every camera here is an OrbbecSensor.
+    print_camera(static_cast<const sensor::OrbbecSensor&>(*opened),
+                 calibration);
+  }
+  if (opt.rig.empty() &&
+      sensors[0]->info().role == sensor::SyncRole::Secondary) {
+    std::printf(
+        "  note: a sync secondary delivers frames only on another camera's "
+        "signal\n");
   }
   std::printf(
       "opened %zu camera(s) in %.1f s\n", sensors.size(),

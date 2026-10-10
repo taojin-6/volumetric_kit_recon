@@ -414,6 +414,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   its sync settings at `open`, written only when asked and checked for SDK
   normalization after a write; the tolerance is 0.4 of a frame period, and
   `OrbbecRig`, its start order and the public `TriggerGrouper` go.
+  *Amended 2026-10-08:* `open_orbbec_sensors` opens a rig's cameras from its
+  sync file, for every caller.
 - [**2026-10-08**](#2026-10-08--the-frames-models-and-block-grammar-are-one-glsl-text-that-the-host-compiles-as-c-and-golden-frames-pin-v3-amends-the-2026-10-03-encoding-entry) —
   The frame's models and block grammar are one GLSL text that the kernels
   include and the host compiles as C++, the device's walk runs in emit order,
@@ -10823,6 +10825,17 @@ the surface. A successful retry replaces it. The viewer publishes the pose
 only after the helper succeeds, alongside the fused-frame count.
 
 ### 2026-10-07 — A rig is an `OrbbecSensor` per camera in a `SensorArray`, on the SDK's global timestamps (SDK 2.10.6 or later): each camera is checked against its sync settings at `open` and written only when asked, the tolerance is 0.4 of a frame period, and `OrbbecRig`, its start order and the public `TriggerGrouper` go (amends the 2026-09-24 SDK, 2026-09-27 rig and 2026-10-06 `IRgbdSensor` and `SensorArray` entries).
+
+*Amended 2026-10-08:* opening a rig is the library's.
+`open_orbbec_sensors` (`orbbec_sensor.hpp`) reads the sync file and opens
+each camera, in the file's order, with its entry as `Options::sync` and on
+the host's clock, returning the sensors `SensorArray::open` takes; the
+caller's options give the streams and `apply_sync`, never a serial or sync
+settings, which the file gives, or a pose, which the array's calibration
+gives. `fuse_orbbec` and `rig_viewer` call it, as calib's live app is to, so
+a new rule for a rig's cameras is made once. Test:
+`recon_sensor_orbbec_open_sensors`, against the camera stub the sync-apply
+test uses (`tests/orbbec_camera_stub.cpp`).
 
 The array's plan finishes (DESIGN.md's Next work, step 2): `fuse_orbbec`
 and `rig_viewer` open one `OrbbecSensor` per camera of the rig's sync

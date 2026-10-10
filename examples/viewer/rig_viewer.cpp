@@ -106,7 +106,6 @@
 #include "volumetric_kit/recon/sensor/array/sensor_array.hpp"
 #include "volumetric_kit/recon/sensor/orbbec/orbbec_sensor.hpp"
 #include "volumetric_kit/recon/sensor/orbbec/orbbec_stream.hpp"
-#include "volumetric_kit/recon/sensor/orbbec/orbbec_sync_config.hpp"
 #include "volumetric_kit/recon/sensor/rgbd_sensor.hpp"
 #include "volumetric_kit/recon/sensor/utils/gpu_frame_prep.hpp"
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
@@ -707,12 +706,6 @@ int run(GLFWwindow* window, const Options& opt) {
   // they decode onto and which must outlive them. Opened here, on the main
   // thread, so a camera that does not answer ends the run with its reason
   // before the window starts drawing; the fuse thread starts them.
-  auto sync = rsensor::read_orbbec_sync_config(opt.rig);
-  if (!sync) {
-    std::fprintf(stderr, "%s: %s\n", opt.rig.c_str(),
-                 sync.status().message().c_str());
-    return 1;
-  }
   rsensor::SensorArray::Options array_options;
   if (!opt.calibration.empty()) {
     auto calibration = rcamera::read_array_calibration(opt.calibration);
@@ -745,23 +738,14 @@ int run(GLFWwindow* window, const Options& opt) {
   if (opt.min_depth) sensor_options.min_depth = *opt.min_depth;
   if (opt.max_depth) sensor_options.max_depth = *opt.max_depth;
   sensor_options.apply_sync = opt.apply_sync;
-  sensor_options.sync_clock_to_host = true;  // sets group on the host clock
-  std::vector<std::unique_ptr<rsensor::IRgbdSensor>> sensors;
-  for (const rsensor::OrbbecSyncDevice& entry : sync.value().devices) {
-    rsensor::OrbbecSensor::Options camera_options = sensor_options;
-    camera_options.serial = entry.serial;
-    camera_options.sync = entry.sync;
-    auto opened = rsensor::OrbbecSensor::open(camera_options);
-    if (!opened) {
-      std::fprintf(stderr, "rig_viewer: camera %s: %s\n", entry.serial.c_str(),
-                   opened.status().message().c_str());
-      return 1;
-    }
-    sensors.push_back(
-        std::make_unique<rsensor::OrbbecSensor>(std::move(opened).value()));
+  auto sensors = rsensor::open_orbbec_sensors(opt.rig, sensor_options);
+  if (!sensors) {  // the message names the file or the camera
+    std::fprintf(stderr, "rig_viewer: %s\n",
+                 sensors.status().message().c_str());
+    return 1;
   }
   auto array_result =
-      rsensor::SensorArray::open(std::move(sensors), array_options);
+      rsensor::SensorArray::open(std::move(sensors).value(), array_options);
   if (!array_result) {
     std::fprintf(stderr, "rig_viewer: %s\n",
                  array_result.status().message().c_str());
