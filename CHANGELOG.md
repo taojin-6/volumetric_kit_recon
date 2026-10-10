@@ -82,6 +82,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   device walks a block in the host writer's order. Frames are unchanged, byte
   for byte. Tests: golden v3 frames pin the bytes both writers write
   (`recon_codec_bitstream`, `recon_codec_device_frame`).
+- CI: **only the owner triggers CI.** The repository's Actions policy lets no
+  other account trigger a workflow, so a fork's pull request never reaches the
+  self-hosted runners, and the build and viewer jobs' fork guards go.
 - build: **the core pin moves to core #15** (a8b63d1), which adds
   `CommandBatch::submit_async`, for the pipelined stages to come; recon's
   calls are unchanged. gfx, pinned at core #13, builds against it.
@@ -205,9 +208,33 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   a rig, each secondary's mean and worst skew to the primary. `rig_viewer`'s
   panel shows the array's counters, frames in no set among them, and loses
   its `lost` column, which `SensorStats` counts as failed.
+- CI: **the Ubuntu 22.04 leg goes.** The Linux legs are Ubuntu 24.04 and
+  26.04, and the optional Assimp loader now builds on the 24.04 leg. No leg
+  builds on the core's 1.3.204 Vulkan-header floor; the oldest headers in CI
+  are 24.04's 1.3.275.
 
 ### Fixed
 
+- `tsdf`: **fusion samples at integer pixel centres**, the convention
+  `GpuFramePrep`, the camera tier, allocation and texturing use: no
+  half-pixel tap shift, and the nearest-pixel fallback and the colour sample
+  rounded and clamped rather than floored. A slanted plane through
+  `GpuFramePrep` now crosses zero within 0.06 mm of the truth at 1 cm voxels,
+  where it was off by up to 5.5 mm, in each camera's own image direction.
+  Regressions: `recon_sensor_gpu_frame_prep`, `recon_tsdf_integrate`.
+- `tsdf`: `TsdfIntegrator::integrate` **refuses a depth or colour camera with
+  a non-finite intrinsic, depth bound or pose entry** before any work, where
+  it fused the whole active set through NaN projections; the kernel's
+  projection rejects a NaN pixel too. Regression: `recon_tsdf_integrate`.
+- `texture`: the single-camera pass **textures a vertex only where its normal
+  points toward the depth camera** (and the colour camera), as the
+  several-view pass does per triangle, so the back of a sheet thinner than
+  the occlusion threshold no longer takes its front's image. Regression:
+  `recon_texture_projective`.
+- `texture`: the single-camera pass **refuses a depth range with
+  `min_depth >= max_depth`**, as the several-view pass does, rather than
+  returning OK with every vertex carried; both passes check a view through
+  one function. Regression: `recon_texture_projective`.
 - `fuse_viewer`: retain the last successfully fused keyframe through a
   preparation or fusion failure, so final and later remeshes keep its
   projected texture. Regression: `recon_example_fuse_keyframe`.
@@ -230,6 +257,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
+- CI: **the self-hosted runner scripts and their guide**
+  (`.github/setup-linux-runner.sh`, `setup-mac-runner.sh`,
+  `teardown-runners.sh`, `self-hosted-runners.md`). The core's
+  `tools/runners` replaces them, for recon's and gfx's runners alike.
 - `sensor/orbbec`: **`OrbbecRig`** (`orbbec_rig.hpp`, BREAKING), with
   `OrbbecRigSet`, `OrbbecRigStats`, the rig's start order and its
   process-wide clock re-sync (`enableDeviceClockSync`).

@@ -79,10 +79,14 @@ add_test(NAME recon_volume_block_stamps COMMAND recon_volume_block_stamps_test)
 
 # tsdf integrate: fuse a synthetic constant-depth plane into a VoxelBlockGrid
 # and verify the classic projective TSDF math per voxel (sdf, truncation, weight
-# + cap). Skips (exit 0) with no device.
+# + cap). It also runs the kernel's projection alone (shaders/project_pinhole)
+# on inputs that make its depth or pixel NaN. Skips (exit 0) with no device.
 add_executable(recon_tsdf_integrate_test tsdf_integrate_test.cpp)
 target_link_libraries(recon_tsdf_integrate_test
                       PRIVATE volumetric_kit::recon_tsdf Vulkan::Vulkan)
+include(vr_embed)
+vr_embed_shaders(recon_tsdf_integrate_test SHADERS
+                 "${CMAKE_CURRENT_SOURCE_DIR}/shaders/project_pinhole.comp")
 vr_target_warnings(recon_tsdf_integrate_test)
 add_test(NAME recon_tsdf_integrate COMMAND recon_tsdf_integrate_test)
 

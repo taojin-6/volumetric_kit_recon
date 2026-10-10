@@ -162,9 +162,11 @@ class VR_TSDF_API TsdfIntegrator {
   ///                    `cam.width * cam.height` (the host applies any raw
   ///                    sensor depth-scale first, as @ref
   ///                    VoxelHashMap::allocate_from_depth does).
-  /// @param cam         Intrinsics + camera->world pose + depth range; the
-  ///                    integrator inverts the pose to project world -> camera,
-  ///                    and the cull relies on it being rigid.
+  /// @param cam         Intrinsics + camera->world pose + depth range, every
+  ///                    entry finite; the integrator inverts the pose to
+  ///                    project world -> camera, and the cull relies on it
+  ///                    being rigid. Its pixel centres sit at integer
+  ///                    coordinates, the camera tier's convention.
   /// @param max_weight  The running-average weight cap (the ported default is
   ///                    5.0).
   /// @param mode        Classic keeps free space ahead of the surface; dynamic
@@ -214,11 +216,12 @@ class VR_TSDF_API TsdfIntegrator {
   ///                  overhead.
   /// @return OK on success, or a non-OK `Status`:
   ///         `Status::Code::InvalidArgument` if the integrator is
-  ///         moved-from, @p depth is null, @p grid lacks a `float`
-  ///         `tsdf`/`weight` attribute, @p color is set but empty or @p grid
-  ///         lacks a `uint32` `color` attribute, or the blocks the frame
-  ///         reaches are too many for a single 1-D dispatch (their voxel count
-  ///         exceeds the device's `maxComputeWorkGroupCount[0]`, or 2^32
+  ///         moved-from, @p depth is null, @p cam or @p color's camera has a
+  ///         non-finite intrinsic, depth bound or pose entry, @p grid lacks a
+  ///         `float` `tsdf`/`weight` attribute, @p color is set but empty or
+  ///         @p grid lacks a `uint32` `color` attribute, or the blocks the
+  ///         frame reaches are too many for a single 1-D dispatch (their voxel
+  ///         count exceeds the device's `maxComputeWorkGroupCount[0]`, or 2^32
   ///         threads); otherwise a buffer or dispatch failure.
   core::Status integrate(volume::VoxelBlockGrid& grid, const float* depth,
                          const DepthCameraParams& cam, float max_weight = 5.0f,

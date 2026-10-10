@@ -212,15 +212,12 @@ layout(set = 0, binding = 1, scalar) readonly buffer Depth { float depth[]; };
 // vertex; fall back to the nearest (max-weight) valid tap instead, the same
 // intent as tsdf_integrate.comp's discontinuity guard (keyed here to the
 // occlusion tolerance -- the scale at which the blend must be trustworthy --
-// since this tier carries no trunc_dist). Sampling is integer-centred,
-// matching this tier's integer-centred projection (u = fx*x/z + cx) and
-// half-texel atlas UV; it deliberately does NOT copy the tsdf sampler's -0.5
-// texture-centred tap shift, which is self-consistent only with that tier's
-// texture-centred convention (DECISIONS.md, the 2026-07-06 depth-sampling
-// decision). Ported in spirit from the prior engine's sample_depth_bilinear_m
-// (our depth is already float metres, so there is no uint16 depth-scale
-// divide). Returns 0.0 when all four taps are invalid; occluded_ok's range
-// check then rejects it.
+// since this tier carries no trunc_dist). Sampling is integer-centred, as the
+// tsdf sampler's is (DECISIONS.md, the depth-sampling decision), matching the
+// projection (u = fx*x/z + cx) and the half-texel atlas UV. Ported in spirit
+// from the prior engine's sample_depth_bilinear_m (our depth is already float
+// metres, so there is no uint16 depth-scale divide). Returns 0.0 when all four
+// taps are invalid; occluded_ok's range check then rejects it.
 float sample_depth(DepthCameraParams c, uint base, vec2 px, float threshold) {
   int w = int(c.width);
   int h = int(c.height);
