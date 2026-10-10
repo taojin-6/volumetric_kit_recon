@@ -723,6 +723,23 @@ target_link_libraries(recon_eval_mesh_distance_test
 vr_target_warnings(recon_eval_mesh_distance_test)
 add_test(NAME recon_eval_mesh_distance COMMAND recon_eval_mesh_distance_test)
 
+# The worker each Orbbec colour decoder decodes on (decode_worker.hpp), driven
+# by a fake decode. It names no SDK type, so it is tested without the driver
+# too, on every leg, the sanitizers' included; with exceptions, as the driver is
+# compiled, since it catches what a decode throws.
+add_executable(recon_sensor_orbbec_decode_worker_test
+               sensor_orbbec_decode_worker_test.cpp)
+target_link_libraries(recon_sensor_orbbec_decode_worker_test
+                      PRIVATE volumetric_kit::recon_core)
+target_include_directories(
+  recon_sensor_orbbec_decode_worker_test
+  PRIVATE ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/orbbec)
+target_compile_options(recon_sensor_orbbec_decode_worker_test
+                       PRIVATE -fexceptions)
+vr_target_warnings(recon_sensor_orbbec_decode_worker_test)
+add_test(NAME recon_sensor_orbbec_decode_worker
+         COMMAND recon_sensor_orbbec_decode_worker_test)
+
 # The Orbbec SDK prerequisite (VR_WITH_ORBBEC only): the copy the build found is
 # the one that loads -- runtime version == configured version, since the SDK is
 # linked in place from an install outside the repo. It opens no SDK context.
