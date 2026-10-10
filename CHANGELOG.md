@@ -75,6 +75,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- CI: **only the owner triggers CI.** The repository's Actions policy lets no
+  other account trigger a workflow, so a fork's pull request never reaches the
+  self-hosted runners, and the build and viewer jobs' fork guards go.
 - build: **the core pin moves to core #15** (a8b63d1), which adds
   `CommandBatch::submit_async`, for the pipelined stages to come; recon's
   calls are unchanged. gfx, pinned at core #13, builds against it.
@@ -198,6 +201,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   a rig, each secondary's mean and worst skew to the primary. `rig_viewer`'s
   panel shows the array's counters, frames in no set among them, and loses
   its `lost` column, which `SensorStats` counts as failed.
+- CI: **the Ubuntu 22.04 leg goes.** The Linux legs are Ubuntu 24.04 and
+  26.04, and the optional Assimp loader now builds on the 24.04 leg. No leg
+  builds on the core's 1.3.204 Vulkan-header floor; the oldest headers in CI
+  are 24.04's 1.3.275.
 
 ### Fixed
 
@@ -243,6 +250,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
+- CI: **the self-hosted runner scripts and their guide**
+  (`.github/setup-linux-runner.sh`, `setup-mac-runner.sh`,
+  `teardown-runners.sh`, `self-hosted-runners.md`). The core's
+  `tools/runners` replaces them, for recon's and gfx's runners alike.
 - `sensor/orbbec`: **`OrbbecRig`** (`orbbec_rig.hpp`, BREAKING), with
   `OrbbecRigSet`, `OrbbecRigStats`, the rig's start order and its
   process-wide clock re-sync (`enableDeviceClockSync`).

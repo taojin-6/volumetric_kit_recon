@@ -418,6 +418,9 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-08**](#2026-10-08--the-single-camera-texture-pass-needs-the-vertex-to-face-the-depth-camera-and-both-texture-passes-check-a-view-one-way-amends-the-2026-08-11-per-vertex-and-2026-09-28-colour-camera-entries) —
   The single-camera texture pass needs the vertex to face the depth camera,
   and both texture passes check a view one way.
+- [**2026-10-10**](#2026-10-10--only-the-owner-triggers-ci-and-the-runner-tooling-is-the-cores) —
+  Only the owner triggers CI, by the repository's Actions policy; no job
+  carries a fork guard. The runner tooling is the core's.
 
 ## Decision record
 
@@ -11005,6 +11008,18 @@ mutations fails `recon_texture_projective`: the agreeing-signs test (a 1 cm
 sheet's back textured, registered and with a colour camera 5 cm aside); the
 facing test without its zero-normal exemption; and the single-camera pass
 without the depth-range check (both bounds zero, and inverted).
+
+### 2026-10-10 — Only the owner triggers CI, and the runner tooling is the core's.
+
+The core's decision
+[Only the owner triggers CI](https://github.com/taojin-6/volumetric_kit_core/blob/main/DECISIONS.md#only-the-owner-triggers-ci)
+holds here, with its rationale and how it was tested: the repository's
+Actions policy lets only the owner's account trigger a workflow, and GitHub
+refuses any other account's run before it creates a job. So no job in
+`ci.yml` carries a fork guard, the build legs' and the viewer's included, and
+the approval of every outside contributor's run stays on as a second gate. A
+fork's change gets CI once a maintainer pushes its branch here. The runner
+tooling is the core's `tools/runners`; recon keeps no copy.
 
 ## Measured lessons
 
