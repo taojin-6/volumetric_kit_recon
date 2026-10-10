@@ -15,11 +15,11 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# Every job but `required` carries the fork guard (DECISIONS.md, 2026-10-08).
+# Only the owner triggers this repository's workflows, so no job carries a fork
+# guard (DECISIONS.md, 2026-10-10).
 jobs:
   build:
     name: ${{ matrix.os }}
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     strategy:
       fail-fast: false
       # The Ubuntu legs run on the self-hosted GPU box (label `vk-linux-gpu`),
@@ -95,34 +95,26 @@ jobs:
       hevc_backend: ${{ matrix.hevc_backend || '' }}
 
   viewer:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     uses: ./.github/workflows/viewer.yml
 
   lint:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     uses: ./.github/workflows/lint.yml
 
   sanitizers:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     uses: ./.github/workflows/sanitizers.yml
 
   required:
     # The single status check branch protection requires. It passes only when
     # every build leg, the viewer, lint, and sanitizers succeeded, and FAILS
-    # (never skips) on any other outcome, a fork's pull request included: a
-    # job skipped by its `if:` counts as passed. Runs on a hosted runner so the
-    # gate can always report, even while a platform is mid-migration to
+    # (never skips) on any other outcome: a skipped required check never reports
+    # its result and would block every merge forever. Runs on a hosted runner so
+    # the gate can always report, even while a platform is mid-migration to
     # self-hosted.
     needs: [build, viewer, lint, sanitizers]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Refuse a pull request from a fork
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
-        run: |
-          echo "::error::CI does not run for a pull request from a fork. A maintainer will push its branch to ${{ github.repository }} to run CI."
-          exit 1
       - name: Assert every required job succeeded
         run: |
           echo "build=${{ needs.build.result }}" \

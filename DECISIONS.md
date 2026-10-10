@@ -413,9 +413,9 @@ entries relevant to your task; later amendments supersede earlier rules.
   its sync settings at `open`, written only when asked and checked for SDK
   normalization after a write; the tolerance is 0.4 of a frame period, and
   `OrbbecRig`, its start order and the public `TriggerGrouper` go.
-- [**2026-10-08**](#2026-10-08--a-pull-request-from-a-fork-gets-no-ci-and-the-runner-tooling-is-the-cores) —
-  A pull request from a fork gets no CI, hosted jobs included; lint runs the
-  core's guard checker. The runner tooling is the core's.
+- [**2026-10-10**](#2026-10-10--only-the-owner-triggers-ci-and-the-runner-tooling-is-the-cores) —
+  Only the owner triggers CI, by the repository's Actions policy; no job
+  carries a fork guard. The runner tooling is the core's.
 
 ## Decision record
 
@@ -10920,20 +10920,17 @@ field, and the camera kept its setting. Restarted three times with MJPEG,
 wait. One camera fused at 30 fps with and without `--host-clock`. Not run:
 `apply_sync`'s write (it rewrites flash) and `rig_viewer`.
 
-### 2026-10-08 — A pull request from a fork gets no CI, and the runner tooling is the core's.
+### 2026-10-10 — Only the owner triggers CI, and the runner tooling is the core's.
 
 The core's decision
-[Fork pull requests get no self-hosted CI](https://github.com/taojin-6/volumetric_kit_core/blob/main/DECISIONS.md#fork-pull-requests-get-no-self-hosted-ci)
-holds here, with its rationale. The runner tooling is the core's
-`tools/runners`; recon keeps no copy.
-
-- **No job runs for a fork's pull request, the hosted ones included.**
-- **lint's `fork guards` job runs the core's `tools/ci/check_fork_guards.py`**
-  on `.github/workflows`, from a pinned checkout of the core.
-- **A fork's pull request can edit the guards out**, so the repository's
-  approval setting for fork pull requests, "Require approval for all external
-  contributors", is the first gate, and the core's runner hook is the
-  backstop.
+[Only the owner triggers CI](https://github.com/taojin-6/volumetric_kit_core/blob/main/DECISIONS.md#only-the-owner-triggers-ci)
+holds here, with its rationale and how it was tested: the repository's
+Actions policy lets only the owner's account trigger a workflow, and GitHub
+refuses any other account's run before it creates a job. So no job in
+`ci.yml` carries a fork guard, the build legs' and the viewer's included, and
+the approval of every outside contributor's run stays on as a second gate. A
+fork's change gets CI once a maintainer pushes its branch here. The runner
+tooling is the core's `tools/runners`; recon keeps no copy.
 
 ## Measured lessons
 
