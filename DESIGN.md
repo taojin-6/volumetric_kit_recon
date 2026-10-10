@@ -1178,6 +1178,10 @@ buffer CUDA imported (`core`'s `create_exported_buffer`, on a device that
 `exports_memory`), handed out as NV12 in `YuvImage::device` with
 `kQueueFamilyExternal`; VideoToolbox's two IOSurface planes as images in
 `YuvImage::image`, through `sensor/apple`'s `PixelBufferImporter`.
+Each CUDA picture slot owns its import and mapping as soon as acquired.
+A failed mapping or host allocation releases them in the current decoder
+context, before releasing the backing Vulkan buffer; moving or erasing a
+ring slot transfers or releases that ownership exactly once.
 `Options::unlabelled_color` stands in for a stream that names no matrix,
 and `reset()` restarts a stream after lost access units. A stream
 the hardware cannot decode or hand out -- not 8-bit 4:2:0, or on
