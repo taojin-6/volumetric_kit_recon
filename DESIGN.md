@@ -777,6 +777,14 @@ bracket, so no `gpu_ms` measures the markers around the work.
 
 ### volume
 
+`VoxelGridParams::validate` rejects non-finite metric fields and block extents,
+and bounds `ceil(trunc_dist / (block_size * voxel_size))` to 127. This is the
+representation limit of the depth allocator's `uint32` work-item count:
+256 distinct tile centres times `(2 * 127 + 1)^3` is 4,244,832,000, whereas
+radius 128 overflows. It also keeps the shared host/GLSL radius conversion
+within its integer range. Validation happens before creating a map; the
+coordinate helpers retain that precondition.
+
 `VoxelHashMap` drives init / allocate-from-coords, -depth,
 -triangles / remove / compact / compact-in-frusta / resize as GLSL
 kernels

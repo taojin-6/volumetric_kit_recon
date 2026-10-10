@@ -463,6 +463,10 @@ entries relevant to your task; later amendments supersede earlier rules.
   Apple's pixel-buffer importer is public: `PixelBufferImporter` in
   `recon_sensor_apple`, on every Apple build, iOS included, with no FFmpeg.
 
+- [**2026-10-10**](#2026-10-10--grid-validation-bounds-the-truncation-band-by-the-depth-kernels-integer-representation) —
+  Grid validation rejects non-finite metrics and bounds the truncation band by
+  the depth kernel's integer representation.
+
 ## Decision record
 
 ### 2026-06-21 — Single Vulkan path (MoltenVK on Apple), like gfx.
@@ -11677,6 +11681,31 @@ remain intact. The no-FFmpeg importer build and test pass under the same
 validation policy, and its implementation and public header compile for
 arm64 iOS 16 with the iOS 27 SDK. The CI compile check keeps exceptions
 enabled. No camera, iPhone or interactive viewer was exercised.
+
+### 2026-10-10 — Grid validation bounds the truncation band by the depth kernel's integer representation.
+
+`VoxelGridParams::validate` is the configuration boundary for the coordinate
+and hash helpers. Positive infinity previously passed its positivity checks:
+an infinite `trunc_dist` or a finite-input division overflow then reached
+`int(ceil(trunc_dist / block_extent))`, undefined on the host. An infinite
+`voxel_size`, or overflow in `block_size * voxel_size`, instead collapsed the
+radius to its one-block minimum.
+
+Both metric fields and the derived block extent must now be finite. The
+float ratio, evaluated in the same order as `truncation_blocks` and GLSL
+`truncationBlocks`, must be at most 127 before either helper casts it to int.
+That bound follows the depth allocator's existing arithmetic:
+`uint items = s_centres * side * side * side`, where
+`side = 2 * tb + 1` and a 16 x 16 tile has at most 256 distinct centres.
+Radius 127 yields 4,244,832,000 items and leaves room for the final lane
+increment; radius 128 yields 4,345,495,808, beyond `UINT32_MAX`. This is a
+representation limit, not a runtime or memory-budget policy. Changing that
+enumeration requires revisiting this bound.
+
+Host tests reject infinities, both finite-input overflow paths, and the first
+float above radius 127, while accepting 127 itself. A small shader runs the
+real shared radius helper and the depth count expression at that boundary,
+checked against host math in 64 bits; it does not enumerate the candidate band.
 
 ## Measured lessons
 
