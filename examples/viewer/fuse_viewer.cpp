@@ -571,7 +571,11 @@ int run(GLFWwindow* window, const Options& opt) {
     return 1;
   }
   vol::VoxelBlockGrid volume = std::move(grid_result).value();
-  auto fuser_result = rtsdf::Fuser::create(rdevice, rallocator);
+  rtsdf::FuserConfig fuser_config;
+  fuser_config.max_grows_per_set = 2;
+  // Keep the live viewer updating at capacity.
+  fuser_config.allow_partial = true;
+  auto fuser_result = rtsdf::Fuser::create(rdevice, rallocator, fuser_config);
   if (!fuser_result) {
     std::fprintf(stderr, "fuser: %s\n",
                  fuser_result.status().message().c_str());

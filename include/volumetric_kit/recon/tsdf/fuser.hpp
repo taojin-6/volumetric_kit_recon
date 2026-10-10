@@ -4,9 +4,7 @@
 #pragma once
 
 /// @file tsdf/fuser.hpp
-/// @brief A set of frames fused into a grid: the grid grown ahead of need,
-///        every frame's truncation band allocated, the grid grown again if
-///        that ran out of room, and the frames integrated.
+/// @brief Grow, allocate a set's truncation bands, then integrate its frames.
 
 #include <cstdint>
 #include <vector>
@@ -16,7 +14,6 @@
 #include "volumetric_kit/recon/core/fwd.hpp"
 #include "volumetric_kit/recon/tsdf/export.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
-#include "volumetric_kit/recon/volume/grid_growth.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
 
@@ -24,79 +21,56 @@ namespace volumetric_kit::recon::tsdf {
 
 /// @brief Options for @ref Fuser::create.
 struct FuserConfig {
-  /// When the grid grows: the ceiling, the memory, and whether at all.
-  volume::GrowthPolicy growth;
-  /// The most times one set may grow the grid, ahead of need and for a
-  /// capacity limit together; 0 never grows. Each grow for a capacity limit
-  /// is followed by one more allocation, so a set allocates at most this
-  /// many times plus one. Lost bucket-lock races are not retried here: the
-  /// allocation re-dispatches while they resolve, and what is left is asked
-  /// for again by the next set.
-  int max_grows_per_set = 2;
-  /// The occupancy past which a set allocates nothing new, so a grid that
-  /// cannot grow stops feeding the allocator's overflow scan; the set's
-  /// frames still fuse into the blocks already there. 1 (the default)
-  /// never stops. With growth on it is at least
-  /// @ref volume::VoxelHashMap::kGrowThreshold: below it, a set would stop
-  /// allocating before a grow ahead is due, and the grid would never grow.
-  float refuse_allocation_above = 1.0f;
+  /// Maximum successful grows per set, including grow-ahead. Zero fixes
+  /// capacity. Four lets the default complete an initial band needing four
+  /// doublings, as the former example allocation loop did.
+  int max_grows_per_set = 4;
+  /// Opt into integrating an incomplete band after allocation retries or
+  /// capacity are exhausted. Intended for live viewers; offline callers
+  /// default to returning an error before integration. Partial mode leaves
+  /// residual lock contention to the next set and backs off a failed grow
+  /// for 60 map ticks; it still reports other errors.
+  bool allow_partial = false;
 };
 
-/// @brief What @ref Fuser::fuse did to the grid, for a caller to report.
+/// @brief The result of a successful @ref Fuser::fuse.
 struct FuseReport {
-  /// The grow ahead of need, before allocating; `NotDue` when
-  /// @ref FuserConfig::max_grows_per_set is 0.
-  volume::GrowthEvent ahead;
-  /// The last grow for a capacity limit; `NotDue` when the set needed none
-  /// or had spent @ref FuserConfig::max_grows_per_set.
-  volume::GrowthEvent grow;
-  /// How many times the set grew the grid.
+  /// Successful grows, and the bucket counts before and after the set.
   int grows = 0;
-  /// The grid was past @ref FuserConfig::refuse_allocation_above, so the set
-  /// allocated nothing new.
-  bool allocation_refused = false;
-  /// Blocks the set's allocation could not place, and why
-  /// (@ref failures). The set fused into the rest. A capacity limit is left
-  /// when the grid could not grow (@ref grow says why) or the set spent
-  /// @ref FuserConfig::max_grows_per_set; lost lock races, when the
-  /// allocation's own rounds ran out.
+  std::int32_t from_buckets = 0;
+  std::int32_t to_buckets = 0;
+  /// Failed allocation requests, which may name the same block more than
+  /// once. Nonzero only with @ref FuserConfig::allow_partial.
   std::uint32_t dropped = 0;
   /// The last allocation's failures by reason.
   volume::AllocFailures failures;
+  /// A capacity or memory error that prevented growth. The band may still
+  /// fit without growing; otherwise only partial mode can return this report.
+  core::Status growth_error;
   /// The map's occupancy after the set.
   float load_factor = 0.0f;
 };
 
-/// @brief Fuses sets of frames into a @ref volume::VoxelBlockGrid: the one
-///        fusion driver, so every caller grows, allocates and integrates
-///        alike.
+/// @brief The shared fusion sequence: grow ahead, allocate, grow for capacity
+///        if needed, then integrate the set.
 ///
-/// A set is one @ref fuse: the grid grows ahead of need
-/// (@ref volume::GridGrowth::grow_ahead); every frame's band is allocated in
-/// one call (@ref volume::VoxelHashMap::allocate_from_depth); if that hits a
-/// capacity limit, the grid grows (@ref volume::GridGrowth::grow) and the set
-/// allocates again, up to @ref FuserConfig::max_grows_per_set; then every
-/// frame is integrated in one call (@ref TsdfIntegrator::integrate). Blocks
-/// that could not be placed are reported, not an error: the set fuses into
-/// the rest, as a scan that outgrew its memory keeps refining what it has.
+/// By default every frame's band must be allocated before integration. A
+/// failed call can grow the grid or add zeroed blocks but does not integrate
+/// an incomplete band. Pure lock contention is retried up to four times
+/// beyond the allocation tier's own rounds. Live callers can explicitly
+/// accept partial coverage through @ref FuserConfig::allow_partial.
 ///
-/// It remembers a refused grow for the grid it fuses (@ref GridGrowth), so
-/// one fuser fuses one grid.
-///
-/// @warning The `Device` and `Allocator` passed to @ref create must outlive
-///          this object; its integrator stores references to them.
+/// Partial mode remembers failed growth for one grid; use one fuser per grid.
+/// @warning The `Device` and `Allocator` must outlive this object.
 class VR_TSDF_API Fuser {
  public:
-  /// @brief Build the integrator and check @p config.
-  /// @param device     The compute device (must outlive this object).
-  /// @param allocator  The allocator (must outlive this object).
-  /// @param config     The growth policy and the per-set bounds.
-  /// @return The fuser; `Status::Code::InvalidArgument` for a negative
-  ///         @ref FuserConfig::max_grows_per_set or
-  ///         @ref volume::GrowthPolicy::max_buckets, or a
-  ///         @ref FuserConfig::refuse_allocation_above outside (0, 1] or,
-  ///         with growth on, below @ref volume::VoxelHashMap::kGrowThreshold;
-  ///         or what @ref TsdfIntegrator::create returns.
+  /// @brief Create the integrator and validate @p config.
+  /// @param device     Compute device; must outlive this object.
+  /// @param allocator  Its allocator; must outlive this object.
+  /// @param config     Growth bound and explicit partial-coverage choice.
+  /// @return The fuser; `Status::Code::InvalidArgument` for a negative bound;
+  ///         `Status::Code::OutOfMemory` on host allocation failure; or
+  ///         @ref TsdfIntegrator::create's error.
   static core::Result<Fuser> create(core::Device& device,
                                     core::Allocator& allocator,
                                     FuserConfig config = {});
@@ -107,17 +81,15 @@ class VR_TSDF_API Fuser {
   Fuser(const Fuser&) = delete;
   Fuser& operator=(const Fuser&) = delete;
 
-  /// @brief Fuse a set of frames into @p grid.
-  /// @param grid        The grid, as @ref TsdfIntegrator::integrate takes it.
-  /// @param frames      Each camera's frame; one is `{frame}`.
+  /// @brief Fuse one set of frames into @p grid.
+  /// @param grid        The grid accepted by @ref TsdfIntegrator::integrate.
+  /// @param frames      Each camera's input; an empty set does nothing.
   /// @param max_weight  As @ref TsdfIntegrator::integrate.
   /// @param mode        As @ref TsdfIntegrator::integrate.
-  /// @param metrics     Optional rows: `"resize"` around a grow, beside the
-  ///                    allocation's `"allocate"` and the integration's
-  ///                    `"integrate"`.
-  /// @return What the set did to the grid; `Status::Code::InvalidArgument`
-  ///         for a moved-from fuser; or the first error of the grow, the
-  ///         allocation or the integration.
+  /// @param metrics     Optional `"resize"`, `"allocate"`, `"integrate"` rows.
+  /// @return A report; `Status::Code::OutOfMemory` for an incomplete band in
+  ///         strict mode or host allocation failure; a resize's backend OOM
+  ///         when it prevents completion; or another tier's error.
   core::Result<FuseReport> fuse(volume::VoxelBlockGrid& grid,
                                 const std::vector<FrameInput>& frames,
                                 float max_weight = 5.0f,
@@ -126,7 +98,7 @@ class VR_TSDF_API Fuser {
 
   /// @return The configuration this was created with.
   const FuserConfig& config() const noexcept { return config_; }
-  /// @return `true` if this owns a live integrator (`false` when moved-from).
+  /// @return Whether this owns a live integrator; false when moved-from.
   bool valid() const noexcept { return integrator_.valid(); }
 
  private:
@@ -134,7 +106,8 @@ class VR_TSDF_API Fuser {
 
   TsdfIntegrator integrator_;
   FuserConfig config_;
-  volume::GridGrowth growth_;
+  std::int32_t refused_at_ = 0;
+  std::uint32_t refused_tick_ = 0;
 };
 
 }  // namespace volumetric_kit::recon::tsdf

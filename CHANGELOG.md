@@ -8,20 +8,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- `tsdf`: **`Fuser`** (`fuser.hpp`), the fusion driver every caller shares:
-  a set of `FrameInput`s fused by growing the grid ahead of need, allocating
-  every band in one call, growing again for a capacity limit (at most
-  `FuserConfig::max_grows_per_set` grows a set) and integrating, with a
-  `FuseReport` of what the set did and what it left out. A set past
-  `refuse_allocation_above` allocates nothing new. Test: `recon_tsdf_fuser`.
-- `volume`: **`GridGrowth`** (`grid_growth.hpp`), every grow of a grid by a
-  `GrowthPolicy` (growth on or off, a bucket ceiling, a `headroom`
-  callback): ahead of need past `kGrowThreshold`, or for a capacity limit; a
-  known headroom too small for the grown grid, 0 included, declines it, and
-  a decline or a resize that ran out of memory is asked again after
-  `retry_after` ticks. **`VoxelBlockGrid::max_num_buckets`** and
-  **`bytes_at`**: the largest size a resize accepts, and the bytes the grid
-  takes at a size. Test: `recon_volume_grid_growth`.
+- `tsdf`: **`Fuser`** (`fuser.hpp`), the shared grow/allocate/integrate
+  sequence. Grows ahead at the map's threshold and defaults to requiring a
+  complete band before integration. `FuserConfig::allow_partial` explicitly
+  opts live callers into partial coverage, with private growth backoff.
+  `FuseReport` reports growth and allocation failures. Tests:
+  `recon_tsdf_fuser`, `recon_tsdf_fuser_oom`.
+- `volume`: **`grow_grid`** (`grid_growth.hpp`), a stateless doubling or
+  grow-to-minimum helper; **`VoxelBlockGrid::max_num_buckets`** and
+  **`bytes_at`**, the capacity ceiling and grid storage footprint. The latter
+  excludes resize scratch and allocator overhead. Host OOM during rehash
+  rolls the map back before returning an error. Test: `recon_volume_grid_growth`.
 - `camera`: **the camera vocabulary**, a tier of its own
   (`volumetric_kit::recon_camera`) that links the core's base tier and GLM,
   and no Vulkan, so a driver uses it without a GPU API:
@@ -99,11 +96,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - CI: **only the owner triggers CI.** The repository's Actions policy lets no
   other account trigger a workflow, so a fork's pull request never reaches the
   self-hosted runners, and the build and viewer jobs' fork guards go.
-- examples: **every example fuses through `tsdf::Fuser`**, so the live
-  rig grows its map ahead of need rather than after a failed allocation,
-  and a set the map cannot hold fuses what fits and says what it left out.
-  `allocate_band` goes from `examples/common/fuse_frame.hpp`, and
-  `codec_mesh` and the codec player grow through `GridGrowth::grow`.
+- examples: **every example fuses through `tsdf::Fuser`**, keeping offline
+  complete-or-error behavior. `fuse_viewer` and `rig_viewer` explicitly accept
+  partial coverage. `allocate_band` goes from `examples/common/fuse_frame.hpp`;
+  `codec_mesh` and the codec player share `volume::grow_grid`.
 - build: **the core pin moves to core #15** (a8b63d1), which adds
   `CommandBatch::submit_async`, for the pipelined stages to come; recon's
   calls are unchanged. gfx, pinned at core #13, builds against it.

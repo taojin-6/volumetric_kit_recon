@@ -8,7 +8,7 @@
 // examples report. The player-side policy lives here -- when to grow the grid
 // for a frame that outgrows it, retrying lock contention -- because it is a
 // player's, not the decoder's (the Decoder refuses rather than grows); the
-// grow itself is the volume tier's (volume::GridGrowth).
+// grow itself is the volume tier's (volume::grow_grid).
 
 #include <algorithm>
 #include <cstdint>
@@ -78,7 +78,6 @@ inline vkc::Status decode_growing(vr::codec::Decoder& dec, const Bytes& frame,
   constexpr int kContendedRetries = 2;
   VKC_ASSIGN(const vr::codec::FrameInfo info,
              vr::codec::read_frame_info(frame.data(), frame.size()));
-  vr::volume::GridGrowth growth;
   int contended = 0;
   for (;;) {
     vkc::StageMetrics attempt;
@@ -89,13 +88,7 @@ inline vkc::Status decode_growing(vr::codec::Decoder& dec, const Bytes& frame,
       return s;
     }
     if (s.domain() == vkc::Status::Code::OutOfMemory) {
-      VKC_ASSIGN(const vr::volume::GrowthEvent grown,
-                 growth.grow(grid, player_buckets(info.block_count)));
-      if (!grown.grew()) {
-        return grown.outcome == vr::volume::GrowthOutcome::ResizeFailed
-                   ? grown.error
-                   : s;
-      }
+      VKC_TRY(vr::volume::grow_grid(grid, player_buckets(info.block_count)));
       ++*grows;
     } else if (s.domain() != vkc::Status::Code::IoError ||
                ++contended > kContendedRetries) {

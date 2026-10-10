@@ -138,14 +138,21 @@ add_test(NAME recon_example_fuse_keyframe
 
 # tsdf fuser: a set fused through tsdf::Fuser, growing on the way, matches the
 # tier calls on a grid that never needed to; it grows ahead before any failure,
-# keeps fusing when the headroom, the policy or the per-set bound stops a grow,
-# and a failed resize neither skips the set nor pins growth. Skips (exit 0) with
-# no device.
+# refuses incomplete bands by default, and keeps fusing only when the caller
+# explicitly allows partial coverage. Skips (exit 0) with no device.
 add_executable(recon_tsdf_fuser_test tsdf_fuser_test.cpp)
 target_link_libraries(recon_tsdf_fuser_test PRIVATE volumetric_kit::recon_tsdf
                                                     Vulkan::Vulkan)
 vr_target_warnings(recon_tsdf_fuser_test)
 add_test(NAME recon_tsdf_fuser COMMAND recon_tsdf_fuser_test)
+
+# Host OOM stays in Status, resize rolls back, and private live backoff expires.
+add_executable(recon_tsdf_fuser_oom_test tsdf_fuser_oom_test.cpp
+                                         test_allocation_failure.cpp)
+target_link_libraries(recon_tsdf_fuser_oom_test
+                      PRIVATE volumetric_kit::recon_tsdf Vulkan::Vulkan)
+vr_target_warnings(recon_tsdf_fuser_oom_test)
+add_test(NAME recon_tsdf_fuser_oom COMMAND recon_tsdf_fuser_oom_test)
 
 # The device-input overloads of allocate_from_depth and integrate: the same
 # frame fused from host arrays and from storage buffers must give the same grid.
@@ -192,10 +199,8 @@ target_link_libraries(recon_volume_resize_test
 vr_target_warnings(recon_volume_resize_test)
 add_test(NAME recon_volume_resize COMMAND recon_volume_resize_test)
 
-# volume grid growth: GridGrowth grows ahead past kGrowThreshold within the
-# ceiling, declines on a known headroom too small (zero included), and lets a
-# refusal -- for memory or a resize that ran out of it -- expire. Skips (exit 0)
-# with no device.
+# Stateless volume growth: doubling, an explicit minimum, content retention, and
+# rejection of invalid or unreachable sizes. Skips (exit 0) with no device.
 add_executable(recon_volume_grid_growth_test volume_grid_growth_test.cpp)
 target_link_libraries(recon_volume_grid_growth_test
                       PRIVATE volumetric_kit::recon_volume Vulkan::Vulkan)

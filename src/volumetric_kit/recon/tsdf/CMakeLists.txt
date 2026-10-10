@@ -6,7 +6,7 @@
 # tsdf/weight attributes via a GLSL compute kernel (classic projective
 # integration first; dynamic follows), and the Fuser that takes a set of frames
 # through the grid's growth, allocation and integration. Depends on recon_volume
-# (VoxelBlockGrid, GridGrowth, DepthCameraParams, the BlockIndex/VoxelGridParams
+# (VoxelBlockGrid, grow_grid, DepthCameraParams, the BlockIndex/VoxelGridParams
 # ABI), per the strict left-to-right tier rule.
 include(GenerateExportHeader)
 include(GNUInstallDirs)

@@ -347,7 +347,7 @@ vkc::Result<Reconstruction> fuse(const Options& opt,
     VKC_ASSIGN(rsensor::DeviceFrame frame, prep.prepare(*polled));
     poses.push_back(frame.depth_camera.cam_to_world);
     // Grow the map ahead of need, allocate the band and integrate depth +
-    // colour, as fuse_replica does; blocks left out are printed.
+    // colour, as fuse_replica does; an incomplete band is an error.
     VKC_TRY(vr_example::fuse_set(fuser, volume, {frame}, 20.0f, nullptr));
     if (opt.texture && fused == keyframe_index && frame.has_color()) {
       keyframe = std::move(frame);

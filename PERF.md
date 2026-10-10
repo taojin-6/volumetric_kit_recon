@@ -364,8 +364,9 @@ With P1, P2 and P5 in place, three host decisions still split a set:
   indirect off the device's count (`CommandBatch::dispatch_indirect`; the
   `TODO(tsdf)` at `tsdf_integrator.cpp:312`).
 - **Allocation failures, which decide a grow.** `tsdf::Fuser` grows ahead
-  of need at `kGrowThreshold` before the set, and leaves a residue of lost
-  lock races to the next set (2026-10-08). What is left:
+  of need at `kGrowThreshold` before the set. Live viewers explicitly use
+  `allow_partial` and leave residual lock races to the next set; offline
+  callers require complete allocation (2026-10-10). What is left:
   - Read the tally back in the set's one submit, so a grow for a capacity
     limit lands a set late.
   - That one-set lag is for the live viewer only. The examples that write a

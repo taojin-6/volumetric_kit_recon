@@ -27,7 +27,6 @@
 #include "volumetric_kit/recon/sensor/utils/gpu_frame_prep.hpp"
 #include "volumetric_kit/recon/tsdf/fuser.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
-#include "volumetric_kit/recon/volume/grid_growth.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_grid.hpp"
 
@@ -78,38 +77,20 @@ inline vr::tsdf::ColorFrame device_color(const vr::sensor::DeviceFrame& frame) {
 /// @brief Print what a set did to the grid, when it did anything worth a line:
 ///        grew, was refused a grow, or left blocks out.
 inline void print_fuse_report(const vr::tsdf::FuseReport& report) {
-  using vr::volume::GrowthOutcome;
-  for (const vr::volume::GrowthEvent* event : {&report.ahead, &report.grow}) {
-    const char* why = event == &report.ahead ? "ahead" : "for a capacity limit";
-    switch (event->outcome) {
-      case GrowthOutcome::Grew:
-        std::printf("  map grew %s at %.3f load: %d -> %d buckets\n", why,
-                    double(event->load_factor), event->from_buckets,
-                    event->to_buckets);
-        break;
-      case GrowthOutcome::DeclinedForMemory:
-        std::printf(
-            "  map grow to %d buckets declined: needs %.0f MiB, %.0f MiB "
-            "free\n",
-            event->to_buckets, double(event->needed_bytes) / (1 << 20),
-            double(event->headroom_bytes) / (1 << 20));
-        break;
-      case GrowthOutcome::ResizeFailed:
-        std::printf("  map grow to %d buckets failed: %s\n", event->to_buckets,
-                    event->error.message().c_str());
-        break;
-      default:
-        break;
-    }
-  }
-  if (report.allocation_refused) {
-    std::printf("  map at %.3f load: no new blocks this set\n",
+  if (report.grows > 0) {
+    std::printf("  map grew %d time(s): %d -> %d buckets, %.3f load\n",
+                report.grows, report.from_buckets, report.to_buckets,
                 double(report.load_factor));
+  }
+  if (!report.growth_error.ok()) {
+    std::printf("  map grow failed: %s\n",
+                report.growth_error.message().c_str());
   }
   if (report.dropped > 0) {
     const vr::volume::AllocFailures& f = report.failures;
     std::printf(
-        "  %u blocks left out (%u lock, %u chain, %u heap, %u table) after "
+        "  %u allocation requests left out (%u lock, %u chain, %u heap, %u "
+        "table) after "
         "%d grow(s)\n",
         report.dropped, f.lock, f.chain, f.heap, f.table, report.grows);
   }
