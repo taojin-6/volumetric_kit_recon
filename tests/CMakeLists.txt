@@ -690,6 +690,22 @@ if(VR_WITH_FFMPEG)
   vr_target_warnings(recon_sensor_video_jpeg_test)
   add_test(NAME recon_sensor_video_jpeg COMMAND recon_sensor_video_jpeg_test)
 
+  if(VR_WITH_CUDA)
+    # Host-only ownership and allocation-failure checks. The test supplies the
+    # driver table: no CUDA device, driver library, or decoder is opened.
+    add_executable(recon_sensor_video_cuda_slot_test
+                   sensor_video_cuda_slot_test.cpp test_allocation_failure.cpp)
+    target_link_libraries(recon_sensor_video_cuda_slot_test
+                          PRIVATE volumetric_kit::recon_core)
+    target_include_directories(recon_sensor_video_cuda_slot_test
+                               PRIVATE ${_vr_video_src})
+    target_include_directories(recon_sensor_video_cuda_slot_test SYSTEM
+                               PRIVATE ${CUDAToolkit_INCLUDE_DIRS})
+    vr_target_warnings(recon_sensor_video_cuda_slot_test)
+    add_test(NAME recon_sensor_video_cuda_slot
+             COMMAND recon_sensor_video_cuda_slot_test)
+  endif()
+
   if(APPLE)
     # Compile the public JPEG decoder here so the executable's native-call
     # replacements intercept it in both static and shared library builds.
