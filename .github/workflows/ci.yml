@@ -28,7 +28,7 @@ jobs:
       fail-fast: false
       # The Ubuntu legs run on the self-hosted GPU box (label `vk-linux-gpu`),
       # each in an OS-matched container with the GPU passed through (`--gpus
-      # all`), so one host covers 22.04 / 24.04 / 26.04 against the real driver.
+      # all`), so one host covers 24.04 / 26.04 against the real driver.
       # macOS runs natively on a self-hosted Mac (label `mac`) — macOS can't be
       # containerised. _build.yml keys its install steps off `runner.os`, so the
       # macOS leg's Homebrew/MoltenVK path is unchanged and only the Ubuntu legs
@@ -59,15 +59,11 @@ jobs:
       # legs build image / PLY IO without it.
       matrix:
         include:
-          - os: ubuntu-22.04
-            runner: vk-linux-gpu
-            container: '{"image":"ubuntu:22.04","options":"--gpus all","env":{"NVIDIA_DRIVER_CAPABILITIES":"all","CMAKE_BUILD_PARALLEL_LEVEL":"4","CTEST_PARALLEL_LEVEL":"4"}}'
-            build_types: '["Release"]'
-            assimp: true
           - os: ubuntu-24.04
             runner: vk-linux-gpu
             container: '{"image":"ubuntu:24.04","options":"--gpus all","env":{"NVIDIA_DRIVER_CAPABILITIES":"all","CMAKE_BUILD_PARALLEL_LEVEL":"4","CTEST_PARALLEL_LEVEL":"4"}}'
             build_types: '["Release"]'
+            assimp: true
             orbbec_sdk: true
             ffmpeg: true
             cuda: true

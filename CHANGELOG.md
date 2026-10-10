@@ -198,6 +198,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   a rig, each secondary's mean and worst skew to the primary. `rig_viewer`'s
   panel shows the array's counters, frames in no set among them, and loses
   its `lost` column, which `SensorStats` counts as failed.
+- CI: **the Ubuntu 22.04 leg goes.** The Linux legs are Ubuntu 24.04 and
+  26.04, and the optional Assimp loader now builds on the 24.04 leg. No leg
+  builds on the core's 1.3.204 Vulkan-header floor; the oldest headers in CI
+  are 24.04's 1.3.275.
 
 ### Fixed
 
