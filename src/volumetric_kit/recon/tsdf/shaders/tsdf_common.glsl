@@ -60,10 +60,15 @@ struct ColorCameraParams {
 
 // Project a world point into a pinhole camera given its intrinsics + rigid
 // cam_to_world pose. Returns true and sets `px` (pixel coords, in
-// [0,width)x[0,height)) and `zc` (camera-space depth, metres) when the point is
-// in front of the camera and inside the image; false otherwise. world -> camera
-// is R^T (world - t) -- the rigid inverse, no explicit mat4 inverse. The two
-// project_to_image overloads adapt the depth and color camera structs onto it.
+// [0,width)x[0,height), pixel centres at integer coordinates) and `zc`
+// (camera-space depth, metres) when the point is in front of the camera and
+// inside the image; false otherwise. world -> camera is R^T (world - t) -- the
+// rigid inverse, no explicit mat4 inverse. The two project_to_image overloads
+// adapt the depth and color camera structs onto it.
+//
+// Both tests are negated, so a NaN fails them: every comparison with NaN is
+// false, so the direct forms would accept a NaN depth or pixel and hand the
+// caller an index nothing else bounds.
 bool project_pinhole(mat4 cam_to_world, float fx, float fy, float cx, float cy,
                      uint width, uint height, vec3 world, out vec2 px,
                      out float zc) {
@@ -71,16 +76,23 @@ bool project_pinhole(mat4 cam_to_world, float fx, float fy, float cx, float cy,
   vec3 t = cam_to_world[3].xyz;
   vec3 p_cam = transpose(rot) * (world - t);
   zc = p_cam.z;
-  if (zc <= 0.0) {
-    return false;  // behind the camera
+  if (!(zc > 0.0)) {
+    return false;  // behind the camera, or not a number
   }
   float u = fx * (p_cam.x / zc) + cx;
   float v = fy * (p_cam.y / zc) + cy;
-  if (u < 0.0 || u >= float(width) || v < 0.0 || v >= float(height)) {
-    return false;  // outside the image
+  if (!(u >= 0.0 && u < float(width) && v >= 0.0 && v < float(height))) {
+    return false;  // outside the image, or not a number
   }
   px = vec2(u, v);
   return true;
+}
+
+// The pixel whose centre is nearest `px`, a coordinate project_pinhole
+// accepted: round half up, clamped into the image, since the last half pixel
+// of [0, width) rounds to `width`.
+uvec2 nearest_pixel(vec2 px, uint width, uint height) {
+  return min(uvec2(floor(px + 0.5)), uvec2(width - 1u, height - 1u));
 }
 
 bool project_to_image(DepthCameraParams c, vec3 world, out vec2 px,

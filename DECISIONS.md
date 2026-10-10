@@ -46,7 +46,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   zero gfx changes").
 - [**2026-07-06**](#depth-sampling-convention) —
   Depth sampling is texture-centred (pixel centres at i+0.5), a deliberate
-  ~½-pixel convention.
+  ~½-pixel convention. (Integer-centred since 2026-10-08.)
 - [**2026-07-07**](#2026-07-07--the-viewer-example-opts-into-gfx-behind-vr_build_viewer-amends-independent-siblings-gfx-untouched) —
   The viewer example opts into gfx behind `VR_BUILD_VIEWER` (amends
   "Independent siblings; gfx untouched").
@@ -413,6 +413,11 @@ entries relevant to your task; later amendments supersede earlier rules.
   its sync settings at `open`, written only when asked and checked for SDK
   normalization after a write; the tolerance is 0.4 of a frame period, and
   `OrbbecRig`, its start order and the public `TriggerGrouper` go.
+- [**2026-10-08**](#2026-10-08--fusion-samples-at-integer-pixel-centres-and-refuses-a-non-finite-camera-amends-the-2026-07-06-depth-sampling-entry) —
+  Fusion samples at integer pixel centres and refuses a non-finite camera.
+- [**2026-10-08**](#2026-10-08--the-single-camera-texture-pass-needs-the-vertex-to-face-the-depth-camera-and-both-texture-passes-check-a-view-one-way-amends-the-2026-08-11-per-vertex-and-2026-09-28-colour-camera-entries) —
+  The single-camera texture pass needs the vertex to face the depth camera,
+  and both texture passes check a view one way.
 - [**2026-10-10**](#2026-10-10--only-the-owner-triggers-ci-and-the-runner-tooling-is-the-cores) —
   Only the owner triggers CI, by the repository's Actions policy; no job
   carries a fork guard. The runner tooling is the core's.
@@ -619,6 +624,10 @@ decision.)
 
 ### 2026-07-06 — Depth sampling is texture-centred (pixel centres at i+0.5), a deliberate ~½-pixel convention.
 
+*Amended 2026-10-08 (below):* the condition below for revisiting it has
+been met, and the sampler is integer-centred: no −0.5 shift, and the fallback
+and the colour sample rounded.
+
 The `tsdf` bilinear depth sampler
 (`tsdf_integrate.comp::sample_depth`) shifts its 2×2 taps by −0.5 and takes the
 containing pixel (`floor(u)`, `floor(v)`) as its nearest-neighbour fallback —
@@ -672,6 +681,9 @@ single-camera scope and the occlusion sampler below all stand; read "one thread
 per triangle … keeps the triangle only when all three" and "the rest get the
 `(-1,-1)` sentinel" as the shape this decision shipped with and the later entry
 replaced.
+
+*Amended 2026-10-08 (below):* the tsdf sampler is integer-centred too, so
+both samplers follow one convention.
 
 Filling the mesh `Vertex::uv0` (the atlas coordinate the
 2026-07-06 hybrid-colour decision reserved) lands as a **new `texture` tier**
@@ -2901,6 +2913,10 @@ name** — the same fix `SparsePushConstants` already applies to its own adjacen
 same-typed scalars.
 
 ### 2026-08-11 — Projective texturing decides visibility per *vertex*, and a negative `uv0` carries its atlas coordinate rather than discarding it (amends the 2026-07-07 texture-tier decision, and retires the `share_vertices` refusal the 2026-08-04 entry records).
+
+*Amended 2026-10-08 (below):* a vertex is textured only where its normal
+points toward the depth camera, and a view whose depth range admits no sample
+is refused.
 
 `ProjectiveTexturer` refused any mesh built with
 `MarchingCubesConfig::share_vertices`. It decided visibility per **triangle**
@@ -7343,6 +7359,9 @@ silent, and an exported picture buffer was already out of the BAR.
 
 ### 2026-09-28 — Projective texturing takes a colour camera of its own and depth on the device: the depth camera decides what is visible, its map what the colour camera sees, and the colour camera gives the coordinate; a view's device depth and coverage are copied on the device rather than staged.
 
+*Amended 2026-10-08 (below):* per vertex, the normal must point toward both
+cameras, not only put them on one side.
+
 **The rule.** A `TextureView` may carry a `color_camera`, the camera its
 tile's image was taken with; its depth as a `depth_buffer` on the device in
 place of the host `depth` array, exactly one of the two; and a `coverage`, the
@@ -10919,6 +10938,76 @@ field, and the camera kept its setting. Restarted three times with MJPEG,
 1–3 of the first 31 sets missed a camera, so the start needs no settling
 wait. One camera fused at 30 fps with and without `--host-clock`. Not run:
 `apply_sync`'s write (it rewrites flash) and `rig_viewer`.
+
+### 2026-10-08 — Fusion samples at integer pixel centres and refuses a non-finite camera (amends the 2026-07-06 depth-sampling entry).
+
+**The rule.**
+- **Integer pixel centres.** `tsdf_integrate.comp` takes its bilinear taps
+  from `floor(u)`, `floor(v)`, with no half-pixel shift, and its
+  nearest-pixel fallback and colour sample at the rounded pixel, clamped into
+  the image (`nearest_pixel`, `tsdf_common.glsl`). The image bound stays
+  `[0, W) × [0, H)`, on which the fusion cull's containment argument
+  (2026-10-06) rests, so its last half pixel reads the edge pixel.
+- **A non-finite camera is refused.** `TsdfIntegrator::integrate` refuses a
+  depth or colour camera with a NaN or infinite intrinsic, depth bound or
+  pose entry among its O(1) checks, before any work; a list with one such
+  frame fuses none. The kernel's projection compares negated, so a NaN pixel
+  fails its bounds too.
+
+**Why.**
+- The 2026-07-06 entry kept the half-pixel offset until the depth intrinsics
+  were integer-centred. Every frame now is: `GpuFramePrep` writes pixel `i`
+  from the ray through `i` (2026-09-28) and the Replica source goes through
+  it (2026-10-07), the camera tier declares the convention, and allocation
+  and texturing already sampled that way. Fusion alone moved each camera's
+  surface half a pixel along that camera's image axes: on a slanted surface
+  a depth error of the slope times the shift, in a different direction for
+  each camera of a rig.
+- A NaN in a pose or an intrinsic projected every voxel to a NaN pixel, which
+  the ordered bounds test passed, and the cull fell back to the whole active
+  set.
+
+**Verified.** Apple M5 Max, macOS, Release with warnings as errors, Orbbec,
+FFmpeg and the viewer: the 57 tests pass. A plane tilted across both image
+axes, imaged at a 160 × 120 pinhole camera's pixel centres with an
+off-centre principal point and fused from `GpuFramePrep` at 1 cm voxels,
+crosses zero within 0.06 mm of the plane along 14 194 voxel columns; with
+the half-pixel shift, within 5.5 mm (`recon_sensor_gpu_frame_prep`). Each of
+these mutations fails a test: the old taps and fallback; the colour sample
+floored, or rounded without the clamp; no finiteness check (NaN and
+infinite poses, focal lengths, principal points and depth bounds, each
+refused with the tick unchanged); and the projection's ordered compares,
+which `recon_tsdf_integrate` runs alone and which pass a NaN point, focal
+length or pose entry, and a finite point and translation a float range
+apart. Not run: `fuse_orbbec` and `rig_viewer` on the rig.
+
+### 2026-10-08 — The single-camera texture pass needs the vertex to face the depth camera, and both texture passes check a view one way (amends the 2026-08-11 per-vertex and 2026-09-28 colour-camera entries).
+
+**The rule.**
+- **The vertex faces both cameras.** The single-camera pass textures a
+  vertex only where its normal points toward the depth camera and the colour
+  camera, where the two signs only had to agree; a zero normal still passes.
+  It is the per-vertex form of the several-view pass's facing test.
+- **One view check:** one depth, a depth map, a depth range with
+  `min_depth < max_depth`, and an image. Each pass then checks the depth and
+  coverage buffers as it uses them, bound in place or copied. The
+  single-camera overloads that take a depth pointer build a `TextureView`
+  and go through the same path.
+
+**Why.**
+- With a registered image, or both cameras behind the surface, the two signs
+  agree. The back of a sheet thinner than the occlusion threshold lies
+  within it of the front the depth camera measured, so it took the front's
+  image: the case the several-view pass's facing test exists for.
+- Only the several-view pass refused an empty depth range, under which the
+  single-camera pass carried every vertex and returned OK.
+
+**Verified.** On the entry above's build, the 57 tests pass, the texture
+tests with no message from the Khronos validation layer. Each of these
+mutations fails `recon_texture_projective`: the agreeing-signs test (a 1 cm
+sheet's back textured, registered and with a colour camera 5 cm aside); the
+facing test without its zero-normal exemption; and the single-camera pass
+without the depth-range check (both bounds zero, and inverted).
 
 ### 2026-10-10 — Only the owner triggers CI, and the runner tooling is the core's.
 

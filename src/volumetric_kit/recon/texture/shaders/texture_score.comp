@@ -48,10 +48,10 @@
 // colour camera's pixel, so the three outcomes above are read off it: behind
 // it is the sentinel, and a vertex in front of it carries its coordinate
 // unless it lands inside the image, on a pixel the image recorded
-// (pc.has_coverage), both cameras see the same side of the surface there, the
-// depth camera sees it unoccluded, and nothing the depth map shows stands
-// between it and the colour camera (color_sees). Cheapest first, the depth
-// reads last.
+// (pc.has_coverage), both cameras see the side of the surface its normal
+// leaves by, the depth camera sees it unoccluded, and nothing the depth map
+// shows stands between it and the colour camera (color_sees). Cheapest first,
+// the depth reads last.
 //
 // Ported from the prior engine's scoreTrianglesKernel + writeTriangleUVsKernel
 // (projective_mapping.cu / projective_texturing.metal): the per-vertex
@@ -117,11 +117,13 @@ vec2 pixel_to_atlas_uv(vec2 px, vec2 image) {
 // Whether the vertex at `position`, colour pixel `cpx` of a `size` image, is
 // textured: the class note's tests, cheapest first.
 //
-// The side test is the per-vertex form of texture_multiview.comp's facing
-// test for the colour camera: across the surface's plane from the depth
-// camera, a colour camera images the other side of what the depth camera
-// proved it sees. A zero normal leaves both sides equal and so passes; a
-// registered image's two cameras are one, which always does.
+// The facing test is the per-vertex form of texture_multiview.comp's: both
+// cameras must see the side the normal leaves by. A depth camera behind it
+// sees the back of a sheet thinner than the occlusion threshold within that
+// threshold of the front it measured, and would give the back the front's
+// image; a colour camera behind it images the other side of what the depth
+// camera proved it sees. Negated, so a NaN normal fails; a zero normal has no
+// side and passes.
 bool seen(vec3 position, vec3 normal, vec2 cpx, vec2 size) {
   if (!inside_image(cpx, size)) {
     return false;
@@ -132,8 +134,8 @@ bool seen(vec3 position, vec3 normal, vec2 cpx, vec2 size) {
   }
   vec3 depth_eye = cam.cam_to_world[3].xyz;
   vec3 color_eye = color.cam_to_world[3].xyz;
-  if ((dot(normal, depth_eye - position) > 0.0) !=
-      (dot(normal, color_eye - position) > 0.0)) {
+  if (normal != vec3(0.0) && !(dot(normal, depth_eye - position) > 0.0 &&
+                               dot(normal, color_eye - position) > 0.0)) {
     return false;
   }
   vec3 q = world_to_camera(cam, position);
