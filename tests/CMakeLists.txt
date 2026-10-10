@@ -325,6 +325,8 @@ target_link_libraries(
   PRIVATE volumetric_kit::recon_volume Vulkan::Vulkan
           volumetric_kit::core_test_policy)
 vr_target_warnings(recon_volume_allocate_test)
+vr_embed_shaders(recon_volume_allocate_test SHADERS
+                 shaders/grid_truncation.comp)
 add_test(NAME recon_volume_allocate COMMAND recon_volume_allocate_test)
 
 # volume triangle-mesh allocation: allocate from a small mesh, then verify on
