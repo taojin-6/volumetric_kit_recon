@@ -20,20 +20,13 @@
 #include "fusion_flags.hpp"
 #include "grid_layout.hpp"
 #include "replica_flags.hpp"
+#include "test_check.hpp"
 #if VR_TEST_ORBBEC_FLAGS
 #include "orbbec_flags.hpp"
 #endif
 
 namespace vkc = volumetric_kit::core;
 namespace codec = volumetric_kit::recon::codec;
-
-#define CHECK(cond)                                                        \
-  do {                                                                     \
-    if (!(cond)) {                                                         \
-      std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
-      return 1;                                                            \
-    }                                                                      \
-  } while (0)
 
 namespace {
 

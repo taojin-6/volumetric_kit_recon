@@ -24,6 +24,7 @@
 #include <cstring>
 #include <vector>
 
+#include "test_check.hpp"
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/buffer.hpp"
@@ -42,14 +43,6 @@ namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
 namespace vol = volumetric_kit::recon::volume;
 namespace tsdf = volumetric_kit::recon::tsdf;
-
-#define CHECK(cond)                                                        \
-  do {                                                                     \
-    if (!(cond)) {                                                         \
-      std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
-      return 1;                                                            \
-    }                                                                      \
-  } while (0)
 
 namespace {
 
@@ -104,46 +97,22 @@ float bits_float(std::uint32_t bits) {
 // GPU's.
 int check_same(const vr_test::Gpu& ctx, vol::VoxelBlockGrid& a,
                vol::VoxelBlockGrid& b, bool exact) {
-  auto ba = vr_test::blocks_of(a);
-  auto bb = vr_test::blocks_of(b);
-  CHECK(ba.ok() && bb.ok());
-  CHECK(!ba.value().empty());
-  CHECK(ba.value().size() == bb.value().size());
-  const auto view = [&](vol::VoxelBlockGrid& g, const char* name) {
-    return vr_test::read_attribute<std::uint32_t>(ctx.device, ctx.allocator, g,
-                                                  name)
-        .value();
-  };
-  const std::vector<std::uint32_t> wa = view(a, "weight");
-  const std::vector<std::uint32_t> wb = view(b, "weight");
-  const std::vector<std::uint32_t> ta = view(a, "tsdf");
-  const std::vector<std::uint32_t> tb = view(b, "tsdf");
-  const std::vector<std::uint32_t> ca = view(a, "color");
-  const std::vector<std::uint32_t> cb = view(b, "color");
-  const std::size_t voxels = grid_params().voxels_per_block;
   std::size_t observed = 0;
-  for (const auto& [coord, ptr] : ba.value()) {
-    const auto other = bb.value().find(coord);
-    CHECK(other != bb.value().end());
-    for (std::size_t k = 0; k < voxels; ++k) {
-      const std::size_t ia = static_cast<std::size_t>(ptr) + k;
-      const std::size_t ib = static_cast<std::size_t>(other->second) + k;
-      if (exact) {
-        CHECK(wa[ia] == wb[ib]);
-        CHECK(ta[ia] == tb[ib]);
-        CHECK(ca[ia] == cb[ib]);
-      } else {
-        CHECK((wa[ia] == 0) == (wb[ib] == 0));
-        CHECK((ca[ia] == 0) == (cb[ib] == 0));
-        CHECK(std::fabs(bits_float(wa[ia]) - bits_float(wb[ib])) <=
-              1e-5f * bits_float(wa[ia]));
-        CHECK(std::fabs(bits_float(ta[ia]) - bits_float(tb[ib])) <= 1e-6f);
-      }
-      observed += wa[ia] != 0 ? 1 : 0;
-    }
-  }
-  std::printf("  %zu blocks, %zu voxels observed\n", ba.value().size(),
-              observed);
+  std::size_t blocks = 0;
+  CHECK(vr_test::compare_grids(
+      ctx, a, b,
+      [exact](vr_test::VoxelWords x, vr_test::VoxelWords y) {
+        if (exact) {
+          return x.weight == y.weight && x.tsdf == y.tsdf && x.color == y.color;
+        }
+        return (x.weight == 0) == (y.weight == 0) &&
+               (x.color == 0) == (y.color == 0) &&
+               std::fabs(bits_float(x.weight) - bits_float(y.weight)) <=
+                   1e-5f * bits_float(x.weight) &&
+               std::fabs(bits_float(x.tsdf) - bits_float(y.tsdf)) <= 1e-6f;
+      },
+      &observed, &blocks));
+  std::printf("  %zu blocks, %zu voxels observed\n", blocks, observed);
   CHECK(observed > 10000);
   return 0;
 }

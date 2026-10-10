@@ -1157,15 +1157,21 @@ shader selects atlas-vs-vertex-color per triangle across one surface, so an
 approximation shows as a seam exactly where texturing stops. Storage stays
 `uint32` (convert in the shader) and is measured; the escalation trigger is
 **not** banding but the running mean *latching* — re-quantized to 8 bits it
-stops moving once the per-frame delta falls under half a code. **Measured**
-(`tests/core_color_space_test.cpp`) at the default `max_weight = 5` and a 2 m
-observation: the mean stops **~10 codes short, uniformly across the range**
+stops moving once the per-frame delta falls under half a code. A historical
+**host arithmetic experiment**, with `max_weight = 5` and a 2 m observation
+(weight 0.25), repeatedly unpacked the current and target codes to linear,
+averaged them with weights 5 and 0.25, and packed the result back to sRGB: the
+mean stops **~10 codes short, uniformly across the range**
 (0→64 settles at 55, 0→255 at 245), and a gap narrower than ~10 codes never
 moves the voxel at all — the residual is range-independent because the sRGB
 curve turns a fixed fraction of the linear gap into a roughly fixed number of
 codes. So fused colour accuracy is ceilinged at ~4%, a *convergence* limit
 rather than a precision one, which is precisely why banding was the wrong
-thing to watch. Authoritative detail: DESIGN.md → "Color space".
+thing to watch. The 2026-10-10 test cleanup keeps this experiment here: it
+models the arithmetic and does not exercise the production integrator, so it
+cannot detect a change to fusion or storage. The color-space tests retain the
+actual conversion and host/shader parity checks. Authoritative detail:
+DESIGN.md → "Color space".
 
 ### 2026-08-03 — A buffer names the *families* that will read it, and the dispatch barrier widens only as far as its queue family may.
 
@@ -9772,7 +9778,9 @@ an unrelated class that collides with the using-declaration.
   `core_stage_metrics`) are gone. The core's suite covers the same ground,
   having been ported from them. `vulkan_smoke` stays, now creating a device
   from `device_requirements()`: that recon's statement is one a real driver
-  meets is recon's to test.
+  meets is recon's to test. *Amended 2026-10-10:* the shared GPU test harness
+  now performs that check for every GPU test; the standalone printing-only
+  smoke executable is removed.
 
 **The viewer.** `examples/viewer/shared_device.hpp` was the neutral bootstrap
 of the 2026-08-02 decision; the core's `SharedDevice` is that bootstrap
@@ -10118,7 +10126,10 @@ factory models, every received pair accounted for (H.265: 64 received, 60
 fused, 3 dropped, 1 lost). With `--host-clock` the first frame sat 197-243
 ms behind the host's system clock; without it, 276 ms, the camera keeping
 the clock the run before set. The example does not `drain`: the fake checks
-it, and the array's example will at a camera.
+it, and the array's example will at a camera. *Amended 2026-10-10:* the fake
+queue only tested its own implementation. The sensor vocabulary test now
+checks defaults, return helpers, copied-frame ownership and enum names directly;
+production array and decoder behavior remains covered separately.
 
 ### 2026-10-06 — Several sensors are a `SensorArray`, vendor-neutral: started in their rig's order, grouped by trigger or by sequence number, and posed by the calibration.
 

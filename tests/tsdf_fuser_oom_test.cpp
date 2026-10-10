@@ -15,6 +15,7 @@
 #include "gpu_test.hpp"
 #include "sphere_scene.hpp"
 #include "test_allocation_failure.hpp"
+#include "test_check.hpp"
 #include "volumetric_kit/core/vulkan/instance.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/tsdf/fuser.hpp"
@@ -24,14 +25,6 @@ namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
 namespace vol = vr::volume;
 namespace tsdf = vr::tsdf;
-
-#define CHECK(cond)                                                        \
-  do {                                                                     \
-    if (!(cond)) {                                                         \
-      std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
-      return 1;                                                            \
-    }                                                                      \
-  } while (0)
 
 namespace {
 
