@@ -245,7 +245,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   `SensorArray` since 2026-10-07.
 - [**2026-09-30**](#2026-09-30--a-rigs-cameras-fuse-in-one-batch-each-dispatch-binds-a-descriptor-set-of-its-own-over-the-same-kernel-and-the-set-is-compacted-once) —
   A rig's cameras fuse in one batch: each dispatch binds a descriptor set of
-  its own over the same kernel, and the set is compacted once.
+  its own over the same kernel, and the set is compacted once. A Dynamic set
+  clears with every camera before it fuses with any since 2026-10-08.
 - [**2026-09-30**](#2026-09-30--depth-allocation-works-a-16-x-16-pixel-tile-a-workgroup-and-dilates-each-distinct-block-of-the-tile-once-its-band-shared-out-over-the-lanes) —
   Depth allocation works a 16 x 16 pixel tile a workgroup and dilates each
   distinct block of the tile once, its band shared out over the lanes.
@@ -432,6 +433,9 @@ entries relevant to your task; later amendments supersede earlier rules.
   The fuse-to-render handoff is `mesh::MeshExchange`: one gfx-free library
   type owns the ring's release, a parked take caps the mark, and an empty
   mesh draws nothing.
+- [**2026-10-08**](#2026-10-08--a-dynamic-set-clears-with-every-camera-before-it-fuses-with-any-amends-the-2026-09-30-one-batch-entry) —
+  A Dynamic set clears with every camera before it fuses with any, through a
+  clear kernel of its own; a single frame and Classic are unchanged.
 
 ## Decision record
 
@@ -7899,6 +7903,9 @@ which the counter named and the person at the window confirmed.
 
 *Amended 2026-10-06 (below):* the one compaction is now of the blocks the
 set's frusta reach, their union, rather than of the whole active set.
+*Amended 2026-10-08 (below):* a Dynamic set no longer reproduces its frames
+fused one at a time: every frame's clear runs before any frame's fuse.
+Classic still does.
 
 **The rule.** `VoxelHashMap::allocate_from_depth` and
 `TsdfIntegrator::integrate` take a list of frames (`volume::DepthInput`,
@@ -11240,6 +11247,79 @@ fail, and with the commit under the lock, the commit test does. The viewers
 build, and `recon_example_viewer_atlas` makes an uploaded, a white and a
 bound atlas on a headless device; neither viewer was run against a window
 or the rig.
+
+### 2026-10-08 — A Dynamic set clears with every camera before it fuses with any (amends the 2026-09-30 one-batch entry).
+
+**The rule.** `TsdfIntegrator::integrate` over a Dynamic set of two or more
+frames records every frame's clear, then every frame's fuse: per frame, the
+clear kernel (`tsdf_clear.comp`), then per frame the integrate kernel with
+`fuse_only` set, which leaves free space past the band alone. A single frame,
+and every Classic call, still run one dispatch a frame. The set's cameras act
+as one instant: its grid does not depend on their order but for the running
+average's arithmetic, as under Classic.
+
+**Why.**
+- **Last camera wins.** Fused one after another, a later camera that sees a
+  voxel as free space past the band cleared what an earlier camera had just
+  fused there. That happens wherever cameras disagree by more than the band:
+  a ray that grazes a surface or passes its silhouette to the background, or
+  a ToF return that multipath makes long. Marching cubes drops a cell with
+  an unweighted corner, so the surface had a hole, in one camera order only.
+  `rig_viewer` fuses Dynamic by default.
+- **Two passes, not marks.** Clearing only the voxels no camera of the set
+  places in its band would keep a contested voxel's history. It needs a
+  mark per voxel, written by a pass over every frame before the fuse: the
+  same two passes, plus a bit buffer, its atomics and its reset. And a
+  camera whose faded band behind its surface reaches a stale surface would
+  shield it from a camera that sees through it, which is what Dynamic
+  exists to clear.
+- **What it costs.** A voxel some camera sees past and another fuses holds
+  only the set's observations, its history cleared each set, as it did
+  before with the fusing camera last. Its block is stamped changed each set.
+- **A kernel of its own.** The clear reads a voxel's weight first and skips
+  an unweighted one before projecting it: under Dynamic most of what a set
+  reaches holds no weight. The same test behind a push constant in the
+  integrate kernel cost Classic 0.11 ms a set, though Classic never takes
+  it. So the two kernels share one body,
+  `tsdf_integrate.glsl`, and `VR_TSDF_CLEAR_ONLY` builds the clear one: the
+  integrate kernel is unchanged, and both take one descriptor layout.
+
+**Measured.** Four 640 x 576 depth cameras on a 1.5 m ring round a 0.3 m
+sphere walking a 0.3 m loop in a 4 x 4 m room 3 m high, ray-cast on the host
+and held in device-local buffers; 1 cm voxels, 4 cm band, max weight 20,
+28 300 blocks reached. M5 Max, Release, the median of 120 sets after 30
+warm-up sets, three interleaved runs each:
+
+| integrate, per set | before | after |
+|---|---|---|
+| Dynamic, device | 1.22 ms | 1.92 ms |
+| Dynamic, host | 1.68 ms | 2.43 ms |
+| Classic, device | 1.27 ms | 1.27 ms |
+
+On the way: the clear as a pass of the integrate kernel, Dynamic 2.10 ms and
+Classic 1.38 ms; a clear pass without the weight test, Dynamic 2.39 ms.
+PERF.md's camera-looping kernel would read each voxel once for both halves.
+
+**Verified.** On this build (macOS, Release, warnings as errors, Orbbec,
+FFmpeg and the viewer), the 58 tests pass, and the tsdf tests raise no
+message under the Khronos validation layer with synchronization validation.
+`recon_tsdf_integrate_dynamic_set` fuses a frontal camera and one 2 mm in
+front of its wall, looking along it at a far wall, as a set in both orders,
+twice. The grids agree bit for bit with each other and with the grazing
+camera and then the frontal one fused a call each: the two never fuse one
+voxel and the frontal one clears nothing the grazing one fuses, so that
+order is every clear before every fuse, without the split. Their meshes
+agree vertex for vertex, the far wall meshes, and the frontal camera's wall
+keeps all 19 210 triangles it has fused alone, and its colour.
+`recon_tsdf_integrate_set` now compares a Dynamic set with the same set
+reversed. Each frame's clear and fuse in turn, as before, fails both; fuses
+before clears leave 6 008 triangles on the wall; a split fuse without colour
+loses it; a set that skips a depth-only frame's fuse, or its clear, fails
+`recon_tsdf_integrate_dynamic_set`.
+Not run: `rig_viewer` on the rig.
+
+Still open: clearing on evidence (a weight decrement, an incidence term)
+and behind a pixel with no return, each judged on the lab rig.
 
 ## Measured lessons
 

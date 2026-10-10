@@ -253,15 +253,21 @@ class VR_TSDF_API TsdfIntegrator {
   ///        one submit for them all, rather than two submits a frame.
   ///
   /// Each frame is a dispatch of its own over one list -- the active blocks
-  /// any of the frames reaches, compacted in one scan -- in order, so every
-  /// voxel takes the frames in turn as integrating them one after another
-  /// does: the same arithmetic in the same order, Dynamic's clearing included.
-  /// A frame changes no block outside its own reach, so the shared list costs
-  /// it only idle threads. The set is compacted once, so allocate every frame's
-  /// band first (@ref volume::VoxelHashMap::allocate_from_depth takes them
-  /// together too); a block first allocated for a later frame is then fused
-  /// from the earlier ones as well. The call is one tick, so a rig's set ages
-  /// as one fuse.
+  /// any of the frames reaches, compacted in one scan -- in order. Under
+  /// Classic every voxel takes the frames in turn as integrating them one
+  /// after another does: the same arithmetic in the same order. Under Dynamic
+  /// the frames are one instant: every frame's clear runs before any frame's
+  /// fuse, a second dispatch a frame, so a voxel one camera sees as free space
+  /// past the band and another inside it loses its history and takes this
+  /// set's observations, whatever the cameras' order. A Dynamic set therefore
+  /// differs from its frames integrated one after another, where a later
+  /// camera's clear erases what an earlier one fused. In either mode the order
+  /// changes only the running average's arithmetic. A frame changes no block
+  /// outside its own reach, so the shared list costs it only idle threads. The
+  /// set is compacted once, so allocate every frame's band first (@ref
+  /// volume::VoxelHashMap::allocate_from_depth takes them together too); a
+  /// block first allocated for a later frame is then fused from the earlier
+  /// ones as well. The call is one tick, so a rig's set ages as one fuse.
   /// @param grid        As @ref integrate.
   /// @param frames      The frames, each checked as @ref integrate checks one
   ///                    before any work. One with no pixels fuses nothing, as
@@ -270,7 +276,7 @@ class VR_TSDF_API TsdfIntegrator {
   /// @param max_weight  As @ref integrate, for every frame.
   /// @param mode        As @ref integrate, for every frame.
   /// @param metrics     As @ref integrate: one `"integrate"` row, a device span
-  ///                    per frame, over one `"  ..active set"` sub-row.
+  ///                    per dispatch, over one `"  ..active set"` sub-row.
   /// @return As @ref integrate.
   core::Status integrate(volume::VoxelBlockGrid& grid,
                          const std::vector<FrameInput>& frames,
@@ -295,15 +301,18 @@ class VR_TSDF_API TsdfIntegrator {
   // The depth and colour frames are staged and bound whole each integrate().
   VkDeviceSize max_storage_buffer_range_ = 0;
 
-  // The integrate kernel's bundled layout + pipeline + descriptor set, its set
-  // allocated from pool_ (which must outlive it) by KernelSetBuilder at
-  // create().
+  // The integrate kernel's bundled layout + pipeline + descriptor set, and the
+  // clear kernel's, which a Dynamic set of several frames runs for every frame
+  // before any frame's fuse; their sets allocated from pool_ (which must
+  // outlive them) by KernelSetBuilder at create().
   core::ComputeKernel kernel_;
+  core::ComputeKernel clear_kernel_;
   core::DescriptorPool pool_;
-  // The kernel's sets, one a frame of a call, so one batch fuses several
-  // cameras; kernel_.set goes unused. Grown to the most frames a call has
-  // had; every set is written whole each call.
+  // Each kernel's sets, one a frame of a call, so one batch fuses several
+  // cameras; the kernels' own sets go unused. Grown to the most frames a call
+  // has had; every set a call dispatches is written whole first.
   core::KernelSets frame_sets_;
+  core::KernelSets clear_sets_;
   // The device-span collector, created once rather than per call: a query pool
   // of a few timestamps is negligible, and a lazily-created one would need a
   // mutable member and a failure path on a diagnostic. Idle -- no query

@@ -1,0 +1,338 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Tao Jin
+
+// Projective TSDF integration (classic or dynamic). One thread per voxel of each
+// listed block (the active blocks the frames' frusta reach): project the voxel
+// centre into the depth camera, compute the truncated signed distance
+// (sdf = depth - Zc, positive in front of the surface), and fuse it into the
+// tsdf/weight attributes by a weighted running average. Dynamic mode
+// additionally hard-clears a voxel that projects into free space past the
+// truncation band (a surface that has receded). Ported from classic_tsdf.metal
+// / classic_tsdf.cu (the neural/triplane channels are out of scope). Each voxel
+// is owned by exactly one thread (a unique block ptr + local index), so the
+// tsdf/weight/color read-modify-write needs no atomics. The one exception is
+// the block's `changed` stamp at binding 8, which every thread of a block
+// shares -- see there.
+//
+// The body of the integrate kernel (tsdf_integrate.comp) and the clear kernel
+// (tsdf_clear.comp), which #include it after their #version, with one
+// descriptor layout. VR_TSDF_CLEAR_ONLY builds the clear kernel: Dynamic's
+// clear alone, which a Dynamic set of several frames runs for every frame
+// before any frame's fuse (the integrate kernel with fuse_only), so the set's
+// cameras act as one instant. It skips a voxel holding no weight before
+// projecting it, as most of what a set reaches holds none, a test the
+// integrate kernel does not pay for (DECISIONS.md, 2026-10-08).
+
+#extension GL_GOOGLE_include_directive : require
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_memory_scope_semantics : require
+#include "tsdf_common.glsl"
+// Cross-tier: the one transfer curve, from core. Colour is fused as a running
+// MEAN, and a mean is a linear operation, so both operands are decoded out of
+// the canonical 8-bit encoding before blending and the result is re-encoded.
+#include "volumetric_kit/recon/core/shaders/color_common.glsl"
+#include "volumetric_kit/recon/volume/shaders/block_stamp.glsl"
+
+layout(local_size_x = 256) in;
+
+#ifdef VR_TSDF_CLEAR_ONLY
+const bool kClearOnly = true;
+#else
+const bool kClearOnly = false;
+#endif
+
+layout(set = 0, binding = 0, scalar) buffer Tsdf { float tsdf[]; };
+layout(set = 0, binding = 1, scalar) buffer Weight { float weight[]; };
+layout(set = 0, binding = 2, scalar) readonly buffer Active {
+  BlockIndex active_blocks[];
+};
+layout(set = 0, binding = 3, scalar) readonly buffer Depth { float depth[]; };
+layout(set = 0, binding = 4, scalar) readonly buffer Camera {
+  DepthCameraParams cam;
+};
+// Color path. The color image is read only when pc.has_color != 0; the color
+// attribute is read/written when pc.has_color (fuse) or pc.has_color_attr (the
+// dynamic clear); each falls back to a 1-element dummy when unbound. RGB packed
+// in a uint's low three bytes -- the mesh tier's `colors[]` layout, so meshing
+// reads the fused color attribute directly. `scalar` like every other data
+// binding (a uint[] is stride 4 under scalar and std430 alike, so this is not a
+// live layout change, but it keeps the scalar-block-layout ABI uniform, as the
+// mesh tier's identical color binding does).
+layout(set = 0, binding = 5, scalar) readonly buffer ColorImage {
+  uint color_image[];
+};
+layout(set = 0, binding = 6, scalar) buffer ColorAttr { uint color_attr[]; };
+layout(set = 0, binding = 7, scalar) readonly buffer ColorCamera {
+  ColorCameraParams color_cam;
+};
+// The map's block stamps (volume::BlockStamp): this dispatch stamps `changed`
+// with the map's tick on a block when it actually CHANGES a voxel of it.
+//
+// Not "the block was in the active set", not "the block was in the frustum",
+// and -- the distinction that costs the most to get wrong -- not "a store
+// happened". The dispatch covers every block the frames' frusta reach and
+// returns early for most of their voxels; a frustum test counts the whole view
+// cone; and in classic mode the free-space cone ahead of the surface is fused
+// too, so a flag set by the mere act of storing would collapse to "the camera
+// could see it" and show a stamp reader the whole view as changed every frame.
+// Only a store that leaves tsdf/weight/color holding a different value may
+// stamp it, which is why the marks below sit AFTER the writes they describe and
+// are guarded by a
+// comparison against the old value: a voxel converged at max_weight re-stores
+// bit-identical numbers, and that is the steady state of any revisiting scan,
+// not a corner case.
+//
+// Indexed by block SLOT (ptr / voxels_per_block), which the map keeps across
+// a resize and zeroes when it frees the block, so a stamp always describes
+// the block living in its slot.
+//
+// Atomics, not a plain store: every writer contributes the same tick, but a
+// non-atomic race is undefined rather than benign without coherent/
+// NonPrivatePointer, and the guard above means the atomic is paid only by
+// voxels that actually changed -- none at all once a block converges. An
+// exchange rather than a max, which would keep a tick from before the clock
+// wrapped over every one after it.
+layout(set = 0, binding = 8, scalar) buffer Stamps { BlockStamp stamps[]; };
+
+// Stamp a block changed, from a lane that changed one of its voxels. When the
+// block is a whole number of workgroups -- every block size from 8 up -- every
+// lane of the workgroup is this block's, so one lane of each subgroup stamps
+// for the lanes beside it, elected among the lanes that reach here (basic
+// subgroup operations are core in compute since Vulkan 1.1). And it reads the
+// stamp first, with a relaxed atomic load since other groups write it, so the
+// subgroups after the first skip the exchange; a stale read costs only an
+// exchange. On the RTX 5090 a stamp from every changed voxel cost
+// 0.013 ms a frame at 2 cm and one a subgroup still 0.03 ms at 1 cm; with
+// both, integrate measured as it did without stamps.
+void stamp_changed(uint block_slot) {
+  if ((uint(pc.grid.voxels_per_block) % gl_WorkGroupSize.x != 0u ||
+       subgroupElect()) &&
+      atomicLoad(stamps[block_slot].changed, gl_ScopeDevice,
+                 gl_StorageSemanticsNone, gl_SemanticsRelaxed) != pc.tick) {
+    atomicExchange(stamps[block_slot].changed, pc.tick);
+  }
+}
+
+// Bilinear depth sample at pixel (u, v), with a nearest-neighbour fallback.
+// Pixel centres sit at integer coordinates (DECISIONS.md, the depth-sampling
+// decision), so the taps are the 2x2 block from floor(u), floor(v) and the
+// nearest pixel is nearest_pixel's. Falls back to that sample when a bilinear
+// tap is out of bounds, invalid (non-finite or <= 0), or the taps straddle a
+// depth discontinuity (max - min > trunc_dist) that would blend across a
+// surface edge. (u, v) is in [0, width) x [0, height), as project_to_image
+// accepts it. The nearest index is computed here but only read on a fallback
+// return, so the common interpolate path loads just the four taps.
+float sample_depth(float u, float v) {
+  int w = int(cam.width);
+  int h = int(cam.height);
+  uvec2 n = nearest_pixel(vec2(u, v), cam.width, cam.height);
+  uint nearest = n.y * cam.width + n.x;  // loaded only on fallback below
+
+  // The 2x2 block [x0,x0+1]x[y0,y0+1]; u, v >= 0, so x0, y0 >= 0.
+  int x0 = int(floor(u));
+  int y0 = int(floor(v));
+  if (x0 + 1 >= w || y0 + 1 >= h) {
+    return depth[nearest];  // a bilinear tap is out of bounds
+  }
+  float d00 = depth[y0 * w + x0];
+  float d10 = depth[y0 * w + x0 + 1];
+  float d01 = depth[(y0 + 1) * w + x0];
+  float d11 = depth[(y0 + 1) * w + x0 + 1];
+  // min/max do not reliably propagate NaN. Reject each tap before either the
+  // range test or mix, even when that tap's interpolation weight is zero.
+  vec4 taps = vec4(d00, d10, d01, d11);
+  if (any(isnan(taps)) || any(isinf(taps))) {
+    return depth[nearest];
+  }
+  float lo = min(min(d00, d10), min(d01, d11));
+  float hi = max(max(d00, d10), max(d01, d11));
+  if (lo <= 0.0 || (hi - lo) > pc.grid.trunc_dist) {
+    return depth[nearest];  // an invalid tap, or a depth discontinuity across the taps
+  }
+  float fx = u - float(x0);
+  float fy = v - float(y0);
+  return mix(mix(d00, d10, fx), mix(d01, d11, fx), fy);
+}
+
+void main() {
+  uint gid = gl_GlobalInvocationID.x;
+  uint vpb = uint(pc.grid.voxels_per_block);
+  if (gid >= pc.num_active_blocks * vpb) {
+    return;
+  }
+  uint block_i = gid / vpb;
+  uint local = gid % vpb;
+  BlockIndex block = active_blocks[block_i];
+  // The stamp slot for this block, resolved once. vpb is not a compile-time
+  // constant, so the divide is a real reciprocal sequence -- it used to be
+  // recomputed inline at each mark site.
+  uint block_slot = uint(block.ptr) / vpb;
+  if (kClearOnly && !(weight[uint(block.ptr) + local] > 0.0)) {
+    return;  // nothing to clear
+  }
+
+  // Voxel world position: node convention (voxel * voxel_size), matching
+  // volume/voxel_coords.hpp::voxel_to_world and the prior engine.
+  int bs = pc.grid.block_size;
+  ivec3 lc = ivec3(int(local % uint(bs)), int((local / uint(bs)) % uint(bs)),
+                   int(local / uint(bs * bs)));
+  ivec3 voxel = block.coord * bs + lc;
+  vec3 world = vec3(voxel) * pc.grid.voxel_size;
+
+  // Project into the depth camera (rigid world -> camera; see project_to_image).
+  // Behind the camera or outside the image -> nothing to fuse.
+  vec2 px;
+  float zc;
+  if (!project_to_image(cam, world, px, zc)) {
+    return;
+  }
+  float u = px.x;
+  float v = px.y;
+  float d = sample_depth(u, v);  // bilinear, with nearest-neighbour fallback
+  // Reject zero holes and out-of-range depth; the negated compare also drops
+  // NaN/inf holes (every comparison with NaN is false), matching
+  // hash_allocate_depth.comp so integration accepts exactly what allocation did.
+  if (!(d > 0.0 && d >= cam.min_depth && d <= cam.max_depth)) {
+    return;  // invalid / out-of-range / non-finite depth
+  }
+
+  // Truncated projective SDF.
+  float trunc_dist = pc.grid.trunc_dist;
+  float sdf = d - zc;
+  if (sdf < -trunc_dist) {
+    return;  // occluded: well behind the surface
+  }
+  uint idx = uint(block.ptr) + local;
+  if (sdf > trunc_dist && (kClearOnly || pc.mode == kModeDynamic)) {
+    // Free space in front of the surface, past the band: under dynamic
+    // integration the surface has receded past this voxel, so hard-clear any
+    // stale geometry back to the pristine unobserved state (tsdf 0 / weight 0 --
+    // the zeroed initial state), which weight-gated readers treat as empty. Free
+    // space is never fused here (classic instead clamps to +trunc, keeping a
+    // smooth field ahead of the surface). Matches the prior engine's
+    // classic_tsdf.cu stale-clearing branch, which zeroes color here too --
+    // whenever the grid carries a color attribute (has_color_attr), not only on
+    // a frame that supplies a color image, so a depth-only recede leaves no
+    // color ghost either. A Dynamic set's fuse (fuse_only) leaves it alone: the
+    // clear kernel has run for every frame of the set first, so a camera that
+    // sees past a voxel another camera of the set places in its band clears
+    // only the voxel's history, and the set's fuse follows.
+    // TODO(tsdf): clear on evidence -- a weight decrement, an incidence term --
+    // and behind a pixel with no return, each judged on the lab rig
+    // (DECISIONS.md, 2026-10-08).
+    if (pc.fuse_only == 0u && weight[idx] > 0.0) {
+      tsdf[idx] = 0.0;
+      weight[idx] = 0.0;
+      if (pc.has_color_attr != 0u) {
+        color_attr[idx] = 0u;  // drop stale color along with the geometry
+      }
+      // A clear changes the field exactly as a fuse does -- a receded surface
+      // that leaves a stale mesh behind is the whole reason dynamic mode exists.
+      // The weight > 0.0 guard above is already the "did anything change" test
+      // on this path: a voxel at weight 0 is in the state the clear writes.
+      stamp_changed(block_slot);
+    }
+    return;
+  }
+  if (kClearOnly) {
+    return;
+  }
+  sdf = clamp(sdf, -trunc_dist, trunc_dist);
+
+  // Inverse-square observation weight with a linear behind-surface dropoff.
+  float w_obs = (zc > 0.01) ? (1.0 / (zc * zc)) : 1.0;
+  if (zc > d) {
+    // Behind the surface but within the band -- the earlier sdf < -trunc_dist
+    // return already guarantees behind <= trunc_dist. Fade linearly to zero at
+    // the band edge, where the w_obs <= 0.0 guard below drops the sample.
+    float behind = zc - d;
+    w_obs *= (trunc_dist - behind) / trunc_dist;
+  }
+  if (w_obs <= 0.0) {
+    return;
+  }
+
+  // Weighted running average, capped at max_weight.
+  float w_old = weight[idx];
+  float s_old = tsdf[idx];
+  float w_sum = w_old + w_obs;
+  float s_new = clamp((s_old * w_old + sdf * w_obs) / max(w_sum, 1e-6),
+                      -trunc_dist, trunc_dist);
+  float w_new = min(w_sum, pc.max_weight);
+  // Whether this fuse MOVED the field, accumulated across the geometry and
+  // colour stores and marked once at the end. Compared before the stores, since
+  // afterwards the old value is gone.
+  bool changed = (s_new != s_old) || (w_new != w_old);
+  tsdf[idx] = s_new;
+  weight[idx] = w_new;
+
+  // Fuse color, if a frame was supplied this call, through the separate color
+  // camera. Project the voxel into the color camera, sample the packed RGB at
+  // the nearest pixel, and running-average it with the SAME weights as the
+  // SDF. RGB stays in the uint's low bytes, matching the mesh tier's color
+  // attribute.
+  //
+  // The "first observation assigns" test keys on whether COLOR was seen
+  // (color_attr == 0, the zero-initialised / cleared state), NOT on the SDF
+  // weight w_old: with a separate color camera the color and depth coverage
+  // differ per voxel (a voxel can accrue depth weight while outside the color
+  // frame, or across depth-only frames), so gating on w_old would blend the
+  // first real color into the black initial attribute and darken it. A fused
+  // color always packs a 0xFF alpha, so it is never 0 -- the sentinel is exact.
+  //
+  // Color still shares the SDF's w_obs and max_weight cap (a bounded moving
+  // average), so once depth saturates the weight a later color change converges
+  // slowly; a separate per-voxel color weight is future work.
+  // TODO(color): the color camera has no visibility test of its own, so a voxel
+  // occluded in the color view (but near-surface for depth) is painted with the
+  // occluder's color, and a voxel whose depth pixel is a hole/out-of-range this
+  // frame gets no color even if the color camera sees it (color fusion sits
+  // after the depth early-returns above). Both are unregistered-color limits a
+  // color-camera depth map would fix; registered capture (color cam == depth
+  // cam) avoids them.
+  if (pc.has_color != 0u) {
+    vec2 cpx;
+    float czc;
+    uint obs_packed = 0u;
+    bool seen = project_to_image(color_cam, world, cpx, czc);
+    if (seen) {
+      uvec2 c = nearest_pixel(cpx, color_cam.width, color_cam.height);
+      obs_packed = color_image[c.y * color_cam.width + c.x];
+      // An image that marks its coverage (ColorFrame::coverage_in_alpha) says
+      // where it has no colour -- a lens mapping outside the captured picture
+      // -- with a zero high byte, and such a pixel fuses nothing, as one
+      // outside the image does.
+      seen = pc.coverage_in_alpha == 0u || (obs_packed >> 24) != 0u;
+    }
+    if (seen) {
+      uint c_old = color_attr[idx];
+      if (c_old == 0u) {
+        // First color observation ASSIGNS, and assigns the sensor's own bytes
+        // rather than a decode/encode round trip of them: an assignment is not
+        // an average, so it needs no linear space, and copying the codes keeps
+        // the stored color bit-exact with what the camera reported instead of
+        // resting on the curve round-tripping all 256 codes. Alpha is forced to
+        // 0xFF (the source's high byte is undefined) so the "color unobserved"
+        // sentinel stays exact -- a written color is never 0, not even black.
+        color_attr[idx] = (obs_packed & 0x00FFFFFFu) | 0xFF000000u;
+      } else {
+        // A running mean, so decode both operands to linear working values,
+        // average there, and re-encode. Blending the encoded codes directly is
+        // wrong by construction and wrong quietly (0.0 and 1.0 would fuse to
+        // 0.214 rather than 0.5) -- the 2026-08-02 color-space decision.
+        vec3 prev = vrUnpackSrgbToLinear(c_old);
+        vec3 obs = vrUnpackSrgbToLinear(obs_packed);
+        vec3 fused = (prev * w_old + obs * w_obs) / max(w_sum, 1e-6);
+        color_attr[idx] = vrPackLinearToSrgb(fused);
+      }
+      // Colour moves the mesh's vertex colours even where the iso-surface has
+      // settled, so it counts as a change in its own right.
+      changed = changed || (color_attr[idx] != c_old);
+    }
+  }
+
+  // One mark per changed voxel, after every store it describes.
+  if (changed) {
+    stamp_changed(block_slot);
+  }
+}

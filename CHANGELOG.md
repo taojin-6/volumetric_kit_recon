@@ -260,6 +260,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `GpuFramePrep` now crosses zero within 0.06 mm of the truth at 1 cm voxels,
   where it was off by up to 5.5 mm, in each camera's own image direction.
   Regressions: `recon_sensor_gpu_frame_prep`, `recon_tsdf_integrate`.
+- `tsdf`: **a Dynamic set no longer depends on its cameras' order.**
+  `TsdfIntegrator::integrate` over several frames runs every frame's clear,
+  in a clear kernel of its own (`tsdf_clear.comp`), before any frame's fuse.
+  A camera that sees past another's band in the same set (a grazing ray, a
+  silhouette, a long multipath return) no longer erases what the other fused,
+  which left a hole in the mesh in one camera order. A single frame and
+  Classic sets are unchanged. Integrate on a synthetic 4-camera Dynamic set at
+  1 cm (M5 Max): 1.22 → 1.92 ms of device time. Regressions:
+  `recon_tsdf_integrate_dynamic_set`, `recon_tsdf_integrate_set`.
 - `tsdf`: `TsdfIntegrator::integrate` **refuses a depth or colour camera with
   a non-finite intrinsic, depth bound or pose entry** before any work, where
   it fused the whole active set through NaN projections; the kernel's
