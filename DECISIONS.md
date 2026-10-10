@@ -413,6 +413,9 @@ entries relevant to your task; later amendments supersede earlier rules.
   its sync settings at `open`, written only when asked and checked for SDK
   normalization after a write; the tolerance is 0.4 of a frame period, and
   `OrbbecRig`, its start order and the public `TriggerGrouper` go.
+- [**2026-10-10**](#2026-10-10--only-the-owner-triggers-ci-and-the-runner-tooling-is-the-cores) —
+  Only the owner triggers CI, by the repository's Actions policy; no job
+  carries a fork guard. The runner tooling is the core's.
 
 ## Decision record
 
@@ -10916,6 +10919,18 @@ field, and the camera kept its setting. Restarted three times with MJPEG,
 1–3 of the first 31 sets missed a camera, so the start needs no settling
 wait. One camera fused at 30 fps with and without `--host-clock`. Not run:
 `apply_sync`'s write (it rewrites flash) and `rig_viewer`.
+
+### 2026-10-10 — Only the owner triggers CI, and the runner tooling is the core's.
+
+The core's decision
+[Only the owner triggers CI](https://github.com/taojin-6/volumetric_kit_core/blob/main/DECISIONS.md#only-the-owner-triggers-ci)
+holds here, with its rationale and how it was tested: the repository's
+Actions policy lets only the owner's account trigger a workflow, and GitHub
+refuses any other account's run before it creates a job. So no job in
+`ci.yml` carries a fork guard, the build legs' and the viewer's included, and
+the approval of every outside contributor's run stays on as a second gate. A
+fork's change gets CI once a maintainer pushes its branch here. The runner
+tooling is the core's `tools/runners`; recon keeps no copy.
 
 ## Measured lessons
 

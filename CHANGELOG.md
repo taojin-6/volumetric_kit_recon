@@ -75,6 +75,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- CI: **only the owner triggers CI.** The repository's Actions policy lets no
+  other account trigger a workflow, so a fork's pull request never reaches the
+  self-hosted runners, and the build and viewer jobs' fork guards go.
 - build: **the core pin moves to core #15** (a8b63d1), which adds
   `CommandBatch::submit_async`, for the pipelined stages to come; recon's
   calls are unchanged. gfx, pinned at core #13, builds against it.
@@ -227,6 +230,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
+- CI: **the self-hosted runner scripts and their guide**
+  (`.github/setup-linux-runner.sh`, `setup-mac-runner.sh`,
+  `teardown-runners.sh`, `self-hosted-runners.md`). The core's
+  `tools/runners` replaces them, for recon's and gfx's runners alike.
 - `sensor/orbbec`: **`OrbbecRig`** (`orbbec_rig.hpp`, BREAKING), with
   `OrbbecRigSet`, `OrbbecRigStats`, the rig's start order and its
   process-wide clock re-sync (`enableDeviceClockSync`).

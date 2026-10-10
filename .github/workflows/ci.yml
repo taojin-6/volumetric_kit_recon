@@ -15,15 +15,11 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Only the owner triggers this repository's workflows, so no job carries a fork
+# guard (DECISIONS.md, 2026-10-10).
 jobs:
   build:
     name: ${{ matrix.os }}
-    # The build legs run on persistent self-hosted runners, so only hand them
-    # trusted code: same-repo PRs and pushes. Fork PRs skip these legs (and then
-    # `required` fails, blocking auto-merge until a maintainer runs CI). The repo
-    # is private today so forks can't reach this regardless — it's a guard for if
-    # it ever goes public.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     strategy:
       fail-fast: false
       # The Ubuntu legs run on the self-hosted GPU box (label `vk-linux-gpu`),
@@ -33,12 +29,14 @@ jobs:
       # containerised. _build.yml keys its install steps off `runner.os`, so the
       # macOS leg's Homebrew/MoltenVK path is unchanged and only the Ubuntu legs
       # use a container; NVIDIA_DRIVER_CAPABILITIES=all makes the toolkit mount
-      # the Vulkan ICD for those. See .github/self-hosted-runners.md.
+      # the Vulkan ICD for those. See the core's tools/runners/README.md.
       #
       # The build and test fan-out is set in the container env, too: a runner's
       # .env reaches jobs run directly on it (the Mac) but not a job container,
-      # where ctest would otherwise run the suite one test at a time. 4 matches
-      # the .env setup-linux-runner.sh writes (24 cores / 6 runners).
+      # where ctest would otherwise run the suite one test at a time. 4 is a
+      # 24-core host over recon's 6 runners.
+      # TODO: gfx's 6 runners share each host, so 2 would match the split the
+      # core's setup-runners.sh writes for jobs on the host.
       #
       # Release runs on every OS; Debug only on macOS, where it is cheap. That
       # halves the jobs on the Linux GPU boxes, which gfx's CI shares, and
@@ -93,12 +91,6 @@ jobs:
       hevc_backend: ${{ matrix.hevc_backend || '' }}
 
   viewer:
-    # Self-hosted like the build legs, so it carries their trusted-code guard.
-    # It lives here on the caller rather than inside viewer.yml so a fork PR
-    # skips this job outright and reaches `required` as `skipped` — the same
-    # shape the build legs already produce, which is what the gate below is
-    # written against.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     uses: ./.github/workflows/viewer.yml
 
   lint:
@@ -109,10 +101,11 @@ jobs:
 
   required:
     # The single status check branch protection requires. It passes only when
-    # every build leg, lint, and sanitizers succeeded, and FAILS (never skips)
-    # on any other outcome: a skipped required check never reports its result
-    # and would block every merge forever. Runs on a hosted runner so the gate
-    # can always report, even while a platform is mid-migration to self-hosted.
+    # every build leg, the viewer, lint, and sanitizers succeeded, and FAILS
+    # (never skips) on any other outcome: a skipped required check never reports
+    # its result and would block every merge forever. Runs on a hosted runner so
+    # the gate can always report, even while a platform is mid-migration to
+    # self-hosted.
     needs: [build, viewer, lint, sanitizers]
     if: always()
     runs-on: ubuntu-24.04
