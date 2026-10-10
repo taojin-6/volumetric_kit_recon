@@ -29,10 +29,9 @@
 //     different queue families, where reading an EXCLUSIVE buffer is undefined
 //     with nothing to report it.
 //   * lifetime -- recon rings its output slots, and mesh::MeshExchange
-//     releases a generation once every frame that drew it has retired.
-//     begin_frame's per-slot fence wait is the only completion signal gfx
-//     exposes, and no semaphore may cross this seam (a cross-library GPU wait
-//     deadlocks against a swapchain rebuild).
+//     releases a generation once every frame that drew it has retired, which
+//     begin_frame's wait for the frame slot's last frame says. No semaphore
+//     crosses this seam: the extract is gated on the host.
 //   * visibility -- the fuse thread blocks on its dispatch's fence inside
 //     submit_single_time before it publishes anything, and gfx's later
 //     vkQueueSubmit makes those device writes visible to the draw, so no
@@ -45,8 +44,11 @@
 //
 // Each re-meshed frame is projectively textured with its own keyframe (the
 // texture tier): the triangles that keyframe saw unoccluded render at full
-// sensor resolution, the rest fall back to fused voxel colour. --no-texture
-// disables it (an A/B against the pure vertex-colour path).
+// sensor resolution, the rest fall back to fused voxel colour. The keyframe's
+// colour buffer is copied into gfx's atlas on the device, in the frame that
+// first draws the mesh, as rig_viewer copies each camera's (viewer_atlas.hpp's
+// LiveAtlas). --no-texture disables it (an A/B against the pure vertex-colour
+// path).
 //
 // Two Dear ImGui panels (gfx's ui tier) show where the time and the memory go:
 // Performance (the renderer's fps + GPU spans, with recon's per-frame fuse
@@ -56,7 +58,7 @@
 //   fuse_viewer <scene_dir> [--voxel 0.02] [--trunc m] [--min-depth m]
 //               [--max-depth m] [--max-frames N] [--remesh-every N]
 //               [--width 1280] [--height 720] [--unlit] [--no-texture]
-//               [--preload] [--no-overlay] [--validation]
+//               [--preload] [--no-overlay] [--validation] ...
 
 #include <algorithm>
 #include <atomic>
@@ -64,7 +66,6 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
-#include <cstdlib>
 #include <exception>
 #include <memory>
 #include <mutex>
@@ -80,16 +81,19 @@
 #include <imgui_impl_glfw.h>
 #include <glm/glm.hpp>
 
-#include "fuse_frame.hpp"        // vr_example::fuse_keyframe
+#include "cli.hpp"
+#include "fuse_frame.hpp"  // vr_example::fuse_keyframe
+#include "fusion_flags.hpp"
 #include "recon_gfx_bridge.hpp"  // to_live_mesh, and the vertex-layout asserts
-#include "replica_sensor.hpp"    // vr_example::ReplicaSensor
+#include "replica_flags.hpp"
+#include "replica_sensor.hpp"  // vr_example::ReplicaSensor
 #include "shared_device.hpp"
 #include "viewer_atlas.hpp"
 #include "viewer_common.hpp"
+#include "viewer_panels.hpp"
 
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
-#include "volumetric_kit/core/vulkan/command_batch.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
@@ -100,6 +104,7 @@
 #include "volumetric_kit/recon/sensor/rgbd_sensor.hpp"
 #include "volumetric_kit/recon/sensor/utils/gpu_frame_prep.hpp"
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
+#include "volumetric_kit/recon/texture/texture_atlas.hpp"
 #include "volumetric_kit/recon/tsdf/fuser.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_grid.hpp"
@@ -110,7 +115,6 @@
 #include "volumetric_kit/gfx/core/frame_metrics.hpp"
 #include "volumetric_kit/gfx/core/profiler.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
-#include "volumetric_kit/gfx/core/sampler.hpp"
 #include "volumetric_kit/gfx/pipelines/hybrid_mesh_pipeline.hpp"
 #include "volumetric_kit/gfx/pipelines/live_mesh.hpp"
 #include "volumetric_kit/gfx/ui/imgui_overlay.hpp"
@@ -132,28 +136,12 @@ namespace win = volumetric_kit::gfx::windowing;
 namespace {
 
 struct Options {
-  std::string scene_dir;
-  std::string cam_params;
-  float voxel = 0.02f;
-  // Derived from `voxel` when left at 0 (see parse_args): a truncation band
-  // fixed in metres is a band whose width *in voxels* changes with --voxel,
-  // which silently degrades the reconstruction in both directions.
-  float trunc = 0.0f;
-  // The depth gate, both ends. Exposed as a pair because the capture takes a
-  // pair: leaving the near plane implicit meant a --max-depth at or under the
-  // default 0.1 m was refused with a message naming a knob this example never
-  // offered.
-  float min_depth = 0.1f;
-  float max_depth = 8.0f;
-  int max_frames = 400;
+  vr_example::ReplicaFlags replica{400};
+  vr_example::FusionFlags fusion{0.02f};
+  fuse_viewer::WindowFlags window;
   int remesh_every = 1;  // re-extract + re-upload every N fused frames
-  int width = 1280;
-  int height = 720;
   bool lit = true;
-  bool texture = true;      // project each keyframe onto the growing mesh (uv0)
-  bool preload = false;     // decode every frame up front (RAM for decode time)
-  bool overlay = true;      // Dear ImGui performance + reconstruction panels
-  bool validation = false;  // Vulkan validation layer on the shared device
+  bool texture = true;  // project each keyframe onto the growing mesh (uv0)
   // In-block vertex sharing (MarchingCubesConfig::share_vertices). Off here to
   // match the example's history, on in the iOS scanner, where the vertex arena
   // is the term that binds -- so this flag is what lets this window stand in
@@ -166,294 +154,25 @@ struct Options {
   bool share_vertices = false;
 };
 
-bool parse_args(int argc, char** argv, Options& o) {
-  for (int i = 1; i < argc; ++i) {
-    const std::string a = argv[i];
-    auto v = [&]() -> const char* {
-      return (i + 1 < argc) ? argv[++i] : nullptr;
-    };
-    if (a == "--cam-params") {
-      const char* x = v();
-      if (!x) return false;
-      o.cam_params = x;
-    } else if (a == "--voxel") {
-      const char* x = v();
-      if (!x) return false;
-      o.voxel = std::strtof(x, nullptr);
-    } else if (a == "--trunc") {
-      const char* x = v();
-      if (!x) return false;
-      o.trunc = std::strtof(x, nullptr);
-    } else if (a == "--min-depth") {
-      const char* x = v();
-      if (!x) return false;
-      o.min_depth = std::strtof(x, nullptr);
-    } else if (a == "--max-depth") {
-      const char* x = v();
-      if (!x) return false;
-      o.max_depth = std::strtof(x, nullptr);
-    } else if (a == "--max-frames") {
-      const char* x = v();
-      if (!x) return false;
-      o.max_frames = std::atoi(x);
-    } else if (a == "--remesh-every") {
-      const char* x = v();
-      if (!x) return false;
-      o.remesh_every = std::max(1, std::atoi(x));
-    } else if (a == "--width") {
-      const char* x = v();
-      if (!x) return false;
-      o.width = std::atoi(x);
-    } else if (a == "--height") {
-      const char* x = v();
-      if (!x) return false;
-      o.height = std::atoi(x);
-    } else if (a == "--unlit") {
-      o.lit = false;
-    } else if (a == "--no-texture") {
-      o.texture = false;
-    } else if (a == "--share-vertices") {
-      o.share_vertices = true;
-    } else if (a == "--preload") {
-      o.preload = true;
-    } else if (a == "--no-overlay") {
-      o.overlay = false;
-    } else if (a == "--validation") {
-      o.validation = true;
-    } else if (!a.empty() && a[0] == '-') {
-      std::fprintf(stderr, "unknown flag %s\n", a.c_str());
-      return false;
-    } else if (o.scene_dir.empty()) {
-      o.scene_dir = a;
-    } else {
-      std::fprintf(stderr, "unexpected arg %s\n", a.c_str());
-      return false;
-    }
-  }
-  if (o.scene_dir.empty()) {
-    std::fprintf(stderr,
-                 "usage: fuse_viewer <scene_dir> [--voxel m] [--trunc m] "
-                 "[--min-depth m] [--max-depth m] [--max-frames n] "
-                 "[--remesh-every n] [--unlit] "
-                 "[--no-texture] [--share-vertices] [--preload] [--no-overlay] "
-                 "[--validation]\n");
-    return false;
-  }
-  // strtof parses "nan"/"inf" without error, and a non-finite knob slips the
-  // downstream guards (NaN compares false to every bound) to reach the grid
-  // params and the GPU -- a silent, degenerate reconstruction. Reject up front.
-  if (!std::isfinite(o.voxel) || o.voxel <= 0.0f) {
-    std::fprintf(stderr, "--voxel must be finite and > 0\n");
-    return false;
-  }
-  // Default the band to 4 voxels, as fuse_replica does -- see the same note in
-  // fuse_render: a band fixed in metres makes --voxel silently change the
-  // reconstruction's quality, and makes the same flag value mean different
-  // things across these examples.
-  if (o.trunc <= 0.0f) o.trunc = 4.0f * o.voxel;
-  if (!std::isfinite(o.trunc) || o.trunc <= 0.0f) {
-    std::fprintf(stderr, "--trunc must be finite and > 0\n");
-    return false;
-  }
-  if (!std::isfinite(o.max_depth) || o.max_depth <= 0.0f) {
-    std::fprintf(stderr, "--max-depth must be finite and > 0\n");
-    return false;
-  }
-  // The same range rule the sensor applies, checked here where the flags
-  // still have their names -- as fuse_replica does.
-  if (!(o.min_depth > 0.0f) || o.min_depth >= o.max_depth) {
-    std::fprintf(stderr, "--min-depth must be in (0, --max-depth)\n");
-    return false;
-  }
-  if (o.cam_params.empty()) o.cam_params = o.scene_dir + "/../cam_params.json";
-  return true;
+vkc::Result<Options> parse_args(int argc, char** argv) {
+  Options o;
+  vr_example::Cli cli("fuse_viewer");
+  o.replica.add_to(cli);
+  o.fusion.add_to(cli);
+  cli.option("--remesh-every", "N", o.remesh_every, 1);
+  o.window.add_to(cli);
+  cli.flag("--unlit", o.lit, false)
+      .flag("--no-texture", o.texture, false)
+      .flag("--share-vertices", o.share_vertices);
+  VKC_TRY(cli.parse(argc, argv));
+  return o;
 }
 
-// What the reconstruction side is holding, shown beside the renderer's frame
-// metrics. gfx's FrameMetrics carries one memory pair (its own allocator's),
-// so recon's device memory + the volume/mesh counters live in their own panel
-// rather than being squeezed into that contract.
-struct ReconstructionPanel {
-  std::size_t fused_frames = 0;
-  std::size_t total_frames = 0;
-  std::size_t vertices = 0;
-  std::size_t triangles = 0;
-  std::uint64_t mesh_version = 0;
-  std::int32_t map_buckets = 0;
-  std::int32_t map_blocks = 0;
-  /// Fraction of the block heap in use, from VoxelHashMap::load_factor -- a
-  /// host copy of the heap counter, not the diagnostics scan.
-  /// **Negative when that read failed**, which the panel draws as `unavailable`
-  /// rather than as a low fraction: this is the figure a reader checks to
-  /// decide whether the scan is still taking geometry in, so the one answer it
-  /// must never give is a calm-looking number it does not have.
-  float map_load_factor = 0.0f;
-  double fuse_ms = 0.0;
-  std::uint64_t preloaded_bytes = 0;
-  vkc::MemoryStats recon_memory;
-  rmesh::ExtractTimings extract;
-};
-
-// Bytes -> MiB, for display only. Mebibytes (1024^2), matching the unit gfx's
-// draw_metrics_panel prints beside this one.
-double to_mebibytes(std::uint64_t bytes) {
-  return static_cast<double>(bytes) / (1024.0 * 1024.0);
-}
-
-// A filled bar carrying its own ceiling.
-//
-// The point of a gauge over the two numbers it replaces: a threshold a reader
-// has to know about is a threshold they will miss. A scan on this pipeline can
-// sit deep in the band where allocation has stopped with every other figure
-// looking healthy -- which is exactly what happened on an iPad, for half a
-// scan, behind an `errors 0` banner. `warn_at` is what makes that state read as
-// a state rather than as one more number.
-void gauge(const char* label, double value, double capacity, double warn_at,
-           const char* overlay) {
-  const double fraction =
-      capacity > 0.0 ? std::min(value / capacity, 1.0) : 0.0;
-  const bool hot = fraction >= warn_at;
-  if (hot) {
-    // Semantic, not decorative: the bar changes colour only when the reader is
-    // meant to act.
-    ImGui::PushStyleColor(ImGuiCol_PlotHistogram,
-                          ImVec4(0.72f, 0.39f, 0.18f, 1.0f));
-  }
-  ImGui::Text("%s", label);
-  ImGui::SameLine(110.0f);
-  ImGui::ProgressBar(static_cast<float>(fraction), ImVec2(-1.0f, 0.0f),
-                     overlay);
-  if (hot) {
-    ImGui::PopStyleColor();
-  }
-}
-
-// Build the reconstruction panel into the ImGui frame the caller is driving
-// (it calls neither NewFrame nor Render), mirroring gfx's draw_metrics_panel.
-void draw_reconstruction_panel(const ReconstructionPanel& panel) {
-  if (!ImGui::Begin("Reconstruction")) {
-    ImGui::End();
-    return;
-  }
-  ImGui::Text("fused    %zu / %zu frames", panel.fused_frames,
-              panel.total_frames);
-  ImGui::Text("fuse     %.2f ms/frame", panel.fuse_ms);
-  ImGui::Separator();
-  ImGui::Text("mesh v%llu",
-              static_cast<unsigned long long>(panel.mesh_version));
-  ImGui::Text("  %zu vertices / %zu triangles", panel.vertices,
-              panel.triangles);
-  // The two fitted output buffers' occupancy, each against its OWN capacity.
-  // They are reported separately because MarchingCubesConfig::share_vertices
-  // decouples them -- pairing the vertex arena's bytes with the index run's
-  // fill ratio would describe a buffer it is not measuring -- and because the
-  // arena is the one that dominates the MiB.
-  //
-  // The MiB is the whole ring (both buffers, every slot), so at
-  // slot_count = 3 it is roughly three times the buffers those fractions are
-  // over. The dispatch count matters on its own: a run that keeps reporting 2
-  // is one whose planner is not tracking the surface, and the ..dispatch row
-  // cannot say so because it sums both attempts into one span.
-  {
-    // 0.9 because past it the next growth step is a refit: the arenas are
-    // grow-only, so a full one costs a second dispatch, which is the `dispatch`
-    // count below going to 2.
-    char overlay[64];
-    std::snprintf(overlay, sizeof(overlay), "%u / %u verts",
-                  panel.extract.emitted_vertices,
-                  panel.extract.vertex_capacity);
-    gauge("  arena", panel.extract.emitted_vertices,
-          panel.extract.vertex_capacity, 0.9, overlay);
-    // Its own bar, against its own capacity, for the reason above: with
-    // share_vertices these two fractions come apart, and the one that forces
-    // the refit is whichever fills first.
-    std::snprintf(overlay, sizeof(overlay), "%u / %u tris",
-                  panel.extract.emitted_triangles,
-                  panel.extract.triangle_capacity);
-    gauge("  indices", panel.extract.emitted_triangles,
-          panel.extract.triangle_capacity, 0.9, overlay);
-  }
-  ImGui::Text("  output %.0f MiB (ring), %u dispatch%s",
-              to_mebibytes(panel.extract.arena_bytes), panel.extract.dispatches,
-              panel.extract.dispatches == 1 ? "" : "es");
-  {
-    // Occupancy against the block heap num_blocks sizes -- the figure that says
-    // a scan has stopped taking in new geometry, which the bare capacity this
-    // row used to print cannot. VoxelHashMap::load_factor reads a host copy
-    // of the heap counter, added on 2026-08-08 as the constant-time reading
-    // a per-frame caller can afford; the diagnostics scan it is often
-    // confused with walks every slot on the host and cannot run per frame.
-    //
-    // The threshold is the map's own (see kGrowThreshold), read once for both
-    // the colour and the words: two literals here drifted apart from the
-    // library's guidance and from each other.
-    const double warn = vol::VoxelHashMap::kGrowThreshold;
-    char overlay[80];
-    if (panel.map_load_factor < 0.0f) {
-      // Negative means the read failed (the fuse thread said why on stderr).
-      // Drawn as full rather than as a fraction: an unknown occupancy is not a
-      // low one, and this bar is read to decide whether to keep scanning.
-      std::snprintf(overlay, sizeof(overlay), "unavailable, %d blocks",
-                    panel.map_blocks);
-      gauge("map", 1.0, 1.0, warn, overlay);
-    } else {
-      std::snprintf(overlay, sizeof(overlay), "%.1f%% of %d blocks%s",
-                    100.0 * panel.map_load_factor, panel.map_blocks,
-                    panel.map_load_factor >= warn ? "  -- grow now" : "");
-      gauge("map", panel.map_load_factor, 1.0, warn, overlay);
-    }
-    // num_blocks is bucket_size * num_buckets, so the bucket count is what a
-    // resize doubles -- the memory story behind the fraction above.
-    ImGui::Text("  %d buckets", panel.map_buckets);
-  }
-  ImGui::Separator();
-  // recon's device memory: its own VMA allocator's share of the device
-  // (reserved_bytes), against the heap's budget. On a shared/adopted device
-  // each library allocates separately, so this is recon's footprint, not the
-  // process total -- which usage_bytes is, where the driver reports budgets.
-  for (std::uint32_t heap = 0; heap < panel.recon_memory.heap_count; ++heap) {
-    const vkc::HeapStats& stats = panel.recon_memory.heaps[heap];
-    if (stats.reserved_bytes == 0) continue;
-    char overlay[64];
-    std::snprintf(overlay, sizeof(overlay), "%.0f / %.0f MiB",
-                  to_mebibytes(stats.reserved_bytes),
-                  to_mebibytes(stats.budget_bytes));
-    char label[32];
-    std::snprintf(label, sizeof(label), "recon heap %u", heap);
-    gauge(label, static_cast<double>(stats.reserved_bytes),
-          static_cast<double>(stats.budget_bytes), 0.9, overlay);
-  }
-  if (panel.preloaded_bytes != 0) {
-    ImGui::Text("frame cache   %.0f MiB (host)",
-                to_mebibytes(panel.preloaded_bytes));
-  }
-  ImGui::End();
-}
-
-// A keyframe's colour image in the canonical packed form (R | G<<8 | B<<16,
-// the coverage byte on top -- the bytes of an RGBA8 upload on the
-// little-endian hosts every Vulkan platform here is), with the extent it was
-// captured at. The extent travels with the pixels rather than being read off a
-// dataset-wide constant, because the frame it came from is the only thing that
-// knows it -- a sensor is free to hand over frames of any size.
-struct AtlasPixels {
-  std::vector<std::uint32_t> pixels;
-  std::uint32_t width = 0;
-  std::uint32_t height = 0;
-
-  bool empty() const noexcept { return pixels.empty(); }
-  void clear() noexcept {
-    pixels.clear();
-    width = 0;
-    height = 0;
-  }
-};
-
-// What travels with a mesh through the exchange: the keyframe image its uv0
+// What travels with a mesh through the exchange: the keyframe colour its uv0
 // index into (empty for none), and the extract's timings, which the panel
 // shows beside the mesh they describe.
 struct MeshPayload {
-  AtlasPixels atlas;
+  fuse_viewer::AtlasJob atlas;
   rmesh::ExtractTimings extract;
 };
 
@@ -474,7 +193,7 @@ int run(GLFWwindow* window, const Options& opt) {
   config.swapchain.depth_format = VK_FORMAT_D32_SFLOAT;
   config.frames_in_flight = 2;
   fuse_viewer::SharedDeviceConfig shared_config;
-  shared_config.enable_validation = opt.validation;
+  shared_config.enable_validation = opt.window.validation;
   shared_config.graphics = config.device;
   const std::unique_ptr<fuse_viewer::vkc::SharedDevice> shared =
       fuse_viewer::build_shared_device(window, shared_config);
@@ -529,13 +248,7 @@ int run(GLFWwindow* window, const Options& opt) {
   // already gated, and the fuse thread below drives an IRgbdSensor& that
   // never learns it is reading a disk. Declared here, before the fuse thread
   // that drives it, so it outlives that thread.
-  vr_example::ReplicaSensor::Options capture_options;
-  capture_options.frame_limit =
-      static_cast<std::size_t>(std::max(0, opt.max_frames));
-  capture_options.min_depth = opt.min_depth;
-  capture_options.max_depth = opt.max_depth;
-  auto capture_result = vr_example::ReplicaSensor::open(
-      opt.scene_dir, opt.cam_params, capture_options);
+  auto capture_result = opt.replica.open(opt.fusion);
   if (!capture_result) {
     std::fprintf(stderr, "capture: %s\n",
                  capture_result.status().message().c_str());
@@ -543,9 +256,12 @@ int run(GLFWwindow* window, const Options& opt) {
   }
   vr_example::ReplicaSensor replica = std::move(capture_result).value();
   const vr::camera::CameraModel& cam = *replica.info().color;
+  // The far plane follows the depth gate the frames carry.
+  const float max_depth = opt.fusion.max_depth.value_or(
+      vr_example::ReplicaSensor::Options{}.max_depth);
 
-  auto grid_result =
-      vr_example::create_fusion_grid(rdevice, rallocator, opt.voxel, opt.trunc);
+  auto grid_result = vr_example::create_fusion_grid(
+      rdevice, rallocator, opt.fusion.voxel, opt.fusion.trunc);
   if (!grid_result) {
     std::fprintf(stderr, "grid: %s\n", grid_result.status().message().c_str());
     return 1;
@@ -562,8 +278,15 @@ int run(GLFWwindow* window, const Options& opt) {
     return 1;
   }
   rtsdf::Fuser fuser = std::move(fuser_result).value();
-  // The frame prep, like the fuser, used only on the fuse thread below.
-  auto prep_result = rsensor::GpuFramePrep::create(rdevice, rallocator);
+  // The frame prep, like the fuser, used only on the fuse thread below. Its
+  // colour is what gfx copies into the atlas, so it is shared with gfx's
+  // family too, as the mesh buffers below are.
+  rsensor::GpuFramePrepConfig prep_config;
+  prep_config.color_queue_families[0] = shared->compute_family();
+  prep_config.color_queue_families[1] = shared->graphics_family();
+  prep_config.color_queue_family_count = 2;
+  auto prep_result =
+      rsensor::GpuFramePrep::create(rdevice, rallocator, prep_config);
   if (!prep_result) {
     std::fprintf(stderr, "frame prep: %s\n",
                  prep_result.status().message().c_str());
@@ -629,15 +352,21 @@ int run(GLFWwindow* window, const Options& opt) {
       std::atan(static_cast<float>(cam.size.height) /
                 (2.0f * std::max(1.0f, static_cast<float>(cam.intrinsics.fy))));
 
-  // --- gfx: pipeline + 1x1 white atlas set ----------------------------------
+  // --- gfx: pipeline + the keyframe atlas -----------------------------------
   auto pipeline_result = vgp::HybridMeshPipeline::create(
-      app.device().handle(), app.swapchain().layout());
+      app.device(), app.allocator(), app.swapchain().layout());
   if (!pipeline_result.ok()) {
     std::fprintf(stderr, "pipeline: %s\n",
                  pipeline_result.status().message().c_str());
     return 1;
   }
   vgp::HybridMeshPipeline pipeline = std::move(pipeline_result).value();
+  // The keyframe's whole colour image is the atlas: one tile, the colour
+  // camera's size. A keyframe of another size is not textured.
+  const rtex::AtlasTile keyframe_tile{0, 0, cam.size.width, cam.size.height};
+  fuse_viewer::LiveAtlas atlas(
+      pipeline, app.allocator(), app.frame_loop().timeline(),
+      {keyframe_tile.width, keyframe_tile.height}, config.frames_in_flight);
 
   // --- gfx profiler: the renderer's own per-frame CPU/GPU timings ------------
   // The render side gets real GPU spans (this device reports 64
@@ -672,7 +401,7 @@ int run(GLFWwindow* window, const Options& opt) {
   // the swapchain layout, which survives a resize, so the overlay is built
   // once.
   std::optional<vg::ui::ImGuiOverlay> overlay;
-  if (opt.overlay) {
+  if (opt.window.overlay) {
     vg::ui::ImGuiOverlayConfig overlay_config;
     overlay_config.layout = app.swapchain().layout();
     overlay_config.min_image_count = app.swapchain().image_count();
@@ -696,30 +425,7 @@ int run(GLFWwindow* window, const Options& opt) {
   }
   // Runs before `overlay` is destroyed (reverse declaration order), which the
   // ImGui backend requires: its Shutdown touches the context the overlay owns.
-  const fuse_viewer::ImGuiGlfwShutdown imgui_glfw_guard{opt.overlay};
-
-  // One sampler shared by every atlas (immutable; outlives them all).
-  auto sampler_result = vg::Sampler::create(app.device().handle());
-  if (!sampler_result.ok()) {
-    std::fprintf(stderr, "sampler: %s\n",
-                 sampler_result.status().message().c_str());
-    return 1;
-  }
-  vg::Sampler sampler = std::move(sampler_result).value();
-
-  // The initial atlas, and the one bound for a mesh with no keyframe
-  // (texturing off, or nothing in line of sight).
-  auto white_result = fuse_viewer::white_atlas(
-      app.device(), app.allocator(), pipeline.descriptor_set_layout(0),
-      sampler.handle());
-  if (!white_result.ok()) {
-    std::fprintf(stderr, "white atlas: %s\n",
-                 white_result.status().message().c_str());
-    return 1;
-  }
-  const std::shared_ptr<fuse_viewer::Atlas> white_atlas =
-      std::move(white_result).value();
-  std::shared_ptr<fuse_viewer::Atlas> current_atlas = white_atlas;
+  const fuse_viewer::ImGuiGlfwShutdown imgui_glfw_guard{opt.window.overlay};
 
   // --- Background fuse thread: load + decode + fuse + extract off the render
   // thread (per-frame JPEG/PNG decode is CPU-heavy and would otherwise gate the
@@ -733,10 +439,11 @@ int run(GLFWwindow* window, const Options& opt) {
   // -------------------------------------------
   // The mesh handoff: recon's buffers, borrowed -- handles and counts, not
   // bytes -- each with its MeshPayload.
+  const bool cross_family =
+      shared->graphics_family() != shared->compute_family();
   rmesh::MeshExchangeConfig exchange_config;
   exchange_config.frames_in_flight = config.frames_in_flight;
-  exchange_config.cross_family =
-      shared->graphics_family() != shared->compute_family();
+  exchange_config.cross_family = cross_family;
   rmesh::MeshExchange<MeshPayload> exchange(exchange_config);
   fuse_viewer::SharedView shared_view;  // the render camera, meshed
   std::mutex share_mtx;
@@ -760,8 +467,8 @@ int run(GLFWwindow* window, const Options& opt) {
     try {
       // Scratch for this thread only; copied under share_mtx once per frame.
       vkc::StageMetrics fuse_stages;
-      // The remesh-only rows -- extract and its breakdown, texture, atlas
-      // readback -- measured here rather than straight into `fuse_stages`, and
+      // The remesh-only rows -- extract and its breakdown, and texture --
+      // measured here rather than straight into `fuse_stages`, and
       // merged in on every frame whether or not this one remeshed.
       //
       // The gate below fires only on the fused frames the renderer has kept up
@@ -775,10 +482,10 @@ int run(GLFWwindow* window, const Options& opt) {
       // cost of a fused frame that also remeshed.
       vkc::StageMetrics remesh_stages;
       // Texture `device_mesh` with one keyframe, then publish it with that
-      // keyframe's colour image, the atlas its uv0 index into, and the
-      // `timings` of the extract that made it. On any texturing failure -- or
-      // when --no-texture -- the atlas stays empty and the render thread binds
-      // the white dummy (every triangle falls back to fused voxel colour).
+      // keyframe's colour, the atlas its uv0 index into, and the `timings` of
+      // the extract that made it. On any texturing failure -- or when
+      // --no-texture -- the atlas job stays empty and the mesh draws in its
+      // fused voxel colour.
       //
       // The mesh and its atlas are ONE value, published and taken together.
       // uv0 is a normalized coordinate into the image of the camera that
@@ -787,71 +494,60 @@ int run(GLFWwindow* window, const Options& opt) {
       // frame's image samples the wrong place on every textured triangle.
       //
       // Nothing is copied to the host: what crosses is the DeviceMesh, five
-      // words of handles and counts. That is the whole of seam B on this side.
+      // words of handles and counts, and the keyframe's colour buffer, which
+      // the render thread copies into the atlas on the device.
       //
       // `keyframe` is the frame to texture with, or null for none. A frame
-      // without colour is not textured either: uv0 would index an atlas that
-      // does not exist, and the white dummy bound in its place would draw every
-      // visible triangle white.
+      // without colour, or colour gfx cannot copy into the atlas, is not
+      // textured: once uv0 index the atlas, the atlas must hold the image.
+      bool uncopyable_said = false;
       auto publish = [&](const rmesh::DeviceMesh& device_mesh,
                          const rsensor::DeviceFrame* keyframe,
                          const rmesh::ExtractTimings& timings) {
         MeshPayload payload;
         payload.extract = timings;
-        AtlasPixels& atlas = payload.atlas;
         if (texturer && keyframe != nullptr && keyframe->has_color() &&
             !device_mesh.empty()) {
-          // Textures the extractor's buffers in place -- no upload, no
-          // readback; the geometry has not left the device since it was meshed.
-          //
-          // The tier opens its own "texture" row, so there is no StageScope
-          // here: rows accumulate by name, and wrapping the call as well would
-          // count the host span twice while adding nothing. What the tier's row
-          // has that a wrapper's cannot is the device half.
-          //
-          // Through the colour camera, the coverage read off the colour's
-          // high byte: the frame as the GPU pass left it, as for any camera.
-          rtex::TextureView view;
-          view.cam = keyframe->depth_camera;
-          view.depth_buffer = keyframe->depth;
-          view.color_camera = keyframe->color_camera;
-          view.coverage = keyframe->color;
-          const vkc::Status texture_status =
-              texturer->texture(device_mesh, view, 0.02f, &remesh_stages);
-          if (texture_status.ok()) {
-            // Its own row, not folded into "texture": a full colour frame
-            // crossing to the host is a cost of its own beside the texturing
-            // dispatch. The pass refuses colour it cannot make canonical, so
-            // these are the canonical bytes the _SRGB upload assumes.
-            // TODO(examples): copy the atlas on the device, as rig_viewer
-            // does, rather than through the host.
-            vkc::StageScope scope(remesh_stages, "atlas readback");
-            const std::size_t pixels =
-                static_cast<std::size_t>(keyframe->color_camera.width) *
-                keyframe->color_camera.height;
-            atlas.pixels.resize(pixels);
-            const vkc::Status read = [&]() -> vkc::Status {
-              vkc::CommandBatch batch(rdevice, rallocator);
-              VKC_TRY(batch.readback(*keyframe->color, 0,
-                                     pixels * sizeof(std::uint32_t),
-                                     atlas.pixels.data()));
-              return batch.submit();
-            }();
-            if (read.ok()) {
-              atlas.width = keyframe->color_camera.width;
-              atlas.height = keyframe->color_camera.height;
-            } else {
-              // No atlas: the mesh's uv0 still name this frame, and the
-              // white dummy bound in its place draws every visible triangle
-              // white, so say why rather than let that read as a texturing
-              // result.
-              std::fprintf(stderr, "fuse_viewer: atlas: %s\n",
-                           read.message().c_str());
-              atlas.clear();
+          if (keyframe->color_camera.width != keyframe_tile.width ||
+              keyframe->color_camera.height != keyframe_tile.height ||
+              !fuse_viewer::copyable(*keyframe->color, keyframe_tile,
+                                     cross_family)) {
+            // Said once: a frame's colour is fixed by the source.
+            if (!uncopyable_said) {
+              std::fprintf(stderr,
+                           "fuse_viewer: the keyframe's colour cannot be "
+                           "copied into the atlas (not the colour camera's "
+                           "size, not a copy source, or EXCLUSIVE across two "
+                           "queue families); drawing fused colour\n");
+              uncopyable_said = true;
             }
           } else {
-            std::fprintf(stderr, "fuse_viewer: texture: %s\n",
-                         texture_status.message().c_str());
+            // Textures the extractor's buffers in place -- no upload, no
+            // readback; the geometry has not left the device since it was
+            // meshed.
+            //
+            // The tier opens its own "texture" row, so there is no
+            // StageScope here: rows accumulate by name, and wrapping the call
+            // as well would count the host span twice while adding nothing.
+            // What the tier's row has that a wrapper's cannot is the device
+            // half.
+            //
+            // Through the colour camera, the coverage read off the colour's
+            // high byte: the frame as the GPU pass left it, as for any camera.
+            rtex::TextureView view;
+            view.cam = keyframe->depth_camera;
+            view.depth_buffer = keyframe->depth;
+            view.color_camera = keyframe->color_camera;
+            view.coverage = keyframe->color;
+            const vkc::Status texture_status =
+                texturer->texture(device_mesh, view, 0.02f, &remesh_stages);
+            if (texture_status.ok()) {
+              payload.atlas.tiles.push_back(
+                  {keyframe->color, keyframe_tile, 0});
+            } else {
+              std::fprintf(stderr, "fuse_viewer: texture: %s\n",
+                           texture_status.message().c_str());
+            }
           }
         }
         exchange.publish(device_mesh, std::move(payload));
@@ -892,20 +588,13 @@ int run(GLFWwindow* window, const Options& opt) {
       // gated by fusion rather than by JPEG/PNG decode (~75% of a streaming
       // loop). Done here, on the fuse thread, so the window is already up and
       // responsive while it works.
-      if (opt.preload) {
-        std::printf("preloading %.0f MB...\n",
-                    static_cast<double>(replica.preload_bytes_projected()) /
-                        (1024 * 1024));
+      if (opt.replica.preload) {
         // `quit` stops the decode at the next frame boundary, so closing the
         // window mid-preload does not leave the join at shutdown waiting out
         // the whole sequence -- the same reason the final extract below is
         // skipped once the user has quit.
-        auto cached_frames = replica.preload(&quit);
-        if (cached_frames) {
-          std::printf(
-              "preloaded %zu frames (%.0f MB)\n", cached_frames.value(),
-              static_cast<double>(replica.preloaded_bytes()) / (1024 * 1024));
-        } else {
+        auto cached_frames = vr_example::preload_frames(replica, &quit);
+        if (!cached_frames) {
           // poll() still decodes on demand, so a failed preload costs speed,
           // not the run.
           std::fprintf(stderr, "fuse_viewer: preload: %s (streaming instead)\n",
@@ -941,8 +630,7 @@ int run(GLFWwindow* window, const Options& opt) {
         for (const char* stage :
              {"frame", "frame prep", "allocate", "resize", "integrate",
               "  ..active set", "extract", "  ..compact", "  ..arena alloc",
-              "  ..descriptors", "  ..dispatch", "  ..readback", "texture",
-              "atlas readback"}) {
+              "  ..descriptors", "  ..dispatch", "  ..readback", "texture"}) {
           fuse_stages.seed(stage);
         }
         // A preload cache hit, else a disk read + JPEG/PNG decode (the CPU
@@ -982,9 +670,9 @@ int run(GLFWwindow* window, const Options& opt) {
         // tier fills its own stage rows. Commit the new keyframe only after
         // both succeed; a failure still remeshes with the previous frame's
         // texture. The error names the stage that stopped fusion.
-        const vkc::Status fuse_status =
-            vr_example::fuse_keyframe(fuser, volume, prep, *polled.value(),
-                                      last_frame, 20.0f, &fuse_stages);
+        const vkc::Status fuse_status = vr_example::fuse_keyframe(
+            fuser, volume, prep, *polled.value(), last_frame,
+            opt.fusion.max_weight, &fuse_stages);
         if (!fuse_status.ok()) {
           std::fprintf(stderr, "fuse_viewer: frame %zu: %s\n", i,
                        fuse_status.message().c_str());
@@ -1097,17 +785,16 @@ int run(GLFWwindow* window, const Options& opt) {
   });
   fuse_viewer::QuitJoin fuse_guard{fuse_thread, quit};
 
-  // --- Render thread (main): pick up the newest mesh + trajectory, upload,
-  // draw following the capture path.
+  // --- Render thread (main): pick up the newest mesh + trajectory, copy its
+  // atlas, draw following the capture path.
   // ------------------------------------------------
-  std::vector<std::shared_ptr<fuse_viewer::Atlas>> slot_atlas(
-      config.frames_in_flight);
   std::vector<glm::mat4> poses;
   std::size_t view_frame = 0;
   // The fuse thread's newest published stage rows + counters, copied out under
   // share_mtx each frame so the panels read a consistent snapshot.
   std::vector<vkc::StageRow> fuse_stages_snapshot;
-  ReconstructionPanel recon_panel;
+  fuse_viewer::ReconstructionPanel recon_panel;
+  bool atlas_error_said = false;  // until an atlas commits again
 
   std::printf(
       "fuse_viewer: %zu frames, fusing on a background thread; close the "
@@ -1132,35 +819,36 @@ int run(GLFWwindow* window, const Options& opt) {
     const win::Frame& render_frame = *frame.value();
 
     // Retire this slot's last frame and take the newest mesh (begin_frame
-    // fence-waited the slot), then commit it with its payload: its atlas (the
-    // keyframe image, else the white dummy) and the panel's extract rows. A
-    // failed upload keeps the mesh parked and the previous mesh, atlas and
-    // rows shown, so all three always come from the same extract. The commit
-    // runs while the fuse thread may already be extracting the next mesh,
-    // which is why the rows come in the payload. An empty mesh skips the
-    // callback, so the rows stay those of the last mesh that drew anything.
+    // waited for the slot's last frame), then commit it with its payload: its
+    // atlas, the keyframe's colour copied in this command buffer before the
+    // frame's rendering begins, and the panel's extract rows. A refused copy,
+    // or an atlas that could not be made, keeps the mesh parked and the
+    // previous mesh, atlas and rows shown, so all three always come from the
+    // same extract. The commit runs while the fuse thread may already be
+    // extracting the next mesh, which is why the rows come in the payload. An
+    // empty mesh skips the callback, so the rows stay those of the last mesh
+    // that drew anything.
+    atlas.poll();
     {
       // Scoped over the whole step, so the row reports ~0 on a frame with no
       // new mesh instead of vanishing from the table.
-      vg::Profiler::Scope upload_scope = profiler.cpu_scope("atlas upload");
+      vg::Profiler::Scope copy_scope =
+          profiler.gpu_scope(render_frame.cmd, "atlas copy");
       const rmesh::ExchangeOutcome outcome = exchange.begin_frame(
           render_frame.slot,
           [&](const rmesh::DeviceMesh&, const MeshPayload& payload) {
-            std::shared_ptr<fuse_viewer::Atlas> next = white_atlas;
-            if (!payload.atlas.empty()) {
-              auto uploaded = fuse_viewer::upload_atlas(
-                  app.device(), app.allocator(),
-                  pipeline.descriptor_set_layout(0), sampler.handle(),
-                  payload.atlas.pixels.data(), payload.atlas.width,
-                  payload.atlas.height);
-              if (!uploaded.ok()) {
+            const vkc::Status committed = atlas.commit(
+                render_frame.cmd, render_frame.number, payload.atlas);
+            if (!committed.ok()) {
+              // Retried every frame, so said once until it succeeds.
+              if (!atlas_error_said) {
                 std::fprintf(stderr, "fuse_viewer: atlas: %s\n",
-                             uploaded.status().message().c_str());
-                return false;
+                             committed.message().c_str());
+                atlas_error_said = true;
               }
-              next = std::move(uploaded).value();
+              return false;
             }
-            current_atlas = std::move(next);
+            atlas_error_said = false;
             recon_panel.extract = payload.extract;
             return true;
           });
@@ -1198,11 +886,6 @@ int run(GLFWwindow* window, const Options& opt) {
     recon_panel.vertices = live_view.vertex_count;
     recon_panel.triangles = live_view.triangle_count;
     recon_panel.mesh_version = live_view.generation;
-    // This slot adopts the current atlas, releasing whatever it bound last
-    // frame (safe: begin_frame fence-waited this slot). Holding it per slot
-    // keeps a version an in-flight frame bound alive past its replacement --
-    // the mesh's own lifetime is recon's ring, which the exchange releases.
-    slot_atlas[render_frame.slot] = current_atlas;
 
     // Follow the trajectory: the frontier (latest fused pose) while fusing,
     // then replay the path in a loop once done.
@@ -1221,10 +904,9 @@ int run(GLFWwindow* window, const Options& opt) {
       const glm::vec3 eye(c2w[3]);
       const glm::vec3 fwd(c2w[2]);             // OpenCV camera looks down +Z
       const glm::vec3 up(-glm::vec3(c2w[1]));  // image-up is -cameraY (y down)
-      view_proj =
-          vg::camera::Camera::look_at_perspective(
-              eye, eye + fwd, up, vfov, aspect, 0.05f, 2.0f * opt.max_depth)
-              .view_proj();
+      view_proj = vg::camera::Camera::look_at_perspective(
+                      eye, eye + fwd, up, vfov, aspect, 0.05f, 2.0f * max_depth)
+                      .view_proj();
       shared_view.publish(view_proj);  // for the fuse thread to mesh
     }
 
@@ -1257,7 +939,7 @@ int run(GLFWwindow* window, const Options& opt) {
       vg::ui::draw_metrics_panel(metrics, "Performance");
       ImGui::SetNextWindowPos(ImVec2(16.0f, 408.0f), ImGuiCond_FirstUseEver);
       ImGui::SetNextWindowSize(ImVec2(400.0f, 250.0f), ImGuiCond_FirstUseEver);
-      draw_reconstruction_panel(recon_panel);
+      fuse_viewer::draw_reconstruction_panel(recon_panel);
     }
 
     vg::RenderTargetBeginInfo begin_info;
@@ -1304,7 +986,7 @@ int run(GLFWwindow* window, const Options& opt) {
         hybrid_frame.view_proj = view_proj;
         hybrid_frame.light_dir = glm::vec3(0.4f, 0.9f, 0.5f);
         hybrid_frame.flags = opt.lit ? vgp::kHybridMeshLit : 0u;
-        hybrid_frame.atlas = slot_atlas[render_frame.slot]->set.handle();
+        hybrid_frame.atlas = atlas.use(render_frame.number);
         hybrid_frame.draws = &draw;
         hybrid_frame.draw_count = 1;
         pipeline.submit(render_frame.cmd, hybrid_frame);
@@ -1337,16 +1019,20 @@ int run(GLFWwindow* window, const Options& opt) {
 }  // namespace
 
 int main(int argc, char** argv) {
-  Options opt;
-  if (!parse_args(argc, argv, opt)) return 2;
+  const vkc::Result<Options> parsed = parse_args(argc, argv);
+  if (!parsed) {
+    std::fprintf(stderr, "%s\n", parsed.status().message().c_str());
+    return 2;
+  }
+  const Options& opt = parsed.value();
 
   if (glfwInit() != GLFW_TRUE) {
     std::fprintf(stderr, "glfwInit failed\n");
     return 1;
   }
   glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-  GLFWwindow* window =
-      glfwCreateWindow(opt.width, opt.height, "fuse_viewer", nullptr, nullptr);
+  GLFWwindow* window = glfwCreateWindow(opt.window.width, opt.window.height,
+                                        "fuse_viewer", nullptr, nullptr);
   if (window == nullptr) {
     std::fprintf(stderr, "glfwCreateWindow failed\n");
     glfwTerminate();

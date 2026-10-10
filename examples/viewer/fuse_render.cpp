@@ -15,13 +15,13 @@
 //   fuse_render <scene_dir> [-o out.png] [--voxel 0.02] [--trunc m]
 //               [--min-depth m] [--max-depth m] [--max-frames N]
 //               [--width 1280] [--height 720] [--yaw 45] [--pitch 30] [--lit]
+//               ...
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
-#include <cstdlib>
 #include <memory>
 #include <optional>
 #include <string>
@@ -31,10 +31,12 @@
 
 #include <glm/glm.hpp>
 
+#include "cli.hpp"
 #include "fuse_frame.hpp"  // vr_example::fuse_set
+#include "fusion_flags.hpp"
 #include "recon_gfx_bridge.hpp"
+#include "replica_flags.hpp"
 #include "replica_sensor.hpp"  // vr_example::ReplicaSensor (examples/common)
-#include "viewer_atlas.hpp"
 
 // core and recon tiers
 #include "volumetric_kit/core/base/result.hpp"
@@ -42,6 +44,7 @@
 #include "volumetric_kit/core/vulkan/command_batch.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/instance.hpp"
+#include "volumetric_kit/core/vulkan/sync.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/io/image_io.hpp"
@@ -61,9 +64,9 @@
 #include "volumetric_kit/gfx/camera/camera.hpp"
 #include "volumetric_kit/gfx/core/offscreen_target.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
-#include "volumetric_kit/gfx/core/sampler.hpp"
 #include "volumetric_kit/gfx/pipelines/gpu_mesh.hpp"
 #include "volumetric_kit/gfx/pipelines/hybrid_mesh_pipeline.hpp"
+#include "volumetric_kit/gfx/pipelines/streamed_atlas.hpp"
 
 namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
@@ -78,21 +81,9 @@ namespace vgp = volumetric_kit::gfx::pipelines;
 namespace {
 
 struct Options {
-  std::string scene_dir;
-  std::string cam_params;
+  vr_example::ReplicaFlags replica{400};
+  vr_example::FusionFlags fusion{0.02f};
   std::string out = "fuse_render.png";
-  float voxel = 0.02f;
-  // Derived from `voxel` when left at 0 (see parse_args): a truncation band
-  // fixed in metres is a band whose width *in voxels* changes with --voxel,
-  // which silently degrades the reconstruction in both directions.
-  float trunc = 0.0f;
-  // The depth gate, both ends. Exposed as a pair because the capture takes a
-  // pair: leaving the near plane implicit meant a --max-depth at or under the
-  // default 0.1 m was refused with a message naming a knob this example never
-  // offered.
-  float min_depth = 0.1f;
-  float max_depth = 8.0f;
-  int max_frames = 400;
   int width = 1280;
   int height = 720;
   float yaw = 45.0f;    // degrees, around the up axis
@@ -100,7 +91,6 @@ struct Options {
   bool lit = false;     // flat raw colour by default (the reconstruction's own)
   int follow = -1;      // >=0: render from this trajectory frame's sensor pose
   bool texture = true;  // project the keyframe image onto the mesh (uv0 atlas)
-  bool preload = false;  // decode every frame up front (RAM for decode time)
   // In-block vertex sharing (MarchingCubesConfig::share_vertices), which
   // `fuse_replica` already exposes and this example did not. It belongs here
   // because this is the only example that renders, and sharing is what a
@@ -118,131 +108,29 @@ struct Options {
   bool share_vertices = false;
 };
 
-bool parse_args(int argc, char** argv, Options& o) {
-  for (int i = 1; i < argc; ++i) {
-    const std::string a = argv[i];
-    auto val = [&](const char* n) -> const char* {
-      return (i + 1 < argc)
-                 ? argv[++i]
-                 : (std::fprintf(stderr, "%s needs a value\n", n), nullptr);
-    };
-    if (a == "-o" || a == "--out") {
-      const char* v = val("-o");
-      if (!v) return false;
-      o.out = v;
-    } else if (a == "--cam-params") {
-      const char* v = val(a.c_str());
-      if (!v) return false;
-      o.cam_params = v;
-    } else if (a == "--voxel") {
-      const char* v = val(a.c_str());
-      if (!v) return false;
-      o.voxel = std::strtof(v, nullptr);
-    } else if (a == "--trunc") {
-      const char* v = val(a.c_str());
-      if (!v) return false;
-      o.trunc = std::strtof(v, nullptr);
-    } else if (a == "--min-depth") {
-      const char* v = val(a.c_str());
-      if (!v) return false;
-      o.min_depth = std::strtof(v, nullptr);
-    } else if (a == "--max-depth") {
-      const char* v = val(a.c_str());
-      if (!v) return false;
-      o.max_depth = std::strtof(v, nullptr);
-    } else if (a == "--max-frames") {
-      const char* v = val(a.c_str());
-      if (!v) return false;
-      o.max_frames = std::atoi(v);
-    } else if (a == "--width") {
-      const char* v = val(a.c_str());
-      if (!v) return false;
-      o.width = std::atoi(v);
-    } else if (a == "--height") {
-      const char* v = val(a.c_str());
-      if (!v) return false;
-      o.height = std::atoi(v);
-    } else if (a == "--yaw") {
-      const char* v = val(a.c_str());
-      if (!v) return false;
-      o.yaw = std::strtof(v, nullptr);
-    } else if (a == "--pitch") {
-      const char* v = val(a.c_str());
-      if (!v) return false;
-      o.pitch = std::strtof(v, nullptr);
-    } else if (a == "--follow") {
-      const char* v = val(a.c_str());
-      if (!v) return false;
-      o.follow = std::atoi(v);
-    } else if (a == "--lit") {
-      o.lit = true;
-    } else if (a == "--no-texture") {
-      o.texture = false;
-    } else if (a == "--share-vertices") {
-      o.share_vertices = true;
-    } else if (a == "--preload") {
-      o.preload = true;
-    } else if (!a.empty() && a[0] == '-') {
-      std::fprintf(stderr, "unknown flag %s\n", a.c_str());
-      return false;
-    } else if (o.scene_dir.empty()) {
-      o.scene_dir = a;
-    } else {
-      std::fprintf(stderr, "unexpected arg %s\n", a.c_str());
-      return false;
-    }
-  }
-  if (o.scene_dir.empty()) {
-    std::fprintf(stderr,
-                 "usage: fuse_render <scene_dir> [-o out.png] [--voxel m] "
-                 "[--trunc m] [--min-depth m] [--max-depth m] [--max-frames n] "
-                 "[--yaw d] [--pitch d] [--lit] [--no-texture] "
-                 "[--share-vertices] [--preload]\n");
-    return false;
-  }
-  // strtof parses "nan"/"inf" without error, and a non-finite knob slips the
-  // downstream guards (NaN compares false to every bound) to reach the grid
-  // params, the GPU, or the camera math -- a silent, degenerate render. Reject
-  // up front.
-  if (!std::isfinite(o.voxel) || o.voxel <= 0.0f) {
-    std::fprintf(stderr, "--voxel must be finite and > 0\n");
-    return false;
-  }
-  // Default the band to 4 voxels, as fuse_replica does. Hardcoding it in metres
-  // meant --voxel alone changed the band's width in voxels: at --voxel 0.05 the
-  // old 0.08 is a 1.6-voxel band, leaving marching cubes a thin, hole-prone
-  // zero set, and at --voxel 0.005 it is 16 voxels, which pushes the
-  // allocation dilation from 27 blocks per surface block to 125. Neither is an
-  // error, and the same flag reconstructed differently here than in
-  // fuse_replica -- which defeats the A/B these examples exist for.
-  if (o.trunc <= 0.0f) o.trunc = 4.0f * o.voxel;
-  if (!std::isfinite(o.trunc) || o.trunc <= 0.0f) {
-    std::fprintf(stderr, "--trunc must be finite and > 0\n");
-    return false;
-  }
-  if (!std::isfinite(o.max_depth) || o.max_depth <= 0.0f) {
-    std::fprintf(stderr, "--max-depth must be finite and > 0\n");
-    return false;
-  }
-  // The same range rule the sensor applies, checked here where the flags
-  // still have their names -- as fuse_replica does.
-  if (!(o.min_depth > 0.0f) || o.min_depth >= o.max_depth) {
-    std::fprintf(stderr, "--min-depth must be in (0, --max-depth)\n");
-    return false;
-  }
-  if (!std::isfinite(o.yaw) || !std::isfinite(o.pitch)) {
-    std::fprintf(stderr, "--yaw/--pitch must be finite\n");
-    return false;
-  }
-  if (o.cam_params.empty()) o.cam_params = o.scene_dir + "/../cam_params.json";
-  return true;
+vkc::Result<Options> parse_args(int argc, char** argv) {
+  Options o;
+  vr_example::Cli cli("fuse_render");
+  o.replica.add_to(cli);
+  cli.option({"-o", "--out"}, "out.png", o.out);
+  o.fusion.add_to(cli);
+  cli.option("--width", "W", o.width, 1)
+      .option("--height", "H", o.height, 1)
+      .option("--yaw", "deg", o.yaw)
+      .option("--pitch", "deg", o.pitch)
+      .option("--follow", "frame", o.follow)
+      .flag("--lit", o.lit)
+      .flag("--no-texture", o.texture, false)
+      .flag("--share-vertices", o.share_vertices);
+  VKC_TRY(cli.parse(argc, argv));
+  return o;
 }
 
 // --- Fuse a Replica sequence into a coloured host mesh (recon side). ---------
 
 // The reconstruction handed to the renderer: the textured mesh plus the RGBA8
 // atlas its uv0 index into (the keyframe image projected onto it). `atlas` is
-// empty when texturing is off, and the caller binds a 1x1 white dummy instead.
+// empty when texturing is off, and the mesh draws in its vertex colour.
 struct Reconstruction {
   rmesh::Mesh mesh;
   // Canonical packed pixels (R | G<<8 | B<<16, the coverage byte on top: 0xFF
@@ -272,14 +160,7 @@ vkc::Result<Reconstruction> fuse(const Options& opt,
   // The sequence arrives through the sensor interface; only this construction
   // knows it is a disk. The frame cap and the depth gate are the sensor's
   // options, so every frame it hands out is already gated.
-  vr_example::ReplicaSensor::Options capture_options;
-  capture_options.frame_limit =
-      static_cast<std::size_t>(std::max(0, opt.max_frames));
-  capture_options.min_depth = opt.min_depth;
-  capture_options.max_depth = opt.max_depth;
-  VKC_ASSIGN(vr_example::ReplicaSensor replica,
-             vr_example::ReplicaSensor::open(opt.scene_dir, opt.cam_params,
-                                             capture_options));
+  VKC_ASSIGN(vr_example::ReplicaSensor replica, opt.replica.open(opt.fusion));
   const vr::camera::CameraModel& cam = *replica.info().color;
   const float cy = static_cast<float>(cam.intrinsics.cy);
   const float fy = static_cast<float>(cam.intrinsics.fy);
@@ -289,9 +170,9 @@ vkc::Result<Reconstruction> fuse(const Options& opt,
       std::atan(cy / fy) +
       std::atan((static_cast<float>(cam.size.height) - cy) / fy);
 
-  VKC_ASSIGN(
-      vol::VoxelBlockGrid volume,
-      vr_example::create_fusion_grid(device, allocator, opt.voxel, opt.trunc));
+  VKC_ASSIGN(vol::VoxelBlockGrid volume,
+             vr_example::create_fusion_grid(device, allocator, opt.fusion.voxel,
+                                            opt.fusion.trunc));
   VKC_ASSIGN(rtsdf::Fuser fuser, rtsdf::Fuser::create(device, allocator));
   VKC_ASSIGN(rsensor::GpuFramePrep prep,
              rsensor::GpuFramePrep::create(device, allocator));
@@ -302,14 +183,8 @@ vkc::Result<Reconstruction> fuse(const Options& opt,
 
   // Decode the sequence up front when asked, so the fuse loop below runs at
   // GPU speed instead of at JPEG/PNG decode speed (~75% of a streaming loop).
-  // Costs ~4.9 MB per frame of RAM, announced before it is spent.
-  if (opt.preload) {
-    std::printf(
-        "preloading %.0f MB...\n",
-        static_cast<double>(replica.preload_bytes_projected()) / (1024 * 1024));
-    VKC_ASSIGN(const std::size_t cached_frames, replica.preload());
-    std::printf("preloaded %zu frames (%.0f MB)\n", cached_frames,
-                static_cast<double>(replica.preloaded_bytes()) / (1024 * 1024));
+  if (opt.replica.preload) {
+    VKC_TRY(vr_example::preload_frames(replica).status());
   }
 
   // The keyframe the mesh is textured with, kept as prepared as it goes by:
@@ -347,7 +222,8 @@ vkc::Result<Reconstruction> fuse(const Options& opt,
     poses.push_back(frame.depth_camera.cam_to_world);
     // Grow the map ahead of need, allocate the band and integrate depth +
     // colour, as fuse_replica does; an incomplete band is an error.
-    VKC_TRY(vr_example::fuse_set(fuser, volume, {frame}, 20.0f, nullptr));
+    VKC_TRY(vr_example::fuse_set(fuser, volume, {frame}, opt.fusion.max_weight,
+                                 nullptr));
     if (opt.texture && fused == keyframe_index && frame.has_color()) {
       keyframe = std::move(frame);
     }
@@ -401,8 +277,12 @@ vkc::Result<Reconstruction> fuse(const Options& opt,
 }  // namespace
 
 int main(int argc, char** argv) {
-  Options opt;
-  if (!parse_args(argc, argv, opt)) return 2;
+  const vkc::Result<Options> parsed = parse_args(argc, argv);
+  if (!parsed) {
+    std::fprintf(stderr, "%s\n", parsed.status().message().c_str());
+    return 2;
+  }
+  const Options& opt = parsed.value();
 
   // 1. Fuse + extract the reconstruction (recon device).
   std::vector<glm::mat4> poses;
@@ -490,8 +370,8 @@ int main(int argc, char** argv) {
   }
   vg::OffscreenTarget target = std::move(target_r).value();
 
-  auto pipeline_result =
-      vgp::HybridMeshPipeline::create(app.device().handle(), target.layout());
+  auto pipeline_result = vgp::HybridMeshPipeline::create(
+      app.device(), app.allocator(), target.layout());
   if (!pipeline_result.ok()) {
     std::fprintf(stderr, "HybridMeshPipeline: %s\n",
                  pipeline_result.status().message().c_str());
@@ -509,26 +389,27 @@ int main(int argc, char** argv) {
   vgp::GpuMesh gpu_mesh = std::move(gpu_r).value();
 
   // 4. Atlas: the keyframe's colour image where texturing ran (uv0 index into
-  // it), else the white dummy.
-  auto sampler_r = vg::Sampler::create(app.device().handle());
-  if (!sampler_r.ok()) {
-    std::fprintf(stderr, "sampler: %s\n", sampler_r.status().message().c_str());
+  // it), uploaded in the frame that draws it; else none, and the mesh draws in
+  // its vertex colour. The one frame is number 1 on a timeline of its own.
+  auto frames_r = vkc::TimelineSemaphore::create(app.device());
+  if (!frames_r.ok()) {
+    std::fprintf(stderr, "timeline: %s\n", frames_r.status().message().c_str());
     return 1;
   }
-  vg::Sampler sampler = std::move(sampler_r).value();
-  auto atlas_r = recon.atlas.empty()
-                     ? fuse_viewer::white_atlas(
-                           app.device(), app.allocator(),
-                           pipeline.descriptor_set_layout(0), sampler.handle())
-                     : fuse_viewer::upload_atlas(
-                           app.device(), app.allocator(),
-                           pipeline.descriptor_set_layout(0), sampler.handle(),
-                           recon.atlas.data(), recon.atlas_w, recon.atlas_h);
-  if (!atlas_r.ok()) {
-    std::fprintf(stderr, "atlas: %s\n", atlas_r.status().message().c_str());
-    return 1;
+  const vkc::TimelineSemaphore frames = std::move(frames_r).value();
+  std::optional<vgp::StreamedAtlas> atlas;
+  if (!recon.atlas.empty()) {
+    vgp::StreamedAtlasDesc atlas_desc;
+    atlas_desc.extent = {recon.atlas_w, recon.atlas_h};
+    atlas_desc.slots = 1;
+    auto atlas_r = vgp::StreamedAtlas::create(pipeline, app.allocator(), frames,
+                                              atlas_desc);
+    if (!atlas_r.ok()) {
+      std::fprintf(stderr, "atlas: %s\n", atlas_r.status().message().c_str());
+      return 1;
+    }
+    atlas = std::move(atlas_r).value();
   }
-  const std::shared_ptr<fuse_viewer::Atlas> atlas = std::move(atlas_r).value();
 
   // 5. Render one frame to the offscreen target, then read it back.
   const vgp::HybridMeshDraw draw{&gpu_mesh};
@@ -537,12 +418,18 @@ int main(int argc, char** argv) {
   frame.view_proj = view_proj;
   frame.light_dir = glm::vec3(0.4f, 0.9f, 0.5f);
   frame.flags = opt.lit ? vgp::kHybridMeshLit : 0u;
-  frame.atlas = atlas->set.handle();
   frame.draws = &draw;
   frame.draw_count = 1;
 
-  const vkc::Status rendered =
-      app.device().submit_single_time([&](VkCommandBuffer cmd) {
+  vkc::Status uploaded;
+  auto rendered = app.device().submit_pending(
+      [&](VkCommandBuffer cmd) {
+        if (atlas) {
+          uploaded =
+              atlas->record_upload(cmd, 1, recon.atlas.data(),
+                                   recon.atlas.size() * sizeof(std::uint32_t));
+          frame.atlas = atlas->use(1);
+        }
         target.prepare(cmd);
         const vg::RenderTarget rt = target.target();
         vg::RenderTargetBeginInfo begin_info;
@@ -561,9 +448,13 @@ int main(int argc, char** argv) {
         pipeline.submit(cmd, frame);
         rt.end(cmd);
         target.record_readback(cmd);
-      });
-  if (!rendered.ok()) {
-    std::fprintf(stderr, "render: %s\n", rendered.message().c_str());
+      },
+      {}, {{&frames, 1}});
+  const vkc::Status done =
+      rendered.ok() ? rendered.value().wait() : rendered.status();
+  if (!done.ok() || !uploaded.ok()) {
+    std::fprintf(stderr, "render: %s\n",
+                 (done.ok() ? uploaded : done).message().c_str());
     return 1;
   }
 

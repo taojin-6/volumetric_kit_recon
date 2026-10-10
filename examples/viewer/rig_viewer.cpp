@@ -26,10 +26,10 @@
 //     an EXCLUSIVE buffer is undefined in the way that appears to work.
 //     Verified per buffer before its camera textures the mesh, so a buffer gfx
 //     cannot copy costs that camera's triangles rather than the mesh's texture.
-//   * lifetime -- the colour buffers a copy reads are held by the frame slot
-//     that recorded it until begin_frame fence-waits that slot again, and an
-//     atlas image is reused only once no frame in flight and no committed
-//     mesh holds it.
+//   * lifetime -- the atlas is gfx's StreamedAtlas, whose images are reused
+//     only once the frame loop's timeline passes the last frame that drew
+//     them, and the colour buffers a copy reads are held until the frame that
+//     copies them completes (viewer_atlas.hpp's LiveAtlas).
 //   * visibility -- as for the mesh: the frame prep fence-waits its batch
 //     before process returns, and gfx's later vkQueueSubmit makes those
 //     writes visible to the copy.
@@ -68,7 +68,6 @@
 #include <csignal>
 #include <cstdint>
 #include <cstdio>
-#include <cstdlib>
 #include <exception>
 #include <memory>
 #include <mutex>
@@ -84,8 +83,12 @@
 #include <imgui_impl_glfw.h>
 #include <glm/glm.hpp>
 
-#include "fuse_frame.hpp"        // vr_example::create_fusion_grid, fuse_set
+#include "cli.hpp"
+#include "fuse_frame.hpp"  // vr_example::create_fusion_grid, fuse_set
+#include "fusion_flags.hpp"
+#include "orbbec_flags.hpp"
 #include "recon_gfx_bridge.hpp"  // to_live_mesh, and the vertex-layout asserts
+#include "rig_report.hpp"
 #include "shared_device.hpp"
 #include "viewer_atlas.hpp"
 #include "viewer_common.hpp"
@@ -117,10 +120,8 @@
 #include "volumetric_kit/gfx/app/windowed_app.hpp"
 #include "volumetric_kit/gfx/camera/camera.hpp"
 #include "volumetric_kit/gfx/core/frame_metrics.hpp"
-#include "volumetric_kit/gfx/core/image_barrier.hpp"
 #include "volumetric_kit/gfx/core/profiler.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
-#include "volumetric_kit/gfx/core/sampler.hpp"
 #include "volumetric_kit/gfx/pipelines/hybrid_mesh_pipeline.hpp"
 #include "volumetric_kit/gfx/pipelines/live_mesh.hpp"
 #include "volumetric_kit/gfx/ui/imgui_overlay.hpp"
@@ -177,22 +178,10 @@ std::uint32_t shading_flags(Shading shading) {
 }
 
 struct Options {
-  std::string rig;          // the sync configuration; required
-  std::string calibration;  // poses by serial; empty: all at the origin
-  bool apply_sync = false;  // write the sync configuration where it differs
-  // H.265 colour unless --mjpeg: MJPEG takes about nine times the
-  // bandwidth (185 against 21 Mbit/s a camera at 4K).
-  bool hevc = true;
-  std::uint32_t color_width = 0;  // 0 keeps the driver's default mode
-  std::uint32_t color_height = 0;
-  std::uint32_t fps = 0;
+  vr_example::OrbbecFlags cameras;  // --rig is required
   // 1 cm: a Femto Mega's depth pixel covers about 4 mm at 1.5 m, so the rig
   // resolves finer than fuse_viewer's 2 cm default for a phone-scale scan.
-  float voxel = 0.01f;             // metres
-  float trunc = 0.0f;              // 0 => 4 * voxel, as the other examples
-  std::optional<float> min_depth;  // unset keeps the driver's defaults
-  std::optional<float> max_depth;
-  float max_weight = 20.0f;
+  vr_example::FusionFlags fusion{0.01f};
   // Dynamic integration by default: a voxel a camera now sees as free space
   // is cleared, so a surface that moves away is gone on the next set rather
   // than fading over max_weight frames, and one arriving there forms at once.
@@ -238,8 +227,7 @@ struct Options {
   // Draw N frames, then exit as a closed window does -- for a scripted run;
   // 0 draws until the window is closed.
   int frames = 0;
-  int width = 1280;
-  int height = 720;
+  fuse_viewer::WindowFlags window;
   // Unlit by default: the cameras' own colour, as they saw it, with no
   // light to darken the faces turned from it.
   Shading shading = Shading::kUnlit;
@@ -250,146 +238,36 @@ struct Options {
   // Now and then read the mesh back and print how much of it each camera
   // textured. Costs a readback of the whole mesh, so off by default.
   bool texture_stats = false;
-  bool overlay = true;      // Dear ImGui panels
-  bool validation = false;  // Vulkan validation layer on the shared device
 };
 
-const char* kUsage =
-    "usage: rig_viewer --rig sync.json [--calibration calib.json] "
-    "[--apply-sync] [--hevc | --mjpeg] [--color WxH] [--fps N] [--voxel m] "
-    "[--trunc m] [--min-depth m] [--max-depth m] [--max-weight w] "
-    "[--dynamic | --static] [--occlusion m] "
-    "[--remesh-every N] [--hold-ms N] [--free-after N] [--sets N] "
-    "[--frames N] "
-    "[--width W] [--height H] "
-    "[--lit | --normals] [--no-texture] [--show-sources] [--texture-stats] "
-    "[--all-depth] "
-    "[--no-overlay] [--validation]\n";
-
-bool parse_args(int argc, char** argv, Options& o) {
-  bool codec_given = false;
-  bool shading_given = false;
-  for (int i = 1; i < argc; ++i) {
-    const std::string a = argv[i];
-    auto value = [&]() -> const char* {
-      return (i + 1 < argc) ? argv[++i] : nullptr;
-    };
-    auto number = [&](float& dst) -> bool {
-      const char* x = value();
-      if (x == nullptr) return false;
-      dst = std::strtof(x, nullptr);
-      return true;
-    };
-    if (a == "--rig" || a == "--calibration") {
-      const char* x = value();
-      if (x == nullptr) return false;
-      (a == "--rig" ? o.rig : o.calibration) = x;
-    } else if (a == "--apply-sync") {
-      o.apply_sync = true;
-    } else if (a == "--hevc" || a == "--mjpeg") {
-      const bool hevc = a == "--hevc";
-      if (codec_given && o.hevc != hevc) {
-        std::fprintf(stderr, "--hevc or --mjpeg, not both\n");
-        return false;
-      }
-      codec_given = true;
-      o.hevc = hevc;
-    } else if (a == "--color") {
-      const char* x = value();
-      unsigned w = 0, h = 0;
-      if (x == nullptr || std::sscanf(x, "%ux%u", &w, &h) != 2 || w == 0 ||
-          h == 0) {
-        std::fprintf(stderr, "--color needs WxH, e.g. 1920x1080\n");
-        return false;
-      }
-      o.color_width = w;
-      o.color_height = h;
-    } else if (a == "--fps") {
-      const char* x = value();
-      if (x == nullptr || std::atoi(x) < 1) {
-        std::fprintf(stderr, "--fps needs N >= 1\n");
-        return false;
-      }
-      o.fps = static_cast<std::uint32_t>(std::atoi(x));
-    } else if (a == "--voxel") {
-      if (!number(o.voxel)) return false;
-    } else if (a == "--trunc") {
-      if (!number(o.trunc)) return false;
-    } else if (a == "--min-depth" || a == "--max-depth") {
-      float d = 0.0f;
-      if (!number(d)) return false;
-      (a == "--min-depth" ? o.min_depth : o.max_depth) = d;
-    } else if (a == "--max-weight") {
-      if (!number(o.max_weight)) return false;
-    } else if (a == "--remesh-every") {
-      const char* x = value();
-      if (x == nullptr) return false;
-      o.remesh_every = std::max(1, std::atoi(x));
-    } else if (a == "--hold-ms") {
-      const char* x = value();
-      if (x == nullptr) return false;
-      o.hold_ms = std::max(0, std::atoi(x));
-    } else if (a == "--free-after") {
-      const char* x = value();
-      if (x == nullptr) return false;
-      o.free_after = std::max(0, std::atoi(x));
-    } else if (a == "--sets" || a == "--frames") {
-      const char* x = value();
-      if (x == nullptr) return false;
-      (a == "--sets" ? o.sets : o.frames) = std::max(0, std::atoi(x));
-    } else if (a == "--width" || a == "--height") {
-      const char* x = value();
-      if (x == nullptr) return false;
-      (a == "--width" ? o.width : o.height) = std::max(1, std::atoi(x));
-    } else if (a == "--lit" || a == "--normals") {
-      const Shading shading = a == "--lit" ? Shading::kLit : Shading::kNormals;
-      if (shading_given && o.shading != shading) {
-        std::fprintf(stderr, "--lit or --normals, not both\n");
-        return false;
-      }
-      shading_given = true;
-      o.shading = shading;
-    } else if (a == "--no-texture") {
-      o.texture = false;
-    } else if (a == "--dynamic" || a == "--static") {
-      o.dynamic = a == "--dynamic";
-    } else if (a == "--occlusion") {
-      if (!number(o.occlusion)) return false;
-    } else if (a == "--all-depth") {
-      o.depth_within_color = false;
-    } else if (a == "--show-sources") {
-      o.show_sources = true;
-    } else if (a == "--texture-stats") {
-      o.texture_stats = true;
-    } else if (a == "--no-overlay") {
-      o.overlay = false;
-    } else if (a == "--validation") {
-      o.validation = true;
-    } else {
-      std::fprintf(stderr, "unknown argument %s\n", a.c_str());
-      return false;
-    }
-  }
-  if (o.rig.empty()) {
-    std::fprintf(stderr, "--rig is required\n");
-    return false;
-  }
-  // strtof takes "nan" and "inf" without complaint, and a NaN knob passes
-  // every bound below by comparing false.
-  for (const float knob : {o.voxel, o.trunc, o.max_weight, o.occlusion}) {
-    if (!std::isfinite(knob)) {
-      std::fprintf(stderr,
-                   "--voxel, --trunc, --max-weight and --occlusion must be "
-                   "finite\n");
-      return false;
-    }
-  }
-  if (!(o.voxel > 0.0f) || !(o.max_weight > 0.0f) || !(o.occlusion > 0.0f)) {
-    std::fprintf(stderr, "--voxel, --max-weight and --occlusion must be > 0\n");
-    return false;
-  }
-  if (o.trunc <= 0.0f) o.trunc = 4.0f * o.voxel;
-  return true;
+vkc::Result<Options> parse_args(int argc, char** argv) {
+  Options o;
+  vr_example::Cli cli("rig_viewer");
+  o.cameras.add_to(cli);
+  cli.require("--rig");
+  o.fusion.add_to(cli);
+  cli.choice<bool>({{"--dynamic", true}, {"--static", false}}, o.dynamic)
+      .option("--occlusion", "m", o.occlusion)
+      .option("--remesh-every", "N", o.remesh_every, 1)
+      .option("--hold-ms", "N", o.hold_ms, 0)
+      .option("--free-after", "N", o.free_after, 0)
+      .option("--sets", "N", o.sets, 0)
+      .option("--frames", "N", o.frames, 0);
+  o.window.add_to(cli);
+  cli.choice<Shading>(
+         {{"--lit", Shading::kLit}, {"--normals", Shading::kNormals}},
+         o.shading)
+      .flag("--no-texture", o.texture, false)
+      .flag("--show-sources", o.show_sources)
+      .flag("--texture-stats", o.texture_stats)
+      .flag("--all-depth", o.depth_within_color, false)
+      .check([&o] {
+        return o.occlusion > 0.0f
+                   ? vkc::Status{}
+                   : vkc::Status::invalid_argument("--occlusion must be > 0");
+      });
+  VKC_TRY(cli.parse(argc, argv));
+  return o;
 }
 
 // A turntable around `target`, about the primary camera's image-up axis.
@@ -475,181 +353,6 @@ std::vector<TextureSource> texture_sources(
   return out;
 }
 
-// One camera's share of an atlas: its colour buffer, as the frame prep left
-// it (R, G, B and coverage in each word -- the bytes of R8G8B8A8), and the
-// tile it goes to.
-struct AtlasTileSource {
-  std::shared_ptr<const vkc::Buffer> color;
-  rtex::AtlasTile tile;
-  std::size_t camera = 0;  // which camera, for the colour-by-camera view
-};
-
-// What a mesh version's atlas is made from: the cameras that textured it,
-// each copied into its tile. Empty for a mesh textured by none.
-struct AtlasJob {
-  std::uint32_t width = 0;
-  std::uint32_t height = 0;
-  std::vector<AtlasTileSource> tiles;
-  bool empty() const noexcept { return tiles.empty(); }
-};
-
-// Record `job` into `image`, a whole atlas: every tile copied from its
-// camera's buffer, then the image made ready for the fragment shader. The
-// previous contents are discarded (UNDEFINED), since a version samples only the
-// tiles it wrote -- a camera missing from the set left no triangle pointing at
-// its tile. With `solid`, each tile is copied from that camera's solid-colour
-// buffer instead (at least a tile's size), so every triangle shows the camera
-// that textured it.
-void record_atlas_copy(VkCommandBuffer cmd, VkImage image, const AtlasJob& job,
-                       const std::vector<VkBuffer>* solid = nullptr) {
-  vg::ImageBarrierDesc to_copy;
-  to_copy.image = image;
-  // Nothing to wait for: acquire hands out only an image no frame in flight
-  // binds, and every frame that bound it has been fence-waited.
-  to_copy.src_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-  to_copy.dst_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
-  to_copy.dst_access = VK_ACCESS_TRANSFER_WRITE_BIT;
-  to_copy.old_layout = VK_IMAGE_LAYOUT_UNDEFINED;
-  to_copy.new_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-  vg::cmd_image_barrier(cmd, to_copy);
-  for (const AtlasTileSource& source : job.tiles) {
-    VkBufferImageCopy region{};
-    region.bufferRowLength = source.tile.width;
-    region.bufferImageHeight = source.tile.height;
-    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    region.imageSubresource.layerCount = 1;
-    region.imageOffset = {static_cast<std::int32_t>(source.tile.x),
-                          static_cast<std::int32_t>(source.tile.y), 0};
-    region.imageExtent = {source.tile.width, source.tile.height, 1};
-    const VkBuffer from =
-        solid != nullptr ? (*solid)[source.camera] : source.color->handle();
-    vkCmdCopyBufferToImage(cmd, from, image,
-                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-  }
-  vg::ImageBarrierDesc to_sample;
-  to_sample.image = image;
-  to_sample.src_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
-  to_sample.src_access = VK_ACCESS_TRANSFER_WRITE_BIT;
-  to_sample.dst_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-  to_sample.dst_access = VK_ACCESS_SHADER_READ_BIT;
-  to_sample.old_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-  to_sample.new_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-  vg::cmd_image_barrier(cmd, to_sample);
-}
-
-// Why a mesh went out without an atlas. Such a mesh draws in fused vertex
-// colour until the next remesh, so a run that often publishes one flickers
-// between the cameras' texture and the fused colour; the Rig panel counts each.
-enum Untextured : std::size_t {
-  kEmptyMesh,   // the extract had no triangles, so there was nothing to texture
-  kNoColour,    // no camera of the set carried colour gfx can copy
-  kTextureOff,  // texturing switched off in the View panel
-  kTextureFailed,  // the texture pass refused or failed (said on stderr)
-  kUntexturedReasons,
-};
-constexpr const char* kUntexturedNames[kUntexturedReasons] = {
-    "empty extract", "no colour", "texturing off", "texture failed"};
-
-// What the rig side reports beside the renderer's metrics, sampled on the
-// fuse thread (which owns the array) and copied out by the render thread every
-// frame, so it holds only what changes.
-struct RigPanel {
-  std::uint64_t sets_fused = 0;
-  std::uint64_t frames_fused = 0;
-  std::size_t cameras_textured = 0;  // in the newest textured set
-  std::size_t cameras_held = 0;      // of those, from a held frame
-  // Over the run: views the texture pass was given from a held frame, and
-  // remeshes it was given fewer cameras than the rig has -- each one a
-  // flicker, where the missing cameras' triangles fell to fused colour. Both
-  // count views given, not triangles taken: a held view whose depth no longer
-  // agrees with the mesh takes none, which --texture-stats shows.
-  std::uint64_t held_views = 0;
-  std::uint64_t short_remeshes = 0;
-  std::array<std::uint64_t, kUntexturedReasons> untextured{};
-  rsensor::SensorArrayStats stats;
-  std::size_t vertices = 0;
-  std::size_t triangles = 0;
-  std::uint64_t mesh_version = 0;
-  float map_load_factor = 0.0f;  // negative: the read failed
-  std::int32_t map_blocks = 0;
-  double fuse_ms = 0.0;    // the newest set's prep, allocate and integrate
-  double remesh_ms = 0.0;  // the newest remesh's extract and texture
-  vkc::MemoryStats recon_memory;
-  bool silent = false;  // no set within kSilenceLimit
-  // Meshes the window committed per second, over the last second: how often
-  // what is drawn changes, the viewer's live rate. Filled on the render
-  // thread, as the mesh counts are.
-  double mesh_rate = 0.0;
-};
-
-double to_mebibytes(std::uint64_t bytes) {
-  return static_cast<double>(bytes) / (1024.0 * 1024.0);
-}
-
-void draw_rig_panel(const RigPanel& panel,
-                    const std::vector<std::string>& serials) {
-  if (!ImGui::Begin("Rig")) {
-    ImGui::End();
-    return;
-  }
-  ImGui::Text("sets     %llu fused (%llu frames), %llu missing a camera",
-              static_cast<unsigned long long>(panel.sets_fused),
-              static_cast<unsigned long long>(panel.frames_fused),
-              static_cast<unsigned long long>(panel.stats.incomplete));
-  ImGui::Text("frames   %llu in no set",
-              static_cast<unsigned long long>(panel.stats.unmatched));
-  if (panel.silent) {
-    ImGui::TextColored(ImVec4(0.9f, 0.5f, 0.2f, 1.0f),
-                       "no set from the rig in %lld s",
-                       static_cast<long long>(kSilenceLimit.count()));
-  }
-  ImGui::Text("fuse     %.2f ms/set", panel.fuse_ms);
-  ImGui::Text("remesh   %.2f ms, the newest", panel.remesh_ms);
-  ImGui::Text("mesh     %.1f updates/s", panel.mesh_rate);
-  ImGui::Text("textured from %zu camera%s, %zu held", panel.cameras_textured,
-              panel.cameras_textured == 1 ? "" : "s", panel.cameras_held);
-  ImGui::Text("  so far  %llu held views, %llu remeshes short of a camera",
-              static_cast<unsigned long long>(panel.held_views),
-              static_cast<unsigned long long>(panel.short_remeshes));
-  for (std::size_t r = 0; r < kUntexturedReasons; ++r) {
-    if (panel.untextured[r] == 0) continue;
-    ImGui::Text("  untextured meshes, %s: %llu", kUntexturedNames[r],
-                static_cast<unsigned long long>(panel.untextured[r]));
-  }
-  ImGui::Separator();
-  for (std::size_t i = 0; i < panel.stats.sensors.size(); ++i) {
-    const rsensor::SensorStats& st = panel.stats.sensors[i];
-    ImGui::Text("%s  %llu in, %llu dropped, %llu failed",
-                i < serials.size() ? serials[i].c_str() : "?",
-                static_cast<unsigned long long>(st.received),
-                static_cast<unsigned long long>(st.dropped),
-                static_cast<unsigned long long>(st.failed));
-  }
-  ImGui::Separator();
-  ImGui::Text("mesh v%llu  %zu vertices / %zu triangles",
-              static_cast<unsigned long long>(panel.mesh_version),
-              panel.vertices, panel.triangles);
-  if (panel.map_load_factor < 0.0f) {
-    ImGui::Text("map      unavailable, %d blocks", panel.map_blocks);
-  } else {
-    ImGui::Text("map      %.1f%% of %d blocks%s", 100.0 * panel.map_load_factor,
-                panel.map_blocks,
-                panel.map_load_factor >= vol::VoxelHashMap::kGrowThreshold
-                    ? "  -- grow now"
-                    : "");
-  }
-  // recon's own share of each heap (reserved_bytes), against its budget, as
-  // fuse_viewer's panel shows it.
-  for (std::uint32_t heap = 0; heap < panel.recon_memory.heap_count; ++heap) {
-    const vkc::HeapStats& stats = panel.recon_memory.heaps[heap];
-    if (stats.reserved_bytes == 0) continue;
-    ImGui::Text("recon heap %u  %.0f / %.0f MiB", heap,
-                to_mebibytes(stats.reserved_bytes),
-                to_mebibytes(stats.budget_bytes));
-  }
-  ImGui::End();
-}
-
 // Owns the WindowedApp and every device resource, so they are gone before
 // main destroys the window (see fuse_viewer's run()).
 int run(GLFWwindow* window, const Options& opt) {
@@ -660,7 +363,7 @@ int run(GLFWwindow* window, const Options& opt) {
   config.swapchain.depth_format = VK_FORMAT_D32_SFLOAT;
   config.frames_in_flight = 2;
   fuse_viewer::SharedDeviceConfig shared_config;
-  shared_config.enable_validation = opt.validation;
+  shared_config.enable_validation = opt.window.validation;
   shared_config.app_name = "rig_viewer";
   shared_config.graphics = config.device;
   const std::unique_ptr<fuse_viewer::vkc::SharedDevice> shared =
@@ -707,8 +410,8 @@ int run(GLFWwindow* window, const Options& opt) {
   // thread, so a camera that does not answer ends the run with its reason
   // before the window starts drawing; the fuse thread starts them.
   rsensor::SensorArray::Options array_options;
-  if (!opt.calibration.empty()) {
-    auto calibration = rcamera::read_array_calibration(opt.calibration);
+  if (!opt.cameras.calibration.empty()) {
+    auto calibration = rcamera::read_array_calibration(opt.cameras.calibration);
     if (!calibration) {  // the message names the file
       std::fprintf(stderr, "rig_viewer: %s\n",
                    calibration.status().message().c_str());
@@ -727,18 +430,9 @@ int run(GLFWwindow* window, const Options& opt) {
   array_options.prep.depth_within_color = opt.depth_within_color;
   // The streams, the same for every camera.
   rsensor::OrbbecSensor::Options sensor_options;
-  sensor_options.device = &rdevice;
-  sensor_options.allocator = &rallocator;
-  if (opt.hevc) sensor_options.color_codec = rsensor::OrbbecColorCodec::Hevc;
-  if (opt.color_width != 0) {
-    sensor_options.color_width = opt.color_width;
-    sensor_options.color_height = opt.color_height;
-  }
-  if (opt.fps != 0) sensor_options.fps = opt.fps;
-  if (opt.min_depth) sensor_options.min_depth = *opt.min_depth;
-  if (opt.max_depth) sensor_options.max_depth = *opt.max_depth;
-  sensor_options.apply_sync = opt.apply_sync;
-  auto sensors = rsensor::open_orbbec_sensors(opt.rig, sensor_options);
+  opt.cameras.apply(opt.fusion, rdevice, rallocator, sensor_options);
+  sensor_options.apply_sync = opt.cameras.apply_sync;
+  auto sensors = rsensor::open_orbbec_sensors(opt.cameras.rig, sensor_options);
   if (!sensors) {  // the message names the file or the camera
     std::fprintf(stderr, "rig_viewer: %s\n",
                  sensors.status().message().c_str());
@@ -779,7 +473,7 @@ int run(GLFWwindow* window, const Options& opt) {
                 i == array.primary() ? " (primary)" : "", cam.size.width,
                 cam.size.height, at.x, at.y, at.z);
   }
-  if (opt.calibration.empty() && cameras > 1) {
+  if (opt.cameras.calibration.empty() && cameras > 1) {
     std::fprintf(stderr,
                  "rig_viewer: no --calibration, so every camera sits at the "
                  "origin and the %zu cameras fuse over one another\n",
@@ -787,8 +481,8 @@ int run(GLFWwindow* window, const Options& opt) {
   }
 
   // --- recon: volume, fuser, extractor, texturer --------------------------
-  auto grid_result =
-      vr_example::create_fusion_grid(rdevice, rallocator, opt.voxel, opt.trunc);
+  auto grid_result = vr_example::create_fusion_grid(
+      rdevice, rallocator, opt.fusion.voxel, opt.fusion.trunc);
   if (!grid_result) {
     std::fprintf(stderr, "grid: %s\n", grid_result.status().message().c_str());
     return 1;
@@ -851,15 +545,18 @@ int run(GLFWwindow* window, const Options& opt) {
                 layout.tiles.size());
   }
 
-  // --- gfx: pipeline, profiler, overlay, sampler ---------------------------
+  // --- gfx: pipeline, atlas, profiler, overlay -----------------------------
   auto pipeline_result = vgp::HybridMeshPipeline::create(
-      app.device().handle(), app.swapchain().layout());
+      app.device(), app.allocator(), app.swapchain().layout());
   if (!pipeline_result.ok()) {
     std::fprintf(stderr, "pipeline: %s\n",
                  pipeline_result.status().message().c_str());
     return 1;
   }
   vgp::HybridMeshPipeline pipeline = std::move(pipeline_result).value();
+  fuse_viewer::LiveAtlas atlas(
+      pipeline, app.allocator(), app.frame_loop().timeline(),
+      {layout.width, layout.height}, config.frames_in_flight);
 
   vg::ProfilerConfig profiler_config;
   profiler_config.frames_in_flight = config.frames_in_flight;
@@ -882,7 +579,7 @@ int run(GLFWwindow* window, const Options& opt) {
   });
 
   std::optional<vg::ui::ImGuiOverlay> overlay;
-  if (opt.overlay) {
+  if (opt.window.overlay) {
     vg::ui::ImGuiOverlayConfig overlay_config;
     overlay_config.layout = app.swapchain().layout();
     overlay_config.min_image_count = app.swapchain().image_count();
@@ -901,28 +598,7 @@ int run(GLFWwindow* window, const Options& opt) {
       return 1;
     }
   }
-  const fuse_viewer::ImGuiGlfwShutdown imgui_glfw_guard{opt.overlay};
-
-  auto sampler_result = vg::Sampler::create(app.device().handle());
-  if (!sampler_result.ok()) {
-    std::fprintf(stderr, "sampler: %s\n",
-                 sampler_result.status().message().c_str());
-    return 1;
-  }
-  vg::Sampler sampler = std::move(sampler_result).value();
-
-  using Atlas = fuse_viewer::Atlas;
-  using AtlasResult = vkc::Result<std::shared_ptr<Atlas>>;
-  // The atlas bound for a mesh no camera textured.
-  AtlasResult white_result = fuse_viewer::white_atlas(
-      app.device(), app.allocator(), pipeline.descriptor_set_layout(0),
-      sampler.handle());
-  if (!white_result.ok()) {
-    std::fprintf(stderr, "white atlas: %s\n",
-                 white_result.status().message().c_str());
-    return 1;
-  }
-  const std::shared_ptr<Atlas> white_atlas = std::move(white_result).value();
+  const fuse_viewer::ImGuiGlfwShutdown imgui_glfw_guard{opt.window.overlay};
 
   // The colour-by-camera view's sources: one device-local buffer a camera,
   // its tile's size, filled with that camera's colour (sRGB bytes, as the
@@ -941,11 +617,9 @@ int run(GLFWwindow* window, const Options& opt) {
       {200, 200, 200},
   }};
   std::vector<vkc::Buffer> solid_buffers;
-  std::vector<VkBuffer> solid_handles;
   auto ensure_solid = [&](VkCommandBuffer cmd) -> bool {
-    if (solid_handles.size() == cameras) return true;
+    if (solid_buffers.size() == cameras) return true;
     solid_buffers.clear();
-    solid_handles.clear();
     for (std::size_t c = 0; c < cameras; ++c) {
       const rtex::AtlasTile& tile = layout.tiles[c];
       vkc::BufferDesc desc;
@@ -958,10 +632,8 @@ int run(GLFWwindow* window, const Options& opt) {
         std::fprintf(stderr, "rig_viewer: colour-by-camera buffer: %s\n",
                      buffer.status().message().c_str());
         solid_buffers.clear();
-        solid_handles.clear();
         return false;
       }
-      solid_handles.push_back(buffer.value().handle());
       solid_buffers.push_back(std::move(buffer).value());
     }
     // Filled only once every buffer exists, so a failed allocation above
@@ -971,7 +643,7 @@ int run(GLFWwindow* window, const Options& opt) {
       const std::uint32_t word = std::uint32_t{rgb[0]} |
                                  (std::uint32_t{rgb[1]} << 8) |
                                  (std::uint32_t{rgb[2]} << 16) | 0xFF000000u;
-      vkCmdFillBuffer(cmd, solid_handles[c], 0, VK_WHOLE_SIZE, word);
+      vkCmdFillBuffer(cmd, solid_buffers[c].handle(), 0, VK_WHOLE_SIZE, word);
     }
     // The fills land before the atlas copy reads them, later in this buffer.
     VkMemoryBarrier filled{};
@@ -982,33 +654,6 @@ int run(GLFWwindow* window, const Options& opt) {
                          VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &filled, 0,
                          nullptr, 0, nullptr);
     return true;
-  };
-
-  // Atlas images the copies fill, reused once only the pool holds one: the
-  // committed version holds its image, and so does every frame slot that
-  // bound it, until begin_frame fence-waits that slot. _SRGB, since the frame
-  // prep's colour is canonical-encoded 8-bit and the sampler then filters in
-  // linear (the 2026-08-02 colour-space decision, as `upload_atlas`).
-  std::vector<std::shared_ptr<Atlas>> atlas_pool;
-  auto acquire_atlas = [&](std::uint32_t width,
-                           std::uint32_t height) -> AtlasResult {
-    for (const std::shared_ptr<Atlas>& atlas : atlas_pool) {
-      if (atlas.use_count() == 1 && atlas->tex.extent().width == width &&
-          atlas->tex.extent().height == height) {
-        return atlas;
-      }
-    }
-    vkc::ImageDesc desc;
-    desc.extent = {width, height};
-    desc.format = VK_FORMAT_R8G8B8A8_SRGB;
-    desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-    auto image = app.allocator().create_image(desc);
-    if (!image.ok()) return image.status();
-    AtlasResult atlas = fuse_viewer::bind_atlas(
-        app.device().handle(), pipeline.descriptor_set_layout(0),
-        sampler.handle(), std::move(image).value());
-    if (atlas.ok()) atlas_pool.push_back(atlas.value());
-    return atlas;
   };
 
   // --- The view -------------------------------------------------------------
@@ -1039,7 +684,7 @@ int run(GLFWwindow* window, const Options& opt) {
   // The fusion and texturing knobs the View panel tunes while the rig runs,
   // read by the fuse thread at each set and each remesh.
   std::atomic<bool> dynamic_on{opt.dynamic};
-  std::atomic<float> max_weight{opt.max_weight};
+  std::atomic<float> max_weight{opt.fusion.max_weight};
   std::atomic<float> occlusion{opt.occlusion};
   // Render-thread state: whether the next atlas copy fills each tile with its
   // camera's colour rather than its image.
@@ -1054,11 +699,11 @@ int run(GLFWwindow* window, const Options& opt) {
   rmesh::MeshExchangeConfig exchange_config;
   exchange_config.frames_in_flight = config.frames_in_flight;
   exchange_config.cross_family = cross_family;
-  rmesh::MeshExchange<AtlasJob> exchange(exchange_config);
+  rmesh::MeshExchange<fuse_viewer::AtlasJob> exchange(exchange_config);
   fuse_viewer::SharedView shared_view;  // the render camera, meshed
   std::mutex share_mtx;
   std::vector<vkc::StageRow> shared_fuse_stages;
-  RigPanel shared_panel;
+  fuse_viewer::RigPanel shared_panel;
   std::atomic<bool> fusing_done{false};
   // Set by whatever ended fusion early, so a scripted run exits non-zero.
   std::atomic<bool> fuse_failed{false};
@@ -1073,7 +718,7 @@ int run(GLFWwindow* window, const Options& opt) {
       std::size_t cameras_held = 0;
       std::uint64_t held_views = 0;
       std::uint64_t short_remeshes = 0;
-      std::array<std::uint64_t, kUntexturedReasons> untextured{};
+      std::array<std::uint64_t, fuse_viewer::kUntexturedReasons> untextured{};
       bool texture_error_reported = false;
       // Each camera's newest frame with colour, which the remeshes texture
       // from (texture_sources).
@@ -1082,42 +727,27 @@ int run(GLFWwindow* window, const Options& opt) {
           static_cast<std::uint64_t>(opt.hold_ms) * 1000000u;
       std::vector<bool> uncopyable_reported(cameras, false);
 
-      // Whether gfx can copy `color` into `tile`: a copy source, as large as
-      // the tile, and CONCURRENT where gfx is on another family, since a copy
-      // from a buffer EXCLUSIVE to recon's is undefined with nothing to report
-      // it. Checked before the camera textures the mesh: once uv0 point into
-      // its tile, the tile must be filled.
-      auto copyable = [&](const vkc::Buffer& color,
-                          const rtex::AtlasTile& tile) {
-        return color.valid() &&
-               (color.usage() & VK_BUFFER_USAGE_TRANSFER_SRC_BIT) != 0 &&
-               (!cross_family ||
-                color.sharing_mode() == VK_SHARING_MODE_CONCURRENT) &&
-               color.size() >= VkDeviceSize(tile.width) * tile.height * 4u;
-      };
-
       // Texture `mesh` from each camera's source (texture_sources: the set's
       // frame, or the camera's held one) and publish the two together: uv0
       // index into those images, so the mesh and its atlas are one value.
       auto publish = [&](const rmesh::DeviceMesh& mesh,
                          const std::vector<TextureSource>& sources) {
-        AtlasJob job;
+        fuse_viewer::AtlasJob job;
         std::size_t views_held = 0;
-        std::size_t why = kTextureOff;
+        std::size_t why = fuse_viewer::kTextureOff;
         if (!texture_on.load()) {
-          why = kTextureOff;
+          why = fuse_viewer::kTextureOff;
         } else if (mesh.empty()) {
-          why = kEmptyMesh;
+          why = fuse_viewer::kEmptyMesh;
         } else {
-          why = kNoColour;
+          why = fuse_viewer::kNoColour;
           std::vector<rtex::TextureView> views;
           rtex::AtlasLayout present{layout.width, layout.height, {}};
-          job.width = layout.width;
-          job.height = layout.height;
           for (std::size_t c = 0; c < sources.size() && c < cameras; ++c) {
             if (sources[c].frame == nullptr) continue;
             const rsensor::DeviceFrame& f = *sources[c].frame;
-            if (!copyable(*f.color, layout.tiles[c])) {
+            if (!fuse_viewer::copyable(*f.color, layout.tiles[c],
+                                       cross_family)) {
               // Said once a camera: its format is fixed at open, so every
               // set would repeat it.
               if (!uncopyable_reported[c]) {
@@ -1154,7 +784,7 @@ int run(GLFWwindow* window, const Options& opt) {
               held_views += views_held;
               short_remeshes += views.size() < cameras ? 1 : 0;
             } else {
-              why = kTextureFailed;
+              why = fuse_viewer::kTextureFailed;
               // Said once: a refusal here is a configuration fault (a frame
               // whose colour is not its tile's size, say), and every remesh
               // would repeat it.
@@ -1163,10 +793,10 @@ int run(GLFWwindow* window, const Options& opt) {
                              textured.message().c_str());
                 texture_error_reported = true;
               }
-              job = AtlasJob{};
+              job = fuse_viewer::AtlasJob{};
             }
           } else {
-            job = AtlasJob{};
+            job = fuse_viewer::AtlasJob{};
           }
         }
         if (job.empty()) {
@@ -1190,41 +820,15 @@ int run(GLFWwindow* window, const Options& opt) {
                        host.status().message().c_str());
           return;
         }
-        const std::vector<rmesh::Vertex>& v = host.value().vertices;
-        std::vector<std::size_t> per_camera(cameras, 0);
-        std::size_t none = 0;
-        const std::size_t triangles = v.size() / 3;
-        for (std::size_t t = 0; t < triangles; ++t) {
-          const vr::Vec2f uv = v[3 * t].uv0;
-          if (!(uv.x >= 0.0f)) {
-            ++none;
-            continue;
-          }
-          const float px = uv.x * static_cast<float>(layout.width);
-          const float py = uv.y * static_cast<float>(layout.height);
-          for (std::size_t c = 0; c < cameras; ++c) {
-            const rtex::AtlasTile& tile = layout.tiles[c];
-            if (px >= tile.x && px < tile.x + tile.width && py >= tile.y &&
-                py < tile.y + tile.height) {
-              ++per_camera[c];
-              break;
-            }
-          }
-        }
-        const double ms = std::chrono::duration<double, std::milli>(
-                              std::chrono::steady_clock::now() - start)
-                              .count();
-        const double n = triangles > 0 ? static_cast<double>(triangles) : 1.0;
-        std::printf("texture stats: %zu triangles, %.1f%% untextured;",
-                    triangles, 100.0 * static_cast<double>(none) / n);
-        for (std::size_t c = 0; c < cameras; ++c) {
-          std::printf(" camera %zu %.1f%%%s", c,
-                      100.0 * static_cast<double>(per_camera[c]) / n,
-                      c < from.size() && from[c].held ? " (held)" : "");
-        }
-        std::printf(" (occlusion %.1f cm, %s; read back in %.0f ms)\n",
-                    100.0 * occlusion.load(),
-                    dynamic_on.load() ? "dynamic" : "static", ms);
+        const fuse_viewer::TextureShares shares =
+            fuse_viewer::count_texture_shares(host.value().vertices, layout);
+        std::vector<bool> held(from.size());
+        for (std::size_t c = 0; c < from.size(); ++c) held[c] = from[c].held;
+        fuse_viewer::print_texture_shares(
+            shares, held, occlusion.load(), dynamic_on.load(),
+            std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - start)
+                .count());
       };
       auto remesh = [&](const std::vector<TextureSource>& sources) {
         remesh_stages.clear();
@@ -1433,16 +1037,10 @@ int run(GLFWwindow* window, const Options& opt) {
   fuse_viewer::QuitJoin fuse_guard{fuse_thread, quit};
 
   // --- Render thread (main) -------------------------------------------------
-  // A taken version's atlas job is recorded into this frame's command buffer,
-  // and the colour buffers it reads stay with this frame's slot until the slot
-  // comes round again.
-  std::vector<std::shared_ptr<Atlas>> slot_atlas(config.frames_in_flight);
-  std::vector<std::vector<std::shared_ptr<const vkc::Buffer>>> slot_sources(
-      config.frames_in_flight);
-  std::shared_ptr<Atlas> current_atlas = white_atlas;
-  bool atlas_error_said = false;  // until an atlas image is acquired again
+  // A taken version's atlas job is recorded into this frame's command buffer.
+  bool atlas_error_said = false;  // until an atlas commits again
   std::vector<vkc::StageRow> fuse_stages_snapshot;
-  RigPanel panel;
+  fuse_viewer::RigPanel panel;
   double last_x = 0.0, last_y = 0.0;
   bool have_last = false;
 
@@ -1477,47 +1075,38 @@ int run(GLFWwindow* window, const Options& opt) {
       continue;
     }
     const win::Frame& render_frame = *frame.value();
-    // begin_frame fence-waited this slot: what its last frame bound or copied
-    // from is free.
-    slot_atlas[render_frame.slot].reset();
-    slot_sources[render_frame.slot].clear();
+    atlas.poll();
 
     // Retire this slot's last frame, take the newest mesh, and commit it
     // with its atlas, copied in this command buffer -- before the frame's
-    // rendering begins, since a copy may not sit inside it. No image to copy
-    // into keeps the mesh parked for the next frame.
+    // rendering begins, since a copy may not sit inside it. A copy refused,
+    // or an atlas that could not be made, keeps the mesh parked for the next
+    // frame.
     {
       vg::Profiler::Scope copy_scope =
           profiler.gpu_scope(render_frame.cmd, "atlas copy");
       const rmesh::ExchangeOutcome outcome = exchange.begin_frame(
-          render_frame.slot, [&](const rmesh::DeviceMesh&, AtlasJob& job) {
+          render_frame.slot,
+          [&](const rmesh::DeviceMesh&, const fuse_viewer::AtlasJob& job) {
             // Every tile is one the fuse thread found copyable, since it
-            // left out any camera whose colour is not.
-            std::shared_ptr<Atlas> next = white_atlas;
-            if (!job.empty()) {
-              AtlasResult acquired = acquire_atlas(job.width, job.height);
-              if (!acquired.ok()) {
-                // Retried every frame, so said once until it succeeds.
-                if (!atlas_error_said) {
-                  std::fprintf(stderr, "rig_viewer: atlas image: %s\n",
-                               acquired.status().message().c_str());
-                  atlas_error_said = true;
-                }
-                return false;
+            // left out any camera whose colour is not. The solid colours are
+            // filled in this command buffer, so ahead of the copy.
+            const bool solid =
+                !job.empty() && show_sources && ensure_solid(render_frame.cmd);
+            const vkc::Status committed =
+                atlas.commit(render_frame.cmd, render_frame.number, job,
+                             solid ? &solid_buffers : nullptr);
+            if (!committed.ok()) {
+              // Retried every frame, so said once until it succeeds.
+              if (!atlas_error_said) {
+                std::fprintf(stderr, "rig_viewer: atlas: %s\n",
+                             committed.message().c_str());
+                atlas_error_said = true;
               }
-              next = std::move(acquired).value();
-              atlas_error_said = false;
-              // Filled in this command buffer, so ahead of the copy.
-              const bool solid = show_sources && ensure_solid(render_frame.cmd);
-              record_atlas_copy(render_frame.cmd, next->tex.handle(), job,
-                                solid ? &solid_handles : nullptr);
-              ++atlas_copies;
-              for (AtlasTileSource& source : job.tiles) {
-                slot_sources[render_frame.slot].push_back(
-                    std::move(source.color));
-              }
+              return false;
             }
-            current_atlas = std::move(next);
+            atlas_error_said = false;
+            atlas_copies += job.empty() ? 0 : 1;
             return true;
           });
       if (outcome == rmesh::ExchangeOutcome::kRefused) {
@@ -1552,7 +1141,6 @@ int run(GLFWwindow* window, const Options& opt) {
       }
       panel.mesh_rate = mesh_rate;
     }
-    slot_atlas[render_frame.slot] = current_atlas;
 
     // --- Input: orbit, pan, zoom, unless a panel has the mouse -------------
     {
@@ -1622,7 +1210,7 @@ int run(GLFWwindow* window, const Options& opt) {
       vg::ui::draw_metrics_panel(metrics, "Performance");
       ImGui::SetNextWindowPos(ImVec2(16.0f, 388.0f), ImGuiCond_FirstUseEver);
       ImGui::SetNextWindowSize(ImVec2(400.0f, 260.0f), ImGuiCond_FirstUseEver);
-      draw_rig_panel(panel, serials);
+      fuse_viewer::draw_rig_panel(panel, serials, kSilenceLimit.count());
       ImGui::SetNextWindowPos(ImVec2(432.0f, 16.0f), ImGuiCond_FirstUseEver);
       if (ImGui::Begin("View")) {
         int mode = static_cast<int>(shading);
@@ -1702,7 +1290,7 @@ int run(GLFWwindow* window, const Options& opt) {
         hybrid_frame.view_proj = view_proj;
         hybrid_frame.light_dir = -view.up + 0.5f * view.right - view.forward;
         hybrid_frame.flags = shading_flags(shading);
-        hybrid_frame.atlas = slot_atlas[render_frame.slot]->set.handle();
+        hybrid_frame.atlas = atlas.use(render_frame.number);
         hybrid_frame.draws = &draw;
         hybrid_frame.draw_count = 1;
         pipeline.submit(render_frame.cmd, hybrid_frame);
@@ -1722,27 +1310,7 @@ int run(GLFWwindow* window, const Options& opt) {
       break;
     }
     if (drawn % 120 == 0) {
-      std::printf(
-          "frame %d: %llu sets fused (%.1f ms/set, remesh %.1f ms), mesh "
-          "v%llu (%zu triangles, %.1f updates/s), textured from %zu "
-          "camera%s (%zu held; %llu held views, %llu remeshes short so far), "
-          "%llu atlas copies",
-          drawn, static_cast<unsigned long long>(panel.sets_fused),
-          panel.fuse_ms, panel.remesh_ms,
-          static_cast<unsigned long long>(panel.mesh_version), panel.triangles,
-          panel.mesh_rate, panel.cameras_textured,
-          panel.cameras_textured == 1 ? "" : "s", panel.cameras_held,
-          static_cast<unsigned long long>(panel.held_views),
-          static_cast<unsigned long long>(panel.short_remeshes),
-          static_cast<unsigned long long>(atlas_copies));
-      for (std::size_t r = 0; r < kUntexturedReasons; ++r) {
-        if (panel.untextured[r] != 0) {
-          std::printf(", %llu untextured (%s)",
-                      static_cast<unsigned long long>(panel.untextured[r]),
-                      kUntexturedNames[r]);
-        }
-      }
-      std::printf("\n");
+      fuse_viewer::print_rig_progress(drawn, panel, atlas_copies);
     }
     ++drawn;
   }
@@ -1756,24 +1324,19 @@ int run(GLFWwindow* window, const Options& opt) {
   }
   // The fuse thread said why on stderr; the exit code is for a script.
   if (fuse_failed.load()) exit_code = 1;
-  std::printf(
-      "rig_viewer: drew %d frames; %llu sets (%llu frames) fused, "
-      "mesh v%llu with %zu triangles, %llu atlas copies\n",
-      drawn, static_cast<unsigned long long>(panel.sets_fused),
-      static_cast<unsigned long long>(panel.frames_fused),
-      static_cast<unsigned long long>(panel.mesh_version), panel.triangles,
-      static_cast<unsigned long long>(atlas_copies));
+  fuse_viewer::print_rig_summary(drawn, panel, atlas_copies);
   return exit_code;
 }
 
 }  // namespace
 
 int main(int argc, char** argv) {
-  Options opt;
-  if (!parse_args(argc, argv, opt)) {
-    std::fputs(kUsage, stderr);
+  const vkc::Result<Options> parsed = parse_args(argc, argv);
+  if (!parsed) {
+    std::fprintf(stderr, "%s\n", parsed.status().message().c_str());
     return 2;
   }
+  const Options& opt = parsed.value();
   std::signal(SIGINT, on_interrupt);
   std::signal(SIGTERM, on_interrupt);
   if (glfwInit() != GLFW_TRUE) {
@@ -1781,8 +1344,8 @@ int main(int argc, char** argv) {
     return 1;
   }
   glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-  GLFWwindow* window =
-      glfwCreateWindow(opt.width, opt.height, "rig_viewer", nullptr, nullptr);
+  GLFWwindow* window = glfwCreateWindow(opt.window.width, opt.window.height,
+                                        "rig_viewer", nullptr, nullptr);
   if (window == nullptr) {
     std::fprintf(stderr, "glfwCreateWindow failed\n");
     glfwTerminate();

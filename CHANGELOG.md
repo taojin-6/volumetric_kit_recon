@@ -109,15 +109,22 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `sensor/utils`: **`GpuFramePrep::prepare` is `prepare_batch` over a set
   of one**, so a frame its checks refuse no longer times a `"frame prep"`
   row.
+- examples: **one command-line parser and one stage table.** Every example
+  refuses a number that is not the whole argument (`--max-frames 10x`,
+  `--color -1x1080`) and a value below a flag's minimum rather than raising
+  it, and prints the cause and the usage line; `--dynamic` and `--static`
+  refuse each other. `fuse_render` and `fuse_viewer` gain `--max-weight`,
+  and `codec_replica` the fusion flags and `--cam-params`. Stage rows print
+  host ms, device ms and the device's share of each host span. `rig_viewer`'s
+  Rig panel draws the map occupancy and recon heaps with `fuse_viewer`'s
+  gauges, which change colour at the grow threshold and at 90% of budget.
 - examples: **`fuse_viewer` and `rig_viewer` hand meshes over through
   `mesh::MeshExchange`**, and their copies of the protocol go, with
   `viewer_common.hpp`'s `retire_and_release_mark` and `unbindable_reason`.
   The view they mesh is `viewer_common.hpp`'s `SharedView`, and
   `recon_gfx_bridge.hpp`'s `to_live_mesh` names recon's buffers for gfx.
   `fuse_viewer`'s panel takes its extract rows from the payload of the mesh
-  it draws. `fuse_render` and both viewers make their atlas with
-  `viewer_atlas.hpp` in place of three copies. Test:
-  `recon_example_viewer_atlas`.
+  it draws.
 - `codec`: **one text for the frame's models and block grammar.** The rANS
   kernels include it as GLSL and the host compiles it as C++
   (`shaders/frame_models.glsl`, `shaders/frame_grammar.glsl`), so the host's
@@ -132,9 +139,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   complete-or-error behavior. `fuse_viewer` and `rig_viewer` explicitly accept
   partial coverage. `allocate_band` goes from `examples/common/fuse_frame.hpp`;
   `codec_mesh` and the codec player share `volume::grow_grid`.
-- build: **the core pin moves to core #15** (a8b63d1), which adds
-  `CommandBatch::submit_async`, for the pipelined stages to come; recon's
-  calls are unchanged. gfx, pinned at core #13, builds against it.
+- examples: **the viewers draw with gfx's `StreamedAtlas` on its frame
+  timeline.** gfx holds the ring of atlas images, the copy recorded in the
+  frame and what a frame keeps alive, so `rig_viewer`'s image pool, its
+  hand-recorded copy and both viewers' per-slot holds go; `viewer_atlas.hpp`
+  keeps `LiveAtlas`, which makes the ring for the first textured mesh and
+  holds a frame's colour buffers on gfx's `RetireQueue`. `fuse_viewer`
+  copies its keyframe's colour on the device as `rig_viewer` does, so its
+  `atlas readback` row and the blocking upload per remesh go. An untextured mesh draws in vertex colour against the
+  pipeline's fallback, so the white atlas goes. `fuse_render`'s PNGs are
+  unchanged. Test: `recon_example_viewer_atlas`. The viewers pin gfx #123.
+- build: **the core pin moves to core #18** (5913731), which adds
+  `CommandBatch::submit_async` (#15), for the pipelined stages to come, and
+  the timeline-value checks the viewers' gfx requires; recon's calls are
+  unchanged.
 - tests: **no test looks for a camera.** `recon_orbbec_sdk_smoke` checks only
   the runtime SDK version, no longer opening a context and enumerating USB
   and network devices, and the conversion test's absent-camera case, which
@@ -262,6 +280,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `fuse_viewer`, `rig_viewer`: **atlas teardown completes when a frame was
+  never submitted.** The atlas drains submitted work before releasing its
+  colour buffers, without waiting for an unsignalled frame number after a
+  failed frame and recovery submit. Regression: `recon_example_viewer_atlas`.
 - `sensor/utils`: **`GpuFramePrep::prepare` returns `OutOfMemory` for a
   host allocation failure while staging**, as `prepare_batch` already did.
   Both preserve previously returned frames and permit a retry. Regression:

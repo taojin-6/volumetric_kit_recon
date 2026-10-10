@@ -47,7 +47,7 @@ the set's frusta reach, so integrate scales with them rather than the map.
 | extract compaction | `compact_active_blocks_in_frusta_on_device` on the render camera's frustum, `rig_viewer.cpp:1289` | 1 per remesh | serial | active count |
 | extract | `marching_cubes.cpp:1309` | 1 (2 on a refit) | serial | 28-byte draw command |
 | texture | `projective_texturer.cpp:737` | 1 | serial | nothing |
-| atlas copy and draw | `rig_viewer.cpp:498`, gfx's frame | gfx's own | render thread | nothing |
+| atlas copy and draw | `LiveAtlas::commit` (`viewer_atlas.hpp`), gfx's frame | gfx's own | render thread | nothing |
 
 Every submit waits on its fence (`device.cpp:710`), so the GPU idles while
 the host records the next one. Fusion is **one set of kernels per camera**.

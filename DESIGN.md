@@ -177,7 +177,7 @@ a message without losing its domain or detail.
 All of it is volumetric_kit_core's (the 2026-10-03 decision), and recon writes
 it under the core's names (2026-10-04): `core::Status` in recon's namespaces,
 `volumetric_kit::core::Status` to a consumer, so a recon error is the same type
-as calib's, and as gfx's from its #100 (the viewers pin gfx #106, which names
+as calib's, and as gfx's from its #100 (the viewers pin gfx #123, which names
 the core's types as recon does). Diagnostics go through the core's one process-wide log sink;
 recon's `log_message(level, message)` tags them with source `"vr"`, which the
 default sink prints as `[vr <level>]`, and an application's handler receives
@@ -1508,11 +1508,32 @@ empty poll is retried after a millisecond until the source reports itself
 replay ends. A frame kept past the next poll — `fuse_render`'s keyframe,
 `fuse_viewer`'s newest successfully fused frame for its final texture pass —
 is kept as prepared, a `DeviceFrame` holding its buffers, and textures through
-its own colour camera, its colour read back to the host for the atlas;
+its own colour camera: `fuse_render` reads its colour back to the host for
+the atlas, and `fuse_viewer` copies it into the atlas on the device;
 `fuse_viewer` keeps that frame through the next preparation and fusion,
 replacing it only on success (`fuse_keyframe`). A failure therefore leaves
 its depth, colour and cameras available for the final and later remeshes.
 Preparing while the previous frame is held allocates a separate output pair.
+
+Every example reads its command line through `examples/common/cli.hpp`'s
+`Cli`: each flag is declared once with the variable it sets, a number is read
+whole and finite, a value below a flag's minimum is refused, flags of which a
+command line gives one form a group (`[a | b]`, or `(a | b)` when one is
+required), and an error is printed with the usage line the declarations
+generate. Flags a family of examples shares are declared and validated once:
+`FusionFlags` (`--voxel`, `--trunc`, `--min-depth`, `--max-depth`,
+`--max-weight`; the band defaults to four voxels, `grid_layout.hpp`'s
+`default_trunc`, and `check_voxel` is every example's `--voxel` rule) in every
+example that fuses a sensor, `ReplicaFlags` (`<scene_dir>`, `--cam-params`,
+`--max-frames`, `--preload`) in the four dataset ones, `OrbbecFlags` (`--rig`,
+`--calibration`, `--apply-sync`, `--hevc | --mjpeg`, `--color`, `--fps`) in
+the two live ones, `CodecFlags` in the two codec ones, and `WindowFlags`
+(`viewer_common.hpp`) in the two windows. Stage rows print through one table,
+`stage_table.hpp`. Reports live beside the helpers rather than in a `main`:
+`fuse_replica`'s extract reports and `--dirty-every` survey in
+`remesh_report.hpp`, the viewers' panels in `viewer_panels.hpp`, and
+`rig_viewer`'s panel, progress line and `--texture-stats` in `rig_report.hpp`.
+A `main.cpp` is the example's story: options, setup, the loop, the report.
 
 `fuse_replica` runs the spine on a posed Replica-SLAM RGB-D sequence and
 writes a PLY; `--dirty-every` reports the
@@ -1545,9 +1566,17 @@ depth only inside each colour camera's view unless given `--all-depth`, and
 texturing a camera a set lacks from its last frame, a fallback view
 (`--hold-ms`). The two viewers hand meshes over through `mesh::MeshExchange`
 and share `viewer_common.hpp`: the teardown guards and the render camera the
-fuse thread meshes (`SharedView`). `fuse_render` and both viewers bind their
-atlas, an image with a descriptor pool and set of its own, through
-`viewer_atlas.hpp`.
+fuse thread meshes (`SharedView`). Both draw with gfx's `StreamedAtlas`
+through `viewer_atlas.hpp`'s `LiveAtlas`: a mesh's payload names the colour
+buffers of the cameras that textured it and their tiles, the frame that
+commits the mesh copies them into the atlas, and gfx's `RetireQueue` holds
+them until the frame loop's timeline reaches that frame; an untextured mesh
+draws in vertex colour against the pipeline's own fallback (2026-10-08).
+At teardown, `LiveAtlas` destroys the gfx atlas first, waiting for submitted
+work or draining the queues when the newest frame was never submitted, then
+reclaims the retained colour buffers without waiting for that frame's number.
+`fuse_render` uploads its keyframe into a `StreamedAtlas` in the frame that
+draws it.
 **`codec_replica`** fuses a Replica sequence as `fuse_replica` does, and
 streams the growing grid through the codec: every `--encode-every` frames it
 encodes, then decodes into a player grid built from `read_frame_info` and
@@ -1556,9 +1585,8 @@ frame rate, and both calls' stage rows. It then judges the last decoded
 surface against the source's, mesh to mesh, with the `eval` tier: accuracy,
 coverage and the F-score at half a voxel, since a fused TSDF is projective
 and sampling it would measure the fusion's bias too. `--sweep` prints the
-rate–distortion table the defaults are chosen from. Its `main.cpp` stays the
-example's story; the stream, its report and the sweep are
-`examples/common/codec_stream.hpp` and `codec_sweep.hpp`.
+rate–distortion table the defaults are chosen from. The stream, its report
+and the sweep are `examples/common/codec_stream.hpp` and `codec_sweep.hpp`.
 
 **`codec_mesh`** loads static geometry through the optional Assimp-backed
 `io::load_mesh`, explicitly normalizes its projected height and up direction
