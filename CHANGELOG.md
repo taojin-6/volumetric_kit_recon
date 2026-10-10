@@ -75,6 +75,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `codec`: **one text for the frame's models and block grammar.** The rANS
+  kernels include it as GLSL and the host compiles it as C++
+  (`shaders/frame_models.glsl`, `shaders/frame_grammar.glsl`), so the host's
+  writer and reader and the device's walk and decode are the same lines; the
+  device walks a block in the host writer's order. Frames are unchanged, byte
+  for byte. Tests: golden v3 frames pin the bytes both writers write
+  (`recon_codec_bitstream`, `recon_codec_device_frame`).
 - CI: **only the owner triggers CI.** The repository's Actions policy lets no
   other account trigger a workflow, so a fork's pull request never reaches the
   self-hosted runners, and the build and viewer jobs' fork guards go.

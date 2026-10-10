@@ -1351,7 +1351,11 @@ only, the reference the GPU kernels must match byte for byte). Every integer
 is coded as a class from a fixed per-frame table plus one raw field, its
 sign the low bit. A partial mask is coded a z plane at a time and a line
 at a time, each against the one before it (v2, 2026-10-01: the mask had
-been half of room0's bits). The format
+been half of room0's bits). The models and a block's grammar, its writer
+and its reader, are one GLSL text that the kernels include and
+`bitstream.cpp` compiles as C++ (`shaders/frame_models.glsl`,
+`shaders/frame_grammar.glsl`, 2026-10-08), and golden frames in the tests
+pin v3's bytes for both writers on every machine. The format
 requires strictly increasing coordinates, so a decoded list is duplicate-free:
 the delta code cannot step backwards within a segment, and the reader checks
 each segment's raw first coordinate against the one before. A flag bit other

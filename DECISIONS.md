@@ -413,6 +413,10 @@ entries relevant to your task; later amendments supersede earlier rules.
   its sync settings at `open`, written only when asked and checked for SDK
   normalization after a write; the tolerance is 0.4 of a frame period, and
   `OrbbecRig`, its start order and the public `TriggerGrouper` go.
+- [**2026-10-08**](#2026-10-08--the-frames-models-and-block-grammar-are-one-glsl-text-that-the-host-compiles-as-c-and-golden-frames-pin-v3-amends-the-2026-10-03-encoding-entry) —
+  The frame's models and block grammar are one GLSL text that the kernels
+  include and the host compiles as C++, the device's walk runs in emit order,
+  and golden frames pin v3's bytes on every machine.
 - [**2026-10-08**](#2026-10-08--fusion-samples-at-integer-pixel-centres-and-refuses-a-non-finite-camera-amends-the-2026-07-06-depth-sampling-entry) —
   Fusion samples at integer pixel centres and refuses a non-finite camera.
 - [**2026-10-08**](#2026-10-08--the-single-camera-texture-pass-needs-the-vertex-to-face-the-depth-camera-and-both-texture-passes-check-a-view-one-way-amends-the-2026-08-11-per-vertex-and-2026-09-28-colour-camera-entries) —
@@ -9394,6 +9398,10 @@ latency measurement was made. The normalization's own test, listed in the
 
 ### 2026-10-03 — rANS encoding runs on the device, byte for byte the host's frame, chosen per frame by segment count.
 
+*Amended 2026-10-08 (the frame grammar entry, below):* the walk is the
+host's own `emit_block`, in emit order, from the GLSL both sides compile, and
+`rans_ops.comp` writes each block's steps down from the end of its run.
+
 The 2026-09-26 decision's fifth PR, for the encoder: the v3 format is
 unchanged, and every frame the device writes is `write_intra_frame`'s.
 
@@ -10938,6 +10946,68 @@ field, and the camera kept its setting. Restarted three times with MJPEG,
 1–3 of the first 31 sets missed a camera, so the start needs no settling
 wait. One camera fused at 30 fps with and without `--host-clock`. Not run:
 `apply_sync`'s write (it rewrites flash) and `rig_viewer`.
+
+### 2026-10-08 — The frame's models and block grammar are one GLSL text that the host compiles as C++, and golden frames pin v3 (amends the 2026-10-03 encoding entry).
+
+The model layout was written twice, as `enum Model` and
+`frame_model_alphabet` in `bitstream.cpp` and as constants with hand-summed
+offsets in `rans_models.glsl`, and a block's grammar four times: the host's
+`emit_block` and `read_block`, the device's walk, reversed, and the device's
+`read_block`. Three of the five kernel bugs planted for the 2026-10-03
+encoding entry were ordering bugs in the reversed walk. P-frames bring a
+grammar of their own, and v4's lanes touch every reader and writer.
+
+**One text.** `shaders/frame_models.glsl` holds the models, each one's
+alphabet and first entry in the per-symbol arrays (`model_base`, which the
+host reads as `frame_model_base`), and the mask's symbols.
+`shaders/frame_grammar.glsl` holds a block's grammar: a writer half,
+`emit_block`, and a reader half, `read_block`, side by side, each chosen by
+a define. The kernels include them as GLSL. `bitstream.cpp` defines `uint`,
+`ivec3`, `uvec2` and `findMSB`, includes the models at namespace scope, and
+includes each half inside a struct whose members are the names that half
+calls: the sinks or the coder, the block's mask (`g_mask`) and coefficients,
+and a reader's coordinate (`g_coord`). The host's writer and reader are the
+device's lines. A table that generated both sides would hold the layout but
+not the grammar, which is control flow.
+
+**The shared text keeps to what both languages mean alike**, by the rules
+its header states; a signed read, for one, returns a `uvec2` of magnitude
+and sign rather than taking an `out` parameter. An includer takes one half,
+since it defines only that half's names.
+
+**The walk runs in emit order.** `rans_ops.comp` writes each block's steps
+down from one past the last step of its run (`step_ends`, in place of
+`step_offsets`), so the steps buffer is unchanged and the walk is
+`emit_block` itself.
+
+**Golden frames.** `tests/codec_frames.hpp` pins five: 700 blocks at K = 64
+and R = 64, 40 at K = 512 and R = 16, 65 at K = 21 and R = 7, and
+int32-extreme coordinates at R = 64, which steps up to 2^32 - 1 on every
+axis, and at R = 1, which writes each in full. Each has its content hash,
+frame size and FNV-1a. The host writer must write them and read them back;
+the device writer must write them, and the device reader must read them as
+the host does. Every CI leg asserts the same constants, so a host or device
+that codes differently on one machine fails too. A lockstep edit of the
+shared grammar, swapping the line context's first two models, passed every
+round trip and the host/device comparison and failed the golden frames on
+both sides. The constants change only with `kFrameVersion`.
+
+**Measured**, Release, room0 at 1 cm for 60 frames on an M5 Max shared with
+other jobs, before and after in alternation: frames identical (173,606 bytes
+a frame), and `..rans encode` / `..rans decode` within the machine's noise:
+device 2.05–3.58 / 2.01–3.85 ms before and 1.91–3.56 / 1.95–3.77 after,
+host 7.56–8.81 / 6.64–9.70 before and 7.46–8.63 / 6.43–7.65 after.
+
+**Not done.** The coder itself is still two texts: `rans.hpp`'s
+`RansWriter::put_bits` and `RansReader` against `rans_ops.comp`'s raw
+chunks, `rans_count.comp`'s step count and `rans_decode.comp`'s reader. The
+golden frames hold them together.
+
+**Validation.** Apple M5 Max, Release with warnings as errors: all 57 tests
+pass, and the four GPU codec tests report no messages with the Khronos layer
+and synchronization validation. GCC 16 builds the changed sources with
+`-Werror`, and its libstdc++ build of `recon_codec_bitstream` passes the
+same golden frames; that test passes under ASan and UBSan too.
 
 ### 2026-10-08 — Fusion samples at integer pixel centres and refuses a non-finite camera (amends the 2026-07-06 depth-sampling entry).
 
