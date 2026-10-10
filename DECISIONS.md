@@ -439,6 +439,11 @@ entries relevant to your task; later amendments supersede earlier rules.
   A Dynamic set clears with every camera before it fuses with any, through a
   clear kernel of its own; a single frame and Classic are unchanged.
 
+- [**2026-10-10**](#2026-10-10--recon-keeps-exception-handlers-shares-frame-preparation-and-leaves-warning-policy-to-consumers) —
+  recon keeps exception handlers and the normal CI configuration;
+  `GpuFramePrep` shares one preparation path, and `-Werror` defaults on
+  only in a top-level build.
+
 ## Decision record
 
 ### 2026-06-21 — Single Vulkan path (MoltenVK on Apple), like gfx.
@@ -11333,6 +11338,44 @@ Not run: `rig_viewer` on the rig.
 
 Still open: clearing on evidence (a weight decrement, an incidence term)
 and behind a pixel with no return, each judged on the lab rig.
+
+### 2026-10-10 — recon keeps exception handlers, shares frame preparation, and leaves warning policy to consumers.
+
+**Build with C++ exceptions enabled.** CI uses the normal exception-enabled
+configurations. The handlers that translate backend errors and checked host
+allocation failures into `Status` remain in place. `Fuser`, `grow_grid` and
+rehash keep their allocation-failure handling, and the shared
+`test_allocation_failure` helper remains for their regression and the frame
+preparation regression.
+
+**One preparation path.** `GpuFramePrep::prepare` and `prepare_batch` use
+one private path. All input checks run before the timing row opens, so a
+refused frame adds no row. A host allocation failure while staging returns
+`OutOfMemory` through both entry points; previously returned frames stay
+intact and the call can be retried. The shared path retains the batch's
+`std::bad_alloc` catch, which the single-frame path previously lacked.
+
+**SDK exceptions stay private.** `vr_link_orbbec_sdk` links the Orbbec SDK
+and enables exceptions privately for each target compiling its calls or
+headers, including `recon_sensor_orbbec_open_sensors_test`. This follows the
+I/O targets' existing treatment of their throwing backends; it does not
+change a consumer's compiler flags.
+
+**Consumer defaults.** `VR_WARNINGS_AS_ERRORS` defaults to
+`PROJECT_IS_TOP_LEVEL`, as the core's and calib's do. A consumer's newer
+compiler reports warnings without failing its build; recon's own CI keeps
+`-Werror`. `recon_subproject_defaults` configures recon as a subproject and
+checks that its tests, examples and `-Werror` default off.
+
+**Validation.** Apple M5 Max, macOS, Release, with Orbbec, FFmpeg, Assimp,
+examples and viewer targets enabled: the build and all 66 tests pass. The
+allocation-failure regression checks both single and batch preparation,
+retained frame contents and retry; linking it against the pre-fix
+implementation reproduces an escaping `std::bad_alloc`. Frame preparation,
+its allocation-failure regression, sensor-array processing, the retained
+keyframe and fusion allocation-failure tests also pass with the Khronos
+layer loaded and synchronization validation enabled. No live-camera or
+interactive viewer check was run.
 
 ## Measured lessons
 

@@ -101,6 +101,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- build: **`VR_WARNINGS_AS_ERRORS` defaults on at the top level only**, as
+  `VR_BUILD_TESTS` does, so a project that fetches recon no longer compiles
+  it with `-Werror`. Test: `recon_subproject_defaults`.
+- build: **every target that calls the Orbbec SDK compiles with exceptions,
+  privately** (`vr_link_orbbec_sdk`), so it can catch the SDK's errors.
+- `sensor/utils`: **`GpuFramePrep::prepare` is `prepare_batch` over a set
+  of one**, so a frame its checks refuse no longer times a `"frame prep"`
+  row.
 - examples: **`fuse_viewer` and `rig_viewer` hand meshes over through
   `mesh::MeshExchange`**, and their copies of the protocol go, with
   `viewer_common.hpp`'s `retire_and_release_mark` and `unbindable_reason`.
@@ -254,6 +262,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `sensor/utils`: **`GpuFramePrep::prepare` returns `OutOfMemory` for a
+  host allocation failure while staging**, as `prepare_batch` already did.
+  Both preserve previously returned frames and permit a retry. Regression:
+  `recon_sensor_gpu_frame_prep_oom`.
 - `sensor/orbbec`: `OrbbecSensor::open` names the camera when the SDK throws
   while finding one asked for by serial, and when its factory intrinsics or
   extrinsic are refused, so a rig's failing camera is known. Test:

@@ -75,7 +75,8 @@ core → volume → tsdf → mesh → texture → interop
   `volumetric_kit::recon_<tier>`; see [package targets](DESIGN.md#naming-conventions-use-these-consistently).
 - Fallible APIs return the core's `core::Status` / `core::Result<T>` and
   propagate with `VKC_TRY` / `VKC_ASSIGN`. No exceptions cross the API
-  boundary. Programmer errors use `VKC_CHECK`. recon does not re-export core
+  boundary. Build recon with C++ exceptions enabled for these handlers.
+  Programmer errors use `VKC_CHECK`. recon does not re-export core
   names into `vr::`; it logs with source `"vr"` (`core/log.hpp`).
 - Include Vulkan through the core's `volumetric_kit/core/vulkan/vulkan.hpp`.
   Keep host PODs and GLSL `layout(scalar)` definitions byte-identical; host

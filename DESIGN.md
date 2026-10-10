@@ -159,7 +159,11 @@ Native CUDA is an optional NVIDIA accelerator under this baseline (the
 
 ## Error handling
 
-No exceptions cross the API boundary (mobile builds use `-fno-exceptions`).
+Build recon with C++ exceptions enabled. Backend handlers and checked host
+allocation paths translate failures into `Status`; this does not imply that
+every host allocation in the library is guarded. Frame preparation retains
+its staging-allocation handler, and fusion retains its growth and rehash
+handlers (2026-10-10).
 Fallible calls return `Status` (success or an error domain + message) or
 `Result<T>` (a value or a `Status`), both `[[nodiscard]]`. `VKC_TRY` and
 `VKC_ASSIGN` remove the check-and-propagate boilerplate. Programmer errors
@@ -1264,7 +1268,10 @@ allocate a block for every set (46 ms a rig set on an RTX 5090, 4.8 ms
 kept). The frame *holds* its device-local
 buffers, and `prepare` reuses one only once no frame does, so a frame kept
 past the next is still itself; the whole frame is checked before anything
-is uploaded, a depth range from 0 included. `depth_within_color` (off by
+is uploaded or timed, a depth range from 0 included, and `prepare` is
+`prepare_batch` over a set of one. Both return `OutOfMemory` for a host
+allocation failure while staging, preserving previously returned frames.
+`depth_within_color` (off by
 default; `rig_viewer` turns it on) zeroes depth outside the colour camera's
 view, by the colour pass's own coverage test, so nothing is fused that no
 colour camera can colour. An Orbbec frame holds its SDK pair and the SDK

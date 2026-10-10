@@ -28,11 +28,14 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 # --- Options -----------------------------------------------------------------
 # PROJECT_IS_TOP_LEVEL (set by project() since CMake 3.21, our floor) is ON only
 # when we are the root project, not pulled in via add_subdirectory/FetchContent;
-# the "build the extras" and "generate install rules" defaults follow from it.
+# the "build the extras", "generate install rules" and -Werror defaults follow
+# from it. A consumer's newer compiler then shows it our new warnings rather
+# than failing its build (tests/subproject checks the extras and -Werror).
 option(VR_BUILD_EXAMPLES "Build example programs" ${PROJECT_IS_TOP_LEVEL})
 option(VR_BUILD_TESTS "Build tests" ${PROJECT_IS_TOP_LEVEL})
 option(VR_INSTALL "Generate install/export rules" ${PROJECT_IS_TOP_LEVEL})
-option(VR_WARNINGS_AS_ERRORS "Treat first-party compiler warnings as errors" ON)
+option(VR_WARNINGS_AS_ERRORS "Treat first-party compiler warnings as errors"
+       ${PROJECT_IS_TOP_LEVEL})
 # OFF by default: the Orbbec SDK is a prerequisite you install, not a vendored
 # dependency, and it ships no iOS build -- recon cross-compiles to iOS
 # unchanged. See cmake/vr_orbbec.cmake for how the build finds it.

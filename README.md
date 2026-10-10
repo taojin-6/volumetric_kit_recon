@@ -31,8 +31,8 @@ CI-gated, and split into clean, independently consumable tiers.
   (GLSL → SPIR-V), with MoltenVK on Apple — Linux / Android / macOS / iOS
   from one source, mirroring `volumetric_kit_gfx`. No Metal/CUDA split. GCC or
   Clang; Windows and MSVC are not supported.
-- **Exception-free:** fallible calls return `Status` / `Result<T>`; mobile builds
-  with `-fno-exceptions` are first-class.
+- **Explicit errors:** fallible calls return `Status` / `Result<T>`. Build recon
+  with C++ exceptions enabled for its internal error handlers.
 - **Shared-device renderer handoff:** the live viewers draw recon's mesh
   buffers on one `VkDevice` shared with `volumetric_kit_gfx`. The host/file
   handoff remains available for standalone workflows; see the
@@ -52,6 +52,9 @@ ctest --test-dir "$recon_root/build" --output-on-failure
 
 Consume it from another CMake project via `find_package(volumetric_kit_recon)`
 or `FetchContent`, then link a tier (e.g. `volumetric_kit::recon_core`).
+Fetched, recon builds its library tiers alone: its tests, examples and
+`-Werror` (`VR_WARNINGS_AS_ERRORS`) default on only when it is the top-level
+project.
 
 recon builds on [`volumetric_kit_core`](https://github.com/taojin-6/volumetric_kit_core),
 the family's shared foundation, fetched pinned by commit on the first configure:
