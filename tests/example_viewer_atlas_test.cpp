@@ -11,7 +11,9 @@
 // an untextured mesh, and leaves the atlas as it was when a copy is refused.
 // Teardown keeps submitted copies' sources alive and releases the sources of
 // a later frame that never reached the queue without waiting for its number.
-// The copies run on a headless device, which the test skips without.
+// The atlas description the viewers and fuse_render share makes, for a single
+// frame, an atlas gfx accepts and draws a host upload from. The copies run on
+// a headless device, which the test skips without.
 
 #include <chrono>
 #include <cstdint>
@@ -35,6 +37,7 @@
 #include "volumetric_kit/gfx/app/headless_app.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/pipelines/hybrid_mesh_pipeline.hpp"
+#include "volumetric_kit/gfx/pipelines/streamed_atlas.hpp"
 
 namespace {
 
@@ -351,6 +354,47 @@ int live_atlas_allocates_for_its_first_textured_job(vg::app::HeadlessApp& app) {
   return 0;
 }
 
+// fuse_render's atlas: one frame in flight, its picture uploaded from the
+// host in the frame that draws it, which binds it.
+int one_frame_atlas_draws_its_upload(vg::app::HeadlessApp& app) {
+  const vgp::StreamedAtlasDesc desc = fuse_viewer::atlas_desc({2, 2}, 1);
+  CHECK(desc.extent.width == 2 && desc.extent.height == 2);
+  CHECK(desc.format == VK_FORMAT_R8G8B8A8_SRGB);
+  CHECK(desc.slots == 2);
+
+  vg::RenderTargetLayout target;
+  target.color_formats[0] = VK_FORMAT_R8G8B8A8_SRGB;
+  target.color_count = 1;
+  target.depth_format = VK_FORMAT_D32_SFLOAT;
+  auto pipeline =
+      vgp::HybridMeshPipeline::create(app.device(), app.allocator(), target);
+  CHECK(pipeline.ok());
+  auto frames = vkc::TimelineSemaphore::create(app.device());
+  CHECK(frames.ok());
+  auto atlas = vgp::StreamedAtlas::create(pipeline.value(), app.allocator(),
+                                          frames.value(), desc);
+  if (!atlas.ok()) {
+    std::fprintf(stderr, "one-frame atlas: %s\n",
+                 atlas.status().message().c_str());
+    return 1;
+  }
+  const std::vector<std::uint32_t> pixels = {1, 2, 3, 4};
+  vkc::Status uploaded;
+  VkDescriptorSet bound = VK_NULL_HANDLE;
+  auto frame1 = app.device().submit_pending(
+      [&](VkCommandBuffer cmd) {
+        uploaded = atlas.value().record_upload(
+            cmd, 1, pixels.data(), pixels.size() * sizeof(std::uint32_t));
+        bound = atlas.value().use(1);
+      },
+      {}, {{&frames.value(), 1}});
+  CHECK(frame1.ok());
+  CHECK(uploaded.ok());
+  CHECK(bound != VK_NULL_HANDLE);
+  CHECK(frame1.value().wait().ok());
+  return 0;
+}
+
 int run_atlas_tests() {
   if (const int rc = copies_place_each_tile()) return rc;
 
@@ -375,6 +419,7 @@ int run_atlas_tests() {
           live_atlas_allocates_for_its_first_textured_job(app.value())) {
     return rc;
   }
+  if (const int rc = one_frame_atlas_draws_its_upload(app.value())) return rc;
   if (const int rc = live_atlas_holds_a_frames_colour(app.value())) return rc;
   if (const int rc =
           live_atlas_teardown_after_an_unsubmitted_frame(app.value())) {
