@@ -134,32 +134,29 @@ The driver decodes each camera's colour itself, so it needs the video
 decoders too (see below; on Linux, CUDA as well). That builds
 `volumetric_kit::recon_sensor_orbbec` -- `OrbbecSensor`, one camera as an
 `IRgbdSensor` (`sensor/orbbec/orbbec_sensor.hpp`), which a `SensorArray`
-reads as a synced rig -- and the live example, which prepares and fuses every
-set on the GPU (or, with `--no-fuse`, only streams):
+reads as a synced rig -- and the live example. Every example takes a core
+scenario file through `--config`; `--help` prints the common entry point.
+The core owns JSON decoding, defaults, units, ranges, source selection and
+operation compatibility. See [example configurations](config/README.md).
 
 ```sh
-build/examples/fuse_orbbec/fuse_orbbec --serial <serial> --frames 300
-# MJPEG colour instead of H.265, at about nine times the bandwidth at 4K:
-build/examples/fuse_orbbec/fuse_orbbec --serial <serial> --mjpeg
+build/examples/fuse_orbbec/fuse_orbbec --config config/examples/fuse_orbbec.json
+# Stream and decode alone, at 4K MJPEG and 25 fps; 60000 camera frames:
+build/examples/fuse_orbbec/fuse_orbbec --config config/examples/stream_orbbec.json
 ```
 
-A camera wired as a sync secondary streams only while its primary does; name
-a primary or standalone camera for a single-camera run. Without `--serial` the
-example opens the only camera that answers, after waiting out the whole
-discovery window (8 s).
+Edit `source.serial` for a single camera, or `source.sync_config` for a synced
+rig. A camera wired as a secondary streams only while its primary does; choose
+a primary or standalone camera for a single-camera run. With neither serial nor
+sync file, the example opens the only camera answering in the discovery window
+(8 s).
 
-A synced rig runs from its sync configuration (the lab rig's is
-`config/femto_mega_sync.json`, in the Orbbec SDK's layout) and a calibration
-file (`camera/array_calibration.hpp`) for the poses. A camera whose sync
-settings differ from the file is refused; `--apply-sync` writes them to it:
-
-```sh
-build/examples/fuse_orbbec/fuse_orbbec --rig config/femto_mega_sync.json \
-    --calibration calib.json --frames 300
-# the stream and decode alone, fusing nothing:
-build/examples/fuse_orbbec/fuse_orbbec --rig config/femto_mega_sync.json \
-    --no-fuse --mjpeg --color 3840x2160 --fps 25 --frames 60000
-```
+The sync file stays in the Orbbec SDK's format (`config/femto_mega_sync.json`),
+and `source.calibration` references the family's calibration file for poses.
+A camera whose sync settings differ is refused; `source.apply_sync: true`
+explicitly writes those settings. The stream operation refuses fusion and
+output settings before opening any resource. Relative paths are resolved from
+the scenario file's directory, including the sync, calibration and output paths.
 
 ### Optional: FFmpeg
 
@@ -190,13 +187,12 @@ loads static triangle geometry through `io::load_mesh`, uses
 grid, then extracts the decoded surface with marching cubes. Build the mesh
 example with `VR_WITH_ASSIMP=ON` after installing the
 [asset I/O prerequisites](#asset-io).
-Both support `--quant-table uniform|band|radial`, `--step` for the global
-quantization scale, `--entropy auto|host|device` and `--segment-size` for
-where and in what segments the frame's rANS encoding and decoding run, and
-`--sweep` for the shared rate-distortion study.
+Their `codec` section selects `quantization_table` (`uniform`, `band`,
+`radial`), `quantization_scale`, `entropy` (`auto`, `host`, `device`),
+`segment_size` and the shared rate-distortion `sweep`.
 
 Rafa2's supplied OBJ has no declared physical unit and its person is tilted
-in the stored coordinates. The explicit head-up vector below is the
+in the stored coordinates. The mesh scenario's explicit head-up vector is the
 visually checked long principal axis. The example rotates it to +Y,
 centres X/Z, puts the feet at Y=0, and scales the projected height to 1.7 m.
 It prints the original and normalized bounds and leaves the asset unchanged.
@@ -206,23 +202,19 @@ This is a height normalization, not an assertion about the source's unit.
 cmake -S "$recon_root" -B "$recon_root/build" -DCMAKE_BUILD_TYPE=Release \
   -DVR_WITH_ASSIMP=ON
 cmake --build "$recon_root/build" --parallel
-dataset_root=/absolute/path/to/datasets
+# Edit source.path in these files to point at the installed datasets.
 "$recon_root/build/examples/codec_replica/codec_replica" \
-  "$dataset_root/replica_room0/room0" --max-frames 400 \
-  --voxel 0.01 --encode-every 0 --preload --sweep
-
+  --config "$recon_root/config/examples/codec_replica.json"
 "$recon_root/build/examples/codec_mesh/codec_mesh" \
-  "$dataset_root/Rafa2/Frame_00001_textured.obj" \
-  --height 1.7 --up-vector -0.9120591159,0.0661250017,-0.4046920474 \
-  --voxel 0.005 --mode signed --sweep -o "$recon_root/build/rafa2"
+  --config "$recon_root/config/examples/codec_mesh.json"
 ```
 
 The mesh example writes `_input.ply` (normalized original), `_source.ply`
 (uncompressed TSDF surface), `_decoded.ply`, and the compressed `.vrtc`
 frame. Conversion error, codec-only error and total error are reported
-separately. `--inspect-only` checks the input and normalization without a
+separately. `codec.inspect_only` checks the input and normalization without a
 GPU run. The signed mode checks indexed topology and winding; it does not
-establish freedom from self-intersections. `--mode shell` supports open or
+establish freedom from self-intersections. `source.sdf_mode: "shell"` supports open or
 inconsistently wound meshes, with an intentional surface offset.
 
 Use a Release build for measurements. The current format is v3, with a

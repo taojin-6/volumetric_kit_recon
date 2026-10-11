@@ -215,28 +215,31 @@ vr_target_warnings(recon_example_fuse_keyframe_test)
 add_test(NAME recon_example_fuse_keyframe
          COMMAND recon_example_fuse_keyframe_test)
 
-# The examples' one command-line parser and the flag sets they declare through
-# it (examples/common/cli.hpp and *_flags.hpp): numbers read whole and finite,
-# unknown, missing and out-of-range arguments refused with the usage line, the
-# generated usage, and each flag set's defaults and validation; the Orbbec and
-# fuse_orbbec flags where the driver is built. Host only.
-add_executable(recon_example_cli_test example_cli_test.cpp)
-target_include_directories(recon_example_cli_test
+# The core parses and validates scenarios. These tests pin the conversion into
+# the runtime sensor and codec options, without opening a camera or GPU.
+add_executable(recon_example_config_test example_config_test.cpp)
+target_include_directories(recon_example_config_test
                            PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
-# recon_sensor_orbbec links recon_sensor; naming both repeats its archive.
 if(TARGET volumetric_kit::recon_sensor_orbbec)
   target_link_libraries(
-    recon_example_cli_test PRIVATE volumetric_kit::recon_codec
-                                   volumetric_kit::recon_sensor_orbbec)
-  target_compile_definitions(recon_example_cli_test
-                             PRIVATE VR_TEST_ORBBEC_FLAGS=1)
+    recon_example_config_test
+    PRIVATE volumetric_kit::recon_codec volumetric_kit::recon_sensor_orbbec
+            volumetric_kit::core_config)
+  target_compile_definitions(recon_example_config_test
+                             PRIVATE VR_TEST_ORBBEC_CONFIG=1)
 else()
   target_link_libraries(
-    recon_example_cli_test PRIVATE volumetric_kit::recon_codec
-                                   volumetric_kit::recon_sensor)
+    recon_example_config_test
+    PRIVATE volumetric_kit::recon_codec volumetric_kit::recon_sensor
+            volumetric_kit::core_config)
 endif()
-vr_target_warnings(recon_example_cli_test)
-add_test(NAME recon_example_cli COMMAND recon_example_cli_test)
+target_link_libraries(recon_example_config_test
+                      PRIVATE volumetric_kit::recon_tsdf)
+target_compile_definitions(
+  recon_example_config_test
+  PRIVATE VR_CONFIG_FIXTURES="${PROJECT_SOURCE_DIR}/config/examples")
+vr_target_warnings(recon_example_config_test)
+add_test(NAME recon_example_config COMMAND recon_example_config_test)
 
 # fuse_orbbec's sets (examples/common/fuse_orbbec_sets.hpp), where the driver is
 # built: a set's first frames kept, the rest let go, and a run over fake cameras
@@ -249,7 +252,7 @@ if(TARGET volumetric_kit::recon_sensor_orbbec)
   target_link_libraries(
     recon_example_fuse_orbbec_sets_test
     PRIVATE volumetric_kit::recon_sensor_orbbec
-            volumetric_kit::recon_sensor_array)
+            volumetric_kit::recon_sensor_array volumetric_kit::core_config)
   vr_target_warnings(recon_example_fuse_orbbec_sets_test)
   add_test(NAME recon_example_fuse_orbbec_sets
            COMMAND recon_example_fuse_orbbec_sets_test)

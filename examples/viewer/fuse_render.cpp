@@ -12,10 +12,8 @@
 // proves the full recon->gfx colour handoff to a file the same rendering drives
 // live later.
 //
-//   fuse_render <scene_dir> [-o out.png] [--voxel 0.02] [--trunc m]
-//               [--min-depth m] [--max-depth m] [--max-frames N]
-//               [--width 1280] [--height 720] [--yaw 45] [--pitch 30] [--lit]
-//               ...
+//   fuse_render --config config/examples/fuse_render.json
+//   fuse_render --help
 
 #include <algorithm>
 #include <chrono>
@@ -31,11 +29,10 @@
 
 #include <glm/glm.hpp>
 
-#include "cli.hpp"
+#include "config.hpp"
 #include "fuse_frame.hpp"  // vr_example::fuse_set
-#include "fusion_flags.hpp"
 #include "recon_gfx_bridge.hpp"
-#include "replica_flags.hpp"
+#include "replica_config.hpp"
 #include "replica_sensor.hpp"  // vr_example::ReplicaSensor (examples/common)
 #include "viewer_atlas.hpp"    // fuse_viewer::atlas_desc
 
@@ -81,51 +78,7 @@ namespace vgp = volumetric_kit::gfx::pipelines;
 
 namespace {
 
-struct Options {
-  vr_example::ReplicaFlags replica{400};
-  vr_example::FusionFlags fusion{0.02f};
-  std::string out = "fuse_render.png";
-  int width = 1280;
-  int height = 720;
-  float yaw = 45.0f;    // degrees, around the up axis
-  float pitch = 30.0f;  // degrees, above the horizon
-  bool lit = false;     // flat raw colour by default (the reconstruction's own)
-  int follow = -1;      // >=0: render from this trajectory frame's sensor pose
-  bool texture = true;  // project the keyframe image onto the mesh (uv0 atlas)
-  // In-block vertex sharing (MarchingCubesConfig::share_vertices), which
-  // `fuse_replica` already exposes and this example did not. It belongs here
-  // because this is the only example that renders, and sharing is what a
-  // memory-bound consumer turns on: an iOS scanner runs with it because the
-  // vertex arena is the term that binds there.
-  //
-  // It is worth a flag specifically BECAUSE it runs beside --texture. The two
-  // were mutually exclusive until the texture pass moved to a per-vertex
-  // dispatch -- the texturer used to decide visibility per triangle and write
-  // uv0 per vertex, so a shared vertex its triangles disagreed about was
-  // written by whichever thread ran last, and it refused the pair outright.
-  // One thread per vertex leaves one writer per vertex, and this is the
-  // example that can show the result: rendering both combinations to a PNG
-  // turns "byte-identical" from a claim into a diff.
-  bool share_vertices = false;
-};
-
-vkc::Result<Options> parse_args(int argc, char** argv) {
-  Options o;
-  vr_example::Cli cli("fuse_render");
-  o.replica.add_to(cli);
-  cli.option({"-o", "--out"}, "out.png", o.out);
-  o.fusion.add_to(cli);
-  cli.option("--width", "W", o.width, 1)
-      .option("--height", "H", o.height, 1)
-      .option("--yaw", "deg", o.yaw)
-      .option("--pitch", "deg", o.pitch)
-      .option("--follow", "frame", o.follow)
-      .flag("--lit", o.lit)
-      .flag("--no-texture", o.texture, false)
-      .flag("--share-vertices", o.share_vertices);
-  VKC_TRY(cli.parse(argc, argv));
-  return o;
-}
+using Options = vr_example::config::Config;
 
 // --- Fuse a Replica sequence into a coloured host mesh (recon side). ---------
 
@@ -142,9 +95,9 @@ struct Reconstruction {
   std::uint32_t atlas_w = 0;
   std::uint32_t atlas_h = 0;
   /// The sensor's vertical field of view (radians), from its own intrinsics.
-  /// Carried out of fuse() because --follow renders through the sensor and must
-  /// match it; deriving it in main() from constants is how it came to use 360
-  /// as the half-height of a 680-tall image.
+  /// Carried out of fuse() because render.follow renders through the sensor and
+  /// must match it; deriving it in main() from constants is how it came to use
+  /// 360 as the half-height of a 680-tall image.
   float sensor_vfov = 0.0f;
 };
 
@@ -161,7 +114,7 @@ vkc::Result<Reconstruction> fuse(const Options& opt,
   // The sequence arrives through the sensor interface; only this construction
   // knows it is a disk. The frame cap and the depth gate are the sensor's
   // options, so every frame it hands out is already gated.
-  VKC_ASSIGN(vr_example::ReplicaSensor replica, opt.replica.open(opt.fusion));
+  VKC_ASSIGN(vr_example::ReplicaSensor replica, vr_example::open_replica(opt));
   const vr::camera::CameraModel& cam = *replica.info().color;
   const float cy = static_cast<float>(cam.intrinsics.cy);
   const float fy = static_cast<float>(cam.intrinsics.fy);
@@ -171,32 +124,33 @@ vkc::Result<Reconstruction> fuse(const Options& opt,
       std::atan(cy / fy) +
       std::atan((static_cast<float>(cam.size.height) - cy) / fy);
 
-  VKC_ASSIGN(vol::VoxelBlockGrid volume,
-             vr_example::create_fusion_grid(device, allocator, opt.fusion.voxel,
-                                            opt.fusion.trunc));
+  VKC_ASSIGN(
+      vol::VoxelBlockGrid volume,
+      vr_example::create_fusion_grid(device, allocator, opt.fusion.voxel_size_m,
+                                     opt.fusion.truncation_m));
   VKC_ASSIGN(rtsdf::Fuser fuser, rtsdf::Fuser::create(device, allocator));
   VKC_ASSIGN(rsensor::GpuFramePrep prep,
              rsensor::GpuFramePrep::create(device, allocator));
   rmesh::MarchingCubesConfig mc_config;
-  mc_config.share_vertices = opt.share_vertices;
+  mc_config.share_vertices = opt.fusion.share_vertices;
   VKC_ASSIGN(rmesh::MarchingCubes extractor,
              rmesh::MarchingCubes::create(device, allocator, mc_config));
 
   // Decode the sequence up front when asked, so the fuse loop below runs at
   // GPU speed instead of at JPEG/PNG decode speed (~75% of a streaming loop).
-  if (opt.replica.preload) {
+  if (opt.source.preload) {
     VKC_TRY(vr_example::preload_frames(replica).status());
   }
 
   // The keyframe the mesh is textured with, kept as prepared as it goes by:
-  // the --follow frame if given, else the middle of the sequence. It holds its
-  // buffers on the device, so the next prepare writes to new ones -- exactly
-  // what a live consumer does with a keyframe, and why this never reaches
-  // back into the dataset for it once fusion is done.
+  // the render.follow frame if given, else the middle of the sequence. It holds
+  // its buffers on the device, so the next prepare writes to new ones --
+  // exactly what a live consumer does with a keyframe, and why this never
+  // reaches back into the dataset for it once fusion is done.
   const std::size_t keyframe_index =
-      (opt.follow >= 0 &&
-       static_cast<std::size_t>(opt.follow) < replica.frame_count())
-          ? static_cast<std::size_t>(opt.follow)
+      (opt.render.follow >= 0 &&
+       static_cast<std::size_t>(opt.render.follow) < replica.frame_count())
+          ? static_cast<std::size_t>(opt.render.follow)
           : replica.frame_count() / 2;
   std::optional<rsensor::DeviceFrame> keyframe;
 
@@ -225,7 +179,7 @@ vkc::Result<Reconstruction> fuse(const Options& opt,
     // colour, as fuse_replica does; an incomplete band is an error.
     VKC_TRY(vr_example::fuse_set(fuser, volume, {frame}, opt.fusion.max_weight,
                                  nullptr));
-    if (opt.texture && fused == keyframe_index && frame.has_color()) {
+    if (opt.render.texture && fused == keyframe_index && frame.has_color()) {
       keyframe = std::move(frame);
     }
     ++fused;
@@ -277,14 +231,7 @@ vkc::Result<Reconstruction> fuse(const Options& opt,
 
 }  // namespace
 
-int main(int argc, char** argv) {
-  const vkc::Result<Options> parsed = parse_args(argc, argv);
-  if (!parsed) {
-    std::fprintf(stderr, "%s\n", parsed.status().message().c_str());
-    return 2;
-  }
-  const Options& opt = parsed.value();
-
+int run_main(const Options& opt) {
   // 1. Fuse + extract the reconstruction (recon device).
   std::vector<glm::mat4> poses;
   vkc::Result<Reconstruction> recon_result = fuse(opt, poses);
@@ -309,30 +256,31 @@ int main(int argc, char** argv) {
   const glm::vec3 center = 0.5f * (lo + hi);
   // Floor the radius so the orbit near/far planes below stay ordered
   // (z_near = max(0.01, r*0.05) < z_far = r*6) even for a tiny/degenerate
-  // reconstruction; the --follow path uses fixed planes and is unaffected.
+  // reconstruction; the render.follow path uses fixed planes and is unaffected.
   const float radius = std::max(0.5f * glm::length(hi - lo), 0.05f);
-  const float aspect =
-      static_cast<float>(opt.width) / static_cast<float>(opt.height);
+  const float aspect = static_cast<float>(opt.window.width) /
+                       static_cast<float>(opt.window.height);
   glm::mat4 view_proj;
-  if (opt.follow >= 0 && static_cast<std::size_t>(opt.follow) < poses.size()) {
+  if (opt.render.follow >= 0 &&
+      static_cast<std::size_t>(opt.render.follow) < poses.size()) {
     // Render from the sensor's own pose (OpenCV: +Z forward, +Y down) -- the
     // same follow-camera math the live viewer uses.
-    const glm::mat4& c2w = poses[static_cast<std::size_t>(opt.follow)];
+    const glm::mat4& c2w = poses[static_cast<std::size_t>(opt.render.follow)];
     const glm::vec3 eye(c2w[3]);
     // The sensor's own vertical FOV, carried out of fuse(). It used to be
     // 2 * atan(360 / 600), wrong twice over: the half-height of a 680-tall
     // sensor is 340, not 360, and hardcoding 600 for fy silently ignored
-    // --cam-params.
+    // source.camera_parameters.
     const float vfov = recon.sensor_vfov;
     view_proj = vg::camera::Camera::look_at_perspective(
                     eye, eye + glm::vec3(c2w[2]), -glm::vec3(c2w[1]), vfov,
                     aspect, 0.05f, 16.0f)
                     .view_proj();
-    std::printf("follow frame %d: eye=(%.2f,%.2f,%.2f)\n", opt.follow, eye.x,
-                eye.y, eye.z);
+    std::printf("follow frame %d: eye=(%.2f,%.2f,%.2f)\n", opt.render.follow,
+                eye.x, eye.y, eye.z);
   } else {
-    const float yaw = glm::radians(opt.yaw);
-    const float pitch = glm::radians(opt.pitch);
+    const float yaw = glm::radians(opt.render.yaw_degrees);
+    const float pitch = glm::radians(opt.render.pitch_degrees);
     const glm::vec3 dir(std::cos(pitch) * std::cos(yaw), std::sin(pitch),
                         std::cos(pitch) * std::sin(yaw));
     const glm::vec3 eye = center + dir * (radius * 2.4f);
@@ -354,8 +302,8 @@ int main(int argc, char** argv) {
   vg::app::HeadlessApp app = std::move(app_r).value();
 
   vg::OffscreenTargetDesc td;
-  td.extent = {static_cast<std::uint32_t>(opt.width),
-               static_cast<std::uint32_t>(opt.height)};
+  td.extent = {static_cast<std::uint32_t>(opt.window.width),
+               static_cast<std::uint32_t>(opt.window.height)};
   // _SRGB, not _UNORM: this is a presentation site, and the only encode on the
   // headless path. The mesh's vertex colors and the decoded atlas are LINEAR
   // (the 2026-08-02 color-space decision), and the readback goes straight into
@@ -418,7 +366,9 @@ int main(int argc, char** argv) {
   frame.extent = td.extent;
   frame.view_proj = view_proj;
   frame.light_dir = glm::vec3(0.4f, 0.9f, 0.5f);
-  frame.flags = opt.lit ? vgp::kHybridMeshLit : 0u;
+  frame.flags = (opt.render.shading == vr_example::config::Shading::Lit)
+                    ? vgp::kHybridMeshLit
+                    : 0u;
   frame.draws = &draw;
   frame.draw_count = 1;
 
@@ -468,7 +418,7 @@ int main(int argc, char** argv) {
   // size chosen above; it exposes no byte count of its own.
   const VkExtent2D extent = target.extent();
   const vkc::Status written = vr::io::write_png_rgba8(
-      opt.out, pixels,
+      opt.output.path, pixels,
       static_cast<std::size_t>(extent.width) * extent.height * 4, extent.width,
       extent.height);
   if (!written) {
@@ -476,9 +426,9 @@ int main(int argc, char** argv) {
     return 1;
   }
   // Vertices as well as triangles, and the ratio between them: that ratio is
-  // the whole observable effect of --share-vertices (3.00 when off, since the
-  // mesh tier emits independent triangles; well under it when on), and it is
-  // what prices the vertex arena a memory-bound consumer is trading against.
+  // the whole observable effect of fusion.share_vertices (3.00 when off, since
+  // the mesh tier emits independent triangles; well under it when on), and it
+  // is what prices the vertex arena a memory-bound consumer is trading against.
   // Printing only the triangle count made the flag look like a no-op -- sharing
   // does not change how many triangles there are.
   std::printf(
@@ -488,6 +438,13 @@ int main(int argc, char** argv) {
       mesh.triangle_count() > 0 ? static_cast<double>(mesh.vertices.size()) /
                                       static_cast<double>(mesh.triangle_count())
                                 : 0.0,
-      opt.out.c_str(), opt.width, opt.height, center.x, center.y, center.z);
+      opt.output.path.c_str(), opt.window.width, opt.window.height, center.x,
+      center.y, center.z);
   return 0;
+}
+
+int main(int argc, char** argv) {
+  return vr_example::configured_main(
+      argc, argv, vr_example::config::Application::FuseRender, "fuse_render",
+      run_main);
 }

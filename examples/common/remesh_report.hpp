@@ -5,7 +5,7 @@
 
 /// @file examples/common/remesh_report.hpp
 /// @brief What re-meshing a fused grid costs, and how much of it changed:
-///        `fuse_replica`'s extract reports and its `--dirty-every` survey.
+///        `fuse_replica`'s extract reports and its `fusion.dirty_every` survey.
 ///        Header-only; compiled into the executables that mesh.
 
 #include <cstddef>
@@ -76,7 +76,7 @@ inline vkc::Result<ChangedBlocks> changed_since(
   return out;
 }
 
-/// @brief `--dirty-every`: the changed and re-mesh fractions of the active
+/// @brief `fusion.dirty_every`: the changed and re-mesh fractions of the active
 ///        blocks, over windows of fused frames, against a tick of its own.
 ///
 /// A window's sample is the union of its frames' changes, which is what a

@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "operation": "fuse",
+  "source": {
+    "kind": "dataset",
+    "path": "data/room0"
+  },
+  "run": {
+    "frames": 400
+  },
+  "output": {
+    "path": "results/room0.png"
+  }
+}

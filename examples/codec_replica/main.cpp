@@ -2,17 +2,15 @@
 // Copyright (c) 2026 Tao Jin
 
 // codec_replica: the TSDF codec on real data. Fuses a Replica sequence as
-// fuse_replica does and, every --encode-every frames, encodes the grid and
+// fuse_replica does and, every codec.encode_every frames, encodes the grid and
 // decodes it into a player grid. Reports what the stream costs, and how far
-// the last decoded surface is from the source's; --sweep then prints the
+// the last decoded surface is from the source's; codec.sweep then prints the
 // rate-distortion table the codec's defaults come from.
 //
-//   codec_replica <scene_dir> [--voxel 0.01] [--encode-every 1] [--k 64]
-//                 [--step 0.2] [--quant-table uniform|band|radial]
-//                 [--max-frames N] [--preload] [--sweep]
-//                 [-o prefix] ...
+//   codec_replica --config config/examples/codec_replica.json
+//   codec_replica --help
 //
-// It takes every Replica example's sequence and fusion flags. Configure with
+// It takes every Replica example's sequence and fusion settings. Configure with
 // -DCMAKE_BUILD_TYPE=Release before quoting any timing.
 
 #include <algorithm>
@@ -22,13 +20,12 @@
 #include <string>
 #include <thread>
 
-#include "cli.hpp"
-#include "codec_flags.hpp"
+#include "codec_config.hpp"
 #include "codec_stream.hpp"
 #include "codec_sweep.hpp"
+#include "config.hpp"
 #include "fuse_frame.hpp"
-#include "fusion_flags.hpp"
-#include "replica_flags.hpp"
+#include "replica_config.hpp"
 #include "replica_sensor.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
@@ -52,26 +49,7 @@ constexpr double kFps = 30.0;
 constexpr std::int32_t kBuckets = 16384;  // the fusion grid's; it grows
 constexpr std::size_t kMetricStride = 4;  // about 1 vertex in 4, both ways
 
-struct Options {
-  vr_example::ReplicaFlags replica{1 << 30};
-  vr_example::FusionFlags fusion{0.01f};
-  vr_example::CodecFlags codec;
-  std::string out_prefix;  // empty: write no meshes
-  int encode_every = 1;    // 0: code only the final grid
-  bool sweep = false;
-};
-
-vkc::Result<Options> parse_args(int argc, char** argv) {
-  Options o;
-  vr_example::Cli cli("codec_replica");
-  o.replica.add_to(cli);
-  o.fusion.add_to(cli);
-  cli.option("--encode-every", "N", o.encode_every, 0);
-  o.codec.add_to(cli);
-  cli.flag("--sweep", o.sweep).option("-o", "prefix", o.out_prefix);
-  VKC_TRY(cli.parse(argc, argv));
-  return o;
-}
+using Options = vr_example::config::Config;
 
 vkc::Status run(const Options& opt) {
   VKC_ASSIGN(vkc::Instance instance, vkc::Instance::create({}));
@@ -82,13 +60,13 @@ vkc::Status run(const Options& opt) {
   VKC_ASSIGN(vkc::Allocator allocator,
              vkc::Allocator::create(instance.handle(), device));
 
-  VKC_ASSIGN(vr_example::ReplicaSensor capture, opt.replica.open(opt.fusion));
-  if (opt.replica.preload) {
+  VKC_ASSIGN(vr_example::ReplicaSensor capture, vr_example::open_replica(opt));
+  if (opt.source.preload) {
     VKC_TRY(vr_example::preload_frames(capture).status());
   }
 
-  const float voxel = opt.fusion.voxel;
-  const float trunc = opt.fusion.trunc;
+  const float voxel = opt.fusion.voxel_size_m;
+  const float trunc = opt.fusion.truncation_m;
   VKC_ASSIGN(vr::volume::VoxelBlockGrid volume,
              vr_example::create_fusion_grid(device, allocator, voxel, trunc,
                                             kBuckets));
@@ -97,15 +75,16 @@ vkc::Status run(const Options& opt) {
              vr::sensor::GpuFramePrep::create(device, allocator));
   VKC_ASSIGN(mesh::MarchingCubes extractor,
              mesh::MarchingCubes::create(device, allocator));
-  const codec::EncoderConfig& config = opt.codec.config;
+  const codec::EncoderConfig& config = vr_example::encoder_config(opt.codec);
   VKC_ASSIGN(vr_example::CodecStream stream,
              vr_example::CodecStream::create(device, allocator, config));
   std::printf("%zu frames at %.3f m voxels; K %u, table %s, scale %.3f\n",
               capture.frame_count(), double(voxel),
-              config.params.coefficient_count, opt.codec.quant_table.c_str(),
+              config.params.coefficient_count,
+              vr_example::quantization_name(opt.codec.quantization_table),
               double(config.params.quantization_scale));
 
-  // Fuse, and code the grid every --encode-every frames and at the end.
+  // Fuse, and code the grid every codec.encode_every frames and at the end.
   VKC_TRY(capture.start());
   std::size_t fused = 0;
   std::size_t coded_at = 0;
@@ -120,7 +99,8 @@ vkc::Status run(const Options& opt) {
     VKC_TRY(vr_example::fuse_set(fuser, volume, {prepared},
                                  opt.fusion.max_weight, nullptr));
     ++fused;
-    if (opt.encode_every > 0 && fused % std::size_t(opt.encode_every) == 0) {
+    if (opt.codec.encode_every > 0 &&
+        fused % std::size_t(opt.codec.encode_every) == 0) {
       VKC_TRY(stream.code(volume));
       coded_at = fused;
     }
@@ -131,16 +111,16 @@ vkc::Status run(const Options& opt) {
   if (coded_at != fused) {
     VKC_TRY(stream.code(volume));
   }
-  stream.report(kFps, opt.encode_every);
+  stream.report(kFps, opt.codec.encode_every);
 
   // The last frame's decoded surface against the source's.
   VKC_ASSIGN(const mesh::Mesh source, extractor.extract_host(volume));
   VKC_ASSIGN(const mesh::Mesh decoded, extractor.extract_host(stream.player()));
   // Written first, so a comparison that refuses a mesh still leaves the
   // meshes to look at.
-  if (!opt.out_prefix.empty()) {
-    VKC_TRY(vr::io::write_ply(opt.out_prefix + "_source.ply", source));
-    VKC_TRY(vr::io::write_ply(opt.out_prefix + "_decoded.ply", decoded));
+  if (!opt.output.prefix.empty()) {
+    VKC_TRY(vr::io::write_ply(opt.output.prefix + "_source.ply", source));
+    VKC_TRY(vr::io::write_ply(opt.output.prefix + "_decoded.ply", decoded));
   }
   // A band's width of reach, and an F-score at half a voxel, inside the
   // reconstruction's own resolution so it moves with the codec. The source is
@@ -156,7 +136,7 @@ vkc::Status run(const Options& opt) {
               decoded.triangle_count(), source.triangle_count());
   vr_example::print_comparison(cmp, voxel);
 
-  if (opt.sweep) {
+  if (opt.codec.sweep) {
     VKC_TRY(vr_example::run_codec_sweep(device, allocator, volume, reference,
                                         extractor, config, stream.player()));
   }
@@ -165,17 +145,18 @@ vkc::Status run(const Options& opt) {
 
 }  // namespace
 
-int main(int argc, char** argv) {
-  const vkc::Result<Options> opt = parse_args(argc, argv);
-  if (!opt.ok()) {
-    std::fprintf(stderr, "%s\n", opt.status().message().c_str());
-    return 2;
-  }
-  const vkc::Status status = run(opt.value());
+int run_main(const Options& opt) {
+  const vkc::Status status = run(opt);
   if (!status.ok()) {
     std::fprintf(stderr, "codec_replica failed: %s\n",
                  status.message().c_str());
     return 1;
   }
   return 0;
+}
+
+int main(int argc, char** argv) {
+  return vr_example::configured_main(
+      argc, argv, vr_example::config::Application::CodecReplica,
+      "codec_replica", run_main);
 }

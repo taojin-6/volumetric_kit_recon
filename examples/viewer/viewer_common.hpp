@@ -21,7 +21,6 @@
 #include <imgui_impl_glfw.h>
 #include <glm/glm.hpp>
 
-#include "cli.hpp"
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/gfx/app/windowed_app.hpp"
@@ -37,24 +36,6 @@ namespace vg = volumetric_kit::gfx;
 namespace vkc = volumetric_kit::core;
 namespace rmesh = volumetric_kit::recon::mesh;
 namespace vol = volumetric_kit::recon::volume;
-
-/// The window both viewers open: `--width`, `--height`, `--no-overlay` (the
-/// Dear ImGui panels) and `--validation` (the Vulkan validation layer on the
-/// shared device).
-struct WindowFlags {
-  int width = 1280;
-  int height = 720;
-  bool overlay = true;
-  bool validation = false;
-
-  /// Declare the four flags on @p cli; this object must outlive the parse.
-  void add_to(vr_example::Cli& cli) {
-    cli.option("--width", "W", width, 1)
-        .option("--height", "H", height, 1)
-        .flag("--no-overlay", overlay, false)
-        .flag("--validation", validation);
-  }
-};
 
 /// @return The window's framebuffer size, at least 1 x 1.
 inline VkExtent2D window_extent(GLFWwindow* window) {

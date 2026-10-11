@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "operation": "fuse",
+  "source": {
+    "kind": "live",
+    "sync_config": "../femto_mega_sync.json"
+  },
+  "run": {
+    "frames": 300
+  },
+  "output": {
+    "path": "results/rig.ply"
+  }
+}

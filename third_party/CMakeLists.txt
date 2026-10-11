@@ -42,7 +42,7 @@ include(FetchContent)
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG f35f5470d80d0becc9492b9e0db0106cd59566bc)
+  GIT_TAG afaa844b41cf21b98d5b412b5e70e3708e1e71ef)
 set(VKC_INSTALL ${VR_INSTALL})
 if(NOT VR_CAMERA_ONLY)
   set(VKC_WITH_VULKAN ON)
@@ -50,7 +50,21 @@ if(NOT VR_CAMERA_ONLY)
     set(VKC_BUILD_TEST_SUPPORT ON)
   endif()
 endif()
+# Scenario parsing is optional and used only by executable examples and their
+# host-side adapter tests. Camera-only/package library consumers need no parser.
+if(NOT VR_CAMERA_ONLY AND (VR_BUILD_EXAMPLES OR VR_BUILD_TESTS))
+  set(VKC_WITH_CONFIG ON)
+endif()
 FetchContent_MakeAvailable(volumetric_kit_core)
+if(NOT VR_CAMERA_ONLY
+   AND (VR_BUILD_EXAMPLES OR VR_BUILD_TESTS)
+   AND NOT TARGET volumetric_kit::core_config)
+  message(
+    FATAL_ERROR
+      "recon's examples and adapter tests require core_config: declare core "
+      "with VKC_WITH_CONFIG=ON before adding recon")
+endif()
+
 # The set()s above are lost when calib or the application made the core
 # available first, without its vulkan tier or its test support.
 if(VR_CAMERA_ONLY)

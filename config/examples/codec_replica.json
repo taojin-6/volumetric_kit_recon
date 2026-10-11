@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "operation": "codec",
+  "source": {
+    "kind": "dataset",
+    "path": "data/room0",
+    "preload": true
+  },
+  "run": {
+    "frames": 400
+  },
+  "fusion": {
+    "voxel_size_m": 0.01
+  },
+  "codec": {
+    "encode_every": 0,
+    "sweep": true
+  }
+}

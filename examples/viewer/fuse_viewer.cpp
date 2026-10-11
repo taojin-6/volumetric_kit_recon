@@ -47,18 +47,16 @@
 // sensor resolution, the rest fall back to fused voxel colour. The keyframe's
 // colour buffer is copied into gfx's atlas on the device, in the frame that
 // first draws the mesh, as rig_viewer copies each camera's (viewer_atlas.hpp's
-// LiveAtlas). --no-texture disables it (an A/B against the pure vertex-colour
-// path).
+// LiveAtlas). render.texture=false disables it (an A/B against the pure
+// vertex-colour path).
 //
 // Two Dear ImGui panels (gfx's ui tier) show where the time and the memory go:
 // Performance (the renderer's fps + GPU spans, with recon's per-frame fuse
 // stages appended) and Reconstruction (mesh/volume counters + recon's device
-// memory). --no-overlay turns both off.
+// memory). window.overlay=false turns both off.
 //
-//   fuse_viewer <scene_dir> [--voxel 0.02] [--trunc m] [--min-depth m]
-//               [--max-depth m] [--max-frames N] [--remesh-every N]
-//               [--width 1280] [--height 720] [--unlit] [--no-texture]
-//               [--preload] [--no-overlay] [--validation] ...
+//   fuse_viewer --config config/examples/fuse_viewer.json
+//   fuse_viewer --help
 
 #include <algorithm>
 #include <atomic>
@@ -81,11 +79,10 @@
 #include <imgui_impl_glfw.h>
 #include <glm/glm.hpp>
 
-#include "cli.hpp"
-#include "fuse_frame.hpp"  // vr_example::fuse_keyframe
-#include "fusion_flags.hpp"
+#include "config.hpp"
+#include "fuse_frame.hpp"        // vr_example::fuse_keyframe
 #include "recon_gfx_bridge.hpp"  // to_live_mesh, and the vertex-layout asserts
-#include "replica_flags.hpp"
+#include "replica_config.hpp"
 #include "replica_sensor.hpp"  // vr_example::ReplicaSensor
 #include "shared_device.hpp"
 #include "viewer_atlas.hpp"
@@ -135,38 +132,7 @@ namespace win = volumetric_kit::gfx::windowing;
 
 namespace {
 
-struct Options {
-  vr_example::ReplicaFlags replica{400};
-  vr_example::FusionFlags fusion{0.02f};
-  fuse_viewer::WindowFlags window;
-  int remesh_every = 1;  // re-extract + re-upload every N fused frames
-  bool lit = true;
-  bool texture = true;  // project each keyframe onto the growing mesh (uv0)
-  // In-block vertex sharing (MarchingCubesConfig::share_vertices). Off here to
-  // match the example's history, on in the iOS scanner, where the vertex arena
-  // is the term that binds -- so this flag is what lets this window stand in
-  // for that configuration rather than only for the desktop one.
-  //
-  // It is worth a flag specifically BECAUSE it runs beside --texture. Sharing
-  // and projective texturing were mutually exclusive until the texture pass
-  // moved to a per-vertex dispatch; this is where the two are exercised
-  // together, live and growing, rather than in one still frame.
-  bool share_vertices = false;
-};
-
-vkc::Result<Options> parse_args(int argc, char** argv) {
-  Options o;
-  vr_example::Cli cli("fuse_viewer");
-  o.replica.add_to(cli);
-  o.fusion.add_to(cli);
-  cli.option("--remesh-every", "N", o.remesh_every, 1);
-  o.window.add_to(cli);
-  cli.flag("--unlit", o.lit, false)
-      .flag("--no-texture", o.texture, false)
-      .flag("--share-vertices", o.share_vertices);
-  VKC_TRY(cli.parse(argc, argv));
-  return o;
-}
+using Options = vr_example::config::Config;
 
 // What travels with a mesh through the exchange: the keyframe colour its uv0
 // index into (empty for none), and the extract's timings, which the panel
@@ -248,7 +214,7 @@ int run(GLFWwindow* window, const Options& opt) {
   // already gated, and the fuse thread below drives an IRgbdSensor& that
   // never learns it is reading a disk. Declared here, before the fuse thread
   // that drives it, so it outlives that thread.
-  auto capture_result = opt.replica.open(opt.fusion);
+  auto capture_result = vr_example::open_replica(opt);
   if (!capture_result) {
     std::fprintf(stderr, "capture: %s\n",
                  capture_result.status().message().c_str());
@@ -257,11 +223,10 @@ int run(GLFWwindow* window, const Options& opt) {
   vr_example::ReplicaSensor replica = std::move(capture_result).value();
   const vr::camera::CameraModel& cam = *replica.info().color;
   // The far plane follows the depth gate the frames carry.
-  const float max_depth = opt.fusion.max_depth.value_or(
-      vr_example::ReplicaSensor::Options{}.max_depth);
+  const float max_depth = opt.fusion.max_depth_m;
 
   auto grid_result = vr_example::create_fusion_grid(
-      rdevice, rallocator, opt.fusion.voxel, opt.fusion.trunc);
+      rdevice, rallocator, opt.fusion.voxel_size_m, opt.fusion.truncation_m);
   if (!grid_result) {
     std::fprintf(stderr, "grid: %s\n", grid_result.status().message().c_str());
     return 1;
@@ -322,8 +287,8 @@ int run(GLFWwindow* window, const Options& opt) {
   mc_config.slot_count = config.frames_in_flight + 1;
   // In-block vertex sharing, which the texture pass no longer excludes: it
   // dispatches per vertex, so a vertex belonging to several triangles has one
-  // writer rather than several disagreeing ones. See --share-vertices.
-  mc_config.share_vertices = opt.share_vertices;
+  // writer rather than several disagreeing ones. See fusion.share_vertices.
+  mc_config.share_vertices = opt.fusion.share_vertices;
   auto extractor_result =
       rmesh::MarchingCubes::create(rdevice, rallocator, mc_config);
   if (!extractor_result) {
@@ -333,10 +298,11 @@ int run(GLFWwindow* window, const Options& opt) {
   }
   rmesh::MarchingCubes extractor = std::move(extractor_result).value();
   // Projective texturer (recon device; used, like the fuser and extractor,
-  // only on the fuse thread below). Cheap to keep even when --no-texture, but
-  // build it only when texturing so the disabled path stays a pure A/B.
+  // only on the fuse thread below). Cheap to keep even when
+  // render.texture=false, but build it only when texturing so the disabled path
+  // stays a pure A/B.
   std::optional<rtex::ProjectiveTexturer> texturer;
-  if (opt.texture) {
+  if (opt.render.texture) {
     auto texture_result = rtex::ProjectiveTexturer::create(rdevice, rallocator);
     if (!texture_result) {
       std::fprintf(stderr, "texturer: %s\n",
@@ -396,10 +362,10 @@ int run(GLFWwindow* window, const Options& opt) {
   const fuse_viewer::ProfilerDetach profiler_guard{app};
 
   // --- gfx ui: the Dear ImGui performance overlay ----------------------------
-  // Optional: --no-overlay skips both the context and the platform backend, so
-  // the disabled path costs nothing and stays a clean A/B. The pipeline bakes
-  // the swapchain layout, which survives a resize, so the overlay is built
-  // once.
+  // Optional: window.overlay=false skips both the context and the platform
+  // backend, so the disabled path costs nothing and stays a clean A/B. The
+  // pipeline bakes the swapchain layout, which survives a resize, so the
+  // overlay is built once.
   std::optional<vg::ui::ImGuiOverlay> overlay;
   if (opt.window.overlay) {
     vg::ui::ImGuiOverlayConfig overlay_config;
@@ -484,8 +450,8 @@ int run(GLFWwindow* window, const Options& opt) {
       // Texture `device_mesh` with one keyframe, then publish it with that
       // keyframe's colour, the atlas its uv0 index into, and the `timings` of
       // the extract that made it. On any texturing failure -- or when
-      // --no-texture -- the atlas job stays empty and the mesh draws in its
-      // fused voxel colour.
+      // render.texture=false -- the atlas job stays empty and the mesh draws in
+      // its fused voxel colour.
       //
       // The mesh and its atlas are ONE value, published and taken together.
       // uv0 is a normalized coordinate into the image of the camera that
@@ -588,7 +554,7 @@ int run(GLFWwindow* window, const Options& opt) {
       // gated by fusion rather than by JPEG/PNG decode (~75% of a streaming
       // loop). Done here, on the fuse thread, so the window is already up and
       // responsive while it works.
-      if (opt.replica.preload) {
+      if (opt.source.preload) {
         // `quit` stops the decode at the next frame boundary, so closing the
         // window mid-preload does not leave the join at shutdown waiting out
         // the whole sequence -- the same reason the final extract below is
@@ -635,7 +601,7 @@ int run(GLFWwindow* window, const Options& opt) {
         }
         // A preload cache hit, else a disk read + JPEG/PNG decode (the CPU
         // cost the preload exists to hoist out of this loop). Timed either way,
-        // so --preload's effect is visible as this row collapsing to ~0.
+        // so source.preload's effect is visible as this row collapsing to ~0.
         auto polled = [&]() {
           vkc::StageScope scope(fuse_stages, "frame");
           return capture.poll();
@@ -688,7 +654,7 @@ int run(GLFWwindow* window, const Options& opt) {
         // extract is not run, saving the dispatch. Fusion routinely outruns
         // the render loop here (a preloaded run remeshes several times per
         // presented frame), so this is the common path, not a corner.
-        if ((i % static_cast<std::size_t>(opt.remesh_every)) == 0 &&
+        if ((i % static_cast<std::size_t>(opt.fusion.remesh_every)) == 0 &&
             exchange.release_and_may_publish(extractor)) {
           remesh(&frame);
         }
@@ -972,7 +938,7 @@ int run(GLFWwindow* window, const Options& opt) {
         // fetches the mesh from VRAM on every presented frame (~64 MiB at
         // room0's 991 k vertices). MarchingCubesConfig::share_vertices cuts
         // that fetch ~4x by emitting ~4x fewer vertices, and
-        // `--share-vertices` now takes it here. It was
+        // `fusion.share_vertices` now takes it here. It was
         // unavailable to this example while the texture tier refused a shared
         // mesh -- it decided visibility per triangle and wrote uv0 per vertex
         // -- and the per-vertex dispatch removed that refusal, so the ~4x is
@@ -985,7 +951,10 @@ int run(GLFWwindow* window, const Options& opt) {
         hybrid_frame.extent = extent;
         hybrid_frame.view_proj = view_proj;
         hybrid_frame.light_dir = glm::vec3(0.4f, 0.9f, 0.5f);
-        hybrid_frame.flags = opt.lit ? vgp::kHybridMeshLit : 0u;
+        hybrid_frame.flags =
+            (opt.render.shading == vr_example::config::Shading::Lit)
+                ? vgp::kHybridMeshLit
+                : 0u;
         hybrid_frame.atlas = atlas.use(render_frame.number);
         hybrid_frame.draws = &draw;
         hybrid_frame.draw_count = 1;
@@ -1018,14 +987,7 @@ int run(GLFWwindow* window, const Options& opt) {
 
 }  // namespace
 
-int main(int argc, char** argv) {
-  const vkc::Result<Options> parsed = parse_args(argc, argv);
-  if (!parsed) {
-    std::fprintf(stderr, "%s\n", parsed.status().message().c_str());
-    return 2;
-  }
-  const Options& opt = parsed.value();
-
+int run_main(const Options& opt) {
   if (glfwInit() != GLFW_TRUE) {
     std::fprintf(stderr, "glfwInit failed\n");
     return 1;
@@ -1046,4 +1008,10 @@ int main(int argc, char** argv) {
   glfwDestroyWindow(window);
   glfwTerminate();
   return rc;
+}
+
+int main(int argc, char** argv) {
+  return vr_example::configured_main(
+      argc, argv, vr_example::config::Application::FuseViewer, "fuse_viewer",
+      run_main);
 }

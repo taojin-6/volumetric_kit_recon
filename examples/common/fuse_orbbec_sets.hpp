@@ -22,7 +22,7 @@
 #include <utility>
 #include <vector>
 
-#include "fuse_orbbec_flags.hpp"
+#include "orbbec_config.hpp"
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
@@ -68,43 +68,47 @@ inline void print_orbbec_camera(
 }
 
 /// @brief Open fuse_orbbec's cameras, each printed: one, or every camera of
-///        the `--rig` file (`open_orbbec_sensors`), the colour decoded onto
+///        the `source.sync_config` file (`open_orbbec_sensors`), the colour
+///        decoded onto
 ///        @p device. A single camera posed by @p calibration is the one it
 ///        names, or its only one. The depth gate is validated by the driver,
 ///        which names both values when it refuses one.
 /// @return The cameras; `Status::Code::NotFound` when @p calibration poses
-///         several and `--serial` names none, or not the named one; or the
+///         several and `source.serial` names none, or not the named one; or the
 ///         driver's error.
 inline vkc::Result<std::vector<std::unique_ptr<vr::sensor::IRgbdSensor>>>
-open_orbbec_cameras(const FuseOrbbecFlags& opt,
+open_orbbec_cameras(const config::Config& opt,
                     const vr::camera::ArrayCalibration& calibration,
                     const vkc::Device& device, vkc::Allocator& allocator) {
   vr::sensor::OrbbecSensor::Options o;
-  opt.cameras.apply(opt.fusion, device, allocator, o);
+  apply_orbbec_config(opt, device, allocator, o);
   std::vector<std::unique_ptr<vr::sensor::IRgbdSensor>> sensors;
   const auto t_open = std::chrono::steady_clock::now();
-  if (!opt.cameras.rig.empty()) {
-    o.apply_sync = opt.cameras.apply_sync;
-    VKC_ASSIGN(sensors, vr::sensor::open_orbbec_sensors(opt.cameras.rig, o));
+  if (!opt.source.sync_config.empty()) {
+    o.apply_sync = opt.source.apply_sync;
+    VKC_ASSIGN(sensors,
+               vr::sensor::open_orbbec_sensors(opt.source.sync_config, o));
   } else {
-    o.serial = opt.serial;
+    o.serial = opt.source.serial;
     const std::vector<vr::camera::SensorCalibration>& posed =
         calibration.sensors;
     if (!posed.empty()) {
       const vr::camera::SensorCalibration* sensor =
-          !opt.serial.empty() ? vr::camera::find_sensor(calibration, opt.serial)
+          !opt.source.serial.empty()
+              ? vr::camera::find_sensor(calibration, opt.source.serial)
           : posed.size() == 1 ? &posed[0]
                               : nullptr;
       if (sensor == nullptr) {
         return vkc::Status::not_found(
-            opt.cameras.calibration +
-            (opt.serial.empty()
-                 ? std::string(" poses several cameras; name one with --serial")
-                 : " does not pose camera " + opt.serial));
+            opt.source.calibration +
+            (opt.source.serial.empty()
+                 ? std::string(
+                       " poses several cameras; name one with source.serial")
+                 : " does not pose camera " + opt.source.serial));
       }
       o.serial = sensor->id;
     }
-    o.sync_clock_to_host = opt.host_clock;
+    o.sync_clock_to_host = opt.source.host_clock;
     VKC_ASSIGN(vr::sensor::OrbbecSensor opened,
                vr::sensor::OrbbecSensor::open(o));
     sensors.push_back(
@@ -115,7 +119,7 @@ open_orbbec_cameras(const FuseOrbbecFlags& opt,
     print_orbbec_camera(static_cast<const vr::sensor::OrbbecSensor&>(*opened),
                         calibration);
   }
-  if (opt.cameras.rig.empty() &&
+  if (opt.source.sync_config.empty() &&
       sensors[0]->info().role == vr::sensor::SyncRole::Secondary) {
     std::printf(
         "  note: a sync secondary delivers frames only on another camera's "
@@ -129,19 +133,18 @@ open_orbbec_cameras(const FuseOrbbecFlags& opt,
 }
 
 /// @brief fuse_orbbec's cameras (@ref open_orbbec_cameras) read as an array
-///        posed by `--calibration`, preparing each set on @p device -- unless
-///        `--no-fuse`, whose array builds no GPU pass.
+///        posed by `source.calibration`, preparing each set on @p device --
+///        unless the stream operation, whose array builds no GPU pass.
 /// @return The array; the calibration file's error, the cameras', or
 ///         `SensorArray::open`'s.
 inline vkc::Result<vr::sensor::SensorArray> open_orbbec_array(
-    const FuseOrbbecFlags& opt, vkc::Device& device,
-    vkc::Allocator& allocator) {
+    const config::Config& opt, vkc::Device& device, vkc::Allocator& allocator) {
   vr::sensor::SensorArray::Options options;
-  if (!opt.cameras.calibration.empty()) {
+  if (!opt.source.calibration.empty()) {
     VKC_ASSIGN(options.calibration,
-               vr::camera::read_array_calibration(opt.cameras.calibration));
+               vr::camera::read_array_calibration(opt.source.calibration));
   }
-  if (!opt.no_fuse) {
+  if (opt.operation != config::Operation::Stream) {
     options.device = &device;
     options.allocator = &allocator;
   }
@@ -271,8 +274,9 @@ class RigSets {
   // Count `set`, keep its skews, and cut it to the run's remaining frames.
   void keep(vr::sensor::FrameSet& set) {
     if (sets_ == 0 && array_.size() == 1) {
-      // The SDK's host clock is the system clock: on it (--host-clock), the
-      // frame is milliseconds old; the camera's own is where it was last set.
+      // The SDK's host clock is the system clock: on it (source.host_clock),
+      // the frame is milliseconds old; the camera's own is where it was last
+      // set.
       const auto host = std::chrono::duration_cast<std::chrono::nanoseconds>(
           std::chrono::system_clock::now().time_since_epoch());
       std::printf("  first frame %.1f ms before the host's clock\n",
