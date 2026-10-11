@@ -8,6 +8,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `examples`: **`fuse_orbbec --no-fuse`**, the stream alone: each set is
+  polled, counted and released, with no GPU preparation, fusion or mesh, and
+  its stages are reported per set. It refuses the fusion flags and `-o`
+  (`Cli::excludes`). Each camera's counters now show `lost` apart from
+  `failed`. Tests: `recon_example_cli`, `recon_example_orbbec_rig`.
 - build: **`VR_CAMERA_ONLY`** configures, builds and installs the camera tier
   (`volumetric_kit::recon_camera`) alone, over the core's base tier, GLM and
   nlohmann/json, with no Vulkan SDK, glslc or core vulkan tier, for calib's

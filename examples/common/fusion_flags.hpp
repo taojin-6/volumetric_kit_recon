@@ -6,7 +6,8 @@
 /// @file examples/common/fusion_flags.hpp
 /// @brief The fusion flags every example that fuses a sensor's frames takes,
 ///        with one validation: `--voxel`, `--trunc`, `--min-depth`,
-///        `--max-depth` and `--max-weight`.
+///        `--max-depth` and `--max-weight`, and the rule that refuses them
+///        in a mode that fuses nothing.
 
 #include <optional>
 #include <string>
@@ -41,6 +42,14 @@ struct FusionFlags {
         .option("--max-depth", "m", max_depth)
         .option("--max-weight", "w", max_weight)
         .check([this] { return finish(); });
+  }
+
+  /// @brief Refuse the five flags on a command line that gives @p name, a
+  ///        mode that fuses nothing (@ref Cli::excludes).
+  /// @pre @ref add_to and @p name were declared on @p cli.
+  static void excluded_by(Cli& cli, const char* name) {
+    cli.excludes(name, {"--voxel", "--trunc", "--min-depth", "--max-depth",
+                        "--max-weight"});
   }
 
   /// @brief Validate and default @ref trunc; @ref add_to's check. Numbers are

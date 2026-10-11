@@ -1587,10 +1587,12 @@ The live counterpart is its own example, not a `fuse_replica` flag:
 `--rig sync.json` one per camera of the file on the host's clock
 (`--apply-sync` writing the settings a camera differs in), as a
 `SensorArray` posed by `--calibration`; it prepares each set on the GPU,
-fuses it through `fuse_set`, and writes a PLY after `--frames` frames. It
-reports the cameras' open time, the array's counters and, for a rig, each
-secondary's mean and worst skew to the primary. Colour is H.265 unless
-`--mjpeg`.
+fuses it through `fuse_set`, and writes a PLY after `--frames` frames.
+`--no-fuse` only streams: each set is polled, counted and released, with no
+GPU preparation, fusion or mesh, so a run measures the cameras' link and
+decode alone. It reports the cameras' open time, the array's counters, each
+camera's `lost` frames and, for a rig, each secondary's mean and worst skew
+to the primary. Colour is H.265 unless `--mjpeg`.
 **`rig_viewer`** (`VR_BUILD_VIEWER` with `VR_WITH_ORBBEC` and
 `VR_WITH_FFMPEG`; CI's viewer leg compiles it) is `fuse_viewer`'s live-rig
 sibling: an `OrbbecSensor` per camera of the sync file read as a

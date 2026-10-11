@@ -156,6 +156,9 @@ settings differ from the file is refused; `--apply-sync` writes them to it:
 ```sh
 build/examples/fuse_orbbec/fuse_orbbec --rig config/femto_mega_sync.json \
     --calibration calib.json --frames 300
+# the stream and decode alone, fusing nothing:
+build/examples/fuse_orbbec/fuse_orbbec --rig config/femto_mega_sync.json \
+    --no-fuse --mjpeg --color 3840x2160 --fps 25 --frames 60000
 ```
 
 ### Optional: FFmpeg

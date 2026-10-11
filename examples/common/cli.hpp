@@ -114,8 +114,9 @@ inline vkc::Status parse_number(const std::string& flag, const char* text,
 /// A flag that takes a value takes the next argument whatever it looks like,
 /// so `--up-axis -y` works; a flag given twice keeps the last. An argument
 /// starting with `-` that names no flag is refused, as are a positional
-/// argument past those declared, a second flag of a @ref one_of group, and a
-/// command line without a positional or a @ref require "required" flag.
+/// argument past those declared, a second flag of a @ref one_of group, a flag
+/// given with one that @ref excludes it, and a command line without a
+/// positional or a @ref require "required" flag.
 /// After the arguments, every @ref check runs, in declaration order. Every
 /// error is InvalidArgument, its message `<program>: <what>` followed by the
 /// @ref usage line, for a `main` to print as it is.
@@ -222,6 +223,19 @@ class Cli {
     return *this;
   }
 
+  /// @brief Refuse each of @p others on a command line that gives the flag
+  ///        declared as @p name, in either order: a mode that has no use for
+  ///        them (`--no-fuse` takes no `--voxel`). The usage line is
+  ///        unchanged.
+  /// @pre @p name and each of @p others were declared.
+  Cli& excludes(const char* name, std::initializer_list<const char*> others) {
+    const std::size_t flag = declared_index(name);
+    for (const char* other : others) {
+      exclusions_.emplace_back(flag, declared_index(other));
+    }
+    return *this;
+  }
+
   /// @brief Switches that each set @p out to their own value, a @ref one_of
   ///        group: `[--hevc | --mjpeg]`.
   template <typename T>
@@ -258,6 +272,7 @@ class Cli {
     std::size_t positional = 0;
     // Per group, the flag given first: a group takes one.
     std::vector<const Flag*> given(static_cast<std::size_t>(next_group_));
+    std::vector<bool> seen(flags_.size(), false);  // per flag, for excludes
     for (int i = 1; i < argc; ++i) {
       const std::string arg = argv[i];
       const std::size_t index = index_of(arg);
@@ -277,6 +292,7 @@ class Cli {
         return error(names_of(flag.group) + ", not both");
       }
       first = &flag;
+      seen[index] = true;
       const char* value = nullptr;
       if (flag.metavar != nullptr) {
         if (i + 1 >= argc) return error(arg + " needs a value");
@@ -284,6 +300,12 @@ class Cli {
       }
       if (const vkc::Status s = flag.handler(arg, value); !s.ok()) {
         return error(s.message());
+      }
+    }
+    for (const std::pair<std::size_t, std::size_t>& rule : exclusions_) {
+      if (seen[rule.first] && seen[rule.second]) {
+        return error(flags_[rule.first].names.front() + " refuses " +
+                     flags_[rule.second].names.front());
       }
     }
     if (positional < positionals_.size()) {
@@ -392,12 +414,13 @@ class Cli {
     return flags_.size();
   }
 
-  Flag& declared(const char* name) {
+  std::size_t declared_index(const char* name) const {
     const std::size_t index = index_of(name);
     VKC_CHECK(index < flags_.size(),
               "Cli: a flag named before it was declared");
-    return flags_[index];
+    return index;
   }
+  Flag& declared(const char* name) { return flags_[declared_index(name)]; }
 
   // Move every flag of group @p from into group @p to.
   void join(int from, int to) {
@@ -431,6 +454,8 @@ class Cli {
   std::string program_;
   std::vector<Flag> flags_;
   std::vector<Positional> positionals_;
+  // (flag, flag it refuses), as indices into flags_.
+  std::vector<std::pair<std::size_t, std::size_t>> exclusions_;
   std::vector<std::function<vkc::Status()>> checks_;
   int next_group_ = 0;
 };

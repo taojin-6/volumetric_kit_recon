@@ -218,8 +218,8 @@ add_test(NAME recon_example_fuse_keyframe
 # The examples' one command-line parser and the flag sets they declare through
 # it (examples/common/cli.hpp and *_flags.hpp): numbers read whole and finite,
 # unknown, missing and out-of-range arguments refused with the usage line, the
-# generated usage, and each flag set's defaults and validation; the Orbbec flags
-# where the driver is built. Host only.
+# generated usage, and each flag set's defaults and validation; the Orbbec and
+# fuse_orbbec flags where the driver is built. Host only.
 add_executable(recon_example_cli_test example_cli_test.cpp)
 target_include_directories(recon_example_cli_test
                            PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
@@ -237,6 +237,19 @@ else()
 endif()
 vr_target_warnings(recon_example_cli_test)
 add_test(NAME recon_example_cli COMMAND recon_example_cli_test)
+
+# fuse_orbbec's set cut (examples/common/orbbec_rig.hpp), where the driver is
+# built: a set's first frames kept, the rest let go. Host only.
+if(TARGET volumetric_kit::recon_sensor_orbbec)
+  add_executable(recon_example_orbbec_rig_test example_orbbec_rig_test.cpp)
+  target_include_directories(recon_example_orbbec_rig_test
+                             PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
+  target_link_libraries(
+    recon_example_orbbec_rig_test PRIVATE volumetric_kit::recon_sensor_orbbec
+                                          volumetric_kit::recon_sensor_array)
+  vr_target_warnings(recon_example_orbbec_rig_test)
+  add_test(NAME recon_example_orbbec_rig COMMAND recon_example_orbbec_rig_test)
+endif()
 
 # The examples' one stage table (examples/common/stage_table.hpp). Host only.
 add_executable(recon_example_stage_table_test example_stage_table_test.cpp)
