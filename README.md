@@ -76,10 +76,11 @@ build against a local core checkout, pass
 ### Asset I/O
 
 `volumetric_kit::recon_io` provides encoded RGB image loading, 16-bit
-grayscale depth PNG loading with explicit units, RGBA8 PNG writing, and
-binary PLY mesh export. Include `io/image_io.hpp` or `io/ply_writer.hpp` under
-`volumetric_kit/recon/`. These are host file operations; they allocate no
-Vulkan resources and do not download a live GPU volume.
+grayscale depth PNG loading with explicit units, RGBA8 and 16-bit grayscale
+PNG writing, and binary PLY mesh export. Include `io/image_io.hpp` or
+`io/ply_writer.hpp` under `volumetric_kit/recon/`. These are host file
+operations; they allocate no Vulkan resources and do not download a live GPU
+volume.
 
 Static mesh import is a separate optional target,
 `volumetric_kit::recon_io_assimp`, with Assimp as a private implementation

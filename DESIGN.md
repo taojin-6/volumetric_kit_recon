@@ -1484,9 +1484,13 @@ encoding. `io::load_depth_u16` requires a genuine 16-bit single-channel PNG
 and returns its samples as stored: what a unit is, is the caller's to say
 (the Replica sensor's `RgbdFrame::metres_per_unit`).
 Expected dimensions are explicit so a camera cannot silently use different
-intrinsics. The PNG writer takes already-encoded RGBA8 and opens its output
-only after encoding succeeds; PLY export converts linear mesh colors to
-canonical sRGB bytes (clamped, NaN as 0) and preserves triangle indices.
+intrinsics. `io::write_png_rgba8` takes already-encoded RGBA8.
+`io::encode_png_u16` encodes 16-bit gray samples as stored, and
+`io::write_png_u16` writes them; stb writes 8-bit only, so it encodes the
+samples' big-endian bytes as two 8-bit channels and IHDR is rewritten to
+16-bit gray. The writers open their output only after encoding succeeds; PLY
+export converts linear mesh colors to canonical sRGB bytes (clamped, NaN as 0)
+and preserves triangle indices.
 Errors name the file and backend reason. Public functions validate their input
 and translate backend exceptions that reach them into `Status`/`Result`
 (tinyply's writer is `noexcept`); private third-party types never appear in
