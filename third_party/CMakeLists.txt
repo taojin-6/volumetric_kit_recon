@@ -31,8 +31,8 @@ include(FetchContent)
 # VR_INSTALL: recon's install must carry the core its exported targets link, and
 # an application that embeds recon without installing it gets none.
 #
-# The pin is core main after PR #25: 0.1.0, with the backend-tagged Status (#19)
-# and vkc_require_core's PACKAGE mode (#21).
+# The pin is core 0.1.0, main's merge of PR #25 (f35f547): the backend-tagged
+# Status (#19) and vkc_require_core's PACKAGE mode (#21).
 #
 # TODO: pin the core's v0.1.0 tag once it is tagged.
 FetchContent_Declare(

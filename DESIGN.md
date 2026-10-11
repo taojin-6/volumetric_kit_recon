@@ -1216,9 +1216,10 @@ and its callback. Its decode-time `kVTParameterErr` also denotes corrupt
 JPEG data (including a truncated fixture), so it is `IoError` there. The
 Orbbec driver's colour decoders stop for good on any code but `IoError`, and
 the sensor's `poll` returns it, so a refused stream or a failing device path is
-not quiet. A `Backend` failure names the library that failed: VideoToolbox,
-CUDA or nvJPEG, or FFmpeg for its `AVERROR_EXTERNAL` (a hardware call failed);
-a hardware failure FFmpeg reports otherwise reads as lost frames.
+not quiet. A `Backend` failure names the library that failed
+(`Status::backend()`): VideoToolbox, CUDA or nvJPEG, Vulkan for the hand-over
+onto the device, or FFmpeg for its `AVERROR_EXTERNAL` (a hardware call
+failed); a hardware failure FFmpeg reports otherwise reads as lost frames.
 `VR_TEST_HEVC_BACKEND` makes the decoder tests fail rather than skip where
 no device path opens, which is how CI holds its legs to NVDEC on 24.04 (and
 nvJPEG where the GPU has the engine) and VideoToolbox on the Mac.

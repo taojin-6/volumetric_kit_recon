@@ -70,10 +70,10 @@ FetchContent_Declare(
   # fallback for a frame with no atlas. A compile floor: the viewers hold no
   # atlas ring, fallback or frame-slot keep-alive of their own.
   #
-  # And at or past gfx 5d7d0a2, its move onto core 0.1, which recon's core pin
-  # requires: gfx builds against recon's core (third_party/CMakeLists.txt
-  # declares the core first), and gfx's vkc_require_core takes core 0.1.0 or
-  # newer.
+  # And at or past gfx #125, whose 5d7d0a2 moves its frame waits and atlas
+  # retirement onto core 0.1's reached-only waits: gfx builds against recon's
+  # core (third_party/CMakeLists.txt declares the core first), and since #122
+  # gfx's vkc_require_core takes core 0.1.0 or newer.
   GIT_TAG d4a88d3a5789b9fa41a0e18fc02a5ea317f08ae9 # gfx main, after #130
   GIT_SHALLOW FALSE)
 FetchContent_MakeAvailable(volumetric_kit_gfx)

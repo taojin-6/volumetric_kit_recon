@@ -72,9 +72,12 @@ An application that also fetches calib, which builds on the core too, declares
 `VKC_WITH_VULKAN ON` before the first `FetchContent_MakeAvailable` of it; to
 build against a local core checkout, pass
 `-DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CORE=<path>`. recon needs the core
-at `VR_CORE_MIN_VERSION` (0.1.0) or newer, with its vulkan tier: on an older
-core or one without the tier, recon's configure fails at the core's
-`vkc_require_core`, and an installed recon is not found.
+at `VR_CORE_MIN_VERSION` (0.1.0) or newer, with its vulkan tier, and checks
+both with the core's `vkc_require_core`: on a core older than that or without
+the tier, recon's configure fails saying why, and an installed recon is not
+found. A core older than 0.1.0 has no `vkc_require_core`, so the configure
+stops at that call as an unknown command: move the first-declared pin to 0.1.0
+or newer.
 
 ### Asset I/O
 

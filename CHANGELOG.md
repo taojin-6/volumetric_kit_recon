@@ -116,14 +116,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - build: **recon builds on core 0.1** (f35f547) and requires 0.1.0 or newer
   with its vulkan tier (`VR_CORE_MIN_VERSION`, the core's
   `vkc_require_core`): a core declared first that is older or lacks the tier
-  fails recon's configure, and the installed package is not found on one. The
-  viewers pin gfx main (d4a88d3), which builds on core 0.1; their code is
-  unchanged. Tests: `recon_subproject_old_core`,
-  `recon_subproject_core_without_vulkan`, `recon_package_core_without_vulkan`.
+  fails recon's configure (one older than 0.1.0 stops at that call as an
+  unknown command), and the installed package is not found on one. recon's
+  tests build the core's `core_test_policy` (`VKC_BUILD_TEST_SUPPORT`). The
+  viewers pin gfx main (d4a88d3), which builds on core 0.1; `fuse_render`'s
+  one-frame atlas takes the two images gfx now needs, through `atlas_desc`,
+  which the live viewers' `LiveAtlas` shares. Tests:
+  `recon_subproject_old_core`, `recon_subproject_core_without_vulkan`,
+  `recon_package_core_without_vulkan`, `recon_package_found`,
+  `recon_example_viewer_atlas`.
 - `sensor/video`: **a decoder's `Backend` status names its backend**
-  (`Status::backend()`): `VideoToolbox`, `Cuda`, `NvJpeg`, or `Ffmpeg` for
-  `AVERROR_EXTERNAL`. Tests: `recon_sensor_video_vt_jpeg_error`,
-  `recon_sensor_video_ffmpeg_error`, `recon_sensor_video_cuda_error`.
+  (`Status::backend()`): `VideoToolbox`, `Cuda`, `NvJpeg`, `Vulkan` for the
+  hand-over onto the device, or `Ffmpeg` for `AVERROR_EXTERNAL`. Tests:
+  `recon_sensor_video_vt_jpeg_error`, `recon_sensor_video_ffmpeg_error`,
+  `recon_sensor_video_cuda_error`.
 - tests: **the GPU tests run on the core's test policy**
   (`tests/gpu_test.hpp`), and CI runs them under the Khronos validation
   layer: any error it reports fails the test, a leaked object's included,
@@ -135,8 +141,6 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   reported. Test: `recon_gpu_test_harness`.
   The fuser OOM regression captures the resize allocation site so the
   validation layer's same-size allocations cannot consume its failure.
-- build: **the core pin moves to core #18's merge** (511fed0), including #17's
-  `core_test_policy`, which recon's tests build with `VKC_BUILD_TEST_SUPPORT`.
 - `sensor/orbbec`: **both colour decoders decode on a `DecodeWorker`, one
   per decoder** (`decode_worker.hpp`, internal): the queue and what a full
   one drops, the thread's start and stop, the counts, and the failure that
@@ -208,11 +212,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   copies its keyframe's colour on the device as `rig_viewer` does, so its
   `atlas readback` row and the blocking upload per remesh go. An untextured mesh draws in vertex colour against the
   pipeline's fallback, so the white atlas goes. `fuse_render`'s PNGs are
-  unchanged. Test: `recon_example_viewer_atlas`. The viewers pin gfx #123.
-- build: **the core pin moves to core #18** (5913731), which adds
-  `CommandBatch::submit_async` (#15), for the pipelined stages to come, and
-  the timeline-value checks the viewers' gfx requires; recon's calls are
-  unchanged.
+  unchanged. Test: `recon_example_viewer_atlas`.
 - tests: **no test looks for a camera.** `recon_orbbec_sdk_smoke` checks only
   the runtime SDK version, no longer opening a context and enumerating USB
   and network devices, and the conversion test's absent-camera case, which
