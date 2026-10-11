@@ -18,9 +18,13 @@ include(CMakeFindDependencyMacro)
 find_dependency(volumetric_kit_core @VR_CORE_MAJOR_MINOR@ CONFIG HINTS
                 "${PACKAGE_PREFIX_DIR}")
 # A core found on CMAKE_PREFIX_PATH may predate the one recon builds with, or
-# lack the vulkan tier; then this package is not found, saying why, as a failed
-# find_dependency leaves it.
-vkc_require_core(@VR_CORE_MIN_VERSION@ VULKAN PACKAGE volumetric_kit_recon)
+# lack a required vulkan tier; then this package is not found, saying why, as a
+# failed find_dependency leaves it. A camera-only package needs just the base.
+if(@VR_PACKAGE_NEEDS_VULKAN@)
+  vkc_require_core(@VR_CORE_MIN_VERSION@ VULKAN PACKAGE volumetric_kit_recon)
+else()
+  vkc_require_core(@VR_CORE_MIN_VERSION@ PACKAGE volumetric_kit_recon)
+endif()
 find_dependency(Threads)
 # CONFIG mode, matching how the build finds glm (find_package(glm CONFIG)): glm
 # ships a package config, not a CMake find module, so forcing CONFIG stops a
@@ -31,8 +35,11 @@ find_dependency(glm CONFIG)
 # public headers include <vulkan/vulkan.h> and the exported target carries
 # Vulkan::Vulkan in its interface link set -- re-find it here so that imported
 # target exists for consumers (without this, find_package(volumetric_kit_recon)
-# followed by a link to recon_core fails with "Vulkan::Vulkan not found").
-find_dependency(Vulkan)
+# followed by a link to recon_core fails with "Vulkan::Vulkan not found"). A
+# package built with VR_CAMERA_ONLY has no recon_core and needs no Vulkan.
+if(@VR_PACKAGE_NEEDS_VULKAN@)
+  find_dependency(Vulkan)
+endif()
 # recon_sensor_orbbec, when this package was built with VR_WITH_ORBBEC, links
 # the Orbbec SDK privately, but its link interface still names ob::OrbbecSDK,
 # so the imported target must exist. The SDK the package was built against is

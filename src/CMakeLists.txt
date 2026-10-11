@@ -10,53 +10,58 @@ include(GNUInstallDirs)
 # camera is the family's camera vocabulary -- the camera model, rigid
 # transforms, the sensor array's calibration file -- over the family core's base
 # tier and GLM alone, linking no Vulkan: calib and a capture driver use it as
-# well as the fusion tiers (the 2026-10-06 decision).
+# well as the fusion tiers (the 2026-10-06 decision). VR_CAMERA_ONLY builds it
+# alone.
 add_subdirectory(volumetric_kit/recon/camera)
-add_subdirectory(volumetric_kit/recon/core)
-add_subdirectory(volumetric_kit/recon/volume)
-add_subdirectory(volumetric_kit/recon/tsdf)
-# mesh reads the volume voxel payload directly (proven against a dense analytic
-# SDF), so it depends on volume, not tsdf.
-add_subdirectory(volumetric_kit/recon/mesh)
-# Host asset I/O branches off mesh for the public Mesh serialization API.
-add_subdirectory(volumetric_kit/recon/io)
-# texture fills the mesh uv0 by projecting a posed camera onto it; it depends on
-# mesh (the Mesh it textures) + volume (DepthCameraParams + the projection ABI),
-# both to its left, so the strict dependency rule holds.
-add_subdirectory(volumetric_kit/recon/texture)
-# sensor is the sensor interface: IRgbdSensor + RgbdFrame + the camera and
-# colour convention conversions. It depends on camera and core alone -- the
-# camera types it trades in are camera::CameraModel and core vocabulary, not
-# voxels or fusion -- so it sits beside the fusion tiers rather than on top of
-# them, and stays implementable from outside this repo, with drivers
-# deliberately left to whoever can build and test them (the 2026-08-02
-# decision).
-add_subdirectory(volumetric_kit/recon/sensor)
-add_subdirectory(volumetric_kit/recon/codec)
-# Quality measurement for the tests and examples that judge a reconstruction or
-# a codec: mesh-to-mesh distance, accuracy / coverage, F-score (the 2026-09-27
-# eval decision). Off recon_mesh.
-add_subdirectory(volumetric_kit/recon/eval)
-# TODO: add_subdirectory() for interop as that tier lands.
+set(_vr_tiers recon_camera)
+if(NOT VR_CAMERA_ONLY)
+  add_subdirectory(volumetric_kit/recon/core)
+  add_subdirectory(volumetric_kit/recon/volume)
+  add_subdirectory(volumetric_kit/recon/tsdf)
+  # mesh reads the volume voxel payload directly (proven against a dense
+  # analytic SDF), so it depends on volume, not tsdf.
+  add_subdirectory(volumetric_kit/recon/mesh)
+  # Host asset I/O branches off mesh for the public Mesh serialization API.
+  add_subdirectory(volumetric_kit/recon/io)
+  # texture fills the mesh uv0 by projecting a posed camera onto it; it depends
+  # on mesh (the Mesh it textures) + volume (DepthCameraParams + the projection
+  # ABI), both to its left, so the strict dependency rule holds.
+  add_subdirectory(volumetric_kit/recon/texture)
+  # sensor is the sensor interface: IRgbdSensor + RgbdFrame + the camera and
+  # colour convention conversions. It depends on camera and core alone -- the
+  # camera types it trades in are camera::CameraModel and core vocabulary, not
+  # voxels or fusion -- so it sits beside the fusion tiers rather than on top of
+  # them, and stays implementable from outside this repo, with drivers
+  # deliberately left to whoever can build and test them (the 2026-08-02
+  # decision).
+  add_subdirectory(volumetric_kit/recon/sensor)
+  add_subdirectory(volumetric_kit/recon/codec)
+  # Quality measurement for the tests and examples that judge a reconstruction
+  # or a codec: mesh-to-mesh distance, accuracy / coverage, F-score (the
+  # 2026-09-27 eval decision). Off recon_mesh.
+  add_subdirectory(volumetric_kit/recon/eval)
+  # TODO: add_subdirectory() for interop as that tier lands.
+  list(
+    APPEND
+    _vr_tiers
+    recon_core
+    recon_volume
+    recon_tsdf
+    recon_mesh
+    recon_texture
+    recon_sensor
+    recon_sensor_utils
+    recon_sensor_array
+    recon_codec
+    recon_eval
+    recon_io)
+endif()
 
 # --- recon: umbrella alias --------------------------------------------------
 # Consumers link `volumetric_kit::recon` and get whatever tiers are built.
 add_library(recon INTERFACE)
 add_library(volumetric_kit::recon ALIAS recon)
-target_link_libraries(
-  recon
-  INTERFACE recon_camera
-            recon_core
-            recon_volume
-            recon_tsdf
-            recon_mesh
-            recon_texture
-            recon_sensor
-            recon_sensor_utils
-            recon_sensor_array
-            recon_codec
-            recon_eval
-            recon_io)
+target_link_libraries(recon INTERFACE ${_vr_tiers})
 if(TARGET recon_io_assimp)
   target_link_libraries(recon INTERFACE recon_io_assimp)
 endif()
@@ -86,6 +91,13 @@ if(VR_INSTALL)
   # the core's version file accepts only the same minor before 1.0.
   vkc_core_version(VR_CORE_MAJOR_MINOR MAJOR_MINOR)
 
+  # The package re-finds Vulkan unless it holds the camera tier alone, as the
+  # build decided: a plain ON/OFF, so an empty VR_CAMERA_ONLY reads as OFF.
+  if(VR_CAMERA_ONLY)
+    set(VR_PACKAGE_NEEDS_VULKAN OFF)
+  else()
+    set(VR_PACKAGE_NEEDS_VULKAN ON)
+  endif()
   include(CMakePackageConfigHelpers)
   configure_package_config_file(
     "${PROJECT_SOURCE_DIR}/cmake/volumetric_kit_reconConfig.cmake.in"

@@ -168,6 +168,8 @@ git -C "$recon_root" diff --check
   installed prerequisites, never fetched by this repository. The video
   decoders hand out device pictures only, so off Apple `VR_WITH_FFMPEG` needs
   `VR_WITH_CUDA`, and `VR_WITH_ORBBEC` needs `VR_WITH_FFMPEG`.
+  `VR_CAMERA_ONLY` builds `recon_camera` alone, with no Vulkan, and refuses
+  the examples and the drivers.
 - Tests use no real hardware: a camera is checked by hand through its example
   (`fuse_orbbec`). Report such a check as run or not run, never as a test.
 - GPU tests run on the core's test policy (`tests/gpu_test.hpp`): CI sets

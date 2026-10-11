@@ -8,6 +8,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- build: **`VR_CAMERA_ONLY`** configures, builds and installs the camera tier
+  (`volumetric_kit::recon_camera`) alone, over the core's base tier, GLM and
+  nlohmann/json, with no Vulkan SDK, glslc or core vulkan tier, for calib's
+  solver. It refuses the examples and the optional drivers. Tests:
+  `recon_subproject_camera_only`, and CI's `camera-only` job, in a container
+  with no Vulkan installed.
 - `io`: **`encode_png_u16`** and **`write_png_u16`** (`image_io.hpp`), the
   16-bit grayscale PNG writer: samples stored as given, read back exactly by
   `load_depth_u16`; the encoder returns the file's bytes. It uses the stb

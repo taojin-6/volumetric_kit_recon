@@ -1,6 +1,74 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Tao Jin
 
+# camera tier: the camera model (its checks, the lens template against OpenCV's
+# numbers), its geometry (rigid checks, Rodrigues against OpenCV), and the
+# sensor array's calibration file (poses read, the refusals, a file in the build
+# tree). Host-only, so they always run.
+add_executable(recon_camera_model_test camera_model_test.cpp)
+target_link_libraries(recon_camera_model_test
+                      PRIVATE volumetric_kit::recon_camera)
+vr_target_warnings(recon_camera_model_test)
+add_test(NAME recon_camera_model COMMAND recon_camera_model_test)
+
+add_executable(recon_camera_geometry_test camera_geometry_test.cpp)
+target_link_libraries(recon_camera_geometry_test
+                      PRIVATE volumetric_kit::recon_camera)
+vr_target_warnings(recon_camera_geometry_test)
+add_test(NAME recon_camera_geometry COMMAND recon_camera_geometry_test)
+
+add_executable(recon_camera_array_calibration_test
+               camera_array_calibration_test.cpp)
+target_link_libraries(recon_camera_array_calibration_test
+                      PRIVATE volumetric_kit::recon_camera)
+target_compile_definitions(
+  recon_camera_array_calibration_test
+  PRIVATE VR_TEST_SCRATCH_DIR="${CMAKE_CURRENT_BINARY_DIR}")
+vr_target_warnings(recon_camera_array_calibration_test)
+add_test(NAME recon_camera_array_calibration
+         COMMAND recon_camera_array_calibration_test)
+
+# A sibling that fetches recon (subproject/) takes each dependency this build
+# fetched as a local source, so it needs no network.
+file(
+  GLOB _vr_fetched
+  LIST_DIRECTORIES true
+  "${FETCHCONTENT_BASE_DIR}/*-src")
+set(_vr_fetched_sources)
+foreach(_vr_source IN LISTS _vr_fetched)
+  get_filename_component(_vr_name "${_vr_source}" NAME)
+  string(REGEX REPLACE "-src$" "" _vr_name "${_vr_name}")
+  string(TOUPPER "${_vr_name}" _vr_name)
+  list(APPEND _vr_fetched_sources
+       "-DFETCHCONTENT_SOURCE_DIR_${_vr_name}=${_vr_source}")
+endforeach()
+# A dependency this build took from a local source instead, as given.
+get_cmake_property(_vr_cache CACHE_VARIABLES)
+foreach(_vr_var IN LISTS _vr_cache)
+  if(_vr_var MATCHES "^FETCHCONTENT_SOURCE_DIR_")
+    if(NOT "${${_vr_var}}" STREQUAL "")
+      list(APPEND _vr_fetched_sources "-D${_vr_var}=${${_vr_var}}")
+    endif()
+  endif()
+endforeach()
+
+# recon camera-only (VR_CAMERA_ONLY), with find_package(Vulkan) disabled: the
+# options that need the rest are refused, and a consumer builds against the
+# fetched source and against its install (subproject/camera_only.cmake).
+add_test(
+  NAME recon_subproject_camera_only
+  COMMAND
+    "${CMAKE_COMMAND}" "-DSOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    "-DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/subproject_camera_only"
+    "-DGENERATOR=${CMAKE_GENERATOR}" "-DCXX_COMPILER=${CMAKE_CXX_COMPILER}"
+    ${_vr_fetched_sources} -P
+    "${CMAKE_CURRENT_SOURCE_DIR}/subproject/camera_only.cmake")
+
+# The camera tier is all VR_CAMERA_ONLY builds.
+if(VR_CAMERA_ONLY)
+  return()
+endif()
+
 # The core tier's own pieces: the version and the log seam's "vr" source.
 add_executable(recon_core_smoke_test core_smoke_test.cpp)
 target_link_libraries(recon_core_smoke_test PRIVATE volumetric_kit::recon_core)
@@ -511,33 +579,6 @@ target_link_libraries(recon_sensor_rgbd_sensor_test
 vr_target_warnings(recon_sensor_rgbd_sensor_test)
 add_test(NAME recon_sensor_rgbd_sensor COMMAND recon_sensor_rgbd_sensor_test)
 
-# camera tier: the camera model (its checks, the lens template against OpenCV's
-# numbers), its geometry (rigid checks, Rodrigues against OpenCV), and the
-# sensor array's calibration file (poses read, the refusals, a file in the build
-# tree). Host-only, so they always run.
-add_executable(recon_camera_model_test camera_model_test.cpp)
-target_link_libraries(recon_camera_model_test
-                      PRIVATE volumetric_kit::recon_camera)
-vr_target_warnings(recon_camera_model_test)
-add_test(NAME recon_camera_model COMMAND recon_camera_model_test)
-
-add_executable(recon_camera_geometry_test camera_geometry_test.cpp)
-target_link_libraries(recon_camera_geometry_test
-                      PRIVATE volumetric_kit::recon_camera)
-vr_target_warnings(recon_camera_geometry_test)
-add_test(NAME recon_camera_geometry COMMAND recon_camera_geometry_test)
-
-add_executable(recon_camera_array_calibration_test
-               camera_array_calibration_test.cpp)
-target_link_libraries(recon_camera_array_calibration_test
-                      PRIVATE volumetric_kit::recon_camera)
-target_compile_definitions(
-  recon_camera_array_calibration_test
-  PRIVATE VR_TEST_SCRATCH_DIR="${CMAKE_CURRENT_BINARY_DIR}")
-vr_target_warnings(recon_camera_array_calibration_test)
-add_test(NAME recon_camera_array_calibration
-         COMMAND recon_camera_array_calibration_test)
-
 # codec tier, host half: CodecParams validation and the DCT's two tables (basis
 # orthonormality, the zigzag order against the prior engine's). CPU-only, so it
 # always runs. The tables are internal (non-installed), reached by include path.
@@ -938,27 +979,6 @@ add_test(NAME recon_io_ply COMMAND recon_io_ply_test)
 # core fixture below and subproject/'s version stamp, which gfx and calib repeat
 # -- into the core's test support, as a function each sibling calls with its
 # package and floor, and port the siblings onto it in one series.
-file(
-  GLOB _vr_fetched
-  LIST_DIRECTORIES true
-  "${FETCHCONTENT_BASE_DIR}/*-src")
-set(_vr_fetched_sources)
-foreach(_vr_source IN LISTS _vr_fetched)
-  get_filename_component(_vr_name "${_vr_source}" NAME)
-  string(REGEX REPLACE "-src$" "" _vr_name "${_vr_name}")
-  string(TOUPPER "${_vr_name}" _vr_name)
-  list(APPEND _vr_fetched_sources
-       "-DFETCHCONTENT_SOURCE_DIR_${_vr_name}=${_vr_source}")
-endforeach()
-# A dependency this build took from a local source instead, as given.
-get_cmake_property(_vr_cache CACHE_VARIABLES)
-foreach(_vr_var IN LISTS _vr_cache)
-  if(_vr_var MATCHES "^FETCHCONTENT_SOURCE_DIR_")
-    if(NOT "${${_vr_var}}" STREQUAL "")
-      list(APPEND _vr_fetched_sources "-D${_vr_var}=${${_vr_var}}")
-    endif()
-  endif()
-endforeach()
 set(_vr_subproject "${CMAKE_CURRENT_BINARY_DIR}/subproject")
 add_test(NAME recon_subproject_clean COMMAND "${CMAKE_COMMAND}" -E rm -rf
                                              "${_vr_subproject}")
