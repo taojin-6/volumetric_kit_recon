@@ -530,9 +530,9 @@ a display symptom of the wrong variable. It is the running mean *latching*:
 per-frame delta falls below half a code, and the voxel's color then freezes
 short of its true mean.
 
-Measured, at the default `max_weight = 5` and a 2 m observation
-(`tests/core_color_space_test.cpp` pins it): the mean stops **~10 codes short of
-its target, uniformly across the range** — 0→64 settles at 55, 0→255 at 245 —
+A historical host arithmetic experiment, described in the 2026-08-02 color-space
+decision, used `max_weight = 5` and a 2 m observation: the mean stops
+**~10 codes short of its target, uniformly across the range** — 0→64 settles at 55, 0→255 at 245 —
 and a gap narrower than ~10 codes never moves the voxel *at all*. The residual
 is range-independent because the sRGB curve makes a fixed fraction of the linear
 gap a roughly fixed number of codes. So the ceiling on fused color accuracy here

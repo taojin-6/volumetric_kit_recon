@@ -27,6 +27,7 @@
 #include <tuple>
 #include <vector>
 
+#include "test_check.hpp"
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
@@ -47,14 +48,6 @@ namespace vkc = volumetric_kit::core;
 namespace vol = volumetric_kit::recon::volume;
 namespace tsdf = volumetric_kit::recon::tsdf;
 namespace mesh = volumetric_kit::recon::mesh;
-
-#define CHECK(cond)                                                        \
-  do {                                                                     \
-    if (!(cond)) {                                                         \
-      std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
-      return 1;                                                            \
-    }                                                                      \
-  } while (0)
 
 namespace {
 
@@ -171,43 +164,12 @@ int fuse(tsdf::TsdfIntegrator& integrator, vol::VoxelBlockGrid& grid,
   return 0;
 }
 
-// Every active block's coordinate and first voxel (`ptr` is a voxel offset).
-vkc::Result<std::map<Coord, std::int32_t>> blocks_of(vol::VoxelBlockGrid& g) {
-  VKC_ASSIGN(std::vector<vol::BlockIndex> active,
-             g.map().compact_active_blocks());
-  std::map<Coord, std::int32_t> out;
-  for (const vol::BlockIndex& b : active) {
-    out[Coord{b.coord.x, b.coord.y, b.coord.z}] = b.ptr;
-  }
-  return out;
-}
-
-// The same blocks, and in each the same bits of weight, tsdf and colour in
-// every voxel. A slot can differ: allocation order is the GPU's.
+// The same nonempty block set and every attribute bit, regardless of slots.
 int check_same(vkc::Device& device, vkc::Allocator& allocator,
                vol::VoxelBlockGrid& a, vol::VoxelBlockGrid& b) {
-  auto ba = blocks_of(a);
-  auto bb = blocks_of(b);
-  CHECK(ba.ok() && bb.ok());
-  CHECK(!ba.value().empty());
-  CHECK(ba.value().size() == bb.value().size());
-  const auto read = [&](vol::VoxelBlockGrid& g, const char* name) {
-    return vr_test::read_attribute<std::uint32_t>(device, allocator, g, name)
-        .value();
-  };
-  const std::array<const char*, 3> names{"weight", "tsdf", "color"};
-  for (const char* name : names) {
-    const std::vector<std::uint32_t> va = read(a, name);
-    const std::vector<std::uint32_t> vb = read(b, name);
-    for (const auto& [coord, ptr] : ba.value()) {
-      const auto other = bb.value().find(coord);
-      CHECK(other != bb.value().end());
-      for (std::size_t k = 0; k < 512; ++k) {
-        CHECK(va[static_cast<std::size_t>(ptr) + k] ==
-              vb[static_cast<std::size_t>(other->second) + k]);
-      }
-    }
-  }
+  std::size_t blocks = 0;
+  CHECK(vr_test::same_grids({device, allocator}, a, b, nullptr, &blocks));
+  CHECK(blocks != 0);
   return 0;
 }
 
@@ -314,7 +276,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
   // Where G looks -- x = 0, y = 0, a metre down its axis -- F's near band
   // holds weight and F's colour.
   {
-    auto blocks = blocks_of(fg.value());
+    auto blocks = vr_test::blocks_of(fg.value());
     CHECK(blocks.ok());
     auto weight =
         vr_test::read_attribute<float>(dev, alloc, fg.value(), "weight");

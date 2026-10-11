@@ -23,6 +23,7 @@
 #include <utility>
 #include <vector>
 
+#include "test_check.hpp"
 #include "viewer_atlas.hpp"
 #include "volumetric_kit/core/testing/vulkan_policy.hpp"
 
@@ -34,14 +35,6 @@
 #include "volumetric_kit/gfx/app/headless_app.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/pipelines/hybrid_mesh_pipeline.hpp"
-
-#define CHECK(cond)                                                        \
-  do {                                                                     \
-    if (!(cond)) {                                                         \
-      std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
-      return 1;                                                            \
-    }                                                                      \
-  } while (0)
 
 namespace {
 

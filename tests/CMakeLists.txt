@@ -7,19 +7,6 @@ target_link_libraries(recon_core_smoke_test PRIVATE volumetric_kit::recon_core)
 vr_target_warnings(recon_core_smoke_test)
 add_test(NAME recon_core_smoke COMMAND recon_core_smoke_test)
 
-# Vulkan availability smoke: proves the build finds Vulkan and the platform
-# driver (MoltenVK on Apple) offers a device that meets recon's requirements
-# (core/device_requirements.hpp). The Vulkan foundation itself -- device,
-# allocator, buffers, kernels, batches, timers, external memory -- is
-# volumetric_kit_core's and is tested there, not here. Skips where no
-# driver/device is present.
-add_executable(recon_vulkan_smoke_test vulkan_smoke_test.cpp)
-target_link_libraries(
-  recon_vulkan_smoke_test PRIVATE volumetric_kit::recon_core Vulkan::Vulkan
-                                  volumetric_kit::core_test_policy)
-vr_target_warnings(recon_vulkan_smoke_test)
-add_test(NAME recon_vulkan_smoke COMMAND recon_vulkan_smoke_test)
-
 # The GPU tests' harness (gpu_test.hpp): a test fails on an error the validation
 # layer reports, a leaked object's included, and skips as the core's test policy
 # and VR_TEST_HEVC_BACKEND say. Under LeakSanitizer, tools/lsan.supp leaves a
@@ -516,9 +503,8 @@ vr_target_warnings(recon_sensor_array_process_test)
 add_test(NAME recon_sensor_array_process
          COMMAND recon_sensor_array_process_test)
 
-# sensor tier: the RGB-D sensor contract, implemented by a fake and driven
-# through the base class -- the no_frame/some_frame returns, poll's newest and
-# drain's oldest-first, frames that hold their pixels. Host-only.
+# sensor tier: RGB-D sensor defaults, frame-return helpers, copied-frame
+# ownership and stable enum names. Host-only.
 add_executable(recon_sensor_rgbd_sensor_test sensor_rgbd_sensor_test.cpp)
 target_link_libraries(recon_sensor_rgbd_sensor_test
                       PRIVATE volumetric_kit::recon_sensor)

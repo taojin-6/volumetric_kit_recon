@@ -33,6 +33,7 @@
 #undef VR_TEST_LSAN
 #endif
 
+#include "test_check.hpp"
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/testing/vulkan_policy.hpp"
 #include "volumetric_kit/core/vulkan/buffer.hpp"
@@ -43,14 +44,6 @@
 
 namespace vkc = volumetric_kit::core;
 namespace test = volumetric_kit::core::test;
-
-#define CHECK(cond)                                                        \
-  do {                                                                     \
-    if (!(cond)) {                                                         \
-      std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
-      return 1;                                                            \
-    }                                                                      \
-  } while (0)
 
 namespace {
 

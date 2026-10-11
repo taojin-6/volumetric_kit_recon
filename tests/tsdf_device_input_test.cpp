@@ -15,10 +15,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <map>
-#include <tuple>
 #include <vector>
 
+#include "test_check.hpp"
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/buffer.hpp"
@@ -37,20 +36,10 @@ namespace vkc = volumetric_kit::core;
 namespace vol = volumetric_kit::recon::volume;
 namespace tsdf = volumetric_kit::recon::tsdf;
 
-#define CHECK(cond)                                                        \
-  do {                                                                     \
-    if (!(cond)) {                                                         \
-      std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
-      return 1;                                                            \
-    }                                                                      \
-  } while (0)
-
 namespace {
 
 constexpr std::uint32_t kWidth = 160;
 constexpr std::uint32_t kHeight = 120;
-
-using Coord = std::tuple<int, int, int>;
 
 vol::VoxelGridParams grid_params() {
   vol::VoxelGridParams grid{};
@@ -74,54 +63,17 @@ vkc::Result<vol::VoxelBlockGrid> make_grid(vkc::Device& device,
                                      3);
 }
 
-// Every active block's coordinate and first voxel (`ptr` is a voxel offset).
-vkc::Result<std::map<Coord, std::int32_t>> blocks_of(vol::VoxelBlockGrid& g) {
-  VKC_ASSIGN(std::vector<vol::BlockIndex> active,
-             g.map().compact_active_blocks());
-  std::map<Coord, std::int32_t> out;
-  for (const vol::BlockIndex& b : active) {
-    out[Coord{b.coord.x, b.coord.y, b.coord.z}] = b.ptr;
-  }
-  return out;
-}
-
-// The device the grids live on, for the helpers that read them back.
-// The two grids' blocks name the same coordinates and hold the same weight in
-// every voxel, and the same tsdf and colour in every observed one (the rest
-// were never written). A slot can differ: allocation order is the GPU's.
+// Weight must match everywhere; tsdf and colour only where observed.
 int check_same(const vr_test::Gpu& ctx, vol::VoxelBlockGrid& a,
                vol::VoxelBlockGrid& b) {
-  auto ba = blocks_of(a);
-  auto bb = blocks_of(b);
-  CHECK(ba.ok() && bb.ok());
-  CHECK(!ba.value().empty());
-  CHECK(ba.value().size() == bb.value().size());
-  const auto view = [&](vol::VoxelBlockGrid& g, const char* name) {
-    return vr_test::read_attribute<std::uint32_t>(ctx.device, ctx.allocator, g,
-                                                  name)
-        .value();
-  };
-  const std::vector<std::uint32_t> wa = view(a, "weight");
-  const std::vector<std::uint32_t> wb = view(b, "weight");
-  const std::vector<std::uint32_t> ta = view(a, "tsdf");
-  const std::vector<std::uint32_t> tb = view(b, "tsdf");
-  const std::vector<std::uint32_t> ca = view(a, "color");
-  const std::vector<std::uint32_t> cb = view(b, "color");
-  const std::size_t voxels = grid_params().voxels_per_block;
   std::size_t observed = 0;
-  for (const auto& [coord, ptr] : ba.value()) {
-    const auto other = bb.value().find(coord);
-    CHECK(other != bb.value().end());
-    for (std::size_t k = 0; k < voxels; ++k) {
-      const std::size_t ia = static_cast<std::size_t>(ptr) + k;
-      const std::size_t ib = static_cast<std::size_t>(other->second) + k;
-      CHECK(wa[ia] == wb[ib]);  // bit patterns: weight 0 is 0
-      if (wa[ia] == 0) continue;
-      ++observed;
-      CHECK(ta[ia] == tb[ib]);
-      CHECK(ca[ia] == cb[ib]);
-    }
-  }
+  CHECK(vr_test::compare_grids(
+      ctx, a, b,
+      [](vr_test::VoxelWords x, vr_test::VoxelWords y) {
+        return x.weight == y.weight &&
+               (x.weight == 0 || (x.tsdf == y.tsdf && x.color == y.color));
+      },
+      &observed));
   CHECK(observed > 1000);
   return 0;
 }
