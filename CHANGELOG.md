@@ -11,8 +11,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `examples`: **`fuse_orbbec --no-fuse`**, the stream alone: each set is
   polled, counted and released, with no GPU preparation, fusion or mesh, and
   its stages are reported per set. It refuses the fusion flags and `-o`
-  (`Cli::excludes`). Each camera's counters now show `lost` apart from
-  `failed`. Tests: `recon_example_cli`, `recon_example_orbbec_rig`.
+  (`Cli::excludes`). Tests: `recon_example_cli`,
+  `recon_example_fuse_orbbec_sets`.
 - build: **`VR_CAMERA_ONLY`** configures, builds and installs the camera tier
   (`volumetric_kit::recon_camera`) alone, over the core's base tier, GLM and
   nlohmann/json, with no Vulkan SDK, glslc or core vulkan tier, for calib's
@@ -124,6 +124,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `examples`: **`fuse_orbbec`'s per-camera `failed` no longer includes
+  `lost`**, which is printed apart (`OrbbecSensor::orbbec_stats()`), and a
+  run that fails (a camera silent for 10 s) still prints its counters.
 - build: **recon builds on core 0.1** (f35f547) and requires 0.1.0 or newer
   with its vulkan tier (`VR_CORE_MIN_VERSION`, the core's
   `vkc_require_core`): a core declared first that is older or lacks the tier

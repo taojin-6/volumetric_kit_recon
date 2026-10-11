@@ -3,7 +3,7 @@
 
 #pragma once
 
-/// @file examples/common/orbbec_rig.hpp
+/// @file examples/common/fuse_orbbec_sets.hpp
 /// @brief fuse_orbbec's cameras: opened and read as a sensor array, each set
 ///        waited for and cut to the run's length, and the report of the
 ///        array's counters and a rig's skew. Header-only, compiled only into
@@ -166,11 +166,12 @@ inline std::size_t cut_set(vr::sensor::FrameSet& set, std::size_t frames) {
   return kept;
 }
 
-/// @brief A run's sets from a started array of `OrbbecSensor`s, each waited
-///        for and cut to the run's length, and what its report prints.
+/// @brief A run's sets from a started array, each waited for and cut to the
+///        run's length, and what its report prints.
 ///
 /// The array is borrowed: it must outlive every @ref next and
-/// @ref print_stats.
+/// @ref print_stats. Only @ref print_stats needs its sensors to be
+/// `OrbbecSensor`s.
 class RigSets {
  public:
   /// How long @ref next waits for a set before calling the cameras silent.
@@ -178,7 +179,15 @@ class RigSets {
   /// primary, or a camera that dropped off the network, delivers none.
   static constexpr std::chrono::seconds kSilenceLimit{10};
 
-  /// @param array   Started, its sensors all `OrbbecSensor`s.
+  /// @brief A secondary's frame's time less its set's, the primary's, over
+  ///        the sets @ref next handed out, before their cut.
+  struct Skew {
+    double sum_ms = 0.0;       ///< The sum, so the mean is over @ref frames.
+    double worst_ms = 0.0;     ///< The largest magnitude.
+    std::uint64_t frames = 0;  ///< The camera's frames among those sets.
+  };
+
+  /// @param array   Started.
   /// @param frames  The frames the run takes.
   RigSets(vr::sensor::SensorArray& array, std::size_t frames)
       : array_(array),
@@ -192,6 +201,9 @@ class RigSets {
   std::size_t sets() const noexcept { return sets_; }
   /// @return The frames those sets held, as cut.
   std::size_t frames() const noexcept { return frames_; }
+  /// @return Camera @p camera's skew to the primary; the primary's is empty.
+  /// @pre @p camera is below the array's size.
+  const Skew& skew(std::size_t camera) const { return skews_[camera]; }
 
   /// @brief Wait for the next set and cut it to the frames the run still
   ///        takes (@ref cut_set).
@@ -227,6 +239,7 @@ class RigSets {
   /// @brief Print the array's sets, each camera's counters, `lost`
   ///        included, and for a rig each secondary's mean and worst skew to
   ///        the primary.
+  /// @pre The array's sensors are all `OrbbecSensor`s.
   void print_stats() const {
     const vr::sensor::SensorArrayStats st = array_.stats();
     std::printf("%llu sets, %llu missing a camera, %llu frames unmatched\n",
@@ -245,24 +258,16 @@ class RigSets {
           static_cast<unsigned long long>(s.dropped),
           static_cast<unsigned long long>(s.failed),
           static_cast<unsigned long long>(s.lost));
-      const Skew& skew = skews_[i];
-      if (skew.frames > 0) {
+      const Skew& lag = skews_[i];
+      if (lag.frames > 0) {
         std::printf("; skew to the primary %+.2f ms mean, %.2f ms worst",
-                    skew.sum_ms / static_cast<double>(skew.frames),
-                    skew.worst_ms);
+                    lag.sum_ms / static_cast<double>(lag.frames), lag.worst_ms);
       }
       std::printf("\n");
     }
   }
 
  private:
-  // A secondary's frame's time less its set's, the primary's, over the run.
-  struct Skew {
-    double sum_ms = 0.0;
-    double worst_ms = 0.0;  // the largest magnitude
-    std::uint64_t frames = 0;
-  };
-
   // Count `set`, keep its skews, and cut it to the run's remaining frames.
   void keep(vr::sensor::FrameSet& set) {
     if (sets_ == 0 && array_.size() == 1) {

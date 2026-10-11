@@ -238,17 +238,21 @@ endif()
 vr_target_warnings(recon_example_cli_test)
 add_test(NAME recon_example_cli COMMAND recon_example_cli_test)
 
-# fuse_orbbec's set cut (examples/common/orbbec_rig.hpp), where the driver is
-# built: a set's first frames kept, the rest let go. Host only.
+# fuse_orbbec's sets (examples/common/fuse_orbbec_sets.hpp), where the driver is
+# built: a set's first frames kept, the rest let go, and a run over fake cameras
+# counted, cut to its length and its skew kept. Host only.
 if(TARGET volumetric_kit::recon_sensor_orbbec)
-  add_executable(recon_example_orbbec_rig_test example_orbbec_rig_test.cpp)
-  target_include_directories(recon_example_orbbec_rig_test
+  add_executable(recon_example_fuse_orbbec_sets_test
+                 example_fuse_orbbec_sets_test.cpp)
+  target_include_directories(recon_example_fuse_orbbec_sets_test
                              PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
   target_link_libraries(
-    recon_example_orbbec_rig_test PRIVATE volumetric_kit::recon_sensor_orbbec
-                                          volumetric_kit::recon_sensor_array)
-  vr_target_warnings(recon_example_orbbec_rig_test)
-  add_test(NAME recon_example_orbbec_rig COMMAND recon_example_orbbec_rig_test)
+    recon_example_fuse_orbbec_sets_test
+    PRIVATE volumetric_kit::recon_sensor_orbbec
+            volumetric_kit::recon_sensor_array)
+  vr_target_warnings(recon_example_fuse_orbbec_sets_test)
+  add_test(NAME recon_example_fuse_orbbec_sets
+           COMMAND recon_example_fuse_orbbec_sets_test)
 endif()
 
 # The examples' one stage table (examples/common/stage_table.hpp). Host only.

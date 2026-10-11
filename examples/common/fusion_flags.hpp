@@ -33,14 +33,19 @@ struct FusionFlags {
   std::optional<float> max_depth;  ///< See @ref min_depth.
   float max_weight = 20.0f;        ///< The running-average cap.
 
+  /// The flags' names, in the order @ref add_to declares them: @ref voxel,
+  /// @ref trunc, @ref min_depth, @ref max_depth, @ref max_weight.
+  static constexpr const char* kNames[] = {"--voxel", "--trunc", "--min-depth",
+                                           "--max-depth", "--max-weight"};
+
   /// @brief Declare the five flags on @p cli, and the check that validates
   ///        them and defaults @ref trunc. This object must outlive the parse.
   void add_to(Cli& cli) {
-    cli.option("--voxel", "m", voxel)
-        .option("--trunc", "m", trunc)
-        .option("--min-depth", "m", min_depth)
-        .option("--max-depth", "m", max_depth)
-        .option("--max-weight", "w", max_weight)
+    cli.option(kNames[0], "m", voxel)
+        .option(kNames[1], "m", trunc)
+        .option(kNames[2], "m", min_depth)
+        .option(kNames[3], "m", max_depth)
+        .option(kNames[4], "w", max_weight)
         .check([this] { return finish(); });
   }
 
@@ -48,8 +53,7 @@ struct FusionFlags {
   ///        mode that fuses nothing (@ref Cli::excludes).
   /// @pre @ref add_to and @p name were declared on @p cli.
   static void excluded_by(Cli& cli, const char* name) {
-    cli.excludes(name, {"--voxel", "--trunc", "--min-depth", "--max-depth",
-                        "--max-weight"});
+    for (const char* flag : kNames) cli.excludes(name, {flag});
   }
 
   /// @brief Validate and default @ref trunc; @ref add_to's check. Numbers are

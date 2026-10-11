@@ -10,11 +10,12 @@
 // them --no-fuse refusing the flags only fusion uses. Host only.
 
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <iterator>
 #include <optional>
 #include <string>
-#include <utility>
 #include <vector>
 
 #include "cli.hpp"
@@ -229,6 +230,17 @@ int fusion_flags() {
     vr_example::FusionFlags f(0.02f);
     vr_example::Cli cli("prog");
     f.add_to(cli);
+    // kNames is every flag add_to declares, in its order, so a mode that
+    // fuses nothing refuses them all (excluded_by).
+    const std::string line = cli.usage();
+    std::vector<std::string> declared;
+    for (std::size_t at = line.find("[-"); at != std::string::npos;
+         at = line.find("[-", at + 1)) {
+      declared.push_back(line.substr(at + 1, line.find(' ', at) - at - 1));
+    }
+    CHECK(declared ==
+          std::vector<std::string>(std::begin(vr_example::FusionFlags::kNames),
+                                   std::end(vr_example::FusionFlags::kNames)));
     CHECK(parse(cli, {}).ok());
     // The band defaults to four voxels, the gate to the source's own.
     CHECK(f.voxel == 0.02f && f.trunc == vr_example::default_trunc(0.02f));
@@ -395,22 +407,21 @@ int fuse_orbbec_flags() {
     f.add_to(cli);
     return has(parse(cli, args), why);
   };
-  // Each flag that only fusion uses, on either side of --no-fuse; each is
-  // taken without it.
-  const std::vector<std::pair<std::string, const char*>> fusion_only = {
-      {"--voxel", "0.01"},    {"--trunc", "0.05"}, {"--min-depth", "0.5"},
-      {"--max-depth", "3"},   {"-o", "a.ply"},     {"--out", "a.ply"},
-      {"--max-weight", "50"},
-  };
-  for (const auto& [flag, value] : fusion_only) {
+  // Each flag that only fusion uses (every one FusionFlags declares, and
+  // -o), on either side of --no-fuse; each is taken without it.
+  std::vector<std::string> fusion_only(
+      std::begin(vr_example::FusionFlags::kNames),
+      std::end(vr_example::FusionFlags::kNames));
+  fusion_only.insert(fusion_only.end(), {"-o", "--out"});
+  for (const std::string& flag : fusion_only) {
     const std::string why =
         "prog: --no-fuse refuses " + (flag == "--out" ? "-o" : flag) + "\n";
-    CHECK(refused({"--no-fuse", flag.c_str(), value}, why.c_str()));
-    CHECK(refused({flag.c_str(), value, "--no-fuse"}, why.c_str()));
+    CHECK(refused({"--no-fuse", flag.c_str(), "0.5"}, why.c_str()));
+    CHECK(refused({flag.c_str(), "0.5", "--no-fuse"}, why.c_str()));
     vr_example::FuseOrbbecFlags f;
     vr_example::Cli cli("prog");
     f.add_to(cli);
-    CHECK(parse(cli, {flag.c_str(), value}).ok());
+    CHECK(parse(cli, {flag.c_str(), "0.5"}).ok());
   }
   CHECK(refused({"--serial", "7", "--rig", "s.json"},
                 "--serial or --rig, not both"));

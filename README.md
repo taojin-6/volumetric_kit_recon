@@ -134,8 +134,8 @@ The driver decodes each camera's colour itself, so it needs the video
 decoders too (see below; on Linux, CUDA as well). That builds
 `volumetric_kit::recon_sensor_orbbec` -- `OrbbecSensor`, one camera as an
 `IRgbdSensor` (`sensor/orbbec/orbbec_sensor.hpp`), which a `SensorArray`
-reads as a synced rig -- and the live example, which prepares every frame on
-the GPU:
+reads as a synced rig -- and the live example, which prepares and fuses every
+set on the GPU (or, with `--no-fuse`, only streams):
 
 ```sh
 build/examples/fuse_orbbec/fuse_orbbec --serial <serial> --frames 300

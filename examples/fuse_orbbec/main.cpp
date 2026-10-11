@@ -29,7 +29,8 @@
 // counted and released, with no GPU preparation, fusion or mesh, so the run
 // measures the cameras' stream and decode alone. The run reports each camera's
 // counters at the end, and a rig's skew of each secondary to the primary. It
-// gives up after ten seconds without a frame rather than waiting.
+// gives up after ten seconds without a frame rather than waiting, still
+// reporting them.
 
 #include <chrono>
 #include <cstddef>
@@ -41,7 +42,7 @@
 #include "cli.hpp"
 #include "fuse_frame.hpp"
 #include "fuse_orbbec_flags.hpp"
-#include "orbbec_rig.hpp"
+#include "fuse_orbbec_sets.hpp"
 #include "stage_table.hpp"
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/base/stage_metrics.hpp"
@@ -117,29 +118,34 @@ vkc::Status run(const Options& opt) {
   const char* verb = opt.no_fuse ? "streamed" : "fused";
   vr_example::RigSets sets(*array, static_cast<std::size_t>(opt.frames));
   vkc::StageMetrics stage_totals;
-  std::size_t reported = 0;  // the count last reported; a set may step past 100
   const auto t_start = std::chrono::steady_clock::now();
-  while (!sets.done()) {
-    VKC_ASSIGN(const sensor::FrameSet set, sets.next(&stage_totals));
-    // A set's stages run here, in turn, on its frames; --no-fuse runs none
-    // past the poll, and the set is released as it came.
-    if (volume) {
-      // One row for the batch: the cameras prepare together.
-      VKC_ASSIGN(const sensor::DeviceFrameSet prepared,
-                 array->process(set, &stage_totals));
-      VKC_TRY(vr_example::fuse_set(*fuser, *volume, prepared.frames,
-                                   opt.fusion.max_weight, &stage_totals));
+  const vkc::Status streamed = [&]() -> vkc::Status {
+    std::size_t reported = 0;  // the count last reported; a set may pass 100
+    while (!sets.done()) {
+      VKC_ASSIGN(const sensor::FrameSet set, sets.next(&stage_totals));
+      // A set's stages run here, in turn, on its frames; --no-fuse runs none
+      // past the poll, and the set is released as it came.
+      if (volume) {
+        // One row for the batch: the cameras prepare together.
+        VKC_ASSIGN(const sensor::DeviceFrameSet prepared,
+                   array->process(set, &stage_totals));
+        VKC_TRY(vr_example::fuse_set(*fuser, *volume, prepared.frames,
+                                     opt.fusion.max_weight, &stage_totals));
+      }
+      if (sets.frames() / 100 > reported / 100) {
+        reported = sets.frames();
+        std::printf("  %s %zu frames (%.1f fps)\n", verb, reported,
+                    static_cast<double>(reported) / seconds_since(t_start));
+      }
     }
-    if (sets.frames() / 100 > reported / 100) {
-      reported = sets.frames();
-      std::printf("  %s %zu frames (%.1f fps)\n", verb, reported,
-                  static_cast<double>(reported) / seconds_since(t_start));
-    }
-  }
+    return {};
+  }();
   const double secs = seconds_since(t_start);
   const double fps =
       static_cast<double>(sets.frames()) / (secs > 0.0 ? secs : 1.0);
+  // Before any error: a run that stalls still reports what it counted.
   sets.print_stats();
+  VKC_TRY(streamed);
   array.reset();
 
   if (!volume) {
