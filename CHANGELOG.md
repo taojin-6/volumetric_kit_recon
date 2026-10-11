@@ -8,6 +8,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `io`: **`encode_png_u16`** and **`write_png_u16`** (`image_io.hpp`), the
+  16-bit grayscale PNG writer: samples stored as given, read back exactly by
+  `load_depth_u16`; the encoder returns the file's bytes. It uses the stb
+  already in `recon_io`. Test: `recon_io_image`.
 - `sensor/orbbec`: **`open_orbbec_sensors`** (`orbbec_sensor.hpp`), a rig's
   cameras opened from its sync file, in its order: each an `OrbbecSensor`
   checked against its entry and on the host's clock, ready for
