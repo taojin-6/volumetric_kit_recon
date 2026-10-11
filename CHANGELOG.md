@@ -19,6 +19,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `sensor`: **decoded pictures readable from another queue family.**
+  `PixelBufferImporter::create` takes the queue families that read its
+  images, and makes them CONCURRENT across two or more distinct;
+  `JpegDecoder::Options::queue_families`,
+  `HevcDecoder::Options::queue_families` and
+  `OrbbecStreamOptions::color_queue_families` pass them through. A renderer
+  on another family, as MoltenVK gives gfx, then reads VideoToolbox's
+  pictures in place. With no families (the default) the images stay
+  EXCLUSIVE. NVDEC's and nvJPEG's buffers are unchanged. Tests:
+  `recon_sensor_apple_pixel_buffer_importer` (with a copy on a renderer's
+  family of a device shared with recon), the video and Orbbec decoder tests,
+  `recon_sensor_orbbec_conversion`.
 - `examples`: **`fuse_orbbec` stream operation**, the stream alone: each set is
   polled, counted and released, with no GPU preparation, fusion or mesh, and
   its stages are reported per set. It refuses explicit fusion and output settings. Tests:
