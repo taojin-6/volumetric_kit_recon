@@ -113,6 +113,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- build: **recon builds on core 0.1** (f35f547) and requires 0.1.0 or newer
+  with its vulkan tier (`VR_CORE_MIN_VERSION`, the core's
+  `vkc_require_core`): a core declared first that is older or lacks the tier
+  fails recon's configure, and the installed package is not found on one. The
+  viewers pin gfx main (d4a88d3), which builds on core 0.1; their code is
+  unchanged. Tests: `recon_subproject_old_core`,
+  `recon_subproject_core_without_vulkan`, `recon_package_core_without_vulkan`.
+- `sensor/video`: **a decoder's `Backend` status names its backend**
+  (`Status::backend()`): `VideoToolbox`, `Cuda`, `NvJpeg`, or `Ffmpeg` for
+  `AVERROR_EXTERNAL`. Tests: `recon_sensor_video_vt_jpeg_error`,
+  `recon_sensor_video_ffmpeg_error`, `recon_sensor_video_cuda_error`.
 - tests: **the GPU tests run on the core's test policy**
   (`tests/gpu_test.hpp`), and CI runs them under the Khronos validation
   layer: any error it reports fails the test, a leaked object's included,

@@ -170,17 +170,17 @@ Fallible calls return `Status` (success or an error domain + message) or
 `Result<T>` (a value or a `Status`), both `[[nodiscard]]`. `VKC_TRY` and
 `VKC_ASSIGN` remove the check-and-propagate boilerplate. Programmer errors
 (precondition violations) fail fast via `VKC_CHECK` (log + abort), distinct from
-recoverable runtime failures. `Status` is intentionally backend-neutral — a
-generic `int64_t` detail code, not a Vulkan or CUDA type — so the same idiom
-serves every tier; the core's `vk_result.hpp` turns a failed `VkResult` into
-`Code::Backend` (`vk_error`, `VKC_VK_TRY`), and `Status::with_context` prefixes
-a message without losing its domain or detail.
+recoverable runtime failures. `Status` is intentionally backend-neutral: a
+`Code::Backend` failure names its backend (`Status::Backend`) and carries that
+backend's code as a generic `int64_t`, never a Vulkan or CUDA type, so the
+same idiom serves every tier; the core's `vk_result.hpp` turns a failed
+`VkResult` into one (`vk_error`, `VKC_VK_TRY`), and `Status::with_context`
+prefixes a message without losing its domain, backend or detail.
 
 All of it is volumetric_kit_core's (the 2026-10-03 decision), and recon writes
 it under the core's names (2026-10-04): `core::Status` in recon's namespaces,
 `volumetric_kit::core::Status` to a consumer, so a recon error is the same type
-as calib's, and as gfx's from its #100 (the viewers pin gfx #123, which names
-the core's types as recon does). Diagnostics go through the core's one process-wide log sink;
+as calib's and gfx's. Diagnostics go through the core's one process-wide log sink;
 recon's `log_message(level, message)` tags them with source `"vr"`, which the
 default sink prints as `[vr <level>]`, and an application's handler receives
 `(level, source, message)`.
@@ -1216,8 +1216,9 @@ and its callback. Its decode-time `kVTParameterErr` also denotes corrupt
 JPEG data (including a truncated fixture), so it is `IoError` there. The
 Orbbec driver's colour decoders stop for good on any code but `IoError`, and
 the sensor's `poll` returns it, so a refused stream or a failing device path is
-not quiet. FFmpeg's `AVERROR_EXTERNAL` (a hardware call failed) reads as
-`Backend`; a hardware failure it reports otherwise reads as lost frames.
+not quiet. A `Backend` failure names the library that failed: VideoToolbox,
+CUDA or nvJPEG, or FFmpeg for its `AVERROR_EXTERNAL` (a hardware call failed);
+a hardware failure FFmpeg reports otherwise reads as lost frames.
 `VR_TEST_HEVC_BACKEND` makes the decoder tests fail rather than skip where
 no device path opens, which is how CI holds its legs to NVDEC on 24.04 (and
 nvJPEG where the GPU has the engine) and VideoToolbox on the Mac.

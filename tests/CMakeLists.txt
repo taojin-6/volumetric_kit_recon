@@ -638,11 +638,11 @@ if(APPLE)
 endif()
 
 # The video decoders (VR_WITH_FFMPEG only). The frame colour test reads the
-# colour off frames built by hand, no codec; it compiles the internal source
-# itself, as the Orbbec conversion test does. The decoder tests decode the
-# committed clips and JPEGs on this machine's hardware, onto the device; on a
-# GPU with no device path they skip, unless VR_TEST_HEVC_BACKEND says this leg
-# has one, where they fail.
+# colour off frames built by hand, no codec, and the FFmpeg error test maps
+# error codes; each compiles the internal source itself, as the Orbbec
+# conversion test does. The decoder tests decode the committed clips and JPEGs
+# on this machine's hardware, onto the device; on a GPU with no device path they
+# skip, unless VR_TEST_HEVC_BACKEND says this leg has one, where they fail.
 if(VR_WITH_FFMPEG)
   set(_vr_video_src ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/sensor/video)
   add_executable(
@@ -656,6 +656,16 @@ if(VR_WITH_FFMPEG)
   vr_target_warnings(recon_sensor_video_frame_color_test)
   add_test(NAME recon_sensor_video_frame_color
            COMMAND recon_sensor_video_frame_color_test)
+
+  add_executable(recon_sensor_video_ffmpeg_error_test
+                 sensor_video_ffmpeg_error_test.cpp ${_vr_video_src}/ffmpeg.cpp)
+  target_link_libraries(recon_sensor_video_ffmpeg_error_test
+                        PRIVATE volumetric_kit::core_base PkgConfig::VR_FFMPEG)
+  target_include_directories(recon_sensor_video_ffmpeg_error_test
+                             PRIVATE ${_vr_video_src})
+  vr_target_warnings(recon_sensor_video_ffmpeg_error_test)
+  add_test(NAME recon_sensor_video_ffmpeg_error
+           COMMAND recon_sensor_video_ffmpeg_error_test)
 
   add_executable(recon_sensor_video_hevc_test sensor_video_hevc_test.cpp)
   target_link_libraries(
@@ -692,6 +702,23 @@ if(VR_WITH_FFMPEG)
     vr_target_warnings(recon_sensor_video_cuda_slot_test)
     add_test(NAME recon_sensor_video_cuda_slot
              COMMAND recon_sensor_video_cuda_slot_test)
+
+    # The Status of a failed driver call. It compiles the CUDA source itself,
+    # which loads libcuda for the error's name and opens no device.
+    add_executable(
+      recon_sensor_video_cuda_error_test sensor_video_cuda_error_test.cpp
+                                         ${_vr_video_src}/cuda_pictures.cpp)
+    target_link_libraries(
+      recon_sensor_video_cuda_error_test
+      PRIVATE volumetric_kit::recon_core volumetric_kit::core_test_policy
+              ${CMAKE_DL_LIBS})
+    target_include_directories(recon_sensor_video_cuda_error_test
+                               PRIVATE ${_vr_video_src})
+    target_include_directories(recon_sensor_video_cuda_error_test SYSTEM
+                               PRIVATE ${CUDAToolkit_INCLUDE_DIRS})
+    vr_target_warnings(recon_sensor_video_cuda_error_test)
+    add_test(NAME recon_sensor_video_cuda_error
+             COMMAND recon_sensor_video_cuda_error_test)
   endif()
 
   if(APPLE)
@@ -902,7 +929,9 @@ add_test(NAME recon_io_ply COMMAND recon_io_ply_test)
 
 # What a sibling that fetches recon gets (subproject/): its configure, from a
 # clean tree, with each dependency this build fetched as a local source, so it
-# needs no network.
+# needs no network. The defaults hold, and recon refuses a core the sibling made
+# available first that is older than VR_CORE_MIN_VERSION (one stamped 0.0.1) or
+# lacks the vulkan tier.
 file(
   GLOB _vr_fetched
   LIST_DIRECTORIES true
@@ -929,15 +958,83 @@ add_test(NAME recon_subproject_clean COMMAND "${CMAKE_COMMAND}" -E rm -rf
                                              "${_vr_subproject}")
 set_tests_properties(recon_subproject_clean PROPERTIES FIXTURES_SETUP
                                                        vr_subproject)
-add_test(
-  NAME recon_subproject_defaults
-  COMMAND
-    "${CMAKE_COMMAND}" -S "${CMAKE_CURRENT_SOURCE_DIR}/subproject" -B
-    "${_vr_subproject}" -G "${CMAKE_GENERATOR}"
-    "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
-    "-DVR_SOURCE_DIR=${PROJECT_SOURCE_DIR}" ${_vr_fetched_sources})
-set_tests_properties(recon_subproject_defaults PROPERTIES FIXTURES_REQUIRED
-                                                          vr_subproject)
+# Configures subproject/ into <dir> under _vr_subproject with the given -D args.
+function(_vr_add_subproject_test name dir)
+  add_test(
+    NAME ${name}
+    COMMAND
+      "${CMAKE_COMMAND}" -S "${CMAKE_CURRENT_SOURCE_DIR}/subproject" -B
+      "${_vr_subproject}/${dir}" -G "${CMAKE_GENERATOR}"
+      "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+      "-DVR_SOURCE_DIR=${PROJECT_SOURCE_DIR}" ${_vr_fetched_sources} ${ARGN})
+  set_tests_properties(${name} PROPERTIES FIXTURES_REQUIRED vr_subproject)
+endfunction()
+# Sets <test>'s PASS_REGULAR_EXPRESSION to <message>, a space in which matches
+# however CMake wrapped the error's lines.
+function(_vr_expect_message test message)
+  string(REPLACE " " "[ \n]+" message "${message}")
+  set_tests_properties(${test} PROPERTIES PASS_REGULAR_EXPRESSION "${message}")
+endfunction()
+
+_vr_add_subproject_test(recon_subproject_defaults defaults)
+_vr_add_subproject_test(recon_subproject_old_core old_core -DVR_CORE_FIRST=ON
+                        -DVKC_WITH_VULKAN=ON -DVR_CONSUMER_CORE_VERSION=0.0.1)
+_vr_expect_message(
+  recon_subproject_old_core
+  "volumetric_kit_recon needs volumetric_kit_core ${VR_CORE_MIN_VERSION} or newer, but the core at .+ is 0.0.1: pin v${VR_CORE_MIN_VERSION} or newer"
+)
+_vr_add_subproject_test(recon_subproject_core_without_vulkan no_vulkan
+                        -DVR_CORE_FIRST=ON -DVKC_WITH_VULKAN=OFF)
+_vr_expect_message(
+  recon_subproject_core_without_vulkan
+  "volumetric_kit_recon needs volumetric_kit_core's vulkan tier, which the core at .+ was built without: set VKC_WITH_VULKAN ON before"
+)
+
+# What a project that finds an installed recon gets (package/): recon's package
+# config, as this build generated it, is not found on an installed core without
+# the vulkan tier, saying why. The core is built and installed for the test.
+include(FetchContent)
+FetchContent_GetProperties(volumetric_kit_core SOURCE_DIR _vr_core_source)
+if(VR_INSTALL AND _vr_core_source)
+  set(_vr_package "${CMAKE_CURRENT_BINARY_DIR}/package")
+  add_test(NAME recon_package_clean COMMAND "${CMAKE_COMMAND}" -E rm -rf
+                                            "${_vr_package}")
+  set_tests_properties(recon_package_clean PROPERTIES FIXTURES_SETUP
+                                                      vr_package_clean)
+  add_test(
+    NAME recon_package_base_core_configure
+    COMMAND
+      "${CMAKE_COMMAND}" -S "${_vr_core_source}" -B "${_vr_package}/core" -G
+      "${CMAKE_GENERATOR}" "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+      -DCMAKE_BUILD_TYPE=Release -DVKC_WITH_VULKAN=OFF -DVKC_BUILD_TESTS=OFF
+      -DVKC_WARNINGS_AS_ERRORS=OFF
+      "-DCMAKE_INSTALL_PREFIX=${_vr_package}/core-install")
+  set_tests_properties(
+    recon_package_base_core_configure
+    PROPERTIES FIXTURES_REQUIRED vr_package_clean FIXTURES_SETUP
+               vr_package_base_core_build)
+  add_test(NAME recon_package_base_core_install
+           COMMAND "${CMAKE_COMMAND}" --build "${_vr_package}/core" --target
+                   install)
+  set_tests_properties(
+    recon_package_base_core_install
+    PROPERTIES FIXTURES_REQUIRED vr_package_base_core_build FIXTURES_SETUP
+               vr_package_base_core)
+  add_test(
+    NAME recon_package_core_without_vulkan
+    COMMAND
+      "${CMAKE_COMMAND}" -S "${CMAKE_CURRENT_SOURCE_DIR}/package" -B
+      "${_vr_package}/consumer" -G "${CMAKE_GENERATOR}"
+      "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+      "-Dvolumetric_kit_recon_DIR=${PROJECT_BINARY_DIR}/src"
+      "-DCMAKE_PREFIX_PATH=${_vr_package}/core-install")
+  set_tests_properties(recon_package_core_without_vulkan
+                       PROPERTIES FIXTURES_REQUIRED vr_package_base_core)
+  _vr_expect_message(
+    recon_package_core_without_vulkan
+    "Reason given by package: volumetric_kit_recon needs volumetric_kit_core's vulkan tier, which the core installed at .+ was built without: install one built with VKC_WITH_VULKAN ON"
+  )
+endif()
 
 # Start the slowest tests first under `ctest --parallel`. Without a COST, CTest
 # runs tests in the order they were added, and a fresh CI runner has no timing
