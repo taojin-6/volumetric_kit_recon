@@ -100,6 +100,9 @@ jobs:
   viewer:
     uses: ./.github/workflows/viewer.yml
 
+  camera-only:
+    uses: ./.github/workflows/camera_only.yml
+
   lint:
     uses: ./.github/workflows/lint.yml
 
@@ -108,12 +111,12 @@ jobs:
 
   required:
     # The single status check branch protection requires. It passes only when
-    # every build leg, the viewer, lint, and sanitizers succeeded, and FAILS
-    # (never skips) on any other outcome: a skipped required check never reports
-    # its result and would block every merge forever. Runs on a hosted runner so
-    # the gate can always report, even while a platform is mid-migration to
-    # self-hosted.
-    needs: [build, viewer, lint, sanitizers]
+    # every build leg, the viewer, camera-only, lint, and sanitizers succeeded,
+    # and FAILS (never skips) on any other outcome: a skipped required check
+    # never reports its result and would block every merge forever. Runs on a
+    # hosted runner so the gate can always report, even while a platform is
+    # mid-migration to self-hosted.
+    needs: [build, viewer, camera-only, lint, sanitizers]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -122,10 +125,12 @@ jobs:
         run: |
           echo "build=${{ needs.build.result }}" \
                "viewer=${{ needs.viewer.result }}" \
+               "camera-only=${{ needs.camera-only.result }}" \
                "lint=${{ needs.lint.result }}" \
                "sanitizers=${{ needs.sanitizers.result }}"
           if [ "${{ needs.build.result }}" = success ] \
              && [ "${{ needs.viewer.result }}" = success ] \
+             && [ "${{ needs.camera-only.result }}" = success ] \
              && [ "${{ needs.lint.result }}" = success ] \
              && [ "${{ needs.sanitizers.result }}" = success ]; then
             echo "All required CI jobs passed."

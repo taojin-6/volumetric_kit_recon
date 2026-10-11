@@ -25,11 +25,14 @@ include(FetchContent)
 # fetches calib or gfx declares the core first, and FetchContent keeps the first
 # declaration of a name, so this pin then yields to the application's, and
 # vkc_require_core refuses that core if it is older than VR_CORE_MIN_VERSION or
-# lacks the vulkan tier. Work on both checkouts at once with
+# lacks the vulkan tier outside VR_CAMERA_ONLY. Work on both checkouts at once with
 # -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CORE=<core checkout>. The core's
 # tests and -Werror stay off in a subproject. Its install rules follow
 # VR_INSTALL: recon's install must carry the core its exported targets link, and
 # an application that embeds recon without installing it gets none.
+# VR_CAMERA_ONLY needs the base tier alone. It leaves VKC_WITH_VULKAN unset
+# rather than OFF, as calib does, so an application that turns the tier on keeps
+# it.
 #
 # The pin is core 0.1.0, main's merge of PR #25 (f35f547): the backend-tagged
 # Status (#19) and vkc_require_core's PACKAGE mode (#21).
@@ -40,15 +43,23 @@ FetchContent_Declare(
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
   GIT_TAG f35f5470d80d0becc9492b9e0db0106cd59566bc)
 set(VKC_INSTALL ${VR_INSTALL})
-set(VKC_WITH_VULKAN ON)
-if(VR_BUILD_TESTS)
-  set(VKC_BUILD_TEST_SUPPORT ON)
+if(NOT VR_CAMERA_ONLY)
+  set(VKC_WITH_VULKAN ON)
+  if(VR_BUILD_TESTS)
+    set(VKC_BUILD_TEST_SUPPORT ON)
+  endif()
 endif()
 FetchContent_MakeAvailable(volumetric_kit_core)
 # The set()s above are lost when calib or the application made the core
 # available first, without its vulkan tier or its test support.
-vkc_require_core(${VR_CORE_MIN_VERSION} VULKAN)
-if(VR_BUILD_TESTS AND NOT TARGET volumetric_kit::core_test_policy)
+if(VR_CAMERA_ONLY)
+  vkc_require_core(${VR_CORE_MIN_VERSION})
+else()
+  vkc_require_core(${VR_CORE_MIN_VERSION} VULKAN)
+endif()
+if(NOT VR_CAMERA_ONLY
+   AND VR_BUILD_TESTS
+   AND NOT TARGET volumetric_kit::core_test_policy)
   message(
     FATAL_ERROR
       "recon's tests need volumetric_kit_core's test support: set "
@@ -76,6 +87,11 @@ FetchContent_MakeAvailable(nlohmann_json)
 set(VR_JSON_INCLUDE_DIR
     "${nlohmann_json_SOURCE_DIR}/include"
     PARENT_SCOPE)
+
+# The camera tier needs nothing below.
+if(VR_CAMERA_ONLY)
+  return()
+endif()
 
 # --- Asset I/O implementation headers (never exported to consumers) --------
 # stb supplies image decoding and PNG writing. tinyply supplies PLY writing.

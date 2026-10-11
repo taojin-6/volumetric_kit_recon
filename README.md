@@ -58,7 +58,10 @@ Consume it from another CMake project via `find_package(volumetric_kit_recon)`
 or `FetchContent`, then link a tier (e.g. `volumetric_kit::recon_core`).
 Fetched, recon builds its library tiers alone: its tests, examples and
 `-Werror` (`VR_WARNINGS_AS_ERRORS`) default on only when it is the top-level
-project.
+project. A consumer with no GPU work, such as calib's solver, sets
+`VR_CAMERA_ONLY` ON to build and install the camera tier
+(`volumetric_kit::recon_camera`) alone, with no Vulkan SDK; it refuses the
+examples and the optional drivers.
 
 recon builds on [`volumetric_kit_core`](https://github.com/taojin-6/volumetric_kit_core),
 the family's shared foundation, fetched pinned by commit on the first configure:
@@ -69,12 +72,13 @@ one `VkDevice` shares with gfx.
 An installed recon carries the core beside it, and `find_package` finds both.
 An application that also fetches calib, which builds on the core too, declares
 `volumetric_kit_core` first, so both build against one copy, and sets
-`VKC_WITH_VULKAN ON` before the first `FetchContent_MakeAvailable` of it; to
-build against a local core checkout, pass
+`VKC_WITH_VULKAN ON` before the first `FetchContent_MakeAvailable` of it
+unless recon is camera-only; to build against a local core checkout, pass
 `-DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CORE=<path>`. recon needs the core
-at `VR_CORE_MIN_VERSION` (0.1.0) or newer, with its vulkan tier, and checks
-both with the core's `vkc_require_core`: on a core older than that or without
-the tier, recon's configure fails saying why, and an installed recon is not
+at `VR_CORE_MIN_VERSION` (0.1.0) or newer, with its vulkan tier unless
+`VR_CAMERA_ONLY` is ON, and checks both with the core's `vkc_require_core`:
+on a core older than that or missing a required tier, recon's configure
+fails saying why, and an installed recon is not
 found. A core older than 0.1.0 has no `vkc_require_core`, so the configure
 stops at that call as an unknown command: move the first-declared pin to 0.1.0
 or newer.

@@ -14,14 +14,6 @@ project(
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
-# Objective-C++ for the one file that reaches Metal (sensor/apple's
-# pixel_buffer_importer.mm), at the C++ standard the rest compiles at.
-if(APPLE)
-  enable_language(OBJCXX)
-  set(CMAKE_OBJCXX_STANDARD 17)
-  set(CMAKE_OBJCXX_STANDARD_REQUIRED ON)
-  set(CMAKE_OBJCXX_EXTENSIONS OFF)
-endif()
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
@@ -31,7 +23,18 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 # the "build the extras", "generate install rules" and -Werror defaults follow
 # from it. A consumer's newer compiler then shows it our new warnings rather
 # than failing its build (tests/subproject checks the extras and -Werror).
-option(VR_BUILD_EXAMPLES "Build example programs" ${PROJECT_IS_TOP_LEVEL})
+#
+# VR_CAMERA_ONLY builds the camera tier (recon_camera) alone, over the core's
+# base tier, GLM and nlohmann/json: no Vulkan, glslc or core vulkan tier, for a
+# consumer with no GPU work, such as calib's solver (the 2026-10-06 camera
+# decision, amended 2026-10-11). The examples and every driver need the rest.
+option(VR_CAMERA_ONLY "Build only the camera tier, with no Vulkan" OFF)
+if(PROJECT_IS_TOP_LEVEL AND NOT VR_CAMERA_ONLY)
+  set(_vr_examples_default ON)
+else()
+  set(_vr_examples_default OFF)
+endif()
+option(VR_BUILD_EXAMPLES "Build example programs" ${_vr_examples_default})
 option(VR_BUILD_TESTS "Build tests" ${PROJECT_IS_TOP_LEVEL})
 option(VR_INSTALL "Generate install/export rules" ${PROJECT_IS_TOP_LEVEL})
 option(VR_WARNINGS_AS_ERRORS "Treat first-party compiler warnings as errors"
@@ -63,6 +66,23 @@ set(VR_SANITIZE
     ""
     CACHE STRING "Sanitizers to enable, e.g. address;undefined (empty = off)")
 
+if(VR_CAMERA_ONLY)
+  foreach(_vr_option VR_BUILD_EXAMPLES VR_WITH_ORBBEC VR_WITH_FFMPEG
+                     VR_WITH_CUDA VR_WITH_ASSIMP)
+    if(${_vr_option})
+      message(FATAL_ERROR "VR_CAMERA_ONLY builds the camera tier alone: "
+                          "turn ${_vr_option} OFF")
+    endif()
+  endforeach()
+elseif(APPLE)
+  # Objective-C++ for the one file that reaches Metal (sensor/apple's
+  # pixel_buffer_importer.mm), at the C++ standard the rest compiles at.
+  enable_language(OBJCXX)
+  set(CMAKE_OBJCXX_STANDARD 17)
+  set(CMAKE_OBJCXX_STANDARD_REQUIRED ON)
+  set(CMAKE_OBJCXX_EXTENSIONS OFF)
+endif()
+
 include(vr_warnings)
 include(vr_sanitizers)
 
@@ -72,7 +92,9 @@ include(vr_sanitizers)
 # core/vulkan/vulkan.hpp, so the requirement is carried on the exported target
 # and the package Config re-runs find_dependency(Vulkan). Mirrors
 # volumetric_kit_gfx.
-find_package(Vulkan REQUIRED)
+if(NOT VR_CAMERA_ONLY)
+  find_package(Vulkan REQUIRED)
+endif()
 
 # The Orbbec SDK (ob::OrbbecSDK), found the same way: installed once, outside
 # the repo, and never fetched (the 2026-09-24 decision).

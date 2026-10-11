@@ -1,0 +1,51 @@
+name: camera-only
+
+# recon's camera tier alone (VR_CAMERA_ONLY), as calib's solver takes it: built
+# and tested in a bare Ubuntu container holding a compiler, CMake, GLM and git,
+# and no Vulkan loader, headers, glslc or driver. find_package(Vulkan) is
+# disabled too, so a configure that reaches for Vulkan fails rather than finds
+# one. The tests are the camera tier's and recon_subproject_camera_only.
+# Invoked by ci.yml, which owns the push / pull_request triggers and the
+# concurrency group.
+on:
+  workflow_call:
+
+jobs:
+  camera-only:
+    runs-on: ubuntu-24.04
+    container: ubuntu:24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # git first, so actions/checkout clones rather than downloads.
+      - name: Install a compiler, CMake, GLM and git
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates git \
+            cmake make g++ libglm-dev
+
+      - uses: actions/checkout@v7
+
+      - name: Assert no Vulkan is installed
+        run: |
+          if ldconfig -p | grep -q libvulkan \
+             || [ -e /usr/include/vulkan/vulkan.h ] \
+             || command -v glslc >/dev/null; then
+            echo "::error::the container has Vulkan; this job proves recon_camera needs none"
+            exit 1
+          fi
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DVR_CAMERA_ONLY=ON \
+            -DCMAKE_DISABLE_FIND_PACKAGE_Vulkan=ON
+
+      - name: Build
+        run: cmake --build build --parallel "$(nproc)"
+
+      - name: Test
+        run: |
+          ctest --test-dir build --output-on-failure --no-tests=error \
+            --parallel "$(nproc)"
