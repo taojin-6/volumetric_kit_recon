@@ -37,6 +37,7 @@
 #include "recon_gfx_bridge.hpp"
 #include "replica_flags.hpp"
 #include "replica_sensor.hpp"  // vr_example::ReplicaSensor (examples/common)
+#include "viewer_atlas.hpp"    // fuse_viewer::atlas_desc
 
 // core and recon tiers
 #include "volumetric_kit/core/base/result.hpp"
@@ -390,7 +391,9 @@ int main(int argc, char** argv) {
 
   // 4. Atlas: the keyframe's colour image where texturing ran (uv0 index into
   // it), uploaded in the frame that draws it; else none, and the mesh draws in
-  // its vertex colour. The one frame is number 1 on a timeline of its own.
+  // its vertex colour. The one frame is number 1 on a timeline of its own, so
+  // one frame is in flight: a ring of two, gfx's least, as it keeps a second
+  // image for the picture a discard restores.
   auto frames_r = vkc::TimelineSemaphore::create(app.device());
   if (!frames_r.ok()) {
     std::fprintf(stderr, "timeline: %s\n", frames_r.status().message().c_str());
@@ -399,11 +402,9 @@ int main(int argc, char** argv) {
   const vkc::TimelineSemaphore frames = std::move(frames_r).value();
   std::optional<vgp::StreamedAtlas> atlas;
   if (!recon.atlas.empty()) {
-    vgp::StreamedAtlasDesc atlas_desc;
-    atlas_desc.extent = {recon.atlas_w, recon.atlas_h};
-    atlas_desc.slots = 1;
-    auto atlas_r = vgp::StreamedAtlas::create(pipeline, app.allocator(), frames,
-                                              atlas_desc);
+    auto atlas_r = vgp::StreamedAtlas::create(
+        pipeline, app.allocator(), frames,
+        fuse_viewer::atlas_desc({recon.atlas_w, recon.atlas_h}, 1));
     if (!atlas_r.ok()) {
       std::fprintf(stderr, "atlas: %s\n", atlas_r.status().message().c_str());
       return 1;

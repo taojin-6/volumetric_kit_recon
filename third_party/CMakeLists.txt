@@ -23,24 +23,22 @@ include(FetchContent)
 # longer fetches or compiles its own (a second VMA_IMPLEMENTATION in the same
 # link would collide). Pinned by commit, never main; an application that also
 # fetches calib or gfx declares the core first, and FetchContent keeps the first
-# declaration of a name, so this pin then yields to the application's. Work on
-# both checkouts at once with
+# declaration of a name, so this pin then yields to the application's, and
+# vkc_require_core refuses that core if it is older than VR_CORE_MIN_VERSION or
+# lacks the vulkan tier. Work on both checkouts at once with
 # -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CORE=<core checkout>. The core's
 # tests and -Werror stay off in a subproject. Its install rules follow
 # VR_INSTALL: recon's install must carry the core its exported targets link, and
 # an application that embeds recon without installing it gets none.
 #
-# The pin is core PR #18's merge, including the merged test policy from #17. PR
-# #15 adds CommandBatch::submit_async for the pipelined stages to come; #17
-# supplies tests/gpu_test.hpp's policy; #18 exposes the timeline-value checks
-# the viewers' gfx requires. This revision also includes #23's Vulkan header
-# floor of 1.3.275, matching recon's supported CI platforms.
+# The pin is core 0.1.0, main's merge of PR #25 (f35f547): the backend-tagged
+# Status (#19) and vkc_require_core's PACKAGE mode (#21).
 #
 # TODO: pin the core's v0.1.0 tag once it is tagged.
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG 511fed0d0db110d2581ea18c0974412f3919655d)
+  GIT_TAG f35f5470d80d0becc9492b9e0db0106cd59566bc)
 set(VKC_INSTALL ${VR_INSTALL})
 set(VKC_WITH_VULKAN ON)
 if(VR_BUILD_TESTS)
@@ -49,12 +47,7 @@ endif()
 FetchContent_MakeAvailable(volumetric_kit_core)
 # The set()s above are lost when calib or the application made the core
 # available first, without its vulkan tier or its test support.
-if(NOT TARGET volumetric_kit::core_vulkan)
-  message(
-    FATAL_ERROR
-      "recon needs volumetric_kit_core's vulkan tier: set VKC_WITH_VULKAN ON "
-      "before the first FetchContent_MakeAvailable of the core")
-endif()
+vkc_require_core(${VR_CORE_MIN_VERSION} VULKAN)
 if(VR_BUILD_TESTS AND NOT TARGET volumetric_kit::core_test_policy)
   message(
     FATAL_ERROR

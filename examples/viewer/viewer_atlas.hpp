@@ -6,7 +6,8 @@
 /// @file examples/viewer/viewer_atlas.hpp
 /// @brief The atlas `fuse_viewer` and `rig_viewer` draw a live mesh with:
 ///        what a mesh's atlas is copied from, and gfx's `StreamedAtlas`
-///        filled from it in the frame that first draws the mesh.
+///        filled from it in the frame that first draws the mesh; and the
+///        atlas description they and `fuse_render` share.
 
 #include <cstddef>
 #include <cstdint>
@@ -88,6 +89,23 @@ inline std::vector<vg::ImageCopy> atlas_copies(
   return copies;
 }
 
+/// @brief The atlas the viewers draw with: @p extent, in the frame prep's
+///        canonical-encoded 8-bit colour, so the sampler decodes and filters
+///        in linear (the 2026-08-02 colour-space decision), and a ring of
+///        @p frames_in_flight plus one images.
+///
+/// With one copy a frame, that ring never waits for a frame, and it always
+/// has the second image gfx needs to keep the picture a discard restores, so
+/// a program drawing a single frame passes 1.
+inline vgp::StreamedAtlasDesc atlas_desc(VkExtent2D extent,
+                                         std::uint32_t frames_in_flight) {
+  vgp::StreamedAtlasDesc desc;
+  desc.extent = extent;
+  desc.format = VK_FORMAT_R8G8B8A8_SRGB;
+  desc.slots = frames_in_flight + 1;
+  return desc;
+}
+
 /// @brief The atlas a live mesh is drawn with: gfx's `StreamedAtlas`,
 ///        rewritten from a mesh's @ref AtlasJob in the frame that first draws
 ///        the mesh.
@@ -113,8 +131,7 @@ class LiveAtlas {
   /// @param frames            The frame loop's timeline
   ///                          (`windowing::FrameLoop::timeline`).
   /// @param extent            The atlas's size; every tile lies inside it.
-  /// @param frames_in_flight  The frame loop's. The ring is one deeper, so
-  ///                          a copy, one a frame, never waits for a frame.
+  /// @param frames_in_flight  The frame loop's (@ref atlas_desc).
   /// @warning @p pipeline, @p allocator and @p frames must outlive it.
   LiveAtlas(const vgp::HybridMeshPipeline& pipeline, vkc::Allocator& allocator,
             const vkc::TimelineSemaphore& frames, VkExtent2D extent,
@@ -122,13 +139,8 @@ class LiveAtlas {
       : pipeline_(&pipeline),
         allocator_(&allocator),
         frames_(&frames),
-        held_(frames) {
-    desc_.extent = extent;
-    // The frame prep's colour is canonical-encoded 8-bit, so the sampler
-    // decodes and filters in linear (the 2026-08-02 colour-space decision).
-    desc_.format = VK_FORMAT_R8G8B8A8_SRGB;
-    desc_.slots = frames_in_flight + 1;
-  }
+        desc_(atlas_desc(extent, frames_in_flight)),
+        held_(frames) {}
 
   LiveAtlas(const LiveAtlas&) = delete;
   LiveAtlas& operator=(const LiveAtlas&) = delete;
