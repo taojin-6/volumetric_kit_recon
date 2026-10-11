@@ -703,8 +703,8 @@ if(VR_WITH_FFMPEG)
     add_test(NAME recon_sensor_video_cuda_slot
              COMMAND recon_sensor_video_cuda_slot_test)
 
-    # The Status of a failed driver call. It compiles the CUDA source itself,
-    # which loads libcuda for the error's name and opens no device.
+    # The Status of a failed driver or nvJPEG call. It compiles the CUDA source
+    # itself, which loads libcuda for the error's name and opens no device.
     add_executable(
       recon_sensor_video_cuda_error_test sensor_video_cuda_error_test.cpp
                                          ${_vr_video_src}/cuda_pictures.cpp)
@@ -930,8 +930,14 @@ add_test(NAME recon_io_ply COMMAND recon_io_ply_test)
 # What a sibling that fetches recon gets (subproject/): its configure, from a
 # clean tree, with each dependency this build fetched as a local source, so it
 # needs no network. The defaults hold, and recon refuses a core the sibling made
-# available first that is older than VR_CORE_MIN_VERSION (one stamped 0.0.1) or
-# lacks the vulkan tier.
+# available first that is older than VR_CORE_MIN_VERSION or lacks the vulkan
+# tier. The old core is this one stamped 0.0.1, standing in for one below a
+# later floor: a real core older than 0.1.0 has no vkc_require_core at all.
+#
+# TODO: move this core-requirement harness -- the message helper, the base-only
+# core fixture below and subproject/'s version stamp, which gfx and calib repeat
+# -- into the core's test support, as a function each sibling calls with its
+# package and floor, and port the siblings onto it in one series.
 file(
   GLOB _vr_fetched
   LIST_DIRECTORIES true
@@ -990,9 +996,11 @@ _vr_expect_message(
   "volumetric_kit_recon needs volumetric_kit_core's vulkan tier, which the core at .+ was built without: set VKC_WITH_VULKAN ON before"
 )
 
-# What a project that finds an installed recon gets (package/): recon's package
-# config, as this build generated it, is not found on an installed core without
-# the vulkan tier, saying why. The core is built and installed for the test.
+# What a project that finds an installed recon gets (package/): this build,
+# installed with the core it carries, is found, with every imported target its
+# link interface names; and recon's package config, as this build generated it,
+# is not found on an installed core without the vulkan tier, saying why. That
+# core is built and installed for the test.
 include(FetchContent)
 FetchContent_GetProperties(volumetric_kit_core SOURCE_DIR _vr_core_source)
 if(VR_INSTALL AND _vr_core_source)
@@ -1001,6 +1009,27 @@ if(VR_INSTALL AND _vr_core_source)
                                             "${_vr_package}")
   set_tests_properties(recon_package_clean PROPERTIES FIXTURES_SETUP
                                                       vr_package_clean)
+  # This build's prefixes after the install's; a -DCMAKE_PREFIX_PATH given twice
+  # keeps only the last.
+  string(REPLACE ";" "$<SEMICOLON>" _vr_prefixes "${CMAKE_PREFIX_PATH}")
+  if(_vr_prefixes)
+    set(_vr_prefixes "$<SEMICOLON>${_vr_prefixes}")
+  endif()
+  add_test(NAME recon_package_install
+           COMMAND "${CMAKE_COMMAND}" --install "${PROJECT_BINARY_DIR}"
+                   --config "$<CONFIG>" --prefix "${_vr_package}/recon-install")
+  set_tests_properties(
+    recon_package_install PROPERTIES FIXTURES_REQUIRED vr_package_clean
+                                     FIXTURES_SETUP vr_package_recon)
+  add_test(
+    NAME recon_package_found
+    COMMAND
+      "${CMAKE_COMMAND}" -S "${CMAKE_CURRENT_SOURCE_DIR}/package" -B
+      "${_vr_package}/found" -G "${CMAKE_GENERATOR}"
+      "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+      "-DCMAKE_PREFIX_PATH=${_vr_package}/recon-install${_vr_prefixes}")
+  set_tests_properties(recon_package_found PROPERTIES FIXTURES_REQUIRED
+                                                      vr_package_recon)
   add_test(
     NAME recon_package_base_core_configure
     COMMAND
