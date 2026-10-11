@@ -91,6 +91,13 @@ if(VR_INSTALL)
   # the core's version file accepts only the same minor before 1.0.
   vkc_core_version(VR_CORE_MAJOR_MINOR MAJOR_MINOR)
 
+  # The package re-finds Vulkan unless it holds the camera tier alone, as the
+  # build decided: a plain ON/OFF, so an empty VR_CAMERA_ONLY reads as OFF.
+  if(VR_CAMERA_ONLY)
+    set(VR_PACKAGE_NEEDS_VULKAN OFF)
+  else()
+    set(VR_PACKAGE_NEEDS_VULKAN ON)
+  endif()
   include(CMakePackageConfigHelpers)
   configure_package_config_file(
     "${PROJECT_SOURCE_DIR}/cmake/volumetric_kit_reconConfig.cmake.in"

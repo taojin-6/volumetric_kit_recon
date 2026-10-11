@@ -24,10 +24,8 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 # from it. A consumer's newer compiler then shows it our new warnings rather
 # than failing its build (tests/subproject checks the extras and -Werror).
 #
-# VR_CAMERA_ONLY builds the camera tier (recon_camera) alone, over the core's
-# base tier, GLM and nlohmann/json: no Vulkan, glslc or core vulkan tier, for a
-# consumer with no GPU work, such as calib's solver (the 2026-10-06 camera
-# decision, amended 2026-10-11). The examples and every driver need the rest.
+# VR_CAMERA_ONLY builds recon_camera alone, with no Vulkan (DECISIONS,
+# 2026-10-06, amended 2026-10-11). The examples and every driver need the rest.
 option(VR_CAMERA_ONLY "Build only the camera tier, with no Vulkan" OFF)
 if(PROJECT_IS_TOP_LEVEL AND NOT VR_CAMERA_ONLY)
   set(_vr_examples_default ON)

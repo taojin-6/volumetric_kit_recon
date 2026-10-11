@@ -78,8 +78,8 @@ unless recon is camera-only; to build against a local core checkout, pass
 at `VR_CORE_MIN_VERSION` (0.1.0) or newer, with its vulkan tier unless
 `VR_CAMERA_ONLY` is ON, and checks both with the core's `vkc_require_core`:
 on a core older than that or missing a required tier, recon's configure
-fails saying why, and an installed recon is not
-found. A core older than 0.1.0 has no `vkc_require_core`, so the configure
+fails saying why, and an installed recon is not found. A core older than
+0.1.0 has no `vkc_require_core`, so the configure
 stops at that call as an unknown command: move the first-declared pin to 0.1.0
 or newer.
 

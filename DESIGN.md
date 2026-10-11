@@ -640,7 +640,9 @@ a bitstream is reproducible on the device that wrote it and decodable on any.
 
 The repo installs and exports like its sibling: per-tier targets under a shared
 export set, a generated `volumetric_kit_reconConfig.cmake`, and consumption via
-both `find_package(volumetric_kit_recon)` and `FetchContent`. Quality gates
+both `find_package(volumetric_kit_recon)` and `FetchContent`.
+`VR_CAMERA_ONLY` builds and installs `recon_camera` alone; that package's
+config finds no Vulkan ([README](README.md#building)). Quality gates
 (warnings-as-errors, formatting hooks, sanitizer and test CI) are wired from the
 start, not retrofitted.
 

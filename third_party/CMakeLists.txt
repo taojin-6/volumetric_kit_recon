@@ -7,7 +7,8 @@
 # package to rely on across our targets (Linux/Android/macOS/iOS):
 # nlohmann/json, stb and tinyply below. The root CMakeLists adds this
 # subdirectory unconditionally and the fetches below run on the first configure
-# (a network is required then; afterwards the FetchContent cache serves it).
+# (a network is required then; afterwards the FetchContent cache serves it);
+# VR_CAMERA_ONLY stops after the core and nlohmann/json.
 
 include(FetchContent)
 
@@ -25,8 +26,8 @@ include(FetchContent)
 # fetches calib or gfx declares the core first, and FetchContent keeps the first
 # declaration of a name, so this pin then yields to the application's, and
 # vkc_require_core refuses that core if it is older than VR_CORE_MIN_VERSION or
-# lacks the vulkan tier outside VR_CAMERA_ONLY. Work on both checkouts at once with
-# -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CORE=<core checkout>. The core's
+# lacks the vulkan tier outside VR_CAMERA_ONLY. Work on both checkouts at once
+# with -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CORE=<core checkout>. The core's
 # tests and -Werror stay off in a subproject. Its install rules follow
 # VR_INSTALL: recon's install must carry the core its exported targets link, and
 # an application that embeds recon without installing it gets none.
@@ -67,12 +68,14 @@ if(NOT VR_CAMERA_ONLY
       "of the core")
 endif()
 
-# --- nlohmann/json (header-only; parsed in one recon_sensor TU) ---------------
-# The rig pose file (sensor/rig_poses.hpp) is JSON. The release's source
-# archive, hash-pinned; only its include/ tree is used, so its CMake is not run
-# (SOURCE_SUBDIR names a directory the archive does not have). It is a PRIVATE
-# SYSTEM include of the one target that parses, never part of the installed
-# interface. volumetric_kit_gfx carries the same library through tinygltf.
+# --- nlohmann/json (header-only; private to the targets that parse JSON) -----
+# recon_camera parses the sensor array's calibration file with it, so a
+# camera-only build fetches it too, and recon_sensor_orbbec its sync file. The
+# release's source archive, hash-pinned; only its include/ tree is used, so its
+# CMake is not run (SOURCE_SUBDIR names a directory the archive does not have).
+# It is a PRIVATE SYSTEM include of each target that parses, never part of the
+# installed interface. volumetric_kit_gfx carries the same library through
+# tinygltf.
 if(POLICY CMP0135)
   cmake_policy(SET CMP0135 NEW) # extracted files get the extraction time
 endif()

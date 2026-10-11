@@ -338,8 +338,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   The family's camera vocabulary is recon's `camera` tier: a double-precision
   camera model with one templated projection, rigid transforms, and the
   sensor array's calibration file, version 2. It links the core's base tier
-  and GLM, not Vulkan, and `VR_CAMERA_ONLY` configures it alone (amended
-  2026-10-11). Cut back the same day, below.
+  and GLM, not Vulkan. *Amended 2026-10-11:* `VR_CAMERA_ONLY` configures it
+  alone. Cut back the same day, below.
 - [**2026-10-06**](#2026-10-06--the-camera-tier-keeps-only-what-a-capture-uses-amends-the-entry-above) —
   The camera tier keeps only what a capture uses: the camera model and its
   check, the lens's forward template, rigid checks, and each sensor's pose
@@ -9913,10 +9913,10 @@ pipelined processing follow (DESIGN.md, [Next work](DESIGN.md#next-work)).
   GLM only, so calib's solver links no Vulkan to use it. Configuring recon
   still finds Vulkan for its other tiers; calib finds it anyway, for its own
   GPU work on the core's vulkan tier, so a camera-only configure would serve
-  no consumer. *Amended 2026-10-11:* calib builds its solver with no Vulkan
-  SDK and takes its camera model from this tier, so it is that consumer:
-  `VR_CAMERA_ONLY` builds and installs the tier alone, with no Vulkan, glslc
-  or core vulkan tier.
+  no consumer. *Amended 2026-10-11:* calib's solver, which builds with no
+  Vulkan SDK, will take its camera model from this tier (decided 2026-10-11;
+  calib's CA1), so it is that consumer: `VR_CAMERA_ONLY` builds and installs
+  the tier alone, with no Vulkan, glslc or core vulkan tier.
 - **Double on the host, float once at upload.** Calibration solves in double
   and the file is written in the shortest form that reads back exactly. float
   would save nothing measurable (a set converts a few models) and cost both:

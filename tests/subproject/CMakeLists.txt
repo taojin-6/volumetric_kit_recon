@@ -37,12 +37,12 @@ else()
   find_package(volumetric_kit_recon CONFIG REQUIRED)
 endif()
 
-# A camera-only recon (VR_CAMERA_ONLY), as calib's solver takes it, makes no
-# target that reaches Vulkan (Vulkan's own is visible here only from a package),
-# and fetches no dependency of the other tiers.
+# A camera-only recon (VR_CAMERA_ONLY) makes no core vulkan tier and no other
+# recon tier, and fetches no dependency of the other tiers. That it finds no
+# Vulkan is the caller's CMAKE_DISABLE_FIND_PACKAGE_Vulkan, as Vulkan's target
+# would be local to recon's directory, not visible here.
 if(VR_EXPECT_CAMERA_ONLY)
-  foreach(_target Vulkan::Vulkan volumetric_kit::core_vulkan
-                  volumetric_kit::recon_core)
+  foreach(_target volumetric_kit::core_vulkan volumetric_kit::recon_core)
     if(TARGET ${_target})
       message(FATAL_ERROR "a camera-only recon made ${_target}")
     endif()
@@ -56,5 +56,6 @@ if(VR_EXPECT_CAMERA_ONLY)
   endforeach()
 endif()
 
+# The umbrella reaches recon_camera, so it must name only tiers that exist.
 add_executable(vr_camera_consumer camera_consumer.cpp)
-target_link_libraries(vr_camera_consumer PRIVATE volumetric_kit::recon_camera)
+target_link_libraries(vr_camera_consumer PRIVATE volumetric_kit::recon)

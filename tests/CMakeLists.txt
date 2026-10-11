@@ -52,10 +52,9 @@ foreach(_vr_var IN LISTS _vr_cache)
   endif()
 endforeach()
 
-# recon camera-only (VR_CAMERA_ONLY), as calib's solver takes it, with
-# find_package(Vulkan) disabled: the options that need the rest are refused, and
-# a consumer builds against the fetched source and against its install
-# (subproject/camera_only.cmake).
+# recon camera-only (VR_CAMERA_ONLY), with find_package(Vulkan) disabled: the
+# options that need the rest are refused, and a consumer builds against the
+# fetched source and against its install (subproject/camera_only.cmake).
 add_test(
   NAME recon_subproject_camera_only
   COMMAND
