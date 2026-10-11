@@ -135,10 +135,7 @@ inline int no_jpeg_decoder(const std::string& why) {
 // CONCURRENT resource may name with it; none on a GPU with one family.
 inline std::optional<std::uint32_t> other_queue_family(
     const vkc::Device& device) {
-  std::uint32_t count = 0;
-  vkGetPhysicalDeviceQueueFamilyProperties(device.physical_device(), &count,
-                                           nullptr);
-  if (count < 2) return std::nullopt;
+  if (device.caps().queue_families().size() < 2) return std::nullopt;
   return device.queue_family() == 0 ? 1u : 0u;
 }
 

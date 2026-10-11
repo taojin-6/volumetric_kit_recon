@@ -1236,7 +1236,7 @@ device's own family among them: two or more distinct make them CONCURRENT, so
 a renderer on another family (gfx's, on MoltenVK) reads them in place. The
 decoders' `Options::queue_families` and
 `OrbbecStreamOptions::color_queue_families` pass the families through;
-NVDEC's and nvJPEG's buffers ignore them and are still taken over from
+NVDEC's and nvJPEG's buffers ignore them and are taken over from
 `kQueueFamilyExternal`. It sets a `YuvImage`'s planes and leaves the
 matrix, range and chroma siting to its caller, who alone knows how the
 samples are coded (a stream's unlabelled colour, say). An iOS camera's

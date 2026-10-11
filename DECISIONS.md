@@ -11753,15 +11753,20 @@ and `OrbbecStreamOptions` pass them on.
   `BufferDesc` does.
 - **NVDEC and nvJPEG wait** (`TODO(sensor)`): a Linux tile also needs gfx
   to map I420.
-- The core's `distinct_queue_families` is internal, so the importer reduces
-  the list with `std::sort` and `std::unique`.
+- **The importer repeats the core allocator's family checks for now.** They
+  live in the core's internal `sharing_for`, and the importer creates its
+  images itself, so it cannot reach them; a `TODO(sensor)` replaces the copy
+  once the core makes them public and recon's core pin reaches that.
 
 **Validation.** Apple M5 Max, MoltenVK, Release with warnings as errors,
 FFmpeg 9.0.2 and Orbbec SDK 2.10.6, under the Khronos validation layer with
 synchronization validation: the importer's test imports a picture on recon's
 family of a windowless `SharedDevice` (`TwoFamilies`) and copies both planes
-on the renderer's, bytes exact, with no message from the layer. No camera
-was opened.
+on the renderer's, bytes exact. The layer checks a CONCURRENT image's create
+info (it reports a duplicate index or a single family) but does not track
+which family owns an EXCLUSIVE image: made EXCLUSIVE, the same copy passes
+with no message. So the guard is the sharing mode recorded on the image,
+which the tests check. No camera was opened.
 
 ## Measured lessons
 
