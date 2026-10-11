@@ -19,6 +19,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `sensor/utils`: **`PictureReadback`** (`picture_readback.hpp`), a set's
+  colour pictures on the host, luma alone or every plane, wherever the
+  decoder left them: NV12 images, or NV12 and I420 planes in a buffer taken
+  over from the family that wrote it. One submit a set, into host memory the
+  readback keeps; each `PictureView` is valid until the next read. The
+  decoder tests read their pictures through it. Tests:
+  `recon_sensor_picture_readback`, `recon_sensor_picture_readback_oom`.
+- `examples`: **`fuse_orbbec` with `diagnostics.readback: true`** reads each
+  set's luma back to the host, a `readback` stage, as the calibration app
+  does. Test:
+  `recon_example_config`.
 - `sensor`: **decoded pictures readable from another queue family.**
   `PixelBufferImporter::create` takes the queue families that read its
   images, and makes them CONCURRENT across two or more distinct;

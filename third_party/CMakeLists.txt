@@ -42,7 +42,7 @@ include(FetchContent)
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG 7857a6d4b9973b32461af09062d0bb894c86c751)
+  GIT_TAG f7a23ce62f6f7ad22fa2231ad430ffd826453499)
 set(VKC_INSTALL ${VR_INSTALL})
 if(NOT VR_CAMERA_ONLY)
   set(VKC_WITH_VULKAN ON)
@@ -56,13 +56,9 @@ if(NOT VR_CAMERA_ONLY AND (VR_BUILD_EXAMPLES OR VR_BUILD_TESTS))
   set(VKC_WITH_CONFIG ON)
 endif()
 FetchContent_MakeAvailable(volumetric_kit_core)
-if(NOT VR_CAMERA_ONLY
-   AND (VR_BUILD_EXAMPLES OR VR_BUILD_TESTS)
-   AND NOT TARGET volumetric_kit::core_config)
-  message(
-    FATAL_ERROR
-      "recon's examples and adapter tests require core_config: declare core "
-      "with VKC_WITH_CONFIG=ON before adding recon")
+if(NOT VR_CAMERA_ONLY AND (VR_BUILD_EXAMPLES OR VR_BUILD_TESTS))
+  # PictureReadback's example switch is diagnostics.readback in core 0.4.0.
+  vkc_require_core(0.4.0 CONFIG)
 endif()
 
 # The set()s above are lost when calib or the application made the core

@@ -128,8 +128,9 @@ links the family core's base tier and GLM, and no other recon tier.
   their own (`sensor/video/`, on the GPU's hardware) and link no camera tier:
   `core` and, on Apple, the Apple importer (`sensor/apple/`), which links
   `core` alone.
-  The GPU pre-processing is a fourth (`sensor/utils/`, Vulkan and shaders), so
-  `recon_sensor` itself stays free of all of them.
+  The GPU pre-processing and the pictures' readback are a fourth
+  (`sensor/utils/`, Vulkan and shaders), so `recon_sensor` itself stays free
+  of all of them.
 - **`codec`** — the per-frame TSDF geometry codec: separate `Encoder` and
   `Decoder` classes over a private 8³ DCT transform, a geometry-only intra
   frame (block coordinates, an observed-voxel mask, the first K coefficients),
@@ -1310,7 +1311,17 @@ allocation failure while staging, preserving previously returned frames.
 `depth_within_color` (off by
 default; `rig_viewer` turns it on) zeroes depth outside the colour camera's
 view, by the colour pass's own coverage test, so nothing is fused that no
-colour camera can colour. An Orbbec frame holds its SDK pair and the SDK
+colour camera can colour.
+**`sensor/utils`' `PictureReadback`** copies a set's colour pictures to the
+host, luma alone or every plane, for calib's detector: NV12 images from
+their corner, and planes in a buffer where they sit, after the batch takes
+the buffer over from `YuvImage::queue_family`; every copy in one batch, one
+submit and one wait. The copies land in host memory it keeps (`Staging`,
+cached for reading), grown to the largest read, and each `PictureView` points
+into it until the next read, so the frames may go at once. A picture is
+checked by the rules `GpuFramePrep` applies to one (`yuv_planes.hpp`), with
+`TRANSFER_SRC` for its buffer where the pass needs storage usage.
+An Orbbec frame holds its SDK pair and the SDK
 context, with the models and the depth-to-colour extrinsic from the factory
 calibration (the extrinsic's rotation made one: the Femto Mega's is not, the
 2026-10-06 sensor-frame decision; `open` refuses one that does not come out a
@@ -1603,9 +1614,11 @@ The live counterpart is its own example, not a `fuse_replica` flag:
 fuses it through `fuse_set`, and writes a PLY after `run.frames` frames.
 `operation: "stream"` only streams: each set is polled, counted and released, with no
 GPU preparation, fusion or mesh, so a run measures the cameras' stream and
-decode alone. It reports the cameras' open time and, at the end or when the
-run fails, the array's counters, each camera's `lost` frames and, for a rig,
-each secondary's mean and worst skew to the primary. Colour is H.265 unless
+decode alone. `diagnostics.readback: true` reads each set's luma back through
+`PictureReadback`, a stage of its own, as the calibration app does. It
+reports the cameras' open time and, at the end or when the run fails, the
+array's counters, each camera's `lost` frames and, for a rig, each
+secondary's mean and worst skew to the primary. Colour is H.265 unless
 `source.color_codec: "mjpeg"`.
 **`rig_viewer`** (`VR_BUILD_VIEWER` with `VR_WITH_ORBBEC` and
 `VR_WITH_FFMPEG`; CI's viewer leg compiles it) is `fuse_viewer`'s live-rig
@@ -1685,8 +1698,8 @@ landed; the stack continues:
    `fuse_orbbec` and `rig_viewer` open a `SensorArray` of `OrbbecSensor`s on
    the SDK's global timestamps (2026-10-07), their skew measured flat over a
    20-minute `fuse_orbbec` run; sessions of hours are still to measure.
-3. **Luma readback** in `sensor/utils`, wherever the decoder left the
-   picture, for calib's detector.
+3. **Luma readback** has landed in `sensor/utils` (`PictureReadback`),
+   wherever the decoder left the picture, for calib's detector.
 4. **Pipelined stages**: the core's `CommandBatch` submits without waiting,
    ordered by timeline semaphores; the per-set host waits go, in
    `tsdf::Fuser` (an allocation's failure count and occupancy read a set
