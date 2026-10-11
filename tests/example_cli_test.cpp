@@ -4,13 +4,16 @@
 // The examples' one command-line parser (examples/common/cli.hpp) and the
 // flag sets every example declares through it: numbers read whole and
 // finite, a flag's value taken whatever it looks like, unknown and missing
-// arguments refused with the usage line, required flags and one-of groups,
-// checks run after the arguments, the voxel rule, and the fusion, Replica,
-// codec and Orbbec flags' defaults and validation. Host only.
+// arguments refused with the usage line, required flags, one-of groups and
+// exclusions, checks run after the arguments, the voxel rule, and the fusion,
+// Replica, codec, Orbbec and fuse_orbbec flags' defaults and validation, among
+// them --no-fuse refusing the flags only fusion uses. Host only.
 
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <iterator>
 #include <optional>
 #include <string>
 #include <vector>
@@ -22,6 +25,7 @@
 #include "replica_flags.hpp"
 #include "test_check.hpp"
 #if VR_TEST_ORBBEC_FLAGS
+#include "fuse_orbbec_flags.hpp"
 #include "orbbec_flags.hpp"
 #endif
 
@@ -166,6 +170,25 @@ int parser() {
   CHECK(
       has(parse(grouped, {"--frames", "2"}), "prog: needs --serial or --rig"));
   CHECK(parse(grouped, {"--serial", "7"}).ok() && serial == "7");
+
+  // A flag that excludes others refuses each, in either order and under any
+  // spelling, naming its first; each parse stands alone, and the others still
+  // parse together.
+  vr_example::Cli modes("prog");
+  bool stream = false;
+  modes.flag("--stream", stream)
+      .option("--voxel", "m", o.voxel)
+      .option({"-o", "--out"}, "out.ply", o.out)
+      .excludes("--stream", {"--voxel", "-o"});
+  CHECK(parse(modes, {"--stream"}).ok() && stream);
+  CHECK(parse(modes, {"--voxel", "0.5", "--out", "d.ply"}).ok());
+  CHECK(has(parse(modes, {"--stream", "--voxel", "1"}),
+            "prog: --stream refuses --voxel\nusage: prog"));
+  CHECK(has(parse(modes, {"--voxel", "1", "--stream"}),
+            "prog: --stream refuses --voxel"));
+  CHECK(has(parse(modes, {"--out", "e.ply", "--stream"}),
+            "prog: --stream refuses -o"));
+  CHECK(modes.usage() == "usage: prog [--stream] [--voxel m] [-o out.ply]");
   return 0;
 }
 
@@ -207,6 +230,17 @@ int fusion_flags() {
     vr_example::FusionFlags f(0.02f);
     vr_example::Cli cli("prog");
     f.add_to(cli);
+    // kNames is every flag add_to declares, in its order, so a mode that
+    // fuses nothing refuses them all (excluded_by).
+    const std::string line = cli.usage();
+    std::vector<std::string> declared;
+    for (std::size_t at = line.find("[-"); at != std::string::npos;
+         at = line.find("[-", at + 1)) {
+      declared.push_back(line.substr(at + 1, line.find(' ', at) - at - 1));
+    }
+    CHECK(declared ==
+          std::vector<std::string>(std::begin(vr_example::FusionFlags::kNames),
+                                   std::end(vr_example::FusionFlags::kNames)));
     CHECK(parse(cli, {}).ok());
     // The band defaults to four voxels, the gate to the source's own.
     CHECK(f.voxel == 0.02f && f.trunc == vr_example::default_trunc(0.02f));
@@ -340,6 +374,62 @@ int orbbec_flags() {
   CHECK(refused({"--apply-sync"}, "--apply-sync needs --rig"));
   return 0;
 }
+
+int fuse_orbbec_flags() {
+  {
+    vr_example::FuseOrbbecFlags f;
+    vr_example::Cli cli("prog");
+    f.add_to(cli);
+    CHECK(parse(cli, {}).ok());
+    CHECK(!f.no_fuse && f.frames == 300 && f.out == "fuse_orbbec.ply");
+    CHECK(f.serial.empty() && !f.host_clock && f.fusion.voxel == 0.02f);
+    // The rig streamed at the calibration app's modes, fusing nothing.
+    CHECK(parse(cli, {"--rig", "s.json", "--no-fuse", "--mjpeg", "--color",
+                      "3840x2160", "--fps", "25", "--frames", "60000"})
+              .ok());
+    CHECK(f.no_fuse && f.frames == 60000 && f.cameras.rig == "s.json");
+    CHECK(!f.cameras.hevc && f.cameras.fps == 25u &&
+          f.cameras.color_width == 3840u);
+  }
+  {
+    // One camera, its clock and its pose are a stream's too.
+    vr_example::FuseOrbbecFlags f;
+    vr_example::Cli cli("prog");
+    f.add_to(cli);
+    CHECK(parse(cli, {"--serial", "7", "--host-clock", "--calibration",
+                      "c.json", "--no-fuse"})
+              .ok());
+    CHECK(f.serial == "7" && f.host_clock && f.no_fuse);
+  }
+  const auto refused = [](std::vector<const char*> args, const char* why) {
+    vr_example::FuseOrbbecFlags f;
+    vr_example::Cli cli("prog");
+    f.add_to(cli);
+    return has(parse(cli, args), why);
+  };
+  // Each flag that only fusion uses (every one FusionFlags declares, and
+  // -o), on either side of --no-fuse; each is taken without it.
+  std::vector<std::string> fusion_only(
+      std::begin(vr_example::FusionFlags::kNames),
+      std::end(vr_example::FusionFlags::kNames));
+  fusion_only.insert(fusion_only.end(), {"-o", "--out"});
+  for (const std::string& flag : fusion_only) {
+    const std::string why =
+        "prog: --no-fuse refuses " + (flag == "--out" ? "-o" : flag) + "\n";
+    CHECK(refused({"--no-fuse", flag.c_str(), "0.5"}, why.c_str()));
+    CHECK(refused({flag.c_str(), "0.5", "--no-fuse"}, why.c_str()));
+    vr_example::FuseOrbbecFlags f;
+    vr_example::Cli cli("prog");
+    f.add_to(cli);
+    CHECK(parse(cli, {flag.c_str(), "0.5"}).ok());
+  }
+  CHECK(refused({"--serial", "7", "--rig", "s.json"},
+                "--serial or --rig, not both"));
+  CHECK(refused({"--rig", "s.json", "--host-clock"},
+                "--host-clock is for one camera"));
+  CHECK(refused({"--no-fuse", "--frames", "0"}, "--frames must be >= 1"));
+  return 0;
+}
 #endif
 
 }  // namespace
@@ -354,6 +444,7 @@ int main() {
   CHECK(codec_flags() == 0);
 #if VR_TEST_ORBBEC_FLAGS
   CHECK(orbbec_flags() == 0);
+  CHECK(fuse_orbbec_flags() == 0);
 #endif
   std::puts("example_cli: OK");
   return 0;

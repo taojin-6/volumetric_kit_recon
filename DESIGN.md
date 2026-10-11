@@ -1554,8 +1554,10 @@ Every example reads its command line through `examples/common/cli.hpp`'s
 `Cli`: each flag is declared once with the variable it sets, a number is read
 whole and finite, a value below a flag's minimum is refused, flags of which a
 command line gives one form a group (`[a | b]`, or `(a | b)` when one is
-required), and an error is printed with the usage line the declarations
-generate. Flags a family of examples shares are declared and validated once:
+required), a flag that excludes others refuses them in either order
+(`Cli::excludes`: `--no-fuse` takes no `FusionFlags` flag and no `-o`), and an
+error is printed with the usage line the declarations generate. Flags a
+family of examples shares are declared and validated once:
 `FusionFlags` (`--voxel`, `--trunc`, `--min-depth`, `--max-depth`,
 `--max-weight`; the band defaults to four voxels, `grid_layout.hpp`'s
 `default_trunc`, and `check_voxel` is every example's `--voxel` rule) in every
@@ -1563,11 +1565,14 @@ example that fuses a sensor, `ReplicaFlags` (`<scene_dir>`, `--cam-params`,
 `--max-frames`, `--preload`) in the four dataset ones, `OrbbecFlags` (`--rig`,
 `--calibration`, `--apply-sync`, `--hevc | --mjpeg`, `--color`, `--fps`) in
 the two live ones, `CodecFlags` in the two codec ones, and `WindowFlags`
-(`viewer_common.hpp`) in the two windows. Stage rows print through one table,
+(`viewer_common.hpp`) in the two windows; `fuse_orbbec`'s whole command line
+is `FuseOrbbecFlags`. Stage rows print through one table,
 `stage_table.hpp`. Reports live beside the helpers rather than in a `main`:
 `fuse_replica`'s extract reports and `--dirty-every` survey in
-`remesh_report.hpp`, the viewers' panels in `viewer_panels.hpp`, and
-`rig_viewer`'s panel, progress line and `--texture-stats` in `rig_report.hpp`.
+`remesh_report.hpp`, the viewers' panels in `viewer_panels.hpp`,
+`rig_viewer`'s panel, progress line and `--texture-stats` in `rig_report.hpp`,
+and `fuse_orbbec`'s camera lines, set loop and counters in
+`fuse_orbbec_sets.hpp`.
 A `main.cpp` is the example's story: options, setup, the loop, the report.
 
 `fuse_replica` runs the spine on a posed Replica-SLAM RGB-D sequence and
@@ -1587,9 +1592,12 @@ The live counterpart is its own example, not a `fuse_replica` flag:
 `--rig sync.json` one per camera of the file on the host's clock
 (`--apply-sync` writing the settings a camera differs in), as a
 `SensorArray` posed by `--calibration`; it prepares each set on the GPU,
-fuses it through `fuse_set`, and writes a PLY after `--frames` frames. It
-reports the cameras' open time, the array's counters and, for a rig, each
-secondary's mean and worst skew to the primary. Colour is H.265 unless
+fuses it through `fuse_set`, and writes a PLY after `--frames` frames.
+`--no-fuse` only streams: each set is polled, counted and released, with no
+GPU preparation, fusion or mesh, so a run measures the cameras' stream and
+decode alone. It reports the cameras' open time and, at the end or when the
+run fails, the array's counters, each camera's `lost` frames and, for a rig,
+each secondary's mean and worst skew to the primary. Colour is H.265 unless
 `--mjpeg`.
 **`rig_viewer`** (`VR_BUILD_VIEWER` with `VR_WITH_ORBBEC` and
 `VR_WITH_FFMPEG`; CI's viewer leg compiles it) is `fuse_viewer`'s live-rig

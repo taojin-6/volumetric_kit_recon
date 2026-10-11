@@ -134,8 +134,8 @@ The driver decodes each camera's colour itself, so it needs the video
 decoders too (see below; on Linux, CUDA as well). That builds
 `volumetric_kit::recon_sensor_orbbec` -- `OrbbecSensor`, one camera as an
 `IRgbdSensor` (`sensor/orbbec/orbbec_sensor.hpp`), which a `SensorArray`
-reads as a synced rig -- and the live example, which prepares every frame on
-the GPU:
+reads as a synced rig -- and the live example, which prepares and fuses every
+set on the GPU (or, with `--no-fuse`, only streams):
 
 ```sh
 build/examples/fuse_orbbec/fuse_orbbec --serial <serial> --frames 300
@@ -156,6 +156,9 @@ settings differ from the file is refused; `--apply-sync` writes them to it:
 ```sh
 build/examples/fuse_orbbec/fuse_orbbec --rig config/femto_mega_sync.json \
     --calibration calib.json --frames 300
+# the stream and decode alone, fusing nothing:
+build/examples/fuse_orbbec/fuse_orbbec --rig config/femto_mega_sync.json \
+    --no-fuse --mjpeg --color 3840x2160 --fps 25 --frames 60000
 ```
 
 ### Optional: FFmpeg
