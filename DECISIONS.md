@@ -4819,9 +4819,10 @@ check refuses.
   one payload (see the timing above). The simpler structure stayed.
 
 **Open.**
-- `Encoder` / `Decoder`, the next PR.
+- `Encoder` / `Decoder`, the next PR. *Landed 2026-09-27 (the public-API
+  entry, below).*
 - The room0 throughput measurement that decides whether the GPU coder is
-  needed.
+  needed. *Measured 2026-09-27 (the room0 defaults entry, below).*
 - The optional CRC section above, a `TODO(codec)` in `parse_frame`.
 - The reader accepts a "partial" mask that decodes all-full or all-empty. Our
   writer never makes one, and it decodes correctly. A `TODO(codec)` in the
