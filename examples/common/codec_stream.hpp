@@ -315,18 +315,20 @@ class CodecStream {
     const auto frames = double(rows_.size());
     double bytes = 0.0;
     double blocks = 0.0;
+    std::size_t max_bytes = 0;
     for (const CodecRow& row : rows_) {
       bytes += double(row.bytes);
       blocks += double(row.blocks);
+      max_bytes = std::max(max_bytes, row.bytes);
     }
     const double per_frame = bytes / frames;
     const double per_block = blocks > 0 ? bytes / blocks : 0.0;
     std::printf("stream: %zu frames coded%s\n", rows_.size(),
                 grows_ > 0 ? " (the player grid grew)" : "");
     std::printf(
-        "  %.0f bytes per frame, %.0f blocks; %.1f bytes per block, %.0fx "
-        "under raw",
-        per_frame, blocks / frames, per_block,
+        "  %.0f bytes per frame (max %zu), %.0f blocks; %.1f bytes "
+        "per block, %.0fx under raw",
+        per_frame, max_bytes, blocks / frames, per_block,
         per_block > 0 ? kRawBytesPerBlock / per_block : 0.0);
     if (every > 0) {
       const double coded_fps = fps / double(every);

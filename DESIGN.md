@@ -1659,8 +1659,8 @@ coverage and the F-score at half a voxel, since a fused TSDF is projective
 and sampling it would measure the fusion's bias too. `codec.sweep` prints the
 rate–distortion table the defaults are chosen from. The stream, its report
 and the sweep are `examples/common/codec_stream.hpp` and `codec_sweep.hpp`.
-The stream keeps a row per coded frame (bytes, blocks, and encode and decode
-host and device ms). It can write the rows to a CSV as frames are coded, and
+The stream keeps a row per coded frame (source index, bytes, blocks, and
+encode and decode host and device ms). It can write the rows to a CSV as frames are coded, and
 every encoded frame, before it is decoded, into a frame directory that must
 be new (`CodecOutputs`). Frame files go through the core's `write_file`; the
 core cannot append, so the CSV is the stream's own.
