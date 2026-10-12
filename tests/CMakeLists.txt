@@ -201,6 +201,30 @@ vr_target_warnings(recon_sensor_gpu_frame_prep_oom_test)
 add_test(NAME recon_sensor_gpu_frame_prep_oom
          COMMAND recon_sensor_gpu_frame_prep_oom_test)
 
+# A set's pictures read back to the host (recon_sensor_utils' PictureReadback)
+# on synthetic NV12 images and NV12 and I420 buffers: exact bytes at odd sizes,
+# offsets and strides, every queue family a buffer comes from, the host memory
+# grown and reused, the refusals and the stage row. Skips with no device.
+add_executable(recon_sensor_picture_readback_test
+               sensor_picture_readback_test.cpp)
+target_link_libraries(
+  recon_sensor_picture_readback_test PRIVATE volumetric_kit::recon_sensor_utils
+                                             volumetric_kit::core_test_policy)
+vr_target_warnings(recon_sensor_picture_readback_test)
+add_test(NAME recon_sensor_picture_readback
+         COMMAND recon_sensor_picture_readback_test)
+
+# Allocation failure during a read is an OutOfMemory result, and the next read
+# succeeds. Separate executable for its replacement operator new.
+add_executable(recon_sensor_picture_readback_oom_test
+               sensor_picture_readback_oom_test.cpp test_allocation_failure.cpp)
+target_link_libraries(
+  recon_sensor_picture_readback_oom_test
+  PRIVATE volumetric_kit::recon_sensor_utils volumetric_kit::core_test_policy)
+vr_target_warnings(recon_sensor_picture_readback_oom_test)
+add_test(NAME recon_sensor_picture_readback_oom
+         COMMAND recon_sensor_picture_readback_oom_test)
+
 # The viewer's retained keyframe survives preparation and integration errors,
 # and still supplies depth, coverage and atlas pixels for projective texturing.
 # Headless: uses the example's fusion helper, without gfx or a dataset.
@@ -731,8 +755,9 @@ if(VR_WITH_FFMPEG)
 
   add_executable(recon_sensor_video_hevc_test sensor_video_hevc_test.cpp)
   target_link_libraries(
-    recon_sensor_video_hevc_test PRIVATE volumetric_kit::recon_sensor_video
-                                         volumetric_kit::core_test_policy)
+    recon_sensor_video_hevc_test
+    PRIVATE volumetric_kit::recon_sensor_video
+            volumetric_kit::recon_sensor_utils volumetric_kit::core_test_policy)
   target_compile_definitions(
     recon_sensor_video_hevc_test
     PRIVATE VR_HEVC_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data/hevc")
@@ -943,7 +968,8 @@ if(VR_WITH_ORBBEC)
   target_link_libraries(
     recon_sensor_orbbec_hevc_test
     PRIVATE volumetric_kit::recon_sensor_orbbec
-            volumetric_kit::recon_sensor_video volumetric_kit::core_test_policy)
+            volumetric_kit::recon_sensor_video
+            volumetric_kit::recon_sensor_utils volumetric_kit::core_test_policy)
   vr_link_orbbec_sdk(recon_sensor_orbbec_hevc_test)
   target_include_directories(
     recon_sensor_orbbec_hevc_test
@@ -965,7 +991,8 @@ if(VR_WITH_ORBBEC)
   target_link_libraries(
     recon_sensor_orbbec_jpeg_test
     PRIVATE volumetric_kit::recon_sensor_orbbec
-            volumetric_kit::recon_sensor_video volumetric_kit::core_test_policy)
+            volumetric_kit::recon_sensor_video
+            volumetric_kit::recon_sensor_utils volumetric_kit::core_test_policy)
   vr_link_orbbec_sdk(recon_sensor_orbbec_jpeg_test)
   target_include_directories(
     recon_sensor_orbbec_jpeg_test

@@ -18,14 +18,15 @@ and home-directory shortcuts are not expanded.
 | `codec_mesh` | [codec_mesh.json](examples/codec_mesh.json) | Height-normalized mesh and codec study |
 | `fuse_orbbec` | [fuse_orbbec.json](examples/fuse_orbbec.json) | Live camera/rig to PLY |
 | `fuse_orbbec` | [stream_orbbec.json](examples/stream_orbbec.json) | Live stream/decode only |
+| `fuse_orbbec` | [readback_orbbec.json](examples/readback_orbbec.json) | Live stream with luma readback |
 | `fuse_render` | [fuse_render.json](examples/fuse_render.json) | Dataset to image |
 | `fuse_viewer` | [fuse_viewer.json](examples/fuse_viewer.json) | Dataset in a window |
 | `rig_viewer` | [rig_viewer.json](examples/rig_viewer.json) | Live rig in a window |
 
 A scenario requires `version: 1`, an explicit `operation`, and a `source`
 object with an explicit `kind`. Settings are grouped into `source`, `fusion`, `codec`,
-`window`, `render`, `run` and `output`. Core's application profile supplies
-defaults and rejects unknown fields, wrong types, out-of-range numbers and
+`window`, `render`, `run`, `output` and `diagnostics`. Core's application
+profile supplies defaults and rejects unknown fields, wrong types, out-of-range numbers and
 unsupported combinations. Dataset paths, a mesh's height and up direction, or
 a rig's sync path remain required where the application needs them.
 
@@ -36,6 +37,7 @@ a rig's sync path remain required where the application needs them.
 | `--hevc` / `--mjpeg` | `source.color_codec` |
 | `--color 3840x2160` / `--fps 25` | `source.color_width`, `source.color_height` / `source.fps` |
 | `--no-fuse` | `operation: "stream"` |
+| `--readback` | `diagnostics.readback: true` |
 | `--voxel` / `--trunc` | `fusion.voxel_size_m` / `fusion.truncation_m` |
 | `--min-depth` / `--max-depth` | `fusion.min_depth_m` / `fusion.max_depth_m` |
 | `--max-frames` / `--frames` / `--sets` | `run.frames` / `run.frames` / `run.sets` |
@@ -49,6 +51,11 @@ of zero or less requests four voxels. Depth limits use the source's defaults
 per-example defaults; `rig_viewer` uses zero for no frame/set limit. Counts
 remain distinct: `fuse_orbbec` counts camera frames, while `rig_viewer` can
 limit both acquired sets and drawn frames.
+
+`fuse_orbbec` accepts `diagnostics.readback: true` in either a stream or fusion
+scenario. It copies every set's luma to host memory and reports a separate
+`readback` stage. It defaults to false, so a stream without it measures only
+streaming and decoding.
 
 `operation: "stream"` refuses an explicitly supplied `fusion` or `output`
 section, including settings equal to their defaults. Leave those sections out.

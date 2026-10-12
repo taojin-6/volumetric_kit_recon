@@ -23,7 +23,9 @@
 // host's clock (OrbbecSensor::Options::sync_clock_to_host), which its first
 // frame's age checks; a rig is always on it. operation=stream only streams:
 // each set is polled, counted and released, with no GPU preparation, fusion or
-// mesh, so the run measures the cameras' stream and decode alone. The run
+// mesh, so the run measures the cameras' stream and decode alone.
+// diagnostics.readback reads each set's luma back to the host through
+// sensor::PictureReadback, as a separate stage. The run
 // reports each camera's counters at the end, and a rig's skew of each secondary
 // to the primary. It gives up after ten seconds without a frame rather than
 // waiting, still reporting them.
@@ -31,6 +33,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdio>
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
@@ -49,6 +52,7 @@
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
 #include "volumetric_kit/recon/mesh/mesh.hpp"
 #include "volumetric_kit/recon/sensor/array/sensor_array.hpp"
+#include "volumetric_kit/recon/sensor/utils/picture_readback.hpp"
 #include "volumetric_kit/recon/tsdf/fuser.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 
@@ -101,6 +105,12 @@ vkc::Status run(const Options& opt) {
     VKC_ASSIGN(extractor, mesh::MarchingCubes::create(device, allocator, {}));
   }
 
+  // --- Luma readback, with diagnostics.readback ---
+  std::unique_ptr<sensor::PictureReadback> readback;
+  if (opt.diagnostics.readback) {
+    VKC_ASSIGN(readback, sensor::PictureReadback::create(device, allocator));
+  }
+
   // --- Stream ---
   VKC_TRY(array->start());
   const char* verb = (opt.operation == vr_example::config::Operation::Stream)
@@ -114,7 +124,14 @@ vkc::Status run(const Options& opt) {
     while (!sets.done()) {
       VKC_ASSIGN(const sensor::FrameSet set, sets.next(&stage_totals));
       // A set's stages run here, in turn, on its frames; operation=stream runs
-      // none past the poll, and the set is released as it came.
+      // none past the poll and any readback, and the set is released as it
+      // came.
+      if (readback) {
+        VKC_TRY(readback
+                    ->read(set.frames, sensor::PictureReadback::Planes::Luma,
+                           &stage_totals)
+                    .status());
+      }
       if (volume) {
         // One row for the batch: the cameras prepare together.
         VKC_ASSIGN(const sensor::DeviceFrameSet prepared,

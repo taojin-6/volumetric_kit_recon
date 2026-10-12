@@ -138,6 +138,8 @@ reads as a synced rig -- and the live example. Every example takes a core
 scenario file through `--config`; `--help` prints the common entry point.
 The core owns JSON decoding, defaults, units, ranges, source selection and
 operation compatibility. See [example configurations](config/README.md).
+Set `diagnostics.readback` to `true` to read each set's luma back to the
+host through `PictureReadback`, during either streaming or fusion.
 
 ```sh
 build/examples/fuse_orbbec/fuse_orbbec --config config/examples/fuse_orbbec.json
