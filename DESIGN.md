@@ -1109,10 +1109,9 @@ read back in a batch of its own.
 
 ### camera
 
-`recon_camera` links `core_base` and GLM; the drivers and the sensor tier
-build on it. It holds only what a capture uses (the second 2026-10-06
-decision): unprojection, rescaling and writing the file come with their first
-caller.
+`recon_camera` links `core_base` and GLM; the drivers, the sensor tier and
+calib build on it. It holds only what a caller uses (the second 2026-10-06
+decision): unprojection and rescaling come with their first caller.
 
 - **`camera/camera_model.hpp`** — `CameraModel`: `ImageSize`,
   `PinholeIntrinsics` and `RationalDistortion` (OpenCV's eight coefficients),
@@ -1123,11 +1122,16 @@ caller.
   reference.
 - **`camera/geometry.hpp`** — GLM's double types, `check_rigid`,
   `rigid_inverse`, `nearest_rotation` (the polar factor, for an SDK's
-  rotation that is not one), and the rotation of a Rodrigues vector.
-  `RodriguesTransform` is OpenCV's `x' = R(rvec) x + tvec`.
+  rotation that is not one), and Rodrigues both ways
+  (`rotation_from_rodrigues`, `rodrigues_from_rotation`, accurate near 0 and
+  pi). `RodriguesTransform` is OpenCV's `x' = R(rvec) x + tvec`.
 - **`camera/array_calibration.hpp`** — the sensor array's calibration file,
-  the family's `device_calibration` layout: each sensor's colour-camera pose
-  by serial. Every other key is ignored.
+  version 2 under version 1's `device_calibration` key: per sensor by serial,
+  an optional colour-camera pose, colour and depth `CameraCalibration`s
+  (model and `factory` / `calibrated` source) and `depth_to_color`, and an
+  optional world sensor. `format_` / `write_array_calibration` write it
+  through the core's `write_file`; version 1 is read for its poses.
+  `SensorArray::open` refuses a sensor the file does not pose.
 
 ### sensor
 

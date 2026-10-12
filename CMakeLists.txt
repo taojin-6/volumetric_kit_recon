@@ -113,8 +113,10 @@ endif()
 # recon, and implementation dependencies that expose private include paths to
 # the tiers below and never become part of the installed link interface. The
 # oldest core recon builds with is checked in the core that arrives
-# (third_party/) and again by the installed package config.
-set(VR_CORE_MIN_VERSION 0.1.0)
+# (third_party/) and again by the installed package config: 0.2.0, whose base
+# tier reads and writes whole files (file_io.hpp) and turns an exception into a
+# Status (exception_status.hpp).
+set(VR_CORE_MIN_VERSION 0.2.0)
 add_subdirectory(third_party)
 
 add_subdirectory(src)

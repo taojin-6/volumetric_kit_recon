@@ -359,8 +359,8 @@ int run(GLFWwindow* window, const Options& opt) {
     // calibration.
     const rcamera::SensorCalibration* calibrated =
         rcamera::find_sensor(array_options.calibration, info.id);
-    camera_poses.push_back(calibrated != nullptr
-                               ? glm::mat4(calibrated->color_to_world)
+    camera_poses.push_back(calibrated != nullptr && calibrated->color_to_world
+                               ? glm::mat4(*calibrated->color_to_world)
                                : glm::mat4(1.0f));
     const rcamera::CameraModel& cam = color_cameras.back();
     const glm::vec3 at(camera_poses.back()[3]);

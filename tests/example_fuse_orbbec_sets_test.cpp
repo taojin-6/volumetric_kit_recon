@@ -7,7 +7,9 @@
 // an array of pushed fake cameras: each set waited for, counted and cut, the
 // run done at exactly N frames, a set missing a secondary counted as it came,
 // and each secondary's skew to the primary over every frame it sent, the
-// primary's none. Host only.
+// primary's none. The single camera a calibration file names: the one asked
+// for if posed, or the file's only posed one, past a camera listed for its
+// lenses alone. Host only.
 
 #include <cmath>
 #include <cstddef>
@@ -23,10 +25,12 @@
 #include "test_check.hpp"
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/base/stage_metrics.hpp"
+#include "volumetric_kit/recon/camera/array_calibration.hpp"
 #include "volumetric_kit/recon/sensor/array/sensor_array.hpp"
 #include "volumetric_kit/recon/sensor/rgbd_sensor.hpp"
 
 namespace vkc = volumetric_kit::core;
+namespace camera = volumetric_kit::recon::camera;
 namespace sensor = volumetric_kit::recon::sensor;
 
 namespace {
@@ -177,11 +181,49 @@ int run() {
   return 0;
 }
 
+int posed() {
+  using Code = vkc::Status::Code;
+  const std::string path = "rig.json";
+  const auto code = [&](const camera::ArrayCalibration& c,
+                        const std::string& serial) {
+    return vr_example::posed_camera(c, serial, path).status().domain();
+  };
+  // No file: the camera asked for, or the first found.
+  CHECK(vr_example::posed_camera({}, "", path).value().empty());
+  CHECK(vr_example::posed_camera({}, "A", path).value() == "A");
+
+  // A posed, B listed for its lenses alone (a factory record).
+  camera::ArrayCalibration c;
+  camera::SensorCalibration a;
+  a.id = "A";
+  a.color_to_world = camera::Mat4d(1.0);
+  camera::SensorCalibration b;
+  b.id = "B";
+  c.sensors = {a, b};
+  // The only posed one.
+  CHECK(vr_example::posed_camera(c, "", path).value() == "A");
+  CHECK(vr_example::posed_camera(c, "A", path).value() == "A");
+  CHECK(code(c, "B") == Code::NotFound);  // listed, unposed
+  CHECK(code(c, "Z") == Code::NotFound);  // not listed
+  const vkc::Status s = vr_example::posed_camera(c, "B", path).status();
+  CHECK(s.message() == "rig.json does not pose camera B");
+
+  // None posed, or two: the run must name one.
+  c.sensors = {b};
+  CHECK(code(c, "") == Code::NotFound);
+  b.color_to_world = camera::Mat4d(1.0);
+  c.sensors = {a, b};
+  CHECK(code(c, "") == Code::NotFound);
+  CHECK(vr_example::posed_camera(c, "B", path).value() == "B");
+  return 0;
+}
+
 }  // namespace
 
 int main() {
   CHECK(cut() == 0);
   CHECK(run() == 0);
+  CHECK(posed() == 0);
   std::puts("example_fuse_orbbec_sets: OK");
   return 0;
 }

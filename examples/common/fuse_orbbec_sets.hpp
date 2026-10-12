@@ -50,8 +50,9 @@ inline void print_orbbec_camera(
   const vr::camera::CameraModel& depth = *opened.info().depth;
   const vr::camera::SensorCalibration* posed =
       vr::camera::find_sensor(calibration, info.serial);
-  const vr::camera::Mat4d pose =
-      posed != nullptr ? posed->color_to_world : vr::camera::Mat4d(1.0);
+  const vr::camera::Mat4d pose = posed != nullptr && posed->color_to_world
+                                     ? *posed->color_to_world
+                                     : vr::camera::Mat4d(1.0);
   std::printf(
       "camera: %s %s, firmware %s, %s %s, sync %s, %s clock\n"
       "  colour %ux%u @ fx=%.1f fy=%.1f cx=%.1f cy=%.1f, at (%.3f, %.3f, "
@@ -67,15 +68,48 @@ inline void print_orbbec_camera(
       depth.intrinsics.fy, depth.intrinsics.cx, depth.intrinsics.cy);
 }
 
+/// @brief The camera a single-camera run opens: @p serial, which
+///        @p calibration (read from @p path) must pose if it lists any
+///        camera, or else the file's only posed camera. A file may list a
+///        camera's lenses alone.
+/// @return The serial, empty for "the first camera found" when both
+///         @p serial and @p calibration are empty; or
+///         `Status::Code::NotFound` naming @p path when the file does not
+///         pose @p serial, or poses no camera or several and @p serial is
+///         empty.
+inline vkc::Result<std::string> posed_camera(
+    const vr::camera::ArrayCalibration& calibration, const std::string& serial,
+    const std::string& path) {
+  const std::vector<vr::camera::SensorCalibration>& listed =
+      calibration.sensors;
+  if (listed.empty()) return serial;
+  const auto posed = [](const vr::camera::SensorCalibration& s) {
+    return s.color_to_world.has_value();
+  };
+  const vr::camera::SensorCalibration* sensor = nullptr;
+  if (!serial.empty()) {
+    sensor = vr::camera::find_sensor(calibration, serial);
+  } else if (std::count_if(listed.begin(), listed.end(), posed) == 1) {
+    sensor = &*std::find_if(listed.begin(), listed.end(), posed);
+  }
+  if (sensor == nullptr || !posed(*sensor)) {
+    return vkc::Status::not_found(
+        path + (serial.empty() ? std::string(" does not pose exactly one "
+                                             "camera; name one with "
+                                             "source.serial")
+                               : " does not pose camera " + serial));
+  }
+  return sensor->id;
+}
+
 /// @brief Open fuse_orbbec's cameras, each printed: one, or every camera of
 ///        the `source.sync_config` file (`open_orbbec_sensors`), the colour
 ///        decoded onto
-///        @p device. A single camera posed by @p calibration is the one it
-///        names, or its only one. The depth gate is validated by the driver,
-///        which names both values when it refuses one.
-/// @return The cameras; `Status::Code::NotFound` when @p calibration poses
-///         several and `source.serial` names none, or not the named one; or the
-///         driver's error.
+///        @p device. A single camera is @ref posed_camera's. The depth gate
+///        is validated by the driver, which names both values when it
+///        refuses one.
+/// @return The cameras; @ref posed_camera's refusal; or the driver's
+///         error.
 inline vkc::Result<std::vector<std::unique_ptr<vr::sensor::IRgbdSensor>>>
 open_orbbec_cameras(const config::Config& opt,
                     const vr::camera::ArrayCalibration& calibration,
@@ -89,25 +123,8 @@ open_orbbec_cameras(const config::Config& opt,
     VKC_ASSIGN(sensors,
                vr::sensor::open_orbbec_sensors(opt.source.sync_config, o));
   } else {
-    o.serial = opt.source.serial;
-    const std::vector<vr::camera::SensorCalibration>& posed =
-        calibration.sensors;
-    if (!posed.empty()) {
-      const vr::camera::SensorCalibration* sensor =
-          !opt.source.serial.empty()
-              ? vr::camera::find_sensor(calibration, opt.source.serial)
-          : posed.size() == 1 ? &posed[0]
-                              : nullptr;
-      if (sensor == nullptr) {
-        return vkc::Status::not_found(
-            opt.source.calibration +
-            (opt.source.serial.empty()
-                 ? std::string(
-                       " poses several cameras; name one with source.serial")
-                 : " does not pose camera " + opt.source.serial));
-      }
-      o.serial = sensor->id;
-    }
+    VKC_ASSIGN(o.serial, posed_camera(calibration, opt.source.serial,
+                                      opt.source.calibration));
     o.sync_clock_to_host = opt.source.host_clock;
     VKC_ASSIGN(vr::sensor::OrbbecSensor opened,
                vr::sensor::OrbbecSensor::open(o));

@@ -2,9 +2,10 @@
 # Copyright (c) 2026 Tao Jin
 
 # camera tier: the camera model (its checks, the lens template against OpenCV's
-# numbers), its geometry (rigid checks, Rodrigues against OpenCV), and the
-# sensor array's calibration file (poses read, the refusals, a file in the build
-# tree). Host-only, so they always run.
+# numbers), its geometry (rigid checks, Rodrigues both ways), and the sensor
+# array's calibration file (versions 2 and 1 read, the refusals, written and
+# read back, its document parsed independently with nlohmann/json). Host-only,
+# so they always run.
 add_executable(recon_camera_model_test camera_model_test.cpp)
 target_link_libraries(recon_camera_model_test
                       PRIVATE volumetric_kit::recon_camera)
@@ -21,9 +22,8 @@ add_executable(recon_camera_array_calibration_test
                camera_array_calibration_test.cpp)
 target_link_libraries(recon_camera_array_calibration_test
                       PRIVATE volumetric_kit::recon_camera)
-target_compile_definitions(
-  recon_camera_array_calibration_test
-  PRIVATE VR_TEST_SCRATCH_DIR="${CMAKE_CURRENT_BINARY_DIR}")
+target_include_directories(recon_camera_array_calibration_test SYSTEM
+                           PRIVATE "${VR_JSON_INCLUDE_DIR}")
 vr_target_warnings(recon_camera_array_calibration_test)
 add_test(NAME recon_camera_array_calibration
          COMMAND recon_camera_array_calibration_test)
