@@ -4594,10 +4594,10 @@ That is 2%, the same per-call pattern the integrator and the mesher use for
 their inputs. The buffers change anyway with the device-resident output below.
 
 **Open.**
-- P-frames (`FrameType::Inter`).
-- The GPU rANS kernels.
-- Device-resident coefficients, so the GPU coder reads them without a host
-  round trip, marked `TODO(codec)` on the transform.
+- P-frames (frame type 1).
+- The GPU rANS kernels, and device-resident coefficients so the GPU coder
+  reads them without a host round trip. *Both landed 2026-10-03 (the device
+  encoding and decoding entries, below).*
 
 ### 2026-09-27 — The v1 frame is independent rANS segments of sorted blocks, every integer a class plus raw bits, behind fixed per-frame tables and a section table; the decoder's end check is for consistency, not integrity (amends the 2026-09-26 entry's interleaved lanes).
 
@@ -4616,8 +4616,12 @@ length in a SEGMENTS section.
   stream needs that coordination.
 - **Cost:** a segment carries its state (4 bytes), its first coordinate (12)
   and its length (4). That is 20 bytes per 64 blocks, against an estimated 30+
-  bytes per block of payload.
-- **Parallelism:** room0's ~107 k blocks come to ~1.7 k segments.
+  bytes per block of payload. *Measured 2026-10-11 (v3, defaults, M5 Max):*
+  18.8 bytes a segment, 2.2% of room0's final frame at 2 cm, 2.6% at 1 cm and
+  2.7% at 5 mm (`codec_replica --encode-every 0 --entropy host`, the frame at
+  `--segment-size 64` against the same frame as one segment).
+- **Parallelism:** room0's ~107 k blocks come to ~1.7 k segments. *Measured
+  2026-10-11:* 101 766 blocks at 5 mm make 1 591.
 
 **The coder.** Giesen's word-oriented rANS:
 - **Parameters:** a 32-bit state in `[2^16, 2^32)`, 16-bit output words, and
@@ -4818,7 +4822,7 @@ check refuses.
 - `Encoder` / `Decoder`, the next PR.
 - The room0 throughput measurement that decides whether the GPU coder is
   needed.
-- The optional CRC section above, a `TODO(codec)` in `read_intra_frame`.
+- The optional CRC section above, a `TODO(codec)` in `parse_frame`.
 - The reader accepts a "partial" mask that decodes all-full or all-empty. Our
   writer never makes one, and it decodes correctly. A `TODO(codec)` in the
   reader's block decode.
@@ -8728,8 +8732,8 @@ and an element under 4 bytes, and `free_stale_blocks` already refuses it.
   case in the same `TODO(codec)`.
 - **The GPU coder, and a device-resident forward output.** Host rANS is now
   34% of a 30 fps interval to encode and 31% to decode at 1 cm. That is less
-  than before, so the GPU coder waits on the same terms as the room0 entry,
-  and the transform's `TODO(codec)` stays.
+  than before, so the GPU coder waits on the same terms as the room0 entry.
+  *Both landed 2026-10-03 (the device encoding entry, below).*
 
 ### 2026-10-02 — Shared instructions live in a concise AGENTS.md; CLAUDE.md imports it, DESIGN.md holds implementation detail, and DECISIONS.md holds the decision index and rationale.
 
