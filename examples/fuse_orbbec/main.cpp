@@ -122,7 +122,7 @@ vkc::Status run(const Options& opt) {
   const vkc::Status streamed = [&]() -> vkc::Status {
     std::size_t reported = 0;  // the count last reported; a set may pass 100
     while (!sets.done()) {
-      VKC_ASSIGN(const sensor::FrameSet set, sets.next(&stage_totals));
+      VKC_ASSIGN(sensor::FrameSet set, sets.next(&stage_totals));
       // A set's stages run here, in turn, on its frames; operation=stream runs
       // none past the poll and any readback, and the set is released as it
       // came.
