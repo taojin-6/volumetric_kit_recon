@@ -10,6 +10,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - `examples`: `codec.sweep`'s `enc gpu` / `dec gpu` count every device span,
   as the per-frame codec rows do.
+- `examples`: `fuse_keyframe` takes the integration mode, as `fuse_set` now
+  must. Test: `recon_example_fuse_keyframe`, in both modes.
 - Examples now accept `--config scenario.json` and `--help`. Core's optional
   `core_config` owns the JSON format, typed settings, defaults and static
   validation. All seven executables use its settings directly; the old local

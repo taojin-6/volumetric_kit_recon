@@ -96,6 +96,10 @@ inline void print_fuse_report(const vr::tsdf::FuseReport& report) {
   }
 }
 
+// TODO(examples): every fusing example passes the mode from fusion.dynamic
+// once core 0.5.0 accepts it beyond rig_viewer; until then the rest pass
+// Classic.
+
 /// @brief Fuse a set of frames already on the device, as
 ///        `sensor::GpuFramePrep` hands them out, through @p fuser: nothing is
 ///        uploaded, and depth and colour are fused with their own cameras. An
@@ -105,16 +109,16 @@ inline void print_fuse_report(const vr::tsdf::FuseReport& report) {
 /// @param grid        The volume to fuse into.
 /// @param frames      The prepared frames.
 /// @param max_weight  The running-average cap (`TsdfIntegrator::integrate`).
+/// @param mode        `Classic` keeps free space ahead of a surface;
+///                    `Dynamic` clears it, so a surface that moves away
+///                    leaves no ghost.
 /// @param metrics     Optional stage rows; null measures nothing.
-/// @param mode        `Classic` (the default) keeps free space ahead of a
-///                    surface; `Dynamic` clears it, so a surface that moves
-///                    away leaves no ghost.
 /// @return OK, or `Fuser::fuse`'s error.
 inline vkc::Status fuse_set(
     vr::tsdf::Fuser& fuser, vr::volume::VoxelBlockGrid& grid,
     const std::vector<std::optional<vr::sensor::DeviceFrame>>& frames,
-    float max_weight, vkc::StageMetrics* metrics,
-    vr::tsdf::IntegrationMode mode = vr::tsdf::IntegrationMode::Classic) {
+    float max_weight, vr::tsdf::IntegrationMode mode,
+    vkc::StageMetrics* metrics) {
   std::vector<vr::tsdf::ColorFrame> colors;
   std::vector<vr::tsdf::FrameInput> inputs;
   colors.reserve(frames.size());  // the inputs point into it
@@ -141,21 +145,22 @@ inline vkc::Status fuse_set(
 /// preparation or fusion failure leaves its pixels and cameras available for
 /// texturing the final mesh. The prep allocates separate outputs while the
 /// previous frame holds its own; this does not roll back changes to the grid.
-/// @param fuser       The fuser; `IntegrationMode::Classic`.
+/// @param fuser       The fuser.
 /// @param grid        The volume to fuse into.
 /// @param prep        The frame preparation pass.
 /// @param frame       The captured frame to prepare and fuse.
 /// @param keyframe    The newest successfully fused frame; unchanged on error.
 /// @param max_weight  The running-average cap (`TsdfIntegrator::integrate`).
+/// @param mode        As @ref fuse_set's.
 /// @param metrics     Optional stage rows; null measures nothing.
 /// @return OK with @p keyframe replaced, or the preparation or fusion error.
 inline vkc::Status fuse_keyframe(
     vr::tsdf::Fuser& fuser, vr::volume::VoxelBlockGrid& grid,
     vr::sensor::GpuFramePrep& prep, const vr::sensor::RgbdFrame& frame,
     std::optional<vr::sensor::DeviceFrame>& keyframe, float max_weight,
-    vkc::StageMetrics* metrics) {
+    vr::tsdf::IntegrationMode mode, vkc::StageMetrics* metrics) {
   VKC_ASSIGN(vr::sensor::DeviceFrame prepared, prep.prepare(frame, metrics));
-  VKC_TRY(fuse_set(fuser, grid, {prepared}, max_weight, metrics));
+  VKC_TRY(fuse_set(fuser, grid, {prepared}, max_weight, mode, metrics));
   keyframe = std::move(prepared);
   return {};
 }

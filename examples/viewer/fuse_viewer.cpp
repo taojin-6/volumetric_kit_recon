@@ -638,7 +638,8 @@ int run(GLFWwindow* window, const Options& opt) {
         // texture. The error names the stage that stopped fusion.
         const vkc::Status fuse_status = vr_example::fuse_keyframe(
             fuser, volume, prep, *polled.value(), last_frame,
-            opt.fusion.max_weight, &fuse_stages);
+            opt.fusion.max_weight, rtsdf::IntegrationMode::Classic,
+            &fuse_stages);
         if (!fuse_status.ok()) {
           std::fprintf(stderr, "fuse_viewer: frame %zu: %s\n", i,
                        fuse_status.message().c_str());

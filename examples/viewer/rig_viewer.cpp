@@ -836,9 +836,10 @@ int run(GLFWwindow* window, const Options& opt) {
         const std::vector<std::optional<rsensor::DeviceFrame>>& frames =
             prepared.value().frames;
         const vkc::Status fused = vr_example::fuse_set(
-            fuser, volume, frames, max_weight.load(), &fuse_stages,
+            fuser, volume, frames, max_weight.load(),
             dynamic_on.load() ? rtsdf::IntegrationMode::Dynamic
-                              : rtsdf::IntegrationMode::Classic);
+                              : rtsdf::IntegrationMode::Classic,
+            &fuse_stages);
         if (!fused.ok()) {
           std::fprintf(stderr, "rig_viewer: fuse: %s\n",
                        fused.message().c_str());

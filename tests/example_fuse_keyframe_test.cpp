@@ -2,31 +2,53 @@
 // Copyright (c) 2026 Tao Jin
 
 // A failed prepare or fuse must leave the viewer's last successful keyframe
-// available for texturing. Exercise the actual example helper and GPU passes,
-// with no window, camera or dataset. Skips without a device.
+// available for texturing, and the frame is fused in the integration mode the
+// helper is given. Exercise the actual example helper and GPU passes, with no
+// window, camera or dataset. Skips without a device.
 
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include "buffer_readback.hpp"
 #include "fuse_frame.hpp"
 #include "gpu_test.hpp"
+#include "grid_readback.hpp"
 #include "test_check.hpp"
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
 
 namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
 namespace sensor = vr::sensor;
+constexpr vr::tsdf::IntegrationMode kClassic =
+    vr::tsdf::IntegrationMode::Classic;
+constexpr vr::tsdf::IntegrationMode kDynamic =
+    vr::tsdf::IntegrationMode::Dynamic;
 
 namespace {
 
 constexpr std::uint32_t kWidth = 16, kHeight = 12;
 constexpr std::size_t kPixels = kWidth * kHeight;
 constexpr std::uint32_t kColor = 0x00563412u;
+
+// A wall facing an identity camera: `depth` (mm) and `color` are its pixels.
+sensor::RgbdFrame wall(const std::vector<std::uint16_t>& depth,
+                       const std::vector<std::uint32_t>& color) {
+  sensor::RgbdFrame frame;
+  frame.depth = depth.data();
+  frame.depth_camera = {{kWidth, kHeight}, {16.0, 16.0, 7.5, 5.5}, {}};
+  frame.color_camera = frame.depth_camera;
+  frame.color_packed = color.data();
+  frame.metres_per_unit = 0.001f;
+  frame.min_depth = 0.1f;
+  frame.max_depth = 5.0f;
+  frame.timestamp_ns = 1;
+  return frame;
+}
 
 int check_retained(const vr_test::Gpu& gpu,
                    vr::texture::ProjectiveTexturer& texturer,
@@ -68,6 +90,49 @@ int check_retained(const vr_test::Gpu& gpu,
   return 0;
 }
 
+// fuse_keyframe fuses in the mode it is given: a wall at 1 m, then the same
+// camera seeing it at 2 m, so the first wall's band is free space well ahead
+// of the second's. Classic leaves weight there; Dynamic clears all of it.
+int check_mode(vr_test::GpuContext& gpu, vr::tsdf::IntegrationMode mode) {
+  auto volume = vr_example::create_fusion_grid(gpu.device, gpu.allocator, 0.05f,
+                                               0.15f, 256);
+  auto fuser = vr::tsdf::Fuser::create(gpu.device, gpu.allocator);
+  auto prep = sensor::GpuFramePrep::create(gpu.device, gpu.allocator);
+  CHECK(volume.ok() && fuser.ok() && prep.ok());
+  // The weight in blocks wholly nearer than 1.6 m: a block is 8 voxels of
+  // 5 cm, so its z coordinate is at most 3.
+  const auto near_weight = [&]() -> double {
+    auto blocks = vr_test::blocks_of(*volume);
+    auto weight = vr_test::read_attribute<float>(gpu.device, gpu.allocator,
+                                                 *volume, "weight");
+    if (!blocks.ok() || !weight.ok()) return -1.0;
+    double sum = 0.0;
+    for (const auto& [coord, ptr] : *blocks) {
+      if (std::get<2>(coord) > 3) continue;
+      for (std::int32_t v = 0; v < 512; ++v) {
+        sum += (*weight)[std::size_t(ptr + v)];
+      }
+    }
+    return sum;
+  };
+  std::vector<std::uint16_t> depth(kPixels, 1000);
+  const std::vector<std::uint32_t> color(kPixels, kColor);
+  sensor::RgbdFrame frame = wall(depth, color);
+  std::optional<sensor::DeviceFrame> keyframe;
+  CHECK(vr_example::fuse_keyframe(*fuser, *volume, *prep, frame, keyframe,
+                                  20.0f, mode, nullptr)
+            .ok());
+  CHECK(near_weight() > 0.0);
+  std::fill(depth.begin(), depth.end(), 2000);
+  frame.timestamp_ns = 2;
+  CHECK(vr_example::fuse_keyframe(*fuser, *volume, *prep, frame, keyframe,
+                                  20.0f, mode, nullptr)
+            .ok());
+  const double left = near_weight();
+  CHECK(mode == kDynamic ? left == 0.0 : left > 0.0);
+  return 0;
+}
+
 int gpu_main(vr_test::GpuContext& gpu) {
   auto volume = vr_example::create_fusion_grid(gpu.device, gpu.allocator, 0.05f,
                                                0.15f, 256);
@@ -79,34 +144,26 @@ int gpu_main(vr_test::GpuContext& gpu) {
 
   std::vector<std::uint16_t> raw_depth(kPixels, 1000);
   std::vector<std::uint32_t> raw_color(kPixels, kColor);
-  sensor::RgbdFrame frame;
-  frame.depth = raw_depth.data();
-  frame.depth_camera = {{kWidth, kHeight}, {16.0, 16.0, 7.5, 5.5}, {}};
-  frame.color_camera = frame.depth_camera;
-  frame.color_packed = raw_color.data();
-  frame.metres_per_unit = 0.001f;
-  frame.min_depth = 0.1f;
-  frame.max_depth = 5.0f;
-  frame.timestamp_ns = 1;
+  sensor::RgbdFrame frame = wall(raw_depth, raw_color);
   std::optional<sensor::DeviceFrame> keyframe;
 
   // A rejected first frame must not invent a keyframe.
   frame.color_to_world[0][0] = 2.0;
   CHECK(!vr_example::fuse_keyframe(*fuser, *volume, *prep, frame, keyframe,
-                                   20.0f, nullptr)
+                                   20.0f, kClassic, nullptr)
              .ok());
   CHECK(!keyframe);
   frame.color_to_world = vr::camera::Mat4d(1.0);
   CHECK(vr_example::fuse_keyframe(*fuser, *volume, *prep, frame, keyframe,
-                                  20.0f, nullptr)
+                                  20.0f, kClassic, nullptr)
             .ok());
   CHECK(check_retained(gpu, *texturer, keyframe) == 0);
 
   // A later bad pose fails preparation without discarding the good frame.
   frame.timestamp_ns = 2;
   frame.color_to_world[0][0] = 2.0;
-  const auto refused = vr_example::fuse_keyframe(*fuser, *volume, *prep, frame,
-                                                 keyframe, 20.0f, nullptr);
+  const auto refused = vr_example::fuse_keyframe(
+      *fuser, *volume, *prep, frame, keyframe, 20.0f, kClassic, nullptr);
   CHECK(!refused.ok());
   CHECK(refused.message().find("GpuFramePrep") != std::string::npos);
   CHECK(check_retained(gpu, *texturer, keyframe) == 0);
@@ -127,8 +184,9 @@ int gpu_main(vr_test::GpuContext& gpu) {
   // A second fuser: the first remembers the grid it fuses.
   auto depth_only_fuser = vr::tsdf::Fuser::create(gpu.device, gpu.allocator);
   CHECK(depth_only_fuser.ok());
-  const auto failed = vr_example::fuse_keyframe(
-      *depth_only_fuser, *depth_only, *prep, frame, keyframe, 20.0f, nullptr);
+  const auto failed =
+      vr_example::fuse_keyframe(*depth_only_fuser, *depth_only, *prep, frame,
+                                keyframe, 20.0f, kClassic, nullptr);
   CHECK(failed.domain() == vkc::Status::Code::InvalidArgument);
   CHECK(failed.message().find("VoxelBlockGrid::attribute") !=
         std::string::npos);
@@ -136,7 +194,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
 
   // A subsequent successful fuse commits the new frame and its atlas.
   CHECK(vr_example::fuse_keyframe(*fuser, *volume, *prep, frame, keyframe,
-                                  20.0f, nullptr)
+                                  20.0f, kClassic, nullptr)
             .ok());
   CHECK(keyframe && keyframe->timestamp_ns == 2);
   CHECK(keyframe->color_camera.cam_to_world[3][0] == 0.25f);
@@ -147,6 +205,9 @@ int gpu_main(vr_test::GpuContext& gpu) {
   CHECK(depth.ok() && *depth == std::vector<float>(kPixels, 2.0f));
   CHECK(color.ok() &&
         *color == std::vector<std::uint32_t>(kPixels, 0xFF1122CCu));
+
+  CHECK(check_mode(gpu, kClassic) == 0);
+  CHECK(check_mode(gpu, kDynamic) == 0);
   std::puts("example_fuse_keyframe: OK");
   return 0;
 }

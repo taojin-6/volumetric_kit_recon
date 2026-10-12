@@ -97,7 +97,8 @@ vkc::Status run(const Options& opt) {
     }
     VKC_ASSIGN(const vr::sensor::DeviceFrame prepared, prep.prepare(*frame));
     VKC_TRY(vr_example::fuse_set(fuser, volume, {prepared},
-                                 opt.fusion.max_weight, nullptr));
+                                 opt.fusion.max_weight,
+                                 vr::tsdf::IntegrationMode::Classic, nullptr));
     ++fused;
     if (opt.codec.encode_every > 0 &&
         fused % std::size_t(opt.codec.encode_every) == 0) {

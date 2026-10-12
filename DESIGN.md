@@ -1555,7 +1555,9 @@ now private implementation dependencies of the installed I/O library.
 `DeviceFrame` over with its encoding declaration and prints what a set did
 to the grid (a grow, a declined one, blocks left out), into the one grid layout
 `grid_layout.hpp` defines, which its `create_fusion_grid` builds and
-`codec_replica`'s player shares. The four dataset examples poll their frames
+`codec_replica`'s player shares. `fuse_set`'s caller names the integration
+mode: `rig_viewer` the one its `fusion.dynamic` and View panel select, every
+other example `Classic`. The four dataset examples poll their frames
 through `sensor::IRgbdSensor&` — the fuse loop never learns what is behind
 it — and prepare each on its own. The two live ones read Orbbec cameras raw
 as a `SensorArray` of `OrbbecSensor`s, `fuse_orbbec` one camera or a rig and
@@ -1777,8 +1779,9 @@ benchmark kit that sized
 them sits on the home box in `~/recon-bench` (a throwaway allocator patch
 behind environment variables); re-measure there after each.
 
-**Codec outputs from a scenario.** No scenario sets `CodecOutputs` yet:
-`output.csv` and `output.frame_directory` come with core 0.5.0's schema.
+**Scenario keys from core 0.5.0.** No scenario sets `CodecOutputs` yet:
+`output.csv` and `output.frame_directory` come with core 0.5.0's schema, and
+with them `fusion.dynamic` for every fusing example, not `rig_viewer` alone.
 
 **Measure the phases before choosing the optimisation.** Three independent
 guesses at this pipeline's bottleneck have been wrong, each corrected by an

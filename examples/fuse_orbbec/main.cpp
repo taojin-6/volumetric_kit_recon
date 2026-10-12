@@ -136,8 +136,9 @@ vkc::Status run(const Options& opt) {
         // One row for the batch: the cameras prepare together.
         VKC_ASSIGN(const sensor::DeviceFrameSet prepared,
                    array->process(set, &stage_totals));
-        VKC_TRY(vr_example::fuse_set(*fuser, *volume, prepared.frames,
-                                     opt.fusion.max_weight, &stage_totals));
+        VKC_TRY(vr_example::fuse_set(
+            *fuser, *volume, prepared.frames, opt.fusion.max_weight,
+            tsdf::IntegrationMode::Classic, &stage_totals));
       }
       if (sets.frames() / 100 > reported / 100) {
         reported = sets.frames();
