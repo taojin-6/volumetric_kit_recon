@@ -11,9 +11,6 @@ shared rule in AGENTS.md.
 
 ## Decision index
 
-- [**2026-10-11**](#2026-10-11--examples-load-the-cores-scenario-format-and-keep-only-runtime-adapters) — Examples load the core scenario format; JSON, defaults and static validation have one owner.
-- [**2026-10-11**](#2026-10-11--picture-readback-publishes-buffer-ownership-for-subsequent-stages) — Picture readback updates ownership before subsequent reads or preparation.
-
 The index and dated entries are in the same chronological order. Read the
 entries relevant to your task; later amendments supersede earlier rules.
 
@@ -474,6 +471,11 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-11**](#2026-10-11--decoded-pictures-name-the-queue-families-that-read-them-videotoolboxs-images-are-concurrent-across-two-or-more) —
   Decoded pictures name the queue families that read them: VideoToolbox's
   images are CONCURRENT across two or more.
+- [**2026-10-11**](#2026-10-11--examples-load-the-cores-scenario-format-and-keep-only-runtime-adapters) —
+  Examples load the core scenario format; JSON, defaults and static validation
+  have one owner.
+- [**2026-10-11**](#2026-10-11--picture-readback-publishes-buffer-ownership-for-subsequent-stages) —
+  Picture readback updates ownership before subsequent reads or preparation.
 - [**2026-10-12**](#2026-10-12--the-viewers-window-glue-comes-from-gfxs-gfx_glfw-recon-keeps-no-copy-amends-the-2026-08-02-bootstrap-and-2026-10-04-vulkan-foundation-entries) —
   The viewers' window glue comes from gfx's `gfx_glfw`; recon keeps no copy.
 
@@ -11775,6 +11777,53 @@ which family owns an EXCLUSIVE image: made EXCLUSIVE, the same copy passes
 with no message. So the guard is the sharing mode recorded on the image,
 which the tests check. No camera was opened.
 
+### 2026-10-11 — Examples load the core's scenario format and keep only runtime adapters
+
+This replaces the 2026-10-08 command-line parser decision. Every executable
+accepts `--config PATH` and `--help`, and directly consumes
+`core::config::Config` for its application profile. The optional CPU-only
+`core_config` target owns the versioned JSON vocabulary, source/operation
+selection, typed defaults, numeric policy, field presence, paths and all static
+validation. Recon's examples register no flags and parse no scenario JSON.
+
+The adapters in `examples/common` only map those typed values to runtime sensor,
+codec and mesh APIs and inject borrowed device resources. Camera discovery,
+asset I/O, GPU and stream capabilities, calibration data and library API
+preconditions remain with their existing owners. The SDK sync format and
+recon calibration format are resources referenced by the scenario; neither is
+replaced by this application-input change.
+
+Defaults retain each executable's behavior, including source-specific depth
+limits and dataset frame caps. The stream operation preserves #220's refusal
+of explicit fusion/output settings. Core resolves relative paths against the
+scenario file's directory before any resource is opened. Core's tests own
+input-validation cases; recon tests pin the adapter boundary and run every
+executable's help, legacy-input refusal and invalid-config startup without
+opening hardware. `config/README.md` is the CLI migration guide.
+
+### 2026-10-11 — Picture readback publishes buffer ownership for subsequent stages
+
+This amends the 2026-09-28 decoded-frame ownership contract:
+`YuvImage::queue_family` names the current owner, initially the writer.
+`PictureReadback::read` acquires a buffer from that family. Both overloads
+now take mutable pictures/frames and update the field only after a successful
+submit and wait: the readback's family for EXCLUSIVE buffers, and
+`kQueueFamilyIgnored` for CONCURRENT buffers. Later stages use that updated
+descriptor; copies made before the read still carry the old metadata.
+`fuse_orbbec` passes the updated set to preparation.
+
+The regression releases an EXCLUSIVE picture from one queue family to
+another, then reads, prepares and reads it again through both overloads.
+Before the fix, synchronization validation reports an acquire without a
+matching release (`VUID-vkQueueSubmit-pSubmits-02207`). A rejected picture
+keeps its original ownership metadata. The two-family case is reported as
+skipped on devices that provide only one family.
+
+Timer creation also belongs inside `PictureReadback::create`'s allocation
+handler. A failure injected at a captured timer allocation size and call
+site must return `OutOfMemory`, and creation must succeed on retry. Before
+the fix, that regression catches an escaping `std::bad_alloc`.
+
 ### 2026-10-12 — The viewers' window glue comes from gfx's `gfx_glfw`; recon keeps no copy (amends the 2026-08-02 bootstrap and 2026-10-04 Vulkan-foundation entries).
 
 gfx #133 made the GLFW glue every windowed app repeated a gfx library,
@@ -11912,50 +11961,3 @@ that shipped in none. The retry loop had read two rounds without progress as a
 capacity limit, which a remove never hits, and every round re-ran every coord,
 so blocks already removed took their locks again. The residue was plain
 contention, so the lock order was dropped.
-
-### 2026-10-11 — Examples load the core's scenario format and keep only runtime adapters
-
-This replaces the 2026-10-08 command-line parser decision. Every executable
-accepts `--config PATH` and `--help`, and directly consumes
-`core::config::Config` for its application profile. The optional CPU-only
-`core_config` target owns the versioned JSON vocabulary, source/operation
-selection, typed defaults, numeric policy, field presence, paths and all static
-validation. Recon's examples register no flags and parse no scenario JSON.
-
-The adapters in `examples/common` only map those typed values to runtime sensor,
-codec and mesh APIs and inject borrowed device resources. Camera discovery,
-asset I/O, GPU and stream capabilities, calibration data and library API
-preconditions remain with their existing owners. The SDK sync format and
-recon calibration format are resources referenced by the scenario; neither is
-replaced by this application-input change.
-
-Defaults retain each executable's behavior, including source-specific depth
-limits and dataset frame caps. The stream operation preserves #220's refusal
-of explicit fusion/output settings. Core resolves relative paths against the
-scenario file's directory before any resource is opened. Core's tests own
-input-validation cases; recon tests pin the adapter boundary and run every
-executable's help, legacy-input refusal and invalid-config startup without
-opening hardware. `config/README.md` is the CLI migration guide.
-
-### 2026-10-11 — Picture readback publishes buffer ownership for subsequent stages
-
-This amends the 2026-09-28 decoded-frame ownership contract:
-`YuvImage::queue_family` names the current owner, initially the writer.
-`PictureReadback::read` acquires a buffer from that family. Both overloads
-now take mutable pictures/frames and update the field only after a successful
-submit and wait: the readback's family for EXCLUSIVE buffers, and
-`kQueueFamilyIgnored` for CONCURRENT buffers. Later stages use that updated
-descriptor; copies made before the read still carry the old metadata.
-`fuse_orbbec` passes the updated set to preparation.
-
-The regression releases an EXCLUSIVE picture from one queue family to
-another, then reads, prepares and reads it again through both overloads.
-Before the fix, synchronization validation reports an acquire without a
-matching release (`VUID-vkQueueSubmit-pSubmits-02207`). A rejected picture
-keeps its original ownership metadata. The two-family case is reported as
-skipped on devices that provide only one family.
-
-Timer creation also belongs inside `PictureReadback::create`'s allocation
-handler. A failure injected at a captured timer allocation size and call
-site must return `OutOfMemory`, and creation must succeed on retry. Before
-the fix, that regression catches an escaping `std::bad_alloc`.
