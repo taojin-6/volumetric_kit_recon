@@ -226,8 +226,9 @@ add_test(NAME recon_sensor_picture_readback_oom
          COMMAND recon_sensor_picture_readback_oom_test)
 
 # The viewer's retained keyframe survives preparation and integration errors,
-# and still supplies depth, coverage and atlas pixels for projective texturing.
-# Headless: uses the example's fusion helper, without gfx or a dataset.
+# and still supplies depth, coverage and atlas pixels for projective texturing;
+# the helper fuses in the integration mode it is given. Headless: uses the
+# example's fusion helper, without gfx or a dataset.
 add_executable(recon_example_fuse_keyframe_test example_fuse_keyframe_test.cpp)
 target_include_directories(recon_example_fuse_keyframe_test
                            PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
@@ -290,6 +291,24 @@ target_link_libraries(recon_example_stage_table_test
                       PRIVATE volumetric_kit::recon_core)
 vr_target_warnings(recon_example_stage_table_test)
 add_test(NAME recon_example_stage_table COMMAND recon_example_stage_table_test)
+
+# The codec examples' stream (examples/common/codec_stream.hpp): on the host, a
+# row's host and device milliseconds, its CSV line and the frame file names; on
+# a device, outputs it cannot make refused on create, none written without
+# outputs, a row per coded frame matching the frame, the new frame directory's
+# files (a frame the decoder refuses included), a frame index coded twice
+# refused, and the CSV replaced on create and written as frames are coded. The
+# device part skips with no device.
+add_executable(recon_example_codec_stream_test example_codec_stream_test.cpp)
+target_include_directories(recon_example_codec_stream_test
+                           PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
+target_link_libraries(
+  recon_example_codec_stream_test
+  PRIVATE volumetric_kit::core_test_policy volumetric_kit::recon_codec
+          volumetric_kit::recon_eval Vulkan::Vulkan)
+vr_target_warnings(recon_example_codec_stream_test)
+add_test(NAME recon_example_codec_stream
+         COMMAND recon_example_codec_stream_test)
 
 # fuse_replica's --dirty-every survey (examples/common/remesh_report.hpp): the
 # changed blocks after a tick, the blocks they put back to marching cubes, and

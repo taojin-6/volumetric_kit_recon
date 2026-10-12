@@ -178,7 +178,7 @@ vkc::Result<Reconstruction> fuse(const Options& opt,
     // Grow the map ahead of need, allocate the band and integrate depth +
     // colour, as fuse_replica does; an incomplete band is an error.
     VKC_TRY(vr_example::fuse_set(fuser, volume, {frame}, opt.fusion.max_weight,
-                                 nullptr));
+                                 rtsdf::IntegrationMode::Classic, nullptr));
     if (opt.render.texture && fused == keyframe_index && frame.has_color()) {
       keyframe = std::move(frame);
     }
