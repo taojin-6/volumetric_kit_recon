@@ -135,6 +135,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `codec`: **one internal frame API for every frame type.** `detail::Frame`
+  carries its `FrameType`, and `write_frame`, `read_frame`, `parse_frame`,
+  `decode_frame` and `assemble_frame(type, …)` replace the `*_intra_frame`
+  functions; `write_frame` refuses a type it does not code as `Unsupported`,
+  as the readers do. Frames are unchanged, byte for byte. Tests:
+  `recon_codec_bitstream` (the type the container writes, and its refusal),
+  `recon_codec_device_frame`.
 - `examples`: **`fuse_orbbec`'s per-camera `failed` no longer includes
   `lost`**, which is printed apart (`OrbbecSensor::orbbec_stats()`), and a
   run that fails (a camera silent for 10 s) still prints its counters.

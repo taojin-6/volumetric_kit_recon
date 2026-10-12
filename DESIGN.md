@@ -1362,7 +1362,7 @@ cannot code; smaller segments give the device parallelism at a few percent
 of size.
 `DecoderConfig::entropy` picks where the decoding runs. On the device
 (`detail::DeviceFrameReader`), the host parses the frame
-(`parse_intra_frame`) and uploads only its tables and payload. One batch
+(`parse_frame`) and uploads only its tables and payload. One batch
 expands each table into a 4096-slot lookup, decodes one segment per
 workgroup into the inverse transform's layout, and reads back the
 coordinates and each segment's fault, which `check_segment` judges exactly
@@ -1428,7 +1428,10 @@ lists blocks it has just allocated by coordinate alone. "Observed" is
 writes weight 1.0 on observed voxels and a fresh block's zeros elsewhere.
 The v3 frame (`bitstream.hpp`, the 2026-10-02 entry) carries the K kept
 weights in its parameter header, `44 + 4K` bytes (300 at K = 64); older
-versions are refused. `read_frame_info` reads them without entropy decoding. Its payload remains segments of R sorted
+versions are refused. `read_frame_info` reads them without entropy decoding.
+Header byte 6 is the frame type, of which intra (0) is the only one: the
+internal `Frame` carries it, and `write_frame` and the readers refuse a type
+they do not code as `Unsupported`. The payload is segments of R sorted
 blocks (default 64). Each segment is one independent rANS stream
 (`rans.hpp`: a 32-bit state, 16-bit words and 12-bit probabilities, integer
 only, the reference the GPU kernels must match byte for byte). Every integer
@@ -1444,7 +1447,7 @@ requires strictly increasing coordinates, so a decoded list is duplicate-free:
 the delta code cannot step backwards within a segment, and the reader checks
 each segment's raw first coordinate against the one before. A flag bit other
 than `kSectionRequired` is reserved, so a known section that sets one is
-refused. `read_intra_frame` never reads outside its buffer, and it takes the
+refused. `read_frame` never reads outside its buffer, and it takes the
 caller's `max_blocks`, because a frame's size cannot bound its block count
 (probability-one blocks cost no bits). It checks that limit only once the
 count agrees with the segment table, so a sound frame past it is
