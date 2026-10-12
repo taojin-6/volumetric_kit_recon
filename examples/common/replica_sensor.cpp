@@ -19,6 +19,7 @@
 #include <utility>
 
 #include "volumetric_kit/core/base/check.hpp"
+#include "volumetric_kit/core/base/file_io.hpp"
 #include "volumetric_kit/recon/io/image_io.hpp"
 
 namespace vkc = volumetric_kit::core;
@@ -28,17 +29,6 @@ namespace {
 
 namespace camera = vr::camera;
 namespace sensor = vr::sensor;
-
-// Read a whole text file into a string, or nullopt if it cannot be opened.
-std::optional<std::string> read_file(const std::string& path) {
-  std::ifstream in(path, std::ios::binary);
-  if (!in) {
-    return std::nullopt;
-  }
-  std::ostringstream ss;
-  ss << in.rdbuf();
-  return ss.str();
-}
 
 // True if a file is at the path. A stat, not an open: the probe at open() runs
 // once per frame that will play, and constructing an ifstream costs ~10x a
@@ -116,16 +106,16 @@ vkc::Result<ReplicaSensor> ReplicaSensor::open(
   replica.results_dir_ = scene_dir + "/results";
 
   // --- Intrinsics (cam_params.json) ---
-  const std::optional<std::string> cam_json = read_file(cam_params_path);
-  if (!cam_json) {
-    return vkc::Status::invalid_argument(
-        "ReplicaSensor::open: cannot read cam params: " + cam_params_path);
+  auto cam_read = vkc::read_file(cam_params_path);
+  if (!cam_read.ok()) {
+    return cam_read.status().with_context("ReplicaSensor::open: cam params");
   }
+  const std::string cam_json = std::move(cam_read).value();
   const std::array<const char*, 7> keys = {"fx", "fy", "cx",   "cy",
                                            "w",  "h",  "scale"};
   std::array<float, 7> values{};
   for (std::size_t k = 0; k < keys.size(); ++k) {
-    const std::optional<float> v = json_number(*cam_json, keys[k]);
+    const std::optional<float> v = json_number(cam_json, keys[k]);
     if (!v) {
       return vkc::Status::invalid_argument(
           std::string("ReplicaSensor::open: cam params missing key '") +

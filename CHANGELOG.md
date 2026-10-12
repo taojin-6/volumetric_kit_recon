@@ -20,12 +20,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `fuse_orbbec` with one camera takes the file's only posed camera.
   Migrating: read `*sensor.color_to_world`. Tests: `recon_sensor_array`,
   `recon_example_fuse_orbbec_sets`.
-- `camera`, `sensor/orbbec`, `io`: whole-file reads and the exception mapping
-  are the core's (`read_file`, `exception_status`), so a missing calibration
-  or sync file is `NotFound`, not `IoError`, and `io`'s private
-  `errors.hpp` is gone. recon needs core 0.2.0 (`VR_CORE_MIN_VERSION`).
-  Tests: `recon_camera_array_calibration`,
-  `recon_sensor_orbbec_open_sensors`, `recon_io_image`, `recon_io_ply`.
+- `camera`, `sensor/orbbec`, `examples`: whole-file reads are the core's
+  `read_file`, so a missing calibration or sync file is `NotFound`, not
+  `IoError`, and a missing Replica `cam_params.json` `NotFound`, not
+  `InvalidArgument`. `io`: its exception mapping and path check are the
+  core's `exception_status` and `check_path`, and its private `errors.hpp` is
+  gone. recon needs core 0.2.0 (`VR_CORE_MIN_VERSION`). Tests:
+  `recon_camera_array_calibration`, `recon_sensor_orbbec_open_sensors`,
+  `recon_example_replica_sensor`, `recon_io_image`, `recon_io_ply`.
 - `examples`: `codec.sweep`'s `enc gpu` / `dec gpu` count every device span,
   as the per-frame codec rows do.
 - `examples`: `fuse_keyframe` takes the integration mode, as `fuse_set` now
@@ -47,9 +49,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and depth `CameraCalibration`s (model and `factory` / `calibrated`
   source) and `depth_to_color`, and an optional world sensor.
   `format_array_calibration` and `write_array_calibration` (through the
-  core's `write_file` and its `WriteMode`) write it, every number in the
-  shortest form that reads back exactly; version 1 is still read for its
-  poses, and a later version is `Unsupported`. Test:
+  core's `write_file` and its `WriteMode`) write it, every number in a form
+  that reads back to the same double; version 1 (no `format` or `version`)
+  is still read for its poses, and a later version is `Unsupported`. Test:
   `recon_camera_array_calibration`.
 - `camera`: **`rodrigues_from_rotation`** and **`rodrigues_from_matrix`**
   (`geometry.hpp`), the inverses of `rotation_from_rodrigues` and

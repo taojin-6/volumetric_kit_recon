@@ -1131,7 +1131,6 @@ decision): unprojection and rescaling come with their first caller.
   (model and `factory` / `calibrated` source) and `depth_to_color`, and an
   optional world sensor. `format_` / `write_array_calibration` write it
   through the core's `write_file`; version 1 is read for its poses.
-  `SensorArray::open` refuses a sensor the file does not pose.
 
 ### sensor
 

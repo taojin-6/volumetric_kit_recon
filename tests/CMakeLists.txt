@@ -283,6 +283,20 @@ if(TARGET volumetric_kit::recon_sensor_orbbec)
            COMMAND recon_example_fuse_orbbec_sets_test)
 endif()
 
+# The Replica example's sensor (examples/common/replica_sensor.hpp), where the
+# examples are built: its intrinsics read through the core's read_file, a
+# missing file NotFound. Host only. examples/ defines vr_example_common after
+# this directory; the name resolves when the build is generated.
+if(VR_BUILD_EXAMPLES)
+  add_executable(recon_example_replica_sensor_test
+                 example_replica_sensor_test.cpp)
+  target_link_libraries(recon_example_replica_sensor_test
+                        PRIVATE vr_example_common)
+  vr_target_warnings(recon_example_replica_sensor_test)
+  add_test(NAME recon_example_replica_sensor
+           COMMAND recon_example_replica_sensor_test)
+endif()
+
 # The examples' one stage table (examples/common/stage_table.hpp). Host only.
 add_executable(recon_example_stage_table_test example_stage_table_test.cpp)
 target_include_directories(recon_example_stage_table_test

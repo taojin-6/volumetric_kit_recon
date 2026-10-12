@@ -11870,10 +11870,10 @@ recon's file, written by recon, so the family has one schema and one writer.
 - **A written distortion names its model**, which the reader requires: the
   eight numbers mean nothing without it.
 - **File I/O is the core's.** The writer takes the core's `WriteMode` (calib
-  never overwrites a session file); both whole-file reads, this file's and
-  the Orbbec sync file's, are `core::read_file`, so a missing file is
-  `NotFound`; and `io`'s exception mapping is `core::exception_status`.
-  recon needs core 0.2.0.
+  never overwrites a session file); the whole-file reads of this file, the
+  Orbbec sync file and the Replica example's `cam_params.json` are
+  `core::read_file`, so a missing file is `NotFound`; and `io`'s exception
+  mapping is `core::exception_status`. recon needs core 0.2.0.
 - **`rodrigues_from_rotation` is accurate to round-off at every angle**:
   `atan2` for the angle, first order only below 1e-8 rad, and past pi/2 the
   axis from the symmetric part. `cv::Rodrigues` returns exactly zero below
