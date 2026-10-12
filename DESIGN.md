@@ -1597,7 +1597,7 @@ finished file from its footer is to come (`TODO(stream)`).
 
 **Recovery.** A whole header whose body runs past the end starts the torn
 tail. A header that fails its CRC or holds what no chunk can starts a
-search, a MiB at a time in 8-byte steps, for the next `RECD`, `INDX` or
+search, in 8-byte steps, for the next `RECD`, `INDX` or
 `TAIL` with a valid header; the bytes skipped are a damaged span, or with no
 chunk after them the torn tail. `Recovery` reports them, and whether a
 footer whose CRCs and sizes agree ends the file (`finished`) or a `TAIL`
