@@ -77,6 +77,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   checked before the cameras open and made with the first set. Examples and
   tests need core 0.5.0. Tests: `recon_example_set_dump`,
   `recon_example_config`.
+- `stream`: **`recon_stream`, the `.vrst` session container**
+  (`stream/session.hpp`, `stream_writer.hpp`, `stream_reader.hpp`), on the
+  family core's base tier alone. `StreamWriter` creates a new file, never
+  over an existing one, and appends records, each payload stored byte for
+  byte with its track, key flag, pts, sequence number and set, each in one
+  write, so a killed process loses nothing it appended; `finish` adds the
+  footer index. `StreamReader` reads a finished file or a killed writer's,
+  past a torn tail and damaged spans, in file order or from a track's key
+  record at a pts, from several threads at once. Tracks of any kind are
+  stored; Geometry (codec frames) is the one defined. Tests:
+  `recon_stream_container`, `recon_stream_recovery`.
 - `examples`: **per-frame codec rows.** `CodecStream` keeps a row per coded
   frame (its source index, bytes, blocks, and encode and decode host and
   device ms) and takes `CodecOutputs`: a CSV of the rows, written as frames

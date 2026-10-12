@@ -61,7 +61,7 @@ conventions and Vulkan setup.
 - CMake: `find_package(volumetric_kit_recon)`; component targets
   `volumetric_kit::recon_camera`, `…_core`, `…_volume`, `…_tsdf`, `…_mesh`,
   `…_texture`,
-  `…_sensor`, `…_codec`, `…_eval`, `…_io`, `…_interop` (+ later `…_track`, `…_stream`),
+  `…_sensor`, `…_codec`, `…_eval`, `…_io`, `…_stream`, `…_interop` (+ later `…_track`),
   plus `…_sensor_utils` (GPU pre-processing), `…_sensor_array` (several
   sensors read as one), `…_sensor_apple` (Apple's pixel buffers as images),
   the opt-in `…_sensor_orbbec`
@@ -77,8 +77,9 @@ left. No upward includes.
 
 `core` → `volume` → `tsdf` → `mesh` → `texture` → `interop`, with `sensor`
 branching off **`core`**, `codec` off **`volume`** and `eval`/`io` off **`mesh`**
-(later: `track`, `stream`). `camera` sits under `sensor` and beside `core`: it
-links the family core's base tier and GLM, and no other recon tier.
+(later: `track`). `camera` sits under `sensor` and beside `core`: it
+links the family core's base tier and GLM, and no other recon tier. `stream`
+links that base tier alone.
 
 - **`camera`** — the camera vocabulary the drivers and the sensor tier
   share: the double-precision `CameraModel` (image size, intrinsics, OpenCV's
@@ -143,6 +144,11 @@ links the family core's base tier and GLM, and no other recon tier.
   the F-score (`eval/mesh_distance.hpp`). Host-side, deterministic, and linked
   by nothing in the pipeline. It is infrastructure, not one of the excluded
   eval harnesses (2026-09-27).
+- **`stream`** — the `.vrst` session container: a session header (tracks,
+  each naming its clock, and the calibration document as bytes) and the
+  records appended after it, each payload stored byte for byte, readable
+  from a killed writer (`stream/session.hpp`, 2026-10-12). Host-side, with
+  no Vulkan and no other recon tier.
 - **`interop`** — the handoff to `volumetric_kit_gfx` (below).
 
 ## Backend strategy: one Vulkan path
@@ -1557,6 +1563,54 @@ GPU-resident reconstruction. The default build has no Assimp dependency;
 `VR_WITH_ASSIMP=ON` finds an installed package and exports a separate target.
 The image and PLY backends use the existing pinned stb and tinyply sources,
 now private implementation dependencies of the installed I/O library.
+
+### stream
+
+`recon_stream` writes and reads `.vrst` files, version 0: a `VRST` session
+header, the records appended after it in `RECD` chunks, and on `finish` a
+footer index (`INDX`, `TAIL`). The byte layout, the CRC and the rules a
+record follows are written down once, in `stream/session.hpp`. Payloads are
+stored and returned byte for byte. `TrackKind::Geometry`, a codec frame per
+record with key meaning intra, is the only kind defined; the writer takes
+any nonzero kind and the reader passes an unknown one through.
+
+**Writing** (`StreamWriter`, one thread). `create` makes the file with
+`O_CREAT | O_EXCL`, so nothing at the path is touched, a symbolic link
+included, then writes the session header and flushes the file and its
+directory. Each `append` checks the record rules, then is one `writev` with
+no buffering, so a killed process loses nothing it appended. `sync` flushes
+to storage (`F_FULLFSYNC` on Apple); a power loss can lose what came after
+the last one. A failed write or flush sticks: every later call returns it,
+and the file reads as a killed writer's. `finish` writes the footer, flushes
+and closes.
+
+**Reading** (`StreamReader`). `open` checks the session header, then scans
+the file, one chunk header per chunk and never a payload: each track's
+counts (`stats`) and key records (`key`, and `key_at` for the last key at or
+before a pts). `next` returns record headers in file order from a
+`Position` the caller holds, skipping other chunks, and `read` checks the
+header again and the payload's CRC. Every method is `const` over `pread`, so
+threads share one reader. A payload above `ReaderOptions::max_payload_bytes`
+is `OutOfMemory` before any allocation. Every open scans for now; opening a
+finished file from its footer is to come (`TODO(stream)`).
+
+**Recovery.** A whole header whose body runs past the end starts the torn
+tail. A header that fails its CRC or holds what no chunk can starts a
+search, a MiB at a time in 8-byte steps, for the next `RECD`, `INDX` or
+`TAIL` with a valid header; the bytes skipped are a damaged span, or with no
+chunk after them the torn tail. `Recovery` reports them, and whether a
+footer whose CRCs and sizes agree ends the file (`finished`) or a `TAIL`
+ends it without one (`footer_damaged`). `next` passes damage the same way,
+returning `InvalidArgument` once; a geometry consumer resumes at the next
+key record. A session header that is cut, out of range or fails a CRC is
+`InvalidArgument`, and one of another version or with a flag set
+`Unsupported`.
+
+Measured on an Apple M5 Max (Release, APFS, warm page cache): CRC-32 at
+2.5 GB/s, 26 times the roughly 95 MB/s of a four-camera recording; appends of
+737,280-byte (depth-sized) payloads at 1.95 GB/s; reads, CRC checked, at
+2.1 GB/s; and opening 864,000 records of 1 KiB (an hour at 240 a second,
+934 MB) in 0.35 s, all of it the scan.
 
 ## Examples
 

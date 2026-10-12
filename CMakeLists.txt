@@ -114,9 +114,8 @@ endif()
 # the tiers below and never become part of the installed link interface. The
 # oldest core recon's libraries build with is checked in the core that arrives
 # (third_party/, which also checks the examples' and tests' later floor) and
-# again by the installed package config: 0.2.0, whose base tier reads and writes
-# whole files (file_io.hpp) and turns an exception into a Status
-# (exception_status.hpp).
+# again by the installed package config: 0.2.0 for whole-file I/O, check_path,
+# exception_status and UniqueFd in the base tier.
 set(VR_CORE_MIN_VERSION 0.2.0)
 add_subdirectory(third_party)
 
