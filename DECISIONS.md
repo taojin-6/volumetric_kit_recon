@@ -13,6 +13,7 @@ shared rule in AGENTS.md.
 
 - [**2026-10-11**](#2026-10-11--examples-load-the-cores-scenario-format-and-keep-only-runtime-adapters) — Examples load the core scenario format; JSON, defaults and static validation have one owner.
 - [**2026-10-11**](#2026-10-11--picture-readback-publishes-buffer-ownership-for-subsequent-stages) — Picture readback updates ownership before subsequent reads or preparation.
+- [**2026-10-12**](#2026-10-12--the-viewers-window-glue-comes-from-gfxs-gfx_glfw) — The viewers' GLFW surface, shared device and ImGui GLFW backend come from gfx's `gfx_glfw`; recon keeps no copy.
 
 The index and dated entries are in the same chronological order. Read the
 entries relevant to your task; later amendments supersede earlier rules.
@@ -11943,3 +11944,21 @@ Timer creation also belongs inside `PictureReadback::create`'s allocation
 handler. A failure injected at a captured timer allocation size and call
 site must return `OutOfMemory`, and creation must succeed on retry. Before
 the fix, that regression catches an escaping `std::bad_alloc`.
+
+### 2026-10-12 — The viewers' window glue comes from gfx's `gfx_glfw`
+
+This amends the 2026-08-02 bootstrap entry ("It lives beside the example it
+serves") and the 2026-10-04 entry's "The viewer." gfx #133 made the GLFW glue
+that every windowed app repeated a gfx library, `gfx_glfw`, with one copy for
+the family. The viewers pin gfx at #135 and take from it the instance
+extensions, the surface, the framebuffer size, the device shared
+with recon (`make_shared_device`, from `vr::device_requirements()`) and ImGui's
+GLFW backend (`ImGuiGlfw`). `examples/viewer/shared_device.hpp`,
+`viewer_common.hpp`'s `window_extent` and `ImGuiGlfwShutdown`, and the viewers'
+own build of `imgui_impl_glfw.cpp` are gone.
+
+A frame now begins with the framebuffer's reported size rather than one
+clamped to 1 x 1, so a window that reports 0 x 0 skips the tick, as gfx's loop
+expects. `rig_viewer` orbits and pans by cursor deltas in window coordinates,
+so it does not use `cursor_in_framebuffer`, which would double their speed on
+a Retina display.

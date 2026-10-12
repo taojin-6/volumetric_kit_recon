@@ -4,25 +4,20 @@
 #pragma once
 
 /// @file examples/viewer/viewer_common.hpp
-/// @brief What `fuse_viewer` and `rig_viewer` share beyond the device
-///        bootstrap and recon's `mesh::MeshExchange`: their window's flags,
-///        the scope guards their teardown order rests on, and the render
-///        camera the fuse thread meshes.
+/// @brief What `fuse_viewer` and `rig_viewer` share beyond gfx's `gfx_glfw`
+///        window glue and recon's `mesh::MeshExchange`: the scope guards
+///        their teardown order rests on, and the render camera the fuse
+///        thread meshes.
 
-#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <mutex>
 #include <thread>
 
-#define GLFW_INCLUDE_VULKAN
-#include <GLFW/glfw3.h>
-#include <imgui_impl_glfw.h>
 #include <glm/glm.hpp>
 
 #include "volumetric_kit/core/base/result.hpp"
-#include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/gfx/app/windowed_app.hpp"
 #include "volumetric_kit/recon/mesh/device_mesh.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
@@ -37,14 +32,6 @@ namespace vkc = volumetric_kit::core;
 namespace rmesh = volumetric_kit::recon::mesh;
 namespace vol = volumetric_kit::recon::volume;
 
-/// @return The window's framebuffer size, at least 1 x 1.
-inline VkExtent2D window_extent(GLFWwindow* window) {
-  int width = 0, height = 0;
-  glfwGetFramebufferSize(window, &width, &height);
-  return {static_cast<std::uint32_t>(std::max(1, width)),
-          static_cast<std::uint32_t>(std::max(1, height))};
-}
-
 /// Signals a fuse thread to quit and joins it on scope exit, so an exception
 /// unwinding the render loop cannot destroy a still-joinable std::thread
 /// (which would call std::terminate). Declared right after the thread so it
@@ -56,16 +43,6 @@ struct QuitJoin {
   ~QuitJoin() {
     quit.store(true);
     if (thread.joinable()) thread.join();
-  }
-};
-
-/// Shuts the ImGui GLFW platform backend down at scope exit. Declared *after*
-/// the overlay so it runs first: ImGui_ImplGlfw_Shutdown touches the ImGui
-/// context the overlay owns, so it must not outlive it.
-struct ImGuiGlfwShutdown {
-  bool active;
-  ~ImGuiGlfwShutdown() {
-    if (active) ImGui_ImplGlfw_Shutdown();
   }
 };
 

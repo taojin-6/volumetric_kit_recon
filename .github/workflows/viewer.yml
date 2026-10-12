@@ -11,8 +11,8 @@ name: viewer (reusable)
 #
 # Build-only on purpose: the live viewers need a window, and a dataset or a rig
 # of cameras that CI does not carry, so there is nothing to run. The compile +
-# link is the whole point -- it is the API seam between recon and gfx (and the
-# ImGui platform backend the examples own) that drifts. FFmpeg and the Orbbec
+# link is the whole point -- it is the API seam between recon and gfx that
+# drifts. FFmpeg and the Orbbec
 # SDK are installed too, so rig_viewer is compiled with the other two.
 on:
   workflow_call:

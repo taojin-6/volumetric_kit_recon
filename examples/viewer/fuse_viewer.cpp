@@ -10,7 +10,7 @@
 // drawing the growing, coloured reconstruction each frame through
 // volumetric_kit_gfx's HybridMeshPipeline following the capture trajectory --
 // the nvblox FuserVisualizer analogue. Both libraries run on ONE VkDevice,
-// built by the neutral bootstrap in shared_device.hpp and adopted by each.
+// built by gfx_glfw's make_shared_device and adopted by each.
 //
 // The mesh crosses the seam as HANDLES, not bytes -- interop seam B. recon's
 // marching-cubes kernel writes its vertex arena, index run and
@@ -73,10 +73,9 @@
 #include <utility>
 #include <vector>
 
-#define GLFW_INCLUDE_VULKAN
+#define GLFW_INCLUDE_NONE  // window and input only: gfx_glfw makes the surface
 #include <GLFW/glfw3.h>
 #include <imgui.h>
-#include <imgui_impl_glfw.h>
 #include <glm/glm.hpp>
 
 #include "config.hpp"
@@ -84,7 +83,6 @@
 #include "recon_gfx_bridge.hpp"  // to_live_mesh, and the vertex-layout asserts
 #include "replica_config.hpp"
 #include "replica_sensor.hpp"  // vr_example::ReplicaSensor
-#include "shared_device.hpp"
 #include "viewer_atlas.hpp"
 #include "viewer_common.hpp"
 #include "viewer_panels.hpp"
@@ -92,6 +90,7 @@
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
+#include "volumetric_kit/core/vulkan/shared_device.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/mesh/device_mesh.hpp"
@@ -107,11 +106,15 @@
 #include "volumetric_kit/recon/volume/voxel_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
 
+#include "volumetric_kit/gfx/app/shared_device_config.hpp"
 #include "volumetric_kit/gfx/app/windowed_app.hpp"
 #include "volumetric_kit/gfx/camera/camera.hpp"
 #include "volumetric_kit/gfx/core/frame_metrics.hpp"
 #include "volumetric_kit/gfx/core/profiler.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
+#include "volumetric_kit/gfx/glfw/imgui_glfw.hpp"
+#include "volumetric_kit/gfx/glfw/shared_device.hpp"
+#include "volumetric_kit/gfx/glfw/window.hpp"
 #include "volumetric_kit/gfx/pipelines/hybrid_mesh_pipeline.hpp"
 #include "volumetric_kit/gfx/pipelines/live_mesh.hpp"
 #include "volumetric_kit/gfx/ui/imgui_overlay.hpp"
@@ -127,6 +130,7 @@ namespace rmesh = volumetric_kit::recon::mesh;
 namespace rtex = volumetric_kit::recon::texture;
 namespace rsensor = volumetric_kit::recon::sensor;
 namespace vg = volumetric_kit::gfx;
+namespace glfw = volumetric_kit::gfx::glfw;
 namespace vgp = volumetric_kit::gfx::pipelines;
 namespace win = volumetric_kit::gfx::windowing;
 
@@ -155,15 +159,22 @@ int run(GLFWwindow* window, const Options& opt) {
   // destroyed. gfx's requirements are the app config's, which adopt verifies.
   vg::app::WindowedAppConfig config;
   config.app_name = "fuse_viewer";
-  config.swapchain.extent = fuse_viewer::window_extent(window);
+  config.swapchain.extent = glfw::framebuffer_extent(window);
   config.swapchain.depth_format = VK_FORMAT_D32_SFLOAT;
   config.frames_in_flight = 2;
-  fuse_viewer::SharedDeviceConfig shared_config;
-  shared_config.enable_validation = opt.window.validation;
-  shared_config.graphics = config.device;
-  const std::unique_ptr<fuse_viewer::vkc::SharedDevice> shared =
-      fuse_viewer::build_shared_device(window, shared_config);
-  if (shared == nullptr) return 1;
+  vg::app::WindowDeviceConfig device_config;
+  device_config.instance.app_name = config.app_name;
+  device_config.instance.enable_validation = opt.window.validation;
+  device_config.graphics = config.device;
+  auto shared_r = glfw::make_shared_device(window, vr::device_requirements(),
+                                           device_config);
+  if (!shared_r) {
+    std::fprintf(stderr, "shared device: %s\n",
+                 shared_r.status().message().c_str());
+    return 1;
+  }
+  const std::unique_ptr<vkc::SharedDevice> shared = std::move(shared_r).value();
+  std::printf("shared device: %s\n", shared->summary().c_str());
 
   // The surface already exists -- picking a present-capable device required
   // one -- so the factory hands over the one the bootstrap made rather than
@@ -367,6 +378,9 @@ int run(GLFWwindow* window, const Options& opt) {
   // pipeline bakes the swapchain layout, which survives a resize, so the
   // overlay is built once.
   std::optional<vg::ui::ImGuiOverlay> overlay;
+  // Declared after the overlay, so it shuts down first, while the context it
+  // binds is alive.
+  std::unique_ptr<glfw::ImGuiGlfw> imgui_glfw;
   if (opt.window.overlay) {
     vg::ui::ImGuiOverlayConfig overlay_config;
     overlay_config.layout = app.swapchain().layout();
@@ -380,18 +394,15 @@ int run(GLFWwindow* window, const Options& opt) {
       return 1;
     }
     overlay = std::move(overlay_result).value();
-    // The platform (GLFW) half of ImGui is the example's to own -- gfx's ui
-    // tier deliberately wraps only the Vulkan renderer backend so it stays
-    // windowing-free. Shut it down before the overlay's context dies, below.
-    ImGui::SetCurrentContext(overlay->context());
-    if (!ImGui_ImplGlfw_InitForVulkan(window, true)) {
-      std::fprintf(stderr, "ImGui_ImplGlfw_InitForVulkan failed\n");
+    auto imgui_glfw_result =
+        glfw::ImGuiGlfw::create(window, overlay->context());
+    if (!imgui_glfw_result) {
+      std::fprintf(stderr, "ImGuiGlfw: %s\n",
+                   imgui_glfw_result.status().message().c_str());
       return 1;
     }
+    imgui_glfw = std::move(imgui_glfw_result).value();
   }
-  // Runs before `overlay` is destroyed (reverse declaration order), which the
-  // ImGui backend requires: its Shutdown touches the context the overlay owns.
-  const fuse_viewer::ImGuiGlfwShutdown imgui_glfw_guard{opt.window.overlay};
 
   // --- Background fuse thread: load + decode + fuse + extract off the render
   // thread (per-frame JPEG/PNG decode is CPU-heavy and would otherwise gate the
@@ -772,7 +783,7 @@ int run(GLFWwindow* window, const Options& opt) {
   while (glfwWindowShouldClose(window) == GLFW_FALSE) {
     glfwPollEvents();
 
-    auto frame = app.begin_frame(fuse_viewer::window_extent(window));
+    auto frame = app.begin_frame(glfw::framebuffer_size(window));
     if (!frame.ok()) {
       std::fprintf(stderr, "begin_frame: %s\n",
                    frame.status().message().c_str());
@@ -888,7 +899,7 @@ int run(GLFWwindow* window, const Options& opt) {
     // forbids two un-rendered frames), and before recording, so the panels are
     // ready when the overlay records its draw data inside the pass below.
     if (overlay) {
-      ImGui_ImplGlfw_NewFrame();
+      imgui_glfw->new_frame();
       overlay->new_frame();
       // Stack the two panels instead of letting ImGui default both to the same
       // spot (which hides one under the other on a fresh layout), and give each

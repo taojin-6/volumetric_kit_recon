@@ -14,11 +14,15 @@
 
 include(FetchContent)
 
+# GLFW for the live viewers' window. Required here: gfx's own lookup is
+# optional, and without GLFW it skips gfx_glfw.
+find_package(glfw3 3.3 REQUIRED)
+
 # volumetric_kit_gfx: the sibling renderer. Its HybridMeshPipeline draws the
-# per-vertex-coloured reconstruction the mesh tier emits. Pinned, built
-# renderer-only (no tests / examples / install). Its core windowing is
-# surface-agnostic, so the *app* owns the window (GLFW below); VG_WITH_GLFW here
-# only keeps the pin consistent with gfx's own examples.
+# per-vertex-coloured reconstruction the mesh tier emits. Pinned, built without
+# tests, examples or install. VG_WITH_GLFW builds gfx_glfw, the window glue the
+# live viewers link: the surface, instance extensions, framebuffer size, the
+# device shared with recon, and ImGui's GLFW backend.
 set(VG_BUILD_TESTS
     OFF
     CACHE BOOL "" FORCE)
@@ -74,12 +78,13 @@ FetchContent_Declare(
   # retirement onto core 0.1's reached-only waits: gfx builds against recon's
   # core (third_party/CMakeLists.txt declares the core first), and since #122
   # gfx's vkc_require_core takes core 0.1.0 or newer.
-  GIT_TAG d4a88d3a5789b9fa41a0e18fc02a5ea317f08ae9 # gfx main, after #130
+  #
+  # And at or past gfx #133, whose gfx_glfw holds the window glue the viewers
+  # used to carry (shared_device.hpp, the GLFW half of viewer_common.hpp, and
+  # their own build of imgui_impl_glfw.cpp). A compile floor.
+  GIT_TAG bc887a4a14349870450f7c3fbbcd48d809faa451 # gfx main, after #135
   GIT_SHALLOW FALSE)
 FetchContent_MakeAvailable(volumetric_kit_gfx)
-
-# GLFW for the live viewer's window (matches how gfx's own examples get it).
-find_package(glfw3 REQUIRED)
 
 # Name only the tiers that are not already pulled in transitively. recon_texture
 # PUBLIC-links recon_mesh + recon_volume and recon_tsdf PUBLIC-links
@@ -125,38 +130,16 @@ if(VR_BUILD_TESTS)
                        PROPERTIES TIMEOUT 30 SKIP_RETURN_CODE 77)
 endif()
 
-# The Dear ImGui sources gfx fetched for its ui tier. gfx exports the path only
-# into its own scope (third_party/CMakeLists.txt sets VG_IMGUI_SOURCE_DIR
-# PARENT_SCOPE), so ask FetchContent for the populated dir instead of reaching
-# into a variable that does not reach us. Guard it: an empty imgui_SOURCE_DIR
-# would otherwise surface as an unreadable "Cannot find source file: /backends/
-# imgui_impl_glfw.cpp" far from the cause.
-FetchContent_GetProperties(imgui)
-if(NOT imgui_SOURCE_DIR)
-  message(
-    FATAL_ERROR
-      "fuse_viewer needs the Dear ImGui sources gfx fetches for its ui tier, "
-      "but FetchContent has no populated 'imgui'. Check that the pinned "
-      "volumetric_kit_gfx still declares it in third_party/CMakeLists.txt.")
-endif()
-
 # fuse_viewer: the live window -- fuses on a background thread, draws the
 # growing reconstruction each frame following the capture trajectory, and shows
-# the Dear ImGui performance + reconstruction panels (gfx's ui tier).
-#
-# The ui tier wraps only ImGui's Vulkan renderer backend, deliberately staying
-# windowing-free, so the *platform* backend (imgui_impl_glfw) is this example's
-# to compile -- exactly as gfx's own examples do it. imgui.h arrives
-# transitively from gfx_ui (SYSTEM); backends/ is added here for
-# imgui_impl_glfw.h.
-add_executable(fuse_viewer fuse_viewer.cpp
-                           "${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp")
+# the Dear ImGui performance + reconstruction panels (gfx's ui tier). Its window
+# glue is gfx_glfw, which PUBLIC-links gfx_app, gfx_ui (and through it
+# gfx_camera) and GLFW, so those are not named again.
+add_executable(fuse_viewer fuse_viewer.cpp)
 target_link_libraries(
-  fuse_viewer PRIVATE ${_viewer_recon_libs} ${_viewer_gfx_libs}
-                      volumetric_kit::gfx_ui glfw Vulkan::Vulkan)
+  fuse_viewer PRIVATE ${_viewer_recon_libs} volumetric_kit::gfx_glfw
+                      volumetric_kit::gfx_pipelines Vulkan::Vulkan)
 target_include_directories(fuse_viewer PRIVATE ${_viewer_common_inc})
-target_include_directories(fuse_viewer SYSTEM
-                           PRIVATE "${imgui_SOURCE_DIR}/backends")
 # Both viewer examples carry the project's warning policy, like every other
 # first-party target -- they are our code, and the overlay/panel logic is where
 # a stale format specifier or an unused capture would otherwise go unseen.
@@ -167,32 +150,20 @@ target_include_directories(fuse_viewer SYSTEM
 # CI does not carry. Added after that gap let a real recon/gfx API mismatch
 # reach `main` unbuilt.
 vr_target_warnings(fuse_viewer)
-# ...but ImGui's own TU carries its own warning posture and would trip that
-# policy. The source-level opt-out follows the target flags on the command line,
-# so it wins; only this third-party TU is exempt, fuse_viewer.cpp stays strict.
-set_source_files_properties("${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp"
-                            PROPERTIES COMPILE_OPTIONS -w)
 
 # rig_viewer: fuse_viewer's sibling for a live, synced rig of Orbbec cameras,
 # read as a sensor array, every camera's frame prepared, fused and textured on
 # the GPU. Built only where the Orbbec driver is (VR_WITH_ORBBEC); the viewer CI
 # leg installs the SDK, so it is compiled on every PR with the other two.
 if(TARGET volumetric_kit::recon_sensor_orbbec)
-  add_executable(rig_viewer rig_viewer.cpp
-                            "${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp")
+  add_executable(rig_viewer rig_viewer.cpp)
   # recon_sensor_array ahead of the list, which names recon_sensor_utils: a
   # library named before one that links it is named again, as above.
   target_link_libraries(
     rig_viewer
-    PRIVATE volumetric_kit::recon_sensor_array
-            ${_viewer_recon_libs}
-            volumetric_kit::recon_sensor_orbbec
-            ${_viewer_gfx_libs}
-            volumetric_kit::gfx_ui
-            glfw
-            Vulkan::Vulkan)
+    PRIVATE volumetric_kit::recon_sensor_array ${_viewer_recon_libs}
+            volumetric_kit::recon_sensor_orbbec volumetric_kit::gfx_glfw
+            volumetric_kit::gfx_pipelines Vulkan::Vulkan)
   target_include_directories(rig_viewer PRIVATE ${_viewer_common_inc})
-  target_include_directories(rig_viewer SYSTEM
-                             PRIVATE "${imgui_SOURCE_DIR}/backends")
   vr_target_warnings(rig_viewer)
 endif()
