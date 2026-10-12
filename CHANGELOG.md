@@ -23,13 +23,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- `examples`: **per-frame codec rows.** `codec_replica` and `codec_mesh`
-  keep a row per coded frame (its source index, bytes, blocks, and encode
-  and decode host and device ms) and report each column's p50, p95 and max.
-  `CodecStream` takes `CodecOutputs`: a CSV of the rows, written as frames
+- `examples`: **per-frame codec rows.** `CodecStream` keeps a row per coded
+  frame (its source index, bytes, blocks, and encode and decode host and
+  device ms) and takes `CodecOutputs`: a CSV of the rows, written as frames
   are coded, and a new directory of every encoded frame. Its frame files,
   `codec_mesh`'s `.vrtc` included, go through the core's `write_file`.
-  Tests: `recon_example_codec_rows`, `recon_example_codec_stream`.
+  Test: `recon_example_codec_stream`.
 - `sensor/utils`: **`PictureReadback`** (`picture_readback.hpp`), a set's
   colour pictures on the host, luma alone or every plane, wherever the
   decoder left them: NV12 images, or NV12 and I420 planes in a buffer taken
