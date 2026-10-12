@@ -209,11 +209,11 @@ Two contracts — both simpler now that recon and gfx are both Vulkan.
   mesh/atlas into a `VkBuffer`/`VkImage` on a **single `VkDevice` shared with gfx**
   (one process) and gfx draws it directly — no external-memory import. Realized by
   the create/adopt device seam: a neutral bootstrap builds one device from both
-  libraries' merged `DeviceRequirements` (real since 2026-08-02; the core's
-  `SharedDevice`, built for the viewers by gfx's `gfx_glfw`); two queues from
-  one graphics+compute family would avoid any queue-family ownership transfer,
-  but MoltenVK offers no such family, so on Apple the buffer is cross-family
-  and pays `VK_SHARING_MODE_CONCURRENT` or an explicit release/acquire — which
+  libraries' merged `DeviceRequirements` (the core's `SharedDevice`, real since
+  2026-08-02); two queues from one graphics+compute family would avoid any
+  queue-family ownership transfer, but MoltenVK offers no such family, so on
+  Apple the buffer is cross-family and pays `VK_SHARING_MODE_CONCURRENT` or an
+  explicit release/acquire — which
   `MarchingCubesConfig::queue_families` now expresses (2026-08-03); see that
   decision and the MoltenVK queue gotcha. The handoff is a ring of mesh/atlas
   slots with variable topology drawn indirectly, both real as of 2026-08-03 —
@@ -1639,7 +1639,8 @@ texturing a camera a set lacks from its last frame, a fallback view
 (`fusion.hold_ms`). The two viewers hand meshes over through `mesh::MeshExchange`,
 take their window glue (the GLFW surface, the shared device and ImGui's GLFW
 backend) from gfx's `gfx_glfw` (2026-10-12), and share `viewer_common.hpp`: the
-teardown guards and the render camera the fuse thread meshes (`SharedView`).
+shared device's settings and gfx's adoption of it, the teardown guards and the
+render camera the fuse thread meshes (`SharedView`).
 Both draw with gfx's `StreamedAtlas` through `viewer_atlas.hpp`'s `LiveAtlas`:
 a mesh's payload names the colour buffers of the cameras that textured it and
 their tiles, the frame that commits the mesh copies them into the atlas, and

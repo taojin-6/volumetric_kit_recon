@@ -108,14 +108,12 @@
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 #include "volumetric_kit/recon/volume/voxel_hash_map.hpp"
 
-#include "volumetric_kit/gfx/app/shared_device_config.hpp"
 #include "volumetric_kit/gfx/app/windowed_app.hpp"
 #include "volumetric_kit/gfx/camera/camera.hpp"
 #include "volumetric_kit/gfx/core/frame_metrics.hpp"
 #include "volumetric_kit/gfx/core/profiler.hpp"
 #include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/glfw/imgui_glfw.hpp"
-#include "volumetric_kit/gfx/glfw/shared_device.hpp"
 #include "volumetric_kit/gfx/glfw/window.hpp"
 #include "volumetric_kit/gfx/pipelines/hybrid_mesh_pipeline.hpp"
 #include "volumetric_kit/gfx/pipelines/live_mesh.hpp"
@@ -267,30 +265,16 @@ int run(GLFWwindow* window, const Options& opt) {
   config.swapchain.extent = glfw::framebuffer_extent(window);
   config.swapchain.depth_format = VK_FORMAT_D32_SFLOAT;
   config.frames_in_flight = 2;
-  vg::app::WindowDeviceConfig device_config;
-  device_config.instance.app_name = config.app_name;
-  device_config.instance.enable_validation = opt.window.validation;
-  device_config.graphics = config.device;
-  auto shared_r = glfw::make_shared_device(window, vr::device_requirements(),
-                                           device_config);
+  auto shared_r =
+      fuse_viewer::make_viewer_device(window, config, opt.window.validation);
   if (!shared_r) {
     std::fprintf(stderr, "shared device: %s\n",
                  shared_r.status().message().c_str());
     return 1;
   }
   const std::unique_ptr<vkc::SharedDevice> shared = std::move(shared_r).value();
-  std::printf("shared device: %s\n", shared->summary().c_str());
 
-  auto app_r = vg::app::WindowedApp::adopt(
-      shared->graphics_payload(), config,
-      [&shared](VkInstance instance) -> vkc::Result<VkSurfaceKHR> {
-        if (instance != shared->instance().handle()) {
-          return vkc::Status::invalid_argument(
-              "surface factory: the app adopted a different VkInstance than "
-              "the bootstrap created the surface on");
-        }
-        return shared->release_surface();
-      });
+  auto app_r = fuse_viewer::adopt_viewer_app(*shared, config);
   if (!app_r.ok()) {
     std::fprintf(stderr, "WindowedApp::adopt: %s\n",
                  app_r.status().message().c_str());
@@ -1066,6 +1050,8 @@ int run(GLFWwindow* window, const Options& opt) {
     {
       const bool ui_mouse = overlay && ImGui::GetIO().WantCaptureMouse;
       double x = 0.0, y = 0.0;
+      // Window coordinates, not glfw::cursor_in_framebuffer: framebuffer
+      // pixels would double orbit and pan speed on a HiDPI display.
       glfwGetCursorPos(window, &x, &y);
       const float dx = have_last ? static_cast<float>(x - last_x) : 0.0f;
       const float dy = have_last ? static_cast<float>(y - last_y) : 0.0f;

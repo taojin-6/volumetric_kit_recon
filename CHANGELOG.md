@@ -11,8 +11,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `examples`: `fuse_viewer` and `rig_viewer` take their window glue from gfx's
   `gfx_glfw` (gfx #133, pinned at #135): the GLFW surface, the shared device
   and ImGui's GLFW backend. `examples/viewer/shared_device.hpp` and the
-  viewers' own `imgui_impl_glfw.cpp` build are gone. Test: the viewer CI leg
-  builds them.
+  viewers' own `imgui_impl_glfw.cpp` build are gone. Test:
+  `recon_example_viewer_device` (the shared device's settings); the viewer CI
+  leg builds the viewers.
 - `examples`: `codec.sweep`'s `enc gpu` / `dec gpu` count every device span,
   as the per-frame codec rows do.
 - `examples`: `fuse_keyframe` takes the integration mode, as `fuse_set` now

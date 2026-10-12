@@ -13,7 +13,6 @@ shared rule in AGENTS.md.
 
 - [**2026-10-11**](#2026-10-11--examples-load-the-cores-scenario-format-and-keep-only-runtime-adapters) — Examples load the core scenario format; JSON, defaults and static validation have one owner.
 - [**2026-10-11**](#2026-10-11--picture-readback-publishes-buffer-ownership-for-subsequent-stages) — Picture readback updates ownership before subsequent reads or preparation.
-- [**2026-10-12**](#2026-10-12--the-viewers-window-glue-comes-from-gfxs-gfx_glfw) — The viewers' GLFW surface, shared device and ImGui GLFW backend come from gfx's `gfx_glfw`; recon keeps no copy.
 
 The index and dated entries are in the same chronological order. Read the
 entries relevant to your task; later amendments supersede earlier rules.
@@ -65,7 +64,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   `mesh::Vertex` *is* the renderer's vertex layout.
 - [**2026-08-02**](#2026-08-02--the-neutral-shared-vkdevice-bootstrap-lands-in-the-viewer-example-and-prefers-two-families-over-a-shared-queue) —
   The neutral shared-`VkDevice` bootstrap lands in the viewer example, and
-  prefers two families over a shared queue.
+  prefers two families over a shared queue. *Amended 2026-10-12:* gfx's
+  `gfx_glfw` builds it; recon keeps no copy.
 - [**2026-08-02**](#2026-08-02--the-sensor-tier-is-a-contract-not-a-driver-collection-a-capture-driver-lives-here-only-if-this-repo-can-build) —
   The `sensor` tier is a *contract*, not a driver collection: a capture driver
   lives here only if this repo can build (`ICameraCapture` went 2026-10-07)
@@ -474,6 +474,8 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-11**](#2026-10-11--decoded-pictures-name-the-queue-families-that-read-them-videotoolboxs-images-are-concurrent-across-two-or-more) —
   Decoded pictures name the queue families that read them: VideoToolbox's
   images are CONCURRENT across two or more.
+- [**2026-10-12**](#2026-10-12--the-viewers-window-glue-comes-from-gfxs-gfx_glfw-recon-keeps-no-copy-amends-the-2026-08-02-bootstrap-and-2026-10-04-vulkan-foundation-entries) —
+  The viewers' window glue comes from gfx's `gfx_glfw`; recon keeps no copy.
 
 ## Decision record
 
@@ -907,6 +909,8 @@ below — and the usage half is now settled by the `MarchingCubesConfig`
 decision below.)
 
 ### 2026-08-02 — The neutral shared-`VkDevice` bootstrap lands in the viewer example, and prefers two families over a shared queue.
+
+*Amended 2026-10-12 (below):* gfx's `gfx_glfw` builds it; recon keeps no copy.
 
 The 2026-07-04
 interop decision's "neutral app-side bootstrap" is now real and in-tree:
@@ -9804,7 +9808,8 @@ of the 2026-08-02 decision; the core's `SharedDevice` is that bootstrap
 generalized (it replaces this one and the iOS app's), so the viewer's header
 now only makes the GLFW surface and converts gfx's requirements and payload,
 as gfx still has a device type of its own. (Since 2026-10-05 it converts
-nothing: gfx takes the core's types.) The queue-plan preference is the
+nothing: gfx takes the core's types. Since 2026-10-12 it is gone: gfx's
+`gfx_glfw` makes the surface and the device.) The queue-plan preference is the
 core's, unchanged. Every queue now has a mutex (it was set only under the
 shared-queue plan), as the core's `wait_idle` is a third thread touching both
 queues.
@@ -11770,6 +11775,16 @@ which family owns an EXCLUSIVE image: made EXCLUSIVE, the same copy passes
 with no message. So the guard is the sharing mode recorded on the image,
 which the tests check. No camera was opened.
 
+### 2026-10-12 — The viewers' window glue comes from gfx's `gfx_glfw`; recon keeps no copy (amends the 2026-08-02 bootstrap and 2026-10-04 Vulkan-foundation entries).
+
+gfx #133 made the GLFW glue every windowed app repeated a gfx library,
+`gfx_glfw`: the instance extensions, the surface, the framebuffer size, the
+device shared with a compute library (`make_shared_device`) and ImGui's GLFW
+backend (`ImGuiGlfw`). The viewers take all of it from there. What stays in
+recon is what is recon's, once, in `viewer_common.hpp`: the shared device's
+settings (recon's `device_requirements()`, the app's graphics requirements and
+`window.validation`) and gfx's adoption of it.
+
 ## Measured lessons
 
 Not decisions, but the measurements that overturned an assumption about
@@ -11944,21 +11959,3 @@ Timer creation also belongs inside `PictureReadback::create`'s allocation
 handler. A failure injected at a captured timer allocation size and call
 site must return `OutOfMemory`, and creation must succeed on retry. Before
 the fix, that regression catches an escaping `std::bad_alloc`.
-
-### 2026-10-12 — The viewers' window glue comes from gfx's `gfx_glfw`
-
-This amends the 2026-08-02 bootstrap entry ("It lives beside the example it
-serves") and the 2026-10-04 entry's "The viewer." gfx #133 made the GLFW glue
-that every windowed app repeated a gfx library, `gfx_glfw`, with one copy for
-the family. The viewers pin gfx at #135 and take from it the instance
-extensions, the surface, the framebuffer size, the device shared
-with recon (`make_shared_device`, from `vr::device_requirements()`) and ImGui's
-GLFW backend (`ImGuiGlfw`). `examples/viewer/shared_device.hpp`,
-`viewer_common.hpp`'s `window_extent` and `ImGuiGlfwShutdown`, and the viewers'
-own build of `imgui_impl_glfw.cpp` are gone.
-
-A frame now begins with the framebuffer's reported size rather than one
-clamped to 1 x 1, so a window that reports 0 x 0 skips the tick, as gfx's loop
-expects. `rig_viewer` orbits and pans by cursor deltas in window coordinates,
-so it does not use `cursor_in_framebuffer`, which would double their speed on
-a Retina display.

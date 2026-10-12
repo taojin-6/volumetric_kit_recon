@@ -12,8 +12,8 @@ name: viewer (reusable)
 # Build-only on purpose: the live viewers need a window, and a dataset or a rig
 # of cameras that CI does not carry, so there is nothing to run. The compile +
 # link is the whole point -- it is the API seam between recon and gfx that
-# drifts. FFmpeg and the Orbbec
-# SDK are installed too, so rig_viewer is compiled with the other two.
+# drifts. FFmpeg and the Orbbec SDK are installed too, so rig_viewer is compiled
+# with the other two.
 on:
   workflow_call:
 
@@ -39,10 +39,9 @@ jobs:
           HOMEBREW_NO_AUTO_UPDATE: '1'
           HOMEBREW_NO_INSTALL_CLEANUP: '1'
         run: |
-          # Same set as the macOS build leg, plus glfw: the viewer owns its
-          # window, so examples/viewer/CMakeLists.txt does find_package(glfw3).
-          # ffmpeg (found through pkgconf) for the decoders the Orbbec driver
-          # needs.
+          # Same set as the macOS build leg, plus glfw (gfx builds gfx_glfw,
+          # the viewers' window glue, only with it) and ffmpeg (found through
+          # pkgconf) for the decoders the Orbbec driver needs.
           ok=0
           for attempt in 1 2 3; do
             if brew install cmake glm molten-vk vulkan-headers vulkan-loader \
