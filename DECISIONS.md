@@ -11987,12 +11987,14 @@ measured rates are DESIGN.md's.
 
 The host writer and reader of type-1 frames, internal. `bitstream.hpp` holds
 the layout and the order of the refusals; this entry holds why. Nothing public
-changes: `read_frame_info`, `Decoder::decode` and the device reader refuse
-type 1 as `Unsupported`, now through `check_frame_type(type, newest, who)`,
-and the device writer still writes intra only. The device coders take P-frames
-next, then the `Decoder` and the `Encoder`; golden P-frames freeze the bytes
-after those, and until then even the worked example in
-`recon_codec_inter_bitstream` may change.
+changes but one refusal: `read_frame_info`, `Decoder::decode` and the device
+reader refuse type 1 as `Unsupported` through `check_frame_type(type, newest,
+who)`, now after the header's other checks, so a type-1 header that also
+fails one of those is `InvalidArgument`, as any frame's. The device writer
+still writes intra only. The device coders take P-frames next, then the
+`Decoder` and the `Encoder`; golden P-frames freeze the bytes after those,
+and until then even the worked example in `recon_codec_inter_bitstream` may
+change.
 
 **Step 0 chose the design.** A throwaway probe (never committed) priced
 P-frame layouts over v3 intra dumps on the M5 Max, Release, at K 64, uniform
@@ -12105,8 +12107,9 @@ make it.
 refuses a mode table that gives it a frequency as `Unsupported` right after
 reading it, before the trailing-bytes check. A motion design may therefore
 append models, or a required section, only when that frequency is nonzero,
-and today's P-frame readers then still read every frame without motion. A static table never yields a symbol of frequency 0, so no decoder
-needs a motion branch.
+and today's P-frame readers then still read every frame without motion. A
+static table never yields a symbol of frequency 0, so no decoder needs a
+motion branch.
 
 **One merge.** `merge_by_coord` is the codec's one walk of two sorted
 lists: the Decoder's grid update moves onto it unchanged, `merge_frame` gives
@@ -12118,29 +12121,30 @@ their own (`tests/codec_frames.hpp`).
 
 **Validation.** Apple M5 Max, macOS, Release with warnings as errors: the 74
 tests pass, the GPU ones under the Khronos validation layer, and the codec
-tests under synchronization validation too. Intra bytes
-are unchanged: the five golden frames pass on both writers. The new
+tests under synchronization validation too. Intra bytes are unchanged: the
+five golden frames pass on both writers. The new
 `recon_codec_inter_bitstream` covers the hash's known answers; the 161-byte
 worked example, read and written byte for byte, and at U = 1 against streams
 built from the coder by the format text; round trips of every mode at K 1, 64
 and 512, U and R of 1, 7, 64 and past the frame, M = 0, A = 0, N = 0, all
 removed, all skipped and extreme coefficients; I → P chains on real hashes
 against the oracle; `merge_by_coord` against `std::set`'s algorithms; each
-reader refusal, one edit each, with its code and its place in the order; each
-writer refusal; every truncation; and 3,000 random corruptions (2,973
-refused). Nineteen planted bugs each failed a test, among them an update
-range off by one, update and new segments swapped, a payload written or read
-for skip, the motion check after the trailing-bytes check, the coding check
-before `NotFound`, no survivor count, no check against reference coordinates,
-and a mode model's base off by one. The first of those passed every round
-trip, since the writer and the reader share the text; the U = 1 example was
-added for it. The host codec tests pass under ASan and UBSan (Debug), and the
-GPU codec tests under them too. GCC 16 compiles the changed sources and tests
-with `-O3 -Werror`, and its libstdc++ build of `recon_codec_bitstream` and
-`recon_codec_inter_bitstream` passes with the same figures. The frame code
-and both host tests compile under `-Werror` for a 32-bit `size_t`
-(`arm64_32`, the watchOS SDK). Not run: GCC 13.3 in `ubuntu:24.04` (no
-Docker daemon on the machine).
+reader refusal, one edit each, with its code and message, and the order
+across the reader's stages, REFERENCE's body before TABLES included; each
+writer refusal, with its code and message; every truncation; and 3,000
+random corruptions (2,973 refused). Twenty-seven planted bugs each failed a
+test, among them an update range off by one, update and new segments
+swapped, a payload written or read for skip, the motion check after the
+trailing-bytes check, TABLES read before REFERENCE, the coding check before
+`NotFound`, no A ≤ N, no M + A bound in the reader or either writer, no
+survivor count, no check against reference coordinates, and a mode model's
+base off by one. The host codec tests pass under ASan and UBSan (Debug), and
+the GPU codec tests under them too. GCC 16 compiles the changed sources and
+tests with `-O3 -Werror`, and its libstdc++ build of `recon_codec_bitstream`
+and `recon_codec_inter_bitstream` passes with the same figures. The frame
+code and both host tests pass a `-Werror` syntax check for a 32-bit `size_t`
+(`arm64_32`, the watchOS SDK), not a build. Not run: GCC 13.3 in
+`ubuntu:24.04` (no Docker daemon on the machine).
 
 ## Measured lessons
 
