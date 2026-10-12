@@ -469,6 +469,9 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-10**](#2026-10-10--grid-validation-bounds-the-truncation-band-by-the-depth-kernels-integer-representation) —
   Grid validation rejects non-finite metrics and bounds the truncation band by
   the depth kernel's integer representation.
+- [**2026-10-11**](#2026-10-11--decoded-pictures-name-the-queue-families-that-read-them-videotoolboxs-images-are-concurrent-across-two-or-more) —
+  Decoded pictures name the queue families that read them: VideoToolbox's
+  images are CONCURRENT across two or more.
 
 ## Decision record
 
@@ -11728,6 +11731,42 @@ Host tests reject infinities, both finite-input overflow paths, and the first
 float above radius 127, while accepting 127 itself. A small shader runs the
 real shared radius helper and the depth count expression at that boundary,
 checked against host math in 64 bits; it does not enumerate the candidate band.
+
+### 2026-10-11 — Decoded pictures name the queue families that read them: VideoToolbox's images are CONCURRENT across two or more.
+
+calib's live view draws each decoder's NV12 picture as a tile on gfx's queue
+while recon reads the same images on its own. MoltenVK gives the two
+libraries different queue families, and the importer made its images
+EXCLUSIVE, so gfx's copy was undefined in the way that appears to work on
+Apple. `PixelBufferImporter::create` now takes the families, and the decoders
+and `OrbbecStreamOptions` pass them on.
+
+- **Families, not a mode**, as for buffers (2026-08-03): a caller passes
+  recon's and gfx's unconditionally, and they collapse to EXCLUSIVE where
+  they are one family.
+- **The device's own family must be among them.** The importer moves the
+  images to `GENERAL` on it and the GPU pass copies them there; a list
+  without it would make both undefined.
+- **`OrbbecStreamOptions` holds them by value**, like
+  `GpuFramePrepConfig::color_queue_families`, since each start opens the
+  decoders afresh. The decoders read a pointer once, at `create`, as
+  `BufferDesc` does.
+- **NVDEC and nvJPEG wait** (`TODO(sensor)`): a Linux tile also needs gfx
+  to map I420.
+- **The importer repeats the core allocator's family checks for now.** They
+  live in the core's internal `sharing_for`, and the importer creates its
+  images itself, so it cannot reach them; a `TODO(sensor)` replaces the copy
+  once the core makes them public and recon's core pin reaches that.
+
+**Validation.** Apple M5 Max, MoltenVK, Release with warnings as errors,
+FFmpeg 9.0.2 and Orbbec SDK 2.10.6, under the Khronos validation layer with
+synchronization validation: the importer's test imports a picture on recon's
+family of a windowless `SharedDevice` (`TwoFamilies`) and copies both planes
+on the renderer's, bytes exact. The layer checks a CONCURRENT image's create
+info (it reports a duplicate index or a single family) but does not track
+which family owns an EXCLUSIVE image: made EXCLUSIVE, the same copy passes
+with no message. So the guard is the sharing mode recorded on the image,
+which the tests check. No camera was opened.
 
 ## Measured lessons
 

@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -128,6 +129,14 @@ inline int no_jpeg_decoder(const std::string& why) {
     return vkc::test::kSkipExitCode;
   }
   return no_decoder(why);
+}
+
+// A queue family of `device`'s GPU besides the device's own, which a
+// CONCURRENT resource may name with it; none on a GPU with one family.
+inline std::optional<std::uint32_t> other_queue_family(
+    const vkc::Device& device) {
+  if (device.caps().queue_families().size() < 2) return std::nullopt;
+  return device.queue_family() == 0 ? 1u : 0u;
 }
 
 // `gpu`'s device again, adopted with none of its optional extensions declared,
