@@ -3,10 +3,13 @@
 
 // fuse_orbbec's dump of its first sets (examples/common/set_dump.hpp): each
 // camera's JPEG written byte for byte and, given the readback's views, its
-// luma beside it as a PNG whose R, G and B are the luma, row strides
-// respected; a camera missing from the set, or a view missing, writes
-// nothing; a frame with no JPEG (before anything is written), a file already
-// there and ids or views not one per frame are refused. Host only.
+// luma beside it as a PNG whose R, G and B are the luma and A opaque, row
+// strides respected; a camera missing from the set, or a view missing,
+// writes nothing; a frame with no JPEG (before anything is written), a file
+// already there and ids or views not one per frame are refused. Over a run:
+// the directory checked up front, made with the first set and not before,
+// taken back when that set fails, no more sets than the limit, and the
+// closing line, a warning when the run ended first. Host only.
 
 #include <cstddef>
 #include <cstdint>
@@ -57,6 +60,26 @@ int test_names() {
         "d/set_000_CL2A141000N.jpg");
   CHECK(vr_example::dump_file("d", 1234, "X", "_luma.png") ==
         "d/set_1234_X_luma.png");
+  return 0;
+}
+
+// Each pixel's luma in R, G and B, A opaque, row by row past the stride.
+int test_luma_rgba() {
+  const std::vector<std::uint8_t> luma = {10, 20, 30, 0xee,  // stride 4
+                                          40, 50, 60, 0xee};
+  sensor::PictureView view;
+  view.width = 3;
+  view.height = 2;
+  view.stride = 4;
+  view.luma = luma.data();
+  const std::vector<std::uint8_t> rgba = vr_example::luma_rgba(view);
+  CHECK(rgba.size() == 3 * 2 * 4);
+  const std::uint8_t expected[] = {10, 20, 30, 40, 50, 60};
+  for (std::size_t i = 0; i < 6; ++i) {
+    CHECK(rgba[4 * i] == expected[i] && rgba[4 * i + 1] == expected[i] &&
+          rgba[4 * i + 2] == expected[i]);
+    CHECK(rgba[4 * i + 3] == 255);
+  }
   return 0;
 }
 
@@ -135,11 +158,78 @@ int test_dump() {
   return 0;
 }
 
+// A two-camera set, each frame carrying a JPEG.
+sensor::FrameSet two_jpegs() {
+  sensor::FrameSet set;
+  set.frames.push_back(with_jpeg({0xff, 0xd8, 0x01, 0xff, 0xd9}));
+  set.frames.push_back(with_jpeg({0xff, 0xd8, 0x02, 0xff, 0xd9}));
+  return set;
+}
+
+// The dump over a run, from its check before the cameras open to its report.
+int test_run() {
+  vr_test::Scratch scratch("vr_set_dump_run_");
+  const std::string dir = (scratch.path / "dump").string();
+  const std::vector<std::string> ids = {"A", "B"};
+  const sensor::FrameSet set = two_jpegs();
+
+  // Off: nothing checked, made or written, and no line.
+  vr_example::SetDump off(dir, 0);
+  CHECK(off.check().ok());
+  CHECK(off.write(set, ids, nullptr).ok() && off.written() == 0);
+  CHECK(off.report().empty() && !exists(dir));
+
+  // Checked up front: nothing is made, a trailing separator included.
+  vr_example::SetDump dump(dir, 2);
+  CHECK(dump.check().ok() && !exists(dir));
+  CHECK(vr_example::SetDump(dir + "/", 2).check().ok());
+  CHECK(vr_example::SetDump((scratch.path / "no" / "dump").string(), 2)
+            .check()
+            .domain() == Code::NotFound);
+  CHECK(vr_example::SetDump(scratch.path.string(), 2).check().domain() ==
+        Code::InvalidArgument);
+  CHECK(vr_example::SetDump(scratch.path.string() + "/", 2).check().domain() ==
+        Code::InvalidArgument);
+
+  // A first set the dump refuses makes no directory.
+  sensor::FrameSet h265 = two_jpegs();
+  h265.frames[1] = sensor::RgbdFrame{};
+  CHECK(dump.write(h265, ids, nullptr).domain() == Code::InvalidArgument);
+  CHECK(!exists(dir) && dump.written() == 0);
+
+  // A first set whose files fail takes its empty directory back: an id with a
+  // separator names a directory that is not there.
+  CHECK(dump.write(set, {"A/x", "B"}, nullptr).domain() == Code::NotFound);
+  CHECK(!exists(dir) && dump.written() == 0);
+
+  // The first set makes the directory; the second set goes beside it, and a
+  // third, past the limit, writes nothing.
+  CHECK(dump.write(set, ids, nullptr).ok() && dump.written() == 1);
+  CHECK(exists(dir + "/set_000_A.jpg") && exists(dir + "/set_000_B.jpg"));
+  CHECK(dump.check().domain() == Code::InvalidArgument);  // there now
+  CHECK(dump.write(set, ids, nullptr).ok() && dump.written() == 2);
+  CHECK(exists(dir + "/set_001_B.jpg"));
+  CHECK(dump.write(set, ids, nullptr).ok() && dump.written() == 2);
+  CHECK(!exists(dir + "/set_002_A.jpg"));
+  CHECK(dump.report() == "dumped 2 sets to " + dir + "\n");
+
+  // A run that ends first: a warning, naming the count it was given.
+  const std::string short_dir = (scratch.path / "short").string();
+  vr_example::SetDump cut(short_dir, 20);
+  CHECK(cut.write(set, ids, nullptr).ok());
+  CHECK(cut.report() == "warning: dumped 1 of 20 sets to " + short_dir +
+                            ": the run ended first (run.frames counts "
+                            "frames, one per camera)\n");
+  return 0;
+}
+
 }  // namespace
 
 int main() {
   CHECK(test_names() == 0);
+  CHECK(test_luma_rgba() == 0);
   CHECK(test_dump() == 0);
+  CHECK(test_run() == 0);
   std::puts("example_set_dump: OK");
   return 0;
 }

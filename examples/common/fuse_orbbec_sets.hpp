@@ -39,33 +39,54 @@ namespace vr_example {
 namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
 
-/// @brief Print an opened camera: what it reports, its cameras' factory
-///        models at the opened modes, its clock, and where @p calibration
-///        puts it.
-inline void print_orbbec_camera(
-    const vr::sensor::OrbbecSensor& opened,
+/// @return An opened camera's report: what it reports, its cameras' factory
+///         models and lens models at the opened modes, its clock, and where
+///         @p calibration puts it. Three lines, each ending in a newline.
+/// @param info         The camera's `OrbbecSensor::device_info()`.
+/// @param sensor       Its `IRgbdSensor::info()`, with both camera models.
+/// @param calibration  The run's calibration; a camera it does not pose sits
+///                     at the origin.
+inline std::string orbbec_camera_report(
+    const vr::sensor::OrbbecDeviceInfo& info,
+    const vr::sensor::SensorInfo& sensor,
     const vr::camera::ArrayCalibration& calibration) {
-  const vr::sensor::OrbbecDeviceInfo& info = opened.device_info();
-  const vr::camera::CameraModel& color = *opened.info().color;
-  const vr::camera::CameraModel& depth = *opened.info().depth;
   const vr::camera::SensorCalibration* posed =
       vr::camera::find_sensor(calibration, info.serial);
   const vr::camera::Mat4d pose = posed != nullptr && posed->color_to_world
                                      ? *posed->color_to_world
                                      : vr::camera::Mat4d(1.0);
-  std::printf(
-      "camera: %s %s, firmware %s, %s %s, sync %s, %s clock\n"
-      "  colour %ux%u @ fx=%.1f fy=%.1f cx=%.1f cy=%.1f, at (%.3f, %.3f, "
-      "%.3f) m\n"
-      "  depth %ux%u @ fx=%.1f fy=%.1f cx=%.1f cy=%.1f\n",
-      info.name.c_str(), info.serial.c_str(), info.firmware_version.c_str(),
-      info.connection_type.c_str(), info.ip_address.c_str(),
-      vr::sensor::to_string(info.sync_mode),
-      vr::sensor::to_string(opened.info().clock), color.size.width,
-      color.size.height, color.intrinsics.fx, color.intrinsics.fy,
-      color.intrinsics.cx, color.intrinsics.cy, pose[3].x, pose[3].y, pose[3].z,
-      depth.size.width, depth.size.height, depth.intrinsics.fx,
-      depth.intrinsics.fy, depth.intrinsics.cx, depth.intrinsics.cy);
+  // " WxH <lens> @ fx=.. fy=.. cx=.. cy=..", a camera's part of its line.
+  const auto camera = [](const vr::camera::CameraModel& model,
+                         const std::string& lens) {
+    char size[32];
+    char intrinsics[96];
+    std::snprintf(size, sizeof size, " %ux%u ", model.size.width,
+                  model.size.height);
+    std::snprintf(intrinsics, sizeof intrinsics,
+                  " @ fx=%.1f fy=%.1f cx=%.1f cy=%.1f", model.intrinsics.fx,
+                  model.intrinsics.fy, model.intrinsics.cx,
+                  model.intrinsics.cy);
+    return size + lens + intrinsics;
+  };
+  char at[96];
+  std::snprintf(at, sizeof at, ", at (%.3f, %.3f, %.3f) m\n", pose[3].x,
+                pose[3].y, pose[3].z);
+  return "camera: " + info.name + " " + info.serial + ", firmware " +
+         info.firmware_version + ", " + info.connection_type + " " +
+         info.ip_address + ", sync " + vr::sensor::to_string(info.sync_mode) +
+         ", " + vr::sensor::to_string(sensor.clock) + " clock\n" + "  colour" +
+         camera(*sensor.color, info.color_lens_model) + at + "  depth" +
+         camera(*sensor.depth, info.depth_lens_model) + "\n";
+}
+
+/// @brief Print an opened camera's @ref orbbec_camera_report.
+inline void print_orbbec_camera(
+    const vr::sensor::OrbbecSensor& opened,
+    const vr::camera::ArrayCalibration& calibration) {
+  std::fputs(
+      orbbec_camera_report(opened.device_info(), opened.info(), calibration)
+          .c_str(),
+      stdout);
 }
 
 /// @brief The camera a single-camera run opens: @p serial, which

@@ -63,6 +63,9 @@ N sets' files into that directory, which must not exist yet (its parent must):
 `set_NNN_<serial>.jpg`, each camera's JPEG as it came, and with `readback`
 `set_NNN_<serial>_luma.png`, the luma the device decoded, as R = G = B. It
 needs `source.color_codec: "mjpeg"`. Writing slows the sets it writes.
+`run.frames` counts frames, so four cameras' 40 frames are 10 sets: a run
+that ends before N sets says so with a warning, and a set the run's end cuts
+writes only the frames it keeps.
 
 `operation: "stream"` refuses an explicitly supplied `fusion` or `output`
 section, including settings equal to their defaults. Leave those sections out.

@@ -1348,9 +1348,10 @@ device, its picture's frame keeping the camera's frame as well, so the
 frame's `color_bitstream` is the camera's JPEG, byte for byte. An H.265 frame
 carries none, since it decodes only after the frames before it.
 `OrbbecDeviceInfo` names each camera's lens model as the SDK reports it at
-the opened mode (`brown-conrady-k6`, say). Each colour decoder, MJPEG's and H.265's, decodes on a
-`DecodeWorker` of its own (`decode_worker.hpp`), which owns its queue, what
-a full one drops, its thread, and the failure that ends decoding.
+the opened mode (`brown-conrady-k6`, say). Each colour decoder, MJPEG's and
+H.265's, decodes on a `DecodeWorker` of its own (`decode_worker.hpp`), which
+owns its queue, what a full one drops, its thread, and the failure that ends
+decoding.
 
 ### codec
 
@@ -1635,13 +1636,13 @@ GPU preparation, fusion or mesh, so a run measures the cameras' stream and
 decode alone. `diagnostics.readback: true` reads each set's luma back through
 `PictureReadback`, a stage of its own, as the calibration app does.
 `diagnostics.dump_sets` writes the first sets' camera JPEGs, and with the
-readback their luma as PNGs (R = G = B), into `diagnostics.dump_directory`,
-which the run makes new, so the device's luma can be compared with the
-JPEGs' off line. It
-reports the cameras' open time and, at the end or when the run fails, the
-array's counters, each camera's `lost` frames and, for a rig, each
-secondary's mean and worst skew to the primary. Colour is H.265 unless
-`source.color_codec: "mjpeg"`.
+readback their luma as PNGs (R = G = B), into `diagnostics.dump_directory`
+(`SetDump`), so the device's luma can be compared with the JPEGs' off line.
+The directory must not exist: it is checked before the cameras open and made
+with the first set. The run reports the cameras' open time and, at the end
+or when it fails, the array's counters, each camera's `lost` frames and, for
+a rig, each secondary's mean and worst skew to the primary. Colour is H.265
+unless `source.color_codec: "mjpeg"`.
 **`rig_viewer`** (`VR_BUILD_VIEWER` with `VR_WITH_ORBBEC` and
 `VR_WITH_FFMPEG`; CI's viewer leg compiles it) is `fuse_viewer`'s live-rig
 sibling: an `OrbbecSensor` per camera of the sync file read as a
@@ -1796,8 +1797,8 @@ benchmark kit that sized
 them sits on the home box in `~/recon-bench` (a throwaway allocator patch
 behind environment variables); re-measure there after each.
 
-**Scenario keys from core 0.5.0.** No scenario sets `CodecOutputs` yet:
-`output.csv` and `output.frame_directory` come with core 0.5.0's schema, and
+**Scenario keys from core #30.** No scenario sets `CodecOutputs` yet:
+`output.csv` and `output.frame_directory` come with core #30's schema, and
 with them `fusion.dynamic` for every fusing example, not `rig_viewer` alone.
 
 **Measure the phases before choosing the optimisation.** Three independent

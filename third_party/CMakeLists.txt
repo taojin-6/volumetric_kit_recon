@@ -35,10 +35,11 @@ include(FetchContent)
 # rather than OFF, as calib does, so an application that turns the tier on keeps
 # it.
 #
-# The pin is core 0.4.0 (f7a23ce, core #28): the scenario configuration the
-# examples take, on 0.2.0's whole-file I/O and exception_status (core #27).
+# The pin is core 0.5.0 (e50de1a, core #29): the scenario configuration the
+# examples take, with diagnostics.dump_sets, on 0.2.0's whole-file I/O and
+# exception_status (core #27).
 #
-# TODO: pin a core release tag once one is tagged.
+# TODO: pin a core release tag once the core tags its releases.
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git

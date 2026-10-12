@@ -63,16 +63,19 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the camera's frame with its picture. An H.265 frame carries none. Tests:
   `recon_sensor_orbbec_jpeg`, `recon_sensor_orbbec_hevc`.
 - `sensor/array`: **a set's skew.** `FrameSet::skew_ns(i)`, a frame's time
-  less the trigger's, signed, and `spread_ns()`, over the frames a set holds;
-  `fuse_orbbec`'s skew report uses them. Tests: `recon_sensor_array`,
-  `recon_example_fuse_orbbec_sets`.
+  less the trigger's, signed and saturated, and `spread_ns()`, over the frames
+  a set holds; `fuse_orbbec`'s skew report uses `skew_ns`. Tests:
+  `recon_sensor_array`, `recon_example_fuse_orbbec_sets`.
 - `sensor/orbbec`: **`OrbbecDeviceInfo::color_lens_model` and
-  `depth_lens_model`**, the SDK's lens models by name
-  (`brown-conrady-k6`, ...). Test: `recon_sensor_orbbec_conversion`.
+  `depth_lens_model`**, the lens models the SDK reports (`none`,
+  `brown-conrady` or `brown-conrady-k6`); `fuse_orbbec`'s camera report
+  prints them. Tests: `recon_sensor_orbbec_conversion`,
+  `recon_example_fuse_orbbec_sets`.
 - `examples`: **`fuse_orbbec` with `diagnostics.dump_sets`** writes the first
   sets' camera JPEGs, and with `diagnostics.readback` their luma as PNGs,
-  into a new `diagnostics.dump_directory` (`config/examples/dump_orbbec.json`).
-  Examples and tests need core 0.5.0. Tests: `recon_example_set_dump`,
+  into a new `diagnostics.dump_directory` (`config/examples/dump_orbbec.json`),
+  checked before the cameras open and made with the first set. Examples and
+  tests need core 0.5.0. Tests: `recon_example_set_dump`,
   `recon_example_config`.
 - `examples`: **per-frame codec rows.** `CodecStream` keeps a row per coded
   frame (its source index, bytes, blocks, and encode and decode host and
