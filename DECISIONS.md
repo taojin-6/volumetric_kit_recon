@@ -4624,6 +4624,9 @@ their inputs. The buffers change anyway with the device-resident output below.
 
 ### 2026-09-27 — The v1 frame is independent rANS segments of sorted blocks, every integer a class plus raw bits, behind fixed per-frame tables and a section table; the decoder's end check is for consistency, not integrity (amends the 2026-09-26 entry's interleaved lanes).
 
+*Amended 2026-10-12 (the `.vrst` entry, below):* no CRC section is added; a
+frame travels in a `.vrst` record, whose CRC-32 checks it.
+
 The second of the 2026-09-26 entry's five PRs: the host rANS reference coder
 (`codec/rans.hpp`) and the v1 intra frame (`codec/bitstream.{hpp,cpp}`), both
 internal. Nothing public changes. `Encoder` / `Decoder` are the next PR.
@@ -4847,6 +4850,7 @@ check refuses.
 - The room0 throughput measurement that decides whether the GPU coder is
   needed. *Measured 2026-09-27 (the room0 defaults entry, below).*
 - The optional CRC section above, a `TODO(codec)` in `parse_frame`.
+  *Dropped 2026-10-12 (the `.vrst` entry, below).*
 - The reader accepts a "partial" mask that decodes all-full or all-empty. Our
   writer never makes one, and it decodes correctly. A `TODO(codec)` in the
   reader's block decode.

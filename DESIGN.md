@@ -1499,7 +1499,8 @@ build refuses rather than wraps. `DctBlocks` lives in `dct_blocks.hpp`, so
 the host-only frame never includes Vulkan. `RansReader::finish` is a
 **consistency** check, not an integrity one. It cannot see a flipped raw
 bit, nor a symbol swapped for one of equal frequency, so integrity is the
-transport's.
+transport's: the CRC-32 of the `.vrst` record that carries the frame
+(`stream`).
 
 ### eval
 
