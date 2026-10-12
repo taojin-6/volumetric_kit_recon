@@ -192,6 +192,9 @@ example with `VR_WITH_ASSIMP=ON` after installing the
 Their `codec` section selects `quantization_table` (`uniform`, `band`,
 `radial`), `quantization_scale`, `entropy` (`auto`, `host`, `device`),
 `segment_size` and the shared rate-distortion `sweep`.
+Over several coded frames, the report gives the p50, p95 and max of each
+frame's bytes, blocks and encode and decode milliseconds (host, and device
+where timed).
 
 Rafa2's supplied OBJ has no declared physical unit and its person is tilted
 in the stored coordinates. The mesh scenario's explicit head-up vector is the

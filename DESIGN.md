@@ -1651,12 +1651,17 @@ draws it.
 streams the growing grid through the codec: every `codec.encode_every` frames it
 encodes, then decodes into a player grid built from `read_frame_info` and
 sized for that frame's blocks. It reports bytes, the bitrate at the coded
-frame rate, and both calls' stage rows. It then judges the last decoded
-surface against the source's, mesh to mesh, with the `eval` tier: accuracy,
-coverage and the F-score at half a voxel, since a fused TSDF is projective
-and sampling it would measure the fusion's bias too. `codec.sweep` prints the
-rate–distortion table the defaults are chosen from. The stream, its report
-and the sweep are `examples/common/codec_stream.hpp` and `codec_sweep.hpp`.
+frame rate, the p50 / p95 / max of its per-frame rows, and both calls' stage
+rows. It then judges the last decoded surface against the source's, mesh to
+mesh, with the `eval` tier: accuracy, coverage and the F-score at half a
+voxel, since a fused TSDF is projective and sampling it would measure the
+fusion's bias too. `codec.sweep` prints the rate–distortion table the
+defaults are chosen from. The stream and its report, the rows, and the sweep
+are `codec_stream.hpp`, `codec_rows.hpp` and `codec_sweep.hpp` in
+`examples/common/`. The stream can also write its rows to a CSV as frames
+are coded, and every encoded frame, before it is decoded, into a frame
+directory that must be new (`CodecOutputs`). Frame files go through the
+core's `write_file`; the core cannot append, so the CSV is the stream's own.
 
 **`codec_mesh`** loads static geometry through the optional Assimp-backed
 `io::load_mesh`, explicitly normalizes its projected height and up direction
@@ -1771,6 +1776,9 @@ next the examples (the codec's transform is resident since 2026-10-01). The
 benchmark kit that sized
 them sits on the home box in `~/recon-bench` (a throwaway allocator patch
 behind environment variables); re-measure there after each.
+
+**Codec outputs from a scenario.** No scenario sets `CodecOutputs` yet:
+`output.csv` and `output.frame_directory` come with core 0.5.0's schema.
 
 **Measure the phases before choosing the optimisation.** Three independent
 guesses at this pipeline's bottleneck have been wrong, each corrected by an

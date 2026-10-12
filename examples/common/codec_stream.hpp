@@ -4,24 +4,29 @@
 #pragma once
 
 // A codec stream as a player sees it: encode a grid, decode the frame into a
-// player grid built from the first frame's header, and keep the totals the
-// examples report. The player-side policy lives here -- when to grow the grid
-// for a frame that outgrows it, retrying lock contention -- because it is a
-// player's, not the decoder's (the Decoder refuses rather than grows); the
-// grow itself is the volume tier's (volume::grow_grid).
+// player grid built from the first frame's header, and keep a row per coded
+// frame for the examples' report. The player-side policy lives here -- when to
+// grow the grid for a frame that outgrows it, retrying lock contention --
+// because it is a player's, not the decoder's (the Decoder refuses rather than
+// grows); the grow itself is the volume tier's (volume::grow_grid).
 
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
-#include <limits>
+#include <ios>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <system_error>
 #include <utility>
 #include <vector>
 
+#include "codec_rows.hpp"
 #include "grid_layout.hpp"
 #include "stage_table.hpp"
+#include "volumetric_kit/core/base/file_io.hpp"
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/recon/codec/decoder.hpp"
@@ -121,79 +126,127 @@ inline void print_comparison(const vr::eval::MeshComparison& c, float voxel) {
   }
 }
 
-/// @brief An encoder, a decoder and the player grid it decodes into, with the
-///        totals of every frame coded through them.
+/// @brief An encoder, a decoder and the player grid it decodes into, with a
+///        row for every frame coded through them.
 class CodecStream {
  public:
   /// The player grid is built from the first frame's header, sized for its
   /// blocks, and grows as later frames need. The decoder runs its rANS
-  /// coding where @p config says the encoder does.
-  static vkc::Result<CodecStream> create(
-      vkc::Device& device, vkc::Allocator& allocator,
-      const vr::codec::EncoderConfig& config) {
+  /// coding where @p config says the encoder does. @p outputs are made here,
+  /// after the codec objects and before any coding: the frame directory, then
+  /// the CSV, its header flushed.
+  /// @return The stream; `create_new_directory`'s error for the frame
+  ///         directory (InvalidArgument when something is at its path,
+  ///         NotFound when its parent is missing); IoError naming a CSV that
+  ///         cannot be written, with the frame directory removed again; or
+  ///         the `Encoder::create` / `Decoder::create` error.
+  static vkc::Result<CodecStream> create(vkc::Device& device,
+                                         vkc::Allocator& allocator,
+                                         const vr::codec::EncoderConfig& config,
+                                         CodecOutputs outputs = {}) {
     VKC_ASSIGN(vr::codec::Encoder enc,
                vr::codec::Encoder::create(device, allocator, config));
     vr::codec::DecoderConfig dc;
     dc.entropy = config.entropy;
     VKC_ASSIGN(vr::codec::Decoder dec,
                vr::codec::Decoder::create(device, allocator, dc));
-    return CodecStream(device, allocator, std::move(enc), std::move(dec));
+    if (!outputs.frame_directory.empty()) {
+      VKC_TRY(vkc::create_new_directory(outputs.frame_directory));
+    }
+    // The core writes whole files only, so the CSV, extended a row at a time,
+    // is the stream's own.
+    std::ofstream csv;
+    if (!outputs.csv.empty()) {
+      csv.open(outputs.csv, std::ios::binary | std::ios::trunc);
+      csv << kCodecRowsCsvHeader << std::flush;
+      if (!csv) {
+        // The directory is this call's and still empty: take it back, so a
+        // re-run is refused for the CSV again, not for the directory.
+        if (!outputs.frame_directory.empty()) {
+          std::error_code ignored;
+          std::filesystem::remove(outputs.frame_directory, ignored);
+        }
+        return csv_error(outputs.csv);
+      }
+    }
+    return CodecStream(device, allocator, std::move(enc), std::move(dec),
+                       std::move(outputs), std::move(csv));
   }
 
-  /// @brief Encode @p source as one frame and decode it into the player.
-  /// @param frame_path Optional output file for the successfully decoded
-  ///                   compressed frame; file I/O is outside codec timings.
-  vkc::Status code(vr::volume::VoxelBlockGrid& source,
+  /// @brief Encode @p source as one frame, decode it into the player, and
+  ///        keep its row. Files are written outside the codec timings: the
+  ///        frame to the frame directory's @ref frame_file before it is
+  ///        decoded, so a frame the decoder refuses is kept; once it decodes,
+  ///        to @p frame_path, and its row to the CSV, flushed.
+  /// @param frame       The source's index of the frame: its row's and its
+  ///                    frame file's.
+  /// @param frame_path  Optional further file for a frame that decodes,
+  ///                    replaced if it exists.
+  /// @return OK; the encode or decode error; `write_file`'s error for a file
+  ///         (InvalidArgument for a frame file already there, @p frame coded
+  ///         before); or IoError naming the CSV.
+  vkc::Status code(vr::volume::VoxelBlockGrid& source, std::size_t frame,
                    const std::string& frame_path = {}) {
-    VKC_ASSIGN(const Bytes frame, encoder_.encode(source, &encode_rows_));
-    if (!player_) {
-      VKC_ASSIGN(vr::volume::VoxelBlockGrid g,
-                 player_grid(*device_, *allocator_, frame));
-      player_.emplace(std::move(g));
-    }
-    VKC_TRY(decode_growing(decoder_, frame, *player_, &decode_rows_, &grows_));
-    if (!frame_path.empty()) {
-      if (frame.size() >
-          std::size_t(std::numeric_limits<std::streamsize>::max())) {
-        return vkc::Status::invalid_argument("frame is too large to write");
-      }
-      std::ofstream output(frame_path, std::ios::binary);
-      output.write(reinterpret_cast<const char*>(frame.data()),
-                   static_cast<std::streamsize>(frame.size()));
-      output.close();
-      if (!output) {
-        return vkc::Status::io_error("cannot write codec frame: " + frame_path);
-      }
+    vkc::StageMetrics encoded;
+    VKC_ASSIGN(const Bytes bytes, encoder_.encode(source, &encoded));
+    const std::string_view chars(reinterpret_cast<const char*>(bytes.data()),
+                                 bytes.size());
+    if (!outputs_.frame_directory.empty()) {
+      VKC_TRY(vkc::write_file(frame_file(outputs_.frame_directory, frame),
+                              chars, vkc::WriteMode::CreateNew));
     }
     VKC_ASSIGN(const vr::codec::FrameInfo info,
-               vr::codec::read_frame_info(frame.data(), frame.size()));
-    ++frames_;
-    bytes_ += double(frame.size());
-    blocks_ += double(info.block_count);
-    max_bytes_ = std::max(max_bytes_, frame.size());
+               vr::codec::read_frame_info(bytes.data(), bytes.size()));
+    if (!player_) {
+      VKC_ASSIGN(vr::volume::VoxelBlockGrid g,
+                 player_grid(*device_, *allocator_, bytes));
+      player_.emplace(std::move(g));
+    }
+    vkc::StageMetrics decoded;
+    VKC_TRY(decode_growing(decoder_, bytes, *player_, &decoded, &grows_));
+    if (!frame_path.empty()) {
+      VKC_TRY(vkc::write_file(frame_path, chars, vkc::WriteMode::Replace));
+    }
+    encode_rows_.merge(encoded);
+    decode_rows_.merge(decoded);
+    rows_.push_back(make_codec_row(frame, bytes.size(), info.block_count,
+                                   encoded, decoded));
+    if (csv_.is_open()) {
+      csv_ << codec_row_csv(rows_.back()) << std::flush;
+      if (!csv_) return csv_error(outputs_.csv);
+    }
     return {};
   }
 
-  /// @return The frames coded so far.
-  std::size_t frames() const noexcept { return frames_; }
+  /// @return A row per frame coded so far, in coding order.
+  const std::vector<CodecRow>& rows() const noexcept { return rows_; }
 
-  /// @return The grid the last frame was decoded into. @pre frames() > 0.
+  /// @return The grid the last frame was decoded into. @pre rows() is not
+  ///         empty.
   vr::volume::VoxelBlockGrid& player() { return *player_; }
 
-  /// @brief Print what the stream cost: size, bitrate, and where the encode
-  ///        and decode time went. @pre frames() > 0.
+  /// @brief Print what the stream cost: size, bitrate, each column's spread
+  ///        over the frames, and where the encode and decode time went.
+  ///        @pre rows() is not empty.
   /// @param fps    The source's frame rate.
   /// @param every  Source frames per coded frame; 0 when only one frame was
   ///               coded, which has no bitrate.
   void report(double fps, int every) const {
-    const double per_frame = bytes_ / double(frames_);
-    const double per_block = blocks_ > 0 ? bytes_ / blocks_ : 0.0;
-    std::printf("stream: %zu frames coded%s\n", frames_,
+    const auto frames = double(rows_.size());
+    double bytes = 0.0;
+    double blocks = 0.0;
+    for (const CodecRow& row : rows_) {
+      bytes += double(row.bytes);
+      blocks += double(row.blocks);
+    }
+    const double per_frame = bytes / frames;
+    const double per_block = blocks > 0 ? bytes / blocks : 0.0;
+    std::printf("stream: %zu frames coded%s\n", rows_.size(),
                 grows_ > 0 ? " (the player grid grew)" : "");
     std::printf(
-        "  %.0f bytes per frame (max %zu), %.0f blocks; %.1f bytes "
-        "per block, %.0fx under raw",
-        per_frame, max_bytes_, blocks_ / double(frames_), per_block,
+        "  %.0f bytes per frame, %.0f blocks; %.1f bytes per block, %.0fx "
+        "under raw",
+        per_frame, blocks / frames, per_block,
         per_block > 0 ? kRawBytesPerBlock / per_block : 0.0);
     if (every > 0) {
       const double coded_fps = fps / double(every);
@@ -201,10 +254,14 @@ class CodecStream {
                   per_frame * 8.0 * coded_fps / 1e6, coded_fps, every, fps);
     }
     std::printf("\n");
-    print_stage_rows("encode, per coded frame", encode_rows_, frames_, 2);
-    print_stage_rows("decode, per coded frame", decode_rows_, frames_, 2);
-    const double enc = row_ms(encode_rows_, "  ..rans encode") / frames_;
-    const double dec = row_ms(decode_rows_, "  ..rans decode") / frames_;
+    // One frame is its own spread, already printed.
+    if (rows_.size() > 1) {
+      std::fputs(format_codec_rows(rows_, 2).c_str(), stdout);
+    }
+    print_stage_rows("encode, per coded frame", encode_rows_, rows_.size(), 2);
+    print_stage_rows("decode, per coded frame", decode_rows_, rows_.size(), 2);
+    const double enc = row_ms(encode_rows_, "  ..rans encode") / frames;
+    const double dec = row_ms(decode_rows_, "  ..rans decode") / frames;
     std::printf(
         "  rANS: %.2f ms encode, %.2f ms decode wall clock per coded frame",
         enc, dec);
@@ -220,23 +277,29 @@ class CodecStream {
 
  private:
   CodecStream(vkc::Device& device, vkc::Allocator& allocator,
-              vr::codec::Encoder enc, vr::codec::Decoder dec)
+              vr::codec::Encoder enc, vr::codec::Decoder dec,
+              CodecOutputs outputs, std::ofstream csv)
       : device_(&device),
         allocator_(&allocator),
         encoder_(std::move(enc)),
-        decoder_(std::move(dec)) {}
+        decoder_(std::move(dec)),
+        outputs_(std::move(outputs)),
+        csv_(std::move(csv)) {}
+
+  static vkc::Status csv_error(const std::string& path) {
+    return vkc::Status::io_error("CodecStream: cannot write the CSV " + path);
+  }
 
   vkc::Device* device_;
   vkc::Allocator* allocator_;
   vr::codec::Encoder encoder_;
   vr::codec::Decoder decoder_;
+  CodecOutputs outputs_;
+  std::ofstream csv_;  // open when outputs_.csv names a file
   std::optional<vr::volume::VoxelBlockGrid> player_;
-  vkc::StageMetrics encode_rows_;
+  vkc::StageMetrics encode_rows_;  // every frame's, summed by stage
   vkc::StageMetrics decode_rows_;
-  std::size_t frames_ = 0;
-  double bytes_ = 0.0;
-  double blocks_ = 0.0;
-  std::size_t max_bytes_ = 0;
+  std::vector<CodecRow> rows_;
   int grows_ = 0;
 };
 

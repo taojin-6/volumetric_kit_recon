@@ -291,6 +291,33 @@ target_link_libraries(recon_example_stage_table_test
 vr_target_warnings(recon_example_stage_table_test)
 add_test(NAME recon_example_stage_table COMMAND recon_example_stage_table_test)
 
+# The codec examples' per-frame rows (examples/common/codec_rows.hpp): a row's
+# host and device milliseconds, nearest-rank percentiles, the p50 / p95 / max
+# table, the CSV lines and the frame file names. Host only.
+add_executable(recon_example_codec_rows_test example_codec_rows_test.cpp)
+target_include_directories(recon_example_codec_rows_test
+                           PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
+target_link_libraries(recon_example_codec_rows_test
+                      PRIVATE volumetric_kit::recon_core)
+vr_target_warnings(recon_example_codec_rows_test)
+add_test(NAME recon_example_codec_rows COMMAND recon_example_codec_rows_test)
+
+# The codec examples' stream (examples/common/codec_stream.hpp): outputs it
+# cannot make refused on create, none written without outputs, a row per coded
+# frame matching the frame, the new frame directory's files (a frame the decoder
+# refuses included), a frame index coded twice refused, and the CSV replaced on
+# create and written as frames are coded. Skips with no device.
+add_executable(recon_example_codec_stream_test example_codec_stream_test.cpp)
+target_include_directories(recon_example_codec_stream_test
+                           PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
+target_link_libraries(
+  recon_example_codec_stream_test
+  PRIVATE volumetric_kit::core_test_policy volumetric_kit::recon_codec
+          volumetric_kit::recon_eval Vulkan::Vulkan)
+vr_target_warnings(recon_example_codec_stream_test)
+add_test(NAME recon_example_codec_stream
+         COMMAND recon_example_codec_stream_test)
+
 # fuse_replica's --dirty-every survey (examples/common/remesh_report.hpp): the
 # changed blocks after a tick, the blocks they put back to marching cubes, and
 # the survey's windows. Skips (exit 0) with no device.

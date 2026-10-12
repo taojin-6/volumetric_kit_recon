@@ -8,6 +8,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `examples`: `codec.sweep`'s `enc gpu` / `dec gpu` count every device span,
+  as the per-frame codec rows do.
 - Examples now accept `--config scenario.json` and `--help`. Core's optional
   `core_config` owns the JSON format, typed settings, defaults and static
   validation. All seven executables use its settings directly; the old local
@@ -19,6 +21,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `examples`: **per-frame codec rows.** `codec_replica` and `codec_mesh`
+  keep a row per coded frame (its source index, bytes, blocks, and encode
+  and decode host and device ms) and report each column's p50, p95 and max.
+  `CodecStream` takes `CodecOutputs`: a CSV of the rows, written as frames
+  are coded, and a new directory of every encoded frame. Its frame files,
+  `codec_mesh`'s `.vrtc` included, go through the core's `write_file`.
+  Tests: `recon_example_codec_rows`, `recon_example_codec_stream`.
 - `sensor/utils`: **`PictureReadback`** (`picture_readback.hpp`), a set's
   colour pictures on the host, luma alone or every plane, wherever the
   decoder left them: NV12 images, or NV12 and I420 planes in a buffer taken

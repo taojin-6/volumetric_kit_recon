@@ -101,7 +101,7 @@ vkc::Status run(const Options& opt) {
     ++fused;
     if (opt.codec.encode_every > 0 &&
         fused % std::size_t(opt.codec.encode_every) == 0) {
-      VKC_TRY(stream.code(volume));
+      VKC_TRY(stream.code(volume, fused - 1));
       coded_at = fused;
     }
   }
@@ -109,7 +109,7 @@ vkc::Status run(const Options& opt) {
     return vkc::Status::invalid_argument("no frames were fused");
   }
   if (coded_at != fused) {
-    VKC_TRY(stream.code(volume));
+    VKC_TRY(stream.code(volume, fused - 1));
   }
   stream.report(kFps, opt.codec.encode_every);
 
