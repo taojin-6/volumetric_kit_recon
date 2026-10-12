@@ -214,8 +214,8 @@ vr_target_warnings(recon_sensor_picture_readback_test)
 add_test(NAME recon_sensor_picture_readback
          COMMAND recon_sensor_picture_readback_test)
 
-# Allocation failure during a read is an OutOfMemory result, and the next read
-# succeeds. Separate executable for its replacement operator new.
+# Allocation failure during creation (including the timer) or a read is an
+# OutOfMemory result, and retry succeeds. Separate allocation overrides.
 add_executable(recon_sensor_picture_readback_oom_test
                sensor_picture_readback_oom_test.cpp test_allocation_failure.cpp)
 target_link_libraries(

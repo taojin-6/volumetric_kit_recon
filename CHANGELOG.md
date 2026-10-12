@@ -23,8 +23,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   colour pictures on the host, luma alone or every plane, wherever the
   decoder left them: NV12 images, or NV12 and I420 planes in a buffer taken
   over from the family that wrote it. One submit a set, into host memory the
-  readback keeps; each `PictureView` is valid until the next read. The
-  decoder tests read their pictures through it. Tests:
+  readback keeps; each `PictureView` is valid until the next read. Reads
+  update the input pictures' queue-family ownership after success so later
+  preparation or readback does not acquire a buffer twice. Creation,
+  including timer allocation, returns `OutOfMemory` on host allocation
+  failure. Tests:
   `recon_sensor_picture_readback`, `recon_sensor_picture_readback_oom`.
 - `examples`: **`fuse_orbbec` with `diagnostics.readback: true`** reads each
   set's luma back to the host, a `readback` stage, as the calibration app

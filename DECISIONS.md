@@ -12,6 +12,7 @@ shared rule in AGENTS.md.
 ## Decision index
 
 - [**2026-10-11**](#2026-10-11--examples-load-the-cores-scenario-format-and-keep-only-runtime-adapters) — Examples load the core scenario format; JSON, defaults and static validation have one owner.
+- [**2026-10-11**](#2026-10-11--picture-readback-publishes-buffer-ownership-for-subsequent-stages) — Picture readback updates ownership before subsequent reads or preparation.
 
 The index and dated entries are in the same chronological order. Read the
 entries relevant to your task; later amendments supersede earlier rules.
@@ -11919,3 +11920,26 @@ scenario file's directory before any resource is opened. Core's tests own
 input-validation cases; recon tests pin the adapter boundary and run every
 executable's help, legacy-input refusal and invalid-config startup without
 opening hardware. `config/README.md` is the CLI migration guide.
+
+### 2026-10-11 — Picture readback publishes buffer ownership for subsequent stages
+
+This amends the 2026-09-28 decoded-frame ownership contract:
+`YuvImage::queue_family` names the current owner, initially the writer.
+`PictureReadback::read` acquires a buffer from that family. Both overloads
+now take mutable pictures/frames and update the field only after a successful
+submit and wait: the readback's family for EXCLUSIVE buffers, and
+`kQueueFamilyIgnored` for CONCURRENT buffers. Later stages use that updated
+descriptor; copies made before the read still carry the old metadata.
+`fuse_orbbec` passes the updated set to preparation.
+
+The regression releases an EXCLUSIVE picture from one queue family to
+another, then reads, prepares and reads it again through both overloads.
+Before the fix, synchronization validation reports an acquire without a
+matching release (`VUID-vkQueueSubmit-pSubmits-02207`). A rejected picture
+keeps its original ownership metadata. The two-family case is reported as
+skipped on devices that provide only one family.
+
+Timer creation also belongs inside `PictureReadback::create`'s allocation
+handler. A failure injected at a captured timer allocation size and call
+site must return `OutOfMemory`, and creation must succeed on retry. Before
+the fix, that regression catches an escaping `std::bad_alloc`.

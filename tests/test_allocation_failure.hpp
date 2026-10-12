@@ -13,6 +13,7 @@ namespace vr_test {
 struct AllocationFailure {
   bool measure = false;
   std::size_t bytes = 0;
+  const void* measured_site = nullptr;
   bool armed = false;
   bool injected = false;
   // Optionally replay a failure at a captured allocation site, so an

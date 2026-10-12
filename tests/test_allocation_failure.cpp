@@ -21,7 +21,10 @@ void* operator new(std::size_t bytes) {
   const void* site = __builtin_return_address(0);
 #endif
   auto& failure = vr_test::allocation_failure;
-  if (failure.measure) failure.bytes = bytes;
+  if (failure.measure) {
+    failure.bytes = bytes;
+    failure.measured_site = site;
+  }
   if (failure.armed && bytes == failure.bytes &&
       (failure.site == nullptr || failure.site == site)) {
     failure.armed = false;  // The error Status can allocate its message.

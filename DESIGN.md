@@ -1289,7 +1289,7 @@ device only (the 2026-10-06 device-only `GpuFramePrep` decision): planes in a
 buffer (`YuvImage::device`, with per-plane offsets and strides) are bound
 where they are, from
 the first plane, once the batch has taken them over from the queue family
-that wrote them (`YuvImage::queue_family`; the 2026-09-28 decoded-frame
+that owns them (`YuvImage::queue_family`; the 2026-09-28 decoded-frame
 decision). NV12's planes may come as images instead (`YuvImage::image`),
 which the batch copies into the pass's input. A dataset decoded on the host
 hands its colour over as packed R'G'B' words instead
@@ -1316,7 +1316,13 @@ colour camera can colour.
 host, luma alone or every plane, for calib's detector: NV12 images from
 their corner, and planes in a buffer where they sit, after the batch takes
 the buffer over from `YuvImage::queue_family`; every copy in one batch, one
-submit and one wait. The copies land in host memory it keeps (`Staging`,
+submit and one wait. Both read overloads take mutable pictures/frames and,
+after a successful submit and wait, update each buffer picture's
+`queue_family` to the readback's family (EXCLUSIVE) or `kQueueFamilyIgnored`
+(CONCURRENT). Subsequent reads and preparation use the updated picture;
+copies made before readback still carry the old ownership metadata.
+Creation, including the GPU timer, and reading return `OutOfMemory` for
+host allocation failure. The copies land in host memory it keeps (`Staging`,
 cached for reading), grown to the largest read, and each `PictureView` points
 into it until the next read, so the frames may go at once. A picture is
 checked by the rules `GpuFramePrep` applies to one (`yuv_planes.hpp`), with
