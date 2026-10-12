@@ -57,6 +57,23 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`geometry.hpp`), the inverses of `rotation_from_rodrigues` and
   `matrix_from_rodrigues`, accurate to round-off from 0 to pi. Test:
   `recon_camera_geometry`.
+- `sensor`: **the colour as the camera coded it.** `RgbdFrame::color_bitstream`
+  (`ColorBitstream{codec, data, size}`, held by `pixels`) is an MJPEG
+  camera's JPEG, byte for byte: the Orbbec driver's `JpegColorDecoder` keeps
+  the camera's frame with its picture. An H.265 frame carries none. Tests:
+  `recon_sensor_orbbec_jpeg`, `recon_sensor_orbbec_hevc`.
+- `sensor/array`: **a set's skew.** `FrameSet::skew_ns(i)`, a frame's time
+  less the trigger's, signed, and `spread_ns()`, over the frames a set holds;
+  `fuse_orbbec`'s skew report uses them. Tests: `recon_sensor_array`,
+  `recon_example_fuse_orbbec_sets`.
+- `sensor/orbbec`: **`OrbbecDeviceInfo::color_lens_model` and
+  `depth_lens_model`**, the SDK's lens models by name
+  (`brown-conrady-k6`, ...). Test: `recon_sensor_orbbec_conversion`.
+- `examples`: **`fuse_orbbec` with `diagnostics.dump_sets`** writes the first
+  sets' camera JPEGs, and with `diagnostics.readback` their luma as PNGs,
+  into a new `diagnostics.dump_directory` (`config/examples/dump_orbbec.json`).
+  Examples and tests need core 0.5.0. Tests: `recon_example_set_dump`,
+  `recon_example_config`.
 - `examples`: **per-frame codec rows.** `CodecStream` keeps a row per coded
   frame (its source index, bytes, blocks, and encode and decode host and
   device ms) and takes `CodecOutputs`: a CSV of the rows, written as frames

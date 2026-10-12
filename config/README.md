@@ -19,6 +19,7 @@ and home-directory shortcuts are not expanded.
 | `fuse_orbbec` | [fuse_orbbec.json](examples/fuse_orbbec.json) | Live camera/rig to PLY |
 | `fuse_orbbec` | [stream_orbbec.json](examples/stream_orbbec.json) | Live stream/decode only |
 | `fuse_orbbec` | [readback_orbbec.json](examples/readback_orbbec.json) | Live stream with luma readback |
+| `fuse_orbbec` | [dump_orbbec.json](examples/dump_orbbec.json) | Live stream with readback, first sets' JPEGs and luma written |
 | `fuse_render` | [fuse_render.json](examples/fuse_render.json) | Dataset to image |
 | `fuse_viewer` | [fuse_viewer.json](examples/fuse_viewer.json) | Dataset in a window |
 | `rig_viewer` | [rig_viewer.json](examples/rig_viewer.json) | Live rig in a window |
@@ -56,6 +57,12 @@ limit both acquired sets and drawn frames.
 scenario. It copies every set's luma to host memory and reports a separate
 `readback` stage. It defaults to false, so a stream without it measures only
 streaming and decoding.
+
+`diagnostics.dump_sets: N` with `diagnostics.dump_directory` writes the first
+N sets' files into that directory, which must not exist yet (its parent must):
+`set_NNN_<serial>.jpg`, each camera's JPEG as it came, and with `readback`
+`set_NNN_<serial>_luma.png`, the luma the device decoded, as R = G = B. It
+needs `source.color_codec: "mjpeg"`. Writing slows the sets it writes.
 
 `operation: "stream"` refuses an explicitly supplied `fusion` or `output`
 section, including settings equal to their defaults. Leave those sections out.

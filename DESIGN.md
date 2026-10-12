@@ -1270,7 +1270,9 @@ from the `ArrayCalibration`, which must pose every sensor. Opened with a
 device, its
 `process(set)` prepares a set through `GpuFramePrep::prepare_batch`: every
 frame checked, then every pass's uploads and every pass's kernels recorded
-into one `CommandBatch`, one submit and one wait.
+into one `CommandBatch`, one submit and one wait. A `FrameSet`'s
+`skew_ns(i)` is sensor i's frame's time less the trigger's, signed, and its
+`spread_ns()` the latest of its frames' times less the earliest.
 **`sensor/utils`'s `GpuFramePrep`** undistorts an `RgbdFrame`
 (`sensor/rgbd_frame.hpp`) on the device: depth sampled at the nearest pixel,
 colour bilinearly and converted from Y'CbCr in the same pass, each camera
@@ -1278,8 +1280,9 @@ keeping its intrinsics. The frame carries each camera's `camera::CameraModel`
 in double, narrowed to float once for the passes; the colour camera's pose,
 `color_to_world`, and the sensor's `depth_to_color`, both refused unless
 rigid, pose the outputs; a sequence number; and `pixels`, the owner of its
-depth and any host colour, so a consumer may keep frames past the next poll
-and past the capture.
+depth, any host colour and any `color_bitstream` (the colour as the camera
+coded it, when that decodes on its own), so a consumer may keep frames past
+the next poll and past the capture.
 `ChromaLocation` travels in the picture's `YuvImage`: JPEG is centred, and
 HEVC keeps the decoded tag with left alignment when unspecified.
 The GPU samples the location consistently for planes in a buffer and NV12
@@ -1341,7 +1344,11 @@ and stays there, the picture carried through the mailbox by an SDK frame
 whose bytes only name it, so a copy of the frame owns nothing
 (`picture_frames.hpp`); for MJPEG it streams the camera's JPEGs, and each
 camera's `JpegColorDecoder` decodes them on a thread of its own onto the
-device. Each colour decoder, MJPEG's and H.265's, decodes on a
+device, its picture's frame keeping the camera's frame as well, so the
+frame's `color_bitstream` is the camera's JPEG, byte for byte. An H.265 frame
+carries none, since it decodes only after the frames before it.
+`OrbbecDeviceInfo` names each camera's lens model as the SDK reports it at
+the opened mode (`brown-conrady-k6`, say). Each colour decoder, MJPEG's and H.265's, decodes on a
 `DecodeWorker` of its own (`decode_worker.hpp`), which owns its queue, what
 a full one drops, its thread, and the failure that ends decoding.
 
@@ -1626,7 +1633,11 @@ fuses it through `fuse_set`, and writes a PLY after `run.frames` frames.
 `operation: "stream"` only streams: each set is polled, counted and released, with no
 GPU preparation, fusion or mesh, so a run measures the cameras' stream and
 decode alone. `diagnostics.readback: true` reads each set's luma back through
-`PictureReadback`, a stage of its own, as the calibration app does. It
+`PictureReadback`, a stage of its own, as the calibration app does.
+`diagnostics.dump_sets` writes the first sets' camera JPEGs, and with the
+readback their luma as PNGs (R = G = B), into `diagnostics.dump_directory`,
+which the run makes new, so the device's luma can be compared with the
+JPEGs' off line. It
 reports the cameras' open time and, at the end or when the run fails, the
 array's counters, each camera's `lost` frames and, for a rig, each
 secondary's mean and worst skew to the primary. Colour is H.265 unless

@@ -297,6 +297,17 @@ if(VR_BUILD_EXAMPLES)
            COMMAND recon_example_replica_sensor_test)
 endif()
 
+# fuse_orbbec's dump of its first sets (examples/common/set_dump.hpp): the JPEGs
+# byte for byte, the luma as R = G = B PNGs, and the refusals. Host only.
+add_executable(recon_example_set_dump_test example_set_dump_test.cpp)
+target_include_directories(recon_example_set_dump_test
+                           PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
+target_link_libraries(
+  recon_example_set_dump_test PRIVATE volumetric_kit::recon_sensor_array
+                                      volumetric_kit::recon_io)
+vr_target_warnings(recon_example_set_dump_test)
+add_test(NAME recon_example_set_dump COMMAND recon_example_set_dump_test)
+
 # The examples' one stage table (examples/common/stage_table.hpp). Host only.
 add_executable(recon_example_stage_table_test example_stage_table_test.cpp)
 target_include_directories(recon_example_stage_table_test

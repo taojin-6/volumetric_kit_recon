@@ -302,10 +302,9 @@ class RigSets {
                       1e6);
     }
     for (std::size_t c = 0; c < set.frames.size(); ++c) {
-      if (c == array_.primary() || !set.frames[c]) continue;
-      const double ms = static_cast<double>(static_cast<std::int64_t>(
-                            set.frames[c]->timestamp_ns - set.timestamp_ns)) /
-                        1e6;
+      const std::optional<std::int64_t> skew_ns = set.skew_ns(c);
+      if (c == array_.primary() || !skew_ns) continue;
+      const double ms = static_cast<double>(*skew_ns) / 1e6;
       skews_[c].sum_ms += ms;
       skews_[c].worst_ms = std::max(skews_[c].worst_ms, std::fabs(ms));
       ++skews_[c].frames;
