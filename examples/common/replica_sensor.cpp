@@ -232,7 +232,7 @@ vkc::Result<ReplicaSensor> ReplicaSensor::open(
   // of frames that will really play. Only the frames the options select are
   // looked at -- the strided indices under the limit -- so the probe scales
   // with the frames the run will play, not with the sequence on disk (at
-  // `--max-frames 5` that is 5 frames, not room0's 400), and an index the
+  // `run.frames 5` that is 5 frames, not room0's 400), and an index the
   // stride never visits cannot end the sequence. Poses are matched to
   // frameNNNNNN by position, so a gap at a visited index ends the sequence
   // exactly as a missing tail does.

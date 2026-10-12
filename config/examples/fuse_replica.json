@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "operation": "fuse",
+  "source": {
+    "kind": "dataset",
+    "path": "data/room0"
+  },
+  "fusion": {
+    "voxel_size_m": 0.02
+  },
+  "output": {
+    "path": "results/room0.ply"
+  }
+}

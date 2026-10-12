@@ -894,7 +894,7 @@ nothing. A consumer compares ticks and resets nothing:
 `free_stale_blocks(max_age)` frees the blocks whose newer stamp is older
 than that, zeroing them with a kernel over the pass's list, so the band the
 allocator still asks for stays, and `rig_viewer` runs it every
-`--free-after` sets; the iOS scanner reads `changed` through
+`fusion.free_after` sets; the iOS scanner reads `changed` through
 `read_block_stamps`.
 
 ### tsdf
@@ -1550,33 +1550,31 @@ replacing it only on success (`fuse_keyframe`). A failure therefore leaves
 its depth, colour and cameras available for the final and later remeshes.
 Preparing while the previous frame is held allocates a separate output pair.
 
-Every example reads its command line through `examples/common/cli.hpp`'s
-`Cli`: each flag is declared once with the variable it sets, a number is read
-whole and finite, a value below a flag's minimum is refused, flags of which a
-command line gives one form a group (`[a | b]`, or `(a | b)` when one is
-required), a flag that excludes others refuses them in either order
-(`Cli::excludes`: `--no-fuse` takes no `FusionFlags` flag and no `-o`), and an
-error is printed with the usage line the declarations generate. Flags a
-family of examples shares are declared and validated once:
-`FusionFlags` (`--voxel`, `--trunc`, `--min-depth`, `--max-depth`,
-`--max-weight`; the band defaults to four voxels, `grid_layout.hpp`'s
-`default_trunc`, and `check_voxel` is every example's `--voxel` rule) in every
-example that fuses a sensor, `ReplicaFlags` (`<scene_dir>`, `--cam-params`,
-`--max-frames`, `--preload`) in the four dataset ones, `OrbbecFlags` (`--rig`,
-`--calibration`, `--apply-sync`, `--hevc | --mjpeg`, `--color`, `--fps`) in
-the two live ones, `CodecFlags` in the two codec ones, and `WindowFlags`
-(`viewer_common.hpp`) in the two windows; `fuse_orbbec`'s whole command line
-is `FuseOrbbecFlags`. Stage rows print through one table,
+Every example reads a scenario with `--config path.json`; `--help` prints
+that entry point. The optional core `config` tier owns the JSON format, typed
+settings, application defaults and all static input validation. Each example
+uses `core::config::Config` directly. `examples/common/config.hpp` handles
+startup and diagnostics, and `replica_config.hpp`, `orbbec_config.hpp` and
+`codec_config.hpp` only copy validated settings into runtime API types and
+attach resources. No local parser, flag registration or config validator
+remains. [Configuration examples](config/README.md) document paths, defaults
+and migration from the previous CLI.
+
+`fuse_orbbec` selects stream-only work with `operation: "stream"`; core
+refuses explicit fusion or output settings for that operation before setup.
+Calibration and SDK sync files stay in their domain formats and are referenced
+by scenario paths. Device and camera capability checks remain in their runtime
+APIs. Stage rows print through one table,
 `stage_table.hpp`. Reports live beside the helpers rather than in a `main`:
-`fuse_replica`'s extract reports and `--dirty-every` survey in
+`fuse_replica`'s extract reports and `fusion.dirty_every` survey in
 `remesh_report.hpp`, the viewers' panels in `viewer_panels.hpp`,
-`rig_viewer`'s panel, progress line and `--texture-stats` in `rig_report.hpp`,
+`rig_viewer`'s panel, progress line and `render.texture_stats` in `rig_report.hpp`,
 and `fuse_orbbec`'s camera lines, set loop and counters in
 `fuse_orbbec_sets.hpp`.
 A `main.cpp` is the example's story: options, setup, the loop, the report.
 
 `fuse_replica` runs the spine on a posed Replica-SLAM RGB-D sequence and
-writes a PLY; `--dirty-every` reports the
+writes a PLY; `fusion.dirty_every` reports the
 changed and re-mesh fractions over windows of its own, keeping its own tick.
 Behind the off-by-default `VR_BUILD_VIEWER`: `fuse_render` writes a headless colour PNG (seam A — it
 builds two devices by design), and `fuse_viewer` opens a live window on one
@@ -1585,29 +1583,29 @@ directly, and carrying the two-panel perf overlay. Both viewers mesh only
 what their render camera sees: the render thread publishes its `view_proj`,
 and the fuse thread re-meshes the blocks inside it after fusing and whenever
 the view moves (2026-10-06). The four dataset examples
-take `--preload`, which makes the loop measure compute rather than the
+take `source.preload`, which makes the loop measure compute rather than the
 JPEG/PNG decoder.
 The live counterpart is its own example, not a `fuse_replica` flag:
 **`fuse_orbbec`** (`VR_WITH_ORBBEC`) reads one `OrbbecSensor`, or with
-`--rig sync.json` one per camera of the file on the host's clock
-(`--apply-sync` writing the settings a camera differs in), as a
-`SensorArray` posed by `--calibration`; it prepares each set on the GPU,
-fuses it through `fuse_set`, and writes a PLY after `--frames` frames.
-`--no-fuse` only streams: each set is polled, counted and released, with no
+`source.sync_config` one per camera of the file on the host's clock
+(`source.apply_sync` writing the settings a camera differs in), as a
+`SensorArray` posed by `source.calibration`; it prepares each set on the GPU,
+fuses it through `fuse_set`, and writes a PLY after `run.frames` frames.
+`operation: "stream"` only streams: each set is polled, counted and released, with no
 GPU preparation, fusion or mesh, so a run measures the cameras' stream and
 decode alone. It reports the cameras' open time and, at the end or when the
 run fails, the array's counters, each camera's `lost` frames and, for a rig,
 each secondary's mean and worst skew to the primary. Colour is H.265 unless
-`--mjpeg`.
+`source.color_codec: "mjpeg"`.
 **`rig_viewer`** (`VR_BUILD_VIEWER` with `VR_WITH_ORBBEC` and
 `VR_WITH_FFMPEG`; CI's viewer leg compiles it) is `fuse_viewer`'s live-rig
 sibling: an `OrbbecSensor` per camera of the sync file read as a
 `SensorArray`, its raw sets prepared, fused and textured from every camera
 on the GPU, and the atlas filled by
 device copies recorded in gfx's frame (the 2026-09-29 decision), fusing
-depth only inside each colour camera's view unless given `--all-depth`, and
+depth only inside each colour camera's view unless given `fusion.depth_within_color: false`, and
 texturing a camera a set lacks from its last frame, a fallback view
-(`--hold-ms`). The two viewers hand meshes over through `mesh::MeshExchange`
+(`fusion.hold_ms`). The two viewers hand meshes over through `mesh::MeshExchange`
 and share `viewer_common.hpp`: the teardown guards and the render camera the
 fuse thread meshes (`SharedView`). Both draw with gfx's `StreamedAtlas`
 through `viewer_atlas.hpp`'s `LiveAtlas`: a mesh's payload names the colour
@@ -1621,13 +1619,13 @@ reclaims the retained colour buffers without waiting for that frame's number.
 `fuse_render` uploads its keyframe into a `StreamedAtlas` in the frame that
 draws it.
 **`codec_replica`** fuses a Replica sequence as `fuse_replica` does, and
-streams the growing grid through the codec: every `--encode-every` frames it
+streams the growing grid through the codec: every `codec.encode_every` frames it
 encodes, then decodes into a player grid built from `read_frame_info` and
 sized for that frame's blocks. It reports bytes, the bitrate at the coded
 frame rate, and both calls' stage rows. It then judges the last decoded
 surface against the source's, mesh to mesh, with the `eval` tier: accuracy,
 coverage and the F-score at half a voxel, since a fused TSDF is projective
-and sampling it would measure the fusion's bias too. `--sweep` prints the
+and sampling it would measure the fusion's bias too. `codec.sweep` prints the
 rate–distortion table the defaults are chosen from. The stream, its report
 and the sweep are `examples/common/codec_stream.hpp` and `codec_sweep.hpp`.
 
@@ -1646,8 +1644,8 @@ the demo's height convention and topology audit, which exist only to scale
 this test asset and are not library code. The mesh example is built only
 with `VR_WITH_ASSIMP=ON`.
 
-Both examples take `--quant-table uniform|band|radial` and `--step` for a
-single configuration. Their common `--sweep` compares all three table
+Both examples take `codec.quantization_table` (`uniform`, `band`, `radial`) and `codec.quantization_scale` for a
+single configuration. Their common `codec.sweep` compares all three table
 families at K = 64, 84, 120 and 512. The middle two retain complete frequency
 shells; K = 64 cuts a shell and is kept as the existing baseline. Each
 configuration has a warm-up and three timed codec rounds; mesh extraction

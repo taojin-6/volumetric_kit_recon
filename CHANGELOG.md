@@ -6,12 +6,23 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Examples now accept `--config scenario.json` and `--help`. Core's optional
+  `core_config` owns the JSON format, typed settings, defaults and static
+  validation. All seven executables use its settings directly; the old local
+  CLI and flag registries are removed. See `config/README.md` and
+  `config/examples/` for migration and working configuration templates.
+  Stream-only camera runs use `operation: "stream"` and retain the refusal of
+  explicit fusion/output settings. Tests cover runtime option mapping and
+  every executable's help/error startup before resource creation.
+
 ### Added
 
-- `examples`: **`fuse_orbbec --no-fuse`**, the stream alone: each set is
+- `examples`: **`fuse_orbbec` stream operation**, the stream alone: each set is
   polled, counted and released, with no GPU preparation, fusion or mesh, and
-  its stages are reported per set. It refuses the fusion flags and `-o`
-  (`Cli::excludes`). Tests: `recon_example_cli`,
+  its stages are reported per set. It refuses explicit fusion and output settings. Tests:
+  `recon_example_config`,
   `recon_example_fuse_orbbec_sets`.
 - build: **`VR_CAMERA_ONLY`** configures, builds and installs the camera tier
   (`volumetric_kit::recon_camera`) alone, over the core's base tier, GLM and

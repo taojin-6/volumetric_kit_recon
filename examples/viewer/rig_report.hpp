@@ -5,8 +5,8 @@
 
 /// @file examples/viewer/rig_report.hpp
 /// @brief What `rig_viewer` reports: its Rig panel, the line it prints every
-///        120 frames and at the end, and `--texture-stats`, the share of the
-///        mesh each camera textured.
+///        120 frames and at the end, and `render.texture_stats`, the share of
+///        the mesh each camera textured.
 
 #include <array>
 #include <cstddef>
@@ -54,7 +54,7 @@ struct RigPanel {
   /// remeshes it was given fewer cameras than the rig has -- each one a
   /// flicker, where the missing cameras' triangles fell to fused colour. Both
   /// count views given, not triangles taken: a held view whose depth no
-  /// longer agrees with the mesh takes none, which --texture-stats shows.
+  /// longer agrees with the mesh takes none, which render.texture_stats shows.
   std::uint64_t held_views = 0;
   std::uint64_t short_remeshes = 0;  ///< See @ref held_views.
   std::array<std::uint64_t, kUntexturedReasons> untextured{};

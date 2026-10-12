@@ -29,3 +29,25 @@ option(
 if(VR_BUILD_VIEWER)
   add_subdirectory(viewer)
 endif()
+
+# Exercise each real executable's startup contract without creating resources.
+if(VR_BUILD_TESTS)
+  foreach(
+    _vr_example
+    fuse_replica
+    codec_replica
+    codec_mesh
+    fuse_orbbec
+    fuse_render
+    fuse_viewer
+    rig_viewer)
+    if(TARGET ${_vr_example})
+      add_test(
+        NAME recon_${_vr_example}_config_entry
+        COMMAND
+          ${CMAKE_COMMAND} -DPROGRAM=$<TARGET_FILE:${_vr_example}>
+          -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/config-entry/${_vr_example} -P
+          ${PROJECT_SOURCE_DIR}/tests/example_config_entry.cmake)
+    endif()
+  endforeach()
+endif()

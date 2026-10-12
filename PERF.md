@@ -1,5 +1,9 @@
 # PERF.md — the live rig path, camera to screen
 
+Current examples use `--config scenario.json`; see [configuration migration](config/README.md).
+Command lines in historical measurements below record the inputs used at the
+time and may show the former per-setting flags.
+
 The optimisation plan for `rig_viewer`'s path: capture, decode, frame prep,
 allocation, fusion, marching cubes, texturing and gfx's draw. It is a shared
 work list. Each item says what it fixes, where the code is, what evidence

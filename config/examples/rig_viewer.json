@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "operation": "view",
+  "source": {
+    "kind": "live",
+    "sync_config": "../femto_mega_sync.json"
+  },
+  "window": {
+    "validation": true
+  }
+}

@@ -5,32 +5,28 @@
 // synced rig of them. Reads its cameras (sensor::OrbbecSensor) as a
 // sensor::SensorArray, which groups a rig's frames by trigger and prepares each
 // set on the GPU in one batch, fuses it into a sparse TSDF volume
-// (tsdf::Fuser), and after --frames frames extracts a
+// (tsdf::Fuser), and after run.frames frames extracts a
 // marching-cubes mesh and writes it to a binary PLY.
 //
-//   fuse_orbbec [--serial SN | --rig sync.json [--apply-sync]]
-//               [--calibration calib.json] [--frames 300] [--no-fuse]
-//               [-o fuse_orbbec.ply] [--hevc | --mjpeg] [--host-clock]
-//               [--color 1280x720] [--fps 30]
-//               [--voxel 0.02] [--trunc m] [--min-depth m] [--max-depth m]
-//               [--max-weight 20]
+//   fuse_orbbec --config config/examples/fuse_orbbec.json
+//   fuse_orbbec --help
 //
 // Depth and colour are fused with their own cameras, the colour decoded onto
-// the GPU: H.265 unless --mjpeg says otherwise, since MJPEG needs about nine
-// times the bandwidth at 4K. --color and --fps pick the colour mode, 4K H.265
-// running at 25 fps at most. --rig fuses every camera of a sync configuration
-// (femto_mega_sync.json) as one rig on the host's clock, refusing cameras whose
-// sync settings differ from it unless --apply-sync writes it to them.
-// --calibration poses each camera from a calibration file
-// (camera/array_calibration.hpp); without it every camera sits at the origin.
-// --host-clock puts one camera on the host's clock
-// (OrbbecSensor::Options::sync_clock_to_host), which its first frame's age
-// checks; a rig is always on it. --no-fuse only streams: each set is polled,
-// counted and released, with no GPU preparation, fusion or mesh, so the run
-// measures the cameras' stream and decode alone. The run reports each camera's
-// counters at the end, and a rig's skew of each secondary to the primary. It
-// gives up after ten seconds without a frame rather than waiting, still
-// reporting them.
+// the GPU: H.265 unless source.color_codec=mjpeg says otherwise, since MJPEG
+// needs about nine times the bandwidth at 4K. The source dimensions and fps
+// pick the colour mode, 4K H.265 running at 25 fps at most. source.sync_config
+// fuses every camera of a sync configuration (femto_mega_sync.json) as one rig
+// on the host's clock, refusing cameras whose sync settings differ from it
+// unless source.apply_sync writes it to them. source.calibration poses each
+// camera from a calibration file (camera/array_calibration.hpp); without it
+// every camera sits at the origin. source.host_clock puts one camera on the
+// host's clock (OrbbecSensor::Options::sync_clock_to_host), which its first
+// frame's age checks; a rig is always on it. operation=stream only streams:
+// each set is polled, counted and released, with no GPU preparation, fusion or
+// mesh, so the run measures the cameras' stream and decode alone. The run
+// reports each camera's counters at the end, and a rig's skew of each secondary
+// to the primary. It gives up after ten seconds without a frame rather than
+// waiting, still reporting them.
 
 #include <chrono>
 #include <cstddef>
@@ -39,9 +35,8 @@
 #include <string>
 #include <utility>
 
-#include "cli.hpp"
+#include "config.hpp"
 #include "fuse_frame.hpp"
-#include "fuse_orbbec_flags.hpp"
 #include "fuse_orbbec_sets.hpp"
 #include "stage_table.hpp"
 #include "volumetric_kit/core/base/result.hpp"
@@ -66,15 +61,7 @@ namespace sensor = volumetric_kit::recon::sensor;
 
 namespace {
 
-using Options = vr_example::FuseOrbbecFlags;
-
-vkc::Result<Options> parse_args(int argc, char** argv) {
-  Options opt;
-  vr_example::Cli cli("fuse_orbbec");
-  opt.add_to(cli);
-  VKC_TRY(cli.parse(argc, argv));
-  return opt;
-}
+using Options = vr_example::config::Config;
 
 double seconds_since(std::chrono::steady_clock::time_point start) {
   return std::chrono::duration<double>(std::chrono::steady_clock::now() - start)
@@ -99,14 +86,15 @@ vkc::Status run(const Options& opt) {
   std::optional<sensor::SensorArray> array;
   VKC_ASSIGN(array, vr_example::open_orbbec_array(opt, device, allocator));
 
-  // --- Volume, unless --no-fuse ---
+  // --- Volume, unless operation=stream ---
   std::optional<vol::VoxelBlockGrid> volume;
   std::optional<tsdf::Fuser> fuser;
   std::optional<mesh::MarchingCubes> extractor;
-  if (!opt.no_fuse) {
+  if (opt.operation != vr_example::config::Operation::Stream) {
     VKC_ASSIGN(vol::VoxelBlockGrid grid,
-               vr_example::create_fusion_grid(
-                   device, allocator, opt.fusion.voxel, opt.fusion.trunc));
+               vr_example::create_fusion_grid(device, allocator,
+                                              opt.fusion.voxel_size_m,
+                                              opt.fusion.truncation_m));
     volume.emplace(std::move(grid));
     VKC_ASSIGN(tsdf::Fuser f, tsdf::Fuser::create(device, allocator));
     fuser.emplace(std::move(f));
@@ -115,16 +103,18 @@ vkc::Status run(const Options& opt) {
 
   // --- Stream ---
   VKC_TRY(array->start());
-  const char* verb = opt.no_fuse ? "streamed" : "fused";
-  vr_example::RigSets sets(*array, static_cast<std::size_t>(opt.frames));
+  const char* verb = (opt.operation == vr_example::config::Operation::Stream)
+                         ? "streamed"
+                         : "fused";
+  vr_example::RigSets sets(*array, static_cast<std::size_t>(opt.run.frames));
   vkc::StageMetrics stage_totals;
   const auto t_start = std::chrono::steady_clock::now();
   const vkc::Status streamed = [&]() -> vkc::Status {
     std::size_t reported = 0;  // the count last reported; a set may pass 100
     while (!sets.done()) {
       VKC_ASSIGN(const sensor::FrameSet set, sets.next(&stage_totals));
-      // A set's stages run here, in turn, on its frames; --no-fuse runs none
-      // past the poll, and the set is released as it came.
+      // A set's stages run here, in turn, on its frames; operation=stream runs
+      // none past the poll, and the set is released as it came.
       if (volume) {
         // One row for the batch: the cameras prepare together.
         VKC_ASSIGN(const sensor::DeviceFrameSet prepared,
@@ -162,27 +152,28 @@ vkc::Status run(const Options& opt) {
 
   // --- Mesh -> PLY ---
   VKC_ASSIGN(mesh::Mesh final_mesh, extractor->extract_host(*volume, 0.0f));
-  VKC_TRY(vr::io::write_ply(opt.out, final_mesh));
+  VKC_TRY(vr::io::write_ply(opt.output.path, final_mesh));
   std::printf(
       "done: fused %zu frames in %.1fs (%.1f fps), mesh %zu vertices / %zu "
       "triangles -> %s\n",
       sets.frames(), secs, fps, final_mesh.vertices.size(),
-      final_mesh.triangle_count(), opt.out.c_str());
+      final_mesh.triangle_count(), opt.output.path.c_str());
   return {};
 }
 
 }  // namespace
 
-int main(int argc, char** argv) {
-  vkc::Result<Options> opt = parse_args(argc, argv);
-  if (!opt) {
-    std::fprintf(stderr, "%s\n", opt.status().message().c_str());
-    return 2;
-  }
-  const vkc::Status status = run(opt.value());
+int run_main(const Options& opt) {
+  const vkc::Status status = run(opt);
   if (!status.ok()) {
     std::fprintf(stderr, "fuse_orbbec failed: %s\n", status.message().c_str());
     return 1;
   }
   return 0;
+}
+
+int main(int argc, char** argv) {
+  return vr_example::configured_main(
+      argc, argv, vr_example::config::Application::FuseOrbbec, "fuse_orbbec",
+      run_main);
 }

@@ -61,9 +61,9 @@ class ReplicaSensor final : public vr::sensor::IRgbdSensor {
   /// @brief Which frames to play, and the depth range to stamp on them.
   struct Options {
     /// One past the highest frame index to play (a fuse example's
-    /// `--max-frames`). Clamped to the frames present on disk.
+    /// `run.frames`). Clamped to the frames present on disk.
     std::size_t frame_limit = std::numeric_limits<std::size_t>::max();
-    /// Play every N-th frame (`--stride`). Must be >= 1.
+    /// Play every N-th frame (`fusion.stride`). Must be >= 1.
     std::size_t frame_stride = 1;
     /// Reject depth nearer than this (metres); stamped on every frame. The
     /// fusion gate, so the driver's knob rather than the dataset's. Above 0,

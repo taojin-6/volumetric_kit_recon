@@ -11,6 +11,8 @@ shared rule in AGENTS.md.
 
 ## Decision index
 
+- [**2026-10-11**](#2026-10-11--examples-load-the-cores-scenario-format-and-keep-only-runtime-adapters) — Examples load the core scenario format; JSON, defaults and static validation have one owner.
+
 The index and dated entries are in the same chronological order. Read the
 entries relevant to your task; later amendments supersede earlier rules.
 
@@ -11849,3 +11851,27 @@ that shipped in none. The retry loop had read two rounds without progress as a
 capacity limit, which a remove never hits, and every round re-ran every coord,
 so blocks already removed took their locks again. The residue was plain
 contention, so the lock order was dropped.
+
+### 2026-10-11 — Examples load the core's scenario format and keep only runtime adapters
+
+This replaces the 2026-10-08 command-line parser decision. Every executable
+accepts `--config PATH` and `--help`, and directly consumes
+`core::config::Config` for its application profile. The optional CPU-only
+`core_config` target owns the versioned JSON vocabulary, source/operation
+selection, typed defaults, numeric policy, field presence, paths and all static
+validation. Recon's examples register no flags and parse no scenario JSON.
+
+The adapters in `examples/common` only map those typed values to runtime sensor,
+codec and mesh APIs and inject borrowed device resources. Camera discovery,
+asset I/O, GPU and stream capabilities, calibration data and library API
+preconditions remain with their existing owners. The SDK sync format and
+recon calibration format are resources referenced by the scenario; neither is
+replaced by this application-input change.
+
+Defaults retain each executable's behavior, including source-specific depth
+limits and dataset frame caps. The stream operation preserves #220's refusal
+of explicit fusion/output settings. Core resolves relative paths against the
+scenario file's directory before any resource is opened. Core's tests own
+input-validation cases; recon tests pin the adapter boundary and run every
+executable's help, legacy-input refusal and invalid-config startup without
+opening hardware. `config/README.md` is the CLI migration guide.

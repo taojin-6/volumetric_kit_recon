@@ -43,18 +43,11 @@
 // triangle, which a vertex shared between triangles that chose differently
 // cannot express (see ProjectiveTexturer).
 //
-//   rig_viewer --rig sync.json [--calibration calib.json] [--apply-sync]
-//              [--hevc | --mjpeg] [--color WxH] [--fps N]
-//              [--voxel 0.01] [--trunc m] [--min-depth m] [--max-depth m]
-//              [--max-weight 20] [--dynamic | --static] [--occlusion 0.05]
-//              [--remesh-every 1] [--hold-ms 2000] [--free-after 30]
-//              [--sets N] [--frames N]
-//              [--width 1280] [--height 720] [--lit | --normals]
-//              [--no-texture] [--show-sources] [--texture-stats] [--all-depth]
-//              [--no-overlay] [--validation]
+//   rig_viewer --config config/examples/rig_viewer.json
+//   rig_viewer --help
 //
-// Without --calibration every camera sits at the world origin, which fuses a
-// rig of several into nonsense; the viewer says so and runs anyway. Drag with
+// Without source.calibration every camera sits at the world origin, which fuses
+// a rig of several into nonsense; the viewer says so and runs anyway. Drag with
 // the left button to orbit, the right to pan, and scroll to zoom; the View
 // panel switches shading, texturing and the viewpoint, and tunes the fusion
 // and texturing knobs below live. Closing the window, or Ctrl+C in the
@@ -83,10 +76,9 @@
 #include <imgui_impl_glfw.h>
 #include <glm/glm.hpp>
 
-#include "cli.hpp"
+#include "config.hpp"
 #include "fuse_frame.hpp"  // vr_example::create_fusion_grid, fuse_set
-#include "fusion_flags.hpp"
-#include "orbbec_flags.hpp"
+#include "orbbec_config.hpp"
 #include "recon_gfx_bridge.hpp"  // to_live_mesh, and the vertex-layout asserts
 #include "rig_report.hpp"
 #include "shared_device.hpp"
@@ -163,112 +155,21 @@ extern "C" void on_interrupt(int signal) {
 constexpr auto kSilenceLimit = std::chrono::seconds(10);
 
 // The three ways the hybrid pipeline shades, as the View panel offers them.
-enum class Shading { kLit, kUnlit, kNormals };
+using Shading = vr_example::config::Shading;
 
 std::uint32_t shading_flags(Shading shading) {
   switch (shading) {
-    case Shading::kLit:
+    case Shading::Lit:
       return vgp::kHybridMeshLit;
-    case Shading::kUnlit:
+    case Shading::Unlit:
       return 0u;
-    case Shading::kNormals:
+    case Shading::Normals:
       return vgp::kHybridMeshNormals;
   }
   return vgp::kHybridMeshLit;
 }
 
-struct Options {
-  vr_example::OrbbecFlags cameras;  // --rig is required
-  // 1 cm: a Femto Mega's depth pixel covers about 4 mm at 1.5 m, so the rig
-  // resolves finer than fuse_viewer's 2 cm default for a phone-scale scan.
-  vr_example::FusionFlags fusion{0.01f};
-  // Dynamic integration by default: a voxel a camera now sees as free space
-  // is cleared, so a surface that moves away is gone on the next set rather
-  // than fading over max_weight frames, and one arriving there forms at once.
-  // --static fuses Classic, keeping it.
-  bool dynamic = true;
-  // Fuse depth only where the camera's colour camera recorded it
-  // (GpuFramePrepConfig::depth_within_color): the Femto Mega's depth sees
-  // about 65 degrees vertically to its 16:9 colour's 51, and depth past the
-  // colour fuses into surfaces no camera can colour or texture, which draw
-  // white. --all-depth fuses all of it.
-  bool depth_within_color = true;
-  // How far, in metres, a camera's depth may disagree with the fused surface
-  // for it to texture a vertex (ProjectiveTexturer's occlusion_threshold).
-  // 5 cm, not the tier's 2 cm: on the lab rig, calibrated, 2 cm left 28% of
-  // the mesh untextured and 5 cm 17% with all depth fused, 8.6% with
-  // depth_within_color (see the 2026-09-29 decision's amendments).
-  float occlusion = 0.05f;
-  // Sets between re-extracts: every set, so the mesh follows the cameras. A
-  // set with a remesh cost about 21.6 ms on the M5 Max at 1 cm (four cameras
-  // fused, extracted and textured), inside the 33 ms a 30 fps rig leaves.
-  int remesh_every = 1;
-  // How old, on the host's clock, a camera's last frame may be and still
-  // texture the mesh when a set lacks the camera, whose triangles would
-  // otherwise flicker to fused colour. The SDK drops a secondary's frame now
-  // and then, and a lost H.265 frame costs every frame to the next key frame
-  // (30 at the camera's default, 1.2 s at 25 fps). The held frame is a
-  // fallback view (TextureView::fallback) with its own depth, so it takes
-  // only triangles no present camera does, where that depth still agrees
-  // with the mesh within the occlusion threshold -- a geometric test, which
-  // a surface that slid along itself passes. Holding costs the frame prep
-  // its buffer reuse: 0.1 ms a set for four 4K cameras on an RTX 5090. 0
-  // turns it off.
-  int hold_ms = 2000;
-  // Every N sets, free the blocks no allocation has asked for and no voxel
-  // has held weight in for N sets (VoxelBlockGrid::free_stale_blocks): space
-  // a surface has left, which otherwise stays allocated and costs every
-  // integrate. A synthetic rig with a moving sphere grew 2 117 blocks to
-  // 7 348 in 600 sets without it and held 2 100 to 3 200 with it; the lab
-  // rig's static room frees about 1 500 noise blocks a pass, in 5 to 7 ms on
-  // the M5 Max. 0 keeps every block.
-  int free_after = 30;
-  int sets = 0;  // stop fusing after N sets; 0 fuses until the window closes
-  // Draw N frames, then exit as a closed window does -- for a scripted run;
-  // 0 draws until the window is closed.
-  int frames = 0;
-  fuse_viewer::WindowFlags window;
-  // Unlit by default: the cameras' own colour, as they saw it, with no
-  // light to darken the faces turned from it.
-  Shading shading = Shading::kUnlit;
-  bool texture = true;  // texture from the cameras; off: fused colour
-  // Each camera's tile filled with a colour of its own rather than its image,
-  // so the window shows which camera textured each triangle.
-  bool show_sources = false;
-  // Now and then read the mesh back and print how much of it each camera
-  // textured. Costs a readback of the whole mesh, so off by default.
-  bool texture_stats = false;
-};
-
-vkc::Result<Options> parse_args(int argc, char** argv) {
-  Options o;
-  vr_example::Cli cli("rig_viewer");
-  o.cameras.add_to(cli);
-  cli.require("--rig");
-  o.fusion.add_to(cli);
-  cli.choice<bool>({{"--dynamic", true}, {"--static", false}}, o.dynamic)
-      .option("--occlusion", "m", o.occlusion)
-      .option("--remesh-every", "N", o.remesh_every, 1)
-      .option("--hold-ms", "N", o.hold_ms, 0)
-      .option("--free-after", "N", o.free_after, 0)
-      .option("--sets", "N", o.sets, 0)
-      .option("--frames", "N", o.frames, 0);
-  o.window.add_to(cli);
-  cli.choice<Shading>(
-         {{"--lit", Shading::kLit}, {"--normals", Shading::kNormals}},
-         o.shading)
-      .flag("--no-texture", o.texture, false)
-      .flag("--show-sources", o.show_sources)
-      .flag("--texture-stats", o.texture_stats)
-      .flag("--all-depth", o.depth_within_color, false)
-      .check([&o] {
-        return o.occlusion > 0.0f
-                   ? vkc::Status{}
-                   : vkc::Status::invalid_argument("--occlusion must be > 0");
-      });
-  VKC_TRY(cli.parse(argc, argv));
-  return o;
-}
+using Options = vr_example::config::Config;
 
 // A turntable around `target`, about the primary camera's image-up axis.
 // recon's world is the rig's, whose cameras follow OpenCV (+Y down), so gfx's
@@ -410,8 +311,8 @@ int run(GLFWwindow* window, const Options& opt) {
   // thread, so a camera that does not answer ends the run with its reason
   // before the window starts drawing; the fuse thread starts them.
   rsensor::SensorArray::Options array_options;
-  if (!opt.cameras.calibration.empty()) {
-    auto calibration = rcamera::read_array_calibration(opt.cameras.calibration);
+  if (!opt.source.calibration.empty()) {
+    auto calibration = rcamera::read_array_calibration(opt.source.calibration);
     if (!calibration) {  // the message names the file
       std::fprintf(stderr, "rig_viewer: %s\n",
                    calibration.status().message().c_str());
@@ -427,12 +328,13 @@ int run(GLFWwindow* window, const Options& opt) {
   array_options.prep.color_queue_families[0] = shared->compute_family();
   array_options.prep.color_queue_families[1] = shared->graphics_family();
   array_options.prep.color_queue_family_count = 2;
-  array_options.prep.depth_within_color = opt.depth_within_color;
+  array_options.prep.depth_within_color = opt.fusion.depth_within_color;
   // The streams, the same for every camera.
   rsensor::OrbbecSensor::Options sensor_options;
-  opt.cameras.apply(opt.fusion, rdevice, rallocator, sensor_options);
-  sensor_options.apply_sync = opt.cameras.apply_sync;
-  auto sensors = rsensor::open_orbbec_sensors(opt.cameras.rig, sensor_options);
+  vr_example::apply_orbbec_config(opt, rdevice, rallocator, sensor_options);
+  sensor_options.apply_sync = opt.source.apply_sync;
+  auto sensors =
+      rsensor::open_orbbec_sensors(opt.source.sync_config, sensor_options);
   if (!sensors) {  // the message names the file or the camera
     std::fprintf(stderr, "rig_viewer: %s\n",
                  sensors.status().message().c_str());
@@ -473,16 +375,17 @@ int run(GLFWwindow* window, const Options& opt) {
                 i == array.primary() ? " (primary)" : "", cam.size.width,
                 cam.size.height, at.x, at.y, at.z);
   }
-  if (opt.cameras.calibration.empty() && cameras > 1) {
-    std::fprintf(stderr,
-                 "rig_viewer: no --calibration, so every camera sits at the "
-                 "origin and the %zu cameras fuse over one another\n",
-                 cameras);
+  if (opt.source.calibration.empty() && cameras > 1) {
+    std::fprintf(
+        stderr,
+        "rig_viewer: no source.calibration, so every camera sits at the "
+        "origin and the %zu cameras fuse over one another\n",
+        cameras);
   }
 
   // --- recon: volume, fuser, extractor, texturer --------------------------
   auto grid_result = vr_example::create_fusion_grid(
-      rdevice, rallocator, opt.fusion.voxel, opt.fusion.trunc);
+      rdevice, rallocator, opt.fusion.voxel_size_m, opt.fusion.truncation_m);
   if (!grid_result) {
     std::fprintf(stderr, "grid: %s\n", grid_result.status().message().c_str());
     return 1;
@@ -679,16 +582,16 @@ int run(GLFWwindow* window, const Options& opt) {
   OrbitView view = home;
   // Looking out of camera i, set by the View panel, until a drag orbits away.
   std::optional<std::size_t> from_camera;
-  Shading shading = opt.shading;
-  std::atomic<bool> texture_on{opt.texture};
+  Shading shading = opt.render.shading;
+  std::atomic<bool> texture_on{opt.render.texture};
   // The fusion and texturing knobs the View panel tunes while the rig runs,
   // read by the fuse thread at each set and each remesh.
-  std::atomic<bool> dynamic_on{opt.dynamic};
+  std::atomic<bool> dynamic_on{opt.fusion.dynamic};
   std::atomic<float> max_weight{opt.fusion.max_weight};
-  std::atomic<float> occlusion{opt.occlusion};
+  std::atomic<float> occlusion{opt.fusion.occlusion_m};
   // Render-thread state: whether the next atlas copy fills each tile with its
   // camera's colour rather than its image.
-  bool show_sources = opt.show_sources;
+  bool show_sources = opt.render.show_sources;
 
   // --- Fuse thread ----------------------------------------------------------
   // The array, its frame prep, fusion, extraction and texturing all run here;
@@ -724,7 +627,7 @@ int run(GLFWwindow* window, const Options& opt) {
       // from (texture_sources).
       std::vector<std::optional<NewestFrame>> newest(cameras);
       const std::uint64_t hold_ns =
-          static_cast<std::uint64_t>(opt.hold_ms) * 1000000u;
+          static_cast<std::uint64_t>(opt.fusion.hold_ms) * 1000000u;
       std::vector<bool> uncopyable_reported(cameras, false);
 
       // Texture `mesh` from each camera's source (texture_sources: the set's
@@ -806,10 +709,10 @@ int run(GLFWwindow* window, const Options& opt) {
         }
         exchange.publish(mesh, std::move(job));
       };
-      // --texture-stats: read `mesh` back and count, per camera, the triangles
-      // it textured (uv0 inside its tile; a triangle's three share one) and
-      // those no camera did, marking the cameras textured from a held frame.
-      // A readback of the whole mesh, hence a flag.
+      // render.texture_stats: read `mesh` back and count, per camera, the
+      // triangles it textured (uv0 inside its tile; a triangle's three share
+      // one) and those no camera did, marking the cameras textured from a held
+      // frame. A readback of the whole mesh, hence a flag.
       std::uint64_t remeshes = 0;
       auto print_texture_stats = [&](const rmesh::DeviceMesh& mesh,
                                      const std::vector<TextureSource>& from) {
@@ -840,7 +743,7 @@ int run(GLFWwindow* window, const Options& opt) {
         if (extracted) {
           publish(extracted.value(), sources);
           // Before the next extract, which retires this mesh.
-          if (opt.texture_stats && remeshes++ % 30 == 0) {
+          if (opt.render.texture_stats && remeshes++ % 30 == 0) {
             print_texture_stats(extracted.value(), sources);
           }
         } else {
@@ -865,7 +768,7 @@ int run(GLFWwindow* window, const Options& opt) {
       std::uint64_t last_set_ns = 0;
       bool said_silent = false;
       // Re-mesh when the view moved while no set fused, from the last set's
-      // frames: an idle rig, or one a --sets run has stopped.
+      // frames: an idle rig, or one a run.sets run has stopped.
       auto remesh_if_view_moved = [&]() {
         if (!shared_view.moved() ||
             !exchange.release_and_may_publish(extractor)) {
@@ -949,7 +852,8 @@ int run(GLFWwindow* window, const Options& opt) {
         ++sets;
         // Ahead of the remesh, so it meshes the smaller set. Housekeeping, so
         // a failed pass is reported and fusion goes on.
-        const auto free_after = static_cast<std::uint32_t>(opt.free_after);
+        const auto free_after =
+            static_cast<std::uint32_t>(opt.fusion.free_after);
         if (free_after != 0 && sets % free_after == 0) {
           const vkc::Result<std::uint32_t> freed =
               volume.free_stale_blocks(free_after, &fuse_stages);
@@ -964,19 +868,19 @@ int run(GLFWwindow* window, const Options& opt) {
           }
         }
 
-        // The last set of a --sets run is always meshed: it meshes the last
+        // The last set of a run.sets run is always meshed: it meshes the last
         // sets fused, and only a view change supersedes it. So it waits a
         // moment for the renderer to collect the previous mesh, then extracts
         // whether or not it did, as fuse_viewer's final extract does -- a
         // minimized window never collects, and skipping lost the surface with
         // nothing said. Not once the window has closed, where an extract and
         // texture would only stall the join.
-        const bool last =
-            opt.sets > 0 && sets >= static_cast<std::uint64_t>(opt.sets);
+        const bool last = opt.run.sets > 0 &&
+                          sets >= static_cast<std::uint64_t>(opt.run.sets);
         if (last) exchange.wait_collected(std::chrono::seconds(1), quit);
         if (!quit.load() &&
             (last ||
-             sets % static_cast<std::uint64_t>(opt.remesh_every) == 0)) {
+             sets % static_cast<std::uint64_t>(opt.fusion.remesh_every) == 0)) {
           if (exchange.release_and_may_publish(extractor)) {
             remesh(texture_sources(newest, sets, set_ns, hold_ns));
           } else if (last) {
@@ -1014,7 +918,7 @@ int run(GLFWwindow* window, const Options& opt) {
         }
         if (last) break;
       }
-      // A --sets run has stopped fusing, or the capture failed with the map
+      // A run.sets run has stopped fusing, or the capture failed with the map
       // intact, but the view still moves: re-mesh what it sees whenever it
       // changes, until the window closes.
       if (started.ok() && map_usable && !quit.load()) {
@@ -1056,7 +960,7 @@ int run(GLFWwindow* window, const Options& opt) {
   std::uint64_t rate_generation = 0;
   double mesh_rate = 0.0;
   while (glfwWindowShouldClose(window) == GLFW_FALSE &&
-         (opt.frames == 0 || drawn < opt.frames)) {
+         (opt.run.frames == 0 || drawn < opt.run.frames)) {
     glfwPollEvents();
     if (g_interrupted.load()) {
       glfwSetWindowShouldClose(window, GLFW_TRUE);
@@ -1214,12 +1118,12 @@ int run(GLFWwindow* window, const Options& opt) {
       ImGui::SetNextWindowPos(ImVec2(432.0f, 16.0f), ImGuiCond_FirstUseEver);
       if (ImGui::Begin("View")) {
         int mode = static_cast<int>(shading);
-        ImGui::RadioButton("unlit", &mode, static_cast<int>(Shading::kUnlit));
+        ImGui::RadioButton("unlit", &mode, static_cast<int>(Shading::Unlit));
         ImGui::SameLine();
-        ImGui::RadioButton("lit", &mode, static_cast<int>(Shading::kLit));
+        ImGui::RadioButton("lit", &mode, static_cast<int>(Shading::Lit));
         ImGui::SameLine();
         ImGui::RadioButton("normals", &mode,
-                           static_cast<int>(Shading::kNormals));
+                           static_cast<int>(Shading::Normals));
         shading = static_cast<Shading>(mode);
         bool texture = texture_on.load();
         if (ImGui::Checkbox("texture from the cameras (next remesh)",
@@ -1330,13 +1234,7 @@ int run(GLFWwindow* window, const Options& opt) {
 
 }  // namespace
 
-int main(int argc, char** argv) {
-  const vkc::Result<Options> parsed = parse_args(argc, argv);
-  if (!parsed) {
-    std::fprintf(stderr, "%s\n", parsed.status().message().c_str());
-    return 2;
-  }
-  const Options& opt = parsed.value();
+int run_main(const Options& opt) {
   std::signal(SIGINT, on_interrupt);
   std::signal(SIGTERM, on_interrupt);
   if (glfwInit() != GLFW_TRUE) {
@@ -1355,4 +1253,10 @@ int main(int argc, char** argv) {
   glfwDestroyWindow(window);
   glfwTerminate();
   return rc;
+}
+
+int main(int argc, char** argv) {
+  return vr_example::configured_main(argc, argv,
+                                     vr_example::config::Application::RigViewer,
+                                     "rig_viewer", run_main);
 }
