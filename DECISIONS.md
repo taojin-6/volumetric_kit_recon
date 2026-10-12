@@ -11917,7 +11917,7 @@ after the writer is killed. `stream/session.hpp` holds the layout; DESIGN.md
   body size before it allocates, and lets the scan read one small header per
   record. The body's is the integrity the codec leaves to the transport (its
   rANS end check is for consistency). zlib's polynomial lets Python's
-  `zlib.crc32` check any chunk; sliced by 8 it runs at 2.5 GB/s.
+  `zlib.crc32` check any chunk.
 - **8-byte alignment.** Every payload starts aligned, so a later mapped
   reader can read 16-bit depth in place, and the search past damage tests one
   offset in 8, for at most 7 bytes a record. The search accepts only `RECD`,
@@ -11969,9 +11969,9 @@ by key; an unknown kind, chunk and header field; the payload limit and a
 body size of 2^64 - 8; every refusal; and two threads on one reader.
 `recon_stream_recovery` flips a bit in a payload, a record header, the
 session header and each part of the footer; cuts the tail at every byte of
-the last record and the footer; damages spans, one of 3 MiB; and reads the
-files of a writer killed by SIGKILL and of one `RLIMIT_FSIZE` stopped, whose
-failure stuck. Both also pass under ASan and UBSan (Debug) and built with
+the last record and the footer; damages spans, one of 3 MiB; forges footers
+that must not count as finished; and reads the files of a writer killed by
+SIGKILL and of one `RLIMIT_FSIZE` stopped, whose failure stuck. Both also pass under ASan and UBSan (Debug) and built with
 GCC 16; the library and the container test compile for `arm64_32` (32-bit
 `size_t`) with `-Wshorten-64-to-32`, which nothing here can run. The
 measured rates are DESIGN.md's.

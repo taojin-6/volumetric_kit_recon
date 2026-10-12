@@ -1597,13 +1597,13 @@ finished file from its footer is to come (`TODO(stream)`).
 
 **Recovery.** A whole header whose body runs past the end starts the torn
 tail. A header that fails its CRC or holds what no chunk can starts a
-search, in 8-byte steps, for the next `RECD`, `INDX` or
-`TAIL` with a valid header; the bytes skipped are a damaged span, or with no
-chunk after them the torn tail. `Recovery` reports them, and whether a
-footer whose CRCs and sizes agree ends the file (`finished`) or a `TAIL`
-ends it without one (`footer_damaged`). `next` passes damage the same way,
-returning `InvalidArgument` once; a geometry consumer resumes at the next
-key record. A session header that is cut, out of range or fails a CRC is
+search, in 8-byte steps, for the next `RECD`, `INDX` or `TAIL` with a valid
+header; the bytes skipped are a damaged span, or with no chunk after them
+the torn tail. `Recovery` reports them, and whether a footer whose CRCs and
+sizes agree ends the file (`finished`) or a damaged one does
+(`footer_damaged`). `next` passes damage the same way, returning
+`InvalidArgument` once; a geometry consumer resumes at the next key record.
+A session header that is cut, out of range or fails a CRC is
 `InvalidArgument`, and one of another version or with a flag set
 `Unsupported`.
 
