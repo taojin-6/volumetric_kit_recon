@@ -12297,10 +12297,9 @@ the apply). Bytes and F-score are unchanged.
 pass under the validation layer, and again under synchronization validation.
 The new `recon_codec_inter` covers:
 - the apply against plain uint16 arithmetic, every source kind at K 1, 21, 64
-  and 512, from a host upload and from device entries whose pad is not 0, in
-  one dispatch and in several (a test's cap on blocks a dispatch); the slots
-  growing under a held reference; `commit` alone changing what is held; the
-  apply's refusals;
+  and 512, from device entries whose pad is not 0, in one dispatch and in
+  several (a test's cap on blocks a dispatch); the slots growing under a held
+  reference; `commit` alone changing what is held; the apply's refusals;
 - frames leaving the grid bit for bit as the CPU oracle decodes their content
   (the host reader's entries through the inverse alone): the `Encoder`'s at
   K = 37 in segments of 64 and 3; chains of spheres from the `Encoder` that
