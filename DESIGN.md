@@ -1740,11 +1740,18 @@ coverage and the F-score at half a voxel, since a fused TSDF is projective
 and sampling it would measure the fusion's bias too. `codec.sweep` prints the
 rate–distortion table the defaults are chosen from. The stream, its report
 and the sweep are `examples/common/codec_stream.hpp` and `codec_sweep.hpp`.
-The stream keeps a row per coded frame (source index, bytes, blocks, and
-encode and decode host and device ms). It can write the rows to a CSV as frames are coded, and
-every encoded frame, before it is decoded, into a frame directory that must
-be new (`CodecOutputs`). Frame files go through the core's `write_file`; the
-core cannot append, so the CSV is the stream's own.
+The stream keeps a row per decoded frame (source index, bytes, blocks, and
+encode and decode host and device ms) and writes `CodecOutputs`, from
+`output.csv` and `output.stream`, as it codes. The CSV gets each row once its
+frame decodes; the core cannot append, so the file is the stream's own. The
+`.vrst` (`recon_stream`) gets every frame the encoder returns, before it is
+decoded, so a frame the decoder refuses is kept: one Geometry track, and per
+frame a key record whose set is the source index and whose pts is that index
+at 30 fps, as Replica frames carry no time. It has no session id or start
+time, so a rerun writes the same bytes. It must be new, so a rerun onto it is
+refused before anything is coded, and a frame index or pts out of order is
+refused before it is encoded, so the writer never refuses a frame the
+encoder has taken. `finish` writes the footer.
 
 **`codec_mesh`** loads static geometry through the optional Assimp-backed
 `io::load_mesh`, explicitly normalizes its projected height and up direction
@@ -1758,8 +1765,9 @@ before scaling to 1.7 m (see the 2026-10-02 decision for the measured bounds
 and normalization). The original asset is left unchanged. File parsing and
 PLY export belong to `io`. `examples/codec_mesh/mesh_normalization.*` holds
 the demo's height convention and topology audit, which exist only to scale
-this test asset and are not library code. The mesh example is built only
-with `VR_WITH_ASSIMP=ON`.
+this test asset and are not library code. Its frame is the one record (set
+and pts 0) of its `output.stream`; `output.prefix` writes PLYs only. The mesh
+example is built only with `VR_WITH_ASSIMP=ON`.
 
 Both examples take `codec.quantization_table` (`uniform`, `band`, `radial`) and `codec.quantization_scale` for a
 single configuration. Their common `codec.sweep` compares all three table
@@ -1859,10 +1867,6 @@ next the examples (the codec's transform is resident since 2026-10-01). The
 benchmark kit that sized
 them sits on the home box in `~/recon-bench` (a throwaway allocator patch
 behind environment variables); re-measure there after each.
-
-**Scenario keys from core #30.** No scenario sets `CodecOutputs` yet:
-`output.csv` and `output.frame_directory` come with core #30's schema, and
-with them `fusion.dynamic` for every fusing example, not `rig_viewer` alone.
 
 **Measure the phases before choosing the optimisation.** Three independent
 guesses at this pipeline's bottleneck have been wrong, each corrected by an

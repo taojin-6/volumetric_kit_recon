@@ -79,7 +79,9 @@ vkc::Status run(const Options& opt) {
   VKC_ASSIGN(mesh::MarchingCubes extractor,
              mesh::MarchingCubes::create(device, allocator));
   VKC_ASSIGN(vr_example::CodecStream stream,
-             vr_example::CodecStream::create(device, allocator, config));
+             vr_example::CodecStream::create(
+                 device, allocator, config,
+                 vr_example::codec_outputs(opt.output), "codec_replica"));
   const vr::tsdf::IntegrationMode mode =
       vr_example::integration_mode(opt.fusion.dynamic);
   std::printf(
@@ -107,7 +109,8 @@ vkc::Status run(const Options& opt) {
     ++fused;
     if (opt.codec.encode_every > 0 &&
         fused % std::size_t(opt.codec.encode_every) == 0) {
-      VKC_TRY(stream.code(volume, fused - 1));
+      VKC_TRY(stream.code(volume, fused - 1,
+                          vr_example::frame_pts_ns(fused - 1, kFps)));
       coded_at = fused;
     }
   }
@@ -115,8 +118,10 @@ vkc::Status run(const Options& opt) {
     return vkc::Status::invalid_argument("no frames were fused");
   }
   if (coded_at != fused) {
-    VKC_TRY(stream.code(volume, fused - 1));
+    VKC_TRY(stream.code(volume, fused - 1,
+                        vr_example::frame_pts_ns(fused - 1, kFps)));
   }
+  VKC_TRY(stream.finish());
   stream.report(kFps, opt.codec.encode_every);
 
   // The last frame's decoded surface against the source's.

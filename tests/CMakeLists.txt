@@ -259,8 +259,11 @@ else()
     PRIVATE volumetric_kit::recon_codec volumetric_kit::recon_sensor
             volumetric_kit::core_config)
 endif()
-target_link_libraries(recon_example_config_test
-                      PRIVATE volumetric_kit::recon_tsdf)
+# codec_config.hpp maps the outputs into codec_stream.hpp's CodecOutputs.
+target_link_libraries(
+  recon_example_config_test
+  PRIVATE volumetric_kit::recon_eval volumetric_kit::recon_stream
+          volumetric_kit::recon_tsdf)
 target_compile_definitions(
   recon_example_config_test
   PRIVATE VR_CONFIG_FIXTURES="${PROJECT_SOURCE_DIR}/config/examples")
@@ -319,19 +322,21 @@ vr_target_warnings(recon_example_stage_table_test)
 add_test(NAME recon_example_stage_table COMMAND recon_example_stage_table_test)
 
 # The codec examples' stream (examples/common/codec_stream.hpp): on the host, a
-# row's host and device milliseconds, its CSV line and the frame file names; on
-# a device, outputs it cannot make refused on create, none written without
-# outputs, a row per coded frame matching the frame, the new frame directory's
-# files (a frame the decoder refuses included), a frame index coded twice
-# refused, and the CSV replaced on create and written as frames are coded. The
-# device part skips with no device.
+# row's host and device milliseconds, its CSV line and a frame's pts; on a
+# device, outputs it cannot make refused on create, none written without
+# outputs, a row per decoded frame matching the frame, the .vrst's records
+# (every encoded frame, byte for byte, a frame the decoder refuses included, and
+# the same bytes on a rerun), a frame out of order refused before it is encoded,
+# and the CSV replaced on create and written as frames are coded. The device
+# part skips with no device.
 add_executable(recon_example_codec_stream_test example_codec_stream_test.cpp)
 target_include_directories(recon_example_codec_stream_test
                            PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
 target_link_libraries(
   recon_example_codec_stream_test
   PRIVATE volumetric_kit::core_test_policy volumetric_kit::recon_codec
-          volumetric_kit::recon_eval Vulkan::Vulkan)
+          volumetric_kit::recon_eval volumetric_kit::recon_stream
+          Vulkan::Vulkan)
 vr_target_warnings(recon_example_codec_stream_test)
 add_test(NAME recon_example_codec_stream
          COMMAND recon_example_codec_stream_test)

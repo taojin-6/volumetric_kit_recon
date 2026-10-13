@@ -191,7 +191,10 @@ example with `VR_WITH_ASSIMP=ON` after installing the
 [asset I/O prerequisites](#asset-io).
 Their `codec` section selects `quantization_table` (`uniform`, `band`,
 `radial`), `quantization_scale`, `entropy` (`auto`, `host`, `device`),
-`segment_size` and the shared rate-distortion `sweep`.
+`segment_size` and the shared rate-distortion `sweep`. `output.stream`
+records every coded frame in a new `.vrst` file (see
+[the stream container](DESIGN.md#stream)), and `output.csv` writes a row per
+decoded frame: its bytes, blocks, and encode and decode host and device ms.
 
 Rafa2's supplied OBJ has no declared physical unit and its person is tilted
 in the stored coordinates. The mesh scenario's explicit head-up vector is the
@@ -211,11 +214,10 @@ cmake --build "$recon_root/build" --parallel
   --config "$recon_root/config/examples/codec_mesh.json"
 ```
 
-The mesh example writes `_input.ply` (normalized original), `_source.ply`
-(uncompressed TSDF surface), `_decoded.ply`, and the compressed `.vrtc`
-frame. Conversion error, codec-only error and total error are reported
-separately. `codec.inspect_only` checks the input and normalization without a
-GPU run. The signed mode checks indexed topology and winding; it does not
+The mesh example's `output.prefix` writes `_input.ply` (normalized original),
+`_source.ply` (uncompressed TSDF surface) and `_decoded.ply`. Conversion
+error, codec-only error and total error are reported separately.
+`codec.inspect_only` checks the input and normalization without a GPU run. The signed mode checks indexed topology and winding; it does not
 establish freedom from self-intersections. `source.sdf_mode: "shell"` supports open or
 inconsistently wound meshes, with an intentional surface offset.
 
