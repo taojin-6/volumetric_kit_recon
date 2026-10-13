@@ -15,6 +15,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `InvalidArgument`, before the codec examples touch the GPU. Migrating:
   `encoder_config` returns `Result<EncoderConfig>`. Test:
   `recon_example_config`.
+- `examples`: **every fusing example fuses in the mode `fusion.dynamic`
+  selects** (`integration_mode`), `Classic` unless set; `codec_replica`
+  prints it. Tests: `recon_example_fuse_keyframe`, `recon_example_config`.
 - `examples`: `fuse_viewer` and `rig_viewer` take their window glue from gfx's
   `gfx_glfw` (gfx #133, pinned at #135): the GLFW surface, the shared device
   and ImGui's GLFW backend. `examples/viewer/shared_device.hpp` and the

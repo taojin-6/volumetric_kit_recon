@@ -1625,8 +1625,9 @@ Measured on an Apple M5 Max (Release, APFS, warm page cache): CRC-32 at
 to the grid (a grow, a declined one, blocks left out), into the one grid layout
 `grid_layout.hpp` defines, which its `create_fusion_grid` builds and
 `codec_replica`'s player shares. `fuse_set`'s caller names the integration
-mode: `rig_viewer` the one its `fusion.dynamic` and View panel select, every
-other example `Classic`. The four dataset examples poll their frames
+mode, the one `fusion.dynamic` selects (`integration_mode`): `Classic` unless
+set, except in `rig_viewer`, whose default is `Dynamic` and whose View panel
+switches it as the rig runs. The four dataset examples poll their frames
 through `sensor::IRgbdSensor&` — the fuse loop never learns what is behind
 it — and prepare each on its own. The two live ones read Orbbec cameras raw
 as a `SensorArray` of `OrbbecSensor`s, `fuse_orbbec` one camera or a rig and

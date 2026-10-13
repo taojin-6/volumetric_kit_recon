@@ -44,6 +44,7 @@ a rig's sync path remain required where the application needs them.
 | `--max-frames` / `--frames` / `--sets` | `run.frames` / `run.frames` / `run.sets` |
 | `--width` / `--height` for a window or image | `window.width` / `window.height` |
 | `--height` / `--up-vector` for a mesh | `source.height_m` / `source.up_vector` (three numbers) |
+| `--dynamic` / `--static` | `fusion.dynamic: true` / `false` |
 | `-o` for fusion/render or a codec | `output.path` or `output.prefix` |
 
 Omitted values retain the previous application's defaults. A truncation value

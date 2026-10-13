@@ -96,9 +96,12 @@ inline void print_fuse_report(const vr::tsdf::FuseReport& report) {
   }
 }
 
-// TODO(examples): every fusing example passes the mode from fusion.dynamic
-// once core #30 accepts it beyond rig_viewer; until then the rest pass
-// Classic.
+/// @return The integration mode `fusion.dynamic` selects: `Dynamic` when
+///         @p dynamic, else `Classic` (@ref fuse_set).
+inline vr::tsdf::IntegrationMode integration_mode(bool dynamic) {
+  return dynamic ? vr::tsdf::IntegrationMode::Dynamic
+                 : vr::tsdf::IntegrationMode::Classic;
+}
 
 /// @brief Fuse a set of frames already on the device, as
 ///        `sensor::GpuFramePrep` hands them out, through @p fuser: nothing is

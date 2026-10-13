@@ -227,8 +227,8 @@ add_test(NAME recon_sensor_picture_readback_oom
 
 # The viewer's retained keyframe survives preparation and integration errors,
 # and still supplies depth, coverage and atlas pixels for projective texturing;
-# the helper fuses in the integration mode it is given. Headless: uses the
-# example's fusion helper, without gfx or a dataset.
+# the helper fuses in the integration mode it is given, the one fusion.dynamic
+# selects. Headless: uses the example's fusion helper, without gfx or a dataset.
 add_executable(recon_example_fuse_keyframe_test example_fuse_keyframe_test.cpp)
 target_include_directories(recon_example_fuse_keyframe_test
                            PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)

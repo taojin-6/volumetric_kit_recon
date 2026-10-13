@@ -80,11 +80,15 @@ vkc::Status run(const Options& opt) {
              mesh::MarchingCubes::create(device, allocator));
   VKC_ASSIGN(vr_example::CodecStream stream,
              vr_example::CodecStream::create(device, allocator, config));
-  std::printf("%zu frames at %.3f m voxels; K %u, table %s, scale %.3f\n",
-              capture.frame_count(), double(voxel),
-              config.params.coefficient_count,
-              vr_example::quantization_name(opt.codec.quantization_table),
-              double(config.params.quantization_scale));
+  const vr::tsdf::IntegrationMode mode =
+      vr_example::integration_mode(opt.fusion.dynamic);
+  std::printf(
+      "%zu frames at %.3f m voxels, %s fusion; K %u, table %s, scale %.3f\n",
+      capture.frame_count(), double(voxel),
+      opt.fusion.dynamic ? "Dynamic" : "Classic",
+      config.params.coefficient_count,
+      vr_example::quantization_name(opt.codec.quantization_table),
+      double(config.params.quantization_scale));
 
   // Fuse, and code the grid every codec.encode_every frames and at the end.
   VKC_TRY(capture.start());
@@ -99,8 +103,7 @@ vkc::Status run(const Options& opt) {
     }
     VKC_ASSIGN(const vr::sensor::DeviceFrame prepared, prep.prepare(*frame));
     VKC_TRY(vr_example::fuse_set(fuser, volume, {prepared},
-                                 opt.fusion.max_weight,
-                                 vr::tsdf::IntegrationMode::Classic, nullptr));
+                                 opt.fusion.max_weight, mode, nullptr));
     ++fused;
     if (opt.codec.encode_every > 0 &&
         fused % std::size_t(opt.codec.encode_every) == 0) {

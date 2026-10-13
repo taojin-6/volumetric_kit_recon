@@ -836,9 +836,7 @@ int run(GLFWwindow* window, const Options& opt) {
             prepared.value().frames;
         const vkc::Status fused = vr_example::fuse_set(
             fuser, volume, frames, max_weight.load(),
-            dynamic_on.load() ? rtsdf::IntegrationMode::Dynamic
-                              : rtsdf::IntegrationMode::Classic,
-            &fuse_stages);
+            vr_example::integration_mode(dynamic_on.load()), &fuse_stages);
         if (!fused.ok()) {
           std::fprintf(stderr, "rig_viewer: fuse: %s\n",
                        fused.message().c_str());
