@@ -1413,7 +1413,7 @@ expands each table into a 4096-slot lookup, decodes one segment per
 workgroup into the inverse transform's layout, and reads back the new
 blocks' coordinates, a P-frame's modes and each segment's fault, which
 `check_segment` and `check_survivors` judge exactly as the host reader
-does. The coefficients and masks stay in VRAM for the
+does. The coefficients and masks stay in VRAM for the apply and the
 inverse (`DctTransform::inverse` over `ResidentBlocks`). The decode's symbol
 walk is inside its serial chain, so `kAuto` decodes on the device only from
 `kMinDeviceDecodeSegments` (80). The frame sets how long one invocation runs,
@@ -1437,11 +1437,20 @@ decoder never grows one (a player calls `grow_grid`). Lock
 contention that outlasts four rounds is `IoError`, never `OutOfMemory`, and
 a free heap that refuses a removed block is `InvalidArgument`. A failure
 after the grid has changed leaves it holding neither frame until a decode
-succeeds. Both classes report `StageMetrics`
+succeeds. A P-frame decodes against the frame the `Decoder` decoded last,
+which `detail::ReferenceStore` keeps as decoded: its quantized coefficients
+and masks on the device, in the inverse's layout, and its `FrameReference`
+and coordinates on the host, never rebuilt from a grid. `merge_frame` gives
+each frame block its sources (the 2026-10-12 entry), `inter_apply.comp` makes
+the blocks into the store's spare slot with integers alone, and the inverse
+reads the spare in the same submit; the spare becomes the reference only
+when the whole decode succeeds. An intra frame takes the same apply from its
+payload alone, and the host path uploads only the entries with a payload
+(the 2026-10-13 entry). Both classes report `StageMetrics`
 (`"codec encode"` / `"codec decode"`). Their breakdown rows share no name
 except the map's own `"  ..active set"`. The private pieces under
 `src/volumetric_kit/recon/codec/` are the `DctTransform`, the rANS
-reference coder and the intra frame. The transform takes a
+reference coder, the frame, its device coders and the reference store. The transform takes a
 `volume::BlockList` to a `DctBlocks` — K quantized 16-bit coefficients per
 block in 3-D zigzag order, a 16-word observed mask, and the params and
 `trunc_dist` they were made with — and back, each call one `CommandBatch`
@@ -1476,11 +1485,11 @@ writes weight 1.0 on observed voxels and a fresh block's zeros elsewhere.
 The v3 frame (`bitstream.hpp`, the 2026-10-02 entry) carries the K kept
 weights in its parameter header, `44 + 4K` bytes (300 at K = 64); older
 versions are refused. `read_frame_info` reads them without entropy decoding.
-Header byte 6 is the frame type, which the internal `Frame` carries: intra
-(0), or a P-frame (1, experimental), coded against the frame before it as
-`bitstream.hpp` lays out and the 2026-10-12 entry explains. The host and
-device writers and readers code both; `read_frame_info` and the `Decoder`
-refuse type 1 as `Unsupported`, as every reader refuses a later type.
+Header byte 6 is the frame type (`FrameType`, which `read_frame_info`
+reports): intra (0), or a P-frame (1, experimental), coded against the frame
+before it as `bitstream.hpp` lays out and the 2026-10-12 entry explains. The
+host and device writers and readers code both, and the `Decoder` decodes
+both; every reader refuses a later type as `Unsupported`.
 The payload is segments of R sorted
 blocks (default 64). Each segment is one independent rANS stream
 (`rans.hpp`: a 32-bit state, 16-bit words and 12-bit probabilities, integer

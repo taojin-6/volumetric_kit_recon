@@ -186,7 +186,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   never-observed blocks and sorts the rest, decoding makes a caller's grid hold
   exactly the frame by diffing its block set, everything checkable is checked
   before the grid is touched, and a grid too small for the frame is refused
-  rather than grown.
+  rather than grown. *Amended 2026-10-13:* the `Decoder` decodes P-frames
+  too, against a reference it keeps.
 - [**2026-09-27**](#2026-09-27--the-video-decoder-is-recon_sensor_video-a-target-of-its-own-over-an-installed-ffmpeg-hevc-in-host-pictures-out-on-the-first-hardware-back-end-that-decodes-a-built-in-clip-nvidia-ahead-of-an-integrated-gpu-each-ci-leg-requires-the-hardware-it-has) —
   The video decoder is `recon_sensor_video`, a target of its own over an
   installed FFmpeg: HEVC in, host pictures out, on the first hardware back end
@@ -492,7 +493,12 @@ entries relevant to your task; later amendments supersede earlier rules.
   P-frames are frame type 1 of v3: a mode per reference block in update
   segments, new blocks in intra segments, the reference named by XXH64 of its
   bytes; a missing reference is `NotFound`. Experimental until golden
-  P-frames freeze it.
+  P-frames freeze it. *Amended 2026-10-13:* the `Decoder` decodes them.
+- [**2026-10-13**](#2026-10-13--the-decoder-decodes-p-frames-against-the-frame-it-decoded-last-kept-on-the-device-as-decoded-in-two-slots-that-swap-only-when-a-decode-succeeds-one-integer-apply-makes-every-decoded-frame-intra-too-amends-the-2026-09-27-encoderdecoder-entry) —
+  The `Decoder` decodes P-frames against the frame it decoded last, kept on
+  the device as decoded and replaced only when a decode succeeds; one integer
+  apply makes every decoded frame. `FrameType` and `FrameInfo::type` are
+  public.
 
 ## Decision record
 
@@ -4623,7 +4629,7 @@ their inputs. The buffers change anyway with the device-resident output below.
 
 **Open.**
 - P-frames (frame type 1). *The format landed 2026-10-12 (the P-frame
-  entry, below); the decoder and the encoder follow.*
+  entry, below), and the decoder 2026-10-13; the encoder follows.*
 - The GPU rANS kernels, and device-resident coefficients so the GPU coder
   reads them without a host round trip. *Both landed 2026-10-03 (the device
   encoding and decoding entries, below).*
@@ -4964,6 +4970,11 @@ process released one. A set's frames are processed one camera after another
 fusion through the stateless `volume::grow_grid` helper, replacing
 `allocate_band`. The decoder still refuses a grid too small for its frame;
 a player grows it with `grow_grid`.
+
+*Amended 2026-10-13 (the P-frame decoding entry, below):* the `Decoder`
+decodes P-frames too, against the frame it decoded last, which it keeps on
+the device. Everything here holds for them, and no refusal or failure
+changes that reference.
 
 The third of the 2026-09-26 entry's five PRs, and the first public API the
 codec has had: `codec/encoder.hpp` (`Encoder`, `EncoderConfig`) and
@@ -11989,7 +12000,8 @@ measured rates are DESIGN.md's.
 
 *Amended the same day (the device coders, at the end):* the device writer
 and reader code type 1 too; `read_frame_info` and `Decoder::decode` still
-refuse it.
+refuse it. *Amended 2026-10-13 (the P-frame decoding entry, below):* both
+take it.
 
 The host writer and reader of type-1 frames, internal. `bitstream.hpp` holds
 the layout and the order of the refusals; this entry holds why. Nothing public
@@ -12200,6 +12212,86 @@ new-block term), `finish` trusting another reference count than was counted,
 and the entries judged before the coding parameters. The codec tests pass
 under ASan and UBSan (Debug). Not run: the RTX 5090 (not reachable from this
 machine).
+
+### 2026-10-13 — The `Decoder` decodes P-frames against the frame it decoded last, kept on the device as decoded in two slots that swap only when a decode succeeds; one integer apply makes every decoded frame, intra too (amends the 2026-09-27 `Encoder`/`Decoder` entry).
+
+The `Decoder` takes type 1; the `Encoder` still writes intra frames only,
+and type 1 stays experimental until golden P-frames freeze it. The format,
+the reference hash and why a missing reference is `NotFound` are the
+2026-10-12 entry's. Public: `FrameType` moves into `codec_params.hpp`, where
+the internal frame code takes it from, `FrameInfo` gains `type`, and
+`read_frame_info` reads a P-frame's header, its `block_count` the decoded
+frame's.
+
+**The reference is what the decoder decoded, kept on the device.** A residual
+adds to the quantized coefficient its reference decoded to, which the grid,
+holding dequantized and clamped SDF, no longer has. So `detail::ReferenceStore`
+keeps the decoded coefficients and masks in the inverse transform's layout,
+and the frame's `FrameReference` and sorted coordinates on the host, which
+`parse_frame` and `merge_frame` take. The reference is the decoder's, not a
+grid's: a P-frame decodes into any grid of its geometry, a fresh one built
+from `read_frame_info` included, and a moved decoder takes it along.
+
+**One apply makes every frame.** `merge_frame` gives each of a frame's N
+blocks an `ApplySource`, and `inter_apply.comp`, one workgroup a block,
+writes the block into the store's spare slot: keep adds each residual to the
+reference mod 2^16, a 16-bit half at a time, and XORs the mask; skip copies
+the reference; zero and a new block copy the payload. An absent side reads as
+zero, so one integer formula serves all three, and an odd K's pad half is
+written 0. An intra frame's sources are `{none, i}`, so it lands in the store
+by the same path. The device path applies from the reader's entries where it
+decoded them; the host path uploads only the entries with a payload, keep,
+zero and new, in frame order, so a mostly-skip P-frame crosses the bus as its
+changes alone. The uploads, the apply and the inverse share one submit
+(`DctTransform::inverse` takes the caller's batch).
+
+**The reference changes only when a decode succeeds.** The store's two slots
+swap at `commit`, after the inverse's submit and reject check pass, with
+`{frame_hash(bytes), header}` and the coordinates. A refusal, which comes
+before the grid changes, or a failure after it leaves the reference as it
+was: a resize, or decoding again, decodes the same frame against the same
+reference, and a P-frame on a frame that failed is `NotFound`. `reserve`
+grows the spare, the list, the sources and the host path's upload before the
+grid changes; each is at most the grid's `tsdf` array once the frame fits
+the heap, as the inverse's buffers are.
+
+**Memory and cost.** The two slots take about 10 MB at 25,000 blocks of K = 64
+(`decoder.hpp` gives the bytes a block), and the list, the sources and the
+host path's upload come on top, all retained as the transform's scratch is.
+Every decode now copies its frame through the apply and hashes it. Hand check
+on the M5 Max, Release: room0, 400 frames at 1 cm, Classic, every frame coded
+as an I-frame and decoded by `kAuto` (on the device), the median of six runs
+before and six after, interleaved: 3.97 → 4.16 ms a frame of host time, 1.91 →
+1.93 ms of device time; `..rans decode` +0.04 ms (the coordinates taken off
+the reader), `..apply` +0.09 ms (`merge_frame`), `..inverse` +0.06 ms (the
+list and sources staged, and the apply). Bytes and F-score are unchanged.
+
+**Validation.** Apple M5 Max, Release with warnings as errors: the 96 tests
+pass under the validation layer, and again under synchronization validation.
+The new `recon_codec_inter` covers:
+- the apply against plain uint16 arithmetic, every source kind at K 1, 21, 64
+  and 512, from a host upload and from device entries whose pad is not 0; the
+  slots growing under a held reference; `commit` alone changing what is held;
+  the apply's refusals;
+- chains on every entropy path, each frame leaving the grid bit for bit as the
+  intra decode of its content: spheres from the `Encoder` that move and grow,
+  which `kAuto` decodes on the device, the host, then the device; synthetic
+  frames with every mode and new blocks, then A = 0, N = 0 and M = 0, at K 21,
+  64 and 512; and coefficients that wrap or differ by 32768;
+- a P-frame into a fresh grid built from `read_frame_info`;
+- `NotFound` with no reference, with a later I-frame held, and on a second
+  decoder; `InvalidArgument` for a scale not the reference's and a new block
+  on a reference block, under `kAuto` at a size it decodes on the device;
+  `OutOfMemory` at the parse and at the hash table, each recovered by a
+  resize, with a P-frame on the failed frame `NotFound`; each refusal leaving
+  the grid as it was;
+- a decoder moved mid-chain.
+
+The decoder tests pass unedited but for the two interim type-1 refusals the
+2026-10-12 change added, which now check type 2. Seven planted bugs each
+failed it: a carry between the halves, an unmasked pad, OR for XOR, no slot
+swap at commit, the upload not renumbered, the wrong bytes hashed, and a
+commit after a failed allocation. Not run: the RTX 5090.
 
 ## Measured lessons
 
