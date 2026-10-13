@@ -486,6 +486,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `stream`: allocation failures in writer validation, saved error copies,
+  and reader key/position diagnostics return `OutOfMemory` instead of
+  escaping as exceptions. Failed writes remain sticky even if allocating
+  their diagnostic fails. Test: `recon_stream_oom`.
+
 - `io`: **`write_png_rgba8` aborts when stb's compressor cannot grow its
   output**, where a build without `assert` wrote through the failed pointer;
   its other allocation failures still return `OutOfMemory`. Its errors now
