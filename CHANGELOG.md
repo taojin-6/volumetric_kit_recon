@@ -85,9 +85,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   write, so a killed process loses nothing it appended; `finish` adds the
   footer index. `StreamReader` reads a finished file or a killed writer's,
   past a torn tail and damaged spans, in file order or from a track's key
-  record at a pts, from several threads at once. Tracks of any kind are
-  stored; Geometry (codec frames) is the one defined. Tests:
-  `recon_stream_container`, `recon_stream_recovery`.
+  record at a pts, from several threads at once. It opens a finished file
+  from its footer index, reading no record, and any other, or one whose
+  footer fails a check, by a scan. Tracks of any kind are stored; Geometry
+  (codec frames) is the one defined. Tests: `recon_stream_container`,
+  `recon_stream_recovery`, `recon_stream_footer`.
 - `codec`: **P-frames (frame type 1) in the v3 frame, host writer and
   reader** (internal, experimental until golden P-frames freeze the bytes).
   A P-frame codes a frame against the one before it, which a REFERENCE

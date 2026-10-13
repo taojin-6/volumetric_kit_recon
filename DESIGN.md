@@ -1588,24 +1588,29 @@ the last one. A failed write or flush sticks: every later call returns it,
 and the file reads as a killed writer's. `finish` writes the footer, flushes
 and closes.
 
-**Reading** (`StreamReader`). `open` checks the session header, then scans
-the file, one chunk header per chunk and never a payload: each track's
-counts (`stats`) and key records (`key`, and `key_at` for the last key at or
-before a pts). `next` returns record headers in file order from a
-`Position` the caller holds, skipping other chunks, and `read` checks the
-header again and the payload's CRC. Every method is `const` over `pread`, so
-threads share one reader. A payload above `ReaderOptions::max_payload_bytes`
-is `OutOfMemory` before any allocation. Every open scans for now; opening a
-finished file from its footer is to come (`TODO(stream)`).
+**Reading** (`StreamReader`). `open` checks the session header, then takes
+each track's counts (`stats`) and key records (`key`, and `key_at` for the
+last key at or before a pts) from a finished file's footer index, reading no
+record. The checks a footer must pass are `Recovery::finished`'s: the
+offset chain, the `TAIL` naming an `INDX` that ends where the `TAIL` starts,
+is what makes the two a footer, and the key count is bounded before anything
+is sized by it. Any other file `open` scans, one chunk header per chunk and
+never a payload. `next`
+returns record headers in file order from a `Position` the caller holds,
+skipping other chunks, and `read` checks the header again and the payload's
+CRC. Every method is `const` over `pread`, so threads share one reader. A
+payload above `ReaderOptions::max_payload_bytes` is `OutOfMemory` before any
+allocation.
 
 **Recovery.** A whole header whose body runs past the end starts the torn
 tail. A header that fails its CRC or holds what no chunk can starts a
 search, in 8-byte steps, for the next `RECD`, `INDX` or `TAIL` with a valid
 header; the bytes skipped are a damaged span, or with no chunk after them
-the torn tail. `Recovery` reports them, and whether a footer whose CRCs and
-sizes agree ends the file (`finished`) or a damaged one does
-(`footer_damaged`). `next` passes damage the same way, returning
-`InvalidArgument` once; a geometry consumer resumes at the next key record.
+the torn tail. `Recovery` reports them, and whether the file was opened from
+its footer (`finished`) or ends with a footer `open` refused
+(`footer_damaged`). `next` passes damage the same way as the scan,
+returning `InvalidArgument` once; a geometry consumer resumes at the next
+key record.
 A session header that is cut, out of range or fails a CRC is
 `InvalidArgument`, and one of another version or with a flag set
 `Unsupported`.
@@ -1613,8 +1618,9 @@ A session header that is cut, out of range or fails a CRC is
 Measured on an Apple M5 Max (Release, APFS, warm page cache): CRC-32 at
 2.5 GB/s, 26 times the roughly 95 MB/s of a four-camera recording; appends of
 737,280-byte (depth-sized) payloads at 1.95 GB/s; reads, CRC checked, at
-2.1 GB/s; and opening 864,000 records of 1 KiB (an hour at 240 a second,
-934 MB) in 0.35 s, all of it the scan.
+2.1 GB/s. Opening 864,000 records of 1 KiB on 8 tracks (an hour at 240 a
+second, 934 MB) takes 0.33 to 0.36 s by the scan, and from the footer 0.5 ms
+with a key in 30 records or 14 ms with every record a key (a 27.6 MB index).
 
 ## Examples
 
