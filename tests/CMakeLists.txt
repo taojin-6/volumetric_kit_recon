@@ -1088,6 +1088,15 @@ target_link_libraries(recon_stream_footer_test
 vr_target_warnings(recon_stream_footer_test)
 add_test(NAME recon_stream_footer COMMAND recon_stream_footer_test)
 
+# Public stream calls contain allocation failures in validation, diagnostics,
+# saved errors, and index/footer growth. Host-only, including retry behavior.
+add_executable(recon_stream_oom_test stream_oom_test.cpp
+                                     test_allocation_failure.cpp)
+target_link_libraries(recon_stream_oom_test
+                      PRIVATE volumetric_kit::recon_stream)
+vr_target_warnings(recon_stream_oom_test)
+add_test(NAME recon_stream_oom COMMAND recon_stream_oom_test)
+
 # What a sibling that fetches recon gets (subproject/): its configure, from a
 # clean tree, with each dependency this build fetched as a local source, so it
 # needs no network. The defaults hold, and recon refuses a core the sibling made
