@@ -12178,7 +12178,7 @@ on the host:
   (`check_coding`) before them, as the host writer does, so both writers refuse
   with one code and message.
 
-Validated on the M5 Max, Release with warnings as errors: the 93 tests pass
+Validated on the M5 Max, Release with warnings as errors: the 94 tests pass
 under the validation layer, and again under synchronization validation. In
 `recon_codec_device_frame` the device writer's bytes equal `write_frame`'s,
 and the reader's modes, new coordinates and keep, zero and new payloads
