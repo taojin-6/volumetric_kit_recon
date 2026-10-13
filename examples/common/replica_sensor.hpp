@@ -88,7 +88,9 @@ class ReplicaSensor final : public vr::sensor::IRgbdSensor {
   ///                         `w,h,fx,fy,cx,cy,scale`.
   /// @param options          Frame selection + depth range.
   /// @return The sensor, not yet started; or a non-OK `vkc::Status` if the
-  ///         intrinsics or trajectory cannot be read/parsed, if
+  ///         intrinsics or trajectory cannot be read/parsed (the core's
+  ///         `read_file` error for `cam_params.json`, `NotFound` for a
+  ///         missing one), if
   ///         `options.frame_stride` is 0, or if the depth range is not finite
   ///         with `0 < min_depth < max_depth` -- named as this sensor's, so a
   ///         caller that never set one of the two knows which default it is

@@ -345,7 +345,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   The camera tier keeps only what a capture uses: the camera model and its
   check, the lens's forward template, rigid checks, and each sensor's pose
   from the calibration file's version-1 layout. Unprojection, rescaling,
-  version 2 and the writer go until a caller needs them.
+  version 2 and the writer go until a caller needs them. *Amended
+  2026-10-12:* version 2 and the writer are back, for calib.
 - [**2026-10-06**](#2026-10-06--tests-use-no-real-hardware-amends-the-2026-09-26-orbbec-driver-entry) —
   Tests use no real hardware: the three camera tests are removed, and a
   camera is checked by hand through `fuse_orbbec`. *Amended 2026-10-07:* no
@@ -478,6 +479,11 @@ entries relevant to your task; later amendments supersede earlier rules.
   Picture readback updates ownership before subsequent reads or preparation.
 - [**2026-10-12**](#2026-10-12--the-viewers-window-glue-comes-from-gfxs-gfx_glfw-recon-keeps-no-copy-amends-the-2026-08-02-bootstrap-and-2026-10-04-vulkan-foundation-entries) —
   The viewers' window glue comes from gfx's `gfx_glfw`; recon keeps no copy.
+- [**2026-10-12**](#2026-10-12--the-calibration-file-records-lenses-and-is-written-version-2-and-its-writer-return-with-calib-its-first-caller-amends-the-2026-10-06-camera-tier-entries) —
+  The calibration file records lenses and is written: version 2 under
+  version 1's `device_calibration` key, its writer and
+  `rodrigues_from_rotation` return with calib; `SensorArray::open` refuses an
+  unposed sensor, and the file I/O is the core's.
 
 ## Decision record
 
@@ -9993,6 +9999,9 @@ pixel of the four rig lenses round-trips within 1e-9 px.
 
 ### 2026-10-06 — The camera tier keeps only what a capture uses (amends the entry above).
 
+*Amended 2026-10-12 (below):* calib is the first caller; version 2 (under
+`device_calibration`), its writer and `rodrigues_from_rotation` return.
+
 Once the tier merged, most of it had no caller outside its own tests:
 `CameraProjection` (host projection and Newton unprojection),
 `invertible_radius2`, `scale_camera_model`, `project_rational`, version 2 of
@@ -11833,6 +11842,54 @@ backend (`ImGuiGlfw`). The viewers take all of it from there. What stays in
 recon is what is recon's, once, in `viewer_common.hpp`: the shared device's
 settings (recon's `device_requirements()`, the app's graphics requirements and
 `window.validation`) and gfx's adoption of it.
+
+### 2026-10-12 — The calibration file records lenses and is written: version 2 and its writer return with calib, its first caller (amends the 2026-10-06 camera-tier entries).
+
+calib's rig app is the caller the 2026-10-06 cut-back waited for. Each
+session records every camera's factory colour and depth models, unposed, and
+each solve writes the posed rig with the lenses it solved with; both are
+recon's file, written by recon, so the family has one schema and one writer.
+
+- **What returns:** version 2 with `CameraCalibration` (the model and its
+  `factory` or `calibrated` source), an optional pose, `depth_to_color` and a
+  world sensor; `format_` and `write_array_calibration`;
+  `rodrigues_from_rotation` and `rodrigues_from_matrix`.
+- **What stays removed:** `CameraProjection`, `invertible_radius2`,
+  `scale_camera_model` and `project_rational`. calib projects and unprojects
+  with OpenCV, and the driver reports factory models at the streamed mode.
+- **Version 2 keeps version 1's `device_calibration` key**, not 2026-10-06's
+  `sensors`, so a version-1 reader (`verify_rig.py`, and recon before this)
+  still finds the poses. `format` and `version` tell the two apart; a later
+  version is `Unsupported`. Version 1 is still read for its poses alone.
+- **Every field of a sensor is optional**, so a factory record is unposed;
+  `SensorArray::open` refuses a sensor the file lists without a pose, as one
+  it does not list.
+- **The world is a sensor's colour camera only.** A floor AprilTag comes with
+  calib's re-anchor, whose axes (z up out of the floor) are not
+  libapriltag's; until then another world is `Unsupported`.
+- **A written distortion names its model**, which the reader requires: the
+  eight numbers mean nothing without it.
+- **File I/O is the core's.** The writer takes the core's `WriteMode` (calib
+  never overwrites a session file); the whole-file reads of this file, the
+  Orbbec sync file and the Replica example's `cam_params.json` are
+  `core::read_file`, so a missing file is `NotFound`; and `io`'s exception
+  mapping is `core::exception_status`. recon needs core 0.2.0.
+- **`rodrigues_from_rotation` is accurate to round-off at every angle**:
+  `atan2` for the angle, first order only below 1e-8 rad, and past pi/2 the
+  axis from the symmetric part. `cv::Rodrigues` returns exactly zero below
+  about 1e-5 rad, so calib converts with this.
+
+**Validation.** Apple M5 Max, macOS, Release with warnings as errors, FFmpeg,
+Orbbec SDK 2.10.6, Assimp and the viewer: the 92 tests pass under the
+validation layer; the camera tier alone, with no Vulkan, builds and passes
+with Apple Clang and GCC 16; and the camera, sensor-array and io tests pass
+under ASan and UBSan. `rodrigues_from_rotation` comes back within 3e-16 of
+the angle, relative, at 0, 1e-9, 1e-6, 1e-5, pi - 1e-6 and pi. Mutation
+check: a `cv::Rodrigues`-style zero below 1e-5 rad, `acos` for the angle,
+first order up to 1e-6 rad, the axis from `sin` past pi/2, the pose written
+uninverted, six significant digits, the `sensors` key, a distortion without
+its model, the write mode ignored, a later version accepted, and an array
+taking an unposed sensor each fail a test. No camera was opened.
 
 ## Measured lessons
 
