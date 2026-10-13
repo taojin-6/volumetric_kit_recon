@@ -9,7 +9,7 @@
 // and each secondary's skew to the primary over every frame it sent, the
 // primary's none. The single camera a calibration file names: the one asked
 // for if posed, or the file's only posed one, past a camera listed for its
-// lenses alone. Host only.
+// lenses alone. A camera's report, its lens models included. Host only.
 
 #include <cmath>
 #include <cstddef>
@@ -26,7 +26,10 @@
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/recon/camera/array_calibration.hpp"
+#include "volumetric_kit/recon/camera/camera_model.hpp"
 #include "volumetric_kit/recon/sensor/array/sensor_array.hpp"
+#include "volumetric_kit/recon/sensor/orbbec/orbbec_stream.hpp"
+#include "volumetric_kit/recon/sensor/orbbec/orbbec_sync_config.hpp"
 #include "volumetric_kit/recon/sensor/rgbd_sensor.hpp"
 
 namespace vkc = volumetric_kit::core;
@@ -218,12 +221,69 @@ int posed() {
   return 0;
 }
 
+// A camera's report: each camera's size, lens model and intrinsics, and the
+// colour camera where the calibration poses it.
+int report() {
+  sensor::OrbbecDeviceInfo info;
+  info.name = "Orbbec Femto Mega";
+  info.serial = "CL2A141000N";
+  info.firmware_version = "1.2.9";
+  info.connection_type = "Ethernet";
+  info.ip_address = "192.168.1.10";
+  info.sync_mode = sensor::OrbbecSyncMode::Primary;
+  info.color_lens_model = "brown-conrady-k6";
+  info.depth_lens_model = "brown-conrady";
+  sensor::SensorInfo cameras;
+  cameras.clock = sensor::ClockDomain::Host;
+  camera::CameraModel color;
+  color.size = {3840, 2160};
+  color.intrinsics = {2240.5, 2241.37, 1920.0, 1080.6};
+  cameras.color = color;
+  camera::CameraModel depth;
+  depth.size = {640, 576};
+  depth.intrinsics = {504.0, 504.5, 320.3, 288.0};
+  cameras.depth = depth;
+  camera::ArrayCalibration calibration;
+  camera::SensorCalibration calibrated;
+  calibrated.id = info.serial;
+  camera::Mat4d pose(1.0);
+  pose[3] = {1.0, -0.5, 2.25, 1.0};
+  calibrated.color_to_world = pose;
+  calibration.sensors.push_back(std::move(calibrated));
+
+  const std::string text =
+      vr_example::orbbec_camera_report(info, cameras, calibration);
+  const auto has = [&](const char* line) {
+    return text.find(line) != std::string::npos;
+  };
+  CHECK(
+      has("  colour 3840x2160 brown-conrady-k6 @ fx=2240.5 fy=2241.4 "
+          "cx=1920.0 cy=1080.6, at (1.000, -0.500, 2.250) m\n"));
+  CHECK(
+      has("  depth 640x576 brown-conrady @ fx=504.0 fy=504.5 cx=320.3 "
+          "cy=288.0\n"));
+  CHECK(text.rfind("camera: Orbbec Femto Mega CL2A141000N, firmware 1.2.9, "
+                   "Ethernet 192.168.1.10, sync ",
+                   0) == 0);
+
+  // Not in the calibration: at the origin.
+  const std::string origin =
+      vr_example::orbbec_camera_report(info, cameras, {});
+  CHECK(origin.find(", at (0.000, 0.000, 0.000) m\n") != std::string::npos);
+
+  // Listed for its lenses alone: no pose, so the report uses the origin too.
+  calibration.sensors[0].color_to_world.reset();
+  CHECK(vr_example::orbbec_camera_report(info, cameras, calibration) == origin);
+  return 0;
+}
+
 }  // namespace
 
 int main() {
   CHECK(cut() == 0);
   CHECK(run() == 0);
   CHECK(posed() == 0);
+  CHECK(report() == 0);
   std::puts("example_fuse_orbbec_sets: OK");
   return 0;
 }

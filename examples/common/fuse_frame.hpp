@@ -97,7 +97,7 @@ inline void print_fuse_report(const vr::tsdf::FuseReport& report) {
 }
 
 // TODO(examples): every fusing example passes the mode from fusion.dynamic
-// once core 0.5.0 accepts it beyond rig_viewer; until then the rest pass
+// once core #30 accepts it beyond rig_viewer; until then the rest pass
 // Classic.
 
 /// @brief Fuse a set of frames already on the device, as

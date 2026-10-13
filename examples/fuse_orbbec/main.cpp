@@ -25,10 +25,12 @@
 // each set is polled, counted and released, with no GPU preparation, fusion or
 // mesh, so the run measures the cameras' stream and decode alone.
 // diagnostics.readback reads each set's luma back to the host through
-// sensor::PictureReadback, as a separate stage. The run
-// reports each camera's counters at the end, and a rig's skew of each secondary
-// to the primary. It gives up after ten seconds without a frame rather than
-// waiting, still reporting them.
+// sensor::PictureReadback, as a separate stage. diagnostics.dump_sets writes
+// the first sets' camera JPEGs, and with the readback their luma, into
+// diagnostics.dump_directory, which the run makes with the first set
+// (vr_example::SetDump). The run reports each camera's counters at the end,
+// and a rig's skew of each secondary to the primary. It gives up after ten
+// seconds without a frame rather than waiting, still reporting them.
 
 #include <chrono>
 #include <cstddef>
@@ -37,10 +39,12 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "config.hpp"
 #include "fuse_frame.hpp"
 #include "fuse_orbbec_sets.hpp"
+#include "set_dump.hpp"
 #include "stage_table.hpp"
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/base/stage_metrics.hpp"
@@ -73,6 +77,12 @@ double seconds_since(std::chrono::steady_clock::time_point start) {
 }
 
 vkc::Status run(const Options& opt) {
+  // The dump's directory, checked before anything opens and made with the
+  // first set it writes.
+  vr_example::SetDump dump(opt.diagnostics.dump_directory,
+                           static_cast<std::size_t>(opt.diagnostics.dump_sets));
+  VKC_TRY(dump.check());
+
   // --- GPU, first: the cameras' pictures are decoded onto it ---
   VKC_ASSIGN(vkc::Instance instance, vkc::Instance::create({}));
   VKC_ASSIGN(vkc::PhysicalDeviceInfo gpu,
@@ -111,6 +121,11 @@ vkc::Status run(const Options& opt) {
     VKC_ASSIGN(readback, sensor::PictureReadback::create(device, allocator));
   }
 
+  std::vector<std::string> ids;  // each camera's, naming its dump files
+  for (std::size_t c = 0; c < array->size(); ++c) {
+    ids.push_back(array->sensor(c).info().id);
+  }
+
   // --- Stream ---
   VKC_TRY(array->start());
   const char* verb = (opt.operation == vr_example::config::Operation::Stream)
@@ -124,14 +139,15 @@ vkc::Status run(const Options& opt) {
     while (!sets.done()) {
       VKC_ASSIGN(sensor::FrameSet set, sets.next(&stage_totals));
       // A set's stages run here, in turn, on its frames; operation=stream runs
-      // none past the poll and any readback, and the set is released as it
-      // came.
+      // none past the poll, any readback and any dump, and the set is
+      // released as it came.
+      std::vector<std::optional<sensor::PictureView>> luma;
       if (readback) {
-        VKC_TRY(readback
-                    ->read(set.frames, sensor::PictureReadback::Planes::Luma,
-                           &stage_totals)
-                    .status());
+        VKC_ASSIGN(luma, readback->read(set.frames,
+                                        sensor::PictureReadback::Planes::Luma,
+                                        &stage_totals));
       }
+      VKC_TRY(dump.write(set, ids, readback ? &luma : nullptr));
       if (volume) {
         // One row for the batch: the cameras prepare together.
         VKC_ASSIGN(const sensor::DeviceFrameSet prepared,
@@ -153,6 +169,7 @@ vkc::Status run(const Options& opt) {
       static_cast<double>(sets.frames()) / (secs > 0.0 ? secs : 1.0);
   // Before any error: a run that stalls still reports what it counted.
   sets.print_stats();
+  std::fputs(dump.report().c_str(), stdout);
   VKC_TRY(streamed);
   array.reset();
 

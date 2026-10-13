@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "operation": "stream",
+  "source": {
+    "kind": "live",
+    "sync_config": "../femto_mega_sync.json",
+    "color_codec": "mjpeg",
+    "color_width": 3840,
+    "color_height": 2160,
+    "fps": 25
+  },
+  "run": {
+    "frames": 60000
+  },
+  "diagnostics": {
+    "readback": true,
+    "dump_sets": 20,
+    "dump_directory": "results/dump"
+  }
+}
