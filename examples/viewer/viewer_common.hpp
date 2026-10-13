@@ -4,26 +4,28 @@
 #pragma once
 
 /// @file examples/viewer/viewer_common.hpp
-/// @brief What `fuse_viewer` and `rig_viewer` share beyond the device
-///        bootstrap and recon's `mesh::MeshExchange`: their window's flags,
-///        the scope guards their teardown order rests on, and the render
-///        camera the fuse thread meshes.
+/// @brief What `fuse_viewer` and `rig_viewer` share beyond gfx's `gfx_glfw`
+///        window glue and recon's `mesh::MeshExchange`: the device both
+///        libraries adopt, the scope guards their teardown order rests on,
+///        and the render camera the fuse thread meshes.
 
-#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
+#include <memory>
 #include <mutex>
 #include <thread>
 
-#define GLFW_INCLUDE_VULKAN
-#include <GLFW/glfw3.h>
-#include <imgui_impl_glfw.h>
 #include <glm/glm.hpp>
 
 #include "volumetric_kit/core/base/result.hpp"
+#include "volumetric_kit/core/vulkan/shared_device.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
+#include "volumetric_kit/gfx/app/shared_device_config.hpp"
 #include "volumetric_kit/gfx/app/windowed_app.hpp"
+#include "volumetric_kit/gfx/glfw/shared_device.hpp"
+#include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/mesh/device_mesh.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
 #include "volumetric_kit/recon/volume/frustum.hpp"
@@ -34,15 +36,68 @@ namespace fuse_viewer {
 
 namespace vg = volumetric_kit::gfx;
 namespace vkc = volumetric_kit::core;
+namespace vr = volumetric_kit::recon;
 namespace rmesh = volumetric_kit::recon::mesh;
 namespace vol = volumetric_kit::recon::volume;
 
-/// @return The window's framebuffer size, at least 1 x 1.
-inline VkExtent2D window_extent(GLFWwindow* window) {
-  int width = 0, height = 0;
-  glfwGetFramebufferSize(window, &width, &height);
-  return {static_cast<std::uint32_t>(std::max(1, width)),
-          static_cast<std::uint32_t>(std::max(1, height))};
+/// @brief The instance and renderer settings a viewer's device is built with.
+/// @param app         The config gfx's app is adopted with: its name, and the
+///                    graphics requirements `WindowedApp::adopt` verifies.
+/// @param validation  Whether to enable the validation layer
+///                    (`window.validation`). `WindowedApp::adopt` ignores the
+///                    app's own setting, so this is the only one.
+/// @return @p app's name and device requirements, and @p validation.
+inline vg::app::WindowDeviceConfig viewer_device_config(
+    const vg::app::WindowedAppConfig& app, bool validation) {
+  vg::app::WindowDeviceConfig config;
+  config.instance.app_name = app.app_name;
+  config.instance.enable_validation = validation;
+  config.graphics = app.device;
+  return config;
+}
+
+/// @brief The one device gfx and recon both adopt, with @p window's surface:
+///        gfx's `make_shared_device` for recon's requirements and
+///        @ref viewer_device_config. Prints the device's summary.
+/// @param window      The window the app presents to; it must outlive the
+///                    device.
+/// @param app         As @ref viewer_device_config.
+/// @param validation  As @ref viewer_device_config.
+/// @return The device, to be declared before, and so outlive, everything
+///         adopted or made on it; or `make_shared_device`'s failure, which
+///         ends the run: two devices cannot share a `VkBuffer`.
+inline vkc::Result<std::unique_ptr<vkc::SharedDevice>> make_viewer_device(
+    GLFWwindow* window, const vg::app::WindowedAppConfig& app,
+    bool validation) {
+  VKC_ASSIGN(
+      std::unique_ptr<vkc::SharedDevice> shared,
+      vg::glfw::make_shared_device(window, vr::device_requirements(),
+                                   viewer_device_config(app, validation)));
+  std::printf("shared device: %s\n", shared->summary().c_str());
+  return shared;
+}
+
+/// @brief gfx's app on @p shared, presenting to the surface @p shared made:
+///        picking a present-capable device needed it, so the app takes that
+///        one, and owns it, rather than making a second.
+/// @param shared  From @ref make_viewer_device; it must outlive the app.
+/// @param app     The config @p shared was built for.
+/// @return The app, or `WindowedApp::adopt`'s failure.
+inline vkc::Result<vg::app::WindowedApp> adopt_viewer_app(
+    vkc::SharedDevice& shared, const vg::app::WindowedAppConfig& app) {
+  return vg::app::WindowedApp::adopt(
+      shared.graphics_payload(), app,
+      [&shared](VkInstance instance) -> vkc::Result<VkSurfaceKHR> {
+        // adopt calls this with the payload's instance, so this trips only if
+        // the two stop coming from one SharedDevice: the surface would then
+        // belong to another instance than the swapchain built on it.
+        if (instance != shared.instance().handle()) {
+          return vkc::Status::invalid_argument(
+              "surface factory: the app adopted a different VkInstance than "
+              "the bootstrap created the surface on");
+        }
+        return shared.release_surface();
+      });
 }
 
 /// Signals a fuse thread to quit and joins it on scope exit, so an exception
@@ -56,16 +111,6 @@ struct QuitJoin {
   ~QuitJoin() {
     quit.store(true);
     if (thread.joinable()) thread.join();
-  }
-};
-
-/// Shuts the ImGui GLFW platform backend down at scope exit. Declared *after*
-/// the overlay so it runs first: ImGui_ImplGlfw_Shutdown touches the ImGui
-/// context the overlay owns, so it must not outlive it.
-struct ImGuiGlfwShutdown {
-  bool active;
-  ~ImGuiGlfwShutdown() {
-    if (active) ImGui_ImplGlfw_Shutdown();
   }
 };
 
