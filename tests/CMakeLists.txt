@@ -715,12 +715,13 @@ target_include_directories(
 vr_target_warnings(recon_codec_device_frame_test)
 add_test(NAME recon_codec_device_frame COMMAND recon_codec_device_frame_test)
 
-# codec tier, P-frame decoding: the reference store's apply against plain uint16
-# arithmetic, and the Decoder's I-then-P chains leaving the grid as the intra
-# decode of the same content does, bit for bit, on every entropy path, with
-# NotFound, the refusals and failures that keep the reference, and moves.
-# Internal headers by include path (the public decoder test stays public-only).
-# Skips without a device.
+# codec tier, decoding on the device: the reference store's apply against plain
+# uint16 arithmetic, and the Decoder's frames -- the Encoder's, and I-then-P
+# chains -- leaving the grid as the CPU oracle's decode of the same content
+# does, bit for bit, with NotFound, a frame the device cannot decode, the
+# refusals and failures that keep the reference, and moves. Internal headers by
+# include path (the public decoder test stays public-only). Skips without a
+# device.
 add_executable(recon_codec_inter_test codec_inter_test.cpp)
 target_link_libraries(
   recon_codec_inter_test PRIVATE volumetric_kit::recon_codec Vulkan::Vulkan

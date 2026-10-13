@@ -317,7 +317,8 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-03**](#2026-10-03--rans-decoding-runs-on-the-device-block-for-block-the-hosts-chosen-from-80-segments) —
   rANS decoding runs on the device, block for block the host's, in segments
   of at most 1,024 blocks, and the decoder picks the device per frame from 80
-  segments.
+  segments. *Amended 2026-10-13:* decoding runs on the device alone, with no
+  host fallback; the host reader is the tests' oracle.
 - [**2026-10-03**](#2026-10-03--error-handling-comes-from-volumetric_kit_core) —
   Error handling comes from `volumetric_kit_core`: `vr::Status`/`Result` are
   the core's types, `VR_TRY`/`VR_ASSIGN`/`VR_CHECK` its macros under recon's
@@ -494,11 +495,11 @@ entries relevant to your task; later amendments supersede earlier rules.
   segments, new blocks in intra segments, the reference named by XXH64 of its
   bytes; a missing reference is `NotFound`. Experimental until golden
   P-frames freeze it. *Amended 2026-10-13:* the `Decoder` decodes them.
-- [**2026-10-13**](#2026-10-13--the-decoder-decodes-p-frames-against-the-frame-it-decoded-last-kept-on-the-device-as-decoded-in-two-slots-that-swap-only-when-a-decode-succeeds-one-integer-apply-makes-every-decoded-frame-intra-too-amends-the-2026-09-27-encoderdecoder-entry) —
+- [**2026-10-13**](#2026-10-13--the-decoder-decodes-p-frames-against-the-frame-it-decoded-last-kept-on-the-device-as-decoded-in-two-slots-that-swap-only-when-a-decode-succeeds-one-integer-apply-makes-every-decoded-frame-intra-too-and-it-decodes-on-the-device-alone-amends-the-2026-09-27-encoderdecoder-and-2026-10-03-decoding-entries) —
   The `Decoder` decodes P-frames against the frame it decoded last, kept on
   the device as decoded and replaced only when a decode succeeds; one integer
-  apply makes every decoded frame. `FrameType` and `FrameInfo::type` are
-  public.
+  apply makes every decoded frame; and it decodes on the device alone.
+  `FrameType` and `FrameInfo::type` are public.
 
 ## Decision record
 
@@ -9626,6 +9627,31 @@ locally.
 
 ### 2026-10-03 — rANS decoding runs on the device, block for block the host's, chosen from 80 segments.
 
+*Amended 2026-10-13 (the P-frame decoding entry, below):* decoding runs on
+the device alone. The host does I/O -- a mesh or a camera stream read in, a
+model saved, a frame's encoded bytes to and from a `.vrst` file or the
+network -- and the control around it: a frame's header and tables, and small
+counts and status words read back. Every other step runs on the GPU, with no
+host fallback (the user's rule, 2026-10-13). So `DecoderConfig` and
+`kMinDeviceDecodeSegments` go, and `EntropyCoding` is the encoder's alone.
+`Decoder::create` builds the device reader and fails if it cannot, and a
+frame the device refuses (a segment past `kMaxDeviceDecodeSegmentSize`, a
+buffer past `maxStorageBufferRange` or free memory) is refused with the
+device's code. The host reader stays, as the tests' oracle only. A frame of
+few segments, which `kAuto` decoded on the host, pays for it. Hand check on
+the M5 Max, Release, the median of six runs before and six after,
+interleaved:
+- room0, 400 I-frames at 1 cm of about 340 segments each, which `kAuto`
+  already decoded on the device: unchanged, 4.06 → 4.03 ms a frame of host
+  time and 1.93 ms of device time;
+- Rafa2 at 5 mm, 2,395 blocks in 38 segments of 64, which `kAuto` decoded on
+  the host, as `codec_mesh`'s sweep times a frame the player holds: 3.29 →
+  3.99 ms of host time at K = 64 and step 0.2 (+0.70 ms, +21%), its device
+  time 0.15 → 2.17 ms; 3.29 → 4.11 ms over all the K = 64 rows; K = 512
+  gains, 13.92 → 8.91 ms. At R = 16 the table below has the device's rANS
+  decode of this frame at 0.87 ms against the host's 1.85; lanes within a
+  segment, a format change, would keep R = 64.
+
 The 2026-09-26 decision's fifth PR, for the decoder. The v3 format is
 unchanged. The device decodes every frame it can hold to `read_intra_frame`'s
 blocks, and refuses every corrupt segment it refuses, with the same message.
@@ -12213,7 +12239,7 @@ and the entries judged before the coding parameters. The codec tests pass
 under ASan and UBSan (Debug). Not run: the RTX 5090 (not reachable from this
 machine).
 
-### 2026-10-13 — The `Decoder` decodes P-frames against the frame it decoded last, kept on the device as decoded in two slots that swap only when a decode succeeds; one integer apply makes every decoded frame, intra too (amends the 2026-09-27 `Encoder`/`Decoder` entry).
+### 2026-10-13 — The `Decoder` decodes P-frames against the frame it decoded last, kept on the device as decoded in two slots that swap only when a decode succeeds; one integer apply makes every decoded frame, intra too; and it decodes on the device alone (amends the 2026-09-27 `Encoder`/`Decoder` and 2026-10-03 decoding entries).
 
 The `Decoder` takes type 1; the `Encoder` still writes intra frames only,
 and type 1 stays experimental until golden P-frames freeze it. The format,
@@ -12239,10 +12265,10 @@ reference mod 2^16, a 16-bit half at a time, and XORs the mask; skip copies
 the reference; zero and a new block copy the payload. An absent side reads as
 zero, so one integer formula serves all three, and an odd K's pad half is
 written 0. An intra frame's sources are `{none, i}`, so it lands in the store
-by the same path. The device path applies from the reader's entries where it
-decoded them; the host path uploads only the entries with a payload, keep,
-zero and new, in frame order, so a mostly-skip P-frame crosses the bus as its
-changes alone. The uploads, the apply and the inverse share one submit
+by the same path. The apply reads the payload where the device reader
+decoded it, so no entry crosses the bus: decoding runs on the device alone
+(the 2026-10-03 decoding entry's amendment says why). The list and sources'
+upload, the apply and the inverse share one submit
 (`DctTransform::inverse` takes the caller's batch).
 
 **The reference changes only when a decode succeeds.** The store's two slots
@@ -12251,18 +12277,17 @@ swap at `commit`, after the inverse's submit and reject check pass, with
 before the grid changes, or a failure after it leaves the reference as it
 was: a resize, or decoding again, decodes the same frame against the same
 reference, and a P-frame on a frame that failed is `NotFound`. `reserve`
-grows the spare, the list, the sources and the host path's upload before the
-grid changes; each is at most the grid's `tsdf` array once the frame fits
-the heap, as the inverse's buffers are.
+grows the spare, the list and the sources before the grid changes; each is
+at most the grid's `tsdf` array once the frame fits the heap, as the
+inverse's buffers are.
 
-**Memory and cost.** The two slots take about 10 MB at 25,000 blocks of K = 64,
-and up to 15 MB with the list, the sources and the host path's upload
-(`decoder.hpp` gives the bytes a block), all retained as the transform's
-scratch is.
+**Memory and cost.** The two slots, the list and the sources take about 10 MB
+at 25,000 blocks of K = 64 (`decoder.hpp` gives the bytes a block), all
+retained as the transform's scratch is.
 Every decode now copies its frame through the apply and hashes it. Hand check
 on the M5 Max, Release: room0, 400 frames at 1 cm, Classic, every frame coded
-as an I-frame and decoded by `kAuto` (on the device), the median of six runs
-before and six after, interleaved: 3.95 → 4.09 ms a frame of host time, 1.91 →
+as an I-frame and decoded on the device, the median of six runs before and
+six after, interleaved: 3.95 → 4.09 ms a frame of host time, 1.91 →
 1.94 ms of device time; `..rans decode` +0.05 ms (the coordinates taken off
 the reader), `..apply` +0.03 ms (`merge_frame`, which takes an intra frame's
 blocks as they are), `..inverse` +0.06 ms (the list and sources staged, and
@@ -12276,25 +12301,28 @@ The new `recon_codec_inter` covers:
   one dispatch and in several (a test's cap on blocks a dispatch); the slots
   growing under a held reference; `commit` alone changing what is held; the
   apply's refusals;
-- chains on every entropy path, each frame leaving the grid bit for bit as the
-  intra decode of its content: spheres from the `Encoder` that move and grow,
-  which `kAuto` decodes on the device, the host, then the device; synthetic
-  frames with every mode and new blocks, then A = 0, N = 0 and M = 0, at K 21,
-  64 and 512; and coefficients that wrap or differ by 32768;
+- frames leaving the grid bit for bit as the CPU oracle decodes their content
+  (the host reader's entries through the inverse alone): the `Encoder`'s at
+  K = 37 in segments of 64 and 3; chains of spheres from the `Encoder` that
+  move and grow; synthetic chains with every mode and new blocks, then
+  A = 0, N = 0 and M = 0, at K 21, 64 and 512; and coefficients that wrap or
+  differ by 32768;
 - a P-frame into a fresh grid built from `read_frame_info`;
 - `NotFound` with no reference, with a later I-frame held, and on a second
-  decoder; `InvalidArgument` for a scale not the reference's and a new block
-  on a reference block, under `kAuto` at a size it decodes on the device;
+  decoder; `InvalidArgument` for a scale not the reference's, a new block on a
+  reference block, and a segment, intra or update, one entry past
+  `kMaxDeviceDecodeSegmentSize`, where segments of the limit decode;
   `OutOfMemory` at the parse and at the hash table, each recovered by a
   resize, with a P-frame on the failed frame `NotFound`; each refusal leaving
-  the grid as it was;
+  the grid and the reference as they were;
 - a decoder moved mid-chain.
 
-The decoder tests pass unedited but for the two interim type-1 refusals the
-2026-10-12 change added, which now check type 2. Seven planted bugs each
-failed it: a carry between the halves, an unmasked pad, OR for XOR, no slot
-swap at commit, the upload not renumbered, the wrong bytes hashed, and a
-commit after a failed allocation. Not run: the RTX 5090.
+The decoder tests run their cases once, on the device; their two interim
+type-1 refusals from the 2026-10-12 change check type 2. Nine planted bugs
+each failed one of the two: a carry between the halves, an unmasked pad, OR
+for XOR, no slot swap at commit, the wrong bytes hashed, a commit after a
+failed allocation, the segment limit off by one or doubled, and the reader's
+verdict ignored. Not run: the RTX 5090.
 
 ## Measured lessons
 

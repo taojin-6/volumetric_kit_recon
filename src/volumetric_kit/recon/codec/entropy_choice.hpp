@@ -4,10 +4,10 @@
 #pragma once
 
 /// @file entropy_choice.hpp
-/// @brief Where a frame's rANS coding runs (@ref EntropyCoding): the policy
-///        the `Encoder` and the `Decoder` share.
+/// @brief Where the `Encoder` runs a frame's rANS coding
+///        (@ref EntropyCoding).
 ///
-/// Internal (under src/, never installed). Each caller also keeps its device
+/// Internal (under src/, never installed). The encoder also keeps its device
 /// coder's build failure, so `kAuto` tries to build it only once.
 
 #include <cstdint>

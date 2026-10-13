@@ -8,6 +8,19 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `codec`: **the `Decoder` decodes on the device alone** (BREAKING).
+  `DecoderConfig` and `kMinDeviceDecodeSegments` are gone, and
+  `EntropyCoding` is the `Encoder`'s alone. `Decoder::create(device,
+  allocator)` builds the device rANS reader and fails if its kernels do not
+  build. A frame the device cannot decode -- a segment past
+  `kMaxDeviceDecodeSegmentSize` (1,024 entries), or past
+  `maxStorageBufferRange` or free memory -- is refused, `InvalidArgument`
+  or `OutOfMemory`, where `kAuto` decoded it on the host. A frame of few
+  segments, which `kAuto` also decoded on the host, decodes slower, at a
+  cost the 2026-10-03 decoding decision's amendment measures. Migrating:
+  drop the config argument, and encode in segments of at most 1,024 blocks.
+  The examples' `codec.entropy` sets the encoder alone. Tests:
+  `recon_codec_decoder`, `recon_codec_inter`.
 - `examples`: **the codec's step rules are recon's.** Examples and tests
   need core 0.6.0 (core #30), which leaves them to the codec:
   `encoder_config` maps `codec.quantization_table` to the weights and refuses

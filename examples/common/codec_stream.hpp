@@ -214,8 +214,7 @@ struct CodecOutputs {
 class CodecStream {
  public:
   /// The player grid is built from the first frame's header, sized for its
-  /// blocks, and grows as later frames need. The decoder runs its rANS
-  /// coding where @p config says the encoder does. @p outputs are made here,
+  /// blocks, and grows as later frames need. @p outputs are made here,
   /// after the codec objects and before any coding: the stream first, as a
   /// rerun onto its file is the common refusal, then the CSV, its header
   /// flushed.
@@ -234,10 +233,8 @@ class CodecStream {
                                          const std::string& program = {}) {
     VKC_ASSIGN(vr::codec::Encoder enc,
                vr::codec::Encoder::create(device, allocator, config));
-    vr::codec::DecoderConfig dc;
-    dc.entropy = config.entropy;
     VKC_ASSIGN(vr::codec::Decoder dec,
-               vr::codec::Decoder::create(device, allocator, dc));
+               vr::codec::Decoder::create(device, allocator));
     // No session id or start time, so a rerun writes the same bytes.
     std::unique_ptr<vr::stream::StreamWriter> writer;
     if (!outputs.stream.empty()) {
