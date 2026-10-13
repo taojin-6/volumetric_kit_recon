@@ -11803,13 +11803,9 @@ which the tests check. No camera was opened.
 
 ### 2026-10-11 — Examples load the core's scenario format and keep only runtime adapters
 
-*Amended 2026-10-12 (core 0.6.0, core #30):* the codec's rules are the
-codec's. Core keeps `codec.quantization_table` as a choice and its generic
-checks (types, `coefficient_count` in [1, 512], a positive normal scale), and
-no longer copies the tables, the coefficient order or the step bounds.
-`encoder_config` maps the table to the weights through
-`codec_quantization.hpp`, the tables' one home, and refuses what
-`CodecParams::validate` refuses, before the codec examples touch the GPU.
+*Amended 2026-10-12 (core 0.6.0, core #30):* the codec's step rules are
+recon's: core no longer checks them, and `encoder_config` applies them
+(DESIGN.md → "Examples").
 
 This replaces the 2026-10-08 command-line parser decision. Every executable
 accepts `--config PATH` and `--help`, and directly consumes

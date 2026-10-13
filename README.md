@@ -217,8 +217,9 @@ cmake --build "$recon_root/build" --parallel
 The mesh example's `output.prefix` writes `_input.ply` (normalized original),
 `_source.ply` (uncompressed TSDF surface) and `_decoded.ply`. Conversion
 error, codec-only error and total error are reported separately.
-`codec.inspect_only` checks the input and normalization without a GPU run. The signed mode checks indexed topology and winding; it does not
-establish freedom from self-intersections. `source.sdf_mode: "shell"` supports open or
+`codec.inspect_only` checks the input and normalization without a GPU run.
+The signed mode checks indexed topology and winding; it does not establish
+freedom from self-intersections. `source.sdf_mode: "shell"` supports open or
 inconsistently wound meshes, with an intentional surface offset.
 
 Use a Release build for measurements. The current format is v3, with a

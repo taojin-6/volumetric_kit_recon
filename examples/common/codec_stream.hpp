@@ -332,7 +332,9 @@ class CodecStream {
 
   /// @brief Finish the stream's file with its footer index
   ///        (`StreamWriter::finish`); without a stream, only mark it
-  ///        finished. Every later call, this one included, is refused.
+  ///        finished. One attempt: however it ends, every later call, this
+  ///        one included, is refused, so a file whose footer failed stays
+  ///        unfinished, read as a killed writer's.
   /// @return OK; InvalidArgument once finished; or the writer's error.
   vkc::Status finish() {
     if (finished_) {

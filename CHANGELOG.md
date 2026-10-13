@@ -8,11 +8,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- `examples`: **the codec's step rules are recon's**, on core 0.6.0
-  (core #30), which leaves them to the codec. `encoder_config` maps
-  `codec.quantization_table` to the weights (`codec_quantization.hpp`, the
-  tables' one home) and refuses a step out of the codec's bounds,
-  `InvalidArgument`, before the codec examples touch the GPU. Migrating:
+- `examples`: **the codec's step rules are recon's.** Examples and tests
+  need core 0.6.0 (core #30), which leaves them to the codec:
+  `encoder_config` maps `codec.quantization_table` to the weights and refuses
+  a step out of the codec's bounds, `InvalidArgument`. Migrating:
   `encoder_config` returns `Result<EncoderConfig>`. Test:
   `recon_example_config`.
 - `examples`: **every fusing example fuses in the mode `fusion.dynamic`
@@ -86,9 +85,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `examples`: **`fuse_orbbec` with `diagnostics.dump_sets`** writes the first
   sets' camera JPEGs, and with `diagnostics.readback` their luma as PNGs,
   into a new `diagnostics.dump_directory` (`config/examples/dump_orbbec.json`),
-  checked before the cameras open and made with the first set. Examples and
-  tests need core 0.5.0. Tests: `recon_example_set_dump`,
-  `recon_example_config`.
+  checked before the cameras open and made with the first set. Tests:
+  `recon_example_set_dump`, `recon_example_config`.
 - `stream`: **`recon_stream`, the `.vrst` session container**
   (`stream/session.hpp`, `stream_writer.hpp`, `stream_reader.hpp`), on the
   family core's base tier alone. `StreamWriter` creates a new file, never

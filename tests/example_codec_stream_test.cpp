@@ -7,10 +7,11 @@
 // refused on create, before any coding, and none written without outputs; a
 // row per decoded frame, under the source's index, whose bytes and blocks are
 // the frame's; every encoded frame a record of the .vrst, a frame the decoder
-// refuses included, byte for byte what an encoder returns, and the same file
-// on a rerun; a frame out of order refused before it is encoded; a stream
-// never finished still read whole; and the CSV replaced on create and extended
-// as each frame is coded. The device part skips with no device.
+// refuses included and the stream going on after it, byte for byte what an
+// encoder returns, and the same file on a rerun; a frame out of order, or any
+// call once finished, refused before anything is encoded; a stream never
+// finished still read whole; and the CSV replaced on create and extended as
+// each frame is coded. The device part skips with no device.
 
 #include <array>
 #include <cstddef>
@@ -137,8 +138,8 @@ int refused(vr_test::GpuContext& gpu, const vr_test::Scratch& scratch) {
 }
 
 // With no outputs, the stream codes and keeps rows but writes no file, so
-// nothing lands in the working directory; a frame out of order is refused
-// all the same.
+// nothing lands in the working directory; a frame out of order, and any call
+// once finished, is refused all the same, with no writer to refuse it.
 int writes_nothing(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
                    const vr_test::Scratch& scratch) {
   const fs::path quiet = scratch.path / "quiet";
@@ -152,19 +153,22 @@ int writes_nothing(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
       made->code(source, 0, pts(0)), made->code(source, 2, pts(2)),
       // Out of order: a frame not above the last, a pts below the last.
       made->code(source, 2, pts(3)), made->code(source, 3, pts(1)),
-      made->finish()};
+      made->finish(),
+      // Finished: a frame in order, and a second finish.
+      made->code(source, 4, pts(4)), made->finish()};
   fs::current_path(before);
   CHECK(coded[0].ok() && coded[1].ok() && coded[4].ok());
-  CHECK(coded[2].domain() == vkc::Status::Code::InvalidArgument);
-  CHECK(coded[3].domain() == vkc::Status::Code::InvalidArgument);
+  for (const int i : {2, 3, 5, 6}) {
+    CHECK(coded[i].domain() == vkc::Status::Code::InvalidArgument);
+  }
   CHECK(made->rows().size() == 2);
   CHECK(fs::is_empty(quiet));
   return 0;
 }
 
 // Frames 3 and 7 of `source`, frames out of order, `other`'s frame 9, which
-// the decoder refuses, then finish, into `outputs`, whose CSV an earlier run
-// left. `rows` receives the rows.
+// the decoder refuses, `source`'s frame 10, then finish, into `outputs`, whose
+// CSV an earlier run left. `rows_out` receives the rows.
 int code_frames(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
                 vol::VoxelBlockGrid& other,
                 const vr_example::CodecOutputs& outputs,
@@ -204,23 +208,26 @@ int code_frames(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
   CHECK(rows.size() == 2);
 
   // A frame the decoder refuses -- another grid's geometry than the
-  // player's -- has a record and no row.
+  // player's -- has a record and no row, and the stream goes on after it.
   CHECK(coder.code(other, 9, pts(9)).domain() ==
         vkc::Status::Code::InvalidArgument);
   CHECK(rows.size() == 2);
+  CHECK(coder.code(source, 10, pts(10)).ok());
+  CHECK(rows.size() == 3 && rows[2].frame == 10);
 
   // Each row is in the CSV as soon as its frame decodes.
   const std::vector<std::string> lines = lines_of(outputs.csv);
-  CHECK(lines.size() == 3);
-  CHECK(lines[1] + "\n" == vr_example::codec_row_csv(rows[0]));
-  CHECK(lines[2] + "\n" == vr_example::codec_row_csv(rows[1]));
+  CHECK(lines.size() == 4);
+  for (std::size_t i = 0; i < rows.size(); ++i) {
+    CHECK(lines[i + 1] + "\n" == vr_example::codec_row_csv(rows[i]));
+  }
 
   // Finished, nothing more is coded.
   CHECK(coder.finish().ok());
   CHECK(coder.code(source, 11, pts(11)).domain() ==
         vkc::Status::Code::InvalidArgument);
   CHECK(coder.finish().domain() == vkc::Status::Code::InvalidArgument);
-  CHECK(rows.size() == 2);
+  CHECK(rows.size() == 3);
   coder.report(kFps, 4);
   *rows_out = rows;
   return 0;
@@ -248,18 +255,19 @@ int check_records(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
   CHECK(track.width == 0 && track.height == 0);
   CHECK(track.sensor.empty() && track.params.empty());
   CHECK(reader.recovery().finished && reader.recovery().torn_bytes == 0);
-  CHECK(reader.stats()[0].records == 3 && reader.stats()[0].keys == 3);
+  CHECK(reader.stats()[0].records == 4 && reader.stats()[0].keys == 4);
 
   vkc::Result<codec::Encoder> enc =
       codec::Encoder::create(gpu.device, gpu.allocator, {});
   CHECK(enc.ok());
   const vkc::Result<vr_example::Bytes> expected = enc->encode(source);
   CHECK(expected.ok());
-  const std::size_t sets[] = {3, 7, 9};
+  const std::size_t sets[] = {3, 7, 9, 10};
   stream::Position pos = reader.begin();
   stream::Record record;
   std::vector<std::uint8_t> payload;
-  for (std::size_t i = 0; i < 3; ++i) {
+  std::size_t row = 0;  // the row of the next frame that decoded
+  for (std::size_t i = 0; i < std::size(sets); ++i) {
     const vkc::Result<bool> more = reader.next(&pos, &record);
     CHECK(more.ok() && *more);
     CHECK(record.info.track == 0 && record.info.key);
@@ -269,14 +277,16 @@ int check_records(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
     const vkc::Result<codec::FrameInfo> info =
         codec::read_frame_info(payload.data(), payload.size());
     CHECK(info.ok());
-    if (i < rows.size()) {
+    if (row < rows.size() && rows[row].frame == sets[i]) {
       CHECK(payload == *expected);
-      CHECK(payload.size() == rows[i].bytes &&
-            info->block_count == rows[i].blocks);
-    } else {
+      CHECK(payload.size() == rows[row].bytes &&
+            info->block_count == rows[row].blocks);
+      ++row;
+    } else {  // the frame the decoder refused
       CHECK(info->voxel_size == other_voxel);
     }
   }
+  CHECK(row == rows.size());
   const vkc::Result<bool> end = reader.next(&pos, &record);
   CHECK(end.ok() && !*end);
   return 0;
