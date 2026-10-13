@@ -484,6 +484,10 @@ entries relevant to your task; later amendments supersede earlier rules.
   version 1's `device_calibration` key, its writer and
   `rodrigues_from_rotation` return with calib; `SensorArray::open` refuses an
   unposed sensor, and the file I/O is the core's.
+- [**2026-10-12**](#2026-10-12--recordings-are-vrst-files-of-our-own-verbatim-records-in-crc-framed-chunks-readable-from-a-killed-writer-in-recon_stream-on-the-cores-base-tier-alone-amends-the-2026-09-27-v1-frame-entry) —
+  Recordings are `.vrst` files of our own: verbatim records in CRC-framed,
+  8-byte-aligned chunks, readable from a killed writer, in `recon_stream` on
+  the core's base tier alone.
 
 ## Decision record
 
@@ -4620,6 +4624,9 @@ their inputs. The buffers change anyway with the device-resident output below.
 
 ### 2026-09-27 — The v1 frame is independent rANS segments of sorted blocks, every integer a class plus raw bits, behind fixed per-frame tables and a section table; the decoder's end check is for consistency, not integrity (amends the 2026-09-26 entry's interleaved lanes).
 
+*Amended 2026-10-12 (the `.vrst` entry, below):* no CRC section is added; a
+frame travels in a `.vrst` record, whose CRC-32 checks it.
+
 The second of the 2026-09-26 entry's five PRs: the host rANS reference coder
 (`codec/rans.hpp`) and the v1 intra frame (`codec/bitstream.{hpp,cpp}`), both
 internal. Nothing public changes. `Encoder` / `Decoder` are the next PR.
@@ -4843,6 +4850,7 @@ check refuses.
 - The room0 throughput measurement that decides whether the GPU coder is
   needed. *Measured 2026-09-27 (the room0 defaults entry, below).*
 - The optional CRC section above, a `TODO(codec)` in `parse_frame`.
+  *Dropped 2026-10-12 (the `.vrst` entry, below).*
 - The reader accepts a "partial" mask that decodes all-full or all-empty. Our
   writer never makes one, and it decodes correctly. A `TODO(codec)` in the
   reader's block decode.
@@ -11890,6 +11898,83 @@ first order up to 1e-6 rad, the axis from `sin` past pi/2, the pose written
 uninverted, six significant digits, the `sensors` key, a distortion without
 its model, the write mode ignored, a later version accepted, and an array
 taking an unposed sensor each fail a test. No camera was opened.
+
+### 2026-10-12 — Recordings are `.vrst` files of our own: verbatim records in CRC-framed chunks, readable from a killed writer, in `recon_stream` on the core's base tier alone (amends the 2026-09-27 v1-frame entry).
+
+A recording holds tracks of several kinds, each on its own clock, the rig's
+calibration, and per record a pts, a sequence number, a capture set and
+whether decoding can start there. It must read up to its last whole record
+after the writer is killed. `stream/session.hpp` holds the layout; DESIGN.md
+(`### stream`) the behaviour.
+
+- **Our own format, payloads verbatim.** MP4 and MKV need a muxer
+  dependency, a finalising step or fragments to survive a kill, and a private
+  sample entry for geometry anyway. Storing each payload byte for byte keeps
+  a later MP4/MKV export a repackaging with no re-encode, and the planned
+  P-frames name their reference by a hash of its exact bytes, which the
+  container must not change.
+- **Two CRCs per chunk, zlib's CRC-32.** The header's lets a reader trust a
+  body size before it allocates, and lets the scan read one small header per
+  record. The body's is the integrity the codec leaves to the transport (its
+  rANS end check is for consistency). zlib's polynomial lets Python's
+  `zlib.crc32` check any chunk.
+- **8-byte alignment.** Every payload starts aligned, so a later mapped
+  reader can read 16-bit depth in place, and the search past damage tests one
+  offset in 8, for at most 7 bytes a record. The search accepts only `RECD`,
+  `INDX` and `TAIL` with a valid header CRC, not any printable tag, so damage
+  must forge one of three tags and a CRC to stop it early.
+- **A clock per track.** A device clock is comparable only within its
+  frames (`sensor::ClockDomain::Device`), so one clock per session cannot
+  describe a rig on device clocks: a track is on the host's `system_clock`
+  (0) or a numbered domain.
+- **The calibration stored as bytes; the core's base tier alone.** The
+  camera tier's document is the family's one serialization of models and
+  poses, and a geometry record is a codec frame, also bytes, so
+  `recon_stream` links neither tier, and a sibling reads a recording with the
+  core's base tier and nothing else.
+- **The footer accelerates; it is not needed.** Every file is read by its
+  scan; a finished file's index is there so an open can skip the scan. Here
+  every open scans, and `finished` says a footer whose CRCs and sizes agree
+  ends the file.
+- **Kinds, extensions and the version.** A kind comes with its first
+  writer: Geometry now, colour and depth with the capture recorder. An
+  unknown tag is skipped by its size, a larger header's trailing fields are
+  ignored, reserved fields are zero, and a flag bit a reader does not know is
+  `Unsupported`, for the file in `VRST` and for that record in `RECD`. The
+  version changes only for what an old reader must not ignore.
+- **`O_EXCL`, not the core's `WriteMode::CreateNew`.** That writes a
+  temporary file and hard-links it into place complete: exFAT, the cards and
+  drives a capture writes to, has no hard links, and a recording must be
+  visible and recoverable while it is written.
+- **The file calls, CRC-32 and little-endian words are `recon_stream`'s
+  own.** The core holds code two siblings need, and calib, gfx and ios have
+  no append, offset reads, CRC or byte-order helpers, so moving them there
+  would raise every recon consumer's core floor and wait on a core release.
+  The cost: about 20 lines repeat the core's private errno mapping and
+  flush, io's PNG writer keeps stb's CRC, and the codec keeps its own byte
+  reader and writer, which work by cursor and varint. A `TODO(stream)` in
+  `file.cpp` moves them to the core when a second sibling needs them. stream
+  uses recon's existing core 0.2.0 floor, for `check_path`, `exception_status`
+  and `UniqueFd` in the base tier; the pin does not move.
+- **The 2026-09-27 v1-frame entry's CRC section is not added:** a frame
+  travels in a `.vrst` record, whose CRC checks it.
+
+**Verification.** Apple M5 Max, Release with warnings as errors, under the
+Khronos validation layer: the full suite passes, 90 of 90, two of them new
+and host-only. `recon_stream_container` pins golden bytes whose CRCs Python's
+`zlib.crc32` computed, a 65,543-byte payload's included; the CRC of every
+length to 64 at each of 8 alignments against a bitwise one; round trips of
+the session, every record field and payloads of 0 to 300,000 bytes; seeking
+by key; an unknown kind, chunk and header field; the payload limit and a
+body size of 2^64 - 8; every refusal; and two threads on one reader.
+`recon_stream_recovery` flips a bit in a payload, a record header, the
+session header and each part of the footer; cuts the tail at every byte of
+the last record and the footer; damages spans, one of 3 MiB; forges footers
+that must not count as finished; and reads the files of a writer killed by
+SIGKILL and of one `RLIMIT_FSIZE` stopped, whose failure stuck. Both also pass under ASan and UBSan (Debug) and built with
+GCC 16; the library and the container test compile for `arm64_32` (32-bit
+`size_t`) with `-Wshorten-64-to-32`, which nothing here can run. The
+measured rates are DESIGN.md's.
 
 ## Measured lessons
 

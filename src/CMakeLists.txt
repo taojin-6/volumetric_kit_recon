@@ -40,6 +40,9 @@ if(NOT VR_CAMERA_ONLY)
   # or a codec: mesh-to-mesh distance, accuracy / coverage, F-score (the
   # 2026-09-27 eval decision). Off recon_mesh.
   add_subdirectory(volumetric_kit/recon/eval)
+  # The .vrst session container: recorded tracks of records, stored verbatim. On
+  # the family core's base tier alone, so it depends on no tier here.
+  add_subdirectory(volumetric_kit/recon/stream)
   # TODO: add_subdirectory() for interop as that tier lands.
   list(
     APPEND
@@ -54,7 +57,8 @@ if(NOT VR_CAMERA_ONLY)
     recon_sensor_array
     recon_codec
     recon_eval
-    recon_io)
+    recon_io
+    recon_stream)
 endif()
 
 # --- recon: umbrella alias --------------------------------------------------

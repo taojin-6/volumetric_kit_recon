@@ -1060,6 +1060,24 @@ target_link_libraries(recon_io_ply_test PRIVATE volumetric_kit::recon_io)
 vr_target_warnings(recon_io_ply_test)
 add_test(NAME recon_io_ply COMMAND recon_io_ply_test)
 
+# stream: the .vrst container through its public API -- golden bytes whose CRCs
+# Python's zlib.crc32 computed, round trips, seeking, unknown kinds and chunks,
+# the limits, every refusal, two threads on one reader -- and what its reader
+# recovers: flipped bits, the tail cut at every byte, damaged spans, a killed
+# writer and one stopped by RLIMIT_FSIZE. Host-only.
+find_package(Threads REQUIRED)
+add_executable(recon_stream_container_test stream_container_test.cpp)
+target_link_libraries(recon_stream_container_test
+                      PRIVATE volumetric_kit::recon_stream Threads::Threads)
+vr_target_warnings(recon_stream_container_test)
+add_test(NAME recon_stream_container COMMAND recon_stream_container_test)
+
+add_executable(recon_stream_recovery_test stream_recovery_test.cpp)
+target_link_libraries(recon_stream_recovery_test
+                      PRIVATE volumetric_kit::recon_stream)
+vr_target_warnings(recon_stream_recovery_test)
+add_test(NAME recon_stream_recovery COMMAND recon_stream_recovery_test)
+
 # What a sibling that fetches recon gets (subproject/): its configure, from a
 # clean tree, with each dependency this build fetched as a local source, so it
 # needs no network. The defaults hold, and recon refuses a core the sibling made
