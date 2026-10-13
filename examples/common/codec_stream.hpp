@@ -201,7 +201,7 @@ inline std::uint64_t frame_pts_ns(std::size_t frame, double fps) {
 ///        coded; an empty path writes nothing.
 struct CodecOutputs {
   /// A file of @ref kCodecRowsCsvHeader, then the @ref codec_row_csv of each
-  /// frame that decodes; replaced if it exists.
+  /// frame that decodes; replaced if it exists. Must not alias the stream.
   std::string csv;
   /// A new `.vrst` file (stream/session.hpp) of every frame the encoder
   /// returns, a record each on its one Geometry track. Nothing may be at the
@@ -223,9 +223,10 @@ class CodecStream {
   ///                 header.
   /// @return The stream; `StreamWriter::create`'s error for the stream
   ///         (InvalidArgument when something is at its path, NotFound when
-  ///         its directory is missing); IoError naming a CSV that cannot be
-  ///         written, with the stream's file removed again; or the
+  ///         its directory is missing); InvalidArgument if the CSV aliases
+  ///         the stream; IoError naming a CSV that cannot be written; or the
   ///         `Encoder::create` / `Decoder::create` error.
+  ///         Either CSV error removes the new stream's file again.
   static vkc::Result<CodecStream> create(vkc::Device& device,
                                          vkc::Allocator& allocator,
                                          const vr::codec::EncoderConfig& config,
@@ -248,20 +249,39 @@ class CodecStream {
       VKC_ASSIGN(writer,
                  vr::stream::StreamWriter::create(outputs.stream, session));
     }
+    const auto remove_stream = [&] {
+      // The stream's file is this call's and holds no record: take it
+      // back, so a rerun is refused for the CSV again, not for the stream.
+      if (writer) {
+        writer.reset();
+        std::error_code ignored;
+        std::filesystem::remove(outputs.stream, ignored);
+      }
+    };
     // The core writes whole files only, so the CSV, extended a row at a time,
     // is the stream's own.
     std::ofstream csv;
     if (!outputs.csv.empty()) {
+      if (writer) {
+        // Creating the stream first resolves dangling symlinks and case
+        // aliases. Check identity before opening the CSV can truncate it.
+        std::error_code error;
+        if (std::filesystem::exists(outputs.csv, error) &&
+            std::filesystem::equivalent(outputs.csv, outputs.stream, error)) {
+          remove_stream();
+          return vkc::Status::invalid_argument(
+              "CodecStream: CSV " + outputs.csv + " aliases stream " +
+              outputs.stream);
+        }
+        if (error) {
+          remove_stream();
+          return csv_error(outputs.csv);
+        }
+      }
       csv.open(outputs.csv, std::ios::binary | std::ios::trunc);
       csv << kCodecRowsCsvHeader << std::flush;
       if (!csv) {
-        // The stream's file is this call's and holds no record: take it
-        // back, so a rerun is refused for the CSV again, not for the stream.
-        if (writer) {
-          writer.reset();
-          std::error_code ignored;
-          std::filesystem::remove(outputs.stream, ignored);
-        }
+        remove_stream();
         return csv_error(outputs.csv);
       }
     }

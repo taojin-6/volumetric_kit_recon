@@ -498,6 +498,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `examples`: reject `output.csv` paths that alias `output.stream`, including
+  symlinks and case-insensitive names, before opening the CSV can truncate
+  the recording. Rejection removes the new stream file so corrected outputs
+  can retry. Test: `recon_example_codec_stream`.
 - `io`: **`write_png_rgba8` aborts when stb's compressor cannot grow its
   output**, where a build without `assert` wrote through the failed pointer;
   its other allocation failures still return `OutOfMemory`. Its errors now

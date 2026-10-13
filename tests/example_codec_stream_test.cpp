@@ -137,6 +137,54 @@ int refused(vr_test::GpuContext& gpu, const vr_test::Scratch& scratch) {
   return 0;
 }
 
+// The CSV must not truncate the stream through another name. Rejection
+// removes the new stream and preserves any pre-existing symlinks.
+int aliased_outputs(vr_test::GpuContext& gpu, const vr_test::Scratch& scratch) {
+  const fs::path dir = scratch.path / "aliases";
+  CHECK(fs::create_directory(dir));
+  const fs::path stream_path = dir / "frames.vrst";
+  const fs::path csv_link = dir / "rows.csv";
+  fs::create_symlink(stream_path.filename(), csv_link);
+  const fs::path dir_link = scratch.path / "linked_outputs";
+  fs::create_directory_symlink(dir, dir_link);
+  std::vector<fs::path> csv_paths = {csv_link, dir_link / "frames.vrst",
+                                     stream_path, dir / "." / "frames.vrst"};
+  // The temporary directory's filesystem determines whether case aliases
+  // exist, independently of the operating system.
+  if (fs::exists(scratch.path / "ALIASES")) {
+    csv_paths.push_back(dir / "FRAMES.vrst");
+  } else {
+    std::puts("aliased_outputs: case-sensitive filesystem; case alias skipped");
+  }
+  for (const fs::path& csv_path : csv_paths) {
+    CHECK(!fs::exists(stream_path));
+    const vr_example::CodecOutputs outputs{csv_path.string(),
+                                           stream_path.string()};
+    vkc::Result<vr_example::CodecStream> made =
+        vr_example::CodecStream::create(gpu.device, gpu.allocator, {}, outputs);
+    CHECK(!made.ok());
+    CHECK(made.status().domain() == vkc::Status::Code::InvalidArgument);
+    CHECK(made.status().message().find(outputs.csv) != std::string::npos);
+    CHECK(made.status().message().find(outputs.stream) != std::string::npos);
+    CHECK(!fs::exists(stream_path));
+    CHECK(fs::is_symlink(csv_link));
+    CHECK(fs::read_symlink(csv_link) == stream_path.filename());
+    CHECK(fs::is_symlink(dir_link));
+  }
+  // A corrected configuration can retry at the same stream path, with a
+  // CSV that does not exist yet. Both files must be readable after finish.
+  const vr_example::CodecOutputs distinct{(dir / "separate.csv").string(),
+                                          stream_path.string()};
+  vkc::Result<vr_example::CodecStream> made =
+      vr_example::CodecStream::create(gpu.device, gpu.allocator, {}, distinct);
+  CHECK(made.ok());
+  CHECK(made->finish().ok());
+  const vkc::Result<std::string> csv = vkc::read_file(distinct.csv);
+  CHECK(csv.ok() && *csv == vr_example::kCodecRowsCsvHeader);
+  CHECK(stream::StreamReader::open(distinct.stream).ok());
+  return 0;
+}
+
 // With no outputs, the stream codes and keeps rows but writes no file, so
 // nothing lands in the working directory; a frame out of order, and any call
 // once finished, is refused all the same, with no writer to refuse it.
@@ -333,6 +381,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
 
   vr_test::Scratch scratch("recon_example_codec_stream_");
   CHECK(refused(gpu, scratch) == 0);
+  CHECK(aliased_outputs(gpu, scratch) == 0);
   CHECK(writes_nothing(gpu, *source, scratch) == 0);
 
   const auto outputs_in = [&scratch](const char* name) {

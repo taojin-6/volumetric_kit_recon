@@ -1753,6 +1753,11 @@ refused before anything is coded, and a frame index or pts out of order is
 refused before it is encoded, so the writer never refuses a frame the
 encoder has taken. `finish` writes the footer.
 
+Before truncating the CSV, creation checks that it does not alias the new
+stream file, including through symlinks or case-insensitive names. An alias
+is `InvalidArgument`; a CSV error during creation removes the new stream
+file for retry.
+
 **`codec_mesh`** loads static geometry through the optional Assimp-backed
 `io::load_mesh`, explicitly normalizes its projected height and up direction
 into metres, allocates its triangle band and writes its field
