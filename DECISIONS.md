@@ -11987,6 +11987,10 @@ measured rates are DESIGN.md's.
 
 ### 2026-10-12 — P-frames are frame type 1 of v3: each reference block gets a mode in update segments, new blocks follow in intra segments, and a REFERENCE section names the reference by XXH64 of its bytes (experimental until golden P-frames freeze it).
 
+*Amended the same day (the device coders, at the end):* the device writer
+and reader code type 1 too; `read_frame_info` and `Decoder::decode` still
+refuse it.
+
 The host writer and reader of type-1 frames, internal. `bitstream.hpp` holds
 the layout and the order of the refusals; this entry holds why. Nothing public
 changes but one refusal: `read_frame_info`, `Decoder::decode` and the device
@@ -12147,6 +12151,55 @@ and `recon_codec_inter_bitstream` passes with the same figures. The frame
 code and both host tests pass a `-Werror` syntax check for a 32-bit `size_t`
 (`arm64_32`, the watchOS SDK), not a build. Not run: GCC 13.3 in
 `ubuntu:24.04` (no Docker daemon on the machine).
+
+**The device coders (amended the same day).** `DeviceFrameWriter` and
+`DeviceFrameReader` code P-frames byte for byte as `write_frame` and
+`read_frame` do, the `Encoder` and the `Decoder` unchanged. Both work on
+entries, the stream positions, which `segment_range` places on the device as
+on the host:
+- The rANS push constants grow from 20 to 32 bytes: `frame_type`,
+  `reference_count` and `update_size`, with `num_entries` (M + A) for the
+  block count.
+- A mode is a u32 on the device, one a reference entry, which the kernels
+  read and write whole; the host keeps bytes. The reader reads back 4 bytes
+  a reference entry and 16 a new block, where an intra frame's 16 a block
+  were all.
+- The writer predicts the payload it reads back from the last frame of the
+  same type: a P-frame's bytes per entry are a fraction of an I-frame's, so
+  one prediction would read an I-frame after a P-frame in two batches, and a
+  P-frame after an I-frame many times over.
+- `kMaxDeviceDecodeSegmentSize` counts entries, as an update segment's cost
+  does: `max(min(M, U), min(A, R))`.
+- The count pass flags what `write_frame` refuses of the entries: the largest
+  mode past the alphabet, and a written −32768, clamped as before so no count
+  indexes past its model. `finish` refuses them, and a counted motion mode,
+  through `check_entries`, the host writer's own last check (after the arrays'
+  sizes and the coordinates' order). It makes the coding parameters' refusals
+  (`check_coding`) before them, as the host writer does, so both writers refuse
+  with one code and message.
+
+Validated on the M5 Max, Release with warnings as errors: the 94 tests pass
+under the validation layer, and again under synchronization validation. In
+`recon_codec_device_frame` the device writer's bytes equal `write_frame`'s,
+and the reader's modes, new coordinates and keep, zero and new payloads
+`decode_frame`'s, on the worked example (at U = 1 too), the 336 frames of the
+round-trip matrix and a P-frame of no entries. The reader refuses each of the
+43 edits of the refusal list (6 judged after a device decode) and 800 random
+payload corruptions of two P-frames (13 decoded, 11 out of int32, 762 corrupt,
+14 out of order) with the host's code and message. The writer refuses motion,
+modes past the alphabet and a −32768 in a keep, zero, new and intra entry as
+`write_frame` does, and a frame that also has a bad voxel size or `trunc_dist`
+for that. An update or new segment of 1,025 entries is refused while the host
+decodes it, and one of 1,024 decodes, as does a frame of 1,026 blocks in short
+segments. Thirteen planted bugs each failed a named case: update and new
+segments swapped, an update range off by one, the slot tables without the mode
+model, a skip that reads a payload, a new segment's start counted in stream
+positions, no entry check in `finish`, an unflagged bad mode, an unflagged
+−32768, no survivor check, the limit counted in blocks (whole, or in its
+new-block term), `finish` trusting another reference count than was counted,
+and the entries judged before the coding parameters. The codec tests pass
+under ASan and UBSan (Debug). Not run: the RTX 5090 (not reachable from this
+machine).
 
 ## Measured lessons
 
