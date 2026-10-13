@@ -715,6 +715,20 @@ target_include_directories(
 vr_target_warnings(recon_codec_device_frame_test)
 add_test(NAME recon_codec_device_frame COMMAND recon_codec_device_frame_test)
 
+# codec tier, P-frame decoding: the reference store's apply against plain uint16
+# arithmetic, its slots growing, and only a commit changing what it holds.
+# Internal headers by include path (the public decoder test stays public-only).
+# Skips without a device.
+add_executable(recon_codec_inter_test codec_inter_test.cpp)
+target_link_libraries(
+  recon_codec_inter_test PRIVATE volumetric_kit::recon_codec Vulkan::Vulkan
+                                 volumetric_kit::core_test_policy)
+target_include_directories(
+  recon_codec_inter_test
+  PRIVATE ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/codec)
+vr_target_warnings(recon_codec_inter_test)
+add_test(NAME recon_codec_inter COMMAND recon_codec_inter_test)
+
 # codec tier, entropy coding: the rANS reference coder (normalization, round
 # trips, a probability-one symbol's zero cost, size against the ideal code
 # length, truncation and bit flips), the v3 frame built on it (round trips,
