@@ -12173,8 +12173,10 @@ on the host:
 - The count pass flags what `write_frame` refuses of the entries: the largest
   mode past the alphabet, and a written −32768, clamped as before so no count
   indexes past its model. `finish` refuses them, and a counted motion mode,
-  through `check_entries`, the host writer's own last check, so both writers
-  refuse with one code and message.
+  through `check_entries`, the host writer's own last check (after the arrays'
+  sizes and the coordinates' order). It makes the coding parameters' refusals
+  (`check_coding`) before them, as the host writer does, so both writers refuse
+  with one code and message.
 
 Validated on the M5 Max, Release with warnings as errors: the 93 tests pass
 under the validation layer, and again under synchronization validation. In
@@ -12183,17 +12185,20 @@ and the reader's modes, new coordinates and keep, zero and new payloads
 `decode_frame`'s, on the worked example (at U = 1 too), the 336 frames of the
 round-trip matrix and a P-frame of no entries. The reader refuses each of the
 43 edits of the refusal list (6 judged after a device decode) and 800 random
-payload corruptions of two P-frames (13 decoded, 11 out of int32, 762
-corrupt, 14 out of order) with the host's code and message. The writer
-refuses motion, modes past the alphabet and a −32768 in a keep, zero, new
-and intra entry as `write_frame` does. An update or new segment of 1,025
-entries is refused while the host decodes it, and one of 1,024 decodes. Ten
-planted bugs each failed a named case: update and new segments swapped, an
-update range off by one, the slot tables without the mode model, a skip that
-reads a payload, a new segment's start counted in stream positions, no
-entry check in `finish`, an unflagged bad mode, an unflagged −32768, no
-survivor check, and the limit counted in blocks. The codec tests pass under
-ASan and UBSan (Debug). Not run: the RTX 5090 (not reachable from this
+payload corruptions of two P-frames (13 decoded, 11 out of int32, 762 corrupt,
+14 out of order) with the host's code and message. The writer refuses motion,
+modes past the alphabet and a −32768 in a keep, zero, new and intra entry as
+`write_frame` does, and a frame that also has a bad voxel size or `trunc_dist`
+for that. An update or new segment of 1,025 entries is refused while the host
+decodes it, and one of 1,024 decodes, as does a frame of 1,026 blocks in short
+segments. Thirteen planted bugs each failed a named case: update and new
+segments swapped, an update range off by one, the slot tables without the mode
+model, a skip that reads a payload, a new segment's start counted in stream
+positions, no entry check in `finish`, an unflagged bad mode, an unflagged
+−32768, no survivor check, the limit counted in blocks (whole, or in its
+new-block term), `finish` trusting another reference count than was counted,
+and the entries judged before the coding parameters. The codec tests pass
+under ASan and UBSan (Debug). Not run: the RTX 5090 (not reachable from this
 machine).
 
 ## Measured lessons
