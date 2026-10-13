@@ -1612,7 +1612,7 @@ tail. A header that fails its CRC or holds what no chunk can starts a
 search, in 8-byte steps, for the next `RECD`, `INDX` or `TAIL` with a valid
 header; the bytes skipped are a damaged span, or with no chunk after them
 the torn tail. `Recovery` reports them, and whether the file was opened from
-its footer (`finished`) or ends with a footer `open` refused
+its footer (`finished`) or the scan found a `TAIL` where the footer's starts
 (`footer_damaged`). `next` passes damage the same way as the scan,
 returning `InvalidArgument` once; a geometry consumer resumes at the next
 key record.

@@ -1082,9 +1082,13 @@ target_link_libraries(recon_stream_recovery_test
 vr_target_warnings(recon_stream_recovery_test)
 add_test(NAME recon_stream_recovery COMMAND recon_stream_recovery_test)
 
-add_executable(recon_stream_footer_test stream_footer_test.cpp)
+add_executable(recon_stream_footer_test stream_footer_test.cpp
+                                        test_allocation_failure.cpp)
 target_link_libraries(recon_stream_footer_test
                       PRIVATE volumetric_kit::recon_stream)
+# A 64-bit off_t, as the library's, for pwrite and truncate past 4 GiB.
+target_compile_definitions(recon_stream_footer_test
+                           PRIVATE _FILE_OFFSET_BITS=64)
 vr_target_warnings(recon_stream_footer_test)
 add_test(NAME recon_stream_footer COMMAND recon_stream_footer_test)
 
