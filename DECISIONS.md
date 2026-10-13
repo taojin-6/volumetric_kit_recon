@@ -12255,24 +12255,27 @@ grows the spare, the list, the sources and the host path's upload before the
 grid changes; each is at most the grid's `tsdf` array once the frame fits
 the heap, as the inverse's buffers are.
 
-**Memory and cost.** The two slots take about 10 MB at 25,000 blocks of K = 64
-(`decoder.hpp` gives the bytes a block), and the list, the sources and the
-host path's upload come on top, all retained as the transform's scratch is.
+**Memory and cost.** The two slots take about 10 MB at 25,000 blocks of K = 64,
+and up to 15 MB with the list, the sources and the host path's upload
+(`decoder.hpp` gives the bytes a block), all retained as the transform's
+scratch is.
 Every decode now copies its frame through the apply and hashes it. Hand check
 on the M5 Max, Release: room0, 400 frames at 1 cm, Classic, every frame coded
 as an I-frame and decoded by `kAuto` (on the device), the median of six runs
-before and six after, interleaved: 3.97 → 4.16 ms a frame of host time, 1.91 →
-1.93 ms of device time; `..rans decode` +0.04 ms (the coordinates taken off
-the reader), `..apply` +0.09 ms (`merge_frame`), `..inverse` +0.06 ms (the
-list and sources staged, and the apply). Bytes and F-score are unchanged.
+before and six after, interleaved: 3.95 → 4.09 ms a frame of host time, 1.91 →
+1.94 ms of device time; `..rans decode` +0.05 ms (the coordinates taken off
+the reader), `..apply` +0.03 ms (`merge_frame`, which takes an intra frame's
+blocks as they are), `..inverse` +0.06 ms (the list and sources staged, and
+the apply). Bytes and F-score are unchanged.
 
 **Validation.** Apple M5 Max, Release with warnings as errors: the 96 tests
 pass under the validation layer, and again under synchronization validation.
 The new `recon_codec_inter` covers:
 - the apply against plain uint16 arithmetic, every source kind at K 1, 21, 64
-  and 512, from a host upload and from device entries whose pad is not 0; the
-  slots growing under a held reference; `commit` alone changing what is held;
-  the apply's refusals;
+  and 512, from a host upload and from device entries whose pad is not 0, in
+  one dispatch and in several (a test's cap on blocks a dispatch); the slots
+  growing under a held reference; `commit` alone changing what is held; the
+  apply's refusals;
 - chains on every entropy path, each frame leaving the grid bit for bit as the
   intra decode of its content: spheres from the `Encoder` that move and grow,
   which `kAuto` decodes on the device, the host, then the device; synthetic

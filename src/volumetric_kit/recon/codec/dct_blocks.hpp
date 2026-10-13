@@ -17,6 +17,14 @@
 
 namespace volumetric_kit::recon::codec::detail {
 
+/// @brief The words one entry's @p k coefficients take on the device: two
+///        int16 a word, each entry starting a word of its own, so an odd K
+///        pads each entry by a half-word (`coefficient_words` in
+///        dct_common.glsl).
+constexpr std::uint32_t coefficient_words(std::uint32_t k) {
+  return k / 2 + k % 2;
+}
+
 /// @brief One block list's transform: what @ref DctTransform::forward produces
 ///        and @ref DctTransform::inverse consumes.
 ///

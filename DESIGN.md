@@ -1450,11 +1450,11 @@ payload alone, and the host path uploads only the entries with a payload
 (`"codec encode"` / `"codec decode"`). Their breakdown rows share no name
 except the map's own `"  ..active set"`. The private pieces under
 `src/volumetric_kit/recon/codec/` are the `DctTransform`, the rANS
-reference coder, the frame, its device coders and the reference store. The transform takes a
-`volume::BlockList` to a `DctBlocks` — K quantized 16-bit coefficients per
-block in 3-D zigzag order, a 16-word observed mask, and the params and
-`trunc_dist` they were made with — and back, each call one `CommandBatch`
-over device-local buffers. The compacted observed list, uploaded sorted list,
+reference coder, the frame, its device coders and the reference store. The
+transform takes a `volume::BlockList` to a `DctBlocks` — K quantized 16-bit
+coefficients per block in 3-D zigzag order, a 16-word observed mask, and the
+params and `trunc_dist` they were made with — and back, each call one
+`CommandBatch` over device-local buffers. The compacted observed list, uploaded sorted list,
 coefficient buffer and mask buffer are retained and grow only when a call needs
 more capacity, releasing the old buffer first and taking 1.5x headroom
 (`ensure_device_scratch`); descriptor ranges and transfers use the current
