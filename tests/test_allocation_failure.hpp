@@ -7,13 +7,15 @@
 
 namespace vr_test {
 
-// Link test_allocation_failure.cpp only into tests that inject failures. The
-// replacement operators are compiled separately from their callers so GCC
-// does not inline delete's free and mistake it for a mismatched deallocation.
+// Link test_allocation_failure.cpp only into tests that inject failures or
+// measure allocations. The replacement operators are compiled separately from
+// their callers so GCC does not inline delete's free and mistake it for a
+// mismatched deallocation.
 struct AllocationFailure {
   bool measure = false;
   std::size_t bytes = 0;
   const void* measured_site = nullptr;
+  std::size_t largest = 0;  // the largest allocation while measuring
   bool armed = false;
   bool injected = false;
   // Optionally replay a failure at a captured allocation site, so an

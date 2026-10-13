@@ -11943,10 +11943,8 @@ after the writer is killed. `stream/session.hpp` holds the layout; DESIGN.md
   poses, and a geometry record is a codec frame, also bytes, so
   `recon_stream` links neither tier, and a sibling reads a recording with the
   core's base tier and nothing else.
-- **The footer accelerates; it is not needed.** Every file is read by its
-  scan; a finished file's index is there so an open can skip the scan. Here
-  every open scans, and `finished` says a footer whose CRCs and sizes agree
-  ends the file.
+- **The footer accelerates; it is not needed.** Every file can be read by
+  its scan; a finished file's index is there so an open can skip the scan.
 - **Kinds, extensions and the version.** A kind comes with its first
   writer: Geometry now, colour and depth with the capture recorder. An
   unknown tag is skipped by its size, a larger header's trailing fields are
