@@ -1588,6 +1588,12 @@ the last one. A failed write or flush sticks: every later call returns it,
 and the file reads as a killed writer's. `finish` writes the footer, flushes
 and closes.
 
+All fallible stream calls contain host allocation failures, including
+validation diagnostics and copies of a saved failure, as `OutOfMemory`.
+Validation or preparation allocation failures leave the writer retryable;
+a failed write or flush remains sticky even if its diagnostic cannot be
+allocated.
+
 **Reading** (`StreamReader`). `open` checks the session header, then scans
 the file, one chunk header per chunk and never a payload: each track's
 counts (`stats`) and key records (`key`, and `key_at` for the last key at or
