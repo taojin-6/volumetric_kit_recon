@@ -1650,13 +1650,17 @@ Preparing while the previous frame is held allocates a separate output pair.
 
 Every example reads a scenario with `--config path.json`; `--help` prints
 that entry point. The optional core `config` tier owns the JSON format, typed
-settings, application defaults and all static input validation. Each example
+settings, application defaults and static input validation. Each example
 uses `core::config::Config` directly. `examples/common/config.hpp` handles
 startup and diagnostics, and `replica_config.hpp`, `orbbec_config.hpp` and
 `codec_config.hpp` only copy validated settings into runtime API types and
-attach resources. No local parser, flag registration or config validator
-remains. [Configuration examples](config/README.md) document paths, defaults
-and migration from the previous CLI.
+attach resources, except that the codec's rules stay the codec's:
+`encoder_config` maps `codec.quantization_table` to the weights
+(`codec_quantization.hpp`, the tables' one home) and refuses a step
+`CodecParams::validate` refuses, before the codec examples touch the GPU. No
+local parser, flag registration or config validator remains.
+[Configuration examples](config/README.md) document paths, defaults and
+migration from the previous CLI.
 
 `fuse_orbbec` selects stream-only work with `operation: "stream"`; core
 refuses explicit fusion or output settings for that operation before setup.

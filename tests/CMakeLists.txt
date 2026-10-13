@@ -241,7 +241,8 @@ add_test(NAME recon_example_fuse_keyframe
          COMMAND recon_example_fuse_keyframe_test)
 
 # The core parses and validates scenarios. These tests pin the conversion into
-# the runtime sensor and codec options, without opening a camera or GPU.
+# the runtime sensor and codec options (the codec's steps checked here, not by
+# core), without opening a camera or GPU.
 add_executable(recon_example_config_test example_config_test.cpp)
 target_include_directories(recon_example_config_test
                            PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)

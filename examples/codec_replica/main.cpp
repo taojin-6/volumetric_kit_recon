@@ -52,6 +52,9 @@ constexpr std::size_t kMetricStride = 4;  // about 1 vertex in 4, both ways
 using Options = vr_example::config::Config;
 
 vkc::Status run(const Options& opt) {
+  // First, so a step the codec refuses costs no GPU work.
+  VKC_ASSIGN(const codec::EncoderConfig config,
+             vr_example::encoder_config(opt.codec));
   VKC_ASSIGN(vkc::Instance instance, vkc::Instance::create({}));
   VKC_ASSIGN(vkc::PhysicalDeviceInfo gpu,
              instance.select_physical_device(vr::device_requirements()));
@@ -75,7 +78,6 @@ vkc::Status run(const Options& opt) {
              vr::sensor::GpuFramePrep::create(device, allocator));
   VKC_ASSIGN(mesh::MarchingCubes extractor,
              mesh::MarchingCubes::create(device, allocator));
-  const codec::EncoderConfig& config = vr_example::encoder_config(opt.codec);
   VKC_ASSIGN(vr_example::CodecStream stream,
              vr_example::CodecStream::create(device, allocator, config));
   std::printf("%zu frames at %.3f m voxels; K %u, table %s, scale %.3f\n",

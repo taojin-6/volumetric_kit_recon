@@ -8,6 +8,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `examples`: **the codec's step rules are recon's**, on core 0.6.0
+  (core #30), which leaves them to the codec. `encoder_config` maps
+  `codec.quantization_table` to the weights (`codec_quantization.hpp`, the
+  tables' one home) and refuses a step out of the codec's bounds,
+  `InvalidArgument`, before the codec examples touch the GPU. Migrating:
+  `encoder_config` returns `Result<EncoderConfig>`. Test:
+  `recon_example_config`.
 - `examples`: `fuse_viewer` and `rig_viewer` take their window glue from gfx's
   `gfx_glfw` (gfx #133, pinned at #135): the GLFW surface, the shared device
   and ImGui's GLFW backend. `examples/viewer/shared_device.hpp` and the
