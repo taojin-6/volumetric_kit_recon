@@ -106,12 +106,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   section names by XXH64 of its bytes (`frame_hash.hpp`): a mode for each
   reference block (keep, skip, zero or remove; motion reserved) in update
   segments, then the new blocks in intra segments. A reader that does not
-  hold the reference refuses it as `NotFound`. `read_frame_info`,
-  `Decoder::decode` and the device coders still refuse type 1, as
-  `Unsupported` once the rest of its header checks out; intra frames are
-  unchanged, byte for byte. See the 2026-10-12 decision. Tests:
-  `recon_codec_inter_bitstream`, and type-1 cases in `recon_codec_bitstream`,
-  `recon_codec_device_frame` and `recon_codec_decoder`.
+  hold the reference refuses it as `NotFound`. `read_frame_info` and
+  `Decoder::decode` still refuse type 1, as `Unsupported` once the rest of
+  its header checks out; intra frames are unchanged, byte for byte. See the
+  2026-10-12 decision. Tests: `recon_codec_inter_bitstream`, and type-1
+  cases in `recon_codec_bitstream` and `recon_codec_decoder`.
+- `codec`: **the device coders write and read P-frames** (internal), byte
+  for byte as the host does. `DeviceFrameWriter::record_count` takes the
+  update size and `finish` the reference, and refuses what `write_frame`
+  refuses of the entries with its code and message; `DeviceFrameReader`
+  decodes type 1 and returns its modes. The device decode's segment limit
+  counts entries. The `Encoder` and `Decoder` are unchanged. See the
+  2026-10-12 P-frame decision. Test: `recon_codec_device_frame`.
 - `examples`: **codec rows and frames, written as they are coded.**
   `CodecStream` keeps a row per decoded frame (its source index, bytes,
   blocks, and encode and decode host and device ms). `codec_replica` and

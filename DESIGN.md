@@ -1400,19 +1400,25 @@ coefficients and masks on the host path. A segment is one serial chain, so
 `kAuto`, the default, codes on the device from `kMinDeviceEncodeSegments` (48)
 segments and on the host below, and on the host too for a frame the device
 cannot code; smaller segments give the device parallelism at a few percent
-of size.
+of size. Both device coders work on entries, a P-frame's stream positions
+(`ResidentBlocks`): its reference entries, each with a u32 mode, then its new
+blocks, which alone the block list holds; an intra frame is all new blocks.
+The count pass also flags what `write_frame` refuses of the entries (a mode
+past the alphabet, a written −32768), which `finish` refuses in its words
+(`check_entries`).
 `DecoderConfig::entropy` picks where the decoding runs. On the device
 (`detail::DeviceFrameReader`), the host parses the frame
 (`parse_frame`) and uploads only its tables and payload. One batch
 expands each table into a 4096-slot lookup, decodes one segment per
-workgroup into the inverse transform's layout, and reads back the
-coordinates and each segment's fault, which `check_segment` judges exactly
-as the host reader does. The coefficients and masks stay in VRAM for the
+workgroup into the inverse transform's layout, and reads back the new
+blocks' coordinates, a P-frame's modes and each segment's fault, which
+`check_segment` and `check_survivors` judge exactly as the host reader
+does. The coefficients and masks stay in VRAM for the
 inverse (`DctTransform::inverse` over `ResidentBlocks`). The decode's symbol
 walk is inside its serial chain, so `kAuto` decodes on the device only from
 `kMinDeviceDecodeSegments` (80). The frame sets how long one invocation runs,
 so the device refuses segments longer than `kMaxDeviceDecodeSegmentSize`
-(1,024 blocks), keeping an invocation near 50 ms. Both coders' `kAuto` uses
+(1,024 entries), keeping an invocation near 50 ms. Both coders' `kAuto` uses
 the host for a frame the device cannot hold (`InvalidArgument` or
 `OutOfMemory`), and for every frame once the device kernels fail to build,
 which it tries once; it reports any other device failure.
@@ -1472,10 +1478,10 @@ weights in its parameter header, `44 + 4K` bytes (300 at K = 64); older
 versions are refused. `read_frame_info` reads them without entropy decoding.
 Header byte 6 is the frame type, which the internal `Frame` carries: intra
 (0), or a P-frame (1, experimental), coded against the frame before it as
-`bitstream.hpp` lays out and the 2026-10-12 entry explains. The host writer
-and reader code both; the device coders, `read_frame_info` and the
-`Decoder` refuse type 1 as `Unsupported`, as every reader refuses a later
-type. The payload is segments of R sorted
+`bitstream.hpp` lays out and the 2026-10-12 entry explains. The host and
+device writers and readers code both; `read_frame_info` and the `Decoder`
+refuse type 1 as `Unsupported`, as every reader refuses a later type.
+The payload is segments of R sorted
 blocks (default 64). Each segment is one independent rANS stream
 (`rans.hpp`: a 32-bit state, 16-bit words and 12-bit probabilities, integer
 only, the reference the GPU kernels must match byte for byte). Every integer
