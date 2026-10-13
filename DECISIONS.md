@@ -488,6 +488,11 @@ entries relevant to your task; later amendments supersede earlier rules.
   Recordings are `.vrst` files of our own: verbatim records in CRC-framed,
   8-byte-aligned chunks, readable from a killed writer, in `recon_stream` on
   the core's base tier alone.
+- [**2026-10-12**](#2026-10-12--p-frames-are-frame-type-1-of-v3-each-reference-block-gets-a-mode-in-update-segments-new-blocks-follow-in-intra-segments-and-a-reference-section-names-the-reference-by-xxh64-of-its-bytes-experimental-until-golden-p-frames-freeze-it) —
+  P-frames are frame type 1 of v3: a mode per reference block in update
+  segments, new blocks in intra segments, the reference named by XXH64 of its
+  bytes; a missing reference is `NotFound`. Experimental until golden
+  P-frames freeze it.
 
 ## Decision record
 
@@ -4617,7 +4622,8 @@ That is 2%, the same per-call pattern the integrator and the mesher use for
 their inputs. The buffers change anyway with the device-resident output below.
 
 **Open.**
-- P-frames (frame type 1).
+- P-frames (frame type 1). *The format landed 2026-10-12 (the P-frame
+  entry, below); the decoder and the encoder follow.*
 - The GPU rANS kernels, and device-resident coefficients so the GPU coder
   reads them without a host round trip. *Both landed 2026-10-03 (the device
   encoding and decoding entries, below).*
@@ -4694,7 +4700,8 @@ a table, plus the bits below its leading one (and a sign) as raw bits:
 - A 44-byte header: magic `VRTC`, version, frame type, voxel size,
   `trunc_dist`, block size, K, the two steps, block count, segment size.
 - A section table of `{id, flags, length}`, then the bodies: TABLES, SEGMENTS,
-  PAYLOAD.
+  PAYLOAD. *Amended 2026-10-12:* a P-frame adds REFERENCE, section id 4,
+  first (the P-frame entry, below).
 - The section rules: an unknown section flagged required stops the read with
   `Unsupported`, and an unknown optional one is skipped. The sections may come
   in any order. The frame's length must be exact.
@@ -11975,6 +11982,169 @@ SIGKILL and of one `RLIMIT_FSIZE` stopped, whose failure stuck. Both also pass u
 GCC 16; the library and the container test compile for `arm64_32` (32-bit
 `size_t`) with `-Wshorten-64-to-32`, which nothing here can run. The
 measured rates are DESIGN.md's.
+
+### 2026-10-12 — P-frames are frame type 1 of v3: each reference block gets a mode in update segments, new blocks follow in intra segments, and a REFERENCE section names the reference by XXH64 of its bytes (experimental until golden P-frames freeze it).
+
+The host writer and reader of type-1 frames, internal. `bitstream.hpp` holds
+the layout and the order of the refusals; this entry holds why. Nothing public
+changes but one refusal: `read_frame_info`, `Decoder::decode` and the device
+reader refuse type 1 as `Unsupported` through `check_frame_type(type, newest,
+who)`, now after the header's other checks, so a type-1 header that also
+fails one of those is `InvalidArgument`, as any frame's. The device writer
+still writes intra only. The device coders take P-frames next, then the
+`Decoder` and the `Encoder`; golden P-frames freeze the bytes after those,
+and until then even the worked example in `recon_codec_inter_bitstream` may
+change.
+
+**Step 0 chose the design.** A throwaway probe (never committed) priced
+P-frame layouts over v3 intra dumps on the M5 Max, Release, at K 64, uniform
+weights and scale 0.2, each frame against the one before:
+
+| Run | Input | Frames | Voxel | R | Mean I-frame |
+|---|---|---|---|---|---|
+| c1cm | room0, Classic | 0–399 | 1 cm | 64 | 242,699 B |
+| c2cm | room0, Classic | 0–399 | 2 cm | 64 | 74,320 B |
+| d1cm | room0, Dynamic | 0–399 | 1 cm | 64 | 231,082 B |
+| dn1cm | room0, Dynamic, depth noise σ = 0.002 z | 0–399 | 1 cm | 64 | 478,157 B |
+| rafa64 | Rafa2 meshes, signed TSDF, grid cleared each frame | 1–150 | 5 mm | 64 | 62,050 B |
+| rafa16 | the same | 1–150 | 5 mm | 16 | 65,078 B |
+
+Its rules, the numbers in the order c1cm / c2cm / d1cm / dn1cm / rafa64:
+
+| Rule | Test | Numbers | Verdict |
+|---|---|---|---|
+| G0 | best mean P/I ≤ 0.6 | 0.050 / 0.062 / 0.153 / 0.430 / 0.426 | go |
+| D1 | G-iii saves ≥ 10% of median P bytes over G-i | −34.2 / −26.7 / −13.0 / −2.5 / −5.2% | G-iii |
+| D2 | skip covers ≥ 1% of kept blocks, or saves ≥ 1% | covers 92.2 / 90.0 / 77.8 / 45.5 / 9.0% | in |
+| D2 | zero for a kept block, the same | covers 0.39 / 0.38 / 0.68 / 4.13 / 2.56%, saves 2.3 / 1.1 / 1.3 / 1.1 / 1.2% | in |
+| D3 | a second coefficient table set saves ≥ 3% | costs 1.12 / 3.05 / 0.70 / 0.12 / 0.93% more | one set |
+| D3 | reusing t − 1's tables saves ≥ 5% on Rafa2 | 1.95% (rafa16 1.71%); all tables are 3.4% of a median P-frame | no reuse |
+| D3b | a mode context saves ≥ 0.1 bit a block | 0.02 / 0.02 / 0.06 / 0.21 / −0.01 | none |
+| D5 | Dynamic content: exact skips < 50% of kept and max\|dq\| ≤ 1 for ≥ 80% | d1cm 77.8 / 94.6%, dn1cm 45.5 / 68.1%, rafa64 9.0 / 69.3% | the encoder's threshold skip waits |
+| D6 | 128 or 256 entries an update segment save ≥ 3% | −9.0 / −13.1, −5.5 / −8.3, −2.1 / −3.2, −0.4 / −0.6, −0.8 / −1.1% | U = 64, a frame field |
+
+This format is the probe's V7 at U = 64: mean P/I 0.058 / 0.069 / 0.158 /
+0.433 / 0.431 (rafa16 0.411), and open-ended 3.07 / 1.13 / 8.42 / 48.63 /
+6.41 Mbit/s at 30 fps against 58.25 / 17.84 / 55.46 / 114.76 / 14.89
+all-intra. The probe priced a symbol at −log2(f / 4096) under the frame's own
+tables plus its raw bits, a stream at 4 + 2⌊bits / 16⌋ bytes plus its 4-byte
+length, and the tables as `write_tables` writes them. Priced intra frames came
+within 0.024% of their files, and priced G-i frames, which it also wrote,
+within 0.31% of their bytes; an independent Python v3 decoder reproduced its
+churn counts on 30 frame pairs. Caveats:
+- G-iii was priced, not written, until this change.
+- The noise stand-in is independent Gaussian noise per pixel, not the rig. No
+  rig recording exists, so the Femto rig is still the deciding input for D3b,
+  D5 and D6.
+- Rafa2 includes 30 open frames, coded signed anyway; dropping every pair that
+  touches one moves no Rafa2 input by more than 0.3 points. Its frame 150 has
+  a 37 mm conversion outlier.
+
+**Why G-iii.** G-i lists every block with its coordinate, so it resends the
+coordinates of blocks the reference already placed: 38 / 31 / 11 / 3 / 5% of
+its bytes. G-iii codes the reference's blocks in reference order, a mode each
+and no coordinate, so an update segment decodes from (s, U, M, the tables)
+alone: one device invocation per segment at fixed positions, with no prefix
+sum. Removing a block costs its mode symbol. New blocks keep the intra
+grammar, and keep, zero and new blocks share one table set.
+
+**Why integer residuals.** A residual is the difference of quantized
+coefficients, wrapped to int16, from the q the reference decoded to, and a
+mask goes by XOR. Both are lossless, so a P-frame decodes to exactly the intra
+decode of the same content, on any device, with no drift. −32768 is the one
+wrapped residual the 16 classes cannot carry; the encoder codes such a block
+with zero, and the writer refuses it in a keep entry.
+
+**The reference is named by XXH64 of its exact bytes.** A frame number (as in
+H.264) needs a session to be unique in, and with no name at all the P-frame
+after a lost frame would decode against the wrong reference. A hash of the
+bytes keeps I-frame bytes identical at every intra period, cannot be fooled
+by a recycled id (a P-frame's bytes contain its own reference's hash), and
+catches a lost, reordered or re-serialized frame. Readers accept sections in
+any order, so transports must store frames verbatim. It need not be
+cryptographic: integrity stays the transport's (2026-09-27). Timed on the M5
+Max (`-O3`, best of 50):
+
+| Frame | XXH64 | FNV-1a-64 |
+|---|---|---|
+| 242,699 B (c1cm I-frame mean) | 0.009 ms | 0.227 ms |
+| 478,157 B (dn1cm I-frame mean) | 0.018 ms | 0.446 ms |
+
+FNV-1a-64 would cost 7–14% of a frame's encode on each side. `frame_hash` is
+written from the published algorithm, with no dependency, and its known
+answers were checked against the reference library (python-xxhash 4.0.1,
+xxHash 0.8.3).
+
+**A missing reference is `NotFound`, checked in `parse_frame`.** A P-frame
+whose reference is not held, or that names another hash or M, is sound and
+decodes once its I-frame arrives. `Unsupported` would say never,
+`InvalidArgument` corrupt, and `IoError` decode again, which
+`decode_growing` would retry for nothing. The check comes after every format
+check, so a corrupt frame stays `InvalidArgument` and a motion frame
+`Unsupported` whatever is held; outside the device decode, so `kAuto` never
+retries it; and before anything is allocated, so M, a count the caller holds,
+bounds the reader's work. Bounding M by `max_blocks` instead would refuse a
+sound P-frame decoded into a fresh grid sized from its N, whenever N < M.
+
+**A P-frame's coding parameters are its reference's.** Its `voxel_size`,
+`trunc_dist`, K, scale and kept weights must equal its reference's bit for
+bit, or it is `InvalidArgument`, after `NotFound`: a residual means nothing
+across quantizers, and another K would read the reference at the wrong
+stride. `parse_frame` and `assemble_frame` share the check, so both writers
+make it.
+
+**Allowed, not refused.**
+- M = 0. A P-frame on an empty reference is the intra frame plus 29 bytes;
+  refusing it would force an I-frame after every empty frame.
+- Second spellings among the modes. Keep with zero residuals and an unchanged
+  mask is skip, and zero can spell any keep; each decodes to the same block,
+  as the mask's second spellings do (2026-09-27). Choosing is the encoder's.
+  A new block on a reference block, whatever that block's mode, is refused
+  all the same (`merge_frame`): a reference block is recoded with zero, never
+  removed and added, so survivors and new blocks merge with no ties.
+
+**Motion's rule.** Mode 4 is reserved for motion compensation. `read_tables`
+refuses a mode table that gives it a frequency as `Unsupported` right after
+reading it, before the trailing-bytes check. A motion design may therefore
+append models, or a required section, only when that frequency is nonzero,
+and today's P-frame readers then still read every frame without motion. A
+static table never yields a symbol of frequency 0, so no decoder needs a
+motion branch.
+
+**One merge.** `merge_by_coord` is the codec's one walk of two sorted
+lists: the Decoder's grid update moves onto it unchanged, `merge_frame` gives
+a P-frame's blocks in frame order with their sources (`ApplySource`, laid out
+as the device's apply will read it), and the encoder's split will use it. The
+library has no host apply: both entropy paths will apply on the device,
+against a reference kept there, so the tests check against an oracle of
+their own (`tests/codec_frames.hpp`).
+
+**Validation.** Apple M5 Max, macOS, Release with warnings as errors: the 74
+tests pass, the GPU ones under the Khronos validation layer, and the codec
+tests under synchronization validation too. Intra bytes are unchanged: the
+five golden frames pass on both writers. The new
+`recon_codec_inter_bitstream` covers the hash's known answers; the 161-byte
+worked example, read and written byte for byte, and at U = 1 against streams
+built from the coder by the format text; round trips of every mode at K 1, 64
+and 512, U and R of 1, 7, 64 and past the frame, M = 0, A = 0, N = 0, all
+removed, all skipped and extreme coefficients; I → P chains on real hashes
+against the oracle; `merge_by_coord` against `std::set`'s algorithms; each
+reader refusal, one edit each, with its code and message, and the order
+across the reader's stages, REFERENCE's body before TABLES included; each
+writer refusal, with its code and message; every truncation; and 3,000
+random corruptions (2,973 refused). Twenty-seven planted bugs each failed a
+test, among them an update range off by one, update and new segments
+swapped, a payload written or read for skip, the motion check after the
+trailing-bytes check, TABLES read before REFERENCE, the coding check before
+`NotFound`, no A ≤ N, no M + A bound in the reader or either writer, no
+survivor count, no check against reference coordinates, and a mode model's
+base off by one. The host codec tests pass under ASan and UBSan (Debug), and
+the GPU codec tests under them too. GCC 16 compiles the changed sources and
+tests with `-O3 -Werror`, and its libstdc++ build of `recon_codec_bitstream`
+and `recon_codec_inter_bitstream` passes with the same figures. The frame
+code and both host tests pass a `-Werror` syntax check for a 32-bit `size_t`
+(`arm64_32`, the watchOS SDK), not a build. Not run: GCC 13.3 in
+`ubuntu:24.04` (no Docker daemon on the machine).
 
 ## Measured lessons
 

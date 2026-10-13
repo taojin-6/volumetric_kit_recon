@@ -1470,9 +1470,12 @@ writes weight 1.0 on observed voxels and a fresh block's zeros elsewhere.
 The v3 frame (`bitstream.hpp`, the 2026-10-02 entry) carries the K kept
 weights in its parameter header, `44 + 4K` bytes (300 at K = 64); older
 versions are refused. `read_frame_info` reads them without entropy decoding.
-Header byte 6 is the frame type, of which intra (0) is the only one: the
-internal `Frame` carries it, and `write_frame` and the readers refuse a type
-they do not code as `Unsupported`. The payload is segments of R sorted
+Header byte 6 is the frame type, which the internal `Frame` carries: intra
+(0), or a P-frame (1, experimental), coded against the frame before it as
+`bitstream.hpp` lays out and the 2026-10-12 entry explains. The host writer
+and reader code both; the device coders, `read_frame_info` and the
+`Decoder` refuse type 1 as `Unsupported`, as every reader refuses a later
+type. The payload is segments of R sorted
 blocks (default 64). Each segment is one independent rANS stream
 (`rans.hpp`: a 32-bit state, 16-bit words and 12-bit probabilities, integer
 only, the reference the GPU kernels must match byte for byte). Every integer

@@ -88,6 +88,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   record at a pts, from several threads at once. Tracks of any kind are
   stored; Geometry (codec frames) is the one defined. Tests:
   `recon_stream_container`, `recon_stream_recovery`.
+- `codec`: **P-frames (frame type 1) in the v3 frame, host writer and
+  reader** (internal, experimental until golden P-frames freeze the bytes).
+  A P-frame codes a frame against the one before it, which a REFERENCE
+  section names by XXH64 of its bytes (`frame_hash.hpp`): a mode for each
+  reference block (keep, skip, zero or remove; motion reserved) in update
+  segments, then the new blocks in intra segments. A reader that does not
+  hold the reference refuses it as `NotFound`. `read_frame_info`,
+  `Decoder::decode` and the device coders still refuse type 1, as
+  `Unsupported` once the rest of its header checks out; intra frames are
+  unchanged, byte for byte. See the 2026-10-12 decision. Tests:
+  `recon_codec_inter_bitstream`, and type-1 cases in `recon_codec_bitstream`,
+  `recon_codec_device_frame` and `recon_codec_decoder`.
 - `examples`: **per-frame codec rows.** `CodecStream` keeps a row per coded
   frame (its source index, bytes, blocks, and encode and decode host and
   device ms) and takes `CodecOutputs`: a CSV of the rows, written as frames
