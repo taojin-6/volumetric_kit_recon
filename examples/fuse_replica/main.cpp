@@ -130,9 +130,9 @@ vkc::Status run(const Options& opt) {
     }
     VKC_ASSIGN(const sensor::DeviceFrame frame,
                prep.prepare(*polled, &stage_totals));
-    VKC_TRY(vr_example::fuse_set(fuser, volume, {frame}, opt.fusion.max_weight,
-                                 tsdf::IntegrationMode::Classic,
-                                 &stage_totals));
+    VKC_TRY(vr_example::fuse_set(
+        fuser, volume, {frame}, opt.fusion.max_weight,
+        vr_example::integration_mode(opt.fusion.dynamic), &stage_totals));
     ++fused;
 
     if (opt.fusion.dirty_every > 0 &&

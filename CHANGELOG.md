@@ -8,6 +8,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `examples`: **the codec's step rules are recon's.** Examples and tests
+  need core 0.6.0 (core #30), which leaves them to the codec:
+  `encoder_config` maps `codec.quantization_table` to the weights and refuses
+  a step out of the codec's bounds, `InvalidArgument`. Migrating:
+  `encoder_config` returns `Result<EncoderConfig>`. Test:
+  `recon_example_config`.
+- `examples`: **every fusing example fuses in the mode `fusion.dynamic`
+  selects** (`integration_mode`), `Classic` unless set; `codec_replica`
+  prints it. Tests: `recon_example_fuse_keyframe`, `recon_example_config`.
+- `examples`: `codec_mesh` writes no `<prefix>.vrtc`. Migrating: set
+  `output.stream`, whose one record holds the same frame.
 - `examples`: `fuse_viewer` and `rig_viewer` take their window glue from gfx's
   `gfx_glfw` (gfx #133, pinned at #135): the GLFW surface, the shared device
   and ImGui's GLFW backend. `examples/viewer/shared_device.hpp` and the
@@ -74,9 +85,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `examples`: **`fuse_orbbec` with `diagnostics.dump_sets`** writes the first
   sets' camera JPEGs, and with `diagnostics.readback` their luma as PNGs,
   into a new `diagnostics.dump_directory` (`config/examples/dump_orbbec.json`),
-  checked before the cameras open and made with the first set. Examples and
-  tests need core 0.5.0. Tests: `recon_example_set_dump`,
-  `recon_example_config`.
+  checked before the cameras open and made with the first set. Tests:
+  `recon_example_set_dump`, `recon_example_config`.
 - `stream`: **`recon_stream`, the `.vrst` session container**
   (`stream/session.hpp`, `stream_writer.hpp`, `stream_reader.hpp`), on the
   family core's base tier alone. `StreamWriter` creates a new file, never
@@ -100,12 +110,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   unchanged, byte for byte. See the 2026-10-12 decision. Tests:
   `recon_codec_inter_bitstream`, and type-1 cases in `recon_codec_bitstream`,
   `recon_codec_device_frame` and `recon_codec_decoder`.
-- `examples`: **per-frame codec rows.** `CodecStream` keeps a row per coded
-  frame (its source index, bytes, blocks, and encode and decode host and
-  device ms) and takes `CodecOutputs`: a CSV of the rows, written as frames
-  are coded, and a new directory of every encoded frame. Its frame files,
-  `codec_mesh`'s `.vrtc` included, go through the core's `write_file`.
-  Test: `recon_example_codec_stream`.
+- `examples`: **codec rows and frames, written as they are coded.**
+  `CodecStream` keeps a row per decoded frame (its source index, bytes,
+  blocks, and encode and decode host and device ms). `codec_replica` and
+  `codec_mesh` write the rows to `output.csv`, and every frame the encoder
+  returns to `output.stream`, a new `.vrst` file: a key record per frame,
+  its set the source index and its pts that index at 30 fps. A rerun writes
+  the same bytes; a frame index or pts out of order is refused before it is
+  encoded. Tests: `recon_example_codec_stream`, `recon_example_config`.
 - `sensor/utils`: **`PictureReadback`** (`picture_readback.hpp`), a set's
   colour pictures on the host, luma alone or every plane, wherever the
   decoder left them: NV12 images, or NV12 and I420 planes in a buffer taken
@@ -496,6 +508,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   its other allocation failures still return `OutOfMemory`. Its errors now
   name the file as the readers' do. Checked with an injected `realloc`
   failure, which the suite cannot inject.
+- `examples`: reject `output.csv` paths that alias `output.stream`, including
+  symlinks and case-insensitive names, before opening the CSV can truncate
+  the recording. Rejection removes the new stream file so corrected outputs
+  can retry. Test: `recon_example_codec_stream`.
 - `fuse_viewer`, `rig_viewer`: **atlas teardown completes when a frame was
   never submitted.** The atlas drains submitted work before releasing its
   colour buffers, without waiting for an unsignalled frame number after a

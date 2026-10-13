@@ -474,7 +474,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   images are CONCURRENT across two or more.
 - [**2026-10-11**](#2026-10-11--examples-load-the-cores-scenario-format-and-keep-only-runtime-adapters) —
   Examples load the core scenario format; JSON, defaults and static validation
-  have one owner.
+  have one owner. *Amended 2026-10-12:* the codec's step rules are recon's.
 - [**2026-10-11**](#2026-10-11--picture-readback-publishes-buffer-ownership-for-subsequent-stages) —
   Picture readback updates ownership before subsequent reads or preparation.
 - [**2026-10-12**](#2026-10-12--the-viewers-window-glue-comes-from-gfxs-gfx_glfw-recon-keeps-no-copy-amends-the-2026-08-02-bootstrap-and-2026-10-04-vulkan-foundation-entries) —
@@ -11802,6 +11802,10 @@ with no message. So the guard is the sharing mode recorded on the image,
 which the tests check. No camera was opened.
 
 ### 2026-10-11 — Examples load the core's scenario format and keep only runtime adapters
+
+*Amended 2026-10-12 (core 0.6.0, core #30):* the codec's step rules are
+recon's: core no longer checks them, and `encoder_config` applies them
+(DESIGN.md → "Examples").
 
 This replaces the 2026-10-08 command-line parser decision. Every executable
 accepts `--config PATH` and `--help`, and directly consumes

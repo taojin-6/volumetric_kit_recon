@@ -227,8 +227,8 @@ add_test(NAME recon_sensor_picture_readback_oom
 
 # The viewer's retained keyframe survives preparation and integration errors,
 # and still supplies depth, coverage and atlas pixels for projective texturing;
-# the helper fuses in the integration mode it is given. Headless: uses the
-# example's fusion helper, without gfx or a dataset.
+# the helper fuses in the integration mode it is given, the one fusion.dynamic
+# selects. Headless: uses the example's fusion helper, without gfx or a dataset.
 add_executable(recon_example_fuse_keyframe_test example_fuse_keyframe_test.cpp)
 target_include_directories(recon_example_fuse_keyframe_test
                            PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
@@ -241,7 +241,8 @@ add_test(NAME recon_example_fuse_keyframe
          COMMAND recon_example_fuse_keyframe_test)
 
 # The core parses and validates scenarios. These tests pin the conversion into
-# the runtime sensor and codec options, without opening a camera or GPU.
+# the runtime sensor and codec options (the codec's steps checked here, not by
+# core), without opening a camera or GPU.
 add_executable(recon_example_config_test example_config_test.cpp)
 target_include_directories(recon_example_config_test
                            PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
@@ -258,8 +259,11 @@ else()
     PRIVATE volumetric_kit::recon_codec volumetric_kit::recon_sensor
             volumetric_kit::core_config)
 endif()
-target_link_libraries(recon_example_config_test
-                      PRIVATE volumetric_kit::recon_tsdf)
+# codec_config.hpp maps the outputs into codec_stream.hpp's CodecOutputs.
+target_link_libraries(
+  recon_example_config_test
+  PRIVATE volumetric_kit::recon_eval volumetric_kit::recon_stream
+          volumetric_kit::recon_tsdf)
 target_compile_definitions(
   recon_example_config_test
   PRIVATE VR_CONFIG_FIXTURES="${PROJECT_SOURCE_DIR}/config/examples")
@@ -318,19 +322,22 @@ vr_target_warnings(recon_example_stage_table_test)
 add_test(NAME recon_example_stage_table COMMAND recon_example_stage_table_test)
 
 # The codec examples' stream (examples/common/codec_stream.hpp): on the host, a
-# row's host and device milliseconds, its CSV line and the frame file names; on
-# a device, outputs it cannot make refused on create, none written without
-# outputs, a row per coded frame matching the frame, the new frame directory's
-# files (a frame the decoder refuses included), a frame index coded twice
-# refused, and the CSV replaced on create and written as frames are coded. The
-# device part skips with no device.
+# row's host and device milliseconds, its CSV line and a frame's pts; on a
+# device, outputs it cannot make refused on create, none written without
+# outputs, a row per decoded frame matching the frame, the .vrst's records
+# (every encoded frame, byte for byte, a frame the decoder refuses included and
+# the stream going on after it, and the same bytes on a rerun), a frame out of
+# order or any call once finished refused before anything is encoded, and the
+# CSV replaced on create and written as frames are coded. The device part skips
+# with no device.
 add_executable(recon_example_codec_stream_test example_codec_stream_test.cpp)
 target_include_directories(recon_example_codec_stream_test
                            PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
 target_link_libraries(
   recon_example_codec_stream_test
   PRIVATE volumetric_kit::core_test_policy volumetric_kit::recon_codec
-          volumetric_kit::recon_eval Vulkan::Vulkan)
+          volumetric_kit::recon_eval volumetric_kit::recon_stream
+          Vulkan::Vulkan)
 vr_target_warnings(recon_example_codec_stream_test)
 add_test(NAME recon_example_codec_stream
          COMMAND recon_example_codec_stream_test)

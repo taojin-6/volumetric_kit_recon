@@ -3,8 +3,9 @@
 
 // A failed prepare or fuse must leave the viewer's last successful keyframe
 // available for texturing, and the frame is fused in the integration mode the
-// helper is given. Exercise the actual example helper and GPU passes, with no
-// window, camera or dataset. Skips without a device.
+// helper is given, the one fusion.dynamic selects. Exercise the actual example
+// helper and GPU passes, with no window, camera or dataset. The device part
+// skips without a device.
 
 #include <algorithm>
 #include <cstdint>
@@ -214,4 +215,8 @@ int gpu_main(vr_test::GpuContext& gpu) {
 
 }  // namespace
 
-int main() { return vr_test::run_on_gpu(gpu_main); }
+int main() {
+  CHECK(vr_example::integration_mode(true) == kDynamic);
+  CHECK(vr_example::integration_mode(false) == kClassic);
+  return vr_test::run_on_gpu(gpu_main);
+}

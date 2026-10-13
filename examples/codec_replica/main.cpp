@@ -52,6 +52,9 @@ constexpr std::size_t kMetricStride = 4;  // about 1 vertex in 4, both ways
 using Options = vr_example::config::Config;
 
 vkc::Status run(const Options& opt) {
+  // First, so a step the codec refuses costs no GPU work.
+  VKC_ASSIGN(const codec::EncoderConfig config,
+             vr_example::encoder_config(opt.codec));
   VKC_ASSIGN(vkc::Instance instance, vkc::Instance::create({}));
   VKC_ASSIGN(vkc::PhysicalDeviceInfo gpu,
              instance.select_physical_device(vr::device_requirements()));
@@ -75,14 +78,19 @@ vkc::Status run(const Options& opt) {
              vr::sensor::GpuFramePrep::create(device, allocator));
   VKC_ASSIGN(mesh::MarchingCubes extractor,
              mesh::MarchingCubes::create(device, allocator));
-  const codec::EncoderConfig& config = vr_example::encoder_config(opt.codec);
   VKC_ASSIGN(vr_example::CodecStream stream,
-             vr_example::CodecStream::create(device, allocator, config));
-  std::printf("%zu frames at %.3f m voxels; K %u, table %s, scale %.3f\n",
-              capture.frame_count(), double(voxel),
-              config.params.coefficient_count,
-              vr_example::quantization_name(opt.codec.quantization_table),
-              double(config.params.quantization_scale));
+             vr_example::CodecStream::create(
+                 device, allocator, config,
+                 vr_example::codec_outputs(opt.output), "codec_replica"));
+  const vr::tsdf::IntegrationMode mode =
+      vr_example::integration_mode(opt.fusion.dynamic);
+  std::printf(
+      "%zu frames at %.3f m voxels, %s fusion; K %u, table %s, scale %.3f\n",
+      capture.frame_count(), double(voxel),
+      opt.fusion.dynamic ? "Dynamic" : "Classic",
+      config.params.coefficient_count,
+      vr_example::quantization_name(opt.codec.quantization_table),
+      double(config.params.quantization_scale));
 
   // Fuse, and code the grid every codec.encode_every frames and at the end.
   VKC_TRY(capture.start());
@@ -97,12 +105,12 @@ vkc::Status run(const Options& opt) {
     }
     VKC_ASSIGN(const vr::sensor::DeviceFrame prepared, prep.prepare(*frame));
     VKC_TRY(vr_example::fuse_set(fuser, volume, {prepared},
-                                 opt.fusion.max_weight,
-                                 vr::tsdf::IntegrationMode::Classic, nullptr));
+                                 opt.fusion.max_weight, mode, nullptr));
     ++fused;
     if (opt.codec.encode_every > 0 &&
         fused % std::size_t(opt.codec.encode_every) == 0) {
-      VKC_TRY(stream.code(volume, fused - 1));
+      VKC_TRY(stream.code(volume, fused - 1,
+                          vr_example::frame_pts_ns(fused - 1, kFps)));
       coded_at = fused;
     }
   }
@@ -110,8 +118,10 @@ vkc::Status run(const Options& opt) {
     return vkc::Status::invalid_argument("no frames were fused");
   }
   if (coded_at != fused) {
-    VKC_TRY(stream.code(volume, fused - 1));
+    VKC_TRY(stream.code(volume, fused - 1,
+                        vr_example::frame_pts_ns(fused - 1, kFps)));
   }
+  VKC_TRY(stream.finish());
   stream.report(kFps, opt.codec.encode_every);
 
   // The last frame's decoded surface against the source's.

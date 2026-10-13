@@ -154,7 +154,7 @@ vkc::Status run(const Options& opt) {
                    array->process(set, &stage_totals));
         VKC_TRY(vr_example::fuse_set(
             *fuser, *volume, prepared.frames, opt.fusion.max_weight,
-            tsdf::IntegrationMode::Classic, &stage_totals));
+            vr_example::integration_mode(opt.fusion.dynamic), &stage_totals));
       }
       if (sets.frames() / 100 > reported / 100) {
         reported = sets.frames();

@@ -5,34 +5,36 @@
 
 // A codec stream as a player sees it: encode a grid, decode the frame into a
 // player grid built from the first frame's header, and keep a row per coded
-// frame, which the report sums and the CSV lists. The player-side policy lives
-// here -- when to grow the grid for a frame that outgrows it, retrying lock
-// contention -- because it is a player's, not the decoder's (the Decoder
-// refuses rather than grows); the grow itself is the volume tier's
-// (volume::grow_grid).
+// frame, which the report sums and the CSV lists; the frames themselves go to
+// a .vrst file. The player-side policy lives here -- when to grow the grid for
+// a frame that outgrows it, retrying lock contention -- because it is a
+// player's, not the decoder's (the Decoder refuses rather than grows); the
+// grow itself is the volume tier's (volume::grow_grid).
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <ios>
+#include <memory>
 #include <optional>
 #include <string>
-#include <string_view>
 #include <system_error>
 #include <utility>
 #include <vector>
 
 #include "grid_layout.hpp"
 #include "stage_table.hpp"
-#include "volumetric_kit/core/base/file_io.hpp"
+#include "volumetric_kit/core/base/check.hpp"
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/recon/codec/decoder.hpp"
 #include "volumetric_kit/recon/codec/encoder.hpp"
 #include "volumetric_kit/recon/eval/mesh_distance.hpp"
+#include "volumetric_kit/recon/stream/stream_writer.hpp"
 #include "volumetric_kit/recon/volume/grid_growth.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 
@@ -188,94 +190,146 @@ inline std::string codec_row_csv(const CodecRow& row) {
   return out + text + device(row.decode_device_ms) + "\n";
 }
 
-/// @return Where a frame directory @p dir holds frame @p frame:
-///         `<dir>/frame_NNNNN.vrtc`, the source's index, five digits or more.
-inline std::string frame_file(const std::string& dir, std::size_t frame) {
-  char name[48];
-  std::snprintf(name, sizeof name, "frame_%05zu.vrtc", frame);
-  return (std::filesystem::path(dir) / name).string();
+/// @return Source frame @p frame's time at @p fps, frame 0 at 0, in ns
+///         rounded to the nearest. @pre @p fps is positive.
+inline std::uint64_t frame_pts_ns(std::size_t frame, double fps) {
+  VKC_CHECK(fps > 0.0, "frame_pts_ns needs a positive frame rate");
+  return std::uint64_t(std::llround(double(frame) * 1e9 / fps));
 }
 
 /// @brief Where a codec stream writes besides its report, each frame as it is
 ///        coded; an empty path writes nothing.
 struct CodecOutputs {
-  /// A file of @ref kCodecRowsCsvHeader, then each frame's @ref codec_row_csv;
-  /// replaced if it exists.
+  /// A file of @ref kCodecRowsCsvHeader, then the @ref codec_row_csv of each
+  /// frame that decodes; replaced if it exists. Must not alias the stream.
   std::string csv;
-  /// A directory, which must not exist yet, of every coded frame's
-  /// @ref frame_file. Its parent must exist.
-  std::string frame_directory;
+  /// A new `.vrst` file (stream/session.hpp) of every frame the encoder
+  /// returns, a record each on its one Geometry track. Nothing may be at the
+  /// path, and its directory must exist.
+  std::string stream;
 };
 
 /// @brief An encoder, a decoder and the player grid it decodes into, with a
-///        row for every frame coded through them.
+///        row for every frame decoded through them.
 class CodecStream {
  public:
   /// The player grid is built from the first frame's header, sized for its
   /// blocks, and grows as later frames need. The decoder runs its rANS
   /// coding where @p config says the encoder does. @p outputs are made here,
-  /// after the codec objects and before any coding: the frame directory, then
-  /// the CSV, its header flushed.
-  /// @return The stream; `create_new_directory`'s error for the frame
-  ///         directory (InvalidArgument when something is at its path,
-  ///         NotFound when its parent is missing); IoError naming a CSV that
-  ///         cannot be written, with the frame directory removed again; or
-  ///         the `Encoder::create` / `Decoder::create` error.
+  /// after the codec objects and before any coding: the stream first, as a
+  /// rerun onto its file is the common refusal, then the CSV, its header
+  /// flushed.
+  /// @param program  The program writing the stream, recorded in its session
+  ///                 header.
+  /// @return The stream; `StreamWriter::create`'s error for the stream
+  ///         (InvalidArgument when something is at its path, NotFound when
+  ///         its directory is missing); InvalidArgument if the CSV aliases
+  ///         the stream; IoError naming a CSV that cannot be written; or the
+  ///         `Encoder::create` / `Decoder::create` error.
+  ///         Either CSV error removes the new stream's file again.
   static vkc::Result<CodecStream> create(vkc::Device& device,
                                          vkc::Allocator& allocator,
                                          const vr::codec::EncoderConfig& config,
-                                         CodecOutputs outputs = {}) {
+                                         CodecOutputs outputs = {},
+                                         const std::string& program = {}) {
     VKC_ASSIGN(vr::codec::Encoder enc,
                vr::codec::Encoder::create(device, allocator, config));
     vr::codec::DecoderConfig dc;
     dc.entropy = config.entropy;
     VKC_ASSIGN(vr::codec::Decoder dec,
                vr::codec::Decoder::create(device, allocator, dc));
-    if (!outputs.frame_directory.empty()) {
-      VKC_TRY(vkc::create_new_directory(outputs.frame_directory));
+    // No session id or start time, so a rerun writes the same bytes.
+    std::unique_ptr<vr::stream::StreamWriter> writer;
+    if (!outputs.stream.empty()) {
+      vr::stream::Track geometry;
+      geometry.kind = vr::stream::TrackKind::Geometry;
+      vr::stream::Session session;
+      session.writer = program;
+      session.tracks.push_back(geometry);
+      VKC_ASSIGN(writer,
+                 vr::stream::StreamWriter::create(outputs.stream, session));
     }
+    const auto remove_stream = [&] {
+      // The stream's file is this call's and holds no record: take it
+      // back, so a rerun is refused for the CSV again, not for the stream.
+      if (writer) {
+        writer.reset();
+        std::error_code ignored;
+        std::filesystem::remove(outputs.stream, ignored);
+      }
+    };
     // The core writes whole files only, so the CSV, extended a row at a time,
     // is the stream's own.
     std::ofstream csv;
     if (!outputs.csv.empty()) {
+      if (writer) {
+        // Creating the stream first resolves dangling symlinks and case
+        // aliases. Check identity before opening the CSV can truncate it.
+        std::error_code error;
+        if (std::filesystem::exists(outputs.csv, error) &&
+            std::filesystem::equivalent(outputs.csv, outputs.stream, error)) {
+          remove_stream();
+          return vkc::Status::invalid_argument(
+              "CodecStream: CSV " + outputs.csv + " aliases stream " +
+              outputs.stream);
+        }
+        if (error) {
+          remove_stream();
+          return csv_error(outputs.csv);
+        }
+      }
       csv.open(outputs.csv, std::ios::binary | std::ios::trunc);
       csv << kCodecRowsCsvHeader << std::flush;
       if (!csv) {
-        // The directory is this call's and still empty: take it back, so a
-        // re-run is refused for the CSV again, not for the directory.
-        if (!outputs.frame_directory.empty()) {
-          std::error_code ignored;
-          std::filesystem::remove(outputs.frame_directory, ignored);
-        }
+        remove_stream();
         return csv_error(outputs.csv);
       }
     }
     return CodecStream(device, allocator, std::move(enc), std::move(dec),
-                       std::move(outputs), std::move(csv));
+                       std::move(outputs), std::move(writer), std::move(csv));
   }
 
   /// @brief Encode @p source as one frame, decode it into the player, and
   ///        keep its row. Files are written outside the codec timings: the
-  ///        frame to the frame directory's @ref frame_file before it is
-  ///        decoded, so a frame the decoder refuses is kept; once it decodes,
-  ///        to @p frame_path, and its row to the CSV, flushed.
-  /// @param frame       The source's index of the frame: its row's and its
-  ///                    frame file's.
-  /// @param frame_path  Optional further file for a frame that decodes,
-  ///                    replaced if it exists.
-  /// @return OK; the encode or decode error; `write_file`'s error for a file
-  ///         (InvalidArgument for a frame file already there, @p frame coded
-  ///         before); or IoError naming the CSV.
+  ///        frame to the stream as soon as it is encoded, so a frame the
+  ///        decoder refuses is kept, and once it decodes, its row to the CSV,
+  ///        flushed.
+  /// @param frame   The source's index of the frame: its row's, and its
+  ///                record's set. Above every frame coded before.
+  /// @param pts_ns  Its time, its record's pts: no earlier than the frames'
+  ///                coded before (@ref frame_pts_ns).
+  /// @return OK; InvalidArgument, before anything is encoded, for a
+  ///         @p frame or @p pts_ns out of order or a finished stream; the
+  ///         encode or decode error; `StreamWriter::append`'s error; or
+  ///         IoError naming the CSV.
   vkc::Status code(vr::volume::VoxelBlockGrid& source, std::size_t frame,
-                   const std::string& frame_path = {}) {
+                   std::uint64_t pts_ns) {
+    // Refused here, not by the writer once the encoder holds the frame.
+    if (finished_) {
+      return vkc::Status::invalid_argument("CodecStream: finished");
+    }
+    if (coded_ > 0 && (frame <= last_frame_ || pts_ns < last_pts_ns_)) {
+      return vkc::Status::invalid_argument(
+          "CodecStream: frame " + std::to_string(frame) + " at " +
+          std::to_string(pts_ns) + " ns does not follow frame " +
+          std::to_string(last_frame_) + " at " + std::to_string(last_pts_ns_) +
+          " ns");
+    }
     vkc::StageMetrics encoded;
     VKC_ASSIGN(const Bytes bytes, encoder_.encode(source, &encoded));
-    const std::string_view chars(reinterpret_cast<const char*>(bytes.data()),
-                                 bytes.size());
-    if (!outputs_.frame_directory.empty()) {
-      VKC_TRY(vkc::write_file(frame_file(outputs_.frame_directory, frame),
-                              chars, vkc::WriteMode::CreateNew));
+    if (writer_) {
+      // TODO(examples): key from FrameInfo::type once P-frames are coded
+      // (C5b); every frame is intra until then.
+      vr::stream::RecordInfo record;
+      record.key = true;
+      record.pts_ns = pts_ns;
+      record.seq = coded_;
+      record.set = frame;
+      VKC_TRY(writer_->append(record, bytes.data(), bytes.size()));
     }
+    ++coded_;
+    last_frame_ = frame;
+    last_pts_ns_ = pts_ns;
     VKC_ASSIGN(const vr::codec::FrameInfo info,
                vr::codec::read_frame_info(bytes.data(), bytes.size()));
     if (!player_) {
@@ -285,9 +339,6 @@ class CodecStream {
     }
     vkc::StageMetrics decoded;
     VKC_TRY(decode_growing(decoder_, bytes, *player_, &decoded, &grows_));
-    if (!frame_path.empty()) {
-      VKC_TRY(vkc::write_file(frame_path, chars, vkc::WriteMode::Replace));
-    }
     encode_rows_.merge(encoded);
     decode_rows_.merge(decoded);
     rows_.push_back(make_codec_row(frame, bytes.size(), info.block_count,
@@ -299,7 +350,21 @@ class CodecStream {
     return {};
   }
 
-  /// @return A row per frame coded so far, in coding order.
+  /// @brief Finish the stream's file with its footer index
+  ///        (`StreamWriter::finish`); without a stream, only mark it
+  ///        finished. One attempt: however it ends, every later call, this
+  ///        one included, is refused, so a file whose footer failed stays
+  ///        unfinished, read as a killed writer's.
+  /// @return OK; InvalidArgument once finished; or the writer's error.
+  vkc::Status finish() {
+    if (finished_) {
+      return vkc::Status::invalid_argument("CodecStream: finished");
+    }
+    finished_ = true;
+    return writer_ ? writer_->finish() : vkc::Status{};
+  }
+
+  /// @return A row per frame decoded so far, in coding order.
   const std::vector<CodecRow>& rows() const noexcept { return rows_; }
 
   /// @return The grid the last frame was decoded into. @pre rows() is not
@@ -356,12 +421,15 @@ class CodecStream {
  private:
   CodecStream(vkc::Device& device, vkc::Allocator& allocator,
               vr::codec::Encoder enc, vr::codec::Decoder dec,
-              CodecOutputs outputs, std::ofstream csv)
+              CodecOutputs outputs,
+              std::unique_ptr<vr::stream::StreamWriter> writer,
+              std::ofstream csv)
       : device_(&device),
         allocator_(&allocator),
         encoder_(std::move(enc)),
         decoder_(std::move(dec)),
         outputs_(std::move(outputs)),
+        writer_(std::move(writer)),
         csv_(std::move(csv)) {}
 
   static vkc::Status csv_error(const std::string& path) {
@@ -373,7 +441,12 @@ class CodecStream {
   vr::codec::Encoder encoder_;
   vr::codec::Decoder decoder_;
   CodecOutputs outputs_;
-  std::ofstream csv_;  // open when outputs_.csv names a file
+  std::unique_ptr<vr::stream::StreamWriter> writer_;  // null without a stream
+  std::ofstream csv_;           // open when outputs_.csv names a file
+  std::uint64_t coded_ = 0;     // frames encoded and recorded: the next seq
+  std::size_t last_frame_ = 0;  // the last of them, once coded_ > 0
+  std::uint64_t last_pts_ns_ = 0;
+  bool finished_ = false;
   std::optional<vr::volume::VoxelBlockGrid> player_;
   vkc::StageMetrics encode_rows_;  // every frame's, summed by stage
   vkc::StageMetrics decode_rows_;
