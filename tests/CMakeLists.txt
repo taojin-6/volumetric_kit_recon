@@ -686,85 +686,85 @@ target_include_directories(
 vr_target_warnings(recon_codec_params_test)
 add_test(NAME recon_codec_params COMMAND recon_codec_params_test)
 
+# codec tier, the CPU oracle (codec_oracle*.hpp): the CPU rANS coder and frame
+# coder that pin the format's bytes, which the library codes on the device
+# alone, and their ends on the device -- a host frame's entries uploaded, the
+# forward read back, the inverse fed from the host, and the frame an Encoder
+# must write. Test-only; the codec tests that hold the device to it link it, and
+# reach the internal headers through it.
+add_library(recon_codec_oracle STATIC codec_oracle.cpp codec_oracle_device.cpp)
+target_link_libraries(recon_codec_oracle PUBLIC volumetric_kit::recon_codec)
+target_include_directories(
+  recon_codec_oracle
+  PUBLIC ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/codec)
+vr_target_warnings(recon_codec_oracle)
+
 # codec tier, GPU half: the internal DctTransform's forward kernel against a
 # double-precision reference, the orthonormal reconstruction bounds, the
 # observed mask, batching past one dispatch, the refusals and the moves. Skips
 # with no device.
 add_executable(recon_codec_dct_test codec_dct_test.cpp)
 target_link_libraries(
-  recon_codec_dct_test PRIVATE volumetric_kit::recon_codec Vulkan::Vulkan
+  recon_codec_dct_test PRIVATE recon_codec_oracle Vulkan::Vulkan
                                volumetric_kit::core_test_policy)
-target_include_directories(
-  recon_codec_dct_test
-  PRIVATE ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/codec)
 vr_target_warnings(recon_codec_dct_test)
 add_test(NAME recon_codec_dct COMMAND recon_codec_dct_test)
 
 # codec tier, the device frame writer and reader: every frame the writer writes
-# is the host writer's, byte for byte, across block counts, K, segment sizes and
+# is the CPU oracle's, byte for byte, across block counts, K, segment sizes and
 # int32 coordinate extremes, and every frame the reader reads, or corrupt
-# payload it refuses, is the host reader's. Skips without a device.
+# payload it refuses, is the oracle's. Skips without a device.
 add_executable(recon_codec_device_frame_test codec_device_frame_test.cpp)
 target_link_libraries(
-  recon_codec_device_frame_test
-  PRIVATE volumetric_kit::recon_codec Vulkan::Vulkan
-          volumetric_kit::core_test_policy)
-target_include_directories(
-  recon_codec_device_frame_test
-  PRIVATE ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/codec)
+  recon_codec_device_frame_test PRIVATE recon_codec_oracle Vulkan::Vulkan
+                                        volumetric_kit::core_test_policy)
 vr_target_warnings(recon_codec_device_frame_test)
 add_test(NAME recon_codec_device_frame COMMAND recon_codec_device_frame_test)
 
 # codec tier, decoding on the device: the reference store's apply against plain
 # uint16 arithmetic, and the Decoder's frames -- the Encoder's, and I-then-P
 # chains -- leaving the grid as the CPU oracle's decode of the same content
-# does, bit for bit, with NotFound, a frame the device cannot decode, the
-# refusals and failures that keep the reference, and moves. Internal headers by
-# include path (the public decoder test stays public-only). Skips without a
-# device.
+# does, bit for bit, with NotFound, a segment longer than the format allows, the
+# refusals and failures that keep the reference, and moves. Internal headers
+# through the oracle (the public decoder test stays public-only). Skips without
+# a device.
 add_executable(recon_codec_inter_test codec_inter_test.cpp)
 target_link_libraries(
-  recon_codec_inter_test PRIVATE volumetric_kit::recon_codec Vulkan::Vulkan
+  recon_codec_inter_test PRIVATE recon_codec_oracle Vulkan::Vulkan
                                  volumetric_kit::core_test_policy)
-target_include_directories(
-  recon_codec_inter_test
-  PRIVATE ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/codec)
 vr_target_warnings(recon_codec_inter_test)
 add_test(NAME recon_codec_inter COMMAND recon_codec_inter_test)
 
-# codec tier, entropy coding: the rANS reference coder (normalization, round
-# trips, a probability-one symbol's zero cost, size against the ideal code
-# length, truncation and bit flips), the v3 frame built on it (round trips,
-# every writer and reader refusal, the frame type, the section rules,
-# corruption, and an all-zero frame's cost), and its P-frames (the reference
-# hash, the worked example, round trips and chains against an independent
-# oracle, the block merge, every refusal in order, corruption). All host-only,
-# so they always run; all reach the internal headers by include path, as
-# recon_codec_params_test does.
+# codec tier, entropy coding: the table normalization and the CPU oracle's rANS
+# coder (round trips, a probability-one symbol's zero cost, size against the
+# ideal code length, truncation and bit flips), the v3 frame through the oracle
+# (round trips, every writer and reader refusal, the frame type, the section
+# rules, corruption, and an all-zero frame's cost), and its P-frames (the
+# reference hash, the worked example, round trips and chains against an
+# independent model, the block merge, every refusal in order, corruption). All
+# host-only, so they always run.
 foreach(_vr_codec_host_test rans bitstream inter_bitstream)
   add_executable(recon_codec_${_vr_codec_host_test}_test
                  codec_${_vr_codec_host_test}_test.cpp)
   target_link_libraries(recon_codec_${_vr_codec_host_test}_test
-                        PRIVATE volumetric_kit::recon_codec)
-  target_include_directories(
-    recon_codec_${_vr_codec_host_test}_test
-    PRIVATE ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/codec)
+                        PRIVATE recon_codec_oracle)
   vr_target_warnings(recon_codec_${_vr_codec_host_test}_test)
   add_test(NAME recon_codec_${_vr_codec_host_test}
            COMMAND recon_codec_${_vr_codec_host_test}_test)
 endforeach()
 
-# codec tier, public API: the Encoder (an empty grid, bytes independent of the
-# hash table's order, unobserved blocks left out, its rows, refusals, moves) and
-# the Decoder with the codec end to end -- a decoded grid within the orthonormal
-# bound of its source, meshing to the analytic sphere it came from, frame after
-# frame into one grid, untouched on every early refusal, and OutOfMemory that a
-# resize recovers. Public headers only, plus the shared codec_fixture.hpp; the
+# codec tier, public API: the Encoder (an empty grid, the CPU oracle's bytes,
+# independent of the hash table's order, unobserved blocks left out, its rows,
+# refusals, moves) and the Decoder with the codec end to end -- a decoded grid
+# within the orthonormal bound of its source, meshing to the analytic sphere it
+# came from, frame after frame into one grid, untouched on every early refusal,
+# and OutOfMemory that a resize recovers. Public headers only, plus the shared
+# codec_fixture.hpp and the oracle's public-typed codec_oracle_encode.hpp; the
 # decoder test links recon_mesh, which the tier may not. Both skip with no
 # device.
 add_executable(recon_codec_encoder_test codec_encoder_test.cpp)
 target_link_libraries(
-  recon_codec_encoder_test PRIVATE volumetric_kit::recon_codec Vulkan::Vulkan
+  recon_codec_encoder_test PRIVATE recon_codec_oracle Vulkan::Vulkan
                                    volumetric_kit::core_test_policy)
 vr_target_warnings(recon_codec_encoder_test)
 add_test(NAME recon_codec_encoder COMMAND recon_codec_encoder_test)

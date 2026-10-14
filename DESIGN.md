@@ -1361,9 +1361,11 @@ decoding.
 
 ### codec
 
-The intra codec is implemented. Its rANS encoding runs on the device or the
-host, both ways with the same bytes (2026-10-03), and its decoding on the
-device alone (2026-10-13). Quantization is
+The intra codec is implemented, and it codes and decodes on the device alone
+(2026-10-13): the host does the I/O around it and the control (a frame's
+header and tables, and small counts and status words read back). The CPU
+rANS coder is the tests' oracle, under `tests/` (`codec_oracle*.hpp`), which
+pins the format's bytes. Quantization is
 one scalar quantizer with a step per DCT basis (2026-10-02):
 `step[u,v,w] = quantization_scale * quantization_weights[u + 8*v + 64*w]`.
 DC is the table's first entry. All blocks share the same 512-entry table, but
@@ -1388,31 +1390,29 @@ blocks, N observed blocks and a predicted prefix G, readback is
 `8 + 16*max(G,N)` bytes, at most `8 + 16*A`, instead of `4 + 20*A`.
 An empty input submits nothing. Append order is unspecified; the CPU coordinate
 sort is still what makes the frame deterministic.
-`EncoderConfig::entropy` picks where the frame's rANS coding runs. On the
-device (`detail::DeviceFrameWriter`), the forward output stays in VRAM: the
-forward's batch also counts every model's symbols and each block's coder
-steps, and only those counts cross to the host, which builds the tables with
-the host writer's own `frame_tables`. A second batch writes every block's
-steps in parallel, codes one segment per invocation into a slot sized by its
-steps, packs the streams, and reads back only the lengths and the payload.
-Bulk buffers are device-local and retained; the bus carries the counts, four
-bytes a block each way, and the payload, against 64 + 2K bytes a block of
-coefficients and masks on the host path. A segment is one serial chain, so
-`kAuto`, the default, codes on the device from `kMinDeviceEncodeSegments` (48)
-segments and on the host below, and on the host too for a frame the device
-cannot code; smaller segments give the device parallelism at a few percent
-of size. Both device coders work on entries, a P-frame's stream positions
+The frame's rANS coding runs on the device (`detail::DeviceFrameWriter`,
+built by `Encoder::create`, which fails if its kernels do not build): the
+forward output stays in VRAM, the forward's batch also counts every model's
+symbols and each block's coder steps, and only those counts cross to the
+host, which builds the tables (`frame_tables`). A second batch writes every
+block's steps in parallel, codes one segment per invocation into a slot sized
+by its steps, packs the streams, and reads back only the lengths and the
+payload. Bulk buffers are device-local and retained; the bus carries the
+counts, four bytes a block each way, and the payload. A segment is one serial
+chain, so smaller segments give the device parallelism at a few percent of
+size. A frame the device cannot hold is refused, never coded on the host.
+Both device coders work on entries, a P-frame's stream positions
 (`ResidentBlocks`): its reference entries, each with a u32 mode, then its new
 blocks, which alone the block list holds; an intra frame is all new blocks.
-The count pass also flags what `write_frame` refuses of the entries (a mode
-past the alphabet, a written −32768), which `finish` refuses in its words
+The count pass also flags what every writer refuses of the entries (a mode
+past the alphabet, a written −32768), which `finish` refuses in their words
 (`check_entries`).
 The `Decoder` decodes on the device (`detail::DeviceFrameReader`): the host
 parses the frame (`parse_frame`) and uploads only its tables and payload.
 One batch expands each table into a 4096-slot lookup, decodes one segment per
 workgroup into the inverse transform's layout, and reads back the new
 blocks' coordinates, a P-frame's modes and each segment's fault, which
-`check_segment` and `check_survivors` judge exactly as the host reader
+`check_segment` and `check_survivors` judge exactly as the oracle's reader
 does. The coefficients and masks stay in VRAM for the apply and the
 inverse (`DctTransform::inverse` over `ResidentBlocks`). One invocation
 decodes a whole segment, so the format holds a segment to at most
@@ -1422,10 +1422,7 @@ larger, before any device work, and every writer, `Encoder::create`
 included, refuses such a size (`check_segment_size`), so every valid frame
 decodes on the device. A frame past `maxStorageBufferRange` or free memory
 is refused with its code (`InvalidArgument` or `OutOfMemory`); nothing
-decodes on the host. The host reader (`read_frame`)
-is the tests' oracle. The encoder's `kAuto` uses the host for a frame the
-device cannot hold, and for every frame once the device kernels fail to
-build, which it tries once; it reports any other device failure.
+decodes on the host.
 `Decoder::decode(frame, grid)` leaves the caller's grid holding exactly the
 frame. It merges the grid's sorted active set with the frame's
 coordinates, removing, allocating, and keeping shared blocks in their
@@ -1452,22 +1449,22 @@ when the whole decode succeeds. An intra frame takes the same apply from its
 payload alone (the 2026-10-13 entry). Both classes report `StageMetrics`
 (`"codec encode"` / `"codec decode"`). Their breakdown rows share no name
 except the map's own `"  ..active set"`. The private pieces under
-`src/volumetric_kit/recon/codec/` are the `DctTransform`, the rANS
-reference coder, the frame, its device coders and the reference store. The
-transform takes a `volume::BlockList` to a `DctBlocks` — K quantized 16-bit
-coefficients per block in 3-D zigzag order, a 16-word observed mask, and the
-params and `trunc_dist` they were made with — and back, each call one
-`CommandBatch` over device-local buffers. The compacted observed list, uploaded sorted list,
+`src/volumetric_kit/recon/codec/` are the `DctTransform`, the rANS tables,
+the frame's layout and checks, its device coders and the reference store.
+The transform's forward takes a `volume::BlockList` to `ResidentBlocks` — K
+quantized 16-bit coefficients per block in 3-D zigzag order and a 16-word
+observed mask, left on the device for the writer — and its inverse takes
+them back, each recorded into the caller's `CommandBatch` over device-local
+buffers. The compacted observed list, uploaded sorted list,
 coefficient buffer and mask buffer are retained and grow only when a call needs
 more capacity, releasing the old buffer first and taking 1.5x headroom
 (`ensure_device_scratch`); descriptor ranges and transfers use the current
 logical sizes.
 They remain allocated until the transform is destroyed. The per-call staging
-inside `CommandBatch` remains transient, and the encoder's host rANS path
-reads coefficients/masks back. The SDF is normalized by `trunc_dist`
-before the transform and the steps are fractions of it, so the inverse
-refuses a `DctBlocks`
-whose `trunc_dist` is not its grid's. `CodecParams::validate` checks the scale,
+inside `CommandBatch` remains transient. The SDF is normalized by
+`trunc_dist` before the transform and the steps are fractions of it, so the
+decoder checks a frame's `trunc_dist` against its grid's before the inverse.
+`CodecParams::validate` checks the scale,
 each kept basis's weight and its effective step; weights beyond K are unused.
 The scale and kept weights must be normal, so a flush-to-zero host or device
 agrees on validity. It refuses a step
@@ -1491,33 +1488,32 @@ versions are refused. `read_frame_info` reads them without entropy decoding.
 Header byte 6 is the frame type (`FrameType`, which `read_frame_info`
 reports): intra (0), or a P-frame (1, experimental), coded against the frame
 before it as `bitstream.hpp` lays out and the 2026-10-12 entry explains. The
-host and device writers and readers code both, and the `Decoder` decodes
-both; every reader refuses a later type as `Unsupported`.
+device writer and reader, and the oracle's, code both, and the `Decoder`
+decodes both; every reader refuses a later type as `Unsupported`.
 The payload is segments of R sorted
 blocks (default 64). Each segment is one independent rANS stream
 (`rans.hpp`: a 32-bit state, 16-bit words and 12-bit probabilities, integer
-only, the reference the GPU kernels must match byte for byte). Every integer
+only, which the kernels code and the oracle pins byte for byte). Every integer
 is coded as a class from a fixed per-frame table plus one raw field, its
 sign the low bit. A partial mask is coded a z plane at a time and a line
 at a time, each against the one before it (v2, 2026-10-01: the mask had
 been half of room0's bits). The models and a block's grammar, its writer
-and its reader, are one GLSL text that the kernels include and
-`bitstream.cpp` compiles as C++ (`shaders/frame_models.glsl`,
-`shaders/frame_grammar.glsl`, 2026-10-08), and golden frames in the tests
-pin v3's bytes for both writers on every machine. The format
+and its reader, are one GLSL text that the kernels include and the oracle
+compiles as C++ (`shaders/frame_models.glsl`, which `bitstream.cpp` compiles
+too, and `shaders/frame_grammar.glsl`, 2026-10-08), and golden frames in the
+tests pin v3's bytes for the device writer and the oracle's on every
+machine. The format
 requires strictly increasing coordinates, so a decoded list is duplicate-free:
 the delta code cannot step backwards within a segment, and the reader checks
 each segment's raw first coordinate against the one before. A flag bit other
 than `kSectionRequired` is reserved, so a known section that sets one is
-refused. `read_frame` never reads outside its buffer, and it takes the
+refused. `parse_frame` never reads outside its buffer, and it takes the
 caller's `max_blocks`, because a frame's size cannot bound its block count
 (probability-one blocks cost no bits). It checks that limit only once the
 count agrees with the segment table, so a sound frame past it is
-`OutOfMemory` and a corrupt count stays `InvalidArgument`. The limit bounds
-its allocation too, at
-under 1.1 KB per block, and every size is checked in 64 bits so a 32-bit
-build refuses rather than wraps. `DctBlocks` lives in `dct_blocks.hpp`, so
-the host-only frame never includes Vulkan. `RansReader::finish` is a
+`OutOfMemory` and a corrupt count stays `InvalidArgument`. Every size is
+checked in 64 bits so a 32-bit build refuses rather than wraps. A segment's
+end check (every word consumed, the state back at its start) is a
 **consistency** check, not an integrity one. It cannot see a flipped raw
 bit, nor a symbol swapped for one of equal frequency, so integrity is the
 transport's: the CRC-32 of the `.vrst` record that carries the frame

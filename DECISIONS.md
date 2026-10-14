@@ -314,7 +314,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   height normalization and topology checks remain example policy.
 - [**2026-10-03**](#2026-10-03--rans-encoding-runs-on-the-device-byte-for-byte-the-hosts-frame-chosen-per-frame-by-segment-count) —
   rANS encoding runs on the device, byte for byte the host's frame, and the
-  encoder picks the device per frame from 48 segments.
+  encoder picks the device per frame from 48 segments. *Amended 2026-10-13:*
+  encoding runs on the device alone too; the CPU coder is the tests' oracle.
 - [**2026-10-03**](#2026-10-03--rans-decoding-runs-on-the-device-block-for-block-the-hosts-chosen-from-80-segments) —
   rANS decoding runs on the device, block for block the host's, in segments
   of at most 1,024 blocks, and the decoder picks the device per frame from 80
@@ -9543,6 +9544,33 @@ latency measurement was made. The normalization's own test, listed in the
 *Amended 2026-10-08 (the frame grammar entry, below):* the walk is the
 host's own `emit_block`, in emit order, from the GLSL both sides compile, and
 `rans_ops.comp` writes each block's steps down from the end of its run.
+*Amended 2026-10-13 (the device-only encoder):* encoding runs on the device
+alone too, by the rule the decoding entry's amendment below gives, so
+`EncoderConfig::entropy`, `EntropyCoding`, `kMinDeviceEncodeSegments` and the
+`kAuto` policy (`entropy_choice.hpp`) go. `Encoder::create` builds the device
+writer and fails if it cannot, and a frame the device cannot hold is refused
+with the device's code. The CPU coder -- `RansWriter` and `RansReader`,
+`write_frame`, `read_frame` and the transform's host forward and inverse --
+moves under `tests/` (`codec_oracle*.hpp`, the `recon_codec_oracle` test
+library): the independent oracle the codec tests hold the device to, byte
+for byte, the one place the user kept a CPU coder. The library keeps what the
+device path uses -- the rANS tables and their normalization, the frame's
+layout, parsing and shared checks, `frame_hash` and the merges -- and no
+function that only tests call. The examples' `codec.entropy` takes `auto`
+and `device` alike and refuses `host`; core drops the key in its next config
+change. A frame of few segments, which `kAuto` coded on the host, pays for
+it. Hand check on the M5 Max, Release, the median of six runs before and six
+after, interleaved:
+- room0 at 1 cm, Classic, 40 I-frames of about 21,900 blocks in 343
+  segments of 64, which `kAuto` already coded on the device: 4.12 → 3.94 ms a
+  frame of host time and 1.97 → 1.95 ms of device time, `..rans encode`
+  1.93 ms both, within noise;
+- Rafa2 at 5 mm, 2,395 blocks in 38 segments of 64, which `kAuto` coded on
+  the host, as `codec_mesh`'s sweep times a warm frame: 2.85 → 2.97 ms of
+  host time at K = 64 and step 0.2 (+0.12 ms, +4%), its device time
+  0.07 → 2.15 ms.
+
+Every frame's bytes are unchanged.
 
 The 2026-09-26 decision's fifth PR, for the encoder: the v3 format is
 unchanged, and every frame the device writes is `write_intra_frame`'s.

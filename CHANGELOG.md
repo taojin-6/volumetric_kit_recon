@@ -8,6 +8,23 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `codec`: **the `Encoder` codes on the device alone** (BREAKING).
+  `EncoderConfig::entropy`, `EntropyCoding` and `kMinDeviceEncodeSegments`
+  are gone. `Encoder::create` builds the device rANS coder and fails if its
+  kernels do not build. A frame the device cannot hold, past
+  `maxStorageBufferRange` or free memory, is refused, `InvalidArgument` or
+  `OutOfMemory`, where `kAuto` coded it on the host. A frame of few
+  segments, which `kAuto` also coded on the host, codes on the device, at a
+  cost the 2026-10-03 encoding decision's amendment measures. The CPU rANS
+  coder moves under
+  `tests/`, the oracle every codec test holds the device to (the
+  `recon_codec_oracle` test library). The examples' `codec.entropy` takes
+  `auto` and `device` alike and refuses `host`, `InvalidArgument`.
+  Migrating: drop `EncoderConfig::entropy`, and set `codec.entropy` to
+  `auto` or leave it out. Tests: `recon_codec_encoder`,
+  `recon_codec_device_frame`, `recon_codec_inter`, `recon_codec_dct`,
+  `recon_codec_rans`, `recon_codec_bitstream`,
+  `recon_codec_inter_bitstream`, `recon_example_config`.
 - `codec`: **a segment holds at most 1,024 entries, a rule of the format**
   (BREAKING). A frame's segment size, and a P-frame's update size, are each
   from 1 to `kMaxDeviceDecodeSegmentSize`: every reader refuses a frame past
@@ -17,8 +34,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   rule. Tests: `recon_codec_bitstream`, `recon_codec_inter_bitstream`,
   `recon_codec_device_frame`, `recon_codec_inter`, `recon_codec_encoder`.
 - `codec`: **the `Decoder` decodes on the device alone** (BREAKING).
-  `DecoderConfig` and `kMinDeviceDecodeSegments` are gone, and
-  `EntropyCoding` is the `Encoder`'s alone. `Decoder::create(device,
+  `DecoderConfig` and `kMinDeviceDecodeSegments` are gone.
+  `Decoder::create(device,
   allocator)` builds the device rANS reader and fails if its kernels do not
   build. A frame the device cannot decode -- a segment past
   `kMaxDeviceDecodeSegmentSize` (1,024 entries), or past
@@ -28,8 +45,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   cost the 2026-10-03 decoding decision's amendment measures.
   `Encoder::create` refuses a `segment_size` past 1,024, `InvalidArgument`.
   Migrating: drop the config argument, and encode in segments of at most
-  1,024 blocks. The examples' `codec.entropy` sets the encoder alone, and
-  `decode_growing` grows the grid once a frame at most. Tests:
+  1,024 blocks. The examples' `decode_growing` grows the grid once a frame
+  at most. Tests:
   `recon_codec_decoder`, `recon_codec_inter`, `recon_codec_encoder`,
   `recon_example_codec_stream`.
 - `examples`: **the codec's step rules are recon's.** Examples and tests
