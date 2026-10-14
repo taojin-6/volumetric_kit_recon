@@ -9558,8 +9558,11 @@ device path uses -- the rANS tables and their normalization, the frame's
 layout, parsing and shared checks, `frame_hash` and the merges -- and no
 function that only tests call. The examples' `codec.entropy` takes `auto`
 and `device` alike and refuses `host`; core drops the key in its next config
-change. A frame of few segments, which `kAuto` coded on the host, pays for
-it. Hand check on the M5 Max, Release, the median of six runs before and six
+change. Two host steps remain in the encoder, each a `TODO(codec)`: the
+coordinate sort, whose observed list crosses the bus both ways, and the scan
+of each entry's coder steps into the segments' step and slot offsets. A
+frame of few segments, which `kAuto` coded on the host, pays for it. Hand
+check on the M5 Max, Release, the median of six runs before and six
 after, interleaved:
 - room0 at 1 cm, Classic, 40 I-frames of about 21,900 blocks in 343
   segments of 64, which `kAuto` already coded on the device: 4.12 → 3.94 ms a

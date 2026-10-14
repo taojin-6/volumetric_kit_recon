@@ -1361,11 +1361,14 @@ decoding.
 
 ### codec
 
-The intra codec is implemented, and it codes and decodes on the device alone
-(2026-10-13): the host does the I/O around it and the control (a frame's
-header and tables, and small counts and status words read back). The CPU
-rANS coder is the tests' oracle, under `tests/` (`codec_oracle*.hpp`), which
-pins the format's bytes. Quantization is
+The intra codec is implemented, and it codes and decodes on the device with
+no host fallback (2026-10-13). Three host steps remain, each a
+`TODO(codec)`: the encoder sorts its observed blocks by coordinate, read
+back and uploaded again, and scans each entry's coder steps into the
+segments' offsets; the `Decoder` merges the grid's active set with the
+frame's blocks into its remove and allocate lists. The CPU rANS coder is the
+tests' oracle, under `tests/` (`codec_oracle*.hpp`), which pins the format's
+bytes. Quantization is
 one scalar quantizer with a step per DCT basis (2026-10-02):
 `step[u,v,w] = quantization_scale * quantization_weights[u + 8*v + 64*w]`.
 DC is the table's first entry. All blocks share the same 512-entry table, but
