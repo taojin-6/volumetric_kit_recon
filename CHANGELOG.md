@@ -8,6 +8,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `codec`: **the `Encoder` lays out its rANS steps on the device.** The
+  forward's submit scans each block's coder steps into its place and each
+  segment's output slot, and reads back the two totals alone, so an encode
+  moves 8 bytes a block and 8 a segment fewer over the bus and waits on no
+  more fences. Every frame's bytes, refusal code and message are unchanged.
+  Tests: `recon_codec_step_layout`, `recon_codec_device_frame`.
 - `codec`: **the codec's coordinate work runs on the device.** The
   `Encoder` sorts its blocks in the forward's submit, so the observed list no
   longer crosses the bus; its `"  ..sort"` row is gone, the sort timed inside

@@ -319,7 +319,8 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-03**](#2026-10-03--rans-encoding-runs-on-the-device-byte-for-byte-the-hosts-frame-chosen-per-frame-by-segment-count) —
   rANS encoding runs on the device, byte for byte the host's frame, and the
   encoder picks the device per frame from 48 segments. *Amended 2026-10-13:*
-  encoding runs on the device alone too; the CPU coder is the tests' oracle.
+  encoding runs on the device alone too, its sort and step layout included;
+  the CPU coder is the tests' oracle.
 - [**2026-10-03**](#2026-10-03--rans-decoding-runs-on-the-device-block-for-block-the-hosts-chosen-from-80-segments) —
   rANS decoding runs on the device, block for block the host's, in segments
   of at most 1,024 blocks, and the decoder picks the device per frame from 80
@@ -511,7 +512,9 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-13**](#2026-10-13--the-codecs-coordinate-work-runs-on-the-device-the-encoder-sorts-its-blocks-with-a-stable-rank-merge-sort-on-coord_less-and-the-decoder-judges-merges-and-diffs-them-by-count-and-binary-search-never-sorting-only-counts-and-verdicts-cross-the-bus-amends-the-2026-10-13-decoder-2026-10-12-p-frame-2026-10-03-observed-list-and-garbage-collection-and-2026-10-01-codec-review-entries) —
   The codec's coordinate work runs on the device: the encoder sorts with a
   stable rank-merge sort, and the decoder judges, merges and diffs by binary
-  search, never sorting; only counts and verdicts cross the bus.
+  search, never sorting; only counts and verdicts cross the bus. *Amended
+  2026-10-13:* so does the writer's step layout, which leaves the codec's
+  host only I/O and control.
 
 ## Decision record
 
@@ -9598,7 +9601,9 @@ after, interleaved:
   host time at K = 64 and step 0.2 (+0.12 ms, +4%), its device time
   0.07 → 2.15 ms.
 
-Every frame's bytes are unchanged.
+Every frame's bytes are unchanged. *Amended 2026-10-13 (the coordinate
+entry, below, and its amendment):* neither host step remains; the sort and
+the step layout run on the device.
 
 The 2026-09-26 decision's fifth PR, for the encoder: the v3 format is
 unchanged, and every frame the device writes is `write_intra_frame`'s.
@@ -12407,6 +12412,41 @@ verdict ignored. Not run: the RTX 5090.
 
 ### 2026-10-13 — The codec's coordinate work runs on the device: the encoder sorts its blocks with a stable rank-merge sort on `coord_less`, and the decoder judges, merges and diffs them by count and binary search, never sorting; only counts and verdicts cross the bus (amends the 2026-10-13 decoder, 2026-10-12 P-frame, 2026-10-03 observed-list and garbage-collection, and 2026-10-01 codec-review entries).
 
+*Amended 2026-10-13 (the device step layout):* the **Next** item below is
+done, so the codec's host does I/O and control alone. `detail::StepLayout`
+(`rans_layout.comp`, one workgroup on `scan.glsl`) records into the
+forward's submit after the count: an exclusive scan E of the entries' steps
+in stream order, from which entry p of segment `[x, y)` ends its steps at
+`E[x] + E[y] - E[p]` and the segment takes `E[x]` to `E[y]`, then a scan of
+the segments' slot sizes. `rans_ops.comp` and `rans_encode.comp` read E, so
+the per-entry step ends and per-segment step offsets go, and only the two
+totals come back to size the coding's buffers. The step total stops at
+2^30, the first whose steps reach 4 GiB, so the writer refuses such a frame
+with its code and words as before; the slot total stays exact below it. An
+encode reads back 4N - 8 bytes fewer and uploads 4N + 8(S + 1) fewer (N
+entries, S segments), exactly as the scratch counting core measured on two
+sphere frames: 176,896 bytes a frame at room0's 21,771 blocks, 19,464 at
+Rafa2's 2,395. It waits on no more fences (3 an encode with the map's list
+held). `frame_segment_range`, whose one caller was the host loop, goes. Hand
+check, M5 Max, Release, the median of six runs before and six after,
+interleaved: room0 at 1 cm, 400 frames of 21,771 blocks, encode 2.96 →
+2.97 ms of host time and 1.98 → 2.03 ms of device time (`..forward`, which
+now holds the layout's dispatch, +0.03 ms; `..rans encode` 1.88 ms both);
+Rafa2 at 5 mm, over the sweep's 90 K = 64 rows, 2.92 → 3.01 ms and 2.11 →
+2.16 ms. On unified memory the bytes saved cost no copy, so the dispatch is
+what shows; a discrete GPU was not measured. The `.vrst` files are the same
+byte for byte. `recon_codec_step_layout` holds every start, slot offset and
+total to the oracle's layout of the oracle's step counts
+(`codec_oracle::step_layout`, `entry_steps`): intra frames of 0 to 65,537
+blocks at K of 1, 64 and 512 in segments of 1 to 1,024, int32's extremes,
+the worked example and C2's matrix at every update and segment size, any
+steps up to the bound, and the cap, also past a u32. Fifteen planted bugs
+each failed a test: an inclusive scan, a lane's run short of its last value,
+no cap, slots a word short or long, either total missing, the slot scan not
+reset or not after the barrier, the wrong A, the ops' or the encoder's run,
+`segment_of` without the update segments, slots sized by steps, and the step
+total read one entry short.
+
 The rule the 2026-10-03 decoding entry's amendment records -- only I/O and
 control cross the bus -- applied to the codec's work on block coordinates.
 Before, the encoder read its observed list back, sorted it and uploaded it
@@ -12577,9 +12617,10 @@ the RTX 5090 (not reachable from this machine), and GCC, which CI covers.
 
 **Next.** The writer's per-entry coder steps still cross the bus, 4 bytes an
 entry each way, laid out in an O(N) host loop (`device_frame_writer.cpp`'s
-`TODO(codec)`); a segmented layout on `scan.glsl` is the next PR. The
-encoder's split (C5a) becomes a `BlockLists` pass in the forward's submit, on
-these searches and ranks. Cutting fences further waits for a measurement.
+`TODO(codec)`); a segmented layout on `scan.glsl` is the next PR (done, the
+amendment above). The encoder's split (C5a) becomes a `BlockLists` pass in
+the forward's submit, on these searches and ranks. Cutting fences further
+waits for a measurement.
 `volume::BlockList`, `VoxelBlockGrid::block_list` and `check_block_list`
 now have no library caller, only tests; removing them is a breaking volume
 change, its own PR once the user decides.

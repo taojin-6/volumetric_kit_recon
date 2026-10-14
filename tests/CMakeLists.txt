@@ -747,6 +747,18 @@ target_link_libraries(
 vr_target_warnings(recon_codec_block_lists_test)
 add_test(NAME recon_codec_block_lists COMMAND recon_codec_block_lists_test)
 
+# codec tier, the device frame writer's step layout: every entry's start and
+# segment's slot against the CPU oracle's, for real frames' steps (every K and
+# segment size, int32 extremes, the worked example, the P-frame matrix) and any
+# steps up to the bound, the step total's cap, and the refusals. Internal
+# headers through the oracle. Skips without a device.
+add_executable(recon_codec_step_layout_test codec_step_layout_test.cpp)
+target_link_libraries(
+  recon_codec_step_layout_test PRIVATE recon_codec_oracle Vulkan::Vulkan
+                                       volumetric_kit::core_test_policy)
+vr_target_warnings(recon_codec_step_layout_test)
+add_test(NAME recon_codec_step_layout COMMAND recon_codec_step_layout_test)
+
 # codec tier, entropy coding: the table normalization and the CPU oracle's rANS
 # coder (round trips, a probability-one symbol's zero cost, size against the
 # ideal code length, truncation and bit flips), the v3 frame through the oracle

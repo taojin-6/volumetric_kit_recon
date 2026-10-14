@@ -1367,12 +1367,12 @@ decoding.
 
 ### codec
 
-The intra codec is implemented, and it codes and decodes on the device with
-no host fallback (2026-10-13). One host step remains, a `TODO(codec)`: the
-encoder scans each entry's coder steps into the segments' offsets. The CPU rANS coder is the
-tests' oracle, under `tests/` (`codec_oracle*.hpp`), which pins the format's
-bytes. Quantization is
-one scalar quantizer with a step per DCT basis (2026-10-02):
+The intra codec is implemented, and it codes and decodes on the device alone
+(2026-10-13): the host does the I/O around it (a frame's bytes, and their
+hash) and the control (a frame's header, sections and tables, and small
+counts and status words read back). The CPU rANS coder is the tests' oracle,
+under `tests/` (`codec_oracle*.hpp`), which pins the format's bytes.
+Quantization is one scalar quantizer with a step per DCT basis (2026-10-02):
 `step[u,v,w] = quantization_scale * quantization_weights[u + 8*v + 64*w]`.
 DC is the table's first entry. All blocks share the same 512-entry table, but
 only the K kept bases use their weights: the global scale and those K weights
@@ -1389,20 +1389,24 @@ observed voxel (`DctTransform::observed`, compacted on the device, reading
 back only its count and reject tally), sorts them by (z, y, x) on the device
 with a stable rank-merge sort on `coord_less` itself, over all of int32
 (`detail::BlockLists`, whose header has the mechanism), transforms them, and
-writes the frame; the sort, the forward and the symbol count share one
-submit. Keys are unique, so the same content gives the same bytes whatever the
-hash table's order. An empty input submits nothing.
+writes the frame; the sort, the forward, the symbol count and the step layout
+share one submit. Keys are unique, so the same content gives the same bytes
+whatever the hash table's order. An empty input submits nothing.
 The frame's rANS coding runs on the device (`detail::DeviceFrameWriter`,
 built by `Encoder::create`, which fails if its kernels do not build): the
 forward output stays in VRAM, the forward's batch also counts every model's
-symbols and each block's coder steps, and only those counts cross to the
-host, which builds the tables (`frame_tables`). A second batch writes every
-block's steps in parallel, codes one segment per invocation into a slot sized
-by its steps, packs the streams, and reads back only the lengths and the
-payload. Bulk buffers are device-local and retained; the bus carries the
-counts, four bytes a block each way, and the payload. A segment is one serial
-chain, so smaller segments give the device parallelism at a few percent of
-size. A frame the device cannot hold is refused, never coded on the host.
+symbols and each block's coder steps and lays the steps out
+(`detail::StepLayout`, whose header has the formulas: one workgroup scans
+the steps into each entry's place, and the segments' slot sizes into their
+offsets), and only the symbol counts and the layout's two totals cross to
+the host, which builds the tables (`frame_tables`) and sizes the coding's
+buffers. A second batch writes every block's steps in parallel, codes one
+segment per invocation into its slot, packs the streams, and reads back only
+the lengths and the payload. Bulk buffers are device-local and retained; the
+bus carries the counts and tables, 8 bytes of totals, and the lengths and
+payload. A segment is one serial chain, so smaller segments give the device
+parallelism at a few percent of size. A frame the device cannot hold is
+refused, never coded on the host.
 Both device coders work on entries, a P-frame's stream positions
 (`ResidentBlocks`): its reference entries, each with a u32 mode, then its new
 blocks, which alone the block list holds; an intra frame is all new blocks.
