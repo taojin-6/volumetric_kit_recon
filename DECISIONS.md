@@ -290,7 +290,8 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-03**](#2026-10-03--garbage-collection-deletes-from-the-device-stale-list) —
   Garbage collection passes its device coordinate list directly to deletion,
   retaining host readback only for control counts. *Amended 2026-10-13:* it
-  frees through the body both `VoxelBlockGrid::remove` overloads share.
+  frees through the body `VoxelBlockGrid::remove` uses, which takes a device
+  list alone.
 
 - [**2026-10-02**](#2026-10-02--mesh-input-binning-keeps-counts-cursors-and-occupied-bins-on-the-device-retains-scratch-and-reads-only-validation-and-bounded-dispatch-control) —
   Mesh input binning keeps counts, cursors and occupied bins on the device,
@@ -514,8 +515,9 @@ entries relevant to your task; later amendments supersede earlier rules.
   The codec's coordinate work runs on the device: the encoder sorts with a
   stable rank-merge sort, and the decoder judges, merges and diffs by binary
   search, never sorting; only counts and verdicts cross the bus.
-  *Amended 2026-10-13:* the host `BlockList` it left without a caller goes.
-- [**2026-10-13**](#2026-10-13--block-lists-reach-the-volume-tier-on-the-device-alone-a-host-list-entry-point-that-only-tests-called-goes-amends-the-2026-08-12-view-meshing-2026-09-26-codec-2026-10-06-view-culling-and-2026-10-13-coordinate-entries) —
+  *Amended 2026-10-13:* the host `BlockList` it left without a caller goes,
+  and the host-array `allocate` and `remove`.
+- [**2026-10-13**](#2026-10-13--block-lists-reach-the-volume-tier-on-the-device-alone-a-host-list-entry-point-that-only-tests-called-goes-amends-the-2026-08-12-view-meshing-2026-09-26-codec-2026-10-03-garbage-collection-2026-10-06-view-culling-and-2026-10-13-coordinate-entries) —
   Block lists reach the volume tier on the device alone; a host-list entry
   point that only tests called goes.
 
@@ -9008,6 +9010,9 @@ listed blocks, then the map's device `remove` -- serves both grid overloads
 and garbage collection: the host overload stages its coordinates once, where
 they went up twice. The device overload checks its input first, so a refused
 list zeroes nothing and keeps the topology epoch.
+*Amended 2026-10-13 (the volume block-list entry, below):* the host
+overloads are gone; the one body serves the grid's device `remove` and
+garbage collection.
 
 The 2026-10-01 block-stamp decision downloaded the stale list after zeroing
 its attributes, then uploaded the same coordinates for `VoxelHashMap::remove`.
@@ -12424,7 +12429,9 @@ verdict ignored. Not run: the RTX 5090.
 ### 2026-10-13 — The codec's coordinate work runs on the device: the encoder sorts its blocks with a stable rank-merge sort on `coord_less`, and the decoder judges, merges and diffs them by count and binary search, never sorting; only counts and verdicts cross the bus (amends the 2026-10-13 decoder, 2026-10-12 P-frame, 2026-10-03 observed-list and garbage-collection, and 2026-10-01 codec-review entries).
 
 *Amended 2026-10-13 (the volume block-list entry, below):* the host
-`BlockList`, `block_list` and `check_block_list` that **Next** names go.
+`BlockList`, `block_list` and `check_block_list` that **Next** names go, and
+so do the host-array `allocate` and `remove` the device overloads here sat
+beside.
 
 The rule the 2026-10-03 decoding entry's amendment records -- only I/O and
 control cross the bus -- applied to the codec's work on block coordinates.
@@ -12603,7 +12610,7 @@ these searches and ranks. Cutting fences further waits for a measurement.
 now have no library caller, only tests; removing them is a breaking volume
 change, its own PR once the user decides.
 
-### 2026-10-13 — Block lists reach the volume tier on the device alone; a host-list entry point that only tests called goes (amends the 2026-08-12 view-meshing, 2026-09-26 codec, 2026-10-06 view-culling and 2026-10-13 coordinate entries).
+### 2026-10-13 — Block lists reach the volume tier on the device alone; a host-list entry point that only tests called goes (amends the 2026-08-12 view-meshing, 2026-09-26 codec, 2026-10-03 garbage-collection, 2026-10-06 view-culling and 2026-10-13 coordinate entries).
 
 **The rule** is the user's (2026-10-13): only I/O takes a host path --
 reading a mesh model, a camera stream (Orbbec, ARKit) -- and what it reads
@@ -12627,6 +12634,24 @@ and upload it as the device list the transform binds.
 `recon_codec_dct` keeps every list refusal, now on the device list: none
 with a count, one shorter than the count, one not a storage buffer, more
 blocks than the heap, and a list compacted before a remove.
+
+**The host-array `allocate` and `remove` go too:**
+`VoxelHashMap::allocate(const BlockIndex*, …)`,
+`VoxelHashMap::remove(const BlockIndex*, …)` and
+`VoxelBlockGrid::remove(const BlockIndex*, …)`. Since the coordinate entry
+the decoder removes and allocates from its device lists and garbage
+collection frees from its own, so no library code staged coordinates from
+the host; the only caller outside recon's tests is the iOS compute smoke
+test's block stage (`apps/compute_smoke/smoke_report.cpp:420`), which must
+upload its eight blocks when it re-pins. The device overloads keep every
+check, round, tally and failure split; the grid's still zeroes, then frees,
+in two submits. A test hands its own coordinates over as a producer kernel
+would, through `tests/device_blocks.hpp` (upload, then the device
+overload), at about 90 call sites. The cases that compared the two
+overloads go with the host one: the hash-map contention fixture runs four
+fresh maps on the device list, the capacity split it repeated is the main
+case's, and the delete test's host/device alternation and host zero-count
+call are gone.
 
 ## Measured lessons
 

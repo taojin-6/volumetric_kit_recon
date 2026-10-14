@@ -30,6 +30,7 @@
 #include <utility>
 #include <vector>
 
+#include "device_blocks.hpp"
 #include "test_check.hpp"
 #include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
@@ -127,8 +128,8 @@ bool fill_grid(const vr_test::Gpu& ctx, vol::VoxelBlockGrid& grid,
       }
     }
   }
-  vkc::Result<std::uint32_t> failed = grid.map().allocate(
-      blocks.data(), static_cast<std::uint32_t>(blocks.size()));
+  vkc::Result<std::uint32_t> failed =
+      vr_test::allocate_blocks(ctx, grid.map(), blocks);
   if (!failed || failed.value() != 0) return false;
   vkc::Result<std::vector<vol::BlockIndex>> active =
       grid.map().compact_active_blocks();

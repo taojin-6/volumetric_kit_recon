@@ -12,6 +12,7 @@
 #include <utility>
 #include <vector>
 
+#include "device_blocks.hpp"
 #include "test_check.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
@@ -93,8 +94,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
   std::vector<vol::BlockIndex> coords =
       coords_in_bucket(0, grid.num_buckets, 7);
   CHECK(coords.size() == 7);
-  vkc::Result<std::uint32_t> alloc =
-      map.allocate(coords.data(), static_cast<std::uint32_t>(coords.size()));
+  vkc::Result<std::uint32_t> alloc = vr_test::allocate_blocks(gpu, map, coords);
   CHECK(alloc.ok() && alloc.value() == 0);
 
   vkc::Result<vol::HashDiagnostics> diag = map.diagnostics();

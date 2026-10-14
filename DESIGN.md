@@ -848,13 +848,12 @@ and `remove` before any index is freed, `remove` by a kernel that finds
 each coord's block itself, so its cost is the count's, not the grid's),
 `resize` copies there, a call's
 inputs are uploaded in its first round, and a round reads back its counts.
-`VoxelHashMap::allocate` and `remove`, and `VoxelBlockGrid::remove`, each
-take a device buffer of `BlockIndex` too, bound where its producer wrote it,
-with the host overload's checks, rounds and failure split; the grid's zeroes
-the listed blocks, then frees them through the map's, two submits. One body
-serves both grid overloads and garbage collection, so the stale-block list
-stays on the GPU through deletion; only the stale and retry counts reach the
-host, and a host list is staged once for both halves.
+`VoxelHashMap::allocate` and `remove`, and `VoxelBlockGrid::remove`, take
+a device buffer of `BlockIndex`, bound where its producer wrote it; a test
+uploads its own coordinates first (`tests/device_blocks.hpp`). The grid's
+zeroes the listed blocks, then frees them through the map's, two submits.
+One body serves it and garbage collection, so the stale-block list stays on
+the GPU through deletion; only the stale and retry counts reach the host.
 A compaction still reads its list back, in the count's own submit while the
 set stays within a quarter past its last count (the 2026-09-28 residency
 decision), except `compact_active_blocks_on_device`'s: its
