@@ -1388,9 +1388,11 @@ reused and its own kept for the extract after), keeps the blocks with an
 observed voxel (`DctTransform::observed`, compacted on the device, reading
 back only its count and reject tally), sorts them by (z, y, x) on the device
 with a stable rank-merge sort on `coord_less` itself, over all of int32
-(`detail::BlockLists`, whose header has the mechanism), transforms them, and
-writes the frame; the sort, the forward, the symbol count and the step layout
-share one submit. Keys are unique, so the same content gives the same bytes
+(`detail::BlockLists`, whose header has the mechanism), transforms them into
+`detail::ReferenceStore`'s spare, the sorted list copied beside them -- the
+frame a decoder will hold, which the encoder holds too once `encode`
+returns it -- and writes the frame; the sort, the forward, the symbol count
+and the step layout share one submit. Keys are unique, so the same content gives the same bytes
 whatever the hash table's order. An empty input submits nothing.
 The frame's rANS coding runs on the device (`detail::DeviceFrameWriter`,
 built by `Encoder::create`, which fails if its kernels do not build): the
@@ -1472,12 +1474,12 @@ reference store. The transform's forward takes a device block list to
 quantized 16-bit coefficients per block in 3-D zigzag order and a 16-word
 observed mask, left on the device for the writer — and its inverse takes
 them back, each recorded into the caller's `CommandBatch` over device-local
-buffers. The compacted observed list, the sort's two halves,
-coefficient buffer and mask buffer are retained and grow only when a call needs
-more capacity, releasing the old buffer first and taking 1.5x headroom
-(`ensure_device_scratch`); descriptor ranges and transfers use the current
-logical sizes.
-They remain allocated until the transform is destroyed. The per-call staging
+buffers. The forward writes into its caller's buffers, the
+encoder's reference store; the compacted observed list and the sort's two
+halves are retained and grow only when a call needs more capacity, releasing
+the old buffer first and taking 1.5x headroom (`ensure_device_scratch`);
+descriptor ranges and transfers use the current logical sizes.
+They remain allocated until their owner is destroyed. The per-call staging
 inside `CommandBatch` remains transient. The SDF is normalized by
 `trunc_dist` before the transform and the steps are fractions of it, so the
 decoder checks a frame's `trunc_dist` against its grid's before the inverse.
