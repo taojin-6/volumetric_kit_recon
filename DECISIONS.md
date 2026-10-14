@@ -12428,27 +12428,23 @@ candidates for (z, y, x) int32 keys:
 |---|---|---|---|
 | Key | 96 bits, sign bits flipped: 12 digits of 8 bits | each axis less its minimum, at most 21 bits | `coord_less` itself |
 | `extreme_frame`'s int32 extremes | 12 passes | do not fit: a second, full-range path | free |
-| Dispatches | 3 a pass: 36, or 9 at room0 after a min/max readback, one more fence | radix's, a pack kernel and the fallback | `1 + ceil(log2(ceil(N / 256)))`: 8 at room0, 5 at Rafa2's 2,395 blocks |
+| Dispatches | 3 a pass: 36, or 9 at room0 after a min/max readback, one more fence | radix's, a pack kernel and the fallback | a tile pass and one a merge level (`block_lists.hpp`): 8 at room0, 5 at Rafa2's 2,395 blocks |
 | New code | a histogram, a ranking and a 256-counter scan a pass | radix's, and `shaderInt64` or its emulation | two small kernels on `coord_order.glsl` |
 | Work | O(N) a pass | O(N) a pass | O(N log² N): about 2.5 M comparisons at room0, 200 M at a million blocks |
 
-`block_sort_tile.comp` sorts 256 entries a workgroup in shared memory (8 KB
-of the 16 KB Vulkan guarantees), and each level of `block_sort_merge.comp`
-merges sibling runs: a left entry lands at its index plus `lower_bound` in
-the right run, a right entry at its index plus `upper_bound` in the left. So
-ties keep their order, the output is a permutation, and the pass count is
-N's alone, which the host holds. A hash table's keys are unique, so any
-correct sort gives the host's order: every frame's bytes are unchanged. If
-frames reach about a million blocks, a merge-path partition on the same
-searches is the upgrade. The sort reads its input and writes two retained
-buffers of its own (`detail::BlockLists`), so the transform's observed list
-is never rewritten; it records into the forward's batch, and the `..sort`
-row goes. `volume/shaders/coord_order.glsl` holds `vrCoordLess`, the mirror
-of `volume::coord_less`, and `VR_COORD_SEARCH`, which generates the binary
-searches over one array, since GLSL passes no buffer to a function; they end
-within `ceil(log2(count + 1))` probes on any input. The decoder's frame is a
-merge of two sorted lists, and its grid diff searches that frame, so it
-sorts nothing.
+Placing each entry by a search of its sibling run (`block_lists.hpp` has the
+mechanism) keeps ties in order, makes the output a permutation, and fixes the
+pass count by N alone, which the host holds; a tile's two arrays of 256
+entries take 8 KB of the 16 KB of shared memory Vulkan guarantees. A hash
+table's keys are unique, so any correct sort gives the host's order: every
+frame's bytes are unchanged. If frames reach about a million blocks, a
+merge-path partition on the same searches is the upgrade. The sort reads its
+input and writes two retained buffers of its own, so the transform's observed
+list is never rewritten; it records into the forward's batch, and the `..sort`
+row goes. `VR_COORD_SEARCH` (`coord_order.glsl`) generates the searches for
+each array they run over, since GLSL passes no buffer to a function. The
+decoder's frame is a merge of two sorted lists, and its grid diff searches
+that frame, so it sorts nothing.
 
 **Rows 11 and 12 stay the reader's, on the device.** After `rans_decode`,
 `rans_verdict.comp` takes, an invocation a segment, its fault, else -- for a
@@ -12471,33 +12467,27 @@ every decode's batch, a frame of no segments included.
 increase -- the grammar's deltas are strictly positive within a segment, and
 the verdict orders segments -- as the committed reference's do, and row 13
 refuses a tie between the two, so a block's place is the survivors below it
-plus the new blocks below it. `frame_merge.comp` places survivor e at `ranks[e] + lower_bound(new,
-ref[e])`, with sources `{e, e}` for keep, `{e, none}` for skip and
-`{none, e}` for zero, and new block q at `q + ranks[lower_bound(ref,
-new[q])]`, `{none, M + q}`; an intra frame is M = 0. Row 13, a new block on
-a reference block whatever its mode, takes `atomicMin` of q and of e: the
-colliding pairs are monotone, so the two minimums are the pair a walk in
-frame order meets first, which `check_new_block` words as `merge_frame` did.
-On a corrupt frame, refused before anything reads the outputs, writes stay
-below N and every search ends.
+plus the new blocks below it, which `frame_merge.comp` counts from the ranks
+and a binary search (its header has the formulas). Row 13 takes `atomicMin`
+of q and of e: the colliding pairs are monotone, so the two minimums are the
+pair a walk in frame order meets first, which `check_new_block` words as
+`merge_frame` did. On a corrupt frame, refused before anything reads the
+outputs, writes stay below N and every search ends.
 
-**The grid diff: the hash table against the frame.** Two dispatches over one
-binding of the table, quiescent as it is for the inverse, and fetched each
-call, since a resize replaces it: an occupied slot (`vrEntryActive`, which
-the compactions now share) whose coordinate a binary search of the frame
-misses is gone, with its ptr; a frame block `vrFindBlockPtr` does not find
-is missing. Neither list is ordered, since `remove` and `allocate` draw heap
-slots atomically anyway, and the passes are independent, with no flag
-buffer between them. That replaces the decoder's compaction, a fence and a
-read back, and its active-set sort. Gone is at most `num_blocks`, since an
-occupied slot holds one block and `validate` makes slots blocks: 16 bytes a
-slot, 1/128 of the `tsdf` array. Missing is at most N. The grid removes and
-allocates straight from them, through `VoxelBlockGrid::remove` and
+**The grid diff: the hash table against the frame** (`grid_diff.comp`), the
+table quiescent as it is for the inverse and fetched each call, since a resize
+replaces it. Neither list is ordered, since `remove` and `allocate` draw heap
+slots atomically anyway, and its two passes are independent, with no flag
+buffer between them; the slot pass shares `vrEntryActive` with the
+compactions. That replaces the decoder's compaction, a fence and a read back,
+and its active-set sort. Gone is at most `num_blocks`, since an occupied slot
+holds one block and `validate` makes slots blocks: 16 bytes a slot, 1/128 of
+the `tsdf` array. Missing is at most N. The grid removes and allocates
+straight from them, through `VoxelBlockGrid::remove` and
 `VoxelHashMap::allocate`'s device-list overloads (the 2026-10-03
-garbage-collection entry's amendment), with `kRounds` and the failure
-handling as before. The encoder keeps its compaction: its observed filter
-runs a workgroup per listed block, not per slot, and often reuses an
-extract's list.
+garbage-collection entry's amendment), with `kRounds` and the failure handling
+as before. The encoder keeps its compaction: its observed filter runs a
+workgroup per listed block, not per slot, and often reuses an extract's list.
 
 **The store keeps the reference on the device.** Each slot holds its block
 list, and `commit` takes no coordinates. The merge writes the spare's list
@@ -12590,6 +12580,9 @@ entry each way, laid out in an O(N) host loop (`device_frame_writer.cpp`'s
 `TODO(codec)`); a segmented layout on `scan.glsl` is the next PR. The
 encoder's split (C5a) becomes a `BlockLists` pass in the forward's submit, on
 these searches and ranks. Cutting fences further waits for a measurement.
+`volume::BlockList`, `VoxelBlockGrid::block_list` and `check_block_list`
+now have no library caller, only tests; removing them is a breaking volume
+change, its own PR once the user decides.
 
 ## Measured lessons
 

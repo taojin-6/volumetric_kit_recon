@@ -834,15 +834,16 @@ several frusta in one scan, on the device in a list of its own, which
 `check_device_block_subset` accepts until the next frustum compaction
 rewrites it or the map allocates, resizes, removes, clears or moves; fusion
 culls to the scanning cameras with it and marching cubes to the viewing one
-(2026-10-06). A host block list travels as a `BlockList` — pointer, count,
-and the `topology_epoch` it was compacted at, paired by
-`VoxelBlockGrid::block_list` so the three cannot be mispaired. A sorted
-block list is in `coord_less` order (z, then y, then x);
-`volume/shaders/coord_order.glsl` mirrors it for kernels (`vrCoordLess`),
-with the binary searches they run over one. `resize` preserves block indices,
-so per-voxel data survives a grow. `VoxelBlockGrid` composes the map with
-independently-allocated SoA attribute arrays (`tsdf`, `weight`, `color`, …),
-each `num_blocks·voxels_per_block`, so a consumer materialises only what it
+(2026-10-06). `VoxelBlockGrid::block_list` pairs a host block list with its
+count and the `topology_epoch` it was compacted at, as a `BlockList`; no
+library code consumes one, only tests, and its removal is pending (the
+2026-10-13 coordinate entry's **Next**). A sorted block list is in
+`coord_less` order (z, then y, then x); `volume/shaders/coord_order.glsl`
+mirrors it for kernels (`vrCoordLess`), with the binary searches they run
+over one. `resize` preserves block indices, so per-voxel data survives a
+grow. `VoxelBlockGrid` composes the map with independently-allocated SoA
+attribute arrays (`tsdf`, `weight`, `color`, …), each
+`num_blocks·voxels_per_block`, so a consumer materialises only what it
 needs. Every buffer of both is device-local, reached through a
 `CommandBatch`: `create`, `clear` and `remove` zero on the device (`clear`
 and `remove` before any index is freed, `remove` by a kernel that finds
@@ -1386,13 +1387,10 @@ own active list (`compact_active_blocks_on_device`, so an extract's list is
 reused and its own kept for the extract after), keeps the blocks with an
 observed voxel (`DctTransform::observed`, compacted on the device, reading
 back only its count and reject tally), sorts them by (z, y, x) on the device
-(`detail::BlockLists`), transforms them, and writes the frame; the sort, the
-forward and the symbol count share one submit. The sort is a stable
-rank-merge sort on `coord_less` itself: a tile kernel sorts 256 entries
-in shared memory, and each level after it merges pairs of sorted runs, every
-entry placed at its index in its run plus a binary search of its sibling
-run (`coord_order.glsl`), so N entries take `1 + ceil(log2(ceil(N / 256)))` dispatches over all of
-int32. Keys are unique, so the same content gives the same bytes whatever the
+with a stable rank-merge sort on `coord_less` itself, over all of int32
+(`detail::BlockLists`, whose header has the mechanism), transforms them, and
+writes the frame; the sort, the forward and the symbol count share one
+submit. Keys are unique, so the same content gives the same bytes whatever the
 hash table's order. An empty input submits nothing.
 The frame's rANS coding runs on the device (`detail::DeviceFrameWriter`,
 built by `Encoder::create`, which fails if its kernels do not build): the
@@ -1433,12 +1431,10 @@ decodes on the host.
 `Decoder::decode(frame, grid)` leaves the caller's grid holding exactly the
 frame. In the decode's own submit, `detail::BlockLists` merges a P-frame's
 surviving reference blocks with its new ones into the frame's list and each
-block's sources, each block placed by a count -- the survivors below it, from
-the ranks, plus the new blocks below it, by binary search -- and finds row
-13, a new block on a reference block, as the first such pair; then it diffs
-the hash table against the frame's list: an occupied slot a search of the
-list misses is gone, and a frame block the table lacks
-(`vrFindBlockPtr`) is missing. Nothing sorts, and 24 bytes come back. The
+block's sources, finds row 13, a new block on a reference block, and diffs
+the hash table against the frame's list into the blocks the grid lacks
+(missing) and those the frame lacks (gone), by count and binary search (the
+header has the mechanism). Nothing sorts, and 24 bytes come back. The
 grid removes the gone blocks and allocates the missing ones from those
 device lists (`VoxelBlockGrid::remove`, `VoxelHashMap::allocate`), keeps
 shared blocks in their slots, then rewrites every voxel's `tsdf` and
