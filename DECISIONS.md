@@ -10625,8 +10625,9 @@ would be a new decision, landing with its CI leg -- and the core's.
 ### 2026-10-06 — Public API serves a caller: entry points only tests used go, or move into their tests (amends the 2026-07-04 GLM entry).
 
 *Amended 2026-10-13 (the volume block-list entry, below):*
-`VoxelHashMap::diagnostics()`, kept below though only tests called it, goes;
-the rule has no such exception now.
+`VoxelHashMap::diagnostics()`, kept below though only tests called it, goes.
+The other exceptions lie outside the volume tier; that entry's **Next** 5
+audits them.
 
 **The rule.** A public function, type or option has a caller outside the
 tests -- an example, a sibling, the iOS app -- or it goes. A test that needs
@@ -12642,8 +12643,9 @@ reading a mesh model, a camera stream (Orbbec, ARKit) -- and what it reads
 goes straight to the GPU; gfx shows processed results without a copy, and
 they return to the host only to be saved. Control may read back counts and
 verdicts. The volume tier's block lists are processing, so they live on the
-device, and no library code stays that only tests call (the 2026-10-06
-public-API entry, without its exceptions).
+device, and no library code stays that only tests call. Here that
+withdraws the 2026-10-06 public-API entry's `diagnostics()` exception; its
+others lie outside the volume tier (**Next** 5).
 
 **What goes.** `volume::BlockList`, `VoxelBlockGrid::block_list` (both
 overloads) and `VoxelBlockGrid::check_block_list`. Since the coordinate
@@ -12704,9 +12706,11 @@ check what they read by behaviour:
   8-entry buckets fail it.
 - `recon_volume_diagnostics` goes with the API.
 
-The host `HashEntry` and `hash.hpp`'s slot sentinels stay as the table's
-layout, which `entries_buffer_size()` and the GLSL mirrors keep to; no host
-code reads a slot.
+The host `HashEntry`, `hash.hpp`'s slot sentinels and `hash_bucket` with
+its primes stay, as the table's layout and hash that the GLSL mirrors;
+`entries_buffer_size()` sizes the table by `HashEntry`, and only tests call
+`hash_bucket`. No host code reads a slot. Whether these mirrors stay public
+or move into the tests awaits the user's decision.
 
 **What stays, and why.** The volume tier's other host entry points, with
 their callers in `src/`, `include/` and `examples/` (and ios's, at its
@@ -12735,6 +12739,11 @@ a sibling:
    I/O.
 4. ios, when it re-pins: the compute smoke test uploads its eight blocks,
    and the scanner's survey and stamps follow item 1.
+5. The 2026-10-06 public-API entry's other exceptions, outside the volume
+   tier, are audited under this rule: the host `TextureView` `texture`
+   overloads, `FrequencyTable::empty`, and the camera tier's
+   `distort_rational` and Rodrigues helpers, which calib now calls
+   (`examples/01_project_point/main.cpp:44`, `cv_pose.cpp:40`).
 
 **Verified** on an Apple M5 Max, macOS, Release with warnings as errors,
 Orbbec, FFmpeg and Assimp: all 96 tests pass under
