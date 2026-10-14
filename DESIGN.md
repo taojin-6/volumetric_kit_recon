@@ -1362,10 +1362,9 @@ decoding.
 ### codec
 
 The intra codec is implemented, and it codes and decodes on the device with
-no host fallback (2026-10-13). Three host steps remain, each a
-`TODO(codec)`: the encoder sorts its observed blocks by coordinate, read
-back and uploaded again, and scans each entry's coder steps into the
-segments' offsets; the `Decoder` merges the grid's active set with the
+no host fallback (2026-10-13). Two host steps remain, each a
+`TODO(codec)`: the encoder scans each entry's coder steps into the
+segments' offsets, and the `Decoder` merges the grid's active set with the
 frame's blocks into its remove and allocate lists. The CPU rANS coder is the
 tests' oracle, under `tests/` (`codec_oracle*.hpp`), which pins the format's
 bytes. Quantization is
@@ -1382,17 +1381,17 @@ is `CodecParams`, **`Encoder`** (`encoder.hpp`) and **`Decoder`** with
 `read_frame_info` (`decoder.hpp`). `Encoder::encode(grid)` takes the map's
 own active list (`compact_active_blocks_on_device`, so an extract's list is
 reused and its own kept for the extract after), keeps the blocks with an
-observed voxel (`DctTransform::observed`, compacted on the device), sorts them by
-(z, y, x), transforms them, and writes the frame. The same content gives
-the same bytes whatever the hash table's order. The filter reads back its count
-and rejection tally together with a predicted prefix of the compacted list:
-the last observed count plus 25%, bounded by the current input count; the full
-input count when there is no previous non-zero count. Only an outgrown prediction needs a second
-transfer-only submit for the tail. It downloads no per-input flags. For A input
-blocks, N observed blocks and a predicted prefix G, readback is
-`8 + 16*max(G,N)` bytes, at most `8 + 16*A`, instead of `4 + 20*A`.
-An empty input submits nothing. Append order is unspecified; the CPU coordinate
-sort is still what makes the frame deterministic.
+observed voxel (`DctTransform::observed`, compacted on the device, reading
+back only its count and reject tally), sorts them by (z, y, x) on the device
+(`detail::BlockLists`), transforms them, and writes the frame; the sort, the
+forward and the symbol count share one submit. The sort is a stable
+rank-merge sort on `coord_less` itself, which `vrCoordLess`
+(`volume/shaders/coord_order.glsl`) mirrors: a tile kernel sorts 256 entries
+in shared memory, and each level after it merges pairs of sorted runs, every
+entry placed at its index in its run plus a binary search of its sibling
+run, so N entries take `1 + ceil(log2(ceil(N / 256)))` dispatches over all of
+int32. Keys are unique, so the same content gives the same bytes whatever the
+hash table's order. An empty input submits nothing.
 The frame's rANS coding runs on the device (`detail::DeviceFrameWriter`,
 built by `Encoder::create`, which fails if its kernels do not build): the
 forward output stays in VRAM, the forward's batch also counts every model's
@@ -1453,12 +1452,13 @@ payload alone (the 2026-10-13 entry). Both classes report `StageMetrics`
 (`"codec encode"` / `"codec decode"`). Their breakdown rows share no name
 except the map's own `"  ..active set"`. The private pieces under
 `src/volumetric_kit/recon/codec/` are the `DctTransform`, the rANS tables,
-the frame's layout and checks, its device coders and the reference store.
-The transform's forward takes a `volume::BlockList` to `ResidentBlocks` — K
+the frame's layout and checks, its device coders, the block lists and the
+reference store. The transform's forward takes a device block list to
+`ResidentBlocks` — K
 quantized 16-bit coefficients per block in 3-D zigzag order and a 16-word
 observed mask, left on the device for the writer — and its inverse takes
 them back, each recorded into the caller's `CommandBatch` over device-local
-buffers. The compacted observed list, uploaded sorted list,
+buffers. The compacted observed list, the sort's two halves,
 coefficient buffer and mask buffer are retained and grow only when a call needs
 more capacity, releasing the old buffer first and taking 1.5x headroom
 (`ensure_device_scratch`); descriptor ranges and transfers use the current
@@ -1477,9 +1477,9 @@ overflow to infinity. The forward
 never reads an unobserved voxel's `tsdf`: it fills each one from the nearest
 observed voxel along x, then y, then z, since a fused block's zeros there
 are a step K = 32 cannot hold, and they decoded a partially observed block
-with 2.8x the error. The transform refuses any block size but 8; a list
-`VoxelBlockGrid::check_block_list` refuses, the O(1) checks it shares with
-`mesh`; and, on the device with one hash probe per block, any entry whose
+with 2.8x the error. The transform refuses any block size but 8; more
+entries than the grid's heap, or a list buffer too small for them; and, on
+the device with one hash probe per block, any entry whose
 coord the grid does not hold, which the inverse then writes nothing into.
 Each block is found by that probe and its ptr never read, so the decoder
 lists blocks it has just allocated by coordinate alone. "Observed" is

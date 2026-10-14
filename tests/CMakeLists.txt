@@ -735,6 +735,17 @@ target_link_libraries(
 vr_target_warnings(recon_codec_inter_test)
 add_test(NAME recon_codec_inter COMMAND recon_codec_inter_test)
 
+# codec tier, the block lists on the device: the encoder's sort against
+# std::stable_sort, over all of int32 and every kind of tie, with its input
+# untouched, and its refusals. Internal headers through the oracle. Skips
+# without a device.
+add_executable(recon_codec_block_lists_test codec_block_lists_test.cpp)
+target_link_libraries(
+  recon_codec_block_lists_test PRIVATE recon_codec_oracle Vulkan::Vulkan
+                                       volumetric_kit::core_test_policy)
+vr_target_warnings(recon_codec_block_lists_test)
+add_test(NAME recon_codec_block_lists COMMAND recon_codec_block_lists_test)
+
 # codec tier, entropy coding: the table normalization and the CPU oracle's rANS
 # coder (round trips, a probability-one symbol's zero cost, size against the
 # ideal code length, truncation and bit flips), the v3 frame through the oracle

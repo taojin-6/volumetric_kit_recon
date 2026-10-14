@@ -273,7 +273,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   transform finds every block by its coordinate, one `CommandBatch` a call
   over device memory; the encoder takes the map's own list and drops
   never-observed blocks before the transform; and the decoder stamps only
-  what it changes (amends the `changed`-stamp entry above).
+  what it changes (amends the `changed`-stamp entry above). *Amended
+  2026-10-13:* the coordinate sort runs on the device too.
 - [**2026-10-02**](#2026-10-02--shared-instructions-live-in-a-concise-agentsmd-claudemd-imports-it-designmd-holds-implementation-detail-and-decisionsmd-holds-the-decision-index-and-rationale) —
   Shared instructions live in a concise AGENTS.md; CLAUDE.md imports it, DESIGN.md holds implementation detail, and DECISIONS.md holds the decision index and rationale.
 - [**2026-10-02**](#2026-10-02--gpu-regressions-guard-span-ownership-chroma-placement-descriptor-aliases-invalid-depth-taps-and-zero-near-visibility) —
@@ -309,6 +310,8 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-03**](#2026-10-03--compact-the-codecs-observed-list-on-the-device-and-retain-transform-scratch) —
   Compact the codec's observed list on the device, predict its readback prefix
   to avoid an unconditional extra fence, and retain transform scratch.
+  *Amended 2026-10-13:* the list stays on the device; only its count comes
+  back.
 - [**2026-10-03**](#2026-10-03--codec-mesh-evaluation-consumes-the-shared-io-loader) —
   The codec example uses Assimp-backed asset loading and shared PLY export;
   height normalization and topology checks remain example policy.
@@ -502,6 +505,10 @@ entries relevant to your task; later amendments supersede earlier rules.
   the device as decoded and replaced only when a decode succeeds; one integer
   apply makes every decoded frame; and it decodes on the device alone.
   `FrameType` and `FrameInfo::type` are public.
+- [**2026-10-13**](#2026-10-13--the-encoder-sorts-its-blocks-on-the-device-a-stable-rank-merge-sort-on-coord_less-in-the-forwards-submit-and-only-the-observed-count-crosses-the-bus-amends-the-2026-10-03-observed-list-and-2026-10-01-codec-review-entries) —
+  The encoder sorts its blocks on the device, a stable rank-merge sort on
+  `coord_less` in the forward's submit; only the observed count crosses the
+  bus.
 
 ## Decision record
 
@@ -8701,6 +8708,9 @@ call, which `Decoder` already forbids.
 *Amended 2026-10-03:* the observed kernel now appends a compact list on the
 device, with a predicted-prefix readback instead of the full input and flags;
 see the dated entry below. The coordinate sort and CPU entropy boundary stay.
+*Amended 2026-10-13:* neither stays; the coder runs on the device alone (the
+2026-10-03 encoding entry's amendment), and so does the sort (the 2026-10-13
+encoder-sort entry).
 *Amended 2026-10-06 (below):* a fuse culls to its frusta and leaves no full
 list, so the encoder takes back an extract's list, and an encode straight
 after a fuse compacts the full list itself.
@@ -9378,6 +9388,10 @@ winding preservation, and OBJ/topology refusals. No discrete GPU or new
 sanitizer run was performed for this change.
 
 ### 2026-10-03 — Compact the codec's observed list on the device and retain transform scratch.
+
+*Amended 2026-10-13 (the encoder-sort entry, below):* the encoder sorts the
+list on the device, so it never leaves it: the filter reads back its count
+and reject tally alone, and the predicted prefix and its tail submit go.
 
 The GPU memory audit found two avoidable costs inside an otherwise staged
 codec. The observed filter downloaded every allocated `BlockIndex` (16 bytes)
@@ -12365,6 +12379,52 @@ each failed one of the two: a carry between the halves, an unmasked pad, OR
 for XOR, no slot swap at commit, the wrong bytes hashed, a commit after a
 failed allocation, the segment limit off by one or doubled, and the reader's
 verdict ignored. Not run: the RTX 5090.
+
+### 2026-10-13 — The encoder sorts its blocks on the device, a stable rank-merge sort on `coord_less` in the forward's submit, and only the observed count crosses the bus (amends the 2026-10-03 observed-list and 2026-10-01 codec-review entries).
+
+The rule the 2026-10-03 decoding entry's amendment records -- only I/O and
+control cross the bus -- applied to the encoder's coordinate step. The
+observed filter appends in hash-table order, so the frame's (z, y, x) order
+takes a sort. On room0 at 1 cm (21,771 blocks a frame) the host's was
+1.03 ms of a 3.87 ms encode (the `..sort` row, the median of six), and the
+list crossed the bus both ways: a predicted prefix of up to 435 KB down, and
+the sorted 348 KB up.
+
+**The sort.** Three candidates for (z, y, x) int32 keys:
+
+| | Full-range LSD radix | Packed 64-bit keys | Stable rank-merge sort (chosen) |
+|---|---|---|---|
+| Key | 96 bits, sign bits flipped: 12 digits of 8 bits | each axis less its minimum, at most 21 bits | `coord_less` itself |
+| `extreme_frame`'s int32 extremes | 12 passes | do not fit: a second, full-range path | free |
+| Dispatches | 3 a pass: 36, or 9 at room0 after a min/max readback, one more fence | radix's, a pack kernel and the fallback | `1 + ceil(log2(ceil(N / 256)))`: 8 at room0, 5 at Rafa2's 2,395 blocks |
+| New code | a histogram, a ranking and a 256-counter scan a pass | radix's, and `shaderInt64` or its emulation | two small kernels on `coord_order.glsl` |
+| Work | O(N) a pass | O(N) a pass | O(N log² N): about 2.5 M comparisons at room0, 200 M at a million blocks |
+
+`block_sort_tile.comp` sorts 256 entries a workgroup in shared memory (8 KB
+of the 16 KB Vulkan guarantees), and each level of `block_sort_merge.comp`
+merges sibling runs: a left entry lands at its index plus `lower_bound` in
+the right run, a right entry at its index plus `upper_bound` in the left. So
+ties keep their order, the output is a permutation, and the pass count is
+N's alone, which the host holds. A hash table's keys are unique, so any
+correct sort gives the host's order: every frame's bytes are unchanged. If
+frames reach about a million blocks, a merge-path partition on the same
+searches is the upgrade. The sort reads its input and writes two retained
+buffers of its own (`detail::BlockLists`), so the transform's observed list
+is never rewritten.
+
+`volume/shaders/coord_order.glsl` holds `vrCoordLess`, the mirror of
+`volume::coord_less`, and `VR_COORD_SEARCH`, which generates the binary
+searches over one array, since GLSL passes no buffer to a function; they end
+within `ceil(log2(count + 1))` probes on any input. The one-workgroup scan
+`rans_scan.comp` ran moves to `codec/shaders/scan.glsl` (`vrScanChunk`), its
+outputs unchanged, for the next kernel that scans.
+
+**What crosses.** `DctTransform::observed` reads back its count and reject
+tally alone, 8 bytes; `record_forward` takes a device list and its count, and
+its host list and upload go. The sort records into the forward's batch, so
+the `..sort` row goes, its device time inside `..forward`, and so does the
+tail submit an outgrown prefix took. About 0.8 MB a room0 frame no longer
+crosses the bus.
 
 ## Measured lessons
 
