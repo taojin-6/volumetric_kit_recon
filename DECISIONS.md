@@ -138,7 +138,8 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-08-12**](#2026-08-12--meshing-a-cameras-view-is-a-caller-supplied-block-list-not-a-camera-the-mesh-tier-holds-and-it-stays-apart-from-incremental-extraction-rather-than-stacking-with-it) —
   Meshing a camera's view is a caller-supplied block list, not a camera the mesh
   tier holds; and it stays apart from incremental extraction rather than
-  stacking with it. Incremental extraction went on 2026-10-06.
+  stacking with it. Incremental extraction went on 2026-10-06. *Amended
+  2026-10-13:* the list is a `DeviceBlockList`; the host `BlockList` is gone.
 - [**2026-08-30**](#2026-08-30--a-profiler-label-belongs-to-the-kernel-not-to-the-timed-span-vk_ext_debug_utils-is-requested-independently-of-validation-and-the-instance-extension-is-declared-across-the-adopt-seam) —
   A profiler label belongs to the kernel, not to the timed span;
   `VK_EXT_debug_utils` is requested independently of validation, and the
@@ -167,7 +168,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   The TSDF codec is one `codec` tier over `volume`, with separate `Encoder` and
   `Decoder` classes: a geometry-only intra frame of per-block DCT coefficients,
   an observed-voxel mask and sorted block coordinates, entropy-coded by chunked
-  static-table rANS.
+  static-table rANS. *Amended 2026-10-13:* `check_block_list` is gone.
 - [**2026-09-27**](#2026-09-27--the-v1-frame-is-independent-rans-segments-of-sorted-blocks-every-integer-a-class-plus-raw-bits-behind-fixed-per-frame-tables-and-a-section-table-the-decoders-end-check-is-for-consistency-not-integrity-amends-the-2026-09-26-entrys-interleaved-lanes) —
   The v1 frame is independent rANS segments of sorted blocks, every integer a
   class plus raw bits, behind fixed per-frame tables and a section table; the
@@ -405,7 +406,8 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-06**](#2026-10-06--marching-cubes-meshes-what-the-viewing-camera-sees-an-extract-over-the-device-frusta-list-the-viewers-re-meshing-on-a-fuse-or-a-view-change-and-a-culled-pass-records-its-density-amends-the-2026-08-12-view-meshing-entry-and-the-2026-10-06-incremental-removal-and-fusion-culling-entries) —
   Marching cubes meshes what the viewing camera sees: an extract over the
   device frusta list, the viewers re-meshing on a fuse or a view change, and
-  a culled pass records its density.
+  a culled pass records its density. *Amended 2026-10-13:* the host
+  `BlockList` it kept for the codec is gone.
 - [**2026-10-06**](#2026-10-06--a-sensor-array-groups-its-frames-by-trigger-only-syncmode-and-sequence-grouping-go-amends-the-2026-10-06-sensorarray-entry) —
   A sensor array groups its frames by trigger only: `SyncMode` and sequence
   grouping go.
@@ -512,6 +514,10 @@ entries relevant to your task; later amendments supersede earlier rules.
   The codec's coordinate work runs on the device: the encoder sorts with a
   stable rank-merge sort, and the decoder judges, merges and diffs by binary
   search, never sorting; only counts and verdicts cross the bus.
+  *Amended 2026-10-13:* the host `BlockList` it left without a caller goes.
+- [**2026-10-13**](#2026-10-13--block-lists-reach-the-volume-tier-on-the-device-alone-a-host-list-entry-point-that-only-tests-called-goes-amends-the-2026-08-12-view-meshing-2026-09-26-codec-2026-10-06-view-culling-and-2026-10-13-coordinate-entries) —
+  Block lists reach the volume tier on the device alone; a host-list entry
+  point that only tests called goes.
 
 ## Decision record
 
@@ -3383,6 +3389,9 @@ apart. The culled overload and its density guard stay.
 `TsdfIntegrator::integrate` culls to the scanning cameras' frusta, on the
 device and in one scan for a rig's set, which the header had claimed and no
 code did.
+*Amended 2026-10-13 (the volume block-list entry, below):* the host `BlockList`
+this entry gave a job, and `VoxelBlockGrid::block_list`, which stamped its
+epoch, go; `DeviceBlockList` carries the same epoch.
 
 A scanning device renders a small part of a large volume — the iPad case, where
 the viewport shows a room corner while the map holds the whole floor. Meshing
@@ -4391,6 +4400,10 @@ yet on one clock. That, HEVC decoding, GPU pre-processing and the hardware
 registration are `TODO(sensor)`s in `orbbec_capture.cpp`; Windows is unbuilt.
 
 ### 2026-09-26 — The TSDF codec is one `codec` tier over `volume`, with separate `Encoder` and `Decoder` classes: a geometry-only intra frame of per-block DCT coefficients, an observed-voxel mask and sorted block coordinates, entropy-coded by chunked static-table rANS.
+
+*Amended 2026-10-13 (the volume block-list entry, below):* the transform takes a
+device list, and `VoxelBlockGrid::check_block_list` and `block_list`'s
+deleted rvalue overload, added here, are gone with `BlockList`.
 
 The roadmap listed two later tiers here, `compress` (DCT) and `codec`/`stream`, a split
 that came from the prior engine: an `ISdfCompressor` family for one volume and a
@@ -10791,6 +10804,9 @@ layer's synchronization validation.
 
 ### 2026-10-06 — Marching cubes meshes what the viewing camera sees: an extract over the device frusta list, the viewers re-meshing on a fuse or a view change, and a culled pass records its density (amends the 2026-08-12 view-meshing entry and the 2026-10-06 incremental-removal and fusion-culling entries).
 
+*Amended 2026-10-13 (the volume block-list entry, below):* `volume::BlockList`,
+`block_list` and `check_block_list`, kept here for the codec, go.
+
 **The rule.** `MarchingCubes::extract_device(grid, iso, const
 volume::DeviceBlockList&, timings)` meshes exactly the listed blocks, binding
 the list in place as the whole-map path binds the map's own; only its count
@@ -12407,6 +12423,9 @@ verdict ignored. Not run: the RTX 5090.
 
 ### 2026-10-13 — The codec's coordinate work runs on the device: the encoder sorts its blocks with a stable rank-merge sort on `coord_less`, and the decoder judges, merges and diffs them by count and binary search, never sorting; only counts and verdicts cross the bus (amends the 2026-10-13 decoder, 2026-10-12 P-frame, 2026-10-03 observed-list and garbage-collection, and 2026-10-01 codec-review entries).
 
+*Amended 2026-10-13 (the volume block-list entry, below):* the host
+`BlockList`, `block_list` and `check_block_list` that **Next** names go.
+
 The rule the 2026-10-03 decoding entry's amendment records -- only I/O and
 control cross the bus -- applied to the codec's work on block coordinates.
 Before, the encoder read its observed list back, sorted it and uploaded it
@@ -12583,6 +12602,31 @@ these searches and ranks. Cutting fences further waits for a measurement.
 `volume::BlockList`, `VoxelBlockGrid::block_list` and `check_block_list`
 now have no library caller, only tests; removing them is a breaking volume
 change, its own PR once the user decides.
+
+### 2026-10-13 — Block lists reach the volume tier on the device alone; a host-list entry point that only tests called goes (amends the 2026-08-12 view-meshing, 2026-09-26 codec, 2026-10-06 view-culling and 2026-10-13 coordinate entries).
+
+**The rule** is the user's (2026-10-13): only I/O takes a host path --
+reading a mesh model, a camera stream (Orbbec, ARKit) -- and what it reads
+goes straight to the GPU; gfx shows processed results without a copy, and
+they return to the host only to be saved. Control may read back counts and
+verdicts. The volume tier's block lists are processing, so they live on the
+device, and no library code stays that only tests call (the 2026-10-06
+public-API entry, without its exceptions).
+
+**What goes.** `volume::BlockList`, `VoxelBlockGrid::block_list` (both
+overloads) and `VoxelBlockGrid::check_block_list`. Since the coordinate
+entry nothing in `src/`, `include/` or `examples/` called them, nor in
+ios, gfx or calib (`git grep` on each `origin/main`): the mesher binds a
+`DeviceBlockList` since 2026-10-06 and the codec its own device lists. A
+`DeviceBlockList` is the one block list, stamped with the epoch, a
+compaction serial and the heap's free count, which
+`check_device_block_list` and `check_device_block_subset` check. The codec
+oracle's `forward` and `inverse` took a `BlockList` only to carry a pointer
+and a count; they take a `std::vector<BlockIndex>`, a test's own host list,
+and upload it as the device list the transform binds.
+`recon_codec_dct` keeps every list refusal, now on the device list: none
+with a count, one shorter than the count, one not a storage buffer, more
+blocks than the heap, and a list compacted before a remove.
 
 ## Measured lessons
 

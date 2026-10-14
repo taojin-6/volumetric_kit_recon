@@ -834,14 +834,12 @@ several frusta in one scan, on the device in a list of its own, which
 `check_device_block_subset` accepts until the next frustum compaction
 rewrites it or the map allocates, resizes, removes, clears or moves; fusion
 culls to the scanning cameras with it and marching cubes to the viewing one
-(2026-10-06). `VoxelBlockGrid::block_list` pairs a host block list with its
-count and the `topology_epoch` it was compacted at, as a `BlockList`; no
-library code consumes one, only tests, and its removal is pending (the
-2026-10-13 coordinate entry's **Next**). A sorted block list is in
-`coord_less` order (z, then y, then x); `volume/shaders/coord_order.glsl`
-mirrors it for kernels (`vrCoordLess`), with the binary searches they run
-over one. `resize` preserves block indices, so per-voxel data survives a
-grow. `VoxelBlockGrid` composes the map with independently-allocated SoA
+(2026-10-06). A block list is a `DeviceBlockList`, on the device
+(2026-10-13). A sorted block list is in `coord_less` order (z, then y,
+then x); `volume/shaders/coord_order.glsl` mirrors it for kernels
+(`vrCoordLess`), with the binary searches they run over one. `resize`
+preserves block indices, so per-voxel data survives a grow.
+`VoxelBlockGrid` composes the map with independently-allocated SoA
 attribute arrays (`tsdf`, `weight`, `color`, …), each
 `num_blocks·voxels_per_block`, so a consumer materialises only what it
 needs. Every buffer of both is device-local, reached through a
@@ -870,7 +868,7 @@ none.
 `topology_epoch()` lives on the *map* — the object that frees a block
 index — and is a globally unique token re-drawn at `create`, at every
 `clear` and at every `remove` that accepts its input, never at `resize`: a
-compacted `BlockList` anchors on it, so no path may free an index without
+`DeviceBlockList` anchors on it, so no path may free an index without
 moving it and no two grids may ever share a value. Host `diagnostics()` scans occupancy;
 `load_factor()` is the constant-time read a per-frame caller can afford (a
 host copy of the heap counter, read back by every round that moves it, which

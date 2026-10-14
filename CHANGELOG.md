@@ -333,6 +333,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   decoders' VideoToolbox pictures go through it. Test:
   `recon_sensor_apple_pixel_buffer_importer`.
 
+### Removed
+
+- `volume`: **the host block list** (BREAKING): `BlockList`,
+  `VoxelBlockGrid::block_list` (both overloads) and
+  `VoxelBlockGrid::check_block_list`. Nothing in recon, ios, gfx or calib
+  used them; a block list is a `DeviceBlockList`. Migrating: compact with
+  `compact_active_blocks_on_device` or
+  `compact_active_blocks_in_frusta_on_device`, and check the list with
+  `check_device_block_list` or `check_device_block_subset`. Tests:
+  `recon_codec_dct`, `recon_codec_inter`.
+
 ### Changed
 
 - `codec`: **one internal frame API for every frame type.** `detail::Frame`
