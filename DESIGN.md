@@ -1367,8 +1367,9 @@ decoding.
 
 ### codec
 
-The intra codec is implemented, and it codes and decodes on the device alone
-(2026-10-13): the host does the I/O around it (a frame's bytes, and their
+The codec is implemented, intra frames and P-frames (frame type 1,
+experimental until golden P-frames freeze it), and it codes and decodes on
+the device alone (2026-10-13): the host does the I/O around it (a frame's bytes, and their
 hash) and the control (a frame's header, sections and tables, and small
 counts and status words read back). The CPU rANS coder is the tests' oracle,
 under `tests/` (`codec_oracle*.hpp`), which pins the format's bytes.
@@ -1389,11 +1390,29 @@ observed voxel (`DctTransform::observed`, compacted on the device, reading
 back only its count and reject tally), sorts them by (z, y, x) on the device
 with a stable rank-merge sort on `coord_less` itself, over all of int32
 (`detail::BlockLists`, whose header has the mechanism), transforms them into
-`detail::ReferenceStore`'s spare, the sorted list copied beside them -- the
-frame a decoder will hold, which the encoder holds too once `encode`
-returns it -- and writes the frame; the sort, the forward, the symbol count
-and the step layout share one submit. Keys are unique, so the same content gives the same bytes
+the reference store's spare (below), the sorted list copied beside them, and
+writes the frame; the sort, the forward, the symbol count and the step layout
+share one submit. Keys are unique, so the same content gives the same bytes
 whatever the hash table's order. An empty input submits nothing.
+At `EncoderConfig::intra_period` N above 1 (default 1, 0 refused) the
+`Encoder` writes P-frames (the 2026-10-14 entry): an I-frame first, then
+every N coded frames, after `force_intra()`, when the grid's `voxel_size` or
+`trunc_dist` is not the reference's (`coding_difference`, the writers' and
+reader's rule), and when the reference holds no block; a P-frame otherwise,
+against the frame `encode` returned last. Its reference is what the decoder
+will hold of that frame: the forward's q and masks and the sorted list, left
+in `detail::ReferenceStore`'s spare and swapped in when `encode` returns the
+frame, so a refusal keeps the reference and the period's count. In the
+forward's submit, `inter_diff.comp` splits the frame against the reference
+and codes it, an invocation an entry: each reference entry finds its block
+by binary search (remove, skip when every word is equal, else keep or zero),
+`survivor_ranks.comp` counts the survivors, and each block the reference
+lacks takes its place among the new blocks from those ranks. A residual of
+−32768 codes zero, and so does a block whose target payload a static price
+(`emit_payload` walked at `bit_length + 1` bits a symbol, 8 a byte symbol,
+plus raw bits) puts strictly below its residual's. Only the device knows the
+new blocks' count, so a P-frame's symbols are counted in a second submit,
+at `kDefaultUpdateSize` entries an update segment.
 The frame's rANS coding runs on the device (`detail::DeviceFrameWriter`,
 built by `Encoder::create`, which fails if its kernels do not build): the
 forward output stays in VRAM, the forward's batch also counts every model's

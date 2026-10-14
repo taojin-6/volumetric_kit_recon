@@ -721,13 +721,14 @@ target_link_libraries(
 vr_target_warnings(recon_codec_device_frame_test)
 add_test(NAME recon_codec_device_frame COMMAND recon_codec_device_frame_test)
 
-# codec tier, decoding on the device: the reference store's apply against plain
+# codec tier, P-frames on the device: the reference store's apply against plain
 # uint16 arithmetic, and the Decoder's frames -- the Encoder's, and I-then-P
 # chains -- leaving the grid as the CPU oracle's decode of the same content
 # does, bit for bit, with NotFound, a segment longer than the format allows, the
-# refusals and failures that keep the reference, and moves. Internal headers
-# through the oracle (the public decoder test stays public-only). Skips without
-# a device.
+# refusals and failures that keep the reference, and moves; and the Encoder's
+# P-frames, the CPU oracle's bytes, with the diff's every choice and refusal.
+# Internal headers through the oracle (the public decoder test stays
+# public-only). Skips without a device.
 add_executable(recon_codec_inter_test codec_inter_test.cpp)
 target_link_libraries(
   recon_codec_inter_test PRIVATE recon_codec_oracle Vulkan::Vulkan
@@ -779,13 +780,14 @@ endforeach()
 
 # codec tier, public API: the Encoder (an empty grid, the CPU oracle's bytes,
 # independent of the hash table's order, unobserved blocks left out, its rows,
-# refusals, moves) and the Decoder with the codec end to end -- a decoded grid
-# within the orthonormal bound of its source, meshing to the analytic sphere it
-# came from, frame after frame into one grid, untouched on every early refusal,
-# and OutOfMemory that a resize recovers. Public headers only, plus the shared
-# codec_fixture.hpp and the oracle's public-typed codec_oracle_encode.hpp; the
-# decoder test links recon_mesh, which the tier may not. Both skip with no
-# device.
+# refusals, moves, and the rules for an I-frame or a P-frame) and the Decoder
+# with the codec end to end -- a decoded grid within the orthonormal bound of
+# its source, meshing to the analytic sphere it came from, frame after frame
+# into one grid, untouched on every early refusal, OutOfMemory that a resize
+# recovers, and P-frame chains decoding to the all-intra chain's grids. Public
+# headers only, plus the shared codec_fixture.hpp and the oracle's public-typed
+# codec_oracle_encode.hpp; the decoder test links recon_mesh, which the tier may
+# not. Both skip with no device.
 add_executable(recon_codec_encoder_test codec_encoder_test.cpp)
 target_link_libraries(
   recon_codec_encoder_test PRIVATE recon_codec_oracle Vulkan::Vulkan
