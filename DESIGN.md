@@ -834,14 +834,12 @@ several frusta in one scan, on the device in a list of its own, which
 `check_device_block_subset` accepts until the next frustum compaction
 rewrites it or the map allocates, resizes, removes, clears or moves; fusion
 culls to the scanning cameras with it and marching cubes to the viewing one
-(2026-10-06). `VoxelBlockGrid::block_list` pairs a host block list with its
-count and the `topology_epoch` it was compacted at, as a `BlockList`; no
-library code consumes one, only tests, and its removal is pending (the
-2026-10-13 coordinate entry's **Next**). A sorted block list is in
-`coord_less` order (z, then y, then x); `volume/shaders/coord_order.glsl`
-mirrors it for kernels (`vrCoordLess`), with the binary searches they run
-over one. `resize` preserves block indices, so per-voxel data survives a
-grow. `VoxelBlockGrid` composes the map with independently-allocated SoA
+(2026-10-06). A block list is a `DeviceBlockList`, on the device
+(2026-10-13). A sorted block list is in `coord_less` order (z, then y,
+then x); `volume/shaders/coord_order.glsl` mirrors it for kernels
+(`vrCoordLess`), with the binary searches they run over one. `resize`
+preserves block indices, so per-voxel data survives a grow.
+`VoxelBlockGrid` composes the map with independently-allocated SoA
 attribute arrays (`tsdf`, `weight`, `color`, …), each
 `num_blocks·voxels_per_block`, so a consumer materialises only what it
 needs. Every buffer of both is device-local, reached through a
@@ -850,13 +848,12 @@ and `remove` before any index is freed, `remove` by a kernel that finds
 each coord's block itself, so its cost is the count's, not the grid's),
 `resize` copies there, a call's
 inputs are uploaded in its first round, and a round reads back its counts.
-`VoxelHashMap::allocate` and `remove`, and `VoxelBlockGrid::remove`, each
-take a device buffer of `BlockIndex` too, bound where its producer wrote it,
-with the host overload's checks, rounds and failure split; the grid's zeroes
-the listed blocks, then frees them through the map's, two submits. One body
-serves both grid overloads and garbage collection, so the stale-block list
-stays on the GPU through deletion; only the stale and retry counts reach the
-host, and a host list is staged once for both halves.
+`VoxelHashMap::allocate` and `remove`, and `VoxelBlockGrid::remove`, take
+a device buffer of `BlockIndex`, bound where its producer wrote it; a test
+uploads its own coordinates first (`tests/device_blocks.hpp`). The grid's
+zeroes the listed blocks, then frees them through the map's, two submits.
+One body serves it and garbage collection, so the stale-block list stays on
+the GPU through deletion; only the stale and retry counts reach the host.
 A compaction still reads its list back, in the count's own submit while the
 set stays within a quarter past its last count (the 2026-09-28 residency
 decision), except `compact_active_blocks_on_device`'s: its
@@ -870,13 +867,13 @@ none.
 `topology_epoch()` lives on the *map* — the object that frees a block
 index — and is a globally unique token re-drawn at `create`, at every
 `clear` and at every `remove` that accepts its input, never at `resize`: a
-compacted `BlockList` anchors on it, so no path may free an index without
-moving it and no two grids may ever share a value. Host `diagnostics()` scans occupancy;
-`load_factor()` is the constant-time read a per-frame caller can afford (a
-host copy of the heap counter, read back by every round that moves it, which
-`diagnostics()` checks against the device's own), and
-`kGrowThreshold` is the occupancy it says to grow at — named here so a UI or
-an embedder cannot draw a ceiling that disagrees with it.
+`DeviceBlockList` anchors on it, so no path may free an index without
+moving it and no two grids may ever share a value. `load_factor()` is the
+occupancy read a per-frame caller can afford (a host copy of the heap
+counter, read back by every round that moves it), and `kGrowThreshold` is
+the occupancy it says to grow at — named here so a UI or an embedder cannot
+draw a ceiling that disagrees with it. No host call reads the table back;
+a kernel binds `entries_buffer()` (2026-10-13).
 `grow_grid` centralizes the growth arithmetic: double, or reach a larger
 requested minimum, within `VoxelBlockGrid::max_num_buckets` (block pointers
 within int32, each attribute array within one binding). It retains no policy
