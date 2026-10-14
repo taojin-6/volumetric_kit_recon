@@ -1622,28 +1622,24 @@ The image and PLY backends use the existing pinned stb and tinyply sources,
 now private implementation dependencies of the installed I/O library.
 
 `io/mesh_normalization.hpp`, in `recon_io`, holds opt-in helpers for a caller
-that knows its mesh's unit or up direction; nothing in recon calls them.
-They work on one mesh or a temporal sequence alike:
+that knows its mesh's unit or up direction; nothing in recon calls them. They
+serve one mesh or a temporal sequence alike:
 
-- `up_axes` is the proper rotation taking a head-up direction to +Y: x is
-  the unit `up × r`, with r = +Z unless `|up.z| >= 0.9`, then +X, and
-  `z = x × up`.
-- `mesh_bounds` measures positions along those axes, and `extend_bounds`
-  grows the bounds by another frame. The union is exact and order-free, so
-  a sequence is measured one frame in memory at a time.
-- `fit_transform` scales the bounds' extent along up to a height in metres;
-  `unit_transform` takes the scale as given. Both centre X/Z and put the
-  lowest Y at zero. A `MeshTransform` holds the axes, the origin (rotated
-  frame, source units) and `metres_per_unit`.
-- `apply_transform` maps positions in double precision and rounds to float.
-  It refuses a non-finite position, an output past float range, and a
-  height along up that collapses at float precision, leaving the positions
-  unchanged. One transform applied to every frame keeps a still point
-  still.
-- `audit_mesh_topology` counts boundary, non-manifold and inconsistently
-  oriented edges, degenerate triangles, components and non-positive
-  component volumes. `supports_signed(allow_holes)` is the signed
-  conversion's precondition; boundary edges pass only when allowed.
+- `up_axes` turns a head-up direction into the proper rotation that takes it
+  to +Y. `mesh_bounds` measures positions along those axes, and
+  `extend_bounds` joins another frame's, exactly and in any order, so a
+  sequence is measured one frame at a time.
+- `fit_transform` (to a height in metres) or `scale_transform` (a given
+  `metres_per_unit`) makes one `MeshTransform` from the bounds, centring X/Z
+  and putting the lowest Y at zero. `apply_transform` maps every frame
+  through it in double precision, rounded to float, so a still point stays
+  still. The fits and `apply_transform` refuse axes that are not a proper
+  rotation, and a refusal leaves the mesh unchanged. The source compiles
+  with `-ffp-contract=off`, so a transform's doubles do not depend on the
+  compiler.
+- `audit_mesh_topology` counts the edges, triangles and components the
+  signed conversion depends on, capping each hole before it takes a
+  component's volume; `supports_signed(allow_holes)` gives the verdict.
 
 ### stream
 
