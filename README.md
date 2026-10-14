@@ -109,7 +109,8 @@ preserves winding under reflections, and joins exactly coincident positions.
 OBJ, PLY and glTF are covered by tests; other formats depend on the installed
 Assimp build. Materials/textures are discarded and animated/skinned/morphed
 assets are refused. Import does not impose physical units or a target height:
-normalization such as Rafa2's 1.7 m convention is a caller operation.
+normalization such as Rafa2's 1.7 m convention is a caller operation, with
+the opt-in helpers of `io/mesh_normalization.hpp` (in `recon_io`).
 
 The default build does not need Assimp. An installed package built with
 `VR_WITH_ASSIMP=ON` also needs Assimp's CMake package at consumption time.

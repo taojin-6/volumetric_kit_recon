@@ -8,6 +8,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `io`: `TriangleMesh` moves to `triangle_mesh.hpp`, in `recon_io`;
+  `mesh_io.hpp` includes it, so no includer changes.
+- `examples`: `codec_mesh` normalizes and audits its mesh through the `io`
+  helpers, and its own `mesh_normalization.*` is gone. Its stream, input PLY
+  and printed normalization are byte for byte unchanged.
 - `codec`: **the `Encoder` lays out its rANS steps on the device.** The
   forward's submit scans each block's coder steps into its place and each
   segment's output slot, and reads back the two totals alone, so an encode
@@ -108,6 +113,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `io`: **opt-in mesh normalization and topology helpers**
+  (`mesh_normalization.hpp`, in `recon_io`, no Assimp), for one mesh or a
+  temporal sequence. `up_axes` turns a head-up direction into axes;
+  `mesh_bounds` and `extend_bounds` measure a mesh, or the union of a
+  sequence's frames, along them; `fit_transform` (to a height) or
+  `unit_transform` (a given scale) makes one `MeshTransform`, which
+  `apply_transform` maps every frame through. A refusal leaves the mesh
+  unchanged. `audit_mesh_topology` and `MeshTopology::supports_signed(
+  allow_holes)` check a mesh before a signed conversion. Nothing calls them
+  unless the caller opts in. Test: `recon_io_mesh_normalization`.
 - `volume`: **`VoxelHashMap::allocate` and `VoxelBlockGrid::remove` from a
   device list**: a storage buffer of `BlockIndex`, bound where its producer
   wrote it, with the map's checks, rounds and failure split. The grid's
