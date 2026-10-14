@@ -502,7 +502,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   segments, new blocks in intra segments, the reference named by XXH64 of its
   bytes; a missing reference is `NotFound`. Experimental until golden
   P-frames freeze it. *Amended 2026-10-13:* the `Decoder` decodes them; row
-  13 is the device merge's, and the host merge is gone.
+  13 is the device merge's, and the host merge is gone. *Amended
+  2026-10-14:* the `Encoder` writes them.
 - [**2026-10-13**](#2026-10-13--the-decoder-decodes-p-frames-against-the-frame-it-decoded-last-kept-on-the-device-as-decoded-in-two-slots-that-swap-only-when-a-decode-succeeds-one-integer-apply-makes-every-decoded-frame-intra-too-and-it-decodes-on-the-device-alone-amends-the-2026-09-27-encoderdecoder-and-2026-10-03-decoding-entries) —
   The `Decoder` decodes P-frames against the frame it decoded last, kept on
   the device as decoded and replaced only when a decode succeeds; one integer
@@ -518,7 +519,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   2026-10-13:* so does the writer's step layout, which leaves the codec's
   host only I/O and control. *Amended 2026-10-14:* the encoder's split is
   its diff's own search, not a `BlockLists` pass.
-- [**2026-10-14**](#2026-10-14--the-encoder-writes-zero-motion-p-frames-against-the-frame-it-returned-last-kept-in-the-referencestore-as-its-forward-made-it-five-rules-make-an-i-frame-and-the-split-the-diff-and-a-static-price-for-zero-run-on-the-device-amends-the-2026-10-13-decoder-and-coordinate-entries) —
+- [**2026-10-14**](#2026-10-14--the-encoder-writes-zero-motion-p-frames-against-the-frame-it-returned-last-kept-in-the-referencestore-as-its-forward-made-it-five-rules-make-an-i-frame-and-the-split-the-diff-and-a-static-price-for-zero-run-on-the-device-amends-the-2026-10-13-decoder-and-coordinate-and-2026-10-12-p-frame-entries) —
   The `Encoder` writes zero-motion P-frames at `intra_period` above 1,
   against the frame it returned last, kept in the `ReferenceStore` as its
   forward made it and moved only when `encode` returns one; five rules make
@@ -12644,7 +12645,7 @@ waits for a measurement.
 now have no library caller, only tests; removing them is a breaking volume
 change, its own PR once the user decides.
 
-### 2026-10-14 — The `Encoder` writes zero-motion P-frames against the frame it returned last, kept in the `ReferenceStore` as its forward made it; five rules make an I-frame, and the split, the diff and a static price for zero run on the device (amends the 2026-10-13 decoder and coordinate entries).
+### 2026-10-14 — The `Encoder` writes zero-motion P-frames against the frame it returned last, kept in the `ReferenceStore` as its forward made it; five rules make an I-frame, and the split, the diff and a static price for zero run on the device (amends the 2026-10-13 decoder and coordinate, and 2026-10-12 P-frame entries).
 
 Library only: the examples keep period 1 until they read
 `codec.intra_period`, and type 1 stays experimental until golden P-frames
@@ -12713,7 +12714,8 @@ to. Step 0 put greedy zero-for-kept at 1–2% of P bytes (its V7).
 **Memory.** The store's two slots take `80 + 4 ceil(K/2)` bytes a block
 each and the sources 8, as in the decoder; a P-frame's entries
 `80 + 4 ceil(K/2)` a frame block and `72 + 4 ceil(K/2)` a reference block:
-about 18 MB at room0's 21,771 blocks of K = 64, all retained.
+about 18 MB at room0's 21,771 blocks of K = 64, all retained, and up to
+1.5x that once grown (`ensure_device_scratch`'s headroom).
 
 **Hand check.** M5 Max, Release, room0's 400 frames at 1 cm: each frame
 coded at period 30 (14 I-frames, 386 P-frames) and, by a second encoder, at

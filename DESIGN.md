@@ -1369,10 +1369,11 @@ decoding.
 
 The codec is implemented, intra frames and P-frames (frame type 1,
 experimental until golden P-frames freeze it), and it codes and decodes on
-the device alone (2026-10-13): the host does the I/O around it (a frame's bytes, and their
-hash) and the control (a frame's header, sections and tables, and small
-counts and status words read back). The CPU rANS coder is the tests' oracle,
-under `tests/` (`codec_oracle*.hpp`), which pins the format's bytes.
+the device alone (2026-10-13): the host does the I/O around it (a frame's
+bytes, and their hash) and the control (a frame's header, sections and
+tables, and small counts and status words read back). The CPU rANS coder is
+the tests' oracle, under `tests/` (`codec_oracle*.hpp`), which pins the
+format's bytes.
 Quantization is one scalar quantizer with a step per DCT basis (2026-10-02):
 `step[u,v,w] = quantization_scale * quantization_weights[u + 8*v + 64*w]`.
 DC is the table's first entry. All blocks share the same 512-entry table, but
@@ -1393,7 +1394,8 @@ with a stable rank-merge sort on `coord_less` itself, over all of int32
 the reference store's spare (below), the sorted list copied beside them, and
 writes the frame; the sort, the forward, the symbol count and the step layout
 share one submit. Keys are unique, so the same content gives the same bytes
-whatever the hash table's order. An empty input submits nothing.
+whatever the hash table's order. An empty I-frame submits nothing; an empty
+P-frame still submits its diff, every entry a remove.
 At `EncoderConfig::intra_period` N above 1 (default 1, 0 refused) the
 `Encoder` writes P-frames (the 2026-10-14 entry): an I-frame first, then
 every N coded frames, after `force_intra()`, when the grid's `voxel_size` or
