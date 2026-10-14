@@ -360,7 +360,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `load_factor()`; a kernel that needs the table binds `entries_buffer()`.
   Tests: `recon_volume_diagnostics` goes; `recon_volume_hash_map`,
   `recon_volume_resize`, `recon_volume_block_grid` and
-  `recon_marching_cubes_sparse` check the heap and the chains by behaviour.
+  `recon_mesh_marching_cubes_sparse` check the heap and the chains by
+  behaviour, the chains' buckets on the device.
 
 ### Changed
 

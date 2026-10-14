@@ -92,10 +92,12 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-08-08**](#2026-08-08--the-sparse-mesh-kernel-resolves-its-own-222-neighbourhood-by-probing-the-hash-table-on-device-and-mesh-therefore-reads-a-volume-buffer--a-coupling-paid-for-not-stumbled-into) —
   The sparse mesh kernel resolves its own 2×2×2 neighbourhood by probing the
   hash table on-device, and `mesh` therefore reads a `volume` buffer — a
-  coupling paid for, not stumbled into.
+  coupling paid for, not stumbled into. *Amended 2026-10-13:* the device
+  shows the chained fixture spills; `HashDiagnostics` is gone.
 - [**2026-08-08**](#2026-08-08--the-overflow-scan-stays-exhaustive-what-gets-bounded-is-its-cost-per-slot-not-its-length) —
   The overflow scan stays exhaustive; what gets bounded is its cost per slot,
-  not its length.
+  not its length. *Amended 2026-10-13:* `diagnostics()` is gone; the device
+  confirms the chain fixtures.
 - [**2026-08-08**](#2026-08-08--fuse_viewer-draws-recons-buffers-interop-seam-b-end-to-end-and-the-release-mark-must-be-published-before-the-mesh-is-taken) —
   `fuse_viewer` draws recon's buffers: interop seam B, end to end, and the
   release mark must be published *before* the mesh is taken.
@@ -229,6 +231,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   Memory the kernels use lives on the device on every platform, and the host
   only records commands against it: one `CommandBatch` per call, parameters
   inline, bulk bytes staged at the edges, small results read back.
+  *Amended 2026-10-13:* `diagnostics()` is gone; the tests check
+  `load_factor()`'s copy of the heap counter by behaviour.
 - [**2026-09-28**](#2026-09-28--a-decoded-colour-frame-never-leaves-the-gpu-the-platforms-hardware-decoder-for-h265-and-mjpeg-alike-hands-its-picture-to-vulkan-in-place-and-gpuframeprep-takes-i420-or-nv12-from-the-host-or-the-device) —
   A decoded colour frame never leaves the GPU: the platform's hardware
   decoder, for H.265 and MJPEG alike, hands its picture to Vulkan in place,
@@ -517,7 +521,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   search, never sorting; only counts and verdicts cross the bus.
   *Amended 2026-10-13:* the host `BlockList` it left without a caller goes,
   and the host-array `allocate` and `remove`.
-- [**2026-10-13**](#2026-10-13--block-lists-reach-the-volume-tier-on-the-device-alone-a-host-list-entry-point-that-only-tests-called-goes-amends-the-2026-08-12-view-meshing-2026-09-26-codec-2026-10-03-garbage-collection-2026-10-06-public-api-and-view-culling-and-2026-10-13-coordinate-entries) —
+- [**2026-10-13**](#2026-10-13--block-lists-reach-the-volume-tier-on-the-device-alone-a-host-list-entry-point-that-only-tests-called-goes-amends-the-2026-08-08-sparse-mesh-and-overflow-scan-2026-08-12-view-meshing-2026-09-26-codec-2026-09-28-device-memory-2026-10-03-garbage-collection-2026-10-06-public-api-and-view-culling-and-2026-10-13-coordinate-entries) —
   Block lists reach the volume tier on the device alone; a host-list entry
   point that only tests called goes: the host `BlockList`, the host-array
   `allocate` and `remove`, and the table readbacks.
@@ -1687,6 +1691,11 @@ than converted. That predicate is pinned directly where it lives, in
 
 ### 2026-08-08 — The sparse mesh kernel resolves its own 2×2×2 neighbourhood by probing the hash table on-device, and `mesh` therefore reads a `volume` buffer — a coupling paid for, not stumbled into.
 
+*Amended 2026-10-13 (the volume block-list entry, below):* `HashDiagnostics`
+is gone, so the suite asks the device whether the chained fixture spills: a
+table of its shape whose chains may not grow refuses some of its blocks for
+chain room.
+
 *Reverses* the "host-built
 neighbour table … no device-side hash probe, and no coupling to the hash
 table's internal buffers" that the sparse-extract description above asserted
@@ -1784,6 +1793,11 @@ phase: a permanently-0.00 row in the overlay that diagnosed this is worse than
 an absent one.
 
 ### 2026-08-08 — The overflow scan stays exhaustive; what gets bounded is its cost per slot, not its length.
+
+*Amended 2026-10-13 (the volume block-list entry, below):* `diagnostics()`,
+`HashDiagnostics` and `volume_diagnostics_test.cpp` are gone;
+`coords_in_bucket` lives in `volume_hash_map_test.cpp`, whose chain fixtures
+the device confirms share their bucket.
 
 An M5 iPad Pro lost the GPU inside
 `allocate_from_depth` at **31 480 of 32 768 blocks** —
@@ -6421,6 +6435,12 @@ coverage test, and ignoring the flag. The test passes under the Khronos
 validation layer with no messages.
 
 ### 2026-09-28 — Memory the kernels use lives on the device on every platform, and the host only records commands against it: one `CommandBatch` per call, parameters inline, bulk bytes staged at the edges, small results read back.
+
+*Amended 2026-10-13 (the volume block-list entry, below):* `diagnostics()`
+is gone. Every allocate and remove round reads the device's heap counter
+into the copy `load_factor()` returns, and `recon_volume_block_grid` and
+`recon_volume_resize` check that copy against the blocks the map holds after
+the calls that move it, a rolled-back `resize` included.
 
 **The rule.** A buffer the kernels read or write is device-local
 (`device_storage_buffer`: VRAM, never mapped), on Apple as on NVIDIA.
@@ -12615,7 +12635,7 @@ these searches and ranks. Cutting fences further waits for a measurement.
 now have no library caller, only tests; removing them is a breaking volume
 change, its own PR once the user decides.
 
-### 2026-10-13 — Block lists reach the volume tier on the device alone; a host-list entry point that only tests called goes (amends the 2026-08-12 view-meshing, 2026-09-26 codec, 2026-10-03 garbage-collection, 2026-10-06 public-API and view-culling, and 2026-10-13 coordinate entries).
+### 2026-10-13 — Block lists reach the volume tier on the device alone; a host-list entry point that only tests called goes (amends the 2026-08-08 sparse-mesh and overflow-scan, 2026-08-12 view-meshing, 2026-09-26 codec, 2026-09-28 device-memory, 2026-10-03 garbage-collection, 2026-10-06 public-API and view-culling, and 2026-10-13 coordinate entries).
 
 **The rule** is the user's (2026-10-13): only I/O takes a host path --
 reading a mesh model, a camera stream (Orbbec, ARKit) -- and what it reads
@@ -12672,9 +12692,16 @@ check what they read by behaviour:
   rebuilt device counter one short of the host copy, and a heap rebuilt
   without excluding the live blocks.
 - **Chains.** `recon_volume_hash_map` already found chained blocks again
-  only by walking their chains, and drops the anchor-offset reads.
-  `recon_marching_cubes_sparse` proves its chained fixture spills from the
-  hash itself: a bucket draws three coordinates for its two slots.
+  only by walking their chains, and drops the anchor-offset reads. Those
+  reads also showed that coordinates the host's `hash_bucket` puts in one
+  bucket share it on the device, so a probe asks the device instead
+  (`chain_refusals`, `tests/device_blocks.hpp`): a table of the fixture's
+  shape whose chains may not grow (`max_chain` 1) refuses each coordinate
+  past the bucket's slots. The 7- and 300-coordinate fixtures expect 3 and
+  292 refusals; a GLSL Z prime drifted from the host's fails the second,
+  and failed no test without the probe. `recon_mesh_marching_cubes_sparse`
+  probes its whole block set, so its chained fixture spills on the device;
+  8-entry buckets fail it.
 - `recon_volume_diagnostics` goes with the API.
 
 The host `HashEntry` and `hash.hpp`'s slot sentinels stay as the table's
