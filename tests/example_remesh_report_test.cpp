@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <vector>
 
+#include "device_blocks.hpp"
 #include "gpu_test.hpp"
 #include "grid_layout.hpp"
 #include "remesh_report.hpp"
@@ -76,7 +77,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
       }
     }
   }
-  CHECK(grid.map().allocate(cube.data(), 27).ok());
+  CHECK(vr_test::allocate_blocks(gpu, grid.map(), cube.data(), 27).ok());
   const std::uint32_t before = grid.map().tick();
   grid.map().advance_tick();
   CHECK(touch(gpu.device, gpu.allocator, grid, vr::Vec3i(1, 1, 1)).ok());

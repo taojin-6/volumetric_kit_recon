@@ -92,10 +92,12 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-08-08**](#2026-08-08--the-sparse-mesh-kernel-resolves-its-own-222-neighbourhood-by-probing-the-hash-table-on-device-and-mesh-therefore-reads-a-volume-buffer--a-coupling-paid-for-not-stumbled-into) —
   The sparse mesh kernel resolves its own 2×2×2 neighbourhood by probing the
   hash table on-device, and `mesh` therefore reads a `volume` buffer — a
-  coupling paid for, not stumbled into.
+  coupling paid for, not stumbled into. *Amended 2026-10-13:* the device
+  shows the chained fixture spills; `HashDiagnostics` is gone.
 - [**2026-08-08**](#2026-08-08--the-overflow-scan-stays-exhaustive-what-gets-bounded-is-its-cost-per-slot-not-its-length) —
   The overflow scan stays exhaustive; what gets bounded is its cost per slot,
-  not its length.
+  not its length. *Amended 2026-10-13:* `diagnostics()` is gone; the device
+  confirms the chain fixtures.
 - [**2026-08-08**](#2026-08-08--fuse_viewer-draws-recons-buffers-interop-seam-b-end-to-end-and-the-release-mark-must-be-published-before-the-mesh-is-taken) —
   `fuse_viewer` draws recon's buffers: interop seam B, end to end, and the
   release mark must be published *before* the mesh is taken.
@@ -138,7 +140,8 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-08-12**](#2026-08-12--meshing-a-cameras-view-is-a-caller-supplied-block-list-not-a-camera-the-mesh-tier-holds-and-it-stays-apart-from-incremental-extraction-rather-than-stacking-with-it) —
   Meshing a camera's view is a caller-supplied block list, not a camera the mesh
   tier holds; and it stays apart from incremental extraction rather than
-  stacking with it. Incremental extraction went on 2026-10-06.
+  stacking with it. Incremental extraction went on 2026-10-06. *Amended
+  2026-10-13:* the list is a `DeviceBlockList`; the host `BlockList` is gone.
 - [**2026-08-30**](#2026-08-30--a-profiler-label-belongs-to-the-kernel-not-to-the-timed-span-vk_ext_debug_utils-is-requested-independently-of-validation-and-the-instance-extension-is-declared-across-the-adopt-seam) —
   A profiler label belongs to the kernel, not to the timed span;
   `VK_EXT_debug_utils` is requested independently of validation, and the
@@ -167,7 +170,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   The TSDF codec is one `codec` tier over `volume`, with separate `Encoder` and
   `Decoder` classes: a geometry-only intra frame of per-block DCT coefficients,
   an observed-voxel mask and sorted block coordinates, entropy-coded by chunked
-  static-table rANS.
+  static-table rANS. *Amended 2026-10-13:* `check_block_list` is gone.
 - [**2026-09-27**](#2026-09-27--the-v1-frame-is-independent-rans-segments-of-sorted-blocks-every-integer-a-class-plus-raw-bits-behind-fixed-per-frame-tables-and-a-section-table-the-decoders-end-check-is-for-consistency-not-integrity-amends-the-2026-09-26-entrys-interleaved-lanes) —
   The v1 frame is independent rANS segments of sorted blocks, every integer a
   class plus raw bits, behind fixed per-frame tables and a section table; the
@@ -228,6 +231,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   Memory the kernels use lives on the device on every platform, and the host
   only records commands against it: one `CommandBatch` per call, parameters
   inline, bulk bytes staged at the edges, small results read back.
+  *Amended 2026-10-13:* `diagnostics()` is gone; the tests check
+  `load_factor()`'s copy of the heap counter by behaviour.
 - [**2026-09-28**](#2026-09-28--a-decoded-colour-frame-never-leaves-the-gpu-the-platforms-hardware-decoder-for-h265-and-mjpeg-alike-hands-its-picture-to-vulkan-in-place-and-gpuframeprep-takes-i420-or-nv12-from-the-host-or-the-device) —
   A decoded colour frame never leaves the GPU: the platform's hardware
   decoder, for H.265 and MJPEG alike, hands its picture to Vulkan in place,
@@ -289,7 +294,8 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-03**](#2026-10-03--garbage-collection-deletes-from-the-device-stale-list) —
   Garbage collection passes its device coordinate list directly to deletion,
   retaining host readback only for control counts. *Amended 2026-10-13:* it
-  frees through the body both `VoxelBlockGrid::remove` overloads share.
+  frees through the body `VoxelBlockGrid::remove` uses, which takes a device
+  list alone.
 
 - [**2026-10-02**](#2026-10-02--mesh-input-binning-keeps-counts-cursors-and-occupied-bins-on-the-device-retains-scratch-and-reads-only-validation-and-bounded-dispatch-control) —
   Mesh input binning keeps counts, cursors and occupied bins on the device,
@@ -395,7 +401,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   MSVC are not supported.
 - [**2026-10-06**](#2026-10-06--public-api-serves-a-caller-entry-points-only-tests-used-go-or-move-into-their-tests-amends-the-2026-07-04-glm-entry) —
   Public API serves a caller: entry points only tests used go, or move into
-  their tests.
+  their tests. *Amended 2026-10-13:* `VoxelHashMap::diagnostics()` goes too.
 - [**2026-10-06**](#2026-10-06--incremental-mesh-extraction-is-removed-the-changed-stamp-stays-and-the-mesher-no-longer-reads-it-amends-the-2026-08-09-2026-08-11-2026-08-12-2026-09-30-2026-10-01-and-2026-10-02-mesh-entries) —
   Incremental mesh extraction is removed; the `changed` stamp stays, and the
   mesher no longer reads it.
@@ -406,7 +412,8 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-06**](#2026-10-06--marching-cubes-meshes-what-the-viewing-camera-sees-an-extract-over-the-device-frusta-list-the-viewers-re-meshing-on-a-fuse-or-a-view-change-and-a-culled-pass-records-its-density-amends-the-2026-08-12-view-meshing-entry-and-the-2026-10-06-incremental-removal-and-fusion-culling-entries) —
   Marching cubes meshes what the viewing camera sees: an extract over the
   device frusta list, the viewers re-meshing on a fuse or a view change, and
-  a culled pass records its density.
+  a culled pass records its density. *Amended 2026-10-13:* the host
+  `BlockList` it kept for the codec is gone.
 - [**2026-10-06**](#2026-10-06--a-sensor-array-groups-its-frames-by-trigger-only-syncmode-and-sequence-grouping-go-amends-the-2026-10-06-sensorarray-entry) —
   A sensor array groups its frames by trigger only: `SyncMode` and sequence
   grouping go.
@@ -517,8 +524,14 @@ entries relevant to your task; later amendments supersede earlier rules.
   stable rank-merge sort, and the decoder judges, merges and diffs by binary
   search, never sorting; only counts and verdicts cross the bus. *Amended
   2026-10-13:* so does the writer's step layout, which leaves the codec's
-  host only I/O and control. *Amended 2026-10-14:* the encoder's split is
-  its diff's own search, not a `BlockLists` pass.
+  host only I/O and control; and the host `BlockList` it left without a
+  caller goes, with the host-array `allocate` and `remove`. *Amended
+  2026-10-14:* the encoder's split is its diff's own search, not a
+  `BlockLists` pass.
+- [**2026-10-13**](#2026-10-13--block-lists-reach-the-volume-tier-on-the-device-alone-a-host-list-entry-point-that-only-tests-called-goes-amends-the-2026-08-08-sparse-mesh-and-overflow-scan-2026-08-12-view-meshing-2026-09-26-codec-2026-09-28-device-memory-2026-10-03-garbage-collection-2026-10-06-public-api-and-view-culling-and-2026-10-13-coordinate-entries) —
+  Block lists reach the volume tier on the device alone; a host-list entry
+  point that only tests called goes: the host `BlockList`, the host-array
+  `allocate` and `remove`, and the table readbacks.
 - [**2026-10-14**](#2026-10-14--the-encoder-writes-zero-motion-p-frames-against-the-frame-it-returned-last-kept-in-the-referencestore-as-its-forward-made-it-five-rules-make-an-i-frame-and-the-split-the-diff-and-a-static-price-for-zero-run-on-the-device-amends-the-2026-10-13-decoder-and-coordinate-and-2026-10-12-p-frame-entries) —
   The `Encoder` writes zero-motion P-frames at `intra_period` above 1,
   against the frame it returned last, kept in the `ReferenceStore` as its
@@ -1691,6 +1704,11 @@ than converted. That predicate is pinned directly where it lives, in
 
 ### 2026-08-08 — The sparse mesh kernel resolves its own 2×2×2 neighbourhood by probing the hash table on-device, and `mesh` therefore reads a `volume` buffer — a coupling paid for, not stumbled into.
 
+*Amended 2026-10-13 (the volume block-list entry, below):* `HashDiagnostics`
+is gone, so the suite asks the device whether the chained fixture spills: a
+table of its shape whose chains may not grow refuses some of its blocks for
+chain room.
+
 *Reverses* the "host-built
 neighbour table … no device-side hash probe, and no coupling to the hash
 table's internal buffers" that the sparse-extract description above asserted
@@ -1788,6 +1806,11 @@ phase: a permanently-0.00 row in the overlay that diagnosed this is worse than
 an absent one.
 
 ### 2026-08-08 — The overflow scan stays exhaustive; what gets bounded is its cost per slot, not its length.
+
+*Amended 2026-10-13 (the volume block-list entry, below):* `diagnostics()`,
+`HashDiagnostics` and `volume_diagnostics_test.cpp` are gone;
+`coords_in_bucket` lives in `volume_hash_map_test.cpp`, whose chain fixtures
+the device confirms share their bucket.
 
 An M5 iPad Pro lost the GPU inside
 `allocate_from_depth` at **31 480 of 32 768 blocks** —
@@ -3396,6 +3419,9 @@ apart. The culled overload and its density guard stay.
 `TsdfIntegrator::integrate` culls to the scanning cameras' frusta, on the
 device and in one scan for a rig's set, which the header had claimed and no
 code did.
+*Amended 2026-10-13 (the volume block-list entry, below):* the host `BlockList`
+this entry gave a job, and `VoxelBlockGrid::block_list`, which stamped its
+epoch, go; `DeviceBlockList` carries the same epoch.
 
 A scanning device renders a small part of a large volume — the iPad case, where
 the viewport shows a room corner while the map holds the whole floor. Meshing
@@ -4404,6 +4430,10 @@ yet on one clock. That, HEVC decoding, GPU pre-processing and the hardware
 registration are `TODO(sensor)`s in `orbbec_capture.cpp`; Windows is unbuilt.
 
 ### 2026-09-26 — The TSDF codec is one `codec` tier over `volume`, with separate `Encoder` and `Decoder` classes: a geometry-only intra frame of per-block DCT coefficients, an observed-voxel mask and sorted block coordinates, entropy-coded by chunked static-table rANS.
+
+*Amended 2026-10-13 (the volume block-list entry, below):* the transform takes a
+device list, and `VoxelBlockGrid::check_block_list` and `block_list`'s
+deleted rvalue overload, added here, are gone with `BlockList`.
 
 The roadmap listed two later tiers here, `compress` (DCT) and `codec`/`stream`, a split
 that came from the prior engine: an `ISdfCompressor` family for one volume and a
@@ -6418,6 +6448,12 @@ coverage test, and ignoring the flag. The test passes under the Khronos
 validation layer with no messages.
 
 ### 2026-09-28 — Memory the kernels use lives on the device on every platform, and the host only records commands against it: one `CommandBatch` per call, parameters inline, bulk bytes staged at the edges, small results read back.
+
+*Amended 2026-10-13 (the volume block-list entry, below):* `diagnostics()`
+is gone. Every allocate and remove round reads the device's heap counter
+into the copy `load_factor()` returns, and `recon_volume_block_grid` and
+`recon_volume_resize` check that copy against the blocks the map holds after
+the calls that move it, a rolled-back `resize` included.
 
 **The rule.** A buffer the kernels read or write is device-local
 (`device_storage_buffer`: VRAM, never mapped), on Apple as on NVIDIA.
@@ -9008,6 +9044,9 @@ listed blocks, then the map's device `remove` -- serves both grid overloads
 and garbage collection: the host overload stages its coordinates once, where
 they went up twice. The device overload checks its input first, so a refused
 list zeroes nothing and keeps the topology epoch.
+*Amended 2026-10-13 (the volume block-list entry, below):* the host
+overloads are gone; the one body serves the grid's device `remove` and
+garbage collection.
 
 The 2026-10-01 block-stamp decision downloaded the stale list after zeroing
 its attributes, then uploaded the same coordinates for `VoxelHashMap::remove`.
@@ -10600,6 +10639,11 @@ would be a new decision, landing with its CI leg -- and the core's.
 
 ### 2026-10-06 — Public API serves a caller: entry points only tests used go, or move into their tests (amends the 2026-07-04 GLM entry).
 
+*Amended 2026-10-13 (the volume block-list entry, below):*
+`VoxelHashMap::diagnostics()`, kept below though only tests called it, goes.
+The other exceptions lie outside the volume tier; that entry's **Next** 5
+audits them.
+
 **The rule.** A public function, type or option has a caller outside the
 tests -- an example, a sibling, the iOS app -- or it goes. A test that needs
 a host-array convenience writes it from the public members.
@@ -10805,6 +10849,9 @@ and FFmpeg: the 56 tests pass with `VR_TEST_HEVC_BACKEND=videotoolbox`, and
 layer's synchronization validation.
 
 ### 2026-10-06 — Marching cubes meshes what the viewing camera sees: an extract over the device frusta list, the viewers re-meshing on a fuse or a view change, and a culled pass records its density (amends the 2026-08-12 view-meshing entry and the 2026-10-06 incremental-removal and fusion-culling entries).
+
+*Amended 2026-10-13 (the volume block-list entry, below):* `volume::BlockList`,
+`block_list` and `check_block_list`, kept here for the codec, go.
 
 **The rule.** `MarchingCubes::extract_device(grid, iso, const
 volume::DeviceBlockList&, timings)` meshes exactly the listed blocks, binding
@@ -12432,7 +12479,7 @@ verdict ignored. Not run: the RTX 5090.
 search (`inter_diff.comp`), on these searches and the reader's survivor
 ranks.
 
-*Amended 2026-10-13 (the device step layout):* the **Next** item below is
+*Amended 2026-10-13 (the device step layout):* the **Next** step layout is
 done, so the codec's host does I/O and control alone. `detail::StepLayout`
 (`rans_layout.comp`, one workgroup on `scan.glsl`) records into the
 forward's submit after the count: an exclusive scan E of the entries' steps
@@ -12466,6 +12513,11 @@ no cap, slots a word short or long, either total missing, the slot scan not
 reset or not after the barrier, the wrong A, the ops' or the encoder's run,
 `segment_of` without the update segments, slots sized by steps, and the step
 total read one entry short.
+
+*Amended 2026-10-13 (the volume block-list entry, below):* the host
+`BlockList`, `block_list` and `check_block_list` that **Next** names go, and
+so do the host-array `allocate` and `remove` the device overloads here sat
+beside.
 
 The rule the 2026-10-03 decoding entry's amendment records -- only I/O and
 control cross the bus -- applied to the codec's work on block coordinates.
@@ -12643,7 +12695,122 @@ the forward's submit, on these searches and ranks. Cutting fences further
 waits for a measurement.
 `volume::BlockList`, `VoxelBlockGrid::block_list` and `check_block_list`
 now have no library caller, only tests; removing them is a breaking volume
-change, its own PR once the user decides.
+change, its own PR (done, the volume block-list entry below).
+
+### 2026-10-13 — Block lists reach the volume tier on the device alone; a host-list entry point that only tests called goes (amends the 2026-08-08 sparse-mesh and overflow-scan, 2026-08-12 view-meshing, 2026-09-26 codec, 2026-09-28 device-memory, 2026-10-03 garbage-collection, 2026-10-06 public-API and view-culling, and 2026-10-13 coordinate entries).
+
+**The rule** is the user's (2026-10-13): only I/O takes a host path --
+reading a mesh model, a camera stream (Orbbec, ARKit) -- and what it reads
+goes straight to the GPU; gfx shows processed results without a copy, and
+they return to the host only to be saved. Control may read back counts and
+verdicts. The volume tier's block lists are processing, so they live on the
+device, and no library code stays that only tests call. Here that
+withdraws the 2026-10-06 public-API entry's `diagnostics()` exception; its
+others lie outside the volume tier (**Next** 5).
+
+**What goes.** `volume::BlockList`, `VoxelBlockGrid::block_list` (both
+overloads) and `VoxelBlockGrid::check_block_list`. Since the coordinate
+entry nothing in `src/`, `include/` or `examples/` called them, nor in
+ios, gfx or calib (`git grep` on each `origin/main`): the mesher binds a
+`DeviceBlockList` since 2026-10-06 and the codec its own device lists. A
+`DeviceBlockList` is the one block list, stamped with the epoch, a
+compaction serial and the heap's free count, which
+`check_device_block_list` and `check_device_block_subset` check. The codec
+oracle's `forward` and `inverse` took a `BlockList` only to carry a pointer
+and a count; they take a `std::vector<BlockIndex>`, a test's own host list,
+and upload it as the device list the transform binds.
+`recon_codec_dct` keeps every list refusal, now on the device list: none
+with a count, one shorter than the count, one not a storage buffer, more
+blocks than the heap, and a list compacted before a remove.
+
+**The host-array `allocate` and `remove` go too:**
+`VoxelHashMap::allocate(const BlockIndex*, …)`,
+`VoxelHashMap::remove(const BlockIndex*, …)` and
+`VoxelBlockGrid::remove(const BlockIndex*, …)`. Since the coordinate entry
+the decoder removes and allocates from its device lists and garbage
+collection frees from its own, so no library code staged coordinates from
+the host; the only caller outside recon's tests is the iOS compute smoke
+test's block stage (`apps/compute_smoke/smoke_report.cpp:420`), which must
+upload its eight blocks when it re-pins. The device overloads keep every
+check, round, tally and failure split; the grid's still zeroes, then frees,
+in two submits. A test hands its own coordinates over as a producer kernel
+would, through `tests/device_blocks.hpp` (upload, then the device
+overload), at about 90 call sites. The cases that compared the two
+overloads go with the host one: the hash-map contention fixture runs four
+fresh maps on the device list, the capacity split it repeated is the main
+case's, and the delete test's host/device alternation and host zero-count
+call are gone.
+
+**And the host table readbacks:** `VoxelHashMap::read_entries`,
+`VoxelHashMap::diagnostics` and `HashDiagnostics`. The 2026-10-06
+public-API entry kept `diagnostics()` as the tests' one window on the
+device heap counter; the rule now has no such exception, and the tests
+check what they read by behaviour:
+- **The heap counter.** Every allocate and remove round reads it back into
+  the copy `load_factor()` returns, so after one the copy is the device's.
+  `recon_volume_block_grid` compares it with the compacted block count after
+  every call that moves the counter, and `recon_volume_resize` after the
+  allocations that follow a grow and a rolled-back grow, and checks that no
+  index is handed out twice. Two planted bugs each failed both tests: a
+  rebuilt device counter one short of the host copy, and a heap rebuilt
+  without excluding the live blocks.
+- **Chains.** `recon_volume_hash_map` already found chained blocks again
+  only by walking their chains, and drops the anchor-offset reads. Those
+  reads also showed that coordinates the host's `hash_bucket` puts in one
+  bucket share it on the device, so a probe asks the device instead
+  (`chain_refusals`, `tests/device_blocks.hpp`): a table of the fixture's
+  shape whose chains may not grow (`max_chain` 1) refuses each coordinate
+  past the bucket's slots. The 7- and 300-coordinate fixtures expect 3 and
+  292 refusals; a GLSL Z prime drifted from the host's fails the second,
+  and failed no test without the probe. `recon_mesh_marching_cubes_sparse`
+  probes its whole block set, so its chained fixture spills on the device;
+  8-entry buckets fail it.
+- `recon_volume_diagnostics` goes with the API.
+
+The host `HashEntry`, `hash.hpp`'s slot sentinels and `hash_bucket` with
+its primes stay, as the table's layout and hash that the GLSL mirrors;
+`entries_buffer_size()` sizes the table by `HashEntry`, and only tests call
+`hash_bucket`. No host code reads a slot. Whether these mirrors stay public
+or move into the tests awaits the user's decision.
+
+**What stays, and why.** The volume tier's other host entry points, with
+their callers in `src/`, `include/` and `examples/` (and ios's, at its
+older pin):
+
+| Entry point | Host side | Callers | Verdict |
+|---|---|---|---|
+| `allocate_from_depth(const float*, camera, …)` | the image staged | none in recon; ios's ARKit fusion (`Fusion.mm:731`, `:849`) and compute smoke test | camera-stream I/O: stays |
+| `allocate_from_depth(const std::vector<DepthInput>&, …)` | a host frame's depth staged | `tsdf/fuser.cpp:87` | camera-stream I/O: stays |
+| `allocate_from_triangles(vertices, …, indices, …)` | mesh staged; candidates counted on the host | `examples/codec_mesh/main.cpp:115` | mesh-model I/O stays; the count is **Next** 3 |
+| `triangle_candidate_offsets` | the candidate count | `tsdf/mesh_integrator.cpp:284`, `allocate_from_triangles` | **Next** 3 |
+| `compact_active_blocks()` | the active set read back | `examples/common/remesh_report.hpp:97`, `VoxelHashMap::resize`; ios's `Fusion.mm:1290` | **Next** 1, 2 |
+| `read_block_stamps()` | every slot's stamps read back | `examples/common/remesh_report.hpp:50`; ios's `Fusion.mm:102` | **Next** 1 |
+| `load_factor()` | none: the copy of a counter the rounds read back | `tsdf/fuser.cpp:53`, `:106`; the viewers | control: stays |
+
+**Next**, each its own PR, since each changes another tier, an example or
+a sibling:
+1. The remesh report (`examples/common/remesh_report.hpp`) counts changed
+   blocks on the device, leaving `compact_active_blocks()` to `resize` and
+   the iOS scanner, and `read_block_stamps()` to the scanner alone.
+2. `VoxelHashMap::resize` rehashes from the device list and rebuilds the
+   heap on the device (its `TODO(volume)`), with no snapshot read back and
+   no host pass over `num_blocks`.
+3. `allocate_from_triangles` and tsdf's `MeshIntegrator` count triangle
+   candidates on the device; the vertices and indices stay the mesh model's
+   I/O.
+4. ios, when it re-pins: the compute smoke test uploads its eight blocks,
+   and the scanner's survey and stamps follow item 1.
+5. The 2026-10-06 public-API entry's other exceptions, outside the volume
+   tier, are audited under this rule: the host `TextureView` `texture`
+   overloads, `FrequencyTable::empty`, and the camera tier's
+   `distort_rational` and Rodrigues helpers, which calib now calls
+   (`examples/01_project_point/main.cpp:44`, `cv_pose.cpp:40`).
+
+**Verified** on an Apple M5 Max, macOS, Release with warnings as errors,
+Orbbec, FFmpeg and Assimp: all 96 tests pass under
+`VKC_TEST_VALIDATION=1`, and the codec, volume, tsdf, mesh and texture
+tests under `VKC_TEST_SYNC_VALIDATION=1` too. Not run: the RTX 5090,
+ASan/UBSan, and GCC, which CI covers.
 
 ### 2026-10-14 — The `Encoder` writes zero-motion P-frames against the frame it returned last, kept in the `ReferenceStore` as its forward made it; five rules make an I-frame, and the split, the diff and a static price for zero run on the device (amends the 2026-10-13 decoder and coordinate, and 2026-10-12 P-frame entries).
 

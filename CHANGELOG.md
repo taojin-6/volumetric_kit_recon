@@ -110,11 +110,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - `volume`: **`VoxelHashMap::allocate` and `VoxelBlockGrid::remove` from a
   device list**: a storage buffer of `BlockIndex`, bound where its producer
-  wrote it, with the host overloads' checks, rounds and failure split. The
-  grid's zeroes the listed blocks and frees them through the map's device
-  `remove`; a refused list zeroes nothing and keeps the topology epoch. The
-  host `VoxelBlockGrid::remove` stages its coordinates once, where they went
-  up twice, and `free_stale_blocks` frees through the same body. Tests:
+  wrote it, with the map's checks, rounds and failure split. The grid's
+  zeroes the listed blocks and frees them through the map's device `remove`;
+  a refused list zeroes nothing and keeps the topology epoch.
+  `free_stale_blocks` frees through the same body. Tests:
   `recon_volume_hash_map`, `recon_volume_block_grid`.
 - `camera`: **the calibration file records lenses and is written**
   (`array_calibration.hpp`). Version 2 keeps version 1's
@@ -350,6 +349,37 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   conversion on the host. It was `sensor/video`'s private `VtPictures`; the
   decoders' VideoToolbox pictures go through it. Test:
   `recon_sensor_apple_pixel_buffer_importer`.
+
+### Removed
+
+- `volume`: **the host block list** (BREAKING): `BlockList`,
+  `VoxelBlockGrid::block_list` (both overloads) and
+  `VoxelBlockGrid::check_block_list`. Nothing in recon, ios, gfx or calib
+  used them; a block list is a `DeviceBlockList`. Migrating: compact with
+  `compact_active_blocks_on_device` or
+  `compact_active_blocks_in_frusta_on_device`, and check the list with
+  `check_device_block_list` or `check_device_block_subset`. Tests:
+  `recon_codec_dct`, `recon_codec_inter`.
+- `volume`: **allocate and remove from a host array** (BREAKING):
+  `VoxelHashMap::allocate(const BlockIndex*, count, failures)`,
+  `VoxelHashMap::remove(const BlockIndex*, …)` and
+  `VoxelBlockGrid::remove(const BlockIndex*, …)`. Only tests called them in
+  recon; each takes a device list (above). Migrating: upload the
+  coordinates into a device-local storage buffer (`device_storage_buffer`,
+  `CommandBatch::upload`) and pass the buffer and its count, as
+  `tests/device_blocks.hpp` does. The iOS compute smoke test's block stage
+  allocates from a host array, and must upload it first when it re-pins.
+  Tests: `recon_volume_hash_map`, `recon_volume_delete`,
+  `recon_volume_block_grid`; every GPU test that allocates blocks uploads
+  them first.
+- `volume`: **the host table readbacks** (BREAKING):
+  `VoxelHashMap::read_entries`, `VoxelHashMap::diagnostics` and
+  `HashDiagnostics`, which only tests called. Migrating: read occupancy with
+  `load_factor()`; a kernel that needs the table binds `entries_buffer()`.
+  Tests: `recon_volume_diagnostics` goes; `recon_volume_hash_map`,
+  `recon_volume_resize`, `recon_volume_block_grid` and
+  `recon_mesh_marching_cubes_sparse` check the heap and the chains by
+  behaviour, the chains' buckets on the device.
 
 ### Changed
 

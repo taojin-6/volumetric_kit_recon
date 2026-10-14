@@ -34,6 +34,7 @@
 #include <utility>
 #include <vector>
 
+#include "device_blocks.hpp"
 #include "test_check.hpp"
 #include "test_meshes.hpp"
 #include "volumetric_kit/core/vulkan/allocator.hpp"
@@ -553,7 +554,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
   // ---- 8. Blocks the band does not reach keep what they held ------------
   CHECK(grid.clear().ok());
   const vol::BlockIndex far_block{vr::Vec3i(40, 40, 40), 0};
-  CHECK(grid.map().allocate(&far_block, 1).ok());
+  CHECK(vr_test::allocate_blocks(gpu, grid.map(), &far_block, 1).ok());
   std::int32_t far_ptr = -1;
   for (const vol::BlockIndex& b : active_blocks(grid)) far_ptr = b.ptr;
   CHECK(far_ptr >= 0);
@@ -619,7 +620,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
   {
     const std::vector<vol::BlockIndex> band = active_blocks(grid);
     CHECK(!band.empty());
-    CHECK(grid.remove(&band[band.size() / 2], 1).ok());
+    CHECK(vr_test::remove_blocks(gpu, grid, &band[band.size() / 2], 1).ok());
   }
   CHECK(refused(tet, kSigned, "not allocated"));
 
