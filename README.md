@@ -190,7 +190,8 @@ grid, then extracts the decoded surface with marching cubes. Build the mesh
 example with `VR_WITH_ASSIMP=ON` after installing the
 [asset I/O prerequisites](#asset-io).
 Their `codec` section selects `quantization_table` (`uniform`, `band`,
-`radial`), `quantization_scale`, `entropy` (`auto`, `host`, `device`),
+`radial`), `quantization_scale`, `entropy` (`auto`, `host`, `device`: where
+the encoder's rANS coding runs; decoding runs on the device),
 `segment_size` and the shared rate-distortion `sweep`. `output.stream`
 records every coded frame in a new `.vrst` file (see
 [the stream container](DESIGN.md#stream)), and `output.csv` writes a row per

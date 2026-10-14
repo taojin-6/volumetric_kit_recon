@@ -186,7 +186,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   never-observed blocks and sorts the rest, decoding makes a caller's grid hold
   exactly the frame by diffing its block set, everything checkable is checked
   before the grid is touched, and a grid too small for the frame is refused
-  rather than grown.
+  rather than grown. *Amended 2026-10-13:* the `Decoder` decodes P-frames
+  too, against a reference it keeps.
 - [**2026-09-27**](#2026-09-27--the-video-decoder-is-recon_sensor_video-a-target-of-its-own-over-an-installed-ffmpeg-hevc-in-host-pictures-out-on-the-first-hardware-back-end-that-decodes-a-built-in-clip-nvidia-ahead-of-an-integrated-gpu-each-ci-leg-requires-the-hardware-it-has) —
   The video decoder is `recon_sensor_video`, a target of its own over an
   installed FFmpeg: HEVC in, host pictures out, on the first hardware back end
@@ -316,7 +317,8 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-03**](#2026-10-03--rans-decoding-runs-on-the-device-block-for-block-the-hosts-chosen-from-80-segments) —
   rANS decoding runs on the device, block for block the host's, in segments
   of at most 1,024 blocks, and the decoder picks the device per frame from 80
-  segments.
+  segments. *Amended 2026-10-13:* decoding runs on the device alone, with no
+  host fallback; the host reader is the tests' oracle.
 - [**2026-10-03**](#2026-10-03--error-handling-comes-from-volumetric_kit_core) —
   Error handling comes from `volumetric_kit_core`: `vr::Status`/`Result` are
   the core's types, `VR_TRY`/`VR_ASSIGN`/`VR_CHECK` its macros under recon's
@@ -492,7 +494,12 @@ entries relevant to your task; later amendments supersede earlier rules.
   P-frames are frame type 1 of v3: a mode per reference block in update
   segments, new blocks in intra segments, the reference named by XXH64 of its
   bytes; a missing reference is `NotFound`. Experimental until golden
-  P-frames freeze it.
+  P-frames freeze it. *Amended 2026-10-13:* the `Decoder` decodes them.
+- [**2026-10-13**](#2026-10-13--the-decoder-decodes-p-frames-against-the-frame-it-decoded-last-kept-on-the-device-as-decoded-in-two-slots-that-swap-only-when-a-decode-succeeds-one-integer-apply-makes-every-decoded-frame-intra-too-and-it-decodes-on-the-device-alone-amends-the-2026-09-27-encoderdecoder-and-2026-10-03-decoding-entries) —
+  The `Decoder` decodes P-frames against the frame it decoded last, kept on
+  the device as decoded and replaced only when a decode succeeds; one integer
+  apply makes every decoded frame; and it decodes on the device alone.
+  `FrameType` and `FrameInfo::type` are public.
 
 ## Decision record
 
@@ -4623,7 +4630,7 @@ their inputs. The buffers change anyway with the device-resident output below.
 
 **Open.**
 - P-frames (frame type 1). *The format landed 2026-10-12 (the P-frame
-  entry, below); the decoder and the encoder follow.*
+  entry, below), and the decoder 2026-10-13; the encoder follows.*
 - The GPU rANS kernels, and device-resident coefficients so the GPU coder
   reads them without a host round trip. *Both landed 2026-10-03 (the device
   encoding and decoding entries, below).*
@@ -4964,6 +4971,11 @@ process released one. A set's frames are processed one camera after another
 fusion through the stateless `volume::grow_grid` helper, replacing
 `allocate_band`. The decoder still refuses a grid too small for its frame;
 a player grows it with `grow_grid`.
+
+*Amended 2026-10-13 (the P-frame decoding entry, below):* the `Decoder`
+decodes P-frames too, against the frame it decoded last, which it keeps on
+the device. Everything here holds for them, and no refusal or failure
+changes that reference.
 
 The third of the 2026-09-26 entry's five PRs, and the first public API the
 codec has had: `codec/encoder.hpp` (`Encoder`, `EncoderConfig`) and
@@ -9615,6 +9627,33 @@ locally.
 
 ### 2026-10-03 — rANS decoding runs on the device, block for block the host's, chosen from 80 segments.
 
+*Amended 2026-10-13 (the P-frame decoding entry, below):* decoding runs on
+the device alone. The host does I/O -- a mesh or a camera stream read in, a
+model saved, a frame's encoded bytes to and from a `.vrst` file or the
+network -- and the control around it: a frame's header and tables, and small
+counts and status words read back. Every other step runs on the GPU, with no
+host fallback (the user's rule, 2026-10-13). So `DecoderConfig` and
+`kMinDeviceDecodeSegments` go, and `EntropyCoding` is the encoder's alone.
+`Decoder::create` builds the device reader and fails if it cannot, and a
+frame the device refuses (a segment past `kMaxDeviceDecodeSegmentSize`, a
+buffer past `maxStorageBufferRange` or free memory) is refused with the
+device's code; `Encoder::create` refuses a `segment_size` past that limit,
+so the library writes no frame it cannot decode. The host reader stays, as
+the tests' oracle only. A frame of
+few segments, which `kAuto` decoded on the host, pays for it. Hand check on
+the M5 Max, Release, the median of six runs before and six after,
+interleaved:
+- room0, 400 I-frames at 1 cm of about 340 segments each, which `kAuto`
+  already decoded on the device: unchanged, 4.06 → 4.03 ms a frame of host
+  time and 1.93 ms of device time;
+- Rafa2 at 5 mm, 2,395 blocks in 38 segments of 64, which `kAuto` decoded on
+  the host, as `codec_mesh`'s sweep times a frame the player holds: 3.29 →
+  3.99 ms of host time at K = 64 and step 0.2 (+0.70 ms, +21%), its device
+  time 0.15 → 2.17 ms; 3.29 → 4.11 ms over all the K = 64 rows; K = 512
+  gains, 13.92 → 8.91 ms. At R = 16 the table below has the device's rANS
+  decode of this frame at 0.87 ms against the host's 1.85; lanes within a
+  segment, a format change, would keep R = 64.
+
 The 2026-09-26 decision's fifth PR, for the decoder. The v3 format is
 unchanged. The device decodes every frame it can hold to `read_intra_frame`'s
 blocks, and refuses every corrupt segment it refuses, with the same message.
@@ -11989,7 +12028,8 @@ measured rates are DESIGN.md's.
 
 *Amended the same day (the device coders, at the end):* the device writer
 and reader code type 1 too; `read_frame_info` and `Decoder::decode` still
-refuse it.
+refuse it. *Amended 2026-10-13 (the P-frame decoding entry, below):* both
+take it.
 
 The host writer and reader of type-1 frames, internal. `bitstream.hpp` holds
 the layout and the order of the refusals; this entry holds why. Nothing public
@@ -12200,6 +12240,90 @@ new-block term), `finish` trusting another reference count than was counted,
 and the entries judged before the coding parameters. The codec tests pass
 under ASan and UBSan (Debug). Not run: the RTX 5090 (not reachable from this
 machine).
+
+### 2026-10-13 — The `Decoder` decodes P-frames against the frame it decoded last, kept on the device as decoded in two slots that swap only when a decode succeeds; one integer apply makes every decoded frame, intra too; and it decodes on the device alone (amends the 2026-09-27 `Encoder`/`Decoder` and 2026-10-03 decoding entries).
+
+The `Decoder` takes type 1; the `Encoder` still writes intra frames only,
+and type 1 stays experimental until golden P-frames freeze it. The format,
+the reference hash and why a missing reference is `NotFound` are the
+2026-10-12 entry's. Public: `FrameType` moves into `codec_params.hpp`, where
+the internal frame code takes it from, `FrameInfo` gains `type`, and
+`read_frame_info` reads a P-frame's header, its `block_count` the decoded
+frame's.
+
+**The reference is what the decoder decoded, kept on the device.** A residual
+adds to the quantized coefficient its reference decoded to, which the grid,
+holding dequantized and clamped SDF, no longer has. So `detail::ReferenceStore`
+keeps the decoded coefficients and masks in the inverse transform's layout,
+and the frame's `FrameReference` and sorted coordinates on the host, which
+`parse_frame` and `merge_frame` take. The reference is the decoder's, not a
+grid's: a P-frame decodes into any grid of its geometry, a fresh one built
+from `read_frame_info` included, and a moved decoder takes it along.
+
+**One apply makes every frame.** `merge_frame` gives each of a frame's N
+blocks an `ApplySource`, and `inter_apply.comp`, one workgroup a block,
+writes the block into the store's spare slot: keep adds each residual to the
+reference mod 2^16, a 16-bit half at a time, and XORs the mask; skip copies
+the reference; zero and a new block copy the payload. An absent side reads as
+zero, so one integer formula serves all three, and an odd K's pad half is
+written 0. An intra frame's sources are `{none, i}`, so it lands in the store
+by the same path. The apply reads the payload where the device reader
+decoded it, so no entry crosses the bus: decoding runs on the device alone
+(the 2026-10-03 decoding entry's amendment says why). The list and sources'
+upload, the apply and the inverse share one submit
+(`DctTransform::inverse` takes the caller's batch).
+
+**The reference changes only when a decode succeeds.** The store's two slots
+swap at `commit`, after the inverse's submit and reject check pass, with
+`{frame_hash(bytes), header}` and the coordinates. A refusal, which comes
+before the grid changes, or a failure after it leaves the reference as it
+was: a resize, or decoding again, decodes the same frame against the same
+reference, and a P-frame on a frame that failed is `NotFound`. `reserve`
+grows the spare, the list and the sources before the grid changes; each is
+at most the grid's `tsdf` array once the frame fits the heap, as the
+inverse's buffers are.
+
+**Memory and cost.** The two slots, the list and the sources take about 10 MB
+at 25,000 blocks of K = 64 (`decoder.hpp` gives the bytes a block), all
+retained as the transform's scratch is.
+Every decode now copies its frame through the apply and hashes it. Hand check
+on the M5 Max, Release: room0, 400 frames at 1 cm, Classic, every frame coded
+as an I-frame and decoded on the device, the median of six runs before and
+six after, interleaved: 3.95 → 4.09 ms a frame of host time, 1.91 →
+1.94 ms of device time; `..rans decode` +0.05 ms (the coordinates taken off
+the reader), `..apply` +0.03 ms (`merge_frame`, which takes an intra frame's
+blocks as they are), `..inverse` +0.06 ms (the list and sources staged, and
+the apply). Bytes and F-score are unchanged.
+
+**Validation.** Apple M5 Max, Release with warnings as errors: the 96 tests
+pass under the validation layer, and again under synchronization validation.
+The new `recon_codec_inter` covers:
+- the apply against plain uint16 arithmetic, every source kind at K 1, 21, 64
+  and 512, from device entries whose pad is not 0, in one dispatch and in
+  several (a test's cap on blocks a dispatch); the slots growing under a held
+  reference; `commit` alone changing what is held; the apply's refusals;
+- frames leaving the grid bit for bit as the CPU oracle decodes their content
+  (the host reader's entries through the inverse alone): the `Encoder`'s at
+  K = 37 in segments of 64 and 3; chains of spheres from the `Encoder` that
+  move and grow; synthetic chains with every mode and new blocks, then
+  A = 0, N = 0 and M = 0, at K 21, 64 and 512; and coefficients that wrap or
+  differ by 32768;
+- a P-frame into a fresh grid built from `read_frame_info`;
+- `NotFound` with no reference, with a later I-frame held, and on a second
+  decoder; `InvalidArgument` for a scale not the reference's, a new block on a
+  reference block, and a segment, intra or update, one entry past
+  `kMaxDeviceDecodeSegmentSize`, where segments of the limit decode;
+  `OutOfMemory` at the parse and at the hash table, each recovered by a
+  resize, with a P-frame on the failed frame `NotFound`; each refusal leaving
+  the grid and the reference as they were;
+- a decoder moved mid-chain.
+
+The decoder tests run their cases once, on the device; their two interim
+type-1 refusals from the 2026-10-12 change check type 2. Nine planted bugs
+each failed one of the two: a carry between the halves, an unmasked pad, OR
+for XOR, no slot swap at commit, the wrong bytes hashed, a commit after a
+failed allocation, the segment limit off by one or doubled, and the reader's
+verdict ignored. Not run: the RTX 5090.
 
 ## Measured lessons
 

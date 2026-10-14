@@ -327,9 +327,9 @@ add_test(NAME recon_example_stage_table COMMAND recon_example_stage_table_test)
 # outputs, a row per decoded frame matching the frame, the .vrst's records
 # (every encoded frame, byte for byte, a frame the decoder refuses included and
 # the stream going on after it, and the same bytes on a rerun), a frame out of
-# order or any call once finished refused before anything is encoded, and the
-# CSV replaced on create and written as frames are coded. The device part skips
-# with no device.
+# order or any call once finished refused before anything is encoded, the CSV
+# replaced on create and written as frames are coded, and a grid too small for a
+# frame grown once at most. The device part skips with no device.
 add_executable(recon_example_codec_stream_test example_codec_stream_test.cpp)
 target_include_directories(recon_example_codec_stream_test
                            PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
@@ -714,6 +714,23 @@ target_include_directories(
   PRIVATE ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/codec)
 vr_target_warnings(recon_codec_device_frame_test)
 add_test(NAME recon_codec_device_frame COMMAND recon_codec_device_frame_test)
+
+# codec tier, decoding on the device: the reference store's apply against plain
+# uint16 arithmetic, and the Decoder's frames -- the Encoder's, and I-then-P
+# chains -- leaving the grid as the CPU oracle's decode of the same content
+# does, bit for bit, with NotFound, a frame the device cannot decode, the
+# refusals and failures that keep the reference, and moves. Internal headers by
+# include path (the public decoder test stays public-only). Skips without a
+# device.
+add_executable(recon_codec_inter_test codec_inter_test.cpp)
+target_link_libraries(
+  recon_codec_inter_test PRIVATE volumetric_kit::recon_codec Vulkan::Vulkan
+                                 volumetric_kit::core_test_policy)
+target_include_directories(
+  recon_codec_inter_test
+  PRIVATE ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/codec)
+vr_target_warnings(recon_codec_inter_test)
+add_test(NAME recon_codec_inter COMMAND recon_codec_inter_test)
 
 # codec tier, entropy coding: the rANS reference coder (normalization, round
 # trips, a probability-one symbol's zero cost, size against the ideal code

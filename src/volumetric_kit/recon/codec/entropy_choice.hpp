@@ -4,10 +4,10 @@
 #pragma once
 
 /// @file entropy_choice.hpp
-/// @brief Where a frame's rANS coding runs (@ref EntropyCoding): the policy
-///        the `Encoder` and the `Decoder` share.
+/// @brief Where the `Encoder` runs a frame's rANS coding
+///        (@ref EntropyCoding).
 ///
-/// Internal (under src/, never installed). Each caller also keeps its device
+/// Internal (under src/, never installed). The encoder also keeps its device
 /// coder's build failure, so `kAuto` tries to build it only once.
 
 #include <cstdint>
@@ -27,8 +27,8 @@ inline bool codes_on_device(EntropyCoding coding, std::uint64_t segments,
 
 /// @return Whether the host codes a frame the device refused with @p s:
 ///         under `kAuto`, one the device cannot hold (past
-///         `maxStorageBufferRange` or a segment limit, or past free memory).
-///         Any other failure is the device's, and is reported.
+///         `maxStorageBufferRange` or free memory). Any other failure is the
+///         device's, and is reported.
 inline bool retry_on_host(EntropyCoding coding, const core::Status& s) {
   return coding == EntropyCoding::kAuto &&
          (s.domain() == core::Status::Code::InvalidArgument ||

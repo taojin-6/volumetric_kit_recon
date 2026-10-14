@@ -8,6 +8,22 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `codec`: **the `Decoder` decodes on the device alone** (BREAKING).
+  `DecoderConfig` and `kMinDeviceDecodeSegments` are gone, and
+  `EntropyCoding` is the `Encoder`'s alone. `Decoder::create(device,
+  allocator)` builds the device rANS reader and fails if its kernels do not
+  build. A frame the device cannot decode -- a segment past
+  `kMaxDeviceDecodeSegmentSize` (1,024 entries), or past
+  `maxStorageBufferRange` or free memory -- is refused, `InvalidArgument`
+  or `OutOfMemory`, where `kAuto` decoded it on the host. A frame of few
+  segments, which `kAuto` also decoded on the host, decodes slower, at a
+  cost the 2026-10-03 decoding decision's amendment measures.
+  `Encoder::create` refuses a `segment_size` past 1,024, `InvalidArgument`.
+  Migrating: drop the config argument, and encode in segments of at most
+  1,024 blocks. The examples' `codec.entropy` sets the encoder alone, and
+  `decode_growing` grows the grid once a frame at most. Tests:
+  `recon_codec_decoder`, `recon_codec_inter`, `recon_codec_encoder`,
+  `recon_example_codec_stream`.
 - `examples`: **the codec's step rules are recon's.** Examples and tests
   need core 0.6.0 (core #30), which leaves them to the codec:
   `encoder_config` maps `codec.quantization_table` to the weights and refuses
@@ -106,18 +122,28 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   section names by XXH64 of its bytes (`frame_hash.hpp`): a mode for each
   reference block (keep, skip, zero or remove; motion reserved) in update
   segments, then the new blocks in intra segments. A reader that does not
-  hold the reference refuses it as `NotFound`. `read_frame_info` and
-  `Decoder::decode` still refuse type 1, as `Unsupported` once the rest of
-  its header checks out; intra frames are unchanged, byte for byte. See the
-  2026-10-12 decision. Tests: `recon_codec_inter_bitstream`, and type-1
-  cases in `recon_codec_bitstream` and `recon_codec_decoder`.
+  hold the reference refuses it as `NotFound`. Intra frames are unchanged,
+  byte for byte. See the 2026-10-12 decision. Tests:
+  `recon_codec_inter_bitstream`, and type-1 cases in `recon_codec_bitstream`.
 - `codec`: **the device coders write and read P-frames** (internal), byte
   for byte as the host does. `DeviceFrameWriter::record_count` takes the
   update size and `finish` the reference, and refuses what `write_frame`
   refuses of the entries with its code and message; `DeviceFrameReader`
   decodes type 1 and returns its modes. The device decode's segment limit
-  counts entries. The `Encoder` and `Decoder` are unchanged. See the
-  2026-10-12 P-frame decision. Test: `recon_codec_device_frame`.
+  counts entries (`kMaxDeviceDecodeSegmentSize`). The `Encoder` is
+  unchanged. See the 2026-10-12 P-frame decision. Test:
+  `recon_codec_device_frame`.
+- `codec`: **the `Decoder` decodes P-frames** (experimental until golden
+  P-frames freeze the bytes) against the frame it decoded last, which it
+  keeps on the device as decoded, into any grid of the frame's geometry. A
+  P-frame whose reference it does not hold is `NotFound`: the stream's
+  P-frames decode again from its next I-frame. A refusal or a failure keeps
+  the reference, so a resize and the same frame again recovers as before.
+  `FrameType` is public (`codec_params.hpp`), `FrameInfo::type` reports it,
+  and `read_frame_info` reads a P-frame's header. Every decoded frame, intra
+  too, now goes through one apply kernel and is hashed, at a cost the
+  2026-10-13 decision measures. Tests: `recon_codec_inter`, and type cases
+  in `recon_codec_decoder`.
 - `examples`: **codec rows and frames, written as they are coded.**
   `CodecStream` keeps a row per decoded frame (its source index, bytes,
   blocks, and encode and decode host and device ms). `codec_replica` and

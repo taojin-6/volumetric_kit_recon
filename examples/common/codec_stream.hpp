@@ -71,15 +71,19 @@ inline vkc::Result<vr::volume::VoxelBlockGrid> player_grid(
       attrs, 2);
 }
 
-/// @brief Decode, growing the grid on OutOfMemory -- the recovery the
+/// @brief Decode, growing the grid once on OutOfMemory -- the recovery the
 ///        Decoder names -- to at least the frame's @ref player_buckets, and
 ///        decoding again, twice at most, on IoError.
 ///
-/// IoError is how the Decoder reports bucket-lock contention that outlasted
-/// its own rounds, which another decode clears, and nothing else; every
-/// other error is returned as itself. Only the attempt that succeeds is timed
-/// into @p rows, so a frame that grew the grid on the way is reported as one
-/// decode.
+/// The Decoder's OutOfMemory is the grid's (too few slots for the frame, or
+/// a hash table that cannot place it), or the device's own, out of memory
+/// for its buffers, which no grow helps. One grow leaves a player grid's heap
+/// at most half full of the frame, so a second OutOfMemory is the device's,
+/// and is returned as the Decoder's. IoError is how the Decoder
+/// reports bucket-lock contention that outlasted its own rounds, which
+/// another decode clears, and nothing else; every other error is returned as
+/// itself. Only the attempt that succeeds is timed into @p rows, so a frame
+/// that grew the grid on the way is reported as one decode.
 inline vkc::Status decode_growing(vr::codec::Decoder& dec, const Bytes& frame,
                                   vr::volume::VoxelBlockGrid& grid,
                                   vkc::StageMetrics* rows, int* grows) {
@@ -87,6 +91,7 @@ inline vkc::Status decode_growing(vr::codec::Decoder& dec, const Bytes& frame,
   VKC_ASSIGN(const vr::codec::FrameInfo info,
              vr::codec::read_frame_info(frame.data(), frame.size()));
   int contended = 0;
+  bool grown = false;
   for (;;) {
     vkc::StageMetrics attempt;
     const vkc::Status s = dec.decode(frame.data(), frame.size(), grid,
@@ -96,7 +101,9 @@ inline vkc::Status decode_growing(vr::codec::Decoder& dec, const Bytes& frame,
       return s;
     }
     if (s.domain() == vkc::Status::Code::OutOfMemory) {
+      if (grown) return s;
       VKC_TRY(vr::volume::grow_grid(grid, player_buckets(info.block_count)));
+      grown = true;
       ++*grows;
     } else if (s.domain() != vkc::Status::Code::IoError ||
                ++contended > kContendedRetries) {
@@ -214,8 +221,7 @@ struct CodecOutputs {
 class CodecStream {
  public:
   /// The player grid is built from the first frame's header, sized for its
-  /// blocks, and grows as later frames need. The decoder runs its rANS
-  /// coding where @p config says the encoder does. @p outputs are made here,
+  /// blocks, and grows as later frames need. @p outputs are made here,
   /// after the codec objects and before any coding: the stream first, as a
   /// rerun onto its file is the common refusal, then the CSV, its header
   /// flushed.
@@ -234,10 +240,8 @@ class CodecStream {
                                          const std::string& program = {}) {
     VKC_ASSIGN(vr::codec::Encoder enc,
                vr::codec::Encoder::create(device, allocator, config));
-    vr::codec::DecoderConfig dc;
-    dc.entropy = config.entropy;
     VKC_ASSIGN(vr::codec::Decoder dec,
-               vr::codec::Decoder::create(device, allocator, dc));
+               vr::codec::Decoder::create(device, allocator));
     // No session id or start time, so a rerun writes the same bytes.
     std::unique_ptr<vr::stream::StreamWriter> writer;
     if (!outputs.stream.empty()) {

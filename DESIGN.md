@@ -1361,8 +1361,9 @@ decoding.
 
 ### codec
 
-The intra codec is implemented. Its rANS coding runs on the device or the
-host, both ways with the same result (2026-10-03). Quantization is
+The intra codec is implemented. Its rANS encoding runs on the device or the
+host, both ways with the same bytes (2026-10-03), and its decoding on the
+device alone (2026-10-13). Quantization is
 one scalar quantizer with a step per DCT basis (2026-10-02):
 `step[u,v,w] = quantization_scale * quantization_weights[u + 8*v + 64*w]`.
 DC is the table's first entry. All blocks share the same 512-entry table, but
@@ -1406,22 +1407,23 @@ blocks, which alone the block list holds; an intra frame is all new blocks.
 The count pass also flags what `write_frame` refuses of the entries (a mode
 past the alphabet, a written −32768), which `finish` refuses in its words
 (`check_entries`).
-`DecoderConfig::entropy` picks where the decoding runs. On the device
-(`detail::DeviceFrameReader`), the host parses the frame
-(`parse_frame`) and uploads only its tables and payload. One batch
-expands each table into a 4096-slot lookup, decodes one segment per
+The `Decoder` decodes on the device (`detail::DeviceFrameReader`): the host
+parses the frame (`parse_frame`) and uploads only its tables and payload.
+One batch expands each table into a 4096-slot lookup, decodes one segment per
 workgroup into the inverse transform's layout, and reads back the new
 blocks' coordinates, a P-frame's modes and each segment's fault, which
 `check_segment` and `check_survivors` judge exactly as the host reader
-does. The coefficients and masks stay in VRAM for the
-inverse (`DctTransform::inverse` over `ResidentBlocks`). The decode's symbol
-walk is inside its serial chain, so `kAuto` decodes on the device only from
-`kMinDeviceDecodeSegments` (80). The frame sets how long one invocation runs,
-so the device refuses segments longer than `kMaxDeviceDecodeSegmentSize`
-(1,024 entries), keeping an invocation near 50 ms. Both coders' `kAuto` uses
-the host for a frame the device cannot hold (`InvalidArgument` or
-`OutOfMemory`), and for every frame once the device kernels fail to build,
-which it tries once; it reports any other device failure.
+does. The coefficients and masks stay in VRAM for the apply and the
+inverse (`DctTransform::inverse` over `ResidentBlocks`). The frame sets how
+long one invocation runs, so the device refuses segments longer than
+`kMaxDeviceDecodeSegmentSize` (1,024 entries), keeping an invocation near
+50 ms, and `Encoder::create` refuses a `segment_size` past it. A frame the
+device refuses, that or one past `maxStorageBufferRange`
+or free memory, is refused with its code (`InvalidArgument` or
+`OutOfMemory`); nothing decodes on the host. The host reader (`read_frame`)
+is the tests' oracle. The encoder's `kAuto` uses the host for a frame the
+device cannot hold, and for every frame once the device kernels fail to
+build, which it tries once; it reports any other device failure.
 `Decoder::decode(frame, grid)` leaves the caller's grid holding exactly the
 frame. It merges the grid's sorted active set with the frame's
 coordinates, removing, allocating, and keeping shared blocks in their
@@ -1437,22 +1439,30 @@ decoder never grows one (a player calls `grow_grid`). Lock
 contention that outlasts four rounds is `IoError`, never `OutOfMemory`, and
 a free heap that refuses a removed block is `InvalidArgument`. A failure
 after the grid has changed leaves it holding neither frame until a decode
-succeeds. Both classes report `StageMetrics`
+succeeds. A P-frame decodes against the frame the `Decoder` decoded last,
+which `detail::ReferenceStore` keeps as decoded: its quantized coefficients
+and masks on the device, in the inverse's layout, and its `FrameReference`
+and coordinates on the host, never rebuilt from a grid. `merge_frame` gives
+each frame block its sources (the 2026-10-12 entry), `inter_apply.comp` makes
+the blocks into the store's spare slot with integers alone, and the inverse
+reads the spare in the same submit; the spare becomes the reference only
+when the whole decode succeeds. An intra frame takes the same apply from its
+payload alone (the 2026-10-13 entry). Both classes report `StageMetrics`
 (`"codec encode"` / `"codec decode"`). Their breakdown rows share no name
 except the map's own `"  ..active set"`. The private pieces under
 `src/volumetric_kit/recon/codec/` are the `DctTransform`, the rANS
-reference coder and the intra frame. The transform takes a
-`volume::BlockList` to a `DctBlocks` — K quantized 16-bit coefficients per
-block in 3-D zigzag order, a 16-word observed mask, and the params and
-`trunc_dist` they were made with — and back, each call one `CommandBatch`
-over device-local buffers. The compacted observed list, uploaded sorted list,
+reference coder, the frame, its device coders and the reference store. The
+transform takes a `volume::BlockList` to a `DctBlocks` — K quantized 16-bit
+coefficients per block in 3-D zigzag order, a 16-word observed mask, and the
+params and `trunc_dist` they were made with — and back, each call one
+`CommandBatch` over device-local buffers. The compacted observed list, uploaded sorted list,
 coefficient buffer and mask buffer are retained and grow only when a call needs
 more capacity, releasing the old buffer first and taking 1.5x headroom
 (`ensure_device_scratch`); descriptor ranges and transfers use the current
 logical sizes.
 They remain allocated until the transform is destroyed. The per-call staging
-inside `CommandBatch` remains transient, and the host rANS path reads
-coefficients/masks back on encode and uploads them on decode. The SDF is normalized by `trunc_dist`
+inside `CommandBatch` remains transient, and the encoder's host rANS path
+reads coefficients/masks back. The SDF is normalized by `trunc_dist`
 before the transform and the steps are fractions of it, so the inverse
 refuses a `DctBlocks`
 whose `trunc_dist` is not its grid's. `CodecParams::validate` checks the scale,
@@ -1476,11 +1486,11 @@ writes weight 1.0 on observed voxels and a fresh block's zeros elsewhere.
 The v3 frame (`bitstream.hpp`, the 2026-10-02 entry) carries the K kept
 weights in its parameter header, `44 + 4K` bytes (300 at K = 64); older
 versions are refused. `read_frame_info` reads them without entropy decoding.
-Header byte 6 is the frame type, which the internal `Frame` carries: intra
-(0), or a P-frame (1, experimental), coded against the frame before it as
-`bitstream.hpp` lays out and the 2026-10-12 entry explains. The host and
-device writers and readers code both; `read_frame_info` and the `Decoder`
-refuse type 1 as `Unsupported`, as every reader refuses a later type.
+Header byte 6 is the frame type (`FrameType`, which `read_frame_info`
+reports): intra (0), or a P-frame (1, experimental), coded against the frame
+before it as `bitstream.hpp` lays out and the 2026-10-12 entry explains. The
+host and device writers and readers code both, and the `Decoder` decodes
+both; every reader refuses a later type as `Unsupported`.
 The payload is segments of R sorted
 blocks (default 64). Each segment is one independent rANS stream
 (`rans.hpp`: a 32-bit state, 16-bit words and 12-bit probabilities, integer
