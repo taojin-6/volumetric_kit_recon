@@ -1417,7 +1417,8 @@ does. The coefficients and masks stay in VRAM for the apply and the
 inverse (`DctTransform::inverse` over `ResidentBlocks`). The frame sets how
 long one invocation runs, so the device refuses segments longer than
 `kMaxDeviceDecodeSegmentSize` (1,024 entries), keeping an invocation near
-50 ms. A frame the device refuses, that or one past `maxStorageBufferRange`
+50 ms, and `Encoder::create` refuses a `segment_size` past it. A frame the
+device refuses, that or one past `maxStorageBufferRange`
 or free memory, is refused with its code (`InvalidArgument` or
 `OutOfMemory`); nothing decodes on the host. The host reader (`read_frame`)
 is the tests' oracle. The encoder's `kAuto` uses the host for a frame the

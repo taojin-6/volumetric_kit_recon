@@ -9637,7 +9637,9 @@ host fallback (the user's rule, 2026-10-13). So `DecoderConfig` and
 `Decoder::create` builds the device reader and fails if it cannot, and a
 frame the device refuses (a segment past `kMaxDeviceDecodeSegmentSize`, a
 buffer past `maxStorageBufferRange` or free memory) is refused with the
-device's code. The host reader stays, as the tests' oracle only. A frame of
+device's code; `Encoder::create` refuses a `segment_size` past that limit,
+so the library writes no frame it cannot decode. The host reader stays, as
+the tests' oracle only. A frame of
 few segments, which `kAuto` decoded on the host, pays for it. Hand check on
 the M5 Max, Release, the median of six runs before and six after,
 interleaved:

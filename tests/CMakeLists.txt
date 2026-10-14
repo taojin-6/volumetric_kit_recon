@@ -327,9 +327,9 @@ add_test(NAME recon_example_stage_table COMMAND recon_example_stage_table_test)
 # outputs, a row per decoded frame matching the frame, the .vrst's records
 # (every encoded frame, byte for byte, a frame the decoder refuses included and
 # the stream going on after it, and the same bytes on a rerun), a frame out of
-# order or any call once finished refused before anything is encoded, and the
-# CSV replaced on create and written as frames are coded. The device part skips
-# with no device.
+# order or any call once finished refused before anything is encoded, the CSV
+# replaced on create and written as frames are coded, and a grid too small for a
+# frame grown once at most. The device part skips with no device.
 add_executable(recon_example_codec_stream_test example_codec_stream_test.cpp)
 target_include_directories(recon_example_codec_stream_test
                            PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)

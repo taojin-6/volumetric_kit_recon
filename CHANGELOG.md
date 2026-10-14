@@ -17,10 +17,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `maxStorageBufferRange` or free memory -- is refused, `InvalidArgument`
   or `OutOfMemory`, where `kAuto` decoded it on the host. A frame of few
   segments, which `kAuto` also decoded on the host, decodes slower, at a
-  cost the 2026-10-03 decoding decision's amendment measures. Migrating:
-  drop the config argument, and encode in segments of at most 1,024 blocks.
-  The examples' `codec.entropy` sets the encoder alone. Tests:
-  `recon_codec_decoder`, `recon_codec_inter`.
+  cost the 2026-10-03 decoding decision's amendment measures.
+  `Encoder::create` refuses a `segment_size` past 1,024, `InvalidArgument`.
+  Migrating: drop the config argument, and encode in segments of at most
+  1,024 blocks. The examples' `codec.entropy` sets the encoder alone, and
+  `decode_growing` grows the grid once a frame at most. Tests:
+  `recon_codec_decoder`, `recon_codec_inter`, `recon_codec_encoder`,
+  `recon_example_codec_stream`.
 - `examples`: **the codec's step rules are recon's.** Examples and tests
   need core 0.6.0 (core #30), which leaves them to the codec:
   `encoder_config` maps `codec.quantization_table` to the weights and refuses
