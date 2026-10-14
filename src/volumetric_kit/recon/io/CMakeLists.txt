@@ -46,6 +46,10 @@ vr_target_warnings(recon_io)
 # Only vendored implementation TUs opt out of first-party warnings.
 set_source_files_properties(stb_impl.cpp tinyply_impl.cpp
                             PROPERTIES COMPILE_OPTIONS -w)
+# No fused multiply-add, so a mesh transform's doubles, which a stream may
+# store, are the same whichever compiler built them.
+set_source_files_properties(mesh_normalization.cpp PROPERTIES COMPILE_OPTIONS
+                                                              -ffp-contract=off)
 
 if(VR_INSTALL)
   install(
