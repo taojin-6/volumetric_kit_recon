@@ -95,6 +95,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `volume`: **`VoxelHashMap::allocate` and `VoxelBlockGrid::remove` from a
+  device list**: a storage buffer of `BlockIndex`, bound where its producer
+  wrote it, with the host overloads' checks, rounds and failure split. The
+  grid's zeroes the listed blocks and frees them through the map's device
+  `remove`; a refused list zeroes nothing and keeps the topology epoch. The
+  host `VoxelBlockGrid::remove` stages its coordinates once, where they went
+  up twice, and `free_stale_blocks` frees through the same body. Tests:
+  `recon_volume_hash_map`, `recon_volume_block_grid`.
 - `camera`: **the calibration file records lenses and is written**
   (`array_calibration.hpp`). Version 2 keeps version 1's
   `device_calibration` key and adds, per sensor, an optional pose, colour

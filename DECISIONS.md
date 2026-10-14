@@ -288,7 +288,8 @@ entries relevant to your task; later amendments supersede earlier rules.
 
 - [**2026-10-03**](#2026-10-03--garbage-collection-deletes-from-the-device-stale-list) —
   Garbage collection passes its device coordinate list directly to deletion,
-  retaining host readback only for control counts.
+  retaining host readback only for control counts. *Amended 2026-10-13:* it
+  frees through the body both `VoxelBlockGrid::remove` overloads share.
 
 - [**2026-10-02**](#2026-10-02--mesh-input-binning-keeps-counts-cursors-and-occupied-bins-on-the-device-retains-scratch-and-reads-only-validation-and-bounded-dispatch-control) —
   Mesh input binning keeps counts, cursors and occupied bins on the device,
@@ -8984,6 +8985,14 @@ under the remote checkout
 `/home/taojin/ws/volumetric_kit/volumetric_kit_recon/.worktrees/gpu-residency-fix-27c331f/`.
 
 ### 2026-10-03 — Garbage collection deletes from the device stale list.
+
+*Amended 2026-10-13:* the grid's own `remove` takes a device list too
+(`VoxelBlockGrid::remove(const Buffer&, count, ...)`, beside the map's
+device `allocate`), and one private body -- zero the listed blocks, then the
+map's device `remove` -- serves both grid overloads and garbage collection:
+the host overload stages its coordinates once, where they went up twice. The
+device overload checks its input first, so a refused list zeroes nothing and
+keeps the topology epoch.
 
 The 2026-10-01 block-stamp decision downloaded the stale list after zeroing
 its attributes, then uploaded the same coordinates for `VoxelHashMap::remove`.

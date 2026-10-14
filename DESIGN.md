@@ -836,8 +836,10 @@ rewrites it or the map allocates, resizes, removes, clears or moves; fusion
 culls to the scanning cameras with it and marching cubes to the viewing one
 (2026-10-06). A host block list travels as a `BlockList` — pointer, count,
 and the `topology_epoch` it was compacted at, paired by
-`VoxelBlockGrid::block_list` so the three cannot be mispaired — which the
-codec takes. `resize` preserves block indices,
+`VoxelBlockGrid::block_list` so the three cannot be mispaired. A sorted
+block list is in `coord_less` order (z, then y, then x);
+`volume/shaders/coord_order.glsl` mirrors it for kernels (`vrCoordLess`),
+with the binary searches they run over one. `resize` preserves block indices,
 so per-voxel data survives a grow. `VoxelBlockGrid` composes the map with
 independently-allocated SoA attribute arrays (`tsdf`, `weight`, `color`, …),
 each `num_blocks·voxels_per_block`, so a consumer materialises only what it
@@ -847,10 +849,13 @@ and `remove` before any index is freed, `remove` by a kernel that finds
 each coord's block itself, so its cost is the count's, not the grid's),
 `resize` copies there, a call's
 inputs are uploaded in its first round, and a round reads back its counts.
-The map's device-buffer `remove` overload binds a producer's coordinate list
-directly. Garbage collection uses it after zeroing the listed attributes, so
-the stale-block list stays on the GPU through deletion; only the stale and
-retry counts reach the host.
+`VoxelHashMap::allocate` and `remove`, and `VoxelBlockGrid::remove`, each
+take a device buffer of `BlockIndex` too, bound where its producer wrote it,
+with the host overload's checks, rounds and failure split; the grid's zeroes
+the listed blocks, then frees them through the map's, two submits. One body
+serves both grid overloads and garbage collection, so the stale-block list
+stays on the GPU through deletion; only the stale and retry counts reach the
+host, and a host list is staged once for both halves.
 A compaction still reads its list back, in the count's own submit while the
 set stays within a quarter past its last count (the 2026-09-28 residency
 decision), except `compact_active_blocks_on_device`'s: its
@@ -899,7 +904,7 @@ interleave. The init kernel zeroes the records, the delete kernel zeroes a
 freed slot's, and `resize` copies them forward, the rehash stamping
 nothing. A consumer compares ticks and resets nothing:
 `free_stale_blocks(max_age)` frees the blocks whose newer stamp is older
-than that, zeroing them with a kernel over the pass's list, so the band the
+than that, through the grid's remove body over the pass's list, so the band the
 allocator still asks for stays, and `rig_viewer` runs it every
 `fusion.free_after` sets; the iOS scanner reads `changed` through
 `read_block_stamps`.
@@ -1385,11 +1390,10 @@ observed voxel (`DctTransform::observed`, compacted on the device, reading
 back only its count and reject tally), sorts them by (z, y, x) on the device
 (`detail::BlockLists`), transforms them, and writes the frame; the sort, the
 forward and the symbol count share one submit. The sort is a stable
-rank-merge sort on `coord_less` itself, which `vrCoordLess`
-(`volume/shaders/coord_order.glsl`) mirrors: a tile kernel sorts 256 entries
+rank-merge sort on `coord_less` itself: a tile kernel sorts 256 entries
 in shared memory, and each level after it merges pairs of sorted runs, every
 entry placed at its index in its run plus a binary search of its sibling
-run, so N entries take `1 + ceil(log2(ceil(N / 256)))` dispatches over all of
+run (`coord_order.glsl`), so N entries take `1 + ceil(log2(ceil(N / 256)))` dispatches over all of
 int32. Keys are unique, so the same content gives the same bytes whatever the
 hash table's order. An empty input submits nothing.
 The frame's rANS coding runs on the device (`detail::DeviceFrameWriter`,
