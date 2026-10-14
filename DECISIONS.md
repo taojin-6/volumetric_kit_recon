@@ -396,7 +396,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   MSVC are not supported.
 - [**2026-10-06**](#2026-10-06--public-api-serves-a-caller-entry-points-only-tests-used-go-or-move-into-their-tests-amends-the-2026-07-04-glm-entry) —
   Public API serves a caller: entry points only tests used go, or move into
-  their tests.
+  their tests. *Amended 2026-10-13:* `VoxelHashMap::diagnostics()` goes too.
 - [**2026-10-06**](#2026-10-06--incremental-mesh-extraction-is-removed-the-changed-stamp-stays-and-the-mesher-no-longer-reads-it-amends-the-2026-08-09-2026-08-11-2026-08-12-2026-09-30-2026-10-01-and-2026-10-02-mesh-entries) —
   Incremental mesh extraction is removed; the `changed` stamp stays, and the
   mesher no longer reads it.
@@ -517,9 +517,10 @@ entries relevant to your task; later amendments supersede earlier rules.
   search, never sorting; only counts and verdicts cross the bus.
   *Amended 2026-10-13:* the host `BlockList` it left without a caller goes,
   and the host-array `allocate` and `remove`.
-- [**2026-10-13**](#2026-10-13--block-lists-reach-the-volume-tier-on-the-device-alone-a-host-list-entry-point-that-only-tests-called-goes-amends-the-2026-08-12-view-meshing-2026-09-26-codec-2026-10-03-garbage-collection-2026-10-06-view-culling-and-2026-10-13-coordinate-entries) —
+- [**2026-10-13**](#2026-10-13--block-lists-reach-the-volume-tier-on-the-device-alone-a-host-list-entry-point-that-only-tests-called-goes-amends-the-2026-08-12-view-meshing-2026-09-26-codec-2026-10-03-garbage-collection-2026-10-06-public-api-and-view-culling-and-2026-10-13-coordinate-entries) —
   Block lists reach the volume tier on the device alone; a host-list entry
-  point that only tests called goes.
+  point that only tests called goes: the host `BlockList`, the host-array
+  `allocate` and `remove`, and the table readbacks.
 
 ## Decision record
 
@@ -10603,6 +10604,10 @@ would be a new decision, landing with its CI leg -- and the core's.
 
 ### 2026-10-06 — Public API serves a caller: entry points only tests used go, or move into their tests (amends the 2026-07-04 GLM entry).
 
+*Amended 2026-10-13 (the volume block-list entry, below):*
+`VoxelHashMap::diagnostics()`, kept below though only tests called it, goes;
+the rule has no such exception now.
+
 **The rule.** A public function, type or option has a caller outside the
 tests -- an example, a sibling, the iOS app -- or it goes. A test that needs
 a host-array convenience writes it from the public members.
@@ -12610,7 +12615,7 @@ these searches and ranks. Cutting fences further waits for a measurement.
 now have no library caller, only tests; removing them is a breaking volume
 change, its own PR once the user decides.
 
-### 2026-10-13 — Block lists reach the volume tier on the device alone; a host-list entry point that only tests called goes (amends the 2026-08-12 view-meshing, 2026-09-26 codec, 2026-10-03 garbage-collection, 2026-10-06 view-culling and 2026-10-13 coordinate entries).
+### 2026-10-13 — Block lists reach the volume tier on the device alone; a host-list entry point that only tests called goes (amends the 2026-08-12 view-meshing, 2026-09-26 codec, 2026-10-03 garbage-collection, 2026-10-06 public-API and view-culling, and 2026-10-13 coordinate entries).
 
 **The rule** is the user's (2026-10-13): only I/O takes a host path --
 reading a mesh model, a camera stream (Orbbec, ARKit) -- and what it reads
@@ -12652,6 +12657,63 @@ overloads go with the host one: the hash-map contention fixture runs four
 fresh maps on the device list, the capacity split it repeated is the main
 case's, and the delete test's host/device alternation and host zero-count
 call are gone.
+
+**And the host table readbacks:** `VoxelHashMap::read_entries`,
+`VoxelHashMap::diagnostics` and `HashDiagnostics`. The 2026-10-06
+public-API entry kept `diagnostics()` as the tests' one window on the
+device heap counter; the rule now has no such exception, and the tests
+check what they read by behaviour:
+- **The heap counter.** Every allocate and remove round reads it back into
+  the copy `load_factor()` returns, so after one the copy is the device's.
+  `recon_volume_block_grid` compares it with the compacted block count after
+  every call that moves the counter, and `recon_volume_resize` after the
+  allocations that follow a grow and a rolled-back grow, and checks that no
+  index is handed out twice. Two planted bugs each failed both tests: a
+  rebuilt device counter one short of the host copy, and a heap rebuilt
+  without excluding the live blocks.
+- **Chains.** `recon_volume_hash_map` already found chained blocks again
+  only by walking their chains, and drops the anchor-offset reads.
+  `recon_marching_cubes_sparse` proves its chained fixture spills from the
+  hash itself: a bucket draws three coordinates for its two slots.
+- `recon_volume_diagnostics` goes with the API.
+
+The host `HashEntry` and `hash.hpp`'s slot sentinels stay as the table's
+layout, which `entries_buffer_size()` and the GLSL mirrors keep to; no host
+code reads a slot.
+
+**What stays, and why.** The volume tier's other host entry points, with
+their callers in `src/`, `include/` and `examples/` (and ios's, at its
+older pin):
+
+| Entry point | Host side | Callers | Verdict |
+|---|---|---|---|
+| `allocate_from_depth(const float*, camera, …)` | the image staged | none in recon; ios's ARKit fusion (`Fusion.mm:731`, `:849`) and compute smoke test | camera-stream I/O: stays |
+| `allocate_from_depth(const std::vector<DepthInput>&, …)` | a host frame's depth staged | `tsdf/fuser.cpp:87` | camera-stream I/O: stays |
+| `allocate_from_triangles(vertices, …, indices, …)` | mesh staged; candidates counted on the host | `examples/codec_mesh/main.cpp:115` | mesh-model I/O stays; the count is **Next** 3 |
+| `triangle_candidate_offsets` | the candidate count | `tsdf/mesh_integrator.cpp:284`, `allocate_from_triangles` | **Next** 3 |
+| `compact_active_blocks()` | the active set read back | `examples/common/remesh_report.hpp:97`, `VoxelHashMap::resize`; ios's `Fusion.mm:1290` | **Next** 1, 2 |
+| `read_block_stamps()` | every slot's stamps read back | `examples/common/remesh_report.hpp:50`; ios's `Fusion.mm:102` | **Next** 1 |
+| `load_factor()` | none: the copy of a counter the rounds read back | `tsdf/fuser.cpp:53`, `:106`; the viewers | control: stays |
+
+**Next**, each its own PR, since each changes another tier, an example or
+a sibling:
+1. The remesh report (`examples/common/remesh_report.hpp`) counts changed
+   blocks on the device, leaving `compact_active_blocks()` to `resize` and
+   the iOS scanner, and `read_block_stamps()` to the scanner alone.
+2. `VoxelHashMap::resize` rehashes from the device list and rebuilds the
+   heap on the device (its `TODO(volume)`), with no snapshot read back and
+   no host pass over `num_blocks`.
+3. `allocate_from_triangles` and tsdf's `MeshIntegrator` count triangle
+   candidates on the device; the vertices and indices stay the mesh model's
+   I/O.
+4. ios, when it re-pins: the compute smoke test uploads its eight blocks,
+   and the scanner's survey and stamps follow item 1.
+
+**Verified** on an Apple M5 Max, macOS, Release with warnings as errors,
+Orbbec, FFmpeg and Assimp: all 96 tests pass under
+`VKC_TEST_VALIDATION=1`, and the codec, volume, tsdf, mesh and texture
+tests under `VKC_TEST_SYNC_VALIDATION=1` too. Not run: the RTX 5090,
+ASan/UBSan, and GCC, which CI covers.
 
 ## Measured lessons
 

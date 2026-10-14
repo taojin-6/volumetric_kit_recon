@@ -454,17 +454,6 @@ target_link_libraries(
 vr_target_warnings(recon_volume_grid_growth_test)
 add_test(NAME recon_volume_grid_growth COMMAND recon_volume_grid_growth_test)
 
-# volume diagnostics: force a collision chain (coords hashing to one bucket) and
-# verify the reported active / overflow / chain-length + heap stats. Skips where
-# no device is present.
-add_executable(recon_volume_diagnostics_test volume_diagnostics_test.cpp)
-target_link_libraries(
-  recon_volume_diagnostics_test
-  PRIVATE volumetric_kit::recon_volume Vulkan::Vulkan
-          volumetric_kit::core_test_policy)
-vr_target_warnings(recon_volume_diagnostics_test)
-add_test(NAME recon_volume_diagnostics COMMAND recon_volume_diagnostics_test)
-
 # volume allocate-from-depth: unproject a synthetic one-pixel depth frame and
 # verify exactly the expected (2*tb+1)^3 truncation-band block cube is allocated
 # on the real driver -- the camera unprojection + band dilation, plus the

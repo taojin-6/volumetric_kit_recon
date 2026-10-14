@@ -868,12 +868,12 @@ none.
 index — and is a globally unique token re-drawn at `create`, at every
 `clear` and at every `remove` that accepts its input, never at `resize`: a
 `DeviceBlockList` anchors on it, so no path may free an index without
-moving it and no two grids may ever share a value. Host `diagnostics()` scans occupancy;
-`load_factor()` is the constant-time read a per-frame caller can afford (a
-host copy of the heap counter, read back by every round that moves it, which
-`diagnostics()` checks against the device's own), and
-`kGrowThreshold` is the occupancy it says to grow at — named here so a UI or
-an embedder cannot draw a ceiling that disagrees with it.
+moving it and no two grids may ever share a value. `load_factor()` is the
+occupancy read a per-frame caller can afford (a host copy of the heap
+counter, read back by every round that moves it), and `kGrowThreshold` is
+the occupancy it says to grow at — named here so a UI or an embedder cannot
+draw a ceiling that disagrees with it. No host call reads the table back;
+a kernel binds `entries_buffer()` (2026-10-13).
 `grow_grid` centralizes the growth arithmetic: double, or reach a larger
 requested minimum, within `VoxelBlockGrid::max_num_buckets` (block pointers
 within int32, each attribute array within one binding). It retains no policy

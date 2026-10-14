@@ -354,6 +354,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Tests: `recon_volume_hash_map`, `recon_volume_delete`,
   `recon_volume_block_grid`; every GPU test that allocates blocks uploads
   them first.
+- `volume`: **the host table readbacks** (BREAKING):
+  `VoxelHashMap::read_entries`, `VoxelHashMap::diagnostics` and
+  `HashDiagnostics`, which only tests called. Migrating: read occupancy with
+  `load_factor()`; a kernel that needs the table binds `entries_buffer()`.
+  Tests: `recon_volume_diagnostics` goes; `recon_volume_hash_map`,
+  `recon_volume_resize`, `recon_volume_block_grid` and
+  `recon_marching_cubes_sparse` check the heap and the chains by behaviour.
 
 ### Changed
 
