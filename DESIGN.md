@@ -1367,10 +1367,8 @@ decoding.
 ### codec
 
 The intra codec is implemented, and it codes and decodes on the device with
-no host fallback (2026-10-13). Two host steps remain, each a
-`TODO(codec)`: the encoder scans each entry's coder steps into the
-segments' offsets, and the `Decoder` merges the grid's active set with the
-frame's blocks into its remove and allocate lists. The CPU rANS coder is the
+no host fallback (2026-10-13). One host step remains, a `TODO(codec)`: the
+encoder scans each entry's coder steps into the segments' offsets. The CPU rANS coder is the
 tests' oracle, under `tests/` (`codec_oracle*.hpp`), which pins the format's
 bytes. Quantization is
 one scalar quantizer with a step per DCT basis (2026-10-02):
@@ -1416,11 +1414,14 @@ past the alphabet, a written −32768), which `finish` refuses in their words
 The `Decoder` decodes on the device (`detail::DeviceFrameReader`): the host
 parses the frame (`parse_frame`) and uploads only its tables and payload.
 One batch expands each table into a 4096-slot lookup, decodes one segment per
-workgroup into the inverse transform's layout, and reads back the new
-blocks' coordinates, a P-frame's modes and each segment's fault, which
-`check_segment` and `check_survivors` judge exactly as the oracle's reader
-does. The coefficients and masks stay in VRAM for the apply and the
-inverse (`DctTransform::inverse` over `ResidentBlocks`). One invocation
+workgroup into the inverse transform's layout, judges the segments
+(`rans_verdict.comp`: the smallest failing segment, by its fault or its first
+coordinate against the block segment before's last) and scans the survivor
+ranks (`survivor_ranks.comp`, on `scan.glsl`), and reads back 8 bytes, the
+verdict and the survivor count, which `check_segment` and `check_survivors`
+word exactly as the oracle's reader does. Every decoded entry stays in VRAM
+for the merge, the apply and the inverse (`DctTransform::inverse` over
+`ResidentBlocks`). One invocation
 decodes a whole segment, so the format holds a segment to at most
 `kMaxDeviceDecodeSegmentSize` (1,024) entries, keeping an invocation near
 50 ms: every reader refuses a frame whose segment size or update size is
@@ -1430,10 +1431,18 @@ decodes on the device. A frame past `maxStorageBufferRange` or free memory
 is refused with its code (`InvalidArgument` or `OutOfMemory`); nothing
 decodes on the host.
 `Decoder::decode(frame, grid)` leaves the caller's grid holding exactly the
-frame. It merges the grid's sorted active set with the frame's
-coordinates, removing, allocating, and keeping shared blocks in their
-slots, then rewrites every voxel's `tsdf` and `weight`, and stamps
-`changed` only on a block it leaves different. Attributes, geometry (exact
+frame. In the decode's own submit, `detail::BlockLists` merges a P-frame's
+surviving reference blocks with its new ones into the frame's list and each
+block's sources, each block placed by a count -- the survivors below it, from
+the ranks, plus the new blocks below it, by binary search -- and finds row
+13, a new block on a reference block, as the first such pair; then it diffs
+the hash table against the frame's list: an occupied slot a search of the
+list misses is gone, and a frame block the table lacks
+(`vrFindBlockPtr`) is missing. Nothing sorts, and 24 bytes come back. The
+grid removes the gone blocks and allocates the missing ones from those
+device lists (`VoxelBlockGrid::remove`, `VoxelHashMap::allocate`), keeps
+shared blocks in their slots, then rewrites every voxel's `tsdf` and
+`weight`, and stamps `changed` only on a block it leaves different. Attributes, geometry (exact
 `voxel_size` / `trunc_dist`, off the header), parsing and the heap are all
 checked before the grid is touched. The attributes must be `tsdf` and `weight` and
 nothing else (`VoxelBlockGrid::attribute_count`), since a kept block would
@@ -1445,16 +1454,17 @@ contention that outlasts four rounds is `IoError`, never `OutOfMemory`, and
 a free heap that refuses a removed block is `InvalidArgument`. A failure
 after the grid has changed leaves it holding neither frame until a decode
 succeeds. A P-frame decodes against the frame the `Decoder` decoded last,
-which `detail::ReferenceStore` keeps as decoded: its quantized coefficients
-and masks on the device, in the inverse's layout, and its `FrameReference`
-and coordinates on the host, never rebuilt from a grid. `merge_frame` gives
-each frame block its sources (the 2026-10-12 entry), `inter_apply.comp` makes
-the blocks into the store's spare slot with integers alone, and the inverse
-reads the spare in the same submit; the spare becomes the reference only
-when the whole decode succeeds. An intra frame takes the same apply from its
-payload alone (the 2026-10-13 entry). Both classes report `StageMetrics`
-(`"codec encode"` / `"codec decode"`). Their breakdown rows share no name
-except the map's own `"  ..active set"`. The private pieces under
+which `detail::ReferenceStore` keeps as decoded: its quantized coefficients,
+masks and block list on the device, in the inverse's layout, and its
+`FrameReference` on the host, never rebuilt from a grid. The merge writes
+each frame block's sources (the 2026-10-12 entry) into the store's spare,
+`inter_apply.comp` makes the blocks there with integers alone, counting any
+source past what is bound, and the inverse reads the spare in the same
+submit; the spare becomes the reference only when the whole decode
+succeeds. An intra frame takes the same apply from its payload alone (the
+2026-10-13 entry). Both classes report `StageMetrics`
+(`"codec encode"` / `"codec decode"`). Their breakdown rows share no name;
+the encoder's `"  ..active set"` is the map's own. The private pieces under
 `src/volumetric_kit/recon/codec/` are the `DctTransform`, the rANS tables,
 the frame's layout and checks, its device coders, the block lists and the
 reference store. The transform's forward takes a device block list to

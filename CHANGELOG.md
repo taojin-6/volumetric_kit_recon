@@ -8,11 +8,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- `codec`: the `Encoder` sorts its blocks on the device, in the forward's
-  submit, so the observed list no longer crosses the bus; its `"  ..sort"`
-  row is gone, the sort timed inside `"  ..forward"`. Every frame's bytes are
-  unchanged. Tests: `recon_codec_block_lists`, `recon_codec_encoder`,
-  `recon_codec_dct`.
+- `codec`: **the codec's coordinate work runs on the device.** The
+  `Encoder` sorts its blocks in the forward's submit, so the observed list no
+  longer crosses the bus; its `"  ..sort"` row is gone, the sort timed inside
+  `"  ..forward"`. The `Decoder` judges a frame's segments, merges a
+  P-frame's blocks with its reference's and diffs the grid's blocks against
+  the frame's in its decode's submit, reading back 24 bytes, and removes and
+  allocates from the device lists; its `"  ..active set"` row is gone, and
+  `"  ..apply"` is the remove and allocate alone. Every frame's bytes,
+  decoded grid, refusal code and message are unchanged. Tests:
+  `recon_codec_block_lists`, `recon_codec_encoder`, `recon_codec_decoder`,
+  `recon_codec_device_frame`, `recon_codec_inter`, `recon_codec_dct`,
+  `recon_codec_inter_bitstream`.
 - `codec`: **the `Encoder` codes on the device alone** (BREAKING).
   `EncoderConfig::entropy`, `EntropyCoding` and `kMinDeviceEncodeSegments`
   are gone. `Encoder::create` builds the device rANS coder and fails if its

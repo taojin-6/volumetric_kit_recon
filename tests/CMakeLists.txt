@@ -736,9 +736,10 @@ vr_target_warnings(recon_codec_inter_test)
 add_test(NAME recon_codec_inter COMMAND recon_codec_inter_test)
 
 # codec tier, the block lists on the device: the encoder's sort against
-# std::stable_sort, over all of int32 and every kind of tie, with its input
-# untouched, and its refusals. Internal headers through the oracle. Skips
-# without a device.
+# std::stable_sort, over all of int32 and every kind of tie; the decoder's merge
+# against the oracle's map and row 13's first collision against a walk; the grid
+# diff against std::set_difference; garbage writing nothing past an output; and
+# the refusals. Internal headers through the oracle. Skips without a device.
 add_executable(recon_codec_block_lists_test codec_block_lists_test.cpp)
 target_link_libraries(
   recon_codec_block_lists_test PRIVATE recon_codec_oracle Vulkan::Vulkan
