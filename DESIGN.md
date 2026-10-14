@@ -1414,13 +1414,15 @@ workgroup into the inverse transform's layout, and reads back the new
 blocks' coordinates, a P-frame's modes and each segment's fault, which
 `check_segment` and `check_survivors` judge exactly as the host reader
 does. The coefficients and masks stay in VRAM for the apply and the
-inverse (`DctTransform::inverse` over `ResidentBlocks`). The frame sets how
-long one invocation runs, so the device refuses segments longer than
-`kMaxDeviceDecodeSegmentSize` (1,024 entries), keeping an invocation near
-50 ms, and `Encoder::create` refuses a `segment_size` past it. A frame the
-device refuses, that or one past `maxStorageBufferRange`
-or free memory, is refused with its code (`InvalidArgument` or
-`OutOfMemory`); nothing decodes on the host. The host reader (`read_frame`)
+inverse (`DctTransform::inverse` over `ResidentBlocks`). One invocation
+decodes a whole segment, so the format holds a segment to at most
+`kMaxDeviceDecodeSegmentSize` (1,024) entries, keeping an invocation near
+50 ms: every reader refuses a frame whose segment size or update size is
+larger, before any device work, and every writer, `Encoder::create`
+included, refuses such a size (`check_segment_size`), so every valid frame
+decodes on the device. A frame past `maxStorageBufferRange` or free memory
+is refused with its code (`InvalidArgument` or `OutOfMemory`); nothing
+decodes on the host. The host reader (`read_frame`)
 is the tests' oracle. The encoder's `kAuto` uses the host for a frame the
 device cannot hold, and for every frame once the device kernels fail to
 build, which it tries once; it reports any other device failure.

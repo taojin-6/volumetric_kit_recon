@@ -172,7 +172,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   The v1 frame is independent rANS segments of sorted blocks, every integer a
   class plus raw bits, behind fixed per-frame tables and a section table; the
   decoder's end check is for consistency, not integrity (amends the 2026-09-26
-  entry's interleaved lanes).
+  entry's interleaved lanes). *Amended 2026-10-13:* a segment holds at most
+  1,024 entries, a rule every writer and reader holds.
 - [**2026-09-27**](#2026-09-27--the-rig-is-orbbecrig-it-checks-the-cameras-against-the-rigs-sync-configuration-and-writes-it-only-when-asked-starts-the-secondaries-before-the-primary-keeps-the-cameras-on-the-hosts-clock-and-builds-each-set-around-a-primary-frame-poses-come-from-the-calibration-file) —
   The rig is `OrbbecRig`: it checks the cameras against the rig's sync
   configuration and writes it only when asked, starts the secondaries before
@@ -4638,7 +4639,16 @@ their inputs. The buffers change anyway with the device-resident output below.
 ### 2026-09-27 — The v1 frame is independent rANS segments of sorted blocks, every integer a class plus raw bits, behind fixed per-frame tables and a section table; the decoder's end check is for consistency, not integrity (amends the 2026-09-26 entry's interleaved lanes).
 
 *Amended 2026-10-12 (the `.vrst` entry, below):* no CRC section is added; a
-frame travels in a `.vrst` record, whose CRC-32 checks it.
+frame travels in a `.vrst` record, whose CRC-32 checks it. *Amended
+2026-10-13 (the device-only encoder):* a segment holds at most
+`kMaxDeviceDecodeSegmentSize` (1,024) entries. R, and a P-frame's U, are
+each from 1 to it: every reader refuses a frame past it as
+`InvalidArgument`, before any device work, and every writer refuses such a
+size (`check_segment_size`). One GPU invocation decodes a whole segment, and
+the codec decodes on the device alone, so this is what makes every valid
+frame decodable; before, the format took any size of at least 1, and the
+device reader alone refused a frame past the limit. No frame outside the
+repository uses a larger size, and the golden frames keep theirs.
 
 The second of the 2026-09-26 entry's five PRs: the host rANS reference coder
 (`codec/rans.hpp`) and the v1 intra frame (`codec/bitstream.{hpp,cpp}`), both

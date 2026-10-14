@@ -8,6 +8,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `codec`: **a segment holds at most 1,024 entries, a rule of the format**
+  (BREAKING). A frame's segment size, and a P-frame's update size, are each
+  from 1 to `kMaxDeviceDecodeSegmentSize`: every reader refuses a frame past
+  it, `InvalidArgument` before any device work, and every writer refuses
+  such a size, so every valid frame decodes on the device. Migrating: write
+  segments of at most 1,024 entries; no frame the library wrote breaks the
+  rule. Tests: `recon_codec_bitstream`, `recon_codec_inter_bitstream`,
+  `recon_codec_device_frame`, `recon_codec_inter`, `recon_codec_encoder`.
 - `codec`: **the `Decoder` decodes on the device alone** (BREAKING).
   `DecoderConfig` and `kMinDeviceDecodeSegments` are gone, and
   `EntropyCoding` is the `Encoder`'s alone. `Decoder::create(device,
