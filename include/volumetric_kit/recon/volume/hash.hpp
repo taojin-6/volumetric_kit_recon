@@ -13,9 +13,10 @@
 namespace volumetric_kit::recon::volume {
 
 /// @name Hash-table slot sentinels
-/// Shared by the host allocator and the compute shaders. `kFreeEntry` and
-/// `kLockEntry` occupy a slot's `ptr` field when it holds no live voxel-block
-/// pointer; `kNoOffset` terminates a collision chain in the `offset` field.
+/// The encoding of a @ref HashEntry, mirrored by
+/// `volume/shaders/hash_common.glsl`. `kFreeEntry` and `kLockEntry` occupy a
+/// slot's `ptr` field when it holds no live voxel-block pointer; `kNoOffset`
+/// terminates a collision chain in the `offset` field.
 /// @{
 inline constexpr std::int32_t kFreeEntry = -1;  ///< Empty slot.
 inline constexpr std::int32_t kLockEntry = -2;  ///< Slot locked mid-insert.
