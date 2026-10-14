@@ -12569,15 +12569,19 @@ oracle's map (every mode mix, M = 0, A = 0, N = 0, int32's extremes, the
 worked example, 1,000 random frames and one of 70,000 blocks); row 13
 against a walk; the diff against `std::set_difference` (overflow chains,
 empty sides, a resize); and garbage writing nothing past an output.
-`recon_codec_device_frame` adds the verdict's first failure and its reset,
+`recon_codec_device_frame` adds the verdict's first failure, a segment
+starting on the last coordinate of the one before, and the verdict's reset,
 and the ranks at M of 0 to 65,537; `recon_codec_inter` the apply's faults,
-a chain whose new blocks sit at int32's extremes, and buffers grown and
-shrunk; `recon_volume_hash_map` and `recon_volume_block_grid` the
-device-list overloads. Nine planted bugs each failed a test: ties to the
+a chain whose new blocks sit at int32's extremes, buffers grown and shrunk,
+and a P-frame that fails row 11 or 12 and also collides, refused by the
+first; `recon_volume_hash_map` and `recon_volume_block_grid` the
+device-list overloads. Twelve planted bugs each failed a test: ties to the
 wrong side, the last partial run skipped, inclusive ranks, `atomicMax` for
 the collision, the verdict not reset, the order checked against the next
-segment, an unsigned `vrCoordLess`, the table's first pass over
-`num_buckets` alone, and the lookup with `max_chain` 0. The codec and
+segment, an equal coordinate accepted across segments, an unsigned
+`vrCoordLess`, the table's first pass over `num_buckets` alone, the lookup
+with `max_chain` 0, and the decoder judging row 13 before rows 11 and 12 or
+ignoring them. The codec and
 volume tests pass under ASan and UBSan too (Debug, Apple clang). Not run:
 the RTX 5090 (not reachable from this machine), and GCC, which CI covers.
 
