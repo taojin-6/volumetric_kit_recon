@@ -189,6 +189,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   too, now goes through one apply kernel and is hashed, at a cost the
   2026-10-13 decision measures. Tests: `recon_codec_inter`, and type cases
   in `recon_codec_decoder`.
+- `codec`: **the `Encoder` writes P-frames** (experimental until golden
+  P-frames freeze the bytes) at `EncoderConfig::intra_period` above 1: an
+  I-frame first, then every period, after `Encoder::force_intra()`, on a
+  grid of other geometry and after a frame of no blocks, and otherwise a
+  zero-motion P-frame against the frame it returned last, which it keeps on
+  the device as it coded it. Only a frame returned moves that reference; a
+  P-frame decodes to exactly the grid the I-frame of the same content does.
+  The default period, 1, writes every frame's bytes as before; the encoder
+  now keeps its last frame in device memory and hashes it, at a cost the
+  2026-10-14 decision measures, and an `intra_period` of 0 is refused.
+  Tests: `recon_codec_encoder`, `recon_codec_decoder`, `recon_codec_inter`,
+  `recon_codec_dct`.
 - `examples`: **codec rows and frames, written as they are coded.**
   `CodecStream` keeps a row per decoded frame (its source index, bytes,
   blocks, and encode and decode host and device ms). `codec_replica` and

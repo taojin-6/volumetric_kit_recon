@@ -509,24 +509,35 @@ entries relevant to your task; later amendments supersede earlier rules.
   segments, new blocks in intra segments, the reference named by XXH64 of its
   bytes; a missing reference is `NotFound`. Experimental until golden
   P-frames freeze it. *Amended 2026-10-13:* the `Decoder` decodes them; row
-  13 is the device merge's, and the host merge is gone.
+  13 is the device merge's, and the host merge is gone. *Amended
+  2026-10-14:* the `Encoder` writes them.
 - [**2026-10-13**](#2026-10-13--the-decoder-decodes-p-frames-against-the-frame-it-decoded-last-kept-on-the-device-as-decoded-in-two-slots-that-swap-only-when-a-decode-succeeds-one-integer-apply-makes-every-decoded-frame-intra-too-and-it-decodes-on-the-device-alone-amends-the-2026-09-27-encoderdecoder-and-2026-10-03-decoding-entries) —
   The `Decoder` decodes P-frames against the frame it decoded last, kept on
   the device as decoded and replaced only when a decode succeeds; one integer
   apply makes every decoded frame; and it decodes on the device alone.
   `FrameType` and `FrameInfo::type` are public. *Amended 2026-10-13:* the
   reference's coordinates live on the device, and the merge runs there.
+  *Amended 2026-10-14:* the `Encoder` keeps its frames in the same store
+  and writes P-frames.
 - [**2026-10-13**](#2026-10-13--the-codecs-coordinate-work-runs-on-the-device-the-encoder-sorts-its-blocks-with-a-stable-rank-merge-sort-on-coord_less-and-the-decoder-judges-merges-and-diffs-them-by-count-and-binary-search-never-sorting-only-counts-and-verdicts-cross-the-bus-amends-the-2026-10-13-decoder-2026-10-12-p-frame-2026-10-03-observed-list-and-garbage-collection-and-2026-10-01-codec-review-entries) —
   The codec's coordinate work runs on the device: the encoder sorts with a
   stable rank-merge sort, and the decoder judges, merges and diffs by binary
   search, never sorting; only counts and verdicts cross the bus. *Amended
   2026-10-13:* so does the writer's step layout, which leaves the codec's
   host only I/O and control; and the host `BlockList` it left without a
-  caller goes, with the host-array `allocate` and `remove`.
+  caller goes, with the host-array `allocate` and `remove`. *Amended
+  2026-10-14:* the encoder's split is its diff's own search, not a
+  `BlockLists` pass.
 - [**2026-10-13**](#2026-10-13--block-lists-reach-the-volume-tier-on-the-device-alone-a-host-list-entry-point-that-only-tests-called-goes-amends-the-2026-08-08-sparse-mesh-and-overflow-scan-2026-08-12-view-meshing-2026-09-26-codec-2026-09-28-device-memory-2026-10-03-garbage-collection-2026-10-06-public-api-and-view-culling-and-2026-10-13-coordinate-entries) —
   Block lists reach the volume tier on the device alone; a host-list entry
   point that only tests called goes: the host `BlockList`, the host-array
   `allocate` and `remove`, and the table readbacks.
+- [**2026-10-14**](#2026-10-14--the-encoder-writes-zero-motion-p-frames-against-the-frame-it-returned-last-kept-in-the-referencestore-as-its-forward-made-it-five-rules-make-an-i-frame-and-the-split-the-diff-and-a-static-price-for-zero-run-on-the-device-amends-the-2026-10-13-decoder-and-coordinate-and-2026-10-12-p-frame-entries) —
+  The `Encoder` writes zero-motion P-frames at `intra_period` above 1,
+  against the frame it returned last, kept in the `ReferenceStore` as its
+  forward made it and moved only when `encode` returns one; five rules make
+  an I-frame; the split, the diff and a static price for zero run on the
+  device.
 
 ## Decision record
 
@@ -12153,7 +12164,9 @@ shared are gone, since the decoder never walks two lists and the encoder's
 split will be a `BlockLists` pass. `check_segment(s, fault)` and
 `check_survivors(survivors, n, a)` take what the device reader reads back,
 the order across segments a fault of its own,
-`SegmentFault::kOutOfOrder`.
+`SegmentFault::kOutOfOrder`. *Amended 2026-10-14 (the `Encoder`'s
+P-frames, below):* the `Encoder` writes type 1, and its split is its diff's
+own search.
 
 The host writer and reader of type-1 frames, internal. `bitstream.hpp` holds
 the layout and the order of the refusals; this entry holds why. Nothing public
@@ -12372,7 +12385,10 @@ coordinates live on the device, in each slot's block list, and `merge_frame`
 is gone: the decoder's merge kernel writes each block's sources into the
 spare in the decode's submit, and the apply reads them there. The apply
 counts a source past what is bound, which no frame that passes rows 11 to
-13 makes, and the store refuses the frame after the submit.
+13 makes, and the store refuses the frame after the submit. *Amended
+2026-10-14 (the `Encoder`'s P-frames, below):* the `Encoder` writes type 1
+too, from a store of its own: its forward fills the spare, and `encode`
+commits it.
 
 The `Decoder` takes type 1; the `Encoder` still writes intra frames only,
 and type 1 stays experimental until golden P-frames freeze it. The format,
@@ -12457,6 +12473,11 @@ failed allocation, the segment limit off by one or doubled, and the reader's
 verdict ignored. Not run: the RTX 5090.
 
 ### 2026-10-13 — The codec's coordinate work runs on the device: the encoder sorts its blocks with a stable rank-merge sort on `coord_less`, and the decoder judges, merges and diffs them by count and binary search, never sorting; only counts and verdicts cross the bus (amends the 2026-10-13 decoder, 2026-10-12 P-frame, 2026-10-03 observed-list and garbage-collection, and 2026-10-01 codec-review entries).
+
+*Amended 2026-10-14 (the `Encoder`'s P-frames, below):* the split the
+**Next** item plans as a `BlockLists` pass is the encoder's diff's own first
+search (`inter_diff.comp`), on these searches and the reader's survivor
+ranks.
 
 *Amended 2026-10-13 (the device step layout):* the **Next** step layout is
 done, so the codec's host does I/O and control alone. `detail::StepLayout`
@@ -12790,6 +12811,130 @@ Orbbec, FFmpeg and Assimp: all 96 tests pass under
 `VKC_TEST_VALIDATION=1`, and the codec, volume, tsdf, mesh and texture
 tests under `VKC_TEST_SYNC_VALIDATION=1` too. Not run: the RTX 5090,
 ASan/UBSan, and GCC, which CI covers.
+
+### 2026-10-14 — The `Encoder` writes zero-motion P-frames against the frame it returned last, kept in the `ReferenceStore` as its forward made it; five rules make an I-frame, and the split, the diff and a static price for zero run on the device (amends the 2026-10-13 decoder and coordinate, and 2026-10-12 P-frame entries).
+
+Library only: the examples keep period 1 until they read
+`codec.intra_period`, and type 1 stays experimental until golden P-frames
+freeze it. The format, the reference hash and `NotFound` are the 2026-10-12
+entry's; the store and the apply the 2026-10-13 decoder entry's.
+
+**Public.** `EncoderConfig::intra_period` (u32, default 1, so every frame's
+bytes are as before; `create` refuses 0) and `Encoder::force_intra()`.
+
+**A frame is an I-frame when:**
+- the encoder holds no reference (its first frame);
+- the period's count is 0: it counts the frames returned since the last
+  I-frame, so any I-frame restarts it;
+- `force_intra()` was called since the last frame returned;
+- the grid's `voxel_size` or `trunc_dist` is not the reference's, bit for
+  bit: `coding_difference`, the rule the writers and the reader already
+  shared, now declared in `bitstream.hpp` (the encoder's params never
+  change);
+- the reference holds no block, where the I-frame is 29 bytes smaller.
+
+Otherwise it is a P-frame. Only a frame `encode` returns moves the
+reference and the count; a refusal keeps both, and a pending
+`force_intra()`. A frame returned and then lost breaks the chain at the
+decoder (`NotFound`) until the next I-frame, which `force_intra()` brings
+forward.
+
+**The reference is what the decoder will hold.** The forward writes into
+the store's spare and the sorted list is copied beside it, so either frame
+type leaves there the q and masks the decoder's apply makes of the frame: a
+skip only when every word is equal, keep's residuals mod 2^16, zero and new
+blocks as they are. `record_forward` takes its output buffers, and the
+transform's own coefficient and mask scratch go, since only tests would
+have used them. `encode` commits `{frame_hash(bytes), header}` once it has
+the bytes, after checking that the frame holds every block the forward made
+(a bug otherwise, which would leave the store's list short of M). One store
+class serves both sides: the encoder's never applies, the decoder's never
+diffs.
+
+**The split and the diff run in the forward's submit**
+(`ReferenceStore::record_diff`, `inter_diff.comp`, whose header has the
+rules):
+1. Pass 0, an invocation a reference entry, finds its block in the frame's
+   sorted list (`VR_COORD_SEARCH`) and writes its mode and payload.
+2. `survivor_ranks.comp`, the reader's scan, counts the survivors below
+   each entry.
+3. Pass 1, an invocation a frame block, finds it in the reference; one the
+   reference lacks is new block `q = t - ranks[e]`, its coordinate and
+   payload at `M + q`.
+
+The coordinate entry planned the split as a `BlockLists` pass. It is the
+diff's own first search instead: both need the store's two slots, and a
+split of its own would write a target an entry only for the diff to read.
+8 bytes come back, the survivor count, from which the host takes A for the
+count, so a P-frame counts its symbols in a second submit: 4 fence waits
+an encode with the map's list held, against an I-frame's 3. U is
+`kDefaultUpdateSize`, 64.
+
+**Zero over keep.** A residual of −32768, which no class carries, codes
+zero. Otherwise the kernel prices both payloads by walking `emit_payload`
+with a sink that charges a symbol `bit_length(s) + 1` bits, a byte model's
+symbol 8, and a raw field its bits, and codes zero only when strictly
+cheaper: a static stand-in for the frame's tables, which do not exist
+until the count. It changes the encoder's bytes, never what a frame decodes
+to. Step 0 put greedy zero-for-kept at 1–2% of P bytes (its V7).
+
+**Memory.** The store's two slots take `80 + 4 ceil(K/2)` bytes a block
+each and the sources 8, as in the decoder; a P-frame's entries
+`80 + 4 ceil(K/2)` a frame block and `72 + 4 ceil(K/2)` a reference block:
+about 18 MB at room0's 21,771 blocks of K = 64, all retained, and up to
+1.5x that once grown (`ensure_device_scratch`'s headroom).
+
+**Hand check.** M5 Max, Release, room0's 400 frames at 1 cm: each frame
+coded at period 30 (14 I-frames, 386 P-frames) and, by a second encoder, at
+period 1, each chain decoded by a fresh decoder of its own, and the two
+players compared after every frame (an uncommitted edit of
+`codec_replica`). Means per frame; step 0's predictions are its V7 u64.
+
+| Fusion | I bytes | P bytes | P/I (step 0) | Mbit/s (all-intra) | Encode I / P, host ms | Device ms | Same grid |
+|---|---|---|---|---|---|---|---|
+| Classic | 239,825 | 12,900 | 0.058 (0.058) | 5.00 (58.25) | 3.66 / 2.87 | 2.22 / 1.24 | 400 of 400 |
+| Dynamic | 228,003 | 35,319 | 0.159 (0.158) | 10.10 (55.46) | 3.05 / 2.54 | 2.13 / 1.43 | 400 of 400 |
+
+P/I is each P-frame over the intra frame of the same grid, and I-frame
+times leave out frame 0's warm-up. A P-frame decodes in 2.09 / 2.63 ms of
+host time against an I-frame's 2.88 / 3.26. The F-scores, 0.9980 and
+0.9984, are the all-intra runs'. At period 1, the median of six runs before
+and six after, interleaved (room0 Classic, 1 cm): encode 2.99 → 3.07 ms of
+host time and 2.04 → 2.06 ms of device time (`..forward`, which now copies
+the sorted list into the store, +0.04 ms), decode unchanged, and the bytes
+and F-score the same.
+
+**Validation.** Apple M5 Max, Release with warnings as errors: the 98 tests
+pass under the validation layer, and the codec and volume tests under
+synchronization validation too.
+- `recon_codec_inter` holds every frame of chains of a sphere that moves
+  and grows beside one that stays -- at period 4 and open-ended, at K 37 in
+  segments of 3 and at the defaults -- to the CPU oracle's bytes: its intra
+  frame of the grid, or `write_frame` of the oracle's P-frame with the
+  price (`codec_frames::encoder_frame`, `codec_oracle::payload_price`); each
+  decodes to its I-frame's grid. It makes each of the diff's choices from
+  one edit: all skip, one block changed, a mask alone (keep, residuals 0),
+  a block gone and one added, unrelated content zero and a small change
+  keep, an empty frame all removed and then an I-frame; and a DC step of
+  32768 zero where the price would keep. It also holds the diff's
+  refusals.
+- `recon_codec_encoder`: an intra period of 0 refused; each I-frame rule at
+  period 3, rows included; refusals (another block size, no weight) that
+  keep the reference, the count and a pending `force_intra()`; and a chain
+  a fresh encoder repeats.
+- `recon_codec_decoder`: chains of 32 frames at period 30 and open-ended,
+  each decoded by its own decoder to the all-intra chain's grid at every
+  frame; and a lost frame, `NotFound`, then `force_intra()`.
+- `recon_codec_dct`: the forward's output buffers refused when short.
+
+Thirteen planted bugs each failed a test: skip never chosen, the price
+ignored, a wrap in the low half missed, a new block's rank off by one, a
+borrow carried between halves, a skip blind to the mask, the ranks not
+dispatched, the sorted list not copied, the count not restarted by an
+I-frame, `force_intra()` never cleared, the empty-reference or the geometry
+rule dropped, and the period off by one. Not run: the RTX 5090, ASan and
+UBSan (CI runs them), and Rafa2, which waits for `codec_mesh` to code a
+sequence.
 
 ## Measured lessons
 
