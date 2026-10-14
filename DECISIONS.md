@@ -273,7 +273,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   transform finds every block by its coordinate, one `CommandBatch` a call
   over device memory; the encoder takes the map's own list and drops
   never-observed blocks before the transform; and the decoder stamps only
-  what it changes (amends the `changed`-stamp entry above).
+  what it changes (amends the `changed`-stamp entry above). *Amended
+  2026-10-13:* the coordinate sort runs on the device too.
 - [**2026-10-02**](#2026-10-02--shared-instructions-live-in-a-concise-agentsmd-claudemd-imports-it-designmd-holds-implementation-detail-and-decisionsmd-holds-the-decision-index-and-rationale) —
   Shared instructions live in a concise AGENTS.md; CLAUDE.md imports it, DESIGN.md holds implementation detail, and DECISIONS.md holds the decision index and rationale.
 - [**2026-10-02**](#2026-10-02--gpu-regressions-guard-span-ownership-chroma-placement-descriptor-aliases-invalid-depth-taps-and-zero-near-visibility) —
@@ -287,7 +288,8 @@ entries relevant to your task; later amendments supersede earlier rules.
 
 - [**2026-10-03**](#2026-10-03--garbage-collection-deletes-from-the-device-stale-list) —
   Garbage collection passes its device coordinate list directly to deletion,
-  retaining host readback only for control counts.
+  retaining host readback only for control counts. *Amended 2026-10-13:* it
+  frees through the body both `VoxelBlockGrid::remove` overloads share.
 
 - [**2026-10-02**](#2026-10-02--mesh-input-binning-keeps-counts-cursors-and-occupied-bins-on-the-device-retains-scratch-and-reads-only-validation-and-bounded-dispatch-control) —
   Mesh input binning keeps counts, cursors and occupied bins on the device,
@@ -309,6 +311,8 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-03**](#2026-10-03--compact-the-codecs-observed-list-on-the-device-and-retain-transform-scratch) —
   Compact the codec's observed list on the device, predict its readback prefix
   to avoid an unconditional extra fence, and retain transform scratch.
+  *Amended 2026-10-13:* the list stays on the device; only its count comes
+  back.
 - [**2026-10-03**](#2026-10-03--codec-mesh-evaluation-consumes-the-shared-io-loader) —
   The codec example uses Assimp-backed asset loading and shared PLY export;
   height normalization and topology checks remain example policy.
@@ -496,12 +500,18 @@ entries relevant to your task; later amendments supersede earlier rules.
   P-frames are frame type 1 of v3: a mode per reference block in update
   segments, new blocks in intra segments, the reference named by XXH64 of its
   bytes; a missing reference is `NotFound`. Experimental until golden
-  P-frames freeze it. *Amended 2026-10-13:* the `Decoder` decodes them.
+  P-frames freeze it. *Amended 2026-10-13:* the `Decoder` decodes them; row
+  13 is the device merge's, and the host merge is gone.
 - [**2026-10-13**](#2026-10-13--the-decoder-decodes-p-frames-against-the-frame-it-decoded-last-kept-on-the-device-as-decoded-in-two-slots-that-swap-only-when-a-decode-succeeds-one-integer-apply-makes-every-decoded-frame-intra-too-and-it-decodes-on-the-device-alone-amends-the-2026-09-27-encoderdecoder-and-2026-10-03-decoding-entries) —
   The `Decoder` decodes P-frames against the frame it decoded last, kept on
   the device as decoded and replaced only when a decode succeeds; one integer
   apply makes every decoded frame; and it decodes on the device alone.
-  `FrameType` and `FrameInfo::type` are public.
+  `FrameType` and `FrameInfo::type` are public. *Amended 2026-10-13:* the
+  reference's coordinates live on the device, and the merge runs there.
+- [**2026-10-13**](#2026-10-13--the-codecs-coordinate-work-runs-on-the-device-the-encoder-sorts-its-blocks-with-a-stable-rank-merge-sort-on-coord_less-and-the-decoder-judges-merges-and-diffs-them-by-count-and-binary-search-never-sorting-only-counts-and-verdicts-cross-the-bus-amends-the-2026-10-13-decoder-2026-10-12-p-frame-2026-10-03-observed-list-and-garbage-collection-and-2026-10-01-codec-review-entries) —
+  The codec's coordinate work runs on the device: the encoder sorts with a
+  stable rank-merge sort, and the decoder judges, merges and diffs by binary
+  search, never sorting; only counts and verdicts cross the bus.
 
 ## Decision record
 
@@ -8701,6 +8711,9 @@ call, which `Decoder` already forbids.
 *Amended 2026-10-03:* the observed kernel now appends a compact list on the
 device, with a predicted-prefix readback instead of the full input and flags;
 see the dated entry below. The coordinate sort and CPU entropy boundary stay.
+*Amended 2026-10-13:* neither stays; the coder runs on the device alone (the
+2026-10-03 encoding entry's amendment), and so does the sort (the 2026-10-13
+coordinate entry).
 *Amended 2026-10-06 (below):* a fuse culls to its frusta and leaves no full
 list, so the encoder takes back an extract's list, and an encode straight
 after a fuse compacts the full list itself.
@@ -8974,6 +8987,14 @@ under the remote checkout
 `/home/taojin/ws/volumetric_kit/volumetric_kit_recon/.worktrees/gpu-residency-fix-27c331f/`.
 
 ### 2026-10-03 — Garbage collection deletes from the device stale list.
+
+*Amended 2026-10-13 (the coordinate entry, below):* the grid's own `remove`
+takes a device list too (`VoxelBlockGrid::remove(const Buffer&, count,
+...)`, beside the map's device `allocate`), and one private body -- zero the
+listed blocks, then the map's device `remove` -- serves both grid overloads
+and garbage collection: the host overload stages its coordinates once, where
+they went up twice. The device overload checks its input first, so a refused
+list zeroes nothing and keeps the topology epoch.
 
 The 2026-10-01 block-stamp decision downloaded the stale list after zeroing
 its attributes, then uploaded the same coordinates for `VoxelHashMap::remove`.
@@ -9378,6 +9399,10 @@ winding preservation, and OBJ/topology refusals. No discrete GPU or new
 sanitizer run was performed for this change.
 
 ### 2026-10-03 — Compact the codec's observed list on the device and retain transform scratch.
+
+*Amended 2026-10-13 (the coordinate entry, below):* the encoder sorts the
+list on the device, so it never leaves it: the filter reads back its count
+and reject tally alone, and the predicted prefix and its tail submit go.
 
 The GPU memory audit found two avoidable costs inside an otherwise staged
 codec. The observed filter downloaded every allocated `BlockIndex` (16 bytes)
@@ -12070,7 +12095,14 @@ measured rates are DESIGN.md's.
 *Amended the same day (the device coders, at the end):* the device writer
 and reader code type 1 too; `read_frame_info` and `Decoder::decode` still
 refuse it. *Amended 2026-10-13 (the P-frame decoding entry, below):* both
-take it.
+take it. *Amended 2026-10-13 (the coordinate entry, below):* row 13, a new
+block on a reference block, is the decoder's merge kernel's, worded by
+`check_new_block`; `merge_by_coord`, `merge_frame` and the one walk they
+shared are gone, since the decoder never walks two lists and the encoder's
+split will be a `BlockLists` pass. `check_segment(s, fault)` and
+`check_survivors(survivors, n, a)` take what the device reader reads back,
+the order across segments a fault of its own,
+`SegmentFault::kOutOfOrder`.
 
 The host writer and reader of type-1 frames, internal. `bitstream.hpp` holds
 the layout and the order of the refusals; this entry holds why. Nothing public
@@ -12284,6 +12316,13 @@ machine).
 
 ### 2026-10-13 — The `Decoder` decodes P-frames against the frame it decoded last, kept on the device as decoded in two slots that swap only when a decode succeeds; one integer apply makes every decoded frame, intra too; and it decodes on the device alone (amends the 2026-09-27 `Encoder`/`Decoder` and 2026-10-03 decoding entries).
 
+*Amended 2026-10-13 (the coordinate entry, below):* the reference's
+coordinates live on the device, in each slot's block list, and `merge_frame`
+is gone: the decoder's merge kernel writes each block's sources into the
+spare in the decode's submit, and the apply reads them there. The apply
+counts a source past what is bound, which no frame that passes rows 11 to
+13 makes, and the store refuses the frame after the submit.
+
 The `Decoder` takes type 1; the `Encoder` still writes intra frames only,
 and type 1 stays experimental until golden P-frames freeze it. The format,
 the reference hash and why a missing reference is `NotFound` are the
@@ -12365,6 +12404,185 @@ each failed one of the two: a carry between the halves, an unmasked pad, OR
 for XOR, no slot swap at commit, the wrong bytes hashed, a commit after a
 failed allocation, the segment limit off by one or doubled, and the reader's
 verdict ignored. Not run: the RTX 5090.
+
+### 2026-10-13 — The codec's coordinate work runs on the device: the encoder sorts its blocks with a stable rank-merge sort on `coord_less`, and the decoder judges, merges and diffs them by count and binary search, never sorting; only counts and verdicts cross the bus (amends the 2026-10-13 decoder, 2026-10-12 P-frame, 2026-10-03 observed-list and garbage-collection, and 2026-10-01 codec-review entries).
+
+The rule the 2026-10-03 decoding entry's amendment records -- only I/O and
+control cross the bus -- applied to the codec's work on block coordinates.
+Before, the encoder read its observed list back, sorted it and uploaded it
+again; the decoder read back the new blocks' coordinates, a P-frame's modes
+and each segment's fault, judged rows 11 and 12 and merged the frame (row
+13) on the host, then compacted the grid, read it back, sorted it, merged it
+with the frame into the remove and allocate lists, and uploaded those and
+the apply's list and sources. On room0 at 1 cm (21,771 blocks a frame) the
+host sort was 0.99 ms of a 3.89 ms encode, and the decoder's compaction
+0.21 ms and its active-set sort most of a 1.33 ms `..apply` (the hand check
+below); a frame moved about 0.8 MB over the bus encoding and 1.3 MB
+decoding.
+
+**The encoder sorts; the decoder never does.** The observed filter appends
+in hash-table order, so the frame's (z, y, x) order takes a sort. Three
+candidates for (z, y, x) int32 keys:
+
+| | Full-range LSD radix | Packed 64-bit keys | Stable rank-merge sort (chosen) |
+|---|---|---|---|
+| Key | 96 bits, sign bits flipped: 12 digits of 8 bits | each axis less its minimum, at most 21 bits | `coord_less` itself |
+| `extreme_frame`'s int32 extremes | 12 passes | do not fit: a second, full-range path | free |
+| Dispatches | 3 a pass: 36, or 9 at room0 after a min/max readback, one more fence | radix's, a pack kernel and the fallback | a tile pass and one a merge level (`block_lists.hpp`): 8 at room0, 5 at Rafa2's 2,395 blocks |
+| New code | a histogram, a ranking and a 256-counter scan a pass | radix's, and `shaderInt64` or its emulation | two small kernels on `coord_order.glsl` |
+| Work | O(N) a pass | O(N) a pass | O(N log² N): about 2.5 M comparisons at room0, 200 M at a million blocks |
+
+Placing each entry by a search of its sibling run (`block_lists.hpp` has the
+mechanism) keeps ties in order, makes the output a permutation, and fixes the
+pass count by N alone, which the host holds; a tile's two arrays of 256
+entries take 8 KB of the 16 KB of shared memory Vulkan guarantees. A hash
+table's keys are unique, so any correct sort gives the host's order: every
+frame's bytes are unchanged. If frames reach about a million blocks, a
+merge-path partition on the same searches is the upgrade. The sort reads its
+input and writes two retained buffers of its own, so the transform's observed
+list is never rewritten; it records into the forward's batch, and the `..sort`
+row goes. `VR_COORD_SEARCH` (`coord_order.glsl`) generates the searches for
+each array they run over, since GLSL passes no buffer to a function. The
+decoder's frame is a merge of two sorted lists, and its grid diff searches
+that frame, so it sorts nothing.
+
+**Rows 11 and 12 stay the reader's, on the device.** After `rans_decode`,
+`rans_verdict.comp` takes, an invocation a segment, its fault, else -- for a
+block segment with a block segment before it -- whether its first coordinate
+follows that segment's last (`SegmentFault::kOutOfOrder`, which the decode
+never writes), and keeps the smallest failing `s << 2 | kind` by `atomicMin`;
+segments number below 2^30, so it fits a u32. The smallest is the segment
+the CPU oracle's walk stops at: every one before it decoded clean, so the
+coordinates it compares are real, and a later segment's comparison against
+a corrupt one never wins. `survivor_ranks.comp`, one workgroup on
+`codec/shaders/scan.glsl` (the scan `rans_scan.comp` ran, now shared, its
+outputs unchanged), writes the survivors before each reference entry, and
+their count at M. The reader reads back those two words and `check()` keeps
+its contract: `check_segment(s, fault)` for the first failing segment, then
+a P-frame's `check_survivors(survivors, n, a)`, codes and words as before.
+The tests' CPU reader computes `kOutOfOrder` itself. The verdict is reset in
+every decode's batch, a frame of no segments included.
+
+**The merge is a count.** Once row 11 passes, the new blocks strictly
+increase -- the grammar's deltas are strictly positive within a segment, and
+the verdict orders segments -- as the committed reference's do, and row 13
+refuses a tie between the two, so a block's place is the survivors below it
+plus the new blocks below it, which `frame_merge.comp` counts from the ranks
+and a binary search (its header has the formulas). Row 13 takes `atomicMin`
+of q and of e: the colliding pairs are monotone, so the two minimums are the
+pair a walk in frame order meets first, which `check_new_block` words as
+`merge_frame` did. On a corrupt frame, refused before anything reads the
+outputs, writes stay below N and every search ends.
+
+**The grid diff: the hash table against the frame** (`grid_diff.comp`), the
+table quiescent as it is for the inverse and fetched each call, since a resize
+replaces it. Neither list is ordered, since `remove` and `allocate` draw heap
+slots atomically anyway, and its two passes are independent, with no flag
+buffer between them; the slot pass shares `vrEntryActive` with the
+compactions. That replaces the decoder's compaction, a fence and a read back,
+and its active-set sort. Gone is at most `num_blocks`, since an occupied slot
+holds one block and `validate` makes slots blocks: 16 bytes a slot, 1/128 of
+the `tsdf` array. Missing is at most N. The grid removes and allocates
+straight from them, through `VoxelBlockGrid::remove` and
+`VoxelHashMap::allocate`'s device-list overloads (the 2026-10-03
+garbage-collection entry's amendment), with `kRounds` and the failure handling
+as before. The encoder keeps its compaction: its observed filter runs a
+workgroup per listed block, not per slot, and often reuses an extract's list.
+
+**The store keeps the reference on the device.** Each slot holds its block
+list, and `commit` takes no coordinates. The merge writes the spare's list
+and sources in the decode's submit, so `record_apply` takes neither. It
+checks on the host what it still can -- the room reserved, the payload's
+buffers, a P-frame's M and K against the held reference's -- and
+`inter_apply.comp` reads a source past what is bound (a reference entry past
+the frame's M, a payload entry past its count) as absent and counts it,
+which the store refuses after the submit. No frame that passes rows 11 to 13
+makes one; this replaces host checks that cannot see sources the device
+made.
+
+**Every size before anything is recorded.** `reserve` -- the store's spare,
+list and sources, and the diff's lists -- comes before the decode's batch.
+Its range checks cannot refuse a frame the parse passed: each buffer is at
+most the grid's 4-byte `tsdf` array, and the ranks, 4 bytes a reference
+entry, fit under the current slot's 64 bytes of masks an entry. So only a
+device out of memory comes before rows 11 to 13, which is no refusal of the
+frame, and a refused frame touches neither the grid nor the reference: the
+merge writes only the spare.
+
+**Gone from the library:** `sort_by_coord`, `kAbsent`, `merge_by_coord`,
+`MergedFrame` and `merge_frame`. Nothing calls them, and the 2026-10-06 rule
+keeps no function only tests call; the tests hold the device merge to the
+oracle's own map (`codec_frames::merge_oracle`), row 13 to a walk, and the
+diff to `std::set_difference`.
+
+**What crosses, and the fences.** The encoder reads back 8 bytes before its
+forward (the observed count and reject tally), and the decoder 24 in its
+decode's submit (the verdict and survivor count, row 13's first collision,
+the gone and missing counts). Fence waits a call, counted against a scratch
+core that counts `vkWaitForFences`, sphere frames of about 400 blocks on the
+M5 Max:
+
+| Call | Before | After |
+|---|---|---|
+| encode, compacting | 4 | 4 |
+| encode, the map's list held | 3 | 3 |
+| decode into a fresh grid (adds only) | 4 | 3 |
+| decode, the same block set | 4 | 2 |
+| decode, adds and drops | 6 | 5 |
+
+The encoder also loses the tail submit an outgrown prefix took, and the
+decoder its compaction and that read back's tail. Fewer would need volume
+changes this does not make: a one-submit decode needs record-into-batch
+variants with device counts, and would have a refused decode move
+`topology_epoch` and `tick`; folding the zeroing into the remove's first
+round needs a public first-round hook, as recon declares no `friend`.
+
+**Hand check.** M5 Max, Release, the median of six runs before (#237's
+head) and six after, interleaved:
+- room0 at 1 cm, Classic, 400 frames each encoded and decoded, 21,771 blocks
+  a frame: encode 3.89 → 2.96 ms a frame of host time (`..sort`'s 0.99 ms
+  gone, `..forward` +0.09 ms), its device time 1.96 → 2.00 ms; decode 4.10 →
+  2.86 ms (`..active set`'s 0.21 ms gone, `..apply` 1.33 → 0.30 ms,
+  `..rans decode` +0.03 ms), its device time 1.94 → 1.96 ms. The `.vrst` is
+  the same byte for byte, and the F-score 0.9980.
+- Rafa2's frame 1 at 5 mm, 2,395 blocks, over the sweep's K = 64 rows:
+  encode 3.01 → 3.15 ms (+0.14 ms: the host's sort took 0.10 ms, and the
+  device's adds five dispatches to the forward's submit), decode 2.88 →
+  2.71 ms. The frame's bytes are the same, and the F-score 1.0000.
+
+**Validation.** Apple M5 Max, Release with warnings as errors: the 97 tests
+pass under the validation layer, and the codec and volume tests under
+synchronization validation too. The new `recon_codec_block_lists` covers the
+sort against `std::stable_sort` (0 to 200,000 entries: all of int32,
+clusters, every kind of tie, sorted and reversed); the merge against the
+oracle's map (every mode mix, M = 0, A = 0, N = 0, int32's extremes, the
+worked example, 1,000 random frames and one of 70,000 blocks); row 13
+against a walk; the diff against `std::set_difference` (overflow chains,
+empty sides, a resize); and garbage writing nothing past an output.
+`recon_codec_device_frame` adds the verdict's first failure, a segment
+starting on the last coordinate of the one before, and the verdict's reset,
+and the ranks at M of 0 to 65,537; `recon_codec_inter` the apply's faults,
+a chain whose new blocks sit at int32's extremes, buffers grown and shrunk,
+and a P-frame that fails row 11 or 12 and also collides, refused by the
+first; `recon_volume_hash_map` and `recon_volume_block_grid` the
+device-list overloads. Twelve planted bugs each failed a test: ties to the
+wrong side, the last partial run skipped, inclusive ranks, `atomicMax` for
+the collision, the verdict not reset, the order checked against the next
+segment, an equal coordinate accepted across segments, an unsigned
+`vrCoordLess`, the table's first pass over `num_buckets` alone, the lookup
+with `max_chain` 0, and the decoder judging row 13 before rows 11 and 12 or
+ignoring them. The codec and
+volume tests pass under ASan and UBSan too (Debug, Apple clang). Not run:
+the RTX 5090 (not reachable from this machine), and GCC, which CI covers.
+
+**Next.** The writer's per-entry coder steps still cross the bus, 4 bytes an
+entry each way, laid out in an O(N) host loop (`device_frame_writer.cpp`'s
+`TODO(codec)`); a segmented layout on `scan.glsl` is the next PR. The
+encoder's split (C5a) becomes a `BlockLists` pass in the forward's submit, on
+these searches and ranks. Cutting fences further waits for a measurement.
+`volume::BlockList`, `VoxelBlockGrid::block_list` and `check_block_list`
+now have no library caller, only tests; removing them is a breaking volume
+change, its own PR once the user decides.
 
 ## Measured lessons
 

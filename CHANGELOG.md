@@ -8,6 +8,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `codec`: **the codec's coordinate work runs on the device.** The
+  `Encoder` sorts its blocks in the forward's submit, so the observed list no
+  longer crosses the bus; its `"  ..sort"` row is gone, the sort timed inside
+  `"  ..forward"`. The `Decoder` judges a frame's segments, merges a
+  P-frame's blocks with its reference's and diffs the grid's blocks against
+  the frame's in its decode's submit, reading back 24 bytes, and removes and
+  allocates from the device lists; its `"  ..active set"` row is gone, and
+  `"  ..apply"` is the remove and allocate alone. Every frame's bytes,
+  decoded grid, refusal code and message are unchanged. Tests:
+  `recon_codec_block_lists`, `recon_codec_encoder`, `recon_codec_decoder`,
+  `recon_codec_device_frame`, `recon_codec_inter`, `recon_codec_dct`,
+  `recon_codec_inter_bitstream`.
 - `codec`: **the `Encoder` codes on the device alone** (BREAKING).
   `EncoderConfig::entropy`, `EntropyCoding` and `kMinDeviceEncodeSegments`
   are gone. `Encoder::create` builds the device rANS coder and fails if its
@@ -90,6 +102,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `volume`: **`VoxelHashMap::allocate` and `VoxelBlockGrid::remove` from a
+  device list**: a storage buffer of `BlockIndex`, bound where its producer
+  wrote it, with the host overloads' checks, rounds and failure split. The
+  grid's zeroes the listed blocks and frees them through the map's device
+  `remove`; a refused list zeroes nothing and keeps the topology epoch. The
+  host `VoxelBlockGrid::remove` stages its coordinates once, where they went
+  up twice, and `free_stale_blocks` frees through the same body. Tests:
+  `recon_volume_hash_map`, `recon_volume_block_grid`.
 - `camera`: **the calibration file records lenses and is written**
   (`array_calibration.hpp`). Version 2 keeps version 1's
   `device_calibration` key and adds, per sensor, an optional pose, colour
