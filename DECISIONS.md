@@ -314,6 +314,8 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-02**](#2026-10-02--per-basis-quantization-and-a-normalized-mesh-codec-fixture) —
   Per-basis quantization replaces the DC/AC split; frame v3 carries the kept
   bases' weights, and a normalized Rafa2 mesh joins room0 in the codec study.
+  *Amended 2026-10-14:* the normalization's arithmetic is `io`'s opt-in
+  helpers.
 - [**2026-10-03**](#2026-10-03--compact-the-codecs-observed-list-on-the-device-and-retain-transform-scratch) —
   Compact the codec's observed list on the device, predict its readback prefix
   to avoid an unconditional extra fence, and retain transform scratch.
@@ -321,7 +323,9 @@ entries relevant to your task; later amendments supersede earlier rules.
   back.
 - [**2026-10-03**](#2026-10-03--codec-mesh-evaluation-consumes-the-shared-io-loader) —
   The codec example uses Assimp-backed asset loading and shared PLY export;
-  height normalization and topology checks remain example policy.
+  height normalization and topology checks remain example policy. *Amended
+  2026-10-14:* they are opt-in `io` helpers; the example chooses the up
+  vector and height.
 - [**2026-10-03**](#2026-10-03--rans-encoding-runs-on-the-device-byte-for-byte-the-hosts-frame-chosen-per-frame-by-segment-count) —
   rANS encoding runs on the device, byte for byte the host's frame, and the
   encoder picks the device per frame from 48 segments. *Amended 2026-10-13:*
@@ -538,6 +542,11 @@ entries relevant to your task; later amendments supersede earlier rules.
   forward made it and moved only when `encode` returns one; five rules make
   an I-frame; the split, the diff and a static price for zero run on the
   device.
+- [**2026-10-14**](#2026-10-14--mesh-normalization-and-the-topology-audit-are-opt-in-generic-io-helpers-for-a-mesh-sequence-bounds-measured-along-one-up-and-joined-over-frames-and-one-transform-for-every-frame-amends-the-2026-10-02-normalized-mesh-and-2026-10-03-codec-mesh-entries) —
+  Mesh normalization and the topology audit are opt-in, generic `io`
+  helpers for a mesh sequence: bounds measured along one up and joined over
+  frames, and one transform applied to every frame. `codec_mesh` uses them,
+  and its single frame keeps its bytes.
 
 ## Decision record
 
@@ -9347,11 +9356,14 @@ Y [-0.10953, 0.054242], Z [0.67838, 1.1272]. Projection inspection shows a
 complete person tilted in XZ, with the head towards -X/-Z. The explicit
 head-up vector `(-0.9120591159, 0.0661250017, -0.4046920474)` is the negative
 long principal axis of the vertex positions, visually checked for sign.
-Its full projected extent is 0.795690789501 source units; scaling by
-2.136508330159 gives a bounding height of 1.7 m. This is the normalization
-convention, not a claim of a recovered source unit or measured stature.
-`codec_mesh` rotates this direction to +Y with a proper rotation, centres
-X/Z and places the minimum Y at zero, without changing the source asset.
+Measured on the float vertices `codec_mesh` reads, its full projected
+extent is 0.795690825737 source units; scaling by 2.13650823286 gives a
+bounding height of 1.7 m. This is the normalization convention, not a claim
+of a recovered source unit or measured stature. `codec_mesh` rotates this
+direction to +Y with a proper rotation, centres X/Z and places the minimum Y
+at zero, without changing the source asset. *Amended 2026-10-14 (below):*
+that arithmetic is `io`'s opt-in `up_axes`, `fit_transform` and
+`apply_transform`, and `codec_mesh` prints the same two figures.
 
 The indexed mesh has one connected component, 75,000 edges and no boundary,
 nonmanifold or inconsistently oriented edges. Its signed volume is positive
@@ -9405,10 +9417,9 @@ For Rafa2 the separate mesh-to-TSDF conversion accuracy / coverage RMS is
 0.091 / 0.403 mm at 1 cm and 0.030 / 0.163 mm at 5 mm. With default codec
 parameters the total decoded-to-original error is 0.891 / 0.857 mm and
 0.415 / 0.381 mm, respectively. These errors are measured independently,
-not added. The float-input normalization prints projected height
-0.795690825737 and scale 2.13650823286; exported input Y is
-[0, 1.70000004768] m. Its tiny difference from the double-precision OBJ
-inspection above is rounding into the production float vertex format.
+not added. Exported input Y is [0, 1.70000004768] m. A double-precision
+inspection of the OBJ text gives 0.795690789501 and 2.136508330159 instead;
+the difference is rounding into the float vertex format.
 
 **Reproduce** with the Release executables and an absolute `dataset_root`:
 
@@ -9578,7 +9589,11 @@ left separate by the asset I/O decision above.
 `examples/codec_mesh/mesh_normalization.*` contains the explicit height/up
 convention, topology audit and conversion to the evaluator's host mesh. Rafa2
 is a test and demo asset, so this is demo policy, compiled into `codec_mesh`
-alone and not tested as library code. The audit runs after normalization, on
+alone and not tested as library code. *Amended 2026-10-14 (below):* the
+normalization and the audit, which were never Rafa2's, are opt-in `io`
+helpers tested there; the example keeps its host-mesh conversion
+(`geometry_mesh.*`), and Rafa2's up vector and height stay in its
+configuration. The audit runs after normalization, on
 the float metres the conversion reads, so a triangle that collapses there
 counts as degenerate. Both codec examples share `parse_number.hpp` for their
 numeric flags, and `codec_mesh` grows its grid only for a capacity limit,
@@ -12935,6 +12950,59 @@ I-frame, `force_intra()` never cleared, the empty-reference or the geometry
 rule dropped, and the period off by one. Not run: the RTX 5090, ASan and
 UBSan (CI runs them), and Rafa2, which waits for `codec_mesh` to code a
 sequence.
+
+### 2026-10-14 — Mesh normalization and the topology audit are opt-in, generic `io` helpers for a mesh sequence: bounds measured along one up and joined over frames, and one transform for every frame (amends the 2026-10-02 normalized-mesh and 2026-10-03 codec-mesh entries).
+
+**Why.** The user, 2026-10-14: "keep in mind the normalization is sequence
+specific, we have Rafa2 now but we can change the data sequence any time. it
+should be designed to handle generic temporal mesh sequences", and "scaling
+can be a helper in the IO module that we can opt in to use". `codec_mesh`'s
+copy fitted a transform to one frame and was written around Rafa2. A
+sequence needs one transform, fitted to all its frames and applied to each,
+so a point that does not move keeps its place, and any dataset needs the
+same arithmetic. So the helpers are `io`'s, opt-in (DESIGN, io), and the
+AGENTS.md rule now lets `io` offer them while no tier applies them on its
+own.
+
+**Choices.**
+- The up direction is fixed before measuring, and the bounds carry their
+  axes: a box in input coordinates cannot give the exact extent along a
+  tilted up, and Rafa2's is tilted.
+- The origin stays in the rotated frame, in source units; one in input
+  coordinates would change the rounding.
+- A component with holes is capped before its volume is taken. Taken about
+  its union-find root vertex, an open component's volume depended on that
+  vertex, so on index order: the open tetrahedron {0,1,3}, {0,3,2},
+  {1,2,3} gave 4/3, the same faces written from vertex 3 gave 0, and
+  `allow_holes` passed one and refused the other.
+- The axes must be a proper rotation, to the camera tier's 1e-6, because
+  the sequence will read a transform back from its `.vrst`.
+- `mesh_normalization.cpp` compiles with `-ffp-contract=off`. In #242's
+  review, Apple clang fused 32 multiply-adds in it and GCC 16 (aarch64) 35,
+  and with contraction off the last bit of the origin's x and z changed, so
+  a stored transform would have depended on the compiler. Rafa2 frame 1's
+  placed floats are the same either way.
+- The helpers use recon's `Vec3d` (glm's `dvec3`) and glm's functions, as
+  the rest of recon does. Normalizing with `glm::normalize` moved five axis
+  components and the scale by one ulp, by the same review's count; frame
+  1's placed floats did not change, and no transform had been stored yet.
+
+**Same bytes.** `codec_mesh` on Rafa2 frame 1 at 5 mm, on main and on this
+change (Apple M5 Max, Release, validation on): the `.vrst` is 67,272 bytes,
+sha256 `b53eb950…`, on both; `_input.ply` and the printed normalization are
+identical. `_source.ply` and `_decoded.ply` differ in vertex order between
+two runs of main itself, as marching cubes emits through atomics; as sorted
+triangle sets they are identical on every run, and so is every non-timing
+line of the report and its sweep.
+
+**Validation.** `recon_io_mesh_normalization` tests every helper on
+synthetic meshes, holes reordered, shifted and rotated among them. All 51
+mutations planted in the helpers fail it, 16 of them the review's. Release
+with warnings as errors and Assimp passes all 84 tests under the validation
+layer.
+
+**Next.** `codec_mesh`'s sequence extends the bounds over its range, applies
+one transform to every frame and stores it in the `.vrst`.
 
 ## Measured lessons
 

@@ -104,10 +104,10 @@ links that base tier alone.
   triangle mesh's distance field written in (signed, or as a shell).
 - **`mesh`** — marching-cubes compute shaders and host mesh containers.
 - **`io`** — host asset loading and export, branching off `mesh`; encoded
-  images, depth PNGs and PLY/PNG export are in `recon_io`, static mesh import
-  in the optional Assimp-backed `recon_io_assimp`. GPU tiers never link back
-  to file I/O. Dataset playback and camera conventions remain with their
-  capture adapters.
+  images, depth PNGs, PLY/PNG export and opt-in mesh normalization helpers
+  are in `recon_io`, static mesh import in the optional Assimp-backed
+  `recon_io_assimp`. GPU tiers never link back to file I/O. Dataset playback
+  and camera conventions remain with their capture adapters.
 - **`texture`** — projective texturing: fills the mesh's per-vertex `uv0` with a
   posed camera's image coordinates where it has line of sight (per-vertex-color
   fallback elsewhere), or with several cameras' coordinates into an atlas of
@@ -1599,15 +1599,17 @@ and translate backend exceptions that reach them into `Status`/`Result`
 (tinyply's writer is `noexcept`); private third-party types never appear in
 installed headers.
 
-`recon_io_assimp` adds `io::load_mesh` and its owned `TriangleMesh` position /
-index container. Assimp handles format decoding and triangulation. Recon
-walks every node instance with composed transforms and corrects triangle
-winding when the determinant is negative. Exactly coincident positions join
-across UV/material seams, with no tolerance-based merging. This is geometry
-import, not topology repair: degenerate and duplicate triangles are retained,
-and manifold/sign checks belong to the consumer. Non-triangle primitives,
-animation, skinning, morph targets and invalid transforms on mesh instances
-are refused; nodes without meshes are not checked.
+`recon_io_assimp` adds `io::load_mesh`, which returns the owned
+`io::TriangleMesh` position / index container of `io/triangle_mesh.hpp`.
+Assimp handles format decoding and triangulation. Recon walks every node
+instance with composed transforms and corrects triangle winding when the
+determinant is negative. Exactly coincident positions join across UV/material
+seams, with no tolerance-based merging. This is geometry import, not topology
+repair: degenerate and duplicate triangles are retained, and manifold/sign
+checks are the consumer's, through `io::audit_mesh_topology` if it opts in.
+Non-triangle primitives, animation, skinning, morph targets and invalid
+transforms on mesh instances are refused; nodes without meshes are not
+checked.
 
 Mesh coordinates retain the imported scene's scale; neither a metre unit nor
 a target height is guessed. No Assimp normalization or handedness flags are
@@ -1618,6 +1620,26 @@ GPU-resident reconstruction. The default build has no Assimp dependency;
 `VR_WITH_ASSIMP=ON` finds an installed package and exports a separate target.
 The image and PLY backends use the existing pinned stb and tinyply sources,
 now private implementation dependencies of the installed I/O library.
+
+`io/mesh_normalization.hpp`, in `recon_io`, holds opt-in helpers for a caller
+that knows its mesh's unit or up direction; nothing in recon calls them. They
+serve one mesh or a temporal sequence alike:
+
+- `up_axes` turns a head-up direction into the proper rotation that takes it
+  to +Y. `mesh_bounds` measures positions along those axes, and
+  `extend_bounds` joins another frame's, exactly and in any order, so a
+  sequence is measured one frame at a time.
+- `fit_transform` (to a height in metres) or `scale_transform` (a given
+  `metres_per_unit`) makes one `MeshTransform` from the bounds, centring X/Z
+  and putting the lowest Y at zero. `apply_transform` maps every frame
+  through it in double precision, rounded to float, so a still point stays
+  still. The fits and `apply_transform` refuse axes that are not a proper
+  rotation, and a refusal leaves the mesh unchanged. The source compiles
+  with `-ffp-contract=off`, so a transform's doubles do not depend on the
+  compiler.
+- `audit_mesh_topology` counts the edges, triangles and components the
+  signed conversion depends on, capping each hole before it takes a
+  component's volume; `supports_signed(allow_holes)` gives the verdict.
 
 ### stream
 
@@ -1821,20 +1843,21 @@ is `InvalidArgument`; a CSV error during creation removes the new stream
 file for retry.
 
 **`codec_mesh`** loads static geometry through the optional Assimp-backed
-`io::load_mesh`, explicitly normalizes its projected height and up direction
-into metres, allocates its triangle band and writes its field
-with `tsdf::MeshIntegrator`. It then encodes, decodes into a separate grid,
-and extracts both grids with `mesh::MarchingCubes`. It reports conversion
+`io::load_mesh` and places it in metres with io's normalization helpers:
+`source.up_vector` gives the axes, and `fit_transform` scales the mesh's own
+bounds to `source.height_m`. It audits the result, allocates its triangle
+band and writes its field with `tsdf::MeshIntegrator`. It then encodes,
+decodes into a separate grid, and extracts both grids with
+`mesh::MarchingCubes`. It reports conversion
 error against the normalized input mesh separately from codec error against
 the uncompressed extracted surface. Rafa2 is the first mesh fixture: its
 file declares no unit, and its tilted body needs an explicit up vector
 before scaling to 1.7 m (see the 2026-10-02 decision for the measured bounds
-and normalization). The original asset is left unchanged. File parsing and
-PLY export belong to `io`. `examples/codec_mesh/mesh_normalization.*` holds
-the demo's height convention and topology audit, which exist only to scale
-this test asset and are not library code. Its frame is the one record (set
-and pts 0) of its `output.stream`; `output.prefix` writes PLYs only. The mesh
-example is built only with `VR_WITH_ASSIMP=ON`.
+and normalization). The original asset is left unchanged. File parsing,
+normalization and PLY export belong to `io`; the example keeps only its
+conversion to the evaluator's host mesh (`geometry_mesh.*`). Its frame is
+the one record (set and pts 0) of its `output.stream`; `output.prefix` writes
+PLYs only. The mesh example is built only with `VR_WITH_ASSIMP=ON`.
 
 Both examples take `codec.quantization_table` (`uniform`, `band`, `radial`) and `codec.quantization_scale` for a
 single configuration. Their common `codec.sweep` compares all three table

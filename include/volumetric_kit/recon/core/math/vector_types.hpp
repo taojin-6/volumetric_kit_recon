@@ -34,6 +34,10 @@ namespace volumetric_kit::recon {
 using Vec2f = glm::vec2;
 /// @brief 3-component float vector (packed 12 B; positions, normals, ...).
 using Vec3f = glm::vec3;
+/// @brief 3-component double vector, for host arithmetic only; no buffer
+///        carries it. The camera tier, which cannot include this header,
+///        names the same type `camera::Vec3d`.
+using Vec3d = glm::dvec3;
 /// @brief 3-component signed-integer vector (e.g. voxel-block coordinates).
 using Vec3i = glm::ivec3;
 /// @brief 4-component float vector (packed 16 B; homogeneous points, ...).

@@ -7,9 +7,11 @@ include(GNUInstallDirs)
 set(_vr_io_generated_inc "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
 set(_vr_io_install_inc "${CMAKE_INSTALL_INCLUDEDIR}/volumetric_kit/recon/io")
 
-# Host image decoding / PNG encoding and Mesh -> PLY serialization. The
-# implementation-only libraries have no public headers or exported targets.
-add_library(recon_io image_io.cpp ply_writer.cpp stb_impl.cpp tinyply_impl.cpp)
+# Host image decoding / PNG encoding, Mesh -> PLY serialization and the opt-in
+# mesh normalization helpers. The implementation-only libraries have no public
+# headers or exported targets.
+add_library(recon_io image_io.cpp mesh_normalization.cpp ply_writer.cpp
+                     stb_impl.cpp tinyply_impl.cpp)
 add_library(volumetric_kit::recon_io ALIAS recon_io)
 generate_export_header(
   recon_io
@@ -44,6 +46,10 @@ vr_target_warnings(recon_io)
 # Only vendored implementation TUs opt out of first-party warnings.
 set_source_files_properties(stb_impl.cpp tinyply_impl.cpp
                             PROPERTIES COMPILE_OPTIONS -w)
+# No fused multiply-add, so a mesh transform's doubles, which a stream may
+# store, are the same whichever compiler built them.
+set_source_files_properties(mesh_normalization.cpp PROPERTIES COMPILE_OPTIONS
+                                                              -ffp-contract=off)
 
 if(VR_INSTALL)
   install(
@@ -53,9 +59,12 @@ if(VR_INSTALL)
     LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
     RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
   install(
-    FILES "${PROJECT_SOURCE_DIR}/include/volumetric_kit/recon/io/image_io.hpp"
-          "${PROJECT_SOURCE_DIR}/include/volumetric_kit/recon/io/ply_writer.hpp"
-          "${_vr_io_generated_inc}/volumetric_kit/recon/io/export.hpp"
+    FILES
+      "${PROJECT_SOURCE_DIR}/include/volumetric_kit/recon/io/image_io.hpp"
+      "${PROJECT_SOURCE_DIR}/include/volumetric_kit/recon/io/mesh_normalization.hpp"
+      "${PROJECT_SOURCE_DIR}/include/volumetric_kit/recon/io/ply_writer.hpp"
+      "${PROJECT_SOURCE_DIR}/include/volumetric_kit/recon/io/triangle_mesh.hpp"
+      "${_vr_io_generated_inc}/volumetric_kit/recon/io/export.hpp"
     DESTINATION "${_vr_io_install_inc}")
 endif()
 

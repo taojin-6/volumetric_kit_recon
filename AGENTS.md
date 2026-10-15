@@ -27,9 +27,10 @@ geometry and compressed bitstreams → renderer handoff.
   Python research/evaluation harnesses. The production C++ `eval` tier is allowed.
 - A sensor driver belongs here only if this repository can build and test it.
   Platform-only drivers such as ARKit belong with their downstream application.
-- The tiers work on any data. Dataset-specific preprocessing (units,
-  orientation, scale) belongs to the caller, as an example does for its demo
-  asset, never to a tier or its tests.
+- The tiers work on any data. `io` may offer opt-in, generic unit,
+  orientation and scale helpers, but a tier still never applies dataset
+  preprocessing on its own: the caller opts in, as an example does for its
+  demo asset, and a tier's tests use synthetic data.
 
 ## Read what the task needs
 

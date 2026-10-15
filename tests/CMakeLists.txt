@@ -1101,6 +1101,15 @@ target_link_libraries(recon_io_ply_test PRIVATE volumetric_kit::recon_io)
 vr_target_warnings(recon_io_ply_test)
 add_test(NAME recon_io_ply COMMAND recon_io_ply_test)
 
+# The opt-in mesh normalization and topology helpers, on synthetic meshes.
+add_executable(recon_io_mesh_normalization_test io_mesh_normalization_test.cpp
+                                                test_allocation_failure.cpp)
+target_link_libraries(recon_io_mesh_normalization_test
+                      PRIVATE volumetric_kit::recon_io)
+vr_target_warnings(recon_io_mesh_normalization_test)
+add_test(NAME recon_io_mesh_normalization
+         COMMAND recon_io_mesh_normalization_test)
+
 # stream: the .vrst container through its public API -- golden bytes whose CRCs
 # Python's zlib.crc32 computed, round trips, seeking, unknown kinds and chunks,
 # the limits, every refusal, two threads on one reader -- what its reader
