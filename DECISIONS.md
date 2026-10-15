@@ -9603,20 +9603,19 @@ left separate by the asset I/O decision above.
 convention, topology audit and conversion to the evaluator's host mesh. Rafa2
 is a test and demo asset, so this is demo policy, compiled into `codec_mesh`
 alone and not tested as library code. *Amended 2026-10-14 (below):* the
-normalization and the audit, which were never Rafa2's, are opt-in `io`
-helpers tested there; the example keeps its host-mesh conversion
-(`geometry_mesh.*`), and Rafa2's up vector and height stay in its
-configuration. The audit runs after normalization, on
-the float metres the conversion reads, so a triangle that collapses there
-counts as degenerate. *Amended 2026-10-14 (the mesh-sequence entry, below):*
-`codec_mesh` codes a numbered range under one transform, and audits each
-frame on its source coordinates first, to refuse before any GPU work, and
-again on the placed ones, which decides. Both codec examples share `parse_number.hpp` for their
-numeric flags, and `codec_mesh` grows its grid only for a capacity limit,
-retrying lock contention. These are consumer choices, so they stay outside
-the format loader. *Amended 2026-10-08 (below):* `parse_number` is
-`cli.hpp`'s, and both examples declare their codec flags through
-`codec_flags.hpp`.
+normalization and the audit, which were never Rafa2's, are opt-in `io` helpers
+tested there; the example keeps its host-mesh conversion (`geometry_mesh.*`),
+and Rafa2's up vector and height stay in its configuration. The audit runs
+after normalization, on the float metres the conversion reads, so a triangle
+that collapses there counts as degenerate. *Amended 2026-10-14 (the
+mesh-sequence entry, below):* `codec_mesh` codes a numbered range under one
+transform, and audits each frame on its source coordinates first, to refuse
+before any GPU work, and again on the placed ones, which decides. Both codec
+examples share `parse_number.hpp` for their numeric flags, and `codec_mesh`
+grows its grid only for a capacity limit, retrying lock contention. These are
+consumer choices, so they stay outside the format loader. *Amended 2026-10-08
+(below):* `parse_number` is `cli.hpp`'s, and both examples declare their codec
+flags through `codec_flags.hpp`.
 Quantization-table candidates likewise remain codec-example policy.
 `codec_mesh` requires `VR_WITH_ASSIMP=ON`; the room codec, production codec
 library and tests build without it.
@@ -9666,10 +9665,11 @@ device path uses -- the rANS tables and their normalization, the frame's
 layout, parsing and shared checks, `frame_hash` and the merges -- and no
 function that only tests call. The examples' `codec.entropy` takes `auto`
 and `device` alike and refuses `host`; core drops the key in its next config
-change. *Amended 2026-10-14:* core 0.7.0 dropped it. Two host steps remain in the encoder, each a `TODO(codec)`: the
-coordinate sort, whose observed list crosses the bus both ways, and the scan
-of each entry's coder steps into the segments' step and slot offsets. A
-frame of few segments, which `kAuto` coded on the host, pays for it. Hand
+change. *Amended 2026-10-14:* core 0.7.0 dropped it. Two host steps remain
+in the encoder, each a `TODO(codec)`: the coordinate sort, whose observed
+list crosses the bus both ways, and the scan of each entry's coder steps into
+the segments' step and slot offsets. A frame of few segments, which `kAuto`
+coded on the host, pays for it. Hand
 check on the M5 Max, Release, the median of six runs before and six
 after, interleaved:
 - room0 at 1 cm, Classic, 40 I-frames of about 21,900 blocks in 343
@@ -13065,10 +13065,11 @@ number, the placement and the conversion's rules are recon's.
   kind, whose params were empty: an old reader passes them through, so the
   version holds. A single mesh stores its transform too.
 - **The audit runs twice.** The first pass audits each frame on its source
-  coordinates. A proper similarity changes no count, hole, orientation or
-  volume sign, so a frame signed mode cannot take is refused there, before
-  any GPU work. The second pass audits the placed coordinates and decides,
-  since rounding can make a triangle degenerate.
+  coordinates. In exact arithmetic a proper similarity changes no count,
+  hole, orientation or volume sign, so a frame signed mode cannot take is
+  refused there, before any GPU work. Rounding can still make a placed
+  triangle degenerate or flip a volume's sign, so the second pass audits the
+  placed coordinates and decides.
 - **`source.allow_holes`.** Off by default and signed mode only: it admits a
   mesh whose only defect is boundary edges, each hole growing a skirt to the
   truncation past its rim (`MeshSdfMode::Signed`). Rafa2's frames 74–99 have
@@ -13084,12 +13085,12 @@ number, the placement and the conversion's rules are recon's.
   Replica's frames, which carry no time either), seq from 0, all key until
   P-frames are coded. A single mesh is set 0 at pts 0, as before. Quality,
   the sweep and the PLYs are the last frame's; the CSV schema holds.
-- **The stream before any work.** `codec_mesh` creates its stream after the
-  GPU setup and before the first conversion or PLY, so a rerun onto an
-  existing stream is refused before any work, and a mesh signed mode refuses
-  leaves no `_input.ply`. A later failure leaves a `.vrst` that reads as
-  unfinished, as any mid-run failure of a sequence does. `codec_replica`
-  keeps its order.
+- **The stream before any conversion.** `codec_mesh` creates its stream after
+  the GPU setup and before the first conversion or PLY, so a rerun onto an
+  existing stream is refused before any GPU work on a frame or any output,
+  and a mesh signed mode refuses leaves no `_input.ply`. A later failure
+  leaves a `.vrst` that reads as unfinished, as any mid-run failure of a
+  sequence does. `codec_replica` keeps its order.
 - **The shell bound is the conversion's.** Core 0.7.0 checks only that
   `shell_voxels` is finite and positive. `MeshSdfParams::validate(grid)`
   holds the `[√3/2, trunc_dist)` rule; `MeshIntegrator::integrate` calls it,
@@ -13098,6 +13099,18 @@ number, the placement and the conversion's rules are recon's.
   4 voxels, so `codec_mesh.json` is unchanged. `codec_mesh_sequence.json`
   sets 0.04 m, 8 voxels: the paper's band and step 0's.
 - **`codec.entropy` is gone** from core 0.7.0, and recon stops reading it.
+- **One home for a mesh file's checks.** `io::check_mesh_file` holds what
+  `io::load_mesh` checks of a path before it reads; the sequence calls it
+  for every frame before the first load.
+- **A placement past float range is the fit's refusal.** The fits refuse
+  bounds they would place past float range, which `apply_transform` would
+  refuse frame by frame, so `codec_mesh` refuses such a scale before any GPU
+  work instead of after coding a frame.
+- **A `%` in the scenario's directory** is read as part of the pattern while
+  core prepends the directory as it is: a scenario under `50%off/` is
+  refused, and one under `take%d/` reads `take0/`. Core 0.8.0 (core #34)
+  escapes it as `%%` for CodecMesh's `source.path`, and `numbered_path`
+  already reads `%%` as `%` in any path, numbered or not.
 
 **Frame 150's conversion outlier.** Kept: the sequence stays 1–150. Under
 the range's transform, frame 150's conversion accuracy is mean 0.024, rms
@@ -13136,9 +13149,9 @@ sweep line are identical.
   frames under frame 1's transform (scale 2.13650823286 against the range's
   2.13436903472), each frame is 0.9971 times as large on average
   (0.9916–1.0047), correlation 0.9915.
-- 12.3 s wall for the run, both passes included. Per frame, the conversion
-  takes 8.9 ms host and 6.7 ms device, encoding 2.8 and 1.6, and decoding
-  3.0 and 1.7.
+- 12.2 s wall for the run, both passes included. Per frame, the conversion
+  takes 8.7 ms host and 6.6 ms device, encoding 2.7 and 1.6, and decoding
+  3.1 and 1.7 (all from one run).
 - A fresh `Decoder` decodes every record into a fresh grid to the run's
   player grid bit for bit (blocks, `tsdf` and `weight`); the last frame
   extracts to the run's 184,708 triangles.
@@ -13162,9 +13175,11 @@ each frame in a cleared grid, and `code_frame`'s records and stored
 transform. `recon_io_mesh_normalization` round-trips the transform bit for
 bit; `recon_tsdf_mesh_integrate` holds `validate` to `integrate`'s
 refusals; `recon_codec_mesh_run` runs the executable on a device, an
-existing stream refused before any work, then two frames; the config-entry
-test inspects a range and refuses a missing frame, a bad pattern and a range
-on a plain path.
+existing stream refused before any conversion or output, then two frames;
+the config-entry test inspects a range and counts its open and refused
+frames, and with no Vulkan driver to find, refuses eleven coding scenarios,
+each for its own reason before any GPU work. `recon_io_mesh_file` holds
+`load_mesh` to `check_mesh_file`.
 
 ## Measured lessons
 

@@ -21,8 +21,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   mesh's is 112 bytes longer, its record unchanged. `CodecStream::create`
   takes those params. Migrating: drop `codec.entropy`; pass the grid
   parameters to `mesh_sdf_config` and check its result; write a literal `%`
-  in a mesh path as `%%`. Tests: `recon_example_config`,
-  `recon_example_mesh_sequence`, `recon_codec_mesh_run`.
+  in a mesh path as `%%`. Until core 0.8.0 escapes the scenario's own
+  directory, keep `%` out of the directories above a `codec_mesh` scenario:
+  there it is read as part of the pattern. Tests: `recon_example_config`,
+  `recon_example_mesh_sequence`, `recon_codec_mesh_run`,
+  `recon_codec_mesh_config_entry`.
+- `io`: the fits (`fit_transform`, `scale_transform`) refuse bounds they
+  would place past float range, `InvalidArgument`, which `apply_transform`
+  refused only once applied; `load_mesh`'s file checks are
+  `check_mesh_file`'s, so those messages begin `check_mesh_file:`. Tests:
+  `recon_io_mesh_normalization`, `recon_io_mesh_file`.
 - `tsdf`: `MeshIntegrator::integrate` refuses its parameters through
   `MeshSdfParams::validate`, so those messages begin `MeshSdfParams:`.
   Test: `recon_tsdf_mesh_integrate`.
@@ -142,6 +150,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   mode take a mesh whose only defect is holes, and `codec.inspect_only`
   checks every frame on the host. Tests: `recon_example_mesh_sequence`,
   `recon_codec_mesh_run`, `recon_codec_mesh_config_entry`.
+- `io`: **`check_mesh_file`**, what `load_mesh` checks of a path before it
+  reads, for a caller that checks a sequence's files first. Test:
+  `recon_io_mesh_file`.
 - `io`: **`encode_transform` and `decode_transform`**, a `MeshTransform`'s
   112-byte form, bit for bit: what a `.vrst` Geometry track's params hold.
   Test: `recon_io_mesh_normalization`.

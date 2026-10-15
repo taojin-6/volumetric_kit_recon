@@ -1856,14 +1856,15 @@ frame-number pattern, a range on a plain path and any frame file that is
 missing or not a regular file, and checks a shell against the truncation
 (`MeshSdfParams::validate`). Its first pass loads each frame, joins its
 bounds along `source.up_vector` (`io::extend_bounds`), audits it and drops
-it, so memory does not grow with the range; the audit's counts do not change
-under a proper similarity, so a frame signed mode cannot take is refused
-there. One transform for the range follows (`fit_transform` or
+it, so memory does not grow with the range. In exact arithmetic a proper
+similarity changes none of the audit's counts, so a frame signed mode cannot
+take is refused there; rounding can still change the degenerate count or a
+volume's sign, which the second pass's audit decides. One transform for the range follows (`fit_transform` or
 `scale_transform`) and places every frame unchanged, so a still point stays
 still; it is printed once and stored as the Geometry track's params
 (`io::encode_transform`). The stream is created after the GPU setup and
 before any frame is converted, so a rerun onto it is refused before any
-work. Each frame (`code_frame`) is loaded, placed, audited again on the
+conversion or output. Each frame (`code_frame`) is loaded, placed, audited again on the
 placed coordinates (the audit that decides, as rounding can make a triangle
 degenerate), converted into the one source grid after a `clear`, so no block
 of an earlier frame stays, and coded as one intra record: set the frame's

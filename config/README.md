@@ -56,7 +56,7 @@ of zero or less requests four voxels. Depth limits use the source's defaults
 per-example defaults; `rig_viewer` uses zero for no frame/set limit. Counts
 remain distinct: `fuse_orbbec` counts camera frames, while `rig_viewer` can
 limit both acquired sets and drawn frames. `codec_mesh` counts exactly:
-`run.frames` meshes, numbered from `run.first`, one each by default.
+`run.frames` meshes, numbered from `run.first`, one by default.
 
 `fuse_orbbec` accepts `diagnostics.readback: true` in either a stream or fusion
 scenario. It copies every set's luma to host memory and reports a separate
