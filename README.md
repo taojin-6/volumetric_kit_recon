@@ -192,11 +192,10 @@ example with `VR_WITH_ASSIMP=ON` after installing the
 [asset I/O prerequisites](#asset-io).
 Their `codec` section selects `quantization_table` (`uniform`, `band`,
 `radial`), `quantization_scale`, `segment_size` and the shared
-rate-distortion `sweep`. The codec codes and decodes on the device, so
-`entropy` takes `auto` and `device` alike and refuses `host`. `output.stream`
-records every coded frame in a new `.vrst` file (see
-[the stream container](DESIGN.md#stream)), and `output.csv` writes a row per
-decoded frame: its bytes, blocks, and encode and decode host and device ms.
+rate-distortion `sweep`. `output.stream` records every coded frame in a new
+`.vrst` file (see [the stream container](DESIGN.md#stream)), and
+`output.csv` writes a row per decoded frame: its bytes, blocks, and encode
+and decode host and device ms.
 
 Rafa2's supplied OBJ has no declared physical unit and its person is tilted
 in the stored coordinates. The mesh scenario's explicit head-up vector is the
