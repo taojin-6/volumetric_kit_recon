@@ -1636,7 +1636,8 @@ serve one mesh or a temporal sequence alike:
   and putting the lowest Y at zero. `apply_transform` maps every frame
   through it in double precision, rounded to float, so a still point stays
   still. The fits and `apply_transform` refuse axes that are not a proper
-  rotation, and a refusal leaves the mesh unchanged. The source compiles
+  rotation, and a refusal leaves the mesh unchanged; the fits also refuse
+  bounds they would place past float range. The source compiles
   with `-ffp-contract=off`, so a transform's doubles do not depend on the
   compiler.
 - `encode_transform` and `decode_transform` are a transform's one byte
