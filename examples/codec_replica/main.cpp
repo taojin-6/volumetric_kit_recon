@@ -45,7 +45,6 @@ namespace mesh = volumetric_kit::recon::mesh;
 
 namespace {
 
-constexpr double kFps = 30.0;
 constexpr std::int32_t kBuckets = 16384;  // the fusion grid's; it grows
 constexpr std::size_t kMetricStride = 4;  // about 1 vertex in 4, both ways
 
@@ -109,8 +108,9 @@ vkc::Status run(const Options& opt) {
     ++fused;
     if (opt.codec.encode_every > 0 &&
         fused % std::size_t(opt.codec.encode_every) == 0) {
-      VKC_TRY(stream.code(volume, fused - 1,
-                          vr_example::frame_pts_ns(fused - 1, kFps)));
+      VKC_TRY(stream.code(
+          volume, fused - 1,
+          vr_example::frame_pts_ns(fused - 1, vr_example::kNominalFps)));
       coded_at = fused;
     }
   }
@@ -118,11 +118,12 @@ vkc::Status run(const Options& opt) {
     return vkc::Status::invalid_argument("no frames were fused");
   }
   if (coded_at != fused) {
-    VKC_TRY(stream.code(volume, fused - 1,
-                        vr_example::frame_pts_ns(fused - 1, kFps)));
+    VKC_TRY(stream.code(
+        volume, fused - 1,
+        vr_example::frame_pts_ns(fused - 1, vr_example::kNominalFps)));
   }
   VKC_TRY(stream.finish());
-  stream.report(kFps, opt.codec.encode_every);
+  stream.report(vr_example::kNominalFps, opt.codec.encode_every);
 
   // The last frame's decoded surface against the source's.
   VKC_ASSIGN(const mesh::Mesh source, extractor.extract_host(volume));

@@ -185,11 +185,11 @@ build has, iOS included, with or without FFmpeg.
 ## Codec evaluation
 
 `codec_replica` runs the grid codec on a fused room sequence. `codec_mesh`
-loads static triangle geometry through `io::load_mesh`, uses
-`tsdf::MeshIntegrator` to convert it to a TSDF, compresses and decodes that
-grid, then extracts the decoded surface with marching cubes. Build the mesh
-example with `VR_WITH_ASSIMP=ON` after installing the
-[asset I/O prerequisites](#asset-io).
+codes one triangle mesh or a numbered sequence of them: it loads each through
+`io::load_mesh`, uses `tsdf::MeshIntegrator` to convert it to a TSDF,
+compresses and decodes that grid, then extracts the decoded surface with
+marching cubes. Build the mesh example with `VR_WITH_ASSIMP=ON` after
+installing the [asset I/O prerequisites](#asset-io).
 Their `codec` section selects `quantization_table` (`uniform`, `band`,
 `radial`), `quantization_scale`, `segment_size` and the shared
 rate-distortion `sweep`. `output.stream` records every coded frame in a new
@@ -197,12 +197,24 @@ rate-distortion `sweep`. `output.stream` records every coded frame in a new
 `output.csv` writes a row per decoded frame: its bytes, blocks, and encode
 and decode host and device ms.
 
-Rafa2's supplied OBJ has no declared physical unit and its person is tilted
-in the stored coordinates. The mesh scenario's explicit head-up vector is the
-visually checked long principal axis. The example rotates it to +Y,
-centres X/Z, puts the feet at Y=0, and scales the projected height to 1.7 m.
-It prints the original and normalized bounds and leaves the asset unchanged.
-This is a height normalization, not an assertion about the source's unit.
+A mesh scenario gives the head-up direction (`source.up_vector`) and either
+the input's unit (`source.metres_per_unit`) or a height to fit
+(`source.height_m`). The example rotates head-up to +Y, centres X/Z and puts
+the lowest point at Y=0, with one transform fitted to every frame it codes,
+printed once and stored in the stream; the files are left unchanged.
+Rafa2's OBJs declare no unit and its person is tilted, so its scenarios give
+the visually checked long principal axis and fit 1.7 m: a height
+normalization, not an assertion about the source's unit.
+
+A sequence's `source.path` holds a printf-style frame number, such as
+`Frame_%05d_textured.obj` (`%d` or `%0Nd` once; `%%` for a literal `%`), and
+`run.first` and `run.frames` select an exact range, every file checked
+before any work. Each frame is converted alone and coded as one record whose
+set is its number, at 30 fps. `codec_mesh_sequence.json` codes Rafa2's
+frames 1–150 at 5 mm in an 8-voxel band; its frames 151–300 replay 150–1,
+so stop at 150. Frames 74–99 and 128–131 have holes, so it sets
+`source.allow_holes: true`: signed mode then takes a mesh whose only defect
+is boundary edges, each hole growing a skirt to the truncation past its rim.
 
 ```sh
 cmake -S "$recon_root" -B "$recon_root/build" -DCMAKE_BUILD_TYPE=Release \
@@ -213,12 +225,15 @@ cmake --build "$recon_root/build" --parallel
   --config "$recon_root/config/examples/codec_replica.json"
 "$recon_root/build/examples/codec_mesh/codec_mesh" \
   --config "$recon_root/config/examples/codec_mesh.json"
+"$recon_root/build/examples/codec_mesh/codec_mesh" \
+  --config "$recon_root/config/examples/codec_mesh_sequence.json"
 ```
 
-The mesh example's `output.prefix` writes `_input.ply` (normalized original),
-`_source.ply` (uncompressed TSDF surface) and `_decoded.ply`. Conversion
-error, codec-only error and total error are reported separately.
-`codec.inspect_only` checks the input and normalization without a GPU run.
+The mesh example's comparisons, sweep and `output.prefix` PLYs are the last
+frame's: `_input.ply` (normalized original), `_source.ply` (uncompressed
+TSDF surface) and `_decoded.ply`. Conversion error, codec-only error and
+total error are reported separately. `codec.inspect_only` checks every
+frame's input and normalization without a GPU.
 The signed mode checks indexed topology and winding; it does not establish
 freedom from self-intersections. `source.sdf_mode: "shell"` supports open or
 inconsistently wound meshes, with an intentional surface offset.

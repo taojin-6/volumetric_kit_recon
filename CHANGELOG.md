@@ -8,6 +8,24 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `examples`: **core 0.7.0 is required** (core #33). Its CodecMesh takes
+  `run.first`, `run.frames`, `fusion.truncation_m`, `source.allow_holes`
+  and `source.metres_per_unit` beside `height_m`, and `codec.entropy`
+  is gone, so a scenario that sets it no longer loads. `mesh_sdf_config`
+  takes the grid's parameters and returns `Result<MeshSdfParams>`, refusing a
+  shell outside `[sqrt(3)/2, truncation)` before any GPU work, the bound core
+  no longer checks. `codec_mesh` creates its stream after the GPU setup and
+  before any conversion, and writes its PLYs after coding, so a rerun onto
+  an existing stream, or a mesh signed mode refuses, leaves no `_input.ply`.
+  Its `.vrst` stores the transform as the Geometry track's params: a single
+  mesh's is 112 bytes longer, its record unchanged. `CodecStream::create`
+  takes those params. Migrating: drop `codec.entropy`; pass the grid
+  parameters to `mesh_sdf_config` and check its result; write a literal `%`
+  in a mesh path as `%%`. Tests: `recon_example_config`,
+  `recon_example_mesh_sequence`, `recon_codec_mesh_run`.
+- `tsdf`: `MeshIntegrator::integrate` refuses its parameters through
+  `MeshSdfParams::validate`, so those messages begin `MeshSdfParams:`.
+  Test: `recon_tsdf_mesh_integrate`.
 - `io`: `TriangleMesh` moves to `triangle_mesh.hpp`, in `recon_io`;
   `mesh_io.hpp` includes it, so no includer changes.
 - `examples`: `codec_mesh` normalizes and audits its mesh through the `io`
@@ -113,6 +131,23 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `examples`: **`codec_mesh` codes a numbered mesh sequence**
+  (`codec_mesh_sequence.json`, Rafa2's frames 1–150). `source.path` may
+  hold a printf-style frame number (`%05d`; `%%` for a literal `%`), and
+  `run.first` with `run.frames`, an exact count, selects the range, every
+  file checked before any work. One transform fitted to every frame places
+  them all; it is printed once and stored in the stream. Each frame is
+  converted into a cleared grid and coded as one record, its set the frame's
+  number and its pts that number at 30 fps. `source.allow_holes` lets signed
+  mode take a mesh whose only defect is holes, and `codec.inspect_only`
+  checks every frame on the host. Tests: `recon_example_mesh_sequence`,
+  `recon_codec_mesh_run`, `recon_codec_mesh_config_entry`.
+- `io`: **`encode_transform` and `decode_transform`**, a `MeshTransform`'s
+  112-byte form, bit for bit: what a `.vrst` Geometry track's params hold.
+  Test: `recon_io_mesh_normalization`.
+- `tsdf`: **`MeshSdfParams::validate(grid)`**, the shell bound
+  `MeshIntegrator::integrate` applies, for a caller to check before any GPU
+  work. Test: `recon_tsdf_mesh_integrate`.
 - `io`: **opt-in mesh normalization and topology helpers** for one mesh or
   a temporal sequence (`mesh_normalization.hpp`, in `recon_io`). Test:
   `recon_io_mesh_normalization`.

@@ -50,4 +50,17 @@ if(VR_BUILD_TESTS)
           ${PROJECT_SOURCE_DIR}/tests/example_config_entry.cmake)
     endif()
   endforeach()
+  # codec_mesh's order on a device: an existing stream refused before any frame
+  # is converted or written, then a two-frame run.
+  if(TARGET codec_mesh)
+    add_test(
+      NAME recon_codec_mesh_run
+      COMMAND
+        ${CMAKE_COMMAND} -DPROGRAM=$<TARGET_FILE:codec_mesh>
+        -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/codec-mesh-run -P
+        ${PROJECT_SOURCE_DIR}/tests/example_codec_mesh_run.cmake)
+    set_tests_properties(
+      recon_codec_mesh_run PROPERTIES SKIP_REGULAR_EXPRESSION
+                                      "skipping: no Vulkan device")
+  endif()
 endif()

@@ -197,6 +197,10 @@ inline std::string codec_row_csv(const CodecRow& row) {
   return out + text + device(row.decode_device_ms) + "\n";
 }
 
+/// The rate a source with no time of its own is coded at: Replica's frames
+/// and a mesh sequence's numbers.
+inline constexpr double kNominalFps = 30.0;
+
 /// @return Source frame @p frame's time at @p fps, frame 0 at 0, in ns
 ///         rounded to the nearest. @pre @p fps is positive.
 inline std::uint64_t frame_pts_ns(std::size_t frame, double fps) {
@@ -227,6 +231,9 @@ class CodecStream {
   /// flushed.
   /// @param program  The program writing the stream, recorded in its session
   ///                 header.
+  /// @param geometry_params  Its Geometry track's params, recorded as given:
+  ///                 empty, or a mesh source's `io::encode_transform` bytes
+  ///                 (stream/session.hpp).
   /// @return The stream; `StreamWriter::create`'s error for the stream
   ///         (InvalidArgument when something is at its path, NotFound when
   ///         its directory is missing); InvalidArgument if the CSV aliases
@@ -237,7 +244,8 @@ class CodecStream {
                                          vkc::Allocator& allocator,
                                          const vr::codec::EncoderConfig& config,
                                          CodecOutputs outputs = {},
-                                         const std::string& program = {}) {
+                                         const std::string& program = {},
+                                         std::string geometry_params = {}) {
     VKC_ASSIGN(vr::codec::Encoder enc,
                vr::codec::Encoder::create(device, allocator, config));
     VKC_ASSIGN(vr::codec::Decoder dec,
@@ -247,6 +255,7 @@ class CodecStream {
     if (!outputs.stream.empty()) {
       vr::stream::Track geometry;
       geometry.kind = vr::stream::TrackKind::Geometry;
+      geometry.params = std::move(geometry_params);
       vr::stream::Session session;
       session.writer = program;
       session.tracks.push_back(geometry);

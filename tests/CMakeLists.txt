@@ -342,6 +342,24 @@ vr_target_warnings(recon_example_codec_stream_test)
 add_test(NAME recon_example_codec_stream
          COMMAND recon_example_codec_stream_test)
 
+# codec_mesh's sequence (examples/codec_mesh/mesh_sequence.hpp), where the mesh
+# example is built. On the host: the frame-number pattern, every file checked
+# before any load, one transform for the whole range, signed mode's rule and
+# source.allow_holes, and inspection. On a device: each frame converted into a
+# cleared grid, and code_frame's records and the transform in the stream.
+# examples/ defines vr_example_mesh after this directory. The device part skips
+# with no device.
+if(VR_BUILD_EXAMPLES AND TARGET recon_io_assimp)
+  add_executable(recon_example_mesh_sequence_test
+                 example_mesh_sequence_test.cpp)
+  target_link_libraries(
+    recon_example_mesh_sequence_test
+    PRIVATE vr_example_mesh volumetric_kit::core_test_policy Vulkan::Vulkan)
+  vr_target_warnings(recon_example_mesh_sequence_test)
+  add_test(NAME recon_example_mesh_sequence
+           COMMAND recon_example_mesh_sequence_test)
+endif()
+
 # fuse_replica's --dirty-every survey (examples/common/remesh_report.hpp): the
 # changed blocks after a tick, the blocks they put back to marching cubes, and
 # the survey's windows. Skips (exit 0) with no device.

@@ -315,7 +315,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   Per-basis quantization replaces the DC/AC split; frame v3 carries the kept
   bases' weights, and a normalized Rafa2 mesh joins room0 in the codec study.
   *Amended 2026-10-14:* the normalization's arithmetic is `io`'s opt-in
-  helpers.
+  helpers, and Rafa2's frames 1–150 are coded as a sequence.
 - [**2026-10-03**](#2026-10-03--compact-the-codecs-observed-list-on-the-device-and-retain-transform-scratch) —
   Compact the codec's observed list on the device, predict its readback prefix
   to avoid an unconditional extra fence, and retain transform scratch.
@@ -325,7 +325,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   The codec example uses Assimp-backed asset loading and shared PLY export;
   height normalization and topology checks remain example policy. *Amended
   2026-10-14:* they are opt-in `io` helpers; the example chooses the up
-  vector and height.
+  vector and height, and codes a numbered range under one transform.
 - [**2026-10-03**](#2026-10-03--rans-encoding-runs-on-the-device-byte-for-byte-the-hosts-frame-chosen-per-frame-by-segment-count) —
   rANS encoding runs on the device, byte for byte the host's frame, and the
   encoder picks the device per frame from 48 segments. *Amended 2026-10-13:*
@@ -495,6 +495,8 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-11**](#2026-10-11--examples-load-the-cores-scenario-format-and-keep-only-runtime-adapters) —
   Examples load the core scenario format; JSON, defaults and static validation
   have one owner. *Amended 2026-10-12:* the codec's step rules are recon's.
+  *Amended 2026-10-14:* so are the mesh conversion's shell bound and a mesh
+  path's frame number.
 - [**2026-10-11**](#2026-10-11--picture-readback-publishes-buffer-ownership-for-subsequent-stages) —
   Picture readback updates ownership before subsequent reads or preparation.
 - [**2026-10-12**](#2026-10-12--the-viewers-window-glue-comes-from-gfxs-gfx_glfw-recon-keeps-no-copy-amends-the-2026-08-02-bootstrap-and-2026-10-04-vulkan-foundation-entries) —
@@ -507,7 +509,8 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-12**](#2026-10-12--recordings-are-vrst-files-of-our-own-verbatim-records-in-crc-framed-chunks-readable-from-a-killed-writer-in-recon_stream-on-the-cores-base-tier-alone-amends-the-2026-09-27-v1-frame-entry) —
   Recordings are `.vrst` files of our own: verbatim records in CRC-framed,
   8-byte-aligned chunks, readable from a killed writer, in `recon_stream` on
-  the core's base tier alone.
+  the core's base tier alone. *Amended 2026-10-14:* a Geometry track's
+  params may hold a mesh source's transform.
 - [**2026-10-12**](#2026-10-12--p-frames-are-frame-type-1-of-v3-each-reference-block-gets-a-mode-in-update-segments-new-blocks-follow-in-intra-segments-and-a-reference-section-names-the-reference-by-xxh64-of-its-bytes-experimental-until-golden-p-frames-freeze-it) —
   P-frames are frame type 1 of v3: a mode per reference block in update
   segments, new blocks in intra segments, the reference named by XXH64 of its
@@ -547,6 +550,13 @@ entries relevant to your task; later amendments supersede earlier rules.
   helpers for a mesh sequence: bounds measured along one up and joined over
   frames, and one transform applied to every frame. `codec_mesh` uses them,
   and its single frame keeps its bytes.
+- [**2026-10-14**](#2026-10-14--codec_mesh-codes-a-numbered-mesh-sequence-under-one-transform-a-frame-number-in-sourcepath-an-exact-range-one-transform-fitted-to-every-frame-and-stored-in-the-stream-a-cleared-grid-and-one-record-per-frame-and-sourceallow_holes-amends-the-2026-10-02-normalized-mesh-2026-10-03-codec-mesh-2026-10-11-examples-and-2026-10-12-container-entries) —
+  `codec_mesh` codes a numbered mesh sequence: a printf-style frame number in
+  `source.path`, `run.first` and an exact `run.frames`, one transform fitted
+  to every frame and stored in the Geometry track's params, a cleared grid
+  and one record per frame, `source.allow_holes`, and its stream made before
+  any work. Frame 150's conversion outlier is mostly the closest-face sign
+  at a sliver fold.
 
 ## Decision record
 
@@ -9439,6 +9449,9 @@ different output prefix. Sweeps print the entire table; sizes include all
 headers, masks, coordinates, entropy tables and coefficients. Timings do
 not establish capture-to-display throughput or discrete-GPU performance.
 Rafa2 has only one frame, so it supplies no temporal quality evidence.
+*Amended 2026-10-14 (the mesh-sequence entry, below):* this file is frame 1
+of V-SENSE's Rafa2, whose frames 1–150 `codec_mesh_sequence.json` codes
+under one transform fitted to them all.
 
 The exported 5 mm radial / K = 64 / scale = 0.1 frame was independently
 parsed: 66,971 bytes, 2,395 blocks, all 512 weights of the first-draft
@@ -9595,7 +9608,10 @@ helpers tested there; the example keeps its host-mesh conversion
 (`geometry_mesh.*`), and Rafa2's up vector and height stay in its
 configuration. The audit runs after normalization, on
 the float metres the conversion reads, so a triangle that collapses there
-counts as degenerate. Both codec examples share `parse_number.hpp` for their
+counts as degenerate. *Amended 2026-10-14 (the mesh-sequence entry, below):*
+`codec_mesh` codes a numbered range under one transform, and audits each
+frame on its source coordinates first, to refuse before any GPU work, and
+again on the placed ones, which decides. Both codec examples share `parse_number.hpp` for their
 numeric flags, and `codec_mesh` grows its grid only for a capacity limit,
 retrying lock contention. These are consumer choices, so they stay outside
 the format loader. *Amended 2026-10-08 (below):* `parse_number` is
@@ -9650,7 +9666,7 @@ device path uses -- the rANS tables and their normalization, the frame's
 layout, parsing and shared checks, `frame_hash` and the merges -- and no
 function that only tests call. The examples' `codec.entropy` takes `auto`
 and `device` alike and refuses `host`; core drops the key in its next config
-change. Two host steps remain in the encoder, each a `TODO(codec)`: the
+change. *Amended 2026-10-14:* core 0.7.0 dropped it. Two host steps remain in the encoder, each a `TODO(codec)`: the
 coordinate sort, whose observed list crosses the bus both ways, and the scan
 of each entry's coder steps into the segments' step and slot offsets. A
 frame of few segments, which `kAuto` coded on the host, pays for it. Hand
@@ -11987,7 +12003,9 @@ which the tests check. No camera was opened.
 
 *Amended 2026-10-12 (core 0.6.0, core #30):* the codec's step rules are
 recon's: core no longer checks them, and `encoder_config` applies them
-(DESIGN.md → "Examples").
+(DESIGN.md → "Examples"). *Amended 2026-10-14 (core 0.7.0, core #33; the
+mesh-sequence entry, below):* so are the mesh conversion's shell bound
+(`MeshSdfParams::validate`) and the frame number in a mesh source's path.
 
 This replaces the 2026-10-08 command-line parser decision. Every executable
 accepts `--config PATH` and `--help`, and directly consumes
@@ -12093,6 +12111,10 @@ its model, the write mode ignored, a later version accepted, and an array
 taking an unposed sensor each fail a test. No camera was opened.
 
 ### 2026-10-12 — Recordings are `.vrst` files of our own: verbatim records in CRC-framed chunks, readable from a killed writer, in `recon_stream` on the core's base tier alone (amends the 2026-09-27 v1-frame entry).
+
+*Amended 2026-10-14 (the mesh-sequence entry, below):* a Geometry track's
+params are empty or a mesh source's transform (`io::encode_transform`), an
+addition to the kind that keeps version 0.
 
 A recording holds tracks of several kinds, each on its own clock, the rig's
 calibration, and per record a pts, a sequence number, a capture set and
@@ -13003,6 +13025,146 @@ layer.
 
 **Next.** `codec_mesh`'s sequence extends the bounds over its range, applies
 one transform to every frame and stores it in the `.vrst`.
+
+### 2026-10-14 — `codec_mesh` codes a numbered mesh sequence under one transform: a frame number in `source.path`, an exact range, one transform fitted to every frame and stored in the stream, a cleared grid and one record per frame, and `source.allow_holes` (amends the 2026-10-02 normalized-mesh, 2026-10-03 codec-mesh, 2026-10-11 examples and 2026-10-12 container entries).
+
+**Why.** The user, 2026-10-14: "keep in mind the normalization is sequence
+specific, we have Rafa2 now but we can change the data sequence any time. it
+should be designed to handle generic temporal mesh sequences". The temporal
+codec needs consecutive frames of one geometry. Core 0.7.0 (core #33) gives
+`codec_mesh` the keys and checks only their types and ranges; the frame
+number, the placement and the conversion's rules are recon's.
+
+**Choices.**
+- **The frame number is in the path.** printf's `%d` or `%0Nd` (1 ≤ N ≤ 9),
+  once, and `%%` for a literal `%`: the part ffmpeg's image sequences read,
+  for any naming that carries a frame number, where stepping a file's last
+  digits would step `_v2` or `_lod0`. `%5d` is refused, since printf pads it
+  with spaces and ffmpeg with zeros. Only `codec_mesh` reads it
+  (`numbered_path`), so recon owns it; a bad pattern fails at run time, before
+  any GPU work, with exit 1.
+- **`run.frames` is an exact count from `run.first`.** A dataset's is a limit
+  that stops at its last frame; here a gap is an error, and "every frame"
+  would code Rafa2's mirrored replay (frames 151–300 replay 150–1). Every
+  file is checked before the first load: missing is `NotFound`, present but
+  not a regular file `InvalidArgument`, as `io::load_mesh` answers. A range
+  key on a plain path is refused, naming it, as its number would select no
+  file.
+- **One transform for the sequence.** A first pass loads each frame, joins
+  its bounds along the up axes and drops it, so memory does not grow with the
+  range; one transform is fitted to the union (`fit_transform` to
+  `height_m`, or `scale_transform` by `metres_per_unit`) and places every
+  frame unchanged, so a still point stays still and a persisting block keeps
+  its coordinates. Fitting frame 1 alone, as step 0 did, sizes the range by
+  one frame. The cost is loading every frame twice.
+- **The transform is stored** in the Geometry track's params, 112 bytes:
+  "VRMT", version 1 and 13 little-endian binary64 (axes x, up, z; origin;
+  metres per unit). `io::encode_transform` and `decode_transform` are its one
+  home, beside `MeshTransform`, since a player needs it and `recon_stream`
+  links only the core's base tier. This is an addition to the v0 Geometry
+  kind, whose params were empty: an old reader passes them through, so the
+  version holds. A single mesh stores its transform too.
+- **The audit runs twice.** The first pass audits each frame on its source
+  coordinates. A proper similarity changes no count, hole, orientation or
+  volume sign, so a frame signed mode cannot take is refused there, before
+  any GPU work. The second pass audits the placed coordinates and decides,
+  since rounding can make a triangle degenerate.
+- **`source.allow_holes`.** Off by default and signed mode only: it admits a
+  mesh whose only defect is boundary edges, each hole growing a skirt to the
+  truncation past its rim (`MeshSdfMode::Signed`). Rafa2's frames 74–99 have
+  8 boundary edges each, two 4-edge loops 13 and 21 mm across, each missing
+  2 triangles; frames 128–131 have 16, loops of 9 and 7 edges at most 13 mm
+  across. No frame has another defect. The sequence template sets it.
+- **A cleared grid per frame.** `MeshIntegrator` overwrites only the blocks
+  its band reaches, so an earlier frame's blocks the new band misses would
+  stay: each frame is converted into the one source grid after a `clear`.
+  The player grid is never cleared, as the `Decoder` leaves exactly a
+  frame's blocks.
+- **Records.** Set the frame's number, pts that number at 30 fps (as
+  Replica's frames, which carry no time either), seq from 0, all key until
+  P-frames are coded. A single mesh is set 0 at pts 0, as before. Quality,
+  the sweep and the PLYs are the last frame's; the CSV schema holds.
+- **The stream before any work.** `codec_mesh` creates its stream after the
+  GPU setup and before the first conversion or PLY, so a rerun onto an
+  existing stream is refused before any work, and a mesh signed mode refuses
+  leaves no `_input.ply`. A later failure leaves a `.vrst` that reads as
+  unfinished, as any mid-run failure of a sequence does. `codec_replica`
+  keeps its order.
+- **The shell bound is the conversion's.** Core 0.7.0 checks only that
+  `shell_voxels` is finite and positive. `MeshSdfParams::validate(grid)`
+  holds the `[√3/2, trunc_dist)` rule; `MeshIntegrator::integrate` calls it,
+  and `codec_mesh` calls it before any GPU work with the resolved truncation.
+- **The band.** `fusion.truncation_m` sets it, and an absent value is still
+  4 voxels, so `codec_mesh.json` is unchanged. `codec_mesh_sequence.json`
+  sets 0.04 m, 8 voxels: the paper's band and step 0's.
+- **`codec.entropy` is gone** from core 0.7.0, and recon stops reading it.
+
+**Frame 150's conversion outlier.** Kept: the sequence stays 1–150. Under
+the range's transform, frame 150's conversion accuracy is mean 0.024, rms
+0.536, p95 0.063 and max 38.358 mm (F 0.9997 at 2.5 mm); step 0 measured
+37.144 mm under frame 1's. Every vertex measured (the report samples 1 in
+4), 340 of 550,470 extracted vertices lie more than a voxel from the placed
+input, at most 39.444 mm, in three clusters within 8 cm of
+(−0.25, 1.06, −0.08) m placed, (0.0054, −0.1147, 0.8006) in source
+coordinates. Of the 289 observed voxels within two voxels of them, 18 take
+the side the input's generalized winding number does not. At 14, faces
+within 1 µm of the nearest point disagree on the side and the conversion's
+pick takes the wrong one: the documented failure of the closest-face sign
+past an acute edge (`MeshSdfMode::Signed`), here at a sliver fold whose
+faces meet their neighbours at 0.1–1.8°. At the other 4, one face's
+interior is nearest and puts the voxel inside, though the winding number
+puts it outside; that needs a self-intersection, which no audit checks, so
+that part is unverified. The cause is frame 150's own geometry, not the
+sequence.
+
+**Same bytes, one frame.** `codec_mesh` on Rafa2 frame 1 at 5 mm
+(`codec_mesh.json` with `output.stream`; Apple M5 Max, Release): its one
+record is byte for byte main's, and its `.vrst` is 67,384 bytes, main's
+67,272 plus the 112-byte params. The `VRST` body holds them, so its size and
+both its CRCs change, and every later chunk starts 112 bytes later, so the
+`INDX` key entry's offset and the `INDX` and `TAIL` CRCs and index offset
+change. Stripping the params and shifting those offsets back gives main's
+file, sha256 `b53eb950…`. `_input.ply` and every non-timing comparison and
+sweep line are identical.
+
+**Rafa2, frames 1–150** (`codec_mesh_sequence.json` pointed at V-SENSE's
+`references/Rafa2_obj`, with outputs; intra period 1; Apple M5 Max, Release):
+- 150 records, sets 1–150, seq 0–149, pts 33,333,333 to 5,000,000,000 ns,
+  all key; the stream finished, the CSV 151 lines.
+- 61,869 bytes a frame on average (58,056 at frame 148 to 65,217 at frame
+  125), 3,426 blocks (3,233–3,546), 18.1 bytes a block. Against step 0's
+  frames under frame 1's transform (scale 2.13650823286 against the range's
+  2.13436903472), each frame is 0.9971 times as large on average
+  (0.9916–1.0047), correlation 0.9915.
+- 12.3 s wall for the run, both passes included. Per frame, the conversion
+  takes 8.9 ms host and 6.7 ms device, encoding 2.8 and 1.6, and decoding
+  3.0 and 1.7.
+- A fresh `Decoder` decodes every record into a fresh grid to the run's
+  player grid bit for bit (blocks, `tsdf` and `weight`); the last frame
+  extracts to the run's 184,708 triangles.
+- Frames 74–99 and 128–131 are admitted open. Inspection over the range
+  lists the same 30 without a GPU in 6.9 s, and without `allow_holes` the
+  run is refused at frame 74 after 1.7 s, before any GPU work or file.
+
+```sh
+# $dataset_root/Rafa2_obj is V-SENSE's references/Rafa2_obj: point the
+# template's source.path at "$dataset_root/Rafa2_obj/Frame_%05d_textured.obj"
+# and add output.stream and output.csv.
+"$recon_root/build/examples/codec_mesh/codec_mesh" \
+  --config "$recon_root/config/examples/codec_mesh_sequence.json"
+```
+
+**Validation.** `recon_example_mesh_sequence` covers the pattern and its
+refusals, every file checked before any load, one transform over a growing
+sequence where frame 1 alone fits wrong, a plain path placed as one mesh was,
+signed mode's rule with and without `allow_holes`, inspection over a range,
+each frame in a cleared grid, and `code_frame`'s records and stored
+transform. `recon_io_mesh_normalization` round-trips the transform bit for
+bit; `recon_tsdf_mesh_integrate` holds `validate` to `integrate`'s
+refusals; `recon_codec_mesh_run` runs the executable on a device, an
+existing stream refused before any work, then two frames; the config-entry
+test inspects a range and refuses a missing frame, a bad pattern and a range
+on a plain path.
 
 ## Measured lessons
 
