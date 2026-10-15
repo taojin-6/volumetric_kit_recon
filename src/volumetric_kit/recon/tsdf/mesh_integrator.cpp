@@ -129,6 +129,21 @@ std::uint32_t group_count(std::uint32_t items) {
 
 }  // namespace
 
+core::Status MeshSdfParams::validate(const VoxelGridParams& grid) const {
+  if (mode == MeshSdfMode::Signed) return {};
+  if (mode != MeshSdfMode::Shell) {
+    return core::Status::invalid_argument("MeshSdfParams: unknown mode");
+  }
+  if (!(shell_voxels >= kMinShellVoxels &&
+        shell_voxels * grid.voxel_size < grid.trunc_dist)) {
+    return core::Status::invalid_argument(
+        "MeshSdfParams: shell_voxels must be at least sqrt(3)/2, or the shell "
+        "can fall between voxels, and thinner than trunc_dist, or nothing "
+        "observed reads as outside");
+  }
+  return {};
+}
+
 core::Result<MeshIntegrator> MeshIntegrator::create(
     core::Device& device, core::Allocator& allocator) {
   VKC_TRY(check_device_requirements(device, "MeshIntegrator::create"));
@@ -219,19 +234,9 @@ core::Result<MeshIntegrateStats> MeshIntegrator::integrate(
                                           ": moved-from integrator");
   }
   const VoxelGridParams& g = grid.grid();
+  VKC_TRY(params.validate(g));
   const bool is_signed = params.mode == MeshSdfMode::Signed;
-  if (!is_signed && params.mode != MeshSdfMode::Shell) {
-    return core::Status::invalid_argument(std::string(kWho) + ": unknown mode");
-  }
   const float shell_m = params.shell_voxels * g.voxel_size;
-  if (!is_signed &&
-      !(params.shell_voxels >= kMinShellVoxels && shell_m < g.trunc_dist)) {
-    return core::Status::invalid_argument(
-        std::string(kWho) +
-        ": shell_voxels must be at least sqrt(3)/2, or the shell can fall "
-        "between voxels, and thinner than trunc_dist, or nothing observed "
-        "reads as outside");
-  }
 
   VKC_ASSIGN(AttributeView tsdf_view, grid.attribute("tsdf"));
   VKC_ASSIGN(AttributeView weight_view, grid.attribute("weight"));
