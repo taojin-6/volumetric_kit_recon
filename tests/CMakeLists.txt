@@ -1128,6 +1128,16 @@ vr_target_warnings(recon_io_mesh_normalization_test)
 add_test(NAME recon_io_mesh_normalization
          COMMAND recon_io_mesh_normalization_test)
 
+# io::check_mesh_file, the one home of a mesh path's checks, and load_mesh
+# answering through it. Host only; built with the Assimp backend.
+if(TARGET recon_io_assimp)
+  add_executable(recon_io_mesh_file_test io_mesh_file_test.cpp)
+  target_link_libraries(recon_io_mesh_file_test
+                        PRIVATE volumetric_kit::recon_io_assimp)
+  vr_target_warnings(recon_io_mesh_file_test)
+  add_test(NAME recon_io_mesh_file COMMAND recon_io_mesh_file_test)
+endif()
+
 # stream: the .vrst container through its public API -- golden bytes whose CRCs
 # Python's zlib.crc32 computed, round trips, seeking, unknown kinds and chunks,
 # the limits, every refusal, two threads on one reader -- what its reader

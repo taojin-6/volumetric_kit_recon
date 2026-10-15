@@ -1607,6 +1607,8 @@ determinant is negative. Exactly coincident positions join across UV/material
 seams, with no tolerance-based merging. This is geometry import, not topology
 repair: degenerate and duplicate triangles are retained, and manifold/sign
 checks are the consumer's, through `io::audit_mesh_topology` if it opts in.
+`io::check_mesh_file` holds the path checks `load_mesh` makes before it
+reads, for a caller that checks a sequence's files before loading any.
 Non-triangle primitives, animation, skinning, morph targets and invalid
 transforms on mesh instances are refused; nodes without meshes are not
 checked.
