@@ -1637,6 +1637,10 @@ serve one mesh or a temporal sequence alike:
   rotation, and a refusal leaves the mesh unchanged. The source compiles
   with `-ffp-contract=off`, so a transform's doubles do not depend on the
   compiler.
+- `encode_transform` and `decode_transform` are a transform's one byte
+  form, bit for bit (the layout is in the header): what a `.vrst` Geometry
+  track's params hold, so a player can place decoded geometry back in the
+  source's coordinates.
 - `audit_mesh_topology` counts the edges, triangles and components the
   signed conversion depends on, capping each hole before it takes a
   component's volume; `supports_signed(allow_holes)` gives the verdict.
@@ -1648,8 +1652,9 @@ header, the records appended after it in `RECD` chunks, and on `finish` a
 footer index (`INDX`, `TAIL`). The byte layout, the CRC and the rules a
 record follows are written down once, in `stream/session.hpp`. Payloads are
 stored and returned byte for byte. `TrackKind::Geometry`, a codec frame per
-record with key meaning intra, is the only kind defined; the writer takes
-any nonzero kind and the reader passes an unknown one through.
+record with key meaning intra, its params empty or a mesh source's
+transform, is the only kind defined; the writer takes any nonzero kind and
+the reader passes an unknown one through.
 
 **Writing** (`StreamWriter`, one thread). `create` makes the file with
 `O_CREAT | O_EXCL`, so nothing at the path is touched, a symbolic link
