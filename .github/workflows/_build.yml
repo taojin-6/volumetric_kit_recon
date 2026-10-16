@@ -354,9 +354,15 @@ jobs:
             exit 1
           }
 
+      # Runs CMAKE_BUILD_PARALLEL_LEVEL jobs at once, from the runner's .env or
+      # the container env as for the Test step below, or one per core where
+      # neither sets it. The level is explicit because a bare --parallel
+      # ignores the variable and runs an unlimited make -j.
       - name: Build
         if: steps.detect.outputs.present == 'true'
-        run: cmake --build build --parallel
+        run: |
+          cmake --build build \
+            --parallel "${CMAKE_BUILD_PARALLEL_LEVEL:-$(getconf _NPROCESSORS_ONLN)}"
 
       # Runs CTEST_PARALLEL_LEVEL tests at once: from the runner's .env on the
       # Mac, from the container env ci.yml sets on the Ubuntu legs.
@@ -401,7 +407,8 @@ jobs:
           cmake -S . -B build-apple -DCMAKE_BUILD_TYPE=Release \
             -DVR_BUILD_EXAMPLES=OFF -DVR_WITH_ORBBEC=OFF -DVR_WITH_FFMPEG=OFF \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON "${flags[@]}"
-          cmake --build build-apple --parallel \
+          cmake --build build-apple \
+            --parallel "${CMAKE_BUILD_PARALLEL_LEVEL:-$(getconf _NPROCESSORS_ONLN)}" \
             --target recon_sensor_apple_pixel_buffer_importer_test
           ctest --test-dir build-apple --output-on-failure --no-tests=error \
             -R '^recon_sensor_apple_pixel_buffer_importer$'
