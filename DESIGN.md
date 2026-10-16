@@ -1607,6 +1607,8 @@ determinant is negative. Exactly coincident positions join across UV/material
 seams, with no tolerance-based merging. This is geometry import, not topology
 repair: degenerate and duplicate triangles are retained, and manifold/sign
 checks are the consumer's, through `io::audit_mesh_topology` if it opts in.
+`io::check_mesh_file` holds the path checks `load_mesh` makes before it
+reads, for a caller that checks a sequence's files before loading any.
 Non-triangle primitives, animation, skinning, morph targets and invalid
 transforms on mesh instances are refused; nodes without meshes are not
 checked.
@@ -1634,9 +1636,14 @@ serve one mesh or a temporal sequence alike:
   and putting the lowest Y at zero. `apply_transform` maps every frame
   through it in double precision, rounded to float, so a still point stays
   still. The fits and `apply_transform` refuse axes that are not a proper
-  rotation, and a refusal leaves the mesh unchanged. The source compiles
+  rotation, and a refusal leaves the mesh unchanged; the fits also refuse
+  bounds they would place past float range. The source compiles
   with `-ffp-contract=off`, so a transform's doubles do not depend on the
   compiler.
+- `encode_transform` and `decode_transform` are a transform's one byte
+  form, bit for bit (the layout is in the header): what a `.vrst` Geometry
+  track's params hold, so a player can place decoded geometry back in the
+  source's coordinates.
 - `audit_mesh_topology` counts the edges, triangles and components the
   signed conversion depends on, capping each hole before it takes a
   component's volume; `supports_signed(allow_holes)` gives the verdict.
@@ -1648,8 +1655,9 @@ header, the records appended after it in `RECD` chunks, and on `finish` a
 footer index (`INDX`, `TAIL`). The byte layout, the CRC and the rules a
 record follows are written down once, in `stream/session.hpp`. Payloads are
 stored and returned byte for byte. `TrackKind::Geometry`, a codec frame per
-record with key meaning intra, is the only kind defined; the writer takes
-any nonzero kind and the reader passes an unknown one through.
+record with key meaning intra, its params empty or a mesh source's
+transform, is the only kind defined; the writer takes any nonzero kind and
+the reader passes an unknown one through.
 
 **Writing** (`StreamWriter`, one thread). `create` makes the file with
 `O_CREAT | O_EXCL`, so nothing at the path is touched, a symbolic link
@@ -1742,8 +1750,9 @@ startup and diagnostics, and `replica_config.hpp`, `orbbec_config.hpp` and
 attach resources, except that the codec's rules stay the codec's:
 `encoder_config` maps `codec.quantization_table` to the weights
 (`codec_quantization.hpp`, the tables' one home) and refuses a step
-`CodecParams::validate` refuses, before the codec examples touch the GPU. No
-local parser, flag registration or config validator remains.
+`CodecParams::validate` refuses. It also refuses `codec.intra_period` other
+than 1 until the examples support P-frame records. Both checks precede GPU
+setup. No local parser, flag registration or config validator remains.
 [Configuration examples](config/README.md) document paths, defaults and
 migration from the previous CLI.
 
@@ -1842,22 +1851,34 @@ stream file, including through symlinks or case-insensitive names. An alias
 is `InvalidArgument`; a CSV error during creation removes the new stream
 file for retry.
 
-**`codec_mesh`** loads static geometry through the optional Assimp-backed
-`io::load_mesh` and places it in metres with io's normalization helpers:
-`source.up_vector` gives the axes, and `fit_transform` scales the mesh's own
-bounds to `source.height_m`. It audits the result, allocates its triangle
-band and writes its field with `tsdf::MeshIntegrator`. It then encodes,
-decodes into a separate grid, and extracts both grids with
-`mesh::MarchingCubes`. It reports conversion
-error against the normalized input mesh separately from codec error against
-the uncompressed extracted surface. Rafa2 is the first mesh fixture: its
-file declares no unit, and its tilted body needs an explicit up vector
-before scaling to 1.7 m (see the 2026-10-02 decision for the measured bounds
-and normalization). The original asset is left unchanged. File parsing,
-normalization and PLY export belong to `io`; the example keeps only its
-conversion to the evaluator's host mesh (`geometry_mesh.*`). Its frame is
-the one record (set and pts 0) of its `output.stream`; `output.prefix` writes
-PLYs only. The mesh example is built only with `VR_WITH_ASSIMP=ON`.
+**`codec_mesh`** codes one mesh or a numbered sequence of them (README,
+Codec evaluation, has the keys). The examples require core 0.8.0: it escapes
+literal `%` characters in the scenario's directory before joining a relative
+`source.path`, so only the user's path carries a frame-number pattern.
+Before any GPU work it refuses a malformed
+frame-number pattern, a range on a plain path and any frame file that is
+missing or not a regular file, and checks a shell against the truncation
+(`MeshSdfParams::validate`). Its first pass loads each frame, joins its
+bounds along `source.up_vector` (`io::extend_bounds`), audits it and drops
+it, so memory does not grow with the range. In exact arithmetic a proper
+similarity changes none of the audit's counts, so a frame signed mode cannot
+take is refused there; rounding can still change the degenerate count or a
+volume's sign, which the second pass's audit decides. One transform for the range follows (`fit_transform` or
+`scale_transform`) and places every frame unchanged, so a still point stays
+still; it is printed once and stored as the Geometry track's params
+(`io::encode_transform`). The stream is created after the GPU setup and
+before any frame is converted, so a rerun onto it is refused before any
+conversion or output. Each frame (`code_frame`) is loaded, placed, audited again on the
+placed coordinates (the audit that decides, as rounding can make a triangle
+degenerate), converted into the one source grid after a `clear`, so no block
+of an earlier frame stays, and coded as one intra record: set the frame's
+number, pts that number at 30 fps, seq from 0. The last frame alone is
+extracted from the source and player grids with `mesh::MarchingCubes` and
+compared, conversion error against the placed input apart from codec error
+against the uncompressed surface. `codec.inspect_only` runs both passes on
+the host. File parsing, placement and PLY export belong to `io`; the example
+keeps its sequence (`mesh_sequence.*`) and the evaluator's host mesh
+(`geometry_mesh.*`).
 
 Both examples take `codec.quantization_table` (`uniform`, `band`, `radial`) and `codec.quantization_scale` for a
 single configuration. Their common `codec.sweep` compares all three table

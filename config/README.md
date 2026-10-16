@@ -10,12 +10,16 @@ The files in [examples](examples) are starting points. Edit their source paths
 and create the output directories before a real run. Paths are relative to the
 configuration file, not the shell's current directory; environment variables
 and home-directory shortcuts are not expanded.
+The examples require core 0.8.0 or newer. In a mesh's `source.path`, write a
+literal `%` as `%%`; literal `%` characters in the configuration file's
+directory are escaped automatically when resolving a relative mesh path.
 
 | Executable | Starting configuration | Work |
 | --- | --- | --- |
 | `fuse_replica` | [fuse_replica.json](examples/fuse_replica.json) | Dataset to PLY |
 | `codec_replica` | [codec_replica.json](examples/codec_replica.json) | Dataset fusion and codec study |
-| `codec_mesh` | [codec_mesh.json](examples/codec_mesh.json) | Height-normalized mesh and codec study |
+| `codec_mesh` | [codec_mesh.json](examples/codec_mesh.json) | One mesh, placed in metres, and codec study |
+| `codec_mesh` | [codec_mesh_sequence.json](examples/codec_mesh_sequence.json) | Numbered mesh sequence under one placement, coded frame by frame |
 | `fuse_orbbec` | [fuse_orbbec.json](examples/fuse_orbbec.json) | Live camera/rig to PLY |
 | `fuse_orbbec` | [stream_orbbec.json](examples/stream_orbbec.json) | Live stream/decode only |
 | `fuse_orbbec` | [readback_orbbec.json](examples/readback_orbbec.json) | Live stream with luma readback |
@@ -28,8 +32,9 @@ A scenario requires `version: 1`, an explicit `operation`, and a `source`
 object with an explicit `kind`. Settings are grouped into `source`, `fusion`, `codec`,
 `window`, `render`, `run`, `output` and `diagnostics`. Core's application
 profile supplies defaults and rejects unknown fields, wrong types, out-of-range numbers and
-unsupported combinations. Dataset paths, a mesh's height and up direction, or
-a rig's sync path remain required where the application needs them.
+unsupported combinations. Dataset paths, a mesh's up direction and one of
+`source.height_m` and `source.metres_per_unit`, or a rig's sync path remain
+required where the application needs them.
 
 | Former command-line input | JSON setting |
 | --- | --- |
@@ -53,7 +58,11 @@ of zero or less requests four voxels. Depth limits use the source's defaults
 (Replica 0.1–8 m; live camera 0.25–5 m). Dataset frame limits retain their old
 per-example defaults; `rig_viewer` uses zero for no frame/set limit. Counts
 remain distinct: `fuse_orbbec` counts camera frames, while `rig_viewer` can
-limit both acquired sets and drawn frames.
+limit both acquired sets and drawn frames. `codec_mesh` counts exactly:
+`run.frames` meshes, numbered from `run.first`, one by default.
+
+The codec examples currently accept only `codec.intra_period: 1` (the
+default); other periods are refused until the examples support P-frame records.
 
 `fuse_orbbec` accepts `diagnostics.readback: true` in either a stream or fusion
 scenario. It copies every set's luma to host memory and reports a separate
@@ -77,9 +86,11 @@ single-camera option. Loading or validating a scenario never changes camera
 settings; camera setup performs that action only when requested.
 
 For mesh inspection, set only `codec.inspect_only: true` in the `codec` section
-and omit `fusion`, `source.sdf_mode` and `source.shell_voxels`; these settings
-are unused until mesh conversion runs. An optional `output.prefix` still
-exports the normalized input mesh.
+and omit `fusion`, `source.sdf_mode`, `source.shell_voxels` and
+`source.allow_holes`; these settings are unused until mesh conversion runs.
+`run` and either scale are accepted, so a range is inspected frame by frame.
+An optional `output.prefix` still exports the last frame's normalized input
+mesh.
 
 The sync document remains SDK-compatible, and the calibration document remains
 recon's domain format. A scenario references these resources rather than

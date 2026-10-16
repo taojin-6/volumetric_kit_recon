@@ -28,6 +28,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <map>
 #include <string>
 #include <tuple>
@@ -659,6 +660,35 @@ int gpu_main(vr_test::GpuContext& gpu) {
   CHECK(refused(tet, {ts::MeshSdfMode::Shell, 0.5f}, "shell_voxels"));
   CHECK(refused(tet, {ts::MeshSdfMode::Shell, 4.0f}, "shell_voxels"));
   CHECK(refused(tet, {static_cast<ts::MeshSdfMode>(7), 1.5f}, "unknown mode"));
+  // MeshSdfParams::validate is integrate's rule, refusal for refusal and
+  // message for message, against the grid's own truncation: a shell of 4
+  // voxels is refused in this 4-voxel band and taken in an 8-voxel one.
+  for (const ts::MeshSdfParams& bad :
+       {ts::MeshSdfParams{ts::MeshSdfMode::Shell, 0.5f},
+        ts::MeshSdfParams{ts::MeshSdfMode::Shell, 0.866f},
+        ts::MeshSdfParams{ts::MeshSdfMode::Shell, 4.0f},
+        ts::MeshSdfParams{ts::MeshSdfMode::Shell,
+                          std::numeric_limits<float>::quiet_NaN()},
+        ts::MeshSdfParams{static_cast<ts::MeshSdfMode>(7), 1.5f}}) {
+    const vkc::Status checked = bad.validate(gp);
+    CHECK(checked.domain() == vkc::Status::Code::InvalidArgument);
+    vkc::Result<ts::MeshIntegrateStats> r =
+        integ.integrate(grid, tet.v.data(), tet.vertex_count(), tet.i.data(),
+                        tet.triangle_count(), bad);
+    CHECK(!r.ok() && r.status().message() == checked.message());
+  }
+  const auto takes = [](ts::MeshSdfMode mode, float shell,
+                        const vol::VoxelGridParams& g) {
+    return ts::MeshSdfParams{mode, shell}.validate(g).ok();
+  };
+  CHECK(takes(ts::MeshSdfMode::Shell, 0.8660254f, gp));
+  CHECK(takes(ts::MeshSdfMode::Shell, 3.99f, gp));
+  CHECK(takes(ts::MeshSdfMode::Signed, 0.0f, gp));
+  {
+    vol::VoxelGridParams wide = gp;
+    wide.trunc_dist = 2.0f * gp.trunc_dist;
+    CHECK(takes(ts::MeshSdfMode::Shell, 4.0f, wide));
+  }
   {
     const std::vector<float> before = snapshot(gpu, grid);
     CHECK(!integ.integrate(grid, nullptr, 4, tet.i.data(), 4, kSigned).ok());

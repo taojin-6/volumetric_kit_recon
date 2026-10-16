@@ -70,6 +70,15 @@ struct MeshSdfParams {
   /// Refused at or above `trunc_dist` too, where no observed voxel would ever
   /// read as outside.
   float shell_voxels = 1.5f;
+
+  /// @brief Check these parameters against the grid they will write: the
+  ///        rule @ref MeshIntegrator::integrate applies, for a caller that
+  ///        refuses before any GPU work.
+  /// @param grid The grid's geometry: its voxel size and `trunc_dist`.
+  /// @return OK, or `Status::invalid_argument` for an unknown mode, or in
+  ///         shell mode a @ref shell_voxels below `sqrt(3) / 2` or a shell
+  ///         not thinner than `trunc_dist`.
+  VR_TSDF_API core::Status validate(const volume::VoxelGridParams& grid) const;
 };
 
 /// @brief What one @ref MeshIntegrator::integrate wrote.
@@ -182,8 +191,8 @@ class VR_TSDF_API MeshIntegrator {
   ///                        both halves.
   /// @return What was written, or a non-OK `Status`:
   ///         `Status::Code::InvalidArgument` for a moved-from integrator; a
-  ///         grid without float `tsdf` / `weight`; an unknown mode or a shell
-  ///         thickness outside `[sqrt(3)/2, trunc_dist)`; a null @p vertices /
+  ///         grid without float `tsdf` / `weight`; @p params that
+  ///         @ref MeshSdfParams::validate refuses; a null @p vertices /
   ///         @p indices with triangles to read, an index at or past
   ///         @p vertex_count, or a mesh too large for the grid (see
   ///         `volume::triangle_candidate_offsets`); a band block that is not
