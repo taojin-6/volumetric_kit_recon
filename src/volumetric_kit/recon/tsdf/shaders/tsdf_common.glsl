@@ -62,15 +62,14 @@ struct ColorCameraParams {
 };
 
 // Project a world point into a pinhole camera given its intrinsics + rigid
-// cam_to_world pose. World -> camera is R^T (world - t), the rigid inverse with
-// no explicit mat4 inverse; camera -> pixel is core/shaders/pinhole.glsl's
+// cam_to_world pose: core/shaders/pinhole.glsl's vr_world_to_camera, then its
 // vr_project_pinhole, under its rules. Also sets `zc`, the camera-space depth
 // (metres). The two project_to_image overloads adapt the depth and color
 // camera structs onto it.
 bool project_pinhole(mat4 cam_to_world, float fx, float fy, float cx, float cy,
                      uint width, uint height, vec3 world, out vec2 px,
                      out float zc) {
-  vec3 p_cam = transpose(mat3(cam_to_world)) * (world - cam_to_world[3].xyz);
+  vec3 p_cam = vr_world_to_camera(cam_to_world, world);
   zc = p_cam.z;
   return vr_project_pinhole(p_cam, vec4(fx, fy, cx, cy), uvec2(width, height),
                             px);

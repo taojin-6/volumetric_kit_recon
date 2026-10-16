@@ -670,12 +670,6 @@ the camera and colour-space vocabulary and the vector types. The description
 stays here because recon's tiers are written against it; the contract is the
 core's headers.
 
-`core/shaders/pinhole.glsl` is the one GLSL pinhole: tsdf's projection and
-volume's depth unprojection go through it, and recon exports it to its
-consumers' kernels (README, "Building"). Its functions take values, so a
-scalar-layout camera and a std430 one both pass theirs. texture keeps its
-extrapolating projection, and the sensor prep its rounded colour test.
-
 the Vulkan compute foundation: VMA `Allocator`, RAII `Buffer`,
 `ShaderModule`, descriptor + `ComputePipeline` wrappers, the `ComputeKernel`
 bundle + `KernelSetBuilder`, the shared-queue-safe
@@ -789,6 +783,14 @@ nothing else — and resolution is **all-or-nothing**, so a driver returning
 two of the three entry points reports no labels rather than a region that can
 be opened and not closed. The label is recorded *outside* the `GpuTimer`
 bracket, so no `gpu_ms` measures the markers around the work.
+
+`core/shaders/pinhole.glsl` is recon's GLSL pinhole: the rigid inverse,
+unprojection, divide, in-image projection and nearest pixel that tsdf,
+volume, texture and the sensor prep's colour test go through, and that recon
+exports to its consumers' kernels (README, "Building"). Its functions take
+values, so a scalar-layout camera and a std430 one both pass theirs. The
+acceptance stays two callers' own: texture extrapolates past the image, and
+the colour test bounds the rounded pixel.
 
 ### volume
 

@@ -127,7 +127,9 @@ entries relevant to your task; later amendments supersede earlier rules.
   Projective texturing decides visibility per *vertex*, and a negative `uv0`
   carries its atlas coordinate rather than discarding it (amends the 2026-07-07
   texture-tier decision, and retires the `share_vertices` refusal the
-  2026-08-04 entry records).
+  2026-08-04 entry records). *Amended 2026-10-16:* the projection is no
+  longer a per-tier copy; texture's goes through `core/shaders/pinhole.glsl`
+  and keeps its own acceptance.
 - [**2026-08-11**](#2026-08-11--an-incremental-extract-trusts-one-struct-cleared-on-every-path-and-re-established-only-where-a-mesh-is-handed-out-every-refusal-is-a-silent-fallback-and-the-fallback-is-reported) —
   An incremental extract trusts one struct, cleared on every path and
   re-established only where a mesh is handed out; every refusal is a silent
@@ -571,12 +573,13 @@ entries relevant to your task; later amendments supersede earlier rules.
   experimental and the templates at period 1: at R = 16 its P-frames code
   slower than intra, and the freeze waits on a decision about interleaved
   rANS lanes.
-- [**2026-10-16**](#2026-10-16--one-glsl-pinhole-for-recon-and-its-consumers-coreshaderspinholeglsl-exported-under-the-include-root-recon_core-names) —
-  One GLSL pinhole for recon and its consumers, `core/shaders/pinhole.glsl`:
-  values, not structs, so scalar-layout and std430 kernels both call it;
-  tsdf's projection and volume's depth unprojection go through it; and
-  `recon_core`'s `VR_SHADER_INCLUDE_DIR` names the root a consumer
-  includes it under, fetched or installed.
+- [**2026-10-16**](#2026-10-16--a-shared-glsl-pinhole-for-recon-and-its-consumers-coreshaderspinholeglsl-exported-under-the-include-root-recon_core-names-amends-the-2026-08-11-texturing-entrys-per-tier-copies) —
+  A shared GLSL pinhole for recon and its consumers,
+  `core/shaders/pinhole.glsl` (amends the 2026-08-11 texturing entry's
+  per-tier copies): values, not structs, so scalar-layout and std430 kernels
+  both call it; recon's kernels project through it, keeping only their own
+  acceptance rules; and `recon_core`'s `VR_SHADER_INCLUDE_DIR` names the root
+  a consumer includes it under, fetched or installed.
 
 ## Decision record
 
@@ -3102,6 +3105,10 @@ same-typed scalars.
 *Amended 2026-10-08 (below):* a vertex is textured only where its normal
 points toward the depth camera, and a view whose depth range admits no sample
 is refused.
+
+*Amended 2026-10-16 (below):* the tiers no longer keep self-contained copies
+of the projection. texture's goes through `core/shaders/pinhole.glsl`, as
+tsdf's does, and keeps its deliberate divergence as its own acceptance rule.
 
 `ProjectiveTexturer` refused any mesh built with
 `MarchingCubesConfig::share_vertices`. It decided visibility per **triangle**
@@ -13401,30 +13408,40 @@ example. By hand, `codec_replica` at period 30 prints
 period 1's accuracy, coverage and F-score. Not run: the RTX 5090, ASan and
 UBSan (CI runs them).
 
-### 2026-10-16 — One GLSL pinhole for recon and its consumers: `core/shaders/pinhole.glsl`, exported under the include root `recon_core` names.
+### 2026-10-16 — A shared GLSL pinhole for recon and its consumers: `core/shaders/pinhole.glsl`, exported under the include root `recon_core` names (amends the 2026-08-11 texturing entry's per-tier copies).
 
 calib's depth checks run kernels of their own over recon's prepared depth,
 and they must project and unproject it by recon's rules. A copy in calib
 would be a second pinhole. The core cannot hold it, since its decisions lock
-"No camera or sensor tier", and gfx needs none, since it folds intrinsics
-into its matrices on the host. So recon's `core` tier holds it, beside
-`color_common.glsl`, and recon exports it.
+"No camera or sensor tier". Nor can recon's `camera` tier, the family's
+camera vocabulary: it builds without Vulkan (`VR_CAMERA_ONLY`), and `volume`
+and `tsdf` do not depend on it, so they could not include it. So recon's
+`core` tier holds it, beside `color_common.glsl`, and recon exports it. gfx
+depends on no recon, so its planned point-cloud shader restates the in-image
+test and the nearest-pixel rule on its own, and its tests must hold that copy
+to recon's rule.
 
-- **Three functions, taking values:** `vr_unproject_pinhole(px, z, k)`,
-  `vr_project_pinhole(p_cam, k, size, out px)` and `vr_nearest_pixel(px,
+- **Five functions, taking values:** `vr_world_to_camera(cam_to_world,
+  world)`, `vr_unproject_pinhole(px, z, k)`, `vr_pinhole_pixel(p_cam, k, out
+  px)` (the divide, wherever the pixel lands), `vr_project_pinhole(p_cam, k,
+  size, out px)` (the same within the image) and `vr_nearest_pixel(px,
   size)`, with `k` = (fx, fy, cx, cy) and `size` a `uvec2`. A struct would
   fix one buffer layout; values let recon's scalar-layout cameras and calib's
   std430 ones pass theirs.
-- **Today's rules:** both tests negated, so a NaN fails them; the domain
+- **Today's rules:** every test negated, so a NaN fails it; the domain
   `[0, W) × [0, H)`; the last half pixel clamped to the edge pixel
   (2026-10-08).
-- **recon's own kernels go through it.** `tsdf_common.glsl`'s
-  `project_pinhole` and `nearest_pixel` are thin wrappers, and
-  `hash_allocate_depth.comp` unprojects with it; each function keeps the
-  order of operations its caller had, so neither changes a bit. Two variants stay, because their
-  rules differ: `texture_common.glsl`'s projection extrapolates past the
-  image (2026-08-11), and `undistort_depth.comp`'s colour test bounds the
-  rounded pixel.
+- **recon's own kernels go through it.** tsdf's `project_pinhole` and
+  `nearest_pixel` are thin wrappers, volume's depth allocation unprojects
+  with it, and texture's `world_to_camera` and `camera_to_image` call its
+  rigid inverse and divide. Each keeps the order of operations its caller
+  had, so none changes a bit. The sensor prep's colour test unprojects and
+  divides through it too, a rounding-level change its tests pass unchanged.
+  What stays each caller's is the acceptance: texture's projection
+  extrapolates past the image (2026-08-11), and the colour test bounds the
+  rounded pixel, `[-0.5, W - 0.5)`, as the colour pass marks coverage.
+  `lens.glsl`'s normalization at z = 1 stays with the lens model it mirrors
+  (`camera::distort_rational`).
 - **Exported through a target property.** `recon_core`'s
   `VR_SHADER_INCLUDE_DIR` names the root a consumer passes its shader
   compiler, as the core's `VKC_CORE_VERSION` rides `core_base`, so it
@@ -13432,17 +13449,23 @@ into its matrices on the host. So recon's `core` tier holds it, beside
   tree the root is a copy of the exported files alone, so a kernel that
   compiles against a fetched recon cannot include recon's internal GLSL and
   then fail against an installed one. Installed, it is the include
-  directory, which the package config sets on the imported target.
+  directory, which the package config sets on the imported target, found
+  from the config's own directory: under CMake 3.29 and older a
+  dependency's package config resets `PACKAGE_PREFIX_DIR` (Ubuntu's Assimp
+  gave `/usr`).
 
 **Validation.** Apple M5 Max, MoltenVK, Release with warnings as errors,
-under the Khronos validation layer. `recon_core_pinhole_gpu` runs the three
+under the Khronos validation layer. `recon_core_pinhole_gpu` runs the five
 functions in a std430 kernel against the host's double: 28 written-out
-edges and 3 unprojections in exact arithmetic, and 2420 grid cases around
-five cameras, from 1 × 1 to 3840 × 2160. `recon_subproject_glsl` and
-`recon_package_glsl` compile that kernel through the fetched and the
-installed root. The tsdf, volume, mesh and texture suites pass, and
+edges, 3 unprojections, 8 unbounded projections and 2 rigid poses in exact
+arithmetic, a general rotation, and 2420 grid cases around five cameras,
+from 1 × 1 to 3840 × 2160. `recon_subproject_glsl` and `recon_package_glsl`
+compile that kernel through the fetched and the installed root, and
+`recon_package_quiet_not_found` checks a refused package leaves no `_vr_`
+variable behind. The tsdf, volume, mesh, texture and sensor suites pass;
 `recon_tsdf_integrate` gains an 8 × 2 colour image, so its nearest pixel's
-clamp is checked against the width rather than the height.
+clamp is checked against the width, and `recon_volume_allocate`'s camera
+now tells a swapped focal length or principal point apart.
 
 ## Measured lessons
 
