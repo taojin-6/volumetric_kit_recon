@@ -61,8 +61,12 @@ remain distinct: `fuse_orbbec` counts camera frames, while `rig_viewer` can
 limit both acquired sets and drawn frames. `codec_mesh` counts exactly:
 `run.frames` meshes, numbered from `run.first`, one by default.
 
-`codec.update_size` sets the P-frames' update segments, so core refuses it,
-even as 0, unless `codec.intra_period` is above 1.
+`codec.intra_period` N codes an I-frame and then up to N − 1 P-frames,
+counted in coded frames. A frame with no observed block, and the frame after
+it, are I-frames whatever the period, and the count restarts at every
+I-frame. The templates keep 1, every frame intra, while P-frames are
+experimental. `codec.update_size` sets the P-frames' update segments, so
+core refuses it, even as 0, unless `codec.intra_period` is above 1.
 
 `fuse_orbbec` accepts `diagnostics.readback: true` in either a stream or fusion
 scenario. It copies every set's luma to host memory and reports a separate

@@ -517,7 +517,9 @@ entries relevant to your task; later amendments supersede earlier rules.
   bytes; a missing reference is `NotFound`. Experimental until golden
   P-frames freeze it. *Amended 2026-10-13:* the `Decoder` decodes them; row
   13 is the device merge's, and the host merge is gone. *Amended
-  2026-10-14:* the `Encoder` writes them.
+  2026-10-14:* the `Encoder` writes them. *Amended 2026-10-16:* golden
+  P-frames pin type 1's bytes, but its freeze waits on interleaved rANS
+  lanes.
 - [**2026-10-13**](#2026-10-13--the-decoder-decodes-p-frames-against-the-frame-it-decoded-last-kept-on-the-device-as-decoded-in-two-slots-that-swap-only-when-a-decode-succeeds-one-integer-apply-makes-every-decoded-frame-intra-too-and-it-decodes-on-the-device-alone-amends-the-2026-09-27-encoderdecoder-and-2026-10-03-decoding-entries) —
   The `Decoder` decodes P-frames against the frame it decoded last, kept on
   the device as decoded and replaced only when a decode succeeds; one integer
@@ -560,12 +562,14 @@ entries relevant to your task; later amendments supersede earlier rules.
   at a sliver fold. *Amended 2026-10-15:* require core 0.8.0's directory
   escaping, and refuse example intra periods other than 1 until C5b.
   *Amended 2026-10-16:* the examples code P-frames, on core 0.9.0.
-- [**2026-10-16**](#2026-10-16--the-codec-examples-code-p-frames-codecintra_period-and-codecupdate_size-reach-the-encoder-and-a-streams-rows-report-and-keys-go-by-frame-type-an-empty-grid-is-an-i-frame-and-golden-p-frames-pin-type-1s-bytes-amends-the-2026-10-14-encoder-and-codec-mesh-entries) —
+- [**2026-10-16**](#2026-10-16--the-codec-examples-code-p-frames-codecintra_period-and-codecupdate_size-reach-the-encoder-and-a-streams-rows-report-and-keys-go-by-frame-type-an-empty-grid-is-an-i-frame-golden-p-frames-pin-type-1s-bytes-and-its-freeze-waits-since-at-r--16-its-p-frames-code-slower-than-intra-amends-the-2026-10-12-p-frame-2026-10-14-encoder-and-codec-mesh-entries) —
   The codec examples code P-frames: `codec.intra_period` and
   `codec.update_size` reach the `Encoder`, a stream's rows, report and keys
   go by frame type, and a failure after the encode forces an I-frame. An
-  empty grid is an I-frame, U is `EncoderConfig::update_size`, and golden
-  P-frames pin type 1's bytes.
+  empty grid is an I-frame, U is `EncoderConfig::update_size` (64,
+  measured), and golden P-frames pin type 1's bytes. Type 1 stays
+  experimental and the templates at period 1: at R = 16 its P-frames code
+  slower than intra, and the freeze waits on interleaved rANS lanes.
 
 ## Decision record
 
@@ -12212,7 +12216,9 @@ split will be a `BlockLists` pass. `check_segment(s, fault)` and
 the order across segments a fault of its own,
 `SegmentFault::kOutOfOrder`. *Amended 2026-10-14 (the `Encoder`'s
 P-frames, below):* the `Encoder` writes type 1, and its split is its diff's
-own search.
+own search. *Amended 2026-10-16 (the codec examples' entry, below):* golden
+P-frames pin type 1's bytes, but its freeze waits: at R = 16 its P-frames
+code slower than intra, and interleaved rANS lanes would change the format.
 
 The host writer and reader of type-1 frames, internal. `bitstream.hpp` holds
 the layout and the order of the refusals; this entry holds why. Nothing public
@@ -13204,11 +13210,13 @@ frames, and with no Vulkan driver to find, refuses twelve coding scenarios,
 each for its own reason before any GPU work. `recon_io_mesh_file` holds
 `load_mesh` to `check_mesh_file`.
 
-### 2026-10-16 — The codec examples code P-frames: `codec.intra_period` and `codec.update_size` reach the `Encoder`, and a stream's rows, report and keys go by frame type; an empty grid is an I-frame, and golden P-frames pin type 1's bytes (amends the 2026-10-14 encoder and codec-mesh entries).
+### 2026-10-16 — The codec examples code P-frames: `codec.intra_period` and `codec.update_size` reach the `Encoder`, and a stream's rows, report and keys go by frame type; an empty grid is an I-frame; golden P-frames pin type 1's bytes, and its freeze waits, since at R = 16 its P-frames code slower than intra (amends the 2026-10-12 P-frame, 2026-10-14 encoder and codec-mesh entries).
 
-Type 1 stays experimental, and the templates at period 1, until P-frame
-encode and decode measure no slower than intra on room0 at 1 cm and on
-Rafa2's frames 1–150.
+**Type 1 stays experimental,** and the templates at period 1. Its freeze
+needed P-frame encode and decode no slower than intra on room0 at 1 cm and
+on Rafa2's frames 1–150. Room0 meets it and Rafa2 at R = 16 does not, so
+the freeze waits on the user's decision about interleaved rANS lanes (both
+below).
 
 **An empty grid is an I-frame,** the sixth rule: a grid with no observed
 block codes intra whatever the reference. The P-frame it replaces removed
@@ -13263,9 +13271,97 @@ does.
 | int32 extremes | 4 | 1 | 1 | every mode, new blocks at the extremes |
 
 U is 6 on the second row so that its 65 entries end in a partial update
-segment. The golden rule is now "a new frame type adds rows; nothing else changes a
-value" (a new `kFrameVersion` is a new format, with goldens of its own), and
-the worked example (`bitstream.hpp`'s 161-byte P-frame) is frozen with them.
+segment. The golden rule is now "a new frame type adds rows; nothing else
+changes a value" (a new `kFrameVersion` is a new format, with goldens of its
+own). It binds type 1's rows and the worked example (`bitstream.hpp`'s
+161-byte P-frame) from type 1's freeze; until then only a change to type
+1's format, such as the lanes below, may change them.
+
+**Measured.** Apple M5 Max, MoltenVK, Release; a warm-up, then the median
+of 3 runs; host ms is a codec call's wall clock and device ms its timed
+device spans, each a mean over every frame of a type. Room0's frames 0–399
+through `codec_replica` (`encode_every` 1), at 1 cm (4 cm band) and 2 cm
+(8 cm), Classic (c1, c2) and Dynamic (d1, d2), R = 64; Rafa2's frames 1–150
+through `codec_mesh` with `codec_mesh_sequence.json`'s settings (5 mm),
+R = 64 and 16 (r64, r16). K = 64, the uniform table, scale 0.2, U = 64.
+Open-ended is a period of 1000. Bytes a frame, with Mbit/s at 30 fps:
+
+| Input | Period 1 | 8 | 30 | Open | I p95 / max | P at 30: mean / p95 / max |
+|---|---|---|---|---|---|---|
+| c1 | 242,699 (58.25) | 41,498 (9.96) | 20,843 (5.00) | 13,230 (3.18) | 274,780 / 275,004 | 12,900 / 21,283 / 47,856 |
+| c2 | 74,320 (17.84) | 13,432 (3.22) | 7,180 (1.72) | 4,877 (1.17) | 83,670 / 83,690 | 4,773 / 7,771 / 15,041 |
+| d1 | 231,082 (55.46) | 59,683 (14.32) | 42,063 (10.10) | 35,571 (8.54) | 268,319 / 269,182 | 35,319 / 41,221 / 51,805 |
+| d2 | 69,502 (16.68) | 17,575 (4.22) | 12,225 (2.93) | 10,261 (2.46) | 79,818 / 80,014 | 10,177 / 12,480 / 16,082 |
+| r64 | 61,869 (14.85) | 31,696 (7.61) | 28,419 (6.82) | 27,451 (6.59) | 64,025 / 65,217 | 27,255 / 45,742 / 53,047 |
+| r16 | 64,888 (15.57) | 32,089 (7.70) | 28,533 (6.85) | 27,483 (6.60) | 67,082 / 68,341 | 27,267 / 45,796 / 53,155 |
+
+Ms a frame at period 30, host / device:
+
+| Input | I encode | P encode | I decode | P decode | P no slower |
+|---|---|---|---|---|---|
+| c1 | 3.248 / 2.180 | 2.170 / 1.097 | 2.901 / 1.976 | 1.951 / 1.149 | yes |
+| c2 | 2.745 / 1.880 | 1.551 / 0.568 | 2.371 / 1.602 | 1.171 / 0.557 | yes |
+| d1 | 3.210 / 2.223 | 2.516 / 1.446 | 3.477 / 2.010 | 2.487 / 1.397 | yes |
+| d2 | 3.081 / 2.198 | 1.802 / 0.810 | 2.765 / 1.793 | 1.677 / 0.808 | yes |
+| r64 | 2.632 / 1.621 | 2.557 / 1.370 | 2.750 / 1.678 | 2.468 / 1.404 | yes |
+| r16 | 1.554 / 0.547 | 2.534 / 1.366 | 1.555 / 0.523 | 2.438 / 1.387 | no |
+
+Each run agrees: r16's P decode is 0.88–0.95 ms slower than its I decode,
+and r64's P encode about 3% faster than its I encode. Dropping each type's
+first frame, which allocates, changes no verdict. By stage (host ms; the
+breakdown rows the examples print), a P-frame's forward carries its second
+count submit, and its rANS stages follow its segment count:
+
+| Stage | c1 I | c1 P | r16 I | r16 P |
+|---|---|---|---|---|
+| `..active set` | 0.172 | 0.161 | 0.231 | 0.227 |
+| `..observed` | 0.359 | 0.352 | 0.192 | 0.196 |
+| `..forward` | 0.621 | 0.908 | 0.390 | 0.654 |
+| `..rans encode` | 2.093 | 0.747 | 0.732 | 1.467 |
+| `..rans decode` | 1.965 | 1.108 | 0.801 | 1.662 |
+| `..apply` | 0.290 | 0.284 | 0.478 | 0.518 |
+| `..inverse` | 0.576 | 0.557 | 0.264 | 0.258 |
+
+The real coder lands on step 0's price (the 2026-10-12 entry; mean P/I,
+open-ended): c1 0.058 against 0.058, c2 0.070 against 0.069 and d1 0.159
+against 0.158, on the same grids (the I-frame means equal step 0's to the
+byte); r64 0.440 against 0.431 and r16 0.420 against 0.411, on near grids
+(`codec_mesh` fits one normalization to all 150 frames and grows
+`allow_holes` skirts, where step 0 placed each frame by frame 1's). Every
+chain measured, the periods above on each input and the U sweep below, 26
+in all, decodes with a fresh `Decoder` bit for bit to the all-intra
+stream's grids, and its I-frames are the all-intra stream's bytes; a chain
+checked against another input's stream fails every frame. Accuracy,
+coverage and F-score are the same at every period, U and run, and every
+run writes the same bytes. Not run: the RTX 5090 (unreachable) and E1's
+rig dumps (none exist yet).
+
+**U stays 64.** The rule: the U of the fewest total bytes over c1, d1 and
+r64 at period 30, among those whose P-frame encode and decode host ms are
+within 5% of U = 64's on each. Bytes, and P encode / decode host ms:
+
+| Input | U = 64 | 128 | 256 |
+|---|---|---|---|
+| c1 | 8,337,022; 2.170 / 1.951 | 7,862,096; 2.325 / 2.094 | 7,631,050; 2.605 / 2.425 |
+| d1 | 16,825,140; 2.516 / 2.487 | 16,532,546; 2.960 / 2.994 | 16,386,974; 3.878 / 4.029 |
+| r64 | 4,262,910; 2.557 / 2.468 | 4,235,630; 3.556 / 3.624 | 4,222,312; 5.086 / 5.922 |
+
+U = 256 saves 4.03% of the total and U = 128 2.70%, but their P-frames
+take 20–140% and 7–47% longer: fewer update segments, less parallelism.
+
+**The freeze waits on rANS lanes.** Rafa2's frames hold about 3,430
+blocks, and the device codes one segment an invocation. An I-frame at
+R = 16 has about 216 segments, but a P-frame's reference entries go in
+ceil(M / U) update segments, about 54 at U = 64, so its rANS stages take
+twice an I-frame's (the stage table). U = 16 gives 215 segments and P-frames
+faster than intra again (r16 decode 1.615 against 1.745 ms, encode 1.910
+against 2.068), but costs 3.8% of r16's stream (4,442,994 against
+4,279,898 bytes) in each segment's length and final state. Interleaved
+rANS lanes within an update segment would give the device that parallelism
+without the segments, but change type 1's format. Open, for the user: add
+the lanes before the freeze, or freeze type 1 as it is and accept P-frames
+slower than intra at small R. The P-frame's second count submit is left to
+a later performance change either way.
 
 **Validation.** Apple M5 Max, Release with warnings as errors, core
 `138914f`: the 87 tests pass under the validation layer, and the codec,
@@ -13276,10 +13372,9 @@ record a key, no `force_intra()` after a refused decode, the median one
 rank high, every row typed intra, the empty-grid rule dropped, a P-frame
 counted at the default U, `validate` blind to the update size, and
 `frame_hash`'s last shift changed, which the device's golden P rows catch
-past the worked example. Not run: the RTX 5090, ASan and UBSan (CI runs
-them), and the hand checks (`codec_replica` at period 30 against period 1,
-and every measured chain decoded to its all-intra grids), which wait on the
-measurements.
+past the worked example. By hand, `codec_replica` at period 30 prints
+period 1's accuracy, coverage and F-score. Not run: the RTX 5090, ASan and
+UBSan (CI runs them).
 
 ## Measured lessons
 

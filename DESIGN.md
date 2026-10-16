@@ -1365,7 +1365,7 @@ decoding.
 ### codec
 
 The codec is implemented, intra frames and P-frames (frame type 1,
-experimental until golden P-frames freeze it), and it codes and decodes on
+experimental until frozen; the 2026-10-16 entry), and it codes and decodes on
 the device alone (2026-10-13): the host does the I/O around it (a frame's
 bytes, and their hash) and the control (a frame's header, sections and
 tables, and small counts and status words read back). The CPU rANS coder is
@@ -1960,6 +1960,12 @@ depth and coverage in the pass between calls, blending views at their seams,
 and a per-triangle tile
 index in gfx so a shared mesh can be textured from several views; and the
 multi-keyframe post-scan atlas, which the multi-view path can carry.
+
+**On `codec`**, P-frames stay experimental (the 2026-10-16 entry): at
+R = 16 they code slower than intra, their 64-entry update segments giving
+the device a quarter of an I-frame's segments, so the freeze waits on
+whether to interleave rANS lanes within an update segment, a format change.
+Counting a P-frame in the forward's submit is a `TODO(codec)`.
 
 **On `tsdf`**, mesh → TSDF has its two modes (2026-09-27), a second way into
 the grid the codec encodes: a mesh sequence converts frame by frame. Both modes
