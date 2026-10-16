@@ -13,12 +13,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `codec.update_size`, whose 0 is the encoder's own (core refuses one at a
   period of 1), and refuses what `EncoderConfig::validate` refuses before
   any GPU work; the refusal of a period other than 1 is gone. `codec_replica`
-  and `codec_mesh` print the period and update size. `CodecStream`'s rows
-  carry the frame type (`CodecRow::type`, and the CSV's `type` column, `I`
-  or `P`, after `frame`); a record is a key only for an I-frame;
-  `report()` gives each type's bytes (mean, p50, p95, max), stage rows and
-  rANS share, and at a period above 1 a GOP's bitrate; and any failure after
-  the encode makes the next frame an I-frame (`Encoder::force_intra`). The
+  and `codec_mesh` print the period and, above 1, the update size.
+  `CodecStream`'s rows carry the frame type (`CodecRow::type`, and the
+  CSV's `type` column, `I` or `P`, after `frame`); a record is a key only
+  for an I-frame; `report()` gives each type's bytes (mean, p50, p95, max),
+  stage rows (`encode_stages`, `decode_stages`) and rANS share, and at a
+  period above 1 a GOP's bitrate (`gop_bytes`); and any failure after the
+  encode makes the next frame an I-frame (`Encoder::force_intra`). The
   sweep codes every row intra. The templates keep period 1 while type 1 is
   experimental. Migrating: read the CSV's columns by name, or shift
   those after `frame` by one; pass the frame type to `make_codec_row` after
@@ -26,9 +27,6 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   set `codec.update_size` only with a `codec.intra_period` above 1. Tests:
   `recon_example_codec_stream`, `recon_example_config`,
   `recon_codec_mesh_run`, `recon_codec_mesh_config_entry`.
-- `codec`: **an empty grid is an I-frame**, with no segment, not a P-frame
-  removing every reference entry at 8 bytes an update segment. Tests:
-  `recon_codec_encoder`, `recon_codec_inter`.
 - `examples`: **core 0.8.0 is required** (core #34). Its CodecMesh takes
   `run.first`, `run.frames`, `fusion.truncation_m`, `source.allow_holes`
   and `source.metres_per_unit` beside `height_m`, and `codec.entropy`
@@ -278,10 +276,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   in `recon_codec_decoder`.
 - `codec`: **the `Encoder` writes P-frames** (experimental until frozen) at
   `EncoderConfig::intra_period` above 1: an I-frame first, then every
-  period, after `Encoder::force_intra()`, on a
-  grid of other geometry and after a frame of no blocks, and otherwise a
-  zero-motion P-frame against the frame it returned last, which it keeps on
-  the device as it coded it. Only a frame returned moves that reference; a
+  period, after `Encoder::force_intra()`, on a grid of other geometry, for
+  a grid of no blocks and after one, and otherwise a zero-motion P-frame
+  against the frame it returned last, which it keeps on the device as it
+  coded it. Only a frame returned moves that reference; a
   P-frame decodes to exactly the grid the I-frame of the same content does.
   The default period, 1, writes every frame's bytes as before; the encoder
   now keeps its last frame in device memory and hashes it, at a cost the

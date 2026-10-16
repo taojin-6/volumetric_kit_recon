@@ -66,7 +66,8 @@ counted in coded frames. A frame with no observed block, and the frame after
 it, are I-frames whatever the period, and the count restarts at every
 I-frame. The templates keep 1, every frame intra, while P-frames are
 experimental. `codec.update_size` sets the P-frames' update segments, so
-core refuses it, even as 0, unless `codec.intra_period` is above 1.
+core refuses it, even as 0, at a `codec.intra_period` of 1 or with
+`codec.inspect_only`.
 
 `fuse_orbbec` accepts `diagnostics.readback: true` in either a stream or fusion
 scenario. It copies every set's luma to host memory and reports a separate

@@ -1963,9 +1963,10 @@ multi-keyframe post-scan atlas, which the multi-view path can carry.
 
 **On `codec`**, P-frames stay experimental (the 2026-10-16 entry): at
 R = 16 they code slower than intra, their 64-entry update segments giving
-the device a quarter of an I-frame's segments, so the freeze waits on
-whether to interleave rANS lanes within an update segment, a format change.
-Counting a P-frame in the forward's submit is a `TODO(codec)`.
+the device a quarter of an I-frame's segments and their encode a second
+submit to count symbols. The freeze waits on whether to interleave rANS
+lanes within an update segment, a format change; encode needs the count
+moved into the forward's submit as well, a `TODO(codec)`.
 
 **On `tsdf`**, mesh → TSDF has its two modes (2026-09-27), a second way into
 the grid the codec encodes: a mesh sequence converts frame by frame. Both modes

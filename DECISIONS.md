@@ -518,8 +518,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   P-frames freeze it. *Amended 2026-10-13:* the `Decoder` decodes them; row
   13 is the device merge's, and the host merge is gone. *Amended
   2026-10-14:* the `Encoder` writes them. *Amended 2026-10-16:* golden
-  P-frames pin type 1's bytes, but its freeze waits on interleaved rANS
-  lanes.
+  P-frames pin type 1's bytes, but its freeze waits on a decision about
+  interleaved rANS lanes.
 - [**2026-10-13**](#2026-10-13--the-decoder-decodes-p-frames-against-the-frame-it-decoded-last-kept-on-the-device-as-decoded-in-two-slots-that-swap-only-when-a-decode-succeeds-one-integer-apply-makes-every-decoded-frame-intra-too-and-it-decodes-on-the-device-alone-amends-the-2026-09-27-encoderdecoder-and-2026-10-03-decoding-entries) —
   The `Decoder` decodes P-frames against the frame it decoded last, kept on
   the device as decoded and replaced only when a decode succeeds; one integer
@@ -569,7 +569,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   empty grid is an I-frame, U is `EncoderConfig::update_size` (64,
   measured), and golden P-frames pin type 1's bytes. Type 1 stays
   experimental and the templates at period 1: at R = 16 its P-frames code
-  slower than intra, and the freeze waits on interleaved rANS lanes.
+  slower than intra, and the freeze waits on a decision about interleaved
+  rANS lanes.
 
 ## Decision record
 
@@ -13349,30 +13350,48 @@ within 5% of U = 64's on each. Bytes, and P encode / decode host ms:
 U = 256 saves 4.03% of the total and U = 128 2.70%, but their P-frames
 take 20–140% and 7–47% longer: fewer update segments, less parallelism.
 
-**The freeze waits on rANS lanes.** Rafa2's frames hold about 3,430
-blocks, and the device codes one segment an invocation. An I-frame at
-R = 16 has about 216 segments, but a P-frame's reference entries go in
-ceil(M / U) update segments, about 54 at U = 64, so its rANS stages take
-twice an I-frame's (the stage table). U = 16 gives 215 segments and P-frames
-faster than intra again (r16 decode 1.615 against 1.745 ms, encode 1.910
-against 2.068), but costs 3.8% of r16's stream (4,442,994 against
-4,279,898 bytes) in each segment's length and final state. Interleaved
-rANS lanes within an update segment would give the device that parallelism
-without the segments, but change type 1's format. Open, for the user: add
-the lanes before the freeze, or freeze type 1 as it is and accept P-frames
-slower than intra at small R. The P-frame's second count submit is left to
-a later performance change either way.
+**The freeze waits on a decision about rANS lanes.** Rafa2's frames hold
+about 3,430 blocks, and the device codes one segment an invocation. An
+I-frame at R = 16 has about 216 segments, but a P-frame's reference entries
+go in ceil(M / U) update segments, about 54 at U = 64, so its rANS stages
+take twice an I-frame's (the stage table). U = 16 gives 215 segments, and
+r16's rANS stages and P decode come back to intra's, but not its P encode,
+whose forward carries the second count submit. Host ms at U = 16 over two
+sets of runs, against the I-frames of the same runs and of period 1 (decode
+and encode with each type's first frame dropped, the stages as the reports
+print them):
+
+| r16 | P | I |
+|---|---|---|
+| decode | 1.51–1.61 | 1.56–1.75 |
+| encode | 1.83–1.88 | 1.52–1.72 |
+| `..rans decode` | 0.74–0.77 | 0.79–0.88 |
+| `..rans encode` | 0.66 | 0.70–0.76 |
+| `..forward` | 0.73 | 0.38–0.52 |
+
+U = 16 also costs 3.8% of r16's stream (4,442,994 against 4,279,898 bytes)
+in each segment's length and final state. Interleaved rANS lanes within an
+update segment would give the device that parallelism without the segments,
+but change type 1's format, and encode at R = 16 would still need the
+second count submit gone, which this entry leaves to a later performance
+change. Open, for the user: add the lanes before the freeze, which then
+waits on that change too, or freeze type 1 as it is and accept P-frames
+slower than intra at small R.
 
 **Validation.** Apple M5 Max, Release with warnings as errors, core
 `138914f`: the 87 tests pass under the validation layer, and the codec,
-example and volume tests under synchronization validation too. Twelve
+example and volume tests under synchronization validation too. Fifteen
 planted bugs each failed a test: the period not mapped, an update size of
 0 passed through, the sweep's period not pinned, every record a key, no
-record a key, no `force_intra()` after a refused decode, the median one
-rank high, every row typed intra, the empty-grid rule dropped, a P-frame
-counted at the default U, `validate` blind to the update size, and
-`frame_hash`'s last shift changed, which the device's golden P rows catch
-past the worked example. By hand, `codec_replica` at period 30 prints
+record a key, no `force_intra()` after a refused decode, none after a
+failed CSV row (the test stops the CSV with the file size limit; a failed
+append takes the same branch, but the writer's failure sticks, so no later
+frame decodes to show it), the median one rank high, a GOP weighting its
+P-frames by the period, every frame's stage rows filed as the I-frames',
+every row typed intra, the empty-grid rule dropped, a P-frame counted at
+the default U, `validate` blind to the update size, and `frame_hash`'s last
+shift changed, which the device's golden P rows catch past the worked
+example. By hand, `codec_replica` at period 30 prints
 period 1's accuracy, coverage and F-score. Not run: the RTX 5090, ASan and
 UBSan (CI runs them).
 
