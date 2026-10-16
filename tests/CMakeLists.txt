@@ -719,8 +719,9 @@ add_test(NAME recon_codec_dct COMMAND recon_codec_dct_test)
 
 # codec tier, the device frame writer and reader: every frame the writer writes
 # is the CPU oracle's, byte for byte, across block counts, K, segment sizes and
-# int32 coordinate extremes, and every frame the reader reads, or corrupt
-# payload it refuses, is the oracle's. Skips without a device.
+# int32 coordinate extremes, the golden frames' pinned bytes among them, intra
+# and P, and every frame the reader reads, or corrupt payload it refuses, is the
+# oracle's. Skips without a device.
 add_executable(recon_codec_device_frame_test codec_device_frame_test.cpp)
 target_link_libraries(
   recon_codec_device_frame_test PRIVATE recon_codec_oracle Vulkan::Vulkan
