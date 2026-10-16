@@ -180,7 +180,8 @@ vr_target_warnings(recon_tsdf_mesh_integrate_test)
 add_test(NAME recon_tsdf_mesh_integrate COMMAND recon_tsdf_mesh_integrate_test)
 # GPU pre-processing (recon_sensor_utils) on synthetic frames: undistortion in
 # the right direction, the colour matrix, a host reference of the sampling, the
-# refusals, and fusing the result. Skips where no device is present.
+# refusals, the outputs' sharing, read on another queue family, and fusing the
+# result. Skips where no device is present.
 add_executable(recon_sensor_gpu_frame_prep_test sensor_gpu_frame_prep_test.cpp)
 target_link_libraries(
   recon_sensor_gpu_frame_prep_test
@@ -189,6 +190,17 @@ target_link_libraries(
 vr_target_warnings(recon_sensor_gpu_frame_prep_test)
 add_test(NAME recon_sensor_gpu_frame_prep
          COMMAND recon_sensor_gpu_frame_prep_test)
+
+# The prep's same-K depth crop folds no output pixel: a Femto Mega NFOV depth
+# lens keeps every one inside its monotonic radius, found by a forward scan of
+# distort_rational that finds a strong barrel lens's fold. Host-only.
+add_executable(recon_sensor_depth_lens_fold_test
+               sensor_depth_lens_fold_test.cpp)
+target_link_libraries(recon_sensor_depth_lens_fold_test
+                      PRIVATE volumetric_kit::recon_camera)
+vr_target_warnings(recon_sensor_depth_lens_fold_test)
+add_test(NAME recon_sensor_depth_lens_fold
+         COMMAND recon_sensor_depth_lens_fold_test)
 
 # Allocation failure while staging is an OutOfMemory result, and a retained
 # frame survives it. Separate executable for its replacement operator new.

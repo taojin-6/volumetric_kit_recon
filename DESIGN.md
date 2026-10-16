@@ -208,9 +208,8 @@ Two contracts — both simpler now that recon and gfx are both Vulkan.
   per-vertex `uv0` + a `Material` texture (gfx has no per-triangle UV; the
   `texture` tier now fills `uv0` for the live single-camera case — see the
   2026-07-07 decision). The triangle-mesh path is
-  the first milestone — a
-  `PointCloud` handoff waits on gfx growing a point-splat pipeline (it renders
-  only meshes today).
+  the first milestone. gfx draws points from `DeviceFrame` depth in place;
+  recon builds no point cloud (the 2026-10-16 depth-sharing decision).
 - **B — Shared Vulkan resources (zero-copy; the live target).** recon writes the
   mesh/atlas into a `VkBuffer`/`VkImage` on a **single `VkDevice` shared with gfx**
   (one process) and gfx draws it directly — no external-memory import. Realized by
