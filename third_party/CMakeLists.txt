@@ -35,16 +35,15 @@ include(FetchContent)
 # rather than OFF, as calib does, so an application that turns the tier on keeps
 # it.
 #
-# The pin is core 0.8.0 (c072a23, core #34): it escapes literal '%' characters
-# in CodecMesh's scenario directory before resolving source.path, and adds
-# codec.intra_period. The examples require this path contract; their adapter
-# refuses intra_period other than 1 until their P-frame support lands.
+# The pin is core 0.9.0 (50099d9, core's feat/config-update-size): it adds
+# codec.update_size, on 0.8.0's codec.intra_period and its escaping of literal
+# '%' characters in CodecMesh's scenario directory before resolving source.path.
 #
 # TODO: pin a core release tag once the core tags its releases.
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG c072a23b7a37ee822235ca6461eb17ee967bfa7c)
+  GIT_TAG 50099d97a20de6821579a2b00e799e7aeb2721d4)
 set(VKC_INSTALL ${VR_INSTALL})
 if(NOT VR_CAMERA_ONLY)
   set(VKC_WITH_VULKAN ON)
@@ -59,8 +58,8 @@ if(NOT VR_CAMERA_ONLY AND (VR_BUILD_EXAMPLES OR VR_BUILD_TESTS))
 endif()
 FetchContent_MakeAvailable(volumetric_kit_core)
 if(NOT VR_CAMERA_ONLY AND (VR_BUILD_EXAMPLES OR VR_BUILD_TESTS))
-  # CodecMesh's resolved source.path needs core 0.8.0's directory escaping.
-  vkc_require_core(0.8.0 CONFIG)
+  # The codec examples map codec.update_size, core 0.9.0's.
+  vkc_require_core(0.9.0 CONFIG)
 endif()
 
 # The set()s above are lost when calib or the application made the core
