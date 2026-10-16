@@ -1365,7 +1365,7 @@ decoding.
 ### codec
 
 The codec is implemented, intra frames and P-frames (frame type 1,
-experimental until golden P-frames freeze it), and it codes and decodes on
+experimental until frozen; the 2026-10-16 entry), and it codes and decodes on
 the device alone (2026-10-13): the host does the I/O around it (a frame's
 bytes, and their hash) and the control (a frame's header, sections and
 tables, and small counts and status words read back). The CPU rANS coder is
@@ -1391,13 +1391,14 @@ with a stable rank-merge sort on `coord_less` itself, over all of int32
 the reference store's spare (below), the sorted list copied beside them, and
 writes the frame; the sort, the forward, the symbol count and the step layout
 share one submit. Keys are unique, so the same content gives the same bytes
-whatever the hash table's order. An empty I-frame submits nothing; an empty
-P-frame still submits its diff, every entry a remove.
+whatever the hash table's order. An empty frame is an I-frame (below), which
+submits nothing.
 At `EncoderConfig::intra_period` N above 1 (default 1, 0 refused) the
 `Encoder` writes P-frames (the 2026-10-14 entry): an I-frame first, then
 every N coded frames, after `force_intra()`, when the grid's `voxel_size` or
 `trunc_dist` is not the reference's (`coding_difference`, the writers' and
-reader's rule), and when the reference holds no block; a P-frame otherwise,
+reader's rule), when the reference holds no block, and when the grid holds
+none (the 2026-10-16 entry); a P-frame otherwise,
 against the frame `encode` returned last. Its reference is what the decoder
 will hold of that frame: the forward's q and masks and the sorted list, left
 in `detail::ReferenceStore`'s spare and swapped in when `encode` returns the
@@ -1411,7 +1412,9 @@ lacks takes its place among the new blocks from those ranks. A residual of
 (`emit_payload` walked at `bit_length + 1` bits a symbol, 8 a byte symbol,
 plus raw bits) puts strictly below its residual's. Only the device knows the
 new blocks' count, so a P-frame's symbols are counted in a second submit,
-at `kDefaultUpdateSize` entries an update segment.
+at `EncoderConfig::update_size` entries an update segment (default 64,
+`kDefaultUpdateSize`). `EncoderConfig::validate` holds the config's checks,
+which `create` makes first.
 The frame's rANS coding runs on the device (`detail::DeviceFrameWriter`,
 built by `Encoder::create`, which fails if its kernels do not build): the
 forward output stays in VRAM, the forward's batch also counts every model's
@@ -1749,10 +1752,11 @@ startup and diagnostics, and `replica_config.hpp`, `orbbec_config.hpp` and
 `codec_config.hpp` only copy validated settings into runtime API types and
 attach resources, except that the codec's rules stay the codec's:
 `encoder_config` maps `codec.quantization_table` to the weights
-(`codec_quantization.hpp`, the tables' one home) and refuses a step
-`CodecParams::validate` refuses. It also refuses `codec.intra_period` other
-than 1 until the examples support P-frame records. Both checks precede GPU
-setup. No local parser, flag registration or config validator remains.
+(`codec_quantization.hpp`, the tables' one home) and a `codec.update_size`
+of 0 to the encoder's own, and before GPU setup refuses what
+`EncoderConfig::validate` refuses: a step out of the codec's bounds, or a
+segment or update size past the longest. No local parser, flag registration
+or config validator remains.
 [Configuration examples](config/README.md) document paths, defaults and
 migration from the previous CLI.
 
@@ -1826,25 +1830,31 @@ draws it.
 **`codec_replica`** fuses a Replica sequence as `fuse_replica` does, and
 streams the growing grid through the codec: every `codec.encode_every` frames it
 encodes, then decodes into a player grid built from `read_frame_info` and
-sized for that frame's blocks. It reports bytes, the bitrate at the coded
-frame rate, and both calls' stage rows. It then judges the last decoded
+sized for that frame's blocks. It reports the bitrate at the coded frame
+rate and, at an intra period above 1, a GOP's (an I-frame and the period's
+P-frames, each at its type's mean), and for each frame type its bytes (mean,
+p50, p95, max) and both calls' stage rows. It then judges the last decoded
 surface against the source's, mesh to mesh, with the `eval` tier: accuracy,
 coverage and the F-score at half a voxel, since a fused TSDF is projective
 and sampling it would measure the fusion's bias too. `codec.sweep` prints the
 rate–distortion table the defaults are chosen from. The stream, its report
 and the sweep are `examples/common/codec_stream.hpp` and `codec_sweep.hpp`.
-The stream keeps a row per decoded frame (source index, bytes, blocks, and
-encode and decode host and device ms) and writes `CodecOutputs`, from
-`output.csv` and `output.stream`, as it codes. The CSV gets each row once its
-frame decodes; the core cannot append, so the file is the stream's own. The
+The stream keeps a row per decoded frame (source index, frame type, bytes,
+blocks, and encode and decode host and device ms) and writes
+`CodecOutputs`, from `output.csv` and `output.stream`, as it codes. The CSV
+gets each row once its frame decodes; the core cannot append, so the file
+is the stream's own. The
 `.vrst` (`recon_stream`) gets every frame the encoder returns, before it is
 decoded, so a frame the decoder refuses is kept: one Geometry track, and per
-frame a key record whose set is the source index and whose pts is that index
-at 30 fps, as Replica frames carry no time. It has no session id or start
-time, so a rerun writes the same bytes. It must be new, so a rerun onto it is
-refused before anything is coded, and a frame index or pts out of order is
-refused before it is encoded, so the writer never refuses a frame the
-encoder has taken. `finish` writes the footer.
+frame a record, a key exactly when it holds an I-frame, whose set is the
+source index and whose pts is that index at 30 fps, as Replica frames carry
+no time. It has no session id or start time, so a rerun writes the same
+bytes. It must be new, so a rerun onto it is refused before anything is
+coded, and a frame index or pts out of order is refused before it is
+encoded, so the writer never refuses one the encoder has taken. Any other
+failure after the encode, of the append, the decode or the CSV, calls
+`force_intra()`, so the next frame never references one the stream or the
+player lacks. `finish` writes the footer.
 
 Before truncating the CSV, creation checks that it does not alias the new
 stream file, including through symlinks or case-insensitive names. An alias
@@ -1852,9 +1862,10 @@ is `InvalidArgument`; a CSV error during creation removes the new stream
 file for retry.
 
 **`codec_mesh`** codes one mesh or a numbered sequence of them (README,
-Codec evaluation, has the keys). The examples require core 0.8.0: it escapes
-literal `%` characters in the scenario's directory before joining a relative
-`source.path`, so only the user's path carries a frame-number pattern.
+Codec evaluation, has the keys). The examples require core 0.9.0, for
+`codec.update_size`; core escapes literal `%` characters in the scenario's
+directory before joining a relative `source.path` (0.8.0), so only the
+user's path carries a frame-number pattern.
 Before any GPU work it refuses a malformed
 frame-number pattern, a range on a plain path and any frame file that is
 missing or not a regular file, and checks a shell against the truncation
@@ -1871,7 +1882,7 @@ before any frame is converted, so a rerun onto it is refused before any
 conversion or output. Each frame (`code_frame`) is loaded, placed, audited again on the
 placed coordinates (the audit that decides, as rounding can make a triangle
 degenerate), converted into the one source grid after a `clear`, so no block
-of an earlier frame stays, and coded as one intra record: set the frame's
+of an earlier frame stays, and coded as one record: set the frame's
 number, pts that number at 30 fps, seq from 0. The last frame alone is
 extracted from the source and player grids with `mesh::MarchingCubes` and
 compared, conversion error against the placed input apart from codec error
@@ -1884,10 +1895,12 @@ Both examples take `codec.quantization_table` (`uniform`, `band`, `radial`) and 
 single configuration. Their common `codec.sweep` compares all three table
 families at K = 64, 84, 120 and 512. The middle two retain complete frequency
 shells; K = 64 cuts a shell and is kept as the existing baseline. Each
-configuration has a warm-up and three timed codec rounds; mesh extraction
-and quality evaluation are outside those timings. Full frame bytes include
-the quantization table. These are deterministic candidate tables, not fitted
-JPEG image tables: the criterion is decoded geometry at a given total size.
+configuration has a warm-up and three timed codec rounds of one grid, all
+intra whatever `codec.intra_period` (`sweep_encoder_config`); mesh
+extraction and quality evaluation are outside those timings. Full frame
+bytes include the quantization table. These are deterministic candidate
+tables, not fitted JPEG image tables: the criterion is decoded geometry at
+a given total size.
 
 ## Next work
 
@@ -1947,6 +1960,13 @@ depth and coverage in the pass between calls, blending views at their seams,
 and a per-triangle tile
 index in gfx so a shared mesh can be textured from several views; and the
 multi-keyframe post-scan atlas, which the multi-view path can carry.
+
+**On `codec`**, P-frames stay experimental (the 2026-10-16 entry): at
+R = 16 they code slower than intra, their 64-entry update segments giving
+the device a quarter of an I-frame's segments and their encode a second
+submit to count symbols. The freeze waits on whether to interleave rANS
+lanes within an update segment, a format change; encode needs the count
+moved into the forward's submit as well, a `TODO(codec)`.
 
 **On `tsdf`**, mesh → TSDF has its two modes (2026-09-27), a second way into
 the grid the codec encodes: a mesh sequence converts frame by frame. Both modes

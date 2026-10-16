@@ -83,9 +83,10 @@ fails saying why, and an installed recon is not found. A core older than
 stops at that call as an unknown command: move the first-declared pin to 0.2.0
 or newer.
 
-Examples and their configuration tests require core 0.8.0 or newer with its
-config tier, including escaping literal `%` characters in a mesh scenario's
-directory. The pinned core supplies this version.
+Examples and their configuration tests require core 0.9.0 or newer with its
+config tier, for `codec.update_size` and the escaping of literal `%`
+characters in a mesh scenario's directory. The pinned core supplies this
+version.
 
 ### Asset I/O
 
@@ -195,11 +196,15 @@ compresses and decodes that grid, then extracts the decoded surface with
 marching cubes. Build the mesh example with `VR_WITH_ASSIMP=ON` after
 installing the [asset I/O prerequisites](#asset-io).
 Their `codec` section selects `quantization_table` (`uniform`, `band`,
-`radial`), `quantization_scale`, `segment_size` and the shared
-rate-distortion `sweep`. `output.stream` records every coded frame in a new
-`.vrst` file (see [the stream container](DESIGN.md#stream)), and
-`output.csv` writes a row per decoded frame: its bytes, blocks, and encode
-and decode host and device ms.
+`radial`), `quantization_scale`, `segment_size`, `intra_period` (an I-frame
+every N coded frames, zero-motion P-frames between, experimental; 1, the
+default, codes every frame intra), `update_size` at a period above 1 (a
+P-frame's entries per update segment; 0, the default, is the codec's 64),
+and the shared rate-distortion `sweep`, which codes intra. `output.stream`
+records every coded frame in a new `.vrst` file, each I-frame a key (see
+[the stream container](DESIGN.md#stream)), and `output.csv` writes a row per
+decoded frame: its type (`I` or `P`), bytes, blocks, and encode and decode
+host and device ms.
 
 A mesh scenario gives the head-up direction (`source.up_vector`) and either
 the input's unit (`source.metres_per_unit`) or a height to fit
