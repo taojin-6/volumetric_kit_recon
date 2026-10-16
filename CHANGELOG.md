@@ -158,6 +158,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `core`: **`core/shaders/pinhole.glsl`**, recon's GLSL pinhole, exported
+  for a consumer's kernels: `vr_unproject_pinhole`, `vr_project_pinhole`
+  and `vr_nearest_pixel`, on values (`vec4 k`, `uvec2 size`) rather than a
+  struct, under tsdf's rules. `recon_core`'s `VR_SHADER_INCLUDE_DIR`
+  property names the root to include
+  `volumetric_kit/recon/core/shaders/pinhole.glsl` under, fetched or
+  installed; an install puts it in the include directory. tsdf's projection
+  and volume's depth unprojection go through it, bit for bit. Tests:
+  `recon_core_pinhole_gpu`, `recon_subproject_glsl`, `recon_package_glsl`.
 - `codec`: **`EncoderConfig::update_size`**, a P-frame's reference entries
   per update segment, 1 to `kMaxDeviceDecodeSegmentSize` (default 64, as
   before and as measured against 128 and 256), and

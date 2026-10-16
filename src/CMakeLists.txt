@@ -102,11 +102,14 @@ if(VR_INSTALL)
   else()
     set(VR_PACKAGE_NEEDS_VULKAN ON)
   endif()
+  # The installed GLSL include root (recon_core's VR_SHADER_INCLUDE_DIR).
+  set(VR_SHADER_INCLUDE_INSTALL_DIR "${CMAKE_INSTALL_INCLUDEDIR}")
   include(CMakePackageConfigHelpers)
   configure_package_config_file(
     "${PROJECT_SOURCE_DIR}/cmake/volumetric_kit_reconConfig.cmake.in"
     "${CMAKE_CURRENT_BINARY_DIR}/volumetric_kit_reconConfig.cmake"
-    INSTALL_DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/volumetric_kit_recon")
+    INSTALL_DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/volumetric_kit_recon"
+    PATH_VARS VR_SHADER_INCLUDE_INSTALL_DIR)
   # SameMinorVersion while in 0.x: under semver a 0.MINOR bump may break, so a
   # consumer that requests 0.MINOR.PATCH must not be handed a different 0.MINOR.
   # Relax to SameMajorVersion once the API stabilizes at 1.0.

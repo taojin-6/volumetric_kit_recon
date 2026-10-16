@@ -13,6 +13,8 @@
 
 #extension GL_EXT_scalar_block_layout : require
 
+#include "volumetric_kit/recon/core/shaders/pinhole.glsl"
+
 struct VoxelGridParams {
   float voxel_size;
   int block_size;
@@ -60,40 +62,23 @@ struct ColorCameraParams {
 };
 
 // Project a world point into a pinhole camera given its intrinsics + rigid
-// cam_to_world pose. Returns true and sets `px` (pixel coords, in
-// [0,width)x[0,height), pixel centres at integer coordinates) and `zc`
-// (camera-space depth, metres) when the point is in front of the camera and
-// inside the image; false otherwise. world -> camera is R^T (world - t) -- the
-// rigid inverse, no explicit mat4 inverse. The two project_to_image overloads
-// adapt the depth and color camera structs onto it.
-//
-// Both tests are negated, so a NaN fails them: every comparison with NaN is
-// false, so the direct forms would accept a NaN depth or pixel and hand the
-// caller an index nothing else bounds.
+// cam_to_world pose. World -> camera is R^T (world - t), the rigid inverse with
+// no explicit mat4 inverse; camera -> pixel is core/shaders/pinhole.glsl's
+// vr_project_pinhole, under its rules. Also sets `zc`, the camera-space depth
+// (metres). The two project_to_image overloads adapt the depth and color
+// camera structs onto it.
 bool project_pinhole(mat4 cam_to_world, float fx, float fy, float cx, float cy,
                      uint width, uint height, vec3 world, out vec2 px,
                      out float zc) {
-  mat3 rot = mat3(cam_to_world);
-  vec3 t = cam_to_world[3].xyz;
-  vec3 p_cam = transpose(rot) * (world - t);
+  vec3 p_cam = transpose(mat3(cam_to_world)) * (world - cam_to_world[3].xyz);
   zc = p_cam.z;
-  if (!(zc > 0.0)) {
-    return false;  // behind the camera, or not a number
-  }
-  float u = fx * (p_cam.x / zc) + cx;
-  float v = fy * (p_cam.y / zc) + cy;
-  if (!(u >= 0.0 && u < float(width) && v >= 0.0 && v < float(height))) {
-    return false;  // outside the image, or not a number
-  }
-  px = vec2(u, v);
-  return true;
+  return vr_project_pinhole(p_cam, vec4(fx, fy, cx, cy), uvec2(width, height),
+                            px);
 }
 
-// The pixel whose centre is nearest `px`, a coordinate project_pinhole
-// accepted: round half up, clamped into the image, since the last half pixel
-// of [0, width) rounds to `width`.
+// vr_nearest_pixel for a camera's width and height.
 uvec2 nearest_pixel(vec2 px, uint width, uint height) {
-  return min(uvec2(floor(px + 0.5)), uvec2(width - 1u, height - 1u));
+  return vr_nearest_pixel(px, uvec2(width, height));
 }
 
 bool project_to_image(DepthCameraParams c, vec3 world, out vec2 px,

@@ -20,18 +20,15 @@
 // Under scalar block layout every field lands at its host offset (no std430
 // vec padding).
 //
-// project_to_image computes the same world -> camera -> pixel arithmetic as
-// tsdf_common.glsl's project_pinhole -- a self-contained copy, so this tier's
-// shaders vendor no cross-tier include, matching how each tier's GLSL restates
-// the small structs/helpers it needs (hash_common.glsl / tsdf_common.glsl).
-//
-// It is NOT interchangeable with that one, and the difference is deliberate:
-// this copy accepts a point in front of the camera whose pixel lands outside
-// the image and returns the extrapolated coordinate, where project_pinhole
-// rejects it. See the contract on the function. Do not reconcile the two by
-// copying either into the other -- tsdf's version here restores the
-// frustum-edge smear this tier's encoding exists to prevent, and this version
-// there makes integration fuse depth at pixels the sampler never validated.
+// project_to_image's camera -> pixel divide is the one in
+// core/shaders/pinhole.glsl's vr_project_pinhole, which tsdf projects through,
+// but the two are NOT interchangeable, and the difference is deliberate: this
+// variant accepts a point in front of the camera whose pixel lands outside the
+// image and returns the extrapolated coordinate, where vr_project_pinhole
+// rejects it. See the contract on the function. Do not reconcile the two --
+// the core's rule here restores the frustum-edge smear this tier's encoding
+// exists to prevent, and this one in tsdf makes integration fuse depth at
+// pixels the sampler never validated.
 
 #extension GL_EXT_scalar_block_layout : require
 

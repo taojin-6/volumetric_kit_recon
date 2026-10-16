@@ -571,6 +571,12 @@ entries relevant to your task; later amendments supersede earlier rules.
   experimental and the templates at period 1: at R = 16 its P-frames code
   slower than intra, and the freeze waits on a decision about interleaved
   rANS lanes.
+- [**2026-10-16**](#2026-10-16--one-glsl-pinhole-for-recon-and-its-consumers-coreshaderspinholeglsl-exported-under-the-include-root-recon_core-names) —
+  One GLSL pinhole for recon and its consumers, `core/shaders/pinhole.glsl`:
+  values, not structs, so scalar-layout and std430 kernels both call it;
+  tsdf's projection and volume's depth unprojection go through it; and
+  `recon_core`'s `VR_SHADER_INCLUDE_DIR` names the root a consumer
+  includes it under, fetched or installed.
 
 ## Decision record
 
@@ -13394,6 +13400,47 @@ shift changed, which the device's golden P rows catch past the worked
 example. By hand, `codec_replica` at period 30 prints
 period 1's accuracy, coverage and F-score. Not run: the RTX 5090, ASan and
 UBSan (CI runs them).
+
+### 2026-10-16 — One GLSL pinhole for recon and its consumers: `core/shaders/pinhole.glsl`, exported under the include root `recon_core` names.
+
+calib's depth checks run kernels of their own over recon's prepared depth,
+and they must project and unproject it by recon's rules. A copy in calib
+would be a second pinhole. The core cannot hold it, since its decisions lock
+"No camera or sensor tier", and gfx needs none, since it folds intrinsics
+into its matrices on the host. So recon's `core` tier holds it, beside
+`color_common.glsl`, and recon exports it.
+
+- **Three functions, taking values:** `vr_unproject_pinhole(px, z, k)`,
+  `vr_project_pinhole(p_cam, k, size, out px)` and `vr_nearest_pixel(px,
+  size)`, with `k` = (fx, fy, cx, cy) and `size` a `uvec2`. A struct would
+  fix one buffer layout; values let recon's scalar-layout cameras and calib's
+  std430 ones pass theirs.
+- **Today's rules:** both tests negated, so a NaN fails them; the domain
+  `[0, W) × [0, H)`; the last half pixel clamped to the edge pixel
+  (2026-10-08).
+- **recon's own kernels go through it.** `tsdf_common.glsl`'s
+  `project_pinhole` and `nearest_pixel` are thin wrappers, and
+  `hash_allocate_depth.comp` unprojects with it; each function keeps the
+  order of operations its caller had, so neither changes a bit. Two variants stay, because their
+  rules differ: `texture_common.glsl`'s projection extrapolates past the
+  image (2026-08-11), and `undistort_depth.comp`'s colour test bounds the
+  rounded pixel.
+- **Exported through a target property.** `recon_core`'s
+  `VR_SHADER_INCLUDE_DIR` names the root a consumer passes its shader
+  compiler, as the core's `VKC_CORE_VERSION` rides `core_base`, so it
+  reaches a project that fetches recon and one that finds it. In the build
+  tree the root is a copy of the exported files alone, so a kernel that
+  compiles against a fetched recon cannot include recon's internal GLSL and
+  then fail against an installed one. Installed, it is the include
+  directory, which the package config sets on the imported target.
+
+**Validation.** Apple M5 Max, MoltenVK, Release with warnings as errors,
+under the Khronos validation layer. `recon_core_pinhole_gpu` runs the three
+functions in a std430 kernel against the host's double: 28 written-out
+edges and 3 unprojections in exact arithmetic, and 2420 grid cases around
+five cameras, from 1 × 1 to 3840 × 2160. `recon_subproject_glsl` and
+`recon_package_glsl` compile that kernel through the fetched and the
+installed root. The tsdf, volume, mesh and texture suites pass unchanged.
 
 ## Measured lessons
 

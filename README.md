@@ -63,6 +63,16 @@ project. A consumer with no GPU work, such as calib's solver, sets
 (`volumetric_kit::recon_camera`) alone, with no Vulkan SDK; it refuses the
 examples and the optional drivers.
 
+A consumer's kernels include recon's GLSL pinhole as recon's own do,
+`#include "volumetric_kit/recon/core/shaders/pinhole.glsl"`, under the root
+that `volumetric_kit::recon_core`'s `VR_SHADER_INCLUDE_DIR` property names,
+fetched or installed. The root holds the exported GLSL alone.
+
+```cmake
+get_target_property(vr_glsl volumetric_kit::recon_core VR_SHADER_INCLUDE_DIR)
+vkc_compile_shaders(my_kernels INCLUDE_DIRS "${vr_glsl}" SHADERS my.comp)
+```
+
 recon builds on [`volumetric_kit_core`](https://github.com/taojin-6/volumetric_kit_core),
 the family's shared foundation, fetched pinned by commit on the first configure:
 its error handling, and its Vulkan foundation -- device, allocator, buffers,

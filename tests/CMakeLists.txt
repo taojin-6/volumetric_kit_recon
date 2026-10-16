@@ -627,6 +627,20 @@ vr_target_warnings(recon_core_color_space_gpu_test)
 add_test(NAME recon_core_color_space_gpu
          COMMAND recon_core_color_space_gpu_test)
 
+# core/shaders/pinhole.glsl, the GLSL pinhole recon exports, against the host's
+# arithmetic in double (shaders/pinhole_cases.comp, std430 as a consumer's
+# kernel): written-out edges in exact arithmetic, and a grid around five
+# cameras. Skips where no device is present.
+add_executable(recon_core_pinhole_gpu_test core_pinhole_gpu_test.cpp)
+vr_embed_shaders(recon_core_pinhole_gpu_test SHADERS
+                 "${CMAKE_CURRENT_SOURCE_DIR}/shaders/pinhole_cases.comp")
+target_link_libraries(
+  recon_core_pinhole_gpu_test
+  PRIVATE volumetric_kit::recon_core volumetric_kit::recon_camera
+          Vulkan::Vulkan volumetric_kit::core_test_policy)
+vr_target_warnings(recon_core_pinhole_gpu_test)
+add_test(NAME recon_core_pinhole_gpu COMMAND recon_core_pinhole_gpu_test)
+
 # sensor tier: the camera-convention conversions -- the OpenGL/ARKit -> CV pose
 # change of basis and the registered-depth intrinsics rescale. These are the two
 # things a capture integration gets *silently* wrong (a flipped axis or a
@@ -1216,6 +1230,15 @@ function(_vr_expect_message test message)
 endfunction()
 
 _vr_add_subproject_test(recon_subproject_defaults defaults)
+set_tests_properties(recon_subproject_defaults
+                     PROPERTIES FIXTURES_SETUP vr_subproject_defaults)
+# The sibling compiles a kernel that includes recon's exported GLSL through the
+# root recon_core names (glsl_consumer.cmake).
+add_test(NAME recon_subproject_glsl
+         COMMAND "${CMAKE_COMMAND}" --build "${_vr_subproject}/defaults"
+                 --target vr_glsl_consumer)
+set_tests_properties(recon_subproject_glsl PROPERTIES FIXTURES_REQUIRED
+                                                      vr_subproject_defaults)
 _vr_add_subproject_test(recon_subproject_old_core old_core -DVR_CORE_FIRST=ON
                         -DVKC_WITH_VULKAN=ON -DVR_CONSUMER_CORE_VERSION=0.0.1)
 _vr_expect_message(
@@ -1261,8 +1284,16 @@ if(VR_INSTALL AND _vr_core_source)
       "${_vr_package}/found" -G "${CMAKE_GENERATOR}"
       "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
       "-DCMAKE_PREFIX_PATH=${_vr_package}/recon-install${_vr_prefixes}")
-  set_tests_properties(recon_package_found PROPERTIES FIXTURES_REQUIRED
-                                                      vr_package_recon)
+  set_tests_properties(
+    recon_package_found PROPERTIES FIXTURES_REQUIRED vr_package_recon
+                                   FIXTURES_SETUP vr_package_found)
+  # ... and compiles a kernel that includes the installed GLSL through the root
+  # the package config names (glsl_consumer.cmake).
+  add_test(NAME recon_package_glsl
+           COMMAND "${CMAKE_COMMAND}" --build "${_vr_package}/found" --target
+                   vr_glsl_consumer)
+  set_tests_properties(recon_package_glsl PROPERTIES FIXTURES_REQUIRED
+                                                     vr_package_found)
   add_test(
     NAME recon_package_base_core_configure
     COMMAND

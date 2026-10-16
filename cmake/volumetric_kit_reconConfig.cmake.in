@@ -77,4 +77,13 @@ endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/volumetric_kit_reconTargets.cmake")
 
+# recon_core names the root its exported GLSL is included under, as in the
+# build tree (src/volumetric_kit/recon/core/CMakeLists.txt): installed, the
+# include directory.
+if(@VR_PACKAGE_NEEDS_VULKAN@)
+  set_target_properties(
+    volumetric_kit::recon_core
+    PROPERTIES VR_SHADER_INCLUDE_DIR "@PACKAGE_VR_SHADER_INCLUDE_INSTALL_DIR@")
+endif()
+
 check_required_components(volumetric_kit_recon)

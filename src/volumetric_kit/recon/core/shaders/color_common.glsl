@@ -7,10 +7,9 @@
 // mesh/shaders/marching_cubes_sparse{,_shared}.comp -- from `core` rather than
 // from a tier, because `sensor` (which owns the boundary *policy*) branches off
 // `core` beside the fusion tiers and cannot be included by them, while the
-// curve itself is vocabulary four tiers need. This is the only cross-tier GLSL
-// include; it resolves through the shader include root vr_compile_shaders
-// passes, spelled like the C++ header path so its provenance is visible at the
-// include site.
+// curve itself is vocabulary four tiers need. It resolves through the shader
+// include root vr_compile_shaders passes, spelled like the C++ header path so
+// its provenance is visible at the include site.
 //
 // The rule (DESIGN.md, "Color space"): 8-bit color is encoded, float color is
 // linear. Averaging is linear and a display encoding deliberately is not, so
