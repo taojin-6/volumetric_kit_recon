@@ -94,7 +94,9 @@ jobs:
       # Name the viewer targets explicitly rather than building everything, so
       # this leg fails for the reason it exists rather than on some unrelated
       # target, and so it does not re-do what the build legs already cover.
+      # The level is explicit, as in _build.yml's Build step.
       - name: Build viewer examples
         run: |
-          cmake --build build --parallel \
+          cmake --build build \
+            --parallel "${CMAKE_BUILD_PARALLEL_LEVEL:-$(getconf _NPROCESSORS_ONLN)}" \
             --target fuse_viewer fuse_render rig_viewer
