@@ -22,8 +22,8 @@ endmacro()
 if(VR_CONSUMER_QUIET)
   find_package(volumetric_kit_recon CONFIG QUIET)
   vr_consumer_leftovers(vr_consumer_left)
-  message(STATUS "volumetric_kit_recon found: '${volumetric_kit_recon_FOUND}'"
-                 "; left behind: '${vr_consumer_left}'")
+  message(STATUS "volumetric_kit_recon found: '${volumetric_kit_recon_FOUND}',"
+                 " left behind: '${vr_consumer_left}'")
   return()
 endif()
 

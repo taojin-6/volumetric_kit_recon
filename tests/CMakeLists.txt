@@ -1340,7 +1340,7 @@ if(VR_INSTALL AND _vr_core_source)
   set_tests_properties(
     recon_package_quiet_not_found
     PROPERTIES FIXTURES_REQUIRED vr_package_base_core PASS_REGULAR_EXPRESSION
-               "volumetric_kit_recon found: '(0|FALSE)'; left behind: ''")
+               "volumetric_kit_recon found: '(0|FALSE)', left behind: ''")
 endif()
 
 # Start the slowest tests first under `ctest --parallel`. Without a COST, CTest
