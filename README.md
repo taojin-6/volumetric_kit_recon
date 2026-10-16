@@ -83,6 +83,10 @@ fails saying why, and an installed recon is not found. A core older than
 stops at that call as an unknown command: move the first-declared pin to 0.2.0
 or newer.
 
+Examples and their configuration tests require core 0.8.0 or newer with its
+config tier, including escaping literal `%` characters in a mesh scenario's
+directory. The pinned core supplies this version.
+
 ### Asset I/O
 
 `volumetric_kit::recon_io` provides encoded RGB image loading, 16-bit

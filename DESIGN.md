@@ -1750,8 +1750,9 @@ startup and diagnostics, and `replica_config.hpp`, `orbbec_config.hpp` and
 attach resources, except that the codec's rules stay the codec's:
 `encoder_config` maps `codec.quantization_table` to the weights
 (`codec_quantization.hpp`, the tables' one home) and refuses a step
-`CodecParams::validate` refuses, before the codec examples touch the GPU. No
-local parser, flag registration or config validator remains.
+`CodecParams::validate` refuses. It also refuses `codec.intra_period` other
+than 1 until the examples support P-frame records. Both checks precede GPU
+setup. No local parser, flag registration or config validator remains.
 [Configuration examples](config/README.md) document paths, defaults and
 migration from the previous CLI.
 
@@ -1851,7 +1852,10 @@ is `InvalidArgument`; a CSV error during creation removes the new stream
 file for retry.
 
 **`codec_mesh`** codes one mesh or a numbered sequence of them (README,
-Codec evaluation, has the keys). Before any GPU work it refuses a malformed
+Codec evaluation, has the keys). The examples require core 0.8.0: it escapes
+literal `%` characters in the scenario's directory before joining a relative
+`source.path`, so only the user's path carries a frame-number pattern.
+Before any GPU work it refuses a malformed
 frame-number pattern, a range on a plain path and any frame file that is
 missing or not a regular file, and checks a shell against the truncation
 (`MeshSdfParams::validate`). Its first pass loads each frame, joins its

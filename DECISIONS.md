@@ -556,7 +556,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   to every frame and stored in the Geometry track's params, a cleared grid
   and one record per frame, `source.allow_holes`, and its stream made before
   any work. Frame 150's conversion outlier is mostly the closest-face sign
-  at a sliver fold.
+  at a sliver fold. *Amended 2026-10-15:* require core 0.8.0's directory
+  escaping, and refuse example intra periods other than 1 until C5b.
 
 ## Decision record
 
@@ -13106,11 +13107,21 @@ number, the placement and the conversion's rules are recon's.
   bounds they would place past float range, which `apply_transform` would
   refuse frame by frame, so `codec_mesh` refuses such a scale before any GPU
   work instead of after coding a frame.
-- **A `%` in the scenario's directory** is read as part of the pattern while
-  core prepends the directory as it is: a scenario under `50%off/` is
-  refused, and one under `take%d/` reads `take0/`. Core 0.8.0 (core #34)
-  escapes it as `%%` for CodecMesh's `source.path`, and `numbered_path`
-  already reads `%%` as `%` in any path, numbered or not.
+- **A `%` in the scenario's directory.** *Amended 2026-10-15:* pin core
+  0.8.0 (core #34, `c072a23`) and require that version for examples and
+  their config tests. Core 0.7.0 prepended the directory without escaping:
+  a scenario under `50%off/` was refused, and one under `take%d/` could
+  silently read `take0/`. Core now escapes the directory's `%` as `%%`
+  for CodecMesh's `source.path`; `numbered_path` reads it as a literal
+  `%` in plain and numbered paths. Tests load real scenario files through
+  `config::load` and compare paths and geometry with a different mesh
+  present in `take0/`; the executable's inspection counts catch the same
+  wrong-file selection. Both regressions fail against the previous pin.
+- **The new intra-period key.** Core 0.8.0 accepts `codec.intra_period` for
+  both codec profiles, but the examples still write all-key records. Their
+  shared `encoder_config` refuses any value other than 1, naming the key,
+  before GPU setup. C5b will connect the period and record frame types;
+  accepting and ignoring it would silently change the requested coding.
 
 **Frame 150's conversion outlier.** Kept: the sequence stays 1–150. Under
 the range's transform, frame 150's conversion accuracy is mean 0.024, rms
@@ -13177,7 +13188,7 @@ bit; `recon_tsdf_mesh_integrate` holds `validate` to `integrate`'s
 refusals; `recon_codec_mesh_run` runs the executable on a device, an
 existing stream refused before any conversion or output, then two frames;
 the config-entry test inspects a range and counts its open and refused
-frames, and with no Vulkan driver to find, refuses eleven coding scenarios,
+frames, and with no Vulkan driver to find, refuses twelve coding scenarios,
 each for its own reason before any GPU work. `recon_io_mesh_file` holds
 `load_mesh` to `check_mesh_file`.
 

@@ -35,16 +35,16 @@ include(FetchContent)
 # rather than OFF, as calib does, so an application that turns the tier on keeps
 # it.
 #
-# The pin is core 0.7.0 (f611302, core #33): the scenario configuration the
-# examples take, with codec_mesh's numbered sequence (run.first, run.frames),
-# its unit or height, truncation and hole policy, and no codec.entropy, on
-# 0.2.0's whole-file I/O and exception_status (core #27).
+# The pin is core 0.8.0 (c072a23, core #34): it escapes literal '%' characters
+# in CodecMesh's scenario directory before resolving source.path, and adds
+# codec.intra_period. The examples require this path contract; their adapter
+# refuses intra_period other than 1 until their P-frame support lands.
 #
 # TODO: pin a core release tag once the core tags its releases.
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG f6113022d4edbd9645cc0ffd1c48d37f33fe39e2)
+  GIT_TAG c072a23b7a37ee822235ca6461eb17ee967bfa7c)
 set(VKC_INSTALL ${VR_INSTALL})
 if(NOT VR_CAMERA_ONLY)
   set(VKC_WITH_VULKAN ON)
@@ -59,9 +59,8 @@ if(NOT VR_CAMERA_ONLY AND (VR_BUILD_EXAMPLES OR VR_BUILD_TESTS))
 endif()
 FetchContent_MakeAvailable(volumetric_kit_core)
 if(NOT VR_CAMERA_ONLY AND (VR_BUILD_EXAMPLES OR VR_BUILD_TESTS))
-  # codec_mesh's sequence keys, its unit, truncation and allow_holes, and the
-  # schema without codec.entropy, are core 0.7.0's.
-  vkc_require_core(0.7.0 CONFIG)
+  # CodecMesh's resolved source.path needs core 0.8.0's directory escaping.
+  vkc_require_core(0.8.0 CONFIG)
 endif()
 
 # The set()s above are lost when calib or the application made the core

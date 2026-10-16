@@ -8,7 +8,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- `examples`: **core 0.7.0 is required** (core #33). Its CodecMesh takes
+- `examples`: **core 0.8.0 is required** (core #34). Its CodecMesh takes
   `run.first`, `run.frames`, `fusion.truncation_m`, `source.allow_holes`
   and `source.metres_per_unit` beside `height_m`, and `codec.entropy`
   is gone, so a scenario that sets it no longer loads. `mesh_sdf_config`
@@ -21,9 +21,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   mesh's is 112 bytes longer, its record unchanged. `CodecStream::create`
   takes those params. Migrating: drop `codec.entropy`; pass the grid
   parameters to `mesh_sdf_config` and check its result; write a literal `%`
-  in a mesh path as `%%`. Until core 0.8.0 escapes the scenario's own
-  directory, keep `%` out of the directories above a `codec_mesh` scenario:
-  there it is read as part of the pattern. Tests: `recon_example_config`,
+  in `source.path` as `%%`. Core escapes literal `%` characters in the
+  scenario's directory, so relative mesh paths beneath `50%off/` and
+  `take%d/` load the intended files. Both codec examples refuse
+  `codec.intra_period` other than 1 until they support P-frame records.
+  Tests: `recon_example_config`,
   `recon_example_mesh_sequence`, `recon_codec_mesh_run`,
   `recon_codec_mesh_config_entry`.
 - `io`: the fits (`fit_transform`, `scale_transform`) refuse bounds they
