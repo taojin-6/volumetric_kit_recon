@@ -20,9 +20,10 @@
 //   2. a rotated pose projects through R^T to hand-computed pixels (the
 //      identity poses above never exercise the rotation);
 //   3. the frustum boundary: a vertex in front of the camera but projecting
-//      OUTSIDE the image carries the clamped border coordinate rather than the
-//      bare sentinel -- the regression this file's second commit exists for,
-//      and (0, 0) would satisfy a weaker "not the sentinel" check;
+//      OUTSIDE the image, past its right border or its left, carries the
+//      clamped border coordinate rather than the bare sentinel -- the
+//      regression this file's second commit exists for, and (0, 0) would
+//      satisfy a weaker "not the sentinel" check;
 //   4. a depth discontinuity across the bilinear taps textures a foreground
 //      vertex via the nearest-tap fallback (the discontinuity guard);
 //   5. a MIXED triangle -- one visible vertex, two occluded but in frame --
@@ -369,6 +370,19 @@ int gpu_main(vr_test::GpuContext& gpu) {
     const vr::Vec3f p = mesh_side.vertices[i].position;
     const float v_px = 500.0f * (p.y / p.z) + 240.0f;
     CHECK(approx(carried.y, (v_px + 0.5f) / 480.0f, 1e-5f));
+  }
+  // ... and past the left border, so the projection extrapolates on both
+  // sides: x = -1.0 projects to u = -180, clamped to the left border.
+  rmesh::Mesh mesh_left;
+  mesh_left.vertices = {vtx(-1.0f, 0.0f, 1.0f), vtx(-1.0f, 0.01f, 1.0f),
+                        vtx(-1.02f, 0.0f, 1.0f)};
+  mesh_left.indices = {0, 1, 2};
+  CHECK(texturer.texture(mesh_left, depth.data(), cam).ok());
+  for (int i = 0; i < 3; ++i) {
+    const vr::Vec2f uv = mesh_left.vertices[i].uv0;
+    CHECK(uses_vertex_color(uv));
+    CHECK(!is_offscreen(uv));
+    CHECK(approx(decode_carried(uv).x, 0.5f / 640.0f, 1e-5f));
   }
 
   // Depth discontinuity: a foreground vertex projecting onto a depth edge must

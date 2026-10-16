@@ -13462,10 +13462,13 @@ arithmetic, a general rotation, and 2420 grid cases around five cameras,
 from 1 × 1 to 3840 × 2160. `recon_subproject_glsl` and `recon_package_glsl`
 compile that kernel through the fetched and the installed root, and
 `recon_package_quiet_not_found` checks a refused package leaves no `_vr_`
-variable behind. The tsdf, volume, mesh, texture and sensor suites pass;
-`recon_tsdf_integrate` gains an 8 × 2 colour image, so its nearest pixel's
-clamp is checked against the width, and `recon_volume_allocate`'s camera
-now tells a swapped focal length or principal point apart.
+variable behind. The tsdf, volume, mesh, texture and sensor suites pass,
+with four cases added: `recon_tsdf_integrate` an 8 × 2 colour image, so its
+nearest pixel's clamp is checked against the width; `recon_volume_allocate`
+a camera that tells a swapped focal length or principal point apart;
+`recon_sensor_gpu_frame_prep` colour principal points a fraction of a pixel
+off, which pin the rounded bounds; and `recon_texture_projective` a vertex
+past the left border, so the extrapolation holds on both sides.
 
 ## Measured lessons
 
