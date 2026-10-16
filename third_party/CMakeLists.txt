@@ -35,15 +35,16 @@ include(FetchContent)
 # rather than OFF, as calib does, so an application that turns the tier on keeps
 # it.
 #
-# The pin is core 0.9.0 (50099d9, core's feat/config-update-size): it adds
-# codec.update_size, on 0.8.0's codec.intra_period and its escaping of literal
-# '%' characters in CodecMesh's scenario directory before resolving source.path.
+# The pin is core 0.9.0 (138914f, core #35): it adds codec.update_size, refused
+# when explicit at an intra_period of 1, on 0.8.0's codec.intra_period and its
+# escaping of literal '%' characters in CodecMesh's scenario directory before
+# resolving source.path.
 #
 # TODO: pin a core release tag once the core tags its releases.
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG 50099d97a20de6821579a2b00e799e7aeb2721d4)
+  GIT_TAG 138914f35c07fe782aaa81055891baa8b55ed782)
 set(VKC_INSTALL ${VR_INSTALL})
 if(NOT VR_CAMERA_ONLY)
   set(VKC_WITH_VULKAN ON)
