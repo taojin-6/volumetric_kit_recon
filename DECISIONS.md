@@ -13440,7 +13440,9 @@ functions in a std430 kernel against the host's double: 28 written-out
 edges and 3 unprojections in exact arithmetic, and 2420 grid cases around
 five cameras, from 1 × 1 to 3840 × 2160. `recon_subproject_glsl` and
 `recon_package_glsl` compile that kernel through the fetched and the
-installed root. The tsdf, volume, mesh and texture suites pass unchanged.
+installed root. The tsdf, volume, mesh and texture suites pass, and
+`recon_tsdf_integrate` gains an 8 × 2 colour image, so its nearest pixel's
+clamp is checked against the width rather than the height.
 
 ## Measured lessons
 

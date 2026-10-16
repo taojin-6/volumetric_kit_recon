@@ -485,13 +485,15 @@ int color_pixel_case(const vr_test::Gpu& ctx) {
     }
   }
   // The voxel at world (0, 0, 1) -- its block's first -- projects to the
-  // principal point. {cx, cy, the pixel read}.
+  // principal point. {cx, cy, the pixel read, the colour image's height}: the
+  // last case's 8 x 2 image clamps x to its width, not its height.
   const struct {
     float cx, cy;
-    std::uint32_t x, y;
-  } cases[] = {{2.25f, 3.75f, 2, 4},  // rounded, down and up
-               {3.5f, 4.49f, 4, 4},   // half up
-               {7.75f, 0.0f, 7, 0}};  // clamped into the image
+    std::uint32_t x, y, color_height;
+  } cases[] = {{2.25f, 3.75f, 2, 4, kSide},  // rounded, down and up
+               {3.5f, 4.49f, 4, 4, kSide},   // half up
+               {7.75f, 0.0f, 7, 0, kSide},   // clamped into the image
+               {7.75f, 0.0f, 7, 0, 2}};      // ... a wide one
   for (const auto& c : cases) {
     auto made =
         vol::VoxelBlockGrid::create(ctx.device, ctx.allocator, gp, attrs, 3);
@@ -510,7 +512,9 @@ int color_pixel_case(const vr_test::Gpu& ctx) {
     cam.min_depth = 0.1f;
     cam.max_depth = 5.0f;
     cam.cam_to_world = vr::Mat4f(1.0f);
-    const tsdf::ColorFrame frame{pixels.data(), color_cam_of(cam)};
+    vr::ColorCameraParams color_cam = color_cam_of(cam);
+    color_cam.height = c.color_height;
+    const tsdf::ColorFrame frame{pixels.data(), color_cam};
     CHECK(integrator
               ->integrate(grid, depth.data(), cam, 5.0f,
                           tsdf::IntegrationMode::Classic, &frame)
