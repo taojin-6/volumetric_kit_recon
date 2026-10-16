@@ -3,21 +3,26 @@
 
 // The codec examples' stream (examples/common/codec_stream.hpp). On the host:
 // a row's type and host and device milliseconds from its calls' stage rows,
-// its CSV line, a frame type's sizes, and a frame's pts. On a grid holding a
-// sphere: outputs it cannot make refused on create, before any coding, and
-// none written without outputs; a row per decoded frame, under the source's
-// index, whose type, bytes and blocks are the frame's; every encoded frame a
-// record of the .vrst, a frame the decoder refuses included and the stream
-// going on after it, byte for byte what an encoder returns, a key exactly
-// when an I-frame, and the same file on a rerun; after a frame encoded but
-// not decoded, an I-frame where the encoder would code a P-frame; a frame out
-// of order, or any call once finished, refused before anything is encoded; a
-// stream never finished still read whole; the CSV replaced on create and
-// extended as each frame is coded; and a grid too small for a frame grown
-// once, the Decoder's OutOfMemory returned past that. The device part skips
-// with no device.
+// its CSV line, a frame type's sizes, a GOP's bytes and bitrate, and a
+// frame's pts. On a grid holding a sphere: outputs it cannot make refused on
+// create, before any coding, and none written without outputs; a row per
+// decoded frame, under the source's index, whose type, bytes and blocks are
+// the frame's, and each type's stage rows its own frames'; every encoded
+// frame a record of the .vrst, a frame the decoder refuses included and the
+// stream going on after it, byte for byte what an encoder returns, a key
+// exactly when an I-frame, and the same file on a rerun; after a frame
+// encoded but not decoded, or whose CSV row fails, an I-frame where the
+// encoder would code a P-frame; a frame out of order, or any call once
+// finished, refused before anything is encoded; a stream never finished
+// still read whole; the CSV replaced on create and extended as each frame is
+// coded; and a grid too small for a frame grown once, the Decoder's
+// OutOfMemory returned past that. The device part skips with no device.
+
+#include <signal.h>
+#include <sys/resource.h>
 
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -116,6 +121,19 @@ int type_sizes() {
   rows.resize(1);
   const auto none = vr_example::frame_sizes(rows, codec::FrameType::kInter);
   CHECK(none.count == 0 && none.mean == 0.0 && none.max == 0);
+  return 0;
+}
+
+int gop_rates() {
+  // An I-frame of 1000 bytes and P-frames of 100: a GOP of 4 holds one
+  // I-frame and three P-frames, 325 bytes a frame; a GOP of 1 the I-frame.
+  vr_example::FrameSizes intra;
+  intra.mean = 1000.0;
+  vr_example::FrameSizes inter;
+  inter.mean = 100.0;
+  CHECK(vr_example::gop_bytes(intra, inter, 4) == 325.0);
+  CHECK(vr_example::gop_bytes(intra, inter, 1) == 1000.0);
+  CHECK(vr_example::mbit_per_s(325.0, 30.0) == 0.078);
   return 0;
 }
 
@@ -408,8 +426,8 @@ int unfinished(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
 // the player refuses, at 3 and 4: frame 3 an I-frame on its geometry, and 4
 // one too, where the encoder would code a P-frame on 3, which the player
 // lacks; 5 an I-frame, the player's geometry again, and the period from it.
-// Each row has its frame's type, and each record is a key exactly when it
-// holds an I-frame.
+// Each row has its frame's type, each type's stage rows hold its own frames'
+// calls alone, and each record is a key exactly when it holds an I-frame.
 int periodic(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
              vol::VoxelBlockGrid& other, const vr_test::Scratch& scratch) {
   constexpr codec::FrameType I = codec::FrameType::kIntra;
@@ -437,6 +455,22 @@ int periodic(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
   for (std::size_t i = 0; i < rows.size(); ++i) {
     CHECK(rows[i].frame == decoded[i] && rows[i].type == types[decoded[i]]);
   }
+  // A type's host spans, summed by stage, are its rows' milliseconds.
+  const auto near = [](double a, double b) {
+    return std::fabs(a - b) <= 1e-9 * std::fabs(b);
+  };
+  for (const codec::FrameType type : {I, P}) {
+    double encode = 0.0;
+    double decode = 0.0;
+    for (const vr_example::CodecRow& row : rows) {
+      if (row.type != type) continue;
+      encode += row.encode_ms;
+      decode += row.decode_ms;
+    }
+    CHECK(encode > 0.0 && decode > 0.0);
+    CHECK(near(coder.encode_stages(type).total_cpu_ms(), encode));
+    CHECK(near(coder.decode_stages(type).total_cpu_ms(), decode));
+  }
   coder.report(kFps, 1);
 
   vkc::Result<std::unique_ptr<stream::StreamReader>> opened =
@@ -456,6 +490,55 @@ int periodic(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
     CHECK(info.ok() && info->type == types[frame]);
     CHECK(record.info.key == (types[frame] == I));
   }
+  return 0;
+}
+
+// At a period of 4, a CSV that stops taking rows after frame 0's -- the file
+// size limit reached, SIGXFSZ ignored -- fails frame 1, a P-frame, once it
+// decodes: its row is kept, IoError naming the CSV returned, and frame 2 is
+// an I-frame where the encoder would code a P-frame. The failure sticks, so
+// frame 3 fails too, an I-frame again. A failed append takes the same branch
+// in code(), but a writer's I/O failure sticks, so no later frame decodes to
+// show it.
+int csv_fails(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
+              const vr_test::Scratch& scratch) {
+  constexpr codec::FrameType I = codec::FrameType::kIntra;
+  constexpr codec::FrameType P = codec::FrameType::kInter;
+  vr_example::CodecOutputs outputs;
+  outputs.csv = (scratch.path / "limited.csv").string();
+  codec::EncoderConfig config;
+  config.intra_period = 4;
+  vkc::Result<vr_example::CodecStream> made = vr_example::CodecStream::create(
+      gpu.device, gpu.allocator, config, outputs);
+  CHECK(made.ok());
+  vr_example::CodecStream& coder = made.value();
+  CHECK(coder.code(source, 0, pts(0)).ok());
+  const std::uintmax_t size = fs::file_size(outputs.csv);
+  // Only this process's limit and disposition change, for one frame, and
+  // nothing else is written meanwhile.
+  std::fflush(nullptr);
+  const auto handler = ::signal(SIGXFSZ, SIG_IGN);
+  CHECK(handler != SIG_ERR);
+  rlimit previous{};
+  CHECK(::getrlimit(RLIMIT_FSIZE, &previous) == 0);
+  const rlimit limited{static_cast<rlim_t>(size), previous.rlim_max};
+  CHECK(::setrlimit(RLIMIT_FSIZE, &limited) == 0);
+  const vkc::Status first = coder.code(source, 1, pts(1));
+  CHECK(::setrlimit(RLIMIT_FSIZE, &previous) == 0);
+  CHECK(::signal(SIGXFSZ, handler) != SIG_ERR);
+  CHECK(first.domain() == vkc::Status::Code::IoError &&
+        first.message().find(outputs.csv) != std::string::npos);
+  for (std::size_t frame = 2; frame < 4; ++frame) {
+    CHECK(coder.code(source, frame, pts(frame)).domain() ==
+          vkc::Status::Code::IoError);
+  }
+  const codec::FrameType types[] = {I, P, I, I};
+  const std::vector<vr_example::CodecRow>& rows = coder.rows();
+  CHECK(rows.size() == std::size(types));
+  for (std::size_t i = 0; i < rows.size(); ++i) {
+    CHECK(rows[i].frame == i && rows[i].type == types[i]);
+  }
+  CHECK(fs::file_size(outputs.csv) == size);
   return 0;
 }
 
@@ -540,6 +623,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
   CHECK(!bytes.empty() && bytes == vr_test::read_bytes(second.stream));
 
   CHECK(periodic(gpu, *source, *other, scratch) == 0);
+  CHECK(csv_fails(gpu, *source, scratch) == 0);
   CHECK(unfinished(gpu, *source, scratch) == 0);
   CHECK(grows_once(gpu) == 0);
   std::puts("example_codec_stream: OK");
@@ -552,6 +636,7 @@ int main() {
   CHECK(row_times() == 0);
   CHECK(csv_lines() == 0);
   CHECK(type_sizes() == 0);
+  CHECK(gop_rates() == 0);
   CHECK(frame_times() == 0);
   return vr_test::run_on_gpu(gpu_main);
 }

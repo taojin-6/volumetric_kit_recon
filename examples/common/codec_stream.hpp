@@ -244,6 +244,21 @@ inline FrameSizes frame_sizes(const std::vector<CodecRow>& rows,
   return s;
 }
 
+/// @return A GOP's bytes a frame at intra period @p period: an I-frame and
+///         @p period - 1 P-frames, each at its type's mean (@p intra's and
+///         @p inter's), the rate a long stream settles at whatever I-frames
+///         its own run forced. @pre @p period is at least 1.
+inline double gop_bytes(const FrameSizes& intra, const FrameSizes& inter,
+                        std::uint32_t period) {
+  VKC_CHECK(period >= 1, "gop_bytes needs a period of at least 1");
+  return (intra.mean + double(period - 1) * inter.mean) / double(period);
+}
+
+/// @return @p bytes_per_frame at @p frames_per_s, in Mbit/s.
+inline double mbit_per_s(double bytes_per_frame, double frames_per_s) {
+  return bytes_per_frame * 8.0 * frames_per_s / 1e6;
+}
+
 /// The rate a source with no time of its own is coded at: Replica's frames
 /// and a mesh sequence's numbers.
 inline constexpr double kNominalFps = 30.0;
@@ -407,6 +422,17 @@ class CodecStream {
   ///         empty.
   vr::volume::VoxelBlockGrid& player() { return *player_; }
 
+  /// @return The encode stage rows of every decoded frame of @p type,
+  ///         summed: what report() prints, a frame of that type each.
+  const vkc::StageMetrics& encode_stages(vr::codec::FrameType type) const {
+    return encode_rows_[static_cast<std::size_t>(type)];
+  }
+
+  /// @return As @ref encode_stages, the decode's.
+  const vkc::StageMetrics& decode_stages(vr::codec::FrameType type) const {
+    return decode_rows_[static_cast<std::size_t>(type)];
+  }
+
   /// @brief Print what the stream cost: its size and bitrate, a GOP's
   ///        bitrate at the intra period, and for each frame type its sizes
   ///        (@ref frame_sizes) and where its encode and decode time went.
@@ -434,7 +460,7 @@ class CodecStream {
         per_block > 0 ? kRawBytesPerBlock / per_block : 0.0);
     if (every > 0) {
       std::printf("; %.2f Mbit/s at %.1f coded frames/s (1 in %d at %.0f fps)",
-                  per_frame * 8.0 * coded_fps / 1e6, coded_fps, every, fps);
+                  mbit_per_s(per_frame, coded_fps), coded_fps, every, fps);
     }
     std::printf("\n");
     const vr::codec::FrameType types[] = {vr::codec::FrameType::kIntra,
@@ -443,15 +469,12 @@ class CodecStream {
                                 frame_sizes(rows_, types[1])};
     if (every > 0 && intra_period_ > 1 && sizes[0].count > 0 &&
         sizes[1].count > 0) {
-      // The rate a long stream settles at, whatever its own I-frames: one
-      // I-frame a period, each type at its mean.
-      const double gop =
-          (sizes[0].mean + double(intra_period_ - 1) * sizes[1].mean) /
-          double(intra_period_);
       std::printf(
           "  GOP of %u: %.2f Mbit/s, an I-frame and %u P-frames at their "
           "means\n",
-          intra_period_, gop * 8.0 * coded_fps / 1e6, intra_period_ - 1);
+          intra_period_,
+          mbit_per_s(gop_bytes(sizes[0], sizes[1], intra_period_), coded_fps),
+          intra_period_ - 1);
     }
     for (std::size_t t = 0; t < 2; ++t) {
       const FrameSizes& s = sizes[t];
@@ -460,12 +483,12 @@ class CodecStream {
           std::string(frame_type_name(types[t])) + "-frame";
       std::printf("  %zu %ss: bytes mean %.0f, p50 %zu, p95 %zu, max %zu\n",
                   s.count, name.c_str(), s.mean, s.p50, s.p95, s.max);
-      print_stage_rows("encode, per " + name, encode_rows_[t], s.count, 4);
-      print_stage_rows("decode, per " + name, decode_rows_[t], s.count, 4);
-      const double enc =
-          row_ms(encode_rows_[t], "  ..rans encode") / double(s.count);
-      const double dec =
-          row_ms(decode_rows_[t], "  ..rans decode") / double(s.count);
+      const vkc::StageMetrics& encode = encode_stages(types[t]);
+      const vkc::StageMetrics& decode = decode_stages(types[t]);
+      print_stage_rows("encode, per " + name, encode, s.count, 4);
+      print_stage_rows("decode, per " + name, decode, s.count, 4);
+      const double enc = row_ms(encode, "  ..rans encode") / double(s.count);
+      const double dec = row_ms(decode, "  ..rans decode") / double(s.count);
       std::printf("    rANS: %.2f ms encode, %.2f ms decode wall clock per %s",
                   enc, dec, name.c_str());
       if (every > 0) {
