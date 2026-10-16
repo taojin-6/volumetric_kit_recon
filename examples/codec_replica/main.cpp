@@ -84,12 +84,9 @@ vkc::Status run(const Options& opt) {
   const vr::tsdf::IntegrationMode mode =
       vr_example::integration_mode(opt.fusion.dynamic);
   std::printf(
-      "%zu frames at %.3f m voxels, %s fusion; K %u, table %s, scale %.3f\n",
-      capture.frame_count(), double(voxel),
-      opt.fusion.dynamic ? "Dynamic" : "Classic",
-      config.params.coefficient_count,
-      vr_example::quantization_name(opt.codec.quantization_table),
-      double(config.params.quantization_scale));
+      "%zu frames at %.3f m voxels, %s fusion; %s\n", capture.frame_count(),
+      double(voxel), opt.fusion.dynamic ? "Dynamic" : "Classic",
+      vr_example::codec_settings(config, opt.codec.quantization_table).c_str());
 
   // Fuse, and code the grid every codec.encode_every frames and at the end.
   VKC_TRY(capture.start());
