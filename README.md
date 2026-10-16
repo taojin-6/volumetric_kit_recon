@@ -66,7 +66,9 @@ examples and the optional drivers.
 A consumer's kernels include recon's GLSL pinhole as recon's own do,
 `#include "volumetric_kit/recon/core/shaders/pinhole.glsl"`, under the root
 that `volumetric_kit::recon_core`'s `VR_SHADER_INCLUDE_DIR` property names,
-fetched or installed. The root holds the exported GLSL alone.
+fetched or installed. Fetched, the root holds the exported GLSL alone;
+installed, it is the include directory, which holds none of recon's internal
+GLSL.
 
 ```cmake
 get_target_property(vr_glsl volumetric_kit::recon_core VR_SHADER_INCLUDE_DIR)

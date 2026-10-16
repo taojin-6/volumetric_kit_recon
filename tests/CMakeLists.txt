@@ -1327,6 +1327,20 @@ if(VR_INSTALL AND _vr_core_source)
     recon_package_core_without_vulkan
     "Reason given by package: volumetric_kit_recon needs volumetric_kit_core's vulkan tier, which the core installed at .+ was built without: install one built with VKC_WITH_VULKAN ON"
   )
+  # The same refusal to a project that finds recon QUIET leaves none of the
+  # package config's variables behind.
+  add_test(
+    NAME recon_package_quiet_not_found
+    COMMAND
+      "${CMAKE_COMMAND}" -S "${CMAKE_CURRENT_SOURCE_DIR}/package" -B
+      "${_vr_package}/quiet" -G "${CMAKE_GENERATOR}"
+      "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}" -DVR_CONSUMER_QUIET=ON
+      "-Dvolumetric_kit_recon_DIR=${PROJECT_BINARY_DIR}/src"
+      "-DCMAKE_PREFIX_PATH=${_vr_package}/core-install")
+  set_tests_properties(
+    recon_package_quiet_not_found
+    PROPERTIES FIXTURES_REQUIRED vr_package_base_core PASS_REGULAR_EXPRESSION
+               "volumetric_kit_recon found: '(0|FALSE)'; left behind: ''")
 endif()
 
 # Start the slowest tests first under `ctest --parallel`. Without a COST, CTest

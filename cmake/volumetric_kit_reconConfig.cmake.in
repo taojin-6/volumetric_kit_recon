@@ -3,12 +3,6 @@
 
 @PACKAGE_INIT@
 
-# The installed GLSL include root, for recon_core's VR_SHADER_INCLUDE_DIR
-# below, expanded before any find_dependency: under CMake 3.29 and older a
-# dependency's own package config resets PACKAGE_PREFIX_DIR, which the
-# expansion reads (Ubuntu's Assimp gave /usr).
-set(_vr_shader_include_dir "@PACKAGE_VR_SHADER_INCLUDE_INSTALL_DIR@")
-
 # recon_core links the platform threading runtime (std::mutex in the core's
 # device, capture threads in the sensor tier) and header-only GLM (its public vector/matrix types), which the exported
 # targets reference as Threads::Threads and the glm target -- re-find both here
@@ -83,13 +77,18 @@ endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/volumetric_kit_reconTargets.cmake")
 
-# recon_core names the root its exported GLSL is included under, as in the
-# build tree (src/volumetric_kit/recon/core/CMakeLists.txt): installed, the
-# include directory.
+# recon_core names the root its exported GLSL is included under, as in the build
+# tree (src/volumetric_kit/recon/core/CMakeLists.txt): installed, the include
+# directory. It is found from this file's directory, not from
+# PACKAGE_PREFIX_DIR, which under CMake 3.29 and older a dependency's package
+# config above resets (Ubuntu's Assimp gave /usr); and only here, past every
+# return above, so a package not found leaves nothing in the caller's scope.
 if(@VR_PACKAGE_NEEDS_VULKAN@)
+  get_filename_component(_vr_glsl_root "@VR_SHADER_INCLUDE_FROM_CONFIG@"
+                         ABSOLUTE BASE_DIR "${CMAKE_CURRENT_LIST_DIR}")
   set_target_properties(volumetric_kit::recon_core
-                        PROPERTIES VR_SHADER_INCLUDE_DIR "${_vr_shader_include_dir}")
+                        PROPERTIES VR_SHADER_INCLUDE_DIR "${_vr_glsl_root}")
+  unset(_vr_glsl_root)
 endif()
-unset(_vr_shader_include_dir)
 
 check_required_components(volumetric_kit_recon)
