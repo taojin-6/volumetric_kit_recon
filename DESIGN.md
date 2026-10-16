@@ -20,7 +20,7 @@ an older measurement to make a new decision.
 
 `volumetric_kit_recon` is the compute backend that builds and compresses
 volumetric geometry. Its pipeline is: **posed depth/RGB-D frames → sparse TSDF
-volume (voxel-hashed) → extracted geometry (mesh/points) → optional compressed
+volume (voxel-hashed) → extracted geometry (mesh) → optional compressed
 bitstream → handoff to a renderer.**
 
 It is deliberately *not* a renderer. Rendering is owned by the sibling library
@@ -208,8 +208,8 @@ Two contracts — both simpler now that recon and gfx are both Vulkan.
   per-vertex `uv0` + a `Material` texture (gfx has no per-triangle UV; the
   `texture` tier now fills `uv0` for the live single-camera case — see the
   2026-07-07 decision). The triangle-mesh path is
-  the first milestone. gfx draws points from `DeviceFrame` depth in place;
-  recon builds no point cloud (the 2026-10-16 depth-sharing decision).
+  the first milestone. gfx is to draw points from `DeviceFrame` depth in place
+  (GF5); recon builds no point cloud (the 2026-10-16 depth-sharing decision).
 - **B — Shared Vulkan resources (zero-copy; the live target).** recon writes the
   mesh/atlas into a `VkBuffer`/`VkImage` on a **single `VkDevice` shared with gfx**
   (one process) and gfx draws it directly — no external-memory import. Realized by

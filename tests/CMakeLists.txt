@@ -28,6 +28,18 @@ vr_target_warnings(recon_camera_array_calibration_test)
 add_test(NAME recon_camera_array_calibration
          COMMAND recon_camera_array_calibration_test)
 
+# The frame prep's same-K depth crop against a folding lens: a forward scan of
+# distort_rational that finds a strong barrel lens's fold, run on a stand-in for
+# a Femto Mega's NFOV depth lens (not an SDK report). It needs recon_camera
+# alone, so it runs in camera-only builds too.
+add_executable(recon_sensor_depth_lens_fold_test
+               sensor_depth_lens_fold_test.cpp)
+target_link_libraries(recon_sensor_depth_lens_fold_test
+                      PRIVATE volumetric_kit::recon_camera)
+vr_target_warnings(recon_sensor_depth_lens_fold_test)
+add_test(NAME recon_sensor_depth_lens_fold
+         COMMAND recon_sensor_depth_lens_fold_test)
+
 # A sibling that fetches recon (subproject/) takes each dependency this build
 # fetched as a local source, so it needs no network.
 file(
@@ -190,17 +202,6 @@ target_link_libraries(
 vr_target_warnings(recon_sensor_gpu_frame_prep_test)
 add_test(NAME recon_sensor_gpu_frame_prep
          COMMAND recon_sensor_gpu_frame_prep_test)
-
-# The prep's same-K depth crop folds no output pixel: a Femto Mega NFOV depth
-# lens keeps every one inside its monotonic radius, found by a forward scan of
-# distort_rational that finds a strong barrel lens's fold. Host-only.
-add_executable(recon_sensor_depth_lens_fold_test
-               sensor_depth_lens_fold_test.cpp)
-target_link_libraries(recon_sensor_depth_lens_fold_test
-                      PRIVATE volumetric_kit::recon_camera)
-vr_target_warnings(recon_sensor_depth_lens_fold_test)
-add_test(NAME recon_sensor_depth_lens_fold
-         COMMAND recon_sensor_depth_lens_fold_test)
 
 # Allocation failure while staging is an OutOfMemory result, and a retained
 # frame survives it. Separate executable for its replacement operator new.

@@ -584,12 +584,13 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-16**](#2026-10-16--a-brew-upgrade-needs-no-cache-clearing-the-mac-jobs-install-nothing-and-the-dependency-cache-keys-on-the-cores-homebrew-key) —
   A brew upgrade needs no cache clearing: the Mac jobs install nothing, and
   the dependency cache keys on the core's Homebrew key.
-- [**2026-10-16**](#2026-10-16--a-prepared-frames-depth-is-shared-like-its-colour-gpuframeprepconfigdepth_queue_families-recon-builds-no-point-clouds-and-makes-no-calibration-measurements-the-same-k-depth-crop-and-nearest-resampling-are-accepted-guarded-by-a-fold-test-amends-the-2026-09-29-rig_viewer-entry) —
+- [**2026-10-16**](#2026-10-16--a-prepared-frames-depth-is-shared-like-its-colour-gpuframeprepconfigdepth_queue_families-recon-builds-no-point-clouds-and-makes-no-calibration-measurements-the-same-k-depth-crop-and-nearest-resampling-are-accepted-on-a-stand-in-lens-pending-a-fold-check-of-the-rigs-own-amends-the-2026-09-29-rig_viewer-entry) —
   A prepared frame's depth may be shared with another queue family, as its
-  colour is: `GpuFramePrepConfig::depth_queue_families`, storage usage
-  alone. recon builds no point clouds and makes no calibration
-  measurements. The same-K depth crop and nearest resampling are accepted,
-  guarded by a fold test.
+  colour is: `GpuFramePrepConfig::depth_queue_families`, with no vertex
+  usage. recon builds no point clouds and makes no calibration
+  measurements. The same-K depth crop and nearest resampling are accepted on
+  a stand-in lens, pending a fold check of each rig camera's own (by hand,
+  not yet run).
 
 ## Decision record
 
@@ -7821,7 +7822,9 @@ reads the rig's raw sets directly (`poll_raw_set`), as `fuse_orbbec --gpu
 families, since MoltenVK hands the two libraries different ones, where
 copying from an EXCLUSIVE buffer is undefined in the way that appears to
 work. Depth stays EXCLUSIVE whatever the config says, since only recon reads
-it. Left empty, both outputs are EXCLUSIVE, as they always were.
+it. *Amended 2026-10-16 (below):* depth may be shared too
+(`GpuFramePrepConfig::depth_queue_families`); the viewer keeps it EXCLUSIVE.
+Left empty, both outputs are EXCLUSIVE, as they always were.
 
 **Why a copy, not zero-copy sampling.** gfx's hybrid pipeline samples an
 image, which buys filtering and the sRGB decode in hardware. Reading the
@@ -13501,36 +13504,45 @@ pkg-config results) are in the rest of `build/`, which checkout's
   and the viewer's, installs nothing: it fails, naming any formula missing.
   A hosted runner installs what its image lacks.
 
-### 2026-10-16 — A prepared frame's depth is shared like its colour, `GpuFramePrepConfig::depth_queue_families`; recon builds no point clouds and makes no calibration measurements; the same-K depth crop and nearest resampling are accepted, guarded by a fold test (amends the 2026-09-29 `rig_viewer` entry).
+### 2026-10-16 — A prepared frame's depth is shared like its colour, `GpuFramePrepConfig::depth_queue_families`; recon builds no point clouds and makes no calibration measurements; the same-K depth crop and nearest resampling are accepted on a stand-in lens, pending a fold check of the rig's own (amends the 2026-09-29 `rig_viewer` entry).
 
-**Depth may be shared.** gfx draws points from each camera's prepared depth
-in place, on its own queue family, for calib's 3D view of a rig of any size.
-`GpuFramePrepConfig::depth_queue_families` names the families a pass's depth
-is shared with, as `color_queue_families` does for colour and independently
-of it. `create` bounds both counts with `check_queue_family_count`; a family
-the device lacks is refused at the first output, as for colour. The buffer
-keeps the pass's storage usage alone, so a consumer binds it as a storage
-buffer, not as vertices. Left empty, depth stays EXCLUSIVE to the pass's
-family, as before; `rig_viewer`, which draws no points, leaves it so.
-`SensorArray::Options::prep` gives every pass of an array the same config.
+**Depth may be shared.** gfx is to draw points from each camera's prepared
+depth in place, on its own queue family (GF5), for calib's 3D view of a rig
+of any size. `GpuFramePrepConfig::depth_queue_families` names the families a
+pass's depth is shared with, as `color_queue_families` does for colour and
+independently of it. For either output, `create` refuses a count past
+`kMaxQueueFamilies` or a family the device does not have, naming the output.
+A missing family used to surface only at the first output, as core's
+allocation error, and for colour not until a frame carried colour. The
+buffer has no usage beyond the pass's storage and transfer usage, so a
+consumer binds it as a storage buffer, not as vertices. Left empty, depth
+stays EXCLUSIVE to the pass's family, as before; `rig_viewer`, which draws no
+points, leaves it so. `SensorArray::Options::prep` gives every pass of an
+array the same config.
 
 **recon prepares RGB-D frames and stops there.** It builds no point clouds
-and makes no calibration measurements: gfx draws points from depth and a
-camera, and calib assembles the rig's views and runs its depth checks as its
+and makes no calibration measurements: gfx is to draw points from depth and
+a camera, and calib assembles the rig's views and runs its depth checks as its
 own kernels. The point-cloud pass planned for recon is withdrawn.
 
-**The depth crop and nearest resampling are accepted.** The pass keeps the
-depth camera's K, so its pinhole image is the lens's view cropped to that K
-(about 65 x 59 degrees at a Femto Mega's NFOV intrinsics) and resampled at
-the nearest pixel. A K reaching further would pass the lens's monotonic
-radius, where `distort_rational` folds and two output pixels read one raw
-pixel. `recon_sensor_depth_lens_fold` scans `distort_rational` forward along
-each border pixel's ray. It finds every same-K output pixel inside that
-radius: the widest at r = 0.914, the fold at 1.245. Its lens has
-CL2A141000N's k1 and k6 as the SDK reported them (the 2026-09-26 entry). The
-other terms of that report were not kept, so the test takes them from
-recon's factory-record test lens, and checking the rig's four real lenses is
-a hand check, not yet run.
+**The depth crop and nearest resampling are accepted on a stand-in lens.**
+The pass keeps the depth camera's K, so its pinhole image is the lens's view
+cropped to that K and resampled at the nearest pixel: about 65 x 59 degrees
+at the test's K (fx about 504 px), of the stand-in's raw 73 x 66. A K
+reaching further would pass the lens's monotonic radius, where
+`distort_rational` folds and two output pixels read one raw pixel.
+`recon_sensor_depth_lens_fold` scans `distort_rational` forward along each
+border pixel's ray. Its lens is a stand-in, not an SDK report: of
+CL2A141000N's depth lens only k1 29.29 and k6 3.77 are on record (the
+2026-09-28 GPU pre-processing entry). The other terms are calib's Femto-like
+test lens, and the test holds the stand-in to the rest of the record. Its
+rays reach its whole raw image, and undistorting moves a raw pixel 30.6 px
+on average and 224.7 px at most, against the 31.5 px and 220.9 px measured
+on CL2A141000N (the 2026-09-26 Orbbec driver entry). On it the widest output
+pixel is at r = 0.914, and nothing folds within r = 3. Where a lens folds
+depends on the terms not on record, so the crop holds for a rig only once
+each camera's depth lens, as the SDK reports it, passes the same scan: a
+hand check, not yet run.
 
 **Verified.** Apple M5 Max, MoltenVK, Release with warnings as errors, core
 `1315d80` (core #36): the 102 tests pass under the validation layer with
@@ -13541,11 +13553,14 @@ UBSan (Debug). `recon_sensor_gpu_frame_prep` crosses families on core's
 family read the same on the renderer's. `recon_sensor_array_process` opens
 arrays of 1, 3 and 5 sensors. `recon_sensor_apple_pixel_buffer_importer`'s
 and `recon_sensor_picture_readback`'s cross-family cases move onto the same
-fixture, and `test_image::make` fills through `test::write_image`. Eight
-planted bugs each failed a test: depth's families ignored, depth given
-colour's, colour given depth's, no check of the depth count, vertex usage
-on the outputs, the array dropping its prep options, the fold scan finding
-no fold, and the guard missing the image's corners.
+fixture, and `test_image::make` fills through `test::write_image`. Planted
+bugs each failed a test: depth's families ignored, depth given colour's,
+colour given depth's, no check of the counts, no check that the device has
+a family, colour's families checked as depth's, colour refused as depth,
+vertex usage on the outputs, the array dropping its prep options, the fold
+scan finding no fold, the guard missing the image's corners, a raw pixel no
+ray reaches let through, and the stand-in replaced by a lens that folds
+before its raw corners or one that moves raw pixels less than measured.
 
 ## Measured lessons
 

@@ -183,12 +183,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `sensor`: **`GpuFramePrepConfig::depth_queue_families`**, the queue
   families a pass's depth buffers are shared with, as `color_queue_families`
   are for colour and independently of them, so a renderer on another family
-  can draw points from a frame's depth in place. The buffers keep storage
-  usage alone; left empty, depth stays EXCLUSIVE, as before.
-  `SensorArray::Options::prep` gives it to every pass. Tests:
+  can draw points from a frame's depth in place. The buffers have no usage
+  beyond the pass's storage and transfer usage (no vertex usage); left
+  empty, depth stays EXCLUSIVE, as before. `GpuFramePrep::create` now refuses
+  a colour or depth family the device does not have, rather than the first
+  output. `SensorArray::Options::prep` gives it to every pass. Tests:
   `recon_sensor_gpu_frame_prep`, `recon_sensor_array_process`, and
-  `recon_sensor_depth_lens_fold`, which guards the same-K depth crop against
-  a folding lens (the 2026-10-16 decision).
+  `recon_sensor_depth_lens_fold`, which scans a stand-in Femto Mega depth
+  lens for a fold inside the same-K crop (the 2026-10-16 decision).
 - `codec`: **`EncoderConfig::update_size`**, a P-frame's reference entries
   per update segment, 1 to `kMaxDeviceDecodeSegmentSize` (default 64, as
   before and as measured against 128 and 256), and
