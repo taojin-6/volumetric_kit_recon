@@ -544,7 +544,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   against the frame it returned last, kept in the `ReferenceStore` as its
   forward made it and moved only when `encode` returns one; five rules make
   an I-frame; the split, the diff and a static price for zero run on the
-  device.
+  device. *Amended 2026-10-16:* a sixth rule, an empty grid; U is
+  `EncoderConfig::update_size`.
 - [**2026-10-14**](#2026-10-14--mesh-normalization-and-the-topology-audit-are-opt-in-generic-io-helpers-for-a-mesh-sequence-bounds-measured-along-one-up-and-joined-over-frames-and-one-transform-for-every-frame-amends-the-2026-10-02-normalized-mesh-and-2026-10-03-codec-mesh-entries) —
   Mesh normalization and the topology audit are opt-in, generic `io`
   helpers for a mesh sequence: bounds measured along one up and joined over
@@ -558,6 +559,13 @@ entries relevant to your task; later amendments supersede earlier rules.
   any work. Frame 150's conversion outlier is mostly the closest-face sign
   at a sliver fold. *Amended 2026-10-15:* require core 0.8.0's directory
   escaping, and refuse example intra periods other than 1 until C5b.
+  *Amended 2026-10-16:* the examples code P-frames, on core 0.9.0.
+- [**2026-10-16**](#2026-10-16--the-codec-examples-code-p-frames-codecintra_period-and-codecupdate_size-reach-the-encoder-and-a-streams-rows-report-and-keys-go-by-frame-type-an-empty-grid-is-an-i-frame-and-golden-p-frames-pin-type-1s-bytes-amends-the-2026-10-14-encoder-and-codec-mesh-entries) —
+  The codec examples code P-frames: `codec.intra_period` and
+  `codec.update_size` reach the `Encoder`, a stream's rows, report and keys
+  go by frame type, and a failure after the encode forces an I-frame. An
+  empty grid is an I-frame, U is `EncoderConfig::update_size`, and golden
+  P-frames pin type 1's bytes.
 
 ## Decision record
 
@@ -12869,7 +12877,9 @@ bytes are as before; `create` refuses 0) and `Encoder::force_intra()`.
   bit: `coding_difference`, the rule the writers and the reader already
   shared, now declared in `bitstream.hpp` (the encoder's params never
   change);
-- the reference holds no block, where the I-frame is 29 bytes smaller.
+- the reference holds no block, where the I-frame is 29 bytes smaller;
+- *amended 2026-10-16:* the grid holds no observed block (the 2026-10-16
+  entry).
 
 Otherwise it is a P-frame. Only a frame `encode` returns moves the
 reference and the count; a refusal keeps both, and a pending
@@ -12906,7 +12916,8 @@ split of its own would write a target an entry only for the diff to read.
 8 bytes come back, the survivor count, from which the host takes A for the
 count, so a P-frame counts its symbols in a second submit: 4 fence waits
 an encode with the map's list held, against an I-frame's 3. U is
-`kDefaultUpdateSize`, 64.
+`kDefaultUpdateSize`, 64. *Amended 2026-10-16:* U is
+`EncoderConfig::update_size`, default 64.
 
 **Zero over keep.** A residual of −32768, which no class carries, codes
 zero. Otherwise the kernel prices both payloads by walking `emit_payload`
@@ -13122,6 +13133,7 @@ number, the placement and the conversion's rules are recon's.
   shared `encoder_config` refuses any value other than 1, naming the key,
   before GPU setup. C5b will connect the period and record frame types;
   accepting and ignoring it would silently change the requested coding.
+  *Amended 2026-10-16:* they map it (the 2026-10-16 entry).
 
 **Frame 150's conversion outlier.** Kept: the sequence stays 1–150. Under
 the range's transform, frame 150's conversion accuracy is mean 0.024, rms
@@ -13191,6 +13203,83 @@ the config-entry test inspects a range and counts its open and refused
 frames, and with no Vulkan driver to find, refuses twelve coding scenarios,
 each for its own reason before any GPU work. `recon_io_mesh_file` holds
 `load_mesh` to `check_mesh_file`.
+
+### 2026-10-16 — The codec examples code P-frames: `codec.intra_period` and `codec.update_size` reach the `Encoder`, and a stream's rows, report and keys go by frame type; an empty grid is an I-frame, and golden P-frames pin type 1's bytes (amends the 2026-10-14 encoder and codec-mesh entries).
+
+Type 1 stays experimental, and the templates at period 1, until P-frame
+encode and decode measure no slower than intra on room0 at 1 cm and on
+Rafa2's frames 1–150.
+
+**An empty grid is an I-frame,** the sixth rule: a grid with no observed
+block codes intra whatever the reference. The P-frame it replaces removed
+every reference entry at 8 bytes an update segment (its length and final
+rANS state), a few KB at room0's sizes, where the intra frame of no blocks
+has no segment. With the fifth rule, an empty frame on either side makes
+an I-frame. The format still admits a P-frame of no blocks, and the
+decoder decodes one.
+
+**U is the caller's.** `EncoderConfig::update_size` sets a P-frame's update
+segment, 1 to `kMaxDeviceDecodeSegmentSize` (`check_segment_size`, the
+format's one segment rule); its default restates `kDefaultUpdateSize`, held
+equal by a `static_assert`, as the segment size's is. `EncoderConfig::validate`
+holds the config's checks: `Encoder::create` makes them first, and the
+examples before any GPU work. Core 0.9.0 (core #35) reads
+`codec.update_size`, 0 being the codec's own, and refuses one given at a
+period of 1, where no P-frame uses it, by core's rule that an ignored
+explicit setting is an error: only core can tell an explicit key from its
+default.
+
+**The examples.** `encoder_config` maps both keys, and the refusal of a
+period other than 1 goes. `CodecStream`:
+- keeps each frame's type in its row and the CSV's `type` column;
+- makes a record a key exactly when it holds an I-frame, where a reader
+  starts or seeks;
+- reports each type's bytes (mean, and nearest-rank p50, p95 and max),
+  stage rows and rANS share, and at a period above 1 a GOP's bitrate: an
+  I-frame and the period's P-frames at their types' means, the rate a long
+  stream settles at whatever I-frames its own run forced;
+- calls `force_intra()` on any failure after the encode: the append, the
+  decode or the CSV. The encoder codes its next P-frame against every frame
+  it returns, so a frame the stream or the player lacks would leave the next
+  P-frame `NotFound` until an I-frame. A frame index or pts out of order is
+  refused before the encode, so it needs no recovery.
+
+The sweep codes every row intra (`sweep_encoder_config`): a row re-encodes
+one grid, which a P-frame would code as all skips.
+
+**Golden P-frames.** `kGoldenInterFrames` (`tests/codec_frames.hpp`) pins
+type 1 as `kGoldenFrames` pins type 0. Each row is a P-frame against a
+golden I-frame row's frame and carries that row, its mode pattern, R and U,
+its content hash (which now covers the modes, leaving every intra value as
+it was), its size and the FNV-1a of its bytes, which pins `frame_hash` too
+through REFERENCE. The oracle writes each and reads it back against its
+reference; the device writes the same bytes and reads them as the oracle
+does.
+
+| Reference row | K | R | U | Covers |
+|---|---|---|---|---|
+| 700 blocks | 64 | 64 | 64 | every mode, 90 new blocks spread through |
+| 65 blocks | 21 | 7 | 6 | a partial last segment of each kind |
+| int32 extremes | 4 | 1 | 1 | every mode, new blocks at the extremes |
+
+U is 6 on the second row so that its 65 entries end in a partial update
+segment. The golden rule is now "a new frame type adds rows; nothing else changes a
+value" (a new `kFrameVersion` is a new format, with goldens of its own), and
+the worked example (`bitstream.hpp`'s 161-byte P-frame) is frozen with them.
+
+**Validation.** Apple M5 Max, Release with warnings as errors, core
+`138914f`: the 87 tests pass under the validation layer, and the codec,
+example and volume tests under synchronization validation too. Twelve
+planted bugs each failed a test: the period not mapped, an update size of
+0 passed through, the sweep's period not pinned, every record a key, no
+record a key, no `force_intra()` after a refused decode, the median one
+rank high, every row typed intra, the empty-grid rule dropped, a P-frame
+counted at the default U, `validate` blind to the update size, and
+`frame_hash`'s last shift changed, which the device's golden P rows catch
+past the worked example. Not run: the RTX 5090, ASan and UBSan (CI runs
+them), and the hand checks (`codec_replica` at period 30 against period 1,
+and every measured chain decoded to its all-intra grids), which wait on the
+measurements.
 
 ## Measured lessons
 

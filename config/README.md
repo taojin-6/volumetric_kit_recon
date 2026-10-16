@@ -10,7 +10,7 @@ The files in [examples](examples) are starting points. Edit their source paths
 and create the output directories before a real run. Paths are relative to the
 configuration file, not the shell's current directory; environment variables
 and home-directory shortcuts are not expanded.
-The examples require core 0.8.0 or newer. In a mesh's `source.path`, write a
+The examples require core 0.9.0 or newer. In a mesh's `source.path`, write a
 literal `%` as `%%`; literal `%` characters in the configuration file's
 directory are escaped automatically when resolving a relative mesh path.
 
@@ -61,8 +61,8 @@ remain distinct: `fuse_orbbec` counts camera frames, while `rig_viewer` can
 limit both acquired sets and drawn frames. `codec_mesh` counts exactly:
 `run.frames` meshes, numbered from `run.first`, one by default.
 
-The codec examples currently accept only `codec.intra_period: 1` (the
-default); other periods are refused until the examples support P-frame records.
+`codec.update_size` sets the P-frames' update segments, so core refuses it,
+even as 0, unless `codec.intra_period` is above 1.
 
 `fuse_orbbec` accepts `diagnostics.readback: true` in either a stream or fusion
 scenario. It copies every set's luma to host memory and reports a separate

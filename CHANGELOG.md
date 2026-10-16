@@ -8,6 +8,25 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `examples`: **the codec examples code P-frames, and core 0.9.0 is
+  required** (core #35). `encoder_config` maps `codec.intra_period` and
+  `codec.update_size`, whose 0 is the encoder's own (core refuses one at a
+  period of 1), and refuses what `EncoderConfig::validate` refuses before
+  any GPU work; the refusal of a period other than 1 is gone. `codec_replica`
+  and `codec_mesh` print the period and update size. `CodecStream`'s rows
+  carry the frame type (`CodecRow::type`, and the CSV's `type` column, `I`
+  or `P`, after `frame`); a record is a key only for an I-frame;
+  `report()` gives each type's bytes (mean, p50, p95, max), stage rows and
+  rANS share, and at a period above 1 a GOP's bitrate; and any failure after
+  the encode makes the next frame an I-frame (`Encoder::force_intra`). The
+  sweep codes every row intra. Migrating: read the CSV's columns by name, or
+  shift those after `frame` by one; pass the frame type to `make_codec_row`
+  after the index; seek a stream from its keys, which are now the I-frames
+  alone. Tests: `recon_example_codec_stream`, `recon_example_config`,
+  `recon_codec_mesh_run`, `recon_codec_mesh_config_entry`.
+- `codec`: **an empty grid is an I-frame**, with no segment, not a P-frame
+  removing every reference entry at 8 bytes an update segment. Tests:
+  `recon_codec_encoder`, `recon_codec_inter`.
 - `examples`: **core 0.8.0 is required** (core #34). Its CodecMesh takes
   `run.first`, `run.frames`, `fusion.truncation_m`, `source.allow_holes`
   and `source.metres_per_unit` beside `height_m`, and `codec.entropy`
@@ -23,9 +42,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   parameters to `mesh_sdf_config` and check its result; write a literal `%`
   in `source.path` as `%%`. Core escapes literal `%` characters in the
   scenario's directory, so relative mesh paths beneath `50%off/` and
-  `take%d/` load the intended files. Both codec examples refuse
-  `codec.intra_period` other than 1 until they support P-frame records.
-  Tests: `recon_example_config`,
+  `take%d/` load the intended files. Tests: `recon_example_config`,
   `recon_example_mesh_sequence`, `recon_codec_mesh_run`,
   `recon_codec_mesh_config_entry`.
 - `io`: the fits (`fit_transform`, `scale_transform`) refuse bounds they
@@ -141,6 +158,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `codec`: **`EncoderConfig::update_size`**, a P-frame's reference entries
+  per update segment, 1 to `kMaxDeviceDecodeSegmentSize` (default 64, as
+  before), and **`EncoderConfig::validate`**, the config's checks, which
+  `Encoder::create` makes first and a caller can make before any GPU work.
+  Tests: `recon_codec_encoder`, `recon_codec_inter`; golden P-frames pin type
+  1's bytes, and through REFERENCE `frame_hash`'s, for the oracle and the
+  device (`recon_codec_inter_bitstream`, `recon_codec_device_frame`).
 - `examples`: **`codec_mesh` codes a numbered mesh sequence**
   (`codec_mesh_sequence.json`, Rafa2's frames 1–150). `source.path` may
   hold a printf-style frame number (`%05d`; `%%` for a literal `%`), and
