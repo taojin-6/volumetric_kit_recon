@@ -5,7 +5,9 @@
 # recon's source, as the recon_subproject_* tests configure it: recon is then
 # not the top-level project, so its tests, examples and -Werror must default
 # off, and the consumer builds the library tiers alone, under its own compiler's
-# warnings. Without, it finds an installed recon (camera_only.cmake).
+# warnings. Without, it finds an installed recon (camera_only.cmake). With all
+# of recon, recon_subproject_glsl builds its kernel on recon's exported GLSL
+# (glsl_consumer.cmake).
 #
 # With -DVR_CORE_FIRST=ON it makes the core available first, as an application
 # that also fetches calib or gfx does, with VKC_WITH_VULKAN as given, so recon's
@@ -59,3 +61,7 @@ endif()
 # The umbrella reaches recon_camera, so it must name only tiers that exist.
 add_executable(vr_camera_consumer camera_consumer.cpp)
 target_link_libraries(vr_camera_consumer PRIVATE volumetric_kit::recon)
+
+if(TARGET volumetric_kit::recon_core)
+  include("${CMAKE_CURRENT_LIST_DIR}/../glsl_consumer.cmake")
+endif()

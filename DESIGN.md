@@ -784,6 +784,14 @@ two of the three entry points reports no labels rather than a region that can
 be opened and not closed. The label is recorded *outside* the `GpuTimer`
 bracket, so no `gpu_ms` measures the markers around the work.
 
+`core/shaders/pinhole.glsl` is recon's GLSL pinhole: the rigid inverse,
+unprojection, divide, in-image projection and nearest pixel that tsdf,
+volume, texture and the sensor prep's colour test go through, and that recon
+exports to its consumers' kernels (README, "Building"). Its functions take
+values, so a scalar-layout camera and a std430 one both pass theirs. The
+acceptance stays two callers' own: texture extrapolates past the image, and
+the colour test bounds the rounded pixel.
+
 ### volume
 
 `VoxelGridParams::validate` rejects non-finite metric fields and block extents,

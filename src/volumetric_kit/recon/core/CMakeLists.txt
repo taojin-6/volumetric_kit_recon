@@ -97,6 +97,23 @@ target_include_directories(
 
 vr_target_warnings(recon_core)
 
+# The GLSL recon exports, for a consumer's kernels to #include as recon's own do
+# ("volumetric_kit/recon/core/shaders/pinhole.glsl") under the root that
+# recon_core's VR_SHADER_INCLUDE_DIR property names. The root holds the exported
+# files alone, here as installed: a copy in this build directory (configure_file
+# copies it again when the source changes), or the installed include directory,
+# which the package config names. recon's own shaders read src/
+# (vr_compile_shaders).
+set(_vr_exported_glsl shaders/pinhole.glsl)
+set(_vr_glsl_root "${CMAKE_CURRENT_BINARY_DIR}/glsl")
+foreach(_vr_glsl IN LISTS _vr_exported_glsl)
+  configure_file(
+    "${_vr_glsl}" "${_vr_glsl_root}/volumetric_kit/recon/core/${_vr_glsl}"
+    COPYONLY)
+endforeach()
+set_target_properties(recon_core PROPERTIES VR_SHADER_INCLUDE_DIR
+                                            "${_vr_glsl_root}")
+
 # Install the target into the shared export set + the headers this tier
 # generates. The umbrella target, public-header tree, and package config are
 # finalized by the parent (src/CMakeLists.txt).
@@ -122,4 +139,6 @@ if(VR_INSTALL)
     DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
     FILES_MATCHING
     PATTERN "*.hpp")
+  install(DIRECTORY "${_vr_glsl_root}/"
+          DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
 endif()
