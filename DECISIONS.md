@@ -580,6 +580,9 @@ entries relevant to your task; later amendments supersede earlier rules.
   both call it; recon's kernels project through it, keeping only their own
   acceptance rules; and `recon_core`'s `VR_SHADER_INCLUDE_DIR` names the root
   a consumer includes it under, fetched or installed.
+- [**2026-10-16**](#2026-10-16--a-brew-upgrade-needs-no-cache-clearing-the-mac-jobs-install-nothing-and-the-dependency-cache-keys-on-the-cores-homebrew-key) —
+  A brew upgrade needs no cache clearing: the Mac jobs install nothing, and
+  the dependency cache keys on the core's Homebrew key.
 
 ## Decision record
 
@@ -13469,6 +13472,27 @@ a camera that tells a swapped focal length or principal point apart;
 `recon_sensor_gpu_frame_prep` colour principal points a fraction of a pixel
 off, which pin the rounded bounds; and `recon_texture_projective` a vertex
 past the left border, so the extrapolation holds on both sides.
+
+### 2026-10-16 — A brew upgrade needs no cache clearing: the Mac jobs install nothing, and the dependency cache keys on the core's Homebrew key.
+
+recon follows the core's decision
+[A brew upgrade needs no cache clearing](https://github.com/taojin-6/volumetric_kit_core/blob/main/DECISIONS.md#a-brew-upgrade-needs-no-cache-clearing).
+Here a cached tree goes stale rather than failing: the cache holds only
+`build/_deps`, which reaches Homebrew through version-free links such as
+`/opt/homebrew/include/vulkan`, and Homebrew keeps each file's source
+mtime, so after an upgrade make finds the new headers older than the
+objects and keeps those built on the old ones. The Cellar paths (FFmpeg's
+pkg-config results) are in the rest of `build/`, which checkout's
+`git clean -ffdx` deletes before every job.
+
+- **Keyed on the versions.** A `_build.yml` leg names its formulae once, and
+  the dependency cache's key and restore prefix carry the key the core's
+  `homebrew-key` action computes from their installed versions and their
+  dependencies' (`none` off macOS). The first run after an upgrade rebuilds
+  `build/_deps`.
+- **Installed by the owner.** A job on the self-hosted Mac, the build legs'
+  and the viewer's, installs nothing: it fails, naming any formula missing.
+  A hosted runner installs what its image lacks.
 
 ## Measured lessons
 
