@@ -39,16 +39,21 @@ jobs:
       # it needs no Homebrew key.
       - name: Check dependencies
         run: |
-          # Same set as the macOS build leg, plus glfw (gfx builds gfx_glfw,
-          # the viewers' window glue, only with it) and ffmpeg (found through
-          # pkgconf) for the decoders the Orbbec driver needs.
+          # The macOS build leg's formulae (_build.yml) less
+          # vulkan-validationlayers and assimp, which this build-only leg
+          # does not use, plus glfw: gfx builds gfx_glfw, the viewers' window
+          # glue, only with it.
+          command -v brew >/dev/null || {
+            echo "::error::brew is not on this runner's PATH"
+            exit 1
+          }
           missing=""
           for pkg in cmake glm molten-vk vulkan-headers vulkan-loader \
-              vulkan-tools shaderc glfw ffmpeg pkgconf; do
+              vulkan-tools shaderc spirv-tools ffmpeg pkgconf glfw; do
             brew list --formula "$pkg" >/dev/null 2>&1 || missing="$missing $pkg"
           done
           if [ -n "$missing" ]; then
-            echo "::error::install by hand on the Mac, while CI is idle:${missing}"
+            echo "::error::install by hand on this self-hosted runner's host, while CI is idle:${missing}"
             exit 1
           fi
 

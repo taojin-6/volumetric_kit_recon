@@ -196,13 +196,16 @@ jobs:
 
       # The leg's Homebrew formulae, named once for the key below: glm
       # supplies the GLM math headers recon_core's types alias; molten-vk is
-      # the Vulkan driver; shaderc provides glslc for the compute shaders;
+      # the Vulkan driver; shaderc provides glslc for the compute shaders and
+      # spirv-tools the spirv-val that checks them;
       # vulkan-loader/-headers/-tools/-validationlayers complete the SDK;
       # ffmpeg (with pkgconf to find it) for a VR_WITH_FFMPEG leg. A job on
       # the self-hosted Mac installs nothing (DECISIONS.md, 2026-10-16): it
       # fails, naming any formula missing. A hosted runner installs what its
       # image lacks.
-      - name: Install or check dependencies (macOS)
+      # TODO: take this check-or-install, and viewer.yml's check, from a core
+      # action once the core has one; calib and gfx copy it too.
+      - name: Install dependencies (macOS)
         id: formulae
         if: steps.detect.outputs.present == 'true' && runner.os == 'macOS'
         env:
@@ -212,7 +215,7 @@ jobs:
           HOMEBREW_NO_INSTALL_CLEANUP: '1'
         run: |
           pkgs="cmake glm molten-vk vulkan-headers vulkan-loader vulkan-tools"
-          pkgs="$pkgs vulkan-validationlayers shaderc"
+          pkgs="$pkgs vulkan-validationlayers shaderc spirv-tools"
           if [ "${{ inputs.ffmpeg }}" = "true" ]; then
             pkgs="$pkgs ffmpeg pkgconf"
           fi
@@ -220,6 +223,11 @@ jobs:
             pkgs="$pkgs assimp"
           fi
           echo "formulae=$pkgs" >> "$GITHUB_OUTPUT"
+          # Without brew every formula would look missing.
+          command -v brew >/dev/null || {
+            echo "::error::brew is not on this runner's PATH"
+            exit 1
+          }
           missing=""
           for pkg in $pkgs; do
             brew list --formula "$pkg" >/dev/null 2>&1 || missing="$missing $pkg"
@@ -301,23 +309,6 @@ jobs:
           echo "hash=${h}" >> "${GITHUB_OUTPUT}"
           echo "workspace ${GITHUB_WORKSPACE} -> ${h}"
 
-      # A build/ that persists on the runner from an earlier job is dropped
-      # when it was built on other Homebrew versions, before the cache below
-      # restores into it: build/homebrew-key records the Homebrew key a tree
-      # is built with, and a tree without one predates it.
-      - name: Discard a build tree built on other Homebrew versions
-        if: steps.detect.outputs.present == 'true' && runner.os == 'macOS'
-        env:
-          KEY: ${{ steps.brew.outputs.key }}
-        run: |
-          built=$(cat build/homebrew-key 2>/dev/null || true)
-          if [ -d build ] && [ "${built}" != "${KEY}" ]; then
-            echo "::warning::discarding a build tree built with Homebrew key '${built:-unrecorded}', now '${KEY}'"
-            rm -rf build
-          fi
-          mkdir -p build
-          printf '%s\n' "${KEY}" > build/homebrew-key
-
       # Cache the FetchContent dependency tree (VMA / googletest sources + builds)
       # so they are not re-cloned and recompiled every run. FetchContent bakes the
       # absolute build path into its sub-build CMakeCache, so a cache is only
@@ -340,8 +331,8 @@ jobs:
       # (third_party/CMakeLists.txt) and the root list, so a FetchContent version
       # bump in either busts the cache; hashFiles skips whichever of those paths
       # does not exist yet. And it carries the Homebrew key (`none` off macOS),
-      # in the restore prefix too, so no tree built on formulae a brew upgrade
-      # deleted is restored.
+      # in the restore prefix too, so no tree built on other Homebrew versions
+      # is restored (DECISIONS.md, 2026-10-16, says why).
       - name: Cache third-party deps
         if: steps.detect.outputs.present == 'true'
         uses: actions/cache@v6
