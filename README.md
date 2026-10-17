@@ -211,8 +211,8 @@ Their `codec` section selects `quantization_table` (`uniform`, `band`,
 `radial`), `quantization_scale`, `segment_size`, `intra_period` (an I-frame
 every N coded frames, zero-motion P-frames between, experimental; 1, the
 default, codes every frame intra), `update_size` at a period above 1 (a
-P-frame's entries per update segment; 0, the default, is the codec's 64),
-and the shared rate-distortion `sweep`, which codes intra. `output.stream`
+P-frame's entries per update segment; 0, the default, takes the segment
+size), and the shared rate-distortion `sweep`, which codes intra. `output.stream`
 records every coded frame in a new `.vrst` file, each I-frame a key (see
 [the stream container](DESIGN.md#stream)), and `output.csv` writes a row per
 decoded frame: its type (`I` or `P`), bytes, blocks, and encode and decode

@@ -521,7 +521,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   13 is the device merge's, and the host merge is gone. *Amended
   2026-10-14:* the `Encoder` writes them. *Amended 2026-10-16:* golden
   P-frames pin type 1's bytes, but its freeze waits on a decision about
-  interleaved rANS lanes.
+  interleaved rANS lanes. *Amended 2026-10-17:* no lanes: U defaults to R,
+  and the freeze waits on the encode's count and a re-measure.
 - [**2026-10-13**](#2026-10-13--the-decoder-decodes-p-frames-against-the-frame-it-decoded-last-kept-on-the-device-as-decoded-in-two-slots-that-swap-only-when-a-decode-succeeds-one-integer-apply-makes-every-decoded-frame-intra-too-and-it-decodes-on-the-device-alone-amends-the-2026-09-27-encoderdecoder-and-2026-10-03-decoding-entries) —
   The `Decoder` decodes P-frames against the frame it decoded last, kept on
   the device as decoded and replaced only when a decode succeeds; one integer
@@ -572,7 +573,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   measured), and golden P-frames pin type 1's bytes. Type 1 stays
   experimental and the templates at period 1: at R = 16 its P-frames code
   slower than intra, and the freeze waits on a decision about interleaved
-  rANS lanes.
+  rANS lanes. *Amended 2026-10-17:* U defaults to the segment size; no lanes,
+  and the freeze waits on the encode's count and a re-measure.
 - [**2026-10-16**](#2026-10-16--a-shared-glsl-pinhole-for-recon-and-its-consumers-coreshaderspinholeglsl-exported-under-the-include-root-recon_core-names-amends-the-2026-08-11-texturing-entrys-per-tier-copies) —
   A shared GLSL pinhole for recon and its consumers,
   `core/shaders/pinhole.glsl` (amends the 2026-08-11 texturing entry's
@@ -583,6 +585,12 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-16**](#2026-10-16--a-brew-upgrade-needs-no-cache-clearing-the-mac-jobs-install-nothing-and-the-dependency-cache-keys-on-the-cores-homebrew-key) —
   A brew upgrade needs no cache clearing: the Mac jobs install nothing, and
   the dependency cache keys on the core's Homebrew key.
+- [**2026-10-17**](#2026-10-17--a-p-frames-update-segments-default-to-its-segment-size-encoderconfigupdate_size-0-the-default-takes-segment_size-resolved-once-in-encodercreate-the-format-and-the-goldens-are-unchanged-amends-the-2026-10-16-codec-examples-2026-10-14-encoder-and-2026-10-12-p-frame-entries) —
+  A P-frame's update segments default to its segment size:
+  `EncoderConfig::update_size` 0, the default, takes `segment_size`
+  (`resolved_update_size()`, resolved once in `Encoder::create`); the format
+  and the goldens are unchanged. No lanes: the freeze waits on the encode's
+  count moving into the forward's submit, and a re-measure.
 
 ## Decision record
 
@@ -12236,6 +12244,8 @@ P-frames, below):* the `Encoder` writes type 1, and its split is its diff's
 own search. *Amended 2026-10-16 (the codec examples' entry, below):* golden
 P-frames pin type 1's bytes, but its freeze waits: at R = 16 its P-frames
 code slower than intra, and interleaved rANS lanes would change the format.
+*Amended 2026-10-17 (the update-size entry, below):* no lanes: U defaults to
+R, and the freeze waits on the encode's count and a re-measure.
 
 The host writer and reader of type-1 frames, internal. `bitstream.hpp` holds
 the layout and the order of the refusals; this entry holds why. Nothing public
@@ -12940,7 +12950,8 @@ split of its own would write a target an entry only for the diff to read.
 count, so a P-frame counts its symbols in a second submit: 4 fence waits
 an encode with the map's list held, against an I-frame's 3. U is
 `kDefaultUpdateSize`, 64. *Amended 2026-10-16:* U is
-`EncoderConfig::update_size`, default 64.
+`EncoderConfig::update_size`, default 64. *Amended 2026-10-17:* default the
+segment size.
 
 **Zero over keep.** A residual of −32768, which no class carries, codes
 zero. Otherwise the kernel prices both payloads by walking `emit_payload`
@@ -13229,6 +13240,12 @@ each for its own reason before any GPU work. `recon_io_mesh_file` holds
 
 ### 2026-10-16 — The codec examples code P-frames: `codec.intra_period` and `codec.update_size` reach the `Encoder`, and a stream's rows, report and keys go by frame type; an empty grid is an I-frame; golden P-frames pin type 1's bytes, and its freeze waits, since at R = 16 its P-frames code slower than intra (amends the 2026-10-12 P-frame, 2026-10-14 encoder and codec-mesh entries).
 
+*Amended 2026-10-17 (the update-size entry, below):* `update_size` 0, the
+default, takes the segment size, and `kDefaultUpdateSize` is gone; "U stays
+64" now holds at R = 64. The user chose neither option under "Open, for the
+user": no lanes, and the freeze waits on the count moving into the
+forward's submit, then a re-measure.
+
 **Type 1 stays experimental,** and the templates at period 1. Its freeze
 needed P-frame encode and decode no slower than intra on room0 at 1 cm and
 on Rafa2's frames 1–150. Room0 meets it and Rafa2 at R = 16 does not, so
@@ -13493,6 +13510,54 @@ pkg-config results) are in the rest of `build/`, which checkout's
 - **Installed by the owner.** A job on the self-hosted Mac, the build legs'
   and the viewer's, installs nothing: it fails, naming any formula missing.
   A hosted runner installs what its image lacks.
+
+### 2026-10-17 — A P-frame's update segments default to its segment size: `EncoderConfig::update_size` 0, the default, takes `segment_size`, resolved once in `Encoder::create`; the format and the goldens are unchanged (amends the 2026-10-16 codec-examples, 2026-10-14 encoder and 2026-10-12 P-frame entries).
+
+**The user's choice.** Of the 2026-10-16 entry's two options the user took
+neither: no interleaved rANS lanes, a format change, and no freeze with
+P-frames slower than intra at small R. U defaults to R instead; a P-frame's
+count moves into the forward's submit next (the `TODO(codec)` in
+`encoder.cpp`), and type 1's freeze follows a re-measure.
+
+**The rule.** `EncoderConfig::update_size` 0, the default, takes
+`segment_size`; an explicit 1 to `kMaxDeviceDecodeSegmentSize` still wins.
+`EncoderConfig::resolved_update_size()` is the rule's one home: `validate`
+checks it after the segment size, so a segment size of 0 is named as one,
+and `Encoder::create` stores it, so the writer sees only a concrete U. The
+format does not change: every P-frame carries its U in REFERENCE, and every
+writer and reader still refuses 0. `kDefaultUpdateSize` goes; the oracle's
+default U becomes `kDefaultSegmentSize`, so the goldens and the worked
+example keep their bytes. Core is unchanged: its 0 "selects the codec's own
+size", which `encoder_config` now passes through.
+
+**Why.** At U = R a P-frame's M reference entries take ceil(M / R) update
+segments, as many as its reference has coded intra, so the device codes and
+decodes it with at least that parallelism at any R. Nothing changes at
+R = 64. At R = 16 the 2026-10-16 entry's U = 16 runs bring P decode level
+with intra for 3.8% of the stream; P encode stays slower by the second
+count submit, the next change's.
+
+**Rejected:** `std::optional` (core already uses 0, and every use would
+need `value_or`), a default member initializer (it would not follow a later
+`segment_size`), a mapping in the examples alone (a library caller at
+R = 16 would keep 64), and U always R (it loses the U sweep, the odd-U
+tests and core's key).
+
+**Validation.** Apple M5 Max, Release with warnings as errors, core
+`138914f`: the 91 tests pass under the validation layer, and the codec,
+volume and example tests under synchronization validation too. Eight
+planted bugs each failed a test: the helper returning `update_size` alone,
+64 for 0, or `segment_size` alone; `validate` refusing 0, or checking U
+before R; `create` keeping the raw 0; `encoder_config` mapping 0 to 64; and
+`codec_settings` printing the raw field. By hand, on the 2026-10-16
+entry's protocol (host ms, the median of 3 runs, each type's first frame
+dropped): Rafa2 at R = 16 and period 30 with no `update_size` prints update
+segments of 16 entries and writes the U = 16 runs' bytes frame for frame
+(4,442,994), its P-frames decoding in 1.467 ms against its I-frames' 1.499
+and period 1's 1.544, and encoding in 1.697 against 1.485 and 1.509
+(`..forward` 0.678 against 0.400) while device ms stay level (P 0.467
+decode and 0.554 encode, I 0.523–0.575); r64 and c1 keep their bytes; and
+every chain decodes bit for bit to the all-intra stream's grids.
 
 ## Measured lessons
 
