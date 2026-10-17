@@ -698,9 +698,10 @@ target_link_libraries(recon_sensor_rgbd_sensor_test
 vr_target_warnings(recon_sensor_rgbd_sensor_test)
 add_test(NAME recon_sensor_rgbd_sensor COMMAND recon_sensor_rgbd_sensor_test)
 
-# codec tier, host half: CodecParams validation and the DCT's two tables (basis
-# orthonormality, the zigzag order against the prior engine's). CPU-only, so it
-# always runs. The tables are internal (non-installed), reached by include path.
+# codec tier, host half: CodecParams validation, EncoderConfig's sizes and the
+# DCT's two tables (basis orthonormality, the zigzag order against the prior
+# engine's). CPU-only, so it always runs. The tables are internal
+# (non-installed), reached by include path.
 add_executable(recon_codec_params_test codec_params_test.cpp)
 target_link_libraries(recon_codec_params_test
                       PRIVATE volumetric_kit::recon_codec)
