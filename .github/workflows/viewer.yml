@@ -34,28 +34,23 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install dependencies
-        env:
-          HOMEBREW_NO_AUTO_UPDATE: '1'
-          HOMEBREW_NO_INSTALL_CLEANUP: '1'
+      # A job on the self-hosted Mac installs nothing (DECISIONS.md,
+      # 2026-10-16): a missing formula fails it. This job caches nothing, so
+      # it needs no Homebrew key.
+      - name: Check dependencies
         run: |
           # Same set as the macOS build leg, plus glfw (gfx builds gfx_glfw,
           # the viewers' window glue, only with it) and ffmpeg (found through
           # pkgconf) for the decoders the Orbbec driver needs.
-          ok=0
-          for attempt in 1 2 3; do
-            if brew install cmake glm molten-vk vulkan-headers vulkan-loader \
-                vulkan-tools shaderc glfw ffmpeg pkgconf; then
-              ok=1
-              break
-            fi
-            echo "::warning::brew install attempt ${attempt} failed; retrying in 15s"
-            sleep 15
+          missing=""
+          for pkg in cmake glm molten-vk vulkan-headers vulkan-loader \
+              vulkan-tools shaderc glfw ffmpeg pkgconf; do
+            brew list --formula "$pkg" >/dev/null 2>&1 || missing="$missing $pkg"
           done
-          [ "${ok}" = 1 ] || {
-            echo "::error::brew install failed after 3 attempts"
+          if [ -n "$missing" ]; then
+            echo "::error::install by hand on the Mac, while CI is idle:${missing}"
             exit 1
-          }
+          fi
 
       # rig_viewer is built only with the Orbbec driver (VR_WITH_ORBBEC).
       - name: Install the Orbbec SDK

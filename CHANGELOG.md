@@ -27,6 +27,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   set `codec.update_size` only with a `codec.intra_period` above 1. Tests:
   `recon_example_codec_stream`, `recon_example_config`,
   `recon_codec_mesh_run`, `recon_codec_mesh_config_entry`.
+- CI: **a Homebrew upgrade on the Mac starts the dependency build fresh.**
+  The macOS legs' dependency cache keys on the installed versions of their
+  Homebrew formulae and of all they depend on (the core's `homebrew-key`
+  action), so the first run after a `brew upgrade` rebuilds `build/_deps`
+  instead of failing on paths the upgrade deleted, and a build tree left on
+  the runner is discarded unless `build/homebrew-key` records the same key.
+  Jobs on the self-hosted Mac install nothing: one fails, naming any formula
+  missing.
 - `examples`: **core 0.8.0 is required** (core #34). Its CodecMesh takes
   `run.first`, `run.frames`, `fusion.truncation_m`, `source.allow_holes`
   and `source.metres_per_unit` beside `height_m`, and `codec.entropy`

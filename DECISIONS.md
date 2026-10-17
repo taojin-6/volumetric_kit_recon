@@ -573,6 +573,9 @@ entries relevant to your task; later amendments supersede earlier rules.
   experimental and the templates at period 1: at R = 16 its P-frames code
   slower than intra, and the freeze waits on a decision about interleaved
   rANS lanes.
+- [**2026-10-16**](#2026-10-16--a-brew-upgrade-needs-no-cache-clearing-the-mac-jobs-install-nothing-and-the-dependency-cache-keys-on-the-cores-homebrew-key) —
+  A brew upgrade needs no cache clearing: the Mac jobs install nothing, and
+  the dependency cache keys on the core's Homebrew key.
 - [**2026-10-16**](#2026-10-16--a-shared-glsl-pinhole-for-recon-and-its-consumers-coreshaderspinholeglsl-exported-under-the-include-root-recon_core-names-amends-the-2026-08-11-texturing-entrys-per-tier-copies) —
   A shared GLSL pinhole for recon and its consumers,
   `core/shaders/pinhole.glsl` (amends the 2026-08-11 texturing entry's
@@ -13407,6 +13410,26 @@ shift changed, which the device's golden P rows catch past the worked
 example. By hand, `codec_replica` at period 30 prints
 period 1's accuracy, coverage and F-score. Not run: the RTX 5090, ASan and
 UBSan (CI runs them).
+
+### 2026-10-16 — A brew upgrade needs no cache clearing: the Mac jobs install nothing, and the dependency cache keys on the core's Homebrew key.
+
+The core's decision
+[A brew upgrade needs no cache clearing](https://github.com/taojin-6/volumetric_kit_core/blob/main/DECISIONS.md#a-brew-upgrade-needs-no-cache-clearing)
+holds here, with its rationale: a build keeps absolute paths into Homebrew's
+Cellar, which `brew upgrade` deletes, so a cache saved before an upgrade
+failed until it was cleared by hand.
+
+- **Keyed on the versions.** A `_build.yml` leg names its formulae once, and
+  the dependency cache's key and restore prefix carry the key the core's
+  `homebrew-key` action computes from their installed versions and their
+  dependencies' (`none` off macOS). The first run after an upgrade rebuilds
+  `build/_deps`. A `build/` left on the runner is discarded before the
+  cache restores into it unless `build/homebrew-key` records the same key.
+  Checkout's `git clean -ffdx` deletes it before every job today; the stamp
+  keeps the rule should that change.
+- **Installed by the owner.** A job on the self-hosted Mac, the build legs'
+  and the viewer's, installs nothing: it fails, naming any formula missing.
+  A hosted runner installs what its image lacks.
 
 ### 2026-10-16 — A shared GLSL pinhole for recon and its consumers: `core/shaders/pinhole.glsl`, exported under the include root `recon_core` names (amends the 2026-08-11 texturing entry's per-tier copies).
 
