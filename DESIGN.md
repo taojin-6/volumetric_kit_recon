@@ -97,8 +97,7 @@ links that base tier alone.
   core's one umbrella header (`core/vulkan/vulkan.hpp`) — no other code
   includes `<vulkan/...>` directly.
 - **`volume`** — the sparse voxel hash map in Vulkan buffers; allocate / compact
-  / rehash as compute shaders, and a stateless `grow_grid` helper. (POD
-  layouts already landed in `volume/hash_types.hpp`.)
+  / rehash as compute shaders, and a stateless `grow_grid` helper.
 - **`tsdf`** — TSDF integration compute shaders (classic + dynamic), the
   `Fuser` that fuses a set of frames (grow, allocate, integrate), and a
   triangle mesh's distance field written in (signed, or as a shell).
@@ -312,7 +311,7 @@ geometry buffers directly.
   (the core's `core/vulkan/vulkan.hpp`) — never `#include <vulkan/...>` directly,
   so adopting volk later for the iOS/Android loader stays a one-header change.
 - **Host buffer layout must match the shader.** Host POD structs (`HashEntry`,
-  `Voxel`, …) and their GLSL mirrors must agree byte-for-byte, so the shaders
+  `BlockIndex`, …) and their GLSL mirrors must agree byte-for-byte, so the shaders
   read them through **scalar block layout** (`GL_EXT_scalar_block_layout`; Vulkan
   1.2 core, MoltenVK-supported), *not* `std430` — `std430` 16-byte-aligns a
   three-component vector, so an `std430` `HashEntry` puts `pos` at offset 16 in
@@ -881,7 +880,10 @@ occupancy read a per-frame caller can afford (a host copy of the heap
 counter, read back by every round that moves it), and `kGrowThreshold` is
 the occupancy it says to grow at — named here so a UI or an embedder cannot
 draw a ceiling that disagrees with it. No host call reads the table back;
-a kernel binds `entries_buffer()` (2026-10-13).
+a kernel binds `entries_buffer()` and reads it through `hash_common.glsl`
+or `hash_lookup.glsl` (2026-10-13), whose layout is internal: the host
+`HashEntry` and fail slots are in `src/volumetric_kit/recon/volume/hash.hpp`,
+and the slot sentinels and hash are in the GLSL alone (2026-10-17).
 `grow_grid` centralizes the growth arithmetic: double, or reach a larger
 requested minimum, within `VoxelBlockGrid::max_num_buckets` (block pointers
 within int32, each attribute array within one binding). It retains no policy

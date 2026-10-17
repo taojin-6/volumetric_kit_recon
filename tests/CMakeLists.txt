@@ -101,10 +101,10 @@ target_link_libraries(
 vr_target_warnings(recon_tier_stage_metrics_test)
 add_test(NAME recon_tier_stage_metrics COMMAND recon_tier_stage_metrics_test)
 
-# volume coordinate math + spatial hash: pure host transforms (world <-> voxel
-# <-> block, negative-coordinate block indexing, truncation band) and the bucket
-# hash function. CPU-only (no device), so these always run -- not gated on a
-# Vulkan driver.
+# volume coordinate math: pure host transforms (world <-> voxel <-> block,
+# negative-coordinate block indexing, truncation band); and the tests' host
+# oracle of the spatial hash (volume_hash_oracle.hpp). CPU-only (no device), so
+# these always run -- not gated on a Vulkan driver.
 add_executable(recon_volume_coords_test volume_coords_test.cpp)
 target_link_libraries(recon_volume_coords_test
                       PRIVATE volumetric_kit::recon_volume)
@@ -118,13 +118,17 @@ vr_target_warnings(recon_volume_hash_test)
 add_test(NAME recon_volume_hash COMMAND recon_volume_hash_test)
 
 # volume GPU hash map: build a VoxelHashMap, allocate a cube of block coords,
-# compact, and verify the active set + the HashEntry scalar-layout round-trip on
-# the real driver (MoltenVK / NVIDIA). Skips where no device is present.
+# compact, and verify the active set round-trips on the real driver (MoltenVK /
+# NVIDIA). The table's entry layout is internal (hash.hpp), reached by include
+# path. Skips where no device is present.
 add_executable(recon_volume_hash_map_test volume_hash_map_test.cpp)
 target_link_libraries(
   recon_volume_hash_map_test
   PRIVATE volumetric_kit::recon_volume Vulkan::Vulkan
           volumetric_kit::core_test_policy)
+target_include_directories(
+  recon_volume_hash_map_test
+  PRIVATE ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/volume)
 vr_target_warnings(recon_volume_hash_map_test)
 add_test(NAME recon_volume_hash_map COMMAND recon_volume_hash_map_test)
 
@@ -466,12 +470,16 @@ vr_target_warnings(recon_volume_resize_test)
 add_test(NAME recon_volume_resize COMMAND recon_volume_resize_test)
 
 # Stateless volume growth: doubling, an explicit minimum, content retention, and
-# rejection of invalid or unreachable sizes. Skips (exit 0) with no device.
+# rejection of invalid or unreachable sizes. The table's entry layout is
+# internal (hash.hpp), reached by include path. Skips (exit 0) with no device.
 add_executable(recon_volume_grid_growth_test volume_grid_growth_test.cpp)
 target_link_libraries(
   recon_volume_grid_growth_test
   PRIVATE volumetric_kit::core_test_policy volumetric_kit::recon_volume
           Vulkan::Vulkan)
+target_include_directories(
+  recon_volume_grid_growth_test
+  PRIVATE ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/volume)
 vr_target_warnings(recon_volume_grid_growth_test)
 add_test(NAME recon_volume_grid_growth COMMAND recon_volume_grid_growth_test)
 
