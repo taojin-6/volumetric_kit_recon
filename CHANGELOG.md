@@ -461,8 +461,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `kHashPrimeX/Y/Z` move into the tests, which alone called them. Migrating:
   nothing outside recon compiled against them, and they have no public
   replacement; the table's layout is recon's kernels' own. Tests:
-  `recon_volume_hash`, `recon_volume_hash_map`, `recon_volume_resize`,
-  `recon_volume_grid_growth`.
+  `recon_package_headers` (new), `recon_volume_hash`, `recon_volume_hash_map`,
+  `recon_volume_resize`, `recon_volume_grid_growth`.
 - `volume`: **the host block list** (BREAKING): `BlockList`,
   `VoxelBlockGrid::block_list` (both overloads) and
   `VoxelBlockGrid::check_block_list`. Nothing in recon, ios, gfx or calib

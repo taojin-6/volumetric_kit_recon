@@ -12778,7 +12778,8 @@ which nothing read, go, leaving `hash_common.glsl`'s. `hash_bucket` and its
 primes become the tests' oracle (`tests/volume_hash_oracle.hpp`).
 `BlockIndex` and `BlockStamp` stay public. Other tiers still bind
 `entries_buffer()` and read it through `hash_common.glsl` or
-`hash_lookup.glsl`.
+`hash_lookup.glsl`. `recon_package_headers` fails if `volume/hash.hpp` or
+any of these names is installed again.
 
 **The rule** is the user's (2026-10-13): only I/O takes a host path --
 reading a mesh model, a camera stream (Orbbec, ARKit) -- and what it reads

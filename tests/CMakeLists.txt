@@ -1302,6 +1302,13 @@ if(VR_INSTALL AND _vr_core_source)
                    vr_glsl_consumer)
   set_tests_properties(recon_package_glsl PROPERTIES FIXTURES_REQUIRED
                                                      vr_package_found)
+  # ... and compiles the installed headers that reach the volume tier, which
+  # hold none of the hash table's internals (package/internal_names.cpp).
+  add_test(NAME recon_package_headers
+           COMMAND "${CMAKE_COMMAND}" --build "${_vr_package}/found" --target
+                   vr_package_headers)
+  set_tests_properties(recon_package_headers PROPERTIES FIXTURES_REQUIRED
+                                                        vr_package_found)
   add_test(
     NAME recon_package_base_core_configure
     COMMAND

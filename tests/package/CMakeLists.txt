@@ -5,8 +5,10 @@
 # recon_package_* tests with the core and recon packages they name. Linking the
 # umbrella target makes generation check that every imported target in its link
 # interface exists; recon_package_glsl builds its kernel on recon's installed
-# GLSL (glsl_consumer.cmake). Found or not, recon's package config leaves none
-# of its own variables (_vr_*) in the caller's scope.
+# GLSL (glsl_consumer.cmake); recon_package_headers compiles the installed
+# headers that reach the volume tier, none of which may hold the hash table's
+# internals (internal_names.cpp). Found or not, recon's package config leaves
+# none of its own variables (_vr_*) in the caller's scope.
 cmake_minimum_required(VERSION 3.21)
 project(vr_package_consumer LANGUAGES CXX)
 
@@ -34,4 +36,6 @@ if(vr_consumer_left)
 endif()
 add_executable(vr_package_consumer consumer.cpp)
 target_link_libraries(vr_package_consumer PRIVATE volumetric_kit::recon)
+add_library(vr_package_headers OBJECT internal_names.cpp)
+target_link_libraries(vr_package_headers PRIVATE volumetric_kit::recon)
 include("${CMAKE_CURRENT_LIST_DIR}/../glsl_consumer.cmake")
