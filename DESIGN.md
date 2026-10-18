@@ -1419,27 +1419,28 @@ lacks takes its place among the new blocks from those ranks. A residual of
 −32768 codes zero, and so does a block whose target payload a static price
 (`emit_payload` walked at `bit_length + 1` bits a symbol, 8 a byte symbol,
 plus raw bits) puts strictly below its residual's. Only the device knows the
-new blocks' count, so the forward's submit counts a P-frame over M plus the
-frame's blocks, and the device takes the survivors off (`counted_entries`),
-at `EncoderConfig::update_size` entries an update segment
+new blocks' count, so the forward's submit counts a P-frame, at
+`EncoderConfig::update_size` entries an update segment
 (`EncoderConfig::resolved_update_size()`: the segment size unless the caller
-sets one). `EncoderConfig::validate` holds the config's checks,
-which `create` makes first.
+sets one), over M plus the frame's blocks, and the device takes the
+survivors off (`counted_entries`). `EncoderConfig::validate` holds the
+config's checks, which `create` makes first.
 The frame's rANS coding runs on the device (`detail::DeviceFrameWriter`,
 built by `Encoder::create`, which fails if its kernels do not build): the
 forward output stays in VRAM, the forward's batch also counts every model's
 symbols and each block's coder steps and lays the steps out
 (`detail::StepLayout`, whose header has the formulas: one workgroup scans
 the steps into each entry's place, and the segments' slot sizes into their
-offsets), and only the symbol counts and the layout's two totals cross to
-the host, which builds the tables (`frame_tables`) and sizes the coding's
-buffers. A second batch writes every block's steps in parallel, codes one
-segment per invocation into its slot, packs the streams, and reads back only
-the lengths and the payload. Bulk buffers are device-local and retained; the
-bus carries the counts and tables, 8 bytes of totals and a P-frame's
-survivor count, and the lengths and payload. A segment is one serial chain,
-so smaller segments give the device parallelism at a few percent of size. A
-frame the device cannot hold is refused, never coded on the host.
+offsets), and only the symbol counts, the layout's two totals and a
+P-frame's survivor count cross to the host, which builds the tables
+(`frame_tables`) and sizes the coding's buffers. A second batch writes every
+block's steps in parallel, codes one segment per invocation into its slot,
+packs the streams, and reads back only the lengths and the payload. Bulk
+buffers are device-local and retained; the bus carries the counts and
+tables, 8 bytes of totals and a P-frame's survivor count, and the lengths
+and payload. A segment is one serial chain, so smaller segments give the
+device parallelism at a few percent of size. A frame the device cannot hold
+is refused, never coded on the host.
 Both device coders work on entries, a P-frame's stream positions
 (`ResidentBlocks`): its reference entries, each with a u32 mode, then its new
 blocks, which alone the block list holds; an intra frame is all new blocks.
