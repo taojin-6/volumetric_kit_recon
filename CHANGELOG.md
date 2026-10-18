@@ -8,6 +8,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `tests`: **core 0.10.0 is required to build the tests** (core #36). The
+  cross-family cases of `recon_sensor_gpu_frame_prep`,
+  `recon_sensor_apple_pixel_buffer_importer` and
+  `recon_sensor_picture_readback` run on its `test::TwoFamilyDevice`, and
+  `test_image::make` fills through its `test::write_image`.
 - `examples`: **the codec examples code P-frames, and core 0.9.0 is
   required** (core #35). `encoder_config` maps `codec.intra_period` and
   `codec.update_size`, whose 0 is the encoder's own (core refuses one at a
@@ -175,6 +180,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   texture project through it bit for bit, and the sensor prep's colour test
   to rounding. Tests: `recon_core_pinhole_gpu`, `recon_subproject_glsl`,
   `recon_package_glsl`, `recon_package_quiet_not_found`.
+- `sensor`: **`GpuFramePrepConfig::depth_queue_families`**, the queue
+  families a pass's depth buffers are shared with, as `color_queue_families`
+  are for colour and independently of them, so a renderer on another family
+  can draw points from a frame's depth in place. The buffers have no usage
+  beyond the pass's storage and transfer usage (no vertex usage); left
+  empty, depth stays EXCLUSIVE, as before. `GpuFramePrep::create` now refuses
+  a colour or depth family the device does not have, rather than the first
+  output. `SensorArray::Options::prep` gives it to every pass. Tests:
+  `recon_sensor_gpu_frame_prep`, `recon_sensor_array_process`, and
+  `recon_sensor_depth_lens_fold`, which scans a stand-in Femto Mega depth
+  lens for a fold inside the same-K crop (the 2026-10-16 decision).
 - `codec`: **`EncoderConfig::update_size`**, a P-frame's reference entries
   per update segment, 1 to `kMaxDeviceDecodeSegmentSize` (default 64, as
   before and as measured against 128 and 256), and

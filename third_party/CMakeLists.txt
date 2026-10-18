@@ -35,16 +35,17 @@ include(FetchContent)
 # rather than OFF, as calib does, so an application that turns the tier on keeps
 # it.
 #
-# The pin is core 0.9.0 (138914f, core #35): it adds codec.update_size, refused
-# when explicit at an intra_period of 1, on 0.8.0's codec.intra_period and its
-# escaping of literal '%' characters in CodecMesh's scenario directory before
-# resolving source.path.
+# The pin is core 0.10.0 (7a1219e, core #36's merge): its test support adds
+# TwoFamilyDevice and write_image, which the cross-family tests use, on 0.9.0's
+# codec.update_size, refused when explicit at an intra_period of 1, 0.8.0's
+# codec.intra_period and its escaping of literal '%' characters in CodecMesh's
+# scenario directory before resolving source.path.
 #
 # TODO: pin a core release tag once the core tags its releases.
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG 138914f35c07fe782aaa81055891baa8b55ed782)
+  GIT_TAG 7a1219e5ecaf385778acfc60f4c55eb70053cfb5)
 set(VKC_INSTALL ${VR_INSTALL})
 if(NOT VR_CAMERA_ONLY)
   set(VKC_WITH_VULKAN ON)
@@ -78,6 +79,10 @@ if(NOT VR_CAMERA_ONLY
       "recon's tests need volumetric_kit_core's test support: set "
       "VKC_BUILD_TEST_SUPPORT ON before the first FetchContent_MakeAvailable "
       "of the core")
+endif()
+if(NOT VR_CAMERA_ONLY AND VR_BUILD_TESTS)
+  # The cross-family tests use core 0.10.0's TwoFamilyDevice and write_image.
+  vkc_require_core(0.10.0)
 endif()
 
 # --- nlohmann/json (header-only; private to the targets that parse JSON) -----
