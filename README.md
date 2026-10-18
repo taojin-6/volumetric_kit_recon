@@ -97,8 +97,8 @@ or newer.
 
 Examples and their configuration tests require core 0.9.0 or newer with its
 config tier, for `codec.update_size` and the escaping of literal `%`
-characters in a mesh scenario's directory. The pinned core supplies this
-version.
+characters in a mesh scenario's directory. The tests require core 0.10.0,
+for its two-family test device. The pinned core supplies both.
 
 ### Asset I/O
 

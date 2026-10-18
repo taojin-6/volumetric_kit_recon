@@ -318,7 +318,8 @@ int run(GLFWwindow* window, const Options& opt) {
   array_options.allocator = &rallocator;
   // The colour buffers are what gfx copies into its atlas, so the array's
   // passes share them with gfx's family too -- the same reasoning as the mesh
-  // buffers below, and the same unconditional pair. Depth only recon reads.
+  // buffers below, and the same unconditional pair. Depth stays EXCLUSIVE:
+  // the viewer draws no points.
   array_options.prep.color_queue_families[0] = shared->compute_family();
   array_options.prep.color_queue_families[1] = shared->graphics_family();
   array_options.prep.color_queue_family_count = 2;
