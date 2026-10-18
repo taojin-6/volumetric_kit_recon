@@ -8,6 +8,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `codec`: **frame type 1 is frozen** (the 2026-10-17 freeze decision): its
+  bytes change only on purpose, never incidentally. `codec_replica.json`,
+  now coding every frame, and `codec_mesh_sequence.json` code at period 30.
+  P-frames code no slower than intra on room0 at 1 cm and on Rafa2 at
+  R = 64; at R = 16 they decode no slower and encode up to 4% slower, on the
+  host alone. Tests: `recon_example_config`.
 - `codec`: **the `Encoder` counts a P-frame in the forward's submit**, one
   fence wait fewer per encode. Every frame's bytes and every reachable
   refusal are unchanged, and `"  ..forward"` is one batch. Tests:
@@ -18,13 +24,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `EncoderConfig::resolved_update_size()` gives the U a config codes with:
   `update_size`, or `segment_size` for 0. `Encoder::create` resolves it, and
   `validate` accepts 0. Nothing changes at R = 64; at R = 16, P-frames
-  decode level with intra for about 4% more bytes. Type 1 stays
-  experimental, and its format and goldens are unchanged. Migrating: read
-  `resolved_update_size()` where you read `update_size`; set
-  `update_size = 64` to keep the old P-frames at another segment size.
-  `encoder_config` copies `codec.update_size` as given, and the examples
-  print the resolved size. Tests: `recon_codec_params`,
-  `recon_codec_encoder`, `recon_codec_inter`, `recon_example_config`.
+  decode level with intra for about 4% more bytes. Type 1's format and
+  goldens are unchanged. Migrating: read `resolved_update_size()` where you
+  read `update_size`; set `update_size = 64` to keep the old P-frames at
+  another segment size. `encoder_config` copies `codec.update_size` as
+  given, and the examples print the resolved size. Tests:
+  `recon_codec_params`, `recon_codec_encoder`, `recon_codec_inter`,
+  `recon_example_config`.
 - `tests`: **core 0.10.0 is required to build the tests** (core #36). The
   cross-family cases of `recon_sensor_gpu_frame_prep`,
   `recon_sensor_apple_pixel_buffer_importer` and
@@ -42,13 +48,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   stage rows (`encode_stages`, `decode_stages`) and rANS share, and at a
   period above 1 a GOP's bitrate (`gop_bytes`); and any failure after the
   encode makes the next frame an I-frame (`Encoder::force_intra`). The
-  sweep codes every row intra. The templates keep period 1 while type 1 is
-  experimental. Migrating: read the CSV's columns by name, or shift
-  those after `frame` by one; pass the frame type to `make_codec_row` after
-  the index; seek a stream from its keys, which are now the I-frames alone;
-  set `codec.update_size` only with a `codec.intra_period` above 1. Tests:
-  `recon_example_codec_stream`, `recon_example_config`,
-  `recon_codec_mesh_run`, `recon_codec_mesh_config_entry`.
+  sweep codes every row intra. Migrating: read the CSV's columns by name,
+  or shift those after `frame` by one; pass the frame type to
+  `make_codec_row` after the index; seek a stream from its keys, which are
+  now the I-frames alone; set `codec.update_size` only with a
+  `codec.intra_period` above 1. Tests: `recon_example_codec_stream`,
+  `recon_example_config`, `recon_codec_mesh_run`,
+  `recon_codec_mesh_config_entry`.
 - CI: **a Homebrew upgrade on the Mac starts the dependency build fresh.**
   The macOS legs' dependency cache keys on the installed versions of their
   Homebrew formulae and of all they depend on (the core's `homebrew-key`
@@ -215,10 +221,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `Encoder::create` makes first and a caller can make before any GPU work.
   Tests: `recon_codec_encoder`, `recon_codec_inter`; golden P-frames pin type
   1's bytes, and through REFERENCE `frame_hash`'s, for the oracle and the
-  device (`recon_codec_inter_bitstream`, `recon_codec_device_frame`), but
-  type 1 stays experimental: at R = 16 its P-frames code slower than intra,
-  and its freeze waits on a decision about interleaved rANS lanes (the
-  2026-10-16 decision).
+  device (`recon_codec_inter_bitstream`, `recon_codec_device_frame`).
 - `examples`: **`codec_mesh` codes a numbered mesh sequence**
   (`codec_mesh_sequence.json`, Rafa2's frames 1–150). `source.path` may
   hold a printf-style frame number (`%05d`; `%%` for a literal `%`), and
@@ -297,7 +300,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (codec frames) is the one defined. Tests: `recon_stream_container`,
   `recon_stream_recovery`, `recon_stream_footer`.
 - `codec`: **P-frames (frame type 1) in the v3 frame, host writer and
-  reader** (internal, experimental until frozen).
+  reader** (internal).
   A P-frame codes a frame against the one before it, which a REFERENCE
   section names by XXH64 of its bytes (`frame_hash.hpp`): a mode for each
   reference block (keep, skip, zero or remove; motion reserved) in update
@@ -313,10 +316,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   counts entries (`kMaxDeviceDecodeSegmentSize`). The `Encoder` is
   unchanged. See the 2026-10-12 P-frame decision. Test:
   `recon_codec_device_frame`.
-- `codec`: **the `Decoder` decodes P-frames** (experimental until frozen)
-  against the frame it decoded last, which it keeps on the device as
-  decoded, into any grid of the frame's geometry. A
-  P-frame whose reference it does not hold is `NotFound`: the stream's
+- `codec`: **the `Decoder` decodes P-frames** against the frame it decoded
+  last, which it keeps on the device as decoded, into any grid of the
+  frame's geometry. A P-frame whose reference it does not hold is
+  `NotFound`: the stream's
   P-frames decode again from its next I-frame. A refusal or a failure keeps
   the reference, so a resize and the same frame again recovers as before.
   `FrameType` is public (`codec_params.hpp`), `FrameInfo::type` reports it,
@@ -324,10 +327,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   too, now goes through one apply kernel and is hashed, at a cost the
   2026-10-13 decision measures. Tests: `recon_codec_inter`, and type cases
   in `recon_codec_decoder`.
-- `codec`: **the `Encoder` writes P-frames** (experimental until frozen) at
-  `EncoderConfig::intra_period` above 1: an I-frame first, then every
-  period, after `Encoder::force_intra()`, on a grid of other geometry, for
-  a grid of no blocks and after one, and otherwise a zero-motion P-frame
+- `codec`: **the `Encoder` writes P-frames** at `EncoderConfig::intra_period`
+  above 1: an I-frame first, then every period, after
+  `Encoder::force_intra()`, on a grid of other geometry, for a grid of no
+  blocks and after one, and otherwise a zero-motion P-frame
   against the frame it returned last, which it keeps on the device as it
   coded it. Only a frame returned moves that reference; a
   P-frame decodes to exactly the grid the I-frame of the same content does.

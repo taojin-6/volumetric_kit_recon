@@ -17,7 +17,7 @@ directory are escaped automatically when resolving a relative mesh path.
 | Executable | Starting configuration | Work |
 | --- | --- | --- |
 | `fuse_replica` | [fuse_replica.json](examples/fuse_replica.json) | Dataset to PLY |
-| `codec_replica` | [codec_replica.json](examples/codec_replica.json) | Dataset fusion and codec study |
+| `codec_replica` | [codec_replica.json](examples/codec_replica.json) | Dataset fusion coded frame by frame, and codec study |
 | `codec_mesh` | [codec_mesh.json](examples/codec_mesh.json) | One mesh, placed in metres, and codec study |
 | `codec_mesh` | [codec_mesh_sequence.json](examples/codec_mesh_sequence.json) | Numbered mesh sequence under one placement, coded frame by frame |
 | `fuse_orbbec` | [fuse_orbbec.json](examples/fuse_orbbec.json) | Live camera/rig to PLY |
@@ -64,10 +64,10 @@ limit both acquired sets and drawn frames. `codec_mesh` counts exactly:
 `codec.intra_period` N codes an I-frame and then up to N − 1 P-frames,
 counted in coded frames. A frame with no observed block, and the frame after
 it, are I-frames whatever the period, and the count restarts at every
-I-frame. The templates keep 1, every frame intra, while P-frames are
-experimental. `codec.update_size` sets the P-frames' update segments, so
-core refuses it, even as 0, at a `codec.intra_period` of 1 or with
-`codec.inspect_only`.
+I-frame. `codec_replica.json` and `codec_mesh_sequence.json` use 30;
+`codec_mesh.json`, one frame, keeps 1. `codec.update_size` sets the
+P-frames' update segments, so core refuses it, even as 0, at a
+`codec.intra_period` of 1 or with `codec.inspect_only`.
 
 `fuse_orbbec` accepts `diagnostics.readback: true` in either a stream or fusion
 scenario. It copies every set's luma to host memory and reports a separate
