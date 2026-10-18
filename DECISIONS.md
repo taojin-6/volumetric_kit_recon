@@ -5138,6 +5138,15 @@ the grids they fuse. A grow shows in `num_buckets`, so the call counts none.
 1–150) write byte-identical streams, and CSV frame, type, bytes and blocks
 columns, against main.
 
+Both helpers contain host allocation failures. `make_decode_grid` includes
+header diagnostics and grid creation in its exception boundary. Once a
+decode succeeds, aggregating its optional metrics cannot turn it into a
+failure: the reference has committed, so reporting failure would invite a
+retry against the wrong reference. A merge that runs out of host memory
+leaves the caller's prior metrics intact and returns decode success.
+`recon_codec_decode_grid_oom` injects the diagnostic and merge failures and
+checks that the following P-frame still decodes to the expected grid.
+
 The third of the 2026-09-26 entry's five PRs, and the first public API the
 codec has had: `codec/encoder.hpp` (`Encoder`, `EncoderConfig`) and
 `codec/decoder.hpp` (`Decoder`, `FrameInfo`, `read_frame_info`). Both hold the

@@ -200,7 +200,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `vr_example::player_grid(device, allocator, frame)` is
   `codec::make_decode_grid(device, allocator, frame.data(), frame.size())`;
   `decode_growing` takes the frame's pointer and size and counts no grows,
-  which show as a larger `num_buckets`. Tests: `recon_codec_decode_grid`,
+  which show as a larger `num_buckets`. Factory host allocation failures
+  return `OutOfMemory`, including header diagnostics. A metrics merge that
+  runs out of host memory preserves the prior metrics and the successful
+  decode result, whose reference has already committed. Tests:
+  `recon_codec_decode_grid`, `recon_codec_decode_grid_oom`,
   `recon_example_codec_stream`, `recon_example_mesh_sequence`.
 - `core`: **`core/shaders/pinhole.glsl`**, recon's GLSL pinhole, exported
   for a consumer's kernels: `vr_world_to_camera`, `vr_unproject_pinhole`,

@@ -1489,7 +1489,11 @@ decoder never grows one. Beside it, as `tsdf::Fuser` grows for fusion,
 `decode_grid.hpp` holds a player's growth: `make_decode_grid` builds a
 grid from a frame's header, its heap twice the frame's blocks, and
 `decode_growing` decodes into it, growing it once on `OutOfMemory` and
-decoding again twice at most on `IoError`. Lock contention that
+decoding again twice at most on `IoError`. The factory contains host allocation
+failures from header parsing through grid creation. The growing decode merges
+only its successful attempt's metrics; if that merge runs out of host memory,
+the caller's prior metrics stay unchanged and the decode still succeeds, since
+its reference has committed. Lock contention that
 outlasts four rounds is `IoError`, never `OutOfMemory`, and a free heap
 that refuses a removed block is `InvalidArgument`. A failure after the
 grid has changed leaves it holding neither frame until a decode
