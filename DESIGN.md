@@ -1376,11 +1376,10 @@ decoding.
 
 The codec is implemented, intra frames and P-frames (frame type 1), and it
 codes and decodes on the device alone (2026-10-13): the host does the I/O
-around it (a frame's
-bytes, and their hash) and the control (a frame's header, sections and
-tables, and small counts and status words read back). The CPU rANS coder is
-the tests' oracle, under `tests/` (`codec_oracle*.hpp`), which pins the
-format's bytes.
+around it (a frame's bytes, and their hash) and the control (a frame's
+header, sections and tables, and small counts and status words read back).
+The CPU rANS coder is the tests' oracle, under `tests/`
+(`codec_oracle*.hpp`), which pins the format's bytes.
 Quantization is one scalar quantizer with a step per DCT basis (2026-10-02):
 `step[u,v,w] = quantization_scale * quantization_weights[u + 8*v + 64*w]`.
 DC is the table's first entry. All blocks share the same 512-entry table, but
@@ -1539,10 +1538,10 @@ The v3 frame (`bitstream.hpp`, the 2026-10-02 entry) carries the K kept
 weights in its parameter header, `44 + 4K` bytes (300 at K = 64); older
 versions are refused. `read_frame_info` reads them without entropy decoding.
 Header byte 6 is the frame type (`FrameType`, which `read_frame_info`
-reports): intra (0), or a P-frame (1), coded against the frame
-before it as `bitstream.hpp` lays out and the 2026-10-12 entry explains. The
-device writer and reader, and the oracle's, code both, and the `Decoder`
-decodes both; every reader refuses a later type as `Unsupported`.
+reports): intra (0), or a P-frame (1), coded against the frame before it
+as `bitstream.hpp` lays out and the 2026-10-12 entry explains. The device
+writer and reader, and the oracle's, code both, and the `Decoder` decodes
+both; every reader refuses a later type as `Unsupported`.
 The payload is segments of R sorted
 blocks (default 64). Each segment is one independent rANS stream
 (`rans.hpp`: a 32-bit state, 16-bit words and 12-bit probabilities, integer

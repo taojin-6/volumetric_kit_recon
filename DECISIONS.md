@@ -616,8 +616,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   Frame type 1 is frozen: the golden rule binds its rows and the worked
   example, and `codec_replica.json` and `codec_mesh_sequence.json` code at
   period 30. The re-measure missed one comparison, Rafa2's encode at
-  R = 16, where P-frames take 4% longer than intra on the host alone; the
-  user froze type 1 anyway, and trimming that overhead is next.
+  R = 16, where P-frames take up to 4% longer than intra on the host alone;
+  the user froze type 1 anyway, and trimming that overhead is next.
 
 ## Decision record
 
@@ -13762,8 +13762,9 @@ no value changes. Mode 4 stays reserved for motion, which its rule (the
 
 **The re-measure,** its protocol declared before it ran, on main `d71fe849`
 (core `7a1219e`), Apple M5 Max, MoltenVK, Release. The scenarios are the
-committed templates with `source.path`, `output.csv` and `output.stream`
-set and `codec.sweep` off; r16 adds `codec.segment_size` 16. None sets
+committed templates with `source.path` and `output.csv` set and
+`codec.sweep` off, and `output.stream` in the first measured run; d1 adds
+`fusion.dynamic` true, and r16 `codec.segment_size` 16. None sets
 `update_size`, so U = R. Each input also ran at period 1. A warm-up, then
 10 runs, each pass over the 8 configurations in a shuffled order; a type's
 time is the median over the runs of its mean host ms (the printed
@@ -13789,17 +13790,17 @@ and count changes before they merged, failed the same comparison under (b)
 by 13 µs.
 
 **The gap is the host's.** r16's device time is level, 0.551 against
-0.554 ms, so the 56 µs is host-side recording and submit, as the stage rows
-show: a P-frame's `..forward` takes 0.503 ms against an I-frame's 0.415
-(every frame). Nothing the format decides is in it, so no format change,
-interleaved rANS lanes included, would remove it, and the user froze type 1
-anyway.
+0.554 ms, so the 56 µs is host time, recording and submit (a P-frame's
+`..forward`, which waits on its diff too, takes 0.503 ms against an
+I-frame's 0.415, every frame). Nothing the format decides is in it, so no
+format change, interleaved rANS lanes included, would remove it, and the
+user froze type 1 anyway.
 
 **Bytes and accuracy.** c1, d1 and r64's period-30 streams are the
 2026-10-16 entry's byte for byte, and r16's frames have its U = 16 run's
-bytes (4,442,994 in all). Every configuration wrote the same bytes in all
-10 runs, and accuracy, coverage and F-score at period 30 equal period 1's
-on each input.
+bytes (4,442,994 in all). Every configuration's CSV frame, type and bytes
+columns match in all 10 runs, and accuracy, coverage and F-score at period
+30 equal period 1's on each input.
 
 **The templates.** `codec_replica.json` codes every frame at period 30
 (`encode_every` 1; its 0 coded only the final grid), then sweeps;
@@ -13814,10 +13815,8 @@ no slower than intra's.
 **Validation.** Apple M5 Max, Release with warnings as errors and Assimp,
 core `7a1219e`: the 93 tests pass under the validation layer, and the codec
 and example tests under synchronization validation too.
-`recon_example_config` checks what each codec template loads as and maps
-to: period 30 at U = R = 64 for `codec_replica.json`, coding every frame,
-and for the sequence, and period 1 for the single mesh. Five planted bugs
-each failed it: `codec_replica.json` at period 1 or at `encode_every` 0, the
+`recon_example_config` checks each template's settings above, through
+`encoder_config`. Five planted bugs each failed it: `codec_replica.json` at period 1 or at `encode_every` 0, the
 sequence without its `codec` section or at a fixed `update_size` of 64, and
 the single mesh at 30. The golden rows pass unchanged
 (`recon_codec_bitstream`, `recon_codec_inter_bitstream`,

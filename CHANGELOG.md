@@ -26,12 +26,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `update_size`, or `segment_size` for 0. `Encoder::create` resolves it, and
   `validate` accepts 0. Nothing changes at R = 64; at R = 16, P-frames
   decode level with intra for about 4% more bytes. Type 1's format and
-  goldens are unchanged. Migrating: read
-  `resolved_update_size()` where you read `update_size`; set
-  `update_size = 64` to keep the old P-frames at another segment size.
-  `encoder_config` copies `codec.update_size` as given, and the examples
-  print the resolved size. Tests: `recon_codec_params`,
-  `recon_codec_encoder`, `recon_codec_inter`, `recon_example_config`.
+  goldens are unchanged. Migrating: read `resolved_update_size()` where you
+  read `update_size`; set `update_size = 64` to keep the old P-frames at
+  another segment size. `encoder_config` copies `codec.update_size` as
+  given, and the examples print the resolved size. Tests:
+  `recon_codec_params`, `recon_codec_encoder`, `recon_codec_inter`,
+  `recon_example_config`.
 - `tests`: **core 0.10.0 is required to build the tests** (core #36). The
   cross-family cases of `recon_sensor_gpu_frame_prep`,
   `recon_sensor_apple_pixel_buffer_importer` and
@@ -52,10 +52,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   sweep codes every row intra. Migrating: read the CSV's columns by name,
   or shift those after `frame` by one; pass the frame type to
   `make_codec_row` after the index; seek a stream from its keys, which are
-  now the I-frames alone;
-  set `codec.update_size` only with a `codec.intra_period` above 1. Tests:
-  `recon_example_codec_stream`, `recon_example_config`,
-  `recon_codec_mesh_run`, `recon_codec_mesh_config_entry`.
+  now the I-frames alone; set `codec.update_size` only with a
+  `codec.intra_period` above 1. Tests: `recon_example_codec_stream`,
+  `recon_example_config`, `recon_codec_mesh_run`,
+  `recon_codec_mesh_config_entry`.
 - CI: **a Homebrew upgrade on the Mac starts the dependency build fresh.**
   The macOS legs' dependency cache keys on the installed versions of their
   Homebrew formulae and of all they depend on (the core's `homebrew-key`
@@ -318,9 +318,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   unchanged. See the 2026-10-12 P-frame decision. Test:
   `recon_codec_device_frame`.
 - `codec`: **the `Decoder` decodes P-frames** against the frame it decoded
-  last, which it keeps on the device as
-  decoded, into any grid of the frame's geometry. A
-  P-frame whose reference it does not hold is `NotFound`: the stream's
+  last, which it keeps on the device as decoded, into any grid of the
+  frame's geometry. A P-frame whose reference it does not hold is
+  `NotFound`: the stream's
   P-frames decode again from its next I-frame. A refusal or a failure keeps
   the reference, so a resize and the same frame again recovers as before.
   `FrameType` is public (`codec_params.hpp`), `FrameInfo::type` reports it,
@@ -328,10 +328,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   too, now goes through one apply kernel and is hashed, at a cost the
   2026-10-13 decision measures. Tests: `recon_codec_inter`, and type cases
   in `recon_codec_decoder`.
-- `codec`: **the `Encoder` writes P-frames** at
-  `EncoderConfig::intra_period` above 1: an I-frame first, then every
-  period, after `Encoder::force_intra()`, on a grid of other geometry, for
-  a grid of no blocks and after one, and otherwise a zero-motion P-frame
+- `codec`: **the `Encoder` writes P-frames** at `EncoderConfig::intra_period`
+  above 1: an I-frame first, then every period, after
+  `Encoder::force_intra()`, on a grid of other geometry, for a grid of no
+  blocks and after one, and otherwise a zero-motion P-frame
   against the frame it returned last, which it keeps on the device as it
   coded it. Only a frame returned moves that reference; a
   P-frame decodes to exactly the grid the I-frame of the same content does.
