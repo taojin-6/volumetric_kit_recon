@@ -1149,7 +1149,9 @@ decision): unprojection and rescaling come with their first caller.
   version 2 under version 1's `device_calibration` key: per sensor by serial,
   an optional colour-camera pose, colour and depth `CameraCalibration`s
   (model and `factory` / `calibrated` source) and `depth_to_color`, and an
-  optional world sensor. `format_` / `write_array_calibration` write it
+  optional world: a sensor at the origin, or a printed tag
+  (`AprilTagWorld`, in OpenCV's marker axes, z up out of a floor tag).
+  `format_` / `write_array_calibration` write it
   through the core's `write_file`; version 1 is read for its poses.
 
 ### sensor
