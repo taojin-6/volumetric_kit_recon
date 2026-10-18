@@ -1422,8 +1422,9 @@ lacks takes its place among the new blocks from those ranks. A residual of
 (`emit_payload` walked at `bit_length + 1` bits a symbol, 8 a byte symbol,
 plus raw bits) puts strictly below its residual's. Only the device knows the
 new blocks' count, so a P-frame's symbols are counted in a second submit,
-at `EncoderConfig::update_size` entries an update segment (default 64,
-`kDefaultUpdateSize`). `EncoderConfig::validate` holds the config's checks,
+at `EncoderConfig::update_size` entries an update segment
+(`EncoderConfig::resolved_update_size()`: the segment size unless the caller
+sets one). `EncoderConfig::validate` holds the config's checks,
 which `create` makes first.
 The frame's rANS coding runs on the device (`detail::DeviceFrameWriter`,
 built by `Encoder::create`, which fails if its kernels do not build): the
@@ -1762,11 +1763,10 @@ startup and diagnostics, and `replica_config.hpp`, `orbbec_config.hpp` and
 `codec_config.hpp` only copy validated settings into runtime API types and
 attach resources, except that the codec's rules stay the codec's:
 `encoder_config` maps `codec.quantization_table` to the weights
-(`codec_quantization.hpp`, the tables' one home) and a `codec.update_size`
-of 0 to the encoder's own, and before GPU setup refuses what
-`EncoderConfig::validate` refuses: a step out of the codec's bounds, or a
-segment or update size past the longest. No local parser, flag registration
-or config validator remains.
+(`codec_quantization.hpp`, the tables' one home), and before GPU setup
+refuses what `EncoderConfig::validate` refuses: a step out of the codec's
+bounds, or a segment or update size past the longest. No local parser, flag
+registration or config validator remains.
 [Configuration examples](config/README.md) document paths, defaults and
 migration from the previous CLI.
 
@@ -1971,12 +1971,10 @@ and a per-triangle tile
 index in gfx so a shared mesh can be textured from several views; and the
 multi-keyframe post-scan atlas, which the multi-view path can carry.
 
-**On `codec`**, P-frames stay experimental (the 2026-10-16 entry): at
-R = 16 they code slower than intra, their 64-entry update segments giving
-the device a quarter of an I-frame's segments and their encode a second
-submit to count symbols. The freeze waits on whether to interleave rANS
-lanes within an update segment, a format change; encode needs the count
-moved into the forward's submit as well, a `TODO(codec)`.
+**On `codec`**, P-frames stay experimental (the 2026-10-17 entry): at
+R = 16 their encode is slower than intra by its second submit to count
+symbols, which moves into the forward's submit next (a `TODO(codec)`); the
+freeze follows that change and a re-measure.
 
 **On `tsdf`**, mesh → TSDF has its two modes (2026-09-27), a second way into
 the grid the codec encodes: a mesh sequence converts frame by frame. Both modes

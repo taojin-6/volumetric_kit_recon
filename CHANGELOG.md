@@ -8,6 +8,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `codec`: **a P-frame's update size defaults to the segment size**
+  (BREAKING). `EncoderConfig{}.update_size` is 0, and
+  `EncoderConfig::resolved_update_size()` gives the U a config codes with:
+  `update_size`, or `segment_size` for 0. `Encoder::create` resolves it, and
+  `validate` accepts 0. Nothing changes at R = 64; at R = 16, P-frames
+  decode level with intra for about 4% more bytes. Type 1 stays
+  experimental, and its format and goldens are unchanged. Migrating: read
+  `resolved_update_size()` where you read `update_size`; set
+  `update_size = 64` to keep the old P-frames at another segment size.
+  `encoder_config` copies `codec.update_size` as given, and the examples
+  print the resolved size. Tests: `recon_codec_params`,
+  `recon_codec_encoder`, `recon_codec_inter`, `recon_example_config`.
 - `tests`: **core 0.10.0 is required to build the tests** (core #36). The
   cross-family cases of `recon_sensor_gpu_frame_prep`,
   `recon_sensor_apple_pixel_buffer_importer` and
