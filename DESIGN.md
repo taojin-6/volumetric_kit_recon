@@ -1419,7 +1419,8 @@ lacks takes its place among the new blocks from those ranks. A residual of
 −32768 codes zero, and so does a block whose target payload a static price
 (`emit_payload` walked at `bit_length + 1` bits a symbol, 8 a byte symbol,
 plus raw bits) puts strictly below its residual's. Only the device knows the
-new blocks' count, so a P-frame's symbols are counted in a second submit,
+new blocks' count, so the forward's submit counts a P-frame over M plus the
+frame's blocks, and the device takes the survivors off (`counted_entries`),
 at `EncoderConfig::update_size` entries an update segment
 (`EncoderConfig::resolved_update_size()`: the segment size unless the caller
 sets one). `EncoderConfig::validate` holds the config's checks,
@@ -1435,10 +1436,10 @@ the host, which builds the tables (`frame_tables`) and sizes the coding's
 buffers. A second batch writes every block's steps in parallel, codes one
 segment per invocation into its slot, packs the streams, and reads back only
 the lengths and the payload. Bulk buffers are device-local and retained; the
-bus carries the counts and tables, 8 bytes of totals, and the lengths and
-payload. A segment is one serial chain, so smaller segments give the device
-parallelism at a few percent of size. A frame the device cannot hold is
-refused, never coded on the host.
+bus carries the counts and tables, 8 bytes of totals and a P-frame's
+survivor count, and the lengths and payload. A segment is one serial chain,
+so smaller segments give the device parallelism at a few percent of size. A
+frame the device cannot hold is refused, never coded on the host.
 Both device coders work on entries, a P-frame's stream positions
 (`ResidentBlocks`): its reference entries, each with a u32 mode, then its new
 blocks, which alone the block list holds; an intra frame is all new blocks.
@@ -1969,10 +1970,9 @@ and a per-triangle tile
 index in gfx so a shared mesh can be textured from several views; and the
 multi-keyframe post-scan atlas, which the multi-view path can carry.
 
-**On `codec`**, P-frames stay experimental (the 2026-10-17 entry): at
-R = 16 their encode is slower than intra by its second submit to count
-symbols, which moves into the forward's submit next (a `TODO(codec)`); the
-freeze follows that change and a re-measure.
+**On `codec`**, P-frames stay experimental (the 2026-10-17 entries): a
+re-measure of their encode at R = 16, now counted in the forward's submit,
+decides type 1's freeze.
 
 **On `tsdf`**, mesh → TSDF has its two modes (2026-09-27), a second way into
 the grid the codec encodes: a mesh sequence converts frame by frame. Both modes
