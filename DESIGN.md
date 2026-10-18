@@ -97,7 +97,8 @@ links that base tier alone.
   core's one umbrella header (`core/vulkan/vulkan.hpp`) — no other code
   includes `<vulkan/...>` directly.
 - **`volume`** — the sparse voxel hash map in Vulkan buffers; allocate / compact
-  / rehash as compute shaders, and a stateless `grow_grid` helper.
+  / rehash as compute shaders, a stateless `grow_grid` helper, and a default
+  hash layout (`kDefaultBucketSize`, `kDefaultMaxChain`).
 - **`tsdf`** — TSDF integration compute shaders (classic + dynamic), the
   `Fuser` that fuses a set of frames (grow, allocate, integrate), and a
   triangle mesh's distance field written in (signed, or as a shell).

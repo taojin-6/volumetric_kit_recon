@@ -5130,10 +5130,10 @@ changes that reference.
 frame; a player's growth sits beside it in the codec, as the `Fuser`'s sits
 in `tsdf`. `make_decode_grid` and `decode_growing` (`codec/decode_grid.hpp`)
 moved from the examples, so a player outside recon, the next app, decodes a
-`.vrst` into a growing grid from one copy. The grid keeps the examples'
-layout, buckets of 8 and chains of up to 128, as constants private to the
-codec, since the volume tier has no default; the examples keep theirs for
-the grids they fuse. A grow shows in `num_buckets`, so the call counts none.
+`.vrst` into a growing grid from one copy. The grid has the examples'
+layout, the volume tier's default (`volume::kDefaultBucketSize`,
+`volume::kDefaultMaxChain`). A grow shows in `num_buckets`, so the call
+counts none.
 `codec_replica` (room0 at 1 cm, period 30) and `codec_mesh` (Rafa2's frames
 1–150) write byte-identical streams, and CSV frame, type, bytes and blocks
 columns, against main.
