@@ -13890,8 +13890,11 @@ keeps one home for what the world is.
   `InvalidArgument`; any other world kind is still `Unsupported`.
 
 **Validation.** Apple M5 Max, macOS, Release with warnings as errors:
-the 93 tests pass under the validation layer, and the camera tier alone,
-with no Vulkan, builds and passes. Six planted bugs each failed a test: the
+the default build's 89 tests pass under the validation layer, and so do
+108 of 112 with the Orbbec SDK 2.10.6, FFmpeg, Assimp and the viewer. The
+other four start `fuse_orbbec`, `fuse_render` and the viewers, and were
+not run on that laptop; CI runs them. The camera tier alone, with no
+Vulkan, builds and passes. Six planted bugs each failed a test: the
 writer dropping the tag, a world with both kinds accepted, an id of -1
 accepted, an infinite size accepted, the tag read but not kept, and a tag
 world that needs a sensor at the origin. No camera was opened.
