@@ -1486,13 +1486,13 @@ carry any other one stale. A grid too small for the frame is `OutOfMemory`,
 whether its heap has too few slots or its hash table cannot place the
 blocks. Both are recovered by growing the grid and decoding again; the
 decoder never grows one. Beside it, as `tsdf::Fuser` grows for fusion,
-`decode_grid.hpp` holds a player's growth: `make_decode_grid` builds a grid
-from a frame's header, its heap twice the frame's blocks, and
+`decode_grid.hpp` holds a player's growth: `make_decode_grid` builds a
+grid from a frame's header, its heap twice the frame's blocks, and
 `decode_growing` decodes into it, growing it once on `OutOfMemory` and
-decoding again twice at most on `IoError`. Lock
-contention that outlasts four rounds is `IoError`, never `OutOfMemory`, and
-a free heap that refuses a removed block is `InvalidArgument`. A failure
-after the grid has changed leaves it holding neither frame until a decode
+decoding again twice at most on `IoError`. Lock contention that
+outlasts four rounds is `IoError`, never `OutOfMemory`, and a free heap
+that refuses a removed block is `InvalidArgument`. A failure after the
+grid has changed leaves it holding neither frame until a decode
 succeeds. A P-frame decodes against the frame the `Decoder` decoded last,
 which `detail::ReferenceStore` keeps as decoded: its quantized coefficients,
 masks and block list on the device, in the inverse's layout, and its
@@ -1735,11 +1735,11 @@ with a key in 30 records or 14 ms with every record a key (a 27.6 MB index).
 `examples/common/fuse_frame.hpp`'s `fuse_set`, which hands each
 `DeviceFrame` over with its encoding declaration and prints what a set did
 to the grid (a grow, a declined one, blocks left out), into the one grid layout
-`grid_layout.hpp` defines, which its `create_fusion_grid` builds. `fuse_set`'s
-caller names the integration
-mode, the one `fusion.dynamic` selects (`integration_mode`): `Classic` unless
-set, except in `rig_viewer`, whose default is `Dynamic` and whose View panel
-switches it as the rig runs. The four dataset examples poll their frames
+`grid_layout.hpp` defines, which its `create_fusion_grid` builds.
+`fuse_set`'s caller names the integration mode, the one `fusion.dynamic`
+selects (`integration_mode`): `Classic` unless set, except in
+`rig_viewer`, whose default is `Dynamic` and whose View panel switches
+it as the rig runs. The four dataset examples poll their frames
 through `sensor::IRgbdSensor&` — the fuse loop never learns what is behind
 it — and prepare each on its own. The two live ones read Orbbec cameras raw
 as a `SensorArray` of `OrbbecSensor`s, `fuse_orbbec` one camera or a rig and
@@ -1846,11 +1846,11 @@ draws it.
 **`codec_replica`** fuses a Replica sequence as `fuse_replica` does, and
 streams the growing grid through the codec: every `codec.encode_every` frames it
 encodes, then decodes with `decode_growing` into a player grid
-`make_decode_grid` built from the first frame. It reports the bitrate at the
-coded frame
-rate and, at an intra period above 1, a GOP's (an I-frame and the period's
-P-frames, each at its type's mean), and for each frame type its bytes (mean,
-p50, p95, max) and both calls' stage rows. It then judges the last decoded
+`make_decode_grid` built from the first frame. It reports the
+bitrate at the coded frame rate and, at an intra period above 1, a
+GOP's (an I-frame and the period's P-frames, each at its type's
+mean), and for each frame type its bytes (mean, p50, p95, max) and
+both calls' stage rows. It then judges the last decoded
 surface against the source's, mesh to mesh, with the `eval` tier: accuracy,
 coverage and the F-score at half a voxel, since a fused TSDF is projective
 and sampling it would measure the fusion's bias too. `codec.sweep` prints the
