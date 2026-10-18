@@ -212,11 +212,11 @@ Their `codec` section selects `quantization_table` (`uniform`, `band`,
 every N coded frames, zero-motion P-frames between, experimental; 1, the
 default, codes every frame intra), `update_size` at a period above 1 (a
 P-frame's entries per update segment; 0, the default, takes the segment
-size), and the shared rate-distortion `sweep`, which codes intra. `output.stream`
-records every coded frame in a new `.vrst` file, each I-frame a key (see
-[the stream container](DESIGN.md#stream)), and `output.csv` writes a row per
-decoded frame: its type (`I` or `P`), bytes, blocks, and encode and decode
-host and device ms.
+size), and the shared rate-distortion `sweep`, which codes intra.
+`output.stream` records every coded frame in a new `.vrst` file, each I-frame
+a key (see [the stream container](DESIGN.md#stream)), and `output.csv` writes
+a row per decoded frame: its type (`I` or `P`), bytes, blocks, and encode and
+decode host and device ms.
 
 A mesh scenario gives the head-up direction (`source.up_vector`) and either
 the input's unit (`source.metres_per_unit`) or a height to fit

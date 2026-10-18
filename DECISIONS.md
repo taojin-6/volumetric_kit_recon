@@ -13534,8 +13534,7 @@ size", which `encoder_config` now passes through.
 segments, as many as its reference has coded intra, so the device codes and
 decodes it with at least that parallelism at any R. Nothing changes at
 R = 64. At R = 16 the 2026-10-16 entry's U = 16 runs bring P decode level
-with intra for 3.8% of the stream; P encode stays slower by the second
-count submit, the next change's.
+with intra for 3.8% of the stream.
 
 **Rejected:** `std::optional` (core already uses 0, and every use would
 need `value_or`), a default member initializer (it would not follow a later
@@ -13545,19 +13544,13 @@ tests and core's key).
 
 **Validation.** Apple M5 Max, Release with warnings as errors, core
 `138914f`: the 91 tests pass under the validation layer, and the codec,
-volume and example tests under synchronization validation too. Eight
-planted bugs each failed a test: the helper returning `update_size` alone,
-64 for 0, or `segment_size` alone; `validate` refusing 0, or checking U
-before R; `create` keeping the raw 0; `encoder_config` mapping 0 to 64; and
-`codec_settings` printing the raw field. By hand, on the 2026-10-16
-entry's protocol (host ms, the median of 3 runs, each type's first frame
-dropped): Rafa2 at R = 16 and period 30 with no `update_size` prints update
-segments of 16 entries and writes the U = 16 runs' bytes frame for frame
-(4,442,994), its P-frames decoding in 1.467 ms against its I-frames' 1.499
-and period 1's 1.544, and encoding in 1.697 against 1.485 and 1.509
-(`..forward` 0.678 against 0.400) while device ms stay level (P 0.467
-decode and 0.554 encode, I 0.523–0.575); r64 and c1 keep their bytes; and
-every chain decodes bit for bit to the all-intra stream's grids.
+volume and example tests under synchronization validation too; eight
+planted bugs each failed a test. By hand, on the 2026-10-16 entry's
+protocol: Rafa2 at R = 16 and period 30 with no `update_size` prints update
+segments of 16 and writes the U = 16 runs' bytes; P decode comes level with
+intra (1.467 against 1.499 host ms) while P encode stays slower (1.697
+against 1.485), with device ms level; r64 and c1 keep their bytes; and
+every chain decodes bit for bit.
 
 ## Measured lessons
 
