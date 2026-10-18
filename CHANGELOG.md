@@ -8,6 +8,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `codec`: **the `Encoder` counts a P-frame in the forward's submit**, one
+  fence wait fewer per encode. Every frame's bytes and every reachable
+  refusal are unchanged, and `"  ..forward"` is one batch. Tests:
+  `recon_codec_step_layout`, `recon_codec_device_frame`,
+  `recon_codec_inter`.
 - `codec`: **a P-frame's update size defaults to the segment size**
   (BREAKING). `EncoderConfig{}.update_size` is 0, and
   `EncoderConfig::resolved_update_size()` gives the U a config codes with:

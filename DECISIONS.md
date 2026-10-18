@@ -553,7 +553,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   forward made it and moved only when `encode` returns one; five rules make
   an I-frame; the split, the diff and a static price for zero run on the
   device. *Amended 2026-10-16:* a sixth rule, an empty grid; U is
-  `EncoderConfig::update_size`.
+  `EncoderConfig::update_size`. *Amended 2026-10-17:* a P-frame is counted
+  in the forward's submit.
 - [**2026-10-14**](#2026-10-14--mesh-normalization-and-the-topology-audit-are-opt-in-generic-io-helpers-for-a-mesh-sequence-bounds-measured-along-one-up-and-joined-over-frames-and-one-transform-for-every-frame-amends-the-2026-10-02-normalized-mesh-and-2026-10-03-codec-mesh-entries) —
   Mesh normalization and the topology audit are opt-in, generic `io`
   helpers for a mesh sequence: bounds measured along one up and joined over
@@ -601,6 +602,11 @@ entries relevant to your task; later amendments supersede earlier rules.
   (`resolved_update_size()`, resolved once in `Encoder::create`); the format
   and the goldens are unchanged. No lanes: the freeze waits on the encode's
   count moving into the forward's submit, and a re-measure.
+- [**2026-10-17**](#2026-10-17--a-p-frame-is-counted-in-the-forwards-submit-its-count-and-step-layout-run-over-m-plus-the-frames-blocks-the-device-takes-off-the-diffs-survivors-and-an-encode-waits-on-one-fence-fewer-amends-the-2026-10-14-encoder-entry) —
+  A P-frame is counted in the forward's submit: its count and step layout
+  run over M plus the frame's blocks, the device takes off the diff's
+  survivors, and an encode waits on one fence fewer (amends the 2026-10-14
+  encoder entry).
 
 ## Decision record
 
@@ -12973,8 +12979,9 @@ diff's own first search instead: both need the store's two slots, and a
 split of its own would write a target an entry only for the diff to read.
 8 bytes come back, the survivor count, from which the host takes A for the
 count, so a P-frame counts its symbols in a second submit: 4 fence waits
-an encode with the map's list held, against an I-frame's 3. U is
-`kDefaultUpdateSize`, 64. *Amended 2026-10-16:* U is
+an encode with the map's list held, against an I-frame's 3. *Amended
+2026-10-17:* counted in the forward's submit, 3 (the 2026-10-17 count
+entry). U is `kDefaultUpdateSize`, 64. *Amended 2026-10-16:* U is
 `EncoderConfig::update_size`, default 64. *Amended 2026-10-17:* default the
 segment size.
 
@@ -13600,7 +13607,8 @@ before its raw corners or one that moves raw pixels less than measured.
 neither: no interleaved rANS lanes, a format change, and no freeze with
 P-frames slower than intra at small R. U defaults to R instead; a P-frame's
 count moves into the forward's submit next (the `TODO(codec)` in
-`encoder.cpp`), and type 1's freeze follows a re-measure.
+`encoder.cpp`), and type 1's freeze follows a re-measure. *Amended
+2026-10-17:* the count moved (the next entry).
 
 **The rule.** `EncoderConfig::update_size` 0, the default, takes
 `segment_size`; an explicit 1 to `kMaxDeviceDecodeSegmentSize` still wins.
@@ -13634,6 +13642,93 @@ segments of 16 and writes the U = 16 runs' bytes; P decode comes level with
 intra (1.467 against 1.499 host ms) while P encode stays slower (1.697
 against 1.485), with device ms level; r64 and c1 keep their bytes; and
 every chain decodes bit for bit.
+
+### 2026-10-17 — A P-frame is counted in the forward's submit: its count and step layout run over M plus the frame's blocks, the device takes off the diff's survivors, and an encode waits on one fence fewer (amends the 2026-10-14 encoder entry).
+
+**The bound.** `ReferenceStore::record_diff` returns the P-frame's entries
+as its batch leaves them, `ResidentBlocks::bounded`: M + n positions, of
+which the `ranks[M]` survivors are counted twice, as a reference entry and
+as a frame block, so the frame's M + A entries are the first
+M + n − `ranks[M]`. `DeviceFrameWriter::record_count` copies that word into
+a 4-byte surplus (binding `ranks` at offset 4M would break
+`minStorageBufferOffsetAlignment`); exact entries zero it. The count kernel
+and `StepLayout` take N from `counted_entries` (`rans_push.glsl`): the
+bound less the surplus, clamped to the new blocks, so a wrong word reads
+nothing past the bound. The layout's segment count follows from N through
+`segment_of`, and lane 0 writes both totals to a buffer of their own, read
+back at offset 0 whatever N the device took.
+
+**Direct over the bound, not indirect.** The `TODO(codec)` asked for an
+indirect count dispatch. Core's `dispatch_indirect` would serve, but its
+arguments need a kernel of their own or `survivor_ranks.comp` tied to the
+writer's width, I-frames would keep a second, direct path, and the layout
+would still need N on the device. Over the bound, a survivor's invocation
+reads one word and returns.
+
+**Where A is read.** The writer reads the surplus back with the counts, and
+`finish` takes the same bounded entries: it refuses a surplus above
+min(M, n), which only a bug makes, and codes the first count − surplus
+entries. `diffed()` and the store's 8-byte readback go, so one frame has one
+entry set. A comes from the device's survivor count and the frame's block
+count from the mode counts, so the encoder's check that the frame holds
+every block the forward made still compares two results.
+
+**Bytes and refusals.** The count walks the M + A entries it walked before,
+so every frame's bytes, the goldens', and every reachable refusal are
+unchanged. `record_count`'s refusals of the bound cannot fire from the
+encoder. An allocation failure in the count now comes before a forward
+reject, as for an I-frame, and the survivor check moves from `diffed()` to
+`finish`, still `InvalidArgument`.
+
+**Fence waits an encode,** counted against a scratch core that counts every
+`vkWaitForFences`, frames of two spheres (433 and 494 blocks), M5 Max:
+
+| Encode | Before | After |
+|---|---|---|
+| I-frame, the map's list held | 3 | 3 |
+| I-frame, compacting | 4 | 4 |
+| P-frame, the map's list held | 4 | 3 |
+| P-frame, compacting | 5 | 4 |
+
+A payload that outgrows `finish`'s read-ahead adds one. Decode is unchanged.
+
+**Hand check.** M5 Max, Release, period 30 at the default U, before
+(`a25fc759`) and after: a warm-up, then three runs of each in shuffled,
+interleaved order; the median of per-type means, host and device apart,
+each type's first frame dropped (`..forward` is the report's P row).
+
+| Input | I encode host | P encode host | P `..forward` | P encode device |
+|---|---|---|---|---|
+| c1, room0 1 cm Classic | 2.979 → 3.034 | 2.204 → 2.011 | 0.933 → 0.740 | 1.117 → 1.097 |
+| d1, room0 1 cm Dynamic | 3.085 → 3.025 | 2.585 → 2.379 | 0.842 → 0.655 | 1.465 → 1.453 |
+| r64, Rafa2 frames 1–150 | 2.553 → 2.567 | 2.530 → 2.327 | 0.670 → 0.491 | 1.382 → 1.358 |
+| r16 | 1.499 → 1.518 | 1.704 → 1.534 | 0.672 → 0.509 | 0.558 → 0.546 |
+
+A P encode's host time falls by 0.17–0.21 ms, `..forward` by 0.16–0.19 ms,
+about twice the 0.10 ms the 2026-09-28 entry's step 5a measured for one
+batch and fence wait. I encode moves by at most 0.06 ms either way, and P
+device time falls by 0.01–0.02 ms though the count covers M + n. Every
+`.vrst` is the same byte for byte, and so are the CSV's frame, type, bytes
+and blocks in every run. At r16 a P-frame now encodes in 1.534 ms against an
+I-frame's 1.518; the re-measure decides the freeze. Not run: the RTX 5090,
+and ASan and UBSan (CI runs them).
+
+**Validation.** Apple M5 Max, Release with warnings as errors, core
+`138914f`: the 91 tests pass under the validation layer, and the codec and
+volume tests under synchronization validation too.
+`recon_codec_step_layout` lays out every frame again with garbage steps
+past N; `recon_codec_device_frame` writes the matrix, the golden P-frames
+and the writer's refusal edits from bounded entries too, over a tail whose
+−32768s a count past N would flag; `recon_codec_inter` counts the diff's
+all-remove frame in its batch. Twelve planted bugs each failed a test: the
+surplus never copied, the layout's segment count from the push, the totals
+read at the bound's end, a device segment count one more at A = 0 (the
+step layout's test alone, as the bytes do not change), the surplus not
+zeroed for exact entries, `finish` coding the bound, the survivor refusal
+dropped, the clamp dropped, the count's exit at the bound, `record_diff`
+leaving the bound unmarked, the surplus copied from `ranks[0]`, and
+`finish` blind to the bound. An encoder that still submits before
+`record_count` passes every test; only the fence count catches it.
 
 ## Measured lessons
 
