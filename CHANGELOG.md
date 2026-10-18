@@ -8,13 +8,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- `codec`: **frame type 1 is frozen** (the 2026-10-17 freeze decision): the
-  golden rule now binds type 1's rows and the worked example.
-  `codec_replica.json`, now coding every frame, and
-  `codec_mesh_sequence.json` code at period 30. P-frames code no slower
-  than intra on room0 at 1 cm and on Rafa2 at R = 64; at R = 16 they decode
-  no slower and encode about 4% slower, on the host alone. Tests:
-  `recon_example_config`.
+- `codec`: **frame type 1 is frozen** (the 2026-10-17 freeze decision): its
+  bytes change only on purpose, never incidentally. `codec_replica.json`,
+  now coding every frame, and `codec_mesh_sequence.json` code at period 30.
+  P-frames code no slower than intra on room0 at 1 cm and on Rafa2 at
+  R = 64; at R = 16 they decode no slower and encode up to 4% slower, on the
+  host alone. Tests: `recon_example_config`.
 - `codec`: **the `Encoder` counts a P-frame in the forward's submit**, one
   fence wait fewer per encode. Every frame's bytes and every reachable
   refusal are unchanged, and `"  ..forward"` is one batch. Tests:

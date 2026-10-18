@@ -524,8 +524,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   P-frames pin type 1's bytes, but its freeze waits on a decision about
   interleaved rANS lanes. *Amended 2026-10-17:* no lanes: U defaults to R,
   and the freeze waits on the encode's count and a re-measure. *Amended
-  2026-10-17:* frozen; the golden rule binds type 1's rows and the worked
-  example.
+  2026-10-17:* frozen, so type 1's bytes change only on purpose.
 - [**2026-10-13**](#2026-10-13--the-decoder-decodes-p-frames-against-the-frame-it-decoded-last-kept-on-the-device-as-decoded-in-two-slots-that-swap-only-when-a-decode-succeeds-one-integer-apply-makes-every-decoded-frame-intra-too-and-it-decodes-on-the-device-alone-amends-the-2026-09-27-encoderdecoder-and-2026-10-03-decoding-entries) —
   The `Decoder` decodes P-frames against the frame it decoded last, kept on
   the device as decoded and replaced only when a decode succeeds; one integer
@@ -612,12 +611,12 @@ entries relevant to your task; later amendments supersede earlier rules.
   run over M plus the frame's blocks, the device takes off the diff's
   survivors, and an encode waits on one fence fewer (amends the 2026-10-14
   encoder entry).
-- [**2026-10-17**](#2026-10-17--frame-type-1-is-frozen-and-the-codec-templates-code-at-period-30-the-golden-rule-binds-type-1s-rows-and-the-worked-example-p-frames-code-no-slower-than-intra-on-room0-at-1-cm-and-on-rafa2-at-r--64-and-at-r--16-decode-no-slower-but-encode-4-slower-on-the-host-alone-amends-the-2026-10-12-p-frame-2026-10-16-codec-examples-and-2026-10-17-update-size-and-count-entries) —
-  Frame type 1 is frozen: the golden rule binds its rows and the worked
-  example, and `codec_replica.json` and `codec_mesh_sequence.json` code at
-  period 30. The re-measure missed one comparison, Rafa2's encode at
-  R = 16, where P-frames take up to 4% longer than intra on the host alone;
-  the user froze type 1 anyway, and trimming that overhead is next.
+- [**2026-10-17**](#2026-10-17--frame-type-1-is-frozen-so-its-bytes-change-only-on-purpose-and-the-codec-templates-code-at-period-30-p-frames-code-no-slower-than-intra-on-room0-at-1-cm-and-on-rafa2-at-r--64-and-at-r--16-decode-no-slower-but-encode-up-to-4-slower-on-the-host-alone-amends-the-2026-10-12-p-frame-2026-10-16-codec-examples-and-2026-10-17-update-size-and-count-entries) —
+  Frame type 1 is frozen, so its bytes change only on purpose, and
+  `codec_replica.json` and `codec_mesh_sequence.json` code at period 30.
+  The re-measure missed one comparison, Rafa2's encode at R = 16, where
+  P-frames take up to 4% longer than intra on the host alone; the user
+  froze type 1 anyway, and trimming that overhead is next.
 
 ## Decision record
 
@@ -12275,8 +12274,8 @@ P-frames pin type 1's bytes, but its freeze waits: at R = 16 its P-frames
 code slower than intra, and interleaved rANS lanes would change the format.
 *Amended 2026-10-17 (the update-size entry, below):* no lanes: U defaults to
 R, and the freeze waits on the encode's count and a re-measure. *Amended
-2026-10-17 (the freeze entry, below):* frozen; the golden rule binds type 1's
-rows and the worked example.
+2026-10-17 (the freeze entry, below):* frozen, so type 1's bytes change only
+on purpose.
 
 The host writer and reader of type-1 frames, internal. `bitstream.hpp` holds
 the layout and the order of the refusals; this entry holds why. Nothing public
@@ -13293,8 +13292,9 @@ forward's submit, then a re-measure.
 
 *Amended 2026-10-17 (the freeze entry, below):* type 1 is frozen, though
 r16's P encode stays slower than intra on the host, and the templates code
-at period 30. The golden rule binds type 1's rows and the worked example,
-which is `codec_frames::example_bytes` in the tests, not in `bitstream.hpp`.
+at period 30. Type 1's rows and the worked example, which is
+`codec_frames::example_bytes` in the tests, not in `bitstream.hpp`, follow
+that entry's rule, not the golden rule below: they change only on purpose.
 
 **Type 1 stays experimental,** and the templates at period 1. Its freeze
 needed P-frame encode and decode no slower than intra on room0 at 1 cm and
@@ -13753,12 +13753,16 @@ leaving the bound unmarked, the surplus copied from `ranks[0]`, and
 `finish` blind to the bound. An encoder that still submits before
 `record_count` passes every test; only the fence count catches it.
 
-### 2026-10-17 — Frame type 1 is frozen, and the codec templates code at period 30: the golden rule binds type 1's rows and the worked example; P-frames code no slower than intra on room0 at 1 cm and on Rafa2 at R = 64, and at R = 16 decode no slower but encode 4% slower, on the host alone (amends the 2026-10-12 P-frame, 2026-10-16 codec-examples, and 2026-10-17 update-size and count entries).
+### 2026-10-17 — Frame type 1 is frozen, so its bytes change only on purpose, and the codec templates code at period 30: P-frames code no slower than intra on room0 at 1 cm and on Rafa2 at R = 64, and at R = 16 decode no slower but encode up to 4% slower, on the host alone (amends the 2026-10-12 P-frame, 2026-10-16 codec-examples, and 2026-10-17 update-size and count entries).
 
-**Frozen.** The golden rule (the 2026-10-16 entry) now binds type 1's rows,
-`kGoldenInterFrames`, and the worked example, `codec_frames::example_bytes`;
-no value changes. Mode 4 stays reserved for motion, which its rule (the
-2026-10-12 entry) lets a later design define without changing a frozen byte.
+**Frozen** means a change to type 1's bytes is deliberate, never
+incidental; for type 1, this replaces the 2026-10-16 entry's golden rule.
+Its goldens, `kGoldenInterFrames` and the worked example
+`codec_frames::example_bytes`, fail on any change. A deliberate one amends
+this entry and updates them in the same PR, and bumps `kFrameVersion` only
+if files written before must stay readable. Mode 4 stays reserved for
+motion, which its rule (the 2026-10-12 entry) lets a later design define
+without changing a frozen byte.
 
 **The re-measure,** its protocol declared before it ran, on main `d71fe849`
 (core `7a1219e`), Apple M5 Max, MoltenVK, Release. The scenarios are the
