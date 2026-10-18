@@ -510,7 +510,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   The calibration file records lenses and is written: version 2 under
   version 1's `device_calibration` key, its writer and
   `rodrigues_from_rotation` return with calib; `SensorArray::open` refuses an
-  unposed sensor, and the file I/O is the core's.
+  unposed sensor, and the file I/O is the core's. *Amended 2026-10-18:* the
+  world may be a printed AprilTag.
 - [**2026-10-12**](#2026-10-12--recordings-are-vrst-files-of-our-own-verbatim-records-in-crc-framed-chunks-readable-from-a-killed-writer-in-recon_stream-on-the-cores-base-tier-alone-amends-the-2026-09-27-v1-frame-entry) —
   Recordings are `.vrst` files of our own: verbatim records in CRC-framed,
   8-byte-aligned chunks, readable from a killed writer, in `recon_stream` on
@@ -619,6 +620,12 @@ entries relevant to your task; later amendments supersede earlier rules.
   The re-measure missed one comparison, Rafa2's encode at R = 16, where
   P-frames take up to 4% longer than intra on the host alone; the user
   froze type 1 anyway, and trimming that overhead is next.
+- [**2026-10-18**](#2026-10-18--the-calibration-files-world-may-be-a-printed-apriltag-in-opencvs-marker-axes-and-the-file-stays-version-2-amends-the-2026-10-12-calibration-file-entry) —
+  The calibration file's world may be a printed AprilTag, in OpenCV's
+  marker axes rather than libapriltag's, so a floor tag's z is up. A world
+  is a sensor or a tag, never both, and a tag puts no sensor at the origin.
+  The file stays version 2: an older reader already refuses a tag world as
+  `Unsupported`.
 
 ## Decision record
 
@@ -12153,6 +12160,9 @@ settings (recon's `device_requirements()`, the app's graphics requirements and
 
 ### 2026-10-12 — The calibration file records lenses and is written: version 2 and its writer return with calib, its first caller (amends the 2026-10-06 camera-tier entries).
 
+*Amended 2026-10-18 (the AprilTag-world entry, below):* the world may also
+be a printed AprilTag, in OpenCV's marker axes.
+
 calib's rig app is the caller the 2026-10-06 cut-back waited for. Each
 session records every camera's factory colour and depth models, unposed, and
 each solve writes the posed rig with the lenses it solved with; both are
@@ -13852,6 +13862,41 @@ paths set, prints period 1's accuracy, coverage and F-score and writes the
 measured c1 or r64 stream byte for byte, which decodes with a fresh
 `Decoder` bit for bit to the all-intra stream's grids. Not run: the RTX
 5090, ASan and UBSan (CI runs them).
+
+### 2026-10-18 — The calibration file's world may be a printed AprilTag, in OpenCV's marker axes, and the file stays version 2 (amends the 2026-10-12 calibration-file entry).
+
+calib re-anchors its solved rig at a tag on the floor (calib's CA12b
+plan). Its file could only leave `world` out, which records nothing, so
+only calib's report would name the world. A world named in recon's file
+keeps one home for what the world is.
+
+- **OpenCV's marker axes, not libapriltag's.** calib finds the tag with
+  OpenCV's detector and fits the frame to its corners in OpenCV's order. The
+  re-anchor wants z up out of the floor. libapriltag's frame puts a floor
+  tag's z down; the legacy detector used it, and so did the 2026-10-06
+  draft (`d5dd23c6`). The draft's `{family, id, size_m}` is kept, but not
+  its axes.
+- **A sensor or a tag, never both, and no origin check for a tag.** A tag
+  is not in the array, so it poses no sensor, and only its own fields are
+  checked. A file that names both kinds has both read, so validate refuses
+  it, for a file as for a struct.
+- **The family is a free string, non-empty UTF-8.** recon detects nothing,
+  so it keeps no list of families; the writer names one (`tag36h11`).
+  `size_m` records what was printed, and nothing in recon reads it.
+- **Still version 2.** Readers before this already refuse every world but
+  a sensor as `Unsupported`, so they refuse a tag-world file rather than
+  misread it. A file with a sensor world or none is unchanged byte for
+  byte.
+
+**Validation.** Apple M5 Max, macOS, Release with warnings as errors:
+the default build's 89 tests pass under the validation layer, and so do
+108 of 112 with the Orbbec SDK 2.10.6, FFmpeg, Assimp and the viewer. The
+other four start `fuse_orbbec`, `fuse_render` and the viewers, and were
+not run on that laptop; CI runs them. The camera tier alone, with no
+Vulkan, builds and passes. Six planted bugs each failed a test: the
+writer dropping the tag, a world with both kinds accepted, an id of -1
+accepted, an infinite size accepted, the tag read but not kept, and a tag
+world that needs a sensor at the origin. No camera was opened.
 
 ## Measured lessons
 

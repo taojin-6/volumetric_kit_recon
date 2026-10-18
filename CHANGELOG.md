@@ -213,6 +213,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   decode result, whose reference has already committed. Tests:
   `recon_codec_decode_grid`, `recon_codec_decode_grid_oom`,
   `recon_example_codec_stream`, `recon_example_mesh_sequence`.
+- `camera`: **a world at a printed AprilTag in the calibration file**
+  (the 2026-10-18 decision). `WorldFrame::apriltag`, an `AprilTagWorld` of
+  `family`, `id` and `size_m` in OpenCV's marker axes, is written as
+  `"world": {"apriltag": {"family": "tag36h11", "id": 0, "size_m": 0.15}}`
+  and read back exactly. `validate_array_calibration` refuses a world that
+  names both a sensor and a tag, an empty or non-UTF-8 family, a negative
+  id, and a size that is not finite and above 0. A tag world needs no sensor
+  at the origin, and `SensorArray::open` takes its poses as given. A world
+  `{"apriltag": …}` missing a field is now `InvalidArgument`, no longer
+  `Unsupported`; any other world kind still is. The file stays version 2,
+  and an earlier reader refuses a tag world as `Unsupported`. Tests:
+  `recon_camera_array_calibration`, `recon_sensor_array`.
 - `core`: **`core/shaders/pinhole.glsl`**, recon's GLSL pinhole, exported
   for a consumer's kernels: `vr_world_to_camera`, `vr_unproject_pinhole`,
   `vr_pinhole_pixel`, `vr_project_pinhole` and `vr_nearest_pixel`, on values
