@@ -36,6 +36,33 @@ if(vr_consumer_left)
 endif()
 add_executable(vr_package_consumer consumer.cpp)
 target_link_libraries(vr_package_consumer PRIVATE volumetric_kit::recon)
+
+# The installed headers internal_names.cpp compiles, found in the install so a
+# new one is checked too: every volume header, and every other recon header that
+# includes one.
+get_target_property(vr_consumer_dirs volumetric_kit::recon_volume
+                    INTERFACE_INCLUDE_DIRECTORIES)
+set(vr_consumer_includes "")
+foreach(dir IN LISTS vr_consumer_dirs)
+  file(
+    GLOB_RECURSE headers
+    RELATIVE "${dir}"
+    "${dir}/volumetric_kit/recon/*.hpp")
+  foreach(header IN LISTS headers)
+    file(STRINGS "${dir}/${header}" includes_volume
+         REGEX "#include \"volumetric_kit/recon/volume/")
+    if(header MATCHES "^volumetric_kit/recon/volume/" OR includes_volume)
+      string(APPEND vr_consumer_includes "#include \"${header}\"\n")
+    endif()
+  endforeach()
+endforeach()
+if(NOT vr_consumer_includes)
+  message(FATAL_ERROR "no installed volume header under ${vr_consumer_dirs}")
+endif()
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/vr_volume_headers.hpp"
+     "${vr_consumer_includes}")
 add_library(vr_package_headers OBJECT internal_names.cpp)
+target_include_directories(vr_package_headers
+                           PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
 target_link_libraries(vr_package_headers PRIVATE volumetric_kit::recon)
 include("${CMAKE_CURRENT_LIST_DIR}/../glsl_consumer.cmake")

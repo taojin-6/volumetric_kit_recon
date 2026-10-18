@@ -883,7 +883,8 @@ draw a ceiling that disagrees with it. No host call reads the table back;
 a kernel binds `entries_buffer()` and reads it through `hash_common.glsl`
 or `hash_lookup.glsl` (2026-10-13), whose layout is internal: the host
 `HashEntry` and fail slots are in `src/volumetric_kit/recon/volume/hash.hpp`,
-and the slot sentinels and hash are in the GLSL alone (2026-10-17).
+and the slot sentinels and hash are the GLSL's alone in the library
+(2026-10-17).
 `grow_grid` centralizes the growth arithmetic: double, or reach a larger
 requested minimum, within `VoxelBlockGrid::max_num_buckets` (block pointers
 within int32, each attribute array within one binding). It retains no policy

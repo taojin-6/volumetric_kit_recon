@@ -12770,16 +12770,17 @@ change, its own PR (done, the volume block-list entry below).
 
 ### 2026-10-13 — Block lists reach the volume tier on the device alone; a host-list entry point that only tests called goes (amends the 2026-08-08 sparse-mesh and overflow-scan, 2026-08-12 view-meshing, 2026-09-26 codec, 2026-09-28 device-memory, 2026-10-03 garbage-collection, 2026-10-06 public-API and view-culling, and 2026-10-13 coordinate entries).
 
-*Amended 2026-10-17 (the table's internals):* the user's decision on the
-host mirrors this entry kept public: under the 2026-10-06 rule they leave
-the public headers. `HashEntry` and the fail-tally slots are internal
+*Amended 2026-10-17 (the table's internals):* by the user's decision, the
+host mirrors this entry kept public leave the public headers, under the
+2026-10-06 rule. `HashEntry` and the fail-tally slots are internal
 (`src/volumetric_kit/recon/volume/hash.hpp`). The host slot sentinels,
 which nothing read, go, leaving `hash_common.glsl`'s. `hash_bucket` and its
 primes become the tests' oracle (`tests/volume_hash_oracle.hpp`).
 `BlockIndex` and `BlockStamp` stay public. Other tiers still bind
 `entries_buffer()` and read it through `hash_common.glsl` or
-`hash_lookup.glsl`. `recon_package_headers` fails if `volume/hash.hpp` or
-any of these names is installed again.
+`hash_lookup.glsl`. `recon_package_headers` fails if `volume/hash.hpp` is
+installed again, or if an installed volume header, or an installed header
+that includes one, declares any of these names in the volume namespace.
 
 **The rule** is the user's (2026-10-13): only I/O takes a host path --
 reading a mesh model, a camera stream (Orbbec, ARKit) -- and what it reads
