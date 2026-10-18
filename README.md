@@ -209,7 +209,7 @@ marching cubes. Build the mesh example with `VR_WITH_ASSIMP=ON` after
 installing the [asset I/O prerequisites](#asset-io).
 Their `codec` section selects `quantization_table` (`uniform`, `band`,
 `radial`), `quantization_scale`, `segment_size`, `intra_period` (an I-frame
-every N coded frames, zero-motion P-frames between, experimental; 1, the
+every N coded frames, zero-motion P-frames between; 1, the
 default, codes every frame intra), `update_size` at a period above 1 (a
 P-frame's entries per update segment; 0, the default, takes the segment
 size), and the shared rate-distortion `sweep`, which codes intra.

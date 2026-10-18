@@ -523,7 +523,9 @@ entries relevant to your task; later amendments supersede earlier rules.
   2026-10-14:* the `Encoder` writes them. *Amended 2026-10-16:* golden
   P-frames pin type 1's bytes, but its freeze waits on a decision about
   interleaved rANS lanes. *Amended 2026-10-17:* no lanes: U defaults to R,
-  and the freeze waits on the encode's count and a re-measure.
+  and the freeze waits on the encode's count and a re-measure. *Amended
+  2026-10-17:* frozen; the golden rule binds type 1's rows and the worked
+  example.
 - [**2026-10-13**](#2026-10-13--the-decoder-decodes-p-frames-against-the-frame-it-decoded-last-kept-on-the-device-as-decoded-in-two-slots-that-swap-only-when-a-decode-succeeds-one-integer-apply-makes-every-decoded-frame-intra-too-and-it-decodes-on-the-device-alone-amends-the-2026-09-27-encoderdecoder-and-2026-10-03-decoding-entries) —
   The `Decoder` decodes P-frames against the frame it decoded last, kept on
   the device as decoded and replaced only when a decode succeeds; one integer
@@ -578,7 +580,9 @@ entries relevant to your task; later amendments supersede earlier rules.
   experimental and the templates at period 1: at R = 16 its P-frames code
   slower than intra, and the freeze waits on a decision about interleaved
   rANS lanes. *Amended 2026-10-17:* U defaults to the segment size; no lanes,
-  and the freeze waits on the encode's count and a re-measure.
+  and the freeze waits on the encode's count and a re-measure. *Amended
+  2026-10-17:* type 1 is frozen, though P encode at R = 16 stays slower than
+  intra on the host, and the templates code at period 30.
 - [**2026-10-16**](#2026-10-16--a-shared-glsl-pinhole-for-recon-and-its-consumers-coreshaderspinholeglsl-exported-under-the-include-root-recon_core-names-amends-the-2026-08-11-texturing-entrys-per-tier-copies) —
   A shared GLSL pinhole for recon and its consumers,
   `core/shaders/pinhole.glsl` (amends the 2026-08-11 texturing entry's
@@ -601,12 +605,19 @@ entries relevant to your task; later amendments supersede earlier rules.
   `EncoderConfig::update_size` 0, the default, takes `segment_size`
   (`resolved_update_size()`, resolved once in `Encoder::create`); the format
   and the goldens are unchanged. No lanes: the freeze waits on the encode's
-  count moving into the forward's submit, and a re-measure.
+  count moving into the forward's submit, and a re-measure. *Amended
+  2026-10-17:* the re-measure ran, and type 1 is frozen (the freeze entry).
 - [**2026-10-17**](#2026-10-17--a-p-frame-is-counted-in-the-forwards-submit-its-count-and-step-layout-run-over-m-plus-the-frames-blocks-the-device-takes-off-the-diffs-survivors-and-an-encode-waits-on-one-fence-fewer-amends-the-2026-10-14-encoder-entry) —
   A P-frame is counted in the forward's submit: its count and step layout
   run over M plus the frame's blocks, the device takes off the diff's
   survivors, and an encode waits on one fence fewer (amends the 2026-10-14
   encoder entry).
+- [**2026-10-17**](#2026-10-17--frame-type-1-is-frozen-and-the-codec-templates-code-at-period-30-the-golden-rule-binds-type-1s-rows-and-the-worked-example-p-frames-code-no-slower-than-intra-on-room0-at-1-cm-and-on-rafa2-at-r--64-and-at-r--16-decode-no-slower-but-encode-4-slower-on-the-host-alone-amends-the-2026-10-12-p-frame-2026-10-16-codec-examples-and-2026-10-17-update-size-and-count-entries) —
+  Frame type 1 is frozen: the golden rule binds its rows and the worked
+  example, and `codec_replica.json` and `codec_mesh_sequence.json` code at
+  period 30. The re-measure missed one comparison, Rafa2's encode at
+  R = 16, where P-frames take 4% longer than intra on the host alone; the
+  user froze type 1 anyway, and trimming that overhead is next.
 
 ## Decision record
 
@@ -12263,7 +12274,9 @@ own search. *Amended 2026-10-16 (the codec examples' entry, below):* golden
 P-frames pin type 1's bytes, but its freeze waits: at R = 16 its P-frames
 code slower than intra, and interleaved rANS lanes would change the format.
 *Amended 2026-10-17 (the update-size entry, below):* no lanes: U defaults to
-R, and the freeze waits on the encode's count and a re-measure.
+R, and the freeze waits on the encode's count and a re-measure. *Amended
+2026-10-17 (the freeze entry, below):* frozen; the golden rule binds type 1's
+rows and the worked example.
 
 The host writer and reader of type-1 frames, internal. `bitstream.hpp` holds
 the layout and the order of the refusals; this entry holds why. Nothing public
@@ -13278,6 +13291,11 @@ default, takes the segment size, and `kDefaultUpdateSize` is gone; "U stays
 user": no lanes, and the freeze waits on the count moving into the
 forward's submit, then a re-measure.
 
+*Amended 2026-10-17 (the freeze entry, below):* type 1 is frozen, though
+r16's P encode stays slower than intra on the host, and the templates code
+at period 30. The golden rule binds type 1's rows and the worked example,
+which is `codec_frames::example_bytes` in the tests, not in `bitstream.hpp`.
+
 **Type 1 stays experimental,** and the templates at period 1. Its freeze
 needed P-frame encode and decode no slower than intra on room0 at 1 cm and
 on Rafa2's frames 1–150. Room0 meets it and Rafa2 at R = 16 does not, so
@@ -13608,7 +13626,9 @@ neither: no interleaved rANS lanes, a format change, and no freeze with
 P-frames slower than intra at small R. U defaults to R instead; a P-frame's
 count moves into the forward's submit next (the `TODO(codec)` in
 `encoder.cpp`), and type 1's freeze follows a re-measure. *Amended
-2026-10-17:* the count moved (the next entry).
+2026-10-17:* the count moved (the next entry). *Amended 2026-10-17:* the
+re-measure left r16's P encode slower than intra, on the host alone, and the
+user froze type 1 anyway (the freeze entry).
 
 **The rule.** `EncoderConfig::update_size` 0, the default, takes
 `segment_size`; an explicit 1 to `kMaxDeviceDecodeSegmentSize` still wins.
@@ -13644,6 +13664,9 @@ against 1.485), with device ms level; r64 and c1 keep their bytes; and
 every chain decodes bit for bit.
 
 ### 2026-10-17 — A P-frame is counted in the forward's submit: its count and step layout run over M plus the frame's blocks, the device takes off the diff's survivors, and an encode waits on one fence fewer (amends the 2026-10-14 encoder entry).
+
+*Amended 2026-10-17 (the freeze entry, below):* the re-measure ran, and type
+1 is frozen.
 
 **The bound.** `ReferenceStore::record_diff` returns the P-frame's entries
 as its batch leaves them, `ResidentBlocks::bounded`: M + n positions, of
@@ -13729,6 +13752,80 @@ dropped, the clamp dropped, the count's exit at the bound, `record_diff`
 leaving the bound unmarked, the surplus copied from `ranks[0]`, and
 `finish` blind to the bound. An encoder that still submits before
 `record_count` passes every test; only the fence count catches it.
+
+### 2026-10-17 — Frame type 1 is frozen, and the codec templates code at period 30: the golden rule binds type 1's rows and the worked example; P-frames code no slower than intra on room0 at 1 cm and on Rafa2 at R = 64, and at R = 16 decode no slower but encode 4% slower, on the host alone (amends the 2026-10-12 P-frame, 2026-10-16 codec-examples, and 2026-10-17 update-size and count entries).
+
+**Frozen.** The golden rule (the 2026-10-16 entry) now binds type 1's rows,
+`kGoldenInterFrames`, and the worked example, `codec_frames::example_bytes`;
+no value changes. Mode 4 stays reserved for motion, which its rule (the
+2026-10-12 entry) lets a later design define without changing a frozen byte.
+
+**The re-measure,** its protocol declared before it ran, on main `d71fe849`
+(core `7a1219e`), Apple M5 Max, MoltenVK, Release. The scenarios are the
+committed templates with `source.path`, `output.csv` and `output.stream`
+set and `codec.sweep` off; r16 adds `codec.segment_size` 16. None sets
+`update_size`, so U = R. Each input also ran at period 1. A warm-up, then
+10 runs, each pass over the 8 configurations in a shuffled order; a type's
+time is the median over the runs of its mean host ms (the printed
+`codec encode` and `codec decode` rows), device ms beside it. The rule: P
+no slower than I, with no tolerance, encode and decode on each input,
+against the same run's I-frames with (a) every frame and (b) each type's
+first frame dropped. Under (b), host / device ms:
+
+| Input | I encode | P encode | I decode | P decode |
+|---|---|---|---|---|
+| c1, room0 1 cm Classic | 3.069 / 2.092 | 2.070 / 1.106 | 2.863 / 1.978 | 1.996 / 1.172 |
+| d1, room0 1 cm Dynamic | 3.078 / 2.147 | 2.380 / 1.449 | 3.258 / 2.011 | 2.504 / 1.405 |
+| r64, Rafa2 frames 1–150 | 2.560 / 1.605 | 2.358 / 1.362 | 2.748 / 1.673 | 2.446 / 1.403 |
+| r16, Rafa2 at R = 16 | 1.501 / 0.554 | 1.558 / 0.551 | 1.546 / 0.525 | 1.489 / 0.468 |
+
+It holds on c1, d1 and r64, encode and decode, under both baselines and in
+every run, and on r16's decode, where P is slower in 1 of the 10 runs. It
+fails on r16's encode: by 9 µs under (a), 1.585 against 1.577 ms, and by
+56 µs under (b), about 4%, with P slower in 9 of the 10 runs. Against the
+period-1 runs' I-frames, for information, every comparison holds (r16's
+encode 1.558 against 1.634). An earlier gate of 3 runs, on the update-size
+and count changes before they merged, failed the same comparison under (b)
+by 13 µs.
+
+**The gap is the host's.** r16's device time is level, 0.551 against
+0.554 ms, so the 56 µs is host-side recording and submit, as the stage rows
+show: a P-frame's `..forward` takes 0.503 ms against an I-frame's 0.415
+(every frame). Nothing the format decides is in it, so no format change,
+interleaved rANS lanes included, would remove it, and the user froze type 1
+anyway.
+
+**Bytes and accuracy.** c1, d1 and r64's period-30 streams are the
+2026-10-16 entry's byte for byte, and r16's frames have its U = 16 run's
+bytes (4,442,994 in all). Every configuration wrote the same bytes in all
+10 runs, and accuracy, coverage and F-score at period 30 equal period 1's
+on each input.
+
+**The templates.** `codec_replica.json` codes every frame at period 30
+(`encode_every` 1; its 0 coded only the final grid), then sweeps;
+`codec_mesh_sequence.json` codes at 30; `codec_mesh.json`, one frame, keeps
+1. None sets `update_size`, so each codes at the measured U = R = 64.
+`EncoderConfig::intra_period` and core's `codec.intra_period` stay 1, so no
+caller's bytes change.
+
+**Next.** Trim a P-frame's host overhead at small R, until r16's encode is
+no slower than intra's.
+
+**Validation.** Apple M5 Max, Release with warnings as errors and Assimp,
+core `7a1219e`: the 93 tests pass under the validation layer, and the codec
+and example tests under synchronization validation too.
+`recon_example_config` checks what each codec template loads as and maps
+to: period 30 at U = R = 64 for `codec_replica.json`, coding every frame,
+and for the sequence, and period 1 for the single mesh. Five planted bugs
+each failed it: `codec_replica.json` at period 1 or at `encode_every` 0, the
+sequence without its `codec` section or at a fixed `update_size` of 64, and
+the single mesh at 30. The golden rows pass unchanged
+(`recon_codec_bitstream`, `recon_codec_inter_bitstream`,
+`recon_codec_device_frame`). By hand, each period-30 template, with its
+paths set, prints period 1's accuracy, coverage and F-score and writes the
+measured c1 or r64 stream byte for byte, which decodes with a fresh
+`Decoder` bit for bit to the all-intra stream's grids. Not run: the RTX
+5090, ASan and UBSan (CI runs them).
 
 ## Measured lessons
 
