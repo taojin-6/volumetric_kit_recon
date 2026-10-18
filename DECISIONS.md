@@ -13872,10 +13872,10 @@ keeps one home for what the world is.
 
 - **OpenCV's marker axes, not libapriltag's.** calib finds the tag with
   OpenCV's detector and fits the frame to its corners in OpenCV's order. The
-  re-anchor wants z up out of the floor. libapriltag's frame (x right, y
-  down, z into the tag) puts a floor tag's z down; the legacy detector used
-  it, and so did the 2026-10-06 draft (`d5dd23c6`). The draft's
-  `{family, id, size_m}` is kept, but not its axes.
+  re-anchor wants z up out of the floor. libapriltag's frame puts a floor
+  tag's z down; the legacy detector used it, and so did the 2026-10-06
+  draft (`d5dd23c6`). The draft's `{family, id, size_m}` is kept, but not
+  its axes.
 - **A sensor or a tag, never both, and no origin check for a tag.** A tag
   is not in the array, so it poses no sensor, and only its own fields are
   checked. A file that names both kinds has both read, so validate refuses
@@ -13886,8 +13886,7 @@ keeps one home for what the world is.
 - **Still version 2.** Readers before this already refuse every world but
   a sensor as `Unsupported`, so they refuse a tag-world file rather than
   misread it. A file with a sensor world or none is unchanged byte for
-  byte. Since `{"apriltag": …}` is now read, one missing a field is
-  `InvalidArgument`; any other world kind is still `Unsupported`.
+  byte.
 
 **Validation.** Apple M5 Max, macOS, Release with warnings as errors:
 the default build's 89 tests pass under the validation layer, and so do
