@@ -1389,8 +1389,9 @@ The defaults retain room0's K = 64 and uniform effective step 0.2, expressed
 as scale 0.2 and weights of one. Frequency-dependent tables are measured
 candidates, not a claim that high frequencies always deserve fewer bits.
 The public API
-is `CodecParams`, **`Encoder`** (`encoder.hpp`) and **`Decoder`** with
-`read_frame_info` (`decoder.hpp`). `Encoder::encode(grid)` takes the map's
+is `CodecParams`, **`Encoder`** (`encoder.hpp`), **`Decoder`** with
+`read_frame_info` (`decoder.hpp`), and a player's `make_decode_grid` and
+`decode_growing` (`decode_grid.hpp`). `Encoder::encode(grid)` takes the map's
 own active list (`compact_active_blocks_on_device`, so an extract's list is
 reused and its own kept for the extract after), keeps the blocks with an
 observed voxel (`DctTransform::observed`, compacted on the device, reading
@@ -1484,7 +1485,11 @@ nothing else (`VoxelBlockGrid::attribute_count`), since a kept block would
 carry any other one stale. A grid too small for the frame is `OutOfMemory`,
 whether its heap has too few slots or its hash table cannot place the
 blocks. Both are recovered by growing the grid and decoding again; the
-decoder never grows one (a player calls `grow_grid`). Lock
+decoder never grows one. Beside it, as `tsdf::Fuser` grows for fusion,
+`decode_grid.hpp` holds a player's growth: `make_decode_grid` builds a grid
+from a frame's header, its heap twice the frame's blocks, and
+`decode_growing` decodes into it, growing it once on `OutOfMemory` and
+decoding again twice at most on `IoError`. Lock
 contention that outlasts four rounds is `IoError`, never `OutOfMemory`, and
 a free heap that refuses a removed block is `InvalidArgument`. A failure
 after the grid has changed leaves it holding neither frame until a decode
@@ -1730,8 +1735,8 @@ with a key in 30 records or 14 ms with every record a key (a 27.6 MB index).
 `examples/common/fuse_frame.hpp`'s `fuse_set`, which hands each
 `DeviceFrame` over with its encoding declaration and prints what a set did
 to the grid (a grow, a declined one, blocks left out), into the one grid layout
-`grid_layout.hpp` defines, which its `create_fusion_grid` builds and
-`codec_replica`'s player shares. `fuse_set`'s caller names the integration
+`grid_layout.hpp` defines, which its `create_fusion_grid` builds. `fuse_set`'s
+caller names the integration
 mode, the one `fusion.dynamic` selects (`integration_mode`): `Classic` unless
 set, except in `rig_viewer`, whose default is `Dynamic` and whose View panel
 switches it as the rig runs. The four dataset examples poll their frames
@@ -1840,8 +1845,9 @@ reclaims the retained colour buffers without waiting for that frame's number.
 draws it.
 **`codec_replica`** fuses a Replica sequence as `fuse_replica` does, and
 streams the growing grid through the codec: every `codec.encode_every` frames it
-encodes, then decodes into a player grid built from `read_frame_info` and
-sized for that frame's blocks. It reports the bitrate at the coded frame
+encodes, then decodes with `decode_growing` into a player grid
+`make_decode_grid` built from the first frame. It reports the bitrate at the
+coded frame
 rate and, at an intra period above 1, a GOP's (an I-frame and the period's
 P-frames, each at its type's mean), and for each frame type its bytes (mean,
 p50, p95, max) and both calls' stage rows. It then judges the last decoded

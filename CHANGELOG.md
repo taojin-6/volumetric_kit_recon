@@ -193,6 +193,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `codec`: **`make_decode_grid` and `decode_growing`**
+  (`codec/decode_grid.hpp`): a player's grid, built from a frame's header,
+  and a decode that grows it once when a frame outgrows it. They were the
+  examples' `player_grid` and `decode_growing`; `CodecStream` and the sweep
+  call them now, and `codec_replica` and `codec_mesh` write the same streams.
+  The `Decoder` still refuses rather than grows. Migrating:
+  `vr_example::player_grid(device, allocator, frame)` is
+  `codec::make_decode_grid(device, allocator, frame.data(), frame.size())`;
+  `decode_growing` takes the frame's pointer and size and counts no grows,
+  which show as a larger `num_buckets`. Tests: `recon_codec_decode_grid`,
+  `recon_example_codec_stream`, `recon_example_mesh_sequence`.
 - `core`: **`core/shaders/pinhole.glsl`**, recon's GLSL pinhole, exported
   for a consumer's kernels: `vr_world_to_camera`, `vr_unproject_pinhole`,
   `vr_pinhole_pixel`, `vr_project_pinhole` and `vr_nearest_pixel`, on values

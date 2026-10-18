@@ -4,13 +4,11 @@
 #pragma once
 
 // A codec stream as a player sees it: encode a grid, decode the frame into a
-// player grid built from the first frame's header, and keep a row per coded
-// frame, which the report sums by frame type and the CSV lists; the frames
-// themselves go to a .vrst file, each I-frame a key. The player-side policy
-// lives here -- when to grow the grid for a frame that outgrows it, retrying
-// lock contention, and an I-frame after a frame the player missed -- because
-// it is a player's, not the codec's (the Decoder refuses rather than grows);
-// the grow itself is the volume tier's (volume::grow_grid).
+// player grid built from the first frame's header and grown as frames need
+// (codec/decode_grid.hpp), and keep a row per coded frame, which the report
+// sums by frame type and the CSV lists; the frames themselves go to a .vrst
+// file, each I-frame a key. An I-frame after a frame the player missed is the
+// stream's policy, kept here.
 
 #include <algorithm>
 #include <cmath>
@@ -27,16 +25,15 @@
 #include <utility>
 #include <vector>
 
-#include "grid_layout.hpp"
 #include "stage_table.hpp"
 #include "volumetric_kit/core/base/check.hpp"
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/base/stage_metrics.hpp"
+#include "volumetric_kit/recon/codec/decode_grid.hpp"
 #include "volumetric_kit/recon/codec/decoder.hpp"
 #include "volumetric_kit/recon/codec/encoder.hpp"
 #include "volumetric_kit/recon/eval/mesh_distance.hpp"
 #include "volumetric_kit/recon/stream/stream_writer.hpp"
-#include "volumetric_kit/recon/volume/grid_growth.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 
 namespace vr_example {
@@ -48,70 +45,6 @@ using Bytes = std::vector<std::uint8_t>;
 
 /// Raw tsdf + weight per block: what a frame compresses.
 inline constexpr double kRawBytesPerBlock = 512.0 * 2.0 * sizeof(float);
-
-/// @return Buckets enough for @p blocks at half the heap, and at least 1024.
-inline std::int32_t player_buckets(std::uint32_t blocks) {
-  const std::int64_t need =
-      (2 * std::int64_t(blocks) + kExampleBucketSize - 1) / kExampleBucketSize;
-  return std::int32_t(std::max<std::int64_t>(need, 1024));
-}
-
-/// @brief A grid for a stream, from a frame's header: its geometry, `tsdf` +
-///        `weight` only (all a frame carries, and all the Decoder accepts),
-///        in the examples' layout, sized for the frame's own blocks.
-inline vkc::Result<vr::volume::VoxelBlockGrid> player_grid(
-    vkc::Device& device, vkc::Allocator& allocator, const Bytes& frame) {
-  VKC_ASSIGN(const vr::codec::FrameInfo info,
-             vr::codec::read_frame_info(frame.data(), frame.size()));
-  const vr::volume::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
-                                             {"weight", sizeof(float)}};
-  return vr::volume::VoxelBlockGrid::create(
-      device, allocator,
-      example_grid_params(info.voxel_size, info.trunc_dist,
-                          player_buckets(info.block_count)),
-      attrs, 2);
-}
-
-/// @brief Decode, growing the grid once on OutOfMemory -- the recovery the
-///        Decoder names -- to at least the frame's @ref player_buckets, and
-///        decoding again, twice at most, on IoError.
-///
-/// The Decoder's OutOfMemory is the grid's (too few slots for the frame, or
-/// a hash table that cannot place it), or the device's own, out of memory
-/// for its buffers, which no grow helps. One grow leaves a player grid's heap
-/// at most half full of the frame, so a second OutOfMemory is the device's,
-/// and is returned as the Decoder's. IoError is how the Decoder
-/// reports bucket-lock contention that outlasted its own rounds, which
-/// another decode clears, and nothing else; every other error is returned as
-/// itself. Only the attempt that succeeds is timed into @p rows, so a frame
-/// that grew the grid on the way is reported as one decode.
-inline vkc::Status decode_growing(vr::codec::Decoder& dec, const Bytes& frame,
-                                  vr::volume::VoxelBlockGrid& grid,
-                                  vkc::StageMetrics* rows, int* grows) {
-  constexpr int kContendedRetries = 2;
-  VKC_ASSIGN(const vr::codec::FrameInfo info,
-             vr::codec::read_frame_info(frame.data(), frame.size()));
-  int contended = 0;
-  bool grown = false;
-  for (;;) {
-    vkc::StageMetrics attempt;
-    const vkc::Status s = dec.decode(frame.data(), frame.size(), grid,
-                                     rows != nullptr ? &attempt : nullptr);
-    if (s.ok()) {
-      if (rows != nullptr) rows->merge(attempt);
-      return s;
-    }
-    if (s.domain() == vkc::Status::Code::OutOfMemory) {
-      if (grown) return s;
-      VKC_TRY(vr::volume::grow_grid(grid, player_buckets(info.block_count)));
-      grown = true;
-      ++*grows;
-    } else if (s.domain() != vkc::Status::Code::IoError ||
-               ++contended > kContendedRetries) {
-      return s;
-    }
-  }
-}
 
 /// @return A row's host milliseconds, or 0 if @p m has no row of that name.
 inline double row_ms(const vkc::StageMetrics& m, const char* name) {
@@ -452,7 +385,7 @@ class CodecStream {
     const double per_block = blocks > 0 ? bytes / blocks : 0.0;
     const double coded_fps = every > 0 ? fps / double(every) : 0.0;
     std::printf("stream: %zu frames coded%s\n", rows_.size(),
-                grows_ > 0 ? " (the player grid grew)" : "");
+                grew_ ? " (the player grid grew)" : "");
     std::printf(
         "  %.0f bytes per frame, %.0f blocks; %.1f bytes per block, %.0fx "
         "under raw",
@@ -543,11 +476,16 @@ class CodecStream {
     last_pts_ns_ = pts_ns;
     if (!player_) {
       VKC_ASSIGN(vr::volume::VoxelBlockGrid g,
-                 player_grid(*device_, *allocator_, bytes));
+                 vr::codec::make_decode_grid(*device_, *allocator_,
+                                             bytes.data(), bytes.size()));
       player_.emplace(std::move(g));
     }
+    const std::int32_t buckets = player_->grid().num_buckets;
     vkc::StageMetrics decoded;
-    VKC_TRY(decode_growing(decoder_, bytes, *player_, &decoded, &grows_));
+    const vkc::Status status = vr::codec::decode_growing(
+        decoder_, bytes.data(), bytes.size(), *player_, &decoded);
+    grew_ = grew_ || player_->grid().num_buckets != buckets;
+    VKC_TRY(status);
     const auto t = static_cast<std::size_t>(info.type);
     encode_rows_[t].merge(encoded);
     decode_rows_[t].merge(decoded);
@@ -577,7 +515,7 @@ class CodecStream {
   vkc::StageMetrics encode_rows_[2];
   vkc::StageMetrics decode_rows_[2];
   std::vector<CodecRow> rows_;
-  int grows_ = 0;
+  bool grew_ = false;  // a decode grew the player grid
 };
 
 }  // namespace vr_example
