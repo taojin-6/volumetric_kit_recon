@@ -4,12 +4,12 @@
 #pragma once
 
 /// @file examples/common/grid_layout.hpp
-/// @brief The block-hash layout every example's grids share.
+/// @brief The block-hash layout of the grids the examples fuse and convert
+///        into; a codec player's grid is the codec's (codec/decode_grid.hpp).
 ///
-/// One definition, so a changed default reaches the grid a fuse writes and
-/// the grid a codec player decodes into alike. Header-only and `volume`-only:
-/// a player includes it without the `tsdf` tier @ref create_fusion_grid
-/// brings.
+/// One definition, so a changed default reaches every such grid.
+/// Header-only and `volume`-only, without the `tsdf` tier
+/// @ref create_fusion_grid brings.
 
 #include <cstdint>
 

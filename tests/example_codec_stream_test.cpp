@@ -14,9 +14,8 @@
 // encoded but not decoded, or whose CSV row fails, an I-frame where the
 // encoder would code a P-frame; a frame out of order, or any call once
 // finished, refused before anything is encoded; a stream never finished
-// still read whole; the CSV replaced on create and extended as each frame is
-// coded; and a grid too small for a frame grown once, the Decoder's
-// OutOfMemory returned past that. The device part skips with no device.
+// still read whole; and the CSV replaced on create and extended as each frame
+// is coded. The device part skips with no device.
 
 #include <signal.h>
 #include <sys/resource.h>
@@ -542,52 +541,6 @@ int csv_fails(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
   return 0;
 }
 
-// decode_growing grows a grid too small for a frame once, to the frame's
-// player_buckets, and decodes it; a grid that one grow leaves too small --
-// two-slot buckets, which player_buckets does not size for -- is grown once,
-// and the Decoder's OutOfMemory is returned, not grown past.
-int grows_once(vr_test::GpuContext& gpu) {
-  GridShape roomy;
-  roomy.num_buckets = 2048;
-  vkc::Result<vol::VoxelBlockGrid> source =
-      sphere_grid(gpu, Sphere{vr::Vec3f(0.0f), 0.4f}, roomy);
-  CHECK(source.ok());
-  vkc::Result<codec::Encoder> enc =
-      codec::Encoder::create(gpu.device, gpu.allocator, {});
-  CHECK(enc.ok());
-  const vkc::Result<vr_example::Bytes> frame = enc->encode(*source);
-  CHECK(frame.ok());
-  const std::uint32_t n =
-      codec::read_frame_info(frame->data(), frame->size())->block_count;
-  vkc::Result<codec::Decoder> dec =
-      codec::Decoder::create(gpu.device, gpu.allocator);
-  CHECK(dec.ok());
-
-  GridShape few;
-  few.num_buckets = 4;
-  vkc::Result<vol::VoxelBlockGrid> small = make_grid(gpu, few);
-  CHECK(small.ok() && small->grid().num_blocks < std::int32_t(n));
-  int grows = 0;
-  CHECK(vr_example::decode_growing(*dec, *frame, *small, nullptr, &grows).ok());
-  CHECK(grows == 1);
-  const vkc::Result<std::vector<vol::BlockIndex>> decoded =
-      active_sorted(*small);
-  CHECK(decoded.ok() && decoded->size() == n);
-
-  GridShape pairs;
-  pairs.bucket_size = 2;
-  pairs.num_buckets = 16;
-  vkc::Result<vol::VoxelBlockGrid> cramped = make_grid(gpu, pairs);
-  CHECK(cramped.ok());
-  grows = 0;
-  const vkc::Status s =
-      vr_example::decode_growing(*dec, *frame, *cramped, nullptr, &grows);
-  CHECK(grows == 1 && cramped->grid().num_blocks < std::int32_t(n));
-  CHECK(s.domain() == vkc::Status::Code::OutOfMemory &&
-        s.message().find("Decoder::decode") != std::string::npos);
-  return 0;
-}
-
 int gpu_main(vr_test::GpuContext& gpu) {
   const Sphere sphere{vr::Vec3f(0.01f, -0.02f, 0.03f), 0.09f};
   vkc::Result<vol::VoxelBlockGrid> source = sphere_grid(gpu, sphere);
@@ -625,7 +578,6 @@ int gpu_main(vr_test::GpuContext& gpu) {
   CHECK(periodic(gpu, *source, *other, scratch) == 0);
   CHECK(csv_fails(gpu, *source, scratch) == 0);
   CHECK(unfinished(gpu, *source, scratch) == 0);
-  CHECK(grows_once(gpu) == 0);
   std::puts("example_codec_stream: OK");
   return 0;
 }

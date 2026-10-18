@@ -347,9 +347,8 @@ add_test(NAME recon_example_stage_table COMMAND recon_example_stage_table_test)
 # included and the stream going on after it, a key exactly when an I-frame, and
 # the same bytes on a rerun), an I-frame after a frame not decoded or whose CSV
 # row fails, a frame out of order or any call once finished refused before
-# anything is encoded, the CSV replaced on create and written as frames are
-# coded, and a grid too small for a frame grown once at most. The device part
-# skips with no device.
+# anything is encoded, and the CSV replaced on create and written as frames are
+# coded. The device part skips with no device.
 add_executable(recon_example_codec_stream_test example_codec_stream_test.cpp)
 target_include_directories(recon_example_codec_stream_test
                            PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
@@ -849,6 +848,30 @@ target_link_libraries(
           volumetric_kit::core_test_policy)
 vr_target_warnings(recon_codec_decoder_test)
 add_test(NAME recon_codec_decoder COMMAND recon_codec_decoder_test)
+
+# codec tier, a player's grid (decode_grid.hpp): make_decode_grid's geometry,
+# layout and attributes off a frame's header, and decode_growing's one grow, its
+# second OutOfMemory, its timing of the attempt that succeeds, and the decoder's
+# refusals passed through. Skips with no device.
+add_executable(recon_codec_decode_grid_test codec_decode_grid_test.cpp)
+target_link_libraries(
+  recon_codec_decode_grid_test
+  PRIVATE volumetric_kit::recon_codec Vulkan::Vulkan
+          volumetric_kit::core_test_policy)
+vr_target_warnings(recon_codec_decode_grid_test)
+add_test(NAME recon_codec_decode_grid COMMAND recon_codec_decode_grid_test)
+
+# Allocation injection stays in its own executable: factory diagnostics and a
+# metrics merge after a committed P-frame, followed by the next P-frame.
+add_executable(recon_codec_decode_grid_oom_test codec_decode_grid_oom_test.cpp
+                                                test_allocation_failure.cpp)
+target_link_libraries(
+  recon_codec_decode_grid_oom_test
+  PRIVATE volumetric_kit::recon_codec Vulkan::Vulkan
+          volumetric_kit::core_test_policy)
+vr_target_warnings(recon_codec_decode_grid_oom_test)
+add_test(NAME recon_codec_decode_grid_oom
+         COMMAND recon_codec_decode_grid_oom_test)
 
 # Apple's pixel buffers imported as images (recon_sensor_apple, any Apple build,
 # with or without FFmpeg): buffers made here, read back in place, prepared as a

@@ -193,7 +193,9 @@ entries relevant to your task; later amendments supersede earlier rules.
   exactly the frame by diffing its block set, everything checkable is checked
   before the grid is touched, and a grid too small for the frame is refused
   rather than grown. *Amended 2026-10-13:* the `Decoder` decodes P-frames
-  too, against a reference it keeps.
+  too, against a reference it keeps. *Amended 2026-10-18:* a player's growth
+  sits beside the decoder, as the `Fuser`'s does: `make_decode_grid` and
+  `decode_growing`.
 - [**2026-09-27**](#2026-09-27--the-video-decoder-is-recon_sensor_video-a-target-of-its-own-over-an-installed-ffmpeg-hevc-in-host-pictures-out-on-the-first-hardware-back-end-that-decodes-a-built-in-clip-nvidia-ahead-of-an-integrated-gpu-each-ci-leg-requires-the-hardware-it-has) —
   The video decoder is `recon_sensor_video`, a target of its own over an
   installed FFmpeg: HEVC in, host pictures out, on the first hardware back end
@@ -5123,6 +5125,27 @@ a player grows it with `grow_grid`.
 decodes P-frames too, against the frame it decoded last, which it keeps on
 the device. Everything here holds for them, and no refusal or failure
 changes that reference.
+
+*Amended 2026-10-18:* the decoder still refuses a grid too small for its
+frame; a player's growth sits beside it in the codec, as the `Fuser`'s sits
+in `tsdf`. `make_decode_grid` and `decode_growing` (`codec/decode_grid.hpp`)
+moved from the examples, so a player outside recon, the next app, decodes a
+`.vrst` into a growing grid from one copy. The grid keeps the examples'
+layout, buckets of 8 and chains of up to 128, as constants private to the
+codec, since the volume tier has no default; the examples keep theirs for
+the grids they fuse. A grow shows in `num_buckets`, so the call counts none.
+`codec_replica` (room0 at 1 cm, period 30) and `codec_mesh` (Rafa2's frames
+1–150) write byte-identical streams, and CSV frame, type, bytes and blocks
+columns, against main.
+
+Both helpers contain host allocation failures. `make_decode_grid` includes
+header diagnostics and grid creation in its exception boundary. Once a
+decode succeeds, aggregating its optional metrics cannot turn it into a
+failure: the reference has committed, so reporting failure would invite a
+retry against the wrong reference. A merge that runs out of host memory
+leaves the caller's prior metrics intact and returns decode success.
+`recon_codec_decode_grid_oom` injects the diagnostic and merge failures and
+checks that the following P-frame still decodes to the expected grid.
 
 The third of the 2026-09-26 entry's five PRs, and the first public API the
 codec has had: `codec/encoder.hpp` (`Encoder`, `EncoderConfig`) and

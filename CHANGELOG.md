@@ -143,10 +143,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `OutOfMemory`, where `kAuto` decoded it on the host. A frame of few
   segments, which `kAuto` also decoded on the host, decodes slower, at a
   cost the 2026-10-03 decoding decision's amendment measures. Migrating:
-  drop the config argument. The examples' `decode_growing` grows the grid
-  once a frame at most. Tests:
-  `recon_codec_decoder`, `recon_codec_inter`, `recon_codec_encoder`,
-  `recon_example_codec_stream`.
+  drop the config argument. Tests: `recon_codec_decoder`,
+  `recon_codec_inter`, `recon_codec_encoder`, `recon_example_codec_stream`.
 - `examples`: **the codec's step rules are recon's.** Examples and tests
   need core 0.6.0 (core #30), which leaves them to the codec:
   `encoder_config` maps `codec.quantization_table` to the weights and refuses
@@ -193,6 +191,21 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `codec`: **`make_decode_grid` and `decode_growing`**
+  (`codec/decode_grid.hpp`): a player's grid, built from a frame's header,
+  and a decode that grows it once when a frame outgrows it. They were the
+  examples' `player_grid` and `decode_growing`; `CodecStream` and the sweep
+  call them now, and `codec_replica` and `codec_mesh` write the same streams.
+  The `Decoder` still refuses rather than grows. Migrating:
+  `vr_example::player_grid(device, allocator, frame)` is
+  `codec::make_decode_grid(device, allocator, frame.data(), frame.size())`;
+  `decode_growing` takes the frame's pointer and size and counts no grows,
+  which show as a larger `num_buckets`. Factory host allocation failures
+  return `OutOfMemory`, including header diagnostics. A metrics merge that
+  runs out of host memory preserves the prior metrics and the successful
+  decode result, whose reference has already committed. Tests:
+  `recon_codec_decode_grid`, `recon_codec_decode_grid_oom`,
+  `recon_example_codec_stream`, `recon_example_mesh_sequence`.
 - `core`: **`core/shaders/pinhole.glsl`**, recon's GLSL pinhole, exported
   for a consumer's kernels: `vr_world_to_camera`, `vr_unproject_pinhole`,
   `vr_pinhole_pixel`, `vr_project_pinhole` and `vr_nearest_pixel`, on values
