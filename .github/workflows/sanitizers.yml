@@ -113,9 +113,13 @@ jobs:
             -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
             -DVR_SANITIZE="address;undefined" -DVR_BUILD_EXAMPLES=OFF
 
+      # The level is explicit, as in _build.yml's Build step; a hosted runner
+      # sets none, so this runs one job per core.
       - name: Build
         if: steps.detect.outputs.present == 'true'
-        run: cmake --build build --parallel
+        run: |
+          cmake --build build \
+            --parallel "${CMAKE_BUILD_PARALLEL_LEVEL:-$(getconf _NPROCESSORS_ONLN)}"
 
       # If a future mesa bump produces leak noise tools/lsan.supp doesn't cover,
       # the escape hatch is to split this run: CPU-only tests with full leak
