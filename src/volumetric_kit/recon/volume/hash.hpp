@@ -4,24 +4,32 @@
 #pragma once
 
 /// @file volume/hash.hpp
-/// @brief The spatial hash function and the hash-table slot sentinels.
+/// @brief The device hash table's entry layout and fail-tally slots.
+///
+/// Internal (under src/, never installed): the map sizes its table by
+/// @ref HashEntry and splits its retry tally by these slots, and its kernels
+/// read both through `volume/shaders/hash_common.glsl`, which mirrors them.
 
+#include <cstddef>
 #include <cstdint>
 
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
 
 namespace volumetric_kit::recon::volume {
 
-/// @name Hash-table slot sentinels
-/// The encoding of a @ref HashEntry, mirrored by
-/// `volume/shaders/hash_common.glsl`. `kFreeEntry` and `kLockEntry` occupy a
-/// slot's `ptr` field when it holds no live voxel-block pointer; `kNoOffset`
-/// terminates a collision chain in the `offset` field.
-/// @{
-inline constexpr std::int32_t kFreeEntry = -1;  ///< Empty slot.
-inline constexpr std::int32_t kLockEntry = -2;  ///< Slot locked mid-insert.
-inline constexpr std::int32_t kNoOffset = 0;    ///< Collision-chain terminator.
-/// @}
+/// Hash-table entry -- one per slot in the table. `hash_common.glsl`'s
+/// `HashEntry` is its device half, byte-identical under scalar block layout
+/// (the 2026-07-05 ABI; DESIGN.md's gotchas say why not `std430`).
+struct HashEntry {
+  std::int32_t ptr;     ///< A block pointer, or `hash_common.glsl`'s
+                        ///< `kFreeEntry` / `kLockEntry`.
+  Vec3i pos;            ///< Block coordinate (signed, 32-bit per axis).
+  std::int32_t offset;  ///< Collision offset for linked-list chaining.
+};
+static_assert(sizeof(HashEntry) == 20, "HashEntry must be 20 bytes");
+static_assert(offsetof(HashEntry, ptr) == 0, "HashEntry layout drift");
+static_assert(offsetof(HashEntry, pos) == 4, "HashEntry layout drift");
+static_assert(offsetof(HashEntry, offset) == 16, "HashEntry layout drift");
 
 /// @name Fail-count slots
 /// The layout of the per-dispatch failure tally the allocate and delete kernels
@@ -54,33 +62,5 @@ inline constexpr std::uint32_t kFailTerminal = 4;  ///< Non-retryable.
 inline constexpr std::uint32_t kFailTable = 5;
 inline constexpr std::uint32_t kFailSlots = 6;  ///< Slots in the tally.
 /// @}
-
-/// @name Spatial-hash primes
-/// The large primes of the Teschner et al. spatial hash. Unsigned so the
-/// coordinate multiply wraps with defined behaviour.
-/// @{
-inline constexpr std::uint32_t kHashPrimeX = 73856093u;
-inline constexpr std::uint32_t kHashPrimeY = 19349669u;
-inline constexpr std::uint32_t kHashPrimeZ = 83492791u;
-/// @}
-
-/// @brief Map a voxel-block coordinate to a bucket index in `[0, num_buckets)`.
-///
-/// The XOR-of-prime-products spatial hash. Deliberately all-unsigned: the block
-/// coordinate can be negative, and signed integer overflow is undefined, so
-/// each axis is cast to `uint32_t` before the multiply (a straight
-/// reinterpretation of the bits, matching the GLSL mirror).
-/// @param block        The voxel-block coordinate.
-/// @param num_buckets  The hash-table bucket count. @pre `num_buckets > 0`
-///                     (enforced by @ref VoxelGridParams::validate); a value of
-///                     0 is undefined -- integer division by zero.
-/// @return The bucket index the coordinate hashes to.
-inline std::uint32_t hash_bucket(Vec3i block, std::int32_t num_buckets) {
-  const std::uint32_t hash =
-      (static_cast<std::uint32_t>(block.x) * kHashPrimeX) ^
-      (static_cast<std::uint32_t>(block.y) * kHashPrimeY) ^
-      (static_cast<std::uint32_t>(block.z) * kHashPrimeZ);
-  return hash % static_cast<std::uint32_t>(num_buckets);
-}
 
 }  // namespace volumetric_kit::recon::volume

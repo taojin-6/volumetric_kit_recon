@@ -544,7 +544,9 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-13**](#2026-10-13--block-lists-reach-the-volume-tier-on-the-device-alone-a-host-list-entry-point-that-only-tests-called-goes-amends-the-2026-08-08-sparse-mesh-and-overflow-scan-2026-08-12-view-meshing-2026-09-26-codec-2026-09-28-device-memory-2026-10-03-garbage-collection-2026-10-06-public-api-and-view-culling-and-2026-10-13-coordinate-entries) —
   Block lists reach the volume tier on the device alone; a host-list entry
   point that only tests called goes: the host `BlockList`, the host-array
-  `allocate` and `remove`, and the table readbacks.
+  `allocate` and `remove`, and the table readbacks. *Amended 2026-10-17:*
+  `HashEntry` and the fail slots are internal, the host sentinels go, and
+  `hash_bucket` moves into the tests.
 - [**2026-10-14**](#2026-10-14--the-encoder-writes-zero-motion-p-frames-against-the-frame-it-returned-last-kept-in-the-referencestore-as-its-forward-made-it-five-rules-make-an-i-frame-and-the-split-the-diff-and-a-static-price-for-zero-run-on-the-device-amends-the-2026-10-13-decoder-and-coordinate-and-2026-10-12-p-frame-entries) —
   The `Encoder` writes zero-motion P-frames at `intra_period` above 1,
   against the frame it returned last, kept in the `ReferenceStore` as its
@@ -12794,6 +12796,18 @@ change, its own PR (done, the volume block-list entry below).
 
 ### 2026-10-13 — Block lists reach the volume tier on the device alone; a host-list entry point that only tests called goes (amends the 2026-08-08 sparse-mesh and overflow-scan, 2026-08-12 view-meshing, 2026-09-26 codec, 2026-09-28 device-memory, 2026-10-03 garbage-collection, 2026-10-06 public-API and view-culling, and 2026-10-13 coordinate entries).
 
+*Amended 2026-10-17 (the table's internals):* by the user's decision, the
+host mirrors this entry kept public leave the public headers, under the
+2026-10-06 rule. `HashEntry` and the fail-tally slots are internal
+(`src/volumetric_kit/recon/volume/hash.hpp`). The host slot sentinels,
+which nothing read, go, leaving `hash_common.glsl`'s. `hash_bucket` and its
+primes become the tests' oracle (`tests/volume_hash_oracle.hpp`).
+`BlockIndex` and `BlockStamp` stay public. Other tiers still bind
+`entries_buffer()` and read it through `hash_common.glsl` or
+`hash_lookup.glsl`. `recon_package_headers` fails if `volume/hash.hpp` is
+installed again, or if an installed volume header, or an installed header
+that includes one, declares any of these names in the volume namespace.
+
 **The rule** is the user's (2026-10-13): only I/O takes a host path --
 reading a mesh model, a camera stream (Orbbec, ARKit) -- and what it reads
 goes straight to the GPU; gfx shows processed results without a copy, and
@@ -12894,7 +12908,8 @@ a sibling:
    candidates on the device; the vertices and indices stay the mesh model's
    I/O.
 4. ios, when it re-pins: the compute smoke test uploads its eight blocks,
-   and the scanner's survey and stamps follow item 1.
+   and the scanner's survey and stamps follow item 1. The smoke test also
+   rewords its two comments that name `HashEntry` (the amendment above).
 5. The 2026-10-06 public-API entry's other exceptions, outside the volume
    tier, are audited under this rule: the host `TextureView` `texture`
    overloads, `FrequencyTable::empty`, and the camera tier's
