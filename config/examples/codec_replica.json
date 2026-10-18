@@ -13,7 +13,8 @@
     "voxel_size_m": 0.01
   },
   "codec": {
-    "encode_every": 0,
+    "intra_period": 30,
+    "encode_every": 1,
     "sweep": true
   }
 }
