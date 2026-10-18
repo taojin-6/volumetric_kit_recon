@@ -35,9 +35,9 @@ namespace vr_example {
 namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
 
-/// @brief The volume every example fuses into: 8x8x8-voxel blocks hashed into
-///        buckets of eight, carrying the three attributes @ref fuse_set
-///        writes -- `tsdf`, `weight` and `color`.
+/// @brief The volume every example fuses into: 8x8x8-voxel blocks carrying
+///        the three attributes @ref fuse_set writes -- `tsdf`, `weight` and
+///        `color`.
 ///
 /// The layout is @ref example_grid_params, which every example shares; the
 /// resolution, the band and the table's starting size are theirs to choose.
@@ -48,8 +48,8 @@ namespace vkc = volumetric_kit::core;
 /// @param allocator    Its allocator.
 /// @param voxel_size   Voxel edge (metres).
 /// @param trunc_dist   Truncation distance (metres).
-/// @param num_buckets  Initial hash-bucket count; `8 * num_buckets` must fit
-///                     an `int32_t`.
+/// @param num_buckets  Initial hash-bucket count, as @ref example_grid_params
+///                     takes it.
 /// @return The grid, or @ref vr::volume::VoxelBlockGrid::create's error.
 inline vkc::Result<vr::volume::VoxelBlockGrid> create_fusion_grid(
     vkc::Device& device, vkc::Allocator& allocator, float voxel_size,

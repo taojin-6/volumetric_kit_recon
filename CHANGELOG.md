@@ -8,6 +8,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `volume`: **one default hash layout**, `kDefaultBucketSize` (8) and
+  `kDefaultMaxChain` (128) in `volume/voxel_grid.hpp`.
+  `codec::make_decode_grid` and the examples' `example_grid_params` build
+  with it in place of their own copies; the examples'
+  `kExampleBucketSize` is gone. `VoxelGridParams{}` stays zero and refused.
+  Streams are unchanged. Tests: `recon_volume_coords`,
+  `recon_codec_decode_grid`.
 - `codec`: **frame type 1 is frozen** (the 2026-10-17 freeze decision): its
   bytes change only on purpose, never incidentally. `codec_replica.json`,
   now coding every frame, and `codec_mesh_sequence.json` code at period 30.

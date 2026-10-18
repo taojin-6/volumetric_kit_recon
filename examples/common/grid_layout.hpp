@@ -20,15 +20,13 @@ namespace vr_example {
 namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
 
-/// Blocks per hash bucket, and heap slots per bucket.
-inline constexpr std::int32_t kExampleBucketSize = 8;
-
-/// @brief 8x8x8-voxel blocks hashed into buckets of eight, one heap slot per
-///        bucket entry, chains of up to 128.
+/// @brief 8x8x8-voxel blocks in the default hash layout
+///        (@ref vr::volume::kDefaultBucketSize,
+///        @ref vr::volume::kDefaultMaxChain), one heap slot per bucket entry.
 /// @param voxel_size   Voxel edge (metres).
 /// @param trunc_dist   Truncation distance (metres).
-/// @param num_buckets  Hash-bucket count; `kExampleBucketSize *
-///                     num_buckets` must fit an `int32_t`.
+/// @param num_buckets  Hash-bucket count; `kDefaultBucketSize * num_buckets`
+///                     must fit an `int32_t`.
 inline vr::volume::VoxelGridParams example_grid_params(
     float voxel_size, float trunc_dist, std::int32_t num_buckets) {
   vr::volume::VoxelGridParams grid{};
@@ -36,10 +34,10 @@ inline vr::volume::VoxelGridParams example_grid_params(
   grid.block_size = 8;
   grid.voxels_per_block = 512;
   grid.trunc_dist = trunc_dist;
-  grid.bucket_size = kExampleBucketSize;
+  grid.bucket_size = vr::volume::kDefaultBucketSize;
   grid.num_buckets = num_buckets;
   grid.num_blocks = grid.bucket_size * grid.num_buckets;
-  grid.max_chain = 128;
+  grid.max_chain = vr::volume::kDefaultMaxChain;
   return grid;
 }
 
