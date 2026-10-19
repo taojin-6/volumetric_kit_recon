@@ -799,6 +799,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `mesh`: **`MeshExchange::begin_frame` hands an empty mesh to `commit`
+  with its payload**, where it committed one at once and dropped the
+  payload, so a consumer showing what the payload names (a player's frame)
+  stayed on the frame before. It still skips the bindable check, and
+  `commit` returning `false` parks it like any other. A `commit` that reads
+  the mesh's buffers checks `empty()` first, since an empty mesh may name
+  null ones. Regression: `recon_mesh_exchange`.
 - `stream`: allocation failures in writer validation, saved error copies,
   and reader key/position diagnostics return `OutOfMemory` instead of
   escaping as exceptions. Failed writes remain sticky even if allocating

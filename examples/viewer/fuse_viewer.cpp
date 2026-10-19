@@ -781,8 +781,8 @@ int run(GLFWwindow* window, const Options& opt) {
     // previous mesh, atlas and rows shown, so all three always come from the
     // same extract. The commit runs while the fuse thread may already be
     // extracting the next mesh, which is why the rows come in the payload. An
-    // empty mesh skips the callback, so the rows stay those of the last mesh
-    // that drew anything.
+    // empty mesh comes through it too, with an empty atlas job that copies
+    // nothing, so the rows are those of the extract that meshed nothing.
     atlas.poll();
     {
       // Scoped over the whole step, so the row reports ~0 on a frame with no

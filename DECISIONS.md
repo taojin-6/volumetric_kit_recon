@@ -462,7 +462,8 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-08**](#2026-10-08--the-fuse-to-render-handoff-is-meshmeshexchange-one-gfx-free-library-type-owns-the-rings-release-a-parked-take-caps-the-mark-and-an-empty-mesh-draws-nothing-amends-the-2026-08-08-seam-b-and-2026-09-29-rig_viewer-entries) —
   The fuse-to-render handoff is `mesh::MeshExchange`: one gfx-free library
   type owns the ring's release, a parked take caps the mark, and an empty
-  mesh draws nothing.
+  mesh draws nothing. *Amended 2026-10-19:* an empty mesh goes through
+  `commit` with its payload.
 - [**2026-10-08**](#2026-10-08--a-dynamic-set-clears-with-every-camera-before-it-fuses-with-any-amends-the-2026-09-30-one-batch-entry) —
   A Dynamic set clears with every camera before it fuses with any, through a
   clear kernel of its own; a single frame and Classic are unchanged.
@@ -11589,6 +11590,18 @@ tooling is the core's `tools/runners`; recon keeps no copy.
 drawn with is gfx's `StreamedAtlas`, and `viewer_atlas.hpp`'s `Atlas`,
 `upload_atlas`, `white_atlas` and `bind_atlas` are gone.
 
+*Amended 2026-10-19:* an empty mesh is handed to `commit` with its payload,
+like any other, and still skips the bindable check; `commit` returning
+`false` parks it. Committed at once, it dropped its payload, so a consumer
+whose payload names what the mesh shows (the player's `FrameStamp`) stayed
+on the frame before, and a stream that meshed nothing never left loading.
+The viewers' payloads hold an empty atlas job for an empty mesh, which
+copies nothing; `fuse_viewer`'s extract rows now describe it.
+`recon_mesh_exchange` covers the payload reaching the commit, an empty mesh
+replacing a drawn one, and a parked empty mesh capping the mark and holding
+newer meshes back until it is committed. Under the old rule, all three and
+the seeded runs fail.
+
 The protocol the 2026-08-08 entry derived was example code. `fuse_viewer`
 and `rig_viewer` each held the take, commit and park state machine and the
 producer's release, `viewer_common.hpp` held the mark and the bindable
@@ -11606,10 +11619,10 @@ the handoff:
 - Consumer: `begin_frame(slot, commit)`, once a frame after the renderer's
   fence wait for that slot. It retires the slot, computes the mark, and takes
   the newest mesh unless one is parked or the exchange has latched, all under
-  one lock. It then commits an empty mesh at once, refuses an unbindable one
-  (latching), and commits any other once `commit` (the consumer's atlas, made
-  from the payload) accepts it, parking it when it does not. `live()` is what
-  to draw.
+  one lock. It then commits an empty mesh at once (until the 2026-10-19
+  amendment), refuses an unbindable one (latching), and commits any other
+  once `commit` (the consumer's atlas, made from the payload) accepts it,
+  parking it when it does not. `live()` is what to draw.
 - The payload is whatever must stay with the mesh: what its `uv0` index
   into (`fuse_viewer`'s keyframe pixels, `rig_viewer`'s atlas job), so the
   mesh and its atlas stay one value by construction, and in `fuse_viewer`
@@ -11629,8 +11642,8 @@ reclaimed it, and the retried commit drew freed buffers. The mark now stops
 one below a parked generation.
 
 **An empty mesh draws nothing.** It is taken like any other, committed
-without the bindable check or the payload's commit, and released with the
-rest.
+without the bindable check or (until the 2026-10-19 amendment) the payload's
+commit, and released with the rest.
 
 **Why the mesh tier, not an `interop` target.** The protocol belongs to the
 ring and names no gfx type, so it sits beside `MarchingCubes` in
