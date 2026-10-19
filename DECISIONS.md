@@ -11599,7 +11599,8 @@ The viewers' payloads hold an empty atlas job for an empty mesh, which
 copies nothing; `fuse_viewer`'s extract rows now describe it.
 `recon_mesh_exchange` covers the payload reaching the commit, an empty mesh
 replacing a drawn one, and a parked empty mesh capping the mark and holding
-newer meshes back until it is committed.
+newer meshes back until it is committed. Under the old rule, all three and
+the seeded runs fail.
 
 The protocol the 2026-08-08 entry derived was example code. `fuse_viewer`
 and `rig_viewer` each held the take, commit and park state machine and the
@@ -11618,10 +11619,10 @@ the handoff:
 - Consumer: `begin_frame(slot, commit)`, once a frame after the renderer's
   fence wait for that slot. It retires the slot, computes the mark, and takes
   the newest mesh unless one is parked or the exchange has latched, all under
-  one lock. It then commits an empty mesh at once, refuses an unbindable one
-  (latching), and commits any other once `commit` (the consumer's atlas, made
-  from the payload) accepts it, parking it when it does not. `live()` is what
-  to draw.
+  one lock. It then commits an empty mesh at once (until the 2026-10-19
+  amendment), refuses an unbindable one (latching), and commits any other
+  once `commit` (the consumer's atlas, made from the payload) accepts it,
+  parking it when it does not. `live()` is what to draw.
 - The payload is whatever must stay with the mesh: what its `uv0` index
   into (`fuse_viewer`'s keyframe pixels, `rig_viewer`'s atlas job), so the
   mesh and its atlas stay one value by construction, and in `fuse_viewer`
@@ -11641,8 +11642,8 @@ reclaimed it, and the retried commit drew freed buffers. The mark now stops
 one below a parked generation.
 
 **An empty mesh draws nothing.** It is taken like any other, committed
-without the bindable check or the payload's commit, and released with the
-rest.
+without the bindable check or (until the 2026-10-19 amendment) the payload's
+commit, and released with the rest.
 
 **Why the mesh tier, not an `interop` target.** The protocol belongs to the
 ring and names no gfx type, so it sits beside `MarchingCubes` in
