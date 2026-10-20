@@ -21,6 +21,7 @@ directory are escaped automatically when resolving a relative mesh path.
 | `codec_mesh` | [codec_mesh.json](examples/codec_mesh.json) | One mesh, placed in metres, and codec study |
 | `codec_mesh` | [codec_mesh_sequence.json](examples/codec_mesh_sequence.json) | Numbered mesh sequence under one placement, coded frame by frame |
 | `fuse_orbbec` | [fuse_orbbec.json](examples/fuse_orbbec.json) | Live camera/rig to PLY |
+| `fuse_orbbec` | [codec_orbbec.json](examples/codec_orbbec.json) | Live rig, each set reconstructed on its own and coded frame by frame |
 | `fuse_orbbec` | [stream_orbbec.json](examples/stream_orbbec.json) | Live stream/decode only |
 | `fuse_orbbec` | [readback_orbbec.json](examples/readback_orbbec.json) | Live stream with luma readback |
 | `fuse_orbbec` | [dump_orbbec.json](examples/dump_orbbec.json) | Live stream with readback, first sets' JPEGs and luma written |
@@ -69,6 +70,14 @@ I-frame. `codec_replica.json` and `codec_mesh_sequence.json` use 30;
 P-frames' update segments, so core refuses it, even as 0, at a
 `codec.intra_period` of 1 or with `codec.inspect_only`.
 
+`fuse_orbbec` codes each fused set as one frame when `output.stream` or
+`output.csv` names a file, with the codec examples' `codec` keys other than
+`encode_every` and `inspect_only`; it still writes the PLY at `output.path`.
+`fusion.accumulate` (default true) fuses each set into the grid so far;
+false clears the grid before each set. `codec_orbbec.json` codes 150 sets of
+a four-camera rig that way at 1 cm, at period 30: add `source.calibration`,
+or every camera sits at the origin.
+
 `fuse_orbbec` accepts `diagnostics.readback: true` in either a stream or fusion
 scenario. It copies every set's luma to host memory and reports a separate
 `readback` stage. It defaults to false, so a stream without it measures only
@@ -83,8 +92,9 @@ needs `source.color_codec: "mjpeg"`. Writing slows the sets it writes.
 that ends before N sets says so with a warning, and a set the run's end cuts
 writes only the frames it keeps.
 
-`operation: "stream"` refuses an explicitly supplied `fusion` or `output`
-section, including settings equal to their defaults. Leave those sections out.
+`operation: "stream"` refuses an explicitly supplied `fusion`, `codec` or
+`output` section, including settings equal to their defaults. Leave those
+sections out.
 `source.serial` and `source.sync_config` are mutually exclusive;
 `source.apply_sync` needs the sync file, and `source.host_clock` is a
 single-camera option. Loading or validating a scenario never changes camera

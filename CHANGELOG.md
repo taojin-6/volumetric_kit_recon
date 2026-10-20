@@ -202,6 +202,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `examples`: **`fuse_orbbec` codes its sets into a `.vrst`** (core 0.13.0,
+  the 2026-10-20 decision). With `output.stream` or `output.csv` it opens
+  `CodecStream` before the cameras, codes each fused set as one frame whose
+  record's set is the set's index in the run and whose pts is the set's host
+  time, and reports the stream; `codec.sweep` sweeps the last grid.
+  `fusion.accumulate: false` clears the grid before each set
+  (`vr_example::fuse_and_code`, `set_codec.hpp`). The PLY is refused when it
+  is the stream's or the CSV's file under another name (`check_apart`).
+  `config/examples/codec_orbbec.json` codes 150 sets of the rig at 1 cm.
+  Tests: `recon_example_set_codec`, `recon_example_config`.
 - `codec`: **`make_decode_grid` and `decode_growing`**
   (`codec/decode_grid.hpp`): a player's grid, built from a frame's header,
   and a decode that grows it once when a frame outgrows it. They were the
