@@ -40,6 +40,16 @@ include(FetchContent)
 # which core each part needs.
 #
 # TODO: pin a core release tag once the core tags its releases.
+# TODO(O1b): fuse_orbbec's fusion.free_after, and the refusal of the dropped
+# fusion.accumulate, are core 0.14.0's (volumetric_kit_core
+# feat/fuse-orbbec-dynamic); at 0.13.0 a FuseOrbbec scenario's free_after is
+# refused and its accumulate loads unread. Once that PR merges, and before this
+# branch merges, pin its merge commit here and in the Homebrew key action
+# (.github/workflows/_build.yml), and raise the core floor of the examples and
+# their tests from 0.13.0 to 0.14.0, naming free_after as the reason, wherever
+# it is stated: the pin paragraph above, vkc_require_core(0.13.0 CONFIG) and its
+# comment below, README.md, config/README.md, DESIGN.md ("The examples require
+# core") and the fuse_orbbec entry in CHANGELOG.md.
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
