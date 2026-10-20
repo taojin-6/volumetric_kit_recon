@@ -5,11 +5,12 @@
 // of N frames keeps a set's first frames in the array's order, past its
 // missing ones, and lets the rest go, their pictures with them. The run over
 // an array of pushed fake cameras: each set waited for, counted and cut, the
-// run done at exactly N frames, a set missing a secondary counted as it came,
-// and each secondary's skew to the primary over every frame it sent, the
-// primary's none. The single camera a calibration file names: the one asked
-// for if posed, or the file's only posed one, past a camera listed for its
-// lenses alone. A camera's report, its lens models included. Host only.
+// run done at exactly N frames, or kept whole past N, a set missing a
+// secondary counted as it came, and each secondary's skew to the primary over
+// every frame it sent, the primary's none. The single camera a calibration file
+// names: the one asked for if posed, or the file's only posed one, past a
+// camera listed for its lenses alone. A camera's report, its lens models
+// included. Host only.
 
 #include <cmath>
 #include <cstddef>
@@ -123,8 +124,8 @@ class Pushed final : public sensor::IRgbdSensor {
 
 // A run of 4 frames from a primary "P" and its secondary "S", in that order:
 // a complete set (2 frames), one missing S (1), and a complete one cut to the
-// last frame the run takes, P's.
-int run() {
+// last frame the run takes, P's, or with `whole` kept whole, 5 frames in all.
+int run(bool whole) {
   auto primary = std::make_unique<Pushed>("P", sensor::SyncRole::Primary);
   auto secondary = std::make_unique<Pushed>("S", sensor::SyncRole::Secondary);
   Pushed* p = primary.get();
@@ -139,7 +140,7 @@ int run() {
   sensor::SensorArray array = std::move(opened).value();
   CHECK(array.start().ok() && array.primary() == 0);
 
-  vr_example::RigSets sets(array, 4);
+  vr_example::RigSets sets(array, 4, whole);
   vkc::StageMetrics stages;
   CHECK(!sets.done() && sets.sets() == 0 && sets.frames() == 0);
   const std::uint64_t base = 5'000'000'000;
@@ -164,11 +165,12 @@ int run() {
   CHECK(!sets.done() && sets.sets() == 2 && sets.frames() == 3);
 
   // One frame left to take: the set is cut to P's, the first in the array's
-  // order, and the run is done at exactly 4.
+  // order, and the run is done at exactly 4; or kept whole, at 5.
   trigger(2, -120'000);
   set = sets.next(&stages);
-  CHECK(set.ok() && set.value().count() == 1 && set.value().frames[0]);
-  CHECK(sets.done() && sets.sets() == 3 && sets.frames() == 4);
+  CHECK(set.ok() && set.value().count() == (whole ? 2u : 1u) &&
+        set.value().frames[0]);
+  CHECK(sets.done() && sets.sets() == 3 && sets.frames() == (whole ? 5u : 4u));
 
   // S's skew over the two frames it sent, the one the cut let go included;
   // the primary has none.
@@ -281,7 +283,8 @@ int report() {
 
 int main() {
   CHECK(cut() == 0);
-  CHECK(run() == 0);
+  CHECK(run(false) == 0);
+  CHECK(run(true) == 0);
   CHECK(posed() == 0);
   CHECK(report() == 0);
   std::puts("example_fuse_orbbec_sets: OK");

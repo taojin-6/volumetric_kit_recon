@@ -4,16 +4,12 @@
 #pragma once
 
 /// @file examples/common/set_codec.hpp
-/// @brief fuse_orbbec's coded sets: each set, as the array prepares it on the
-///        device, fused into the grid, cleared first unless
-///        `fusion.accumulate`, and coded as one frame of a @ref CodecStream
-///        at the set's time. It needs no camera driver, so its test runs on
-///        every build.
+/// @brief fuse_orbbec's coded sets, apart from its camera driver, so their
+///        test runs on every build.
 
+#include <algorithm>
 #include <cstddef>
-#include <filesystem>
 #include <string>
-#include <system_error>
 
 #include "codec_stream.hpp"
 #include "config.hpp"
@@ -26,19 +22,21 @@
 
 namespace vr_example {
 
-/// @brief Fuse @p set into @p grid as @p fusion says (@ref fuse_set), and code
-///        the grid as one frame of @p stream.
+/// @brief Fuse @p set, as the array prepared it on the device, into @p grid
+///        as @p fusion says (@ref fuse_set), and code the grid as one frame
+///        of @p stream at the set's time.
 ///
 /// With `fusion.accumulate` the set joins the grid so far. Without it the
 /// grid is cleared first, so the frame is the set's own reconstruction, as
-/// codec_mesh codes one mesh a frame.
+/// codec_mesh codes one mesh a frame. A set stamped before the last frame
+/// recorded, as a clock stepping back stamps it, is coded at that frame's
+/// time rather than refused.
 /// @param index   The set's index in the run: the frame's number, above every
 ///                frame coded before.
 /// @param stream  The stream, or null to fuse alone.
 /// @param stages  Optional stage rows for the fusion; the stream keeps the
 ///                codec's own.
-/// @return OK; the clear's or `Fuser::fuse`'s error; or `CodecStream::code`'s,
-///         which refuses a set's time earlier than the last one's.
+/// @return OK; the clear's, `Fuser::fuse`'s or `CodecStream::code`'s error.
 inline vkc::Status fuse_and_code(vr::tsdf::Fuser& fuser,
                                  vr::volume::VoxelBlockGrid& grid,
                                  const vr::sensor::DeviceFrameSet& set,
@@ -50,23 +48,17 @@ inline vkc::Status fuse_and_code(vr::tsdf::Fuser& fuser,
   VKC_TRY(fuse_set(fuser, grid, set.frames, fusion.max_weight,
                    integration_mode(fusion.dynamic), stages));
   if (stream == nullptr) return {};
-  return stream->code(grid, index, set.timestamp_ns);
+  return stream->code(grid, index,
+                      std::max(set.timestamp_ns, stream->last_pts_ns()));
 }
 
-/// @brief Refuse to write @p path over a file @p outputs wrote. The core
-///        compares the paths' text, so another spelling of the stream's or
-///        the CSV's file, through a case alias or a link, passes it.
-/// @return OK when @p path names neither file or does not exist yet;
-///         InvalidArgument naming both when it names one.
+/// @brief Refuse to write @p path over a file @p outputs name
+///        (@ref check_not_same_file), once they exist.
+/// @return OK, or the first refusal.
 inline vkc::Status check_apart(const std::string& path,
                                const CodecOutputs& outputs) {
   for (const std::string* output : {&outputs.stream, &outputs.csv}) {
-    std::error_code error;  // a path that cannot be checked is not refused
-    if (!output->empty() && std::filesystem::exists(path, error) &&
-        std::filesystem::equivalent(path, *output, error)) {
-      return vkc::Status::invalid_argument(path + " is the file " + *output +
-                                           " already holds");
-    }
+    if (!output->empty()) VKC_TRY(check_not_same_file(path, *output));
   }
   return {};
 }

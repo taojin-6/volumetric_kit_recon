@@ -15,8 +15,9 @@
 // encoded but not decoded, or whose CSV row fails, an I-frame where the
 // encoder would code a P-frame; a frame out of order, or any call once
 // finished, refused before anything is encoded; a stream never finished
-// still read whole; and the CSV replaced on create and extended as each frame
-// is coded. The device part skips with no device.
+// still read whole, and one dropped before its first frame removed; and the
+// CSV replaced on create and extended as each frame is coded. The device part
+// skips with no device.
 
 #include <signal.h>
 #include <sys/resource.h>
@@ -407,12 +408,19 @@ int check_records(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
 }
 
 // A stream destroyed without finish leaves a file that reads as a killed
-// writer's: not finished, every record whole.
+// writer's: not finished, every record whole. Destroyed before its first
+// frame, it leaves none, so a rerun onto its path is not refused.
 int unfinished(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
                const vr_test::Scratch& scratch) {
   vr_example::CodecOutputs outputs;
   outputs.stream = (scratch.path / "unfinished.vrst").string();
-  {
+  {  // Dropped before its first frame: the file is taken back.
+    vkc::Result<vr_example::CodecStream> made =
+        vr_example::CodecStream::create(gpu.device, gpu.allocator, {}, outputs);
+    CHECK(made.ok() && fs::exists(outputs.stream));
+  }
+  CHECK(!fs::exists(outputs.stream));
+  {  // Created again at the same path, and dropped with two frames.
     vkc::Result<vr_example::CodecStream> made =
         vr_example::CodecStream::create(gpu.device, gpu.allocator, {}, outputs);
     CHECK(made.ok());

@@ -6,12 +6,15 @@
 // the device as a rig's are. Three sets fused and coded at an intra period of
 // 30 into a .vrst: a Geometry record each, only the first a key, each record's
 // set the set's index and its pts the set's time, and every frame decodes
-// through codec::decode_growing. Each camera sees a wall 1 m ahead over the
-// left of its picture in the first set and over the right in the others: with
-// fusion.accumulate false the left walls are gone from the second and third
-// frames' decodes, and with it true they stay. On the host, a path that is the
-// stream's or the CSV's file through a link refused, and one beside them
-// taken. The device part skips with no device.
+// through codec::decode_growing. The last set is stamped before the one
+// before it, as a clock stepping back stamps it, and is coded at that one's
+// time. Each camera sees a wall 1 m ahead over the left of its picture in the
+// first set and over the right in the others: with fusion.accumulate false
+// the left walls are gone from the second and third frames' decodes and from
+// the grid left after the run, with or without a stream, and with it true
+// they stay. On the host, a path that is the stream's or the CSV's file
+// through a link refused, one beside them taken, and one that cannot be
+// checked refused. The device part skips with no device.
 
 #include <array>
 #include <chrono>
@@ -60,7 +63,16 @@ constexpr std::uint64_t kStartNs = 1'760'000'000'123'456'789;
 constexpr std::uint64_t kPeriodNs = 33'366'701;
 constexpr double kOffsetM = 3.0;  // camera B's x; camera A's is 0
 
-std::uint64_t set_time(std::size_t set) { return kStartNs + set * kPeriodNs; }
+// A set's time: the last set's 1 us before the one before it.
+std::uint64_t set_time(std::size_t set) {
+  return set + 1 < kSets ? kStartNs + set * kPeriodNs
+                         : set_time(set - 1) - 1000;
+}
+
+// The pts a set is coded at: its time, or the last frame's when earlier.
+std::uint64_t coded_pts(std::size_t set) {
+  return set + 1 < kSets ? set_time(set) : set_time(set - 1);
+}
 
 // A camera on the host's clock at 30 fps whose frames the test pushes: a
 // wall 1 m ahead over the left or the right of its picture, no return
@@ -120,23 +132,31 @@ class Camera final : public sensor::IRgbdSensor {
   std::vector<sensor::RgbdFrame> frames_;
 };
 
-// Vertices of a mesh on each camera's walls: A's left and right, then B's.
-using Walls = std::array<std::size_t, 4>;
-
-Walls walls(const vr::mesh::Mesh& mesh) {
-  Walls count{};
-  for (const vr::mesh::Vertex& v : mesh.vertices) {
+// Whether `grid`'s surface holds both cameras' left walls exactly when
+// `left`, and their right walls exactly when `right`.
+int walls(vr::mesh::MarchingCubes& extractor, vr::volume::VoxelBlockGrid& grid,
+          bool left, bool right) {
+  auto mesh = extractor.extract_host(grid);
+  CHECK(mesh.ok());
+  // Vertices on each camera's walls: A's left and right, then B's.
+  std::array<std::size_t, 4> count{};
+  for (const vr::mesh::Vertex& v : mesh->vertices) {
     const double x = v.position.x;
     const bool b = x > kOffsetM / 2;
-    const bool right = x > (b ? kOffsetM : 0.0);
-    ++count[(b ? 2 : 0) + (right ? 1 : 0)];
+    const bool on_right = x > (b ? kOffsetM : 0.0);
+    ++count[(b ? 2 : 0) + (on_right ? 1 : 0)];
   }
-  return count;
+  for (const std::size_t c : {std::size_t{0}, std::size_t{2}}) {
+    CHECK((count[c] > 0) == left);
+    CHECK((count[c + 1] > 0) == right);
+  }
+  return 0;
 }
 
 // Push, poll and prepare kSets sets, the first's walls on the left and the
-// others' on the right, fusing and coding each through fuse_and_code into a
-// new stream at `path`.
+// others' on the right, fusing each through fuse_and_code and coding it into
+// a new stream at `path`, unless empty. The grid left after the run holds the
+// last set's walls, and the first's only if `accumulate`.
 int code_sets(vr_test::GpuContext& gpu, const cfg::Fusion& fusion,
               const std::string& path) {
   auto a = std::make_unique<Camera>("A", sensor::SyncRole::Primary);
@@ -165,13 +185,17 @@ int code_sets(vr_test::GpuContext& gpu, const cfg::Fusion& fusion,
   CHECK(grid.ok());
   auto fuser = vr::tsdf::Fuser::create(gpu.device, gpu.allocator);
   CHECK(fuser.ok());
-  codec::EncoderConfig config;
-  config.intra_period = 30;
-  vr_example::CodecOutputs outputs;
-  outputs.stream = path;
-  auto coded = vr_example::CodecStream::create(gpu.device, gpu.allocator,
-                                               config, outputs);
-  CHECK(coded.ok());
+  std::optional<vr_example::CodecStream> coded;
+  if (!path.empty()) {
+    codec::EncoderConfig config;
+    config.intra_period = 30;
+    vr_example::CodecOutputs outputs;
+    outputs.stream = path;
+    auto made = vr_example::CodecStream::create(gpu.device, gpu.allocator,
+                                                config, outputs);
+    CHECK(made.ok());
+    coded.emplace(std::move(made).value());
+  }
   for (std::size_t s = 0; s < kSets; ++s) {
     for (Camera* c : cameras) c->push(s, s == 0);
     auto set = array.poll_set();
@@ -183,17 +207,22 @@ int code_sets(vr_test::GpuContext& gpu, const cfg::Fusion& fusion,
     auto prepared = array.process(*set.value());
     CHECK(prepared.ok() && prepared->timestamp_ns == set_time(s));
     CHECK(vr_example::fuse_and_code(*fuser, *grid, *prepared, s, fusion,
-                                    &*coded, nullptr)
+                                    coded ? &*coded : nullptr, nullptr)
               .ok());
   }
-  CHECK(coded->rows().size() == kSets);
-  CHECK(coded->finish().ok());
+  if (coded) {
+    CHECK(coded->rows().size() == kSets);
+    CHECK(coded->finish().ok());
+  }
+  auto extractor = vr::mesh::MarchingCubes::create(gpu.device, gpu.allocator);
+  CHECK(extractor.ok());
+  CHECK(walls(*extractor, *grid, fusion.accumulate, true) == 0);
   return 0;
 }
 
 // The stream at `path`: a Geometry record per set, only the first a key,
-// each at its set and the set's time, and each decoding. The second set
-// on, the left walls are there only if `accumulate`.
+// each at its set and coded pts, and each decoding. The second set on, the
+// left walls are there only if `accumulate`.
 int check_stream(vr_test::GpuContext& gpu, const std::string& path,
                  bool accumulate) {
   auto opened = stream::StreamReader::open(path);
@@ -217,7 +246,7 @@ int check_stream(vr_test::GpuContext& gpu, const std::string& path,
     CHECK(more.ok() && *more);
     CHECK(record.info.key == (s == 0));
     CHECK(record.info.seq == s && record.info.set == s);
-    CHECK(record.info.pts_ns == set_time(s));
+    CHECK(record.info.pts_ns == coded_pts(s));
     CHECK(reader.read(record, &payload).ok());
     if (!player) {
       auto made = codec::make_decode_grid(gpu.device, gpu.allocator,
@@ -228,15 +257,7 @@ int check_stream(vr_test::GpuContext& gpu, const std::string& path,
     CHECK(
         codec::decode_growing(*decoder, payload.data(), payload.size(), *player)
             .ok());
-    auto decoded = extractor->extract_host(*player);
-    CHECK(decoded.ok());
-    const Walls seen = walls(*decoded);
-    const bool left = s == 0 || accumulate;
-    const bool right = s > 0;
-    for (const std::size_t c : {std::size_t{0}, std::size_t{2}}) {
-      CHECK((seen[c] > 0) == left);
-      CHECK((seen[c + 1] > 0) == right);
-    }
+    CHECK(walls(*extractor, *player, s == 0 || accumulate, s > 0) == 0);
   }
   const vkc::Result<bool> end = reader.next(&pos, &record);
   CHECK(end.ok() && !*end);
@@ -253,13 +274,15 @@ int gpu_main(vr_test::GpuContext& gpu) {
             .string();
     CHECK(code_sets(gpu, fusion, path) == 0);
     CHECK(check_stream(gpu, path, accumulate) == 0);
+    CHECK(code_sets(gpu, fusion, "") == 0);  // fused alone
   }
   std::puts("example_set_codec: OK");
   return 0;
 }
 
 // check_apart: a path that does not exist, or is another file, is taken; a
-// link to the stream or the CSV is refused, naming both.
+// link to the stream or the CSV is refused, naming both; and a path that
+// cannot be told apart from a missing output is refused.
 int apart() {
   vr_test::Scratch scratch("recon_example_set_codec_apart_");
   vr_example::CodecOutputs outputs;
@@ -283,6 +306,10 @@ int apart() {
     CHECK(refused.message().find(link.string()) != std::string::npos &&
           refused.message().find(*target) != std::string::npos);
   }
+  vr_example::CodecOutputs missing;
+  missing.stream = (scratch.path / "missing.vrst").string();
+  CHECK(vr_example::check_apart(other.string(), missing).domain() ==
+        vkc::Status::Code::IoError);
   return 0;
 }
 

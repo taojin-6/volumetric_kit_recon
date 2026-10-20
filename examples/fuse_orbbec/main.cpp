@@ -33,10 +33,11 @@
 // seconds without a frame rather than waiting, still reporting them.
 //
 // output.stream or output.csv codes each fused set as one frame of the codec
-// examples' stream (vr_example::CodecStream) at the set's time on the host's
-// clock, and reports the stream; codec.sweep then prints the codec's
-// rate-distortion table on the last grid. fusion.accumulate false clears the
-// grid before each set, so each frame, and the PLY, is one set's own
+// examples' stream (vr_example::CodecStream) at the set's time, the host's
+// clock for a rig, and reports the stream, even when the run fails part-way;
+// codec.sweep then prints the codec's rate-distortion table on the last grid.
+// fusion.accumulate false clears the grid before each set and keeps the
+// run's last set whole, so each frame, and the PLY, is one set's own
 // reconstruction.
 
 #include <chrono>
@@ -109,7 +110,9 @@ vkc::Status run(const Options& opt) {
              vkc::Allocator::create(instance.handle(), device));
 
   // --- Codec, with output.stream or output.csv: before the cameras, so a
-  // rerun onto an existing stream is refused before any camera opens ---
+  // rerun onto an existing stream, or a PLY that is its file or the CSV's
+  // under another name, is refused before any camera opens. A stream that
+  // codes no set is removed again when the run ends ---
   std::optional<vr_example::CodecStream> stream;
   if (!opt.output.stream.empty() || !opt.output.csv.empty()) {
     VKC_ASSIGN(vr_example::CodecStream made,
@@ -117,6 +120,8 @@ vkc::Status run(const Options& opt) {
                    device, allocator, config,
                    vr_example::codec_outputs(opt.output), "fuse_orbbec"));
     stream.emplace(std::move(made));
+    VKC_TRY(vr_example::check_apart(opt.output.path,
+                                    vr_example::codec_outputs(opt.output)));
     std::printf("codec: %s\n",
                 vr_example::codec_settings(config, opt.codec.quantization_table)
                     .c_str());
@@ -161,7 +166,8 @@ vkc::Status run(const Options& opt) {
   const char* verb = (opt.operation == vr_example::config::Operation::Stream)
                          ? "streamed"
                          : "fused";
-  vr_example::RigSets sets(*array, static_cast<std::size_t>(opt.run.frames));
+  vr_example::RigSets sets(*array, static_cast<std::size_t>(opt.run.frames),
+                           !opt.fusion.accumulate);
   vkc::StageMetrics stage_totals;
   const auto t_start = std::chrono::steady_clock::now();
   const vkc::Status streamed = [&]() -> vkc::Status {
@@ -197,10 +203,18 @@ vkc::Status run(const Options& opt) {
   const double secs = seconds_since(t_start);
   const double fps =
       static_cast<double>(sets.frames()) / (secs > 0.0 ? secs : 1.0);
-  // Before any error: a run that stalls still reports what it counted.
+  // Before any error: a run that stalls still reports what it counted, and
+  // finishes and reports the frames it coded.
   sets.print_stats();
   std::fputs(dump.report().c_str(), stdout);
+  vkc::Status finished;
+  if (stream && !stream->rows().empty()) {
+    finished = stream->finish();
+    // A coded frame per source set; one frame alone has no bitrate.
+    stream->report(opt.source.fps, stream->rows().size() > 1 ? 1 : 0);
+  }
   VKC_TRY(streamed);
+  VKC_TRY(finished);
   array.reset();
 
   if (!volume) {
@@ -214,15 +228,9 @@ vkc::Status run(const Options& opt) {
   vr_example::print_stage_rows("stages per fused frame, mean over " +
                                    std::to_string(sets.frames()) + " frames",
                                stage_totals, sets.frames());
-  if (stream) {
-    VKC_TRY(stream->finish());
-    stream->report(opt.source.fps, stream->rows().size() > 1 ? 1 : 0);
-  }
 
-  // --- Mesh -> PLY, never over the stream or its rows ---
+  // --- Mesh -> PLY ---
   VKC_ASSIGN(mesh::Mesh final_mesh, extractor->extract_host(*volume, 0.0f));
-  VKC_TRY(vr_example::check_apart(opt.output.path,
-                                  vr_example::codec_outputs(opt.output)));
   VKC_TRY(vr::io::write_ply(opt.output.path, final_mesh));
   std::printf(
       "done: fused %zu frames in %.1fs (%.1f fps), mesh %zu vertices / %zu "
