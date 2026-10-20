@@ -13926,24 +13926,28 @@ opens the `codec` section, `output.stream`, `output.csv` and
   each set, as `codec_mesh` converts each mesh into a cleared grid, so each
   coded frame is one set's own reconstruction. The default, true, keeps the
   accumulating scan. Every set is coded, so each P-frame carries that set's
-  sensor noise. Dynamic fusion that frees stale blocks, as `rig_viewer`
-  runs, was the other choice; it waits for a need.
+  sensor noise, and a set missing a camera is a frame without its view; the
+  run's last set is kept whole rather than cut to `run.frames`. Dynamic
+  fusion that frees stale blocks, as `rig_viewer` runs, was the other
+  choice; it waits for a need.
 - **The calibration's world.** The stream holds the geometry where
   `source.calibration` puts it: no upright transform, and the Geometry
-  track's params stay empty. A portrait rig calibrated to one of its
-  cameras lies sideways in a y-up player; turning a world upright is later
-  work, on the writer's side or the player's.
-- **Numbered by the run.** A record's set is the set's index in the run and
-  its pts the set's host time, so a set the loop missed shows as a gap in
-  pts.
-- **Not yet:** a capture-volume crop (`fusion.max_depth_m` is the limit
-  there is), raw RGBD recording and replay, colour, and the session's host
-  clock and calibration, which `CodecStream` does not record.
+  track's params stay empty. No such world is upright in the player, which
+  keeps +Y up: a world anchored to a camera is that camera's, +Y down and
+  on its side for a camera mounted on its side, and a tag's world is z-up
+  (the 2026-10-18 entry). Turning a world upright is later work, on the
+  writer's side or the player's.
+- **Numbered by the run, timed by the set**, so a set the loop missed is a
+  gap in pts, not in numbers, and a clock stepping back does not end the
+  run.
+- **Deferred** by the user, with the rest in DESIGN's Next work: a crop,
+  raw recording, colour and an upright world.
 
 **Validation.** `recon_example_set_codec` codes three sets of two fake
 cameras, read through a `SensorArray` and prepared on the GPU, into a
-`.vrst`, under the validation layer. No camera was opened; `fuse_orbbec`
-has not yet run on the rig.
+`.vrst`, under the validation layer, and checks the grid each run leaves,
+with a stream and without. No camera was opened; `fuse_orbbec` has not yet
+run on the rig.
 
 ## Measured lessons
 

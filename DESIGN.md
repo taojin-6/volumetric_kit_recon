@@ -1828,15 +1828,17 @@ or when it fails, the array's counters, each camera's `lost` frames and, for
 a rig, each secondary's mean and worst skew to the primary. Colour is H.265
 unless `source.color_codec: "mjpeg"`.
 With `output.stream` or `output.csv` it also codes each fused set as one
-frame through the codec examples' `CodecStream`, opened before the cameras
-(`set_codec.hpp`, the 2026-10-20 decision): a record's set is the set's index
-in the run and its pts the set's host time, so a set the loop missed shows
-as a gap in pts. `fusion.accumulate: false` clears the grid before each
-set, so each frame is that set's own reconstruction and the PLY the last
-set's. The PLY is refused when it is the stream's or the CSV's file under
-another name, and `codec.sweep` sweeps the last grid. Two costs are not yet
-measured on the rig: the stream decodes every frame again into its player
-grid, and a loop slower than the rig gets the newest set, so sets drop.
+frame through the codec examples' `CodecStream` (`fuse_and_code`,
+`set_codec.hpp`; the 2026-10-20 decision). `main.cpp` opens the stream
+before the cameras and refuses there a PLY that is the stream's or the
+CSV's file under another name. A record's set is the set's index in the run
+and its pts the set's time; a set stamped before the last frame, as a clock
+stepping back stamps it, takes that frame's time. `fusion.accumulate: false`
+clears the grid before each set and keeps the run's last set whole, so each
+frame is that set's own reconstruction and the PLY the last set's. A run
+that fails part-way still finishes and reports its stream; one that coded
+no set leaves none. The report's bitrate is at `source.fps`, and
+`codec.sweep` sweeps the last grid.
 **`rig_viewer`** (`VR_BUILD_VIEWER` with `VR_WITH_ORBBEC` and
 `VR_WITH_FFMPEG`; CI's viewer leg compiles it) is `fuse_viewer`'s live-rig
 sibling: an `OrbbecSensor` per camera of the sync file read as a
@@ -1894,7 +1896,8 @@ player lacks. `finish` writes the footer.
 Before truncating the CSV, creation checks that it does not alias the new
 stream file, including through symlinks or case-insensitive names. An alias
 is `InvalidArgument`; a CSV error during creation removes the new stream
-file for retry.
+file for retry, as does destroying the stream unfinished before its first
+frame.
 
 **`codec_mesh`** codes one mesh or a numbered sequence of them (README,
 Codec evaluation, has the keys). The examples require core 0.9.0, for
@@ -1999,6 +2002,13 @@ multi-keyframe post-scan atlas, which the multi-view path can carry.
 **On `codec`**, trimming a P-frame's host overhead at small R, where its
 encode stays slower than intra's on the host alone (the 2026-10-17 freeze
 entry).
+
+**On `fuse_orbbec`'s stream** (the 2026-10-20 entry): a capture-volume
+crop (`fusion.max_depth_m` is the limit there is), raw RGBD recording and
+replay, colour, an upright world, and the session's host clock and
+calibration, which `CodecStream` does not record. Two costs are unmeasured
+on the rig: the stream decodes every frame again into its player grid, and
+a loop slower than the rig gets the newest set, so sets drop.
 
 **On `tsdf`**, mesh → TSDF has its two modes (2026-09-27), a second way into
 the grid the codec encodes: a mesh sequence converts frame by frame. Both modes

@@ -168,10 +168,10 @@ build/examples/fuse_orbbec/fuse_orbbec --config config/examples/codec_orbbec.jso
 ```
 
 With `output.stream` or `output.csv` (core 0.13.0), the example codes each
-fused set as one frame of a `.vrst`, as the [codec examples](#codec-evaluation)
-do, at the set's time on the host's clock. The frames are geometry only, in
-the world `source.calibration` defines; `codec_orbbec.json` reconstructs
-each set on its own.
+fused set as one frame, as the [codec examples](#codec-evaluation) do, at the
+set's time (for a rig, on the host's clock); `output.stream` records the
+frames in a `.vrst`. They are geometry only, in the world
+`source.calibration` defines.
 
 Edit `source.serial` for a single camera, or `source.sync_config` for a synced
 rig. A camera wired as a secondary streams only while its primary does; choose

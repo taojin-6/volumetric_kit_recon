@@ -74,7 +74,8 @@ P-frames' update segments, so core refuses it, even as 0, at a
 `output.csv` names a file, with the codec examples' `codec` keys other than
 `encode_every` and `inspect_only`; it still writes the PLY at `output.path`.
 `fusion.accumulate` (default true) fuses each set into the grid so far;
-false clears the grid before each set. `codec_orbbec.json` codes 150 sets of
+false clears the grid before each set and keeps the run's last set whole, up
+to one set's frames past `run.frames`. `codec_orbbec.json` codes 150 sets of
 a four-camera rig that way at 1 cm, at period 30: add `source.calibration`,
 or every camera sits at the origin.
 
