@@ -1900,10 +1900,10 @@ file for retry, as does destroying the stream unfinished before its first
 frame.
 
 **`codec_mesh`** codes one mesh or a numbered sequence of them (README,
-Codec evaluation, has the keys). The examples require core 0.9.0, for
-`codec.update_size`; core escapes literal `%` characters in the scenario's
-directory before joining a relative `source.path` (0.8.0), so only the
-user's path carries a frame-number pattern.
+Codec evaluation, has the keys). The examples require core 0.13.0; core
+escapes literal `%` characters in the scenario's directory before joining a
+relative `source.path` (0.8.0), so only the user's path carries a
+frame-number pattern.
 Before any GPU work it refuses a malformed
 frame-number pattern, a range on a plain path and any frame file that is
 missing or not a regular file, and checks a shell against the truncation

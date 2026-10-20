@@ -95,10 +95,10 @@ fails saying why, and an installed recon is not found. A core older than
 stops at that call as an unknown command: move the first-declared pin to 0.2.0
 or newer.
 
-Examples and their configuration tests require core 0.9.0 or newer with its
-config tier, for `codec.update_size` and the escaping of literal `%`
-characters in a mesh scenario's directory. The tests require core 0.10.0,
-for its two-family test device. The pinned core supplies both.
+Examples and their configuration tests require core 0.13.0 or newer with its
+config tier, for `fuse_orbbec`'s `codec` section and outputs. The tests
+require core 0.10.0, for its two-family test device. The pinned core supplies
+both.
 
 ### Asset I/O
 
@@ -167,10 +167,10 @@ build/examples/fuse_orbbec/fuse_orbbec --config config/examples/stream_orbbec.js
 build/examples/fuse_orbbec/fuse_orbbec --config config/examples/codec_orbbec.json
 ```
 
-With `output.stream` or `output.csv` (core 0.13.0), the example codes each
-fused set as one frame, as the [codec examples](#codec-evaluation) do, at the
-set's time (for a rig, on the host's clock); `output.stream` records the
-frames in a `.vrst`. They are geometry only, in the world
+With `output.stream` or `output.csv`, the example codes each fused set as
+one frame, as the [codec examples](#codec-evaluation) do, at the set's time
+(for a rig, on the host's clock); `output.stream` records the frames in a
+`.vrst`. They are geometry only, in the world
 `source.calibration` defines.
 
 Edit `source.serial` for a single camera, or `source.sync_config` for a synced

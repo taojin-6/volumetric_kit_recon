@@ -35,23 +35,15 @@ include(FetchContent)
 # rather than OFF, as calib does, so an application that turns the tier on keeps
 # it.
 #
-# The pin is core 0.10.0 (7a1219e, core #36's merge): its test support adds
-# TwoFamilyDevice and write_image, which the cross-family tests use, on 0.9.0's
-# codec.update_size, refused when explicit at an intra_period of 1, 0.8.0's
-# codec.intra_period and its escaping of literal '%' characters in CodecMesh's
-# scenario directory before resolving source.path.
+# The pin is core 0.13.0 (8b494c3, core #43's merge), as is the Homebrew key
+# action in .github/workflows/_build.yml; the vkc_require_core checks below say
+# which core each part needs.
 #
 # TODO: pin a core release tag once the core tags its releases.
-# TODO(O1): fuse_orbbec's codec keys and fusion.accumulate are core 0.13.0's
-# (volumetric_kit_core feat/fuse-orbbec-stream). Once that PR merges, and before
-# this branch merges, pin its merge commit here and raise the core floor of the
-# examples and their tests from 0.9.0 to 0.13.0 wherever it is stated: the pin
-# paragraph above, vkc_require_core(0.9.0 CONFIG) and its comment below,
-# README.md, config/README.md and DESIGN.md ("The examples require core").
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG 7a1219e5ecaf385778acfc60f4c55eb70053cfb5)
+  GIT_TAG 8b494c320b5e6c8f44cadc87702c083c8b4cc78c)
 set(VKC_INSTALL ${VR_INSTALL})
 if(NOT VR_CAMERA_ONLY)
   set(VKC_WITH_VULKAN ON)
@@ -66,8 +58,9 @@ if(NOT VR_CAMERA_ONLY AND (VR_BUILD_EXAMPLES OR VR_BUILD_TESTS))
 endif()
 FetchContent_MakeAvailable(volumetric_kit_core)
 if(NOT VR_CAMERA_ONLY AND (VR_BUILD_EXAMPLES OR VR_BUILD_TESTS))
-  # The codec examples map codec.update_size, core 0.9.0's.
-  vkc_require_core(0.9.0 CONFIG)
+  # fuse_orbbec and its configuration tests read FuseOrbbec's codec section and
+  # outputs, core 0.13.0's.
+  vkc_require_core(0.13.0 CONFIG)
 endif()
 
 # The set()s above are lost when calib or the application made the core

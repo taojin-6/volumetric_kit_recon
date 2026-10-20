@@ -263,13 +263,12 @@ jobs:
       # The installed versions of those formulae and of all they depend on:
       # the dependency cache below keys on them, so the first run after a
       # brew upgrade builds on the new versions (the core's
-      # tools/runners/README.md, "Upgrading Homebrew").
-      # TODO: re-pin to the core pin in third_party/CMakeLists.txt once
-      # taojin-6/volumetric_kit_core#39 merges and the pin includes it.
+      # tools/runners/README.md, "Upgrading Homebrew"). The action is at the
+      # core pin in third_party/CMakeLists.txt.
       - name: Homebrew key
         id: brew
         if: steps.detect.outputs.present == 'true' && runner.os == 'macOS'
-        uses: taojin-6/volumetric_kit_core/.github/actions/homebrew-key@3badac2e9bca719cf1d86fb9363d2f829d69451e
+        uses: taojin-6/volumetric_kit_core/.github/actions/homebrew-key@8b494c320b5e6c8f44cadc87702c083c8b4cc78c
         with:
           formulae: ${{ steps.formulae.outputs.formulae }}
 
