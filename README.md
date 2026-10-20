@@ -169,9 +169,9 @@ build/examples/fuse_orbbec/fuse_orbbec --config config/examples/codec_orbbec.jso
 
 With `output.stream` or `output.csv` (core 0.13.0), the example codes each
 fused set as one frame of a `.vrst`, as the [codec examples](#codec-evaluation)
-do, its time the set's on the host's clock: geometry only, in the world
-`source.calibration` defines. `codec_orbbec.json` reconstructs each set on
-its own.
+do, at the set's time on the host's clock. The frames are geometry only, in
+the world `source.calibration` defines; `codec_orbbec.json` reconstructs
+each set on its own.
 
 Edit `source.serial` for a single camera, or `source.sync_config` for a synced
 rig. A camera wired as a secondary streams only while its primary does; choose
@@ -183,8 +183,9 @@ The sync file stays in the Orbbec SDK's format (`config/femto_mega_sync.json`),
 and `source.calibration` references the family's calibration file for poses.
 A camera whose sync settings differ is refused; `source.apply_sync: true`
 explicitly writes those settings. The stream operation refuses fusion, codec
-and output settings before opening any resource. Relative paths are resolved from
-the scenario file's directory, including the sync, calibration and output paths.
+and output settings before opening any resource. Relative paths are resolved
+from the scenario file's directory, including the sync, calibration and output
+paths.
 
 ### Optional: FFmpeg
 
