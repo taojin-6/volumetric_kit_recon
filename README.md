@@ -163,7 +163,7 @@ host through `PictureReadback`, during either streaming or fusion.
 build/examples/fuse_orbbec/fuse_orbbec --config config/examples/fuse_orbbec.json
 # Stream and decode alone, at 4K MJPEG and 25 fps; 60000 camera frames:
 build/examples/fuse_orbbec/fuse_orbbec --config config/examples/stream_orbbec.json
-# Fused as rig_viewer fuses, each set coded as one frame of a .vrst:
+# Fused Dynamic, each set coded as one frame of a .vrst:
 build/examples/fuse_orbbec/fuse_orbbec --config config/examples/codec_orbbec.json
 ```
 

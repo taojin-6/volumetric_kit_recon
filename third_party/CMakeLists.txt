@@ -49,7 +49,8 @@ include(FetchContent)
 # their tests from 0.13.0 to 0.14.0, naming free_after as the reason, wherever
 # it is stated: the pin paragraph above, vkc_require_core(0.13.0 CONFIG) and its
 # comment below, README.md, config/README.md, DESIGN.md ("The examples require
-# core") and the fuse_orbbec entry in CHANGELOG.md.
+# core") and the fuse_orbbec entry in CHANGELOG.md, which then cites that PR's
+# number beside core #43.
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git

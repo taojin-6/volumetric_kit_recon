@@ -1814,7 +1814,8 @@ The live counterpart is its own example, not a `fuse_replica` flag:
 `source.sync_config` one per camera of the file on the host's clock
 (`source.apply_sync` writing the settings a camera differs in), as a
 `SensorArray` posed by `source.calibration`; it prepares each set on the GPU,
-fuses it through `fuse_set`, and writes a PLY after `run.frames` frames.
+fuses it through `fuse_and_code` (`set_codec.hpp`: `fuse_set`, then the
+`fusion.free_after` pass), and writes a PLY after `run.frames` frames.
 `operation: "stream"` only streams: each set is polled, counted and released, with no
 GPU preparation, fusion or mesh, so a run measures the cameras' stream and
 decode alone. `diagnostics.readback: true` reads each set's luma back through
@@ -1828,10 +1829,9 @@ or when it fails, the array's counters, each camera's `lost` frames and, for
 a rig, each secondary's mean and worst skew to the primary. Colour is H.265
 unless `source.color_codec: "mjpeg"`.
 With `output.stream` or `output.csv` it also codes each fused set as one
-frame through the codec examples' `CodecStream` (`fuse_and_code`,
-`set_codec.hpp`; the 2026-10-20 decision). `main.cpp` opens the stream
-before the cameras and refuses there a PLY that is the stream's or the
-CSV's file under another name. A record's set is the set's index in the run
+frame through the codec examples' `CodecStream` (the 2026-10-20
+decision). `main.cpp` opens the stream before the cameras and refuses there
+a PLY that is the stream's or the CSV's file under another name. A record's set is the set's index in the run
 and its pts the set's time; a set stamped before the last frame, as a clock
 stepping back stamps it, takes that frame's time. A run that fails part-way
 still finishes and reports its stream; one that coded no set leaves none.
