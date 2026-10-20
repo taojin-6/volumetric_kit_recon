@@ -59,7 +59,8 @@ endif()
 FetchContent_MakeAvailable(volumetric_kit_core)
 if(NOT VR_CAMERA_ONLY AND (VR_BUILD_EXAMPLES OR VR_BUILD_TESTS))
   # fuse_orbbec and its configuration tests read FuseOrbbec's fusion.free_after,
-  # core 0.14.0's.
+  # core 0.14.0's; the cross-family tests' TwoFamilyDevice and write_image (core
+  # 0.10.0's) come with it.
   vkc_require_core(0.14.0 CONFIG)
 endif()
 
@@ -78,10 +79,6 @@ if(NOT VR_CAMERA_ONLY
       "recon's tests need volumetric_kit_core's test support: set "
       "VKC_BUILD_TEST_SUPPORT ON before the first FetchContent_MakeAvailable "
       "of the core")
-endif()
-if(NOT VR_CAMERA_ONLY AND VR_BUILD_TESTS)
-  # The cross-family tests use core 0.10.0's TwoFamilyDevice and write_image.
-  vkc_require_core(0.10.0)
 endif()
 
 # --- nlohmann/json (header-only; private to the targets that parse JSON) -----

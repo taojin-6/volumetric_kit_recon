@@ -203,14 +203,16 @@ vkc::Status run(const Options& opt) {
   const double fps =
       static_cast<double>(sets.frames()) / (secs > 0.0 ? secs : 1.0);
   // Before any error: a run that stalls still reports what it counted, and
-  // finishes and reports the frames it coded.
+  // finishes the stream it recorded and reports the frames it decoded.
   sets.print_stats();
   std::fputs(dump.report().c_str(), stdout);
   vkc::Status finished;
-  if (stream && !stream->rows().empty()) {
+  if (stream && stream->coded() > 0) {
     finished = stream->finish();
     // A coded frame per source set; one frame alone has no bitrate.
-    stream->report(opt.source.fps, stream->rows().size() > 1 ? 1 : 0);
+    if (!stream->rows().empty()) {
+      stream->report(opt.source.fps, stream->rows().size() > 1 ? 1 : 0);
+    }
   }
   VKC_TRY(streamed);
   VKC_TRY(finished);

@@ -1834,7 +1834,8 @@ decision). `main.cpp` opens the stream before the cameras and refuses there
 a PLY that is the stream's or the CSV's file under another name. A record's set is the set's index in the run
 and its pts the set's time; a set stamped before the last frame, as a clock
 stepping back stamps it, takes that frame's time. A run that fails part-way
-still finishes and reports its stream; one that coded no set leaves none.
+still finishes its stream and reports the frames it decoded; one that coded
+no set leaves none.
 The report's bitrate is at `source.fps`, and `codec.sweep` sweeps the last
 grid.
 **`rig_viewer`** (`VR_BUILD_VIEWER` with `VR_WITH_ORBBEC` and

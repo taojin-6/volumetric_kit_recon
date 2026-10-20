@@ -95,9 +95,8 @@ fails saying why, and an installed recon is not found. A core older than
 stops at that call as an unknown command: move the first-declared pin to 0.2.0
 or newer.
 
-Examples and their configuration tests require core 0.14.0 or newer with its
-config tier, for `fuse_orbbec`'s `fusion.free_after`. The tests require core
-0.10.0, for its two-family test device. The pinned core supplies both.
+Examples and tests require core 0.14.0 or newer with its config tier, for
+`fuse_orbbec`'s `fusion.free_after`; the pinned core supplies it.
 
 ### Asset I/O
 

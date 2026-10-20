@@ -384,6 +384,11 @@ class CodecStream {
   /// @return A row per frame decoded so far, in coding order.
   const std::vector<CodecRow>& rows() const noexcept { return rows_; }
 
+  /// @return The frames encoded and recorded so far, a frame the decoder
+  ///         refused among them (it has no row); the destructor removes an
+  ///         unfinished stream's file only while this is 0.
+  std::uint64_t coded() const noexcept { return coded_; }
+
   /// @return The pts of the last frame recorded, below which @ref code
   ///         refuses one; 0 before the first.
   std::uint64_t last_pts_ns() const noexcept { return last_pts_ns_; }

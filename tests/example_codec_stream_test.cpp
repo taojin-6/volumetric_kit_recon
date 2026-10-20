@@ -300,11 +300,13 @@ int code_frames(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
   CHECK(started.size() == 1 &&
         started[0] + "\n" == vr_example::kCodecRowsCsvHeader);
   CHECK(fs::is_regular_file(outputs.stream));
+  CHECK(coder.coded() == 0);
 
   CHECK(coder.code(source, 3, pts(3)).ok());
   CHECK(coder.code(source, 7, pts(7)).ok());
   const std::vector<vr_example::CodecRow>& rows = coder.rows();
   CHECK(rows.size() == 2 && rows[0].frame == 3 && rows[1].frame == 7);
+  CHECK(coder.coded() == 2);
   for (const vr_example::CodecRow& row : rows) {
     CHECK(row.bytes > 0 && row.blocks > 0);
     CHECK(row.encode_ms > 0.0 && row.decode_ms > 0.0);
@@ -319,15 +321,15 @@ int code_frames(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
   CHECK(again.message().find("frame 7") != std::string::npos);
   CHECK(coder.code(source, 8, pts(6)).domain() ==
         vkc::Status::Code::InvalidArgument);
-  CHECK(rows.size() == 2);
+  CHECK(rows.size() == 2 && coder.coded() == 2);
 
   // A frame the decoder refuses -- another grid's geometry than the
   // player's -- has a record and no row, and the stream goes on after it.
   CHECK(coder.code(other, 9, pts(9)).domain() ==
         vkc::Status::Code::InvalidArgument);
-  CHECK(rows.size() == 2);
+  CHECK(rows.size() == 2 && coder.coded() == 3);
   CHECK(coder.code(source, 10, pts(10)).ok());
-  CHECK(rows.size() == 3 && rows[2].frame == 10);
+  CHECK(rows.size() == 3 && rows[2].frame == 10 && coder.coded() == 4);
 
   // Each row is in the CSV as soon as its frame decodes.
   const std::vector<std::string> lines = lines_of(outputs.csv);
