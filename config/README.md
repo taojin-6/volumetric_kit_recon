@@ -21,7 +21,7 @@ directory are escaped automatically when resolving a relative mesh path.
 | `codec_mesh` | [codec_mesh.json](examples/codec_mesh.json) | One mesh, placed in metres, and codec study |
 | `codec_mesh` | [codec_mesh_sequence.json](examples/codec_mesh_sequence.json) | Numbered mesh sequence under one placement, coded frame by frame |
 | `fuse_orbbec` | [fuse_orbbec.json](examples/fuse_orbbec.json) | Live camera/rig to PLY |
-| `fuse_orbbec` | [codec_orbbec.json](examples/codec_orbbec.json) | Live rig, each set reconstructed on its own and coded frame by frame |
+| `fuse_orbbec` | [codec_orbbec.json](examples/codec_orbbec.json) | Live rig fused as `rig_viewer` fuses, coded set by set |
 | `fuse_orbbec` | [stream_orbbec.json](examples/stream_orbbec.json) | Live stream/decode only |
 | `fuse_orbbec` | [readback_orbbec.json](examples/readback_orbbec.json) | Live stream with luma readback |
 | `fuse_orbbec` | [dump_orbbec.json](examples/dump_orbbec.json) | Live stream with readback, first sets' JPEGs and luma written |
@@ -73,11 +73,11 @@ P-frames' update segments, so core refuses it, even as 0, at a
 `fuse_orbbec` codes each fused set as one frame when `output.stream` or
 `output.csv` names a file, with the codec examples' `codec` keys other than
 `encode_every` and `inspect_only`; it still writes the PLY at `output.path`.
-`fusion.accumulate` (default true) fuses each set into the grid so far;
-false clears the grid before each set and keeps the run's last set whole, up
-to one set's frames past `run.frames`. `codec_orbbec.json` codes 150 sets of
-a four-camera rig that way at 1 cm, at period 30: add `source.calibration`,
-or every camera sits at the origin.
+Like `rig_viewer`, it frees stale blocks every `fusion.free_after` sets
+(default 30), and with `fusion.dynamic: true` it clears a surface the
+cameras see past, so the frames follow a changing scene. `codec_orbbec.json`
+codes 150 sets of a four-camera rig that way at 1 cm, at period 30: add
+`source.calibration`, or every camera sits at the origin.
 
 `fuse_orbbec` accepts `diagnostics.readback: true` in either a stream or fusion
 scenario. It copies every set's luma to host memory and reports a separate

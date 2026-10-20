@@ -914,9 +914,9 @@ freed slot's, and `resize` copies them forward, the rehash stamping
 nothing. A consumer compares ticks and resets nothing:
 `free_stale_blocks(max_age)` frees the blocks whose newer stamp is older
 than that, through the grid's remove body over the pass's list, so the band the
-allocator still asks for stays, and `rig_viewer` runs it every
-`fusion.free_after` sets; the iOS scanner reads `changed` through
-`read_block_stamps`.
+allocator still asks for stays, and the live examples run it every
+`fusion.free_after` sets (`free_stale_blocks_every`, `fuse_frame.hpp`); the
+iOS scanner reads `changed` through `read_block_stamps`.
 
 ### tsdf
 
@@ -1833,12 +1833,10 @@ frame through the codec examples' `CodecStream` (`fuse_and_code`,
 before the cameras and refuses there a PLY that is the stream's or the
 CSV's file under another name. A record's set is the set's index in the run
 and its pts the set's time; a set stamped before the last frame, as a clock
-stepping back stamps it, takes that frame's time. `fusion.accumulate: false`
-clears the grid before each set and keeps the run's last set whole, so each
-frame is that set's own reconstruction and the PLY the last set's. A run
-that fails part-way still finishes and reports its stream; one that coded
-no set leaves none. The report's bitrate is at `source.fps`, and
-`codec.sweep` sweeps the last grid.
+stepping back stamps it, takes that frame's time. A run that fails part-way
+still finishes and reports its stream; one that coded no set leaves none.
+The report's bitrate is at `source.fps`, and `codec.sweep` sweeps the last
+grid.
 **`rig_viewer`** (`VR_BUILD_VIEWER` with `VR_WITH_ORBBEC` and
 `VR_WITH_FFMPEG`; CI's viewer leg compiles it) is `fuse_viewer`'s live-rig
 sibling: an `OrbbecSensor` per camera of the sync file read as a

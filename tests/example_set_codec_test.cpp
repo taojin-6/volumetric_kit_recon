@@ -3,19 +3,26 @@
 
 // fuse_orbbec's coded sets (examples/common/set_codec.hpp), with no camera
 // driver: two fake cameras 3 m apart, read as a sensor array and prepared on
-// the device as a rig's are. Three sets fused and coded at an intra period of
-// 30 into a .vrst: a Geometry record each, only the first a key, each record's
-// set the set's index and its pts the set's time, and every frame decodes
-// through codec::decode_growing. The last set is stamped before the one
-// before it, as a clock stepping back stamps it, and is coded at that one's
-// time. Each camera sees a wall 1 m ahead over the left of its picture in the
-// first set and over the right in the others: with fusion.accumulate false
-// the left walls are gone from the second and third frames' decodes and from
-// the grid left after the run, with or without a stream, and with it true
-// they stay. On the host, a path that is the stream's or the CSV's file
-// through a link refused, one beside them taken, and one that cannot be
+// the device as a rig's are. Each camera sees a back wall 2 m ahead and, in
+// the first three sets, a near wall 1 m ahead over the left of its picture,
+// which then leaves, so the cameras see past it to the back wall. Seven sets
+// fused through fuse_and_code at a fusion.free_after of 2 and coded at an
+// intra period of 30 into a .vrst: a Geometry record each, only the first a
+// key, each record's set the set's index and its pts the set's time, and
+// every frame decodes through codec::decode_growing. The last set is stamped
+// before the one before it, as a clock stepping back stamps it, and is coded
+// at that one's time. Dynamic: the near walls are in the frames that see
+// them and gone from the first that sees past them, and the free pass after
+// set 5 frees all their blocks from the grid. Classic: no voxel loses its
+// weight, so every later frame keeps the near blocks the last frame to see
+// the walls held, and that pass frees exactly the near blocks that never
+// held an observed voxel. The back walls stay in every frame and grid either
+// way, and a free_after of 0 frees nothing. The grid is the same with a
+// stream and without. On the host, a path that is the stream's or the CSV's
+// file through a link refused, one beside them taken, and one that cannot be
 // checked refused. The device part skips with no device.
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -56,12 +63,21 @@ namespace fs = std::filesystem;
 namespace {
 
 constexpr std::uint32_t kW = 64, kH = 48;
-constexpr std::uint32_t kGap = 6;  // columns left empty each side of centre
-constexpr std::size_t kSets = 3;
+constexpr std::size_t kSets = 7;
+constexpr std::size_t kNearSets = 3;  // the sets that see the near walls
+constexpr int kFreeAfter = 2;
+// The set whose free pass frees the near walls' blocks under Dynamic. The
+// grid's clock starts at 1, and each set's fuse advances it by one after the
+// set's allocation. Set 2 last asks for the blocks, at tick 3, and the pass
+// after set 1, at tick 3, last finds them observed: set 3 clears them. The
+// pass after set 3 (tick 5) finds them 2 ticks old, not more than
+// kFreeAfter; the pass after set 5 (tick 7), 4.
+constexpr std::size_t kFreedSet = 5;
 // A host-clock time, and a set period no frame rate's pts would give.
 constexpr std::uint64_t kStartNs = 1'760'000'000'123'456'789;
 constexpr std::uint64_t kPeriodNs = 33'366'701;
 constexpr double kOffsetM = 3.0;  // camera B's x; camera A's is 0
+constexpr double kMidM = 1.5;     // between the near walls, 1 m, and the back
 
 // A set's time: the last set's 1 us before the one before it.
 std::uint64_t set_time(std::size_t set) {
@@ -74,9 +90,9 @@ std::uint64_t coded_pts(std::size_t set) {
   return set + 1 < kSets ? set_time(set) : set_time(set - 1);
 }
 
-// A camera on the host's clock at 30 fps whose frames the test pushes: a
-// wall 1 m ahead over the left or the right of its picture, no return
-// elsewhere, and its colour as packed words on the host.
+// A camera on the host's clock at 30 fps whose frames the test pushes: the
+// back wall 2 m ahead, the near wall 1 m ahead over the left of its picture
+// in the first kNearSets sets, and its colour as packed words on the host.
 class Camera final : public sensor::IRgbdSensor {
  public:
   Camera(std::string id, sensor::SyncRole role) {
@@ -86,18 +102,19 @@ class Camera final : public sensor::IRgbdSensor {
     info_.fps = 30;
   }
 
-  void push(std::size_t set, bool left) {
+  void push(std::size_t set) {
     struct Pixels {
       std::vector<std::uint16_t> depth;
       std::vector<std::uint32_t> color;
     };
     auto pixels = std::make_shared<Pixels>();
-    pixels->depth.assign(std::size_t{kW} * kH, 0);
+    pixels->depth.assign(std::size_t{kW} * kH, 2000);  // 2 m
     pixels->color.assign(std::size_t{kW} * kH, 0x00806040u);
-    for (std::uint32_t y = 0; y < kH; ++y) {
-      for (std::uint32_t x = 0; x < kW; ++x) {
-        const bool wall = left ? x + kGap < kW / 2 : x >= kW / 2 + kGap;
-        if (wall) pixels->depth[std::size_t{y} * kW + x] = 1000;  // 1 m
+    if (set < kNearSets) {
+      for (std::uint32_t y = 0; y < kH; ++y) {
+        for (std::uint32_t x = 0; x < kW / 2; ++x) {
+          pixels->depth[std::size_t{y} * kW + x] = 1000;  // 1 m
+        }
       }
     }
     sensor::RgbdFrame f;
@@ -132,33 +149,57 @@ class Camera final : public sensor::IRgbdSensor {
   std::vector<sensor::RgbdFrame> frames_;
 };
 
-// Whether `grid`'s surface holds both cameras' left walls exactly when
-// `left`, and their right walls exactly when `right`.
-int walls(vr::mesh::MarchingCubes& extractor, vr::volume::VoxelBlockGrid& grid,
-          bool left, bool right) {
+// What a grid holds of the walls: its surface's vertices on each, A's near
+// and back walls then B's, and the coordinates of its blocks nearer than
+// kMidM, the near walls' and their bands', sorted.
+struct Walls {
+  std::array<std::size_t, 4> vertices{};
+  std::vector<vr::Vec3i> near_blocks;
+
+  bool near() const { return vertices[0] > 0 && vertices[2] > 0; }
+  bool no_near() const { return vertices[0] == 0 && vertices[2] == 0; }
+  bool back() const { return vertices[1] > 0 && vertices[3] > 0; }
+};
+
+int read_walls(vr::mesh::MarchingCubes& extractor,
+               vr::volume::VoxelBlockGrid& grid, Walls* out) {
+  *out = {};
   auto mesh = extractor.extract_host(grid);
   CHECK(mesh.ok());
-  // Vertices on each camera's walls: A's left and right, then B's.
-  std::array<std::size_t, 4> count{};
   for (const vr::mesh::Vertex& v : mesh->vertices) {
-    const double x = v.position.x;
-    const bool b = x > kOffsetM / 2;
-    const bool on_right = x > (b ? kOffsetM : 0.0);
-    ++count[(b ? 2 : 0) + (on_right ? 1 : 0)];
+    const bool b = v.position.x > kOffsetM / 2;
+    ++out->vertices[(b ? 2 : 0) + (v.position.z > kMidM ? 1 : 0)];
   }
-  for (const std::size_t c : {std::size_t{0}, std::size_t{2}}) {
-    CHECK((count[c] > 0) == left);
-    CHECK((count[c + 1] > 0) == right);
+  auto blocks = grid.map().compact_active_blocks();
+  CHECK(blocks.ok());
+  const vr::volume::VoxelGridParams& params = grid.map().grid();
+  const double extent = double(params.voxel_size) * params.block_size;
+  for (const vr::volume::BlockIndex& block : *blocks) {
+    if ((block.coord.z + 0.5) * extent < kMidM) {
+      out->near_blocks.push_back(block.coord);
+    }
   }
+  std::sort(out->near_blocks.begin(), out->near_blocks.end(),
+            vr::volume::coord_less);
   return 0;
 }
 
-// Push, poll and prepare kSets sets, the first's walls on the left and the
-// others' on the right, fusing each through fuse_and_code and coding it into
-// a new stream at `path`, unless empty. The grid left after the run holds the
-// last set's walls, and the first's only if `accumulate`.
+// Whether every block of `part` is in `whole`, both sorted.
+bool holds(const std::vector<vr::Vec3i>& whole,
+           const std::vector<vr::Vec3i>& part) {
+  return std::includes(whole.begin(), whole.end(), part.begin(), part.end(),
+                       vr::volume::coord_less);
+}
+
+// Push, poll and prepare kSets sets, fusing each through fuse_and_code and
+// coding it into a new stream at `path`, unless empty, and check the grid
+// after each, kept in `grids`: the back walls always; the near walls'
+// surface while the cameras see them, and under Dynamic not after; and the
+// near walls' blocks all kept until the pass after kFreedSet, then under
+// Dynamic with a free pass all gone, under Classic some kept
+// (check_stream), and with no pass all kept.
 int code_sets(vr_test::GpuContext& gpu, const cfg::Fusion& fusion,
-              const std::string& path) {
+              const std::string& path, std::vector<Walls>* grids) {
   auto a = std::make_unique<Camera>("A", sensor::SyncRole::Primary);
   auto b = std::make_unique<Camera>("B", sensor::SyncRole::Secondary);
   Camera* cameras[] = {a.get(), b.get()};
@@ -185,6 +226,8 @@ int code_sets(vr_test::GpuContext& gpu, const cfg::Fusion& fusion,
   CHECK(grid.ok());
   auto fuser = vr::tsdf::Fuser::create(gpu.device, gpu.allocator);
   CHECK(fuser.ok());
+  auto extractor = vr::mesh::MarchingCubes::create(gpu.device, gpu.allocator);
+  CHECK(extractor.ok());
   std::optional<vr_example::CodecStream> coded;
   if (!path.empty()) {
     codec::EncoderConfig config;
@@ -196,8 +239,9 @@ int code_sets(vr_test::GpuContext& gpu, const cfg::Fusion& fusion,
     CHECK(made.ok());
     coded.emplace(std::move(made).value());
   }
+  grids->clear();
   for (std::size_t s = 0; s < kSets; ++s) {
-    for (Camera* c : cameras) c->push(s, s == 0);
+    for (Camera* c : cameras) c->push(s);
     auto set = array.poll_set();
     for (int ms = 0; ms < 200 && set.ok() && !set.value(); ++ms) {
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -209,22 +253,41 @@ int code_sets(vr_test::GpuContext& gpu, const cfg::Fusion& fusion,
     CHECK(vr_example::fuse_and_code(*fuser, *grid, *prepared, s, fusion,
                                     coded ? &*coded : nullptr, nullptr)
               .ok());
+
+    grids->emplace_back();
+    Walls& walls = grids->back();
+    CHECK(read_walls(*extractor, *grid, &walls) == 0);
+    const Walls& first = grids->front();
+    CHECK(walls.back() && !first.near_blocks.empty());
+    if (s < kNearSets) CHECK(walls.near());
+    if (s >= kNearSets && fusion.dynamic) CHECK(walls.no_near());
+    if (s < kFreedSet || fusion.free_after == 0) {
+      CHECK(walls.near_blocks == first.near_blocks);
+    } else if (fusion.dynamic) {
+      CHECK(walls.near_blocks.empty());
+    } else {
+      CHECK(!walls.near_blocks.empty() &&
+            holds(first.near_blocks, walls.near_blocks));
+    }
   }
   if (coded) {
     CHECK(coded->rows().size() == kSets);
     CHECK(coded->finish().ok());
   }
-  auto extractor = vr::mesh::MarchingCubes::create(gpu.device, gpu.allocator);
-  CHECK(extractor.ok());
-  CHECK(walls(*extractor, *grid, fusion.accumulate, true) == 0);
   return 0;
 }
 
-// The stream at `path`: a Geometry record per set, only the first a key,
-// each at its set and coded pts, and each decoding. The second set on, the
-// left walls are there only if `accumulate`.
+// The stream at `path`, coded from `grids`: a Geometry record per set, only
+// the first a key, each at its set and coded pts, and each decoding. Every
+// frame holds the back walls, and the near walls while the cameras see them.
+// After that, under Dynamic, the frames hold no near block, since the codec
+// leaves out a block without an observed voxel. Under Classic each frame
+// holds every near block the last frame to see the near walls held, since
+// no weight falls, and from the pass after kFreedSet the grid holds exactly
+// the frame's near blocks: the pass frees those that never held an observed
+// voxel and keeps the rest.
 int check_stream(vr_test::GpuContext& gpu, const std::string& path,
-                 bool accumulate) {
+                 bool dynamic, const std::vector<Walls>& grids) {
   auto opened = stream::StreamReader::open(path);
   CHECK(opened.ok());
   const stream::StreamReader& reader = **opened;
@@ -241,6 +304,7 @@ int check_stream(vr_test::GpuContext& gpu, const std::string& path,
   stream::Position pos = reader.begin();
   stream::Record record;
   std::vector<std::uint8_t> payload;
+  Walls last_seen;  // the frame of the last set to see the near walls
   for (std::size_t s = 0; s < kSets; ++s) {
     const vkc::Result<bool> more = reader.next(&pos, &record);
     CHECK(more.ok() && *more);
@@ -257,7 +321,19 @@ int check_stream(vr_test::GpuContext& gpu, const std::string& path,
     CHECK(
         codec::decode_growing(*decoder, payload.data(), payload.size(), *player)
             .ok());
-    CHECK(walls(*extractor, *player, s == 0 || accumulate, s > 0) == 0);
+
+    Walls walls;
+    CHECK(read_walls(*extractor, *player, &walls) == 0);
+    CHECK(walls.back());
+    if (s < kNearSets) {
+      CHECK(walls.near() && !walls.near_blocks.empty());
+      last_seen = walls;
+    } else if (dynamic) {
+      CHECK(walls.no_near() && walls.near_blocks.empty());
+    } else {
+      CHECK(holds(walls.near_blocks, last_seen.near_blocks));
+      if (s >= kFreedSet) CHECK(walls.near_blocks == grids[s].near_blocks);
+    }
   }
   const vkc::Result<bool> end = reader.next(&pos, &record);
   CHECK(end.ok() && !*end);
@@ -266,16 +342,27 @@ int check_stream(vr_test::GpuContext& gpu, const std::string& path,
 
 int gpu_main(vr_test::GpuContext& gpu) {
   vr_test::Scratch scratch("recon_example_set_codec_");
-  for (const bool accumulate : {false, true}) {
-    cfg::Fusion fusion;  // 2 cm voxels, an 8 cm band, Classic
-    fusion.accumulate = accumulate;
+  for (const bool dynamic : {true, false}) {
+    cfg::Fusion fusion;  // 2 cm voxels, an 8 cm band
+    fusion.dynamic = dynamic;
+    fusion.free_after = kFreeAfter;
     const std::string path =
-        (scratch.path / (accumulate ? "accumulated.vrst" : "per_set.vrst"))
-            .string();
-    CHECK(code_sets(gpu, fusion, path) == 0);
-    CHECK(check_stream(gpu, path, accumulate) == 0);
-    CHECK(code_sets(gpu, fusion, "") == 0);  // fused alone
+        (scratch.path / (dynamic ? "dynamic.vrst" : "classic.vrst")).string();
+    std::vector<Walls> coded;
+    CHECK(code_sets(gpu, fusion, path, &coded) == 0);
+    CHECK(check_stream(gpu, path, dynamic, coded) == 0);
+    // Fused alone, the grid holds the same near blocks after every set.
+    std::vector<Walls> alone;
+    CHECK(code_sets(gpu, fusion, "", &alone) == 0);
+    for (std::size_t s = 0; s < kSets; ++s) {
+      CHECK(alone[s].near_blocks == coded[s].near_blocks);
+    }
   }
+  cfg::Fusion never;  // Dynamic, freeing nothing
+  never.dynamic = true;
+  never.free_after = 0;
+  std::vector<Walls> kept;
+  CHECK(code_sets(gpu, never, "", &kept) == 0);
   std::puts("example_set_codec: OK");
   return 0;
 }

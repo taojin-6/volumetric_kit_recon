@@ -365,10 +365,11 @@ add_test(NAME recon_example_codec_stream
 # fuse_orbbec's coded sets (examples/common/set_codec.hpp), with no camera
 # driver: fake cameras read as a sensor array and prepared on the device, each
 # set fused and coded into a .vrst whose records, keys, sets and pts are the
-# sets', every frame decoded; with fusion.accumulate false a wall only the first
-# set saw is gone from the later frames, and with it true it stays. On the host,
-# a path that is the stream's or the CSV's file refused. The device part skips
-# with no device.
+# sets', every frame decoded. A wall the cameras later see past: under Dynamic
+# gone from the frames that see past it, and its blocks freed by the
+# fusion.free_after pass due; under Classic its observed blocks kept. On the
+# host, a path that is the stream's or the CSV's file refused. The device part
+# skips with no device.
 add_executable(recon_example_set_codec_test example_set_codec_test.cpp)
 target_include_directories(recon_example_set_codec_test
                            PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)

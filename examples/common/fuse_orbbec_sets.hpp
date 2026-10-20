@@ -207,8 +207,8 @@ inline std::size_t cut_set(vr::sensor::FrameSet& set, std::size_t frames) {
   return kept;
 }
 
-/// @brief A run's sets from a started array, each waited for and, unless
-///        kept whole, cut to the run's length, and what its report prints.
+/// @brief A run's sets from a started array, each waited for and cut to the
+///        run's length, and what its report prints.
 ///
 /// The array is borrowed: it must outlive every @ref next and
 /// @ref print_stats. Only @ref print_stats needs its sensors to be
@@ -230,14 +230,9 @@ class RigSets {
 
   /// @param array   Started.
   /// @param frames  The frames the run takes.
-  /// @param whole   Keep the run's last set whole, past @p frames, rather
-  ///                than cut it: for a run that makes each set a frame of
-  ///                its own.
-  RigSets(vr::sensor::SensorArray& array, std::size_t frames,
-          bool whole = false)
+  RigSets(vr::sensor::SensorArray& array, std::size_t frames)
       : array_(array),
         limit_(frames),
-        whole_(whole),
         skews_(array.size()),
         last_set_(std::chrono::steady_clock::now()) {}
 
@@ -251,8 +246,8 @@ class RigSets {
   /// @pre @p camera is below the array's size.
   const Skew& skew(std::size_t camera) const { return skews_[camera]; }
 
-  /// @brief Wait for the next set and, unless whole, cut it to the frames
-  ///        the run still takes (@ref cut_set).
+  /// @brief Wait for the next set and cut it to the frames the run still
+  ///        takes (@ref cut_set).
   ///
   /// The host time of the poll that hands the set out is @p stages' `"poll"`
   /// row; an empty poll is the loop waiting, not the driver working. Each
@@ -314,8 +309,7 @@ class RigSets {
   }
 
  private:
-  // Count `set`, keep its skews, and unless whole, cut it to the run's
-  // remaining frames.
+  // Count `set`, keep its skews, and cut it to the run's remaining frames.
   void keep(vr::sensor::FrameSet& set) {
     if (sets_ == 0 && array_.size() == 1) {
       // The SDK's host clock is the system clock: on it (source.host_clock),
@@ -336,7 +330,7 @@ class RigSets {
       skews_[c].worst_ms = std::max(skews_[c].worst_ms, std::fabs(ms));
       ++skews_[c].frames;
     }
-    frames_ += whole_ ? set.count() : cut_set(set, limit_ - frames_);
+    frames_ += cut_set(set, limit_ - frames_);
     ++sets_;
   }
 
@@ -357,7 +351,6 @@ class RigSets {
 
   vr::sensor::SensorArray& array_;
   std::size_t limit_;
-  bool whole_;
   std::size_t sets_ = 0;
   std::size_t frames_ = 0;
   std::vector<Skew> skews_;  // per camera; the primary's stays empty

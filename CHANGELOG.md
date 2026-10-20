@@ -206,16 +206,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   0.13.0 is required** (core #43, the 2026-10-20 decision). With
   `output.stream` or `output.csv` it codes each fused set as one frame at
   the set's time (`vr_example::fuse_and_code`, `set_codec.hpp`) and
-  reports the stream, even after a failure part-way;
-  `fusion.accumulate: false` clears the grid before each set and keeps the
-  last set whole (`RigSets`), and `codec.sweep` sweeps the last grid. A
-  PLY that is the stream's or the CSV's file under another name is refused
-  before the cameras open (`check_apart`, on `check_not_same_file`, which
-  `CodecStream::create` uses too). A `CodecStream` destroyed unfinished
-  before its first frame removes its file, so a rerun is not refused. New
-  template: `config/examples/codec_orbbec.json`. Tests:
-  `recon_example_set_codec`, `recon_example_codec_stream`,
-  `recon_example_fuse_orbbec_sets`, `recon_example_config`.
+  reports the stream, even after a failure part-way, and `codec.sweep`
+  sweeps the last grid. It frees stale blocks every `fusion.free_after`
+  sets, as `rig_viewer` does, through one function both call
+  (`free_stale_blocks_every`, `fuse_frame.hpp`); the PLY is unchanged.
+  `codec_orbbec.json` fuses Dynamic, so a surface the rig sees past leaves
+  the stream. A PLY that is the stream's or the CSV's file under another
+  name is refused before the cameras open (`check_apart`, on
+  `check_not_same_file`, which `CodecStream::create` uses too). A
+  `CodecStream` destroyed unfinished before its first frame removes its
+  file, so a rerun is not refused. New template:
+  `config/examples/codec_orbbec.json`. Tests: `recon_example_set_codec`,
+  `recon_example_codec_stream`, `recon_example_config`.
 - `codec`: **`make_decode_grid` and `decode_growing`**
   (`codec/decode_grid.hpp`): a player's grid, built from a frame's header,
   and a decode that grows it once when a frame outgrows it. They were the

@@ -36,9 +36,9 @@
 // examples' stream (vr_example::CodecStream) at the set's time, the host's
 // clock for a rig, and reports the stream, even when the run fails part-way;
 // codec.sweep then prints the codec's rate-distortion table on the last grid.
-// fusion.accumulate false clears the grid before each set and keeps the
-// run's last set whole, so each frame, and the PLY, is one set's own
-// reconstruction.
+// fusion.dynamic clears a surface the cameras see past, so the stream and the
+// PLY follow a changing scene, and every fusion.free_after sets the grid frees
+// the blocks such a surface left, as rig_viewer's does.
 
 #include <chrono>
 #include <cstddef>
@@ -166,8 +166,7 @@ vkc::Status run(const Options& opt) {
   const char* verb = (opt.operation == vr_example::config::Operation::Stream)
                          ? "streamed"
                          : "fused";
-  vr_example::RigSets sets(*array, static_cast<std::size_t>(opt.run.frames),
-                           !opt.fusion.accumulate);
+  vr_example::RigSets sets(*array, static_cast<std::size_t>(opt.run.frames));
   vkc::StageMetrics stage_totals;
   const auto t_start = std::chrono::steady_clock::now();
   const vkc::Status streamed = [&]() -> vkc::Status {
