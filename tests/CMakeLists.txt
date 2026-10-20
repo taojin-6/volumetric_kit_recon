@@ -340,15 +340,16 @@ add_test(NAME recon_example_stage_table COMMAND recon_example_stage_table_test)
 
 # The codec examples' stream (examples/common/codec_stream.hpp): on the host, a
 # row's type and host and device milliseconds, its CSV line, a frame type's
-# sizes, a GOP's bytes and bitrate, and a frame's pts; on a device, outputs it
-# cannot make refused on create, none written without outputs, a row per decoded
-# frame matching the frame and each type's stage rows its own, the .vrst's
-# records (every encoded frame, byte for byte, a frame the decoder refuses
-# included and the stream going on after it, a key exactly when an I-frame, and
-# the same bytes on a rerun), an I-frame after a frame not decoded or whose CSV
-# row fails, a frame out of order or any call once finished refused before
-# anything is encoded, and the CSV replaced on create and written as frames are
-# coded. The device part skips with no device.
+# sizes, a GOP's bytes and bitrate, a frame's pts, and the comparison options
+# the codec examples share; on a device, outputs it cannot make refused on
+# create, none written without outputs, a row per decoded frame matching the
+# frame and each type's stage rows its own, the .vrst's records (every encoded
+# frame, byte for byte, a frame the decoder refuses included and the stream
+# going on after it, a key exactly when an I-frame, and the same bytes on a
+# rerun), an I-frame after a frame not decoded or whose CSV row fails, a frame
+# out of order or any call once finished refused before anything is encoded, and
+# the CSV replaced on create and written as frames are coded. The device part
+# skips with no device.
 add_executable(recon_example_codec_stream_test example_codec_stream_test.cpp)
 target_include_directories(recon_example_codec_stream_test
                            PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)

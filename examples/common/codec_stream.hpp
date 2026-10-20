@@ -70,6 +70,20 @@ inline void print_comparison(const vr::eval::MeshComparison& c, float voxel) {
   }
 }
 
+/// @return How the codec examples compare a decoded surface with its source,
+///         inside the reconstruction's own resolution so the figures move
+///         with the codec: a band's width of reach (@p trunc, at least 2 cm),
+///         about 1 vertex in 4 both ways, and an F-score at half a voxel
+///         (@p voxel).
+inline vr::eval::CompareOptions codec_compare_options(float voxel,
+                                                      float trunc) {
+  vr::eval::CompareOptions compare;
+  compare.reach = std::max(trunc, 0.02f);
+  compare.stride = 4;
+  compare.fscore_threshold = 0.5f * voxel;
+  return compare;
+}
+
 /// @return @p type's name in a stream's rows: "I" or "P".
 inline const char* frame_type_name(vr::codec::FrameType type) {
   return type == vr::codec::FrameType::kIntra ? "I" : "P";

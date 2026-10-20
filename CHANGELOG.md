@@ -8,6 +8,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `examples`: **one home for the codec examples' mesh comparison**,
+  `vr_example::codec_compare_options` (`codec_stream.hpp`), which
+  `codec_replica` and `codec_mesh` call; their figures are unchanged.
+  Tests: `recon_example_codec_stream`.
 - `volume`: **one default hash layout**, `kDefaultBucketSize` (8) and
   `kDefaultMaxChain` (128) in `volume/voxel_grid.hpp`.
   `codec::make_decode_grid` and the examples' `example_grid_params` build

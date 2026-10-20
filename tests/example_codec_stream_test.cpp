@@ -3,8 +3,9 @@
 
 // The codec examples' stream (examples/common/codec_stream.hpp). On the host:
 // a row's type and host and device milliseconds from its calls' stage rows,
-// its CSV line, a frame type's sizes, a GOP's bytes and bitrate, and a
-// frame's pts. On a grid holding a sphere: outputs it cannot make refused on
+// its CSV line, a frame type's sizes, a GOP's bytes and bitrate, a frame's
+// pts, and the comparison options the codec examples share. On a grid
+// holding a sphere: outputs it cannot make refused on
 // create, before any coding, and none written without outputs; a row per
 // decoded frame, under the source's index, whose type, bytes and blocks are
 // the frame's, and each type's stage rows its own frames'; every encoded
@@ -41,6 +42,7 @@
 #include "volumetric_kit/recon/stream/stream_reader.hpp"
 
 namespace codec = volumetric_kit::recon::codec;
+namespace eval = volumetric_kit::recon::eval;
 namespace stream = volumetric_kit::recon::stream;
 namespace fs = std::filesystem;
 using namespace codec_fixture;
@@ -143,6 +145,19 @@ int frame_times() {
   CHECK(vr_example::frame_pts_ns(2, 30.0) == 66'666'667);
   CHECK(vr_example::frame_pts_ns(3, 30.0) == 100'000'000);
   CHECK(vr_example::frame_pts_ns(400, 30.0) == 13'333'333'333);
+  return 0;
+}
+
+int compare_options() {
+  // The band's width of reach, 2 cm at least; 1 vertex in 4; F at half a
+  // voxel.
+  const eval::CompareOptions wide =
+      vr_example::codec_compare_options(0.01f, 0.04f);
+  CHECK(wide.reach == 0.04f && wide.stride == 4 &&
+        wide.fscore_threshold == 0.005f);
+  const eval::CompareOptions narrow =
+      vr_example::codec_compare_options(0.002f, 0.008f);
+  CHECK(narrow.reach == 0.02f && narrow.fscore_threshold == 0.001f);
   return 0;
 }
 
@@ -590,5 +605,6 @@ int main() {
   CHECK(type_sizes() == 0);
   CHECK(gop_rates() == 0);
   CHECK(frame_times() == 0);
+  CHECK(compare_options() == 0);
   return vr_test::run_on_gpu(gpu_main);
 }

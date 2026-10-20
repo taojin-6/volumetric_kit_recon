@@ -13,7 +13,6 @@
 // It takes every Replica example's sequence and fusion settings. Configure with
 // -DCMAKE_BUILD_TYPE=Release before quoting any timing.
 
-#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -46,7 +45,6 @@ namespace mesh = volumetric_kit::recon::mesh;
 namespace {
 
 constexpr std::int32_t kBuckets = 16384;  // the fusion grid's; it grows
-constexpr std::size_t kMetricStride = 4;  // about 1 vertex in 4, both ways
 
 using Options = vr_example::config::Config;
 
@@ -131,15 +129,11 @@ vkc::Status run(const Options& opt) {
     VKC_TRY(vr::io::write_ply(opt.output.prefix + "_source.ply", source));
     VKC_TRY(vr::io::write_ply(opt.output.prefix + "_decoded.ply", decoded));
   }
-  // A band's width of reach, and an F-score at half a voxel, inside the
-  // reconstruction's own resolution so it moves with the codec. The source is
-  // indexed once, for this comparison and every one the sweep makes.
-  eval::CompareOptions compare;
-  compare.reach = std::max(trunc, 0.02f);
-  compare.stride = kMetricStride;
-  compare.fscore_threshold = 0.5f * voxel;
+  // The source is indexed once, for this comparison and every one the sweep
+  // makes.
   VKC_ASSIGN(const eval::ReferenceMesh reference,
-             eval::ReferenceMesh::create(source, compare));
+             eval::ReferenceMesh::create(
+                 source, vr_example::codec_compare_options(voxel, trunc)));
   VKC_ASSIGN(const eval::MeshComparison cmp, reference.compare(decoded));
   std::printf("surface: %zu triangles decoded against %zu:\n",
               decoded.triangle_count(), source.triangle_count());
