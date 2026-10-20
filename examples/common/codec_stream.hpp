@@ -231,13 +231,16 @@ struct CodecOutputs {
 
 /// @brief Refuse to write @p path when it is @p file under another name,
 ///        through a link or a case alias: the core compares paths as text.
-/// @return OK when nothing is at @p path or it is another file;
-///         InvalidArgument naming both when it is @p file; IoError when that
-///         cannot be told, as when @p file is missing.
+/// @return OK when nothing is at @p path or at @p file, or they are two
+///         files; InvalidArgument naming both when they are one; IoError
+///         when that cannot be told, as for a name too long to look up.
 inline vkc::Status check_not_same_file(const std::string& path,
                                        const std::string& file) {
+  // Both checked for existence first: libc++'s `equivalent` reports an
+  // error when one is missing, libstdc++'s returns false.
   std::error_code error;
   const bool same = std::filesystem::exists(path, error) &&
+                    std::filesystem::exists(file, error) &&
                     std::filesystem::equivalent(path, file, error);
   if (error) {
     return vkc::Status::io_error("cannot tell whether " + path + " is " + file);

@@ -280,9 +280,9 @@ int gpu_main(vr_test::GpuContext& gpu) {
   return 0;
 }
 
-// check_apart: a path that does not exist, or is another file, is taken; a
-// link to the stream or the CSV is refused, naming both; and a path that
-// cannot be told apart from a missing output is refused.
+// check_apart: a path that does not exist, or is another file, or beside an
+// output that does not exist, is taken; a link to the stream or the CSV is
+// refused, naming both; and a path that cannot be looked up is refused.
 int apart() {
   vr_test::Scratch scratch("recon_example_set_codec_apart_");
   vr_example::CodecOutputs outputs;
@@ -308,7 +308,10 @@ int apart() {
   }
   vr_example::CodecOutputs missing;
   missing.stream = (scratch.path / "missing.vrst").string();
-  CHECK(vr_example::check_apart(other.string(), missing).domain() ==
+  CHECK(vr_example::check_apart(other.string(), missing).ok());
+  // A name past every file system's limit cannot be looked up.
+  const fs::path unknowable = scratch.path / std::string(300, 'x');
+  CHECK(vr_example::check_apart(unknowable.string(), outputs).domain() ==
         vkc::Status::Code::IoError);
   return 0;
 }
