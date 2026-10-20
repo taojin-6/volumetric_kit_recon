@@ -5,19 +5,22 @@
 // driver: two fake cameras 3 m apart, read as a sensor array and prepared on
 // the device as a rig's are. Each camera sees a back wall 2 m ahead and, in
 // the first three sets, a near wall 1 m ahead over the left of its picture,
-// which then leaves, so the cameras see past it to the back wall. Seven sets
-// fused through fuse_and_code at a fusion.free_after of 2 and coded at an
-// intra period of 30 into a .vrst: a Geometry record each, only the first a
-// key, each record's set the set's index and its pts the set's time, and
-// every frame decodes through codec::decode_growing. The last set is stamped
-// before the one before it, as a clock stepping back stamps it, and is coded
-// at that one's time. Dynamic: the near walls are in the frames that see
-// them and gone from the first that sees past them, and the free pass after
-// set 5 frees all their blocks from the grid. Classic: no voxel loses its
-// weight, so every later frame keeps the near blocks the last frame to see
-// the walls held, and that pass frees exactly the near blocks that never
-// held an observed voxel. The back walls stay in every frame and grid either
-// way, and a free_after of 0 frees nothing. The grid is the same with a
+// which then leaves, so the cameras see past it to the back wall. Nine sets
+// fused through fuse_and_code at a fusion.free_after of 3 and a
+// fusion.max_weight of 1.5, and coded at an intra period of 30 into a .vrst:
+// a Geometry record each, only the first a key, each record's set the set's
+// index and its pts the set's time, and every frame decodes through
+// codec::decode_growing. The last set is stamped before the one before it,
+// as a clock stepping back stamps it, and is coded at that one's time. After
+// the second set the heaviest voxel is at the cap, which the near walls' two
+// sets pass. Dynamic: the near walls are in the frames that see them and
+// gone from the first that sees past them; the free pass after set 5 frees
+// the near blocks the last frame to see the walls left out, and the pass
+// after set 8 the rest. Classic: no voxel loses its weight, so every later
+// frame keeps the near blocks the last frame to see the walls held, and the
+// pass after set 5 frees exactly the near blocks that never held an observed
+// voxel. The back walls stay in every frame and grid either way, and a
+// free_after of 0 frees nothing. The grid holds the same near blocks with a
 // stream and without. On the host, a path that is the stream's or the CSV's
 // file through a link refused, one beside them taken, and one that cannot be
 // checked refused. The device part skips with no device.
@@ -38,6 +41,7 @@
 #include <vector>
 
 #include "gpu_test.hpp"
+#include "grid_readback.hpp"
 #include "scratch_dir.hpp"
 #include "set_codec.hpp"
 #include "test_check.hpp"
@@ -63,16 +67,21 @@ namespace fs = std::filesystem;
 namespace {
 
 constexpr std::uint32_t kW = 64, kH = 48;
-constexpr std::size_t kSets = 7;
+constexpr std::size_t kSets = 9;
 constexpr std::size_t kNearSets = 3;  // the sets that see the near walls
-constexpr int kFreeAfter = 2;
-// The set whose free pass frees the near walls' blocks under Dynamic. The
-// grid's clock starts at 1, and each set's fuse advances it by one after the
-// set's allocation. Set 2 last asks for the blocks, at tick 3, and the pass
-// after set 1, at tick 3, last finds them observed: set 3 clears them. The
-// pass after set 3 (tick 5) finds them 2 ticks old, not more than
-// kFreeAfter; the pass after set 5 (tick 7), 4.
-constexpr std::size_t kFreedSet = 5;
+constexpr int kFreeAfter = 3;
+constexpr float kMaxWeight = 1.5F;  // two sets of the near walls pass it
+// The sets whose free passes free near blocks, from the grid's clock. It
+// starts at 1, and each set's fuse advances it by one after the set's
+// allocation: set s asks for blocks at tick s + 1, and a pass after it runs
+// at tick s + 2. Set 2 last asks for the near blocks, at tick 3, and the pass
+// after it, at tick 4, stamps those holding an observed voxel. The pass after
+// set 5, at tick 7, finds the rest 4 ticks old, more than kFreeAfter, and
+// frees them; the stamped ones are 3 ticks old and stay. Under Dynamic set 3
+// cleared those, so no later pass stamps them, and the pass after set 8, at
+// tick 10, frees them.
+constexpr std::size_t kUnobservedFreedSet = 5;
+constexpr std::size_t kClearedFreedSet = 8;
 // A host-clock time, and a set period no frame rate's pts would give.
 constexpr std::uint64_t kStartNs = 1'760'000'000'123'456'789;
 constexpr std::uint64_t kPeriodNs = 33'366'701;
@@ -193,11 +202,13 @@ bool holds(const std::vector<vr::Vec3i>& whole,
 
 // Push, poll and prepare kSets sets, fusing each through fuse_and_code and
 // coding it into a new stream at `path`, unless empty, and check the grid
-// after each, kept in `grids`: the back walls always; the near walls'
-// surface while the cameras see them, and under Dynamic not after; and the
-// near walls' blocks all kept until the pass after kFreedSet, then under
-// Dynamic with a free pass all gone, under Classic some kept
-// (check_stream), and with no pass all kept.
+// after each, kept in `grids`: after the second set its heaviest voxel at
+// fusion.max_weight, which the near walls' two sets pass; the back walls
+// always; the near walls' surface while the cameras see them, and under
+// Dynamic not after; and the near walls' blocks all kept until the pass
+// after kUnobservedFreedSet, then some (check_stream says which) until,
+// under Dynamic, the pass after kClearedFreedSet frees the rest; with no
+// pass, all kept.
 int code_sets(vr_test::GpuContext& gpu, const cfg::Fusion& fusion,
               const std::string& path, std::vector<Walls>* grids) {
   auto a = std::make_unique<Camera>("A", sensor::SyncRole::Primary);
@@ -253,6 +264,13 @@ int code_sets(vr_test::GpuContext& gpu, const cfg::Fusion& fusion,
     CHECK(vr_example::fuse_and_code(*fuser, *grid, *prepared, s, fusion,
                                     coded ? &*coded : nullptr, nullptr)
               .ok());
+    if (s == 1) {  // read once: the whole attribute is slow in Debug
+      auto weights = vr_test::read_attribute<float>(gpu.device, gpu.allocator,
+                                                    *grid, "weight");
+      CHECK(weights.ok() && !weights->empty());
+      CHECK(*std::max_element(weights->begin(), weights->end()) ==
+            fusion.max_weight);
+    }
 
     grids->emplace_back();
     Walls& walls = grids->back();
@@ -261,12 +279,13 @@ int code_sets(vr_test::GpuContext& gpu, const cfg::Fusion& fusion,
     CHECK(walls.back() && !first.near_blocks.empty());
     if (s < kNearSets) CHECK(walls.near());
     if (s >= kNearSets && fusion.dynamic) CHECK(walls.no_near());
-    if (s < kFreedSet || fusion.free_after == 0) {
+    if (s < kUnobservedFreedSet || fusion.free_after == 0) {
       CHECK(walls.near_blocks == first.near_blocks);
-    } else if (fusion.dynamic) {
+    } else if (fusion.dynamic && s >= kClearedFreedSet) {
       CHECK(walls.near_blocks.empty());
     } else {
       CHECK(!walls.near_blocks.empty() &&
+            walls.near_blocks.size() < first.near_blocks.size() &&
             holds(first.near_blocks, walls.near_blocks));
     }
   }
@@ -281,9 +300,11 @@ int code_sets(vr_test::GpuContext& gpu, const cfg::Fusion& fusion,
 // the first a key, each at its set and coded pts, and each decoding. Every
 // frame holds the back walls, and the near walls while the cameras see them.
 // After that, under Dynamic, the frames hold no near block, since the codec
-// leaves out a block without an observed voxel. Under Classic each frame
-// holds every near block the last frame to see the near walls held, since
-// no weight falls, and from the pass after kFreedSet the grid holds exactly
+// leaves out a block without an observed voxel, and from the pass after
+// kUnobservedFreedSet until the one after kClearedFreedSet the grid holds
+// exactly the near blocks the last frame to see the near walls held. Under
+// Classic each frame holds every near block that frame held, since no weight
+// falls, and from the pass after kUnobservedFreedSet the grid holds exactly
 // the frame's near blocks: the pass frees those that never held an observed
 // voxel and keeps the rest.
 int check_stream(vr_test::GpuContext& gpu, const std::string& path,
@@ -330,9 +351,14 @@ int check_stream(vr_test::GpuContext& gpu, const std::string& path,
       last_seen = walls;
     } else if (dynamic) {
       CHECK(walls.no_near() && walls.near_blocks.empty());
+      if (s >= kUnobservedFreedSet && s < kClearedFreedSet) {
+        CHECK(grids[s].near_blocks == last_seen.near_blocks);
+      }
     } else {
       CHECK(holds(walls.near_blocks, last_seen.near_blocks));
-      if (s >= kFreedSet) CHECK(walls.near_blocks == grids[s].near_blocks);
+      if (s >= kUnobservedFreedSet) {
+        CHECK(walls.near_blocks == grids[s].near_blocks);
+      }
     }
   }
   const vkc::Result<bool> end = reader.next(&pos, &record);
@@ -346,6 +372,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
     cfg::Fusion fusion;  // 2 cm voxels, an 8 cm band
     fusion.dynamic = dynamic;
     fusion.free_after = kFreeAfter;
+    fusion.max_weight = kMaxWeight;
     const std::string path =
         (scratch.path / (dynamic ? "dynamic.vrst" : "classic.vrst")).string();
     std::vector<Walls> coded;
@@ -361,6 +388,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
   cfg::Fusion never;  // Dynamic, freeing nothing
   never.dynamic = true;
   never.free_after = 0;
+  never.max_weight = kMaxWeight;
   std::vector<Walls> kept;
   CHECK(code_sets(gpu, never, "", &kept) == 0);
   std::puts("example_set_codec: OK");

@@ -144,8 +144,9 @@ inline vkc::Status fuse_set(
 /// @brief `fusion.free_after`'s pass, run after each fused set: every
 ///        @p free_after sets, free the blocks of @p grid that neither an
 ///        allocation nor an observed voxel has stamped for more than
-///        @p free_after sets (`VoxelBlockGrid::free_stale_blocks`), such as
-///        those a surface left under Dynamic integration. 0 never frees.
+///        @p free_after ticks of its clock, one a fused set
+///        (`VoxelBlockGrid::free_stale_blocks`), such as those a surface
+///        left under Dynamic integration. 0 never frees.
 ///
 /// Housekeeping: a failed pass is printed to stderr as
 /// "<program>: free blocks: <why>", and the caller fuses on.
