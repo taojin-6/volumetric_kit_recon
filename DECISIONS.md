@@ -627,6 +627,10 @@ entries relevant to your task; later amendments supersede earlier rules.
   is a sensor or a tag, never both, and a tag puts no sensor at the origin.
   The file stays version 2: an older reader already refuses a tag world as
   `Unsupported`.
+- [**2026-10-20**](#2026-10-20--fuse_orbbec-writes-a-stream-one-tsdf-per-set-in-the-calibrations-world) —
+  `fuse_orbbec` writes a stream, one TSDF per set
+  (`fusion.accumulate: false`), in the world the calibration defines: no
+  upright transform, crop, raw recording or colour yet.
 
 ## Decision record
 
@@ -13910,6 +13914,36 @@ Vulkan, builds and passes. Six planted bugs each failed a test: the
 writer dropping the tag, a world with both kinds accepted, an id of -1
 accepted, an infinite size accepted, the tag read but not kept, and a tag
 world that needs a sensor at the origin. No camera was opened.
+
+### 2026-10-20 — `fuse_orbbec` writes a stream, one TSDF per set, in the calibration's world.
+
+The user wants a rig stream to show what the Rafa2 stream shows: the
+reconstructed scene, frame by frame, without colour for now. Core 0.13.0
+opens the `codec` section, `output.stream`, `output.csv` and
+`fusion.accumulate` to FuseOrbbec.
+
+- **One TSDF per set.** `fusion.accumulate: false` clears the grid before
+  each set, as `codec_mesh` converts each mesh into a cleared grid, so each
+  coded frame is one set's own reconstruction. The default, true, keeps the
+  accumulating scan. Every set is coded, so each P-frame carries that set's
+  sensor noise. Dynamic fusion that frees stale blocks, as `rig_viewer`
+  runs, was the other choice; it waits for a need.
+- **The calibration's world.** The stream holds the geometry where
+  `source.calibration` puts it: no upright transform, and the Geometry
+  track's params stay empty. A portrait rig calibrated to one of its
+  cameras lies sideways in a y-up player; turning a world upright is later
+  work, on the writer's side or the player's.
+- **Numbered by the run.** A record's set is the set's index in the run and
+  its pts the set's host time, so a set the loop missed shows as a gap in
+  pts.
+- **Not yet:** a capture-volume crop (`fusion.max_depth_m` is the limit
+  there is), raw RGBD recording and replay, colour, and the session's host
+  clock and calibration, which `CodecStream` does not record.
+
+**Validation.** `recon_example_set_codec` codes three sets of two fake
+cameras, read through a `SensorArray` and prepared on the GPU, into a
+`.vrst`, under the validation layer. No camera was opened; `fuse_orbbec`
+has not yet run on the rig.
 
 ## Measured lessons
 

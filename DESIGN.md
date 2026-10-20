@@ -1784,7 +1784,8 @@ registration or config validator remains.
 migration from the previous CLI.
 
 `fuse_orbbec` selects stream-only work with `operation: "stream"`; core
-refuses explicit fusion or output settings for that operation before setup.
+refuses explicit fusion, codec or output settings for that operation before
+setup.
 Calibration and SDK sync files stay in their domain formats and are referenced
 by scenario paths. Device and camera capability checks remain in their runtime
 APIs. Stage rows print through one table,
@@ -1826,6 +1827,17 @@ with the first set. The run reports the cameras' open time and, at the end
 or when it fails, the array's counters, each camera's `lost` frames and, for
 a rig, each secondary's mean and worst skew to the primary. Colour is H.265
 unless `source.color_codec: "mjpeg"`.
+With `output.stream` or `output.csv` it also codes each fused set as one
+frame through `codec_replica`'s `CodecStream`, opened before the cameras
+(`set_codec.hpp`, the 2026-10-20 decision): a record's set is the set's index
+in the run and its pts the set's host time, so a set the loop missed shows
+as a gap in pts. `fusion.accumulate: false` clears the grid before each
+set, so each frame is that set's own reconstruction and the PLY the last
+set's. The PLY
+is refused when it is the stream's or the CSV's file under another name, and
+`codec.sweep` sweeps the last grid. Two costs are not yet measured on the
+rig: the stream decodes every frame again into its player grid, and a loop
+slower than the rig gets the newest set, so sets drop.
 **`rig_viewer`** (`VR_BUILD_VIEWER` with `VR_WITH_ORBBEC` and
 `VR_WITH_FFMPEG`; CI's viewer leg compiles it) is `fuse_viewer`'s live-rig
 sibling: an `OrbbecSensor` per camera of the sync file read as a

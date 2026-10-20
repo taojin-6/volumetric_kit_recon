@@ -362,6 +362,29 @@ vr_target_warnings(recon_example_codec_stream_test)
 add_test(NAME recon_example_codec_stream
          COMMAND recon_example_codec_stream_test)
 
+# fuse_orbbec's coded sets (examples/common/set_codec.hpp), with no camera
+# driver: fake cameras read as a sensor array and prepared on the device, each
+# set fused and coded into a .vrst whose records, keys, sets and pts are the
+# sets', every frame decoded; with fusion.accumulate false a wall only the first
+# set saw is gone from the later frames, and with it true it stays. On the host,
+# a path that is the stream's or the CSV's file refused. The device part skips
+# with no device.
+add_executable(recon_example_set_codec_test example_set_codec_test.cpp)
+target_include_directories(recon_example_set_codec_test
+                           PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
+target_link_libraries(
+  recon_example_set_codec_test
+  PRIVATE volumetric_kit::core_config
+          volumetric_kit::core_test_policy
+          volumetric_kit::recon_codec
+          volumetric_kit::recon_eval
+          volumetric_kit::recon_sensor_array
+          volumetric_kit::recon_stream
+          volumetric_kit::recon_tsdf
+          Vulkan::Vulkan)
+vr_target_warnings(recon_example_set_codec_test)
+add_test(NAME recon_example_set_codec COMMAND recon_example_set_codec_test)
+
 # codec_mesh's sequence (examples/codec_mesh/mesh_sequence.hpp), where the mesh
 # example is built. On the host: the frame-number pattern, every file checked
 # before any load, one transform for the whole range, signed mode's rule and
