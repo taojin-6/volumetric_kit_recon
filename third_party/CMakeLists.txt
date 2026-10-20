@@ -43,10 +43,11 @@ include(FetchContent)
 #
 # TODO: pin a core release tag once the core tags its releases.
 # TODO(O1): fuse_orbbec's codec keys and fusion.accumulate are core 0.13.0's
-# (volumetric_kit_core feat/fuse-orbbec-stream). Once that PR merges, bump this
-# pin to its merge commit and raise the examples' core floor from 0.9.0 to
-# 0.13.0: vkc_require_core below, and the floor README.md and config/README.md
-# state.
+# (volumetric_kit_core feat/fuse-orbbec-stream). Once that PR merges, and before
+# this branch merges, pin its merge commit here and raise the core floor of the
+# examples and their tests from 0.9.0 to 0.13.0 wherever it is stated: the pin
+# paragraph above, vkc_require_core(0.9.0 CONFIG) and its comment below,
+# README.md, config/README.md and DESIGN.md ("The examples require core").
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
