@@ -203,7 +203,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - `examples`: **`fuse_orbbec` codes its sets into a `.vrst`, and core
-  0.13.0 is required** (core #43, the 2026-10-20 decision). With
+  0.14.0 is required** (core #43 and #44, the 2026-10-20 decision). With
   `output.stream` or `output.csv` it codes each fused set as one frame at
   the set's time (`vr_example::fuse_and_code`, `set_codec.hpp`) and
   reports the stream, even after a failure part-way, and `codec.sweep`

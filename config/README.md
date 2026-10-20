@@ -10,7 +10,7 @@ The files in [examples](examples) are starting points. Edit their source paths
 and create the output directories before a real run. Paths are relative to the
 configuration file, not the shell's current directory; environment variables
 and home-directory shortcuts are not expanded.
-The examples require core 0.13.0 or newer. In a mesh's `source.path`, write a
+The examples require core 0.14.0 or newer. In a mesh's `source.path`, write a
 literal `%` as `%%`; literal `%` characters in the configuration file's
 directory are escaped automatically when resolving a relative mesh path.
 

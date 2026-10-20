@@ -35,26 +35,15 @@ include(FetchContent)
 # rather than OFF, as calib does, so an application that turns the tier on keeps
 # it.
 #
-# The pin is core 0.13.0 (8b494c3, core #43's merge), as is the Homebrew key
+# The pin is core 0.14.0 (96f89d6, core #44's merge), as is the Homebrew key
 # action in .github/workflows/_build.yml; the vkc_require_core checks below say
 # which core each part needs.
 #
 # TODO: pin a core release tag once the core tags its releases.
-# TODO(O1b): fuse_orbbec's fusion.free_after, and the refusal of the dropped
-# fusion.accumulate, are core 0.14.0's (volumetric_kit_core
-# feat/fuse-orbbec-dynamic); at 0.13.0 a FuseOrbbec scenario's free_after is
-# refused and its accumulate loads unread. Once that PR merges, and before this
-# branch merges, pin its merge commit here and in the Homebrew key action
-# (.github/workflows/_build.yml), and raise the core floor of the examples and
-# their tests from 0.13.0 to 0.14.0, naming free_after as the reason, wherever
-# it is stated: the pin paragraph above, vkc_require_core(0.13.0 CONFIG) and its
-# comment below, README.md, config/README.md, DESIGN.md ("The examples require
-# core") and the fuse_orbbec entry in CHANGELOG.md, which then cites that PR's
-# number beside core #43.
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG 8b494c320b5e6c8f44cadc87702c083c8b4cc78c)
+  GIT_TAG 96f89d685f2ae8309dfc9df4e35eb8526d5bdbf8)
 set(VKC_INSTALL ${VR_INSTALL})
 if(NOT VR_CAMERA_ONLY)
   set(VKC_WITH_VULKAN ON)
@@ -69,9 +58,9 @@ if(NOT VR_CAMERA_ONLY AND (VR_BUILD_EXAMPLES OR VR_BUILD_TESTS))
 endif()
 FetchContent_MakeAvailable(volumetric_kit_core)
 if(NOT VR_CAMERA_ONLY AND (VR_BUILD_EXAMPLES OR VR_BUILD_TESTS))
-  # fuse_orbbec and its configuration tests read FuseOrbbec's codec section and
-  # outputs, core 0.13.0's.
-  vkc_require_core(0.13.0 CONFIG)
+  # fuse_orbbec and its configuration tests read FuseOrbbec's fusion.free_after,
+  # core 0.14.0's.
+  vkc_require_core(0.14.0 CONFIG)
 endif()
 
 # The set()s above are lost when calib or the application made the core
