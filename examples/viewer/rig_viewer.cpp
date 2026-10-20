@@ -76,7 +76,7 @@
 #include <glm/glm.hpp>
 
 #include "config.hpp"
-#include "fuse_frame.hpp"  // vr_example::create_fusion_grid, fuse_set
+#include "fuse_frame.hpp"  // fusion grid, fuse_set, free_stale_blocks_every
 #include "orbbec_config.hpp"
 #include "recon_gfx_bridge.hpp"  // to_live_mesh, and the vertex-layout asserts
 #include "rig_report.hpp"
@@ -849,18 +849,9 @@ int run(GLFWwindow* window, const Options& opt) {
           frames_fused += frame ? 1 : 0;
         }
         ++sets;
-        // Ahead of the remesh, so it meshes the smaller set. Housekeeping, so
-        // a failed pass is reported and fusion goes on.
-        const auto free_after =
-            static_cast<std::uint32_t>(opt.fusion.free_after);
-        if (free_after != 0 && sets % free_after == 0) {
-          const vkc::Result<std::uint32_t> freed =
-              volume.free_stale_blocks(free_after, &fuse_stages);
-          if (!freed) {
-            std::fprintf(stderr, "rig_viewer: free blocks: %s\n",
-                         freed.status().message().c_str());
-          }
-        }
+        // Ahead of the remesh, so it meshes the smaller set.
+        vr_example::free_stale_blocks_every(volume, sets, opt.fusion.free_after,
+                                            "rig_viewer", &fuse_stages);
         for (std::size_t c = 0; c < frames.size() && c < cameras; ++c) {
           if (frames[c] && frames[c]->has_color()) {
             newest[c] = NewestFrame{*frames[c], sets};
