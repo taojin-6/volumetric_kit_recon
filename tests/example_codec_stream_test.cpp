@@ -38,7 +38,6 @@
 #include <memory>
 #include <optional>
 #include <string>
-#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -48,7 +47,6 @@
 #include "networking_loopback.hpp"
 #include "scratch_dir.hpp"
 #include "volumetric_kit/core/base/file_io.hpp"
-#include "volumetric_kit/core/base/log.hpp"
 #include "volumetric_kit/recon/networking/stream_client.hpp"
 #include "volumetric_kit/recon/networking/stream_server.hpp"
 #include "volumetric_kit/recon/stream/stream_reader.hpp"
@@ -795,20 +793,17 @@ int refused_publish(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
   CHECK(
       server->publish(net::record_info(1000, true), ahead.data(), ahead.size())
           .ok());
-  std::vector<std::string> warnings;  // the stream's, logged on this thread
-  vkc::set_log_handler([&warnings](vkc::LogLevel level, std::string_view,
-                                   std::string_view message) {
-    if (level == vkc::LogLevel::Warning &&
-        message.find("not served") != std::string_view::npos) {
-      warnings.emplace_back(message);
-    }
-  });
-  vkc::Status coded[3];
+  const std::size_t before = gpu.log.warnings().size();
   for (std::size_t frame = 0; frame < 3; ++frame) {
-    coded[frame] = coder.code(source, frame, pts(frame));
+    CHECK(coder.code(source, frame, pts(frame)).ok());
   }
-  vkc::set_log_handler({});
-  for (const vkc::Status& status : coded) CHECK(status.ok());
+  const std::vector<std::string> logged = gpu.log.warnings();
+  std::vector<std::string> warnings;  // the stream's since `before`
+  for (std::size_t i = before; i < logged.size(); ++i) {
+    if (logged[i].find("not served") != std::string::npos) {
+      warnings.push_back(logged[i]);
+    }
+  }
   CHECK(warnings.size() == 3);
   for (std::size_t frame = 0; frame < 3; ++frame) {
     CHECK(warnings[frame].find("frame " + std::to_string(frame) +
