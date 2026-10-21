@@ -45,9 +45,10 @@
 //
 // Ctrl+C (or a SIGTERM) ends the run. Before the cameras stream, the run
 // returns with nothing recorded: the empty stream is removed and the cameras
-// are released. After, it ends after the set in hand, as run.frames would:
-// the stream is finished and its viewers closed, the cameras are released
-// and the PLY is written. A second one ends the process.
+// are released; one during their discovery takes effect once they are open,
+// as the run prints. After, it ends after the set in hand, as run.frames
+// would: the stream is finished and its viewers closed, the cameras are
+// released and the PLY is written. A second one ends the process.
 
 #include <chrono>
 #include <cstddef>
@@ -148,7 +149,14 @@ vkc::Status run(const Options& opt) {
   // prepares each set on the device in one batch. An optional so the run can
   // release the cameras before the extract: stop() ends the streams but keeps
   // the cameras held for a restart. After the device, so every picture on it
-  // goes first.
+  // goes first. A Ctrl+C before here skips their discovery, which takes
+  // seconds and does not see one.
+  if (vr_example::interrupted()) {
+    std::printf("interrupted before the cameras opened\n");
+    return {};
+  }
+  std::printf(
+      "opening the cameras; a Ctrl+C takes effect once they are open\n");
   std::optional<sensor::SensorArray> array;
   VKC_ASSIGN(array, vr_example::open_orbbec_array(opt, device, allocator));
 
@@ -179,8 +187,8 @@ vkc::Status run(const Options& opt) {
   }
 
   // --- Stream, until run.frames or Ctrl+C ---
-  // A Ctrl+C during the setup (camera discovery takes seconds) ends the run
-  // here, before any set.
+  // A Ctrl+C during the cameras' discovery, or the setup after it, ends the
+  // run here, before any set.
   if (vr_example::interrupted()) {
     std::printf("interrupted before streaming\n");
     return {};
