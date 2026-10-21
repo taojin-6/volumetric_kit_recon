@@ -151,8 +151,9 @@ links that base tier alone, and `networking` links `stream`.
   no Vulkan and no other recon tier.
 - **`networking`** — a session served and read live over TCP, its wire the
   `.vrst` file's own bytes: `StreamServer` and `StreamClient`, over BSD
-  sockets and threads of their own (2026-10-21). Host-side, on `stream`
-  alone, so the format and the sockets are tested apart.
+  sockets and threads of their own (2026-10-21). Host-side, on `stream`,
+  so the format and the sockets are tested apart; it logs through recon's
+  log seam (`core/log.hpp`), header-only over the family core's base tier.
 - **`interop`** — the handoff to `volumetric_kit_gfx` (below).
 
 ## Backend strategy: one Vulkan path
@@ -1769,10 +1770,10 @@ accept. `publish` frames the record by the writer's rules, copies its chunk
 once, takes one lock to append it to the GOP log and wakes the viewers: it
 never waits on a socket. The log holds one GOP, the newest key and every
 record after it, as chunks shared by the viewers still to send them. A
-viewer is subscribed at the GOP's key under that lock, before its `VRST`
-chunk is queued. It takes its next chunk only once its socket polls
-writable, under 128 KiB unsent (`TCP_NOTSENT_LOWAT`), and at that chunk
-boundary goes on from a newer key if one has come: newest key wins, so a
+viewer's first record, after its `VRST` chunk, is the GOP's key, and the
+log keeps every record since. It takes its next chunk only once its socket
+polls writable, under 128 KiB unsent (`TCP_NOTSENT_LOWAT`), and at that
+chunk boundary goes on from a newer key if one has come: newest key wins, so a
 P-frame never goes out without the records it is predicted from, and a
 lagging viewer's seq jumps to a key. A record that would take the GOP past
 `max_gop_bytes` (64 MiB) drops it and every record until the next key, as
@@ -1793,15 +1794,12 @@ with `IoError`, as do a refusal at every address, a reset and the sender's
 end, which comes after every whole record; a failed check ends it with the
 parser's error, which every later call returns again.
 
-**Sockets** (private `socket.cpp`). Every socket is non-blocking and
-close-on-exec, set explicitly, since Linux does not pass the flags to an
-accepted socket and macOS has no `accept4`. SIGPIPE is off through
-`SO_NOSIGPIPE` on Apple and `MSG_NOSIGNAL` elsewhere, chosen by platform, as
-Apple's SDKs define `MSG_NOSIGNAL` too. The sender sets `TCP_NODELAY` and
-the listener `SO_REUSEADDR`. Every call is retried on `EINTR`: an
-application's signal handler interrupts `poll`, which is never restarted.
-The GOP log (`gop_log.cpp`) has no socket, thread or clock, and is tested
-alone.
+**Sockets** (private `socket.hpp`, which gives the reasons). IPv4 only:
+the server listens on it, and a name is looked up for it. Every socket is
+non-blocking and close-on-exec, accepted ones included, and never raises
+SIGPIPE; every call is retried on `EINTR`. The sender sets `TCP_NODELAY`
+and the listener `SO_REUSEADDR`. The GOP log (`gop_log.cpp`) has no socket,
+thread or clock, and is tested alone.
 
 ## Examples
 

@@ -278,8 +278,7 @@ it is recorded (`networking/stream_server.hpp`) and reads it as it arrives
 (`networking/stream_client.hpp`), byte for byte the `.vrst` file's chunks;
 see [the networking contract](DESIGN.md#networking). `serve_stream` serves a
 recording live, paced by its pts and looping until Ctrl+C, with no camera or
-GPU; a viewer connects to the sender's `host:port`, as mDNS does not cross a
-routed VPN:
+GPU; a viewer connects to the sender's `host:port`:
 
 ```sh
 "$recon_root/build/examples/serve_stream/serve_stream" rafa2.vrst  # port 47801

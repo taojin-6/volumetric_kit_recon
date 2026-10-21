@@ -61,7 +61,7 @@ core → volume → tsdf → mesh → texture → interop
   │        └→ codec     ├→ eval
   │                    └→ io
   └→ sensor ← camera          (later: track)
-stream → networking           (on the family core's base tier alone)
+stream → networking           (stream on the family core's base tier alone)
 ```
 
 - No upward includes. `camera` depends on the family core's base tier and GLM
