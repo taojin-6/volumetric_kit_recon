@@ -36,9 +36,9 @@
 // examples' stream (vr_example::CodecStream) at the set's time, the host's
 // clock for a rig, and reports the stream, even when the run fails part-way;
 // codec.sweep then prints the codec's rate-distortion table on the last grid.
-// fusion.dynamic clears a surface the cameras see past, so the stream and the
-// PLY follow a changing scene, and every fusion.free_after sets the grid frees
-// the blocks such a surface left, as rig_viewer's does.
+// fusion.dynamic, true by default, clears a surface the cameras see past, so
+// the stream and the PLY follow a changing scene, and every fusion.free_after
+// sets the grid frees the blocks such a surface left, as rig_viewer's does.
 
 #include <chrono>
 #include <cstddef>
