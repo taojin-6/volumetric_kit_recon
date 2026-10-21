@@ -202,6 +202,21 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `examples`: **`fuse_orbbec` serves its coded sets live, and core 0.16.0
+  is required** (core #46). With `output.serve`, a port, it codes each fused
+  set as with `output.stream` and serves the records live on that port, on
+  every interface (`CodecOutputs::serve`, mapped by `codec_outputs`).
+  `CodecStream` starts its `networking::StreamServer` on the stream's
+  session before making any file, so a port in use leaves none; publishes
+  each record after appending it, so no viewer gets a frame the file lacks;
+  logs a record the server refuses at Warning, failing no frame; and closes
+  the viewers in `finish()`, after which `server()` is null. fuse_orbbec
+  prints the port, and Ctrl+C or SIGTERM ends its run after the set in hand,
+  as `run.frames` would, through `examples/common/interrupt.hpp`
+  (`rig_viewer`'s handler, moved); a second one ends the process. New
+  template: `config/examples/serve_orbbec.json`. Tests:
+  `recon_example_codec_stream`, `recon_example_config`,
+  `recon_example_interrupt`.
 - `networking`: **a session served and read live over TCP**
   (`recon_networking`, a tier of its own on `recon_stream`, the 2026-10-21
   decision). `StreamServer` (`networking/stream_server.hpp`, with

@@ -32,13 +32,21 @@
 // and a rig's skew of each secondary to the primary. It gives up after ten
 // seconds without a frame rather than waiting, still reporting them.
 //
-// output.stream or output.csv codes each fused set as one frame of the codec
-// examples' stream (vr_example::CodecStream) at the set's time, the host's
-// clock for a rig, and reports the stream, even when the run fails part-way;
-// codec.sweep then prints the codec's rate-distortion table on the last grid.
-// fusion.dynamic, true by default, clears a surface the cameras see past, so
-// the stream and the PLY follow a changing scene, and every fusion.free_after
-// sets the grid frees the blocks such a surface left, as rig_viewer's does.
+// output.stream, output.csv or output.serve codes each fused set as one frame
+// of the codec examples' stream (vr_example::CodecStream) at the set's time,
+// the host's clock for a rig, and reports the stream, even when the run fails
+// part-way; codec.sweep then prints the codec's rate-distortion table on the
+// last grid. output.serve serves each frame live, as it is recorded, on that
+// port on every interface (networking::StreamServer), to a player that
+// connects. fusion.dynamic, true by default, clears a surface the cameras see
+// past, so the stream and the PLY follow a changing scene, and every
+// fusion.free_after sets the grid frees the blocks such a surface left, as
+// rig_viewer's does.
+//
+// Ctrl+C (or a SIGTERM) once the cameras stream ends the run after the set
+// in hand, as run.frames would: the stream is finished and its viewers
+// closed, the cameras are released and the PLY is written. A second one ends
+// the process.
 
 #include <chrono>
 #include <cstddef>
@@ -55,6 +63,7 @@
 #include "config.hpp"
 #include "fuse_frame.hpp"
 #include "fuse_orbbec_sets.hpp"
+#include "interrupt.hpp"
 #include "set_codec.hpp"
 #include "set_dump.hpp"
 #include "stage_table.hpp"
@@ -69,6 +78,7 @@
 #include "volumetric_kit/recon/io/ply_writer.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
 #include "volumetric_kit/recon/mesh/mesh.hpp"
+#include "volumetric_kit/recon/networking/stream_server.hpp"
 #include "volumetric_kit/recon/sensor/array/sensor_array.hpp"
 #include "volumetric_kit/recon/sensor/utils/picture_readback.hpp"
 #include "volumetric_kit/recon/tsdf/fuser.hpp"
@@ -109,12 +119,13 @@ vkc::Status run(const Options& opt) {
   VKC_ASSIGN(vkc::Allocator allocator,
              vkc::Allocator::create(instance.handle(), device));
 
-  // --- Codec, with output.stream or output.csv: before the cameras, so a
-  // rerun onto an existing stream, or a PLY that is its file or the CSV's
-  // under another name, is refused before any camera opens. A stream that
-  // codes no set is removed again when the run ends ---
+  // --- Codec, with output.stream, output.csv or output.serve: before the
+  // cameras, so a port in use, a rerun onto an existing stream, or a PLY that
+  // is its file or the CSV's under another name, is refused before any camera
+  // opens. A stream that codes no set is removed again when the run ends ---
   std::optional<vr_example::CodecStream> stream;
-  if (!opt.output.stream.empty() || !opt.output.csv.empty()) {
+  if (!opt.output.stream.empty() || !opt.output.csv.empty() ||
+      opt.output.serve != 0) {
     VKC_ASSIGN(vr_example::CodecStream made,
                vr_example::CodecStream::create(
                    device, allocator, config,
@@ -125,6 +136,9 @@ vkc::Status run(const Options& opt) {
     std::printf("codec: %s\n",
                 vr_example::codec_settings(config, opt.codec.quantization_table)
                     .c_str());
+    if (const vr::networking::StreamServer* server = stream->server()) {
+      std::printf("serving on port %u\n", unsigned{server->port()});
+    }
   }
 
   // The cameras, read as an array that poses each frame and, when fusing,
@@ -161,8 +175,9 @@ vkc::Status run(const Options& opt) {
     ids.push_back(array->sensor(c).info().id);
   }
 
-  // --- Stream ---
+  // --- Stream, until run.frames or Ctrl+C ---
   VKC_TRY(array->start());
+  vr_example::catch_interrupts();
   const char* verb = (opt.operation == vr_example::config::Operation::Stream)
                          ? "streamed"
                          : "fused";
@@ -195,6 +210,11 @@ vkc::Status run(const Options& opt) {
         reported = sets.frames();
         std::printf("  %s %zu frames (%.1f fps)\n", verb, reported,
                     static_cast<double>(reported) / seconds_since(t_start));
+      }
+      // After the set in hand, so a run that ends well holds one.
+      if (vr_example::interrupted()) {
+        std::printf("  interrupted after %zu frames\n", sets.frames());
+        break;
       }
     }
     return {};

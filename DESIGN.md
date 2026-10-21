@@ -1895,16 +1895,22 @@ with the first set. The run reports the cameras' open time and, at the end
 or when it fails, the array's counters, each camera's `lost` frames and, for
 a rig, each secondary's mean and worst skew to the primary. Colour is H.265
 unless `source.color_codec: "mjpeg"`.
-With `output.stream` or `output.csv` it also codes each fused set as one
-frame through the codec examples' `CodecStream` (the 2026-10-20
-decision). `main.cpp` opens the stream before the cameras and refuses there
-a PLY that is the stream's or the CSV's file under another name. A record's set is the set's index in the run
+With `output.stream`, `output.csv` or `output.serve` it also codes each
+fused set as one frame through the codec examples' `CodecStream` (the
+2026-10-20 decision). `main.cpp` opens the stream before the cameras and
+refuses there a port in use and a PLY that is the stream's or the CSV's file
+under another name. A record's set is the set's index in the run
 and its pts the set's time; a set stamped before the last frame, as a clock
 stepping back stamps it, takes that frame's time. A run that fails part-way
 still finishes its stream and reports the frames it decoded; one that coded
 no set leaves none.
 The report's bitrate is at `source.fps`, and `codec.sweep` sweeps the last
-grid.
+grid. `output.serve` serves the records live on that port, on every
+interface. A Ctrl+C or SIGTERM once the cameras stream (`interrupt.hpp`,
+`rig_viewer`'s handler too) ends the run after the set in hand, as
+`run.frames` would: the stream is finished, its viewers closed, the cameras
+released and the PLY written; the handler restores the default, so a second
+one ends the process.
 **`rig_viewer`** (`VR_BUILD_VIEWER` with `VR_WITH_ORBBEC` and
 `VR_WITH_FFMPEG`; CI's viewer leg compiles it) is `fuse_viewer`'s live-rig
 sibling: an `OrbbecSensor` per camera of the sync file read as a
@@ -1944,7 +1950,8 @@ rate–distortion table the defaults are chosen from. The stream, its report
 and the sweep are `examples/common/codec_stream.hpp` and `codec_sweep.hpp`.
 The stream keeps a row per decoded frame (source index, frame type, bytes,
 blocks, and encode and decode host and device ms) and writes
-`CodecOutputs`, from `output.csv` and `output.stream`, as it codes. The CSV
+`CodecOutputs`, from `output.csv`, `output.stream` and `output.serve`, as it
+codes. The CSV
 gets each row once its frame decodes; the core cannot append, so the file
 is the stream's own. The
 `.vrst` (`recon_stream`) gets every frame the encoder returns, before it is
@@ -1957,7 +1964,12 @@ coded, and a frame index or pts out of order is refused before it is
 encoded, so the writer never refuses one the encoder has taken. Any other
 failure after the encode, of the append, the decode or the CSV, calls
 `force_intra()`, so the next frame never references one the stream or the
-player lacks. `finish` writes the footer.
+player lacks. `finish` writes the footer. With `serve`, a
+`networking::StreamServer` on the same session serves each record once it
+is appended, so no viewer gets a frame the file lacks; a record it refuses
+is logged at Warning and fails no frame, as failing would stop the
+recording. It starts before the file is made, so a port in use leaves none,
+and `finish` closes the viewers.
 
 Before truncating the CSV, creation checks that it does not alias the new
 stream file, including through symlinks or case-insensitive names. An alias
@@ -1966,7 +1978,7 @@ file for retry, as does destroying the stream unfinished before its first
 frame.
 
 **`codec_mesh`** codes one mesh or a numbered sequence of them (README,
-Codec evaluation, has the keys). The examples require core 0.15.0; core
+Codec evaluation, has the keys). The examples require core 0.16.0; core
 escapes literal `%` characters in the scenario's directory before joining a
 relative `source.path` (0.8.0), so only the user's path carries a
 frame-number pattern.
