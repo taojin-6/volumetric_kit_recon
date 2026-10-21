@@ -1765,10 +1765,10 @@ end. The port is 47801 (`kDefaultPort`).
 
 **Serving** (`StreamServer`). `start` listens on a numeric IPv4 address, or
 every interface, and starts an accept thread; one thread per viewer sends,
-at most `max_viewers` (4) at once, and a connection past them is closed at
-accept. `publish` frames the record by the writer's rules, copies its chunk
-once, takes one lock to append it to the GOP log and wakes the viewers: it
-never waits on a socket. The log holds one GOP, the newest key and every
+at most `max_viewers` (4) at once, first come, and a connection past them is
+closed at accept. `publish` frames the record by the writer's rules, copies
+its chunk once, takes one lock to append it to the GOP log and wakes the
+viewers: it never waits on a socket. The log holds one GOP, the newest key and every
 record after it, as chunks shared by the viewers still to send them. A
 viewer's first record, after its `VRST` chunk, is the GOP's key, and the
 log keeps every record since. It takes its next chunk only once its socket
@@ -1779,9 +1779,10 @@ lagging viewer's seq jumps to a key. A record that would take the GOP past
 `max_gop_bytes` (64 MiB) drops it and every record until the next key, as
 a copy that fails does (`OutOfMemory`). A viewer whose end acknowledges no
 byte for `stall_limit` (10 s) with bytes waiting is closed: one draining
-slowly stays, though its socket holds over the mark. Viewers that join, leave,
-fail or are refused are logged at Info. The destructor stops every thread
-within a poll slice (20 ms) and the write under way. One track is served
+slowly stays, though its socket holds over the mark, as does one with
+nothing waiting. Viewers that join, leave or fail are logged at Info; a
+refusal at Warning, the first and then one in 10 s at most. The destructor
+stops every thread within a poll slice (20 ms) and the write under way. One track is served
 (`Unsupported` otherwise), and `publish` is called from one thread.
 
 **Reading** (`StreamClient`). `connect` never blocks: a numeric IPv4 address
@@ -1793,7 +1794,9 @@ at most `wait`. The receive buffer is 256 KiB, set before the connect. No
 byte for `idle_limit` (10 s), counted from `connect`, ends the connection
 with `IoError`, as do a refusal at every address, a reset and the sender's
 end, which comes after every whole record; a failed check ends it with the
-parser's error, which every later call returns again.
+parser's error, which every later call returns again. Every error reads
+`StreamClient: <host>:<port>: <reason>`, the address once, and the idle
+limit's reason names the stage it ended in (the header lists the reasons).
 
 **Sockets** (private `socket.hpp`, which gives the reasons). IPv4 only:
 the server listens on it, and a name is looked up for it. Every socket is

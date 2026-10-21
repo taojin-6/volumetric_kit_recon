@@ -291,7 +291,9 @@ GPU; a viewer connects to the sender's `host:port`:
 "$recon_root/build/examples/serve_stream/serve_stream" rafa2.vrst --port 0
 ```
 
-Both listen on every interface, with no authentication or encryption.
+Both listen on every interface, with no authentication or encryption: any
+host that reaches the port can watch, and the first four to connect keep
+their slots while they stay (`max_viewers`).
 
 ## License
 
