@@ -54,8 +54,9 @@ required where the application needs them.
 | `-o` for fusion/render | `output.path` or `output.prefix` |
 | `-o` for a codec | `output.prefix` (PLYs) and `output.stream` (coded frames) |
 
-Omitted values retain the previous application's defaults. A truncation value
-of zero or less requests four voxels. Depth limits use the source's defaults
+Omitted values retain the previous application's defaults, except
+`fuse_orbbec`'s integration mode (below). A truncation value of zero or less
+requests four voxels. Depth limits use the source's defaults
 (Replica 0.1–8 m; live camera 0.25–5 m). Dataset frame limits retain their old
 per-example defaults; `rig_viewer` uses zero for no frame/set limit. Counts
 remain distinct: `fuse_orbbec` counts camera frames, while `rig_viewer` can
