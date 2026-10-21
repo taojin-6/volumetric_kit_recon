@@ -1312,9 +1312,10 @@ foreach(_vr_networking_test server client stress)
 endforeach()
 
 # serve_stream's replay (examples/common/stream_replay.hpp): the records from
-# the first key, seq and key pts across passes by the writer's rules, and the
-# dues. Host only.
-add_executable(recon_example_stream_replay_test example_stream_replay_test.cpp)
+# the first key, seq and key pts across passes by the writer's rules, the dues,
+# damage left out and an allocation failure past it refused. Host only.
+add_executable(recon_example_stream_replay_test example_stream_replay_test.cpp
+                                                test_allocation_failure.cpp)
 target_include_directories(recon_example_stream_replay_test
                            PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
 target_link_libraries(recon_example_stream_replay_test
