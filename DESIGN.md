@@ -1793,7 +1793,9 @@ at most `wait`. The receive buffer is 256 KiB, set before the connect. No
 byte for `idle_limit` (10 s), counted from `connect`, ends the connection
 with `IoError`, as do a refusal at every address, a reset and the sender's
 end, which comes after every whole record; a failed check ends it with the
-parser's error, which every later call returns again.
+parser's error, which every later call returns again. Every error reads
+`StreamClient: <host>:<port>: <reason>`, the address once, and the idle
+limit's reason names the stage it ended in (the header lists the reasons).
 
 **Sockets** (private `socket.hpp`, which gives the reasons). IPv4 only:
 the server listens on it, and a name is looked up for it. Every socket is
