@@ -1275,12 +1275,13 @@ add_test(NAME recon_stream_oom COMMAND recon_stream_oom_test)
 
 # networking: the server's GOP log with no sockets (join, newest key wins at a
 # chunk boundary, the GOP limit, a lost copy, no P-frame without its key) and
-# the socket calls (each socket's settings read back, no SIGPIPE, a wait a
-# signal interrupts) -- internal and unexported, so the tests compile their
-# sources themselves -- then the server and the client on loopback, 127.0.0.1
-# port 0 only: the wire against the writer's file, joins, newest key wins, the
-# limits, the rules, teardown, signals, the client's errors against raw senders,
-# and a stress run for ThreadSanitizer. Host-only.
+# the socket calls (each socket's settings read back, no SIGPIPE, the bytes a
+# peer has not acknowledged, a wait a signal interrupts) -- internal and
+# unexported, so the tests compile their sources themselves -- then the server
+# and the client on loopback, 127.0.0.1 port 0 only: the wire against the
+# writer's file, joins, newest key wins, the limits, the rules, teardown,
+# signals, the client's errors against raw senders, and a stress run for
+# ThreadSanitizer. Host-only.
 set(_vr_networking_src
     ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/networking)
 add_executable(recon_networking_gop_log_test networking_gop_log_test.cpp

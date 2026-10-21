@@ -1777,8 +1777,9 @@ chunk boundary goes on from a newer key if one has come: newest key wins, so a
 P-frame never goes out without the records it is predicted from, and a
 lagging viewer's seq jumps to a key. A record that would take the GOP past
 `max_gop_bytes` (64 MiB) drops it and every record until the next key, as
-a copy that fails does (`OutOfMemory`). A viewer that takes no byte for
-`stall_limit` (10 s) with bytes waiting is closed. Viewers that join, leave,
+a copy that fails does (`OutOfMemory`). A viewer whose end acknowledges no
+byte for `stall_limit` (10 s) with bytes waiting is closed: one draining
+slowly stays, though its socket holds over the mark. Viewers that join, leave,
 fail or are refused are logged at Info. The destructor stops every thread
 within a poll slice (20 ms) and the write under way. One track is served
 (`Unsupported` otherwise), and `publish` is called from one thread.

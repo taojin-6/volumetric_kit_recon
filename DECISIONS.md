@@ -14061,7 +14061,10 @@ replaying a recording, sends; the player reads.
   too, and 0.59 MB on macOS, where it gates `poll` alone (loopback,
   measured). A viewer takes its next chunk only once its socket polls
   writable, and the client's receive buffer is 256 KiB, set before the
-  connect so the window scale fits it.
+  connect so the window scale fits it. Its stall is counted from what it
+  acknowledges, not from the socket polling writable: one draining under
+  64 KiB (Linux) or a chunk (macOS) a `stall_limit` stays above the mark
+  as it reads (an external review, measured).
 - **Joining at the cached GOP.** A viewer gets the GOP from its key, up to
   about 1.3 MB and 0.2 to 0.4 s over the VPN, and shows a frame at once.
   Waiting for the next key instead sends nothing extra but shows nothing for
