@@ -642,6 +642,13 @@ entries relevant to your task; later amendments supersede earlier rules.
   record rules; `ChunkParser` copies bytes as they arrive and checks each
   chunk as `StreamReader` does, through the same functions, before any of
   its body; a failure is final.
+- [**2026-10-21**](#2026-10-21--a-session-is-served-live-over-tcp-by-a-tier-of-its-own-recon_networking-the-wire-is-the-file-newest-key-wins-and-a-viewer-joins-at-the-cached-gop) —
+  A session is served live over TCP by a tier of its own,
+  `recon_networking` (the owner's: sockets apart from the format, testable
+  alone). The wire is the `.vrst` file's bytes; a viewer behind skips to a
+  newer key, only at a chunk boundary, so no P-frame goes without its
+  references; a viewer joins at the cached GOP; `publish` never waits; a
+  viewer types the sender's address, as mDNS does not cross the VPN.
 
 ## Decision record
 
@@ -14019,6 +14026,90 @@ each of 19 refusals at the byte that completes it, bodies of 1 GiB before any
 arrives; and returns a failure again after more bytes. `recon_stream_oom`
 fails the encoder's and the parser's allocations. The existing stream tests
 pass unchanged, and all of them under ASan and UBSan.
+
+### 2026-10-21 — A session is served live over TCP by a tier of its own, `recon_networking`: the wire is the file, newest key wins, and a viewer joins at the cached GOP.
+
+The player on the laptop, over the VPN to the lab, and later an iPhone show
+the rig's reconstruction as it is fused: fuse_orbbec, or `serve_stream`
+replaying a recording, sends; the player reads.
+
+- **TCP.** A P-frame names its reference by hash, and the decoder refuses
+  one without it (`NotFound`), so every record must arrive, in order, until
+  the next key. A datagram transport would rebuild TCP's retransmission, or
+  freeze to the next key on every loss. TCP's cost is head-of-line
+  blocking, about an RTT (22 ms over the VPN) per lost segment. Measured from
+  the lab, the path lost nothing and carried 4 to 16 MB/s, at least 3 times
+  a stream's 6.8 to 10 Mbit/s at an intra period of 30. A chunk is one write
+  with `TCP_NODELAY`: header and payload in two writes cost a P-frame 16 ms
+  more under Nagle (measured).
+- **The wire is the file.** The `VRST` chunk, then `RECD` chunks as the
+  writer writes them, without the footer: a killed writer's file, which
+  every reader takes. Each chunk carries H, B and both CRCs, so there is no
+  framing of our own, and a viewer could save its bytes as a `.vrst`. The
+  viewer sends nothing yet; a WebSocket would carry the same chunks, one a
+  message.
+- **Newest key wins.** A viewer that falls behind must lose records, but a
+  P-frame lost alone breaks every frame to the next key. So the server keeps
+  one GOP, and a viewer skips the unsent rest of it only once a newer key
+  exists, and only at a chunk boundary: the outcome of dropping P-frames to
+  the next I-frame, with the GOP log the one queue. The skip must happen in
+  the sender, not behind the kernel's buffers: a peer that did not read took
+  2.05 MB on Linux and 0.69 MB on macOS before pushing back, and with a
+  128 KiB `TCP_NOTSENT_LOWAT` 0.20 MB on Linux, where the mark gates `send`
+  too, and 0.59 MB on macOS, where it gates `poll` alone (loopback,
+  measured). A viewer takes its next chunk only once its socket polls
+  writable, and the client's receive buffer is 256 KiB, set before the
+  connect so the window scale fits it.
+- **Joining at the cached GOP.** A viewer gets the GOP from its key, up to
+  about 1.3 MB and 0.2 to 0.4 s over the VPN, and shows a frame at once.
+  Waiting for the next key instead sends nothing extra but shows nothing for
+  up to a second, and a replayed file cannot force a key. The viewer is
+  subscribed at accept under the lock `publish` takes, before its `VRST`
+  chunk is queued, so once it has the session it misses no record but by
+  newest key wins.
+- **A tier of its own.** The plan put the sockets in `recon_stream`, beside
+  the format; the owner moved them to a module of their own, "to separate
+  concern and make it testable". `recon_networking` links `recon_stream`, the
+  format's in-memory half having been made public for it (the chunks entry,
+  above), so it reaches into no private detail of stream. Its socket calls
+  and its GOP log, the drop rule with no socket, thread or clock, are tested
+  alone, under the loopback tests. The core gets no TCP helper until a
+  second sibling needs one.
+- **`publish` never waits.** fuse_orbbec's fusion thread calls it, and a
+  slow iteration drops camera sets. It copies the record once, takes one
+  lock and wakes the viewers; one thread per viewer sends, and a viewer's
+  failure is logged at Info (the default sink drops it), never returned.
+- **A typed address.** mDNS does not cross the routed WireGuard tunnel (the
+  lab's `.local` name does not resolve), so a viewer names the sender's
+  `host:port`; Bonjour is deferred, as are authentication and encryption.
+- **One track.** Newest key wins is per GOP; a second track would need a GOP
+  of its own.
+
+**Verification.** Apple M5 Max, Debug and Release (117 tests each, all
+passing), and the stream and networking tests under ThreadSanitizer and
+under ASan with UBSan, as CI now runs them on the Mac Debug leg and in the
+sanitizer job. On loopback (127.0.0.1, port 0): a raw viewer's bytes are the
+writer's file less its footer, and a client's records carry the file's
+offsets; a viewer joining mid-GOP gets the GOP from its key, and before any
+key nothing; one that does not read while 3 GOPs of 1 MiB records are
+published gets the key it was sending, then the newest GOP whole, each
+`publish` back at once; past `max_gop_bytes` nothing comes until the next
+key; a viewer taking no byte is closed after a 200 ms `stall_limit`;
+connection `max_viewers` + 1 ends before any byte; viewers leaving by a close
+or a reset never fail `publish`; the destructor returns within 1 s with no
+viewers, idle ones and a stalled one; 100 SIGUSR1 to a no-op handler leave
+every record whole; the client's refusals and errors each come once and
+again. Mutations each fail a test: the newest-key jump left out (GOP log,
+server, stress), a chunk abandoned mid-way (server, stress), the low-water
+mark not set (the socket test, reading it back; on macOS the loopback tests
+pass without it, as there it gates `poll` alone), the stall limit never
+reached (server), `EINTR` not retried (socket, server), and the join taken
+outside the lock or after the session is queued (the stress test's joins
+under keys, under ThreadSanitizer). Taking a chunk before the socket polls
+writable fails none: it sends one stale chunk, which is whole and in order.
+`serve_stream`'s loop, on loopback, replays Rafa2 at 29.99 records a second
+and 6.84 Mbit/s for two passes, seq unbroken. Neither the lab nor the VPN
+has run it yet.
 
 ## Measured lessons
 

@@ -43,6 +43,9 @@ if(NOT VR_CAMERA_ONLY)
   # The .vrst session container: recorded tracks of records, stored verbatim. On
   # the family core's base tier alone, so it depends on no tier here.
   add_subdirectory(volumetric_kit/recon/stream)
+  # A session served and read live over TCP: the stream's chunks on sockets, off
+  # stream alone.
+  add_subdirectory(volumetric_kit/recon/networking)
   # TODO: add_subdirectory() for interop as that tier lands.
   list(
     APPEND
@@ -58,7 +61,8 @@ if(NOT VR_CAMERA_ONLY)
     recon_codec
     recon_eval
     recon_io
-    recon_stream)
+    recon_stream
+    recon_networking)
 endif()
 
 # --- recon: umbrella alias --------------------------------------------------

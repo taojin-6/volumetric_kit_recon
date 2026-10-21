@@ -1273,6 +1273,72 @@ target_link_libraries(recon_stream_oom_test
 vr_target_warnings(recon_stream_oom_test)
 add_test(NAME recon_stream_oom COMMAND recon_stream_oom_test)
 
+# networking: the server's GOP log with no sockets (join, newest key wins at a
+# chunk boundary, the GOP limit, a lost copy, no P-frame without its key) and
+# the socket calls (each socket's settings read back, no SIGPIPE, a wait a
+# signal interrupts) -- internal and unexported, so the tests compile their
+# sources themselves -- then the server and the client on loopback, 127.0.0.1
+# port 0 only: the wire against the writer's file, joins, newest key wins, the
+# limits, the rules, teardown, signals, the client's errors against raw senders,
+# and a stress run for ThreadSanitizer. Host-only.
+set(_vr_networking_src
+    ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/networking)
+add_executable(recon_networking_gop_log_test networking_gop_log_test.cpp
+                                             ${_vr_networking_src}/gop_log.cpp)
+target_include_directories(recon_networking_gop_log_test
+                           PRIVATE ${_vr_networking_src})
+vr_target_warnings(recon_networking_gop_log_test)
+add_test(NAME recon_networking_gop_log COMMAND recon_networking_gop_log_test)
+
+add_executable(recon_networking_socket_test networking_socket_test.cpp
+                                            ${_vr_networking_src}/socket.cpp)
+target_include_directories(recon_networking_socket_test
+                           PRIVATE ${_vr_networking_src})
+target_link_libraries(recon_networking_socket_test
+                      PRIVATE volumetric_kit::core_base Threads::Threads)
+vr_target_warnings(recon_networking_socket_test)
+add_test(NAME recon_networking_socket COMMAND recon_networking_socket_test)
+
+foreach(_vr_networking_test server client stress)
+  add_executable(recon_networking_${_vr_networking_test}_test
+                 networking_${_vr_networking_test}_test.cpp)
+  target_link_libraries(
+    recon_networking_${_vr_networking_test}_test
+    PRIVATE volumetric_kit::recon_networking Threads::Threads)
+  vr_target_warnings(recon_networking_${_vr_networking_test}_test)
+  add_test(NAME recon_networking_${_vr_networking_test}
+           COMMAND recon_networking_${_vr_networking_test}_test)
+endforeach()
+
+# serve_stream's replay (examples/common/stream_replay.hpp): the records from
+# the first key, seq and key pts across passes by the writer's rules, and the
+# dues. Host only.
+add_executable(recon_example_stream_replay_test example_stream_replay_test.cpp)
+target_include_directories(recon_example_stream_replay_test
+                           PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
+target_link_libraries(recon_example_stream_replay_test
+                      PRIVATE volumetric_kit::recon_stream)
+vr_target_warnings(recon_example_stream_replay_test)
+add_test(NAME recon_example_stream_replay
+         COMMAND recon_example_stream_replay_test)
+
+# The format's and the sockets' host-only tests, which CI builds and runs again
+# under ThreadSanitizer (.github/workflows/_build.yml): one target to build
+# them.
+add_custom_target(recon_stream_tests)
+add_dependencies(
+  recon_stream_tests
+  recon_stream_container_test
+  recon_stream_chunks_test
+  recon_stream_recovery_test
+  recon_stream_footer_test
+  recon_stream_oom_test
+  recon_networking_gop_log_test
+  recon_networking_socket_test
+  recon_networking_server_test
+  recon_networking_client_test
+  recon_networking_stress_test)
+
 # What a sibling that fetches recon gets (subproject/): its configure, from a
 # clean tree, with each dependency this build fetched as a local source, so it
 # needs no network. The defaults hold, and recon refuses a core the sibling made

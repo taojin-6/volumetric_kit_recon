@@ -417,6 +417,37 @@ jobs:
           DYLD_LIBRARY_PATH: ${{ env.VR_LAYER_LIBRARY_PATH }}
         run: ctest --test-dir build --output-on-failure
 
+      # The stream and networking tests again under ThreadSanitizer, for the
+      # server's and the client's threads: the sanitizer job runs address and
+      # undefined only. In a tree of their own that reuses the sources
+      # FetchContent fetched for build/, as the Apple importer's step below
+      # does, built for those tests alone (recon_stream_tests,
+      # tests/CMakeLists.txt). Debug only: the races do not depend on the
+      # build type.
+      - name: Stream and networking under ThreadSanitizer (macOS)
+        if: >-
+          steps.detect.outputs.present == 'true' && runner.os == 'macOS'
+          && matrix.build_type == 'Debug'
+        env:
+          TSAN_OPTIONS: halt_on_error=1
+        run: |
+          shopt -s nullglob
+          flags=()
+          for src in build/_deps/*-src; do
+            dep=$(basename "${src}" -src | tr '[:lower:]' '[:upper:]')
+            flags+=("-DFETCHCONTENT_SOURCE_DIR_${dep}=${PWD}/${src}")
+          done
+          rm -rf build-tsan
+          cmake -S . -B build-tsan -DCMAKE_BUILD_TYPE=Debug \
+            -DVR_SANITIZE=thread -DVR_BUILD_EXAMPLES=OFF \
+            -DVR_WITH_ORBBEC=OFF -DVR_WITH_FFMPEG=OFF -DVR_WITH_ASSIMP=OFF \
+            "${flags[@]}"
+          cmake --build build-tsan \
+            --parallel "${CMAKE_BUILD_PARALLEL_LEVEL:-$(getconf _NPROCESSORS_ONLN)}" \
+            --target recon_stream_tests
+          ctest --test-dir build-tsan --output-on-failure --no-tests=error \
+            -R '^recon_(stream|networking)_'
+
       # recon_sensor_apple promises two builds the step above does not make
       # (DECISIONS.md, 2026-10-08): with no FFmpeg, and for iOS. So build and
       # run the importer's test again without FFmpeg, in a tree of its own

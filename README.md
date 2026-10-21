@@ -271,6 +271,23 @@ global scale and the K kept bases' quantization weights in each frame; older
 versions are refused. See [the codec contract](DESIGN.md#codec) and
 [the measurement record](DECISIONS.md#2026-10-02--per-basis-quantization-and-a-normalized-mesh-codec-fixture).
 
+## Live streaming
+
+`volumetric_kit::recon_networking` serves a session to viewers over TCP as
+it is recorded (`networking/stream_server.hpp`) and reads it as it arrives
+(`networking/stream_client.hpp`), byte for byte the `.vrst` file's chunks;
+see [the networking contract](DESIGN.md#networking). `serve_stream` serves a
+recording live, paced by its pts and looping until Ctrl+C, with no camera or
+GPU; a viewer connects to the sender's `host:port`, as mDNS does not cross a
+routed VPN:
+
+```sh
+"$recon_root/build/examples/serve_stream/serve_stream" rafa2.vrst  # port 47801
+"$recon_root/build/examples/serve_stream/serve_stream" rafa2.vrst --port 0
+```
+
+It listens on every interface, with no authentication or encryption.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

@@ -14,6 +14,8 @@ endif()
 if(TARGET volumetric_kit::recon_sensor_orbbec)
   add_subdirectory(fuse_orbbec)
 endif()
+# A recording served live, with no camera or GPU.
+add_subdirectory(serve_stream)
 
 # The gfx-linked reconstruction viewer examples (fuse_render headless PNG +
 # fuse_viewer live window). OFF by default: opting in is the ONLY place the
@@ -50,6 +52,15 @@ if(VR_BUILD_TESTS)
           ${PROJECT_SOURCE_DIR}/tests/example_config_entry.cmake)
     endif()
   endforeach()
+  # serve_stream's arguments: usage and exit 2 for bad ones, 1 for a missing
+  # file, before it listens; it is never run to serve, which would listen on
+  # every interface.
+  add_test(
+    NAME recon_serve_stream_args
+    COMMAND
+      ${CMAKE_COMMAND} -DPROGRAM=$<TARGET_FILE:serve_stream>
+      -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/serve-stream-args -P
+      ${PROJECT_SOURCE_DIR}/tests/example_serve_stream_args.cmake)
   # codec_mesh's order on a device: an existing stream refused before any frame
   # is converted or written, then a two-frame run.
   if(TARGET codec_mesh)
