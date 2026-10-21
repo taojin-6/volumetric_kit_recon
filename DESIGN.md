@@ -1745,12 +1745,13 @@ to the grid (a grow, a declined one, blocks left out), into the one grid layout
 `grid_layout.hpp` defines, which its `create_fusion_grid` builds.
 `fuse_set`'s caller names the integration mode, the one `fusion.dynamic`
 selects (`integration_mode`): `Classic` unless set, except in
-`rig_viewer`, whose default is `Dynamic` and whose View panel switches
-it as the rig runs. The four dataset examples poll their frames
-through `sensor::IRgbdSensor&` — the fuse loop never learns what is behind
-it — and prepare each on its own. The two live ones read Orbbec cameras raw
-as a `SensorArray` of `OrbbecSensor`s, `fuse_orbbec` one camera or a rig and
-`rig_viewer` a rig, and prepare each set in one batch (`SensorArray::process`).
+`fuse_orbbec` and `rig_viewer`, whose default is `Dynamic`;
+`rig_viewer`'s View panel switches it as the rig runs. The four
+dataset examples poll their frames through `sensor::IRgbdSensor&` — the
+fuse loop never learns what is behind it — and prepare each on its own.
+The two live ones read Orbbec cameras raw as a `SensorArray` of
+`OrbbecSensor`s, `fuse_orbbec` one camera or a rig and `rig_viewer` a rig,
+and prepare each set in one batch (`SensorArray::process`).
 The four dataset examples take `ReplicaSensor` as the source: frame cap,
 stride and the depth gate are its options, stamped on each frame it hands
 out, and its disk probe at `open` visits only the frames those options
@@ -1899,7 +1900,7 @@ file for retry, as does destroying the stream unfinished before its first
 frame.
 
 **`codec_mesh`** codes one mesh or a numbered sequence of them (README,
-Codec evaluation, has the keys). The examples require core 0.14.0; core
+Codec evaluation, has the keys). The examples require core 0.15.0; core
 escapes literal `%` characters in the scenario's directory before joining a
 relative `source.path` (0.8.0), so only the user's path carries a
 frame-number pattern.

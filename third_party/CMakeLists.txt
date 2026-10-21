@@ -35,7 +35,7 @@ include(FetchContent)
 # rather than OFF, as calib does, so an application that turns the tier on keeps
 # it.
 #
-# The pin is core 0.14.0 (96f89d6, core #44's merge), as is the Homebrew key
+# The pin is core 0.15.0 (b992f12, core #45's merge), as is the Homebrew key
 # action in .github/workflows/_build.yml; the vkc_require_core checks below say
 # which core each part needs.
 #
@@ -43,7 +43,7 @@ include(FetchContent)
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG 96f89d685f2ae8309dfc9df4e35eb8526d5bdbf8)
+  GIT_TAG b992f12bcb22b4697acdb94820f13f6ec8e423f7)
 set(VKC_INSTALL ${VR_INSTALL})
 if(NOT VR_CAMERA_ONLY)
   set(VKC_WITH_VULKAN ON)
@@ -58,10 +58,11 @@ if(NOT VR_CAMERA_ONLY AND (VR_BUILD_EXAMPLES OR VR_BUILD_TESTS))
 endif()
 FetchContent_MakeAvailable(volumetric_kit_core)
 if(NOT VR_CAMERA_ONLY AND (VR_BUILD_EXAMPLES OR VR_BUILD_TESTS))
-  # fuse_orbbec and its configuration tests read FuseOrbbec's fusion.free_after,
-  # core 0.14.0's; the cross-family tests' TwoFamilyDevice and write_image (core
-  # 0.10.0's) come with it.
-  vkc_require_core(0.14.0 CONFIG)
+  # fuse_orbbec fuses Dynamic by default, as FuseOrbbec's fusion.dynamic does
+  # from core 0.15.0, and its configuration tests expect it; fusion.free_after
+  # (core 0.14.0's) and the cross-family tests' TwoFamilyDevice and write_image
+  # (core 0.10.0's) come with it.
+  vkc_require_core(0.15.0 CONFIG)
 endif()
 
 # The set()s above are lost when calib or the application made the core

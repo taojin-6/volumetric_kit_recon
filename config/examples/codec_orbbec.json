@@ -9,8 +9,7 @@
     "frames": 600
   },
   "fusion": {
-    "voxel_size_m": 0.01,
-    "dynamic": true
+    "voxel_size_m": 0.01
   },
   "codec": {
     "intra_period": 30

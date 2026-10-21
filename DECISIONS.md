@@ -632,7 +632,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   Dynamic and free stale blocks (`rig_viewer` by default, `fuse_orbbec`
   with `fusion.dynamic: true`, as its stream template sets), in the world
   the calibration defines: no upright transform, crop, raw recording or
-  colour yet.
+  colour yet. *Amended 2026-10-20:* `fuse_orbbec` fuses Dynamic by default
+  too (core #45).
 
 ## Decision record
 
@@ -13936,7 +13937,10 @@ scene, frame by frame, without colour for now. Core 0.13.0 opens the
   past keeps its blocks, and every frame codes them, whatever the running
   average leaves of its mesh. `rig_viewer` fuses Dynamic by default and
   `codec_orbbec.json` sets `fusion.dynamic`; FuseOrbbec's default stays
-  Classic, so a plain scan's PLY is unchanged.
+  Classic, so a plain scan's PLY is unchanged. *Amended 2026-10-20:* by the
+  owner's decision, FuseOrbbec defaults to Dynamic too (core 0.15.0, core
+  #45), so a plain scan fuses Dynamic and `codec_orbbec.json` leaves the
+  key out; `fusion.dynamic: false` selects Classic.
 - **The calibration's world, uncropped.** The stream holds the geometry
   where `source.calibration` puts it: no upright transform, and the
   Geometry track's params stay empty. No such world is upright in the

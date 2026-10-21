@@ -95,8 +95,8 @@ fails saying why, and an installed recon is not found. A core older than
 stops at that call as an unknown command: move the first-declared pin to 0.2.0
 or newer.
 
-Examples and tests require core 0.14.0 or newer with its config tier, for
-`fuse_orbbec`'s `fusion.free_after`; the pinned core supplies it.
+Examples and tests require core 0.15.0 or newer with its config tier, for
+`fuse_orbbec`'s Dynamic default; the pinned core supplies it.
 
 ### Asset I/O
 
@@ -161,7 +161,7 @@ host through `PictureReadback`, during either streaming or fusion.
 build/examples/fuse_orbbec/fuse_orbbec --config config/examples/fuse_orbbec.json
 # Stream and decode alone, at 4K MJPEG and 25 fps; 60000 camera frames:
 build/examples/fuse_orbbec/fuse_orbbec --config config/examples/stream_orbbec.json
-# Fused Dynamic, each set coded as one frame of a .vrst:
+# Each fused set coded as one frame of a .vrst:
 build/examples/fuse_orbbec/fuse_orbbec --config config/examples/codec_orbbec.json
 ```
 
