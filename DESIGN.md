@@ -2044,14 +2044,12 @@ Before any GPU work it refuses a malformed
 frame-number pattern, a range on a plain path and any frame file that is
 missing or not a regular file, checks a shell against the truncation
 (`MeshSdfParams::validate`), and refuses a band too narrow for a true SDF
-(`check_true_sdf_band`: `codec::kTrueSdfBandVoxels` voxels from the zero
-level, which in shell mode lies the half-thickness further out). It codes
-with `EncoderConfig::true_sdf` (the 2026-10-21 entry), the one caller that
-sets it: a mesh's field is a true distance. Its first pass loads each
-frame, joins its
-bounds along `source.up_vector` (`io::extend_bounds`), audits it and drops
-it, so memory does not grow with the range. In exact arithmetic a proper
-similarity changes none of the audit's counts, so a frame signed mode cannot
+(`check_true_sdf_band`). It codes with `EncoderConfig::true_sdf` (the
+2026-10-21 entry), the one caller that sets it. Its first pass loads each
+frame, joins its bounds along `source.up_vector` (`io::extend_bounds`),
+audits it and drops it, so memory does not grow with the range. In exact
+arithmetic a proper similarity changes none of the audit's counts, so a
+frame signed mode cannot
 take is refused there; rounding can still change the degenerate count or a
 volume's sign, which the second pass's audit decides. One transform for the range follows (`fit_transform` or
 `scale_transform`) and places every frame unchanged, so a still point stays
@@ -2173,13 +2171,13 @@ than the rig gets the newest set, so sets drop; that cost is unmeasured.
 **On `tsdf`**, mesh → TSDF has its two modes (2026-09-27), a second way into
 the grid the codec encodes: a mesh sequence converts frame by frame. A
 winding-number sign would fix at the root the sign errors a true-SDF stream
-cuts (the 2026-10-21 true-SDF entry), folds within √3 voxels among them. Both
-modes cost the same. On Rafa2 the band's allocation costs what PERF.md's MESH3
-row gives, and the write what the 2026-10-21 `MeshIntegrator` entry gives.
-Smaller costs around them remain: writing only the blocks the codec will code,
-chaining the write's submissions, and computing `triangle_candidate_offsets`
-and uploading the mesh once a frame rather than once to allocate and again to
-write.
+cuts (the 2026-10-21 true-SDF entry), and the folds within √3 voxels that it
+cannot. Both modes cost the same. On Rafa2 the band's allocation costs what
+PERF.md's MESH3 row gives, and the write what the 2026-10-21 `MeshIntegrator`
+entry gives. Smaller costs around them remain: writing only the blocks the
+codec will code, chaining the write's submissions, and computing
+`triangle_candidate_offsets` and uploading the mesh once a frame rather than
+once to allocate and again to write.
 Dynamic's clear is still a hard reset from one ray: clearing on evidence (a
 weight decrement, an incidence term) and behind a pixel with no return are
 the next steps, each judged on the lab rig (`TODO(tsdf)` in

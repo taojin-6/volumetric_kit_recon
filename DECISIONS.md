@@ -586,8 +586,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   at a sliver fold. *Amended 2026-10-15:* require core 0.8.0's directory
   escaping, and refuse example intra periods other than 1 until C5b.
   *Amended 2026-10-16:* the examples code P-frames, on core 0.9.0.
-  *Amended 2026-10-21:* it codes a true SDF, in a band of at least 15
-  voxels, and the templates convert in 16.
+  *Amended 2026-10-21:* it codes a true SDF and refuses a band too narrow
+  for one; the templates convert in 16 voxels.
 - [**2026-10-16**](#2026-10-16--the-codec-examples-code-p-frames-codecintra_period-and-codecupdate_size-reach-the-encoder-and-a-streams-rows-report-and-keys-go-by-frame-type-an-empty-grid-is-an-i-frame-golden-p-frames-pin-type-1s-bytes-and-its-freeze-waits-since-at-r--16-its-p-frames-code-slower-than-intra-amends-the-2026-10-12-p-frame-2026-10-14-encoder-and-codec-mesh-entries) —
   The codec examples code P-frames: `codec.intra_period` and
   `codec.update_size` reach the `Encoder`, a stream's rows, report and keys
@@ -673,11 +673,10 @@ entries relevant to your task; later amendments supersede earlier rules.
   A true signed distance codes without the observed mask:
   `EncoderConfig::true_sdf` cuts each corner farther than √3 voxels from
   zero of a cell whose sign changes, and codes only the blocks that hold
-  surface, every mask all ones but the cuts in a band of 15 voxels.
-  `codec_mesh` alone sets it, in code, and refuses a narrower band, so
-  multi-view RGB-D capture keeps its mask, byte for byte. The mesh templates
-  convert in 16 voxels and code at K 56, about 2 Mbit/s on Rafa2; the
-  format, the decoder and the goldens are unchanged.
+  surface. `codec_mesh` alone sets it, in code, so multi-view RGB-D capture
+  keeps its mask, byte for byte. The mesh templates convert in 16 voxels
+  and code at K 56, about 2 Mbit/s on Rafa2; the format, the decoder and
+  the goldens are unchanged.
 - [**2026-10-22**](#2026-10-22--recon-is-fetched-by-commit-never-installed-no-install-rules-package-config-or-package-tests-amends-the-2026-10-16-glsl-pinhole-entry-and-the-2026-10-17-amendment-of-the-2026-10-13-block-list-entry) —
   recon is fetched by commit, never installed (the owner's rule for the
   family): no install rules, package config or package tests. The
@@ -13363,8 +13362,8 @@ number, the placement and the conversion's rules are recon's.
 - **The band.** `fusion.truncation_m` sets it, and an absent value is still
   4 voxels, so `codec_mesh.json` is unchanged. `codec_mesh_sequence.json`
   sets 0.04 m, 8 voxels: the paper's band and step 0's. *Amended
-  2026-10-21:* `codec_mesh` refuses a band under 15 voxels, and both
-  templates set 0.08 m, 16 (the 2026-10-21 entry).
+  2026-10-21:* `codec_mesh` refuses a band too narrow for a true SDF, and
+  both templates set 0.08 m, 16 voxels (the 2026-10-21 entry).
 - **`codec.entropy` is gone** from core 0.7.0, and recon stops reading it.
 - **One home for a mesh file's checks.** `io::check_mesh_file` holds what
   `io::load_mesh` checks of a path before it reads; the sequence calls it
@@ -13988,10 +13987,10 @@ columns match in all 10 runs, and accuracy, coverage and F-score at period
 
 **The templates.** `codec_replica.json` codes every frame at period 30
 (`encode_every` 1; its 0 coded only the final grid), then sweeps;
-`codec_mesh_sequence.json` codes at 30; `codec_mesh.json`, one frame, keeps
-1. *Amended 2026-10-21:* `codec_mesh_sequence.json` now codes a true SDF at
-K 56 in a 16-voxel band (the 2026-10-21 entry); r64 and r16 above measure
-its earlier settings. None sets `update_size`, so each codes at the measured U = R = 64.
+`codec_mesh_sequence.json` codes at 30; `codec_mesh.json`, one frame,
+keeps 1. None sets `update_size`, so each codes at the measured U = R = 64.
+r64 and r16 above measure `codec_mesh_sequence.json` as it stood before the
+2026-10-21 entry moved it to a true SDF at K 56 in a 16-voxel band.
 `EncoderConfig::intra_period` and core's `codec.intra_period` stay 1, so no
 caller's bytes change.
 
@@ -14315,51 +14314,49 @@ the default, and multi-view RGB-D capture keeps the true mask.
 
 - **One switch, in the encoder.** `EncoderConfig::true_sdf`, false by
   default, which codes as before, byte for byte. No scenario or config key
-  sets it, so no RGB-D scenario can. Its doc states the precondition: on
-  fused depth, whose crossing cells have corners past √3 voxels, the cut
-  would erase real surface. `CodecParams` is untouched: it is in every
-  header and the decoder's checks, and the rule is neither.
-- **The cut.** In each cell whose 8 voxels, across block faces, are
-  observed and whose sign changes, every corner with |tsdf| > √3 h + 1e-6 m
-  (one fused multiply-add) is coded unobserved. A distance is 1-Lipschitz,
-  so a cell a real surface crosses has every corner within √3 h of it: only
-  sign errors are cut, such as the sheets the closest-face sign leaves past
-  a hole's rim or a sharp edge (the 2026-09-27 mesh entry). One pass, from
-  the field as it stands, so no cut changes which cells another tests.
-- **The surface blocks.** Only the blocks holding a corner of a cell whose
-  8 voxels are observed and uncut, and that changes sign or has a corner
+  sets it, so no RGB-D scenario can. Its doc states the precondition, a true
+  distance. `CodecParams` is untouched: it is in every header and the
+  decoder's checks, and the rule is neither.
+- **The cut.** In each cell whose 8 voxels, across block faces, are observed
+  and whose sign changes, every corner with |tsdf| > √3 h + 1e-6 m is coded
+  unobserved. A distance is 1-Lipschitz, so a cell a real surface crosses
+  has every corner within √3 h of it: only sign errors are cut, such as the
+  sheets the closest-face sign leaves past a hole's rim or a sharp edge (the
+  2026-09-27 mesh entry). One pass, from the field as it stands, so no cut
+  changes which cells another tests.
+- **The surface blocks.** Only the blocks holding a corner of a cell whose 8
+  voxels are observed and uncut, and that changes sign or has a corner
   within h of zero, are coded. Without the margin a hole opened in the
-  study (a coverage maximum of 1.75 mm became 3.55). A coded voxel then
-  lies within (1 + 8√3) h = 14.86 h of the zero level: a near cell's corner
-  within h, the cell's others within √3 h of it, the block's within 7√3 h.
-  So a band of `kTrueSdfBandVoxels` (15) observes every one, and every mask
-  is all ones but the cuts; past a narrower band, voxels stay unobserved.
+  entropy study (frame 1 in a 4-voxel band: its coverage maximum, 1.75 mm,
+  became 3.55). A coded voxel then lies within (1 + 8√3) h = 14.86 h of the
+  zero level: a near cell's corner within h, the cell's others within √3 h
+  of it, the block's within 7√3 h. So a band of `kTrueSdfBandVoxels` (15)
+  observes every one, and every mask is all ones but the cuts; past a
+  narrower band, voxels stay unobserved.
 - **The true distance comes from the conversion.** The encoder cannot drop
   the mask alone: over a narrow band an all-ones mask codes the forward's
   fill as data (the study, frames 1–30: −79.7% BD-rate, against −82.7% for
   the true distance and −84.3% with the surface blocks).
-- **On the device, in `"  ..observed"`'s batch.** `dct_surface.comp` cuts,
-  then flags the blocks to keep, over the map's active list; the observed
-  filter appends the flagged blocks, and the forward reads the cut set. Both
-  are encoder scratch, so the caller's grid is never written, and only the
-  count crosses, as before. The mesher's neighbourhood probe and corner
-  addressing moved to `volume/shaders/block_neighbourhood.glsl`, for both,
-  since codec may not include mesh.
+- **On the device, in `"  ..observed"`'s batch** (DESIGN has the passes).
+  The cut set and the keep flags are encoder scratch, so the caller's grid
+  is never written, and only the count crosses, as before. The mesher's
+  neighbourhood probe and corner addressing moved to
+  `volume/shaders/block_neighbourhood.glsl`, since codec may not include
+  mesh.
 - **`codec_mesh` sets it, in code,** the one caller, and refuses before any
-  GPU work a band under 15 voxels, plus the shell's half-thickness in shell
+  GPU work a narrower band, with the shell's half-thickness added in shell
   mode, whose zero level lies that far from the mesh. So a mesh stream
   always codes without the mask, and nothing else does.
 - **The templates.** `codec_mesh_sequence.json` converts in 16 voxels
   (`fusion.truncation_m` 0.08), the smallest power-of-two multiple of 8
   voxels past 15, and codes at K 56, scale 0.040877, period 30: the study's
-  measured point p3, scale 0.081754 at 0.04 m. The scale is a fraction of
-  the band, so twice the band takes half the scale for the same 3.27 mm
-  step, and with a power-of-two ratio the quantized coefficients are the
-  study's own. The study's advice to keep 8 voxels is about the band its
-  candidate blocks came from, which changes no kept block; the band a frame
-  codes in is the conversion's. `codec_mesh.json`, one frame, moves to the
-  same band, K and scale. Its sweep ladder, in fractions of the band, is
-  coarse at a wide band; a ladder in metres is a follow-up.
+  measured point, scale 0.081754 at 0.04 m. The scale is a fraction of the
+  band, so twice the band takes half the scale for the same 3.27 mm step,
+  and with a power-of-two ratio the quantized coefficients are the study's
+  own. The study's advice to keep 8 voxels is about the band its candidate
+  blocks came from, which changes no kept block; the band a frame codes in
+  is the conversion's. `codec_mesh.json`, one frame, moves to the same band,
+  K and scale.
 - **The stream records nothing new.** The format is frozen, and no consumer
   reads a decoded weight as "seen": a decoded grid is meshed, never fused
   into. A decoded voxel of a coded block has weight 1 unless cut, and the
@@ -14367,14 +14364,13 @@ the default, and multi-view RGB-D capture keeps the true mask.
   writer, `codec_mesh`, and the Geometry track's placement; a flag waits for
   a consumer that needs one.
 - **Not taken:** an all-ones mask over the fill (above); a second, narrower
-  conversion for the candidate blocks, which the kept set does not need;
-  a mask flag in the stream; a separate switch for the cut, without which
-  the conversion's curtains are coded whole; deblocking, which is the
-  decoder's, later.
+  conversion for the candidate blocks, which the kept set does not need; a
+  mask flag in the stream; a separate switch for the cut, without which the
+  conversion's curtains are coded whole.
 
-**Measured** by the study's harness on Rafa2 frames 1–150: its total
-chamfer to the input over the 150 frames, at a 0.2 m reach, and its face
-jump, one method for every row.
+**Measured** by the study's harness on Rafa2 frames 1–150: its total chamfer
+to the input over the 150 frames, at a 0.2 m reach, and its face jump, one
+method for every row.
 
 | Stream | Mbit/s | Total chamfer | Face jump |
 |---|---|---|---|
@@ -14391,14 +14387,15 @@ the K56 template writes 1,246,265 B (1.994 Mbit/s) against the study's
 1,246,126, with its block count on all 150 frames and its bytes on frames
 1–73. Decoded by one decoder, the two streams' grids are bit-identical in
 metres on 138 frames, frames 1–73 among them. On the 12 others, between 75
-and 141, every difference is one of 53 voxels this PR cuts and the study
-did not, each coded by the study 32 mm or more from zero, or the fill of
-their blocks (at most 2.1 mm); 6 more frames differ in bytes alone,
-P-frames against a reference that differed. This PR's cut examines every
-cell of voxels observed in 16 voxels, the study's only the cells of blocks
-it observed in 8, and the two differ past 31 mm alone, in no cell that
-keeps a block. At K 120 and scale 0.007036 the same 12 frames differ the
-same way (53 voxels, 33 mm or more), at 4,236,145 B against 4,235,824.
+and 141, every difference is one of 53 voxels this PR cuts and the study did
+not, or the fill of their blocks (at most 2.1 mm). Each of the 53 lies
+33.9 mm or more from the surface, by a near-lossless code of the same
+conversion (masked, K 512, every frame intra); 6 more frames differ in bytes
+alone, P-frames against a reference that differed. This PR's cut examines
+every cell of voxels observed in 16 voxels, the study's only the cells of
+blocks it observed in 8, and the two differ past 31 mm alone, in no cell
+that keeps a block. At K 120 and scale 0.007036 the same 12 frames differ
+the same way, by the same 53 voxels, at 4,236,145 B against 4,235,824.
 
 **Validation.** Apple M5 Max, MoltenVK, Release with warnings as errors,
 Assimp, FFmpeg and Orbbec, core `b992f12`: the 111 tests pass under the
@@ -14408,23 +14405,27 @@ blocks and cut set come from the study's rule on the host, on a curtain (a
 sphere's distance negated in a slab 20 mm out) and a speck only the near
 rule keeps, at three segment sizes: cuts across block faces, partial masks,
 the same bytes whatever the hash order, heap growth between frames, and no
-stale cut after a cleared grid; on two spheres, nothing is cut. Planted bugs
-each failed their test: no cut pass (`true_sdf_oracle_case`,
-`curtain_case`), the anchor block alone kept or every observed block
-appended (`surface_blocks_case`), a forward that ignores the cut
-(`cut_case`), no margin (`true_sdf_oracle_case`), and no zeroing of the cut
-set or the keep flags (`stale_cut_case`). By hand: `codec_replica` on room0
-writes origin/main's `.vrst` byte for byte (8,361,488 B) and its CSV's
-frame, type, bytes and blocks on all 400 frames; an untouched origin/main
-build decodes the K56 and K120 streams (`decode_growing`) to this build's
-grids on all 150 frames. Time, each run gated on an idle GPU with no other
-test or player running, the median of 3 runs each, host / device ms,
-origin/main on its template against this build on the new one: the mesh
-conversion takes 8.46 / 6.76 against 28.27 / 25.52 a frame, the 16-voxel
-band holding 3.9x the bin entries (4,637,972 on frame 150 against
-1,198,674); `codec encode` takes 2.66 / 1.60 an I-frame and 2.41 / 1.37 a
-P-frame against 2.48 / 1.37 and 2.23 / 1.13, the fewer blocks outweighing
-the two passes. Not run: the RTX 5090, ASan and UBSan (CI runs them).
+stale cut after a cleared grid; on two spheres, nothing is cut.
+`recon_codec_dct` holds the passes to the same host rule in one dispatch and
+in chunks of 3 and 7 blocks, and `recon_example_config` holds the band check
+at every voxel size from 1 to 50 mm. Planted bugs each failed their test: no
+cut pass (`true_sdf_oracle_case`, `curtain_case`), the anchor block alone
+kept or every observed block appended (`surface_blocks_case`), a forward
+that ignores the cut (`cut_case`), no margin (`true_sdf_oracle_case`), no
+zeroing of the cut set or the keep flags (`stale_cut_case`), passes that
+rerun the first chunk (`surface_chunks_case`), and an absolute tolerance on
+the band (`recon_example_config`). By hand: `codec_replica` on room0 writes
+origin/main's `.vrst` byte for byte (8,361,488 B) and its CSV's frame, type,
+bytes and blocks on all 400 frames; an untouched origin/main build decodes
+the K56 and K120 streams (`decode_growing`) to this build's grids on all 150
+frames. Time, each run gated on an idle GPU with no other test or player
+running, the median of 3 runs each, host / device ms, origin/main on its
+template against this build on the new one: the mesh conversion takes
+8.46 / 6.76 against 28.27 / 25.52 a frame, the 16-voxel band holding 3.9x
+the bin entries (4,637,972 on frame 150 against 1,198,674); `codec encode`
+takes 2.66 / 1.60 an I-frame and 2.41 / 1.37 a P-frame against 2.48 / 1.37
+and 2.23 / 1.13, the fewer blocks outweighing the two passes. Not run: the
+RTX 5090, ASan and UBSan (CI runs them).
 
 ### 2026-10-22 — recon is fetched by commit, never installed: no install rules, package config or package tests (amends the 2026-10-16 GLSL pinhole entry and the 2026-10-17 amendment of the 2026-10-13 block-list entry).
 
