@@ -14368,22 +14368,63 @@ the default, and multi-view RGB-D capture keeps the true mask.
   a consumer that needs one.
 - **Not taken:** an all-ones mask over the fill (above); a second, narrower
   conversion for the candidate blocks, which the kept set does not need;
-  a mask flag in the stream; a separate switch for the cut, which without
-  the mask carries the conversion's curtains whole; deblocking, which is the
+  a mask flag in the stream; a separate switch for the cut, without which
+  the conversion's curtains are coded whole; deblocking, which is the
   decoder's, later.
 
-**Validation.** Apple M5 Max, Release with warnings as errors.
+**Measured** by the study's harness on Rafa2 frames 1–150: its total
+chamfer to the input over the 150 frames, at a 0.2 m reach, and its face
+jump, one method for every row.
+
+| Stream | Mbit/s | Total chamfer | Face jump |
+|---|---|---|---|
+| The old template (masked; K 64, scale 0.2, 8 voxels) | 6.82 | 0.543 mm | 0.920 mm |
+| The K56 template | 1.99 | 0.294 mm | 0.466 mm |
+| The K56 template and the study's LF deblock, not shipped | 1.99 | 0.262 mm | 0.193 mm |
+
+The K56 template's largest GoP is 1.74x its mean (3.47 Mbit/s, frames
+121–150) and its largest I-frame 29,655 B; at K 120 (6.78 Mbit/s) the
+largest GoP is 1.66x its mean, and the old template's 1.47x.
+
+**This PR's streams carry those numbers over by identity.** `codec_mesh` on
+the K56 template writes 1,246,265 B (1.994 Mbit/s) against the study's
+1,246,126, with its block count on all 150 frames and its bytes on frames
+1–73. Decoded by one decoder, the two streams' grids are bit-identical in
+metres on 138 frames, frames 1–73 among them. On the 12 others, between 75
+and 141, every difference is one of 53 voxels this PR cuts and the study
+did not, each coded by the study 32 mm or more from zero, or the fill of
+their blocks (at most 2.1 mm); 6 more frames differ in bytes alone,
+P-frames against a reference that differed. This PR's cut examines every
+cell of voxels observed in 16 voxels, the study's only the cells of blocks
+it observed in 8, and the two differ past 31 mm alone, in no cell that
+keeps a block. At K 120 and scale 0.007036 the same 12 frames differ the
+same way (53 voxels, 33 mm or more), at 4,236,145 B against 4,235,824.
+
+**Validation.** Apple M5 Max, MoltenVK, Release with warnings as errors,
+Assimp, FFmpeg and Orbbec, core `b992f12`: the 111 tests pass under the
+validation layer and synchronization validation, the goldens unchanged.
 `recon_codec_encoder` holds `true_sdf` frames to the CPU oracle, whose
-blocks and cut set come from the study's rule on the host, on a curtain
-(a sphere's distance negated in a slab 20 mm out) and a speck only the near
+blocks and cut set come from the study's rule on the host, on a curtain (a
+sphere's distance negated in a slab 20 mm out) and a speck only the near
 rule keeps, at three segment sizes: cuts across block faces, partial masks,
 the same bytes whatever the hash order, heap growth between frames, and no
-stale cut after a cleared grid; on two spheres, nothing is cut. Planted
-bugs each failed their test: no cut pass (`true_sdf_oracle_case`,
+stale cut after a cleared grid; on two spheres, nothing is cut. Planted bugs
+each failed their test: no cut pass (`true_sdf_oracle_case`,
 `curtain_case`), the anchor block alone kept or every observed block
 appended (`surface_blocks_case`), a forward that ignores the cut
 (`cut_case`), no margin (`true_sdf_oracle_case`), and no zeroing of the cut
-set or the keep flags (`stale_cut_case`).
+set or the keep flags (`stale_cut_case`). By hand: `codec_replica` on room0
+writes origin/main's `.vrst` byte for byte (8,361,488 B) and its CSV's
+frame, type, bytes and blocks on all 400 frames; an untouched origin/main
+build decodes the K56 and K120 streams (`decode_growing`) to this build's
+grids on all 150 frames. Time, each run gated on an idle GPU with no other
+test or player running, the median of 3 runs each, host / device ms,
+origin/main on its template against this build on the new one: the mesh
+conversion takes 8.46 / 6.76 against 28.27 / 25.52 a frame, the 16-voxel
+band holding 3.9x the bin entries (4,637,972 on frame 150 against
+1,198,674); `codec encode` takes 2.66 / 1.60 an I-frame and 2.41 / 1.37 a
+P-frame against 2.48 / 1.37 and 2.23 / 1.13, the fewer blocks outweighing
+the two passes. Not run: the RTX 5090, ASan and UBSan (CI runs them).
 
 ### 2026-10-22 — recon is fetched by commit, never installed: no install rules, package config or package tests (amends the 2026-10-16 GLSL pinhole entry and the 2026-10-17 amendment of the 2026-10-13 block-list entry).
 
