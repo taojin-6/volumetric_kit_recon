@@ -21,8 +21,8 @@
 // reaching a client as it is coded, with the file's seq, key, pts, set, bytes
 // and offset, and the end once finished, a frame the file refuses never
 // served, serving alone writing no file, a port in use refused before any
-// file is made, and a client that leaves never failing a frame. The device
-// part skips with no device.
+// file is made, and neither a client that leaves nor a record the server
+// refuses failing a frame. The device part skips with no device.
 
 #include <signal.h>
 #include <sys/resource.h>
@@ -38,6 +38,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -47,6 +48,7 @@
 #include "networking_loopback.hpp"
 #include "scratch_dir.hpp"
 #include "volumetric_kit/core/base/file_io.hpp"
+#include "volumetric_kit/core/base/log.hpp"
 #include "volumetric_kit/recon/networking/stream_client.hpp"
 #include "volumetric_kit/recon/networking/stream_server.hpp"
 #include "volumetric_kit/recon/stream/stream_reader.hpp"
@@ -775,6 +777,50 @@ int unrecorded_unserved(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
   return 0;
 }
 
+// A record the server refuses fails no frame: with a key at seq 1000 already
+// published to the stream's server, each record after is out of order there,
+// yet every frame is coded and recorded, each refusal a Warning naming it.
+int refused_publish(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
+                    const vr_test::Scratch& scratch) {
+  const vr_example::CodecOutputs outputs =
+      served_on_loopback(scratch.path / "refused.vrst");
+  vkc::Result<vr_example::CodecStream> made =
+      vr_example::CodecStream::create(gpu.device, gpu.allocator, {}, outputs);
+  CHECK(made.ok());
+  vr_example::CodecStream& coder = made.value();
+  // server() hands the stream's own server out as const.
+  auto* const server = const_cast<networking::StreamServer*>(coder.server());
+  CHECK(server != nullptr);
+  const net::Bytes ahead = net::record_payload(1000, 4);
+  CHECK(
+      server->publish(net::record_info(1000, true), ahead.data(), ahead.size())
+          .ok());
+  std::vector<std::string> warnings;  // the stream's, logged on this thread
+  vkc::set_log_handler([&warnings](vkc::LogLevel level, std::string_view,
+                                   std::string_view message) {
+    if (level == vkc::LogLevel::Warning &&
+        message.find("not served") != std::string_view::npos) {
+      warnings.emplace_back(message);
+    }
+  });
+  vkc::Status coded[3];
+  for (std::size_t frame = 0; frame < 3; ++frame) {
+    coded[frame] = coder.code(source, frame, pts(frame));
+  }
+  vkc::set_log_handler({});
+  for (const vkc::Status& status : coded) CHECK(status.ok());
+  CHECK(warnings.size() == 3);
+  for (std::size_t frame = 0; frame < 3; ++frame) {
+    CHECK(warnings[frame].find("frame " + std::to_string(frame) +
+                               " not served") != std::string::npos);
+  }
+  CHECK(coder.finish().ok());
+  vkc::Result<std::unique_ptr<stream::StreamReader>> opened =
+      stream::StreamReader::open(outputs.stream);
+  CHECK(opened.ok() && (*opened)->stats()[0].records == 3);
+  return 0;
+}
+
 int gpu_main(vr_test::GpuContext& gpu) {
   const Sphere sphere{vr::Vec3f(0.01f, -0.02f, 0.03f), 0.09f};
   vkc::Result<vol::VoxelBlockGrid> source = sphere_grid(gpu, sphere);
@@ -817,6 +863,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
   CHECK(port_in_use(gpu, scratch) == 0);
   CHECK(viewer_leaves(gpu, *source, scratch) == 0);
   CHECK(unrecorded_unserved(gpu, *source, scratch) == 0);
+  CHECK(refused_publish(gpu, *source, scratch) == 0);
   std::puts("example_codec_stream: OK");
   return 0;
 }
