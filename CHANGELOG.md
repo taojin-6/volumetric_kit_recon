@@ -212,10 +212,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   128 KiB unsent; `publish` never waits on a socket. `StreamClient`
   (`networking/stream_client.hpp`, with `ClientOptions`) connects without
   blocking and returns the session, then each record, checked as
-  `StreamReader` checks it. `examples/serve_stream` serves a `.vrst` live,
-  paced by its pts and looping (`examples/common/stream_replay.hpp`). CI runs
-  the stream and networking tests under ThreadSanitizer on the Mac Debug
-  leg. Tests: `recon_networking_gop_log`, `recon_networking_socket`,
+  `StreamReader` checks it; its errors read
+  `StreamClient: <host>:<port>: <reason>`. `examples/serve_stream` serves a
+  `.vrst` live, paced by its pts and looping
+  (`examples/common/stream_replay.hpp`). CI runs the stream and networking
+  tests under ThreadSanitizer on the Mac Debug leg. Tests: `recon_networking_gop_log`, `recon_networking_socket`,
   `recon_networking_server`, `recon_networking_client`,
   `recon_networking_stress`, `recon_example_stream_replay`,
   `recon_serve_stream_args`.
