@@ -43,10 +43,11 @@
 // fusion.free_after sets the grid frees the blocks such a surface left, as
 // rig_viewer's does.
 //
-// Ctrl+C (or a SIGTERM) once the cameras stream ends the run after the set
-// in hand, as run.frames would: the stream is finished and its viewers
-// closed, the cameras are released and the PLY is written. A second one ends
-// the process.
+// Ctrl+C (or a SIGTERM) ends the run. Before the cameras stream, the run
+// returns with nothing recorded: the empty stream is removed and the cameras
+// are released. After, it ends after the set in hand, as run.frames would:
+// the stream is finished and its viewers closed, the cameras are released
+// and the PLY is written. A second one ends the process.
 
 #include <chrono>
 #include <cstddef>
@@ -102,6 +103,8 @@ double seconds_since(std::chrono::steady_clock::time_point start) {
 }
 
 vkc::Status run(const Options& opt) {
+  // First, so a Ctrl+C while the run sets up still unwinds what it opened.
+  vr_example::catch_interrupts();
   // Checked before anything opens: the dump's directory, which the run makes
   // with the first set it writes, and any codec step the codec refuses.
   vr_example::SetDump dump(opt.diagnostics.dump_directory,
@@ -176,8 +179,13 @@ vkc::Status run(const Options& opt) {
   }
 
   // --- Stream, until run.frames or Ctrl+C ---
+  // A Ctrl+C during the setup (camera discovery takes seconds) ends the run
+  // here, before any set.
+  if (vr_example::interrupted()) {
+    std::printf("interrupted before streaming\n");
+    return {};
+  }
   VKC_TRY(array->start());
-  vr_example::catch_interrupts();
   const char* verb = (opt.operation == vr_example::config::Operation::Stream)
                          ? "streamed"
                          : "fused";

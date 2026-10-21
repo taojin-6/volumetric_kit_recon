@@ -211,11 +211,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   each record after appending it, so no viewer gets a frame the file lacks;
   logs a record the server refuses at Warning, failing no frame; and closes
   the viewers in `finish()`, after which `server()` is null. fuse_orbbec
-  prints the port, and Ctrl+C or SIGTERM ends its run after the set in hand,
-  as `run.frames` would, through `examples/common/interrupt.hpp`
-  (`rig_viewer`'s handler, moved); a second one ends the process. New
-  template: `config/examples/serve_orbbec.json`. Tests:
-  `recon_example_codec_stream`, `recon_example_config`,
+  prints the port, and Ctrl+C or SIGTERM ends its run cleanly, through
+  `examples/common/interrupt.hpp` (`rig_viewer`'s handler, moved): during
+  the setup, with nothing recorded and the empty stream removed; once the
+  cameras stream, after the set in hand, as `run.frames` would. A second one
+  ends the process. New template: `config/examples/serve_orbbec.json`.
+  Tests: `recon_example_codec_stream`, `recon_example_config`,
   `recon_example_interrupt`.
 - `networking`: **a session served and read live over TCP**
   (`recon_networking`, a tier of its own on `recon_stream`, the 2026-10-21

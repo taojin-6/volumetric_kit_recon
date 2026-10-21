@@ -163,7 +163,8 @@ build/examples/fuse_orbbec/fuse_orbbec --config config/examples/fuse_orbbec.json
 build/examples/fuse_orbbec/fuse_orbbec --config config/examples/stream_orbbec.json
 # Each fused set coded as one frame of a .vrst:
 build/examples/fuse_orbbec/fuse_orbbec --config config/examples/codec_orbbec.json
-# The same, recorded and served live on port 47801 until Ctrl+C:
+# The same, recorded and served live on port 47801 for up to 216000 frames
+# or until Ctrl+C:
 build/examples/fuse_orbbec/fuse_orbbec --config config/examples/serve_orbbec.json
 ```
 
@@ -173,7 +174,8 @@ set's time (for a rig, on the host's clock); `output.stream` records the
 frames in a `.vrst`, and `output.serve` serves them live, as they are
 recorded, on that port (see [Live streaming](#live-streaming)). They are
 geometry only, in the world `source.calibration` defines. Ctrl+C ends a run
-as `run.frames` would, and a second one the process.
+cleanly: before the cameras stream, with nothing recorded, and after, as
+`run.frames` would. A second one ends the process.
 
 Edit `source.serial` for a single camera, or `source.sync_config` for a synced
 rig. A camera wired as a secondary streams only while its primary does; choose

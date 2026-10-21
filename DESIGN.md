@@ -1906,11 +1906,12 @@ still finishes its stream and reports the frames it decoded; one that coded
 no set leaves none.
 The report's bitrate is at `source.fps`, and `codec.sweep` sweeps the last
 grid. `output.serve` serves the records live on that port, on every
-interface. A Ctrl+C or SIGTERM once the cameras stream (`interrupt.hpp`,
-`rig_viewer`'s handler too) ends the run after the set in hand, as
-`run.frames` would: the stream is finished, its viewers closed, the cameras
-released and the PLY written; the handler restores the default, so a second
-one ends the process.
+interface. A Ctrl+C or SIGTERM (`interrupt.hpp`, `rig_viewer`'s handler
+too, installed first) ends the run. During the setup, the run returns before
+the cameras stream, removing the empty stream and releasing the cameras.
+Once they stream, it ends after the set in hand, as `run.frames` would: the
+stream is finished, its viewers closed, the cameras released and the PLY
+written. The handler restores the default, so a second one ends the process.
 **`rig_viewer`** (`VR_BUILD_VIEWER` with `VR_WITH_ORBBEC` and
 `VR_WITH_FFMPEG`; CI's viewer leg compiles it) is `fuse_viewer`'s live-rig
 sibling: an `OrbbecSensor` per camera of the sync file read as a
