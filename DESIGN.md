@@ -1419,8 +1419,10 @@ is `CodecParams`, **`Encoder`** (`encoder.hpp`), **`Decoder`** with
 `decode_growing` (`decode_grid.hpp`). `Encoder::encode(grid)` takes the map's
 own active list (`compact_active_blocks_on_device`, so an extract's list is
 reused and its own kept for the extract after), keeps the blocks with an
-observed voxel (`DctTransform::observed`, compacted on the device, reading
-back only its count and reject tally), sorts them by (z, y, x) on the device
+observed voxel, or with `EncoderConfig::true_sdf` those holding surface
+(`DctTransform::observed`, compacted on the device, reading back only its
+count and reject tally; the true-SDF passes below share its batch), sorts
+them by (z, y, x) on the device
 with a stable rank-merge sort on `coord_less` itself, over all of int32
 (`detail::BlockLists`, whose header has the mechanism), transforms them into
 the reference store's spare (below), the sorted list copied beside them, and
@@ -1573,6 +1575,22 @@ Each block is found by that probe and its ptr never read, so the decoder
 lists blocks it has just allocated by coordinate alone. "Observed" is
 `volume::kObservedWeight`, the threshold the mesher reads too. The inverse
 writes weight 1.0 on observed voxels and a fresh block's zeros elsewhere.
+With `EncoderConfig::true_sdf` (the 2026-10-21 entry), `dct_surface.comp`
+runs twice over the active list before the observed filter, a workgroup a
+block, each lane taking the 8 cells anchored on its x-line, their corners
+reached across the block's +x/+y/+z faces through
+`volume/shaders/block_neighbourhood.glsl`, the mesher's neighbourhood probe
+and corner addressing. A cell counts when its 8 voxels are observed. The
+first pass sets, in each counted cell whose sign changes, the cut bit of
+every corner with |tsdf| > √3 h + 1e-6 m; the second flags each block
+holding a corner of a counted cell with no corner cut, whose sign changes or
+that has a corner with |tsdf| < h; the filter appends the flagged blocks.
+Metres on the raw `tsdf`, strict comparisons, below 0 inside, and every
+write an `atomicOr`, so the order the workgroups run in changes nothing. The
+forward reads the cut set: a cut voxel is unobserved, its mask bit 0 and its
+value filled. The cut set (a bit a voxel slot) and the keep flags (a word a
+block slot) are retained scratch too, sized to the grid's heap, zeroed in
+each batch and bound on every call, since a regrown one is a new buffer.
 The v3 frame (`bitstream.hpp`, the 2026-10-02 entry) carries the K kept
 weights in its parameter header, `44 + 4K` bytes (300 at K = 64); older
 versions are refused. `read_frame_info` reads them without entropy decoding.

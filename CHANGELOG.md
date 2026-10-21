@@ -355,6 +355,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `codec`: **`EncoderConfig::true_sdf`** codes a true signed distance, such
+  as `tsdf::MeshIntegrator` converts a mesh to, without the observed mask
+  (the 2026-10-21 decision): it cuts each corner farther than √3 voxels from
+  zero of a cell whose sign changes, then codes only the blocks that hold
+  surface, so in a band of `kTrueSdfBandVoxels` (15) every mask is all ones
+  but the cuts. Off by default, which codes as before; the frames are
+  ordinary frames, which any `Decoder` decodes. On fused depth the cut would
+  erase real surface. Tests: `recon_codec_encoder`, `recon_codec_decoder`,
+  `recon_codec_inter`, `recon_codec_dct`, `recon_codec_params`.
 - `networking`: `StreamClient::next` has an overload reporting progress even
   when no complete record is ready. Callers can drain partial receives and
   buffered records before waiting on their own controls. The original

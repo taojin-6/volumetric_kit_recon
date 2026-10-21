@@ -198,8 +198,10 @@ entries relevant to your task; later amendments supersede earlier rules.
   rather than grown. *Amended 2026-10-13:* the `Decoder` decodes P-frames
   too, against a reference it keeps. *Amended 2026-10-18:* a player's growth
   sits beside the decoder, as the `Fuser`'s does: `make_decode_grid` and
-  `decode_growing`. *Amended 2026-10-22:* both take the caller's block
-  ceiling, and refuse a frame or a grow past it as `InvalidArgument`.
+  `decode_growing`. *Amended 2026-10-21:* with `EncoderConfig::true_sdf`,
+  observed blocks without surface are dropped too. *Amended 2026-10-22:*
+  `make_decode_grid` and `decode_growing` take the caller's block ceiling,
+  and refuse a frame or a grow past it as `InvalidArgument`.
 - [**2026-09-27**](#2026-09-27--the-video-decoder-is-recon_sensor_video-a-target-of-its-own-over-an-installed-ffmpeg-hevc-in-host-pictures-out-on-the-first-hardware-back-end-that-decodes-a-built-in-clip-nvidia-ahead-of-an-integrated-gpu-each-ci-leg-requires-the-hardware-it-has) —
   The video decoder is `recon_sensor_video`, a target of its own over an
   installed FFmpeg: HEVC in, host pictures out, on the first hardware back end
@@ -288,7 +290,9 @@ entries relevant to your task; later amendments supersede earlier rules.
   over device memory; the encoder takes the map's own list and drops
   never-observed blocks before the transform; and the decoder stamps only
   what it changes (amends the `changed`-stamp entry above). *Amended
-  2026-10-13:* the coordinate sort runs on the device too.
+  2026-10-13:* the coordinate sort runs on the device too. *Amended
+  2026-10-21:* with `EncoderConfig::true_sdf`, only the blocks holding
+  surface are kept.
 - [**2026-10-02**](#2026-10-02--shared-instructions-live-in-a-concise-agentsmd-claudemd-imports-it-designmd-holds-implementation-detail-and-decisionsmd-holds-the-decision-index-and-rationale) —
   Shared instructions live in a concise AGENTS.md; CLAUDE.md imports it, DESIGN.md holds implementation detail, and DECISIONS.md holds the decision index and rationale.
 - [**2026-10-02**](#2026-10-02--gpu-regressions-guard-span-ownership-chroma-placement-descriptor-aliases-invalid-depth-taps-and-zero-near-visibility) —
@@ -663,6 +667,14 @@ entries relevant to your task; later amendments supersede earlier rules.
   is ruled out only by a bound, less a rounding margin of its own, strictly
   above the voxel's limit, so every voxel writes what its whole bin writes.
   Blocks past 16^3 voxels are refused.
+- [**2026-10-21**](#2026-10-21--a-true-signed-distance-codes-without-the-observed-mask-encoderconfigtrue_sdf-cuts-each-corner-farther-than-3-voxels-from-zero-of-a-cell-whose-sign-changes-and-codes-only-the-blocks-that-hold-surface-whole-it-is-off-by-default-and-set-in-code-alone-so-fused-depth-keeps-its-mask-amends-the-2026-09-27-encoder-and-2026-10-01-codec-review-entries) —
+  A true signed distance codes without the observed mask:
+  `EncoderConfig::true_sdf` cuts each corner farther than √3 voxels from
+  zero of a cell whose sign changes, and codes only the blocks that hold
+  surface, every mask all ones but the cuts in a band of 15 voxels. It is
+  off by default and set in code alone, so multi-view RGB-D capture keeps
+  its mask, byte for byte; the format, the decoder and the goldens are
+  unchanged.
 - [**2026-10-22**](#2026-10-22--recon-is-fetched-by-commit-never-installed-no-install-rules-package-config-or-package-tests-amends-the-2026-10-16-glsl-pinhole-entry-and-the-2026-10-17-amendment-of-the-2026-10-13-block-list-entry) —
   recon is fetched by commit, never installed (the owner's rule for the
   family): no install rules, package config or package tests. The
@@ -5261,6 +5273,9 @@ coordinate and a mask class in the frame and contributes nothing to the mesh,
 since the mesher skips unobserved corners. The filter runs after the transform
 because the mask is what says which blocks those are. As a result a decoded
 grid can hold fewer blocks than the source grid, with the same surface.
+*Amended 2026-10-21:* with `EncoderConfig::true_sdf` the encoder drops the
+observed blocks that hold no surface too, and its cut changes the surface
+on purpose, past sign errors.
 
 **Decoding into the caller's grid, by diffing.** The grid is the caller's, as
 it is for every tier. After `Decoder::decode(frame, grid)` succeeds, the grid
@@ -14281,6 +14296,71 @@ fail.
 
 **Not done**: the conversion's smaller costs around the write, in DESIGN's
 Next work.
+
+### 2026-10-21 — A true signed distance codes without the observed mask: `EncoderConfig::true_sdf` cuts each corner farther than √3 voxels from zero of a cell whose sign changes, and codes only the blocks that hold surface, whole; it is off by default and set in code alone, so fused depth keeps its mask (amends the 2026-09-27 encoder and 2026-10-01 codec-review entries).
+
+The mask is 43% of an I-frame's bytes and 51% of a P-frame's on Rafa2 (the
+2026-10-21 quantization study), and it says which voxels a fused grid
+observed. A mesh's distance is exact wherever it is computed, so its blocks
+need no mask, only a band wide enough to observe them. The owner's rule:
+code without the mask only where a true signed distance exists; masks stay
+the default, and multi-view RGB-D capture keeps the true mask.
+
+- **One switch, in the encoder.** `EncoderConfig::true_sdf`, false by
+  default, which codes as before, byte for byte. No scenario or config key
+  sets it, so no RGB-D scenario can. Its doc states the precondition: on
+  fused depth, whose crossing cells have corners past √3 voxels, the cut
+  would erase real surface. `CodecParams` is untouched: it is in every
+  header and the decoder's checks, and the rule is neither.
+- **The cut.** In each cell whose 8 voxels, across block faces, are
+  observed and whose sign changes, every corner with |tsdf| > √3 h + 1e-6 m
+  (one fused multiply-add) is coded unobserved. A distance is 1-Lipschitz,
+  so a cell a real surface crosses has every corner within √3 h of it: only
+  sign errors are cut, such as the sheets the closest-face sign leaves past
+  a hole's rim or a sharp edge (the 2026-09-27 mesh entry). One pass, from
+  the field as it stands, so no cut changes which cells another tests.
+- **The surface blocks.** Only the blocks holding a corner of a cell whose
+  8 voxels are observed and uncut, and that changes sign or has a corner
+  within h of zero, are coded. Without the margin a hole opened in the
+  study (a coverage maximum of 1.75 mm became 3.55). A coded voxel then
+  lies within (1 + 8√3) h = 14.86 h of the zero level: a near cell's corner
+  within h, the cell's others within √3 h of it, the block's within 7√3 h.
+  So a band of `kTrueSdfBandVoxels` (15) observes every one, and every mask
+  is all ones but the cuts; past a narrower band, voxels stay unobserved.
+- **The true distance comes from the conversion.** The encoder cannot drop
+  the mask alone: over a narrow band an all-ones mask codes the forward's
+  fill as data (the study, frames 1–30: −79.7% BD-rate, against −82.7% for
+  the true distance and −84.3% with the surface blocks).
+- **On the device, in `"  ..observed"`'s batch.** `dct_surface.comp` cuts,
+  then flags the blocks to keep, over the map's active list; the observed
+  filter appends the flagged blocks, and the forward reads the cut set. Both
+  are encoder scratch, so the caller's grid is never written, and only the
+  count crosses, as before. The mesher's neighbourhood probe and corner
+  addressing moved to `volume/shaders/block_neighbourhood.glsl`, for both,
+  since codec may not include mesh.
+- **The stream records nothing new.** The format is frozen, and no consumer
+  reads a decoded weight as "seen": a decoded grid is meshed, never fused
+  into. A decoded voxel of a coded block has weight 1 unless cut, and the
+  header's `trunc_dist` is the band. A flag waits for a consumer that needs
+  one.
+- **Not taken:** an all-ones mask over the fill (above); a second, narrower
+  conversion for the candidate blocks, which the kept set does not need;
+  a mask flag in the stream; a separate switch for the cut, which without
+  the mask carries the conversion's curtains whole; deblocking, which is the
+  decoder's, later.
+
+**Validation.** Apple M5 Max, Release with warnings as errors.
+`recon_codec_encoder` holds `true_sdf` frames to the CPU oracle, whose
+blocks and cut set come from the study's rule on the host, on a curtain
+(a sphere's distance negated in a slab 20 mm out) and a speck only the near
+rule keeps, at three segment sizes: cuts across block faces, partial masks,
+the same bytes whatever the hash order, heap growth between frames, and no
+stale cut after a cleared grid; on two spheres, nothing is cut. Planted
+bugs each failed their test: no cut pass (`true_sdf_oracle_case`,
+`curtain_case`), the anchor block alone kept or every observed block
+appended (`surface_blocks_case`), a forward that ignores the cut
+(`cut_case`), no margin (`true_sdf_oracle_case`), and no zeroing of the cut
+set or the keep flags (`stale_cut_case`).
 
 ### 2026-10-22 — recon is fetched by commit, never installed: no install rules, package config or package tests (amends the 2026-10-16 GLSL pinhole entry and the 2026-10-17 amendment of the 2026-10-13 block-list entry).
 
