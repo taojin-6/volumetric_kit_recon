@@ -640,8 +640,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   tier, networking next, writes and reads the format without stream's
   detail: `ChunkEncoder` frames what `StreamWriter` writes and holds the
   record rules; `ChunkParser` copies bytes as they arrive and checks each
-  chunk as `StreamReader` does, through the same functions, before any of
-  its body; a failure is final.
+  chunk with the functions `StreamReader` uses, its header before waiting
+  for its body; a failure is final.
 
 ## Decision record
 
@@ -13992,13 +13992,13 @@ the format already is, rather than reached in stream's private `detail`.
   would save one copy at a stream's rate, for a second call and a size
   contract. Copying takes pieces of any size, a byte at a time included.
   Drained between pieces, it holds about one chunk.
-- **Checked before buffered.** Each check runs as the bytes it needs arrive:
-  the magic and H at 8, the CRC and fields at H, the body's CRC at its end.
-  B is refused from the header: a session's above `kMaxSessionBytes` as
-  `InvalidArgument`, as the reader refuses it, since the format caps it;
-  any other above 64 MiB (`ChunkParser::kMaxBodyBytes`) as `OutOfMemory`,
-  the parser's own limit, as `ReaderOptions::max_payload_bytes` is the
-  reader's.
+- **Checked before a body is waited for.** Each check runs as the bytes it
+  needs arrive: the magic and H at 8, the CRC and fields at H, the body's
+  CRC at its end. B is refused from the header: a session's above
+  `kMaxSessionBytes` as `InvalidArgument`, as the reader refuses it, since
+  the format caps it; any other above 64 MiB (`ChunkParser::kMaxBodyBytes`)
+  as `OutOfMemory`, the parser's own limit, as
+  `ReaderOptions::max_payload_bytes` is the reader's.
 - **Every body's CRC, a skipped one's too.** A skipped body arrives
   anyway, and bytes that fail a CRC cannot be trusted past it.
 - **Nothing resyncs.** A stream has no file to search past damage, so a
@@ -14013,10 +14013,11 @@ the format already is, rather than reached in stream's private `detail`.
 before its footer and with an unfinished one on 1 and 2 tracks; refuses
 every session and record the writer refuses, with the writer's message the
 encoder's after the path; feeds finished files, a killed writer's cut in its
-last padding and one with skipped chunks whole, a byte at a time and in 12
-seeded splits, each giving the reader's records, offsets and payloads; meets
-each of 19 refusals at the byte that completes it, bodies of 1 GiB before any
-arrives; and returns a failure again after more bytes. `recon_stream_oom`
+last padding, one with skipped chunks and one with a wider session header
+whole, a byte at a time and in 12 seeded splits, each giving the reader's
+records, offsets and payloads; meets each of 20 refusals at the byte that
+completes it, bodies of 1 GiB before any arrives; and returns a failure
+again after more bytes. `recon_stream_oom`
 fails the encoder's and the parser's allocations. The existing stream tests
 pass unchanged, and all of them under ASan and UBSan.
 
