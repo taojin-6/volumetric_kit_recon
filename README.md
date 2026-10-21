@@ -163,8 +163,7 @@ build/examples/fuse_orbbec/fuse_orbbec --config config/examples/fuse_orbbec.json
 build/examples/fuse_orbbec/fuse_orbbec --config config/examples/stream_orbbec.json
 # Each fused set coded as one frame of a .vrst:
 build/examples/fuse_orbbec/fuse_orbbec --config config/examples/codec_orbbec.json
-# The same, recorded and served live on port 47801 for up to 216000 frames
-# or until Ctrl+C:
+# The same, also served live:
 build/examples/fuse_orbbec/fuse_orbbec --config config/examples/serve_orbbec.json
 ```
 
