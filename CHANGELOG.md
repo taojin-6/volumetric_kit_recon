@@ -202,6 +202,21 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `stream`: **the `.vrst` chunks in memory** (`stream/chunks.hpp`, the
+  2026-10-21 decision). `ChunkEncoder` makes the session chunk and each
+  record's framing (`RecordFraming`: its header and padding) by
+  `StreamWriter::append`'s rules. `ChunkParser` takes `.vrst` bytes as they
+  arrive and returns the session, then each record and its payload, its
+  `offset` that of the bytes fed, with `StreamReader`'s checks. A chunk
+  header is checked once it is in, before its body is needed: a session body
+  above `kMaxSessionBytes` is `InvalidArgument`, any other above
+  `ChunkParser::kMaxBodyBytes` (64 MiB) `OutOfMemory`. Other tags, a
+  finished file's footer included, and a record setting an unknown flag are
+  skipped, and a failure is returned by every later call. `StreamWriter`
+  writes through a `ChunkEncoder`, its bytes unchanged; its refusals give
+  the encoder's message after the call and the path, which `create`'s now
+  name too. `StreamReader` checks chunks through the same functions,
+  unchanged. Tests: `recon_stream_chunks`, `recon_stream_oom`.
 - `examples`: **`fuse_orbbec` codes its sets into a `.vrst` and fuses
   Dynamic by default, and core 0.15.0 is required** (core #43, #44 and
   #45, the 2026-10-20 decision). With `output.stream` or `output.csv` it

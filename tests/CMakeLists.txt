@@ -1228,7 +1228,9 @@ endif()
 
 # stream: the .vrst container through its public API -- golden bytes whose CRCs
 # Python's zlib.crc32 computed, round trips, seeking, unknown kinds and chunks,
-# the limits, every refusal, two threads on one reader -- what its reader
+# the limits, every refusal, two threads on one reader -- its chunks in memory:
+# the encoder's bytes and refusals against the writer's, the parser fed a file
+# in any pieces against the reader, each refusal at its byte -- what its reader
 # recovers: flipped bits, the tail cut at every byte, damaged spans, a killed
 # writer and one stopped by RLIMIT_FSIZE -- and its open from the footer: the
 # scan's counts and keys, each footer check refusing a forged footer, and
@@ -1239,6 +1241,12 @@ target_link_libraries(recon_stream_container_test
                       PRIVATE volumetric_kit::recon_stream Threads::Threads)
 vr_target_warnings(recon_stream_container_test)
 add_test(NAME recon_stream_container COMMAND recon_stream_container_test)
+
+add_executable(recon_stream_chunks_test stream_chunks_test.cpp)
+target_link_libraries(recon_stream_chunks_test
+                      PRIVATE volumetric_kit::recon_stream)
+vr_target_warnings(recon_stream_chunks_test)
+add_test(NAME recon_stream_chunks COMMAND recon_stream_chunks_test)
 
 add_executable(recon_stream_recovery_test stream_recovery_test.cpp)
 target_link_libraries(recon_stream_recovery_test

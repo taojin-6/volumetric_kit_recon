@@ -517,7 +517,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   Recordings are `.vrst` files of our own: verbatim records in CRC-framed,
   8-byte-aligned chunks, readable from a killed writer, in `recon_stream` on
   the core's base tier alone. *Amended 2026-10-14:* a Geometry track's
-  params may hold a mesh source's transform.
+  params may hold a mesh source's transform. *Amended 2026-10-21:* its
+  chunks are made and read in memory too, publicly.
 - [**2026-10-12**](#2026-10-12--p-frames-are-frame-type-1-of-v3-each-reference-block-gets-a-mode-in-update-segments-new-blocks-follow-in-intra-segments-and-a-reference-section-names-the-reference-by-xxh64-of-its-bytes-experimental-until-golden-p-frames-freeze-it) —
   P-frames are frame type 1 of v3: a mode per reference block in update
   segments, new blocks in intra segments, the reference named by XXH64 of its
@@ -634,6 +635,13 @@ entries relevant to your task; later amendments supersede earlier rules.
   the calibration defines: no upright transform, crop, raw recording or
   colour yet. *Amended 2026-10-20:* `fuse_orbbec` fuses Dynamic by default
   too (core #45).
+- [**2026-10-21**](#2026-10-21--the-vrst-chunks-in-memory-are-public-chunkencoder-frames-what-streamwriter-writes-by-the-record-rules-it-now-holds-and-chunkparser-reads-bytes-as-they-arrive-through-streamreaders-checks-amends-the-2026-10-12-container-entry) —
+  The `.vrst` chunks in memory are public (`stream/chunks.hpp`), so a second
+  tier, networking next, writes and reads the format without stream's
+  detail: `ChunkEncoder` frames what `StreamWriter` writes and holds the
+  record rules; `ChunkParser` copies bytes as they arrive and checks each
+  chunk with the functions `StreamReader` uses, its header before waiting
+  for its body; a failure is final.
 
 ## Decision record
 
@@ -12235,6 +12243,10 @@ taking an unposed sensor each fail a test. No camera was opened.
 params are empty or a mesh source's transform (`io::encode_transform`), an
 addition to the kind that keeps version 0.
 
+*Amended 2026-10-21 (the chunks entry, below):* the chunks are also made and
+read in memory, publicly (`stream/chunks.hpp`), and the writer frames
+through the encoder.
+
 A recording holds tracks of several kinds, each on its own clock, the rig's
 calibration, and per record a pts, a sequence number, a capture set and
 whether decoding can start there. It must read up to its last whole record
@@ -13962,6 +13974,52 @@ leaves the Dynamic frames at the first set that sees past it and the grid
 at the free passes the clock's ticks give; under Classic its observed
 blocks stay in the grid and in every frame. No camera was opened; `fuse_orbbec`
 has not yet run on the rig.
+
+### 2026-10-21 — The `.vrst` chunks in memory are public: `ChunkEncoder` frames what `StreamWriter` writes, by the record rules it now holds, and `ChunkParser` reads bytes as they arrive, through `StreamReader`'s checks (amends the 2026-10-12 container entry).
+
+A live view of the rig sends a session's chunks over TCP as the file holds
+them, and the sockets go in a tier of their own, `recon_networking`, by the
+owner's decision, testable apart from the format. That tier makes and checks
+chunks, so the format's in-memory half is public in `recon_stream`, where
+the format already is, rather than reached in stream's private `detail`.
+
+- **One home for the format.** The writer is the encoder and the file: the
+  session chunk, each record's header and padding, and the rules (a track
+  the session has, seq rising, key pts never back), whose state moves into
+  the encoder. The parser and the reader check a chunk with the same pure
+  functions; the reader keeps its `pread`, index and search past damage.
+- **The parser copies what it is fed.** A buffer handed out to read into
+  would save one copy at a stream's rate, for a second call and a size
+  contract. Copying takes pieces of any size, a byte at a time included.
+  Drained between pieces, it holds about one chunk.
+- **Checked before a body is waited for.** Each check runs as the bytes it
+  needs arrive: the magic and H at 8, the CRC and fields at H, the body's
+  CRC at its end. B is refused from the header: a session's above
+  `kMaxSessionBytes` as `InvalidArgument`, as the reader refuses it, since
+  the format caps it; any other above 64 MiB (`ChunkParser::kMaxBodyBytes`)
+  as `OutOfMemory`, the parser's own limit, as
+  `ReaderOptions::max_payload_bytes` is the reader's.
+- **Every body's CRC, a skipped one's too.** A skipped body arrives
+  anyway, and bytes that fail a CRC cannot be trusted past it.
+- **Nothing resyncs.** A stream has no file to search past damage, so a
+  failed check ends the parse, and every later call returns it.
+- **A writer's refusal carries the encoder's** after the call and the path
+  (`Status::with_context`), and `create`'s name the path now too. To count
+  nothing for a record it cannot index, the writer reserves a key's index
+  room before the encoder frames it.
+
+**Verification.** Apple M5 Max, Debug and Release with warnings as errors:
+`recon_stream_chunks` compares the encoder's bytes with the writer's file
+before its footer and with an unfinished one on 1 and 2 tracks; refuses
+every session and record the writer refuses, with the writer's message the
+encoder's after the path; feeds finished files, a killed writer's cut in its
+last padding, one with skipped chunks and one with a wider session header
+whole, a byte at a time and in 12 seeded splits, each giving the reader's
+records, offsets and payloads; meets each of 20 refusals at the byte that
+completes it, bodies of 1 GiB before any arrives; and returns a failure
+again after more bytes. `recon_stream_oom`
+fails the encoder's and the parser's allocations. The existing stream tests
+pass unchanged, and all of them under ASan and UBSan.
 
 ## Measured lessons
 

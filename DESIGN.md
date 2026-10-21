@@ -1728,6 +1728,19 @@ A session header that is cut, out of range or fails a CRC is
 `InvalidArgument`, and one of another version or with a flag set
 `Unsupported`.
 
+**In memory** (`stream/chunks.hpp`, the 2026-10-21 entry). `ChunkEncoder`
+makes the session chunk and frames each record by the record rules, whose
+state it holds; `StreamWriter` writes through one. `ChunkParser` takes bytes
+as they arrive (`feed` copies them) and returns the session, then each
+record, through the checks the reader's chunks pass. Each check runs once
+the bytes it needs are in, a header's before its body is needed: B is at
+most `kMaxSessionBytes` for the session (`InvalidArgument`) and
+`ChunkParser::kMaxBodyBytes` (64 MiB) for any other chunk (`OutOfMemory`).
+Both CRCs are checked on every chunk, a skipped one's too. Other tags, the
+footer included, and a record setting an unknown flag are skipped. Nothing
+resyncs: every call after a failure returns it. Drained between pieces, it
+holds about one chunk.
+
 Measured on an Apple M5 Max (Release, APFS, warm page cache): CRC-32 at
 2.5 GB/s, 26 times the roughly 95 MB/s of a four-camera recording; appends of
 737,280-byte (depth-sized) payloads at 1.95 GB/s; reads, CRC checked, at
