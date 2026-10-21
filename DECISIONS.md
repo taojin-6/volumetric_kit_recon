@@ -14115,8 +14115,16 @@ without it), and a lookup of any family kept unfiltered (socket). Taking a
 chunk before the socket polls writable fails none: it sends one stale
 chunk, which is whole and in order.
 `serve_stream`'s loop, on loopback, replays Rafa2 at 29.99 records a second
-and 6.84 Mbit/s for two passes, seq unbroken. Neither the lab nor the VPN
-has run it yet.
+and 6.84 Mbit/s for two passes, seq unbroken. Over the VPN (the lab's
+`serve_stream`, built with g++ 15.2, to a client on the laptop): a fast
+reader got Rafa2 at 30.00 records a second and 6.9 Mbit/s of payload, its
+session 43 to 48 ms and its first record, a key, 83 to 92 ms after the
+connect by address (55 to 74 and 92 to 117 ms by name); two at once got
+the same, though in one of two runs each skipped once to a key in its first
+2 s; a reader taking one record per 200 ms for 20 s stayed within 4 s of
+live, each of its 20 jumps to a key, and reading fast again drained
+0.28 MB of stale records in 21 ms and was live 0.31 s later; five
+reconnects each began at a key.
 
 ## Measured lessons
 
