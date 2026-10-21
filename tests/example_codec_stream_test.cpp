@@ -616,6 +616,7 @@ int serves(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
   CHECK(made.ok());
   vr_example::CodecStream& coder = made.value();
   CHECK(coder.server() != nullptr && coder.server()->port() != 0);
+  const std::uint16_t port = coder.server()->port();
   const std::unique_ptr<networking::StreamClient> client = joined(coder);
   CHECK(client != nullptr);
   std::vector<net::Got> got;
@@ -629,7 +630,7 @@ int serves(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
   }
   CHECK(coder.finish().ok());
   CHECK(coder.server() == nullptr);
-  CHECK(net::wait_end(*client));
+  CHECK(net::wait_end(*client, port));
 
   vkc::Result<std::unique_ptr<stream::StreamReader>> opened =
       stream::StreamReader::open(outputs.stream);
@@ -665,6 +666,7 @@ int serves_alone(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
   vr_example::CodecStream& coder = made.value();
   const std::unique_ptr<networking::StreamClient> client = joined(coder);
   CHECK(client != nullptr);
+  const std::uint16_t port = coder.server()->port();
   const fs::path before = fs::current_path();
   fs::current_path(quiet);
   vkc::Status coded[3];
@@ -676,7 +678,7 @@ int serves_alone(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
   }
   const vkc::Status finished = coder.finish();
   fs::current_path(before);
-  CHECK(finished.ok() && net::wait_end(*client));
+  CHECK(finished.ok() && net::wait_end(*client, port));
   CHECK(coder.rows().size() == 3);
   for (std::size_t frame = 0; frame < 3; ++frame) {
     CHECK(coded[frame].ok() && arrived[frame]);
@@ -751,6 +753,7 @@ int unrecorded_unserved(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
   vr_example::CodecStream& coder = made.value();
   const std::unique_ptr<networking::StreamClient> client = joined(coder);
   CHECK(client != nullptr);
+  const std::uint16_t port = coder.server()->port();
   CHECK(coder.code(source, 0, pts(0)).ok());
   net::Got first;
   CHECK(net::next_within(*client, &first) && first.record.info.seq == 0);
@@ -771,7 +774,7 @@ int unrecorded_unserved(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
   // The writer's failure sticks, so its footer fails too; the viewers are
   // closed all the same.
   CHECK(!coder.finish().ok() && coder.server() == nullptr);
-  CHECK(net::wait_end(*client));
+  CHECK(net::wait_end(*client, port));
   return 0;
 }
 
