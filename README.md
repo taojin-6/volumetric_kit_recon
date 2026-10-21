@@ -237,11 +237,17 @@ A sequence's `source.path` holds a printf-style frame number, such as
 `Frame_%05d_textured.obj` (`%d` or `%0Nd` once; `%%` for a literal `%`), and
 `run.first` and `run.frames` select an exact range, every file checked
 before any work. Each frame is converted alone and coded as one record whose
-set is its number, at 30 fps. `codec_mesh_sequence.json` codes Rafa2's
-frames 1–150 at 5 mm in an 8-voxel band; its frames 151–300 replay 150–1,
-so stop at 150. Frames 74–99 and 128–131 have holes, so it sets
+set is its number, at 30 fps. A mesh's field is a true distance, so
+`codec_mesh` codes it without the observed mask
+(`EncoderConfig::true_sdf`), in a band of at least 15 voxels from the
+surface (`fusion.truncation_m`), plus the shell's half-thickness in shell
+mode; it refuses a narrower one before any GPU work.
+`codec_mesh_sequence.json` codes Rafa2's frames 1–150 at 5 mm in a 16-voxel
+band, at K 56 and scale 0.040877; its frames 151–300 replay 150–1, so stop
+at 150. Frames 74–99 and 128–131 have holes, so it sets
 `source.allow_holes: true`: signed mode then takes a mesh whose only defect
-is boundary edges, each hole growing a skirt to the truncation past its rim.
+is boundary edges, each hole growing a skirt past its rim, which the coding
+cuts where it flips sign farther than √3 voxels out.
 
 ```sh
 cmake -S "$recon_root" -B "$recon_root/build" -DCMAKE_BUILD_TYPE=Release \

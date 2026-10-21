@@ -66,7 +66,7 @@ limit both acquired sets and drawn frames. `codec_mesh` counts exactly:
 `run.frames` meshes, numbered from `run.first`, one by default.
 
 `codec.intra_period` N codes an I-frame and then up to N − 1 P-frames,
-counted in coded frames. A frame with no observed block, and the frame after
+counted in coded frames. A frame with no block to code, and the frame after
 it, are I-frames whatever the period, and the count restarts at every
 I-frame. `codec_replica.json` and `codec_mesh_sequence.json` use 30;
 `codec_mesh.json`, one frame, keeps 1. `codec.update_size` sets the
