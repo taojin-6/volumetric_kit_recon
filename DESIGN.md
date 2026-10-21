@@ -914,9 +914,9 @@ freed slot's, and `resize` copies them forward, the rehash stamping
 nothing. A consumer compares ticks and resets nothing:
 `free_stale_blocks(max_age)` frees the blocks whose newer stamp is older
 than that, through the grid's remove body over the pass's list, so the band the
-allocator still asks for stays, and `rig_viewer` runs it every
-`fusion.free_after` sets; the iOS scanner reads `changed` through
-`read_block_stamps`.
+allocator still asks for stays, and the live examples run it every
+`fusion.free_after` sets (`free_stale_blocks_every`, `fuse_frame.hpp`); the
+iOS scanner reads `changed` through `read_block_stamps`.
 
 ### tsdf
 
@@ -1784,7 +1784,8 @@ registration or config validator remains.
 migration from the previous CLI.
 
 `fuse_orbbec` selects stream-only work with `operation: "stream"`; core
-refuses explicit fusion or output settings for that operation before setup.
+refuses explicit fusion, codec or output settings for that operation before
+setup.
 Calibration and SDK sync files stay in their domain formats and are referenced
 by scenario paths. Device and camera capability checks remain in their runtime
 APIs. Stage rows print through one table,
@@ -1813,7 +1814,8 @@ The live counterpart is its own example, not a `fuse_replica` flag:
 `source.sync_config` one per camera of the file on the host's clock
 (`source.apply_sync` writing the settings a camera differs in), as a
 `SensorArray` posed by `source.calibration`; it prepares each set on the GPU,
-fuses it through `fuse_set`, and writes a PLY after `run.frames` frames.
+fuses it through `fuse_and_code` (`set_codec.hpp`: `fuse_set`, then the
+`fusion.free_after` pass), and writes a PLY after `run.frames` frames.
 `operation: "stream"` only streams: each set is polled, counted and released, with no
 GPU preparation, fusion or mesh, so a run measures the cameras' stream and
 decode alone. `diagnostics.readback: true` reads each set's luma back through
@@ -1826,6 +1828,16 @@ with the first set. The run reports the cameras' open time and, at the end
 or when it fails, the array's counters, each camera's `lost` frames and, for
 a rig, each secondary's mean and worst skew to the primary. Colour is H.265
 unless `source.color_codec: "mjpeg"`.
+With `output.stream` or `output.csv` it also codes each fused set as one
+frame through the codec examples' `CodecStream` (the 2026-10-20
+decision). `main.cpp` opens the stream before the cameras and refuses there
+a PLY that is the stream's or the CSV's file under another name. A record's set is the set's index in the run
+and its pts the set's time; a set stamped before the last frame, as a clock
+stepping back stamps it, takes that frame's time. A run that fails part-way
+still finishes its stream and reports the frames it decoded; one that coded
+no set leaves none.
+The report's bitrate is at `source.fps`, and `codec.sweep` sweeps the last
+grid.
 **`rig_viewer`** (`VR_BUILD_VIEWER` with `VR_WITH_ORBBEC` and
 `VR_WITH_FFMPEG`; CI's viewer leg compiles it) is `fuse_viewer`'s live-rig
 sibling: an `OrbbecSensor` per camera of the sync file read as a
@@ -1883,13 +1895,14 @@ player lacks. `finish` writes the footer.
 Before truncating the CSV, creation checks that it does not alias the new
 stream file, including through symlinks or case-insensitive names. An alias
 is `InvalidArgument`; a CSV error during creation removes the new stream
-file for retry.
+file for retry, as does destroying the stream unfinished before its first
+frame.
 
 **`codec_mesh`** codes one mesh or a numbered sequence of them (README,
-Codec evaluation, has the keys). The examples require core 0.9.0, for
-`codec.update_size`; core escapes literal `%` characters in the scenario's
-directory before joining a relative `source.path` (0.8.0), so only the
-user's path carries a frame-number pattern.
+Codec evaluation, has the keys). The examples require core 0.14.0; core
+escapes literal `%` characters in the scenario's directory before joining a
+relative `source.path` (0.8.0), so only the user's path carries a
+frame-number pattern.
 Before any GPU work it refuses a malformed
 frame-number pattern, a range on a plain path and any frame file that is
 missing or not a regular file, and checks a shell against the truncation
@@ -1988,6 +2001,13 @@ multi-keyframe post-scan atlas, which the multi-view path can carry.
 **On `codec`**, trimming a P-frame's host overhead at small R, where its
 encode stays slower than intra's on the host alone (the 2026-10-17 freeze
 entry).
+
+**On `fuse_orbbec`'s stream** (the 2026-10-20 entry): a capture-volume
+crop (`fusion.max_depth_m` is the limit there is), raw RGBD recording and
+replay, colour, an upright world, and the session's host clock and
+calibration, which `CodecStream` does not record. Two costs are unmeasured
+on the rig: the stream decodes every frame again into its player grid, and
+a loop slower than the rig gets the newest set, so sets drop.
 
 **On `tsdf`**, mesh → TSDF has its two modes (2026-09-27), a second way into
 the grid the codec encodes: a mesh sequence converts frame by frame. Both modes

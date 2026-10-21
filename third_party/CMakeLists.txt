@@ -35,17 +35,15 @@ include(FetchContent)
 # rather than OFF, as calib does, so an application that turns the tier on keeps
 # it.
 #
-# The pin is core 0.10.0 (7a1219e, core #36's merge): its test support adds
-# TwoFamilyDevice and write_image, which the cross-family tests use, on 0.9.0's
-# codec.update_size, refused when explicit at an intra_period of 1, 0.8.0's
-# codec.intra_period and its escaping of literal '%' characters in CodecMesh's
-# scenario directory before resolving source.path.
+# The pin is core 0.14.0 (96f89d6, core #44's merge), as is the Homebrew key
+# action in .github/workflows/_build.yml; the vkc_require_core checks below say
+# which core each part needs.
 #
 # TODO: pin a core release tag once the core tags its releases.
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG 7a1219e5ecaf385778acfc60f4c55eb70053cfb5)
+  GIT_TAG 96f89d685f2ae8309dfc9df4e35eb8526d5bdbf8)
 set(VKC_INSTALL ${VR_INSTALL})
 if(NOT VR_CAMERA_ONLY)
   set(VKC_WITH_VULKAN ON)
@@ -60,8 +58,10 @@ if(NOT VR_CAMERA_ONLY AND (VR_BUILD_EXAMPLES OR VR_BUILD_TESTS))
 endif()
 FetchContent_MakeAvailable(volumetric_kit_core)
 if(NOT VR_CAMERA_ONLY AND (VR_BUILD_EXAMPLES OR VR_BUILD_TESTS))
-  # The codec examples map codec.update_size, core 0.9.0's.
-  vkc_require_core(0.9.0 CONFIG)
+  # fuse_orbbec and its configuration tests read FuseOrbbec's fusion.free_after,
+  # core 0.14.0's; the cross-family tests' TwoFamilyDevice and write_image (core
+  # 0.10.0's) come with it.
+  vkc_require_core(0.14.0 CONFIG)
 endif()
 
 # The set()s above are lost when calib or the application made the core
@@ -79,10 +79,6 @@ if(NOT VR_CAMERA_ONLY
       "recon's tests need volumetric_kit_core's test support: set "
       "VKC_BUILD_TEST_SUPPORT ON before the first FetchContent_MakeAvailable "
       "of the core")
-endif()
-if(NOT VR_CAMERA_ONLY AND VR_BUILD_TESTS)
-  # The cross-family tests use core 0.10.0's TwoFamilyDevice and write_image.
-  vkc_require_core(0.10.0)
 endif()
 
 # --- nlohmann/json (header-only; private to the targets that parse JSON) -----

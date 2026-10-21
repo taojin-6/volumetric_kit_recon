@@ -31,6 +31,14 @@
 // (vr_example::SetDump). The run reports each camera's counters at the end,
 // and a rig's skew of each secondary to the primary. It gives up after ten
 // seconds without a frame rather than waiting, still reporting them.
+//
+// output.stream or output.csv codes each fused set as one frame of the codec
+// examples' stream (vr_example::CodecStream) at the set's time, the host's
+// clock for a rig, and reports the stream, even when the run fails part-way;
+// codec.sweep then prints the codec's rate-distortion table on the last grid.
+// fusion.dynamic clears a surface the cameras see past, so the stream and the
+// PLY follow a changing scene, and every fusion.free_after sets the grid frees
+// the blocks such a surface left, as rig_viewer's does.
 
 #include <chrono>
 #include <cstddef>
@@ -41,9 +49,13 @@
 #include <utility>
 #include <vector>
 
+#include "codec_config.hpp"
+#include "codec_stream.hpp"
+#include "codec_sweep.hpp"
 #include "config.hpp"
 #include "fuse_frame.hpp"
 #include "fuse_orbbec_sets.hpp"
+#include "set_codec.hpp"
 #include "set_dump.hpp"
 #include "stage_table.hpp"
 #include "volumetric_kit/core/base/result.hpp"
@@ -51,7 +63,9 @@
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/instance.hpp"
+#include "volumetric_kit/recon/codec/encoder.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
+#include "volumetric_kit/recon/eval/mesh_distance.hpp"
 #include "volumetric_kit/recon/io/ply_writer.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
 #include "volumetric_kit/recon/mesh/mesh.hpp"
@@ -66,6 +80,7 @@ namespace vol = volumetric_kit::recon::volume;
 namespace tsdf = volumetric_kit::recon::tsdf;
 namespace mesh = volumetric_kit::recon::mesh;
 namespace sensor = volumetric_kit::recon::sensor;
+namespace eval = volumetric_kit::recon::eval;
 
 namespace {
 
@@ -77,11 +92,13 @@ double seconds_since(std::chrono::steady_clock::time_point start) {
 }
 
 vkc::Status run(const Options& opt) {
-  // The dump's directory, checked before anything opens and made with the
-  // first set it writes.
+  // Checked before anything opens: the dump's directory, which the run makes
+  // with the first set it writes, and any codec step the codec refuses.
   vr_example::SetDump dump(opt.diagnostics.dump_directory,
                            static_cast<std::size_t>(opt.diagnostics.dump_sets));
   VKC_TRY(dump.check());
+  VKC_ASSIGN(const vr::codec::EncoderConfig config,
+             vr_example::encoder_config(opt.codec));
 
   // --- GPU, first: the cameras' pictures are decoded onto it ---
   VKC_ASSIGN(vkc::Instance instance, vkc::Instance::create({}));
@@ -91,6 +108,24 @@ vkc::Status run(const Options& opt) {
              vkc::Device::create(instance, gpu, vr::device_requirements()));
   VKC_ASSIGN(vkc::Allocator allocator,
              vkc::Allocator::create(instance.handle(), device));
+
+  // --- Codec, with output.stream or output.csv: before the cameras, so a
+  // rerun onto an existing stream, or a PLY that is its file or the CSV's
+  // under another name, is refused before any camera opens. A stream that
+  // codes no set is removed again when the run ends ---
+  std::optional<vr_example::CodecStream> stream;
+  if (!opt.output.stream.empty() || !opt.output.csv.empty()) {
+    VKC_ASSIGN(vr_example::CodecStream made,
+               vr_example::CodecStream::create(
+                   device, allocator, config,
+                   vr_example::codec_outputs(opt.output), "fuse_orbbec"));
+    stream.emplace(std::move(made));
+    VKC_TRY(vr_example::check_apart(opt.output.path,
+                                    vr_example::codec_outputs(opt.output)));
+    std::printf("codec: %s\n",
+                vr_example::codec_settings(config, opt.codec.quantization_table)
+                    .c_str());
+  }
 
   // The cameras, read as an array that poses each frame and, when fusing,
   // prepares each set on the device in one batch. An optional so the run can
@@ -152,9 +187,9 @@ vkc::Status run(const Options& opt) {
         // One row for the batch: the cameras prepare together.
         VKC_ASSIGN(const sensor::DeviceFrameSet prepared,
                    array->process(set, &stage_totals));
-        VKC_TRY(vr_example::fuse_set(
-            *fuser, *volume, prepared.frames, opt.fusion.max_weight,
-            vr_example::integration_mode(opt.fusion.dynamic), &stage_totals));
+        VKC_TRY(vr_example::fuse_and_code(
+            *fuser, *volume, prepared, sets.sets() - 1, opt.fusion,
+            stream ? &*stream : nullptr, &stage_totals));
       }
       if (sets.frames() / 100 > reported / 100) {
         reported = sets.frames();
@@ -167,10 +202,20 @@ vkc::Status run(const Options& opt) {
   const double secs = seconds_since(t_start);
   const double fps =
       static_cast<double>(sets.frames()) / (secs > 0.0 ? secs : 1.0);
-  // Before any error: a run that stalls still reports what it counted.
+  // Before any error: a run that stalls still reports what it counted, and
+  // finishes the stream it recorded and reports the frames it decoded.
   sets.print_stats();
   std::fputs(dump.report().c_str(), stdout);
+  vkc::Status finished;
+  if (stream && stream->coded() > 0) {
+    finished = stream->finish();
+    // A coded frame per source set; one frame alone has no bitrate.
+    if (!stream->rows().empty()) {
+      stream->report(opt.source.fps, stream->rows().size() > 1 ? 1 : 0);
+    }
+  }
   VKC_TRY(streamed);
+  VKC_TRY(finished);
   array.reset();
 
   if (!volume) {
@@ -193,6 +238,14 @@ vkc::Status run(const Options& opt) {
       "triangles -> %s\n",
       sets.frames(), secs, fps, final_mesh.vertices.size(),
       final_mesh.triangle_count(), opt.output.path.c_str());
+  if (stream && opt.codec.sweep) {
+    const eval::CompareOptions compare = vr_example::codec_compare_options(
+        opt.fusion.voxel_size_m, opt.fusion.truncation_m);
+    VKC_ASSIGN(const eval::ReferenceMesh reference,
+               eval::ReferenceMesh::create(final_mesh, compare));
+    VKC_TRY(vr_example::run_codec_sweep(device, allocator, *volume, reference,
+                                        *extractor, config, stream->player()));
+  }
   return {};
 }
 

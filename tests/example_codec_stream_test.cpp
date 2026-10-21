@@ -3,8 +3,9 @@
 
 // The codec examples' stream (examples/common/codec_stream.hpp). On the host:
 // a row's type and host and device milliseconds from its calls' stage rows,
-// its CSV line, a frame type's sizes, a GOP's bytes and bitrate, and a
-// frame's pts. On a grid holding a sphere: outputs it cannot make refused on
+// its CSV line, a frame type's sizes, a GOP's bytes and bitrate, a frame's
+// pts, and the comparison options the codec examples share. On a grid
+// holding a sphere: outputs it cannot make refused on
 // create, before any coding, and none written without outputs; a row per
 // decoded frame, under the source's index, whose type, bytes and blocks are
 // the frame's, and each type's stage rows its own frames'; every encoded
@@ -14,8 +15,9 @@
 // encoded but not decoded, or whose CSV row fails, an I-frame where the
 // encoder would code a P-frame; a frame out of order, or any call once
 // finished, refused before anything is encoded; a stream never finished
-// still read whole; and the CSV replaced on create and extended as each frame
-// is coded. The device part skips with no device.
+// still read whole, and one dropped before its first frame removed; and the
+// CSV replaced on create and extended as each frame is coded. The device part
+// skips with no device.
 
 #include <signal.h>
 #include <sys/resource.h>
@@ -41,6 +43,7 @@
 #include "volumetric_kit/recon/stream/stream_reader.hpp"
 
 namespace codec = volumetric_kit::recon::codec;
+namespace eval = volumetric_kit::recon::eval;
 namespace stream = volumetric_kit::recon::stream;
 namespace fs = std::filesystem;
 using namespace codec_fixture;
@@ -143,6 +146,19 @@ int frame_times() {
   CHECK(vr_example::frame_pts_ns(2, 30.0) == 66'666'667);
   CHECK(vr_example::frame_pts_ns(3, 30.0) == 100'000'000);
   CHECK(vr_example::frame_pts_ns(400, 30.0) == 13'333'333'333);
+  return 0;
+}
+
+int compare_options() {
+  // The band's width of reach, 2 cm at least; 1 vertex in 4; F at half a
+  // voxel.
+  const eval::CompareOptions wide =
+      vr_example::codec_compare_options(0.01f, 0.04f);
+  CHECK(wide.reach == 0.04f && wide.stride == 4 &&
+        wide.fscore_threshold == 0.005f);
+  const eval::CompareOptions narrow =
+      vr_example::codec_compare_options(0.002f, 0.008f);
+  CHECK(narrow.reach == 0.02f && narrow.fscore_threshold == 0.001f);
   return 0;
 }
 
@@ -284,11 +300,13 @@ int code_frames(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
   CHECK(started.size() == 1 &&
         started[0] + "\n" == vr_example::kCodecRowsCsvHeader);
   CHECK(fs::is_regular_file(outputs.stream));
+  CHECK(coder.coded() == 0);
 
   CHECK(coder.code(source, 3, pts(3)).ok());
   CHECK(coder.code(source, 7, pts(7)).ok());
   const std::vector<vr_example::CodecRow>& rows = coder.rows();
   CHECK(rows.size() == 2 && rows[0].frame == 3 && rows[1].frame == 7);
+  CHECK(coder.coded() == 2);
   for (const vr_example::CodecRow& row : rows) {
     CHECK(row.bytes > 0 && row.blocks > 0);
     CHECK(row.encode_ms > 0.0 && row.decode_ms > 0.0);
@@ -303,15 +321,15 @@ int code_frames(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
   CHECK(again.message().find("frame 7") != std::string::npos);
   CHECK(coder.code(source, 8, pts(6)).domain() ==
         vkc::Status::Code::InvalidArgument);
-  CHECK(rows.size() == 2);
+  CHECK(rows.size() == 2 && coder.coded() == 2);
 
   // A frame the decoder refuses -- another grid's geometry than the
   // player's -- has a record and no row, and the stream goes on after it.
   CHECK(coder.code(other, 9, pts(9)).domain() ==
         vkc::Status::Code::InvalidArgument);
-  CHECK(rows.size() == 2);
+  CHECK(rows.size() == 2 && coder.coded() == 3);
   CHECK(coder.code(source, 10, pts(10)).ok());
-  CHECK(rows.size() == 3 && rows[2].frame == 10);
+  CHECK(rows.size() == 3 && rows[2].frame == 10 && coder.coded() == 4);
 
   // Each row is in the CSV as soon as its frame decodes.
   const std::vector<std::string> lines = lines_of(outputs.csv);
@@ -392,12 +410,19 @@ int check_records(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
 }
 
 // A stream destroyed without finish leaves a file that reads as a killed
-// writer's: not finished, every record whole.
+// writer's: not finished, every record whole. Destroyed before its first
+// frame, it leaves none, so a rerun onto its path is not refused.
 int unfinished(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
                const vr_test::Scratch& scratch) {
   vr_example::CodecOutputs outputs;
   outputs.stream = (scratch.path / "unfinished.vrst").string();
-  {
+  {  // Dropped before its first frame: the file is taken back.
+    vkc::Result<vr_example::CodecStream> made =
+        vr_example::CodecStream::create(gpu.device, gpu.allocator, {}, outputs);
+    CHECK(made.ok() && fs::exists(outputs.stream));
+  }
+  CHECK(!fs::exists(outputs.stream));
+  {  // Created again at the same path, and dropped with two frames.
     vkc::Result<vr_example::CodecStream> made =
         vr_example::CodecStream::create(gpu.device, gpu.allocator, {}, outputs);
     CHECK(made.ok());
@@ -590,5 +615,6 @@ int main() {
   CHECK(type_sizes() == 0);
   CHECK(gop_rates() == 0);
   CHECK(frame_times() == 0);
+  CHECK(compare_options() == 0);
   return vr_test::run_on_gpu(gpu_main);
 }

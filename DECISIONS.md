@@ -627,6 +627,12 @@ entries relevant to your task; later amendments supersede earlier rules.
   is a sensor or a tag, never both, and a tag puts no sensor at the origin.
   The file stays version 2: an older reader already refuses a tag world as
   `Unsupported`.
+- [**2026-10-20**](#2026-10-20--mesh-sequences-clear-the-grid-per-frame-live-rigs-fuse-dynamic-and-free-stale-blocks-and-fuse_orbbecs-stream-stays-in-the-calibrations-world-uncropped) —
+  Mesh sequences clear the grid per frame (`codec_mesh`); live rigs fuse
+  Dynamic and free stale blocks (`rig_viewer` by default, `fuse_orbbec`
+  with `fusion.dynamic: true`, as its stream template sets), in the world
+  the calibration defines: no upright transform, crop, raw recording or
+  colour yet.
 
 ## Decision record
 
@@ -13910,6 +13916,48 @@ Vulkan, builds and passes. Six planted bugs each failed a test: the
 writer dropping the tag, a world with both kinds accepted, an id of -1
 accepted, an infinite size accepted, the tag read but not kept, and a tag
 world that needs a sensor at the origin. No camera was opened.
+
+### 2026-10-20 — Mesh sequences clear the grid per frame, live rigs fuse Dynamic and free stale blocks, and `fuse_orbbec`'s stream stays in the calibration's world, uncropped.
+
+A rig stream is to show what the Rafa2 stream shows: the reconstructed
+scene, frame by frame, without colour for now. Core 0.13.0 opens the
+`codec` section, `output.stream` and `output.csv` to FuseOrbbec, and core
+0.14.0 `fusion.free_after`.
+
+- **A mesh sequence clears per frame.** `codec_mesh` converts each mesh
+  into a cleared grid, so each frame is that mesh alone, as before.
+- **A live rig fuses Dynamic and frees stale blocks.** Each set fuses into
+  the grid so far. Dynamic integration clears a surface the cameras see
+  past, which takes it out of the stream at the first set that sees past
+  it; every `fusion.free_after` sets (default 30) `free_stale_blocks` then
+  gives back the blocks it left. The pass frees only blocks without an
+  observed voxel, which the codec leaves out anyway, so it changes no
+  frame. Under Classic no voxel loses weight, so a surface the cameras see
+  past keeps its blocks, and every frame codes them, whatever the running
+  average leaves of its mesh. `rig_viewer` fuses Dynamic by default and
+  `codec_orbbec.json` sets `fusion.dynamic`; FuseOrbbec's default stays
+  Classic, so a plain scan's PLY is unchanged.
+- **The calibration's world, uncropped.** The stream holds the geometry
+  where `source.calibration` puts it: no upright transform, and the
+  Geometry track's params stay empty. No such world is upright in the
+  player, which keeps +Y up: a world anchored to a camera is that camera's,
+  +Y down and on its side for a camera mounted on its side, and a tag's
+  world is z-up (the 2026-10-18 entry). Turning a world upright is later
+  work, on the writer's side or the player's. No crop:
+  `fusion.max_depth_m` is the limit there is.
+- **Numbered by the run, timed by the set**, so a set the loop missed is a
+  gap in pts, not in numbers, and a clock stepping back does not end the
+  run.
+- **Deferred**, with the rest in DESIGN's Next work: a crop, raw
+  recording, colour and an upright world.
+
+**Validation.** `recon_example_set_codec` codes nine sets of two fake
+cameras, read through a `SensorArray` and prepared on the GPU, into a
+`.vrst` under the validation layer. A near wall the cameras later see past
+leaves the Dynamic frames at the first set that sees past it and the grid
+at the free passes the clock's ticks give; under Classic its observed
+blocks stay in the grid and in every frame. No camera was opened; `fuse_orbbec`
+has not yet run on the rig.
 
 ## Measured lessons
 

@@ -340,15 +340,16 @@ add_test(NAME recon_example_stage_table COMMAND recon_example_stage_table_test)
 
 # The codec examples' stream (examples/common/codec_stream.hpp): on the host, a
 # row's type and host and device milliseconds, its CSV line, a frame type's
-# sizes, a GOP's bytes and bitrate, and a frame's pts; on a device, outputs it
-# cannot make refused on create, none written without outputs, a row per decoded
-# frame matching the frame and each type's stage rows its own, the .vrst's
-# records (every encoded frame, byte for byte, a frame the decoder refuses
-# included and the stream going on after it, a key exactly when an I-frame, and
-# the same bytes on a rerun), an I-frame after a frame not decoded or whose CSV
-# row fails, a frame out of order or any call once finished refused before
-# anything is encoded, and the CSV replaced on create and written as frames are
-# coded. The device part skips with no device.
+# sizes, a GOP's bytes and bitrate, a frame's pts, and the comparison options
+# the codec examples share; on a device, outputs it cannot make refused on
+# create, none written without outputs, a row per decoded frame matching the
+# frame and each type's stage rows its own, the .vrst's records (every encoded
+# frame, byte for byte, a frame the decoder refuses included and the stream
+# going on after it, a key exactly when an I-frame, and the same bytes on a
+# rerun), an I-frame after a frame not decoded or whose CSV row fails, a frame
+# out of order or any call once finished refused before anything is encoded, and
+# the CSV replaced on create and written as frames are coded. The device part
+# skips with no device.
 add_executable(recon_example_codec_stream_test example_codec_stream_test.cpp)
 target_include_directories(recon_example_codec_stream_test
                            PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
@@ -360,6 +361,30 @@ target_link_libraries(
 vr_target_warnings(recon_example_codec_stream_test)
 add_test(NAME recon_example_codec_stream
          COMMAND recon_example_codec_stream_test)
+
+# fuse_orbbec's coded sets (examples/common/set_codec.hpp), with no camera
+# driver: fake cameras read as a sensor array and prepared on the device, each
+# set fused and coded into a .vrst whose records, keys, sets and pts are the
+# sets', every frame decoded. A wall the cameras later see past: under Dynamic
+# gone from the frames that see past it, and its blocks freed by the
+# fusion.free_after pass due; under Classic its observed blocks kept. On the
+# host, a path that is the stream's or the CSV's file refused. The device part
+# skips with no device.
+add_executable(recon_example_set_codec_test example_set_codec_test.cpp)
+target_include_directories(recon_example_set_codec_test
+                           PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
+target_link_libraries(
+  recon_example_set_codec_test
+  PRIVATE volumetric_kit::core_config
+          volumetric_kit::core_test_policy
+          volumetric_kit::recon_codec
+          volumetric_kit::recon_eval
+          volumetric_kit::recon_sensor_array
+          volumetric_kit::recon_stream
+          volumetric_kit::recon_tsdf
+          Vulkan::Vulkan)
+vr_target_warnings(recon_example_set_codec_test)
+add_test(NAME recon_example_set_codec COMMAND recon_example_set_codec_test)
 
 # codec_mesh's sequence (examples/codec_mesh/mesh_sequence.hpp), where the mesh
 # example is built. On the host: the frame-number pattern, every file checked

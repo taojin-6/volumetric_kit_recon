@@ -95,10 +95,8 @@ fails saying why, and an installed recon is not found. A core older than
 stops at that call as an unknown command: move the first-declared pin to 0.2.0
 or newer.
 
-Examples and their configuration tests require core 0.9.0 or newer with its
-config tier, for `codec.update_size` and the escaping of literal `%`
-characters in a mesh scenario's directory. The tests require core 0.10.0,
-for its two-family test device. The pinned core supplies both.
+Examples and tests require core 0.14.0 or newer with its config tier, for
+`fuse_orbbec`'s `fusion.free_after`; the pinned core supplies it.
 
 ### Asset I/O
 
@@ -163,7 +161,15 @@ host through `PictureReadback`, during either streaming or fusion.
 build/examples/fuse_orbbec/fuse_orbbec --config config/examples/fuse_orbbec.json
 # Stream and decode alone, at 4K MJPEG and 25 fps; 60000 camera frames:
 build/examples/fuse_orbbec/fuse_orbbec --config config/examples/stream_orbbec.json
+# Fused Dynamic, each set coded as one frame of a .vrst:
+build/examples/fuse_orbbec/fuse_orbbec --config config/examples/codec_orbbec.json
 ```
+
+With `output.stream` or `output.csv`, the example codes each fused set as
+one frame, as the [codec examples](#codec-evaluation) do, at the set's time
+(for a rig, on the host's clock); `output.stream` records the frames in a
+`.vrst`. They are geometry only, in the world
+`source.calibration` defines.
 
 Edit `source.serial` for a single camera, or `source.sync_config` for a synced
 rig. A camera wired as a secondary streams only while its primary does; choose
@@ -174,9 +180,10 @@ sync file, the example opens the only camera answering in the discovery window
 The sync file stays in the Orbbec SDK's format (`config/femto_mega_sync.json`),
 and `source.calibration` references the family's calibration file for poses.
 A camera whose sync settings differ is refused; `source.apply_sync: true`
-explicitly writes those settings. The stream operation refuses fusion and
-output settings before opening any resource. Relative paths are resolved from
-the scenario file's directory, including the sync, calibration and output paths.
+explicitly writes those settings. The stream operation refuses fusion, codec
+and output settings before opening any resource. Relative paths are resolved
+from the scenario file's directory, including the sync, calibration and output
+paths.
 
 ### Optional: FFmpeg
 

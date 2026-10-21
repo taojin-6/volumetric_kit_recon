@@ -141,6 +141,34 @@ inline vkc::Status fuse_set(
   return {};
 }
 
+/// @brief `fusion.free_after`'s pass, run after each fused set: every
+///        @p free_after sets, free the blocks of @p grid that neither an
+///        allocation nor an observed voxel has stamped for more than
+///        @p free_after ticks of its clock, one a fused set
+///        (`VoxelBlockGrid::free_stale_blocks`), such as those a surface
+///        left under Dynamic integration. 0 never frees.
+///
+/// Housekeeping: a failed pass is printed to stderr as
+/// "<program>: free blocks: <why>", and the caller fuses on.
+/// @param grid        The volume the sets fuse into.
+/// @param sets        The sets fused so far, this one included.
+/// @param free_after  `fusion.free_after`, nonnegative.
+/// @param program     The name the failure is printed under.
+/// @param metrics     Optional stage rows: the pass's `"block stamps"`.
+inline void free_stale_blocks_every(vr::volume::VoxelBlockGrid& grid,
+                                    std::uint64_t sets, int free_after,
+                                    const char* program,
+                                    vkc::StageMetrics* metrics) {
+  const auto every = static_cast<std::uint32_t>(free_after);
+  if (every == 0 || sets % every != 0) return;
+  const vkc::Result<std::uint32_t> freed =
+      grid.free_stale_blocks(every, metrics);
+  if (!freed) {
+    std::fprintf(stderr, "%s: free blocks: %s\n", program,
+                 freed.status().message().c_str());
+  }
+}
+
 /// @brief Prepare and fuse one frame, retaining it as the next keyframe only
 ///        after both steps succeed.
 ///
