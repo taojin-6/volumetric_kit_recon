@@ -45,10 +45,9 @@
 //
 // Ctrl+C (or a SIGTERM) ends the run. Before the cameras stream, the run
 // returns with nothing recorded: the empty stream is removed and the cameras
-// are released; one during their discovery takes effect once they are open,
-// as the run prints. After, it ends after the set in hand, as run.frames
-// would: the stream is finished and its viewers closed, the cameras are
-// released and the PLY is written. A second one ends the process.
+// are released. After, it ends after the set in hand, as run.frames would:
+// the stream is finished and its viewers closed, the cameras are released
+// and the PLY is written. A second one ends the process.
 
 #include <chrono>
 #include <cstddef>
@@ -187,8 +186,7 @@ vkc::Status run(const Options& opt) {
   }
 
   // --- Stream, until run.frames or Ctrl+C ---
-  // A Ctrl+C during the cameras' discovery, or the setup after it, ends the
-  // run here, before any set.
+  // A Ctrl+C since the check above ends the run here, before any set.
   if (vr_example::interrupted()) {
     std::printf("interrupted before streaming\n");
     return {};
