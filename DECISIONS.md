@@ -649,6 +649,12 @@ entries relevant to your task; later amendments supersede earlier rules.
   newer key, only at a chunk boundary, so no P-frame goes without its
   references; a viewer joins at the cached GOP; `publish` never waits; a
   viewer types the sender's address.
+- [**2026-10-21**](#2026-10-21--meshintegrator-finds-each-voxels-nearest-triangle-with-an-exact-early-exit-a-triangle-is-ruled-out-only-by-a-lower-bound-less-a-rounding-margin-of-its-own-strictly-above-the-voxels-limit) —
+  `MeshIntegrator` finds each voxel's nearest triangle with an exact early
+  exit: a workgroup per block sorts its bin by a lower bound, and a triangle
+  is ruled out only by a bound, less a rounding margin of its own, strictly
+  above the voxel's limit, so every voxel writes what its whole bin writes.
+  Blocks past 16^3 voxels are refused.
 
 ## Decision record
 
@@ -14128,6 +14134,68 @@ the same, though in one of two runs each skipped once to a key in its first
 live, each of its 20 jumps to a key, and reading fast again drained
 0.28 MB of stale records in 21 ms and was live 0.31 s later; five
 reconnects each began at a key.
+
+### 2026-10-21 — `MeshIntegrator` finds each voxel's nearest triangle with an exact early exit: a triangle is ruled out only by a lower bound, less a rounding margin of its own, strictly above the voxel's limit.
+
+A mesh sequence converts each frame with `MeshIntegrator`, whose write
+measured every voxel against every triangle of its block's bin. In the
+16-voxel band the mesh templates move to with the K56 point (#262), Rafa2
+at 5 mm bins 4.65 M (triangle, block) pairs a frame, 3.9 times the 8-voxel
+band's 1.21 M, and the write took 29.57 / 27.17 ms (host / device) a
+frame. Almost none of a bin can be a given voxel's nearest triangle.
+
+- **A workgroup per block.** It sorts the bin into 256 buckets of each
+  triangle's support-plane bound at the block's centre (a counting sort in
+  shared memory) and stages it 64 triangles at a time with each triangle's
+  bounds. Each brick of 32 voxels keeps the staged triangles that a support
+  plane or a ball does not rule out anywhere in its box, and each voxel
+  measures those its own support-plane or cylinder bound does not. A voxel
+  stops at the first chunk whose bucket floor, less its distance from the
+  centre, rules out everything after. Past its first 2,048 entries a bin
+  goes on unsorted, every voxel scanning it to the end.
+- **Exact.** A triangle is ruled out only when a bound, taken less
+  2^-14 (s + band) -- s its largest coordinate or the block centre's, band
+  `trunc_dist` plus the block's half-diagonal -- is positive with its square
+  strictly above the voxel's best d^2 or `trunc_dist`^2. By the count in
+  `mesh_integrate.comp`, that margin is about ten times what the closest
+  point and the bounds can round by, so such a triangle can neither beat nor
+  tie the best, nor be observed. Every triangle measured goes through the
+  same routine on the same floats, and the minimum over (d^2, index) does not
+  depend on the order: the bytes are the brute force's.
+- **Limits.** Shared memory is 16,132 bytes, inside the 16,384 every Vulkan
+  device offers; the shader's preprocessor refuses to compile past it.
+  `kMaxVoxelsPerBlock` (16^3) bounds a workgroup's rounds of 256 voxels at
+  16, refused past it where a dispatch's thread limit used to refuse.
+
+**Measured** (M5 Max, MoltenVK, Release; Rafa2 frames 1–150 at 5 mm, the
+`"mesh integrate"` row's mean a frame over three runs each, interleaved, each
+run on an idle GPU):
+
+| band | origin/main | this |
+| --- | --- | --- |
+| 8 voxels (`codec_mesh_sequence.json`) | 8.55 / 6.89 ms | 3.65 / 2.21 ms |
+| 16 voxels (#262's K56 template) | 29.57 / 27.17 ms | 7.95 / 5.95 ms |
+
+origin/main's three 16-voxel runs gave 25.26 to 28.20 ms on the device (#262
+measured 25.52), this branch's 5.94 to 5.96.
+
+**Validation.** `codec_mesh` on the template writes origin/main's `.vrst`
+byte for byte (4,272,320 B), and every frame's `tsdf` and `weight` hash the
+same as origin/main's in both bands, signed and shell.
+`recon_tsdf_mesh_integrate_exact` compares every voxel's bits with a brute
+force over the same bins, rebuilt by replaying the binning's work items
+through its own GLSL, on 21 fixtures. Planted bugs each fail it: a margin of
+0 (17 fixtures), the tie order reversed (12), the unsorted tail skipped (2),
+and `>=` in place of both of the rule's `>` (the fan at zero distance, whose
+faces all measure 0 at the origin's voxel and whose lowest index signs it
+-0). Two do not, as the argument says: `>=` on the square alone, since the
+margin already keeps ties, and the margin of the centre's alone, which only a
+triangle hundreds of metres long through the blocks near the origin would
+tell apart. At 1/128 of the margin every fixture still passes; at 1/1024 four
+fail.
+
+**Not done**: the conversion's smaller costs around the write, in DESIGN's
+Next work.
 
 ## Measured lessons
 

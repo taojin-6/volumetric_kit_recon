@@ -1017,7 +1017,14 @@ capacity, only compaction/range planning retries after growth; normal calls
 need one planning submission plus one per write. No grid write precedes
 missing-block, overflow, bin-size and binding-range validation
 (2026-10-02). Ties break on the triangle index, so the same mesh writes the same
-bytes. Each call is a tick, and every block it writes is stamped `changed`.
+bytes. One workgroup writes each block, and a voxel measures only the
+triangles no lower bound rules out; a bound, less a rounding margin of the
+triangle's own, rules a triangle out only when it is strictly farther than
+the voxel's best so far, or than `trunc_dist` where that is nearer, so every
+voxel writes what measuring its whole bin writes (2026-10-21;
+`mesh_integrate.comp` has the bounds and the rounding count). Blocks past
+`kMaxVoxelsPerBlock` (16^3 voxels) are refused. Each call is a tick, and
+every block it writes is stamped `changed`.
 
 ### mesh
 
@@ -2092,9 +2099,12 @@ a loop slower than the rig gets the newest set, so sets drop.
 
 **On `tsdf`**, mesh → TSDF has its two modes (2026-09-27), a second way into
 the grid the codec encodes: a mesh sequence converts frame by frame. Both modes
-cost the same, measured on an 81 920-triangle sphere at scan density (M5 Max,
-Release): 12.8 ms to write, 10.8 ms of it on the GPU, after 14.2 ms to
-allocate; 12.6 ms and 10.6 ms resident (the 2026-09-28 residency decision).
+cost the same. On an 81 920-triangle sphere at scan density (M5 Max, Release)
+the band took 14.2 ms to allocate (2026-09-27); the write's cost on Rafa2 is
+in the 2026-10-21 entry. Smaller costs around it remain: writing only the
+blocks the codec will code, chaining the write's submissions, and computing
+`triangle_candidate_offsets` once a frame rather than once to allocate and
+again to write.
 Dynamic's clear is still a hard reset from one ray: clearing on evidence (a
 weight decrement, an incidence term) and behind a pixel with no return are
 the next steps, each judged on the lab rig (`TODO(tsdf)` in

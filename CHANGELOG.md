@@ -8,6 +8,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `tsdf`: **`MeshIntegrator` measures a voxel against only the triangles no
+  lower bound rules out**, a workgroup per block, and writes the same bytes:
+  a triangle is ruled out only when strictly farther than the voxel's best,
+  by bounds less a rounding margin of its own. On Rafa2 the write takes
+  about a quarter of its time in a 16-voxel band and under half in an
+  8-voxel one (the 2026-10-21 decision). A grid whose blocks hold more than
+  `MeshIntegrator::kMaxVoxelsPerBlock` (16^3) voxels is refused.
+  Tests: `recon_tsdf_mesh_integrate`, `recon_tsdf_mesh_integrate_exact`.
 - `examples`: **one home for the codec examples' mesh comparison**,
   `vr_example::codec_compare_options` (`codec_stream.hpp`), which
   `codec_replica` and `codec_mesh` call; their figures are unchanged.

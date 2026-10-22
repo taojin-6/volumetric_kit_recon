@@ -141,6 +141,7 @@ kernels.
 | D2 | Put `--show-sources`' buffers on the device | ~133 MB over PCIe per remesh with the view on | S | — | landed (#130) |
 | D3 | Keep exported picture buffers out of the BAR | robustness on ReBAR systems | S | — | not needed (#130) |
 | MESH1 | Keep mesh-input bins and cursors on-device and retain scratch | RTX 4090 sparse-capacity host 0.920 → 0.125 ms (7.4x); dense host +0.9%, device +3.4%; Apple timing mixed | M | — | landed (#149), measured Release on M5 Max and RTX 4090; mesh input only, outside the live rig |
+| MESH2 | Measure each voxel against only the triangles no lower bound rules out, exactly | Rafa2 at 5 mm, host / device: 16-voxel band 29.57 / 27.17 → 7.95 / 5.95 ms, 8-voxel 8.55 / 6.89 → 3.65 / 2.21 | M | — | `perf/mesh-integrate-early-exit`, measured Release on M5 Max; mesh input only, outside the live rig |
 | L1 | Shared-vertex remesh for the rig | ~3.4× fewer vertices | L | gfx | blocked |
 | L2 | Pipeline sets | overlaps set N's GPU work with set N+1's host work | L | P6 | later |
 | L3 | Read VideoToolbox's plane images directly | 0.28–0.31 ms GPU per 4K frame, Apple only | M | — | later |
