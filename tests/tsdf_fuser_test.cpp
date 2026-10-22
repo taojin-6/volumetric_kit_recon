@@ -4,8 +4,8 @@
 // Complete fusion is the default; live callers explicitly accept partial
 // bands. Growth, grow-ahead, and a bounded failure preserve the expected
 // voxel data and integration tick. A live grid holding a block fuses a set in
-// one submit to the same voxels, stamps and tick, and grows a set late. Skips
-// when no device is available.
+// one submit to the same voxels, stamps and tick, its new blocks included,
+// and grows a set late. Skips when no device is available.
 
 #include <cstddef>
 #include <cstdint>
@@ -84,6 +84,35 @@ bool same_stamps(vol::VoxelBlockGrid& a, vol::VoxelBlockGrid& b) {
     const vol::BlockStamp& y = (*stamps_b)[std::uint32_t(other->second) / vpb];
     if (x.requested != y.requested || x.weighted != y.weighted ||
         x.changed != y.changed) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Whether each block `grid` holds carries the bits `expected` holds there.
+bool held_blocks_match(const vr_test::Gpu& gpu, vol::VoxelBlockGrid& expected,
+                       vol::VoxelBlockGrid& grid) {
+  auto all = vr_test::blocks_of(expected);
+  auto held = vr_test::blocks_of(grid);
+  if (!all.ok() || !held.ok()) return false;
+  std::vector<vr_test::detail::GridBlockPair> pairs;
+  for (const auto& [coord, ptr] : *held) {
+    const auto there = all->find(coord);
+    if (there == all->end()) return false;
+    pairs.push_back({coord, std::size_t(there->second), std::size_t(ptr)});
+  }
+  for (const char* name : {"weight", "tsdf", "color"}) {
+    auto a = vr_test::read_attribute<std::uint32_t>(gpu.device, gpu.allocator,
+                                                    expected, name);
+    auto b = vr_test::read_attribute<std::uint32_t>(gpu.device, gpu.allocator,
+                                                    grid, name);
+    if (!a.ok() || !b.ok() ||
+        !vr_test::detail::compare_voxels(
+            pairs, std::size_t(grid.grid().voxels_per_block),
+            [&](std::size_t ia, std::size_t ib) {
+              return a.value()[ia] == b.value()[ib];
+            })) {
       return false;
     }
   }
@@ -224,6 +253,33 @@ int gpu_main(vr_test::GpuContext& gpu) {
     CHECK(vr_test::same_grids(ctx, *expected, *grid));
     CHECK(same_stamps(*expected, *grid));
     CHECK(grid->map().tick() == expected->map().tick());
+  }
+
+  // There, a set's new blocks are fused in its own submit: once a grid holds
+  // set[0]'s band, each block it holds after the whole set carries the
+  // voxels the tier calls give. A block a lock race left out is not held.
+  {
+    tsdf::FuserConfig config;
+    config.allow_partial = true;
+    auto fuser = make_fuser(dev, alloc, config);
+    auto expected = make_grid(dev, alloc, params(1024));
+    auto grid = make_grid(dev, alloc, params(1024));
+    CHECK(fuser.ok() && expected.ok() && grid.ok());
+    std::vector<tsdf::FrameInput> first{set[0]};
+    std::uint32_t first_blocks = 0;
+    for (const std::vector<tsdf::FrameInput>* frames : {&first, &set}) {
+      const std::vector<vol::DepthInput> band(frames->begin(), frames->end());
+      auto failed = expected->map().allocate_from_depth(band);
+      CHECK(failed.ok() && failed.value() == 0);
+      CHECK(integrator->integrate(*expected, *frames).ok());
+      auto report = fuser->fuse(*grid, *frames);
+      CHECK(report.ok() && report->grows == 0);
+      if (frames == &first) first_blocks = grid->map().allocated_blocks();
+    }
+    std::printf("  one submit allocated %u of the set's blocks after %u\n",
+                grid->map().allocated_blocks() - first_blocks, first_blocks);
+    CHECK(grid->map().allocated_blocks() > first_blocks + 100);
+    CHECK(held_blocks_match(ctx, *expected, *grid));
   }
 
   // There, a capacity limit is grown for the next set, after this one: the set
