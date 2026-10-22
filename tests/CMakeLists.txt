@@ -841,8 +841,10 @@ add_test(NAME recon_codec_dct COMMAND recon_codec_dct_test)
 # codec tier, the decoder-side deblock: detail::Deblock's chains and every rule
 # of its filters against the CPU oracle, workgroups one at a time in either
 # order and in chunks to the same bits, its stamps, recording without a submit,
-# its refusals and the step-keyed rule. Internal headers through the oracle.
-# Skips without a device.
+# its refusals and the step-keyed rule; and the Decoder's switch -- off exact,
+# on the oracle's filter of each frame under the rule, I- and P-frames, toggled
+# between frames, the filter changing in one decoder, rebuilt while paused, its
+# stamps and rows. Internal headers through the oracle. Skips without a device.
 add_executable(recon_codec_deblock_test codec_deblock_test.cpp)
 target_link_libraries(
   recon_codec_deblock_test PRIVATE recon_codec_oracle Vulkan::Vulkan
