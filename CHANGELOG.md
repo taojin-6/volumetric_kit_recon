@@ -8,9 +8,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- CI: **the sanitizer job starts its slowest tests first** again: the COST
-  list holds every test over 25 s there, `recon_codec_inter` first, which
-  had started last. A test under `tests/` that hangs fails after 300 s.
+- CI: **the sanitizer job starts its slowest tests first** again,
+  `recon_codec_inter`, which had started last, first. A test under `tests/`
+  that hangs fails after 300 s.
   The Mac's ThreadSanitizer step runs the tests whose code runs threads,
   the Orbbec decode workers' among them (`recon_tsan_tests`), and no longer
   the single-threaded stream tests. The viewer leg runs the viewers'

@@ -1440,8 +1440,8 @@ _vr_expect_message(
 # Start the slowest tests first under `ctest --parallel`. Without a COST, CTest
 # runs tests in the order they were added, and a fresh CI runner has no timing
 # history, so a slow test added late finished last. Seconds under the sanitizers
-# job, the longest in CI (2026-10-22), for every test over 25; only the order
-# matters.
+# job, the longest in CI, in run 39717939263 (before the 2026-10-22 test trims);
+# only the order matters.
 set_tests_properties(recon_codec_inter PROPERTIES COST 115)
 set_tests_properties(recon_codec_decoder PROPERTIES COST 96)
 set_tests_properties(recon_tsdf_mesh_integrate_exact PROPERTIES COST 56)
@@ -1454,8 +1454,8 @@ set_tests_properties(recon_example_set_codec PROPERTIES COST 29)
 
 # A test skips by exiting with the core's test::kSkipExitCode (gpu_test.hpp). A
 # hang (a fence never signalled, a deadlocked thread) fails in 300 s rather than
-# holding a shared runner to its job's limit: the slowest test, under the
-# sanitizers, takes about 115.
+# holding a shared runner to its job's limit; 300 is well above the largest
+# COST.
 get_property(
   _vr_tests
   DIRECTORY
