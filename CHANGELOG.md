@@ -225,6 +225,35 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `volume`: **a set that overfills the hash table no longer sweeps it once
+  per failing insert**: an insert that must overflow its bucket reports
+  `AllocFailures::heap` at once when fewer than an eighth of the blocks are
+  left, so the first 5 mm frame of a small table stops stalling the GPU for
+  most of a second (the 2026-08-08 decision, amended). Regression:
+  `recon_volume_hash_map`.
+- `volume`: **a dispatch ends at the first round that hits a capacity
+  limit**, so the caller grows that much sooner, where it re-dispatched the
+  whole set until progress stalled. The new `AllocFailures::rounds` says how
+  many rounds a call ran. Regression: `recon_volume_allocate`.
+- `volume`, `tsdf`, `mesh`: **a dispatch past the device's group limit
+  splits** where it was refused, on a device that reports Vulkan's floor of
+  65,535 groups, as many Android and Mesa drivers do:
+  `allocate_from_triangles` past 16.7 M candidate blocks,
+  `TsdfIntegrator::integrate` past 32,767 reached blocks,
+  `MeshIntegrator::integrate` past 16.7 M candidates, and a `MarchingCubes`
+  extract past 65,535 active blocks, such as room0 at 5 mm (the 2026-08-08
+  decision, amended). Regressions: `recon_volume_allocate_triangles`,
+  `recon_tsdf_integrate`, `recon_tsdf_mesh_integrate`,
+  `recon_mesh_marching_cubes_sparse`.
+- `examples`: **`fuse_viewer` and `rig_viewer` time the whole render pass
+  on the GPU**, as the Performance panel's "render pass" row; its
+  "mesh draw" and "overlay draw" rows are CPU-only. On Apple GPUs those two
+  read about 0 ms as GPU scopes inside the pass. Test:
+  `recon_example_viewer_pass`.
+- `examples`: **the viewers' panels show ImGui's colours as authored**: the
+  viewers' gfx pin moves from #135 to #148, past gfx #144. Their default
+  `_SRGB` swapchain encoded the colours a second time, so the panels drew
+  washed out. Test: `recon_example_viewer_pass`.
 - `examples`: **`serve_stream` serves on past a damaged payload**: a record
   whose payload fails its CRC is printed once and skipped, with the P-frames
   after it, up to the pass's next key (`ReplayLoop::send_pass`). It used to
@@ -911,36 +940,6 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- `volume`: **a set that overfills the hash table no longer sweeps it once
-  per failing insert**: an insert that must overflow its bucket reports
-  `AllocFailures::heap` at once when fewer than an eighth of the blocks are
-  left, so the first 5 mm frame of a small table stops stalling the GPU for
-  most of a second (the 2026-08-08 decision, amended). Regression:
-  `recon_volume_hash_map`.
-- `volume`: **a dispatch ends at the first round that hits a capacity
-  limit**, so the caller grows that much sooner, where it re-dispatched the
-  whole set until progress stalled. The new `AllocFailures::rounds` says how
-  many rounds a call ran. Regression:
-  `recon_volume_allocate`.
-- `volume`, `tsdf`, `mesh`: **a dispatch past the device's group limit
-  splits** where it was refused, on a device that reports Vulkan's floor of
-  65,535 groups, as many Android and Mesa drivers do:
-  `allocate_from_triangles` past 16.7 M candidate blocks,
-  `TsdfIntegrator::integrate` past 32,767 reached blocks,
-  `MeshIntegrator::integrate` past 16.7 M candidates, and a `MarchingCubes`
-  extract past 65,535 active blocks, such as room0 at 5 mm (the 2026-08-08
-  decision, amended). Regressions: `recon_volume_allocate_triangles`,
-  `recon_tsdf_integrate`, `recon_tsdf_mesh_integrate`,
-  `recon_mesh_marching_cubes_sparse`.
-- `examples`: **`fuse_viewer` and `rig_viewer` time the whole render pass
-  on the GPU**, as the Performance panel's "render pass" row; its
-  "mesh draw" and "overlay draw" rows are CPU-only. On Apple GPUs those two
-  read about 0 ms as GPU scopes inside the pass. Test:
-  `recon_example_viewer_pass`.
-- `examples`: **the viewers' panels show ImGui's colours as authored**: the
-  viewers' gfx pin moves from #135 to #148, past gfx #144. Their default
-  `_SRGB` swapchain encoded the colours a second time, so the panels drew
-  washed out. Test: `recon_example_viewer_pass`.
 - `mesh`: **`MeshExchange::begin_frame` hands an empty mesh to `commit`
   with its payload**, where it committed one at once and dropped the
   payload, so a consumer showing what the payload names (a player's frame)

@@ -1942,10 +1942,10 @@ near-full state, was wrong. A dispatch that overfills the table leaves only
 anchors free, so the heap never empties, and every failing insert swept the
 whole table holding its home bucket's lock: Replica room0's first frame at
 5 mm in 4 096 buckets spent 0.70–0.90 s of allocate device time on an M5 Max
-(Release, three runs). On the heap path an overflow
-insert now reports `heap` without scanning once fewer than an eighth of the
-blocks are left, the anchors' share at the default bucket size; `table`
-remains a clean sweep's proof, on the rehash path and at smaller buckets.
+(Release, three runs). On the heap path an overflow insert now reports
+`heap` without scanning once fewer than an eighth of the blocks are left, the
+anchors' share at the default bucket size; `table` remains a clean sweep's
+proof, on the rehash path and at smaller buckets.
 The retry loop also ends at the first round with a capacity limit, where it
 re-dispatched until two rounds made no progress, each repeating the failed
 inserts and the lock races of the threads queued behind them;
