@@ -14559,22 +14559,24 @@ T and the row the study's on every frame.
 **Time,** Release, on the M5 Max and on the RTX 5090 above (with an Intel
 Core Ultra 9 285K; clocks not locked), each unit run only once the GPU had
 been idle for 3 s with no other test, player or scratch GPU binary running
-(nor, on the RTX 5090's host, a CI job) and other processes under 400% CPU,
-and re-run if that changed (the run's own processes alone exempt). The
-chain's device interval, barriers included, back to back: 20 chains
-recorded into one batch over each frame's blocks, against 20 over one block
-(the same dispatches and host encoding), the wall difference over 20;
-frames 1–150, ms, mean / p95 on the M5 Max. On the RTX 5090 a frame's
-interval is within the method's noise (11 of its 15 cells hold a negative
-one), so the mean alone.
+(nor, on the RTX 5090's host, a CI job or another compute app) and other
+processes under 400% CPU, and re-run if such a binary, job or app, or that
+CPU load, appeared while it ran. The run's own processes are exempt
+throughout, and on the M5 Max the CPU bound also skips desktop apps such as
+WindowServer and the browser. The chain's device interval, barriers
+included, back to back: 20 chains recorded into one batch over each frame's
+blocks, against 20 over one block (the same dispatches and host encoding),
+the wall difference over 20; frames 1–150, ms, mean / p95 on the M5 Max. On
+the RTX 5090 a frame's interval is within the method's noise (11 of its 15
+cells hold a negative one), so the mean alone.
 
 | Stream (blocks a frame) | M5 Max: LF | LG | R | RTX 5090: LF | LG | R |
 |---|---|---|---|---|---|---|
-| stock (3,426) | 0.043 / 0.055 | 0.107 / 0.120 | 0.110 / 0.123 | 0.009 | 0.029 | 0.037 |
+| stock (3,426) | 0.043 / 0.055 | 0.107 / 0.120 | 0.109 / 0.123 | 0.009 | 0.029 | 0.037 |
 | stk682a (1,925) | 0.021 / 0.030 | 0.053 / 0.074 | 0.050 / 0.075 | 0.005 | 0.013 | 0.013 |
-| stk2 (1,925) | 0.020 / 0.029 | 0.053 / 0.077 | 0.052 / 0.077 | 0.005 | 0.014 | 0.013 |
+| stk2 (1,925) | 0.020 / 0.029 | 0.053 / 0.077 | 0.052 / 0.077 | 0.005 | 0.014 | 0.014 |
 | stk1 (1,925) | 0.020 / 0.029 | 0.053 / 0.076 | 0.051 / 0.072 | 0.005 | 0.010 | 0.015 |
-| K56 template (1,924) | 0.021 / 0.029 | 0.052 / 0.076 | 0.052 / 0.077 | 0.009 | 0.013 | 0.013 |
+| K56 template (1,924) | 0.021 / 0.029 | 0.052 / 0.076 | 0.052 / 0.076 | 0.009 | 0.013 | 0.013 |
 
 The prototype's, back to back on the same streams on the M5 Max, one
 timestamp span around its whole chain (which this repeat method matched
@@ -14588,33 +14590,37 @@ one host interval, with the deblock off and on, each with and without
 `StageMetrics`; every mode on a fresh decoder and grid after an unrecorded
 warm-up, the modes' order rotated by round. On − off is paired by frame and
 round, mean ± a 95% interval, in ms; "device" is the `"codec decode"`
-row's device half, and the wall is without metrics unless marked. The M5
-Max pools two rounds a stream (stk2 one), the RTX 5090 three. stk682a is
-the control: its rule picks no filter, so on and off do the same work.
+row's device half, and the wall is without metrics unless marked. Both
+machines pool rounds 0 and 1 (stk2 on the M5 Max round 1 alone); in each,
+off with metrics runs just before on with metrics. The RTX 5090's round 2,
+which ran off with metrics first, read that mode's device row 0.03–0.09 ms
+above rounds 0 and 1 on every stream and is left out. stk682a is the
+control: its rule picks no filter, so on and off do the same work.
 
 | Stream (filter) | M5 Max: device | wall | wall, metrics on | RTX 5090: device | wall | wall, metrics on |
 |---|---|---|---|---|---|---|
-| stock (LG) | +0.12 ± 0.27 | +0.60 ± 0.27 | +0.47 ± 0.29 | +0.044 ± 0.007 | +0.085 ± 0.048 | −0.168 ± 0.044 |
-| stk682a (none) | +0.24 ± 0.31 | +0.17 ± 0.32 | +0.55 ± 0.33 | −0.030 ± 0.012 | −0.011 ± 0.046 | +0.028 ± 0.044 |
-| stk2 (LF) | +0.12 ± 0.02 | +1.25 ± 0.19 | +0.40 ± 0.15 | +0.002 ± 0.006 | −0.023 ± 0.042 | −0.043 ± 0.043 |
-| stk1 (LG) | +0.29 ± 0.03 | +0.54 ± 0.11 | +0.13 ± 0.12 | +0.020 ± 0.006 | −0.170 ± 0.041 | −0.203 ± 0.040 |
-| K56 template (LF) | +0.16 ± 0.05 | +0.13 ± 0.10 | +0.18 ± 0.12 | −0.001 ± 0.006 | −0.007 ± 0.043 | −0.010 ± 0.056 |
+| stock (LG) | +0.12 ± 0.27 | +0.60 ± 0.27 | +0.47 ± 0.29 | +0.054 ± 0.001 | +0.007 ± 0.054 | −0.089 ± 0.054 |
+| stk682a (none) | +0.24 ± 0.30 | +0.17 ± 0.32 | +0.55 ± 0.33 | +0.000 ± 0.001 | −0.093 ± 0.056 | +0.048 ± 0.054 |
+| stk2 (LF) | +0.12 ± 0.02 | +1.25 ± 0.19 | +0.40 ± 0.15 | +0.017 ± 0.001 | +0.070 ± 0.055 | +0.021 ± 0.053 |
+| stk1 (LG) | +0.29 ± 0.03 | +0.54 ± 0.11 | +0.13 ± 0.12 | +0.034 ± 0.001 | −0.070 ± 0.051 | −0.206 ± 0.049 |
+| K56 template (LF) | +0.16 ± 0.05 | +0.13 ± 0.10 | +0.18 ± 0.12 | +0.015 ± 0.000 | +0.108 ± 0.051 | −0.045 ± 0.078 |
 
 With the deblock off, the device row averages 3.2–5.4 ms a frame on the M5
-Max and 0.8–1.9 ms on the RTX 5090, the wall 5.3–8.4 and 2.2–3.4 ms. The
+Max and 0.8–1.8 ms on the RTX 5090, the wall 5.3–8.4 and 2.3–3.4 ms. The
 wall resolves no deblock on either machine: the control moves it by up to
-0.55 ms on the M5 Max, and three RTX 5090 walls fall significantly, so the
-modes' order and the GPU's power state move it more than the filter does.
-On the M5 Max the device row resolves LF at 0.12–0.16 ms and LG at 0.29 ms
-on the 1,925-block streams, five to eight times the back-to-back interval;
-on stock and the control its noise is ±0.3 ms. On the RTX 5090 it
-reads +0.044 (stock, LG), +0.020 (stk1, LG), and +0.002 and −0.001 (LF),
-against the control's −0.030; its GPU sat in P0 for a third of the 1 Hz
-samples during these units, and mostly in P5 or P8 otherwise. There the
-rule's chain (LG for stk682a), recorded on its own after each paced exact
-decode, sums over its dispatches' timestamp spans to 0.015–0.016 ms for
-LF, 0.034 ms for LG at 1,925 blocks and 0.054 ms at 3,426 (mean over 150
-frames, the GPU mostly in P5; the M5 Max admitted none of these units).
+0.55 ms on the M5 Max and by −0.09 ms on the RTX 5090, whose walls move
+−0.21 to +0.11 ms, of either sign, so the modes' order and the GPU's power
+state move it more than the filter does. On the M5 Max the device row
+resolves LF at 0.12–0.16 ms and LG at 0.29 ms on the 1,925-block streams,
+five to eight times the back-to-back interval; on stock and the control its
+noise is ±0.3 ms. On the RTX 5090 it resolves every filter: +0.054 (stock,
+LG), +0.034 (stk1, LG), +0.017 and +0.015 (LF), each within 0.002 ms of the
+chain's span sum below, and the control +0.000; its GPU sat in P0 for a
+third of the 1 Hz samples during these units, and mostly in P5 or P8
+otherwise. There the rule's chain (LG for stk682a), recorded on its own
+after each paced exact decode, sums over its dispatches' timestamp spans to
+0.015–0.016 ms for LF, 0.034 ms for LG at 1,925 blocks and 0.054 ms at
+3,426 (mean over 150 frames, the GPU mostly in P5; not run on the M5 Max).
 
 ### 2026-10-22 — recon is fetched by commit, never installed: no install rules, package config or package tests (amends the 2026-10-16 GLSL pinhole entry and the 2026-10-17 amendment of the 2026-10-13 block-list entry).
 
