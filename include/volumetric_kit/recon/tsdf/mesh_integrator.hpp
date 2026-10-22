@@ -87,8 +87,9 @@ struct MeshIntegrateStats {
   std::uint32_t triangles = 0;
   /// Blocks written: every block the mesh's truncation band reaches.
   std::uint32_t blocks = 0;
-  /// Triangle-in-block incidences, which is what the kernel's cost scales
-  /// with: each voxel measures every triangle binned into its block.
+  /// Triangle-in-block incidences: what the binning passes scale with, and
+  /// the write's worst case -- a voxel measures at most every triangle binned
+  /// into its block, and in practice the few no lower bound rules out.
   std::uint32_t bin_entries = 0;
   /// The dispatches the write was split into, each submitted on its own, so
   /// that no submission measures more than
@@ -119,21 +120,27 @@ struct MeshIntegrateStats {
 /// Two dispatches bin every triangle into each block its band reaches (a
 /// count, then a fill), each over one work item per (triangle, candidate block)
 /// pair, so a large triangle costs more items and never a longer one. Then one
-/// thread per voxel measures its block's bin, in as many submissions as it
-/// takes to keep each under @ref kMaxDispatchBinEntries bin entries. The
-/// minimum over a bin is taken with the triangle index as tie-break, so the
-/// result does not depend on the order the atomics filled the bin in -- the
-/// same mesh writes the same bytes.
+/// workgroup per block writes its voxels, in as many submissions as it takes to
+/// keep each under @ref kMaxDispatchBinEntries bin entries: it sorts the bin
+/// nearest its centre first, and each voxel measures only the triangles no
+/// lower bound rules out, stopping once every later one is (mesh_integrate.comp
+/// has the bounds, and why their rounding cannot matter). The minimum is taken
+/// with the triangle index as tie-break, and a triangle is ruled out only when
+/// it is strictly farther than the voxel's best so far, or than `trunc_dist`
+/// where that is nearer, so the result does not depend on the order the
+/// atomics filled the bin in, nor on which triangles were ruled out -- every
+/// voxel writes what measuring its whole bin writes, and the same mesh writes
+/// the same bytes.
 /// Counts, prefix sums, fill cursors and occupied bins stay on the device.
 /// Only validation totals and bounded dispatch ranges are read back. Scratch
 /// grows as needed and is retained until this integrator is destroyed: about
 /// 16 bytes per grid block slot, plus the largest mesh's inputs and bins.
 /// Each call refreshes the mesh and bins.
 ///
-/// A voxel's cost is its bin, which a mesh near the grid's resolution keeps in
-/// the hundreds. A mesh far finer than the voxels is where it grows, so a bin
-/// past @ref kMaxBinTriangles is refused rather than measured: decimate the
-/// mesh toward the voxel size first.
+/// A voxel's cost is at most its bin, which a mesh near the grid's resolution
+/// keeps in the hundreds. A mesh far finer than the voxels is where it grows,
+/// so a bin past @ref kMaxBinTriangles is refused rather than measured:
+/// decimate the mesh toward the voxel size first.
 ///
 /// @warning The `Device` and `Allocator` passed to @ref create must
 ///          outlive this object; it stores references to them. The grid must be
@@ -144,14 +151,18 @@ struct MeshIntegrateStats {
 ///       fuse stamps one.
 class VR_TSDF_API MeshIntegrator {
  public:
-  /// The most triangles one block's bin may hold. Each voxel of the block
-  /// measures all of them in one thread, so this bounds how long a thread
-  /// runs. About 230 times the average bin of the 2026-09-27 entry's sphere,
-  /// whose triangles are 1.6 voxels on a side; a bin reaches it with
+  /// The most triangles one block's bin may hold. A voxel of the block may
+  /// measure all of them, so this and @ref kMaxVoxelsPerBlock bound how long a
+  /// workgroup runs. About 230 times the average bin of the 2026-09-27 entry's
+  /// sphere, whose triangles are 1.6 voxels on a side; a bin reaches it with
   /// triangles near a tenth of a voxel across, detail the grid cannot hold.
   static constexpr std::uint32_t kMaxBinTriangles = 1u << 16;
-  /// The most bin entries one integrate dispatch measures: each is one
-  /// closest-point test per voxel of its block. A write with more is split
+  /// The most voxels a block may hold (`VoxelGridParams::voxels_per_block`),
+  /// 16^3. One workgroup writes a block, 256 voxels at a time, each 256
+  /// scanning the bin again, so this bounds a workgroup's rounds at 16.
+  static constexpr std::uint32_t kMaxVoxelsPerBlock = 1u << 12;
+  /// The most bin entries one integrate dispatch measures: each is at most
+  /// one closest-point test per voxel of its block. A write with more is split
   /// across dispatches, so no one submission grows with the mesh -- the shape
   /// the 2026-08-08 entry records hanging an M5 iPad.
   static constexpr std::uint32_t kMaxDispatchBinEntries = 1u << 20;
@@ -191,7 +202,8 @@ class VR_TSDF_API MeshIntegrator {
   ///                        both halves.
   /// @return What was written, or a non-OK `Status`:
   ///         `Status::Code::InvalidArgument` for a moved-from integrator; a
-  ///         grid without float `tsdf` / `weight`; @p params that
+  ///         grid without float `tsdf` / `weight`, or whose
+  ///         `voxels_per_block` is past @ref kMaxVoxelsPerBlock; @p params that
   ///         @ref MeshSdfParams::validate refuses; a null @p vertices /
   ///         @p indices with triangles to read, an index at or past
   ///         @p vertex_count, or a mesh too large for the grid (see

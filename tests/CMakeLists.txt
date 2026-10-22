@@ -194,6 +194,25 @@ target_link_libraries(
           volumetric_kit::core_test_policy)
 vr_target_warnings(recon_tsdf_mesh_integrate_test)
 add_test(NAME recon_tsdf_mesh_integrate COMMAND recon_tsdf_mesh_integrate_test)
+
+# tsdf mesh integrate, exactly: the kernel's early exit writes, bit for bit,
+# what a brute force (shaders/mesh_integrate_reference.comp) writes measuring
+# every triangle of each voxel's bin -- on shared vertices with opposite
+# windings, duplicates, near-coincident sheets, slivers, metre-long triangles, a
+# far sphere, bins past the kernel's sort, three block sizes, both modes. Skips
+# with no device.
+add_executable(recon_tsdf_mesh_integrate_exact_test
+               tsdf_mesh_integrate_exact_test.cpp)
+target_link_libraries(
+  recon_tsdf_mesh_integrate_exact_test
+  PRIVATE volumetric_kit::recon_tsdf Vulkan::Vulkan
+          volumetric_kit::core_test_policy)
+vr_embed_shaders(
+  recon_tsdf_mesh_integrate_exact_test SHADERS
+  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/mesh_integrate_reference.comp")
+vr_target_warnings(recon_tsdf_mesh_integrate_exact_test)
+add_test(NAME recon_tsdf_mesh_integrate_exact
+         COMMAND recon_tsdf_mesh_integrate_exact_test)
 # GPU pre-processing (recon_sensor_utils) on synthetic frames: undistortion in
 # the right direction, the colour matrix, a host reference of the sampling, the
 # refusals, the outputs' sharing, read on another queue family, and fusing the

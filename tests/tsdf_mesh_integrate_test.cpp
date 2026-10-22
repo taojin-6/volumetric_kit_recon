@@ -713,6 +713,24 @@ int gpu_main(vr_test::GpuContext& gpu) {
                           tet.i.data(), tet.triangle_count(), kSigned)
                .ok());
   }
+  // Blocks past kMaxVoxelsPerBlock: 32^3 voxels.
+  {
+    vol::VoxelGridParams big = gp;
+    big.block_size = 32;
+    big.voxels_per_block = 32 * 32 * 32;
+    big.num_buckets = 8;
+    big.num_blocks = 64;
+    vkc::Result<vol::VoxelBlockGrid> big_grid =
+        vol::VoxelBlockGrid::create(gpu.device, gpu.allocator, big, attrs, 2);
+    CHECK(big_grid.ok());
+    const std::vector<float> before = snapshot(gpu, big_grid.value());
+    vkc::Result<ts::MeshIntegrateStats> r =
+        integ.integrate(big_grid.value(), tet.v.data(), tet.vertex_count(),
+                        tet.i.data(), tet.triangle_count(), kSigned);
+    CHECK(!r.ok() &&
+          r.status().message().find("kMaxVoxelsPerBlock") != std::string::npos);
+    CHECK(snapshot(gpu, big_grid.value()) == before);
+  }
 
   // A capacity past 256^2 with a partial final group exercises a second
   // prefix level. A coarse sheet reaches >4096 blocks, growing the compact
