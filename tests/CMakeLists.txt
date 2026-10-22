@@ -365,6 +365,17 @@ target_include_directories(recon_example_interrupt_test
 vr_target_warnings(recon_example_interrupt_test)
 add_test(NAME recon_example_interrupt COMMAND recon_example_interrupt_test)
 
+# The senders' log (examples/common/info_log.hpp): Info, Warning and Error in
+# the default sink's line form, Debug dropped, and concurrent lines whole. Host
+# only.
+add_executable(recon_example_info_log_test example_info_log_test.cpp)
+target_include_directories(recon_example_info_log_test
+                           PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
+target_link_libraries(recon_example_info_log_test
+                      PRIVATE volumetric_kit::core_base Threads::Threads)
+vr_target_warnings(recon_example_info_log_test)
+add_test(NAME recon_example_info_log COMMAND recon_example_info_log_test)
+
 # The examples' one stage table (examples/common/stage_table.hpp). Host only.
 add_executable(recon_example_stage_table_test example_stage_table_test.cpp)
 target_include_directories(recon_example_stage_table_test
