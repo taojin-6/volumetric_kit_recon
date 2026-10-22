@@ -61,6 +61,19 @@ if(VR_BUILD_TESTS)
       ${CMAKE_COMMAND} -DPROGRAM=$<TARGET_FILE:serve_stream>
       -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/serve-stream-args -P
       ${PROJECT_SOURCE_DIR}/tests/example_serve_stream_args.cmake)
+  # fuse_replica on a device: two frames of a wall, each meshed on the device,
+  # then the PLY.
+  add_test(
+    NAME recon_fuse_replica_run
+    COMMAND
+      ${CMAKE_COMMAND} -DPROGRAM=$<TARGET_FILE:fuse_replica>
+      -DCOLOR=${PROJECT_SOURCE_DIR}/tests/data/jpeg/patches_256x144.jpg
+      -DDEPTH=${PROJECT_SOURCE_DIR}/tests/data/replica/depth_1m_256x144.png
+      -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/fuse-replica-run -P
+      ${PROJECT_SOURCE_DIR}/tests/example_fuse_replica_run.cmake)
+  set_tests_properties(
+    recon_fuse_replica_run PROPERTIES SKIP_REGULAR_EXPRESSION
+                                      "skipping: no Vulkan device")
   # codec_mesh's order on a device: an existing stream refused before any frame
   # is converted or written, then a two-frame run.
   if(TARGET codec_mesh)

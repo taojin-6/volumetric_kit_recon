@@ -7,10 +7,10 @@
 // (sensor::GpuFramePrep) as a camera's, fuses it into a sparse TSDF volume
 // (tsdf::Fuser: grow the map ahead of need, allocate the truncation band,
 // then integrate depth + colour),
-// periodically extracts a marching-cubes mesh, and writes the final coloured
-// mesh to a binary PLY for inspection. This is the headless spine; the
-// live-viewer variant renders the growing mesh each frame through the
-// volumetric_kit_gfx sibling.
+// periodically extracts a marching-cubes mesh on the device, and writes the
+// final coloured mesh to a binary PLY for inspection. This is the headless
+// spine; the live-viewer variant renders the growing mesh each frame through
+// the volumetric_kit_gfx sibling.
 //
 //   fuse_replica --config config/examples/fuse_replica.json
 //   fuse_replica --help
@@ -141,32 +141,24 @@ vkc::Status run(const Options& opt) {
     }
     if (opt.fusion.mesh_every > 0 &&
         fused % static_cast<std::size_t>(opt.fusion.mesh_every) == 0) {
+      // On the device, as a live consumer meshes: nothing is read back in the
+      // timed loop, and the host extract below is the PLY's alone. The
+      // DeviceMesh borrows the extractor's buffers and is dropped here -- at
+      // the default slot_count of 1 the next extract invalidates it, which is
+      // exactly what a benchmark wants and what a real consumer must not do.
       mesh::ExtractTimings rt{};
-      std::size_t tris = 0;
-      if (opt.fusion.device_extract) {
-        // The DeviceMesh borrows the extractor's buffers and is dropped here --
-        // at the default slot_count of 1 the next extract invalidates it, which
-        // is exactly what a benchmark wants and what a real consumer must not
-        // do.
-        VKC_ASSIGN(mesh::DeviceMesh dm,
-                   extractor.extract_device(volume, 0.0f, &rt));
-        tris = dm.triangle_count;
-      } else {
-        VKC_ASSIGN(mesh::Mesh preview,
-                   extractor.extract_host(volume, 0.0f, &rt));
-        tris = preview.triangle_count();
-      }
+      VKC_ASSIGN(const mesh::DeviceMesh dm,
+                 extractor.extract_device(volume, 0.0f, &rt));
       remeshes.add(rt);
       if (fused % 100 == 0) {
-        std::printf("  fused %zu frames, %zu triangles so far\n", fused, tris);
+        std::printf("  fused %zu frames, %u triangles so far\n", fused,
+                    dm.triangle_count);
       }
     }
   }
 
   const std::int32_t voxels_per_block = volume.grid().voxels_per_block;
-  remeshes.print(
-      opt.fusion.device_extract ? "extract_device" : "extract + download",
-      voxels_per_block);
+  remeshes.print("extract_device", voxels_per_block);
   // Per stage, host against device, averaged over the fused frames. A stage
   // whose device share is small is not a slow kernel and will not be fixed by
   // a faster one. The instrument is not free at this scale: one timed submit
