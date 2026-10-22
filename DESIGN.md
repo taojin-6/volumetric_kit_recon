@@ -1970,10 +1970,10 @@ failure after the encode, of the append, the decode or the CSV, calls
 `force_intra()`, so the next frame never references one the stream or the
 player lacks. `finish` writes the footer. With `serve`, a
 `networking::StreamServer` on the same session serves each record once it
-is appended, so no viewer gets a frame the file lacks; a record it refuses
-is logged at Warning and fails no frame, as failing would stop the
-recording. It starts before the file is made, so a port in use leaves none,
-and `finish` closes the viewers.
+is in the file, if there is one, so no viewer gets a frame the file lacks; a
+record it refuses is logged at Warning and fails no frame, as failing would
+stop the recording. It starts before the file is made, so a port in use
+leaves none, and `finish` closes the viewers.
 
 Before truncating the CSV, creation checks that it does not alias the new
 stream file, including through symlinks or case-insensitive names. An alias

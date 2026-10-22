@@ -167,13 +167,12 @@ build/examples/fuse_orbbec/fuse_orbbec --config config/examples/codec_orbbec.jso
 build/examples/fuse_orbbec/fuse_orbbec --config config/examples/serve_orbbec.json
 ```
 
-With `output.stream`, `output.csv` or `output.serve`, the example codes each
-fused set as one frame, as the [codec examples](#codec-evaluation) do, at the
-set's time (for a rig, on the host's clock); `output.stream` records the
-frames in a `.vrst`, and `output.serve` serves them
-([Live streaming](#live-streaming)). They are geometry only, in the world
-`source.calibration` defines. Ctrl+C ends a run cleanly
-([Examples](DESIGN.md#examples)).
+With `output.stream`, `output.csv` or `output.serve`
+([Live streaming](#live-streaming)), the example codes each fused set as one
+frame, as the [codec examples](#codec-evaluation) do, at the set's time (for
+a rig, on the host's clock); `output.stream` records the frames in a `.vrst`.
+They are geometry only, in the world `source.calibration` defines. Ctrl+C
+ends a run cleanly ([Examples](DESIGN.md#examples)).
 
 Edit `source.serial` for a single camera, or `source.sync_config` for a synced
 rig. A camera wired as a secondary streams only while its primary does; choose
