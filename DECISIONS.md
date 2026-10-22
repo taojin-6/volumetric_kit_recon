@@ -421,7 +421,7 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-06**](#2026-10-06--fusion-runs-over-the-blocks-the-scanning-cameras-reach-one-frustum-a-frame-no-near-cut-far-at-max_depth--trunc_dist-their-union-compacted-in-one-scan-amends-the-2026-08-12-view-meshing-and-the-2026-09-30-one-batch-and-device-list-entries) —
   Fusion runs over the blocks the scanning cameras reach: one frustum a
   frame, no near cut, far at `max_depth + trunc_dist`, their union compacted
-  in one scan.
+  in one scan. *Amended 2026-10-22:* in the fuse's own submit.
 - [**2026-10-06**](#2026-10-06--marching-cubes-meshes-what-the-viewing-camera-sees-an-extract-over-the-device-frusta-list-the-viewers-re-meshing-on-a-fuse-or-a-view-change-and-a-culled-pass-records-its-density-amends-the-2026-08-12-view-meshing-entry-and-the-2026-10-06-incremental-removal-and-fusion-culling-entries) —
   Marching cubes meshes what the viewing camera sees: an extract over the
   device frusta list, the viewers re-meshing on a fuse or a view change, and
@@ -460,6 +460,8 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-10**](#2026-10-10--fusion-is-library-code-with-strict-defaults-and-opt-in-partial-coverage) —
   `tsdf::Fuser` owns grow/allocate/integrate with strict defaults and opt-in
   partial coverage; `volume::grow_grid` shares stateless growth arithmetic.
+  *Amended 2026-10-22:* a partial set on a grid holding a block is one
+  submit, and its capacity grow lands a set late.
 - [**2026-10-10**](#2026-10-10--only-the-owner-triggers-ci-and-the-runner-tooling-is-the-cores) —
   Only the owner triggers CI, by the repository's Actions policy; no job
   carries a fork guard. The runner tooling is the core's.
@@ -550,7 +552,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   host only I/O and control; and the host `BlockList` it left without a
   caller goes, with the host-array `allocate` and `remove`. *Amended
   2026-10-14:* the encoder's split is its diff's own search, not a
-  `BlockLists` pass.
+  `BlockLists` pass. *Amended 2026-10-22:* the grid's zeroing rides the
+  map's remove's first round, a fence fewer.
 - [**2026-10-13**](#2026-10-13--block-lists-reach-the-volume-tier-on-the-device-alone-a-host-list-entry-point-that-only-tests-called-goes-amends-the-2026-08-08-sparse-mesh-and-overflow-scan-2026-08-12-view-meshing-2026-09-26-codec-2026-09-28-device-memory-2026-10-03-garbage-collection-2026-10-06-public-api-and-view-culling-and-2026-10-13-coordinate-entries) —
   Block lists reach the volume tier on the device alone; a host-list entry
   point that only tests called goes: the host `BlockList`, the host-array
@@ -5935,10 +5938,12 @@ better of each, measured rather than argued:
   change survives: trusting the face down to any nonzero area passes every
   case too. The 1e-4 guard is kept as a margin, not a measured need.
 
-**Open**, a `TODO(eval)` in the code (the ground-truth test's copy of the
-metric went with the test, which #81 dropped before landing):
-- A threaded `compare_meshes`: room0 at 1 cm takes ~2 s at stride 4 on one
-  core.
+**Threaded** (2026-10-22): `compare` measures each direction on every core,
+a slice of the points per thread, each writing only its own entries, so the
+figures are one thread's to the bit. Room0 fused at 2 cm with each triangle
+split in four (1.3 M triangles) against a copy moved up to 1 mm, stride 4,
+both ways, on the shared M5 Max in Release: 1.6 to 1.9 s on one core, 0.25
+to 0.32 s threaded, every figure identical.
 
 ### 2026-09-27 — A mesh becomes a TSDF two ways, in the `tsdf` tier: signed by the closest triangle's normal, for a closed mesh, or as an unsigned shell, for any mesh — binned per block over the allocation's own candidates, with no topology.
 
@@ -10949,6 +10954,12 @@ sparse kernels' dispatch time (each lost one barrier per workgroup).
 carries a serial of its own, so a later frustum compaction makes an earlier
 list stale.
 
+*Amended 2026-10-22 (PERF.md P6):* the fuse records the same compaction into
+its own submit (`VoxelHashMap::record_compaction`) and sizes its dispatch
+from the device's count, refusing none. The map's host copy of the heap
+counter, not a second compaction, tells an empty grid from one the frames do
+not reach.
+
 **The rule.** `TsdfIntegrator::integrate` builds one frustum for each frame
 it fuses -- the depth camera's intrinsics and pose, **no near cut** (near 0),
 far at `max_depth + trunc_dist`, sides widened as `make_frustum_planes`
@@ -11590,6 +11601,14 @@ facing test without its zero-normal exemption; and the single-camera pass
 without the depth-range check (both bounds zero, and inverted).
 
 ### 2026-10-10 — Fusion is library code, with strict defaults and opt-in partial coverage.
+
+*Amended 2026-10-22 (PERF.md P6, its first step):* once its grid holds a
+block, a partial set is one submit (`TsdfIntegrator::allocate_and_integrate`):
+one allocation round, then the compaction and the fuse in its batch. That
+round's lock races wait for the next set, and a grow for a capacity limit is
+made after it, so what the set could not allocate lands with the next. An
+empty grid's first set keeps the rounds: whether the call ticks depends on
+whether the grid gains a block. Strict fusion is unchanged.
 
 `tsdf::Fuser` owns the per-set sequence formerly in
 `examples/common/fuse_frame.hpp`: grow ahead past `kGrowThreshold`, allocate
@@ -12697,6 +12716,13 @@ failed allocation, the segment limit off by one or doubled, and the reader's
 verdict ignored. Not run: the RTX 5090.
 
 ### 2026-10-13 — The codec's coordinate work runs on the device: the encoder sorts its blocks with a stable rank-merge sort on `coord_less`, and the decoder judges, merges and diffs them by count and binary search, never sorting; only counts and verdicts cross the bus (amends the 2026-10-13 decoder, 2026-10-12 P-frame, 2026-10-03 observed-list and garbage-collection, and 2026-10-01 codec-review entries).
+
+*Amended 2026-10-22 (the remove's first round):* `VoxelHashMap::remove`
+takes the public first-round hook **What crosses, and the fences** names,
+`first_round`, and `VoxelBlockGrid::remove` records its zeroing there,
+ahead of the delete in the same submit. A decode that drops blocks, and a
+garbage collection that frees any, waits on one fence fewer: 4 for a
+decode with adds and drops.
 
 *Amended 2026-10-14 (the `Encoder`'s P-frames, below):* the split the
 **Next** item plans as a `BlockLists` pass is the encoder's diff's own first
@@ -14103,11 +14129,14 @@ replaying a recording, sends; the player reads.
   128 KiB `TCP_NOTSENT_LOWAT` 0.20 MB on Linux, where the mark gates `send`
   too, and 0.59 MB on macOS, where it gates `poll` alone (loopback,
   measured). A viewer takes its next chunk only once its socket polls
-  writable, and the client's receive buffer is 256 KiB, set before the
-  connect so the window scale fits it. Its stall is counted from what it
-  acknowledges too, not from the socket polling writable alone: one
-  draining under 64 KiB (Linux) or a chunk (macOS) a `stall_limit` stays
-  above the mark as it reads (measured).
+  writable, and the client's receive buffer is 2 MiB, set before the
+  connect so the window scale fits it. A stream carries at most one buffer
+  a round trip: 256 KiB held it to about 12 MB/s over the VPN, where the
+  rig at 1 cm needs 9.4 MB/s; 2 MiB holds that rig's key (0.78 MB) and
+  three times its bytes a round trip (0.62 MB) (2026-10-22). Its stall is
+  counted from what it acknowledges too, not from the socket polling
+  writable alone: one draining under 64 KiB (Linux) or a chunk (macOS) a
+  `stall_limit` stays above the mark as it reads (measured).
 - **Joining at the cached GOP.** A viewer gets the GOP from its key, up to
   about 1.3 MB and 0.2 to 0.4 s over the VPN, and shows a frame at once.
   Waiting for the next key instead sends nothing extra but shows nothing for

@@ -66,6 +66,7 @@ vr_embed_shaders(
   SHADERS
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/tsdf_integrate.comp"
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/tsdf_clear.comp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/tsdf_dispatch_args.comp"
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/mesh_bin.comp"
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/mesh_scan_counts.comp"
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/mesh_scan_sums.comp"

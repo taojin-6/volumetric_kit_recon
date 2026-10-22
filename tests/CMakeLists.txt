@@ -469,7 +469,8 @@ add_test(NAME recon_example_remesh_report
 # tsdf fuser: a set fused through tsdf::Fuser, growing on the way, matches the
 # tier calls on a grid that never needed to; it grows ahead before any failure,
 # refuses incomplete bands by default, and keeps fusing only when the caller
-# explicitly allows partial coverage. Skips (exit 0) with no device.
+# explicitly allows partial coverage, whose one-submit sets match the tier calls
+# too and grow a set late. Skips (exit 0) with no device.
 add_executable(recon_tsdf_fuser_test tsdf_fuser_test.cpp)
 target_link_libraries(
   recon_tsdf_fuser_test PRIVATE volumetric_kit::core_test_policy
@@ -1010,6 +1011,12 @@ if(VR_WITH_FFMPEG)
   target_compile_definitions(
     recon_sensor_video_hevc_test
     PRIVATE VR_HEVC_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data/hevc")
+  if(VR_WITH_CUDA)
+    # It asks libcuda which primary contexts the decoders hold.
+    target_include_directories(recon_sensor_video_hevc_test SYSTEM
+                               PRIVATE ${CUDAToolkit_INCLUDE_DIRS})
+    target_link_libraries(recon_sensor_video_hevc_test PRIVATE ${CMAKE_DL_LIBS})
+  endif()
   vr_target_warnings(recon_sensor_video_hevc_test)
   add_test(NAME recon_sensor_video_hevc COMMAND recon_sensor_video_hevc_test)
 

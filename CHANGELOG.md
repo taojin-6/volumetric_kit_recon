@@ -8,6 +8,55 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `volume`: **`allocate_from_triangles` asks for each block once a
+  workgroup**, not once per work item naming it, and allocates the same
+  blocks in under half the device time on Rafa2's 8-voxel band at 5 mm
+  (PERF.md MESH3). Test: `recon_volume_allocate_triangles`.
+- `volume`: **`VoxelBlockGrid::remove` zeroes in the map's own submit**
+  (`VoxelHashMap::remove`'s new `first_round`), one fence wait fewer for a
+  decode that drops blocks or a garbage collection. Tests:
+  `recon_volume_delete`, `recon_volume_block_grid`,
+  `recon_volume_block_stamps`.
+- `tsdf`: **`TsdfIntegrator::integrate` is one submit**, the compaction's
+  count sizing the fuse on the device: one fence wait fewer, the same
+  voxels. The `"  ..active set"` row now times the compaction's device half
+  alone. New: `VoxelHashMap::record_compaction` and `allocated_blocks`.
+  Tests: `recon_tsdf_integrate_cull`, `recon_tier_stage_metrics`,
+  `recon_volume_block_grid`.
+- `tsdf`: **a live set is one submit**: once its grid holds a block, a
+  `Fuser` with `allow_partial` allocates, compacts and fuses a set in one
+  batch (`TsdfIntegrator::allocate_and_integrate`; `allocate_from_depth`'s
+  new `then`), one fence wait a set where it took three. What its one
+  allocation round leaves out, and a grow for a capacity limit, land a set
+  late; strict fusion is unchanged (the 2026-10-10 decision, amended).
+  Tests: `recon_tsdf_fuser`.
+- `codec`: **a decode writes only the voxels whose bits it changes**, to
+  the same grids and stamps: room0's decode at 1 cm takes 0.99 ms of device
+  time a frame, from 1.12. Tests: `recon_codec_dct`.
+- `sensor`: **NVDEC's H.265 decoders share the GPU's primary CUDA
+  context**, a stream each, where FFmpeg made a context per decoder: four
+  4K decoders on an RTX 5090 hold 1.3 GiB of device memory while decoding,
+  not 2.8 GiB. Tests: `recon_sensor_video_hevc`.
+- `networking`: **a `StreamClient` receives through 2 MiB**, not 256 KiB,
+  which held a stream to about 12 MB/s over the VPN, under the rig's
+  9.4 MB/s at 1 cm; Linux caps it at `net.core.rmem_max`. Tests:
+  `recon_networking_socket`.
+- `eval`: **`ReferenceMesh::compare` measures on every core**, with one
+  thread's figures, about 6 times faster on a room-sized mesh. Tests:
+  `recon_eval_mesh_distance`.
+- `examples`: **`fuse_orbbec`'s stream decodes only with `output.csv` or
+  `codec.sweep`**, so recording or serving alone no longer decodes every
+  set into a second grid. `CodecOutputs::decode`, on by default, says
+  whether to decode; off, a row's decode columns are empty
+  (`CodecRow::decode_ms` is optional) and `CodecStream::player()`, now a
+  pointer, is null. Tests: `recon_example_codec_stream`,
+  `recon_example_set_codec`.
+- `examples`: **`CodecStream::create` makes its outputs before the codec's
+  kernels**, so a refused output builds none, and a codec error removes the
+  stream and CSV files it made. Test: `recon_example_codec_stream`.
+- `examples`: **`fuse_replica` re-meshes on the device** and reads a mesh
+  back only for the final PLY; `fusion.device_extract` no longer changes
+  it. Tests: `recon_fuse_replica_run`.
 - `codec`: **`make_decode_grid` and `decode_growing` take a block ceiling**
   (BREAKING), so a forged header or frame from a file or a socket can no
   longer make a player's grid gigabytes large. A frame past `max_blocks`,
@@ -233,6 +282,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `examples`: **`codec_mesh`'s mesh conversion table has its `allocate`
+  row**, where `convert_frame` passed the conversion's metrics to the
+  integrator alone. Regression: `recon_example_mesh_sequence`.
 - `volume`: **a set that overfills the hash table no longer sweeps it once
   per failing insert**: an insert that must overflow its bucket reports
   `AllocFailures::heap` at once when fewer than an eighth of the blocks are

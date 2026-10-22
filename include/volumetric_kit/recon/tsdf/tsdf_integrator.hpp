@@ -207,21 +207,19 @@ class VR_TSDF_API TsdfIntegrator {
   ///                  kernel. A tier whose host row dwarfs its device row is
   ///                  not a slow kernel.
   ///
-  ///                  A fuse runs *two* dispatches, so the second -- the
-  ///                  compaction of the blocks the frame reaches (@ref
-  ///                  volume::VoxelHashMap::compact_active_blocks_in_frusta_on_device)
-  ///                  -- reports itself as a `"  ..active set"` breakdown row
-  ///                  beneath this one. Without it that kernel's device time
-  ///                  would fall into the gap above and read as submit
-  ///                  overhead.
+  ///                  The fuse's submit also compacts the blocks the frame
+  ///                  reaches (@ref volume::VoxelHashMap::record_compaction),
+  ///                  a dispatch that reports its device half as a
+  ///                  `"  ..active set"` breakdown row beneath this one.
+  ///                  Without it that kernel's device time would fall into the
+  ///                  gap above and read as submit overhead.
   /// @return OK on success, or a non-OK `Status`:
   ///         `Status::Code::InvalidArgument` if the integrator is
   ///         moved-from, @p depth is null, @p cam or @p color's camera has a
   ///         non-finite intrinsic, depth bound or pose entry, @p grid lacks a
-  ///         `float` `tsdf`/`weight` attribute, @p color is set but empty or
-  ///         @p grid lacks a `uint32` `color` attribute, or the blocks the
-  ///         frame reaches hold 2^32 voxels or more; otherwise a buffer or
-  ///         dispatch failure.
+  ///         `float` `tsdf`/`weight` attribute, or @p color is set but empty
+  ///         or @p grid lacks a `uint32` `color` attribute; otherwise a buffer
+  ///         or dispatch failure.
   core::Status integrate(volume::VoxelBlockGrid& grid, const float* depth,
                          const DepthCameraParams& cam, float max_weight = 5.0f,
                          IntegrationMode mode = IntegrationMode::Classic,
@@ -283,11 +281,52 @@ class VR_TSDF_API TsdfIntegrator {
                          IntegrationMode mode = IntegrationMode::Classic,
                          core::StageMetrics* metrics = nullptr);
 
+  /// @brief Allocate @p frames' bands and @ref integrate them in one submit,
+  ///        for a live caller that accepts a partial band
+  ///        (@ref FuserConfig::allow_partial).
+  ///
+  /// One allocation round (@ref volume::VoxelHashMap::allocate_from_depth
+  /// with its `then`), the compaction and the fuse share a batch, so the set
+  /// waits on one fence. The fuse is the one @ref integrate gives on the
+  /// blocks the round allocated: a block the round failed, to a lost lock
+  /// race or a capacity limit, is left out of this set, where
+  /// @ref volume::VoxelHashMap::allocate_from_depth alone would retry the
+  /// races first.
+  /// @param grid          As @ref integrate; it must hold a block
+  ///                      (@ref volume::VoxelHashMap::allocated_blocks), as
+  ///                      after its first set, which allocating and then
+  ///                      integrating takes, retries included.
+  /// @param frames        As @ref integrate.
+  /// @param max_weight    As @ref integrate.
+  /// @param mode          As @ref integrate.
+  /// @param out_failures  As @ref volume::VoxelHashMap::allocate_from_depth.
+  /// @param metrics       As @ref integrate, and an `"allocate"` row with the
+  ///                      round's device half alone: the `"integrate"` row's
+  ///                      host half is the whole set's.
+  /// @return The failed allocations, as
+  ///         @ref volume::VoxelHashMap::allocate_from_depth counts them; or
+  ///         as @ref integrate refuses, and
+  ///         `Status::Code::InvalidArgument` for a grid holding no block.
+  core::Result<std::uint32_t> allocate_and_integrate(
+      volume::VoxelBlockGrid& grid, const std::vector<FrameInput>& frames,
+      float max_weight, IntegrationMode mode,
+      volume::AllocFailures* out_failures,
+      core::StageMetrics* metrics = nullptr);
+
   /// @return `true` if this owns a live pipeline (`false` when moved-from).
   bool valid() const noexcept { return kernel_.valid(); }
 
  private:
   TsdfIntegrator() = default;
+
+  // integrate's body, and allocate_and_integrate's when `allocate`: the
+  // frames' allocation round then shares the batch, ahead of the fuse.
+  core::Result<std::uint32_t> fuse(volume::VoxelBlockGrid& grid,
+                                   const std::vector<FrameInput>& frames,
+                                   float max_weight, IntegrationMode mode,
+                                   bool allocate,
+                                   volume::AllocFailures* out_failures,
+                                   core::StageMetrics* metrics);
 
   // Borrowed (must outlive this).
   core::Device* device_ = nullptr;
@@ -306,9 +345,14 @@ class VR_TSDF_API TsdfIntegrator {
   // outlive them) by KernelSetBuilder at create().
   core::ComputeKernel kernel_;
   core::ComputeKernel clear_kernel_;
+  // Sizes their dispatches from the compaction's device count into args_,
+  // a VkDispatchIndirectCommand a dispatch, grown to the most a call has had.
+  core::ComputeKernel args_kernel_;
+  core::Buffer args_;
   core::DescriptorPool pool_;
   // Each kernel's sets, one a frame of a call, so one batch fuses several
-  // cameras; the kernels' own sets go unused. Grown to the most frames a call
+  // cameras; each takes the kernel's own set's place for its frame's
+  // dispatches, which bind the kernel's set. Grown to the most frames a call
   // has had; every set a call dispatches is written whole first.
   core::KernelSets frame_sets_;
   core::KernelSets clear_sets_;

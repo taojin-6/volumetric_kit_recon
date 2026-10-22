@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <string>
 
+#include "codec_config.hpp"
 #include "codec_stream.hpp"
 #include "config.hpp"
 #include "fuse_frame.hpp"
@@ -53,6 +54,15 @@ inline vkc::Status fuse_and_code(vr::tsdf::Fuser& fuser,
   if (stream == nullptr) return {};
   return stream->code(grid, index,
                       std::max(set.timestamp_ns, stream->last_pts_ns()));
+}
+
+/// @return The outputs of @p opt's stream (@ref codec_outputs), decoding each
+///         frame only with `output.csv` or `codec.sweep`, which read the
+///         decode: a recording or a server alone needs none.
+inline CodecOutputs set_codec_outputs(const config::Config& opt) {
+  CodecOutputs outputs = codec_outputs(opt.output);
+  outputs.decode = !opt.output.csv.empty() || opt.codec.sweep;
+  return outputs;
 }
 
 /// @brief Refuse to write @p path over a file @p outputs name
