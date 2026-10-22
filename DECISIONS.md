@@ -600,7 +600,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   per-tier copies): values, not structs, so scalar-layout and std430 kernels
   both call it; recon's kernels project through it, keeping only their own
   acceptance rules; and `recon_core`'s `VR_SHADER_INCLUDE_DIR` names the root
-  a consumer includes it under, fetched or installed.
+  a consumer includes it under, fetched or installed. *Amended 2026-10-22:*
+  fetched only; recon installs nothing.
 - [**2026-10-16**](#2026-10-16--a-brew-upgrade-needs-no-cache-clearing-the-mac-jobs-install-nothing-and-the-dependency-cache-keys-on-the-cores-homebrew-key) —
   A brew upgrade needs no cache clearing: the Mac jobs install nothing, and
   the dependency cache keys on the core's Homebrew key.
@@ -662,6 +663,11 @@ entries relevant to your task; later amendments supersede earlier rules.
   is ruled out only by a bound, less a rounding margin of its own, strictly
   above the voxel's limit, so every voxel writes what its whole bin writes.
   Blocks past 16^3 voxels are refused.
+- [**2026-10-22**](#2026-10-22--recon-is-fetched-by-commit-never-installed-no-install-rules-package-config-or-package-tests-amends-the-2026-10-16-glsl-pinhole-entry-and-the-2026-10-17-amendment-of-the-2026-10-13-block-list-entry) —
+  recon is fetched by commit, never installed (the owner's rule for the
+  family): no install rules, package config or package tests. The
+  add_subdirectory checks stay, the public headers' one among them, and the
+  camera-only check runs in the camera-only build alone.
 
 ## Decision record
 
@@ -912,6 +918,11 @@ shared device is the precondition seam B needs, not seam B itself.
 *Amended 2026-08-08 (below):* `fuse_viewer` now draws recon's buffers
 directly — seam B — so the precondition has been collected on.
 `fuse_render` deliberately stays two-device seam A.
+*Amended 2026-10-22:* the leg is no longer build-only. It runs the viewers'
+headless tests, which need no window or dataset: `recon_example_viewer_atlas`
+and `recon_example_viewer_pass` on a headless device,
+`recon_example_viewer_device`, and each viewer's config entry, on the core's
+test policy with validation.
 
 ### 2026-07-07 — Projective texturing is a new `texture` tier; live single-camera first.
 
@@ -5932,9 +5943,9 @@ better of each, measured rather than argued:
   sweep decoding into the stream's player carry over into the examples.
 - **Tests from #95**, ported: thin triangles against the double-precision
   answer (50 000 draws, enough to meet Ericson's rare misses; reverting to
-  it fails), and the pruned search against a scan of every triangle
-  (probing one cell fewer along x, or leaving the box gap unsquared,
-  fails). One
+  it fails; 5 000 under the sanitizers), and the pruned search against a
+  scan of every triangle (probing one cell fewer at either end along x, or
+  leaving the box gap unsquared, fails at 500 points). One
   change survives: trusting the face down to any nonzero area passes every
   case too. The 1e-4 guard is kept as a margin, not a measured need.
 
@@ -12960,6 +12971,8 @@ primes become the tests' oracle (`tests/volume_hash_oracle.hpp`).
 `hash_lookup.glsl`. `recon_package_headers` fails if `volume/hash.hpp` is
 installed again, or if an installed volume header, or an installed header
 that includes one, declares any of these names in the volume namespace.
+*Amended 2026-10-22 (the install entry):* `recon_subproject_headers` makes
+that check on the public headers, as a fetching sibling sees them.
 
 **The rule** is the user's (2026-10-13): only I/O takes a host path --
 reading a mesh model, a camera stream (Orbbec, ARKit) -- and what it reads
@@ -13621,6 +13634,9 @@ UBSan (CI runs them).
 
 ### 2026-10-16 — A shared GLSL pinhole for recon and its consumers: `core/shaders/pinhole.glsl`, exported under the include root `recon_core` names (amends the 2026-08-11 texturing entry's per-tier copies).
 
+*Amended 2026-10-22 (the install entry):* recon installs nothing, so the
+root is the build tree's copy alone.
+
 calib's depth checks run kernels of their own over recon's prepared depth,
 and they must project and unproject it by recon's rules. A copy in calib
 would be a second pinhole. The core cannot hold it, since its decisions lock
@@ -13734,7 +13750,7 @@ border pixel's ray. Its lens is a stand-in, not an SDK report: of
 CL2A141000N's depth lens only k1 29.29 and k6 3.77 are on record (the
 2026-09-28 GPU pre-processing entry). The other terms are calib's Femto-like
 test lens, and the test holds the stand-in to the rest of the record. Its
-rays reach its whole raw image, and undistorting moves a raw pixel 30.6 px
+rays reach its whole raw image, and undistorting moves a raw pixel 30.7 px
 on average and 224.7 px at most, against the 31.5 px and 220.9 px measured
 on CL2A141000N (the 2026-09-26 Orbbec driver entry). On it the widest output
 pixel is at r = 0.914, and nothing folds within r = 3. Where a lens folds
@@ -14250,8 +14266,8 @@ byte for byte (4,272,320 B), and every frame's `tsdf` and `weight` hash the
 same as origin/main's in both bands, signed and shell.
 `recon_tsdf_mesh_integrate_exact` compares every voxel's bits with a brute
 force over the same bins, rebuilt by replaying the binning's work items
-through its own GLSL, on 21 fixtures. Planted bugs each fail it: a margin of
-0 (17 fixtures), the tie order reversed (12), the unsorted tail skipped (2),
+through its own GLSL, on 19 fixtures. Planted bugs each fail it: a margin of
+0 (15 fixtures), the tie order reversed (11), the unsorted tail skipped (2),
 and `>=` in place of both of the rule's `>` (the fan at zero distance, whose
 faces all measure 0 at the origin's voxel and whose lowest index signs it
 -0). Two do not, as the argument says: `>=` on the square alone, since the
@@ -14262,6 +14278,30 @@ fail.
 
 **Not done**: the conversion's smaller costs around the write, in DESIGN's
 Next work.
+
+### 2026-10-22 — recon is fetched by commit, never installed: no install rules, package config or package tests (amends the 2026-10-16 GLSL pinhole entry and the 2026-10-17 amendment of the 2026-10-13 block-list entry).
+
+**The rule** is the owner's, for the whole family: a sibling is consumed by
+commit (`FetchContent`), as the player and ios fetch recon; only third-party
+SDKs are installed prerequisites. calib's package config and install tests
+were the one user of an installed recon; calib drops them before it pins
+recon past this change. With siblings pinning different core minors, one
+prefix could not hold them together anyway.
+
+**What goes.** `VR_INSTALL` and every `install()` rule,
+`cmake/volumetric_kit_reconConfig.cmake.in` and what fed it only
+(`VR_FFMPEG_CONSUMER_MODULES`), and `tests/package` with its nine
+`recon_package_*` tests, which built and installed a base-only core per run.
+recon sets the core's `VKC_INSTALL` OFF. `VR_SHADER_INCLUDE_DIR` names the
+build tree's copy of the exported GLSL alone.
+
+**What stays.** The add_subdirectory checks (`tests/subproject`): the
+defaults, the GLSL root, the core refusals, and the public headers' check of
+the hash table's internals, now `recon_subproject_headers` on the headers
+under `include/`. `recon_subproject_camera_only` drops its install step and
+is registered only in a `VR_CAMERA_ONLY` build: its configures are Release
+with Vulkan hidden whatever the leg, so the camera-only job, the one place
+with no Vulkan at all, is its home.
 
 ## Measured lessons
 

@@ -94,25 +94,23 @@ bool same_stamps(vol::VoxelBlockGrid& a, vol::VoxelBlockGrid& b) {
 bool held_blocks_match(const vr_test::Gpu& gpu, vol::VoxelBlockGrid& expected,
                        vol::VoxelBlockGrid& grid) {
   auto all = vr_test::blocks_of(expected);
-  auto held = vr_test::blocks_of(grid);
+  auto held = grid.map().compact_active_blocks();
   if (!all.ok() || !held.ok()) return false;
-  std::vector<vr_test::detail::GridBlockPair> pairs;
-  for (const auto& [coord, ptr] : *held) {
-    const auto there = all->find(coord);
+  vr_test::detail::MatchedBlocks blocks;
+  for (const vol::BlockIndex& b : *held) {
+    const auto there =
+        all->find(vr_test::BlockCoord{b.coord.x, b.coord.y, b.coord.z});
     if (there == all->end()) return false;
-    pairs.push_back({coord, std::size_t(there->second), std::size_t(ptr)});
+    blocks.a.push_back({b.coord, there->second});
+    blocks.b.push_back(b);
   }
   for (const char* name : {"weight", "tsdf", "color"}) {
-    auto a = vr_test::read_attribute<std::uint32_t>(gpu.device, gpu.allocator,
-                                                    expected, name);
-    auto b = vr_test::read_attribute<std::uint32_t>(gpu.device, gpu.allocator,
-                                                    grid, name);
+    auto a = vr_test::read_blocks<std::uint32_t>(gpu, expected, name, blocks.a);
+    auto b = vr_test::read_blocks<std::uint32_t>(gpu, grid, name, blocks.b);
     if (!a.ok() || !b.ok() ||
         !vr_test::detail::compare_voxels(
-            pairs, std::size_t(grid.grid().voxels_per_block),
-            [&](std::size_t ia, std::size_t ib) {
-              return a.value()[ia] == b.value()[ib];
-            })) {
+            blocks, std::size_t(grid.grid().voxels_per_block),
+            [&](std::size_t i) { return a.value()[i] == b.value()[i]; })) {
       return false;
     }
   }
@@ -157,7 +155,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
   // The reference: the tier calls on a grid with room for the set, twice, so
   // the running average and the colour blend run too.
   auto integrator = tsdf::TsdfIntegrator::create(dev, alloc);
-  auto reference = make_grid(dev, alloc, params(1024));
+  auto reference = make_grid(dev, alloc, params(256));
   CHECK(integrator.ok() && reference.ok());
   const std::vector<vol::DepthInput> depths(set.begin(), set.end());
   for (int pass = 0; pass < 2; ++pass) {

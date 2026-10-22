@@ -1,6 +1,6 @@
 name: viewer (reusable)
 
-# Build-only leg for the gfx-linked viewer examples (VR_BUILD_VIEWER=ON).
+# The leg for the gfx-linked viewer examples (VR_BUILD_VIEWER=ON).
 #
 # The library tiers, the default build, and every other CI leg are deliberately
 # renderer-independent (the 2026-07-07 opt-in-gfx decision), so nothing else
@@ -9,11 +9,14 @@ name: viewer (reusable)
 # which returns `Result<DeviceMesh>`, so `-DVR_BUILD_VIEWER=ON` failed to build
 # at 8a439fc and nothing noticed. This leg closes it.
 #
-# Build-only on purpose: the live viewers need a window, and a dataset or a rig
-# of cameras that CI does not carry, so there is nothing to run. The compile +
-# link is the whole point -- it is the API seam between recon and gfx that
-# drifts. FFmpeg and the Orbbec SDK are installed too, so rig_viewer is compiled
-# with the other two.
+# The live viewers need a window, and a dataset or a rig of cameras that CI
+# does not carry, so they are built, not run: the compile + link is the API
+# seam between recon and gfx that drifts. Their headless tests do run: the
+# atlas both live viewers draw with and the render pass they record, each on a
+# headless device, the device they adopt, and each viewer's config entry,
+# which returns before any window.
+# FFmpeg and the Orbbec SDK are installed too, so rig_viewer is compiled with
+# the other two.
 on:
   workflow_call:
 
@@ -39,17 +42,17 @@ jobs:
       # it needs no Homebrew key.
       - name: Check dependencies
         run: |
-          # The macOS build leg's formulae (_build.yml) less
-          # vulkan-validationlayers and assimp, which this build-only leg
-          # does not use, plus glfw: gfx builds gfx_glfw, the viewers' window
-          # glue, only with it.
+          # The macOS build leg's formulae (_build.yml) less assimp, which
+          # this leg does not use, plus glfw: gfx builds gfx_glfw, the
+          # viewers' window glue, only with it.
           command -v brew >/dev/null || {
             echo "::error::brew is not on this runner's PATH"
             exit 1
           }
           missing=""
           for pkg in cmake glm molten-vk vulkan-headers vulkan-loader \
-              vulkan-tools shaderc spirv-tools ffmpeg pkgconf glfw; do
+              vulkan-tools vulkan-validationlayers shaderc spirv-tools ffmpeg \
+              pkgconf glfw; do
             brew list --formula "$pkg" >/dev/null 2>&1 || missing="$missing $pkg"
           done
           if [ -n "$missing" ]; then
@@ -71,14 +74,15 @@ jobs:
       # slow, reach for a persistent FETCHCONTENT_BASE_DIR outside the workspace
       # (survives checkout's `git clean -ffdx`, no upload at all), not the cache.
       - name: Configure
-        # Tests off: the library tests already run in every build leg, and this
-        # leg exists for the viewer targets alone. Retry rides out transient
-        # FetchContent clone blips, as in _build.yml.
+        # Tests on for the viewers' own; the build below names its targets,
+        # so the library tests, which every build leg runs, are not built.
+        # Retry rides out transient FetchContent clone blips, as in
+        # _build.yml.
         run: |
           ok=0
           for attempt in 1 2 3; do
             if cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
-                -DVR_BUILD_VIEWER=ON -DVR_BUILD_TESTS=OFF \
+                -DVR_BUILD_VIEWER=ON -DVR_BUILD_TESTS=ON \
                 -DVR_WITH_FFMPEG=ON -DVR_WITH_ORBBEC=ON; then
               ok=1
               break
@@ -99,4 +103,20 @@ jobs:
         run: |
           cmake --build build \
             --parallel "${CMAKE_BUILD_PARALLEL_LEVEL:-$(getconf _NPROCESSORS_ONLN)}" \
-            --target fuse_viewer fuse_render rig_viewer
+            --target fuse_viewer fuse_render rig_viewer \
+            recon_example_viewer_atlas_test recon_example_viewer_device_test \
+            recon_example_viewer_pass_test
+
+      # The viewers' headless tests, on the core's test policy as in
+      # _build.yml's Test step: a device and the validation layer required.
+      # None opens a window.
+      - name: Test viewer examples
+        env:
+          VKC_REQUIRE_VULKAN_DEVICE: '1'
+          VKC_TEST_VALIDATION: '1'
+        run: |
+          prefix=$(brew --prefix)
+          export VK_LAYER_PATH="${prefix}/share/vulkan/explicit_layer.d"
+          export DYLD_LIBRARY_PATH="${prefix}/lib"
+          ctest --test-dir build --output-on-failure --no-tests=error \
+            -R '^recon_(example_viewer_|(fuse_render|fuse_viewer|rig_viewer)_config_entry$)'

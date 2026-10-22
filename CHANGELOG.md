@@ -8,6 +8,22 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- CI: **the sanitizer job starts its slowest tests first** again,
+  `recon_codec_inter`, which had started last, first. A test under `tests/`
+  that hangs fails after 300 s.
+  The Mac's ThreadSanitizer step runs the tests whose code runs threads,
+  the Orbbec decode workers' among them (`recon_tsan_tests`), and no longer
+  the single-threaded stream tests. The viewer leg runs the viewers'
+  headless tests, which no leg ran: `recon_example_viewer_atlas`,
+  `recon_example_viewer_device`, `recon_example_viewer_pass` and the three
+  viewers' config entries.
+  The NVIDIA legs keep the driver's shader cache across runs, which their
+  containers had silently turned off: the suite at `-j4` with validation
+  takes 15 s warm on the RTX 5090, against 38 s with no cache.
+- `tests`: **slow tests trimmed, with the properties they check kept**; the
+  Orbbec decoder tests and the networking reaping case wait on counts, not
+  fixed sleeps. Under ASan (Debug) on an M5 Max, `recon_eval_mesh_distance`
+  takes 6 s in place of 28 s.
 - `volume`: **`allocate_from_triangles` asks for each block once a
   workgroup**, not once per work item naming it, and allocates the same
   blocks in under half the device time on Rafa2's 8-voxel band at 5 mm
@@ -723,6 +739,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
+- build: **install rules and the package config** (BREAKING; the
+  2026-10-22 decision). recon is consumed by commit: `VR_INSTALL`,
+  `volumetric_kit_reconConfig.cmake` and `find_package(volumetric_kit_recon)`
+  go, and the core recon fetches installs nothing either. Migrating: fetch
+  recon pinned by commit with `FetchContent` (README, Building). Tests:
+  `recon_subproject_headers` (was `recon_package_headers`), and
+  `recon_subproject_camera_only`, now in camera-only builds alone.
 - `volume`: **the hash table's internals** (BREAKING): `volume/hash.hpp` is
   no longer installed, and `HashEntry` leaves `hash_types.hpp`. `HashEntry`
   and the fail-tally slots (`kFail*`) are internal. The host slot sentinels

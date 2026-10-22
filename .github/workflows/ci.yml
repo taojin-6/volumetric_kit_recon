@@ -38,6 +38,13 @@ jobs:
       # TODO: gfx's 6 runners share each host, so 2 would match the split the
       # core's setup-runners.sh writes for jobs on the host.
       #
+      # So is the NVIDIA driver's shader cache. By default it lives under
+      # $HOME/.cache, which a bare image lacks, and the driver then caches
+      # nothing, so every test process compiled every pipeline cold: about
+      # half the Test step. /__w/_tool, the runner's tool cache, outlives the
+      # job, so the cache stays warm across runs (the driver keys it by driver
+      # and GPU); _build.yml's bootstrap creates it.
+      #
       # Release runs on every OS; Debug only on macOS, where it is cheap. That
       # halves the jobs on the Linux GPU boxes, which gfx's CI shares, and
       # sanitizers still builds and tests Debug on Linux (clang + ASan/UBSan).
@@ -63,7 +70,7 @@ jobs:
         include:
           - os: ubuntu-24.04
             runner: vk-linux-gpu
-            container: '{"image":"ubuntu:24.04","options":"--gpus all","env":{"NVIDIA_DRIVER_CAPABILITIES":"all","CMAKE_BUILD_PARALLEL_LEVEL":"4","CTEST_PARALLEL_LEVEL":"4"}}'
+            container: '{"image":"ubuntu:24.04","options":"--gpus all","env":{"NVIDIA_DRIVER_CAPABILITIES":"all","CMAKE_BUILD_PARALLEL_LEVEL":"4","CTEST_PARALLEL_LEVEL":"4","__GL_SHADER_DISK_CACHE_PATH":"/__w/_tool/nvidia-glcache","__GL_SHADER_DISK_CACHE_SKIP_CLEANUP":"1"}}'
             build_types: '["Release"]'
             assimp: true
             orbbec_sdk: true
@@ -73,7 +80,7 @@ jobs:
             sync_validation: true
           - os: ubuntu-26.04
             runner: vk-linux-gpu
-            container: '{"image":"ubuntu:26.04","options":"--gpus all","env":{"NVIDIA_DRIVER_CAPABILITIES":"all","CMAKE_BUILD_PARALLEL_LEVEL":"4","CTEST_PARALLEL_LEVEL":"4"}}'
+            container: '{"image":"ubuntu:26.04","options":"--gpus all","env":{"NVIDIA_DRIVER_CAPABILITIES":"all","CMAKE_BUILD_PARALLEL_LEVEL":"4","CTEST_PARALLEL_LEVEL":"4","__GL_SHADER_DISK_CACHE_PATH":"/__w/_tool/nvidia-glcache","__GL_SHADER_DISK_CACHE_SKIP_CLEANUP":"1"}}'
             build_types: '["Release"]'
             sync_validation: true
           - os: macos-26

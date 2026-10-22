@@ -389,9 +389,9 @@ std::vector<Fixture> fixtures() {
     }
     out.push_back(std::move(f));
   }
-  // Two tilted, divided sheets wound opposite ways, delta apart: from
-  // coincident through the bounds' margin (about 16 um here) to well past it.
-  for (const double delta : {0.0, 1e-6, 1e-5, 2e-5, 4e-5, 1e-4}) {
+  // Two tilted, divided sheets wound opposite ways, delta apart: coincident,
+  // inside the bounds' margin (about 16 um here), just past it and well past.
+  for (const double delta : {0.0, 1e-5, 2e-5, 1e-4}) {
     Fixture f;
     char name[64];
     std::snprintf(name, sizeof name, "sheets %g um apart", delta * 1e6);
@@ -506,7 +506,7 @@ std::vector<Fixture> fixtures() {
     Fixture f;
     f.name =
         mode == ts::MeshSdfMode::Signed ? "far sphere" : "far sphere, shell";
-    f.mesh = icosphere(Vec3f(312.37f, -207.11f, 151.93f), 0.21f, 4);
+    f.mesh = icosphere(Vec3f(312.37f, -207.11f, 151.93f), 0.21f, 3);
     f.mode = mode;
     out.push_back(std::move(f));
   }
@@ -520,7 +520,7 @@ std::vector<Fixture> fixtures() {
     out.push_back(std::move(f));
     Fixture g;
     g.name = "sphere, 16-voxel blocks";
-    g.mesh = icosphere(Vec3f(0.0137f, -0.021f, 0.0093f), 0.15f, 4);
+    g.mesh = icosphere(Vec3f(0.0137f, -0.021f, 0.0093f), 0.15f, 3);
     g.block_size = 16;
     out.push_back(std::move(g));
   }
@@ -544,26 +544,29 @@ std::vector<Fixture> fixtures() {
   return out;
 }
 
-// Convert `f` into a fresh grid, run the reference over the blocks written,
-// and compare every voxel's bits.
-int check_fixture(vr_test::GpuContext& gpu, ts::MeshIntegrator& integ,
-                  Reference& ref, const Fixture& f) {
+// A grid for `f`'s block size and band: 8,192 blocks, or 2^22 voxels where
+// that is fewer. The 20 m triangles take 5,741 8-voxel blocks.
+vkc::Result<vol::VoxelBlockGrid> make_grid(const vr_test::Gpu& gpu,
+                                           const Fixture& f) {
   vol::VoxelGridParams gp{};
   gp.voxel_size = kVoxel;
   gp.block_size = f.block_size;
   gp.voxels_per_block = f.block_size * f.block_size * f.block_size;
   gp.trunc_dist = f.trunc;
   gp.bucket_size = 8;
-  // A heap of 2^22 voxels, whatever the block size.
-  gp.num_buckets = std::max(64, (1 << 22) / gp.voxels_per_block / 8);
+  gp.num_buckets = std::min(1024, (1 << 22) / gp.voxels_per_block / 8);
   gp.num_blocks = gp.bucket_size * gp.num_buckets;
   gp.max_chain = 128;
   const vol::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
                                       {"weight", sizeof(float)}};
-  vkc::Result<vol::VoxelBlockGrid> grid_r =
-      vol::VoxelBlockGrid::create(gpu.device, gpu.allocator, gp, attrs, 2);
-  CHECK(grid_r.ok());
-  vol::VoxelBlockGrid grid = std::move(grid_r).value();
+  return vol::VoxelBlockGrid::create(gpu.device, gpu.allocator, gp, attrs, 2);
+}
+
+// Convert `f` into `grid`, cleared, run the reference over the blocks
+// written, and compare every voxel's bits.
+int check_fixture(vr_test::GpuContext& gpu, ts::MeshIntegrator& integ,
+                  Reference& ref, vol::VoxelBlockGrid& grid, const Fixture& f) {
+  const vol::VoxelGridParams& gp = grid.grid();
   const Mesh& m = f.mesh;
   CHECK(grid.clear().ok());
   vkc::Result<std::uint32_t> failed = grid.map().allocate_from_triangles(
@@ -601,22 +604,20 @@ int check_fixture(vr_test::GpuContext& gpu, ts::MeshIntegrator& integ,
   }
   if (f.past_sorted) CHECK(want.largest_bin > kKernelSorted);
 
+  // Both block by block, in `active`'s order.
   const std::vector<float> tsdf =
-      vr_test::read_attribute<float>(gpu.device, gpu.allocator, grid, "tsdf")
-          .value();
+      vr_test::read_blocks<float>(gpu, grid, "tsdf", active).value();
   const std::vector<float> weight =
-      vr_test::read_attribute<float>(gpu.device, gpu.allocator, grid, "weight")
-          .value();
+      vr_test::read_blocks<float>(gpu, grid, "weight", active).value();
   const auto vpb = static_cast<std::size_t>(gp.voxels_per_block);
   std::size_t differ = 0;
   std::size_t observed = 0;
   for (std::size_t b = 0; b < active.size(); ++b) {
     for (std::size_t k = 0; k < vpb; ++k) {
-      const std::size_t got = std::size_t(active[b].ptr) + k;
       const std::size_t at = b * vpb + k;
       observed += want.weight[at] != 0.0f ? 1 : 0;
-      if (std::memcmp(&tsdf[got], &want.tsdf[at], 4) == 0 &&
-          std::memcmp(&weight[got], &want.weight[at], 4) == 0) {
+      if (std::memcmp(&tsdf[at], &want.tsdf[at], 4) == 0 &&
+          std::memcmp(&weight[at], &want.weight[at], 4) == 0) {
         continue;
       }
       if (differ++ < 4) {
@@ -626,19 +627,19 @@ int check_fixture(vr_test::GpuContext& gpu, ts::MeshIntegrator& integ,
                      "tsdf %.9g weight %g, the whole bin gives %.9g, %g\n",
                      f.name.c_str(), active[b].coord.x, active[b].coord.y,
                      active[b].coord.z, k % bs, (k / bs) % bs, k / (bs * bs),
-                     double(tsdf[got]), double(weight[got]),
+                     double(tsdf[at]), double(weight[at]),
                      double(want.tsdf[at]), double(want.weight[at]));
       }
     }
   }
   if (f.minus_zero_at_origin) {
     bool found = false;
-    for (const vol::BlockIndex& b : active) {
-      if (b.coord == vr::Vec3i(0)) {
+    for (std::size_t b = 0; b < active.size(); ++b) {
+      if (active[b].coord == vr::Vec3i(0)) {
         found = true;
-        CHECK(std::signbit(tsdf[std::size_t(b.ptr)]));
-        CHECK(tsdf[std::size_t(b.ptr)] == 0.0f);
-        CHECK(weight[std::size_t(b.ptr)] == 1.0f);
+        CHECK(std::signbit(tsdf[b * vpb]));
+        CHECK(tsdf[b * vpb] == 0.0f);
+        CHECK(weight[b * vpb] == 1.0f);
       }
     }
     CHECK(found);
@@ -671,9 +672,18 @@ int gpu_main(vr_test::GpuContext& gpu) {
   CHECK(integ_r.ok());
   ts::MeshIntegrator integ = std::move(integ_r).value();
 
+  // One grid per block size and band, cleared for each fixture.
+  std::map<std::pair<int, float>, vol::VoxelBlockGrid> grids;
   int failures = 0;
   for (const Fixture& f : fixtures()) {
-    failures += check_fixture(gpu, integ, ref, f);
+    const std::pair<int, float> shape{f.block_size, f.trunc};
+    auto it = grids.find(shape);
+    if (it == grids.end()) {
+      vkc::Result<vol::VoxelBlockGrid> made = make_grid(gpu, f);
+      CHECK(made.ok());
+      it = grids.emplace(shape, std::move(made).value()).first;
+    }
+    failures += check_fixture(gpu, integ, ref, it->second, f);
   }
   CHECK(failures == 0);
   std::printf("tsdf_mesh_integrate_exact: OK\n");

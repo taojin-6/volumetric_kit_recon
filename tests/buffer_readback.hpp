@@ -39,26 +39,30 @@ inline vkc::Result<vkc::Buffer> upload_device_buffer(const vkc::Device& device,
   return buffer;
 }
 
-// The first `count` elements of `buffer`, which needs TRANSFER_SRC usage.
+// `count` elements of `buffer` from element `first`; the buffer needs
+// TRANSFER_SRC usage.
 template <typename T>
 vkc::Result<std::vector<T>> read_back(const vkc::Device& device,
                                       vkc::Allocator& allocator,
                                       const vkc::Buffer& buffer,
-                                      std::size_t count) {
+                                      std::size_t count,
+                                      std::size_t first = 0) {
   std::vector<T> out(count);
   vkc::CommandBatch batch(device, allocator);
-  VKC_TRY(
-      batch.readback(buffer, 0, VkDeviceSize(count) * sizeof(T), out.data()));
+  VKC_TRY(batch.readback(buffer, VkDeviceSize(first) * sizeof(T),
+                         VkDeviceSize(count) * sizeof(T), out.data()));
   VKC_TRY(batch.submit());
   return out;
 }
 
-// Write `data` over the start of `buffer`, which needs TRANSFER_DST usage.
+// Write `data` over `buffer` from element `first`; the buffer needs
+// TRANSFER_DST usage.
 template <typename T>
 vkc::Status write_back(const vkc::Device& device, vkc::Allocator& allocator,
-                       const vkc::Buffer& buffer, const std::vector<T>& data) {
+                       const vkc::Buffer& buffer, const std::vector<T>& data,
+                       std::size_t first = 0) {
   vkc::CommandBatch batch(device, allocator);
-  VKC_TRY(batch.upload(buffer, 0, data.data(),
+  VKC_TRY(batch.upload(buffer, VkDeviceSize(first) * sizeof(T), data.data(),
                        VkDeviceSize(data.size()) * sizeof(T)));
   return batch.submit();
 }

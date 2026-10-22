@@ -68,8 +68,8 @@ vol::VoxelGridParams grid_params() {
   grid.voxels_per_block = 512;
   grid.trunc_dist = 0.04f;
   grid.bucket_size = 8;
-  grid.num_buckets = 4096;
-  grid.num_blocks = 4096 * 8;
+  grid.num_buckets = 512;  // 4,096 blocks: the sets take at most 2,376
+  grid.num_blocks = 512 * 8;
   grid.max_chain = 128;
   return grid;
 }

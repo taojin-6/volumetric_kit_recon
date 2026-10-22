@@ -2,10 +2,8 @@
 # Copyright (c) 2026 Tao Jin
 
 # Orchestrator for the component tiers. Each subdirectory owns its own target
-# and build settings and installs itself into the shared
-# volumetric_kit_reconTargets export set; the strict dependency rule (a tier may
-# depend only on tiers to its left) is expressed by what each links.
-include(GNUInstallDirs)
+# and build settings; the strict dependency rule (a tier may depend only on
+# tiers to its left) is expressed by what each links.
 
 # camera is the family's camera vocabulary -- the camera model, rigid
 # transforms, the sensor array's calibration file -- over the family core's base
@@ -81,54 +79,4 @@ if(TARGET recon_sensor_video)
 endif()
 if(TARGET recon_sensor_orbbec)
   target_link_libraries(recon INTERFACE recon_sensor_orbbec)
-endif()
-
-# --- Install / export -------------------------------------------------------
-# Tiers install their own targets into volumetric_kit_reconTargets and their own
-# headers (so a partial build never ships a header for a tier it didn't build);
-# here we add the umbrella and finalize the export set and package config.
-if(VR_INSTALL)
-  install(TARGETS recon EXPORT volumetric_kit_reconTargets)
-
-  install(
-    EXPORT volumetric_kit_reconTargets
-    NAMESPACE volumetric_kit::
-    DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/volumetric_kit_recon")
-
-  # The installed package re-finds the core at the MAJOR.MINOR this build used:
-  # the core's version file accepts only the same minor before 1.0.
-  vkc_core_version(VR_CORE_MAJOR_MINOR MAJOR_MINOR)
-
-  # The package re-finds Vulkan unless it holds the camera tier alone, as the
-  # build decided: a plain ON/OFF, so an empty VR_CAMERA_ONLY reads as OFF.
-  if(VR_CAMERA_ONLY)
-    set(VR_PACKAGE_NEEDS_VULKAN OFF)
-  else()
-    set(VR_PACKAGE_NEEDS_VULKAN ON)
-  endif()
-  # The installed GLSL include root (recon_core's VR_SHADER_INCLUDE_DIR),
-  # relative to the package config's directory, which the config resolves it
-  # against; an absolute include directory stays absolute.
-  if(IS_ABSOLUTE "${CMAKE_INSTALL_INCLUDEDIR}")
-    set(VR_SHADER_INCLUDE_FROM_CONFIG "${CMAKE_INSTALL_INCLUDEDIR}")
-  else()
-    file(RELATIVE_PATH VR_SHADER_INCLUDE_FROM_CONFIG
-         "${CMAKE_INSTALL_FULL_LIBDIR}/cmake/volumetric_kit_recon"
-         "${CMAKE_INSTALL_FULL_INCLUDEDIR}")
-  endif()
-  include(CMakePackageConfigHelpers)
-  configure_package_config_file(
-    "${PROJECT_SOURCE_DIR}/cmake/volumetric_kit_reconConfig.cmake.in"
-    "${CMAKE_CURRENT_BINARY_DIR}/volumetric_kit_reconConfig.cmake"
-    INSTALL_DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/volumetric_kit_recon")
-  # SameMinorVersion while in 0.x: under semver a 0.MINOR bump may break, so a
-  # consumer that requests 0.MINOR.PATCH must not be handed a different 0.MINOR.
-  # Relax to SameMajorVersion once the API stabilizes at 1.0.
-  write_basic_package_version_file(
-    "${CMAKE_CURRENT_BINARY_DIR}/volumetric_kit_reconConfigVersion.cmake"
-    COMPATIBILITY SameMinorVersion)
-  install(
-    FILES "${CMAKE_CURRENT_BINARY_DIR}/volumetric_kit_reconConfig.cmake"
-          "${CMAKE_CURRENT_BINARY_DIR}/volumetric_kit_reconConfigVersion.cmake"
-    DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/volumetric_kit_recon")
 endif()
