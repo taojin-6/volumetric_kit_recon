@@ -14,8 +14,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   or a grow past `make_decode_grid`'s grid for it, is refused as
   `InvalidArgument` (a frame to skip) before the decode or the grow, and
   `make_decode_grid` checks the header's block count against the segment
-  table. Migrating: pass the most blocks a frame may hold, from your memory
-  budget, after `make_decode_grid`'s size and `decode_growing`'s grid.
+  table. Migrating: pass both helpers `max_blocks`, the most blocks a frame
+  may hold under your memory budget.
   Tests: `recon_codec_decode_grid`, `recon_codec_decode_grid_oom`.
 - `examples`: **a finer fusion grid starts with a larger table**:
   `create_fusion_grid`'s default bucket count, `fusion_buckets`, scales
