@@ -135,7 +135,7 @@ kernels.
 | P5 | Extract from the fuse's device block list | measured −14% an extract on the M5 Max, −35% on the RTX 5090 | M | P1 for the shared list | landed (#129); a fuse's list is no longer reused (2026-10-06) |
 | P4 | Bind texture views in place, with no per-remesh copies | measured 0.26–0.51 ms GPU per remesh at 4K, 0.04–0.12 at 720p | M | P1's descriptor-array decision | deferred |
 | P2 | Record a set's frame prep in one batch | measured parity once host colour stages on threads; the pipeline's unit of work | S | — | landed (`SensorArray::process`) |
-| P6 | Take the remaining host decisions off the critical path | at most ~0.5 ms/set on the RTX 5090, ~0.7 on the M5 Max (measured gap) | M | P1, P5 | step 1 landed; set time unmeasured |
+| P6 | Take the remaining host decisions off the critical path | at most ~0.5 ms/set on the RTX 5090, ~0.7 on the M5 Max (measured gap) | M | P1, P5 | step 1 landed (#268); set time unmeasured |
 | P7 | Free the blocks nothing asks for or weights | measured: the map 7.3k → 2.9k blocks in 600 sets, integrate's device time −40% on the M5 Max, −50% on the RTX 5090; a static room keeps its size | M | — | landed (#132); device-list follow-up landed (#146) |
 | P9 | Allocate only the band blocks a sample can weight | ~60% of a static room's active set holds no weight; compaction, integrate and meshing scale with it | M | — | open, measure first |
 | D1 | Report a decoder's fallback to host pictures | makes a silent 12 MB/camera/frame PCIe regression visible | S | — | superseded: the decoders hand out device pictures only |
@@ -143,7 +143,7 @@ kernels.
 | D3 | Keep exported picture buffers out of the BAR | robustness on ReBAR systems | S | — | not needed (#130) |
 | MESH1 | Keep mesh-input bins and cursors on-device and retain scratch | RTX 4090 sparse-capacity host 0.920 → 0.125 ms (7.4x); dense host +0.9%, device +3.4%; Apple timing mixed | M | — | landed (#149), measured Release on M5 Max and RTX 4090; mesh input only, outside the live rig |
 | MESH2 | Measure each voxel against only the triangles no lower bound rules out, exactly | Rafa2 at 5 mm, host / device: 16-voxel band 29.57 / 27.17 → 7.95 / 5.95 ms, 8-voxel 8.55 / 6.89 → 3.65 / 2.21 | M | — | landed (#263), measured Release on M5 Max; mesh input only, outside the live rig |
-| MESH3 | Ask for each block a mesh's band names once a workgroup | Rafa2 at 5 mm, the `allocate` row host / device, means of three interleaved runs: RTX 4090 8-voxel band 11.19 / 7.90 → 5.51 / 2.27 ms, 16-voxel 16.37 / 13.06 → 12.10 / 8.90; M5 Max 8-voxel 7.73 / 6.14 → 4.15 / 2.60, 16-voxel 10.45 / 8.87 → 8.92 / 7.35 | S | — | landed, measured Release on RTX 4090 and M5 Max; mesh input only, outside the live rig |
+| MESH3 | Ask for each block a mesh's band names once a workgroup | Rafa2 at 5 mm, the `allocate` row host / device, means of three interleaved runs: RTX 4090 8-voxel band 11.19 / 7.90 → 5.51 / 2.27 ms, 16-voxel 16.37 / 13.06 → 12.10 / 8.90; M5 Max 8-voxel 7.73 / 6.14 → 4.15 / 2.60, 16-voxel 10.45 / 8.87 → 8.92 / 7.35 | S | — | landed (#268), measured Release on RTX 4090 and M5 Max; mesh input only, outside the live rig |
 | L1 | Shared-vertex remesh for the rig | ~3.4× fewer vertices | L | gfx | blocked |
 | L2 | Pipeline sets | overlaps set N's GPU work with set N+1's host work | L | P6 | later |
 | L3 | Read VideoToolbox's plane images directly | 0.28–0.31 ms GPU per 4K frame, Apple only | M | — | later |
