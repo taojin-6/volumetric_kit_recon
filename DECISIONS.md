@@ -14199,8 +14199,8 @@ byte for byte (4,272,320 B), and every frame's `tsdf` and `weight` hash the
 same as origin/main's in both bands, signed and shell.
 `recon_tsdf_mesh_integrate_exact` compares every voxel's bits with a brute
 force over the same bins, rebuilt by replaying the binning's work items
-through its own GLSL, on 21 fixtures. Planted bugs each fail it: a margin of
-0 (17 fixtures), the tie order reversed (12), the unsorted tail skipped (2),
+through its own GLSL, on 19 fixtures. Planted bugs each fail it: a margin of
+0 (15 fixtures), the tie order reversed (11), the unsorted tail skipped (2),
 and `>=` in place of both of the rule's `>` (the fan at zero distance, whose
 faces all measure 0 at the origin's voxel and whose lowest index signs it
 -0). Two do not, as the argument says: `>=` on the square alone, since the
