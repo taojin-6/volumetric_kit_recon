@@ -2008,7 +2008,7 @@ stream file, including through symlinks or case-insensitive names. An alias
 is `InvalidArgument`. The encoder and decoder are made after every output,
 so a refused output costs no kernel; an error after the stream file is made
 removes it for retry, as does destroying the stream unfinished before its
-first frame.
+first frame, and a codec error removes the new CSV too.
 
 **`codec_mesh`** codes one mesh or a numbered sequence of them (README,
 Codec evaluation, has the keys). The examples require core 0.16.0; core

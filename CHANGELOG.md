@@ -71,7 +71,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Tests: `recon_example_codec_stream`, `recon_example_set_codec`.
 - `examples`: **`CodecStream::create` makes its outputs before the codec's
   kernels**, so a port in use, a stream already at its path or a CSV that
-  cannot be written is refused without building them. Test:
+  cannot be written is refused without building them; a codec error then
+  removes the stream and CSV files it made. Test:
   `recon_example_codec_stream`.
 - `examples`: **`fuse_replica` re-meshes on the device**, as a live consumer
   does, and reads a mesh back only for the final PLY, so its timed loop no

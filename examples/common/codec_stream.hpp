@@ -290,7 +290,8 @@ class CodecStream {
   ///         @ref check_not_same_file's error when the CSV is the stream's
   ///         file; IoError naming a CSV that cannot be written; or the
   ///         `Encoder::create` / `Decoder::create` error. Each error after
-  ///         the stream is made removes its file again.
+  ///         the stream is made removes its file again, and a codec error
+  ///         the CSV too.
   static vkc::Result<CodecStream> create(vkc::Device& device,
                                          vkc::Allocator& allocator,
                                          const vr::codec::EncoderConfig& config,
@@ -338,20 +339,24 @@ class CodecStream {
         return csv_error(outputs.csv);
       }
     }
+    // A codec error takes back the files made above.
+    const auto refuse = [&](const vkc::Status& status) {
+      take_back(writer, outputs.stream);
+      if (csv.is_open()) {
+        csv.close();
+        std::error_code ignored;
+        std::filesystem::remove(outputs.csv, ignored);
+      }
+      return status;
+    };
     vkc::Result<vr::codec::Encoder> enc =
         vr::codec::Encoder::create(device, allocator, config);
-    if (!enc.ok()) {
-      take_back(writer, outputs.stream);
-      return enc.status();
-    }
+    if (!enc.ok()) return refuse(enc.status());
     std::optional<vr::codec::Decoder> dec;
     if (outputs.decode) {
       vkc::Result<vr::codec::Decoder> made =
           vr::codec::Decoder::create(device, allocator);
-      if (!made.ok()) {
-        take_back(writer, outputs.stream);
-        return made.status();
-      }
+      if (!made.ok()) return refuse(made.status());
       dec.emplace(std::move(made).value());
     }
     return CodecStream(device, allocator, std::move(enc).value(),

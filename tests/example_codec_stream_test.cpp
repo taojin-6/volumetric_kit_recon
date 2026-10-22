@@ -201,7 +201,7 @@ codec::EncoderConfig unusable_config() {
 
 // Outputs that cannot be made are refused by create with the writer's or
 // the stream's code, naming the path, before the encoder; outputs that can
-// be made get the encoder's refusal, and the stream's file is taken back.
+// be made get the encoder's refusal, and their files are taken back.
 int refused(vr_test::GpuContext& gpu, const vr_test::Scratch& scratch) {
   const auto refuses = [&gpu](const vr_example::CodecOutputs& outputs,
                               vkc::Status::Code code,
@@ -235,7 +235,7 @@ int refused(vr_test::GpuContext& gpu, const vr_test::Scratch& scratch) {
   made.stream = (scratch.path / "uncoded.vrst").string();
   made.csv = (scratch.path / "uncoded.csv").string();
   CHECK(refuses(made, vkc::Status::Code::InvalidArgument, "intra_period"));
-  CHECK(!fs::exists(made.stream));
+  CHECK(!fs::exists(made.stream) && !fs::exists(made.csv));
   return 0;
 }
 
