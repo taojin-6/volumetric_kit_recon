@@ -376,7 +376,7 @@ void main() {
         scanning = false;
       }
       if (scanning) {
-        s_any = 1u;
+        atomicOr(s_any, 1u);
         atomicMax(s_glimit[g], floatBitsToUint(limit) + 1u);
       }
       barrier();
