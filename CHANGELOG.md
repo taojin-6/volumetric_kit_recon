@@ -8,6 +8,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `codec`: **a decode writes only the voxels whose bits it changes**, so a
+  block a P-frame repeats costs the inverse its reads alone; grids and
+  stamps end as before, bit for bit. On room0 at 1 cm (21,771 blocks a
+  frame; M5 Max, Release, back to back, the median of 20 passes)
+  `..inverse` takes 0.51 ms of host time a frame, from 0.65, and the
+  decode's device time is 0.99 ms, from 1.12. Tests: `recon_codec_dct`.
 - `codec`: **`make_decode_grid` and `decode_growing` take a block ceiling**
   (BREAKING), so a forged header or frame from a file or a socket can no
   longer make a player's grid gigabytes large. A frame past `max_blocks`,
