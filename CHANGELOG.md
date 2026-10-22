@@ -889,6 +889,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `volume`: **a set that overfills the hash table no longer sweeps it once
+  per failing insert**: an insert that must overflow its bucket reports
+  `AllocFailures::heap` at once when fewer than an eighth of the blocks are
+  left, so the first 5 mm frame of a small table stops stalling the GPU for
+  most of a second (the 2026-08-08 decision, amended). Regression:
+  `recon_volume_hash_map`.
 - `mesh`: **`MeshExchange::begin_frame` hands an empty mesh to `commit`
   with its payload**, where it committed one at once and dropped the
   payload, so a consumer showing what the payload names (a player's frame)

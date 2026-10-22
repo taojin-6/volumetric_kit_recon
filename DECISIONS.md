@@ -97,7 +97,8 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-08-08**](#2026-08-08--the-overflow-scan-stays-exhaustive-what-gets-bounded-is-its-cost-per-slot-not-its-length) —
   The overflow scan stays exhaustive; what gets bounded is its cost per slot,
   not its length. *Amended 2026-10-13:* `diagnostics()` is gone; the device
-  confirms the chain fixtures.
+  confirms the chain fixtures. *Amended 2026-10-22:* the heap path refuses an
+  overflow insert, unscanned, below an eighth of the blocks.
 - [**2026-08-08**](#2026-08-08--fuse_viewer-draws-recons-buffers-interop-seam-b-end-to-end-and-the-release-mark-must-be-published-before-the-mesh-is-taken) —
   `fuse_viewer` draws recon's buffers: interop seam B, end to end, and the
   release mark must be published *before* the mesh is taken.
@@ -1929,6 +1930,15 @@ an absent one.
 `HashDiagnostics` and `volume_diagnostics_test.cpp` are gone;
 `coords_in_bucket` lives in `volume_hash_map_test.cpp`, whose chain fixtures
 the device confirms share their bucket.
+*Amended 2026-10-22:* change (2)'s premise, that an empty heap is the
+near-full state, was wrong. A dispatch that overfills the table leaves only
+anchors free, so the heap never empties, and every failing insert swept the
+whole table holding its home bucket's lock: Replica room0's first frame at
+5 mm in 4 096 buckets spent 0.70–0.90 s of allocate device time on an M5 Max
+(Release, three runs). On the heap path an overflow
+insert now reports `heap` without scanning once fewer than an eighth of the
+blocks are left, the anchors' share at the default bucket size; `table`
+remains a clean sweep's proof, on the rehash path and at smaller buckets.
 
 An M5 iPad Pro lost the GPU inside
 `allocate_from_depth` at **31 480 of 32 768 blocks** —
