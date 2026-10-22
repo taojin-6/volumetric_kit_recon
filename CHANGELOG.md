@@ -225,6 +225,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `stream`: **`nominal_period_ns`** (`stream/session.hpp`), a track's period
+  from its nominal rate, and 30 a second's for an unknown rate: the one
+  fallback every reader takes. `serve_stream`'s replay paces by it.
+  Test: `recon_stream_container`.
 - `examples`: **`fuse_orbbec` serves its coded sets live, and core 0.16.0
   is required** (core #46). With `output.serve`, a port, it codes each fused
   set as with `output.stream` and serves the records live on that port, on
