@@ -135,7 +135,7 @@ kernels.
 | P5 | Extract from the fuse's device block list | measured −14% an extract on the M5 Max, −35% on the RTX 5090 | M | P1 for the shared list | landed (#129); a fuse's list is no longer reused (2026-10-06) |
 | P4 | Bind texture views in place, with no per-remesh copies | measured 0.26–0.51 ms GPU per remesh at 4K, 0.04–0.12 at 720p | M | P1's descriptor-array decision | deferred |
 | P2 | Record a set's frame prep in one batch | measured parity once host colour stages on threads; the pipeline's unit of work | S | — | landed (`SensorArray::process`) |
-| P6 | Take the remaining host decisions off the critical path | at most ~0.5 ms/set on the RTX 5090, ~0.7 on the M5 Max (measured gap) | M | P1, P5 | step 1 landed (a live fuse waits on 1 fence a set, from 3); set time unmeasured |
+| P6 | Take the remaining host decisions off the critical path | at most ~0.5 ms/set on the RTX 5090, ~0.7 on the M5 Max (measured gap) | M | P1, P5 | step 1 landed; set time unmeasured |
 | P7 | Free the blocks nothing asks for or weights | measured: the map 7.3k → 2.9k blocks in 600 sets, integrate's device time −40% on the M5 Max, −50% on the RTX 5090; a static room keeps its size | M | — | landed (#132); device-list follow-up landed (#146) |
 | P9 | Allocate only the band blocks a sample can weight | ~60% of a static room's active set holds no weight; compaction, integrate and meshing scale with it | M | — | open, measure first |
 | D1 | Report a decoder's fallback to host pictures | makes a silent 12 MB/camera/frame PCIe regression visible | S | — | superseded: the decoders hand out device pictures only |
@@ -370,13 +370,11 @@ is measured.
 > also means rethinking #129's cached list, which holds that count. P2 was
 > dropped, so P6 no longer waits on it.
 
-> **Step 1 landed (2026-10-22): the fuse is one submit.** A throwaway bench
-> fused room0's four-frame sets through a partial `tsdf::Fuser`, as
-> `rig_viewer` does (1 cm, Release, M5 Max), counting `vkWaitForFences`:
-> 3 waits a set before, 1 after; a strict `Fuser` takes 2, from 3. The set's
-> time is unmeasured: the Mac was shared at a load average of 10–54, and 16
-> interleaved pairs of 95-set runs scattered 3.5–20.5 ms a set, a median
-> 7.8 ms before and 7.4 ms after. Measure it on the RTX 5090.
+> **Step 1 landed (2026-10-22): the fuse is one submit.** Counting
+> `vkWaitForFences` while a partial `tsdf::Fuser` fused room0's four-frame
+> sets as `rig_viewer` does (1 cm, Release, M5 Max): 3 waits a set before,
+> 1 after; a strict `Fuser` takes 2, from 3. The set's time is unmeasured;
+> measure it on the RTX 5090.
 
 With P1, P2 and P5 in place, three host decisions split a set, two of them
 taken off by step 1:
