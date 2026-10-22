@@ -58,7 +58,7 @@ conventions and Vulkan setup.
   `VKC_ASSIGN`, `VKC_CHECK`, `VKC_VK_TRY`).
   Deliberately *not* the `VK_` prefix — that belongs to Vulkan. (The prior
   engine's `VK_DEVICE_HOST`-style macros are renamed `VR_*` on port.)
-- CMake: `find_package(volumetric_kit_recon)`; component targets
+- CMake: fetched by commit (`FetchContent`); component targets
   `volumetric_kit::recon_camera`, `…_core`, `…_volume`, `…_tsdf`, `…_mesh`,
   `…_texture`,
   `…_sensor`, `…_codec`, `…_eval`, `…_io`, `…_stream`, `…_networking`, `…_interop` (+ later `…_track`),
@@ -618,8 +618,8 @@ source repos are left untouched on disk — never build or write in them.
   are **re-implemented as Vulkan compute shaders (GLSL → SPIR-V)** for the
   baseline, with an **optional native-CUDA port as the NVIDIA accelerator**
   (2026-07-04) — the algorithms transfer, the kernel source does not.
-- **Hardening applied on port:** add install/export + package config; replace
-  glog/fmt with the pluggable log handler; adopt `Status`/`Result` repo-wide;
+- **Hardening applied on port:** replace glog/fmt with the pluggable log
+  handler; adopt `Status`/`Result` repo-wide;
   rename `VK_*` device macros → `VR_*`; break the `ReconstructionPipeline`
   god-object so each tier has a standalone API; drop committed build artifacts,
   hardcoded paths, and machine-specific config.
@@ -649,11 +649,10 @@ a bitstream is reproducible on the device that wrote it and decodable on any.
 
 ## Packaging
 
-The repo installs and exports like its sibling: per-tier targets under a shared
-export set, a generated `volumetric_kit_reconConfig.cmake`, and consumption via
-both `find_package(volumetric_kit_recon)` and `FetchContent`.
-`VR_CAMERA_ONLY` builds and installs `recon_camera` alone; that package's
-config finds no Vulkan ([README](README.md#building)). Quality gates
+A consumer fetches recon by commit (`FetchContent`) and links its per-tier
+targets; recon has no install rules or package config (the 2026-10-22
+decision). `VR_CAMERA_ONLY` builds `recon_camera` alone, with no Vulkan
+([README](README.md#building)). Quality gates
 (warnings-as-errors, formatting hooks, sanitizer and test CI) are wired from the
 start, not retrofitted.
 
@@ -1658,9 +1657,9 @@ enabled, and importer unit/up-axis conversions are switched off where the
 installed Assimp allows: before 5.3 it still applies Collada's `<unit>`, and
 5.4.x converts FBX regardless. This is a host boundary for file input and output, separate from
 GPU-resident reconstruction. The default build has no Assimp dependency;
-`VR_WITH_ASSIMP=ON` finds an installed package and exports a separate target.
+`VR_WITH_ASSIMP=ON` finds an installed Assimp and builds a separate target.
 The image and PLY backends use the existing pinned stb and tinyply sources,
-now private implementation dependencies of the installed I/O library.
+now private implementation dependencies of the I/O library.
 
 `io/mesh_normalization.hpp`, in `recon_io`, holds opt-in helpers for a caller
 that knows its mesh's unit or up direction; nothing in recon calls them. They

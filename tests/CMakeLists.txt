@@ -64,20 +64,20 @@ foreach(_vr_var IN LISTS _vr_cache)
   endif()
 endforeach()
 
-# recon camera-only (VR_CAMERA_ONLY), with find_package(Vulkan) disabled: the
-# options that need the rest are refused, and a consumer builds against the
-# fetched source and against its install (subproject/camera_only.cmake).
-add_test(
-  NAME recon_subproject_camera_only
-  COMMAND
-    "${CMAKE_COMMAND}" "-DSOURCE_DIR=${PROJECT_SOURCE_DIR}"
-    "-DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/subproject_camera_only"
-    "-DGENERATOR=${CMAKE_GENERATOR}" "-DCXX_COMPILER=${CMAKE_CXX_COMPILER}"
-    ${_vr_fetched_sources} -P
-    "${CMAKE_CURRENT_SOURCE_DIR}/subproject/camera_only.cmake")
-
-# The camera tier is all VR_CAMERA_ONLY builds.
+# The camera tier is all VR_CAMERA_ONLY builds. Only they check recon
+# camera-only (subproject/camera_only.cmake): with find_package(Vulkan)
+# disabled, the options that need the rest are refused, and a consumer builds
+# against the fetched source. The camera-only CI job, which has no Vulkan at
+# all, is its home; it is Release whatever the build's type.
 if(VR_CAMERA_ONLY)
+  add_test(
+    NAME recon_subproject_camera_only
+    COMMAND
+      "${CMAKE_COMMAND}" "-DSOURCE_DIR=${PROJECT_SOURCE_DIR}"
+      "-DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/subproject_camera_only"
+      "-DGENERATOR=${CMAKE_GENERATOR}" "-DCXX_COMPILER=${CMAKE_CXX_COMPILER}"
+      ${_vr_fetched_sources} -P
+      "${CMAKE_CURRENT_SOURCE_DIR}/subproject/camera_only.cmake")
   return()
 endif()
 
@@ -1378,10 +1378,10 @@ add_dependencies(
 # tier. The old core is this one stamped 0.0.1, standing in for one below a
 # later floor: a real core older than 0.1.0 has no vkc_require_core at all.
 #
-# TODO: move this core-requirement harness -- the message helper, the base-only
-# core fixture below and subproject/'s version stamp, which gfx and calib repeat
-# -- into the core's test support, as a function each sibling calls with its
-# package and floor, and port the siblings onto it in one series.
+# TODO: move this core-requirement harness -- the message helper and
+# subproject/'s version stamp, which gfx and calib repeat -- into the core's
+# test support, as a function each sibling calls with its package and floor, and
+# port the siblings onto it in one series.
 set(_vr_subproject "${CMAKE_CURRENT_BINARY_DIR}/subproject")
 add_test(NAME recon_subproject_clean COMMAND "${CMAKE_COMMAND}" -E rm -rf
                                              "${_vr_subproject}")
@@ -1415,6 +1415,13 @@ add_test(NAME recon_subproject_glsl
                  --target vr_glsl_consumer)
 set_tests_properties(recon_subproject_glsl PROPERTIES FIXTURES_REQUIRED
                                                       vr_subproject_defaults)
+# ... and compiles the public headers that reach the volume tier, which hold
+# none of the hash table's internals (subproject/internal_names.cpp).
+add_test(NAME recon_subproject_headers
+         COMMAND "${CMAKE_COMMAND}" --build "${_vr_subproject}/defaults"
+                 --target vr_public_headers)
+set_tests_properties(recon_subproject_headers PROPERTIES FIXTURES_REQUIRED
+                                                         vr_subproject_defaults)
 _vr_add_subproject_test(recon_subproject_old_core old_core -DVR_CORE_FIRST=ON
                         -DVKC_WITH_VULKAN=ON -DVR_CONSUMER_CORE_VERSION=0.0.1)
 _vr_expect_message(
@@ -1427,104 +1434,6 @@ _vr_expect_message(
   recon_subproject_core_without_vulkan
   "volumetric_kit_recon needs volumetric_kit_core's vulkan tier, which the core at .+ was built without: set VKC_WITH_VULKAN ON before"
 )
-
-# What a project that finds an installed recon gets (package/): this build,
-# installed with the core it carries, is found, with every imported target its
-# link interface names; and recon's package config, as this build generated it,
-# is not found on an installed core without the vulkan tier, saying why. That
-# core is built and installed for the test.
-include(FetchContent)
-FetchContent_GetProperties(volumetric_kit_core SOURCE_DIR _vr_core_source)
-if(VR_INSTALL AND _vr_core_source)
-  set(_vr_package "${CMAKE_CURRENT_BINARY_DIR}/package")
-  add_test(NAME recon_package_clean COMMAND "${CMAKE_COMMAND}" -E rm -rf
-                                            "${_vr_package}")
-  set_tests_properties(recon_package_clean PROPERTIES FIXTURES_SETUP
-                                                      vr_package_clean)
-  # This build's prefixes after the install's; a -DCMAKE_PREFIX_PATH given twice
-  # keeps only the last.
-  string(REPLACE ";" "$<SEMICOLON>" _vr_prefixes "${CMAKE_PREFIX_PATH}")
-  if(_vr_prefixes)
-    set(_vr_prefixes "$<SEMICOLON>${_vr_prefixes}")
-  endif()
-  add_test(NAME recon_package_install
-           COMMAND "${CMAKE_COMMAND}" --install "${PROJECT_BINARY_DIR}"
-                   --config "$<CONFIG>" --prefix "${_vr_package}/recon-install")
-  set_tests_properties(
-    recon_package_install PROPERTIES FIXTURES_REQUIRED vr_package_clean
-                                     FIXTURES_SETUP vr_package_recon)
-  add_test(
-    NAME recon_package_found
-    COMMAND
-      "${CMAKE_COMMAND}" -S "${CMAKE_CURRENT_SOURCE_DIR}/package" -B
-      "${_vr_package}/found" -G "${CMAKE_GENERATOR}"
-      "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
-      "-DCMAKE_PREFIX_PATH=${_vr_package}/recon-install${_vr_prefixes}")
-  set_tests_properties(
-    recon_package_found PROPERTIES FIXTURES_REQUIRED vr_package_recon
-                                   FIXTURES_SETUP vr_package_found)
-  # ... and compiles a kernel that includes the installed GLSL through the root
-  # the package config names (glsl_consumer.cmake).
-  add_test(NAME recon_package_glsl
-           COMMAND "${CMAKE_COMMAND}" --build "${_vr_package}/found" --target
-                   vr_glsl_consumer)
-  set_tests_properties(recon_package_glsl PROPERTIES FIXTURES_REQUIRED
-                                                     vr_package_found)
-  # ... and compiles the installed headers that reach the volume tier, which
-  # hold none of the hash table's internals (package/internal_names.cpp).
-  add_test(NAME recon_package_headers
-           COMMAND "${CMAKE_COMMAND}" --build "${_vr_package}/found" --target
-                   vr_package_headers)
-  set_tests_properties(recon_package_headers PROPERTIES FIXTURES_REQUIRED
-                                                        vr_package_found)
-  add_test(
-    NAME recon_package_base_core_configure
-    COMMAND
-      "${CMAKE_COMMAND}" -S "${_vr_core_source}" -B "${_vr_package}/core" -G
-      "${CMAKE_GENERATOR}" "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
-      -DCMAKE_BUILD_TYPE=Release -DVKC_WITH_VULKAN=OFF -DVKC_BUILD_TESTS=OFF
-      -DVKC_WARNINGS_AS_ERRORS=OFF
-      "-DCMAKE_INSTALL_PREFIX=${_vr_package}/core-install")
-  set_tests_properties(
-    recon_package_base_core_configure
-    PROPERTIES FIXTURES_REQUIRED vr_package_clean FIXTURES_SETUP
-               vr_package_base_core_build)
-  add_test(NAME recon_package_base_core_install
-           COMMAND "${CMAKE_COMMAND}" --build "${_vr_package}/core" --target
-                   install)
-  set_tests_properties(
-    recon_package_base_core_install
-    PROPERTIES FIXTURES_REQUIRED vr_package_base_core_build FIXTURES_SETUP
-               vr_package_base_core)
-  add_test(
-    NAME recon_package_core_without_vulkan
-    COMMAND
-      "${CMAKE_COMMAND}" -S "${CMAKE_CURRENT_SOURCE_DIR}/package" -B
-      "${_vr_package}/consumer" -G "${CMAKE_GENERATOR}"
-      "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
-      "-Dvolumetric_kit_recon_DIR=${PROJECT_BINARY_DIR}/src"
-      "-DCMAKE_PREFIX_PATH=${_vr_package}/core-install")
-  set_tests_properties(recon_package_core_without_vulkan
-                       PROPERTIES FIXTURES_REQUIRED vr_package_base_core)
-  _vr_expect_message(
-    recon_package_core_without_vulkan
-    "Reason given by package: volumetric_kit_recon needs volumetric_kit_core's vulkan tier, which the core installed at .+ was built without: install one built with VKC_WITH_VULKAN ON"
-  )
-  # The same refusal to a project that finds recon QUIET leaves none of the
-  # package config's variables behind.
-  add_test(
-    NAME recon_package_quiet_not_found
-    COMMAND
-      "${CMAKE_COMMAND}" -S "${CMAKE_CURRENT_SOURCE_DIR}/package" -B
-      "${_vr_package}/quiet" -G "${CMAKE_GENERATOR}"
-      "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}" -DVR_CONSUMER_QUIET=ON
-      "-Dvolumetric_kit_recon_DIR=${PROJECT_BINARY_DIR}/src"
-      "-DCMAKE_PREFIX_PATH=${_vr_package}/core-install")
-  set_tests_properties(
-    recon_package_quiet_not_found
-    PROPERTIES FIXTURES_REQUIRED vr_package_base_core PASS_REGULAR_EXPRESSION
-               "volumetric_kit_recon found: '(0|FALSE)', left behind: ''")
-endif()
 
 # Start the slowest tests first under `ctest --parallel`. Without a COST, CTest
 # runs tests in the order they were added, and a fresh CI runner has no timing

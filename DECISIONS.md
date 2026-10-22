@@ -593,7 +593,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   per-tier copies): values, not structs, so scalar-layout and std430 kernels
   both call it; recon's kernels project through it, keeping only their own
   acceptance rules; and `recon_core`'s `VR_SHADER_INCLUDE_DIR` names the root
-  a consumer includes it under, fetched or installed.
+  a consumer includes it under, fetched or installed. *Amended 2026-10-22:*
+  fetched only; recon installs nothing.
 - [**2026-10-16**](#2026-10-16--a-brew-upgrade-needs-no-cache-clearing-the-mac-jobs-install-nothing-and-the-dependency-cache-keys-on-the-cores-homebrew-key) —
   A brew upgrade needs no cache clearing: the Mac jobs install nothing, and
   the dependency cache keys on the core's Homebrew key.
@@ -655,6 +656,11 @@ entries relevant to your task; later amendments supersede earlier rules.
   is ruled out only by a bound, less a rounding margin of its own, strictly
   above the voxel's limit, so every voxel writes what its whole bin writes.
   Blocks past 16^3 voxels are refused.
+- [**2026-10-22**](#2026-10-22--recon-is-fetched-by-commit-never-installed-no-install-rules-package-config-or-package-tests-amends-the-2026-10-16-glsl-pinhole-entry-and-the-2026-10-17-amendment-of-the-2026-10-13-block-list-entry) —
+  recon is fetched by commit, never installed (the owner's rule for the
+  family): no install rules, package config or package tests. The
+  add_subdirectory checks stay, the public headers' one among them, and the
+  camera-only check runs in the camera-only build alone.
 
 ## Decision record
 
@@ -12897,6 +12903,8 @@ primes become the tests' oracle (`tests/volume_hash_oracle.hpp`).
 `hash_lookup.glsl`. `recon_package_headers` fails if `volume/hash.hpp` is
 installed again, or if an installed volume header, or an installed header
 that includes one, declares any of these names in the volume namespace.
+*Amended 2026-10-22 (the install entry):* `recon_subproject_headers` makes
+that check on the public headers, as a fetching sibling sees them.
 
 **The rule** is the user's (2026-10-13): only I/O takes a host path --
 reading a mesh model, a camera stream (Orbbec, ARKit) -- and what it reads
@@ -13558,6 +13566,9 @@ UBSan (CI runs them).
 
 ### 2026-10-16 — A shared GLSL pinhole for recon and its consumers: `core/shaders/pinhole.glsl`, exported under the include root `recon_core` names (amends the 2026-08-11 texturing entry's per-tier copies).
 
+*Amended 2026-10-22 (the install entry):* recon installs nothing, so the
+root is the build tree's copy alone.
+
 calib's depth checks run kernels of their own over recon's prepared depth,
 and they must project and unproject it by recon's rules. A copy in calib
 would be a second pinhole. The core cannot hold it, since its decisions lock
@@ -14196,6 +14207,29 @@ fail.
 
 **Not done**: the conversion's smaller costs around the write, in DESIGN's
 Next work.
+
+### 2026-10-22 — recon is fetched by commit, never installed: no install rules, package config or package tests (amends the 2026-10-16 GLSL pinhole entry and the 2026-10-17 amendment of the 2026-10-13 block-list entry).
+
+**The rule** is the owner's, for the whole family: a sibling is consumed by
+commit (`FetchContent`), as the player and ios fetch recon; only third-party
+SDKs are installed prerequisites. No consumer ever found an installed recon,
+and with siblings pinning different core minors, one prefix could not hold
+them together anyway.
+
+**What goes.** `VR_INSTALL` and every `install()` rule,
+`cmake/volumetric_kit_reconConfig.cmake.in` and what fed it only
+(`VR_FFMPEG_CONSUMER_MODULES`), and `tests/package` with its nine
+`recon_package_*` tests, which built and installed a base-only core per run.
+recon sets the core's `VKC_INSTALL` OFF. `VR_SHADER_INCLUDE_DIR` names the
+build tree's copy of the exported GLSL alone.
+
+**What stays.** The add_subdirectory checks (`tests/subproject`): the
+defaults, the GLSL root, the core refusals, and the public headers' check of
+the hash table's internals, now `recon_subproject_headers` on the headers
+under `include/`. `recon_subproject_camera_only` drops its install step and
+is registered only in a `VR_CAMERA_ONLY` build: its configures are Release
+with Vulkan hidden whatever the leg, so the camera-only job, the one place
+with no Vulkan at all, is its home.
 
 ## Measured lessons
 

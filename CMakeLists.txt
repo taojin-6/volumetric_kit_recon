@@ -20,9 +20,10 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 # --- Options -----------------------------------------------------------------
 # PROJECT_IS_TOP_LEVEL (set by project() since CMake 3.21, our floor) is ON only
 # when we are the root project, not pulled in via add_subdirectory/FetchContent;
-# the "build the extras", "generate install rules" and -Werror defaults follow
-# from it. A consumer's newer compiler then shows it our new warnings rather
-# than failing its build (tests/subproject checks the extras and -Werror).
+# the "build the extras" and -Werror defaults follow from it. A consumer's newer
+# compiler then shows it our new warnings rather than failing its build
+# (tests/subproject checks the extras and -Werror). recon has no install rules:
+# a consumer fetches it by commit (DECISIONS.md, 2026-10-22).
 #
 # VR_CAMERA_ONLY builds recon_camera alone, with no Vulkan (DECISIONS,
 # 2026-10-06, amended 2026-10-11). The examples and every driver need the rest.
@@ -34,7 +35,6 @@ else()
 endif()
 option(VR_BUILD_EXAMPLES "Build example programs" ${_vr_examples_default})
 option(VR_BUILD_TESTS "Build tests" ${PROJECT_IS_TOP_LEVEL})
-option(VR_INSTALL "Generate install/export rules" ${PROJECT_IS_TOP_LEVEL})
 option(VR_WARNINGS_AS_ERRORS "Treat first-party compiler warnings as errors"
        ${PROJECT_IS_TOP_LEVEL})
 # OFF by default: the Orbbec SDK is a prerequisite you install, not a vendored
@@ -87,9 +87,8 @@ include(vr_sanitizers)
 # --- Dependencies + library --------------------------------------------------
 # The Vulkan loader (linked at runtime) + headers, from the system SDK (MoltenVK
 # on Apple). Public: recon's headers reach Vulkan through the core's
-# core/vulkan/vulkan.hpp, so the requirement is carried on the exported target
-# and the package Config re-runs find_dependency(Vulkan). Mirrors
-# volumetric_kit_gfx.
+# core/vulkan/vulkan.hpp, so the requirement is carried on recon's targets.
+# Mirrors volumetric_kit_gfx.
 if(NOT VR_CAMERA_ONLY)
   find_package(Vulkan REQUIRED)
 endif()
@@ -109,12 +108,11 @@ if(VR_WITH_ASSIMP)
   find_package(assimp CONFIG REQUIRED)
 endif()
 
-# Pinned dependencies: volumetric_kit_core, linked PUBLIC and installed beside
-# recon, and implementation dependencies that expose private include paths to
-# the tiers below and never become part of the installed link interface. The
-# oldest core recon's libraries build with is checked in the core that arrives
-# (third_party/, which also checks the examples' and tests' later floor) and
-# again by the installed package config: 0.2.0 for whole-file I/O, check_path,
+# Pinned dependencies: volumetric_kit_core, linked PUBLIC, and implementation
+# dependencies that expose private include paths to the tiers below and never
+# become part of their link interface. The oldest core recon's libraries build
+# with is checked in the core that arrives (third_party/, which also checks the
+# examples' and tests' later floor): 0.2.0 for whole-file I/O, check_path,
 # exception_status and UniqueFd in the base tier.
 set(VR_CORE_MIN_VERSION 0.2.0)
 add_subdirectory(third_party)

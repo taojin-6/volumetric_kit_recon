@@ -8,7 +8,6 @@
 # Mesh it textures) and recon_volume (DepthCameraParams + the projection ABI),
 # per the strict left-to-right tier rule.
 include(GenerateExportHeader)
-include(GNUInstallDirs)
 
 set(_vr_texture_generated_inc "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
 
@@ -47,10 +46,8 @@ target_compile_features(recon_texture PUBLIC cxx_std_17)
 target_link_libraries(recon_texture PUBLIC recon_mesh recon_volume)
 
 target_include_directories(
-  recon_texture
-  PUBLIC "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>"
-         "$<BUILD_INTERFACE:${_vr_texture_generated_inc}>"
-         "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
+  recon_texture PUBLIC "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>"
+                       "$<BUILD_INTERFACE:${_vr_texture_generated_inc}>")
 
 # Compile the GLSL view-selection kernel to SPIR-V and embed it as a constexpr
 # byte array (projective_texturer.cpp #includes the generated *.spv.hpp on a
@@ -63,25 +60,3 @@ vr_embed_shaders(
   "${CMAKE_CURRENT_SOURCE_DIR}/shaders/texture_multiview.comp")
 
 vr_target_warnings(recon_texture)
-
-# Install the target into the shared export set + this tier's headers (the
-# texture/ subtree) + its generated export header. Mirrors recon_tsdf so a
-# partial build never installs a header for a tier it did not build.
-if(VR_INSTALL)
-  install(
-    TARGETS recon_texture
-    EXPORT volumetric_kit_reconTargets
-    ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
-    LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
-    RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
-  install(
-    DIRECTORY "${PROJECT_SOURCE_DIR}/include/volumetric_kit/recon/texture"
-    DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/volumetric_kit/recon"
-    FILES_MATCHING
-    PATTERN "*.hpp")
-  install(
-    DIRECTORY "${_vr_texture_generated_inc}/"
-    DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
-    FILES_MATCHING
-    PATTERN "*.hpp")
-endif()

@@ -603,6 +603,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
+- build: **install rules and the package config** (BREAKING; the
+  2026-10-22 decision). recon is consumed by commit: `VR_INSTALL`,
+  `volumetric_kit_reconConfig.cmake` and `find_package(volumetric_kit_recon)`
+  go, and the core recon fetches installs nothing either. Migrating: fetch
+  recon pinned by commit with `FetchContent` (README, Building). Tests:
+  `recon_subproject_headers` (was `recon_package_headers`), and
+  `recon_subproject_camera_only`, now in camera-only builds alone.
 - `volume`: **the hash table's internals** (BREAKING): `volume/hash.hpp` is
   no longer installed, and `HashEntry` leaves `hash_types.hpp`. `HashEntry`
   and the fail-tally slots (`kFail*`) are internal. The host slot sentinels

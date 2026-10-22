@@ -1,17 +1,18 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Tao Jin
 
-// recon_package_headers compiles this against the installed recon and never
-// runs it. The hash table's internals stay out of the install: volume/hash.hpp
-// is not installed; every installed volume header, and every installed recon
-// header that includes one, compiles without it; and none of them declares one
-// of the names below in the volume namespace.
+// recon_subproject_headers compiles this in the sibling that fetches recon and
+// never runs it. The hash table's internals stay out of the public headers:
+// volume/hash.hpp is not on the include path recon's targets give a consumer;
+// every public volume header, and every public recon header that includes one,
+// compiles without it; and none of them declares one of the names below in the
+// volume namespace.
 
 #if __has_include("volumetric_kit/recon/volume/hash.hpp")
-#error "volume/hash.hpp is installed, but the hash table's layout is internal"
+#error "volume/hash.hpp is public, but the hash table's layout is internal"
 #endif
 
-// Those headers, as package/CMakeLists.txt finds them in the install.
+// Those headers, as subproject/CMakeLists.txt finds them in recon's include/.
 #include "vr_volume_headers.hpp"
 
 // An alias is ill-formed after any other declaration of its name: a class or
