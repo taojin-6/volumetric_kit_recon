@@ -5902,9 +5902,9 @@ better of each, measured rather than argued:
   sweep decoding into the stream's player carry over into the examples.
 - **Tests from #95**, ported: thin triangles against the double-precision
   answer (50 000 draws, enough to meet Ericson's rare misses; reverting to
-  it fails), and the pruned search against a scan of every triangle
-  (probing one cell fewer along x, or leaving the box gap unsquared,
-  fails). One
+  it fails; 5 000 under the sanitizers), and the pruned search against a
+  scan of every triangle (probing one cell fewer at either end along x, or
+  leaving the box gap unsquared, fails at 500 points). One
   change survives: trusting the face down to any nonzero area passes every
   case too. The 1e-4 guard is kept as a margin, not a measured need.
 
