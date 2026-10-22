@@ -122,6 +122,22 @@ if(VR_BUILD_TESTS)
   vr_target_warnings(recon_example_viewer_device_test)
   add_test(NAME recon_example_viewer_device
            COMMAND recon_example_viewer_device_test)
+
+  # The render pass both live viewers record (viewer_common.hpp), on a headless
+  # gfx device. Skips with no device under the core policy.
+  add_executable(recon_example_viewer_pass_test
+                 "${PROJECT_SOURCE_DIR}/tests/example_viewer_pass_test.cpp")
+  target_link_libraries(
+    recon_example_viewer_pass_test
+    PRIVATE volumetric_kit::core_test_policy volumetric_kit::recon_mesh
+            volumetric_kit::gfx_glfw Vulkan::Vulkan)
+  target_include_directories(
+    recon_example_viewer_pass_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}"
+                                           "${PROJECT_SOURCE_DIR}/tests")
+  vr_target_warnings(recon_example_viewer_pass_test)
+  add_test(NAME recon_example_viewer_pass
+           COMMAND recon_example_viewer_pass_test)
+  set_tests_properties(recon_example_viewer_pass PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 
 # fuse_viewer: the live window -- fuses on a background thread, draws the

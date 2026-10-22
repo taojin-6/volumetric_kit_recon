@@ -932,6 +932,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   decision, amended). Regressions: `recon_volume_allocate_triangles`,
   `recon_tsdf_integrate`, `recon_tsdf_mesh_integrate`,
   `recon_mesh_marching_cubes_sparse`.
+- `examples`: **`fuse_viewer` and `rig_viewer` time the whole render pass
+  on the GPU**, as the Performance panel's "render pass" row; its
+  "mesh draw" and "overlay draw" rows are CPU-only. On Apple GPUs those two
+  read about 0 ms as GPU scopes inside the pass. Test:
+  `recon_example_viewer_pass`.
 - `mesh`: **`MeshExchange::begin_frame` hands an empty mesh to `commit`
   with its payload**, where it committed one at once and dropped the
   payload, so a consumer showing what the payload names (a player's frame)
