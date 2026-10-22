@@ -1545,9 +1545,15 @@ whose header has the filters): a line fit across each face, and at coarser
 steps a Gaussian after it. The host picks the filter per frame from the
 header alone: K and T, the step of DC and the zigzag's next three
 coefficients at their basis peaks, in millimetres, select a row of
-`kDeblockRule`, the study's rule; a fine step runs none. The line passes run
-in place on `tsdf`, a dispatch an axis, a 64-lane workgroup a block and a
-lane a face line, probing the block and its +axis neighbour through
+`kDeblockRule`, the study's rule; a fine step runs none. Nor does a frame any
+of whose blocks has an unobserved voxel (that entry's 2026-10-22 decision),
+found on the device: the inverse, which reads every mask, sets a word with
+`atomicOr` when a block's mask is not all ones, zeroed earlier in the batch;
+every deblock kernel returns first thing when it is set; and the inverse's
+readback, after the deblock, carries it beside the reject count, so the
+frame reports `"off"`. The line passes run in place on `tsdf`, a dispatch an
+axis, a 64-lane workgroup a block and a lane a face line, probing the block
+and its +axis neighbour through
 `vrResolveOctants` (`block_neighbourhood.glsl`). The Gaussian is one
 dispatch a block over the block and the 1-voxel halo of its 26 neighbours,
 in shared memory; it writes the interior in place and the shell, the
@@ -2178,7 +2184,10 @@ encode stays slower than intra's on the host alone (the 2026-10-17 freeze
 entry). For true-SDF streams (the 2026-10-21 entry): the step-keyed deblock
 in the player; one 0.2 m comparison reach in `codec_compare_options`, which
 reaches max(truncation, 2 cm) today; and a sweep ladder in metres, since
-fractions of a 16-voxel band are coarse steps.
+fractions of a 16-voxel band are coarse steps. For the deblock (the deblock
+entry's 2026-10-22 decision): a mask-edge guard, before masked frames are
+filtered again, and the K56 template's frames with a cut, which it now
+skips.
 
 **On `fuse_orbbec`'s stream** (the 2026-10-20 entry): a capture-volume
 crop (`fusion.max_depth_m` is the limit there is), raw RGBD recording and

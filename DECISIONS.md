@@ -679,13 +679,15 @@ entries relevant to your task; later amendments supersede earlier rules.
   keeps its mask, byte for byte. The mesh templates convert in 16 voxels
   and code at K 56, about 2 Mbit/s on Rafa2; the format, the decoder and
   the goldens are unchanged.
-- [**2026-10-21**](#2026-10-21--the-decoder-deblocks-on-request-a-runtime-switch-off-by-default-runs-the-studys-step-keyed-line-fit-and-gaussian-on-the-device-in-the-decodes-last-submit-and-a-paused-player-rebuilds-its-frame-from-the-reference-amends-the-2026-10-13-decoder-entry) —
+- [**2026-10-21**](#2026-10-21--the-decoder-deblocks-on-request-a-runtime-switch-off-by-default-runs-the-studys-step-keyed-line-fit-and-gaussian-on-the-device-in-the-decodes-last-submit-on-a-frame-without-an-unobserved-voxel-and-a-paused-player-rebuilds-its-frame-from-the-reference-amends-the-2026-10-13-decoder-entry) —
   The decoder deblocks on request: `Decoder::set_deblock`, off by default
   and read at each decode, runs the study's step-keyed line fit and
   Gaussian on the device in the decode's last submit, its filter picked
   from each frame's header; `Decoder::rebuild` remakes the last frame from
   the reference with the switch as it is, so a paused player shows a
-  toggle. Streams are unchanged.
+  toggle. Streams are unchanged. *2026-10-22:* a frame with an unobserved
+  voxel is skipped, so a live RGB-D stream decodes exactly: on a live room
+  capture the filter erodes surface at mask edges and in thin parts.
 - [**2026-10-22**](#2026-10-22--recon-is-fetched-by-commit-never-installed-no-install-rules-package-config-or-package-tests-amends-the-2026-10-16-glsl-pinhole-entry-and-the-2026-10-17-amendment-of-the-2026-10-13-block-list-entry) —
   recon is fetched by commit, never installed (the owner's rule for the
   family): no install rules, package config or package tests. The
@@ -14440,7 +14442,7 @@ template against this build on the new one: `codec encode` takes
 conversion in each band is timed in the `MeshIntegrator` entry, above. Not
 run: the RTX 5090, ASan and UBSan (CI runs them).
 
-### 2026-10-21 — The decoder deblocks on request: a runtime switch, off by default, runs the study's step-keyed line fit and Gaussian on the device in the decode's last submit, and a paused player rebuilds its frame from the reference (amends the 2026-10-13 decoder entry).
+### 2026-10-21 — The decoder deblocks on request: a runtime switch, off by default, runs the study's step-keyed line fit and Gaussian on the device in the decode's last submit, on a frame without an unobserved voxel, and a paused player rebuilds its frame from the reference (amends the 2026-10-13 decoder entry).
 
 The 2026-10-21 quantization study found the steps quantization leaves at
 block faces the largest error a decoded mesh shows, and a decoder-side
@@ -14466,6 +14468,23 @@ live.
   confirm:* K 36–55, which the study did not fit, takes the rows of K 56
   and above. An RDOQ stream would need a signal the frozen header lacks;
   none ships.
+- **Only on a frame whose masks are all ones** (the owner, 2026-10-22, on
+  the live rig's result below): a frame any of whose blocks has an
+  unobserved voxel decodes exactly as with the switch off and reports
+  `"off"`, with its T. So a live RGB-D stream decodes exactly, and the
+  player can default the switch on. A true-SDF frame's masks are all ones
+  but its cuts: of the K56 template's 150 frames, the 79 without a cut are
+  deblocked as before and the 71 with one, from frame 74 on (1–29 blocks of
+  about 1,920), are not. Of the study's streams below, stock is masked on
+  every frame, and stk682a, stk2 and stk1 are mask-free. The inverse, which
+  reads every mask, finds such a frame: it sets a device word with
+  `atomicOr`, zeroed before it in the batch, which every deblock kernel
+  reads first and returns on, and which the inverse's readback carries
+  beside its reject count; no submit, wait or mapping is added. The
+  kernels' rules for unobserved taps stay, for a mask-edge guard on masked
+  frames later: at 1 cm, a host emulation leaving every voxel within a
+  voxel of an unobserved one exact improved chamfer by 2.2% (the filter
+  alone, 1.9%) and lost 69% less surface.
 - **In the decode's last submit.** The inverse records without submitting
   (`DctTransform::record_inverse`), the deblock follows it, and the
   inverse's reject count is read back last, so no copy splits the compute.
@@ -14506,9 +14525,10 @@ live.
 
 **Validation.** Apple M5 Max, MoltenVK, Release with warnings as errors,
 core `b992f12`: the 101 tests pass under the validation layer and
-synchronization validation. So do the 100 of a Linux build, GCC 15.2 with
-no Assimp, FFmpeg, CUDA or Orbbec, on an NVIDIA RTX 5090 (Ubuntu 26.04,
-driver 615.71), its ICD the loader's only one. `recon_codec_deblock` holds
+synchronization validation, the gate's included, and the four codec tests
+it touches in Debug. Before the gate, so did the 100 of a Linux build, GCC
+15.2 with no Assimp, FFmpeg, CUDA or Orbbec, on an NVIDIA RTX 5090 (Ubuntu
+26.04, driver 615.71), its ICD the loader's only one. `recon_codec_deblock` holds
 the kernels to a CPU oracle ported from the study's filters, which reads a
 snapshot of each pass whatever order the workgroups run in, within 2e-6 of
 the band: LF, LG, R and each stage alone over partial masks, missing face,
@@ -14522,25 +14542,37 @@ reverse, and in chunks of 2 and 3, gives the one-dispatch run's bits, so a
 voxel one workgroup writes and another reads in a pass fails in one order
 or the other. The fixtures' blocks sit past slot 2n, their lists carry
 other blocks' `ptr`s, and their masks are by list position. The Decoder's
-cases: off is the exact decode; on, every frame is the oracle's filter of
-the exact decode under the row the rule picks (none, LF, LG, R by T, R at
-K 20), and not the next row's; I- and P-frames toggled between frames,
-and four filters in one decoder over growing frames; `rebuild` equal to the
-decode with the switch so, its refusals leaving the grid as it was, and the
-next P-frame unchanged by it; a block only the deblock writes stamped; the
-rows unchanged. 26 bugs planted by hand each failed their case, among them
+cases: off is the exact decode; on, every mask-free frame is the oracle's
+filter of the exact decode under the row the rule picks (none, LF, LG, R by
+T, R at K 20), and not the next row's; I- and P-frames toggled between
+frames, and four filters in one decoder over growing frames; `rebuild` equal
+to the decode with the switch so, its refusals leaving the grid as it was,
+and the next P-frame unchanged by it; a block only the deblock writes
+stamped; the rows unchanged. The gate's: a masked chain's I- and P-frames,
+and its `rebuild`, the exact decode to the bit, stamps too, reported
+`"off"`; a single unobserved voxel skipping its whole frame; masked and
+mask-free frames interleaved in one decoder; a true-SDF sphere deblocked
+and a cut curtain skipped; and the skip word, set, leaving the grid, its
+stamps and, over a primed snapshot, the store's copy as they were under
+every filter, and zero running the filter. 26 bugs planted by hand each
+failed their case, among them
 a shell voxel written in place on either face (the serialized orders), p
 and q swapped, candidacy over two samples, the kink at `>`, either clip or
 the clamp dropped, a 6-face halo, no chunk base, the snapshot or the masks
 by slot, a trusted `ptr`, the axes reversed, the deblock before the inverse,
 an ignored switch, `rebuild` without the diff, either stamp dropped, and a
 deblock on by default (`recon_codec_inter` and `recon_codec_deblock`;
-`recon_codec_decoder`'s bounds are loose enough to pass it).
+`recon_codec_decoder`'s bounds are loose enough to pass it); so did 9 for
+the gate: the flag never set, set from lane 0's line alone, or never
+zeroed; each kernel ignoring the word; the decoder binding none, or
+reporting the rule's filter; and the deblock binding its zero word over the
+caller's.
 
 By hand, against the study's own CPU code, its T computed its own way, on
 Rafa2 frames 1–150 of the prototype's four streams and the K56 template's,
-every frame: the decoder with the switch on (the rule's filter), and LF, LG
-and R each forced on the exact decode. All 20 pass the study's rule: every
+every frame: the rule's filter as the decoder ran it with the switch on
+before the gate, and LF, LG and R each forced on the exact decode. All 20
+pass the study's rule: every
 voxel within 0.030 µm (none over 1 µm), the marching-cubes triangle count
 equal on every frame (five sign flips, each within 0.00012 µm), no weight,
 unobserved voxel or block changed. T matched the study's to the bit on
@@ -14556,7 +14588,19 @@ T and the row the study's on every frame.
 | stk1 | 0.335 mm | LG | 0.030 / 0.011 / 0.030 / 0.022 µm |
 | K56 template | 0.200 mm | LF | 0.011 / 0.011 / 0.030 / 0.015 µm |
 
-**Time,** Release, on the M5 Max and on the RTX 5090 above (with an Intel
+With the gate, the M5 Max decoded every frame of these five streams and of
+the two room captures below with the switch on and off, each grid hashed
+against the pre-gate build's: the exact decode is unchanged on every frame;
+a masked frame decodes on as off and reports `"off"` (stock's 150, the
+rooms' 305 and 302, and the K56 template's 71); a mask-free frame decodes
+on, its filter too, as before the gate (the 150 of stk682a, stk2 and stk1
+each, and the K56 template's 79); and `rebuild` with the switch on equals
+the decode on every frame.
+
+**Time** the filter takes where it runs, measured before the gate, on every
+frame, stock's masked ones included; the gate's own cost, an atomic a
+masked block in the inverse and a word more read back, is not timed.
+Release, on the M5 Max and on the RTX 5090 above (with an Intel
 Core Ultra 9 285K; clocks not locked), each unit run only once the GPU had
 been idle for 3 s with no other test, player or scratch GPU binary running
 (nor, on the RTX 5090's host, a CI job or another compute app) and other
@@ -14597,7 +14641,7 @@ which ran off with metrics first, read that mode's device row 0.03–0.09 ms
 above rounds 0 and 1 on every stream and is left out. stk682a is the
 control: its rule picks no filter, so on and off do the same work.
 
-| Stream (filter) | M5 Max: device | wall | wall, metrics on | RTX 5090: device | wall | wall, metrics on |
+| Stream (the filter run) | M5 Max: device | wall | wall, metrics on | RTX 5090: device | wall | wall, metrics on |
 |---|---|---|---|---|---|---|
 | stock (LG) | +0.12 ± 0.27 | +0.60 ± 0.27 | +0.47 ± 0.29 | +0.054 ± 0.001 | +0.007 ± 0.054 | −0.089 ± 0.054 |
 | stk682a (none) | +0.24 ± 0.30 | +0.17 ± 0.32 | +0.55 ± 0.33 | +0.000 ± 0.001 | −0.093 ± 0.056 | +0.048 ± 0.054 |
@@ -14621,6 +14665,38 @@ otherwise. There the rule's chain (LG for stk682a), recorded on its own
 after each paced exact decode, sums over its dispatches' timestamp spans to
 0.015–0.016 ms for LF, 0.034 ms for LG at 1,925 blocks and 0.054 ms at
 3,426 (mean over 150 frames, the GPU mostly in P5; not run on the M5 Max).
+
+**On the live rig, room scale,** the reason for the gate. Two captures of
+the four-camera Orbbec rig, coded by `fuse_orbbec` under the rig's capture
+config (K 64, uniform scale 0.2, intra period 30, the default truncation of
+4 voxels) and filtered as before the gate; every 10th frame (31 a capture,
+11 I and 20 P) judged against the grid the encoder read, at a 0.2 m reach,
+the face and interior jumps the study's.
+
+| Capture | Blocks a frame | T (filter) | Error near the surface | Face / interior jump | Face jump, on vs off |
+|---|---|---|---|---|---|
+| 1 cm voxels, 305 frames | 21,168 | 0.490 mm (LG) | 3.25 mm, 6.6 T | 0.98 | −10.5% |
+| 5 mm voxels, 302 frames | 82,030 | 0.245 mm (LF) | 2.08 mm, 8.5 T | 0.94 | −4.4% |
+| Rafa2 stock, for scale | 3,426 | 0.490 mm (LG) | 0.55 mm, 1.1 T | 2.43 | −79% (LF −73%) |
+
+T halves at 5 mm only because the truncation is 4 voxels. The room's error
+lies inside blocks, not at their faces, so the filter T sizes is a light
+denoiser there. At 1 cm LG improves accuracy (−8.7%), coverage (−3.1%) and
+chamfer (−1.9%) on every frame, yet 53k more of the input's vertices end
+10 mm or more from the decoded surface (+8.9% over off), 93% of them within
+a voxel of an unobserved voxel, and parts 3 voxels thin or less lose 1.0%
+of theirs. About half of that count is surface the sign flips remove
+(12.7k fewer triangles a frame), the rest vertices moved past the 10 mm
+threshold, one voxel at 1 cm. At 5 mm LF is worse than off in coverage
+(mean +0.8%, p95 +2.5%) and chamfer (+0.8%) on all 31 frames, mostly by
+eroding parts 1.5 cm thin or less, and neither LG, R nor a host-emulated
+mask guard beats off there. Paced at 30 fps on the lab's RTX 4090, rounds 0
+and 1 pooled as above, the filter adds +1.49 ± 0.15 ms of decode wall at
+1 cm (device +1.26 ± 0.14) and +1.40 ± 0.28 ms at 5 mm (device
++1.16 ± 0.27), the device time 3.2 and 1.8 times its chain back to back
+(LG 0.39 ms, LF 0.64 ms), the GPU clocking down between frames. Rafa2
+stock on that GPU, an LG reference rather than a control, adds
++0.17 ± 0.09 ms (device +0.12 ± 0.03); no no-filter control ran there.
 
 ### 2026-10-22 — recon is fetched by commit, never installed: no install rules, package config or package tests (amends the 2026-10-16 GLSL pinhole entry and the 2026-10-17 amendment of the 2026-10-13 block-list entry).
 

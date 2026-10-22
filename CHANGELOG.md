@@ -369,8 +369,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `Decoder::set_deblock(true)` smooths each decoded frame across its block
   faces on the device, inside the decode's last submit, by the filter the
   frame's header picks; `Decoder::last_deblock()` says which (`DeblockInfo`:
-  `"LF"`, `"LG"`, `"R"` or `"off"`, and T). Off by default: the grid holds
-  the exact decode, as before. `Decoder::rebuild(grid)` rebuilds the last
+  `"LF"`, `"LG"`, `"R"` or `"off"`, and T). A frame with an unobserved
+  voxel, as every live RGB-D frame has, is skipped and decodes exactly. Off
+  by default: the grid holds the exact decode, as before. `Decoder::rebuild(grid)` rebuilds the last
   decoded frame from the decoder's reference with the switch as it is now,
   so a paused player shows a toggle. Its device time is in `"codec
   decode"`'s. Streams are unchanged. Tests:
