@@ -258,11 +258,27 @@ core::Status TsdfIntegrator::integrate(VoxelBlockGrid& grid,
                                        const std::vector<FrameInput>& frames,
                                        float max_weight, IntegrationMode mode,
                                        core::StageMetrics* metrics) {
+  return fuse(grid, frames, max_weight, mode, false, nullptr, metrics).status();
+}
+
+core::Result<std::uint32_t> TsdfIntegrator::allocate_and_integrate(
+    VoxelBlockGrid& grid, const std::vector<FrameInput>& frames,
+    float max_weight, IntegrationMode mode, volume::AllocFailures* out_failures,
+    core::StageMetrics* metrics) {
+  return fuse(grid, frames, max_weight, mode, true, out_failures, metrics);
+}
+
+core::Result<std::uint32_t> TsdfIntegrator::fuse(
+    VoxelBlockGrid& grid, const std::vector<FrameInput>& frames,
+    float max_weight, IntegrationMode mode, bool allocate,
+    volume::AllocFailures* out_failures, core::StageMetrics* metrics) {
   // Opened before the validity check so a refused call still costs its row -- a
   // stage that reports nothing when it fails reads on an overlay as a stage
   // that did not run, which is the reading a frozen pipeline most needs not to
   // give. Inert when metrics is null, and it publishes both halves on every
-  // return below rather than only the one that reaches the dispatch.
+  // return below rather than only the one that reaches the dispatch. An
+  // allocation sharing the submit leads, as it does in its own call.
+  if (allocate && metrics != nullptr) metrics->seed("allocate");
   core::GpuStageScope stage(metrics, gpu_timer_, "integrate");
   if (!valid()) {
     return core::Status::invalid_argument(
@@ -335,7 +351,7 @@ core::Status TsdfIntegrator::integrate(VoxelBlockGrid& grid,
     any_color = true;
   }
   if (live.empty()) {
-    return {};
+    return std::uint32_t{0};
   }
 
   // The float tsdf + weight attributes to fuse into.
@@ -386,14 +402,19 @@ core::Status TsdfIntegrator::integrate(VoxelBlockGrid& grid,
   // The heap counter says whether the grid holds a block, so no second
   // compaction has to: an empty grid has nothing to fuse and does not tick; a
   // grid the frames merely do not reach does, as it did when every call fused
-  // the whole set.
+  // the whole set. With an allocation in the batch, the caller's grid holds
+  // one already, so the call ticks before the allocation can be known.
   volume::VoxelHashMap& map = grid.map();
   if (map.allocated_blocks() == 0) {
-    return {};
+    if (!allocate) return std::uint32_t{0};
+    return core::Status::invalid_argument(
+        "TsdfIntegrator::allocate_and_integrate: the grid holds no block; "
+        "allocate its first set, then integrate it");
   }
-  // The blocks the compaction can list, those the map holds, bound the
-  // dispatches.
-  const std::uint32_t max_blocks = map.allocated_blocks();
+  // The blocks the compaction can list bound the dispatches: those the map
+  // holds, or with the allocation in the batch, every block.
+  const auto max_blocks = static_cast<std::uint32_t>(
+      allocate ? grid_params.num_blocks : map.allocated_blocks());
   const auto vpb = static_cast<std::uint32_t>(grid_params.voxels_per_block);
 
   // A Dynamic set of several frames is one instant: every frame's clear (the
@@ -432,8 +453,9 @@ core::Status TsdfIntegrator::integrate(VoxelBlockGrid& grid,
                              2 + (split ? 2 * count : count) * dispatches));
 
   // The compaction's own row, without which its device time would read as
-  // integrate's submit overhead: its device half alone, since its host time
-  // is this call's one submit. Open until the submit has resolved its span.
+  // integrate's submit overhead, and an allocation's row: their device halves
+  // alone, since their host time is this call's one submit. Open until the
+  // submit has resolved their spans.
   core::StageMetrics parts;
   std::optional<core::GpuStageScope> active_stage;
   active_stage.emplace(metrics != nullptr ? &parts : nullptr, gpu_timer_,
@@ -456,6 +478,7 @@ core::Status TsdfIntegrator::integrate(VoxelBlockGrid& grid,
   const auto record = [&](core::CommandBatch& batch) -> core::Status {
     // The call is one tick: every block it changes is stamped with the new
     // one, so a reader that recorded the tick before sees the change as newer.
+    // Advanced here, after an allocation in the batch has taken the old one.
     map.advance_tick();
     const std::uint32_t tick = map.tick();
     VKC_ASSIGN(const volume::RecordedBlockList active,
@@ -571,9 +594,17 @@ core::Status TsdfIntegrator::integrate(VoxelBlockGrid& grid,
     return {};
   };
 
-  core::CommandBatch batch(*device_, *allocator_);
-  VKC_TRY(record(batch));
-  VKC_TRY(batch.submit());
+  std::uint32_t dropped = 0;
+  if (allocate) {
+    const std::vector<volume::DepthInput> depths(frames.begin(), frames.end());
+    VKC_ASSIGN(dropped, map.allocate_from_depth(
+                            depths, out_failures,
+                            metrics != nullptr ? &parts : nullptr, record));
+  } else {
+    core::CommandBatch batch(*device_, *allocator_);
+    VKC_TRY(record(batch));
+    VKC_TRY(batch.submit());
+  }
   active_stage.reset();
   if (metrics != nullptr) {
     for (const core::StageRow& row : parts.rows()) {
@@ -584,7 +615,7 @@ core::Status TsdfIntegrator::integrate(VoxelBlockGrid& grid,
       }
     }
   }
-  return {};
+  return dropped;
 }
 
 }  // namespace volumetric_kit::recon::tsdf

@@ -82,26 +82,37 @@ core::Result<FuseReport> Fuser::fuse(volume::VoxelBlockGrid& grid,
     const auto ahead = grow();
     if (!ahead) return ahead.status();
   }
-  int lock_retries = 0;
-  for (;;) {
-    VKC_ASSIGN(report.dropped, grid.map().allocate_from_depth(
-                                   depths, &report.failures, metrics));
-    if (report.dropped == 0) break;
+  if (config_.allow_partial && grid.map().allocated_blocks() != 0) {
+    // The steady state of a live grid: one allocation round, the compaction
+    // and the fuse in one submit. What the round leaves out waits for the
+    // next set, and so does a grow for a capacity limit, made after this one.
+    VKC_ASSIGN(report.dropped,
+               integrator_.allocate_and_integrate(
+                   grid, frames, max_weight, mode, &report.failures, metrics));
     if (report.failures.capacity_limited()) {
-      VKC_ASSIGN(const bool grew, grow());
-      if (grew) continue;
-    } else if (!config_.allow_partial && lock_retries++ < kLockRetries) {
-      continue;
+      VKC_TRY(grow().status());
     }
-    if (!config_.allow_partial) {
-      if (!report.growth_error.ok()) return report.growth_error;
-      return core::Status::out_of_memory(
-          "Fuser::fuse: could not allocate the complete truncation band");
+  } else {
+    int lock_retries = 0;
+    for (;;) {
+      VKC_ASSIGN(report.dropped, grid.map().allocate_from_depth(
+                                     depths, &report.failures, metrics));
+      if (report.dropped == 0) break;
+      if (report.failures.capacity_limited()) {
+        VKC_ASSIGN(const bool grew, grow());
+        if (grew) continue;
+      } else if (!config_.allow_partial && lock_retries++ < kLockRetries) {
+        continue;
+      }
+      if (!config_.allow_partial) {
+        if (!report.growth_error.ok()) return report.growth_error;
+        return core::Status::out_of_memory(
+            "Fuser::fuse: could not allocate the complete truncation band");
+      }
+      break;
     }
-    break;
+    VKC_TRY(integrator_.integrate(grid, frames, max_weight, mode, metrics));
   }
-
-  VKC_TRY(integrator_.integrate(grid, frames, max_weight, mode, metrics));
   report.to_buckets = grid.grid().num_buckets;
   VKC_ASSIGN(report.load_factor, grid.map().load_factor());
   return report;

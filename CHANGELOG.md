@@ -32,6 +32,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   table. Migrating: pass both helpers `max_blocks`, the most blocks a frame
   may hold under your memory budget.
   Tests: `recon_codec_decode_grid`, `recon_codec_decode_grid_oom`.
+- `tsdf`: **a live set is one submit**: once its grid holds a block, a
+  `Fuser` with `allow_partial` allocates, compacts and fuses a set in one
+  batch (`TsdfIntegrator::allocate_and_integrate`), one fence wait a set
+  where it took three. That one allocation round leaves its lock races to
+  the next set, and a grow for a capacity limit is made after the set, so
+  what it could not allocate lands with the next. Strict fusion is
+  unchanged (the 2026-10-10 decision, amended). New: the frame-list
+  `VoxelHashMap::allocate_from_depth` takes a `then`, a caller's work
+  recorded into its one round's batch. Tests: `recon_tsdf_fuser`.
 - `tsdf`: **`TsdfIntegrator::integrate` is one submit**: the compaction's
   count stays on the device and sizes the fuse's dispatch
   (`dispatch_indirect`), one fence wait fewer a call, and the voxels are

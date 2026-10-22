@@ -460,6 +460,8 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-10**](#2026-10-10--fusion-is-library-code-with-strict-defaults-and-opt-in-partial-coverage) —
   `tsdf::Fuser` owns grow/allocate/integrate with strict defaults and opt-in
   partial coverage; `volume::grow_grid` shares stateless growth arithmetic.
+  *Amended 2026-10-22:* a partial set on a grid holding a block is one
+  submit, and its capacity grow lands a set late.
 - [**2026-10-10**](#2026-10-10--only-the-owner-triggers-ci-and-the-runner-tooling-is-the-cores) —
   Only the owner triggers CI, by the repository's Actions policy; no job
   carries a fork guard. The runner tooling is the core's.
@@ -11597,6 +11599,14 @@ facing test without its zero-normal exemption; and the single-camera pass
 without the depth-range check (both bounds zero, and inverted).
 
 ### 2026-10-10 — Fusion is library code, with strict defaults and opt-in partial coverage.
+
+*Amended 2026-10-22 (PERF.md P6, its first step):* once its grid holds a
+block, a partial set is one submit (`TsdfIntegrator::allocate_and_integrate`):
+one allocation round, then the compaction and the fuse in its batch. That
+round's lock races wait for the next set, and a grow for a capacity limit is
+made after it, so what the set could not allocate lands with the next. An
+empty grid's first set keeps the rounds: whether the call ticks depends on
+whether the grid gains a block. Strict fusion is unchanged.
 
 `tsdf::Fuser` owns the per-set sequence formerly in
 `examples/common/fuse_frame.hpp`: grow ahead past `kGrowThreshold`, allocate

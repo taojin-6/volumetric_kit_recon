@@ -3,7 +3,9 @@
 
 // Complete fusion is the default; live callers explicitly accept partial
 // bands. Growth, grow-ahead, and a bounded failure preserve the expected
-// voxel data and integration tick. Skips when no device is available.
+// voxel data and integration tick. A live grid holding a block fuses a set in
+// one submit to the same voxels, stamps and tick, and grows a set late. Skips
+// when no device is available.
 
 #include <cstddef>
 #include <cstdint>
@@ -62,6 +64,30 @@ vkc::Result<tsdf::Fuser> make_fuser(vkc::Device& device,
                                     vkc::Allocator& allocator,
                                     tsdf::FuserConfig config = {}) {
   return tsdf::Fuser::create(device, allocator, std::move(config));
+}
+
+// Whether two grids' blocks carry the same stamps, block by block.
+bool same_stamps(vol::VoxelBlockGrid& a, vol::VoxelBlockGrid& b) {
+  auto blocks_a = vr_test::blocks_of(a);
+  auto blocks_b = vr_test::blocks_of(b);
+  auto stamps_a = a.map().read_block_stamps();
+  auto stamps_b = b.map().read_block_stamps();
+  if (!blocks_a.ok() || !blocks_b.ok() || !stamps_a.ok() || !stamps_b.ok() ||
+      blocks_a->size() != blocks_b->size()) {
+    return false;
+  }
+  const auto vpb = std::uint32_t(a.grid().voxels_per_block);
+  for (const auto& [coord, ptr] : *blocks_a) {
+    const auto other = blocks_b->find(coord);
+    if (other == blocks_b->end()) return false;
+    const vol::BlockStamp& x = (*stamps_a)[std::uint32_t(ptr) / vpb];
+    const vol::BlockStamp& y = (*stamps_b)[std::uint32_t(other->second) / vpb];
+    if (x.requested != y.requested || x.weighted != y.weighted ||
+        x.changed != y.changed) {
+      return false;
+    }
+  }
+  return true;
 }
 
 // Whether any voxel of `grid` holds weight: the set was integrated.
@@ -175,6 +201,69 @@ int gpu_main(vr_test::GpuContext& gpu) {
     CHECK(report.ok() && report->dropped == 0);
     CHECK(retry->fuse(*grid, set).ok());
     CHECK(vr_test::same_grids(ctx, *reference, *grid));
+  }
+
+  // A live grid's steady state: once it holds a block, a partial fuser
+  // allocates, compacts and fuses a set in one submit, to the voxels, stamps
+  // and tick the tier calls give, in either mode.
+  for (const tsdf::IntegrationMode mode :
+       {tsdf::IntegrationMode::Classic, tsdf::IntegrationMode::Dynamic}) {
+    tsdf::FuserConfig config;
+    config.allow_partial = true;
+    auto fuser = make_fuser(dev, alloc, config);
+    auto expected = make_grid(dev, alloc, params(1024));
+    auto grid = make_grid(dev, alloc, params(1024));
+    CHECK(fuser.ok() && expected.ok() && grid.ok());
+    for (int pass = 0; pass < 3; ++pass) {
+      auto failed = expected->map().allocate_from_depth(depths);
+      CHECK(failed.ok() && failed.value() == 0);
+      CHECK(integrator->integrate(*expected, set, 5.0f, mode).ok());
+      auto report = fuser->fuse(*grid, set, 5.0f, mode);
+      CHECK(report.ok() && report->dropped == 0 && report->grows == 0);
+    }
+    CHECK(vr_test::same_grids(ctx, *expected, *grid));
+    CHECK(same_stamps(*expected, *grid));
+    CHECK(grid->map().tick() == expected->map().tick());
+  }
+
+  // There, a capacity limit is grown for the next set, after this one: the set
+  // fuses what its round allocated, and the next completes the band, capacity
+  // no longer limiting it. A lock race in its one round lands a set later.
+  {
+    tsdf::FuserConfig config;
+    config.allow_partial = true;
+    auto fuser = make_fuser(dev, alloc, config);
+    auto grid = make_grid(dev, alloc, params(64));
+    CHECK(fuser.ok() && grid.ok());
+    auto first = fuser->fuse(*grid, {set[0]});
+    CHECK(first.ok() && first->dropped == 0 && first->grows == 0);
+    CHECK(first->load_factor <= vol::VoxelHashMap::kGrowThreshold);
+    auto late = fuser->fuse(*grid, set);
+    CHECK(late.ok() && late->dropped > 0 && late->failures.capacity_limited());
+    CHECK(late->grows == 1 && late->to_buckets == 128);
+    auto next = fuser->fuse(*grid, set);
+    CHECK(next.ok() && next->grows == 0 && !next->failures.capacity_limited());
+    std::uint32_t dropped = next->dropped;
+    for (int later = 0; dropped != 0 && later < 4; ++later) {
+      auto again = fuser->fuse(*grid, set);
+      CHECK(again.ok() && again->grows == 0);
+      dropped = again->dropped;
+    }
+    CHECK(dropped == 0);
+  }
+
+  // The one submit needs a grid holding a block: an empty grid's first set
+  // allocates, with the tier's retries, and then integrates.
+  {
+    auto empty = make_grid(dev, alloc, params(1024));
+    CHECK(empty.ok());
+    const std::uint32_t tick = empty->map().tick();
+    CHECK(integrator
+              ->allocate_and_integrate(*empty, set, 5.0f,
+                                       tsdf::IntegrationMode::Classic, nullptr)
+              .status()
+              .domain() == vkc::Status::Code::InvalidArgument);
+    CHECK(empty->map().tick() == tick && empty->map().allocated_blocks() == 0);
   }
 
   // Live callers opt in: each bound includes the next set's grow-ahead,

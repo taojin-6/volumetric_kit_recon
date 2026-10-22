@@ -904,7 +904,8 @@ so it is not a peak-memory budget for resize (2026-10-10).
 `allocate_from_depth` also takes a list of frames (`DepthInput`), every
 frame dispatched in each round's one submit, on a set of its own; a round
 that retries dispatches them all again, and the rounds are the call's, not
-each frame's. Opt-in
+each frame's. A caller's `then` shares the first round's submit, after its
+readbacks, and makes that round the only one. Opt-in
 `StageMetrics*` on `allocate_from_depth` (an `"allocate"` row summing every
 retry round) and on both compaction entry points (an `"active set"` row,
 breakdown-prefixed when the caller already has a stage open).
@@ -989,7 +990,11 @@ can still be followed by successful allocation into the existing grid.
 `allow_partial` explicitly opts live callers into integrating what fits.
 `fuse_viewer` and `rig_viewer` enable it with a two-grow bound. That mode
 leaves pure lock contention for the next set and privately backs off a failed
-grow for 60 map ticks at the same size. Its fuser belongs to one grid.
+grow for 60 map ticks at the same size. Once its grid holds a block, a set is
+one submit (`TsdfIntegrator::allocate_and_integrate`): one allocation round,
+the compaction and the fuse, and a grow for a capacity limit made after it,
+so what the set could not allocate lands with the next (2026-10-10, amended
+2026-10-22). Its fuser belongs to one grid.
 `FuseReport` carries the before/after bucket counts, grows, allocation
 failures, any failed-grow status and final occupancy; failed allocation
 requests can refer to the same block repeatedly. Host allocation exceptions

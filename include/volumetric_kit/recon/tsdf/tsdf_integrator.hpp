@@ -281,11 +281,52 @@ class VR_TSDF_API TsdfIntegrator {
                          IntegrationMode mode = IntegrationMode::Classic,
                          core::StageMetrics* metrics = nullptr);
 
+  /// @brief Allocate @p frames' bands and @ref integrate them in one submit,
+  ///        for a live caller that accepts a partial band
+  ///        (@ref FuserConfig::allow_partial).
+  ///
+  /// One allocation round (@ref volume::VoxelHashMap::allocate_from_depth
+  /// with its `then`), the compaction and the fuse share a batch, so the set
+  /// waits on one fence. The fuse is the one @ref integrate gives on the
+  /// blocks the round allocated: a block the round failed, to a lost lock
+  /// race or a capacity limit, is left out of this set, where
+  /// @ref volume::VoxelHashMap::allocate_from_depth alone would retry the
+  /// races first.
+  /// @param grid          As @ref integrate; it must hold a block
+  ///                      (@ref volume::VoxelHashMap::allocated_blocks), as
+  ///                      after its first set, which allocating and then
+  ///                      integrating takes, retries included.
+  /// @param frames        As @ref integrate.
+  /// @param max_weight    As @ref integrate.
+  /// @param mode          As @ref integrate.
+  /// @param out_failures  As @ref volume::VoxelHashMap::allocate_from_depth.
+  /// @param metrics       As @ref integrate, and an `"allocate"` row with the
+  ///                      round's device half alone: the `"integrate"` row's
+  ///                      host half is the whole set's.
+  /// @return The failed allocations, as
+  ///         @ref volume::VoxelHashMap::allocate_from_depth counts them; or
+  ///         as @ref integrate refuses, and
+  ///         `Status::Code::InvalidArgument` for a grid holding no block.
+  core::Result<std::uint32_t> allocate_and_integrate(
+      volume::VoxelBlockGrid& grid, const std::vector<FrameInput>& frames,
+      float max_weight, IntegrationMode mode,
+      volume::AllocFailures* out_failures,
+      core::StageMetrics* metrics = nullptr);
+
   /// @return `true` if this owns a live pipeline (`false` when moved-from).
   bool valid() const noexcept { return kernel_.valid(); }
 
  private:
   TsdfIntegrator() = default;
+
+  // integrate's body, and allocate_and_integrate's when `allocate`: the
+  // frames' allocation round then shares the batch, ahead of the fuse.
+  core::Result<std::uint32_t> fuse(volume::VoxelBlockGrid& grid,
+                                   const std::vector<FrameInput>& frames,
+                                   float max_weight, IntegrationMode mode,
+                                   bool allocate,
+                                   volume::AllocFailures* out_failures,
+                                   core::StageMetrics* metrics);
 
   // Borrowed (must outlive this).
   core::Device* device_ = nullptr;
