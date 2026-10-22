@@ -19,8 +19,8 @@ interop seam: `recon` builds the volume, `gfx` renders it.
 
 `recon` is a from-scratch, production-grade rebuild that salvages the proven core
 of an earlier reconstruction engine and hardens it for public release:
-deterministic only (no experimental/neural code), installable and packaged,
-CI-gated, and split into clean, independently consumable tiers.
+deterministic only (no experimental/neural code), CI-gated, and split into
+clean, independently consumable tiers.
 
 ## Design at a glance
 

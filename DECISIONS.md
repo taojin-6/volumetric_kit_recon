@@ -14216,9 +14216,10 @@ Next work.
 
 **The rule** is the owner's, for the whole family: a sibling is consumed by
 commit (`FetchContent`), as the player and ios fetch recon; only third-party
-SDKs are installed prerequisites. No consumer ever found an installed recon,
-and with siblings pinning different core minors, one prefix could not hold
-them together anyway.
+SDKs are installed prerequisites. calib's package config and install tests
+were the one user of an installed recon; calib drops them before it pins
+recon past this change. With siblings pinning different core minors, one
+prefix could not hold them together anyway.
 
 **What goes.** `VR_INSTALL` and every `install()` rule,
 `cmake/volumetric_kit_reconConfig.cmake.in` and what fed it only
