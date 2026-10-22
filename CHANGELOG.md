@@ -13,8 +13,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   removal -- a decode that drops blocks, a garbage collection -- waits on
   one fence fewer. On Rafa2 at 5 mm (3,426 blocks a frame; M5 Max,
   Release, back to back, the median of 20 passes) a decode's `..apply`
-  takes 0.48 ms of host time a frame, from 0.62. Tests:
-  `recon_volume_delete`, `recon_volume_block_grid`,
+  takes 0.48 ms of host time a frame, from 0.62. `VoxelHashMap::remove`
+  also keeps its per-coord done flags between calls rather than allocating
+  them each time. Tests: `recon_volume_delete`, `recon_volume_block_grid`,
   `recon_volume_block_stamps`.
 - `codec`: **a decode writes only the voxels whose bits it changes**, so a
   block a P-frame repeats costs the inverse its reads alone; grids and
