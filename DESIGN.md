@@ -819,8 +819,9 @@ band shared out over the lanes (2026-09-30);
 the defaults — would hole through the middle, so a block is allocated when its
 centre is within `trunc_dist` + the block's half-diagonal of some triangle,
 and the work is split per *candidate block* rather than per triangle so one
-lane cannot own a 250 000-block quad. The host pass that counts those blocks
-is also where an index is bounds-checked and a zero-area or non-finite
+lane cannot own a 250 000-block quad; as a depth tile does, a workgroup asks
+for each distinct block its lanes name once. The host pass that counts those
+blocks is also where an index is bounds-checked and a zero-area or non-finite
 triangle is dropped — the former being the one input that divides by zero in
 the closest-point solve, which lives in `core/shaders/triangle_common.glsl`
 so mesh-to-SDF evaluates the field with the same function. That pass is the
@@ -2130,12 +2131,11 @@ than the rig gets the newest set, so sets drop; that cost is unmeasured.
 
 **On `tsdf`**, mesh → TSDF has its two modes (2026-09-27), a second way into
 the grid the codec encodes: a mesh sequence converts frame by frame. Both modes
-cost the same. On an 81 920-triangle sphere at scan density (M5 Max, Release)
-the band took 14.2 ms to allocate (2026-09-27); the write's cost on Rafa2 is
-in the 2026-10-21 entry. Smaller costs around it remain: writing only the
-blocks the codec will code, chaining the write's submissions, and computing
-`triangle_candidate_offsets` once a frame rather than once to allocate and
-again to write.
+cost the same. On Rafa2 the band's allocation costs what PERF.md's MESH3 row
+gives, and the write what the 2026-10-21 entry gives. Smaller costs around
+them remain: writing only the blocks the codec will code, chaining the
+write's submissions, and computing `triangle_candidate_offsets` and uploading
+the mesh once a frame rather than once to allocate and again to write.
 Dynamic's clear is still a hard reset from one ray: clearing on evidence (a
 weight decrement, an incidence term) and behind a pixel with no return are
 the next steps, each judged on the lab rig (`TODO(tsdf)` in

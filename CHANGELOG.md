@@ -66,6 +66,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   8-voxel one (the 2026-10-21 decision). A grid whose blocks hold more than
   `MeshIntegrator::kMaxVoxelsPerBlock` (16^3) voxels is refused.
   Tests: `recon_tsdf_mesh_integrate`, `recon_tsdf_mesh_integrate_exact`.
+- `volume`: **`allocate_from_triangles` asks for each block once a
+  workgroup**, where every work item naming a block probed, locked and
+  stamped it, a few hundred a block at scan density. It allocates the same
+  blocks; Rafa2's allocation at 5 mm takes under half its device time in the
+  8-voxel band, and a sixth to a third less in the 16-voxel one (PERF.md
+  MESH3). Test: `recon_volume_allocate_triangles`.
 - `examples`: **one home for the codec examples' mesh comparison**,
   `vr_example::codec_compare_options` (`codec_stream.hpp`), which
   `codec_replica` and `codec_mesh` call; their figures are unchanged.
