@@ -1990,9 +1990,10 @@ leaves none, and `finish` closes the viewers.
 
 Before truncating the CSV, creation checks that it does not alias the new
 stream file, including through symlinks or case-insensitive names. An alias
-is `InvalidArgument`; a CSV error during creation removes the new stream
-file for retry, as does destroying the stream unfinished before its first
-frame.
+is `InvalidArgument`. The encoder and decoder are made after every output,
+so a refused output costs no kernel; an error after the stream file is made
+removes it for retry, as does destroying the stream unfinished before its
+first frame.
 
 **`codec_mesh`** codes one mesh or a numbered sequence of them (README,
 Codec evaluation, has the keys). The examples require core 0.16.0; core

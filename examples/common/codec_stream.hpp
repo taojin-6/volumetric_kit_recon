@@ -265,9 +265,10 @@ class CodecStream {
  public:
   /// The player grid is built from the first frame's header, sized for its
   /// blocks, and grows as later frames need. @p outputs are made here,
-  /// after the codec objects and before any coding: the server first, so a
-  /// port in use touches no file, then the stream, as a rerun onto its file
-  /// is the common refusal, then the CSV, its header flushed.
+  /// before the codec objects, so a refused output costs no kernel: the
+  /// server first, so a port in use touches no file, then the stream, as a
+  /// rerun onto its file is the common refusal, then the CSV, its header
+  /// flushed.
   /// @param program  The program writing the stream, recorded in its session
   ///                 header.
   /// @param rate     Its Geometry track's nominal rate, the source's: unknown
@@ -281,8 +282,8 @@ class CodecStream {
   ///         NotFound when its directory is missing);
   ///         @ref check_not_same_file's error when the CSV is the stream's
   ///         file; IoError naming a CSV that cannot be written; or the
-  ///         `Encoder::create` / `Decoder::create` error. Each CSV error
-  ///         removes the new stream's file again.
+  ///         `Encoder::create` / `Decoder::create` error. Each error after
+  ///         the stream is made removes its file again.
   static vkc::Result<CodecStream> create(vkc::Device& device,
                                          vkc::Allocator& allocator,
                                          const vr::codec::EncoderConfig& config,
@@ -290,10 +291,6 @@ class CodecStream {
                                          const std::string& program = {},
                                          vr::stream::Rate rate = {},
                                          std::string geometry_params = {}) {
-    VKC_ASSIGN(vr::codec::Encoder enc,
-               vr::codec::Encoder::create(device, allocator, config));
-    VKC_ASSIGN(vr::codec::Decoder dec,
-               vr::codec::Decoder::create(device, allocator));
     // One session for the file and the viewers. No session id or start
     // time, so a rerun writes the same bytes.
     vr::stream::Track geometry;
@@ -334,9 +331,22 @@ class CodecStream {
         return csv_error(outputs.csv);
       }
     }
-    return CodecStream(device, allocator, std::move(enc), std::move(dec),
-                       config.intra_period, std::move(outputs),
-                       std::move(server), std::move(writer), std::move(csv));
+    vkc::Result<vr::codec::Encoder> enc =
+        vr::codec::Encoder::create(device, allocator, config);
+    if (!enc.ok()) {
+      take_back(writer, outputs.stream);
+      return enc.status();
+    }
+    vkc::Result<vr::codec::Decoder> dec =
+        vr::codec::Decoder::create(device, allocator);
+    if (!dec.ok()) {
+      take_back(writer, outputs.stream);
+      return dec.status();
+    }
+    return CodecStream(device, allocator, std::move(enc).value(),
+                       std::move(dec).value(), config.intra_period,
+                       std::move(outputs), std::move(server), std::move(writer),
+                       std::move(csv));
   }
 
   CodecStream(CodecStream&&) = default;

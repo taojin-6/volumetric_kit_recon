@@ -5,8 +5,9 @@
 // a row's type and host and device milliseconds from its calls' stage rows,
 // its CSV line, a frame type's sizes, a GOP's bytes and bitrate, a frame's
 // pts, and the comparison options the codec examples share. On a grid
-// holding a sphere: outputs it cannot make refused on
-// create, before any coding, and none written without outputs; a row per
+// holding a sphere: outputs it cannot make refused on create, before the
+// encoder, whose refusal takes the stream's file back, and none written
+// without outputs; a row per
 // decoded frame, under the source's index, whose type, bytes and blocks are
 // the frame's, and each type's stage rows its own frames'; the .vrst's track
 // at the nominal rate given, and every encoded frame a record of it, a
@@ -181,14 +182,23 @@ std::vector<std::string> lines_of(const std::string& path) {
   return lines;
 }
 
+// A config the encoder refuses. create makes the outputs before the codec's
+// kernels, so an output refused with it is refused for its own cause.
+codec::EncoderConfig unusable_config() {
+  codec::EncoderConfig config;
+  config.intra_period = 0;
+  return config;
+}
+
 // Outputs that cannot be made are refused by create with the writer's or
-// the stream's code, naming the path.
+// the stream's code, naming the path, before the encoder; outputs that can
+// be made get the encoder's refusal, and the stream's file is taken back.
 int refused(vr_test::GpuContext& gpu, const vr_test::Scratch& scratch) {
   const auto refuses = [&gpu](const vr_example::CodecOutputs& outputs,
                               vkc::Status::Code code,
                               const std::string& named) {
-    vkc::Result<vr_example::CodecStream> made =
-        vr_example::CodecStream::create(gpu.device, gpu.allocator, {}, outputs);
+    vkc::Result<vr_example::CodecStream> made = vr_example::CodecStream::create(
+        gpu.device, gpu.allocator, unusable_config(), outputs);
     return !made.ok() && made.status().domain() == code &&
            made.status().message().find(named) != std::string::npos;
   };
@@ -212,6 +222,11 @@ int refused(vr_test::GpuContext& gpu, const vr_test::Scratch& scratch) {
   late.csv = (scratch.path / "missing" / "rows.csv").string();
   CHECK(refuses(late, vkc::Status::Code::IoError, late.csv));
   CHECK(!fs::exists(late.stream));
+  vr_example::CodecOutputs made;
+  made.stream = (scratch.path / "uncoded.vrst").string();
+  made.csv = (scratch.path / "uncoded.csv").string();
+  CHECK(refuses(made, vkc::Status::Code::InvalidArgument, "intra_period"));
+  CHECK(!fs::exists(made.stream));
   return 0;
 }
 
@@ -238,8 +253,8 @@ int aliased_outputs(vr_test::GpuContext& gpu, const vr_test::Scratch& scratch) {
     CHECK(!fs::exists(stream_path));
     const vr_example::CodecOutputs outputs{csv_path.string(),
                                            stream_path.string()};
-    vkc::Result<vr_example::CodecStream> made =
-        vr_example::CodecStream::create(gpu.device, gpu.allocator, {}, outputs);
+    vkc::Result<vr_example::CodecStream> made = vr_example::CodecStream::create(
+        gpu.device, gpu.allocator, unusable_config(), outputs);
     CHECK(!made.ok());
     CHECK(made.status().domain() == vkc::Status::Code::InvalidArgument);
     CHECK(made.status().message().find(outputs.csv) != std::string::npos);
@@ -694,7 +709,7 @@ int serves_alone(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
 }
 
 // A port in use fails create with the server's IoError, naming it, before
-// the stream or the CSV is made.
+// the stream, the CSV or the encoder is made.
 int port_in_use(vr_test::GpuContext& gpu, const vr_test::Scratch& scratch) {
   const net::Listener taken = net::bind_loopback();
   CHECK(taken.port != 0);
@@ -702,8 +717,8 @@ int port_in_use(vr_test::GpuContext& gpu, const vr_test::Scratch& scratch) {
       served_on_loopback(scratch.path / "unserved.vrst");
   outputs.csv = (scratch.path / "unserved.csv").string();
   outputs.serve->port = taken.port;
-  vkc::Result<vr_example::CodecStream> made =
-      vr_example::CodecStream::create(gpu.device, gpu.allocator, {}, outputs);
+  vkc::Result<vr_example::CodecStream> made = vr_example::CodecStream::create(
+      gpu.device, gpu.allocator, unusable_config(), outputs);
   CHECK(!made.ok() && made.status().domain() == vkc::Status::Code::IoError);
   CHECK(made.status().message().find(":" + std::to_string(taken.port)) !=
         std::string::npos);
