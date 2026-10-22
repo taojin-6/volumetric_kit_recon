@@ -14129,11 +14129,14 @@ replaying a recording, sends; the player reads.
   128 KiB `TCP_NOTSENT_LOWAT` 0.20 MB on Linux, where the mark gates `send`
   too, and 0.59 MB on macOS, where it gates `poll` alone (loopback,
   measured). A viewer takes its next chunk only once its socket polls
-  writable, and the client's receive buffer is 256 KiB, set before the
-  connect so the window scale fits it. Its stall is counted from what it
-  acknowledges too, not from the socket polling writable alone: one
-  draining under 64 KiB (Linux) or a chunk (macOS) a `stall_limit` stays
-  above the mark as it reads (measured).
+  writable, and the client's receive buffer is 2 MiB, set before the
+  connect so the window scale fits it. A stream carries at most one buffer
+  a round trip: 256 KiB held it to about 12 MB/s over the VPN, where the
+  rig at 1 cm needs 9.4 MB/s; 2 MiB holds that rig's key (0.78 MB) and
+  three times its bytes a round trip (0.62 MB) (2026-10-22). Its stall is
+  counted from what it acknowledges too, not from the socket polling
+  writable alone: one draining under 64 KiB (Linux) or a chunk (macOS) a
+  `stall_limit` stays above the mark as it reads (measured).
 - **Joining at the cached GOP.** A viewer gets the GOP from its key, up to
   about 1.3 MB and 0.2 to 0.4 s over the VPN, and shows a frame at once.
   Waiting for the next key instead sends nothing extra but shows nothing for

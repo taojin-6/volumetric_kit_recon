@@ -75,6 +75,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the decoder's surface, without FFmpeg's copy first: 16 µs of GPU copying
   per 4K picture, not 33 µs (Nsight Systems, RTX 5090), for 126 MiB more of
   NVDEC's surfaces per 4K decoder. Tests: `recon_sensor_video_hevc`.
+- `networking`: **a `StreamClient` receives through 2 MiB**, not 256 KiB,
+  which held a stream to about 12 MB/s over the VPN, under the rig's
+  9.4 MB/s at 1 cm (the 2026-10-21 networking decision). Linux holds it to
+  `net.core.rmem_max`. Tests: `recon_networking_socket`.
 - `eval`: **`ReferenceMesh::compare` measures on every core**, with the
   figures one thread gives: about 6 times faster on a room-sized mesh (the
   2026-09-27 eval decision). Tests: `recon_eval_mesh_distance`.

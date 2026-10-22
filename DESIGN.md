@@ -1814,7 +1814,7 @@ is parsed at once, and a name is looked up on a detached thread, which the
 client abandons if it is destroyed first. `next(wait, …)` finishes the
 lookup and the connect, trying each address in turn, then returns each
 record, both CRCs checked, its `offset` that of the bytes received, waiting
-at most `wait`. The receive buffer is 256 KiB, set before the connect. No
+at most `wait`. The receive buffer is 2 MiB, set before the connect. No
 byte for `idle_limit` (10 s), counted from `connect`, ends the connection
 with `IoError`, as do a refusal at every address, a reset and the sender's
 end, which comes after every whole record; a failed check ends it with the
