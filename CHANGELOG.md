@@ -906,13 +906,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   whole set until progress stalled. The new `AllocFailures::rounds` says how
   many rounds a call ran. Regression:
   `recon_volume_allocate`.
-- `volume`, `tsdf`: **a dispatch past the device's group limit splits**
-  where it was refused, on a device that reports Vulkan's floor of 65,535
-  groups, as many Android and Mesa drivers do: `allocate_from_triangles`
-  past 16.7 M candidate blocks, `TsdfIntegrator::integrate` past 32,767
-  reached blocks, and `MeshIntegrator::integrate` past 16.7 M candidates.
-  Regressions: `recon_volume_allocate_triangles`, `recon_tsdf_integrate`,
-  `recon_tsdf_mesh_integrate`.
+- `volume`, `tsdf`, `mesh`: **a dispatch past the device's group limit
+  splits** where it was refused, on a device that reports Vulkan's floor of
+  65,535 groups, as many Android and Mesa drivers do:
+  `allocate_from_triangles` past 16.7 M candidate blocks,
+  `TsdfIntegrator::integrate` past 32,767 reached blocks,
+  `MeshIntegrator::integrate` past 16.7 M candidates, and a `MarchingCubes`
+  extract past 65,535 active blocks, such as room0 at 5 mm (the 2026-08-08
+  decision, amended). Regressions: `recon_volume_allocate_triangles`,
+  `recon_tsdf_integrate`, `recon_tsdf_mesh_integrate`,
+  `recon_mesh_marching_cubes_sparse`.
 - `mesh`: **`MeshExchange::begin_frame` hands an empty mesh to `commit`
   with its payload**, where it committed one at once and dropped the
   payload, so a consumer showing what the payload names (a player's frame)

@@ -606,14 +606,16 @@ add_test(NAME recon_volume_frustum COMMAND recon_volume_frustum_test)
 
 # Sparse marching cubes: mesh an analytic sphere written into a real multi-block
 # VoxelBlockGrid, exercising cross-block neighbour sampling, and prove the same
-# field meshes identically however it is divided into blocks. Skips where no
-# device is present.
+# field meshes identically however it is divided into blocks or dispatches
+# (core/dispatch.hpp's test seam, by src/). Skips where no device is present.
 add_executable(recon_mesh_marching_cubes_sparse_test
                marching_cubes_sparse_test.cpp)
 target_link_libraries(
   recon_mesh_marching_cubes_sparse_test
   PRIVATE volumetric_kit::recon_mesh Vulkan::Vulkan
           volumetric_kit::core_test_policy)
+target_include_directories(recon_mesh_marching_cubes_sparse_test
+                           PRIVATE ${PROJECT_SOURCE_DIR}/src)
 vr_target_warnings(recon_mesh_marching_cubes_sparse_test)
 add_test(NAME recon_mesh_marching_cubes_sparse
          COMMAND recon_mesh_marching_cubes_sparse_test)

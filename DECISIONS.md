@@ -93,7 +93,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   The sparse mesh kernel resolves its own 2×2×2 neighbourhood by probing the
   hash table on-device, and `mesh` therefore reads a `volume` buffer — a
   coupling paid for, not stumbled into. *Amended 2026-10-13:* the device
-  shows the chained fixture spills; `HashDiagnostics` is gone.
+  shows the chained fixture spills; `HashDiagnostics` is gone. *Amended
+  2026-10-22:* the extract splits its dispatch at the device's group limit.
 - [**2026-08-08**](#2026-08-08--the-overflow-scan-stays-exhaustive-what-gets-bounded-is-its-cost-per-slot-not-its-length) —
   The overflow scan stays exhaustive; what gets bounded is its cost per slot,
   not its length. *Amended 2026-10-13:* `diagnostics()` is gone; the device
@@ -1828,6 +1829,11 @@ than converted. That predicate is pinned directly where it lives, in
 is gone, so the suite asks the device whether the chained fixture spills: a
 table of its shape whose chains may not grow refuses some of its blocks for
 chain room.
+*Amended 2026-10-22:* the extract splits its dispatch at
+`maxComputeWorkGroupCount[0]`, as the codec's and the block stamps' passes
+do, so a smaller block costs more dispatches but no longer lowers the
+reachable active-block count (the "two things deliberately not done"
+below), and room0's ~107 k blocks at 5 mm mesh at the 65535 floor.
 
 *Reverses* the "host-built
 neighbour table … no device-side hash probe, and no coupling to the hash
