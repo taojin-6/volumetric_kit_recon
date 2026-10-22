@@ -52,9 +52,13 @@ FetchContent_Declare(
   # examples draw that on default flags; nothing in CI catches it, since this
   # leg builds them and does not render.
   #
-  # And at or past gfx #133, which adds gfx_glfw (above). A compile floor, and
-  # the newest, so it covers the older ones.
-  GIT_TAG bc887a4a14349870450f7c3fbbcd48d809faa451 # gfx main, after #135
+  # And at or past gfx #133, which adds gfx_glfw (above). A compile floor.
+  #
+  # And at or past gfx #144, which shows ImGui's colours as authored on the
+  # default _SRGB swapchain; before it the panels were encoded twice and drew
+  # washed out. A rendering floor, and the newest, so it covers the older ones;
+  # recon_example_viewer_pass checks it.
+  GIT_TAG b35520f5c6068e93bef0dccadd3ef1fa10fa9c6b # gfx main, after #148
   GIT_SHALLOW FALSE)
 FetchContent_MakeAvailable(volumetric_kit_gfx)
 
@@ -122,6 +126,22 @@ if(VR_BUILD_TESTS)
   vr_target_warnings(recon_example_viewer_device_test)
   add_test(NAME recon_example_viewer_device
            COMMAND recon_example_viewer_device_test)
+
+  # The render pass both live viewers record (viewer_common.hpp), on a headless
+  # gfx device. Skips with no device under the core policy.
+  add_executable(recon_example_viewer_pass_test
+                 "${PROJECT_SOURCE_DIR}/tests/example_viewer_pass_test.cpp")
+  target_link_libraries(
+    recon_example_viewer_pass_test
+    PRIVATE volumetric_kit::core_test_policy volumetric_kit::recon_mesh
+            volumetric_kit::gfx_glfw Vulkan::Vulkan)
+  target_include_directories(
+    recon_example_viewer_pass_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}"
+                                           "${PROJECT_SOURCE_DIR}/tests")
+  vr_target_warnings(recon_example_viewer_pass_test)
+  add_test(NAME recon_example_viewer_pass
+           COMMAND recon_example_viewer_pass_test)
+  set_tests_properties(recon_example_viewer_pass PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 
 # fuse_viewer: the live window -- fuses on a background thread, draws the

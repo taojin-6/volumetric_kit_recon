@@ -93,6 +93,12 @@ layout(set = 0, binding = 7, scalar) readonly buffer ColorCamera {
 // exchange rather than a max, which would keep a tick from before the clock
 // wrapped over every one after it.
 layout(set = 0, binding = 8, scalar) buffer Stamps { BlockStamp stamps[]; };
+// How many blocks binding 2 lists: the compaction's count, left on the device
+// (VoxelHashMap::record_compaction), which tsdf_dispatch_args.comp sized this
+// dispatch from.
+layout(set = 0, binding = 9) readonly buffer ActiveCount {
+  uint active_count;
+};
 
 // Stamp a block changed, from a lane that changed one of its voxels. When the
 // block is a whole number of workgroups -- every block size from 8 up -- every
@@ -155,9 +161,11 @@ float sample_depth(float u, float v) {
 }
 
 void main() {
-  uint gid = gl_GlobalInvocationID.x;
+  // item_base is a whole number of workgroups, so a workgroup still lies in
+  // one block wherever the dispatch starts (stamp_changed).
+  uint gid = pc.item_base + gl_GlobalInvocationID.x;
   uint vpb = uint(pc.grid.voxels_per_block);
-  if (gid >= pc.num_active_blocks * vpb) {
+  if (gid >= active_count * vpb) {
     return;
   }
   uint block_i = gid / vpb;

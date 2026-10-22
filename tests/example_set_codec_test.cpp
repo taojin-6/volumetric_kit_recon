@@ -23,7 +23,8 @@
 // free_after of 0 frees nothing. The grid holds the same near blocks with a
 // stream and without. On the host, a path that is the stream's or the CSV's
 // file through a link refused, one beside them taken, and one that cannot be
-// checked refused. The device part skips with no device.
+// checked refused; and the stream decoding only with a CSV or a sweep. The
+// device part skips with no device.
 
 #include <algorithm>
 #include <array>
@@ -326,6 +327,7 @@ int check_stream(vr_test::GpuContext& gpu, const std::string& path,
   auto extractor = vr::mesh::MarchingCubes::create(gpu.device, gpu.allocator);
   CHECK(extractor.ok());
   std::optional<vr::volume::VoxelBlockGrid> player;
+  constexpr std::uint32_t kMaxBlocks = 1u << 20;  // far past the scene's
   stream::Position pos = reader.begin();
   stream::Record record;
   std::vector<std::uint8_t> payload;
@@ -338,14 +340,15 @@ int check_stream(vr_test::GpuContext& gpu, const std::string& path,
     CHECK(record.info.pts_ns == coded_pts(s));
     CHECK(reader.read(record, &payload).ok());
     if (!player) {
-      auto made = codec::make_decode_grid(gpu.device, gpu.allocator,
-                                          payload.data(), payload.size());
+      auto made =
+          codec::make_decode_grid(gpu.device, gpu.allocator, payload.data(),
+                                  payload.size(), kMaxBlocks);
       CHECK(made.ok());
       player.emplace(std::move(made).value());
     }
-    CHECK(
-        codec::decode_growing(*decoder, payload.data(), payload.size(), *player)
-            .ok());
+    CHECK(codec::decode_growing(*decoder, payload.data(), payload.size(),
+                                *player, kMaxBlocks)
+              .ok());
 
     Walls walls;
     CHECK(read_walls(*extractor, *player, &walls) == 0);
@@ -435,9 +438,29 @@ int apart() {
   return 0;
 }
 
+// set_codec_outputs: codec_outputs' paths and port, decoding only with
+// output.csv or codec.sweep, not for a recording or a server alone.
+int decodes() {
+  cfg::Config opt;
+  opt.output.stream = "rig.vrst";
+  opt.output.serve = 47801;
+  const vr_example::CodecOutputs live = vr_example::set_codec_outputs(opt);
+  CHECK(!live.decode && live.stream == "rig.vrst" && live.csv.empty());
+  CHECK(live.serve && live.serve->port == 47801);
+  cfg::Config listed = opt;
+  listed.output.csv = "rig.csv";
+  const vr_example::CodecOutputs rows = vr_example::set_codec_outputs(listed);
+  CHECK(rows.decode && rows.csv == "rig.csv");
+  cfg::Config swept = opt;
+  swept.codec.sweep = true;
+  CHECK(vr_example::set_codec_outputs(swept).decode);
+  return 0;
+}
+
 }  // namespace
 
 int main() {
   CHECK(apart() == 0);
+  CHECK(decodes() == 0);
   return vr_test::run_on_gpu(gpu_main);
 }

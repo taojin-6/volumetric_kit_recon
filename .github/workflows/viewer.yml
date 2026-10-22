@@ -12,8 +12,9 @@ name: viewer (reusable)
 # The live viewers need a window, and a dataset or a rig of cameras that CI
 # does not carry, so they are built, not run: the compile + link is the API
 # seam between recon and gfx that drifts. Their headless tests do run: the
-# atlas both live viewers draw with, on a headless device, the device they
-# adopt, and each viewer's config entry, which returns before any window.
+# atlas both live viewers draw with and the render pass they record, each on a
+# headless device, the device they adopt, and each viewer's config entry,
+# which returns before any window.
 # FFmpeg and the Orbbec SDK are installed too, so rig_viewer is compiled with
 # the other two.
 on:
@@ -103,7 +104,8 @@ jobs:
           cmake --build build \
             --parallel "${CMAKE_BUILD_PARALLEL_LEVEL:-$(getconf _NPROCESSORS_ONLN)}" \
             --target fuse_viewer fuse_render rig_viewer \
-            recon_example_viewer_atlas_test recon_example_viewer_device_test
+            recon_example_viewer_atlas_test recon_example_viewer_device_test \
+            recon_example_viewer_pass_test
 
       # The viewers' headless tests, on the core's test policy as in
       # _build.yml's Test step: a device and the validation layer required.

@@ -158,23 +158,29 @@ add_test(NAME recon_volume_block_grid COMMAND recon_volume_block_grid_test)
 # volume block stamps: every allocation path stamps the blocks it asks for with
 # the map's tick, the block pass stamps those holding weight, and
 # free_stale_blocks frees those neither for more than max_age ticks; resize
-# keeps the records, remove and clear zero them. Skips with no device.
+# keeps the records, remove and clear zero them; a pass split into several
+# dispatches (core/dispatch.hpp's test seam, by src/). Skips with no device.
 add_executable(recon_volume_block_stamps_test volume_block_stamps_test.cpp)
 target_link_libraries(
   recon_volume_block_stamps_test
   PRIVATE volumetric_kit::recon_volume Vulkan::Vulkan
           volumetric_kit::core_test_policy)
+target_include_directories(recon_volume_block_stamps_test
+                           PRIVATE ${PROJECT_SOURCE_DIR}/src)
 vr_target_warnings(recon_volume_block_stamps_test)
 add_test(NAME recon_volume_block_stamps COMMAND recon_volume_block_stamps_test)
 
 # tsdf integrate: fuse a synthetic constant-depth plane into a VoxelBlockGrid
 # and verify the classic projective TSDF math per voxel (sdf, truncation, weight
-# + cap). It also runs the kernel's projection alone (shaders/project_pinhole)
-# on inputs that make its depth or pixel NaN. Skips with no device.
+# + cap), and a split dispatch (core/dispatch.hpp's test seam, by src/). It also
+# runs the kernel's projection alone (shaders/project_pinhole) on inputs that
+# make its depth or pixel NaN. Skips with no device.
 add_executable(recon_tsdf_integrate_test tsdf_integrate_test.cpp)
 target_link_libraries(
   recon_tsdf_integrate_test PRIVATE volumetric_kit::recon_tsdf Vulkan::Vulkan
                                     volumetric_kit::core_test_policy)
+target_include_directories(recon_tsdf_integrate_test
+                           PRIVATE ${PROJECT_SOURCE_DIR}/src)
 include(vr_embed)
 vr_embed_shaders(recon_tsdf_integrate_test SHADERS
                  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/project_pinhole.comp")
@@ -185,13 +191,15 @@ add_test(NAME recon_tsdf_integrate COMMAND recon_tsdf_integrate_test)
 # pseudonormals, or as a shell) and check every voxel of every written block
 # against a brute-force host reference -- an independent closest point, and the
 # winding number for inside/outside -- on a sharp tetrahedron, a dented cube, an
-# open quad and a triangle soup, plus determinism and every refusal. Skips with
-# no device.
+# open quad and a triangle soup, plus determinism (a split binning among it) and
+# every refusal. Skips with no device.
 add_executable(recon_tsdf_mesh_integrate_test tsdf_mesh_integrate_test.cpp)
 target_link_libraries(
   recon_tsdf_mesh_integrate_test
   PRIVATE volumetric_kit::recon_tsdf Vulkan::Vulkan
           volumetric_kit::core_test_policy)
+target_include_directories(recon_tsdf_mesh_integrate_test
+                           PRIVATE ${PROJECT_SOURCE_DIR}/src)
 vr_target_warnings(recon_tsdf_mesh_integrate_test)
 add_test(NAME recon_tsdf_mesh_integrate COMMAND recon_tsdf_mesh_integrate_test)
 
@@ -461,7 +469,8 @@ add_test(NAME recon_example_remesh_report
 # tsdf fuser: a set fused through tsdf::Fuser, growing on the way, matches the
 # tier calls on a grid that never needed to; it grows ahead before any failure,
 # refuses incomplete bands by default, and keeps fusing only when the caller
-# explicitly allows partial coverage. Skips (exit 0) with no device.
+# explicitly allows partial coverage, whose one-submit sets match the tier calls
+# too and grow a set late. Skips (exit 0) with no device.
 add_executable(recon_tsdf_fuser_test tsdf_fuser_test.cpp)
 target_link_libraries(
   recon_tsdf_fuser_test PRIVATE volumetric_kit::core_test_policy
@@ -578,15 +587,18 @@ add_test(NAME recon_volume_allocate COMMAND recon_volume_allocate_test)
 # volume triangle-mesh allocation: allocate from a small mesh, then verify on
 # the real driver that every block holding a voxel within trunc_dist is present
 # -- brute-forced on the host against an independent closest-point -- that a
-# triangle wider than the band leaves no hole (where the point path does), and
-# that the distance prune keeps the bounding box's far corners out. Skips where
-# no device is present.
+# triangle wider than the band leaves no hole (where the point path does), that
+# the distance prune keeps the bounding box's far corners out, and that a split
+# dispatch (core/dispatch.hpp's test seam, by src/) allocates the same blocks.
+# Skips where no device is present.
 add_executable(recon_volume_allocate_triangles_test
                volume_allocate_triangles_test.cpp)
 target_link_libraries(
   recon_volume_allocate_triangles_test
   PRIVATE volumetric_kit::recon_volume Vulkan::Vulkan
           volumetric_kit::core_test_policy)
+target_include_directories(recon_volume_allocate_triangles_test
+                           PRIVATE ${PROJECT_SOURCE_DIR}/src)
 vr_target_warnings(recon_volume_allocate_triangles_test)
 add_test(NAME recon_volume_allocate_triangles
          COMMAND recon_volume_allocate_triangles_test)
@@ -606,14 +618,16 @@ add_test(NAME recon_volume_frustum COMMAND recon_volume_frustum_test)
 
 # Sparse marching cubes: mesh an analytic sphere written into a real multi-block
 # VoxelBlockGrid, exercising cross-block neighbour sampling, and prove the same
-# field meshes identically however it is divided into blocks. Skips where no
-# device is present.
+# field meshes identically however it is divided into blocks or dispatches
+# (core/dispatch.hpp's test seam, by src/). Skips where no device is present.
 add_executable(recon_mesh_marching_cubes_sparse_test
                marching_cubes_sparse_test.cpp)
 target_link_libraries(
   recon_mesh_marching_cubes_sparse_test
   PRIVATE volumetric_kit::recon_mesh Vulkan::Vulkan
           volumetric_kit::core_test_policy)
+target_include_directories(recon_mesh_marching_cubes_sparse_test
+                           PRIVATE ${PROJECT_SOURCE_DIR}/src)
 vr_target_warnings(recon_mesh_marching_cubes_sparse_test)
 add_test(NAME recon_mesh_marching_cubes_sparse
          COMMAND recon_mesh_marching_cubes_sparse_test)
@@ -802,12 +816,12 @@ add_test(NAME recon_codec_params COMMAND recon_codec_params_test)
 # alone, and their ends on the device -- a host frame's entries uploaded, the
 # forward read back, the inverse fed from the host, and the frame an Encoder
 # must write. Test-only; the codec tests that hold the device to it link it, and
-# reach the internal headers through it.
+# reach the internal headers through it (core/dispatch.hpp's by src/).
 add_library(recon_codec_oracle STATIC codec_oracle.cpp codec_oracle_device.cpp)
 target_link_libraries(recon_codec_oracle PUBLIC volumetric_kit::recon_codec)
 target_include_directories(
-  recon_codec_oracle
-  PUBLIC ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/codec)
+  recon_codec_oracle PUBLIC ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/codec
+                            ${PROJECT_SOURCE_DIR}/src)
 vr_target_warnings(recon_codec_oracle)
 
 # codec tier, GPU half: the internal DctTransform's forward kernel against a
@@ -918,12 +932,16 @@ add_test(NAME recon_codec_decoder COMMAND recon_codec_decoder_test)
 # codec tier, a player's grid (decode_grid.hpp): make_decode_grid's geometry,
 # layout and attributes off a frame's header, and decode_growing's one grow, its
 # second OutOfMemory, its timing of the attempt that succeeds, and the decoder's
-# refusals passed through. Skips with no device.
+# refusals passed through; the caller's ceiling, against frames forged with the
+# internal frame writer. Skips with no device.
 add_executable(recon_codec_decode_grid_test codec_decode_grid_test.cpp)
 target_link_libraries(
   recon_codec_decode_grid_test
   PRIVATE volumetric_kit::recon_codec Vulkan::Vulkan
           volumetric_kit::core_test_policy)
+target_include_directories(
+  recon_codec_decode_grid_test
+  PRIVATE ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/codec)
 vr_target_warnings(recon_codec_decode_grid_test)
 add_test(NAME recon_codec_decode_grid COMMAND recon_codec_decode_grid_test)
 
@@ -993,6 +1011,12 @@ if(VR_WITH_FFMPEG)
   target_compile_definitions(
     recon_sensor_video_hevc_test
     PRIVATE VR_HEVC_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data/hevc")
+  if(VR_WITH_CUDA)
+    # It asks libcuda which primary contexts the decoders hold.
+    target_include_directories(recon_sensor_video_hevc_test SYSTEM
+                               PRIVATE ${CUDAToolkit_INCLUDE_DIRS})
+    target_link_libraries(recon_sensor_video_hevc_test PRIVATE ${CMAKE_DL_LIBS})
+  endif()
   vr_target_warnings(recon_sensor_video_hevc_test)
   add_test(NAME recon_sensor_video_hevc COMMAND recon_sensor_video_hevc_test)
 
@@ -1354,7 +1378,8 @@ endforeach()
 
 # serve_stream's replay (examples/common/stream_replay.hpp): the records from
 # the first key, seq and key pts across passes by the writer's rules, the dues,
-# damage left out and an allocation failure past it refused. Host only.
+# damage left out and an allocation failure past it refused, and a damaged
+# payload skipped to the next key. Host only.
 add_executable(recon_example_stream_replay_test example_stream_replay_test.cpp
                                                 test_allocation_failure.cpp)
 target_include_directories(recon_example_stream_replay_test

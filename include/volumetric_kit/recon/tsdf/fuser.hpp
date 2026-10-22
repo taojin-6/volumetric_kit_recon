@@ -29,7 +29,11 @@ struct FuserConfig {
   /// capacity are exhausted. Intended for live viewers; offline callers
   /// default to returning an error before integration. Partial mode leaves
   /// residual lock contention to the next set and backs off a failed grow
-  /// for 60 map ticks; it still reports other errors.
+  /// for 60 map ticks; it still reports other errors. Once the grid holds a
+  /// block, a partial set is one submit
+  /// (@ref TsdfIntegrator::allocate_and_integrate): one allocation round, and
+  /// a grow for a capacity limit made after it, so what the set could not
+  /// allocate lands with the next.
   bool allow_partial = false;
 };
 

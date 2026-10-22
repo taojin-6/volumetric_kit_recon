@@ -16,7 +16,8 @@
 // faces tied for nearest disagree -- past an edge or corner sharper than 90
 // degrees -- so there only the distance is checked; the regular tetrahedron's
 // 70.5-degree edges put many voxels there. A cube with one corner pushed in has
-// concave edges and a concave vertex. An open quad's field runs on past its
+// concave edges and a concave vertex, and writes the same bytes with its
+// binning split across dispatches. An open quad's field runs on past its
 // rim, since there is no topology to find one. A soup must write the same bytes
 // as its indexed mesh, and the same mesh twice the same bytes. A triangle under
 // a millimetre across checks the closest point has no size threshold, and a
@@ -42,6 +43,7 @@
 #include "volumetric_kit/core/vulkan/allocator.hpp"
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
+#include "volumetric_kit/recon/core/dispatch.hpp"
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
 #include "volumetric_kit/recon/tsdf/mesh_integrator.hpp"
 #include "volumetric_kit/recon/volume/hash_types.hpp"
@@ -462,6 +464,17 @@ int gpu_main(vr_test::GpuContext& gpu) {
   if (verify(gpu, grid, "signed dented cube",
              [&](vr::Vec3f p) { return signed_closed(p, cube, trunc); }) != 0) {
     return 1;
+  }
+  // Its ~600 candidates binned at one group a dispatch, three dispatches a
+  // pass, write the same bytes: the path a mesh past 16.7 M candidates takes
+  // on a device with Vulkan's 65,535-group floor.
+  {
+    const std::map<Coord, std::vector<float>> cube_bytes = by_coord(gpu, grid);
+    vr::detail::set_test_groups_per_dispatch(1);
+    const bool split = convert(cube, kSigned).ok();
+    vr::detail::set_test_groups_per_dispatch(0);
+    CHECK(split);
+    CHECK(by_coord(gpu, grid) == cube_bytes);
   }
 
   // ---- 5. Signed open quad: no topology, so no rim ----------------------

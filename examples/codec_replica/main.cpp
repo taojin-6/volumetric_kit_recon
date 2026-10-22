@@ -75,10 +75,11 @@ vkc::Status run(const Options& opt) {
              vr::sensor::GpuFramePrep::create(device, allocator));
   VKC_ASSIGN(mesh::MarchingCubes extractor,
              mesh::MarchingCubes::create(device, allocator));
-  VKC_ASSIGN(vr_example::CodecStream stream,
-             vr_example::CodecStream::create(
-                 device, allocator, config,
-                 vr_example::codec_outputs(opt.output), "codec_replica"));
+  VKC_ASSIGN(
+      vr_example::CodecStream stream,
+      vr_example::CodecStream::create(
+          device, allocator, config, vr_example::codec_outputs(opt.output),
+          "codec_replica", {vr_example::kNominalFps, 1}));
   const vr::tsdf::IntegrationMode mode =
       vr_example::integration_mode(opt.fusion.dynamic);
   std::printf(
@@ -122,7 +123,8 @@ vkc::Status run(const Options& opt) {
 
   // The last frame's decoded surface against the source's.
   VKC_ASSIGN(const mesh::Mesh source, extractor.extract_host(volume));
-  VKC_ASSIGN(const mesh::Mesh decoded, extractor.extract_host(stream.player()));
+  VKC_ASSIGN(const mesh::Mesh decoded,
+             extractor.extract_host(*stream.player()));
   // Written first, so a comparison that refuses a mesh still leaves the
   // meshes to look at.
   if (!opt.output.prefix.empty()) {
@@ -141,7 +143,7 @@ vkc::Status run(const Options& opt) {
 
   if (opt.codec.sweep) {
     VKC_TRY(vr_example::run_codec_sweep(device, allocator, volume, reference,
-                                        extractor, config, stream.player()));
+                                        extractor, config, *stream.player()));
   }
   return {};
 }
