@@ -210,8 +210,7 @@ class VR_TSDF_API MeshIntegrator {
   ///         `volume::triangle_candidate_offsets`); a band block that is not
   ///         allocated; a bin past
   ///         @ref kMaxBinTriangles; or a buffer past what one storage-buffer
-  ///         binding can cover, or a binning pass past what one 1-D dispatch
-  ///         can launch. Every refusal comes before the grid is written.
+  ///         binding can cover. Every refusal comes before the grid is written.
   ///         Otherwise whatever a buffer or a dispatch returns; a dispatch
   ///         that fails after the first has written leaves the blocks before
   ///         it written.
