@@ -8,6 +8,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `examples`: **the senders print viewers joining and leaving.**
+  `serve_stream` and `fuse_orbbec` install `vr_example::print_info_log`
+  (`examples/common/info_log.hpp`), which prints Info, Warning and Error as
+  the core's default sink prints a line and drops Debug, so the server's
+  Info lines for a viewer that joins, leaves or fails reach stderr.
+  `networking`: the refusals past `max_viewers` not logged at Warning (the
+  first, then one in 10 s) go at Debug, not Info, so such a sender is not
+  flooded. Tests: `recon_example_info_log`, `recon_networking_server`.
 - `tsdf`: **`MeshIntegrator` measures a voxel against only the triangles no
   lower bound rules out**, a workgroup per block, and writes the same bytes:
   a triangle is ruled out only when strictly farther than the voxel's best,
