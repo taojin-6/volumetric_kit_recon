@@ -1450,9 +1450,12 @@ set_tests_properties(recon_tsdf_mesh_integrate PROPERTIES COST 36)
 set_tests_properties(recon_codec_encoder PROPERTIES COST 30)
 set_tests_properties(recon_example_set_codec PROPERTIES COST 29)
 
-# A test skips by exiting with the core's test::kSkipExitCode (gpu_test.hpp).
+# A test skips by exiting with the core's test::kSkipExitCode (gpu_test.hpp). A
+# hang (a fence never signalled, a deadlocked thread) fails in 300 s rather than
+# holding a shared runner to its job's limit: the slowest test, under the
+# sanitizers, takes about 115.
 get_property(
   _vr_tests
   DIRECTORY
   PROPERTY TESTS)
-set_tests_properties(${_vr_tests} PROPERTIES SKIP_RETURN_CODE 77)
+set_tests_properties(${_vr_tests} PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 300)
