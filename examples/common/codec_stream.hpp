@@ -380,7 +380,9 @@ class CodecStream {
     }
     vkc::StageMetrics encoded;
     VKC_ASSIGN(const Bytes bytes, encoder_.encode(source, &encoded));
-    const vkc::Status played = play(bytes, frame, pts_ns, encoded);
+    const vkc::Status played =
+        play(bytes, frame, pts_ns, encoded,
+             static_cast<std::uint32_t>(source.grid().num_blocks));
     if (!played.ok()) encoder_.force_intra();
     return played;
   }
@@ -536,9 +538,10 @@ class CodecStream {
 
   // What code() does once the encoder returns frame @p frame's @p bytes:
   // record and serve them, decode them into the player, and keep and write
-  // their row, @p encoded its encode's stage rows.
+  // their row, @p encoded its encode's stage rows. The source's slots,
+  // @p max_blocks, bound its frames' blocks: the player's ceiling.
   vkc::Status play(const Bytes& bytes, std::size_t frame, std::uint64_t pts_ns,
-                   const vkc::StageMetrics& encoded) {
+                   const vkc::StageMetrics& encoded, std::uint32_t max_blocks) {
     VKC_ASSIGN(const vr::codec::FrameInfo info,
                vr::codec::read_frame_info(bytes.data(), bytes.size()));
     vr::stream::RecordInfo record;
@@ -564,15 +567,16 @@ class CodecStream {
     last_frame_ = frame;
     last_pts_ns_ = pts_ns;
     if (!player_) {
-      VKC_ASSIGN(vr::volume::VoxelBlockGrid g,
-                 vr::codec::make_decode_grid(*device_, *allocator_,
-                                             bytes.data(), bytes.size()));
+      VKC_ASSIGN(
+          vr::volume::VoxelBlockGrid g,
+          vr::codec::make_decode_grid(*device_, *allocator_, bytes.data(),
+                                      bytes.size(), max_blocks));
       player_.emplace(std::move(g));
     }
     const std::int32_t buckets = player_->grid().num_buckets;
     vkc::StageMetrics decoded;
     const vkc::Status status = vr::codec::decode_growing(
-        decoder_, bytes.data(), bytes.size(), *player_, &decoded);
+        decoder_, bytes.data(), bytes.size(), *player_, max_blocks, &decoded);
     grew_ = grew_ || player_->grid().num_buckets != buckets;
     VKC_TRY(status);
     const auto t = static_cast<std::size_t>(info.type);

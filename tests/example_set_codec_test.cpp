@@ -326,6 +326,7 @@ int check_stream(vr_test::GpuContext& gpu, const std::string& path,
   auto extractor = vr::mesh::MarchingCubes::create(gpu.device, gpu.allocator);
   CHECK(extractor.ok());
   std::optional<vr::volume::VoxelBlockGrid> player;
+  constexpr std::uint32_t kMaxBlocks = 1u << 20;  // far past the scene's
   stream::Position pos = reader.begin();
   stream::Record record;
   std::vector<std::uint8_t> payload;
@@ -338,14 +339,15 @@ int check_stream(vr_test::GpuContext& gpu, const std::string& path,
     CHECK(record.info.pts_ns == coded_pts(s));
     CHECK(reader.read(record, &payload).ok());
     if (!player) {
-      auto made = codec::make_decode_grid(gpu.device, gpu.allocator,
-                                          payload.data(), payload.size());
+      auto made =
+          codec::make_decode_grid(gpu.device, gpu.allocator, payload.data(),
+                                  payload.size(), kMaxBlocks);
       CHECK(made.ok());
       player.emplace(std::move(made).value());
     }
-    CHECK(
-        codec::decode_growing(*decoder, payload.data(), payload.size(), *player)
-            .ok());
+    CHECK(codec::decode_growing(*decoder, payload.data(), payload.size(),
+                                *player, kMaxBlocks)
+              .ok());
 
     Walls walls;
     CHECK(read_walls(*extractor, *player, &walls) == 0);

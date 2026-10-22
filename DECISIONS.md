@@ -195,7 +195,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   rather than grown. *Amended 2026-10-13:* the `Decoder` decodes P-frames
   too, against a reference it keeps. *Amended 2026-10-18:* a player's growth
   sits beside the decoder, as the `Fuser`'s does: `make_decode_grid` and
-  `decode_growing`.
+  `decode_growing`. *Amended 2026-10-22:* both take the caller's block
+  ceiling, and refuse a frame or a grow past it as `InvalidArgument`.
 - [**2026-09-27**](#2026-09-27--the-video-decoder-is-recon_sensor_video-a-target-of-its-own-over-an-installed-ffmpeg-hevc-in-host-pictures-out-on-the-first-hardware-back-end-that-decodes-a-built-in-clip-nvidia-ahead-of-an-integrated-gpu-each-ci-leg-requires-the-hardware-it-has) —
   The video decoder is `recon_sensor_video`, a target of its own over an
   installed FFmpeg: HEVC in, host pictures out, on the first hardware back end
@@ -5182,6 +5183,18 @@ retry against the wrong reference. A merge that runs out of host memory
 leaves the caller's prior metrics intact and returns decode success.
 `recon_codec_decode_grid_oom` injects the diagnostic and merge failures and
 checks that the following P-frame still decodes to the expected grid.
+
+*Amended 2026-10-22:* both helpers take the caller's ceiling, `max_blocks`.
+They sized the grid from the frame's own header, so the v1-frame entry's
+bound, the caller's capacity, was gone once the 2026-10-21 networking entry
+fed them TCP bytes: a forged 50-byte header, or a frame of 8 bytes per 1024
+blocks, made a grid of gigabytes that was never shrunk. A frame past the
+ceiling, or a grow past `make_decode_grid`'s grid for it, is refused before
+the decode or the grow, as `InvalidArgument`, a frame a player skips rather
+than an `OutOfMemory` that stops it. `make_decode_grid` checks the block
+count against the segment table through the decoder's own parse, where a
+sound P-frame stops at its reference (`NotFound`). The ceiling is a required
+argument, so a player states its budget.
 
 The third of the 2026-09-26 entry's five PRs, and the first public API the
 codec has had: `codec/encoder.hpp` (`Encoder`, `EncoderConfig`) and

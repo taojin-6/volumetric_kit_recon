@@ -1504,7 +1504,12 @@ decoder never grows one. Beside it, as `tsdf::Fuser` grows for fusion,
 `decode_grid.hpp` holds a player's growth: `make_decode_grid` builds a
 grid from a frame's header, its heap twice the frame's blocks, and
 `decode_growing` decodes into it, growing it once on `OutOfMemory` and
-decoding again twice at most on `IoError`. The factory contains host allocation
+decoding again twice at most on `IoError`. Both take the caller's ceiling,
+`max_blocks`: a frame past it is refused before it is decoded, and a grow
+past `make_decode_grid`'s grid for it before it is made, each as
+`InvalidArgument`; the factory checks the header's block count against the
+segment table as the decoder does. The examples pass the source grid's
+slots. The factory contains host allocation
 failures from header parsing through grid creation. The growing decode merges
 only its successful attempt's metrics; if that merge runs out of host memory,
 the caller's prior metrics stay unchanged and the decode still succeeds, since

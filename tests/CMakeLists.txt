@@ -907,12 +907,16 @@ add_test(NAME recon_codec_decoder COMMAND recon_codec_decoder_test)
 # codec tier, a player's grid (decode_grid.hpp): make_decode_grid's geometry,
 # layout and attributes off a frame's header, and decode_growing's one grow, its
 # second OutOfMemory, its timing of the attempt that succeeds, and the decoder's
-# refusals passed through. Skips with no device.
+# refusals passed through; the caller's ceiling, against frames forged with the
+# internal frame writer. Skips with no device.
 add_executable(recon_codec_decode_grid_test codec_decode_grid_test.cpp)
 target_link_libraries(
   recon_codec_decode_grid_test
   PRIVATE volumetric_kit::recon_codec Vulkan::Vulkan
           volumetric_kit::core_test_policy)
+target_include_directories(
+  recon_codec_decode_grid_test
+  PRIVATE ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/codec)
 vr_target_warnings(recon_codec_decode_grid_test)
 add_test(NAME recon_codec_decode_grid COMMAND recon_codec_decode_grid_test)
 

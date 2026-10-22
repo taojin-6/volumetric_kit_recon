@@ -8,6 +8,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `codec`: **`make_decode_grid` and `decode_growing` take a block ceiling**
+  (BREAKING), so a forged header or frame from a file or a socket can no
+  longer make a player's grid gigabytes large. A frame past `max_blocks`,
+  or a grow past `make_decode_grid`'s grid for it, is refused as
+  `InvalidArgument` (a frame to skip) before the decode or the grow, and
+  `make_decode_grid` checks the header's block count against the segment
+  table. Migrating: pass the most blocks a frame may hold, from your memory
+  budget, after `make_decode_grid`'s size and `decode_growing`'s grid.
+  Tests: `recon_codec_decode_grid`, `recon_codec_decode_grid_oom`.
 - `tsdf`: **`MeshIntegrator` measures a voxel against only the triangles no
   lower bound rules out**, a workgroup per block, and writes the same bytes:
   a triangle is ruled out only when strictly farther than the voxel's best,
