@@ -98,7 +98,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   The overflow scan stays exhaustive; what gets bounded is its cost per slot,
   not its length. *Amended 2026-10-13:* `diagnostics()` is gone; the device
   confirms the chain fixtures. *Amended 2026-10-22:* the heap path refuses an
-  overflow insert, unscanned, below an eighth of the blocks.
+  overflow insert, unscanned, below an eighth of the blocks, and the retry
+  loop ends at a capacity limit.
 - [**2026-08-08**](#2026-08-08--fuse_viewer-draws-recons-buffers-interop-seam-b-end-to-end-and-the-release-mark-must-be-published-before-the-mesh-is-taken) —
   `fuse_viewer` draws recon's buffers: interop seam B, end to end, and the
   release mark must be published *before* the mesh is taken.
@@ -1939,6 +1940,13 @@ whole table holding its home bucket's lock: Replica room0's first frame at
 insert now reports `heap` without scanning once fewer than an eighth of the
 blocks are left, the anchors' share at the default bucket size; `table`
 remains a clean sweep's proof, on the rehash path and at smaller buckets.
+The retry loop also ends at the first round with a capacity limit, where it
+re-dispatched until two rounds made no progress, each repeating the failed
+inserts and the lock races of the threads queued behind them;
+`AllocFailures::rounds` counts the rounds, and `recon_volume_allocate` tests
+the exit. With both, that frame allocates in 13–22 ms, after one more grow
+(resize 35–41 ms of host time, from 9–15), and meshes the same 6 585 513
+vertices.
 
 An M5 iPad Pro lost the GPU inside
 `allocate_from_depth` at **31 480 of 32 768 blocks** —

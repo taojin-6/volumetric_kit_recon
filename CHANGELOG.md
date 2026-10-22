@@ -895,6 +895,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   left, so the first 5 mm frame of a small table stops stalling the GPU for
   most of a second (the 2026-08-08 decision, amended). Regression:
   `recon_volume_hash_map`.
+- `volume`: **a dispatch ends at the first round that hits a capacity
+  limit**, so the caller grows that much sooner, where it re-dispatched the
+  whole set until progress stalled. The new `AllocFailures::rounds` says how
+  many rounds a call ran. Regression:
+  `recon_volume_allocate`.
 - `mesh`: **`MeshExchange::begin_frame` hands an empty mesh to `commit`
   with its payload**, where it committed one at once and dropped the
   payload, so a consumer showing what the payload names (a player's frame)
