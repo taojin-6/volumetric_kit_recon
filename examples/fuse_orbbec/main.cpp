@@ -38,10 +38,10 @@
 // part-way; codec.sweep then prints the codec's rate-distortion table on the
 // last grid. output.serve serves each frame live, as it is recorded, on that
 // port on every interface (networking::StreamServer), to a player that
-// connects. fusion.dynamic, true by default, clears a surface the cameras see
-// past, so the stream and the PLY follow a changing scene, and every
-// fusion.free_after sets the grid frees the blocks such a surface left, as
-// rig_viewer's does.
+// connects, and prints each viewer joining and leaving. fusion.dynamic, true
+// by default, clears a surface the cameras see past, so the stream and the PLY
+// follow a changing scene, and every fusion.free_after sets the grid frees the
+// blocks such a surface left, as rig_viewer's does.
 //
 // Ctrl+C (or a SIGTERM) ends the run. Before the cameras stream, the run
 // returns with nothing recorded: the empty stream is removed and the cameras
@@ -64,6 +64,7 @@
 #include "config.hpp"
 #include "fuse_frame.hpp"
 #include "fuse_orbbec_sets.hpp"
+#include "info_log.hpp"
 #include "interrupt.hpp"
 #include "set_codec.hpp"
 #include "set_dump.hpp"
@@ -287,6 +288,7 @@ vkc::Status run(const Options& opt) {
 }  // namespace
 
 int run_main(const Options& opt) {
+  vr_example::print_info_log();  // output.serve's viewers joining and leaving
   const vkc::Status status = run(opt);
   if (!status.ok()) {
     std::fprintf(stderr, "fuse_orbbec failed: %s\n", status.message().c_str());
