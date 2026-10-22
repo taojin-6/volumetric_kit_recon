@@ -8,8 +8,9 @@
 // holding a sphere: outputs it cannot make refused on
 // create, before any coding, and none written without outputs; a row per
 // decoded frame, under the source's index, whose type, bytes and blocks are
-// the frame's, and each type's stage rows its own frames'; every encoded
-// frame a record of the .vrst, a frame the decoder refuses included and the
+// the frame's, and each type's stage rows its own frames'; the .vrst's track
+// at the nominal rate given, and every encoded frame a record of it, a
+// frame the decoder refuses included and the
 // stream going on after it, byte for byte what an encoder returns, a key
 // exactly when an I-frame, and the same file on a rerun; after a frame
 // encoded but not decoded, or whose CSV row fails, an I-frame where the
@@ -301,8 +302,9 @@ int code_frames(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
   CHECK(
       vkc::write_file(outputs.csv, "stale\nstale\n", vkc::WriteMode::CreateNew)
           .ok());
-  vkc::Result<vr_example::CodecStream> made = vr_example::CodecStream::create(
-      gpu.device, gpu.allocator, {}, outputs, "example_codec_stream");
+  vkc::Result<vr_example::CodecStream> made =
+      vr_example::CodecStream::create(gpu.device, gpu.allocator, {}, outputs,
+                                      "example_codec_stream", {30000, 1001});
   CHECK(made.ok());
   vr_example::CodecStream coder = std::move(made).value();
   // The CSV holds its header, and the stream's file is there, before any
@@ -378,7 +380,7 @@ int check_records(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
   CHECK(session.tracks.size() == 1);
   const stream::Track& track = session.tracks[0];
   CHECK(track.kind == stream::TrackKind::Geometry && track.clock == 1);
-  CHECK(track.rate.num == 0 && track.rate.den == 1);
+  CHECK(track.rate.num == 30000 && track.rate.den == 1001);
   CHECK(track.width == 0 && track.height == 0);
   CHECK(track.sensor.empty() && track.params.empty());
   CHECK(reader.recovery().finished && reader.recovery().torn_bytes == 0);

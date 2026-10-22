@@ -223,6 +223,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   explicit fusion/output settings. Tests cover runtime option mapping and
   every executable's help/error startup before resource creation.
 
+### Fixed
+
+- `examples`: **a codec stream's track records its nominal rate**, which
+  `CodecStream::create` now takes: `source.fps` for `fuse_orbbec`'s, 30 a
+  second for `codec_replica`'s and `codec_mesh`'s. They said unknown, so a
+  player paced a 25 fps rig recording's loop restart at 30.
+  Tests: `recon_example_codec_stream`, `recon_example_mesh_sequence`.
+
 ### Added
 
 - `stream`: **`nominal_period_ns`** (`stream/session.hpp`), a track's period

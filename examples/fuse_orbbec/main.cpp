@@ -129,10 +129,11 @@ vkc::Status run(const Options& opt) {
   std::optional<vr_example::CodecStream> stream;
   if (!opt.output.stream.empty() || !opt.output.csv.empty() ||
       opt.output.serve != 0) {
-    VKC_ASSIGN(vr_example::CodecStream made,
-               vr_example::CodecStream::create(
-                   device, allocator, config,
-                   vr_example::codec_outputs(opt.output), "fuse_orbbec"));
+    VKC_ASSIGN(
+        vr_example::CodecStream made,
+        vr_example::CodecStream::create(device, allocator, config,
+                                        vr_example::codec_outputs(opt.output),
+                                        "fuse_orbbec", {opt.source.fps, 1}));
     stream.emplace(std::move(made));
     VKC_TRY(vr_example::check_apart(opt.output.path,
                                     vr_example::codec_outputs(opt.output)));

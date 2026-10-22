@@ -75,10 +75,11 @@ vkc::Status run(const Options& opt) {
              vr::sensor::GpuFramePrep::create(device, allocator));
   VKC_ASSIGN(mesh::MarchingCubes extractor,
              mesh::MarchingCubes::create(device, allocator));
-  VKC_ASSIGN(vr_example::CodecStream stream,
-             vr_example::CodecStream::create(
-                 device, allocator, config,
-                 vr_example::codec_outputs(opt.output), "codec_replica"));
+  VKC_ASSIGN(
+      vr_example::CodecStream stream,
+      vr_example::CodecStream::create(
+          device, allocator, config, vr_example::codec_outputs(opt.output),
+          "codec_replica", {vr_example::kNominalFps, 1}));
   const vr::tsdf::IntegrationMode mode =
       vr_example::integration_mode(opt.fusion.dynamic);
   std::printf(

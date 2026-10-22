@@ -209,9 +209,9 @@ inline double mbit_per_s(double bytes_per_frame, double frames_per_s) {
   return bytes_per_frame * 8.0 * frames_per_s / 1e6;
 }
 
-/// The rate a source with no time of its own is coded at: Replica's frames
-/// and a mesh sequence's numbers.
-inline constexpr double kNominalFps = 30.0;
+/// The rate a source with no time of its own is coded at, frames a second:
+/// Replica's frames and a mesh sequence's numbers.
+inline constexpr std::uint32_t kNominalFps = 30;
 
 /// @return Source frame @p frame's time at @p fps, frame 0 at 0, in ns
 ///         rounded to the nearest. @pre @p fps is positive.
@@ -270,6 +270,8 @@ class CodecStream {
   /// is the common refusal, then the CSV, its header flushed.
   /// @param program  The program writing the stream, recorded in its session
   ///                 header.
+  /// @param rate     Its Geometry track's nominal rate, the source's: unknown
+  ///                 by default.
   /// @param geometry_params  Its Geometry track's params, recorded as given:
   ///                 empty, or a mesh source's `io::encode_transform` bytes
   ///                 (stream/session.hpp).
@@ -286,6 +288,7 @@ class CodecStream {
                                          const vr::codec::EncoderConfig& config,
                                          CodecOutputs outputs = {},
                                          const std::string& program = {},
+                                         vr::stream::Rate rate = {},
                                          std::string geometry_params = {}) {
     VKC_ASSIGN(vr::codec::Encoder enc,
                vr::codec::Encoder::create(device, allocator, config));
@@ -295,6 +298,7 @@ class CodecStream {
     // time, so a rerun writes the same bytes.
     vr::stream::Track geometry;
     geometry.kind = vr::stream::TrackKind::Geometry;
+    geometry.rate = rate;
     geometry.params = std::move(geometry_params);
     vr::stream::Session session;
     session.writer = program;

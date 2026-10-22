@@ -1971,7 +1971,8 @@ blocks, and encode and decode host and device ms) and writes
 codes. The CSV gets each row once its frame decodes; the core cannot append,
 so the file is the stream's own. The
 `.vrst` (`recon_stream`) gets every frame the encoder returns, before it is
-decoded, so a frame the decoder refuses is kept: one Geometry track, and per
+decoded, so a frame the decoder refuses is kept: one Geometry track, at the
+source's nominal rate (the rig's `source.fps`, else 30 a second), and per
 frame a record, a key exactly when it holds an I-frame, whose set is the
 source index and whose pts is that index at 30 fps, as Replica frames carry
 no time. It has no session id or start time, so a rerun writes the same
