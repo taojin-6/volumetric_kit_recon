@@ -61,7 +61,7 @@ conventions and Vulkan setup.
 - CMake: `find_package(volumetric_kit_recon)`; component targets
   `volumetric_kit::recon_camera`, `…_core`, `…_volume`, `…_tsdf`, `…_mesh`,
   `…_texture`,
-  `…_sensor`, `…_codec`, `…_eval`, `…_io`, `…_stream`, `…_interop` (+ later `…_track`),
+  `…_sensor`, `…_codec`, `…_eval`, `…_io`, `…_stream`, `…_networking`, `…_interop` (+ later `…_track`),
   plus `…_sensor_utils` (GPU pre-processing), `…_sensor_array` (several
   sensors read as one), `…_sensor_apple` (Apple's pixel buffers as images),
   the opt-in `…_sensor_orbbec`
@@ -79,7 +79,7 @@ left. No upward includes.
 branching off **`core`**, `codec` off **`volume`** and `eval`/`io` off **`mesh`**
 (later: `track`). `camera` sits under `sensor` and beside `core`: it
 links the family core's base tier and GLM, and no other recon tier. `stream`
-links that base tier alone.
+links that base tier alone, and `networking` links `stream`.
 
 - **`camera`** — the camera vocabulary the drivers and the sensor tier
   share: the double-precision `CameraModel` (image size, intrinsics, OpenCV's
@@ -149,6 +149,11 @@ links that base tier alone.
   records appended after it, each payload stored byte for byte, readable
   from a killed writer (`stream/session.hpp`, 2026-10-12). Host-side, with
   no Vulkan and no other recon tier.
+- **`networking`** — a session served and read live over TCP, its wire the
+  `.vrst` file's own bytes: `StreamServer` and `StreamClient`, over BSD
+  sockets and threads of their own (2026-10-21). Host-side, on `stream`,
+  so the format and the sockets are tested apart; it logs through recon's
+  log seam (`core/log.hpp`), header-only over the family core's base tier.
 - **`interop`** — the handoff to `volumetric_kit_gfx` (below).
 
 ## Backend strategy: one Vulkan path
@@ -1748,6 +1753,58 @@ Measured on an Apple M5 Max (Release, APFS, warm page cache): CRC-32 at
 second, 934 MB) takes 0.33 to 0.36 s by the scan, and from the footer 0.5 ms
 with a key in 30 records or 14 ms with every record a key (a 27.6 MB index).
 
+### networking
+
+`recon_networking` serves one session live over TCP and reads it
+(`networking/stream_server.hpp`, `networking/stream_client.hpp`, the
+2026-10-21 entry). The wire is the file: the `VRST` chunk, then `RECD`
+chunks as `StreamWriter` writes them, made by `ChunkEncoder` and read by
+`ChunkParser`, with no footer and no framing of its own. A viewer sends
+nothing; the server reads and drops what one does send, and closes on its
+end. The port is 47801 (`kDefaultPort`).
+
+**Serving** (`StreamServer`). `start` listens on a numeric IPv4 address, or
+every interface, and starts an accept thread; one thread per viewer sends,
+at most `max_viewers` (4) at once, first come, and a connection past them is
+closed at accept. `publish` frames the record by the writer's rules, copies
+its chunk once, takes one lock to append it to the GOP log and wakes the
+viewers: it never waits on a socket. The log holds one GOP, the newest key and every
+record after it, as chunks shared by the viewers still to send them. A
+viewer's first record, after its `VRST` chunk, is the GOP's key, and the
+log keeps every record since. It takes its next chunk only once its socket
+polls writable, under 128 KiB unsent (`TCP_NOTSENT_LOWAT`), and at that
+chunk boundary goes on from a newer key if one has come: newest key wins, so a
+P-frame never goes out without the records it is predicted from, and a
+lagging viewer's seq jumps to a key. A record that would take the GOP past
+`max_gop_bytes` (64 MiB) drops it and every record until the next key, as
+a copy that fails does (`OutOfMemory`). A viewer whose end acknowledges no
+byte for `stall_limit` (10 s) with bytes waiting is closed: one draining
+slowly stays, though its socket holds over the mark, as does one with
+nothing waiting. Viewers that join, leave or fail are logged at Info; a
+refusal at Warning, the first and then one in 10 s at most. The destructor
+stops every thread within a poll slice (20 ms) and the write under way. One track is served
+(`Unsupported` otherwise), and `publish` is called from one thread.
+
+**Reading** (`StreamClient`). `connect` never blocks: a numeric IPv4 address
+is parsed at once, and a name is looked up on a detached thread, which the
+client abandons if it is destroyed first. `next(wait, …)` finishes the
+lookup and the connect, trying each address in turn, then returns each
+record, both CRCs checked, its `offset` that of the bytes received, waiting
+at most `wait`. The receive buffer is 256 KiB, set before the connect. No
+byte for `idle_limit` (10 s), counted from `connect`, ends the connection
+with `IoError`, as do a refusal at every address, a reset and the sender's
+end, which comes after every whole record; a failed check ends it with the
+parser's error, which every later call returns again. Every error reads
+`StreamClient: <host>:<port>: <reason>`, the address once, and the idle
+limit's reason names the stage it ended in (the header lists the reasons).
+
+**Sockets** (private `socket.hpp`, which gives the reasons). IPv4 only:
+the server listens on it, and a name is looked up for it. Every socket is
+non-blocking and close-on-exec, accepted ones included, and never raises
+SIGPIPE; every call is retried on `EINTR`. The sender sets `TCP_NODELAY`
+and the listener `SO_REUSEADDR`. The GOP log (`gop_log.cpp`) has no socket,
+thread or clock, and is tested alone.
+
 ## Examples
 
 (`examples/`.) Every example that fuses prepares its frames on the GPU
@@ -1952,6 +2009,16 @@ extraction and quality evaluation are outside those timings. Full frame
 bytes include the quantization table. These are deterministic candidate
 tables, not fitted JPEG image tables: the criterion is decoded geometry at
 a given total size.
+
+**`serve_stream <in.vrst> [--port N]`** serves a recording live: a sender
+with no camera or GPU, so it builds wherever the examples do. It replays one
+track's records from its first key read whole, each due at its pts from its
+pass's start, in a loop until Ctrl+C (`ReplayLoop`, `stream_replay.hpp`).
+Each pass is restamped, seq past the passes before and pts a pass's span (the
+records' pts span and one mean step) later, so seq keeps rising and key pts
+never go back, as `publish` requires. It listens on every interface, on 47801
+or N (0 takes a free one, which it prints). Bad arguments exit 2 with the
+usage; a failure, a missing file included, exits 1.
 
 ## Next work
 
