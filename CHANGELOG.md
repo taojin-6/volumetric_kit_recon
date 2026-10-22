@@ -54,6 +54,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   context per decoder. Four 4K decoders on an RTX 5090 hold 1.3 GiB of
   device memory while decoding, not 2.8 GiB (nvidia-smi). Tests:
   `recon_sensor_video_hevc`.
+- `sensor`: **NVDEC's picture is copied once on the device**, straight off
+  the decoder's surface, without FFmpeg's copy first: 16 µs of GPU copying
+  per 4K picture, not 33 µs (Nsight Systems, RTX 5090), for 126 MiB more of
+  NVDEC's surfaces per 4K decoder. Tests: `recon_sensor_video_hevc`.
 - `tsdf`: **`MeshIntegrator` measures a voxel against only the triangles no
   lower bound rules out**, a workgroup per block, and writes the same bytes:
   a triangle is ruled out only when strictly farther than the voxel's best,
