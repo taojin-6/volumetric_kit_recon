@@ -1550,7 +1550,7 @@ in place on `tsdf`, a dispatch an axis, a 64-lane workgroup a block and a
 lane a face line, probing the block and its +axis neighbour through
 `vrResolveOctants` (`block_neighbourhood.glsl`). The Gaussian is one
 dispatch a block over the block and the 1-voxel halo of its 26 neighbours,
-in shared memory; it writes the interior in place and the shell, the 296
+in shared memory; it writes the interior in place and the shell, the
 voxels a neighbour's halo reads, into a snapshot by list position, which a
 store dispatch copies back. A block's own observed voxels come from the
 frame's masks, a neighbour's from its weights, and each block is found by

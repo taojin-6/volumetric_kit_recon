@@ -547,7 +547,9 @@ entries relevant to your task; later amendments supersede earlier rules.
   `FrameType` and `FrameInfo::type` are public. *Amended 2026-10-13:* the
   reference's coordinates live on the device, and the merge runs there.
   *Amended 2026-10-14:* the `Encoder` keeps its frames in the same store
-  and writes P-frames.
+  and writes P-frames. *Amended 2026-10-21:* the deblock, on request, joins
+  the decode's last submit, and `rebuild` remakes a frame from the
+  reference.
 - [**2026-10-13**](#2026-10-13--the-codecs-coordinate-work-runs-on-the-device-the-encoder-sorts-its-blocks-with-a-stable-rank-merge-sort-on-coord_less-and-the-decoder-judges-merges-and-diffs-them-by-count-and-binary-search-never-sorting-only-counts-and-verdicts-cross-the-bus-amends-the-2026-10-13-decoder-2026-10-12-p-frame-2026-10-03-observed-list-and-garbage-collection-and-2026-10-01-codec-review-entries) —
   The codec's coordinate work runs on the device: the encoder sorts with a
   stable rank-merge sort, and the decoder judges, merges and diffs by binary
@@ -677,6 +679,13 @@ entries relevant to your task; later amendments supersede earlier rules.
   keeps its mask, byte for byte. The mesh templates convert in 16 voxels
   and code at K 56, about 2 Mbit/s on Rafa2; the format, the decoder and
   the goldens are unchanged.
+- [**2026-10-21**](#2026-10-21--the-decoder-deblocks-on-request-a-runtime-switch-off-by-default-runs-the-studys-step-keyed-line-fit-and-gaussian-on-the-device-in-the-decodes-last-submit-and-a-paused-player-rebuilds-its-frame-from-the-reference-amends-the-2026-10-13-decoder-entry) —
+  The decoder deblocks on request: `Decoder::set_deblock`, off by default
+  and read at each decode, runs the study's step-keyed line fit and
+  Gaussian on the device in the decode's last submit, its filter picked
+  from each frame's header; `Decoder::rebuild` remakes the last frame from
+  the reference with the switch as it is, so a paused player shows a
+  toggle. Streams are unchanged.
 - [**2026-10-22**](#2026-10-22--recon-is-fetched-by-commit-never-installed-no-install-rules-package-config-or-package-tests-amends-the-2026-10-16-glsl-pinhole-entry-and-the-2026-10-17-amendment-of-the-2026-10-13-block-list-entry) —
   recon is fetched by commit, never installed (the owner's rule for the
   family): no install rules, package config or package tests. The
@@ -12654,6 +12663,11 @@ machine).
 
 ### 2026-10-13 — The `Decoder` decodes P-frames against the frame it decoded last, kept on the device as decoded in two slots that swap only when a decode succeeds; one integer apply makes every decoded frame, intra too; and it decodes on the device alone (amends the 2026-09-27 `Encoder`/`Decoder` and 2026-10-03 decoding entries).
 
+*Amended 2026-10-21 (the deblock entry, below):* with
+`Decoder::set_deblock` on, the decode's last submit also smooths the frame
+after the inverse, and `Decoder::rebuild` remakes the last frame from the
+reference without reading it again.
+
 *Amended 2026-10-13 (the coordinate entry, below):* the reference's
 coordinates live on the device, in each slot's block list, and `merge_frame`
 is gone: the decoder's merge kernel writes each block's sources into the
@@ -14425,6 +14439,138 @@ template against this build on the new one: `codec encode` takes
 2.23 / 1.13, the fewer blocks outweighing the two passes. The mesh
 conversion in each band is timed in the `MeshIntegrator` entry, above. Not
 run: the RTX 5090, ASan and UBSan (CI runs them).
+
+### 2026-10-21 — The decoder deblocks on request: a runtime switch, off by default, runs the study's step-keyed line fit and Gaussian on the device in the decode's last submit, and a paused player rebuilds its frame from the reference (amends the 2026-10-13 decoder entry).
+
+The 2026-10-21 quantization study found the steps quantization leaves at
+block faces the largest error a decoded mesh shows, and a decoder-side
+filter that removes most of them for no bits: on Rafa2 the K56 template's
+face jump falls from 0.466 to 0.193 mm under its LF filter, and its chamfer
+from 0.294 to 0.262 mm (the true-SDF entry, above). Its prototype ran the
+filters on the GPU in 0.15–0.52 ms a frame at 30 fps on the M5 Max, in a
+submit and fence of its own. The owner wants it in the player, toggled
+live.
+
+- **A switch on the `Decoder`, off by default, read at each decode.**
+  `set_deblock` / `deblock()`. Off is the exact decode, which the decoder's
+  contract, the bit-for-bit oracle and inter tests and the examples'
+  quality numbers rest on; the player turns it on. The filter is out of
+  loop -- a P-frame decodes from its reference's coefficients, never from a
+  grid -- so it may change between any two frames; a construction-time
+  option could not be toggled live. No `DecoderConfig`: nothing else needs
+  one.
+- **The filter from the header alone.** K and T, the step of DC and the
+  zigzag's next three coefficients at their basis peaks, pick a row of
+  `kDeblockRule`, the study's rule A for its rounding streams; T takes the
+  study's arithmetic, so its thresholds fall where it measured them. *To
+  confirm:* K 36–55, which the study did not fit, takes the rows of K 56
+  and above. An RDOQ stream would need a signal the frozen header lacks;
+  none ships.
+- **In the decode's last submit.** The inverse records without submitting
+  (`DctTransform::record_inverse`), the deblock follows it, and the
+  inverse's reject count is read back last, so no copy splits the compute.
+  Nothing of its own: no submit, fence, compaction, readback or indirect
+  dispatch; the frame's list and its count come from the decode.
+- **The kernels,** a 64-lane workgroup a block (Vulkan guarantees 128,
+  WebGPU 256). The line passes run in place, a dispatch an axis: a line
+  reads three voxels a side and writes two, so a voxel lies on one line of
+  a pass, read before it is written. The Gaussian is fused, one dispatch
+  over the block and the 1-voxel halo of its 26 neighbours in 4 KB of
+  shared memory, each pass's outputs held in registers until its inputs
+  are read; it writes the interior, which no other workgroup reads, in
+  place, and the shell into a snapshot packed to its 296 voxels a block,
+  by list position, which a store dispatch copies back. LF is 3 dispatches,
+  LG and R 5, against the prototype's 4 and 7. A block's own observed
+  voxels come from the frame's mask, a neighbour's from its weight; every
+  block is found by coordinate, never by a list's `ptr`.
+- **Stamps** follow what it writes: with it on they may name a block whose
+  values end as they were, never miss one that changed.
+- **Its device time is part of `"codec decode"`'s** (*to confirm*): one
+  submit cannot split its host half, and the player sums device halves.
+- **A paused frame is rebuilt from the reference.** The store holds the
+  frame's list, masks, quantized coefficients and header, so `rebuild`
+  runs the inverse and the deblock again under the switch as it is now,
+  with no bitstream read and no GoP re-decoded, once the grid diff has
+  confirmed the grid holds exactly the frame's blocks: a block it lacked
+  would be no neighbour, and one too many a neighbour the frame lacks.
+- **The filter is reported by name** (`DeblockInfo`, with T): a filter
+  picker for A/B comparisons would need a public enum, which waits until
+  one is asked for.
+- **Not taken:** a construction-time option; a per-frame neighbour table,
+  which saves no probe (the Gaussian needs its 26 neighbours either way);
+  a copy of the exact decode to compare against at the end, whose cost
+  buys only that a voxel moved and moved back keeps its bits, not 1 ulp
+  of metres; per-axis ping-pong snapshots (more dispatches and bytes); a
+  whole-block snapshot with the interior in place, which saves no memory
+  sector over the shell's.
+
+**Validation.** Apple M5 Max, MoltenVK, Release with warnings as errors,
+core `b992f12`: the 101 tests pass under the validation layer and
+synchronization validation. `recon_codec_deblock` holds the kernels to a CPU
+oracle ported from the study's filters, which reads a snapshot of each pass
+whatever order the workgroups run in, within 2e-6 of the band: LF, LG, R and
+each stage alone over partial masks, missing face, edge and corner
+neighbours and an unobserved plane; lines set by hand for the 3-sample
+candidacy, a sample at the clamp's kink and an ulp below it, the [-1, 1]
+clamp and the clip; an unobserved Gaussian tap against a hand value, a spike
+losing three clips, and a corner reaching its diagonal block. Every
+workgroup alone, after the last one's writes, in list order and in
+reverse, and in chunks of 2 and 3, gives the one-dispatch run's bits, so a
+voxel one workgroup writes and another reads in a pass fails in one order
+or the other. The fixtures' blocks sit past slot 2n, their lists carry
+other blocks' `ptr`s, and their masks are by list position. The Decoder's
+cases: off is the exact decode; on, every frame is the oracle's filter of
+the exact decode under the row the rule picks (none, LF, LG, R by T, R at
+K 20), and not the next row's; I- and P-frames toggled between frames,
+and four filters in one decoder over growing frames; `rebuild` equal to the
+decode with the switch so, its refusals leaving the grid as it was, and the
+next P-frame unchanged by it; a block only the deblock writes stamped; the
+rows unchanged. 26 bugs planted by hand each failed their case, among them
+a shell voxel written in place on either face (the serialized orders), p
+and q swapped, candidacy over two samples, the kink at `>`, either clip or
+the clamp dropped, a 6-face halo, no chunk base, the snapshot or the masks
+by slot, a trusted `ptr`, the axes reversed, the deblock before the inverse,
+an ignored switch, `rebuild` without the diff, either stamp dropped, and a
+deblock on by default (`recon_codec_inter` and `recon_codec_deblock`;
+`recon_codec_decoder`'s bounds are loose enough to pass it).
+
+By hand, against the study's own CPU code, its T computed its own way, on
+Rafa2 frames 1–150 of the prototype's four streams and the K56 template's,
+every frame: the decoder with the switch on (the rule's filter), and LF, LG
+and R each forced on the exact decode. All 20 pass the study's rule: every
+voxel within 0.030 µm (none over 1 µm), the marching-cubes triangle count
+equal on every frame (five sign flips, each within 0.00012 µm), no weight,
+unobserved voxel or block changed. T matched the study's to the bit on
+every frame, and so did the row.
+
+| Stream | T | Rule | Largest difference, the rule's / LF / LG / R |
+|---|---|---|---|
+| stock (K 64, s 0.2) | 0.490 mm | LG | 0.019 / 0.011 / 0.019 / 0.011 µm |
+| stk682a | 0.021 mm | none | exact / 0.007 / 0.026 / 0.015 µm |
+| stk2 | 0.112 mm | LF | 0.011 / 0.011 / 0.030 / 0.015 µm |
+| stk1 | 0.335 mm | LG | 0.030 / 0.011 / 0.030 / 0.022 µm |
+| K56 template | 0.200 mm | LF | 0.011 / 0.011 / 0.030 / 0.015 µm |
+
+**Time,** Apple M5 Max, Release, each unit run only once the GPU had been
+idle for 3 s with no other test, player or scratch GPU binary running and
+other processes under 400% CPU, and re-run if that changed (the run's own
+processes alone exempt). The chain's device interval, barriers included,
+back to back: 20 chains recorded into one batch over each frame's blocks,
+against 20 over one block (the same dispatches and host encoding), the wall
+difference over 20; frames 1–150, mean / p95 ms.
+
+| Stream (blocks a frame) | LF | LG | R |
+|---|---|---|---|
+| stock (3,426) | 0.043 / 0.055 | 0.107 / 0.120 | 0.110 / 0.123 |
+| stk682a (1,925) | 0.021 / 0.030 | 0.053 / 0.074 | 0.050 / 0.075 |
+| stk2 (1,925) | 0.020 / 0.029 | 0.053 / 0.077 | 0.052 / 0.077 |
+| stk1 (1,925) | 0.020 / 0.029 | 0.053 / 0.076 | 0.051 / 0.072 |
+| K56 template (1,924) | 0.021 / 0.029 | 0.052 / 0.076 | 0.052 / 0.077 |
+
+The prototype's, back to back on the same streams, one timestamp span
+around its whole chain (which this repeat method matched within 7%): LF
+0.052–0.097 ms and LG 0.099–0.186 ms. Building the three pipelines takes
+2.5 ms (4.3 ms the first time), of `Decoder::create`'s 11.8 ms.
 
 ### 2026-10-22 — recon is fetched by commit, never installed: no install rules, package config or package tests (amends the 2026-10-16 GLSL pinhole entry and the 2026-10-17 amendment of the 2026-10-13 block-list entry).
 

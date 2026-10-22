@@ -373,8 +373,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the exact decode, as before. `Decoder::rebuild(grid)` rebuilds the last
   decoded frame from the decoder's reference with the switch as it is now,
   so a paused player shows a toggle. Its device time is in `"codec
-  decode"`'s; a frame whose filter has a Gaussian takes 1,184 bytes of
-  device memory a block. Streams are unchanged. Tests:
+  decode"`'s. Streams are unchanged. Tests:
   `recon_codec_deblock`, `recon_codec_dct`, `recon_codec_decoder`,
   `recon_codec_inter`, `recon_mesh_marching_cubes_sparse`.
 - `codec`: **`EncoderConfig::true_sdf`** codes a true signed distance, such
