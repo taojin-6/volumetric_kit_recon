@@ -20,8 +20,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   containers had silently turned off: the suite at `-j4` with validation
   takes 15 s warm on the RTX 5090, against 38 s with no cache.
 - `tests`: **slow tests trimmed, with the properties they check kept**:
-  grid comparisons read only the compared blocks, on heaps sized to their
-  scenes; `recon_tsdf_mesh_integrate_exact` measures 41% fewer closest
+  grid comparisons and the codec fixtures read only the span their blocks
+  lie in, and the tsdf tests' heaps shrink to their scenes;
+  `recon_codec_inter` and `recon_codec_decoder` share one transform,
+  `Decoder` and `Encoder` across their cases, and the codec's P-frame
+  chains, corruption and merge sweeps are shorter;
+  `recon_tsdf_mesh_integrate_exact` measures 41% fewer closest
   points; the Orbbec decoder tests and the networking reaping case wait
   for every pair or viewer to be accounted for, not for a fixed time; the
   stream, eval and lens-fold host loops shrink. Under ASan (Debug) on an
