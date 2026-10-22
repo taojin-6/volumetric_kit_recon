@@ -13363,7 +13363,7 @@ number, the placement and the conversion's rules are recon's.
   4 voxels, so `codec_mesh.json` is unchanged. `codec_mesh_sequence.json`
   sets 0.04 m, 8 voxels: the paper's band and step 0's. *Amended
   2026-10-21:* `codec_mesh` refuses a band too narrow for a true SDF, and
-  both templates set 0.08 m, 16 voxels (the 2026-10-21 entry).
+  both templates set 0.08 m, 16 voxels (the 2026-10-21 true-SDF entry).
 - **`codec.entropy` is gone** from core 0.7.0, and recon stops reading it.
 - **One home for a mesh file's checks.** `io::check_mesh_file` holds what
   `io::load_mesh` checks of a path before it reads; the sequence calls it
@@ -14279,15 +14279,15 @@ run on an idle GPU):
 
 | band | origin/main | this |
 | --- | --- | --- |
-| 8 voxels (`codec_mesh_sequence.json`) | 8.55 / 6.89 ms | 3.65 / 2.21 ms |
+| 8 voxels (`codec_mesh_sequence.json` before #262) | 8.55 / 6.89 ms | 3.65 / 2.21 ms |
 | 16 voxels (#262's K56 template) | 29.57 / 27.17 ms | 7.95 / 5.95 ms |
 
 origin/main's three 16-voxel runs gave 25.26 to 28.20 ms on the device (#262
 measured 25.52), this branch's 5.94 to 5.96.
 
-**Validation.** `codec_mesh` on the template writes origin/main's `.vrst`
-byte for byte (4,272,320 B), and every frame's `tsdf` and `weight` hash the
-same as origin/main's in both bands, signed and shell.
+**Validation.** `codec_mesh` on the 8-voxel template writes origin/main's
+`.vrst` byte for byte (4,272,320 B), and every frame's `tsdf` and `weight`
+hash the same as origin/main's in both bands, signed and shell.
 `recon_tsdf_mesh_integrate_exact` compares every voxel's bits with a brute
 force over the same bins, rebuilt by replaying the binning's work items
 through its own GLSL, on 19 fixtures. Planted bugs each fail it: a margin of
