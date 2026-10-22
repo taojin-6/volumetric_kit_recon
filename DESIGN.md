@@ -1651,7 +1651,7 @@ and preserves triangle indices.
 Errors name the file and backend reason. Public functions validate their input
 and translate backend exceptions that reach them into `Status`/`Result`
 (tinyply's writer is `noexcept`); private third-party types never appear in
-installed headers.
+public headers.
 
 `recon_io_assimp` adds `io::load_mesh`, which returns the owned
 `io::TriangleMesh` position / index container of `io/triangle_mesh.hpp`.
