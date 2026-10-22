@@ -5938,10 +5938,12 @@ better of each, measured rather than argued:
   change survives: trusting the face down to any nonzero area passes every
   case too. The 1e-4 guard is kept as a margin, not a measured need.
 
-**Open**, a `TODO(eval)` in the code (the ground-truth test's copy of the
-metric went with the test, which #81 dropped before landing):
-- A threaded `compare_meshes`: room0 at 1 cm takes ~2 s at stride 4 on one
-  core.
+**Threaded** (2026-10-22): `compare` measures each direction on every core,
+a slice of the points per thread, each writing only its own entries, so the
+figures are one thread's to the bit. Room0 fused at 2 cm with each triangle
+split in four (1.3 M triangles) against a copy moved up to 1 mm, stride 4,
+both ways, on the shared M5 Max in Release: 1.6 to 1.9 s on one core, 0.25
+to 0.32 s threaded, every figure identical.
 
 ### 2026-09-27 — A mesh becomes a TSDF two ways, in the `tsdf` tier: signed by the closest triangle's normal, for a closed mesh, or as an unsigned shell, for any mesh — binned per block over the allocation's own candidates, with no topology.
 

@@ -75,6 +75,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the decoder's surface, without FFmpeg's copy first: 16 µs of GPU copying
   per 4K picture, not 33 µs (Nsight Systems, RTX 5090), for 126 MiB more of
   NVDEC's surfaces per 4K decoder. Tests: `recon_sensor_video_hevc`.
+- `eval`: **`ReferenceMesh::compare` measures on every core**, with the
+  figures one thread gives: about 6 times faster on a room-sized mesh (the
+  2026-09-27 eval decision). Tests: `recon_eval_mesh_distance`.
 - `tsdf`: **`MeshIntegrator` measures a voxel against only the triangles no
   lower bound rules out**, a workgroup per block, and writes the same bytes:
   a triangle is ruled out only when strictly farther than the voxel's best,
