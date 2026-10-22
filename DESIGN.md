@@ -1485,7 +1485,7 @@ coordinate against the block segment before's last) and scans the survivor
 ranks (`survivor_ranks.comp`, on `scan.glsl`), and reads back 8 bytes, the
 verdict and the survivor count, which `check_segment` and `check_survivors`
 word exactly as the oracle's reader does. Every decoded entry stays in VRAM
-for the merge, the apply and the inverse (`DctTransform::inverse` over
+for the merge, the apply and the inverse (`DctTransform::record_inverse` over
 `ResidentBlocks`). One invocation
 decodes a whole segment, so the format holds a segment to at most
 `kMaxDeviceDecodeSegmentSize` (1,024) entries, keeping an invocation near
