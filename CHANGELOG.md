@@ -8,6 +8,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `volume`: **`allocate_from_triangles` asks for each block once a
+  workgroup**, where every work item naming a block probed, locked and
+  stamped it, a few hundred a block at scan density. It allocates the same
+  blocks; Rafa2's allocation at 5 mm takes under half its device time in the
+  8-voxel band, and a sixth to a third less in the 16-voxel one (PERF.md
+  MESH3). Test: `recon_volume_allocate_triangles`.
 - `volume`: **`VoxelBlockGrid::remove` zeroes in the map's own submit**,
   through `VoxelHashMap::remove`'s new optional `first_round` hook, so a
   removal -- a decode that drops blocks, a garbage collection -- waits on
@@ -17,21 +23,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   also keeps its per-coord done flags between calls rather than allocating
   them each time. Tests: `recon_volume_delete`, `recon_volume_block_grid`,
   `recon_volume_block_stamps`.
-- `codec`: **a decode writes only the voxels whose bits it changes**, so a
-  block a P-frame repeats costs the inverse its reads alone; grids and
-  stamps end as before, bit for bit. On room0 at 1 cm (21,771 blocks a
-  frame; M5 Max, Release, back to back, the median of 20 passes)
-  `..inverse` takes 0.51 ms of host time a frame, from 0.65, and the
-  decode's device time is 0.99 ms, from 1.12. Tests: `recon_codec_dct`.
-- `codec`: **`make_decode_grid` and `decode_growing` take a block ceiling**
-  (BREAKING), so a forged header or frame from a file or a socket can no
-  longer make a player's grid gigabytes large. A frame past `max_blocks`,
-  or a grow past `make_decode_grid`'s grid for it, is refused as
-  `InvalidArgument` (a frame to skip) before the decode or the grow, and
-  `make_decode_grid` checks the header's block count against the segment
-  table. Migrating: pass both helpers `max_blocks`, the most blocks a frame
-  may hold under your memory budget.
-  Tests: `recon_codec_decode_grid`, `recon_codec_decode_grid_oom`.
+- `tsdf`: **`TsdfIntegrator::integrate` is one submit**: the compaction's
+  count stays on the device and sizes the fuse's dispatch
+  (`dispatch_indirect`), one fence wait fewer a call, and the voxels are
+  unchanged. The `"  ..active set"` row carries the compaction's device half
+  alone. New: `VoxelHashMap::record_compaction`, a compaction recorded into
+  a caller's batch, and `VoxelHashMap::allocated_blocks`. Tests:
+  `recon_tsdf_integrate_cull`, `recon_tier_stage_metrics`,
+  `recon_volume_block_grid`.
 - `tsdf`: **a live set is one submit**: once its grid holds a block, a
   `Fuser` with `allow_partial` allocates, compacts and fuses a set in one
   batch (`TsdfIntegrator::allocate_and_integrate`), one fence wait a set
@@ -41,20 +40,28 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   unchanged (the 2026-10-10 decision, amended). New: the frame-list
   `VoxelHashMap::allocate_from_depth` takes a `then`, a caller's work
   recorded into its one round's batch. Tests: `recon_tsdf_fuser`.
-- `tsdf`: **`TsdfIntegrator::integrate` is one submit**: the compaction's
-  count stays on the device and sizes the fuse's dispatch
-  (`dispatch_indirect`), one fence wait fewer a call, and the voxels are
-  unchanged. The `"  ..active set"` row carries the compaction's device half
-  alone. New: `VoxelHashMap::record_compaction`, a compaction recorded into
-  a caller's batch, and `VoxelHashMap::allocated_blocks`. Tests:
-  `recon_tsdf_integrate_cull`, `recon_tier_stage_metrics`,
-  `recon_volume_block_grid`.
-- `examples`: **a finer fusion grid starts with a larger table**:
-  `create_fusion_grid`'s default bucket count, `fusion_buckets`, scales
-  16,384 by (1 cm / voxel)², from 1× up to 4×, so `fuse_orbbec`, `rig_viewer`,
-  `fuse_viewer` and `fuse_render` start a 5 mm grid at 65,536 buckets, where
-  its first set fits, rather than growing through a full table. Test:
-  `recon_example_fuse_keyframe`.
+- `codec`: **a decode writes only the voxels whose bits it changes**, so a
+  block a P-frame repeats costs the inverse its reads alone; grids and
+  stamps end as before, bit for bit. On room0 at 1 cm (21,771 blocks a
+  frame; M5 Max, Release, back to back, the median of 20 passes)
+  `..inverse` takes 0.51 ms of host time a frame, from 0.65, and the
+  decode's device time is 0.99 ms, from 1.12. Tests: `recon_codec_dct`.
+- `sensor`: **NVDEC's H.265 decoders share the GPU's primary CUDA context**,
+  each on a stream of its own as nvJPEG's decoder is, where FFmpeg made a
+  context per decoder. Four 4K decoders on an RTX 5090 hold 1.3 GiB of
+  device memory while decoding, not 2.8 GiB (nvidia-smi). Tests:
+  `recon_sensor_video_hevc`.
+- `sensor`: **NVDEC's picture is copied once on the device**, straight off
+  the decoder's surface, without FFmpeg's copy first: 16 µs of GPU copying
+  per 4K picture, not 33 µs (Nsight Systems, RTX 5090), for 126 MiB more of
+  NVDEC's surfaces per 4K decoder. Tests: `recon_sensor_video_hevc`.
+- `networking`: **a `StreamClient` receives through 2 MiB**, not 256 KiB,
+  which held a stream to about 12 MB/s over the VPN, under the rig's
+  9.4 MB/s at 1 cm (the 2026-10-21 networking decision). Linux holds it to
+  `net.core.rmem_max`. Tests: `recon_networking_socket`.
+- `eval`: **`ReferenceMesh::compare` measures on every core**, with the
+  figures one thread gives: about 6 times faster on a room-sized mesh (the
+  2026-09-27 eval decision). Tests: `recon_eval_mesh_distance`.
 - `examples`: **`fuse_orbbec`'s stream decodes only with `output.csv` or
   `codec.sweep`** (`set_codec_outputs`): a run that only records or serves
   no longer decodes every set again into a second grid nothing reads.
@@ -66,26 +73,25 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   kernels**, so a port in use, a stream already at its path or a CSV that
   cannot be written is refused without building them. Test:
   `recon_example_codec_stream`.
-- `sensor`: **NVDEC's H.265 decoders share the GPU's primary CUDA context**,
-  each on a stream of its own as nvJPEG's decoder is, where FFmpeg made a
-  context per decoder. Four 4K decoders on an RTX 5090 hold 1.3 GiB of
-  device memory while decoding, not 2.8 GiB (nvidia-smi). Tests:
-  `recon_sensor_video_hevc`.
-- `sensor`: **NVDEC's picture is copied once on the device**, straight off
-  the decoder's surface, without FFmpeg's copy first: 16 µs of GPU copying
-  per 4K picture, not 33 µs (Nsight Systems, RTX 5090), for 126 MiB more of
-  NVDEC's surfaces per 4K decoder. Tests: `recon_sensor_video_hevc`.
 - `examples`: **`fuse_replica` re-meshes on the device**, as a live consumer
   does, and reads a mesh back only for the final PLY, so its timed loop no
   longer downloads every `fusion.mesh_every` frames; `fusion.device_extract`
   no longer changes it. Tests: `recon_fuse_replica_run`.
-- `networking`: **a `StreamClient` receives through 2 MiB**, not 256 KiB,
-  which held a stream to about 12 MB/s over the VPN, under the rig's
-  9.4 MB/s at 1 cm (the 2026-10-21 networking decision). Linux holds it to
-  `net.core.rmem_max`. Tests: `recon_networking_socket`.
-- `eval`: **`ReferenceMesh::compare` measures on every core**, with the
-  figures one thread gives: about 6 times faster on a room-sized mesh (the
-  2026-09-27 eval decision). Tests: `recon_eval_mesh_distance`.
+- `codec`: **`make_decode_grid` and `decode_growing` take a block ceiling**
+  (BREAKING), so a forged header or frame from a file or a socket can no
+  longer make a player's grid gigabytes large. A frame past `max_blocks`,
+  or a grow past `make_decode_grid`'s grid for it, is refused as
+  `InvalidArgument` (a frame to skip) before the decode or the grow, and
+  `make_decode_grid` checks the header's block count against the segment
+  table. Migrating: pass both helpers `max_blocks`, the most blocks a frame
+  may hold under your memory budget.
+  Tests: `recon_codec_decode_grid`, `recon_codec_decode_grid_oom`.
+- `examples`: **a finer fusion grid starts with a larger table**:
+  `create_fusion_grid`'s default bucket count, `fusion_buckets`, scales
+  16,384 by (1 cm / voxel)², from 1× up to 4×, so `fuse_orbbec`, `rig_viewer`,
+  `fuse_viewer` and `fuse_render` start a 5 mm grid at 65,536 buckets, where
+  its first set fits, rather than growing through a full table. Test:
+  `recon_example_fuse_keyframe`.
 - `tsdf`: **`MeshIntegrator` measures a voxel against only the triangles no
   lower bound rules out**, a workgroup per block, and writes the same bytes:
   a triangle is ruled out only when strictly farther than the voxel's best,
@@ -94,12 +100,6 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   8-voxel one (the 2026-10-21 decision). A grid whose blocks hold more than
   `MeshIntegrator::kMaxVoxelsPerBlock` (16^3) voxels is refused.
   Tests: `recon_tsdf_mesh_integrate`, `recon_tsdf_mesh_integrate_exact`.
-- `volume`: **`allocate_from_triangles` asks for each block once a
-  workgroup**, where every work item naming a block probed, locked and
-  stamped it, a few hundred a block at scan density. It allocates the same
-  blocks; Rafa2's allocation at 5 mm takes under half its device time in the
-  8-voxel band, and a sixth to a third less in the 16-voxel one (PERF.md
-  MESH3). Test: `recon_volume_allocate_triangles`.
 - `examples`: **one home for the codec examples' mesh comparison**,
   `vr_example::codec_compare_options` (`codec_stream.hpp`), which
   `codec_replica` and `codec_mesh` call; their figures are unchanged.
@@ -294,6 +294,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `examples`: **`codec_mesh`'s mesh conversion table has its `allocate`
+  row**, where `convert_frame` passed the conversion's metrics to the
+  integrator alone. Regression: `recon_example_mesh_sequence`.
 - `volume`: **a set that overfills the hash table no longer sweeps it once
   per failing insert**: an insert that must overflow its bucket reports
   `AllocFailures::heap` at once when fewer than an eighth of the blocks are
@@ -332,9 +335,6 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   second for `codec_replica`'s and `codec_mesh`'s. They said unknown, so a
   player paced a 25 fps rig recording's loop restart at 30.
   Tests: `recon_example_codec_stream`, `recon_example_mesh_sequence`.
-- `examples`: **`codec_mesh`'s mesh conversion table has its `allocate`
-  row**, where `convert_frame` passed the conversion's metrics to the
-  integrator alone. Regression: `recon_example_mesh_sequence`.
 
 ### Added
 
