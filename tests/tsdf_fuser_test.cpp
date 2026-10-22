@@ -102,7 +102,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
   // The reference: the tier calls on a grid with room for the set, twice, so
   // the running average and the colour blend run too.
   auto integrator = tsdf::TsdfIntegrator::create(dev, alloc);
-  auto reference = make_grid(dev, alloc, params(1024));
+  auto reference = make_grid(dev, alloc, params(256));
   CHECK(integrator.ok() && reference.ok());
   const std::vector<vol::DepthInput> depths(set.begin(), set.end());
   for (int pass = 0; pass < 2; ++pass) {

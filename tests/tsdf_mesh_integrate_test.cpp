@@ -25,6 +25,7 @@
 // present.
 
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -188,19 +189,29 @@ std::vector<float> snapshot(const vr_test::Gpu& ctx,
   return out;
 }
 
+// The active blocks' voxels of one attribute, block i's from i * vpb.
+std::vector<float> attr(const vr_test::Gpu& ctx, vol::VoxelBlockGrid& grid,
+                        const char* name,
+                        const std::vector<vol::BlockIndex>& blocks) {
+  return vr_test::read_blocks<float>(ctx, grid, name, blocks).value();
+}
+
 // Each written block's voxels, keyed by coordinate: the heap hands a block a
 // different slot in each grid, so bytes are compared block by block.
 std::map<Coord, std::vector<float>> by_coord(const vr_test::Gpu& ctx,
                                              vol::VoxelBlockGrid& grid) {
   std::map<Coord, std::vector<float>> out;
-  const std::vector<float> tsdf = attr(ctx, grid, "tsdf");
-  const std::vector<float> weight = attr(ctx, grid, "weight");
-  const int vpb = grid.grid().voxels_per_block;
-  for (const vol::BlockIndex& b : active_blocks(grid)) {
+  const std::vector<vol::BlockIndex> blocks = active_blocks(grid);
+  const std::vector<float> tsdf = attr(ctx, grid, "tsdf", blocks);
+  const std::vector<float> weight = attr(ctx, grid, "weight", blocks);
+  const auto vpb = static_cast<std::size_t>(grid.grid().voxels_per_block);
+  for (std::size_t i = 0; i < blocks.size(); ++i) {
+    const vol::BlockIndex& b = blocks[i];
     std::vector<float>& vals = out[{b.coord.x, b.coord.y, b.coord.z}];
-    vals.assign(tsdf.begin() + b.ptr, tsdf.begin() + b.ptr + vpb);
-    vals.insert(vals.end(), weight.begin() + b.ptr,
-                weight.begin() + b.ptr + vpb);
+    const auto first = static_cast<std::ptrdiff_t>(i * vpb);
+    const auto last = static_cast<std::ptrdiff_t>((i + 1) * vpb);
+    vals.assign(tsdf.begin() + first, tsdf.begin() + last);
+    vals.insert(vals.end(), weight.begin() + first, weight.begin() + last);
   }
   return out;
 }
@@ -218,11 +229,12 @@ template <class F>
 int verify(const vr_test::Gpu& ctx, vol::VoxelBlockGrid& grid, const char* what,
            F expect, int* observed_count = nullptr) {
   const vol::VoxelGridParams& g = grid.grid();
-  const std::vector<float> tsdf = attr(ctx, grid, "tsdf");
-  const std::vector<float> weight = attr(ctx, grid, "weight");
+  const std::vector<vol::BlockIndex> blocks = active_blocks(grid);
+  const std::vector<float> tsdf = attr(ctx, grid, "tsdf", blocks);
+  const std::vector<float> weight = attr(ctx, grid, "weight", blocks);
   int observed = 0;
-  for (const vol::BlockIndex& b : active_blocks(grid)) {
-    const vr::Vec3i base = vol::block_to_voxel(b.coord, g);
+  for (std::size_t i = 0; i < blocks.size(); ++i) {
+    const vr::Vec3i base = vol::block_to_voxel(blocks[i].coord, g);
     for (int local = 0; local < g.voxels_per_block; ++local) {
       const vr::Vec3i lc(local % g.block_size,
                          (local / g.block_size) % g.block_size,
@@ -230,8 +242,10 @@ int verify(const vr_test::Gpu& ctx, vol::VoxelBlockGrid& grid, const char* what,
       const vr::Vec3f p = vol::voxel_to_world(base + lc, g);
       const Expect e = expect(p);
       if (e.skip) continue;
-      const float w = weight[b.ptr + local];
-      const float t = tsdf[b.ptr + local];
+      const std::size_t at = i * static_cast<std::size_t>(g.voxels_per_block) +
+                             static_cast<std::size_t>(local);
+      const float w = weight[at];
+      const float t = tsdf[at];
       const float err = e.magnitude_only
                             ? std::fabs(std::fabs(t) - std::fabs(e.value))
                             : std::fabs(t - e.value);
@@ -319,14 +333,15 @@ Expect signed_sheets(vr::Vec3f p, const std::vector<Rect>& sheets, float z0,
 int gpu_main(vr_test::GpuContext& gpu) {
   // 10 mm voxels in 8-voxel blocks, a 40 mm (4-voxel) band: coarse enough that
   // the brute-force reference stays quick, with a band several voxels deep.
+  // 1,024 blocks hold the largest band here, the metre sheet's 392.
   vol::VoxelGridParams gp{};
   gp.voxel_size = 0.01f;
   gp.block_size = 8;
   gp.voxels_per_block = 512;
   gp.trunc_dist = 0.04f;
   gp.bucket_size = 8;
-  gp.num_buckets = 1024;
-  gp.num_blocks = 8192;
+  gp.num_buckets = 128;
+  gp.num_blocks = 1024;
   gp.max_chain = 128;
   const float trunc = gp.trunc_dist;
 
