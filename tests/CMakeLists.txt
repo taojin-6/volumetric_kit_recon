@@ -172,12 +172,15 @@ add_test(NAME recon_volume_block_stamps COMMAND recon_volume_block_stamps_test)
 
 # tsdf integrate: fuse a synthetic constant-depth plane into a VoxelBlockGrid
 # and verify the classic projective TSDF math per voxel (sdf, truncation, weight
-# + cap). It also runs the kernel's projection alone (shaders/project_pinhole)
-# on inputs that make its depth or pixel NaN. Skips with no device.
+# + cap), and a split dispatch (core/dispatch.hpp's test seam, by src/). It also
+# runs the kernel's projection alone (shaders/project_pinhole) on inputs that
+# make its depth or pixel NaN. Skips with no device.
 add_executable(recon_tsdf_integrate_test tsdf_integrate_test.cpp)
 target_link_libraries(
   recon_tsdf_integrate_test PRIVATE volumetric_kit::recon_tsdf Vulkan::Vulkan
                                     volumetric_kit::core_test_policy)
+target_include_directories(recon_tsdf_integrate_test
+                           PRIVATE ${PROJECT_SOURCE_DIR}/src)
 include(vr_embed)
 vr_embed_shaders(recon_tsdf_integrate_test SHADERS
                  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/project_pinhole.comp")
@@ -188,13 +191,15 @@ add_test(NAME recon_tsdf_integrate COMMAND recon_tsdf_integrate_test)
 # pseudonormals, or as a shell) and check every voxel of every written block
 # against a brute-force host reference -- an independent closest point, and the
 # winding number for inside/outside -- on a sharp tetrahedron, a dented cube, an
-# open quad and a triangle soup, plus determinism and every refusal. Skips with
-# no device.
+# open quad and a triangle soup, plus determinism (a split binning among it) and
+# every refusal. Skips with no device.
 add_executable(recon_tsdf_mesh_integrate_test tsdf_mesh_integrate_test.cpp)
 target_link_libraries(
   recon_tsdf_mesh_integrate_test
   PRIVATE volumetric_kit::recon_tsdf Vulkan::Vulkan
           volumetric_kit::core_test_policy)
+target_include_directories(recon_tsdf_mesh_integrate_test
+                           PRIVATE ${PROJECT_SOURCE_DIR}/src)
 vr_target_warnings(recon_tsdf_mesh_integrate_test)
 add_test(NAME recon_tsdf_mesh_integrate COMMAND recon_tsdf_mesh_integrate_test)
 

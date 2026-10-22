@@ -220,9 +220,8 @@ class VR_TSDF_API TsdfIntegrator {
   ///         non-finite intrinsic, depth bound or pose entry, @p grid lacks a
   ///         `float` `tsdf`/`weight` attribute, @p color is set but empty or
   ///         @p grid lacks a `uint32` `color` attribute, or the blocks the
-  ///         frame reaches are too many for a single 1-D dispatch (their voxel
-  ///         count exceeds the device's `maxComputeWorkGroupCount[0]`, or 2^32
-  ///         threads); otherwise a buffer or dispatch failure.
+  ///         frame reaches hold 2^32 voxels or more; otherwise a buffer or
+  ///         dispatch failure.
   core::Status integrate(volume::VoxelBlockGrid& grid, const float* depth,
                          const DepthCameraParams& cam, float max_weight = 5.0f,
                          IntegrationMode mode = IntegrationMode::Classic,
@@ -295,7 +294,7 @@ class VR_TSDF_API TsdfIntegrator {
   core::Allocator* allocator_ = nullptr;
 
   // Cached maxComputeWorkGroupCount[0] -- the device cap on a 1-D dispatch's
-  // groupCountX; integrate() rejects a block list that would exceed it.
+  // groupCountX; integrate() splits a pass that would exceed it.
   std::uint32_t max_workgroup_count_x_ = 0;
   // The ceiling on one storage-buffer binding's range, read once at create().
   // The depth and colour frames are staged and bound whole each integrate().

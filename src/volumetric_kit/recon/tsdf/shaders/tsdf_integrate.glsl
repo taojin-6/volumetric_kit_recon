@@ -155,7 +155,9 @@ float sample_depth(float u, float v) {
 }
 
 void main() {
-  uint gid = gl_GlobalInvocationID.x;
+  // item_base is a whole number of workgroups, so a workgroup still lies in
+  // one block wherever the dispatch starts (stamp_changed).
+  uint gid = pc.item_base + gl_GlobalInvocationID.x;
   uint vpb = uint(pc.grid.voxels_per_block);
   if (gid >= pc.num_active_blocks * vpb) {
     return;

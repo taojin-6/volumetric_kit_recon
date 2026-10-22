@@ -79,6 +79,7 @@ layout(push_constant, scalar) uniform PushConstants {
   VoxelGridParams grid;
   uint tri_count;
   uint pass;  // kPassCount or kPassFill
+  uint item_base;  // the first work item this dispatch covers
 } pc;
 
 const uint kPassCount = 0u;
@@ -86,7 +87,7 @@ const uint kPassFill = 1u;
 const uint kNoSlot = 0xFFFFFFFFu;
 
 void main() {
-  uint gid = gl_GlobalInvocationID.x;
+  uint gid = pc.item_base + gl_GlobalInvocationID.x;
   if (gid >= vr_tri_offsets[pc.tri_count]) {
     return;
   }
