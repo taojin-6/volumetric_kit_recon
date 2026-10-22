@@ -17,6 +17,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   table. Migrating: pass the most blocks a frame may hold, from your memory
   budget, after `make_decode_grid`'s size and `decode_growing`'s grid.
   Tests: `recon_codec_decode_grid`, `recon_codec_decode_grid_oom`.
+- `examples`: **a finer fusion grid starts with a larger table**:
+  `create_fusion_grid`'s default bucket count, `fusion_buckets`, scales
+  16,384 by (1 cm / voxel)², at least 1×, so `fuse_orbbec`, `rig_viewer`,
+  `fuse_viewer` and `fuse_render` start a 5 mm grid at 65,536 buckets, where
+  its first set fits, rather than growing through a full table. Test:
+  `recon_example_fuse_keyframe`.
 - `tsdf`: **`MeshIntegrator` measures a voxel against only the triangles no
   lower bound rules out**, a workgroup per block, and writes the same bytes:
   a triangle is ruled out only when strictly farther than the voxel's best,

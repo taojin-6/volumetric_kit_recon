@@ -13,8 +13,10 @@
 /// `sensor::DeviceFrame` to the fuser's inputs, which the tier cannot see,
 /// and the lines the examples print about what a set did to the grid.
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <limits>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -35,6 +37,22 @@ namespace vr_example {
 namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
 
+/// @brief The hash-bucket count @ref create_fusion_grid starts at unless told:
+///        16,384 at 1 cm and coarser, scaled by (1 cm / @p voxel_size)^2
+///        finer, as a surface's blocks are, so a first set fits the table it
+///        starts in rather than filling it.
+/// @param voxel_size  Voxel edge (metres).
+/// @return The count, capped where `kDefaultBucketSize` times it would
+///         overflow an `int32_t`; a grid that large is refused by its
+///         validation, not wrapped.
+inline std::int32_t fusion_buckets(float voxel_size) {
+  const double ratio = 0.01 / double(voxel_size);
+  const double scale = std::max(1.0, ratio * ratio);
+  constexpr double kMax =
+      std::numeric_limits<std::int32_t>::max() / vr::volume::kDefaultBucketSize;
+  return static_cast<std::int32_t>(std::min(16384.0 * scale, kMax));
+}
+
 /// @brief The volume every example fuses into: 8x8x8-voxel blocks carrying
 ///        the three attributes @ref fuse_set writes -- `tsdf`, `weight` and
 ///        `color`.
@@ -49,17 +67,19 @@ namespace vkc = volumetric_kit::core;
 /// @param voxel_size   Voxel edge (metres).
 /// @param trunc_dist   Truncation distance (metres).
 /// @param num_buckets  Initial hash-bucket count, as @ref example_grid_params
-///                     takes it.
+///                     takes it; @ref fusion_buckets when unset.
 /// @return The grid, or @ref vr::volume::VoxelBlockGrid::create's error.
 inline vkc::Result<vr::volume::VoxelBlockGrid> create_fusion_grid(
     vkc::Device& device, vkc::Allocator& allocator, float voxel_size,
-    float trunc_dist, std::int32_t num_buckets = 16384) {
+    float trunc_dist, std::optional<std::int32_t> num_buckets = std::nullopt) {
   const vr::volume::AttributeSpec attrs[] = {{"tsdf", sizeof(float)},
                                              {"weight", sizeof(float)},
                                              {"color", sizeof(std::uint32_t)}};
   return vr::volume::VoxelBlockGrid::create(
       device, allocator,
-      example_grid_params(voxel_size, trunc_dist, num_buckets), attrs, 3);
+      example_grid_params(voxel_size, trunc_dist,
+                          num_buckets.value_or(fusion_buckets(voxel_size))),
+      attrs, 3);
 }
 
 /// @brief How a prepared frame's colour is fused: through its own camera, the
