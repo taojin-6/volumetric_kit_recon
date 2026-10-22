@@ -863,7 +863,9 @@ inputs are uploaded in its first round, and a round reads back its counts.
 `VoxelHashMap::allocate` and `remove`, and `VoxelBlockGrid::remove`, take
 a device buffer of `BlockIndex`, bound where its producer wrote it; a test
 uploads its own coordinates first (`tests/device_blocks.hpp`). The grid's
-zeroes the listed blocks, then frees them through the map's, two submits.
+zeroes the listed blocks and frees them through the map's, the zeroing
+recorded into the map's first round (`remove`'s `first_round`) ahead of
+the delete, so it takes no submit of its own.
 One body serves it and garbage collection, so the stale-block list stays on
 the GPU through deletion; only the stale and retry counts reach the host.
 A compaction still reads its list back, in the count's own submit while the

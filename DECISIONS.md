@@ -550,7 +550,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   host only I/O and control; and the host `BlockList` it left without a
   caller goes, with the host-array `allocate` and `remove`. *Amended
   2026-10-14:* the encoder's split is its diff's own search, not a
-  `BlockLists` pass.
+  `BlockLists` pass. *Amended 2026-10-22:* the grid's zeroing rides the
+  map's remove's first round, a fence fewer.
 - [**2026-10-13**](#2026-10-13--block-lists-reach-the-volume-tier-on-the-device-alone-a-host-list-entry-point-that-only-tests-called-goes-amends-the-2026-08-08-sparse-mesh-and-overflow-scan-2026-08-12-view-meshing-2026-09-26-codec-2026-09-28-device-memory-2026-10-03-garbage-collection-2026-10-06-public-api-and-view-culling-and-2026-10-13-coordinate-entries) —
   Block lists reach the volume tier on the device alone; a host-list entry
   point that only tests called goes: the host `BlockList`, the host-array
@@ -12697,6 +12698,13 @@ failed allocation, the segment limit off by one or doubled, and the reader's
 verdict ignored. Not run: the RTX 5090.
 
 ### 2026-10-13 — The codec's coordinate work runs on the device: the encoder sorts its blocks with a stable rank-merge sort on `coord_less`, and the decoder judges, merges and diffs them by count and binary search, never sorting; only counts and verdicts cross the bus (amends the 2026-10-13 decoder, 2026-10-12 P-frame, 2026-10-03 observed-list and garbage-collection, and 2026-10-01 codec-review entries).
+
+*Amended 2026-10-22 (the remove's first round):* `VoxelHashMap::remove`
+takes the public first-round hook **What crosses, and the fences** names,
+`first_round`, and `VoxelBlockGrid::remove` records its zeroing there,
+ahead of the delete in the same submit. A decode that drops blocks, and a
+garbage collection that frees any, waits on one fence fewer: 4 for a
+decode with adds and drops.
 
 *Amended 2026-10-14 (the `Encoder`'s P-frames, below):* the split the
 **Next** item plans as a `BlockLists` pass is the encoder's diff's own first
