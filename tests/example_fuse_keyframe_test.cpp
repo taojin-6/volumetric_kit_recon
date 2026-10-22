@@ -10,7 +10,6 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
-#include <limits>
 #include <optional>
 #include <string>
 #include <tuple>
@@ -219,11 +218,11 @@ int gpu_main(vr_test::GpuContext& gpu) {
 int main() {
   CHECK(vr_example::integration_mode(true) == kDynamic);
   CHECK(vr_example::integration_mode(false) == kClassic);
-  // A finer grid starts with a table its first set fits.
+  // A finer grid starts with a table its first set fits, up to 5 mm's; a
+  // 2 mm one's (25x) would pass a binding's range, so it starts there too.
   CHECK(vr_example::fusion_buckets(0.02f) == 16384);
   CHECK(vr_example::fusion_buckets(0.01f) == 16384);
   CHECK(vr_example::fusion_buckets(0.005f) == 65536);
-  CHECK(vr_example::fusion_buckets(1e-6f) ==
-        std::numeric_limits<std::int32_t>::max() / 8);
+  CHECK(vr_example::fusion_buckets(0.002f) == 65536);
   return vr_test::run_on_gpu(gpu_main);
 }

@@ -16,7 +16,6 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
-#include <limits>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -40,17 +39,15 @@ namespace vkc = volumetric_kit::core;
 /// @brief The hash-bucket count @ref create_fusion_grid starts at unless told:
 ///        16,384 at 1 cm and coarser, scaled by (1 cm / @p voxel_size)^2
 ///        finer, as a surface's blocks are, so a first set fits the table it
-///        starts in rather than filling it.
+///        starts in rather than filling it. The scale stops at 4x (5 mm): a
+///        finer grid starts there and the fuser grows it, rather than taking
+///        gigabytes up front, or at 2.5 mm and finer passing a storage
+///        binding's range.
 /// @param voxel_size  Voxel edge (metres).
-/// @return The count, capped where `kDefaultBucketSize` times it would
-///         overflow an `int32_t`; a grid that large is refused by its
-///         validation, not wrapped.
 inline std::int32_t fusion_buckets(float voxel_size) {
   const double ratio = 0.01 / double(voxel_size);
-  const double scale = std::max(1.0, ratio * ratio);
-  constexpr double kMax =
-      std::numeric_limits<std::int32_t>::max() / vr::volume::kDefaultBucketSize;
-  return static_cast<std::int32_t>(std::min(16384.0 * scale, kMax));
+  return static_cast<std::int32_t>(16384.0 *
+                                   std::clamp(ratio * ratio, 1.0, 4.0));
 }
 
 /// @brief The volume every example fuses into: 8x8x8-voxel blocks carrying
