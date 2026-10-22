@@ -110,12 +110,17 @@ jobs:
     steps:
       # Bare ubuntu:* images lack git (actions/checkout needs it) and sudo (the
       # install steps use it); we run as root in the container, so install them
-      # before anything else. Skipped on hosted runners.
+      # before anything else. Skipped on hosted runners. The NVIDIA driver's
+      # shader cache directory, which the container env names (ci.yml says
+      # why), is made here: the driver creates nothing above its own GLCache.
       - name: Bootstrap container
         if: inputs.container != ''
         run: |
           apt-get update
           apt-get install -y --no-install-recommends ca-certificates git sudo
+          if [ -n "${__GL_SHADER_DISK_CACHE_PATH:-}" ]; then
+            mkdir -p "${__GL_SHADER_DISK_CACHE_PATH}"
+          fi
 
       - uses: actions/checkout@v7
 

@@ -16,6 +16,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the single-threaded stream tests. The viewer leg runs the viewers'
   headless tests, which no leg ran: `recon_example_viewer_atlas`,
   `recon_example_viewer_device` and the three viewers' config entries.
+  The NVIDIA legs keep the driver's shader cache across runs, which their
+  containers had silently turned off: the suite at `-j4` with validation
+  takes 15 s warm on the RTX 5090, against 38 s with no cache.
 - `tsdf`: **`MeshIntegrator` measures a voxel against only the triangles no
   lower bound rules out**, a workgroup per block, and writes the same bytes:
   a triangle is ruled out only when strictly farther than the voxel's best,
