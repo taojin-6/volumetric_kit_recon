@@ -194,6 +194,25 @@ target_link_libraries(
           volumetric_kit::core_test_policy)
 vr_target_warnings(recon_tsdf_mesh_integrate_test)
 add_test(NAME recon_tsdf_mesh_integrate COMMAND recon_tsdf_mesh_integrate_test)
+
+# tsdf mesh integrate, exactly: the kernel's early exit writes, bit for bit,
+# what a brute force (shaders/mesh_integrate_reference.comp) writes measuring
+# every triangle of each voxel's bin -- on shared vertices with opposite
+# windings, duplicates, near-coincident sheets, slivers, metre-long triangles, a
+# far sphere, bins past the kernel's sort, three block sizes, both modes. Skips
+# with no device.
+add_executable(recon_tsdf_mesh_integrate_exact_test
+               tsdf_mesh_integrate_exact_test.cpp)
+target_link_libraries(
+  recon_tsdf_mesh_integrate_exact_test
+  PRIVATE volumetric_kit::recon_tsdf Vulkan::Vulkan
+          volumetric_kit::core_test_policy)
+vr_embed_shaders(
+  recon_tsdf_mesh_integrate_exact_test SHADERS
+  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/mesh_integrate_reference.comp")
+vr_target_warnings(recon_tsdf_mesh_integrate_exact_test)
+add_test(NAME recon_tsdf_mesh_integrate_exact
+         COMMAND recon_tsdf_mesh_integrate_exact_test)
 # GPU pre-processing (recon_sensor_utils) on synthetic frames: undistortion in
 # the right direction, the colour matrix, a host reference of the sampling, the
 # refusals, the outputs' sharing, read on another queue family, and fusing the
@@ -279,8 +298,8 @@ endif()
 # codec_config.hpp maps the outputs into codec_stream.hpp's CodecOutputs.
 target_link_libraries(
   recon_example_config_test
-  PRIVATE volumetric_kit::recon_eval volumetric_kit::recon_stream
-          volumetric_kit::recon_tsdf)
+  PRIVATE volumetric_kit::recon_eval volumetric_kit::recon_networking
+          volumetric_kit::recon_stream volumetric_kit::recon_tsdf)
 target_compile_definitions(
   recon_example_config_test
   PRIVATE VR_CONFIG_FIXTURES="${PROJECT_SOURCE_DIR}/config/examples")
@@ -329,6 +348,15 @@ target_link_libraries(
 vr_target_warnings(recon_example_set_dump_test)
 add_test(NAME recon_example_set_dump COMMAND recon_example_set_dump_test)
 
+# The live examples' Ctrl+C (examples/common/interrupt.hpp): a raised SIGINT
+# sets the flag and restores its default handler, SIGTERM's still caught. Host
+# only.
+add_executable(recon_example_interrupt_test example_interrupt_test.cpp)
+target_include_directories(recon_example_interrupt_test
+                           PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
+vr_target_warnings(recon_example_interrupt_test)
+add_test(NAME recon_example_interrupt COMMAND recon_example_interrupt_test)
+
 # The examples' one stage table (examples/common/stage_table.hpp). Host only.
 add_executable(recon_example_stage_table_test example_stage_table_test.cpp)
 target_include_directories(recon_example_stage_table_test
@@ -347,8 +375,9 @@ add_test(NAME recon_example_stage_table COMMAND recon_example_stage_table_test)
 # frame, byte for byte, a frame the decoder refuses included and the stream
 # going on after it, a key exactly when an I-frame, and the same bytes on a
 # rerun), an I-frame after a frame not decoded or whose CSV row fails, a frame
-# out of order or any call once finished refused before anything is encoded, and
-# the CSV replaced on create and written as frames are coded. The device part
+# out of order or any call once finished refused before anything is encoded, the
+# CSV replaced on create and written as frames are coded, and the frames served
+# live to a client on 127.0.0.1 port 0 as the file records them. The device part
 # skips with no device.
 add_executable(recon_example_codec_stream_test example_codec_stream_test.cpp)
 target_include_directories(recon_example_codec_stream_test
@@ -356,8 +385,8 @@ target_include_directories(recon_example_codec_stream_test
 target_link_libraries(
   recon_example_codec_stream_test
   PRIVATE volumetric_kit::core_test_policy volumetric_kit::recon_codec
-          volumetric_kit::recon_eval volumetric_kit::recon_stream
-          Vulkan::Vulkan)
+          volumetric_kit::recon_eval volumetric_kit::recon_networking
+          volumetric_kit::recon_stream Vulkan::Vulkan)
 vr_target_warnings(recon_example_codec_stream_test)
 add_test(NAME recon_example_codec_stream
          COMMAND recon_example_codec_stream_test)
@@ -379,6 +408,7 @@ target_link_libraries(
           volumetric_kit::core_test_policy
           volumetric_kit::recon_codec
           volumetric_kit::recon_eval
+          volumetric_kit::recon_networking
           volumetric_kit::recon_sensor_array
           volumetric_kit::recon_stream
           volumetric_kit::recon_tsdf

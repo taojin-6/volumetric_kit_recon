@@ -7,8 +7,8 @@
 // player grid built from the first frame's header and grown as frames need
 // (codec/decode_grid.hpp), and keep a row per coded frame, which the report
 // sums by frame type and the CSV lists; the frames themselves go to a .vrst
-// file, each I-frame a key. An I-frame after a frame the player missed is the
-// stream's policy, kept here.
+// file, each I-frame a key, and to the viewers of a live server. An I-frame
+// after a frame the player missed is the stream's policy, kept here.
 
 #include <algorithm>
 #include <cmath>
@@ -27,12 +27,15 @@
 
 #include "stage_table.hpp"
 #include "volumetric_kit/core/base/check.hpp"
+#include "volumetric_kit/core/base/log.hpp"
 #include "volumetric_kit/core/base/result.hpp"
 #include "volumetric_kit/core/base/stage_metrics.hpp"
 #include "volumetric_kit/recon/codec/decode_grid.hpp"
 #include "volumetric_kit/recon/codec/decoder.hpp"
 #include "volumetric_kit/recon/codec/encoder.hpp"
+#include "volumetric_kit/recon/core/log.hpp"
 #include "volumetric_kit/recon/eval/mesh_distance.hpp"
+#include "volumetric_kit/recon/networking/stream_server.hpp"
 #include "volumetric_kit/recon/stream/stream_writer.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 
@@ -227,6 +230,11 @@ struct CodecOutputs {
   /// returns, a record each on its one Geometry track, an I-frame's a key.
   /// Nothing may be at the path, and its directory must exist.
   std::string stream;
+  /// Where to serve those records live, as they are recorded
+  /// (`networking::StreamServer`, the session the stream's); none serves
+  /// nothing. Defaulted, so two-field braces stay quiet under
+  /// -Wmissing-field-initializers.
+  std::optional<vr::networking::ServerOptions> serve = std::nullopt;
 };
 
 /// @brief Refuse to write @p path when it is @p file under another name,
@@ -257,21 +265,22 @@ class CodecStream {
  public:
   /// The player grid is built from the first frame's header, sized for its
   /// blocks, and grows as later frames need. @p outputs are made here,
-  /// after the codec objects and before any coding: the stream first, as a
-  /// rerun onto its file is the common refusal, then the CSV, its header
-  /// flushed.
+  /// after the codec objects and before any coding: the server first, so a
+  /// port in use touches no file, then the stream, as a rerun onto its file
+  /// is the common refusal, then the CSV, its header flushed.
   /// @param program  The program writing the stream, recorded in its session
   ///                 header.
   /// @param geometry_params  Its Geometry track's params, recorded as given:
   ///                 empty, or a mesh source's `io::encode_transform` bytes
   ///                 (stream/session.hpp).
-  /// @return The stream; `StreamWriter::create`'s error for the stream
-  ///         (InvalidArgument when something is at its path, NotFound when
-  ///         its directory is missing); @ref check_not_same_file's error
-  ///         when the CSV is the stream's file; IoError naming a CSV that
-  ///         cannot be written; or the `Encoder::create` /
-  ///         `Decoder::create` error. Each CSV error removes the new
-  ///         stream's file again.
+  /// @return The stream; `StreamServer::start`'s error for the server
+  ///         (IoError for a port in use); `StreamWriter::create`'s error for
+  ///         the stream (InvalidArgument when something is at its path,
+  ///         NotFound when its directory is missing);
+  ///         @ref check_not_same_file's error when the CSV is the stream's
+  ///         file; IoError naming a CSV that cannot be written; or the
+  ///         `Encoder::create` / `Decoder::create` error. Each CSV error
+  ///         removes the new stream's file again.
   static vkc::Result<CodecStream> create(vkc::Device& device,
                                          vkc::Allocator& allocator,
                                          const vr::codec::EncoderConfig& config,
@@ -282,15 +291,21 @@ class CodecStream {
                vr::codec::Encoder::create(device, allocator, config));
     VKC_ASSIGN(vr::codec::Decoder dec,
                vr::codec::Decoder::create(device, allocator));
-    // No session id or start time, so a rerun writes the same bytes.
+    // One session for the file and the viewers. No session id or start
+    // time, so a rerun writes the same bytes.
+    vr::stream::Track geometry;
+    geometry.kind = vr::stream::TrackKind::Geometry;
+    geometry.params = std::move(geometry_params);
+    vr::stream::Session session;
+    session.writer = program;
+    session.tracks.push_back(std::move(geometry));
+    std::unique_ptr<vr::networking::StreamServer> server;
+    if (outputs.serve) {
+      VKC_ASSIGN(server,
+                 vr::networking::StreamServer::start(session, *outputs.serve));
+    }
     std::unique_ptr<vr::stream::StreamWriter> writer;
     if (!outputs.stream.empty()) {
-      vr::stream::Track geometry;
-      geometry.kind = vr::stream::TrackKind::Geometry;
-      geometry.params = std::move(geometry_params);
-      vr::stream::Session session;
-      session.writer = program;
-      session.tracks.push_back(geometry);
       VKC_ASSIGN(writer,
                  vr::stream::StreamWriter::create(outputs.stream, session));
     }
@@ -317,16 +332,16 @@ class CodecStream {
     }
     return CodecStream(device, allocator, std::move(enc), std::move(dec),
                        config.intra_period, std::move(outputs),
-                       std::move(writer), std::move(csv));
+                       std::move(server), std::move(writer), std::move(csv));
   }
 
   CodecStream(CodecStream&&) = default;
   CodecStream& operator=(CodecStream&&) = delete;
 
-  /// Closes the stream's file. One never finished that holds no record, as
-  /// after a run that failed before its first frame, is removed, so a rerun
-  /// onto it is not refused; one that holds records stays, read as a killed
-  /// writer's.
+  /// Closes the viewers and the stream's file. One never finished that holds
+  /// no record, as after a run that failed before its first frame, is
+  /// removed, so a rerun onto it is not refused; one that holds records
+  /// stays, read as a killed writer's.
   ~CodecStream() {
     if (!finished_ && coded_ == 0) take_back(writer_, outputs_.stream);
   }
@@ -334,11 +349,14 @@ class CodecStream {
   /// @brief Encode @p source as one frame, decode it into the player, and
   ///        keep its row. Files are written outside the codec timings: the
   ///        frame to the stream as soon as it is encoded, so a frame the
-  ///        decoder refuses is kept, and once it decodes, its row to the CSV,
-  ///        flushed. The encoder codes its next P-frame against every frame
-  ///        it returns, so any failure after the encode makes the next frame
-  ///        an I-frame (`Encoder::force_intra`): a frame the stream or the
-  ///        player lacks is never a reference.
+  ///        decoder refuses is kept, then to the viewers, and once it
+  ///        decodes, its row to the CSV, flushed. The encoder codes its next
+  ///        P-frame against every frame it returns, so any failure after the
+  ///        encode makes the next frame an I-frame (`Encoder::force_intra`):
+  ///        a frame the stream or the player lacks is never a reference. A
+  ///        frame the server refuses is logged at Warning and never fails the
+  ///        call: the viewers lose the rest of its GOP, the recording
+  ///        nothing.
   /// @param frame   The source's index of the frame: its row's, and its
   ///                record's set. Above every frame coded before.
   /// @param pts_ns  Its time, its record's pts: no earlier than the frames'
@@ -367,18 +385,25 @@ class CodecStream {
     return played;
   }
 
-  /// @brief Finish the stream's file with its footer index
-  ///        (`StreamWriter::finish`); without a stream, only mark it
-  ///        finished. One attempt: however it ends, every later call, this
-  ///        one included, is refused, so a file whose footer failed stays
-  ///        unfinished, read as a killed writer's.
+  /// @brief Close the viewers, which see the stream end, and finish the
+  ///        stream's file with its footer index (`StreamWriter::finish`);
+  ///        without either, only mark it finished. One attempt: however it
+  ///        ends, every later call, this one included, is refused, so a file
+  ///        whose footer failed stays unfinished, read as a killed writer's.
   /// @return OK; InvalidArgument once finished; or the writer's error.
   vkc::Status finish() {
     if (finished_) {
       return vkc::Status::invalid_argument("CodecStream: finished");
     }
     finished_ = true;
+    server_.reset();
     return writer_ ? writer_->finish() : vkc::Status{};
+  }
+
+  /// @return The server the frames are served on; null when not serving, or
+  ///         once finished.
+  const vr::networking::StreamServer* server() const noexcept {
+    return server_.get();
   }
 
   /// @return A row per frame decoded so far, in coding order.
@@ -482,6 +507,7 @@ class CodecStream {
   CodecStream(vkc::Device& device, vkc::Allocator& allocator,
               vr::codec::Encoder enc, vr::codec::Decoder dec,
               std::uint32_t intra_period, CodecOutputs outputs,
+              std::unique_ptr<vr::networking::StreamServer> server,
               std::unique_ptr<vr::stream::StreamWriter> writer,
               std::ofstream csv)
       : device_(&device),
@@ -490,6 +516,7 @@ class CodecStream {
         decoder_(std::move(dec)),
         intra_period_(intra_period),
         outputs_(std::move(outputs)),
+        server_(std::move(server)),
         writer_(std::move(writer)),
         csv_(std::move(csv)) {}
 
@@ -508,20 +535,30 @@ class CodecStream {
   }
 
   // What code() does once the encoder returns frame @p frame's @p bytes:
-  // record them, decode them into the player, and keep and write their row,
-  // @p encoded its encode's stage rows.
+  // record and serve them, decode them into the player, and keep and write
+  // their row, @p encoded its encode's stage rows.
   vkc::Status play(const Bytes& bytes, std::size_t frame, std::uint64_t pts_ns,
                    const vkc::StageMetrics& encoded) {
     VKC_ASSIGN(const vr::codec::FrameInfo info,
                vr::codec::read_frame_info(bytes.data(), bytes.size()));
-    if (writer_) {
-      vr::stream::RecordInfo record;
-      // A reader starts, or seeks, at a key: a frame that decodes alone.
-      record.key = info.type == vr::codec::FrameType::kIntra;
-      record.pts_ns = pts_ns;
-      record.seq = coded_;
-      record.set = frame;
-      VKC_TRY(writer_->append(record, bytes.data(), bytes.size()));
+    vr::stream::RecordInfo record;
+    // A reader starts, or seeks, at a key: a frame that decodes alone.
+    record.key = info.type == vr::codec::FrameType::kIntra;
+    record.pts_ns = pts_ns;
+    record.seq = coded_;
+    record.set = frame;
+    if (writer_) VKC_TRY(writer_->append(record, bytes.data(), bytes.size()));
+    // After the file, so no viewer gets a frame the file lacks. Returning a
+    // refusal would leave coded_ behind the file, whose writer would then
+    // refuse the next seq.
+    if (server_) {
+      const vkc::Status served =
+          server_->publish(record, bytes.data(), bytes.size());
+      if (!served.ok()) {
+        vr::log_message(vkc::LogLevel::Warning,
+                        "CodecStream: frame " + std::to_string(frame) +
+                            " not served: " + served.message());
+      }
     }
     ++coded_;
     last_frame_ = frame;
@@ -556,6 +593,8 @@ class CodecStream {
   vr::codec::Decoder decoder_;
   std::uint32_t intra_period_;  // the encoder's, for a GOP's bitrate
   CodecOutputs outputs_;
+  // Null when not serving, or once finished.
+  std::unique_ptr<vr::networking::StreamServer> server_;
   std::unique_ptr<vr::stream::StreamWriter> writer_;  // null without a stream
   std::ofstream csv_;           // open when outputs_.csv names a file
   std::uint64_t coded_ = 0;     // frames encoded and recorded: the next seq

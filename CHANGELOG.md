@@ -8,6 +8,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `tsdf`: **`MeshIntegrator` measures a voxel against only the triangles no
+  lower bound rules out**, a workgroup per block, and writes the same bytes:
+  a triangle is ruled out only when strictly farther than the voxel's best,
+  by bounds less a rounding margin of its own. On Rafa2 the write takes
+  about a quarter of its time in a 16-voxel band and under half in an
+  8-voxel one (the 2026-10-21 decision). A grid whose blocks hold more than
+  `MeshIntegrator::kMaxVoxelsPerBlock` (16^3) voxels is refused.
+  Tests: `recon_tsdf_mesh_integrate`, `recon_tsdf_mesh_integrate_exact`.
 - `examples`: **one home for the codec examples' mesh comparison**,
   `vr_example::codec_compare_options` (`codec_stream.hpp`), which
   `codec_replica` and `codec_mesh` call; their figures are unchanged.
@@ -206,6 +214,23 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   when no complete record is ready. Callers can drain partial receives and
   buffered records before waiting on their own controls. The original
   three-argument overload is retained. Tests: `recon_networking_client`.
+- `examples`: **`fuse_orbbec` serves its coded sets live, and core 0.16.0
+  is required** (core #46). With `output.serve`, a port, it codes each fused
+  set as with `output.stream` and serves the records live on that port, on
+  every interface (`CodecOutputs::serve`, mapped by `codec_outputs`).
+  `CodecStream` starts its `networking::StreamServer` on the stream's
+  session before making any file, so a port in use leaves none; publishes
+  each record once it is in the file, if any, so no viewer gets a frame the
+  file lacks; logs a record the server refuses at Warning, failing no frame;
+  and closes the viewers in `finish()`, after which `server()` is null.
+  fuse_orbbec prints the port, and Ctrl+C or SIGTERM ends its run cleanly,
+  through `examples/common/interrupt.hpp` (`rig_viewer`'s handler, moved):
+  during the setup, with nothing recorded and the empty stream removed; once
+  the cameras stream, after the set in hand, as `run.frames` would. A second
+  signal of the same kind ends the process. New template:
+  `config/examples/serve_orbbec.json`.
+  Tests: `recon_example_codec_stream`, `recon_example_config`,
+  `recon_example_interrupt`.
 - `networking`: **a session served and read live over TCP**
   (`recon_networking`, a tier of its own on `recon_stream`, the 2026-10-21
   decision). `StreamServer` (`networking/stream_server.hpp`, with
@@ -220,7 +245,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `StreamClient: <host>:<port>: <reason>`. `examples/serve_stream` serves a
   `.vrst` live, paced by its pts and looping
   (`examples/common/stream_replay.hpp`). CI runs the stream and networking
-  tests under ThreadSanitizer on the Mac Debug leg. Tests: `recon_networking_gop_log`, `recon_networking_socket`,
+  tests under ThreadSanitizer on the Mac Debug leg. Tests:
+  `recon_networking_gop_log`, `recon_networking_socket`,
   `recon_networking_server`, `recon_networking_client`,
   `recon_networking_stress`, `recon_example_stream_replay`,
   `recon_serve_stream_args`.

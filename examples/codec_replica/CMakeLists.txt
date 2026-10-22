@@ -13,6 +13,7 @@ target_link_libraries(
   PRIVATE vr_example_common
           volumetric_kit::recon_codec
           volumetric_kit::recon_eval
+          volumetric_kit::recon_networking
           volumetric_kit::recon_sensor_utils
           volumetric_kit::recon_stream
           volumetric_kit::recon_tsdf

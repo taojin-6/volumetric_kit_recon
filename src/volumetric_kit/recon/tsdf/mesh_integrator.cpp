@@ -6,7 +6,6 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <limits>
 #include <string>
 #include <vector>
 
@@ -36,7 +35,8 @@ using volume::VoxelGridParams;
 
 constexpr const char* kWho = "MeshIntegrator::integrate";
 
-// Local group size, matching `layout(local_size_x = 256)` in both kernels.
+// Local group size, matching `layout(local_size_x = 256)` in the binning,
+// scan and compaction kernels; mesh_integrate.comp runs a workgroup per block.
 constexpr std::uint32_t kLocalSize = 256;
 // Bins whose starts share a window have at most window-1 entries between
 // their first and last starts, plus at most kMaxBinTriangles for the last bin.
@@ -244,6 +244,11 @@ core::Result<MeshIntegrateStats> MeshIntegrator::integrate(
       weight_view.element_size != sizeof(float)) {
     return core::Status::invalid_argument(
         std::string(kWho) + ": tsdf/weight attributes must be float");
+  }
+  if (static_cast<std::uint32_t>(g.voxels_per_block) > kMaxVoxelsPerBlock) {
+    return core::Status::invalid_argument(
+        std::string(kWho) + ": voxels_per_block exceeds kMaxVoxelsPerBlock (" +
+        std::to_string(kMaxVoxelsPerBlock) + "), what one workgroup writes");
   }
 
   MeshIntegrateStats stats;
@@ -463,16 +468,6 @@ core::Result<MeshIntegrateStats> MeshIntegrator::integrate(
   VKC_TRY(core::check_storage_buffer_range(
       (std::string(kWho) + ": the block list").c_str(), block_bytes,
       max_storage_buffer_range_));
-  const std::uint64_t max_threads = std::min<std::uint64_t>(
-      std::uint64_t{max_workgroup_count_x_} * kLocalSize,
-      std::numeric_limits<std::uint32_t>::max());
-  const auto max_dispatch_blocks =
-      static_cast<std::uint32_t>(max_threads / vpb);
-  if (max_dispatch_blocks == 0) {
-    return core::Status::invalid_argument(
-        std::string(kWho) +
-        ": voxels_per_block exceeds what one dispatch can launch");
-  }
   if (blocks_.size() < block_bytes) {
     VKC_TRY(ensure_scratch(blocks_, block_bytes, "tsdf.mesh_blocks"));
     bind(compact_bins_, 3, blocks_);
@@ -495,14 +490,15 @@ core::Result<MeshIntegrateStats> MeshIntegrator::integrate(
   grid.map().advance_tick();
   const std::uint32_t tick = grid.map().tick();
 
-  // Every range satisfies the entry budget. Splitting further for the device
-  // thread limit only reduces its work. Keep one submission per write, with
-  // the fill in the first: combining them would undo the watchdog contract.
+  // Every range satisfies the entry budget. Splitting further for the device's
+  // workgroup-count limit (mesh_integrate.comp runs a workgroup per block)
+  // only reduces its work. Keep one submission per write, with the fill in
+  // the first: combining them would undo the watchdog contract.
   const BinPush fill_push{g, triangle_count, kPassFill};
   for (const BinRange& range : dispatch_ranges) {
     for (std::uint32_t offset = 0; offset < range.count;) {
       const std::uint32_t n =
-          std::min(range.count - offset, max_dispatch_blocks);
+          std::min(range.count - offset, max_workgroup_count_x_);
       core::CommandBatch batch(*device_, *allocator_);
       if (stats.dispatches == 0) {
         VKC_TRY(batch.dispatch(bin_, &fill_push, sizeof(fill_push),
@@ -515,9 +511,8 @@ core::Result<MeshIntegrateStats> MeshIntegrator::integrate(
                                static_cast<std::uint32_t>(params.mode),
                                is_signed ? 0.0f : shell_m,
                                tick};
-      VKC_TRY(batch.dispatch(integrate_, &push, sizeof(push),
-                             group_count(n * vpb), max_workgroup_count_x_,
-                             &stage));
+      VKC_TRY(batch.dispatch(integrate_, &push, sizeof(push), n,
+                             max_workgroup_count_x_, &stage));
       VKC_TRY(batch.submit());
       ++stats.dispatches;
       offset += n;
