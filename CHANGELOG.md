@@ -22,7 +22,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `tests`: **slow tests trimmed, with the properties they check kept**; the
   Orbbec decoder tests and the networking reaping case wait on counts, not
   fixed sleeps. Under ASan (Debug) on an M5 Max, `recon_eval_mesh_distance`
-  takes 13 s in place of 51 s.
+  takes 6 s in place of 28 s.
 - `tsdf`: **`MeshIntegrator` measures a voxel against only the triangles no
   lower bound rules out**, a workgroup per block, and writes the same bytes:
   a triangle is ruled out only when strictly farther than the voxel's best,
