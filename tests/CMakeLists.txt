@@ -1438,12 +1438,17 @@ _vr_expect_message(
 # Start the slowest tests first under `ctest --parallel`. Without a COST, CTest
 # runs tests in the order they were added, and a fresh CI runner has no timing
 # history, so a slow test added late finished last. Seconds under the sanitizers
-# job, the longest in CI (2026-10-06); only the order matters.
-set_tests_properties(recon_tsdf_mesh_integrate PROPERTIES COST 42)
-set_tests_properties(recon_eval_mesh_distance PROPERTIES COST 29)
-set_tests_properties(recon_mesh_marching_cubes_sparse PROPERTIES COST 25)
-set_tests_properties(recon_codec_decoder PROPERTIES COST 23)
-set_tests_properties(recon_codec_device_frame PROPERTIES COST 17)
+# job, the longest in CI (2026-10-22), for every test over 25; only the order
+# matters.
+set_tests_properties(recon_codec_inter PROPERTIES COST 115)
+set_tests_properties(recon_codec_decoder PROPERTIES COST 96)
+set_tests_properties(recon_tsdf_mesh_integrate_exact PROPERTIES COST 56)
+set_tests_properties(recon_eval_mesh_distance PROPERTIES COST 55)
+set_tests_properties(recon_codec_device_frame PROPERTIES COST 52)
+set_tests_properties(recon_example_codec_stream PROPERTIES COST 49)
+set_tests_properties(recon_tsdf_mesh_integrate PROPERTIES COST 36)
+set_tests_properties(recon_codec_encoder PROPERTIES COST 30)
+set_tests_properties(recon_example_set_codec PROPERTIES COST 29)
 
 # A test skips by exiting with the core's test::kSkipExitCode (gpu_test.hpp).
 get_property(
