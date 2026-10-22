@@ -49,6 +49,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   kernels**, so a port in use, a stream already at its path or a CSV that
   cannot be written is refused without building them. Test:
   `recon_example_codec_stream`.
+- `sensor`: **NVDEC's H.265 decoders share the GPU's primary CUDA context**,
+  each on a stream of its own as nvJPEG's decoder is, where FFmpeg made a
+  context per decoder. Four 4K decoders on an RTX 5090 hold 1.3 GiB of
+  device memory while decoding, not 2.8 GiB (nvidia-smi). Tests:
+  `recon_sensor_video_hevc`.
 - `tsdf`: **`MeshIntegrator` measures a voxel against only the triangles no
   lower bound rules out**, a workgroup per block, and writes the same bytes:
   a triangle is ruled out only when strictly farther than the voxel's best,
