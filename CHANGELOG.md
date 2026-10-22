@@ -225,6 +225,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `examples`: **`serve_stream` serves on past a damaged payload**: a record
+  whose payload fails its CRC is printed once and skipped, with the P-frames
+  after it, up to the pass's next key (`ReplayLoop::send_pass`). It used to
+  end the serve and drop every viewer. Test: `recon_example_stream_replay`.
 - `examples`: **a codec stream's track records its nominal rate**, which
   `CodecStream::create` now takes: `source.fps` for `fuse_orbbec`'s, 30 a
   second for `codec_replica`'s and `codec_mesh`'s. They said unknown, so a

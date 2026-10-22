@@ -2041,9 +2041,12 @@ track's records from its first key read whole, each due at its pts from its
 pass's start, in a loop until Ctrl+C (`ReplayLoop`, `stream_replay.hpp`).
 Each pass is restamped, seq past the passes before and pts a pass's span (the
 records' pts span and one mean step) later, so seq keeps rising and key pts
-never go back, as `publish` requires. It listens on every interface, on 47801
-or N (0 takes a free one, which it prints). Bad arguments exit 2 with the
-usage; a failure, a missing file included, exits 1.
+never go back, as `publish` requires. A record whose payload fails its CRC
+is skipped with the P-frames after it, up to the pass's next key, and
+printed in the first pass. It listens on every interface, on 47801 or N (0
+takes a free one, which it prints). Bad arguments exit 2 with the usage; a
+failure, a missing file or no key whose payload reads whole included,
+exits 1.
 
 ## Next work
 

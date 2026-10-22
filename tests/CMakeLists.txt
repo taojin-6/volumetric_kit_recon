@@ -1360,7 +1360,8 @@ endforeach()
 
 # serve_stream's replay (examples/common/stream_replay.hpp): the records from
 # the first key, seq and key pts across passes by the writer's rules, the dues,
-# damage left out and an allocation failure past it refused. Host only.
+# damage left out and an allocation failure past it refused, and a damaged
+# payload skipped to the next key. Host only.
 add_executable(recon_example_stream_replay_test example_stream_replay_test.cpp
                                                 test_allocation_failure.cpp)
 target_include_directories(recon_example_stream_replay_test
