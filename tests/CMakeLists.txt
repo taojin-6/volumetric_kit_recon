@@ -158,12 +158,15 @@ add_test(NAME recon_volume_block_grid COMMAND recon_volume_block_grid_test)
 # volume block stamps: every allocation path stamps the blocks it asks for with
 # the map's tick, the block pass stamps those holding weight, and
 # free_stale_blocks frees those neither for more than max_age ticks; resize
-# keeps the records, remove and clear zero them. Skips with no device.
+# keeps the records, remove and clear zero them; a pass split into several
+# dispatches (core/dispatch.hpp's test seam, by src/). Skips with no device.
 add_executable(recon_volume_block_stamps_test volume_block_stamps_test.cpp)
 target_link_libraries(
   recon_volume_block_stamps_test
   PRIVATE volumetric_kit::recon_volume Vulkan::Vulkan
           volumetric_kit::core_test_policy)
+target_include_directories(recon_volume_block_stamps_test
+                           PRIVATE ${PROJECT_SOURCE_DIR}/src)
 vr_target_warnings(recon_volume_block_stamps_test)
 add_test(NAME recon_volume_block_stamps COMMAND recon_volume_block_stamps_test)
 
@@ -791,12 +794,12 @@ add_test(NAME recon_codec_params COMMAND recon_codec_params_test)
 # alone, and their ends on the device -- a host frame's entries uploaded, the
 # forward read back, the inverse fed from the host, and the frame an Encoder
 # must write. Test-only; the codec tests that hold the device to it link it, and
-# reach the internal headers through it.
+# reach the internal headers through it (core/dispatch.hpp's by src/).
 add_library(recon_codec_oracle STATIC codec_oracle.cpp codec_oracle_device.cpp)
 target_link_libraries(recon_codec_oracle PUBLIC volumetric_kit::recon_codec)
 target_include_directories(
-  recon_codec_oracle
-  PUBLIC ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/codec)
+  recon_codec_oracle PUBLIC ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/codec
+                            ${PROJECT_SOURCE_DIR}/src)
 vr_target_warnings(recon_codec_oracle)
 
 # codec tier, GPU half: the internal DctTransform's forward kernel against a
