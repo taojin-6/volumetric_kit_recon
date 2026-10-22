@@ -19,18 +19,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   The NVIDIA legs keep the driver's shader cache across runs, which their
   containers had silently turned off: the suite at `-j4` with validation
   takes 15 s warm on the RTX 5090, against 38 s with no cache.
-- `tests`: **slow tests trimmed, with the properties they check kept**:
-  grid comparisons and the codec fixtures read only the span their blocks
-  lie in, and the tsdf tests' heaps shrink to their scenes;
-  `recon_codec_inter` and `recon_codec_decoder` share one transform,
-  `Decoder` and `Encoder` across their cases, and the codec's P-frame
-  chains, corruption and merge sweeps are shorter;
-  `recon_tsdf_mesh_integrate_exact` measures 41% fewer closest
-  points; the Orbbec decoder tests and the networking reaping case wait
-  for every pair or viewer to be accounted for, not for a fixed time; the
-  stream, eval and lens-fold host loops shrink. Under ASan (Debug) on an
-  M5 Max, `recon_eval_mesh_distance` takes 13 s in place of 51 s and
-  `recon_stream_footer` 3 s in place of 18 s.
+- `tests`: **slow tests trimmed, with the properties they check kept**; the
+  Orbbec decoder tests and the networking reaping case wait on counts, not
+  fixed sleeps. Under ASan (Debug) on an M5 Max, `recon_eval_mesh_distance`
+  takes 13 s in place of 51 s.
 - `tsdf`: **`MeshIntegrator` measures a voxel against only the triangles no
   lower bound rules out**, a workgroup per block, and writes the same bytes:
   a triangle is ruled out only when strictly farther than the voxel's best,
