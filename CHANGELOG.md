@@ -937,6 +937,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   "mesh draw" and "overlay draw" rows are CPU-only. On Apple GPUs those two
   read about 0 ms as GPU scopes inside the pass. Test:
   `recon_example_viewer_pass`.
+- `examples`: **the viewers' panels show ImGui's colours as authored**: the
+  viewers' gfx pin moves from #135 to #148, past gfx #144. Their default
+  `_SRGB` swapchain encoded the colours a second time, so the panels drew
+  washed out. Test: `recon_example_viewer_pass`.
 - `mesh`: **`MeshExchange::begin_frame` hands an empty mesh to `commit`
   with its payload**, where it committed one at once and dropped the
   payload, so a consumer showing what the payload names (a player's frame)

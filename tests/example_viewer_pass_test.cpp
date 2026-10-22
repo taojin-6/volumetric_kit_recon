@@ -3,10 +3,14 @@
 
 // The render pass both live viewers record (examples/viewer/viewer_common.hpp):
 // one GPU-timed stage spans the whole pass, and the mesh and overlay draws
-// inside it are CPU-only stages. Runs on a headless device, which the test
-// skips without.
+// inside it are CPU-only stages; the overlay's colours show as authored on an
+// _SRGB target, as the swapchain's default is. Runs on a headless device,
+// which the test skips without.
 
+#include <cstddef>
+#include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 #include <imgui.h>
@@ -29,6 +33,8 @@ namespace vkc = volumetric_kit::core;
 namespace vg = volumetric_kit::gfx;
 
 constexpr VkExtent2D kExtent{64, 64};
+// ImGui's dark WindowBg, as an sRGB byte.
+constexpr int kWindowBg = 15;
 
 const vkc::StageRow* find_row(const vg::FrameMetrics& metrics,
                               const char* name) {
@@ -38,7 +44,7 @@ const vkc::StageRow* find_row(const vg::FrameMetrics& metrics,
   return nullptr;
 }
 
-int pass_is_one_gpu_stage(vg::app::HeadlessApp& app) {
+int records_the_viewer_pass(vg::app::HeadlessApp& app) {
   vg::OffscreenTargetDesc desc;
   desc.extent = kExtent;
   desc.color_format = VK_FORMAT_R8G8B8A8_SRGB;  // as the swapchain's default
@@ -60,6 +66,9 @@ int pass_is_one_gpu_stage(vg::app::HeadlessApp& app) {
     ImGui::GetIO().DisplaySize = ImVec2(static_cast<float>(kExtent.width),
                                         static_cast<float>(kExtent.height));
     overlay.value().new_frame();
+    ImGui::GetBackgroundDrawList()->AddRectFilled(
+        ImVec2(0.0f, 0.0f), ImGui::GetIO().DisplaySize,
+        IM_COL32(kWindowBg, kWindowBg, kWindowBg, 255));
     const vkc::Status drawn =
         app.device().submit_single_time([&](VkCommandBuffer cmd) {
           profiler.value().begin_frame(0, cmd);
@@ -67,11 +76,23 @@ int pass_is_one_gpu_stage(vg::app::HeadlessApp& app) {
           fuse_viewer::record_view_pass(
               profiler.value(), cmd, target.value().target(),
               [&](VkCommandBuffer) { ++meshes; }, &overlay.value());
+          target.value().record_readback(cmd);
           profiler.value().end_frame();
         });
     CHECK(drawn.ok());
   }
   CHECK(meshes == 2);
+
+  // gfx #144 and on: the target encodes the byte once, not twice (69).
+  const auto* pixels =
+      static_cast<const std::uint8_t*>(target.value().pixels());
+  CHECK(pixels != nullptr);
+  const std::size_t centre =
+      (std::size_t{kExtent.height} / 2 * kExtent.width + kExtent.width / 2) * 4;
+  std::printf("WindowBg %d reads %d\n", kWindowBg, pixels[centre]);
+  for (std::size_t c = 0; c < 3; ++c) {
+    CHECK(std::abs(pixels[centre + c] - kWindowBg) <= 1);
+  }
 
   const vg::FrameMetrics& metrics = profiler.value().metrics();
   const vkc::StageRow* pass = find_row(metrics, "render pass");
@@ -101,7 +122,7 @@ int run_pass_tests() {
     std::fprintf(stderr, "%s\n", loaded.message().c_str());
     return 1;
   }
-  if (const int rc = pass_is_one_gpu_stage(app.value())) return rc;
+  if (const int rc = records_the_viewer_pass(app.value())) return rc;
   std::puts("viewer_pass: OK");
   return 0;
 }
