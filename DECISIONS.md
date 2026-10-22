@@ -13686,7 +13686,7 @@ border pixel's ray. Its lens is a stand-in, not an SDK report: of
 CL2A141000N's depth lens only k1 29.29 and k6 3.77 are on record (the
 2026-09-28 GPU pre-processing entry). The other terms are calib's Femto-like
 test lens, and the test holds the stand-in to the rest of the record. Its
-rays reach its whole raw image, and undistorting moves a raw pixel 30.6 px
+rays reach its whole raw image, and undistorting moves a raw pixel 30.7 px
 on average and 224.7 px at most, against the 31.5 px and 220.9 px measured
 on CL2A141000N (the 2026-09-26 Orbbec driver entry). On it the widest output
 pixel is at r = 0.914, and nothing folds within r = 3. Where a lens folds
