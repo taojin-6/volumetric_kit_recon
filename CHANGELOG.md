@@ -32,6 +32,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   table. Migrating: pass both helpers `max_blocks`, the most blocks a frame
   may hold under your memory budget.
   Tests: `recon_codec_decode_grid`, `recon_codec_decode_grid_oom`.
+- `tsdf`: **`TsdfIntegrator::integrate` is one submit**: the compaction's
+  count stays on the device and sizes the fuse's dispatch
+  (`dispatch_indirect`), one fence wait fewer a call, and the voxels are
+  unchanged. The `"  ..active set"` row carries the compaction's device half
+  alone. New: `VoxelHashMap::record_compaction`, a compaction recorded into
+  a caller's batch, and `VoxelHashMap::allocated_blocks`. Tests:
+  `recon_tsdf_integrate_cull`, `recon_tier_stage_metrics`,
+  `recon_volume_block_grid`.
 - `examples`: **a finer fusion grid starts with a larger table**:
   `create_fusion_grid`'s default bucket count, `fusion_buckets`, scales
   16,384 by (1 cm / voxel)², from 1× up to 4×, so `fuse_orbbec`, `rig_viewer`,

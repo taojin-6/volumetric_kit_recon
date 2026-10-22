@@ -878,7 +878,8 @@ refuses one that a full compaction, allocation, resize, remove, clear or
 move has made stale. While the last one still holds, the call returns it
 again, dispatching and reporting nothing, so the encoder after an extract
 reuses the extract's compaction (2026-09-30). A fuse culls instead and leaves
-none.
+none: `record_compaction` records its compaction into the fuse's own batch,
+the list and its count left on the device for the dispatches after it.
 `topology_epoch()` lives on the *map* — the object that frees a block
 index — and is a globally unique token re-drawn at `create`, at every
 `clear` and at every `remove` that accepts its input, never at `resize`: a
@@ -959,9 +960,11 @@ block, while the dispatch scales with the reached blocks, not the map. A
 frame with a non-positive focal length, whose principal point lies outside
 its image (the side widening then stops containing it), or whose planes are
 not finite fuses the whole active set; the pose must be rigid. A grid with blocks ticks even when none is
-reached (2026-10-06). The list stays on the device, so a fuse is two
-submits, the compaction's count the only thing read back; the frames are
-staged.
+reached (2026-10-06), which the map's host copy of the heap counter
+answers. The list and its count stay on the device: a one-thread kernel
+(`tsdf_dispatch_args.comp`) turns the count into the fuse's indirect
+dispatches, so a fuse is one submit that reads nothing back; the frames
+are staged.
 `integrate` also takes a list of frames
 (`FrameInput`, a `DepthInput` and its colour, so one list feeds both
 calls): one compaction and one submit for them all, each frame a dispatch

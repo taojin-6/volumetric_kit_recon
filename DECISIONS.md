@@ -421,7 +421,7 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-06**](#2026-10-06--fusion-runs-over-the-blocks-the-scanning-cameras-reach-one-frustum-a-frame-no-near-cut-far-at-max_depth--trunc_dist-their-union-compacted-in-one-scan-amends-the-2026-08-12-view-meshing-and-the-2026-09-30-one-batch-and-device-list-entries) —
   Fusion runs over the blocks the scanning cameras reach: one frustum a
   frame, no near cut, far at `max_depth + trunc_dist`, their union compacted
-  in one scan.
+  in one scan. *Amended 2026-10-22:* in the fuse's own submit.
 - [**2026-10-06**](#2026-10-06--marching-cubes-meshes-what-the-viewing-camera-sees-an-extract-over-the-device-frusta-list-the-viewers-re-meshing-on-a-fuse-or-a-view-change-and-a-culled-pass-records-its-density-amends-the-2026-08-12-view-meshing-entry-and-the-2026-10-06-incremental-removal-and-fusion-culling-entries) —
   Marching cubes meshes what the viewing camera sees: an extract over the
   device frusta list, the viewers re-meshing on a fuse or a view change, and
@@ -10949,6 +10949,12 @@ sparse kernels' dispatch time (each lost one barrier per workgroup).
 `compact_active_blocks_in_frustum` overloads are gone, and the frusta list
 carries a serial of its own, so a later frustum compaction makes an earlier
 list stale.
+
+*Amended 2026-10-22 (PERF.md P6):* the fuse records the same compaction into
+its own submit (`VoxelHashMap::record_compaction`) and sizes its dispatch
+from the device's count, refusing none. The map's host copy of the heap
+counter, not a second compaction, tells an empty grid from one the frames do
+not reach.
 
 **The rule.** `TsdfIntegrator::integrate` builds one frustum for each frame
 it fuses -- the depth camera's intrinsics and pose, **no near cut** (near 0),

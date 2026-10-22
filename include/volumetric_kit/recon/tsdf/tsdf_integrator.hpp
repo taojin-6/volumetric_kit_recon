@@ -207,21 +207,19 @@ class VR_TSDF_API TsdfIntegrator {
   ///                  kernel. A tier whose host row dwarfs its device row is
   ///                  not a slow kernel.
   ///
-  ///                  A fuse runs *two* dispatches, so the second -- the
-  ///                  compaction of the blocks the frame reaches (@ref
-  ///                  volume::VoxelHashMap::compact_active_blocks_in_frusta_on_device)
-  ///                  -- reports itself as a `"  ..active set"` breakdown row
-  ///                  beneath this one. Without it that kernel's device time
-  ///                  would fall into the gap above and read as submit
-  ///                  overhead.
+  ///                  The fuse's submit also compacts the blocks the frame
+  ///                  reaches (@ref volume::VoxelHashMap::record_compaction),
+  ///                  a dispatch that reports its device half as a
+  ///                  `"  ..active set"` breakdown row beneath this one.
+  ///                  Without it that kernel's device time would fall into the
+  ///                  gap above and read as submit overhead.
   /// @return OK on success, or a non-OK `Status`:
   ///         `Status::Code::InvalidArgument` if the integrator is
   ///         moved-from, @p depth is null, @p cam or @p color's camera has a
   ///         non-finite intrinsic, depth bound or pose entry, @p grid lacks a
-  ///         `float` `tsdf`/`weight` attribute, @p color is set but empty or
-  ///         @p grid lacks a `uint32` `color` attribute, or the blocks the
-  ///         frame reaches hold 2^32 voxels or more; otherwise a buffer or
-  ///         dispatch failure.
+  ///         `float` `tsdf`/`weight` attribute, or @p color is set but empty
+  ///         or @p grid lacks a `uint32` `color` attribute; otherwise a buffer
+  ///         or dispatch failure.
   core::Status integrate(volume::VoxelBlockGrid& grid, const float* depth,
                          const DepthCameraParams& cam, float max_weight = 5.0f,
                          IntegrationMode mode = IntegrationMode::Classic,
@@ -306,9 +304,14 @@ class VR_TSDF_API TsdfIntegrator {
   // outlive them) by KernelSetBuilder at create().
   core::ComputeKernel kernel_;
   core::ComputeKernel clear_kernel_;
+  // Sizes their dispatches from the compaction's device count into args_,
+  // a VkDispatchIndirectCommand a dispatch, grown to the most a call has had.
+  core::ComputeKernel args_kernel_;
+  core::Buffer args_;
   core::DescriptorPool pool_;
   // Each kernel's sets, one a frame of a call, so one batch fuses several
-  // cameras; the kernels' own sets go unused. Grown to the most frames a call
+  // cameras; each takes the kernel's own set's place for its frame's
+  // dispatches, which bind the kernel's set. Grown to the most frames a call
   // has had; every set a call dispatches is written whole first.
   core::KernelSets frame_sets_;
   core::KernelSets clear_sets_;
