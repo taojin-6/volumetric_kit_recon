@@ -649,6 +649,9 @@ entries relevant to your task; later amendments supersede earlier rules.
   newer key, only at a chunk boundary, so no P-frame goes without its
   references; a viewer joins at the cached GOP; `publish` never waits; a
   viewer types the sender's address.
+- [**2026-10-22**](#2026-10-22--streamclient-reports-progress-before-a-whole-record-is-ready) —
+  `StreamClient::next` can report partial input and connection progress,
+  allowing a consumer to drain it before waiting on its own controls.
 
 ## Decision record
 
@@ -14128,6 +14131,29 @@ the same, though in one of two runs each skipped once to a key in its first
 live, each of its 20 jumps to a key, and reading fast again drained
 0.28 MB of stale records in 21 ms and was live 0.31 s later; five
 reconnects each began at a key.
+
+### 2026-10-22 — StreamClient reports progress before a whole record is ready.
+
+The player waits on its consumer's take when a decoded frame cannot yet be
+published. A zero-wait `StreamClient::next` takes at most one receive, up to
+256 KiB, and can return false while more of a partial record is already in
+the socket. Treating that false as idle adds a consumer wait per receive,
+slowing the drain even when the sender and decoder can keep up.
+
+The four-argument overload adds an optional `bool* progressed`. Each call
+resets it, then sets it after a successful lookup/connect step, bytes
+received, or a record returned from the parser. Once true it stays true for
+that call, including when the next step is idle. Callers can drain with
+zero-wait calls while it reports progress, checking their controls between
+calls, then wait on those controls once no progress was possible. On error
+it covers only earlier successful steps; the error remains terminal. The
+three-argument overload remains a forwarding symbol, so existing callers
+retain their API and behavior.
+
+The loopback regression sends a 512 KiB record in pieces, distinguishes
+partial progress from an idle call, and checks records sent together,
+connect progress, sticky errors and an allocation failure while copying
+one. The player's consumer-wakeup policy stays with the player.
 
 ## Measured lessons
 

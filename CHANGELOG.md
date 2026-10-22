@@ -202,6 +202,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `networking`: `StreamClient::next` has an overload reporting progress even
+  when no complete record is ready. Callers can drain partial receives and
+  buffered records before waiting on their own controls. The original
+  three-argument overload is retained. Tests: `recon_networking_client`.
 - `networking`: **a session served and read live over TCP**
   (`recon_networking`, a tier of its own on `recon_stream`, the 2026-10-21
   decision). `StreamServer` (`networking/stream_server.hpp`, with
