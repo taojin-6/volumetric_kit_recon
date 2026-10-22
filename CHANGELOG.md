@@ -298,6 +298,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   second for `codec_replica`'s and `codec_mesh`'s. They said unknown, so a
   player paced a 25 fps rig recording's loop restart at 30.
   Tests: `recon_example_codec_stream`, `recon_example_mesh_sequence`.
+- `examples`: **`codec_mesh`'s mesh conversion table has its `allocate`
+  row**, where `convert_frame` passed the conversion's metrics to the
+  integrator alone. Regression: `recon_example_mesh_sequence`.
 
 ### Added
 
