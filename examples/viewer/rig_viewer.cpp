@@ -58,7 +58,6 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
-#include <csignal>
 #include <cstdint>
 #include <cstdio>
 #include <exception>
@@ -77,6 +76,7 @@
 
 #include "config.hpp"
 #include "fuse_frame.hpp"  // fusion grid, fuse_set, free_stale_blocks_every
+#include "interrupt.hpp"
 #include "orbbec_config.hpp"
 #include "recon_gfx_bridge.hpp"  // to_live_mesh, and the vertex-layout asserts
 #include "rig_report.hpp"
@@ -136,20 +136,6 @@ namespace vgp = volumetric_kit::gfx::pipelines;
 namespace win = volumetric_kit::gfx::windowing;
 
 namespace {
-
-// Ctrl+C (or a SIGTERM) in the terminal closes the window rather than ending
-// the process there: the render loop then leaves as it does on a click, the
-// fuse thread stops the rig, and the cameras are released. Killed outright, the
-// process would leave them to notice the dropped connection. The handler
-// restores the default, so a second Ctrl+C still ends a run that has hung.
-// Lock-free, as a signal handler may only touch such an atomic.
-std::atomic<bool> g_interrupted{false};
-static_assert(std::atomic<bool>::is_always_lock_free,
-              "the interrupt flag must be safe to set from a signal handler");
-extern "C" void on_interrupt(int signal) {
-  g_interrupted.store(true);
-  std::signal(signal, SIG_DFL);
-}
 
 // How long the fuse thread waits for a set before saying the rig is silent. It
 // keeps waiting after saying so: a window is not a batch run, and a camera
@@ -952,7 +938,9 @@ int run(GLFWwindow* window, const Options& opt) {
   while (glfwWindowShouldClose(window) == GLFW_FALSE &&
          (opt.run.frames == 0 || drawn < opt.run.frames)) {
     glfwPollEvents();
-    if (g_interrupted.load()) {
+    // Ctrl+C closes the window: the loop leaves as on a click, the fuse
+    // thread stops the rig, and the cameras are released.
+    if (vr_example::interrupted()) {
       glfwSetWindowShouldClose(window, GLFW_TRUE);
       continue;
     }
@@ -1227,8 +1215,7 @@ int run(GLFWwindow* window, const Options& opt) {
 }  // namespace
 
 int run_main(const Options& opt) {
-  std::signal(SIGINT, on_interrupt);
-  std::signal(SIGTERM, on_interrupt);
+  vr_example::catch_interrupts();
   if (glfwInit() != GLFW_TRUE) {
     std::fprintf(stderr, "glfwInit failed\n");
     return 1;

@@ -15,14 +15,20 @@
 // encoded but not decoded, or whose CSV row fails, an I-frame where the
 // encoder would code a P-frame; a frame out of order, or any call once
 // finished, refused before anything is encoded; a stream never finished
-// still read whole, and one dropped before its first frame removed; and the
-// CSV replaced on create and extended as each frame is coded. The device part
-// skips with no device.
+// still read whole, and one dropped before its first frame removed; the CSV
+// replaced on create and extended as each frame is coded; and, served on
+// 127.0.0.1 port 0 (never every interface), every frame the file records
+// reaching a client as it is coded, with the file's seq, key, pts, set, bytes
+// and offset, and the end once finished, a frame the file refuses never
+// served, serving alone writing no file, a port in use refused before any
+// file is made, and neither a client that leaves nor a record the server
+// refuses failing a frame. The device part skips with no device.
 
 #include <signal.h>
 #include <sys/resource.h>
 
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -38,13 +44,18 @@
 #include "codec_fixture.hpp"
 #include "codec_stream.hpp"
 #include "gpu_test.hpp"
+#include "networking_loopback.hpp"
 #include "scratch_dir.hpp"
 #include "volumetric_kit/core/base/file_io.hpp"
+#include "volumetric_kit/recon/networking/stream_client.hpp"
+#include "volumetric_kit/recon/networking/stream_server.hpp"
 #include "volumetric_kit/recon/stream/stream_reader.hpp"
 
 namespace codec = volumetric_kit::recon::codec;
 namespace eval = volumetric_kit::recon::eval;
+namespace networking = volumetric_kit::recon::networking;
 namespace stream = volumetric_kit::recon::stream;
+namespace net = vr_test::net;
 namespace fs = std::filesystem;
 using namespace codec_fixture;
 
@@ -566,6 +577,248 @@ int csv_fails(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
   return 0;
 }
 
+// Outputs serving on 127.0.0.1, a free port, besides the stream at
+// `stream_path`, if any.
+vr_example::CodecOutputs served_on_loopback(const fs::path& stream_path = {}) {
+  vr_example::CodecOutputs outputs;
+  outputs.stream = stream_path.string();
+  outputs.serve.emplace();
+  outputs.serve->host = "127.0.0.1";
+  outputs.serve->port = 0;
+  return outputs;
+}
+
+// A client of `coder`'s server that has its session, so it misses no frame
+// coded after; null, the reason on stderr, if it cannot.
+std::unique_ptr<networking::StreamClient> joined(
+    const vr_example::CodecStream& coder) {
+  if (coder.server() == nullptr) return nullptr;
+  std::unique_ptr<networking::StreamClient> client =
+      net::connect(coder.server()->port());
+  if (!client || !net::wait_session(*client)) return nullptr;
+  return client;
+}
+
+// At a period of 3, `source` coded at frames 0-6 but 3, `other`'s frame,
+// which the decoder refuses, with a client joined from the start and reading
+// each frame once it is coded: it gets every record of the file, the refused
+// frame's included, with the file's seq, key, pts, set, payload and offset,
+// under the file's session, then the end once the stream is finished, which
+// leaves the stream without a server.
+int serves(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
+           vol::VoxelBlockGrid& other, const vr_test::Scratch& scratch) {
+  const vr_example::CodecOutputs outputs =
+      served_on_loopback(scratch.path / "served.vrst");
+  codec::EncoderConfig config;
+  config.intra_period = 3;
+  vkc::Result<vr_example::CodecStream> made = vr_example::CodecStream::create(
+      gpu.device, gpu.allocator, config, outputs, "example_codec_stream");
+  CHECK(made.ok());
+  vr_example::CodecStream& coder = made.value();
+  CHECK(coder.server() != nullptr && coder.server()->port() != 0);
+  const std::uint16_t port = coder.server()->port();
+  const std::unique_ptr<networking::StreamClient> client = joined(coder);
+  CHECK(client != nullptr);
+  std::vector<net::Got> got;
+  for (std::size_t frame = 0; frame < 7; ++frame) {
+    const bool refused = frame == 3;
+    CHECK(coder.code(refused ? other : source, frame, pts(frame)).ok() !=
+          refused);
+    net::Got record;
+    CHECK(net::next_within(*client, &record));
+    got.push_back(std::move(record));
+  }
+  CHECK(coder.finish().ok());
+  CHECK(coder.server() == nullptr);
+  CHECK(net::wait_end(*client, port));
+
+  vkc::Result<std::unique_ptr<stream::StreamReader>> opened =
+      stream::StreamReader::open(outputs.stream);
+  CHECK(opened.ok());
+  const stream::StreamReader& reader = **opened;
+  CHECK(vr_test::vrst::same(*client->session(), reader.session()));
+  CHECK(reader.stats()[0].records == got.size());
+  stream::Position pos = reader.begin();
+  stream::Record record;
+  std::vector<std::uint8_t> payload;
+  for (std::size_t i = 0; i < got.size(); ++i) {
+    const vkc::Result<bool> more = reader.next(&pos, &record);
+    CHECK(more.ok() && *more);
+    CHECK(reader.read(record, &payload).ok());
+    const stream::Record& served = got[i].record;
+    CHECK(served.info.seq == i && served.info.set == i);
+    CHECK(served.info.pts_ns == pts(i));
+    CHECK(vr_test::vrst::same(served.info, record.info));
+    CHECK(served.offset == record.offset && got[i].payload == payload);
+  }
+  return 0;
+}
+
+// Serving alone, the stream codes its frames and serves each, a key at the
+// default period of 1, writing no file.
+int serves_alone(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
+                 const vr_test::Scratch& scratch) {
+  const fs::path quiet = scratch.path / "serving";
+  CHECK(fs::create_directory(quiet));
+  vkc::Result<vr_example::CodecStream> made = vr_example::CodecStream::create(
+      gpu.device, gpu.allocator, {}, served_on_loopback());
+  CHECK(made.ok());
+  vr_example::CodecStream& coder = made.value();
+  const std::unique_ptr<networking::StreamClient> client = joined(coder);
+  CHECK(client != nullptr);
+  const std::uint16_t port = coder.server()->port();
+  const fs::path before = fs::current_path();
+  fs::current_path(quiet);
+  vkc::Status coded[3];
+  net::Got got[3];
+  bool arrived[3] = {};
+  for (std::size_t frame = 0; frame < 3; ++frame) {
+    coded[frame] = coder.code(source, frame, pts(frame));
+    arrived[frame] = net::next_within(*client, &got[frame]);
+  }
+  const vkc::Status finished = coder.finish();
+  fs::current_path(before);
+  CHECK(finished.ok() && net::wait_end(*client, port));
+  CHECK(coder.rows().size() == 3);
+  for (std::size_t frame = 0; frame < 3; ++frame) {
+    CHECK(coded[frame].ok() && arrived[frame]);
+    const stream::RecordInfo& info = got[frame].record.info;
+    CHECK(info.seq == frame && info.set == frame && info.key);
+    CHECK(info.pts_ns == pts(frame));
+    CHECK(got[frame].payload.size() == coder.rows()[frame].bytes);
+  }
+  CHECK(fs::is_empty(quiet));
+  return 0;
+}
+
+// A port in use fails create with the server's IoError, naming it, before
+// the stream or the CSV is made.
+int port_in_use(vr_test::GpuContext& gpu, const vr_test::Scratch& scratch) {
+  const net::Listener taken = net::bind_loopback();
+  CHECK(taken.port != 0);
+  vr_example::CodecOutputs outputs =
+      served_on_loopback(scratch.path / "unserved.vrst");
+  outputs.csv = (scratch.path / "unserved.csv").string();
+  outputs.serve->port = taken.port;
+  vkc::Result<vr_example::CodecStream> made =
+      vr_example::CodecStream::create(gpu.device, gpu.allocator, {}, outputs);
+  CHECK(!made.ok() && made.status().domain() == vkc::Status::Code::IoError);
+  CHECK(made.status().message().find(":" + std::to_string(taken.port)) !=
+        std::string::npos);
+  CHECK(!fs::exists(outputs.stream) && !fs::exists(outputs.csv));
+  return 0;
+}
+
+// A client that leaves mid-run, after two frames, never fails a frame: the
+// rest are coded and recorded as before.
+int viewer_leaves(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
+                  const vr_test::Scratch& scratch) {
+  const vr_example::CodecOutputs outputs =
+      served_on_loopback(scratch.path / "left.vrst");
+  codec::EncoderConfig config;
+  config.intra_period = 3;
+  vkc::Result<vr_example::CodecStream> made = vr_example::CodecStream::create(
+      gpu.device, gpu.allocator, config, outputs);
+  CHECK(made.ok());
+  vr_example::CodecStream& coder = made.value();
+  std::unique_ptr<networking::StreamClient> client = joined(coder);
+  CHECK(client != nullptr);
+  for (std::size_t frame = 0; frame < 2; ++frame) {
+    CHECK(coder.code(source, frame, pts(frame)).ok());
+    net::Got got;
+    CHECK(net::next_within(*client, &got) && got.record.info.seq == frame);
+  }
+  client.reset();
+  for (std::size_t frame = 2; frame < 8; ++frame) {
+    CHECK(coder.code(source, frame, pts(frame)).ok());
+  }
+  CHECK(coder.finish().ok() && coder.rows().size() == 8);
+  vkc::Result<std::unique_ptr<stream::StreamReader>> opened =
+      stream::StreamReader::open(outputs.stream);
+  CHECK(opened.ok() && (*opened)->stats()[0].records == 8);
+  return 0;
+}
+
+// A frame the file refuses is never served: with the stream's file at its
+// size limit (SIGXFSZ ignored), frame 1's record cannot be appended, and the
+// client, which got frame 0, sees the end once the stream is finished, with
+// nothing between.
+int unrecorded_unserved(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
+                        const vr_test::Scratch& scratch) {
+  const vr_example::CodecOutputs outputs =
+      served_on_loopback(scratch.path / "full.vrst");
+  vkc::Result<vr_example::CodecStream> made =
+      vr_example::CodecStream::create(gpu.device, gpu.allocator, {}, outputs);
+  CHECK(made.ok());
+  vr_example::CodecStream& coder = made.value();
+  const std::unique_ptr<networking::StreamClient> client = joined(coder);
+  CHECK(client != nullptr);
+  const std::uint16_t port = coder.server()->port();
+  CHECK(coder.code(source, 0, pts(0)).ok());
+  net::Got first;
+  CHECK(net::next_within(*client, &first) && first.record.info.seq == 0);
+  // Only this process's limit and disposition change, for one frame, and
+  // nothing else is written meanwhile.
+  const std::uintmax_t size = fs::file_size(outputs.stream);
+  std::fflush(nullptr);
+  const auto handler = ::signal(SIGXFSZ, SIG_IGN);
+  CHECK(handler != SIG_ERR);
+  rlimit previous{};
+  CHECK(::getrlimit(RLIMIT_FSIZE, &previous) == 0);
+  const rlimit limited{static_cast<rlim_t>(size), previous.rlim_max};
+  CHECK(::setrlimit(RLIMIT_FSIZE, &limited) == 0);
+  const vkc::Status full = coder.code(source, 1, pts(1));
+  CHECK(::setrlimit(RLIMIT_FSIZE, &previous) == 0);
+  CHECK(::signal(SIGXFSZ, handler) != SIG_ERR);
+  CHECK(full.domain() == vkc::Status::Code::IoError);
+  // The writer's failure sticks, so its footer fails too; the viewers are
+  // closed all the same.
+  CHECK(!coder.finish().ok() && coder.server() == nullptr);
+  CHECK(net::wait_end(*client, port));
+  return 0;
+}
+
+// A record the server refuses fails no frame: with a key at seq 1000 already
+// published to the stream's server, each record after is out of order there,
+// yet every frame is coded and recorded, each refusal a Warning naming it.
+int refused_publish(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
+                    const vr_test::Scratch& scratch) {
+  const vr_example::CodecOutputs outputs =
+      served_on_loopback(scratch.path / "refused.vrst");
+  vkc::Result<vr_example::CodecStream> made =
+      vr_example::CodecStream::create(gpu.device, gpu.allocator, {}, outputs);
+  CHECK(made.ok());
+  vr_example::CodecStream& coder = made.value();
+  // server() hands the stream's own server out as const.
+  auto* const server = const_cast<networking::StreamServer*>(coder.server());
+  CHECK(server != nullptr);
+  const net::Bytes ahead = net::record_payload(1000, 4);
+  CHECK(
+      server->publish(net::record_info(1000, true), ahead.data(), ahead.size())
+          .ok());
+  const std::size_t before = gpu.log.warnings().size();
+  for (std::size_t frame = 0; frame < 3; ++frame) {
+    CHECK(coder.code(source, frame, pts(frame)).ok());
+  }
+  const std::vector<std::string> logged = gpu.log.warnings();
+  std::vector<std::string> warnings;  // the stream's since `before`
+  for (std::size_t i = before; i < logged.size(); ++i) {
+    if (logged[i].find("not served") != std::string::npos) {
+      warnings.push_back(logged[i]);
+    }
+  }
+  CHECK(warnings.size() == 3);
+  for (std::size_t frame = 0; frame < 3; ++frame) {
+    CHECK(warnings[frame].find("frame " + std::to_string(frame) +
+                               " not served") != std::string::npos);
+  }
+  CHECK(coder.finish().ok());
+  vkc::Result<std::unique_ptr<stream::StreamReader>> opened =
+      stream::StreamReader::open(outputs.stream);
+  CHECK(opened.ok() && (*opened)->stats()[0].records == 3);
+  return 0;
+}
+
 int gpu_main(vr_test::GpuContext& gpu) {
   const Sphere sphere{vr::Vec3f(0.01f, -0.02f, 0.03f), 0.09f};
   vkc::Result<vol::VoxelBlockGrid> source = sphere_grid(gpu, sphere);
@@ -603,6 +856,12 @@ int gpu_main(vr_test::GpuContext& gpu) {
   CHECK(periodic(gpu, *source, *other, scratch) == 0);
   CHECK(csv_fails(gpu, *source, scratch) == 0);
   CHECK(unfinished(gpu, *source, scratch) == 0);
+  CHECK(serves(gpu, *source, *other, scratch) == 0);
+  CHECK(serves_alone(gpu, *source, scratch) == 0);
+  CHECK(port_in_use(gpu, scratch) == 0);
+  CHECK(viewer_leaves(gpu, *source, scratch) == 0);
+  CHECK(unrecorded_unserved(gpu, *source, scratch) == 0);
+  CHECK(refused_publish(gpu, *source, scratch) == 0);
   std::puts("example_codec_stream: OK");
   return 0;
 }

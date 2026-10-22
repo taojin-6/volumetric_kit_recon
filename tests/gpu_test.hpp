@@ -38,19 +38,22 @@ namespace vr_test {
 namespace vr = volumetric_kit::recon;
 namespace vkc = volumetric_kit::core;
 
-// A Gpu, with the instance and the physical device its device was made on.
+// A Gpu, with the instance and the physical device its device was made on, and
+// the run's log capture: a test reads the warnings it keeps rather than
+// installing a handler, which would end the capture.
 struct GpuContext : Gpu {
   vkc::Instance& instance;
   const vkc::PhysicalDeviceInfo& physical;
+  const vkc::test::LogCapture& log;
 };
 
 namespace detail {
 
 // Makes the context and runs `test` on it. Everything made here is destroyed
-// before this returns, while the caller's log capture still counts what the
-// validation layer reports, a leaked object included.
+// before this returns, while `log` still counts what the validation layer
+// reports, a leaked object included.
 template <typename Test>
-int run_on_gpu(Test& test) {
+int run_on_gpu(Test& test, const vkc::test::LogCapture& log) {
   vkc::Result<vkc::Instance> instance =
       vkc::Instance::create(vkc::test::instance_config());
   if (!instance) {
@@ -90,7 +93,7 @@ int run_on_gpu(Test& test) {
                  allocator.status().message().c_str());
     return 1;
   }
-  GpuContext gpu{{*device, *allocator}, *instance, *physical};
+  GpuContext gpu{{*device, *allocator}, *instance, *physical, log};
   return test(gpu);
 }
 
@@ -106,7 +109,7 @@ template <typename Test>
 int run_on_gpu(Test&& test, vkc::test::LogCapture::ErrorHandler on_error = {}) {
   const vkc::test::ValidationSession validation;
   const vkc::test::LogCapture log(std::move(on_error));
-  return log.exit_code(detail::run_on_gpu(test));
+  return log.exit_code(detail::run_on_gpu(test, log));
 }
 
 // What a decoder test returns when the decoders have no device path here (no

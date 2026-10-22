@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "operation": "fuse",
+  "source": {
+    "kind": "live",
+    "sync_config": "../femto_mega_sync.json"
+  },
+  "run": {
+    "frames": 216000
+  },
+  "fusion": {
+    "voxel_size_m": 0.01
+  },
+  "codec": {
+    "intra_period": 30
+  },
+  "output": {
+    "path": "results/rig_end.ply",
+    "stream": "results/rig.vrst",
+    "serve": 47801
+  }
+}

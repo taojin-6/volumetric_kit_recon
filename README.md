@@ -95,8 +95,8 @@ fails saying why, and an installed recon is not found. A core older than
 stops at that call as an unknown command: move the first-declared pin to 0.2.0
 or newer.
 
-Examples and tests require core 0.15.0 or newer with its config tier, for
-`fuse_orbbec`'s Dynamic default; the pinned core supplies it.
+Examples and tests require core 0.16.0 or newer with its config tier, for
+`fuse_orbbec`'s `output.serve`; the pinned core supplies it.
 
 ### Asset I/O
 
@@ -163,13 +163,16 @@ build/examples/fuse_orbbec/fuse_orbbec --config config/examples/fuse_orbbec.json
 build/examples/fuse_orbbec/fuse_orbbec --config config/examples/stream_orbbec.json
 # Each fused set coded as one frame of a .vrst:
 build/examples/fuse_orbbec/fuse_orbbec --config config/examples/codec_orbbec.json
+# The same, also served live:
+build/examples/fuse_orbbec/fuse_orbbec --config config/examples/serve_orbbec.json
 ```
 
-With `output.stream` or `output.csv`, the example codes each fused set as
-one frame, as the [codec examples](#codec-evaluation) do, at the set's time
-(for a rig, on the host's clock); `output.stream` records the frames in a
-`.vrst`. They are geometry only, in the world
-`source.calibration` defines.
+With `output.stream`, `output.csv` or `output.serve`
+([Live streaming](#live-streaming)), the example codes each fused set as one
+frame, as the [codec examples](#codec-evaluation) do, at the set's time (for
+a rig, on the host's clock); `output.stream` records the frames in a `.vrst`.
+They are geometry only, in the world `source.calibration` defines. Ctrl+C
+ends a run cleanly ([Examples](DESIGN.md#examples)).
 
 Edit `source.serial` for a single camera, or `source.sync_config` for a synced
 rig. A camera wired as a secondary streams only while its primary does; choose
@@ -276,7 +279,8 @@ versions are refused. See [the codec contract](DESIGN.md#codec) and
 `volumetric_kit::recon_networking` serves a session to viewers over TCP as
 it is recorded (`networking/stream_server.hpp`) and reads it as it arrives
 (`networking/stream_client.hpp`), byte for byte the `.vrst` file's chunks;
-see [the networking contract](DESIGN.md#networking). `serve_stream` serves a
+see [the networking contract](DESIGN.md#networking). `fuse_orbbec` serves
+the rig's coded frames with `output.serve`. `serve_stream` serves a
 recording live, paced by its pts and looping until Ctrl+C, with no camera or
 GPU; a viewer connects to the sender's `host:port`:
 
@@ -285,7 +289,7 @@ GPU; a viewer connects to the sender's `host:port`:
 "$recon_root/build/examples/serve_stream/serve_stream" rafa2.vrst --port 0
 ```
 
-It listens on every interface, with no authentication or encryption: any
+Both listen on every interface, with no authentication or encryption: any
 host that reaches the port can watch, and the first four to connect keep
 their slots while they stay (`max_viewers`).
 
