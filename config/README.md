@@ -75,8 +75,9 @@ P-frames' update segments, so core refuses it, even as 0, at a
 `fuse_orbbec` codes each fused set as one frame when `output.stream` or
 `output.csv` names a file or `output.serve` a port, with the codec examples'
 `codec` keys other than `encode_every` and `inspect_only`; it still writes
-the PLY at `output.path`. `output.serve` serves the frames live on that port,
-on every interface, as they are recorded; 0, the default, serves nothing.
+the PLY at `output.path`. `output.serve` serves the frames on that port as
+they are recorded ([Live streaming](../README.md#live-streaming)); 0, the
+default, serves nothing.
 Like `rig_viewer`, it fuses Dynamic by default, clearing a surface the
 cameras see past, so the frames and the PLY follow a changing scene, and it
 frees stale blocks every `fusion.free_after` sets (default 30).

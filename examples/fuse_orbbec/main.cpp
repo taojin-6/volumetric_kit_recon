@@ -47,7 +47,7 @@
 // returns with nothing recorded: the empty stream is removed and the cameras
 // are released. After, it ends after the set in hand, as run.frames would:
 // the stream is finished and its viewers closed, the cameras are released
-// and the PLY is written. A second one ends the process.
+// and the PLY is written. A second signal of the same kind ends the process.
 
 #include <chrono>
 #include <cstddef>

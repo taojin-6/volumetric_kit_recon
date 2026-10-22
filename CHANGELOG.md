@@ -214,8 +214,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   prints the port, and Ctrl+C or SIGTERM ends its run cleanly, through
   `examples/common/interrupt.hpp` (`rig_viewer`'s handler, moved): during
   the setup, with nothing recorded and the empty stream removed; once the
-  cameras stream, after the set in hand, as `run.frames` would. A second one
-  ends the process. New template: `config/examples/serve_orbbec.json`.
+  cameras stream, after the set in hand, as `run.frames` would. A second
+  signal of the same kind ends the process. New template:
+  `config/examples/serve_orbbec.json`.
   Tests: `recon_example_codec_stream`, `recon_example_config`,
   `recon_example_interrupt`.
 - `networking`: **a session served and read live over TCP**
@@ -232,7 +233,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `StreamClient: <host>:<port>: <reason>`. `examples/serve_stream` serves a
   `.vrst` live, paced by its pts and looping
   (`examples/common/stream_replay.hpp`). CI runs the stream and networking
-  tests under ThreadSanitizer on the Mac Debug leg. Tests: `recon_networking_gop_log`, `recon_networking_socket`,
+  tests under ThreadSanitizer on the Mac Debug leg. Tests:
+  `recon_networking_gop_log`, `recon_networking_socket`,
   `recon_networking_server`, `recon_networking_client`,
   `recon_networking_stress`, `recon_example_stream_replay`,
   `recon_serve_stream_args`.
