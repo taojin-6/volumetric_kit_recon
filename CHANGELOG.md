@@ -9,71 +9,54 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - `volume`: **`allocate_from_triangles` asks for each block once a
-  workgroup**, where every work item naming a block probed, locked and
-  stamped it, a few hundred a block at scan density. It allocates the same
-  blocks; Rafa2's allocation at 5 mm takes under half its device time in the
-  8-voxel band, and a sixth to a third less in the 16-voxel one (PERF.md
-  MESH3). Test: `recon_volume_allocate_triangles`.
-- `volume`: **`VoxelBlockGrid::remove` zeroes in the map's own submit**,
-  through `VoxelHashMap::remove`'s new optional `first_round` hook, so a
-  removal -- a decode that drops blocks, a garbage collection -- waits on
-  one fence fewer. On Rafa2 at 5 mm (3,426 blocks a frame; M5 Max,
-  Release, back to back, the median of 20 passes) a decode's `..apply`
-  takes 0.48 ms of host time a frame, from 0.62. `VoxelHashMap::remove`
-  also keeps its per-coord done flags between calls rather than allocating
-  them each time. Tests: `recon_volume_delete`, `recon_volume_block_grid`,
+  workgroup**, not once per work item naming it, and allocates the same
+  blocks in under half the device time on Rafa2's 8-voxel band at 5 mm
+  (PERF.md MESH3). Test: `recon_volume_allocate_triangles`.
+- `volume`: **`VoxelBlockGrid::remove` zeroes in the map's own submit**
+  (`VoxelHashMap::remove`'s new `first_round`), one fence wait fewer for a
+  decode that drops blocks or a garbage collection. Tests:
+  `recon_volume_delete`, `recon_volume_block_grid`,
   `recon_volume_block_stamps`.
-- `tsdf`: **`TsdfIntegrator::integrate` is one submit**: the compaction's
-  count stays on the device and sizes the fuse's dispatch
-  (`dispatch_indirect`), one fence wait fewer a call, and the voxels are
-  unchanged. The `"  ..active set"` row carries the compaction's device half
-  alone. New: `VoxelHashMap::record_compaction`, a compaction recorded into
-  a caller's batch, and `VoxelHashMap::allocated_blocks`. Tests:
-  `recon_tsdf_integrate_cull`, `recon_tier_stage_metrics`,
+- `tsdf`: **`TsdfIntegrator::integrate` is one submit**, the compaction's
+  count sizing the fuse on the device: one fence wait fewer, the same
+  voxels. The `"  ..active set"` row now times the compaction's device half
+  alone. New: `VoxelHashMap::record_compaction` and `allocated_blocks`.
+  Tests: `recon_tsdf_integrate_cull`, `recon_tier_stage_metrics`,
   `recon_volume_block_grid`.
 - `tsdf`: **a live set is one submit**: once its grid holds a block, a
   `Fuser` with `allow_partial` allocates, compacts and fuses a set in one
-  batch (`TsdfIntegrator::allocate_and_integrate`), one fence wait a set
-  where it took three. That one allocation round leaves its lock races to
-  the next set, and a grow for a capacity limit is made after the set, so
-  what it could not allocate lands with the next. Strict fusion is
-  unchanged (the 2026-10-10 decision, amended). New: the frame-list
-  `VoxelHashMap::allocate_from_depth` takes a `then`, a caller's work
-  recorded into its one round's batch. Tests: `recon_tsdf_fuser`.
-- `codec`: **a decode writes only the voxels whose bits it changes**, so a
-  block a P-frame repeats costs the inverse its reads alone; grids and
-  stamps end as before, bit for bit. On room0 at 1 cm (21,771 blocks a
-  frame; M5 Max, Release, back to back, the median of 20 passes)
-  `..inverse` takes 0.51 ms of host time a frame, from 0.65, and the
-  decode's device time is 0.99 ms, from 1.12. Tests: `recon_codec_dct`.
-- `sensor`: **NVDEC's H.265 decoders share the GPU's primary CUDA context**,
-  each on a stream of its own as nvJPEG's decoder is, where FFmpeg made a
-  context per decoder. Four 4K decoders on an RTX 5090 hold 1.3 GiB of
-  device memory while decoding, not 2.8 GiB (nvidia-smi). Tests:
-  `recon_sensor_video_hevc`.
+  batch (`TsdfIntegrator::allocate_and_integrate`; `allocate_from_depth`'s
+  new `then`), one fence wait a set where it took three. What its one
+  allocation round leaves out, and a grow for a capacity limit, land a set
+  late; strict fusion is unchanged (the 2026-10-10 decision, amended).
+  Tests: `recon_tsdf_fuser`.
+- `codec`: **a decode writes only the voxels whose bits it changes**, to
+  the same grids and stamps: room0's decode at 1 cm takes 0.99 ms of device
+  time a frame, from 1.12. Tests: `recon_codec_dct`.
+- `sensor`: **NVDEC's H.265 decoders share the GPU's primary CUDA
+  context**, a stream each, where FFmpeg made a context per decoder: four
+  4K decoders on an RTX 5090 hold 1.3 GiB of device memory while decoding,
+  not 2.8 GiB. Tests: `recon_sensor_video_hevc`.
 - `networking`: **a `StreamClient` receives through 2 MiB**, not 256 KiB,
   which held a stream to about 12 MB/s over the VPN, under the rig's
-  9.4 MB/s at 1 cm (the 2026-10-21 networking decision). Linux holds it to
-  `net.core.rmem_max`. Tests: `recon_networking_socket`.
-- `eval`: **`ReferenceMesh::compare` measures on every core**, with the
-  figures one thread gives: about 6 times faster on a room-sized mesh (the
-  2026-09-27 eval decision). Tests: `recon_eval_mesh_distance`.
+  9.4 MB/s at 1 cm; Linux caps it at `net.core.rmem_max`. Tests:
+  `recon_networking_socket`.
+- `eval`: **`ReferenceMesh::compare` measures on every core**, with one
+  thread's figures, about 6 times faster on a room-sized mesh. Tests:
+  `recon_eval_mesh_distance`.
 - `examples`: **`fuse_orbbec`'s stream decodes only with `output.csv` or
-  `codec.sweep`** (`set_codec_outputs`): a run that only records or serves
-  no longer decodes every set again into a second grid nothing reads.
-  `CodecOutputs::decode`, on by default, turns the decode off; a row then
-  has empty decode columns (`CodecRow::decode_ms` is optional), and
-  `CodecStream::player()` returns a pointer, null with no decoded frame.
-  Tests: `recon_example_codec_stream`, `recon_example_set_codec`.
+  `codec.sweep`**, so recording or serving alone no longer decodes every
+  set into a second grid. `CodecOutputs::decode`, on by default, says
+  whether to decode; off, a row's decode columns are empty
+  (`CodecRow::decode_ms` is optional) and `CodecStream::player()`, now a
+  pointer, is null. Tests: `recon_example_codec_stream`,
+  `recon_example_set_codec`.
 - `examples`: **`CodecStream::create` makes its outputs before the codec's
-  kernels**, so a port in use, a stream already at its path or a CSV that
-  cannot be written is refused without building them; a codec error then
-  removes the stream and CSV files it made. Test:
-  `recon_example_codec_stream`.
-- `examples`: **`fuse_replica` re-meshes on the device**, as a live consumer
-  does, and reads a mesh back only for the final PLY, so its timed loop no
-  longer downloads every `fusion.mesh_every` frames; `fusion.device_extract`
-  no longer changes it. Tests: `recon_fuse_replica_run`.
+  kernels**, so a refused output builds none, and a codec error removes the
+  stream and CSV files it made. Test: `recon_example_codec_stream`.
+- `examples`: **`fuse_replica` re-meshes on the device** and reads a mesh
+  back only for the final PLY; `fusion.device_extract` no longer changes
+  it. Tests: `recon_fuse_replica_run`.
 - `codec`: **`make_decode_grid` and `decode_growing` take a block ceiling**
   (BREAKING), so a forged header or frame from a file or a socket can no
   longer make a player's grid gigabytes large. A frame past `max_blocks`,
