@@ -24,7 +24,9 @@
 // and offset, and the end once finished, a frame the file refuses never
 // served, serving alone writing no file, a port in use refused before any
 // file is made, and neither a client that leaves nor a record the server
-// refuses failing a frame. The device part skips with no device.
+// refuses failing a frame. Without the decode, the same file and records,
+// rows with no decode columns, and no player grid. The device part skips
+// with no device.
 
 #include <signal.h>
 #include <sys/resource.h>
@@ -81,11 +83,16 @@ int row_times() {
   decode.add_cpu("codec decode", 2.0);
   decode.add_cpu("  ..rans decode", 1.5);
   const vr_example::CodecRow row = vr_example::make_codec_row(
-      7, codec::FrameType::kInter, 4096, 12, encode, decode);
+      7, codec::FrameType::kInter, 4096, 12, encode, &decode);
   CHECK(row.frame == 7 && row.type == codec::FrameType::kInter);
   CHECK(row.bytes == 4096 && row.blocks == 12);
   CHECK(row.encode_ms == 3.0 && row.encode_device_ms == 1.25);
   CHECK(row.decode_ms == 2.0 && !row.decode_device_ms);
+  // A frame not decoded has no decode columns.
+  const vr_example::CodecRow encoded = vr_example::make_codec_row(
+      7, codec::FrameType::kInter, 4096, 12, encode, nullptr);
+  CHECK(encoded.encode_ms == 3.0 && encoded.encode_device_ms == 1.25);
+  CHECK(!encoded.decode_ms && !encoded.decode_device_ms);
   // The sweep's device columns count the same way.
   CHECK(vr_example::device_ms(encode) == 1.25 &&
         !vr_example::device_ms(decode));
@@ -93,14 +100,15 @@ int row_times() {
 }
 
 int csv_lines() {
-  // The header, then a line per row, its type I or P and an unset device
-  // column empty.
+  // The header, then a line per row, its type I or P and an unset column
+  // empty: a device column, or both decode columns of a frame not decoded.
   constexpr codec::FrameType I = codec::FrameType::kIntra;
   constexpr codec::FrameType P = codec::FrameType::kInter;
   const vr_example::CodecRow rows[] = {
       {3, I, 1000, 10, 1.5, 0.5, 2.0, std::nullopt},
       {7, P, 3000, 30, 2.5, std::nullopt, 1.0, std::nullopt},
-      {11, P, 2000, 20, 0.25, 0.75, 3.0, std::nullopt}};
+      {11, P, 2000, 20, 0.25, 0.75, 3.0, std::nullopt},
+      {13, P, 500, 5, 0.5, 0.25, std::nullopt, std::nullopt}};
   std::string text = vr_example::kCodecRowsCsvHeader;
   for (const vr_example::CodecRow& row : rows) {
     text += vr_example::codec_row_csv(row);
@@ -110,7 +118,8 @@ int csv_lines() {
         "decode_host_ms,decode_device_ms\n"
         "3,I,1000,10,1.500,0.500,2.000,\n"
         "7,P,3000,30,2.500,,1.000,\n"
-        "11,P,2000,20,0.250,0.750,3.000,\n");
+        "11,P,2000,20,0.250,0.750,3.000,\n"
+        "13,P,500,5,0.500,0.250,,\n");
   return 0;
 }
 
@@ -328,16 +337,16 @@ int code_frames(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
   CHECK(started.size() == 1 &&
         started[0] + "\n" == vr_example::kCodecRowsCsvHeader);
   CHECK(fs::is_regular_file(outputs.stream));
-  CHECK(coder.coded() == 0);
+  CHECK(coder.coded() == 0 && coder.player() == nullptr);
 
   CHECK(coder.code(source, 3, pts(3)).ok());
   CHECK(coder.code(source, 7, pts(7)).ok());
   const std::vector<vr_example::CodecRow>& rows = coder.rows();
   CHECK(rows.size() == 2 && rows[0].frame == 3 && rows[1].frame == 7);
-  CHECK(coder.coded() == 2);
+  CHECK(coder.coded() == 2 && coder.player() != nullptr);
   for (const vr_example::CodecRow& row : rows) {
     CHECK(row.bytes > 0 && row.blocks > 0);
-    CHECK(row.encode_ms > 0.0 && row.decode_ms > 0.0);
+    CHECK(row.encode_ms > 0.0 && row.decode_ms && *row.decode_ms > 0.0);
     CHECK(!row.encode_device_ms || *row.encode_device_ms >= 0.0);
     CHECK(!row.decode_device_ms || *row.decode_device_ms >= 0.0);
   }
@@ -517,7 +526,7 @@ int periodic(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
     for (const vr_example::CodecRow& row : rows) {
       if (row.type != type) continue;
       encode += row.encode_ms;
-      decode += row.decode_ms;
+      decode += row.decode_ms.value_or(0.0);
     }
     CHECK(encode > 0.0 && decode > 0.0);
     CHECK(near(coder.encode_stages(type).total_cpu_ms(), encode));
@@ -836,6 +845,59 @@ int refused_publish(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
   return 0;
 }
 
+// At a period of 3, `source` coded at frames 0-4, served, recorded and
+// listed, with the decode and without. Without, the frames are coded, served
+// and recorded as with it, the .vrst byte for byte the same; each row has its
+// frame's type and encode and no decode, as its CSV line has, and no player
+// grid is made.
+int decode_off(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
+               const vr_test::Scratch& scratch) {
+  constexpr codec::FrameType I = codec::FrameType::kIntra;
+  constexpr codec::FrameType P = codec::FrameType::kInter;
+  const codec::FrameType types[] = {I, P, P, I, P};
+  codec::EncoderConfig config;
+  config.intra_period = 3;
+  std::vector<std::uint8_t> recorded[2];  // without the decode, then with
+  for (const bool decode : {false, true}) {
+    const std::string name = decode ? "decoded" : "undecoded";
+    vr_example::CodecOutputs outputs =
+        served_on_loopback(scratch.path / (name + ".vrst"));
+    outputs.csv = (scratch.path / (name + ".csv")).string();
+    outputs.decode = decode;
+    vkc::Result<vr_example::CodecStream> made = vr_example::CodecStream::create(
+        gpu.device, gpu.allocator, config, outputs, "example_codec_stream");
+    CHECK(made.ok());
+    vr_example::CodecStream& coder = made.value();
+    const std::unique_ptr<networking::StreamClient> client = joined(coder);
+    CHECK(client != nullptr);
+    for (std::size_t frame = 0; frame < std::size(types); ++frame) {
+      CHECK(coder.code(source, frame, pts(frame)).ok());
+      net::Got got;
+      CHECK(net::next_within(*client, &got) && got.record.info.seq == frame);
+    }
+    CHECK(coder.finish().ok());
+    CHECK((coder.player() != nullptr) == decode);
+    const std::vector<vr_example::CodecRow>& rows = coder.rows();
+    const std::vector<std::string> lines = lines_of(outputs.csv);
+    CHECK(rows.size() == std::size(types) && lines.size() == rows.size() + 1);
+    for (std::size_t i = 0; i < rows.size(); ++i) {
+      CHECK(rows[i].frame == i && rows[i].type == types[i]);
+      CHECK(rows[i].bytes > 0 && rows[i].encode_ms > 0.0);
+      CHECK(rows[i].decode_ms.has_value() == decode);
+      CHECK(decode || !rows[i].decode_device_ms);
+      CHECK(lines[i + 1] + "\n" == vr_example::codec_row_csv(rows[i]));
+    }
+    for (const codec::FrameType type : {I, P}) {
+      CHECK(!coder.encode_stages(type).rows().empty());
+      CHECK(coder.decode_stages(type).rows().empty() != decode);
+    }
+    coder.report(kFps, 1);
+    recorded[decode ? 1 : 0] = vr_test::read_bytes(outputs.stream);
+  }
+  CHECK(!recorded[0].empty() && recorded[0] == recorded[1]);
+  return 0;
+}
+
 int gpu_main(vr_test::GpuContext& gpu) {
   const Sphere sphere{vr::Vec3f(0.01f, -0.02f, 0.03f), 0.09f};
   vkc::Result<vol::VoxelBlockGrid> source = sphere_grid(gpu, sphere);
@@ -879,6 +941,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
   CHECK(viewer_leaves(gpu, *source, scratch) == 0);
   CHECK(unrecorded_unserved(gpu, *source, scratch) == 0);
   CHECK(refused_publish(gpu, *source, scratch) == 0);
+  CHECK(decode_off(gpu, *source, scratch) == 0);
   std::puts("example_codec_stream: OK");
   return 0;
 }

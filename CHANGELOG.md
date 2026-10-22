@@ -23,6 +23,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `fuse_viewer` and `fuse_render` start a 5 mm grid at 65,536 buckets, where
   its first set fits, rather than growing through a full table. Test:
   `recon_example_fuse_keyframe`.
+- `examples`: **`fuse_orbbec`'s stream decodes only with `output.csv` or
+  `codec.sweep`** (`set_codec_outputs`): a run that only records or serves
+  no longer decodes every set again into a second grid nothing reads.
+  `CodecOutputs::decode`, on by default, turns the decode off; a row then
+  has empty decode columns (`CodecRow::decode_ms` is optional), and
+  `CodecStream::player()` returns a pointer, null with no decoded frame.
+  Tests: `recon_example_codec_stream`, `recon_example_set_codec`.
 - `examples`: **`CodecStream::create` makes its outputs before the codec's
   kernels**, so a port in use, a stream already at its path or a CSV that
   cannot be written is refused without building them. Test:

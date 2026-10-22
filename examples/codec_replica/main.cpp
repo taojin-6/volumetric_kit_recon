@@ -123,7 +123,8 @@ vkc::Status run(const Options& opt) {
 
   // The last frame's decoded surface against the source's.
   VKC_ASSIGN(const mesh::Mesh source, extractor.extract_host(volume));
-  VKC_ASSIGN(const mesh::Mesh decoded, extractor.extract_host(stream.player()));
+  VKC_ASSIGN(const mesh::Mesh decoded,
+             extractor.extract_host(*stream.player()));
   // Written first, so a comparison that refuses a mesh still leaves the
   // meshes to look at.
   if (!opt.output.prefix.empty()) {
@@ -142,7 +143,7 @@ vkc::Status run(const Options& opt) {
 
   if (opt.codec.sweep) {
     VKC_TRY(vr_example::run_codec_sweep(device, allocator, volume, reference,
-                                        extractor, config, stream.player()));
+                                        extractor, config, *stream.player()));
   }
   return {};
 }

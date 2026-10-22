@@ -1914,12 +1914,14 @@ a rig, each secondary's mean and worst skew to the primary. Colour is H.265
 unless `source.color_codec: "mjpeg"`.
 With `output.stream`, `output.csv` or `output.serve` it also codes each
 fused set as one frame through the codec examples' `CodecStream` (the
-2026-10-20 decision). `main.cpp` opens the stream before the cameras and
+2026-10-20 decision), decoding it too only with `output.csv` or
+`codec.sweep` (`set_codec_outputs`), for their decode columns and the
+sweep's grid. `main.cpp` opens the stream before the cameras and
 refuses there a port in use and a PLY that is the stream's or the CSV's file
 under another name. A record's set is the set's index in the run
 and its pts the set's time; a set stamped before the last frame, as a clock
 stepping back stamps it, takes that frame's time. A run that fails part-way
-still finishes its stream and reports the frames it decoded; one that coded
+still finishes its stream and reports the frames it coded; one that coded
 no set leaves none.
 The report's bitrate is at `source.fps`, and `codec.sweep` sweeps the last
 grid. A Ctrl+C or SIGTERM (`interrupt.hpp`, `rig_viewer`'s handler too,
@@ -1968,8 +1970,10 @@ and the sweep are `examples/common/codec_stream.hpp` and `codec_sweep.hpp`.
 The stream keeps a row per decoded frame (source index, frame type, bytes,
 blocks, and encode and decode host and device ms) and writes
 `CodecOutputs`, from `output.csv`, `output.stream` and `output.serve`, as it
-codes. The CSV gets each row once its frame decodes; the core cannot append,
-so the file is the stream's own. The
+codes. `CodecOutputs::decode`, on by default, decodes each frame into the
+player grid; off, each recorded frame has a row with empty decode columns,
+and no decoder or player grid is made. The CSV gets each row once it is
+kept; the core cannot append, so the file is the stream's own. The
 `.vrst` (`recon_stream`) gets every frame the encoder returns, before it is
 decoded, so a frame the decoder refuses is kept: one Geometry track, at the
 source's nominal rate (the rig's `source.fps`, else 30 a second), and per
@@ -2115,9 +2119,12 @@ entry).
 **On `fuse_orbbec`'s stream** (the 2026-10-20 entry): a capture-volume
 crop (`fusion.max_depth_m` is the limit there is), raw RGBD recording and
 replay, colour, an upright world, and the session's host clock and
-calibration, which `CodecStream` does not record. Two costs are unmeasured
-on the rig: the stream decodes every frame again into its player grid, and
-a loop slower than the rig gets the newest set, so sets drop.
+calibration, which `CodecStream` does not record. With `output.csv` or
+`codec.sweep` the stream still decodes each frame inside the set loop: on
+the lab rig (4 Femtos, RTX 4090, Release; 1 cm, Dynamic, period 30; 303
+sets) a P-frame's decode took 2.70 ms host and 2.14 ms device, 37% and 38%
+of the set's fusion and coding, and 6.49 / 4.38 ms at 5 mm. A loop slower
+than the rig gets the newest set, so sets drop; that cost is unmeasured.
 
 **On `tsdf`**, mesh → TSDF has its two modes (2026-09-27), a second way into
 the grid the codec encodes: a mesh sequence converts frame by frame. Both modes

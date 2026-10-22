@@ -23,7 +23,8 @@
 // free_after of 0 frees nothing. The grid holds the same near blocks with a
 // stream and without. On the host, a path that is the stream's or the CSV's
 // file through a link refused, one beside them taken, and one that cannot be
-// checked refused. The device part skips with no device.
+// checked refused; and the stream decoding only with a CSV or a sweep. The
+// device part skips with no device.
 
 #include <algorithm>
 #include <array>
@@ -437,9 +438,29 @@ int apart() {
   return 0;
 }
 
+// set_codec_outputs: codec_outputs' paths and port, decoding only with
+// output.csv or codec.sweep, not for a recording or a server alone.
+int decodes() {
+  cfg::Config opt;
+  opt.output.stream = "rig.vrst";
+  opt.output.serve = 47801;
+  const vr_example::CodecOutputs live = vr_example::set_codec_outputs(opt);
+  CHECK(!live.decode && live.stream == "rig.vrst" && live.csv.empty());
+  CHECK(live.serve && live.serve->port == 47801);
+  cfg::Config listed = opt;
+  listed.output.csv = "rig.csv";
+  const vr_example::CodecOutputs rows = vr_example::set_codec_outputs(listed);
+  CHECK(rows.decode && rows.csv == "rig.csv");
+  cfg::Config swept = opt;
+  swept.codec.sweep = true;
+  CHECK(vr_example::set_codec_outputs(swept).decode);
+  return 0;
+}
+
 }  // namespace
 
 int main() {
   CHECK(apart() == 0);
+  CHECK(decodes() == 0);
   return vr_test::run_on_gpu(gpu_main);
 }
