@@ -911,6 +911,10 @@ shared device is the precondition seam B needs, not seam B itself.
 *Amended 2026-08-08 (below):* `fuse_viewer` now draws recon's buffers
 directly — seam B — so the precondition has been collected on.
 `fuse_render` deliberately stays two-device seam A.
+*Amended 2026-10-22:* the leg is no longer build-only. It runs the viewers'
+headless tests, which need no window or dataset: `recon_example_viewer_atlas`
+on a headless device, `recon_example_viewer_device`, and each viewer's
+config entry, on the core's test policy with validation.
 
 ### 2026-07-07 — Projective texturing is a new `texture` tier; live single-camera first.
 

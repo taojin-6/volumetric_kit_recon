@@ -13,7 +13,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   had started last. A test under `tests/` that hangs fails after 300 s.
   The Mac's ThreadSanitizer step runs the tests whose code runs threads,
   the Orbbec decode workers' among them (`recon_tsan_tests`), and no longer
-  the single-threaded stream tests.
+  the single-threaded stream tests. The viewer leg runs the viewers'
+  headless tests, which no leg ran: `recon_example_viewer_atlas`,
+  `recon_example_viewer_device` and the three viewers' config entries.
 - `tsdf`: **`MeshIntegrator` measures a voxel against only the triangles no
   lower bound rules out**, a workgroup per block, and writes the same bytes:
   a triangle is ruled out only when strictly farther than the voxel's best,
