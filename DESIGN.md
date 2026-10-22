@@ -1504,7 +1504,12 @@ decoder never grows one. Beside it, as `tsdf::Fuser` grows for fusion,
 `decode_grid.hpp` holds a player's growth: `make_decode_grid` builds a
 grid from a frame's header, its heap twice the frame's blocks, and
 `decode_growing` decodes into it, growing it once on `OutOfMemory` and
-decoding again twice at most on `IoError`. The factory contains host allocation
+decoding again twice at most on `IoError`. Both take the caller's ceiling,
+`max_blocks`: a frame past it is refused before it is decoded, and a grow
+past `make_decode_grid`'s grid for it before it is made, each as
+`InvalidArgument`; the factory checks the header's block count against the
+segment table as the decoder does. The examples pass the source grid's
+slots. The factory contains host allocation
 failures from header parsing through grid creation. The growing decode merges
 only its successful attempt's metrics; if that merge runs out of host memory,
 the caller's prior metrics stay unchanged and the decode still succeeds, since
@@ -1966,7 +1971,8 @@ blocks, and encode and decode host and device ms) and writes
 codes. The CSV gets each row once its frame decodes; the core cannot append,
 so the file is the stream's own. The
 `.vrst` (`recon_stream`) gets every frame the encoder returns, before it is
-decoded, so a frame the decoder refuses is kept: one Geometry track, and per
+decoded, so a frame the decoder refuses is kept: one Geometry track, at the
+source's nominal rate (the rig's `source.fps`, else 30 a second), and per
 frame a record, a key exactly when it holds an I-frame, whose set is the
 source index and whose pts is that index at 30 fps, as Replica frames carry
 no time. It has no session id or start time, so a rerun writes the same
@@ -2035,9 +2041,12 @@ track's records from its first key read whole, each due at its pts from its
 pass's start, in a loop until Ctrl+C (`ReplayLoop`, `stream_replay.hpp`).
 Each pass is restamped, seq past the passes before and pts a pass's span (the
 records' pts span and one mean step) later, so seq keeps rising and key pts
-never go back, as `publish` requires. It listens on every interface, on 47801
-or N (0 takes a free one, which it prints). Bad arguments exit 2 with the
-usage; a failure, a missing file included, exits 1.
+never go back, as `publish` requires. A record whose payload fails its CRC
+is skipped with the P-frames after it, up to the pass's next key, and
+printed in the first pass. It listens on every interface, on 47801 or N (0
+takes a free one, which it prints). Bad arguments exit 2 with the usage; a
+failure, a missing file or no key whose payload reads whole included,
+exits 1.
 
 ## Next work
 

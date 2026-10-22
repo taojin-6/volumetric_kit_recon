@@ -1157,35 +1157,23 @@ int run(GLFWwindow* window, const Options& opt) {
       ImGui::End();
     }
 
-    vg::RenderTargetBeginInfo begin_info;
-    begin_info.clear_color.float32[0] = 0.05f;
-    begin_info.clear_color.float32[1] = 0.05f;
-    begin_info.clear_color.float32[2] = 0.07f;
-    begin_info.clear_color.float32[3] = 1.0f;
-    render_frame.target->begin(render_frame.cmd, begin_info);
-    {
-      vg::Profiler::Scope draw_scope =
-          profiler.gpu_scope(render_frame.cmd, "mesh draw");
-      if (live_view.valid() && !live_view.empty()) {
-        // recon's buffers, named rather than copied, as in fuse_viewer.
-        const vgp::HybridMeshDraw draw{fuse_viewer::to_live_mesh(live_view)};
-        vgp::HybridMeshFrame hybrid_frame;
-        hybrid_frame.extent = extent;
-        hybrid_frame.view_proj = view_proj;
-        hybrid_frame.light_dir = -view.up + 0.5f * view.right - view.forward;
-        hybrid_frame.flags = shading_flags(shading);
-        hybrid_frame.atlas = atlas.use(render_frame.number);
-        hybrid_frame.draws = &draw;
-        hybrid_frame.draw_count = 1;
-        pipeline.submit(render_frame.cmd, hybrid_frame);
-      }
-    }
-    if (overlay) {
-      vg::Profiler::Scope overlay_scope =
-          profiler.gpu_scope(render_frame.cmd, "overlay draw");
-      overlay->render(render_frame.cmd);
-    }
-    render_frame.target->end(render_frame.cmd);
+    fuse_viewer::record_view_pass(
+        profiler, render_frame.cmd, *render_frame.target,
+        [&](VkCommandBuffer cmd) {
+          if (!live_view.valid() || live_view.empty()) return;
+          // recon's buffers, named rather than copied, as in fuse_viewer.
+          const vgp::HybridMeshDraw draw{fuse_viewer::to_live_mesh(live_view)};
+          vgp::HybridMeshFrame hybrid_frame;
+          hybrid_frame.extent = extent;
+          hybrid_frame.view_proj = view_proj;
+          hybrid_frame.light_dir = -view.up + 0.5f * view.right - view.forward;
+          hybrid_frame.flags = shading_flags(shading);
+          hybrid_frame.atlas = atlas.use(render_frame.number);
+          hybrid_frame.draws = &draw;
+          hybrid_frame.draw_count = 1;
+          pipeline.submit(cmd, hybrid_frame);
+        },
+        overlay ? &*overlay : nullptr);
 
     const vkc::Status present = app.end_frame(render_frame);
     if (!present.ok() && !win::swapchain_stale(present)) {

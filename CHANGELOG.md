@@ -8,6 +8,21 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `codec`: **`make_decode_grid` and `decode_growing` take a block ceiling**
+  (BREAKING), so a forged header or frame from a file or a socket can no
+  longer make a player's grid gigabytes large. A frame past `max_blocks`,
+  or a grow past `make_decode_grid`'s grid for it, is refused as
+  `InvalidArgument` (a frame to skip) before the decode or the grow, and
+  `make_decode_grid` checks the header's block count against the segment
+  table. Migrating: pass both helpers `max_blocks`, the most blocks a frame
+  may hold under your memory budget.
+  Tests: `recon_codec_decode_grid`, `recon_codec_decode_grid_oom`.
+- `examples`: **a finer fusion grid starts with a larger table**:
+  `create_fusion_grid`'s default bucket count, `fusion_buckets`, scales
+  16,384 by (1 cm / voxel)², from 1× up to 4×, so `fuse_orbbec`, `rig_viewer`,
+  `fuse_viewer` and `fuse_render` start a 5 mm grid at 65,536 buckets, where
+  its first set fits, rather than growing through a full table. Test:
+  `recon_example_fuse_keyframe`.
 - `examples`: **the senders print viewers joining and leaving.**
   `serve_stream` and `fuse_orbbec` install `vr_example::print_info_log`
   (`examples/common/info_log.hpp`), which prints Info, Warning and Error as
@@ -216,8 +231,53 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   explicit fusion/output settings. Tests cover runtime option mapping and
   every executable's help/error startup before resource creation.
 
+### Fixed
+
+- `volume`: **a set that overfills the hash table no longer sweeps it once
+  per failing insert**: an insert that must overflow its bucket reports
+  `AllocFailures::heap` at once when fewer than an eighth of the blocks are
+  left, so the first 5 mm frame of a small table stops stalling the GPU for
+  most of a second (the 2026-08-08 decision, amended). Regression:
+  `recon_volume_hash_map`.
+- `volume`: **a dispatch ends at the first round that hits a capacity
+  limit**, so the caller grows that much sooner, where it re-dispatched the
+  whole set until progress stalled. The new `AllocFailures::rounds` says how
+  many rounds a call ran. Regression: `recon_volume_allocate`.
+- `volume`, `tsdf`, `mesh`: **a dispatch past the device's group limit
+  splits** where it was refused, on a device that reports Vulkan's floor of
+  65,535 groups, as many Android and Mesa drivers do:
+  `allocate_from_triangles` past 16.7 M candidate blocks,
+  `TsdfIntegrator::integrate` past 32,767 reached blocks,
+  `MeshIntegrator::integrate` past 16.7 M candidates, and a `MarchingCubes`
+  extract past 65,535 active blocks, such as room0 at 5 mm (the 2026-08-08
+  decision, amended). Regressions: `recon_volume_allocate_triangles`,
+  `recon_tsdf_integrate`, `recon_tsdf_mesh_integrate`,
+  `recon_mesh_marching_cubes_sparse`.
+- `examples`: **`fuse_viewer` and `rig_viewer` time the whole render pass
+  on the GPU**, as the Performance panel's "render pass" row; its
+  "mesh draw" and "overlay draw" rows are CPU-only. On Apple GPUs those two
+  read about 0 ms as GPU scopes inside the pass. Test:
+  `recon_example_viewer_pass`.
+- `examples`: **the viewers' panels show ImGui's colours as authored**: the
+  viewers' gfx pin moves from #135 to #148, past gfx #144. Their default
+  `_SRGB` swapchain encoded the colours a second time, so the panels drew
+  washed out. Test: `recon_example_viewer_pass`.
+- `examples`: **`serve_stream` serves on past a damaged payload**: a record
+  whose payload fails its CRC is printed once and skipped, with the P-frames
+  after it, up to the pass's next key (`ReplayLoop::send_pass`). It used to
+  end the serve and drop every viewer. Test: `recon_example_stream_replay`.
+- `examples`: **a codec stream's track records its nominal rate**, which
+  `CodecStream::create` now takes: `source.fps` for `fuse_orbbec`'s, 30 a
+  second for `codec_replica`'s and `codec_mesh`'s. They said unknown, so a
+  player paced a 25 fps rig recording's loop restart at 30.
+  Tests: `recon_example_codec_stream`, `recon_example_mesh_sequence`.
+
 ### Added
 
+- `stream`: **`nominal_period_ns`** (`stream/session.hpp`), a track's period
+  from its nominal rate, and 30 a second's for an unknown rate, for a reader
+  that paces records where their pts cannot. `serve_stream`'s replay paces
+  by it. Test: `recon_stream_container`.
 - `examples`: **`fuse_orbbec` serves its coded sets live, and core 0.16.0
   is required** (core #46). With `output.serve`, a port, it codes each fused
   set as with `output.stream` and serves the records live on that port, on

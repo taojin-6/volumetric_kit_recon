@@ -48,8 +48,10 @@ add_library(recon_core)
 add_library(volumetric_kit::recon_core ALIAS recon_core)
 
 # The Vulkan foundation is the core's (core_vulkan); what recon compiles of its
-# own here is only the version query. The rest of the tier is header-only.
-target_sources(recon_core PRIVATE version.cpp)
+# own here is the version query and the split dispatch's test seam
+# (dispatch.hpp, internal, which the other tiers reach on a PRIVATE src/ path).
+# The rest of the tier is header-only.
+target_sources(recon_core PRIVATE dispatch.cpp version.cpp)
 
 # Generated headers: the VR_CORE_API export macro + the configured version
 # header. The export header is per-tier (core/export.hpp + VR_CORE_API +

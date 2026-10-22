@@ -93,11 +93,14 @@ entries relevant to your task; later amendments supersede earlier rules.
   The sparse mesh kernel resolves its own 2×2×2 neighbourhood by probing the
   hash table on-device, and `mesh` therefore reads a `volume` buffer — a
   coupling paid for, not stumbled into. *Amended 2026-10-13:* the device
-  shows the chained fixture spills; `HashDiagnostics` is gone.
+  shows the chained fixture spills; `HashDiagnostics` is gone. *Amended
+  2026-10-22:* the extract splits its dispatch at the device's group limit.
 - [**2026-08-08**](#2026-08-08--the-overflow-scan-stays-exhaustive-what-gets-bounded-is-its-cost-per-slot-not-its-length) —
   The overflow scan stays exhaustive; what gets bounded is its cost per slot,
   not its length. *Amended 2026-10-13:* `diagnostics()` is gone; the device
-  confirms the chain fixtures.
+  confirms the chain fixtures. *Amended 2026-10-22:* the heap path refuses an
+  overflow insert, unscanned, below an eighth of the blocks, and the retry
+  loop ends at a capacity limit.
 - [**2026-08-08**](#2026-08-08--fuse_viewer-draws-recons-buffers-interop-seam-b-end-to-end-and-the-release-mark-must-be-published-before-the-mesh-is-taken) —
   `fuse_viewer` draws recon's buffers: interop seam B, end to end, and the
   release mark must be published *before* the mesh is taken.
@@ -195,7 +198,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   rather than grown. *Amended 2026-10-13:* the `Decoder` decodes P-frames
   too, against a reference it keeps. *Amended 2026-10-18:* a player's growth
   sits beside the decoder, as the `Fuser`'s does: `make_decode_grid` and
-  `decode_growing`.
+  `decode_growing`. *Amended 2026-10-22:* both take the caller's block
+  ceiling, and refuse a frame or a grow past it as `InvalidArgument`.
 - [**2026-09-27**](#2026-09-27--the-video-decoder-is-recon_sensor_video-a-target-of-its-own-over-an-installed-ffmpeg-hevc-in-host-pictures-out-on-the-first-hardware-back-end-that-decodes-a-built-in-clip-nvidia-ahead-of-an-integrated-gpu-each-ci-leg-requires-the-hardware-it-has) —
   The video decoder is `recon_sensor_video`, a target of its own over an
   installed FFmpeg: HEVC in, host pictures out, on the first hardware back end
@@ -1825,6 +1829,11 @@ than converted. That predicate is pinned directly where it lives, in
 is gone, so the suite asks the device whether the chained fixture spills: a
 table of its shape whose chains may not grow refuses some of its blocks for
 chain room.
+*Amended 2026-10-22:* the extract splits its dispatch at
+`maxComputeWorkGroupCount[0]`, as the codec's and the block stamps' passes
+do, so a smaller block costs more dispatches but no longer lowers the
+reachable active-block count (the "two things deliberately not done"
+below), and room0's ~107 k blocks at 5 mm mesh at the 65535 floor.
 
 *Reverses* the "host-built
 neighbour table … no device-side hash probe, and no coupling to the hash
@@ -1928,6 +1937,22 @@ an absent one.
 `HashDiagnostics` and `volume_diagnostics_test.cpp` are gone;
 `coords_in_bucket` lives in `volume_hash_map_test.cpp`, whose chain fixtures
 the device confirms share their bucket.
+*Amended 2026-10-22:* change (2)'s premise, that an empty heap is the
+near-full state, was wrong. A dispatch that overfills the table leaves only
+anchors free, so the heap never empties, and every failing insert swept the
+whole table holding its home bucket's lock: Replica room0's first frame at
+5 mm in 4 096 buckets spent 0.70–0.90 s of allocate device time on an M5 Max
+(Release, three runs). On the heap path an overflow insert now reports
+`heap` without scanning once fewer than an eighth of the blocks are left, the
+anchors' share at the default bucket size; `table` remains a clean sweep's
+proof, on the rehash path and at smaller buckets.
+The retry loop also ends at the first round with a capacity limit, where it
+re-dispatched until two rounds made no progress, each repeating the failed
+inserts and the lock races of the threads queued behind them;
+`AllocFailures::rounds` counts the rounds, and `recon_volume_allocate` tests
+the exit. With both, that frame allocates in 13–22 ms, after one more grow
+(resize 35–41 ms of host time, from 9–15), and meshes the same 6 585 513
+vertices.
 
 An M5 iPad Pro lost the GPU inside
 `allocate_from_depth` at **31 480 of 32 768 blocks** —
@@ -5182,6 +5207,18 @@ retry against the wrong reference. A merge that runs out of host memory
 leaves the caller's prior metrics intact and returns decode success.
 `recon_codec_decode_grid_oom` injects the diagnostic and merge failures and
 checks that the following P-frame still decodes to the expected grid.
+
+*Amended 2026-10-22:* both helpers take the caller's ceiling, `max_blocks`.
+They sized the grid from the frame's own header, so the v1-frame entry's
+bound, the caller's capacity, was gone once the 2026-10-21 networking entry
+fed them TCP bytes: a forged 50-byte header, or a frame of 8 bytes per 1024
+blocks, made a grid of gigabytes that was never shrunk. A frame past the
+ceiling, or a grow past `make_decode_grid`'s grid for it, is refused before
+the decode or the grow, as `InvalidArgument`, a frame a player skips rather
+than an `OutOfMemory` that stops it. `make_decode_grid` checks the block
+count against the segment table through the decoder's own parse, where a
+sound P-frame stops at its reference (`NotFound`). The ceiling is a required
+argument, so a player states its budget.
 
 The third of the 2026-09-26 entry's five PRs, and the first public API the
 codec has had: `codec/encoder.hpp` (`Encoder`, `EncoderConfig`) and

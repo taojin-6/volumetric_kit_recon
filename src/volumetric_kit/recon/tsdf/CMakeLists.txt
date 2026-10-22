@@ -48,11 +48,13 @@ target_compile_features(recon_tsdf PUBLIC cxx_std_17)
 # recon_volume (and, transitively, recon_core) too.
 target_link_libraries(recon_tsdf PUBLIC recon_volume)
 
+# PRIVATE src/: recon_core's internal dispatch.hpp, as recon_volume reaches it.
 target_include_directories(
   recon_tsdf
   PUBLIC "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>"
          "$<BUILD_INTERFACE:${_vr_tsdf_generated_inc}>"
-         "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
+         "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>"
+  PRIVATE "${PROJECT_SOURCE_DIR}/src")
 
 # Compile the GLSL kernels to SPIR-V and embed them as constexpr byte arrays
 # (each .cpp #includes its generated *.spv.hpp on a PRIVATE path), so recon_tsdf

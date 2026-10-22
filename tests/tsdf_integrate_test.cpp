@@ -4,8 +4,9 @@
 // GPU test for TsdfIntegrator: fuse a synthetic constant-depth plane into a
 // VoxelBlockGrid and verify the classic projective TSDF math per voxel --
 // sdf = depth - Zc, truncation, inverse-square weight with behind-surface
-// dropoff, and the running-average weight cap across two frames. Runs on the
-// real driver (MoltenVK / NVIDIA); exits 0 (skip) where no device is present.
+// dropoff, and the running-average weight cap across two frames -- and the
+// same voxels from a dispatch split into eight. Runs on the real driver
+// (MoltenVK / NVIDIA); exits 0 (skip) where no device is present.
 
 #include <algorithm>
 #include <cmath>
@@ -27,6 +28,7 @@
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/recon/core/color_space.hpp"
+#include "volumetric_kit/recon/core/dispatch.hpp"
 #include "volumetric_kit/recon/core/math/vector_types.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
 #include "volumetric_kit/recon/volume/hash_types.hpp"
@@ -699,6 +701,36 @@ int gpu_main(vr_test::GpuContext& gpu) {
     }
   }
   CHECK(touched > 0);
+
+  // The same frame at one group a dispatch, eight dispatches over the four
+  // blocks, fuses the same voxels bit for bit: the path a set reaching more
+  // than 32,767 blocks takes on a device with Vulkan's 65,535-group floor.
+  {
+    vkc::Result<vol::VoxelBlockGrid> made =
+        vol::VoxelBlockGrid::create(gpu.device, gpu.allocator, grid, attrs, 2);
+    CHECK(made.ok());
+    vol::VoxelBlockGrid split = std::move(made).value();
+    CHECK(vr_test::allocate_blocks(gpu, split.map(), blocks).value() == 0);
+    vkc::Result<std::vector<vol::BlockIndex>> list =
+        split.map().compact_active_blocks();
+    CHECK(list.ok() && list.value().size() == blocks.size());
+    vr::detail::set_test_groups_per_dispatch(1);
+    const bool fused = integ.integrate(split, depth.data(), cam, 5.0f).ok();
+    vr::detail::set_test_groups_per_dispatch(0);
+    CHECK(fused);
+    const std::vector<float> split_tsdf = floats(split, "tsdf");
+    const std::vector<float> split_weight = floats(split, "weight");
+    for (const vol::BlockIndex& b : active.value()) {
+      const std::int32_t p = find_ptr(list.value(), b.coord);
+      CHECK(p >= 0);
+      for (int v = 0; v < grid.voxels_per_block; ++v) {
+        const std::size_t mine = static_cast<std::size_t>(p + v);
+        const std::size_t ref = static_cast<std::size_t>(b.ptr + v);
+        CHECK(split_tsdf[mine] == tsdf_data[ref] &&
+              split_weight[mine] == weight_data[ref]);
+      }
+    }
+  }
 
   // A second identical frame: the same observation, so sdf is unchanged, but
   // the weight accumulates and saturates at the cap (4.25 + 4.25 -> min(8.5,
