@@ -1354,22 +1354,24 @@ vr_target_warnings(recon_example_stream_replay_test)
 add_test(NAME recon_example_stream_replay
          COMMAND recon_example_stream_replay_test)
 
-# The format's and the sockets' host-only tests, which CI builds and runs again
-# under ThreadSanitizer (.github/workflows/_build.yml): one target to build
-# them.
-add_custom_target(recon_stream_tests)
+# The tests whose code runs threads -- a reader shared by two, the sockets', the
+# Orbbec decode workers -- which CI builds and runs again under ThreadSanitizer
+# (.github/workflows/_build.yml): one target to build them.
+add_custom_target(recon_tsan_tests)
 add_dependencies(
-  recon_stream_tests
+  recon_tsan_tests
   recon_stream_container_test
-  recon_stream_chunks_test
-  recon_stream_recovery_test
-  recon_stream_footer_test
-  recon_stream_oom_test
   recon_networking_gop_log_test
   recon_networking_socket_test
   recon_networking_server_test
   recon_networking_client_test
-  recon_networking_stress_test)
+  recon_networking_stress_test
+  recon_sensor_orbbec_decode_worker_test)
+if(VR_WITH_ORBBEC)
+  add_dependencies(
+    recon_tsan_tests recon_sensor_orbbec_jpeg_test
+    recon_sensor_orbbec_hevc_test recon_sensor_orbbec_open_sensors_test)
+endif()
 
 # What a sibling that fetches recon gets (subproject/): its configure, from a
 # clean tree, with each dependency this build fetched as a local source, so it

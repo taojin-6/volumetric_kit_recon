@@ -11,6 +11,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - CI: **the sanitizer job starts its slowest tests first** again: the COST
   list holds every test over 25 s there, `recon_codec_inter` first, which
   had started last. A test under `tests/` that hangs fails after 300 s.
+  The Mac's ThreadSanitizer step runs the tests whose code runs threads,
+  the Orbbec decode workers' among them (`recon_tsan_tests`), and no longer
+  the single-threaded stream tests.
 - `tsdf`: **`MeshIntegrator` measures a voxel against only the triangles no
   lower bound rules out**, a workgroup per block, and writes the same bytes:
   a triangle is ruled out only when strictly farther than the voxel's best,
