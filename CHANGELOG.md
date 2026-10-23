@@ -8,6 +8,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `examples`: **`codec_mesh` codes a true SDF** (`EncoderConfig::true_sdf`,
+  the 2026-10-21 decision) and refuses, before any GPU work, a band under 15
+  voxels, plus the shell's half-thickness in shell mode. Its templates
+  convert in a 16-voxel band (`fusion.truncation_m` 0.08) and code at K 56,
+  scale 0.040877: Rafa2's frames 1–150 print 1.99 Mbit/s and 1,924 blocks a
+  frame, where the old template printed 6.82 Mbit/s and 3,426. Migrating: a
+  mesh scenario widens `fusion.truncation_m` to the minimum and divides
+  `codec.quantization_scale` by the band's growth to keep its step.
+  Tests: `recon_example_config`, `recon_codec_mesh_run`,
+  `recon_codec_mesh_config_entry`.
 - build: **recon pins core 0.19.0** (ff44a98, core #49's merge), and the
   viewers pin gfx main after #152, which builds on it; recon's core floors
   are unchanged, and the viewers need core 0.18.0, gfx's floor at that pin.
@@ -355,6 +365,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `codec`: **`EncoderConfig::true_sdf`** codes a true signed distance, such
+  as `tsdf::MeshIntegrator` converts a mesh to, without the observed mask
+  (the 2026-10-21 decision): it cuts each corner farther than √3 voxels from
+  zero of a cell whose sign changes, then codes only the blocks that hold
+  surface. Off by default, which codes as before; the frames are ordinary
+  frames, which any `Decoder` decodes. Tests: `recon_codec_encoder`,
+  `recon_codec_decoder`, `recon_codec_inter`, `recon_codec_dct`,
+  `recon_codec_params`.
 - `networking`: `StreamClient::next` has an overload reporting progress even
   when no complete record is ready. Callers can drain partial receives and
   buffered records before waiting on their own controls. The original

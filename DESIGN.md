@@ -1419,8 +1419,10 @@ is `CodecParams`, **`Encoder`** (`encoder.hpp`), **`Decoder`** with
 `decode_growing` (`decode_grid.hpp`). `Encoder::encode(grid)` takes the map's
 own active list (`compact_active_blocks_on_device`, so an extract's list is
 reused and its own kept for the extract after), keeps the blocks with an
-observed voxel (`DctTransform::observed`, compacted on the device, reading
-back only its count and reject tally), sorts them by (z, y, x) on the device
+observed voxel, or with `EncoderConfig::true_sdf` those holding surface
+(`DctTransform::observed`, compacted on the device, reading back only its
+count and reject tally; the true-SDF passes below share its batch), sorts
+them by (z, y, x) on the device
 with a stable rank-merge sort on `coord_less` itself, over all of int32
 (`detail::BlockLists`, whose header has the mechanism), transforms them into
 the reference store's spare (below), the sorted list copied beside them, and
@@ -1573,6 +1575,22 @@ Each block is found by that probe and its ptr never read, so the decoder
 lists blocks it has just allocated by coordinate alone. "Observed" is
 `volume::kObservedWeight`, the threshold the mesher reads too. The inverse
 writes weight 1.0 on observed voxels and a fresh block's zeros elsewhere.
+With `EncoderConfig::true_sdf` (the 2026-10-21 entry), `dct_surface.comp`
+runs twice over the active list before the observed filter, a workgroup a
+block, each lane taking the 8 cells anchored on its x-line, their corners
+reached across the block's +x/+y/+z faces through
+`volume/shaders/block_neighbourhood.glsl`, the mesher's neighbourhood probe
+and corner addressing. A cell counts when its 8 voxels are observed. The
+first pass sets, in each counted cell whose sign changes, the cut bit of
+every corner with |tsdf| > √3 h + 1e-6 m; the second flags each block
+holding a corner of a counted cell with no corner cut, whose sign changes or
+that has a corner with |tsdf| < h; the filter appends the flagged blocks.
+Metres on the raw `tsdf`, strict comparisons, below 0 inside, and every
+write an `atomicOr`, so the order the workgroups run in changes nothing. The
+forward reads the cut set: a cut voxel is unobserved, its mask bit 0 and its
+value filled. The cut set (a bit a voxel slot) and the keep flags (a word a
+block slot) are retained scratch too, sized to the grid's heap, zeroed in
+each batch and bound on every call, since a regrown one is a new buffer.
 The v3 frame (`bitstream.hpp`, the 2026-10-02 entry) carries the K kept
 weights in its parameter header, `44 + 4K` bytes (300 at K = 64); older
 versions are refused. `read_frame_info` reads them without entropy decoding.
@@ -2024,11 +2042,14 @@ relative `source.path` (0.8.0), so only the user's path carries a
 frame-number pattern.
 Before any GPU work it refuses a malformed
 frame-number pattern, a range on a plain path and any frame file that is
-missing or not a regular file, and checks a shell against the truncation
-(`MeshSdfParams::validate`). Its first pass loads each frame, joins its
-bounds along `source.up_vector` (`io::extend_bounds`), audits it and drops
-it, so memory does not grow with the range. In exact arithmetic a proper
-similarity changes none of the audit's counts, so a frame signed mode cannot
+missing or not a regular file, checks a shell against the truncation
+(`MeshSdfParams::validate`), and refuses a band too narrow for a true SDF
+(`check_true_sdf_band`). It codes with `EncoderConfig::true_sdf` (the
+2026-10-21 entry), the one caller that sets it. Its first pass loads each
+frame, joins its bounds along `source.up_vector` (`io::extend_bounds`),
+audits it and drops it, so memory does not grow with the range. In exact
+arithmetic a proper similarity changes none of the audit's counts, so a
+frame signed mode cannot
 take is refused there; rounding can still change the degenerate count or a
 volume's sign, which the second pass's audit decides. One transform for the range follows (`fit_transform` or
 `scale_transform`) and places every frame unchanged, so a still point stays
@@ -2132,7 +2153,10 @@ multi-keyframe post-scan atlas, which the multi-view path can carry.
 
 **On `codec`**, trimming a P-frame's host overhead at small R, where its
 encode stays slower than intra's on the host alone (the 2026-10-17 freeze
-entry).
+entry). For true-SDF streams (the 2026-10-21 entry): the step-keyed deblock
+in the player; one 0.2 m comparison reach in `codec_compare_options`, which
+reaches max(truncation, 2 cm) today; and a sweep ladder in metres, since
+fractions of a 16-voxel band are coarse steps.
 
 **On `fuse_orbbec`'s stream** (the 2026-10-20 entry): a capture-volume
 crop (`fusion.max_depth_m` is the limit there is), raw RGBD recording and
@@ -2145,12 +2169,15 @@ of the set's fusion and coding, and 6.49 / 4.38 ms at 5 mm. A loop slower
 than the rig gets the newest set, so sets drop; that cost is unmeasured.
 
 **On `tsdf`**, mesh → TSDF has its two modes (2026-09-27), a second way into
-the grid the codec encodes: a mesh sequence converts frame by frame. Both modes
-cost the same. On Rafa2 the band's allocation costs what PERF.md's MESH3 row
-gives, and the write what the 2026-10-21 entry gives. Smaller costs around
-them remain: writing only the blocks the codec will code, chaining the
-write's submissions, and computing `triangle_candidate_offsets` and uploading
-the mesh once a frame rather than once to allocate and again to write.
+the grid the codec encodes: a mesh sequence converts frame by frame. A
+winding-number sign would fix at the root the sign errors a true-SDF stream
+cuts (the 2026-10-21 true-SDF entry), and the folds within √3 voxels that it
+cannot. Both modes cost the same. On Rafa2 the band's allocation costs what
+PERF.md's MESH3 row gives, and the write what the 2026-10-21 `MeshIntegrator`
+entry gives. Smaller costs around them remain: writing only the blocks the
+codec will code, chaining the write's submissions, and computing
+`triangle_candidate_offsets` and uploading the mesh once a frame rather than
+once to allocate and again to write.
 Dynamic's clear is still a hard reset from one ray: clearing on evidence (a
 weight decrement, an incidence term) and behind a pixel with no return are
 the next steps, each judged on the lab rig (`TODO(tsdf)` in
