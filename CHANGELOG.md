@@ -365,6 +365,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `codec`: **the decoder-side deblock** (the 2026-10-21 deblock decision).
+  `Decoder::set_deblock(true)` smooths each decoded frame across its block
+  faces on the device, inside the decode's last submit, by the filter the
+  frame's header picks; `Decoder::last_deblock()` says which (`DeblockInfo`:
+  `"LF"`, `"LG"`, `"R"` or `"off"`, and T). A frame with an unobserved
+  voxel, as every live RGB-D frame has, is skipped and decodes exactly. Off
+  by default: the grid holds the exact decode, as before.
+  `Decoder::rebuild(grid)` rebuilds the last decoded frame from the
+  decoder's reference with the switch as it is now, so a paused player shows
+  a toggle. Its device time is in `"codec decode"`'s. Streams are unchanged.
+  Tests: `recon_codec_deblock`, `recon_codec_dct`, `recon_codec_decoder`,
+  `recon_codec_inter`, `recon_mesh_marching_cubes_sparse`.
 - `codec`: **`EncoderConfig::true_sdf`** codes a true signed distance, such
   as `tsdf::MeshIntegrator` converts a mesh to, without the observed mask
   (the 2026-10-21 decision): it cuts each corner farther than √3 voxels from
