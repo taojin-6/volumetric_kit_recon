@@ -8,6 +8,25 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Stage rows follow core 0.20.0's timing**, which recon now needs (pinned
+  at core #50's head until it merges): a row's host time splits into busy
+  and wait, its device half says whether it was measured, and a timed batch
+  tiles its device time, so a stage holds every command recorded inside it
+  and both totals skip breakdowns (the 2026-10-23 decision, reversing the
+  2026-08-10 one). A set fused in its allocation's submit
+  (`TsdfIntegrator::allocate_and_integrate`, a `Fuser`'s steady state)
+  reports the round as `"integrate"`'s `"  ..allocate"` breakdown where it
+  was a top-level `"allocate"` row; `"integrate"` holds it. The decoder's
+  breakdowns have device halves, `"  ..apply"` the grid's removal and
+  allocation rounds, which were untimed. The examples' stage table prints
+  host busy, wait and device (n/t, n/a), and a codec row's device column is
+  unset unless every stage was measured. `VoxelBlockGrid::create` builds the
+  block kernels, so the first remove compiles no pipeline. Migration: a
+  caller whose scope wraps a recon call gets recon's device time in that
+  scope's row too; add no recon row's device half to it again. Tests:
+  `recon_tier_stage_metrics`, `recon_codec_decoder`,
+  `recon_volume_block_grid`, `recon_example_stage_table`,
+  `recon_example_codec_stream`, `recon_sensor_picture_readback_oom`.
 - build: **recon pins core 0.19.0** (ff44a98, core #49's merge), and the
   viewers pin gfx main after #152, which builds on it; recon's core floors
   are unchanged, and the viewers need core 0.18.0, gfx's floor at that pin.
@@ -355,6 +374,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `mesh`: **`MarchingCubes::extract_device` takes `StageMetrics`**: a
+  `"marching cubes"` row over the compaction's `"  ..active set"` and the
+  attempts' `"  ..dispatch"`, timed inside the submits an extract already
+  makes. `volume`: **`VoxelHashMap::allocate` and `remove`, and
+  `VoxelBlockGrid::remove`, take the caller's `GpuStageScope`**, whose tile
+  every round counts to. Tests: `recon_tier_stage_metrics`,
+  `recon_volume_block_grid`.
 - `stream`: **`nominal_period_ns`** (`stream/session.hpp`), a track's period
   from its nominal rate, and 30 a second's for an unknown rate, for a reader
   that paces records where their pts cannot. `serve_stream`'s replay paces

@@ -72,8 +72,7 @@ std::uint64_t pts(std::size_t frame) {
 }
 
 int row_times() {
-  // Host: the stage, its breakdowns inside it. Device: every span timed,
-  // breakdowns included, as they are separate dispatches.
+  // Host and device alike: the stage, its breakdowns inside it.
   vkc::StageMetrics encode;
   encode.add_cpu("codec encode", 3.0);
   encode.add_gpu("codec encode", 1.0);
@@ -86,16 +85,28 @@ int row_times() {
       7, codec::FrameType::kInter, 4096, 12, encode, &decode);
   CHECK(row.frame == 7 && row.type == codec::FrameType::kInter);
   CHECK(row.bytes == 4096 && row.blocks == 12);
-  CHECK(row.encode_ms == 3.0 && row.encode_device_ms == 1.25);
+  CHECK(row.encode_ms == 3.0 && row.encode_device_ms == 1.0);
   CHECK(row.decode_ms == 2.0 && !row.decode_device_ms);
   // A frame not decoded has no decode columns.
   const vr_example::CodecRow encoded = vr_example::make_codec_row(
       7, codec::FrameType::kInter, 4096, 12, encode, nullptr);
-  CHECK(encoded.encode_ms == 3.0 && encoded.encode_device_ms == 1.25);
+  CHECK(encoded.encode_ms == 3.0 && encoded.encode_device_ms == 1.0);
   CHECK(!encoded.decode_ms && !encoded.decode_device_ms);
   // The sweep's device columns count the same way.
-  CHECK(vr_example::device_ms(encode) == 1.25 &&
-        !vr_example::device_ms(decode));
+  CHECK(vr_example::device_ms(encode) == 1.0 && !vr_example::device_ms(decode));
+  // A stage whose device work ran untimed leaves the column unset, as does
+  // one the queue cannot time; an untimed breakdown under a timed stage
+  // does not.
+  vkc::StageMetrics partial = encode;
+  partial.add_device("codec encode", vkc::DeviceTime::NotTimed);
+  CHECK(!vr_example::device_ms(partial));
+  vkc::StageMetrics unavailable;
+  unavailable.add_cpu("codec decode", 2.0);
+  unavailable.add_device("codec decode", vkc::DeviceTime::Unavailable);
+  CHECK(!vr_example::device_ms(unavailable));
+  vkc::StageMetrics deep = encode;
+  deep.add_device("  ..observed", vkc::DeviceTime::NotTimed);
+  CHECK(vr_example::device_ms(deep) == 1.0);
   return 0;
 }
 

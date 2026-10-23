@@ -326,9 +326,9 @@ int run(GLFWwindow* window, const Options& opt) {
   // The render side gets real GPU spans (this device reports 64
   // timestampValidBits through MoltenVK) plus fps and whole-frame CPU time;
   // attaching it to the app makes the frame loop drive begin_frame/end_frame.
-  // recon's stages are measured separately, as wall-clock rows unless a
-  // vkc::GpuTimer timed them (StageRow::has_gpu says which): every recon
-  // dispatch blocks on its fence, so a host span covers the device work too.
+  // recon's stages are measured separately: host rows whose fence waits are
+  // their wait (StageRow::wait_ms), with a device half where a GpuTimer timed
+  // them (StageRow::device says what it holds).
   vg::ProfilerConfig profiler_config;
   profiler_config.frames_in_flight = config.frames_in_flight;
   auto profiler_result = vg::Profiler::create(app.device(), profiler_config);
@@ -583,8 +583,9 @@ int run(GLFWwindow* window, const Options& opt) {
         fuse_stages.clear();
         for (const char* stage :
              {"frame", "frame prep", "allocate", "resize", "integrate",
-              "  ..active set", "extract", "  ..compact", "  ..arena alloc",
-              "  ..descriptors", "  ..dispatch", "  ..readback", "texture"}) {
+              "  ..active set", "  ..allocate", "extract", "  ..compact",
+              "  ..arena alloc", "  ..descriptors", "  ..dispatch",
+              "  ..readback", "texture"}) {
           fuse_stages.seed(stage);
         }
         // A preload cache hit, else a disk read + JPEG/PNG decode (the CPU

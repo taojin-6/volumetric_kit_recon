@@ -729,21 +729,22 @@ binds each dispatch a set of its own, from a grow-only `KernelSets`, through
 `dispatch`'s set overload, which refuses a temporary since the batch binds
 that very object at `submit` (the 2026-09-30 decision).
 Vocabulary: `Status`/`Result`, the GLM aliases, `camera_params.hpp`,
-`color_space.hpp`, and the core's `core/base/stage_metrics.hpp` — the `{name, cpu_ms, gpu_ms,
-has_gpu}` rows every tier reports timings in, with `GpuTimer` measuring the
-device half through the timed `submit_single_time` overload (a window is
-ended by publishing it). `kBreakdownPrefix` marks a row its parent's row
-already contains, so `total_cpu_ms` skips it and `total_gpu_ms` **does
-not** — a host scope spans a whole call, a device span one dispatch, so a
-sub-row's device time has no parent to be counted through; `in_stage()` is
-how a callee reached from both positions knows which of the two it is
-writing. A tier opens one **`GpuStageScope`** per call
-(`core/vulkan/gpu_timer.hpp`): it times the host span, is what `dispatch()` takes to
-record the device one, and publishes both in its destructor, so no early
-return can strand a span. Timing is unavailable, never an error — a query
-pool that will not allocate degrades like a family with no timestamps, and
-`abandon()` retires the pool when a failed fence wait leaks the command
-buffer carrying its queries. `Device::create` enables `scalarBlockLayout`
+`color_space.hpp`, and the core's `core/base/stage_metrics.hpp` — the rows
+every tier reports timings in: host time (`cpu_ms`), the part of it blocked on
+the device (`wait_ms`, which every core wait reports to the scopes open on its
+thread), and a device half (`gpu_ms`, with `device` saying whether it was
+measured, ran untimed, or cannot be). A timed batch tiles its device time: a
+timestamp at each change of tag, so a stage's time holds every command
+recorded inside it, and a tile counts to every scope open around its tag
+(the 2026-10-23 entry). `kBreakdownPrefix` marks a row its parent's row
+already contains, so both totals skip it; `in_stage()` is how a callee
+reached from both positions knows which of the two it is writing. A tier
+opens one **`GpuStageScope`** per call (`core/vulkan/gpu_timer.hpp`): it times
+the host span, is what `dispatch()` takes to tag the device one, and
+publishes all three halves in its destructor, so no early return can strand
+a span. Timing is unavailable, never an error — a query pool that will not
+allocate degrades like a family with no timestamps, and a batch that finds
+no free range runs untimed. `Device::create` enables `scalarBlockLayout`
 because `device_requirements()` asks for it, recon's
 `check_device_requirements` refuses a created or adopted device without it,
 and both record the queue family's `queueFlags`. `create_exported_buffer` (`core/vulkan/external_memory.hpp`) makes
@@ -862,7 +863,10 @@ each coord's block itself, so its cost is the count's, not the grid's),
 inputs are uploaded in its first round, and a round reads back its counts.
 `VoxelHashMap::allocate` and `remove`, and `VoxelBlockGrid::remove`, take
 a device buffer of `BlockIndex`, bound where its producer wrote it; a test
-uploads its own coordinates first (`tests/device_blocks.hpp`). The grid's
+uploads its own coordinates first (`tests/device_blocks.hpp`). Each also takes
+a caller's `GpuStageScope`, whose tile every round counts to, as the
+decoder's `"  ..apply"` does. A grid's `create` builds the kernels its removal
+and block pass run, so the first remove compiles nothing. The grid's
 zeroes the listed blocks and frees them through the map's, the zeroing
 recorded into the map's first round (`remove`'s `first_round`) ahead of
 the delete, so it takes no submit of its own.
@@ -1060,7 +1064,10 @@ consumer releases by generation; the kernel writes a real
 `DeviceMesh` (valid until the next extract, enforced by a generation stamp),
 `download` takes the single host copy and bridges the two workflows. The
 arena, index run and draw command are device-only, and each extract attempt
-is one batch that reads back the 28-byte command. A whole-map extract never
+is one batch that reads back the 28-byte command. Given `StageMetrics`,
+`extract_device` reports a `"marching cubes"` row over the compaction's
+`"  ..active set"` and the attempts' `"  ..dispatch"`, tiled inside those
+submits. A whole-map extract never
 brings the active list to the host: it compacts onto the device, or takes
 the map's last list back from it, and binds it in place (2026-09-30). An
 `extract_device` overload meshes a `volume::DeviceBlockList` the caller
@@ -2113,9 +2120,9 @@ has moved from the example into the validated I/O module. On `mesh`, the greppab
 `TODO(mesh)`s: cross-block vertex sharing, per-vertex normals, measuring a
 return of the default kernel to the per-triangle append (the per-block
 reservation cost ~10% of the dispatch and was taken for incremental
-extraction) — and `ExtractTimings`' device half — which must
-bracket several dispatches in **one** timed submit, since a timed submit costs
-~0.13 ms on MoltenVK and four of the six phases run under that. On `texture`,
+extraction) — and one submit per extract, since a timed submit costs
+~0.13 ms on MoltenVK and a timed extract pays it for the compaction and for
+each attempt. On `texture`,
 the `TODO(texture)`s: keeping a static keyframe set's
 depth and coverage in the pass between calls, blending views at their seams,
 and a per-triangle tile
