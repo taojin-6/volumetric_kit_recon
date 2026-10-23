@@ -14833,13 +14833,7 @@ round's off, which is exact, as the two tile one submit. The round becomes
 `"integrate"`'s `"  ..allocate"` breakdown: as the top-level `"allocate"`
 row it was, the totals would count it twice. An async submit would not
 separate them either, since a tile's scopes are fixed when its command is
-recorded. The decoder's deblock (the 2026-10-21 deblock entry), in the
-inverse's submit, nests the same way: its scope opens inside
-`"  ..inverse"`'s around its passes and that submit, and its tiles, the
-counts read back after them included, are taken off `"  ..inverse"` as
-`"codec decode"`'s `"  ..deblock"`, a device half alone, since its host time
-is the submit's. Its device time stays in `"codec decode"`'s, as that entry
-has it.
+recorded.
 
 **What it adds**, with no submit, wait or result changed:
 - `MarchingCubes::extract_device` takes `StageMetrics`: a `"marching cubes"`
@@ -14852,7 +14846,8 @@ has it.
   hash deletes and allocations, every round, through the `GpuStageScope` that
   `VoxelBlockGrid::remove` and `VoxelHashMap::allocate` and `remove` now
   take. Those rounds were untimed, and `"codec decode"` read as measured
-  without them.
+  without them. `"  ..inverse"` holds the deblock's passes, in its submit
+  (the 2026-10-21 deblock entry).
 - `VoxelBlockGrid::create` builds the block kernels for a grid with
   attributes: the first remove, a player's first P-frame or a rig's first
   garbage collection, compiled two pipelines inside the frame.

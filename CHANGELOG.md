@@ -20,11 +20,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   reports the round as `"integrate"`'s `"  ..allocate"` breakdown where it
   was a top-level `"allocate"` row; `"integrate"` holds it. The decoder's
   breakdowns have device halves, `"  ..apply"` the grid's removal and
-  allocation rounds, which were untimed, and the deblock
-  (`Decoder::set_deblock`) its own, `"  ..deblock"`, a device half taken off
-  `"  ..inverse"`, whose submit it shares; `Decoder::rebuild` reports it
-  under `"codec decode"` too. The examples' stage table prints
-  host busy, wait and device (n/t, n/a), and a codec row's device column is
+  allocation rounds, which were untimed, and `"  ..inverse"` the deblock's
+  passes (`Decoder::set_deblock`), in its submit. The examples' stage table
+  prints host busy, wait and device (n/t, n/a), and a codec row's device column is
   unset unless every stage was measured. `VoxelBlockGrid::create` builds the
   block kernels, so the first remove compiles no pipeline, and makes no
   timer: its block pass makes one at the first timed call. Migration: a
