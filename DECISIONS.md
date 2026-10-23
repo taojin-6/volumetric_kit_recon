@@ -14292,8 +14292,8 @@ prefix could not hold them together anyway.
 `cmake/volumetric_kit_reconConfig.cmake.in` and what fed it only
 (`VR_FFMPEG_CONSUMER_MODULES`), and `tests/package` with its nine
 `recon_package_*` tests, which built and installed a base-only core per run.
-recon sets the core's `VKC_INSTALL` OFF. `VR_SHADER_INCLUDE_DIR` names the
-build tree's copy of the exported GLSL alone.
+`VR_SHADER_INCLUDE_DIR` names the build tree's copy of the exported GLSL
+alone.
 
 **What stays.** The add_subdirectory checks (`tests/subproject`): the
 defaults, the GLSL root, the core refusals, and the public headers' check of

@@ -92,7 +92,8 @@ configure stops at that call as an unknown command: move the first-declared
 pin to 0.2.0 or newer.
 
 Examples and tests require core 0.16.0 or newer with its config tier, for
-`fuse_orbbec`'s `output.serve`; the pinned core supplies it.
+`fuse_orbbec`'s `output.serve`, and the viewers (`VR_BUILD_VIEWER`) 0.18.0,
+the pinned gfx's floor; the pinned core supplies both.
 
 ### Asset I/O
 

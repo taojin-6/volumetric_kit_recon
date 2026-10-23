@@ -16,15 +16,12 @@ include(FetchContent)
 
 # volumetric_kit_gfx: the sibling renderer. Its HybridMeshPipeline draws the
 # per-vertex-coloured reconstruction the mesh tier emits. Pinned, built without
-# tests, examples or install. VG_WITH_GLFW builds gfx_glfw, the live viewers'
-# window glue.
+# tests or examples. VG_WITH_GLFW builds gfx_glfw, the live viewers' window
+# glue.
 set(VG_BUILD_TESTS
     OFF
     CACHE BOOL "" FORCE)
 set(VG_BUILD_EXAMPLES
-    OFF
-    CACHE BOOL "" FORCE)
-set(VG_INSTALL
     OFF
     CACHE BOOL "" FORCE)
 set(VG_WITH_GLFW
@@ -58,7 +55,9 @@ FetchContent_Declare(
   # default _SRGB swapchain; before it the panels were encoded twice and drew
   # washed out. A rendering floor, and the newest, so it covers the older ones;
   # recon_example_viewer_pass checks it.
-  GIT_TAG b35520f5c6068e93bef0dccadd3ef1fa10fa9c6b # gfx main, after #148
+  #
+  # It refuses a core older than 0.18.0 (gfx's VG_VKC_MIN_VERSION).
+  GIT_TAG f147e00e7fb45382da8874198684656496f09b7c # gfx main, after #152
   GIT_SHALLOW FALSE)
 FetchContent_MakeAvailable(volumetric_kit_gfx)
 
