@@ -91,9 +91,8 @@ fails saying why. A core older than 0.1.0 has no `vkc_require_core`, so the
 configure stops at that call as an unknown command: move the first-declared
 pin to 0.20.0 or newer.
 
-Examples and tests require core 0.16.0 or newer with its config tier, for
-`fuse_orbbec`'s `output.serve`, and the viewers (`VR_BUILD_VIEWER`) 0.18.0,
-the pinned gfx's floor; the pinned core supplies both.
+Examples and tests also need the core's config tier. That floor covers every
+core version they and the viewers' pinned gfx (`VR_BUILD_VIEWER`) need.
 
 ### Asset I/O
 
