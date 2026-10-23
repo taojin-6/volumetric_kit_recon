@@ -14309,10 +14309,10 @@ with no Vulkan at all, is its home.
 ### 2026-10-22 — StreamClient reports progress before a whole record is ready.
 
 The player waits on its consumer's take when a decoded frame cannot yet be
-published. A zero-wait `StreamClient::next` takes at most one receive, up to
-2 MiB, and can return false while more of a partial record is already in
-the socket. Treating that false as idle adds a consumer wait per receive,
-slowing the drain even when the sender and decoder can keep up.
+published. A zero-wait `StreamClient::next` takes at most one receive, and
+can return false while more of a partial record is already in the socket.
+Treating that false as idle adds a consumer wait per receive, slowing the
+drain even when the sender and decoder can keep up.
 
 The four-argument overload adds an optional `bool* progressed`. Each call
 resets it, then sets it after a successful lookup/connect step, bytes
