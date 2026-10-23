@@ -217,13 +217,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
   mesh.indices = {0, 1, 2};
   CHECK(texturer.value().texture(mesh, depth.data(), cam, 0.02f, &metrics));
 
-  // "  ..active set" is the compaction dispatch integrate() makes before the
-  // fusion one. It is listed here because a stage that runs two kernels and
-  // times one reports the other's device time as submit overhead -- the gap
-  // between the halves then means something different from what the row above
-  // it claims.
-  const char* kStages[] = {"allocate", "integrate", "  ..active set",
-                           "texture"};
+  const char* kStages[] = {"allocate", "integrate", "texture"};
   for (const char* stage : kStages) {
     CHECK(row_reports_both_halves(metrics, stage, device_can_time, "spine"));
     const vkc::StageRow* row = find(metrics, stage);
@@ -242,13 +236,17 @@ int gpu_main(vr_test::GpuContext& gpu) {
         row->cpu_ms, row->gpu_ms, 100.0 * row->gpu_ms / row->cpu_ms);
   }
 
-  // The compaction's device half is a SECOND dispatch, so no row above it
-  // contains that span -- which is why the device total counts breakdown rows
-  // where the host total cannot. Skipping them lost this kernel from every
-  // total while its host time stayed counted through "integrate".
+  // "  ..active set" is the compaction dispatch integrate() records ahead of
+  // the fusion one, in the same submit, so it reports its device half alone: a
+  // stage that runs two kernels and times one reports the other's device time
+  // as submit overhead. No row above it contains that span -- which is why the
+  // device total counts breakdown rows where the host total cannot. Skipping
+  // them lost this kernel from every total while its host time stayed counted
+  // through "integrate".
   {
     const vkc::StageRow* active_set = find(metrics, "  ..active set");
-    CHECK(active_set != nullptr);
+    CHECK(active_set != nullptr && active_set->cpu_ms == 0.0);
+    CHECK(active_set->has_gpu || !device_can_time);
     if (active_set->has_gpu) {
       // Compared with a tolerance, not for equality: the two totals accumulate
       // a different set of rows, so the same quantity comes out with different

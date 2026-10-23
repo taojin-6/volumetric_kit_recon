@@ -11,7 +11,6 @@
 # the core's core/vulkan/vulkan.hpp umbrella. Deps: volumetric_kit_core,
 # header-only GLM and the Vulkan loader/headers.
 include(GenerateExportHeader)
-include(GNUInstallDirs)
 
 # The core's device serializes submits with std::mutex and recon's sensor tier
 # runs capture threads, so everything above recon_core needs the platform
@@ -22,24 +21,21 @@ include(GNUInstallDirs)
 find_package(Threads REQUIRED)
 
 # GLM: header-only vector/matrix math. PUBLIC -- it appears in public headers
-# (math/vector_types.hpp aliases glm::vec*/glm::mat4), so consumers need it too
-# (the package Config re-finds it). An imported CONFIG target brings glm's
-# headers in as SYSTEM includes, so glm internals don't trip -Werror. We link
-# the canonical glm::glm target, which every glm packaging provides -- the name
-# we link here is baked into the exported target and must resolve on every
-# consumer's platform, and the newer glm::glm-header-only target does not exist
-# on older packagings (e.g. Ubuntu's libglm-dev), which would break their
-# find_package(volumetric_kit_recon). glm is header-only in our use, so linking
-# glm::glm carries no runtime library. If a target platform lacks a system glm,
-# supply it via the package manager (brew/apt/vcpkg/Conan) or a FetchContent
-# pin.
+# (math/vector_types.hpp aliases glm::vec*/glm::mat4), so consumers need it too.
+# An imported CONFIG target brings glm's headers in as SYSTEM includes, so glm
+# internals don't trip -Werror. We link the canonical glm::glm target, which
+# every glm packaging provides: the newer glm::glm-header-only target does not
+# exist on older packagings (e.g. Ubuntu's libglm-dev). glm is header-only in
+# our use, so linking glm::glm carries no runtime library. If a target platform
+# lacks a system glm, supply it via the package manager (brew/apt/vcpkg/Conan)
+# or a FetchContent pin.
 find_package(glm CONFIG REQUIRED)
 
 # The Vulkan loader + headers. PUBLIC: the public headers reach Vulkan through
 # the core's core/vulkan/vulkan.hpp and so include <vulkan/vulkan.h>, meaning
-# every consumer compiles against it and links the loader (the package Config
-# re-finds Vulkan). MoltenVK is the loader/driver on Apple. The core's vulkan
-# tier links it too; naming it here keeps recon's own use explicit.
+# every consumer compiles against it and links the loader. MoltenVK is the
+# loader/driver on Apple. The core's vulkan tier links it too; naming it here
+# keeps recon's own use explicit.
 find_package(Vulkan REQUIRED)
 
 set(_vr_generated_inc "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
@@ -48,8 +44,10 @@ add_library(recon_core)
 add_library(volumetric_kit::recon_core ALIAS recon_core)
 
 # The Vulkan foundation is the core's (core_vulkan); what recon compiles of its
-# own here is only the version query. The rest of the tier is header-only.
-target_sources(recon_core PRIVATE version.cpp)
+# own here is the version query and the split dispatch's test seam
+# (dispatch.hpp, internal, which the other tiers reach on a PRIVATE src/ path).
+# The rest of the tier is header-only.
+target_sources(recon_core PRIVATE dispatch.cpp version.cpp)
 
 # Generated headers: the VR_CORE_API export macro + the configured version
 # header. The export header is per-tier (core/export.hpp + VR_CORE_API +
@@ -83,27 +81,22 @@ target_compile_features(recon_core PUBLIC cxx_std_17)
 
 # PUBLIC: consumers compile our public headers (which include GLM and the core's
 # base and vulkan tiers) and, for a static archive, must also link the threading
-# runtime -- so the exported target carries these requirements (the Config.cmake
-# re-finds Threads, glm, Vulkan and volumetric_kit_core).
+# runtime -- so the target carries these requirements.
 target_link_libraries(
   recon_core PUBLIC volumetric_kit::core_base volumetric_kit::core_vulkan
                     Threads::Threads glm::glm Vulkan::Vulkan)
 
 target_include_directories(
-  recon_core
-  PUBLIC "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>"
-         "$<BUILD_INTERFACE:${_vr_generated_inc}>"
-         "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
+  recon_core PUBLIC "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>"
+                    "$<BUILD_INTERFACE:${_vr_generated_inc}>")
 
 vr_target_warnings(recon_core)
 
 # The GLSL recon exports, for a consumer's kernels to #include as recon's own do
 # ("volumetric_kit/recon/core/shaders/pinhole.glsl") under the root that
 # recon_core's VR_SHADER_INCLUDE_DIR property names. The root holds the exported
-# files alone, here as installed: a copy in this build directory (configure_file
-# copies it again when the source changes), or the installed include directory,
-# which the package config names. recon's own shaders read src/
-# (vr_compile_shaders).
+# files alone: a copy in this build directory (configure_file copies it again
+# when the source changes). recon's own shaders read src/ (vr_compile_shaders).
 set(_vr_exported_glsl shaders/pinhole.glsl)
 set(_vr_glsl_root "${CMAKE_CURRENT_BINARY_DIR}/glsl")
 foreach(_vr_glsl IN LISTS _vr_exported_glsl)
@@ -113,32 +106,3 @@ foreach(_vr_glsl IN LISTS _vr_exported_glsl)
 endforeach()
 set_target_properties(recon_core PROPERTIES VR_SHADER_INCLUDE_DIR
                                             "${_vr_glsl_root}")
-
-# Install the target into the shared export set + the headers this tier
-# generates. The umbrella target, public-header tree, and package config are
-# finalized by the parent (src/CMakeLists.txt).
-if(VR_INSTALL)
-  install(
-    TARGETS recon_core
-    EXPORT volumetric_kit_reconTargets
-    ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
-    LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
-    RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
-  # This tier ships only its own headers: the core/ source subtree plus the
-  # generated export.hpp/version.hpp. Scoping to core/ (rather than the whole
-  # include/ tree) keeps a core-only build from installing a later tier's
-  # headers, which would pull deps this package's Config does not declare. Each
-  # future tier adds its own header install the same way.
-  install(
-    DIRECTORY "${PROJECT_SOURCE_DIR}/include/volumetric_kit/recon/core"
-    DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/volumetric_kit/recon"
-    FILES_MATCHING
-    PATTERN "*.hpp")
-  install(
-    DIRECTORY "${_vr_generated_inc}/"
-    DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
-    FILES_MATCHING
-    PATTERN "*.hpp")
-  install(DIRECTORY "${_vr_glsl_root}/"
-          DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
-endif()

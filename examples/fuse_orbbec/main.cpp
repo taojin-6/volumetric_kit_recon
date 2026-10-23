@@ -36,12 +36,13 @@
 // of the codec examples' stream (vr_example::CodecStream) at the set's time,
 // the host's clock for a rig, and reports the stream, even when the run fails
 // part-way; codec.sweep then prints the codec's rate-distortion table on the
-// last grid. output.serve serves each frame live, as it is recorded, on that
-// port on every interface (networking::StreamServer), to a player that
-// connects. fusion.dynamic, true by default, clears a surface the cameras see
-// past, so the stream and the PLY follow a changing scene, and every
-// fusion.free_after sets the grid frees the blocks such a surface left, as
-// rig_viewer's does.
+// last grid. Only output.csv or codec.sweep decodes each frame too, for the
+// decode's rows and the sweep's grid. output.serve serves each frame live, as
+// it is recorded, on that port on every interface (networking::StreamServer),
+// to a player that connects, and prints each viewer joining and leaving.
+// fusion.dynamic, true by default, clears a surface the cameras see past, so
+// the stream and the PLY follow a changing scene, and every fusion.free_after
+// sets the grid frees the blocks such a surface left, as rig_viewer's does.
 //
 // Ctrl+C (or a SIGTERM) ends the run. Before the cameras stream, the run
 // returns with nothing recorded: the empty stream is removed and the cameras
@@ -64,6 +65,7 @@
 #include "config.hpp"
 #include "fuse_frame.hpp"
 #include "fuse_orbbec_sets.hpp"
+#include "info_log.hpp"
 #include "interrupt.hpp"
 #include "set_codec.hpp"
 #include "set_dump.hpp"
@@ -129,13 +131,13 @@ vkc::Status run(const Options& opt) {
   std::optional<vr_example::CodecStream> stream;
   if (!opt.output.stream.empty() || !opt.output.csv.empty() ||
       opt.output.serve != 0) {
-    VKC_ASSIGN(vr_example::CodecStream made,
-               vr_example::CodecStream::create(
-                   device, allocator, config,
-                   vr_example::codec_outputs(opt.output), "fuse_orbbec"));
+    const vr_example::CodecOutputs outputs = vr_example::set_codec_outputs(opt);
+    VKC_ASSIGN(
+        vr_example::CodecStream made,
+        vr_example::CodecStream::create(device, allocator, config, outputs,
+                                        "fuse_orbbec", {opt.source.fps, 1}));
     stream.emplace(std::move(made));
-    VKC_TRY(vr_example::check_apart(opt.output.path,
-                                    vr_example::codec_outputs(opt.output)));
+    VKC_TRY(vr_example::check_apart(opt.output.path, outputs));
     std::printf("codec: %s\n",
                 vr_example::codec_settings(config, opt.codec.quantization_table)
                     .c_str());
@@ -237,7 +239,7 @@ vkc::Status run(const Options& opt) {
   const double fps =
       static_cast<double>(sets.frames()) / (secs > 0.0 ? secs : 1.0);
   // Before any error: a run that stalls still reports what it counted, and
-  // finishes the stream it recorded and reports the frames it decoded.
+  // finishes the stream it recorded and reports the frames it coded.
   sets.print_stats();
   std::fputs(dump.report().c_str(), stdout);
   vkc::Status finished;
@@ -278,7 +280,7 @@ vkc::Status run(const Options& opt) {
     VKC_ASSIGN(const eval::ReferenceMesh reference,
                eval::ReferenceMesh::create(final_mesh, compare));
     VKC_TRY(vr_example::run_codec_sweep(device, allocator, *volume, reference,
-                                        *extractor, config, stream->player()));
+                                        *extractor, config, *stream->player()));
   }
   return {};
 }
@@ -286,6 +288,7 @@ vkc::Status run(const Options& opt) {
 }  // namespace
 
 int run_main(const Options& opt) {
+  vr_example::print_info_log();  // output.serve's viewers joining and leaving
   const vkc::Status status = run(opt);
   if (!status.ok()) {
     std::fprintf(stderr, "fuse_orbbec failed: %s\n", status.message().c_str());

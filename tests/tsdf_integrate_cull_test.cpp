@@ -14,6 +14,7 @@
 // device is present.
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <map>
@@ -133,8 +134,7 @@ vkc::Result<std::map<Coord, Block>> blocks_of(const vr_test::Gpu& ctx,
   VKC_ASSIGN(const std::vector<vol::BlockIndex> active,
              g.map().compact_active_blocks());
   const auto read = [&](const char* name) {
-    return vr_test::read_attribute<std::uint32_t>(ctx.device, ctx.allocator, g,
-                                                  name);
+    return vr_test::read_blocks<std::uint32_t>(ctx, g, name, active);
   };
   VKC_ASSIGN(const std::vector<std::uint32_t> tsdf, read("tsdf"));
   VKC_ASSIGN(const std::vector<std::uint32_t> weight, read("weight"));
@@ -143,12 +143,14 @@ vkc::Result<std::map<Coord, Block>> blocks_of(const vr_test::Gpu& ctx,
              g.map().read_block_stamps());
   const std::size_t vpb = grid_params().voxels_per_block;
   std::map<Coord, Block> out;
-  for (const vol::BlockIndex& b : active) {
-    const auto first = tsdf.begin() + b.ptr;
+  for (std::size_t i = 0; i < active.size(); ++i) {
+    const vol::BlockIndex& b = active[i];
+    const auto first = static_cast<std::ptrdiff_t>(i * vpb);
+    const auto last = static_cast<std::ptrdiff_t>((i + 1) * vpb);
     Block& block = out[Coord{b.coord.x, b.coord.y, b.coord.z}];
-    block.tsdf.assign(first, first + vpb);
-    block.weight.assign(weight.begin() + b.ptr, weight.begin() + b.ptr + vpb);
-    block.color.assign(color.begin() + b.ptr, color.begin() + b.ptr + vpb);
+    block.tsdf.assign(tsdf.begin() + first, tsdf.begin() + last);
+    block.weight.assign(weight.begin() + first, weight.begin() + last);
+    block.color.assign(color.begin() + first, color.begin() + last);
     block.stamp = stamps[static_cast<std::size_t>(b.ptr) / vpb];
   }
   return out;

@@ -8,6 +8,96 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- CI: **the sanitizer job starts its slowest tests first** again,
+  `recon_codec_inter`, which had started last, first. A test under `tests/`
+  that hangs fails after 300 s.
+  The Mac's ThreadSanitizer step runs the tests whose code runs threads,
+  the Orbbec decode workers' among them (`recon_tsan_tests`), and no longer
+  the single-threaded stream tests. The viewer leg runs the viewers'
+  headless tests, which no leg ran: `recon_example_viewer_atlas`,
+  `recon_example_viewer_device`, `recon_example_viewer_pass` and the three
+  viewers' config entries.
+  The NVIDIA legs keep the driver's shader cache across runs, which their
+  containers had silently turned off: the suite at `-j4` with validation
+  takes 15 s warm on the RTX 5090, against 38 s with no cache.
+- `tests`: **slow tests trimmed, with the properties they check kept**; the
+  Orbbec decoder tests and the networking reaping case wait on counts, not
+  fixed sleeps. Under ASan (Debug) on an M5 Max, `recon_eval_mesh_distance`
+  takes 6 s in place of 28 s. Under ASan or TSan, `recon_networking_client`'s
+  flood case checks its calls without their 500 ms limit, which TSan misses
+  on a loaded host.
+- `volume`: **`allocate_from_triangles` asks for each block once a
+  workgroup**, not once per work item naming it, and allocates the same
+  blocks in under half the device time on Rafa2's 8-voxel band at 5 mm
+  (PERF.md MESH3). Test: `recon_volume_allocate_triangles`.
+- `volume`: **`VoxelBlockGrid::remove` zeroes in the map's own submit**
+  (`VoxelHashMap::remove`'s new `first_round`), one fence wait fewer for a
+  decode that drops blocks or a garbage collection. Tests:
+  `recon_volume_delete`, `recon_volume_block_grid`,
+  `recon_volume_block_stamps`.
+- `tsdf`: **`TsdfIntegrator::integrate` is one submit**, the compaction's
+  count sizing the fuse on the device: one fence wait fewer, the same
+  voxels. The `"  ..active set"` row now times the compaction's device half
+  alone. New: `VoxelHashMap::record_compaction` and `allocated_blocks`.
+  Tests: `recon_tsdf_integrate_cull`, `recon_tier_stage_metrics`,
+  `recon_volume_block_grid`.
+- `tsdf`: **a live set is one submit**: once its grid holds a block, a
+  `Fuser` with `allow_partial` allocates, compacts and fuses a set in one
+  batch (`TsdfIntegrator::allocate_and_integrate`; `allocate_from_depth`'s
+  new `then`), one fence wait a set where it took three. What its one
+  allocation round leaves out, and a grow for a capacity limit, land a set
+  late; strict fusion is unchanged (the 2026-10-10 decision, amended).
+  Tests: `recon_tsdf_fuser`.
+- `codec`: **a decode writes only the voxels whose bits it changes**, to
+  the same grids and stamps: room0's decode at 1 cm takes 0.99 ms of device
+  time a frame, from 1.12. Tests: `recon_codec_dct`.
+- `sensor`: **NVDEC's H.265 decoders share the GPU's primary CUDA
+  context**, a stream each, where FFmpeg made a context per decoder: four
+  4K decoders on an RTX 5090 hold 1.3 GiB of device memory while decoding,
+  not 2.8 GiB. Tests: `recon_sensor_video_hevc`.
+- `networking`: **a `StreamClient` receives through 2 MiB**, not 256 KiB,
+  which held a stream to about 12 MB/s over the VPN, under the rig's
+  9.4 MB/s at 1 cm; Linux caps it at `net.core.rmem_max`. Tests:
+  `recon_networking_socket`.
+- `eval`: **`ReferenceMesh::compare` measures on every core**, with one
+  thread's figures, about 6 times faster on a room-sized mesh. Tests:
+  `recon_eval_mesh_distance`.
+- `examples`: **`fuse_orbbec`'s stream decodes only with `output.csv` or
+  `codec.sweep`**, so recording or serving alone no longer decodes every
+  set into a second grid. `CodecOutputs::decode`, on by default, says
+  whether to decode; off, a row's decode columns are empty
+  (`CodecRow::decode_ms` is optional) and `CodecStream::player()`, now a
+  pointer, is null. Tests: `recon_example_codec_stream`,
+  `recon_example_set_codec`.
+- `examples`: **`CodecStream::create` makes its outputs before the codec's
+  kernels**, so a refused output builds none, and a codec error removes the
+  stream and CSV files it made. Test: `recon_example_codec_stream`.
+- `examples`: **`fuse_replica` re-meshes on the device** and reads a mesh
+  back only for the final PLY; `fusion.device_extract` no longer changes
+  it. Tests: `recon_fuse_replica_run`.
+- `codec`: **`make_decode_grid` and `decode_growing` take a block ceiling**
+  (BREAKING), so a forged header or frame from a file or a socket can no
+  longer make a player's grid gigabytes large. A frame past `max_blocks`,
+  or a grow past `make_decode_grid`'s grid for it, is refused as
+  `InvalidArgument` (a frame to skip) before the decode or the grow, and
+  `make_decode_grid` checks the header's block count against the segment
+  table. Migrating: pass both helpers `max_blocks`, the most blocks a frame
+  may hold under your memory budget.
+  Tests: `recon_codec_decode_grid`, `recon_codec_decode_grid_oom`.
+- `examples`: **a finer fusion grid starts with a larger table**:
+  `create_fusion_grid`'s default bucket count, `fusion_buckets`, scales
+  16,384 by (1 cm / voxel)², from 1× up to 4×, so `fuse_orbbec`, `rig_viewer`,
+  `fuse_viewer` and `fuse_render` start a 5 mm grid at 65,536 buckets, where
+  its first set fits, rather than growing through a full table. Test:
+  `recon_example_fuse_keyframe`.
+- `examples`: **the senders print viewers joining and leaving.**
+  `serve_stream` and `fuse_orbbec` install `vr_example::print_info_log`
+  (`examples/common/info_log.hpp`), which prints Info, Warning and Error as
+  the core's default sink prints a line and drops Debug, so the server's
+  Info lines for a viewer that joins, leaves or fails reach stderr.
+  `networking`: the refusals past `max_viewers` not logged at Warning (the
+  first, then one in 10 s) go at Debug, not Info, so such a sender is not
+  flooded. Tests: `recon_example_info_log`, `recon_networking_server`.
 - `tsdf`: **`MeshIntegrator` measures a voxel against only the triangles no
   lower bound rules out**, a workgroup per block, and writes the same bytes:
   a triangle is ruled out only when strictly farther than the voxel's best,
@@ -208,12 +298,60 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   explicit fusion/output settings. Tests cover runtime option mapping and
   every executable's help/error startup before resource creation.
 
+### Fixed
+
+- `examples`: **`codec_mesh`'s mesh conversion table has its `allocate`
+  row**, where `convert_frame` passed the conversion's metrics to the
+  integrator alone. Regression: `recon_example_mesh_sequence`.
+- `volume`: **a set that overfills the hash table no longer sweeps it once
+  per failing insert**: an insert that must overflow its bucket reports
+  `AllocFailures::heap` at once when fewer than an eighth of the blocks are
+  left, so the first 5 mm frame of a small table stops stalling the GPU for
+  most of a second (the 2026-08-08 decision, amended). Regression:
+  `recon_volume_hash_map`.
+- `volume`: **a dispatch ends at the first round that hits a capacity
+  limit**, so the caller grows that much sooner, where it re-dispatched the
+  whole set until progress stalled. The new `AllocFailures::rounds` says how
+  many rounds a call ran. Regression: `recon_volume_allocate`.
+- `volume`, `tsdf`, `mesh`: **a dispatch past the device's group limit
+  splits** where it was refused, on a device that reports Vulkan's floor of
+  65,535 groups, as many Android and Mesa drivers do:
+  `allocate_from_triangles` past 16.7 M candidate blocks,
+  `TsdfIntegrator::integrate` past 32,767 reached blocks,
+  `MeshIntegrator::integrate` past 16.7 M candidates, and a `MarchingCubes`
+  extract past 65,535 active blocks, such as room0 at 5 mm (the 2026-08-08
+  decision, amended). Regressions: `recon_volume_allocate_triangles`,
+  `recon_tsdf_integrate`, `recon_tsdf_mesh_integrate`,
+  `recon_mesh_marching_cubes_sparse`.
+- `examples`: **`fuse_viewer` and `rig_viewer` time the whole render pass
+  on the GPU**, as the Performance panel's "render pass" row; its
+  "mesh draw" and "overlay draw" rows are CPU-only. On Apple GPUs those two
+  read about 0 ms as GPU scopes inside the pass. Test:
+  `recon_example_viewer_pass`.
+- `examples`: **the viewers' panels show ImGui's colours as authored**: the
+  viewers' gfx pin moves from #135 to #148, past gfx #144. Their default
+  `_SRGB` swapchain encoded the colours a second time, so the panels drew
+  washed out. Test: `recon_example_viewer_pass`.
+- `examples`: **`serve_stream` serves on past a damaged payload**: a record
+  whose payload fails its CRC is printed once and skipped, with the P-frames
+  after it, up to the pass's next key (`ReplayLoop::send_pass`). It used to
+  end the serve and drop every viewer. Test: `recon_example_stream_replay`.
+- `examples`: **a codec stream's track records its nominal rate**, which
+  `CodecStream::create` now takes: `source.fps` for `fuse_orbbec`'s, 30 a
+  second for `codec_replica`'s and `codec_mesh`'s. They said unknown, so a
+  player paced a 25 fps rig recording's loop restart at 30.
+  Tests: `recon_example_codec_stream`, `recon_example_mesh_sequence`.
+
 ### Added
 
 - `networking`: `StreamClient::next` has an overload reporting progress even
   when no complete record is ready. Callers can drain partial receives and
   buffered records before waiting on their own controls. The original
   three-argument overload is retained. Tests: `recon_networking_client`.
+- `stream`: **`nominal_period_ns`** (`stream/session.hpp`), a track's period
+  from its nominal rate, and 30 a second's for an unknown rate, for a reader
+  that paces records where their pts cannot. `serve_stream`'s replay paces
+  by it. Test: `recon_stream_container`.
 - `examples`: **`fuse_orbbec` serves its coded sets live, and core 0.16.0
   is required** (core #46). With `output.serve`, a port, it codes each fused
   set as with `output.stream` and serves the records live on that port, on
@@ -607,6 +745,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
+- build: **install rules and the package config** (BREAKING; the
+  2026-10-22 decision). recon is consumed by commit: `VR_INSTALL`,
+  `volumetric_kit_reconConfig.cmake` and `find_package(volumetric_kit_recon)`
+  go, and the core recon fetches installs nothing either. Migrating: fetch
+  recon pinned by commit with `FetchContent` (README, Building). Tests:
+  `recon_subproject_headers` (was `recon_package_headers`), and
+  `recon_subproject_camera_only`, now in camera-only builds alone.
 - `volume`: **the hash table's internals** (BREAKING): `volume/hash.hpp` is
   no longer installed, and `HashEntry` leaves `hash_types.hpp`. `HashEntry`
   and the fail-tally slots (`kFail*`) are internal. The host slot sentinels

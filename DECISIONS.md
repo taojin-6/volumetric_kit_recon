@@ -93,11 +93,14 @@ entries relevant to your task; later amendments supersede earlier rules.
   The sparse mesh kernel resolves its own 2×2×2 neighbourhood by probing the
   hash table on-device, and `mesh` therefore reads a `volume` buffer — a
   coupling paid for, not stumbled into. *Amended 2026-10-13:* the device
-  shows the chained fixture spills; `HashDiagnostics` is gone.
+  shows the chained fixture spills; `HashDiagnostics` is gone. *Amended
+  2026-10-22:* the extract splits its dispatch at the device's group limit.
 - [**2026-08-08**](#2026-08-08--the-overflow-scan-stays-exhaustive-what-gets-bounded-is-its-cost-per-slot-not-its-length) —
   The overflow scan stays exhaustive; what gets bounded is its cost per slot,
   not its length. *Amended 2026-10-13:* `diagnostics()` is gone; the device
-  confirms the chain fixtures.
+  confirms the chain fixtures. *Amended 2026-10-22:* the heap path refuses an
+  overflow insert, unscanned, below an eighth of the blocks, and the retry
+  loop ends at a capacity limit.
 - [**2026-08-08**](#2026-08-08--fuse_viewer-draws-recons-buffers-interop-seam-b-end-to-end-and-the-release-mark-must-be-published-before-the-mesh-is-taken) —
   `fuse_viewer` draws recon's buffers: interop seam B, end to end, and the
   release mark must be published *before* the mesh is taken.
@@ -195,7 +198,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   rather than grown. *Amended 2026-10-13:* the `Decoder` decodes P-frames
   too, against a reference it keeps. *Amended 2026-10-18:* a player's growth
   sits beside the decoder, as the `Fuser`'s does: `make_decode_grid` and
-  `decode_growing`.
+  `decode_growing`. *Amended 2026-10-22:* both take the caller's block
+  ceiling, and refuse a frame or a grow past it as `InvalidArgument`.
 - [**2026-09-27**](#2026-09-27--the-video-decoder-is-recon_sensor_video-a-target-of-its-own-over-an-installed-ffmpeg-hevc-in-host-pictures-out-on-the-first-hardware-back-end-that-decodes-a-built-in-clip-nvidia-ahead-of-an-integrated-gpu-each-ci-leg-requires-the-hardware-it-has) —
   The video decoder is `recon_sensor_video`, a target of its own over an
   installed FFmpeg: HEVC in, host pictures out, on the first hardware back end
@@ -417,7 +421,7 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-06**](#2026-10-06--fusion-runs-over-the-blocks-the-scanning-cameras-reach-one-frustum-a-frame-no-near-cut-far-at-max_depth--trunc_dist-their-union-compacted-in-one-scan-amends-the-2026-08-12-view-meshing-and-the-2026-09-30-one-batch-and-device-list-entries) —
   Fusion runs over the blocks the scanning cameras reach: one frustum a
   frame, no near cut, far at `max_depth + trunc_dist`, their union compacted
-  in one scan.
+  in one scan. *Amended 2026-10-22:* in the fuse's own submit.
 - [**2026-10-06**](#2026-10-06--marching-cubes-meshes-what-the-viewing-camera-sees-an-extract-over-the-device-frusta-list-the-viewers-re-meshing-on-a-fuse-or-a-view-change-and-a-culled-pass-records-its-density-amends-the-2026-08-12-view-meshing-entry-and-the-2026-10-06-incremental-removal-and-fusion-culling-entries) —
   Marching cubes meshes what the viewing camera sees: an extract over the
   device frusta list, the viewers re-meshing on a fuse or a view change, and
@@ -456,6 +460,8 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-10**](#2026-10-10--fusion-is-library-code-with-strict-defaults-and-opt-in-partial-coverage) —
   `tsdf::Fuser` owns grow/allocate/integrate with strict defaults and opt-in
   partial coverage; `volume::grow_grid` shares stateless growth arithmetic.
+  *Amended 2026-10-22:* a partial set on a grid holding a block is one
+  submit, and its capacity grow lands a set late.
 - [**2026-10-10**](#2026-10-10--only-the-owner-triggers-ci-and-the-runner-tooling-is-the-cores) —
   Only the owner triggers CI, by the repository's Actions policy; no job
   carries a fork guard. The runner tooling is the core's.
@@ -546,7 +552,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   host only I/O and control; and the host `BlockList` it left without a
   caller goes, with the host-array `allocate` and `remove`. *Amended
   2026-10-14:* the encoder's split is its diff's own search, not a
-  `BlockLists` pass.
+  `BlockLists` pass. *Amended 2026-10-22:* the grid's zeroing rides the
+  map's remove's first round, a fence fewer.
 - [**2026-10-13**](#2026-10-13--block-lists-reach-the-volume-tier-on-the-device-alone-a-host-list-entry-point-that-only-tests-called-goes-amends-the-2026-08-08-sparse-mesh-and-overflow-scan-2026-08-12-view-meshing-2026-09-26-codec-2026-09-28-device-memory-2026-10-03-garbage-collection-2026-10-06-public-api-and-view-culling-and-2026-10-13-coordinate-entries) —
   Block lists reach the volume tier on the device alone; a host-list entry
   point that only tests called goes: the host `BlockList`, the host-array
@@ -593,7 +600,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   per-tier copies): values, not structs, so scalar-layout and std430 kernels
   both call it; recon's kernels project through it, keeping only their own
   acceptance rules; and `recon_core`'s `VR_SHADER_INCLUDE_DIR` names the root
-  a consumer includes it under, fetched or installed.
+  a consumer includes it under, fetched or installed. *Amended 2026-10-22:*
+  fetched only; recon installs nothing.
 - [**2026-10-16**](#2026-10-16--a-brew-upgrade-needs-no-cache-clearing-the-mac-jobs-install-nothing-and-the-dependency-cache-keys-on-the-cores-homebrew-key) —
   A brew upgrade needs no cache clearing: the Mac jobs install nothing, and
   the dependency cache keys on the core's Homebrew key.
@@ -655,6 +663,11 @@ entries relevant to your task; later amendments supersede earlier rules.
   is ruled out only by a bound, less a rounding margin of its own, strictly
   above the voxel's limit, so every voxel writes what its whole bin writes.
   Blocks past 16^3 voxels are refused.
+- [**2026-10-22**](#2026-10-22--recon-is-fetched-by-commit-never-installed-no-install-rules-package-config-or-package-tests-amends-the-2026-10-16-glsl-pinhole-entry-and-the-2026-10-17-amendment-of-the-2026-10-13-block-list-entry) —
+  recon is fetched by commit, never installed (the owner's rule for the
+  family): no install rules, package config or package tests. The
+  add_subdirectory checks stay, the public headers' one among them, and the
+  camera-only check runs in the camera-only build alone.
 - [**2026-10-22**](#2026-10-22--streamclient-reports-progress-before-a-whole-record-is-ready) —
   `StreamClient::next` can report partial input and connection progress,
   allowing a consumer to drain it before waiting on its own controls.
@@ -908,6 +921,11 @@ shared device is the precondition seam B needs, not seam B itself.
 *Amended 2026-08-08 (below):* `fuse_viewer` now draws recon's buffers
 directly — seam B — so the precondition has been collected on.
 `fuse_render` deliberately stays two-device seam A.
+*Amended 2026-10-22:* the leg is no longer build-only. It runs the viewers'
+headless tests, which need no window or dataset: `recon_example_viewer_atlas`
+and `recon_example_viewer_pass` on a headless device,
+`recon_example_viewer_device`, and each viewer's config entry, on the core's
+test policy with validation.
 
 ### 2026-07-07 — Projective texturing is a new `texture` tier; live single-camera first.
 
@@ -1828,6 +1846,11 @@ than converted. That predicate is pinned directly where it lives, in
 is gone, so the suite asks the device whether the chained fixture spills: a
 table of its shape whose chains may not grow refuses some of its blocks for
 chain room.
+*Amended 2026-10-22:* the extract splits its dispatch at
+`maxComputeWorkGroupCount[0]`, as the codec's and the block stamps' passes
+do, so a smaller block costs more dispatches but no longer lowers the
+reachable active-block count (the "two things deliberately not done"
+below), and room0's ~107 k blocks at 5 mm mesh at the 65535 floor.
 
 *Reverses* the "host-built
 neighbour table … no device-side hash probe, and no coupling to the hash
@@ -1931,6 +1954,22 @@ an absent one.
 `HashDiagnostics` and `volume_diagnostics_test.cpp` are gone;
 `coords_in_bucket` lives in `volume_hash_map_test.cpp`, whose chain fixtures
 the device confirms share their bucket.
+*Amended 2026-10-22:* change (2)'s premise, that an empty heap is the
+near-full state, was wrong. A dispatch that overfills the table leaves only
+anchors free, so the heap never empties, and every failing insert swept the
+whole table holding its home bucket's lock: Replica room0's first frame at
+5 mm in 4 096 buckets spent 0.70–0.90 s of allocate device time on an M5 Max
+(Release, three runs). On the heap path an overflow insert now reports
+`heap` without scanning once fewer than an eighth of the blocks are left, the
+anchors' share at the default bucket size; `table` remains a clean sweep's
+proof, on the rehash path and at smaller buckets.
+The retry loop also ends at the first round with a capacity limit, where it
+re-dispatched until two rounds made no progress, each repeating the failed
+inserts and the lock races of the threads queued behind them;
+`AllocFailures::rounds` counts the rounds, and `recon_volume_allocate` tests
+the exit. With both, that frame allocates in 13–22 ms, after one more grow
+(resize 35–41 ms of host time, from 9–15), and meshes the same 6 585 513
+vertices.
 
 An M5 iPad Pro lost the GPU inside
 `allocate_from_depth` at **31 480 of 32 768 blocks** —
@@ -5186,6 +5225,18 @@ leaves the caller's prior metrics intact and returns decode success.
 `recon_codec_decode_grid_oom` injects the diagnostic and merge failures and
 checks that the following P-frame still decodes to the expected grid.
 
+*Amended 2026-10-22:* both helpers take the caller's ceiling, `max_blocks`.
+They sized the grid from the frame's own header, so the v1-frame entry's
+bound, the caller's capacity, was gone once the 2026-10-21 networking entry
+fed them TCP bytes: a forged 50-byte header, or a frame of 8 bytes per 1024
+blocks, made a grid of gigabytes that was never shrunk. A frame past the
+ceiling, or a grow past `make_decode_grid`'s grid for it, is refused before
+the decode or the grow, as `InvalidArgument`, a frame a player skips rather
+than an `OutOfMemory` that stops it. `make_decode_grid` checks the block
+count against the segment table through the decoder's own parse, where a
+sound P-frame stops at its reference (`NotFound`). The ceiling is a required
+argument, so a player states its budget.
+
 The third of the 2026-09-26 entry's five PRs, and the first public API the
 codec has had: `codec/encoder.hpp` (`Encoder`, `EncoderConfig`) and
 `codec/decoder.hpp` (`Decoder`, `FrameInfo`, `read_frame_info`). Both hold the
@@ -5895,16 +5946,18 @@ better of each, measured rather than argued:
   sweep decoding into the stream's player carry over into the examples.
 - **Tests from #95**, ported: thin triangles against the double-precision
   answer (50 000 draws, enough to meet Ericson's rare misses; reverting to
-  it fails), and the pruned search against a scan of every triangle
-  (probing one cell fewer along x, or leaving the box gap unsquared,
-  fails). One
+  it fails; 5 000 under the sanitizers), and the pruned search against a
+  scan of every triangle (probing one cell fewer at either end along x, or
+  leaving the box gap unsquared, fails at 500 points). One
   change survives: trusting the face down to any nonzero area passes every
   case too. The 1e-4 guard is kept as a margin, not a measured need.
 
-**Open**, a `TODO(eval)` in the code (the ground-truth test's copy of the
-metric went with the test, which #81 dropped before landing):
-- A threaded `compare_meshes`: room0 at 1 cm takes ~2 s at stride 4 on one
-  core.
+**Threaded** (2026-10-22): `compare` measures each direction on every core,
+a slice of the points per thread, each writing only its own entries, so the
+figures are one thread's to the bit. Room0 fused at 2 cm with each triangle
+split in four (1.3 M triangles) against a copy moved up to 1 mm, stride 4,
+both ways, on the shared M5 Max in Release: 1.6 to 1.9 s on one core, 0.25
+to 0.32 s threaded, every figure identical.
 
 ### 2026-09-27 — A mesh becomes a TSDF two ways, in the `tsdf` tier: signed by the closest triangle's normal, for a closed mesh, or as an unsigned shell, for any mesh — binned per block over the allocation's own candidates, with no topology.
 
@@ -10915,6 +10968,12 @@ sparse kernels' dispatch time (each lost one barrier per workgroup).
 carries a serial of its own, so a later frustum compaction makes an earlier
 list stale.
 
+*Amended 2026-10-22 (PERF.md P6):* the fuse records the same compaction into
+its own submit (`VoxelHashMap::record_compaction`) and sizes its dispatch
+from the device's count, refusing none. The map's host copy of the heap
+counter, not a second compaction, tells an empty grid from one the frames do
+not reach.
+
 **The rule.** `TsdfIntegrator::integrate` builds one frustum for each frame
 it fuses -- the depth camera's intrinsics and pose, **no near cut** (near 0),
 far at `max_depth + trunc_dist`, sides widened as `make_frustum_planes`
@@ -11556,6 +11615,14 @@ facing test without its zero-normal exemption; and the single-camera pass
 without the depth-range check (both bounds zero, and inverted).
 
 ### 2026-10-10 — Fusion is library code, with strict defaults and opt-in partial coverage.
+
+*Amended 2026-10-22 (PERF.md P6, its first step):* once its grid holds a
+block, a partial set is one submit (`TsdfIntegrator::allocate_and_integrate`):
+one allocation round, then the compaction and the fuse in its batch. That
+round's lock races wait for the next set, and a grow for a capacity limit is
+made after it, so what the set could not allocate lands with the next. An
+empty grid's first set keeps the rounds: whether the call ticks depends on
+whether the grid gains a block. Strict fusion is unchanged.
 
 `tsdf::Fuser` owns the per-set sequence formerly in
 `examples/common/fuse_frame.hpp`: grow ahead past `kGrowThreshold`, allocate
@@ -12664,6 +12731,13 @@ verdict ignored. Not run: the RTX 5090.
 
 ### 2026-10-13 — The codec's coordinate work runs on the device: the encoder sorts its blocks with a stable rank-merge sort on `coord_less`, and the decoder judges, merges and diffs them by count and binary search, never sorting; only counts and verdicts cross the bus (amends the 2026-10-13 decoder, 2026-10-12 P-frame, 2026-10-03 observed-list and garbage-collection, and 2026-10-01 codec-review entries).
 
+*Amended 2026-10-22 (the remove's first round):* `VoxelHashMap::remove`
+takes the public first-round hook **What crosses, and the fences** names,
+`first_round`, and `VoxelBlockGrid::remove` records its zeroing there,
+ahead of the delete in the same submit. A decode that drops blocks, and a
+garbage collection that frees any, waits on one fence fewer: 4 for a
+decode with adds and drops.
+
 *Amended 2026-10-14 (the `Encoder`'s P-frames, below):* the split the
 **Next** item plans as a `BlockLists` pass is the encoder's diff's own first
 search (`inter_diff.comp`), on these searches and the reader's survivor
@@ -12900,6 +12974,8 @@ primes become the tests' oracle (`tests/volume_hash_oracle.hpp`).
 `hash_lookup.glsl`. `recon_package_headers` fails if `volume/hash.hpp` is
 installed again, or if an installed volume header, or an installed header
 that includes one, declares any of these names in the volume namespace.
+*Amended 2026-10-22 (the install entry):* `recon_subproject_headers` makes
+that check on the public headers, as a fetching sibling sees them.
 
 **The rule** is the user's (2026-10-13): only I/O takes a host path --
 reading a mesh model, a camera stream (Orbbec, ARKit) -- and what it reads
@@ -13561,6 +13637,9 @@ UBSan (CI runs them).
 
 ### 2026-10-16 — A shared GLSL pinhole for recon and its consumers: `core/shaders/pinhole.glsl`, exported under the include root `recon_core` names (amends the 2026-08-11 texturing entry's per-tier copies).
 
+*Amended 2026-10-22 (the install entry):* recon installs nothing, so the
+root is the build tree's copy alone.
+
 calib's depth checks run kernels of their own over recon's prepared depth,
 and they must project and unproject it by recon's rules. A copy in calib
 would be a second pinhole. The core cannot hold it, since its decisions lock
@@ -13674,7 +13753,7 @@ border pixel's ray. Its lens is a stand-in, not an SDK report: of
 CL2A141000N's depth lens only k1 29.29 and k6 3.77 are on record (the
 2026-09-28 GPU pre-processing entry). The other terms are calib's Femto-like
 test lens, and the test holds the stand-in to the rest of the record. Its
-rays reach its whole raw image, and undistorting moves a raw pixel 30.6 px
+rays reach its whole raw image, and undistorting moves a raw pixel 30.7 px
 on average and 224.7 px at most, against the 31.5 px and 220.9 px measured
 on CL2A141000N (the 2026-09-26 Orbbec driver entry). On it the widest output
 pixel is at r = 0.914, and nothing folds within r = 3. Where a lens folds
@@ -14069,11 +14148,14 @@ replaying a recording, sends; the player reads.
   128 KiB `TCP_NOTSENT_LOWAT` 0.20 MB on Linux, where the mark gates `send`
   too, and 0.59 MB on macOS, where it gates `poll` alone (loopback,
   measured). A viewer takes its next chunk only once its socket polls
-  writable, and the client's receive buffer is 256 KiB, set before the
-  connect so the window scale fits it. Its stall is counted from what it
-  acknowledges too, not from the socket polling writable alone: one
-  draining under 64 KiB (Linux) or a chunk (macOS) a `stall_limit` stays
-  above the mark as it reads (measured).
+  writable, and the client's receive buffer is 2 MiB, set before the
+  connect so the window scale fits it. A stream carries at most one buffer
+  a round trip: 256 KiB held it to about 12 MB/s over the VPN, where the
+  rig at 1 cm needs 9.4 MB/s; 2 MiB holds that rig's key (0.78 MB) and
+  three times its bytes a round trip (0.62 MB) (2026-10-22). Its stall is
+  counted from what it acknowledges too, not from the socket polling
+  writable alone: one draining under 64 KiB (Linux) or a chunk (macOS) a
+  `stall_limit` stays above the mark as it reads (measured).
 - **Joining at the cached GOP.** A viewer gets the GOP from its key, up to
   about 1.3 MB and 0.2 to 0.4 s over the VPN, and shows a frame at once.
   Waiting for the next key instead sends nothing extra but shows nothing for
@@ -14187,8 +14269,8 @@ byte for byte (4,272,320 B), and every frame's `tsdf` and `weight` hash the
 same as origin/main's in both bands, signed and shell.
 `recon_tsdf_mesh_integrate_exact` compares every voxel's bits with a brute
 force over the same bins, rebuilt by replaying the binning's work items
-through its own GLSL, on 21 fixtures. Planted bugs each fail it: a margin of
-0 (17 fixtures), the tie order reversed (12), the unsorted tail skipped (2),
+through its own GLSL, on 19 fixtures. Planted bugs each fail it: a margin of
+0 (15 fixtures), the tie order reversed (11), the unsorted tail skipped (2),
 and `>=` in place of both of the rule's `>` (the fan at zero distance, whose
 faces all measure 0 at the origin's voxel and whose lowest index signs it
 -0). Two do not, as the argument says: `>=` on the square alone, since the
@@ -14200,11 +14282,35 @@ fail.
 **Not done**: the conversion's smaller costs around the write, in DESIGN's
 Next work.
 
+### 2026-10-22 — recon is fetched by commit, never installed: no install rules, package config or package tests (amends the 2026-10-16 GLSL pinhole entry and the 2026-10-17 amendment of the 2026-10-13 block-list entry).
+
+**The rule** is the owner's, for the whole family: a sibling is consumed by
+commit (`FetchContent`), as the player and ios fetch recon; only third-party
+SDKs are installed prerequisites. calib's package config and install tests
+were the one user of an installed recon; calib drops them before it pins
+recon past this change. With siblings pinning different core minors, one
+prefix could not hold them together anyway.
+
+**What goes.** `VR_INSTALL` and every `install()` rule,
+`cmake/volumetric_kit_reconConfig.cmake.in` and what fed it only
+(`VR_FFMPEG_CONSUMER_MODULES`), and `tests/package` with its nine
+`recon_package_*` tests, which built and installed a base-only core per run.
+recon sets the core's `VKC_INSTALL` OFF. `VR_SHADER_INCLUDE_DIR` names the
+build tree's copy of the exported GLSL alone.
+
+**What stays.** The add_subdirectory checks (`tests/subproject`): the
+defaults, the GLSL root, the core refusals, and the public headers' check of
+the hash table's internals, now `recon_subproject_headers` on the headers
+under `include/`. `recon_subproject_camera_only` drops its install step and
+is registered only in a `VR_CAMERA_ONLY` build: its configures are Release
+with Vulkan hidden whatever the leg, so the camera-only job, the one place
+with no Vulkan at all, is its home.
+
 ### 2026-10-22 — StreamClient reports progress before a whole record is ready.
 
 The player waits on its consumer's take when a decoded frame cannot yet be
 published. A zero-wait `StreamClient::next` takes at most one receive, up to
-256 KiB, and can return false while more of a partial record is already in
+2 MiB, and can return false while more of a partial record is already in
 the socket. Treating that false as idle adds a consumer wait per receive,
 slowing the drain even when the sender and decoder can keep up.
 

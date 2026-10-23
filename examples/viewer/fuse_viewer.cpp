@@ -897,65 +897,54 @@ int run(GLFWwindow* window, const Options& opt) {
       fuse_viewer::draw_reconstruction_panel(recon_panel);
     }
 
-    vg::RenderTargetBeginInfo begin_info;
-    begin_info.clear_color.float32[0] = 0.05f;
-    begin_info.clear_color.float32[1] = 0.05f;
-    begin_info.clear_color.float32[2] = 0.07f;
-    begin_info.clear_color.float32[3] = 1.0f;
-    render_frame.target->begin(render_frame.cmd, begin_info);
-    {
-      vg::Profiler::Scope draw_scope =
-          profiler.gpu_scope(render_frame.cmd, "mesh draw");
-      if (has_mesh) {
-        // recon's buffers, named rather than copied. LiveMesh owns nothing and
-        // reads the index count GPU-side out of the indirect command recon's
-        // marching-cubes kernel wrote, so the count does not cross the CPU
-        // either.
-        //
-        // No barrier is recorded here, and the reason is the fence + submit
-        // chain, not the barrier scope: recon's extract blocks on its own fence
-        // inside submit_single_time -- an availability operation covering every
-        // device write it made -- before the mesh is published at all, and this
-        // thread's vkQueueSubmit then makes those writes visible to the draw.
-        // recon's dispatch barrier does also name DRAW_INDIRECT, but it names
-        // VERTEX_INPUT only where its queue family advertises graphics (Vulkan
-        // forbids that stage on a compute-only family, and the bootstrap
-        // matches recon's on VK_QUEUE_COMPUTE_BIT alone), so it is not
-        // something this seam can rest on off Apple.
-        //
-        // The arena and index run are device-local, so the vertex-input stage
-        // fetches the mesh from VRAM on every presented frame (~64 MiB at
-        // room0's 991 k vertices). MarchingCubesConfig::share_vertices cuts
-        // that fetch ~4x by emitting ~4x fewer vertices, and
-        // `fusion.share_vertices` now takes it here. It was
-        // unavailable to this example while the texture tier refused a shared
-        // mesh -- it decided visibility per triangle and wrote uv0 per vertex
-        // -- and the per-vertex dispatch removed that refusal, so the ~4x is
-        // measurable on the running window rather than only in `fuse_replica`.
-        // The texture tier's several-view atlas still refuses a shared mesh
-        // -- it chooses per triangle, and waits on a per-primitive tile id --
-        // but this example textures from one camera.
-        const vgp::HybridMeshDraw draw{fuse_viewer::to_live_mesh(live_view)};
-        vgp::HybridMeshFrame hybrid_frame;
-        hybrid_frame.extent = extent;
-        hybrid_frame.view_proj = view_proj;
-        hybrid_frame.light_dir = glm::vec3(0.4f, 0.9f, 0.5f);
-        hybrid_frame.flags =
-            (opt.render.shading == vr_example::config::Shading::Lit)
-                ? vgp::kHybridMeshLit
-                : 0u;
-        hybrid_frame.atlas = atlas.use(render_frame.number);
-        hybrid_frame.draws = &draw;
-        hybrid_frame.draw_count = 1;
-        pipeline.submit(render_frame.cmd, hybrid_frame);
-      }
-    }
-    if (overlay) {
-      vg::Profiler::Scope overlay_scope =
-          profiler.gpu_scope(render_frame.cmd, "overlay draw");
-      overlay->render(render_frame.cmd);
-    }
-    render_frame.target->end(render_frame.cmd);
+    fuse_viewer::record_view_pass(
+        profiler, render_frame.cmd, *render_frame.target,
+        [&](VkCommandBuffer cmd) {
+          if (!has_mesh) return;
+          // recon's buffers, named rather than copied. LiveMesh owns nothing
+          // and reads the index count GPU-side out of the indirect command
+          // recon's marching-cubes kernel wrote, so the count does not cross
+          // the CPU either.
+          //
+          // No barrier is recorded here, and the reason is the fence + submit
+          // chain, not the barrier scope: recon's extract blocks on its own
+          // fence inside submit_single_time -- an availability operation
+          // covering every device write it made -- before the mesh is
+          // published at all, and this thread's vkQueueSubmit then makes those
+          // writes visible to the draw. recon's dispatch barrier does also
+          // name DRAW_INDIRECT, but it names VERTEX_INPUT only where its queue
+          // family advertises graphics (Vulkan forbids that stage on a
+          // compute-only family, and the bootstrap matches recon's on
+          // VK_QUEUE_COMPUTE_BIT alone), so it is not something this seam can
+          // rest on off Apple.
+          //
+          // The arena and index run are device-local, so the vertex-input
+          // stage fetches the mesh from VRAM on every presented frame (~64 MiB
+          // at room0's 991 k vertices). MarchingCubesConfig::share_vertices
+          // cuts that fetch ~4x by emitting ~4x fewer vertices, and
+          // `fusion.share_vertices` now takes it here. It was unavailable to
+          // this example while the texture tier refused a shared mesh -- it
+          // decided visibility per triangle and wrote uv0 per vertex -- and the
+          // per-vertex dispatch removed that refusal, so the ~4x is measurable
+          // on the running window rather than only in `fuse_replica`. The
+          // texture tier's several-view atlas still refuses a shared mesh --
+          // it chooses per triangle, and waits on a per-primitive tile id --
+          // but this example textures from one camera.
+          const vgp::HybridMeshDraw draw{fuse_viewer::to_live_mesh(live_view)};
+          vgp::HybridMeshFrame hybrid_frame;
+          hybrid_frame.extent = extent;
+          hybrid_frame.view_proj = view_proj;
+          hybrid_frame.light_dir = glm::vec3(0.4f, 0.9f, 0.5f);
+          hybrid_frame.flags =
+              (opt.render.shading == vr_example::config::Shading::Lit)
+                  ? vgp::kHybridMeshLit
+                  : 0u;
+          hybrid_frame.atlas = atlas.use(render_frame.number);
+          hybrid_frame.draws = &draw;
+          hybrid_frame.draw_count = 1;
+          pipeline.submit(cmd, hybrid_frame);
+        },
+        overlay ? &*overlay : nullptr);
 
     const vkc::Status present = app.end_frame(render_frame);
     if (!present.ok() && !win::swapchain_stale(present)) {

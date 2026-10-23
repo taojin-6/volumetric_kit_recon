@@ -37,9 +37,10 @@ Baseline: `main` at `36b6d86` (2026-09-30).
 
 For one set of four cameras, one iteration of `rig_viewer`'s fuse thread
 (`examples/viewer/rig_viewer.cpp:1270`), at the baseline. P1 has since made
-allocate, compaction and integrate one submit each per set, and P2 frame
-prep; see their rows. Since 2026-10-06 the compaction keeps only the blocks
-the set's frusta reach, so integrate scales with them rather than the map.
+allocate, compaction and integrate one submit each per set, P2 frame prep,
+and P6's first step the three one submit on a live grid; see their rows.
+Since 2026-10-06 the compaction keeps only the blocks the set's frusta
+reach, so integrate scales with them rather than the map.
 
 | stage | code | submits | order | read back |
 |---|---|---|---|---|
@@ -134,7 +135,7 @@ kernels.
 | P5 | Extract from the fuse's device block list | measured −14% an extract on the M5 Max, −35% on the RTX 5090 | M | P1 for the shared list | landed (#129); a fuse's list is no longer reused (2026-10-06) |
 | P4 | Bind texture views in place, with no per-remesh copies | measured 0.26–0.51 ms GPU per remesh at 4K, 0.04–0.12 at 720p | M | P1's descriptor-array decision | deferred |
 | P2 | Record a set's frame prep in one batch | measured parity once host colour stages on threads; the pipeline's unit of work | S | — | landed (`SensorArray::process`) |
-| P6 | Take the remaining host decisions off the critical path | at most ~0.5 ms/set on the RTX 5090, ~0.7 on the M5 Max (measured gap) | M | P1, P5 | open |
+| P6 | Take the remaining host decisions off the critical path | at most ~0.5 ms/set on the RTX 5090, ~0.7 on the M5 Max (measured gap) | M | P1, P5 | step 1 landed (#268); set time unmeasured |
 | P7 | Free the blocks nothing asks for or weights | measured: the map 7.3k → 2.9k blocks in 600 sets, integrate's device time −40% on the M5 Max, −50% on the RTX 5090; a static room keeps its size | M | — | landed (#132); device-list follow-up landed (#146) |
 | P9 | Allocate only the band blocks a sample can weight | ~60% of a static room's active set holds no weight; compaction, integrate and meshing scale with it | M | — | open, measure first |
 | D1 | Report a decoder's fallback to host pictures | makes a silent 12 MB/camera/frame PCIe regression visible | S | — | superseded: the decoders hand out device pictures only |
@@ -142,6 +143,7 @@ kernels.
 | D3 | Keep exported picture buffers out of the BAR | robustness on ReBAR systems | S | — | not needed (#130) |
 | MESH1 | Keep mesh-input bins and cursors on-device and retain scratch | RTX 4090 sparse-capacity host 0.920 → 0.125 ms (7.4x); dense host +0.9%, device +3.4%; Apple timing mixed | M | — | landed (#149), measured Release on M5 Max and RTX 4090; mesh input only, outside the live rig |
 | MESH2 | Measure each voxel against only the triangles no lower bound rules out, exactly | Rafa2 at 5 mm, host / device: 16-voxel band 29.57 / 27.17 → 7.95 / 5.95 ms, 8-voxel 8.55 / 6.89 → 3.65 / 2.21 | M | — | landed (#263), measured Release on M5 Max; mesh input only, outside the live rig |
+| MESH3 | Ask for each block a mesh's band names once a workgroup | Rafa2 at 5 mm, the `allocate` row host / device, means of three interleaved runs: RTX 4090 8-voxel band 11.19 / 7.90 → 5.51 / 2.27 ms, 16-voxel 16.37 / 13.06 → 12.10 / 8.90; M5 Max 8-voxel 7.73 / 6.14 → 4.15 / 2.60, 16-voxel 10.45 / 8.87 → 8.92 / 7.35 | S | — | landed (#268), measured Release on RTX 4090 and M5 Max; mesh input only, outside the live rig |
 | L1 | Shared-vertex remesh for the rig | ~3.4× fewer vertices | L | gfx | blocked |
 | L2 | Pipeline sets | overlaps set N's GPU work with set N+1's host work | L | P6 | later |
 | L3 | Read VideoToolbox's plane images directly | 0.28–0.31 ms GPU per 4K frame, Apple only | M | — | later |
@@ -368,19 +370,24 @@ is measured.
 > also means rethinking #129's cached list, which holds that count. P2 was
 > dropped, so P6 no longer waits on it.
 
-With P1, P2 and P5 in place, three host decisions still split a set:
+> **Step 1 landed (2026-10-22): the fuse is one submit.** Counting
+> `vkWaitForFences` while a partial `tsdf::Fuser` fused room0's four-frame
+> sets as `rig_viewer` does (1 cm, Release, M5 Max): 3 waits a set before,
+> 1 after; a strict `Fuser` takes 2, from 3. The set's time is unmeasured;
+> measure it on the RTX 5090.
 
-- **The compaction count, which sizes the integrate dispatch.** Dispatch
-  indirect off the device's count (`CommandBatch::dispatch_indirect`; the
-  `TODO(tsdf)` at `tsdf_integrator.cpp:312`).
+With P1, P2 and P5 in place, three host decisions split a set, two of them
+taken off by step 1:
+
+- **The compaction count, which sizes the integrate dispatch.** Done: the
+  count stays on the device and sizes the fuse through `dispatch_indirect`.
 - **Allocation failures, which decide a grow.** `tsdf::Fuser` grows ahead
   of need at `kGrowThreshold` before the set. Live viewers explicitly use
-  `allow_partial` and leave residual lock races to the next set; offline
-  callers require complete allocation (2026-10-10). What is left:
-  - Read the tally back in the set's one submit, so a grow for a capacity
-    limit lands a set late.
-  - That one-set lag is for the live viewer only. The examples that write a
-    mesh (`fuse_replica` and the rest) keep the synchronous grow.
+  `allow_partial`; offline callers require complete allocation (2026-10-10).
+  Done for the live viewers: once the grid holds a block, the tally comes
+  back in the set's one submit, and a grow for a capacity limit lands a set
+  late. The examples that write a mesh (`fuse_replica` and the rest) keep
+  the synchronous grow.
 - **The triangle count, which sizes the texture dispatch and the arena
   refit.** Keep it: a refit is rare once the plan has measured density.
 

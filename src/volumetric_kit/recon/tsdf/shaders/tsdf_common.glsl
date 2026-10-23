@@ -100,7 +100,6 @@ const uint kModeDynamic = 1u;
 
 layout(push_constant, scalar) uniform PushConstants {
   VoxelGridParams grid;
-  uint num_active_blocks;
   float max_weight;
   uint mode;
   uint has_color;       // 0 = depth only; 1 = also fuse the color frame
@@ -110,4 +109,5 @@ layout(push_constant, scalar) uniform PushConstants {
   // 1 = a Dynamic set's fuse, whose clears tsdf_clear.comp ran for every frame
   // of the set first: free space past the band is left alone.
   uint fuse_only;
+  uint item_base;  // the first thread this dispatch covers
 } pc;

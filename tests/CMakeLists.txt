@@ -64,20 +64,20 @@ foreach(_vr_var IN LISTS _vr_cache)
   endif()
 endforeach()
 
-# recon camera-only (VR_CAMERA_ONLY), with find_package(Vulkan) disabled: the
-# options that need the rest are refused, and a consumer builds against the
-# fetched source and against its install (subproject/camera_only.cmake).
-add_test(
-  NAME recon_subproject_camera_only
-  COMMAND
-    "${CMAKE_COMMAND}" "-DSOURCE_DIR=${PROJECT_SOURCE_DIR}"
-    "-DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/subproject_camera_only"
-    "-DGENERATOR=${CMAKE_GENERATOR}" "-DCXX_COMPILER=${CMAKE_CXX_COMPILER}"
-    ${_vr_fetched_sources} -P
-    "${CMAKE_CURRENT_SOURCE_DIR}/subproject/camera_only.cmake")
-
-# The camera tier is all VR_CAMERA_ONLY builds.
+# The camera tier is all VR_CAMERA_ONLY builds. Only they check recon
+# camera-only (subproject/camera_only.cmake): with find_package(Vulkan)
+# disabled, the options that need the rest are refused, and a consumer builds
+# against the fetched source. The camera-only CI job, which has no Vulkan at
+# all, is its home; it is Release whatever the build's type.
 if(VR_CAMERA_ONLY)
+  add_test(
+    NAME recon_subproject_camera_only
+    COMMAND
+      "${CMAKE_COMMAND}" "-DSOURCE_DIR=${PROJECT_SOURCE_DIR}"
+      "-DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/subproject_camera_only"
+      "-DGENERATOR=${CMAKE_GENERATOR}" "-DCXX_COMPILER=${CMAKE_CXX_COMPILER}"
+      ${_vr_fetched_sources} -P
+      "${CMAKE_CURRENT_SOURCE_DIR}/subproject/camera_only.cmake")
   return()
 endif()
 
@@ -158,23 +158,29 @@ add_test(NAME recon_volume_block_grid COMMAND recon_volume_block_grid_test)
 # volume block stamps: every allocation path stamps the blocks it asks for with
 # the map's tick, the block pass stamps those holding weight, and
 # free_stale_blocks frees those neither for more than max_age ticks; resize
-# keeps the records, remove and clear zero them. Skips with no device.
+# keeps the records, remove and clear zero them; a pass split into several
+# dispatches (core/dispatch.hpp's test seam, by src/). Skips with no device.
 add_executable(recon_volume_block_stamps_test volume_block_stamps_test.cpp)
 target_link_libraries(
   recon_volume_block_stamps_test
   PRIVATE volumetric_kit::recon_volume Vulkan::Vulkan
           volumetric_kit::core_test_policy)
+target_include_directories(recon_volume_block_stamps_test
+                           PRIVATE ${PROJECT_SOURCE_DIR}/src)
 vr_target_warnings(recon_volume_block_stamps_test)
 add_test(NAME recon_volume_block_stamps COMMAND recon_volume_block_stamps_test)
 
 # tsdf integrate: fuse a synthetic constant-depth plane into a VoxelBlockGrid
 # and verify the classic projective TSDF math per voxel (sdf, truncation, weight
-# + cap). It also runs the kernel's projection alone (shaders/project_pinhole)
-# on inputs that make its depth or pixel NaN. Skips with no device.
+# + cap), and a split dispatch (core/dispatch.hpp's test seam, by src/). It also
+# runs the kernel's projection alone (shaders/project_pinhole) on inputs that
+# make its depth or pixel NaN. Skips with no device.
 add_executable(recon_tsdf_integrate_test tsdf_integrate_test.cpp)
 target_link_libraries(
   recon_tsdf_integrate_test PRIVATE volumetric_kit::recon_tsdf Vulkan::Vulkan
                                     volumetric_kit::core_test_policy)
+target_include_directories(recon_tsdf_integrate_test
+                           PRIVATE ${PROJECT_SOURCE_DIR}/src)
 include(vr_embed)
 vr_embed_shaders(recon_tsdf_integrate_test SHADERS
                  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/project_pinhole.comp")
@@ -185,13 +191,15 @@ add_test(NAME recon_tsdf_integrate COMMAND recon_tsdf_integrate_test)
 # pseudonormals, or as a shell) and check every voxel of every written block
 # against a brute-force host reference -- an independent closest point, and the
 # winding number for inside/outside -- on a sharp tetrahedron, a dented cube, an
-# open quad and a triangle soup, plus determinism and every refusal. Skips with
-# no device.
+# open quad and a triangle soup, plus determinism (a split binning among it) and
+# every refusal. Skips with no device.
 add_executable(recon_tsdf_mesh_integrate_test tsdf_mesh_integrate_test.cpp)
 target_link_libraries(
   recon_tsdf_mesh_integrate_test
   PRIVATE volumetric_kit::recon_tsdf Vulkan::Vulkan
           volumetric_kit::core_test_policy)
+target_include_directories(recon_tsdf_mesh_integrate_test
+                           PRIVATE ${PROJECT_SOURCE_DIR}/src)
 vr_target_warnings(recon_tsdf_mesh_integrate_test)
 add_test(NAME recon_tsdf_mesh_integrate COMMAND recon_tsdf_mesh_integrate_test)
 
@@ -357,6 +365,17 @@ target_include_directories(recon_example_interrupt_test
 vr_target_warnings(recon_example_interrupt_test)
 add_test(NAME recon_example_interrupt COMMAND recon_example_interrupt_test)
 
+# The senders' log (examples/common/info_log.hpp): Info, Warning and Error in
+# the default sink's line form, Debug dropped, and concurrent lines whole. Host
+# only.
+add_executable(recon_example_info_log_test example_info_log_test.cpp)
+target_include_directories(recon_example_info_log_test
+                           PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
+target_link_libraries(recon_example_info_log_test
+                      PRIVATE volumetric_kit::core_base Threads::Threads)
+vr_target_warnings(recon_example_info_log_test)
+add_test(NAME recon_example_info_log COMMAND recon_example_info_log_test)
+
 # The examples' one stage table (examples/common/stage_table.hpp). Host only.
 add_executable(recon_example_stage_table_test example_stage_table_test.cpp)
 target_include_directories(recon_example_stage_table_test
@@ -450,7 +469,8 @@ add_test(NAME recon_example_remesh_report
 # tsdf fuser: a set fused through tsdf::Fuser, growing on the way, matches the
 # tier calls on a grid that never needed to; it grows ahead before any failure,
 # refuses incomplete bands by default, and keeps fusing only when the caller
-# explicitly allows partial coverage. Skips (exit 0) with no device.
+# explicitly allows partial coverage, whose one-submit sets match the tier calls
+# too and grow a set late. Skips (exit 0) with no device.
 add_executable(recon_tsdf_fuser_test tsdf_fuser_test.cpp)
 target_link_libraries(
   recon_tsdf_fuser_test PRIVATE volumetric_kit::core_test_policy
@@ -567,15 +587,18 @@ add_test(NAME recon_volume_allocate COMMAND recon_volume_allocate_test)
 # volume triangle-mesh allocation: allocate from a small mesh, then verify on
 # the real driver that every block holding a voxel within trunc_dist is present
 # -- brute-forced on the host against an independent closest-point -- that a
-# triangle wider than the band leaves no hole (where the point path does), and
-# that the distance prune keeps the bounding box's far corners out. Skips where
-# no device is present.
+# triangle wider than the band leaves no hole (where the point path does), that
+# the distance prune keeps the bounding box's far corners out, and that a split
+# dispatch (core/dispatch.hpp's test seam, by src/) allocates the same blocks.
+# Skips where no device is present.
 add_executable(recon_volume_allocate_triangles_test
                volume_allocate_triangles_test.cpp)
 target_link_libraries(
   recon_volume_allocate_triangles_test
   PRIVATE volumetric_kit::recon_volume Vulkan::Vulkan
           volumetric_kit::core_test_policy)
+target_include_directories(recon_volume_allocate_triangles_test
+                           PRIVATE ${PROJECT_SOURCE_DIR}/src)
 vr_target_warnings(recon_volume_allocate_triangles_test)
 add_test(NAME recon_volume_allocate_triangles
          COMMAND recon_volume_allocate_triangles_test)
@@ -595,14 +618,16 @@ add_test(NAME recon_volume_frustum COMMAND recon_volume_frustum_test)
 
 # Sparse marching cubes: mesh an analytic sphere written into a real multi-block
 # VoxelBlockGrid, exercising cross-block neighbour sampling, and prove the same
-# field meshes identically however it is divided into blocks. Skips where no
-# device is present.
+# field meshes identically however it is divided into blocks or dispatches
+# (core/dispatch.hpp's test seam, by src/). Skips where no device is present.
 add_executable(recon_mesh_marching_cubes_sparse_test
                marching_cubes_sparse_test.cpp)
 target_link_libraries(
   recon_mesh_marching_cubes_sparse_test
   PRIVATE volumetric_kit::recon_mesh Vulkan::Vulkan
           volumetric_kit::core_test_policy)
+target_include_directories(recon_mesh_marching_cubes_sparse_test
+                           PRIVATE ${PROJECT_SOURCE_DIR}/src)
 vr_target_warnings(recon_mesh_marching_cubes_sparse_test)
 add_test(NAME recon_mesh_marching_cubes_sparse
          COMMAND recon_mesh_marching_cubes_sparse_test)
@@ -791,12 +816,12 @@ add_test(NAME recon_codec_params COMMAND recon_codec_params_test)
 # alone, and their ends on the device -- a host frame's entries uploaded, the
 # forward read back, the inverse fed from the host, and the frame an Encoder
 # must write. Test-only; the codec tests that hold the device to it link it, and
-# reach the internal headers through it.
+# reach the internal headers through it (core/dispatch.hpp's by src/).
 add_library(recon_codec_oracle STATIC codec_oracle.cpp codec_oracle_device.cpp)
 target_link_libraries(recon_codec_oracle PUBLIC volumetric_kit::recon_codec)
 target_include_directories(
-  recon_codec_oracle
-  PUBLIC ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/codec)
+  recon_codec_oracle PUBLIC ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/codec
+                            ${PROJECT_SOURCE_DIR}/src)
 vr_target_warnings(recon_codec_oracle)
 
 # codec tier, GPU half: the internal DctTransform's forward kernel against a
@@ -907,12 +932,16 @@ add_test(NAME recon_codec_decoder COMMAND recon_codec_decoder_test)
 # codec tier, a player's grid (decode_grid.hpp): make_decode_grid's geometry,
 # layout and attributes off a frame's header, and decode_growing's one grow, its
 # second OutOfMemory, its timing of the attempt that succeeds, and the decoder's
-# refusals passed through. Skips with no device.
+# refusals passed through; the caller's ceiling, against frames forged with the
+# internal frame writer. Skips with no device.
 add_executable(recon_codec_decode_grid_test codec_decode_grid_test.cpp)
 target_link_libraries(
   recon_codec_decode_grid_test
   PRIVATE volumetric_kit::recon_codec Vulkan::Vulkan
           volumetric_kit::core_test_policy)
+target_include_directories(
+  recon_codec_decode_grid_test
+  PRIVATE ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/codec)
 vr_target_warnings(recon_codec_decode_grid_test)
 add_test(NAME recon_codec_decode_grid COMMAND recon_codec_decode_grid_test)
 
@@ -982,6 +1011,12 @@ if(VR_WITH_FFMPEG)
   target_compile_definitions(
     recon_sensor_video_hevc_test
     PRIVATE VR_HEVC_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data/hevc")
+  if(VR_WITH_CUDA)
+    # It asks libcuda which primary contexts the decoders hold.
+    target_include_directories(recon_sensor_video_hevc_test SYSTEM
+                               PRIVATE ${CUDAToolkit_INCLUDE_DIRS})
+    target_link_libraries(recon_sensor_video_hevc_test PRIVATE ${CMAKE_DL_LIBS})
+  endif()
   vr_target_warnings(recon_sensor_video_hevc_test)
   add_test(NAME recon_sensor_video_hevc COMMAND recon_sensor_video_hevc_test)
 
@@ -1347,7 +1382,8 @@ target_sources(recon_networking_client_test PRIVATE test_allocation_failure.cpp)
 
 # serve_stream's replay (examples/common/stream_replay.hpp): the records from
 # the first key, seq and key pts across passes by the writer's rules, the dues,
-# damage left out and an allocation failure past it refused. Host only.
+# damage left out and an allocation failure past it refused, and a damaged
+# payload skipped to the next key. Host only.
 add_executable(recon_example_stream_replay_test example_stream_replay_test.cpp
                                                 test_allocation_failure.cpp)
 target_include_directories(recon_example_stream_replay_test
@@ -1358,22 +1394,26 @@ vr_target_warnings(recon_example_stream_replay_test)
 add_test(NAME recon_example_stream_replay
          COMMAND recon_example_stream_replay_test)
 
-# The format's and the sockets' host-only tests, which CI builds and runs again
+# The tests whose code runs threads -- a reader shared by two, the sockets', the
+# senders' log, the Orbbec decode workers -- which CI builds and runs again
 # under ThreadSanitizer (.github/workflows/_build.yml): one target to build
 # them.
-add_custom_target(recon_stream_tests)
+add_custom_target(recon_tsan_tests)
 add_dependencies(
-  recon_stream_tests
+  recon_tsan_tests
   recon_stream_container_test
-  recon_stream_chunks_test
-  recon_stream_recovery_test
-  recon_stream_footer_test
-  recon_stream_oom_test
   recon_networking_gop_log_test
   recon_networking_socket_test
   recon_networking_server_test
   recon_networking_client_test
-  recon_networking_stress_test)
+  recon_networking_stress_test
+  recon_example_info_log_test
+  recon_sensor_orbbec_decode_worker_test)
+if(VR_WITH_ORBBEC)
+  add_dependencies(
+    recon_tsan_tests recon_sensor_orbbec_jpeg_test
+    recon_sensor_orbbec_hevc_test recon_sensor_orbbec_open_sensors_test)
+endif()
 
 # What a sibling that fetches recon gets (subproject/): its configure, from a
 # clean tree, with each dependency this build fetched as a local source, so it
@@ -1382,10 +1422,10 @@ add_dependencies(
 # tier. The old core is this one stamped 0.0.1, standing in for one below a
 # later floor: a real core older than 0.1.0 has no vkc_require_core at all.
 #
-# TODO: move this core-requirement harness -- the message helper, the base-only
-# core fixture below and subproject/'s version stamp, which gfx and calib repeat
-# -- into the core's test support, as a function each sibling calls with its
-# package and floor, and port the siblings onto it in one series.
+# TODO: move this core-requirement harness -- the message helper and
+# subproject/'s version stamp, which gfx and calib repeat -- into the core's
+# test support, as a function each sibling calls with its package and floor, and
+# port the siblings onto it in one series.
 set(_vr_subproject "${CMAKE_CURRENT_BINARY_DIR}/subproject")
 add_test(NAME recon_subproject_clean COMMAND "${CMAKE_COMMAND}" -E rm -rf
                                              "${_vr_subproject}")
@@ -1419,6 +1459,13 @@ add_test(NAME recon_subproject_glsl
                  --target vr_glsl_consumer)
 set_tests_properties(recon_subproject_glsl PROPERTIES FIXTURES_REQUIRED
                                                       vr_subproject_defaults)
+# ... and compiles the public headers that reach the volume tier, which hold
+# none of the hash table's internals (subproject/internal_names.cpp).
+add_test(NAME recon_subproject_headers
+         COMMAND "${CMAKE_COMMAND}" --build "${_vr_subproject}/defaults"
+                 --target vr_public_headers)
+set_tests_properties(recon_subproject_headers PROPERTIES FIXTURES_REQUIRED
+                                                         vr_subproject_defaults)
 _vr_add_subproject_test(recon_subproject_old_core old_core -DVR_CORE_FIRST=ON
                         -DVKC_WITH_VULKAN=ON -DVR_CONSUMER_CORE_VERSION=0.0.1)
 _vr_expect_message(
@@ -1432,117 +1479,27 @@ _vr_expect_message(
   "volumetric_kit_recon needs volumetric_kit_core's vulkan tier, which the core at .+ was built without: set VKC_WITH_VULKAN ON before"
 )
 
-# What a project that finds an installed recon gets (package/): this build,
-# installed with the core it carries, is found, with every imported target its
-# link interface names; and recon's package config, as this build generated it,
-# is not found on an installed core without the vulkan tier, saying why. That
-# core is built and installed for the test.
-include(FetchContent)
-FetchContent_GetProperties(volumetric_kit_core SOURCE_DIR _vr_core_source)
-if(VR_INSTALL AND _vr_core_source)
-  set(_vr_package "${CMAKE_CURRENT_BINARY_DIR}/package")
-  add_test(NAME recon_package_clean COMMAND "${CMAKE_COMMAND}" -E rm -rf
-                                            "${_vr_package}")
-  set_tests_properties(recon_package_clean PROPERTIES FIXTURES_SETUP
-                                                      vr_package_clean)
-  # This build's prefixes after the install's; a -DCMAKE_PREFIX_PATH given twice
-  # keeps only the last.
-  string(REPLACE ";" "$<SEMICOLON>" _vr_prefixes "${CMAKE_PREFIX_PATH}")
-  if(_vr_prefixes)
-    set(_vr_prefixes "$<SEMICOLON>${_vr_prefixes}")
-  endif()
-  add_test(NAME recon_package_install
-           COMMAND "${CMAKE_COMMAND}" --install "${PROJECT_BINARY_DIR}"
-                   --config "$<CONFIG>" --prefix "${_vr_package}/recon-install")
-  set_tests_properties(
-    recon_package_install PROPERTIES FIXTURES_REQUIRED vr_package_clean
-                                     FIXTURES_SETUP vr_package_recon)
-  add_test(
-    NAME recon_package_found
-    COMMAND
-      "${CMAKE_COMMAND}" -S "${CMAKE_CURRENT_SOURCE_DIR}/package" -B
-      "${_vr_package}/found" -G "${CMAKE_GENERATOR}"
-      "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
-      "-DCMAKE_PREFIX_PATH=${_vr_package}/recon-install${_vr_prefixes}")
-  set_tests_properties(
-    recon_package_found PROPERTIES FIXTURES_REQUIRED vr_package_recon
-                                   FIXTURES_SETUP vr_package_found)
-  # ... and compiles a kernel that includes the installed GLSL through the root
-  # the package config names (glsl_consumer.cmake).
-  add_test(NAME recon_package_glsl
-           COMMAND "${CMAKE_COMMAND}" --build "${_vr_package}/found" --target
-                   vr_glsl_consumer)
-  set_tests_properties(recon_package_glsl PROPERTIES FIXTURES_REQUIRED
-                                                     vr_package_found)
-  # ... and compiles the installed headers that reach the volume tier, which
-  # hold none of the hash table's internals (package/internal_names.cpp).
-  add_test(NAME recon_package_headers
-           COMMAND "${CMAKE_COMMAND}" --build "${_vr_package}/found" --target
-                   vr_package_headers)
-  set_tests_properties(recon_package_headers PROPERTIES FIXTURES_REQUIRED
-                                                        vr_package_found)
-  add_test(
-    NAME recon_package_base_core_configure
-    COMMAND
-      "${CMAKE_COMMAND}" -S "${_vr_core_source}" -B "${_vr_package}/core" -G
-      "${CMAKE_GENERATOR}" "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
-      -DCMAKE_BUILD_TYPE=Release -DVKC_WITH_VULKAN=OFF -DVKC_BUILD_TESTS=OFF
-      -DVKC_WARNINGS_AS_ERRORS=OFF
-      "-DCMAKE_INSTALL_PREFIX=${_vr_package}/core-install")
-  set_tests_properties(
-    recon_package_base_core_configure
-    PROPERTIES FIXTURES_REQUIRED vr_package_clean FIXTURES_SETUP
-               vr_package_base_core_build)
-  add_test(NAME recon_package_base_core_install
-           COMMAND "${CMAKE_COMMAND}" --build "${_vr_package}/core" --target
-                   install)
-  set_tests_properties(
-    recon_package_base_core_install
-    PROPERTIES FIXTURES_REQUIRED vr_package_base_core_build FIXTURES_SETUP
-               vr_package_base_core)
-  add_test(
-    NAME recon_package_core_without_vulkan
-    COMMAND
-      "${CMAKE_COMMAND}" -S "${CMAKE_CURRENT_SOURCE_DIR}/package" -B
-      "${_vr_package}/consumer" -G "${CMAKE_GENERATOR}"
-      "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
-      "-Dvolumetric_kit_recon_DIR=${PROJECT_BINARY_DIR}/src"
-      "-DCMAKE_PREFIX_PATH=${_vr_package}/core-install")
-  set_tests_properties(recon_package_core_without_vulkan
-                       PROPERTIES FIXTURES_REQUIRED vr_package_base_core)
-  _vr_expect_message(
-    recon_package_core_without_vulkan
-    "Reason given by package: volumetric_kit_recon needs volumetric_kit_core's vulkan tier, which the core installed at .+ was built without: install one built with VKC_WITH_VULKAN ON"
-  )
-  # The same refusal to a project that finds recon QUIET leaves none of the
-  # package config's variables behind.
-  add_test(
-    NAME recon_package_quiet_not_found
-    COMMAND
-      "${CMAKE_COMMAND}" -S "${CMAKE_CURRENT_SOURCE_DIR}/package" -B
-      "${_vr_package}/quiet" -G "${CMAKE_GENERATOR}"
-      "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}" -DVR_CONSUMER_QUIET=ON
-      "-Dvolumetric_kit_recon_DIR=${PROJECT_BINARY_DIR}/src"
-      "-DCMAKE_PREFIX_PATH=${_vr_package}/core-install")
-  set_tests_properties(
-    recon_package_quiet_not_found
-    PROPERTIES FIXTURES_REQUIRED vr_package_base_core PASS_REGULAR_EXPRESSION
-               "volumetric_kit_recon found: '(0|FALSE)', left behind: ''")
-endif()
-
 # Start the slowest tests first under `ctest --parallel`. Without a COST, CTest
 # runs tests in the order they were added, and a fresh CI runner has no timing
 # history, so a slow test added late finished last. Seconds under the sanitizers
-# job, the longest in CI (2026-10-06); only the order matters.
-set_tests_properties(recon_tsdf_mesh_integrate PROPERTIES COST 42)
-set_tests_properties(recon_eval_mesh_distance PROPERTIES COST 29)
-set_tests_properties(recon_mesh_marching_cubes_sparse PROPERTIES COST 25)
-set_tests_properties(recon_codec_decoder PROPERTIES COST 23)
-set_tests_properties(recon_codec_device_frame PROPERTIES COST 17)
+# job, the longest in CI, in run 39717939263 (before the 2026-10-22 test trims);
+# only the order matters.
+set_tests_properties(recon_codec_inter PROPERTIES COST 115)
+set_tests_properties(recon_codec_decoder PROPERTIES COST 96)
+set_tests_properties(recon_tsdf_mesh_integrate_exact PROPERTIES COST 56)
+set_tests_properties(recon_eval_mesh_distance PROPERTIES COST 55)
+set_tests_properties(recon_codec_device_frame PROPERTIES COST 52)
+set_tests_properties(recon_example_codec_stream PROPERTIES COST 49)
+set_tests_properties(recon_tsdf_mesh_integrate PROPERTIES COST 36)
+set_tests_properties(recon_codec_encoder PROPERTIES COST 30)
+set_tests_properties(recon_example_set_codec PROPERTIES COST 29)
 
-# A test skips by exiting with the core's test::kSkipExitCode (gpu_test.hpp).
+# A test skips by exiting with the core's test::kSkipExitCode (gpu_test.hpp). A
+# hang (a fence never signalled, a deadlocked thread) fails in 300 s rather than
+# holding a shared runner to its job's limit; 300 is well above the largest
+# COST.
 get_property(
   _vr_tests
   DIRECTORY
   PROPERTY TESTS)
-set_tests_properties(${_vr_tests} PROPERTIES SKIP_RETURN_CODE 77)
+set_tests_properties(${_vr_tests} PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 300)

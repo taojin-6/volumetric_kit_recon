@@ -19,8 +19,8 @@ interop seam: `recon` builds the volume, `gfx` renders it.
 
 `recon` is a from-scratch, production-grade rebuild that salvages the proven core
 of an earlier reconstruction engine and hardens it for public release:
-deterministic only (no experimental/neural code), installable and packaged,
-CI-gated, and split into clean, independently consumable tiers.
+deterministic only (no experimental/neural code), CI-gated, and split into
+clean, independently consumable tiers.
 
 ## Design at a glance
 
@@ -54,21 +54,19 @@ The GPU tests follow the core's test policy (its README, "Build and test"):
 `VKC_REQUIRE_VULKAN_DEVICE`, `VKC_TEST_VALIDATION` and
 `VKC_TEST_SYNC_VALIDATION`.
 
-Consume it from another CMake project via `find_package(volumetric_kit_recon)`
-or `FetchContent`, then link a tier (e.g. `volumetric_kit::recon_core`).
-Fetched, recon builds its library tiers alone: its tests, examples and
-`-Werror` (`VR_WARNINGS_AS_ERRORS`) default on only when it is the top-level
-project. A consumer with no GPU work, such as calib's solver, sets
-`VR_CAMERA_ONLY` ON to build and install the camera tier
+Consume it from another CMake project with `FetchContent`, pinned by commit
+(recon has no install rules), then link a tier (e.g.
+`volumetric_kit::recon_core`). Fetched, recon builds its library tiers alone:
+its tests, examples and `-Werror` (`VR_WARNINGS_AS_ERRORS`) default on only
+when it is the top-level project. A consumer with no GPU work, such as calib's
+solver, sets `VR_CAMERA_ONLY` ON to build the camera tier
 (`volumetric_kit::recon_camera`) alone, with no Vulkan SDK; it refuses the
 examples and the optional drivers.
 
 A consumer's kernels include recon's GLSL pinhole as recon's own do,
 `#include "volumetric_kit/recon/core/shaders/pinhole.glsl"`, under the root
 that `volumetric_kit::recon_core`'s `VR_SHADER_INCLUDE_DIR` property names,
-fetched or installed. Fetched, the root holds the exported GLSL alone;
-installed, it is the include directory, which holds none of recon's internal
-GLSL.
+which holds the exported GLSL alone.
 
 ```cmake
 get_target_property(vr_glsl volumetric_kit::recon_core VR_SHADER_INCLUDE_DIR)
@@ -81,7 +79,6 @@ its error handling, and its Vulkan foundation -- device, allocator, buffers,
 kernels, command batches, timers -- whose types recon uses under the core's
 names (`volumetric_kit::core::Status`, `volumetric_kit::core::Device`) and which
 one `VkDevice` shares with gfx.
-An installed recon carries the core beside it, and `find_package` finds both.
 An application that also fetches calib, which builds on the core too, declares
 `volumetric_kit_core` first, so both build against one copy, and sets
 `VKC_WITH_VULKAN ON` before the first `FetchContent_MakeAvailable` of it
@@ -90,10 +87,9 @@ unless recon is camera-only; to build against a local core checkout, pass
 at `VR_CORE_MIN_VERSION` (0.2.0) or newer, with its vulkan tier unless
 `VR_CAMERA_ONLY` is ON, and checks both with the core's `vkc_require_core`:
 on a core older than that or missing a required tier, recon's configure
-fails saying why, and an installed recon is not found. A core older than
-0.1.0 has no `vkc_require_core`, so the configure
-stops at that call as an unknown command: move the first-declared pin to 0.2.0
-or newer.
+fails saying why. A core older than 0.1.0 has no `vkc_require_core`, so the
+configure stops at that call as an unknown command: move the first-declared
+pin to 0.2.0 or newer.
 
 Examples and tests require core 0.16.0 or newer with its config tier, for
 `fuse_orbbec`'s `output.serve`; the pinned core supplies it.
@@ -127,9 +123,8 @@ assets are refused. Import does not impose physical units or a target height:
 normalization such as Rafa2's 1.7 m convention is a caller operation, with
 the opt-in helpers of `io/mesh_normalization.hpp` (in `recon_io`).
 
-The default build does not need Assimp. An installed package built with
-`VR_WITH_ASSIMP=ON` also needs Assimp's CMake package at consumption time.
-Cross-compiles must supply Assimp for the target platform, not a host package.
+The default build does not need Assimp. Cross-compiles must supply Assimp for
+the target platform, not a host package.
 
 ### Optional: Orbbec SDK
 
@@ -291,7 +286,14 @@ GPU; a viewer connects to the sender's `host:port`:
 
 Both listen on every interface, with no authentication or encryption: any
 host that reaches the port can watch, and the first four to connect keep
-their slots while they stay (`max_viewers`).
+their slots while they stay (`max_viewers`). Both print each viewer joining
+and leaving on stderr; one the sender closes, or whose connection fails,
+ends with `closed: <why>` or `failed: <why>` in place of `left`:
+
+```text
+[vr info] StreamServer: viewer 192.168.1.20:52311 joined, 1 of 4
+[vr info] StreamServer: viewer 192.168.1.20:52311 left
+```
 
 ## License
 

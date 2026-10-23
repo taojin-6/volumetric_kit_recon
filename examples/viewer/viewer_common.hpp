@@ -7,7 +7,8 @@
 /// @brief What `fuse_viewer` and `rig_viewer` share beyond gfx's `gfx_glfw`
 ///        window glue and recon's `mesh::MeshExchange`: the device both
 ///        libraries adopt, the scope guards their teardown order rests on,
-///        and the render camera the fuse thread meshes.
+///        the render pass each frame records, and the render camera the
+///        fuse thread meshes.
 
 #include <atomic>
 #include <chrono>
@@ -24,7 +25,10 @@
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
 #include "volumetric_kit/gfx/app/shared_device_config.hpp"
 #include "volumetric_kit/gfx/app/windowed_app.hpp"
+#include "volumetric_kit/gfx/core/profiler.hpp"
+#include "volumetric_kit/gfx/core/render_target.hpp"
 #include "volumetric_kit/gfx/glfw/shared_device.hpp"
+#include "volumetric_kit/gfx/ui/imgui_overlay.hpp"
 #include "volumetric_kit/recon/core/device_requirements.hpp"
 #include "volumetric_kit/recon/mesh/device_mesh.hpp"
 #include "volumetric_kit/recon/mesh/marching_cubes.hpp"
@@ -120,6 +124,40 @@ struct ProfilerDetach {
   vg::app::WindowedApp& app;
   ~ProfilerDetach() { app.set_profiler(nullptr); }
 };
+
+/// @brief Records a frame's one render pass into @p target: the clear,
+///        @p draw_mesh, then @p overlay's UI.
+///
+/// One GPU scope, "render pass", spans the pass; "mesh draw" and
+/// "overlay draw" inside it are CPU-only. Apple GPUs sample a timestamp only
+/// at a pass's edge, so a GPU scope inside the pass reads about 0 ms there.
+/// @param profiler   The frame's profiler, between its `begin_frame` and
+///                   `end_frame`.
+/// @param cmd        The frame's command buffer, outside any render pass.
+/// @param target     The frame's target, in its attachment layouts.
+/// @param draw_mesh  Called with @p cmd inside the pass to draw the mesh.
+/// @param overlay    The UI, or null for none.
+template <class DrawMesh>
+void record_view_pass(vg::Profiler& profiler, VkCommandBuffer cmd,
+                      const vg::RenderTarget& target, DrawMesh&& draw_mesh,
+                      vg::ui::ImGuiOverlay* overlay) {
+  vg::RenderTargetBeginInfo begin_info;
+  begin_info.clear_color.float32[0] = 0.05f;
+  begin_info.clear_color.float32[1] = 0.05f;
+  begin_info.clear_color.float32[2] = 0.07f;
+  begin_info.clear_color.float32[3] = 1.0f;
+  const vg::Profiler::Scope pass = profiler.gpu_scope(cmd, "render pass");
+  target.begin(cmd, begin_info);
+  {
+    const vg::Profiler::Scope mesh = profiler.cpu_scope("mesh draw");
+    draw_mesh(cmd);
+  }
+  if (overlay != nullptr) {
+    const vg::Profiler::Scope ui = profiler.cpu_scope("overlay draw");
+    overlay->render(cmd);
+  }
+  target.end(cmd);
+}
 
 /// @brief The render camera, handed from the render thread to the fuse
 ///        thread, which meshes what it sees (the 2026-10-06 decision).

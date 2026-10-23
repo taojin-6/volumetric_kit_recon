@@ -2,14 +2,12 @@
 # Copyright (c) 2026 Tao Jin
 
 include(GenerateExportHeader)
-include(GNUInstallDirs)
 
 set(_vr_io_generated_inc "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
-set(_vr_io_install_inc "${CMAKE_INSTALL_INCLUDEDIR}/volumetric_kit/recon/io")
 
 # Host image decoding / PNG encoding, Mesh -> PLY serialization and the opt-in
 # mesh normalization helpers. The implementation-only libraries have no public
-# headers or exported targets.
+# headers or targets.
 add_library(recon_io image_io.cpp mesh_normalization.cpp ply_writer.cpp
                      stb_impl.cpp tinyply_impl.cpp)
 add_library(volumetric_kit::recon_io ALIAS recon_io)
@@ -36,10 +34,8 @@ target_compile_features(recon_io PUBLIC cxx_std_17)
 target_compile_options(recon_io PRIVATE -fexceptions)
 target_link_libraries(recon_io PUBLIC recon_mesh)
 target_include_directories(
-  recon_io
-  PUBLIC "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>"
-         "$<BUILD_INTERFACE:${_vr_io_generated_inc}>"
-         "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
+  recon_io PUBLIC "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>"
+                  "$<BUILD_INTERFACE:${_vr_io_generated_inc}>")
 target_include_directories(recon_io SYSTEM PRIVATE "${VR_STB_INCLUDE_DIR}"
                                                    "${VR_TINYPLY_INCLUDE_DIR}")
 vr_target_warnings(recon_io)
@@ -51,25 +47,8 @@ set_source_files_properties(stb_impl.cpp tinyply_impl.cpp
 set_source_files_properties(mesh_normalization.cpp PROPERTIES COMPILE_OPTIONS
                                                               -ffp-contract=off)
 
-if(VR_INSTALL)
-  install(
-    TARGETS recon_io
-    EXPORT volumetric_kit_reconTargets
-    ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
-    LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
-    RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
-  install(
-    FILES
-      "${PROJECT_SOURCE_DIR}/include/volumetric_kit/recon/io/image_io.hpp"
-      "${PROJECT_SOURCE_DIR}/include/volumetric_kit/recon/io/mesh_normalization.hpp"
-      "${PROJECT_SOURCE_DIR}/include/volumetric_kit/recon/io/ply_writer.hpp"
-      "${PROJECT_SOURCE_DIR}/include/volumetric_kit/recon/io/triangle_mesh.hpp"
-      "${_vr_io_generated_inc}/volumetric_kit/recon/io/export.hpp"
-    DESTINATION "${_vr_io_install_inc}")
-endif()
-
 # An installed prerequisite, like the sensor decoders. Keeping it separate lets
-# image / PLY consumers build and install without Assimp on every platform.
+# image / PLY consumers build without Assimp on every platform.
 if(VR_WITH_ASSIMP)
   add_library(recon_io_assimp mesh_io.cpp)
   add_library(volumetric_kit::recon_io_assimp ALIAS recon_io_assimp)
@@ -99,17 +78,4 @@ if(VR_WITH_ASSIMP)
     PUBLIC recon_io
     PRIVATE assimp::assimp)
   vr_target_warnings(recon_io_assimp)
-
-  if(VR_INSTALL)
-    install(
-      TARGETS recon_io_assimp
-      EXPORT volumetric_kit_reconTargets
-      ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
-      LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
-      RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
-    install(
-      FILES "${PROJECT_SOURCE_DIR}/include/volumetric_kit/recon/io/mesh_io.hpp"
-            "${_vr_io_generated_inc}/volumetric_kit/recon/io/assimp_export.hpp"
-      DESTINATION "${_vr_io_install_inc}")
-  endif()
 endif()

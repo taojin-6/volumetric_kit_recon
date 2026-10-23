@@ -110,12 +110,17 @@ jobs:
     steps:
       # Bare ubuntu:* images lack git (actions/checkout needs it) and sudo (the
       # install steps use it); we run as root in the container, so install them
-      # before anything else. Skipped on hosted runners.
+      # before anything else. Skipped on hosted runners. The NVIDIA driver's
+      # shader cache directory, which the container env names (ci.yml says
+      # why), is made here: the driver creates nothing above its own GLCache.
       - name: Bootstrap container
         if: inputs.container != ''
         run: |
           apt-get update
           apt-get install -y --no-install-recommends ca-certificates git sudo
+          if [ -n "${__GL_SHADER_DISK_CACHE_PATH:-}" ]; then
+            mkdir -p "${__GL_SHADER_DISK_CACHE_PATH}"
+          fi
 
       - uses: actions/checkout@v7
 
@@ -417,19 +422,26 @@ jobs:
           DYLD_LIBRARY_PATH: ${{ env.VR_LAYER_LIBRARY_PATH }}
         run: ctest --test-dir build --output-on-failure
 
-      # The stream and networking tests again under ThreadSanitizer, for the
-      # server's and the client's threads: the sanitizer job runs address and
-      # undefined only. In a tree of their own that reuses the sources
-      # FetchContent fetched for build/, as the Apple importer's step below
-      # does, built for those tests alone (recon_stream_tests,
-      # tests/CMakeLists.txt). Debug only: the races do not depend on the
-      # build type.
-      - name: Stream and networking under ThreadSanitizer (macOS)
+      # The tests whose code runs threads again under ThreadSanitizer: the
+      # stream reader two threads share, the server's and the client's
+      # threads, the senders' log handler (examples/common/info_log.hpp),
+      # and the Orbbec decode workers, which the sanitizer job, on
+      # address and undefined only and with no Orbbec SDK, never runs. In a
+      # tree of their own that reuses the sources FetchContent fetched for
+      # build/, as the Apple importer's step below does, built for those
+      # tests alone (recon_tsan_tests, tests/CMakeLists.txt), with the Orbbec
+      # SDK and FFmpeg as this leg has them. Debug only: the races do not
+      # depend on the build type.
+      - name: Threaded tests under ThreadSanitizer (macOS)
         if: >-
           steps.detect.outputs.present == 'true' && runner.os == 'macOS'
           && matrix.build_type == 'Debug'
         env:
           TSAN_OPTIONS: halt_on_error=1
+          VR_TEST_HEVC_BACKEND: ${{ inputs.hevc_backend }}
+          VKC_REQUIRE_VULKAN_DEVICE: '1'
+          VKC_TEST_VALIDATION: '1'
+          DYLD_LIBRARY_PATH: ${{ env.VR_LAYER_LIBRARY_PATH }}
         run: |
           shopt -s nullglob
           flags=()
@@ -440,13 +452,14 @@ jobs:
           rm -rf build-tsan
           cmake -S . -B build-tsan -DCMAKE_BUILD_TYPE=Debug \
             -DVR_SANITIZE=thread -DVR_BUILD_EXAMPLES=OFF \
-            -DVR_WITH_ORBBEC=OFF -DVR_WITH_FFMPEG=OFF -DVR_WITH_ASSIMP=OFF \
-            "${flags[@]}"
+            -DVR_WITH_ORBBEC=${{ inputs.orbbec_sdk && 'ON' || 'OFF' }} \
+            -DVR_WITH_FFMPEG=${{ inputs.ffmpeg && 'ON' || 'OFF' }} \
+            -DVR_WITH_ASSIMP=OFF "${flags[@]}"
           cmake --build build-tsan \
             --parallel "${CMAKE_BUILD_PARALLEL_LEVEL:-$(getconf _NPROCESSORS_ONLN)}" \
-            --target recon_stream_tests
+            --target recon_tsan_tests
           ctest --test-dir build-tsan --output-on-failure --no-tests=error \
-            -R '^recon_(stream|networking)_'
+            -R '^recon_(networking_|stream_container$|example_info_log$|sensor_orbbec_(decode_worker|jpeg|hevc|open_sensors)$)'
 
       # recon_sensor_apple promises two builds the step above does not make
       # (DECISIONS.md, 2026-10-08): with no FFmpeg, and for iOS. So build and

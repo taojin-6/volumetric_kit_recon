@@ -28,12 +28,10 @@ include(FetchContent)
 # vkc_require_core refuses that core if it is older than VR_CORE_MIN_VERSION or
 # lacks the vulkan tier outside VR_CAMERA_ONLY. Work on both checkouts at once
 # with -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CORE=<core checkout>. The core's
-# tests and -Werror stay off in a subproject. Its install rules follow
-# VR_INSTALL: recon's install must carry the core its exported targets link, and
-# an application that embeds recon without installing it gets none.
-# VR_CAMERA_ONLY needs the base tier alone. It leaves VKC_WITH_VULKAN unset
-# rather than OFF, as calib does, so an application that turns the tier on keeps
-# it.
+# tests and -Werror stay off in a subproject, and so do its install rules, as
+# recon installs nothing. VR_CAMERA_ONLY needs the base tier alone. It leaves
+# VKC_WITH_VULKAN unset rather than OFF, as calib does, so an application that
+# turns the tier on keeps it.
 #
 # The pin is core 0.16.0 (7bb81da, core #46's merge), as is the Homebrew key
 # action in .github/workflows/_build.yml; the vkc_require_core checks below say
@@ -44,7 +42,7 @@ FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
   GIT_TAG 7bb81da1876f4708c2dc6acff29790851a3e9299)
-set(VKC_INSTALL ${VR_INSTALL})
+set(VKC_INSTALL OFF)
 if(NOT VR_CAMERA_ONLY)
   set(VKC_WITH_VULKAN ON)
   if(VR_BUILD_TESTS)
@@ -52,7 +50,7 @@ if(NOT VR_CAMERA_ONLY)
   endif()
 endif()
 # Scenario parsing is optional and used only by executable examples and their
-# host-side adapter tests. Camera-only/package library consumers need no parser.
+# host-side adapter tests. Camera-only and library consumers need no parser.
 if(NOT VR_CAMERA_ONLY AND (VR_BUILD_EXAMPLES OR VR_BUILD_TESTS))
   set(VKC_WITH_CONFIG ON)
 endif()
@@ -87,9 +85,8 @@ endif()
 # camera-only build fetches it too, and recon_sensor_orbbec its sync file. The
 # release's source archive, hash-pinned; only its include/ tree is used, so its
 # CMake is not run (SOURCE_SUBDIR names a directory the archive does not have).
-# It is a PRIVATE SYSTEM include of each target that parses, never part of the
-# installed interface. volumetric_kit_gfx carries the same library through
-# tinygltf.
+# It is a PRIVATE SYSTEM include of each target that parses, never part of its
+# interface. volumetric_kit_gfx carries the same library through tinygltf.
 if(POLICY CMP0135)
   cmake_policy(SET CMP0135 NEW) # extracted files get the extraction time
 endif()
@@ -112,8 +109,8 @@ endif()
 
 # --- Asset I/O implementation headers (never exported to consumers) --------
 # stb supplies image decoding and PNG writing. tinyply supplies PLY writing.
-# Their implementation TUs live in recon_io; no helper target leaks through the
-# installed static-library link interface.
+# Their implementation TUs live in recon_io; no helper target leaks through its
+# link interface.
 FetchContent_Declare(
   stb
   GIT_REPOSITORY https://github.com/nothings/stb.git

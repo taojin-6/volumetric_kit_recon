@@ -58,7 +58,7 @@ conventions and Vulkan setup.
   `VKC_ASSIGN`, `VKC_CHECK`, `VKC_VK_TRY`).
   Deliberately *not* the `VK_` prefix — that belongs to Vulkan. (The prior
   engine's `VK_DEVICE_HOST`-style macros are renamed `VR_*` on port.)
-- CMake: `find_package(volumetric_kit_recon)`; component targets
+- CMake: fetched by commit (`FetchContent`); component targets
   `volumetric_kit::recon_camera`, `…_core`, `…_volume`, `…_tsdf`, `…_mesh`,
   `…_texture`,
   `…_sensor`, `…_codec`, `…_eval`, `…_io`, `…_stream`, `…_networking`, `…_interop` (+ later `…_track`),
@@ -618,8 +618,8 @@ source repos are left untouched on disk — never build or write in them.
   are **re-implemented as Vulkan compute shaders (GLSL → SPIR-V)** for the
   baseline, with an **optional native-CUDA port as the NVIDIA accelerator**
   (2026-07-04) — the algorithms transfer, the kernel source does not.
-- **Hardening applied on port:** add install/export + package config; replace
-  glog/fmt with the pluggable log handler; adopt `Status`/`Result` repo-wide;
+- **Hardening applied on port:** replace glog/fmt with the pluggable log
+  handler; adopt `Status`/`Result` repo-wide;
   rename `VK_*` device macros → `VR_*`; break the `ReconstructionPipeline`
   god-object so each tier has a standalone API; drop committed build artifacts,
   hardcoded paths, and machine-specific config.
@@ -649,11 +649,10 @@ a bitstream is reproducible on the device that wrote it and decodable on any.
 
 ## Packaging
 
-The repo installs and exports like its sibling: per-tier targets under a shared
-export set, a generated `volumetric_kit_reconConfig.cmake`, and consumption via
-both `find_package(volumetric_kit_recon)` and `FetchContent`.
-`VR_CAMERA_ONLY` builds and installs `recon_camera` alone; that package's
-config finds no Vulkan ([README](README.md#building)). Quality gates
+A consumer fetches recon by commit (`FetchContent`) and links its per-tier
+targets; recon has no install rules or package config (the 2026-10-22
+decision). `VR_CAMERA_ONLY` builds `recon_camera` alone, with no Vulkan
+([README](README.md#building)). Quality gates
 (warnings-as-errors, formatting hooks, sanitizer and test CI) are wired from the
 start, not retrofitted.
 
@@ -819,8 +818,9 @@ band shared out over the lanes (2026-09-30);
 the defaults — would hole through the middle, so a block is allocated when its
 centre is within `trunc_dist` + the block's half-diagonal of some triangle,
 and the work is split per *candidate block* rather than per triangle so one
-lane cannot own a 250 000-block quad. The host pass that counts those blocks
-is also where an index is bounds-checked and a zero-area or non-finite
+lane cannot own a 250 000-block quad; as a depth tile does, a workgroup asks
+for each distinct block its lanes name once. The host pass that counts those
+blocks is also where an index is bounds-checked and a zero-area or non-finite
 triangle is dropped — the former being the one input that divides by zero in
 the closest-point solve, which lives in `core/shaders/triangle_common.glsl`
 so mesh-to-SDF evaluates the field with the same function. That pass is the
@@ -863,7 +863,9 @@ inputs are uploaded in its first round, and a round reads back its counts.
 `VoxelHashMap::allocate` and `remove`, and `VoxelBlockGrid::remove`, take
 a device buffer of `BlockIndex`, bound where its producer wrote it; a test
 uploads its own coordinates first (`tests/device_blocks.hpp`). The grid's
-zeroes the listed blocks, then frees them through the map's, two submits.
+zeroes the listed blocks and frees them through the map's, the zeroing
+recorded into the map's first round (`remove`'s `first_round`) ahead of
+the delete, so it takes no submit of its own.
 One body serves it and garbage collection, so the stale-block list stays on
 the GPU through deletion; only the stale and retry counts reach the host.
 A compaction still reads its list back, in the count's own submit while the
@@ -875,7 +877,8 @@ refuses one that a full compaction, allocation, resize, remove, clear or
 move has made stale. While the last one still holds, the call returns it
 again, dispatching and reporting nothing, so the encoder after an extract
 reuses the extract's compaction (2026-09-30). A fuse culls instead and leaves
-none.
+none: `record_compaction` records its compaction into the fuse's own batch,
+the list and its count left on the device for the dispatches after it.
 `topology_epoch()` lives on the *map* — the object that frees a block
 index — and is a globally unique token re-drawn at `create`, at every
 `clear` and at every `remove` that accepts its input, never at `resize`: a
@@ -900,7 +903,8 @@ so it is not a peak-memory budget for resize (2026-10-10).
 `allocate_from_depth` also takes a list of frames (`DepthInput`), every
 frame dispatched in each round's one submit, on a set of its own; a round
 that retries dispatches them all again, and the rounds are the call's, not
-each frame's. Opt-in
+each frame's. A caller's `then` shares the first round's submit, after its
+readbacks, and makes that round the only one. Opt-in
 `StageMetrics*` on `allocate_from_depth` (an `"allocate"` row summing every
 retry round) and on both compaction entry points (an `"active set"` row,
 breakdown-prefixed when the caller already has a stage open).
@@ -956,9 +960,11 @@ block, while the dispatch scales with the reached blocks, not the map. A
 frame with a non-positive focal length, whose principal point lies outside
 its image (the side widening then stops containing it), or whose planes are
 not finite fuses the whole active set; the pose must be rigid. A grid with blocks ticks even when none is
-reached (2026-10-06). The list stays on the device, so a fuse is two
-submits, the compaction's count the only thing read back; the frames are
-staged.
+reached (2026-10-06), which the map's host copy of the heap counter
+answers. The list and its count stay on the device: a one-thread kernel
+(`tsdf_dispatch_args.comp`) turns the count into the fuse's indirect
+dispatches, so a fuse is one submit that reads nothing back; the frames
+are staged.
 `integrate` also takes a list of frames
 (`FrameInput`, a `DepthInput` and its colour, so one list feeds both
 calls): one compaction and one submit for them all, each frame a dispatch
@@ -983,7 +989,11 @@ can still be followed by successful allocation into the existing grid.
 `allow_partial` explicitly opts live callers into integrating what fits.
 `fuse_viewer` and `rig_viewer` enable it with a two-grow bound. That mode
 leaves pure lock contention for the next set and privately backs off a failed
-grow for 60 map ticks at the same size. Its fuser belongs to one grid.
+grow for 60 map ticks at the same size. Once its grid holds a block, a set is
+one submit (`TsdfIntegrator::allocate_and_integrate`): one allocation round,
+the compaction and the fuse, and a grow for a capacity limit made after it,
+so what the set could not allocate lands with the next (2026-10-10, amended
+2026-10-22). Its fuser belongs to one grid.
 `FuseReport` carries the before/after bucket counts, grows, allocation
 failures, any failed-grow status and final occupancy; failed allocation
 requests can refer to the same block repeatedly. Host allocation exceptions
@@ -1504,7 +1514,12 @@ decoder never grows one. Beside it, as `tsdf::Fuser` grows for fusion,
 `decode_grid.hpp` holds a player's growth: `make_decode_grid` builds a
 grid from a frame's header, its heap twice the frame's blocks, and
 `decode_growing` decodes into it, growing it once on `OutOfMemory` and
-decoding again twice at most on `IoError`. The factory contains host allocation
+decoding again twice at most on `IoError`. Both take the caller's ceiling,
+`max_blocks`: a frame past it is refused before it is decoded, and a grow
+past `make_decode_grid`'s grid for it before it is made, each as
+`InvalidArgument`; the factory checks the header's block count against the
+segment table as the decoder does. The examples pass the source grid's
+slots. The factory contains host allocation
 failures from header parsing through grid creation. The growing decode merges
 only its successful attempt's metrics; if that merge runs out of host memory,
 the caller's prior metrics stay unchanged and the decode still succeeds, since
@@ -1636,7 +1651,7 @@ and preserves triangle indices.
 Errors name the file and backend reason. Public functions validate their input
 and translate backend exceptions that reach them into `Status`/`Result`
 (tinyply's writer is `noexcept`); private third-party types never appear in
-installed headers.
+public headers.
 
 `recon_io_assimp` adds `io::load_mesh`, which returns the owned
 `io::TriangleMesh` position / index container of `io/triangle_mesh.hpp`.
@@ -1658,9 +1673,9 @@ enabled, and importer unit/up-axis conversions are switched off where the
 installed Assimp allows: before 5.3 it still applies Collada's `<unit>`, and
 5.4.x converts FBX regardless. This is a host boundary for file input and output, separate from
 GPU-resident reconstruction. The default build has no Assimp dependency;
-`VR_WITH_ASSIMP=ON` finds an installed package and exports a separate target.
+`VR_WITH_ASSIMP=ON` finds an installed Assimp and builds a separate target.
 The image and PLY backends use the existing pinned stb and tinyply sources,
-now private implementation dependencies of the installed I/O library.
+now private implementation dependencies of the I/O library.
 
 `io/mesh_normalization.hpp`, in `recon_io`, holds opt-in helpers for a caller
 that knows its mesh's unit or up direction; nothing in recon calls them. They
@@ -1789,16 +1804,16 @@ byte for `stall_limit` (10 s) with bytes waiting is closed: a slow reader
 stays while its end acknowledges a byte within the limit (one behind a large
 receive buffer may not), as does one with nothing waiting. Viewers that
 join, leave or fail are logged at Info; a refusal at Warning, the first and
-then one in 10 s at most. The destructor stops every thread within a poll
-slice (20 ms) and the write under way. One track is served (`Unsupported`
-otherwise), and `publish` is called from one thread.
+then one in 10 s at most, the rest at Debug. The destructor stops every
+thread within a poll slice (20 ms) and the write under way. One track is
+served (`Unsupported` otherwise), and `publish` is called from one thread.
 
 **Reading** (`StreamClient`). `connect` never blocks: a numeric IPv4 address
 is parsed at once, and a name is looked up on a detached thread, which the
 client abandons if it is destroyed first. `next(wait, …)` finishes the
 lookup and the connect, trying each address in turn, then returns each
 record, both CRCs checked, its `offset` that of the bytes received, waiting
-at most `wait`. The receive buffer is 256 KiB, set before the connect. No
+at most `wait`. The receive buffer is 2 MiB, set before the connect. No
 byte for `idle_limit` (10 s), counted from `connect`, ends the connection
 with `IoError`, as do a refusal at every address, a reset and the sender's
 end, which comes after every whole record; a failed check ends it with the
@@ -1808,7 +1823,7 @@ limit's reason names the stage it ended in (the header lists the reasons).
 The four-argument `next` overload also writes whether this call made
 progress: a record returned, a successful lookup/connect step, or bytes
 received. It resets that output on every call and keeps it true across a
-later idle step. `next(0, ...)` reads at most one 256 KiB receive, so a false
+later idle step. `next(0, ...)` reads at most one 2 MiB receive, so a false
 result alone does not mean the input is drained; callers waiting on their
 own controls drain while progress is true. On an error the output covers
 only earlier successful steps, and the error remains terminal. The original
@@ -1917,12 +1932,14 @@ a rig, each secondary's mean and worst skew to the primary. Colour is H.265
 unless `source.color_codec: "mjpeg"`.
 With `output.stream`, `output.csv` or `output.serve` it also codes each
 fused set as one frame through the codec examples' `CodecStream` (the
-2026-10-20 decision). `main.cpp` opens the stream before the cameras and
+2026-10-20 decision), decoding it too only with `output.csv` or
+`codec.sweep` (`set_codec_outputs`), for their decode columns and the
+sweep's grid. `main.cpp` opens the stream before the cameras and
 refuses there a port in use and a PLY that is the stream's or the CSV's file
 under another name. A record's set is the set's index in the run
 and its pts the set's time; a set stamped before the last frame, as a clock
 stepping back stamps it, takes that frame's time. A run that fails part-way
-still finishes its stream and reports the frames it decoded; one that coded
+still finishes its stream and reports the frames it coded; one that coded
 no set leaves none.
 The report's bitrate is at `source.fps`, and `codec.sweep` sweeps the last
 grid. A Ctrl+C or SIGTERM (`interrupt.hpp`, `rig_viewer`'s handler too,
@@ -1971,10 +1988,13 @@ and the sweep are `examples/common/codec_stream.hpp` and `codec_sweep.hpp`.
 The stream keeps a row per decoded frame (source index, frame type, bytes,
 blocks, and encode and decode host and device ms) and writes
 `CodecOutputs`, from `output.csv`, `output.stream` and `output.serve`, as it
-codes. The CSV gets each row once its frame decodes; the core cannot append,
-so the file is the stream's own. The
+codes. `CodecOutputs::decode`, on by default, decodes each frame into the
+player grid; off, each recorded frame has a row with empty decode columns,
+and no decoder or player grid is made. The CSV gets each row once it is
+kept; the core cannot append, so the file is the stream's own. The
 `.vrst` (`recon_stream`) gets every frame the encoder returns, before it is
-decoded, so a frame the decoder refuses is kept: one Geometry track, and per
+decoded, so a frame the decoder refuses is kept: one Geometry track, at the
+source's nominal rate (the rig's `source.fps`, else 30 a second), and per
 frame a record, a key exactly when it holds an I-frame, whose set is the
 source index and whose pts is that index at 30 fps, as Replica frames carry
 no time. It has no session id or start time, so a rerun writes the same
@@ -1992,9 +2012,10 @@ leaves none, and `finish` closes the viewers.
 
 Before truncating the CSV, creation checks that it does not alias the new
 stream file, including through symlinks or case-insensitive names. An alias
-is `InvalidArgument`; a CSV error during creation removes the new stream
-file for retry, as does destroying the stream unfinished before its first
-frame.
+is `InvalidArgument`. The encoder and decoder are made after every output,
+so a refused output costs no kernel; an error after the stream file is made
+removes it for retry, as does destroying the stream unfinished before its
+first frame, and a codec error removes the new CSV too.
 
 **`codec_mesh`** codes one mesh or a numbered sequence of them (README,
 Codec evaluation, has the keys). The examples require core 0.16.0; core
@@ -2043,9 +2064,12 @@ track's records from its first key read whole, each due at its pts from its
 pass's start, in a loop until Ctrl+C (`ReplayLoop`, `stream_replay.hpp`).
 Each pass is restamped, seq past the passes before and pts a pass's span (the
 records' pts span and one mean step) later, so seq keeps rising and key pts
-never go back, as `publish` requires. It listens on every interface, on 47801
-or N (0 takes a free one, which it prints). Bad arguments exit 2 with the
-usage; a failure, a missing file included, exits 1.
+never go back, as `publish` requires. A record whose payload fails its CRC
+is skipped with the P-frames after it, up to the pass's next key, and
+printed in the first pass. It listens on every interface, on 47801 or N (0
+takes a free one, which it prints). Bad arguments exit 2 with the usage; a
+failure, a missing file or no key whose payload reads whole included,
+exits 1.
 
 ## Next work
 
@@ -2113,18 +2137,20 @@ entry).
 **On `fuse_orbbec`'s stream** (the 2026-10-20 entry): a capture-volume
 crop (`fusion.max_depth_m` is the limit there is), raw RGBD recording and
 replay, colour, an upright world, and the session's host clock and
-calibration, which `CodecStream` does not record. Two costs are unmeasured
-on the rig: the stream decodes every frame again into its player grid, and
-a loop slower than the rig gets the newest set, so sets drop.
+calibration, which `CodecStream` does not record. With `output.csv` or
+`codec.sweep` the stream still decodes each frame inside the set loop: on
+the lab rig (4 Femtos, RTX 4090, Release; 1 cm, Dynamic, period 30; 303
+sets) a P-frame's decode took 2.70 ms host and 2.14 ms device, 37% and 38%
+of the set's fusion and coding, and 6.49 / 4.38 ms at 5 mm. A loop slower
+than the rig gets the newest set, so sets drop; that cost is unmeasured.
 
 **On `tsdf`**, mesh → TSDF has its two modes (2026-09-27), a second way into
 the grid the codec encodes: a mesh sequence converts frame by frame. Both modes
-cost the same. On an 81 920-triangle sphere at scan density (M5 Max, Release)
-the band took 14.2 ms to allocate (2026-09-27); the write's cost on Rafa2 is
-in the 2026-10-21 entry. Smaller costs around it remain: writing only the
-blocks the codec will code, chaining the write's submissions, and computing
-`triangle_candidate_offsets` once a frame rather than once to allocate and
-again to write.
+cost the same. On Rafa2 the band's allocation costs what PERF.md's MESH3 row
+gives, and the write what the 2026-10-21 entry gives. Smaller costs around
+them remain: writing only the blocks the codec will code, chaining the
+write's submissions, and computing `triangle_candidate_offsets` and uploading
+the mesh once a frame rather than once to allocate and again to write.
 Dynamic's clear is still a hard reset from one ray: clearing on evidence (a
 weight decrement, an incidence term) and behind a pixel with no return are
 the next steps, each judged on the lab rig (`TODO(tsdf)` in
