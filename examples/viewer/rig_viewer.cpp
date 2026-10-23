@@ -795,9 +795,9 @@ int run(GLFWwindow* window, const Options& opt) {
         // The table shows the newest set's rows, seeded in display order so the
         // remesh rows read 0 between remeshes rather than drop out.
         fuse_stages.clear();
-        for (const char* stage :
-             {"poll", "frame prep", "allocate", "resize", "integrate",
-              "  ..active set", "block stamps", "extract", "texture"}) {
+        for (const char* stage : {"poll", "frame prep", "allocate", "resize",
+                                  "integrate", "  ..active set", "  ..allocate",
+                                  "block stamps", "extract", "texture"}) {
           fuse_stages.seed(stage);
         }
         fuse_stages.add_cpu("poll", poll_ms);

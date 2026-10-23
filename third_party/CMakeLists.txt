@@ -32,7 +32,7 @@ include(FetchContent)
 # alone. It leaves VKC_WITH_VULKAN unset rather than OFF, as calib does, so an
 # application that turns the tier on keeps it.
 #
-# The pin is core 0.19.0 (ff44a98, core #49's merge), as is the Homebrew key
+# The pin is core 0.20.0 (0daced5, core #50's merge), as is the Homebrew key
 # action in .github/workflows/_build.yml; the vkc_require_core checks below say
 # which core each part needs.
 #
@@ -40,7 +40,7 @@ include(FetchContent)
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG ff44a981055d505590e295ff6a943bb1b6e96109)
+  GIT_TAG 0daced5a3b3ef3b64ad2f8f245aa437367d3ed55)
 if(NOT VR_CAMERA_ONLY)
   set(VKC_WITH_VULKAN ON)
   if(VR_BUILD_TESTS)
@@ -54,11 +54,9 @@ if(NOT VR_CAMERA_ONLY AND (VR_BUILD_EXAMPLES OR VR_BUILD_TESTS))
 endif()
 FetchContent_MakeAvailable(volumetric_kit_core)
 if(NOT VR_CAMERA_ONLY AND (VR_BUILD_EXAMPLES OR VR_BUILD_TESTS))
-  # fuse_orbbec serves its coded frames on FuseOrbbec's output.serve, core
-  # 0.16.0's, and its configuration tests read it; the Dynamic default (core
-  # 0.15.0's), fusion.free_after (0.14.0's) and the cross-family tests'
-  # TwoFamilyDevice and write_image (0.10.0's) come with it.
-  vkc_require_core(0.16.0 CONFIG)
+  # The examples read their scenarios, and the tests check them, through the
+  # config tier; the libraries' floor covers every core version either needs.
+  vkc_require_core(${VR_CORE_MIN_VERSION} CONFIG)
 endif()
 
 # The set()s above are lost when calib or the application made the core

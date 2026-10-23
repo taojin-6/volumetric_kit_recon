@@ -120,7 +120,8 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-08-10**](#2026-08-10--a-breakdown-row-is-one-the-callers-row-already-contains-so-the-host-total-skips-it-and-the-device-total-must-not-and-a-ceiling-the-library-knows-is-the-librarys-to-name) —
   A breakdown row is one the *caller's* row already contains, so the host total
   skips it and the device total must not; and a ceiling the library knows is the
-  library's to name.
+  library's to name. *Reversed 2026-10-23:* device time tiles, so a stage holds
+  its breakdowns' and both totals skip them.
 - [**2026-08-11**](#2026-08-11--the-per-block-span-table-is-opt-in-is-retired-by-generation-rather-than-described-in-prose-is-anchored-per-block-slot-to-a-globally-unique-topology-token-and-is-one-table-for-the-whole-ring-rather-than-one-per-slot) —
   The per-block span table is opt-in, is retired by generation rather than
   described in prose, is anchored per block slot to a globally unique topology
@@ -699,6 +700,12 @@ entries relevant to your task; later amendments supersede earlier rules.
 - [**2026-10-22**](#2026-10-22--streamclient-reports-progress-before-a-whole-record-is-ready) —
   `StreamClient::next` can report partial input and connection progress,
   allowing a consumer to drain it before waiting on its own controls.
+- [**2026-10-23**](#2026-10-23--a-stages-device-time-holds-every-command-recorded-inside-it-so-both-totals-skip-breakdowns-the-extract-and-the-decodes-grid-edits-are-timed-and-a-grid-builds-its-block-kernels-at-create-amends-the-2026-08-10-breakdown-entry) —
+  A stage's device time holds every command recorded inside it (core
+  0.20.0's tiles), so both totals skip breakdowns; a fused set's allocation
+  is `"integrate"`'s `"  ..allocate"`; the extract and the decode's grid
+  edits are timed inside today's submits; a grid builds its block kernels at
+  create, and an extractor or a grid its timer at the first timed call.
 
 ## Decision record
 
@@ -3023,6 +3030,9 @@ declare/verify shape as the enabled extension list, and its own change.
 > whether the extension was enabled, which is the one clause that survived.
 
 ### 2026-08-10 — A breakdown row is one the *caller's* row already contains, so the host total skips it and the device total must not; and a ceiling the library knows is the library's to name.
+
+*Reversed 2026-10-23 (below):* device time tiles, so a stage's device half
+holds its breakdowns' and `total_gpu_ms` skips them again.
 
 Refines the entry above, on three things the first cut of `kBreakdownPrefix` got
 wrong once a sub-row carried a *device* half.
@@ -14799,6 +14809,73 @@ The loopback regression sends a 512 KiB record in pieces, distinguishes
 partial progress from an idle call, and checks records sent together,
 connect progress, sticky errors and an allocation failure while copying
 one. The player's consumer-wakeup policy stays with the player.
+
+### 2026-10-23 — A stage's device time holds every command recorded inside it, so both totals skip breakdowns; the extract and the decode's grid edits are timed, and a grid builds its block kernels at create (amends the 2026-08-10 breakdown entry).
+
+**What the core changed.** Core 0.20.0 (#50; D3 of the data-flow design,
+which the owner approved) tiles a timed batch: a timestamp before its first
+command, at each change of tag and after its last. A stage's device time
+therefore holds its fills, copies and barriers, and a tile counts to every
+scope open around its tag. A row's host time splits into busy and blocked
+(`wait_ms`, which every core wait reports), and `DeviceTime` says what a
+device half holds: measured, run untimed (n/t), or not timeable (n/a).
+
+**The 2026-08-10 rule reverses.** That entry made `total_gpu_ms` count
+breakdowns, because a device span covered one dispatch and no parent held
+it. A tile's parent holds it now, so both totals skip breakdowns, as the
+core's do.
+
+**Two breakdowns of one blocking submit nest.** A blocking submit credits
+the scopes open at it, and two scopes open at once nest. The fused set's
+allocation round (`allocate_and_integrate`) opens inside the compaction's
+scope, so the compaction's tiles hold the round's. The integrator takes the
+round's off, which is exact, as the two tile one submit. The round becomes
+`"integrate"`'s `"  ..allocate"` breakdown: as the top-level `"allocate"`
+row it was, the totals would count it twice. An async submit would not
+separate them either, since a tile's scopes are fixed when its command is
+recorded.
+
+**What it adds**, with no submit, wait or result changed:
+- `MarchingCubes::extract_device` takes `StageMetrics`: a `"marching cubes"`
+  row over the compaction's `"  ..compact"` and the attempts'
+  `"  ..dispatch"`. A timed extract writes timestamps into the compaction's
+  submit and each attempt's, so one submit per extract stays the
+  `TODO(mesh)`.
+- The decoder's breakdowns tag their own commands, so each has a device half
+  and `"codec decode"`'s is their sum. `"  ..apply"` holds the grid's zeroing,
+  hash deletes and allocations, every round, through the `GpuStageScope` that
+  `VoxelBlockGrid::remove` and `VoxelHashMap::allocate` and `remove` now
+  take. Those rounds were untimed, and `"codec decode"` read as measured
+  without them. `"  ..inverse"` holds the deblock's passes, in its submit
+  (the 2026-10-21 deblock entry).
+- `VoxelBlockGrid::create` builds the block kernels for a grid with
+  attributes: the first remove, a player's first P-frame or a rig's first
+  garbage collection, compiled two pipelines inside the frame.
+- The examples' table prints host busy, wait and device, with n/t and n/a,
+  and a codec row's device column is unset unless every stage was measured.
+- The libraries need core 0.20.0.
+
+**The extract's rows are named for what they time**, not as the design
+sketched them (`mesh` over `..compact` and `..mc`). `"mesh"` is the player's
+own row around the call, as `"decode"` is around `"codec decode"`, and the
+two would merge. `"  ..dispatch"` is the attempt's whole submit -- reset,
+dispatch, readback and a refit -- which `ExtractTimings::dispatch_ms` names
+so, not the kernel alone. The compaction is `"  ..compact"`, as
+`ExtractTimings::compact_ms` names it, and the map takes the name
+(`compact_active_blocks_on_device`'s `row`): as the map's own
+`"  ..active set"` it would merge with a fuse's or an encode's timed into the
+same metrics. The decoder's breakdowns keep their names until its one-batch
+form splits them as the design does.
+
+**A timer is made by the first call that is timed.** An extractor, and a
+grid for its block pass, make their `GpuTimer` when a caller first passes
+metrics, not at create. A timer allocates its query pool when made, and
+MoltenVK backs each pool with a Metal counter sample buffer, of which a
+device has few: with a pool made at every create, the macOS runner refused
+them in `recon_mesh_marching_cubes_sparse` (33 grids and 14 extractors,
+`Could not create MTLCounterSampleBuffer`), and past that refusal MoltenVK
+emulates the timestamps while the timer still reads available. Every other
+tier's timer is made at create, as before this change.
 
 ## Measured lessons
 

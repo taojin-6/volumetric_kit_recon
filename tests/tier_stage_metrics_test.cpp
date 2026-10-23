@@ -7,22 +7,25 @@
 ///
 /// The assertions with teeth, in order of what they catch:
 ///
-/// 1. **Every tier contributes its row**, including the breakdown row for the
-///    second dispatch `integrate` makes. A tier whose row is missing is
-///    indistinguishable, on an overlay, from a tier that ran instantly.
-/// 2. **`gpu_ms < cpu_ms`, per row.** The host row is wall clock around a
-///    fence-blocked submit; the device row is the dispatch inside it. Equal
-///    numbers would mean the span is the wall clock relabelled, which is the
-///    failure this whole change exists to prevent — and the one a passing
-///    "some number came back" assertion would wave through.
-/// 3. **A window is per call, not per lifetime** — from both sides, and this
-///    is where the interesting bugs live. Each timer holds at most `max_spans`
-///    spans and then silently stops timing, so *running more calls than one
-///    window holds and asserting the last still reports a device span* catches
-///    both "an untimed call recorded a span anyway" (which would make this a
-///    global sink, the thing the 2026-08-01 decision refused) and "publishing
-///    did not end the window" (which would report every earlier frame's device
-///    time under this frame's label until the window filled). Asserting on
+/// 1. **Every tier contributes its row**, including the breakdown rows for
+///    the parts of a stage. A tier whose row is missing is indistinguishable,
+///    on an overlay, from a tier that ran instantly.
+/// 2. **`gpu_ms < cpu_ms` and `wait_ms <= cpu_ms`, per row.** The host row is
+///    wall clock around a fence-blocked submit, its wait the fence's; the
+///    device row is the work inside it. Equal numbers would mean the span is
+///    the wall clock relabelled, which is the failure this whole change
+///    exists to prevent — and the one a passing "some number came back"
+///    assertion would wave through.
+/// 3. **A breakdown is inside its stage, device time included**: a stage's
+///    device half holds its breakdowns', the totals skip them, and two
+///    breakdowns of one submit do not hold each other's.
+/// 4. **Timing is per call, not per lifetime** — from both sides. A timer's
+///    pool holds a fixed number of queries, so *running more calls than it
+///    holds and asserting the last still reports a device span* catches both
+///    "an untimed call recorded a span anyway" (which would make this a
+///    global sink, the thing the 2026-08-01 decision refused) and "a call
+///    kept its queries" (the timer would stop timing). Null metrics also
+///    leave a scope open around the call with no device half. Asserting on
 ///    counts rather than on the ratio between two ~16 µs spans is what keeps
 ///    this deterministic: the ratio flaked ~8% of runs on correct code.
 
@@ -37,11 +40,13 @@
 #include "volumetric_kit/core/vulkan/device.hpp"
 #include "volumetric_kit/core/vulkan/gpu_timer.hpp"
 #include "volumetric_kit/core/vulkan/vulkan.hpp"
+#include "volumetric_kit/recon/mesh/marching_cubes.hpp"
 #include "volumetric_kit/recon/mesh/mesh.hpp"
 #include "volumetric_kit/recon/texture/projective_texturer.hpp"
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
 #include "volumetric_kit/recon/volume/voxel_block_grid.hpp"
 
+#include "buffer_readback.hpp"
 #include "gpu_test.hpp"
 
 namespace vr = volumetric_kit::recon;
@@ -61,9 +66,10 @@ constexpr std::uint32_t kWidth = 64;
 constexpr std::uint32_t kHeight = 64;
 
 // More calls than one window holds: GpuTimer::create's default max_spans is 32,
-// past which begin() refuses every span and the tier's GPU column freezes. Any
-// number above that works; this leaves margin without costing real time (the
-// fixture's fuse is a fraction of a millisecond).
+// past which a timer whose calls kept their queries finds no free range and
+// the tier's GPU column reads n/t. Any number above that works; this leaves
+// margin without costing real time (the fixture's fuse is a fraction of a
+// millisecond).
 constexpr int kPastOneWindow = 40;
 
 const vkc::StageRow* find(const vkc::StageMetrics& m, const char* name) {
@@ -79,10 +85,10 @@ const vkc::StageRow* find(const vkc::StageMetrics& m, const char* name) {
 // `gpu_ms < cpu_ms` is the load-bearing half and it is structural, not a
 // tolerance: the span is recorded inside the very submit the host row wraps, so
 // under it is the only place it can land. That makes it the assertion that
-// catches a window carrying more than this call put in it -- N accumulated
-// spans against one call's wall clock is a factor, not a coin flip -- where
-// `has_gpu` alone would wave a leak through, since spans left over from earlier
-// calls publish under the same label and set it.
+// catches a call reporting more than it put in -- N accumulated spans against
+// one call's wall clock is a factor, not a coin flip -- where a Measured state
+// alone would wave a leak through, since spans left over from earlier calls
+// publish under the same label and set it. The wait is part of the host span.
 bool row_reports_both_halves(const vkc::StageMetrics& m, const char* stage,
                              bool device_can_time, const char* context) {
   const vkc::StageRow* row = find(m, stage);
@@ -97,8 +103,13 @@ bool row_reports_both_halves(const vkc::StageMetrics& m, const char* stage,
                  stage, row->cpu_ms);
     return false;
   }
+  if (!(row->wait_ms >= 0.0 && row->wait_ms <= row->cpu_ms)) {
+    std::fprintf(stderr, "FAIL (%s): '%s' wait %.4f outside host %.4f ms\n",
+                 context, stage, row->wait_ms, row->cpu_ms);
+    return false;
+  }
   if (!device_can_time) return true;
-  if (!row->has_gpu) {
+  if (row->device != vkc::DeviceTime::Measured) {
     // The device supports timestamps and this tier still produced no span: its
     // timer was never created, never reached the dispatch, or was never
     // published. All three are silent in production -- the row simply goes
@@ -221,7 +232,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
   for (const char* stage : kStages) {
     CHECK(row_reports_both_halves(metrics, stage, device_can_time, "spine"));
     const vkc::StageRow* row = find(metrics, stage);
-    if (!row->has_gpu) {
+    if (row->device != vkc::DeviceTime::Measured) {
       // A queue family reporting zero timestampValidBits is a supported
       // configuration, so reporting host-only is right -- but only once the
       // probe above has independently confirmed that is what happened.
@@ -236,36 +247,121 @@ int gpu_main(vr_test::GpuContext& gpu) {
         row->cpu_ms, row->gpu_ms, 100.0 * row->gpu_ms / row->cpu_ms);
   }
 
-  // "  ..active set" is the compaction dispatch integrate() records ahead of
-  // the fusion one, in the same submit, so it reports its device half alone: a
-  // stage that runs two kernels and times one reports the other's device time
-  // as submit overhead. No row above it contains that span -- which is why the
-  // device total counts breakdown rows where the host total cannot. Skipping
-  // them lost this kernel from every total while its host time stayed counted
-  // through "integrate".
+  // "  ..active set" is the compaction integrate() records ahead of the
+  // fusion, in the same submit: a breakdown with its device half alone, which
+  // "integrate"'s holds too, since a tile counts to every scope open around
+  // it. So both totals skip it.
   {
     const vkc::StageRow* active_set = find(metrics, "  ..active set");
+    const vkc::StageRow* integrate = find(metrics, "integrate");
     CHECK(active_set != nullptr && active_set->cpu_ms == 0.0);
-    CHECK(active_set->has_gpu || !device_can_time);
-    if (active_set->has_gpu) {
-      // Compared with a tolerance, not for equality: the two totals accumulate
-      // a different set of rows, so the same quantity comes out with different
-      // rounding, and `total - row == total_excluding_row` is false in the last
-      // bits. An earlier cut asserted exactly that and passed here on ~0.01 ms
-      // spans while failing CI, where lavapipe's 225 ms texture row makes the
-      // representable gap wider than the rows being summed.
-      //
-      // 1e-9 ms is a picosecond -- far below any span a query pool can report
-      // and far above double rounding at these magnitudes. Under the skip this
-      // replaced the difference is 0 against a real span, so the mutation is
-      // still caught by a wide margin.
-      CHECK(metrics.total_gpu_ms() >= active_set->gpu_ms);
-      const double delta =
-          metrics.total_gpu_ms() - metrics.total_gpu_ms("  ..active set");
-      CHECK(std::fabs(delta - active_set->gpu_ms) < 1e-9);
+    CHECK(active_set->device == vkc::DeviceTime::Measured || !device_can_time);
+    if (active_set->device == vkc::DeviceTime::Measured) {
+      CHECK(integrate->gpu_ms >= active_set->gpu_ms);
     }
-    // The host half, by contrast, must stay out: "integrate" already spans it.
+    CHECK(metrics.total_gpu_ms() == metrics.total_gpu_ms("  ..active set"));
     CHECK(metrics.total_cpu_ms() == metrics.total_cpu_ms("  ..active set"));
+  }
+
+  // --- a set allocated in its fuse's submit (the Fuser's steady state) -------
+  //
+  // "integrate" holds the allocation round's tiles, the round is its
+  // "  ..allocate" breakdown, and "  ..active set" is the compaction alone: two
+  // breakdowns of one submit do not hold each other's time. A narrow camera
+  // over a large image makes the round far longer than the fuse, so a
+  // compaction row that still held the round would overrun "integrate".
+  {
+    vr::DepthCameraParams narrow = cam;
+    narrow.width = narrow.height = 1024;
+    narrow.fx = narrow.fy = 16384.0f;
+    narrow.cx = narrow.cy = 512.0f;
+    const std::vector<float> plane(std::size_t{1024} * 1024, 1.0f);
+    vkc::Result<vkc::Buffer> on_device = vr_test::upload_device_buffer(
+        gpu.device, gpu.allocator, plane.data(), plane.size() * sizeof(float));
+    CHECK(on_device);
+    const vr::tsdf::FrameInput frame{
+        {vkc::StorageInput(on_device.value()), narrow}, nullptr};
+    vkc::StageMetrics fused;
+    CHECK(integrator.value().allocate_and_integrate(
+        grid.value(), {frame}, 5.0f, vr::tsdf::IntegrationMode::Classic,
+        nullptr, &fused));
+    CHECK(row_reports_both_halves(fused, "integrate", device_can_time,
+                                  "fused set"));
+    CHECK(find(fused, "allocate") == nullptr);
+    const vkc::StageRow* round = find(fused, "  ..allocate");
+    const vkc::StageRow* compaction = find(fused, "  ..active set");
+    const vkc::StageRow* whole = find(fused, "integrate");
+    CHECK(round != nullptr && compaction != nullptr);
+    CHECK(round->cpu_ms == 0.0 && compaction->cpu_ms == 0.0);
+    if (device_can_time) {
+      CHECK(round->device == vkc::DeviceTime::Measured &&
+            compaction->device == vkc::DeviceTime::Measured);
+      CHECK(round->gpu_ms > 0.0 && compaction->gpu_ms >= 0.0);
+      CHECK(round->gpu_ms + compaction->gpu_ms <= whole->gpu_ms + 1e-9);
+      std::fprintf(stderr,
+                   "fused set: integrate %.4f ms, ..allocate %.4f, "
+                   "..active set %.4f\n",
+                   whole->gpu_ms, round->gpu_ms, compaction->gpu_ms);
+    }
+    CHECK(fused.total_gpu_ms() == whole->gpu_ms);
+    CHECK(fused.total_cpu_ms() == whole->cpu_ms);
+  }
+
+  // --- the mesh tier: an extract over its compaction and its dispatch --------
+  {
+    vkc::Result<vr::mesh::MarchingCubes> mc =
+        vr::mesh::MarchingCubes::create(gpu.device, gpu.allocator);
+    CHECK(mc);
+    // The fuses above moved the active set, so this one compacts.
+    vkc::StageMetrics first;
+    CHECK(mc.value().extract_device(grid.value(), 0.0f, nullptr, &first));
+    CHECK(row_reports_both_halves(first, "marching cubes", device_can_time,
+                                  "extract"));
+    const vkc::StageRow* whole = find(first, "marching cubes");
+    const vkc::StageRow* compaction = find(first, "  ..compact");
+    const vkc::StageRow* dispatch = find(first, "  ..dispatch");
+    CHECK(compaction != nullptr && dispatch != nullptr);
+    CHECK(find(first, "  ..active set") == nullptr);
+    CHECK(compaction->cpu_ms <= whole->cpu_ms &&
+          dispatch->cpu_ms <= whole->cpu_ms);
+    if (device_can_time) {
+      CHECK(compaction->device == vkc::DeviceTime::Measured &&
+            dispatch->device == vkc::DeviceTime::Measured);
+      // Its own tile too: the first extract grows the index run, whose
+      // identity fill, a submit of its own, is the stage's alone. Without it
+      // the two sides are equal.
+      std::fprintf(stderr,
+                   "extract: marching cubes %.4f ms, ..compact %.4f, "
+                   "..dispatch %.4f\n",
+                   whole->gpu_ms, compaction->gpu_ms, dispatch->gpu_ms);
+      CHECK(whole->gpu_ms > compaction->gpu_ms + dispatch->gpu_ms + 1e-9);
+    }
+    CHECK(first.total_gpu_ms() == whole->gpu_ms);
+    CHECK(first.total_cpu_ms() == whole->cpu_ms);
+
+    // Nothing changed since, so the map's list holds and nothing compacts; a
+    // steady extract is its one dispatch's submit, which is the stage's tile.
+    vkc::StageMetrics again;
+    vr::mesh::ExtractTimings timings;
+    CHECK(mc.value().extract_device(grid.value(), 0.0f, &timings, &again));
+    CHECK(find(again, "  ..compact") == nullptr);
+    const vkc::StageRow* steady = find(again, "  ..dispatch");
+    CHECK(steady != nullptr);
+    if (device_can_time && timings.dispatches == 1) {
+      CHECK(std::fabs(steady->gpu_ms - find(again, "marching cubes")->gpu_ms) <
+            1e-9);
+    }
+
+    // Null metrics tile nothing: a scope open around the extract gets its
+    // fence waits but no device half.
+    vkc::StageMetrics outer;
+    {
+      const vkc::StageScope around(outer, "around");
+      CHECK(mc.value().extract_device(grid.value()));
+    }
+    CHECK(outer.rows().size() == 1);
+    CHECK(outer.rows()[0].device == vkc::DeviceTime::None);
+    CHECK(outer.rows()[0].wait_ms <= outer.rows()[0].cpu_ms);
   }
 
   // The cull is the frame's own, so the next integrate compacts again, with
@@ -321,10 +417,10 @@ int gpu_main(vr_test::GpuContext& gpu) {
   // --- publishing ends the window -------------------------------------------
   //
   // The same window bound, from the publishing side: each call must report its
-  // OWN span. Without the drain in report_into the spans accumulate across
-  // calls -- reporting a running total under each frame's label, the defect
-  // review caught in #62 -- and once they reach max_spans the timer stops
-  // recording, so the last of these calls comes back host-only.
+  // OWN span. A call that kept its queries would report a running total under
+  // each frame's label, the defect review caught in #62, and once they reach
+  // max_spans the timer stops timing, so the last of these calls comes back
+  // untimed.
   //
   // Deterministic where comparing two spans' magnitudes is not: these are
   // ~16 µs on this fixture, small enough that ordinary jitter clears any ratio

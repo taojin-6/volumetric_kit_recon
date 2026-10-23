@@ -3,9 +3,11 @@
 
 #include "volumetric_kit/recon/tsdf/tsdf_integrator.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <optional>
 #include <string>
 #include <vector>
@@ -276,9 +278,7 @@ core::Result<std::uint32_t> TsdfIntegrator::fuse(
   // stage that reports nothing when it fails reads on an overlay as a stage
   // that did not run, which is the reading a frozen pipeline most needs not to
   // give. Inert when metrics is null, and it publishes both halves on every
-  // return below rather than only the one that reaches the dispatch. An
-  // allocation sharing the submit leads, as it does in its own call.
-  if (allocate && metrics != nullptr) metrics->seed("allocate");
+  // return below rather than only the one that reaches the dispatch.
   core::GpuStageScope stage(metrics, gpu_timer_, "integrate");
   if (!valid()) {
     return core::Status::invalid_argument(
@@ -452,10 +452,9 @@ core::Result<std::uint32_t> TsdfIntegrator::fuse(
   VKC_TRY(gpu_timer_.reserve(*device_,
                              2 + (split ? 2 * count : count) * dispatches));
 
-  // The compaction's own row, without which its device time would read as
-  // integrate's submit overhead, and an allocation's row: their device halves
-  // alone, since their host time is this call's one submit. Open until the
-  // submit has resolved their spans.
+  // The compaction's own row, and an allocation's: breakdowns of "integrate",
+  // whose row holds their tiles and their host time, so only their device
+  // halves are kept. Open until the submit has resolved their tiles.
   core::StageMetrics parts;
   std::optional<core::GpuStageScope> active_stage;
   active_stage.emplace(metrics != nullptr ? &parts : nullptr, gpu_timer_,
@@ -607,11 +606,21 @@ core::Result<std::uint32_t> TsdfIntegrator::fuse(
   }
   active_stage.reset();
   if (metrics != nullptr) {
+    // A fused round's scope opened inside the compaction's, so the
+    // compaction's tiles hold the round's too: taken off, which is exact, as
+    // the two tile one submit.
+    const core::StageRow* round = nullptr;
     for (const core::StageRow& row : parts.rows()) {
-      if (row.has_gpu) {
-        metrics->add_gpu(row.name, row.gpu_ms);
+      if (std::strcmp(row.name, "allocate") == 0) round = &row;
+    }
+    for (const core::StageRow& row : parts.rows()) {
+      const char* name = &row == round ? "  ..allocate" : row.name;
+      metrics->seed(name);
+      if (&row == round || round == nullptr) {
+        metrics->add_device(name, row.device, row.gpu_ms);
       } else {
-        metrics->seed(row.name);
+        metrics->add_device(name, std::max(row.device, round->device),
+                            row.gpu_ms - round->gpu_ms);
       }
     }
   }

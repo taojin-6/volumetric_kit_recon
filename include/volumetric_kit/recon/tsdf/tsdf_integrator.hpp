@@ -192,27 +192,18 @@ class VR_TSDF_API TsdfIntegrator {
   ///        cap, so a changed color converges over several frames once the
   ///        weight saturates.
   /// @param metrics  Optional `StageMetrics` collecting this call's timing:
-  ///                  an `"integrate"` host row around the whole call, and its
-  ///                  device half from a timestamp span around the fusion
-  ///                  dispatch. `nullptr` measures nothing -- no timer runs, no
+  ///                  an `"integrate"` row around the whole call, its wait the
+  ///                  fence's, and its device half every command of its one
+  ///                  submit. `nullptr` measures nothing -- no timer runs, no
   ///                  query is written, and the dispatch takes the untimed
   ///                  submit path (the `ExtractTimings` shape, and the
   ///                  2026-08-01 bar: no global sink, no state retained between
   ///                  calls).
   ///
-  ///                  The two halves answer different questions and the gap
-  ///                  between them is the point: the host row is wall clock
-  ///                  around a fence-blocked submit, so it carries the command
-  ///                  buffer, the submit and the stall; the device row is the
-  ///                  kernel. A tier whose host row dwarfs its device row is
-  ///                  not a slow kernel.
-  ///
-  ///                  The fuse's submit also compacts the blocks the frame
-  ///                  reaches (@ref volume::VoxelHashMap::record_compaction),
-  ///                  a dispatch that reports its device half as a
-  ///                  `"  ..active set"` breakdown row beneath this one.
-  ///                  Without it that kernel's device time would fall into the
-  ///                  gap above and read as submit overhead.
+  ///                  The submit also compacts the blocks the frame reaches
+  ///                  (@ref volume::VoxelHashMap::record_compaction), whose
+  ///                  device half alone is a `"  ..active set"` breakdown row
+  ///                  beneath this one.
   /// @return OK on success, or a non-OK `Status`:
   ///         `Status::Code::InvalidArgument` if the integrator is
   ///         moved-from, @p depth is null, @p cam or @p color's camera has a
@@ -300,9 +291,9 @@ class VR_TSDF_API TsdfIntegrator {
   /// @param max_weight    As @ref integrate.
   /// @param mode          As @ref integrate.
   /// @param out_failures  As @ref volume::VoxelHashMap::allocate_from_depth.
-  /// @param metrics       As @ref integrate, and an `"allocate"` row with the
-  ///                      round's device half alone: the `"integrate"` row's
-  ///                      host half is the whole set's.
+  /// @param metrics       As @ref integrate, whose row is the whole set's, and
+  ///                      a `"  ..allocate"` breakdown with the round's device
+  ///                      half alone.
   /// @return The failed allocations, as
   ///         @ref volume::VoxelHashMap::allocate_from_depth counts them; or
   ///         as @ref integrate refuses, and
