@@ -688,7 +688,9 @@ entries relevant to your task; later amendments supersede earlier rules.
   toggle. Streams are unchanged. *Amended 2026-10-22:* a frame with an
   unobserved voxel is skipped, so a live RGB-D stream decodes exactly: on a
   live room capture the filter erodes surface at mask edges and in thin
-  parts.
+  parts. *Amended 2026-10-23:* only a frame more than half of whose blocks
+  hold one, so a true-SDF mesh frame with a few cut voxels is smoothed, and
+  a live frame, masked in nearly every block, still is not.
 - [**2026-10-22**](#2026-10-22--recon-is-fetched-by-commit-never-installed-no-install-rules-package-config-or-package-tests-amends-the-2026-10-16-glsl-pinhole-entry-and-the-2026-10-17-amendment-of-the-2026-10-13-block-list-entry) —
   recon is fetched by commit, never installed (the owner's rule for the
   family): no install rules, package config or package tests. The
@@ -12668,8 +12670,9 @@ machine).
 
 *Amended 2026-10-21 (the deblock entry, below):* with
 `Decoder::set_deblock` on, the decode's last submit also smooths a frame
-without an unobserved voxel after the inverse, and `Decoder::rebuild`
-remakes the last frame from the reference without reading it again.
+after the inverse, unless that entry's gate skips it, and
+`Decoder::rebuild` remakes the last frame from the reference without
+reading it again.
 
 *Amended 2026-10-13 (the coordinate entry, below):* the reference's
 coordinates live on the device, in each slot's block list, and `merge_frame`
@@ -14445,6 +14448,24 @@ run: the RTX 5090, ASan and UBSan (CI runs them).
 
 ### 2026-10-21 — The decoder deblocks on request: a runtime switch, off by default, runs the study's step-keyed line fit and Gaussian on the device in the decode's last submit, on a frame without an unobserved voxel, and a paused player rebuilds its frame from the reference (amends the 2026-10-13 decoder entry).
 
+*Amended 2026-10-23 (the owner):* the gate skips a frame only when more
+than half of its blocks are masked, holding an unobserved voxel, where a
+single such block skipped it, so a mesh sequence's true-SDF frames with a
+few cut voxels are smoothed on every frame and live frames stay exact; the
+player's switch defaults on, the library's stays off. The inverse counts
+the masked blocks on the device, an `atomicAdd` a masked block, in place of
+the flag; each kernel compares the count with the frame's block count, and
+the readback carries the count, so `DeblockInfo` says what ran
+(`detail::deblock_skips`). One half (`kDeblockMaskedDivisor`) is a round
+line far from both kinds of frame: the K56 template's frames with a cut
+have at most 1.6% of their blocks masked (29 of 1,830; 71 of its 150 frames
+have one), the live room captures at least 99.8% on every frame (1 cm
+99.99–100% of 17,592–21,797 blocks, 5 mm 99.81–99.998% of 64,382–85,017),
+and Rafa2 stock, the masked template before true SDF, its voxels past the
+band unobserved, 73.9–75.3%, so it stays skipped. The rules for unobserved
+taps are unchanged, and now meet the cut voxels; the amendment's
+validation closes this entry.
+
 The 2026-10-21 quantization study found the steps quantization leaves at
 block faces the largest error a decoded mesh shows, and a decoder-side
 filter that removes most of them for no bits: on Rafa2 the K56 template's
@@ -14473,10 +14494,11 @@ live.
   the live rig's result below): a frame any of whose blocks has an
   unobserved voxel decodes exactly as with the switch off and reports
   `"off"`, with its T. So a live RGB-D stream decodes exactly, and the
-  player can default the switch on. *To confirm:* a true-SDF frame's masks
-  are all ones but its cuts, so the K56 template's frames with a cut (among
-  frames 74–150, 1–29 blocks of about 1,920) are skipped too, against the
-  decision's premise that true-SDF streams stay as they were. The inverse,
+  player can default the switch on. A true-SDF frame's masks are all ones
+  but its cuts, so the K56 template's frames with a cut (among frames
+  74–150, 1–29 blocks of about 1,920) were skipped too, against the
+  decision's premise that true-SDF streams stay as they were; the
+  2026-10-23 amendment, above, settles it. The inverse,
   which reads every mask, finds such a frame on the device and its readback
   reports it; no submit, wait or mapping is added. The kernels' rules for
   unobserved taps stay, for a mask-edge guard on masked frames later: at
@@ -14704,6 +14726,32 @@ partial mask line and a device one a masked block in the inverse, and a word
 more read back), is not resolved: back to back on the M5 Max, the switch
 off, the gated build against the one before moved the rooms' per-frame
 median device time by −0.86 to +0.05 ms, within that method's noise.
+
+**The 2026-10-23 amendment's validation.** The lab's RTX 4090 (Ubuntu
+26.04, driver 615.71.10, GCC 15.2), Release with warnings as errors and the
+CI ubuntu-26.04 leg's options: the 95 tests pass under the validation layer
+(1.4.341) and synchronization validation. `recon_codec_deblock` holds the
+gate at its boundary. The kernels, on frames of 32 and 33 blocks under each
+filter, run the oracle's filter with a count of 16, exactly half of 32, and
+leave the grid and its stamps as they were with 17 or every block, the
+store too over a primed snapshot. A decoded frame of 250 blocks, each
+masked block two unobserved voxels in two x-lines, is the oracle's filter
+of its exact decode with 1 or 125 masked, reported `"LG"`, and the exact
+decode with 126, reported `"off"`, each rebuilt to the same with the switch
+on and to the exact decode with it off. The masked sphere chains, 84–86%
+of their blocks masked, stay exact, interleaved with mask-free frames too,
+and a true-SDF curtain, 20 of its 130 blocks cut, is deblocked. The host's
+rule holds to 2^32 − 1 blocks. 11 planted bugs each failed it: the count
+never incremented, never zeroed, or counted by masked line; the kernels'
+comparison inverted, at `>=`, or at a quarter; each kernel ignoring the
+gate; the host's rule at `>=`; and the decoder reporting the any-masked
+rule. On the same GPU, every frame decoded with the switch on and off,
+each grid hashed, against the pre-gate deblock (9d08d236): the K56
+template is deblocked (LF) on all 150 frames, each the pre-gate build's
+hash, its 71 cut frames included; Rafa2 stock and the two room captures
+decode on as off on every frame (150, 305 and 302), reported `"off"`; the
+exact decode is the pre-gate build's on every frame of the four; and
+`rebuild` with the switch on equals the decode on every frame.
 
 ### 2026-10-22 — recon is fetched by commit, never installed: no install rules, package config or package tests (amends the 2026-10-16 GLSL pinhole entry and the 2026-10-17 amendment of the 2026-10-13 block-list entry).
 
