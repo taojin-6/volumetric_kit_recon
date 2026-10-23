@@ -14776,12 +14776,13 @@ RTX 4090 for off, the fallback and the unguarded deblock (27bfada4): every
 10th frame of both captures (31 each) against the encoder's input S_enc at
 a 0.2 m reach, the exact decode identical in both runs. At 1 cm (LG) the
 fallback decodes as off: 30 of the 31 frames equal it in every measure,
-the 31st within 0.0003 mm of its coverage p95, and the triangle count and
-the S_enc vertices more than a voxel (10 mm) from the decoded surface are
-off's on all 31. The unguarded deblock, as before, adds 53,368 such vertices
-(26,373 removed by sign flips, 26,995 moved past the threshold), 1.0% of
-thin parts' vertices and 93% at mask edges, and 12,743 fewer triangles a
-frame, for chamfer −1.9%. At 5 mm (LF) the fallback adds 169 vertices more
+the 31st within 0.0003 mm of it in each distance (coverage p95 the
+farthest), and the triangle count and the S_enc vertices more than a voxel
+(10 mm) from the decoded surface are off's on all 31. The unguarded
+deblock, as before, adds 53,368 such vertices (26,373 removed by sign
+flips, 26,995 moved past the threshold), 1.0% of thin parts' vertices and
+93% at mask edges, and 12,743 fewer triangles a frame, for chamfer −1.9%.
+At 5 mm (LF) the fallback adds 169 vertices more
 than a voxel (5 mm) from the surface over the 31 frames, 58 by sign flips
 and 111 past the threshold, 166 of them in thin parts, and 17 fewer
 triangles a frame of 5.24 million; chamfer moves +0.000002 mm on average
