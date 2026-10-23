@@ -1827,6 +1827,14 @@ end, which comes after every whole record; a failed check ends it with the
 parser's error, which every later call returns again. Every error reads
 `StreamClient: <host>:<port>: <reason>`, the address once, and the idle
 limit's reason names the stage it ended in (the header lists the reasons).
+The four-argument `next` overload also writes whether this call made
+progress: a record returned, a successful lookup/connect step, or bytes
+received. It resets that output on every call and keeps it true across a
+later idle step. `next(0, ...)` reads at most one receive, so a false result
+alone does not mean the input is drained; callers waiting on their own
+controls drain while progress is true. On an error the output covers only
+earlier successful steps, and the error remains terminal. The original
+three-argument overload forwards without requesting progress.
 
 **Sockets** (private `socket.hpp`, which gives the reasons). IPv4 only:
 the server listens on it, and a name is looked up for it. Every socket is

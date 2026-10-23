@@ -669,6 +669,9 @@ entries relevant to your task; later amendments supersede earlier rules.
   family): no install rules, package config or package tests. The
   add_subdirectory checks stay, the public headers' one among them, and the
   camera-only check runs in the camera-only build alone.
+- [**2026-10-22**](#2026-10-22--streamclient-reports-progress-before-a-whole-record-is-ready) —
+  `StreamClient::next` can report partial input and connection progress,
+  allowing a consumer to drain it before waiting on its own controls.
 - [**2026-10-23**](#2026-10-23--a-stages-device-time-holds-every-command-recorded-inside-it-so-both-totals-skip-breakdowns-the-extract-and-the-decodes-grid-edits-are-timed-and-a-grid-builds-its-block-kernels-at-create-amends-the-2026-08-10-breakdown-entry) —
   A stage's device time holds every command recorded inside it (core
   0.20.0's tiles), so both totals skip breakdowns; a fused set's allocation
@@ -14312,6 +14315,29 @@ under `include/`. `recon_subproject_camera_only` drops its install step and
 is registered only in a `VR_CAMERA_ONLY` build: its configures are Release
 with Vulkan hidden whatever the leg, so the camera-only job, the one place
 with no Vulkan at all, is its home.
+
+### 2026-10-22 — StreamClient reports progress before a whole record is ready.
+
+The player waits on its consumer's take when a decoded frame cannot yet be
+published. A zero-wait `StreamClient::next` takes at most one receive, and
+can return false while more of a partial record is already in the socket.
+Treating that false as idle adds a consumer wait per receive, slowing the
+drain even when the sender and decoder can keep up.
+
+The four-argument overload adds an optional `bool* progressed`. Each call
+resets it, then sets it after a successful lookup/connect step, bytes
+received, or a record returned from the parser. Once true it stays true for
+that call, including when the next step is idle. Callers can drain with
+zero-wait calls while it reports progress, checking their controls between
+calls, then wait on those controls once no progress was possible. On error
+it covers only earlier successful steps; the error remains terminal. The
+three-argument overload remains a forwarding symbol, so existing callers
+retain their API and behavior.
+
+The loopback regression sends a 512 KiB record in pieces, distinguishes
+partial progress from an idle call, and checks records sent together,
+connect progress, sticky errors and an allocation failure while copying
+one. The player's consumer-wakeup policy stays with the player.
 
 ### 2026-10-23 — A stage's device time holds every command recorded inside it, so both totals skip breakdowns; the extract and the decode's grid edits are timed, and a grid builds its block kernels at create (amends the 2026-08-10 breakdown entry).
 
