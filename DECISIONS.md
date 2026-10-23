@@ -14454,8 +14454,8 @@ that day's earlier amendment, which skipped a frame once more than half its
 blocks were masked (#273):* the deblock skips no frame; it falls back to the
 exact decode block by block. A masked block, one holding an unobserved
 voxel, is never written. A line is fitted across a face only when both its
-blocks are fully observed, so both sides of a face with a masked block stay
-as decoded. The Gaussian runs on fully observed blocks alone; a masked
+blocks are fully observed, so neither side of a face with a masked block is
+line-fitted. The Gaussian runs on fully observed blocks alone; a masked
 neighbour's observed voxels keep their decoded values through all three
 passes and enter its taps as such, its unobserved ones dropping out as
 before. Why: a frame gate is all or nothing, and the frames sit at both
@@ -14468,13 +14468,14 @@ smoothed but for its cut blocks, and a live frame decodes as with the
 switch off but for its few fully observed blocks; the player's switch
 defaults on, the library's stays off. `DeblockInfo` keeps the rule's
 filter and T and gains the frame's `block_count` and `exact_blocks`, the
-blocks that kept their exact decode, so a fully masked frame, which decodes
-as off, says so. On the device a first dispatch, an invocation a block,
-flags each fully observed block by slot and counts the masked blocks,
-whose count the decode's last readback carries; the later kernels return
-at once for a masked block, by its own mask. The inverse's count, the skip
-word and the kernels' comparison are gone. The amendment's validation
-closes this entry.
+blocks the fallback kept at their exact decode, those holding an unobserved
+voxel (a fully observed block the filter happens to leave unchanged is not
+counted), so a fully masked frame, which decodes as off, says so. On the
+device a first dispatch, an invocation a block, flags each fully observed
+block by slot and counts the masked blocks, whose count the decode's last
+readback carries; the later kernels return at once for a masked block, by
+its own mask. The inverse's count, the skip word and the kernels'
+comparison are gone. The amendment's validation closes this entry.
 
 The 2026-10-21 quantization study found the steps quantization leaves at
 block faces the largest error a decoded mesh shows, and a decoder-side
@@ -14512,8 +14513,10 @@ live.
 - **In the decode's last submit.** The inverse records without submitting
   (`DctTransform::record_inverse`), the deblock follows it, and the
   inverse's reject count is read back last, so no copy splits the compute.
-  Nothing of its own: no submit, fence, compaction, readback or indirect
-  dispatch; the frame's list and its count come from the decode.
+  Nothing of its own but the count of the blocks it kept, read back in the
+  same batch just before the inverse's reject count: no submit, fence,
+  compaction or indirect dispatch; the frame's list and its count come from
+  the decode.
 - **The kernels,** a 64-lane workgroup a block (Vulkan guarantees 128,
   WebGPU 256). The line passes run in place, a dispatch an axis: a line
   reads three voxels a side and writes two, so a voxel lies on one line of
@@ -14522,10 +14525,12 @@ live.
   shared memory, each pass's outputs held in registers until its inputs
   are read; it writes the interior, which no other workgroup reads, in
   place, and the shell into a snapshot packed to its 296 voxels a block,
-  by list position, which a store dispatch copies back. LF is 3 dispatches,
-  LG and R 5, against the prototype's 4 and 7. A block's own observed
-  voxels come from the frame's mask, a neighbour's from its weight; every
-  block is found by coordinate, never by a list's `ptr`.
+  by list position, which a store dispatch copies back. LF is 4 dispatches
+  (the flags, then an axis each), LG and R 6, against the prototype's 4
+  and 7. Whether a block is fully observed comes from its own mask words
+  or, for a neighbour, its flag; a masked neighbour's observed voxels come
+  from its weights; every block is found by coordinate, never by a list's
+  `ptr`.
 - **Stamps** follow what it writes: with it on they may name a block whose
   values end as they were, never miss one that changed.
 - **Its device time is part of `"codec decode"`'s** (*to confirm*): one
@@ -14549,10 +14554,10 @@ live.
 
 **Validation.** Apple M5 Max, MoltenVK, Release with warnings as errors,
 core `b992f12`: the 101 tests pass under the validation layer and
-synchronization validation, the gate's included, and the four codec tests
-it touches in Debug. So do the 100 of a Linux build, GCC 15.2 with no
-Assimp, FFmpeg, CUDA or Orbbec, on an NVIDIA RTX 5090 (Ubuntu 26.04, driver
-615.71), its ICD the loader's only one. `recon_codec_deblock` holds the
+synchronization validation, and the four codec tests it touches in Debug.
+So do the 100 of a Linux build, GCC 15.2 with no Assimp, FFmpeg, CUDA or
+Orbbec, on an NVIDIA RTX 5090 (Ubuntu 26.04, driver 615.71), its ICD the
+loader's only one. `recon_codec_deblock` holds the
 kernels to a CPU oracle ported from the study's filters, which reads a
 snapshot of each pass whatever order the workgroups run in, within 2e-6 of
 the band: LF, LG, R and each stage alone over partial masks, missing face,
@@ -14571,23 +14576,15 @@ K 20), and not the next row's; I- and P-frames toggled between frames, and
 four filters in one decoder over growing frames; `rebuild` equal to the
 decode with the switch so, its refusals leaving the grid as it was, and the
 next P-frame unchanged by it; a block only the deblock writes stamped; the
-rows unchanged. The gate's: a masked chain's I- and P-frames, and its
-`rebuild`, the exact decode to the bit, stamps too, reported `"off"`; a
-single unobserved voxel skipping its whole frame; masked and mask-free
-frames interleaved in one decoder; a true-SDF sphere deblocked and a cut
-curtain skipped; and the skip word, set, leaving the grid, its stamps and,
-over a primed snapshot, the store's copy as they were under every filter,
-and zero running the filter. 26 bugs planted by hand each failed their case,
-among them a shell voxel written in place on either face (the serialized
-orders), p and q swapped, candidacy over two samples, the kink at `>`,
-either clip or the clamp dropped, a 6-face halo, no chunk base, the snapshot
-or the masks by slot, a trusted `ptr`, the axes reversed, the deblock before
-the inverse, an ignored switch, `rebuild` without the diff, either stamp
+rows unchanged. 26 bugs planted by hand each failed their case, among them
+a shell voxel written in place on either face (the serialized orders), p
+and q swapped, candidacy over two samples, the kink at `>`, either clip or
+the clamp dropped, a 6-face halo, no chunk base, the snapshot or the masks
+by slot, a trusted `ptr`, the axes reversed, the deblock before the
+inverse, an ignored switch, `rebuild` without the diff, either stamp
 dropped, and a deblock on by default (`recon_codec_inter` and
 `recon_codec_deblock`; `recon_codec_decoder`'s bounds are loose enough to
-pass it); so did 8 for the gate: the flag never set, set from lane 0's line
-alone, or never zeroed; each kernel ignoring the word; the decoder reporting
-the rule's filter; and a skip buffer without a word accepted.
+pass it).
 
 By hand, against the study's own CPU code, its T computed its own way, on
 Rafa2 frames 1–150 of the prototype's four streams and the K56 template's,
@@ -14637,9 +14634,10 @@ cells hold a negative one), so the mean alone.
 The prototype's, back to back on the same streams on the M5 Max, one
 timestamp span around its whole chain (which this repeat method matched
 within 7%): LF 0.052–0.097 ms and LG 0.099–0.186 ms. Building the three
-pipelines takes 2.5 ms (4.3 ms the first time) of `Decoder::create`'s
-11.8 ms on the M5 Max, and 0.33 ms (1.8 ms the first time, the driver's
-shader cache warm) of 1.3 ms on the RTX 5090.
+pipelines, before the fallback's flags kernel made four, takes 2.5 ms
+(4.3 ms the first time) of `Decoder::create`'s 11.8 ms on the M5 Max, and
+0.33 ms (1.8 ms the first time, the driver's shader cache warm) of 1.3 ms
+on the RTX 5090.
 
 Paced at 30 fps, as a player runs it: 150 frames, each `decode_growing`
 one host interval, with the deblock off and on, each with and without
@@ -14767,11 +14765,11 @@ template and both room captures. The K56 template's 79 mask-free frames
 decode on to main's hash; its 71 cut frames keep 1–29 blocks exact
 (363 in all, each frame's masked blocks), and per voxel they differ from
 the unguarded deblock only in those blocks (131,122 voxels) and within
-2 voxels of them (158,651), none farther. The rooms filter few blocks: at
-1 cm 0–2 of 17,592–21,797 a frame, none on 285 of 305 frames, which decode
-as off; at 5 mm 1–158 of 64,382–85,017, 0.12% on average. On every frame of
-the three the masked blocks hold the exact decode, `exact_blocks` counts
-them, and `rebuild` equals the decode.
+2 voxels of them (158,651), none farther. The rooms leave few blocks
+eligible, fully observed: at 1 cm 0–2 of 17,592–21,797 a frame, none on
+285 of 305 frames, which decode as off; at 5 mm 1–158 of 64,382–85,017,
+0.12% on average. On every frame of the three the masked blocks hold the
+exact decode, `exact_blocks` counts them, and `rebuild` equals the decode.
 
 **Room quality.** The 2026-10-22 evaluation, re-run on nunga's second
 RTX 4090 for off, the fallback and the unguarded deblock (27bfada4): every
@@ -14786,7 +14784,7 @@ thin parts' vertices and 93% at mask edges, and 12,743 fewer triangles a
 frame, for chamfer −1.9%. At 5 mm (LF) the fallback adds 169 vertices more
 than a voxel (5 mm) from the surface over the 31 frames, 58 by sign flips
 and 111 past the threshold, 166 of them in thin parts, and 17 fewer
-triangles a frame of 5.24 million; chamfer moves +0.00001 mm on average
+triangles a frame of 5.24 million; chamfer moves +0.000002 mm on average
 and +0.00003 mm at most. The unguarded deblock adds 963,436 (475,814 and
 487,622), 1.2% of thin parts' vertices, and 66,993 fewer triangles a frame,
 for chamfer +0.8%. So on live room frames the fallback is the exact decode

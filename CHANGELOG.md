@@ -15,8 +15,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   shares; the rest of the frame is filtered. A true-SDF frame, as the
   `codec_mesh` templates code, is smoothed but for its few cut blocks; a
   live RGB-D frame, masked in nearly every block, decodes nearly exactly.
-  `DeblockInfo` gains `block_count` and `exact_blocks`, the blocks that kept
-  their exact decode. Test: `recon_codec_deblock`.
+  `DeblockInfo` gains `block_count` and `exact_blocks`, the blocks the
+  fallback kept at their exact decode. Test: `recon_codec_deblock`.
 - `examples`: **`codec_mesh` codes a true SDF** (`EncoderConfig::true_sdf`,
   the 2026-10-21 decision) and refuses, before any GPU work, a band under 15
   voxels, plus the shell's half-thickness in shell mode. Its templates
