@@ -1547,38 +1547,38 @@ submit; the spare becomes the reference only when the whole decode
 succeeds. An intra frame takes the same apply from its payload alone (the
 2026-10-13 entry). With `Decoder::set_deblock` on (off by default; the
 2026-10-21 deblock entry), the same submit then smooths the frame across its
-block faces, with no submit or readback of its own (`detail::Deblock`,
-whose header has the filters): a line fit across each face, and at coarser
-steps a Gaussian after it. The host picks the filter per frame from the
-header alone: K and T, the step of DC and the zigzag's next three
-coefficients at their basis peaks, in millimetres, select a row of
-`kDeblockRule`, the study's rule; a fine step runs none. A masked block,
-holding an unobserved voxel, keeps its exact decode (that entry's
-2026-10-23 amendment): a first dispatch, an invocation a block, flags each
-fully observed block by slot in a word a slot zeroed earlier in the batch
-and counts the masked blocks; every later kernel returns, uniformly and
-before any probe or barrier, for a block whose own mask words are not all
-ones; a line is fitted across a face only when the neighbour's flag is set
-too, so both sides of a face with a masked block stay as decoded; the
-Gaussian holds a masked neighbour's voxels at their decoded values through
-all three passes, its unobserved ones dropping out; and the count is read
-back after the deblock, beside the inverse's reject count. The line passes run in
-place on `tsdf`, a dispatch an axis, a 64-lane workgroup a block and a lane
-a face line, probing the block and its +axis neighbour through
-`vrResolveOctants` (`block_neighbourhood.glsl`). The Gaussian is one
-dispatch a block over the block and the 1-voxel halo of its 26 neighbours,
-in shared memory; it writes the interior in place and the shell, the
-voxels a neighbour's halo reads, into a snapshot by list position, which a
-store dispatch copies back. A neighbour's observed voxels come from its
-weights, and each block is found by coordinate. Only fully observed
-blocks' `tsdf` change, and a block the deblock writes is stamped
+block faces, with no submit of its own and its one readback in the same
+batch (`detail::Deblock`, whose header has the filters): a line fit across
+each face, and at coarser steps a Gaussian after it. The host picks the
+filter per frame from the header alone: K and T, the step of DC and the
+zigzag's next three coefficients at their basis peaks, in millimetres,
+select a row of `kDeblockRule`, the study's rule; a fine step runs none. A
+masked block, holding an unobserved voxel, keeps its exact decode (that
+entry's 2026-10-23 amendment): a first dispatch, an invocation a block,
+flags each fully observed block by slot in a word a slot zeroed earlier in
+the batch and counts the masked blocks; every later kernel returns,
+uniformly and before any probe or barrier, for a block whose own mask words
+are not all ones; a line is fitted across a face only when the neighbour's
+flag is set too, so neither side of a face with a masked block is
+line-fitted; the Gaussian holds a masked neighbour's voxels at their
+decoded values through all three passes, its unobserved ones dropping out;
+and the count is read back after the deblock, beside the inverse's reject
+count. The line passes run in place on `tsdf`, a dispatch an axis, a
+64-lane workgroup a block and a lane a face line, probing the block and its
++axis neighbour through `vrResolveOctants` (`block_neighbourhood.glsl`).
+The Gaussian is one dispatch a block over the block and the 1-voxel halo of
+its 26 neighbours, in shared memory; it writes the interior in place and
+the shell, the voxels a neighbour's halo reads, into a snapshot by list
+position, which a store dispatch copies back. A neighbour's observed voxels
+come from its weights, and each block is found by coordinate. Only fully
+observed blocks' `tsdf` change, and a block the deblock writes is stamped
 `changed`. P-frames decode from the reference's coefficients, so the switch
 may change between any two frames.
 `Decoder::rebuild` reconstructs the last decoded frame from the held
 reference with the switch as it is now, into the grid that decode left
 (the grid diff checks its blocks first), so a paused player shows a toggle;
 `Decoder::last_deblock` reports the filter, T, the frame's blocks and those
-that kept their exact decode. Both classes report `StageMetrics`
+the fallback kept at their exact decode. Both classes report `StageMetrics`
 (`"codec encode"` / `"codec decode"`). Their breakdown rows share no name;
 the encoder's `"  ..active set"` is the map's own. The private pieces under
 `src/volumetric_kit/recon/codec/` are the `DctTransform`, the rANS tables,

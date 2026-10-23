@@ -15,8 +15,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   shares; the rest of the frame is filtered. A true-SDF frame, as the
   `codec_mesh` templates code, is smoothed but for its few cut blocks; a
   live RGB-D frame, masked in nearly every block, decodes nearly exactly.
-  `DeblockInfo` gains `block_count` and `exact_blocks`, the blocks that kept
-  their exact decode. Test: `recon_codec_deblock`.
+  `DeblockInfo` gains `block_count` and `exact_blocks`, the blocks the
+  fallback kept at their exact decode. Test: `recon_codec_deblock`.
 - **Stage rows follow core 0.20.0's timing**, which recon now pins (core
   #50's merge) and needs: its libraries, examples, tests and
   viewers have that one floor, and the examples and tests the core's config
