@@ -23,7 +23,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `tests`: **slow tests trimmed, with the properties they check kept**; the
   Orbbec decoder tests and the networking reaping case wait on counts, not
   fixed sleeps. Under ASan (Debug) on an M5 Max, `recon_eval_mesh_distance`
-  takes 6 s in place of 28 s.
+  takes 6 s in place of 28 s. Under ASan or TSan, `recon_networking_client`'s
+  flood case checks its calls without their 500 ms limit, which TSan misses
+  on a loaded host.
 - `volume`: **`allocate_from_triangles` asks for each block once a
   workgroup**, not once per work item naming it, and allocates the same
   blocks in under half the device time on Rafa2's 8-voxel band at 5 mm
