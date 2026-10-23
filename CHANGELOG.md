@@ -9,7 +9,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - **Stage rows follow core 0.20.0's timing**, which recon now pins (core
-  #50's head until it merges) and needs: its libraries, examples, tests and
+  #50's merge) and needs: its libraries, examples, tests and
   viewers have that one floor, and the examples and tests the core's config
   tier too. A row's host time splits into busy
   and wait, its device half says whether it was measured, and a timed batch
