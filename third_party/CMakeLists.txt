@@ -32,15 +32,16 @@ include(FetchContent)
 # alone. It leaves VKC_WITH_VULKAN unset rather than OFF, as calib does, so an
 # application that turns the tier on keeps it.
 #
-# The pin is core 0.19.0 (ff44a98, core #49's merge), as is the Homebrew key
+# The pin is core 0.20.0 (e4d00f1, core #50's head), as is the Homebrew key
 # action in .github/workflows/_build.yml; the vkc_require_core checks below say
 # which core each part needs.
 #
 # TODO: pin a core release tag once the core tags its releases.
+# TODO(timing): re-pin to core's merge commit.
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG ff44a981055d505590e295ff6a943bb1b6e96109)
+  GIT_TAG e4d00f1f21ee532eabfeea0aeb41ef3c0bbd9270)
 if(NOT VR_CAMERA_ONLY)
   set(VKC_WITH_VULKAN ON)
   if(VR_BUILD_TESTS)
