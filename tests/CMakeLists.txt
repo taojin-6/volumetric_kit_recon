@@ -1376,6 +1376,10 @@ foreach(_vr_networking_test server client stress)
            COMMAND recon_networking_${_vr_networking_test}_test)
 endforeach()
 
+# The client also checks its progress output across an allocation failure while
+# copying a saved error.
+target_sources(recon_networking_client_test PRIVATE test_allocation_failure.cpp)
+
 # serve_stream's replay (examples/common/stream_replay.hpp): the records from
 # the first key, seq and key pts across passes by the writer's rules, the dues,
 # damage left out and an allocation failure past it refused, and a damaged
