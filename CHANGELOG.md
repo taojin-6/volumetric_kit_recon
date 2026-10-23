@@ -9,10 +9,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - build: **recon pins core 0.19.0** (ff44a98, core #49's merge), and the
-  viewers pin gfx main after #152, which builds on it; the core floors are
-  unchanged. recon's kernels build through the device's pipeline cache
-  (core #48), so a kernel that several objects build on one device is
-  compiled once. On an RTX 4090, Release, under validation and
+  viewers pin gfx main after #152, which builds on it; recon's core floors
+  are unchanged, and the viewers need core 0.18.0, gfx's floor at that pin.
+  The live viewers now present FIFO, paced to the display (gfx #150's
+  default), where they presented MAILBOX. recon's kernels build through the
+  device's pipeline cache (core #48), so a kernel that several objects build
+  on one device is compiled once. On an RTX 4090, Release, under validation and
   synchronization validation, the codec tier's 13 test binaries take 10.1 s
   in place of 31.4 s with the NVIDIA driver's shader disk cache off
   (`recon_codec_inter` 1.9 s, from 11.1), and about 5.7 s either way with it
