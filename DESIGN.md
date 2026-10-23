@@ -2188,8 +2188,8 @@ entry). For true-SDF streams (the 2026-10-21 entry): the step-keyed deblock
 in the player; one 0.2 m comparison reach in `codec_compare_options`, which
 reaches max(truncation, 2 cm) today; and a sweep ladder in metres, since
 fractions of a 16-voxel band are coarse steps. For the deblock (the deblock
-entry's 2026-10-22 decision): a mask-edge guard, before masked frames are
-filtered again.
+entry's 2026-10-22 decision, amended 2026-10-23): a mask-edge guard, before
+the frames its gate skips, such as live RGB-D frames, are filtered.
 
 **On `fuse_orbbec`'s stream** (the 2026-10-20 entry): a capture-volume
 crop (`fusion.max_depth_m` is the limit there is), raw RGBD recording and

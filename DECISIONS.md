@@ -14746,12 +14746,12 @@ never incremented, never zeroed, or counted by masked line; the kernels'
 comparison inverted, at `>=`, or at a quarter; each kernel ignoring the
 gate; the host's rule at `>=`; and the decoder reporting the any-masked
 rule. On the same GPU, every frame decoded with the switch on and off,
-each grid hashed, against the pre-gate deblock (9d08d236): the K56
-template is deblocked (LF) on all 150 frames, each the pre-gate build's
-hash, its 71 cut frames included; Rafa2 stock and the two room captures
-decode on as off on every frame (150, 305 and 302), reported `"off"`; the
-exact decode is the pre-gate build's on every frame of the four; and
-`rebuild` with the switch on equals the decode on every frame.
+each grid hashed, against the pre-gate deblock (27bfada4, #264 before its
+gate): the K56 template is deblocked (LF) on all 150 frames, each the
+pre-gate build's hash, its 71 cut frames included; Rafa2 stock and the two
+room captures decode on as off on every frame (150, 305 and 302), reported
+`"off"`; the exact decode is the pre-gate build's on every frame of the
+four; and `rebuild` with the switch on equals the decode on every frame.
 
 ### 2026-10-22 — recon is fetched by commit, never installed: no install rules, package config or package tests (amends the 2026-10-16 GLSL pinhole entry and the 2026-10-17 amendment of the 2026-10-13 block-list entry).
 
