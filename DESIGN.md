@@ -1066,8 +1066,8 @@ consumer releases by generation; the kernel writes a real
 arena, index run and draw command are device-only, and each extract attempt
 is one batch that reads back the 28-byte command. Given `StageMetrics`,
 `extract_device` reports a `"marching cubes"` row over the compaction's
-`"  ..active set"` and the attempts' `"  ..dispatch"`, tiled inside those
-submits. A whole-map extract never
+`"  ..compact"` and the attempts' `"  ..dispatch"`, tiled inside those
+submits; its timer is made by the first such call. A whole-map extract never
 brings the active list to the host: it compacts onto the device, or takes
 the map's last list back from it, and binds it in place (2026-09-30). An
 `extract_device` overload meshes a `volume::DeviceBlockList` the caller
@@ -2043,7 +2043,7 @@ removes it for retry, as does destroying the stream unfinished before its
 first frame, and a codec error removes the new CSV too.
 
 **`codec_mesh`** codes one mesh or a numbered sequence of them (README,
-Codec evaluation, has the keys). The examples require core 0.16.0; core
+Codec evaluation, has the keys). The core
 escapes literal `%` characters in the scenario's directory before joining a
 relative `source.path` (0.8.0), so only the user's path carries a
 frame-number pattern.

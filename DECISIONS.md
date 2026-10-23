@@ -691,7 +691,7 @@ entries relevant to your task; later amendments supersede earlier rules.
   0.20.0's tiles), so both totals skip breakdowns; a fused set's allocation
   is `"integrate"`'s `"  ..allocate"`; the extract and the decode's grid
   edits are timed inside today's submits; a grid builds its block kernels at
-  create.
+  create, and an extractor or a grid its timer at the first timed call.
 
 ## Decision record
 
@@ -14510,7 +14510,7 @@ recorded.
 
 **What it adds**, with no submit, wait or result changed:
 - `MarchingCubes::extract_device` takes `StageMetrics`: a `"marching cubes"`
-  row over the compaction's `"  ..active set"` and the attempts'
+  row over the compaction's `"  ..compact"` and the attempts'
   `"  ..dispatch"`. A timed extract writes timestamps into the compaction's
   submit and each attempt's, so one submit per extract stays the
   `TODO(mesh)`.
@@ -14526,6 +14526,28 @@ recorded.
 - The examples' table prints host busy, wait and device, with n/t and n/a,
   and a codec row's device column is unset unless every stage was measured.
 - The libraries need core 0.20.0.
+
+**The extract's rows are named for what they time**, not as the design
+sketched them (`mesh` over `..compact` and `..mc`). `"mesh"` is the player's
+own row around the call, as `"decode"` is around `"codec decode"`, and the
+two would merge. `"  ..dispatch"` is the attempt's whole submit -- reset,
+dispatch, readback and a refit -- which `ExtractTimings::dispatch_ms` names
+so, not the kernel alone. The compaction is `"  ..compact"`, as
+`ExtractTimings::compact_ms` names it, and the map takes the name
+(`compact_active_blocks_on_device`'s `row`): as the map's own
+`"  ..active set"` it would merge with a fuse's or an encode's timed into the
+same metrics. The decoder's breakdowns keep their names until its one-batch
+form splits them as the design does.
+
+**A timer is made by the first call that is timed.** An extractor, and a
+grid for its block pass, make their `GpuTimer` when a caller first passes
+metrics, not at create. A timer allocates its query pool when made, and
+MoltenVK backs each pool with a Metal counter sample buffer, of which a
+device has few: with a pool made at every create, the macOS runner refused
+them in `recon_mesh_marching_cubes_sparse` (33 grids and 14 extractors,
+`Could not create MTLCounterSampleBuffer`), and past that refusal MoltenVK
+emulates the timestamps while the timer still reads available. Every other
+tier's timer is made at create, as before this change.
 
 ## Measured lessons
 

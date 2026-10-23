@@ -318,16 +318,23 @@ int gpu_main(vr_test::GpuContext& gpu) {
     CHECK(row_reports_both_halves(first, "marching cubes", device_can_time,
                                   "extract"));
     const vkc::StageRow* whole = find(first, "marching cubes");
-    const vkc::StageRow* compaction = find(first, "  ..active set");
+    const vkc::StageRow* compaction = find(first, "  ..compact");
     const vkc::StageRow* dispatch = find(first, "  ..dispatch");
     CHECK(compaction != nullptr && dispatch != nullptr);
+    CHECK(find(first, "  ..active set") == nullptr);
     CHECK(compaction->cpu_ms <= whole->cpu_ms &&
           dispatch->cpu_ms <= whole->cpu_ms);
     if (device_can_time) {
       CHECK(compaction->device == vkc::DeviceTime::Measured &&
             dispatch->device == vkc::DeviceTime::Measured);
-      // Its own tiles too: the first extract grows the arena.
-      CHECK(compaction->gpu_ms + dispatch->gpu_ms <= whole->gpu_ms + 1e-9);
+      // Its own tile too: the first extract grows the index run, whose
+      // identity fill, a submit of its own, is the stage's alone. Without it
+      // the two sides are equal.
+      std::fprintf(stderr,
+                   "extract: marching cubes %.4f ms, ..compact %.4f, "
+                   "..dispatch %.4f\n",
+                   whole->gpu_ms, compaction->gpu_ms, dispatch->gpu_ms);
+      CHECK(whole->gpu_ms > compaction->gpu_ms + dispatch->gpu_ms + 1e-9);
     }
     CHECK(first.total_gpu_ms() == whole->gpu_ms);
     CHECK(first.total_cpu_ms() == whole->cpu_ms);
@@ -337,7 +344,7 @@ int gpu_main(vr_test::GpuContext& gpu) {
     vkc::StageMetrics again;
     vr::mesh::ExtractTimings timings;
     CHECK(mc.value().extract_device(grid.value(), 0.0f, &timings, &again));
-    CHECK(find(again, "  ..active set") == nullptr);
+    CHECK(find(again, "  ..compact") == nullptr);
     const vkc::StageRow* steady = find(again, "  ..dispatch");
     CHECK(steady != nullptr);
     if (device_can_time && timings.dispatches == 1) {
