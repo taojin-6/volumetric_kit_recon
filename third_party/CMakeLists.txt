@@ -28,12 +28,11 @@ include(FetchContent)
 # vkc_require_core refuses that core if it is older than VR_CORE_MIN_VERSION or
 # lacks the vulkan tier outside VR_CAMERA_ONLY. Work on both checkouts at once
 # with -DFETCHCONTENT_SOURCE_DIR_VOLUMETRIC_KIT_CORE=<core checkout>. The core's
-# tests and -Werror stay off in a subproject, and so do its install rules, as
-# recon installs nothing. VR_CAMERA_ONLY needs the base tier alone. It leaves
-# VKC_WITH_VULKAN unset rather than OFF, as calib does, so an application that
-# turns the tier on keeps it.
+# tests and -Werror stay off in a subproject. VR_CAMERA_ONLY needs the base tier
+# alone. It leaves VKC_WITH_VULKAN unset rather than OFF, as calib does, so an
+# application that turns the tier on keeps it.
 #
-# The pin is core 0.16.0 (7bb81da, core #46's merge), as is the Homebrew key
+# The pin is core 0.19.0 (ff44a98, core #49's merge), as is the Homebrew key
 # action in .github/workflows/_build.yml; the vkc_require_core checks below say
 # which core each part needs.
 #
@@ -41,8 +40,7 @@ include(FetchContent)
 FetchContent_Declare(
   volumetric_kit_core
   GIT_REPOSITORY https://github.com/taojin-6/volumetric_kit_core.git
-  GIT_TAG 7bb81da1876f4708c2dc6acff29790851a3e9299)
-set(VKC_INSTALL OFF)
+  GIT_TAG ff44a981055d505590e295ff6a943bb1b6e96109)
 if(NOT VR_CAMERA_ONLY)
   set(VKC_WITH_VULKAN ON)
   if(VR_BUILD_TESTS)
