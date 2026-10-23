@@ -14420,12 +14420,11 @@ bytes and blocks on all 400 frames; an untouched origin/main build decodes
 the K56 and K120 streams (`decode_growing`) to this build's grids on all 150
 frames. Time, each run gated on an idle GPU with no other test or player
 running, the median of 3 runs each, host / device ms, origin/main on its
-template against this build on the new one: the mesh conversion takes
-8.46 / 6.76 against 28.27 / 25.52 a frame, the 16-voxel band holding 3.9x
-the bin entries (4,637,972 on frame 150 against 1,198,674); `codec encode`
-takes 2.66 / 1.60 an I-frame and 2.41 / 1.37 a P-frame against 2.48 / 1.37
-and 2.23 / 1.13, the fewer blocks outweighing the two passes. Not run: the
-RTX 5090, ASan and UBSan (CI runs them).
+template against this build on the new one: `codec encode` takes
+2.66 / 1.60 an I-frame and 2.41 / 1.37 a P-frame against 2.48 / 1.37 and
+2.23 / 1.13, the fewer blocks outweighing the two passes. The mesh
+conversion in each band is timed in the `MeshIntegrator` entry, above. Not
+run: the RTX 5090, ASan and UBSan (CI runs them).
 
 ### 2026-10-22 — recon is fetched by commit, never installed: no install rules, package config or package tests (amends the 2026-10-16 GLSL pinhole entry and the 2026-10-17 amendment of the 2026-10-13 block-list entry).
 
