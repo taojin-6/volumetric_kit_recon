@@ -815,9 +815,12 @@ add_test(NAME recon_codec_params COMMAND recon_codec_params_test)
 # coder that pin the format's bytes, which the library codes on the device
 # alone, and their ends on the device -- a host frame's entries uploaded, the
 # forward read back, the inverse fed from the host, and the frame an Encoder
-# must write. Test-only; the codec tests that hold the device to it link it, and
-# reach the internal headers through it (core/dispatch.hpp's by src/).
-add_library(recon_codec_oracle STATIC codec_oracle.cpp codec_oracle_device.cpp)
+# must write -- and the decoder-side deblock's filters in double
+# (codec_deblock_oracle.hpp). Test-only; the codec tests that hold the device to
+# it link it, and reach the internal headers through it (core/dispatch.hpp's by
+# src/).
+add_library(recon_codec_oracle STATIC codec_oracle.cpp codec_oracle_device.cpp
+                                      codec_deblock_oracle.cpp)
 target_link_libraries(recon_codec_oracle PUBLIC volumetric_kit::recon_codec)
 target_include_directories(
   recon_codec_oracle PUBLIC ${PROJECT_SOURCE_DIR}/src/volumetric_kit/recon/codec
@@ -834,6 +837,20 @@ target_link_libraries(
                                volumetric_kit::core_test_policy)
 vr_target_warnings(recon_codec_dct_test)
 add_test(NAME recon_codec_dct COMMAND recon_codec_dct_test)
+
+# codec tier, the decoder-side deblock: detail::Deblock's chains and every rule
+# of its filters against the CPU oracle, workgroups one at a time in either
+# order and in chunks to the same bits, its stamps, recording without a submit,
+# its refusals and the step-keyed rule; and the Decoder's switch -- off exact,
+# on the oracle's filter of each frame under the rule, I- and P-frames, toggled
+# between frames, the filter changing in one decoder, rebuilt while paused, its
+# stamps and rows. Internal headers through the oracle. Skips without a device.
+add_executable(recon_codec_deblock_test codec_deblock_test.cpp)
+target_link_libraries(
+  recon_codec_deblock_test PRIVATE recon_codec_oracle Vulkan::Vulkan
+                                   volumetric_kit::core_test_policy)
+vr_target_warnings(recon_codec_deblock_test)
+add_test(NAME recon_codec_deblock COMMAND recon_codec_deblock_test)
 
 # codec tier, the device frame writer and reader: every frame the writer writes
 # is the CPU oracle's, byte for byte, across block counts, K, segment sizes and

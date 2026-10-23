@@ -20,16 +20,26 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   reports the round as `"integrate"`'s `"  ..allocate"` breakdown where it
   was a top-level `"allocate"` row; `"integrate"` holds it. The decoder's
   breakdowns have device halves, `"  ..apply"` the grid's removal and
-  allocation rounds, which were untimed. The examples' stage table prints
+  allocation rounds, which were untimed, and the deblock
+  (`Decoder::set_deblock`) its own, `"  ..deblock"`, a device half taken off
+  `"  ..inverse"`, whose submit it shares; `Decoder::rebuild` reports it
+  under `"codec decode"` too. The examples' stage table prints
   host busy, wait and device (n/t, n/a), and a codec row's device column is
   unset unless every stage was measured. `VoxelBlockGrid::create` builds the
   block kernels, so the first remove compiles no pipeline, and makes no
   timer: its block pass makes one at the first timed call. Migration: a
   caller whose scope wraps a recon call gets recon's device time in that
   scope's row too; add no recon row's device half to it again. Tests:
-  `recon_tier_stage_metrics`, `recon_codec_decoder`,
+  `recon_tier_stage_metrics`, `recon_codec_decoder`, `recon_codec_deblock`,
   `recon_volume_block_grid`, `recon_example_stage_table`,
   `recon_example_codec_stream`, `recon_sensor_picture_readback_oom`.
+- `codec`: **the deblock skips a frame only when more than half its blocks
+  hold an unobserved voxel** (the 2026-10-21 deblock decision's 2026-10-23
+  amendment), where it skipped a frame with any. A true-SDF frame with a few
+  cut voxels, as the `codec_mesh` templates code, is now smoothed, its
+  unobserved voxels untouched; a live RGB-D frame, masked in nearly every
+  block, still decodes exactly and reports `"off"`. Test:
+  `recon_codec_deblock`.
 - `examples`: **`codec_mesh` codes a true SDF** (`EncoderConfig::true_sdf`,
   the 2026-10-21 decision) and refuses, before any GPU work, a band under 15
   voxels, plus the shell's half-thickness in shell mode. Its templates
@@ -395,6 +405,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   so a stage's compaction stays apart from another's in one set. Tests:
   `recon_tier_stage_metrics`, `recon_volume_block_grid`,
   `recon_codec_decoder`.
+- `codec`: **the decoder-side deblock** (the 2026-10-21 deblock decision).
+  `Decoder::set_deblock(true)` smooths each decoded frame across its block
+  faces on the device, inside the decode's last submit, by the filter the
+  frame's header picks; `Decoder::last_deblock()` says which (`DeblockInfo`:
+  `"LF"`, `"LG"`, `"R"` or `"off"`, and T). Off by default: the grid holds
+  the exact decode, as before.
+  `Decoder::rebuild(grid)` rebuilds the last decoded frame from the
+  decoder's reference with the switch as it is now, so a paused player shows
+  a toggle. Its device time is in `"codec decode"`'s. Streams are unchanged.
+  Tests: `recon_codec_deblock`, `recon_codec_dct`, `recon_codec_decoder`,
+  `recon_codec_inter`, `recon_mesh_marching_cubes_sparse`.
 - `codec`: **`EncoderConfig::true_sdf`** codes a true signed distance, such
   as `tsdf::MeshIntegrator` converts a mesh to, without the observed mask
   (the 2026-10-21 decision): it cuts each corner farther than √3 voxels from
