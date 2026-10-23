@@ -104,6 +104,10 @@ int row_times() {
   unavailable.add_cpu("codec decode", 2.0);
   unavailable.add_device("codec decode", vkc::DeviceTime::Unavailable);
   CHECK(!vr_example::device_ms(unavailable));
+  vkc::StageMetrics beside = encode;  // a timed stage beside an untimed one
+  beside.add_cpu("resize", 1.0);
+  beside.add_device("resize", vkc::DeviceTime::NotTimed);
+  CHECK(!vr_example::device_ms(beside));
   vkc::StageMetrics deep = encode;
   deep.add_device("  ..observed", vkc::DeviceTime::NotTimed);
   CHECK(vr_example::device_ms(deep) == 1.0);
