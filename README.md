@@ -123,6 +123,10 @@ assets are refused. Import does not impose physical units or a target height:
 normalization such as Rafa2's 1.7 m convention is a caller operation, with
 the opt-in helpers of `io/mesh_normalization.hpp` (in `recon_io`).
 
+`io::load_textured_mesh(path)` in `io/textured_mesh.hpp` loads the same
+triangles with one UV per vertex, a position repeated at UV seams, and the
+path of the diffuse map, which `io::load_color_packed` decodes.
+
 The default build does not need Assimp. Cross-compiles must supply Assimp for
 the target platform, not a host package.
 
