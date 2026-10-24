@@ -6,8 +6,8 @@
 // coordinates each corner names, one vertex per distinct position and UV, the
 // triangles of load_mesh in its order, and the map resolved beside the library
 // and decoded by load_color_packed. With no texture coordinates it is
-// NotFound; an asset load_mesh refuses gets load_mesh's error; and each of its
-// own refusals.
+// NotFound; an asset load_mesh refuses gets load_mesh's error; each of its
+// own refusals; and map paths that Assimp 5 and 6 report differently.
 
 #include <array>
 #include <cstdint>
@@ -277,6 +277,40 @@ int main() {
     CHECK(status.domain() == r.code);
     CHECK(status.message().find(r.named) != std::string::npos);
   }
+
+  // The same map path on every Assimp: an absolute one is kept, a backslash
+  // separates directories in a library's name and in its map's, a library's
+  // extension matches in either case, and a map may repeat its library's
+  // directory. A missing map is still a path. The last two OBJs are named
+  // from their own directory, one with an absolute library path.
+  write(dir / "materials" / "abs.MTL",
+        "newmtl a\nmap_Kd " + map.string() + "\n");
+  write(dir / "materials" / "back.MTL", "newmtl a\nmap_Kd sub\\cube.png\n");
+  write(dir / "materials" / "nest.mtl",
+        "newmtl a\nmap_Kd materials/cube.png\n");
+  square(
+      "rooted.obj",
+      "mtllib " + (dir / "materials" / "cube.mtl").string() + "\nusemtl cube\n",
+      "");
+  const struct {
+    std::string path;
+    fs::path map;
+  } maps[] = {
+      {square("abs.obj", "mtllib materials/abs.MTL\nusemtl a\n", ""), map},
+      {square("back.obj", "mtllib materials\\back.MTL\nusemtl a\n", ""),
+       dir / "materials" / "sub" / "cube.png"},
+      {square("nest.obj", "mtllib materials/nest.mtl\nusemtl a\n", ""),
+       dir / "materials" / "materials" / "cube.png"},
+      {"cube.obj", fs::path("materials") / "cube.png"},
+      {"rooted.obj", map}};
+  const fs::path before = fs::current_path();
+  fs::current_path(dir);
+  for (const auto& m : maps) {
+    const vkc::Result<io::TexturedMesh> mesh = io::load_textured_mesh(m.path);
+    CHECK(mesh.ok());
+    CHECK(fs::path(mesh->diffuse_texture) == m.map);
+  }
+  fs::current_path(before);
   std::puts("io_textured_mesh: OK");
   return 0;
 }
