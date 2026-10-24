@@ -8,6 +8,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `codec`: **the deblock falls back to the exact decode block by block and
+  skips no frame** (the 2026-10-21 deblock decision's 2026-10-23
+  amendment), where it skipped a frame with an unobserved voxel. A block
+  holding one keeps its exact decode, and no line is fitted across a face it
+  shares; the rest of the frame is filtered. A true-SDF frame, as the
+  `codec_mesh` templates code, is smoothed but for its few cut blocks; a
+  live RGB-D frame, masked in nearly every block, decodes nearly exactly.
+  `DeblockInfo` gains `block_count` and `exact_blocks`, the blocks the
+  fallback kept at their exact decode. Test: `recon_codec_deblock`.
 - **Stage rows follow core 0.20.0's timing**, which recon now pins (core
   #50's merge) and needs: its libraries, examples, tests and
   viewers have that one floor, and the examples and tests the core's config
@@ -31,13 +40,6 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `recon_tier_stage_metrics`, `recon_codec_decoder`, `recon_codec_deblock`,
   `recon_volume_block_grid`, `recon_example_stage_table`,
   `recon_example_codec_stream`, `recon_sensor_picture_readback_oom`.
-- `codec`: **the deblock skips a frame only when more than half its blocks
-  hold an unobserved voxel** (the 2026-10-21 deblock decision's 2026-10-23
-  amendment), where it skipped a frame with any. A true-SDF frame with a few
-  cut voxels, as the `codec_mesh` templates code, is now smoothed, its
-  unobserved voxels untouched; a live RGB-D frame, masked in nearly every
-  block, still decodes exactly and reports `"off"`. Test:
-  `recon_codec_deblock`.
 - `examples`: **`codec_mesh` codes a true SDF** (`EncoderConfig::true_sdf`,
   the 2026-10-21 decision) and refuses, before any GPU work, a band under 15
   voxels, plus the shell's half-thickness in shell mode. Its templates
