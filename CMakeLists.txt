@@ -112,9 +112,10 @@ endif()
 # dependencies that expose private include paths to the tiers below and never
 # become part of their link interface. The oldest core recon's libraries build
 # with is checked in the core that arrives (third_party/, which also checks the
-# examples' and tests' later floor): 0.2.0 for whole-file I/O, check_path,
-# exception_status and UniqueFd in the base tier.
-set(VR_CORE_MIN_VERSION 0.2.0)
+# config tier the examples and tests need): 0.20.0 for the stage rows' wait and
+# device halves, whose device time tiles each batch, so a stage holds every
+# command recorded inside it.
+set(VR_CORE_MIN_VERSION 0.20.0)
 add_subdirectory(third_party)
 
 add_subdirectory(src)

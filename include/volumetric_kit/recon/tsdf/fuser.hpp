@@ -90,7 +90,10 @@ class VR_TSDF_API Fuser {
   /// @param frames      Each camera's input; an empty set does nothing.
   /// @param max_weight  As @ref TsdfIntegrator::integrate.
   /// @param mode        As @ref TsdfIntegrator::integrate.
-  /// @param metrics     Optional `"resize"`, `"allocate"`, `"integrate"` rows.
+  /// @param metrics     Optional `"resize"`, `"allocate"`, `"integrate"` rows;
+  ///                    a set allocated in the fuse's submit has
+  ///                    `"integrate"`'s `"  ..allocate"` breakdown instead
+  ///                    (@ref TsdfIntegrator::allocate_and_integrate).
   /// @return A report; `Status::Code::OutOfMemory` for an incomplete band in
   ///         strict mode or host allocation failure; a resize's backend OOM
   ///         when it prevents completion; or another tier's error.

@@ -8,6 +8,29 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Stage rows follow core 0.20.0's timing**, which recon now pins (core
+  #50's merge) and needs: its libraries, examples, tests and
+  viewers have that one floor, and the examples and tests the core's config
+  tier too. A row's host time splits into busy
+  and wait, its device half says whether it was measured, and a timed batch
+  tiles its device time, so a stage holds every command recorded inside it
+  and both totals skip breakdowns (the 2026-10-23 decision, reversing the
+  2026-08-10 one). A set fused in its allocation's submit
+  (`TsdfIntegrator::allocate_and_integrate`, a `Fuser`'s steady state)
+  reports the round as `"integrate"`'s `"  ..allocate"` breakdown where it
+  was a top-level `"allocate"` row; `"integrate"` holds it. The decoder's
+  breakdowns have device halves, `"  ..apply"` the grid's removal and
+  allocation rounds, which were untimed, and `"  ..inverse"` the deblock's
+  passes (`Decoder::set_deblock`), in its submit. The examples' stage table
+  prints host busy, wait and device (n/t, n/a), and a codec row's device column is
+  unset unless every stage was measured. `VoxelBlockGrid::create` builds the
+  block kernels, so the first remove compiles no pipeline, and makes no
+  timer: its block pass makes one at the first timed call. Migration: a
+  caller whose scope wraps a recon call gets recon's device time in that
+  scope's row too; add no recon row's device half to it again. Tests:
+  `recon_tier_stage_metrics`, `recon_codec_decoder`, `recon_codec_deblock`,
+  `recon_volume_block_grid`, `recon_example_stage_table`,
+  `recon_example_codec_stream`, `recon_sensor_picture_readback_oom`.
 - `codec`: **the deblock skips a frame only when more than half its blocks
   hold an unobserved voxel** (the 2026-10-21 deblock decision's 2026-10-23
   amendment), where it skipped a frame with any. A true-SDF frame with a few
@@ -25,10 +48,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `codec.quantization_scale` by the band's growth to keep its step.
   Tests: `recon_example_config`, `recon_codec_mesh_run`,
   `recon_codec_mesh_config_entry`.
-- build: **recon pins core 0.19.0** (ff44a98, core #49's merge), and the
-  viewers pin gfx main after #152, which builds on it; recon's core floors
-  are unchanged, and the viewers need core 0.18.0, gfx's floor at that pin.
-  The live viewers now present FIFO, paced to the display (gfx #150's
+- build: **the viewers pin gfx main after #152**, which builds on core
+  0.19.0 (#49's merge). The live viewers now present FIFO, paced to the display (gfx #150's
   default), where they presented MAILBOX. recon's kernels build through the
   device's pipeline cache (core #48), so a kernel that several objects build
   on one device is compiled once. On an RTX 4090, Release, under validation and
@@ -372,6 +393,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `mesh`: **`MarchingCubes::extract_device` takes `StageMetrics`**: a
+  `"marching cubes"` row over the compaction's `"  ..compact"` and the
+  attempts' `"  ..dispatch"`, timed inside the submits an extract already
+  makes; the extractor makes its timer at the first timed call.
+  `volume`: **`VoxelHashMap::allocate` and `remove`, and
+  `VoxelBlockGrid::remove`, take the caller's `GpuStageScope`**, whose tile
+  every round counts to, and `compact_active_blocks_on_device` a row name,
+  so a stage's compaction stays apart from another's in one set. Tests:
+  `recon_tier_stage_metrics`, `recon_volume_block_grid`,
+  `recon_codec_decoder`.
 - `codec`: **the decoder-side deblock** (the 2026-10-21 deblock decision).
   `Decoder::set_deblock(true)` smooths each decoded frame across its block
   faces on the device, inside the decode's last submit, by the filter the

@@ -16,6 +16,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <ios>
@@ -108,14 +109,23 @@ struct CodecRow {
   std::optional<double> decode_device_ms;  ///< Decode, device.
 };
 
-/// @return A codec call's device time: every span @p m timed summed
-///         (`StageMetrics::total_gpu_ms`, breakdowns included, as each is a
-///         dispatch of its own), or unset when it timed none.
+/// @return A codec call's device time, its stages' summed
+///         (`StageMetrics::total_gpu_ms`: a breakdown's is inside its
+///         stage's); unset when no stage was timed, or when one with a device
+///         half was not, so a partial sum never passes for the call's.
 inline std::optional<double> device_ms(const vkc::StageMetrics& m) {
+  bool measured = false;
   for (const vkc::StageRow& row : m.rows()) {
-    if (row.has_gpu) return m.total_gpu_ms();
+    if (row.device == vkc::DeviceTime::None ||
+        std::strncmp(row.name, vkc::StageMetrics::kBreakdownPrefix,
+                     std::strlen(vkc::StageMetrics::kBreakdownPrefix)) == 0) {
+      continue;
+    }
+    if (row.device != vkc::DeviceTime::Measured) return std::nullopt;
+    measured = true;
   }
-  return std::nullopt;
+  if (!measured) return std::nullopt;
+  return m.total_gpu_ms();
 }
 
 /// @brief A frame's row from the stage rows its encode and decode filled:
