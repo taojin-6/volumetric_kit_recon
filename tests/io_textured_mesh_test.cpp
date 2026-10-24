@@ -182,6 +182,18 @@ int main() {
     }
     CHECK(matches == 1);
   }
+  // Corners join on equal coordinates, -0 as 0, and split on v alone: the
+  // square's two corners at (1, 0, 0) name v = 0 and 0.5, and its two at
+  // (0, 1, 0) name u = 0 and -0, so 5 vertices.
+  const std::string seams = (dir / "seams.obj").string();
+  write(seams,
+        "v 0 0 0\nv 1 0 0\nv 0 1 0\nv 1 1 0\n"
+        "vt 0 0\nvt 1 0\nvt 0 1\nvt 1 1\nvt 1 0.5\nvt -0 1\n"
+        "f 1/1 2/2 3/3\nf 2/5 4/4 3/6\n");
+  const vkc::Result<io::TexturedMesh> seamed = io::load_textured_mesh(seams);
+  CHECK(seamed.ok());
+  CHECK(seamed->geometry.positions.size() == 5);
+
   // The map resolves against the material library, and decodes.
   CHECK(fs::path(textured->diffuse_texture) == map);
   const vkc::Result<std::vector<std::uint32_t>> pixels =
