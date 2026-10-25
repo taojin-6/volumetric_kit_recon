@@ -697,8 +697,9 @@ int serves(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
 
 // A sender's frames, each recorded into a front batch, its device rows taken
 // back, then finished: the file code() writes, byte for byte, I- and
-// P-frames, with each set's type, its "write", "publish" and "wait: frame"
-// rows, its frame's own encode row and its decode from the decoder's slot. A
+// P-frames, with each set's type, its "crc", "write", "publish" and
+// "wait: frame" rows, its frame's own encode row and its decode from the
+// decoder's slot. A
 // frame out of order is refused, its front dropped.
 int halves(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
            vol::VoxelBlockGrid& other, const vr_test::Scratch& scratch) {
@@ -727,7 +728,7 @@ int halves(vr_test::GpuContext& gpu, vol::VoxelBlockGrid& source,
     CHECK(b->finish(*pending, frame, pts(frame), set).ok() == (frame != 2));
     CHECK(set.is_published() && set.type.has_value());
     for (const char* row :
-         {"codec encode", "write", "publish", "wait: frame"}) {
+         {"codec encode", "crc", "write", "publish", "wait: frame"}) {
       CHECK(vr_example::find_row(set.rows, row) != nullptr);
     }
   }

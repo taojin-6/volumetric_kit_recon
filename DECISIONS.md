@@ -15061,7 +15061,7 @@ the latencies. Every set is timed: timing every frame cost 0.02 ms of host
 time on the 4090 (M0). A set ends at its frame's publish, so the decode a
 codec example runs after it counts in neither its rows nor its counters.
 Writing and publishing a frame are rows of their own (`"write"`,
-`"publish"`).
+`"publish"`), and so is a sender's one CRC of it (`"crc"`).
 
 **The compactions are named apart.** The 2026-09-27 entry kept the
 encoder's compaction under the map's `"  ..active set"`, and the free

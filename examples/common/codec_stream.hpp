@@ -508,7 +508,8 @@ class CodecStream {
   ///        code its rANS half in a batch of its own and wait on it
   ///        (`"wait: frame"`), finish the frame, then play it as @ref code
   ///        does -- written (`"write"`) and published (`"publish"`) as its
-  ///        head and payload lie, under one CRC (`stream::RecordPayload`),
+  ///        head and payload lie, under one CRC (`stream::RecordPayload`,
+  ///        `"crc"`),
   ///        the set published, and decoded, when the stream decodes, from
   ///        the decoder's input slot they are copied into.
   /// @param frame   As @ref code.
@@ -550,10 +551,15 @@ class CodecStream {
     rows.merge(back_rows);
     set.rows.merge(rows);
     set.tail = find_row(back_rows, "  ..tail") != nullptr;
-    const vkc::Status played = play(
-        vr::stream::RecordPayload::of(encoded.head.data(), encoded.head.size(),
-                                      encoded.payload, encoded.payload_size),
-        frame, pts_ns, rows, max_blocks_, &set);
+    const vr::stream::RecordPayload payload = [&] {
+      // The record's one CRC, for the file and the viewers alike.
+      const vkc::StageScope crc(&set.rows, "crc");
+      return vr::stream::RecordPayload::of(encoded.head.data(),
+                                           encoded.head.size(), encoded.payload,
+                                           encoded.payload_size);
+    }();
+    const vkc::Status played =
+        play(payload, frame, pts_ns, rows, max_blocks_, &set);
     if (!played.ok()) encoder_.force_intra();
     return played;
   }
