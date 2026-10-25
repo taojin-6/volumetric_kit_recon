@@ -1257,10 +1257,9 @@ buffer CUDA imported (`core`'s `create_exported_buffer`, on a device that
 `exports_memory`), handed out as NV12 in `YuvImage::device` with
 `kQueueFamilyExternal`; VideoToolbox's two IOSurface planes as images in
 `YuvImage::image`, through `sensor/apple`'s `PixelBufferImporter`.
-Each CUDA picture slot owns its import and mapping as soon as acquired.
-A failed mapping or host allocation releases them in the current decoder
-context, before releasing the backing Vulkan buffer; moving or erasing a
-ring slot transfers or releases that ownership exactly once.
+Each CUDA picture buffer's `CudaBufferMapping` is held from the moment it
+exists, so a failed mapping or host allocation releases it, in its context,
+before the Vulkan buffer it maps.
 `Options::unlabelled_color` stands in for a stream that names no matrix,
 and `reset()` restarts a stream after lost access units. A stream
 the hardware cannot decode or hand out -- not 8-bit 4:2:0, or on
@@ -1294,6 +1293,16 @@ failed); a hardware failure FFmpeg reports otherwise reads as lost frames.
 `VR_TEST_HEVC_BACKEND` makes the decoder tests fail rather than skip where
 no device path opens, which is how CI holds its legs to NVDEC on 24.04 (and
 nvJPEG where the GPU has the engine) and VideoToolbox on the Mac.
+**`sensor/video`'s CUDA interop** (`cuda_interop.hpp`, `VR_WITH_CUDA`) is
+public, and is how both decoders reach CUDA: `cuda_ordinal_of` finds the
+CUDA device whose UUID is the Vulkan device's; `CudaContext` retains that
+GPU's primary context, which every holder shares and none leaves current;
+`CudaStream` is a non-blocking stream of its holder's own; and
+`CudaBufferMapping::map` imports a `create_exported_buffer` buffer's memory,
+taking its descriptor (`InvalidArgument` once taken), and maps the whole
+buffer, which stays the caller's. The one crossing it documents is CUDA
+writes, Vulkan reads: the writing stream or an event is synchronized, then
+the reader acquires the buffer from `VK_QUEUE_FAMILY_EXTERNAL`.
 **`sensor/apple`'s `PixelBufferImporter`** (`recon_sensor_apple`, on every
 Apple build, iOS included, with no FFmpeg) hands an 8-bit NV12
 `CVPixelBuffer` on an IOSurface to Vulkan in place: each plane becomes a
