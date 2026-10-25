@@ -44,10 +44,13 @@ add_library(recon_core)
 add_library(volumetric_kit::recon_core ALIAS recon_core)
 
 # The Vulkan foundation is the core's (core_vulkan); what recon compiles of its
-# own here is the version query and the split dispatch's test seam
-# (dispatch.hpp, internal, which the other tiers reach on a PRIVATE src/ path).
-# The rest of the tier is header-only.
+# own here is the version query, the split dispatch's test seam and the one
+# count-to-indirect-slices kernel (dispatch.hpp, internal, which the other tiers
+# reach on a PRIVATE src/ path). The rest of the tier is header-only.
 target_sources(recon_core PRIVATE dispatch.cpp version.cpp)
+include(vr_embed)
+vr_embed_shaders(recon_core SHADERS
+                 "${CMAKE_CURRENT_SOURCE_DIR}/shaders/dispatch_args.comp")
 
 # Generated headers: the VR_CORE_API export macro + the configured version
 # header. The export header is per-tier (core/export.hpp + VR_CORE_API +
