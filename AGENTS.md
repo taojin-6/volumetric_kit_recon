@@ -87,7 +87,7 @@ stream → networking           (stream on the family core's base tier alone)
   kernels first calls `check_device_requirements`.
 - Kernel memory is device-local, reached through `CommandBatch`. Preserve
   the documented exception for small parameters; the host reads results
-  back through the batch, never through a mapping.
+  back through the batch, or a ring slot it binds (`core::HostRing`).
   Require `DEVICE_LOCAL` for bulk allocations and verify borrowed input
   metadata; `HOST_VISIBLE` may coexist with device locality on UMA or BAR.
 - Zero-copy recon/gfx interop uses one shared `VkDevice`. The mesh ring is

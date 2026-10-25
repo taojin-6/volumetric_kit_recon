@@ -243,7 +243,10 @@ entries relevant to your task; later amendments supersede earlier rules.
   only records commands against it: one `CommandBatch` per call, parameters
   inline, bulk bytes staged at the edges, small results read back.
   *Amended 2026-10-13:* `diagnostics()` is gone; the tests check
-  `load_factor()`'s copy of the heap counter by behaviour.
+  `load_factor()`'s copy of the heap counter by behaviour. *Amended
+  2026-10-24:* a frame's results and input go through core's `HostRing`
+  slots, in place where device-mapped memory is cached and copied
+  elsewhere, chosen by the device, with no switch.
 - [**2026-09-28**](#2026-09-28--a-decoded-colour-frame-never-leaves-the-gpu-the-platforms-hardware-decoder-for-h265-and-mjpeg-alike-hands-its-picture-to-vulkan-in-place-and-gpuframeprep-takes-i420-or-nv12-from-the-host-or-the-device) —
   A decoded colour frame never leaves the GPU: the platform's hardware
   decoder, for H.265 and MJPEG alike, hands its picture to Vulkan in place,
@@ -560,7 +563,9 @@ entries relevant to your task; later amendments supersede earlier rules.
   caller goes, with the host-array `allocate` and `remove`. *Amended
   2026-10-14:* the encoder's split is its diff's own search, not a
   `BlockLists` pass. *Amended 2026-10-22:* the grid's zeroing rides the
-  map's remove's first round, a fence fewer.
+  map's remove's first round, a fence fewer. *Amended 2026-10-24:* the
+  verdicts no longer cross before the grid changes; a gate on the device
+  judges them, and the counts are read once the frame's batch has run.
 - [**2026-10-13**](#2026-10-13--block-lists-reach-the-volume-tier-on-the-device-alone-a-host-list-entry-point-that-only-tests-called-goes-amends-the-2026-08-08-sparse-mesh-and-overflow-scan-2026-08-12-view-meshing-2026-09-26-codec-2026-09-28-device-memory-2026-10-03-garbage-collection-2026-10-06-public-api-and-view-culling-and-2026-10-13-coordinate-entries) —
   Block lists reach the volume tier on the device alone; a host-list entry
   point that only tests called goes: the host `BlockList`, the host-array
@@ -708,6 +713,13 @@ entries relevant to your task; later amendments supersede earlier rules.
   is `"integrate"`'s `"  ..allocate"`; the extract and the decode's grid
   edits are timed inside today's submits; a grid builds its block kernels at
   create, and an extractor or a grid its timer at the first timed call.
+- [**2026-10-24**](#2026-10-24--a-frame-decodes-and-meshes-in-the-callers-batch-every-count-stays-on-the-device-the-maps-rounds-k--3-the-extract-and-the-decoder-gather-their-results-into-ring-slots-and-the-blocking-calls-are-one-submit-amends-the-2026-09-28-device-memory-2026-10-13-coordinate-and-2026-10-23-breakdown-entries) —
+  A frame decodes and meshes in the caller's batch: the map's removal and
+  allocation run K = 3 device rounds, the extract sizes itself on the
+  device, and the decoder judges rows 11 to 13 there; each gathers its
+  results into a ring slot read after the batch. The blocking calls are
+  record, one submit and finish. A rafa2-like P-frame's batch records 39
+  dispatches and 47 barriers (48 where the ring copies).
 
 ## Decision record
 
@@ -6816,7 +6828,9 @@ so that Apple could skip staging. It was dropped before merge:
   the same invisible-where-tested class as the host-visible locks.
 
 With plain device memory, a Mac run is the NVIDIA path. Revisit it with a
-measurement of staging on the memory-bound iPad. The first cut's shortcuts
+measurement of staging on the memory-bound iPad. *Revisited 2026-10-24* (the
+one-batch frame entry): a frame's ring slots run in place where
+device-mapped memory is cached. The first cut's shortcuts
 through a mapped destination went with it, for the same reason and because
 nothing in the loop is mapped: uploads target device memory, and readbacks
 are small counts.
@@ -14916,6 +14930,97 @@ them in `recon_mesh_marching_cubes_sparse` (33 grids and 14 extractors,
 `Could not create MTLCounterSampleBuffer`), and past that refusal MoltenVK
 emulates the timestamps while the timer still reads available. Every other
 tier's timer is made at create, as before this change.
+
+### 2026-10-24 — A frame decodes and meshes in the caller's batch: every count stays on the device, the map's rounds (K = 3), the extract and the decoder gather their results into ring slots, and the blocking calls are one submit (amends the 2026-09-28 device-memory, 2026-10-13 coordinate and 2026-10-23 breakdown entries).
+
+**Why.** The owner asked for timing that is "comprehensive and correct" with
+"no unnecessary copy or waits", "everything ... GPU with zero-copy", on
+"regular DRAM/VRAM split devices" as well as unified memory, and "if the new
+design is beneficial everywhere, we do not need the older pipelines". A
+rafa2 P-frame took 6 submits, 6 blocking waits, 6 readback buffers and 7
+staging buffers (M0, on the RTX 4090 and the M5 Max): every count a step
+needed crossed to the host before the next step was recorded. Now the whole
+frame, decode and mesh, is one batch the caller records and submits, and
+the host reads the frame's results once it has run. The old per-frame paths
+are gone; `decode`, `decode_growing`, `extract_device`, `allocate`,
+`remove` and the vector reads are record, one submit and finish.
+
+**The map's rounds run on the device.** `record_allocate` and
+`record_remove` record K rounds over one list. A one-thread kernel
+(`hash_rounds.comp`, one instance a kind) sizes each round from the tally
+the last one left: a round runs only while the last lost bucket-lock races
+and met no capacity limit, as the host loop did. After the last round it
+writes the outcome whole into a result slot and closes the caller's gate on
+any failure, so what is gated on it after the rounds runs nothing. `settle`
+reads the slot and refreshes the heap's host copy. K = 3: no call needed
+more than 2 of the host rounds in 4,230 frames on four devices, so one round
+is spare. The blocking calls repeat record, submit and settle while lost
+races alone remain, up to the 10 rounds they always had: one submit for
+every K rounds, and no readback buffer.
+
+**The extract sizes itself.** `record_extract` records the compaction, a
+one-thread kernel that sizes the marching cubes from the compaction's count
+(zero groups behind a closed gate) and resets the slot's draw command, the
+marching cubes, and a finalize that gathers the results and zeroes the
+command's `indexCount` when the surface outgrew the slot. `finish` reads
+them and, on an overflow, grows the slot and meshes again in a blocking
+batch of its own (`"  ..refit"`). The 1.5x growth stays, so a density rise
+under it costs no refit. `DeviceMesh::ready` names the extractor's timeline
+value the batch set: a consumer's GPU wait on it waits on a value already
+reached, which the shared queue allows (the header's D10). A producer that
+records its next extract before the consumer takes the last mesh needs
+`slot_count` of frames in flight plus two (D5).
+
+**The decoder judges a frame on the device (D4).** The host parses the
+record in place in its input slot and checks what it can before anything
+is recorded: the grid, the header, the tables, the reference, N against the
+heap. Rows 11 to 13, which crossed the bus before the grid changed, are now
+a gate kernel's: it opens the removal and allocation rounds, which close it
+on their own failure, and the apply, the inverse and the deblock are
+indirect slices of N behind it. A frame refused on the device leaves the
+grid and the reference untouched but moves `topology_epoch` and `tick`, as
+the 2026-10-13 coordinate entry foresaw. The payload is bound where it lies
+in the slot, at a byte offset the kernels take. Every update of the batch
+(the tables, the segment words, the steps) comes before its first dispatch,
+so MoltenVK opens no blit encoder mid-batch. `finish` settles both rounds
+and reads the results slot. `rebuild` is one batch, one submit and a wait,
+its results in the same slot. `record_growing` grows a heap the frame
+outgrows before recording; `finish_growing` decodes the frame again from
+the pending frame's own slot, after a grow (once) or as it is (twice), so a
+recovery needs no other input slot.
+
+**Gathers write whole structs.** Each gather assigns its results with one
+constructor, and a `static_assert` ties the host struct's size to its
+fields. In test builds core poisons an output range before the batch runs,
+so a field a kernel skipped shows as the poison.
+
+**The slots are leases (the free rule's user side).** A result or input
+slot is claimed at record and held by the token -- `RecordedRounds`,
+`PendingExtract`'s claim, `PendingDecode::input` -- until the token is
+dropped and its batch has resolved. A refused recording claims nothing.
+The map has `kResultSlots` (4), the decoder two input and two result slots,
+the extractor two result slots. The map's record and `claim_input` refuse a
+claim past them (`InvalidArgument`); the decoder's and the extractor's
+result claims cannot fail while their `@pre` holds, and check it
+(`VKC_CHECK`).
+
+**No mappable-memory switch (amends the 2026-09-28 entry).** Core's
+`HostRing` places a slot in place where `DeviceMapped` memory is cached
+(Apple, lavapipe) and copies the used range through a device-only mirror
+elsewhere (NVIDIA), from the device's facts alone. The 2026-09-28 reason,
+that a Mac must exercise the NVIDIA path, is met by the NVIDIA CI legs,
+which run the copied path under synchronization validation; its condition,
+a staging measurement on Apple, by the M5 Max and the iPhone, where staged
+minus in place was zero or more within noise.
+
+**What a frame costs now.** One submit and no staging buffer, recorded or
+through `decode()` and `extract_device()` (`recon_codec_recorded`,
+`recon_mesh_recorded_extract`, `recon_volume_recorded`). A rafa2-like
+P-frame's batch -- K 56, the LG deblock, blocks removed, kept and new,
+decoded and meshed -- records 39 dispatches and 47 barriers, 48 where the
+ring copies (its output copies' barrier); `recon_codec_recorded` pins them.
+That is half the Apple step near 80 dispatches a batch, so none of its
+levers is needed.
 
 ## Measured lessons
 
