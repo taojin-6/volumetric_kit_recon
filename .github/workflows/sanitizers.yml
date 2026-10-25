@@ -103,15 +103,17 @@ jobs:
           path: build/_deps
           key: ${{ steps.deps.outputs.key }}-${{ hashFiles('third_party/CMakeLists.txt', 'CMakeLists.txt', 'cmake/vr_sanitizers.cmake', '.github/workflows/sanitizers.yml') }}
 
-      # Debug + clang gives the most reliable sanitizer + mesa interop. No
-      # examples: this job never runs them.
+      # Debug + clang gives the most reliable sanitizer + mesa interop. The
+      # examples are built for their tests: lavapipe's maxStorageBufferRange is
+      # the 128 MiB Vulkan guarantees, which no other leg's device reports, so
+      # recon_fuse_replica_run here is an example's run at that floor.
       - name: Configure
         if: steps.detect.outputs.present == 'true'
         run: |
           cmake -S . -B build \
             -DCMAKE_BUILD_TYPE=Debug \
             -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
-            -DVR_SANITIZE="address;undefined" -DVR_BUILD_EXAMPLES=OFF
+            -DVR_SANITIZE="address;undefined" -DVR_BUILD_EXAMPLES=ON
 
       # The level is explicit, as in _build.yml's Build step; a hosted runner
       # sets none, so this runs one job per core.

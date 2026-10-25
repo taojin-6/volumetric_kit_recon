@@ -233,9 +233,8 @@ int code_sets(vr_test::GpuContext& gpu, const cfg::Fusion& fusion,
   sensor::SensorArray array = std::move(opened).value();
   CHECK(array.start().ok());
 
-  // 1024 buckets hold the walls' blocks (at most 2250) without a grow. The
-  // examples' default table has 256 MiB attributes, past the 2^27
-  // maxStorageBufferRange Vulkan guarantees, and lavapipe refuses that grid.
+  // 1024 buckets hold the walls' blocks (at most 2250) without a grow, on
+  // every device alike: the default start is capped by the device's range.
   auto grid = vr_example::create_fusion_grid(gpu.device, gpu.allocator,
                                              fusion.voxel_size_m,
                                              fusion.truncation_m, 1024);

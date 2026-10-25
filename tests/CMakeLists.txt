@@ -284,6 +284,22 @@ vr_target_warnings(recon_example_fuse_keyframe_test)
 add_test(NAME recon_example_fuse_keyframe
          COMMAND recon_example_fuse_keyframe_test)
 
+# The examples' fusion grid starts larger for a finer grid, capped to fit the
+# device's maxStorageBufferRange: the start at lavapipe's 128 MiB and a 4 GiB
+# range and a capped caller's warning on the host, and the cap against the
+# grid's own ceiling on a device.
+add_executable(recon_example_fusion_buckets_test
+               example_fusion_buckets_test.cpp)
+target_include_directories(recon_example_fusion_buckets_test
+                           PRIVATE ${PROJECT_SOURCE_DIR}/examples/common)
+target_link_libraries(
+  recon_example_fusion_buckets_test
+  PRIVATE volumetric_kit::recon_sensor_utils volumetric_kit::recon_tsdf
+          volumetric_kit::core_test_policy)
+vr_target_warnings(recon_example_fusion_buckets_test)
+add_test(NAME recon_example_fusion_buckets
+         COMMAND recon_example_fusion_buckets_test)
+
 # The core parses and validates scenarios. These tests pin the conversion into
 # the runtime sensor and codec options (the codec's steps checked here, not by
 # core), without opening a camera or GPU.
