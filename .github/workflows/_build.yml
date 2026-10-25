@@ -540,7 +540,7 @@ jobs:
           while IFS= read -r arg; do
             args+=("${arg}")
           done < build-apple/importer_flags.txt
-          ios=(xcrun --sdk iphoneos clang++ -target arm64-apple-ios16.0
+          ios=(xcrun --sdk iphoneos clang++ -target arm64-apple-ios27.0
                -std=c++17 -Wall -Wextra -Wpedantic -Werror
                -fsyntax-only "${args[@]}")
           "${ios[@]}" -x objective-c++ -fobjc-arc "${importer}"
