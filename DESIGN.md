@@ -1454,8 +1454,8 @@ decoding.
 The codec is implemented, intra frames and P-frames (frame type 1), and it
 codes and decodes on the device alone (2026-10-13): the host does the I/O
 around it (a frame's bytes, and their hash) and the control (a frame's
-header, sections and tables, and small counts and status words read back,
-a decode's once its batch has run).
+header, sections and tables, and small counts and status words, a decode's
+and an encode's read from results slots once their batches have run).
 The CPU rANS coder is the tests' oracle, under `tests/`
 (`codec_oracle*.hpp`), which pins the format's bytes.
 Quantization is one scalar quantizer with a step per DCT basis (2026-10-02):
@@ -1469,31 +1469,40 @@ candidates, not a claim that high frequencies always deserve fewer bits.
 The public API
 is `CodecParams`, **`Encoder`** (`encoder.hpp`), **`Decoder`** with
 `read_frame_info` (`decoder.hpp`), and a player's `make_decode_grid` and
-`decode_growing` (`decode_grid.hpp`). `Encoder::encode(grid)` takes the map's
-own active list (`compact_active_blocks_on_device`, so an extract's list is
-reused and its own kept for the extract after), keeps the blocks with an
-observed voxel, or with `EncoderConfig::true_sdf` those holding surface
-(`DctTransform::observed`, compacted on the device, reading back only its
-count and reject tally; the true-SDF passes below share its batch), sorts
-them by (z, y, x) on the device
-with a stable rank-merge sort on `coord_less` itself, over all of int32
-(`detail::BlockLists`, whose header has the mechanism), transforms them into
-the reference store's spare (below), the sorted list copied beside them, and
-writes the frame; the sort, the forward, the symbol count and the step layout
-share one submit. Keys are unique, so the same content gives the same bytes
-whatever the hash table's order. An empty frame is an I-frame (below), which
-submits nothing.
+`decode_growing` (`decode_grid.hpp`). A frame is two batches, the caller's
+(the 2026-10-25 entry): `Encoder::record_front` records, after what the
+batch holds (a sender's fusion), every step whose count only the device
+knows, and `record_back` the rANS coding, sized on the host from the
+front's results; `finish` lays the frame out, its payload left in an
+encoder slot (`EncodedFrame`), and `encode(grid)` is those, a submit and a
+wait each, the head and payload joined: 2 submits. The front takes the
+map's own active list -- the one it holds (`held_device_list`), or one
+compacted into the batch, which leaves the map none, so an extract after
+compacts its own -- keeps the blocks with an observed voxel, or with
+`EncoderConfig::true_sdf` those holding surface (`DctTransform::record_observed`,
+their count left on the device; the true-SDF passes below share it), sorts
+them by (z, y, x) on the device with a stable rank-merge sort on
+`coord_less` itself, over all of int32 (`detail::BlockLists`, whose header
+has the mechanism), its last level writing the reference store's spare list,
+and transforms them into the spare's masks and coefficients (below). Every
+step is sized for the grid's block slots and runs for the device's count:
+the observed pass and the forward from indirect slices, the sort's levels
+recorded for the bound, a level the count does not need copying its entries
+through. Keys are unique, so the same content gives the same bytes whatever
+the hash table's order. A frame whose front finds no block to code is an
+I-frame of none (below), with no back batch.
 At `EncoderConfig::intra_period` N above 1 (default 1, 0 refused) the
 `Encoder` writes P-frames (the 2026-10-14 entry): an I-frame first, then
 every N coded frames, after `force_intra()`, when the grid's `voxel_size` or
 `trunc_dist` is not the reference's (`coding_difference`, the writers' and
 reader's rule), when the reference holds no block, and when the grid holds
-none (the 2026-10-16 entry); a P-frame otherwise,
-against the frame `encode` returned last. Its reference is what the decoder
+none (the 2026-10-16 entry, decided by the device's count, so a P-frame
+planned at record finishes as an I-frame of none); a P-frame otherwise,
+against the frame returned last. Its reference is what the decoder
 will hold of that frame: the forward's q and masks and the sorted list, left
-in `detail::ReferenceStore`'s spare and swapped in when `encode` returns the
-frame, so a refusal keeps the reference and the period's count. In the
-forward's submit, `inter_diff.comp` splits the frame against the reference
+in `detail::ReferenceStore`'s spare and swapped in when `finish` returns the
+frame, so a refusal or `abandon` keeps the reference and the period's count.
+In the front's batch, `inter_diff.comp` splits the frame against the reference
 and codes it, an invocation an entry: each reference entry finds its block
 by binary search (remove, skip when every word is equal, else keep or zero),
 `survivor_ranks.comp` counts the survivors, and each block the reference
@@ -1501,34 +1510,41 @@ lacks takes its place among the new blocks from those ranks. A residual of
 −32768 codes zero, and so does a block whose target payload a static price
 (`emit_payload` walked at `bit_length + 1` bits a symbol, 8 a byte symbol,
 plus raw bits) puts strictly below its residual's. Only the device knows the
-new blocks' count, so the forward's submit counts a P-frame, at
+frame's blocks and its new blocks' count, so the front counts a P-frame, at
 `EncoderConfig::update_size` entries an update segment
 (`EncoderConfig::resolved_update_size()`: the segment size unless the caller
-sets one), over M plus the frame's blocks, and the device takes the
-survivors off (`counted_entries`). `EncoderConfig::validate` holds the
-config's checks, which `create` makes first.
+sets one), over M plus the bound's blocks, and the device takes the blocks
+the frame lacks and the survivors off (`counted_entries`, from two frame
+words). `EncoderConfig::validate` holds the config's checks, which `create`
+makes first.
 The frame's rANS coding runs on the device (`detail::DeviceFrameWriter`,
 built by `Encoder::create`, which fails if its kernels do not build): the
-forward output stays in VRAM, the forward's batch also counts every model's
-symbols and each block's coder steps and lays the steps out
-(`detail::StepLayout`, whose header has the formulas: one workgroup scans
-the steps into each entry's place, and the segments' slot sizes into their
-offsets), and only the symbol counts, the layout's two totals and a
-P-frame's survivor count cross to the host, which builds the tables
-(`frame_tables`) and sizes the coding's buffers. A second batch writes every
-block's steps in parallel, codes one segment per invocation into its slot,
-packs the streams, and reads back only the lengths and the payload. Bulk
-buffers are device-local and retained; the bus carries the counts and
-tables, 8 bytes of totals and a P-frame's survivor count, and the lengths
-and payload. A segment is one serial chain, so smaller segments give the
-device parallelism at a few percent of size. A frame the device cannot hold
-is refused, never coded on the host.
+forward output stays in VRAM, the front also counts every model's symbols
+and each block's coder steps and lays the steps out (`detail::StepLayout`,
+whose header has the formulas: one workgroup scans the steps into each
+entry's place, and the segments' slot sizes into their offsets), and its
+last command (`encode_results.comp`) gathers what the host needs -- the
+symbol counts, the layout's two totals, the frame words and the reject and
+refusal words -- into a results slot (`core::HostRing`), from which the
+host builds the tables (`frame_tables`) and sizes the coding's buffers. The
+back half uploads the tables inline first, writes every block's steps in
+parallel, codes one segment per invocation into its slot, scans the lengths
+into the payload's offsets and a second results slot, and packs the streams
+into a payload slot: in place on unified memory and lavapipe, the slot
+itself; copied on a discrete GPU, the payload's likely size (the last
+frame of its type's bytes per entry plus 25%), any rest gathered again into
+its own output range by `finish` (a tail, `"  ..tail"`). The frame's
+reference hash runs over the head and the payload unjoined (`frame_hash`'s
+two-run form). Bulk buffers are device-local and retained. A segment is one
+serial chain, so smaller segments give the device parallelism at a few
+percent of size. A frame the device cannot hold is refused, never coded on
+the host.
 Both device coders work on entries, a P-frame's stream positions
 (`ResidentBlocks`): its reference entries, each with a u32 mode, then its new
 blocks, which alone the block list holds; an intra frame is all new blocks.
 The count pass also flags what every writer refuses of the entries (a mode
-past the alphabet, a written −32768), which `finish` refuses in their words
-(`check_entries`).
+past the alphabet, a written −32768), which `record_back` refuses in their
+words (`check_entries`).
 The `Decoder` decodes on the device (`detail::DeviceFrameReader`): the host
 parses the frame (`parse_frame`) and uploads only its tables and payload.
 One batch expands each table into a 4096-slot lookup, decodes one segment per

@@ -729,7 +729,8 @@ entries relevant to your task; later amendments supersede earlier rules.
   `"  ..stale set"`, apart from a fuse's `"  ..active set"`. A sensor may
   notify; a set's prep, one allocation round, its fuse (gated on the whole
   band where strict, a refused set fused again at its own tick) and the free
-  pass record into the caller's batch.
+  pass record into the caller's batch; an encode is two halves in the
+  caller's batches, every count on the device, the payload in a slot.
 
 ## Decision record
 
@@ -15134,6 +15135,33 @@ so a redo or a free pass is never undone by an older settle.
 `dispatch_with_retry` stays for triangles and the rehash. A warm strict set
 of device frames is one submit, one wait and no staging buffer
 (`recon_tsdf_fuser`), where it took two waits.
+
+**An encode is two halves in the caller's batches (amends the 2026-09-27
+encoder, 2026-10-17 count and 2026-10-24 one-batch entries).** The front
+(`Encoder::record_front`) records, after a sender's fusion, everything whose
+count only the device knows: the active set -- the map's held list, or a
+compaction in the batch -- the observed pass, the sort, the forward, a
+P-frame's diff, the count and the layout, each sized for the grid's block
+slots and run for the device's count: the observed pass and the forward
+from indirect slices, the sort's levels and the diff's and count's passes
+over the bound, a group past the count returning. The sort's last level
+writes the store's spare list, so no copy follows it. One gather
+(`encode_results.comp`) leaves the host's figures in a results slot. The
+back (`record_back`) builds the tables on the host, uploads them inline
+first, and codes into a payload slot; `finish` lays the head out, PAYLOAD
+last (`assemble_head`), the payload left in the slot (`EncodedFrame`), and
+hashes the two unjoined. On a discrete GPU the slot is copied out to the
+last frame's size per entry plus 25%; a frame past it gathers the rest again
+into its own output range (a tail), since the core's test poison fills a
+copied output range at its batch's front (the owner's Q3). `encode` is the
+halves, 2 submits where it took 4, and no staging buffer warm where it took
+4, one a batch that read back. Two choices follow from the
+device deciding the count. Whether the grid holds a block to code is the
+front's to answer, so a P-frame planned at record over a grid of none
+finishes as an I-frame of none, with no back batch, the bytes `encode` gave
+a grid of none. And a compaction recorded into the front's batch gives the
+map no count to hold, so an extract after the encoder compacts its own list,
+where it took the encoder's back.
 
 ## Measured lessons
 

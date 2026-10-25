@@ -35,6 +35,19 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   pass, and it moves the topology epoch even when it frees nothing. Tests:
   `recon_tsdf_fuser`, `recon_tsdf_fuser_oom`, `recon_volume_recorded`,
   `recon_volume_block_stamps`, `recon_tier_stage_metrics`.
+- `codec`: **an encode is two halves in the caller's batches** (the
+  2026-10-25 decision): `Encoder::record_front`, `record_back`, `finish` and
+  `abandon`, `PendingEncode` and `EncodedFrame`, whose payload stays in an
+  encoder slot. Every count stays on the device until the front's results
+  slot; `encode` is the halves, 2 submits and, warm, no staging buffer (it
+  was 4 and 4), its bytes, rows and refusals as they were, plus
+  `"  ..tables"`. Migration: a compaction the encoder records leaves the map
+  no list, so an extract after it compacts its own; a P-frame planned over a
+  grid of no block finishes as an I-frame of none (as `encode` always
+  coded it); an I-frame of none records no back half and so reports no
+  `"  ..rans encode"`. Tests: `recon_codec_encoder`,
+  `recon_codec_device_frame`, `recon_codec_inter`, `recon_codec_step_layout`,
+  `recon_codec_block_lists`, `recon_codec_dct`, `recon_codec_bitstream`.
 
 ### Changed
 
