@@ -169,8 +169,9 @@ git -C "$recon_root" diff --check
 - `VR_BUILD_VIEWER`, `VR_WITH_ORBBEC`, `VR_WITH_FFMPEG`, `VR_WITH_CUDA`, and
   `VR_WITH_ASSIMP` enable optional paths. Orbbec, FFmpeg and Assimp are
   installed prerequisites, never fetched by this repository. The video
-  decoders hand out device pictures only, so off Apple `VR_WITH_FFMPEG` needs
-  `VR_WITH_CUDA`, and `VR_WITH_ORBBEC` needs `VR_WITH_FFMPEG`.
+  decoders hand out device pictures only: Apple builds them always, on
+  VideoToolbox, and refuses `VR_WITH_FFMPEG`; elsewhere `VR_WITH_FFMPEG`
+  needs `VR_WITH_CUDA`, and `VR_WITH_ORBBEC` needs `VR_WITH_FFMPEG`.
   `VR_CAMERA_ONLY` builds `recon_camera` alone, with no Vulkan, and refuses
   the examples and the drivers.
 - Tests use no real hardware: a camera is checked by hand through its example

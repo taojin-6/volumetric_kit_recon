@@ -65,7 +65,8 @@ conventions and Vulkan setup.
   plus `…_sensor_utils` (GPU pre-processing), `…_sensor_array` (several
   sensors read as one), `…_sensor_apple` (Apple's pixel buffers as images),
   the opt-in `…_sensor_orbbec`
-  driver (`VR_WITH_ORBBEC`), `…_sensor_video` decoder (`VR_WITH_FFMPEG`), and
+  driver (`VR_WITH_ORBBEC`), `…_sensor_video` decoders (every Apple build,
+  elsewhere `VR_WITH_FFMPEG`), and
   `…_io_assimp` mesh importer (`VR_WITH_ASSIMP`);
   umbrella alias
   `volumetric_kit::recon`.
@@ -1212,8 +1213,8 @@ implementer every dataset example runs is
 `examples/common/replica_sensor.hpp`, which plays a Replica sequence back
 through the interface, its frames prepared on the GPU as a camera's.
 **`sensor/orbbec`** (`VR_WITH_ORBBEC`, which
-needs `VR_WITH_FFMPEG` for the colour decoders, and the Orbbec SDK 2.10.6 or
-later) is the live Femto Mega, through the sensor interface below:
+needs the colour decoders, `VR_WITH_FFMPEG` off Apple, and the Orbbec SDK
+2.10.6 or later) is the live Femto Mega, through the sensor interface below:
 **`OrbbecSensor`**, one camera. A synced rig is an `OrbbecSensor` per camera
 in a `SensorArray` (the 2026-10-07 rig decision), opened from its sync file by
 `open_orbbec_sensors`. It hands out every frame
@@ -1241,35 +1242,49 @@ after decoding. A gap in the frame index, or an empty frame, waits for the
 next key frame, where the decoder is reset; pictures come out in display
 order, each settling its own pair. All of it is counted in `stats().lost`
 (the 2026-09-28 decision).
-**`sensor/video`'s decoders** (`VR_WITH_FFMPEG`) hand out pictures on the
-device only (the 2026-10-06 device-only decoder decision), on the hardware
-of the device they are given, fixed per build: VideoToolbox on Apple, and
-through CUDA elsewhere, so off Apple `VR_WITH_FFMPEG` needs `VR_WITH_CUDA`
-(the CUDA 13 toolkit's headers; libcuda and libnvjpeg are loaded at run
-time). A **`DecodedPicture`** is a frame's colour as it is: its
+**`sensor/video`'s decoders** (every Apple build, and elsewhere
+`VR_WITH_FFMPEG`) hand out pictures on the device only (the 2026-10-06
+device-only decoder decision), on the hardware of the device they are given,
+fixed per build: VideoToolbox on Apple, directly, with no FFmpeg (the
+2026-10-25 decision), and through CUDA elsewhere, so `VR_WITH_FFMPEG` needs
+`VR_WITH_CUDA` (the CUDA 13 toolkit's headers; libcuda and libnvjpeg are
+loaded at run time). A **`DecodedPicture`** is a frame's colour as it is: its
 `YuvImage` (`DecodedPicture::yuv`: the planes, the queue family that wrote
 them, the size, the matrix's weights, the range and the chroma siting), with
 the stream's pts and its transfer and primaries as an optional
 `ColorEncoding` (empty when that type cannot name them) beside it.
-**`HevcDecoder`** decodes H.265 access units through FFmpeg's
-hardware decoding: NVDEC's picture copied device to device into a Vulkan
-buffer CUDA imported (`core`'s `create_exported_buffer`, on a device that
-`exports_memory`), handed out as NV12 in `YuvImage::device` with
-`kQueueFamilyExternal`; VideoToolbox's two IOSurface planes as images in
-`YuvImage::image`, through `sensor/apple`'s `PixelBufferImporter`.
-Each CUDA picture slot owns its import and mapping as soon as acquired.
-A failed mapping or host allocation releases them in the current decoder
-context, before releasing the backing Vulkan buffer; moving or erasing a
-ring slot transfers or releases that ownership exactly once.
+**`HevcDecoder`** decodes H.265 access units on the hardware. Off Apple,
+through FFmpeg's hardware decoding: NVDEC's picture copied device to device
+into a Vulkan buffer CUDA imported (`core`'s `create_exported_buffer`, on a
+device that `exports_memory`), handed out as NV12 in `YuvImage::device`
+with `kQueueFamilyExternal`. Each CUDA picture slot owns its import and
+mapping as soon as acquired. A failed mapping or host allocation releases
+them in the current decoder context, before releasing the backing Vulkan
+buffer; moving or erasing a ring slot transfers or releases that ownership
+exactly once. On Apple, through a `VTDecompressionSession` of its own
+(`vt_hevc.cpp`): it reads the parameter sets and each picture's slice
+header itself (`hevc_syntax.cpp`), hands VideoToolbox the picture's slices
+as one length-prefixed sample of a format made from the sequence's VPS, SPS
+and PPSs (a new session only where a changed set needs one), and puts the
+pictures, which come back in decode order, into display order by their
+picture order count: shown once more wait than the SPS reorders, and all at
+a sequence started afresh and at the end. The two IOSurface planes are
+images in `YuvImage::image`, through `sensor/apple`'s
+`PixelBufferImporter`, written at the range the VUI declares (video range
+without one), so the samples are the stream's own. A picture whose
+reference is missing, after a skipped access unit, VideoToolbox reports as
+bad data, `IoError`.
 `Options::unlabelled_color` stands in for a stream that names no matrix,
-and `reset()` restarts a stream after lost access units. A stream
-the hardware cannot decode or hand out -- not 8-bit 4:2:0, or on
-VideoToolbox a display window off the coded corner, which FFmpeg hands over
-already cut from the wrong corner, so the decoder reads each SPS there --
-is refused, `Unsupported`, from then on, after the pictures decoded before
-it. A candidate cropped SPS is first parsed in full by FFmpeg, without its
-slices and with parse errors enabled; a malformed one is `IoError` and
-cannot latch a crop refusal.
+and `reset()` restarts a stream after lost access units (on Apple, on a
+fresh session at the next key frame). A stream the hardware cannot decode
+or hand out -- not 8-bit 4:2:0, or on VideoToolbox a display window off the
+coded corner, which it fills from the corner instead -- is refused,
+`Unsupported`, from then on, after the pictures decoded before it. On
+Apple each SPS is read whole, to its trailing bits, before it can refuse
+the stream: a malformed one is `IoError` and cannot latch a refusal.
+VideoToolbox's decoder sessions for both decoders open in one place
+(`videotoolbox.cpp`): NV12 on Metal-compatible IOSurfaces, on the hardware
+decoder or not at all.
 **`JpegDecoder`** decodes a baseline 8-bit 4:2:0 JPEG, BT.601 full
 range as JFIF defines it, with no FFmpeg: on nvJPEG's hardware JPEG engine
 into the same kind of buffer, I420, or through VideoToolbox's hardware
@@ -1282,9 +1297,10 @@ only itself (and, for H.265, the frames to the next key frame);
 `Unsupported` is a stream the hardware refuses, or a `create` with no
 device path (no device or allocator, or a GPU the build's path cannot
 reach); `Backend` or `OutOfMemory` is the device path failing. VideoToolbox
-JPEG errors retain that distinction from session creation, the decode call
-and its callback. Its decode-time `kVTParameterErr` also denotes corrupt
-JPEG data (including a truncated fixture), so it is `IoError` there. The
+errors retain that distinction from session creation, the decode call and
+its callback, for both decoders. Its decode-time `kVTParameterErr` also
+denotes corrupt data (including a truncated JPEG fixture), so it is
+`IoError` there. The
 Orbbec driver's colour decoders stop for good on any code but `IoError`, and
 the sensor's `poll` returns it, so a refused stream or a failing device path is
 not quiet. A `Backend` failure names the library that failed
@@ -2042,8 +2058,8 @@ cameras stream, removing the empty stream and releasing the cameras. Once
 they stream, it ends after the set in hand, as `run.frames` would: the
 stream is finished, its viewers closed, the cameras released and the PLY
 written. A second signal of the same kind ends the process.
-**`rig_viewer`** (`VR_BUILD_VIEWER` with `VR_WITH_ORBBEC` and
-`VR_WITH_FFMPEG`; CI's viewer leg compiles it) is `fuse_viewer`'s live-rig
+**`rig_viewer`** (`VR_BUILD_VIEWER` with `VR_WITH_ORBBEC`, and
+`VR_WITH_FFMPEG` off Apple; CI's viewer leg compiles it) is `fuse_viewer`'s live-rig
 sibling: an `OrbbecSensor` per camera of the sync file read as a
 `SensorArray`, its raw sets prepared, fused and textured from every camera
 on the GPU, and the atlas filled by
